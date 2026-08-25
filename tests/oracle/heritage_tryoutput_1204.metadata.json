@@ -1,0 +1,73 @@
+{
+  "schema": 2,
+  "fixture_id": "HERITAGE-TRYOUTPUT-STACKGUARD-CONTAINS",
+  "description": "Output-contains branch of Heritage::tryOutputStackGuard (heritage.cc:1406-1430, the fourth justifiedContain touchpoint at cc:1420): six trigger geometries driven directly with a locked stack output (justified / unjustified +2 / far-end +4 / size==retSize no-SUBPIECE / pre-existing output reuse / vnFinal-null no-op with empty write and cc:1430 true), full op projection with SUBPIECE in[1] constants, caller-perspective translation of the return storage, write-list {ah} entries, plus the exact cc:1420 LE/BE call-shape constants",
+  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5 (spacebase over ram), ram_be=6 (big-endian), iop=7; stack delay=1",
+  "compiler_spec": "synthetic prototype fixture: tryoutputguard (inputs RSI 0x30/RDI 0x38, output RAX 0x0 — model entries inert for the locked-output characterization); the guarded call carries a locked non-void output whose storage Address is the stack spacebase at callee 0x1000:8 (ParameterPieces typelock + setOutputLock + setStackOutputLock, the coreaction.cc:1546-1549 shape) with stackoffset 0x10 caller/callee rebase",
+  "analysis_options": {
+    "boundary": "direct drive of the production Heritage::tryOutputStackGuard output-contains branch (heritage.cc:1406-1430) with outputCharacter derived through the production FuncProto::characterizeAsOutput locked branch (fspec.cc:4339-4353) on the C++ side and staged with the same cc:4346 math on the Rust side",
+    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+    "staging": "the cc:1407/cc:1410 fc->getOutput() reads are staged on the Rust side through the locked_output_storage parameter Some((Address(0x1000), retSize)) — the same (Address,size) the C++ oracle derives from its locked ProtoParameter; production passes None (FSPEC-OUTPUT-STORAGE-0001)"
+  },
+  "overall_status": "PARTIAL_MATCH:covered-tryoutput-contains-projection-MATCH",
+  "covered_projection_status": "MATCH",
+  "expected_stdout_sha256": "b08f89a9c9c59889b4071618d7e2dc337c8ba03643a9246dff21105fdf1cd7a1",
+  "expected_exit_code": 0,
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "comparand": {
+    "rugra_base_commit": "6d085bd8cd43c4b89a1487eb84abfa77b22bf0c8",
+    "rugra_base_tree": "649cd33fe7faec5912bf8ef3b4bf891a37b2d43d",
+    "cpp_fixture_sha256": "a44583a5cabcdb4163536a45ba64cfdf770cffe26bd38f7771ce0c11e59bf4a8",
+    "rust_fixture_sha256": "09bc1bc071afd0c8d81468635ea0df781eaef0d818f2f07ec647e50cc14524d7",
+    "heritage_rs_sha256": "94afe9d2a1e75b6cecc782b15ba9d71a15d66ef88334f1f3d947d1de840ee20a",
+    "heritage_doc_sha256": "ff88304e59c2f24d8e56510215d28b8d7e0a326b97d3036443417841a5c3f6a1",
+    "runner_sha256": "46f776e0c94a94e58e7615c8bc9c97c19fd836062f8b4961eb5b109ee6770ab9",
+    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+    "rust_crate_tree_sha256": "feefc1de327ca2e0bd1c650899f94853f4e58602cee455d4e59a097a39ab8f2f",
+    "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-tryoutput-d0-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+    "host": {
+      "cxx": "g++ (GCC) 16.2.1 20260810",
+      "cxx_target": "x86_64-pc-linux-gnu",
+      "cxx_path": "/usr/bin/g++",
+      "cc_path": "/usr/bin/gcc",
+      "ar_path": "/usr/bin/ar",
+      "make_path": "/usr/bin/make",
+      "python_path": "/usr/bin/python3.14",
+      "git_path": "/usr/bin/git",
+      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+      "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+      "cargo_path": "/usr/bin/cargo",
+      "rustc_path": "/usr/bin/rustc",
+      "rust_toolchain": "system-arch-linux",
+      "platform": "Linux 7.1.8-arch1-3 x86_64"
+    }
+  },
+  "build": {
+    "registry_packages": 164,
+    "registry_lock_closure_sha256": "0c4903da86a0c935e9f8a6132a6049d065945a66aaa4a96744122729382af304"
+  },
+  "input_manifest": {
+    "cases": [
+      "stack_output_contains_full",
+      "cc1420_constant"
+    ],
+    "sha256": "5473f0ec26ef1d548ef8edea3cf6d5e3b134ae21c05aecffa22172ce238fa825"
+  },
+  "coverage": {
+    "output_contains_branch": "MATCH: six geometries through the production Heritage::tryOutputStackGuard output-contains branch (heritage.cc:1406-1430) — op order (CALL then opInsertAfter'd SUBPIECE, cc:1424), inputs/outputs per op, write-list entries with the vnFinal-only active-heritage flag (cc:1426-1429), and the cc:1430 return value true on every geometry including the no-op",
+    "cc1420_truncate_constant": "MATCH: the fourth justifiedContain touchpoint retAddr.justifiedContain(retSize, addr, size, false) — LE start distances 0/2/4 (SUBPIECE in[1] constants c4(0)/c4(2)/c4(4) in the drive projection) and the BE end distances 4/2/0 pinned by case=cc1420_constant",
+    "missing_outvn_creation": "MATCH: cc:1413-1416 — the call output is created at (caller-perspective retAddr, retSize) only when callOp->getOut() is null; the created varnode is written but not active-heritage when the SUBPIECE overwrites vnFinal",
+    "preexisting_outvn_reuse": "MATCH: cc:1411-1412 — a pre-existing call output is reused as SUBPIECE in[0] (geom 4) with no second output created",
+    "vnfinal_null_noop": "MATCH: cc:1426 guard — a pre-existing output with size==retSize (geom 5) creates no ops, leaves the write list empty, and cc:1430 still returns true",
+    "caller_perspective_translation": "MATCH: cc:1407-1410 — the callee-perspective locked storage 0x1000 is translated by diff = addr - transAddr = 0x10 to the caller perspective 0x1010 (the created output varnode offset and the retc header field)",
+    "production_entry_wiring": "UNTESTED: the production guardCalls entry (heritage.cc:1487-1491) passes None for locked_output_storage because Rugra's FuncProto keeps no proto-store output storage (set_output_parameter discards pieces.addr, FSPEC-OUTPUT-STORAGE-0001); the conservative false keeps the unknown_effect INDIRECT guard. Until that residual lands, the production entry cannot reach the ported branch and the direct-drive comparand stages the same (Address, retSize) the C++ oracle derives from fc->getOutput()",
+    "be_stack_space": "UNTESTED: a big-endian spacebase space cannot be staged in Rugra's transitional AddressSpace enum (Stack is LE, is_big_endian() is a constant false), so the BE routing of cc:1420 is pinned only at helper level (case=cc1420_constant), mirroring the heritage_subpiece_const_1204 convention"
+  }
+}

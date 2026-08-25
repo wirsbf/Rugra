@@ -1126,3 +1126,46 @@ normalizeWriteSize/callOpIndirectEffect 的 1:1 移植：
   （保留旧常量/旧插入/旧接线）时差异行：back 常量 c4(0) vs oracle
   c4(8/6/4/12)、前后 concat 顺序颠倒、SUBPIECE 输出与 INDIRECT in0
   状态 F vs W。
+
+## `pub fn try_output_stack_guard`（HERITAGE-TRYOUTPUT-STACKGUARD-CONTAINS，2026-08-25）
+
+- **Ghidra**: `Heritage::tryOutputStackGuard`（heritage.cc:1391-1430）的
+  output-contains 分支（cc:1406-1430）——**第 4 个 justifiedContain 触点**
+  （cc:1420，继 guardOutputOverlapStack 的 cc:1336/cc:1358 与 fspec.cc:4344
+  的表征读取之后）。
+- **分支语义**（到达条件：guardCalls cc:1487 的 isStackOutputLock 门 + 非
+  no_containment 表征）：
+  - cc:1407-1410：`retAddr = fc->getOutput()->getAddress()`（callee 视角
+    存储地址）+ `diff = addr - transAddr`（caller/callee 栈指针差）平移到
+    caller 视角；`retSize = fc->getOutput()->getSize()`。
+  - cc:1411-1416：call 无输出时 `newVarnodeOut(retSize, retAddr, callOp)`
+    并令 vnFinal = outvn。
+  - cc:1417-1425：`size < retSize` 时 SUBPIECE 截断输出到守卫区间，
+    截断常量 = `retAddr.justifiedContain(retSize, addr, size, false)`——
+    容器 = caller 视角返回存储、contained = 守卫区间、forceleft=false，
+    address.cc:138-141 按 retAddr 空间端序路由（LE start 距离 / BE end
+    距离）。SUBPIECE 插在 call 之后（cc:1424），其输出即 vnFinal。
+  - cc:1426-1429：vnFinal 非空才 `setActiveHeritage` + push write；
+    cc:1430 恒返回 true（vnFinal 空的 no-op 几何也如此）。
+- **Rugra 适配**：`locked_output_storage: Option<(Address, i32)>` 第 9 参
+  暂存 cc:1407/cc:1410 的两次 `fc->getOutput()` 读取——Rugra 的 FuncProto
+  尚无 proto-store output 存储模型（`set_output_parameter` 丢弃
+  `pieces.addr`，FSPEC-OUTPUT-STORAGE-0001 残差），生产 guard_calls 传
+  `None` 走保守 false 回退（保持 unknown_effect INDIRECT 守卫，永不
+  under-protect）。读取锁纪律：`existing_out` 先绑定再分支（edition 2021
+  下 match scrutinee 临时值会活过臂体，内联 scrutinee 将在 `None` 臂内对
+  同一 call op 自死锁——与 guard_output_overlap_stack cc:1329 同族坑）。
+- **双侧 fixture**: `tests/oracle/heritage_tryoutput_1204.{cc,rs}` +
+  `tools/run_heritage_tryoutput_oracle.sh`。六个触发几何（justified /
+  unjustified +2 / 远端 +4 / size==retSize 无 SUBPIECE / 预存输出复用 /
+  预存输出 no-op 空 write）直接驱动真实函数，投影 block 内 op 序、
+  SUBPIECE 常量、输出创建/复用、caller 平移（存储 0x1000 + diff 0x10 →
+  0x1010）、write 表项与 {ah} 标志、cc:1430 返回值；case2 钉 cc:1420
+  调用形态的 LE/BE 双路由算术（LE 0/2/4/0/0/0，BE 4/2/0/0/4/0）。
+  C++ 侧 FuncCallSpecs 携带生产前置态（锁定非 void 输出 + spacebase 存储
+  + setStackOutputLock，coreaction.cc:1546-1549 形态），occ 经生产
+  `characterizeAsOutput` 锁定分支（fspec.cc:4339-4353）求值；Rugra 侧
+  occ 以同数学（cc:4346）staged。
+  covered=MATCH（双侧逐字节一致）；overall=PARTIAL_MATCH（生产入口
+  None 回退路径 = FSPEC-OUTPUT-STORAGE-0001，BE 栈空间过渡模型下不可
+  stage，两处登记为 UNTESTED）。

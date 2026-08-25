@@ -1456,7 +1456,16 @@ impl Heritage {
                         .unwrap_or(0);
                     if output_character != crate::fspec::containment::NO_CONTAINMENT {
                         effecttype = crate::fspec::EffectType::UnknownEffect;
-                        if self.try_output_stack_guard(fd, i, space, addr, off, size, output_character, write) {
+                        // cc:1491: if (tryOutputStackGuard(fc, addr,
+                        // transAddr, size, outputCharacter, write)). The
+                        // cc:1407/cc:1410 fc->getOutput() storage reads are
+                        // staged through the last parameter; production has
+                        // no proto-store output model yet (FSPEC-OUTPUT-
+                        // STORAGE-0001 residual), so None keeps the
+                        // unknown_effect fallback — never under-protects.
+                        if self.try_output_stack_guard(
+                            fd, i, space, addr, off, size, output_character, write, None,
+                        ) {
                             effecttype = crate::fspec::EffectType::Unaffected;
                         }
                     }
@@ -3471,13 +3480,31 @@ impl Heritage {
 
     // Ghidra: heritage.cc:1391 Heritage::tryOutputStackGuard
     /// Attempt to guard a stack range against a call with a locked stack
-    /// output. Faithful port of the `contained_by` branch (cc:1395-1405):
-    /// the biggest contained output is translated to the caller's
-    /// perspective and guarded by `guard_output_overlap_stack`. The
-    /// "output contains the range" branch (cc:1407-1430) needs the locked
-    /// output parameter's own storage Address, which Rugra's FuncProto does
-    /// not keep; it conservatively reports `false` so guardCalls falls back
-    /// to the unknown_effect INDIRECT (never under-protects the range).
+    /// output. Faithful port of both branches:
+    ///  - `contained_by` (cc:1395-1405): the biggest contained output is
+    ///    translated to the caller's perspective and guarded by
+    ///    `guard_output_overlap_stack`.
+    ///  - output-contains (cc:1406-1430): the call's output varnode is
+    ///    created at the caller-perspective return address when missing
+    ///    (cc:1413-1416), and when the range is smaller than the return
+    ///    storage a SUBPIECE truncates the output down to the range
+    ///    (cc:1417-1425) with the cc:1420 truncate constant — the FOURTH
+    ///    justifiedContain touchpoint — routed through the endian-aware
+    ///    `justified_contain_range`.
+    ///
+    /// `locked_output_storage` stages the two `fc->getOutput()` reads of the
+    /// branch (cc:1407 address / cc:1410 size). Ghidra's FuncCallSpecs always
+    /// has a proto-store output here: production reaches this function only
+    /// through the `isStackOutputLock` gate (heritage.cc:1487), which
+    /// ActionFuncLink::funcLinkOutput sets exclusively for a locked non-void
+    /// output whose storage is in the spacebase space (coreaction.cc:1546-
+    /// 1549). Rugra's FuncProto does not model the proto-store output storage
+    /// yet (`set_output_parameter` discards `pieces.addr`, fspec.rs), so
+    /// production passes `None` and this branch conservatively reports
+    /// `false`, keeping guardCalls' unknown_effect INDIRECT guard (the
+    /// never-under-protect direction). Register as the
+    /// FSPEC-OUTPUT-STORAGE-0001 residual; see HERITAGE-
+    /// TRYOUTPUT-STACKGUARD-CONTAINS.
     pub fn try_output_stack_guard(
         &mut self,
         fd: &mut Funcdata,
@@ -3488,6 +3515,7 @@ impl Heritage {
         size: i32,
         output_character: i32,
         write: &mut Vec<Arc<RwLock<Varnode>>>,
+        locked_output_storage: Option<(Address, i32)>,
     ) -> bool {
         if output_character == crate::fspec::containment::CONTAINED_BY {
             // cc:1396-1400: if (!fc->getBiggestContainedOutput(...)) return false
@@ -3518,11 +3546,80 @@ impl Heritage {
             );
             return true;
         }
-        // cc:1406-1430: output exists and contains the heritage range.
-        // Requires the locked output parameter's storage (fc->getOutput()).
-        // Rugra FuncProto keeps only the return data-type; conservative
-        // false keeps the unknown_effect INDIRECT guard in guardCalls.
-        false
+        // cc:1406: Reaching here, output exists and contains the heritage
+        // range. The two getOutput() reads are staged through
+        // locked_output_storage (see doc comment); None keeps the
+        // conservative false fallback.
+        let Some((ret_addr, ret_size)) = locked_output_storage else {
+            return false;
+        };
+        // cc:1407-1410: retAddr = fc->getOutput()->getAddress();
+        //              diff = (int4)(addr.getOffset() - transAddr.getOffset());
+        //              retAddr = retAddr + diff;  retSize = fc->getOutput()->getSize();
+        let diff = addr.as_u64().wrapping_sub(trans_offset);
+        let ret_addr = Address::new(ret_addr.as_u64().wrapping_add(diff));
+        // cc:1411: outvn = callOp->getOut();
+        let call_op = match fd.get_call_specs(fc_idx).and_then(|fc| fc.find_call_op(fd)) {
+            Some(op) => op,
+            None => return false,
+        };
+        let mut vn_final: Option<Arc<RwLock<Varnode>>> = None;
+        // Bind the read guard's take into a `let` before the match: in
+        // edition 2021 a match scrutinee temporary lives through the arms,
+        // so an inline scrutinee would hold the read lock while
+        // new_varnode_out takes the write lock on the same op (the same
+        // self-deadlock guard_output_overlap_stack fixed at cc:1329).
+        let existing_out = call_op.0.read().unwrap().output.as_ref().cloned();
+        let outvn = match existing_out {
+            Some(existing) => existing,
+            None => {
+                // cc:1413-1416: outvn = fd->newVarnodeOut(retSize, retAddr,
+                // callOp); vnFinal = outvn.
+                let created = fd.new_varnode_out(ret_size as usize, ret_addr, &call_op);
+                vn_final = Some(created.clone());
+                created
+            }
+        };
+        if size < ret_size {
+            // cc:1418-1419: subPiece = fd->newOp(2, callOp->getAddr());
+            // opSetOpcode(subPiece, CPUI_SUBPIECE);
+            let op_addr = call_op.0.read().unwrap().get_addr();
+            let sub_piece = fd.new_op(2, op_addr);
+            fd.op_set_opcode(&sub_piece, OpCode::CPUI_SUBPIECE);
+            // cc:1420: truncateAmount = retAddr.justifiedContain(retSize,
+            // addr, size, false) — the fourth justifiedContain touchpoint
+            // (after cc:1336/cc:1358 in guardOutputOverlapStack and the
+            // characterization reads in fspec.cc:4344). Container = the
+            // caller-perspective return storage, contained = the guarded
+            // range; address.cc:138-141 routes on retAddr's space
+            // endianness, which is the spacebase (stack) space on this path
+            // — the same space the caller passes in.
+            let truncate_amount = crate::fspec::justified_contain_range(
+                ret_addr.as_u64(),
+                ret_size,
+                addr.as_u64(),
+                size,
+                false,
+                space.is_big_endian(),
+            );
+            // cc:1421-1422: opSetInput(subPiece, newConstant(4,
+            // truncateAmount), 1); opSetInput(subPiece, outvn, 0).
+            let off_const = fd.new_constant(4, truncate_amount as u64);
+            fd.op_set_input(&sub_piece, off_const, 1);
+            fd.op_set_input(&sub_piece, outvn, 0);
+            // cc:1423: vnFinal = fd->newVarnodeOut(size, addr, subPiece);
+            vn_final = Some(fd.new_varnode_out(size as usize, addr, &sub_piece));
+            // cc:1424: fd->opInsertAfter(subPiece, callOp);
+            fd.op_insert_after(&sub_piece, &call_op);
+        }
+        // cc:1426-1429: if (vnFinal != (Varnode *)0) { vnFinal->
+        // setActiveHeritage(); write.push_back(vnFinal); }
+        if let Some(vn_final) = vn_final {
+            vn_final.write().unwrap().set_active_heritage();
+            write.push(vn_final);
+        }
+        // cc:1430: return true;
+        true
     }
 
     // Ghidra: heritage.cc:2572 Heritage::bumpDeadcodeDelay
@@ -6489,6 +6586,62 @@ mod tests {
             count_alive(&new_fd)
         );
         assert_eq!(new_fd.heritage.pass, 3);
+    }
+
+    // HERITAGE-TRYOUTPUT-STACKGUARD-CONTAINS: Rust-only regression test for
+    // the production None staging arm — guard_calls passes None until the
+    // FSPEC-OUTPUT-STORAGE-0001 residual (FuncProto keeps no proto-store
+    // output storage) lands, and the branch must conservatively return
+    // false with an untouched write list so guardCalls keeps the
+    // unknown_effect INDIRECT guard. The oracle-verified Some(...) arm is
+    // covered bilaterally by tests/oracle/heritage_tryoutput_1204.
+    #[test]
+    fn test_try_output_stack_guard_none_storage_is_conservative_false() {
+        use crate::block::BlockBasic;
+        use crate::funcdata::Funcdata;
+
+        let mut fd = Funcdata::new("nonestage", Address::new(0x7000), 0x20);
+        let block: Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(BlockBasic::new(0, Address::new(0x7000))));
+        fd.bblocks.add_block(block.clone());
+        let call = fd.new_op(1, Address::new(0x7000));
+        fd.op_set_opcode(&call, OpCode::CPUI_CALL);
+        let target = fd.new_constant(8, 0x4000);
+        fd.op_set_input(&call, target, 0);
+        fd.op_insert_end(&call, &block);
+        let fc = crate::fspec::FuncCallSpecs::new_for_op(
+            &call,
+            crate::fspec::FuncProto::new(
+                String::new(),
+                Arc::new(crate::type_system::datatype::Datatype::Void(
+                    crate::type_system::datatype::TypeBase::new(
+                        "void".to_string(),
+                        0,
+                        crate::type_system::datatype::TypeMetatype::Void,
+                    ),
+                )),
+            ),
+        );
+        let fc_idx = fd.add_call_specs(fc);
+
+        let mut write: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        let guarded = Heritage::new().try_output_stack_guard(
+            &mut fd,
+            fc_idx,
+            AddressSpace::Stack,
+            Address::new(0x1010),
+            0x1000,
+            4,
+            crate::fspec::containment::CONTAINS_JUSTIFIED,
+            &mut write,
+            None,
+        );
+
+        assert!(!guarded);
+        assert!(write.is_empty());
+        // The call op is untouched: no output creation, no SUBPIECE.
+        assert!(call.0.read().unwrap().output.is_none());
+        assert_eq!(block.read().unwrap().get_ops().len(), 1);
     }
 }
 
