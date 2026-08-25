@@ -95,7 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Now actually run restructure_varnode and report scope symbol count.
         let mut scope = rugra::varmap::ScopeLocal::new();
-        scope.restructure_varnode(&fd);
+        scope.restructure_varnode(&mut fd);
         eprintln!("[{}] scope symbols: {}", name, scope.symbols.len());
         for s in &scope.symbols {
             eprintln!("    sym: name={} start={} size={}", s.name, s.start, s.size);

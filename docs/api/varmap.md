@@ -42,13 +42,16 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
 即 `1` = 负向增长（x86）、`-1` = 正向增长。此前 `ScopeLocal::new`
 误初始化为 `-1`，导致 `has_local_alias` 在 x86 上恒返回 false，静默
 关闭了别名分析（P0-1，详见 `docs/alignment_audit/INDEX.md`）。
-- `pub aliases: Vec<u64>` — 排序的别名偏移（varmap.cc `alias`）
+- `pub aliases: Vec<u64>` — 别名偏移（gather 后按 gather 序；`sort_aliases` 后升序，varmap.cc:726）
 - `pub add_base: Vec<AddBase>` — 加法基根（base + index）
 - `direction: i32` — 方向：`1`=负向增长(x86)，`-1`=正向增长（与 Ghidra `AliasChecker::direction` 同号）
-- `gather_internal(&mut self, fd)` — `AliasChecker::gatherInternal` (varmap.cc:660)
+- `gather(&mut self, fd, stack_grows_negative, defer)` — `AliasChecker::gather` (varmap.cc:692-704)：复位状态、`direction = stackGrowsNegative() ? 1 : -1`（Rugra 无 per-space 增长位，传 scope 的原型派生旗标——与 Ghidra 栈空间的位同源配置）、`derive_boundaries(fd 原型)`、非 defer 立即 `gather_internal`。**2026-08-25 VARMAP-GATHEROPEN-GUARD-0001**：deriveBoundaries 从此经该入口接入 varmap 域（此前管线从不调用，边界恒 0x1000000）
+- `gather_internal(&mut self, fd)` — `AliasChecker::gatherInternal` (varmap.cc:660)；`alias_boundary` 初值 = `local_extreme`（非硬编码 ~0——正向增长时为 localBoundary），列表清理由 `gather` 承担（varmap.cc:698-699），此处不再排序（sortAlias 独立，varmap.cc:1279）
 - `gather_additive_base(&mut self, startvn)` — `AliasChecker::gatherAdditiveBase` (varmap.cc:741)，递归 BFS 追踪 INT_ADD/INT_SUB/PTRADD/PTRSUB/SEGMENTOP/COPY 后继
-- `has_local_alias(&self, vn)` — `AliasChecker::hasLocalAlias` (varmap.cc:711)；`direction==-1`（正向增长）时返回 false
-- `derive_boundaries(&mut self, local_boundary)` — `AliasChecker::deriveBoundaries`
+- `sort_aliases(&mut self)` — `AliasChecker::sortAlias` (varmap.cc:726)，restructureVarnode varmap.cc:1279 调用（checkUnaliasedReturn 的 lower_bound 依赖有序）
+- `has_local_alias(&self, vn)` — `AliasChecker::hasLocalAlias` (varmap.cc:711)；`direction==-1`（正向增长）时返回 false；`!calculated` 时保守 true（Ghidra 此处现场 gatherInternal——Rust 取 &self，管线两条路径均预计算，未计算分支不可达）
+- `derive_boundaries(&mut self, localrange, paramrange, has_model)` — `AliasChecker::deriveBoundaries` (varmap.cc:633-655)：默认 `localExtreme=~0 / localBoundary=0x1000000`（正向增长时 `localExtreme=localBoundary`）；**有模型时** `localBoundary = paramrange 末 range 的 last`（默认负增长模型 = **511**，fspec.cc:2298-2307——此前死区 [511,0x1000000) 内的正偏移加法基不收缩 aliasBoundary，R8 §6.3 证伪"行为等价"后的修复），正向增长改 `paramrange 首 range 的 first` 且 `localExtreme = localBoundary`
+- `boundaries()` — RUGRA-GLUE 观察口：`(localBoundary, localExtreme, aliasBoundary)`（C++ fixture 经 `#define private public` 直读成员）
 
 辅助函数：
 - `pub fn gather_offset(vn)` — `AliasChecker::gatherOffset` (varmap.cc:817)，递归求和常量偏移（COPY/ADD/SUB/PTRADD/SEGMENTOP），末尾按字节大小掩码；`VARMAP-GATHEROFFSET-0001` 已按 `address.hh:499` 的 `size >= 8` 钳位语义修复 8-byte 边界，并由锁定 12.0.4 的 7/8-byte 直接状态 fixture 验证。该窄分支的 `MATCH` 不提升整个 `AliasChecker` 模块状态。
@@ -71,7 +74,11 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
   `start as i64`——负偏移保持负值供 `RangeHint::compare` 有符号排序）
 - `add_fixed_type(start, dtype, flags)` — `MapState::addFixedType` (varmap.cc:926)
 - `gather_varnodes(fd)` — `MapState::gatherVarnodes` (varmap.cc:1124)，逐 op-code 分支（INDIRECT/MULTIEQUAL/PIECE/SUBPIECE/COPY/默认），含 same-storage 去重与 `is_read_active`。PIECE 视为两个 COPY（little-endian slot=1，addr+=inFirst.size）；SUBPIECE 用 little-endian `trunc = in1.offset`，`addr = in0.off + trunc` 后与 vn 地址比较
-- `gather_open(fd, checker)` — `MapState::gatherOpen` (varmap.cc:1211)，对每个 AddBase 根：指针→pointee，数组→base，index 在则 minItems=3；非指针传 `None`（Ghidra 传 NULL，"Do unknown array"，varmap.cc:1230），由 `add_range` 回退默认类型（varmap.cc:896）
+- `gather_open(fd, types)` — `MapState::gatherOpen` (varmap.cc:1211-1249)：先跑内嵌 checker 的 `gather(fd, grows, false)`（varmap.cc:1214，含 deriveBoundaries），对每个 AddBase 根：指针→pointee，**数组层全下钻**（varmap.cc:1226-1227 `while`——此前单层是缺陷），index 在则 minItems=3；非指针传 `None`（Ghidra 传 NULL，"Do unknown array"，varmap.cc:1230），由 `add_range` 回退默认类型（varmap.cc:896）；随后遍历 `fd.heritage.load_guard`/`store_guard` 走 `add_guard`（varmap.cc:1241-1248）。**checker 现为 MapState 成员**（varmap.hh MapState `AliasChecker checker`），`sort_alias`/`get_alias` 是 restructureVarnode 的消费口（varmap.cc:1279-1284）
+- `set_stack_grows_negative(grows)` — RUGRA-GLUE：Ghidra 由 space 成员的增长位（varmap.cc:700）供 checker.gather 取向；Rugra AddressSpace 无该位，装 scope 的原型派生值
+- `add_guard(guard, opc, types)` — **2026-08-25 VARMAP-GATHEROPEN-GUARD-0001** `MapState::addGuard` (varmap.cc:1003-1039)：`isValid`（op 活且 opcode 匹配，heritage.hh:169）→ step==0 拒 → 地址输入类型指针下钻数组层 → outSize 匹配/整除 step（整除时假装 outSize 数组）→ 对齐不匹配且 step<=8 时工厂 `getBase(step,TYPE_UNKNOWN)` 重型 → range-locked（`analysis_state==2`）`minItems=(max-min+1)/step-1` 否则 3 → open hint
+- `gather_symbols(scope)` — **2026-08-25** `MapState::gatherSymbols` (varmap.cc:1044-1059)：按 space 的 maptable 列表序回灌每个映射符号（entry 起始偏移、符号类型、typelock→hint 旗标）为 fixed hint——restructureVarnode varmap.cc:1269 的 typelocked 符号回灌
+- `sort_alias()` / `get_alias()` — varmap.cc:1279/1281-1284 的 `state.sortAlias()`/`state.getAlias()`
 - `is_read_active(vn)` — `MapState::isReadActive` (varmap.cc:1088)，过滤纯 same-storage INDIRECT/MULTIEQUAL
 - `initialize()` — `MapState::initialize` (varmap.cc:1063-1082)：先取分析窗口的
   ** getLastSignedRange**（`get_last_signed_range`，address.cc:562-583——正半区
@@ -110,7 +117,11 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
 局部变量作用域。对应 Ghidra ScopeLocal。`#[derive(Debug, Clone)]`（2026-06-26：
 Clone 用于 printc 从 `fd.scope` 复用）。
 **2026-06-26 完整对齐**（类型面 2026-08-16 `TYPE-WIRING-0001` 统一到 TypeFactory 单轨：`restructure_varnode` 解析工厂句柄——`fd.arch.types` 优先，无 Architecture 生产路径回退 `TypeFactory::shared_default()`（DataOrg flavor，模拟 headless 单 Architecture 进程）——并贯穿 `gather_spacebase`/`restructure`/`merge_with`/`create_entry`/`fake_input_symbols`；Ghidra 对应 `glb->types` 于 varmap.cc:1261/1309、`fd.getArch()->types` 于 varmap.cc:1129/1438）：
-- `restructure_varnode(fd)` — 主入口：`ScopeLocal::restructureVarnode` (varmap.cc:1256)，编排 reset_local_window→build_map_state→gather_varnodes→gather_spacebase→gather_internal→gather_open→restructure→mark_unaliased→fake_input_symbols；默认类型 = 工厂 `getBase(1,TYPE_UNKNOWN)`（varmap.cc:1261）
+- `restructure_varnode(fd)` — 主入口（**fd 取 `&mut`**：annotateRawStackPtr 插 PTRSUB op，varmap.cc:405-406）：`ScopeLocal::restructureVarnode` (varmap.cc:1256-1286) 完整编排：clearUnlockedCategory(-1) 存活逻辑→reset_local_window→build_map_state→gather_varnodes→gather_spacebase→gather_open（内嵌 checker.gather + addGuard）→**gather_symbols 回灌（:1269）**→restructure→**clear_unlocked_category(function_parameter) + clear_category(fake_input)（:1275-1276）**→fake_input_symbols→**sort_alias（:1279）→mark_unaliased→check_unaliased_return（:1280-1282）→alias[0]==0 时 annotate_raw_stack_ptr（:1284-1285）**；默认类型 = 工厂 `getBase(1,TYPE_UNKNOWN)`（varmap.cc:1261）。fakeInputSymbols 先于 markUnaliased（Ghidra varmap.cc:1272-1277 的注释："define fake symbols so that mark_unaliased will work"——此前 Rugra 顺序颠倒）；aliasyes 门未穿透（coreaction.rs:877-880 TODO，Rugra 恒 true）
+- `clear_unlocked_category(cat)` — `ScopeInternal::clearUnlockedCategory` (database.cc:2071-2090) 的 cat>=0 分支（varmap.cc:1275 对 function_parameter 调用）：typelock 存活（未 namelock 的已定义名重置 $$undef，database.cc:2080-2082）；`resetSizeLockType`（:2085-2086）无 Rugra 路径（LocalSymbol 无 sizelock 概念，不可达）；其余 removeSymbol
+- `clear_category(cat)` — `ScopeInternal::clearCategory` (database.cc:2022-2029) 的 cat>=0 分支（varmap.cc:1276 对 fake_input 调用）
+- `check_unaliased_return(fd, alias)` — **2026-08-25** `ScopeLocal::checkUnaliasedReturn` (varmap.cc:414-428)：首个 RETURN 的值输入在栈空间且无别名（有序表的 lower_bound）触达 `[off, off+size-1]` 时 `mark_not_mapped(off, size, false)`（删重叠符号 + 并集树去范围）
+- `annotate_raw_stack_ptr(fd)` — **2026-08-25** `ScopeLocal::annotateRawStackPtr` (varmap.cc:386-408)：type recovery 已开始时，栈指针的非加法读者（跳过 eval-special 非调用与 INT_ADD/PTRSUB/PTRADD）改为消费占位 `PTRSUB(sp,#0)`（newOpBefore + opSetInput 到 getSlot 槽位）
 - `reset_local_window(fd)` — `ScopeLocal::resetLocalWindow` (varmap.cc:432-460)：`stackGrowsNegative` 取自原型（:435），`min/maxParamOffset` 复位（:436-437；**等价性仅限第 1 趟/经 clear 的边界**——Ghidra 只在构造/`Funcdata::clear`/decode 调 resetLocalWindow（funcdata.cc:70/96/836），RULE_REPEATAPPLY 重启不 clear（action.cc:539-570），第 2+ 趟保持 markNotMapped 窄化窗口与跨趟累积 min/max；Rugra 每趟 fresh scope 全量重装——登记 `VARMAP-CROSSPASS-PERSISTENCE-0001`），并集树 = 原型 localRange ∪ paramRange（:441-458）装入 `local_range`；原型自身 localRange 另存 `proto_local_range`（buildVariableName 的门读原型而非并集，varmap.cc:555）。`rangeLocked`（:439）无 Rugra 路径（`<localdb lock>` decode 未移植）。**2026-08-24 VARMAP-LOCALWINDOW-0001**：替换原先硬编码的正向 `[0,0x100000)` 窗口——那是参数侧半区，把每条符号扩展负偏移 local/open hint 在 add_range 门丢弃（4096B 数组不恢复、负偏移名回绕的单点根因）
 - `build_map_state(fd, types)` — varmap.cc:1260-1261 的 MapState 组装：分析窗口 = 并集树逐条减 paramrange（varmap.cc:870-875 "Clear possible input symbols"）+ `getBase(1,TYPE_UNKNOWN)` 默认类型
 - `restructure(state, types)` — `ScopeLocal::restructure` (varmap.cc:1294)，相交→merge_with(工厂句柄)，不相交→attempt_join/adjust_fit/create_entry
@@ -123,6 +134,7 @@ Clone 用于 printc 从 `fd.scope` 复用）。
 - `func_proto_param_range(fd)`（自由函数）— `FuncProto::getParamRange` (fspec.hh:1540)：Rugra FuncProto 不持有模型 Arc，按 `FuncProto::setScope` 的回退序（fspec.cc:3879-3885）经 Architecture 注册表解析——约定名 → defaultfp → 无 Architecture 时以 `ProtoModelFull::new`（= `defaultParamRange`，fspec.cc:2292，8 字节负增长栈 [0,511]）作 FUNCPROTO-MODEL-BIND-0001 期占位
 - `func_proto_local_range(fd)`（自由函数）— `FuncProto::getLocalRange` (fspec.hh:1539)：与 param 版同一回退序的 local 窗口桥（2026-08-24 VARMAP-LOCALWINDOW-0001）；无 Architecture 回退 `ProtoModelFull::new` 的 `default_local_range`（fspec.cc:2263-2290，负增长 8 字节栈 = `[u64::MAX-999999, u64::MAX]`——heritage 符号扩展负偏移所在半区）
 - `func_proto_stack_grows_negative(fd)`（自由函数）— `FuncProto::isStackGrowsNegative` (fspec.hh:1541)：同回退序读模型 `stackgrowsnegative`（resetLocalWindow :435 消费）；无模型回退 `true`（ProtoModel 默认构造，fspec.cc:2349）
+- `func_proto_has_model(fd)`（自由函数）— `FuncProto::hasModel` (fspec.hh:1389)：同回退序探测模型是否绑定；derive_boundaries 的 `if (proto.hasModel())` 门（varmap.cc:641）——无 Architecture 时 false，边界保持 0x1000000 默认（与 Ghidra 无模型原型一致；Ghidra 侧经 Funcdata 构造的 setScope（funcdata.cc:68）模型恒绑定，该 false 分支在 oracle fixture 域不可构造，仅 Rust 单测覆盖）
 - `window_in_range(ranges, offset, size)`（自由函数）— `RangeList::inRange(addr,size)` (address.cc:468-487) 的 Vec 窗口形态：完整 extent（uintb 回绕）须落在单一 range 内
 - `get_last_signed_range(ranges)`（自由函数）— `RangeList::getLastSignedRange` (address.cc:562-583)：正半区（`first <= midway`）末位，无则负半区末位；initialize 的端点推导源
 - `param_range_in_range(paramrange, offset)`（自由函数）— `RangeList::inRange(addr,1)` (address.cc:468-487)：空表 false，否则最后一个 `first <= offset` 的 range 须 `last >= offset`（Rugra fspec RangeList 无 space 字段——参数 range 全为 stack 且调用方已过滤 scope space，Ghidra 的 space 测试被覆盖）
@@ -155,7 +167,10 @@ varmap 算法层（RangeHint/AliasChecker/MapState/ScopeLocal）已 1:1 对齐 G
 尚未完成：
 - ~~**集成到 printc.rs**：变量命名仍用启发式 get_stack_variable_name，未走 ScopeLocal 符号查找~~ → 2026-08-15 已完成：printc 消费 `assign_default_names` 建立的权威名（见 printc.md），命名源切换
 - alias_block_level 配置（影响 markUnaliased 的 struct/array 阻断）
-- LoadGuard/StoreGuard 在 gatherOpen 中的 addGuard 路径（待 LoadGuard 接入 Funcdata 栈空间）
+- ~~LoadGuard/StoreGuard 在 gatherOpen 中的 addGuard 路径~~ → 2026-08-25 VARMAP-GATHEROPEN-GUARD-0001 已移植（MapState::addGuard + gather_open 消费 `fd.heritage.load_guard/store_guard`），锁定 oracle 双侧 fixture 验证
+- coreaction.rs ActionActiveParam 的 `AliasChecker::new(1)+gather_internal` 改走 `gather`（coreaction.cc:1731 `aliascheck.gather(&data,stack,true)` 的 defer 语义 + deriveBoundaries）——fspec/coreaction 租约外，登记 VARMAP-ACTIVEPARAM-GATHER-0001
+- fspec.rs `check_input_trial_use` 缺 fspec.cc:5618 `!getLocalRange().inRange → markNoUse` 与 callee_pop 分支（fspec.cc:5619-5625）——func_proto_local_range 桥已可供，fspec.rs 租约外，登记 FSPEC-TRIALUSE-LOCALRANGE-0001
+- derive_boundaries 的 direction==-1（正向增长栈）分支无 fixture 驱动（fixture 栈为负增长；可构造分歧输入需正向增长 SpacebaseSpace）
 - TYPE_PARTIALSTRUCT/PARTIALUNION 在 addFixedType 的处理（Rugra 无此元类型）
 - buildDefaultName 的代表 Varnode 分支（database.cc:1759-1771）已移植但无 fixture 驱动（需活 Funcdata/HighVariable；绑定 ActionNameVars caller 闭包）
 - 真实 Translate 寄存器表接入 ScopeLocal::register_names（生产管线 Architecture 桥接待做）

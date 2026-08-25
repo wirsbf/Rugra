@@ -529,6 +529,9 @@ pub struct AliasChecker {
     pub add_base: Vec<AddBase>,
     /// Boundary between local and parameter region (varmap.cc `localBoundary`).
     local_boundary: u64,
+    /// The extreme offset of the locals region (varmap.cc `localExtreme`):
+    /// `~0` for negative-growing stacks, `localBoundary` for positive growth.
+    local_extreme: u64,
     /// The lowest alias offset seen (varmap.cc `aliasBoundary`), initialised to
     /// `local_extreme` and shrunk toward the locals region.
     alias_boundary: u64,
@@ -542,40 +545,121 @@ pub struct AliasChecker {
 }
 
 impl AliasChecker {
-    /// The "infinitely far" boundary, so the first real alias always wins.
-    /// Ghidra initialises `localExtreme` from `space->getHighest()`.
-    const LOCAL_EXTREME: u64 = u64::MAX;
-
-    // Ghidra: varmap.hh:137 AliasChecker::new
+    // Ghidra: varmap.hh:137 AliasChecker::AliasChecker
     pub fn new(direction: i32) -> Self {
         Self {
             aliases: Vec::new(),
             add_base: Vec::new(),
             local_boundary: 0x1000000,
-            alias_boundary: Self::LOCAL_EXTREME,
+            local_extreme: u64::MAX,
+            alias_boundary: u64::MAX,
             direction,
             calculated: false,
         }
     }
 
     // Ghidra: varmap.cc:633 AliasChecker::deriveBoundaries
-    /// Configure local/parameter boundaries from a function prototype.
-    /// Corresponds to `AliasChecker::deriveBoundaries` (varmap.cc ~590).
-    /// For a negative-growing stack the locals occupy offsets below
-    /// `local_boundary`; the parameter region is above it.
-    pub fn derive_boundaries(&mut self, local_boundary: u64) {
-        self.local_boundary = local_boundary;
+    /// Set up basic offset boundaries for what constitutes a local variable
+    /// or a parameter on the stack, informed by the ProtoModel when available.
+    /// Faithful to `AliasChecker::deriveBoundaries` (varmap.cc:633-655):
+    /// defaults `localExtreme = ~0; localBoundary = 0x1000000` (with
+    /// `localExtreme = localBoundary` when the stack grows positively),
+    /// then, **if the prototype has a model** (`proto.hasModel()`), reads the
+    /// model's local/param windows and sets `localBoundary =
+    /// paramrange.getLastRange()->getLast()` — for the default
+    /// negative-growth model that is **511** (`defaultParamRange`
+    /// `[0,511]`, fspec.cc:2298-2307) — and, for positive growth,
+    /// `localBoundary = paramrange.getFirstRange()->getFirst()` with
+    /// `localExtreme = localBoundary`. Ranges arrive as sorted inclusive
+    /// `(first,last)` pairs; `getFirstRange`/`getLastRange` are the set's
+    /// first/last elements (address.hh Range ordering by (space,first)).
+    pub fn derive_boundaries(
+        &mut self,
+        localrange: &[(u64, u64)],
+        paramrange: &[(u64, u64)],
+        has_model: bool,
+    ) {
+        // localExtreme = ~((uintb)0); localBoundary = 0x1000000;
+        // if (direction == -1) localExtreme = localBoundary; (varmap.cc:636-639)
+        self.local_extreme = u64::MAX;
+        self.local_boundary = 0x1000000;
+        if self.direction == -1 {
+            self.local_extreme = self.local_boundary;
+        }
+        // if (proto.hasModel()) { const Range *local = localrange.getFirstRange();
+        // const Range *param = paramrange.getLastRange();
+        // if ((local != 0)&&(param != 0)) { ... } } (varmap.cc:641-653)
+        if has_model {
+            let local = localrange.first();
+            let param = paramrange.last();
+            if let (Some(_local), Some(param)) = (local, param) {
+                self.local_boundary = param.1; // param->getLast()
+                if self.direction == -1 {
+                    // localBoundary = paramrange.getFirstRange()->getFirst();
+                    // localExtreme = localBoundary; (varmap.cc:650-651)
+                    self.local_boundary = paramrange.first().map(|r| r.0).unwrap_or(0);
+                    self.local_extreme = self.local_boundary;
+                }
+            }
+        }
+    }
+
+    // Ghidra: varmap.cc:692 AliasChecker::gather
+    /// Entry point for a function+space alias analysis. Faithful to
+    /// `AliasChecker::gather` (varmap.cc:692-704): reset state, set
+    /// `direction = space->stackGrowsNegative() ? 1 : -1`, run
+    /// `deriveBoundaries(fd->getFuncProto())`, and — unless `defer` — run
+    /// `gatherInternal` immediately (a deferred checker calculates on the
+    /// first `hasLocalAlias`). Rugra's `AddressSpace` enum carries no
+    /// per-space growth flag; the scope's prototype-derived
+    /// `stack_grows_negative` is passed in its place (identical value for
+    /// every reachable cspec: the stack space's growth bit and the model's
+    /// `stackgrowsnegative` are configured together).
+    pub fn gather(&mut self, fd: &crate::funcdata::Funcdata, stack_grows_negative: bool, defer: bool) {
+        // fd = f; space = spc; calculated = false;
+        // addBase.clear(); alias.clear(); (varmap.cc:695-699)
+        self.calculated = false;
+        self.add_base.clear();
+        self.aliases.clear();
+        // direction = space->stackGrowsNegative() ? 1 : -1; (varmap.cc:700)
+        self.direction = if stack_grows_negative { 1 } else { -1 };
+        // deriveBoundaries(fd->getFuncProto()); (varmap.cc:701) — the
+        // prototype's own local/param windows (fspec.hh:1539/1540), with the
+        // same model precedence as the `func_proto_*` bridges.
+        let localrange = func_proto_local_range(fd)
+            .ranges()
+            .iter()
+            .map(|r| (r.get_first().as_u64(), r.get_last().as_u64()))
+            .collect::<Vec<_>>();
+        let paramrange = func_proto_param_range(fd)
+            .ranges()
+            .iter()
+            .map(|r| (r.get_first().as_u64(), r.get_last().as_u64()))
+            .collect::<Vec<_>>();
+        self.derive_boundaries(&localrange, &paramrange, func_proto_has_model(fd));
+        if !defer {
+            self.gather_internal(fd);
+        }
+    }
+
+    // RUGRA-GLUE: boundary observation accessor for the locked oracle fixture
+    /// `(localBoundary, localExtreme, aliasBoundary)` — the Ghidra fixture
+    /// reads these members directly through `#define private public`; the
+    /// Rust fixture gets the same read-only view here.
+    pub fn boundaries(&self) -> (u64, u64, u64) {
+        (self.local_boundary, self.local_extreme, self.alias_boundary)
     }
 
     // Ghidra: varmap.cc:660 AliasChecker::gatherInternal
     /// If there is a stack (spacebase) pointer, find its input Varnode, and look
     /// for additive uses of it. Then calculate the offsets that start an aliased
-    /// region. Faithful to `AliasChecker::gatherInternal` (varmap.cc:660).
+    /// region. Faithful to `AliasChecker::gatherInternal` (varmap.cc:660):
+    /// `aliasBoundary = localExtreme` (NOT a constant — deriveBoundaries
+    /// sets it to `localBoundary` for positive-growth stacks); the lists are
+    /// cleared by `gather` (varmap.cc:698-699), not here.
     pub fn gather_internal(&mut self, fd: &crate::funcdata::Funcdata) {
         self.calculated = true;
-        self.alias_boundary = Self::LOCAL_EXTREME;
-        self.aliases.clear();
-        self.add_base.clear();
+        self.alias_boundary = self.local_extreme;
 
         // Find the spacebase input varnode (RSP). Rugra models RSP as the
         // Register-space input varnode at offset 0x20, size 8.
@@ -608,8 +692,19 @@ impl AliasChecker {
                 self.alias_boundary = offset;
             }
         }
+        // NOTE: no sort here — Ghidra's gatherInternal (varmap.cc:660-684)
+        // leaves `alias` in gather order; `sortAlias` (varmap.cc:726) runs
+        // separately from ScopeLocal::restructureVarnode (varmap.cc:1279).
+    }
 
-        self.sort_aliases();
+    // Ghidra: varmap.cc:726 AliasChecker::sortAlias
+    /// Sort the alias offsets ascending. Faithful to
+    /// `AliasChecker::sortAlias` (varmap.cc:726-729), called from
+    /// `ScopeLocal::restructureVarnode` (varmap.cc:1279) before
+    /// markUnaliased/checkUnaliasedReturn consume the list
+    /// (checkUnaliasedReturn's lower_bound requires the sort).
+    pub fn sort_aliases(&mut self) {
+        self.aliases.sort();
     }
 
     // Ghidra: varmap.cc:741 AliasChecker::gatherAdditiveBase
@@ -725,11 +820,6 @@ impl AliasChecker {
             }
         }
         // Ghidra clears marks here; our HashSet is dropped at scope end.
-    }
-
-    // Ghidra: varmap.hh:137 AliasChecker::sortAliases
-    fn sort_aliases(&mut self) {
-        self.aliases.sort();
     }
 
     // Ghidra: varmap.cc:711 AliasChecker::hasLocalAlias
@@ -992,6 +1082,28 @@ fn func_proto_stack_grows_negative(fd: &crate::funcdata::Funcdata) -> bool {
     true
 }
 
+// Ghidra: fspec.hh:1389 FuncProto::hasModel
+/// Whether the prototype has a ProtoModel attached
+/// (`FuncProto::hasModel`, fspec.hh:1389 `model != 0`), resolved with the
+/// same precedence as `func_proto_param_range`/`func_proto_local_range`
+/// (the registry model for the prototype's convention name, else the
+/// Architecture default). With no Architecture attached there is no model —
+/// `AliasChecker::deriveBoundaries` then keeps the `0x1000000` default
+/// boundary (varmap.cc:637), exactly as Ghidra does for a model-less
+/// prototype.
+fn func_proto_has_model(fd: &crate::funcdata::Funcdata) -> bool {
+    if let Some(arch) = &fd.arch {
+        let name = fd.get_func_proto().get_model_name();
+        if arch.proto_models.get(name).is_some() {
+            return true;
+        }
+        if arch.defaultfp.is_some() {
+            return true;
+        }
+    }
+    false
+}
+
 // RUGRA-GLUE: window_in_range (RangeList::inRange over the Vec window model)
 /// `RangeList::inRange(addr, size)` (address.cc:468-487) over a sorted,
 /// inclusive `Vec<(first, last)>` window: empty → false; the last range with
@@ -1246,6 +1358,17 @@ pub struct MapState {
     /// inclusive `Vec<(first, last)>`; all ranges are stack ranges (the Vec
     /// carries no space, cf. `param_range_in_range`).
     range: Vec<(u64, u64)>,
+    /// Alias analysis for the space (varmap.hh MapState member
+    /// `AliasChecker checker`): `gatherOpen` (varmap.cc:1214) runs
+    /// `checker.gather(&fd,spaceid,false)` on it and `restructureVarnode`
+    /// (varmap.cc:1279-1284) consumes `sortAlias`/`getAlias` afterwards.
+    pub(crate) checker: AliasChecker,
+    /// Whether the stack grows toward smaller addresses — Ghidra derives
+    /// gatherOpen's `checker.gather` direction from the space member
+    /// (`spaceid->stackGrowsNegative()`, varmap.cc:700); Rugra's
+    /// `AddressSpace` enum carries no per-space flag, so the scope's
+    /// prototype-derived value is installed at construction.
+    stack_grows_negative: bool,
 }
 
 impl MapState {
@@ -1262,6 +1385,8 @@ impl MapState {
             iter_pos: 0,
             default_type: None,
             range,
+            checker: AliasChecker::new(1),
+            stack_grows_negative: true,
         }
     }
 
@@ -1276,7 +1401,17 @@ impl MapState {
             iter_pos: 0,
             default_type: Some(default_type),
             range,
+            checker: AliasChecker::new(1),
+            stack_grows_negative: true,
         }
+    }
+
+    // RUGRA-GLUE: direction install for the checker (Ghidra reads the space
+    // member's growth flag; the Rust MapState stores the scope's value).
+    /// Set the stack-growth direction the embedded checker uses when
+    /// `gather_open` runs `checker.gather` (varmap.cc:1214/700).
+    pub fn set_stack_grows_negative(&mut self, grows_negative: bool) {
+        self.stack_grows_negative = grows_negative;
     }
 
     // RUGRA-GLUE: analysis window accessor (Ghidra reads the `range` member
@@ -1569,43 +1704,204 @@ impl MapState {
 
     // Ghidra: varmap.cc:1211 MapState::gatherOpen
     /// Gather open (pointer-referenced) ranges. Faithful to
-    /// `MapState::gatherOpen` (varmap.cc:1211): for each additive base root,
-    /// if its type is a pointer, create an open RangeHint sized to the
-    /// pointee; use minItems=3 if an index varnode is present.
+    /// `MapState::gatherOpen` (varmap.cc:1211-1249): run
+    /// `checker.gather(&fd,spaceid,false)` (the alias analysis whose
+    /// deriveBoundaries sets the local/param boundary), then for each
+    /// additive base root, if its type is a pointer, descend through ALL
+    /// array layers of the pointee (varmap.cc:1224-1227 — a single-level
+    /// descend stops too early for `int (*)[4][8]`-shaped pointers) and
+    /// create an open RangeHint; use minItems=3 if an index varnode is
+    /// present, -1 otherwise. Finally every LoadGuard/StoreGuard of the
+    /// function is converted through `add_guard` (varmap.cc:1241-1248).
     pub fn gather_open(
         &mut self,
         fd: &crate::funcdata::Funcdata,
-        checker: &AliasChecker,
+        types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
     ) {
-        let addbase = checker.get_add_base();
-        let aliases = checker.get_aliases();
+        // checker.gather(&fd,spaceid,false); (varmap.cc:1214)
+        self.checker.gather(fd, self.stack_grows_negative, false);
+
+        let addbase = self.checker.add_base.clone();
+        let aliases = self.checker.aliases.clone();
         for (i, entry) in addbase.iter().enumerate() {
             let offset = aliases.get(i).copied().unwrap_or(0);
             let ct: Option<Arc<Datatype>> = {
                 let base_vn = entry.base.read().unwrap();
                 base_vn.v_type.clone()
             };
-            // If pointer, descend to pointee; if pointee is array, descend to base.
-            let pointee = ct.and_then(|t| match t.as_ref() {
+            // if (ct->getMetatype() == TYPE_PTR) { ct = ptr_to;
+            // while (ct->getMetatype() == TYPE_ARRAY) ct = base; }
+            // else ct = NULL; (varmap.cc:1224-1230)
+            let mut pointee = ct.and_then(|t| match t.as_ref() {
                 Datatype::Pointer(p) => Some(p.ptr_to.clone()),
                 _ => None,
             });
+            while let Some(p) = pointee.clone() {
+                match p.as_ref() {
+                    Datatype::Array(a) => pointee = Some(a.array_of.clone()),
+                    _ => break,
+                }
+            }
             // Ghidra passes ct = NULL for non-pointers ("Do unknown array",
             // varmap.cc:1230); MapState::addRange substitutes the default
             // type (the factory's getBase(1,TYPE_UNKNOWN), varmap.cc:896).
-            let final_dt: Option<Arc<Datatype>> = match &pointee {
-                Some(p) => match p.as_ref() {
-                    Datatype::Array(a) => Some(a.array_of.clone()),
-                    _ => Some(p.clone()),
-                },
-                None => None,
-            };
             let min_items: i32 = if entry.index.is_some() { 3 } else { -1 };
-            self.add_range(offset, final_dt, 0, RangeType::Open, min_items);
+            self.add_range(offset, pointee, 0, RangeType::Open, min_items);
         }
-        // LoadGuard/StoreGuard handling (varmap.cc:1241-1248) is omitted until
-        // Rugra wires LoadGuard into Funcdata for the stack space; the additive
-        // base trace above already captures the dominant alias sources.
+
+        // const list<LoadGuard> &loadGuard( fd.getLoadGuards() );
+        // for(giter=loadGuard.begin();giter!=loadGuard.end();++giter)
+        //   addGuard(*giter,CPUI_LOAD,typeFactory); (varmap.cc:1241-1244)
+        for guard in &fd.heritage.load_guard {
+            self.add_guard(guard, OpCode::CPUI_LOAD, types);
+        }
+        // const list<LoadGuard> &storeGuard( fd.getStoreGuards() );
+        // ... addGuard(*siter,CPUI_STORE,typeFactory); (varmap.cc:1246-1248)
+        for guard in &fd.heritage.store_guard {
+            self.add_guard(guard, OpCode::CPUI_STORE, types);
+        }
+    }
+
+    // Ghidra: varmap.cc:1003 MapState::addGuard
+    /// Convert a LoadGuard (LOAD or STORE) into an open RangeHint, making
+    /// use of any data-type or index information. Faithful to
+    /// `MapState::addGuard` (varmap.cc:1003-1039): the guard must still
+    /// describe a live op of the expected opcode (`isValid`,
+    /// heritage.hh:169 `!op->isDead() && op->code() == opc`) with a nonzero
+    /// step; the pointer type of the address input is descended through
+    /// array layers; the access size must match the step or evenly divide it
+    /// (pretending an array of the LOAD size); a mismatched alignment
+    /// re-types to `getBase(step,TYPE_UNKNOWN)` unless step exceeds 8;
+    /// a range-locked guard (`analysisState == 2`, heritage.hh:168) yields
+    /// `minItems = (max-min+1)/step - 1`, otherwise the conservative 3.
+    pub fn add_guard(
+        &mut self,
+        guard: &crate::heritage::LoadGuard,
+        opc: OpCode,
+        types: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    ) {
+        // if (!guard.isValid(opc)) return; (varmap.cc:1006)
+        let Some(op_arc) = guard.get_op() else { return; };
+        let op_alive_and_code = {
+            let op = op_arc.read().unwrap();
+            (!op.is_dead(), op.opcode)
+        };
+        if !op_alive_and_code.0 || op_alive_and_code.1 != opc {
+            return;
+        }
+        // int4 step = guard.getStep(); if (step == 0) return;
+        // (varmap.cc:1007-1008)
+        if guard.step == 0 {
+            return; // No definitive sign of array access
+        }
+        // Datatype *ct = guard.getOp()->getIn(1)->getTypeReadFacing(op)
+        // (varmap.cc:1009) — the ADDRESS input (LOAD/STORE input slot 1).
+        let mut ct: Option<Arc<Datatype>> = {
+            let op = op_arc.read().unwrap();
+            let Some(in1) = op.inrefs.get(1) else { return; };
+            let vn = in1.read().unwrap();
+            vn.get_type_read_facing()
+        };
+        // if (ct->getMetatype() == TYPE_PTR) { ct = ptrTo;
+        // while (ct->getMetatype() == TYPE_ARRAY) ct = base; } (cc:1010-1014)
+        if let Some(t) = ct.clone() {
+            if let Datatype::Pointer(p) = t.as_ref() {
+                let mut base = p.ptr_to.clone();
+                while let Datatype::Array(a) = base.as_ref() {
+                    base = a.array_of.clone();
+                }
+                ct = Some(base);
+            }
+        } else {
+            return;
+        }
+        let Some(ct) = ct else { return };
+        // int4 outSize; if (opc == CPUI_STORE) outSize = getIn(2)->getSize();
+        // else outSize = getOut()->getSize(); (varmap.cc:1015-1019)
+        let out_size: usize = {
+            let op = op_arc.read().unwrap();
+            if opc == OpCode::CPUI_STORE {
+                let Some(val) = op.inrefs.get(2) else { return; };
+                val.read().unwrap().get_size()
+            } else {
+                let Some(out) = op.output.clone() else { return; };
+                let out_size = out.read().unwrap().get_size();
+                out_size
+            }
+        };
+        // if (outSize != step) { if (outSize > step || (step % outSize)!=0)
+        // return; step = outSize; } (varmap.cc:1020-1027)
+        let mut step = guard.step as u64;
+        if out_size as u64 != step {
+            if out_size as u64 > step || (step % out_size as u64) != 0 {
+                return; // field in array of structures or something unusual
+            }
+            // Since the LOAD size divides the step and we want to preserve
+            // the arrayness we pretend we have an array of LOAD's size.
+            step = out_size as u64;
+        }
+        // if (ct->getAlignSize() != step) { if (step > 8) return;
+        // ct = typeFactory->getBase(step,TYPE_UNKNOWN); } (varmap.cc:1028-1032)
+        let mut ct = ct;
+        if ct.get_align_size() as u64 != step {
+            if step > 8 {
+                return; // Don't manufacture primitives bigger than 8-bytes
+            }
+            ct = make_int_type(types, step as usize);
+        }
+        // if (guard.isRangeLocked()) { int4 minItems = ((max - min)+1)/step;
+        //   addRange(min,ct,0,open,minItems-1); }
+        // else addRange(min,ct,0,open,3); (varmap.cc:1033-1038)
+        let min_items: i32 = if guard.analysis_state == 2 {
+            // isRangeLocked (heritage.hh:168): analysisState == 2
+            let span = guard
+                .get_maximum()
+                .wrapping_sub(guard.get_minimum())
+                .wrapping_add(1);
+            (span / step) as i32 - 1
+        } else {
+            3
+        };
+        self.add_range(guard.get_minimum(), Some(ct), 0, RangeType::Open, min_items);
+    }
+
+    // Ghidra: varmap.cc:1044 MapState::gatherSymbols
+    /// Run through all Symbols in the scope's maptable (the space's EntryMap)
+    /// and create a corresponding fixed RangeHint for each Symbol entry.
+    /// Faithful to `MapState::gatherSymbols` (varmap.cc:1044-1059): each
+    /// entry's START offset (the SymbolEntry address, not the symbol), the
+    /// symbol's type, and `RangeHint::typelock` when the symbol is
+    /// type-locked feed `addRange(start,ct,flags,fixed,-1)` — this re-feeds
+    /// locked symbols so restructure keeps their boundaries stable across
+    /// passes (varmap.cc:1269).
+    pub fn gather_symbols(&mut self, scope: &ScopeLocal) {
+        // list<SymbolEntry> iterate over rangemap = maptable[space->getIndex()]
+        // in list (insertion-refined) order (varmap.cc:1047-1050).
+        let rangemap = scope.materialize_maptable(scope.space);
+        for entry in rangemap.records() {
+            // sym = (*riter).getSymbol(); if (sym == 0) continue;
+            let Some(sym) = scope.symbols.get(entry.sym) else { continue };
+            // uintb start = (*riter).getAddr().getOffset(); (varmap.cc:1054)
+            let start = entry.start;
+            let ct = sym.dtype.clone();
+            // uint4 flags = sym->isTypeLocked() ? RangeHint::typelock : 0;
+            let flags = if sym.typelock { range_flags::TYPE_LOCK } else { 0 };
+            self.add_range(start, ct, flags, RangeType::Fixed, -1);
+        }
+    }
+
+    // Ghidra: varmap.cc MapState::sortAlias (checker.sortAlias at
+    // varmap.cc:1279) / MapState::getAlias (varmap.cc:1281-1284)
+    /// Sort the embedded alias-checker's offsets (restructureVarnode,
+    /// varmap.cc:1279) and expose the list the way `state.getAlias()` does.
+    pub fn sort_alias(&mut self) {
+        self.checker.sort_aliases();
+    }
+
+    // Ghidra: varmap.cc:1281 MapState::getAlias
+    /// The (sorted, after `sort_alias`) alias offsets of the embedded checker.
+    pub fn get_alias(&self) -> &[u64] {
+        &self.checker.aliases
     }
 
     // Ghidra: varmap.cc:1063 MapState::initialize
@@ -2576,7 +2872,12 @@ impl ScopeLocal {
     /// unconditional install is the only reachable behavior.
     pub fn reset_local_window(&mut self, fd: &crate::funcdata::Funcdata) {
         // stackGrowsNegative = fd->getFuncProto().isStackGrowsNegative();
+        // (varmap.cc:435)
         self.stack_grows_negative = func_proto_stack_grows_negative(fd);
+        // The AliasChecker direction (varmap.cc:700) reads the SPACE's
+        // growth flag; Rugra derives it from the same proto flag (the two
+        // are configured together in every reachable cspec).
+        self.stack_direction = if self.stack_grows_negative { 1 } else { -1 };
         // minParamOffset = ~(uintb)0; maxParamOffset = 0;
         self.min_param_offset = u64::MAX;
         self.max_param_offset = 0;
@@ -2645,8 +2946,14 @@ impl ScopeLocal {
     // Ghidra: varmap.cc:1256 ScopeLocal::restructureVarnode
     /// Restructure the stack frame from varnodes.
     /// Main entry point. Faithful to `ScopeLocal::restructureVarnode`
-    /// (varmap.cc:1256).
-    pub fn restructure_varnode(&mut self, fd: &crate::funcdata::Funcdata) {
+    /// (varmap.cc:1256-1286), including the gatherSymbols re-feed (:1269),
+    /// the function_parameter/fake_input category clears before
+    /// fakeInputSymbols (:1275-1276), sortAlias + markUnaliased +
+    /// checkUnaliasedReturn (:1279-1282) and the alias[0]==0
+    /// annotateRawStackPtr placeholder (:1284-1285). `fd` is mutable
+    /// because annotateRawStackPtr inserts PTRSUB ops (newOpBefore/
+    /// opSetInput, varmap.cc:405-406).
+    pub fn restructure_varnode(&mut self, fd: &mut crate::funcdata::Funcdata) {
         // Ghidra varmap.cc:1259 `clearUnlockedCategory(-1)`（1275 为 function_parameter 另一调用） — NOT a blanket
         // clear: symbols with category >= 0 (function parameters, equates)
         // survive unconditionally (database.cc:2086 `if
@@ -2738,18 +3045,23 @@ impl ScopeLocal {
 
         // Build the MapState with a default unknown base type (1 byte),
         // matching Ghidra's MapState construction (varmap.cc:1260-1261),
-        // including the param-range subtraction of varmap.cc:870-875.
+        // including the param-range subtraction of varmap.cc:870-875. The
+        // stack-growth direction the MapState's embedded AliasChecker uses
+        // (varmap.cc:700 `spaceid->stackGrowsNegative()`) comes from the
+        // scope's proto-derived flag.
         let mut state = self.build_map_state(fd, &types);
+        state.set_stack_grows_negative(self.stack_grows_negative);
+        // state.gatherVarnodes(*fd); (varmap.cc:1267)
         state.gather_varnodes(fd);
         state.gather_spacebase(fd, &types);
-
-        // Gather alias info.
-        let mut checker = AliasChecker::new(self.stack_direction);
-        checker.gather_internal(fd);
-        let aliases = checker.get_aliases().to_vec();
-
-        // Gather open (pointer-referenced) ranges.
-        state.gather_open(fd, &checker);
+        // state.gatherOpen(*fd); (varmap.cc:1268) — runs checker.gather
+        // (varmap.cc:1214, deriveBoundaries included) and the
+        // LoadGuard/StoreGuard addGuard loops (varmap.cc:1241-1248).
+        state.gather_open(fd, &types);
+        // state.gatherSymbols(maptable[space->getIndex()]); (varmap.cc:1269)
+        // — re-feeds every mapped Symbol (typelocked ones with the typelock
+        // hint flag) as a fixed hint.
+        state.gather_symbols(&self);
 
         // Restructure: merge overlapping ranges into disjoint symbols
         // (varmap.cc:1270). A LowlevelError from `RangeHint::merge`
@@ -2765,11 +3077,212 @@ impl ScopeLocal {
             }
         };
 
-        // Mark unaliased symbols.
-        self.mark_unaliased(&aliases);
-
-        // Build fake input symbols for parameters.
+        // At some point, processing mapped input symbols may be folded into
+        // the above gather/restructure process, but for now we just define
+        // fake symbols so that mark_unaliased will work (varmap.cc:1272-1277):
+        // clearUnlockedCategory(Symbol::function_parameter) — unlocked
+        // parameter Symbols do NOT survive the pass (only type-locked ones
+        // stay, with an unlocked name reset) — then clearCategory(fake_input)
+        // drops every previous pass's fake input symbols before rebuilding.
+        self.clear_unlocked_category(symbol_category::FUNCTION_PARAMETER);
+        self.clear_category(symbol_category::FAKE_INPUT);
         self.fake_input_symbols(fd, &types);
+
+        // state.sortAlias(); (varmap.cc:1279)
+        state.sort_alias();
+        let aliases = state.get_alias().to_vec();
+        // if (aliasyes) { markUnaliased(state.getAlias());
+        // checkUnaliasedReturn(state.getAlias()); } (varmap.cc:1280-1282) —
+        // Rugra threads aliasyes implicitly true (the coreaction caller
+        // does not yet pass its numpass-derived flag; registered at
+        // coreaction.rs ActionRestructureVarnode TODO).
+        self.mark_unaliased(&aliases);
+        self.check_unaliased_return(fd, &aliases);
+        // if (!state.getAlias().empty() && state.getAlias()[0] == 0)
+        //   annotateRawStackPtr(); (varmap.cc:1284-1285) — a zero offset use
+        // of the stack pointer gets the placeholder PTRSUB.
+        if !aliases.is_empty() && aliases[0] == 0 {
+            self.annotate_raw_stack_ptr(fd);
+        }
+    }
+
+    // Ghidra: database.cc:2071 ScopeInternal::clearUnlockedCategory (cat >= 0)
+    /// Clear unlocked symbols of the given category, mirroring
+    /// `ScopeInternal::clearUnlockedCategory` (database.cc:2071-2090) for the
+    /// `cat >= 0` branch `restructureVarnode` uses with
+    /// `Symbol::function_parameter` (varmap.cc:1275): a type-locked symbol
+    /// survives but its unlocked name resets to the `$$undef` placeholder
+    /// (`renameSymbol(sym,buildUndefinedName())`, database.cc:2080-2082);
+    /// everything else is `removeSymbol`'d. Ghidra's trailing
+    /// `resetSizeLockType` (database.cc:2085-2086) has no Rugra counterpart:
+    /// no Rugra path creates a size-locked (as opposed to type-locked)
+    /// Symbol in ScopeLocal, so the branch is unreachable today.
+    pub fn clear_unlocked_category(&mut self, cat: i32) {
+        if cat < 0 {
+            return; // category doesn't exist (database.cc:2073)
+        }
+        // Rename pass: type-locked symbols with an unlocked, defined name
+        // take the undefined placeholder (order-independent of removals).
+        loop {
+            let idx = self
+                .symbols
+                .iter()
+                .position(|s| {
+                    s.category == cat
+                        && s.typelock
+                        && !s.namelock
+                        && !s.is_name_undefined()
+                });
+            let Some(idx) = idx else { break };
+            let undef = self
+                .build_undefined_name()
+                .unwrap_or_else(|| "$$undef00000000".to_string());
+            self.rename_symbol(idx, &undef);
+        }
+        // Removal pass: every non-type-locked symbol of the category
+        // (database.cc:2088-2089). Removing by position repeatedly keeps the
+        // Vec re-keying consistent.
+        loop {
+            let idx = self
+                .symbols
+                .iter()
+                .position(|s| s.category == cat && !s.typelock);
+            match idx {
+                Some(idx) => {
+                    self.remove_symbol(idx);
+                }
+                None => break,
+            }
+        }
+    }
+
+    // Ghidra: database.cc:2022 ScopeInternal::clearCategory (cat >= 0)
+    /// Remove every symbol of the given category, mirroring
+    /// `ScopeInternal::clearCategory` (database.cc:2022-2029) for the
+    /// `cat >= 0` branch `restructureVarnode` uses with
+    /// `Symbol::fake_input` (varmap.cc:1276).
+    pub fn clear_category(&mut self, cat: i32) {
+        if cat < 0 {
+            return;
+        }
+        loop {
+            let idx = self.symbols.iter().position(|s| s.category == cat);
+            match idx {
+                Some(idx) => {
+                    self.remove_symbol(idx);
+                }
+                None => break,
+            }
+        }
+    }
+
+    // Ghidra: varmap.cc:414 ScopeLocal::checkUnaliasedReturn
+    /// If the return value is passed back in a location whose address space
+    /// holds \b this scope's variables, assume the return value is unmapped,
+    /// unless there is a specific alias into the location. Faithful to
+    /// `ScopeLocal::checkUnaliasedReturn` (varmap.cc:414-428): the first
+    /// RETURN op's value input, when it lives in the stack space and no
+    /// alias offset (lower_bound over the SORTED alias list) reaches into
+    /// `[offset, offset+size-1]`, is marked unmapped via
+    /// `markNotMapped(space, offset, size, false)` — which removes any
+    /// overlapping symbol and narrows the range tree.
+    fn check_unaliased_return(&mut self, fd: &crate::funcdata::Funcdata, alias: &[u64]) {
+        // PcodeOp *retOp = fd->getFirstReturnOp(); if (retOp == 0 ||
+        // retOp->numInput() < 2) return; (varmap.cc:417-418)
+        let Some(ret_op) = fd.get_first_return_op() else { return; };
+        let (space, offset, size) = {
+            let op = ret_op.0.read().unwrap();
+            if op.inrefs.len() < 2 {
+                return;
+            }
+            let vn = op.inrefs[1].read().unwrap();
+            (vn.get_space(), vn.get_offset(), vn.get_size())
+        };
+        // if (vn->getSpace() != space) return; (varmap.cc:420)
+        if space != self.space {
+            return;
+        }
+        // Assume vn is mapped. Cannot check vn->isMapped() as we are in the
+        // middle of restructuring. (varmap.cc:421)
+        // vector<uintb>::const_iterator iter = lower_bound(alias.begin(),
+        // alias.end(), vn->getOffset()); if (iter != alias.end()) {
+        //   if (*iter <= (vn->getOffset() + vn->getSize() - 1)) return; }
+        // (varmap.cc:422-426) — alias must be sorted (sortAlias, cc:1279).
+        let end = offset.wrapping_add(size as u64).wrapping_sub(1);
+        let pos = alias.partition_point(|&a| a < offset);
+        if pos < alias.len() && alias[pos] <= end {
+            return; // Alias into return storage, don't continue
+        }
+        // markNotMapped(space, vn->getOffset(), vn->getSize(), false);
+        // (varmap.cc:427)
+        self.mark_not_mapped(offset, size as i32, false);
+    }
+
+    // Ghidra: varmap.cc:386 ScopeLocal::annotateRawStackPtr
+    /// For any read of the input stack pointer by a non-additive p-code op,
+    /// assume this constitutes a zero offset reference into the stack frame
+    /// and replace the raw Varnode with the standard spacebase placeholder
+    /// `PTRSUB(sp,#0)` so the data-type system can treat it as a reference.
+    /// Faithful to `ScopeLocal::annotateRawStackPtr` (varmap.cc:386-408):
+    /// requires type recovery to have started; consumers whose eval type is
+    /// `special` (unless a call) and the additive INT_ADD/PTRSUB/PTRADD
+    /// producers are skipped; every remaining consumer gets a new PTRSUB
+    /// before it, feeding slot `op->getSlot(spVn)`.
+    fn annotate_raw_stack_ptr(&mut self, fd: &mut crate::funcdata::Funcdata) {
+        // if (!fd->hasTypeRecoveryStarted()) return; (varmap.cc:389)
+        if !fd.has_type_recovery_started() {
+            return;
+        }
+        // Varnode *spVn = fd->findSpacebaseInput(space);
+        // if (spVn == 0) return; (varmap.cc:390-391)
+        let Some(sp_vn) = find_spacebase_input(fd) else { return; };
+        // Collect the raw readers: skip eval-special non-calls and the
+        // additive opcodes (varmap.cc:394-401).
+        let descend_refs: Vec<_> = {
+            let sp = sp_vn.read().unwrap();
+            sp.descend.iter().filter_map(|w| w.upgrade()).collect()
+        };
+        let mut ref_ops: Vec<std::sync::Arc<RwLock<crate::op::PcodeOp>>> = Vec::new();
+        for op_ref in descend_refs {
+            let op = op_ref.read().unwrap();
+            // if (op->getEvalType() == PcodeOp::special && !op->isCall())
+            // continue; (varmap.cc:396)
+            if op.get_eval_type() == crate::op::pcodeop_flags::SPECIAL && !op.is_call() {
+                continue;
+            }
+            // if (opc == CPUI_INT_ADD || opc == CPUI_PTRSUB ||
+            //     opc == CPUI_PTRADD) continue; (varmap.cc:397-399)
+            if matches!(
+                op.opcode,
+                OpCode::CPUI_INT_ADD | OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD
+            ) {
+                continue;
+            }
+            ref_ops.push(op_ref.clone());
+        }
+        // for each refOp: slot = op->getSlot(spVn); ptrsub =
+        // fd->newOpBefore(op,CPUI_PTRSUB,spVn,fd->newConstant(size,0));
+        // fd->opSetInput(op, ptrsub->getOut(), slot); (varmap.cc:402-407)
+        for op_arc in ref_ops {
+            let slot = {
+                let op = op_arc.read().unwrap();
+                let mut slot = op.inrefs.len();
+                for (i, vn) in op.inrefs.iter().enumerate() {
+                    if Arc::ptr_eq(vn, &sp_vn) {
+                        slot = i;
+                        break;
+                    }
+                }
+                slot
+            };
+            let op_ref = crate::op::PcodeOpRef(op_arc);
+            let cnst = fd.new_constant(sp_vn.read().unwrap().get_size(), 0);
+            let ptrsub = fd.new_op_before(&op_ref, OpCode::CPUI_PTRSUB, &sp_vn, &cnst, None);
+            let ptrsub_out = ptrsub.0.read().unwrap().output.clone();
+            if let Some(out) = ptrsub_out {
+                fd.op_set_input(&op_ref, out, slot);
+            }
+        }
     }
 
     // Ghidra: varmap.cc:1294 ScopeLocal::restructure
@@ -4588,6 +5101,24 @@ mod tests {
     // --- ScopeLocal.restructure via adjust_fit (varmap.cc:1294, 587) ---
 
     #[test]
+    // Ghidra: varmap.cc:633 AliasChecker::deriveBoundaries (model gates)
+    /// The default-window model sets localBoundary = paramrange last = 511;
+    /// a model-less prototype keeps the 0x1000000 default; the positive-
+    /// growth branch takes paramrange first-range first for BOTH
+    /// localBoundary and localExtreme (varmap.cc:648-652).
+    fn test_derive_boundaries_model_gates() {
+        let local = vec![(0xfffffffffff0bdc0u64, u64::MAX)];
+        let param = vec![(0u64, 0x1ffu64)];
+        let mut checker = AliasChecker::new(1);
+        checker.derive_boundaries(&local, &param, true);
+        assert_eq!(checker.boundaries(), (0x1ff, u64::MAX, u64::MAX));
+        checker.derive_boundaries(&local, &param, false);
+        assert_eq!(checker.boundaries(), (0x1000000, u64::MAX, u64::MAX));
+        let mut pos = AliasChecker::new(-1);
+        pos.derive_boundaries(&local, &param, true);
+        assert_eq!(pos.boundaries(), (0, 0, u64::MAX));
+    }
+
     fn test_get_last_signed_range_midway_corner() {
         // R8 cross-review corner: `Range::operator<` compares only
         // (spaceIndex, first) — never `last` (address.hh:202-205) — so
