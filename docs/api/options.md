@@ -39,9 +39,11 @@ Ghidra reference: `ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/options.{
   splitpointer) on/off pair that `OptionSplitDatatypes::apply` passes to
   `ActionDatabase::toggleAction` (options.cc:1007-1016): both off unless the
   struct or array bit is set; otherwise splitcopy on and splitpointer =
-  pointer bit. `// RUGRA-GLUE` decomposition — `Architecture` has no `allacts`
-  field yet, so the pair is computed rather than applied to a root Action's
-  `ActionGroupList`; the wiring point is documented in the source.
+  pointer bit. `// RUGRA-GLUE` decomposition of Ghidra's inline if/else;
+  since OPTIONS-SPLITDATATYPE-WIRING-0003 (2026-08-25) `apply` forwards the
+  pair through `arch.allacts.toggle_action(get_current_name(), ...)`
+  directly — `getCurrentName()` is snapshotted once because `toggleAction`
+  never renames the current root (action.cc:1049/1024).
 
 ## Module `elem_ids`
 `<optionslist>` XML element ids. Rugra currently holds private `u32` values;
@@ -140,10 +142,13 @@ not parity evidence.
   bit semantics struct/array/pointer (1/2/4), singular option name, p1-assign
   p2/p3-OR evaluation order, partial-mutation-on-error, return messages, and
   the toggleAction decision logic are ported and oracle-verified via
-  `tests/oracle/options_splitdatatype_1204.*`; residual wiring: the
-  (splitcopy, splitpointer) pair is computed by `split_action_toggles`
-  instead of being applied to a root Action's `ActionGroupList` because
-  `Architecture` has no `allacts` field yet, and `LowlevelError` on unknown
-  tokens is carried as the returned message string rather than a thrown
-  error (`ArchOption::apply` returns `String`).
+  `tests/oracle/options_splitdatatype_1204.*`; the (splitcopy, splitpointer)
+  pair is now applied to the current root's `ActionGroupList` through
+  `arch.allacts.toggle_action` inside `apply` (OPTIONS-SPLITDATATYPE-WIRING-0003,
+  2026-08-25; oracle-verified by `tests/oracle/options_wiring_1204.*` whose
+  comparand is a direct production `apply` call). Residual:
+  `LowlevelError` on unknown tokens is carried as the returned message string
+  rather than a thrown error (`ArchOption::apply` returns `String`), and a
+  `None` `allacts` (pre-`build_action` Architecture, unrepresentable in
+  Ghidra) skips the toggles.
 <!-- annotation-pass: 2026-08-11 (ANN-A, mapping comments only) -->

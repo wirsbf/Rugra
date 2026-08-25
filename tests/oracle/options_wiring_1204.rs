@@ -1,12 +1,13 @@
-//! OPTIONS-SPLITDATATYPE-WIRING-0002 Rust comparand.
+//! OPTIONS-SPLITDATATYPE-WIRING-0002 Rust comparand (re-pinned by
+//! OPTIONS-SPLITDATATYPE-WIRING-0003).
 //!
-//! Drives the production `ActionDatabase::toggle_action` /
-//! `add_to_group` / `remove_from_group` through the exact forwarding
-//! sequence `OptionSplitDatatypes::apply` performs (options.cc:1007-1016),
-//! with the configuration bits produced by the production option apply
-//! (`rugra::options::OptionSplitDatatypes`) and the production toggle
-//! pair (`rugra::options::split_action_toggles`). No hand-written expected
-//! output is embedded.
+//! Calls the production `OptionSplitDatatypes::apply`
+//! (`rugra::options::OptionSplitDatatypes`) directly: the configuration
+//! bits, partial-assignment error ordering, return string, and the
+//! internal `allacts` forwarding (options.cc:1007-1016) — the two
+//! `ActionDatabase::toggle_action` calls on the current root — all run
+//! inside the production body. No hand-written expected output is
+//! embedded.
 
 use rugra::action::{Action, ActionDatabase, ActionGroup, ActionGroupList, ActionRestartGroup};
 use rugra::arch::Architecture;
@@ -84,31 +85,17 @@ fn emit_state(arch: &Architecture, tag: &str) {
 }
 
 fn apply_case(arch: &mut Architecture, p1: &str, p2: &str, p3: &str) -> (bool, String) {
-    // Production option apply (options.cc:1002-1005, 1017-1019): the
-    // configuration bits, partial-assignment error ordering, and the return
-    // string.
+    // Direct production apply (options.cc:999-1020): configuration bits,
+    // partial-assignment error ordering, return string, and the internal
+    // allacts forwarding (options.cc:1007-1016) that
+    // OPTIONS-SPLITDATATYPE-WIRING-0003 wired into
+    // `OptionSplitDatatypes::apply`. Since that wiring, the comparand is a
+    // single production call, mirroring the oracle fixture's
+    // `option.apply(&arch, ...)` entrypoint.
     let result = rugra::options::OptionSplitDatatypes.apply(arch, p1, p2, p3);
-    let threw_message = result.strip_prefix("LowlevelError: ").map(str::to_string);
-    match threw_message {
-        Some(message) => (true, message),
-        None => {
-            // Production forwarding (options.cc:1007-1016): the wiring target
-            // of OPTIONS-SPLITDATATYPE-WIRING-0002 — once options.rs owns its
-            // allacts forwarding block, this fixture sequence is exactly what
-            // the production apply performs internally.
-            let (splitcopy_on, splitpointer_on) =
-                rugra::options::split_action_toggles(arch.split_datatype_config);
-            let mut db = arch
-                .allacts
-                .as_ref()
-                .expect("allacts populated")
-                .write()
-                .expect("allacts write lock");
-            let current = db.get_current_name().to_string();
-            db.toggle_action(&current, "splitcopy", splitcopy_on);
-            db.toggle_action(&current, "splitpointer", splitpointer_on);
-            (false, result)
-        }
+    match result.strip_prefix("LowlevelError: ") {
+        Some(message) => (true, message.to_string()),
+        None => (false, result),
     }
 }
 

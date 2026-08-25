@@ -38,12 +38,21 @@ cpp_fixture="$repo_root/tests/oracle/options_wiring_1204.cc"
 rust_fixture="$repo_root/tests/oracle/options_wiring_1204.rs"
 action_rs="$repo_root/src/action.rs"
 arch_rs="$repo_root/src/arch.rs"
+options_rs="$repo_root/src/options.rs"
 action_doc="$repo_root/docs/api/action.md"
 arch_doc="$repo_root/docs/api/arch.md"
+options_doc="$repo_root/docs/api/options.md"
 cargo_lock=/tmp/rugra-cargo-build.lock
-cargo_target=/tmp/rugra-target-options-wiring
 
 user_home=$(/usr/bin/getent passwd "$(/usr/bin/id -u)" | /usr/bin/awk -F: 'NR == 1 { print $6 }')
+# The cargo target and compiler temp dir live under the user home rather
+# than /tmp because this host mounts /tmp as a quota-limited tmpfs shared
+# by the concurrent agent fleet: cc-rs's c++ invocations and g++'s internal
+# .s temp files otherwise exhaust the per-user quota
+# (OPTIONS-SPLITDATATYPE-WIRING-0003 re-pin).
+cargo_target="$user_home/.cache/rugra-target-options-wiring"
+build_tmpdir="$user_home/.cache/rugra-options-wiring-tmp"
+/usr/bin/mkdir -p "$build_tmpdir"
 host_cxx_bin=$(/usr/bin/readlink -f /usr/bin/g++)
 host_cc_bin=$(/usr/bin/readlink -f /usr/bin/gcc)
 host_ar_bin=$(/usr/bin/readlink -f /usr/bin/ar)
@@ -61,7 +70,7 @@ for tool in "$host_cxx_bin" "$host_cc_bin" "$host_ar_bin" "$host_make_bin" \
   fi
 done
 for input in "$metadata" "$cpp_fixture" "$rust_fixture" "$action_rs" \
-  "$arch_rs" "$action_doc" "$arch_doc" "$runner"; do
+  "$arch_rs" "$options_rs" "$action_doc" "$arch_doc" "$options_doc" "$runner"; do
   if [[ ! -f "$input" || -L "$input" ]]; then
     echo "required input is not a regular non-symlink file: $input" >&2
     exit 1
@@ -103,13 +112,15 @@ host_platform=$(/usr/bin/uname -srm)
 
 /usr/bin/env -i PATH="$clean_path" LC_ALL=C "$host_python_bin" -I -S - \
   "$metadata" "$cpp_fixture" "$rust_fixture" "$action_rs" "$arch_rs" \
-  "$action_doc" "$arch_doc" "$runner_fd_path" "$oracle_commit" "$oracle_tag" "$oracle_cpp_tree" \
+  "$options_rs" "$action_doc" "$arch_doc" "$options_doc" "$runner_fd_path" \
+  "$oracle_commit" "$oracle_tag" "$oracle_cpp_tree" \
   "$oracle_makefile_blob" "$rugra_base_commit" "$rugra_base_tree" \
   "$host_cxx" "$host_rustc" "$host_cargo" "$host_platform" <<'PY'
 import hashlib, json, pathlib, sys
-(metadata_name, cpp_name, rust_name, action_name, arch_name, action_doc_name,
- arch_doc_name, runner_name, oracle_commit, oracle_tag, cpp_tree, makefile_blob,
- base_commit, base_tree, host_cxx, host_rustc, host_cargo, host_platform) = sys.argv[1:]
+(metadata_name, cpp_name, rust_name, action_name, arch_name, options_name,
+ action_doc_name, arch_doc_name, options_doc_name, runner_name, oracle_commit,
+ oracle_tag, cpp_tree, makefile_blob, base_commit, base_tree, host_cxx,
+ host_rustc, host_cargo, host_platform) = sys.argv[1:]
 metadata = json.loads(pathlib.Path(metadata_name).read_text(encoding="utf-8"))
 if metadata["fixture_id"] != "OPTIONS-SPLITDATATYPE-WIRING-0002":
     raise SystemExit("fixture id mismatch")
@@ -130,7 +141,9 @@ if metadata["input_fingerprint"] != "sha256:" + hashlib.sha256(canonical).hexdig
 for field, filename in {
     "cpp_fixture_sha256": cpp_name, "rust_fixture_sha256": rust_name,
     "action_rs_sha256": action_name, "arch_rs_sha256": arch_name,
+    "options_rs_sha256": options_name,
     "action_doc_sha256": action_doc_name, "arch_doc_sha256": arch_doc_name,
+    "options_doc_sha256": options_doc_name,
     "runner_sha256": runner_name,
 }.items():
     actual = hashlib.sha256(pathlib.Path(filename).read_bytes()).hexdigest()
@@ -149,12 +162,17 @@ cleanup() {
     return 1
   fi
   /usr/bin/rm -rf -- "$oracle_tmp"
+  if [[ "$build_tmpdir" == "$user_home"/.cache/rugra-options-wiring-tmp && \
+        -d "$build_tmpdir" && ! -L "$build_tmpdir" ]]; then
+    /usr/bin/rm -rf -- "$build_tmpdir"
+  fi
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-owned=("$cpp_fixture" "$rust_fixture" "$action_rs" "$arch_rs" "$action_doc" "$arch_doc" "$metadata" "$runner")
+owned=("$cpp_fixture" "$rust_fixture" "$action_rs" "$arch_rs" "$options_rs" \
+  "$action_doc" "$arch_doc" "$options_doc" "$metadata" "$runner")
 /usr/bin/sha256sum "${owned[@]}" >"$oracle_tmp/owned.before"
 
 /usr/bin/mkdir -p "$oracle_tmp/source" "$oracle_tmp/rugra"
@@ -166,11 +184,12 @@ owned=("$cpp_fixture" "$rust_fixture" "$action_rs" "$arch_rs" "$action_doc" "$ar
   -xf "$oracle_tmp/ghidra-cpp.tar" -C "$oracle_tmp/source"
 oracle_cpp="$oracle_tmp/source/Ghidra/Features/Decompiler/src/decompile/cpp"
 jobs=$(/usr/bin/getconf _NPROCESSORS_ONLN 2>/dev/null || /usr/bin/printf '1')
-/usr/bin/env -i PATH="$clean_path" LC_ALL=C "$host_make_bin" --silent \
+/usr/bin/env -i PATH="$clean_path" LC_ALL=C TMPDIR="$build_tmpdir" \
+  "$host_make_bin" --silent \
   -C "$oracle_cpp" -j "$jobs" CXX="$host_cxx_bin -std=c++11" \
   CC="$host_cc_bin" AR="$host_ar_bin" EXTRA= libdecomp.a
 cpp_binary="$oracle_tmp/action_pool_clone_filter_cpp"
-/usr/bin/env -i PATH="$clean_path" LC_ALL=C "$host_cxx_bin" \
+/usr/bin/env -i PATH="$clean_path" LC_ALL=C TMPDIR="$build_tmpdir" "$host_cxx_bin" \
   -std=c++11 -O2 -Wall -Wno-sign-compare -m64 -I"$oracle_cpp" \
   "$cpp_fixture" "$oracle_cpp/libdecomp.cc" "$oracle_cpp/sleigh_arch.cc" \
   "$oracle_cpp/inject_sleigh.cc" -Wl,--whole-archive "$oracle_cpp/libdecomp.a" \
@@ -196,13 +215,15 @@ fi
   -xf "$oracle_tmp/rugra-base.tar" -C "$oracle_tmp/rugra"
 /usr/bin/cp -- "$action_rs" "$oracle_tmp/rugra/src/action.rs"
 /usr/bin/cp -- "$arch_rs" "$oracle_tmp/rugra/src/arch.rs"
+/usr/bin/cp -- "$options_rs" "$oracle_tmp/rugra/src/options.rs"
 /usr/bin/mkdir -p "$oracle_tmp/rugra/src/bin"
 /usr/bin/cp -- "$rust_fixture" \
   "$oracle_tmp/rugra/src/bin/options_wiring_1204_fixture.rs"
 /usr/bin/ln -s "$ghidra_root" "$oracle_tmp/rugra/ghidra"
 
 /usr/bin/flock "$cargo_lock" /usr/bin/env -i HOME="$user_home" \
-  PATH="$clean_path" LC_ALL=C.UTF-8 CARGO_HOME="$user_home/.cargo" \
+  PATH="$clean_path" LC_ALL=C.UTF-8 TMPDIR="$build_tmpdir" \
+  CARGO_HOME="$user_home/.cargo" \
   CARGO_TARGET_DIR="$cargo_target" CARGO_INCREMENTAL=0 \
   "$host_cargo_bin" run --quiet --offline --locked \
   --manifest-path "$oracle_tmp/rugra/Cargo.toml" \

@@ -872,16 +872,24 @@ impl ArchOption for OptionSplitDatatypes {
         // Ghidra: options.cc:1007-1016 — toggle the "splitcopy"/"splitpointer"
         // action groups on the current root Action.
         let (splitcopy_on, splitpointer_on) = split_action_toggles(arch.split_datatype_config);
-        // RUGRA-GLUE: Ghidra calls
+        // Ghidra: options.cc:1008-1015
         //   glb->allacts.toggleAction(glb->allacts.getCurrentName(),
         //                             "splitcopy",  splitcopy_on);
         //   glb->allacts.toggleAction(glb->allacts.getCurrentName(),
         //                             "splitpointer", splitpointer_on);
-        // (options.cc:1008-1015, ActionDatabase::toggleAction action.cc:1036-1053).
-        // Architecture does not own an allacts field yet, so the exact
-        // on/off pair is computed here; once allacts lands on Architecture,
-        // forward these two booleans to its toggle_action.
-        let _ = (splitcopy_on, splitpointer_on);
+        // getCurrentName() is re-read at each call site, but toggleAction
+        // never writes currentactname (action.cc:1049 only reads it; the sole
+        // writer is setCurrent at action.cc:1024), so one snapshot is
+        // equivalent for the pair. A `None` database (Rugra's pre-build_action
+        // state, unrepresentable for Ghidra's embedded allacts member) skips
+        // the toggles — same Option-guard precedent as reset_defaults
+        // (architecture.cc:1442 wiring in src/arch.rs).
+        if let Some(db) = &arch.allacts {
+            let mut db = db.write().expect("allacts write lock");
+            let current = db.get_current_name().to_string();
+            db.toggle_action(&current, "splitcopy", splitcopy_on);
+            db.toggle_action(&current, "splitpointer", splitpointer_on);
+        }
         // Ghidra: options.cc:1017-1019
         if old_config == arch.split_datatype_config {
             "Split data-type configuration unchanged".to_string()
@@ -915,14 +923,12 @@ pub fn get_option_bit(val: &str) -> Result<u32, String> {
 }
 
 // RUGRA-GLUE: decomposition of the two toggleAction group switches that
-// OptionSplitDatatypes::apply performs (options.cc:1007-1016). Rugra's
-// Architecture does not yet own an ActionDatabase (allacts), so the
-// (splitcopy, splitpointer) on/off pair that Ghidra passes to
-// ActionDatabase::toggleAction (action.cc:1036-1053) — which adds/removes
-// the group from the current root's ActionGroupList and re-clones the root —
-// is computed as a pure function of the configuration bits. Wiring point:
-// once Architecture grows its allacts field, apply() should forward this
-// pair to allacts.toggle_action(get_current_name(), ...) directly.
+// OptionSplitDatatypes::apply performs (options.cc:1007-1016) into the
+// (splitcopy, splitpointer) on/off pair. Ghidra writes this as an inline
+// if/else over the configuration bits; the pair is forwarded by apply()
+// to Architecture::allacts's toggle_action (action.cc:1036-1053), which
+// adds/removes the group from the current root's ActionGroupList and
+// re-clones the root from the universal.
 pub fn split_action_toggles(config: u32) -> (bool, bool) {
     use crate::arch::split_datatype as split_datatype_option;
     if config & (split_datatype_option::OPTION_STRUCT | split_datatype_option::OPTION_ARRAY) == 0 {

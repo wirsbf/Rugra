@@ -65,15 +65,18 @@
     "rugra_base_tree": "37bc660cdefa47c5844d596d00caad8b8edd810a",
     "overlay": [
       "src/action.rs",
-      "src/arch.rs"
+      "src/arch.rs",
+      "src/options.rs"
     ],
     "cpp_fixture_sha256": "bc11efeec3f304b56f03373a99393e76ab2b10f6a9827511966516fc4ba582f9",
-    "rust_fixture_sha256": "41738ec019723033af4058d6033a83c966e3d7436bf6444e016daa0476db69d1",
+    "rust_fixture_sha256": "d3cfe36b9b1160f27da2d9565a3768c7ac28a39acac9031cea77b467d98c0a7c",
     "action_rs_sha256": "d161bf5e3a4ddee98dd5249b88f821724adddf9eeb6c4eb5aad717412877648a",
     "arch_rs_sha256": "e6affe20321db1635dd7a1f1b4a7282f2ed45afc954b627c8b2720842e19f7d6",
+    "options_rs_sha256": "deea809e77a41d53a77e604459d65fe8163bd7c218a39d156c5d4235b89025ec",
     "action_doc_sha256": "9fd80bbca98656615e5db2faec8497b283424a325331cff64df61596531bdf31",
     "arch_doc_sha256": "d7f26c2745177b03fa52dbb2bedab12a74af26e4298c5ce5e5d5bda28762c5d2",
-    "runner_sha256": "bacc5bb9ea8c7d57ab8c7b8873c154521b972955db1e3922342422cdff267151",
+    "options_doc_sha256": "ab8d1b6f2a1cdd22afd7ae5687718fc9762d6da3f444e6f75e21f5a7ff982ccd",
+    "runner_sha256": "60bf5c810e7897df63a64c98a8400a2002881826ca6ac42d65f24ae7d6cf60ac",
     "ghidra_action_cc_blob": "9a4e2e26d04d45805f14900fadcbbac01270a2f0",
     "ghidra_action_hh_blob": "e929dbb98e8e1fb23d7ac8e8d86e9f4f39fc998c",
     "ghidra_options_cc_blob": "e0778433e1c2df7ef310026d346dceac9de5a399",
@@ -91,7 +94,7 @@
   "build": {
     "cpp_oracle": "The complete locked decompiler C++ subtree is exported to a fresh temporary directory and libdecomp.a is rebuilt before linking the fixture; the fixture calls CapabilityPoint::initializeAll() first (as ghidra_process.cc:523 does) so the embedded Architecture constructor finds the registered C print language.",
     "private_state_observer": "The fixture pre-includes the standard library, then scopes class/private/protected visibility macros to architecture.hh and options.hh so it can observe ActionDatabase's actionmap/groupmap and Architecture's allacts/split_datatype_config without altering production bodies; a minimal Architecture subclass stubs the pure virtuals the option path never calls.",
-    "rust_comparand": "A tar snapshot of pinned Rugra base fce01555 is materialized, src/action.rs and src/arch.rs are overlaid, and the fixture is compiled as a temporary Cargo bin offline/locked under /tmp/rugra-cargo-build.lock with CARGO_TARGET_DIR=/tmp/rugra-target-options-wiring.",
+    "rust_comparand": "A tar snapshot of pinned Rugra base fce01555 is materialized, src/action.rs, src/arch.rs, and src/options.rs are overlaid, and the fixture is compiled as a temporary Cargo bin offline/locked under /tmp/rugra-cargo-build.lock with CARGO_TARGET_DIR and TMPDIR under the user home (~/.cache/rugra-target-options-wiring and ~/.cache/rugra-options-wiring-tmp; both relocated off the quota-limited /tmp tmpfs by OPTIONS-SPLITDATATYPE-WIRING-0003 because cc-rs/g++ compiler temp files exhausted the shared per-user quota).",
     "drift_check": "All owned source, documentation, fixture, metadata, and runner files are hashed before and after execution."
   },
   "expected_stdout_sha256": "8662fd98c6162b40e8a33291644ed1442fbc4577c418b1547a7601af2a45759a",
@@ -102,11 +105,11 @@
     "group_membership_mutation": "MATCH: addToGroup inserts and removeFromGroup erases on the steering grouplist with default-insert semantics; sorted membership output is byte-identical",
     "tree_projection": "MATCH: the derived tree drops exactly the leaves whose basegroup left the grouplist and keeps nested group structure (body[...]) identical on both sides",
     "error_paths": "MATCH: p1-unknown leaves every observable untouched; p2-unknown assigns the partial p1 configuration and never reaches the toggle block (root identity unchanged)",
-    "forwarding_pair": "MATCH: the (splitcopy, splitpointer) on/off pair driven by the production split_action_toggles plus two toggle_action calls reproduces the oracle apply's internal forwarding byte-for-byte, including the double-toggle call order",
+    "forwarding_pair": "MATCH: since OPTIONS-SPLITDATATYPE-WIRING-0003 the production OptionSplitDatatypes::apply itself forwards the (splitcopy, splitpointer) pair (production split_action_toggles) through arch.allacts's two toggle_action calls on getCurrentName(), and the comparand's apply_case is a single direct production apply call; the oracle apply's internal forwarding is reproduced byte-for-byte, including the double-toggle call order",
     "arch_allacts_embedding": "MATCH: the comparand Architecture carries the synthetic database through the new allacts field behind Arc<RwLock> and observes the same registry state the embedded Ghidra value produces"
   },
   "residuals": [
-    "options.rs OptionSplitDatatypes::apply still computes the forwarding pair without calling allacts.toggle_action itself (its RUGRA-GLUE block at src/options.rs:875-884); the comparand performs the identical production sequence externally. Swapping that block to forward through arch.allacts is the follow-up OPTIONS-SPLITDATATYPE-WIRING-0003 write-set (options.rs + options.md), after which this fixture's apply_case becomes a direct production call.",
+    "OPTIONS-SPLITDATATYPE-WIRING-0003 (2026-08-25) closed the former wiring residual: the production OptionSplitDatatypes::apply now forwards the toggle pair through arch.allacts.toggle_action itself (options.cc:1008-1015), and this fixture's apply_case is a direct production apply call. Remaining Rust-side divergence inside the projection: a `None` allacts (pre-build_action Architecture, unrepresentable for Ghidra's embedded member) skips the toggles, and LowlevelError is returned as a 'LowlevelError: ' prefixed String normalized by the comparand instead of being thrown.",
     "Architecture::build_action (architecture.cc:582-591) is ported but UNTESTED by this fixture: the oracle-side TestArch cannot run the real universalAction(glb) against null subcomponents, and the Rugra side accordingly builds only the synthetic database. Its two-call body is code-inspected only until the pipeline integration task drives it.",
     "Architecture::resetDefaults' printlist arm (architecture.cc:1443) stays deferred with the PrintLanguage subsystem.",
     "parseExtraRules (architecture.cc:586) has no Rugra counterpart; registered as ARCH-PARSEEXTRARULES-0001.",
