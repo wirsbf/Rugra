@@ -82,8 +82,8 @@ not yet wired into main.rs; existing linear scan still active).
 
 | Rust 方法 | Ghidra flow.cc | 说明 |
 |---|---|---|
-| `recover_jump_tables` | :1427 recoverJumpTables | BRANCHIND 跳转表恢复主入口；notreached 延迟列表 + partial/complete 分支 |
-| `check_multistage_jumptables` | :1408 checkMultistageJumptables | 多阶段跳转表检测（结构占位，checkForMultistage 未移植） |
+| `recover_jump_tables` | :1427 recoverJumpTables | BRANCHIND 跳转表恢复主入口；partial Funcdata（`@@jump@` 命名、共享 Architecture/loader）+ `Funcdata::recover_jump_table` 分级恢复 + notreached 延迟列表 + partial/complete 分支；LowlevelError 经 `Result` 上抛同 C++ throw 通道 |
+| `check_multistage_jumptables` | :1408 checkMultistageJumptables | 多阶段跳转表检测；`JumpTable::check_for_multistage` 已移植（JUMPTABLE-PIPELINE-0001），被 override 提升的单条目表间接 op 推回 `tablelist` |
 | `xref_inlined_branch` | :1053 xrefInlinedBranch | 内联注入的 CALL/CALLIND/BRANCHIND 交叉引用；BRANCHIND 走 find_jump_table |
 | `find_unprocessed` | :850 findUnprocessed | addrlist 剩余地址 → unprocessed |
 | `dedup_unprocessed` | :866 dedupUnprocessed | 排序 + 去重（Address: Ord） |
@@ -101,11 +101,13 @@ not yet wired into main.rs; existing linear scan still active).
 
 ### 已知缺口（RUGRA-GLUE 标注）
 
-- **partial Funcdata 克隆**：Ghidra 在 recoverJumpTables 里构建独立的 partial
-  Funcdata 做分析；Rugra 无此机制，恢复直接走 `jumptable::try_recover` 原地执行
-  `JumpTable::recover_addresses`。
-- **JumpTable::checkForMultistage**：未移植（依赖 partial Funcdata 简化路径），
-  `check_multistage_jumptables` 保留迭代结构但不推送新 op。
+- **partial Funcdata 克隆**（已关闭，JUMPTABLE-PIPELINE-0001）：`recover_jump_tables`
+  现构建 `@<fn>@@jump@<addr>` 命名的 partial Funcdata 并共享源函数的
+  Architecture（含 loader），经 `Funcdata::recover_jump_table` → `stage_jump_table`
+  → `truncated_flow` + "jumptable" 策略组完整分级恢复；不再走原地 `try_recover`。
+- **JumpTable::checkForMultistage**（已关闭，JUMPTABLE-PIPELINE-0001）：
+  `check_for_multistage` 已移植，`check_multistage_jumptables` 按 flow.cc:1414-1415
+  将被提升表的间接 op 推回 `tablelist`。
 - **Funcdata::linkJumpTable**：未移植，`xref_inlined_branch` 用 `find_jump_table`
   近似。
 - **FuncCallSpecs 管线**：`FlowInfo::setup_call_specs`/`setup_callind_specs` 的 stable

@@ -785,113 +785,95 @@ impl<'a> FlowInfo<'a> {
     /// op in `tablelist` calling `data.recoverJumpTable(partial, op, this,
     /// mode)`. On failure it calls `truncateIndirectJump(op, mode)`; on a
     /// partial recovery it either defers the op to `notreached` (if more flow
-    /// is coming) or marks the table complete.
-    ///
-    /// Rugra notes: there is no partial `Funcdata` clone, and `Funcdata::
-    /// recoverJumpTable` is not yet ported — recovery goes through
-    /// [`crate::jumptable::try_recover`], which performs the same
-    /// `JumpTable::recover_addresses` work in-place. The `notreached` deferral
-    /// list and the `fail_mode` → `RecoveryMode` mapping are preserved so the
-    /// caller can drive the multistage loop in `generate_ops`.
+    /// is coming) or marks the table complete. A LowlevelError escaping the
+    /// staged recovery propagates to the caller exactly as the C++ throw
+    /// escapes `recoverJumpTables` → `generateOps` → `followFlow`.
     // Ghidra: flow.cc:1427 FlowInfo::recoverJumpTables
     pub fn recover_jump_tables(
         &mut self,
-        new_tables: &mut Vec<Option<crate::jumptable::JumpTable>>,
+        new_tables: &mut Vec<Option<Arc<RwLock<crate::jumptable::JumpTable>>>>,
         notreached: &mut Vec<crate::op::PcodeOpRef>,
-    ) {
-        // Ghidra reads tablelist[0] to build the partial-Funcdata label
-        // (flow.cc:1430-1437). Rugra skips the label because there is no
-        // partial clone; we still require a non-empty tablelist.
-        let tablelist = self.collect_branchinds();
-        let tablelist_len = tablelist.len();
+    ) -> crate::error::Result<()> {
+        // flow.cc:1430-1435: the partial Funcdata label is built from
+        // tablelist[0]'s address (printRaw of a ram-space address is the
+        // zero-padded 8-digit hex offset).
+        let op0_addr = self.tablelist[0].0.read().unwrap().get_addr().as_u64();
+        let nm = format!("{}@@jump@{:08x}", self.fd.get_name(), op0_addr);
+        // flow.cc:1437: Funcdata partial(nm,nm,data.getScopeLocal()
+        // ->getParent(),data.getAddress(),(FunctionSymbol *)0); — the partial
+        // shares the architecture and entry address of the source function.
+        let entry = *self.fd.get_address();
+        let fd_size = self.fd.size;
+        let arch = self.fd.get_arch().cloned();
+        let mut partial = Funcdata::new(&nm, entry, fd_size);
+        if let Some(arch) = arch {
+            partial.set_arch(arch);
+        }
+        // Funcdata::truncatedFlow reads the source FlowInfo through this
+        // snapshot (the C++ passes the FlowInfo pointer itself).
+        let flow_state = self.truncated_state();
 
-        for op in &tablelist {
-            let mode = crate::jumptable::RecoveryMode::FailNormal;
-
-            // data.recoverJumpTable(partial, op, this, mode) (flow.cc:1442).
-            let jt_opt = match crate::jumptable::try_recover(&op.0, self.fd) {
-                Some(jt) => Some(jt),
-                None => None,
-            };
-
-            match &jt_opt {
+        let tablelist_len = self.tablelist.len();
+        for i in 0..tablelist_len {
+            let op = self.tablelist[i].clone();
+            // flow.cc:1441-1442: mode is an out parameter of
+            // data.recoverJumpTable(partial,op,this,mode).
+            let mut mode = crate::jumptable::RecoveryMode::Success;
+            let jt = self.fd.recover_jump_table(&mut partial, &op, &mut mode, &flow_state)?;
+            match &jt {
                 None => {
-                    // Could not recover the jumptable (flow.cc:1443-1445).
+                    // Could not recover the jumptable (flow.cc:1443-1445):
+                    // unless this flow is being inlined for something else,
+                    // treat the indirect jump as a call/return.
                     if !self.is_flow_for_inline() {
-                        // Treat the indirect jump as a call/return. The mode
-                        // flows straight through to truncate_indirect_jump,
-                        // exactly like flow.cc:1445 passes the JumpTable
-                        // RecoveryMode to truncateIndirectJump.
-                        self.truncate_indirect_jump(op, mode);
+                        eprintln!(
+                            "[JUMPTABLE] recovery failed at 0x{:x} mode={:?} → truncate",
+                            op.0.read().unwrap().get_addr().as_u64(),
+                            mode
+                        );
+                        self.truncate_indirect_jump(&op, mode);
                     }
                 }
                 Some(jt) => {
-                    if jt.is_partial() {
+                    if jt.read().unwrap().is_partial() {
                         // flow.cc:1447-1455: defer if more flow is coming and
                         // we have not already queued this op.
-                        if tablelist_len > 1 && !Self::is_in_array(notreached, op) {
+                        if tablelist_len > 1 && !Self::is_in_array(notreached, &op) {
                             notreached.push(op.clone());
                         } else {
-                            // Recovered table is final — attach it to fd and
-                            // mark complete. Ghidra leaves attachment to the
-                            // caller of recoverJumpTable; Rugra attaches here
-                            // because there is no partial-clone hand-off.
-                            let jt_arc = std::sync::Arc::new(std::sync::RwLock::new(
-                                crate::jumptable::JumpTable::new(jt.opaddress),
-                            ));
-                            {
-                                let mut dst = jt_arc.write().unwrap();
-                                dst.addresstable = jt.addresstable.clone();
-                                dst.mark_complete();
-                                dst.set_indirect_op(op.0.clone());
-                            }
-                            self.fd.jump_tables.push(jt_arc);
+                            // flow.cc:1454: jt->markComplete();
+                            jt.write().unwrap().mark_complete();
                         }
-                    } else {
-                        // Fully recovered — attach to fd.
-                        let jt_arc = std::sync::Arc::new(std::sync::RwLock::new(
-                            crate::jumptable::JumpTable::new(jt.opaddress),
-                        ));
-                        {
-                            let mut dst = jt_arc.write().unwrap();
-                            dst.addresstable = jt.addresstable.clone();
-                            dst.set_indirect_op(op.0.clone());
-                        }
-                        self.fd.jump_tables.push(jt_arc);
                     }
                 }
             }
-            new_tables.push(jt_opt);
+            new_tables.push(jt);
         }
+        Ok(())
     }
 
     /// Look for changes in control-flow near indirect jumps that were
     /// discovered after the jumptable recovery. Faithful to
-    /// `FlowInfo::checkMultistageJumptables` (flow.cc:1408-1417).
-    ///
-    /// Ghidra walks every `JumpTable` on `data` and, if `checkForMultistage`
-    /// reports new flow, pushes the table's indirect op back onto
-    /// `tablelist` so `generateOps` will recover it again.
-    ///
-    /// Rugra notes: `JumpTable::checkForMultistage` is not yet ported (it
-    /// needs the partial-`Funcdata` simplification path). We mirror the
-    /// iteration structure and surface the gap: for now no new indirect jumps
-    /// are reported, so this is a structural placeholder that preserves the
-    /// multistage loop contract.
+    /// `FlowInfo::checkMultistageJumptables` (flow.cc:1408-1417): every
+    /// `JumpTable` on `data` is consulted, and any table that
+    /// `checkForMultistage` promotes has its indirect op pushed back onto
+    /// `tablelist` so the generateOps do-while revisits it.
     // Ghidra: flow.cc:1408 FlowInfo::checkMultistageJumptables
-    pub fn check_multistage_jumptables(&self) -> Vec<crate::op::PcodeOpRef> {
-        let rediscovered: Vec<crate::op::PcodeOpRef> = Vec::new();
+    pub fn check_multistage_jumptables(&mut self) {
+        // flow.cc:1412: int4 num = data.numJumpTables(); — the census is
+        // fixed up front; only tablelist is appended in the loop body.
         let num = self.fd.jump_tables.len();
         for i in 0..num {
-            let jt_arc = &self.fd.jump_tables[i];
-            // Ghidra: if (jt->checkForMultistage(&data)) tablelist.push_back(...);
-            // RUGRA-GLUE: JumpTable::checkForMultistage is not yet ported — it
-            // requires the partial Funcdata simplification loop that Rugra
-            // does not model. We keep the iteration so the multistage contract
-            // is visible; nothing is pushed until that method exists.
-            let _ = jt_arc;
+            let jt_arc = self.fd.jump_tables[i].clone();
+            let promote = jt_arc.write().unwrap().check_for_multistage(self.fd);
+            // flow.cc:1414-1415: if (jt->checkForMultistage(&data))
+            //   tablelist.push_back(jt->getIndirectOp());
+            if promote {
+                if let Some(indirect) = jt_arc.read().unwrap().get_indirect_op() {
+                    self.tablelist.push(crate::op::PcodeOpRef(indirect));
+                }
+            }
         }
-        rediscovered
     }
 
     /// If the given injected op is a CALL, CALLIND, or BRANCHIND, add
@@ -2610,67 +2592,53 @@ impl<'a> FlowInfo<'a> {
         }
 
         // Phase 2: jump-table recovery (flow.cc:796-821).
-        // Collect BRANCHIND ops found during Phase 1, recover their jump
-        // tables, and push newly discovered addresses to addrlist.
-        // Ghidra structure: do { while(!tablelist.empty()) {...}
-        // checkContainedCall(); checkMultistageJumptables(); ... }
-        // while(!tablelist.empty()) — the do-while body runs at least once,
-        // so checkContainedCall executes even with no indirect jumps.
+        // do { while(!tablelist.empty()) { recoverJumpTables → newAddress per
+        // entry + fallthru } checkContainedCall(); checkMultistageJumptables();
+        // notreached refill; injectPcode(); } while(!tablelist.empty()) —
+        // the do-while body runs at least once, so checkContainedCall
+        // executes even with no indirect jumps.
+        let mut notreached: Vec<crate::op::PcodeOpRef> = Vec::new();
+        let mut notreachcnt: usize = 0;
         loop {
-            // Collect all BRANCHIND ops still in the raw dead list.
-            let branchinds: Vec<crate::op::PcodeOpRef> = self.collect_branchinds();
-            if !branchinds.is_empty() {
-                // Recover jump tables for each BRANCHIND.
-                let mut new_addresses: Vec<Address> = Vec::new();
-                for bi_ref in &branchinds {
-                    // Check if already has a jump table.
-                    let bi_addr = bi_ref.0.read().unwrap().get_addr().as_u64();
-                    let already = self
-                        .fd
-                        .jump_tables
-                        .iter()
-                        .any(|jt| jt.read().unwrap().get_op_address().as_u64() == bi_addr);
-                    if already {
-                        // Use existing table entries.
-                        if let Some(jt_arc) = self
-                            .fd
-                            .jump_tables
-                            .iter()
-                            .find(|jt| jt.read().unwrap().get_op_address().as_u64() == bi_addr)
-                        {
-                            let jt = jt_arc.read().unwrap();
-                            for i in 0..jt.num_entries() {
-                                new_addresses.push(jt.get_address_by_index(i));
-                            }
-                        }
-                        continue;
+            // flow.cc:797: for each jumptable found (tablelist is filled by
+            // xref_control_flow on BRANCHIND, flow.cc:321-322).
+            while !self.tablelist.is_empty() {
+                let mut new_tables: Vec<Option<Arc<RwLock<crate::jumptable::JumpTable>>>> =
+                    Vec::new();
+                self.recover_jump_tables(&mut new_tables, &mut notreached)?;
+                self.tablelist.clear();
+                // flow.cc:801-810: for each recovered table, push every
+                // entry address and trace the new flow.
+                for jt in new_tables {
+                    let Some(jt) = jt else { continue };
+                    let (num, indirect_addr, entries) = {
+                        let jt_rg = jt.read().unwrap();
+                        let indirect_addr = jt_rg
+                            .get_indirect_op()
+                            .map(crate::op::PcodeOpRef)
+                            .map(|op| op.0.read().unwrap().get_addr())
+                            .unwrap_or(*self.fd.get_address());
+                        (
+                            jt_rg.num_entries(),
+                            indirect_addr,
+                            (0..jt_rg.num_entries())
+                                .map(|i| jt_rg.get_address_by_index(i))
+                                .collect::<Vec<Address>>(),
+                        )
+                    };
+                    for addr in entries {
+                        self.new_address(indirect_addr, addr);
                     }
-
-                    // Try recovery (jumptable.rs::try_recover).
-                    if let Some(jt) = crate::jumptable::try_recover(&bi_ref.0, self.fd) {
-                        let jt_arc = std::sync::Arc::new(std::sync::RwLock::new(jt));
-                        let jt_copy = jt_arc.read().unwrap();
-                        for i in 0..jt_copy.num_entries() {
-                            new_addresses.push(jt_copy.get_address_by_index(i));
-                        }
-                        drop(jt_copy);
-                        self.fd.jump_tables.push(jt_arc);
+                    if num > 0 {
+                        eprintln!(
+                            "[JUMPTABLE] recovered {} entries from indirect jump at 0x{:x}",
+                            num,
+                            indirect_addr.as_u64()
+                        );
                     }
-                }
-
-                // Push newly discovered addresses and trace them (flow.cc:806-809).
-                // Ghidra passes the table's indirect op as the branch source;
-                // its address only feeds the out-of-bounds diagnostic.
-                let indirect_source = self
-                    .tablelist
-                    .first()
-                    .map(|op| op.0.read().unwrap().get_addr())
-                    .unwrap_or(Address::new(self.baddr));
-                for addr in &new_addresses {
-                    self.new_address(indirect_source, *addr);
-                }
-                while !self.addrlist.is_empty() {
-                    self.fallthru()?;
+                    while !self.addrlist.is_empty() {
+                        self.fallthru()?;
+                    }
                 }
             }
 
@@ -2678,26 +2646,27 @@ impl<'a> FlowInfo<'a> {
             // constructions. Runs on every do-while pass, including a first
             // pass with no jump tables.
             self.check_contained_call();
-            // flow.cc:814: checkMultistageJumptables(); — not yet ported;
-            // Rugra approximates the tablelist refill below via a fresh
-            // BRANCHIND census (JUMPTABLE-MULTISTAGE gap, flow_audit.md).
+            // flow.cc:814: checkMultistageJumptables(); — promote
+            // override-marked single-entry tables back onto tablelist
+            // (JUMPTABLE-MULTISTAGE closed by JUMPTABLE-PIPELINE-0001).
+            self.check_multistage_jumptables();
 
-            // flow.cc:815-818: refill tablelist from unreached indirect ops,
-            // then expand any injections queued by this pass before the
-            // `!tablelist.empty()` loop condition (flow.cc:819-820).
+            // flow.cc:815-818: refill tablelist from unreached indirect ops.
+            while notreachcnt < notreached.len() {
+                self.tablelist.push(notreached[notreachcnt].clone());
+                notreachcnt += 1;
+            }
+            // flow.cc:819-820: expand any injections queued by this pass
+            // before the `!tablelist.empty()` loop condition.
             if self.has_inject() {
                 self.inject_pcode();
             }
-
-            // Check if any new BRANCHINDs appeared (multistage, flow.cc:821
-            // while-condition `!tablelist.empty()`).
-            let new_branchinds = self.collect_branchinds();
-            if new_branchinds.len() <= branchinds.len() {
-                break; // No new indirect jumps → done.
+            // flow.cc:821: `while(!tablelist.empty())` — inlining or
+            // multistage may have added new indirect branches.
+            if self.tablelist.is_empty() {
+                break;
             }
         }
-        // flow.cc:821: the do-while only exits with an empty tablelist.
-        self.tablelist.clear();
         Ok(())
     }
 

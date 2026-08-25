@@ -7637,60 +7637,105 @@ impl Funcdata {
         new_jt
     }
 
-    // Ghidra: funcdata_block.cc:492 Funcdata::stageJumpTable
+    // Ghidra: funcdata_block.cc:491 Funcdata::stageJumpTable
     /// Recover a jump-table for a BRANCHIND using existing flow information.
-    /// Faithful to `Funcdata::stageJumpTable` (funcdata_block.cc:492-548). A
-    /// partial function clone is simplified under the "jumptable" strategy,
-    /// then the table's addresses are recovered. Returns a success/failure
-    /// code.
-    ///
-    /// `truncated_flow` now provides the partial clone, but this adapter does
-    /// not receive the source `FlowInfo` needed to invoke it. The
-    /// `glb->allacts` action dispatch and `recoverMultistage` legs also remain
-    /// gaps. Callers must construct and simplify `partial` before entering
-    /// this method.
+    /// Faithful to `Funcdata::stageJumpTable` (funcdata_block.cc:491-548). A
+    /// partial function clone is built via `truncatedFlow`, simplified under
+    /// the "jumptable" strategy group (reset+perform on the partial), then
+    /// the table's addresses are recovered from the simplified data-flow.
+    /// Returns a success/failure code; `Err` is the LowlevelError channel
+    /// that Ghidra lets propagate out of `stageJumpTable` (bad partial clone,
+    /// truncated-flow clone failures).
     pub fn stage_jump_table(
         &mut self,
         partial: &mut Funcdata,
         jt: &Arc<RwLock<crate::jumptable::JumpTable>>,
         op: &PcodeOpRef,
-    ) -> crate::jumptable::RecoveryMode {
+        flow_state: &crate::flow::TruncatedFlowState,
+    ) -> crate::error::Result<crate::jumptable::RecoveryMode> {
         if !partial.is_jumptable_recovery_on() {
-            // Do full analysis on the table if we haven't before.
+            // Do full analysis on the table if we haven't before
             partial.flags |= funcdata_flags::JUMPTABLERECOVERY_ON;
-            // Ghidra: partial.truncatedFlow(this, flow); then runs the
-            // "jumptable" action group on the partial clone. This adapter has
-            // no FlowInfo parameter, so its caller must perform both steps.
+            // cc:497: partial.truncatedFlow(this, flow); — clones the raw
+            // dead-list ops, callspecs, and linked jumptables, then builds
+            // the partial CFG. The C++ LowlevelError throw propagates up
+            // through stageJumpTable; the Rust Result does the same.
+            partial.truncated_flow(&*self, flow_state)?;
+            // cc:499-518: save the current root action, switch the
+            // architecture's ActionDatabase to the "jumptable" strategy
+            // group, and reset+perform it on the partial clone. A
+            // LowlevelError out of perform is caught, warned, and mapped to
+            // fail_normal (cc:514-518).
+            //
+            // Ghidra's `glb->allacts` is architecture-owned and initialized
+            // by Architecture::buildAction (architecture.cc:582-591). Rugra
+            // drivers build their own root database and never call
+            // build_action, so the architecture slot is typically None; when
+            // present the shared slot is used with the oracle's
+            // save/restore of the current root, otherwise a per-stage
+            // database with the same universal tree and default groups is
+            // constructed. The observable effect on `partial` is identical.
+            let shared_db = self.get_arch().and_then(|a| a.allacts.clone());
+            let local_db;
+            let db_slot: &Arc<std::sync::RwLock<crate::action::ActionDatabase>> =
+                match &shared_db {
+                    Some(db) => db,
+                    None => {
+                        let mut db = crate::action::ActionDatabase::new();
+                        db.set_default_actions();
+                        local_db = std::sync::Arc::new(std::sync::RwLock::new(db));
+                        &local_db
+                    }
+                };
+            let perform_result = {
+                let mut db = db_slot
+                    .write()
+                    .expect("allacts write lock poisoned");
+                let oldactname = db.get_current_name().to_string();
+                db.set_current("jumptable");
+                let result = db.perform_action("jumptable", partial);
+                if oldactname.is_empty() {
+                    // No root was current before (uninitialized slot); the
+                    // C++ database always has a current root after
+                    // resetDefaults, and set_default_actions just ran, so
+                    // this arm is unreachable in practice.
+                    db.set_current("decompile");
+                } else {
+                    db.set_current(&oldactname);
+                }
+                result
+            };
+            // cc:514-518: catch(LowlevelError &err) { setCurrent(old);
+            // warning(err.explain, op->getAddr()); return fail_normal; }
+            if let Err(err) = perform_result {
+                self.warning(&err.to_string(), op.0.read().unwrap().get_addr());
+                return Ok(crate::jumptable::RecoveryMode::FailNormal);
+            }
         }
-
         let op_seqnum = op.0.read().unwrap().get_seq_num().clone();
         // Ghidra: PcodeOp *partop = partial.findOp(op->getSeqNum());
         let partop = partial.obank.find_op(&op_seqnum);
+        // cc:522-523: partop == 0 || code != BRANCHIND || addr mismatch →
+        // throw LowlevelError("Error recovering jumptable: Bad partial clone")
         let partop = match partop {
-            Some(p) => p,
-            None => {
-                self.warning(
-                    "Error recovering jumptable: Bad partial clone",
-                    op.0.read().unwrap().get_addr(),
-                );
-                return crate::jumptable::RecoveryMode::FailNormal;
+            Some(p)
+                if {
+                    let p_rg = p.0.read().unwrap();
+                    p_rg.opcode == OpCode::CPUI_BRANCHIND
+                        && p_rg.get_addr().as_u64() == op.0.read().unwrap().get_addr().as_u64()
+                } =>
+            {
+                p
+            }
+            _ => {
+                return Err(crate::error::Error::Lowlevel(
+                    "Error recovering jumptable: Bad partial clone".to_string(),
+                ));
             }
         };
-        {
-            let p_rg = partop.0.read().unwrap();
-            if p_rg.opcode != OpCode::CPUI_BRANCHIND
-                || p_rg.get_addr().as_u64() != op.0.read().unwrap().get_addr().as_u64()
-            {
-                self.warning(
-                    "Error recovering jumptable: Bad partial clone",
-                    op.0.read().unwrap().get_addr(),
-                );
-                return crate::jumptable::RecoveryMode::FailNormal;
-            }
-            // Indirectop we were trying to recover was eliminated as dead code.
-            if p_rg.is_dead() {
-                return crate::jumptable::RecoveryMode::Success;
-            }
+        // Indirectop we were trying to recover was eliminated as dead code.
+        if partop.0.read().unwrap().is_dead() {
+            return Ok(crate::jumptable::RecoveryMode::Success);
         }
 
         // Test if the branch target is copied from the return address.
@@ -7701,29 +7746,43 @@ impl Funcdata {
         if let Some(vn) = in0 {
             if self.test_for_return_address(&vn) {
                 // Switch would not recover anyway.
-                return crate::jumptable::RecoveryMode::FailReturn;
+                return Ok(crate::jumptable::RecoveryMode::FailReturn);
             }
         }
 
-        // Ghidra: jt->setLoadCollect(flow->doesJumpRecord());
-        // RUGRA-GAP: FlowInfo not threaded through; default to no load collect.
+        // cc:532: jt->setLoadCollect(flow->doesJumpRecord()) — the flag is
+        // the RECORD_JUMPLOADS bit of the source FlowInfo's options, carried
+        // through the truncated-flow state snapshot.
         {
             let mut jt_w = jt.write().unwrap();
-            jt_w.set_load_collect(false);
+            jt_w.set_load_collect(
+                (flow_state.flags & crate::flow::flow_flags::RECORD_JUMPLOADS) != 0,
+            );
             jt_w.set_indirect_op(partop.0.clone());
         }
-        // Ghidra branches on jt->isPartial(): recoverMultistage vs recoverAddresses.
-        // RUGRA-GAP: recoverMultistage not ported; always recoverAddresses.
-        let recovered = jt.write().unwrap().recover_addresses(partial);
-        if !recovered {
-            // recoverAddresses returned false (no model / zero entries).
-            self.warning(
-                "Jumptable recovery produced no addresses",
-                op.0.read().unwrap().get_addr(),
-            );
-            return crate::jumptable::RecoveryMode::FailNormal;
+        // cc:534-537: isPartial() → recoverMultistage; else recoverAddresses.
+        // recoverMultistage absorbs both exception families internally
+        // (restoring the old model + address table), so the try/catch below
+        // only guards the recoverAddresses leg.
+        {
+            let mut jt_w = jt.write().unwrap();
+            if jt_w.is_partial() {
+                jt_w.recover_multistage(partial);
+            } else {
+                drop(jt_w);
+                match jt.write().unwrap().recover_addresses_classified(partial) {
+                    Ok(()) => return Ok(crate::jumptable::RecoveryMode::Success),
+                    Err(crate::jumptable::JumpTableRecoveryError::Thunk { .. }) => {
+                        return Ok(crate::jumptable::RecoveryMode::FailThunk)
+                    }
+                    Err(crate::jumptable::JumpTableRecoveryError::Lowlevel { message }) => {
+                        self.warning(&message, op.0.read().unwrap().get_addr());
+                        return Ok(crate::jumptable::RecoveryMode::FailNormal);
+                    }
+                }
+            }
         }
-        crate::jumptable::RecoveryMode::Success
+        Ok(crate::jumptable::RecoveryMode::Success)
     }
 
     // Ghidra: funcdata_block.cc:555 Funcdata::earlyJumpTableFail
@@ -7848,19 +7907,22 @@ impl Funcdata {
         crate::jumptable::RecoveryMode::Success
     }
 
-    // Ghidra: funcdata_block.cc:640 Funcdata::recoverJumpTable
+    // Ghidra: funcdata_block.cc:639 Funcdata::recoverJumpTable
     /// Recover control-flow destinations for a BRANCHIND. Faithful to
-    /// `Funcdata::recoverJumpTable` (funcdata_block.cc:640-674). If an
+    /// `Funcdata::recoverJumpTable` (funcdata_block.cc:639-673). If an
     /// existing non-override, non-partial table exists it is returned
     /// immediately; otherwise an attempt is made to stage recovery. Returns
     /// the recovered table (also pushed into `jump_tables` if newly created)
-    /// or `None` on failure, with `mode` set to the failure code.
+    /// or `None` on failure, with `mode` set to the failure code. `Err` is
+    /// the LowlevelError that Ghidra lets escape `stageJumpTable` (bad
+    /// partial clone / truncated-flow clone failure).
     pub fn recover_jump_table(
         &mut self,
         partial: &mut Funcdata,
         op: &PcodeOpRef,
         mode: &mut crate::jumptable::RecoveryMode,
-    ) -> Option<Arc<RwLock<crate::jumptable::JumpTable>>> {
+        flow_state: &crate::flow::TruncatedFlowState,
+    ) -> crate::error::Result<Option<Arc<RwLock<crate::jumptable::JumpTable>>>> {
         *mode = crate::jumptable::RecoveryMode::Success;
 
         // Search for a pre-existing jumptable.
@@ -7871,37 +7933,37 @@ impl Funcdata {
             };
             if !is_override {
                 if !is_partial {
-                    return Some(jt); // Previously calculated jumptable.
+                    return Ok(Some(jt)); // Previously calculated jumptable.
                 }
             }
-            *mode = self.stage_jump_table(partial, &jt, op);
+            *mode = self.stage_jump_table(partial, &jt, op, flow_state)?;
             if *mode != crate::jumptable::RecoveryMode::Success {
-                return None;
+                return Ok(None);
             }
             // Relink table back to original op.
             jt.write().unwrap().set_indirect_op(op.0.clone());
-            return Some(jt);
+            return Ok(Some(jt));
         }
 
         if (self.flags & funcdata_flags::JUMPTABLERECOVERY_DONT) != 0 {
-            return None; // Explicitly told not to recover jumptables.
+            return Ok(None); // Explicitly told not to recover jumptables.
         }
         *mode = self.early_jump_table_fail(op);
         if *mode != crate::jumptable::RecoveryMode::Success {
-            return None;
+            return Ok(None);
         }
 
         // JumpTable trialjt(glb);  — start with an empty trial table.
         let op_addr = op.0.read().unwrap().get_addr();
         let trial_jt = Arc::new(RwLock::new(crate::jumptable::JumpTable::new(op_addr)));
-        *mode = self.stage_jump_table(partial, &trial_jt, op);
+        *mode = self.stage_jump_table(partial, &trial_jt, op, flow_state)?;
         if *mode != crate::jumptable::RecoveryMode::Success {
-            return None;
+            return Ok(None);
         }
         // Make the jumptable permanent.
         trial_jt.write().unwrap().set_indirect_op(op.0.clone());
         self.jump_tables.push(trial_jt.clone());
-        Some(trial_jt)
+        Ok(Some(trial_jt))
     }
 
     // Ghidra: funcdata_block.cc:679 Funcdata::switchOverJumpTables

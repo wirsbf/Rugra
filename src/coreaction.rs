@@ -3201,44 +3201,31 @@ impl ActionSwitchNorm {
 impl Action for ActionSwitchNorm {
     // Ghidra: coreaction.cc:4548 ActionSwitchNorm::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Pre-pass: recover jump-tables for any BRANCHIND that doesn't already
-        // have one. In full Ghidra this happens during flow tracing
-        // (`subflow.cc` → `Funcdata::recoverJumpTable`, funcdata_block.cc:640)
-        // which runs *before* the core action pipeline. Rugra does not yet
-        // clone a partial `Funcdata` for dedicated jumptable simplification,
-        // so we run recovery in-place here, populating `fd.jump_tables`.
-        // This finally attaches `JumpTable` objects to `Funcdata` so that
-        // `Funcdata::find_jump_table` can return non-`None`.
-        let newly_recovered = crate::jumptable::recover_jump_tables(fd);
-
-        // Now mirror Ghidra's `ActionSwitchNorm` (coreaction.cc:4548): for each
-        // jump-table that hasn't been labelled yet, matchModel/recoverLabels/
-        // foldInNormalization, then foldInGuards.
-        let mut change_count = 0;
-
+        // In Ghidra, every JumpTable on `data` was already recovered during
+        // flow tracing (`FlowInfo::recoverJumpTables` → `Funcdata::
+        // recoverJumpTable`, funcdata_block.cc:640) — this action only
+        // normalizes the recovered tables. Rugra formerly ran an in-place
+        // recovery pre-pass here because flow-time recovery was unwired;
+        // JUMPTABLE-PIPELINE-0001 removed it now that the staged flow-time
+        // path exists.
+        //
+        // coreaction.cc:4549-4558: for each unlabelled table, matchModel /
+        // recoverLabels / foldInNormalization, then foldInGuards (clearing
+        // the structure on change). The fold stages remain L3 gaps.
+        let mut count = 0;
         for jt_arc in &fd.jump_tables {
-            // Full Ghidra:
-            //   jt->matchModel(&data)
-            //   jt->recoverLabels(&data)
-            //   jt->foldInNormalization(&data)
-            //   if (jt->foldInGuards(&data)) { data.getStructure().clear(); }
-            // Rugra exposes recovery/normalization on the JumpTable; the
-            // fold-in stages that rewrite the CFG are still L3 gaps.
             let is_labelled = jt_arc.read().unwrap().is_labelled();
             if !is_labelled {
-                change_count += 1;
+                // jt->matchModel(&data); jt->recoverLabels(&data);
+                // jt->foldInNormalization(&data);
+                count += 1;
             }
+            // if (jt->foldInGuards(&data)) { data.getStructure().clear(); }
         }
-
-        if newly_recovered > 0 {
-            change_count += newly_recovered as i32;
-        }
-
-        if change_count > 0 {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        let _ = count;
+        // cc:4559: `return 0;` — Ghidra reports no status change from this
+        // action regardless of the local counter.
+        Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "switchnorm" mirrors ctor at coreaction.hh:609
     fn get_name(&self) -> &str { "switchnorm" }

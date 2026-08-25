@@ -4696,6 +4696,64 @@ impl JumpTable {
     pub fn recover_addresses(&mut self, fd: &crate::funcdata::Funcdata) -> bool {
         self.recover_addresses_classified(fd).is_ok()
     }
+
+    // Ghidra: jumptable.cc:2653 JumpTable::recoverMultistage
+    /// Do a normal recoverAddresses, but save off the old JumpModel, and if
+    /// we fail recovery, put back the old model.
+    ///
+    /// Faithful to `recoverMultistage` (jumptable.cc:2653-2675): the old
+    /// address table is restored on EITHER exception family
+    /// (JumptableThunkError and LowlevelError run the identical catch body);
+    /// `loadpoints` is cleared up front and NOT restored on failure;
+    /// `partialTable = false` and `clearSavedModel()` run regardless of
+    /// outcome, keeping the new model only when recovery succeeded.
+    pub fn recover_multistage(&mut self, fd: &crate::funcdata::Funcdata) {
+        self.save_model();
+        let oldaddresstable = std::mem::take(&mut self.addresstable);
+        self.loadpoints.clear();
+        if self.recover_addresses_classified(fd).is_err() {
+            self.restore_saved_model();
+            self.addresstable = oldaddresstable;
+            // fd->warning("Second-stage recovery error", indirect->getAddr())
+            // — indirect is set by stageJumpTable immediately before this
+            // call (funcdata_block.cc:532); opaddress is the defensive
+            // fallback for the unlinked override corner.
+            let warn_addr = self
+                .indirect
+                .as_ref()
+                .map(|o| o.read().unwrap().get_addr())
+                .unwrap_or(self.opaddress);
+            fd.warning("Second-stage recovery error", warn_addr);
+        }
+        self.partial_table = false;
+        self.clear_saved_model(); // Keep the new model if it was created successfully
+    }
+
+    // Ghidra: jumptable.cc:2847 JumpTable::checkForMultistage
+    /// Check if this table has been marked as needing additional stages of
+    /// recovery, via the override. Faithful to `checkForMultistage`
+    /// (jumptable.cc:2847-2860): only a fully recovered single-entry table
+    /// with a linked indirect op can be promoted; on a positive override
+    /// query `partialTable` is set (the mutation survives the call, exactly
+    /// like the C++ field write through the non-const `this`).
+    pub fn check_for_multistage(&mut self, fd: &crate::funcdata::Funcdata) -> bool {
+        if self.addresstable.len() != 1 {
+            return false;
+        }
+        if self.partial_table {
+            return false;
+        }
+        let Some(indirect) = self.indirect.clone() else {
+            return false;
+        };
+        let addr = indirect.read().unwrap().get_addr();
+        if fd.localoverride.query_multistage_jumptable(addr) {
+            self.partial_table = true; // Mark that we need additional recovery
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Default upper bound on the number of entries a jump-table may hold when no

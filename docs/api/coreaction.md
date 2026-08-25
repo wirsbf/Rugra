@@ -1728,3 +1728,12 @@ stack pentry 且无锁定 stack 参数占用 placeholder 角色时非空（Rugra
 placeholder LOAD 作为最后一个 CALL 输入（`fc->create_placeholder`）。该输入
 使 CALL 满足 `usesSpacebasePtr()`，`RuleIndirectCollapse` 的 else-if 分支
 （ruleaction.cc:3223）据此折叠 unknown-effect guard INDIRECT。
+## 2026-08-25：ActionSwitchNorm 去自创预扫（JUMPTABLE-PIPELINE-0001 段2）
+
+`ActionSwitchNorm::apply`（coreaction.cc:4548-4560）不再在 apply 开头做原地
+`jumptable::recover_jump_tables(fd)` 预扫——那是 flow 期恢复未接线时代的自创补丁。
+oracle 中所有 `data` 上的 JumpTable 均在 flow 追踪期
+（`FlowInfo::recoverJumpTables` → `Funcdata::recoverJumpTable`）已恢复完毕，
+该 Action 只做规范化（matchModel/recoverLabels/foldInNormalization/foldInGuards，
+fold 阶段仍为 L2 登记缺口）。apply 现镜像 cc:4559 恒返 0（NO_CHANGE），
+unlabelled 计数仅保留本地变量。

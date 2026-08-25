@@ -1685,3 +1685,25 @@ MERGE-CLEAR-LIFECYCLE-0001（上文）记录的 `funcdata::` 2 个预存在失�
 - 关联：`comment::test_comment_sorter_op_landmark_interleaving` 第三个
   预存失败已由 `8b8dc90b`（BLOCK-STOPADDR-FIXTURE-REGRESSION-0001，
   本分支祖先）修复，单跑与全量均通过，无本轮改动。
+
+## 2026-08-25：`JUMPTABLE-PIPELINE-0001` 段2 — stageJumpTable/recoverJumpTable 分级恢复
+
+`Funcdata::stage_jump_table(partial, jt, op, flow_state)`（funcdata_block.cc:491-548）
+现为完整分级恢复：partial 首次进入时置 `JUMPTABLERECOVERY_ON` → `truncated_flow`
+克隆 → "jumptable" 策略组（`ActionDatabase` 共享 `arch.allacts` 槽位或等价本地库）
+reset+perform，perform 的 LowlevelError 映射 `warning + fail_normal`（cc:514-518）；
+`find_op(SeqNum)` 失败/opcode/地址不符返回 `Err(Lowlevel("Bad partial clone"))`
+——这是 C++ throw 的穿透通道（经 recoverJumpTable/recoverJumpTables/generateOps 直达
+followFlow 调用方，cc:522-523）。`partop` dead → `success`；return-address 复制测试 →
+`fail_return`（cc:527-529）。`set_load_collect` 读 `TruncatedFlowState::flags` 的
+RECORD_JUMPLOADS 位（cc:532 `flow->doesJumpRecord()`）；`set_indirect_op(partop)`
+顺带写 `opaddress`（jumptable.hh:599）。恢复分支（cc:534-545）：`is_partial()` →
+`recover_multistage`，否则 `recover_addresses_classified`，Thunk → `fail_thunk`、
+Lowlevel → `warning + fail_normal`。
+
+`Funcdata::recover_jump_table`（cc:639-673）链接既有表（override/partial 经
+stage 重试）或 trial 表分级恢复，成功后 `set_indirect_op(op)` 重链 + push
+`jump_tables`。所有 stage 失败码沿 `mode` 传出，LowlevelError 走 `Result` 通道。
+
+E2E：getparameter.constprop.0 @0x3fd5 88 条目恢复（flow 665 ops/36 块 → 1866/138），
+glob_set @0x4c45 35 条目恢复；124 函数 defects=0/numbering=0。
