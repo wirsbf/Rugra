@@ -3,6 +3,31 @@
 **状态**: 🔧 L2（仅逐函数核对，禁止据此宣称模块 L3）
 **源代码路径**: `src/typeop.rs`
 
+## 2026-08-25：`TypeOpIntAdd::propagate_add_in2out` 全量移植（typeop.cc:1215-1253）
+
+生产 caller 为 `ActionInferTypes` dispatch 的 PTRSUB/PTRADD/INT_ADD 指针臂
+（coreaction.rs，typeop.cc:2375/:2279/:1200）。四类决定性语义：
+
+- **引用/输出参数**：`typegrp: &Arc<RwLock<TypeFactory>>` 显式穿透（C++ 经
+  TypeOp 的 `tlst` 成员）；factory 真实改写（downChain/getBase/
+  getTypePointer/getTypePointerRel 全部 intern）。`parent/parent_off` 是跨
+  整个 do-while 循环共享的累积槽——循环前清一次，downChain 只在当前
+  pointee 为 struct/array 时写入、从不重置；`getTypePointerRel` 用**循环
+  结束时**的快照。
+- **循环边界/遍历顺序**：`do { downChain } while`——至少一次；downChain
+  返回 None 即 break；重规范化 offset 归零才停；无显式深度上限。
+  `allow_wrap = op != PTRSUB`（PTRSUB 永不回绕）。`command == Passthrough`
+  完全跳过循环、pointer 保持 alttype。
+- **计数器/累加器**：无计数器；`parent_off` per-call 累积（最后一次
+  struct/array 容器写入生效）。
+- **排序/比较键**：重载选择——`get_type_pointer_rel_ephemeral`
+  （type.cc:4016 无名 ephemeral 版，非 :4029 具名版）；downChain 全灭但
+  parent 存在 → `pt = getBase(1, Unknown)`；pointer==NULL 且 command==AddZero
+  退回 alttype；spacebase 输入且 ptrto 为 TYPE_SPACEBASE → 以**结果**
+  pointer 的 size/wordsize 改写为 unknown 基类型指针。
+
+双侧 fixture：`tests/oracle/stop_ptrsub_wire_1204.*`（MATCH）。
+
 ## 模块说明 (Module Doc)
 
 Type operations for P-code

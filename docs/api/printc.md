@@ -1,5 +1,17 @@
 # `printc.rs` API Reference
 
+## 2026-08-25：`find_partial_field` 半开区间边界修复（type.cc:1580-1638）
+
+`find_partial_field` 的字段包含判定由闭区间 `off + sz <= f.offset + f_size`
+改为 Ghidra `TypeStruct::findTruncation`（经 `getFieldIter`，
+type.cc:1580-1602）的语义：包含区间是半开的 `[offset, offset+size)`
+（`curfield.offset <= off && curfield.offset + size > off`），外加跨度检查
+`noff + sz <= size`。旧闭上界使 offset 恰落在字段起点且 `sz == 0` 时命中
+**前一个**字段（PTRSUB(bar,0x10) 渲染成 `bar->prev` 而非 `bar->point`）。
+这是 STOP/PTRSUB 接线（VARNODE-STOPUP-FLAGS-0001）在 E2E 验收中暴露的
+移植缺陷：`( )bar` 空 cast（coreaction getInputCast 旧启发式，另修）消除
+后字段名仍偏早一格。
+
 `PrintC::doc_function` now follows locked Ghidra 12.0.4
 `PrintC::docFunction` at `printc.cc:2641-2676`: it delegates the declaration
 exactly once to `emitFunctionDeclaration`. The former production-only `main`

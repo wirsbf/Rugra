@@ -3303,13 +3303,8 @@ impl TypeOpIntAdd {
     /// indicating how the op should be treated. When the command is `AddConst`
     /// or `AddZero`, the constant offset is written into `offset`.
     ///
-    /// Note: Ghidra's `propagateAddPointer` is the low-level classifier;
-    /// `propagateAddIn2Out` (typeop.cc:1215, which also uses
-    /// `TypePointer::downChain`/`getTypePointerRel`) consumes it to build the
-    /// transformed pointer type. Rugra ports the classifier faithfully here;
-    /// the full down-chain reconstruction (`propagateAddIn2Out`) requires
-    /// `TypeFactory`/`TypePointer::down_chain` wiring that is not yet
-    /// available and is tracked separately.
+    /// The down-chain reconstruction that consumes this classifier is
+    /// [`Self::propagate_add_in2out`] below.
     // Ghidra: typeop.cc:1268 TypeOpIntAdd::propagateAddPointer
     pub fn propagate_add_pointer(
         op: &PcodeOp,
@@ -3424,6 +3419,127 @@ impl TypeOpIntAdd {
             }
             _ => (PropagateAddCommand::NoPropagate, 0),
         }
+    }
+
+    /// Assuming a pointer data-type from an ADD PcodeOp propagates from an
+    /// input to its output, calculate the transformed data-type of the output
+    /// Varnode, which will depend on details of the operation. If the edge
+    /// doesn't make sense as "an ADD to a pointer", prevent the propagation by
+    /// returning the output Varnode's current data-type.
+    ///
+    /// Faithful to `TypeOpIntAdd::propagateAddIn2Out` (typeop.cc:1215-1253).
+    /// `alttype` is the resolved input pointer data-type (callers guarantee
+    /// TYPE_PTR); `typegrp` is the owning TypeFactory, threaded explicitly
+    /// because the C++ original reaches it through the TypeOp's `tlst` member —
+    /// the factory is genuinely mutated (downChain/getBase/getTypePointer/
+    /// getTypePointerRel all intern). The production caller is the
+    /// PTRSUB/PTRADD/INT_ADD pointer arm of the ActionInferTypes dispatch
+    /// (`TypeOpPtrsub::propagateType` typeop.cc:2375,
+    /// `TypeOpPtradd::propagateType` typeop.cc:2279,
+    /// `TypeOpIntAdd::propagateType` typeop.cc:1200).
+    // Ghidra: typeop.cc:1215 TypeOpIntAdd::propagateAddIn2Out
+    pub fn propagate_add_in2out(
+        alttype: &Arc<Datatype>,
+        typegrp: &Arc<RwLock<TypeFactory>>,
+        op: &PcodeOp,
+        inslot: i32,
+    ) -> Option<Arc<Datatype>> {
+        // typeop.cc:1216: `TypePointer *pointer = (TypePointer *)alttype;` —
+        // the C++ downcast is unchecked; every caller guards metatype ==
+        // TYPE_PTR first. A non-pointer input stops the propagation.
+        let ptr0 = match alttype.as_ref() {
+            Datatype::Pointer(p) => p.clone(),
+            _ => return None,
+        };
+        // typeop.cc:1220: sz = pointer->getPtrTo()->getAlignSize()
+        let (command, offset) =
+            Self::propagate_add_pointer(op, inslot, ptr0.ptr_to.get_align_size() as i32);
+        if command == PropagateAddCommand::NoPropagate {
+            return None; // Doesn't look like a good pointer add
+        }
+        let mut factory = typegrp.write().unwrap();
+        // typeop.cc:1222-1223: `parent`/`parentOff` are shared accumulator
+        // slots across the whole do-while loop — cleared once before it,
+        // written only by downChain when the current pointee is a struct or
+        // array, never reset between iterations. The `getTypePointerRel` call
+        // below (typeop.cc:1241) uses the END-of-loop snapshot.
+        let mut parent: Option<Arc<Datatype>> = None;
+        let mut parent_off: i64 = 0;
+        let mut pointer: Option<Arc<Datatype>> = Some(alttype.clone());
+        if command != PropagateAddCommand::Passthrough {
+            // typeop.cc:1224-1232: do { pointer = downChain(...) } while —
+            // body runs at least once; break on a NULL chain; continue only
+            // while the re-normalized offset stays non-zero. There is no
+            // explicit depth cap (termination relies on offset consumption /
+            // NULL). allowWrap = (op->code() != CPUI_PTRSUB): PTRSUB never
+            // wraps. typeOffset is int8 in Ghidra (uintb -> int8 implicit
+            // conversion; negative encodings reach the wrap branch).
+            let wordsize = ptr0.wordsize as u32;
+            let mut type_offset =
+                crate::space::AddrSpace::address_to_byte_int(offset as i64, wordsize);
+            let allow_wrap = op.get_opcode() != OpCode::CPUI_PTRSUB;
+            loop {
+                // Loop-entry invariant: pointer is Some (do-while shape).
+                let current = pointer.clone().expect("do-while entry invariant");
+                let next = factory.down_chain_virtual(
+                    &current,
+                    &mut type_offset,
+                    &mut parent,
+                    &mut parent_off,
+                    allow_wrap,
+                );
+                match next {
+                    None => {
+                        pointer = None;
+                        break;
+                    }
+                    Some(found) => {
+                        pointer = Some(found);
+                        if type_offset == 0 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(parent_pointer) = parent.clone() {
+            // typeop.cc:1233-1242: if the innermost containing object is a
+            // TYPE_STRUCT or TYPE_ARRAY, preserve info about this container.
+            let pt = match &pointer {
+                None => factory
+                    .get_base(1, TypeMetatype::Unknown)
+                    .expect("canonical unknown1 base type"), // Offset does not point at a proper sub-type
+                Some(found) => match found.as_ref() {
+                    Datatype::Pointer(ptype) => ptype.ptr_to.clone(), // The sub-type being directly pointed at
+                    _ => return None, // ill-typed in the oracle (unchecked C++ cast)
+                },
+            };
+            // typeop.cc:1241: the ephemeral UNNAMED getTypePointerRel overload
+            // (type.cc:4016), not the named type.cc:4029 form.
+            pointer = Some(factory.get_type_pointer_rel_ephemeral(parent_pointer, pt, parent_off));
+        }
+        // typeop.cc:1243-1247: a fully consumed chain with command AddZero
+        // (added 0) falls back to the input type; anything else NULL.
+        let pointer = pointer?;
+        // typeop.cc:1248-1251: spacebase input whose transformed pointee is
+        // TYPE_SPACEBASE rewrites to an unknown base-type pointer, sized from
+        // the RESULT pointer (not the input alttype).
+        if op
+            .get_in(inslot as usize)
+            .is_some_and(|input| input.read().unwrap().is_spacebase())
+        {
+            if let Datatype::Pointer(ptype) = pointer.as_ref() {
+                if ptype.ptr_to.get_metatype() == TypeMetatype::Spacebase {
+                    let unknown = factory
+                        .get_base(1, TypeMetatype::Unknown)
+                        .expect("canonical unknown1 base type");
+                    return Some(
+                        factory.get_type_pointer(ptype.base.size, unknown, ptype.wordsize),
+                    );
+                }
+            }
+        }
+        Some(pointer)
     }
 }
 

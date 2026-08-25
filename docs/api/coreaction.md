@@ -1,5 +1,53 @@
 # `coreaction.rs` API Reference
 
+## 2026-08-25：STOP seal + PTRSUB downChain 接线（VARNODE-STOPUP-FLAGS-0001 / TYPE-PTRSUB-PTRSUB-0001）
+
+四项 1:1 接线，消除 progressbarinit 的「Type propagation algorithm not
+settling」警告与 7 层 `->total` 嵌套（双侧 fixture
+`tests/oracle/stop_ptrsub_wire_1204.*` MATCH）：
+
+1. **`build_localtypes` 的 needsBlock 接线（coreaction.cc:5020-5031）**：每个
+   varnode 循环体内计算 `needs_block`——`Varnode::getLocalType` 内
+   blockup 的唯一写入点是定义 op 的 `stop_type_propagation`（varnode.cc:912，
+   typelock 早退之后才被咨询）；`needs_block` 为真则
+   `set_stop_up_propagation()`（varnode flag 0x800，全源码只设不清）。
+   SymbolEntry/getExactPiece 分支（cc:5022-5027，可使 needsBlock 保持
+   false）仍未接线（B2-W3 / TYPEFACTORY-EXACTPIECE-0001），故每个
+   varnode 都走 getLocalType 路径。
+2. **`propagate_type_edge` 补 cc:5093**：`outslot >= 0 &&
+   stops_up_propagation()` 时拒绝传播（sealed varnode 作为输入槽目标被封禁；
+   以 op 输出为目标的边不受影响——正因如此 downChain 字段指针仍能流入
+   RulePtrArith 封禁的 PTRSUB 输出）。
+3. **`propagate_type` 四臂拆分（原 INT_ADD|INT_SUB|PTRADD|PTRSUB 合并臂 +
+   sibling 传播删除）**：PTRSUB（typeop.cc:2366-2378）/PTRADD（:2268-2281）
+   指针只走 input→output 且经 `TypeOpIntAdd::propagate_add_in2out`（typeop.rs，
+   typeop.cc:1215）的 downChain 字段消耗变换；INT_ADD（:1181-1201）int 路径
+   仅 slot-1 常量放行、`outvn->isConstant()` 透传；INT_SUB→`None`（基类
+   typeop.cc:317-321）。非 const 兄弟 input 的指针正向传播（Ghidra 无此路径）
+   已删除。`type_factory: Option<&Arc<RwLock<TypeFactory>>>` 参数沿
+   apply→propagate_across_returns/propagate_one_type→propagate_type_edge→
+   propagate_type 下传（Ghidra 经 TypeOp 的 `tlst` 成员隐式可达）。
+4. **`ActionInferTypes::reset` override（coreaction.hh:975）**：按函数清零
+   `local_count`（原缺失导致跨函数泄漏、误触 7-pass cap）。
+
+配套修正（同一根因暴露的既有缺陷）：
+
+- **`ptr_input_reqtype` 改为 `TypeOpPtrsub::getInputCast`（typeop.cc:2320-2347）
+  / `TypeOpPtradd::getInputCast`（:2250-2266）的忠实端口**：reqtype=输入
+  varnode 自身（read-facing）类型、curtype=其 HIGH 类型，PTRSUB 剥一层共享
+  array 后比较基类型、PTRADD 比较 align_size——**从不咨询 op 的 output
+  类型**（旧启发式用 output 指针类型，ActionInferTypes 给 PTRSUB 输出
+  PointerRel 形态后会插出 `( )bar` 空 cast）。`cast_input_ptr` 相应去掉
+  二次 castStandard 门（Ghidra castInput 对 getInputCast 非空返回直接插
+  CAST，cc:2672-2675；testStructOffset0/tryResolutionAdjustment 为登记残差）。
+  read-facing 的 resolveInFlow（needs-resolution 类型）仍缺
+  （ACTION-INFERTYPES-DISPATCH-0001）；typedef 剥层为结构性 no-op。
+- **`build_localtypes` 两处 v_type 播种过滤 Unknown 占位类型**：VarnodeBank
+  建新 varnode 时预置 unknown-N，Ghidra 的 getLocalType
+  （varnode.cc:918-934）除 typelock 早退外从不读 v_type——占位 unknown
+  顶掉 sized-int 回退会使未封禁 INT_SUB/PTRSUB 输出停留 unknown（双侧
+  fixture case C/q 抓出）。
+
 ## 2026-08-24：build_localtypes 的 CALL/CALLIND input 播种（TYPEOP-LOCALTYPE-DISPATCH-0001 D2）
 
 `build_localtypes` 的 `CPUI_CALL | CPUI_CALLIND` 臂在保留 output 播种之外新增

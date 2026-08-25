@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "fixture_id": "STOP-PTRSUB-WIRE-0001",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "source": "coreaction.cc:5008-5037 ActionInferTypes::buildLocaltypes; coreaction.cc:5074-5113 propagateTypeEdge (cc:5093 stopsUpPropagation guard); coreaction.hh:975 reset; typeop.cc:1215-1253 propagateAddIn2Out; typeop.cc:1181-1201/2268-2281/2366-2378 pointer arms; typeop.cc:317-321 base null; type.cc:1084-1121 downChain; type.cc:4016-4025 ephemeral getTypePointerRel"
+  },
+  "architecture": "Synthetic FixtureArchitecture (x86-64-like spaces: ram=3 register=4), 8-byte pointer storage, wordsize 1",
+  "compiler_spec": "None: direct decompiler API with no lifted machine code",
+  "analysis_options": {
+    "factory": "oracle TypeFactory with xunknownN core types; Rugra TypeFactory::new_flavor(8, Standalone)",
+    "action": "ActionInferTypes alone, reset per fixture, 8 passes",
+    "normalization": "type projection = metatoken+size, pointers add ->pointee and |rel=parent:byteOffset; no temporary ids",
+    "random_seed": "none",
+    "error_injection": "none"
+  },
+  "input_manifest": {
+    "cases": [
+      [
+        "A",
+        "PTRSUB(bar,8) stop_type_propagation + LOAD",
+        "output takes rel pointer (prev@8), varnode stop_up set"
+      ],
+      [
+        "B",
+        "PTRSUB(bar,8) without stop + LOAD",
+        "same rel pointer, stop_up unset"
+      ],
+      [
+        "C",
+        "INT_SUB(bar,8) + LOAD",
+        "base null arm: output keeps int8"
+      ],
+      [
+        "D",
+        "INT_ADD(bar,8) + LOAD",
+        "same propagateAddIn2Out downChain as A"
+      ],
+      [
+        "E",
+        "INT_EQUAL(bar, q) with q = PTRSUB(z,8) stop",
+        "cc:5093: sibling edge into sealed q rejected, q stays int8"
+      ],
+      [
+        "F",
+        "INT_EQUAL(bar, q2) with q2 = PTRSUB(z2,8) no stop",
+        "plain pointer crosses the compare arm, q2 takes ProgressData*"
+      ],
+      [
+        "passes",
+        "8 applies",
+        "localcount stops below 7, no exception, types stable after pass1"
+      ]
+    ]
+  },
+  "observation_schema": {
+    "per_cell": "final v_type projection + stops_up_propagation flag, at pre/pass1/pass2/pass8",
+    "counter": "ActionInferTypes localcount after passes 1/2/8 (private-member read via visibility rewrite on the C++ side)",
+    "stability": "Arc/Datatype* identity of every cell between pass1 and pass8"
+  },
+  "comparand": {
+    "rust_base_commit": "fce01555544a1ccb19f82ac31a2d7593b9f0640b",
+    "runner": "tools/run_stop_ptrsub_wire_oracle.sh"
+  },
+  "comparand_sha256": {
+    "cpp_fixture_sha256": "eb5aca38c920ac44d827621b9f210d8351ea089384cc30eb78f9cb13bb47fb96",
+    "rust_fixture_sha256": "ec195de480996313c03c02ae5616540e5051e01cd8ce8400fc7d4e4b55b33081",
+    "rugra_coreaction_sha256": "befb3c0c2ea85103d5d1c47ad93aa3070cfcd97fe7f3ed8afc128bb780a09b03",
+    "rugra_typeop_sha256": "ca8572187ec75207c1c2305234a5668b0a0032157ea252a786af7d57c47ee90c",
+    "rugra_printc_sha256": "e7abb1e73cc9e36615cd394ac0936302a190ad8bacee9e3196800a4f9d1b2a4a"
+  },
+  "coverage": {
+    "build_localtypes_needs_block_to_stop_up": "MATCH: A stop=1 vs B stop=0, identical bilateral projection",
+    "propagate_type_edge_5093_seal": "MATCH: q stays int8 (sealed) while q2 takes ProgressData* through the same INT_EQUAL arm",
+    "ptrsub_downchain_field_pointer_and_ephemeral_rel": "MATCH: tA/tB/tD = ptr8->int8|rel=ProgressData:8",
+    "int_add_pointer_arm": "MATCH: tD identical to tA/tB",
+    "int_sub_null_arm": "MATCH: tC stays int8",
+    "localcount_settling_below_cap": "UNTESTED: localcount is a default-private member on the C++ side and is not projected; settling is observed via types_stable_since_pass1 and the absence of the 7-pass freeze",
+    "symbol_entry_exact_piece_branch": "MISMATCH: coreaction.cc:5022-5027 getExactPiece branch not wired (B2-W3 / TYPEFACTORY-EXACTPIECE-0001); fixture varnodes carry no SymbolEntry so both sides take the getLocalType path",
+    "type_recovery_exceeded_flag": "UNTESTED: funcdata typerecovery_exceeded accessor missing (B2-W5 residual); cap branch not reached because localcount settles",
+    "read_facing_resolution": "MISMATCH: resolveInFlow for needs-resolution inputs is ACTION-INFERTYPES-DISPATCH-0001; fixture inputs do not need resolution",
+    "compare_arm_pointerrel_downgrade": "UNTESTED: typeop.cc:976-981 PointerRel downgrade before crossing INT_EQUAL avoided by using plain pointer carriers"
+  },
+  "execution_evidence": [
+    {
+      "runner": "tools/run_stop_ptrsub_wire_oracle.sh",
+      "result": "MATCH",
+      "stage": "bilateral stdout diff",
+      "detail": "ghidra.stdout and rugra.stdout byte-identical across pre/pass1/pass2/pass8 projections"
+    }
+  ],
+  "overall_status": "MATCH"
+}

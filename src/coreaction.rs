@@ -3403,15 +3403,17 @@ impl ActionSetCasts {
     /// `ActionSetCasts::castInput` (coreaction.cc:2655-2720, PTRSUB/PTRADD
     /// branch). For a PTRSUB `c = PTRSUB(a, off)` or PTRADD
     /// `c = PTRADD(a, idx, sz)`, input slot 0 must be a pointer whose
-    /// pointed-to type matches the op's expected base. If `a`'s high type is
-    /// a different pointer (or not a pointer at all) and `castStandard` says
-    /// a cast is required, insert `out = CAST(a)` feeding slot 0 with the
-    /// op's expected pointer type, so printc emits `(ptype *)a`.
+    /// pointed-to type matches the op's expected base. If `a`'s (read-facing)
+    /// varnode type differs from its high type in the way
+    /// `TypeOpPtrsub/Ptradd::getInputCast` describes (see
+    /// [`Self::ptr_input_reqtype`]), insert `out = CAST(a)` feeding slot 0
+    /// with `reqtype`, so printc emits `(ptype *)a`.
     ///
-    /// `reqtype` is the pointer type the op expects for slot 0 (derived from
-    /// the op's output pointer type when present, matching Ghidra's
-    /// `TypeOp::inputTypeLocal` for pointer ops which mirrors the output's
-    /// pointer layer). Returns true if a cast was inserted.
+    /// `reqtype` comes from the faithful getInputCast port; Ghidra's
+    /// `castInput` inserts the cast directly for a non-null getInputCast
+    /// return (its testStructOffset0/tryResolutionAdjustment rewrites are
+    /// separate residuals here), so no second `castStandard` gate is applied.
+    /// Returns true if a cast was inserted.
     // Ghidra: coreaction.cc:2655 ActionSetCasts::castInput (PTRSUB/PTRADD arm)
     fn cast_input_ptr(
         &self,
@@ -3421,39 +3423,27 @@ impl ActionSetCasts {
         strategy: &crate::type_system::cast::CastStrategyC,
         reqtype: std::sync::Arc<crate::type_system::datatype::Datatype>,
     ) -> bool {
+        let _ = strategy;
         // (1) Read the current input varnode and its high type.
-        let (in_vn, curtype, op_pc, in_size) = {
+        let (in_vn, op_pc, in_size) = {
             let op = op_ref.0.read().unwrap();
             let Some(in_arc_ref) = op.get_in(slot) else { return false; };
             let in_arc = in_arc_ref.clone();
             let op_pc = op.get_addr();
             drop(op);
-            let (in_size, curtype, is_annot) = {
+            let (in_size, is_annot) = {
                 let in_rg = in_arc.read().unwrap();
-                let is_annot = in_rg.is_annotation();
-                let in_size = in_rg.get_size();
-                let curtype = in_rg.high.as_ref()
-                    .map(|h| h.read().unwrap().v_type.get())
-                    .or_else(|| in_rg.v_type.clone())
-                    .unwrap_or_else(|| reqtype.clone());
-                (in_size, curtype, is_annot)
+                (in_rg.get_size(), in_rg.is_annotation())
             };
             if is_annot { return false; }
-            (in_arc, curtype, op_pc, in_size)
+            (in_arc, op_pc, in_size)
         };
         // Constants cannot carry a pointer cast; skip (faithful to castInput
         // which only updates integer constants, never pointer constants).
         if in_vn.read().unwrap().is_constant() {
             return false;
         }
-        // (2) castStandard(reqtype, curtype, care_uint_int=true, care_ptr_uint=true).
-        // care_uint_int=true because pointer layers must match exactly
-        // (cast.cc:310-324 peel-pointer logic requires under-the-pointer
-        // metatype agreement for pointer-to-pointer casts).
-        let Some(_cast_type) = strategy.cast_standard_full(&reqtype, &curtype, true, true) else {
-            return false;
-        };
-        // (3) Insert CPUI_CAST op: out = CAST(in), out implied.
+        // (2) Insert CPUI_CAST op: out = CAST(in), out implied.
         //     Faithful to coreaction.cc:2702-2712.
         let new_op = fd.new_op(1, op_pc);
         let out_vn = fd.new_unique_out(in_size, &new_op);
@@ -3461,40 +3451,112 @@ impl ActionSetCasts {
         out_vn.write().unwrap().set_implied();
         fd.op_set_opcode(&new_op, OpCode::CPUI_CAST);
         fd.op_set_input(&new_op, in_vn, 0);
-        fd.op_set_input(op_ref, out_vn, slot);
+        fd.op_set_input(op_ref, out_vn.clone(), slot);
         fd.op_insert_before(&new_op, op_ref);
         true
     }
 
-    /// Compute the expected pointer type for input slot 0 of a PTRSUB/PTRADD
-    /// op, derived from the op's output pointer type (the PTRSUB/PTRADD
-    /// output is a pointer; input 0 must be a compatible pointer).
-    /// Returns None if the op has no typed pointer output (nothing to fit).
-    // RUGRA-GLUE: helper mirroring TypeOp::{PTRSUB,PTRADD}::inputTypeLocal
-    // (typeop.cc) for the pointer case; Rugra has no TypeOp class hierarchy.
+    /// Compute the cast type for input slot 0 of a PTRSUB/PTRADD op, faithful
+    /// to `TypeOpPtrsub::getInputCast` (typeop.cc:2320-2347) and
+    /// `TypeOpPtradd::getInputCast` (typeop.cc:2250-2266).
+    ///
+    /// Both oracles compare the input VARNODE's own (read-facing) type —
+    /// `reqtype` — against the input HIGH's (read-facing) type — `curtype`:
+    /// PTRSUB additionally peels one array layer and unwraps typedefs before
+    /// the base equality check; PTRADD compares the bases' `align_size`.
+    /// Neither ever consults the op's OUTPUT type (the previous heuristic
+    /// here did, which produced casts to downChain-transformed field pointers
+    /// whenever ActionInferTypes gave the PTRSUB output a PointerRel form).
+    ///
+    /// Residual: `getTypeReadFacing`'s in-flow resolution of
+    /// needs-resolution types (PointerRel et al.) is not available yet
+    /// (ACTION-INFERTYPES-DISPATCH-0001) — the raw v_type/high type is used,
+    /// which is exact for every type that does not need resolution. Rugra
+    /// also has no typedef layer, so the `getTypedef()` unwrap loop is a
+    /// structural no-op.
+    // Ghidra: typeop.cc:2320 TypeOpPtrsub::getInputCast / typeop.cc:2250 TypeOpPtradd::getInputCast
     fn ptr_input_reqtype(
         op: &crate::op::PcodeOpRef,
     ) -> Option<std::sync::Arc<crate::type_system::datatype::Datatype>> {
+        use crate::type_system::TypeMetatype;
         use crate::type_system::datatype::Datatype;
-        let out_arc = op.0.read().unwrap().output.as_ref().cloned()?;
-        let out_rg = out_arc.read().unwrap();
-        // Output pointer type: from high type if present, else varnode type.
-        let out_type = out_rg.high.as_ref()
+        let (opcode, in0_arc) = {
+            let op = op.0.read().unwrap();
+            (op.opcode, op.get_in(0).cloned()?)
+        };
+        let in0 = in0_arc.read().unwrap();
+        // reqtype = op->getIn(0)->getTypeReadFacing(op)
+        let reqtype = in0.v_type.clone()?;
+        // curtype = op->getIn(0)->getHighTypeReadFacing(op)
+        let curtype = in0
+            .high
+            .as_ref()
             .map(|h| h.read().unwrap().v_type.get())
-            .or_else(|| out_rg.v_type.clone())?;
-        // For PTRSUB `c = PTRSUB(a, off)`: input(0) should be a pointer to
-        // the same outer type as c's pointed-to type. In Ghidra this is
-        // `TypeOpSub::inputTypeLocal` which returns a pointer to the
-        // PTRSUB's resolved base. Rugra lacks struct-field resolution here,
-        // so we use c's pointer type directly (the most common case where
-        // PTRSUB's input and output share the same pointer representation).
-        // For PTRADD `c = PTRADD(a, idx, sz)`: input(0) should be a pointer
-        // to the array element type, which equals c's pointed-to type, so
-        // again c's pointer type is the right reqtype.
-        if !matches!(out_type.as_ref(), Datatype::Pointer(_)) {
-            return None;
+            .unwrap_or_else(|| reqtype.clone());
+        // Pointer-identity equality mirrors Ghidra's interned `Datatype*`
+        // comparison; the name check extends it across separately-constructed
+        // Arcs of the same named factory type.
+        let same_type = |a: &Arc<Datatype>, b: &Arc<Datatype>| {
+            Arc::ptr_eq(a, b) || (!a.get_name().is_empty() && a.get_name() == b.get_name())
+        };
+        let ptr_of = |t: &Arc<Datatype>| match t.as_ref() {
+            Datatype::Pointer(p) => Some(p.ptr_to.clone()),
+            _ => None,
+        };
+        match opcode {
+            OpCode::CPUI_PTRSUB => {
+                // typeop.cc:2327-2328
+                if same_type(&curtype, &reqtype) {
+                    return None;
+                }
+                // typeop.cc:2329-2331
+                if reqtype.get_metatype() != TypeMetatype::Pointer {
+                    return Some(reqtype);
+                }
+                if curtype.get_metatype() != TypeMetatype::Pointer {
+                    return Some(reqtype);
+                }
+                // typeop.cc:2331-2335: go down exactly one level, peeling a
+                // shared array layer.
+                let reqbase = ptr_of(&reqtype)?;
+                let curbase = ptr_of(&curtype)?;
+                let (reqbase, curbase) = match (reqbase.as_ref(), curbase.as_ref()) {
+                    (Datatype::Array(_), Datatype::Array(_)) => {
+                        let peel = |b: &Arc<Datatype>| match b.as_ref() {
+                            Datatype::Array(a) => a.array_of.clone(),
+                            _ => b.clone(),
+                        };
+                        (peel(&reqbase), peel(&curbase))
+                    }
+                    _ => (reqbase, curbase),
+                };
+                // typeop.cc:2337-2340 typedef unwrap is a no-op (no typedef
+                // layer in Rugra).
+                // typeop.cc:2342-2344
+                if same_type(&curbase, &reqbase) {
+                    return None;
+                }
+                Some(reqtype)
+            }
+            OpCode::CPUI_PTRADD => {
+                // typeop.cc:2257-2258
+                if reqtype.get_metatype() != TypeMetatype::Pointer {
+                    return Some(reqtype);
+                }
+                if curtype.get_metatype() != TypeMetatype::Pointer {
+                    return Some(reqtype);
+                }
+                // typeop.cc:2259-2262: equal align sizes on the bases cancel
+                // the cast.
+                let reqbase = ptr_of(&reqtype)?;
+                let curbase = ptr_of(&curtype)?;
+                if reqbase.get_align_size() == curbase.get_align_size() {
+                    return None;
+                }
+                Some(reqtype)
+            }
+            _ => None,
         }
-        Some(out_type)
     }
 
     // RUGRA-GLUE: output_metatype (no Ghidra direct counterpart; derived from
@@ -3721,6 +3783,7 @@ impl ActionInferTypes {
         // propagation. The per-op arms below then refine from op semantics,
         // matching Ghidra's getLocalType consulting the defining op.
         for vn_arc in fd.vbank.loc_tree.iter().map(|v| v.0.clone()) {
+            let mut needs_block = false;
             {
                 let vn = vn_arc.read().unwrap();
                 if vn.is_annotation() {
@@ -3729,9 +3792,44 @@ impl ActionInferTypes {
                 if !vn.is_written() && vn.has_no_descend() {
                     continue;
                 }
+                // Ghidra's getLocalType (varnode.cc:918-934) never consults
+                // the varnode's current v_type except through the typelock
+                // early-return (cc:906-907); the temp comes from the
+                // def/descend dispatch. VarnodeBank pre-seeds freshly created
+                // varnodes with placeholder unknown-N types, and seeding
+                // those into the temp map would preempt the sized-int local
+                // fallback below (an unsealed INT_SUB/PTRSUB output would
+                // keep unknown instead of the oracle's int local), so only
+                // concrete (non-Unknown) types — typelock-carried or
+                // previously inferred — enter the temp map here.
                 if let Some(ct) = vn.v_type.clone() {
-                    temps.insert(vn_id(&vn), ct);
+                    if ct.get_metatype() != TypeMetatype::Unknown {
+                        temps.insert(vn_id(&vn), ct);
+                    }
                 }
+                // coreaction.cc:5020-5031: `bool needsBlock = false;` is
+                // reset per varnode, and its ONLY writer inside
+                // `Varnode::getLocalType` is the defining op's
+                // stop_type_propagation flag (varnode.cc:912), consulted
+                // after the typelock early-return (varnode.cc:906). The
+                // SymbolEntry/getExactPiece branch (coreaction.cc:5022-5027)
+                // that can bypass getLocalType — leaving needsBlock false —
+                // is not wired in Rugra yet (registered gap B2-W3 /
+                // TYPEFACTORY-EXACTPIECE-0001), so every varnode takes the
+                // getLocalType path and the blockup computation reduces to
+                // the def consult below.
+                if !vn.is_type_lock() {
+                    needs_block = vn
+                        .get_def()
+                        .is_some_and(|def| def.read().unwrap().stops_type_propagation());
+                }
+            }
+            // coreaction.cc:5030-5031: `if (needsBlock) vn->setStopUpPropagation();`
+            // — set-only over the varnode's whole lifetime; Ghidra has no
+            // clear call site anywhere (clearStopUpPropagation is declared at
+            // varnode.hh:334 with zero callers).
+            if needs_block {
+                vn_arc.write().unwrap().set_stop_up_propagation();
             }
         }
         // Walk all live ops and seed temp types from op semantics. Mirrors the
@@ -3954,10 +4052,17 @@ impl ActionInferTypes {
             }
             let id = vn_id(&vn);
             if !temps.contains_key(&id) {
-                if let Some(t) = vn.v_type.clone() {
-                    temps.insert(id, t);
-                } else {
-                    temps.insert(id, int_types.sized(vn.get_size()));
+                // Same Unknown-placeholder filter as the first seeding loop:
+                // the bank's unknown-N placeholder is not a Ghidra local type
+                // (getLocalType varnode.cc:918-934), so the sized scalar
+                // fallback wins over it.
+                match vn.v_type.clone() {
+                    Some(t) if t.get_metatype() != TypeMetatype::Unknown => {
+                        temps.insert(id, t);
+                    }
+                    _ => {
+                        temps.insert(id, int_types.sized(vn.get_size()));
+                    }
                 }
             }
         }
@@ -3976,6 +4081,7 @@ impl ActionInferTypes {
         outslot: i32,
         int_types: &IntTypes,
         ptr_size: usize,
+        type_factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
         if inslot == outslot {
             return None; // don't backtrack
@@ -4012,6 +4118,15 @@ impl ActionInferTypes {
             if ov.is_type_lock() {
                 return None;
             }
+            // coreaction.cc:5093: `if (outvn->stopsUpPropagation() && outslot >= 0)
+            // return false;` — propagation is blocked into a STOP-sealed
+            // varnode when it is the edge's INPUT-slot target (outslot >= 0);
+            // an edge targeting the op's OUTPUT (outslot == -1) is not subject
+            // to this flag, which is exactly what lets the downChain
+            // field-pointer flow reach a RulePtrArith-sealed PTRSUB output.
+            if outslot >= 0 && ov.stops_up_propagation() {
+                return None;
+            }
         }
 
         // Boolean propagation guard (coreaction.cc:5095-5098).
@@ -4024,8 +4139,15 @@ impl ActionInferTypes {
 
         // The per-opcode propagateType dispatch (op.cc propagateType). Returns
         // the new type for the output, if any.
-        let newtype =
-            Self::propagate_type(op, &alttype, inslot, outslot, int_types, ptr_size)?;
+        let newtype = Self::propagate_type(
+            op,
+            &alttype,
+            inslot,
+            outslot,
+            int_types,
+            ptr_size,
+            type_factory,
+        )?;
         let cur = {
             let ov = out_vn_arc.read().unwrap();
             temps.get(&vn_id(&ov)).cloned()
@@ -4046,6 +4168,10 @@ impl ActionInferTypes {
     /// Per-opcode `propagateType` dispatch. Faithful to
     /// `OpCode::propagateType` (typeop*.cc). Returns the type that the output
     /// varnode should take when `alttype` flows from `inslot` to `outslot`.
+    /// `type_factory` is the owning Architecture TypeFactory that the C++
+    /// original reaches through the TypeOp's `tlst` member (op.hh:122); the
+    /// add-family pointer arms need it to intern the downChain-transformed
+    /// types, so they stop the propagation when no factory is available.
     // RUGRA-GLUE: Rugra driver that folds ActionInferTypes::propagateOneType over the varnode set (coreaction.cc:5400-5405)
     fn propagate_type(
         op: &crate::op::PcodeOp,
@@ -4054,6 +4180,7 @@ impl ActionInferTypes {
         outslot: i32,
         int_types: &IntTypes,
         ptr_size: usize,
+        type_factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
     ) -> Option<std::sync::Arc<crate::type_system::datatype::Datatype>> {
         use crate::type_system::datatype::TypeMetatype;
         let alt_meta = alttype.get_metatype();
@@ -4091,29 +4218,90 @@ impl ActionInferTypes {
                 }
             }
 
-            // Pointer arithmetic: pointer + int → pointer.
-            OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_PTRADD
-            | OpCode::CPUI_PTRSUB => {
-                if alt_meta == TypeMetatype::Pointer {
-                    // Pointer flows to the output and to the non-constant
-                    // sibling input.
-                    if outslot == -1 {
-                        return Some(alttype.clone());
-                    }
-                    if outslot >= 0 {
-                        let outslot_s = outslot as usize;
-                        if let Some(sib) = op.inrefs.get(outslot_s) {
-                            let sv = sib.read().unwrap();
-                            if !sv.is_constant() {
-                                return Some(alttype.clone());
-                            }
-                        }
-                    }
-                    None
-                } else {
-                    None
+            // PTRSUB (typeop.cc:2366-2378 TypeOpPtrsub::propagateType): a
+            // pointer input is transformed through propagateAddIn2Out's
+            // downChain — the struct offset is consumed and the output takes
+            // the field pointer / ephemeral PointerRel form. It never
+            // propagates output->input, nor across two input slots.
+            OpCode::CPUI_PTRSUB => {
+                if inslot != -1 && outslot != -1 {
+                    return None; // Must propagate input <-> output
                 }
+                if alt_meta != TypeMetatype::Pointer {
+                    return None;
+                }
+                if inslot == -1 {
+                    // Propagating output to input: don't propagate pointer
+                    // types this direction.
+                    return None;
+                }
+                let factory = type_factory?;
+                crate::typeop::TypeOpIntAdd::propagate_add_in2out(alttype, factory, op, inslot)
             }
+
+            // PTRADD (typeop.cc:2268-2281 TypeOpPtradd::propagateType): same
+            // pointer transformation as PTRSUB, plus the slot-2 multiplier
+            // edge rejection.
+            OpCode::CPUI_PTRADD => {
+                if inslot == 2 || outslot == 2 {
+                    return None; // Don't propagate along this edge
+                }
+                if inslot != -1 && outslot != -1 {
+                    return None; // Must propagate input <-> output
+                }
+                if alt_meta != TypeMetatype::Pointer {
+                    return None;
+                }
+                if inslot == -1 {
+                    return None;
+                }
+                let factory = type_factory?;
+                crate::typeop::TypeOpIntAdd::propagate_add_in2out(alttype, factory, op, inslot)
+            }
+
+            // INT_ADD (typeop.cc:1181-1201 TypeOpIntAdd::propagateType): ints
+            // only flow when added to the slot-1 constant; pointers flow
+            // input->output through the same downChain transform.
+            OpCode::CPUI_INT_ADD => {
+                if alt_meta != TypeMetatype::Pointer {
+                    if alt_meta != TypeMetatype::Int && alt_meta != TypeMetatype::Uint {
+                        return None;
+                    }
+                    if outslot != 1
+                        || !op
+                            .get_in(1)
+                            .is_some_and(|in1| in1.read().unwrap().is_constant())
+                    {
+                        return None;
+                    }
+                } else if inslot != -1 && outslot != -1 {
+                    return None; // Must propagate input <-> output for pointers
+                }
+                // outvn is the edge's output varnode (op output when
+                // outslot < 0, else the op input at outslot).
+                let out_is_constant = if outslot < 0 {
+                    op.get_out()
+                        .is_some_and(|out| out.read().unwrap().is_constant())
+                } else {
+                    op.get_in(outslot as usize)
+                        .is_some_and(|out| out.read().unwrap().is_constant())
+                };
+                if out_is_constant && alt_meta != TypeMetatype::Pointer {
+                    return Some(alttype.clone());
+                }
+                if inslot == -1 {
+                    // Propagating output to input: don't propagate pointer
+                    // types this direction.
+                    return None;
+                }
+                let factory = type_factory?;
+                crate::typeop::TypeOpIntAdd::propagate_add_in2out(alttype, factory, op, inslot)
+            }
+
+            // INT_SUB: `TypeOpIntSub` has no propagateType override; the
+            // base `TypeOp::propagateType` (typeop.cc:317-321) returns null —
+            // pointers never propagate through a subtraction.
+            OpCode::CPUI_INT_SUB => None,
 
             // LOAD: the address (slot 1) is a pointer to the output's type,
             // and vice-versa.
@@ -4216,6 +4404,7 @@ impl ActionInferTypes {
         temps: &mut TempTypes,
         int_types: &IntTypes,
         ptr_size: usize,
+        type_factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
     ) {
         use std::collections::HashSet;
         // Stack of (op_arc, inslot, outslot) edges to explore, plus the set of
@@ -4270,7 +4459,7 @@ impl ActionInferTypes {
             let op_arc = edge.op.clone();
             let op = op_arc.read().unwrap();
             if let Some(out_vn_arc) = Self::propagate_type_edge(
-                &op, temps, edge.inslot, edge.outslot, int_types, ptr_size,
+                &op, temps, edge.inslot, edge.outslot, int_types, ptr_size, type_factory,
             ) {
                 // Determine the new type for the output varnode.
                 let in_vn_arc = if edge.inslot == -1 {
@@ -4281,7 +4470,9 @@ impl ActionInferTypes {
                 let alttype = in_vn_arc
                     .and_then(|a| temps.get(&vn_id(&a.read().unwrap())).cloned());
                 let newtype = alttype.and_then(|t| {
-                    Self::propagate_type(&op, &t, edge.inslot, edge.outslot, int_types, ptr_size)
+                    Self::propagate_type(
+                        &op, &t, edge.inslot, edge.outslot, int_types, ptr_size, type_factory,
+                    )
                 });
                 drop(op); // release borrow before mutating temps
                 if let Some(nt) = newtype {
@@ -4368,6 +4559,7 @@ impl ActionInferTypes {
         temps: &mut TempTypes,
         int_types: &IntTypes,
         ptr_size: usize,
+        type_factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
     ) {
         use crate::type_system::datatype::TypeMetatype;
         if fd.get_func_proto().is_output_locked() {
@@ -4437,7 +4629,7 @@ impl ActionInferTypes {
             if improved {
                 temps.insert(id, base_ct.clone());
                 let rv2 = rv.clone();
-                self.propagate_one_type(&rv2, temps, int_types, ptr_size);
+                self.propagate_one_type(&rv2, temps, int_types, ptr_size, type_factory);
             }
         }
     }
@@ -4466,6 +4658,14 @@ impl IntTypes {
 }
 
 impl Action for ActionInferTypes {
+    // Ghidra: coreaction.hh:975 ActionInferTypes::reset
+    /// `virtual void reset(Funcdata &data) { localcount = 0; }` — the
+    /// settling-pass counter is per-function; without this override the
+    /// counter leaks across functions in a shared action pool and trips the
+    /// 7-pass cap spuriously.
+    fn reset(&mut self, _fd: &mut Funcdata) {
+        self.local_count = 0;
+    }
     // Ghidra: coreaction.cc:5374 ActionInferTypes::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionInferTypes::apply (coreaction.cc:5374-5416).
@@ -4539,7 +4739,13 @@ impl Action for ActionInferTypes {
         // SymbolTable layer).
         seed_global_struct_pointers(fd, &mut temps, ptr_size);
 
-        // 4. For each eligible varnode, propagate its type via DFS.
+        // 4. For each eligible varnode, propagate its type via DFS. The
+        // Architecture TypeFactory (Ghidra's `data.getArch()->types`,
+        // coreaction.cc:5377) threads down to the add-family pointer arms,
+        // which intern downChain-transformed types through it.
+        let type_factory: Option<
+            Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        > = fd.arch.as_ref().and_then(|a| a.types.clone());
         let roots: Vec<_> = fd
             .vbank
             .loc_tree
@@ -4553,13 +4759,19 @@ impl Action for ActionInferTypes {
         for root in &roots {
             // Only seed roots that actually have a temp type.
             if temps.contains_key(&vn_id(&root.read().unwrap())) {
-                
-                self.propagate_one_type(root, &mut temps, &int_types, ptr_size);
+
+                self.propagate_one_type(
+                    root,
+                    &mut temps,
+                    &int_types,
+                    ptr_size,
+                    type_factory.as_ref(),
+                );
             }
         }
 
         // 5. propagateAcrossReturns.
-        self.propagate_across_returns(fd, &mut temps, &int_types, ptr_size);
+        self.propagate_across_returns(fd, &mut temps, &int_types, ptr_size, type_factory.as_ref());
 
         // 6. writeBack: commit temp types to v_type.
         if self.write_back(fd, &temps) {
@@ -12002,24 +12214,31 @@ mod tests {
 
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
 
-        // in0: a (long *) pointer varnode, defined by some earlier op.
+        // TypeOpPtrsub::getInputCast (typeop.cc:2311-2347) compares the input
+        // VARNODe's own type (`reqtype`) with its HIGH's type (`curtype`) —
+        // never the op's output type. Give in0 an (int *) varnode type whose
+        // high holds a (long *): both are pointers, the one-level bases int
+        // and long differ (no shared array layer, no typedefs), so the cast
+        // to the varnode's own (int *) is required.
         let long_t = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
         let long_ptr = Arc::new(Datatype::Pointer(TypePointer {
             base: TypeBase::new("long *".to_string(), 8, TypeMetatype::Pointer),
             ptr_to: long_t.clone(),
             wordsize: 1,
         }));
-        let in0 = Arc::new(RwLock::new(Varnode::new(8, Address::new(0x2000))));
-        in0.write().unwrap().set_flags(varnode_flags::WRITTEN);
-        in0.write().unwrap().v_type = Some(long_ptr);
-
-        // PTRSUB output: (int *) — different pointed-to type than input(0).
         let int_t = Arc::new(Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)));
         let int_ptr = Arc::new(Datatype::Pointer(TypePointer {
             base: TypeBase::new("int *".to_string(), 8, TypeMetatype::Pointer),
             ptr_to: int_t.clone(),
             wordsize: 1,
         }));
+        let in0 = Arc::new(RwLock::new(Varnode::new(8, Address::new(0x2000))));
+        in0.write().unwrap().set_flags(varnode_flags::WRITTEN);
+        in0.write().unwrap().v_type = Some(int_ptr.clone());
+        in0.write().unwrap().high =
+            Some(Arc::new(RwLock::new(crate::variable::HighVariable::new(long_ptr))));
+
+        // PTRSUB output: its type plays no role in the input cast decision.
         let out = Arc::new(RwLock::new(Varnode::new(8, Address::new(0x3000))));
         out.write().unwrap().set_flags(varnode_flags::WRITTEN);
         out.write().unwrap().v_type = Some(int_ptr.clone());
@@ -12037,9 +12256,10 @@ mod tests {
 
         let mut a = ActionSetCasts::new();
         let status = a.apply(&mut fd).unwrap();
-        // castStandard between (int *) and (long *) of equal size returns
-        // Some(reqtype) (different pointed-to metatypes under a pointer
-        // layer), so a CAST must be inserted.
+        // The varnode type (int *) differs from the high type (long *) one
+        // level down, so a CAST to reqtype = the varnode's own (int *) is
+        // inserted (castInput takes the getInputCast return directly,
+        // coreaction.cc:2672-2675).
         assert_eq!(status, action_status::CHANGE, "apply must report CHANGE");
         assert!(a.count >= 1, "at least one CAST must be inserted");
 
@@ -12053,6 +12273,12 @@ mod tests {
         let cast_op = cast_op_arc.unwrap();
         assert_eq!(cast_op.read().unwrap().opcode, OpCode::CPUI_CAST,
             "the defining op must be a CAST");
+        assert!(Arc::ptr_eq(&cast_op.read().unwrap().get_in(0).unwrap(), &in0),
+            "the CAST reads the original input varnode");
+        assert!(Arc::ptr_eq(
+            &new_in0.as_ref().unwrap().read().unwrap().v_type.as_ref().unwrap(),
+            &int_ptr,
+        ), "the CAST output carries the varnode's own type as reqtype");
     }
 
     /// PTRSUB where input(0) already has the matching pointer type → no cast
@@ -12111,22 +12337,29 @@ mod tests {
 
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
 
+        // TypeOpPtradd::getInputCast (typeop.cc:2250-2266): reqtype = the
+        // input VARNODe's own type, curtype = its HIGH's type; the cast is
+        // dropped only when the one-level bases have equal align sizes.
+        // int (align 4) vs char (align 1) differ, so the varnode's own
+        // (int *) becomes the CAST target.
         let char_t = Arc::new(Datatype::Base(TypeBase::new("char".to_string(), 1, TypeMetatype::Int)));
         let char_ptr = Arc::new(Datatype::Pointer(TypePointer {
             base: TypeBase::new("char *".to_string(), 8, TypeMetatype::Pointer),
             ptr_to: char_t.clone(),
             wordsize: 1,
         }));
-        let in0 = Arc::new(RwLock::new(Varnode::new(8, Address::new(0x2000))));
-        in0.write().unwrap().set_flags(varnode_flags::WRITTEN);
-        in0.write().unwrap().v_type = Some(char_ptr);
-
         let int_t = Arc::new(Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)));
         let int_ptr = Arc::new(Datatype::Pointer(TypePointer {
             base: TypeBase::new("int *".to_string(), 8, TypeMetatype::Pointer),
             ptr_to: int_t.clone(),
             wordsize: 1,
         }));
+        let in0 = Arc::new(RwLock::new(Varnode::new(8, Address::new(0x2000))));
+        in0.write().unwrap().set_flags(varnode_flags::WRITTEN);
+        in0.write().unwrap().v_type = Some(int_ptr.clone());
+        in0.write().unwrap().high =
+            Some(Arc::new(RwLock::new(crate::variable::HighVariable::new(char_ptr))));
+
         let out = Arc::new(RwLock::new(Varnode::new(8, Address::new(0x3000))));
         out.write().unwrap().set_flags(varnode_flags::WRITTEN);
         out.write().unwrap().v_type = Some(int_ptr.clone());
@@ -12146,7 +12379,7 @@ mod tests {
         let status = a.apply(&mut fd).unwrap();
         assert_eq!(status, action_status::CHANGE, "PTRADD must cast mismatched pointer");
         assert!(a.count >= 1);
-        // Verify CAST op now feeds slot 0.
+        // Verify CAST op now feeds slot 0 with the varnode's own type.
         let new_in0 = op_ref.0.read().unwrap().get_in(0).map(|a| a.clone());
         let cast_op_arc = {
             let in0_rg = new_in0.as_ref().unwrap().read().unwrap();
@@ -12154,6 +12387,10 @@ mod tests {
         };
         assert!(cast_op_arc.is_some());
         assert_eq!(cast_op_arc.unwrap().read().unwrap().opcode, OpCode::CPUI_CAST);
+        assert!(Arc::ptr_eq(
+            &new_in0.as_ref().unwrap().read().unwrap().v_type.as_ref().unwrap(),
+            &int_ptr,
+        ), "the CAST output carries the varnode's own type as reqtype");
     }
 
     // ---- ActionInferTypes + default-pipeline tree tests ----

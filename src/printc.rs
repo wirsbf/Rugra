@@ -11889,7 +11889,19 @@ impl PrintC {
         };
         for f in fields {
             let f_size = f.type_ptr.get_size();
-            if off >= f.offset && off + sz <= f.offset + f_size {
+            // Ghidra TypeStruct::findTruncation (type.cc:1624-1638) via
+            // getFieldIter (type.cc:1580-1602): field containment is the
+            // half-open range [offset, offset+size) — `curfield.offset <= off`
+            // AND `curfield.offset + size > off` — plus the span check
+            // `noff + sz <= size`. The previous closed upper bound
+            // (`off + sz <= offset + size` alone) matched the PREDECESSOR
+            // field when the offset lands exactly on a field start with
+            // sz == 0 (e.g. PTRSUB(bar,0x10) resolved to `prev` instead of
+            // `point`).
+            if off >= f.offset
+                && off < f.offset + f_size
+                && off + sz <= f.offset + f_size
+            {
                 return Some((f.name.clone(), f.offset, f.type_ptr.clone()));
             }
         }
