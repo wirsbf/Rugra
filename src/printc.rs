@@ -2502,8 +2502,23 @@ impl PrintC {
     // and setupOpList both key on op->getParent()->getIndex()
     /// (comment.cc:295/370), so the first op's parent yields the exact
     /// window key the sorter placed comments under.
+    ///
+    /// Dead-op transport deviation: Rugra keeps destroyed ops in a block's
+    /// op-list snapshot with `parent == None`, while Ghidra's
+    /// BlockBasic::removeOp (block.cc:2292-2297) sets the parent to NULL and
+    /// erases the op from the list in the same step — every op in
+    /// `bb->beginOp()..endOp()` (printc.cc:2694) has parent == bb. So the
+    /// first op Ghidra's loop would see is the first PARENTED op; deriving
+    /// the window from `ops.first()` alone can yield None (leading dead op)
+    /// and skip the cc:2684 setupBlockList, after which the per-op
+    /// emitCommentGroup landmarks run against the PREVIOUS block's window:
+    /// setupOpList's upper_bound can then land before `start`, hasNext
+    /// returns true and getNext dereferences end() (UB in C++, OOB panic in
+    /// Rust). Returning the first parented op's block index restores
+    /// Ghidra's invariant that the window key and every op landmark share
+    /// one basic block.
     fn ops_block_index(ops: &[crate::op::PcodeOpRef]) -> Option<i32> {
-        ops.first().and_then(|o| {
+        ops.iter().find_map(|o| {
             o.0.read()
                 .unwrap()
                 .parent

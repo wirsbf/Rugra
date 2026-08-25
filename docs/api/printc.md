@@ -1301,7 +1301,6 @@ main(1)/myprogress(1)/my_get_line(1)/helpf(1)/file2string(1)/parseconfig(1)/
 getparameter(1)/glob_word(2)/glob_set(2)/glob_range(1)/next_url(1)/
 match_url(3)——全部为 `__stack_chk_fail`/`exit` 类 noreturn 调用点，
 语句级发射接通后应逐条出现（这是正向变化；差分门禁全量判定留给 root）。
-<<<<<<< HEAD
 附注（已解决）：`comment_sorter_iterators_1204` 的失配根因是 fixture 构造了
 非法状态（未安装 cover）——Ghidra 的 C++ fixture 经 `setBasicBlockRange`
 显式装 cover（`block.hh:462` setInitialRange private+friend）。已按合法状态
@@ -1363,7 +1362,7 @@ try_rule_switch 的 case 标签是出边索引（非 jumptable 恢复标签）�
 default 恒 None；doc_function 全管线中 `uVar0 = 10; return uVar0;` 未折叠
 为 `return 10;`（ActionReturnRecovery + implied 层）。funcdata
 `test_switch_case_structuring` 断言恢复（case 标签 ×2 + 体 return 计数）。
-=======
+<<<<<<< HEAD
 附注：`comment_sorter_iterators_1204` fixture 在 0d2252d（`get_stop_addr`
 回退从"末 op 地址"改为 `initial_range`）后 Rust 侧回归失配（内部地址
 注释落入 header_unplaced）——预存在问题，非本租约，建议 root 重登记
@@ -1379,4 +1378,35 @@ default 恒 None；doc_function 全管线中 `uVar0 = 10; return uVar0;` 未折�
   get_next 索引越过 commmap 末尾（main 打印阶段 index-out-of-bounds panic）。现于每个
   parent 块边界：先 drain 离开块的尾部注释，再以 live parent 索引开新窗口，
   复现 oracle 的逐块协议。
->>>>>>> c7674b91 (fix: eliminate 6-function E2E timeouts (selectGoto non-termination, heritage rename O(n^2), main print panic))
+=======
+
+### 2026-08-25（续2）：PRINTC-COMMENT-WINDOW-PANIC-0001 — ops_block_index 死 op 前缀跳过 setupBlockList 的 OOB panic
+
+E2E 中 parseconfig.constprop.0 / glob_set / next_url 三个 worker PANICKED
+（`comment.rs get_next` 越界：`commmap.len()==1` 但 `start==1`、`opstop==0`）。
+
+**根因（instrumented 复现）**：`emit_block_basic_rpn`/`emit_block_ops` 的块窗口
+键经 `ops_block_index(ops)` 从 `ops.first()` 的 `parent` 推导。Rugra 的死 op
+transport 让块 op 列表快照保留已销毁 op（`parent=None`，is_dead=true），首 op
+为死 COPY 时推导得 `None`，cc:2684 的 `setup_block_bounds`（setupBlockList）
+被整段跳过；但循环内 per-op `emit_comment_group(Some(op))`（cc:2712/2717 语义）
+仍对活 op 触发——`setup_op_stop` 以该 op 真实父块（如 blk=14）算
+`upper_bound`，落在上一块（blk=27）遗留窗口 `start=1` 之前（opstop=0），
+`hasNext`（`start != opstop`，comment.hh:250）返回 true，`getNext` 在 `end()`
+取值——C++ 侧同序列是 end() 解引用 UB；Ghidra 不会走到，因为
+`BlockBasic::removeOp`（block.cc:2292-2297）setParent(NULL) 与从列表 erase
+同一步发生，`bb->beginOp()..endOp()`（printc.cc:2694）里每个 op 的 parent
+都是 bb，且 setupBlockList(bb) 无条件先于一切 op landmark。
+
+**修复**：`ops_block_index` 从 `ops.first()` 改为 `ops.iter().find_map(...)`——
+返回**首个有 parent 的 op** 的块 index（即 Ghidra 循环实际看到的首 op）。
+窗口键与 `findPosition`/`setupOpList` 的 `op->getParent()->getIndex()`
+（comment.cc:292/370）保持同键不变式恢复：同块窗口内
+`lower_bound((bl,0,0)) <= upper_bound((bl,order,0xffffffff))` 恒成立，
+opstop 不会落到 start 之前。全死 op 前缀的块本就无 per-op landmark
+（is_dead 先 continue），None 分支行为不变。
+
+**验收**：`--rugra-selected-function parseconfig.constprop.0 glob_set next_url`
+→ 3/3 decompiled（633/402/547 字节），0 panic 0 timeout；main 维持 TIMEOUT
+（既有状态，非本缺陷范畴）。
+>>>>>>> 0ed760fb (align: derive comment window key from first parented op (PRINTC-COMMENT-WINDOW-PANIC-0001))
