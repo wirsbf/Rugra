@@ -1,0 +1,63 @@
+{
+  "schema_version": 2,
+  "fixture_id": "MERGE-OVERLAPLOC-FLAGUNION-1204",
+  "stable_function_closure": [
+    "ghidra::ActionDatabase::universalAction coreaction.cc:5462",
+    "ghidra::ActionGroup::apply action.cc:506",
+    "ghidra::Action::perform action.cc:298",
+    "ghidra::ActionAssignHigh::apply coreaction.hh:346",
+    "ghidra::ActionMergeRequired::apply coreaction.hh:370",
+    "ghidra::Merge::mergeAddrTied merge.cc:609",
+    "ghidra::Merge::unifyAddress merge.cc:581",
+    "ghidra::Merge::mergeRangeMust merge.cc:301",
+    "ghidra::Merge::merge merge.cc:1565",
+    "ghidra::HighVariable::mergeInternal variable.cc:626",
+    "ghidra::VarnodeBank::overlapLoc varnode.cc:1791",
+    "ghidra::VarnodeBank::endLoc(int4,const Address&,uint4) varnode.cc:1693",
+    "ghidra::VarnodeCompareLocDef::operator() varnode.cc:34"
+  ],
+  "overall_status": "MATCH",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{varnode.cc:34-53,1693-1715,1782-1820, merge.cc:301-317,581-601,609-648,1565-1575, variable.cc:626-666, coreaction.hh:365-373, coreaction.cc:5462-5790, action.cc:298-362,506-527}",
+    "signature": "uint4 VarnodeBank::overlapLoc(VarnodeLocSet::const_iterator iter,vector<VarnodeLocSet::const_iterator> &bounds) const; void Merge::mergeAddrTied(void); void Merge::mergeRangeMust(VarnodeLocSet::const_iterator startiter,VarnodeLocSet::const_iterator enditer)"
+  },
+  "rugra_source": {
+    "base_commit": "463664610f23956530f627e28f9388a6af858a99",
+    "base_tree": "710c1e9b9698b4a6a4d1537a7efe549b1e1b1679",
+    "base_src_tree": "56e09aae43f4c091a5310997d6fbc96f7e0c4530",
+    "base_merge_blob": "ba8242f1aeb45610eb4fd1be4b13ff1b1d9dcce7"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "7ef43040c42d870b0308d7eefa672ad90a32a6db6b3cf3124aaa0e0ddc9f8802",
+    "rust_fixture_sha256": "3ccc1edb12b60db817b44e15f83a9781a20d9a7a4f704c7c1415fc25d81488ed",
+    "candidate_merge_rs_sha256": "ffcbc7f08f1a2156466319d97580d3bad703d1c047fc581f664e564fc71e06fa"
+  },
+  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5 (spacebase, base=register:0x0:8), join=6, iop=7",
+  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols",
+  "analysis_options": "Oracle side builds the raw universal Action tree through ActionDatabase::universalAction and derives an unfiltered clone via the public group API (setGroup(\"all\") + setCurrent(\"all\")); Rust side drives the identical child sequence of build_default_pipeline (the construction behind ActionDatabase::set_default_actions). Both sides perform the merge-group children assignhigh..markimplied in tree order through the exact Action::perform / ActionRestartGroup::perform_child boundary, catching the exception/panic channel per child (LowlevelError catch vs catch_unwind).",
+  "input_manifest": {
+    "inputs": [
+      "case=cross_run_head_union: ram base=0x6000 size=0x20, one block b0, ops r0..r2 in SeqNum order (r0 a=COPY(const4:7) 4-byte stack:0x200 output created through the production newVarnodeOut path with the queryProperties addrtied|mapped tail cleared, raw head; r1 b=COPY(const4:5) second 4-byte stack:0x200 output tail cleared then addrtied installed at build time, NON-head member of run 1; r2 c=COPY(const4:3) 4-byte stack:0x202 output tail cleared then addrtied installed at build time, head of run 2 overlapping run 1 maxOff 0x203), int4 types, children assignhigh..markimplied driven in tree order with per-child perform-count observation",
+      "case=same_loc_later_member_no_gate: ram base=0x7000 size=0x20, one block b0, ops r0..r1 in SeqNum order (r0 a=COPY(const4:7) 4-byte stack:0x200 output tail cleared, raw head; r1 b=COPY(const4:5) second 4-byte stack:0x200 output tail cleared then addrtied installed at build time, later member only, no other run), int4 types, same children sequence"
+    ],
+    "sha256": "7b773b486b3e86832490725923826be37ac8cdb7bd525a349391104706c21dfd"
+  },
+  "expected_stdout": {
+    "ghidra_stdout_sha256": "6c3d97ce65b22a3adfc9ec1fdbec19ba6fda2f3569e5aaf304727a1ff37adb46",
+    "rugra_stdout_sha256": "6c3d97ce65b22a3adfc9ec1fdbec19ba6fda2f3569e5aaf304727a1ff37adb46",
+    "lines_per_side": 16
+  },
+  "registered_divergence_lines": {},
+  "coverage": {
+    "cross_run_head_union_gate": "MATCH: overlapLoc(a) unions the raw run-1 head flags with run-2 head c's addrtied (varnode.cc:1813), gate passes, mergeRangeMust merges run 1's members a+b into one 2-instance HighVariable (post a:hi=2, b:hi=2) while run 2's c stays separate (c:hi=1; same=a~b=1;a~c=0;b~c=0) — identical on both sides",
+    "same_loc_later_member_no_gate": "MATCH: the only addrtied varnode is a NON-head same-location member; overlapLoc never reads it (endLoc(size,addr,written) jumps past every same-location member at varnode.cc:1800/:1815), the gate fails, no merge happens (post a:hi=1, b:hi=1, same=a~b=0, markexplicit res=2) — identical on both sides; both fixtures reset the rule_onceperfunc children between cases (Action::reset / ActionState::reset_for_function) so the second Funcdata runs the real apply bodies",
+    "endloc_written_upper_bound": "MATCH: endLoc(4, stack:0x200, written) returns the first element strictly greater than (0x200, sz4, written, SeqNum(m_maximal)) — instrumented against the locked oracle as the run terminator that excludes same-location later members from the flags walk",
+    "per_member_or_negative_control": "DISCRIMINATING (verified): a candidate merge.rs that ORs every same-location member's flags into the range gate (last.head_flags |= flags on append) diverges on the negative case — the gate wrongly passes and a+b get merged (post hi=2, same=a~b=1) while the locked oracle holds hi=1, same=a~b=0; the runner's required token pins the oracle-side projection so any such regression fails the gate",
+    "task_attribution_correction": "The original TODO hypothesis (Rust drops one side's flags in the overlap-loc merge path) is REFUTED by instrumentation: Rust's per-range first_flags fold already implements Ghidra's head-only gate union. The extraout_RAX / __nptr convergence symptoms must have a different root cause; re-registered on docs/TODO_BOARD.md under MERGE-OVERLAPLOC-FLAGUNION-0001."
+  },
+  "expected_runner_sha256": "35d6149c06718d79be242d5ecd52868339a77a96cbeb9647eac68049f022edb7"
+}

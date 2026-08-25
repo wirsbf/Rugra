@@ -128,6 +128,26 @@ run，最后把不同 offset/size 的 High 以相对首地址的 offset 放入�
 C++ `LowlevelError` 不同，因此 production 边界明确为 **MISMATCH**，不得用
 相同文本冒充完整异常通道 MATCH。
 
+`AddrTiedLocRange` 的 gate flags 字段为 `head_flags`（自 `first_flags`
+更名）：只记录每个精确 `(space,offset,size)` run **头成员**（`VarnodeLocSet`
+顺序首位）的 flags。这是对 locked `overlapLoc`（`varnode.cc:1791-1820`）的
+插桩验证结论：`:1798` 读首 run 头的 flags，`:1813` 只对**后续 run 的头**做
+OR，而 `:1800/:1815` 的 `endLoc(size,addr,written)` 跳跃（`upper_bound` 于
+`(addr,size,written,SeqNum(m_maximal))`）会越过同位置的**全部**后续成员——
+同 run 的非头成员永不参与 gate。`merge_addr_tied_inner` 的 cluster 级
+`head_flags` 折叠复现该跨 run 头联合（簇扩展条件
+`next.offset <= running maxOff` 与 `:1804` 的延续条件一致）。
+`tests/oracle/merge_overlaploc_1204.*`（runner
+`tools/run_merge_overlaploc_oracle.sh`）双侧字节一致地钉住两个方向：
+正例 cross-run 头联合门控（raw 头 + 重叠 run 的 addrtied 头 → run1 a+b
+合并为 2-instance High、run2 c 独立），负例同位置后置成员不门控
+（唯一 addrtied 成员非头 → 无合并，`hi=1, same=a~b=0`）；per-member OR
+变体（把同 run 后续成员 flags 也 OR 进 gate）在负例上分歧（错误合并
+`hi=2`），证明该 fixture 可鉴别该类回归。双侧 fixture 均在两个 case 之间
+reset `rule_onceperfunc` 子 Action（C++ `Action::reset` / Rust
+`ActionState::reset_for_function`），否则第二个 Funcdata 上的子 Action 全部
+命中 `status_end` 短路（`action.cc:343-344/:352-356`），负例将退化为空转。
+
 地址空间仍有一个表示层缺口：`Ram/Register/Overlay` 可确定为 PROCESSOR，
 `Stack` 可确定为 SPACEBASE，locked `OtherSpace::INDEX == 1` 可确定为
 PROCESSOR；`AddressSpace::Other(non-1)` 已丢失真实 `AddrSpace::getType()`，

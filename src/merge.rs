@@ -18,14 +18,20 @@ use std::sync::{Arc, RwLock};
 
 /// One `(space, offset, size)` sub-range from Ghidra's `overlapLoc` bounds.
 /// Members retain `VarnodeLocSet` order: input, then written definitions in
-/// `SeqNum` order. `first_flags` intentionally records only the first member,
-/// matching `overlapLoc`'s one `getFlags()` read per exact-location sub-range.
+/// `SeqNum` order. `head_flags` records ONLY the first member's flags, per
+/// `overlapLoc`'s gate accumulation: the initial read at varnode.cc:1798
+/// (`flags = vn->getFlags()`) and each later OR at :1813
+/// (`flags |= vn->getFlags()`) see only the FIRST varnode of each visited
+/// exact-location run (the iterator jumps to `endLoc(size,addr,written)`
+/// past every same-location member at :1800/:1815). Later members of the
+/// same run never contribute to the gate — instrumented against the locked
+/// oracle 12.0.4 (see tests/oracle/merge_overlaploc_1204.*).
 #[derive(Debug)]
 struct AddrTiedLocRange {
     space: AddressSpace,
     offset: u64,
     size: usize,
-    first_flags: u32,
+    head_flags: u32,
     members: Vec<Arc<RwLock<Varnode>>>,
 }
 
@@ -946,9 +952,15 @@ impl Merge {
                 cluster_end += 1;
             }
 
+            // Ghidra merge.cc:629-631 gates on overlapLoc's returned flags:
+            // the union of HEAD-member flags across the runs the walk
+            // visited (varnode.cc:1798 + :1813). Folding each range's
+            // head_flags across this cluster reproduces that union because
+            // the cluster extension rule (next.offset <= running maxOff)
+            // matches the walk's continuation condition.
             let flags = ranges[cluster_start..cluster_end]
                 .iter()
-                .fold(0u32, |acc, range| acc | range.first_flags);
+                .fold(0u32, |acc, range| acc | range.head_flags);
             if flags & varnode_flags::ADDRTIED != 0 {
                 let members: Vec<Arc<RwLock<Varnode>>> = ranges[cluster_start..cluster_end]
                     .iter()
@@ -1013,6 +1025,9 @@ impl Merge {
             }
             if let Some(last) = ranges.last_mut() {
                 if last.space == space && last.offset == offset && last.size == size {
+                    // Only the run HEAD contributes gate flags (varnode.cc
+                    // :1798/:1813); later same-location members are skipped
+                    // by the endLoc(size,addr,written) jump at :1800/:1815.
                     last.members.push(member);
                     continue;
                 }
@@ -1021,7 +1036,7 @@ impl Merge {
                 space,
                 offset,
                 size,
-                first_flags: flags,
+                head_flags: flags,
                 members: vec![member],
             });
         }
