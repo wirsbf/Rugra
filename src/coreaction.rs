@@ -612,51 +612,617 @@ impl Action for ActionDeadCode {
     }
 }
 
+// RUGRA-GLUE: wraps Varnode::getSpaceFromConst (varnode.hh) for the
+// LOAD/STORE space-id operands of searchForSpaceAttribute — same projection
+// double_precis.rs uses (the constant holds a space id; recover via
+// AddressSpace::from_id).
+fn space_from_const_vn(vn: &crate::varnode::Varnode) -> crate::space::AddressSpace {
+    if vn.is_constant() {
+        crate::space::AddressSpace::from_id(vn.get_offset() as u8)
+    } else {
+        vn.get_space()
+    }
+}
+
+// Ghidra: space.hh:374 AddrSpace::getMinimumPtrSize
+/// Minimum pointer size of an enum-space projection. The registry handle
+/// caches `minimumPointerSize` (set to `newsize` only by `truncateSpace`,
+/// space.cc:105-112); every hardwired enum space is untruncated, so the
+/// production value is 0 (= exact addrSize match) — the documented enum
+/// projection of [`crate::space::AddrSpace::get_minimum_ptr_size`].
+fn enum_minimum_ptr_size(_spc: crate::space::AddressSpace) -> i32 {
+    0
+}
+
 /// Action for identifying constant pointers and replacing them
 ///
-/// Corresponds to Ghidra's `ActionConstantPtr`
-pub struct ActionConstantPtr;
+/// Corresponds to Ghidra's `ActionConstantPtr` (coreaction.hh:186-196):
+/// check for constants, with pointer type, that correspond to global
+/// symbols. Iterates the constant space, infers the pointer space, runs the
+/// op/bounds/bit-form gates, queries the parent scope's container table and
+/// rewrites hits into `PTRSUB(spacebase, offset)` chains via
+/// [`Funcdata::spacebase_constant`].
+pub struct ActionConstantPtr {
+    /// Number of passes made for this function (coreaction.hh:189
+    /// `localcount`).
+    localcount: i32,
+    /// Externalized Ghidra `Action::count` (one increment per
+    /// `spacebaseConstant` rewrite, coreaction.cc:1213).
+    count: i32,
+}
 
 impl ActionConstantPtr {
     // Ghidra: coreaction.hh:188 ActionConstantPtr (constructor mirror)
     pub fn new() -> Self {
-        Self
+        Self { localcount: 0, count: 0 }
+    }
+
+    // Ghidra: coreaction.cc:957 ActionConstantPtr::searchForSpaceAttribute
+    /// From a constant, search forward in its data-flow either for a LOAD or
+    /// STORE operation where we can see the address space being accessed, or
+    /// search for a pointer data-type with an address space attribute.
+    /// Faithful to `searchForSpaceAttribute` (coreaction.cc:957-995): a
+    /// limited traversal (3 steps) through the op reading the constant, over
+    /// INT_ADD/COPY/INDIRECT/MULTIEQUAL, until a LOAD/STORE is hit; when the
+    /// chase hits a varnode with no lone descendant, cc:984's `break` exits
+    /// the for-loop (with `vn` already advanced to the output at cc:972) and
+    /// the epilogue scans every descendant of that varnode for LOAD/STORE
+    /// (R-RAWQUAR F2 fix: the former `?` early-return skipped the epilogue).
+    fn search_for_space_attribute(
+        vn: &Arc<RwLock<crate::varnode::Varnode>>,
+        op: &Arc<RwLock<PcodeOp>>,
+    ) -> Option<crate::space::AddressSpace> {
+        // cc:960-985: for(int4 i=0;i<3;++i) — the limited data-flow walk.
+        let mut vn = vn.clone();
+        let mut op = op.clone();
+        'chase: for _ in 0..3 {
+            // cc:961-966: a pointer type with an explicit space attribute
+            // whose addrSize matches the varnode size answers directly.
+            // Rugra's TypePointer does not model the space attribute yet
+            // (TYPE-0001 residual), so the arm always falls through — the
+            // behavior when no pointer carries a space attribute.
+            let _ = vn.read().unwrap().get_type();
+            let next: Option<(Arc<RwLock<crate::varnode::Varnode>>, Arc<RwLock<PcodeOp>>)> = {
+                let op_r = op.read().unwrap();
+                match op_r.opcode {
+                    // cc:968-974: chase the output's lone descendant.
+                    OpCode::CPUI_INT_ADD
+                    | OpCode::CPUI_COPY
+                    | OpCode::CPUI_INDIRECT
+                    | OpCode::CPUI_MULTIEQUAL => {
+                        let outvn = match op_r.output.clone() {
+                            Some(out) => out,
+                            // Unreachable in valid IR (these opcodes always
+                            // have outputs); the C++ would dereference null.
+                            None => return None,
+                        };
+                        let desc = outvn.read().unwrap().lone_descend();
+                        match desc {
+                            // cc:972 already advanced vn to the output;
+                            // cc:984: if (op == 0) break — out of the for
+                            // loop, into the epilogue below (which scans
+                            // THIS varnode's descendants).
+                            None => {
+                                drop(op_r);
+                                vn = outvn;
+                                break 'chase;
+                            }
+                            Some(desc) => {
+                                drop(op_r);
+                                Some((outvn, desc))
+                            }
+                        }
+                    }
+                    // cc:975-976: LOAD exposes the space constant.
+                    OpCode::CPUI_LOAD => {
+                        let spc_vn = op_r.get_in(0)?;
+                        return Some(space_from_const_vn(&spc_vn.read().unwrap()));
+                    }
+                    // cc:977-980: STORE only when vn is the address input.
+                    OpCode::CPUI_STORE => {
+                        let is_addr_input = op_r
+                            .get_in(1)
+                            .map(|n| Arc::ptr_eq(n, &vn))
+                            .unwrap_or(false);
+                        if !is_addr_input {
+                            return None;
+                        }
+                        let spc_vn = op_r.get_in(0)?;
+                        return Some(space_from_const_vn(&spc_vn.read().unwrap()));
+                    }
+                    _ => return None,
+                }
+            };
+            let (next_vn, next_op) = next?;
+            vn = next_vn;
+            op = next_op;
+        }
+        // cc:986-993: epilogue — scan every descendant of the final varnode
+        // for a LOAD (any position) or a STORE where vn is the address input.
+        for desc in vn.read().unwrap().descend_iter() {
+            let desc_r = desc.read().unwrap();
+            match desc_r.opcode {
+                OpCode::CPUI_LOAD => {
+                    let spc_vn = desc_r.get_in(0)?;
+                    return Some(space_from_const_vn(&spc_vn.read().unwrap()));
+                }
+                OpCode::CPUI_STORE => {
+                    let is_addr_input = desc_r
+                        .get_in(1)
+                        .map(|n| Arc::ptr_eq(n, &vn))
+                        .unwrap_or(false);
+                    if is_addr_input {
+                        let spc_vn = desc_r.get_in(0)?;
+                        return Some(space_from_const_vn(&spc_vn.read().unwrap()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    // Ghidra: coreaction.cc:1005 ActionConstantPtr::selectInferSpace
+    /// Select the address space in which we infer that the given constant is
+    /// a pointer. Faithful to `selectInferSpace` (coreaction.cc:1005-1032):
+    /// an explicit TYPE_PTR space attribute wins first; otherwise the first
+    /// space in `inferPtrSpaces` whose size gate passes (`minSize==0` demands
+    /// `vn.size == spc.addrSize`, else `vn.size >= minSize`); a second
+    /// candidate triggers `searchForSpaceAttribute` disambiguation and ends
+    /// the scan.
+    fn select_infer_space(
+        vn: &Arc<RwLock<crate::varnode::Varnode>>,
+        op: &Arc<RwLock<PcodeOp>>,
+        space_list: &[crate::space::AddressSpace],
+    ) -> Option<crate::space::AddressSpace> {
+        let mut res_space: Option<crate::space::AddressSpace> = None;
+        // cc:1009-1013: explicit pointer type with a matching space.
+        // Rugra's TypePointer does not model the space attribute yet
+        // (TYPE-0001 residual), so this arm cannot fire — the behavior when
+        // no pointer type carries a space attribute.
+        let _ = vn.read().unwrap().get_type();
+        // cc:1014-1030: walk inferPtrSpaces in order (the default data space
+        // leads — architecture.cc:665-701 cacheAddrSpaceProperties; Rugra's
+        // list is built by <global> ingestion in registration order).
+        for spc in space_list {
+            let min_size = enum_minimum_ptr_size(*spc);
+            let vn_size = vn.read().unwrap().get_size();
+            if min_size == 0 {
+                // cc:1017-1019: exact addrSize match required.
+                if vn_size != spc.addr_size() {
+                    continue;
+                }
+            } else if (vn_size as i32) < min_size {
+                // cc:1021-1022: partial pointers must at least reach
+                // minSize.
+                continue;
+            }
+            if res_space.is_some() {
+                // cc:1023-1028: a second candidate — disambiguate from the
+                // syntax tree, then stop scanning.
+                let search_spc = Self::search_for_space_attribute(vn, op);
+                if let Some(found) = search_spc {
+                    res_space = Some(found);
+                }
+                break;
+            }
+            res_space = Some(*spc);
+        }
+        res_space
+    }
+
+    // Ghidra: coreaction.cc:1041 ActionConstantPtr::checkCopy
+    /// Check if we need to try to infer a constant pointer from the input of
+    /// the given COPY. Faithful to `checkCopy` (coreaction.cc:1041-1054):
+    /// a COPY feeding a lone RETURN consults the locked output type (PTR or
+    /// UNKNOWN try regardless of infer_pointers; anything else refuses);
+    /// every other COPY follows the infer_pointers boolean.
+    fn check_copy(op: &Arc<RwLock<PcodeOp>>, fd: &Funcdata) -> bool {
+        // cc:1044-1045: vn = op->getOut(); retOp = vn->loneDescend().
+        let ret_op = {
+            let op_r = op.read().unwrap();
+            let outvn = op_r.output.clone();
+            match outvn {
+                Some(out) => out.read().unwrap().lone_descend(),
+                None => None,
+            }
+        };
+        if let Some(ret_op) = ret_op {
+            let is_return = ret_op.read().unwrap().opcode == OpCode::CPUI_RETURN;
+            // cc:1046: retOp is RETURN and the function output is locked.
+            if is_return && fd.funcp.is_output_locked() {
+                // cc:1047-1048: the locked output metatype decides.
+                let meta = fd.funcp.return_type.get_metatype();
+                if meta != crate::type_system::datatype::TypeMetatype::Pointer
+                    && meta != crate::type_system::datatype::TypeMetatype::Unknown
+                {
+                    // cc:1049: we KNOW the constant can't be a pointer.
+                    return false;
+                }
+                // cc:1051: we KNOW it is a pointer — infer regardless of
+                // the infer_pointers config.
+                return true;
+            }
+        }
+        // cc:1053: every other COPY follows the architecture boolean.
+        fd.arch.as_ref().map(|a| a.infer_pointers).unwrap_or(false)
+    }
+
+    // Ghidra: coreaction.cc:1070 ActionConstantPtr::isPointer
+    /// Determine if the given Varnode might be a pointer constant; if it is,
+    /// return the symbol it points to. Faithful to `isPointer`
+    /// (coreaction.cc:1070-1165): the explicit TYPE_PTR arm resolves
+    /// immediately with `needexacthit=false`; otherwise the op-shape gate
+    /// (CALL/CALLIND/COPY/PIECE/comparisons/INT_ADD/STORE), the pointer
+    /// range gate, the `bit_transitions>=3` gate and the container query run
+    /// in that order. `rampoint`/`full_encoding` are the C++ out parameters.
+    fn is_pointer(
+        spc: crate::space::AddressSpace,
+        vn: &Arc<RwLock<crate::varnode::Varnode>>,
+        op: &Arc<RwLock<PcodeOp>>,
+        slot: usize,
+        rampoint: &mut crate::address::Address,
+        full_encoding: &mut u64,
+        fd: &Funcdata,
+    ) -> Option<crate::database::QueryContainerHit> {
+        use crate::type_system::datatype::TypeMetatype;
+        let mut needexacthit: bool;
+        let (vn_offset, vn_size) = {
+            let vn_r = vn.read().unwrap();
+            (vn_r.get_offset(), vn_r.get_size())
+        };
+        let op_addr = op.read().unwrap().get_addr();
+        let op_code = op.read().unwrap().opcode;
+        // cc:1077-1080: explicitly marked as a pointer type — resolve and
+        // skip every heuristic gate (needexacthit=false: partial pointers may
+        // land mid-symbol).
+        if vn.read().unwrap().get_type_read_facing().map(|dt| dt.get_metatype())
+            == Some(TypeMetatype::Pointer)
+        {
+            *rampoint = Self::resolve_constant(spc, vn_offset, vn_size, op_addr, full_encoding);
+            needexacthit = false;
+        } else {
+            // cc:1082: locked as NOT a pointer.
+            if vn.read().unwrap().is_type_lock() {
+                return None;
+            }
+            needexacthit = true;
+            // cc:1086-1136: check if the constant is involved in a potential
+            // pointer expression as the base.
+            match op_code {
+                OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
+                    // cc:1090-1091: the call target itself is never inferred.
+                    if slot == 0 {
+                        return None;
+                    }
+                    // cc:1093-1099: a locked callspec parameter type that is
+                    // neither PTR nor UNKNOWN rules the constant out.
+                    let fc = fd.get_call_specs_of_op(&crate::op::PcodeOpRef(op.clone()));
+                    match &fc {
+                        Some(fc_arc) => {
+                            let fc_r = fc_arc.read().unwrap();
+                            if fc_r.is_input_locked()
+                                && (fc_r.prototype.num_params() as usize) > slot - 1
+                            {
+                                // cc:1095-1098: the locked parameter type decides.
+                                if let Some(param) = fc_r.prototype.get_param(slot - 1) {
+                                    let meta = param.data_type.get_metatype();
+                                    if meta != TypeMetatype::Pointer
+                                        && meta != TypeMetatype::Unknown
+                                    {
+                                        // cc:1097: definitely not passing a pointer.
+                                        return None;
+                                    }
+                                }
+                            } else {
+                                // cc:1100-1101: an unlocked/missing parameter
+                                // needs the infer_pointers boolean.
+                                if !fd.arch.as_ref().map(|a| a.infer_pointers).unwrap_or(false)
+                                {
+                                    return None;
+                                }
+                            }
+                        }
+                        None => {
+                            // cc:1100-1101: no callspec at all.
+                            if !fd.arch.as_ref().map(|a| a.infer_pointers).unwrap_or(false) {
+                                return None;
+                            }
+                        }
+                    }
+                }
+                OpCode::CPUI_COPY => {
+                    // cc:1104-1106.
+                    if !Self::check_copy(op, fd) {
+                        return None;
+                    }
+                }
+                OpCode::CPUI_PIECE
+                | OpCode::CPUI_INT_EQUAL
+                | OpCode::CPUI_INT_NOTEQUAL
+                | OpCode::CPUI_INT_LESS
+                | OpCode::CPUI_INT_LESSEQUAL => {
+                    // cc:1108-1116: pointers get concatenated in structures /
+                    // compared against constants — needs infer_pointers.
+                    if !fd.arch.as_ref().map(|a| a.infer_pointers).unwrap_or(false) {
+                        return None;
+                    }
+                }
+                OpCode::CPUI_INT_ADD => {
+                    // cc:1118-1128: an INT_ADD output already typed PTR makes
+                    // the constant the base of the pointer expression.
+                    let out_is_ptr = op
+                        .read()
+                        .unwrap()
+                        .output
+                        .as_ref()
+                        .and_then(|out| out.read().unwrap().get_type_def_facing())
+                        .map(|dt| dt.get_metatype() == TypeMetatype::Pointer)
+                        .unwrap_or(false);
+                    if out_is_ptr {
+                        // cc:1122-1123: another pointer base in the same
+                        // expression means this constant is the offset, not
+                        // the pointer.
+                        let other_is_ptr = op
+                            .read()
+                            .unwrap()
+                            .get_in(1 - slot)
+                            .and_then(|other| other.read().unwrap().get_type_read_facing())
+                            .map(|dt| dt.get_metatype() == TypeMetatype::Pointer)
+                            .unwrap_or(false);
+                        if other_is_ptr {
+                            return None;
+                        }
+                        // cc:1125: the typed sum pins the symbol exactly enough
+                        // that a mid-symbol hit is acceptable.
+                        needexacthit = false;
+                    } else if !fd.arch.as_ref().map(|a| a.infer_pointers).unwrap_or(false) {
+                        return None;
+                    }
+                }
+                OpCode::CPUI_STORE => {
+                    // cc:1130-1132: only the value input (slot 2) of STORE.
+                    if slot != 2 {
+                        return None;
+                    }
+                }
+                _ => return None,
+            }
+            // cc:1138-1141: the constant must sit in the space's inferred
+            // pointer range (AddrSpace::calcScaleMask bounds, space.cc:34-44).
+            let (lower_bound, upper_bound) = Self::pointer_bounds(spc);
+            if lower_bound > vn_offset {
+                return None;
+            }
+            if upper_bound < vn_offset {
+                return None;
+            }
+            // cc:1143-1144: reject single bits / masks.
+            if crate::rangeutil::bit_transitions(vn_offset, vn_size) < 3 {
+                return None;
+            }
+            // cc:1145.
+            *rampoint = Self::resolve_constant(spc, vn_offset, vn_size, op_addr, full_encoding);
+        }
+
+        // cc:1148: rampoint.isInvalid() — Rugra's no-resolver resolve always
+        // produces a (spaceless but defined) address, and no resolver is
+        // registered in this pipeline, so the invalid branch is unreachable
+        // here (AddressResolver registration is the translate.cc residual).
+        // cc:1151: global addresses are address tied — empty usepoint.
+        let entry = fd.query_container_parent_scope(
+            *rampoint,
+            1,
+            // cc:1151 — the empty usepoint `Address()`.
+            crate::address::Address::new(0),
+        )?;
+        // cc:1152-1160: strings (character arrays) may be pointed at from
+        // the middle.
+        if entry.type_metatype
+            == crate::type_system::datatype::TypeMetatype::Array
+            && entry.base_is_char_print
+        {
+            needexacthit = false;
+        }
+        // cc:1161-1162: every other symbol demands an entry starting exactly
+        // at the resolved address.
+        if needexacthit && entry.entry_addr.as_u64() != rampoint.as_u64() {
+            return None;
+        }
+        Some(entry)
+    }
+
+    // Ghidra: translate.cc:628 AddrSpaceManager::resolveConstant
+    /// Resolve a native constant into an address — the no-resolver default
+    /// path of `AddrSpaceManager::resolveConstant` (translate.cc:637-641):
+    /// `fullEncoding = val; val = addressToByte(val, wordSize); val =
+    /// wrapOffset(val)`. Rugra's Funcdata pipeline carries no
+    /// `AddrSpaceManager`, and no `AddressResolver` is registered for the
+    /// production spaces (x86-64 registers none), so this local arm is the
+    /// exact production behavior for this oracle configuration; the
+    /// resolver-registration channel is the documented residual.
+    fn resolve_constant(
+        spc: crate::space::AddressSpace,
+        val: u64,
+        _sz: usize,
+        _point: crate::address::Address,
+        full_encoding: &mut u64,
+    ) -> crate::address::Address {
+        // cc:638: fullEncoding = val.
+        *full_encoding = val;
+        // cc:639: val = addressToByte(val, wordSize) — multiply by the space
+        // word size (1 for every production space here).
+        let word_size = spc.word_size().max(1) as u64;
+        let val_bytes = if word_size == 1 { val } else { val * word_size };
+        // cc:640: wrapOffset — mask to the space's address size.
+        let addr_bits = (spc.addr_size() * 8) as u32;
+        let addr_mask = if addr_bits == 0 || addr_bits >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << addr_bits) - 1
+        };
+        crate::address::Address::new(val_bytes & addr_mask)
+    }
+
+    // Ghidra: space.cc:34 AddrSpace::calcScaleMask
+    /// The default pointer bounds of an address space, recomputed from the
+    /// space's (addressSize, wordsize) exactly as `calcScaleMask`
+    /// (space.cc:34-44) caches them on construction:
+    /// `highest = calc_mask(addressSize)*wordsize + wordsize-1`,
+    /// `bufferSize = addressSize<3 ? 0x100 : 0x1000`,
+    /// `pointerLowerBound = bufferSize`, `pointerUpperBound =
+    /// highest-bufferSize`. Rugra's enum `AddressSpace` carries no cached
+    /// bounds (the registry handle does, and the Funcdata pipeline uses the
+    /// enum), so the constructor formula is evaluated directly — same
+    /// inputs, same unsigned wraparound arithmetic.
+    fn pointer_bounds(spc: crate::space::AddressSpace) -> (u64, u64) {
+        let address_size = spc.addr_size() as i32;
+        let word_size = spc.word_size() as u64;
+        let highest = crate::space::calc_mask(address_size)
+            .wrapping_mul(word_size)
+            .wrapping_add(word_size.wrapping_sub(1));
+        let buffer_size: u64 = if address_size < 3 { 0x100 } else { 0x1000 };
+        (buffer_size, highest.wrapping_sub(buffer_size))
     }
 }
 
 impl Action for ActionConstantPtr {
     // Ghidra: coreaction.cc:1167 ActionConstantPtr::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        let mut changed = 0;
+        // cc:1170: type recovery must have started.
+        if !fd.has_type_recovery_started() {
+            return Ok(action_status::NO_CHANGE);
+        }
+        // cc:1172-1174: at most 4 passes once type recovery starts.
+        if self.localcount >= 4 {
+            return Ok(action_status::NO_CHANGE);
+        }
+        self.localcount += 1;
 
-        // Scan all alive ops for LOAD/STORE with constant address varnodes.
-        // Tag the constant varnodes with the READONLY flag so downstream
-        // passes (PrintC) can resolve them to named globals.
-        for op_ref in &fd.obank.alivelist {
-            let op = op_ref.0.read().unwrap();
-            match op.opcode {
-                OpCode::CPUI_LOAD | OpCode::CPUI_STORE => {
-                    // Input[1] is the address for LOAD/STORE
-                    if let Some(addr_vn_arc) = op.inrefs.get(1) {
-                        let is_const = addr_vn_arc.read().unwrap().is_constant();
-                        if is_const {
-                            let mut vn = addr_vn_arc.write().unwrap();
-                            if vn.flags & crate::varnode::varnode_flags::READONLY == 0 {
-                                vn.set_flags(crate::varnode::varnode_flags::READONLY);
-                                changed += 1;
-                            }
-                        }
-                    }
+        // cc:1178: cspc = glb->getConstantSpace().
+        let cspc = crate::space::AddressSpace::Const;
+        // cc:1182-1183: begiter = data.beginLoc(cspc); enditer =
+        // data.endLoc(cspc). The snapshot materializes the same ordered
+        // VarnodeLocSet window once up front; every varnode the loop itself
+        // creates is either offset 0 (the spacebase constant, skipped at
+        // cc:1188) or pre-flagged with setPtrCheck (cc:407/430), so visiting
+        // them is a no-op in Ghidra and their absence from the snapshot is
+        // observationally equivalent.
+        let constant_vns: Vec<Arc<RwLock<crate::varnode::Varnode>>> = fd
+            .vbank
+            .begin_loc_space(cspc)
+            .map(|loc_ref| loc_ref.0.clone())
+            .collect();
+
+        for vn in constant_vns {
+            // cc:1187: the C++ tolerates newly inserted non-constant
+            // varnodes by breaking; the snapshot cannot contain any.
+            // cc:1188: never make constant 0 into a spacebase.
+            let (vn_offset, _) = {
+                let vn_r = vn.read().unwrap();
+                if !vn_r.is_constant() {
+                    break;
                 }
-                _ => {}
+                (vn_r.get_offset(), vn_r.get_size())
+            };
+            if vn_offset == 0 {
+                continue;
+            }
+            // cc:1189: have we checked this variable before?
+            if (vn.read().unwrap().addlflags & crate::varnode::addl_flags::PTR_CHECK) != 0 {
+                continue;
+            }
+            // cc:1190: no descendants — nothing to infer from.
+            if vn.read().unwrap().has_no_descend() {
+                continue;
+            }
+            // cc:1191: constant 0 already serving as a spacebase.
+            if vn.read().unwrap().is_spacebase() {
+                continue;
+            }
+            // cc:1194-1195: op = vn->loneDescend().
+            let Some(op) = vn.read().unwrap().lone_descend() else {
+                continue;
+            };
+            // cc:1196-1197: rspc = selectInferSpace(vn, op, glb->inferPtrSpaces).
+            let infer_ptr_spaces = fd
+                .arch
+                .as_ref()
+                .map(|a| a.infer_ptr_spaces.clone())
+                .unwrap_or_default();
+            let Some(rspc) = Self::select_infer_space(&vn, &op, &infer_ptr_spaces) else {
+                continue;
+            };
+            // cc:1198-1204: slot gates.
+            let Some(slot) = op.read().unwrap().slot_of_input(&vn) else {
+                continue;
+            };
+            let opc = op.read().unwrap().opcode;
+            if opc == OpCode::CPUI_INT_ADD {
+                // cc:1201: the other side is already a spacebase.
+                let other_is_spacebase = op
+                    .read()
+                    .unwrap()
+                    .get_in(1 - slot)
+                    .map(|other| other.read().unwrap().is_spacebase())
+                    .unwrap_or(false);
+                if other_is_spacebase {
+                    continue;
+                }
+            } else if opc == OpCode::CPUI_PTRSUB || opc == OpCode::CPUI_PTRADD {
+                // cc:1203-1204.
+                continue;
+            }
+            // cc:1205-1207: entry = isPointer(rspc,vn,op,slot,...).
+            let mut rampoint = crate::address::Address::new(0);
+            let mut full_encoding: u64 = 0;
+            let entry = Self::is_pointer(
+                rspc,
+                &vn,
+                &op,
+                slot,
+                &mut rampoint,
+                &mut full_encoding,
+                fd,
+            );
+            // cc:1208: set the check flag AFTER searching for the symbol.
+            vn.write().unwrap().addlflags |= crate::varnode::addl_flags::PTR_CHECK;
+            if let Some(entry) = entry {
+                // cc:1210: data.spacebaseConstant(op,slot,entry,rampoint,
+                // fullEncoding,vn->getSize()).
+                let origsize = vn.read().unwrap().get_size();
+                fd.spacebase_constant(
+                    &crate::op::PcodeOpRef(op.clone()),
+                    slot,
+                    &entry,
+                    rspc,
+                    rampoint,
+                    full_encoding,
+                    origsize,
+                );
+                // cc:1211-1212: INT_ADD with the constant in slot 1 swaps to
+                // slot 0 so the spacebase leads the expression.
+                if opc == OpCode::CPUI_INT_ADD && slot == 1 {
+                    fd.op_swap_input(&crate::op::PcodeOpRef(op.clone()), 0, 1);
+                }
+                // cc:1213.
+                self.count += 1;
             }
         }
+        // cc:1216: apply always returns 0; the change flows through the
+        // base-class count (take_count_delta).
+        Ok(action_status::NO_CHANGE)
+    }
 
-        if changed > 0 {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+    // Ghidra: coreaction.hh:194 ActionConstantPtr::reset
+    fn reset(&mut self, _fd: &mut Funcdata) {
+        self.localcount = 0;
+    }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:1213) into the Rust ActionState accumulator.
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
 
     // RUGRA-GLUE: Rust Action trait get_name; "constantptr" mirrors ctor at coreaction.hh:188
@@ -852,27 +1418,36 @@ impl Action for ActionRestructureVarnode {
         }
         // Install the register-name lookup standing in for
         // `glb->translate->getRegisterName` (translate.hh:380): Ghidra's
-        // ScopeLocal::getRegisterName (varmap.cc:586) reads the SLEIGH
-        // register index; Rugra's ScopeLocal takes a caller-installed table
-        // (see its field docs). x86-64 general-purpose registers.
-        scope.register_names = [
-            (0x00u64, 8i32, "RAX"), (0x00, 4, "EAX"), (0x00, 2, "AX"), (0x00, 1, "AL"),
-            (0x08, 8, "RCX"), (0x08, 4, "ECX"),
-            (0x10, 8, "RDX"), (0x10, 4, "EDX"),
-            (0x18, 8, "RBX"), (0x18, 4, "EBX"),
-            (0x20, 8, "RSP"), (0x20, 4, "ESP"),
-            (0x28, 8, "RBP"), (0x28, 4, "EBP"),
-            (0x30, 8, "RSI"), (0x30, 4, "ESI"),
-            (0x38, 8, "RDI"), (0x38, 4, "EDI"),
-            (0x80, 8, "R8"), (0x88, 8, "R9"),
-            (0x90, 8, "R10"), (0x98, 8, "R11"),
-            (0xA0, 8, "R12"), (0xA8, 8, "R13"),
-            (0xB0, 8, "R14"), (0xB8, 8, "R15"),
-            (0x200, 8, "RIP"),
-        ]
-        .into_iter()
-        .map(|(o, s, n)| ((o, s), n.to_string()))
-        .collect();
+        // ScopeInternal::buildVariableName register queries
+        // (database.cc:2447/2454/2462/2472/2485) read the SLEIGH
+        // `varnode_xref` through the Architecture's Translate; Rugra's
+        // ScopeLocal takes a caller-attached Architecture handle
+        // (`set_arch_lookup`) whose `register_xref` (populated from
+        // `SleighBase::getAllRegisters`, sleighbase.cc:182-186) answers via
+        // the faithful `Architecture::get_register_name` port
+        // (sleighbase.cc:144-168). The legacy flat table below stays as the
+        // fixture fallback for Funcdata without an Architecture.
+        scope.set_arch_lookup(fd.arch.clone());
+        if fd.arch.is_none() {
+            scope.register_names = [
+                (0x00u64, 8i32, "RAX"), (0x00, 4, "EAX"), (0x00, 2, "AX"), (0x00, 1, "AL"),
+                (0x08, 8, "RCX"), (0x08, 4, "ECX"),
+                (0x10, 8, "RDX"), (0x10, 4, "EDX"),
+                (0x18, 8, "RBX"), (0x18, 4, "EBX"),
+                (0x20, 8, "RSP"), (0x20, 4, "ESP"),
+                (0x28, 8, "RBP"), (0x28, 4, "EBP"),
+                (0x30, 8, "RSI"), (0x30, 4, "ESI"),
+                (0x38, 8, "RDI"), (0x38, 4, "EDI"),
+                (0x80, 8, "R8"), (0x88, 8, "R9"),
+                (0x90, 8, "R10"), (0x98, 8, "R11"),
+                (0xA0, 8, "R12"), (0xA8, 8, "R13"),
+                (0xB0, 8, "R14"), (0xB8, 8, "R15"),
+                (0x200, 8, "RIP"),
+            ]
+            .into_iter()
+            .map(|(o, s, n)| ((o, s), n.to_string()))
+            .collect();
+        }
         // Ghidra cc:2280: l1->restructureVarnode(aliasyes).
         // Rugra's restructure_varnode doesn't yet take aliasyes (the
         // markUnaliased aliasyes gate is inside restructure, which is

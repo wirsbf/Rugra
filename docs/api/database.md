@@ -383,10 +383,15 @@ equate-pipeline 测试随 VARNODE-COPYSYMBOL-HIGHBRANCH-0001 的关联函数签�
   （`stack_container` 等）所需的「祖先栈」约定构造器——此前无生产调用方。
 - `QueryContainerHit`：`queryContainer`/`queryProperties` 命中的可观察投影
   （scope_id/name、entry_addr/size/offset、symbol_id/name、`getAllFlags`、
-  `type_metatype`、`base_is_char_print`）。携带 ActionConstantPtr::isPointer
-  （coreaction.cc:1151-1163）消费的全部字段：needexacthit 判据
-  `entry->getAddr() != rampoint`（经 `entry_addr`）与 char-array 中部例外
-  `TYPE_ARRAY + base->isCharPrint()`（经 `type_metatype`+`base_is_char_print`）。
+  `type_metatype`、`base_is_char_print`、`symbol_type`）。携带
+  ActionConstantPtr::isPointer（coreaction.cc:1151-1163）消费的全部字段：
+  needexacthit 判据 `entry->getAddr() != rampoint`（经 `entry_addr`）与
+  char-array 中部例外 `TYPE_ARRAY + base->isCharPrint()`（经
+  `type_metatype`+`base_is_char_print`）。段(b) 新增 `symbol_type:
+  Option<Arc<Datatype>>`（`entry->getSymbol()->getType()` 的共享句柄，
+  spacebaseConstant 的 getTypePointerStripArray/typelock 折叠消费，
+  funcdata.cc:413-419）；`PartialEq` derive 因 Datatype 无等价实现而移除
+  （无既有相等比较调用方）。
 - `Database::query_container(qpoint,addr,size,usepoint)`（database.cc:1246
   Database 级入口）：`map_scope(qpoint,addr)` 定位 base scope →
   `ancestor_stack` → 静态 `Scope::query_container` → 命中投影。

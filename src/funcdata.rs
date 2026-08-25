@@ -4910,34 +4910,45 @@ impl Funcdata {
     /// INT_ADD (for intra-symbol offset), INT_ZEXT (if growing), or
     /// SUBPIECE (if shrinking) to preserve the original value/size.
     ///
-    /// Rugra caveat: full Ghidra behaviour requires a SymbolEntry with
-    /// `getAddr()`/`getSymbol()->getType()`. Rugra's `symbol_table` is
-    /// name-only; we perform the structural PTRSUB/ADD/ZEXT/SUBPIECE
-    /// rewrite and rely on `link_symbol_reference` to recover the Symbol
-    /// at PTRSUB time. Type-locking of the output is skipped (no entrytype).
+    /// `entry` is the query-channel hit for the Symbol being pointed (in)to
+    /// — the projection of Ghidra's `SymbolEntry *entry` observable reads:
+    /// `entry->getAddr()` for the `extra` offset (cc:369) and
+    /// `entry->getSymbol()` for the output typing/typelock (cc:413-419).
+    /// `spaceid` carries the resolved space: its addrSize is the pointer
+    /// size `sz` (cc:363, `rampoint.getAddrSize()`) and its wordSize feeds
+    /// the byteToAddress normalization (cc:370) — Rugra's legacy
+    /// `Address` is spaceless (ADDRESS-0001 residual), so the space rides
+    /// this parameter instead of the address.
     pub fn spacebase_constant(
         &mut self,
         op: &crate::op::PcodeOpRef,
         slot: usize,
+        entry: &crate::database::QueryContainerHit,
+        spaceid: crate::space::AddressSpace,
         rampoint: crate::address::Address,
         origval: u64,
         origsize: usize,
     ) {
         use crate::opcodes::OpCode;
-        // cc:363: sz = rampoint.getAddrSize().
-        let sz = rampoint.as_u64().leading_zeros().checked_sub(0).map(|_| 8).unwrap_or(8);
-        let sz = sz.max(1).min(8) as usize;
-        // Rugra: use the configured address size (x86-64 = 8) when rampoint
-        // does not carry it. Fall back to origsize for the structural rewrite.
-        let sz = origsize.max(sz).min(8);
-        // cc:369: extra = rampoint.getOffset() - entry->getAddr().getOffset().
-        // Rugra: without a SymbolEntry we cannot know the entry's start; assume
-        // extra == 0 (the constant points at the start of its symbol). This
-        // matches the common case and avoids fabricating an INT_ADD.
-        let extra: u64 = 0;
-        // Convert extra to address units (cc:370). Word size of ram is 1 for
-        // typical x86-64, so byteToAddress is a no-op; kept for fidelity.
-        let extra = extra; // already in address units (word_size==1).
+        // cc:363: sz = rampoint.getAddrSize() — the address size of the
+        // resolved space (x86-64 ram = 8), NOT the constant's size.
+        let sz = spaceid.addr_size();
+        // cc:365-366: sb_type = getTypeSpacebase(spaceid, Address());
+        // ptr = getTypePointer(sz, sb_type, spaceid->getWordSize()).
+        let sb_ptr_type = self.arch.as_ref().and_then(|arch| arch.types.clone()).map(|types| {
+            let mut tf = types.write().unwrap();
+            let sb_type = tf.get_type_spacebase(Some(spaceid), crate::address::Address::new(0));
+            tf.get_type_pointer(sz, sb_type, spaceid.word_size())
+        });
+
+        // cc:369: extra = rampoint.getOffset() - entry->getAddr().getOffset()
+        // — offset from the beginning of the entry, then cc:370 byteToAddress
+        // (wordsize normalization: bytes -> addressable units).
+        let extra_raw = rampoint
+            .as_u64()
+            .wrapping_sub(entry.entry_addr.as_u64());
+        let word_size = spaceid.word_size().max(1) as u64;
+        let extra = extra_raw / word_size;
 
         // cc:372-390: classify the existing op (COPY vs other).
         let op_code = op.0.read().unwrap().opcode;
@@ -4950,10 +4961,11 @@ impl Funcdata {
             if sz < origsize {
                 zext_op = Some(op.clone());
             } else {
-                // cc:382: op->insertInput(1) — PTRSUB/ADD/SUBPIECE take 2 inputs.
-                op.0.write().unwrap().inrefs.resize(2, std::sync::Arc::new(std::sync::RwLock::new(
-                    crate::varnode::Varnode::new_constant(0, 0),
-                )));
+                // cc:382: op->insertInput(1) — PTRSUB, ADD, SUBPIECE all
+                // take 2 parameters. Rugra's op_insert_input performs the
+                // insertInput+opSetInput pair with a real varnode (the
+                // transient NULL slot is unobservable), so the actual input
+                // install happens at each opSetInput site below.
                 if origsize < sz {
                     sub_op = Some(op.clone());
                 } else if extra != 0 {
@@ -4964,8 +4976,12 @@ impl Funcdata {
             }
         }
 
-        // cc:391-393: spacebase_vn = newConstant(sz, 0); updateType; setFlags.
+        // cc:391-393: spacebase_vn = newConstant(sz, 0); updateType(ptr,
+        // true, true); setFlags(spacebase).
         let spacebase_vn = self.new_constant(sz, 0);
+        if let Some(ptr) = sb_ptr_type.clone() {
+            spacebase_vn.write().unwrap().update_type_lock(ptr, true, true);
+        }
         spacebase_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
 
         // cc:394-402: allocate/repurpose the PTRSUB op.
@@ -4981,21 +4997,64 @@ impl Funcdata {
         }
         let add_op = add_op.unwrap();
 
-        // cc:405: newconstoff = origval - extra.
+        // cc:405: newconstoff = origval - extra — everything in address units.
         let newconstoff = origval.wrapping_sub(extra);
         // cc:406-407: newconst = newConstant(sz, newconstoff); setPtrCheck.
         let newconst = self.new_constant(sz, newconstoff);
-        // Ghidra cc:407: vn->setPtrCheck() clears the PTR_CHECK bit so the
-        // constant is no longer re-examined as a potential pointer. Rugra
-        // stores this in `addlflags` (addl_flags::PTR_CHECK).
         newconst.write().unwrap().addlflags |= crate::varnode::addl_flags::PTR_CHECK;
+        // cc:408-409: if (spaceid->isTruncated()) addOp->setPtrFlow(). The
+        // enum space projection cannot be truncated (only the registry
+        // handle's truncateSpace sets the state), so this never fires here.
 
-        // cc:410-411: opSetInput(addOp, spacebase_vn, 0); opSetInput(addOp, newconst, 1).
-        self.op_set_input(&add_op, spacebase_vn, 0);
-        self.op_set_input(&add_op, newconst, 1);
+        // cc:410-411: opSetInput(addOp, spacebase_vn, 0);
+        // opSetInput(addOp, newconst, 1).
+        self.set_or_insert_input(&add_op, spacebase_vn, 0);
+        self.set_or_insert_input(&add_op, newconst, 1);
 
-        // Track the current output varnode of the chain.
+        // cc:413-419: type the PTRSUB output as a pointer to the (array-
+        // stripped) entry type, typelocked when the Symbol is.
         let mut outvn = add_op.0.read().unwrap().output.clone();
+        if let Some(types) = self.arch.as_ref().and_then(|arch| arch.types.clone()) {
+            let mut tf = types.write().unwrap();
+            // cc:413-415: entrytype = sym->getType(); ptrentrytype =
+            // getTypePointerStripArray(sz, entrytype, spaceid->getWordSize())
+            // (type.cc:3849-3858: one getStripped step, then strip the first
+            // ARRAY level). A Symbol without a resolved type reads as the
+            // factory's undefined of the pointer size (the analyzer's DAT
+            // label default).
+            let entrytype = match entry.symbol_type.clone() {
+                Some(dt) => dt,
+                None => tf
+                    .get_base(sz, crate::type_system::datatype::TypeMetatype::Unknown)
+                    .unwrap_or_else(|| {
+                        std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+                            crate::type_system::datatype::TypeBase::new(
+                                format!("undefined{sz}"),
+                                sz,
+                                crate::type_system::datatype::TypeMetatype::Unknown,
+                            ),
+                        ))
+                    }),
+            };
+            let mut stripped = crate::type_system::datatype::Datatype::get_stripped_arc(&entrytype)
+                .unwrap_or(entrytype.clone());
+            if let crate::type_system::datatype::Datatype::Array(arr) = stripped.as_ref() {
+                stripped = arr.array_of.clone();
+            }
+            let ptrentrytype = tf.get_type_pointer(sz, stripped, spaceid.word_size());
+            // cc:416-418: typelock = sym->isTypeLocked(); typelock &&
+            // TYPE_UNKNOWN -> false.
+            let mut typelock = (entry.all_flags & crate::database::symbol_flags::TYPELOCK) != 0;
+            if typelock
+                && entrytype.get_metatype()
+                    == crate::type_system::datatype::TypeMetatype::Unknown
+            {
+                typelock = false;
+            }
+            if let Some(out) = &outvn {
+                out.write().unwrap().update_type_lock(ptrentrytype, typelock, false);
+            }
+        }
 
         // cc:420-434: if (extra != 0) build INT_ADD(outvn, extconst).
         if extra != 0 {
@@ -5011,8 +5070,9 @@ impl Funcdata {
             let extconst = self.new_constant(sz, extra);
             extconst.write().unwrap().addlflags |= crate::varnode::addl_flags::PTR_CHECK;
             // cc:431-432.
-            self.op_set_input(&extra_op, outvn.clone().unwrap(), 0);
-            self.op_set_input(&extra_op, extconst, 1);
+            let current_out = outvn.clone().expect("PTRSUB chain output present");
+            self.set_or_insert_input(&extra_op, current_out, 0);
+            self.set_or_insert_input(&extra_op, extconst, 1);
             outvn = extra_op.0.read().unwrap().output.clone();
         }
 
@@ -5027,7 +5087,8 @@ impl Funcdata {
             }
             let zext_op = zext_op.unwrap();
             self.op_set_opcode(&zext_op, OpCode::CPUI_INT_ZEXT);
-            self.op_set_input(&zext_op, outvn.clone().unwrap(), 0);
+            let current_out = outvn.clone().expect("PTRSUB chain output present");
+            self.set_or_insert_input(&zext_op, current_out, 0);
             outvn = zext_op.0.read().unwrap().output.clone();
         } else if origsize < sz {
             // cc:447-458: INT_SUBPIECE to truncate back to origsize.
@@ -5040,9 +5101,10 @@ impl Funcdata {
             }
             let sub_op = sub_op.unwrap();
             self.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
-            self.op_set_input(&sub_op, outvn.clone().unwrap(), 0);
+            let current_out = outvn.clone().expect("PTRSUB chain output present");
+            self.set_or_insert_input(&sub_op, current_out, 0);
             let zero = self.new_constant(4, 0);
-            self.op_set_input(&sub_op, zero, 1);
+            self.set_or_insert_input(&sub_op, zero, 1);
             outvn = sub_op.0.read().unwrap().output.clone();
         }
 
@@ -5051,6 +5113,27 @@ impl Funcdata {
             if let Some(out) = outvn {
                 self.op_set_input(op, out, slot);
             }
+        }
+    }
+
+    // RUGRA-GLUE: opSetInput-after-insertInput pair for spacebaseConstant
+    // (funcdata.cc:382's insertInput(1) followed by the opSetInput sites at
+    // cc:410/431/456). Ghidra pushes a NULL slot and fills it later; Rust's
+    // inrefs cannot hold NULL, so a fresh slot takes the real varnode
+    // directly through the faithful op_insert_input (insertInput+opSetInput
+    // with an unobservable transient NULL) and an existing slot goes through
+    // op_set_input.
+    fn set_or_insert_input(
+        &mut self,
+        op: &crate::op::PcodeOpRef,
+        vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        slot: usize,
+    ) {
+        let exists = op.0.read().unwrap().inrefs.len() > slot;
+        if exists {
+            self.op_set_input(op, vn, slot);
+        } else {
+            self.op_insert_input(op, vn, slot);
         }
     }
 

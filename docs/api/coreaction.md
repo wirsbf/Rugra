@@ -263,15 +263,62 @@ Corresponds to Ghidra's `ActionDeadCode`
 
 *暂无代码注释*
 
-### `pub struct ActionConstantPtr`
+### `pub struct ActionConstantPtr` (2026-08-25 B3-COREACTION-CONSTANTPTR-0001 段(b) 重写)
 
-Action for identifying constant pointers and replacing them
-
-Corresponds to Ghidra's `ActionConstantPtr`
+Action for identifying constant pointers and replacing them. Iterates the
+constant-space varnodes, infers the pointer space (`selectInferSpace` over
+`inferPtrSpaces`), runs `isPointer`'s op-shape / pointer-range /
+`bit_transitions>=3` / container-query gates and rewrites hits into
+`PTRSUB(spacebase, offset)` chains via `Funcdata::spacebase_constant`.
+Faithful to `coreaction.cc:957-1217` (searchForSpaceAttribute /
+selectInferSpace / checkCopy / isPointer / apply). Known projections (both
+documented in-source): the pointer-space attribute of TYPE_PTR is not
+modeled (TYPE-0001 residual) and `rampoint.getAddrSize()` rides an explicit
+`spaceid` parameter because legacy `Address` is spaceless (ADDRESS-0001).
 
 ### `pub fn new() -> Self`
 
-*暂无代码注释*
+构造镜像 coreaction.hh:188；`localcount` 初值 0（Ghidra 的该成员由
+`reset()` 零化，coreaction.hh:194 — Rust 构造即置零）。
+
+### `fn search_for_space_attribute(vn, op) -> Option<AddressSpace>`
+
+Ghidra: coreaction.cc:957。3 步数据流遍历（INT_ADD/COPY/INDIRECT/
+MULTIEQUAL）找 LOAD/STORE 的空间常量；尾段扫描全部后代。**R-RAWQUAR
+F2 修复（2026-08-25）**：追链中 `lone_descend()==None` 时 cc:984 是
+`break` 跳出到尾段（且 cc:972 已把 vn 前移到输出），尾段扫描**该输出**
+的全部后代——首版 `?` 从整个函数提前返回 None 跳过了 epilogue（仅
+多候选空间可观测，x86-64 单 ram 候选不触发）；现以 labeled `break
+'chase` 忠实镜像。
+
+### `fn select_infer_space(vn, op, space_list) -> Option<AddressSpace>`
+
+Ghidra: coreaction.cc:1005。TYPE_PTR 空间属性（未建模，恒走列表）→
+`inferPtrSpaces` 顺序扫描，尺寸门（minSize==0 要求 ==addrSize）；
+第二候选触发 `searchForSpaceAttribute` 消歧后 break。
+
+### `fn check_copy(op, fd) -> bool`
+
+Ghidra: coreaction.cc:1041。COPY 喂 lone RETURN 且输出锁定：PTR/UNKNOWN
+放行，否则拒绝；其余跟随 `infer_pointers`。
+
+### `fn is_pointer(spc, vn, op, slot, rampoint, full_encoding, fd) -> Option<QueryContainerHit>`
+
+Ghidra: coreaction.cc:1070。显式 TYPE_PTR 臂（未建模，走通用门）→
+op 形状门（CALL/CALLIND 锁定参数类型、COPY、PIECE/比较、INT_ADD、
+STORE slot 2）→ calcScaleMask 指针范围门（0x1000/high-0x1000）→
+bit_transitions>=3 → resolveConstant（translate.cc:637-641 无 resolver
+默认路径）→ `query_container_parent_scope(rampoint,1,Address())`；
+char-array 中部例外（cc:1153-1159）与 needexacthit（cc:1161-1162）。
+
+### `fn apply(&mut self, fd) -> Result<i32>`
+
+Ghidra: coreaction.cc:1167。`hasTypeRecoveryStarted` 门 + `localcount>=4`
+早退；常量空间 locset 快照迭代（新造 varnode 或 offset 0 或已
+PtrCheck，等价于 Ghidra 的迭代中插入容忍）；命中走
+`spacebase_constant(op, slot, &entry, rspc, rampoint, fullEncoding, size)`
++ INT_ADD slot==1 的 `op_swap_input(0,1)`；`count` 经
+`take_count_delta` 外化（cc:1213）。
 
 ### `pub struct ActionCse`
 

@@ -607,6 +607,21 @@ pub struct Architecture {
     /// `RuleLoadVarnode::correctSpacebase` (ruleaction.cc:4181) via
     /// [`Architecture::get_contain`].
     pub stack_base_space: crate::space::AddressSpace,
+
+    /// The SLEIGH register cross-reference, keyed exactly like
+    /// `SleighBase::varnode_xref` (sleighbase.cc:91's insert key):
+    /// `(space index, offset, size)` with BIG sizes first
+    /// (`VarnodeData::operator<`, pcoderaw.hh:67-71). Populated from
+    /// `SleighBase::getAllRegisters` (sleighbase.cc:182-186) — the
+    /// `varnode_xref` copy the shim's `rugra_sleigh_register_info` walks —
+    /// by the driver at architecture build time. Consumers:
+    /// [`Architecture::get_register_name`] (the
+    /// `SleighBase::getRegisterName` projection) and
+    /// [`Architecture::get_exact_register_name`].
+    pub register_xref: std::collections::BTreeMap<
+        (i32, u64, i32),
+        String,
+    >,
 }
 
 // Manual Debug impl (the `loader` field is `Arc<dyn LoadImage>` without a
@@ -686,6 +701,7 @@ impl Architecture {
             stack_grows_negative: true,
             stack_reverse_justify: false,
             stack_base_space: crate::space::AddressSpace::Ram,
+            register_xref: std::collections::BTreeMap::new(),
         };
         arch.reset_defaults_internal();
         arch
@@ -813,9 +829,131 @@ impl Architecture {
         None
     }
 
+    // Ghidra: sleighbase.cc:144 SleighBase::getRegisterName
+    /// Register-name lookup: faithful 1:1 port of
+    /// `SleighBase::getRegisterName(base, off, size)`
+    /// (sleighbase.cc:144-168). Finds the register name whose varnode
+    /// contains `[off, off+size)` in `base`, walking the `varnode_xref`
+    /// ordering (`VarnodeData::operator<`: space index, then offset, then
+    /// BIG sizes first — pcoderaw.hh:67-71). The `upper_bound` step lands on
+    /// the first entry greater than the probe `(base, off, size)`; because
+    /// equal offsets sort big-size-first, `iter--` lands on the largest
+    /// register starting at `off` (or an earlier offset otherwise). The
+    /// back-walk then requires a covering
+    /// `point.offset + point.size >= off + size`, stopping at the first
+    /// base-offset change — exactly the C++ loop at cc:151-167. An empty
+    /// table (no SLEIGH catalog installed) yields "" everywhere, matching a
+    /// Translate with no registers.
+    pub fn get_register_name(
+        &self,
+        base: crate::space::AddressSpace,
+        off: u64,
+        size: i32,
+    ) -> String {
+        // cc:147-150: sym = {space=base, offset=off, size=size}; the probe
+        // key mirrors the C++ map ordering with (space-index, offset, size
+        // DESCENDING), so a Rust BTreeMap over (index, offset, -size) with
+        // the probe's `-size` reproduces the C++ ordering exactly.
+        let probe = (base.space_id() as i32, off, -size);
+        // cc:151-153: iter = upper_bound(sym); if (iter == begin()) return "";
+        // iter--. upper_bound is the first entry STRICTLY greater than the
+        // probe, so the element it steps back to is the GREATEST entry with
+        // key <= probe — an inclusive end bound. (iter == begin() means no
+        // entry <= probe exists at all, the empty-range case.)
+        let (prev_key, prev_name) = {
+            let mut walker = self.register_xref.range(..=probe);
+            match walker.next_back() {
+                Some(entry) => (entry.0.clone(), entry.1.clone()),
+                None => return String::new(),
+            }
+        };
+        let (prev_space, prev_off, neg_prev_size) = prev_key;
+        let prev_size = -neg_prev_size;
+        // cc:155: point.space != base → "".
+        if crate::space::AddressSpace::from_id(prev_space as u8) != base {
+            return String::new();
+        }
+        // cc:156: offbase = point.offset.
+        let offbase = prev_off;
+        // cc:157-158: point.offset+point.size >= off+size → name.
+        if prev_off.wrapping_add(prev_size as u64) >= off.wrapping_add(size as u64) {
+            return prev_name;
+        }
+        // cc:160-166: walk back ONE predecessor per step
+        // (`while(iter!=begin()){ --iter; ... }`), checking each for the
+        // space/base-offset break and the covering gate. `range(..current)`
+        // is the RangeTo (exclusive) bound: it already excludes `current`,
+        // so `next_back()` lands exactly on the immediate predecessor —
+        // oracle's `--iter`. (F1 fix, R-RAWQUAR: the former extra
+        // `next_back()` discard skipped every other predecessor.)
+        let mut current = prev_key;
+        loop {
+            let mut walker = self.register_xref.range(..current);
+            match walker.next_back() {
+                None => return String::new(),
+                Some((next_key, next_name)) => {
+                    let (next_space, next_off, neg_next_size) = *next_key;
+                    let next_size = -neg_next_size;
+                    // cc:163: space change or base-offset change → "".
+                    if crate::space::AddressSpace::from_id(next_space as u8) != base
+                        || next_off != offbase
+                    {
+                        return String::new();
+                    }
+                    // cc:164-165: covering entry → name.
+                    if next_off.wrapping_add(next_size as u64)
+                        >= off.wrapping_add(size as u64)
+                    {
+                        return next_name.clone();
+                    }
+                    current = *next_key;
+                }
+            }
+        }
+    }
+
+    // Ghidra: sleighbase.cc:170 SleighBase::getExactRegisterName
+    /// Exact `(space, offset, size)` register-name lookup, faithful to
+    /// `SleighBase::getExactRegisterName` (sleighbase.cc:170-180): the
+    /// `varnode_xref.find` hit or "".
+    pub fn get_exact_register_name(
+        &self,
+        base: crate::space::AddressSpace,
+        off: u64,
+        size: i32,
+    ) -> String {
+        self.register_xref
+            .get(&(base.space_id() as i32, off, -size))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    // RUGRA-GLUE: set_register_xref (no Ghidra counterpart; Ghidra fills
+    //   varnode_xref during SleighBase::buildXrefs (sleighbase.cc:79-96)
+    //   from the live symbol table, Rugra snapshots the shim's
+    //   getAllRegisters enumeration at driver time).
+    /// Install the SLEIGH register cross-reference: entries are
+    /// `(space index, offset, size, name)` tuples from
+    /// `rugra_sleigh_register_info` (the `SleighBase::getAllRegisters`
+    /// copy). The key mirrors `VarnodeData::operator<` with big sizes
+    /// first (pcoderaw.hh:67-71); the value is the register name. A
+    /// duplicate key keeps the FIRST insert, matching
+    /// `varnode_xref.insert`'s no-overwrite semantics (sleighbase.cc:91 —
+    /// the conflicting pair goes to errorPairs instead).
+    pub fn set_register_xref(
+        &mut self,
+        entries: impl IntoIterator<Item = (i32, u64, i32, String)>,
+    ) {
+        self.register_xref.clear();
+        for (space_index, offset, size, name) in entries {
+            self.register_xref
+                .entry((space_index, offset, -size))
+                .or_insert(name);
+        }
+    }
+
     // Ghidra: space.hh:505 AddrSpace::getContain (stack override: translate.hh:187)
     /// Return the containing space of a virtual space, `None` otherwise.
-    ///
     /// Faithful relocation of the `getContain` family: the base
     /// `AddrSpace::getContain` (space.hh:505-507) returns null for
     /// non-virtual spaces, and the `SpacebaseSpace` override
@@ -2794,5 +2932,81 @@ mod tests {
 
         arch.set_lane_records(Vec::new());
         assert_eq!(arch.get_minimum_laned_register_size(), -1);
+    }
+
+    // Ghidra: sleighbase.cc:144 SleighBase::getRegisterName — boundary
+    // semantics regression (upper_bound + iter-- == greatest entry <= probe).
+    #[test]
+    fn test_get_register_name_boundaries() {
+        use crate::space::AddressSpace;
+        let mut arch = Architecture::new();
+        // A miniature varnode_xref in the SLEIGH ordering (big sizes first
+        // per pcoderaw.hh:67-71): RAX family at 0x0, XMM0_Qa 16 bytes at
+        // 0x110 with an 8-byte XMM0_Q lower half at the same offset.
+        arch.set_register_xref(vec![
+            (4, 0x0, 8, "RAX".to_string()),
+            (4, 0x0, 4, "EAX".to_string()),
+            (4, 0x0, 1, "AL".to_string()),
+            (4, 0x20, 8, "RSP".to_string()),
+            (4, 0x110, 16, "XMM0_Qa".to_string()),
+            (4, 0x110, 8, "XMM0_Q".to_string()),
+        ]);
+        let reg = AddressSpace::Register;
+        // Exact hits: the greatest <= probe is the probe itself.
+        assert_eq!(arch.get_register_name(reg, 0x0, 8), "RAX");
+        assert_eq!(arch.get_register_name(reg, 0x20, 8), "RSP");
+        // 16 bytes at 0x110 covers only via the 16-byte entry (the 8-byte
+        // lower half alone does not cover [0x110,0x120)).
+        assert_eq!(arch.get_register_name(reg, 0x110, 16), "XMM0_Qa");
+        // 8 bytes at 0x110: the -8 probe sorts before -16, so the greatest
+        // <= probe is the 8-byte entry itself.
+        assert_eq!(arch.get_register_name(reg, 0x110, 8), "XMM0_Q");
+        // Sub-register inside RAX: probe (4,0x1,-1) — greatest <= probe is
+        // (4,0x0,-1) AL (exact key ordering: -1 > -4 > -8). AL fails the
+        // covering gate (0x0+1 < 0x1+1), so the walk-back visits the
+        // immediate predecessor (4,0x0,-4) EAX, which covers (0x0+4 >= 0x2)
+        // → "EAX" — the oracle's C++ replica answer (R-RAWQUAR F1: the
+        // double-step bug skipped EAX and returned RAX here).
+        assert_eq!(arch.get_register_name(reg, 0x1, 1), "EAX");
+        // Full discriminating table (set_register_xref clears + rebuilds):
+        arch.set_register_xref(vec![
+            (4, 0x0, 8, "RAX".to_string()),
+            (4, 0x0, 4, "EAX".to_string()),
+            (4, 0x0, 1, "AL".to_string()),
+            (4, 0x20, 8, "RSP".to_string()),
+            (4, 0x110, 16, "XMM0_Qa".to_string()),
+            (4, 0x110, 8, "XMM0_Q".to_string()),
+            (4, 0x100, 2, "S2".to_string()),
+            (4, 0x100, 4, "S4".to_string()),
+            (4, 0x100, 8, "S8".to_string()),
+            (4, 0x200, 4, "Q4".to_string()),
+            (4, 0x200, 8, "Q8".to_string()),
+        ]);
+        // Two-step walk-back success: probe (0x102,4) — greatest <= is
+        // (4,0x100,-2) S2 (offset 0x100 < 0x102, S2 is the largest key at
+        // that offset); S2 fails (0x102 < 0x106), predecessor S4 fails
+        // (0x104 < 0x106), predecessor S8 covers (0x108 >= 0x106) → "S8".
+        assert_eq!(arch.get_register_name(reg, 0x102, 4), "S8");
+        // False-miss discriminator: probe (0x201,4) — greatest <= is Q4
+        // (0x204 < 0x205 fails), the immediate predecessor Q8 covers
+        // (0x208 >= 0x205) → "Q8". The double-step bug skipped Q8 and
+        // returned "" (R-RAWQUAR F1 miss-direction).
+        assert_eq!(arch.get_register_name(reg, 0x201, 4), "Q8");
+        // Span past RAX end: (4,0x7,-4) — greatest <= is RAX(8) but
+        // 0x0+8 < 0x7+4, and the back-walk stops at the base-offset change
+        // (no other entry at offset 0x0 covers) → "".
+        assert_eq!(arch.get_register_name(reg, 0x7, 4), "");
+        // Gap between entries: probe at 0x40 → greatest <= is RSP(0x20,8)
+        // which covers [0x40,0x48)? no: 0x20+8 < 0x40+8 → back-walk hits
+        // offset change → "".
+        assert_eq!(arch.get_register_name(reg, 0x40, 8), "");
+        // Different space: nothing in ram → "".
+        assert_eq!(arch.get_register_name(AddressSpace::Ram, 0x0, 8), "");
+        // Empty catalog: "" everywhere (Translate with no registers).
+        let empty = Architecture::new();
+        assert_eq!(empty.get_register_name(reg, 0x0, 8), "");
+        // getExactRegisterName (sleighbase.cc:170-180).
+        assert_eq!(arch.get_exact_register_name(reg, 0x110, 16), "XMM0_Qa");
+        assert_eq!(arch.get_exact_register_name(reg, 0x110, 4), "");
     }
 }

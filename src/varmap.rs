@@ -2356,6 +2356,14 @@ pub struct ScopeLocal {
     /// empty default returns "" exactly like a Translate with no matching
     /// register.
     pub register_names: std::collections::BTreeMap<(u64, i32), String>,
+    /// The Architecture whose `register_xref` answers register-name
+    /// lookups when attached — Ghidra's `glb->translate` of the
+    /// `buildVariableName` register queries (database.cc:2447 etc.). When
+    /// `Some`, [`Self::get_register_name`] delegates to
+    /// `Architecture::get_register_name` (the faithful
+    /// sleighbase.cc:144-168 port) and `register_names` above is only the
+    /// fixture fallback.
+    pub arch_lookup: Option<std::sync::Arc<crate::arch::Architecture>>,
     /// Exact `Funcdata::warningHeader` texts emitted inside scope methods
     /// that Ghidra routes through the scope's `fd` member
     /// (varmap.cc:536 markNotMapped; varmap.cc:1439-1445 fakeInputSymbols
@@ -2409,6 +2417,7 @@ impl ScopeLocal {
             max_param_offset: 0,
             stack_grows_negative: true,
             register_names: std::collections::BTreeMap::new(),
+            arch_lookup: None,
             pending_warnings: Vec::new(),
             pending_lowlevel_error: None,
             mapentry_log: Vec::new(),
@@ -3817,17 +3826,39 @@ impl ScopeLocal {
     /// `glb->translate->getRegisterName(space, off, size)`. The fixture
     /// installs an exact `(offset, size) → name` table; an absent entry
     /// returns the empty string exactly like a Translate without a matching
-    /// register.
+    /// register. When an `arch` handle is attached
+    /// ([`ScopeLocal::set_arch_lookup`]), the lookup delegates to
+    /// `Architecture::get_register_name` — the faithful
+    /// `SleighBase::getRegisterName` port (sleighbase.cc:144-168) — and the
+    /// flat table stays as the fallback for fixture ScopeLocals without an
+    /// Architecture.
     pub fn get_register_name(
         &self,
-        _space: crate::space::AddressSpace,
+        space: crate::space::AddressSpace,
         offset: u64,
         size: i32,
     ) -> String {
+        if let Some(arch) = &self.arch_lookup {
+            return arch.get_register_name(space, offset, size);
+        }
         self.register_names
             .get(&(offset, size))
             .cloned()
             .unwrap_or_default()
+    }
+
+    // RUGRA-GLUE: set_arch_lookup (no Ghidra counterpart; Ghidra's
+    //   ScopeInternal holds the `glb` Architecture pointer from its
+    //   constructor (database.hh:688) and the getRegisterName calls in
+    //   ScopeInternal::buildVariableName (database.cc:2447/2454/2462/2472/
+    /// 2485) read glb->translate directly; Rugra's ScopeLocal is a plain
+    /// struct, so the Architecture handle is attached by the caller that
+    /// owns both).
+    /// Attach the Architecture whose `register_xref` answers register-name
+    /// lookups. Callers install this once at scope construction, before
+    /// any `build_variable_name` consumer runs.
+    pub fn set_arch_lookup(&mut self, arch: Option<std::sync::Arc<crate::arch::Architecture>>) {
+        self.arch_lookup = arch;
     }
 
     // RUGRA-GLUE: local_range_in_range (RangeList::inRange for the local window)

@@ -3576,7 +3576,7 @@ pub struct Database {
 ///   (`entry_offset`), and the symbol name for the symbol reference.
 /// - `Funcdata::spacebaseConstant` (funcdata.cc:363): `entry->getAddr()`
 ///   for the `extra` computation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct QueryContainerHit {
     /// Id of the scope whose entry answered (innermost wins; the C++
     /// `SymbolEntry*` carries its owning scope implicitly).
@@ -3602,6 +3602,12 @@ pub struct QueryContainerHit {
     /// For a TYPE_ARRAY Symbol: `((TypeArray *)type)->getBase()->isCharPrint()`
     /// (coreaction.cc:1156-1159). False for every other metatype.
     pub base_is_char_print: bool,
+    /// `entry->getSymbol()->getType()` as the shared Datatype handle —
+    /// `None` mirrors a Symbol whose type is not resolved yet. The
+    /// `spacebaseConstant` consumer (funcdata.cc:413-419) reads it for
+    /// `getTypePointerStripArray` and the typelock fold (B3-COREACTION-
+    /// CONSTANTPTR-0001 segment b).
+    pub symbol_type: Option<Arc<Datatype>>,
 }
 
 /// Observable projection of one `queryByName` match.
@@ -4063,6 +4069,7 @@ impl Database {
             all_flags: entry.get_all_flags(),
             type_metatype,
             base_is_char_print,
+            symbol_type: sym.dtype.clone(),
         })
     }
 

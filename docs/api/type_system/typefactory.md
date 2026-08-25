@@ -913,3 +913,16 @@ metadata.json}` + runner `tools/run_typefactory_codeflags_decode_oracle.sh`
 the throw survives exactly like the oracle's own prototype-decode
 failures; live ctor/dtor/`has_thisptr` flag observation is gated on the
 same port (TYPEFACTORY-CODEFLAGS-DECODE-0001 residual).
+
+
+## 2026-08-25：spacebase 类型携带 scope 快照（B3-COREACTION-CONSTANTPTR-0001 段(b)）
+
+- `TypeFactory::symboltab: Option<Arc<RwLock<Database>>>`（新字段，两构造器
+  初始化 None）+ `set_spacebase_scope_source(db)`：Ghidra 的
+  `TypeSpacebase::getMap` 每次 `glb->symboltab->getGlobalScope()` 动态解析
+  （type.cc:2935-2945）；Rugra 类型不携带 Architecture，改为构造时快照
+  （符号图在反编译前安装、期间稳定，与 oracle 可观察答案一致）。
+- `get_type_spacebase` 在句柄存在时把 global scope 克隆进新 spacebase 产品
+  的 `scope` 字段——`TypeSpacebase::get_sub_type`（RulePtrsubUndo 的
+  isPtrsubMatching 守卫）由此获得 subtype 答案。去重键不变
+  （`__spacebase_{ws}_{frame}`），首次构造定格快照。

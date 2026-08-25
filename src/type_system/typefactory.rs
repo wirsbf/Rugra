@@ -101,6 +101,17 @@ pub struct TypeFactory {
     /// architecture.cc:1422). Rugra stores it on the factory because the
     /// factory has no Architecture handle yet.
     max_base_type_size: usize,
+
+    /// The symbol-table snapshot global spacebases resolve through. Ghidra's
+    /// `TypeSpacebase::getMap` reads `glb->symboltab->getGlobalScope()`
+    /// dynamically (type.cc:2935-2945); Rugra's types carry no Architecture,
+    /// so the factory holds the Database handle here and clones the global
+    /// scope into each new spacebase product (the scope graph is installed
+    /// before decompilation and stable during it, matching the oracle's
+    /// observable answers). Consumers: `TypeSpacebase::get_sub_type` (the
+    /// RulePtrsubUndo isPtrsubMatching guard) and the spacebase typing of
+    /// `Funcdata::spacebase_constant` (B3-COREACTION-CONSTANTPTR-0001 b).
+    symboltab: Option<std::sync::Arc<std::sync::RwLock<crate::database::Database>>>,
 }
 
 /// Which core-unknown registration path the architecture uses. Ghidra
@@ -165,6 +176,7 @@ impl TypeFactory {
             // factory default because TypeFactory reads it from `glb` at
             // type.cc:3652.
             max_base_type_size: 10,
+            symboltab: None,
         };
         factory.init_core_types_flavor(flavor);
         factory
@@ -205,6 +217,7 @@ impl TypeFactory {
             enum_type: TypeMetatype::Unknown,
             align_map: Vec::new(),
             max_base_type_size: 10,
+            symboltab: None,
         };
         // Ghidra: type.cc:3118 `clearCache();` is the constructor's only call.
         factory.clear_cache();
@@ -1754,11 +1767,34 @@ impl TypeFactory {
             fd: None,
             spaceid,
             localframe: frame,
-            scope: None,
+            // The getMap projection (type.cc:2935-2945 reads
+            // glb->symboltab->getGlobalScope() dynamically): clone the live
+            // global scope — installed before decompilation and stable
+            // during it — so get_sub_type answers subtype queries with the
+            // oracle's answers (B3-COREACTION-CONSTANTPTR-0001 b).
+            scope: self.symboltab.as_ref().and_then(|db| {
+                db.read()
+                    .unwrap()
+                    .get_global_scope()
+                    .map(|scope| std::sync::Arc::new(scope.clone()))
+            }),
         };
         let dt = Arc::new(Datatype::Spacebase(sb));
         self.types.insert(key, dt.clone());
         dt
+    }
+
+    // RUGRA-GLUE: set_spacebase_scope_source (no Ghidra counterpart; Ghidra
+    // resolves the map dynamically through the Architecture on every
+    // TypeSpacebase::getMap call, Rugra snapshots it at construction).
+    /// Register the Database whose global scope new spacebase types resolve
+    /// through — the driver/fixture attaches this right after installing the
+    /// symbol graph and before the first `get_type_spacebase` call.
+    pub fn set_spacebase_scope_source(
+        &mut self,
+        db: Option<std::sync::Arc<std::sync::RwLock<crate::database::Database>>>,
+    ) {
+        self.symboltab = db;
     }
 
     // RUGRA-GLUE: legacy named relative-pointer convenience. It predates the

@@ -13352,7 +13352,18 @@ impl RulePtrsubUndo {
         match ptrto.get_metatype() {
             TypeMetatype::Spacebase => {
                 let newoff = off.wrapping_mul(wordsize);
-                let (sub, sub_off) = ptrto.get_sub_type(newoff);
+                // type.cc:1127's ptrto->getSubType(newoff,&newoff) is a
+                // VIRTUAL dispatch — TypeSpacebase overrides it (type.cc
+                // :2947-2969, querying the indexed scope). Rugra's borrowed
+                // Datatype::get_sub_type cannot expose the scope-owned Arc
+                // through the shared signature, so the spacebase arm
+                // dispatches to the variant override directly.
+                let (sub, sub_off) =
+                    if let Datatype::Spacebase(sb) = ptrto.as_ref() {
+                        sb.get_sub_type(newoff)
+                    } else {
+                        unreachable!("metatype/dispatch agreement")
+                    };
                 match sub {
                     None => false,
                     Some(s) => {
@@ -13361,7 +13372,7 @@ impl RulePtrsubUndo {
                         if extra < 0 || extra >= s.get_size() as i64 {
                             // type.cc:1134 — testForArraySlack allows PTRSUB into
                             // an arrayed component even when extra is OOB.
-                            if !Self::test_for_array_slack(s, extra) {
+                            if !Self::test_for_array_slack(s.as_ref(), extra) {
                                 return false;
                             }
                         }

@@ -461,6 +461,16 @@ struct DecompileRequest {
     string_entries: Vec<(u64, String)>,
     prototype_entries: Vec<(u64, usize)>,
     flow_override_entries: Vec<FlowOverrideRecord>,
+    /// B3-COREACTION-CONSTANTPTR-0001 (b): the a0 `.rodata` DAT label layer
+    /// (address, name) the worker installs into the Database symbol graph
+    /// (add_symbol_mapped on the global scope), so ActionConstantPtr's
+    /// `queryContainer(rampoint,1,Address())` (coreaction.cc:1151) fires on
+    /// hugehelp's alias constants.
+    rodata_dat_entries: Vec<(u64, String)>,
+    /// `.rodata` section extent `(base_vaddr, size)` — the readonly property
+    /// range source (`Database::setPropertyRange(Varnode::readonly, ...)`,
+    /// the loader registration channel of architecture.cc:1371-1383).
+    rodata_span: Option<(u64, u64)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -941,12 +951,37 @@ fn collect_external_imports(elf: &goblin::elf::Elf) -> Vec<ExternalImport> {
     imports
 }
 
-// RUGRA-GLUE: the EXTERNAL-block base in normalized (ELF-relative)
-// coordinates: the 0x1000-aligned start of the range after the last
-// allocatable section byte, mirroring ElfProgramBuilder.allocateLinkageBlock
-// with ElfLoadAdapter.getLinkageBlockAlignment() == 0x1000
-// (ElfLoadAdapter.java:445). For the locked curl input: .bss ends at
-// 0x18680 -> base 0x19000.
+// RUGRA-GLUE (B3-COREACTION-CONSTANTPTR-0001 b): builds the vaddr-keyed
+// memory image the worker's loader-backed StringManager reads through — the
+// PT_LOAD segments laid out at their virtual addresses, NOBITS (.bss)
+// zero-filled, exactly what Ghidra's loader hands getStringData
+// (stringmanage.cc:427-475 loadFill loop).
+fn worker_memory_load_image(elf: &goblin::elf::Elf, buffer: &[u8]) -> rugra::loadimage::RawLoadImage {
+    const PT_LOAD: u32 = 1;
+    let mut top = 0usize;
+    for ph in elf.program_headers.iter() {
+        if ph.p_type == PT_LOAD {
+            top = top
+                .max((ph.p_vaddr as usize).saturating_add(ph.p_memsz as usize));
+        }
+    }
+    let mut image = vec![0u8; top];
+    for ph in elf.program_headers.iter() {
+        if ph.p_type == PT_LOAD {
+            let vaddr = ph.p_vaddr as usize;
+            let file_size = ph.p_filesz as usize;
+            let src = buffer
+                .get(ph.p_offset as usize..(ph.p_offset as usize).saturating_add(file_size))
+                .unwrap_or(&[]);
+            let dst_end = vaddr.saturating_add(src.len()).min(top);
+            if vaddr < dst_end {
+                image[vaddr..dst_end].copy_from_slice(&src[..dst_end - vaddr]);
+            }
+        }
+    }
+    rugra::loadimage::RawLoadImage::from_bytes("curl", 0, image)
+}
+
 fn external_block_base(elf: &goblin::elf::Elf) -> u64 {
     const SHF_ALLOC: u64 = 0x2;
     const LINKAGE_BLOCK_ALIGNMENT: u64 = 0x1000;
@@ -1613,15 +1648,45 @@ impl rugra::pcodeparse::SleighSymbolLookup for WorkerSpecHost {
 // default SLEIGH asset path) instead of being carried and
 // fingerprint-verified inside the worker request.
 fn worker_architecture() -> Result<std::sync::Arc<rugra::arch::Architecture>, String> {
+    worker_architecture_with_program_db(None, None)
+}
+
+// B3-COREACTION-CONSTANTPTR-0001 (b): the decompile entry hands the
+// first-init builder the Program-DB symbol graph (the Funcdata query
+// channel's data source: Architecture::symboltab owns the Database in
+// Ghidra) and the loader-backed string manager source (Ghidra's
+// buildStringManager reads through the loader, architecture.cc:1391-1401
+// — buildLoader precedes buildStringManager). One worker process serves
+// one job, so the first initializer fixes these for the process.
+fn worker_architecture_with_program_db(
+    symboltab: Option<std::sync::Arc<std::sync::RwLock<rugra::database::Database>>>,
+    loader: Option<std::sync::Arc<dyn rugra::loadimage::LoadImage>>,
+) -> Result<std::sync::Arc<rugra::arch::Architecture>, String> {
     static CACHE: std::sync::OnceLock<
         Result<std::sync::Arc<rugra::arch::Architecture>, String>,
     > = std::sync::OnceLock::new();
-    match CACHE.get_or_init(|| {
+    if let Some(cached) = CACHE.get() {
+        return cached.clone();
+    }
+    let built = build_worker_architecture(symboltab, loader);
+    // One initializer per worker process (one job per process); a losing
+    // racing writer is impossible by construction, the set result is still
+    // checked for symmetry with the OnceLock contract.
+    let _ = CACHE.set(built.clone());
+    built
+}
+
+fn build_worker_architecture(
+    symboltab: Option<std::sync::Arc<std::sync::RwLock<rugra::database::Database>>>,
+    loader: Option<std::sync::Arc<dyn rugra::loadimage::LoadImage>>,
+) -> Result<std::sync::Arc<rugra::arch::Architecture>, String> {
+    (|| {
         let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
             .map_err(|error| format!("unable to read compiler spec: {error}"))?;
         let sleigh = rugra::sleigh_ffi::SleighCtx::new()
             .ok_or_else(|| "unable to initialize SLEIGH register catalog".to_string())?;
         let mut registers = HashMap::new();
+        let mut register_xref: Vec<(i32, u64, i32, String)> = Vec::new();
         for index in 0..sleigh.num_registers() {
             let Some((name, space, offset, size)) = sleigh.register_info(index) else {
                 continue;
@@ -1629,6 +1694,12 @@ fn worker_architecture() -> Result<std::sync::Arc<rugra::arch::Architecture>, St
             let Ok(space_id) = u8::try_from(space) else {
                 continue;
             };
+            // B3-VARMAP-REGNAME-0001: the same enumeration feeds the
+            // Architecture register_xref (SleighBase::getAllRegisters →
+            // varnode_xref, sleighbase.cc:182-186) that
+            // Architecture::get_register_name (sleighbase.cc:144-168) walks
+            // for ScopeInternal::buildVariableName's register queries.
+            register_xref.push((space, offset, size, name.to_string()));
             registers.insert(
                 name.to_string(),
                 rugra::fspec::VarnodeData {
@@ -1658,6 +1729,16 @@ fn worker_architecture() -> Result<std::sync::Arc<rugra::arch::Architecture>, St
         store.register_tag(&root);
         let mut arch = rugra::arch::Architecture::new();
         arch.archid = "x86:LE:64:default".to_string();
+        // B3-VARMAP-REGNAME-0001: install the SLEIGH register
+        // cross-reference (SleighBase::buildXrefs → varnode_xref,
+        // sleighbase.cc:79-96, materialized through getAllRegisters at
+        // :182-186) so Architecture::get_register_name — the
+        // sleighbase.cc:144-168 port ScopeLocal::get_register_name
+        // delegates to — answers with the oracle's register names
+        // (XMM0_Qa at register:0x110, CW at 0x3c, ...), replacing the
+        // former 25-entry hardwired GPR table whose gaps produced
+        // `in_register_00000110`-style raw leaks.
+        arch.set_register_xref(register_xref);
         // Ghidra: sleigh_arch.cc:241-245 SleighArchitecture::buildCommentDB
         // (UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ①). Architecture::init
         // (architecture.cc:1391-1414) calls buildCommentDB at :1400, before
@@ -1731,11 +1812,38 @@ fn worker_architecture() -> Result<std::sync::Arc<rugra::arch::Architecture>, St
         if arch.defaultfp.is_none() {
             return Err("No default prototype specified".to_string());
         }
+        // B3-COREACTION-CONSTANTPTR-0001 (b): Ghidra's Architecture owns its
+        // symboltab, loader-backed string manager and TypeFactory from init
+        // (architecture.cc:1391-1414: buildTypeFactory -> buildStringManager
+        // precede any Funcdata). Install the query-channel Database (the
+        // Funcdata query_container_parent_scope data source), the loader and
+        // its StringManager (ruleaction.cc:7375's isString backend), and the
+        // canonical TypeFactory (TYPE-WIRING-0001) so spacebaseConstant's
+        // output typing (funcdata.cc:365-366/415) resolves through the same
+        // factory the printer observes.
+        if let Some(db) = symboltab.clone() {
+            arch.symboltab = Some(db);
+        }
+        if let Some(loader) = loader {
+            arch.loader = Some(loader);
+            arch.build_string_manager();
+        }
+        let types = arch.ensure_types();
+        // The raw shared_default factory starts with an empty alignment
+        // map; the arch-attach guard (type.cc: "if (alignMap.empty())
+        // setDefaultAlignmentMap()", mirrored at typefactory.rs:2437) runs
+        // when a spec-decoded factory meets its Architecture. The worker's
+        // canonical factory takes the same default map before any
+        // getBase/findAdd consumer runs. The spacebase scope source gives
+        // TypeSpacebase::get_sub_type the global scope snapshot Ghidra
+        // resolves dynamically (getMap, type.cc:2935-2945).
+        {
+            let mut tf = types.write().unwrap();
+            tf.set_default_alignment_map();
+            tf.set_spacebase_scope_source(symboltab.clone());
+        }
         Ok(Arc::new(arch))
-    }) {
-        Ok(arch) => Ok(arch.clone()),
-        Err(message) => Err(message.clone()),
-    }
+    })()
 }
 
 // RUGRA-GLUE: reconstructs the original per-function prototype pre-pass inside the cancellable worker.
@@ -1834,6 +1942,109 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         .get(section_start..section_end)
         .ok_or_else(|| "ELF section range is outside the input image".to_string())?;
 
+    // B3-COREACTION-CONSTANTPTR-0001 (b): the Program-DB symbol graph
+    // ActionConstantPtr queries (coreaction.cc:1151 via the Funcdata
+    // query-channel). Ghidra's platform analyzers populate the global scope
+    // before decompilation: the ASCII strings analyzer types discovered
+    // strings as char arrays, referenced-but-untyped data gets DAT labels
+    // with undefined type. The driver mirrors that split using the a0
+    // `.rodata` DAT label layer: string-classified addresses (the request's
+    // string_entries, already gated by stringmanage.cc's UTF-8
+    // checkCharacters) carry `char[len]`, everything else stays untyped.
+    // The `.rodata` extent registers the readonly property range
+    // (`Database::setPropertyRange(Varnode::readonly, ...)`, the loader
+    // channel of architecture.cc:1371-1383) RulePtrsubCharConstant /
+    // PrintC::pushPtrCharConstant consume via isReadOnly.
+    let program_db: Option<std::sync::Arc<std::sync::RwLock<rugra::database::Database>>> =
+        if request.rodata_dat_entries.is_empty() {
+            None
+        } else {
+            let db_arc = std::sync::Arc::new(std::sync::RwLock::new(
+                rugra::database::Database::new(false),
+            ));
+            let string_addrs: HashMap<u64, &String> = request
+                .string_entries
+                .iter()
+                .map(|(address, value)| (*address, value))
+                .collect();
+            {
+                let mut db = db_arc.write().unwrap();
+                let global = db.global_scope_id;
+                // The global scope owns the whole ram space (cspec <global>;
+                // stack locals live in function-local scopes Ghidra attaches
+                // later, none exist in this projection).
+                if let Some(rng) = rugra::address::Range::new(
+                    Address::new(0),
+                    Address::new(u64::MAX),
+                ) {
+                    db.add_range(global, rng);
+                }
+                let mut typed = 0usize;
+                // The strings-analyzer split: untyped referenced data gets
+                // the DAT label's undefined1 (the platform default for byte
+                // labels); string-classified addresses get char[len+1].
+                let undefined1 = rugra::type_system::typefactory::TypeFactory::shared_default()
+                    .write()
+                    .unwrap()
+                    .get_base(1, rugra::type_system::datatype::TypeMetatype::Unknown);
+                for (address, name) in &request.rodata_dat_entries {
+                    let dtype = string_addrs.get(address).map(|value| {
+                        // strings analyzer product: char array over the run
+                        // including its NUL terminator.
+                        let char_base = rugra::type_system::datatype::TypeBase::new_char(
+                            "char".to_string(),
+                            rugra::type_system::datatype::TypeMetatype::Int,
+                        );
+                        let len = value.len() + 1;
+                        std::sync::Arc::new(rugra::type_system::datatype::Datatype::Array(
+                            rugra::type_system::datatype::TypeArray {
+                                base: rugra::type_system::datatype::TypeBase::new(
+                                    String::new(),
+                                    len,
+                                    rugra::type_system::datatype::TypeMetatype::Array,
+                                ),
+                                array_of: std::sync::Arc::new(
+                                    rugra::type_system::datatype::Datatype::Base(char_base),
+                                ),
+                                num_elements: len,
+                            },
+                        ))
+                    });
+                    if dtype.is_some() {
+                        typed += 1;
+                    }
+                    let dtype =
+                        dtype.or_else(|| undefined1.clone());
+                    db.add_symbol_mapped(global, name, dtype, Address::new(*address), 1);
+                }
+                if let Some((base, size)) = request.rodata_span {
+                    if let Some(rng) = rugra::address::Range::new(
+                        Address::new(base),
+                        Address::new(base + size - 1),
+                    ) {
+                        db.set_property_range(
+                            rugra::database::symbol_flags::READONLY,
+                            rng,
+                        );
+                    }
+                }
+                eprintln!(
+                    "[PREPASS] {} program-DB symbol graph: {} .rodata entries ({} string-typed) + readonly range",
+                    target.name,
+                    request.rodata_dat_entries.len(),
+                    typed
+                );
+            }
+            Some(db_arc)
+        };
+    // The loader-backed string manager source: the contiguous memory image
+    // of the PT_LOAD segments (Ghidra's loader reads vaddr-keyed; .bss is
+    // zero-filled NOBITS).
+    let program_loader: Option<std::sync::Arc<dyn rugra::loadimage::LoadImage>> =
+        Some(std::sync::Arc::new(worker_memory_load_image(elf, &request.binary_image)));
+    let worker_arch =
+        worker_architecture_with_program_db(program_db, program_loader)?;
+
     let debug_db = DebugPrototypeDatabase::parse_elf(&request.binary_image)
         .map_err(|error| format!("unable to import DWARF prototypes: {error}"))?;
     let debug_globals = DebugGlobalDatabase::parse_elf(&request.binary_image)
@@ -1861,7 +2072,9 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // the DWARF/PLT prototype overlays below — the named-ctor model binding
     // (FuncProto::setScope -> setModel(defaultfp)) rides on it, so an overlay
     // can lock the prototype only after a model is in place.
-    fd.set_arch(worker_architecture()?);
+    // B3-COREACTION-CONSTANTPTR-0001 (b): the architecture built above with
+    // the Program-DB symbol graph + loader-backed StringManager.
+    fd.set_arch(worker_arch);
     // FLOW-SHAREDRETURN-0001: the controller supplies the out-of-band
     // `<flowoverridelist>` projection for exactly this function. Seed it
     // before FlowInfo construction because Ghidra's constructor caches
@@ -2088,6 +2301,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         if let Err(err) = db.perform_action("decompile", &mut fd_write) {
             eprintln!("[DRIVER] {} pipeline ABORTED: {:?}", target.name, err);
         }
+
     }
     eprintln!("[STEP] {} action done {:?}", target.name, t0.elapsed());
 
@@ -2825,6 +3039,9 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     // query_container channel (see scan_rodata_dat_entries); deliberately
     // NOT routed into symbol_entries in this slice.
     let mut rodata_dat_entries: BTreeMap<u64, String> = BTreeMap::new();
+    // B3-COREACTION-CONSTANTPTR-0001 (b): `.rodata` extent for the readonly
+    // property range (the a0 layer's reserved consumers).
+    let mut rodata_span: Option<(u64, u64)> = None;
     let mut plt_symbols: HashMap<u64, String> = HashMap::new();
 
     {
@@ -2956,6 +3173,10 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                     let rodata = &buffer[start..end];
                     let base_vaddr = header.sh_addr;
                     string_table = scan_rodata_strings(rodata, base_vaddr);
+                    // B3-COREACTION-CONSTANTPTR-0001 (b): the `.rodata`
+                    // extent backs the readonly property range installed on
+                    // the worker Database.
+                    rodata_span = Some((base_vaddr, header.sh_size));
                     // Segment-(a0) Program-DB layer: synthetic .rodata DAT
                     // labels reserved for the (a1) query_container wiring.
                     rodata_dat_entries =
@@ -3256,6 +3477,14 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                     .filter(|record| record.function_address == func.vaddr)
                     .copied()
                     .collect(),
+                // B3-COREACTION-CONSTANTPTR-0001 (b): the a0 DAT layer rides
+                // the request so the worker can install the Database symbol
+                // graph ActionConstantPtr queries.
+                rodata_dat_entries: rodata_dat_entries
+                    .iter()
+                    .map(|(&address, name)| (address, name.clone()))
+                    .collect(),
+                rodata_span,
             },
         };
         let direct_output = if matches!(mode, DriverMode::CompareFunctions(_)) {

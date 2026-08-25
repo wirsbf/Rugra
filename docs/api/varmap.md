@@ -159,7 +159,12 @@ Clone 用于 printc 从 `fd.scope` 复用）。
 `proto_local_range: Vec<(first,last)>`（**原型自身 localRange** 缓存——buildVariableName 的门，
 varmap.cc:555；正偏移参数在并集内但不在本窗口，命名落入 ScopeInternal 分支）、`min_param_offset`/
 `max_param_offset`（markNotMapped parameter=true 更新，varmap.cc:519-524）、`stack_grows_negative`、
-`register_names`（Translate::getRegisterName 表，translate.hh:380 的调用方装填桥）。
+`register_names`（Translate::getRegisterName 表，translate.hh:380 的调用方装填桥——fixture 回退路径）、
+`arch_lookup: Option<Arc<Architecture>>`（生产路径：Ghidra ScopeInternal 自带 `glb` 指针，
+database.cc:2447/2454/2462/2472/2485 的 getRegisterName 读 `glb->translate`；Rugra 的
+ScopeLocal 是 plain struct，由 `set_arch_lookup` 在 scope 构造时挂 Architecture，
+`get_register_name` 优先委派 `Architecture::get_register_name`——sleighbase.cc:144-168
+的忠实端口，B3-VARMAP-REGNAME-0001）。
 
 ## 当前限制
 
@@ -173,7 +178,7 @@ varmap 算法层（RangeHint/AliasChecker/MapState/ScopeLocal）已 1:1 对齐 G
 - derive_boundaries 的 direction==-1（正向增长栈）分支无 fixture 驱动（fixture 栈为负增长；可构造分歧输入需正向增长 SpacebaseSpace）
 - TYPE_PARTIALSTRUCT/PARTIALUNION 在 addFixedType 的处理（Rugra 无此元类型）
 - buildDefaultName 的代表 Varnode 分支（database.cc:1759-1771）已移植但无 fixture 驱动（需活 Funcdata/HighVariable；绑定 ActionNameVars caller 闭包）
-- 真实 Translate 寄存器表接入 ScopeLocal::register_names（生产管线 Architecture 桥接待做）
+- ~~真实 Translate 寄存器表接入 ScopeLocal::register_names（生产管线 Architecture 桥接待做）~~ → 2026-08-25 B3-VARMAP-REGNAME-0001 已完成：SLEIGH 全量注册名表（`SleighBase::getAllRegisters`，sleighbase.cc:182-186）由 driver 装入 `Architecture::register_xref`，`ScopeLocal::set_arch_lookup` 挂 Architecture 后 `get_register_name` 委派 `Architecture::get_register_name`（sleighbase.cc:144-168 忠实端口：upper_bound+iter-- = key≤probe 最大元素、覆盖判定 `off+size≥off'+size'`、回走 base-offset 断裂即空）；ActionRestructureVarnode 构造 scope 时接线，无 Architecture 的 fixture 走原 flat 表回退。E2E：`in_register_0000002x` 族裸名 40 处 → `in_RSP`/`in_R8`/`in_RDX`/`in_R9`（与 golden 的 database.cc:2470-2475 产物同形），唯一残差 `in_register_0000003c`（CW 2 字节 vs 4 字节 probe 不覆盖——lifter flag 读取结构性差异，登记 RULE 家族残差）
 - Symbol::symbolId 分配（database.cc:1813-1816）与 multiEntrySet 维护：Rugra LocalSymbol 单整映射模型暂无对应物
 
 测试：varmap::tests 26 个（compare/contain/reconcile/preferred/merge/absorb/const_absorbable/

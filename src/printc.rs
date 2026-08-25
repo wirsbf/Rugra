@@ -1926,9 +1926,108 @@ impl PrintC {
                         self.rpn_push_in(op_arc, op, 0, self.mods);
                         return;
                     }
-                    // Spacebase or other typed pointer: fall through to the
-                    // generic field-name rendering below (Rugra lacks the
-                    // TypeSpacebase symbol resolution at printc.cc:1078-1094).
+                    if meta == TypeMetatype::Spacebase {
+                        // printc.cc:1057-1097: TYPE_SPACEBASE arm — the offset
+                        // constant resolves to a global symbol (`&name`) or an
+                        // unnamed location. symbol = op->getIn(1)->getHigh()
+                        // ->getSymbol() (the linkSymbolReference attachment,
+                        // variable.cc:419-432); Rugra's ActionNameVars namerec
+                        // is a registered no-op (FUNCDATA-LINKSYMBOL residual),
+                        // so the print-side stand-in is the same container
+                        // query linkSymbolReference issues (queryContainer at
+                        // the global scope, empty usepoint).
+                        let mut valueon_here = valueon;
+                        let mut arrayvalue = false;
+                        let mut symbol: Option<String> = None;
+                        let mut symbol_type_array = false;
+                        {
+                            let hit = self.symboltab.as_ref().and_then(|db| {
+                                let db = db.read().unwrap();
+                                db.query_container(
+                                    db.global_scope_id,
+                                    crate::address::Address::new(in1const),
+                                    1,
+                                    // cc:1080 — sb->getAddress(...) resolves
+                                    // through the spacebase; base-0 ram makes
+                                    // the offset the address itself.
+                                    crate::address::Address::new(0),
+                                )
+                            });
+                            if let Some(hit) = hit {
+                                symbol = Some(hit.symbol_name.clone());
+                                symbol_type_array =
+                                    hit.type_metatype == TypeMetatype::Array;
+                            }
+                        }
+                        if symbol.is_some() {
+                            // cc:1062-1070: an ARRAY symbol drops the '&'
+                            // (the value form uses [0]).
+                            if symbol_type_array {
+                                arrayvalue = valueon_here;
+                                valueon_here = true;
+                            }
+                            // TODO(PRINTC-SPACEBASE-TYPECODE-0001): oracle
+                            // cc:1068-1069's `TYPE_CODE → valueon = true`
+                            // (a function symbol drops the '&' as well) is
+                            // not implemented — the program-DB hit carries
+                            // only `type_metatype` and no CODE entries exist
+                            // in the driver's DAT layer, so the branch is
+                            // unreachable in this pipeline; registered in
+                            // ALIGNMENT_ROADMAP.md (printc module residuals).
+                        }
+                        // cc:1072-1076: EMIT &name / name.
+                        if !valueon_here {
+                            self.rpn_push_op(self.rpn_tok_addressof);
+                        }
+                        if symbol.is_none() {
+                            // cc:1078-1082: pushUnnamedLocation(addr, ...) —
+                            // `0x<hex>` of the spacebase-resolved address.
+                            let addr_text = format!("0x{:x}", in1const);
+                            let unnamed = crate::printlanguage::Atom::with_field(
+                                &addr_text,
+                                crate::printlanguage::TagType::FieldToken,
+                                crate::printlanguage::SyntaxHighlight::NoColor,
+                                0,
+                                0,
+                                -1,
+                            );
+                            self.rpn_push_atom(&unnamed);
+                        } else {
+                            // cc:1083-1094: pushSymbol(symbol,...) at offset 0
+                            // (the exact-hit entry's own name; DAT_*/s_* labels
+                            // are already C-safe).
+                            // TODO(PRINTC-SPACEBASE-PARTIALSYM-0001): oracle
+                            // cc:1084-1093 — when `high->getSymbolOffset() !=
+                            // 0` the arm prints
+                            // pushPartialSymbol(symbol, off, 0, ...) (a
+                            // mid-symbol reference renders the accessed
+                            // sub-field, not the whole symbol name). Rugra's
+                            // container-query stand-in has no symbol-offset
+                            // channel (FUNCDATA-LINKSYMBOL residual), and the
+                            // ConstantPtr path always constructs off==0
+                            // (newconst = origval - extra lands on the entry
+                            // start), so the branch is unreachable in this
+                            // pipeline; registered in ALIGNMENT_ROADMAP.md
+                            // (printc module residuals).
+                            let sym_atom = crate::printlanguage::Atom::with_field(
+                                &symbol.unwrap(),
+                                crate::printlanguage::TagType::FieldToken,
+                                crate::printlanguage::SyntaxHighlight::NoColor,
+                                0,
+                                0,
+                                -1,
+                            );
+                            self.rpn_push_atom(&sym_atom);
+                        }
+                        if arrayvalue {
+                            // cc:1095-1096: push_integer(0,...) inside the
+                            // subscript — `name[0]`.
+                            self.emit.print("[0]");
+                        }
+                        return;
+                    }
+                    // Other typed pointer: fall through to the generic
+                    // field-name rendering below.
                 }
                 // printc.cc:1139-1142 throws "PTRSUB off of non structured
                 // pointer type"; Rugra cannot throw, so fall back to the

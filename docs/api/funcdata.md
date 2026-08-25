@@ -1589,6 +1589,30 @@ Funcdata 现在可经 `arch.symboltab` 走忠实 `Database`/`Scope` 查询图，
 - 验证：`tests/oracle/cptr_query_channel_1204` 双侧 fixture（真实 Ghidra
   12.0.4 oracle）；`cargo check --lib` 绿。
 
+## 2026-08-25：spacebase_constant 激活与 sz/extra/输出类型修复（B3-COREACTION-CONSTANTPTR-0001 段(b)）
+
+死代码激活 + 两处语义错修正（funcdata.cc:360-462 逐行对齐）：
+
+- **签名扩展**：`(op, slot, entry: &QueryContainerHit, spaceid: AddressSpace,
+  rampoint, origval, origsize)` — `entry` 是 Ghidra `SymbolEntry *entry` 的
+  可观察投影（`getAddr()` 供 extra、`getSymbol()` 供输出类型/typelock）；
+  `spaceid` 携带解析空间（cc:363 的 `rampoint.getAddrSize()` 与 cc:370 的
+  wordSize 归一都读它——legacy Address 无空间，ADDRESS-0001 残留经参数传递）。
+- **sz 修正**（原 `leading_zeros` 推导恒得 8 的臆造式删除）：`sz =
+  spaceid.addr_size()`（空间地址大小，x86-64 ram=8，非常量大小）。
+- **extra 修正**（原硬编码 0）：`rampoint - entry.entry_addr` 后按 wordsize
+  byteToAddress（cc:369-370）；≠0 时走 INT_ADD 链（cc:420-434）。
+- **输出类型链**（cc:413-419）：entrytype（symbol_type，缺省 getBase(sz,
+  Unknown)）→ `getTypePointerStripArray`（type.cc:3849-3858：strip + 剥一层
+  ARRAY）→ `update_type_lock(ptr, typelock, false)`；typelock 取 symbol
+  TYPELOCK 位、Unknown 折叠为 false。
+- **spacebase_vn 类型**（cc:365-366/391-393）：`get_type_spacebase` +
+  `get_type_pointer` 后 `update_type_lock(ptr, true, true)`——此前仅置
+  SPACEBASE flag，RulePtrsubCharConstant 的 sbType 门恒 false。
+- **COPY 复用**：`set_or_insert_input`（cc:382 insertInput(1)+opSetInput 对
+  的借用安全形态，瞬时 NULL 不可观察）。
+- 验证：`tests/oracle/cptr_b_1204` 双侧 fixture MATCH（17 records）。
+
 ## 2026-08-25：newVarnode 属性尾接入 INDIRECT 构造器（FUNCDATA-NEWVARNODE-FLAGS-TAIL-0001）
 
 R9-F2 登记的两处租约外欠应用收口：`Funcdata::newIndirectOp` /

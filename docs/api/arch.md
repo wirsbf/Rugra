@@ -427,4 +427,43 @@ ActionConstbase（coreaction.rs:5477 stub）激活在 setcasts 租约释放后�
   双消费者共享缓存、DataUnavail/无终止符/opaque、内部串 CRC hash）。
 - 残差：消费侧（ruleaction:7375 / printc:1537 / funcdata 内部串 / driver
   string_table 退役）为 TYPEOP-LOCALTYPE-DISPATCH-0001 D3 接线。
+
+## SLEIGH 注册名交叉表（B3-VARMAP-REGNAME-0001）
+
+- `Architecture::register_xref: BTreeMap<(i32,u64,i32),String>`：键
+  `(space index, offset, -size)` 精确镜像 `SleighBase::varnode_xref` 的
+  `map<VarnodeData,string>` 排序（`VarnodeData::operator<`，
+  pcoderaw.hh:67-71：space index → offset → **大 size 在前**，故第三元取
+  `-size` 升序）。装填源 = shim 的 `rugra_sleigh_register_info` 枚举
+  （`SleighBase::getAllRegisters`，sleighbase.cc:182-186 的 varnode_xref 拷贝），
+  `set_register_xref` 以 `or_insert` 保留首插——`varnode_xref.insert` 的
+  no-overwrite 语义（sleighbase.cc:91，冲突对走 errorPairs）。
+- `Architecture::get_register_name(base, off, size)`：
+  `SleighBase::getRegisterName`（sleighbase.cc:144-168）忠实端口。
+  决定性语义：`upper_bound(sym)+iter--` 的净位置 = **key ≤ probe 的最大元素**
+  （Rust `range(..=probe).next_back()`；`iter==begin()` = 空区间 = ""）；
+  命中条目先过 space 相等门，再过覆盖门
+  `point.offset+point.size >= off+size`（u64 wrapping，镜像 C++ uintb 回绕）；
+  不覆盖时从命中条目**每步恰好回退一个前驱**（`range(..current)` 为 RangeTo
+  排除端点，`next_back()` 即 oracle 的 `--iter`；R-RAWQUAR F1 修复：首版多余
+  丢弃一次 `next_back()` 导致隔一取一），遇到 space 变化或 base-offset 变化
+  即 ""（cc:160-166）。精确命中走本函数（同 size 条目自然取到自身）；子寄存器
+  覆盖取**紧邻前驱中首个覆盖者**（AL 探 (reg,0x1,1)：AL 不覆盖→EAX 覆盖→
+  "EAX"，与复核 C++ 复刻一致）。
+- `Architecture::get_exact_register_name`（sleighbase.cc:170-180）：
+  `find` 精确命中或 ""。
+- 消费链：`ScopeLocal::get_register_name` 委派（database.cc:2447/2454/2462/
+  2472/2485 的 `glb->translate` 调用位——unaff_/persist/irregular-input/
+  addrtied/extraout 五个命名分支的寄存器名源），driver
+  `build_worker_architecture` 在 cspec 解析前装入全表（1440 项，含
+  XMM0_Qa@0x110:16、CW@0x3c:2、EFLAGS@0x2 等）。单测
+  `test_get_register_name_boundaries`：精确命中/子寄存器紧邻前驱覆盖
+  （EAX 判别）/两步回走成功（S8）/假性漏查判别（Q8）/越界回走断裂/
+  跨 space/空表/16-vs-8 字节同 offset 选择。
+- E2E 证据（2026-08-25，本 worktree）：修前硬编码 25 项 GPR 表缺
+  XMM/CW/EFLAGS → `in_register_00000110` 等 40 处；接入后全量 1440 项表
+  → `in_RSP`(21)/`in_R8`(7)/`in_RDX`/`in_R9`（与 golden 的
+  database.cc:2470-2475 irregular-input 产物同通道同形；golden 自身 in_R8 2 +
+  in_RCX 6 于 helpf/parseconfig）。差分门禁：defects=0、skeleton 与修前
+  逐函数一致（纯改名零结构变化，compare 名字归一化验证）。
 <!-- annotation-pass: 2026-08-24 -->
