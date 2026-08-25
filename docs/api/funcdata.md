@@ -1736,3 +1736,33 @@ Rugra 通道（保真序）：
 
 配套 driver：`curl_decompile.rs` worker_architecture 播种 `symboltab`
 （DWARF DebugGlobalDatabase + ELF STT_OBJECT）。
+### removeUnreachableBlocks 忠实重写 + descend2Undef 接线（2026-08-25，HTTPD-STRIPPREFIX-ADDDESCEND-0001）
+- `remove_unreachable_blocks(issuewarning, checkexistence)` 完整对齐
+  funcdata_block.cc:346-393：checkexistence 快扫（首个非入口且无 immed_dom
+  的块）或缓存 `blocks_unreachable` 标志门控；`collect_reachable`
+  （block.cc:2154）取不可达集；逐块 setDead（+每块头警告）→
+  `branch_remove_internal(blk,0)` 清出边（销毁分支 op + 修补后继 phi）→
+  `block_remove_internal(blk, true)`（descend2Undef + **全部** op 销毁）→
+  `structure_reset()`。
+- 删除两个自创降级：① "unreachable>=5 且 >5% 则跳过"保守门禁（Ghidra 无
+  此门禁；正是 httpd ap_stripprefix/ap_ht_time/ap_update_vhost_from_headers/
+  ap_getword 的 "Free varnode has multiple descendants" panic 根因——不可达
+  块里的活 op 继续读 free varnode，RuleCondNegate 的 op_bool_negate 二次
+  addDescend 即炸）；② "有外部后代的 op 保留 alive"的 mark_dead 近似
+  （Ghidra blockRemoveInternal(true) 销毁全部 op，被搁浅的读先经
+  descend2Undef 换成 0xBADDEF 常量）。
+- `descend2_undef`（funcdata_varnode.cc:543-583）修死-parent 判定：改查
+  块级 DEAD flag（cc:558），原 `parent.is_none()` 近似在"先全标 dead 再逐块
+  删"的顺序下漏跳死块读者；MULTIEQUAL 臂经 slot 前驱块尾插 COPY、INDIRECT
+  臂前插 COPY、普通 op 直插常量。
+- `block_remove_internal` 不可达臂接线 `descend2_undef`（cc:304-310 的
+  undef 返回值控制一次性警告），移除 RUGRA-GAP 注释。
+- `descendants_outside`（funcdata_block.cc:234-241）改查读者 op 的**父块**
+  DEAD flag（原查 op 自身 is_dead，删块序中恒 false → 误报）。
+- `move_out_edge` 忠实重写（block.cc:1439 moveOutEdge = replaceInEdge
+  block.cc:160-173）：捕获目标 in-slot i 后，对源块做
+  half_delete_out_edge(rev)（成对协议），目标**保留**槽位 i 重指向新源
+  （reverse_index=新源 size_out），新源 append 出边（rev=i）；原实现
+  "源出边原地改指 + 新目标 append 入边 + 旧目标 Vec::remove 入边"是单侧
+  滑动（其他源的 reverse_index 不修正）且仅 BlockBasic——ActionDoNothing/
+  RedundBranch 的 splice 早期即污染 bblocks。

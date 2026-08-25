@@ -665,3 +665,7 @@ callspec noret=1 + "Does not return" + noreturn halt；copy_flow_effects 单向
 E2E 零变化。hasModel（truncate case 的 setInternal 分歧）与 spec name
 （Ghidra CALLIND spec 名按地址派生 vs Rugra 继承 caller funcp 名，既有
 `setup_call_specs` 构造 quirk）在 fixture 中显式不投影并在 metadata 登记。
+
+### generateBlocks 的 removeUnreachableBlocks 参数（2026-08-25）
+- 调用改为 `remove_unreachable_blocks(false, true)`（issuewarning=false，
+  checkexistence=true 主动扫描），对齐 flow.cc:844。

@@ -2225,73 +2225,68 @@ impl Funcdata {
     /// Faithful to `BlockGraph::moveOutEdge` (block.cc). This redirects the
     /// edge by updating both the source's outgoing list and the old/new
     /// destinations' incoming lists.
+    // Ghidra: block.cc:1439 BlockGraph::moveOutEdge
+    /// Move an out-edge of `bb` (at `slot`) to `bbnew`. Faithful to
+    /// `BlockGraph::moveOutEdge` (block.cc:1439-1449): capture the target
+    /// `outbl` and its in-slot `i` from the edge's reverse_index, then run
+    /// `FlowBlock::replaceInEdge(i, bbnew)` on `outbl` (block.cc:160-173):
+    ///   - `oldb = outbl.in[i].point` (= bb);
+    ///   - `oldb->halfDeleteOutEdge(outbl.in[i].reverse_index)` — the paired
+    ///     removal of bb's out-half (slide + peer decrements);
+    ///   - the in-slot `i` on `outbl` is KEPT and re-pointed at `bbnew` with
+    ///     `reverse_index = bbnew.size_out()`;
+    ///   - `bbnew` gets a fresh out-edge appended with `reverse_index = i`.
+    /// The former Rugra version appended a new in-edge to `bbnew` and
+    /// `Vec::remove`d the old in-edge from `outbl` — a one-sided removal
+    /// that slid `outbl`'s in-list without decrementing the OTHER sources'
+    /// out-edge reverse_index entries (BLOCK-RECIPROCAL-OOB-0001), and only
+    /// handled BlockBasic peers.
     pub fn move_out_edge(
         &mut self,
         bb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         slot: usize,
         bbnew: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) {
-        // Get the old destination.
-        let old_dest = {
+        // cc:1444-1445: outbl = blold->getOut(slot); i = getOutRevIndex(slot).
+        let (outbl, i) = {
             let bb_rg = bb.read().unwrap();
-            bb_rg.get_out(slot).map(|e| e.point)
+            match bb_rg.get_out(slot) {
+                Some(e) => (e.point.clone(), e.reverse_index),
+                None => return,
+            }
         };
-        let Some(old_dest) = old_dest else { return };
-        // Update the source's outgoing edge to point to bbnew.
-        let rev_idx_new = bbnew.read().unwrap().size_in() as i32;
+        // replaceInEdge(i, blnew) on outbl (block.cc:160-173):
+        // cc:163: oldb = intothis[num].point; cc:164: its reverse_index.
+        let (old_rev, label) = {
+            let out_rg = outbl.read().unwrap();
+            match out_rg.get_in(i as usize) {
+                Some(e) => (e.reverse_index, e.flags),
+                None => return,
+            }
+        };
+        // cc:164: oldb->halfDeleteOutEdge(intothis[num].reverse_index).
+        // No guard on outbl/bbnew is held here, so the half-delete's peer
+        // updates can lock either safely.
         {
             let mut bb_rg = bb.write().unwrap();
-            if let Some(any) = bb_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
-                if slot < any.outgoing.len() {
-                    let old_rev = any.outgoing[slot].reverse_index;
-                    any.outgoing[slot].point = bbnew.clone();
-                    any.outgoing[slot].reverse_index = rev_idx_new;
-                    // Remove the old reverse edge from old_dest.
-                    let _ = old_rev;
-                }
-            }
+            bb_rg.half_delete_out_edge(old_rev as usize);
         }
-        // Add the incoming edge to bbnew.
+        // cc:165-166: intothis[num].point = b; reverse_index = b->outofthis.size().
+        let blnew_size_out = bbnew.read().unwrap().size_out() as i32;
         {
-            let mut bn_rg = bbnew.write().unwrap();
-            let out_idx = slot as i32;
-            bn_rg.add_in_edge(crate::block::BlockEdge::new(bb.clone(), out_idx));
+            let mut out_rg = outbl.write().unwrap();
+            let ins = out_rg.in_edges_mut();
+            if (i as usize) < ins.len() {
+                ins[i as usize].point = bbnew.clone();
+                ins[i as usize].reverse_index = blnew_size_out;
+            }
         }
-        // Remove the old incoming edge from old_dest (the reverse_index stored
-        // in bb's edge tells us which slot in old_dest to remove).
-        let old_rev = {
-            let bb_rg = bb.read().unwrap();
-            // The reverse_index was captured before we changed it; recompute
-            // from old_dest's incoming list by finding bb.
-            let dest_rg = old_dest.read().unwrap();
-            let mut found = None;
-            for i in 0..dest_rg.size_in() {
-                if let Some(e) = dest_rg.get_in(i) {
-                    if Arc::ptr_eq(&e.point, bb) {
-                        found = Some(i);
-                        break;
-                    }
-                }
-            }
-            found
-        };
-        if let Some(slot_in) = old_rev {
-            let mut od_rg = old_dest.write().unwrap();
-            if let Some(any) = od_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
-                if slot_in < any.incoming.len() {
-                    any.incoming.remove(slot_in);
-                    // Fix reverse indices on bb's remaining edges that pointed
-                    // past the removed slot.
-                    let mut bb_rg = bb.write().unwrap();
-                    if let Some(any_bb) = bb_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
-                        for e in any_bb.outgoing.iter_mut() {
-                            if e.reverse_index > slot_in as i32 {
-                                e.reverse_index -= 1;
-                            }
-                        }
-                    }
-                }
-            }
+        // cc:167: b->outofthis.push_back(BlockEdge(this, intothis[num].label, num)).
+        {
+            let mut new_rg = bbnew.write().unwrap();
+            let mut edge = crate::block::BlockEdge::new(outbl, i);
+            edge.flags = label;
+            new_rg.add_out_edge(edge);
         }
     }
 
@@ -3032,149 +3027,108 @@ impl Funcdata {
         Ok(())
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::removeUnreachableBlocks
-    /// Remove any basic blocks not reachable from the entry point.
-    /// Faithful to `Funcdata::removeUnreachableBlocks` (funcdata_block.cc:347-394).
+    // Ghidra: funcdata_block.cc:346 Funcdata::removeUnreachableBlocks
+    /// Remove any unreachable basic blocks. Faithful to
+    /// `Funcdata::removeUnreachableBlocks` (funcdata_block.cc:346-393):
+    /// a quick existence scan (`checkexistence=true`, first non-entry block
+    /// with null immed_dom) or the cached `blocks_unreachable` flag
+    /// (`checkexistence=false`, maintained by structureReset) gates entry;
+    /// the (un)reachable set comes from `BlockGraph::collectReachable`
+    /// (block.cc:2154); each unreachable block is flagged dead (with the
+    /// per-block header warning when `issuewarning`), then out-edges are
+    /// severed via `branchRemoveInternal(bb,0)` (destroying the branch op
+    /// and patching successor MULTIEQUALs), then the block is removed via
+    /// `blockRemoveInternal(bb,true)` (descend2Undef on stranded outputs +
+    /// destruction of ALL its ops), and finally structureReset.
     ///
-    /// Performs a forward BFS from the entry block, marks blocks NOT visited as
-    /// dead, removes their out-edges, then removes them from the graph. Returns
-    /// true if any unreachable block was removed.
-    pub fn remove_unreachable_blocks(&mut self) -> bool {
+    /// The former Rugra "conservative guard" (skip removal when >=5 blocks
+    /// and >5% were unreachable) and the "leave ops with external
+    /// descendants alive" approximation are removed: both deviate from the
+    /// oracle and leave live ops in dead blocks reading free varnodes,
+    /// which surfaces as "Free varnode has multiple descendants" panics in
+    /// later Actions (RuleCondNegate/RulePullsubMulti).
+    pub fn remove_unreachable_blocks(&mut self, issuewarning: bool, checkexistence: bool) -> bool {
+        use crate::block::block_flags;
         let n = self.bblocks.get_size();
-        if n == 0 {
-            return false;
-        }
-        // Find the entry point: a block with zero in-edges (no predecessors),
-        // matching Ghidra's isEntryPoint() (block.hh:325: size_in()==0 or
-        // explicitly flagged). Previously only checked the ENTRY_POINT flag
-        // which is never set during Rugra's CFG construction, causing the
-        // fallback to block 0 — which may not be the true entry, leading to
-        // false-positive "unreachable" detection and function-body loss.
-        let entry = (0..n)
-            .find(|&i| {
-                self.bblocks.get_block(i).map(|b| {
-                    let bg = b.read().unwrap();
-                    bg.size_in() == 0
-                        || (bg.get_flags() & crate::block::block_flags::ENTRY_POINT) != 0
-                }).unwrap_or(false)
-            })
-            .unwrap_or(0);
-        // Forward BFS from entry to find reachable set.
-        let mut reachable = std::collections::HashSet::new();
-        let mut queue = vec![entry];
-        reachable.insert(entry);
-        while let Some(idx) = queue.pop() {
-            let outs: Vec<i32> = {
-                if let Some(blk) = self.bblocks.get_block(idx) {
-                    let b = blk.read().unwrap();
-                    let nn = b.size_out();
-                    (0..nn).filter_map(|j| b.get_out(j).map(|e| e.point.read().unwrap().get_index())).collect()
-                } else {
-                    Vec::new()
-                }
-            };
-            for o in outs {
-                if reachable.insert(o as usize) {
-                    queue.push(o as usize);
-                }
-            }
-        }
-        // Collect unreachable blocks.
-        let unreachable: Vec<usize> = (0..n).filter(|i| !reachable.contains(i)).collect();
-        if unreachable.is_empty() {
-            return false;
-        }
-        // Conservative guard: if a large fraction of blocks are "unreachable",
-        // the CFG is likely incomplete (BRANCHIND/jump-table edges missing).
-        // Skip removal to avoid deleting reachable function body.
-        // Uses BOTH absolute (>=5) and relative (>5%) thresholds: small test
-        // CFGs with genuinely dead blocks still get cleaned, but real functions
-        // with incomplete CFGs (where many blocks are falsely unreachable)
-        // are protected.
-        // TODO: remove this guard once BRANCHIND edges are added to the CFG.
-        if unreachable.len() >= 5 && unreachable.len() * 20 > n {
-            return false;
-        }
-        // Mark dead, remove their out-edges, then remove from the graph.
-        // Faithful to Ghidra removeUnreachableBlocks (funcdata_block.cc:370-391):
-        // for each unreachable block: setDead, branchRemoveInternal all out-edges,
-        // then blockRemoveInternal (which destroys ops + removes from graph).
-        // For unreachable=true, Ghidra calls descend2Undef on output varnodes
-        // (funcdata_block.cc:305-306) and checks descendantsOutside (312).
-        // Rugra's simplified version: mark block's ops as dead (so they don't
-        // appear in alivelist for printc), remove all edges, remove block.
-        let dead_arcs: Vec<_> = unreachable.iter()
-            .filter_map(|&i| self.bblocks.get_block(i))
-            .collect();
-        // Phase 1: mark blocks DEAD.
-        for arc in &dead_arcs {
-            arc.write().unwrap().set_flags(crate::block::block_flags::DEAD);
-        }
-        // Phase 2: destroy ops in each dead block. Faithful to Ghidra
-        // blockRemoveInternal funcdata_block.cc:300-319: for unreachable=true,
-        // Ghidra calls descend2Undef on output varnodes, then checks
-        // descendantsOutside. Rugra's approach: only mark_dead ops whose
-        // output has NO descendants outside the dead block set. Ops with
-        // external descendants are left alive (their block is DEAD-flagged so
-        // emit_block_ops skips them, but the op stays in alivelist so its
-        // output varnode remains valid for any phi-node that references it).
-        let dead_block_ptrs: std::collections::HashSet<usize> = dead_arcs.iter()
-            .map(|a| std::sync::Arc::as_ptr(a) as *const () as usize)
-            .collect();
-        for arc in &dead_arcs {
-            let ops_to_check: Vec<crate::op::PcodeOpRef> = {
-                let block = arc.read().unwrap();
-                if let Some(bb) = block.as_any().downcast_ref::<crate::block::BlockBasic>() {
-                    bb.ops.iter().map(|o| o.0.clone()).map(crate::op::PcodeOpRef).collect()
-                } else {
-                    Vec::new()
-                }
-            };
-            for op_ref in ops_to_check {
-                // Check if output has descendants outside dead blocks.
-                let has_external_desc = {
-                    let op = op_ref.0.read().unwrap();
-                    if let Some(ref out_arc) = op.output {
-                        let out_vn = out_arc.read().unwrap();
-                        out_vn.descend.iter()
-                            .filter_map(|w| w.upgrade())
-                            .any(|desc_op| {
-                                let d = desc_op.read().unwrap();
-                                d.parent.as_ref()
-                                    .and_then(|pw| pw.upgrade())
-                                    .map(|parent| {
-                                        let p = std::sync::Arc::as_ptr(&parent) as *const () as usize;
-                                        !dead_block_ptrs.contains(&p)
-                                    })
-                                    .unwrap_or(true)
-                            })
-                    } else {
-                        false
-                    }
+        if checkexistence {
+            // cc:352-358: quick check for the existence of unreachable
+            // blocks — first non-entry block with null immed dom.
+            let mut found = false;
+            for i in 0..n {
+                let blk = match self.bblocks.get_block(i) {
+                    Some(b) => b,
+                    None => continue,
                 };
-                if !has_external_desc {
-                    self.obank.mark_dead(op_ref);
+                let blk_rg = blk.read().unwrap();
+                if blk_rg.is_entry_point() {
+                    continue; // Don't remove starting component
                 }
-                // Ops with external descendants are left alive — their block is
-                // DEAD-flagged (emit_block_ops checks is_dead) but the op
-                // remains valid for phi-node references.
-            }
-        }
-        // Phase 3: detach all out-edges (branchRemoveInternal equivalent).
-        for arc in &dead_arcs {
-            while arc.read().unwrap().size_out() > 0 {
-                let dst = arc.read().unwrap().get_out(0).map(|e| e.point);
-                if let Some(dst) = dst {
-                    self.bblocks.remove_edge_blocks(arc, &dst);
-                } else {
+                if blk_rg.get_immed_dom().and_then(|w| w.upgrade()).is_none() {
+                    found = true;
                     break;
                 }
             }
+            if !found {
+                return false;
+            }
+        } else if self.flags & funcdata_flags::BLOCKS_UNREACHABLE == 0 {
+            // cc:360-361: use cached check.
+            return false;
         }
-        // Phase 4: remove blocks from graph (blockRemoveInternal equivalent).
-        for arc in &dead_arcs {
-            self.bblocks.remove_block_arc(arc);
+
+        // cc:365-366: find entry point. The oracle indexes off the end when
+        // no entry exists (UB); Rugra falls back to block 0 rather than
+        // panicking, which only fires on synthetic test graphs.
+        let entry_idx = (0..n)
+            .find(|&i| {
+                self.bblocks
+                    .get_block(i)
+                    .map(|b| b.read().unwrap().is_entry_point())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(0);
+        let entry = match self.bblocks.get_block(entry_idx) {
+            Some(b) => b,
+            None => return false,
+        };
+        // cc:367: collectReachable(list, entry, true).
+        let mut list: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        self.bblocks.collect_reachable(&mut list, &entry, true);
+        if list.is_empty() {
+            return false;
         }
+
+        // cc:369-381: flag every unreachable block dead (+warning).
+        for blk in &list {
+            blk.write().unwrap().set_flags(block_flags::DEAD);
+            if issuewarning {
+                let (space_name, start_raw) = {
+                    let blk_rg = blk.read().unwrap();
+                    let start = blk_rg.get_start_addr();
+                    (
+                        start.get_space().map(|s| s.get_name()).unwrap_or_default(),
+                        format!("{:x}", start.as_u64()),
+                    )
+                };
+                self.warning_header(&format!(
+                    "Removing unreachable block ({},{})",
+                    space_name, start_raw
+                ));
+            }
+        }
+        // cc:382-386: sever all out-edges (branchRemoveInternal destroys the
+        // branch op at sizeOut()==2 and patches successor MULTIEQUALs).
+        for blk in &list {
+            while blk.read().unwrap().size_out() > 0 {
+                self.branch_remove_internal(blk, 0);
+            }
+        }
+        // cc:387-390: remove each block (unreachable=true: descend2Undef on
+        // stranded outputs, then op destruction for ALL ops).
+        for blk in &list {
+            self.block_remove_internal(blk, true);
+        }
+        // cc:391
         self.structure_reset();
         true
     }
@@ -8296,25 +8250,33 @@ impl Funcdata {
     /// (funcdata_block.cc:234-242).
     pub fn descendants_outside(&self, vn: &Arc<RwLock<crate::varnode::Varnode>>) -> bool {
         use crate::block::block_flags;
-        // Walk the descend list; if any reading op's parent block is NOT
-        // dead, the varnode has descendants outside.
+        // cc:238-240: for each descendant op, if its PARENT BLOCK is not
+        // dead, the varnode has descendants outside the dead-block set.
+        // (Block-level isDead, not op-level: unreachable blocks are all
+        // flagged dead before any op destruction begins.)
         let descend: Vec<Arc<RwLock<crate::op::PcodeOp>>> = {
             let vn_rg = vn.read().unwrap();
             vn_rg.descend_iter().collect()
         };
         for dop in descend {
-            // We cannot reach getParent()->isDead() without a parent pointer
-            // on PcodeOp. Approximate via the op's own DEAD flag, which is
-            // set when the op is destroyed.
-            let is_dead = dop.read().unwrap().is_dead();
-            if !is_dead {
-                // The op is alive somewhere; treat it as outside the dead block.
-                let _ = block_flags::DEAD;
+            let parent_alive = dop
+                .read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(|p| p.upgrade())
+                .map(|p| p.read().unwrap().get_flags() & block_flags::DEAD == 0)
+                // An op with no parent block cannot be in a dead block; the
+                // oracle would dereference getParent() here, and every op on
+                // this path has a parent at block-removal time.
+                .unwrap_or(true);
+            if parent_alive {
                 return true;
             }
         }
         false
     }
+
 
     // Ghidra: funcdata_block.cc:255 Funcdata::blockRemoveInternal
     /// Remove an active basic block from the function: delete its PcodeOps,
@@ -8378,9 +8340,10 @@ impl Funcdata {
             if is_assignment {
                 if let Some(deadvn) = out_vn {
                     if unreachable_flag {
-                        // Ghidra: bool undef = descend2Undef(deadvn);
-                        // RUGRA-GAP: descend2Undef not ported. Mark warning.
-                        if !desc_warning {
+                        // cc:304-310: mark descendants as undefined first.
+                        let undef = self.descend2_undef(&deadvn);
+                        if undef && !desc_warning {
+                            // Print the warning only once.
                             self.warning_header(
                                 "Creating undefined varnodes in (possibly) reachable block",
                             );
@@ -8388,6 +8351,7 @@ impl Funcdata {
                         }
                     }
                     if self.descendants_outside(&deadvn) {
+                        // If any descendants outside of bb
                         // Ghidra throws LowlevelError here.
                         panic!("Deleting op with descendants");
                     }
@@ -8864,12 +8828,19 @@ impl Funcdata {
         for op_arc in descends {
             let opc = op_arc.read().unwrap().opcode;
             let parent = op_arc.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
-            // cc:558-559: skip ops whose parent block has been destroyed.
-            // Rugra models this as parent.is_none() — a destroyed block clears
-            // the op's parent link. The Ghidra `isDead()` block flag is not
-            // modeled as a runtime field; we treat presence of a parent as
-            // "alive" and set `res` if that parent has incoming edges.
-            if parent.is_none() { continue; }
+            // cc:558-559: skip ops whose parent BLOCK is flagged dead (the
+            // block-level f_dead bit set by removeUnreachableBlocks phase 1
+            // before any op destruction); a missing parent is also skipped.
+            // cc:559: res=true when the parent has in-edges (possibly
+            // reachable block).
+            let parent_dead = match &parent {
+                Some(p) => {
+                    let p_rg = p.read().unwrap();
+                    p_rg.get_flags() & crate::block::block_flags::DEAD != 0
+                }
+                None => true,
+            };
+            if parent_dead { continue; }
             if let Some(p) = &parent {
                 if p.read().unwrap().size_in() != 0 { res = true; }
             }

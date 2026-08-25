@@ -2563,7 +2563,7 @@ impl<'a> FlowInfo<'a> {
         }
         if self.has_possible_unreachable() {
             // data.removeUnreachableBlocks(false,true) (flow.cc:844).
-            self.fd.remove_unreachable_blocks();
+            self.fd.remove_unreachable_blocks(false, true);
         }
         Ok(())
     }

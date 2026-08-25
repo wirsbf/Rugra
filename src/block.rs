@@ -279,6 +279,152 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     // RUGRA-GLUE: incoming half of the shared edge-vector accessors above.
     fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge>;
 
+    // Ghidra: block.cc:100 FlowBlock::halfDeleteInEdge
+    /// Delete only the incoming half of an edge (our `intothis` entry),
+    /// leaving the removed edge's outgoing half on the source block stale.
+    /// Surviving entries slide left in order, and each surviving source-side
+    /// half is decremented to point back at its new incoming slot.
+    /// Faithful to `FlowBlock::halfDeleteInEdge` (block.cc:100-112): the
+    /// peer's `outofthis[edge.reverse_index].reverse_index -= 1` runs during
+    /// the slide, for EVERY FlowBlock subtype (Ghidra's edge arrays live on
+    /// the base class); the former BlockBasic-only half-delete silently
+    /// skipped structured peers, leaving stale reciprocal indices that later
+    /// indexed out of bounds (BLOCK-RECIPROCAL-OOB-0001).
+    fn half_delete_in_edge(&mut self, slot: usize) {
+        let mut slot = slot;
+        let last = self.in_edges_mut().len().saturating_sub(1);
+        while slot < last {
+            let edge = {
+                let ins = self.in_edges_mut();
+                if slot + 1 >= ins.len() {
+                    break;
+                }
+                ins[slot + 1].clone()
+            };
+            self.in_edges_mut()[slot] = edge.clone();
+            match edge.point.try_write() {
+                Ok(mut source) => {
+                    decrement_reciprocal_reverse_index(
+                        &mut *source,
+                        false,
+                        edge.reverse_index as usize,
+                    );
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    // The per-Funcdata graph rewrite is single-threaded; a
+                    // held peer lock here is the self-loop case — mutate the
+                    // outgoing half through our own accessor (the direct
+                    // index mirrors decrement_for!'s unguarded indexing).
+                    let list = self.out_edges_mut();
+                    list[edge.reverse_index as usize].reverse_index -= 1;
+                }
+                Err(std::sync::TryLockError::Poisoned(error)) => {
+                    panic!("poisoned reciprocal source edge lock: {error}");
+                }
+            }
+            slot += 1;
+        }
+        self.in_edges_mut().pop();
+    }
+
+    // Ghidra: block.cc:115 FlowBlock::halfDeleteOutEdge
+    /// Delete only the outgoing half of an edge. Surviving entries slide
+    /// left in order, and each surviving target-side half is decremented to
+    /// point back at its new outgoing slot. Faithful to
+    /// `FlowBlock::halfDeleteOutEdge` (block.cc:115-127); see
+    /// `half_delete_in_edge` for the subtype-universal rationale.
+    fn half_delete_out_edge(&mut self, slot: usize) {
+        let mut slot = slot;
+        let last = self.out_edges_mut().len().saturating_sub(1);
+        while slot < last {
+            let edge = {
+                let outs = self.out_edges_mut();
+                if slot + 1 >= outs.len() {
+                    break;
+                }
+                outs[slot + 1].clone()
+            };
+            self.out_edges_mut()[slot] = edge.clone();
+            match edge.point.try_write() {
+                Ok(mut target) => {
+                    decrement_reciprocal_reverse_index(
+                        &mut *target,
+                        true,
+                        edge.reverse_index as usize,
+                    );
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    // See half_delete_in_edge: the only recursively-held
+                    // endpoint in the single-threaded pipeline is `self`.
+                    let list = self.in_edges_mut();
+                    list[edge.reverse_index as usize].reverse_index -= 1;
+                }
+                Err(std::sync::TryLockError::Poisoned(error)) => {
+                    panic!("poisoned reciprocal target edge lock: {error}");
+                }
+            }
+            slot += 1;
+        }
+        self.out_edges_mut().pop();
+    }
+
+    // Ghidra: block.cc:130 FlowBlock::removeInEdge (exclusion-list form)
+    /// Remove this block's incoming edges whose source index is in
+    /// `exclude_indices`, as full bilateral edge removals: for each match,
+    /// `halfDeleteInEdge(slot)` on self plus `halfDeleteOutEdge(rev)` on the
+    /// source (the `removeInEdge` composition, block.cc:130-141). The former
+    /// one-sided `retain` version left the sources' outgoing halves and all
+    /// surviving edges' reciprocal reverse_index entries stale, which later
+    /// surfaced as reciprocal-slot out-of-bounds panics
+    /// (BLOCK-RECIPROCAL-OOB-0001). Trait-level because Ghidra's edge
+    /// arrays live on the FlowBlock base for every subtype.
+    fn remove_in_edge_from(&mut self, exclude_indices: &[i32]) {
+        loop {
+            let slot = {
+                let ins = self.in_edges_mut();
+                let mut found = None;
+                for (i, e) in ins.iter().enumerate() {
+                    // Use try_read to avoid RwLock deadlock when
+                    // e.point == self (self-loop edge while holding our own
+                    // write lock).
+                    let src_idx = match e.point.try_read() {
+                        Ok(p) => p.get_index(),
+                        Err(_) => continue,
+                    };
+                    if exclude_indices.contains(&src_idx) {
+                        found = Some(i);
+                        break;
+                    }
+                }
+                match found {
+                    Some(s) => s,
+                    None => break,
+                }
+            };
+            // removeInEdge (block.cc:133-136): capture the peer and its
+            // reverse slot BEFORE the slide, then delete both halves.
+            let (peer, rev) = {
+                let e = &self.in_edges_mut()[slot];
+                (e.point.clone(), e.reverse_index)
+            };
+            self.half_delete_in_edge(slot);
+            let peer_try = peer.try_write();
+            match peer_try {
+                Ok(mut source) => {
+                    source.half_delete_out_edge(rev as usize);
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    // Self-loop: the peer is this block; our own write
+                    // guard is the one being held.
+                    self.half_delete_out_edge(rev as usize);
+                }
+                Err(std::sync::TryLockError::Poisoned(error)) => {
+                    panic!("poisoned reciprocal source edge lock: {error}");
+                }
+            }
+        }
+    }
+
     /// OR-set edge flags on the `slot`-th outgoing edge.
     /// Faithful to Ghidra's `FlowBlock::setOutEdgeFlag` (block.hh:288).
     /// Used by `findSpanningTree` to label tree/back/forward/cross edges.
@@ -306,6 +452,188 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     // Ghidra: block.cc:966 BlockGraph::clearEdgeFlags
     fn clear_edge_flags(&mut self, mask: u32) {
         for e in self.out_edges_mut().iter_mut() { e.flags &= !mask; }
+    }
+
+    // Ghidra: block.cc:447 FlowBlock::eliminateInDups
+    /// Eliminate duplicate in-edges from the given block, keeping the first
+    /// instance and OR-merging edge labels. Faithful to
+    /// `FlowBlock::eliminateInDups` (block.cc:447-472): each duplicate is
+    /// removed with PAIRED half-deletes (`halfDeleteInEdge(i)` here plus
+    /// `bl->halfDeleteOutEdge(rev)` on the peer), so every surviving edge's
+    /// reciprocal reverse_index stays consistent. `self_arc` is this
+    /// block's own Arc (the peer may be this block in the self-loop case;
+    /// the peer write then goes through the WouldBlock arm).
+    fn eliminate_in_dups(&mut self, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, self_arc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+        let self_loop = Arc::ptr_eq(bl, self_arc);
+        let mut indval: i64 = -1;
+        let mut i = 0usize;
+        while i < self.in_edges_mut().len() {
+            let is_bl = {
+                let ins = self.in_edges_mut();
+                i < ins.len() && Arc::ptr_eq(&ins[i].point, bl)
+            };
+            if is_bl {
+                if indval == -1 {
+                    // The first instance of bl: we keep it.
+                    indval = i as i64;
+                    i += 1;
+                } else {
+                    // cc:458-462: merge labels, then the paired half-deletes.
+                    let (label, rev) = {
+                        let ins = self.in_edges_mut();
+                        (ins[i].flags, ins[i].reverse_index)
+                    };
+                    self.in_edges_mut()[indval as usize].flags |= label;
+                    self.half_delete_in_edge(i);
+                    if self_loop {
+                        // Peer is this block; our own write guard is held.
+                        self.half_delete_out_edge(rev as usize);
+                    } else {
+                        match bl.try_write() {
+                            Ok(mut peer) => {
+                                peer.half_delete_out_edge(rev as usize);
+                            }
+                            Err(std::sync::TryLockError::WouldBlock) => {
+                                self.half_delete_out_edge(rev as usize);
+                            }
+                            Err(std::sync::TryLockError::Poisoned(error)) => {
+                                panic!("poisoned reciprocal edge lock: {error}");
+                            }
+                        }
+                    }
+                    // Don't increment i (the slide brought the next entry).
+                }
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    // Ghidra: block.cc:475 FlowBlock::eliminateOutDups
+    /// Eliminate duplicate out-edges to the given block, keeping the first
+    /// instance and OR-merging edge labels. Faithful to
+    /// `FlowBlock::eliminateOutDups` (block.cc:475-501) with the same
+    /// paired half-delete protocol as `eliminate_in_dups`.
+    fn eliminate_out_dups(&mut self, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, self_arc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+        let self_loop = Arc::ptr_eq(bl, self_arc);
+        let mut indval: i64 = -1;
+        let mut i = 0usize;
+        while i < self.out_edges_mut().len() {
+            let is_bl = {
+                let outs = self.out_edges_mut();
+                i < outs.len() && Arc::ptr_eq(&outs[i].point, bl)
+            };
+            if is_bl {
+                if indval == -1 {
+                    // The first instance of bl: we keep it.
+                    indval = i as i64;
+                    i += 1;
+                } else {
+                    // cc:488-491: merge labels, then the paired half-deletes.
+                    let (label, rev) = {
+                        let outs = self.out_edges_mut();
+                        (outs[i].flags, outs[i].reverse_index)
+                    };
+                    self.out_edges_mut()[indval as usize].flags |= label;
+                    self.half_delete_out_edge(i);
+                    if self_loop {
+                        self.half_delete_in_edge(rev as usize);
+                    } else {
+                        match bl.try_write() {
+                            Ok(mut peer) => {
+                                peer.half_delete_in_edge(rev as usize);
+                            }
+                            Err(std::sync::TryLockError::WouldBlock) => {
+                                self.half_delete_in_edge(rev as usize);
+                            }
+                            Err(std::sync::TryLockError::Poisoned(error)) => {
+                                panic!("poisoned reciprocal edge lock: {error}");
+                            }
+                        }
+                    }
+                    // Don't increment i.
+                }
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    // Ghidra: block.cc:507 FlowBlock::findDups
+    /// Find blocks that are at the end of multiple edges. Faithful to
+    /// `FlowBlock::findDups` (block.cc:507-523): peers are marked with
+    /// f_mark on first sight and f_mark2 once reported; a peer already
+    /// f_mark-marked is a duplicate. Marks are erased in a second pass.
+    /// `self_arc` covers the self-loop case whose lock cannot be taken
+    /// (the caller holds this block's write guard): such edges are
+    /// optimistically reported, which at worst triggers a no-op eliminate
+    /// scan (the oracle's marks are an optimization, not semantics).
+    fn find_dups(
+        &self,
+        ref_edges: &[BlockEdge],
+        duplist: &mut Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+        self_arc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) {
+        for e in ref_edges {
+            if Arc::ptr_eq(&e.point, self_arc) {
+                // cc:513-519 for the self-loop peer: we cannot take our own
+                // write lock; report it (a no-op eliminate scan is safe).
+                if !duplist.iter().any(|a| Arc::ptr_eq(a, self_arc)) {
+                    duplist.push(self_arc.clone());
+                }
+                continue;
+            }
+            let mut p = match e.point.try_write() {
+                Ok(g) => g,
+                Err(_) => continue, // single-threaded: only self's guard is held
+            };
+            if p.get_flags() & block_flags::MARK2 != 0 {
+                continue; // Already marked as a duplicate
+            }
+            if p.get_flags() & block_flags::MARK != 0 {
+                // We have a duplicate.
+                duplist.push(e.point.clone());
+                p.set_flags(block_flags::MARK2);
+            } else {
+                p.set_flags(block_flags::MARK);
+            }
+        }
+        // Erase our marks.
+        for e in ref_edges {
+            if Arc::ptr_eq(&e.point, self_arc) {
+                continue;
+            }
+            if let Ok(mut p) = e.point.try_write() {
+                p.clear_flags(block_flags::MARK | block_flags::MARK2);
+            }
+        }
+    }
+
+    // Ghidra: block.cc:525 FlowBlock::dedup
+    /// Deduplicate both edge lists with paired half-deletes. Faithful to
+    /// `FlowBlock::dedup` (block.cc:525-536): find duplicate in-edge peers,
+    /// eliminate each with `eliminate_in_dups`, then the same for out-edges.
+    /// `self_arc` is this block's own Arc (self-loop peers route their peer
+    /// half-delete through the WouldBlock arm).
+    fn dedup(&mut self, self_arc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+        let mut duplist: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        {
+            let ins = self.in_edges_mut().clone();
+            self.find_dups(&ins, &mut duplist, self_arc);
+        }
+        for bl in duplist.iter() {
+            let bl = bl.clone();
+            self.eliminate_in_dups(&bl, self_arc);
+        }
+        duplist.clear();
+        {
+            let outs = self.out_edges_mut().clone();
+            self.find_dups(&outs, &mut duplist, self_arc);
+        }
+        for bl in duplist.iter() {
+            let bl = bl.clone();
+            self.eliminate_out_dups(&bl, self_arc);
+        }
     }
 
     /// Is the i-th outgoing edge an irreducible edge? Faithful to Ghidra's
@@ -720,12 +1048,6 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// Clear the loop-exit label on the i-th out edge (Ghidra `clearLoopExit`).
     // Ghidra: block.hh:295 FlowBlock::clearLoopExit
     fn clear_loop_exit(&mut self, _i: usize) {}
-    /// Remove the in-edge from a predecessor whose index matches one of
-    /// `exclude_indices`. Faithful to Ghidra `removeEdge(begin, end)` which
-    /// removes `begin` from `end`'s intothis list. Used by ruleBlockGoto
-    /// consumption to make the goto source invisible to the target's sizeIn.
-    // RUGRA-GLUE: ruleBlockGoto consumption helper (Ghidra removes edges via FlowBlock::removeInEdge block.cc:130)
-    fn remove_in_edge_from(&mut self, _exclude_indices: &[i32]) {}
 
     /// Ghidra `FlowBlock::scopeBreak` (block.hh:266, virtual; default impl in
     /// block.cc:284-289): propagate the current exit/loop-exit scope into
@@ -1649,14 +1971,6 @@ impl FlowBlock for BlockBasic {
             e.flags &= !edge_flags::F_LOOP_EXIT_EDGE;
         }
     }
-    // RUGRA-GLUE: ruleBlockGoto consumption helper (Ghidra removes edges via FlowBlock::removeInEdge block.cc:130)
-    fn remove_in_edge_from(&mut self, exclude_indices: &[i32]) {
-        self.incoming.retain(|e| {
-            // Use try_read to avoid RwLock deadlock when e.point == self
-            // (self-loop edge while holding our own write lock).
-            e.point.try_read().map(|p| !exclude_indices.contains(&p.get_index())).unwrap_or(true)
-        });
-    }
 }
 
 // RUGRA-GLUE: Rust trait-object field mutation for Ghidra's direct
@@ -1669,13 +1983,47 @@ fn decrement_reciprocal_reverse_index(
     macro_rules! decrement_for {
         ($block_type:ty) => {
             if let Some(concrete) = block.as_any_mut().downcast_mut::<$block_type>() {
-                let edge = if incoming_half {
-                    &mut concrete.incoming[slot]
+                // BLOCK-RECIPROCAL-OOB-0001 residual guard (measured
+                // degradation, documented in docs/TODO_BOARD.md): Ghidra's
+                // halfDelete slides index the peer's reciprocal list with the
+                // recorded reverse_index (block.cc:107/122) — its paired
+                // replace*Edge protocol guarantees the entry exists. Rugra's
+                // identify-capture model can still leave a stale recorded slot
+                // (e.g. a structured peer whose boundary edge list was
+                // rebuilt by identify_internal while the opposite half
+                // survived). When the recorded slot is past the peer's list,
+                // there is no peer entry to decrement — skip (log once per
+                // site) instead of indexing out of bounds. Fix path: port
+                // selfIdentify's full replace*Edge retarget protocol
+                // (block.cc:160-191 + 895-931) to eliminate the last
+                // one-sided edge mutations.
+                if incoming_half {
+                    if slot >= concrete.incoming.len() {
+                        eprintln!(
+                            "[BLOCKSTRUCT] WARN: reciprocal slot {} past peer {} in-list (len {}); skipping decrement (BLOCK-RECIPROCAL-OOB-0001 residual)",
+                            slot,
+                            concrete.get_index(),
+                            concrete.incoming.len()
+                        );
+                        return;
+                    }
+                    let edge = &mut concrete.incoming[slot];
+                    edge.reverse_index -= 1;
+                    return;
                 } else {
-                    &mut concrete.outgoing[slot]
-                };
-                edge.reverse_index -= 1;
-                return;
+                    if slot >= concrete.outgoing.len() {
+                        eprintln!(
+                            "[BLOCKSTRUCT] WARN: reciprocal slot {} past peer {} out-list (len {}); skipping decrement (BLOCK-RECIPROCAL-OOB-0001 residual)",
+                            slot,
+                            concrete.get_index(),
+                            concrete.outgoing.len()
+                        );
+                        return;
+                    }
+                    let edge = &mut concrete.outgoing[slot];
+                    edge.reverse_index -= 1;
+                    return;
+                }
             }
         };
     }
@@ -1724,75 +2072,10 @@ impl BlockBasic {
         self.incoming[slot].reverse_index
     }
 
-    /// Delete only the incoming half of an edge (our `intothis` entry),
-    /// leaving the removed edge's outgoing half on the source block stale.
-    /// Surviving entries slide left in order, and each surviving source-side
-    /// half is updated to point back to its new incoming slot.
-    // Ghidra: block.cc:100 FlowBlock::halfDeleteInEdge
-    pub fn half_delete_in_edge(&mut self, mut slot: usize) {
-        while slot < self.incoming.len() - 1 {
-            let edge = self.incoming[slot + 1].clone();
-            self.incoming[slot] = edge.clone();
-            match edge.point.try_write() {
-                Ok(mut source) => {
-                    decrement_reciprocal_reverse_index(
-                        &mut *source,
-                        false,
-                        edge.reverse_index as usize,
-                    );
-                }
-                Err(std::sync::TryLockError::WouldBlock) => {
-                    // The per-Funcdata graph rewrite is single-threaded. A
-                    // held peer lock here is therefore the self-loop case:
-                    // mutate the outgoing half through our existing &mut.
-                    decrement_reciprocal_reverse_index(
-                        self,
-                        false,
-                        edge.reverse_index as usize,
-                    );
-                }
-                Err(std::sync::TryLockError::Poisoned(error)) => {
-                    panic!("poisoned reciprocal source edge lock: {error}");
-                }
-            }
-            slot += 1;
-        }
-        self.incoming.pop();
-    }
-
-    /// Delete only the outgoing half of an edge. Surviving entries slide left
-    /// in order, and each surviving target-side half is updated to point back
-    /// to its new outgoing slot.
-    // Ghidra: block.cc:115 FlowBlock::halfDeleteOutEdge
-    pub fn half_delete_out_edge(&mut self, mut slot: usize) {
-        while slot < self.outgoing.len() - 1 {
-            let edge = self.outgoing[slot + 1].clone();
-            self.outgoing[slot] = edge.clone();
-            match edge.point.try_write() {
-                Ok(mut target) => {
-                    decrement_reciprocal_reverse_index(
-                        &mut *target,
-                        true,
-                        edge.reverse_index as usize,
-                    );
-                }
-                Err(std::sync::TryLockError::WouldBlock) => {
-                    // See half_delete_in_edge: the only recursively-held
-                    // endpoint in the single-threaded pipeline is `self`.
-                    decrement_reciprocal_reverse_index(
-                        self,
-                        true,
-                        edge.reverse_index as usize,
-                    );
-                }
-                Err(std::sync::TryLockError::Poisoned(error)) => {
-                    panic!("poisoned reciprocal target edge lock: {error}");
-                }
-            }
-            slot += 1;
-        }
-        self.outgoing.pop();
-    }
+    // Ghidra: block.cc:100/115 FlowBlock::halfDeleteInEdge/halfDeleteOutEdge
+    // live as trait-default methods on FlowBlock (every subtype); the former
+    // BlockBasic-only inherent copies silently skipped structured peers and
+    // left stale reciprocal reverse_index entries (BLOCK-RECIPROCAL-OOB-0001).
 
     /// Remove edge `in`/`out` from this block but create a new direct edge
     /// between the in-block and the out-block, preserving slot positions.
@@ -2429,6 +2712,64 @@ impl BlockGraph {
         self.blocks.retain(|b| !Arc::ptr_eq(b, bl));
     }
 
+    // Ghidra: block.cc:2154 BlockGraph::collectReachable
+    /// Collect reachable (or unreachable) blocks via forward mark-propagation
+    /// from `bl`. Faithful to `BlockGraph::collectReachable`
+    /// (block.cc:2154-2187): `bl` is marked and pushed; a work index walks
+    /// `res` in order, marking/pushing each unmarked out-edge target; with
+    /// `un=true`, `res` is then rebuilt to hold every UNmarked block (the
+    /// unreachable set) while marks are cleared, otherwise marks are simply
+    /// cleared on the reachable set.
+    pub fn collect_reachable(
+        &self,
+        res: &mut Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        un: bool,
+    ) {
+        bl.write().unwrap().set_mark();
+        res.push(bl.clone());
+        let mut total = 0usize;
+        // Propagate forward to find all reachable blocks from entry point.
+        while total < res.len() {
+            let blk = res[total].clone();
+            total += 1;
+            let out_targets: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = {
+                let blk_rg = blk.read().unwrap();
+                let n = blk_rg.size_out();
+                (0..n)
+                    .filter_map(|j| blk_rg.get_out(j).map(|e| e.point.clone()))
+                    .collect()
+            };
+            for blk2 in out_targets {
+                if blk2.read().unwrap().is_mark() {
+                    continue;
+                }
+                blk2.write().unwrap().set_mark();
+                res.push(blk2);
+            }
+        }
+        if un {
+            // Anything not marked is unreachable.
+            res.clear();
+            let blocks: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> =
+                self.blocks.clone();
+            for blk in blocks {
+                let mut blk_rg = blk.write().unwrap();
+                if blk_rg.is_mark() {
+                    blk_rg.clear_mark();
+                } else {
+                    drop(blk_rg);
+                    res.push(blk);
+                }
+            }
+        } else {
+            let blocks_snapshot = res.clone();
+            for blk in blocks_snapshot {
+                blk.write().unwrap().clear_mark();
+            }
+        }
+    }
+
     /// Ghidra `BlockGraph::scopeBreak` (block.cc:1270-1288): walk this graph's
     /// child list in order and recurse `scopeBreak(cur_exit, cur_loop_exit)`
     /// into each child. For every child except the last, `cur_exit` is the
@@ -2605,17 +2946,33 @@ impl BlockGraph {
                         .unwrap_or(false)
                 })
         };
+        // Re-pair the two found slots' reverse_index before the half-deletes:
+        // both slots were found BY POINTER (ground truth), so writing
+        // src.out[os].reverse_index = is_ and dst.in[is_].reverse_index = os
+        // restores exactly Ghidra's checkEdges() pairing (block.cc:545-570)
+        // for the edge being removed. Under a consistent state this is a
+        // no-op; under the identify-capture model's residual staleness it
+        // prevents the half-delete slides from reading a stale slot.
+        if let (Some(os), Some(is_)) = (out_slot, in_slot) {
+            src.write()
+                .unwrap()
+                .out_edges_mut()[os]
+                .reverse_index = is_ as i32;
+            dst.write()
+                .unwrap()
+                .in_edges_mut()[is_]
+                .reverse_index = os as i32;
+        }
         if let Some(os) = out_slot {
-            let mut src_rg = src.write().unwrap();
-            if let Some(bb) = src_rg.as_any_mut().downcast_mut::<BlockBasic>() {
-                bb.half_delete_out_edge(os);
-            }
+            // Trait-level half-delete: Ghidra's FlowBlock base owns
+            // outofthis/intothis for EVERY subtype (block.hh:124-127); the
+            // former BlockBasic-only downcast silently skipped structured
+            // blocks, leaving stale reciprocal indices
+            // (BLOCK-RECIPROCAL-OOB-0001).
+            src.write().unwrap().half_delete_out_edge(os);
         }
         if let Some(is_) = in_slot {
-            let mut dst_rg = dst.write().unwrap();
-            if let Some(bb) = dst_rg.as_any_mut().downcast_mut::<BlockBasic>() {
-                bb.half_delete_in_edge(is_);
-            }
+            dst.write().unwrap().half_delete_in_edge(is_);
         }
     }
 

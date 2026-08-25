@@ -1748,3 +1748,8 @@ unlabelled 计数仅保留本地变量。
 4. **marker(INDIRECT) 收集分支（cc:1401-1408）**：`!propagateIndirect && INDIRECT` 时，in(0) 地址≠输出地址（活动 COPY）或输出 persist → 标记但**不**入队。结构性新增 `propagate_indirect` 字段（coreaction.hh:244），protorecovery_a=true / protorecovery_b=false 双注册（action.rs 对应 cc:5497/:5498/:5680/:5681）。
 
 Phase-2 推播门（cc:1427-1429）同步修正为 `propagate_indirect || !INDIRECT || is_indirect_store`（旧代码硬编码 false 且注释自相矛盾）。fixture `tests/oracle/actiondw_copydef_1204` 锁定全部六 case 双注册行为（24 records 字节一致 MATCH），包括 oracle 深层语义：**分支④的 no-push 标记使 phase-2 的 `!isDirectWrite` 守卫跳过 mark+push，永久阻断经该 varnode 的 taint 传播**（w_out=0 判别）。
+### ActionUnreachable 参数对齐（2026-08-25，HTTPD-STRIPPREFIX-ADDDESCEND-0001）
+- `ActionUnreachable::apply` 调用
+  `remove_unreachable_blocks(true, false)`（issuewarning=true，
+  checkexistence=false 走缓存 BLOCKS_UNREACHABLE 标志），对齐
+  coreaction.cc:3460。

@@ -2892,12 +2892,12 @@ impl ActionUnreachable {
 impl Action for ActionUnreachable {
     // Ghidra: coreaction.cc:3457 ActionUnreachable::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionUnreachable::apply (coreaction.cc:3457-3464).
-        if fd.remove_unreachable_blocks() {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
+        // Faithful to ActionUnreachable::apply (coreaction.cc:3457-3464):
+        // issuewarning=true, checkexistence=false (cached flag gate).
+        if fd.remove_unreachable_blocks(true, false) {
+            self.count += 1; // Deleting at least one block
         }
+        Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "unreachable" mirrors ctor at coreaction.hh:493
     fn get_name(&self) -> &str { "unreachable" }
@@ -13169,7 +13169,9 @@ mod tests {
         fd.bblocks.add_edge(b0.clone(), b1.clone()); // 0 -> 1 (reachable)
         // b2 has NO in-edges → unreachable.
         assert_eq!(fd.bblocks.get_size(), 3);
-        let removed = fd.remove_unreachable_blocks();
+        // Active search (checkexistence=true), matching the oracle's
+        // generateBlocks call form (flow.cc:844).
+        let removed = fd.remove_unreachable_blocks(false, true);
         assert!(removed, "should remove unreachable block 2");
         assert_eq!(fd.bblocks.get_size(), 2, "block 2 should be gone");
     }
