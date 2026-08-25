@@ -1317,3 +1317,21 @@ case 的 desc/copymap 投影为 "-"：oracle FlowBlock 用户构造器（cc:61-6
   （GetStr 家族 >10s 超时根因）。BlockCopy 补空 `incoming`/`outgoing` 字段保持 trait 全。
 - `set_out_edge_flag_mirrored` / `clear_out_edge_flag_mirrored` 的 self-edge 分支 — 同步改为
   out_edges_mut/in_edges_mut 访问器（原 downcast 链在结构化块 self-loop 上同样丢标记）。
+## isComplex 条件守卫域（RULEBLOCKOR-ISCOOMPLEX-0001，2026-08-25）
+
+`FlowBlock::is_complex`（trait 默认，block.hh:250）从恒 `false` 改为恒
+`true`——oracle 基类即 `return true`（非叶/非委托子类一律太复杂，不能当
+条件子句）；`BlockBasic::is_complex`（block.cc:2388-2444）全量移植 statement
+计数：分支本身（sizeOut>=2 时 statement=1）→ 每 CALL +1（先于输出判空）→
+无输出非流断 op（STORE 等）+1 → 有输出计算的保守 calc-explicit 判定
+（无 descendant / addr-tied / 被 marker 或块外 op 读 / 引用数 >
+max_implied_ref(默认 2, architecture.cc:1420) 任一命中 +1），statement>2
+即拒绝折叠。`BlockCopy::is_complex`（block.hh:536）委托
+`original.is_complex()`；`BlockCondition::is_complex`（block.hh:635）改为
+`first.is_complex()`（原无条件 `true` 是背离 oracle 的占位）。消费方：
+blockaction.rs `try_rule_or`（ruleBlockOr blockaction.cc:1342）在折叠
+INT_OR/AND 条件前用 `orblock.is_complex()` 守卫——此前恒 false 宽松放行，
+导致 my_fwrite 出现 Ghidra 不会做的错误折叠（空体 `if (…||…) {}` 形态）。
+注：Ghidra 对 `bl` 自身的 isComplex 检查在 cc:1333-1334 处于注释状态，Rugra
+同样不查 `bl` 只查 `orblock`。Rugra 的 BlockBasic 无 arch 回指针，
+max_implied_ref 取默认常量 2（与 ActionRestructureVarnode 同一先例）。

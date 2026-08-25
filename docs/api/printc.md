@@ -1495,3 +1495,18 @@ label 的 implicit-function-declaration）。
 - `audit_syntax`：53 OK/71 FAIL → 55 OK/69 FAIL（+2：清零 2 处
   "标号使用前未定义"）。
 - `cargo test --lib printc` 10/10；funcdata 18 失败为预存（stash 验证）。
+
+## DEAD 守卫上移 + 结构化体空判定域（PRINTC-DEADGUARD-TOPLEVEL-0001，2026-08-25）
+
+1. **DEAD 跳过只属于顶层游走**：Ghidra 的发射树没有 dead-block 概念——
+   emitBlockIf 无条件 `getBlock(1)->emit(this)`（printc.cc:2921-2922），
+   emitBlockList 对每个 child 同理。结构化父块是其子块唯一发射者（无论
+   consumed 标志），父定向递归不得消费 DEAD 标志。`emit_block_structured`
+   内的 DEAD 早退移除，改由入口游走（`emit_block_graph` 顶层循环与
+   doc_function 的 root/unreachable 循环）在调用前自行跳过 DEAD 块。
+2. **is_block_body_empty 只对叶体有意义**：Ghidra 的 emitBlockIf
+   （printc.cc:2878-2943）没有空体跳过；Rugra 的空体扫描只对叶体
+   （Basic/Copy，get_ops() 列真实 op）有意义——结构化体（BlockIf/
+   BlockList/...）自身无直接 op，扫描必须报非空并交给递归发射决定；之前
+   扫描把每个结构化体都误判为空，吞掉整个 then 分支（my_fwrite 的嵌套
+   fopen/return-if 丢失只剩 `if (cond) {}` 的根因之一）。

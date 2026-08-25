@@ -810,3 +810,16 @@ FSPEC-POSSIBLEPARAM-JOIN-0006 的 metadata residual 登记）：
 - 残差：BE 空间行仍 UNTESTED（ADDRESS-0001 过渡 enum 小端限定）；
   fspec 内 spaceless `justified_contain` 生产调用方清零（仅
   `justified_contain_in_space` 内部委托与测试保留）。
+## locked_output_storage 域（FSPEC-LOCKEDOUTSTORAGE-0001，2026-08-25）
+
+新增 `FuncProto::locked_output_storage`（coreaction.cc:4637-4648 的
+outparam getAddress/getSize 支撑）：解析类型锁定返回值的存储为
+`(space, offset, size)`。Ghidra 的 `FuncProto::getOutput()` 携带已解析
+ProtoParameter（锁定签名时地址由模型输出指派固定）；Rugra FuncProto 只保存
+返回数据类型，故按需跑同一指派：`ProtoModel::assignParameterStorage` 的输出
+半（fspec.cc:2429-2440），再把指派 offset 映射回所属输出 ParamEntry 恢复
+空间标识（ParameterPieces.addr 在过渡 Address 模型中无空间）。void/不可
+指派返回返回 None；assignAddressFallback 在成功路径 piece.type 为 null
+（fspec.cc:748-770），只有降级 void 兜底才填 void 类型（fspec.cc:2438-2442）
+——前置 metatype 过滤后残余 Some(void) 即降级信号，同样返回 None。
+消费方：coreaction.rs ActionPrototypeTypes Step 3（锁定 RETURN 读插入）。

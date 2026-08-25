@@ -879,3 +879,28 @@ f_loop_edge 环断边标——即 oracle 的入口态，此前缺失。结构化
 （block.cc:2104-2147 完整移植 + oracle fixture
 `tests/oracle/block_calcloop_1204` 七 case 双侧 byte-MATCH，含
 structureReset 链 structureLoops+calcForwardDominator 端到端投影）。
+
+## selfIdentify 外部边改写/dedup/剥离域（BLOCKSTRUCT-SELFIDENTIFY-EXT-0001，2026-08-25）
+
+`identify_internal`（BlockGraph::identifyInternal+selfIdentify，
+block.cc:884-963）补齐三个外部半边语义：
+
+1. **改写全类型化**（`rewrite_out_edges_to_idx`/`rewrite_in_edges_to_idx`，
+   对应 cc:910-912/922-924 的 replaceOutEdge/replaceInEdge）：Ghidra 的边数组
+   在 FlowBlock 基类，任何块类型的邻居边都会被改写；Rugra 之前的
+   BlockBasic-only 改写使结构化块残留指向已消费组件的陈旧边，膨胀下游规则
+   的 sizeIn/sizeOut（ruleBlockCat `outblock->sizeIn()!=1`，
+   blockaction.cc:1292）。
+2. **外部 dedup**（`dedup_edges_all_types`，cc:930 selfIdentify 末尾的
+   dedup()）：多个被消费组件（或 install 块+组件）各有边指向同一外部块时，
+   Ghidra 的成对半边删除顺带收敛外部重复边；Rugra 单侧边模型需在全部改写
+   完成后对 touched 外部块显式 dedup（labels OR 合并，block.cc:447-501）。
+3. **组件外边剥离**（strip_external）：Ghidra 的 replace*Edge 半删除把组件
+   的外部边移交给复合块，组件只保留组件间内部边；Rugra 之前对被消费块
+   blanket clear_edges，现改为按 is_component 谓词 retain（内部边如
+   cond→clause 保留，外部边如 clause→merge 移交复合块），与 oracle 的
+   per-component in/out 计数一致。
+
+另：cc:951 `ident->flags |= (f_interior_gotoout|f_interior_gotoin)`——复合块
+从每个被消费组件（含 install 块，它在 Ghidra 的 -nodes- 集内）继承
+interior-goto 标记。

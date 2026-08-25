@@ -3237,14 +3237,16 @@ impl PrintC {
 
         // Skip blocks that have been consumed by structuring (DEAD flag set by
         // CollapseStructure when a block is absorbed into a BlockIf/BlockList/etc.)
-        // These blocks have been replaced by structured blocks; their ops are emitted
-        // via the structured block's recursive children traversal. Mark as emitted
-        // so doc_function's root/unreachable loops don't re-visit them (single-
-        // ownership: a consumed block is emitted only via its structured parent).
-        if block_arc.read().unwrap().get_flags() & crate::block::block_flags::DEAD != 0 {
-            emitted.insert(block_idx);
-            return;
-        }
+        // NOTE: this guard belongs to the TOP-LEVEL graph walks only. Ghidra's
+        // emit tree has no dead-block concept at all — emitBlockIf calls
+        // bl->getBlock(1)->emit(this) unconditionally (printc.cc:2921-2922),
+        // emitBlockList likewise for every child. A structured parent OWNS its
+        // children and is their sole emitter, consumed flag or not, so the
+        // parent-directed recursion below must never consult this flag. The
+        // entry walks (emit_block_graph and doc_function's root/unreachable
+        // loops) apply the DEAD skip themselves before calling in.
+        let bt = block_arc.read().unwrap().get_type();
+        let _ = bt;
 
         // Skip all emission after RETURN — prevents dead-code blocks from appearing.
         // BUT control structures (WhileDo/DoWhile/If/etc) must still render even
@@ -3286,6 +3288,7 @@ impl PrintC {
         }
 
         let block_type = block_arc.read().unwrap().get_type();
+
 
         match block_type {
             BlockType::If => self.emit_structured_if(block_arc, graph, emitted),
@@ -3417,10 +3420,27 @@ impl PrintC {
                     if seq_emit {
                         // Already emitted sequentially, skip normal BlockIf processing
                     } else {
-                    // Check if bodies have any emittable ops — skip empty if/else blocks
-                    let if_body_empty = self.is_block_body_empty(&if_data.if_body);
+                    // Check if bodies have any emittable ops — skip empty if/else
+                    // blocks. Ghidra's emitBlockIf (printc.cc:2878-2943) has no
+                    // empty-body skip at all: getBlock(1)->emit(this) runs
+                    // unconditionally. The emptiness scan is only meaningful
+                    // for leaf bodies (Basic/Copy, where get_ops() lists real
+                    // ops); a structured body (BlockIf/BlockList/...) has no
+                    // direct ops of its own, so the scan must report non-empty
+                    // and let the recursive emit decide — previously the scan
+                    // mis-classified every structured body as empty and
+                    // swallowed the entire then-branch (e.g. my_fwrite's
+                    // nested fopen/return-if lost with only `if (cond) {}`).
+                    let body_empty = |pself: &Self, b: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>| {
+                        let is_leaf = matches!(
+                            b.read().unwrap().get_type(),
+                            BlockType::Basic | BlockType::Copy
+                        );
+                        is_leaf && pself.is_block_body_empty(b)
+                    };
+                    let if_body_empty = body_empty(self, &if_data.if_body);
                     let else_body_empty = if_data.else_body.as_ref()
-                        .map_or(true, |eb| self.is_block_body_empty(eb));
+                        .map_or(true, |eb| body_empty(self, eb));
 
                     if if_body_empty && else_body_empty {
                         // Both bodies empty — skip entire if/else, just emit condition block's ops
@@ -6676,6 +6696,12 @@ impl PrintC {
         let mut emitted = std::collections::HashSet::new();
         for i in 0..graph.get_size() {
             if let Some(block_arc) = graph.get_block(i) {
+                // Top-level walk: skip blocks consumed into a structured
+                // parent (DEAD) — the parent emits them via its children
+                // (single-ownership, mirroring Ghidra's compacted list).
+                if block_arc.read().unwrap().get_flags() & crate::block::block_flags::DEAD != 0 {
+                    continue;
+                }
                 let block_idx = std::sync::Arc::as_ptr(&block_arc) as *const () as usize;
                 if !emitted.contains(&block_idx) {
                     self.emit_block_structured(&block_arc, graph, &mut emitted);
@@ -7423,7 +7449,9 @@ impl PrintLanguage for PrintC {
             if let Some(block_arc) = graph.get_block(i) {
                 let block_idx = std::sync::Arc::as_ptr(&block_arc) as *const () as usize;
                 let size_in = block_arc.read().unwrap().size_in();
-                if size_in == 0 && !discovery_emitted.contains(&block_idx) {
+                let is_dead = block_arc.read().unwrap().get_flags()
+                    & crate::block::block_flags::DEAD != 0;
+                if size_in == 0 && !is_dead && !discovery_emitted.contains(&block_idx) {
                     self.emit_block_structured(&block_arc, graph, &mut discovery_emitted);
                 }
             }
@@ -7432,10 +7460,14 @@ impl PrintLanguage for PrintC {
         // Without this, globals referenced only in unreachable blocks (e.g.
         // glob_buffer in glob_set's strdup call after a return) won't be
         // collected in Pass 1, so their extern declarations are missing.
+        // DEAD (consumed) blocks are skipped: their structured parent
+        // discovers them via the child recursion above.
         for i in 0..graph.get_size() {
             if let Some(block_arc) = graph.get_block(i) {
                 let block_idx = std::sync::Arc::as_ptr(&block_arc) as *const () as usize;
-                if !discovery_emitted.contains(&block_idx) {
+                let is_dead = block_arc.read().unwrap().get_flags()
+                    & crate::block::block_flags::DEAD != 0;
+                if !is_dead && !discovery_emitted.contains(&block_idx) {
                     self.emit_block_structured(&block_arc, graph, &mut discovery_emitted);
                 }
             }

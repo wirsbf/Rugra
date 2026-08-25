@@ -1655,3 +1655,20 @@ e2e return 值折叠链的最后检验环节（GAP-A/GAP-B 已集成后的上游
   路径、addr-tied 子分支（需 partialroot 旗标基建）、checkImpliedCover
   LOAD/STORE/CALL 交叉（Rust 块级近似仍在）、标记次序（平坦 vs DFS 后序，
   等价性论证未钉）。
+## ActionPrototypeTypes 锁定输出/模型恢复域（COREACTION-PROTOLOCKEDOUT-0001，2026-08-25）
+
+`ActionPrototypeTypes::apply`（coreaction.cc:4607-4651）补两处：
+
+1. **模型不变量恢复**（cc:4613-4614 前置）：Rugra 的 DWARF/PLT 锁定签名
+   路径可能留下 `model=None && model_locked=true`，破坏下游一切模型查询
+   （Ghidra 的 FuncProto 永远持有已解析模型，未知名在 FuncProto::decode
+   映射到 createUnknownModel，fspec.cc:4697）。在 evalfp 就绪且无模型时
+   安装默认模型——锁只防替换，此处是恢复不变量而非替换。
+2. **Step 3 锁定输出读插入**（cc:4637-4649）：isOutputLocked 且返回类型非
+   void 时，为每个存活非 halt RETURN 插入输出存储读作为最后输入
+   （`opInsertInput(op, newVarnode(size,addr), numInput())` +
+   `updateType(type,true,true)`）——这是返回值数据流边，heritage 把自由读
+   重命名到到达定义得到 `return <value>`，并启用 ActionReturnSplit 的
+   分支 RETURN。之前只移植了 else 臂（initActiveOutput），导致所有
+   DWARF/PLT 锁定签名函数反编译为无值 `return;` 且产值 op 被 dead-code。
+   storage 解析在 fspec.rs `locked_output_storage`（见 fspec.md）。

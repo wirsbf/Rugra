@@ -485,6 +485,71 @@ impl FuncProto {
         model.output.characterize_as_param(addr_space, addr_offset, size)
     }
 
+    // Ghidra: coreaction.cc:4637-4648 ActionPrototypeTypes (outparam getAddress/getSize)
+    /// Resolve the storage of the type-locked return value as
+    /// `(space, offset, size)`. Ghidra's `FuncProto::getOutput()` carries the
+    /// resolved ProtoParameter (address fixed by the model's output
+    /// assignment when the signature was locked); Rugra's FuncProto keeps
+    /// only the return data-type, so this runs the same assignment on demand:
+    /// `ProtoModel::assignParameterStorage`'s output half (fspec.cc:2429-
+    /// 2440), then maps the assigned offset back onto the owning output
+    /// ParamEntry to recover the space identity (ParameterPieces.addr is
+    /// spaceless in the transitional Address model). Returns None for a
+    /// void/unassignable return.
+    pub fn locked_output_storage(&self) -> Option<(AddressSpace, u64, i32)> {
+        if !self.output_type_locked {
+            return None;
+        }
+        if matches!(
+            self.return_type.get_metatype(),
+            crate::type_system::TypeMetatype::Void
+        ) {
+            return None;
+        }
+        let model = self.model.as_ref();
+        let model = model?;
+        let proto = PrototypePieces {
+            out_type: Some(&self.return_type),
+            in_types: &[],
+            first_var_arg_slot: -1,
+        };
+        let mut res: Vec<ParameterPieces> = Vec::new();
+        // ignore_output_error=true: an unassignable return degrades to the
+        // void entry, which the type check above already filtered out.
+        let assign = model.assign_parameter_storage(&proto, &mut res, true, None);
+        if assign.is_err() {
+            return None;
+        }
+        let piece = res.first()?;
+        // Ghidra's assignAddressFallback leaves piece.type null on success
+        // (fspec.cc:748-770); only the degraded-void catch fills in a void
+        // type (fspec.cc:2438-2442). The metatype filter above already
+        // excluded a genuine void return, so a Some(void) here is the
+        // degradation signal.
+        if let Some(t) = &piece.ty {
+            if matches!(t.get_metatype(), crate::type_system::TypeMetatype::Void) {
+                return None;
+            }
+        }
+        let off = piece.addr.as_u64();
+        let size = self.return_type.get_size() as i32;
+        if size <= 0 {
+            return None;
+        }
+        let entries: &[ParamEntry] = match &model.output {
+            ParamListOutput::Standard(list) => &list.base.entry,
+            ParamListOutput::Register(list) => &list.base.base.entry,
+        };
+        for e in entries {
+            let base = e.get_base();
+            let esize = e.get_size() as u64;
+            if off >= base && (off - base) + size as u64 <= esize {
+                return Some((e.get_space(), off, size));
+            }
+        }
+        None
+    }
+
     // Ghidra: fspec.cc:4459 FuncProto::getBiggestContainedInputParam
     /// Find the biggest input-parameter storage entirely contained in the
     /// given range. The varargs and `voidinputlock` early-returns are exact;

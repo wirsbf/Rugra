@@ -630,14 +630,15 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         (self.get_flags() & block_flags::FLIP_PATH) != 0
     }
 
-    // Ghidra: block.hh:332 FlowBlock::isComplex
-    /// Is the control flow of this block too complex for simple condition
-    /// folding? Faithful to `isComplex()` (block.hh:332, block.cc:2388).
-    /// For BlockBasic: checks if the last op is a CBRANCH with additional
-    /// ops after it (indicating complex register manipulation).
-    /// Simplified: returns false (conservative — allows folding).
+    // Ghidra: block.hh:249 FlowBlock::isComplex
+    /// Is \b this too complex to be a condition (BlockCondition)?
+    /// Faithful to the base virtual (block.hh:249-250): returns \b true —
+    /// anything that is not specifically a leaf/basic block (or a delegating
+    /// subclass) is too complex to be emitted as a conditional clause.
+    /// BlockBasic/BlockCopy/BlockCondition override with the real semantics
+    /// (block.cc:2388, block.hh:536, block.hh:635).
     fn is_complex(&self) -> bool {
-        false
+        true
     }
 
     // Ghidra: block.cc:405 FlowBlock::restrictedByConditional
@@ -1344,6 +1345,104 @@ impl FlowBlock for BlockBasic {
     // RUGRA-GLUE: Rust helper (Ghidra BlockBasic exposes op list via begin/end iterators)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         self.ops.clone()
+    }
+
+    // Ghidra: block.cc:2388 BlockBasic::isComplex
+    /// Is this block too complicated to serve as a clause of a
+    /// BlockCondition? Faithful port of `BlockBasic::isComplex`
+    /// (block.cc:2388-2444): counts "statements" in the block —
+    ///   - the branch itself, when sizeOut()>=2 (cc:2399-2400),
+    ///   - every CALL (cc:2407-2408), checked before the output checks,
+    ///   - every output-less op that is not a flow-break (stores, cc:2409-2412),
+    ///   - every calculation whose output has no descendants, is
+    ///     address-tied, is read by an op outside this block, or is read
+    ///     more than max_implied_ref times (cc:2413-2438),
+    /// returning true as soon as statement > 2 (cc:2441).
+    fn is_complex(&self) -> bool {
+        // cc:2398-2400: statement = 0; if (sizeOut()>=2) statement = 1;
+        // Consider the branch as a statement.
+        let mut statement: i32 = 0;
+        if self.size_out() >= 2 {
+            statement = 1;
+        }
+        // cc:2401: maxref = data->getArch()->max_implied_ref — the default 2
+        // (architecture.cc:1420). Rugra's BlockBasic holds no arch
+        // back-pointer; same constant precedent as ActionRestructureVarnode
+        // (coreaction.rs "arch.max_implied_ref default").
+        let maxref: i32 = 2;
+        for op_ref in &self.ops {
+            let inst = op_ref.0.read().unwrap();
+            // cc:2405: if (inst->isMarker()) continue;
+            if inst.is_marker() {
+                continue;
+            }
+            match &inst.output {
+                None => {
+                    // cc:2407-2408: isCall is checked first in Ghidra, before
+                    // the null-output arm — a CALL counts regardless of output.
+                    if inst.is_call() {
+                        statement += 1;
+                    } else if !inst.is_flow_break() {
+                        // cc:2409-2412: output-less flow-breaks are free;
+                        // everything else (stores) is a statement.
+                        statement += 1;
+                    }
+                }
+                Some(out_vn) => {
+                    if inst.is_call() {
+                        // cc:2407-2408: calls with an output still count as
+                        // exactly one statement (never reach calc-explicit).
+                        statement += 1;
+                    } else {
+                        // cc:2413-2438: calculation with output — conservative
+                        // version of Varnode::calc_explicit.
+                        let vn = out_vn.read().unwrap();
+                        let mut yesstatement = false;
+                        if vn.descend_iter().next().is_none() {
+                            // cc:2417-2418: hasNoDescend → dead calculation.
+                            yesstatement = true;
+                        } else if vn.is_addr_tied() {
+                            // cc:2419-2420: isAddrTied → conservative explicit.
+                            yesstatement = true;
+                        } else {
+                            // cc:2422-2435: count references; used outside
+                            // this block or too many refs → statement.
+                            let mut totalref: i32 = 0;
+                            for d_arc in vn.descend_iter() {
+                                let d_op = d_arc.read().unwrap();
+                                // cc:2426: d_op->isMarker() ||
+                                //          (d_op->getParent() != this)
+                                // "used outside of block": Ghidra compares
+                                // the descendant's parent BlockBasic with
+                                // `this`; Rugra's sblocks mirror shares the
+                                // op Arcs, so membership in self.ops is the
+                                // same test.
+                                if d_op.is_marker()
+                                    || !self.ops.iter().any(|o| Arc::ptr_eq(&o.0, &d_arc))
+                                {
+                                    yesstatement = true;
+                                    break;
+                                }
+                                totalref += 1;
+                                if totalref > maxref {
+                                    // cc:2431-2433: used too many times.
+                                    yesstatement = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if yesstatement {
+                            statement += 1;
+                        }
+                    }
+                }
+            }
+            // cc:2441: if (statement >2) return true;
+            if statement > 2 {
+                return true;
+            }
+        }
+        false
     }
 
     // Ghidra: block.hh:466 BlockBasic::insert
@@ -3491,6 +3590,12 @@ impl FlowBlock for BlockCopy {
     fn get_type(&self) -> BlockType {
         BlockType::Copy
     }
+    // Ghidra: block.hh:536 BlockCopy::isComplex
+    /// Delegates to the mirrored block (usually a BlockBasic), exactly as
+    /// Ghidra's inline `virtual bool isComplex(void) const { return copy->isComplex(); }`.
+    fn is_complex(&self) -> bool {
+        self.original.read().unwrap().is_complex()
+    }
     // Ghidra: block.hh:165 FlowBlock::getFlags
     fn get_flags(&self) -> u32 {
         self.flags
@@ -4736,6 +4841,12 @@ impl FlowBlock for BlockCondition {
         ops.extend(self.second.read().unwrap().get_ops());
         ops
     }
+    // Ghidra: block.hh:635 BlockCondition::isComplex
+    /// `virtual bool isComplex(void) const { return getBlock(0)->isComplex(); }`
+    /// — a compound condition is exactly as complex as its first clause.
+    fn is_complex(&self) -> bool {
+        self.first.read().unwrap().is_complex()
+    }
     // Ghidra: block.cc:3034 BlockCondition::scopeBreak — delegate to the
     // inherent helper which holds the faithful port (cc:3037-3038 recurse
     // into both sub-conditions with cur_exit=-1, no fixed exit).
@@ -4774,13 +4885,13 @@ impl BlockCondition {
         self.second.read().unwrap().flip_in_place_test() == 0
     }
 
-    /// Ghidra `BlockCondition::isComplex` (block.hh, inherited): is this
-    /// condition too complex to fold? Rugra returns true unconditionally for
-    /// a compound condition (matching Ghidra's BlockCondition never being
-    /// considered "simple").
-    // RUGRA-GLUE: compound conditions are always complex (Ghidra BlockCondition has no isComplex override; base returns true for non-leaf)
+    /// Ghidra `BlockCondition::isComplex` (block.hh:635): a compound
+    /// condition is exactly as complex as its first sub-block —
+    /// `{ return getBlock(0)->isComplex(); }`. The previous unconditional
+    /// `true` was a stand-in that diverged from the oracle.
+    // Ghidra: block.hh:635 BlockCondition::isComplex
     pub fn is_complex(&self) -> bool {
-        true
+        self.first.read().unwrap().is_complex()
     }
 
     /// Ghidra `BlockCondition::lastOp` (block.cc:3016-3021): the last op is

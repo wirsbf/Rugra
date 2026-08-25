@@ -129,6 +129,7 @@ fn build_copy(sblocks: &mut BlockGraph, bblocks: &BlockGraph) {
     // Clear existing structure blocks
     sblocks.clear();
 
+
     // Copy each basic block
     for i in 0..bblocks.get_size() {
         if let Some(bb) = bblocks.get_block(i) {
@@ -275,6 +276,183 @@ fn set_out_edge_flag_all_types(
         } else if let Some(bg) = any.downcast_mut::<crate::block::BlockGoto>() {
             or_in_flag!(bg);
         }
+    }
+}
+
+// Ghidra: block.cc:178 FlowBlock::replaceOutEdge (selfIdentify's external-src half, block.cc:910-912)
+/// Retarget every outgoing edge of `bl` that currently points at the block
+/// whose graph index is `old_idx` so it points at `new_block` instead.
+/// Type-agnostic mirror of Ghidra's `otherbl->replaceOutEdge(j,this)`:
+/// Ghidra's virtual edge arrays live on every FlowBlock, so the rewrite
+/// lands for structured components (BlockList/BlockIf/...) exactly as for
+/// BlockBasic. The previous BlockBasic-only rewrite left structured blocks'
+/// stale edges pointing at consumed (DEAD) components, inflating the
+/// sizeIn/sizeOut tests of downstream rules (ruleBlockCat's
+/// `outblock->sizeIn() != 1`, blockaction.cc:1292).
+pub(crate) fn rewrite_out_edges_to_idx(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    old_idx: i32,
+    new_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+) -> bool {
+    let mut changed = false;
+    let mut w = bl.write().unwrap();
+    let any = w.as_any_mut();
+    macro_rules! rewrite_out {
+        ($blk:expr) => {
+            for e in $blk.outgoing.iter_mut() {
+                let t = match e.point.try_read() {
+                    Ok(g) => g.get_index(),
+                    Err(_) => continue,
+                };
+                if t == old_idx && !std::sync::Arc::ptr_eq(&e.point, new_block) {
+                    e.point = new_block.clone();
+                    changed = true;
+                }
+            }
+        };
+    }
+    if let Some(bb) = any.downcast_mut::<crate::block::BlockBasic>() {
+        rewrite_out!(bb);
+    } else if let Some(bg) = any.downcast_mut::<crate::block::BlockGraph>() {
+        rewrite_out!(bg);
+    } else if let Some(bg) = any.downcast_mut::<crate::block::BlockList>() {
+        rewrite_out!(bg);
+    } else if let Some(bi) = any.downcast_mut::<crate::block::BlockIf>() {
+        rewrite_out!(bi);
+    } else if let Some(bw) = any.downcast_mut::<crate::block::BlockWhileDo>() {
+        rewrite_out!(bw);
+    } else if let Some(bd) = any.downcast_mut::<crate::block::BlockDoWhile>() {
+        rewrite_out!(bd);
+    } else if let Some(bi) = any.downcast_mut::<crate::block::BlockInfLoop>() {
+        rewrite_out!(bi);
+    } else if let Some(bc) = any.downcast_mut::<crate::block::BlockCondition>() {
+        rewrite_out!(bc);
+    } else if let Some(bs) = any.downcast_mut::<crate::block::BlockSwitch>() {
+        rewrite_out!(bs);
+    } else if let Some(bg) = any.downcast_mut::<crate::block::BlockGoto>() {
+        rewrite_out!(bg);
+    }
+    changed
+}
+
+// Ghidra: block.cc:160 FlowBlock::replaceInEdge (selfIdentify's external-dst half, block.cc:922-924)
+/// Retarget every incoming edge of `bl` that currently comes from the block
+/// whose graph index is `old_idx` so it comes from `new_block` instead.
+/// Type-agnostic mirror of Ghidra's `otherbl->replaceInEdge(j,this)`.
+pub(crate) fn rewrite_in_edges_to_idx(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    old_idx: i32,
+    new_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+) -> bool {
+    let mut changed = false;
+    let mut w = bl.write().unwrap();
+    let any = w.as_any_mut();
+    macro_rules! rewrite_in {
+        ($blk:expr) => {
+            for e in $blk.incoming.iter_mut() {
+                let s = match e.point.try_read() {
+                    Ok(g) => g.get_index(),
+                    Err(_) => continue,
+                };
+                if s == old_idx && !std::sync::Arc::ptr_eq(&e.point, new_block) {
+                    e.point = new_block.clone();
+                    changed = true;
+                }
+            }
+        };
+    }
+    if let Some(bb) = any.downcast_mut::<crate::block::BlockBasic>() {
+        rewrite_in!(bb);
+    } else if let Some(bg) = any.downcast_mut::<crate::block::BlockGraph>() {
+        rewrite_in!(bg);
+    } else if let Some(bg) = any.downcast_mut::<crate::block::BlockList>() {
+        rewrite_in!(bg);
+    } else if let Some(bi) = any.downcast_mut::<crate::block::BlockIf>() {
+        rewrite_in!(bi);
+    } else if let Some(bw) = any.downcast_mut::<crate::block::BlockWhileDo>() {
+        rewrite_in!(bw);
+    } else if let Some(bd) = any.downcast_mut::<crate::block::BlockDoWhile>() {
+        rewrite_in!(bd);
+    } else if let Some(bi) = any.downcast_mut::<crate::block::BlockInfLoop>() {
+        rewrite_in!(bi);
+    } else if let Some(bc) = any.downcast_mut::<crate::block::BlockCondition>() {
+        rewrite_in!(bc);
+    } else if let Some(bs) = any.downcast_mut::<crate::block::BlockSwitch>() {
+        rewrite_in!(bs);
+    } else if let Some(bg) = any.downcast_mut::<crate::block::BlockGoto>() {
+        rewrite_in!(bg);
+    }
+    changed
+}
+
+// Ghidra: block.cc:525 FlowBlock::dedup (external half of selfIdentify's dedup)
+/// Merge duplicate edges in `bl`'s in/out lists: keep the first edge to each
+/// distinct block, OR the labels together, drop the rest — the semantics of
+/// `FlowBlock::dedup`/`eliminateInDups`/`eliminateOutDups` (block.cc:447-501,
+/// 525-539). Ghidra runs `this->dedup()` on the composite; its half-deletes
+/// also clean the external counterpart halves, because Ghidra edges are
+/// paired. Rugra's one-sided edge model needs the same dedup applied to the
+/// external blocks that just had multiple edges retargeted onto the same
+/// composite (e.g. both the outer condition's false-exit and the inner
+/// clause's exit retarget onto the shared merge block, which must end with
+/// exactly one in-edge from the composite so ruleBlockCat can chain it).
+pub(crate) fn dedup_edges_all_types(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+) {
+    // RUGRA-GLUE: dedup_list — Rust 借用安全 helper：Ghidra 的
+    // FlowBlock::dedup/eliminateInDups/eliminateOutDups 直接遍历单一的
+    // `intothis`/`outofthis` 数组对，而 Rugra 每个 block struct 各自持有
+    // `incoming`/`outgoing` 两个 Vec，需要把同一套 dedup 循环体（block.cc:
+    // 447-501 的单数组循环）逐 Vec 展开，故为纯语言结构胶水。
+    fn dedup_list(edges: &mut Vec<crate::block::BlockEdge>) {
+        let mut keep: Vec<usize> = Vec::new();
+        let mut i = 0;
+        while i < edges.len() {
+            let dup = keep.iter().any(|&k| {
+                Arc::ptr_eq(&edges[k].point, &edges[i].point)
+            });
+            if dup {
+                // block.cc:459/488: labels OR into the kept edge, drop this one.
+                let pos = keep.iter().position(|&k| {
+                    Arc::ptr_eq(&edges[k].point, &edges[i].point)
+                }).unwrap();
+                let label = edges[i].flags;
+                edges[pos].flags |= label;
+                edges.remove(i);
+            } else {
+                keep.push(i);
+                i += 1;
+            }
+        }
+    }
+    let mut w = bl.write().unwrap();
+    let any = w.as_any_mut();
+    macro_rules! dedup_edges {
+        ($blk:expr) => {
+            dedup_list(&mut $blk.incoming);
+            dedup_list(&mut $blk.outgoing);
+        };
+    }
+    if let Some(bb) = any.downcast_mut::<crate::block::BlockBasic>() {
+        dedup_edges!(bb);
+    } else if let Some(bg) = any.downcast_mut::<crate::block::BlockGraph>() {
+        dedup_edges!(bg);
+    } else if let Some(bg) = any.downcast_mut::<crate::block::BlockList>() {
+        dedup_edges!(bg);
+    } else if let Some(bi) = any.downcast_mut::<crate::block::BlockIf>() {
+        dedup_edges!(bi);
+    } else if let Some(bw) = any.downcast_mut::<crate::block::BlockWhileDo>() {
+        dedup_edges!(bw);
+    } else if let Some(bd) = any.downcast_mut::<crate::block::BlockDoWhile>() {
+        dedup_edges!(bd);
+    } else if let Some(bi) = any.downcast_mut::<crate::block::BlockInfLoop>() {
+        dedup_edges!(bi);
+    } else if let Some(bc) = any.downcast_mut::<crate::block::BlockCondition>() {
+        dedup_edges!(bc);
+    } else if let Some(bs) = any.downcast_mut::<crate::block::BlockSwitch>() {
+        dedup_edges!(bs);
+    } else if let Some(bg) = any.downcast_mut::<crate::block::BlockGoto>() {
+        dedup_edges!(bg);
     }
 }
 
@@ -2393,6 +2571,10 @@ impl<'a> CollapseStructure<'a> {
         // with new_block, so capture all boundary edges first.
         let mut new_in: Vec<crate::block::BlockEdge> = Vec::new();
         let mut new_out: Vec<crate::block::BlockEdge> = Vec::new();
+        // External blocks whose edge lists were (or will be) retargeted onto
+        // new_block — deduped once at the end, mirroring the external half of
+        // Ghidra selfIdentify's final dedup() (block.cc:930).
+        let mut touched: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
 
         // Capture external in-edges of the install_idx block (cond/head).
         // These are in-edges whose source is NOT in consumed_set AND NOT the
@@ -2452,6 +2634,19 @@ impl<'a> CollapseStructure<'a> {
         for &c_idx in consumed_indices {
             let ci = c_idx as usize;
             if ci >= size { continue; }
+            // cc:951: ident->flags |= ((*iter)->flags & (f_interior_gotoout |
+            // f_interior_gotoin)) — the composite inherits interior-goto
+            // marks from every consumed component.
+            {
+                if let Some(cb) = self.graph.get_block(ci) {
+                    let cf = cb.read().unwrap().get_flags()
+                        & (crate::block::block_flags::INTERIOR_GOTOOUT
+                           | crate::block::block_flags::INTERIOR_GOTOIN);
+                    if cf != 0 {
+                        new_block.write().unwrap().set_flags(cf);
+                    }
+                }
+            }
             // Collect this consumed block's boundary edges.
             // IN-edges: source not in consumed set → boundary incoming.
             let (in_boundary, out_boundary) = {
@@ -2495,50 +2690,25 @@ impl<'a> CollapseStructure<'a> {
                 new_out.push(crate::block::BlockEdge::new(dst.clone(), new_in.len() as i32));
             }
             // Rewrite external blocks' edges to point to new_block, mirroring
-            // Ghidra selfIdentify's replaceOutEdge/replaceInEdge. This keeps
-            // parent CBRANCH out-edges consistent when their clause is consumed
-            // elsewhere (otherwise the parent's edge points at a now-DEAD block).
-            // Only Basic external blocks are rewritten (structured blocks keep
-            // their own edge vectors and are handled when they are the parent).
+            // Ghidra selfIdentify's replaceOutEdge/replaceInEdge (block.cc:
+            // 910-912, 922-924). This keeps parent CBRANCH out-edges and
+            // merge-block in-edges consistent when their clause/source is
+            // consumed elsewhere. Type-agnostic (Ghidra's edge arrays live on
+            // every FlowBlock); the previous BlockBasic-only rewrite left
+            // structured blocks with stale edges to consumed components,
+            // inflating sizeIn/sizeOut for downstream rules.
             for src in &in_boundary {
                 let s_any = src.clone();
                 // Avoid self-loop: don't rewrite new_block's own edge
                 if std::sync::Arc::ptr_eq(&s_any, new_block) { continue; }
-                let mut sb = s_any.write().unwrap();
-                let sref = sb.as_any_mut();
-                if let Some(bb) = sref.downcast_mut::<crate::block::BlockBasic>() {
-                    for eslot in 0..bb.outgoing.len() {
-                        // Use try_read: we hold sb's write lock, and if
-                        // outgoing[eslot].point IS sb (self-loop edge),
-                        // read would deadlock. try_read returns Err, skip.
-                        let t = match bb.outgoing[eslot].point.try_read() {
-                            Ok(g) => g.get_index(),
-                            Err(_) => continue,
-                        };
-                        if t == c_idx {
-                            bb.outgoing[eslot].point = new_block.clone();
-                        }
-                    }
-                }
+                touched.push(s_any.clone());
+                rewrite_out_edges_to_idx(&s_any, c_idx, new_block);
             }
             for dst in &out_boundary {
                 let d_any = dst.clone();
                 if std::sync::Arc::ptr_eq(&d_any, new_block) { continue; }
-                let mut db = d_any.write().unwrap();
-                let dref = db.as_any_mut();
-                if let Some(bb) = dref.downcast_mut::<crate::block::BlockBasic>() {
-                    for dslot in 0..bb.incoming.len() {
-                        // try_read: we hold db's write lock; if incoming[dslot].point
-                        // IS db (self-loop), read would deadlock.
-                        let s = match bb.incoming[dslot].point.try_read() {
-                            Ok(g) => g.get_index(),
-                            Err(_) => continue,
-                        };
-                        if s == c_idx {
-                            bb.incoming[dslot].point = new_block.clone();
-                        }
-                    }
-                }
+                touched.push(d_any.clone());
+                rewrite_in_edges_to_idx(&d_any, c_idx, new_block);
             }
         }
 
@@ -2589,101 +2759,115 @@ impl<'a> CollapseStructure<'a> {
 
         // NOW install new_block at install_idx (replaces the cond block).
         // Done AFTER self_identify captured the cond block's boundary edges.
-        // IMPORTANT: capture the old block's Arc BEFORE replacing, then update
-        // all other blocks' out-edges that pointed to the old block to point to
-        // new_block. Without this, Arc-identity edges keep pointing at the old
-        // (now-replaced) block, making the new structured block unreachable.
+        // IMPORTANT: after replacing, retarget every other block's edges that
+        // pointed at the old install block (index == install_idx, which the
+        // old block and new_block share) to new_block. The index-based
+        // rewrite covers every block type uniformly (Ghidra's selfIdentify
+        // walks the install block as a component — block.cc:940-963 passes
+        // the cond in -nodes- — so its external neighbors are retargeted like
+        // any consumed component's).
+        // NOW install new_block at install_idx (replaces the cond block).
+        // Done AFTER self_identify captured the cond block's boundary edges.
+        // IMPORTANT: after replacing, retarget every other block's edges that
+        // pointed at the old install block (index == install_idx, which the
+        // old block and new_block share) to new_block. The index-based
+        // rewrite covers every block type uniformly (Ghidra's selfIdentify
+        // walks the install block as a component — block.cc:940-963 passes
+        // the cond in -nodes- — so its external neighbors are retargeted like
+        // any consumed component's).
+        let mut old_install: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = None;
         if install_idx < size {
-            let old_block = self.graph.blocks[install_idx].clone();
+            // cc:951 (install block is in Ghidra's -nodes- set): the
+            // composite inherits its interior-goto marks too.
+            {
+                let cf = self.graph.blocks[install_idx].read().unwrap().get_flags()
+                    & (crate::block::block_flags::INTERIOR_GOTOOUT
+                       | crate::block::block_flags::INTERIOR_GOTOIN);
+                if cf != 0 {
+                    new_block.write().unwrap().set_flags(cf);
+                }
+            }
+            old_install = Some(self.graph.blocks[install_idx].clone());
             self.graph.blocks[install_idx] = new_block.clone();
-            // Scan all blocks; for any out-edge whose point Arc-matches old_block,
-            // redirect it to new_block.
             for gi in 0..size {
                 if gi == install_idx { continue; }
                 let gb = match self.graph.get_block(gi) { Some(b) => b, None => continue };
-                let mut gw = gb.write().unwrap();
-                let gref = gw.as_any_mut();
-                // BlockBasic edges:
-                if let Some(bb) = gref.downcast_mut::<crate::block::BlockBasic>() {
-                    for e in bb.outgoing.iter_mut() {
-                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
-                            e.point = new_block.clone();
-                        }
-                    }
-                    for e in bb.incoming.iter_mut() {
-                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
-                            e.point = new_block.clone();
-                        }
-                    }
-                } else if let Some(blist) = gref.downcast_mut::<crate::block::BlockList>() {
-                    for e in blist.outgoing.iter_mut() {
-                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
-                            e.point = new_block.clone();
-                        }
-                    }
-                    for e in blist.incoming.iter_mut() {
-                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
-                            e.point = new_block.clone();
-                        }
-                    }
-                } else if let Some(bif) = gref.downcast_mut::<crate::block::BlockIf>() {
-                    for e in bif.outgoing.iter_mut() {
-                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
-                            e.point = new_block.clone();
-                        }
-                    }
-                    for e in bif.incoming.iter_mut() {
-                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
-                            e.point = new_block.clone();
-                        }
-                    }
-                } else if let Some(bwd) = gref.downcast_mut::<crate::block::BlockWhileDo>() {
-                    for e in bwd.outgoing.iter_mut() {
-                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
-                            e.point = new_block.clone();
-                        }
-                    }
-                    for e in bwd.incoming.iter_mut() {
-                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
-                            e.point = new_block.clone();
-                        }
-                    }
-                } else if let Some(bcond) = gref.downcast_mut::<crate::block::BlockCondition>() {
-                    for e in bcond.outgoing.iter_mut() {
-                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
-                            e.point = new_block.clone();
-                        }
-                    }
-                    for e in bcond.incoming.iter_mut() {
-                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
-                            e.point = new_block.clone();
-                        }
-                    }
-                } else if let Some(binf) = gref.downcast_mut::<crate::block::BlockInfLoop>() {
-                    for e in binf.outgoing.iter_mut() {
-                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
-                            e.point = new_block.clone();
-                        }
-                    }
-                    for e in binf.incoming.iter_mut() {
-                        if std::sync::Arc::ptr_eq(&e.point, &old_block) {
-                            e.point = new_block.clone();
-                        }
-                    }
-                }
+                let ch1 = rewrite_out_edges_to_idx(&gb, install_idx as i32, new_block);
+                let ch2 = rewrite_in_edges_to_idx(&gb, install_idx as i32, new_block);
+                if ch1 || ch2 { touched.push(gb); }
             }
         }
 
-        // Clear consumed blocks' edges and mark DEAD (Ghidra removes them from list).
-        for &idx in consumed_indices {
-            let i = idx as usize;
-            if i < size && i != install_idx {
-                let mut b = self.graph.blocks[i].write().unwrap();
-                let any_ref = b.as_any_mut();
-                if let Some(bb) = any_ref.downcast_mut::<crate::block::BlockBasic>() {
-                    bb.clear_edges();
+        // Ghidra selfIdentify ends with dedup() (block.cc:930): its paired
+        // half-deletes collapse the external duplicates created when several
+        // consumed components (or the install block plus a component) each had
+        // an edge to the same external block. Rugra's one-sided edge model
+        // needs the explicit external dedup, run once AFTER all retargets.
+        for ext in &touched {
+            dedup_edges_all_types(ext);
+        }
+
+        // Ghidra selfIdentify moves each component's EXTERNAL edge halves
+        // onto the composite (the replace*Edge half-deletes, block.cc:160-191):
+        // after identification a component keeps only its component-to-
+        // component (internal) edges. Mirror that for every component — the
+        // consumed set plus the install block — instead of blanket-clearing,
+        // so per-component in/out counts match the oracle (internal edges
+        // like cond->clause stay; external ones like clause->merge move to
+        // the composite). Consumed components are then DEAD-flagged (Ghidra
+        // removes them from the list, block.cc:953-960).
+        {
+            let is_component =
+                |idx: i32| consumed_set.contains(&idx) || idx == install_idx as i32;
+            let strip_external =
+                |bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>| {
+                    let mut w = bl.write().unwrap();
+                    let any = w.as_any_mut();
+                    macro_rules! strip {
+                        ($blk:expr) => {{
+                            $blk.incoming.retain(|e| {
+                                e.point.try_read().map(|g| is_component(g.get_index()))
+                                    .unwrap_or(true)
+                            });
+                            $blk.outgoing.retain(|e| {
+                                e.point.try_read().map(|g| is_component(g.get_index()))
+                                    .unwrap_or(true)
+                            });
+                        }};
+                    }
+                    if let Some(bb) = any.downcast_mut::<crate::block::BlockBasic>() {
+                        strip!(bb);
+                    } else if let Some(bg) = any.downcast_mut::<crate::block::BlockGraph>() {
+                        strip!(bg);
+                    } else if let Some(bg) = any.downcast_mut::<crate::block::BlockList>() {
+                        strip!(bg);
+                    } else if let Some(bi) = any.downcast_mut::<crate::block::BlockIf>() {
+                        strip!(bi);
+                    } else if let Some(bw) = any.downcast_mut::<crate::block::BlockWhileDo>() {
+                        strip!(bw);
+                    } else if let Some(bd) = any.downcast_mut::<crate::block::BlockDoWhile>() {
+                        strip!(bd);
+                    } else if let Some(bgt) = any.downcast_mut::<crate::block::BlockGoto>() {
+                        strip!(bgt);
+                    } else if let Some(bc) = any.downcast_mut::<crate::block::BlockCondition>() {
+                        strip!(bc);
+                    } else if let Some(binf) = any.downcast_mut::<crate::block::BlockInfLoop>() {
+                        strip!(binf);
+                    } else if let Some(bs) = any.downcast_mut::<crate::block::BlockSwitch>() {
+                        strip!(bs);
+                    }
+                };
+            if let Some(oi) = &old_install {
+                strip_external(oi);
+            }
+            for &idx in consumed_indices {
+                let i = idx as usize;
+                if i < size && i != install_idx {
+                    if let Some(cb) = self.graph.get_block(i) {
+                        strip_external(&cb);
+                        cb.write().unwrap().set_flags(crate::block::block_flags::DEAD);
+                    }
                 }
-                b.set_flags(crate::block::block_flags::DEAD);
             }
         }
     }
