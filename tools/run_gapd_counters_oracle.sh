@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# GAPD-COUNTERS-1204: locked 12.0.4 bilateral runner.  Proves the two GAP-D
+# counter fixes: (1) ActionMarkExplicit::baseExplicit marks every member of
+# a multi-instance HighVariable explicit (coreaction.cc:3020-3021, before
+# the addrtied rule), and (2) ActionMarkImplied::apply's per-candidate
+# count increment surfaces through Action::perform (coreaction.cc:3434 +
+# action.cc:362).  Drives the real merge-group prefix assignhigh..
+# markimplied on a gated 2-instance stack cluster plus one all-constant
+# implied candidate; asserts act=markexplicit|res=5 and
+# act=markimplied|res=1 byte-identically on both sides.
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
+oracle_tag=Ghidra_12.0.4_build
+oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
+oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
+rugra_base_commit=1ff25f924635e12489ca9cba9c688443cae2401e
+rugra_base_tree=61d5dd05b8f3d95c711a5367bf4d793d87e332eb
+rugra_base_src_tree=4d553d6c0bfe78ac997fb5565389b7ca78df9ed9
+rugra_base_coreaction_blob=e5f2d7238b4974ef8a11a29b798a6ab5e8562764
+
+ghidra_root="$repo_root/ghidra"
+metadata="$repo_root/tests/oracle/gapd_counters_1204.metadata.json"
+cpp_fixture="$repo_root/tests/oracle/gapd_counters_1204.cc"
+rust_fixture="$repo_root/tests/oracle/gapd_counters_1204.rs"
+runner="$repo_root/tools/run_gapd_counters_oracle.sh"
+
+for required in "$metadata" "$cpp_fixture" "$rust_fixture" "$runner"; do
+  if [[ ! -f "$required" || -L "$required" ]]; then
+    echo "required input is not a regular non-symlink file: $required" >&2
+    exit 1
+  fi
+done
+
+actual_commit=$(git -C "$ghidra_root" rev-parse HEAD)
+actual_tag=$(git -C "$ghidra_root" rev-parse "refs/tags/$oracle_tag^{commit}")
+actual_cpp_tree=$(git -C "$ghidra_root" rev-parse \
+  "$oracle_commit:Ghidra/Features/Decompiler/src/decompile/cpp")
+actual_makefile=$(git -C "$ghidra_root" rev-parse \
+  "$oracle_commit:Ghidra/Features/Decompiler/src/decompile/cpp/Makefile")
+if [[ "$actual_commit" != "$oracle_commit" || "$actual_tag" != "$oracle_commit" || \
+      "$actual_cpp_tree" != "$oracle_cpp_tree" || \
+      "$actual_makefile" != "$oracle_makefile_blob" ]]; then
+  echo "locked Ghidra oracle identity mismatch" >&2
+  exit 1
+fi
+if ! git -C "$ghidra_root" diff --quiet -- \
+  Ghidra/Features/Decompiler/src/decompile/cpp; then
+  echo "locked Ghidra decompiler source is dirty" >&2
+  exit 1
+fi
+
+for binding in \
+  "$rugra_base_commit^{commit}:$rugra_base_commit" \
+  "$rugra_base_commit^{tree}:$rugra_base_tree" \
+  "$rugra_base_commit:src:$rugra_base_src_tree" \
+  "$rugra_base_commit:src/coreaction.rs:$rugra_base_coreaction_blob"; do
+  expression=${binding%:*}
+  expected=${binding##*:}
+  actual=$(git -C "$repo_root" rev-parse "$expression")
+  if [[ "$actual" != "$expected" ]]; then
+    echo "pinned Rugra base identity mismatch: $expression" >&2
+    exit 1
+  fi
+done
+
+runner_sha=$(sha256sum "$runner" | awk '{print $1}')
+python3 -I -S - "$metadata" "$cpp_fixture" "$rust_fixture" \
+  "$runner_sha" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+(metadata_raw, cpp_raw, rust_raw, runner_sha) = sys.argv[1:]
+
+def sha(path):
+    return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+
+def require(label, actual, expected):
+    if actual != expected:
+        raise SystemExit(f"{label} mismatch: expected={expected!r} actual={actual!r}")
+
+data = json.loads(pathlib.Path(metadata_raw).read_text(encoding="utf-8"))
+require("fixture", data["fixture_id"], "GAPD-COUNTERS-1204")
+require("overall", data["overall_status"], "MATCH")
+comparand = data["comparand"]
+for key, path in (
+    ("cpp_fixture_sha256", cpp_raw),
+    ("rust_fixture_sha256", rust_raw),
+):
+    require(key, sha(path), comparand[key])
+require("runner sha", runner_sha, comparand["runner_sha256"])
+
+fingerprinted = {
+    "architecture": data["architecture"],
+    "compiler_spec": data["compiler_spec"],
+    "analysis_options": data["analysis_options"],
+    "inputs": data["input_manifest"]["inputs"],
+}
+canonical = json.dumps(
+    fingerprinted, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+).encode("utf-8")
+require("input manifest sha", hashlib.sha256(canonical).hexdigest(),
+        data["input_manifest"]["sha256"])
+PY
+
+oracle_tmp=$(mktemp -d /tmp/rugra-gapd-counters-1204.XXXXXX)
+cleanup() {
+  case "$oracle_tmp" in
+    /tmp/rugra-gapd-counters-1204.??????) rm -rf -- "$oracle_tmp" ;;
+    *) echo "refusing unsafe cleanup target: $oracle_tmp" >&2 ;;
+  esac
+}
+trap cleanup EXIT HUP INT TERM
+
+snapshot="$oracle_tmp/workspace"
+mkdir -p "$snapshot/tests/oracle" \
+  "$snapshot/ghidra/Ghidra/Features/Decompiler/src/decompile"
+git -C "$repo_root" archive --format=tar --output="$oracle_tmp/rugra.tar" \
+  "$rugra_base_commit" Cargo.toml Cargo.lock build.rs README.md \
+  benches/decompile_bench.rs tests/oracle/decompress_1204.rs \
+  tests/oracle/funcproto_lock_1204.rs src sleigh_shim
+tar -xf "$oracle_tmp/rugra.tar" -C "$snapshot"
+cp "$rust_fixture" "$snapshot/tests/oracle/gapd_counters_1204.rs"
+
+git -C "$ghidra_root" archive --format=tar --output="$oracle_tmp/ghidra.tar" \
+  "$oracle_commit" Ghidra/Features/Decompiler/src/decompile/cpp
+mkdir -p "$oracle_tmp/oracle"
+tar -xf "$oracle_tmp/ghidra.tar" -C "$oracle_tmp/oracle"
+oracle_cpp="$oracle_tmp/oracle/Ghidra/Features/Decompiler/src/decompile/cpp"
+ln -s "$oracle_cpp" \
+  "$snapshot/ghidra/Ghidra/Features/Decompiler/src/decompile/cpp"
+
+jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')
+make --silent -C "$oracle_cpp" -j "$jobs" \
+  CXX="g++ -std=c++11" EXTRA= libdecomp.a
+g++ -std=c++11 -O2 -Wall -Wno-sign-compare -m64 \
+  -I"$oracle_cpp" "$cpp_fixture" \
+  "$oracle_cpp/libdecomp.cc" "$oracle_cpp/sleigh_arch.cc" \
+  "$oracle_cpp/inject_sleigh.cc" \
+  -Wl,--whole-archive "$oracle_cpp/libdecomp.a" -Wl,--no-whole-archive -lz \
+  -o "$oracle_tmp/gapd_counters_cpp"
+
+flock /tmp/rugra-cargo-build.lock -c \
+  "CARGO_TARGET_DIR=/tmp/rugra-target-gapd-counters cargo build --offline --locked --quiet --manifest-path '$snapshot/Cargo.toml' --lib"
+rustc --edition=2021 -O \
+  -L dependency=/tmp/rugra-target-gapd-counters/debug/deps \
+  --extern rugra=/tmp/rugra-target-gapd-counters/debug/librugra.rlib \
+  "$snapshot/tests/oracle/gapd_counters_1204.rs" \
+  -o "$oracle_tmp/gapd_counters_rust"
+
+set +e
+"$oracle_tmp/gapd_counters_cpp" \
+  >"$oracle_tmp/ghidra.stdout" 2>"$oracle_tmp/ghidra.stderr"
+ghidra_status=$?
+"$oracle_tmp/gapd_counters_rust" \
+  >"$oracle_tmp/rugra.stdout" 2>"$oracle_tmp/rugra.stderr"
+rugra_status=$?
+set -e
+
+python3 -I -S - "$metadata" "$oracle_tmp/ghidra.stdout" \
+  "$oracle_tmp/rugra.stdout" "$ghidra_status" "$rugra_status" \
+  "$oracle_tmp/ghidra.stderr" "$oracle_tmp/rugra.stderr" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+ghidra_stdout = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
+rugra_stdout = pathlib.Path(sys.argv[3]).read_text(encoding="utf-8")
+ghidra_status = int(sys.argv[4])
+rugra_status = int(sys.argv[5])
+ghidra_stderr = pathlib.Path(sys.argv[6]).read_text(encoding="utf-8")
+rugra_stderr = pathlib.Path(sys.argv[7]).read_text(encoding="utf-8")
+
+if ghidra_status != 0 or rugra_status != 0:
+    raise SystemExit(
+        f"fixture exit codes must be 0: ghidra={ghidra_status} rugra={rugra_status}"
+    )
+if ghidra_stderr or rugra_stderr:
+    raise SystemExit("fixture stderr must be empty")
+
+def line_sha(text):
+    return hashlib.sha256(text.encode()).hexdigest()
+
+expected = data["expected_stdout"]
+if line_sha(ghidra_stdout) != expected["ghidra_stdout_sha256"]:
+    raise SystemExit("ghidra stdout hash mismatch")
+if line_sha(rugra_stdout) != expected["rugra_stdout_sha256"]:
+    raise SystemExit("rugra stdout hash mismatch")
+
+glines = ghidra_stdout.splitlines()
+rlines = rugra_stdout.splitlines()
+if len(glines) != len(rlines):
+    raise SystemExit("stdout line-count mismatch")
+for index, (gl, rl) in enumerate(zip(glines, rlines)):
+    if gl != rl:
+        raise SystemExit(f"divergence on line {index + 1}: {gl!r} vs {rl!r}")
+
+verdicts = [line for line in rlines if line.startswith("verdict=")]
+if verdicts != ["verdict=PIPELINE-OK"]:
+    raise SystemExit(f"rugra verdict must be PIPELINE-OK: {verdicts!r}")
+markexplicit = [line for line in rlines if line.startswith("act=markexplicit|")]
+if not markexplicit or markexplicit[0] != "act=markexplicit|res=5|exc=none":
+    raise SystemExit(
+        f"markexplicit must report the 5-explicit count: {markexplicit!r}"
+    )
+markimplied = [line for line in rlines if line.startswith("act=markimplied|")]
+if not markimplied or markimplied[0] != "act=markimplied|res=1|exc=none":
+    raise SystemExit(
+        f"markimplied must report the 1-candidate count: {markimplied!r}"
+    )
+post = [line for line in rlines if line.startswith("post|")]
+if len(post) != 1 or ",m1:in=0,wr=1,ex=1,im=0,at=0,hi=2," not in post[0]:
+    raise SystemExit(
+        "post projection must show m1 explicit via the numInstances rule "
+        "(ex=1, at=0, hi=2)"
+    )
+print("gapd_counters_1204: decisive_projection=MATCH "
+      "registered_mismatch=0 overall=MATCH")
+PY

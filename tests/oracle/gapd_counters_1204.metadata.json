@@ -1,0 +1,60 @@
+{
+  "schema_version": 2,
+  "fixture_id": "GAPD-COUNTERS-1204",
+  "stable_function_closure": [
+    "ghidra::ActionDatabase::universalAction coreaction.cc:5462",
+    "ghidra::ActionGroup::apply action.cc:506",
+    "ghidra::Action::perform action.cc:298",
+    "ghidra::ActionAssignHigh::apply coreaction.hh:346",
+    "ghidra::ActionMergeRequired::apply coreaction.hh:370",
+    "ghidra::ActionMarkExplicit::baseExplicit coreaction.cc:3007",
+    "ghidra::ActionMarkExplicit::apply coreaction.cc:3237",
+    "ghidra::ActionMarkImplied::checkImpliedCover coreaction.cc:3376",
+    "ghidra::ActionMarkImplied::apply coreaction.cc:3416",
+    "ghidra::Merge::mergeAddrTied merge.cc:609",
+    "ghidra::Merge::mergeRangeMust merge.cc:301",
+    "ghidra::HighVariable::numInstances variable.hh:179"
+  ],
+  "overall_status": "MATCH",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{coreaction.cc:3007-3082,3237-3266,3376-3414,3416-3455,5717-5720, coreaction.hh:339-362,427-461, action.cc:298-362,506-527, merge.cc:301-317,609-648, variable.hh:179}",
+    "signature": "int4 ActionMarkExplicit::baseExplicit(Varnode *vn,int4 maxref); int4 ActionMarkExplicit::apply(Funcdata &data); int4 ActionMarkImplied::apply(Funcdata &data); int4 Action::perform(Funcdata &data)"
+  },
+  "rugra_source": {
+    "base_commit": "1ff25f924635e12489ca9cba9c688443cae2401e",
+    "base_tree": "61d5dd05b8f3d95c711a5367bf4d793d87e332eb",
+    "base_src_tree": "4d553d6c0bfe78ac997fb5565389b7ca78df9ed9",
+    "base_coreaction_blob": "e5f2d7238b4974ef8a11a29b798a6ab5e8562764"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "f5a4adb03364f8540f1443ff529ff8d816b26a73f824e9bdb26ea54c09f35aff",
+    "rust_fixture_sha256": "3604dbd056b21e3fc7a2d5dd7fc70dc6f62c505fbbf231f5ebd3f03733ba8bfc",
+    "runner_sha256": "8a7aaadef88084dd5e1342868844ad19f05d09e6c5ca10c1e1b8d31a6681e80f"
+  },
+  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5 (spacebase, base=register:0x0:8), join=6, iop=7",
+  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols",
+  "analysis_options": "Oracle side builds the raw universal Action tree through ActionDatabase::universalAction and derives an unfiltered clone via the public group API (setGroup(\"all\") + setCurrent(\"all\")); Rust side drives the identical child sequence of build_default_pipeline (the construction behind ActionDatabase::set_default_actions). Both sides perform the merge-group children assignhigh..markimplied in tree order through the exact Action::perform / ActionRestartGroup::perform_child boundary, catching the exception/panic channel per child (LowlevelError catch vs catch_unwind).",
+  "input_manifest": {
+    "inputs": [
+      "case=gapd_counters: ram base=0x6000 size=0x20, one block b0, ops r0..r5 in SeqNum order (r0 m2=COPY(const4:9) with m2 a 4-byte stack:0x200 output created through the production newVarnodeOut path with the queryProperties addrtied|mapped tail cleared then addrtied re-installed at build time; r1 q2=INT_ADD(m2,const4:2) unique output no descendants; r2 m1=COPY(const4:5) second 4-byte stack:0x200 output with the tail cleared and no re-install; r3 q1=INT_ADD(m1,const4:1) unique no descendants; r4 z1=INT_MULT(const4:3,const4:4) unique one descendant; r5 w1=INT_OR(z1,const4:8) unique no descendants), int4 types, gated exact-location cluster force-merged at mergerequired, children assignhigh..markimplied driven in tree order with per-child perform-count observation"
+    ],
+    "sha256": "24076d5ea727bcd251674f96df604206633bf1545ad87d49cb6af7891d694586"
+  },
+  "expected_stdout": {
+    "ghidra_stdout_sha256": "a57b986174b440712ef30d45f8aa0a484beb693217b0cc00ff81895306eb0a8a",
+    "rugra_stdout_sha256": "a57b986174b440712ef30d45f8aa0a484beb693217b0cc00ff81895306eb0a8a"
+  },
+  "registered_divergence_lines": {},
+  "coverage": {
+    "base_explicit_numinstances_rule": "MATCH: m1 (no addrtied, no mapped, one descendant, def COPY) is marked explicit solely by the multi-instance rule (coreaction.cc:3020-3021) — act=markexplicit|res=5 with post m1:ex=1,im=0,at=0,hi=2 identical on both sides; closes COREACTION-BASEEXPLICIT-NUMINST-0001",
+    "markimplied_count_bridge": "MATCH: act=markimplied|res=1 (z1 popped once and implied) — apply's per-candidate count increment surfaces through perform (coreaction.cc:3434 + action.cc:362); closes COREACTION-MARKIMPLIED-COUNT-0001 and retires the registered divergence previously carried by merge_forcepanic_1204",
+    "gated_cluster_force_merge": "MATCH: mergerequired builds the 2-instance HighVariable on the gated stack:0x200 exact-location cluster on both sides (post m2:hi=2, m1:hi=2); m2 is created first so the cluster head is the gated member on both loc-tree orders",
+    "implied_classification": "MATCH: z1 (all-constant def inputs, one descendant) is implied on both sides (post z1:ex=0,im=1) — cover-lazy-safe observation, checkImpliedCover never consults a cover",
+    "prefixed_negative_control": "MATCH-negative: the pre-fix base (dc6f0bfa, before commit 1ff25f92) run against the same fixture produces act=markexplicit|res=4, act=markimplied|res=0 and post m1:ex=0,im=1 (m1 wrongly implied) — both gaps are discriminated by this fixture",
+    "addr_tied_location_ranges_first_flags_representation": "UNTESTED: Rust merge.rs addr_tied_location_ranges records only the first member's flags per exact-location range while Ghidra overlapLoc ORs flags across the whole overlapping cluster; this fixture orders the gated member first so the observation never depends on the difference — representation-layer residual registered for root dispatch (not in this lease's write-set)"
+  }
+}
