@@ -4,7 +4,20 @@
 **版本**: 0.1.0
 **状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线运转中，本 wave 已落地 23 个原子提交**
 
-## 关键指标增量（2026-08-25，W-2026-08-24-TRIFUNC-GAP wave 进行中）
+## 关键指标增量（2026-08-25 第二批，master `ef26eb24`，89 项集成）
+
+> 第一批增量见下节。本批为同日后续 wave（触发词：三函数收敛 + 函数体差距分诊）。
+
+| 维度 | 第一批末 | 本批末 | 说明 |
+|---|---|---|---|
+| curl 差分 skeleton | 2012（口径含 6 timeout 隐藏） | **2849**（124 函数全输出、main 恢复后真差异显形；超时/panic 清零使隐藏 diff 显形，同口径逐函数净账 21 改善−380 vs 2 回归+6） | goto 0→22、裸条件 50→0、extern DAT 69→0、->literal 175→0、in_register 裸名≈清零、空 if 体 7→6 |
+| defects / numbering | 0 / 0 | **0 / 0** | numbering 由 isComplex 集成顺带归零（match_url 合法 \|\| 折叠恢复） |
+| 三函数严格字节 | 0/3 | **0/3**（结构大幅收敛） | my_fwrite 守卫+fwrite+return 恢复（剩 21 行 TEMPVAR 在途）；progressbarinit `__nptr` 达成 golden 同名（13 函数获 DWARF 推荐命名）；hugehelp 六 puts 结构就绪等 CPTR |
+| main 状态 | 1 TIMEOUT | **0 TIMEOUT（30s 对齐 oracle）**，894 行 diff 已分诊 6 桶（结构化 373/命名 171/全局 162/常量字符串 181/死存储 105/调用原型 52） | argc 原型 `int main(int argc,char **argv)` 逐字节=golden |
+| httpd 语料 | 未测 | 首回归跑：timeout 全消、21 函数净 −53；暴露 2 P0 panic（已钉死引入 commit，修复在途）+ goto 三缺陷家族（curl 零覆盖路径） | 报告 /tmp/rugra-reports/HTTPD-GATE-c1e3733d.md |
+| 复核闭环 | — | 本批 5 复核：4 APPROVE（含 mutation 实证）+1 REJECT（回走双步，C++ 复刻实证）→ 返修中 | 机制 C 运转正常 |
+
+## 关键指标增量（2026-08-25 第一批，W-2026-08-24-TRIFUNC-GAP wave 进行中）
 
 > 本节为 wave 期间增量快照；上节 2026-08-21 数据为 wave 前基线。任务明细见 `docs/TODO_BOARD.md` 活跃 wave 段，
 > 过程证据链见 `docs/alignment_docs/WAVE_STATUS_2026-08-25*.md` 与 `docs/alignment_audit/REVIEW_*` 系列。

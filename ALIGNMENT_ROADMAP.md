@@ -12,6 +12,13 @@
 **最后核实**: 2026-08-16（session 收尾快照：以下 L1/L2/L3 为模块级算法对齐状态；本 session 89 提交后 heritage 四链与 typed-decl 链已 APPROVE 收官，逐模块行内证据已随各 commit 更新；输出质量数据见 CURRENT_STATUS.md）（逐行核对 Rugra 源码 vs Ghidra 源码）。**2026-07-02 19:29 校对注**：此日期后已 **204 commit**（含 `docs/archive/dated/QUALITY_GAP_2026-07-02.md` 质量诊断 + `28f1cfe` 全量函数级审计），本文件中模块级 L1/L2/L3 逐行状态仍反映 06-27 核实结果，**输出质量/测试数等可实测项已过时**——以 AGENTS.md「当前反编译质量（2026-07-02 19:29）」节及下方统计汇总表「2026-07-02 19:29 校对」注为准。模块级状态需重新逐行核实 Ghidra 源码后方可更新（铁律 10：禁止形式上改、实质没验证）。
 **目标**: 完整实现 Ghidra 反编译器的所有算法，不使用简化版。
 
+**2026-08-25 wave 补记（不改变 L 级别，仅登记已集成证据；逐项复核/差分证据见 TODO_BOARD 对应行）**：
+- `blockaction.rs`/`block.rs`：identifyInternal selfIdentify 外部半边 + BlockBasic::isComplex 全量（block.cc:2388-2444，复核 APPROVE，master `c95b8459`）；ruleBlockOr 折叠守卫生效（my_fwrite 幻影折叠消除）。
+- `coreaction.rs`：ActionMarkExplicit 全量 + MarkImplied count 桥（复核 APPROVE，`cac8f60a`）；ActionPrototypeTypes Step 3 换 locked_output_storage 实现（`c95b8459`）；NAME_LOCKED 前端边界（`ef26eb24`，debugproto.rs 侧，coreaction 零改动）。
+- `printc.rs`：emitBlockIf goto 臂（复核 APPROVE，`5aac3203`）+ flat opCbranch 全臂/emitBlockBasic 尾 goto-label（`c23d4f52`）+ is_block_body_empty 三道发射门禁镜像（`e0af9d21`）+ print 侧 extern 发射删除（`9a9da74a`）。
+- `varmap.rs`/`arch.rs`：寄存器名 SLEIGH 1440 项目录移植返修中（rawquar，REJECT→返修）；overlapLoc head-flags 语义钉死+双侧 fixture（复核 APPROVE 含 mutation 实证，`46a55b1b`）。
+- 输出质量收敛数据见 CURRENT_STATUS.md「2026-08-25 第二批」节。
+
 ## 图例
 
 - **L1** (📋 计划) — 已识别差距，尚未开始实现，或仅有数据结构骨架无核心算法
