@@ -1961,7 +1961,8 @@ impl TypeOpCallind {
         // `tlst->getBase(op->getIn(slot)->getSize(),TYPE_UNKNOWN)` — always
         // the Architecture TypeFactory the constructor received.
         let input_size = op.get_in(slot)?.read().unwrap().get_size();
-        let fallback = || base_local_type(&self.type_factory, input_size);
+        let fallback =
+            || base_local_type(&self.type_factory, input_size, TypeMetatype::Unknown);
 
         if slot == 0 {
             // First parameter is code pointer (typeop.cc:752-756):

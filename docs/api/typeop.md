@@ -433,3 +433,10 @@ TypeOp trait +get_output_token/get_input_cast/propagate_type/get_output_metatype
 
 - `default_trait_methods_are_none` 测试改用 `TypeOpBranch::new(TypeFactory::raw())` 构造实例（TYPEOP-LOCALBASE-DEFAULTS-0001 的 TypeOpBranch 带工厂字段后，原 unit-struct 用法触发 E0423，阻塞全仓 cargo test --lib）。行为语义不变（token/cast/metatype/propagate 默认值均不触工厂）。
 
+
+### D2 集成补丁
+
+-  的 fallback 调用点适配 A38 的 3 参
+  `base_local_type`（meta=`TypeMetatype::Unknown`，D2 语义不变：
+  typeop.cc:271-275 基类缺省）。
+
