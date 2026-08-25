@@ -2513,6 +2513,16 @@ impl PrintC {
         })
     }
 
+    // RUGRA-GLUE: per-op parent-block index for the flattened emitBlockBasic
+    // comment protocol (Ghidra runs emitBlockBasic per basic block with a
+    // fresh setupBlockList window each; printc.cc:2684/2742).
+    fn op_parent_block_index(op: &crate::op::PcodeOp) -> Option<i32> {
+        op.parent
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .map(|p| p.read().unwrap().get_index())
+    }
+
     // Ghidra: printc.cc:2678 PrintC::emitBlockBasic
     /// Walk a basic block's ops and emit each printable op as an RPN statement.
     /// `suppress_branch` is the Rust transport for Ghidra's `no_branch` print
@@ -2537,12 +2547,33 @@ impl PrintC {
         ops: &[crate::op::PcodeOpRef],
         suppress_branch: bool,
     ) {
-        // printc.cc:2684: commsorter.setupBlockList(bb);
-        let block_index = Self::ops_block_index(ops);
-        if let Some(index) = block_index {
-            self.comment_sorter.setup_block_bounds(index);
-        }
+        // printc.cc:2684: commsorter.setupBlockList(bb); — Ghidra runs
+        // emitBlockBasic per BASIC block, opening a fresh comment window per
+        // block and draining its tail (cc:2742) before the next block's
+        // window. Rugra's transport can receive a flattened ops slice whose
+        // first op's parent no longer upgrades (block replaced during
+        // structuring), which previously skipped the setup entirely and let
+        // per-op emitCommentGroup(Some) run against a STALE window — start
+        // could then exceed a later opstop and get_next indexed past
+        // commmap.len() (main print panic). Reproduce the oracle's per-block
+        // protocol on the flattened walk: at every parent-block boundary,
+        // drain the old block's tail comments, then open the new block's
+        // window with the op's live parent index.
+        let mut cur_block: Option<i32> = None;
         for op_ref in ops {
+            let op_block = Self::op_parent_block_index(&op_ref.0.read().unwrap());
+            if op_block != cur_block {
+                if cur_block.is_some() {
+                    // printc.cc:2742: emitCommentGroup(NULL) — tail of the
+                    // block we are leaving.
+                    self.emit_comment_group(None);
+                }
+                if let Some(index) = op_block {
+                    // printc.cc:2684: commsorter.setupBlockList(bb);
+                    self.comment_sorter.setup_block_bounds(index);
+                }
+                cur_block = op_block;
+            }
             let op_guard = op_ref.0.read().unwrap();
             // Rugra's dead ops stay in the block's op list (Ghidra unlinks
             // them from PcodeOpBank), so keep the is_dead guard first.
@@ -2592,7 +2623,7 @@ impl PrintC {
         }
         // printc.cc:2742: emitCommentGroup((const PcodeOp *)0); — any
         // remaining comments in this basic block (opstop = stop).
-        if block_index.is_some() {
+        if cur_block.is_some() {
             self.emit_comment_group(None);
         }
     }
@@ -2677,13 +2708,11 @@ impl PrintC {
         let block = block_arc.read().unwrap();
         let ops = block.get_ops();
 
-        // printc.cc:2684: commsorter.setupBlockList(bb); — open this block's
-        // comment window (same op-parent-derived index the sorter placed
-        // comments under; see ops_block_index).
-        let block_index = Self::ops_block_index(&ops);
-        if let Some(index) = block_index {
-            self.comment_sorter.setup_block_bounds(index);
-        }
+        // printc.cc:2684: commsorter.setupBlockList(bb); — per-block comment
+        // window opened at every parent-block boundary of the flattened walk
+        // (see emit_block_basic_rpn): a stale window from a skipped setup let
+        // start exceed a later opstop and panic get_next (main print crash).
+        let mut cur_block: Option<i32> = None;
 
         // Clear block-local register defs — each block starts fresh
         self.block_local_reg_defs.clear();
@@ -2704,6 +2733,22 @@ impl PrintC {
 
         for op_ref in &ops {
             let op = op_ref.0.read().unwrap();
+
+            // printc.cc:2684/2742 per-block comment protocol on the flattened
+            // walk: at a parent-block boundary, drain the leaving block's tail
+            // comments and open the new block's window (op parent, live).
+            {
+                let op_block = Self::op_parent_block_index(&op);
+                if op_block != cur_block {
+                    if cur_block.is_some() {
+                        self.emit_comment_group(None);
+                    }
+                    if let Some(index) = op_block {
+                        self.comment_sorter.setup_block_bounds(index);
+                    }
+                    cur_block = op_block;
+                }
+            }
 
             // Rugra's dead ops can stay in a block's op list snapshots
             // (Ghidra's Funcdata::opDestroy unlinks them from the owning
@@ -2849,7 +2894,7 @@ impl PrintC {
 
         // printc.cc:2742: emitCommentGroup((const PcodeOp *)0); — any
         // remaining comments in this basic block.
-        if block_index.is_some() {
+        if cur_block.is_some() {
             self.emit_comment_group(None);
         }
     }

@@ -1675,10 +1675,19 @@ impl PcodeOpBank {
     // Ghidra: op.hh:310 PcodeOpBank::destroy
     pub fn destroy(&mut self, op: PcodeOpRef) {
         self.optree.remove(&op);
-        self.alivelist
-            .retain(|x| Arc::as_ptr(&x.0) != Arc::as_ptr(&op.0));
-        self.deadlist
-            .retain(|x| Arc::as_ptr(&x.0) != Arc::as_ptr(&op.0));
+        // cc:992-996: Ghidra throws on a non-dead op and erases ONLY the
+        // deadlist entry (via the stored insertiter). An op is in exactly one
+        // of alivelist/deadlist (markAlive/markDead move it), so branching on
+        // the dead flag reproduces the single-list erase without scanning
+        // both lists per destroyed op (ActionDeadCode destroys in bulk).
+        let ptr = Arc::as_ptr(&op.0);
+        if op.0.read().unwrap().is_dead() {
+            self.deadlist
+                .retain(|x| Arc::as_ptr(&x.0) != ptr);
+        } else {
+            self.alivelist
+                .retain(|x| Arc::as_ptr(&x.0) != ptr);
+        }
         self.remove_from_code_list(&op);
     }
 

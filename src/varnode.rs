@@ -3056,10 +3056,21 @@ impl VarnodeBank {
             return Err(anyhow!("Making input out of constant varnode"));
         }
         drop(value);
-        if !self.owns_loc_ref(&vn) || !self.owns_def_ref(&vn) {
+        // cc:1366-1367: Ghidra erases via the stored lociter/defiter — the
+        // erase IS the ownership proof (a foreign/stale Arc removes nothing).
+        // The identity-erase residency bools replace the O(n)
+        // owns_loc_ref/owns_def_ref preflight scans, which made Heritage
+        // rename O(n^2) on large functions (every empty-stack promotion
+        // rescanned both trees).
+        let loc_removed = self.erase_loc_identity(&vn);
+        let def_removed = self.erase_def_identity(&vn);
+        if !loc_removed || !def_removed {
             return Err(anyhow!("Making input out of unmanaged varnode"));
         }
-        Ok(self.transition_input(vn))
+        vn.write()
+            .unwrap()
+            .set_flags(varnode_flags::INPUT | varnode_flags::COVERDIRTY);
+        Ok(self.xref(vn))
     }
 
     // RUGRA-GLUE: internal non-fallible entry for callers that have just
@@ -3127,10 +3138,17 @@ impl VarnodeBank {
             return Err(anyhow!("Deleting integrated varnode"));
         }
         drop(value);
-        if !self.owns_loc_ref(vn) || !self.owns_def_ref(vn) {
+        // cc:1282-1283: Ghidra erases via the stored lociter/defiter — the
+        // erase IS the ownership proof. The identity-erase residency bools
+        // replace the O(n) owns_loc_ref/owns_def_ref preflight scans, and the
+        // prevalidated body below no longer retains whole trees per delete
+        // (Heritage rename deletes every consumed free, which made large
+        // functions quadratic).
+        let loc_removed = self.erase_loc_identity(vn);
+        let def_removed = self.erase_def_identity(vn);
+        if !loc_removed || !def_removed {
             return Err(anyhow!("Deleting unmanaged varnode"));
         }
-        self.destroy_varnode_prevalidated(vn);
         Ok(())
     }
 
@@ -3148,15 +3166,13 @@ impl VarnodeBank {
             self.owns_loc_ref(vn) && self.owns_def_ref(vn),
             "destroy requires a bank-owned Varnode"
         );
-        let loc_before = self.loc_tree.len();
-        let def_before = self.def_tree.len();
-        self.loc_tree.retain(|entry| !Arc::ptr_eq(&entry.0, vn));
-        self.def_tree.retain(|entry| !Arc::ptr_eq(&entry.0, vn));
-        let loc_removed = self.loc_tree.len() + 1 == loc_before;
-        let def_removed = self.def_tree.len() + 1 == def_before;
+        // cc:1282-1283: erase via the stored-iterator equivalent (identity
+        // erase, O(log n) fast path) instead of whole-tree retains.
+        let loc_removed = self.erase_loc_identity(vn);
+        let def_removed = self.erase_def_identity(vn);
         debug_assert!(
             loc_removed && def_removed,
-            "destroy ownership preflight disagrees with removal"
+            "destroy preflight disagrees with identity erase"
         );
     }
 
@@ -3179,42 +3195,51 @@ impl VarnodeBank {
         if vn.read().unwrap().is_input() {
             return vn;
         }
-        // (2) Overlap dedup against existing inputs. Ghidra uses
-        // vbank.beginDef(Varnode::input, addr+size) then walks back; Rugra
-        // scans loc_tree for input varnodes overlapping [vn_addr, vn_end).
+        // (2) Overlap dedup, ported from funcdata_varnode.cc:346-361:
+        //     `vbank.beginDef(input, vn->getAddr()+vn->getSize())` lower-bounds
+        //     into the input section of the def tree at the first address
+        //     >= addr+size, then `--iter` checks ONLY the immediately
+        //     preceding element. The def-tree order (input bucket first,
+        //     then space/addr/size) makes the last element strictly below
+        //     that bound exactly that predecessor:
+        //     `def_tree.range(..search).next_back()`. This replaces the
+        //     previous full loc_tree scan per promotion (O(n) with a lock
+        //     per entry — the Heritage rename quadratic on large functions).
         let (vn_space, vn_addr, vn_size) = {
             let r = vn.read().unwrap();
             (r.address_space, r.loc, r.size)
         };
         let vn_end = vn_addr.as_u64().saturating_add(vn_size as u64);
-        let existing = {
-            let mut found: Option<Arc<RwLock<Varnode>>> = None;
-            for loc_ref in self.loc_tree.iter() {
-                let cand = loc_ref.0.clone();
-                let cr = cand.read().unwrap();
-                if !cr.is_input() || cr.address_space != vn_space {
-                    continue;
-                }
-                let c_start = cr.loc.as_u64();
-                let c_end = c_start.saturating_add(cr.size as u64);
-                let overlaps = vn_addr.as_u64() < c_end && c_start < vn_end;
-                if overlaps {
-                    if cr.loc == vn_addr && cr.size == vn_size {
-                        // Exact match → return existing (Ghidra cc:356-357).
-                        found = Some(cand.clone());
-                        break;
-                    } else {
-                        // Partial overlap → Ghidra throws LowlevelError.
-                        // Rugra logs and falls through (conservative).
-                        eprintln!("[HERITAGE] WARN: overlapping input varnodes at {:x} (size {}) vs {:x} (size {})",
-                                  vn_addr.as_u64(), vn_size, c_start, cr.size);
+        let search = {
+            // Ghidra's searchvn for beginDef(input, addr): flags=input,
+            // loc=addr, size left at its 0 default (varnode.cc:1916-1918).
+            let mut key = Varnode::new_with_space(0, vn_space, vn_end);
+            key.flags = varnode_flags::INPUT;
+            VarnodeDefRef(std::sync::Arc::new(std::sync::RwLock::new(key)))
+        };
+        if let Some(prev_ref) = self.def_tree.range(..search).next_back() {
+            let invn = prev_ref.0.clone();
+            let invn_r = invn.read().unwrap();
+            // cc:354: predecessor is an input by construction (inputs sort
+            // first in the def tree); keep the explicit guard as the oracle.
+            if invn_r.is_input() {
+                let vn_r = vn.read().unwrap();
+                // cc:355: (-1 != vn->overlap(*invn)) || (-1 != invn->overlap(*vn))
+                if vn_r.overlap(&invn_r) != -1 || invn_r.overlap(&vn_r) != -1 {
+                    // cc:356-357: same size and address → return existing.
+                    if vn_r.get_size() == invn_r.get_size()
+                        && vn_r.get_addr() == invn_r.get_addr()
+                    {
+                        return invn.clone();
                     }
+                    // cc:358: partial overlap → Ghidra throws
+                    // LowlevelError("Overlapping input varnodes"). Rugra
+                    // logs and falls through (conservative, pre-existing
+                    // degrade recorded in the todo ledger).
+                    eprintln!("[HERITAGE] WARN: overlapping input varnodes at {:x} (size {}) vs {:x} (size {})",
+                              vn_r.get_offset(), vn_size, invn_r.get_offset(), invn_r.get_size());
                 }
             }
-            found
-        };
-        if let Some(existing) = existing {
-            return existing;
         }
         // (3) Mark as input via set_input (sets INPUT | INSERT, re-inserts).
         let vn = self.set_input_prevalidated(vn);

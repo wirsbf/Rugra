@@ -265,21 +265,31 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge>;
 
+    // RUGRA-GLUE: mutable edge-vector accessors shared by every FlowBlock
+    // subtype. Ghidra's FlowBlock base class owns outofthis/intothis
+    // (block.hh:124-127), so edge-label writes (setOutEdgeFlag block.cc:240,
+    // setGotoBranch block.cc:305) apply to EVERY block kind — structured
+    // blocks included. Rugra duplicates the vectors per concrete type, so
+    // the label mutators route through these accessors instead of a
+    // downcast chain that silently dropped writes on BlockIf/BlockList/
+    // BlockCondition/... (root cause of the selectGoto non-termination:
+    // goto marks vanished between rounds, so TraceDAG re-proposed the same
+    // edge forever).
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge>;
+    // RUGRA-GLUE: incoming half of the shared edge-vector accessors above.
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge>;
+
     /// OR-set edge flags on the `slot`-th outgoing edge.
     /// Faithful to Ghidra's `FlowBlock::setOutEdgeFlag` (block.hh:288).
     /// Used by `findSpanningTree` to label tree/back/forward/cross edges.
     // Ghidra: block.cc:240 FlowBlock::setOutEdgeFlag
     fn set_out_edge_flag(&mut self, slot: usize, flag: u32) {
-        // Default: try to downcast to the concrete block types that hold an
-        // `outgoing: Vec<BlockEdge>` field. BlockGraph/BlockBasic/BlockCopy.
-        let any = self.as_any_mut();
-        if let Some(bb) = any.downcast_mut::<BlockBasic>() {
-            if slot < bb.outgoing.len() { bb.outgoing[slot].flags |= flag; }
-        } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
-            if slot < bg.outgoing.len() { bg.outgoing[slot].flags |= flag; }
-        }
-        // Other block kinds (BlockCopy etc.) don't own out-edges that need
-        // spanning-tree labels in Rugra's structurer.
+        // Ghidra's FlowBlock base class owns outofthis/intothis for EVERY
+        // subtype (block.hh:124-127), so setOutEdgeFlag applies to structured
+        // blocks (BlockIf/BlockList/BlockCondition/...) exactly as to
+        // BlockBasic. Route through out_edges_mut instead of a downcast chain.
+        let outs = self.out_edges_mut();
+        if slot < outs.len() { outs[slot].flags |= flag; }
     }
 
     // Ghidra: block.hh:289 FlowBlock::clearOutEdgeFlag
@@ -287,24 +297,15 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// `FlowBlock::clearOutEdgeFlag` (block.hh:289). Counterpart to
     /// `set_out_edge_flag`. Used by LoopBody::clearExitMarks.
     fn clear_out_edge_flag(&mut self, slot: usize, flag: u32) {
-        let any = self.as_any_mut();
-        if let Some(bb) = any.downcast_mut::<BlockBasic>() {
-            if slot < bb.outgoing.len() { bb.outgoing[slot].flags &= !flag; }
-        } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
-            if slot < bg.outgoing.len() { bg.outgoing[slot].flags &= !flag; }
-        }
+        let outs = self.out_edges_mut();
+        if slot < outs.len() { outs[slot].flags &= !flag; }
     }
 
     /// Clear a mask of edge flags from ALL outgoing edges.
     /// Faithful to Ghidra's `FlowBlock::clearEdgeFlags` (block.cc).
     // Ghidra: block.cc:966 BlockGraph::clearEdgeFlags
     fn clear_edge_flags(&mut self, mask: u32) {
-        let any = self.as_any_mut();
-        if let Some(bb) = any.downcast_mut::<BlockBasic>() {
-            for e in bb.outgoing.iter_mut() { e.flags &= !mask; }
-        } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
-            for e in bg.outgoing.iter_mut() { e.flags &= !mask; }
-        }
+        for e in self.out_edges_mut().iter_mut() { e.flags &= !mask; }
     }
 
     /// Is the i-th outgoing edge an irreducible edge? Faithful to Ghidra's
@@ -357,12 +358,8 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// side without holding both write locks at once.
     // Ghidra: block.cc:245 FlowBlock::setOutEdgeFlag (mirrored in-edge half)
     fn set_in_edge_flag(&mut self, slot: usize, flag: u32) {
-        let any = self.as_any_mut();
-        if let Some(bb) = any.downcast_mut::<BlockBasic>() {
-            if slot < bb.incoming.len() { bb.incoming[slot].flags |= flag; }
-        } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
-            if slot < bg.incoming.len() { bg.incoming[slot].flags |= flag; }
-        }
+        let ins = self.in_edges_mut();
+        if slot < ins.len() { ins[slot].flags |= flag; }
     }
 
     /// Clear edge flags from the `slot`-th incoming edge. This is the mirrored
@@ -373,12 +370,8 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// findIrreducible's cross/forward relabel (block.cc:1182).
     // Ghidra: block.cc:254 FlowBlock::clearOutEdgeFlag (mirrored in-edge half)
     fn clear_in_edge_flag(&mut self, slot: usize, flag: u32) {
-        let any = self.as_any_mut();
-        if let Some(bb) = any.downcast_mut::<BlockBasic>() {
-            if slot < bb.incoming.len() { bb.incoming[slot].flags &= !flag; }
-        } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
-            if slot < bg.incoming.len() { bg.incoming[slot].flags &= !flag; }
-        }
+        let ins = self.in_edges_mut();
+        if slot < ins.len() { ins[slot].flags &= !flag; }
     }
 
     /// Get the copy-map reference (Ghidra `copymap`: back reference to a
@@ -1015,15 +1008,18 @@ pub fn set_out_edge_flag_mirrored(
     };
     if Arc::ptr_eq(&target, cur) {
         // Self-edge: both halves live on this block; one exclusive guard.
+        // Route through the trait-wide out_edges_mut/in_edges_mut so the
+        // write lands for EVERY block kind (Ghidra's FlowBlock base owns
+        // outofthis/intothis for all subtypes, block.hh:124-127) — the old
+        // BlockBasic/BlockGraph downcast chain silently dropped self-edge
+        // labels on structured blocks.
         let mut g = cur.write().unwrap();
-        let any = g.as_any_mut();
-        if let Some(bb) = any.downcast_mut::<BlockBasic>() {
-            if i < bb.outgoing.len() { bb.outgoing[i].flags |= lab; }
-            if (rev as usize) < bb.incoming.len() { bb.incoming[rev as usize].flags |= lab; }
-        } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
-            if i < bg.outgoing.len() { bg.outgoing[i].flags |= lab; }
-            if (rev as usize) < bg.incoming.len() { bg.incoming[rev as usize].flags |= lab; }
+        {
+            let outs = g.out_edges_mut();
+            if i < outs.len() { outs[i].flags |= lab; }
         }
+        let ins = g.in_edges_mut();
+        if (rev as usize) < ins.len() { ins[rev as usize].flags |= lab; }
     } else {
         cur.write().unwrap().set_out_edge_flag(i, lab);
         target.write().unwrap().set_in_edge_flag(rev as usize, lab);
@@ -1052,15 +1048,15 @@ pub fn clear_out_edge_flag_mirrored(
     };
     if Arc::ptr_eq(&target, cur) {
         // Self-edge: both halves live on this block; one exclusive guard.
+        // Trait-wide accessors (see set_out_edge_flag_mirrored): Ghidra's
+        // FlowBlock base owns both edge arrays for every subtype.
         let mut g = cur.write().unwrap();
-        let any = g.as_any_mut();
-        if let Some(bb) = any.downcast_mut::<BlockBasic>() {
-            if i < bb.outgoing.len() { bb.outgoing[i].flags &= !lab; }
-            if (rev as usize) < bb.incoming.len() { bb.incoming[rev as usize].flags &= !lab; }
-        } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
-            if i < bg.outgoing.len() { bg.outgoing[i].flags &= !lab; }
-            if (rev as usize) < bg.incoming.len() { bg.incoming[rev as usize].flags &= !lab; }
+        {
+            let outs = g.out_edges_mut();
+            if i < outs.len() { outs[i].flags &= !lab; }
         }
+        let ins = g.in_edges_mut();
+        if (rev as usize) < ins.len() { ins[rev as usize].flags &= !lab; }
     } else {
         cur.write().unwrap().clear_out_edge_flag(i, lab);
         target.write().unwrap().clear_in_edge_flag(rev as usize, lab);
@@ -1327,6 +1323,13 @@ impl FlowBlock for BlockBasic {
     fn get_out(&self, slot: usize) -> Option<BlockEdge> {
         self.outgoing.get(slot).cloned()
     }
+
+    // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
+    // owns outofthis/intothis for every subtype, block.hh:124-127)
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+
 
     // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) {
@@ -3461,6 +3464,12 @@ pub struct BlockCopy {
     pub flags: u32,
     pub parent: Option<Weak<RwLock<BlockGraph>>>,
     pub original: Arc<RwLock<BlockBasic>>,
+    /// Ghidra's FlowBlock base edge arrays (block.hh:124-127), inherited by
+    /// BlockCopy. Rugra's structurer copies blocks as BlockBasic (build_copy),
+    /// so these stay empty; they exist so the trait-wide edge-label accessors
+    /// (out_edges_mut/in_edges_mut) are total, like the C++ base class.
+    pub incoming: Vec<BlockEdge>,
+    pub outgoing: Vec<BlockEdge>,
 }
 
 impl FlowBlock for BlockCopy {
@@ -3510,6 +3519,13 @@ impl FlowBlock for BlockCopy {
     fn get_out(&self, _slot: usize) -> Option<BlockEdge> {
         None
     }
+
+    // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
+    // owns outofthis/intothis for every subtype, block.hh:124-127)
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+
     // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
@@ -3613,6 +3629,13 @@ impl FlowBlock for BlockGoto {
     fn get_out(&self, slot: usize) -> Option<BlockEdge> {
         self.outgoing.get(slot).cloned()
     }
+
+    // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
+    // owns outofthis/intothis for every subtype, block.hh:124-127)
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+
     // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) {
         self.incoming.push(edge);
@@ -3789,6 +3812,13 @@ impl FlowBlock for BlockIf {
     fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
     // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+
+    // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
+    // owns outofthis/intothis for every subtype, block.hh:124-127)
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+
     // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
     // RUGRA-GLUE: Rust edge-construction helper
@@ -4038,6 +4068,13 @@ impl FlowBlock for BlockWhileDo {
     fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
     // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+
+    // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
+    // owns outofthis/intothis for every subtype, block.hh:124-127)
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+
     // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
     // RUGRA-GLUE: Rust edge-construction helper
@@ -4209,6 +4246,13 @@ impl FlowBlock for BlockDoWhile {
     fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
     // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+
+    // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
+    // owns outofthis/intothis for every subtype, block.hh:124-127)
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+
     // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
     // RUGRA-GLUE: Rust edge-construction helper
@@ -4330,6 +4374,13 @@ impl FlowBlock for BlockInfLoop {
     fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
     // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+
+    // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
+    // owns outofthis/intothis for every subtype, block.hh:124-127)
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+
     // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
     // RUGRA-GLUE: Rust edge-construction helper
@@ -4532,6 +4583,13 @@ impl FlowBlock for BlockList {
     fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
     // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+
+    // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
+    // owns outofthis/intothis for every subtype, block.hh:124-127)
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+
     // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
     // RUGRA-GLUE: Rust edge-construction helper
@@ -4654,6 +4712,13 @@ impl FlowBlock for BlockCondition {
     fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
     // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+
+    // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
+    // owns outofthis/intothis for every subtype, block.hh:124-127)
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+
     // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
     // RUGRA-GLUE: Rust edge-construction helper
@@ -4854,6 +4919,13 @@ impl FlowBlock for BlockSwitch {
     fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
     // Ghidra: block.hh:301 FlowBlock::getOut
     fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+
+    // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
+    // owns outofthis/intothis for every subtype, block.hh:124-127)
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+
     // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
     // RUGRA-GLUE: Rust edge-construction helper

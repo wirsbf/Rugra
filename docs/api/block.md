@@ -1306,3 +1306,14 @@ case 的 desc/copymap 投影为 "-"：oracle FlowBlock 用户构造器（cc:61-6
 不初始化这两个字段（findSpanningTree 才初始化，cc:1025-1027），直接投影
 是堆噪声而非算法输出——这一非确定性两侧同因同果，按"不可比即不投影"处
 理并在 metadata normalization 登记。
+
+### 2026-08-25：FlowBlock 边 flag 写入 trait 化（selectGoto 非终止修复）
+- `FlowBlock::out_edges_mut` / `in_edges_mut`（新 trait 方法）— Ghidra 的 FlowBlock 基类持有
+  `outofthis`/`intothis`（block.hh:124-127），对所有子类型生效；Rugra 每个具体类型各存
+  `outgoing`/`incoming`，`set_out_edge_flag`/`clear_out_edge_flag`/`clear_edge_flags`/
+  `set_in_edge_flag`/`clear_in_edge_flag` 改经这对访问器路由，替换原先只覆盖
+  BlockBasic/BlockGraph 的 downcast 链。此前 goto 标记在结构化块（BlockIf/BlockList/
+  BlockCondition 等）上被静默丢弃，TraceDAG 反复重提同一边导致 selectGoto 死循环
+  （GetStr 家族 >10s 超时根因）。BlockCopy 补空 `incoming`/`outgoing` 字段保持 trait 全。
+- `set_out_edge_flag_mirrored` / `clear_out_edge_flag_mirrored` 的 self-edge 分支 — 同步改为
+  out_edges_mut/in_edges_mut 访问器（原 downcast 链在结构化块 self-loop 上同样丢标记）。

@@ -1301,6 +1301,7 @@ main(1)/myprogress(1)/my_get_line(1)/helpf(1)/file2string(1)/parseconfig(1)/
 getparameter(1)/glob_word(2)/glob_set(2)/glob_range(1)/next_url(1)/
 match_url(3)——全部为 `__stack_chk_fail`/`exit` 类 noreturn 调用点，
 语句级发射接通后应逐条出现（这是正向变化；差分门禁全量判定留给 root）。
+<<<<<<< HEAD
 附注（已解决）：`comment_sorter_iterators_1204` 的失配根因是 fixture 构造了
 非法状态（未安装 cover）——Ghidra 的 C++ fixture 经 `setBasicBlockRange`
 显式装 cover（`block.hh:462` setInitialRange private+friend）。已按合法状态
@@ -1362,3 +1363,20 @@ try_rule_switch 的 case 标签是出边索引（非 jumptable 恢复标签）�
 default 恒 None；doc_function 全管线中 `uVar0 = 10; return uVar0;` 未折叠
 为 `return 10;`（ActionReturnRecovery + implied 层）。funcdata
 `test_switch_case_structuring` 断言恢复（case 标签 ×2 + 体 return 计数）。
+=======
+附注：`comment_sorter_iterators_1204` fixture 在 0d2252d（`get_stop_addr`
+回退从"末 op 地址"改为 `initial_range`）后 Rust 侧回归失配（内部地址
+注释落入 header_unplaced）——预存在问题，非本租约，建议 root 重登记
+（fixture 手工块无 initial_range，需 pub 化 `set_initial_range` 或恢复
+无 range 时的末 op 回退）。
+
+### 2026-08-25：flattened emitBlockBasic 逐块注释窗口协议（main 打印 panic 修复）
+- `op_parent_block_index`（新 helper）— 从单个 op 的 live parent 取块索引。
+- `emit_block_basic_rpn` / `emit_block_ops` — Ghidra 逐基本块调 emitBlockBasic（每块
+  setupBlockList → emit → 尾部 emitCommentGroup(NULL)，printc.cc:2684/2742）。Rugra 的
+  flattened ops 切片原先只按首 op 的 parent 开窗：首 op parent 失效时 setup 被跳过，
+  per-op emitCommentGroup(Some) 使用陈旧窗口，start 可超过后续 opstop，
+  get_next 索引越过 commmap 末尾（main 打印阶段 index-out-of-bounds panic）。现于每个
+  parent 块边界：先 drain 离开块的尾部注释，再以 live parent 索引开新窗口，
+  复现 oracle 的逐块协议。
+>>>>>>> c7674b91 (fix: eliminate 6-function E2E timeouts (selectGoto non-termination, heritage rename O(n^2), main print panic))

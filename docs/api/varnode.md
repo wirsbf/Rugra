@@ -1013,6 +1013,7 @@ normalize 位点（LE 值与修复前逐位一致；BE 域整体 UNTESTED，登�
   等价指针）、def STOP 早退+blockup、path 指针胜整型、typelock union 直返、
   null local type 错误通道。
 
+<<<<<<< HEAD
 ## 2026-08-25：CALLOTHER userop 闭包接线（TYPEOP-LOCALTYPE-CALLOTHER-0001，TYPEOP-LOCALTYPE-DISPATCH-0001 CALLOTHER 切片）
 
 关闭 A48 复核精确定位的 caller 闭包：`PcodeOp → TypeOpCallother::get*Local →
@@ -1056,3 +1057,18 @@ tlst->getArch()->userops.getOp(in(0).offset) → 基类 canonical 回落`
   metadata-less UnspecializedPcodeOp 全链 canonical 回落、builtin 注册身份、
   slot-0 常量与越界槽的基类默认。varnode_localtype_res_1204 fixture 调用点
   同步补 `None` 线程（行为逐字节不变，runner 重钉验证）。
+=======
+### 2026-08-25：O(n) 扫描移除（heritage rename 超时修复）
+- `VarnodeBank::set_input`（varnode.cc:1358-1371）— 先 `erase_loc_identity`/`erase_def_identity`
+  再置 INPUT 标志；erase 的 residency bool 取代原 `owns_loc_ref`/`owns_def_ref` 全量扫描
+  （Ghidra 经 stored lociter/defiter erase，erase 本身即所有权证明）。语义不变：free/constant
+  检查、`Err("Making input out of unmanaged varnode")` 均保留。
+- `VarnodeBank::destroy_varnode` / `destroy_varnode_prevalidated`（varnode.cc:1276-1285）—
+  两处全量 `retain` 改为 identity-erase（O(log n) 快路径 + 兜底 identity 扫描）；预检
+  owns 扫描由 erase 结果取代，`Err("Deleting unmanaged varnode")` 保留。
+- `VarnodeBank::set_input_varnode`（funcdata_varnode.cc:340-373 的 vbank 层）— overlap 去重
+  从全量 loc_tree 线性扫描改为 Ghidra 的 `beginDef(input, addr+size)` 前驱查询：
+  `def_tree.range(..search).next_back()`（search 为 flags=INPUT、loc=addr+size、size=0 的
+  合成键，对应 varnode.cc:1916-1918 的 searchvn），只检查紧邻前驱一条；精确匹配返回既有
+  input，部分重叠保持既有 WARN 降级。Heritage rename 的每次空栈提升从 O(n) 降为 O(log n)。
+>>>>>>> c7674b91 (fix: eliminate 6-function E2E timeouts (selectGoto non-termination, heritage rename O(n^2), main print panic))

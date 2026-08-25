@@ -1060,3 +1060,9 @@ Rust 的 `Vec` 删除会把后方索引左移。因此实现现在先解析两�
 `truncated_flow_1204` fixture 用同地址 times `[0,1,2]` 锁住
 `insertAfterDead(time0,time1)` 的结果必须为 `[1,0,2]`，并继续证明该顺序被
 partial clone 与 `splitBasic` 保留；旧结果 `[1,2,0]` 是 Vec 适配缺陷。
+
+### 2026-08-25：PcodeOpBank::destroy 单列表分支
+- `PcodeOpBank::destroy`（op.cc:989-999）— Ghidra 只 erase deadlist（stored insertiter），
+  alivelist/deadlist 互斥（markAlive/markDead 迁移）。Rust 按 `is_dead()` 分支只 retain 所在
+  的那一个列表，行为等价（每个 op 恰在其中一个列表），每 op 销毁扫描减半，
+  ActionDeadCode 批量销毁收益。
