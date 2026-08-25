@@ -5702,6 +5702,11 @@ impl Action for ActionInferTypes {
         if self.local_count >= 7 {
             if self.local_count == 7 {
                 fd.warning_header("Type propagation algorithm not settling");
+                // coreaction.cc:5393: data.setTypeRecoveryExceeded(); — the
+                // flag is what lets RulePtrArith's buildTree
+                // (ruleaction.cc:6502/6514) stamp propagated types on new
+                // PTRADD/PTRSUB outputs itself, since this loop no longer runs.
+                fd.set_type_recovery_exceeded();
                 self.local_count += 1;
             }
             return Ok(action_status::NO_CHANGE);

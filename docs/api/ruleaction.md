@@ -1243,3 +1243,23 @@ LOAD→COPY 转换后：若 `refvn = op->getOut()` 带 spacebase_placeholder 标
 `resolve_spacebase_relative` 记录该 call 点的 stackoffset（并可能
 abort placeholder）。闭合 CALLSPEC-0001 中登记的
 "resolveSpacebaseRelative is still absent" 残差。
+
+## RulePtrArith/AddTreeState 类型链补齐 + RulePieceStructure 再入闸门（RULE-PTRARITH-ADDTREE-0001，本次新增）
+
+- `AddTreeState::assign_propagated_type`（ruleaction.cc:6342
+  `AddTreeState::assignPropagatedType`）：PTRADD/PTRSUB 新建 op 的输出类型
+  由指针输入经 opcode `propagateType`（→ `propagateAddIn2Out` downChain）
+  推导；`build_tree` 在 `data.isTypeRecoveryExceeded()` 时于 PTRADD 段与
+  PTRSUB 段各调用一次（ruleaction.cc:6502/6514）——传播循环已停时由
+  规则自身盖章。此前该链完全缺失。
+- `AddTreeState::build_tree` 的 PTRSUB 段 `setStopTypePropagation` 现在仅在
+  `size != 0` 时设置（ruleaction.cc:6516-6517）；此前无条件设置。
+- `RulePieceStructure::apply_op` 补上 `op->isPartialRoot()` 再入闸门与
+  `op->setPartialRoot()`（ruleaction.cc:7610/7642，flag = PcodeOp
+  addlflags `concat_root` 0x100，见 op.rs `is_partial_root`/`set_partial_root`）。
+  缺失时 cleanup 池对同一 CONCAT 根每轮重走并返回 change，
+  universal 尾部永不收敛（main 全量超时的根因）。
+- 双侧 fixture：`tests/oracle/ptrarith_addtree_1204.{cc,rs}` + runner
+  `tools/run_ptrarith_addtree_oracle.sh`，5 用例（PTRADD 多倍数路 /
+  PTRSUB 子类型路 / 非倍数 valid=false / 未类型化基座 / 未启动 type
+  recovery）10 条记录与锁定 12.0.4 oracle 逐字节一致。

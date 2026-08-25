@@ -317,6 +317,13 @@ pub mod funcdata_flags {
     /// (`rootlist.size() > 1` after structureLoops) and read via
     /// `has_unreachable_blocks` (funcdata.hh:149).
     pub const BLOCKS_UNREACHABLE: u32 = 1 << 6;
+    /// Data-type propagation passes reached maximum (Ghidra
+    /// `typerecovery_exceeded`, funcdata.hh:72 = 0x4000). Set by
+    /// ActionInferTypes when `localcount` hits 7 (coreaction.cc:5393); read
+    /// by `AddTreeState::buildTree` (ruleaction.cc:6502/6514) to stamp
+    /// propagated types on freshly created PTRADD/PTRSUB outputs directly,
+    /// because the propagation loop no longer runs.
+    pub const TYPE_RECOVERY_EXCEEDED: u32 = 1 << 14;
 }
 
 use crate::varnode::VarnodeBank;
@@ -577,6 +584,21 @@ impl Funcdata {
     /// Mark that type recovery has started.
     pub fn set_type_recovery_started(&mut self) {
         self.flags |= funcdata_flags::TYPE_RECOVERY_START;
+    }
+
+    // Ghidra: funcdata.hh:152 Funcdata::isTypeRecoveryExceeded
+    /// Has maximum data-type propagation passes been reached? Faithful to
+    /// `Funcdata::isTypeRecoveryExceeded` (funcdata.hh:152).
+    pub fn is_type_recovery_exceeded(&self) -> bool {
+        (self.flags & funcdata_flags::TYPE_RECOVERY_EXCEEDED) != 0
+    }
+
+    // Ghidra: funcdata.hh:182 Funcdata::setTypeRecoveryExceeded
+    /// Mark that propagation passes have reached the maximum. Faithful to
+    /// `Funcdata::setTypeRecoveryExceeded` (funcdata.hh:182): set-only, never
+    /// cleared for the lifetime of the Funcdata.
+    pub fn set_type_recovery_exceeded(&mut self) {
+        self.flags |= funcdata_flags::TYPE_RECOVERY_EXCEEDED;
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::isDoublePrecisOn

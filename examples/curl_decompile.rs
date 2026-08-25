@@ -1784,6 +1784,47 @@ fn build_worker_architecture(
         arch.set_commentdb(std::sync::Arc::new(std::sync::RwLock::new(
             rugra::comment::CommentDatabaseInternal::new(),
         )));
+        // Ghidra: architecture.cc:1391-1414 Architecture::init builds the
+        // TypeFactory unconditionally (buildTypegrp at :1398, before
+        // buildCommentDB :1400) — every Funcdata sees `data.getArch()->types`.
+        // RULE-PTRARITH-ADDTREE-0001: without a factory, ActionInferTypes'
+        // PTRSUB/PTRADD/INT_ADD pointer arms (TypeOpPtrsub::propagateType →
+        // propagateAddIn2Out → downChain) silently dead-end, so field-pointer
+        // types (URLGlob* → char** literal / URLPattern* pattern) never reach
+        // RulePtrArith and `INT_ADD(param_copy, 0x38)`→LOAD stays raw.
+        // The data_organization decode + setup_sizes mirror
+        // parseCompilerConfig's ELEM_DATA_ORGANIZATION arm (architecture.cc:1269)
+        // and its trailing types->setupSizes() (architecture.cc:1350), using
+        // the same locked cspec DOM parsed above.
+        {
+            let mut types = rugra::type_system::typefactory::TypeFactory::new(8);
+            let data_org = root
+                .read()
+                .map_err(|_| "compiler spec element lock poisoned".to_string())?
+                .children
+                .iter()
+                .find(|child| {
+                    child
+                        .read()
+                        .map(|element| element.name == "data_organization")
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .ok_or_else(|| "compiler spec has no data_organization".to_string())?;
+            let registry = Arc::new(std::sync::RwLock::new(
+                rugra::marshal::IdRegistry::new(),
+            ));
+            let mut decoder =
+                rugra::marshal::TreeDecoder::new(data_org, registry);
+            types.decode_data_organization(&mut decoder);
+            types.setup_sizes(&rugra::type_system::typefactory::SizeArchInputs {
+                stack_spacebase_size: Some(8),
+                default_data_space_addr_size: 8,
+                default_size: 8,
+                far_pointer: None,
+            });
+            arch.set_types(Arc::new(std::sync::RwLock::new(types)));
+        }
         let mut inject_lib =
             rugra::pcodeinject::PcodeInjectLibrary::new(SPEC_UNIQUE_INJECT_BASE);
         inject_lib.set_sleigh_lookup(host.clone());

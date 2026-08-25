@@ -1066,3 +1066,11 @@ partial clone 与 `splitBasic` 保留；旧结果 `[1,2,0]` 是 Vec 适配缺陷
   alivelist/deadlist 互斥（markAlive/markDead 迁移）。Rust 按 `is_dead()` 分支只 retain 所在
   的那一个列表，行为等价（每个 op 恰在其中一个列表），每 op 销毁扫描减半，
   ActionDeadCode 批量销毁收益。
+
+## PcodeOp concat_root 旗标（RULE-PTRARITH-ADDTREE-0001，本次新增）
+
+`PcodeOp::is_partial_root` / `set_partial_root`（op.hh:220-221，
+addlflags `concat_root` = 0x100，常量此前已存在但无访问器与使用者）。
+RulePieceStructure::applyOp 顶部闸门（ruleaction.cc:7610）+ 建树前
+`setPartialRoot()`（:7642）——CONCAT 树只重排一次；缺失该闸门时
+cleanup 池对同一根反复返回 change 导致 universal 尾部不收敛。

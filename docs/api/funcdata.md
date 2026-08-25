@@ -1766,3 +1766,15 @@ Rugra 通道（保真序）：
   "源出边原地改指 + 新目标 append 入边 + 旧目标 Vec::remove 入边"是单侧
   滑动（其他源的 reverse_index 不修正）且仅 BlockBasic——ActionDoNothing/
   RedundBranch 的 splice 早期即污染 bblocks。
+
+## typerecovery_exceeded 旗标（RULE-PTRARITH-ADDTREE-0001，本次新增）
+
+`funcdata_flags::TYPE_RECOVERY_EXCEEDED`（Ghidra `typerecovery_exceeded`，
+funcdata.hh:72 = 0x4000；Rugra 重映射位空间取 bit 14）+
+`Funcdata::is_type_recovery_exceeded`（funcdata.hh:152）/
+`set_type_recovery_exceeded`（funcdata.hh:182，只置位、函数生命周期内
+不清除，`clear()` 亦不重置——与 Ghidra 一致）。置位点 =
+`ActionInferTypes::apply` localcount==7 分支（coreaction.cc:5393）；
+消费点 = `AddTreeState::build_tree` 的 `assignPropagatedType`
+（ruleaction.cc:6502/6514）：传播循环停止后由 RulePtrArith 自己给新建
+PTRADD/PTRSUB 输出盖章类型。

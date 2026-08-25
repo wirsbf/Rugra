@@ -1728,6 +1728,7 @@ stack pentry 且无锁定 stack 参数占用 placeholder 角色时非空（Rugra
 placeholder LOAD 作为最后一个 CALL 输入（`fc->create_placeholder`）。该输入
 使 CALL 满足 `usesSpacebasePtr()`，`RuleIndirectCollapse` 的 else-if 分支
 （ruleaction.cc:3223）据此折叠 unknown-effect guard INDIRECT。
+
 ## 2026-08-25：ActionSwitchNorm 去自创预扫（JUMPTABLE-PIPELINE-0001 段2）
 
 `ActionSwitchNorm::apply`（coreaction.cc:4548-4560）不再在 apply 开头做原地
@@ -1753,3 +1754,14 @@ Phase-2 推播门（cc:1427-1429）同步修正为 `propagate_indirect || !INDIR
   `remove_unreachable_blocks(true, false)`（issuewarning=true，
   checkexistence=false 走缓存 BLOCKS_UNREACHABLE 标志），对齐
   coreaction.cc:3460。
+## ActionInferTypes setTypeRecoveryExceeded 接线（RULE-PTRARITH-ADDTREE-0001，本次新增）
+
+localcount==7 告警分支补上 `data.setTypeRecoveryExceeded()`（coreaction.cc:5393，
+此前只 warningHeader + 计数）。该旗标是 RulePtrArith buildTree 在传播
+停止后自行给新建 PTRADD/PTRSUB 输出盖章（assignPropagatedType）的前提。
+同轮次另确认：PTRSUB/PTRADD/INT_ADD 指针臂依赖 `fd.arch.types`
+TypeFactory（`propagateAddIn2Out` downChain），E2E 驱动侧
+`worker_architecture()` 现按 `Architecture::init`（architecture.cc:1398
+buildTypegrp + :1269 ELEM_DATA_ORGANIZATION + :1350 setupSizes）装配
+带 `<data_organization>` 解码的真实工厂——此前工厂缺失使全部指针传播臂
+静默失效，RulePtrArith 因此从未触发。

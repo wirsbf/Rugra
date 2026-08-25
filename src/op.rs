@@ -612,6 +612,22 @@ impl PcodeOp {
         self.addlflags |= op_addl_flags::NO_INDIRECT_COLLAPSE;
     }
 
+    // Ghidra: op.hh:220 PcodeOp::isPartialRoot
+    /// Is this op's output the root of a CONCAT tree already visited by
+    /// RulePieceStructure? Faithful to `PcodeOp::isPartialRoot`
+    /// (op.hh:220): `(addlflags & concat_root) != 0` (concat_root = 0x100).
+    /// The guard keeps the cleanup-pool rule from re-walking a tree it
+    /// already restructured (ruleaction.cc:7628).
+    pub fn is_partial_root(&self) -> bool {
+        (self.addlflags & op_addl_flags::CONCAT_ROOT) != 0
+    }
+    // Ghidra: op.hh:221 PcodeOp::setPartialRoot
+    /// Mark this op's output as the root of a visited CONCAT tree.
+    /// Faithful to `PcodeOp::setPartialRoot` (op.hh:221).
+    pub fn set_partial_root(&mut self) {
+        self.addlflags |= op_addl_flags::CONCAT_ROOT;
+    }
+
     // Ghidra: op.hh:179 PcodeOp::isIndirectCreation
     /// Return true if this op creates a varnode indirectly (an INDIRECT op
     /// marked as indirect_creation). Faithful to `PcodeOp::isIndirectCreation`

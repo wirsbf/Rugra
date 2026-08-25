@@ -12248,8 +12248,13 @@ impl Rule for RulePieceStructure {
     // Ghidra: ruleaction.cc:7607 RulePieceStructure::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePieceStructure::applyOp (ruleaction.cc:7607-7700).
-        // Ghidra's `op->isPartialRoot()` re-visit guard is not modelled in
-        // Rugra (no partial-root flag on PcodeOp), so it is skipped.
+        // if (op->isPartialRoot()) return 0; — CONCAT tree already visited.
+        // RULE-PTRARITH-ADDTREE-0001: without this guard the cleanup pool
+        // re-walks the same roots every pass, each returning CHANGE, so the
+        // universal tail never converges once structured types are visible.
+        if op_arc.read().unwrap().is_partial_root() {
+            return Ok(action_status::NO_CHANGE);
+        }
         let outvn = match op_arc.read().unwrap().output.clone() {
             Some(o) => o,
             None => return Ok(action_status::NO_CHANGE),
@@ -12305,7 +12310,9 @@ impl Rule for RulePieceStructure {
                 break;
             }
         }
-        // op->setPartialRoot(): no partial-root flag in Rugra, skipped.
+        // op->setPartialRoot() (ruleaction.cc:7642): mark before the storage
+        // walk so the tree is never re-visited.
+        op_arc.write().unwrap().set_partial_root();
 
         // ruleaction.cc:7665 reads the same Architecture-owned TypeFactory
         // for every leaf. A missing Rust Architecture/type handle is outside
@@ -16575,13 +16582,43 @@ impl<'a> AddTreeState<'a> {
         true
     }
 
-    /// Faithful to `AddTreeState::buildTree` (ruleaction.cc:6508-6550).
+    /// Faithful to `AddTreeState::assignPropagatedType` (ruleaction.cc:6339-6350).
     ///
-    /// The type-inheritance (`inheritResolution`) / `assignPropagatedType`
-    /// calls are omitted (Rugra has no per-op type resolution propagation
-    /// wired here). The structural PTRADD/PTRSUB/INT_ADD restructure is
-    /// faithful.
-    // Ghidra: ruleaction.cc:6508 AddTreeState::buildTree
+    /// The data-type from the pointer input (of either a PTRSUB or PTRADD)
+    /// is propagated to the output of the PcodeOp via the opcode's virtual
+    /// `propagateType`. `buildTree` only ever calls this on freshly created
+    /// CPUI_PTRADD/CPUI_PTRSUB ops, where the dispatch reduces to the
+    /// `TypeOpPtradd::propagateType`/`TypeOpPtrsub::propagateType` pointer
+    /// arm: TYPE_PTR input at slot 0 → `propagateAddIn2Out` (the factory's
+    /// `downChain` walk, incl. the PTRSUB no-wrap distinction).
+    // Ghidra: ruleaction.cc:6342 AddTreeState::assignPropagatedType
+    fn assign_propagated_type(&mut self, newop: &crate::op::PcodeOpRef) {
+        let vn = match newop.0.read().unwrap().get_in(0) { Some(v) => v.clone(), None => return };
+        let in_type = match vn.read().unwrap().get_type_read_facing() { Some(t) => t, None => return };
+        use crate::type_system::datatype::TypeMetatype;
+        if in_type.get_metatype() != TypeMetatype::Pointer {
+            return; // propagateAddIn2Out requires a TYPE_PTR alttype
+        }
+        let factory = match self.data.get_arch().and_then(|a| a.types.clone()) {
+            Some(f) => f,
+            None => return,
+        };
+        let op_guard = newop.0.read().unwrap();
+        let new_type = crate::typeop::TypeOpIntAdd::propagate_add_in2out(&in_type, &factory, &op_guard, 0);
+        drop(op_guard);
+        if let Some(nt) = new_type {
+            if let Some(out) = newop.0.read().unwrap().get_out() {
+                out.write().unwrap().update_type(nt);
+            }
+        }
+    }
+
+    /// Faithful to `AddTreeState::buildTree` (ruleaction.cc:6490-6532).
+    ///
+    /// The union `inheritResolution` calls are omitted (Rugra has no
+    /// per-edge union resolution); the exceeded-type stamping goes through
+    /// `assign_propagated_type` exactly as in Ghidra.
+    // Ghidra: ruleaction.cc:6490 AddTreeState::buildTree
     fn build_tree(&mut self) {
         let mult_node = self.build_multiples();
         let extra_node = self.build_extra();
@@ -16599,6 +16636,10 @@ impl<'a> AddTreeState<'a> {
             self.data.op_set_input(&newp, size_const, 2);
             self.data.op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
             newop = Some(newp.clone());
+            // if (data.isTypeRecoveryExceeded()) assignPropagatedType(newop);
+            if self.data.is_type_recovery_exceeded() {
+                self.assign_propagated_type(&newp);
+            }
             let out = newp.0.read().unwrap().output.clone().unwrap();
             out
         } else {
@@ -16616,8 +16657,14 @@ impl<'a> AddTreeState<'a> {
             self.data.op_set_input(&newp, off_const, 1);
             self.data.op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
             newop = Some(newp.clone());
-            // setStopTypePropagation
-            newp.0.write().unwrap().addlflags |= crate::op::op_addl_flags::STOP_TYPE_PROPAGATION;
+            // if (data.isTypeRecoveryExceeded()) assignPropagatedType(newop);
+            if self.data.is_type_recovery_exceeded() {
+                self.assign_propagated_type(&newp);
+            }
+            // if (size != 0) newop->setStopTypePropagation();
+            if self.size != 0 {
+                newp.0.write().unwrap().addlflags |= crate::op::op_addl_flags::STOP_TYPE_PROPAGATION;
+            }
             mult_node = newp.0.read().unwrap().output.clone().unwrap();
         }
 
