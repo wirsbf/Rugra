@@ -2852,35 +2852,80 @@ impl Action for ActionPrototypeWarnings {
 ///    duplicate them via processMultiplier.
 /// 3. Clear marks.
 pub struct ActionMarkExplicit { pub count: i32 }
+
+/// Record of the backward edge traversal state for one Varnode on the
+/// op stack. Faithful to `ActionMarkExplicit::OpStackElement`
+/// (coreaction.cc:3136-3157): LOAD skips the space input, PTRADD does
+/// not traverse the multiplier slot, SEGMENTOP skips its first two
+/// inputs. (Nested in the Ghidra class; Rust requires module scope.)
+// Ghidra: coreaction.cc:3136 ActionMarkExplicit::OpStackElement::OpStackElement
+pub struct MarkExplicitOpStackElement {
+    vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    slot: usize,
+    slotback: usize,
+}
+impl MarkExplicitOpStackElement {
+    // Ghidra: coreaction.cc:3136 ActionMarkExplicit::OpStackElement::OpStackElement
+    fn new(v: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> Self {
+        use crate::opcodes::OpCode;
+        let mut slot = 0usize;
+        let mut slotback = 0usize;
+        let v_rg = v.read().unwrap();
+        if v_rg.is_written() {
+            if let Some(def_arc) = v_rg.get_def() {
+                let def = def_arc.read().unwrap();
+                match def.opcode {
+                    OpCode::CPUI_LOAD => {
+                        slot = 1;
+                        slotback = 2;
+                    }
+                    OpCode::CPUI_PTRADD => {
+                        slotback = 1; // Don't traverse the multiplier slot
+                    }
+                    OpCode::CPUI_SEGMENTOP => {
+                        slot = 2;
+                        slotback = 3;
+                    }
+                    _ => {
+                        slotback = def.num_input();
+                    }
+                }
+            }
+        }
+        Self { vn: v.clone(), slot, slotback }
+    }
+}
+
 impl ActionMarkExplicit {
     // Ghidra: coreaction.hh:427 ActionMarkExplicit (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
 
     /// Check if a Varnode should be marked explicit. Faithful to
-    /// `baseExplicit` (coreaction.cc). Returns:
+    /// `baseExplicit` (coreaction.cc:3007-3082). Returns:
     /// - -1: should be explicit
     /// - -2: explicit (NEW op, may need special printing)
     /// - 0: single descendant, not explicit
     /// - >0: number of descendants (potential implied)
     // Ghidra: coreaction.cc:3007 ActionMarkExplicit::baseExplicit
     fn base_explicit(
-        vn: &crate::varnode::Varnode,
+        vn_arc: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         max_ref: i32,
     ) -> i32 {
         use crate::opcodes::OpCode;
-        // Get defining op.
-        let Some(def) = vn.get_def() else {
+        let vn = vn_arc.read().unwrap();
+        // Get defining op (cc:3012-3013).
+        let Some(def_arc) = vn.get_def() else {
             return -1; // No def → explicit.
         };
-        let def_rg = def.read().unwrap();
-        // Marker ops → explicit.
-        if def_rg.is_marker() {
+        let def = def_arc.read().unwrap();
+        // Marker ops → explicit (cc:3014).
+        if def.is_marker() {
             return -1;
         }
-        // Call ops → explicit.
-        if def_rg.is_call() {
-            // CPUI_NEW with 1 input → explicit but special.
-            if def_rg.opcode == OpCode::CPUI_NEW && def_rg.num_input() == 1 {
+        // Call ops → explicit (cc:3015-3019); CPUI_NEW with a single input
+        // is explicit but may need special printing (-2).
+        if def.is_call() {
+            if def.opcode == OpCode::CPUI_NEW && def.num_input() == 1 {
                 return -2;
             }
             return -1;
@@ -2897,29 +2942,407 @@ impl ActionMarkExplicit {
             }
         }
         // Addr-tied varnodes are often explicit (pointers may reference them).
+        // cc:3020-3021: a HighVariable merged across more than one Varnode
+        // instance can never be implied — the token is printed per instance,
+        // so every defining varnode of the high must be explicit.
+        if let Some(high) = vn.get_high() {
+            if high.read().unwrap().num_instances() > 1 {
+                return -1; // Must not be merged at all
+            }
+        }
         if vn.is_addr_tied() {
-            // Simplified: addr-tied → explicit.
+            // cc:3022-3029: addr-tied SUBPIECE of an addr-tied input whose
+            // join overlap equals the truncation offset is a copy marker —
+            // explicit and not printed. (cc:3026 compares int4 overlapJoin
+            // against uintb getOffset: -1 sign-extends and never matches a
+            // small SUBPIECE offset, mirrored by the u64 cast.)
+            if def.opcode == OpCode::CPUI_SUBPIECE {
+                if let Some(vin_arc) = def.get_in(0) {
+                    let vin = vin_arc.read().unwrap();
+                    if vin.is_addr_tied() {
+                        if let Some(off_vn_arc) = def.get_in(1) {
+                            let off = off_vn_arc.read().unwrap().get_offset();
+                            if (vn.overlap_join(&vin) as u64) == off {
+                                return -1;
+                            }
+                        }
+                    }
+                }
+            }
+            // cc:3030-3031: addr-tied needs a lone descendant to stay
+            // implicit-eligible.
+            let Some(use_op_arc) = vn.lone_descend() else {
+                return -1;
+            };
+            let use_op = use_op_arc.read().unwrap();
+            if use_op.opcode == OpCode::CPUI_INT_ZEXT {
+                // cc:3032-3036: explicit unless the ZEXT output is itself
+                // addr-tied AND fully contains vn (contains == 0).
+                match use_op.get_out() {
+                    Some(vnout_arc) => {
+                        let vnout = vnout_arc.read().unwrap();
+                        if !vnout.is_addr_tied() || vnout.contains(&vn) != 0 {
+                            return -1;
+                        }
+                    }
+                    None => return -1,
+                }
+            } else if use_op.opcode == OpCode::CPUI_PIECE {
+                // cc:3037-3045: the PIECE root itself must be explicit;
+                // internal pieces of a non-partial-root stay implicit-
+                // eligible.
+                match Self::piece_node_find_root(vn_arc) {
+                    Some(root_arc) => {
+                        if std::sync::Arc::ptr_eq(&root_arc, vn_arc) {
+                            return -1;
+                        }
+                        // cc:3040: `rootVn->getDef()->isPartialRoot()` — Rugra
+                        // has no PcodeOp::partialroot flag (ruleaction.rs
+                        // RulePieceStructure skips setPartialRoot at Ghidra
+                        // ruleaction.cc:7642; VariablePiece registry tracked
+                        // by MERGE-ADDRTIED-CLOSURE-0001), so the flag reads
+                        // false for every IR the current pipeline builds.
+                    }
+                    None => return -1,
+                }
+            } else {
+                // cc:3046-3048: any other lone reader of an addr-tied
+                // varnode keeps it explicit.
+                return -1;
+            }
+        } else if vn.is_mapped() {
+            // cc:3050-3054: NOT addrtied but still mapped — a first-use
+            // (register) or dynamic symbol mapping — should be explicit.
+            return -1;
+        } else if vn.is_proto_partial() {
+            // cc:3055-3059: pieces being CONCATed into a structure are
+            // explicit; internal PIECEs will be hidden.
+            return -1;
+        } else if def.opcode == OpCode::CPUI_PIECE
+            && def
+                .get_in(0)
+                .map(|v| v.read().unwrap().is_proto_partial())
+                .unwrap_or(false)
+        {
+            // cc:3060-3063: the base of PIECE operations building a
+            // structure should be explicit.
             return -1;
         }
-        drop(def_rg);
-
-        // Ghidra coreaction.cc:3064: `if (vn->hasNoDescend()) return -1;`
-        // — a written varnode with no descendants must be explicit (a
-        // dangling output can never be implied into a reader).
-        if vn.descend_iter().count() == 0 {
+        // cc:3064: must have at least one descendant.
+        if vn.has_no_descend() {
             return -1;
         }
 
-        // Count descendants.
-        let desc_count = vn.descend_iter().count() as i32;
-        if desc_count > max_ref {
-            return desc_count;
+        // cc:3066-3072: a PTRSUB dereference of a constant/input spacebase
+        // is always implicit — remove the limit on max references.
+        let mut max_ref = max_ref;
+        if def.opcode == OpCode::CPUI_PTRSUB {
+            if let Some(base_vn_arc) = def.get_in(0) {
+                let base_vn = base_vn_arc.read().unwrap();
+                if base_vn.is_spacebase()
+                    && (base_vn.is_constant() || base_vn.is_input())
+                {
+                    max_ref = 1000000;
+                }
+            }
         }
-        if desc_count > 1 {
-            return desc_count;
+        // cc:3073-3081: count descendants; a marker reader or exceeding
+        // maxref makes the varnode explicit.
+        let mut desc_count: i32 = 0;
+        for op_arc in vn.descend_iter() {
+            let op = op_arc.read().unwrap();
+            if op.is_marker() {
+                return -1;
+            }
+            desc_count += 1;
+            if desc_count > max_ref {
+                return -1; // Must not exceed max descendants
+            }
         }
-        // Single or zero descendants → not explicit.
+
         desc_count
+    }
+
+    // Ghidra: op.cc:824 PieceNode::findRoot
+    /// Find the root of the CONCAT tree of Varnodes marked either
+    /// `is_proto_partial()` or `is_addr_tied()`: the maximal Varnode
+    /// containing the given Varnode (as storage) with a backward path to it
+    /// through PIECE operations. Mirrors the private helper
+    /// `piece_node_find_root` in funcdata.rs (same oracle lines,
+    /// op.cc:824-852; endianness-adjusted output address, renormalize is a
+    /// no-op for word-size-1 spaces, `compareOrder != 0` tie replacement) —
+    /// duplicated locally because the funcdata.rs item is private and that
+    /// file is outside this change's lease.
+    fn piece_node_find_root(
+        vn_arc: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        use crate::opcodes::OpCode;
+        use std::sync::Arc;
+        let mut cur = vn_arc.clone();
+        loop {
+            let (is_pp, is_at, cur_addr, cur_space) = {
+                let r = cur.read().unwrap();
+                (r.is_proto_partial(), r.is_addr_tied(), r.get_offset(), r.get_space())
+            };
+            if !is_pp && !is_at {
+                break;
+            }
+            let mut piece_op: Option<Arc<std::sync::RwLock<crate::op::PcodeOp>>> = None;
+            let readers: Vec<_> = cur.read().unwrap().descend.iter().filter_map(|w| w.upgrade()).collect();
+            for op_arc in readers {
+                let op = op_arc.read().unwrap();
+                if op.opcode != OpCode::CPUI_PIECE {
+                    continue;
+                }
+                let slot = (0..2)
+                    .find(|&i| op.get_in(i).map(|v| Arc::ptr_eq(v, &cur)).unwrap_or(false));
+                let (Some(slot), Some(out)) = (slot, op.output.clone()) else { continue };
+                let out_r = out.read().unwrap();
+                let mut addr = out_r.get_offset();
+                let (in0_size, in1_size) = (
+                    op.get_in(0).map(|v| v.read().unwrap().get_size()).unwrap_or(0),
+                    op.get_in(1).map(|v| v.read().unwrap().get_size()).unwrap_or(0),
+                );
+                // if (addr.getSpace()->isBigEndian() == (slot == 1))
+                //   addr = addr + op->getIn(1-slot)->getSize();
+                if cur_space.is_big_endian() == (slot == 1) {
+                    addr = addr.wrapping_add(if slot == 0 { in1_size } else { in0_size } as u64);
+                }
+                // addr.renormalize(vn->getSize()) — identity for word-size-1
+                // spaces (Rugra's scalar Address carries no word size).
+                if addr == cur_addr {
+                    match &piece_op {
+                        Some(prev) => {
+                            // op.cc:841-843: `if (op->compareOrder(pieceOp))
+                            // pieceOp = op;` — nonzero truthiness replaces.
+                            let prev_guard = prev.read().unwrap();
+                            if op.compare_order(&prev_guard) != 0 {
+                                drop(prev_guard);
+                                piece_op = Some(op_arc.clone());
+                            }
+                        }
+                        None => piece_op = Some(op_arc.clone()),
+                    }
+                }
+            }
+            match piece_op {
+                Some(op_arc) => {
+                    let next = op_arc.read().unwrap().output.clone();
+                    match next {
+                        Some(n) => cur = n,
+                        None => break,
+                    }
+                }
+                None => break,
+            }
+        }
+        Some(cur)
+    }
+
+    /// Look for one Varnode with multiple descendants flowing into another.
+    /// Faithful to `multipleInteraction` (coreaction.cc:3091-3132): for
+    /// bool-output / INT_ZEXT / INT_SEXT / PTRADD outputs whose first two
+    /// inputs carry the multlist mark, the marked input is purged to
+    /// explicit. Returns the number of Varnodes marked explicit.
+    // Ghidra: coreaction.cc:3091 ActionMarkExplicit::multipleInteraction
+    fn multiple_interaction(
+        multlist: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
+    ) -> i32 {
+        use crate::opcodes::OpCode;
+        let mut purgelist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+            Vec::new();
+
+        for vn_arc in multlist {
+            // All elements in this list should have a defining op.
+            let vn = vn_arc.read().unwrap();
+            let Some(def_arc) = vn.get_def() else { continue };
+            let op = def_arc.read().unwrap();
+            let opc = op.opcode;
+            if op.is_bool_output()
+                || opc == OpCode::CPUI_INT_ZEXT
+                || opc == OpCode::CPUI_INT_SEXT
+                || opc == OpCode::CPUI_PTRADD
+            {
+                let mut maxparam = 2usize;
+                if op.num_input() < maxparam {
+                    maxparam = op.num_input();
+                }
+                for j in 0..maxparam {
+                    let Some(topvn_arc) = op.get_in(j) else { continue };
+                    let topvn = topvn_arc.read().unwrap();
+                    // We have a "multiple" interaction between topvn and vn.
+                    if topvn.is_mark() {
+                        let mut topopc = OpCode::CPUI_COPY;
+                        if topvn.is_written() {
+                            if let Some(topdef_arc) = topvn.get_def() {
+                                let topdef = topdef_arc.read().unwrap();
+                                if topdef.is_bool_output() {
+                                    continue; // Try not to make boolean outputs explicit
+                                }
+                                topopc = topdef.opcode;
+                            }
+                        }
+                        if opc == OpCode::CPUI_PTRADD {
+                            if topopc == OpCode::CPUI_PTRADD {
+                                purgelist.push(topvn_arc.clone());
+                            }
+                        } else {
+                            purgelist.push(topvn_arc.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        for vn_arc in &purgelist {
+            let mut vn = vn_arc.write().unwrap();
+            vn.set_explicit();
+            vn.clear_implied();
+            vn.clear_mark();
+        }
+        purgelist.len() as i32
+    }
+
+    /// Count the number of terms in the expression making up vn; if more
+    /// than max, mark vn explicit. Faithful to `processMultiplier`
+    /// (coreaction.cc:3166-3199) including the marked-ancestor shortcut
+    /// (cc:3192-3195) and the spacebase exclusion (cc:3179-3180).
+    // Ghidra: coreaction.cc:3166 ActionMarkExplicit::processMultiplier
+    fn process_multiplier(
+        vn_arc: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        max: i32,
+    ) {
+        let mut opstack: Vec<MarkExplicitOpStackElement> = Vec::new();
+        let mut finalcount: i32 = 0;
+
+        opstack.push(MarkExplicitOpStackElement::new(vn_arc));
+        loop {
+            if opstack.is_empty() {
+                break;
+            }
+            let vncur_arc = opstack.last().unwrap().vn.clone();
+            let vncur = vncur_arc.read().unwrap();
+            let isaterm = vncur.is_explicit() || !vncur.is_written();
+            if isaterm || (opstack.last().unwrap().slotback <= opstack.last().unwrap().slot) {
+                // Trimming condition (cc:3177)
+                if isaterm {
+                    if !vncur.is_spacebase() {
+                        // Don't count space base (cc:3179-3180)
+                        finalcount += 1;
+                    }
+                }
+                if finalcount > max {
+                    // Make this variable explicit (cc:3182-3185)
+                    drop(vncur);
+                    let mut vn = vn_arc.write().unwrap();
+                    vn.set_explicit();
+                    vn.clear_implied();
+                    return;
+                }
+                opstack.pop();
+            } else {
+                let def_arc = vncur.get_def().expect("non-term stack element is written");
+                let op = def_arc.read().unwrap();
+                let slot = opstack.last().unwrap().slot;
+                let Some(newvn_arc) = op.get_in(slot) else {
+                    opstack.last_mut().unwrap().slot += 1;
+                    continue;
+                };
+                opstack.last_mut().unwrap().slot += 1;
+                let ancestor_marked = newvn_arc.read().unwrap().is_mark();
+                drop(vncur);
+                if ancestor_marked {
+                    // If an ancestor is marked (also possible implied with
+                    // multiple descendants) then automatically consider this
+                    // to be explicit (cc:3192-3195).
+                    let mut vn = vn_arc.write().unwrap();
+                    vn.set_explicit();
+                    vn.clear_implied();
+                    return;
+                }
+                opstack.push(MarkExplicitOpStackElement::new(&newvn_arc));
+            }
+        }
+    }
+
+    /// Assume vn is produced via a CPUI_NEW operation. If it is immediately
+    /// fed to a constructor, set special printing flags on the Varnode.
+    /// Faithful to `checkNewToConstructor` (coreaction.cc:3205-3235).
+    // Ghidra: coreaction.cc:3205 ActionMarkExplicit::checkNewToConstructor
+    fn check_new_to_constructor(
+        fd: &mut Funcdata,
+        vn_arc: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        use crate::opcodes::OpCode;
+        let vn = vn_arc.read().unwrap();
+        let Some(op_arc) = vn.get_def() else { return };
+        let op = op_arc.read().unwrap();
+        let Some(bb_arc) = op.parent.as_ref().and_then(|w| w.upgrade()) else {
+            return;
+        };
+        let mut firstuse: Option<std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>> = None;
+        for curop_arc in vn.descend_iter() {
+            let curop = curop_arc.read().unwrap();
+            let curop_bb = curop.parent.as_ref().and_then(|w| w.upgrade());
+            let same_bb = match &curop_bb {
+                Some(cb) => std::sync::Arc::ptr_eq(cb, &bb_arc),
+                None => false,
+            };
+            if !same_bb {
+                continue;
+            }
+            if firstuse.is_none() {
+                firstuse = Some(curop_arc.clone());
+            } else if let Some(fu_arc) = &firstuse {
+                let fu = fu_arc.read().unwrap();
+                // cc:3216-3223: replace firstuse when curop runs earlier, or
+                // when a CALLIND's function-pointer input is defined by the
+                // current firstuse.
+                let replace = if curop.get_seq_num().get_order() < fu.get_seq_num().get_order() {
+                    true
+                } else if curop.opcode == OpCode::CPUI_CALLIND {
+                    curop
+                        .get_in(0)
+                        .filter(|ptr_arc| ptr_arc.read().unwrap().is_written())
+                        .and_then(|ptr_arc| ptr_arc.read().unwrap().get_def())
+                        .map(|ptr_def| std::sync::Arc::ptr_eq(&ptr_def, fu_arc))
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+                drop(fu);
+                if replace {
+                    firstuse = Some(curop_arc.clone());
+                }
+            }
+        }
+        let Some(firstuse_arc) = firstuse else { return };
+        let firstuse = firstuse_arc.read().unwrap();
+        if !firstuse.is_call() {
+            return;
+        }
+        if firstuse.get_out().is_some() {
+            return;
+        }
+        if firstuse.num_input() < 2 {
+            return; // Must have at least 1 parameter (plus destination varnode)
+        }
+        if !firstuse
+            .get_in(1)
+            .map(|v| std::sync::Arc::ptr_eq(&v, vn_arc))
+            .unwrap_or(false)
+        {
+            return; // First parameter must be result of new
+        }
+        // data.opMarkSpecialPrint(firstuse) — Mark call to print the new
+        // operator as well (cc:3233).
+        drop(firstuse);
+        drop(op);
+        drop(vn);
+        fd.op_mark_special_print(&crate::op::PcodeOpRef(firstuse_arc));
+        // data.opMarkNonPrinting(op) — Don't print the new operator as a
+        // stand-alone operation (cc:3234).
+        fd.op_mark_non_printing(&crate::op::PcodeOpRef(op_arc));
     }
 }
 impl Action for ActionMarkExplicit {
@@ -2930,11 +3353,19 @@ impl Action for ActionMarkExplicit {
 
     // Ghidra: coreaction.cc:3237 ActionMarkExplicit::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        let max_ref = 2; // arch.max_implied_ref default
-        let mut change_count = 0;
+        // cc:3244: maxref = data.getArch()->max_implied_ref (default 2,
+        // arch.rs default_x86_64 mirrors architecture.cc).
+        let max_ref = fd.arch.as_ref().map(|a| a.max_implied_ref).unwrap_or(2);
+        let mut change_count: i32 = 0;
+        // implied varnodes with >1 descendants (cc:3241)
+        let mut multlist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+            Vec::new();
 
-        // Iterate all varnodes from the loc_tree (VarnodeLocSet equivalent).
-        // Collect defined (written or input) varnodes and process them.
+        // Iterate all varnodes from the loc_tree (VarnodeLocSet equivalent);
+        // skip free varnodes (cc:3245 `enditer = data.beginDef(0)` proxy —
+        // constants attached to op inputs are marked explicit by baseExplicit
+        // in Ghidra but never reach any print path, so the non-free proxy
+        // keeps the observable flag set identical).
         let varnodes: Vec<_> = fd
             .vbank
             .loc_tree
@@ -2948,23 +3379,47 @@ impl Action for ActionMarkExplicit {
             if !vn_rg.is_written() && !vn_rg.is_input() {
                 continue;
             }
-            // Call base_explicit.
-            let desc_count = Self::base_explicit(&vn_rg, max_ref);
+            drop(vn_rg);
+            // cc:3249: baseExplicit determination.
+            let desc_count = Self::base_explicit(vn_arc, max_ref);
             if desc_count < 0 {
-                // Should be explicit — set the EXPLICIT flag.
-                drop(vn_rg);
+                // cc:3251-3254: should be explicit — set the EXPLICIT flag,
+                // bump the inherited count, and run the NEW-to-constructor
+                // special-print pass for -2.
                 vn_arc.write().unwrap().set_explicit();
                 change_count += 1;
+                if desc_count < -1 {
+                    Self::check_new_to_constructor(fd, vn_arc);
+                }
+            } else if desc_count > 1 {
+                // cc:3256-3259: keep track of possible implieds with more
+                // than one descendant.
+                vn_arc.write().unwrap().set_mark();
+                multlist.push(vn_arc.clone());
             }
-            // Note: multlist + multipleInteraction + processMultiplier
-            // require HighVariable integration (L3 gap).
+        }
+
+        // cc:3262: count += multipleInteraction(multlist)
+        change_count += Self::multiple_interaction(&multlist);
+        // cc:3263: maxdup = data.getArch()->max_term_duplication
+        let max_dup = fd.arch.as_ref().map(|a| a.max_term_duplication).unwrap_or(2);
+        for vn_arc in &multlist {
+            // cc:3266: mark may have been cleared by multipleInteraction
+            if vn_arc.read().unwrap().is_mark() {
+                Self::process_multiplier(vn_arc, max_dup);
+            }
+        }
+        // cc:3269-3270: clear marks.
+        for vn_arc in &multlist {
+            vn_arc.write().unwrap().clear_mark();
         }
 
         if change_count > 0 {
-            // Ghidra coreaction.cc:3247-3251: every setExplicit call increments
-            // the inherited Action::count; the base perform then observes
-            // lcount<count and reports it. Returning the bump count here is
-            // the sanctioned Rust count-bridge (see Action::perform doc).
+            // Ghidra coreaction.cc:3252/3262: every setExplicit/purge
+            // increments the inherited Action::count; apply itself returns
+            // 0 (cc:3271). Returning the bump count here is the sanctioned
+            // Rust count-bridge (see Action::perform doc).
+            self.count += change_count;
             Ok(change_count)
         } else {
             Ok(action_status::NO_CHANGE)
@@ -3194,6 +3649,14 @@ impl Action for ActionMarkImplied {
             // the bump count here is the sanctioned Rust count-bridge (see
             // Action::perform doc; same convention as
             // ActionMarkExplicit::apply above).
+            // Ghidra coreaction.cc:3434: `count += 1` fires for every
+            // varnode that completes the traversal — it will be marked
+            // either explicit or implied. apply itself returns 0 (cc:3454);
+            // returning the bump count is the sanctioned Rust count-bridge
+            // (see Action::perform doc), so `perform` observes
+            // lcount<count → count_apply/status_end exactly like the oracle
+            // (ActionMarkImplied is rule_onceperfunc, coreaction.hh:461).
+            self.count += change_count;
             Ok(change_count)
         } else {
             Ok(action_status::NO_CHANGE)

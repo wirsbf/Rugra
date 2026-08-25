@@ -1598,3 +1598,60 @@ buildLocaltypes 引用 coreaction.cc:5012 修正为 5008（定义起始行）。
   使 loc_tree 簇首为带 addrtied 的成员——规避 merge.rs `addr_tied_location_ranges`
   `first_flags` 仅取簇首成员 flags 与 Ghidra `overlapLoc` 全簇 OR 的已知表示差
   （表示层残差另行登记，不影响本 fixture 双侧同判）。
+### 2026-08-25：MarkExplicit 全量 port + MarkImplied count 桥（`RETURNFOLD-GAPA-UPSTREAM-0001`）
+
+e2e return 值折叠链的最后检验环节（GAP-A/GAP-B 已集成后的上游切片）：
+
+- **`ActionMarkExplicit::base_explicit` 全量重写**（coreaction.cc:3007-3082，
+  原 addr-tied 简化分支整体替换）：
+  - cc:3020-3021 `high != null && high->numInstances() > 1 → return -1`
+    （多实例 high 永不 implied——`COREACTION-BASEEXPLICIT-NUMINST-0001` 的核心
+    规则；折叠/显式选择的判定开关）。
+  - addr-tied 分支（cc:3022-3049）：SUBPIECE 输入 addr-tied 且
+    `overlap_join(vin) as u64 == in(1).get_offset()`（cc:3026 int4→uintb 提升，
+    -1 符号扩展永不匹配小偏移）→ -1；`lone_descend`：ZEXT 输出 addr-tied 且
+    `contains(vn)==0` 才可继续 implied 候选（cc:3032-3036）；PIECE 经
+    `piece_node_find_root`（op.cc:824-852，funcdata.rs 私有 helper 的本地镜像，
+    租约边界）判定根/内部件（cc:3037-3045，`isPartialRoot` 因 Rugra 无
+    PcodeOp::partialroot flag 恒 false，MERGE-ADDRTIED-CLOSURE-0001）；其余
+    lone reader → -1（cc:3046-3048）。
+  - cc:3050-3063：`is_mapped → -1`（heritage 属性尾）、`is_proto_partial → -1`、
+    PIECE def 且 in(0) proto-partial → -1。
+  - cc:3066-3072：PTRSUB 引用常量/输入 spacebase 时 `max_ref = 1000000`。
+  - cc:3073-3081 后继循环：marker reader → -1；**`desccount > maxref → -1`**
+    （修复原 `return desc_count` 缺陷——超限必须是 explicit 而非 multlist 候选）。
+- **新增 `multiple_interaction`**（cc:3091-3132）：bool 输出/ZEXT/SEXT/PTRADD 的
+  前两输入带 mark → purgelist → `set_explicit + clear_implied + clear_mark`；
+  PTRADD 只清洗 PTRADD 祖先；bool 输出祖先 `continue` 不清洗。
+- **新增 `MarkExplicitOpStackElement` + `process_multiplier`**
+  （cc:3136-3157/3166-3199，Rust 需模块作用域）：LOAD slot=1/slotback=2、
+  PTRADD slotback=1（不遍历乘数槽）、SEGMENTOP slot=2/slotback=3；项计数
+  `> max_term_duplication` 或命中已标 mark 的祖先 → explicit；spacebase 不计数。
+- **新增 `check_new_to_constructor`**（cc:3205-3235）：NEW 输出喂构造器时
+  `op_mark_special_print(firstuse)` + `op_mark_non_printing(new op)`
+  （`PcodeOpRef` 包装经 funcdata.rs 公有 API）。
+- **`ActionMarkExplicit::apply` 全量重写**（cc:3237-3272）：multlist 收集
+  （desccount>1 → set_mark）、`count += multiple_interaction(multlist)`、
+  processMultiplier（mark 未被清除者）、末尾统一 clear_mark；arch 缺失时
+  max_implied_ref/max_term_duplication 回退默认 2（architecture.cc:1420-1421）。
+- **`ActionMarkImplied::apply` count 桥**（`COREACTION-MARKIMPLIED-COUNT-0001`）：
+  原 `change_count > 0` 双臂均返回 `NO_CHANGE` 的缺陷修复为返回计数增量
+  （cc:3434 每完成一个 varnode `count += 1`，apply 本身返回 0 cc:3454；
+  sanctioned Rust count-bridge），`rule_onceperfunc` 下 perform 观察
+  lcount<count → count_apply/status_end 与 oracle 状态机一致。平坦迭代与
+  Ghidra DFS 后序的标记结果与计数总量等价（常数/自由 varnode 双侧同被
+  排除：Ghidra def_tree 免费段在 `beginDef(0)` 之后，isFree 跳过 cc:3426）。
+- 双侧对拍：`tests/oracle/returnfold_upstream_1204.{cc,rs,metadata.json}` +
+  `tools/run_returnfold_upstream_oracle.sh`。四场景驱动**生产**
+  `ActionMarkExplicit::perform` + `ActionMarkImplied::perform` +
+  `PrintC::emitBlockBasic`/`emit_block_graph`（rpn 路径）：
+  s1_fold（单实例 COPY→RETURN：implied、mi_count=1、打印 `return+lit10` 无
+  独立赋值行——cc:2704-2705 跳过 + cc:526-534 递归内联）；s2_merged（双实例
+  high 合并：双 explicit、me_count=2、assign 行保留 + var 返回）；s3_dup3
+  （3 读超 maxref：explicit、1 assign + 3 var 返回——钉死 desccount>maxref
+  修复）；s4_mult2（2 读==maxref：multlist 存活 processMultiplier、implied、
+  双折叠）。双侧 stdout 22 行字节一致（sha `c1472b99…`），stderr 双空，
+  diff rc=0，各 2 次确定性。残差（UNTESTED，metadata coverage）：NEW 构造器
+  路径、addr-tied 子分支（需 partialroot 旗标基建）、checkImpliedCover
+  LOAD/STORE/CALL 交叉（Rust 块级近似仍在）、标记次序（平坦 vs DFS 后序，
+  等价性论证未钉）。
