@@ -943,6 +943,30 @@ impl Varnode {
         self.addlflags &= !addl_flags::ACTIVE_HERITAGE;
     }
 
+    // Ghidra: varnode.hh:261 Varnode::isSpacebasePlaceholder
+    /// Is \b this used specifically to track stackpointer values? Faithful
+    /// to `Varnode::isSpacebasePlaceholder` (varnode.hh:261):
+    /// `(addlflags & Varnode::spacebase_placeholder) != 0`.
+    pub fn is_spacebase_placeholder(&self) -> bool {
+        (self.addlflags & addl_flags::SPACEBASE_PLACEHOLDER) != 0
+    }
+
+    // Ghidra: varnode.hh:319 Varnode::setSpacebasePlaceholder
+    /// Mark \b this as a special Varnode for tracking stackpointer values.
+    /// Faithful to `Varnode::setSpacebasePlaceholder` (varnode.hh:319):
+    /// `addlflags |= Varnode::spacebase_placeholder`.
+    pub fn set_spacebase_placeholder(&mut self) {
+        self.addlflags |= addl_flags::SPACEBASE_PLACEHOLDER;
+    }
+
+    // Ghidra: varnode.hh:320 Varnode::clearSpacebasePlaceholder
+    /// Clear the stackpointer tracking mark. Faithful to
+    /// `Varnode::clearSpacebasePlaceholder` (varnode.hh:320):
+    /// `addlflags &= ~Varnode::spacebase_placeholder`.
+    pub fn clear_spacebase_placeholder(&mut self) {
+        self.addlflags &= !addl_flags::SPACEBASE_PLACEHOLDER;
+    }
+
     // Ghidra: varnode.cc:352 Varnode::setFlags
     pub fn set_flags(&mut self, f: u32) {
         self.flags |= f;
@@ -2948,21 +2972,23 @@ impl VarnodeBank {
         &mut self,
         vn: Arc<RwLock<Varnode>>,
         op: Weak<RwLock<PcodeOp>>,
-    ) -> Arc<RwLock<Varnode>> {
+    ) -> Option<Arc<RwLock<Varnode>>> {
         // Ghidra setDef erases via the stored lociter/defiter
         // (varnode.cc:1396-1397), never by a recomputed comparison key.
+        // The identity-erase residency bools double as the ownership proof
+        // (the oracle's stored iterators make the erase itself that proof),
+        // replacing the former O(n) owns_*_ref preflight scans.
         let loc_removed = self.erase_loc_identity(&vn);
         let def_removed = self.erase_def_identity(&vn);
-        debug_assert!(
-            loc_removed && def_removed,
-            "setDef requires a bank-owned free Varnode"
-        );
+        if !loc_removed || !def_removed {
+            return None;
+        }
         {
             let mut value = vn.write().unwrap();
             value.def = Some(op);
             value.set_flags(varnode_flags::WRITTEN | varnode_flags::COVERDIRTY);
         }
-        self.xref(vn)
+        Some(self.xref(vn))
     }
 
     // Ghidra: varnode.cc:1250 VarnodeBank::create
@@ -3111,10 +3137,17 @@ impl VarnodeBank {
             return Err(anyhow!("Assignment to constant at r0x{address:08x}"));
         }
         drop(value);
-        if !self.owns_loc_ref(&vn) || !self.owns_def_ref(&vn) {
-            return Err(anyhow!("Defining unmanaged varnode"));
+        // Ghidra's setDef erases via the stored lociter/defiter
+        // (varnode.cc:1396-1397) — the erase IS the ownership proof, O(log n).
+        // The former O(n) owns_loc_ref/owns_def_ref preflight scans made the
+        // heritage/pool setDef path quadratic on large functions; the
+        // identity-erase residency bools reproduce the oracle's
+        // "unmanaged varnode" error with the same observable outcome
+        // (same Err for a foreign Arc, same success for a bank-owned one).
+        match self.transition_def(vn.clone(), op) {
+            Some(canonical) => Ok(canonical),
+            None => Err(anyhow!("Defining unmanaged varnode")),
         }
-        Ok(self.transition_def(vn, op))
     }
 
     // RUGRA-GLUE: internal non-fallible entry for callers that have just
@@ -3125,7 +3158,14 @@ impl VarnodeBank {
         op: Weak<RwLock<PcodeOp>>,
     ) -> Arc<RwLock<Varnode>> {
         debug_assert!(vn.read().unwrap().is_free() && !vn.read().unwrap().is_constant());
-        self.transition_def(vn, op)
+        match self.transition_def(vn, op) {
+            Some(canonical) => canonical,
+            // The debug_assert above established a freshly allocated,
+            // bank-owned free Varnode; Ghidra's stored-iterator erase can
+            // never miss there. Keep the panic contract of the former
+            // debug_assert path for a corrupted bank.
+            None => panic!("set_def_prevalidated lost a freshly allocated Varnode"),
+        }
     }
 
     // Ghidra: varnode.cc:1276 VarnodeBank::destroy

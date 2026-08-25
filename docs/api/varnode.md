@@ -1072,3 +1072,20 @@ tlst->getArch()->userops.getOp(in(0).offset) → 基类 canonical 回落`
   合成键，对应 varnode.cc:1916-1918 的 searchvn），只检查紧邻前驱一条；精确匹配返回既有
   input，部分重叠保持既有 WARN 降级。Heritage rename 的每次空栈提升从 O(n) 降为 O(log n)。
 >>>>>>> c7674b91 (fix: eliminate 6-function E2E timeouts (selectGoto non-termination, heritage rename O(n^2), main print panic))
+
+## spacebase placeholder 访问器（varnode.hh:261/319/320，本次新增）
+
+- `Varnode::is_spacebase_placeholder` / `set_spacebase_placeholder` /
+  `clear_spacebase_placeholder`：`addlflags & SPACEBASE_PLACEHOLDER (0x400)`
+  的读/置/清，逐行对齐 Ghidra 内联访问器。置位方：
+  `FuncCallSpecs::create_placeholder`；清除方：`RuleLoadVarnode` 解析尾巴。
+
+## VarnodeBank::set_def 所有权证明重构（本次性能修复）
+
+Ghidra `setDef`（varnode.cc:1390-1398）以存储在 Varnode 内的 lociter/defiter
+执行 erase —— erase 本身即所有权证明，O(log n)。Rugra 原实现先做
+`owns_loc_ref`/`owns_def_ref` 两个 O(n) 全树扫描再 `transition_def`，使
+heritage/pool 的 setDef 路径在大函数上呈二次方。现 `transition_def` 返回
+`Option<Arc<..>>`（identity-erase 的两个 residency bool 作为所有权证明），
+`set_def` 据此产出同样的 `Err("Defining unmanaged varnode")`，
+`set_def_prevalidated` 保留 panic 契约。可观测行为（成功/Err 分支）不变。

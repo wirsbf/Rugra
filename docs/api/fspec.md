@@ -823,3 +823,36 @@ ProtoParameter（锁定签名时地址由模型输出指派固定）；Rugra Fun
 （fspec.cc:748-770），只有降级 void 兜底才填 void 类型（fspec.cc:2438-2442）
 ——前置 metatype 过滤后残余 Some(void) 即降级信号，同样返回 None。
 消费方：coreaction.rs ActionPrototypeTypes Step 3（锁定 RETURN 读插入）。
+
+## spacebase placeholder 链（HERITAGE-GUARD-STACKOFFSET-0001，本次新增）
+
+`FuncCallSpecs` 的 stack-pointer placeholder 解析闭环，1:1 对齐
+`fspec.cc:4849-4921`：
+
+- `FuncProto::get_spacebase`（fspec.hh:1611）：委托 `model->input.get_spacebase()`
+  （ParamListStandard 的 `space_base`，仅当模型 input 列表含 stack pentry 时
+  非 None）。cspec 解码路径已在 pentry 循环设置该字段。
+- `FuncCallSpecs::create_placeholder`（fspec.cc:4849-4858）：
+  `opStackLoad(spacebase,0,1,op,null,false)` + `opInsertInput` 追加为 CALL 最后
+  一个输入，`setStackPlaceholderSlot(slot)` + `setSpacebasePlaceholder()`。
+  调用方：`ActionFuncLink::apply` 的 funcLinkInput 尾巴（coreaction.cc:1511-1513）。
+- `FuncCallSpecs::set_stack_placeholder_slot` / `clear_stack_placeholder_slot`
+  （fspec.hh:1653/1654）：slot 索引记录。
+- `FuncCallSpecs::resolve_spacebase_relative`（fspec.cc:4870-4908）：当
+  `RuleLoadVarnode` 把 placeholder LOAD 解析为 COPY 后（ruleaction.cc:4294-4303
+  尾巴），读取 COPY 源 varnode 的偏移写入 `stackoffset`；placeholder 本身在
+  placeholder slot 时走 `abort_spacebase_relative` 清除；input-locked 路径从
+  锁定参数地址换算（`stackoffset -= addr.offset` + wrapOffset）。Ghidra 的
+  LowlevelError 以 stderr 约定呈现（驱动无异常通道）。
+- `abort_spacebase_relative`（fspec.cc:4910-4921）死锁修复：原实现
+  `if let Some(def) = vn.read().unwrap().def...` 的 scrutinee 临时 read guard
+  在整个 if-let 体内存活，而 `op_destroy(LOAD)` → `destroy_varnode(vn)` →
+  `make_free(vn)` 需要 `vn.write()` —— 单线程 RwLock 自死锁（main() worker
+  futex 挂起，coredump 栈 `abort_spacebase_relative → op_destroy →
+  op_unset_output → make_free_prevalidated` 复现）。修复为先在块作用域内快照
+  `def_to_destroy` 再 destroy，保序等同 oracle。
+
+可观测效果：stackoffset 已解析的 call 使 `Heritage::guard_calls` 的
+`has_effect_translate` 命中模型 effectlist（unaffected/killedbycall），不再为
+每个 (stack range × call) 生成 unknown-effect INDIRECT（main 从 8190 个 guard
+INDIRECT 降至 ~5460，mainloop repeatapply 收敛轮数 37+ → 1）。

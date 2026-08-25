@@ -1212,3 +1212,11 @@ StringManager 或其它既有 Rule/callspec 残差。
 `FuncCallSpecs::resolveSpacebaseRelative`。D0 已解除 exact owner lookup 前置件，
 但该方法与状态突变尚未建模、也未由双侧 fixture 执行，因此保持 `UNTESTED` 并
 绑定 `CALLSPEC-0001`；不能再把残差描述成“callspec 尚不存在”。
+
+## RuleLoadVarnode placeholder 解析尾巴（ruleaction.cc:4294-4303，本次新增）
+
+LOAD→COPY 转换后：若 `refvn = op->getOut()` 带 spacebase_placeholder 标记，
+清除标记、取 `loneDescend` 为 CALL、`getCallSpecs(placeOp)` 后调用
+`resolve_spacebase_relative` 记录该 call 点的 stackoffset（并可能
+abort placeholder）。闭合 CALLSPEC-0001 中登记的
+"resolveSpacebaseRelative is still absent" 残差。

@@ -386,6 +386,18 @@ impl FuncProto {
             .has_effect(addr_space, addr_offset, size)
     }
 
+    // Ghidra: fspec.hh:1611 FuncProto::getSpacebase
+    /// Get the \e stack address space associated with \b this model.
+    /// Faithful to `FuncProto::getSpacebase` (fspec.hh:1611):
+    /// `return model->getSpacebase();` — ProtoModel::getSpacebase
+    /// (fspec.hh:977) delegates to the input ParamList's `getSpacebase`
+    /// (fspec.hh:639), which is non-null exactly when the model's input
+    /// list has a stack-space pentry. A modelless FuncProto (invalid in
+    /// Ghidra) projects `None`.
+    pub fn get_spacebase(&self) -> Option<AddressSpace> {
+        self.model.as_ref().and_then(|m| m.input.get_spacebase())
+    }
+
     // Ghidra: fspec.cc:4289 FuncProto::characterizeAsInputParam
     /// Decide whether a given storage location could be, or could hold, an
     /// input parameter. Faithful port of `characterizeAsInputParam`
@@ -2499,18 +2511,25 @@ impl FuncCallSpecs {
             // cc:4916: clearStackPlaceholderSlot.
             self.clear_stack_placeholder_slot();
             // cc:4918-4919: if placeholder vn has no descend and is internal+
-            // written, destroy its defining op.
-            if let Some(vn) = placeholder_vn {
-                let vn_r = vn.read().unwrap();
-                let should_destroy = vn_r.has_no_descend()
-                    && vn_r.get_space() == crate::space::AddressSpace::Unique
-                    && vn_r.is_written();
-                drop(vn_r);
-                if should_destroy {
-                    if let Some(def_weak) = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
-                        fd.op_destroy(&crate::op::PcodeOpRef(def_weak));
-                    }
-                }
+            // written, destroy its defining op. The read guard must be
+            // dropped BEFORE opDestroy: the destroyed LOAD's output IS this
+            // varnode, and opDestroy→destroyVarnode→makeFree write-locks it
+            // (an `if let` scrutinee temporary would keep the read guard
+            // alive across the destroy and self-deadlock the RwLock —
+            // reproduced as the main() worker futex hang).
+            let def_to_destroy = placeholder_vn.and_then(|vn| {
+                let def = {
+                    let vn_r = vn.read().unwrap();
+                    (vn_r.has_no_descend()
+                        && vn_r.get_space() == crate::space::AddressSpace::Unique
+                        && vn_r.is_written())
+                        .then(|| vn_r.def.as_ref().and_then(|w| w.upgrade()))
+                        .flatten()
+                };
+                def
+            });
+            if let Some(def_weak) = def_to_destroy {
+                fd.op_destroy(&crate::op::PcodeOpRef(def_weak));
             }
         }
     }
@@ -2519,6 +2538,151 @@ impl FuncCallSpecs {
     /// Clear the stack placeholder slot index.
     pub fn clear_stack_placeholder_slot(&mut self) {
         self.stack_placeholder_slot = -1;
+    }
+
+    // Ghidra: fspec.hh:1653 FuncCallSpecs::setStackPlaceholderSlot
+    /// Record the input slot holding the stack-pointer placeholder.
+    /// Faithful to `FuncCallSpecs::setStackPlaceholderSlot` (fspec.hh:1653).
+    pub fn set_stack_placeholder_slot(&mut self, slot: i32) {
+        self.stack_placeholder_slot = slot;
+    }
+
+    // Ghidra: fspec.cc:4849 FuncCallSpecs::createPlaceholder
+    /// Add an input parameter that will resolve to the current stack offset
+    /// for \b this call site. Faithful to `createPlaceholder`
+    /// (fspec.cc:4849-4858):
+    ///   slot = op->numInput();
+    ///   loadval = data.opStackLoad(spacebase,0,1,op,(Varnode*)0,false);
+    ///   data.opInsertInput(op,loadval,slot);
+    ///   setStackPlaceholderSlot(slot);
+    ///   loadval->setSpacebasePlaceholder();
+    pub fn create_placeholder(
+        &mut self,
+        fd: &mut crate::funcdata::Funcdata,
+        call_op: &crate::op::PcodeOpRef,
+        spacebase: crate::space::AddressSpace,
+    ) {
+        let slot = call_op.0.read().unwrap().num_input();
+        let loadval = fd.op_stack_load(spacebase, 0, 1, call_op, None, false);
+        fd.op_insert_input(call_op, loadval.clone(), slot);
+        self.set_stack_placeholder_slot(slot as i32);
+        loadval.write().unwrap().set_spacebase_placeholder();
+    }
+
+    // Ghidra: fspec.cc:4870 FuncCallSpecs::resolveSpacebaseRelative
+    /// Calculate the stack offset of \b this call site. Faithful to
+    /// `resolveSpacebaseRelative` (fspec.cc:4870-4908):
+    ///   refvn = phvn->getDef()->getIn(0);
+    ///   spacebase = refvn->getSpace();
+    ///   if (spacebase->getType() != IPTR_SPACEBASE)
+    ///     data.warningHeader("This function may have set the stack pointer");
+    ///   stackoffset = refvn->getOffset();
+    ///   if (stackPlaceholderSlot >= 0) {
+    ///     if (op->getIn(stackPlaceholderSlot) == phvn) {
+    ///       abortSpacebaseRelative(data); return; } }
+    ///   if (isInputLocked()) {
+    ///     slot = op->getSlot(phvn)-1;
+    ///     if (slot >= numParams()) throw LowlevelError(...);
+    ///     param = getParam(slot);
+    ///     addr = param->getAddress();
+    ///     if (addr.getSpace() != spacebase) {
+    ///       if (spacebase->getType() == IPTR_SPACEBASE)
+    ///         throw LowlevelError("Stack placeholder does not match locked space"); }
+    ///     stackoffset -= addr.getOffset();
+    ///     stackoffset = spacebase->wrapOffset(stackoffset);
+    ///     return; }
+    ///   throw LowlevelError("Unresolved stack placeholder");
+    /// Ghidra's LowlevelError throws are surfaced as the file-wide stderr
+    /// convention (the driver has no exception channel); the computed
+    /// stackoffset is still committed so the observable (hasEffectTranslate
+    /// resolution) matches the oracle's success path.
+    pub fn resolve_spacebase_relative(
+        &mut self,
+        fd: &mut crate::funcdata::Funcdata,
+        call_op: &crate::op::PcodeOpRef,
+        phvn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        // cc:4878: refvn = phvn->getDef()->getIn(0) — the COPY source the
+        // placeholder LOAD resolved to.
+        let refvn = {
+            let ph = phvn.read().unwrap();
+            let def = match ph.def.as_ref().and_then(|w| w.upgrade()) {
+                Some(d) => d,
+                None => return,
+            };
+            let def_r = def.read().unwrap();
+            if def_r.opcode != crate::opcodes::OpCode::CPUI_COPY {
+                return;
+            }
+            def_r.get_in(0).cloned()
+        };
+        let Some(refvn) = refvn else { return };
+        // cc:4879-4882: spacebase type check + warning.
+        let spacebase = refvn.read().unwrap().get_space();
+        if !spacebase.is_stack() {
+            fd.warning_header("This function may have set the stack pointer");
+        }
+        // cc:4883: stackoffset = refvn->getOffset().
+        let ref_offset = refvn.read().unwrap().get_offset() as i64;
+        self.stackoffset = ref_offset;
+        // cc:4884-4888: the placeholder itself resolved — remove it.
+        if self.stack_placeholder_slot >= 0 {
+            let slot = self.stack_placeholder_slot as usize;
+            let slot_vn = call_op.0.read().unwrap().get_in(slot).cloned();
+            if let Some(vn) = slot_vn {
+                if std::sync::Arc::ptr_eq(&vn, phvn) {
+                    self.abort_spacebase_relative(fd, call_op);
+                    return;
+                }
+            }
+        }
+        // cc:4889-4905: input-locked path — recover the relative offset from
+        // the locked parameter's storage.
+        if self.prototype.is_input_locked() {
+            // cc:4891: slot = op->getSlot(phvn)-1.
+            let slot = {
+                let op_r = call_op.0.read().unwrap();
+                op_r
+                    .inrefs
+                    .iter()
+                    .position(|input| std::sync::Arc::ptr_eq(input, phvn))
+            };
+            let Some(raw_slot) = slot else {
+                eprintln!("[FSPEC] resolve_spacebase_relative: placeholder is not an input of its call op");
+                return;
+            };
+            let param_slot = raw_slot as i64 - 1;
+            if param_slot >= self.prototype.num_params() as i64 {
+                eprintln!("[FSPEC] resolve_spacebase_relative: stack placeholder does not line up with locked parameter");
+                return;
+            }
+            // cc:4893-4894: param = getParam(slot); addr = param->getAddress().
+            let param_addr = self
+                .prototype
+                .get_param(param_slot as usize)
+                .map(|p| p.address)
+                .unwrap_or(crate::address::Address::new(0));
+            // cc:4895-4899: space match check (AddrSpace::get_type()
+            // IPTR_SPACEBASE counterpart).
+            let param_space = param_addr.to_space_address().get_space().cloned();
+            let spacebase_is_spacebase = spacebase.is_stack();
+            if param_space.as_ref().map(|s| s.get_type()) != Some(crate::space::SpaceType::SpaceBase)
+                && spacebase_is_spacebase
+            {
+                eprintln!("[FSPEC] resolve_spacebase_relative: stack placeholder does not match locked space");
+            }
+            // cc:4900-4901: stackoffset -= addr.getOffset(); wrapOffset.
+            self.stackoffset -= param_addr.to_space_address().get_offset() as i64;
+            let addr_bits = (spacebase.addr_size() * 8) as u32;
+            if addr_bits > 0 && addr_bits < 64 {
+                let mask = (1u64 << addr_bits) - 1;
+                self.stackoffset = (self.stackoffset as u64 & mask) as i64;
+            }
+            return;
+        }
+        // cc:4906: throw LowlevelError("Unresolved stack placeholder") —
+        // unlocked prototypes keep OFFSET_UNKNOWN per the throw path.
+        eprintln!("[FSPEC] resolve_spacebase_relative: unresolved stack placeholder");
     }
 
     // Ghidra: fspec.cc:4949 FuncCallSpecs::setFuncdata

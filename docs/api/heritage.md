@@ -1181,3 +1181,13 @@ normalizeWriteSize/callOpIndirectEffect 的 1:1 移植：
   covered=MATCH（双侧逐字节一致，11/12）；overall=PARTIAL_MATCH（BE 栈
   空间过渡模型下不可 stage，登记为 UNTESTED）。
 
+
+## LocationMap::add 导航重写（本次性能修复）
+
+`LocationMap::add`（heritage.cc:33-71）原先以 `Vec` 快照全部同 space 键再
+线性定位（每次 add O(n)，每 pass 覆盖构建 O(n²)）。现按 oracle 的
+lower_bound/--iter/++iter 语义改用 BTreeMap range 查询（`range(..(space,addr))`
+取 prev、`range((space,addr)..)` 取 lb1/lb2），后续 merge 循环同样以 range
+游标推进。分类结果（prev=0/1/2、合并后 size/pass、插入位置）与原实现逐分支
+等价：selected=prev 时不 revisit (prev, addr) 区间（prev 是 addr 前最后键），
+merge 循环前向 only 亦与 forward-only iterator 对齐。

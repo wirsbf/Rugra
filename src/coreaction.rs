@@ -7666,6 +7666,31 @@ impl Action for ActionFuncLink {
                 || (is_known_function(callee_name.as_deref())
                     && known_param_count(callee_name.as_deref()) > 0);
             Self::func_link_input(fd, &op_ref, callee_name.as_deref());
+            // Ghidra funcLinkInput tail (coreaction.cc:1477/1505/1511-1513):
+            // spacebase = fc->getSpacebase() stays non-null when the model's
+            // input list has a stack pentry and no locked stack parameter
+            // claimed the placeholder role (Rugra's locked path is
+            // register-only, so the role is never claimed). Append the
+            // stack-pointer LOAD placeholder as the final CALL input exactly
+            // as cc:1512 `fc->createPlaceholder(data, spacebase)`.
+            {
+                let fc_arc = fd.callspecs.get(idx).cloned();
+                let spacebase = fc_arc
+                    .as_ref()
+                    .and_then(|a| a.read().unwrap().prototype.get_spacebase());
+                if let (Some(fc_arc), Some(spacebase)) = (fc_arc, spacebase) {
+                    let needs_placeholder = {
+                        let fc = fc_arc.read().unwrap();
+                        fc.stack_placeholder_slot < 0
+                    };
+                    if needs_placeholder {
+                        fc_arc
+                            .write()
+                            .unwrap()
+                            .create_placeholder(fd, &op_ref, spacebase);
+                    }
+                }
+            }
             Self::func_link_output(fd, idx, &op_ref);
             if !known {
                 if let Some(mut fc) = fd.get_call_specs_mut(idx) {

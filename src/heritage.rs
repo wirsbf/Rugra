@@ -62,28 +62,32 @@ impl LocationMap {
         // past it into the merge loop instead lost the "completely
         // contained" classification for exact-start re-adds (prev must be
         // 2, not 1, so a later pass does not re-flag the range NEW).
+        // Navigation uses the map's ordered range queries (the oracle's
+        // lower_bound/iterator arithmetic, O(log n)); the former Vec-keys
+        // snapshot made each add O(n) and the per-pass cover build O(n²).
         let mut intersect = 0;
-        let keys: Vec<Address> = self
+        // lb1/lb2: first two same-space entries with key >= addr.
+        let mut fwd = self.themap.range((space, addr)..);
+        let lb1 = fwd.next().filter(|(k, _)| k.0 == space).map(|(k, v)| (k.1, *v));
+        let lb2 = fwd.next().filter(|(k, _)| k.0 == space).map(|(k, v)| (k.1, *v));
+        // prev: last same-space entry with key < addr (cc:38-39 --iter).
+        let prev = self
             .themap
-            .keys()
-            .filter(|k| k.0 == space)
-            .map(|k| k.1)
-            .collect();
-        let lb = keys.iter().position(|k| *k >= addr);
-        let mut i = match lb {
-            Some(pos) if pos > 0 => pos - 1,
-            Some(_) => 0,
-            None => keys.len().saturating_sub(1),
-        };
-        if i < keys.len()
-            && A::overlap(&addr, 0, keys[i], self.themap[&(space, keys[i])].size) == -1
-        {
-            i += 1;
+            .range(..(space, addr))
+            .next_back()
+            .filter(|(k, _)| k.0 == space)
+            .map(|(k, v)| (k.1, *v));
+        // Selected entry: prev when it exists, else lb1 (cc:39 iter==begin).
+        let had_prev = prev.is_some();
+        let mut selected = prev.or(lb1);
+        // cc:40-41: if the selected entry does not overlap, advance one.
+        if let Some((k_addr, k_sp)) = selected {
+            if A::overlap(&addr, 0, k_addr, k_sp.size) == -1 {
+                selected = if had_prev { lb1 } else { lb2 };
+            }
         }
         // Ghidra cc:43-57: containment / first merge on the selected entry.
-        if i < keys.len() {
-            let k_addr = keys[i];
-            let k_sp = self.themap[&(space, k_addr)];
+        if let Some((k_addr, k_sp)) = selected {
             let where_ = A::overlap(&addr, 0, k_addr, k_sp.size);
             if where_ != -1 {
                 // Ghidra cc:46-49: completely contained?
@@ -98,15 +102,21 @@ impl LocationMap {
                     pass = k_sp.pass;
                 }
                 self.themap.remove(&(space, k_addr));
-                i += 1;
             }
         }
         // Ghidra cc:58-66: continue merging subsequent overlapping entries.
-        while i < keys.len() {
-            let (k_addr, k_sp) = (keys[i], self.themap.get(&(space, keys[i])).copied().unwrap_or(SizePass { size: 0, pass: 0 }));
-            if self.themap.get(&(space, keys[i])).is_none() { i += 1; continue; }
+        loop {
+            let next = self
+                .themap
+                .range((space, addr)..)
+                .next()
+                .filter(|(k, _)| k.0 == space)
+                .map(|(k, v)| (k.1, *v));
+            let Some((k_addr, k_sp)) = next else { break };
             let where_ = A::overlap(&k_addr, 0, addr, size);
-            if where_ == -1 { break; }
+            if where_ == -1 {
+                break;
+            }
             if where_ + k_sp.size > size {
                 size = where_ + k_sp.size;
             }
@@ -114,8 +124,7 @@ impl LocationMap {
                 intersect = 1;
                 pass = k_sp.pass;
             }
-            self.themap.remove(&(space, keys[i]));
-            i += 1;
+            self.themap.remove(&(space, k_addr));
         }
         // Ghidra cc:67-70: insert merged entry.
         self.themap.insert((space, addr), SizePass { size, pass });

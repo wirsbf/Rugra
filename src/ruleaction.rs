@@ -15174,11 +15174,36 @@ impl Rule for RuleLoadVarnode {
         // data.opSetOpcode(op, CPUI_COPY);
         fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
 
-        // The spacebase-placeholder / call-resolve tail (ruleaction.cc:4294-4303)
-        // can now identify the exact callspec, but
-        // FuncCallSpecs::resolveSpacebaseRelative is still absent. The core
-        // LOAD→COPY transform is complete; the exact-owner tail remains
-        // CALLSPEC-0001 and is not claimed by this identity-only D0.
+        // ruleaction.cc:4294-4303: Varnode *refvn = op->getOut();
+        //   if (refvn->isSpacebasePlaceholder()) {
+        //     refvn->clearSpacebasePlaceholder();
+        //     PcodeOp *placeOp = refvn->loneDescend();
+        //     if (placeOp != null) {
+        //       FuncCallSpecs *fc = data.getCallSpecs(placeOp);
+        //       if (fc != null) fc->resolveSpacebaseRelative(data,refvn); } }
+        // The placeholder LOAD just resolved to a COPY from a stack varnode;
+        // its only reader is the CALL the placeholder was appended to, and
+        // the resolve records this call site's stackoffset (aborting the
+        // placeholder when it is the input in the placeholder slot).
+        let refvn = op_arc.read().unwrap().output.clone();
+        if let Some(refvn) = refvn {
+            if refvn.read().unwrap().is_spacebase_placeholder() {
+                refvn.write().unwrap().clear_spacebase_placeholder();
+                let place_op = refvn
+                    .read()
+                    .unwrap()
+                    .lone_descend()
+                    .map(crate::op::PcodeOpRef);
+                if let Some(place_op) = place_op {
+                    if let Some(fc_arc) = fd.get_call_specs_of_op(&place_op) {
+                        fc_arc
+                            .write()
+                            .unwrap()
+                            .resolve_spacebase_relative(fd, &place_op, &refvn);
+                    }
+                }
+            }
+        }
         Ok(action_status::CHANGE)
     }
 

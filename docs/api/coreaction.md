@@ -1672,3 +1672,12 @@ e2e return 值折叠链的最后检验环节（GAP-A/GAP-B 已集成后的上游
    分支 RETURN。之前只移植了 else 臂（initActiveOutput），导致所有
    DWARF/PLT 锁定签名函数反编译为无值 `return;` 且产值 op 被 dead-code。
    storage 解析在 fspec.rs `locked_output_storage`（见 fspec.md）。
+
+## ActionFuncLink::apply placeholder 尾巴（coreaction.cc:1477/1511-1513，本次新增）
+
+funcLinkInput 尾巴：`spacebase = fc->getSpacebase()` 在模型 input 列表含
+stack pentry 且无锁定 stack 参数占用 placeholder 角色时非空（Rugra 的锁定
+路径仅寄存器参数，角色永不占用），对每个建模 call 追加 stack-pointer
+placeholder LOAD 作为最后一个 CALL 输入（`fc->create_placeholder`）。该输入
+使 CALL 满足 `usesSpacebasePtr()`，`RuleIndirectCollapse` 的 else-if 分支
+（ruleaction.cc:3223）据此折叠 unknown-effect guard INDIRECT。
