@@ -73,7 +73,9 @@ fn default_unknown_type(
 //   table, a line-cited port of the complete Ghidra override set; when M1
 //   lands, root may consolidate by re-pointing these helpers at the typeop
 //   trait impls. CALL input delegates to the R3-approved D1 port
-//   `TypeOpCall::get_input_local` (typeop.rs:1393).
+//   `TypeOpCall::get_input_local` (typeop.rs:1393); CALLIND input delegates
+//   to the R19-approved D2 port `TypeOpCallind::get_input_local`
+//   (typeop.rs:2059), eliminating the former inlined slot-0 copy.
 // Ghidra: typeop.cc:261 TypeOp::getOutputLocal / typeop.cc:271 TypeOp::getInputLocal
 fn local_base(
     type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
@@ -284,15 +286,20 @@ pub fn op_output_type_local(
 /// - TypeOpCbranch: slot 1 `getBase(size, TYPE_BOOL)`, slot 0 a pointer to
 ///   the code type sized/worded by the input (typeop.cc:609-619);
 /// - TypeOpCall: the R3-approved D1 port (typeop.cc:687-718);
+/// - TypeOpCallind: the R19-approved D2 port (typeop.cc:745-774) — slot 0 is
+///   the code pointer (cc:752-756); param slots delegate to the fd-less
+///   trait form, which observes Ghidra's fc==null base default (cc:758-759)
+///   because a bare &PcodeOp carries no parent Funcdata chain (cc:757). The
+///   full callspec branch (isTypeLocked/isThisPointer, cc:760-772) is
+///   `TypeOpCallind::get_input_local_in_fd`, wired through the
+///   ActionInferTypes coreaction arm. TypeOpReturn param slots need the
+///   Funcdata too — same base-default residual as Ghidra's bb==null path;
 /// - TypeOpCallother (typeop.cc:855-863): same descriptor lookup as the
 ///   output side through `tlst->getArch()->userops.getOp(in(0).offset)`;
 ///   `DatatypeUserOp` maps CALLOTHER slot-1 to its first fixed input type
 ///   (userop.cc:79), a metadata-less descriptor yields the TypeOp base
 ///   default `getBase(in(slot).size, TYPE_UNKNOWN)` — including slot 0,
 ///   the index constant itself;
-/// - TypeOpCallind slot 0: code pointer (typeop.cc:752-756); param slots and
-///   TypeOpReturn param slots need the Funcdata (parent chain) — base
-///   default residual, identical to Ghidra's fc==null / bb==null paths;
 /// - TypeOpIndirect slot 1: pointer to the code type sized by in(0) and
 ///   worded by the referenced op's address space (typeop.cc:1992-2003) —
 ///   the referenced op lives in the same code space as the INDIRECT op
@@ -370,22 +377,19 @@ pub fn op_input_type_local(
             use crate::typeop::TypeOp as _;
             crate::typeop::TypeOpCall::new(type_factory.clone()).get_input_local(op, slot)
         }
-        // typeop.cc:752-756 — code pointer for the indirect target register.
-        (OpCode::CPUI_CALLIND, 0) => {
-            let code = type_factory.write().unwrap().get_type_code();
-            let word_size = op
-                .get_addr()
-                .get_space()
-                .map(|space| space.get_word_size() as usize)
-                // Legacy spaceless op addresses: every hardwired and x86-64
-                // spec space is wordsize 1 (space.rs word_size table).
-                .unwrap_or(1);
-            Some(
-                type_factory
-                    .write()
-                    .unwrap()
-                    .get_type_pointer(input_size, code, word_size),
-            )
+        // typeop.cc:745-774 — delegate to the reviewed D2 port
+        // (`TypeOpCallind::getInputLocal`). Slot 0 resolves the code pointer
+        // (cc:752-756) with no Funcdata; for slot >= 1 the callspec lookup
+        // needs the parent Funcdata chain (cc:757), which a bare &PcodeOp
+        // cannot reach, so the fd-less trait form observes Ghidra's fc==0
+        // base default (cc:758-759) — identical bytes to the previous `_`
+        // fallback of this table. The full callspec branch
+        // (isTypeLocked/isThisPointer, cc:760-772) lives in
+        // `TypeOpCallind::get_input_local_in_fd`, wired through the
+        // ActionInferTypes coreaction arm.
+        (OpCode::CPUI_CALLIND, _) => {
+            use crate::typeop::TypeOp as _;
+            crate::typeop::TypeOpCallind::new(type_factory.clone()).get_input_local(op, slot)
         }
         // typeop.cc:1992-2003 — slot 1 is the iop constant; the pointer is
         // worded by the referenced op's space, i.e. this op's code space.

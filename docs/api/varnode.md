@@ -978,17 +978,24 @@ normalize 位点（LE 值与修复前逐位一致；BE 域整体 UNTESTED，登�
   `getBase(size,TYPE_UNKNOWN)`）。覆盖全部 Ghidra override：PTRADD/PTRSUB 全
   INT（typeop.cc:2235/2241/2311/2317）、shift slot-1
   `getBaseNoChar(size,INT)`（:1510-1516/1535-1541/1600-1606）、CBRANCH
-  slot1 BOOL + slot0 code-ptr（:609-619）、CALLIND slot0 code-ptr（:752-756）、
-  INDIRECT slot1 code-ptr（:1992-2003）、INSERT/EXTRACT slot0 UNKNOWN
-  （:2535-2541/2550-2556）、CPOOLREF 输入 INT（:2465-2469）、CALL input 委托
-  R3-approved 的 D1 `TypeOpCall::get_input_local`（typeop.cc:687-718）、CALL
-  output 全量 720-735（fspec 门 → outputLocked 门 → VOID 门 → 锁定返回类型）。
+  slot1 BOOL + slot0 code-ptr（:609-619）、INDIRECT slot1 code-ptr（:1992-2003）、
+  INSERT/EXTRACT slot0 UNKNOWN（:2535-2541/2550-2556）、CPOOLREF 输入 INT
+  （:2465-2469）、CALL input 委托 R3-approved 的 D1
+  `TypeOpCall::get_input_local`（typeop.cc:687-718）、CALL output 全量 720-735
+  （fspec 门 → outputLocked 门 → VOID 门 → 锁定返回类型）、CALLIND input 委托
+  R19-approved 的 D2 `TypeOpCallind::get_input_local`（typeop.cc:745-774）——
+  slot0 code-ptr（:752-756）与参数槽 fc==null 基类默认（:758-759）都经 typeop
+  单拷贝解析，消除此前 slot0 的内联重复；参数槽完整 callspec 分支
+  （isTypeLocked/isThisPointer，:760-772）在 `get_input_local_in_fd`
+  （ActionInferTypes coreaction 臂接线）。
   **为什么本地表而非 typeop.rs trait**：现行 typeop.rs 宏族
   （binary/unary/functional）与 COPY/LOAD/STORE/MULTIEQUAL/PTRADD/PTRSUB 的
   get*Local 覆盖读对侧 varnode 的 v_type 而非 `getBase(size,metatype)`
   （登记残差 PRINTC-CAST-OPNAME-0001 M1）；M1 落地后 root 可将两张表合并。
-  残差：CALLIND 参数槽/RETURN 参数槽（需 parent→Funcdata，走 Ghidra 自身的
-  fc==null/bb==null 基类默认路径）、CPOOLREF 记录路径（无 cpool 基础设施）。
+  残差：CALLIND 参数槽经 fd-less 委托观测 fc==null 基类默认（完整 callspec
+  分支在 coreaction 臂，typeop.rs `get_input_local_in_fd`）、RETURN 参数槽
+  （需 parent→Funcdata，走 Ghidra 自身的 bb==null 基类默认路径）、
+  CPOOLREF 记录路径（无 cpool 基础设施）。
   ~~CALLOTHER userop 元数据（TypeFactory 无 arch 反链）~~ —— 已由
   TYPEOP-LOCALTYPE-CALLOTHER-0001 闭包接线关闭（见下节）。
 - **flag 常量**（varnode.hh:131-132）：`addl_flags::STOP_UP_PROPAGATION=0x800`、
