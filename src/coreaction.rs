@@ -8492,9 +8492,13 @@ impl ActionConditionalConst {
     ///    whose source block is dominated by constBlock when blockIsDom).
     ///  - COPY: only follow if its output has a lone descendant that is not a
     ///    marker and not another COPY.
-    ///  - otherwise: if blockIsDom AND constBlock dominates op's parent,
-    ///    replace the read with a constant; else pushConstant to extend the
-    ///    point through this op.
+    ///  - otherwise: if blockIsDom AND constBlock dominates op's parent:
+    ///    CPUI_RETURN never takes the constant directly — a `copyBeforeRet`
+    ///    COPY (newOp(1, ret->getAddr()), out at varVn's size/address) is
+    ///    inserted before the RETURN and its output becomes RETURN input
+    ///    slot 1 (cc:4439-4448); every other opcode gets the constant in
+    ///    varVn's slot directly (cc:4449-4452). Else pushConstant to extend
+    ///    the point through this op.
     fn propagate_constant(
         &mut self,
         fd: &mut Funcdata,
@@ -8621,7 +8625,11 @@ impl ActionConditionalConst {
                     // converges (12/24 curl timeouts). Ghidra avoids this via
                     // immediate deadcode/condexe folding of the now-constant
                     // compare; Rugra's downstream passes don't always fold, so
-                    // we guard at the source.
+                    // we guard at the source. For the CPUI_RETURN arm below the
+                    // guard is vacuous after the first insertion (RETURN slot 1
+                    // then holds the copyBeforeRet COPY output, never a
+                    // constant, and op_set_input severs varVn's descend link so
+                    // the RETURN is never revisited).
                     let slot = op_arc.read().unwrap().slot_of_input(&var_vn);
                     if let Some(slot) = slot {
                         let already_const = op_arc.read().unwrap().get_in(slot)
@@ -8637,8 +8645,56 @@ impl ActionConditionalConst {
                             const_vn = Some(fd.new_constant(size, point.value));
                         }
                         let cvn = const_vn.clone().unwrap();
-                        // cc:4449-4452: replace the read with the constant.
-                        fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), cvn, slot);
+                        if opc == OpCode::CPUI_RETURN {
+                            // cc:4439-4448: CPUI_RETURN ops can't directly take
+                            // constants as inputs. Insert a COPY before the
+                            // RETURN whose output varnode (at varVn's exact
+                            // size/address) becomes RETURN input slot 1 — slot
+                            // 1 unconditionally, NOT getSlot(varVn).
+                            let (var_size, var_space, var_off) = {
+                                let vr = var_vn.read().unwrap();
+                                (vr.get_size(), vr.get_space(), vr.get_offset())
+                            };
+                            let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+                            let ret_addr = op_ref.0.read().unwrap().get_addr();
+                            // cc:4442: newOp(1, op->getAddr()).
+                            let copy_before_ret = fd.new_op(1, ret_addr);
+                            // cc:4443: opSetOpcode(copyBeforeRet, CPUI_COPY).
+                            fd.op_set_opcode(&copy_before_ret, OpCode::CPUI_COPY);
+                            // cc:4444: opSetInput(copyBeforeRet, constVn, 0).
+                            fd.op_set_input(&copy_before_ret, cvn, 0);
+                            // cc:4445: newVarnodeOut(varVn->getSize(),
+                            // varVn->getAddr(), copyBeforeRet). Space-aware
+                            // form of Funcdata::new_varnode_out (which pins the
+                            // Register space): the COPY out must live at
+                            // varVn's exact (space,offset,size). The
+                            // assignHigh/checkForLaned/setVarnodeProperties
+                            // legs mirror Funcdata::newVarnodeOut
+                            // (funcdata_varnode.cc:104-122) inline.
+                            let out_vn = fd.vbank.create_def_with_space(
+                                var_size,
+                                var_space,
+                                var_off,
+                                &copy_before_ret.0,
+                            );
+                            copy_before_ret.0.write().unwrap().output = Some(out_vn.clone());
+                            let _ = fd.assign_high(&out_vn);
+                            if var_size >= fd.min_laned_size as usize {
+                                fd.check_for_laned_register(
+                                    var_size,
+                                    var_space,
+                                    crate::address::Address::new(var_off),
+                                );
+                            }
+                            fd.set_varnode_properties(&out_vn);
+                            // cc:4446: opSetInput(op, copyBeforeRet->getOut(), 1).
+                            fd.op_set_input(&op_ref, out_vn, 1);
+                            // cc:4447: opInsertBefore(copyBeforeRet, op).
+                            fd.op_insert_before(&copy_before_ret, &op_ref);
+                        } else {
+                            // cc:4449-4452: replace the read with the constant.
+                            fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), cvn, slot);
+                        }
                         self.count += 1;
                     }
                 } else {

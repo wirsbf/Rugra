@@ -1416,3 +1416,36 @@ buildLocaltypes 引用 coreaction.cc:5012 修正为 5008（定义起始行）。
   stderr 后返回；该非 callspec 分支绑定 `PIPE-STALL-SHAPE-0001`。上述分支均未做
   双侧执行，状态为 `UNTESTED`；callspec 分支继续绑定 `CALLSPEC-0001`，不属于 D0
   identity `MATCH`。
+
+## ActionConditionalConst propagateConstant CPUI_RETURN 特例（2026-08-25，RETURNFOLD-GAPB-CONDCONST-0001）
+
+- `propagate_constant` 补齐 cc:4439-4448 的 CPUI_RETURN 特例：RETURN 不能直接吃
+  常量输入——对被 const 块支配的每个 RETURN 后代，先 `new_op(1, ret.addr)` 建
+  `copyBeforeRet` COPY，`op_set_opcode(COPY)`、`op_set_input(copy, constVn, 0)`、
+  输出 varnode 落在 varVn 的精确 (space,offset,size)（cc:4445
+  `newVarnodeOut(varVn->getSize(), varVn->getAddr(), …)`；Rust 侧因
+  `Funcdata::new_varnode_out` 钉死 Register space，改用
+  `vbank.create_def_with_space` + 内联 assignHigh/checkForLaned/
+  setVarnodeProperties 腿，保留任意 space 的正确性），RETURN 的 slot 1 无条件改读
+  该 COPY 输出（cc:4446 用字面 1，不用 getSlot(varVn)），最后
+  `op_insert_before(copy, ret)`。此前的 Rust 把常量直接塞进 RETURN 输入槽，
+  产出 oracle 永不存在的 `RETURN const` IR 形（A61 审计 GAP-B）。
+- 非 RETURN 支配读仍走 cc:4449-4452 的直接槽替换；`count += 1` 对两臂一致
+  （cc:4453）。Rugra-only 的值级收敛守卫保留（`already_const` 早退），RETURN 臂
+  上天然空转：插入后 slot 1 持 COPY 输出而非常量，且 op_set_input 切断 varVn→
+  RETURN 的 descend 链使 RETURN 不会被重访。
+- 下游不变量：copyBeforeRet **不**置 `return_copy` flag（区别于 heritage
+  guardReturns 的 persist COPY）；`RulePropagateCopy` 的 cc:3933
+  `isReturnCopy()` 守卫保证该 COPY 输入永不被折叠进 RETURN（RETURN 本身带
+  TypeOpReturn 的 return_copy flag，typeop.cc:879）。
+- 双侧对拍：`tests/oracle/returnfold_gapb_1204.{cc,rs,metadata.json}` +
+  `tools/run_returnfold_gapb_oracle.sh`——真实 `ActionConditionalConst::apply`
+  驱动 5 块 CFG（INT_EQUAL(X,5) CBRANCH、两个被支配 RETURN、一个非支配 RETURN、
+  一个非 RETURN 支配读 INT_ADD），观察面含 RPO 序、X descend 序、count
+  （CountProbe/`count` pub 字段 + perform-bypass 的 zeroCount 说明）、COPY
+  几何（pc/out/in0/flags）、slot1 非常量不变量、二次 apply 稳定性、
+  RulePropagateCopy 全扫描 hits=0；双侧 stdout 字节一致（MATCH）。残差（均
+  登记 UNTESTED，见 metadata）：apply 返回值不对称（Ghidra cc:4545 恒 0 vs
+  Rugra count>0，CONDCONST-APPLY-RETURN-0001）、MULTIEQUAL phi 臂
+  （CONDCONST-MULTIEQUAL-GUARD-0001）、implied-boolean 臂
+  （CONDCONST-IMPLIEDBOOL-0001）、打印期折叠（依赖 GAP-A/GAP-D 上游）。
