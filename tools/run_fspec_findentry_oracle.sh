@@ -505,7 +505,7 @@ if $ghidra_only; then
   exit 0
 fi
 
-fixture_target=/tmp/rugra-target-fspec-writer/fspec-findentry
+fixture_target=/home/wirs/.cache/a85-fspin-target/fspec-findentry
 /usr/bin/mkdir -p "$fixture_target"
 for cargo_config in \
   "$snapshot_root/.cargo/config" "$snapshot_root/.cargo/config.toml" \
@@ -518,7 +518,7 @@ for cargo_config in \
   fi
 done
 if ! /usr/bin/flock /tmp/rugra-cargo-build.lock -c \
-  "CARGO_HOME='$cargo_home' CARGO_TARGET_DIR='$fixture_target' CARGO_NET_OFFLINE=true CXX='$host_cxx_bin' CC='$host_cc_bin' AR='$host_ar_bin' RUSTC='$host_rustc_bin' '$host_cargo_bin' build --offline --locked --quiet --manifest-path '$snapshot_root/Cargo.toml' --lib" \
+  "CARGO_HOME='$cargo_home' CARGO_TARGET_DIR='$fixture_target' CARGO_NET_OFFLINE=true CXX='$host_cxx_bin' CC='$host_cc_bin' AR='$host_ar_bin' RUSTC='$host_rustc_bin' timeout 600 '$host_cargo_bin' build --offline --locked --quiet --manifest-path '$snapshot_root/Cargo.toml' --lib" \
   >"$oracle_tmp/cargo.stdout" 2>"$oracle_tmp/cargo.stderr"; then
   /usr/bin/cat "$oracle_tmp/cargo.stdout" >&2
   /usr/bin/cat "$oracle_tmp/cargo.stderr" >&2
