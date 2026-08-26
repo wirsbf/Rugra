@@ -3880,8 +3880,15 @@ impl<'a> CollapseStructure<'a> {
         let goto_target = match block.read().unwrap().get_out(1) { Some(e) => e.point.clone(), None => return false };
         drop(body_edge);
 
-        // Don't extract switch case bodies
-        if self.switch_case_indices.contains(&body_idx) { return false; }
+        // NOTE: no switch_case_indices guard on body_idx here — Ghidra's
+        // ruleBlockGoto (cc:1446-1471) has no case-body pre-guard. The old
+        // invented guard (`refreshSwitchCases` cascade marking) rejected
+        // IfGoto wraps whose body was a CBRANCH-chain taken target — exactly
+        // the jumptable-neighborhood loop heads — leaving selectGoto's goto
+        // marks unconsumed and driving the cc:1275 exhausted path
+        // (TRI2-STRUCT-IRREDUCIBLE-TRACE-0001). refreshSwitchCases has no
+        // oracle counterpart at all.
+        let _ = body_idx;
 
         // Create BlockIf in newBlockIfGoto style (Ghidra block.cc:1799-1816):
         // - Only [cond] is consumed (body stays external as an out-edge)
