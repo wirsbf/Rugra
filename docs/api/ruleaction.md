@@ -763,9 +763,20 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - `acceptable_size(size)` — 检查截断大小是否合法（1/2/4/8 或 >=8）
   - `replace_descendants(orig_vn, new_vn, max_byte, min_byte)` — 用更窄的 new_vn 替换 orig_vn 的所有后代 SUBPIECE（转换为 COPY 或调整截断偏移）
   - `find_subpiece(base_vn, out_size, shift)` — 搜索预存的 SUBPIECE
-  - `build_subpiece(fd, base_vn, out_size, shift)` — 创建新 SUBPIECE op
+  - `build_subpiece(fd, base_vn, out_size, shift) -> Result<Varnode>` — 创建新 SUBPIECE op（ruleaction.cc:776-839）。
+    **2026-08-27 修正（VARMAP-ORPHAN-DECL-0001 根因）**：此前仅在 `is_written` 时 `op_insert_after`，
+    input 基底的新 SUBPIECE 从未插入任何 block，滞留 dead 列表；opDeadAndGone（funcdata.hh:476
+    `obank.destroy(op)`，与 opDestroy 不同**不销毁输出**）销毁 op 后，输出 Varnode 带 WRITTEN flag
+    滞留 vank，被 ActionNameVars::linkSymbols（coreaction.cc:2954 isFree 跳过不适用于它）铸成
+    零读 ScopeLocal 符号 → 孤儿声明（progressbarinit `int iVar1;`、my_get_token `int iVar2;`）。
+    现按 oracle 无条件插入：input 基底 `op_insert_begin`（block 0 头部，cc:834-835），
+    written 基底 `op_insert_after`（definer 之后，cc:836-837）；既非 input 也非 written 返回
+    `Err("Undefined pullsub")` 镜像 cc:788 `throw LowlevelError`。两调用点
+    （RulePullsubMulti::applyOp / RulePullsubIndirect::applyOp）`?` 传播等价 Ghidra 异常上抛。
   - `apply_op` — 主算法：检查 SUBPIECE(MULTIEQUAL)，计算使用范围，检查各分支 consume，为每个分支创建/查找 SUBPIECE，构建新的窄 MULTIEQUAL，替换后代
-  - 已知限制：hasLoopIn/isPrecisLo/isPrecisHi/isJoin/JoinRecord 用保守默认（允许变换）；opInsertBegin 用 op_insert_before 替代
+  - 已知限制：hasLoopIn/isPrecisLo/isPrecisHi/isJoin/JoinRecord 用保守默认（允许变换）；
+    非 join 基底 oracle 用 `newVarnodeOut(smalladdr1)`（同空间 base+shift，cc:826-832），
+    Rugra 恒用 `new_unique_out`（unique 空间）——残留差异，登记 TODO `RULE-PULLSUB-NEWVNODEOUT-0001`
 
 ## 2026-06-27（续 4）：RuleAndMask 完整移植
 

@@ -10909,13 +10909,13 @@ impl RulePullsubMulti {
 
     /// Build a new SUBPIECE of `base_vn`. Faithful to `buildSubpiece`
     /// (ruleaction.cc:776-839). Returns the output Varnode.
-    // Ghidra: ruleaction.cc:1007 RulePullsubMulti::buildSubpiece
+    // Ghidra: ruleaction.cc:776 RulePullsubMulti::buildSubpiece
     fn build_subpiece(
         fd: &mut Funcdata,
         base_vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         out_size: u32,
         shift: u64,
-    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+    ) -> Result<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
         let (is_input, is_written, def_addr, base_addr, base_size, is_big_endian) = {
             let r = base_vn.read().unwrap();
             (
@@ -10927,14 +10927,26 @@ impl RulePullsubMulti {
                 r.space().is_big_endian(),
             )
         };
-        let new_addr = if is_input {
-            // Use the first block's start; Rugra doesn't easily expose this,
-            // so use a default.
-            crate::address::Address::new(0)
-        } else if let Some(a) = def_addr {
-            a
+        // cc:783-790: the new op's address comes from the base's provenance.
+        // cc:784-785: input bases anchor at block 0's start; cc:788-789:
+        // written bases at the definer's address, and anything else is
+        // Ghidra's LowlevelError("Undefined pullsub") throw, mirrored as Err.
+        let block0 = if is_input {
+            Some(
+                fd.bblocks
+                    .get_block(0)
+                    .ok_or(crate::error::Error::from("Undefined pullsub"))?,
+            )
         } else {
-            crate::address::Address::new(0)
+            None
+        };
+        let new_addr = if let Some(bb0) = block0.as_ref() {
+            bb0.read().unwrap().get_start_addr()
+        } else {
+            match def_addr {
+                Some(a) => a,
+                None => return Err(crate::error::Error::from("Undefined pullsub")),
+            }
         };
         // Compute the small address.
         let _small_addr = if !is_big_endian {
@@ -10950,14 +10962,26 @@ impl RulePullsubMulti {
         fd.op_set_input(&new_op, base_vn.clone(), 0);
         let shift_const = fd.new_constant(4, shift);
         fd.op_set_input(&new_op, shift_const, 1);
-        // Insert near base_vn's definition.
-        if is_written {
-            if let Some(def) = base_vn.read().unwrap().get_def() {
-                let def_ref = crate::op::PcodeOpRef(def);
-                fd.op_insert_after(&new_op, &def_ref);
-            }
+        // cc:834-837: ALWAYS insert the new op — input bases at the head of
+        // block 0, written bases right after the base's definer. The previous
+        // conditional form (only insert when is_written) left input-based
+        // SUBPIECEs on the dead list WITH their output attached; ActionPool's
+        // opDeadAndGone (action.cc:829-834) then destroyed the op, stranding a
+        // WRITTEN-flagged output Varnode in the bank that linkSymbols
+        // (coreaction.cc:2952-2954 isFree skip) still visited, minting orphan
+        // ScopeLocal symbols for ranges with zero live reads
+        // (VARMAP-ORPHAN-DECL-0001).
+        if let Some(bb0) = block0.as_ref() {
+            fd.op_insert_begin(&new_op, bb0);
+        } else {
+            let def = base_vn
+                .read()
+                .unwrap()
+                .get_def()
+                .ok_or(crate::error::Error::from("Undefined pullsub"))?;
+            fd.op_insert_after(&new_op, &crate::op::PcodeOpRef(def));
         }
-        out_vn
+        Ok(out_vn)
     }
 }
 
@@ -11041,7 +11065,7 @@ impl Rule for RulePullsubMulti {
             };
             let vn_sub = match Self::find_subpiece(&vn_piece, new_size as u32, min_byte as u64) {
                 Some(v) => v,
-                None => Self::build_subpiece(fd, &vn_piece, new_size as u32, min_byte as u64),
+                None => Self::build_subpiece(fd, &vn_piece, new_size as u32, min_byte as u64)?,
             };
             params.push(vn_sub);
         }
@@ -12611,8 +12635,10 @@ impl Rule for RulePullsubIndirect {
         }
         let basevn = indir_in0.clone();
         // small1 = findSubpiece(basevn,newSize,op->getIn(1)->getOffset()) or buildSubpiece
-        let small1 = RulePullsubMulti::find_subpiece(&basevn, new_size as u32, op_in1_offset)
-            .unwrap_or_else(|| RulePullsubMulti::build_subpiece(fd, &basevn, new_size as u32, op_in1_offset));
+        let small1 = match RulePullsubMulti::find_subpiece(&basevn, new_size as u32, op_in1_offset) {
+            Some(v) => v,
+            None => RulePullsubMulti::build_subpiece(fd, &basevn, new_size as u32, op_in1_offset)?,
+        };
         // Create new indirect near original indirect.
         let indir_addr = indir.read().unwrap().get_addr();
         let new_ind = fd.new_op(2, indir_addr);
