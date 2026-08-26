@@ -801,16 +801,21 @@ pub fn known_no_return_callee_protos(
 
 // callspec with a direct entry address: (1) set_funcdata with the symbol's
 // display name, (2) when the symbol is a table import, install the locked
-// signature proto on the call site, (3) refresh the CALL op's typed fspec
-// annotation against the same stable callspec owner. Unresolved targets are
-// left exactly as flow produced them (unknown). Returns (named, locked
+// signature proto on the call site, (3) when the entry address has a DWARF
+// definition, install the locked DWARF callee proto (the
+// queryCall→ActionDefaultParams copy boundary for debug-backed functions),
+// (4) refresh the CALL op's typed fspec annotation against the same stable
+// callspec owner. Unresolved targets are left exactly as flow produced them
+// (unknown). Returns (named, locked libc signatures, locked DWARF
 // signatures, relinked call ops, known no-return callees marked).
 fn link_call_specs(
     fd: &mut rugra::funcdata::Funcdata,
     libc_signatures: &rugra::debugproto::LibcSignatureTable,
+    debug_db: &rugra::debugproto::DebugPrototypeDatabase,
     storage: &rugra::debugproto::X86_64GccStorage,
     fn_name: &str,
-) -> (usize, usize, usize, usize) {
+    type_names: &std::collections::HashMap<String, std::sync::Arc<rugra::type_system::datatype::Datatype>>,
+) -> (usize, usize, usize, usize, usize) {
     // Keep the stable owner with each direct target. Multiple CALLs may share
     // one machine address, so an address lookup is not an identity lookup.
     let targets: Vec<_> = fd
@@ -822,8 +827,14 @@ fn link_call_specs(
                 .map(|entry| (owner.clone(), spec.op_addr.as_u64(), entry.as_u64()))
         })
         .collect();
+    // CALLSPEC-ENV-SCOPE-0001: the model carrier for the DWARF callee copy
+    // is the same resolved default model the decompiled function's own
+    // FuncProto carries after set_arch (both Funcdata objects would bind the
+    // Architecture defaultfp; FUNCPROTO-MODEL-BIND-0001).
+    let model_carrier = fd.funcp.clone();
     let mut named = 0usize;
     let mut signatures = 0usize;
+    let mut dwarf_signatures = 0usize;
     let mut noreturn_marked = 0usize;
     for (owner, op_addr, entry) in targets {
         // flow.cc:660: queryFunction(entry) -> the PLT thunk's symbol name.
@@ -837,17 +848,39 @@ fn link_call_specs(
             .set_funcdata(&name, rugra::address::Address::new(entry));
         named += 1;
         // coreaction.cc:2327: fc->copy(otherfunc->getFuncProto()) — the
-        // platform side's locked libc signature for the imported callee.
-        match libc_signatures.locked_proto(&name, storage) {
+        // platform side's locked callee signature for the resolved target.
+        // Two disjoint sources at this boundary (a .plt.sec/.plt/.plt.got
+        // thunk address never carries a DWARF definition, and a DWARF
+        // definition's function name is never a generic_clib import):
+        //   (a) the generic_clib locked signature for the imported symbol;
+        //   (b) the DWARF-analyzer locked signature for a debug-info callee
+        //       (headless golden main: `glob_url(&urls,pcVar12,&urlnum)`
+        //       3-arg and `curl_version()` 0-arg render from this boundary).
+        let mut installed = false;
+        match libc_signatures.locked_proto(&name, storage, Some(type_names)) {
             Ok(Some(proto)) => {
                 owner.write().unwrap().prototype = proto;
                 signatures += 1;
+                installed = true;
             }
             Ok(None) => {}
             Err(error) => eprintln!(
                 "[PREPASS] {} callspec@0x{:x}: libc signature for {} rejected: {}",
                 fn_name, op_addr, name, error
             ),
+        }
+        if !installed {
+            match debug_db.locked_callsite_proto(entry, &model_carrier, storage) {
+                Ok(Some(proto)) => {
+                    owner.write().unwrap().prototype = proto;
+                    dwarf_signatures += 1;
+                }
+                Ok(None) => {}
+                Err(error) => eprintln!(
+                    "[PREPASS] {} callspec@0x{:x}: DWARF signature for {} rejected: {}",
+                    fn_name, op_addr, name, error
+                ),
+            }
         }
         // flow.cc:663-664 copyFlowEffects position (FLOW-NORETURN-DATA-0001):
         // the "Non-Returning Functions - Known" analyzer has already set
@@ -869,7 +902,7 @@ fn link_call_specs(
     // that exact owner identity through a typed Weak carried by the temporary
     // Iop annotation; TypeOp/PrintC consumption remains a separate residual.
     let relinked = relink_call_spec_targets(fd);
-    (named, signatures, relinked, noreturn_marked)
+    (named, signatures, dwarf_signatures, relinked, noreturn_marked)
 }
 
 // RUGRA-GLUE: refresh each direct CALL's fspec annotation from its stable
@@ -1761,6 +1794,47 @@ fn build_worker_architecture(
         arch.set_commentdb(std::sync::Arc::new(std::sync::RwLock::new(
             rugra::comment::CommentDatabaseInternal::new(),
         )));
+        // Ghidra: architecture.cc:1391-1414 Architecture::init builds the
+        // TypeFactory unconditionally (buildTypegrp at :1398, before
+        // buildCommentDB :1400) — every Funcdata sees `data.getArch()->types`.
+        // RULE-PTRARITH-ADDTREE-0001: without a factory, ActionInferTypes'
+        // PTRSUB/PTRADD/INT_ADD pointer arms (TypeOpPtrsub::propagateType →
+        // propagateAddIn2Out → downChain) silently dead-end, so field-pointer
+        // types (URLGlob* → char** literal / URLPattern* pattern) never reach
+        // RulePtrArith and `INT_ADD(param_copy, 0x38)`→LOAD stays raw.
+        // The data_organization decode + setup_sizes mirror
+        // parseCompilerConfig's ELEM_DATA_ORGANIZATION arm (architecture.cc:1269)
+        // and its trailing types->setupSizes() (architecture.cc:1350), using
+        // the same locked cspec DOM parsed above.
+        {
+            let mut types = rugra::type_system::typefactory::TypeFactory::new(8);
+            let data_org = root
+                .read()
+                .map_err(|_| "compiler spec element lock poisoned".to_string())?
+                .children
+                .iter()
+                .find(|child| {
+                    child
+                        .read()
+                        .map(|element| element.name == "data_organization")
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .ok_or_else(|| "compiler spec has no data_organization".to_string())?;
+            let registry = Arc::new(std::sync::RwLock::new(
+                rugra::marshal::IdRegistry::new(),
+            ));
+            let mut decoder =
+                rugra::marshal::TreeDecoder::new(data_org, registry);
+            types.decode_data_organization(&mut decoder);
+            types.setup_sizes(&rugra::type_system::typefactory::SizeArchInputs {
+                stack_spacebase_size: Some(8),
+                default_data_space_addr_size: 8,
+                default_size: 8,
+                far_pointer: None,
+            });
+            arch.set_types(Arc::new(std::sync::RwLock::new(types)));
+        }
         let mut inject_lib =
             rugra::pcodeinject::PcodeInjectLibrary::new(SPEC_UNIQUE_INJECT_BASE);
         inject_lib.set_sleigh_lookup(host.clone());
@@ -1837,6 +1911,83 @@ fn build_worker_architecture(
             arch.loader = Some(loader);
             arch.build_string_manager();
         }
+        // MAINDIFF-UNIQLEAK-0001: seed the Architecture's `symboltab`
+        // (`Database`, database.rs) global scope with the binary's sized
+        // global Symbols — DWARF static variables (typed) plus ELF OBJECT
+        // symbols — mirroring the Ghidra front-end's Program symbol table
+        // that `Scope::queryProperties`' parent-scope walk
+        // (database.cc:943 stackContainer, reached from
+        // `Funcdata::linkSymbol` funcdata_varnode.cc:1169) reads from.
+        // Seeds into the query-channel Database when the front-end supplied
+        // one (B3 rodata entries stay intact); a fresh Database otherwise.
+        // Without entries in this channel the parent-walk finds nothing,
+        // and linkSymbol minted a dead ScopeLocal `in_ram_` symbol for
+        // every global-sourced heritage input (37 dead declarations in
+        // main alone; the golden declares none because the global Symbol
+        // absorbs them). CWD-relative read, same pattern as the
+        // sleigh_specs loads above; on read failure the channel stays
+        // empty and behavior falls back to the symbol_table proxy.
+        {
+            if arch.symboltab.is_none() {
+                arch.symboltab = Some(Arc::new(std::sync::RwLock::new(
+                    rugra::database::Database::new(false),
+                )));
+            }
+            if let Ok(image) = fs::read("examples/curl") {
+            let db_arc = arch.symboltab.clone().unwrap();
+            let mut db = db_arc.write().unwrap();
+            let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
+            if let Ok(globals) = DebugGlobalDatabase::parse_elf(&image) {
+                for (&address, global) in globals.iter() {
+                    let size = global.data_type.get_size().max(1) as i32;
+                    let scope = db.global_scope_id;
+                    let _ = db.add_symbol_mapped(
+                        scope,
+                        &global.name,
+                        Some(global.data_type.clone()),
+                        Address::new(address),
+                        size,
+                    );
+                    seen.insert(address);
+                }
+            }
+            if let Ok(Object::Elf(elf)) = Object::parse(&image) {
+                for sym in elf.syms.iter() {
+                    let is_object = goblin::elf::sym::st_type(sym.st_info)
+                        == goblin::elf::sym::STT_OBJECT;
+                    if !is_object || sym.st_size == 0 || sym.is_import() {
+                        continue;
+                    }
+                    let address = sym.st_value;
+                    if address == 0 || !seen.insert(address) {
+                        continue;
+                    }
+                    let Some(name) = elf.strtab.get_at(sym.st_name) else {
+                        continue;
+                    };
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let size = sym.st_size as i32;
+                    let dtype = std::sync::Arc::new(rugra::type_system::datatype::Datatype::Base(
+                        rugra::type_system::datatype::TypeBase::new(
+                            format!("undefined{size}"),
+                            size as usize,
+                            rugra::type_system::datatype::TypeMetatype::Unknown,
+                        ),
+                    ));
+                    let scope = db.global_scope_id;
+                    let _ = db.add_symbol_mapped(
+                        scope,
+                        name,
+                        Some(dtype),
+                        Address::new(address),
+                        size,
+                    );
+                }
+            }
+            }
+        }
         let types = arch.ensure_types();
         // The raw shared_default factory starts with an empty alignment
         // map; the arch-attach guard (type.cc: "if (alignMap.empty())
@@ -1849,8 +2000,7 @@ fn build_worker_architecture(
         {
             let mut tf = types.write().unwrap();
             tf.set_default_alignment_map();
-            tf.set_spacebase_scope_source(symboltab.clone());
-        }
+            tf.set_spacebase_scope_source(symboltab.clone());        }
         Ok(Arc::new(arch))
     })()
 }
@@ -2059,7 +2209,41 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     } else {
                         8
                     };
-                    db.add_symbol_mapped(global, name, dtype, Address::new(*address), entry_size);
+                    let symbol_id =
+                        db.add_symbol_mapped(global, name, dtype, Address::new(*address), entry_size);
+                    if let Some(symbol_id) = symbol_id {
+                        // MAINDIFF-STRCONST-0001 (a): the strings-analyzer
+                        // Data carries a LOCKED char-array type (the
+                        // ATTRIB_TYPELOCK channel of Symbol::decodeHeader,
+                        // database.cc:439-442), so
+                        // Funcdata::spacebaseConstant's `sym->isTypeLocked()`
+                        // (funcdata.cc:416) keeps the PTRSUB output's
+                        // char-pointer type locked against later type
+                        // propagation, letting RulePtrsubCharConstant's
+                        // charPrint guard pass.
+                        if string_addrs.contains_key(address) {
+                            db.set_symbol_flag(
+                                global,
+                                symbol_id,
+                                rugra::database::symbol_flags::TYPELOCK,
+                                true,
+                            );
+                        }
+                        // (b): every global in the read-only `.rodata`
+                        // memory block carries Varnode::readonly on its
+                        // symbol (ATTRIB_READONLY, database.cc:435-438) —
+                        // the entry-hit arm of Scope::queryProperties
+                        // (database.cc:1273) folds it into the readonly
+                        // answers RulePtrsubCharConstant (ruleaction.cc:
+                        // 7372) and PrintC::pushPtrCharConstant
+                        // (printc.cc:1709) consume.
+                        db.set_symbol_flag(
+                            global,
+                            symbol_id,
+                            rugra::database::symbol_flags::READONLY,
+                            true,
+                        );
+                    }
                 }
                 // MAINDIFF-GLOBAL-0001: the global symbol layer — ELF OBJECT
                 // symbols, GOT PTR_ labels, .data PTR_DAT_ labels. Entries
@@ -2211,6 +2395,12 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         fd.add_string(*address, value.clone());
     }
     let libc_signatures = rugra::debugproto::LibcSignatureTable::default();
+    // DWARF named-type index (Ghidra's program type-manager name resolution):
+    // signature base spellings like `FILE` resolve to the binary's real type
+    // graph so a locked libc `FILE *` return keeps SUB_PTR_STRUCT specificity
+    // against inferred `char *` (parse_type_names, debugproto).
+    let dwarf_type_names = rugra::debugproto::parse_type_names(&request.binary_image)
+        .unwrap_or_default();
     let callspec_link_enabled = std::env::var("RUGRA_DISABLE_CALLSPEC_LINK").is_err();
     let mut dwarf_applied = false;
     match debug_db.apply(&mut fd, &debug_storage) {
@@ -2243,7 +2433,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // import names) and DWARF did not already lock a prototype.
     if callspec_link_enabled && !dwarf_applied {
         if let Some(import_name) = fd.symbol_table.get(&target.vaddr).cloned() {
-            match libc_signatures.locked_proto(&import_name, &debug_storage) {
+            match libc_signatures.locked_proto(&import_name, &debug_storage, Some(&dwarf_type_names)) {
                 Ok(Some(proto)) => {
                     eprintln!(
                         "[PREPASS] {} applied locked PLT-import signature: {} params",
@@ -2346,7 +2536,6 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         fd.obank.optree.len(),
         fd.bblocks.get_size()
     );
-
     // CALLSPEC-DRIVER-0001: resolve every CALL/CALLIND call specification
     // against the symbol/signature front-end (Ghidra's FlowInfo::queryCall
     // boundary, flow.cc:656-672). Ghidra queries the Program database here
@@ -2359,22 +2548,26 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // so root can isolate this feature's corpus effect on the same tree.
     let mut named = 0usize;
     let mut signatures = 0usize;
+    let mut dwarf_signatures = 0usize;
     let mut relinked = 0usize;
     let mut noreturn_marked = 0usize;
     if callspec_link_enabled {
-        (named, signatures, relinked, noreturn_marked) = link_call_specs(
+        (named, signatures, dwarf_signatures, relinked, noreturn_marked) = link_call_specs(
             &mut fd,
             &libc_signatures,
+            &debug_db,
             &debug_storage,
             &target.name,
+            &dwarf_type_names,
         );
     }
     eprintln!(
-        "[PREPASS] {} call specs: {} callspecs, {} named, {} locked libc signatures, {} fspec targets relinked, {} known no-return callees marked",
+        "[PREPASS] {} call specs: {} callspecs, {} named, {} locked libc signatures, {} locked DWARF signatures, {} fspec targets relinked, {} known no-return callees marked",
         target.name,
         fd.callspecs.len(),
         named,
         signatures,
+        dwarf_signatures,
         relinked,
         noreturn_marked
     );
@@ -2403,6 +2596,48 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     }
     eprintln!("[STEP] {} action done {:?}", target.name, t0.elapsed());
 
+    if let Ok(dump_fn) = std::env::var("RUGRA_DUMP_FUNC") {
+        if dump_fn == target.name {
+            let fd_read = fd_arc.read().unwrap();
+            eprintln!("[DUMP] === basic blocks for {} ===", target.name);
+            for i in 0..fd_read.bblocks.get_size() {
+                let blk = match fd_read.bblocks.get_block(i) {
+                    Some(b) => b,
+                    None => continue,
+                };
+                let blk_rg = blk.read().unwrap();
+                let ins: Vec<i32> =
+                    (0..blk_rg.size_in()).map(|j| blk_rg.get_in(j).map(|e| e.point.read().unwrap().get_index()).unwrap_or(-1)).collect();
+                let outs: Vec<i32> =
+                    (0..blk_rg.size_out()).map(|j| blk_rg.get_out(j).map(|e| e.point.read().unwrap().get_index()).unwrap_or(-1)).collect();
+                eprintln!("[DUMP] bb{} in={:?} out={:?}", blk_rg.get_index(), ins, outs);
+                if let Some(bb) = blk_rg.as_any().downcast_ref::<rugra::block::BlockBasic>() {
+                    let type_str = |v: &std::sync::Arc<std::sync::RwLock<rugra::varnode::Varnode>>| -> String {
+                        let vr = v.read().unwrap();
+                        let own = vr.v_type.as_ref().map(|t| format!("{:?}/{}", t.get_metatype(), t.get_name())).unwrap_or_else(|| "-".into());
+                        let hi = vr.high.as_ref().map(|h| {
+                            let hrg = h.read().unwrap();
+                            format!("{:?}/{}", hrg.v_type.get().get_metatype(), hrg.v_type.get().get_name())
+                        }).unwrap_or_else(|| "-".into());
+                        format!("t={} h={}", own, hi)
+                    };
+                    for op in <rugra::block::BlockBasic as rugra::block::FlowBlock>::get_ops(bb) {
+                        let op_rg = op.0.read().unwrap();
+                        let out_s = op_rg.get_out().map(|v| {
+                            let vr = v.read().unwrap();
+                            format!("vn#{}(h={}:{}:{:x},{})", vr.create_index, vr.high.as_ref().map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_else(|| "?".into()), vr.get_space().name(), vr.get_offset(), type_str(v))
+                        }).unwrap_or_default();
+                        let in_s: Vec<String> = op_rg.inrefs.iter().map(|a| {
+                            let vr = a.read().unwrap();
+                            let extra = if vr.is_input() { ", INPUT" } else { "" };
+                            format!("vn#{}(h={}{}:{}:{:x},{})", vr.create_index, vr.high.as_ref().map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_else(|| "?".into()), extra, vr.get_space().name(), vr.get_offset(), type_str(a))
+                        }).collect();
+                        eprintln!("[DUMP]   op @0x{:x}/{} {:?} stopTP={} outStopUp={} {} = ({})", op_rg.start.addr.as_u64(), op_rg.start.order, op_rg.opcode, op_rg.stops_type_propagation(), op_rg.get_out().map(|o| o.read().unwrap().stops_up_propagation()).unwrap_or(false), out_s, in_s.join(", "));
+                    }
+                }
+            }
+        }
+    }
     let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
     printer.set_rpn_enabled(true);
     let fd_read = fd_arc

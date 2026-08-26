@@ -904,3 +904,18 @@ block.cc:884-963）补齐三个外部半边语义：
 另：cc:951 `ident->flags |= (f_interior_gotoout|f_interior_gotoin)`——复合块
 从每个被消费组件（含 install 块，它在 Ghidra 的 -nodes- 集内）继承
 interior-goto 标记。
+
+### ruleBlockGoto 消费边改双边 removeEdge（2026-08-25，BLOCK-RECIPROCAL-OOB-0001）
+- if-goto 臂（newBlockIfGoto 尾，block.cc:1814 `removeEdge(ret,
+  getTrueOut())`）与 pure-goto 臂（newBlockGoto 尾，block.cc:1711
+  `removeEdge(ret, getOut(0))`）都改经
+  `BlockGraph::remove_edge_blocks(new_block, goto_target)` 全双边删除
+  （含槽位重结对）；原"目标侧 retain + 源侧 outgoing.clear"单侧对留下
+  stale reverse_index（httpd ap_getword 等 panic 根因之一）。
+- `dedup_edges_all_types` 改为 trait 级 `FlowBlock::dedup(self_arc)` 成对
+  协议（block.cc:525）；原 `edges.remove(i)` 单侧去重滑列表不作对侧修正。
+- `identify_internal` 安装后新增 `resync_boundary_reverse_indices`
+  （RUGRA-GLUE 不变量修复）：Ghidra selfIdentify 经 replace*Edge
+  （block.cc:160-191, 910-924）在重定向时同步两侧 reverse_index；Rugra
+  的 rewrite_* 只翻 e.point，故按指针重结对复合块边界边以恢复
+  checkEdges 不变量（一致状态下 no-op），并把 new_block 纳入安装后 dedup。

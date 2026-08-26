@@ -1013,7 +1013,6 @@ normalize 位点（LE 值与修复前逐位一致；BE 域整体 UNTESTED，登�
   等价指针）、def STOP 早退+blockup、path 指针胜整型、typelock union 直返、
   null local type 错误通道。
 
-<<<<<<< HEAD
 ## 2026-08-25：CALLOTHER userop 闭包接线（TYPEOP-LOCALTYPE-CALLOTHER-0001，TYPEOP-LOCALTYPE-DISPATCH-0001 CALLOTHER 切片）
 
 关闭 A48 复核精确定位的 caller 闭包：`PcodeOp → TypeOpCallother::get*Local →
@@ -1057,7 +1056,6 @@ tlst->getArch()->userops.getOp(in(0).offset) → 基类 canonical 回落`
   metadata-less UnspecializedPcodeOp 全链 canonical 回落、builtin 注册身份、
   slot-0 常量与越界槽的基类默认。varnode_localtype_res_1204 fixture 调用点
   同步补 `None` 线程（行为逐字节不变，runner 重钉验证）。
-=======
 ### 2026-08-25：O(n) 扫描移除（heritage rename 超时修复）
 - `VarnodeBank::set_input`（varnode.cc:1358-1371）— 先 `erase_loc_identity`/`erase_def_identity`
   再置 INPUT 标志；erase 的 residency bool 取代原 `owns_loc_ref`/`owns_def_ref` 全量扫描
@@ -1071,7 +1069,6 @@ tlst->getArch()->userops.getOp(in(0).offset) → 基类 canonical 回落`
   `def_tree.range(..search).next_back()`（search 为 flags=INPUT、loc=addr+size、size=0 的
   合成键，对应 varnode.cc:1916-1918 的 searchvn），只检查紧邻前驱一条；精确匹配返回既有
   input，部分重叠保持既有 WARN 降级。Heritage rename 的每次空栈提升从 O(n) 降为 O(log n)。
->>>>>>> c7674b91 (fix: eliminate 6-function E2E timeouts (selectGoto non-termination, heritage rename O(n^2), main print panic))
 
 ## spacebase placeholder 访问器（varnode.hh:261/319/320，本次新增）
 
@@ -1096,3 +1093,7 @@ heritage/pool 的 setDef 路径在大函数上呈二次方。现 `transition_def
   varnode 类型替换为 entry 的对应尺寸片段（`update_type_lock(dt, true,
   true)`），再做 mapentry 链接与 flag 折叠（cc:414-421 原有）。此前缺
   updateType 腿，PTR_ 槽位符号的 `undefined *` 类型到不了 varnode。
+## 2026-08-25（ACTIONDW-COPYDEF-MARKING-0001）：is_stack_store / set_stack_store 访问器
+
+- `is_stack_store()`（varnode.hh:265）：`(addlflags & stack_store) != 0`——是否由显式 CPUI_STORE 产生（RuleStoreVarnode 转 STORE→COPY 时设置，ruleaction.cc:4333；ActionDirectWrite 的 COPY 源追踪消费，coreaction.cc:1382）。flag 常量 `STACK_STORE=0x100` 先前已存在且 RuleStoreVarnode 已写入，仅缺访问器。
+- `set_stack_store()`（varnode.hh:338）：`addlflags |= stack_store`。

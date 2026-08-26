@@ -1,5 +1,46 @@
 # `printc.rs` API Reference
 
+## 2026-08-26：RPN 常量臂接通完整 pushConstant 分派（MAINDIFF-STRCONST-0001）
+
+RPN 叶片 `make_atom_for_vn` 的常量路径此前走自创 `format_constant_value`
+（小值十进制 / 大值 `0x..  /* dec */` 注释 / `-1` 特判），既不查类型也不查
+StringManager。本次替换为 `constant_leaf_text`（`&mut self`，持 vn/op），完整
+移植 `PrintC::pushConstant` 的 metatype 分派（printc.cc:1749-1815）：
+
+- `TYPE_UINT`/`TYPE_INT`：`isCharPrint()` → `char_constant_text`
+  （pushCharConstant cc:1606-1654），`isEnumType()` → `enum_constant_text`
+  （pushEnumConstant cc:1666-1687 的 exact-member 切片），否则
+  `integer_text`（cc:1288-1368，signed 求补、hex/dec 自然底判定）。
+- `TYPE_UNKNOWN` → `integer_text`；`TYPE_BOOL` → `true/false`
+  （pushBoolConstant cc:1488-1495）。
+- `TYPE_PTR`/`TYPE_PTRREL`（cc:1775-1790）：`option_NULL && val==0` →
+  `NULL` token；ptr-to charPrint → `ptr_char_constant_text`
+  （`pushPtrCharConstant` cc:1698-1719 文本核：非零值、默认数据空间
+  resolveConstant、全局 scope readonly、`print_character_constant` 引号串）；
+  ptr-to CODE → `ptr_code_constant_text`（cc:1730-1742，默认代码空间 +
+  `queryFunction` 符号名）；未命中落入 default cast
+  （`default_cast_constant_text` cc:1806-1815，可选 `(type)` cast + force_hex
+  整数）。
+- `TYPE_VOID`（cc:1772-1774）：oracle 是 `clear(); throw LowlevelError`；
+  Rugra 双路径统一降级为 `/* void constant */` 标记（发射路径不 panic，与
+  直接发射臂同形）。`TYPE_FLOAT`（cc:1791-1793 → `push_float`
+  cc:1380-1424）：Rugra 无 FloatFormat，统一发 `FLOAT_UNKNOWN`——
+  cc:1386 无格式 sentinel 本身，与直接发射臂同形。
+- 其余 metatype → default cast。
+
+直接发射 helper（`push_integer`/`push_char_constant_fmt`/
+`emit_default_cast_constant`/`push_ptr_char_constant`）改为文本核的薄包装，
+两条路径（RPN 叶片与直接发射）输出同一形态；`format_constant_value` 连同
+`/* dec */` 自创注释删除。`print_unicode` 的逃逸判定由
+`!(0x20..=0x7e).contains` 纠正为 `printlanguage::unicode_needs_escape`
+（printlanguage.cc:411-487：C0 控制 + 可打印 ASCII 内的 `\\` `"` `'`），修复
+字符串字面量内引号不逃逸。E2E（curl 124 函数）：hugehelp 三个字符串字面量
+与 golden 逐字节一致（2132/2105/2139 字节含截断标记），progressbarinit
+`curl_getenv("COLUMNS")`、my_fwrite `fopen(..., "wb")` 折叠，
+`/* dec */` 清零，defects=0 / numbering=0。
+
+**源代码路径**: `src/printc.rs`
+
 ## 2026-08-25：`find_partial_field` 半开区间边界修复（type.cc:1580-1638）
 
 `find_partial_field` 的字段包含判定由闭区间 `off + sz <= f.offset + f_size`
@@ -1548,3 +1589,12 @@ numbering=0 保持；audit 错误总数 15→15（1 处形态变化见上）。
   （匿名根走 genericTypeName）+ 每指针层一个 `*` + 每数组层 `[n]`；
   `(*)[n]` 运算符形态不发射（Rugra cast 位点只拼平面类型）。PTR_ 槽位
   符号因此能拼出 golden 的 `(undefined *)0x0` 形态。
+## RPN 常量字符串解析 + comma 分隔符（MYFWRITE-TEMPVAR-0001，2026-08-26）
+
+1. RPN 常量臂接入地址键符号/字符串表解析（对应 push_varnode Priority 0；
+   位运算操作数掩码门控与主路径一致）——call 实参位置的字符串字面量
+   （`fopen(...,"wb")`）经此打印。
+2. call 实参分隔符由 `", "` 改 `","`（printc.cc:623-631 pushOp(&comma)，
+   comma 记号 spacing 0，printc.cc:57）——`fwrite(buffer,size,nmemb,__s)`。
+3. push_varnode Priority 0.5 寄存器参数名门控收紧为"本函数实际输入"
+   （printlanguage.cc:218-262 pushSymbolDetail 语义）。

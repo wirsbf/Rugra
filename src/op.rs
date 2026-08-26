@@ -613,19 +613,17 @@ impl PcodeOp {
     }
 
     // Ghidra: op.hh:220 PcodeOp::isPartialRoot
-    /// Is this op's output the root of a CONCAT (PIECE) tree? Faithful to
-    /// `PcodeOp::isPartialRoot` (op.hh:220):
-    ///   `(addlflags & concat_root) != 0` (`concat_root = 0x100`, op.hh:117).
-    /// Set by RulePieceStructure after reassembly (ruleaction.cc:7642) and
-    /// re-checked as the re-visit guard at ruleaction.cc:7610 so the rule
-    /// never re-processes an already-visited CONCAT tree.
+    /// Is this op's output the root of a CONCAT tree already visited by
+    /// RulePieceStructure? Faithful to `PcodeOp::isPartialRoot`
+    /// (op.hh:220): `(addlflags & concat_root) != 0` (concat_root = 0x100).
+    /// The guard keeps the cleanup-pool rule from re-walking a tree it
+    /// already restructured (ruleaction.cc:7628).
     pub fn is_partial_root(&self) -> bool {
         (self.addlflags & op_addl_flags::CONCAT_ROOT) != 0
     }
-
     // Ghidra: op.hh:221 PcodeOp::setPartialRoot
-    /// Mark this op's output as the root of a CONCAT tree. Faithful to
-    /// `PcodeOp::setPartialRoot` (op.hh:221): `addlflags |= concat_root`.
+    /// Mark this op's output as the root of a visited CONCAT tree.
+    /// Faithful to `PcodeOp::setPartialRoot` (op.hh:221).
     pub fn set_partial_root(&mut self) {
         self.addlflags |= op_addl_flags::CONCAT_ROOT;
     }

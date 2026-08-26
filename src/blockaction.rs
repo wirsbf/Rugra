@@ -399,60 +399,76 @@ pub(crate) fn rewrite_in_edges_to_idx(
 pub(crate) fn dedup_edges_all_types(
     bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
 ) {
-    // RUGRA-GLUE: dedup_list — Rust 借用安全 helper：Ghidra 的
-    // FlowBlock::dedup/eliminateInDups/eliminateOutDups 直接遍历单一的
-    // `intothis`/`outofthis` 数组对，而 Rugra 每个 block struct 各自持有
-    // `incoming`/`outgoing` 两个 Vec，需要把同一套 dedup 循环体（block.cc:
-    // 447-501 的单数组循环）逐 Vec 展开，故为纯语言结构胶水。
-    fn dedup_list(edges: &mut Vec<crate::block::BlockEdge>) {
-        let mut keep: Vec<usize> = Vec::new();
-        let mut i = 0;
-        while i < edges.len() {
-            let dup = keep.iter().any(|&k| {
-                Arc::ptr_eq(&edges[k].point, &edges[i].point)
-            });
-            if dup {
-                // block.cc:459/488: labels OR into the kept edge, drop this one.
-                let pos = keep.iter().position(|&k| {
-                    Arc::ptr_eq(&edges[k].point, &edges[i].point)
-                }).unwrap();
-                let label = edges[i].flags;
-                edges[pos].flags |= label;
-                edges.remove(i);
-            } else {
-                keep.push(i);
-                i += 1;
-            }
-        }
-    }
-    let mut w = bl.write().unwrap();
-    let any = w.as_any_mut();
-    macro_rules! dedup_edges {
-        ($blk:expr) => {
-            dedup_list(&mut $blk.incoming);
-            dedup_list(&mut $blk.outgoing);
+    // Ghidra selfIdentify ends with FlowBlock::dedup (block.cc:930->525),
+    // whose eliminateInDups/eliminateOutDups remove duplicates with PAIRED
+    // half-deletes (block.cc:461-462 / 490-491), keeping every surviving
+    // edge's reciprocal reverse_index consistent on BOTH sides. The former
+    // one-sided `edges.remove(i)` dedup slid the local list without the
+    // peer corrections, leaving stale reverse_index entries that later
+    // indexed out of bounds (BLOCK-RECIPROCAL-OOB-0001). The trait-level
+    // `dedup(self_arc)` runs the faithful protocol for every block type
+    // (Ghidra's edge arrays live on the FlowBlock base).
+    bl.write().unwrap().dedup(bl);
+}
+
+// RUGRA-GLUE: 不变量修复 helper（Ghidra 无此独立函数——selfIdentify 经
+// replaceOutEdge/replaceInEdge（block.cc:160-191, 910-924）在重定向时同步
+// 两侧 reverse_index；Rugra 的 rewrite_out/in_edges_to_idx 只翻 e.point，
+// 故按指针重结对复合块边界边以恢复 checkEdges() 不变量 block.cc:545-570，
+// 一致状态下为 no-op，不引入与 oracle 可观测行为的分歧）。
+pub(crate) fn resync_boundary_reverse_indices(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+) {
+    // In-edges: for slot i with source S, find S's out-slot j pointing back
+    // at bl, then set S.out[j].reverse_index = i and bl.in[i].reverse_index = j.
+    let n_in = bl.read().unwrap().size_in();
+    for i in 0..n_in {
+        let peer = bl.read().unwrap().get_in(i).map(|e| e.point);
+        let Some(peer) = peer else { continue };
+        let j = if Arc::ptr_eq(&peer, bl) {
+            // Self-loop: search our own out list.
+            let r = bl.read().unwrap();
+            (0..r.size_out()).find(|&k| {
+                r.get_out(k).map(|e| Arc::ptr_eq(&e.point, bl)).unwrap_or(false)
+            })
+        } else {
+            let r = peer.read().unwrap();
+            (0..r.size_out()).find(|&k| {
+                r.get_out(k).map(|e| Arc::ptr_eq(&e.point, bl)).unwrap_or(false)
+            })
         };
+        let Some(j) = j else { continue };
+        if !Arc::ptr_eq(&peer, bl) {
+            peer.write().unwrap().out_edges_mut()[j].reverse_index = i as i32;
+        } else {
+            bl.write().unwrap().out_edges_mut()[j].reverse_index = i as i32;
+        }
+        bl.write().unwrap().in_edges_mut()[i].reverse_index = j as i32;
     }
-    if let Some(bb) = any.downcast_mut::<crate::block::BlockBasic>() {
-        dedup_edges!(bb);
-    } else if let Some(bg) = any.downcast_mut::<crate::block::BlockGraph>() {
-        dedup_edges!(bg);
-    } else if let Some(bg) = any.downcast_mut::<crate::block::BlockList>() {
-        dedup_edges!(bg);
-    } else if let Some(bi) = any.downcast_mut::<crate::block::BlockIf>() {
-        dedup_edges!(bi);
-    } else if let Some(bw) = any.downcast_mut::<crate::block::BlockWhileDo>() {
-        dedup_edges!(bw);
-    } else if let Some(bd) = any.downcast_mut::<crate::block::BlockDoWhile>() {
-        dedup_edges!(bd);
-    } else if let Some(bi) = any.downcast_mut::<crate::block::BlockInfLoop>() {
-        dedup_edges!(bi);
-    } else if let Some(bc) = any.downcast_mut::<crate::block::BlockCondition>() {
-        dedup_edges!(bc);
-    } else if let Some(bs) = any.downcast_mut::<crate::block::BlockSwitch>() {
-        dedup_edges!(bs);
-    } else if let Some(bg) = any.downcast_mut::<crate::block::BlockGoto>() {
-        dedup_edges!(bg);
+    // Out-edges: for slot k with target T, find T's in-slot m pointing back
+    // at bl, then set T.in[m].reverse_index = k and bl.out[k].reverse_index = m.
+    let n_out = bl.read().unwrap().size_out();
+    for k in 0..n_out {
+        let peer = bl.read().unwrap().get_out(k).map(|e| e.point);
+        let Some(peer) = peer else { continue };
+        let m = if Arc::ptr_eq(&peer, bl) {
+            let r = bl.read().unwrap();
+            (0..r.size_in()).find(|&q| {
+                r.get_in(q).map(|e| Arc::ptr_eq(&e.point, bl)).unwrap_or(false)
+            })
+        } else {
+            let r = peer.read().unwrap();
+            (0..r.size_in()).find(|&q| {
+                r.get_in(q).map(|e| Arc::ptr_eq(&e.point, bl)).unwrap_or(false)
+            })
+        };
+        let Some(m) = m else { continue };
+        if !Arc::ptr_eq(&peer, bl) {
+            peer.write().unwrap().in_edges_mut()[m].reverse_index = k as i32;
+        } else {
+            bl.write().unwrap().in_edges_mut()[m].reverse_index = k as i32;
+        }
+        bl.write().unwrap().out_edges_mut()[k].reverse_index = m as i32;
     }
 }
 
@@ -2798,14 +2814,24 @@ impl<'a> CollapseStructure<'a> {
             }
         }
 
+        // Re-pair the composite's boundary reverse indices by pointer. The
+        // oracle's replace*Edge protocol (block.cc:160-191, invoked from
+        // selfIdentify block.cc:910-924) sets both halves' reverse_index at
+        // retarget time; Rugra's rewrite_* only flips e.point, so this pass
+        // restores Ghidra's checkEdges() invariant (block.cc:545-570) before
+        // any paired half-delete (dedup / ruleBlockGoto's removeEdge) reads
+        // the recorded slots.
+        resync_boundary_reverse_indices(new_block);
+
         // Ghidra selfIdentify ends with dedup() (block.cc:930): its paired
         // half-deletes collapse the external duplicates created when several
         // consumed components (or the install block plus a component) each had
-        // an edge to the same external block. Rugra's one-sided edge model
-        // needs the explicit external dedup, run once AFTER all retargets.
+        // an edge to the same external block. The composite itself is part of
+        // that dedup (the oracle runs FlowBlock::dedup on ident).
         for ext in &touched {
             dedup_edges_all_types(ext);
         }
+        dedup_edges_all_types(new_block);
 
         // Ghidra selfIdentify moves each component's EXTERNAL edge halves
         // onto the composite (the replace*Edge half-deletes, block.cc:160-191):
@@ -3585,25 +3611,15 @@ impl<'a> CollapseStructure<'a> {
         // the new BlockIf, so it has 2 out-edges.
         self.identify_internal(&if_block, &[], i);
         self.update_switch_case_reference(cond_idx, &if_block);
-        // Faithful to Ghidra newBlockIfGoto: removeEdge(ret, ret->getTrueOut()).
-        // Remove the goto_target's in-edge from the new BlockIf so the target's
-        // sizeIn no longer counts the goto source. This is the "consumption"
-        // that lets WhileDo see a reduced size_in on loop bodies with breaks.
-        {
-            let if_idx = if_block.read().unwrap().get_index();
-            let goto_target_idx = goto_target.read().unwrap().get_index();
-            goto_target.write().unwrap().remove_in_edge_from(&[if_idx, cond_idx]);
-            // Also remove the goto_target from the if_block's outgoing, so the
-            // goto edge is fully "consumed" (invisible to size_out and
-            // clip_extra_roots). Use try_read to avoid RwLock deadlock when
-            // e.point == if_block (self-loop edge while holding write lock).
-            if let Some(bif) = if_block.write().unwrap().as_any_mut().downcast_mut::<BlockIf>() {
-                // Remove the goto_target edge from outgoing. Compare by Arc
-                // pointer identity (not by reading the target, which would
-                // deadlock if e.point == if_block under our write lock).
-                bif.outgoing.retain(|e| !std::sync::Arc::ptr_eq(&e.point, &goto_target));
-            }
-        }
+        // Faithful to Ghidra newBlockIfGoto: removeEdge(ret, ret->getTrueOut())
+        // (block.cc:1814). BlockGraph::removeEdge is a FULL bilateral removal
+        // (block.cc:1469-1481: find the slot in end->intothis, then
+        // removeInEdge = halfDeleteInEdge + peer halfDeleteOutEdge), so the
+        // target's in-edge AND the if_block's out-edge disappear together and
+        // every surviving edge's reciprocal reverse_index stays consistent.
+        // The former one-sided retain pair left stale reciprocal indices
+        // (BLOCK-RECIPROCAL-OOB-0001).
+        self.graph.remove_edge_blocks(&if_block, &goto_target);
         self.change_count += 1;
         true
     }
@@ -3678,27 +3694,18 @@ impl<'a> CollapseStructure<'a> {
         // edges onto the BlockGoto so it has correct size_in for further merging.
         self.identify_internal(&goto_block, &[idx], i);
         self.update_switch_case_reference(idx, &goto_block);
-        // Faithful to Ghidra newBlockGoto: removeEdge(ret, ret->getOut(0)).
-        // After identify_internal, the goto_target has an in-edge from the new
-        // BlockGoto. Remove it so the target's sizeIn no longer counts the
-        // goto source — this is the "consumption" that lets WhileDo match.
-        {
-            let goto_idx = goto_block.read().unwrap().get_index();
-            goto_target.write().unwrap().remove_in_edge_from(&[goto_idx, idx]);
-            // Ghidra newBlockGoto tail (block.cc:1710-1711):
-            // forceOutputNum(1) + removeEdge(ret, ret->getOut(0)) — the
-            // wrapped component's single inherited out-edge (to the goto
-            // target) is removed so the BlockGoto is a sink; downstream
-            // rules (ruleBlockIfNoExit's sizeOut()==0 clause test,
-            // ruleBlockCat) must see out=0. identify_internal rebuilt the
-            // inherited edge, so clear it here.
-            if let Some(g) = self.graph.get_block(goto_idx as usize) {
-                let mut w = g.write().unwrap();
-                if let Some(bg) = w.as_any_mut().downcast_mut::<crate::block::BlockGoto>() {
-                    bg.outgoing.clear();
-                }
-            }
-        }
+        // Faithful to Ghidra newBlockGoto: forceOutputNum(1) +
+        // removeEdge(ret, ret->getOut(0)) (block.cc:1710-1711). The wrapped
+        // component is single-out (the pure-goto rule precondition), so the
+        // BlockGoto inherits exactly one out-edge (to the goto target);
+        // removing it bilaterally (BlockGraph::removeEdge, block.cc:1469:
+        // removeInEdge = halfDeleteInEdge + peer halfDeleteOutEdge) makes the
+        // BlockGoto a sink for downstream rules (ruleBlockIfNoExit's
+        // sizeOut()==0 clause test, ruleBlockCat) while keeping the target's
+        // in-list and every reciprocal reverse_index consistent. The former
+        // one-sided retain/clear pair left stale reciprocal indices
+        // (BLOCK-RECIPROCAL-OOB-0001).
+        self.graph.remove_edge_blocks(&goto_block, &goto_target);
         self.change_count += 1;
         eprintln!("[COLLAPSE] {} ruleBlockGoto: wrapped block {} (size_out={})", self.name, idx, size_out);
         true

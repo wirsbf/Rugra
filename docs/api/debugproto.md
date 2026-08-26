@@ -193,3 +193,58 @@ Rugra 此前 `ProtoParameter::new` 恒 `flags: 0`，两个适配层都只靠
   skeleton 差异 2863 → 2849（-14），defects=0、numbering=0 保持。
   其余 skeleton 差异均为独立既有缺口（curl_getenv 赋值语句缺失、"COLUMNS"
   字符串引用、char* cast 传播等）。
+
+## 2026-08-25：CALLSPEC-ENV-SCOPE-0001 — DWARF 签名链接到调用点（queryCall→copy 边界）
+
+### 缺口
+
+`DebugPrototypeDatabase::apply` 只把 DWARF 签名锁到**被反编译函数自身**的
+`fd.funcp`；调用点的 105 个 callspec 里只有 24 个 generic_clib 导入拿到锁定
+原型（`LibcSignatureTable`），其余 81 个（curl 内部函数：glob_url/
+getparameter/parseconfig/match_url 等）在 flow 期保持 `fd.funcp.clone()`
+（flow.rs:1390，Ghidra 的 `FuncCallSpecs` ctor 克隆 default 而非调用者）。
+headless golden 的环境里这些 callee 的 DWARF 签名被 analyzer 锁进 Program
+数据库，`FlowInfo::queryCall`（flow.cc:656-672）解析 callee `Funcdata`，
+`ActionDefaultParams`（coreaction.cc:2322-2330）`fc->copy(otherfunc->
+getFuncProto())` 把整份 callee 原型（model + 全部锁位 + 参数 store 的 clone，
+`FuncProto::copy` fspec.cc:3789-3804）复制到调用点——这是 golden main
+`glob_url(&urls,pcVar12,&urlnum)`（3 参）与 `curl_version()`（0 参）的来源。
+
+### 落地
+
+- `DebugPrototypeDatabase::locked_callsite_proto(entry, model_carrier,
+  storage)`：同一 Program-数据库边界的调用点半边。`model_carrier` 提供模型
+  ——与 callee 自身 `Funcdata` 绑定的 Architecture defaultfp 相同（driver 传
+  `fd.funcp`，FUNCPROTO-MODEL-BIND-0001 的 set_arch 绑定后）。锁配方与
+  `apply` 完全一致（共享 `locked_proto` 构建器，fspec.cc:3843-3852 setPieces
+  语义）：SYSV 存储、DW_AT_name 才 NAME_LOCKED、input/output/model 三锁、
+  空参签名钉 unknown 模型哨兵。`Ok(None)` = 该地址无 DWARF 定义（thunk/
+  导入：generic_clib 表或 active recovery 负责）。
+- driver `link_call_specs`：libc 表未命中（thunk 地址无 DWARF 定义、DWARF
+  函数名不在 24 条导入表内——两源按构造不相交）后查 DWARF，命中即整体替换
+  callspec `prototype`。`[PREPASS]` 日志新增 locked DWARF signatures 计数。
+
+### 可观察效果与边界（诚实账）
+
+- main：`extraout_var` 声明位次变化（14 个 DWARF 锁定 callee 的 output_type
+  _locked 改变了 funcLinkOutput 的锁定路径与 active-output trial 集合）。
+  **调用实参个数不变**：`curl_version(lVar50,in_RDX,argv,argc,in_R8,in_R9)`
+  仍 6 个试验参数——实参个数由 CALL op 的 input varnodes 决定
+  （printc opCall 按 `op->numInput()-1` 渲染，printc.cc:610-624），而 Rugra
+  缺少 Ghidra 的收敛消费者：`build_input_from_trials` 未做
+  `data.opSetAllInput`（fspec.cc:5739 尾）、`commit_new_inputs`（fspec.cc:5150
+  port）零调用方、`ActionLockInputs`/`ActionParamList` 未移植、
+  `ActionFuncLink::func_link_input` 读硬编码 ABI 表而非锁定原型参数。这些
+  全部在 coreaction/fspec 租约域（`MAINDIFF-CALLPROTO-0001`），本改动是它们
+  需要的环境数据面。
+- `match_url` 的 `URLGlob **glob` 聚合参数走 fail-visible 拒绝路径
+  （`compiler-spec aggregate/stack assignment is not yet representable`），
+  保持未锁——与 `apply` 对聚合参数的既有拒绝语义一致。
+
+## parse_type_names：DWARF 命名类型索引（2026-08-26）
+
+`parse_type_names`（RUGRA-GLUE，Program-import 边界）：遍历 DWARF 单元的
+structure/union/enumeration/typedef/base_type DIE 建立名字→类型索引，供
+`LibcSignatureTable::locked_proto` 解析签名基础拼写（如 `FILE`）。Ghidra 侧
+由 DWARF analyzer 填充 program type manager；重复名首见优先（锁定 curl
+语料无冲突）。

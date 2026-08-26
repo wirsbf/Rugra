@@ -1560,6 +1560,32 @@ impl Scope {
         id
     }
 
+    // Ghidra: database.cc:394 Symbol::decodeHeader (flag attributes)
+    /// Set or clear one flag bit on a Symbol — the driver-side channel of
+    /// the analyzer→decompiler symbol flag write. In Ghidra the platform
+    /// analyzers express symbol flags through the symbol XML this decoder
+    /// reads (database.cc:404-450): the ASCII-strings analyzer's defined
+    /// Data carries a locked char-array type (`ATTRIB_TYPELOCK`, cc:439-442)
+    /// and globals in read-only memory blocks carry `Varnode::readonly`
+    /// (`ATTRIB_READONLY`, cc:435-438). `Funcdata::spacebaseConstant`
+    /// (funcdata.cc:416) then reads `sym->isTypeLocked()` to decide whether
+    /// the PTRSUB output's char-pointer type survives later type
+    /// propagation, and `Scope::queryProperties`'s entry-hit arm
+    /// (database.cc:1273 `flags = res->getAllFlags()`) folds the symbol
+    /// flags into the readonly answers `RulePtrsubCharConstant`
+    /// (ruleaction.cc:7372) and `PrintC::pushPtrCharConstant`
+    /// (printc.cc:1709) consume.
+    pub fn set_symbol_flag(&mut self, symbol_id: u64, flag: u32, on: bool) {
+        if let Some(sym) = self.symbols.get(&symbol_id) {
+            let mut sym_rg = sym.write().unwrap();
+            if on {
+                sym_rg.flags |= flag;
+            } else {
+                sym_rg.flags &= !flag;
+            }
+        }
+    }
+
     // Ghidra: database.cc:2138 ScopeInternal::removeSymbol
     /// Remove the given Symbol from this Scope. Faithful to `removeSymbol`.
     pub fn remove_symbol(&mut self, symbol_id: u64) {
@@ -4025,6 +4051,18 @@ impl Database {
         // usepoint (empty uselimit → addrtied + fold branch).
         scope.add_map_point(id, addr, Address::new(0), size, Some(&ctx));
         Some(id)
+    }
+
+    // Ghidra: database.cc:394 Symbol::decodeHeader (flag attributes)
+    /// Database-level forwarder of [`crate::database::Scope::
+    /// set_symbol_flag`]: set or clear one flag bit on a Symbol owned by
+    /// `scope_id` — the driver-side channel of the analyzer→decompiler
+    /// symbol flag write (the XML flag attributes `Symbol::decodeHeader`
+    /// reads at database.cc:404-450).
+    pub fn set_symbol_flag(&mut self, scope_id: u64, symbol_id: u64, flag: u32, on: bool) {
+        if let Some(scope) = self.scopes.get_mut(&scope_id) {
+            scope.set_symbol_flag(symbol_id, flag, on);
+        }
     }
 
     // Ghidra: database.cc:3050 Database::addRange

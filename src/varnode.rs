@@ -1200,6 +1200,22 @@ impl Varnode {
     // Flag constants already defined in varnode_flags/addl_flags above; these
     // are the missing accessor methods needed by ported Rules.
 
+    // Ghidra: varnode.hh:265 Varnode::isStackStore
+    /// Was this originally produced by an explicit CPUI_STORE? Faithful
+    /// inline `(addlflags & Varnode::stack_store) != 0`. The flag is set by
+    /// RuleStoreVarnode when it converts a constant-offset STORE into a
+    /// COPY (ruleaction.cc:4333), and consumed by ActionDirectWrite's
+    /// COPY-source trace (coreaction.cc:1382).
+    pub fn is_stack_store(&self) -> bool {
+        (self.addlflags & addl_flags::STACK_STORE) != 0
+    }
+    // Ghidra: varnode.hh:338 Varnode::setStackStore
+    /// Mark as produced by explicit CPUI_STORE:
+    /// `addlflags |= Varnode::stack_store`.
+    pub fn set_stack_store(&mut self) {
+        self.addlflags |= addl_flags::STACK_STORE;
+    }
+
     // Ghidra: varnode.cc:578 Varnode::isAddrForce
     /// Is this varnode forced to be treated as an address? (varnode.hh:251)
     pub fn is_addr_force(&self) -> bool {

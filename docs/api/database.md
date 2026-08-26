@@ -2,6 +2,21 @@
 
 Rust symbol database corresponding to Ghidra's `database.hh` / `database.cc`.
 
+## 2026-08-26：`set_symbol_flag` 驱动侧符号标志通道（MAINDIFF-STRCONST-0001）
+
+`Scope::set_symbol_flag` / `Database::set_symbol_flag`（Ghidra 侧对应
+`Symbol::decodeHeader` 的 XML 标志属性读取，database.cc:394-462）：设置/清除
+Symbol 的单个 flag 位。平台分析器通过符号 XML 表达标志——ASCII 字符串分析器
+的 defined Data 带锁定 char 数组类型（`ATTRIB_TYPELOCK` cc:439-442），只读
+内存块中的全局量带 `Varnode::readonly`（`ATTRIB_READONLY` cc:435-438）。下游
+消费：`Funcdata::spacebaseConstant` 读 `sym->isTypeLocked()`（funcdata.cc:416）
+决定 PTRSUB 输出的 char 指针类型能否在后续类型传播中存活，
+`Scope::queryProperties` 的 entry-hit 臂（database.cc:1273
+`flags = res->getAllFlags()`）把符号位折进 readonly 答案，供
+`RulePtrsubCharConstant`（ruleaction.cc:7372）与 `PrintC::pushPtrCharConstant`
+（printc.cc:1709）消费。驱动侧（examples/curl_decompile.rs）对字符串地址
+符号置 TYPELOCK、对 `.rodata` 全局量置 READONLY。
+
 **Status:** L2. The 2026-08-11 locked audit rejects the prior L3 claim:
 rangemap/usepoint selection, specialized Symbol identity, and
 ScopeLocal-to-Funcdata property propagation are not equivalent.

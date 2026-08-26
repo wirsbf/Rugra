@@ -1335,3 +1335,28 @@ INT_OR/AND 条件前用 `orblock.is_complex()` 守卫——此前恒 false 宽�
 注：Ghidra 对 `bl` 自身的 isComplex 检查在 cc:1333-1334 处于注释状态，Rugra
 同样不查 `bl` 只查 `orblock`。Rugra 的 BlockBasic 无 arch 回指针，
 max_implied_ref 取默认常量 2（与 ActionRestructureVarnode 同一先例）。
+
+### 边互惠（reciprocal reverse_index）修复族（2026-08-25，BLOCK-RECIPROCAL-OOB-0001）
+- `FlowBlock::half_delete_in_edge/half_delete_out_edge`（block.cc:100-115）
+  上移为 trait 默认方法（经 `in_edges_mut/out_edges_mut`），对**所有**子类型
+  生效；原 BlockBasic 专属实现对结构块（BlockIf/BlockGoto/BlockList/…）静默
+  跳过，留下过期 reverse_index → 后续 OOB panic。
+- `FlowBlock::dedup/eliminate_in_dups/eliminate_out_dups/find_dups`
+  （block.cc:447-523）完整移植：消除重复边用**成对** half-delete
+  （cc:461-462/490-491），两侧 reverse_index 同步维护；`find_dups` 的
+  f_mark/f_mark2 标记协议照搬（自环经 self_arc 报告）。
+- `FlowBlock::remove_in_edge_from`（Rugra 排除表形式的 removeInEdge
+  block.cc:130-141）改为全双边：先 `half_delete_in_edge(slot)` 再对源块
+  `half_delete_out_edge(rev)`；原单侧 `retain` 版本留下源侧出边半边与
+  幸存边的互惠索引全 stale。
+- `BlockGraph::collect_reachable`（block.cc:2154-2187）移植：正向 mark
+  传播收集（不可）可达块集合，供 `Funcdata::remove_unreachable_blocks`
+  使用。
+- `BlockGraph::remove_edge_blocks`（block.cc:1469 removeEdge）：按指针找到
+  两侧槽位后**先重结对**（`src.out[os].rev = is_; dst.in[is_].rev = os_`，
+  恢复 checkEdges 不变量 block.cc:545-570，一致状态下为 no-op）再双侧
+  half-delete；half-delete 不再经 BlockBasic downcast。
+- `decrement_reciprocal_reverse_index`：记录槽越界时跳过递减并打
+  `[BLOCKSTRUCT] WARN`（BLOCK-RECIPROCAL-OOB-0001 残差，见 TODO_BOARD；
+  修复路径 = selfIdentify 的 replace*Edge 完整移植 block.cc:160-191）。
+  httpd 29/30 函数 0 panic；该残差 WARN 在 httpd 全量出现 28 次。

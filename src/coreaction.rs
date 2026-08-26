@@ -2892,12 +2892,12 @@ impl ActionUnreachable {
 impl Action for ActionUnreachable {
     // Ghidra: coreaction.cc:3457 ActionUnreachable::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionUnreachable::apply (coreaction.cc:3457-3464).
-        if fd.remove_unreachable_blocks() {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
+        // Faithful to ActionUnreachable::apply (coreaction.cc:3457-3464):
+        // issuewarning=true, checkexistence=false (cached flag gate).
+        if fd.remove_unreachable_blocks(true, false) {
+            self.count += 1; // Deleting at least one block
         }
+        Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "unreachable" mirrors ctor at coreaction.hh:493
     fn get_name(&self) -> &str { "unreachable" }
@@ -3201,44 +3201,31 @@ impl ActionSwitchNorm {
 impl Action for ActionSwitchNorm {
     // Ghidra: coreaction.cc:4548 ActionSwitchNorm::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Pre-pass: recover jump-tables for any BRANCHIND that doesn't already
-        // have one. In full Ghidra this happens during flow tracing
-        // (`subflow.cc` → `Funcdata::recoverJumpTable`, funcdata_block.cc:640)
-        // which runs *before* the core action pipeline. Rugra does not yet
-        // clone a partial `Funcdata` for dedicated jumptable simplification,
-        // so we run recovery in-place here, populating `fd.jump_tables`.
-        // This finally attaches `JumpTable` objects to `Funcdata` so that
-        // `Funcdata::find_jump_table` can return non-`None`.
-        let newly_recovered = crate::jumptable::recover_jump_tables(fd);
-
-        // Now mirror Ghidra's `ActionSwitchNorm` (coreaction.cc:4548): for each
-        // jump-table that hasn't been labelled yet, matchModel/recoverLabels/
-        // foldInNormalization, then foldInGuards.
-        let mut change_count = 0;
-
+        // In Ghidra, every JumpTable on `data` was already recovered during
+        // flow tracing (`FlowInfo::recoverJumpTables` → `Funcdata::
+        // recoverJumpTable`, funcdata_block.cc:640) — this action only
+        // normalizes the recovered tables. Rugra formerly ran an in-place
+        // recovery pre-pass here because flow-time recovery was unwired;
+        // JUMPTABLE-PIPELINE-0001 removed it now that the staged flow-time
+        // path exists.
+        //
+        // coreaction.cc:4549-4558: for each unlabelled table, matchModel /
+        // recoverLabels / foldInNormalization, then foldInGuards (clearing
+        // the structure on change). The fold stages remain L3 gaps.
+        let mut count = 0;
         for jt_arc in &fd.jump_tables {
-            // Full Ghidra:
-            //   jt->matchModel(&data)
-            //   jt->recoverLabels(&data)
-            //   jt->foldInNormalization(&data)
-            //   if (jt->foldInGuards(&data)) { data.getStructure().clear(); }
-            // Rugra exposes recovery/normalization on the JumpTable; the
-            // fold-in stages that rewrite the CFG are still L3 gaps.
             let is_labelled = jt_arc.read().unwrap().is_labelled();
             if !is_labelled {
-                change_count += 1;
+                // jt->matchModel(&data); jt->recoverLabels(&data);
+                // jt->foldInNormalization(&data);
+                count += 1;
             }
+            // if (jt->foldInGuards(&data)) { data.getStructure().clear(); }
         }
-
-        if newly_recovered > 0 {
-            change_count += newly_recovered as i32;
-        }
-
-        if change_count > 0 {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        let _ = count;
+        // cc:4559: `return 0;` — Ghidra reports no status change from this
+        // action regardless of the local counter.
+        Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "switchnorm" mirrors ctor at coreaction.hh:609
     fn get_name(&self) -> &str { "switchnorm" }
@@ -4093,24 +4080,46 @@ impl ActionMarkImplied {
         let def_op = def_op_arc.read().unwrap();
         let def_opc = def_op.opcode;
 
-        // (1) LOAD def crossing STORE: simplified — forbid if any alive STORE
-        // shares the def op's basic block. Full Ghidra uses cover.contain +
-        // isPossibleAlias; this is a conservative substitute.
+        // (1) LOAD def crossing STORE (coreaction.cc:3379-3395): Ghidra walks
+        // the alive STORE ops and, when `vn->getCover()->contain(storeop, 2)`
+        // — INTERIOR containment, same max==2 form as check (2) — cavalierly
+        // lets the load through unless the STORE's spacebase offset equals
+        // the LOAD's AND isPossibleAlias cannot rule the pointers different.
+        // The previous whole-block shortcut forbade every LOAD that merely
+        // shared a block with a STORE, even one AFTER the load's last read
+        // (my_fwrite's `*stream` vs the later `_IO_read_ptr` store).
         if def_opc == OpCode::CPUI_LOAD {
-            let def_block = def_op.parent.as_ref().and_then(|w| w.upgrade());
-            if let Some(def_block) = def_block {
-                let def_bi = def_block.read().unwrap().get_index();
-                let stores_in_block = fd.obank.alivelist.iter().any(|o| {
-                    let o = o.0.read().unwrap();
-                    if o.opcode != OpCode::CPUI_STORE || o.is_dead() {
+            let vn_cover = vn_arc.read().unwrap().cover.as_ref().map(|c| c.clone());
+            let load_spacebase_off = def_op.get_in(0).map(|v| v.read().unwrap().get_offset());
+            if let Some(cover) = vn_cover {
+                for store_op_ref in &fd.obank.alivelist {
+                    let store_op = store_op_ref.0.read().unwrap();
+                    if store_op.is_dead() || store_op.opcode != OpCode::CPUI_STORE {
+                        continue;
+                    }
+                    let Some(store_blk) = store_op.parent.as_ref().and_then(|w| w.upgrade()) else { continue };
+                    let store_bi = store_blk.read().unwrap().get_index();
+                    let store_order = store_op.start.get_order();
+                    let interior = cover
+                        .blocks
+                        .get(&store_bi)
+                        .map(|cb| cb.contain(store_order) && cb.boundary(store_order) == 0)
+                        .unwrap_or(false);
+                    if !interior {
+                        continue;
+                    }
+                    // The LOAD crosses this STORE. Ghidra consults
+                    // isPossibleAlias (coreaction.cc:3392) before refusing;
+                    // Rugra's full alias machinery is unported
+                    // (is_possible_alias_step is reserved), so same-spacebase
+                    // crossings are conservatively refused — a superset of
+                    // Ghidra's refusals, differing only for provably
+                    // non-aliasing pointer pairs.
+                    let store_spacebase_off =
+                        store_op.get_in(0).map(|v| v.read().unwrap().get_offset());
+                    if load_spacebase_off == store_spacebase_off {
                         return false;
                     }
-                    o.parent.as_ref().and_then(|w| w.upgrade())
-                        .map(|b| b.read().unwrap().get_index() == def_bi)
-                        .unwrap_or(false)
-                });
-                if stores_in_block {
-                    return false;
                 }
             }
         }
@@ -4120,10 +4129,13 @@ impl ActionMarkImplied {
         // CALL (or LOAD) whose live cover spans another CALL op cannot be
         // implied — inlining its def expression would place a call result
         // across another call boundary. The precise check is
-        // `vn->getCover()->contain(callop, 2)` (interior or shared-boundary).
-        // Rugra's varnode.cover (built by Merge::compute_varnode_covers) holds
-        // the def->last-read range per block, so contain(block_idx, order) is
-        // the faithful equivalent.
+        // `vn->getCover()->contain(callop, 2)`: cover.cc:413-424 with max==2
+        // requires INTERIOR containment — `CoverBlock::contain` (cover.cc:107,
+        // inclusive of both endpoints) AND `CoverBlock::boundary(op)==0`
+        // (cover.cc:129 — neither the defining point nor the tail). A LOAD
+        // whose only read is the CALL itself has the call on its TAIL
+        // boundary, so it does not count as crossing and stays imposable —
+        // that is exactly the `fopen(*(char **)stream, ...)` inline form.
         if matches!(def_opc, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND | OpCode::CPUI_LOAD) {
             let vn_cover = vn_arc.read().unwrap().cover.as_ref().map(|c| c.clone());
             if let Some(cover) = vn_cover {
@@ -4133,11 +4145,6 @@ impl ActionMarkImplied {
                     if !matches!(call_op.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND) {
                         continue;
                     }
-                    // Ghidra's contain(op, max=2) returns true for interior or
-                    // shared-boundary points. Rugra's contain(block_idx, order)
-                    // is the interior check; we also treat the def op itself as
-                    // not crossing (a CALL result feeding another input of the
-                    // SAME op is not a crossing — it's the normal case).
                     if let (Some(call_blk), Some(def_blk)) = (
                         call_op.parent.as_ref().and_then(|w| w.upgrade()),
                         def_op.parent.as_ref().and_then(|w| w.upgrade()),
@@ -4149,7 +4156,16 @@ impl ActionMarkImplied {
                         if call_bi == def_bi && call_order == def_op.start.get_order() {
                             continue;
                         }
-                        if cover.contain(call_bi, call_order) {
+                        // contain(callop, 2): interior only. Rugra's public
+                        // Cover::contain(block, point) is the max==1 form, so
+                        // the boundary==0 test from cover.cc:421 is applied on
+                        // the CoverBlock directly.
+                        let interior = cover
+                            .blocks
+                            .get(&call_bi)
+                            .map(|cb| cb.contain(call_order) && cb.boundary(call_order) == 0)
+                            .unwrap_or(false);
+                        if interior {
                             return false;
                         }
                     }
@@ -4289,12 +4305,161 @@ impl ActionSetCasts {
         }
     }
 
+    /// Faithful port of `TypeOpLoad::getInputCast` (typeop.cc:440-470).
+    /// Slot 1 (the address): cast the load POINTER so it matches the output
+    /// type. `reqtype` is the output's high type; `curtype` is the address
+    /// high type unwrapped ONE level. When the unwrapped pointee matches the
+    /// output size and is primitive-ish, the cast is POSTPONED to the load
+    /// output (returning None) unless the address is already an implied CAST
+    /// that can be re-cast — this is what keeps `stream->_IO_read_ptr`
+    /// (address char**, output high FILE*) free of a `*(FILE **)` prefix in
+    /// the oracle. A size mismatch (e.g. `*stream` on a FILE* param feeding
+    /// fopen's char*) falls through to castStandard and returns the pointer
+    /// cast `char**` that prints `*(char **)stream`.
+    // Ghidra: typeop.cc:440 TypeOpLoad::getInputCast
+    fn load_input_cast(
+        op: &crate::op::PcodeOp,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        use crate::type_system::datatype::{Datatype, TypeMetatype};
+        if slot != 1 {
+            return None;
+        }
+        // cc:444: reqtype = op->getOut()->getHighTypeDefFacing()
+        let reqtype = op.get_out().and_then(|o| {
+            let vn = o.read().unwrap();
+            vn.high.as_ref()
+                .map(|h| h.read().unwrap().v_type.get())
+                .or_else(|| vn.v_type.clone())
+        })?;
+        let invn = op.get_in(1)?;
+        let in_size = invn.read().unwrap().get_size();
+        // cc:446: curtype = invn->getHighTypeReadFacing(op)
+        let curtype_full = {
+            let vn = invn.read().unwrap();
+            vn.high.as_ref()
+                .map(|h| h.read().unwrap().v_type.get())
+                .or_else(|| vn.v_type.clone())
+        }?;
+        // cc:450-453: unwrap exactly one level; a non-pointer address takes
+        // a direct pointer-to-reqtype cast.
+        let curtype = match curtype_full.as_ref() {
+            Datatype::Pointer(pt) => pt.ptr_to.clone(),
+            _ => return Some(make_ptr(reqtype, in_size)),
+        };
+        // cc:454-465: postpone branch.
+        if !curtype.type_equal(&reqtype) && curtype.get_size() == reqtype.get_size() {
+            let curmeta = curtype.get_metatype();
+            if !matches!(
+                curmeta,
+                TypeMetatype::Struct | TypeMetatype::Array | TypeMetatype::Spacebase | TypeMetatype::Union
+            ) {
+                // Primitive pointee of the right size: only keep going to
+                // re-cast when the address is already an implied CAST.
+                let vn_rg = invn.read().unwrap();
+                let def_is_cast = vn_rg
+                    .def
+                    .as_ref()
+                    .and_then(|d| d.upgrade())
+                    .map(|d| d.read().unwrap().opcode == OpCode::CPUI_CAST)
+                    .unwrap_or(false);
+                if !vn_rg.is_implied() || !vn_rg.is_written() || !def_is_cast {
+                    return None; // Postpone cast to output
+                }
+            }
+        }
+        // cc:467-469: castStandard(reqtype, curtype, false, true), then wrap
+        // the resulting cast type back into a pointer.
+        let cast = strategy.cast_standard_full(&reqtype, &curtype, false, true)?;
+        Some(make_ptr(cast, in_size))
+    }
+
+    /// Faithful port of `TypeOpStore::getInputCast` (typeop.cc:520-555).
+    /// Slot 1 (the address): when the pointed-to size does not match the
+    /// value size, cast the pointer to pointer-of-valuetype. Slot 2 (the
+    /// value): when sizes match, castStandard(pointedToType, valueType) —
+    /// the `(char *)__s` form for a FILE* stored through a char** field
+    /// pointer.
+    // Ghidra: typeop.cc:520 TypeOpStore::getInputCast
+    fn store_input_cast(
+        op: &crate::op::PcodeOp,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        use crate::type_system::datatype::Datatype;
+        if slot == 0 {
+            return None;
+        }
+        let pointer_vn = op.get_in(1)?;
+        let value_vn = op.get_in(2)?;
+        let pointer_type = {
+            let vn = pointer_vn.read().unwrap();
+            vn.high.as_ref()
+                .map(|h| h.read().unwrap().v_type.get())
+                .or_else(|| vn.v_type.clone())
+        }?;
+        let value_type = {
+            let vn = value_vn.read().unwrap();
+            vn.high.as_ref()
+                .map(|h| h.read().unwrap().v_type.get())
+                .or_else(|| vn.v_type.clone())
+        }?;
+        let ptr_size = pointer_vn.read().unwrap().get_size();
+        // cc:530-535: pointedToType / destSize.
+        let (pointed_to, dest_size) = match pointer_type.as_ref() {
+            Datatype::Pointer(pt) => (pt.ptr_to.clone(), pt.ptr_to.get_size() as i64),
+            _ => (pointer_type.clone(), -1i64),
+        };
+        // cc:536-541: size mismatch → cast the POINTER (slot 1 only).
+        if dest_size != value_type.get_size() as i64 {
+            if slot == 1 {
+                return Some(make_ptr(value_type, ptr_size));
+            }
+            return None;
+        }
+        if slot == 1 {
+            // cc:542-551: a CAST already in place on the pointer is tested
+            // for the right target type and re-cast only then.
+            let vn_rg = pointer_vn.read().unwrap();
+            let def = vn_rg.def.as_ref().and_then(|d| d.upgrade());
+            if let Some(def) = def {
+                if def.read().unwrap().opcode == OpCode::CPUI_CAST
+                    && vn_rg.is_implied()
+                    && vn_rg
+                        .lone_descend()
+                        .map(|d| {
+                            std::ptr::eq(
+                                &*d.read().unwrap() as *const crate::op::PcodeOp,
+                                op as *const crate::op::PcodeOp,
+                            )
+                        })
+                        .unwrap_or(false)
+                {
+                    let new_type = make_ptr(value_type, ptr_size);
+                    if !pointer_type.type_equal(&new_type) {
+                        return Some(new_type);
+                    }
+                }
+            }
+            return None;
+        }
+        // cc:553-554: slot 2 — cast the value, not the pointer.
+        strategy.cast_standard_full(&pointed_to, &value_type, false, true)
+    }
+
     /// Faithful 1:1 port of `ActionSetCasts::castInput` (coreaction.cc:2655-2720).
     /// For input `slot` of `op`, compute the op's expected input type
     /// (inputTypeLocal = getBase(size, metain)), the current varnode's high
     /// type, and if `castStandard` says a cast is needed, insert a CPUI_CAST op
     /// feeding the slot: `out = CAST(in)`, with out implied (inlined by printc
     /// as `(reqtype)in`).
+    ///
+    /// LOAD slot 1 and STORE slots 1/2 take the `TypeOpLoad::getInputCast`
+    /// (typeop.cc:440-470) / `TypeOpStore::getInputCast` (typeop.cc:520-555)
+    /// overrides instead of the generic metain model — those return a POINTER
+    /// cast for the LOAD address (`*(char **)stream`) and a pointee cast for
+    /// the STORE value (`(char *)__s`).
     ///
     /// Returns true if a cast was inserted.
     // Ghidra: coreaction.cc:2655 ActionSetCasts::castInput
@@ -4312,6 +4477,40 @@ impl ActionSetCasts {
             let Some(in_arc_ref) = op.get_in(slot) else { return false; };
             let in_arc = in_arc_ref.clone();
             let op_pc = op.get_addr();
+            // TypeOpLoad::getInputCast / TypeOpStore::getInputCast arms. A
+            // Some(reqtype) here is already the final cast decision (the
+            // override ran castStandard internally — coreaction.cc:2662-2669
+            // does not re-gate getInputCast's return), so step (2)'s
+            // castStandard must be skipped for it.
+            let specialized = match op.opcode {
+                OpCode::CPUI_LOAD => Self::load_input_cast(&op, slot, strategy),
+                OpCode::CPUI_STORE => Self::store_input_cast(&op, slot, strategy),
+                _ => None,
+            };
+            if let Some(reqtype) = specialized {
+                let in_size = in_arc.read().unwrap().get_size();
+                if in_arc.read().unwrap().is_annotation() { return false; }
+                // Release the op read guard before the Funcdata mutations
+                // below take their own write locks on this op.
+                drop(op);
+                // (3) Insert CPUI_CAST op: out = CAST(in), out implied.
+                //     Faithful to coreaction.cc:2702-2712.
+                if in_arc.read().unwrap().is_constant() {
+                    // Constants just get their type updated (castInput
+                    // const path).
+                    in_arc.write().unwrap().v_type = Some(reqtype);
+                    return true;
+                }
+                let new_op = fd.new_op(1, op_pc);
+                let out_vn = fd.new_unique_out(in_size, &new_op);
+                out_vn.write().unwrap().v_type = Some(reqtype);
+                out_vn.write().unwrap().set_implied();
+                fd.op_set_opcode(&new_op, OpCode::CPUI_CAST);
+                fd.op_set_input(&new_op, in_arc.clone(), 0);
+                fd.op_set_input(op_ref, out_vn, slot);
+                fd.op_insert_before(&new_op, op_ref);
+                return true;
+            }
             let meta_opt = Self::input_metatype(op.opcode);
             drop(op);
             let Some(meta) = meta_opt else { return false; };
@@ -4388,10 +4587,52 @@ impl ActionSetCasts {
         // cc:2541: tokenct = op->getOpcode()->getOutputToken(op, castStrategy)
         // Rugra: compute the token type from the opcode's output metatype.
         let out_size = outvn.read().unwrap().get_size();
-        let meta = Self::output_metatype(op.0.read().unwrap().opcode);
-        let tokenct = match meta {
-            Some(m) => base_type_for(out_size, m),
-            None => return 0,
+        // TypeOpLoad::getOutputToken (typeop.cc:472-485): the LOAD's token
+        // is the POINTEE of its address input's high type (when the pointee
+        // size matches the output size), else the output's own high type.
+        // This is what surfaces the golden `(FILE *)stream->_IO_read_ptr`
+        // cast: the address (PTRSUB `stream->_IO_read_ptr`) is char**, so
+        // the token is char* while the phi-merged output high is FILE*.
+        let tokenct = {
+            let op_rg = op.0.read().unwrap();
+            if op_rg.opcode == OpCode::CPUI_LOAD {
+                let in1_high = op_rg
+                    .get_in(1)
+                    .and_then(|a| {
+                        let vn = a.read().unwrap();
+                        vn.high
+                            .as_ref()
+                            .map(|h| h.read().unwrap().v_type.get())
+                            .or_else(|| vn.v_type.clone())
+                    });
+                let out_high = || {
+                    outvn.read().unwrap().high.as_ref()
+                        .map(|h| h.read().unwrap().v_type.get())
+                        .or_else(|| outvn.read().unwrap().v_type.clone())
+                };
+                match in1_high {
+                    Some(ct) if matches!(ct.as_ref(), Datatype::Pointer(_)) => {
+                        if let Datatype::Pointer(pt) = ct.as_ref() {
+                            if pt.ptr_to.get_size() == out_size {
+                                pt.ptr_to.clone()
+                            } else {
+                                out_high().unwrap_or_else(|| ct.clone())
+                            }
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    _ => match out_high() {
+                        Some(t) => t,
+                        None => return 0,
+                    },
+                }
+            } else {
+                match Self::output_metatype(op_rg.opcode) {
+                    Some(m) => base_type_for(out_size, m),
+                    None => return 0,
+                }
+            }
         };
         // cc:2543: outHighType = outvn->getHigh()->getType()
         let out_high_type = outvn.read().unwrap().high.as_ref()
@@ -5011,56 +5252,23 @@ impl ActionInferTypes {
                         }
                     }
                 }
-                // LOAD: address input (slot 1) is a pointer; output gets a
-                // size-based scalar so the address pointer can bootstrap.
-                OpCode::CPUI_LOAD => {
-                    if let (Some(space_in), Some(addr_in), Some(out)) =
-                        (op.get_in(0), op.get_in(1), op.get_out())
-                    {
-                        let av = addr_in.read().unwrap();
-                        let _ = space_in;
-                        let ov = out.read().unwrap();
-                        // If the address varnode already carries a pointer
-                        // type (e.g. a type-locked parameter), the load
-                        // output takes the pointed-to type — Ghidra's
-                        // TypeOpLoad::propagateType (typeop.cc:487-505)
-                        // input1→output edge. Fall back to the size-based
-                        // scalar otherwise.
-                        let addr_ptr_pointed = av
-                            .v_type
-                            .as_ref()
-                            .and_then(|t| match t.as_ref() {
-                                crate::type_system::datatype::Datatype::Pointer(pt) => {
-                                    Some(pt.ptr_to.clone())
-                                }
-                                _ => None,
-                            });
-                        let pointed = addr_ptr_pointed
-                            .unwrap_or_else(|| int_types.sized(ov.get_size()));
-                        temps
-                            .entry(vn_id(&av))
-                            .and_modify(|e| {
-                                if e.get_metatype() == TypeMetatype::Unknown {
-                                    *e = make_ptr(pointed.clone(), ptr_size);
-                                }
-                            })
-                            .or_insert_with(|| make_ptr(pointed.clone(), ptr_size));
-                        temps.entry(vn_id(&ov)).or_insert(pointed);
-                    }
-                }
-                // STORE: address input (slot 1) is a pointer to the value
-                // input's type (slot 2).
-                OpCode::CPUI_STORE => {
-                    if let (Some(addr_in), Some(val_in)) = (op.get_in(1), op.get_in(2)) {
-                        let av = addr_in.read().unwrap();
-                        let vv = val_in.read().unwrap();
-                        let pointed = int_types.sized(vv.get_size());
-                        temps
-                            .entry(vn_id(&av))
-                            .or_insert_with(|| make_ptr(pointed.clone(), ptr_size));
-                        temps.entry(vn_id(&vv)).or_insert(pointed);
-                    }
-                }
+                // LOAD/STORE: Ghidra's buildLocaltypes (coreaction.cc:5008-
+                // 5037) seeds NOTHING from these ops — Varnode::getLocalType
+                // (varnode.cc:900-936) consults the DEF's outputTypeLocal
+                // (LOAD/STORE outputs: base UNKNOWN; a SEALED PTRSUB address
+                // early-returns its TYPE_INT local) plus the DESCENDANT ops'
+                // inputTypeLocal (e.g. a CALL's locked parameter type). The
+                // former op-centric seeding here bootstrapped the ADDRESS
+                // temp with pointer-to-sized-scalar (`long *`), which is not
+                // an edge write and thus BYPASSED the RulePtrArith seal
+                // (stops_up_propagation blocks only propagate_type_edge
+                // targets, outslot >= 0) — it overwrote the downChain
+                // field-pointer char** on my_fwrite's `stream->_IO_read_ptr`
+                // PTRSUB and suppressed the golden `(FILE *)`/`(char *)`
+                // casts. Outputs/addresses fall through to the generic
+                // fallback (int8) and the propagation rounds below, exactly
+                // as Ghidra's def/descendant dispatch does.
+                OpCode::CPUI_LOAD | OpCode::CPUI_STORE => {}
                 // INT_ADD/INT_SUB/PTRSUB/PTRADD with a spacebase input →
                 // pointer output. Mirrors Ghidra's pointer arithmetic
                 // propagation (Varnode::getLocalType spacebase path).
@@ -5217,20 +5425,80 @@ impl ActionInferTypes {
         inslot: i32,
         outslot: i32,
         int_types: &IntTypes,
-        ptr_size: usize,
+        _ptr_size: usize,
         type_factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
     ) -> Option<std::sync::Arc<crate::type_system::datatype::Datatype>> {
         use crate::type_system::datatype::TypeMetatype;
         let alt_meta = alttype.get_metatype();
         match op.opcode {
-            // COPY: type flows straight through, both directions.
-            OpCode::CPUI_COPY => Some(alttype.clone()),
+            // COPY (typeop.cc:411-423 TypeOpCopy::propagateType): the type
+            // flows between the output and the single input only
+            // (`(inslot!=-1)&&(outslot!=-1)` returns null — no input↔input
+            // edges exist for a 1-input op in the PropagationState walk, but
+            // the guard is kept faithful). A SPACEBASE input transforms to a
+            // pointer-to-unknown1 of the alttype's size; anything else flows
+            // unchanged.
+            OpCode::CPUI_COPY => {
+                if inslot != -1 && outslot != -1 {
+                    return None; // Must propagate input <-> output
+                }
+                let in_vn_is_spacebase = if inslot == -1 {
+                    op.get_out().cloned()
+                } else {
+                    op.inrefs.get(inslot as usize).cloned()
+                }
+                .map(|v| v.read().unwrap().is_spacebase())
+                .unwrap_or(false);
+                if in_vn_is_spacebase {
+                    let factory = type_factory?;
+                    let unknown1 = factory
+                        .read()
+                        .unwrap()
+                        .get_base(1, TypeMetatype::Unknown)
+                        .unwrap_or_else(|| {
+                            std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+                                crate::type_system::datatype::TypeBase::new(
+                                    "unknown".to_string(),
+                                    1,
+                                    TypeMetatype::Unknown,
+                                ),
+                            ))
+                        });
+                    let mut factory = factory.write().unwrap();
+                    return Some(std::sync::Arc::new(
+                        crate::type_system::datatype::Datatype::Pointer(
+                            crate::type_system::datatype::TypePointer {
+                                base: crate::type_system::datatype::TypeBase::new(
+                                    format!("{} *", unknown1.get_name()),
+                                    alttype.get_size(),
+                                    TypeMetatype::Pointer,
+                                ),
+                                ptr_to: unknown1,
+                                wordsize: 1,
+                            },
+                        ),
+                    ));
+                    // (get_type_pointer interning form; wordsize from the
+                    // default data space — the worker cspec's ram space has
+                    // wordsize 1.)
+                }
+                Some(alttype.clone())
+            }
 
-            // MULTIEQUAL (phi): type flows between output and any input.
-            OpCode::CPUI_MULTIEQUAL => Some(alttype.clone()),
+            // MULTIEQUAL (phi): Ghidra has NO TypeOpMultiequal::propagateType
+            // override — the base TypeOp::propagateType (typeop.cc:317-321)
+            // returns null, so types NEVER flow across a phi's edges during
+            // ActionInferTypes. The earlier `Some(alttype)` here let a
+            // locked CALL output type leak through the phi into sibling
+            // inputs (my_fwrite: fopen's FILE* overwrote the LOAD-out temp
+            // and then lost to the inferred char*), diverging from the
+            // oracle where phi members keep their independent temps and the
+            // HighVariable::getTypeRepresentative merge (variable.cc:377-395)
+            // alone decides the high type.
+            OpCode::CPUI_MULTIEQUAL => None,
 
-            // INDIRECT: transparent.
-            OpCode::CPUI_INDIRECT => Some(alttype.clone()),
+            // INDIRECT (typeop.cc:2005-2020 TypeOpIndirect::propagateType):
+            // see the dedicated arm below.
 
             // Zero-extending: output carries input's type (forward).
             OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT => {
@@ -5355,8 +5623,16 @@ impl ActionInferTypes {
                     );
                 }
                 if inslot == -1 && outslot == 1 {
-                    // output type → address becomes pointer to it
-                    return Some(make_ptr(alttype.clone(), ptr_size));
+                    // output type → address becomes pointer to it.
+                    // Ghidra TypeOpLoad::propagateType (typeop.cc:493-496)
+                    // wraps via propagateToPointer (typeop.cc:186-198),
+                    // which truncates a pointer alttype to unknown* — the
+                    // raw ptr-of-ptr here typed my_fwrite's
+                    // `stream->_IO_read_ptr` address FILE** (out FILE* →
+                    // make_ptr(FILE*)), which outranked the downChain field
+                    // type char** in the typeOrder competition and
+                    // suppressed the golden `(FILE *)`/`(char *)` casts.
+                    return Some(crate::typeop::propagate_to_pointer(alttype));
                 }
                 None
             }
@@ -5373,7 +5649,10 @@ impl ActionInferTypes {
                     );
                 }
                 if inslot == 2 && outslot == 1 {
-                    return Some(make_ptr(alttype.clone(), ptr_size));
+                    // value → address: propagateToPointer truncation, same
+                    // as the LOAD arm (TypeOpStore::propagateType,
+                    // typeop.cc:563-566).
+                    return Some(crate::typeop::propagate_to_pointer(alttype));
                 }
                 None
             }
@@ -5715,6 +5994,11 @@ impl Action for ActionInferTypes {
         if self.local_count >= 7 {
             if self.local_count == 7 {
                 fd.warning_header("Type propagation algorithm not settling");
+                // coreaction.cc:5393: data.setTypeRecoveryExceeded(); — the
+                // flag is what lets RulePtrArith's buildTree
+                // (ruleaction.cc:6502/6514) stamp propagated types on new
+                // PTRADD/PTRSUB outputs itself, since this loop no longer runs.
+                fd.set_type_recovery_exceeded();
                 self.local_count += 1;
             }
             return Ok(action_status::NO_CHANGE);
@@ -6904,10 +7188,16 @@ impl Action for ActionMultiCse {
 ///    - Are stack stores from INDIRECT ops
 ///    - Are defined by non-COPY/non-PIECE/non-SUBPIECE ops
 /// 4. Propagate direct-write through the worklist
-pub struct ActionDirectWrite;
+pub struct ActionDirectWrite {
+    /// Propagate thru CPUI_INDIRECT ops. Faithful to the `propagateIndirect`
+    /// field (coreaction.hh:244), set once by the constructor: `true` for the
+    /// `protorecovery_a` registration, `false` for `protorecovery_b`
+    /// (coreaction.cc:5497/:5498, :5680/:5681).
+    propagate_indirect: bool,
+}
 impl ActionDirectWrite {
-    // Ghidra: coreaction.hh:243 ActionDirectWrite (constructor mirror)
-    pub fn new() -> Self { Self }
+    // Ghidra: coreaction.hh:246 ActionDirectWrite::ActionDirectWrite
+    pub fn new(propagate_indirect: bool) -> Self { Self { propagate_indirect } }
 }
 impl Action for ActionDirectWrite {
     // Ghidra: coreaction.cc:1350 ActionDirectWrite::apply
@@ -6919,13 +7209,24 @@ impl Action for ActionDirectWrite {
 
         let varnodes: Vec<_> = fd.vbank.loc_tree.iter().map(|v| v.0.clone()).collect();
 
-        // Phase 1: Clear + collect worklist
+        // Phase 1: Clear + collect worklist (cc:1360-1416)
         let mut worklist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
         for vn_arc in &varnodes {
             vn_arc.write().unwrap().clear_direct_write();
             let vn_rg = vn_arc.read().unwrap();
             if vn_rg.is_input() {
                 if vn_rg.is_persist() || vn_rg.is_spacebase() {
+                    drop(vn_rg);
+                    vn_arc.write().unwrap().set_direct_write();
+                    worklist.push(vn_arc.clone());
+                }
+                // Ghidra cc:1368-1371: else if (data.getFuncProto()
+                //   .possibleInputParam(vn->getAddr(),vn->getSize()))
+                else if fd.funcp.possible_input_param(
+                    vn_rg.get_offset(),
+                    vn_rg.get_size() as i32,
+                    vn_rg.get_space(),
+                ) {
                     drop(vn_rg);
                     vn_arc.write().unwrap().set_direct_write();
                     worklist.push(vn_arc.clone());
@@ -6942,13 +7243,112 @@ impl Action for ActionDirectWrite {
                         drop(vn_rg);
                         vn_arc.write().unwrap().set_direct_write();
                         worklist.push(vn_arc.clone());
-                    } else if def_opc != OpCode::CPUI_PIECE && def_opc != OpCode::CPUI_SUBPIECE {
-                        // Non-COPY, non-PIECE, non-SUBPIECE writes are direct
+                    }
+                    // Ghidra cc:1381: else if (op->code() == CPUI_COPY)
+                    // For most COPYs, do NOT consider it a direct write.
+                    else if def_opc == OpCode::CPUI_COPY {
+                        // Ghidra cc:1382: if (vn->isStackStore()) — the
+                        // original operation was really a CPUI_STORE (the
+                        // flag is set by RuleStoreVarnode,
+                        // ruleaction.cc:4333).
+                        if vn_rg.is_stack_store() {
+                            // Ghidra cc:1383-1388: Varnode *invn =
+                            //   op->getIn(0); if (invn->isWritten()) {
+                            //   curop = invn->getDef(); if (curop->code()
+                            //   == CPUI_COPY) invn = curop->getIn(0); }
+                            // — trace the COPY source through (at most) one
+                            // intermediate COPY (single-level unroll, not a
+                            // loop).
+                            let mut invn_arc = {
+                                let op_rg = def_op.read().unwrap();
+                                match op_rg.inrefs.first() {
+                                    Some(v) => v.clone(),
+                                    None => { drop(vn_rg); continue; }
+                                }
+                            };
+                            if invn_arc.read().unwrap().is_written() {
+                                let curop_arc = invn_arc.read().unwrap()
+                                    .def.as_ref().and_then(|w| w.upgrade());
+                                if let Some(curop) = curop_arc {
+                                    if curop.read().unwrap().opcode == OpCode::CPUI_COPY {
+                                        let next = {
+                                            let op_rg = curop.read().unwrap();
+                                            op_rg.inrefs.first().cloned()
+                                        };
+                                        if let Some(next) = next {
+                                            invn_arc = next;
+                                        }
+                                    }
+                                }
+                            }
+                            // Ghidra cc:1389-1392: if (invn->isWritten() &&
+                            //   invn->getDef()->isMarker()) — source is from
+                            //   an INDIRECT → treat as direct write.
+                            let marker_sourced = {
+                                let invn_rg = invn_arc.read().unwrap();
+                                if invn_rg.is_written() {
+                                    invn_rg.def.as_ref()
+                                        .and_then(|w| w.upgrade())
+                                        .map(|d| d.read().unwrap().is_marker())
+                                        .unwrap_or(false)
+                                } else {
+                                    false
+                                }
+                            };
+                            if marker_sourced {
+                                drop(vn_rg);
+                                vn_arc.write().unwrap().set_direct_write();
+                                worklist.push(vn_arc.clone());
+                            }
+                        }
+                        // Plain COPY output: NOT a direct write at collection
+                        // time (cc:1381 comment); it can only gain the flag
+                        // via Phase-2 taint.
+                    }
+                    // Ghidra cc:1395-1399: else if (op->code()!=CPUI_PIECE
+                    //   && op->code()!=CPUI_SUBPIECE) — anything that writes
+                    // to a variable in a way that isn't some form of COPY.
+                    else if def_opc != OpCode::CPUI_PIECE && def_opc != OpCode::CPUI_SUBPIECE {
                         drop(vn_rg);
                         vn_arc.write().unwrap().set_direct_write();
                         worklist.push(vn_arc.clone());
                     }
-                    // COPY and STACK_STORE cases deferred (need is_stack_store infrastructure)
+                }
+                // Ghidra cc:1401-1408: else if (!propagateIndirect &&
+                //   op->code() == CPUI_INDIRECT) — the marker collection
+                // branch, only active for the protorecovery_b registration.
+                // The output is marked but deliberately NOT pushed to the
+                // worklist ("We do NOT add vn to worklist as INDIRECT
+                // otherwise does not propagate").
+                else if !self.propagate_indirect && def_opc == OpCode::CPUI_INDIRECT {
+                    let (addr_differs, out_persist) = {
+                        let op_rg = def_op.read().unwrap();
+                        let in0 = op_rg.inrefs.first().cloned();
+                        let out = op_rg.output.clone();
+                        match (in0, out) {
+                            (Some(in0), Some(out)) => {
+                                let i = in0.read().unwrap();
+                                let o = out.read().unwrap();
+                                // Ghidra cc:1403: op->getIn(0)->getAddr() !=
+                                //   outvn->getAddr() — full Address compare
+                                //   (AddrSpace pointer + offset).
+                                let differs = i.get_space() != o.get_space()
+                                    || i.get_offset() != o.get_offset();
+                                (differs, o.is_persist())
+                            }
+                            (None, _) | (_, None) => (false, false),
+                        }
+                    };
+                    // Ghidra cc:1404/1406: address change indicates an active
+                    // COPY (direct write); else a persist output must be
+                    // present in global storage at the call point.
+                    if addr_differs {
+                        drop(vn_rg);
+                        vn_arc.write().unwrap().set_direct_write();
+                    } else if out_persist {
+                        drop(vn_rg);
+                        vn_arc.write().unwrap().set_direct_write();
+                    }
                 }
             } else if vn_rg.is_constant() {
                 // Ghidra cc:1411: if (!vn->isIndirectZero())
@@ -6972,15 +7372,16 @@ impl Action for ActionDirectWrite {
                 };
                 if !out_vn.read().unwrap().is_direct_write() {
                     out_vn.write().unwrap().set_direct_write();
-                    // Ghidra cc:1428: for call-based INDIRECTs, output is marked
-                    // but does not propagate unless propagateIndirect || isIndirectStore.
-                    // Rugra lacks propagateIndirect flag (TODO); use conservative
-                    // true (propagate through INDIRECTs), which matches the
-                    // protorecovery_b registration (propagateIndirect=false would
-                    // stop propagation, but Rugra doesn't have the flag yet).
+                    // Ghidra cc:1427-1429: for call based INDIRECTs, output
+                    // is marked, but does not propagate depending on setting:
+                    //   if (propagateIndirect || op->code() != CPUI_INDIRECT
+                    //       || op->isIndirectStore())
+                    // `propagateIndirect` is the constructor flag
+                    // (coreaction.hh:244): true for protorecovery_a, false
+                    // for protorecovery_b.
                     let is_ind = desc_op_arc.read().unwrap().opcode == OpCode::CPUI_INDIRECT;
                     let is_store = desc_op_arc.read().unwrap().is_indirect_store();
-                    if !is_ind || is_store {
+                    if self.propagate_indirect || !is_ind || is_store {
                         worklist.push(out_vn);
                     }
                 }
@@ -12237,17 +12638,12 @@ impl Action for ActionStructureTransform {
 /// blockaction.cc:2212) and calls `data.nodeSplit(parent, slot)` per split
 /// edge so each goto source gets its own RETURN block.
 ///
-/// Rugra port: `Funcdata::nodeSplit` (funcdata_block.cc:856) IS ported at
-/// `funcdata.rs:1215` (`Funcdata::node_split`), but a real block split would
-/// break the staged structurer's stable-index invariant. We instead achieve
-/// the same per-branch RETURN using the existing op API without splitting any
-/// block: for each splittable multi-in-edge
-/// RETURN block, for each in-edge whose source is a goto predecessor (a block
-/// whose last op is a BRANCH/CBRANCH), we synthesize a new RETURN op at the
-/// predecessor's address, seed its input with the original RETURN's input
-/// (so the return value is preserved), and append it to the predecessor's op
-/// list. This is the data-flow equivalent of `nodeSplit`'s cloned RETURN
-/// (CloneBlockOps::cloneBlock, funcdata_block.cc:874) without the CFG edit.
+/// Rugra port: calls the real `Funcdata::node_split` (port of
+/// funcdata_block.cc:856, including CloneBlockOps op cloning with the
+/// MULTIEQUAL → COPY in-edge split) — see apply for the one detection-side
+/// substitution (basic-block goto-predecessor proxy for the structured
+/// copy-map walk, because Rugra's structured BlockGoto/BlockIf keep their
+/// goto targets implicit).
 pub struct ActionReturnSplit {
     pub count: i32,
 }
@@ -12298,27 +12694,33 @@ impl ActionReturnSplit {
 impl Action for ActionReturnSplit {
     // Ghidra: blockaction.cc:2264 ActionReturnSplit::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra (blockaction.cc:2264-2324):
-        //   if (data.getStructure().getSize() == 0) return 0;
-        //   for each RETURN op (alive): parent = op->getParent();
-        //     if (parent->sizeIn() <= 1) continue;
-        //     if (!isSplittable(parent)) continue;
-        //     gatherReturnGotos(parent, gotos); if empty continue;
-        //     ... choose splitedge from marked goto preds ...
-        //   for each split: data.nodeSplit(retnode, splitedge); count += 1;
+        // Faithful to blockaction.cc:2264-2324. For each alive RETURN whose
+        // basic-block parent has >1 in-edge and is splittable, gather the
+        // goto predecessors and nodeSplit the parent along those in-edges so
+        // each goto source gets its own RETURN block. nodeSplit
+        // (Funcdata::node_split, funcdata.rs port of funcdata_block.cc:856)
+        // clones the block's ops via CloneBlockOps — the MULTIEQUAL phi
+        // clone takes the split edge's incoming value and the original phi
+        // drops that in-edge — so the cloned RETURN reads the value along
+        // its own path (the `-1` for an early return), which the op-append
+        // substitute could never reproduce (its clones shared the original
+        // RETURN's pre-value placeholder).
         //
-        // Rugra port: detect multi-in-edge splittable RETURN blocks, then for
-        // each goto predecessor (an in-edge source whose last op is a
-        // BRANCH/CBRANCH) synthesize a new RETURN op and append it to the
-        // predecessor's op list. This avoids nodeSplit (unported) while still
-        // giving each goto branch its own RETURN — the substantive transform.
+        // gatherReturnGotos (blockaction.cc:2212-2240) walks the STRUCTURED
+        // copy-map chain for t_goto (gotoPrints) / t_if (gotoTarget) blocks.
+        // Rugra's structurer keeps BlockGoto/BlockIf goto targets implicit
+        // (goto_target: None) and never sets the originals' copy maps, so
+        // the structured form is unavailable; the basic-block proxy (in-edge
+        // source ending in an explicit BRANCH/CBRANCH = the edge is an
+        // unstructured branch, i.e. what the structurer renders as goto)
+        // is used instead — the same detection the previous substitute used,
+        // only the transform is now the real nodeSplit.
         if fd.sblocks.blocks.is_empty() {
             return Ok(action_status::NO_CHANGE);
         }
-        // Snapshot the RETURN ops + their parents (we may mutate the alive
-        // list / block op lists while iterating, so collect first).
-        // Each entry: (return_op_ref, parent_arc, parent_in_count).
-        let mut returns: Vec<(crate::op::PcodeOpRef, Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, usize)> = Vec::new();
+        // Snapshot the RETURN parents first (nodeSplit mutates the CFG and
+        // the alive op list). Each entry: (parent_arc, in_count).
+        let mut returns: Vec<(Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, usize)> = Vec::new();
         for op_ref in &fd.obank.alivelist {
             let parent_arc = {
                 let op_rg = op_ref.0.read().unwrap();
@@ -12333,31 +12735,29 @@ impl Action for ActionReturnSplit {
             if in_count <= 1 {
                 continue;
             }
-            returns.push((op_ref.clone(), parent_arc.clone(), in_count));
+            returns.push((parent_arc, in_count));
         }
 
-        for (ret_op, parent_arc, in_count) in returns {
+        // splitedge/retnode pairs, in the order they will be split
+        // (blockaction.cc:2294-2305: biggest in-edge index first so earlier
+        // nodeSplits do not shift later edges' indices).
+        let mut splitedge: Vec<usize> = Vec::new();
+        let mut retnode: Vec<Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = Vec::new();
+        for (parent_arc, in_count) in &returns {
             // isSplittable(parent) (blockaction.cc:2282).
             let ops = parent_arc.read().unwrap().get_ops();
             if !Self::is_splittable(&ops) {
                 continue;
             }
-            // gatherReturnGotos (blockaction.cc:2212): for each in-edge, the
-            // goto predecessor is the source block whose last op is a
-            // BRANCH/CBRANCH targeting this RETURN block. In Rugra's flat
-            // basic-block graph the in-edges' source IS that predecessor.
-            // Collect the goto predecessors and their addresses.
-            let mut goto_preds: Vec<Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = Vec::new();
+            // gatherReturnGotos: mark each in-edge source that ends in an
+            // explicit branch (the goto-predecessor proxy).
+            let mut marked: Vec<bool> = vec![false; *in_count];
+            let mut any_marked = false;
             {
                 let parent_rg = parent_arc.read().unwrap();
-                for slot in 0..in_count {
+                for slot in 0..*in_count {
                     let Some(edge) = parent_rg.get_in(slot) else { continue };
-                    // The source block of this in-edge.
                     let pred_arc = edge.point.clone();
-                    // A goto predecessor ends in a BRANCH or CBRANCH
-                    // (gatherReturnGotos checks the copy-map for a t_goto/
-                    // t_if node; at the basic-block level that is a trailing
-                    // branch op).
                     let last_op = pred_arc.read().unwrap().get_ops().into_iter().last();
                     let is_goto = match last_op {
                         Some(o) => {
@@ -12367,61 +12767,46 @@ impl Action for ActionReturnSplit {
                         None => false,
                     };
                     if is_goto {
-                        goto_preds.push(pred_arc);
+                        marked[slot] = true;
+                        any_marked = true;
                     }
                 }
             }
-            if goto_preds.is_empty() {
-                continue;
+            if !any_marked {
+                continue; // gotoblocks.empty() (blockaction.cc:2287)
             }
-            // Ghidra can't split ALL in edges (blockaction.cc:2309-2312) — it
-            // keeps one edge as the original RETURN. We mirror that: leave the
-            // first goto predecessor un-split (the original RETURN stays),
-            // and synthesize RETURNs for the rest.
-            if goto_preds.len() == in_count {
-                goto_preds.remove(0);
-            }
-            if goto_preds.is_empty() {
-                continue;
-            }
-            // The return-value input(s) of the original RETURN, to seed the
-            // synthesized RETURNs (CloneBlockOps::buildOpClone copies the
-            // op's inputs, funcdata_block.cc:978-990).
-            let ret_inputs: Vec<Arc<std::sync::RwLock<crate::varnode::Varnode>>> = {
-                let r = ret_op.0.read().unwrap();
-                // RETURN slot 0 is the indicator; slot 1+ is the return value.
-                (1..r.num_input()).filter_map(|s| r.get_in(s).cloned()).collect()
-            };
-            // Address to place the new RETURNs at (the predecessor's start
-            // address, like nodeSplitBlockEdge's new block address).
-            for pred_arc in goto_preds {
-                let pred_addr = pred_arc.read().unwrap().get_start_addr();
-                let pred_last = pred_arc.read().unwrap().get_ops().into_iter().last();
-                let Some(pred_last) = pred_last else { continue };
-                // Build a new RETURN op (newOp + opSetOpcode,
-                // funcdata_block.cc:972-973).
-                let new_ret = fd.new_op(1 + ret_inputs.len(), pred_addr);
-                fd.op_set_opcode(&new_ret, OpCode::CPUI_RETURN);
-                // Seed inputs: slot 0 = return indicator (0), then the
-                // return-value inputs (mirroring CloneBlockOps).
-                let ind = fd.new_constant(1, 0);
-                fd.op_set_input(&new_ret, ind, 0);
-                for (i, vin) in ret_inputs.iter().enumerate() {
-                    fd.op_set_input(&new_ret, vin.clone(), 1 + i);
+            // Selection walk (blockaction.cc:2292-2305): from the biggest
+            // in-edge index down; every marked edge is pushed.
+            let mut splitcount = 0;
+            for i in (0..*in_count).rev() {
+                if marked[i] {
+                    splitedge.push(i);
+                    retnode.push(parent_arc.clone());
+                    splitcount += 1;
                 }
-                // Insert the new RETURN right after the predecessor's last op
-                // (its trailing branch), so it becomes the block's final op.
-                fd.op_insert_after(&new_ret, &pred_last);
-                // Attach the new op to the predecessor block (so its parent
-                // is set, matching nodeSplitBlockEdge's bprime).
-                new_ret.0.write().unwrap().parent =
-                    Some(std::sync::Arc::downgrade(&pred_arc) as std::sync::Weak<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>);
-                pred_arc.write().unwrap().add_op(new_ret);
-                self.count += 1;
+            }
+            // Can't split ALL in edges (blockaction.cc:2309-2312) — pop the
+            // last pushed (smallest index) so one edge keeps the original.
+            if *in_count == splitcount {
+                splitedge.pop();
+                retnode.pop();
             }
         }
-        // Ghidra always returns 0.
-        Ok(action_status::NO_CHANGE)
+
+        let mut splits = 0;
+        for i in 0..splitedge.len() {
+            fd.node_split(&retnode[i], splitedge[i]);
+            self.count += 1;
+            splits += 1;
+        }
+        // Ghidra's apply returns 0 but does `count += 1` per split, which
+        // Action::perform translates into a rule_repeatapply re-entry of the
+        // fullloop (action.cc:332 lcount<count) — that re-entry is what
+        // re-structures the CFG after nodeSplit's structureReset. Rugra's
+        // Action trait carries the change through apply's return value (the
+        // sanctioned count-bridge; same convention as ActionMarkImplied),
+        // so the split count is returned instead of a bare 0.
+        Ok(splits)
     }
 
     // RUGRA-GLUE: Rust Action trait get_name; "returnsplit" mirrors ctor at blockaction.hh:337
@@ -13033,7 +13418,9 @@ mod tests {
         fd.bblocks.add_edge(b0.clone(), b1.clone()); // 0 -> 1 (reachable)
         // b2 has NO in-edges → unreachable.
         assert_eq!(fd.bblocks.get_size(), 3);
-        let removed = fd.remove_unreachable_blocks();
+        // Active search (checkexistence=true), matching the oracle's
+        // generateBlocks call form (flow.cc:844).
+        let removed = fd.remove_unreachable_blocks(false, true);
         assert!(removed, "should remove unreachable block 2");
         assert_eq!(fd.bblocks.get_size(), 2, "block 2 should be gone");
     }

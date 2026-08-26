@@ -1980,10 +1980,23 @@ impl Architecture {
                     self.decode_aggressive_trim(&mut decoder)?;
                 }
                 "data_organization" => {
-                    report.skipped_children.push((
-                        "data_organization".to_string(),
-                        "CSPEC-TYPEORG-STATE-0001".to_string(),
-                    ));
+                    // Ghidra architecture.cc:1268-1269:
+                    //   else if (subId == ELEM_DATA_ORGANIZATION)
+                    //     types->decodeDataOrganization(decoder);
+                    // The factory exists for the whole parse (Architecture::init
+                    // builds it before parseCompilerConfig, architecture.cc:1391);
+                    // Rugra's `types` is optional, so the canonical factory is
+                    // installed lazily here (TYPE-WIRING-0001). This is what
+                    // populates sizeOfInt/Long/Pointer/Char/WChar and the
+                    // alignment map that `TypeFactory::getBase`'s findAdd
+                    // requires — without it every downChain/get_type_pointer
+                    // interning path panics with the uninitialized-alignment-map
+                    // LowlevelError.
+                    let types = self.ensure_types();
+                    types
+                        .write()
+                        .expect("type factory lock poisoned")
+                        .decode_data_organization(&mut decoder);
                 }
                 "enum" => {
                     report.skipped_children.push(("enum".to_string(), "CSPEC-TYPEORG-STATE-0001".to_string()));
@@ -2210,20 +2223,24 @@ impl Architecture {
             );
         }
         // types->setupSizes() (architecture.cc:1350): if no
-        // data_organization was registered, set up default values.
-        match &self.types {
-            Some(_) => {
-                // TypeFactory setup is owned by CSPEC-TYPEORG-STATE-0001;
-                // the setupSizes call is recorded as executed-no-op here.
-                report
-                    .post_step_residuals
-                    .push("types->setupSizes: TypeFactory state (CSPEC-TYPEORG-STATE-0001)".to_string());
-            }
-            None => {
-                report
-                    .post_step_residuals
-                    .push("types->setupSizes: no TypeFactory attached (CSPEC-TYPEORG-STATE-0001)".to_string());
-            }
+        // data_organization was registered, set up default values. Ghidra's
+        // setupSizes reads the Architecture for the stack spacebase size,
+        // default data space address size, and default size; Rugra threads
+        // the same values from the compiler-spec address size (x86-64: the
+        // ram default data space and the RSP stack spacebase are both
+        // addr_size wide; there is no far-pointer segment op in the locked
+        // cspec, so far_pointer stays None).
+        {
+            let types = self.ensure_types();
+            types
+                .write()
+                .expect("type factory lock poisoned")
+                .setup_sizes(&crate::type_system::typefactory::SizeArchInputs {
+                    stack_spacebase_size: Some(addr_size as i32),
+                    default_data_space_addr_size: addr_size as i32,
+                    default_size: addr_size as i32,
+                    far_pointer: None,
+                });
         }
         Ok(report)
     }

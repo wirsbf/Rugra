@@ -386,7 +386,7 @@ impl HeritageInfo {
     ///   - loadGuardSearch = false
     /// Previously Rugra hard-coded delay=0/deadcodedelay=0/deadremoved=-1/
     /// load_guard_search=true, which broke the per-space staggered heritage
-    /// timing (Stack delay=1) and inverted the loadGuardSearch flag
+    /// timing and inverted the loadGuardSearch flag
     /// (Ghidra: false = search not yet performed).
     pub fn new(space: AddressSpace) -> Self {
         let (delay, deadcodedelay, has_call_placeholders) = if space.is_heritaged() {
@@ -6215,15 +6215,20 @@ mod tests {
     fn test_heritage_creation() {
         let mut h = Heritage::new();
         assert_eq!(h.get_pass(), 0);
-        // After alignment with Ghidra cc:2817/2843: Ram delay=0/deadcodedelay=0.
+        // Locked-oracle delay model (MAINDIFF-UNIQLEAK-0001): x86-64.sla
+        // space table gives ram delay=1 (unique/register=0); stack is
+        // synthesized as ram+1 = 2 (architecture.cc:566 addSpacebase).
         // getDeadCodeDelay reads infolist; build_info_list populates it.
         h.build_info_list();
-        assert_eq!(h.get_dead_code_delay(AddressSpace::Ram), 0);
-        // deadRemovalAllowed = (pass > deadcodedelay) = (0 > 0) = false.
+        assert_eq!(h.get_dead_code_delay(AddressSpace::Ram), 1);
+        // deadRemovalAllowed = (pass > deadcodedelay) = (0 > 1) = false.
         // (Ghidra prevents dead-code removal before any heritage pass.)
         assert!(!h.dead_removal_allowed(AddressSpace::Ram));
-        // Stack has delay=1.
-        assert_eq!(h.get_dead_code_delay(AddressSpace::Stack), 1);
+        // Stack has delay=2 (ram delay 1 + 1, architecture.cc:566).
+        assert_eq!(h.get_dead_code_delay(AddressSpace::Stack), 2);
+        // Register/unique have delay=0 (x86-64.sla).
+        assert_eq!(h.get_dead_code_delay(AddressSpace::Register), 0);
+        assert_eq!(h.get_dead_code_delay(AddressSpace::Unique), 0);
     }
 
     /// Build a STORE op targeting the stack space, mark it spacebase, and

@@ -133,12 +133,24 @@ impl AddressSpace {
     /// Heritage delay for this space — number of heritage passes before
     /// this space's varnodes are first heritaged. Faithful to
     /// `AddrSpace::getDelay()` (space.hh). Ghidra reads this from the
-    /// .sla spec (space.cc:325); Rugra's simplified enum model uses the
-    /// Ghidra defaults: Stack=1 (so stack varnodes get a 2nd heritage pass
-    /// after register/unique), all others=0.
+    /// .sla spec space record (`delay` attribute, sleighbase.cc:292
+    /// decodeSlaSpace → `new AddrSpace(..., delay, deadcodedelay)`).
+    /// Locked x86-64 oracle values (sleigh_specs/x86-64.sla space table,
+    /// verified byte-level: `60 a5 cc 71 83 "ram" c9 21 83 e0 a3 10
+    /// e0 aa 21 81 ...` = ELEM_SPACE name="ram" index=3 delay=1):
+    ///   OTHER/const=0, unique=0 (size 4), ram=1, register=0.
+    /// The stack space is NOT in the .sla — it is synthesized by
+    /// `Architecture::decodeStackPointer` → `addSpacebase`
+    /// (architecture.cc:566) with `SpacebaseSpace(...,
+    /// basespace->getDelay()+1, ...)` = ram(1)+1 = **2** for x86-64.
+    /// MAINDIFF-UNIQLEAK-0001: Rugra previously had Ram=0/Stack=1,
+    /// heritaging ram one pass too early (dead removal on ram from pass
+    /// 0 → "Heritage AFTER dead removal" bump/restart) and the stack one
+    /// pass before the oracle's first stack pass at pass 2.
     pub fn get_delay(&self) -> i32 {
         match self {
-            AddressSpace::Stack => 1,
+            AddressSpace::Ram => 1,
+            AddressSpace::Stack => 2,
             _ => 0,
         }
     }

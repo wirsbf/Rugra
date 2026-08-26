@@ -1,5 +1,32 @@
 # `ruleaction.rs` API Reference
 
+## 2026-08-26：`RulePtrsubCharConstant` 完整守护链接通（MAINDIFF-STRCONST-0001）
+
+此前实现以 `Funcdata::string_table` 命中代理 `Scope::isReadOnly` +
+`StringManager::isString`，且无条件把 PTRSUB 转 COPY（跳过 pushConstFurther
+传播半段）。本次对齐 `RulePtrsubCharConstant::applyOp`
+（ruleaction.cc:7354-7403）与 `pushConstFurther`（cc:7323-7340）的完整语义：
+
+- 守护链：spacebase 输入（cc:7357-7361）→ 常量偏移（cc:7363-7364）→
+  输出 `getTypeDefFacing` 为 TYPE_PTR 且 ptr-to `isCharPrint()`
+  （cc:7366-7369）→ `Funcdata::is_scope_read_only(symaddr,1,op_addr)`
+  （Database 属性区间通道，cc:7372）→ 共享
+  `Architecture.string_manager.is_string_typed(symaddr, charsize, opaque)`
+  （cc:7375，charsize/opaque 按 stringmanage.cc:166 虚调用投影 basetype）。
+  规则与 `PrintC::pushPtrCharConstant`（printc.cc:1698）读同一个
+  Address-keyed StringManager，一次正/负缓存两处同答案。
+- 传播半段（cc:7378-7391）：非 addr-force 输出先给每个 descendant 一次
+  `push_const_further`（PTRADD 槽 0 常量增量折叠，`addval *= in(2)`），全部
+  传播成功才 `op_destroy` PTRSUB；任一失败或 addr-force 走 COPY 转换
+  （cc:7395-7400，char* 类型随常量携带）。
+- descendant 快照对应 oracle 迭代器先 `++iter` 再变换的遍历健壮性。
+
+E2E：hugehelp 三个合法字符串地址（0x10ea40/0x111270/0x113ad0）折叠为
+字面量，三个非法 UTF-8 地址保持 `&DAT_*` 形态（isString 负缓存拒绝），
+与 golden 逐字节一致。
+
+**源代码路径**: `src/ruleaction.rs`
+
 ## 2026-08-24：112 个 Rule 名对齐锁定 oracle 构造器字符串
 
 `impl Rule for X` 的 `get_name` 字面量全部改为 oracle ctor 精确名
@@ -544,13 +571,31 @@ applyOp 在 `opSetOpcode(op,CPUI_COPY)` **之后**才读 `op->code()`
 
 ### 2026-06-26（续）：RuleScarry + RuleSborrow（trivial 分支）
 
-#### `pub struct RuleScarry`（ruleaction.cc:3434-3510，trivial 分支 3460-3466）
-`scarry(V, 0) => false`（加 0 无有符号溢出）。AddExpression 形式（3475-3510）待补。
+#### `pub struct RuleScarry`（ruleaction.cc:3430-3493，全量）
+#### `pub struct RuleSborrow`（ruleaction.cc:3361-3412，全量）
 
-#### `pub struct RuleSborrow`（ruleaction.cc:3381-3432，trivial 分支 3390-3395）
-`sborrow(V, 0) => false`。AddExpression 形式待补。
+**2026-08-25（MAINDIFF-UNIQLEAK-0001）补齐 AddExpression 深形式**（此前仅 trivial 分支）：
 
-测试：ruleaction::tests +3（Scarry 零→COPY(0)；Sborrow 零→COPY(0)；Sborrow 非零不变）。
+- trivial：`scarry(V,0)/scarry(0,V)/sborrow(V,0) => COPY(0)`。
+- SBORROW 深形式（ruleaction.cc:3376-3410）：遍历 SBORROW 输出的后代，找
+  `INT_EQUAL/INT_NOTEQUAL`，其另一输入是 `INT_SLESS(x, 0)`；用
+  `AddExpression::gather_two_terms_subtract(avn, bvn)` 与
+  `gather_two_terms_root(xvn)` 比对，等价则折叠：
+  - `sborrow(V,W) != (V-W s< 0)  =>  V s< W`（compop→INT_SLESS）
+  - `sborrow(V,W) == (V-W s< 0)  =>  W s<= V`（compop→INT_SLESSEQUAL）
+- SCARRY 深形式（ruleaction.cc:3447-3492）：常量侧归一化（slot0 常量则交换
+  avn/bvn），排除整型最小值（signbit mask）；`gather_two_terms_add` 比对；
+  折叠时把比较常量换成 `-W & mask` 的 newConstant：
+  - `scarry(V,#W) != (V+#W s< 0)  =>  V s< -#W` 等 4 形式。
+
+实现依托 `src/expression.rs` 已有 `AddExpression`/`functional_equality`
+（expression.cc:299-526）。E2E 效果：curl main 的 gcc 循环守卫模式
+`sborrow(argc,1) != (argc-1 s< 0)` 折叠为 `argc < 2`（与 12.0.4 golden 一致），
+消除 implied flag varnode 走 `pushUnnamedLocation`（printc.cc:1938）打印
+`register0x…` 裸名并被文本回填声明的泄漏类。
+
+测试：ruleaction::tests 3 个（Scarry 零→COPY(0)；Sborrow 零→COPY(0)（fixture
+补 output 以镜像 oracle `op->getOut()` 不变量）；Sborrow 非零不变）。
 
 ### 2026-06-26（续）：RuleAndDistribute
 
@@ -1226,9 +1271,22 @@ LOAD→COPY 转换后：若 `refvn = op->getOut()` 带 spacebase_placeholder 标
 abort placeholder）。闭合 CALLSPEC-0001 中登记的
 "resolveSpacebaseRelative is still absent" 残差。
 
-### 2026-08-26：RulePieceStructure 重访守卫（ruleaction.cc:7610/7642）
-- `applyOp` 开头补 `if (op->isPartialRoot()) return 0`（cc:7610），重装
-  结束补 `op->setPartialRoot()`（cc:7642），依托 op.rs 新增的
-  CONCAT_ROOT addlflag。修复前规则对同一 PIECE 树无限重触发
-  （每次 apply 返回 1，ActionPool 永不收敛），curl main 直接 timeout；
-  修复后 main 正常收敛输出，差分门禁 defects=0。
+## RulePtrArith/AddTreeState 类型链补齐 + RulePieceStructure 再入闸门（RULE-PTRARITH-ADDTREE-0001，本次新增）
+
+- `AddTreeState::assign_propagated_type`（ruleaction.cc:6342
+  `AddTreeState::assignPropagatedType`）：PTRADD/PTRSUB 新建 op 的输出类型
+  由指针输入经 opcode `propagateType`（→ `propagateAddIn2Out` downChain）
+  推导；`build_tree` 在 `data.isTypeRecoveryExceeded()` 时于 PTRADD 段与
+  PTRSUB 段各调用一次（ruleaction.cc:6502/6514）——传播循环已停时由
+  规则自身盖章。此前该链完全缺失。
+- `AddTreeState::build_tree` 的 PTRSUB 段 `setStopTypePropagation` 现在仅在
+  `size != 0` 时设置（ruleaction.cc:6516-6517）；此前无条件设置。
+- `RulePieceStructure::apply_op` 补上 `op->isPartialRoot()` 再入闸门与
+  `op->setPartialRoot()`（ruleaction.cc:7610/7642，flag = PcodeOp
+  addlflags `concat_root` 0x100，见 op.rs `is_partial_root`/`set_partial_root`）。
+  缺失时 cleanup 池对同一 CONCAT 根每轮重走并返回 change，
+  universal 尾部永不收敛（main 全量超时的根因）。
+- 双侧 fixture：`tests/oracle/ptrarith_addtree_1204.{cc,rs}` + runner
+  `tools/run_ptrarith_addtree_oracle.sh`，5 用例（PTRADD 多倍数路 /
+  PTRSUB 子类型路 / 非倍数 valid=false / 未类型化基座 / 未启动 type
+  recovery）10 条记录与锁定 12.0.4 oracle 逐字节一致。

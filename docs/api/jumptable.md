@@ -509,3 +509,18 @@ recover_model/recover_addresses/try_recover/recover_jump_tables。ActionSwitchNo
 ## calcRange/markModel 集成与注释行号勘误（2026-08-23，root）
 
 dbcc9cb 集成：守卫交集就地写回、isBoolOutput 分支、常量无 early-return、markModel branch 判空跳过。复核域外 4 处既有注释行号漂移已修正（recoverModel 1437→1418、1453→1434、1484→1462、1293→1274）。
+
+## recoverMultistage/checkForMultistage 移植（2026-08-25，JUMPTABLE-PIPELINE-0001 段2）
+
+- `JumpTable::recover_multistage(fd)`（jumptable.cc:2653-2675）：saveModel → 暂存旧
+  addresstable → loadpoints.clear → recover_addresses_classified；两类异常
+  （JumptableThunkError/LowlevelError）同一恢复体（restoreSavedModel + 还原地址表 +
+  "Second-stage recovery error" 警告）；无论成败 `partial_table=false` +
+  clearSavedModel。loadpoints 失败时**不**还原（cc:2659 清空后无还原语句）。
+- `JumpTable::check_for_multistage(fd)`（jumptable.cc:2847-2860）：三条前置
+  （单条目/非 partial/indirect 已链接）+ `Override::query_multistage_jumptable`
+  命中时置 `partial_table=true` 并返回 true。
+- `FlowInfo::check_multistage_jumptables`（flow.cc:1408-1417）随之从结构占位升级为
+  完整移植：被提升表间接 op 推回 `tablelist`（JUMPTABLE-MULTISTAGE 缺口关闭）。
+- `Funcdata::stage_jump_table` isPartial 分支改走 recover_multistage（此前
+  RUGRA-GAP 注释声称未移植）。

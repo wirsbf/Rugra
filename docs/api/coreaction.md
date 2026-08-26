@@ -1728,3 +1728,58 @@ stack pentry 且无锁定 stack 参数占用 placeholder 角色时非空（Rugra
 placeholder LOAD 作为最后一个 CALL 输入（`fc->create_placeholder`）。该输入
 使 CALL 满足 `usesSpacebasePtr()`，`RuleIndirectCollapse` 的 else-if 分支
 （ruleaction.cc:3223）据此折叠 unknown-effect guard INDIRECT。
+
+## 2026-08-25：ActionSwitchNorm 去自创预扫（JUMPTABLE-PIPELINE-0001 段2）
+
+`ActionSwitchNorm::apply`（coreaction.cc:4548-4560）不再在 apply 开头做原地
+`jumptable::recover_jump_tables(fd)` 预扫——那是 flow 期恢复未接线时代的自创补丁。
+oracle 中所有 `data` 上的 JumpTable 均在 flow 追踪期
+（`FlowInfo::recoverJumpTables` → `Funcdata::recoverJumpTable`）已恢复完毕，
+该 Action 只做规范化（matchModel/recoverLabels/foldInNormalization/foldInGuards，
+fold 阶段仍为 L2 登记缺口）。apply 现镜像 cc:4559 恒返 0（NO_CHANGE），
+unlabelled 计数仅保留本地变量。
+
+## 2026-08-25（ACTIONDW-COPYDEF-MARKING-0001）：ActionDirectWrite 收集段四偏差修复
+
+`ActionDirectWrite::apply`（coreaction.cc:1350-1434）收集段对齐修复，四处真偏差（MAINDIFF-DEADSTORE-0001 诊断发现）：
+
+1. **COPY-def 误标（cc:1381-1394）**：oracle 对 COPY 输出收集期**不**标 directwrite（isStackStore 追踪例外）；旧代码 `else if def_opc != PIECE && != SUBPIECE` 把 COPY 一起标+入队。现按 oracle 分支序：COPY 单列，仅 `isStackStore()` 时做源追踪。
+2. **possibleInputParam 分支缺失（cc:1368-1371）**：非 persist/spacebase 输入若 `FuncProto::possibleInputParam` 为真则标记。新增 `FuncProto::possible_input_param`（fspec.cc:4366-4387 完整前奏：dotdotstat 短路 + voidinputlock 门 + 锁定参数 justifiedContain==0 判定；Rugra 无锁定参数状态时该环 inert，与兄弟移植 characterize_as_input_param 同一降级口径）。
+3. **isStackStore 源追踪（cc:1382-1393）**：COPY 输出带 stack_store flag（RuleStoreVarnode 设置）时，追源**单层**解一层 COPY，源 def 为 marker（INDIRECT）则标记+入队；两层 COPY 链不标记（oracle 单层解开的边界）。
+4. **marker(INDIRECT) 收集分支（cc:1401-1408）**：`!propagateIndirect && INDIRECT` 时，in(0) 地址≠输出地址（活动 COPY）或输出 persist → 标记但**不**入队。结构性新增 `propagate_indirect` 字段（coreaction.hh:244），protorecovery_a=true / protorecovery_b=false 双注册（action.rs 对应 cc:5497/:5498/:5680/:5681）。
+
+Phase-2 推播门（cc:1427-1429）同步修正为 `propagate_indirect || !INDIRECT || is_indirect_store`（旧代码硬编码 false 且注释自相矛盾）。fixture `tests/oracle/actiondw_copydef_1204` 锁定全部六 case 双注册行为（24 records 字节一致 MATCH），包括 oracle 深层语义：**分支④的 no-push 标记使 phase-2 的 `!isDirectWrite` 守卫跳过 mark+push，永久阻断经该 varnode 的 taint 传播**（w_out=0 判别）。
+### ActionUnreachable 参数对齐（2026-08-25，HTTPD-STRIPPREFIX-ADDDESCEND-0001）
+- `ActionUnreachable::apply` 调用
+  `remove_unreachable_blocks(true, false)`（issuewarning=true，
+  checkexistence=false 走缓存 BLOCKS_UNREACHABLE 标志），对齐
+  coreaction.cc:3460。
+## ActionInferTypes setTypeRecoveryExceeded 接线（RULE-PTRARITH-ADDTREE-0001，本次新增）
+
+localcount==7 告警分支补上 `data.setTypeRecoveryExceeded()`（coreaction.cc:5393，
+此前只 warningHeader + 计数）。该旗标是 RulePtrArith buildTree 在传播
+停止后自行给新建 PTRADD/PTRSUB 输出盖章（assignPropagatedType）的前提。
+同轮次另确认：PTRSUB/PTRADD/INT_ADD 指针臂依赖 `fd.arch.types`
+TypeFactory（`propagateAddIn2Out` downChain），E2E 驱动侧
+`worker_architecture()` 现按 `Architecture::init`（architecture.cc:1398
+buildTypegrp + :1269 ELEM_DATA_ORGANIZATION + :1350 setupSizes）装配
+带 `<data_organization>` 解码的真实工厂——此前工厂缺失使全部指针传播臂
+静默失效，RulePtrArith 因此从未触发。
+## ActionSetCasts 类型转换输入/输出令牌 + MarkImplied cover + ReturnSplit（MYFWRITE-TEMPVAR-0001，2026-08-26）
+
+1. **castInput 专用臂**（coreaction.cc:2662 `getInputCast` 派发）：LOAD 走
+   `load_input_cast`（typeop.cc:440-470，slot 1 地址指针转换，`*(char **)stream`
+   形态），STORE 走 `store_input_cast`（typeop.cc:520-555，slot 1 尺寸失配转
+   指针/slot 2 castStandard 转值，`(char *)__s` 形态）。专用臂返回值即最终
+   cast 决策（cc:2662-2669 不再二次门控），插入 CAST op 于目标 op 之前。
+2. **castOutput LOAD 令牌**（typeop.cc:472-485 `getOutputToken`）：LOAD 的
+   token 是地址输入 high 类型的 pointee（尺寸匹配输出时），否则输出自身
+   high——这是 `(FILE *)stream->_IO_read_ptr` 输出转换的来源。
+3. **ActionMarkImplied**（coreaction.cc:3379-3395）：LOAD 跨 STORE 判定改用
+   cover INTERIOR 包含（cover.cc:413-424 max==2 形态 + boundary==0），替换
+   原整块保守拒绝；同 spacebase 偏移的交叉仍保守拒绝（isPossibleAlias
+   未移植）。CALL 交叉判定同步改 interior-only（尾部边界不算交叉）。
+4. **ActionReturnSplit**（blockaction.cc:2280-2315）：重写为 marked-edge
+   选择走 + `fd.node_split`（此前为手工合成 RETURN，破坏 staged structurer
+   稳定索引不变量的替代路径已弃用）；count 经 apply 返回值承载（Action
+   count-bridge 约定）。

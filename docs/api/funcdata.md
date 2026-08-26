@@ -1699,3 +1699,102 @@ MERGE-CLEAR-LIFECYCLE-0001（上文）记录的 `funcdata::` 2 个预存在失�
 - 验收：curl E2E main 从 timeout（>10s 无输出）恢复收敛，全文件
   in_ram_* irregular-input 命名 66→0，差分门禁 defects=0/numbering=0
   （124 函数）。
+## 2026-08-25：`JUMPTABLE-PIPELINE-0001` 段2 — stageJumpTable/recoverJumpTable 分级恢复
+
+`Funcdata::stage_jump_table(partial, jt, op, flow_state)`（funcdata_block.cc:491-548）
+现为完整分级恢复：partial 首次进入时置 `JUMPTABLERECOVERY_ON` → `truncated_flow`
+克隆 → "jumptable" 策略组（`ActionDatabase` 共享 `arch.allacts` 槽位或等价本地库）
+reset+perform，perform 的 LowlevelError 映射 `warning + fail_normal`（cc:514-518）；
+`find_op(SeqNum)` 失败/opcode/地址不符返回 `Err(Lowlevel("Bad partial clone"))`
+——这是 C++ throw 的穿透通道（经 recoverJumpTable/recoverJumpTables/generateOps 直达
+followFlow 调用方，cc:522-523）。`partop` dead → `success`；return-address 复制测试 →
+`fail_return`（cc:527-529）。`set_load_collect` 读 `TruncatedFlowState::flags` 的
+RECORD_JUMPLOADS 位（cc:532 `flow->doesJumpRecord()`）；`set_indirect_op(partop)`
+顺带写 `opaddress`（jumptable.hh:599）。恢复分支（cc:534-545）：`is_partial()` →
+`recover_multistage`，否则 `recover_addresses_classified`，Thunk → `fail_thunk`、
+Lowlevel → `warning + fail_normal`。
+
+`Funcdata::recover_jump_table`（cc:639-673）链接既有表（override/partial 经
+stage 重试）或 trial 表分级恢复，成功后 `set_indirect_op(op)` 重链 + push
+`jump_tables`。所有 stage 失败码沿 `mode` 传出，LowlevelError 走 `Result` 通道。
+
+E2E：getparameter.constprop.0 @0x3fd5 88 条目恢复（flow 665 ops/36 块 → 1866/138），
+glob_set @0x4c45 35 条目恢复；124 函数 defects=0/numbering=0。
+## 2026-08-25：MAINDIFF-UNIQLEAK-0001 — linkSymbol 全局符号半边
+
+### `Funcdata::query_global_symbol_hit`（database.cc:1263 Scope::queryProperties 全局半边）
+
+`link_symbol`（funcdata_varnode.cc:1156）中 `localmap->queryProperties` 的
+父作用域走查半边：Ghidra 的 `Scope::queryProperties`（database.cc:1263-1281）
+经 `mapScope` + `stackContainer`（database.cc:943-975）从 local scope 走到
+GLOBAL scope 并返回最小包含 SymbolEntry。ram 地址命中全局 Symbol
+（stdin/config 等 ELF/DWARF 全局）时，`handleSymbolConflict` 早臂
+（funcdata_varnode.cc:1000-1003）把 entry 挂到 Varnode 的 HighVariable，
+**不**在 ScopeLocal 建符号 —— `emitScopeVarDecls`（printc.cc:2254-2276，
+只走 ScopeLocal 及其子）因此永不声明它。
+
+Rugra 通道（保真序）：
+1. 真 `Database` 图（`Architecture::symboltab`），经
+   `query_properties_parent_scope` 同容器语义查询；
+2. driver `symbol_table` 名字代理（仅精确地址命中，无大小）。
+
+空间门：仅 Ram varnode 查询（全局 scope 只拥有 ram 区间；Rugra SymbolEntry
+地址无空间维度，不开门会跨空间碰撞）。命中时把全局符号名发布到 high
+（对齐 `vn->setSymbolEntry(entry)` + HighVariable 符号解析），返回 None
+跳过本地建符号臂（对齐 linkSymbols cc:2963 `sym==0` 跳过 + cc:2971
+`isGlobal` 门控的 finalizeDatatype）。
+
+修复前：main 中 37 个全局来源 heritage 输入被铸成死 `in_ram_XXXX` 声明
+（golden 0）。修复后 main 声明区 163→96 行。
+
+配套 driver：`curl_decompile.rs` worker_architecture 播种 `symboltab`
+（DWARF DebugGlobalDatabase + ELF STT_OBJECT）。
+### removeUnreachableBlocks 忠实重写 + descend2Undef 接线（2026-08-25，HTTPD-STRIPPREFIX-ADDDESCEND-0001）
+- `remove_unreachable_blocks(issuewarning, checkexistence)` 完整对齐
+  funcdata_block.cc:346-393：checkexistence 快扫（首个非入口且无 immed_dom
+  的块）或缓存 `blocks_unreachable` 标志门控；`collect_reachable`
+  （block.cc:2154）取不可达集；逐块 setDead（+每块头警告）→
+  `branch_remove_internal(blk,0)` 清出边（销毁分支 op + 修补后继 phi）→
+  `block_remove_internal(blk, true)`（descend2Undef + **全部** op 销毁）→
+  `structure_reset()`。
+- 删除两个自创降级：① "unreachable>=5 且 >5% 则跳过"保守门禁（Ghidra 无
+  此门禁；正是 httpd ap_stripprefix/ap_ht_time/ap_update_vhost_from_headers/
+  ap_getword 的 "Free varnode has multiple descendants" panic 根因——不可达
+  块里的活 op 继续读 free varnode，RuleCondNegate 的 op_bool_negate 二次
+  addDescend 即炸）；② "有外部后代的 op 保留 alive"的 mark_dead 近似
+  （Ghidra blockRemoveInternal(true) 销毁全部 op，被搁浅的读先经
+  descend2Undef 换成 0xBADDEF 常量）。
+- `descend2_undef`（funcdata_varnode.cc:543-583）修死-parent 判定：改查
+  块级 DEAD flag（cc:558），原 `parent.is_none()` 近似在"先全标 dead 再逐块
+  删"的顺序下漏跳死块读者；MULTIEQUAL 臂经 slot 前驱块尾插 COPY、INDIRECT
+  臂前插 COPY、普通 op 直插常量。
+- `block_remove_internal` 不可达臂接线 `descend2_undef`（cc:304-310 的
+  undef 返回值控制一次性警告），移除 RUGRA-GAP 注释。
+- `descendants_outside`（funcdata_block.cc:234-241）改查读者 op 的**父块**
+  DEAD flag（原查 op 自身 is_dead，删块序中恒 false → 误报）。
+- `move_out_edge` 忠实重写（block.cc:1439 moveOutEdge = replaceInEdge
+  block.cc:160-173）：捕获目标 in-slot i 后，对源块做
+  half_delete_out_edge(rev)（成对协议），目标**保留**槽位 i 重指向新源
+  （reverse_index=新源 size_out），新源 append 出边（rev=i）；原实现
+  "源出边原地改指 + 新目标 append 入边 + 旧目标 Vec::remove 入边"是单侧
+  滑动（其他源的 reverse_index 不修正）且仅 BlockBasic——ActionDoNothing/
+  RedundBranch 的 splice 早期即污染 bblocks。
+
+## typerecovery_exceeded 旗标（RULE-PTRARITH-ADDTREE-0001，本次新增）
+
+`funcdata_flags::TYPE_RECOVERY_EXCEEDED`（Ghidra `typerecovery_exceeded`，
+funcdata.hh:72 = 0x4000；Rugra 重映射位空间取 bit 14）+
+`Funcdata::is_type_recovery_exceeded`（funcdata.hh:152）/
+`set_type_recovery_exceeded`（funcdata.hh:182，只置位、函数生命周期内
+不清除，`clear()` 亦不重置——与 Ghidra 一致）。置位点 =
+`ActionInferTypes::apply` localcount==7 分支（coreaction.cc:5393）；
+消费点 = `AddTreeState::build_tree` 的 `assignPropagatedType`
+（ruleaction.cc:6502/6514）：传播循环停止后由 RulePtrArith 自己给新建
+PTRADD/PTRSUB 输出盖章类型。
+## switch_edge 半边重建（MYFWRITE-TEMPVAR-0001，2026-08-26）
+
+`switch_edge`（block.cc:1489-1495 经 FlowBlock::replaceOutEdge block.cc:178-191）：
+补齐旧目标的 halfDeleteInEdge（reciprocal reverse_index）、out-edge 重指向时
+刷新 reverse_index 至新目标 in-edge 规模、新目标 push_back 镜像 in-edge 且
+flags 随出边携带。此前仅指针改写使 nodeSplit 复制块不可达/原块 in-edge 过剩，
+returnsplit 永久重入。

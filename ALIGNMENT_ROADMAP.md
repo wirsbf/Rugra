@@ -103,7 +103,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | 13 | `merge.cc` | `merge.rs` | 🔧 **L2（2026-08-24 ADDRTIED 窄地基已集成）** | main `e9a0b7a`（reviewed source `c8001f5`）覆盖 processor/spacebase、exact-run 首成员 flags、free 跳过、max-overlap、offset-aware `groupWith` 与 forced-error 的 8-line scoped projection；冷启动双侧8/8逐字节相同、独立复核 APPROVE。my_fwrite A/B 仅 skeleton45→44、decl30→29，全语料 implied 警告259→136，故它是 split 后放大器而非首因，整体仍 `MISMATCH`。残差保持：未知 `Other(non-1)`、`Result`→panic production boundary、grouped required/unifyAddress、comparator/边界/原生group顺序及完整错误状态；`mergeOp` 重链、persistent StackAffectingOps/protoPartial、`groupPartials`、copy-trim 首次出现序、完整 markImplied/cache/partial-piece 仍未闭合。不得据窄 fixture 恢复 L3。 | `merge.cc`, `merge.hh` |
 | 14 | `variable.cc` | `variable.rs` | 🔧 L2 | HighVariable 未原子建立 VN↔High 关系，annotation/后建 VN 挂接错误，强 Arc 形成环，instances 未按 compareJustLoc 维持顺序，销毁与 dirty 传播未闭合 | `variable.cc` |
 | 15 | **`varmap.cc`** | `varmap.rs` | 🔧 L2 | **RangeHint/AliasChecker/MapState/ScopeLocal 算法层 1:1 对齐**；已接入 printc；**Stack-spacebase 解析**已实现（gather_spacebase 递归解析 RSP/frame_base 链）。**2026-06-29 重大进展**：ActionSpacebase 接入主管线（coreaction.cc:5506），标记 RSP 输入为 SPACEBASE → varmap/printc 正确识别栈指针 → **curl uVar 碎片 149→0**。**剩余**：alias_block_level、LoadGuard addGuard；部分 LOAD/STORE 为 RIP-relative 全局（非栈）仍需类型传播配合 | `varmap.cc` |
-| 16 | `funcdata.cc` + 3子文件 | `funcdata.rs` | 🔧 L2 | 核心功能已实现；缺少 funcdata_block/op/varnode 的部分高级 API | `funcdata.cc`, `funcdata_block.cc`, `funcdata_op.cc`, `funcdata_varnode.cc` |
+| 16 | `funcdata.cc` + 3子文件 | `funcdata.rs` | 🔧 L2 | 核心功能已实现；缺少 funcdata_block/op/varnode 的部分高级 API。**2026-08-26 mapGlobals 真移植落地**（MAINDIFF-GLOBAL-0001，funcdata_varnode.cc:1653-1719 → map_globals 四类决定性语义全对齐：space-major 组循环+跨 space break、index 局部置 0、inconsistentuse 单 bool、maxvn 严格更大者；RAM 组走 Database queryProperties 父作用域通道）；stage/recover jumptable 分级恢复（JUMPTABLE-PIPELINE-0001）、removeUnreachableBlocks 忠实重写、linkSymbol 全局半边 query_global_symbol_hit（UNIQLEAK）已并入 | `funcdata.cc`, `funcdata_block.cc`, `funcdata_op.cc`, `funcdata_varnode.cc` |
 
 ---
 
@@ -207,7 +207,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 `RuleDoubleShift`, `RuleIdentityEl`, `RuleSignShift`, `RuleSubZext`, `RuleConcatShift`,
 `RuleShiftCompare`, `RuleAndCompare`, `RuleTestSign`, `RuleEquality`, `RuleLessNotEqual`,
 `RuleLessEqual`(apply), `RuleRightShiftAnd`, `RuleHighOrderAnd`, `RuleAndZext`, `RuleZextSless`,
-`RuleScarry`(trivial), `RuleSborrow`(trivial)
+`RuleScarry`, `RuleSborrow`（2026-08-25 MAINDIFF-UNIQLEAK-0001 补齐 AddExpression 深形式，ruleaction.cc:3376-3410/3447-3492，依托 expression.rs）
 
 **✅ 全部已移植（2026-07-04 核实）** — 主管线 oppool1/oppool2/cleanup 的 Rule 差距为 0。
 之前此表标注的 22 个"缺失"Rule 经逐行对比 Ghidra coreaction.cc 注册列表 vs Rugra action.rs 注册列表，确认全部已移植并注册到主管线。

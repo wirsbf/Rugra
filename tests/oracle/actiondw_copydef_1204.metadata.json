@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "fixture_id": "ACTIONDW-COPYDEF-0001",
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "instrumentation_policy": "Only the temporary archived oracle source is patched: Varnode and PcodeOp each receive a one-line public fixtureSetFlag(uint4) setter (persist/spacebase/indirect_creation/indirect_store main-flag planting that production analysis would derive). The locked Ghidra worktree and production APIs are unchanged."
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+  },
+  "analysis_options": {
+    "entry": "Direct ActionDirectWrite::apply for both constructor registrations (propagateIndirect=true=protorecovery_a and false=protorecovery_b) on a fresh cleared Funcdata per case",
+    "funcproto_state": "unlocked zero-param FuncProto with the architecture default model (BfdArchitecture defaultfp on the Ghidra side; the production cspec parse worker_architecture path plus fd.set_arch on the Rust side)",
+    "registrations": [
+      "a",
+      "b"
+    ],
+    "worklist": "vector stack, push_back/pop_back LIFO (not directly observable: only final directwrite flags are dumped)",
+    "normalization": "Stable fixture names replace process-local object addresses. The iop-space Varnode offset encodes the referenced PcodeOp pointer on both sides (newVarnodeIop / new_varnode_iop) and is rendered as the referenced op's fixture name — zero information loss for this action, which never reads iop offsets. The spacebase flag is planted on r11 and the equal-address isIndirectStore construction uses register 0xe0 because Ghidra's Funcdata::setInputVarnode tail (funcdata_varnode.cc:365-371) derives the unaffected flag from the model effectlist for RSP/unique-space storage — a bank-level input-state derivation Rugra has not ported; those register choices keep every input byte-identical without normalization. No flags, masks, aliases, order, control flow, or other state is normalized. Ghidra FSPEC has no Rust AddressSpace representation and is not constructed."
+  },
+  "assets": {
+    "source_policy": "Materialize all specifications and the curl input from verified Git blob IDs at the pinned Rugra provenance commit; never consume working-tree copies.",
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.sla",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64.pspec",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86-64-gcc.cspec",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:sleigh_specs/x86.ldefs",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "source_ref": "34a3febff160031c265cfbd841a94022c68c2c19:examples/curl",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "bfd": {
+      "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "library_path": "/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+    }
+  },
+  "rugra_source": {
+    "base_commit": "e1140912464f0e4912143de9f4fa9c6aeba0f644",
+    "base_tree": "ad1711e0973938e209d7d4a6542fec5a6b41b962",
+    "base_src_tree": "4f9ebbe096e91e290ea0736add7482da1ed44465",
+    "base_sleigh_shim_tree": "c7729d9d1554dc62c486bcd7d58fdbf44bebb97d",
+    "base_coreaction_blob": "474ce0b947f2ec3c3947848ade082fbb7a0e1a77",
+    "base_fspec_blob": "87e2e62276218b859ff357ad110d936ca8c45e63",
+    "base_varnode_blob": "52b68f6550bb4656ab284384d12ae749082084e0",
+    "base_action_blob": "a945ae46bb5a768189a0487c299c2a256b08df8b",
+    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs",
+      "src",
+      "sleigh_shim"
+    ],
+    "archive_policy": "Extract only the explicit dependency closure from the pinned commit, then overlay the four declared live source files.",
+    "base_closure_hash_scheme": "sha256 of rugra-actiondw-copydef-base-v1 plus sorted length-prefixed relative paths and pinned archive contents",
+    "base_closure_sha256": "556db9b36a05dd44be43e338d232e96434062b8d110e631606abd75fd1519f5d",
+    "overlays": {
+      "src/coreaction.rs": {
+        "sha256": "2a42ae2a4284d102321269cd19cf0c62b7af328080413c59dc0eaeb1337d36aa"
+      },
+      "src/fspec.rs": {
+        "sha256": "e84d6d3babe67cde89b9e9107df3479013098466a57803eac71b0e35ecf2ac35"
+      },
+      "src/varnode.rs": {
+        "sha256": "d6e178278cb3e00e74e98afaceeb049b5c046de7b13e7f46f4b7defdeb7f5e5e"
+      },
+      "src/action.rs": {
+        "sha256": "4ff5285ccf0a779c270ec2117a79b7d0d24b579c04f6a40f599db3d3f1832125"
+      }
+    }
+  },
+  "host_tools": {
+    "g++": "g++ (GCC) 16.2.1 20260810",
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
+    "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)",
+    "platform": "Linux 7.1.8-arch1-3 x86_64"
+  },
+  "input_manifest": {
+    "binary": {
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a"
+    },
+    "function": {
+      "name": "GetStr",
+      "entry": 14032,
+      "size": 0
+    },
+    "cases": [
+      "param_inputs",
+      "stackstore_trace",
+      "indirect_marker",
+      "phase2_push",
+      "indirect_store_push",
+      "noncopy_defs",
+      "void_input_lock"
+    ],
+    "sha256": "6b1766ff63fd5e469b291f538f86c98121b0055ccf8d6ebd7e073da6aed7c46a"
+  },
+  "coverage": {
+    "possible_input_param_input_branch": "MATCH",
+    "copy_def_not_collected": "MATCH",
+    "copy_of_marked_param_tainted": "MATCH",
+    "spacebase_input_branch": "MATCH",
+    "stackstore_single_level_trace": "MATCH",
+    "stackstore_unrolled_boundary": "MATCH",
+    "stackstore_unwritten_source": "MATCH",
+    "plain_copy_of_marker_out": "MATCH",
+    "stackstore_constant_taint_interplay": "MATCH",
+    "marker_indirect_addr_change": "MATCH",
+    "marker_indirect_persist_leg": "MATCH",
+    "marker_multiequal_no_branch": "MATCH",
+    "marker_mark_blocks_phase2_taint": "MATCH",
+    "persist_nonmarker_def": "MATCH",
+    "phase2_push_gate_registration": "MATCH",
+    "phase2_indirect_store_push_leg": "MATCH",
+    "piece_subpiece_exclusion": "MATCH",
+    "constant_and_indirectzero": "MATCH",
+    "voidinputlock_gate": "MATCH"
+  },
+  "target_projection": {
+    "status": "MATCH",
+    "record_count": 28,
+    "scheme": "Strict byte equality of the ordered 7 case x 2 registration x 2 stage records from both runtimes. The iop-space offset is rendered as the referenced op's fixture name on both sides. The projection retains complete raw main flags, input/written/persist/directwrite/stackstore bits, def identity, ordered descendant slot lists, full op inventory (opcode, marker, indirect_store, inputs, output), possibleInputParam probes, and the apply return value."
+  },
+  "known_residuals": {
+    "locked_param_preamble": "UNTESTED: FuncProto::possibleInputParam's locked-parameter justifiedContain loop (fspec.cc:4371-4384) is inert in the fixture state (zero params) and in Rugra's FuncProto state today; Rugra's port degrades the loop the same way the in-repo sibling characterize_as_input_param does because ProtoParameter stores a spaceless Address with no standalone size. Lock-state coverage requires the param-space/size storage first.",
+    "setinputvarnode_unaffected_derivation": "MISMATCH (bank-level, out of scope): Ghidra's Funcdata::setInputVarnode tail (funcdata_varnode.cc:365-371) sets unaffected/return_address from the model effectlist; Rugra's set_input_varnode lacks the tail. The fixture routes around it with register choices (r11 for the spacebase flag, 0xe0 for the equal-address construction) whose input state is otherwise identical; ACTIONDW never reads the unaffected bit.",
+    "worklist_order": "UNTESTED: the LIFO worklist order is not directly observable through final directwrite flags; only order-independent outcomes are locked.",
+    "funcallspecs_possible_input_param": "MISMATCH (pre-existing, untouched): FuncCallSpecs::possible_input_param (fspec.rs:2122) remains a model-only delegation without the FuncProto preamble; it is a separate debt from this fixture's FuncProto::possible_input_param.",
+    "protorecovery_b_group_filtering": "UNTESTED: the decompile-root filtering of the protorecovery_b group is a pipeline-orchestration concern outside ActionDirectWrite::apply."
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "d151b9720c74b5e350904226cf466a1e39b7be3e1683160ed4ffc481b940980e",
+    "rust_fixture_sha256": "1c8588e74d2b1e8e4c11cb5135ae0cab1ae526c03ccaf7d65628ff84d1381afc",
+    "runner_sha256": "0c29388fd29d76cf2f56311f75c0c81a4f9d50c048e864ee8b6047bda7da51d1",
+    "ghidra_instrumentation_sha256": "87c1c29401e729047130105bf43dc6c67d7a277697b16e6c63b5fb27290e1640"
+  },
+  "expected_results": {
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "rugra_timed_out": false,
+    "ghidra_stdout_sha256": "9a0ae7fd631ecb0d3e1c95d3e53eaac458a18f5abcf3ffae4bc73552bc0e1f14",
+    "ghidra_stderr_sha256": "2f683a2c41c244556c83ea906a009e461c6444930ab93653608be67a65e12ff9",
+    "rugra_stdout_sha256": "9a0ae7fd631ecb0d3e1c95d3e53eaac458a18f5abcf3ffae4bc73552bc0e1f14",
+    "rugra_stderr_normalized_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "overall_status": "MATCH"
+}

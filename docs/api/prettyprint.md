@@ -1,5 +1,14 @@
 # `prettyprint.rs` API Reference
 
+## 2026-08-26：`EmitNoMarkup` 空白折叠不进入字符串字面量（MAINDIFF-STRCONST-0001）
+
+`get_output` 后处理的取消-清理段（cancel_patterns 之后的双空格折叠与
+` )` 修剪）此前对整行盲做。反编译器的字符串常量合法包含多空格 run
+（hugehelp 别名的 `\n   or specify` / 八空格缩进），盲折叠会改写字面量内容。
+现折叠循环带引号状态机：`"`/`'` 开启的字面量区域逐字复制（反斜杠逃逸不翻转
+引号态），折叠与修剪仅发生在字面量外。golden 中 hugehelp 三个
+`puts("...")` 字面量（含连续空格与 `\n`）逐字节保持。
+
 ## 文档状态
 
 - **状态**: 🔧 **L2（2026-08-12）**——`Emit::open_group/close_group` 已补齐，

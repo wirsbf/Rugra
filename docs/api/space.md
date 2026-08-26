@@ -274,7 +274,12 @@ Decode from string format "id:base_space_id:name"
  
 
 ### 2026-07-05: AddressSpace delay/deadcodedelay/is_heritaged
-- `get_delay`(space.hh): Stack=1,其他=0(Ghidra .sla spec 默认)。
+- `get_delay`(space.hh): 锁定 x86-64 oracle 值（2026-08-25 MAINDIFF-UNIQLEAK-0001
+  修正）：ram=1、stack=2（architecture.cc:566 `addSpacebase` 合成为 ram delay+1）、
+  unique/register=0（x86-64.sla space 表）。此前 Rugra 硬编码 Ram=0/Stack=1，
+  导致 ram 提前一个 pass 被 heritage（pass 0 起允许 dead removal →
+  "Heritage AFTER dead removal" bump/restart）、stack 比 oracle 的首个
+  stack pass（pass 2）早一个 pass。
 - `get_deadcode_delay`: = get_delay。
 - `is_heritaged`: Const/Iop/Join 不 heritaged。
  

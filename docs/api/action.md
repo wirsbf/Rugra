@@ -1266,3 +1266,6 @@ convention` **51** / gcc 审计 16 FAIL 持平；glob_url 单声明块（无重�
   `prof_op_hits: AtomicU32` 循环诊断计数器临时摘除 `Clone`；诊断结束后
   字段删除，derive 恢复 `#[derive(Debug, Clone)]`，可观测行为无变化
   （Ghidra 的 Rule 字段本身可拷贝）。
+## 2026-08-25（ACTIONDW-COPYDEF-MARKING-0001）：ActionDirectWrite 双注册接线 propagateIndirect
+
+`universalAction`（coreaction.cc:5497/:5498 mainloop、:5680/:5681 fullloop）的四个 ActionDirectWrite 注册点现按 oracle 传 `propagate_indirect`：protorecovery_a=`true`、protorecovery_b=`false`（coreaction.hh:244 构造器参数）。此前两注册共用无参 `new()`，phase-2 推播门与分支④的 marker 收集都无法区分两种注册语义。

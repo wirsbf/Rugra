@@ -3675,12 +3675,17 @@ impl Rule for RuleZextSless {
 }
 
 /// Simplify signed comparisons using INT_SCARRY:
-///   `scarry(V, 0)  =>  false`
+///   - `scarry(V,0)  =>  false`
+///   - `scarry(V,#W) != (V + #W s< 0)  =>  V s< -#W`
+///   - `scarry(V,#W) != (0 s< V + #W)  =>  -#W s< V`
+///   - `scarry(V,#W) == (0 s< V + #W)  =>  V s<= -#W`
+///   - `scarry(V,#W) == (V + #W s< 0)  =>  -#W s<= V`
 ///
-/// Faithful to Ghidra's `RuleScarry` (ruleaction.cc:3434-3510). This ports
-/// the trivial branch (3460-3466): a SCARRY with a zero operand always yields
-/// false (no signed overflow when adding zero). The deeper AddExpression-based
-/// forms (3475-3510) require that infrastructure and are deferred.
+/// Faithful to Ghidra's `RuleScarry` (ruleaction.cc:3430-3493): the trivial
+/// branch (3440-3446), the constant-side normalization with the integer-
+/// minimum exclusion (3447-3454), and the AddExpression-based comparison
+/// collapse (3455-3492) with the negated constant rewrites, mirroring
+/// `RuleSborrow`'s deep form above (MAINDIFF-UNIQLEAK-0001 same family).
 pub struct RuleScarry;
 
 impl RuleScarry {
@@ -3689,25 +3694,129 @@ impl RuleScarry {
 }
 
 impl Rule for RuleScarry {
-    // Ghidra: ruleaction.cc:3450 RuleScarry::applyOp
+    // Ghidra: ruleaction.cc:3430 RuleScarry::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        let has_zero = {
+        // cc:3455-3457: svn/avn/bvn.
+        let (svn, avn_orig, bvn_orig) = {
             let op = op_arc.read().unwrap();
+            let svn = match &op.output { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
             let avn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
             let bvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let a_zero = avn.read().unwrap().is_constant() && avn.read().unwrap().get_offset() == 0;
-            let b_zero = bvn.read().unwrap().is_constant() && bvn.read().unwrap().get_offset() == 0;
-            a_zero || b_zero
+            (svn, avn, bvn)
         };
-        if !has_zero {
-            return Ok(action_status::NO_CHANGE);
+        // cc:3440-3446: trivial case scarry(V,0)/scarry(0,V) => false.
+        {
+            let a = avn_orig.read().unwrap();
+            let b = bvn_orig.read().unwrap();
+            let a_zero = a.is_constant() && a.get_offset() == 0;
+            let b_zero = b.is_constant() && b.get_offset() == 0;
+            if b_zero || a_zero {
+                drop(a); drop(b);
+                let follow = crate::op::PcodeOpRef(op_arc.clone());
+                fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+                let c = fd.new_constant(1, 0);
+                fd.op_set_input(&follow, c, 0);
+                fd.op_remove_input(&follow, 1);
+                return Ok(action_status::CHANGE);
+            }
         }
-        let follow = crate::op::PcodeOpRef(op_arc.clone());
-        fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
-        let c = fd.new_constant(1, 0);
-        fd.op_set_input(&follow, c, 0);
-        fd.op_remove_input(&follow, 1);
-        Ok(action_status::CHANGE)
+        // cc:3447-3454: one side must be constant; if the constant is on
+        // slot 0, swap so avn=non-constant, bvn=constant. Exclude the
+        // integer minimum constant (signbit mask) where the rule does not
+        // hold.
+        let (avn, bvn) = {
+            let b_is_const = bvn_orig.read().unwrap().is_constant();
+            if b_is_const {
+                (avn_orig, bvn_orig)
+            } else {
+                if !avn_orig.read().unwrap().is_constant() {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                // avn = bvn; bvn = op->getIn(0);
+                let b_size = avn_orig.read().unwrap().get_size();
+                let val = crate::address::calc_mask(b_size);
+                let int_min = val ^ (val >> 1);
+                if int_min == avn_orig.read().unwrap().get_offset() {
+                    return Ok(action_status::NO_CHANGE);
+                }
+                (bvn_orig, avn_orig)
+            }
+        };
+        // cc:3455-3492: descendant walk (mirror of RuleSborrow's, with the
+        // add-based gather and negated-constant rewrite).
+        let descendants: Vec<_> = svn.read().unwrap().descend_iter().collect();
+        for compop_arc in descendants {
+            let (comp_opc, in0, in1) = {
+                let compop = compop_arc.read().unwrap();
+                (compop.opcode, compop.inrefs.get(0).cloned(), compop.inrefs.get(1).cloned())
+            };
+            if comp_opc != OpCode::CPUI_INT_EQUAL && comp_opc != OpCode::CPUI_INT_NOTEQUAL {
+                continue;
+            }
+            let (Some(c_in0), Some(c_in1)) = (in0, in1) else { continue };
+            let cvn = if std::sync::Arc::ptr_eq(&c_in0, &svn) { c_in1 } else { c_in0 };
+            let (signop_arc, sign_opc) = {
+                let cv = cvn.read().unwrap();
+                if !cv.is_written() { continue; }
+                match cv.get_def() {
+                    Some(d) => {
+                        let opc = d.read().unwrap().opcode;
+                        (d, opc)
+                    }
+                    None => continue,
+                }
+            };
+            if sign_opc != OpCode::CPUI_INT_SLESS {
+                continue;
+            }
+            let (s_in0, s_in1) = {
+                let signop = signop_arc.read().unwrap();
+                (signop.inrefs.get(0).cloned(), signop.inrefs.get(1).cloned())
+            };
+            let (Some(s_in0), Some(s_in1)) = (s_in0, s_in1) else { continue };
+            let const_match_zero = |v: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>| {
+                let r = v.read().unwrap();
+                r.is_constant() && r.get_offset() == 0
+            };
+            let zside: usize = if const_match_zero(&s_in0) {
+                0
+            } else if const_match_zero(&s_in1) {
+                1
+            } else {
+                continue;
+            };
+            let xvn = if zside == 0 { s_in1 } else { s_in0 };
+            if !xvn.read().unwrap().is_written() {
+                continue;
+            }
+            // cc:3473-3476: expr1.gatherTwoTermsAdd(avn,bvn);
+            //               expr2.gatherTwoTermsRoot(xvn);
+            let mut expr1 = crate::expression::AddExpression::new();
+            expr1.gather_two_terms_add(&avn, &bvn);
+            let mut expr2 = crate::expression::AddExpression::new();
+            expr2.gather_two_terms_root(&xvn);
+            if !expr1.is_equivalent(&expr2) {
+                continue;
+            }
+            // cc:3478-3479: newval = -bvn->getOffset() & calc_mask(...);
+            let b_size = bvn.read().unwrap().get_size();
+            let b_offset = bvn.read().unwrap().get_offset();
+            let new_val = b_offset.wrapping_neg() & crate::address::calc_mask(b_size);
+            let new_const = fd.new_constant(b_size, new_val);
+            // cc:3481-3490: rewrite the comparison op.
+            let comp_ref = crate::op::PcodeOpRef(compop_arc.clone());
+            if comp_opc == OpCode::CPUI_INT_NOTEQUAL {
+                fd.op_set_opcode(&comp_ref, OpCode::CPUI_INT_SLESS);
+                fd.op_set_input(&comp_ref, avn, 1 - zside);
+                fd.op_set_input(&comp_ref, new_const, zside);
+            } else {
+                fd.op_set_opcode(&comp_ref, OpCode::CPUI_INT_SLESSEQUAL);
+                fd.op_set_input(&comp_ref, avn, zside);
+                fd.op_set_input(&comp_ref, new_const, 1 - zside);
+            }
+            return Ok(action_status::CHANGE);
+        }
+        Ok(action_status::NO_CHANGE)
     }
 
     // Ghidra: ruleaction.cc:3434 RuleScarry
@@ -3717,10 +3826,22 @@ impl Rule for RuleScarry {
 }
 
 /// Simplify signed comparisons using INT_SBORROW:
-///   `sborrow(V, 0)  =>  false`
+///   - `sborrow(V,0)  =>  false`
+///   - `sborrow(V,W) != (V + (W * -1) s< 0)  =>  V s< W`
+///   - `sborrow(V,W) != (0 s< V + (W * -1))  =>  W s< V`
+///   - `sborrow(V,W) == (V + (W * -1) s< 0)  =>  W s<= V`
+///   - `sborrow(V,W) == (0 s< V + (W * -1))  =>  V s<= W`
 ///
-/// Faithful to Ghidra's `RuleSborrow` (ruleaction.cc:3381-3432). Ports the
-/// trivial branch (3390-3395). The AddExpression-based forms are deferred.
+/// Faithful to Ghidra's `RuleSborrow` (ruleaction.cc:3361-3412): the trivial
+/// branch (3370-3375) plus the full AddExpression-based comparison-collapse
+/// walk over the SBORROW's descendants (3376-3410), driven by
+/// [`crate::expression::AddExpression`] (expression.cc:299-393) with
+/// `functionalEquality` (expression.cc:404-526) as the term-equivalence
+/// oracle. MAINDIFF-UNIQLEAK-0001: without the deep forms, gcc's
+/// loop-guard pattern `sborrow(V,W) != (V-W s< 0)` survives as an implied
+/// flag varnode whose print falls through to `pushUnnamedLocation`
+/// (printc.cc:1938) — emitting a bare `register0x…`/`unique0x…` token that
+/// the prettyprint backfill then declares (unique/register leak class).
 pub struct RuleSborrow;
 
 impl RuleSborrow {
@@ -3729,22 +3850,109 @@ impl RuleSborrow {
 }
 
 impl Rule for RuleSborrow {
-    // Ghidra: ruleaction.cc:3381 RuleSborrow::applyOp
+    // Ghidra: ruleaction.cc:3361 RuleSborrow::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
-        let b_zero = {
+        // cc:3364-3368: svn = op->getOut(); avn = op->getIn(0); bvn = op->getIn(1);
+        let (svn, avn, bvn) = {
             let op = op_arc.read().unwrap();
+            let svn = match &op.output { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let avn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
             let bvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            bvn.read().unwrap().is_constant() && bvn.read().unwrap().get_offset() == 0
+            (svn, avn, bvn)
         };
-        if !b_zero {
-            return Ok(action_status::NO_CHANGE);
+        // cc:3370-3375: trivial case sborrow(V,0) => false.
+        let b_zero = {
+            let b = bvn.read().unwrap();
+            b.is_constant() && b.get_offset() == 0
+        };
+        if b_zero {
+            let follow = crate::op::PcodeOpRef(op_arc.clone());
+            fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
+            let c = fd.new_constant(1, 0);
+            fd.op_set_input(&follow, c, 0);
+            fd.op_remove_input(&follow, 1);
+            return Ok(action_status::CHANGE);
         }
-        let follow = crate::op::PcodeOpRef(op_arc.clone());
-        fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
-        let c = fd.new_constant(1, 0);
-        fd.op_set_input(&follow, c, 0);
-        fd.op_remove_input(&follow, 1);
-        Ok(action_status::CHANGE)
+        // cc:3377-3410: walk the SBORROW output's descendants looking for an
+        // INT_EQUAL/INT_NOTEQUAL whose other input is INT_SLESS(x, 0) with
+        // x's additive expression equivalent to avn - bvn.
+        let descendants: Vec<_> = svn.read().unwrap().descend_iter().collect();
+        for compop_arc in descendants {
+            let (comp_opc, in0, in1) = {
+                let compop = compop_arc.read().unwrap();
+                (compop.opcode, compop.inrefs.get(0).cloned(), compop.inrefs.get(1).cloned())
+            };
+            // cc:3379-3380: if ((compop->code()!=CPUI_INT_EQUAL)&&(compop->code()!=CPUI_INT_NOTEQUAL)) continue;
+            if comp_opc != OpCode::CPUI_INT_EQUAL && comp_opc != OpCode::CPUI_INT_NOTEQUAL {
+                continue;
+            }
+            let (Some(c_in0), Some(c_in1)) = (in0, in1) else { continue };
+            // cc:3381: cvn = (compop->getIn(0)==svn) ? compop->getIn(1) : compop->getIn(0);
+            let cvn = if std::sync::Arc::ptr_eq(&c_in0, &svn) { c_in1 } else { c_in0 };
+            // cc:3382-3383: if (!cvn->isWritten()) continue; signop = cvn->getDef();
+            let (signop_arc, sign_opc) = {
+                let cv = cvn.read().unwrap();
+                if !cv.is_written() { continue; }
+                match cv.get_def() {
+                    Some(d) => {
+                        let opc = d.read().unwrap().opcode;
+                        (d, opc)
+                    }
+                    None => continue,
+                }
+            };
+            // cc:3384: if (signop->code() != CPUI_INT_SLESS) continue;
+            if sign_opc != OpCode::CPUI_INT_SLESS {
+                continue;
+            }
+            // cc:3385-3390: locate the zero-constant slot zside of the SLESS;
+            // if (signop->getIn(0)->constantMatch(0)) zside=0 else if
+            // (signop->getIn(1)->constantMatch(0)) zside=1 else continue.
+            let (s_in0, s_in1) = {
+                let signop = signop_arc.read().unwrap();
+                (signop.inrefs.get(0).cloned(), signop.inrefs.get(1).cloned())
+            };
+            let (Some(s_in0), Some(s_in1)) = (s_in0, s_in1) else { continue };
+            let const_match_zero = |v: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>| {
+                let r = v.read().unwrap();
+                r.is_constant() && r.get_offset() == 0
+            };
+            let zside: usize = if const_match_zero(&s_in0) {
+                0
+            } else if const_match_zero(&s_in1) {
+                1
+            } else {
+                continue;
+            };
+            // cc:3391-3392: xvn = signop->getIn(1-zside); if (!xvn->isWritten()) continue;
+            let xvn = if zside == 0 { s_in1 } else { s_in0 };
+            if !xvn.read().unwrap().is_written() {
+                continue;
+            }
+            // cc:3393-3397: expr1.gatherTwoTermsSubtract(avn,bvn);
+            //               expr2.gatherTwoTermsRoot(xvn);
+            let mut expr1 = crate::expression::AddExpression::new();
+            expr1.gather_two_terms_subtract(&avn, &bvn);
+            let mut expr2 = crate::expression::AddExpression::new();
+            expr2.gather_two_terms_root(&xvn);
+            if !expr1.is_equivalent(&expr2) {
+                continue;
+            }
+            // cc:3399-3408: rewrite the comparison op.
+            let comp_ref = crate::op::PcodeOpRef(compop_arc.clone());
+            if comp_opc == OpCode::CPUI_INT_NOTEQUAL {
+                // Replace with simple less than: V s< W
+                fd.op_set_opcode(&comp_ref, OpCode::CPUI_INT_SLESS);
+                fd.op_set_input(&comp_ref, avn, 1 - zside);
+                fd.op_set_input(&comp_ref, bvn, zside);
+            } else {
+                fd.op_set_opcode(&comp_ref, OpCode::CPUI_INT_SLESSEQUAL);
+                fd.op_set_input(&comp_ref, avn, zside);
+                fd.op_set_input(&comp_ref, bvn, 1 - zside);
+            }
+            return Ok(action_status::CHANGE);
+        }
+        Ok(action_status::NO_CHANGE)
     }
 
     // Ghidra: ruleaction.cc:3365 RuleSborrow
@@ -11201,20 +11409,22 @@ impl Rule for RuleFloatSignCleanup {
 
 /// Cleanup: Set-up to print string constants.
 ///
-/// Faithful to `RulePtrsubCharConstant` (ruleaction.cc:7372-7421) plus its
-/// `pushConstFurther` helper (ruleaction.cc:7341-7358). When a PTRSUB over a
+/// Faithful to `RulePtrsubCharConstant` (ruleaction.cc:7354-7402) plus its
+/// `pushConstFurther` helper (ruleaction.cc:7323-7340). When a PTRSUB over a
 /// TYPE_SPACEBASE refers to a read-only, string-looking address whose output is
 /// a (char *), the PTRSUB is converted to a COPY of a string pointer constant
-/// (and descendant PTRADDs are collapsed).
+/// (and descendant PTRADDs are collapsed via `push_const_further`, destroying
+/// the op when every descendant propagated).
 ///
-/// NOTE: The output's pointer/char-print type guard (`outvn->getTypeDefFacing()`
-/// is a pointer whose base `isCharPrint()`) is now implemented via `get_type()`
-/// / `is_char_print()`. The rule still cannot fully fire because the deeper
-/// guards — `TYPE_SPACEBASE` dereference, `Scope::isReadOnly`, and
-/// `stringManager->isString` — require infrastructure Rugra does not yet expose
-/// on Funcdata. The transform (`pushConstFurther` over descendants →
-/// COPY / opDestroy) is implemented in `push_const_further` and would be invoked
-/// once those scope/string-manager guards can be evaluated.
+/// The guards run through the production channels: the output's
+/// pointer/char-print type guard via `get_type()`/`is_char_print()`
+/// (ruleaction.cc:7366-7369), the read-only test through
+/// `Funcdata::is_scope_read_only` (the Database property-range channel behind
+/// `scope->isReadOnly`, ruleaction.cc:7372), and the string test through the
+/// shared Architecture-owned StringManager (`stringManager->isString`,
+/// ruleaction.cc:7375) — the same manager `PrintC::pushPtrCharConstant`
+/// renders from at print time (printc.cc:1537/1698), so rule and printer
+/// observe one positive/negative-cached truth per address.
 pub struct RulePtrsubCharConstant;
 
 impl RulePtrsubCharConstant {
@@ -11280,47 +11490,95 @@ impl Rule for RulePtrsubCharConstant {
         }).unwrap_or(false);
         if !sb_is_spacebase_ptr { return Ok(action_status::NO_CHANGE); }
         // outtype = outvn->getTypeDefFacing(); require TYPE_PTR with
-        //   basetype isCharPrint().
-        let out_is_char_ptr = outvn.read().unwrap().get_type().as_ref().map(|dt| {
+        //   basetype isCharPrint() (ruleaction.cc:7366-7369).
+        let outtype = outvn.read().unwrap().get_type();
+        let out_is_char_ptr = outtype.as_ref().map(|dt| {
             if dt.get_metatype() != TypeMetatype::Pointer { return false; }
             if let Datatype::Pointer(tp) = dt.as_ref() {
                 tp.ptr_to.is_char_print()
             } else { false }
         }).unwrap_or(false);
         if !out_is_char_ptr { return Ok(action_status::NO_CHANGE); }
-        // Compute the symbol address. Ghidra uses TypeSpacebase::getAddress
-        // (which calls Architecture::resolveConstant). Rugra's spacebase base
-        // is 0 (the load image base), so symaddr = vn1 offset.
-        let symaddr = vn1.read().unwrap().get_offset();
-        // ruleaction.cc:7390 — Scope::isReadOnly(symaddr, 1, op->getAddr()).
-        // Rugra has no Scope/Database read-only query wired to rules, so we use
-        // Funcdata's string_table as a read-only proxy: its entries come from
-        // .rodata (inherently read-only) and stand in for isReadOnly.
-        if !_fd.string_table.contains_key(&symaddr) {
-            return Ok(action_status::NO_CHANGE); // not a known read-only address
+        let outtype = outtype.unwrap();
+        let basetype = if let Datatype::Pointer(tp) = outtype.as_ref() {
+            tp.ptr_to.clone()
+        } else { return Ok(action_status::NO_CHANGE); };
+        // ruleaction.cc:7370-7371: Address symaddr = sbtype->getAddress(
+        //   vn1->getOffset(), vn1->getSize(), op->getAddr()); scope =
+        //   sbtype->getMap(). Rugra's spacebase base is 0 (wordsize 1), so
+        //   symaddr is the raw offset and the scope is the global query
+        //   channel's Database.
+        let symaddr = crate::address::Address::new(vn1.read().unwrap().get_offset());
+        let op_addr = op_arc.read().unwrap().get_addr();
+        // ruleaction.cc:7372-7373: if (!scope->isReadOnly(symaddr,1,op->getAddr()))
+        //   return 0; — the real readonly channel (Database property ranges
+        //   fed by Funcdata::set_symbol_property_range). No channel attached
+        //   (legacy/test Funcdata) cannot confirm readonly: Ghidra's scope
+        //   always exists, so the conservative no-op matches the observable
+        //   "rule did not fire".
+        match _fd.is_scope_read_only(symaddr, 1, op_addr) {
+            Some(true) => {}
+            _ => return Ok(action_status::NO_CHANGE),
         }
-        // ruleaction.cc:7393 — stringManager->isString(symaddr, basetype).
-        // If the Architecture exposes a populated StringManager, require it to
-        // confirm symaddr holds a real string (the precise Ghidra guard). When
-        // no StringManager is attached (legacy/test Funcdata), fall back to the
-        // string_table hit alone, which is itself a string-bearing address.
-        if let Some(sm) = _fd.get_arch().and_then(|a| a.string_manager.as_ref()) {
-            if !sm.read().unwrap().is_string(crate::Address::new(symaddr)) {
-                return Ok(action_status::NO_CHANGE); // confirmed not a string
+        // ruleaction.cc:7375: if (!data.getArch()->stringManager->isString(
+        //   symaddr, basetype)) return 0; — the shared Architecture-owned
+        //   StringManager (positive AND negative cached), the same manager
+        //   PrintC::pushPtrCharConstant reads through at print time
+        //   (printc.cc:1537/1698). charsize/opaque project basetype exactly
+        //   as stringmanage.cc:166's virtual getStringData call does.
+        let Some(sm) = _fd.get_arch().and_then(|a| a.string_manager.clone()) else {
+            return Ok(action_status::NO_CHANGE);
+        };
+        let charsize = basetype.get_size() as i32;
+        let opaque = (basetype.get_flags()
+            & crate::type_system::datatype::type_flags::OPAQUE_STRUCT)
+            != 0; // charType->isOpaqueString() (type.hh)
+        if !sm.read().unwrap().is_string_typed(symaddr, charsize, opaque) {
+            return Ok(action_status::NO_CHANGE); // confirmed not a string
+        }
+        // ruleaction.cc:7378-7391: the propagation half. Unless the output is
+        // address-forced, give every descendant a chance to swallow the
+        // constant (pushConstFurther); the op is destroyed only when every
+        // descendant propagated.
+        let val = vn1.read().unwrap().get_offset();
+        let remove_copy = if !outvn.read().unwrap().is_addr_force() {
+            let mut remove = true;
+            // Ghidra advances the iterator before transforming (cc:7386-7387),
+            // making the walk robust to descendant rewrites; the snapshot
+            // preserves the same descend-list order.
+            let descendants: Vec<_> = {
+                let out_r = outvn.read().unwrap();
+                out_r.descend.iter().filter_map(|w| w.upgrade()).collect()
+            };
+            for subop in descendants {
+                let slot = subop.read().unwrap().slot_of_input(&outvn);
+                if let Some(slot) = slot {
+                    if !Self::push_const_further(_fd, &crate::op::PcodeOpRef(subop), slot, val, outtype.clone()) {
+                        remove = false;
+                    }
+                } else {
+                    remove = false;
+                }
             }
-        }
-        // If we reach here, the PTRSUB should be converted to a COPY of a
-        // constant pointer. Faithful to ruleaction.cc:7396-7421.
-        // Convert the original PTRSUB to a COPY of the constant.
-        let outvn_size = outvn.read().unwrap().get_size();
-        let newvn = _fd.new_constant(outvn_size, vn1.read().unwrap().get_offset());
-        if let Some(outtype) = outvn.read().unwrap().get_type() {
-            newvn.write().unwrap().update_type(outtype);
-        }
+            remove
+        } else {
+            false
+        };
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
-        _fd.op_remove_input(&op_ref, 1);
-        _fd.op_set_input(&op_ref, newvn, 0);
-        _fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+        if remove_copy {
+            // ruleaction.cc:7392-7393: data.opDestroy(op).
+            _fd.op_destroy(&op_ref);
+        } else {
+            // ruleaction.cc:7395-7400: convert the original PTRSUB to a COPY
+            // of the constant, with the char-pointer type carried over
+            // (cc:7396-7397).
+            let outvn_size = outvn.read().unwrap().get_size();
+            let newvn = _fd.new_constant(outvn_size, val);
+            newvn.write().unwrap().update_type(outtype);
+            _fd.op_remove_input(&op_ref, 1);
+            _fd.op_set_input(&op_ref, newvn, 0);
+            _fd.op_set_opcode(&op_ref, OpCode::CPUI_COPY);
+        }
         Ok(action_status::CHANGE)
     }
 
@@ -12040,11 +12298,10 @@ impl Rule for RulePieceStructure {
     // Ghidra: ruleaction.cc:7607 RulePieceStructure::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePieceStructure::applyOp (ruleaction.cc:7607-7700).
-        // cc:7610: if (op->isPartialRoot()) return 0 — the re-visit guard:
-        // a CONCAT tree already reassembled by a previous application must
-        // not be processed again (otherwise the rule re-fires on the same
-        // PIECE forever, each application returning 1 and the ActionPool
-        // never converging).
+        // if (op->isPartialRoot()) return 0; — CONCAT tree already visited.
+        // RULE-PTRARITH-ADDTREE-0001: without this guard the cleanup pool
+        // re-walks the same roots every pass, each returning CHANGE, so the
+        // universal tail never converges once structured types are visible.
         if op_arc.read().unwrap().is_partial_root() {
             return Ok(action_status::NO_CHANGE);
         }
@@ -12103,9 +12360,8 @@ impl Rule for RulePieceStructure {
                 break;
             }
         }
-        // cc:7642: op->setPartialRoot() — mark the tree as visited so the
-        // cc:7610 guard rejects any re-application (PcodeOp addlflags
-        // concat_root bit, op.hh:117/220-221).
+        // op->setPartialRoot() (ruleaction.cc:7642): mark before the storage
+        // walk so the tree is never re-visited.
         op_arc.write().unwrap().set_partial_root();
 
         // ruleaction.cc:7665 reads the same Architecture-owned TypeFactory
@@ -16376,13 +16632,43 @@ impl<'a> AddTreeState<'a> {
         true
     }
 
-    /// Faithful to `AddTreeState::buildTree` (ruleaction.cc:6508-6550).
+    /// Faithful to `AddTreeState::assignPropagatedType` (ruleaction.cc:6339-6350).
     ///
-    /// The type-inheritance (`inheritResolution`) / `assignPropagatedType`
-    /// calls are omitted (Rugra has no per-op type resolution propagation
-    /// wired here). The structural PTRADD/PTRSUB/INT_ADD restructure is
-    /// faithful.
-    // Ghidra: ruleaction.cc:6508 AddTreeState::buildTree
+    /// The data-type from the pointer input (of either a PTRSUB or PTRADD)
+    /// is propagated to the output of the PcodeOp via the opcode's virtual
+    /// `propagateType`. `buildTree` only ever calls this on freshly created
+    /// CPUI_PTRADD/CPUI_PTRSUB ops, where the dispatch reduces to the
+    /// `TypeOpPtradd::propagateType`/`TypeOpPtrsub::propagateType` pointer
+    /// arm: TYPE_PTR input at slot 0 → `propagateAddIn2Out` (the factory's
+    /// `downChain` walk, incl. the PTRSUB no-wrap distinction).
+    // Ghidra: ruleaction.cc:6342 AddTreeState::assignPropagatedType
+    fn assign_propagated_type(&mut self, newop: &crate::op::PcodeOpRef) {
+        let vn = match newop.0.read().unwrap().get_in(0) { Some(v) => v.clone(), None => return };
+        let in_type = match vn.read().unwrap().get_type_read_facing() { Some(t) => t, None => return };
+        use crate::type_system::datatype::TypeMetatype;
+        if in_type.get_metatype() != TypeMetatype::Pointer {
+            return; // propagateAddIn2Out requires a TYPE_PTR alttype
+        }
+        let factory = match self.data.get_arch().and_then(|a| a.types.clone()) {
+            Some(f) => f,
+            None => return,
+        };
+        let op_guard = newop.0.read().unwrap();
+        let new_type = crate::typeop::TypeOpIntAdd::propagate_add_in2out(&in_type, &factory, &op_guard, 0);
+        drop(op_guard);
+        if let Some(nt) = new_type {
+            if let Some(out) = newop.0.read().unwrap().get_out() {
+                out.write().unwrap().update_type(nt);
+            }
+        }
+    }
+
+    /// Faithful to `AddTreeState::buildTree` (ruleaction.cc:6490-6532).
+    ///
+    /// The union `inheritResolution` calls are omitted (Rugra has no
+    /// per-edge union resolution); the exceeded-type stamping goes through
+    /// `assign_propagated_type` exactly as in Ghidra.
+    // Ghidra: ruleaction.cc:6490 AddTreeState::buildTree
     fn build_tree(&mut self) {
         let mult_node = self.build_multiples();
         let extra_node = self.build_extra();
@@ -16400,6 +16686,10 @@ impl<'a> AddTreeState<'a> {
             self.data.op_set_input(&newp, size_const, 2);
             self.data.op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
             newop = Some(newp.clone());
+            // if (data.isTypeRecoveryExceeded()) assignPropagatedType(newop);
+            if self.data.is_type_recovery_exceeded() {
+                self.assign_propagated_type(&newp);
+            }
             let out = newp.0.read().unwrap().output.clone().unwrap();
             out
         } else {
@@ -16417,8 +16707,14 @@ impl<'a> AddTreeState<'a> {
             self.data.op_set_input(&newp, off_const, 1);
             self.data.op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
             newop = Some(newp.clone());
-            // setStopTypePropagation
-            newp.0.write().unwrap().addlflags |= crate::op::op_addl_flags::STOP_TYPE_PROPAGATION;
+            // if (data.isTypeRecoveryExceeded()) assignPropagatedType(newop);
+            if self.data.is_type_recovery_exceeded() {
+                self.assign_propagated_type(&newp);
+            }
+            // if (size != 0) newop->setStopTypePropagation();
+            if self.size != 0 {
+                newp.0.write().unwrap().addlflags |= crate::op::op_addl_flags::STOP_TYPE_PROPAGATION;
+            }
             mult_node = newp.0.read().unwrap().output.clone().unwrap();
         }
 
@@ -19961,11 +20257,20 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let zero = fd.vbank.create_constant(4, 0);
+        // The oracle's applyOp reads op->getOut() unconditionally
+        // (ruleaction.cc:3455); a SCARRY without an output never reaches a
+        // rule in the real pipeline, so the fixture mirrors that invariant.
+        let out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Unique, 0x100);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_SCARRY,
         )));
-        op.write().unwrap().inrefs = vec![v, zero];
+        {
+            let mut o = op.write().unwrap();
+            o.inrefs = vec![v, zero];
+            o.output = Some(out.clone());
+        }
+        out.write().unwrap().def = Some(Arc::downgrade(&op));
         let rule = RuleScarry::new();
         let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
@@ -19981,11 +20286,19 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let zero = fd.vbank.create_constant(4, 0);
+        // Same output invariant as the SCARRY fixture above
+        // (ruleaction.cc:3366 reads op->getOut() first).
+        let out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Unique, 0x100);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_SBORROW,
         )));
-        op.write().unwrap().inrefs = vec![v, zero];
+        {
+            let mut o = op.write().unwrap();
+            o.inrefs = vec![v, zero];
+            o.output = Some(out.clone());
+        }
+        out.write().unwrap().def = Some(Arc::downgrade(&op));
         let rule = RuleSborrow::new();
         let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
@@ -21569,9 +21882,13 @@ mod tests {
         assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
     }
 
-    /// RulePtrsubCharConstant: when the Architecture's StringManager CONFIRMS
-    /// symaddr as a string, the PTRSUB is collapsed to a COPY of the constant
-    /// (ruleaction.cc:7396-7421).
+    /// RulePtrsubCharConstant: when the scope's readonly channel confirms
+    /// symaddr (Database property range, ruleaction.cc:7372) AND the
+    /// Architecture's StringManager confirms the string (cc:7375), the rule
+    /// fires (cc:7402 `return 1`). With no descendants and no addr-force the
+    /// propagation half succeeds vacuously (cc:7380-7390) so the PTRSUB is
+    /// destroyed (cc:7392-7393); the addr-forced form instead collapses to a
+    /// COPY of the typed constant (cc:7395-7400).
     #[test]
     fn test_rule_ptrsub_char_constant_string_manager_confirms() {
         use crate::type_system::datatype::{
@@ -21619,6 +21936,20 @@ mod tests {
             },
         );
         arch.set_string_manager(std::sync::Arc::new(std::sync::RwLock::new(sm)));
+        // ruleaction.cc:7372 — scope->isReadOnly(symaddr,1,op->getAddr()):
+        // the production readonly channel is the Database property range
+        // (loader/architecture.cc:1371-1383 style), reached through the
+        // Architecture's symboltab.
+        {
+            let mut db = crate::database::Database::new(false);
+            if let Some(rng) = crate::address::Range::new(
+                crate::address::Address::new(0x1000),
+                crate::address::Address::new(0x2fff),
+            ) {
+                db.set_property_range(crate::database::symbol_flags::READONLY, rng);
+            }
+            arch.set_symboltab(std::sync::Arc::new(std::sync::RwLock::new(db)));
+        }
         fd.set_arch(std::sync::Arc::new(arch));
         let sb_vn = fd.vbank.create_constant(8, 0);
         sb_vn.write().unwrap().update_type(sb_ptr);
@@ -21631,9 +21962,90 @@ mod tests {
         op.output = Some(outvn);
         let op_arc = Arc::new(RwLock::new(op));
         let r = RulePtrsubCharConstant::new();
-        // StringManager confirms 0x2000 → CHANGE (collapsed to COPY).
+        // Readonly + StringManager confirm 0x2000 → CHANGE. With no
+        // descendants the propagation half vacuously succeeds (cc:7381),
+        // so the PTRSUB is destroyed (cc:7392-7393): inputs detached.
+        assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::CHANGE);
+        assert!(op_arc.read().unwrap().inrefs.is_empty());
+    }
+
+    /// RulePtrsubCharConstant addr-force arm: an address-forced output
+    /// skips the propagation half (cc:7380 guard) and the PTRSUB collapses
+    /// to a COPY of the typed string-pointer constant (cc:7395-7400).
+    #[test]
+    fn test_rule_ptrsub_char_constant_addr_force_copy_arm() {
+        use crate::type_system::datatype::{
+            Datatype, TypeBase, TypeMetatype, TypePointer, TypeSpacebase, type_flags,
+        };
+        let mut fd = Funcdata::new("charconst3", Address::new(0x1000), 0x10);
+        let sb_dt = Arc::new(Datatype::Spacebase(TypeSpacebase {
+            base: TypeBase::new("spacebase".into(), 0, TypeMetatype::Spacebase),
+            address: Address::new(0),
+            fd: None,
+            spaceid: None,
+            localframe: Address::new(0),
+            scope: None,
+        }));
+        let sb_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("spacebase *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: sb_dt,
+            wordsize: 1,
+        }));
+        let char_print = {
+            let mut b = TypeBase::new("char".into(), 1, TypeMetatype::Int);
+            b.flags |= type_flags::CHARTYPE;
+            Arc::new(Datatype::Base(b))
+        };
+        let out_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("char *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: char_print.clone(),
+            wordsize: 1,
+        }));
+        let mut arch = crate::arch::Architecture::new();
+        let mut sm = crate::stringmanage::StringManager::new(100);
+        sm.insert_string_data(
+            Address::new(0x2000),
+            crate::stringmanage::StringData {
+                is_truncated: false,
+                byte_data: vec![b'h', b'e', b'l', b'l', b'o'],
+            },
+        );
+        arch.set_string_manager(std::sync::Arc::new(std::sync::RwLock::new(sm)));
+        {
+            let mut db = crate::database::Database::new(false);
+            if let Some(rng) = crate::address::Range::new(
+                crate::address::Address::new(0x1000),
+                crate::address::Address::new(0x2fff),
+            ) {
+                db.set_property_range(crate::database::symbol_flags::READONLY, rng);
+            }
+            arch.set_symboltab(std::sync::Arc::new(std::sync::RwLock::new(db)));
+        }
+        fd.set_arch(std::sync::Arc::new(arch));
+        let sb_vn = fd.vbank.create_constant(8, 0);
+        sb_vn.write().unwrap().update_type(sb_ptr);
+        let vn1 = fd.vbank.create_constant(8, 0x2000);
+        let seq = SeqNum::new(Address::new(0x1000), 0);
+        let mut op = PcodeOp::new(seq, OpCode::CPUI_PTRSUB);
+        op.inrefs = vec![sb_vn, vn1];
+        let outvn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x301);
+        outvn.write().unwrap().update_type(out_ptr);
+        // cc:7380 — outvn->isAddrForce() blocks the propagation half, so the
+        // else arm converts the PTRSUB to a COPY (cc:7395-7400).
+        outvn.write().unwrap().set_addr_force();
+        op.output = Some(outvn);
+        let op_arc = Arc::new(RwLock::new(op));
+        let r = RulePtrsubCharConstant::new();
         assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::CHANGE);
         assert_eq!(op_arc.read().unwrap().opcode, OpCode::CPUI_COPY);
+        // newvn = newConstant(outvn->getSize(), vn1->getOffset()) with the
+        // char-pointer type carried over (cc:7396-7397).
+        let in0 = op_arc.read().unwrap().get_in(0).unwrap().clone();
+        let in0_r = in0.read().unwrap();
+        assert!(in0_r.is_constant());
+        assert_eq!(in0_r.get_offset(), 0x2000);
+        assert_eq!(in0_r.get_size(), 8);
+        assert!(in0_r.get_type().is_some());
     }
 
     /// RuleSegment constant-fold path: both SEGMENTOP inputs constant with a

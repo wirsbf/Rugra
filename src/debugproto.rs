@@ -169,9 +169,50 @@ impl DebugGlobalDatabase {
     }
 }
 
+// RUGRA-GLUE: index of DWARF named types (struct/union/enum/typedef spellings)
+// built at the Program-import boundary. Ghidra's DWARF analyzer populates the
+// program type manager with these names, and the platform signature loader
+// resolves signature base spellings (e.g. `FILE`) against that manager; this
+// index is the driver-side equivalent handed to `LibcSignatureTable::locked_proto`.
+// First definition wins on duplicate names (Ghidra suffixes conflicts; the
+// locked curl corpus has none).
+pub fn parse_type_names(bytes: &[u8]) -> Result<HashMap<String, Arc<Datatype>>> {
+    let dwarf = load_dwarf(bytes).context("parsing object for DWARF named types")?;
+    let mut names: HashMap<String, Arc<Datatype>> = HashMap::new();
+    let mut headers = dwarf.units();
+    while let Some(header) = headers.next().context("iterating DWARF units")? {
+        let unit = dwarf.unit(header).context("loading DWARF unit")?;
+        let mut entries = unit.entries();
+        while let Some((_, entry)) = entries.next_dfs().context("walking DWARF DIEs")? {
+            let named = matches!(
+                entry.tag(),
+                gimli::DW_TAG_structure_type
+                    | gimli::DW_TAG_union_type
+                    | gimli::DW_TAG_enumeration_type
+                    | gimli::DW_TAG_typedef
+                    | gimli::DW_TAG_base_type
+            );
+            if !named {
+                continue;
+            }
+            let Some(name) = entry_string(&dwarf, &unit, entry, gimli::DW_AT_name)? else {
+                continue;
+            };
+            if names.contains_key(&name) {
+                continue;
+            }
+            let data_type = match entry_reference(&unit, entry, gimli::DW_AT_type)? {
+                Some(offset) => resolve_type(&dwarf, &unit, offset, 0, &mut Vec::new())?,
+                None => resolve_type(&dwarf, &unit, entry.offset(), 0, &mut Vec::new())?,
+            };
+            names.insert(name, data_type);
+        }
+    }
+    Ok(names)
+}
+
 // RUGRA-GLUE: shared DWARF section loader for the prototype and global importers
-fn load_dwarf(bytes: &[u8]) -> Result<Dwarf<DwarfReader>> {
-    let object = object::File::parse(bytes).context("parsing object for DWARF sections")?;
+fn load_dwarf(bytes: &[u8]) -> Result<Dwarf<DwarfReader>> {    let object = object::File::parse(bytes).context("parsing object for DWARF sections")?;
     let endian = if object.is_little_endian() {
         RunTimeEndian::Little
     } else {
@@ -283,8 +324,57 @@ impl DebugPrototypeDatabase {
         let Some(debug_proto) = self.get(fd.baseaddr.as_u64()) else {
             return Ok(false);
         };
+        let model_carrier = fd.funcp.clone();
+        fd.funcp = self.locked_proto(debug_proto, &model_carrier, storage)?;
+        Ok(true)
+    }
+
+    /// Materialize the locked call-site `FuncProto` for a callee entry
+    /// address, mirroring the other half of the same Program-database
+    /// boundary: `FlowInfo::queryCall` (flow.cc:656-672) resolves the callee
+    /// `Funcdata` whose DWARF signature the analyzer locked, and
+    /// `ActionDefaultParams` (coreaction.cc:2322-2330) copies that whole
+    /// callee prototype onto the call site with
+    /// `fc->copy(otherfunc->getFuncProto())` — `FuncProto::copy`
+    /// (fspec.cc:3789-3804) transfers the model pointer, the flag word
+    /// (every lock bit), and a clone of the parameter store, so the call
+    /// site ends up with the callee's locked parameter list verbatim.
+    ///
+    /// `model_carrier` supplies the model exactly as the callee's own
+    /// `Funcdata` would have bound it: the Architecture default model both
+    /// the decompiled function and every DWARF-analyzed callee carry (the
+    /// same carrier `apply` clones from `fd.funcp` after
+    /// `Funcdata::set_arch`'s named-ctor binding, FUNCPROTO-MODEL-BIND-0001).
+    ///
+    /// Returns `Ok(None)` when the address has no DWARF definition (import
+    /// thunk / non-debug function: the boundary contributes nothing and the
+    /// generic_clib import table or active recovery owns the call site).
+    // RUGRA-GLUE: the queryCall -> ActionDefaultParams copy boundary for DWARF-locked callees; Ghidra reaches it via the Program database, Rugra's driver hands it directly
+    pub fn locked_callsite_proto(
+        &self,
+        entry: u64,
+        model_carrier: &FuncProto,
+        storage: &X86_64GccStorage,
+    ) -> Result<Option<FuncProto>> {
+        let Some(debug_proto) = self.get(entry) else {
+            return Ok(None);
+        };
+        self.locked_proto(debug_proto, model_carrier, storage).map(Some)
+    }
+
+    // RUGRA-GLUE: shared locked-signature builder behind both halves of the
+    // DWARF Program-database boundary (own-function apply + call-site copy);
+    // the lock recipe mirrors FuncProto::setPieces (fspec.cc:3843-3852):
+    // assigned storage, DW_AT_name-gated NAME_LOCKED bits, input/output/model
+    // locks, and the void-signature unknown-model pin below.
+    fn locked_proto(
+        &self,
+        debug_proto: &DebugPrototype,
+        model_carrier: &FuncProto,
+        storage: &X86_64GccStorage,
+    ) -> Result<FuncProto> {
         let addresses = storage.assign(&debug_proto.parameters)?;
-        let mut proto: FuncProto = fd.funcp.clone();
+        let mut proto: FuncProto = model_carrier.clone();
         proto.return_type = debug_proto.return_type.clone();
         proto.parameters.clear();
         for (index, (parameter, address)) in debug_proto
@@ -339,8 +429,7 @@ impl DebugPrototypeDatabase {
         if debug_proto.parameters.is_empty() {
             proto.set_model_name("unknown");
         }
-        fd.funcp = proto;
-        Ok(true)
+        Ok(proto)
     }
 }
 
@@ -519,22 +608,34 @@ impl LibcSignatureTable {
     /// import: stays unlocked, active recovery decides) and `Err` when a
     /// listed signature cannot be represented (stack/aggregate spill).
     // Ghidra: fspec.cc:3830 FuncProto::setPieces
+    // Ghidra: fspec.cc:3503-3531 FuncCallSpecs::setGenericSignature (type half)
+    /// Resolve the platform-side locked signature for an imported callee.
+    /// `type_names` is the DWARF named-type index (`parse_type_names`): a
+    /// signature base spelling that names a DWARF-known type resolves to that
+    /// concrete type — the same name resolution Ghidra's signature loader
+    /// performs against the program's type manager, where `FILE *` is a
+    /// pointer to the real glibc `FILE` struct rather than an opaque unknown.
+    /// Without it, an unknown-based `FILE *` loses the typeOrder competition
+    /// against `char *` (SUB_PTR vs SUB_PTR, then pointee char vs unknown)
+    /// and the decompiler's inferred `char *` overwrites the locked libc
+    /// return type.
     pub fn locked_proto(
         &self,
         name: &str,
         storage: &X86_64GccStorage,
+        type_names: Option<&HashMap<String, Arc<Datatype>>>,
     ) -> Result<Option<FuncProto>> {
         let Some(signature) = self.lookup(name) else {
             return Ok(None);
         };
         let address_size = 8usize;
-        let return_type = parse_c_type(signature.return_type, address_size)?;
+        let return_type = parse_c_type(signature.return_type, address_size, type_names)?;
         let mut parameters = Vec::new();
         for declaration in split_parameter_list(signature.parameters) {
             let (type_text, parameter_name) = split_declaration(declaration)?;
             parameters.push(DebugParameter {
                 name: parameter_name.to_string(),
-                data_type: parse_c_type(type_text, address_size)?,
+                data_type: parse_c_type(type_text, address_size, type_names)?,
             });
         }
         let addresses = storage.assign(&parameters)?;
@@ -590,8 +691,12 @@ fn split_declaration(declaration: &str) -> Result<(&str, &str)> {
     Ok((type_text, name))
 }
 
-// RUGRA-GLUE: parses the signature data's C type spellings into Datatypes; only the metatype/size-bearing forms the 24-entry public libc ABI uses (void, char, int, long, size_t, time_t, ushort and pointer layers). Opaque base names (FILE, stat) resolve to an address-sized unknown base under the pointer, the same information content the decompiler can use for storage assignment
-fn parse_c_type(type_text: &str, address_size: usize) -> Result<Arc<Datatype>> {
+// RUGRA-GLUE: parses the signature data's C type spellings into Datatypes; only the metatype/size-bearing forms the 24-entry public libc ABI uses (void, char, int, long, size_t, time_t, ushort and pointer layers). A base spelling that names a DWARF-known type (FILE, stat) resolves to that concrete type through `type_names` — the same type-manager name resolution Ghidra's signature loader performs — and only falls back to an address-sized unknown base when the name is unknown
+fn parse_c_type(
+    type_text: &str,
+    address_size: usize,
+    type_names: Option<&HashMap<String, Arc<Datatype>>>,
+) -> Result<Arc<Datatype>> {
     let (base_text, pointer_depth) = split_pointer_depth(type_text);
     let mut datatype = match base_text {
         "void" => Arc::new(Datatype::Void(TypeBase::new(
@@ -624,11 +729,16 @@ fn parse_c_type(type_text: &str, address_size: usize) -> Result<Arc<Datatype>> {
             2,
             TypeMetatype::Uint,
         ))),
-        other => Arc::new(Datatype::Base(TypeBase::new(
-            other.to_string(),
-            address_size,
-            TypeMetatype::Unknown,
-        ))),
+        other => type_names
+            .and_then(|index| index.get(other))
+            .cloned()
+            .unwrap_or_else(|| {
+                Arc::new(Datatype::Base(TypeBase::new(
+                    other.to_string(),
+                    address_size,
+                    TypeMetatype::Unknown,
+                )))
+            }),
     };
     for _ in 0..pointer_depth {
         let display = format!("{} *", datatype.get_name());
@@ -1295,7 +1405,7 @@ mod tests {
 
         // free: void return, one void* parameter at RDI (0x38), fully locked.
         let free = table
-            .locked_proto("free", &storage)
+            .locked_proto("free", &storage, None)
             .expect("free signature represents")
             .expect("free is in the table");
         assert_eq!(free.return_type.get_metatype(), TypeMetatype::Void);
@@ -1307,7 +1417,7 @@ mod tests {
 
         // strdup: char * return (8-byte pointer), one char* parameter.
         let strdup = table
-            .locked_proto("strdup", &storage)
+            .locked_proto("strdup", &storage, None)
             .expect("strdup signature represents")
             .expect("strdup is in the table");
         assert_eq!(strdup.return_type.get_metatype(), TypeMetatype::Pointer);
@@ -1316,7 +1426,7 @@ mod tests {
 
         // strtol: long return, (char*, char**, int) at RDI/RSI/RDX.
         let strtol = table
-            .locked_proto("strtol", &storage)
+            .locked_proto("strtol", &storage, None)
             .expect("strtol signature represents")
             .expect("strtol is in the table");
         assert_eq!(strtol.num_params(), 3);
@@ -1326,7 +1436,7 @@ mod tests {
         // __ctype_b_loc: zero parameters, ushort ** return; the empty
         // parameter list is a locked void input.
         let ctype = table
-            .locked_proto("__ctype_b_loc", &storage)
+            .locked_proto("__ctype_b_loc", &storage, None)
             .expect("__ctype_b_loc signature represents")
             .expect("__ctype_b_loc is in the table");
         assert_eq!(ctype.num_params(), 0);
@@ -1335,7 +1445,7 @@ mod tests {
 
         // Unknown imports stay unlocked (Ok(None) — active recovery decides).
         assert!(table
-            .locked_proto("not_an_import", &storage)
+            .locked_proto("not_an_import", &storage, None)
             .expect("unknown import does not error")
             .is_none());
     }
@@ -1435,6 +1545,47 @@ mod tests {
                 .get_name(),
             "int *"
         );
+    }
+
+    // CALLSPEC-ENV-SCOPE-0001: the call-site half of the DWARF boundary —
+    // queryCall resolves the DWARF-locked callee and ActionDefaultParams
+    // copies its whole FuncProto to the call site (coreaction.cc:2322-2330),
+    // so a caller decompiling with debug info sees the callee's locked
+    // parameter list (golden main: `glob_url(&urls,pcVar12,&urlnum)` 3-arg
+    // from the DWARF definition, not an experimental guess).
+    #[test]
+    fn locked_callsite_proto_copies_dwarf_signature() {
+        let bytes = std::fs::read("examples/curl").expect("curl fixture");
+        let db = DebugPrototypeDatabase::parse_elf(&bytes).expect("DWARF prototypes");
+        // glob_url @ 0x4f70: (URLGlob **glob, char *url, int *urlnum).
+        let mut carrier = FuncProto::new("carrier".to_string(), void_type());
+        // The driver hands the callsite the same resolved default model the
+        // callee's own Funcdata would carry (FUNCPROTO-MODEL-BIND-0001):
+        // simulate the post-set_arch binding the worker performs.
+        carrier.set_model_name("__stdcall");
+        let proto = db
+            .locked_callsite_proto(0x4f70, &carrier, &register_resources())
+            .expect("glob_url callsite prototype represents")
+            .expect("glob_url has a DWARF definition");
+        assert_eq!(proto.num_params(), 3);
+        assert!(proto.is_input_locked());
+        assert!(proto.is_output_locked());
+        assert!(proto.is_model_locked());
+        assert!(!proto.is_model_unknown());
+        assert_eq!(proto.get_param(0).unwrap().name, "glob");
+        assert_eq!(proto.get_param(0).unwrap().address.as_u64(), 0x38);
+        assert_eq!(proto.get_param(2).unwrap().address.as_u64(), 0x10);
+        assert_eq!(
+            proto.get_param(0).unwrap().data_type.get_name(),
+            "URLGlob **"
+        );
+
+        // A thunk/import address has no DWARF definition: the boundary
+        // contributes nothing (Ok(None)) and the import table owns it.
+        assert!(db
+            .locked_callsite_proto(0x2490, &carrier, &register_resources())
+            .expect("thunk lookup does not error")
+            .is_none());
     }
 
     #[test]

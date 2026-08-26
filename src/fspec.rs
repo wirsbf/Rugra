@@ -428,6 +428,49 @@ impl FuncProto {
         model.input.characterize_as_param(addr_space, addr_offset, size)
     }
 
+    // Ghidra: fspec.cc:4366 FuncProto::possibleInputParam
+    /// Does the given storage location make sense as an input parameter?
+    /// Faithful port of `possibleInputParam` (fspec.cc:4366-4387). If the
+    /// proto is varargs, go straight to the model; otherwise the
+    /// `voidinputlock` gate and the locked-parameter
+    /// `justifiedContain==0` test run before the model fallback.
+    ///
+    /// The locked-parameter loop (fspec.cc:4371-4384) is gated the same way
+    /// the in-repo sibling port `characterize_as_input_param` (fspec.rs:410)
+    /// gates it: Rugra's `ProtoParameter` stores a spaceless `Address` and
+    /// no standalone size, so the per-space `justifiedContain` test cannot
+    /// be evaluated without inventing param-space state. With no locked
+    /// input parameters recorded (the protorecovery-stage state this method
+    /// is reached from — ActionDirectWrite, coreaction.cc:1368), the loop is
+    /// inert and control reaches the model exactly as in Ghidra.
+    pub fn possible_input_param(
+        &self,
+        addr_offset: u64,
+        size: i32,
+        addr_space: AddressSpace,
+    ) -> bool {
+        // Ghidra: if (!isDotdotdot()) { if ((flags&voidinputlock)!=0)
+        //   return false; ... }
+        if !self.is_dotdotdot {
+            if self.void_input_locked {
+                return false;
+            }
+            // Ghidra: int4 num = numParams(); if (num > 0) { ... locked
+            // justifiedContain loop ... if (locktest) return false; }
+            // — locked-input parameters are unreachable in Rugra's
+            // FuncProto state today (see doc comment); numParams()==0 falls
+            // through to the model like Ghidra's num==0 path.
+        }
+        // Ghidra: return model->possibleInputParam(addr,size);
+        // A modelless FuncProto is an invalid state in Ghidra (the
+        // dereference would fault); Rugra production can still observe it,
+        // and `false` is the conservative projection (do not treat the
+        // location as an official input).
+        match self.model.as_ref() {
+            Some(model) => model.possible_input_param(addr_space, Address::new(addr_offset), size),
+            None => false,
+        }
+    }
     // Ghidra: fspec.cc:4336 FuncProto::characterizeAsOutput
     /// Decide whether a given storage location could be, or could hold, the
     /// return value. Faithful port of `characterizeAsOutput`
@@ -6921,6 +6964,14 @@ impl ProtoModelFull {
         model.default_local_range(stack_space, addr_size);
         model.default_param_range(stack_space, addr_size);
         model
+    }
+
+    // Ghidra: fspec.hh:883 ProtoModel::possibleInputParam
+    /// Does the given storage location make sense as an input parameter?
+    /// Faithful inline delegation `return input->possibleParam(loc,size);`
+    /// (fspec.hh:885) to the input ParamList.
+    pub fn possible_input_param(&self, loc_space: AddressSpace, loc: Address, size: i32) -> bool {
+        self.input.possible_param(loc_space, loc, size)
     }
 
     // Ghidra: fspec.cc:2263 ProtoModel::defaultLocalRange
