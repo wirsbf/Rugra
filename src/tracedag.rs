@@ -752,20 +752,48 @@ impl<'a> TraceDAG<'a> {
                 // cc:994-999: could not push any trace further — pick an
                 // edge to be unstructured and restart from the beginning.
                 let bad = self.select_bad_edge();
+                if std::env::var("RUGRA_IRRED_DBG").map(|v| v == "1").unwrap_or(false) {
+                    let t = &self.traces[bad];
+                    eprintln!("[TD] BADEDGE trace#{} ({}->{}) edgelump={}", bad, t.bottom_block_idx, t.dest_block_idx, t.edgelump);
+                }
                 self.remove_trace(bad);
                 current = self.begin_slot();
                 missed = 0;
             } else if let Some(exit_block) = self.check_retirement(curtrace) {
                 // cc:1000-1003: resume at the iterator returned by retireBranch.
                 let bp_idx = self.traces[curtrace].top_bp;
+                if std::env::var("RUGRA_IRRED_DBG").map(|v| v == "1").unwrap_or(false) {
+                    let t = &self.traces[curtrace];
+                    eprintln!("[TD] RETIRE trace#{} bp{} exit={} t.bot={} t.dest={} t.lump={}",
+                        curtrace, bp_idx, exit_block, t.bottom_block_idx, t.dest_block_idx, t.edgelump);
+                }
                 current = self.retire_branch(bp_idx, exit_block);
                 missed = 0;
             } else if self.check_open(curtrace) {
                 // cc:1004-1007: resume at the iterator returned by openBranch.
+                if std::env::var("RUGRA_IRRED_DBG").map(|v| v == "1").unwrap_or(false) {
+                    let t = &self.traces[curtrace];
+                    eprintln!("[TD] OPEN trace#{} t.bot={} t.dest={} t.lump={}",
+                        curtrace, t.bottom_block_idx, t.dest_block_idx, t.edgelump);
+                }
                 current = self.open_branch(curtrace);
                 missed = 0;
             } else {
                 // cc:1008-1011
+                if std::env::var("RUGRA_IRRED_DBG").map(|v| v == "1").unwrap_or(false) {
+                    let t = &self.traces[curtrace];
+                    let dest = t.dest_block_idx;
+                    let sin = if dest >= 0 { self.size_in(dest) } else { 0 };
+                    let vc = self.visit_count.get(&dest).copied().unwrap_or(0);
+                    let mut ldag = 0;
+                    for s2 in 0..sin {
+                        if self.is_loop_dag_in(dest, s2) {
+                            ldag += 1;
+                        }
+                    }
+                    eprintln!("[TD] STALL trace#{} dest={} lump={} vc={} loopDAG_in={} total_in={}",
+                        curtrace, dest, t.edgelump, vc, ldag, sin);
+                }
                 missed += 1;
                 current = self.next_slot(current.unwrap());
             }

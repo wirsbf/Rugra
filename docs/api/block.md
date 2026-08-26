@@ -4,7 +4,8 @@
 
 ## 文档状态
 
-- **状态**: 已核对（当前有效）
+- **状态**: 已核对（当前有效；2026-08-27 新增 `absorbed_into`/`resolve_to_graph_level`）
+- **2026-08-27 追加（TRI2-STRUCT-IRREDUCIBLE-TRACE-0001）**: `BlockGraph` 新增 `absorbed_into: HashMap<i32,i32>` 字段（吸收块索引 → 吸收它的组合块 install 槽位）+ `resolve_to_graph_level(&self, idx) -> i32`（沿链传递解析；live 块返回自身；`clear()` 一并重置）。这是 Ghidra `FlowBlock::parent` 链（block.hh:78）的 Rugra 等价物：oracle 中被组合块吸收的组件保持 `parent` 指向包含它的组合块，`LoopBody::update`（blockaction.cc:95-102）、`FloatingEdge::getCurrentEdge`（cc:28-33）、`LoopBody::emitLikelyEdges`（cc:367-379）等经 `getParent()` 上溯到 graph 级；Rugra 组合块以 children Arc 引用组件而非每块父指针，包含关系在 identify_internal/collapse_sequences 吸收时登记到该 map。语义：链必终止于 live 顶层块（只有 live 块可被再吸收）。
 - **Ghidra 12.0.4 对齐级别**: L2；edge flags、双向 reverse-index、parent、RPO/loop/dominator 与 marshal 均有已复现反例
 - **文档目标**: 说明 Rugra 当前控制流块模型、CFG 相关对象和结构化块表示
 - **可信边界**: 本文档描述的是当前 `block.rs` 在工程中的职责与公开接口角色，不代表“控制流恢复已经与 Ghidra 完全一致”

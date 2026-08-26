@@ -2229,6 +2229,17 @@ pub struct BlockGraph {
     /// Number of descendants in the spanning tree (+1) (Ghidra `numdesc`,
     /// block.hh:126); -1 marks unset.
     pub num_desc: i32,
+    /// Absorption map: absorbed (DEAD) block index -> index of the composite
+    /// that consumed it (the composite's install slot). This is the Rust
+    /// equivalent of Ghidra's FlowBlock `parent` chain (block.hh:78): in the
+    /// oracle every absorbed component keeps `parent` pointing at its
+    /// containing composite, and algorithms like LoopBody::update
+    /// (blockaction.cc:95-102) walk `getParent()` up to the graph level.
+    /// Rugra composites hold Arc references to their components instead of a
+    /// per-block parent pointer, so the containment relation is recorded here
+    /// at identifyInternal time and resolved transitively by
+    /// `resolve_to_graph_level`.
+    pub absorbed_into: std::collections::HashMap<i32, i32>,
 }
 
 impl BlockGraph {
@@ -2243,6 +2254,7 @@ impl BlockGraph {
             flags: 0,
             copy_map: None,
             num_desc: -1,
+            absorbed_into: std::collections::HashMap::new(),
         }
     }
 
@@ -2259,6 +2271,31 @@ impl BlockGraph {
     // RUGRA-GLUE: Rust accessor (Ghidra uses list[i] inline)
     pub fn get_block(&self, i: usize) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         self.blocks.get(i).cloned()
+    }
+
+    /// Resolve a block index to its current top-level (graph-level) form by
+    /// following the absorption chain, mirroring Ghidra's
+    /// `while (bl->getParent() != graph) bl = bl->getParent();` parent walks
+    /// (e.g. LoopBody::update blockaction.cc:95-102, FloatingEdge::
+    /// getCurrentEdge blockaction.cc:28-33, LoopBody::emitLikelyEdges
+    /// blockaction.cc:367-379). A live block resolves to itself; a block
+    /// absorbed by composite C installed at slot k resolves to k (and
+    /// transitively further if C was itself absorbed later). The chain always
+    /// terminates at a live top-level block because only live blocks can be
+    /// re-absorbed.
+    // RUGRA-GLUE: parent-chain walk over the absorbed_into map (Ghidra: block.hh:78 FlowBlock::parent)
+    pub fn resolve_to_graph_level(&self, idx: i32) -> i32 {
+        let mut cur = idx;
+        // Bound the walk by the map size: each step must make progress, and
+        // the absorption relation is acyclic (a composite is installed after
+        // its components exist), so any chain is shorter than the map.
+        for _ in 0..=self.absorbed_into.len() {
+            match self.absorbed_into.get(&cur) {
+                Some(&next) if next != cur => cur = next,
+                _ => return cur,
+            }
+        }
+        cur
     }
 
     /// Clear EVERY in-edge and out-edge label of every component block.
@@ -3006,6 +3043,9 @@ impl BlockGraph {
         self.blocks.clear();
         self.incoming.clear();
         self.outgoing.clear();
+        // Absorption bookkeeping refers to the previous block population;
+        // reset with the graph (Ghidra rebuilds the parent relation per copy).
+        self.absorbed_into.clear();
     }
 
     // Ghidra: block.cc:1439 BlockGraph::addEdge

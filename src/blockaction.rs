@@ -533,34 +533,29 @@ pub struct FloatingEdge {
 
 impl FloatingEdge {
     // Ghidra: blockaction.cc:27 FloatingEdge::getCurrentEdge
-    /// Re-resolve this edge against the live graph: move top/bottom up through
-    /// the collapse hierarchy to the current graph level, then check if the
-    /// out-edge still exists. Returns Some((top_idx, outedge)) if the edge is
-    /// still present, None if it was collapsed away.
-    ///
-    /// Ghidra walks `top->getParent() != graph` (up through nested structured
-    /// blocks). Rugra's index-based model doesn't maintain a clean parent
-    /// chain at graph level (identify_internal installs structured blocks at
-    /// install_idx, consuming children which become DEAD). So we resolve by:
-    /// if the original top/bottom indices are still live (not DEAD) and top
-    /// has an out-edge to bottom, use them; otherwise None. This mirrors the
-    /// effect of Ghidra's parent-walk for the common case where the edge
-    /// hasn't been collapsed.
+    /// Re-resolve the edge against the current graph:
+    ///   - cc:28-33: walk both endpoints up the collapse hierarchy
+    ///     (`while(top->getParent() != graph) top = top->getParent();`) so an
+    ///     endpoint absorbed by a composite resolves to that composite, whose
+    ///     inherited boundary edges (selfIdentify) represent the same flow.
+    ///   - cc:34-35: find the out-slot of the resolved top that targets the
+    ///     resolved bottom; failure means the edge no longer exists.
+    /// The previous port returned None whenever the source block carried the
+    /// DEAD flag, dropping edges whose source was absorbed — diverging from
+    /// the oracle exactly where selectGoto re-resolves leftover likelygoto
+    /// entries after a collapse round.
     pub fn get_current_edge(&self, graph: &BlockGraph) -> Option<(i32, usize)> {
-        let top_i = self.from_idx as usize;
-        let bottom_i = self.to_idx as usize;
+        let top = graph.resolve_to_graph_level(self.from_idx);
+        let bottom = graph.resolve_to_graph_level(self.to_idx);
+        let top_i = top as usize;
         if top_i >= graph.get_size() { return None; }
-        let top = graph.get_block(top_i)?;
-        let top_r = top.read().unwrap();
-        // If top was consumed (DEAD), the edge is gone.
-        if top_r.get_flags() & crate::block::block_flags::DEAD != 0 { return None; }
-        // Find the out-slot whose target is bottom (by index identity or
-        // current bottom index if still live).
+        let top_blk = graph.get_block(top_i)?;
+        let top_r = top_blk.read().unwrap();
         for slot in 0..top_r.size_out() {
             if let Some(e) = top_r.get_out(slot) {
                 let dst = e.point.read().unwrap().get_index();
-                if dst == self.to_idx {
-                    return Some((self.from_idx, slot));
+                if dst == bottom {
+                    return Some((top, slot));
                 }
             }
         }
@@ -939,25 +934,58 @@ impl LoopBody {
     /// Emit edges that exit this loop body to a likely-goto list, with proper
     /// priority: exit edges first (official exit edge held last among them),
     /// then back-edges (tails→head) in reverse tail order. Faithful to
-    /// `LoopBody::emitLikelyEdges` (blockaction.cc:364-412). The resulting list
-    /// orders candidate goto edges so the structurer prefers keeping the
-    /// official loop exit structured and marks the others as goto.
-    pub fn emit_likely_edges(&self, likely: &mut Vec<FloatingEdge>, graph: &BlockGraph) {
-        // Exit edges, holding off the official exit-to-exitblock edge until the
-        // end (so it appears right before the final back-edge).
+    /// `LoopBody::emitLikelyEdges` (blockaction.cc:364-412):
+    ///   - cc:367-371: resolve head and exitblock up the collapse hierarchy.
+    ///   - cc:372-379: resolve each tail; if the exitblock was collapsed into
+    ///     a tail, the loop no longer really has an exit (exitblock = null).
+    ///   - cc:381-397: walk exit_edges in order, re-resolving each against the
+    ///     live graph via getCurrentEdge (vanished edges are skipped); the
+    ///     official exit edge (resolved target == exitblock) at the LAST
+    ///     entry is held back.
+    ///   - cc:398-409: emit the held exit edge right before the final
+    ///     back-edge, then back-edges (tail→head) in reverse tail order.
+    /// The resulting list orders candidate goto edges so the structurer
+    /// prefers keeping the official loop exit structured and marks the others
+    /// as goto.
+    pub fn emit_likely_edges(&mut self, likely: &mut Vec<FloatingEdge>, graph: &BlockGraph) {
+        // cc:367-371: resolve head and exitblock up the hierarchy.
+        self.head = graph.resolve_to_graph_level(self.head);
+        if self.exit_block >= 0 {
+            self.exit_block = graph.resolve_to_graph_level(self.exit_block);
+        }
+        // cc:372-379: resolve tails; absorbed exitblock nulls the exit.
+        for ti in 0..self.tails.len() {
+            let tail = graph.resolve_to_graph_level(self.tails[ti]);
+            self.tails[ti] = tail;
+            if tail == self.exit_block {
+                // If the exitblock was collapsed into the tail, we no longer
+                // really have an exit.
+                self.exit_block = -1;
+            }
+        }
+        // cc:381-397: exit edges, holding off the official exit edge.
         let mut hold: Option<FloatingEdge> = None;
         let n = self.exit_edges.len();
         for (i, fe) in self.exit_edges.iter().enumerate() {
-            if i == n.saturating_sub(1) && fe.to_idx == self.exit_block {
-                hold = Some(fe.clone());
-                continue;
+            // cc:388-390: re-resolve against the live graph; skip vanished.
+            let Some((top_idx, slot)) = fe.get_current_edge(graph) else { continue };
+            let Some(top_blk) = graph.get_block(top_idx as usize) else { continue };
+            let out_idx = {
+                let r = top_blk.read().unwrap();
+                r.get_out(slot).map(|e| e.point.read().unwrap().get_index())
+            };
+            let Some(out_idx) = out_idx else { continue };
+            // cc:391-397: last entry targeting the exitblock is held.
+            if i == n.saturating_sub(1) && out_idx == self.exit_block {
+                hold = Some(FloatingEdge { from_idx: top_idx, to_idx: out_idx });
+                break;
             }
-            likely.push(fe.clone());
+            likely.push(FloatingEdge { from_idx: top_idx, to_idx: out_idx });
         }
-        // Back-edges in reverse tail order; the held exit edge goes right before
-        // the final (first-tail) back-edge.
+        // cc:398-409: back-edges in reverse tail order; the held exit edge
+        // goes right before the final (first-tail) back-edge.
         let tails_len = self.tails.len();
-        for (rev_i, &tail) in self.tails.iter().rev().enumerate() {
+        for (rev_i, &tail) in self.tails.clone().iter().rev().enumerate() {
             if rev_i == tails_len - 1 {
                 if let Some(h) = hold.take() {
                     likely.push(h);
@@ -983,32 +1011,47 @@ impl LoopBody {
     /// Update head/tails to the current graph view and return the loop's
     /// bottom (first tail not collapsed into head). Returns None if the loop
     /// has been fully collapsed (or head self-loops, returning Some(head)).
-    /// Faithful to `LoopBody::update` (blockaction.cc:94-114). Rugra's
-    /// index-based model: a block is "collapsed" if DEAD or its index no
-    /// longer holds a live block matching the loop's tail.
+    /// Faithful to `LoopBody::update` (blockaction.cc:94-114):
+    ///   - cc:95-96: `while(head->getParent() != graph) head = head->getParent();`
+    ///     — resolve the head through the collapse hierarchy to a top-level
+    ///     block. A head absorbed by a composite resolves to the composite.
+    ///   - cc:97-103: same parent-chain walk per tail; the first tail that
+    ///     does NOT resolve to (the resolved) head is the loop bottom — the
+    ///     loop still exists even if its tail was absorbed by a composite,
+    ///     because the composite holds the tail and is itself live.
+    ///   - cc:104-112: all tails resolved into the head block — the loop is
+    ///     fully collapsed; only a head self-loop edge keeps it alive.
+    ///   - cc:113: return null otherwise.
+    /// The previous port returned None as soon as a tail carried the DEAD
+    /// flag, treating absorption as loop death. In the oracle an absorbed
+    /// tail resolves to its live containing composite, so `updateLoopBody`
+    /// (cc:1214-1216) sees the loop alive and selectGoto keeps consuming the
+    /// remaining likelygoto entries. That divergence is what stranded the
+    /// irreducible jumptable-neighborhood loops (TRI2-STRUCT-IRREDUCIBLE-
+    /// TRACE-0001): the leftover candidate goto edges were dropped before
+    /// being marked, the final TraceDAG found nothing, and selectGoto hit
+    /// the cc:1275 LowlevelError site.
     pub fn update(&mut self, graph: &BlockGraph) -> Option<i32> {
-        // For each tail, if it's still live (not DEAD) and != head, it's the bottom.
+        // cc:95-96: resolve head up the hierarchy.
+        self.head = graph.resolve_to_graph_level(self.head);
+        // cc:97-103: resolve each tail; first one that is not the head is
+        // the bottom.
         for ti in 0..self.tails.len() {
-            let tail_i = self.tails[ti] as usize;
-            if tail_i >= graph.get_size() { continue; }
-            let tail_blk = match graph.get_block(tail_i) { Some(b) => b, None => continue };
-            let tail_r = tail_blk.read().unwrap();
-            if tail_r.get_flags() & crate::block::block_flags::DEAD != 0 { continue; }
-            if tail_i as i32 != self.head {
-                return Some(tail_i as i32);
+            let bottom = graph.resolve_to_graph_level(self.tails[ti]);
+            self.tails[ti] = bottom;
+            if bottom != self.head {
+                return Some(bottom); // Loop hasn't been fully collapsed yet
             }
         }
-        // Check head self-loop (cc:109-112).
+        // cc:104-109: check for head looping with itself.
         let head_i = self.head as usize;
         if head_i < graph.get_size() {
             if let Some(head_blk) = graph.get_block(head_i) {
                 let head_r = head_blk.read().unwrap();
-                if head_r.get_flags() & crate::block::block_flags::DEAD == 0 {
-                    for slot in 0..head_r.size_out() {
-                        if let Some(e) = head_r.get_out(slot) {
-                            if e.point.read().unwrap().get_index() == self.head {
-                                return Some(self.head);
-                            }
+                for slot in 0..head_r.size_out() {
+                    if let Some(e) = head_r.get_out(slot) {
+                        if e.point.read().unwrap().get_index() == self.head {
+                            return Some(self.head);
                         }
                     }
                 }
@@ -1847,8 +1890,32 @@ impl<'a> CollapseStructure<'a> {
         }
         // cc:1242
         self.likelylistfull = true;
+        if std::env::var("RUGRA_IRRED_DBG").map(|v| v == "1").unwrap_or(false) {
+            eprintln!("[IRRED] {} trace done loopbottom={} edges={:?}", self.name, loopbottom,
+                edges.iter().map(|e| (e.top, e.bottom)).collect::<Vec<_>>());
+        }
         if loopbottom == -1 && edges.is_empty() {
             // cc:1247-1250: no loops left and the trace found no gotos.
+            if std::env::var("RUGRA_IRRED_DBG").map(|v| v == "1").unwrap_or(false) {
+                let n_live = (0..self.graph.get_size()).filter(|&i| {
+                    self.graph.get_block(i).map(|b| {
+                        b.read().unwrap().get_flags() & crate::block::block_flags::DEAD == 0
+                    }).unwrap_or(false)
+                }).count();
+                eprintln!("[IRRED] {} finaltrace residual graph (live={}):", self.name, n_live);
+                for i in 0..self.graph.get_size() {
+                    let Some(b) = self.graph.get_block(i) else { continue };
+                    let r = b.read().unwrap();
+                    if r.get_flags() & crate::block::block_flags::DEAD != 0 { continue; }
+                    let outs: Vec<String> = (0..r.size_out()).filter_map(|j| {
+                        r.get_out(j).map(|e| format!("{}(L{:x})", e.point.read().unwrap().get_index(), e.flags))
+                    }).collect();
+                    let ins: Vec<String> = (0..r.size_in()).filter_map(|j| {
+                        r.get_in(j).map(|e| format!("{}(L{:x})", e.point.read().unwrap().get_index(), e.flags))
+                    }).collect();
+                    eprintln!("[IRRED]   blk{} in=[{}] out=[{}]", r.get_index(), ins.join(","), outs.join(","));
+                }
+            }
             self.finaltrace = true;
             return false;
         }
@@ -2223,6 +2290,13 @@ impl<'a> CollapseStructure<'a> {
         }
         // Store into the VecDeque for updateLoopBody-style iteration.
         self.loop_order = loop_order.into_iter().collect();
+        if std::env::var("RUGRA_IRRED_DBG").map(|v| v == "1").unwrap_or(false) {
+            for (i, lb) in self.loop_order.iter().enumerate() {
+                eprintln!("[IRRED] {} loop_order[{}] head={} tails={:?} depth={} exit={} exit_edges={:?}",
+                    self.name, i, lb.head, lb.tails, lb.depth, lb.exit_block,
+                    lb.exit_edges.iter().map(|e| (e.from_idx, e.to_idx)).collect::<Vec<_>>());
+            }
+        }
         eprintln!(
             "[COLLAPSE] {} LoopBody pipeline: {} loops, depths={}",
             self.name,
@@ -3065,6 +3139,11 @@ impl<'a> CollapseStructure<'a> {
                     if let Some(cb) = self.graph.get_block(i) {
                         strip_external(&cb);
                         cb.write().unwrap().set_flags(crate::block::block_flags::DEAD);
+                        // Record the containment (Ghidra: the consumed node's
+                        // `parent` becomes the new composite, block.hh:78).
+                        self.graph
+                            .absorbed_into
+                            .insert(idx, install_idx as i32);
                     }
                 }
             }
@@ -4964,6 +5043,11 @@ impl<'a> CollapseStructure<'a> {
             // structured later. finalize_structure (Phase 1.1) physically
             // removes DEAD blocks at the end of collapse_all.
             succ.write().unwrap().set_flags(crate::block::block_flags::DEAD);
+            // Record the containment (Ghidra: consumed node's `parent`
+            // becomes the composite, block.hh:78) for parent-chain walks.
+            self.graph
+                .absorbed_into
+                .insert(succ_idx as i32, block_idx_val);
             self.change_count += 1;
         }
     }
