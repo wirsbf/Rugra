@@ -967,3 +967,10 @@ interior-goto 标记。
   的 oracle 规则序列为 ruleBlockOr → ruleBlockIfNoExit 包 D（cc:1840 第二
   趟）→ ruleBlockCat 合并 sink C，终态 List[If[Condition(Or), D], C]（旧断
   言只搜一层，恰好匹配旧 bug 造成的 Condition 直接 List 子节点形态）。
+## build_copy 活动视图接线（TRI2-STORESPLIT-WHOLESTRUCT-0001，2026-08-26）
+
+`build_copy` 不再快照 `ops`：镜像块经 `live_ops_source` 链接到原 bblock 的
+活动 op 列表（Ghidra `BlockGraph::buildCopy` block.cc:1925-1938 建立的
+BlockCopy 委托契约，block.hh:520-535）。BRANCHIND 的 f_switch_out 复算改从
+源块读取（镜像不再持有自己的 op 快照）。效果：ActionBlockStructure 之后由
+cleanup pool（RuleSplit* 等）插入的 STORE 对打印可见。

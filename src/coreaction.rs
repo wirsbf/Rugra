@@ -5252,23 +5252,85 @@ impl ActionInferTypes {
                         }
                     }
                 }
-                // LOAD/STORE: Ghidra's buildLocaltypes (coreaction.cc:5008-
-                // 5037) seeds NOTHING from these ops — Varnode::getLocalType
-                // (varnode.cc:900-936) consults the DEF's outputTypeLocal
-                // (LOAD/STORE outputs: base UNKNOWN; a SEALED PTRSUB address
-                // early-returns its TYPE_INT local) plus the DESCENDANT ops'
-                // inputTypeLocal (e.g. a CALL's locked parameter type). The
-                // former op-centric seeding here bootstrapped the ADDRESS
-                // temp with pointer-to-sized-scalar (`long *`), which is not
-                // an edge write and thus BYPASSED the RulePtrArith seal
-                // (stops_up_propagation blocks only propagate_type_edge
-                // targets, outslot >= 0) — it overwrote the downChain
-                // field-pointer char** on my_fwrite's `stream->_IO_read_ptr`
-                // PTRSUB and suppressed the golden `(FILE *)`/`(char *)`
-                // casts. Outputs/addresses fall through to the generic
-                // fallback (int8) and the propagation rounds below, exactly
-                // as Ghidra's def/descendant dispatch does.
-                OpCode::CPUI_LOAD | OpCode::CPUI_STORE => {}
+                // LOAD: address input (slot 1) is a pointer; output gets a
+                // size-based scalar so the address pointer can bootstrap.
+                OpCode::CPUI_LOAD => {
+                    if let (Some(space_in), Some(addr_in), Some(out)) =
+                        (op.get_in(0), op.get_in(1), op.get_out())
+                    {
+                        let av = addr_in.read().unwrap();
+                        let _ = space_in;
+                        let ov = out.read().unwrap();
+                        // If the address varnode already carries a pointer
+                        // type (e.g. a type-locked parameter), the load
+                        // output takes the pointed-to type — Ghidra's
+                        // TypeOpLoad::propagateType (typeop.cc:487-505)
+                        // input1→output edge. Fall back to the size-based
+                        // scalar otherwise.
+                        let addr_ptr_pointed = av
+                            .v_type
+                            .as_ref()
+                            .and_then(|t| match t.as_ref() {
+                                crate::type_system::datatype::Datatype::Pointer(pt) => {
+                                    Some(pt.ptr_to.clone())
+                                }
+                                _ => None,
+                            });
+                        let pointed = addr_ptr_pointed
+                            .unwrap_or_else(|| int_types.sized(ov.get_size()));
+                        temps
+                            .entry(vn_id(&av))
+                            .and_modify(|e| {
+                                if e.get_metatype() == TypeMetatype::Unknown {
+                                    *e = make_ptr(pointed.clone(), ptr_size);
+                                }
+                            })
+                            .or_insert_with(|| make_ptr(pointed.clone(), ptr_size));
+                        temps.entry(vn_id(&ov)).or_insert(pointed);
+                    }
+                }
+                // STORE: the value input's LOCAL type is the default
+                // `TypeOp::getInputLocal` (typeop.cc:271-275):
+                // `TypeOpStore` overrides only getInputCast and
+                // propagateType (typeop.cc:520-570), never the local
+                // lookup, so Ghidra seeds the factory's unknown base
+                // of the value's OWN size — never a narrower int.
+                // `IntTypes::sized` saturates at the 8-byte `long`,
+                // which stamps an 8-byte type on a 16-byte XMM
+                // constant; that size-mismatched local is a state
+                // Ghidra's inference cannot produce (the
+                // pointer->value edge of `TypeOpStore::
+                // propagateType` -> `propagateFromPointer`
+                // (typeop.cc:206-228) crosses only exact-size or
+                // partial-enum matches). The full-width unknown
+                // local is what lets `testDatatypeCompatibility`'s
+                // piece walk (subflow.cc:2319-2334) cover every
+                // outType component, so RuleSplitStore
+                // (subflow.cc:2991-3004) splits whole-struct
+                // constant STOREs into per-field STOREs
+                // (TRI2-STORESPLIT-WHOLESTRUCT-0001).
+                OpCode::CPUI_STORE => {
+                    if let (Some(addr_in), Some(val_in)) = (op.get_in(1), op.get_in(2)) {
+                        let av = addr_in.read().unwrap();
+                        let vv = val_in.read().unwrap();
+                        let pointed = match fd
+                            .arch
+                            .as_ref()
+                            .and_then(|a| a.types.clone())
+                            .map(|tf| {
+                                tf.write()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                    .get_base_result(vv.get_size(), TypeMetatype::Unknown)
+                            }) {
+                            Some(Ok(ct)) => ct,
+                            _ => int_types.sized(vv.get_size()),
+                        };
+                        temps
+                            .entry(vn_id(&av))
+                            .or_insert_with(|| make_ptr(pointed.clone(), ptr_size));
+                        temps.entry(vn_id(&vv)).or_insert(pointed);
+                    }
+                }
                 // INT_ADD/INT_SUB/PTRSUB/PTRADD with a spacebase input →
                 // pointer output. Mirrors Ghidra's pointer arithmetic
                 // propagation (Varnode::getLocalType spacebase path).

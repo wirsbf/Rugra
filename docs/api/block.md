@@ -1360,3 +1360,19 @@ max_implied_ref 取默认常量 2（与 ActionRestructureVarnode 同一先例）
   `[BLOCKSTRUCT] WARN`（BLOCK-RECIPROCAL-OOB-0001 残差，见 TODO_BOARD；
   修复路径 = selfIdentify 的 replace*Edge 完整移植 block.cc:160-191）。
   httpd 29/30 函数 0 panic；该残差 WARN 在 httpd 全量出现 28 次。
+
+## BlockBasic::live_ops_source 镜像委托（TRI2-STORESPLIT-WHOLESTRUCT-0001，2026-08-26）
+
+`BlockBasic` 新增 `live_ops_source: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>`
+字段（RUGRA-GLUE）：Ghidra 的结构图节点是 `BlockCopy` 镜像
+（`BlockGraph::buildCopy`，block.cc:1925-1938），其 `firstOp`/`lastOp`/
+`printRaw`/`emit` 全部经 `copy` 字段读**原 BlockBasic 的活动 op 列表**
+（block.hh:520-535；`PrintC::emitBlockCopy` printc.cc:2759-2764 发射
+`subBlock(0)` 即原块）。因此在 ActionBlockStructure 之后插入 PcodeOp
+（cleanup pool：RuleSplitCopy/SplitLoad/SplitStore/StringCopy/StringStore，
+coreaction.cc:5694-5712）对打印与后续读者始终可见。Rugra 的 `build_copy`
+此前对 `ops` 做快照，晚插入的拆分 STORE 在打印期丢失；该字段让新建镜像
+携带同一活动视图契约（完整 BlockCopy 移植前过渡，登记
+BLOCK-BUILDCOPY-MIRROR-0001）。仅 build_copy 设置；`bblocks` 中的原块
+永不携带镜像链，委托不递归。字段持 trait 对象（BlockGraph 块即
+`Arc<RwLock<dyn FlowBlock>>`），`get_ops` 经 trait 方法委托。

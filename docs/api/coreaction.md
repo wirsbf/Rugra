@@ -1804,3 +1804,18 @@ buildTypegrp + :1269 ELEM_DATA_ORGANIZATION + :1350 setupSizes）装配
   buildInputFromTrials → clearActiveInput 与 oracle 逐行对应。
 - `test_action_funclink_initializes_active` 更新为 oracle 行为：unlocked
   callee 仅 initActiveInput（0 trial），trial 由 heritage guardCalls 注册。
+
+## ActionInferTypes STORE 值局部类型改用工厂 getBase（TRI2-STORESPLIT-WHOLESTRUCT-0001，2026-08-26）
+
+STORE 值输入（slot 2）的局部类型种子从 `IntTypes::sized(size)`（8 字节
+`long` 封顶）改为工厂 `getBase(size, UNKNOWN)`：Ghidra 的
+`Varnode::getLocalType`（varnode.cc:900-936）对每个读者取
+`op->inputTypeLocal(i)`，`TypeOpStore` 不覆写 `getInputLocal`
+（typeop.hh:279 注释掉），走默认 `TypeOp::getInputLocal`
+（typeop.cc:271-275）= `tlst->getBase(自身尺寸, TYPE_UNKNOWN)`；尺寸 16
+经 type.cc:3652-3656 变为 unknown1 数组。指针→值方向的
+`TypeOpStore::propagateType`→`propagateFromPointer`（typeop.cc:206-228）
+只跨精确尺寸或部分枚举匹配，不会把 16 字节常量压成 8 字节整型。全宽
+unknown 局部类型使 `testDatatypeCompatibility` 的分段游走
+（subflow.cc:2319-2334）覆盖 outType 每个字段，RuleSplitStore
+（subflow.cc:2991-3004）得以把整结构常量 STORE 拆成逐字段 STORE。
