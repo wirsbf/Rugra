@@ -1699,6 +1699,20 @@ MERGE-CLEAR-LIFECYCLE-0001（上文）记录的 `funcdata::` 2 个预存在失�
 - 验收：curl E2E main 从 timeout（>10s 无输出）恢复收敛，全文件
   in_ram_* irregular-input 命名 66→0，差分门禁 defects=0/numbering=0
   （124 函数）。
+
+### 2026-08-26：mapGlobals maxvn 携带修复（R-MAPGLOBALS REJECT fix-forward）
+- 独立复核 R-MAPGLOBALS（机制 C）在 `map_globals` 判 REJECT：oracle
+  funcdata_varnode.cc:1685-1686 `if (vn->getSize() > maxvn->getSize())
+  maxvn = vn;` 携带**varnode 本体**，cc:1692-1693 的 ct 取组内最大
+  varnode 的 high 类型；Rugra 侧 `maxvn` 只取组起始且从不更新
+  （`max_size`/`max_addr` 标量是对的），ct 分支读了错源。
+- 修复：内层循环 `if n_size > max_size` 臂同步 `maxvn = next.clone()`
+  （funcdata.rs map_globals，3 行代码变更）；触发输入类为同基址双宽度
+  persist varnode（loc 序 size 升序，较小者为组起始）且最大者尾 == 组尾。
+- 判别 fixture：`FUNCDATA-MAPGLOBALS-MAXVN-0001`
+  （tests/oracle/funcdata_mapglobals_maxvn_1204）以同基址 1+8 字节
+  persist varnode 钉死 ct 取大 varnode（addSymbol 尺寸 8）与
+  entry 臂 inconsistentuse 翻转（warningHeader）。
 ## 2026-08-25：`JUMPTABLE-PIPELINE-0001` 段2 — stageJumpTable/recoverJumpTable 分级恢复
 
 `Funcdata::stage_jump_table(partial, jt, op, flow_state)`（funcdata_block.cc:491-548）

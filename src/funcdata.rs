@@ -9602,7 +9602,10 @@ impl Funcdata {
             if !vn.read().unwrap().is_persist() { continue; } // Could be a code ref
             if vn.read().unwrap().get_symbol_entry().is_some() { continue; }
             // cc:1671-1673: the group's base address and initial end.
-            let maxvn = vn.clone();
+            // maxvn starts as the group-start varnode and is REASSIGNED by
+            // the inner loop on strictly greater size (cc:1685-1686), so the
+            // ct read below takes the biggest varnode's high type.
+            let mut maxvn = vn.clone();
             let (base_space, addr) = { let r = vn.read().unwrap(); (r.get_space(), *r.get_addr()) };
             let mut endaddr = addr.as_u64() + vn.read().unwrap().get_size() as u64;
             let mut uncovered: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
@@ -9631,10 +9634,14 @@ impl Funcdata {
                     }
                     // cc:1684: endaddr extends to this varnode's end.
                     endaddr = n_addr_arc.as_u64() + n_size as u64;
-                    // cc:1685-1686: track the biggest varnode in the group.
+                    // cc:1685-1686: track the biggest varnode in the group —
+                    // `if (vn->getSize() > maxvn->getSize()) maxvn = vn;`
+                    // carries the varnode itself (max_size/max_addr are its
+                    // size/addr projection), first-maximal wins.
                     if n_size > max_size {
                         max_size = n_size;
                         max_addr = n_addr_arc;
+                        maxvn = next.clone();
                     }
                     i += 1;
                 } else {
