@@ -1350,7 +1350,11 @@ pub struct AddMapContext<'a> {
 
 /// An in-memory implementation of the Scope interface. Faithful to `Scope`
 /// (database.hh:462) + `ScopeInternal` (database.hh:798).
-#[derive(Debug, Clone)]
+// Clone: the lazy `maptable` index (Mutex-guarded) rebuilds from `entries`
+// on first query, so a cloned Scope starts with a fresh (dirty) index —
+// observably identical to the C++ copy (which rebuilds its rangemap
+// through the copy constructor's addMap calls).
+#[derive(Debug)]
 pub struct Scope {
     /// Unique id for the scope.
     pub unique_id: u64,
@@ -1368,12 +1372,62 @@ pub struct Scope {
     pub entries: Vec<SymbolEntry>,
     /// Dynamic storage entries.
     pub dynamic_entries: Vec<SymbolEntry>,
+    /// Static-entry indices ordered by `(addr, insertion seq)` — the Rust
+    /// realization of ScopeInternal's `maptable` address rangemap
+    /// (database.hh:877-878 `EntryMap` over `maptable`), backing
+    /// `find_container`'s binary-search containment query. Insertion order
+    /// is preserved for equal addresses (the seq tie-break), so the Vec
+    /// `entries` itself stays the observable insertion-order container.
+    /// Guarded by a Mutex so the (immutable) query path can rebuild it
+    /// lazily after mutation (the C++ maintains its rangemap incrementally
+    /// on insert; a lazy rebuild yields the identical pure-function-of-
+    /// -entries query answer, which is what alignment observes).
+    addr_index: std::sync::Mutex<AddrIndex>,
     /// References to Symbol objects organized by category.
     pub categories: BTreeMap<i32, CategoryList>,
     /// Next available symbol id.
     pub next_unique_id: u64,
     /// Child scope ids.
     pub children: Vec<u64>,
+}
+
+// RUGRA-GLUE: manual Clone (the Mutex-guarded index is not Clone): the
+// copy re-derives a fresh (dirty) maptable index that rebuilds from
+// `entries` on first query — observably identical to the C++ copy, whose
+// rangemap is re-populated entry-by-entry.
+impl Clone for Scope {
+    // RUGRA-GLUE: trait-impl method (see the impl-block note above): the
+    // field copy plus a fresh dirty addr_index.
+    fn clone(&self) -> Self {
+        Self {
+            unique_id: self.unique_id,
+            name: self.name.clone(),
+            display_name: self.display_name.clone(),
+            parent_id: self.parent_id,
+            rangetree: self.rangetree.clone(),
+            symbols: self.symbols.clone(),
+            entries: self.entries.clone(),
+            dynamic_entries: self.dynamic_entries.clone(),
+            addr_index: std::sync::Mutex::new(AddrIndex::default()),
+            categories: self.categories.clone(),
+            next_unique_id: self.next_unique_id,
+            children: self.children.clone(),
+        }
+    }
+}
+
+// RUGRA-GLUE: the sorted-address index backing Scope::find_container's
+// binary-search containment query — ScopeInternal's per-space `maptable`
+// rangemap (database.hh:877-878) realized as `(addr, insertion seq)`
+// sorted entry indices plus a parallel prefix-max-end array. Rebuilt
+// lazily after any entries mutation; `None` marks the dirty state.
+#[derive(Default, Debug, Clone)]
+struct AddrIndex {
+    /// Entry indices sorted by `(entry.addr, index)` — `None` = dirty.
+    sorted: Option<Vec<u32>>,
+    /// Parallel to the built `sorted`: `prefix_max_end[p]` is the largest
+    /// `get_last()` over `sorted[0..=p]`, pruning the backward walk.
+    prefix_max_end: Vec<u64>,
 }
 
 impl Scope {
@@ -1390,6 +1444,7 @@ impl Scope {
             symbols: BTreeMap::new(),
             entries: Vec::new(),
             dynamic_entries: Vec::new(),
+            addr_index: std::sync::Mutex::new(AddrIndex::default()),
             categories: BTreeMap::new(),
             next_unique_id: ID_BASE,
             children: Vec::new(),
@@ -1400,6 +1455,19 @@ impl Scope {
     /// Get the name of the Scope.
     pub fn get_name(&self) -> &str {
         &self.name
+    }
+
+    // RUGRA-GLUE: addr_sorted index maintenance (ScopeInternal's maptable
+    // rangemap is maintained incrementally on insert in C++; the Rust port
+    // marks the index dirty at every entry push/retain/clear site and
+    // rebuilds it lazily at the next find_container query — O(1) per
+    /// mutation, one O(n log n) rebuild per query epoch, and the identical
+    /// pure-function-of-entries query answers).
+    fn invalidate_addr_index(&mut self) {
+        if let Ok(mut index) = self.addr_index.lock() {
+            index.sorted = None;
+            index.prefix_max_end.clear();
+        }
     }
 
     // Ghidra: database.hh:34 Scope::getDisplayName
@@ -1479,6 +1547,8 @@ impl Scope {
             size,
             RangeList::new(),
         ));
+        // maptable insert (database.cc:1869 addMapInternal).
+        self.invalidate_addr_index();
         id
     }
 
@@ -1508,6 +1578,8 @@ impl Scope {
         self.entries.retain(|e| {
             e.symbol.read().unwrap().symbol_id != symbol_id
         });
+        // maptable rebuild after entry removal (positional renumbering).
+        self.invalidate_addr_index();
         self.dynamic_entries.retain(|e| {
             e.symbol.read().unwrap().symbol_id != symbol_id
         });
@@ -1549,15 +1621,96 @@ impl Scope {
             .find(|e| e.addr == addr && e.offset == 0)
     }
 
-    // Ghidra: database.hh:34 Scope::findContainer
-    /// Find the smallest Symbol containing the given memory range. Faithful to
-    /// `findContainer` (database.hh:629).
-    pub fn find_container(&self, addr: Address, size: i32) -> Option<&SymbolEntry> {
-        let target_end = addr.as_u64().saturating_add(size as u64 - 1);
-        self.entries.iter().filter(|e| {
-            let e_end = e.addr.as_u64().saturating_add(e.size as u64 - 1);
-            e.addr.as_u64() <= addr.as_u64() && target_end <= e_end
-        }).min_by_key(|e| e.size)
+    // Ghidra: database.cc:2250 ScopeInternal::findContainer
+    /// Find the smallest SymbolEntry containing the given memory range that
+    /// is valid at `usepoint`. Faithful to `ScopeInternal::findContainer`
+    /// (database.cc:2250-2276): the C++ queries the per-space `maptable`
+    /// rangemap for the refinement interval containing `addr` (the
+    /// `rangemap->find` window, rangemap.hh:355 — copies sub-sorted by
+    /// first-use, bounded by the usepoint) and walks it backward, keeping a
+    /// candidate only if it is strictly smaller than the running best
+    /// (`entry->getSize() < oldsize || oldsize == -1`, cc:2268), requires
+    /// `entry->inUse(usepoint)` (cc:2269), and breaks on an exact size match
+    /// (cc:2270-2271). The Rust realization walks [`Scope::addr_sorted`]
+    /// backward from the last entry starting at or before `addr`
+    /// (containment requires `e.addr <= addr`), pruned by
+    /// [`Scope::addr_prefix_max_end`] (stop once no lower-positioned entry
+    /// can reach the range end), with the same strict-smaller/inUse/exact-
+    /// break selection. Walk-order divergence: the oracle's window order is
+    /// (interval copy, subsort) while this walk is (addr, insertion seq) —
+    /// the selection outcome (unique smallest in-use container) is identical
+    /// for the flat / nested-at-same-base entry sets the loaders and
+    /// analyzers seed; only an equal-size overlapping tie at different
+    /// addresses could resolve differently. Returns the index into
+    /// `entries`, so `stackContainer` hands the index straight through
+    /// without a linear position lookup.
+    pub fn find_container(
+        &self,
+        addr: Address,
+        size: i32,
+        usepoint: Address,
+    ) -> Option<usize> {
+        // ScopeInternal::addMapInternal (database.cc:1841-1842) rejects
+        // zero/negative-size mappings; a degenerate query finds nothing.
+        if size <= 0 {
+            return None;
+        }
+        let start = addr.as_u64();
+        // cc:2266 — uintb end = addr.getOffset() + size - 1.
+        let end = start + size as u64 - 1;
+        // Lazy maptable build (see invalidate_addr_index): the index is a
+        // pure function of `entries`, so a rebuild-on-dirty query answers
+        // identically to the C++'s incrementally-maintained rangemap.
+        let mut index_guard = self.addr_index.lock().ok()?;
+        if index_guard.sorted.is_none() {
+            let mut sorted: Vec<u32> = (0..self.entries.len() as u32).collect();
+            sorted.sort_by_key(|&i| (self.entries[i as usize].addr.as_u64(), i));
+            let mut prefix_max_end = Vec::with_capacity(sorted.len());
+            let mut max_end = 0u64;
+            for &i in &sorted {
+                max_end = max_end.max(self.entries[i as usize].get_last());
+                prefix_max_end.push(max_end);
+            }
+            index_guard.sorted = Some(sorted);
+            index_guard.prefix_max_end = prefix_max_end;
+        }
+        let sorted = index_guard.sorted.as_ref()?;
+        let prefix_max_end = &index_guard.prefix_max_end;
+        // Containment requires the entry to start at or before `addr`, so
+        // candidates live strictly before the first later-starting entry.
+        let hi = sorted
+            .partition_point(|&i| self.entries[i as usize].addr.as_u64() <= start);
+        let mut best: Option<usize> = None;
+        let mut oldsize: i64 = -1; // cc:2268 sentinel
+        let mut p = hi as i64 - 1;
+        while p >= 0 {
+            let pu = p as usize;
+            // Prefix-max-end prune: no entry at position <= pu can reach
+            // `end`, so no lower entry can contain the range.
+            if prefix_max_end[pu] < end {
+                break;
+            }
+            let idx = sorted[pu] as usize;
+            let entry = &self.entries[idx];
+            // cc:2267 — entry->getLast() >= end: we contain the range.
+            if entry.get_last() >= end {
+                // cc:2268 — strictly smaller than the running best, or first.
+                if (entry.size as i64) < oldsize || oldsize == -1 {
+                    // cc:2269 — valid at the usepoint.
+                    if entry.in_use(usepoint) {
+                        best = Some(idx);
+                        oldsize = entry.size as i64;
+                        // cc:2270-2271 — exact size match: nothing smaller
+                        // can contain the range.
+                        if entry.size == size {
+                            break;
+                        }
+                    }
+                }
+            }
+            p -= 1;
+        }
+        best
     }
 
     // Ghidra: database.hh:34 Scope::findOverlap
@@ -1781,12 +1934,12 @@ impl Scope {
         let mut i = 0;
         while i < scope1_end && i < scope_stack.len() {
             let scope1 = scope_stack[i];
-            // database.cc:952 — findContainer(addr, size, usepoint).
-            if let Some(entry) = scope1.find_container(addr, size) {
-                if entry.in_use(usepoint) {
-                    *addrmatch = scope1.entries.iter().position(|e| std::ptr::eq(e, entry));
-                    return Some(i);
-                }
+            // database.cc:952 — findContainer(addr, size, usepoint): the
+            // inUse(usepoint) filter is inside findContainer (cc:2269), so
+            // the returned index is the attachable entry.
+            if let Some(entry_idx) = scope1.find_container(addr, size, usepoint) {
+                *addrmatch = Some(entry_idx);
+                return Some(i);
             }
             // database.cc:957 — discovery of a new variable.
             if scope1.in_scope(addr, size) {
@@ -2652,6 +2805,8 @@ impl Scope {
                 self.dynamic_entries.push(entry);
             } else {
                 self.entries.push(entry);
+                // maptable insert (database.cc:1869 addMapInternal).
+                self.invalidate_addr_index();
             }
         }
         decoder.close_element(elem_id);
@@ -2723,8 +2878,8 @@ impl Scope {
     ) -> (FunctionSymbol, Option<u64>) {
         // database.cc:1620 — queryContainer(addr, 1, Address()).
         let overlap = self
-            .find_container(addr, 1)
-            .map(|e| e.symbol.read().unwrap().symbol_id);
+            .find_container(addr, 1, Address::new(0))
+            .map(|idx| self.entries[idx].symbol.read().unwrap().symbol_id);
         // database.cc:1626 — new FunctionSymbol(owner, nm, glb->min_funcsymbol_size).
         let id = self.allocate_id();
         let mut sym = Symbol::new(self.unique_id, nm, "func");
@@ -2744,6 +2899,8 @@ impl Scope {
             consume_size,
             RangeList::new(),
         ));
+        // maptable insert (database.cc:1869 addMapInternal).
+        self.invalidate_addr_index();
         (fs, overlap)
     }
 
@@ -2783,6 +2940,8 @@ impl Scope {
             1,
             RangeList::new(),
         ));
+        // maptable insert (database.cc:1869 addMapInternal).
+        self.invalidate_addr_index();
         // database.cc:1654 — ret->symbol->flags &= ~Varnode::readonly.
         // The external reference value is in the image and probably isn't a
         // valid readonly datum, so strip the readonly attribute.
@@ -2808,8 +2967,8 @@ impl Scope {
     ) -> (LabSymbol, Option<u64>) {
         // database.cc:1669 — queryContainer(addr, 1, addr).
         let overlap = self
-            .find_container(addr, 1)
-            .map(|e| e.symbol.read().unwrap().symbol_id);
+            .find_container(addr, 1, addr)
+            .map(|idx| self.entries[idx].symbol.read().unwrap().symbol_id);
         // database.cc:1675 — new LabSymbol(owner, nm).
         let id = self.allocate_id();
         let mut sym = Symbol::new(self.unique_id, nm, "label");
@@ -2827,6 +2986,8 @@ impl Scope {
             1,
             RangeList::new(),
         ));
+        // maptable insert (database.cc:1869 addMapInternal).
+        self.invalidate_addr_index();
         // The LabSymbol view for the caller (database.cc:1678 return).
         (LabSymbol::new(self.unique_id, nm, addr), overlap)
     }
@@ -3127,6 +3288,8 @@ impl Scope {
             size,
             uselimit,
         ));
+        // maptable insert (database.cc:1869 addMapInternal).
+        self.invalidate_addr_index();
     }
 
     // Ghidra: database.cc:1889 ScopeInternal::begin
@@ -4631,10 +4794,23 @@ mod tests {
         let mut scope = Scope::new(1, "local", 0);
         scope.add_symbol_mapped("big", "struct", Address::new(0x1000), 16);
         scope.add_symbol_mapped("small", "int", Address::new(0x1000), 4);
-        let container = scope.find_container(Address::new(0x1000), 4);
+        let container = scope.find_container(Address::new(0x1000), 4, Address::new(0));
         assert!(container.is_some());
         // Smallest containing = the 4-byte one.
-        assert_eq!(container.unwrap().get_size(), 4);
+        assert_eq!(scope.entries[container.unwrap()].get_size(), 4);
+        // Over-extending query (cc:2267 getLast >= end): only the 16-byte
+        // entry contains [0x1000,0x100f].
+        let container = scope.find_container(Address::new(0x1000), 16, Address::new(0));
+        assert_eq!(scope.entries[container.unwrap()].get_size(), 16);
+        // Interior query starting past the base (cc find window on the
+        // containing interval): [0x1002,0x1005] is beyond small's end
+        // (0x1003, cc:2267 getLast >= end fails), only big contains.
+        let container = scope.find_container(Address::new(0x1002), 4, Address::new(0));
+        assert_eq!(scope.entries[container.unwrap()].get_size(), 16);
+        // No container: past every entry.
+        assert!(scope
+            .find_container(Address::new(0x2000), 4, Address::new(0))
+            .is_none());
     }
 
     #[test]

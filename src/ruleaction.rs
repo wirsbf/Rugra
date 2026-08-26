@@ -12040,8 +12040,14 @@ impl Rule for RulePieceStructure {
     // Ghidra: ruleaction.cc:7607 RulePieceStructure::applyOp
     fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to RulePieceStructure::applyOp (ruleaction.cc:7607-7700).
-        // Ghidra's `op->isPartialRoot()` re-visit guard is not modelled in
-        // Rugra (no partial-root flag on PcodeOp), so it is skipped.
+        // cc:7610: if (op->isPartialRoot()) return 0 — the re-visit guard:
+        // a CONCAT tree already reassembled by a previous application must
+        // not be processed again (otherwise the rule re-fires on the same
+        // PIECE forever, each application returning 1 and the ActionPool
+        // never converging).
+        if op_arc.read().unwrap().is_partial_root() {
+            return Ok(action_status::NO_CHANGE);
+        }
         let outvn = match op_arc.read().unwrap().output.clone() {
             Some(o) => o,
             None => return Ok(action_status::NO_CHANGE),
@@ -12097,7 +12103,10 @@ impl Rule for RulePieceStructure {
                 break;
             }
         }
-        // op->setPartialRoot(): no partial-root flag in Rugra, skipped.
+        // cc:7642: op->setPartialRoot() — mark the tree as visited so the
+        // cc:7610 guard rejects any re-application (PcodeOp addlflags
+        // concat_root bit, op.hh:117/220-221).
+        op_arc.write().unwrap().set_partial_root();
 
         // ruleaction.cc:7665 reads the same Architecture-owned TypeFactory
         // for every leaf. A missing Rust Architecture/type handle is outside

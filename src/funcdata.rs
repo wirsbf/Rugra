@@ -9406,7 +9406,7 @@ impl Funcdata {
             if vn.read().unwrap().get_symbol_entry().is_some() { continue; }
             // cc:1671-1673: the group's base address and initial end.
             let maxvn = vn.clone();
-            let addr = { let r = vn.read().unwrap(); *r.get_addr() };
+            let (base_space, addr) = { let r = vn.read().unwrap(); (r.get_space(), *r.get_addr()) };
             let mut endaddr = addr.as_u64() + vn.read().unwrap().get_size() as u64;
             let mut uncovered: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
             // cc:1675-1691: extend over overlapping persistent varnodes.
@@ -9414,11 +9414,18 @@ impl Funcdata {
             let mut max_addr = addr;
             while i < candidates.len() {
                 let next = candidates[i].clone();
-                let (n_persist, n_addr_arc, n_size, n_has_entry) = {
+                let (n_persist, n_space, n_addr_arc, n_size, n_has_entry) = {
                     let r = next.read().unwrap();
-                    (r.is_persist(), *r.get_addr(), r.get_size(), r.get_symbol_entry().is_some())
+                    (r.is_persist(), r.get_space(), *r.get_addr(), r.get_size(), r.get_symbol_entry().is_some())
                 };
                 if !n_persist { break; }
+                // cc:1687 `vn->getAddr() < endaddr` compares space-major
+                // (Address::operator<): the loc walk is space-ascending, so
+                // the first varnode of a later space compares Greater and
+                // breaks the group — cross-space groups cannot exist in the
+                // oracle. Rugra's Address carries no space, so the same
+                // break is explicit here.
+                if n_space != base_space { break; }
                 if n_addr_arc.as_u64() < endaddr {
                     // cc:1679-1683: internal varnodes without a symbol will
                     // not link to the base-address symbol — remember them.
@@ -9460,11 +9467,20 @@ impl Funcdata {
             let ct_size = ct.as_ref().map(|t| t.get_size()).unwrap_or(1);
             // cc:1697-1701: fl = 0; empty usepoint (assume existing symbol
             // is addrtied); entry = queryProperties(addr, 1, usepoint, fl).
-            let query = self.query_properties_parent_scope(
-                addr,
-                1,
-                crate::address::Address::new(0), // the empty usepoint Address()
-            );
+            // Channel routing: the Database query channel models the global
+            // scope over the default data (RAM) space only — a non-RAM
+            // persist group (e.g. a locked register) queries the ScopeLocal
+            // leg in the oracle, which remains the registered funcdata gap,
+            // so those groups take the legacy proxy arm below.
+            let query = if base_space == AddressSpace::Ram {
+                self.query_properties_parent_scope(
+                    addr,
+                    1,
+                    crate::address::Address::new(0), // the empty usepoint Address()
+                )
+            } else {
+                None
+            };
             match query {
                 Some((None, _fl)) => {
                     // cc:1702-1709: no symbol covers the base address —
@@ -9555,7 +9571,7 @@ impl Funcdata {
                             .as_ref()
                             .and_then(|s| {
                                 s.build_variable_name(
-                                    AddressSpace::Ram,
+                                    base_space,
                                     addr.as_u64(),
                                     None,
                                     ct.as_ref(),
@@ -9564,7 +9580,7 @@ impl Funcdata {
                                         | crate::varnode::varnode_flags::PERSIST,
                                 )
                             })
-                            .unwrap_or_else(|| format!("Ram{:016x}", addr.as_u64()));
+                            .unwrap_or_else(|| format!("{:?}{:016x}", base_space, addr.as_u64()));
                         self.symbol_table.insert(addr.as_u64(), name);
                     } else if (addr.as_u64() + max_size as u64).saturating_sub(1)
                         > self

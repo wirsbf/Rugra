@@ -1225,3 +1225,10 @@ LOAD→COPY 转换后：若 `refvn = op->getOut()` 带 spacebase_placeholder 标
 `resolve_spacebase_relative` 记录该 call 点的 stackoffset（并可能
 abort placeholder）。闭合 CALLSPEC-0001 中登记的
 "resolveSpacebaseRelative is still absent" 残差。
+
+### 2026-08-26：RulePieceStructure 重访守卫（ruleaction.cc:7610/7642）
+- `applyOp` 开头补 `if (op->isPartialRoot()) return 0`（cc:7610），重装
+  结束补 `op->setPartialRoot()`（cc:7642），依托 op.rs 新增的
+  CONCAT_ROOT addlflag。修复前规则对同一 PIECE 树无限重触发
+  （每次 apply 返回 1，ActionPool 永不收敛），curl main 直接 timeout；
+  修复后 main 正常收敛输出，差分门禁 defects=0。

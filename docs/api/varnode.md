@@ -1089,3 +1089,10 @@ heritage/pool 的 setDef 路径在大函数上呈二次方。现 `transition_def
 `Option<Arc<..>>`（identity-erase 的两个 residency bool 作为所有权证明），
 `set_def` 据此产出同样的 `Err("Defining unmanaged varnode")`，
 `set_def_prevalidated` 保留 panic 契约。可观测行为（成功/Err 分支）不变。
+
+### 2026-08-26：Varnode::setSymbolProperties 补 updateType 腿（varnode.cc:413）
+- `set_symbol_properties` 开头补 `entry->updateType(this)`（cc:413，
+  database.cc:135-144 的 sized-piece 类型替换）：type-locked 符号现在先把
+  varnode 类型替换为 entry 的对应尺寸片段（`update_type_lock(dt, true,
+  true)`），再做 mapentry 链接与 flag 折叠（cc:414-421 原有）。此前缺
+  updateType 腿，PTR_ 槽位符号的 `undefined *` 类型到不了 varnode。

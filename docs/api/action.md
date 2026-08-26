@@ -1260,3 +1260,9 @@ convention` **51** / gcc 审计 16 FAIL 持平；glob_url 单声明块（无重�
 - 残差：mainloop 未启用 RULE_REPEATAPPLY 导致后期 trivial op 不被再简化
   （原 cleanup 补刀掩盖的缺口，现暴露；对齐路径=补 mainloop repeatapply 基础
   设施，非池注册 hack）。
+
+### 2026-08-26：RuleState 恢复 Clone（诊断脚手架摘除）
+- `RuleState`（action.hh:203-210 的 Rule 字段镜像）曾为挂
+  `prof_op_hits: AtomicU32` 循环诊断计数器临时摘除 `Clone`；诊断结束后
+  字段删除，derive 恢复 `#[derive(Debug, Clone)]`，可观测行为无变化
+  （Ghidra 的 Rule 字段本身可拷贝）。

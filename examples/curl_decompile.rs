@@ -472,11 +472,14 @@ struct DecompileRequest {
     /// the loader registration channel of architecture.cc:1371-1383).
     rodata_span: Option<(u64, u64)>,
     /// MAINDIFF-GLOBAL-0001: the Program-DB global symbol layer (address,
-    /// name, byte size) — ELF OBJECT symbols, GOT PTR_ labels and .data
-    /// PTR_DAT_ pointer labels the worker installs into the Database
-    /// global scope, where `Funcdata::mapGlobals` / `linkSymbol` /
-    /// `setVarnodeProperties` query them (funcdata_varnode.cc:25/1156/1653).
-    db_symbol_entries: Vec<(u64, String, i32)>,
+    /// name, byte size, is-pointer-slot) — ELF OBJECT symbols, GOT PTR_
+    /// labels and .data PTR_DAT_ pointer labels the worker installs into
+    /// the Database global scope, where `Funcdata::mapGlobals` /
+    /// `linkSymbol` / `setVarnodeProperties` query them
+    /// (funcdata_varnode.cc:25/1156/1653). Pointer slots carry `undefined *`
+    /// (the oracle's facing type for PTR_ labels — golden witness
+    /// `PTR___gmon_start___00116fe8 != (undefined *)0x0`).
+    db_symbol_entries: Vec<(u64, String, i32, bool)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2065,11 +2068,33 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                 // at that address (one entry per address keeps
                 // queryContainer's smallest-entry pick unambiguous).
                 let mut seeded_db_symbols = 0usize;
-                for &(address, ref name, size) in &request.db_symbol_entries {
+                // `undefined *`: pointer over the oracle's named 1-byte
+                // "undefined" core type (golden witness `(undefined *)0x0`;
+                // Ghidra's PTR_ labels are pointers by construction).
+                let undefined_star = {
+                    let base = std::sync::Arc::new(
+                        rugra::type_system::datatype::Datatype::Base(
+                            rugra::type_system::datatype::TypeBase::new(
+                                "undefined".to_string(),
+                                1,
+                                rugra::type_system::datatype::TypeMetatype::Unknown,
+                            ),
+                        ),
+                    );
+                    rugra::type_system::typefactory::TypeFactory::shared_default()
+                        .write()
+                        .unwrap()
+                        .get_type_pointer_default(base)
+                };
+                for &(address, ref name, size, pointer_slot) in &request.db_symbol_entries {
                     if dwarf_display_names.contains_key(&address) {
                         continue;
                     }
-                    let dtype = undefined8.clone();
+                    let dtype = if pointer_slot {
+                        Some(undefined_star.clone())
+                    } else {
+                        undefined8.clone()
+                    };
                     db.add_symbol_mapped(global, name, dtype, Address::new(address), size.max(1));
                     seeded_db_symbols += 1;
                 }
@@ -3119,7 +3144,7 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     // MAINDIFF-GLOBAL-0001: the Program-DB global symbol layer (address,
     // name, byte size) — ELF OBJECT symbols, GOT PTR_ labels and .data
     // PTR_DAT_ pointer labels (see the collection block below).
-    let mut db_symbol_entries: Vec<(u64, String, i32)> = Vec::new();
+    let mut db_symbol_entries: Vec<(u64, String, i32, bool)> = Vec::new();
 
     {
         // Collect all function symbols
@@ -3359,7 +3384,7 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 let name = raw.split('@').next().unwrap_or(raw).replace('.', "_");
                 symbol_table.insert(st_value, name.clone());
-                db_symbol_entries.push((st_value, name, st_size as i32));
+                db_symbol_entries.push((st_value, name, st_size as i32, false));
             };
             for sym in elf.syms.iter() {
                 if sym.st_info & 0xf != 1 /* STT_OBJECT */ {
@@ -3397,7 +3422,7 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                         ANALYZE_HEADLESS_IMAGE_BASE + addr
                     );
                     symbol_table.insert(addr, label.clone());
-                    db_symbol_entries.push((addr, label, 8));
+                    db_symbol_entries.push((addr, label, 8, true));
                 }
             }
             // .data R_X86_64_RELATIVE pointer layer (PTR_DAT_).
@@ -3420,7 +3445,7 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                         ANALYZE_HEADLESS_IMAGE_BASE + reloc.r_offset
                     );
                     symbol_table.insert(reloc.r_offset, label.clone());
-                    db_symbol_entries.push((reloc.r_offset, label, 8));
+                    db_symbol_entries.push((reloc.r_offset, label, 8, true));
                 }
             }
             eprintln!(

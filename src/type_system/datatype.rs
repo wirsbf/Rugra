@@ -4075,8 +4075,12 @@ impl TypeSpacebase {
         // AddrSpace::byteToAddress(off, wordsize) (space.hh).
         let addr_off = off.wrapping_mul(wordsize) as u64;
         let addr = Address::new(addr_off);
-        match scope.find_container(addr, 1) {
-            Some(entry) => {
+        // type.cc:2962-2963 — "Assume symbol being referenced is address
+        // tied so we use a null point of context": queryContainer(addr, 1,
+        // nullPoint); Rugra's null usepoint is Address::new(0).
+        match scope.find_container(addr, 1, Address::new(0)) {
+            Some(entry_idx) => {
+                let entry = &scope.entries[entry_idx];
                 // newoff = (addr - entry.addr) + entry.offset (type.cc:2967).
                 let newoff = (addr.as_u64().wrapping_sub(entry.addr.as_u64()) as i64)
                     + entry.offset as i64;

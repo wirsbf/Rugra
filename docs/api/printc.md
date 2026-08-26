@@ -1537,3 +1537,14 @@ PRINTC-UNLINKED-REF-0001 诊断⑤），不属 print 租约。
 验收：curl E2E 9 对 SUB-A 双声明全消（body 全部改用符号名 iVarN/lVarN）；
 语句结构零丢失（前缀归一化后逐语句 multiset 相同）；defects=0/
 numbering=0 保持；audit 错误总数 15→15（1 处形态变化见上）。
+
+### 2026-08-26：genericTypeName + 平面 cast 类型拼写（printc.cc:3373）
+- 新增 `generic_type_name`（`PrintC::genericTypeName`，printc.cc:3373-3399
+  逐分支）：INT→`unkint<size>`、UINT→`unkuint<size>`、UNKNOWN→
+  `unkbyte<size>`、FLOAT→`unkfloat<size>`、SPACEBASE→`BADSPACEBASE`（无
+  尺寸后缀）、其余→`BADTYPE`（无尺寸）。
+- 新增 `cast_type_string`：cast 位点的平面类型拼写（pushType 的
+  buildTypeStack 折叠，printc.cc:264/313/1472-1476）——根类型 displayName
+  （匿名根走 genericTypeName）+ 每指针层一个 `*` + 每数组层 `[n]`；
+  `(*)[n]` 运算符形态不发射（Rugra cast 位点只拼平面类型）。PTR_ 槽位
+  符号因此能拼出 golden 的 `(undefined *)0x0` 形态。

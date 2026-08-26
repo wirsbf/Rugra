@@ -423,3 +423,23 @@ equate-pipeline 测试随 VARNODE-COPYSYMBOL-HIGHBRANCH-0001 的关联函数签�
   `tools/run_cptr_query_channel_oracle.sh`，oracle 12.0.4 真实执行）；
   `cargo test` 因 master 既有的 typeop.rs 测试目标编译错误在本分支同样
   不可用（本租约外），`cargo check --lib` 绿。
+
+### 2026-08-26：findContainer 移植 + maptable 惰性索引（MAINDIFF-GLOBAL-0001）
+- `Scope::find_container` 重写为 `ScopeInternal::findContainer`
+  （database.cc:2250-2276）的忠实移植：签名加 `usepoint`（`inUse` 过滤在
+  cc:2272 内部，stackContainer cc:952 依赖），返回值从 `Option<&SymbolEntry>`
+  改为 `Option<usize>`（entries 下标，免除 stackContainer 的线性
+  position 查找）。选择语义逐条对齐：窗口逆序走（cc:2267-2268
+  `--res.second`）、`getLast() >= end` 包含判定（cc:2270）、严格更小
+  `size < oldsize || oldsize == -1`（cc:2271）、`inUse(usepoint)`
+  （cc:2272）、精确尺寸 break（cc:2274）。
+- 新增 `addr_index: Mutex<AddrIndex>`：按 `(addr, 插入 seq)` 排序的
+  maptable 等价物（database.hh:877-878 的 per-space rangemap）+ 前缀最大
+  end 剪枝数组；所有 entries 变更点（add_map_internal/remove_symbol/
+  decode/add_function_name 等）`invalidate_addr_index()` 置脏，查询时惰性
+  重建——纯函数于 entries 的查询答案与 C++ 增量维护一致。`Scope` 的
+  `Clone` 改手写（拷贝后脏索引，等价 C++ 拷贝构造逐条 addMap）。
+- `Database::query_container_entry`（queryContainer 活入口形态）与
+  `query_properties`/`discover_scope`（database.cc:1246/1263/1353）是
+  `Funcdata::mapGlobals`（funcdata_varnode.cc:1701/1703）与
+  `linkSymbol`（cc:1169）的查询通道。

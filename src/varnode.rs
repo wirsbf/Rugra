@@ -1498,11 +1498,25 @@ impl Varnode {
 
     // Ghidra: varnode.cc:410 Varnode::setSymbolProperties
     /// Set symbol properties on this Varnode from a SymbolEntry.
-    /// Faithful to `setSymbolProperties` (varnode.cc:410-424). Sets
-    /// mapentry if type-locked, applies entry flags (minus typelock).
+    /// Faithful to `setSymbolProperties` (varnode.cc:410-424): the entry's
+    /// `updateType` runs first (a type-locked symbol replaces the varnode's
+    /// type with its sized piece, database.cc:135-144), then the mapentry
+    /// link for type-locked symbols, then the entry flags (minus typelock).
     pub fn set_symbol_properties(&mut self, entry: &Arc<RwLock<SymbolEntry>>) {
+        // cc:413: res = entry->updateType(this).
+        let (vn_addr, vn_size) = (*self.get_addr(), self.get_size() as i32);
+        let sized = entry.read().unwrap().update_type(
+            &mut crate::type_system::typefactory::TypeFactory::shared_default()
+                .write()
+                .unwrap(),
+            vn_addr,
+            vn_size,
+        );
+        if let Some(dt) = sized {
+            self.update_type_lock(dt, true, true);
+        }
         let e = entry.read().unwrap();
-        // cc:414: if entry symbol is type-locked, set mapentry
+        // cc:414-421: if the entry's symbol is type-locked, set mapentry.
         let is_type_locked = e.symbol.read().unwrap().is_type_locked();
         if is_type_locked {
             self.mapentry = Some(entry.clone());

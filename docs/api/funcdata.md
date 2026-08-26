@@ -1685,3 +1685,17 @@ MERGE-CLEAR-LIFECYCLE-0001（上文）记录的 `funcdata::` 2 个预存在失�
 - 关联：`comment::test_comment_sorter_op_landmark_interleaving` 第三个
   预存失败已由 `8b8dc90b`（BLOCK-STOPADDR-FIXTURE-REGRESSION-0001，
   本分支祖先）修复，单跑与全量均通过，无本轮改动。
+
+### 2026-08-26：mapGlobals 跨 space 组边界 + 通道分流（MAINDIFF-GLOBAL-0001）
+- `map_globals`（funcdata_varnode.cc:1653-1719）内层分组循环补跨 space
+  break：oracle 的 `vn->getAddr() < endaddr` 是 space-major Address 比较
+  （loc 走查按 space 升序，后续 space 的 varnode 比较为 Greater 直接
+  break）；Rugra 的 `Address` 不携带 space，等价 break 显式化为
+  `n_space != base_space`。
+- queryProperties 通道分流：RAM space 组走 Database 查询通道（global
+  scope 只建模默认数据空间）；非 RAM persist 组（如锁定寄存器）在
+  oracle 走 ScopeLocal 腿，仍为登记的 funcdata 缺口，走 legacy
+  symbol_table 代理臂。
+- 验收：curl E2E main 从 timeout（>10s 无输出）恢复收敛，全文件
+  in_ram_* irregular-input 命名 66→0，差分门禁 defects=0/numbering=0
+  （124 函数）。

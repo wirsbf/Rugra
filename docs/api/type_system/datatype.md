@@ -355,3 +355,9 @@ core-type 位向指针传播。已改为 `flags & CORETYPE`；工厂核心类型
   (fspec.cc:4675-4839, fspec.rs lease) is not ported, so a present
   `<prototype>` child errors after being consumed — cursor partial state
   preserved (TYPEFACTORY-CODEFLAGS-DECODE-0001).
+
+### 2026-08-26：TypeSpacebase::getMap 的 findContainer 适配
+- `type.cc:2962-2963` 的 `queryContainer(addr, 1, nullPoint)`：随
+  `Scope::find_container` 签名变化传入空 usepoint（Rugra 的 null
+  usepoint = `Address::new(0)`），语义不变（addrtied 符号空 uselimit
+  恒 in-use）。

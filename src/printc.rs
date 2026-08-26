@@ -1225,6 +1225,78 @@ impl PrintC {
     /// symbol naming stays identical between the legacy and RPN paths.
     /// Constants become a syntax Atom carrying the literal text. `op` is the
 
+    // Ghidra: printc.cc:3373 PrintC::genericTypeName
+    /// Generate a generic name for an unnamed data-type. Faithful to
+    /// `PrintC::genericTypeName` (printc.cc:3373-3399):
+    ///   TYPE_INT -> "unkint<size>", TYPE_UINT -> "unkuint<size>",
+    ///   TYPE_UNKNOWN -> "unkbyte<size>", TYPE_FLOAT -> "unkfloat<size>",
+    ///   TYPE_SPACEBASE -> "BADSPACEBASE" (no size), default -> "BADTYPE".
+    fn generic_type_name(ct: &crate::type_system::Datatype) -> String {
+        use crate::type_system::TypeMetatype;
+        let size = ct.get_size();
+        match ct.get_metatype() {
+            TypeMetatype::Int => format!("unkint{size}"),
+            TypeMetatype::Uint => format!("unkuint{size}"),
+            TypeMetatype::Unknown => format!("unkbyte{size}"),
+            // cc:3387-3389: BADSPACEBASE returns without the size suffix.
+            TypeMetatype::Spacebase => "BADSPACEBASE".to_string(),
+            TypeMetatype::Float => format!("unkfloat{size}"),
+            // cc:3393-3395: every other metatype (struct/union/enum/...) is
+            // "BADTYPE" with no size.
+            _ => "BADTYPE".to_string(),
+        }
+    }
+
+    // Ghidra: printc.cc:264/313 PrintC::pushTypeStart + pushTypeEnd (the
+    /// cast-spelling fold of PrintC::pushType, printc.cc:1472-1476)
+    /// The flat `<base> *` / `<base> [n]` rendering pushType emits between
+    /// its parens: buildTypeStack (printlanguage.cc) descends pointer/array
+    /// layers to the root identifier type (cc:267-272), the root prints its
+    /// displayName — or genericTypeName for an anonymous root (cc:280-285) —
+    /// then each pointer layer contributes a `*` (cc:292-293) and each
+    /// array layer an `[numElements]` (cc:324-328). Pointer-into-array
+    /// spellings that need the `(*)[n]` operator form are not emitted
+    /// (Rugra's cast sites only spell flat types); those keep the outer
+    /// layer order, matching the common single-pointer case exactly.
+    fn cast_type_string(ct: &crate::type_system::Datatype) -> String {
+        use crate::type_system::datatype::Datatype;
+        // cc:267-272: buildTypeStack — the stack is base-type first,
+        // final-modifier last; the root identifier is the stack's back().
+        let mut layers: Vec<&Datatype> = Vec::new();
+        let mut cur = ct;
+        loop {
+            match cur {
+                Datatype::Pointer(p) => {
+                    layers.push(cur);
+                    cur = &p.ptr_to;
+                }
+                Datatype::Array(a) => {
+                    layers.push(cur);
+                    cur = &a.array_of;
+                }
+                _ => break,
+            }
+        }
+        // cc:272+280-289: the base type's identifier — displayName when
+        // named, genericTypeName when anonymous.
+        let base_name = if cur.get_name().is_empty() {
+            Self::generic_type_name(cur)
+        } else {
+            cur.get_display_name().to_string()
+        };
+        let mut spelling = base_name;
+        // cc:290-302 + cc:319-330: emit the modifier layers outside-in
+        // (stack order is reversed here): `*` per pointer, `[n]` per array.
+        for layer in layers.iter().rev() {
+            match layer {
+                Datatype::Pointer(_) => spelling.push_str(" *"),
+                Datatype::Array(a) => spelling.push_str(&format!(" [{}]", a.num_elements)),
+                _ => unreachable!("only pointer/array layers are stacked"),
+            }
+        }
+        spelling
+    }
+
     // Ghidra: printc.cc:1744 PrintC::pushConstant (typed arms)
     /// Typed-constant literal per PrintC::pushConstant (printc.cc:1744-1810):
     /// a TYPE_PTR zero prints as the cast + integer form `(char *)0x0`
@@ -1237,7 +1309,10 @@ impl PrintC {
         let val = vn.get_offset();
         match ct.get_metatype() {
             crate::type_system::TypeMetatype::Pointer => {
-                (val == 0).then(|| format!("({})0x0", ct.get_name()))
+                // The cast prefix is pushType (structural spelling), not
+                // getName: unnamed canonical pointers have empty names and
+                // would print `()0x0`.
+                (val == 0).then(|| format!("({})0x0", Self::cast_type_string(ct)))
             }
             crate::type_system::TypeMetatype::Int | crate::type_system::TypeMetatype::Uint
                 if ct.get_name() == "char" =>
@@ -8873,7 +8948,10 @@ impl PrintLanguage for PrintC {
                     match ct.get_metatype() {
                         crate::type_system::TypeMetatype::Pointer => {
                             if val == 0 {
-                                let name = ct.get_name();
+                                // The cast prefix is pushType's structural
+                                // spelling (empty canonical pointer names
+                                // would print `()0x0`).
+                                let name = Self::cast_type_string(ct);
                                 if !self.discovery_pass {
                                     self.emit.print(&format!("({})0x0", name));
                                 }
@@ -10120,8 +10198,11 @@ impl PrintC {
         // printc.cc:459-462: if (!option_nocasts) { pushOp(&typecast); pushType(dt); }
         if !self.option_nocasts {
             if let Some(ref dt) = out_dt {
-                // pushType(dt) renders the type's display name.
-                self.emit.print(&format!("({})", dt.get_name()));
+                // pushType(dt) renders the structural cast spelling
+                // (pushTypeStart/pushTypeEnd): displayName or genericTypeName
+                // at the root, `*`/`[n]` layers outside-in — getName alone
+                // is empty for unnamed canonical pointer/array types.
+                self.emit.print(&format!("({})", Self::cast_type_string(dt)));
             }
         }
         // printc.cc:463: pushVn(op->getIn(0),op,mods);
