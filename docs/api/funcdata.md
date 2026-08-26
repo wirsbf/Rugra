@@ -1778,3 +1778,10 @@ funcdata.hh:72 = 0x4000；Rugra 重映射位空间取 bit 14）+
 消费点 = `AddTreeState::build_tree` 的 `assignPropagatedType`
 （ruleaction.cc:6502/6514）：传播循环停止后由 RulePtrArith 自己给新建
 PTRADD/PTRSUB 输出盖章类型。
+## switch_edge 半边重建（MYFWRITE-TEMPVAR-0001，2026-08-26）
+
+`switch_edge`（block.cc:1489-1495 经 FlowBlock::replaceOutEdge block.cc:178-191）：
+补齐旧目标的 halfDeleteInEdge（reciprocal reverse_index）、out-edge 重指向时
+刷新 reverse_index 至新目标 in-edge 规模、新目标 push_back 镜像 in-edge 且
+flags 随出边携带。此前仅指针改写使 nodeSplit 复制块不可达/原块 in-edge 过剩，
+returnsplit 永久重入。

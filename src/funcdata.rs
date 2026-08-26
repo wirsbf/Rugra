@@ -2678,21 +2678,71 @@ impl Funcdata {
 
     // Ghidra: block.cc:1489 BlockGraph::switchEdge
     /// Redirect the edge from `in`→`outbefore` to `in`→`outafter`.
-    /// Faithful to `BlockGraph::switchEdge` (block.cc:1489-1495).
+    /// Faithful to `BlockGraph::switchEdge` (block.cc:1489-1495) through
+    /// `FlowBlock::replaceOutEdge` (block.cc:178-191): the OLD target's
+    /// in-edge half is removed (`halfDeleteInEdge` at the reciprocal
+    /// reverse_index), the out-edge is re-pointed with a fresh reverse_index
+    /// sized to the new target's in-edge list, and the NEW target gains the
+    /// mirrored in-edge — the out-edge label (flags) carries over
+    /// (`intothis.push_back(BlockEdge(this,outofthis[num].label,num))`).
+    /// The previous pointer-only rewrite left both in-edge lists stale,
+    /// which made a nodeSplit duplicate block unreachable and the original
+    /// block over-in-edged (returnsplit then re-split forever).
     pub fn switch_edge(
         &mut self,
         in_block: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         outbefore: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         outafter: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) {
-        // Find the out-edge slot from in_block pointing to outbefore, then
-        // redirect it to outafter (block.cc:1492-1494).
+        // Find the out-edge slot from in_block pointing to outbefore
+        // (block.cc:1492-1494).
         if let Some(slot) = find_out_index(in_block, outbefore) {
-            let mut in_rg = in_block.write().unwrap();
-            if let Some(bb) = in_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
-                bb.replace_out_edge_target(slot, outafter.clone());
+            // (1) oldb->halfDeleteInEdge(outofthis[num].reverse_index)
+            // (block.cc:182) — snapshot the reverse index first.
+            let rev = in_block
+                .read()
+                .unwrap()
+                .get_out(slot)
+                .map(|e| e.reverse_index)
+                .unwrap_or(-1);
+            if rev >= 0 {
+                let mut old_rg = outbefore.write().unwrap();
+                if let Some(old_bb) = old_rg
+                    .as_any_mut()
+                    .downcast_mut::<crate::block::BlockBasic>()
+                {
+                    old_bb.half_delete_in_edge(rev as usize);
+                }
             }
-            // BlockGraph and other types: nodeSplit only operates on BlockBasic.
+            // (2)+(3) re-point the out edge and append the new target's
+            // in-edge (block.cc:183-185). Sequential locks: outbefore's
+            // write guard was dropped above; in_block and outafter are
+            // distinct Arcs on the nodesplit path.
+            let new_in_size = outafter.read().unwrap().size_in() as i32;
+            let carried_flags = in_block
+                .read()
+                .unwrap()
+                .get_out(slot)
+                .map(|e| e.flags)
+                .unwrap_or(0);
+            {
+                let mut in_rg = in_block.write().unwrap();
+                if let Some(bb) = in_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                    let out_edges = bb.out_edges_mut();
+                    if slot < out_edges.len() {
+                        out_edges[slot].point = outafter.clone();
+                        out_edges[slot].reverse_index = new_in_size;
+                    }
+                }
+            }
+            {
+                let mut new_rg = outafter.write().unwrap();
+                new_rg.add_in_edge(crate::block::BlockEdge {
+                    point: in_block.clone(),
+                    flags: carried_flags,
+                    reverse_index: slot as i32,
+                });
+            }
         }
     }
 
@@ -14512,7 +14562,14 @@ impl CloneBlockOps {
                 }
                 _ => {
                     // Regular op: patch each input (funcdata_block.cc:1079-1101).
-                    let num_in = clone_ref.0.read().unwrap().num_input();
+                    // Ghidra iterates `cloneOp->numInput()`, which equals
+                    // `origOp->numInput()` because buildOpClone created the
+                    // clone with the orig's slot count (funcdata_block.cc:970
+                    // `data.newOp(op->numInput(),...)`). Rugra's `create`
+                    // only RESERVES the capacity — the clone's inrefs are
+                    // still empty — so the orig's count is the faithful loop
+                    // bound (op_set_input extends/fills the clone's slots).
+                    let num_in = orig_ref.0.read().unwrap().num_input();
                     for i in 0..num_in {
                         let orig_vn = orig_ref.0.read().unwrap().inrefs.get(i).cloned();
                         let Some(orig_vn) = orig_vn else { continue };

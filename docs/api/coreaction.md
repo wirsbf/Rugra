@@ -1765,3 +1765,21 @@ TypeFactory（`propagateAddIn2Out` downChain），E2E 驱动侧
 buildTypegrp + :1269 ELEM_DATA_ORGANIZATION + :1350 setupSizes）装配
 带 `<data_organization>` 解码的真实工厂——此前工厂缺失使全部指针传播臂
 静默失效，RulePtrArith 因此从未触发。
+## ActionSetCasts 类型转换输入/输出令牌 + MarkImplied cover + ReturnSplit（MYFWRITE-TEMPVAR-0001，2026-08-26）
+
+1. **castInput 专用臂**（coreaction.cc:2662 `getInputCast` 派发）：LOAD 走
+   `load_input_cast`（typeop.cc:440-470，slot 1 地址指针转换，`*(char **)stream`
+   形态），STORE 走 `store_input_cast`（typeop.cc:520-555，slot 1 尺寸失配转
+   指针/slot 2 castStandard 转值，`(char *)__s` 形态）。专用臂返回值即最终
+   cast 决策（cc:2662-2669 不再二次门控），插入 CAST op 于目标 op 之前。
+2. **castOutput LOAD 令牌**（typeop.cc:472-485 `getOutputToken`）：LOAD 的
+   token 是地址输入 high 类型的 pointee（尺寸匹配输出时），否则输出自身
+   high——这是 `(FILE *)stream->_IO_read_ptr` 输出转换的来源。
+3. **ActionMarkImplied**（coreaction.cc:3379-3395）：LOAD 跨 STORE 判定改用
+   cover INTERIOR 包含（cover.cc:413-424 max==2 形态 + boundary==0），替换
+   原整块保守拒绝；同 spacebase 偏移的交叉仍保守拒绝（isPossibleAlias
+   未移植）。CALL 交叉判定同步改 interior-only（尾部边界不算交叉）。
+4. **ActionReturnSplit**（blockaction.cc:2280-2315）：重写为 marked-edge
+   选择走 + `fd.node_split`（此前为手工合成 RETURN，破坏 staged structurer
+   稳定索引不变量的替代路径已弃用）；count 经 apply 返回值承载（Action
+   count-bridge 约定）。

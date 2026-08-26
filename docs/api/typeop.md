@@ -465,3 +465,10 @@ TypeOp trait +get_output_token/get_input_cast/propagate_type/get_output_metatype
   `base_local_type`（meta=`TypeMetatype::Unknown`，D2 语义不变：
   typeop.cc:271-275 基类缺省）。
 
+
+## propagate_to_pointer 提为 pub（MYFWRITE-TEMPVAR-0001，2026-08-26）
+
+`propagate_to_pointer`（typeop.cc:186-198）可见性改 pub：coreaction.rs 的
+LOAD/STORE 专用 cast 臂需要构造 pointer 包装类型（`tlst->getTypePointer` 等
+价路径），与 Ghidra 中 TypeOpLoad/TypeOpStore 同文件共享 propagateToPointer
+的布局一致。

@@ -142,9 +142,50 @@ impl DebugGlobalDatabase {
     }
 }
 
+// RUGRA-GLUE: index of DWARF named types (struct/union/enum/typedef spellings)
+// built at the Program-import boundary. Ghidra's DWARF analyzer populates the
+// program type manager with these names, and the platform signature loader
+// resolves signature base spellings (e.g. `FILE`) against that manager; this
+// index is the driver-side equivalent handed to `LibcSignatureTable::locked_proto`.
+// First definition wins on duplicate names (Ghidra suffixes conflicts; the
+// locked curl corpus has none).
+pub fn parse_type_names(bytes: &[u8]) -> Result<HashMap<String, Arc<Datatype>>> {
+    let dwarf = load_dwarf(bytes).context("parsing object for DWARF named types")?;
+    let mut names: HashMap<String, Arc<Datatype>> = HashMap::new();
+    let mut headers = dwarf.units();
+    while let Some(header) = headers.next().context("iterating DWARF units")? {
+        let unit = dwarf.unit(header).context("loading DWARF unit")?;
+        let mut entries = unit.entries();
+        while let Some((_, entry)) = entries.next_dfs().context("walking DWARF DIEs")? {
+            let named = matches!(
+                entry.tag(),
+                gimli::DW_TAG_structure_type
+                    | gimli::DW_TAG_union_type
+                    | gimli::DW_TAG_enumeration_type
+                    | gimli::DW_TAG_typedef
+                    | gimli::DW_TAG_base_type
+            );
+            if !named {
+                continue;
+            }
+            let Some(name) = entry_string(&dwarf, &unit, entry, gimli::DW_AT_name)? else {
+                continue;
+            };
+            if names.contains_key(&name) {
+                continue;
+            }
+            let data_type = match entry_reference(&unit, entry, gimli::DW_AT_type)? {
+                Some(offset) => resolve_type(&dwarf, &unit, offset, 0, &mut Vec::new())?,
+                None => resolve_type(&dwarf, &unit, entry.offset(), 0, &mut Vec::new())?,
+            };
+            names.insert(name, data_type);
+        }
+    }
+    Ok(names)
+}
+
 // RUGRA-GLUE: shared DWARF section loader for the prototype and global importers
-fn load_dwarf(bytes: &[u8]) -> Result<Dwarf<DwarfReader>> {
-    let object = object::File::parse(bytes).context("parsing object for DWARF sections")?;
+fn load_dwarf(bytes: &[u8]) -> Result<Dwarf<DwarfReader>> {    let object = object::File::parse(bytes).context("parsing object for DWARF sections")?;
     let endian = if object.is_little_endian() {
         RunTimeEndian::Little
     } else {
@@ -540,22 +581,34 @@ impl LibcSignatureTable {
     /// import: stays unlocked, active recovery decides) and `Err` when a
     /// listed signature cannot be represented (stack/aggregate spill).
     // Ghidra: fspec.cc:3830 FuncProto::setPieces
+    // Ghidra: fspec.cc:3503-3531 FuncCallSpecs::setGenericSignature (type half)
+    /// Resolve the platform-side locked signature for an imported callee.
+    /// `type_names` is the DWARF named-type index (`parse_type_names`): a
+    /// signature base spelling that names a DWARF-known type resolves to that
+    /// concrete type — the same name resolution Ghidra's signature loader
+    /// performs against the program's type manager, where `FILE *` is a
+    /// pointer to the real glibc `FILE` struct rather than an opaque unknown.
+    /// Without it, an unknown-based `FILE *` loses the typeOrder competition
+    /// against `char *` (SUB_PTR vs SUB_PTR, then pointee char vs unknown)
+    /// and the decompiler's inferred `char *` overwrites the locked libc
+    /// return type.
     pub fn locked_proto(
         &self,
         name: &str,
         storage: &X86_64GccStorage,
+        type_names: Option<&HashMap<String, Arc<Datatype>>>,
     ) -> Result<Option<FuncProto>> {
         let Some(signature) = self.lookup(name) else {
             return Ok(None);
         };
         let address_size = 8usize;
-        let return_type = parse_c_type(signature.return_type, address_size)?;
+        let return_type = parse_c_type(signature.return_type, address_size, type_names)?;
         let mut parameters = Vec::new();
         for declaration in split_parameter_list(signature.parameters) {
             let (type_text, parameter_name) = split_declaration(declaration)?;
             parameters.push(DebugParameter {
                 name: parameter_name.to_string(),
-                data_type: parse_c_type(type_text, address_size)?,
+                data_type: parse_c_type(type_text, address_size, type_names)?,
             });
         }
         let addresses = storage.assign(&parameters)?;
@@ -611,8 +664,12 @@ fn split_declaration(declaration: &str) -> Result<(&str, &str)> {
     Ok((type_text, name))
 }
 
-// RUGRA-GLUE: parses the signature data's C type spellings into Datatypes; only the metatype/size-bearing forms the 24-entry public libc ABI uses (void, char, int, long, size_t, time_t, ushort and pointer layers). Opaque base names (FILE, stat) resolve to an address-sized unknown base under the pointer, the same information content the decompiler can use for storage assignment
-fn parse_c_type(type_text: &str, address_size: usize) -> Result<Arc<Datatype>> {
+// RUGRA-GLUE: parses the signature data's C type spellings into Datatypes; only the metatype/size-bearing forms the 24-entry public libc ABI uses (void, char, int, long, size_t, time_t, ushort and pointer layers). A base spelling that names a DWARF-known type (FILE, stat) resolves to that concrete type through `type_names` — the same type-manager name resolution Ghidra's signature loader performs — and only falls back to an address-sized unknown base when the name is unknown
+fn parse_c_type(
+    type_text: &str,
+    address_size: usize,
+    type_names: Option<&HashMap<String, Arc<Datatype>>>,
+) -> Result<Arc<Datatype>> {
     let (base_text, pointer_depth) = split_pointer_depth(type_text);
     let mut datatype = match base_text {
         "void" => Arc::new(Datatype::Void(TypeBase::new(
@@ -645,11 +702,16 @@ fn parse_c_type(type_text: &str, address_size: usize) -> Result<Arc<Datatype>> {
             2,
             TypeMetatype::Uint,
         ))),
-        other => Arc::new(Datatype::Base(TypeBase::new(
-            other.to_string(),
-            address_size,
-            TypeMetatype::Unknown,
-        ))),
+        other => type_names
+            .and_then(|index| index.get(other))
+            .cloned()
+            .unwrap_or_else(|| {
+                Arc::new(Datatype::Base(TypeBase::new(
+                    other.to_string(),
+                    address_size,
+                    TypeMetatype::Unknown,
+                )))
+            }),
     };
     for _ in 0..pointer_depth {
         let display = format!("{} *", datatype.get_name());
@@ -1316,7 +1378,7 @@ mod tests {
 
         // free: void return, one void* parameter at RDI (0x38), fully locked.
         let free = table
-            .locked_proto("free", &storage)
+            .locked_proto("free", &storage, None)
             .expect("free signature represents")
             .expect("free is in the table");
         assert_eq!(free.return_type.get_metatype(), TypeMetatype::Void);
@@ -1328,7 +1390,7 @@ mod tests {
 
         // strdup: char * return (8-byte pointer), one char* parameter.
         let strdup = table
-            .locked_proto("strdup", &storage)
+            .locked_proto("strdup", &storage, None)
             .expect("strdup signature represents")
             .expect("strdup is in the table");
         assert_eq!(strdup.return_type.get_metatype(), TypeMetatype::Pointer);
@@ -1337,7 +1399,7 @@ mod tests {
 
         // strtol: long return, (char*, char**, int) at RDI/RSI/RDX.
         let strtol = table
-            .locked_proto("strtol", &storage)
+            .locked_proto("strtol", &storage, None)
             .expect("strtol signature represents")
             .expect("strtol is in the table");
         assert_eq!(strtol.num_params(), 3);
@@ -1347,7 +1409,7 @@ mod tests {
         // __ctype_b_loc: zero parameters, ushort ** return; the empty
         // parameter list is a locked void input.
         let ctype = table
-            .locked_proto("__ctype_b_loc", &storage)
+            .locked_proto("__ctype_b_loc", &storage, None)
             .expect("__ctype_b_loc signature represents")
             .expect("__ctype_b_loc is in the table");
         assert_eq!(ctype.num_params(), 0);
@@ -1356,7 +1418,7 @@ mod tests {
 
         // Unknown imports stay unlocked (Ok(None) — active recovery decides).
         assert!(table
-            .locked_proto("not_an_import", &storage)
+            .locked_proto("not_an_import", &storage, None)
             .expect("unknown import does not error")
             .is_none());
     }

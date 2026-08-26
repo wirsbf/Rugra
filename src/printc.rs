@@ -1676,13 +1676,14 @@ impl PrintC {
                 self.emit.print("(");
                 let n = op.num_input();
                 // in(0) is the target; args are in(1..n).
-                // printc.cc:626-631: each arg is pushVn — record + drain so
-                // implied argument expressions (e.g. malloc results feeding a
-                // call) inline at the argument position.
+                // printc.cc:623-631: `pushOp(&comma,op)` between parameters,
+                // where `comma` is { ",", ..., spacing 0 } (printc.cc:57) —
+                // the separator is a bare "," with no trailing space, e.g.
+                // `fwrite(buffer,size,nmemb,__s)`.
                 let mut first = true;
                 for i in 1..n {
                     if !first {
-                        self.emit.print(", ");
+                        self.emit.print(",");
                     }
                     first = false;
                     if op.get_in(i).is_some() {
@@ -4965,8 +4966,16 @@ impl PrintC {
             }
         }
 
-        // Priority 0.5: Parameter names take precedence over HighVariable for Register varnodes
-        if vn.get_space() == AddressSpace::Register {
+        // Priority 0.5: Parameter names for Register varnodes — gated on the
+        // varnode being the function's actual INPUT, mirroring the
+        // push_varnode Priority 0.5 gate. Ghidra resolves names through the
+        // HighVariable's Symbol only (pushVnExplicit → pushSymbolDetail,
+        // printlanguage.cc:218-262); a register-space varnode that merely
+        // shares the parameter's storage (an address-tied MULTIEQUAL phi like
+        // my_fwrite's __s at the stream register) must print its OWN high's
+        // name. This ungated offset match printed `fwrite(..., stream)` for
+        // the __s phi.
+        if vn.get_space() == AddressSpace::Register && vn.is_input() {
             if let Some(pname) = self.param_names.get(&vn.get_offset()) {
                 return pname.clone();
             }
@@ -6349,8 +6358,20 @@ impl PrintC {
 
         // Register args: try block-local def, then value_def_map, then the
         // COPY-source / inline chase that op_call used to do inline.
+        // Ghidra's opCall pushes each argument varnode directly
+        // (printc.cc:631-635) and the leaf resolves through the
+        // HighVariable's Symbol (pushVnExplicit → pushSymbolDetail,
+        // printlanguage.cc:218-262). The offset-keyed chase below is Rugra
+        // scaffolding for varnodes with no usable high; when the varnode HAS
+        // a named high (e.g. my_fwrite's address-tied MULTIEQUAL __s at the
+        // stream register) the chase must not override it — keying on
+        // (register, offset) collides with the INPUT parameter at the same
+        // storage and printed `fwrite(..., stream)` where the IR read __s.
+        let high_named = vn_arc.read().unwrap().high.as_ref()
+            .map(|h| !h.read().unwrap().get_name().is_empty())
+            .unwrap_or(false);
         let mut resolved = false;
-        if space == crate::space::AddressSpace::Register {
+        if space == crate::space::AddressSpace::Register && !high_named {
             let key = (space, offset);
             let def_op_opt = self.block_local_reg_defs.get(&key).cloned()
                 .or_else(|| self.value_def_map.get(&key).cloned());
@@ -8703,8 +8724,18 @@ impl PrintLanguage for PrintC {
             }
         }
 
-        // Priority 0.5: Parameter names always take precedence for Register varnodes
-        if vn.get_space() == AddressSpace::Register {
+        // Priority 0.5: Parameter names for Register varnodes — gated on the
+        // varnode being the function's actual INPUT. Ghidra resolves a name
+        // through the HighVariable's Symbol only (pushVnExplicit →
+        // pushSymbolDetail, printlanguage.cc:218-262:
+        // `vn->getHigh()->getSymbol()`); a register-space varnode that merely
+        // shares the parameter's register offset (e.g. an address-tied
+        // MULTIEQUAL phi merging a param with a later value, like my_fwrite's
+        // __s at the stream register) has its OWN high and must print that
+        // high's name, never the parameter's. Printing the offset-matched
+        // parameter name for such reads emitted `fwrite(..., stream)` where
+        // the IR read the __s phi.
+        if vn.get_space() == AddressSpace::Register && vn.is_input() {
             if let Some(pname) = self.param_names.get(&vn.get_offset()) {
                 self.used_varnode_names.insert(pname.clone());
                 if !self.discovery_pass {

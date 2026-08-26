@@ -932,7 +932,7 @@ impl TypeOp for TypeOpStore {
 /// (typeop.cc:186-198): a pointer-to-pointer is collapsed to a pointer to an
 /// unknown base of the right size to avoid creating ptr->ptr.
 // Ghidra: typeop.cc:186 TypeOp::propagateToPointer
-fn propagate_to_pointer(alt_type: &Arc<Datatype>) -> Arc<Datatype> {
+pub fn propagate_to_pointer(alt_type: &Arc<Datatype>) -> Arc<Datatype> {
     use crate::type_system::datatype::TypePointer;
     let sz = alt_type.get_size();
     let pointee = match alt_type.as_ref() {

@@ -805,6 +805,7 @@ fn link_call_specs(
     debug_db: &rugra::debugproto::DebugPrototypeDatabase,
     storage: &rugra::debugproto::X86_64GccStorage,
     fn_name: &str,
+    type_names: &std::collections::HashMap<String, std::sync::Arc<rugra::type_system::datatype::Datatype>>,
 ) -> (usize, usize, usize, usize, usize) {
     // Keep the stable owner with each direct target. Multiple CALLs may share
     // one machine address, so an address lookup is not an identity lookup.
@@ -847,7 +848,7 @@ fn link_call_specs(
         //       (headless golden main: `glob_url(&urls,pcVar12,&urlnum)`
         //       3-arg and `curl_version()` 0-arg render from this boundary).
         let mut installed = false;
-        match libc_signatures.locked_proto(&name, storage) {
+        match libc_signatures.locked_proto(&name, storage, Some(type_names)) {
             Ok(Some(proto)) => {
                 owner.write().unwrap().prototype = proto;
                 signatures += 1;
@@ -2296,6 +2297,12 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         fd.add_string(*address, value.clone());
     }
     let libc_signatures = rugra::debugproto::LibcSignatureTable::default();
+    // DWARF named-type index (Ghidra's program type-manager name resolution):
+    // signature base spellings like `FILE` resolve to the binary's real type
+    // graph so a locked libc `FILE *` return keeps SUB_PTR_STRUCT specificity
+    // against inferred `char *` (parse_type_names, debugproto).
+    let dwarf_type_names = rugra::debugproto::parse_type_names(&request.binary_image)
+        .unwrap_or_default();
     let callspec_link_enabled = std::env::var("RUGRA_DISABLE_CALLSPEC_LINK").is_err();
     let mut dwarf_applied = false;
     match debug_db.apply(&mut fd, &debug_storage) {
@@ -2328,7 +2335,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // import names) and DWARF did not already lock a prototype.
     if callspec_link_enabled && !dwarf_applied {
         if let Some(import_name) = fd.symbol_table.get(&target.vaddr).cloned() {
-            match libc_signatures.locked_proto(&import_name, &debug_storage) {
+            match libc_signatures.locked_proto(&import_name, &debug_storage, Some(&dwarf_type_names)) {
                 Ok(Some(proto)) => {
                     eprintln!(
                         "[PREPASS] {} applied locked PLT-import signature: {} params",
@@ -2453,6 +2460,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
             &debug_db,
             &debug_storage,
             &target.name,
+            &dwarf_type_names,
         );
     }
     eprintln!(
@@ -2495,7 +2503,10 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
             let fd_read = fd_arc.read().unwrap();
             eprintln!("[DUMP] === basic blocks for {} ===", target.name);
             for i in 0..fd_read.bblocks.get_size() {
-                let blk = fd_read.bblocks.get_block(i);
+                let blk = match fd_read.bblocks.get_block(i) {
+                    Some(b) => b,
+                    None => continue,
+                };
                 let blk_rg = blk.read().unwrap();
                 let ins: Vec<i32> =
                     (0..blk_rg.size_in()).map(|j| blk_rg.get_in(j).map(|e| e.point.read().unwrap().get_index()).unwrap_or(-1)).collect();
@@ -2503,18 +2514,27 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     (0..blk_rg.size_out()).map(|j| blk_rg.get_out(j).map(|e| e.point.read().unwrap().get_index()).unwrap_or(-1)).collect();
                 eprintln!("[DUMP] bb{} in={:?} out={:?}", blk_rg.get_index(), ins, outs);
                 if let Some(bb) = blk_rg.as_any().downcast_ref::<rugra::block::BlockBasic>() {
-                    for op in bb.get_ops() {
+                    let type_str = |v: &std::sync::Arc<std::sync::RwLock<rugra::varnode::Varnode>>| -> String {
+                        let vr = v.read().unwrap();
+                        let own = vr.v_type.as_ref().map(|t| format!("{:?}/{}", t.get_metatype(), t.get_name())).unwrap_or_else(|| "-".into());
+                        let hi = vr.high.as_ref().map(|h| {
+                            let hrg = h.read().unwrap();
+                            format!("{:?}/{}", hrg.v_type.get().get_metatype(), hrg.v_type.get().get_name())
+                        }).unwrap_or_else(|| "-".into());
+                        format!("t={} h={}", own, hi)
+                    };
+                    for op in <rugra::block::BlockBasic as rugra::block::FlowBlock>::get_ops(bb) {
                         let op_rg = op.0.read().unwrap();
                         let out_s = op_rg.get_out().map(|v| {
                             let vr = v.read().unwrap();
-                            format!("vn#{}(h={})", vr.create_index, vr.high.as_ref().map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_else(|| "?".into()))
+                            format!("vn#{}(h={}:{}:{:x},{})", vr.create_index, vr.high.as_ref().map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_else(|| "?".into()), vr.get_space().name(), vr.get_offset(), type_str(v))
                         }).unwrap_or_default();
                         let in_s: Vec<String> = op_rg.inrefs.iter().map(|a| {
                             let vr = a.read().unwrap();
                             let extra = if vr.is_input() { ", INPUT" } else { "" };
-                            format!("vn#{}(h={}{}:{:x})", vr.create_index, vr.high.as_ref().map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_else(|| "?".into()), extra, vr.get_offset())
+                            format!("vn#{}(h={}{}:{}:{:x},{})", vr.create_index, vr.high.as_ref().map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_else(|| "?".into()), extra, vr.get_space().name(), vr.get_offset(), type_str(a))
                         }).collect();
-                        eprintln!("[DUMP]   op @0x{:x}/{} {:?} {} = ({})", op_rg.start.addr.as_u64(), op_rg.start.order, op_rg.opcode, out_s, in_s.join(", "));
+                        eprintln!("[DUMP]   op @0x{:x}/{} {:?} stopTP={} outStopUp={} {} = ({})", op_rg.start.addr.as_u64(), op_rg.start.order, op_rg.opcode, op_rg.stops_type_propagation(), op_rg.get_out().map(|o| o.read().unwrap().stops_up_propagation()).unwrap_or(false), out_s, in_s.join(", "));
                     }
                 }
             }

@@ -241,3 +241,10 @@ getFuncProto())` 把整份 callee 原型（model + 全部锁位 + 参数 store �
   （`compiler-spec aggregate/stack assignment is not yet representable`），
   保持未锁——与 `apply` 对聚合参数的既有拒绝语义一致。
 
+## parse_type_names：DWARF 命名类型索引（2026-08-26）
+
+`parse_type_names`（RUGRA-GLUE，Program-import 边界）：遍历 DWARF 单元的
+structure/union/enumeration/typedef/base_type DIE 建立名字→类型索引，供
+`LibcSignatureTable::locked_proto` 解析签名基础拼写（如 `FILE`）。Ghidra 侧
+由 DWARF analyzer 填充 program type manager；重复名首见优先（锁定 curl
+语料无冲突）。

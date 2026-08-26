@@ -1578,3 +1578,12 @@ PRINTC-UNLINKED-REF-0001 诊断⑤），不属 print 租约。
 验收：curl E2E 9 对 SUB-A 双声明全消（body 全部改用符号名 iVarN/lVarN）；
 语句结构零丢失（前缀归一化后逐语句 multiset 相同）；defects=0/
 numbering=0 保持；audit 错误总数 15→15（1 处形态变化见上）。
+## RPN 常量字符串解析 + comma 分隔符（MYFWRITE-TEMPVAR-0001，2026-08-26）
+
+1. RPN 常量臂接入地址键符号/字符串表解析（对应 push_varnode Priority 0；
+   位运算操作数掩码门控与主路径一致）——call 实参位置的字符串字面量
+   （`fopen(...,"wb")`）经此打印。
+2. call 实参分隔符由 `", "` 改 `","`（printc.cc:623-631 pushOp(&comma)，
+   comma 记号 spacing 0，printc.cc:57）——`fwrite(buffer,size,nmemb,__s)`。
+3. push_varnode Priority 0.5 寄存器参数名门控收紧为"本函数实际输入"
+   （printlanguage.cc:218-262 pushSymbolDetail 语义）。

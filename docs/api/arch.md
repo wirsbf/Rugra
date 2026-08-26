@@ -467,3 +467,13 @@ ActionConstbase（coreaction.rs:5477 stub）激活在 setcasts 租约释放后�
   in_RCX 6 于 helpf/parseconfig）。差分门禁：defects=0、skeleton 与修前
   逐函数一致（纯改名零结构变化，compare 名字归一化验证）。
 <!-- annotation-pass: 2026-08-24 -->
+
+## data_organization 解码 + setup_sizes 接线（TYPE-WIRING-0001，2026-08-26）
+
+`parseCompilerConfig` 的 `data_organization` 子元素从 skipped-children 改为
+`types.decode_data_organization`（architecture.cc:1268-1269），工厂经
+`ensure_types` 惰性安装；`setup_sizes`（architecture.cc:1350）以 cspec 地址
+尺寸构造 SizeArchInputs（stack spacebase/default data space/default size，
+far_pointer=None）真实执行，替换原 recorded-no-op。缺此接线时
+TypeFactory::getBase 的 findAdd 因对齐映射未初始化在 downChain/
+get_type_pointer 全路径 panic。
