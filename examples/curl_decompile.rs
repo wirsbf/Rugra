@@ -2643,7 +2643,8 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                             let extra = if vr.is_input() { ", INPUT" } else { "" };
                             format!("vn#{}(h={}{}:{}:{:x},{})", vr.create_index, vr.high.as_ref().map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_else(|| "?".into()), extra, vr.get_space().name(), vr.get_offset(), type_str(a))
                         }).collect();
-                        eprintln!("[DUMP]   op @0x{:x}/{} {:?} stopTP={} outStopUp={} {} = ({})", op_rg.start.addr.as_u64(), op_rg.start.order, op_rg.opcode, op_rg.stops_type_propagation(), op_rg.get_out().map(|o| o.read().unwrap().stops_up_propagation()).unwrap_or(false), out_s, in_s.join(", "));
+                        let flag_s = format!("mk={} np={} nr={} outimpl={}", op_rg.is_marker(), (op_rg.flags & rugra::op::pcodeop_flags::NONPRINTING) != 0, (op_rg.flags & rugra::op::pcodeop_flags::NORETURN) != 0, op_rg.get_out().map(|o| o.read().unwrap().is_implied()).unwrap_or(false));
+                        eprintln!("[DUMP]   op @0x{:x}/{} {:?} {} stopTP={} outStopUp={} {} = ({})", op_rg.start.addr.as_u64(), op_rg.start.order, op_rg.opcode, flag_s, op_rg.stops_type_propagation(), op_rg.get_out().map(|o| o.read().unwrap().stops_up_propagation()).unwrap_or(false), out_s, in_s.join(", "));
                     }
                 }
             }

@@ -1848,3 +1848,13 @@ STORE 值输入（slot 2）的局部类型种子从 `IntTypes::sized(size)`（8 
 unknown 局部类型使 `testDatatypeCompatibility` 的分段游走
 （subflow.cc:2319-2334）覆盖 outType 每个字段，RuleSplitStore
 （subflow.cc:2991-3004）得以把整结构常量 STORE 拆成逐字段 STORE。
+- `ActionSetCasts::cast_output` tokenct 计算补 CALL/CALLIND 臂（对齐
+  coreaction.cc:2541 getOutputToken → TypeOpCall::getOutputLocal
+  typeop.cc:720-735 / TypeOpCallind::getOutputLocal typeop.cc:776-789）：
+  callspec 的 LOCKED 非 void 输出类型，否则 TypeOp 基类默认
+  `getBase(out_size, TYPE_UNKNOWN)`（typeop.cc:261-265）。该 token 使
+  unlocked（默认 proto）call 输出打印为 `__nptr = (char *)curl_getenv(...)`
+  —— token undefined8 对输出 high char* → castStandard(char*,undefined8) →
+  CALL 后插 CAST；locked 且类型等于输出 high（strtol→long）命中
+  type_equal 短路不插。CALLIND 经 get_call_specs_of_op（slot-0 Iop 注解,
+  TYPEOP-FSPEC-SPACE-0001）取 callspec，等价 typeop.cc:782 getCallSpecs。

@@ -4580,6 +4580,7 @@ impl ActionSetCasts {
     ) -> i32 {
         use crate::type_system::cast::base_type_for;
         use crate::type_system::datatype::Datatype;
+        use crate::type_system::datatype::TypeMetatype;
         // cc:2542: get the output varnode.
         let outvn = match op.0.read().unwrap().output.as_ref() {
             Some(o) => o.clone(), None => return 0,
@@ -4626,6 +4627,40 @@ impl ActionSetCasts {
                         Some(t) => t,
                         None => return 0,
                     },
+                }
+            } else if matches!(op_rg.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND) {
+                // cc:2541 getOutputToken -> outputTypeLocal ->
+                // TypeOpCall::getOutputLocal (typeop.cc:720-735) /
+                // TypeOpCallind::getOutputLocal (typeop.cc:776-789): the
+                // callspec's LOCKED non-void output type, else the TypeOp
+                // base default getBase(size, TYPE_UNKNOWN) (typeop.cc:261-265).
+                // This token is what makes an unlocked (default-proto) call
+                // output print as `__nptr = (char *)curl_getenv(...)`: token
+                // undefined8 vs output high char* ->
+                // castStandard(char*, undefined8) -> CAST inserted after the
+                // CALL, whose printc spelling is the CAST output's high type
+                // (PrintC::opTypeCast, printc.cc:448-464). Locked outputs
+                // whose type equals the output high (strtol -> long) hit the
+                // type_equal short-circuit and take no cast.
+                // CALLIND reaches the callspec through Funcdata::getCallSpecs
+                // (typeop.cc:782); Rugra's get_call_specs_of_op performs the
+                // same op-identity verification through the slot-0 Iop
+                // annotation (TYPEOP-FSPEC-SPACE-0001).
+                match fd.get_call_specs_of_op(op) {
+                    Some(fc) => {
+                        let fc_r = fc.read().unwrap();
+                        if fc_r.prototype.output_type_locked {
+                            let ct = fc_r.prototype.return_type.clone();
+                            if ct.get_metatype() != TypeMetatype::Void {
+                                ct
+                            } else {
+                                base_type_for(out_size, TypeMetatype::Unknown)
+                            }
+                        } else {
+                            base_type_for(out_size, TypeMetatype::Unknown)
+                        }
+                    }
+                    None => base_type_for(out_size, TypeMetatype::Unknown),
                 }
             } else {
                 match Self::output_metatype(op_rg.opcode) {
