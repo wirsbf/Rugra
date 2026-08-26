@@ -1903,7 +1903,8 @@ impl<'a> CollapseStructure<'a> {
                     let ins: Vec<String> = (0..r.size_in()).filter_map(|j| {
                         r.get_in(j).map(|e| format!("{}(L{:x})", e.point.read().unwrap().get_index(), e.flags))
                     }).collect();
-                    eprintln!("[IRRED]   blk{} in=[{}] out=[{}]", r.get_index(), ins.join(","), outs.join(","));
+                    eprintln!("[IRRED]   blk{} in=[{}] out=[{}] ty={:?} fl={:#x}",
+                        r.get_index(), ins.join(","), outs.join(","), r.get_type(), r.get_flags());
                 }
             }
             self.finaltrace = true;
@@ -3518,12 +3519,15 @@ impl<'a> CollapseStructure<'a> {
                     structural += 1;
                     continue;
                 }
-                // Edge from a CBRANCH cascade member → structural
-                // (cascade members are blocks in switch_case_indices)
-                if self.switch_case_indices.contains(&pred.get_index()) {
-                    structural += 1;
-                    continue;
-                }
+                // NOTE: no switch_case_indices arm — Ghidra's guard is plain
+                // `clauseblock->sizeIn() != 1` (cc:1391/cc:1428 etc.) with no
+                // notion of cascade members. The invented arm counted the
+                // refreshSwitchCases CBRANCH-chain marks (no oracle
+                // counterpart) as "structural", so every else-if chain the
+                // cascade walker touched was rejected by proper_if/if_else/
+                // do_while — leaving the chain uncollapsible and selectGoto
+                // to exhaust (TRI2-STRUCT-IRREDUCIBLE-TRACE-0001,
+                // glob_range residual 1→2→3→9 with properif-legal shapes).
                 // Edge from a DEAD block (already consumed by structuring) → structural
                 if pred.get_flags() & crate::block::block_flags::DEAD != 0 {
                     structural += 1;
