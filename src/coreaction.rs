@@ -7871,10 +7871,18 @@ impl Action for ActionActiveParam {
                         fc.final_input_check(op_ref);
                     }
                 }
-                if let Some(mut fc) = fd.get_call_specs_mut(i) {
+                // Ghidra cc:1752-1755: resolveModel, deriveInputMap,
+                // buildInputFromTrials, clearActiveInput. The owner Arc is
+                // cloned so the write guard can coexist with the &mut fd the
+                // opSetAllInput tail inside build_input_from_trials needs.
+                let owner = fd.callspecs.get(i).cloned();
+                if let Some(owner) = owner {
+                    let mut fc = owner.write().unwrap();
                     fc.resolve_model();
                     fc.derive_input_map();
-                    let _params = fc.build_input_from_trials();
+                    if let Some(op_ref) = &op_ref {
+                        fc.build_input_from_trials(fd, op_ref);
+                    }
                     fc.clear_active_input();
                 }
                 count += 1;
@@ -8464,9 +8472,14 @@ impl ActionFuncLink {
                     false, // unlocked — active recovery decides
                 ),
             };
-            let mut proto = crate::fspec::FuncProto::new(String::new(), return_type);
+            let mut proto = crate::fspec::FuncProto::new(String::new(), return_type.clone());
             proto.set_output_lock(output_locked);
             let mut fc = crate::fspec::FuncCallSpecs::new_for_op(&op_ref, proto);
+            // new_for_op sanitizes to the Ghidra ctor state (fspec.cc:4926
+            // `: FuncProto()`); this Rugra-only late-spec fallback re-applies
+            // its known-return output lock on top of the fresh prototype.
+            fc.prototype.return_type = return_type.clone();
+            fc.prototype.set_output_lock(output_locked);
             fc.proto_model = Some(crate::type_system::protomodel::ProtoModel::default_x86_64());
             let owner = Arc::new(std::sync::RwLock::new(fc));
             let annotation = fd.new_varnode_call_specs(&owner);
@@ -8478,46 +8491,91 @@ impl ActionFuncLink {
 
     /// Set up the modeled input-parameter recovery slice for a sub-function
     /// call, corresponding to `ActionFuncLink::funcLinkInput`
-    /// (coreaction.cc:1474-1513). The stack-placeholder path remains
-    /// `CALLSPEC-0001`.
+    /// (coreaction.cc:1474-1513). The stack-placeholder tail (cc:1511-1512)
+    /// stays in `apply`, which owns the op/fd borrow sequence.
     ///
-    /// If the prototype is unlocked (or varargs), initialize the active-input
-    /// ParamActive so ActionActiveParam can gather trials. If locked, register
-    /// each formal parameter as a trial and mark it active. The locked-stack-
-    /// param path (opStackLoad + spacebase placeholder) requires Funcdata
-    /// op-edit pcode injection; the register-param trial registration is
-    /// implemented here.
+    /// Faithful structure of the Ghidra original:
+    /// 1. `if ((!inputlocked)||varargs) fc->initActiveInput();` (cc:1477) —
+    ///    trial recovery is only armed for unlocked prototypes or varargs.
+    /// 2. Locked path (cc:1478-1510): each formal parameter
+    ///    `fc->getParam(i)` becomes a stub CALL input via
+    ///    `data.opInsertInput(op, data.newVarnode(param->getSize(),
+    ///    param->getAddress()), op->numInput())` at the parameter's storage
+    ///    address. The arity therefore follows the locked prototype — the
+    ///    DWARF/generic_clib signature installed at the call site — not any
+    ///    front-end approximation table.
+    /// 3. Varargs additionally registers each formal as a fixed-position
+    ///    active trial (cc:1488-1493) so `buildInputFromTrials`'s
+    ///    `sortFixedPosition` keeps the fixed args ahead of the variable
+    ///    ones. For the non-varargs locked case Ghidra also registers the
+    ///    trials into its (inactive) activeinput object consumed by
+    ///    `transferLockedInputParam` (fspec.cc:5038) on the deindirect path;
+    ///    Rugra's `active_input` container doubles as the is-input-active
+    ///    flag, so creating it here would wrongly arm ActionActiveParam —
+    ///    those bookkeeping trials stay unregistered until the deindirect
+    ///    seam is wired (deindirect() is the unwired CALLSPEC-0001 boundary).
     // Ghidra: coreaction.cc:1474 ActionFuncLink::funcLinkInput
     pub fn func_link_input(
         fd: &mut Funcdata,
+        fc_idx: usize,
         op: &crate::op::PcodeOpRef,
-        callee_name: Option<&str>,
     ) {
         use crate::space::AddressSpace;
-        // Determine param count: known_param_types (with type info) first,
-        // then fall back to known_param_count (count only).
-        let types = known_param_types(callee_name);
-        let n_args = if let Some(ref t) = types {
-            t.len()
-        } else if is_known_function(callee_name) {
-            known_param_count(callee_name)
-        } else {
-            0
+        // Ghidra cc:1475-1479: read the lock state, arm trial recovery only
+        // for (!inputlocked)||varargs.
+        let (inputlocked, varargs) = match fd.get_call_specs(fc_idx) {
+            Some(fc) => (fc.is_input_locked(), fc.is_dotdotdot()),
+            None => return,
         };
-        if n_args > 0 {
-            // Known prototype: build parameter varnodes via opInsertInput.
-            // Ghidra coreaction.cc:1507-1508 opInsertInput(newVarnode(sz,addr)).
-            // SYSV arg register offsets (x86_lift.rs encoding):
-            // RDI=0x38, RSI=0x30, RDX=0x10, RCX=0x8, R8=0x80, R9=0x88
-            let sysv_offsets: [u64; 6] = [0x38, 0x30, 0x10, 0x8, 0x80, 0x88];
-            for (i, &reg_off) in sysv_offsets.iter().enumerate() {
-                if i >= n_args { break; }
-                let vn = fd.vbank.create_with_space(8, AddressSpace::Register, reg_off);
-                fd.op_insert_input(op, vn, 1 + i);
+        if !inputlocked || varargs {
+            if let Some(mut fc) = fd.get_call_specs_mut(fc_idx) {
+                fc.init_active_input();
             }
         }
-        let _ = types;
-        // Unknown: caller (apply) sets fc.init_active_input() for trial recovery.
+        if inputlocked {
+            // Ghidra cc:1480-1483: snapshot the formal parameter storage
+            // (address offset + type size) from the locked prototype.
+            let params: Vec<(u64, i32)> = match fd.get_call_specs(fc_idx) {
+                Some(fc) => fc
+                    .prototype
+                    .parameters
+                    .iter()
+                    .map(|p| (p.address.as_u64(), p.data_type.get_size() as i32))
+                    .collect(),
+                None => Vec::new(),
+            };
+            for (i, &(off, sz)) in params.iter().enumerate() {
+                // Ghidra cc:1488-1493: varargs registers each formal as an
+                // active fixed-position trial.
+                if varargs {
+                    if let Some(mut fc) = fd.get_call_specs_mut(fc_idx) {
+                        if let Some(active) = fc.active_input.as_mut() {
+                            active.register_trial_in_space(
+                                AddressSpace::Register,
+                                crate::address::Address::new(off),
+                                sz,
+                            );
+                            let last = active.get_num_trials() - 1;
+                            active.get_trial_mut(last).mark_active();
+                            active.get_trial_mut(last).set_fixed_position(i as i32);
+                        }
+                    }
+                }
+                // Ghidra cc:1494-1508: IPTR_SPACEBASE parameters load through
+                // opStackLoad and the first claims the stack-placeholder
+                // role; every other parameter is a fresh Varnode at its
+                // storage address appended as the last CALL input
+                // (cc:1507-1508). The locked x86-64-gcc storage assigned by
+                // X86_64GccStorage is register-only (stack spill bails at
+                // debugproto assign), so the spacebase leg is unreachable
+                // until stack storage lands; the register leg below covers
+                // every installed signature.
+                let vn = fd.vbank.create_with_space(sz as usize, AddressSpace::Register, off);
+                let _ = fd.assign_high(&vn);
+                let num_in = op.0.read().unwrap().num_input();
+                fd.op_insert_input(op, vn, num_in);
+            }
+        }
     }
 
     /// Set up the modeled return-value recovery slice for a sub-function call,
@@ -8623,7 +8681,6 @@ impl Action for ActionFuncLink {
         let n_new = self.setup_call_specs(fd);
         // Collect (callspec_index, op_ref) pairs so we can pass the CALL op to
         // funcLinkInput/funcLinkOutput without double-borrowing fd.
-        let symbol_table = fd.symbol_table.clone();
         let n_calls = fd.num_calls();
         let mut pairs: Vec<(usize, crate::op::PcodeOpRef)> = Vec::new();
         for i in 0..n_calls {
@@ -8634,18 +8691,16 @@ impl Action for ActionFuncLink {
             }
         }
         for (idx, op_ref) in pairs {
-            let callee_name = fd
-                .get_call_specs(idx)
-                .and_then(|fc| fc.entry_addr)
-                .and_then(|a| symbol_table.get(&a.as_u64()).cloned());
-            let known = known_param_types(callee_name.as_deref()).is_some()
-                || (is_known_function(callee_name.as_deref())
-                    && known_param_count(callee_name.as_deref()) > 0);
-            Self::func_link_input(fd, &op_ref, callee_name.as_deref());
-            // Ghidra funcLinkInput tail (coreaction.cc:1477/1505/1511-1513):
+            // Ghidra funcLinkInput (coreaction.cc:1474-1513): initActiveInput
+            // happens INSIDE func_link_input (cc:1477) — before the
+            // stack-placeholder tail — so ParamActive::setPlaceholderSlot
+            // (fspec.hh:1672) reserves the placeholder's slotbase and every
+            // later heritage-registered trial keeps slot == op input index.
+            Self::func_link_input(fd, idx, &op_ref);
+            // Ghidra funcLinkInput tail (coreaction.cc:1511-1513):
             // spacebase = fc->getSpacebase() stays non-null when the model's
             // input list has a stack pentry and no locked stack parameter
-            // claimed the placeholder role (Rugra's locked path is
+            // claimed the placeholder role (Rugra's locked storage is
             // register-only, so the role is never claimed). Append the
             // stack-pointer LOAD placeholder as the final CALL input exactly
             // as cc:1512 `fc->createPlaceholder(data, spacebase)`.
@@ -8668,49 +8723,14 @@ impl Action for ActionFuncLink {
                 }
             }
             Self::func_link_output(fd, idx, &op_ref);
-            if !known {
-                if let Some(mut fc) = fd.get_call_specs_mut(idx) {
-                    fc.init_active_input();
-                    // Register trials for each CALL input that's a possible
-                    // input parameter. In Ghidra, this happens during
-                    // Heritage::guardCalls (heritage.cc:1496-1504) which runs
-                    // per-address-range during SSA heritage. Rugra centralizes
-                    // it here because Heritage::guard_calls is a stub.
-                    // Corresponds to the covered guardCalls trial-registration
-                    // slice; the full consumer remains CALLSPEC-0001:
-                    //   if (fc->isInputActive() && tryregister) {
-                    //     if (characterizeAsInputParam == contains_justified)
-                    //       active->registerTrial(transAddr, size);
-                    let model = fc.proto_model.clone();
-                    if let Some(active) = fc.active_input.as_mut() {
-                        let inputs: Vec<(u64, i32, crate::space::AddressSpace)> = {
-                            let op = op_ref.0.read().unwrap();
-                            op.inrefs.iter().skip(1).filter_map(|vn| {
-                                let v = vn.read().unwrap();
-                                let space = v.get_space();
-                                if space == crate::space::AddressSpace::Register
-                                    || space == crate::space::AddressSpace::Stack
-                                {
-                                    Some((v.get_offset(), v.get_size() as i32, space))
-                                } else {
-                                    None
-                                }
-                            }).collect()
-                        };
-                        for (offset, size, space) in inputs {
-                            let addr = crate::address::Address::new(offset);
-                            // Check ProtoModel: only register if this address
-                            // is a possible input parameter slot.
-                            let is_param = model.as_ref()
-                                .map(|m| m.possible_input_param(offset, size, space))
-                                .unwrap_or(true);
-                            if is_param && active.which_trial_in_space(space, addr, size) < 0 {
-                                active.register_trial_in_space(space, addr, size);
-                            }
-                        }
-                    }
-                }
-            }
+            // Ghidra funcLinkInput ends at the placeholder: trial
+            // registration for unlocked prototypes happens exclusively in
+            // Heritage::guardCalls (heritage.cc:1495-1509, ported at
+            // heritage.rs guard_calls), which appends each trial varnode as
+            // the last CALL input and registers it at the matching slot. The
+            // former centralized re-registration loop over existing CALL
+            // inputs was dead weight for flow-created specs (a lifted CALL
+            // carries only input(0) here) and is removed.
         }
         if n_new > 0 || n_calls > 0 {
             Ok(action_status::NO_CHANGE)
@@ -13520,18 +13540,21 @@ mod tests {
         assert!(fd.get_call_specs(0).unwrap().active_input.is_none());
         let mut a = ActionFuncLink::new();
         a.apply(&mut fd).unwrap();
-        // After: unknown callee → active_input initialized for trial recovery.
+        // After: unlocked callee → initActiveInput (coreaction.cc:1482-1483),
+        // but funcLinkInput itself registers NO trials — in the oracle the
+        // two pre-existing CALL inputs only become trials during heritage
+        // (Heritage::guardCalls cc:1495-1509 registers each candidate range
+        // while appending it as the last CALL input). The former centralized
+        // re-registration loop over existing inputs was a guard_calls-stub
+        // workaround and is gone.
         let callspec = fd.get_call_specs(0).unwrap();
         let active = callspec.active_input.as_ref().unwrap();
-        assert_eq!(active.get_num_trials(), 2);
-        assert_eq!(
-            active.get_trial(0).get_space(),
-            crate::space::AddressSpace::Register
-        );
-        assert_eq!(
-            active.get_trial(1).get_space(),
-            crate::space::AddressSpace::Stack
-        );
+        assert_eq!(active.get_num_trials(), 0);
+        // The stack-pointer placeholder (cc:1511-1512 createPlaceholder) is
+        // appended as the final CALL input for a model with a stack entry.
+        // This Funcdata carries no model, so no placeholder is created and
+        // the CALL input count stays exactly as constructed.
+        assert_eq!(op_ref.0.read().unwrap().num_input(), 3);
     }
 
     /// FuncCallSpecs.is_input_locked: true when all params type-locked.

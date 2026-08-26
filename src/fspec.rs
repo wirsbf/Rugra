@@ -2016,8 +2016,25 @@ impl FuncCallSpecs {
     /// For a direct CALL, capture input(0) before setup replaces it with the
     /// FSPEC annotation. A cloned FSPEC input resolves through its typed
     /// handle to the original call target, matching Ghidra's constructor.
-    pub fn new_for_op(op: &crate::op::PcodeOpRef, prototype: FuncProto) -> Self {
+    ///
+    /// The composed prototype is the Ghidra default-constructed FuncProto
+    /// (fspec.cc:3778: `model=null, store=null, flags=0` — no parameters, no
+    /// locks, extrapop unknown), exactly as the C++ ctor's `: FuncProto()`
+    /// base initializer (fspec.cc:4926). The legacy `_caller_funcp` argument
+    /// (flow.rs passes a clone of the CALLER's prototype) is deliberately
+    /// NOT composed: in the oracle the caller's formals never reach a call
+    /// site. Prototypes arrive exclusively via queryCall's
+    /// `copyFlowEffects` (flow.cc:663-664 — inline/noreturn/injectid flags
+    /// only), ActionDefaultParams' copy-from-callee / setInternal
+    /// (coreaction.cc:2321-2328), or a platform locked-signature install.
+    /// Composing the caller clone made every unknown callee inherit the
+    /// caller's locked DWARF formals (e.g. a 0-arg `__stack_chk_fail`
+    /// rendering as `__stack_chk_fail(filename, config)` inside
+    /// parseconfig). The parameter is kept so flow.rs call sites stay
+    /// untouched; dropping it belongs to CALLSPEC-0001's unified entry.
+    pub fn new_for_op(op: &crate::op::PcodeOpRef, _caller_funcp: FuncProto) -> Self {
         use crate::opcodes::OpCode;
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
         let (op_addr, direct_target) = {
             let call = op.0.read().unwrap();
             let target = if call.opcode == OpCode::CPUI_CALL {
@@ -2043,6 +2060,17 @@ impl FuncCallSpecs {
                 Some(Address::new(offset))
             }
         });
+        // fspec.cc:4926 `: FuncProto()` — fresh ctor state, void stand-in
+        // return type (Ghidra's null store resolves its type only on
+        // setModel/setOutput).
+        let prototype = FuncProto::new(
+            String::new(),
+            Arc::new(Datatype::Void(TypeBase::new(
+                "void".to_string(),
+                0,
+                TypeMetatype::Void,
+            ))),
+        );
         let mut result = Self::new(op_addr, prototype);
         result.op = Arc::downgrade(&op.0);
         result.entry_addr = entry_addr;
@@ -2287,50 +2315,164 @@ impl FuncCallSpecs {
         // picks between alternatives — Rugra doesn't support that yet.
     }
 
-    // Ghidra: fspec.cc:4924 FuncCallSpecs::deriveInputMap
-    /// Derive the input prototype from active trials using the model's
-    /// fillinMap. Faithful to `ProtoModel::deriveInputMap` (fspec.hh:791-792).
+    // Ghidra: fspec.hh:1494 FuncCallSpecs::deriveInputMap
+    /// Derive the input prototype from active trials via the model's input
+    /// ParamList. Faithful to the inline `deriveInputMap`
+    /// (fspec.hh:1494-1495 `model->deriveInputMap(active)`, whose ProtoModel
+    /// body at fspec.hh:791-792 is `input->fillinMap(active)`) — the
+    /// cspec-parsed `ProtoModelFull::input: ParamListStandard` port
+    /// (fspec.rs:6046, oracle fspec.cc:1285-1313, including the final
+    /// "mark every active trial used" loop). The simplified
+    /// `type_system::protomodel` seam is only consulted when the full model
+    /// is absent (its `fillin_input_map` skips CHECKED trials, so it can
+    /// never mark an active trial used — the dual-model seam residual).
     pub fn derive_input_map(&mut self) {
-        if let (Some(model), Some(active)) = (self.proto_model.as_ref(), self.active_input.as_mut()) {
-            model.derive_input_map(active);
-        }
-    }
-
-    // Ghidra: fspec.cc:4924 FuncCallSpecs::deriveOutputMap
-    /// Derive the output prototype from active trials. Faithful to
-    /// `ProtoModel::deriveOutputMap` (fspec.hh:798-799).
-    pub fn derive_output_map(&mut self) {
-        if let (Some(model), Some(active)) = (self.proto_model.as_ref(), self.active_output.as_mut()) {
-            model.derive_output_map(active);
-        }
-    }
-
-    // Ghidra: fspec.cc:5685 FuncCallSpecs::buildInputFromTrials
-    /// Build the final input parameter list from the resolved trials. Faithful
-    /// to `FuncCallSpecs::buildInputFromTrials` (fspec.cc:5685-5741).
-    ///
-    /// Walks the active-input trials; for each USED trial, records its (space,
-    /// offset, size) as a formal parameter. Stack-space trials are translated
-    /// relative to the caller's spacebase. Unused trials are dropped.
-    ///
-    /// Returns the list of resolved parameters as (address, size) pairs. The
-    /// caller (ActionActiveParam) then updates the FuncProto.
-    pub fn build_input_from_trials(&mut self) -> Vec<(Address, i32)> {
-        let mut result = Vec::new();
-        if let Some(active) = &self.active_input {
-            for i in 0..active.get_num_trials() {
-                let trial = active.get_trial(i);
-                if !trial.is_used() { continue; }
-                let addr = trial.get_address();
-                let sz = trial.get_size();
-                result.push((addr, sz));
+        let full_model = self.prototype.model.clone();
+        if let Some(active) = self.active_input.as_mut() {
+            match &full_model {
+                Some(model) => model.input.fillin_map(active),
+                None => {
+                    if let Some(model) = self.proto_model.as_ref() {
+                        model.derive_input_map(active);
+                    }
+                }
             }
         }
-        // Delete unused trials (renumber used ones).
-        if let Some(active) = self.active_input.as_mut() {
-            active.trial.retain(|t| t.is_used());
+    }
+
+    // Ghidra: fspec.hh:1501 FuncCallSpecs::deriveOutputMap
+    /// Derive the output prototype from active trials via the model's output
+    /// ParamList. Faithful to the inline `deriveOutputMap`
+    /// (fspec.hh:1501-1502 `model->deriveOutputMap(active)`, whose
+    /// ProtoModel body at fspec.hh:798-799 is `output->fillinMap(active)`)
+    /// — the `ProtoModelFull::output: ParamListOutput` enum dispatch
+    /// (`ParamListStandardOut::fillinMap`, oracle fspec.cc:1720-1758). The
+    /// simplified seam remains the no-full-model fallback.
+    pub fn derive_output_map(&mut self) {
+        let full_model = self.prototype.model.clone();
+        if let Some(active) = self.active_output.as_mut() {
+            match &full_model {
+                Some(model) => model.output.fillin_map(active),
+                None => {
+                    if let Some(model) = self.proto_model.as_ref() {
+                        model.derive_output_map(active);
+                    }
+                }
+            }
         }
-        result
+    }
+
+    // Ghidra: fspec.cc:5668 FuncCallSpecs::buildInputFromTrials
+    /// Set the final input Varnodes to the CALL based on ParamActive analysis.
+    /// Faithful 1:1 port of `buildInputFromTrials` (fspec.cc:5668-5741).
+    ///
+    /// Varnodes that don't look like parameters are removed (the CALL's whole
+    /// input list is rewritten via `op_set_all_input`, preserving only the
+    /// fspec annotation in slot 0). Unreferenced parameters are filled in with
+    /// a fresh Varnode at the trial address; oversized Varnodes are truncated
+    /// through a SUBPIECE inserted before the call. Stack-passed parameter
+    /// ranges are marked not-mapped on the local scope. Surviving trials are
+    /// renumbered by `deleteUnusedTrials`.
+    pub fn build_input_from_trials(
+        &mut self,
+        fd: &mut crate::funcdata::Funcdata,
+        call_op: &crate::op::PcodeOpRef,
+    ) {
+        // Ghidra fspec.cc:5677: newparam.push_back(op->getIn(0)) — preserve
+        // the fspec parameter across the wholesale rewrite.
+        let mut newparam: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+            call_op.0.read().unwrap().get_in(0).cloned().into_iter().collect();
+        // Ghidra fspec.cc:5698-5701: if (isDotdotdot() && isInputLocked())
+        //   activeinput.sortFixedPosition();
+        if self.is_dotdotdot() && self.is_input_locked() {
+            if let Some(active) = self.active_input.as_mut() {
+                active.sort_fixed_position();
+            }
+        }
+        // Trial decisions snapshotted up front so the loop body can mutate fd
+        // (SUBPIECE / newVarnode / scope) without holding the trial borrow.
+        let decisions: Vec<(bool, crate::space::AddressSpace, u64, i32, bool, i32)> =
+            match self.active_input.as_ref() {
+                Some(active) => {
+                    (0..active.get_num_trials())
+                        .filter_map(|i| {
+                            let trial = active.get_trial(i);
+                            // Ghidra fspec.cc:5705: if (!paramtrial.isUsed()) continue;
+                            if !trial.is_used() {
+                                return None;
+                            }
+                            Some((
+                                true,
+                                trial.get_space(),
+                                trial.get_address().as_u64(),
+                                trial.get_size(),
+                                trial.is_unref(),
+                                trial.get_slot(),
+                            ))
+                        })
+                        .collect()
+                }
+                None => Vec::new(),
+            };
+        for (_used, space, mut off, sz, is_unref, slot) in decisions {
+            // Ghidra fspec.cc:5709-5715: spacebase trials translate through
+            // this call's resolved stackoffset into caller perspective.
+            let isspacebase = space == crate::space::AddressSpace::Stack;
+            if isspacebase && self.stackoffset != OFFSET_UNKNOWN {
+                off = ((self.stackoffset as i128 + off as i128).rem_euclid(1i128 << 64)) as u64;
+            }
+            let vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>;
+            if is_unref {
+                // Ghidra fspec.cc:5716-5717: recovered unreferenced address as
+                // part of prototype — create the varnode via Funcdata::
+                // newVarnode (funcdata_varnode.cc:148-165): bank create +
+                // assignHigh + the queryProperties flag tail, so an unref
+                // parameter inherits the mapped/addrtied range flags a
+                // Ghidra-created varnode would carry into printing.
+                vn = fd.vbank.create_with_space(sz as usize, space, off);
+                let _ = fd.assign_high(&vn);
+                crate::heritage::Heritage::apply_new_varnode_flags(fd, &vn);
+            } else {
+                // Ghidra fspec.cc:5719: vn = op->getIn(paramtrial.getSlot()).
+                let current = call_op.0.read().unwrap().get_in(slot as usize).cloned();
+                let Some(mut slot_vn) = current else { continue };
+                // Ghidra fspec.cc:5720-5732: varnode bigger than the parameter
+                // type — insert a SUBPIECE truncate before the call.
+                let vn_size = slot_vn.read().unwrap().get_size() as i32;
+                if vn_size > sz {
+                    let (op_addr, vn_off) = {
+                        let (op_r, vn_r) = (call_op.0.read().unwrap(), slot_vn.read().unwrap());
+                        (op_r.get_addr(), vn_r.get_offset())
+                    };
+                    let newop = fd.new_op(2, op_addr);
+                    // x86-64 is little-endian: outvn at vn->getAddr() (the
+                    // big-endian +size-sz alternative is fspec.cc:5725-5726).
+                    let outvn = fd.new_varnode_out(sz as usize, Address::new(vn_off), &newop);
+                    fd.op_set_opcode(&newop, crate::opcodes::OpCode::CPUI_SUBPIECE);
+                    fd.op_set_input(&newop, slot_vn.clone(), 0);
+                    let trunc_const = fd.new_constant(1, 0);
+                    fd.op_set_input(&newop, trunc_const, 1);
+                    fd.op_insert_before(&newop, call_op);
+                    slot_vn = outvn;
+                }
+                vn = slot_vn;
+            }
+            newparam.push(vn);
+            // Ghidra fspec.cc:5735-5738: mark the stack range used to pass
+            // this parameter as unmapped (parameter=true).
+            if isspacebase {
+                if let Some(scope) = fd.scope.as_mut() {
+                    scope.mark_not_mapped(off, sz, true);
+                }
+            }
+        }
+        // Ghidra fspec.cc:5739: data.opSetAllInput(op,newparam) — set final
+        // parameter list.
+        fd.op_set_all_input(call_op, &newparam);
+        // Ghidra fspec.cc:5740: activeinput.deleteUnusedTrials().
+        if let Some(active) = self.active_input.as_mut() {
+            active.delete_unused_trials();
+        }
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::isInputActive
@@ -2578,16 +2720,30 @@ impl FuncCallSpecs {
     }
 
     // Ghidra: fspec.hh:1654 FuncCallSpecs::clearStackPlaceholderSlot
-    /// Clear the stack placeholder slot index.
+    /// Clear the input slot holding the stack-pointer placeholder. Faithful
+    /// to the inline `clearStackPlaceholderSlot` (fspec.hh:1674): releases
+    /// the FuncCallSpecs slot and, when input recovery is still active,
+    /// `ParamActive::freePlaceholderSlot` shifts every trial above the
+    /// placeholder down one slot so trial slots stay aligned with the CALL
+    /// op input indices.
     pub fn clear_stack_placeholder_slot(&mut self) {
         self.stack_placeholder_slot = -1;
+        if let Some(active) = self.active_input.as_mut() {
+            active.free_placeholder_slot();
+        }
     }
 
     // Ghidra: fspec.hh:1653 FuncCallSpecs::setStackPlaceholderSlot
-    /// Record the input slot holding the stack-pointer placeholder.
-    /// Faithful to `FuncCallSpecs::setStackPlaceholderSlot` (fspec.hh:1653).
+    /// Record the input slot holding the stack-pointer placeholder. Faithful
+    /// to the inline `setStackPlaceholderSlot` (fspec.hh:1672): when input
+    /// recovery is active, `ParamActive::setPlaceholderSlot` reserves the
+    /// current slotbase for the placeholder so subsequently registered
+    /// trials keep their slot equal to the CALL op input index.
     pub fn set_stack_placeholder_slot(&mut self, slot: i32) {
         self.stack_placeholder_slot = slot;
+        if let Some(active) = self.active_input.as_mut() {
+            active.set_placeholder_slot();
+        }
     }
 
     // Ghidra: fspec.cc:4849 FuncCallSpecs::createPlaceholder
@@ -2776,13 +2932,13 @@ impl FuncCallSpecs {
         // transitional ProtoParameter can still carry a legacy spaceless
         // Address, so validate every parameter before mutating the CALL or
         // its ParamActive container. A missing space cannot be guessed.
-        let param_descs: Option<Vec<(Address, crate::space::AddressSpace)>> = self
+        let param_descs: Option<Vec<(Address, crate::space::AddressSpace, i32)>> = self
             .prototype
             .parameters
             .iter()
             .map(|param| {
                 ParamActive::space_from_tagged_address(param.address)
-                    .map(|space| (param.address, space))
+                    .map(|space| (param.address, space, param.data_type.get_size() as i32))
             })
             .collect();
         let Some(param_descs) = param_descs else { return; };
@@ -2790,7 +2946,7 @@ impl FuncCallSpecs {
         // Rugra does not yet expose getSpacebaseRelative; the placeholder
         // logic below mirrors the structure but the stackref is implicit.
         let placeholder_slot = self.stack_placeholder_slot;
-        let placeholder_vn: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+        let mut placeholder_vn: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
             if placeholder_slot >= 0 {
                 let slot = placeholder_slot as usize;
                 call_op.0.read().unwrap().get_in(slot).cloned()
@@ -2813,12 +2969,7 @@ impl FuncCallSpecs {
         // `param_descs` is the prevalidated address/space snapshot, avoiding
         // a borrow of self across the mutable build_param closure.
         for i in 0..param_descs.len() {
-            let (paddr, pspace) = param_descs[i];
-            // Size of the parameter: read from its data_type.
-            let psize = {
-                // Datatype sizes: use the stored data_type's get_size if avail.
-                0i32 // resolved below via the type's known size
-            };
+            let (paddr, pspace, psize) = param_descs[i];
             let existing = if 1 + i < new_input.len() {
                 Some(new_input[1 + i].clone())
             } else {
@@ -2830,21 +2981,26 @@ impl FuncCallSpecs {
             }
             // activeinput.registerTrial(paddr, psize) + getTrial(i).markActive().
             if let Some(active) = self.active_input.as_mut() {
-                active.register_trial_in_space(pspace, paddr, 8);
+                active.register_trial_in_space(pspace, paddr, psize);
                 let trial_index = active.get_num_trials() - 1;
                 active.get_trial_mut(trial_index).mark_active();
             }
-            // First stack-space param becomes the placeholder.
+            // Ghidra cc:5172-5177: the first IPTR_SPACEBASE (stack) parameter
+            // claims the spacebase-placeholder role on its varnode AND nulls
+            // the pending placeholder — with a locked stack parameter we
+            // don't need (and must not re-append) the stack-pointer
+            // placeholder.
             if no_placehold && pspace == crate::space::AddressSpace::Stack {
-                let _ = &vn;
+                vn.write().unwrap().set_spacebase_placeholder();
                 no_placehold = false;
+                placeholder_vn = None;
             }
         }
         // Ghidra: if (placeholder != null) { newinput.push_back(placeholder);
         //   setStackPlaceholderSlot(newinput.size()-1); }
         if let Some(ph) = placeholder_vn {
             new_input.push(ph);
-            self.stack_placeholder_slot = (new_input.len() - 1) as i32;
+            self.set_stack_placeholder_slot((new_input.len() - 1) as i32);
         }
         // Ghidra: data.opSetAllInput(op, newinput).
         fd.op_set_all_input(call_op, new_input);
@@ -4123,6 +4279,45 @@ impl ParamActive {
         self.stackplaceholder = -2;
         self.slotbase -= 1;
         self.maxpass = 0;
+    }
+
+    // Ghidra: fspec.hh:310 ParamActive::setPlaceholderSlot
+    /// Establish the stack placeholder slot: the placeholder occupies the
+    /// current `slotbase` so subsequent trial slots stay aligned with the
+    /// CALL op input indices. Faithful to the inline `setPlaceholderSlot`
+    /// (fspec.hh:310).
+    pub fn set_placeholder_slot(&mut self) {
+        self.stackplaceholder = self.slotbase;
+        self.slotbase += 1;
+    }
+
+    // Ghidra: fspec.hh:317 ParamActive::sortFixedPosition
+    /// Sort the trials by fixed position (then `operator<`). Faithful to the
+    /// inline `sortFixedPosition` (fspec.hh:317) with
+    /// `ParamTrial::fixedPositionCompare` (fspec.cc:1920-1933): unset (-1)
+    /// positions never sort before a set position, two set positions compare
+    /// numerically, and the two-unset fallback is `ParamTrial::operator<`.
+    /// The only production caller (`buildInputFromTrials`, fspec.cc:5700)
+    /// runs AFTER `deriveInputMap`, whose `buildTrialMap` has already called
+    /// `active->sortTrials()` (fspec.cc:936) — i.e. the trial vector is
+    /// already in full `operator<` (entry group) order, which is exactly the
+    /// order the two-unset `a < b` arm would select. Rust's stable sort with
+    /// `Ordering::Equal` for that arm therefore reproduces the oracle
+    /// sequence; the residual (C++ `std::sort` is unstable among truly
+    /// equivalent trials) is unobservable because a pair of trials that
+    /// compares false in both directions is either identical in
+    /// group/offset/size or entry-less — and entry-less trials were marked
+    /// `noUse` by `buildTrialMap` (fspec.cc:864), so `buildInputFromTrials`'
+    /// `isUsed()` loop skips them.
+    pub fn sort_fixed_position(&mut self) {
+        self.trial.sort_by(|a, b| {
+            match (a.fixed_position, b.fixed_position) {
+                (-1, -1) => std::cmp::Ordering::Equal,
+                (-1, _) => std::cmp::Ordering::Greater,
+                (_, -1) => std::cmp::Ordering::Less,
+                (x, y) => x.cmp(&y),
+            }
+        });
     }
 
     // Ghidra: fspec.cc:2063 ParamActive::joinTrial
@@ -5906,10 +6101,18 @@ pub fn characterize_as_param(
             }
             if seen_chain { active.get_trial_mut(i).mark_inactive(); }
         }
-        let upper = std::cmp::min(max as usize, stop.saturating_sub(1));
-        for i in start..=upper {
-            if active.get_trial(i).is_definitely_not_used() { continue; }
-            if !active.get_trial(i).is_active() { active.get_trial_mut(i).mark_active(); }
+        // Ghidra fspec.cc:1145: `for(int4 i=start;i<=max;++i)` — with the
+        // `max = -1` sentinel (no active trial seen before a chain) the loop
+        // body never runs. The `-1 as usize` wrap would instead saturate the
+        // hole-filling loop to `stop-1` and mark every inactive trial in the
+        // section active (the XMM0-7 unref-explosion root cause), so the
+        // loop is guarded on `max >= 0`.
+        if max >= 0 {
+            let upper = std::cmp::min(max as usize, stop.saturating_sub(1));
+            for i in start..=upper {
+                if active.get_trial(i).is_definitely_not_used() { continue; }
+                if !active.get_trial(i).is_active() { active.get_trial_mut(i).mark_active(); }
+            }
         }
     }
 

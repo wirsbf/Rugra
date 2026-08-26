@@ -422,6 +422,17 @@ const WORKER_PROTOCOL_VERSION: u32 = 2;
 // budget and reaped main (3510 bytes; action phase ~11.5s) before it could
 // emit anything, so the locked DWARF `int main(int argc, char **argv)`
 // prototype never reached the corpus output.
+fn function_timeout() -> Duration {
+    // Diagnostic env knob: an over-budget function (e.g. main, which does
+    // not converge in the post-blockstruct action loop — pre-existing at the
+    // branch head) can be given a larger wall budget for measurement without
+    // rebuilding. Defaults to the canonical 30s above.
+    std::env::var("RUGRA_FUNC_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(30))
+}
 const FUNCTION_TIMEOUT: Duration = Duration::from_secs(30);
 const WORKER_MODE_ARG: &str = "--rugra-curl-function-worker";
 const WORKER_LABEL_ARG: &str = "--probe-label";
@@ -3801,7 +3812,7 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         };
         let worker_run = run_isolated_worker(
             &job,
-            FUNCTION_TIMEOUT,
+            function_timeout(),
             MonitorMode::Deadline,
             RequestMode::Valid,
             None,
@@ -3817,7 +3828,7 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
             ),
             WorkerOutcome::Timeout => eprintln!(
                 "[PREPASS-TIMEOUT] {} exceeded {:?} and was reaped",
-                func.name, FUNCTION_TIMEOUT
+                func.name, function_timeout()
             ),
             WorkerOutcome::Panic => {
                 eprintln!("[PREPASS-PANIC] {} worker panicked", func.name)
@@ -3971,7 +3982,7 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
 
         let worker_run = run_isolated_worker(
             &job,
-            FUNCTION_TIMEOUT,
+            function_timeout(),
             MonitorMode::Deadline,
             RequestMode::Valid,
             None,

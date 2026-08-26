@@ -1783,3 +1783,24 @@ buildTypegrp + :1269 ELEM_DATA_ORGANIZATION + :1350 setupSizes）装配
    选择走 + `fd.node_split`（此前为手工合成 RETURN，破坏 staged structurer
    稳定索引不变量的替代路径已弃用）；count 经 apply 返回值承载（Action
    count-bridge 约定）。
+## ActionFuncLink/ActionActiveParam 调用实参收敛（MAINDIFF-CALLPROTO-0001，本次新增）
+
+- `func_link_input(fd, fc_idx, op)`（coreaction.cc:1474-1513 `funcLinkInput`）
+  重写：`(!inputlocked)||varargs` 才 `init_active_input`（cc:1482-1483）；
+  locked 路从**锁定原型**参数表构造 stub CALL 输入
+  （`newVarnode(sz,param->getAddress())` cc:1507-1508，Rugra 侧
+  `X86_64GccStorage` 只产寄存器存储，stack 存储在 debugproto assign 处
+  fail-visible 拒绝，故 Register 空间是可达全域；varargs 形参另注册
+  fixed-position active trial cc:1488-1493）。硬编码
+  `known_param_count/known_param_types` 表（glob_url=2 与 DWARF 3 冲突的
+  根因）从本函数删除；表中残留仅 ActionCallParams/ActionInferParams 域。
+- `ActionFuncLink::apply`（cc:1575-1586）：`known` 谓词（⑤）删除——
+  trial 注册的唯一所有者是 `Heritage::guard_calls`（heritage.cc:1495-1509，
+  heritage.rs 已移植），apply 内集中式重注册环移除；placeholder 尾
+  （cc:1511-1513 createPlaceholder）保持在 apply。
+- `ActionActiveParam::apply` finalize（cc:1752-1755）：callspec owner Arc
+  先克隆再持写锁，使 `build_input_from_trials(fd, op)` 的 opSetAllInput 尾
+  可与 `&mut fd` 共存；序列 resolveModel → deriveInputMap →
+  buildInputFromTrials → clearActiveInput 与 oracle 逐行对应。
+- `test_action_funclink_initializes_active` 更新为 oracle 行为：unlocked
+  callee 仅 initActiveInput（0 trial），trial 由 heritage guardCalls 注册。

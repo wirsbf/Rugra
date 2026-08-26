@@ -861,3 +861,43 @@ INDIRECT 降至 ~5460，mainloop repeatapply 收敛轮数 37+ → 1）。
 
 - **`FuncProto::possible_input_param(addr_offset, size, addr_space)`**（fspec.cc:4366-4387）：`!isDotdotdot` 时先过 `void_input_locked` 门（→false），再遍历锁定参数 `justifiedContain(param_size, addr, size, false)==0 → true`、`locktest` 后无命中 →false；否则落到 model。锁定参数环与仓内兄弟移植 `characterize_as_input_param`（fspec.rs:410）同一降级口径：Rugra `ProtoParameter` 存无空间 `Address` 且无独立 size，锁定环 inert；protorecovery 阶段（本方法唯一调用方 ActionDirectWrite cc:1368）`numParams()==0`，控制流与 oracle 的 num==0 路径完全一致。modelless FuncProto 是 Ghidra 不存在的状态，保守返回 false。
 - **`ProtoModelFull::possible_input_param(loc_space, loc, size)`**（fspec.hh:883 内联）：`input->possibleParam(loc,size)` 一行委托。
+## 调用实参收敛链（MAINDIFF-CALLPROTO-0001，本次新增）
+
+`FuncCallSpecs` 输入参数收敛的完整闭环，1:1 对齐 fspec.cc:5668-5741 与
+fspec.hh:310-317/1653-1654：
+
+- `build_input_from_trials(fd, call_op)`（fspec.cc:5668 `buildInputFromTrials`）
+  完整化：保留 fspec 输入槽 0 → varargs+locked 时 `sort_fixed_position` →
+  逐 USED 试验：spacebase 试验按 `stackoffset` 换算 caller 视角、UNREF 试验
+  经 `Funcdata::newVarnode`（bank create + assignHigh + queryProperties flag
+  尾，funcdata_varnode.cc:148-165）新建 varnode、过大 varnode 经 SUBPIECE
+  截断（fspec.cc:5720-5732，x86-64 little-endian 臂）→ `op_set_all_input`
+  一次性重写 CALL 输入（fspec.cc:5739）→ spacebase 参数范围
+  `scope.mark_not_mapped(off, sz, parameter=true)` →
+  `delete_unused_trials()` 重排 slot。旧版只返回 (address,size) 表、
+  从不落 CALL 输入（curl_version 6 试验参数的直接根因）。
+- `new_for_op(op, _caller_funcp)`（fspec.cc:4926 `: FuncProto()` 基类初始化）
+  改为组装全新默认 FuncProto（无参/无锁/extrapop unknown）；flow.rs 传入的
+  caller funcp 克隆不再合成（oracle 中 caller 形参永不进入 call site——
+  parseconfig 内 `__stack_chk_fail(filename,config)` 2 参 bug 根因）。
+- `derive_input_map` / `derive_output_map`（fspec.hh:1494/1501）：优先走
+  `prototype.model`（cspec 解码的 ProtoModelFull，input 为 ParamListStandard
+  port，含 fspec.cc:1305-1312 "mark every active trial used" 尾环），仅在
+  full model 缺席时回退简化版 `proto_model` seam。
+- `commit_new_inputs`（fspec.cc:5150）修正：首个 IPTR_SPACEBASE（stack）锁定
+  参数在 varnode 上 `set_spacebase_placeholder()` 并把待定 placeholder 置
+  None（cc:5172-5177——锁定 stack 参数存在时不再追加 stack-pointer
+  placeholder）；placeholder 重挂改经 `set_stack_placeholder_slot` inline
+  （isinputactive 门控）。零调用方状态与 oracle 一致：仅 deindirect
+  （fspec.cc:5466）/forceSet（fspec.cc:5497）调用，二者均在 CALLSPEC-0001
+  未接线 seam 之后。
+- `ParamActive::set_placeholder_slot`（fspec.hh:310）/
+  `free_placeholder_slot`（fspec.cc:1995-2011：slot>placeholder 的 trial
+  slot-1、stackplaceholder=-2、slotbase-1、maxpass=0）/
+  `sort_fixed_position`（fspec.hh:317 + fixedPositionCompare fspec.cc:1920-1933；
+  双 (-1) 臂在 deriveInputMap 的 buildTrialMap+sortTrials 之后以稳定排序
+  保持既有 operator< 组序，entry-less trial 已被 markNoUse 不可观测）接入
+  `set/clear_stack_placeholder_slot` inline（isinputactive 门控）。
+- `characterize_as_param`（fspec.cc:1145）`max=-1` 哨兵防护：oracle
+  `for(i=start;i<=max;++i)` 在无 active 试验前置链时循环体不执行，
+  usize 回绕会反向饱和 hole-filling 循环（XMM0-7 unref 爆炸根因）。
