@@ -282,26 +282,6 @@ fn sanitize_c_ident(name: &str) -> String {
     name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect()
 }
 
-// RUGRA-GLUE: format_constant_value (RPN path helper; approximates
-// printc.cc:1946 pushConstant constant formatting). Renders a u64 offset as
-// a C integer literal: small values decimal (push_integer's `val<=10`
-// decimal boundary, printc.cc:1332), large values hex with a decimal
-// comment, all-ones as -1.
-fn format_constant_value(val: u64) -> String {
-    if val <= 10 {
-        format!("{}", val)
-    } else if val >= 0x8000_0000_0000_0000 {
-        // Likely negative: show as signed.
-        format!("{}", val as i64)
-    } else if val == 0xffffffff {
-        "-1".to_string() // (uint32_t)-1
-    } else if val >= 256 {
-        format!("0x{:x} /* {} */", val, val)
-    } else {
-        format!("0x{:x}", val)
-    }
-}
-
 // Ghidra: printc.cc:1426 PrintC::printUnicode (char-constant escapes)
 /// Escape one char-codepoint body for a character constant, faithful to
 /// `PrintC::printUnicode` (printc.cc:1426-1466): the special escapes
@@ -1225,27 +1205,120 @@ impl PrintC {
     /// symbol naming stays identical between the legacy and RPN paths.
     /// Constants become a syntax Atom carrying the literal text. `op` is the
 
-    // Ghidra: printc.cc:1744 PrintC::pushConstant (typed arms)
-    /// Typed-constant literal per PrintC::pushConstant (printc.cc:1744-1810):
-    /// a TYPE_PTR zero prints as the cast + integer form `(char *)0x0`
-    /// (default arm cc:1805-1809 with option_nocasts=false — C has no null
-    /// token); a char-print base type prints as a character literal
-    /// `'/0'` (cc:1750-1752 pushCharConstant). Returns None for untyped
-    /// constants and non-zero pointer values (plain integer form).
-    fn typed_constant_literal(vn: &Varnode) -> Option<String> {
-        let ct = vn.v_type.as_ref()?;
+    // Ghidra: printc.cc:1744 PrintC::pushConstant
+    /// The RPN leaf's `pushConstant` dispatch, returning the literal text of
+    /// a constant varnode. Faithful to the metatype switch
+    /// (printc.cc:1749-1805): TYPE_UINT/TYPE_INT route char-print values to
+    /// the character-constant form and everything else to the signed or
+    /// unsigned integer; TYPE_UNKNOWN prints the unsigned integer;
+    /// TYPE_BOOL prints true/false; TYPE_PTR/TYPE_PTRREL print the null
+    /// token (option_NULL), then try the character-pointer string literal
+    /// (`pushPtrCharConstant`, 1782-1784) or the function-name constant
+    /// (1786-1788) before falling through to the default cast; every other
+    /// metatype falls straight to the default cast (1806-1815). Untyped
+    /// constants (no `v_type`) take the TYPE_UNKNOWN arm — the callers that
+    /// lack a propagated type could not have produced any of the special
+    /// forms.
+    fn constant_leaf_text(&mut self, vn: &Varnode, op: Option<&PcodeOp>) -> String {
+        use crate::type_system::TypeMetatype;
         let val = vn.get_offset();
+        let Some(ct) = vn.v_type.clone() else {
+            return self.integer_text(val, vn.get_size(), false, display_format::DEFAULT);
+        };
+        let sz = ct.get_size();
         match ct.get_metatype() {
-            crate::type_system::TypeMetatype::Pointer => {
-                (val == 0).then(|| format!("({})0x0", ct.get_name()))
+            TypeMetatype::Uint => {
+                if ct.is_char_print() {
+                    self.char_constant_text(val, sz, false, display_format::DEFAULT)
+                } else if ct.is_enum_type() {
+                    self.enum_constant_text(val, &ct)
+                } else {
+                    self.integer_text(val, sz, false, display_format::DEFAULT)
+                }
             }
-            crate::type_system::TypeMetatype::Int | crate::type_system::TypeMetatype::Uint
-                if ct.get_name() == "char" =>
-            {
-                Some(format!("'{}'", escape_char_body(val & 0xff)))
+            TypeMetatype::Int => {
+                if ct.is_char_print() {
+                    self.char_constant_text(val, sz, true, display_format::DEFAULT)
+                } else if ct.is_enum_type() {
+                    self.enum_constant_text(val, &ct)
+                } else {
+                    self.integer_text(val, sz, true, display_format::DEFAULT)
+                }
             }
-            _ => None,
+            TypeMetatype::Unknown => {
+                self.integer_text(val, sz, false, display_format::DEFAULT)
+            }
+            TypeMetatype::Bool => {
+                // pushBoolConstant: printc.cc:1488-1495.
+                if val != 0 { "true".to_string() } else { "false".to_string() }
+            }
+            TypeMetatype::Pointer => {
+                // printc.cc:1775-1790 (TYPE_PTR/TYPE_PTRREL arm).
+                if self.option_null && val == 0 {
+                    // pushAtom(Atom(nullToken,vartoken,var_color,op,vn));
+                    return "NULL".to_string();
+                }
+                if let Datatype::Pointer(p) = ct.as_ref() {
+                    // if (subtype->isCharPrint()) { (1782)
+                    if p.ptr_to.is_char_print() {
+                        // if (pushPtrCharConstant(val,ct,vn,op)) return; (1783-1784)
+                        if let Some(text) = self.ptr_char_constant_text(val, &ct, op) {
+                            return text;
+                        }
+                    } else if p.ptr_to.get_metatype() == TypeMetatype::Code {
+                        // else if (subtype->getMetatype()==TYPE_CODE) { (1786)
+                        //   if (pushPtrCodeConstant(val,ct,vn,op)) return; (1787-1788)
+                        if let Some(name) = self.ptr_code_constant_text(val, &ct) {
+                            return name;
+                        }
+                    }
+                }
+                // break; -> default cast (printc.cc:1790 + 1806-1815).
+                self.default_cast_constant_text(val, &ct)
+            }
+            _ => {
+                // Struct/Union/Array/Code/Spacebase/Enum-meta: default cast.
+                self.default_cast_constant_text(val, &ct)
+            }
         }
+    }
+
+    // Ghidra: printc.cc:1666 PrintC::pushEnumConstant
+    /// The text core of the enum-constant arm: the exact-match member name
+    /// when present, the unsigned integer otherwise (matching
+    /// `push_enum_constant_named`'s exact-member slice of
+    /// `TypeEnum::getMatches`).
+    fn enum_constant_text(&self, val: u64, ct: &Datatype) -> String {
+        if let Datatype::Enum(e) = ct {
+            if let Some(name) = e.values.get(&val) {
+                return name.clone();
+            }
+        }
+        self.integer_text(val, ct.get_size(), false, display_format::DEFAULT)
+    }
+
+    // Ghidra: printc.cc:1730 PrintC::pushPtrCodeConstant
+    /// The text core of the function-name constant: resolve the pointer
+    /// value in the default code space and look up the function's display
+    /// name through the global scope (`Scope::queryFunction`,
+    /// printc.cc:1736). Returns `None` when no function sits at the address.
+    fn ptr_code_constant_text(&self, val: u64, ct: &Datatype) -> Option<String> {
+        // printc.cc:1733: AddrSpace *spc = glb->getDefaultCodeSpace();
+        let spc = self
+            .spaceman
+            .as_ref()
+            .and_then(|sm| sm.read().unwrap().get_default_code_space())
+            .unwrap_or(AddressSpace::Ram);
+        // printc.cc:1735: val = AddrSpace::addressToByte(val,spc->getWordSize());
+        let word_size = spc.word_size().max(1) as u64;
+        let val = if word_size == 1 { val } else { val / word_size };
+        // printc.cc:1736: fd = symboltab->getGlobalScope()->queryFunction(...);
+        self.query_global_function(crate::address::Address::new(val))
+            .and_then(|a| self.symbol_table.get(&a.as_u64()).cloned())
+            .map(|name| {
+                let _ = ct;
+                name
+            })
     }
 
     // RUGRA-GLUE: make_atom_for_vn (RPN leaf atom construction; mirrors the
@@ -1260,12 +1333,13 @@ impl PrintC {
         use crate::printlanguage::{Atom, AtomPayload, SyntaxHighlight, TagType};
         // printlanguage.cc:221-228: annotation / constant fast-paths.
         if vn.is_constant() {
-            // pushConstant (printc.cc:1744-1810) - emit the literal value,
-            // keyed on the constant's propagated type (typed null pointers
-            // as `(char *)0x0`, char-print types as character literals).
+            // pushConstant (printc.cc:1744-1815) — the constant's literal
+            // text resolved through the full typed dispatch (char pointers
+            // to string literals via the shared StringManager, char-print
+            // character constants, the signed/unsigned hex-vs-decimal
+            // integer decision), no invented decimal comments.
             let val = vn.get_offset();
-            let name = Self::typed_constant_literal(vn)
-                .unwrap_or_else(|| format_constant_value(val));
+            let name = self.constant_leaf_text(vn, Some(_op));
             return Atom {
                 name,
                 type_: TagType::Syntax,
@@ -10197,9 +10271,33 @@ impl PrintC {
         _vn: Option<&Varnode>,
         op: Option<&PcodeOp>,
     ) -> bool {
+        match self.ptr_char_constant_text(val, ct, op) {
+            Some(text) => {
+                self.emit.print(&text);
+                true
+            }
+            None => false,
+        }
+    }
+
+    // Ghidra: printc.cc:1698 PrintC::pushPtrCharConstant
+    /// The text core of [`Self::push_ptr_char_constant`]: the full guard
+    /// chain (nonzero value 1701, default-data-space resolution 1702-1707,
+    /// the global-scope read-only test 1709-1710) and the quoted-string
+    /// rendering through the shared StringManager
+    /// (`printCharacterConstant`, 1712-1715). Returns the literal text on
+    /// success — shared by the direct-emit helper and the RPN constant leaf
+    /// (make_atom_for_vn's pushConstant dispatch) so both paths print one
+    /// form.
+    fn ptr_char_constant_text(
+        &mut self,
+        val: u64,
+        ct: &Datatype,
+        op: Option<&PcodeOp>,
+    ) -> Option<String> {
         // printc.cc:1701: if (val==0) return false;
         if val == 0 {
-            return false;
+            return None;
         }
         // printc.cc:1702-1706: spc = glb->getDefaultDataSpace(); point =
         // op ? op->getAddr() : Address() (invalid).
@@ -10221,22 +10319,21 @@ impl PrintC {
         // has no Rust representation yet, SPACE-0001 residual.)
         // printc.cc:1709-1710: global-scope read-only check.
         if !self.global_scope_is_read_only(stringaddr) {
-            return false; // Check that string location is readonly
+            return None; // Check that string location is readonly
         }
         // printc.cc:1712-1715: ostringstream str; subct = ct->getPtrTo();
         //   if (!printCharacterConstant(str,stringaddr,subct)) return false;
         let subct = match ct {
             Datatype::Pointer(p) => p.ptr_to.clone(),
-            _ => return false,
+            _ => return None,
         };
         let mut str = String::new();
         if !self.print_character_constant(&mut str, stringaddr, &subct) {
-            return false; // Can we get a nice ASCII string
+            return None; // Can we get a nice ASCII string
         }
         // printc.cc:1717: pushAtom(Atom(str.str(),vartoken,
-        //   EmitMarkup::const_color,op,vn)); — direct-emit form.
-        self.emit.print(&str);
-        true
+        //   EmitMarkup::const_color,op,vn)); — text form.
+        Some(str)
     }
 
     // Ghidra: printc.cc:1730 PrintC::pushPtrCodeConstant
@@ -11921,7 +12018,13 @@ impl PrintC {
     /// escapes (`\0 \a \b \t \n \v \f \r \\ \" \'`) first, then a generic
     /// `\x..` hex escape, otherwise the raw UTF-8 encoding (writeUtf8).
     fn print_unicode(&self, out: &mut String, onechar: i32) {
-        let needs_escape = !(0x20..=0x7e).contains(&onechar); // unicodeNeedsEscape
+        // printlanguage.cc:411-487 unicodeNeedsEscape: true for C0 controls,
+        // and — inside printable ASCII (0x20..0x7E) — for back-slash (92),
+        // double-quote (34) and single-quote (39); the former
+        // `!(0x20..=0x7e).contains` shortcut inverted this and left quote
+        // characters unescaped inside string literals.
+        let needs_escape =
+            crate::printlanguage::unicode_needs_escape(onechar);
         if needs_escape {
             match onechar { // printc.cc:1430-1464 switch
                 0 => { out.push_str("\\0"); return; }
@@ -11987,6 +12090,32 @@ impl PrintC {
     ///   by `sign && format!=force_char`.
     pub fn push_integer(&mut self, val: u64, sz: usize, sign: bool,
                         display_format: u32) {
+        let t = self.integer_text(val, sz, sign, display_format);
+        // This scalar helper has no `(vn, op)`, so it cannot observe
+        // isUnsignedPrint/isLongPrint or emit their unsigned/sized suffixes.
+        self.emit.print(&t);
+    }
+
+    // Ghidra: printc.cc:1288 PrintC::push_integer
+    /// The text core of [`Self::push_integer`] under the current mods: the
+    /// sign flip (1313-1320), the format decision (1325-1337) and the
+    /// literal rendering (1339-1361) exactly as `PrintC::push_integer`
+    /// builds them into its ostringstream before pushing the atom. Shared
+    /// by the direct-emit helper and the RPN constant leaf
+    /// (make_atom_for_vn's pushConstant dispatch) so both paths print one
+    /// form.
+    fn integer_text(&self, val: u64, sz: usize, sign: bool,
+                    display_format: u32) -> String {
+        self.integer_text_with_mods(val, sz, sign, display_format, self.mods)
+    }
+
+    // Ghidra: printc.cc:1288 PrintC::push_integer
+    /// The mods-explicit form of [`Self::integer_text`] — the caller passes
+    /// the scoped modifier view (printlanguage.hh:283-289 pushMod/popMod
+    /// semantics, e.g. the `force_hex unless force_dec` view the default
+    /// cast arm of `pushConstant` installs at printc.cc:1810-1813).
+    fn integer_text_with_mods(&self, val: u64, sz: usize, sign: bool,
+                              display_format: u32, mods: u32) -> String {
         use crate::printlanguage::{most_natural_base, format_binary};
         let mut v = val;
         let mut print_negsign = false;
@@ -12002,9 +12131,9 @@ impl PrintC {
         // displayFormat decision (printc.cc:1325-1337).
         let fmt = if display_format != display_format::DEFAULT {
             display_format
-        } else if self.is_set(crate::printlanguage::modifiers::FORCE_HEX) {
+        } else if mods & crate::printlanguage::modifiers::FORCE_HEX != 0 {
             display_format::HEX
-        } else if v <= 10 || self.is_set(crate::printlanguage::modifiers::FORCE_DEC) {
+        } else if v <= 10 || mods & crate::printlanguage::modifiers::FORCE_DEC != 0 {
             display_format::DEC
         } else if most_natural_base(v) == 16 {
             display_format::HEX
@@ -12035,9 +12164,7 @@ impl PrintC {
                 t.push_str(&format_binary(v));
             }
         }
-        // This scalar helper has no `(vn, op)`, so it cannot observe
-        // isUnsignedPrint/isLongPrint or emit their unsigned/sized suffixes.
-        self.emit.print(&t);
+        t
     }
 
     // Ghidra: printc.cc:1606 PrintC::pushCharConstant
@@ -12054,17 +12181,25 @@ impl PrintC {
     /// (printc.cc:1641-1654) are the covered scalar observations.
     pub fn push_char_constant_fmt(&mut self, val: u64, sz: usize, sign: bool,
                                   display_format: u32) {
+        let t = self.char_constant_text(val, sz, sign, display_format);
+        self.emit.print(&t);
+    }
+
+    // Ghidra: printc.cc:1606 PrintC::pushCharConstant
+    /// The text core of [`Self::push_char_constant_fmt`]: the forced-format
+    /// fall-through to `push_integer` (1624-1629), the byte>=0x80 integer
+    /// fall-through (1630-1640), and the `'...'` rendering (1641-1654).
+    fn char_constant_text(&self, val: u64, sz: usize, sign: bool,
+                          display_format: u32) -> String {
         let mut fmt = display_format;
         // printc.cc:1624-1629: forced non-char format -> push_integer.
         if fmt != display_format::DEFAULT && fmt != display_format::CHAR {
-            self.push_integer(val, sz, sign, fmt);
-            return;
+            return self.integer_text(val, sz, sign, fmt);
         }
         // printc.cc:1630-1640: byte chars >= 0x80 -> integer unless hex/char.
         if sz == 1 && val >= 0x80 {
             if fmt != display_format::HEX && fmt != display_format::CHAR {
-                self.push_integer(val, 1, sign, fmt);
-                return;
+                return self.integer_text(val, 1, sign, fmt);
             }
             fmt = display_format::HEX; // Fallthru but force hex (printc.cc:1639).
         }
@@ -12078,7 +12213,7 @@ impl PrintC {
             self.print_unicode(&mut t, val as i32);
         }
         t.push('\'');
-        self.emit.print(&t);
+        t
     }
 
     // Ghidra: printc.cc:1666 PrintC::pushEnumConstant
@@ -12216,20 +12351,32 @@ impl PrintC {
     // Helper: the default cast-then-hex-integer rendering at printc.cc:1806-1815.
     // Ghidra: printc.cc:1744 PrintC::pushConstant
     fn emit_default_cast_constant(&mut self, val: u64, ct: &Datatype) {
+        let t = self.default_cast_constant_text(val, ct);
+        self.emit.print(&t);
+    }
+
+    // Ghidra: printc.cc:1806-1815 PrintC::pushConstant default arm
+    /// The text core of [`Self::emit_default_cast_constant`]: the optional
+    /// `(type)` cast prefix (1807-1809) and the force-hex integer literal
+    /// (1810-1815, `pushMod`/`force_hex` unless `force_dec` is set).
+    fn default_cast_constant_text(&self, val: u64, ct: &Datatype) -> String {
+        let mut t = String::new();
         if !self.option_nocasts {
             // pushOp(&typecast,op); pushType(ct);
-            self.emit.print("(");
-            self.emit.tag_type(ct.get_name(), ct.get_id());
-            self.emit.print(")");
+            t.push('(');
+            t.push_str(ct.get_name());
+            t.push(')');
         }
         // pushMod(); if (!isSet(force_dec)) setMod(force_hex);
         // push_integer(val, ct->getSize(), false, ...); popMod();
-        self.push_mod();
-        if !self.is_set(crate::printlanguage::modifiers::FORCE_DEC) {
-            self.set_mod(crate::printlanguage::modifiers::FORCE_HEX);
+        let mut mods = self.mods;
+        if mods & crate::printlanguage::modifiers::FORCE_DEC == 0 {
+            mods |= crate::printlanguage::modifiers::FORCE_HEX;
         }
-        self.push_integer(val, ct.get_size(), false, display_format::DEFAULT);
-        self.pop_mod();
+        // The scoped-mods view for the nested integer_text decision.
+        let text = self.integer_text_with_mods(val, ct.get_size(), false, display_format::DEFAULT, mods);
+        t.push_str(&text);
+        t
     }
 
     // Ghidra: printc.cc:1905 PrintC::pushSymbol

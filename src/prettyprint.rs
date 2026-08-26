@@ -985,17 +985,50 @@ impl EmitNoMarkup {
             for (pattern, replacement) in &cancel_patterns {
                 line = line.replace(pattern, replacement);
             }
-            // Clean up double spaces in content (not indent) from cancellation
+            // Clean up double spaces in content (not indent) from cancellation.
+            // String/char literals are opaque (MAINDIFF-STRCONST-0001): the
+            // decompiler's string constants legally contain runs of spaces
+            // (e.g. the hugehelp aliases' `\n   or specify` / eight-space
+            // indents), so the collapse and the ` )` trim must not reach
+            // inside a quoted region. Escapes (`\"`, `\\`, `\'`) do not
+            // toggle the quote state.
             {
                 let trimmed_start = line.len() - line.trim_start().len();
                 let indent_part = &line[..trimmed_start];
-                let mut content = line[trimmed_start..].to_string();
-                while content.contains("  ") {
-                    content = content.replace("  ", " ");
+                let content = &line[trimmed_start..];
+                let mut outside = String::with_capacity(content.len());
+                let mut chars = content.chars().peekable();
+                while let Some(c) = chars.next() {
+                    if c == '"' || c == '\'' {
+                        // Quoted region: copy verbatim until the matching
+                        // close quote, honouring backslash escapes.
+                        let quote = c;
+                        outside.push(quote);
+                        while let Some(qc) = chars.next() {
+                            outside.push(qc);
+                            if qc == '\\' {
+                                if let Some(esc) = chars.next() {
+                                    outside.push(esc);
+                                }
+                            } else if qc == quote {
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+                    if c == ' ' {
+                        if let Some(&n) = chars.peek() {
+                            if n == ' ' {
+                                continue; // Collapse "  " -> " " outside literals.
+                            }
+                            if n == ')' {
+                                continue; // Trim " )" -> ")" outside literals.
+                            }
+                        }
+                    }
+                    outside.push(c);
                 }
-                // Also clean trailing space before )
-                content = content.replace(" )", ")");
-                line = format!("{}{}", indent_part, content);
+                line = format!("{}{}", indent_part, outside);
             }
 
             // 5. "goto function_name;" where function_name is a known libc function → tail call

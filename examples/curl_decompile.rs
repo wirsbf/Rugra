@@ -2164,7 +2164,41 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     }
                     let dtype =
                         dtype.or_else(|| undefined1.clone());
-                    db.add_symbol_mapped(global, name, dtype, Address::new(*address), 1);
+                    let symbol_id =
+                        db.add_symbol_mapped(global, name, dtype, Address::new(*address), 1);
+                    if let Some(symbol_id) = symbol_id {
+                        // MAINDIFF-STRCONST-0001 (a): the strings-analyzer
+                        // Data carries a LOCKED char-array type (the
+                        // ATTRIB_TYPELOCK channel of Symbol::decodeHeader,
+                        // database.cc:439-442), so
+                        // Funcdata::spacebaseConstant's `sym->isTypeLocked()`
+                        // (funcdata.cc:416) keeps the PTRSUB output's
+                        // char-pointer type locked against later type
+                        // propagation, letting RulePtrsubCharConstant's
+                        // charPrint guard pass.
+                        if string_addrs.contains_key(address) {
+                            db.set_symbol_flag(
+                                global,
+                                symbol_id,
+                                rugra::database::symbol_flags::TYPELOCK,
+                                true,
+                            );
+                        }
+                        // (b): every global in the read-only `.rodata`
+                        // memory block carries Varnode::readonly on its
+                        // symbol (ATTRIB_READONLY, database.cc:435-438) —
+                        // the entry-hit arm of Scope::queryProperties
+                        // (database.cc:1273) folds it into the readonly
+                        // answers RulePtrsubCharConstant (ruleaction.cc:
+                        // 7372) and PrintC::pushPtrCharConstant
+                        // (printc.cc:1709) consume.
+                        db.set_symbol_flag(
+                            global,
+                            symbol_id,
+                            rugra::database::symbol_flags::READONLY,
+                            true,
+                        );
+                    }
                 }
                 if let Some((base, size)) = request.rodata_span {
                     if let Some(rng) = rugra::address::Range::new(

@@ -1,5 +1,32 @@
 # `ruleaction.rs` API Reference
 
+## 2026-08-26：`RulePtrsubCharConstant` 完整守护链接通（MAINDIFF-STRCONST-0001）
+
+此前实现以 `Funcdata::string_table` 命中代理 `Scope::isReadOnly` +
+`StringManager::isString`，且无条件把 PTRSUB 转 COPY（跳过 pushConstFurther
+传播半段）。本次对齐 `RulePtrsubCharConstant::applyOp`
+（ruleaction.cc:7354-7403）与 `pushConstFurther`（cc:7323-7340）的完整语义：
+
+- 守护链：spacebase 输入（cc:7357-7361）→ 常量偏移（cc:7363-7364）→
+  输出 `getTypeDefFacing` 为 TYPE_PTR 且 ptr-to `isCharPrint()`
+  （cc:7366-7369）→ `Funcdata::is_scope_read_only(symaddr,1,op_addr)`
+  （Database 属性区间通道，cc:7372）→ 共享
+  `Architecture.string_manager.is_string_typed(symaddr, charsize, opaque)`
+  （cc:7375，charsize/opaque 按 stringmanage.cc:166 虚调用投影 basetype）。
+  规则与 `PrintC::pushPtrCharConstant`（printc.cc:1698）读同一个
+  Address-keyed StringManager，一次正/负缓存两处同答案。
+- 传播半段（cc:7378-7391）：非 addr-force 输出先给每个 descendant 一次
+  `push_const_further`（PTRADD 槽 0 常量增量折叠，`addval *= in(2)`），全部
+  传播成功才 `op_destroy` PTRSUB；任一失败或 addr-force 走 COPY 转换
+  （cc:7395-7400，char* 类型随常量携带）。
+- descendant 快照对应 oracle 迭代器先 `++iter` 再变换的遍历健壮性。
+
+E2E：hugehelp 三个合法字符串地址（0x10ea40/0x111270/0x113ad0）折叠为
+字面量，三个非法 UTF-8 地址保持 `&DAT_*` 形态（isString 负缓存拒绝），
+与 golden 逐字节一致。
+
+**源代码路径**: `src/ruleaction.rs`
+
 ## 2026-08-24：112 个 Rule 名对齐锁定 oracle 构造器字符串
 
 `impl Rule for X` 的 `get_name` 字面量全部改为 oracle ctor 精确名
