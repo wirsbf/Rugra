@@ -1,6 +1,13 @@
 # `blockaction.rs` API Reference
 
-**状态**: 已核对（当前有效，2026-08-26 BLOCKSTRUCT-GUARD-GAPS-0001 三处存量守卫缺口补齐）
+**状态**: 已核对（当前有效，2026-08-27 TRI2-STRUCT-IRREDUCIBLE-TRACE-0001 父链解析第一轮）
+**2026-08-27 追加（TRI2-STRUCT-IRREDUCIBLE-TRACE-0001 round 1 — 折叠层级父链解析）**: 修复 selectGoto exhausted 残差族（jumptable 邻域不可约环）的分叉根因：旧端口把「tail 被复合块吸收」误判为「环死亡」，而 oracle 经 `getParent()` 链把吸收后的 tail 解析到存活的组合块上，环仍然存在：
+1. `LoopBody::update`（cc:94-114 重写）：`cc:95-96` head 父链解析 + `cc:97-103` 每 tail 父链解析（`resolve_to_graph_level`），首个解析结果 ≠ head（均解析后）即返回 bottom；`cc:104-112` 全部 tail 解析进 head 才检查 head 自环；`cc:113` 返回 None。旧实现遇 DEAD tail 直接 `continue`（自创"index-based model"），`updateLoopBody`（cc:1214-1216）视为环死亡 → `likelylistfull=false` 丢弃剩余 likelygoto 候选 → final trace 空 → cc:1275 LowlevelError。
+2. `FloatingEdge::get_current_edge`（cc:27-37 重写）：`cc:28-33` 双端点父链解析（吸收端点解析到组合块，其 selfIdentify 继承的边界边代表同一流），`cc:34-35` 找 out-slot。旧实现遇 DEAD source 直接 None——正是 selectGoto 重解析残留候选时丢边的位置。
+3. `LoopBody::emit_likely_edges`（cc:364-412 重写）：`cc:367-371` head/exitblock 解析、`cc:372-379` tails 解析 + `tail == exitblock → exitblock = -1`（exitblock 被吸收进 tail 则环无出口）、`cc:381-397` exit_edges 逐条 getCurrentEdge 重解析（消失边跳过）+ 官方 exit 边（解析后目标 == exitblock 的**最后一条**）held、`cc:398-409` held 边在最终 back-edge 前发射 + back-edges 逆 tail 序。旧实现 clone 原始条目不重解析、hold 判定用陈旧 to_idx。
+4. 吸收登记：`identify_internal` 消费块 DEAD 处 + `collapse_sequences` succ DEAD 处写 `graph.absorbed_into[idx] = install_idx`（Ghidra `FlowBlock::parent` 指向组合块的等价记录，见 block.md `resolve_to_graph_level`）。
+E2E（curl 124 fn，fast-release + RUGRA_IRRED_DBG=1）：exit 0 / 0 panic，`selectGoto exhausted` **9→6 hits**（main、glob_word 清零；getparameter/glob_set/glob_range/match_url/next_url×1(原2)/parseconfig 残留），defects=0 / numbering=0，skeleton 3050→2742。`[IRRED]`（finaltrace 残差图 dump）/`[TD]`（TraceDAG OPEN/RETIRE/STALL/BADEDGE 决策日志）为 RUGRA_IRRED_DBG=1 环境变量门控的诊断输出（stderr）。
+**状态（前）**: 已核对（2026-08-26 BLOCKSTRUCT-GUARD-GAPS-0001 三处存量守卫缺口补齐）
 **2026-08-26 追加（BLOCKSTRUCT-GUARD-GAPS-0001）**: 补齐复核登记的三处 oracle 守卫缺口（存量债，非上一轮引入）：
 1. `try_rule_if_else` 补全 ruleBlockIfElse 守卫组（blockaction.cc:1416-1444 逐行）：cc:1422 `bl->isSwitchOut()`、cc:1423-1424 双出边 `isDecisionOut`（经 `out_edge_is_decision`，block.hh:336 = 非 irreducible/back/goto）、cc:1433-1434 共同汇合点非 cond 自身（No loops）、cc:1435 两子句 exit 同点、cc:1437-1438 子句 `isSwitchOut`、cc:1439-1440 子句 `isGotoOut(0)`。**同时修正 tc/fc 位置语义**：oracle `tc = bl->getTrueOut()` = out[1]、`fc = bl->getFalseOut()` = out[0]（block.hh:299-300，位置性；Rugra flow.rs:1045 fallthru-first 同构）——旧端口把 out[0] 读进 tc 槽、out[1] 读进 fc 槽，`new_block_if_else(..., negated=false)` 把 **false 路径子句打印在 `if` 之下**，与 oracle（此处从不 negateCondition，cc:1442）相反的 C 语义。
 2. `try_rule_do_while` 补 cc:1562-1563 `bl->isGotoOut(0)/isGotoOut(1)` 拒绝守卫（经 `out_edge_is_goto` label 形态，结构块同样可见）：已标 unstructured 的回边/出边保持 goto，不再被 do/while 吸收。
