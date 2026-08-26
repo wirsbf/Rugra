@@ -3012,6 +3012,18 @@ impl<'a> CollapseStructure<'a> {
                 bcond.incoming = new_in; bcond.outgoing = new_out;
             } else if let Some(binf) = nref.downcast_mut::<crate::block::BlockInfLoop>() {
                 binf.incoming = new_in; binf.outgoing = new_out;
+            } else if let Some(bsw) = nref.downcast_mut::<crate::block::BlockSwitch>() {
+                // Ghidra newBlockSwitch (block.cc:1913): identifyInternal(ret,cs)
+                // runs the same selfIdentify edge transfer as every other
+                // composite — the switch block's incoming/outgoing are the
+                // dispatch's external in-edge and the case/exit boundary
+                // out-edges. The missing arm left every BlockSwitch composite
+                // with sizeIn==0/sizeOut==0 (one-sided edges: pred kept its
+                // out-half, exit kept its in-half), so ruleBlockCat rejected
+                // the chain (cc:1300 `outblock->sizeIn() != 1`) and selectGoto
+                // exhausted at the residual 3-block graph (TRI2-STRUCT-
+                // IRREDUCIBLE-TRACE-0001, glob_set 19->3 live).
+                bsw.incoming = new_in; bsw.outgoing = new_out;
             }
         }
 
