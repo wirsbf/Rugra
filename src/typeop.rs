@@ -874,21 +874,15 @@ impl TypeOp for TypeOpStore {
     }
 
     // Ghidra: typeop.hh:152 TypeOp::getInputLocal (base; Store does not override)
-    fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
-        if slot == 2 {
-            // The value being stored should match the base type of the pointer (inrefs[1])
-            return op.get_in(1).and_then(|vn| {
-                let vn_read = vn.read().unwrap();
-                if let Some(dt) = &vn_read.v_type {
-                    if let Datatype::Pointer(ptr) = dt.as_ref() {
-                        return Some(ptr.ptr_to.clone());
-                    }
-                }
-                None
-            });
-        }
-        None
-    }
+    // TypeOpStore has NO getInputLocal override in the oracle (typeop.hh:279
+    // declares it commented out); every input's local type is the base
+    // default `tlst->getBase(ownSize, TYPE_UNKNOWN)` (typeop.cc:271-275).
+    // The previous in-table override invented a slot-2 "pointer's pointee"
+    // lookup Ghidra never performs; removed as a standing deviation. The
+    // trait default resolves through local_type_factory, which this
+    // table-registered unit type does not carry (returns None) — identical
+    // to the pre-removal observable behavior since no dispatch site reached
+    // it; the faithful coreaction dispatch seeds the base directly.
 
     /// For STORE, a type propagates between the value (slot 2) and the pointer
     /// (slot 1), never along the space constant (slot 0). Value-to-pointer

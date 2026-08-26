@@ -3,6 +3,18 @@
 **状态**: 🔧 L2（仅逐函数核对，禁止据此宣称模块 L3）
 **源代码路径**: `src/typeop.rs`
 
+## 2026-08-26：`TypeOpStore::get_input_local` 自创 override 移除（TRI2-STORESPLIT-WHOLESTRUCT-0001）
+
+锁定 oracle 的 `typeop.hh:279` 中 `TypeOpStore::getInputLocal` 声明是注释行
+（`TypeOpStore` 只覆写 `getInputCast`/`getOutputToken`/`propagateType`），
+slot 2 值输入的局部类型因此是基默认
+`TypeOp::getInputLocal` = `tlst->getBase(in.size, TYPE_UNKNOWN)`
+（typeop.cc:266-276）。旧的表内 override 发明了 Ghidra 从不执行的
+slot-2「指针 pointee 回查」，已删除；trait 默认经
+`local_type_factory()` 解析（表注册 unit type 不携带工厂时返回 None），
+`ActionInferTypes` 的 coreaction 读者派发臂直接播种基类型，观察行为与
+oracle 一致。
+
 ## 2026-08-25：`TypeOpIntAdd::propagate_add_in2out` 全量移植（typeop.cc:1215-1253）
 
 生产 caller 为 `ActionInferTypes` dispatch 的 PTRSUB/PTRADD/INT_ADD 指针臂

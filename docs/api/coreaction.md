@@ -1765,6 +1765,35 @@ TypeFactory（`propagateAddIn2Out` downChain），E2E 驱动侧
 buildTypegrp + :1269 ELEM_DATA_ORGANIZATION + :1350 setupSizes）装配
 带 `<data_organization>` 解码的真实工厂——此前工厂缺失使全部指针传播臂
 静默失效，RulePtrArith 因此从未触发。
+## ActionInferTypes LOAD/STORE 读者派发（TRI2-STORESPLIT-WHOLESTRUCT-0001，2026-08-26）
+
+op-centric 遍历的 `CPUI_LOAD | CPUI_STORE` 臂重写为读者派发：每个非
+annotation 输入（slot 1/2；slot 0 spaceid 是 annotation 被
+`is_annotation()` 跳过，对应 buildLocaltypes 的 `vn->isAnnotation()`
+continue，coreaction.cc:5018）以 `merge_min_type_order` 播种
+`getBase(size, TYPE_UNKNOWN)`——即 `Varnode::getLocalType`
+（varnode.cc:897-936）descend 遍历 `op->inputTypeLocal(i)` 的 typeOrder
+最小值在 op-centric 走向上的投影。决定性语义：
+
+- **无 override**：`TypeOpLoad::getInputLocal`/`TypeOpStore::getInputLocal`
+  在 typeop.hh:269/:279 均为注释行，两 opcode 的每个输入局部类型都是
+  `TypeOp::getInputLocal` 基默认 `tlst->getBase(in.size, TYPE_UNKNOWN)`
+  （typeop.cc:266-276）。超过 max_base_type_size 的值的该基类型是
+  unknown1[N] 数组（type.cc:3652-3657），不是 `IntTypes::sized` 饱和的
+  8 字节 long——后者令 `testDatatypeCompatibility` 的 piece 走查
+  （subflow.cc:2314-2330）无法覆盖全部 outType 分量，`RuleSplitStore`
+  （subflow.cc:2991-3004）便不触发整结构常量 STORE 拆分（progressbarinit
+  `*bar=0` → golden 5 行逐字段清零）。
+- **最小值合并**：`merge_min_type_order` 保持 varnode.cc:926-931 的
+  `0 > newct->typeOrder(*ct)` 严格小于才替换——unknown 播种永不逐出更
+  具体的读者播种（CALL 锁定参数、downChain 字段指针）；wip 2647faac 的
+  STORE 地址 `pointer-to-pointee` 单向 or_insert 播种（Ghidra
+  buildLocaltypes 无此 op 中心播种）一并移除。
+- **FILE*+8 不误拆**：字段指针 STORE 的 outType 经 `getValueDatatype` 的
+  `getExactPiece`（subflow.cc:2910-2962）恢复出的分量与 8 字节标量值
+  兼容性不成立时不拆分——my_fwrite `stream->_IO_read_ptr` 保持单
+  STORE/LOAD。
+
 ## ActionSetCasts 类型转换输入/输出令牌 + MarkImplied cover + ReturnSplit（MYFWRITE-TEMPVAR-0001，2026-08-26）
 
 1. **castInput 专用臂**（coreaction.cc:2662 `getInputCast` 派发）：LOAD 走

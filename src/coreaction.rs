@@ -5252,83 +5252,55 @@ impl ActionInferTypes {
                         }
                     }
                 }
-                // LOAD: address input (slot 1) is a pointer; output gets a
-                // size-based scalar so the address pointer can bootstrap.
-                OpCode::CPUI_LOAD => {
-                    if let (Some(space_in), Some(addr_in), Some(out)) =
-                        (op.get_in(0), op.get_in(1), op.get_out())
-                    {
-                        let av = addr_in.read().unwrap();
-                        let _ = space_in;
-                        let ov = out.read().unwrap();
-                        // If the address varnode already carries a pointer
-                        // type (e.g. a type-locked parameter), the load
-                        // output takes the pointed-to type — Ghidra's
-                        // TypeOpLoad::propagateType (typeop.cc:487-505)
-                        // input1→output edge. Fall back to the size-based
-                        // scalar otherwise.
-                        let addr_ptr_pointed = av
-                            .v_type
-                            .as_ref()
-                            .and_then(|t| match t.as_ref() {
-                                crate::type_system::datatype::Datatype::Pointer(pt) => {
-                                    Some(pt.ptr_to.clone())
-                                }
-                                _ => None,
-                            });
-                        let pointed = addr_ptr_pointed
-                            .unwrap_or_else(|| int_types.sized(ov.get_size()));
-                        temps
-                            .entry(vn_id(&av))
-                            .and_modify(|e| {
-                                if e.get_metatype() == TypeMetatype::Unknown {
-                                    *e = make_ptr(pointed.clone(), ptr_size);
-                                }
-                            })
-                            .or_insert_with(|| make_ptr(pointed.clone(), ptr_size));
-                        temps.entry(vn_id(&ov)).or_insert(pointed);
-                    }
-                }
-                // STORE: the value input's LOCAL type is the default
-                // `TypeOp::getInputLocal` (typeop.cc:271-275):
-                // `TypeOpStore` overrides only getInputCast and
-                // propagateType (typeop.cc:520-570), never the local
-                // lookup, so Ghidra seeds the factory's unknown base
-                // of the value's OWN size — never a narrower int.
-                // `IntTypes::sized` saturates at the 8-byte `long`,
-                // which stamps an 8-byte type on a 16-byte XMM
-                // constant; that size-mismatched local is a state
-                // Ghidra's inference cannot produce (the
-                // pointer->value edge of `TypeOpStore::
-                // propagateType` -> `propagateFromPointer`
+                // LOAD/STORE reader dispatch (varnode.cc:918-932 descendant
+                // visits mapped onto the op-centric walk): Ghidra's
+                // buildLocaltypes (coreaction.cc:5008-5037) seeds nothing
+                // op-centrically, but every Varnode's local type IS the
+                // typeOrder-minimum over its readers'
+                // `op->inputTypeLocal(i)` — and neither TypeOpLoad nor
+                // TypeOpStore overrides getInputLocal (typeop.hh:269/279 both
+                // commented out), so each non-annotation LOAD/STORE input
+                // contributes the base default `TypeOp::getInputLocal`
+                // (typeop.cc:271-275) = `tlst->getBase(ownSize, UNKNOWN)`.
+                // For a >10-byte constant that base is an unknown1 array
+                // (type.cc:3652-3656) — NOT IntTypes::sized's saturating
+                // 8-byte long, which the generic fallback below would stamp
+                // and which Ghidra cannot produce: the pointer->value edge
+                // of TypeOpStore::propagateType -> propagateFromPointer
                 // (typeop.cc:206-228) crosses only exact-size or
-                // partial-enum matches). The full-width unknown
-                // local is what lets `testDatatypeCompatibility`'s
-                // piece walk (subflow.cc:2319-2334) cover every
-                // outType component, so RuleSplitStore
-                // (subflow.cc:2991-3004) splits whole-struct
-                // constant STOREs into per-field STOREs
-                // (TRI2-STORESPLIT-WHOLESTRUCT-0001).
-                OpCode::CPUI_STORE => {
-                    if let (Some(addr_in), Some(val_in)) = (op.get_in(1), op.get_in(2)) {
-                        let av = addr_in.read().unwrap();
-                        let vv = val_in.read().unwrap();
-                        let pointed = match fd
-                            .arch
-                            .as_ref()
-                            .and_then(|a| a.types.clone())
-                            .map(|tf| {
-                                tf.write()
-                                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                    .get_base_result(vv.get_size(), TypeMetatype::Unknown)
-                            }) {
-                            Some(Ok(ct)) => ct,
-                            _ => int_types.sized(vv.get_size()),
-                        };
-                        temps
-                            .entry(vn_id(&av))
-                            .or_insert_with(|| make_ptr(pointed.clone(), ptr_size));
-                        temps.entry(vn_id(&vv)).or_insert(pointed);
+                // partial-enum matches. The full-width unknown local lets
+                // testDatatypeCompatibility's piece walk (subflow.cc:2319-
+                // 2334) cover every outType component so RuleSplitStore
+                // (subflow.cc:2991-3004) splits whole-struct constant
+                // STOREs into per-field STOREs
+                // (TRI2-STORESPLIT-WHOLESTRUCT-0001). merge_min_type_order
+                // keeps the varnode.cc:926-931 minimum: an unknown8 seed can
+                // never displace a more specific reader seed (CALL locked
+                // param, downChain field pointer).
+                OpCode::CPUI_LOAD | OpCode::CPUI_STORE => {
+                    let type_factory = fd.arch.as_ref().and_then(|a| a.types.clone());
+                    let Some(type_factory) = type_factory else {
+                        continue;
+                    };
+                    for slot in 0..op.num_input() {
+                        let input_vn = op.get_in(slot).cloned();
+                        let Some(input_vn) = input_vn else { continue };
+                        if input_vn.read().unwrap().is_annotation() {
+                            continue;
+                        }
+                        let ct = {
+                            let mut tf = type_factory
+                                .write()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            tf.get_base_result(
+                                input_vn.read().unwrap().get_size(),
+                                TypeMetatype::Unknown,
+                            )
+                        }
+                        .ok();
+                        if let Some(ct) = ct {
+                            merge_min_type_order(temps, vn_id(&input_vn.read().unwrap()), ct);
+                        }
                     }
                 }
                 // INT_ADD/INT_SUB/PTRSUB/PTRADD with a spacebase input →
