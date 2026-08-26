@@ -1265,11 +1265,26 @@ impl PrintC {
             cur.get_display_name().to_string()
         };
         let mut spelling = base_name;
-        // cc:290-302 + cc:319-330: emit the modifier layers outside-in
-        // (stack order is reversed here): `*` per pointer, `[n]` per array.
+        // cc:279-286 + cc:292-302: the modifier chain is emitted after ONE
+        // type_expr_space (printc.cc:73, OpToken::space spacing=1) — a
+        // single blank between the base identifier and the first modifier —
+        // then per layer: ptr_expr `*` (printc.cc:75, unary_prefix with
+        // spacing=0) or array_expr `[n]` (printc.cc:78, postsurround with
+        // spacing=1, Emit::spaces accumulates per printlanguage.cc:326-369 /
+        // prettyprint.cc:46-58). Consecutive pointer layers therefore glue:
+        // Pointer(Pointer(char)) prints `char **`, Pointer³ prints
+        // `ushort ***` — the old per-layer " *" produced the non-oracle
+        // `char * *`. The named-layer early break of buildTypeStack
+        // (printc.cc:150) is not mirrored here: Rugra's parsed nested
+        // pointers carry display names while the oracle corpus types are
+        // anonymous factory pointers, and stopping at a named layer would
+        // re-introduce `char * *` against golden `char **`.
+        if !layers.is_empty() {
+            spelling.push(' ');
+        }
         for layer in layers.iter().rev() {
             match layer {
-                Datatype::Pointer(_) => spelling.push_str(" *"),
+                Datatype::Pointer(_) => spelling.push('*'),
                 Datatype::Array(a) => spelling.push_str(&format!(" [{}]", a.num_elements)),
                 _ => unreachable!("only pointer/array layers are stacked"),
             }
@@ -2276,9 +2291,17 @@ impl PrintC {
         if !self.option_nocasts {
             self.rpn_push_op(self.rpn_tok_typecast);
             if let Some(ref dt) = out_dt {
-                // pushType(dt) renders the type's display name as a
-                // TypeToken syntax Atom (printc.cc:2013 pushType).
-                let type_name = dt.get_name().to_string();
+                // pushType(dt) renders the structural cast spelling
+                // (printc.cc:2013 pushType -> pushTypeStart/pushTypeEnd):
+                // buildTypeStack walks the pointer/array layers and emits
+                // `char **` for nested pointers. Rugra's non-interned
+                // pointers carry per-layer display names (`char * *` on the
+                // outer of a pointer-to-pointer built by make_ptr), so the
+                // raw get_name() here must go through the same structural
+                // fold as op_type_cast's cast_type_string — else
+                // `*(char * *)stream` leaks where the oracle prints
+                // `*(char **)stream`.
+                let type_name = Self::cast_type_string(dt);
                 let type_atom = Atom::with_type(
                     &type_name,
                     TagType::TypeToken,

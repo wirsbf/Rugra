@@ -1598,3 +1598,19 @@ numbering=0 保持；audit 错误总数 15→15（1 处形态变化见上）。
    comma 记号 spacing 0，printc.cc:57）——`fwrite(buffer,size,nmemb,__s)`。
 3. push_varnode Priority 0.5 寄存器参数名门控收紧为"本函数实际输入"
    （printlanguage.cc:218-262 pushSymbolDetail 语义）。
+
+## cast_type_string / rpn_op_type_cast：嵌套指针粘着拼写（2026-08-27）
+
+- `cast_type_string`（对齐 printc.cc:279-286 pushTypeStart + cc:292-302）
+  修饰链在**一个** type_expr_space（printc.cc:73 spacing=1）后发射——基名
+  与首个修饰符间单一空格——随后每层 ptr_expr `*`（printc.cc:75
+  unary_prefix spacing=0）或 array_expr `[n]`（printc.cc:78 postsurround
+  spacing=1）。连续指针层粘着：Pointer(Pointer(char)) 打 `char **`，
+  Pointer³ 打 `ushort ***`；旧逐层 `" *"` 产出非 oracle 的 `char * *`。
+  buildTypeStack 的 named-layer 早断（printc.cc:150）不镜像：Rugra 解析的
+  嵌套指针携带显示名而 oracle 语料类型为匿名工厂指针，named 层截断会
+  重新引入 `char * *`。
+- `rpn_op_type_cast` 的 pushType（printc.cc:2013）同样走结构化折叠：旧
+  `dt.get_name()` 直读外层原始名（make_ptr 造的 pointer-to-pointer 外层名
+  就是 `char * *`），在 `*(char * *)stream` 泄漏处 oracle 打
+  `*(char **)stream`；现改走 cast_type_string 同一折叠。
