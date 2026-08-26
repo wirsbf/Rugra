@@ -1,0 +1,86 @@
+{
+  "schema_version": 2,
+  "fixture_id": "FUNCDATA-MAPGLOBALS-MAXVN-0001",
+  "todo_ids": [
+    "FUNCDATA-MAPGLOBALS-MAXVN-0001"
+  ],
+  "status_note": "Bilateral Funcdata::mapGlobals oracle: the inner group loop's maxvn reassignment on strictly greater size (funcdata_varnode.cc:1685-1686) and the ct read from the biggest varnode's high type (cc:1692-1693), discriminated on the same-address dual-width persist shape the R-MAPGLOBALS independent review flagged as latent-UNTESTED (REJECT fix-forward: commit re-based 612bc14f).",
+  "decisive_semantics": {
+    "reference_output_parameters": "maxvn is a Varnode* carried across the inner loop to the ct read; no out params; addSymbol mutates the discovered (global) scope.",
+    "loop_bounds_traversal_order": "outer walk over vbank.beginLoc..endLoc (loc order: space, offset, size ascending — the 1-byte member is the group start at a shared base address); inner loop peeks without consuming, breaks on non-persist / other space / offset >= endaddr, consumes (++iter) only in the overlap arm.",
+    "counter_accumulator_lifecycle": "maxvn starts as the group-start varnode (cc:1671) and is reassigned ONLY on strictly greater size (cc:1685-1686, first-maximal wins); endaddr is extended (and can shrink) unconditionally per consumed member (cc:1684); inconsistentuse is one function-level set-only bool; index resets to 0 before each buildVariableName.",
+    "sorting_comparison_keys": "strictly-greater '>' (equal size never swaps — case d); the ct selection gate is maxvn->getAddr()==addr && addr+maxvn->getSize()==endaddr; the entry-arm overflow test is (addr+ct->getSize())-1 > (entry_addr+entry_size)-1 unsigned."
+  },
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "architecture": "locked synthetic LE 64-bit Architecture (FixtureTranslate/FixtureArchitecture, cf. funcdata_calcnzm_1204): const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; no SLEIGH/BFD loader.",
+  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output (calcnzm form); core types registered as undefined1/2/4/8 + int1/int2/int8 + uint4 so the span fallback and the forced highs have distinct observable printNameBase characters on both sides (Rugra's 4-byte unsigned core is named 'uint', the C++ twin 'uint4' — only the first character 'u' is observable through buildVariableName).",
+  "analysis_options": {
+    "entrypoint": "direct Funcdata factory surface (newOp/newVarnodeOut/newConstant/opSetInput/opInsertEnd + setHighLevel) with written persist varnodes carrying forced v_type, a Database-backed global scope (ownership range 0..u64::MAX added after varnode creation), one seeded 4-byte entry for the entry arm, and a CommentDatabaseInternal so warningHeader is observable",
+    "flag_channel": "persist|addrtied are pinned directly on the varnodes (production derives them from the newVarnodeOut localmap queryProperties channel, a registered Rugra gap) — identical flag state both sides",
+    "high_channel": "setHighLevel assigns the HighVariable; getType() derives from the single member's forced v_type (HighVariable::updateType, variable.cc:400-417)"
+  },
+  "expected_results": {
+    "record_count": 6
+  },
+  "projection_status": "MATCH",
+  "overall_status": "MATCH",
+  "coverage": {
+    "maxvn_type_source_dual_width": {
+      "status": "MATCH",
+      "residual_todo_ids": [],
+      "note": "case a: addSymbol's ct is the MAX varnode's forced uint4 high (type size 4, metatype uint, name base 'u') — the group-start 1-byte type and the 8-byte span fallback are both wrong answers this record excludes"
+    },
+    "entry_arm_overflow_flip": {
+      "status": "MATCH",
+      "residual_todo_ids": [],
+      "note": "case b + warn: a 2-byte max high type against a seeded 4-byte entry keeps (addr+ct_size)-1 <= entry_end-1, so no inconsistentuse and warningHeader count 0; the pre-fix group-start source would read the 8-byte start type and flip both"
+    },
+    "span_fallback_arm": {
+      "status": "MATCH",
+      "residual_todo_ids": [],
+      "note": "case c: internal 1-byte@+1 member shrinks endaddr to addr+2, the maxvn span gate fails, ct = getBase(2,TYPE_UNKNOWN): entry size 2, metatype unknown"
+    },
+    "strictly_greater_no_swap_on_equal": {
+      "status": "MATCH",
+      "residual_todo_ids": [],
+      "note": "case d: equal-size member (int8) never displaces the start member (uint8): ct is the start's type"
+    },
+    "multi_member_group": {
+      "status": "MATCH",
+      "residual_todo_ids": [],
+      "note": "case e: 1B start + 8B max + 4B@+4 internal: ct from the max member; the internal member is uncovered-remembered but ignored in the discovery arm"
+    },
+    "uncovered_entry_arm_cover_varnodes": {
+      "status": "UNTESTED",
+      "residual_todo_ids": ["MAINDIFF-GLOBAL-0001"],
+      "note": "coverVarnodes entry-arm interaction (internal uncovered members under an existing entry with a spanning ct) is not driven here; the registered latent deviations (addrtied filtering, high==None fallback) live in that TODO"
+    },
+    "non_ram_persist_group": {
+      "status": "UNTESTED",
+      "residual_todo_ids": ["MAINDIFF-GLOBAL-0001"],
+      "note": "register-space persist groups (the ScopeLocal query leg / legacy proxy arm) stay on the registered funcdata gap"
+    }
+  },
+  "comparand": {
+    "cpp_fixture": "tests/oracle/funcdata_mapglobals_maxvn_1204.cc",
+    "rust_fixture": "tests/oracle/funcdata_mapglobals_maxvn_1204.rs",
+    "runner": "tools/run_funcdata_mapglobals_maxvn_oracle.sh",
+    "rust_side_src": "src/funcdata.rs map_globals (fix commit 612bc14f, re-based onto master ac6e6795)"
+  },
+  "evidence": {
+    "runner_exits": [0, 0],
+    "runs": 2,
+    "ghidra_stdout_sha256": "76201868ddbeb485a79f47b3c87e6f985ca1a986c7e46b09a712660dff86630d",
+    "discrimination_probe": "snapshot-only revert of the maxvn=next.clone() line flips a/e to the group-start type (name iRam.../size=1/mt=int) and warn count to 1 — both MISMATCH observables from R-MAPGLOBALS section 3"
+  },
+  "review": {
+    "source": "/tmp/rugra-reports/R-MAPGLOBALS.md",
+    "verdict": "REJECT (1 MISMATCH: ct type source = group-start varnode, not the max varnode)",
+    "disposition": "fix-forward; this fixture is the discrimination evidence the review required (mechanism B2)"
+  }
+}
