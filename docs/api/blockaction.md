@@ -927,3 +927,38 @@ interior-goto 标记。
   用于结构化分叉 triage。
 - `collapse_internal_rules` 内 `bs_try!` 宏：`RUGRA_BS_TRACE=1` 时打印
   每条规则命中（规则名 + 块索引）。默认关闭，零行为变化。
+
+### identify_internal 成对去重 + 规则守卫回 oracle（2026-08-26，TRI2-STRUCT-SELECTGOTO-SELFLOOP-0001）
+- **成对去重协议**：删除安装前对 `new_in`/`new_out` 的单侧 `retain` 去重。
+  oracle 的 selfIdentify（block.cc:895-931）对每个被重定向的 peer 槽位各推
+  一个复合块半边（平行边合法），仅由末尾 `dedup()`（block.cc:930）成对收
+  敛——`eliminateInDups/eliminateOutDups`（block.cc:440-501）在对侧半删
+  duplicate 槽位。旧单侧 retain 使复合块边数欠计，随后 touched peer 的成对
+  dedup 按陈旧 reverse_index `halfDeleteOutEdge`（slot=-1→usize::MAX 时
+  `while slot < last` 跳过循环、pop 尾边）删掉复合块仅存的出边——proper-if
+  复合块 sizeOut==0 → TraceDAG 走断 → `selectGoto exhausted` → `code_r`
+  自环 goto 兜底发射的完整根因链。现顺序为 resync（双射）→ 复合块 dedup →
+  touched peers dedup（Ghidra 只 dedup ident；peer 侧为幂等 no-op 保护）。
+- **边标签继承**：捕获边界边时保留 `e.flags`（对齐 replaceIn/OutEdge 的
+  `BlockEdge(this, outofthis[num].label, num)`，block.cc:172/188）；旧
+  `BlockEdge::new` 清零 flags，goto/loopback 标签在复合块边界丢失。
+- **双射 resync**：`resync_boundary_reverse_indices` 改为按 peer 出现次序
+  消费对侧槽位（第 occ 个回指边），平行边各自配对；旧首匹配把所有平行边
+  配到同一对侧槽位。
+- **install==consumed 跳过**：消费循环跳过 `c_idx == install_idx`（对齐
+  newBlockGoto/newBlockDoWhile 的 `nodes={bl}`——install 块已由 install 捕
+  获阶段处理；二次遍历把每条边界边翻倍，未配对的 reverse_index 又触发上述
+  pop-尾边误删）。
+- **规则守卫回 oracle**：`try_rule_proper_if`/`try_rule_if_no_exit`/
+  `try_rule_while_do`/`try_rule_do_while` 删除自创
+  `switch_case_indices`/`CASE_BODY` 级联守卫（与 a9d68f77 从
+  try_rule_if_no_exit 删 cascade-member guard 同族；CBRANCH 链在 oracle 中
+  就是嵌套 if/else，不存在的"级联 switch"概念阻塞了合法结构化），补上
+  oracle 守卫：cc:1383/1487/1525/1561 `bl->isSwitchOut()`（f_switch_out 由
+  build_copy 对 BRANCHIND 块重建，block.cc:2286 不变量）、cc:1394/1500/
+  1534 子句 `isSwitchOut`、cc:1501 `!isDecisionOut`、cc:1487-1490 自环/
+  goto-out。真实 switch（BRANCHIND 派发块）仍被保护。
+- funcdata `test_bool_condition_folding_and_pattern` 搜索层扩到两级：该 CFG
+  的 oracle 规则序列为 ruleBlockOr → ruleBlockIfNoExit 包 D（cc:1840 第二
+  趟）→ ruleBlockCat 合并 sink C，终态 List[If[Condition(Or), D], C]（旧断
+  言只搜一层，恰好匹配旧 bug 造成的 Condition 直接 List 子节点形态）。

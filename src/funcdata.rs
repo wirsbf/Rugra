@@ -12932,8 +12932,13 @@ mod tests {
         // BlockList, wrapped in a BlockIf (ruleBlockIfNoExit, blockaction.cc:
         // 1840, runs after the fixpoint and wraps an exit-only clause into an
         // if), or its original block slot may have been replaced.
-        // Search ALL blocks recursively (one composite level) for any
-        // BlockCondition with And.
+        // Search ALL blocks recursively (two composite levels) for any
+        // BlockCondition with Or. Two levels are required: Ghidra's rule
+        // sequence on this CFG (traced against blockaction.cc) is
+        // ruleBlockOr -> ruleBlockIfNoExit wraps the exit clause D
+        // (cc:1840 second pass) -> ruleBlockCat merges the If with the
+        // false-edge sink C, giving List[If[Condition(Or), D], C] — the
+        // Condition sits INSIDE an If that is a List child.
         let mut found_or = false;
         for i in 0..graph.get_size() {
             if let Some(block) = graph.get_block(i) {
@@ -12951,6 +12956,19 @@ mod tests {
                                 if c.get_type() == BlockType::Condition {
                                     if let Some(cond) = c.as_any().downcast_ref::<BlockCondition>() {
                                         if cond.op_type == BoolOp::Or { found_or = true; }
+                                    }
+                                }
+                                // Level 2: the child may be the
+                                // ruleBlockIfNoExit BlockIf whose condition
+                                // is the Or composite (List[If[Cond, D], C]).
+                                if c.get_type() == BlockType::If {
+                                    if let Some(bif2) = c.as_any().downcast_ref::<crate::block::BlockIf>() {
+                                        let cc = bif2.condition.read().unwrap();
+                                        if cc.get_type() == BlockType::Condition {
+                                            if let Some(cond) = cc.as_any().downcast_ref::<BlockCondition>() {
+                                                if cond.op_type == BoolOp::Or { found_or = true; }
+                                            }
+                                        }
                                     }
                                 }
                             }

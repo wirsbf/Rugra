@@ -2887,10 +2887,6 @@ impl<'a> CollapseStructure<'a> {
             // BlockIf / BlockList / BlockWhileDo / BlockDoWhile / BlockGoto / BlockSwitch
             // all expose incoming/outgoing via as_any_mut. Try the common ones.
             if let Some(bif) = nref.downcast_mut::<crate::block::BlockIf>() {
-                if std::env::var("RUGRA_BS_DUMP").map(|v| v == "3").unwrap_or(false) {
-                    eprintln!("[DBG3] identify_internal install install_idx={} consumed={:?} captured in={} out={}",
-                        install_idx, consumed_indices, new_in.len(), new_out.len());
-                }
                 bif.incoming = new_in; bif.outgoing = new_out;
             } else if let Some(blist) = nref.downcast_mut::<crate::block::BlockList>() {
                 blist.incoming = new_in; blist.outgoing = new_out;
@@ -3025,10 +3021,6 @@ impl<'a> CollapseStructure<'a> {
                 };
             if let Some(oi) = &old_install {
                 strip_external(oi);
-            }
-            if std::env::var("RUGRA_BS_DUMP").map(|v| v == "3").unwrap_or(false) {
-                let (ni, no) = { let r = new_block.read().unwrap(); (r.size_in(), r.size_out()) };
-                eprintln!("[DBG3] identify_internal post-strip install_idx={} composite in={} out={}", install_idx, ni, no);
             }
             for &idx in consumed_indices {
                 let i = idx as usize;
@@ -3874,8 +3866,10 @@ impl<'a> CollapseStructure<'a> {
         };
         let b = block.read().unwrap();
         if b.size_out() != 2 { return false; }
-        // Skip switch dispatch blocks
-        if b.get_flags() & crate::block::block_flags::CASE_BODY != 0 { return false; }
+        // cc:1525: `if (bl->isSwitchOut()) return false;` — f_switch_out
+        // (BRANCHIND dispatch, set by build_copy per block.cc:2286), not the
+        // invented CASE_BODY cascade marks.
+        if b.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { return false; }
         // cc:1526-1528: `if (bl->getOut(0)==bl) return false; if (bl->getOut(1)==bl)
         // return false; if (bl->isInteriorGotoTarget()) return false;`
         let cond_idx_pre = b.get_index();
@@ -3901,6 +3895,8 @@ impl<'a> CollapseStructure<'a> {
             let clause_in = self.count_non_structural_in_edges(&c);
             if clause_in != 1 { continue; }
             if c.size_out() != 1 { continue; }
+            // cc:1534: `if (clauseblock->isSwitchOut()) continue;`
+            if c.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { drop(c); continue; }
             // Clause must loop back to the condition block
             let clause_out = match c.get_out(0) { Some(e) => e, None => continue };
             if clause_out.point.read().unwrap().get_index() != cond_idx { continue; }
@@ -3957,7 +3953,10 @@ impl<'a> CollapseStructure<'a> {
         };
         let b = block.read().unwrap();
         if b.size_out() != 2 { return false; }
-        if b.get_flags() & crate::block::block_flags::CASE_BODY != 0 { return false; }
+        // cc:1561: `if (bl->isSwitchOut()) return false;` — f_switch_out
+        // (BRANCHIND dispatch, set by build_copy per block.cc:2286), not the
+        // invented CASE_BODY cascade marks.
+        if b.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { return false; }
 
         let cond_idx = b.get_index();
         for slot in 0..2 {
