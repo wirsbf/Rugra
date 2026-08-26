@@ -989,3 +989,19 @@ cleanup pool（RuleSplit* 等）插入的 STORE 对打印可见。
   借回指针让 get_ops 暴露源块当前 op：结构化时点的成员资格快照供
   collapse 消费，此后所有后续读取（打印、ActionSetCasts 等结构化后
   Action 插入）看到源块实时 op，与 BlockCopy 一致。
+
+
+### 2026-08-27：TRI2 round 4 — clause 入边门进一步回 oracle
+
+- `count_non_structural_in_edges` 删除自创 `switch_case_indices`（cascade
+  成员）arm：该 arm 把 refreshSwitchCases 的 CBRANCH 链标记当作"结构化"入边
+  计数排除，导致所有被级联遍历器触碰的 else-if 链被 proper_if/if_else/
+  do_while 拒判，链不可塌缩，selectGoto exhausted（TRI2-STRUCT-
+  IRREDUCIBLE-TRACE-0001，glob_range 残差 1→2→3→9 with properif-legal
+  shapes）。oracle 守卫为纯 `clauseblock->sizeIn() != 1`（blockaction.cc:
+  1391/1428 等），无 cascade 概念。
+- E2E curl：exhausted 8 函数→2（getparameter.constprop.0/glob_set），
+  defects=0/numbering=0，skeleton 3050→2611，输出回流 result/curl_cur.c。
+- 残余分叉（下一步）：Switch-dispatch arm 与 DEAD arm 在 oracle 中不存在
+  （Ghidra 用 identifyInternal 把消费块移出 graph，sizeIn() 自然不含），
+  完整 faithful 移除待续。
