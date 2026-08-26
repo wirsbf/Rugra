@@ -1376,3 +1376,12 @@ coreaction.cc:5694-5712）对打印与后续读者始终可见。Rugra 的 `buil
 BLOCK-BUILDCOPY-MIRROR-0001）。仅 build_copy 设置；`bblocks` 中的原块
 永不携带镜像链，委托不递归。字段持 trait 对象（BlockGraph 块即
 `Arc<RwLock<dyn FlowBlock>>`），`get_ops` 经 trait 方法委托。
+- `BlockBasic.source_basic`（BLOCK-BUILDCOPY-MIRROR-0001 关联项）：结构图
+  副本的源基本块回指针。Ghidra 的结构图用 BlockCopy 包装器镜像基本块
+  （block.hh:520-538），其 firstOp/lastOp **委托**被包装的活块
+  （block.hh:533-534 `return copy->firstOp()`），故结构化后插入的 op
+  （如 ActionSetCasts 的 CAST，coreaction.cc:5735 晚于 blockstructure
+  :5659）对 printer 可见。Rugra 的 build_copy 原先克隆 op-list Vec 冻结
+  快照，结构化后插入不可见；`get_ops` 在 `source_basic` 为 Some 时改为
+  读源块**当前** op 列表，恢复 BlockCopy 活委托语义。快照成员资格仍供
+  collapse 自身消费（build_copy 先填 ops 再挂 source_basic）。

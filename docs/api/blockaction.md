@@ -974,3 +974,9 @@ interior-goto 标记。
 BlockCopy 委托契约，block.hh:520-535）。BRANCHIND 的 f_switch_out 复算改从
 源块读取（镜像不再持有自己的 op 快照）。效果：ActionBlockStructure 之后由
 cleanup pool（RuleSplit* 等）插入的 STORE 对打印可见。
+- `build_copy`（block.cc:1933 newBlockCopy）：为每个结构图 BlockBasic 副本
+  挂 `source_basic` 回指针（BLOCK-BUILDCOPY-MIRROR-0001）。Ghidra
+  BlockCopy 包装器的 op 访问委托源活块（block.hh:533-534），Rugra 副本
+  借回指针让 get_ops 暴露源块当前 op：结构化时点的成员资格快照供
+  collapse 消费，此后所有后续读取（打印、ActionSetCasts 等结构化后
+  Action 插入）看到源块实时 op，与 BlockCopy 一致。
