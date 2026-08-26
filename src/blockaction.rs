@@ -189,6 +189,24 @@ fn build_copy(sblocks: &mut BlockGraph, bblocks: &BlockGraph) {
     }
 }
 
+// RUGRA-GLUE: short type tag for the env-gated RUGRA_BS_DUMP graph dumper
+// (downcast-based; the derived Debug impls recurse into children and can
+// overflow the worker stack). Debug-only helper, no Ghidra counterpart.
+fn debug_type_name(b: &dyn FlowBlock) -> String {
+    let any = b.as_any();
+    if any.is::<crate::block::BlockBasic>() { "Basic".into() }
+    else if any.is::<crate::block::BlockGraph>() { "Graph".into() }
+    else if any.is::<crate::block::BlockList>() { "List".into() }
+    else if any.is::<crate::block::BlockIf>() { "If".into() }
+    else if any.is::<crate::block::BlockWhileDo>() { "WhileDo".into() }
+    else if any.is::<crate::block::BlockDoWhile>() { "DoWhile".into() }
+    else if any.is::<crate::block::BlockGoto>() { "Goto".into() }
+    else if any.is::<crate::block::BlockCondition>() { "Condition".into() }
+    else if any.is::<crate::block::BlockInfLoop>() { "InfLoop".into() }
+    else if any.is::<crate::block::BlockSwitch>() { "Switch".into() }
+    else { "Other".into() }
+}
+
 // Ghidra: block.cc:240 FlowBlock::setOutEdgeFlag (+ mirrored in-edge half,
 // block.cc:245-247)
 /// OR-set an edge label on the `j`-th outgoing edge of ANY concrete block
@@ -1260,6 +1278,9 @@ impl<'a> CollapseStructure<'a> {
                     "[BLOCKSTRUCT] {}: selectGoto exhausted (LowlevelError site, blockaction.cc:1275)",
                     self.name
                 );
+                if std::env::var("RUGRA_BS_DUMP").map(|v| v == "1").unwrap_or(false) {
+                    self.debug_dump_graph("exhausted");
+                }
                 break;
             }
         }
@@ -1267,6 +1288,46 @@ impl<'a> CollapseStructure<'a> {
         // identifyInternal's list compaction, block.cc:953-960), required
         // for downstream emit (printc emitBlockGraph).
         self.finalize_structure();
+    }
+
+    // RUGRA-GLUE: env-gated (RUGRA_BS_DUMP=1) graph-state dumper for
+    // blockstructure divergence triage; no Ghidra counterpart (debug-only).
+    fn debug_dump_graph(&self, when: &str) {
+        let size = self.graph.get_size();
+        let mut nonisolated = 0;
+        for i in 0..size {
+            let b = match self.graph.get_block(i) { Some(b) => b, None => continue };
+            let r = b.read().unwrap();
+            let dead = r.get_flags() & crate::block::block_flags::DEAD != 0;
+            let mut outs = String::new();
+            for s in 0..r.size_out() {
+                if let Some(e) = r.get_out(s) {
+                    let (dst_idx, ty) = match e.point.try_read() {
+                        Ok(g) => (g.get_index(), debug_type_name(&*g)),
+                        Err(_) => (-1, "?".to_string()),
+                    };
+                    let goto = r.is_goto_out(s);
+                    outs.push_str(&format!(" [{}:{}:{}{}]", s, dst_idx, ty, if goto { ",GOTO" } else { "" }));
+                }
+            }
+            let mut ins = String::new();
+            for s in 0..r.size_in() {
+                if let Some(e) = r.get_in(s) {
+                    let src_idx = match e.point.try_read() {
+                        Ok(g) => g.get_index(),
+                        Err(_) => -1,
+                    };
+                    ins.push_str(&format!(" [{}:{}]", s, src_idx));
+                }
+            }
+            let iso = dead || (r.size_in() == 0 && r.size_out() == 0);
+            if !iso { nonisolated += 1; }
+            eprintln!(
+                "[DBG] {} {} blk#{} ty={} dead={} in={}{} out={}{} flags={:#x}",
+                when, self.name, i, debug_type_name(&*r), dead, r.size_in(), ins, r.size_out(), outs, r.get_flags()
+            );
+        }
+        eprintln!("[DBG] {} {} size={} nonisolated={}", when, self.name, size, nonisolated);
     }
 
     // Ghidra: blockaction.cc:1889 CollapseStructure::collapseAll selectGoto loop
@@ -1584,17 +1645,28 @@ impl<'a> CollapseStructure<'a> {
         // Running goto first ensures continue/break edges are consumed (wrapped
         // as BlockIfGoto/BlockGoto) BEFORE while_do tries to match the body,
         // which reduces clause size_in so WhileDo can form.
-        if self.try_rule_if_goto(i) { return; }
-        if self.try_rule_goto(i) { return; }
-        if self.try_rule_cat(i) { return; }
-        if self.try_rule_proper_if(i) { return; }
-        if self.try_rule_if_else(i) { return; }
-        if self.try_rule_while_do(i) { return; }
-        if self.try_rule_do_while(i) { return; }
+        let bs_trace = std::env::var("RUGRA_BS_TRACE").map(|v| v == "1").unwrap_or(false);
+        macro_rules! bs_try {
+            ($f:ident) => {
+                if self.$f(i) {
+                    if bs_trace {
+                        eprintln!("[DBG] rule {} fired on blk#{}", stringify!($f), i);
+                    }
+                    return;
+                }
+            };
+        }
+        bs_try!(try_rule_if_goto);
+        bs_try!(try_rule_goto);
+        bs_try!(try_rule_cat);
+        bs_try!(try_rule_proper_if);
+        bs_try!(try_rule_if_else);
+        bs_try!(try_rule_while_do);
+        bs_try!(try_rule_do_while);
         // Ghidra cc:1821: ruleBlockInfLoop (between do_while and switch)
-        if self.try_rule_inf_loop(i) { return; }
+        bs_try!(try_rule_inf_loop);
         // Ghidra cc:1825: ruleBlockSwitch (last in collapseInternal)
-        if self.try_rule_switch(i) { return; }
+        bs_try!(try_rule_switch);
     }
 
     // Ghidra: blockaction.hh:46 LoopBody::applyRulesToChildren

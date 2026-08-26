@@ -919,3 +919,11 @@ interior-goto 标记。
   （block.cc:160-191, 910-924）在重定向时同步两侧 reverse_index；Rugra
   的 rewrite_* 只翻 e.point，故按指针重结对复合块边界边以恢复
   checkEdges 不变量（一致状态下 no-op），并把 new_block 纳入安装后 dedup。
+
+### selectGoto exhausted 调试注桩（2026-08-26，TRI2-STRUCT-SELECTGOTO-SELFLOOP-0001）
+- `debug_type_name` / `CollapseStructure::debug_dump_graph`（RUGRA-GLUE，
+  无 Ghidra 对应物）：`RUGRA_BS_DUMP=1` 时在 selectGoto exhausted 位点
+  （blockaction.cc:1275 LowlevelError 站点）dump 全图 in/out/flags 状态，
+  用于结构化分叉 triage。
+- `collapse_internal_rules` 内 `bs_try!` 宏：`RUGRA_BS_TRACE=1` 时打印
+  每条规则命中（规则名 + 块索引）。默认关闭，零行为变化。
