@@ -2452,6 +2452,20 @@ impl<'a> FlowInfo<'a> {
         let midpoint = (ordafter as u64 / 2 + ordbefore as u64 / 2) as u32;
         op_ref.0.write().unwrap().start.set_order(midpoint);
         *prev_order = Some(midpoint);
+        // block.cc:2285-2288: if (inst->isBranch()) { if
+        // (inst->code()==CPUI_BRANCHIND) setFlag(f_switch_out); } — the
+        // block owning a BRANCHIND is a switch "out" block for its whole
+        // life (spliceBlock's fl2 merge at block.cc:1611 propagates it).
+        // Consumers: ruleBlockSwitch's isSwitchOut gate
+        // (blockaction.cc:1652) and ActionRedundBranch's no-splice guard
+        // (coreaction.cc:3507, "Do not splice block coming from single exit
+        // switch").
+        if op_ref.0.read().unwrap().is_branch()
+            && op_ref.0.read().unwrap().opcode == OpCode::CPUI_BRANCHIND
+        {
+            let fl = guard.get_flags();
+            guard.set_flags(fl | crate::block::block_flags::SWITCH_OUT);
+        }
     }
 
     /// Generate edges between the basic blocks. Faithful to

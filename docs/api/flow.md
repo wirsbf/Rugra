@@ -675,3 +675,13 @@ E2E 零变化。hasModel（truncate case 的 setInternal 分歧）与 spec name
 前任断点抢救：`generate_blocks()` 后调 `switch_over_jump_tables_from_flow`
 （funcdata_op.cc:778 `data.switchOverJumpTables(flow)` 的 Rust 拆借用形态，
 resolver 经 FlowInfo::target）。
+
+### block_insert_at_end 补 f_switch_out 尾（2026-08-26 wip，PRINTC-SWITCH-EMIT-0001）
+
+前任未提交 triage 中唯一的语义修复（其余调试桩未保留）：
+`block_insert_at_end` 是 `BlockBasic::insert`（block.cc:2258-2289）的 flow 侧
+内联形态，旧版漏掉尾段——`inst->isBranch() && code()==CPUI_BRANCHIND` 时
+`setFlag(f_switch_out)`（block.cc:2285-2288）。BRANCHIND 落块终身是 switch
+out 块（spliceBlock 的 fl2 合并在 block.cc:1611 传播该旗标）。消费点：
+ruleBlockSwitch 的 isSwitchOut 门（blockaction.cc:1652）与
+ActionRedundBranch 的 no-splice 守卫（coreaction.cc:3507）。
