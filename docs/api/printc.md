@@ -21,6 +21,11 @@ StringManager。本次替换为 `constant_leaf_text`（`&mut self`，持 vn/op�
   `queryFunction` 符号名）；未命中落入 default cast
   （`default_cast_constant_text` cc:1806-1815，可选 `(type)` cast + force_hex
   整数）。
+- `TYPE_VOID`（cc:1772-1774）：oracle 是 `clear(); throw LowlevelError`；
+  Rugra 双路径统一降级为 `/* void constant */` 标记（发射路径不 panic，与
+  直接发射臂同形）。`TYPE_FLOAT`（cc:1791-1793 → `push_float`
+  cc:1380-1424）：Rugra 无 FloatFormat，统一发 `FLOAT_UNKNOWN`——
+  cc:1386 无格式 sentinel 本身，与直接发射臂同形。
 - 其余 metatype → default cast。
 
 直接发射 helper（`push_integer`/`push_char_constant_fmt`/

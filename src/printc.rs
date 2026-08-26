@@ -1214,7 +1214,9 @@ impl PrintC {
     /// TYPE_BOOL prints true/false; TYPE_PTR/TYPE_PTRREL print the null
     /// token (option_NULL), then try the character-pointer string literal
     /// (`pushPtrCharConstant`, 1782-1784) or the function-name constant
-    /// (1786-1788) before falling through to the default cast; every other
+    /// (1786-1788) before falling through to the default cast; TYPE_FLOAT
+    /// takes the push_float form (1791-1793), TYPE_VOID the cleared-error
+    /// marker (1772-1774, degraded to a comment in Rugra); every other
     /// metatype falls straight to the default cast (1806-1815). Untyped
     /// constants (no `v_type`) take the TYPE_UNKNOWN arm — the callers that
     /// lack a propagated type could not have produced any of the special
@@ -1251,6 +1253,18 @@ impl PrintC {
             TypeMetatype::Bool => {
                 // pushBoolConstant: printc.cc:1488-1495.
                 if val != 0 { "true".to_string() } else { "false".to_string() }
+            }
+            TypeMetatype::Void => {
+                // printc.cc:1772-1774: clear(); throw LowlevelError. Rugra:
+                // the same marker the direct-emit path prints (no panic in
+                // the emit path).
+                "/* void constant */".to_string()
+            }
+            TypeMetatype::Float => {
+                // push_float (printc.cc:1791-1793 -> 1380-1424): Rugra has
+                // no FloatFormat; FLOAT_UNKNOWN is the sentinel printc.cc
+                // 1386 itself emits — same form as the direct-emit path.
+                "FLOAT_UNKNOWN".to_string()
             }
             TypeMetatype::Pointer => {
                 // printc.cc:1775-1790 (TYPE_PTR/TYPE_PTRREL arm).
