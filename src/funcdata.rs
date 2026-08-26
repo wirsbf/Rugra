@@ -7673,10 +7673,11 @@ impl Funcdata {
     /// heritage info, and applies dead-code delay. Faithful to
     /// `Funcdata::startProcessing` (funcdata.cc:150-168).
     ///
-    /// RUGRA-GAP: `followFlow`, `localoverride.applyDeadCodeDelay`, and the
-    /// inline-function header warning depend on infrastructure not yet ported;
-    /// the flag transition, unlocked-output clear, structuring reset, call-spec
-    /// sort, and heritage-info build are all performed.
+    /// RUGRA-GAP: `followFlow` and the inline-function header warning depend
+    /// on infrastructure not yet ported; the flag transition,
+    /// unlocked-output clear, structuring reset, call-spec sort,
+    /// heritage-info build, and dead-code-delay application are all
+    /// performed.
     pub fn start_processing(&mut self) {
         if self.is_proc_started() {
             // Ghidra throws LowlevelError here; Rugra panics to preserve the
@@ -7713,7 +7714,19 @@ impl Funcdata {
         self.heritage.build_info_list();
 
         // Ghidra: localoverride.applyDeadCodeDelay(*this);
-        // RUGRA-GAP: localoverride not ported.
+        // (override.cc:217-231): for every space with an override delay
+        // (Override::deadcodedelay[spc->getIndex()] >= 0), install it via
+        // Funcdata::setDeadCodeDelay (funcdata.hh:248 →
+        // Heritage::setDeadCodeDelay heritage.cc:2815). The override
+        // survives Funcdata::clear ("Do not clear overrides", funcdata.cc:106),
+        // so a restart installed by Heritage::bumpDeadcodeDelay takes effect
+        // here on the next pass. Copy the entries out first: the override
+        // borrows self immutably while heritage is mutated.
+        for (index, delay) in self.localoverride.deadcode_delays().collect::<Vec<_>>() {
+            if let Some(space) = crate::space::AddressSpace::from_index(index) {
+                self.heritage.set_dead_code_delay(space, delay);
+            }
+        }
     }
 
     // Ghidra: funcdata.cc:170 Funcdata::stopProcessing

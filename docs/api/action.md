@@ -1269,3 +1269,25 @@ convention` **51** / gcc 审计 16 FAIL 持平；glob_url 单声明块（无重�
 ## 2026-08-25（ACTIONDW-COPYDEF-MARKING-0001）：ActionDirectWrite 双注册接线 propagateIndirect
 
 `universalAction`（coreaction.cc:5497/:5498 mainloop、:5680/:5681 fullloop）的四个 ActionDirectWrite 注册点现按 oracle 传 `propagate_indirect`：protorecovery_a=`true`、protorecovery_b=`false`（coreaction.hh:244 构造器参数）。此前两注册共用无参 `new()`，phase-2 推播门与分支④的 marker 收集都无法区分两种注册语义。
+
+## 2026-08-27（MAIN-POSTSTRUCT-SPIN-0001）：ActionRestartGroup 重启环降级为有界完成
+
+`apply_restart`（action.cc:553-582）的重启分支（cc:574-580
+clearAnalysis → 逐子 reset → status_start → 重跑）在 Rugra 侧不可执行：
+oracle 的重启环依赖 `Funcdata::startProcessing → followFlow`
+（funcdata.cc:157）在清空的 Funcdata 上重新生成原始 p-code，而 Rugra 的
+流生成在驱动侧（`rugra::flow::follow_flow*` 于管线前调用），
+`Funcdata::start_processing` 无法重入。旧代码在未清空状态上
+`group.reset + STATUS_START` 重跑整个子树——这正是
+MAIN-POSTSTRUCT-SPIN-0001 观察到的 post-blockstruct 动作环不收敛形态
+（≥250s 静默挂起 / subflow tryCallPull 连发）。
+
+现行行为（保守降级，登记 PIPE-RESTART-0001）：curstart 未超
+maxrestarts 时，`eprintln!("[ACTION] restart pending after convergence:
+...")` 后 `return Ok(0)` 有界完成；pending 标志保持置位（与 oracle
+maxrestarts 路径的终态一致，本循环是其唯一消费者 action.cc:562）。
+curstart 超 maxrestarts 路径（cc:569-573 warningHeader + curstart=-1）
+保持原样。收敛证据：curl 124/124、0 timeout/0 panic（main 独立 7.1s）、
+defects=0/numbering=0；语料内唯一 restart 触发者=match_url（heritage
+bump register，见 heritage.md）。真实重启环（clearAnalysis + in-Funcdata
+流再生成 + 双侧 fixture 对拍）归 PIPE-RESTART-0001。

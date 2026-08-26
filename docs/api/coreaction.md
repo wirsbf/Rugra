@@ -1858,3 +1858,13 @@ unknown 局部类型使 `testDatatypeCompatibility` 的分段游走
   CALL 后插 CAST；locked 且类型等于输出 high（strtol→long）命中
   type_equal 短路不插。CALLIND 经 get_call_specs_of_op（slot-0 Iop 注解,
   TYPEOP-FSPEC-SPACE-0001）取 callspec，等价 typeop.cc:782 getCallSpecs。
+## 2026-08-27（MAIN-POSTSTRUCT-SPIN-0001）：ActionPrototypeWarnings 空间名表接线
+
+`ActionPrototypeWarnings::apply`（coreaction.cc:4885-4892）的覆写消息
+生成从空名表改为按锁定 x86-64 语料空间表构造 9 项名字向量
+（`AddressSpace::spec_space_name`，索引 0-8），再交
+`Override::generate_override_messages`（override.cc:279）。
+`Heritage::bump_deadcode_delay`（heritage.cc:2580）现在是生产级插入者：
+match_url 触发后输出 oracle 同文的
+"Restarted to delay deadcode elimination for space: register" 头注释。
+此前"消息列表可证为空"的前提随 deadcode-delay override 接线失效。

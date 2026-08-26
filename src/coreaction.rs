@@ -3328,13 +3328,19 @@ impl Action for ActionPrototypeWarnings {
         // coreaction.cc:4889-4892: override messages (deadcode-delay restart
         // notices). Space-name indexing needs Architecture's indexed space
         // manager (override.cc:51-56 getSpace(i)->getName()); Rugra's
-        // Architecture has no indexed space list yet and no code path inserts
-        // deadcode-delay overrides, so the message list is provably empty —
-        // the empty name table is observably identical today.
-        for message in fd
-            .localoverride
-            .generate_override_messages(&[] as &[String])
-        {
+        // Architecture has no indexed space list yet, so resolve names
+        // through the locked x86-64 corpus space table
+        // (AddressSpace::spec_space_name, same provenance as
+        // AddressSpace::get_index). Heritage::bumpDeadcodeDelay
+        // (heritage.cc:2581) is the production inserter.
+        let space_names: Vec<String> = (0..9)
+            .map(|i| {
+                crate::space::AddressSpace::spec_space_name(i)
+                    .unwrap_or("unknown")
+                    .to_string()
+            })
+            .collect();
+        for message in fd.localoverride.generate_override_messages(&space_names) {
             // coreaction.cc:4892: data.warningHeader(overridemessages[i]);
             fd.warning_header(&message);
         }
@@ -13335,9 +13341,14 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(comments.len(), 1);
+        // Oracle text: Override::generateDeadcodeDelayMessage
+        // (override.cc:51-56) resolves the space name via
+        // glb->getSpace(0)->getName() = "const" (locked x86-64 corpus
+        // table, AddressSpace::spec_space_name). The old expectation
+        // "unknown" was the empty-name-table degradation.
         assert_eq!(
             comments[0].get_text(),
-            "WARNING: Restarted to delay deadcode elimination for space: unknown"
+            "WARNING: Restarted to delay deadcode elimination for space: const"
         );
     }
 

@@ -1812,3 +1812,17 @@ PTRADD/PTRSUB 输出盖章类型。
 刷新 reverse_index 至新目标 in-edge 规模、新目标 push_back 镜像 in-edge 且
 flags 随出边携带。此前仅指针改写使 nodeSplit 复制块不可达/原块 in-edge 过剩，
 returnsplit 永久重入。
+
+## `start_processing` 接入 applyDeadCodeDelay（MAIN-POSTSTRUCT-SPIN-0001，2026-08-27）
+
+补齐 funcdata.cc:166 `localoverride.applyDeadCodeDelay(*this)` 腿
+（override.cc:217-231）：遍历 override 的 deadcodedelay 表（`delay >= 0`
+项），经 `AddressSpace::from_index`（`AddrSpaceManager::getSpace(i)`
+替身）解析回空间，逐项 `Heritage::set_dead_code_delay(space, delay)`
+（heritage.cc:2815；`delay < info->delay` panic 镜像 LowlevelError）。
+Override 跨 `Funcdata::clear` 存活（funcdata.cc:106 "Do not clear
+overrides"），因此 `Heritage::bump_deadcode_delay` 安装的重启延迟在下一
+遍 startProcessing 生效——与 oracle 的重启遍语义一致。先拷贝表项再改
+heritage（override 借 self 不可变而 heritage 可变）。followFlow 与
+inline-function 头警告仍属未移植基础设施（驱动侧流生成，
+PIPE-RESTART-0001）。
