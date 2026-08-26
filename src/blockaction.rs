@@ -437,23 +437,36 @@ pub(crate) fn dedup_edges_all_types(
 pub(crate) fn resync_boundary_reverse_indices(
     bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
 ) {
-    // In-edges: for slot i with source S, find S's out-slot j pointing back
-    // at bl, then set S.out[j].reverse_index = i and bl.in[i].reverse_index = j.
+    // The pairing must be a BIJECTION: parallel edges between bl and one peer
+    // (legitimate per selfIdentify's per-slot replace protocol, block.cc:910-
+    // 924) each consume a distinct peer slot, in order. A first-match-only
+    // pairing would point every parallel edge at the same peer slot and make
+    // the subsequent paired dedup (block.cc:440-501) delete by stale slots.
+    // In-edges: for slot i with source S, pair with S's occ-th out-slot that
+    // points back at bl, where occ = number of S-sourced in-edges before i.
     let n_in = bl.read().unwrap().size_in();
     for i in 0..n_in {
-        let peer = bl.read().unwrap().get_in(i).map(|e| e.point);
-        let Some(peer) = peer else { continue };
-        let j = if Arc::ptr_eq(&peer, bl) {
-            // Self-loop: search our own out list.
+        let (peer, occ) = {
             let r = bl.read().unwrap();
-            (0..r.size_out()).find(|&k| {
-                r.get_out(k).map(|e| Arc::ptr_eq(&e.point, bl)).unwrap_or(false)
-            })
+            let peer = match r.get_in(i) { Some(e) => e.point, None => continue };
+            let mut occ = 0usize;
+            for q in 0..i {
+                if let Some(e) = r.get_in(q) {
+                    if Arc::ptr_eq(&e.point, &peer) { occ += 1; }
+                }
+            }
+            (peer, occ)
+        };
+        let j = if Arc::ptr_eq(&peer, bl) {
+            let r = bl.read().unwrap();
+            (0..r.size_out())
+                .filter(|&k| r.get_out(k).map(|e| Arc::ptr_eq(&e.point, bl)).unwrap_or(false))
+                .nth(occ)
         } else {
             let r = peer.read().unwrap();
-            (0..r.size_out()).find(|&k| {
-                r.get_out(k).map(|e| Arc::ptr_eq(&e.point, bl)).unwrap_or(false)
-            })
+            (0..r.size_out())
+                .filter(|&k| r.get_out(k).map(|e| Arc::ptr_eq(&e.point, bl)).unwrap_or(false))
+                .nth(occ)
         };
         let Some(j) = j else { continue };
         if !Arc::ptr_eq(&peer, bl) {
@@ -463,22 +476,31 @@ pub(crate) fn resync_boundary_reverse_indices(
         }
         bl.write().unwrap().in_edges_mut()[i].reverse_index = j as i32;
     }
-    // Out-edges: for slot k with target T, find T's in-slot m pointing back
-    // at bl, then set T.in[m].reverse_index = k and bl.out[k].reverse_index = m.
+    // Out-edges: for slot k with target T, pair with T's occ-th in-slot that
+    // points back at bl, where occ = number of T-targeted out-edges before k.
     let n_out = bl.read().unwrap().size_out();
     for k in 0..n_out {
-        let peer = bl.read().unwrap().get_out(k).map(|e| e.point);
-        let Some(peer) = peer else { continue };
+        let (peer, occ) = {
+            let r = bl.read().unwrap();
+            let peer = match r.get_out(k) { Some(e) => e.point, None => continue };
+            let mut occ = 0usize;
+            for q in 0..k {
+                if let Some(e) = r.get_out(q) {
+                    if Arc::ptr_eq(&e.point, &peer) { occ += 1; }
+                }
+            }
+            (peer, occ)
+        };
         let m = if Arc::ptr_eq(&peer, bl) {
             let r = bl.read().unwrap();
-            (0..r.size_in()).find(|&q| {
-                r.get_in(q).map(|e| Arc::ptr_eq(&e.point, bl)).unwrap_or(false)
-            })
+            (0..r.size_in())
+                .filter(|&q| r.get_in(q).map(|e| Arc::ptr_eq(&e.point, bl)).unwrap_or(false))
+                .nth(occ)
         } else {
             let r = peer.read().unwrap();
-            (0..r.size_in()).find(|&q| {
-                r.get_in(q).map(|e| Arc::ptr_eq(&e.point, bl)).unwrap_or(false)
-            })
+            (0..r.size_in())
+                .filter(|&q| r.get_in(q).map(|e| Arc::ptr_eq(&e.point, bl)).unwrap_or(false))
+                .nth(occ)
         };
         let Some(m) = m else { continue };
         if !Arc::ptr_eq(&peer, bl) {
@@ -1245,6 +1267,9 @@ impl<'a> CollapseStructure<'a> {
     /// parseconfig.constprop.0 cascade (41 blocks / 21 likely-goto edges /
     /// 10 cascade rounds / 8 DEAD).
     pub fn collapse_all_5step(&mut self) {
+        if std::env::var("RUGRA_BS_DUMP").map(|v| v == "2").unwrap_or(false) {
+            self.debug_dump_graph("initial");
+        }
         // cc:1879-1884: finaltrace = false; graph.clearVisitCount();
         // orderLoopBodies(). (clearVisitCount happens inside
         // order_loop_bodies right after structure_loops — same entry state.)
@@ -1646,11 +1671,15 @@ impl<'a> CollapseStructure<'a> {
         // as BlockIfGoto/BlockGoto) BEFORE while_do tries to match the body,
         // which reduces clause size_in so WhileDo can form.
         let bs_trace = std::env::var("RUGRA_BS_TRACE").map(|v| v == "1").unwrap_or(false);
+        let bs_dump2 = std::env::var("RUGRA_BS_DUMP").map(|v| v == "2").unwrap_or(false);
         macro_rules! bs_try {
             ($f:ident) => {
                 if self.$f(i) {
                     if bs_trace {
                         eprintln!("[DBG] rule {} fired on blk#{}", stringify!($f), i);
+                    }
+                    if bs_dump2 {
+                        self.debug_dump_graph(concat!("after_", stringify!($f)));
                     }
                     return;
                 }
@@ -2636,7 +2665,7 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
-    // Ghidra: blockaction.hh:46 LoopBody::identifyInternal
+    // Ghidra: block.cc:940 BlockGraph::identifyInternal
     /// Ghidra's identifyInternal: collapse consumed blocks into a structured block.
     /// Faithful port of BlockGraph::identifyInternal + selfIdentify (block.cc:940, 895).
     /// Steps:
@@ -2690,7 +2719,14 @@ impl<'a> CollapseStructure<'a> {
                         // and the new_block (not yet installed, but guard anyway).
                         if !consumed_set.contains(&src_idx)
                             && src_idx != install_idx as i32 {
-                            new_in.push(crate::block::BlockEdge::new(e.point.clone(), new_out.len() as i32));
+                            // cc:924 replaceInEdge keeps the peer's edge label:
+                            // BlockEdge(this, outofthis[num].label, num). The
+                            // inherited in-edge carries the same half's flags.
+                            new_in.push(crate::block::BlockEdge {
+                                point: e.point.clone(),
+                                flags: e.flags,
+                                reverse_index: -1,
+                            });
                         }
                     }
                 }
@@ -2712,7 +2748,14 @@ impl<'a> CollapseStructure<'a> {
                             Err(_) => continue,
                         };
                         if !consumed_set.contains(&dst_idx) && dst_idx != install_idx as i32 {
-                            new_out.push(crate::block::BlockEdge::new(e.point.clone(), new_in.len() as i32));
+                            // cc:910 replaceOutEdge keeps the peer's edge label
+                            // (block.cc:188 BlockEdge(this, outofthis[num].label,
+                            // num) on the in-half) — flags carry over.
+                            new_out.push(crate::block::BlockEdge {
+                                point: e.point.clone(),
+                                flags: e.flags,
+                                reverse_index: -1,
+                            });
                         }
                     }
                 }
@@ -2722,6 +2765,15 @@ impl<'a> CollapseStructure<'a> {
         for &c_idx in consumed_indices {
             let ci = c_idx as usize;
             if ci >= size { continue; }
+            // The install block is captured by the install-capture phases
+            // above; factories that consume the block at its own install
+            // slot (newBlockGoto/newBlockDoWhile pass nodes={bl} with bl at
+            // install_idx) must not walk it twice — a second walk would
+            // duplicate every boundary edge, and the duplicate's unpaired
+            // reverse_index then makes the paired dedup half-delete a peer
+            // slot by stale index (halfDeleteOutEdge pops the peer's LAST
+            // edge when fed a -1 slot).
+            if ci == install_idx { continue; }
             // cc:951: ident->flags |= ((*iter)->flags & (f_interior_gotoout |
             // f_interior_gotoin)) — the composite inherits interior-goto
             // marks from every consumed component.
@@ -2737,7 +2789,7 @@ impl<'a> CollapseStructure<'a> {
             }
             // Collect this consumed block's boundary edges.
             // IN-edges: source not in consumed set → boundary incoming.
-            let (in_boundary, out_boundary) = {
+            let (in_boundary, out_boundary): (Vec<(Arc<RwLock<dyn FlowBlock + Send + Sync>>, u32)>, Vec<(Arc<RwLock<dyn FlowBlock + Send + Sync>>, u32)>) = {
                 let cb = match self.graph.get_block(ci) { Some(b) => b, None => continue };
                 let c = cb.read().unwrap();
                 let mut ib = Vec::new();
@@ -2753,7 +2805,7 @@ impl<'a> CollapseStructure<'a> {
                         // so edges between it and other consumed blocks are
                         // INTERNAL to the new component.
                         if !consumed_set.contains(&src_idx) && src_idx != install_idx as i32 {
-                            ib.push(e.point.clone());
+                            ib.push((e.point.clone(), e.flags));
                         }
                     }
                 }
@@ -2764,18 +2816,31 @@ impl<'a> CollapseStructure<'a> {
                             Err(_) => continue,
                         };
                         if !consumed_set.contains(&dst_idx) && dst_idx != install_idx as i32 {
-                            ob.push(e.point.clone());
+                            ob.push((e.point.clone(), e.flags));
                         }
                     }
                 }
                 (ib, ob)
             };
             // Add boundary edges to new_block (record the external block).
-            for src in &in_boundary {
-                new_in.push(crate::block::BlockEdge::new(src.clone(), new_out.len() as i32));
+            // Labels carry over per replaceInEdge/replaceOutEdge (block.cc:172,
+            // 188). Duplicates are NOT collapsed here: the oracle's selfIdentify
+            // pushes one composite half per redirected peer slot and collapses
+            // them only in the final paired dedup() (block.cc:930) — see the
+            // dedup note below identify_internal.
+            for (src, fl) in &in_boundary {
+                new_in.push(crate::block::BlockEdge {
+                    point: src.clone(),
+                    flags: *fl,
+                    reverse_index: -1,
+                });
             }
-            for dst in &out_boundary {
-                new_out.push(crate::block::BlockEdge::new(dst.clone(), new_in.len() as i32));
+            for (dst, fl) in &out_boundary {
+                new_out.push(crate::block::BlockEdge {
+                    point: dst.clone(),
+                    flags: *fl,
+                    reverse_index: -1,
+                });
             }
             // Rewrite external blocks' edges to point to new_block, mirroring
             // Ghidra selfIdentify's replaceOutEdge/replaceInEdge (block.cc:
@@ -2785,14 +2850,14 @@ impl<'a> CollapseStructure<'a> {
             // every FlowBlock); the previous BlockBasic-only rewrite left
             // structured blocks with stale edges to consumed components,
             // inflating sizeIn/sizeOut for downstream rules.
-            for src in &in_boundary {
+            for (src, _) in &in_boundary {
                 let s_any = src.clone();
                 // Avoid self-loop: don't rewrite new_block's own edge
                 if std::sync::Arc::ptr_eq(&s_any, new_block) { continue; }
                 touched.push(s_any.clone());
                 rewrite_out_edges_to_idx(&s_any, c_idx, new_block);
             }
-            for dst in &out_boundary {
+            for (dst, _) in &out_boundary {
                 let d_any = dst.clone();
                 if std::sync::Arc::ptr_eq(&d_any, new_block) { continue; }
                 touched.push(d_any.clone());
@@ -2800,26 +2865,19 @@ impl<'a> CollapseStructure<'a> {
             }
         }
 
-        // Dedup new_block's edges (Ghidra selfIdentify ends with dedup()).
-        let mut seen_in: Vec<std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
-        new_in.retain(|e| {
-            let dup = seen_in.iter().any(|a| std::sync::Arc::ptr_eq(a, &e.point));
-            if !dup { seen_in.push(e.point.clone()); }
-            !dup
-        });
-        let mut seen_out: Vec<std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
-        new_out.retain(|e| {
-            let dup = seen_out.iter().any(|a| std::sync::Arc::ptr_eq(a, &e.point));
-            if !dup { seen_out.push(e.point.clone()); }
-            !dup
-        });
-        // Fix reverse_index after dedup.
-        for (i, e) in new_out.iter_mut().enumerate() {
-            e.reverse_index = i as i32;
-        }
-        for (i, e) in new_in.iter_mut().enumerate() {
-            e.reverse_index = i as i32;
-        }
+        // NOTE (block.cc:930 selfIdentify's dedup): the oracle does NOT
+        // deduplicate the inherited edges at capture time. Each redirected
+        // peer slot contributes one composite half, so the composite may
+        // legitimately hold duplicate edges to one external block (e.g. a
+        // proper-if where BOTH the cond's false branch and the clause's exit
+        // target the merge block). Those duplicates are collapsed ONLY by
+        // the paired dedup() below, whose eliminateInDups/eliminateOutDups
+        // half-delete the peer's duplicate slot together with the composite's
+        // duplicate half. The previous unilateral `retain` here under-counted
+        // the composite side, so the peer's later paired dedup deleted the
+        // composite's ONLY remaining edge — the root cause of composites
+        // ending with sizeOut==0, truncated TraceDAG walks and the
+        // "selectGoto exhausted" dead-loop (TRI2-STRUCT-SELECTGOTO-SELFLOOP-0001).
 
         // Install the collected boundary edges onto new_block (downcast to a
         // concrete block type that owns incoming/outgoing vectors).
@@ -2829,6 +2887,10 @@ impl<'a> CollapseStructure<'a> {
             // BlockIf / BlockList / BlockWhileDo / BlockDoWhile / BlockGoto / BlockSwitch
             // all expose incoming/outgoing via as_any_mut. Try the common ones.
             if let Some(bif) = nref.downcast_mut::<crate::block::BlockIf>() {
+                if std::env::var("RUGRA_BS_DUMP").map(|v| v == "3").unwrap_or(false) {
+                    eprintln!("[DBG3] identify_internal install install_idx={} consumed={:?} captured in={} out={}",
+                        install_idx, consumed_indices, new_in.len(), new_out.len());
+                }
                 bif.incoming = new_in; bif.outgoing = new_out;
             } else if let Some(blist) = nref.downcast_mut::<crate::block::BlockList>() {
                 blist.incoming = new_in; blist.outgoing = new_out;
@@ -2891,19 +2953,25 @@ impl<'a> CollapseStructure<'a> {
         // selfIdentify block.cc:910-924) sets both halves' reverse_index at
         // retarget time; Rugra's rewrite_* only flips e.point, so this pass
         // restores Ghidra's checkEdges() invariant (block.cc:545-570) before
-        // any paired half-delete (dedup / ruleBlockGoto's removeEdge) reads
-        // the recorded slots.
+        // the paired dedup reads the recorded slots. The pairing is a
+        // BIJECTION: parallel edges to one peer consume distinct peer slots
+        // in order, mirroring the oracle's per-slot replace protocol.
         resync_boundary_reverse_indices(new_block);
 
-        // Ghidra selfIdentify ends with dedup() (block.cc:930): its paired
-        // half-deletes collapse the external duplicates created when several
-        // consumed components (or the install block plus a component) each had
-        // an edge to the same external block. The composite itself is part of
-        // that dedup (the oracle runs FlowBlock::dedup on ident).
+        // Ghidra selfIdentify ends with dedup() (block.cc:930) run ON THE
+        // COMPOSITE ONLY: its paired half-deletes collapse the external
+        // duplicates created when several consumed components (or the
+        // install block plus a component) each had an edge to the same
+        // external block. The composite's dedup is what removes the peer's
+        // duplicate slot (eliminateInDups/eliminateOutDups, block.cc:440-501).
+        dedup_edges_all_types(new_block);
+        // The touched external blocks may still carry duplicate slots from
+        // the index-based rewrite above (their dedup is a no-op once the
+        // composite's paired dedup has cleaned them — kept as an invariant
+        // guard for the rewrite model's residual states).
         for ext in &touched {
             dedup_edges_all_types(ext);
         }
-        dedup_edges_all_types(new_block);
 
         // Ghidra selfIdentify moves each component's EXTERNAL edge halves
         // onto the composite (the replace*Edge half-deletes, block.cc:160-191):
@@ -2957,6 +3025,10 @@ impl<'a> CollapseStructure<'a> {
                 };
             if let Some(oi) = &old_install {
                 strip_external(oi);
+            }
+            if std::env::var("RUGRA_BS_DUMP").map(|v| v == "3").unwrap_or(false) {
+                let (ni, no) = { let r = new_block.read().unwrap(); (r.size_in(), r.size_out()) };
+                eprintln!("[DBG3] identify_internal post-strip install_idx={} composite in={} out={}", install_idx, ni, no);
             }
             for &idx in consumed_indices {
                 let i = idx as usize;
@@ -3375,6 +3447,15 @@ impl<'a> CollapseStructure<'a> {
         };
         let b = block.read().unwrap();
         if b.size_out() != 2 { return false; }
+        // cc:1383: `if (bl->isSwitchOut()) return false;` — the dispatch
+        // block of a switch must be structured by ruleBlockSwitch, never as
+        // a proper if. f_switch_out is set for BRANCHIND blocks by build_copy
+        // (block.cc:2286 invariant) — NOT the invented switch_case_indices /
+        // CASE_BODY cascade marks, which have no oracle counterpart and
+        // blocked legitimate CBRANCH-chain structuring (Ghidra structures
+        // if-chains as nested ifs; see GETSTR-ZERODIFF-A precedent for
+        // deleting the same guard family from try_rule_if_no_exit).
+        if b.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { return false; }
 
         // Check that this block ends with a CBRANCH
         let ops = b.get_ops();
@@ -3411,12 +3492,9 @@ impl<'a> CollapseStructure<'a> {
         ];
         drop(b);
 
-        // Protect: if either branch target is a switch case body, don't
-        // structurally extract it — would pull `case` label out of switch.
-        if self.switch_case_indices.contains(&true_idx)
-            || self.switch_case_indices.contains(&false_idx) {
-            return false;
-        }
+        // NOTE: no switch_case_indices/CASE_BODY pre-guard here — Ghidra's
+        // ruleBlockProperIf has no such check (the clause guard is
+        // isSwitchOut, added in the dir loop below per cc:1394).
 
         // Try both directions (i=0: true clause, i=1: false clause)
         for dir in 0..2 {
@@ -3434,6 +3512,9 @@ impl<'a> CollapseStructure<'a> {
             let non_structural_in = self.count_non_structural_in_edges(&c);
             if non_structural_in != 1 { continue; }
             if c.size_out() != 1 { continue; }
+            // cc:1394: `if (clauseblock->isSwitchOut()) continue;` — don't
+            // use a switch (possibly with goto edges) as the if clause.
+            if c.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { drop(c); continue; }
             // cc:1395: `if (!bl->isDecisionOut(i)) continue;` — don't use a
             // loopbottom/exit/goto edge as the clause edge (captured before
             // the `b` guard was dropped).
@@ -3483,36 +3564,36 @@ impl<'a> CollapseStructure<'a> {
         // condition components (BlockCondition) legitimately match here.
         let _ = ops;
 
-        // Ghidra's ruleBlockIfNoExit (blockaction.cc:1491-1506) guards the
-        // clause ONLY with `clauseblock->isSwitchOut()` (the commented-out
-        // isInteriorGotoTarget check is disabled in the oracle). The old
-        // Rugra-specific "cascade member" guard (commit 290d060) had no
-        // oracle counterpart and wrongly rejected a BlockCondition composite
-        // whose in-edges still reference the already-consumed (DEAD) CBRANCH
-        // blocks of a collapsed Or-pattern — the exact composite
-        // ruleBlockIfNoExit must wrap for GetStr-style short-circuit exits.
-        // Switch-case protection below is the isSwitchOut() equivalent for
-        // Rugra's switch representation.
-
+        // cc:1487-1490: `if (bl->isSwitchOut()) return false; if
+        // (bl->getOut(0)==bl) return false; if (bl->getOut(1)==bl) return
+        // false; if (bl->isGotoOut(0)) return false; if (bl->isGotoOut(1))
+        // return false;` — no switch dispatch, no self loops, no
+        // unstructured branches out of the condition.
+        if b.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { return false; }
         let cond_idx = b.get_index();
+        if b.get_out(0).map_or(false, |e| e.point.read().unwrap().get_index() == cond_idx) { return false; }
+        if b.get_out(1).map_or(false, |e| e.point.read().unwrap().get_index() == cond_idx) { return false; }
+        if Self::out_edge_is_goto(&*b, 0) { return false; }
+        if Self::out_edge_is_goto(&*b, 1) { return false; }
+
+        // NOTE: the invented switch_case_indices/CASE_BODY pre-guards are
+        // gone (same family as the cascade-member guard deleted in a9d68f77):
+        // Ghidra guards the clause only via isSwitchOut + isDecisionOut
+        // inside the loop (cc:1500-1501). The cascade marks wrongly rejected
+        // exit clauses of CBRANCH chains, leaving the graph stuck at the
+        // "selectGoto exhausted" dead-loop (TRI2-STRUCT-SELECTGOTO-SELFLOOP-0001).
+
         let true_edge = match b.get_out(0) { Some(e) => e, None => return false };
         let false_edge = match b.get_out(1) { Some(e) => e, None => return false };
         let true_block = true_edge.point.clone();
         let false_block = false_edge.point.clone();
-        let true_idx = true_block.read().unwrap().get_index();
-        let false_idx = false_block.read().unwrap().get_index();
+        // cc:1501: `if (!bl->isDecisionOut(i)) continue;` — pre-captured
+        // before the read guard drops (edge labels live on the halves).
+        let decision_out = [
+            Self::out_edge_is_decision(&*b, 0),
+            Self::out_edge_is_decision(&*b, 1),
+        ];
         drop(b);
-
-        // Protect switch case bodies
-        if self.switch_case_indices.contains(&true_idx)
-            || self.switch_case_indices.contains(&false_idx) {
-            return false;
-        }
-        // Also check CASE_BODY flag (set by refresh_switch_cases)
-        if true_block.read().unwrap().get_flags() & crate::block::block_flags::CASE_BODY != 0
-            || false_block.read().unwrap().get_flags() & crate::block::block_flags::CASE_BODY != 0 {
-            return false;
-        }
 
         for dir in 0..2 {
             let clause = if dir == 0 { true_block.clone() } else { false_block.clone() };
@@ -3520,11 +3601,10 @@ impl<'a> CollapseStructure<'a> {
             let c_idx = c.get_index();
             if c.size_in() != 1 { continue; }
             if c.size_out() != 0 { continue; } // Must have no out-edge (RETURN/exit)
-            // Protect: don't extract switch case bodies — they must stay inside
-            // their BlockSwitch or the emitted `case` label ends up outside the switch.
-            if self.switch_case_indices.contains(&c_idx) { continue; }
-            // Also check CASE_BODY flag directly on the clause
-            if c.get_flags() & crate::block::block_flags::CASE_BODY != 0 { continue; }
+            // cc:1500: `if (clauseblock->isSwitchOut()) continue;`
+            if c.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { drop(c); continue; }
+            // cc:1501: `if (!bl->isDecisionOut(i)) continue;`
+            if !decision_out[dir] { drop(c); continue; }
             drop(c);
 
             // Ghidra blockaction.cc:1510-1512 (ruleBlockIfNoExit): `if (i==0)
