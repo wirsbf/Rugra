@@ -669,3 +669,9 @@ E2E 零变化。hasModel（truncate case 的 setInternal 分歧）与 spec name
 ### generateBlocks 的 removeUnreachableBlocks 参数（2026-08-25）
 - 调用改为 `remove_unreachable_blocks(false, true)`（issuewarning=false，
   checkexistence=true 主动扫描），对齐 flow.cc:844。
+
+## switchOverJumpTables 流期末接线（2026-08-26 wip，PRINTC-SWITCH-EMIT-0001）
+
+前任断点抢救：`generate_blocks()` 后调 `switch_over_jump_tables_from_flow`
+（funcdata_op.cc:778 `data.switchOverJumpTables(flow)` 的 Rust 拆借用形态，
+resolver 经 FlowInfo::target）。

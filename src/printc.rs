@@ -4294,15 +4294,32 @@ impl PrintC {
 
                     // cc:3331-3349: emit one label group + body per case block.
                     let mut emitted_case_values: std::collections::HashSet<u64> = std::collections::HashSet::new();
-                    let has_default = switch_data.default_case.is_some();
+                    // Ghidra keeps the default inside caseblocks (addCase's
+                    // isdefault, block.cc:3513) and finalizePrinting sorts it
+                    // among the cases by its label; emitSwitchCase prints a
+                    // single `default:` for it (cc:3140-3145). Rugra's
+                    // switch_finalize_labels sets default_case to the SAME
+                    // Arc as the matching case entry; the trailing block
+                    // below only fires for a default that is not a case body.
+                    let default_in_cases = switch_data.default_case.as_ref().map_or(false, |dc| {
+                        switch_data.cases.iter().any(|c| std::sync::Arc::ptr_eq(c, dc))
+                    });
                     for (idx, case_block) in switch_data.cases.iter().enumerate() {
+                        let is_default_case = switch_data.default_case.as_ref()
+                            .map_or(false, |dc| std::sync::Arc::ptr_eq(dc, case_block));
                         let case_idx = std::sync::Arc::as_ptr(case_block) as *const () as usize;
                         let body_already_emitted = emitted.contains(&case_idx);
                         let values = &switch_data.case_values[idx];
                         // Skip duplicate case values (two CBRANCH blocks comparing
                         // the same constant produce duplicate cases in one switch).
-                        let has_new_value = values.iter().any(|v| !emitted_case_values.contains(v));
+                        let has_new_value = is_default_case
+                            || values.iter().any(|v| !emitted_case_values.contains(v));
                         if !has_new_value { continue; }
+                        // cc:3140-3145: isDefaultCase → single `default:`.
+                        if is_default_case {
+                            self.emit.tag_line(0);
+                            self.emit.print("default:");
+                        } else {
                         // cc:3146-3157: for(i<num) { val=getLabel; tagLine;
                         //   print("case"); spaces(1); pushConstant; print(":") }
                         for val in values {
@@ -4317,6 +4334,7 @@ impl PrintC {
                                     display_format::DEFAULT);
                             }
                             self.emit.print(":");
+                        }
                         }
 
                         // cc:3333: int4 id = emit->startIndent();
@@ -4350,7 +4368,7 @@ impl PrintC {
                                 })
                         };
                         let is_last_label =
-                            !has_default && idx + 1 == switch_data.cases.len();
+                            !default_in_cases && idx + 1 == switch_data.cases.len();
                         if !ends_with_return && !is_last_label {
                             self.emit.tag_line(0);
                             self.emit.print("break;");
@@ -4359,21 +4377,24 @@ impl PrintC {
                         self.emit.drop_indent();
                     }
 
-                    // cc:3140-3145: the default case (part of caseblocks in
-                    // Ghidra, tagged isdefault; Rugra stores it separately and
-                    // emits it after the regular cases). As the final label it
-                    // never takes a break (cc:3342 i != numCaseBlocks-1).
-                    if let Some(ref def_block) = switch_data.default_case {
-                        let def_idx = std::sync::Arc::as_ptr(&def_block) as *const () as usize;
-                        if !emitted.contains(&def_idx) {
-                            self.emit.tag_line(0);
-                            self.emit.print("default:");
-                            self.emit.bump_indent();
-                            let saved_seen_return = self.seen_return;
-                            self.seen_return = false;
-                            self.emit_switch_case_body(def_block, graph, emitted);
-                            self.seen_return = saved_seen_return;
-                            self.emit.drop_indent();
+                    // cc:3140-3145: legacy path — a default that is NOT one
+                    // of the case bodies (Rugra's try_rule_switch used to
+                    // store a separate exit-target default). switch_finalize
+                    // -labels now inlines the default among the sorted cases,
+                    // so this only fires when no case matched default_block.
+                    if !default_in_cases {
+                        if let Some(ref def_block) = switch_data.default_case {
+                            let def_idx = std::sync::Arc::as_ptr(&def_block) as *const () as usize;
+                            if !emitted.contains(&def_idx) {
+                                self.emit.tag_line(0);
+                                self.emit.print("default:");
+                                self.emit.bump_indent();
+                                let saved_seen_return = self.seen_return;
+                                self.seen_return = false;
+                                self.emit_switch_case_body(def_block, graph, emitted);
+                                self.seen_return = saved_seen_return;
+                                self.emit.drop_indent();
+                            }
                         }
                     }
 

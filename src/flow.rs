@@ -3301,13 +3301,40 @@ pub fn follow_flow_with_callee_protos(
     flow.generate_ops(entry)?;
     // funcdata_op.cc:776: generateBlocks is responsible for the official
     // entry identity/flag, ordered edge replay, and synthetic entry creation.
-    flow.generate_blocks()
+    let blocks_res = flow.generate_blocks();
+    // funcdata_op.cc:778: switchOverJumpTables(flow) — resolve each table
+    // address to its basic block, build block2addr, and pick the
+    // most-common-target default before any structuring pass.
+    flow.switch_over_jump_tables_from_flow();
+    blocks_res
 }
 
 // ===================== Injection helpers (RUGRA-GLUE) =====================
 // These free functions bridge gaps between Rugra's current types and the
 // Ghidra flow.cc call paths. They are file-local to flow.rs because this
 // alignment task is constrained to editing src/flow.rs.
+
+impl<'a> FlowInfo<'a> {
+    // RUGRA-GLUE: funcdata_op.cc:778 calls data.switchOverJumpTables(flow)
+    // from inside followFlow, where Ghidra's pointers alias freely. In Rust
+    // the FlowInfo owns the &mut Funcdata, so the call is issued from here
+    // with a split borrow: the jump-table Arcs are cloned out of fd first,
+    // then the resolver closure reads only `visited`/obank via self.target.
+    fn switch_over_jump_tables_from_flow(&mut self) {
+        for jt_arc in self.fd.jump_tables.clone() {
+            let ok = {
+                let resolver = |addr: Address| self.target(addr);
+                jt_arc.write().unwrap().switch_over(&resolver)
+            };
+            if !ok {
+                eprintln!(
+                    "[JUMPTABLE] switchOver failed at 0x{:x} (destination not linked)",
+                    jt_arc.read().unwrap().get_op_address().as_u64()
+                );
+            }
+        }
+    }
+}
 
 /// Resolve the stable callspec owner for an exact call op. The typed Weak on
 /// input(0) is the fast path; Funcdata's fallback compares the bound PcodeOp

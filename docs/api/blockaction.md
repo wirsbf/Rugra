@@ -962,3 +962,11 @@ interior-goto 标记。
   的 oracle 规则序列为 ruleBlockOr → ruleBlockIfNoExit 包 D（cc:1840 第二
   趟）→ ruleBlockCat 合并 sink C，终态 List[If[Condition(Or), D], C]（旧断
   言只搜一层，恰好匹配旧 bug 造成的 Condition 直接 List 子节点形态）。
+
+## installSwitchDefaults + switch_finalize_labels（2026-08-26 wip，PRINTC-SWITCH-EMIT-0001）
+
+前任断点抢救：ActionBlockStructure 复制前置 `fd.install_switch_defaults()`
+（blockaction.cc:2176）；ActionFinalStructure 加 `switch_finalize_labels`
+（block.cc:3556 BlockSwitch::finalizePrinting 的 Rust 形态：block2addr 标签回填 +
+CaseOrder (label,depth) 排序 + default 内联进 cases）。RUGRA_SWITCH_TRACE 诊断
+输出为 env 门控（提交前若转正需复核保留理由）。

@@ -2504,11 +2504,15 @@ impl Funcdata {
     /// Remove a branch edge from a basic block. Faithful to
     /// `Funcdata::removeBranch` / `branchRemoveInternal`
     /// (funcdata_block.cc). If the block has 2 out-edges (CBRANCH), the
-    /// branch op is destroyed. The edge to the un-selected out-block is
-    /// severed.
+    /// branch op is destroyed. The edge to the given out-block is severed.
     ///
     /// `bb` is the block with the branch; `num` is the out-edge index to
-    /// KEEP (0 or 1). The OTHER edge is removed.
+    /// REMOVE — faithful to `Funcdata::removeBranch(bb,num)` →
+    /// `branchRemoveInternal` (funcdata_block.cc:181-199:
+    /// `bbout = bb->getOut(num); removeEdge(bb,bbout)`). The previous port
+    /// inverted the index (treating `num` as the KEPT edge and removing
+    /// `1-num`), so faithful callers like ActionDeterminedBranch's
+    /// `removeBranch(bb,1)` severed the surviving edge instead.
     pub fn remove_branch(
         &mut self,
         bb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -2530,12 +2534,33 @@ impl Funcdata {
             }
         }
 
-        // The out-edge to REMOVE is (1 - num) if num is the kept one.
-        let remove_edge = if n_out == 2 { 1 - num } else { return };
+        // cc:190-191: bbout = bb->getOut(num); removeEdge — remove edge num.
+        let remove_edge = num;
+        if remove_edge >= n_out {
+            return;
+        }
 
         // Get the target block of the edge to remove.
         let target = bb.read().unwrap().get_out(remove_edge).map(|e| e.point);
         let Some(target) = target else { return };
+
+        // cc:192: blocknum = bbout->getInIndex(bb) — the in-slot of bb in
+        // the target, needed to adjust MULTIEQUAL input slots AFTER the edge
+        // is severed. Computed before the edge halves go away.
+        let bb_in_slot = {
+            let target_rg = target.read().unwrap();
+            let bb_ptr = Arc::as_ptr(bb) as *const () as usize;
+            let mut slot = None;
+            for si in 0..target_rg.size_in() {
+                if let Some(e) = target_rg.get_in(si) {
+                    if Arc::as_ptr(&e.point) as *const () as usize == bb_ptr {
+                        slot = Some(si);
+                        break;
+                    }
+                }
+            }
+            slot
+        };
 
         // Remove the edge from bb to target.
         // In our simplified model, we remove the outgoing edge from bb and
@@ -2556,6 +2581,25 @@ impl Funcdata {
                 any.incoming.retain(|e| {
                     Arc::as_ptr(&e.point) as *const () as usize != bb_ptr
                 });
+            }
+        }
+
+        // cc:193-197: every MULTIEQUAL in the target loses the input that
+        // flowed along the removed edge (opRemoveInput + opZeroMulti).
+        // Skipping this strands an orphaned input slot and corrupts the
+        // downstream SSA merge for the surviving paths.
+        if let Some(blocknum) = bb_in_slot {
+            let multi_ops: Vec<crate::op::PcodeOpRef> = {
+                let target_rg = target.read().unwrap();
+                target_rg
+                    .get_ops()
+                    .into_iter()
+                    .filter(|o| o.0.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL)
+                    .collect()
+            };
+            for op in multi_ops {
+                self.op_remove_input(&op, blocknum);
+                self.op_zero_multi(&op);
             }
         }
     }
@@ -8284,16 +8328,25 @@ impl Funcdata {
     /// For each jump-table, for each address, compute the corresponding basic
     /// block index and the default branch. Faithful to
     /// `Funcdata::switchOverJumpTables` (funcdata_block.cc:679-686).
-    ///
-    /// RUGRA-GAP: Ghidra delegates to `JumpTable::switchOver(flow)` which
-    /// consults `FlowInfo`'s address→op map. Rugra's `JumpTable` has no
-    /// `switch_over` yet; this stub iterates the tables so the call site is
-    /// preserved, and the per-table switchover is a no-op until FlowInfo
-    /// lands.
-    pub fn switch_over_jump_tables(&mut self) {
+    /// The `resolve` closure stands in for Ghidra's `const FlowInfo &flow`
+    /// (`flow.target(addr)`) so the FlowInfo borrow never aliases `self`.
+    pub fn switch_over_jump_tables(
+        &mut self,
+        resolve: &dyn Fn(Address) -> Option<crate::op::PcodeOpRef>,
+    ) {
+        // funcdata_op.cc:688-693: for each table, switchOver(flow) builds
+        // block2addr (out-edge position ↔ address index), last_block, and
+        // the most-common-target default_block. Ghidra lets a LowlevelError
+        // from one table propagate; Rugra logs to stderr and continues with
+        // the remaining tables so one stale table cannot kill the function.
         for jt in &self.jump_tables {
-            // RUGRA-GAP: jt->switchOver(flow);
-            let _ = jt;
+            let ok = jt.write().unwrap().switch_over(resolve);
+            if !ok {
+                eprintln!(
+                    "[JUMPTABLE] switchOver failed at 0x{:x} (destination not linked)",
+                    jt.read().unwrap().get_op_address().as_u64()
+                );
+            }
         }
     }
 

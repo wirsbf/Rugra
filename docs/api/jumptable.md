@@ -524,3 +524,14 @@ dbcc9cb 集成：守卫交集就地写回、isBoolOutput 分支、常量无 earl
   完整移植：被提升表间接 op 推回 `tablelist`（JUMPTABLE-MULTISTAGE 缺口关闭）。
 - `Funcdata::stage_jump_table` isPartial 分支改走 recover_multistage（此前
   RUGRA-GAP 注释声称未移植）。
+
+## switchOver/recoverLabels/foldIn 表 API 移植（2026-08-26 wip，PRINTC-SWITCH-EMIT-0001）
+
+前任 agent 崩溃断点抢救（编译绿，E2E glob_set 挂起待修）：
+- `JumpTable::block2_position`（jumptable.cc:2337）、`num_indices_by_block`（cc:2438）、
+  `get_index_by_block`（cc:2485）、`switch_over`（cc:2528，block2addr/last_block/
+  most-common-target default_block）、`match_model`（cc:2683）、`trivial_switch_over`
+  （cc:2603）、`recover_labels`（cc:2714）、`fold_in_normalization`（cc:2601 起，
+  switch_var_consume NZMASK/SEXT 豁免）、`fold_in_guards_arc`（jumptable.hh:617 形态）。
+- JumpBasic 守卫折叠 flip 判定改 `get_flip_path()`（cc:1382-1384），val 按
+  `((indpath==0)!=isBooleanFlip())` 计算（cc:1402）。

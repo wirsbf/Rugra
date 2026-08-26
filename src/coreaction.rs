@@ -3065,7 +3065,9 @@ impl Action for ActionRedundBranch {
             }
 
             // All exits go to the same block → remove the branch (edge 1).
-            fd.remove_branch(&bl, 0); // Keep edge 0, remove edge 1.
+            // coreaction.cc:3523: data.removeBranch(bb,1) — edge 1 is the
+            // removed index under the faithful remove_branch semantics.
+            fd.remove_branch(&bl, 1);
             return Ok(action_status::NO_CHANGE);
         }
         Ok(action_status::NO_CHANGE)
@@ -3204,26 +3206,44 @@ impl Action for ActionSwitchNorm {
         // In Ghidra, every JumpTable on `data` was already recovered during
         // flow tracing (`FlowInfo::recoverJumpTables` → `Funcdata::
         // recoverJumpTable`, funcdata_block.cc:640) — this action only
-        // normalizes the recovered tables. Rugra formerly ran an in-place
-        // recovery pre-pass here because flow-time recovery was unwired;
-        // JUMPTABLE-PIPELINE-0001 removed it now that the staged flow-time
-        // path exists.
+        // normalizes the recovered tables (JUMPTABLE-PIPELINE-0001 wired the
+        // flow-time recovery; JUMPTABLE-TABLEAPI-0001 fills in the four
+        // per-table stages).
         //
-        // coreaction.cc:4549-4558: for each unlabelled table, matchModel /
-        // recoverLabels / foldInNormalization, then foldInGuards (clearing
-        // the structure on change). The fold stages remain L3 gaps.
+        // coreaction.cc:4549-4558:
+        //   for each unlabelled table: matchModel / recoverLabels /
+        //   foldInNormalization; then foldInGuards — on change, clear the
+        //   structure so the (later, restarting) mainloop's determinedbranch
+        //   + blockrecovery re-structure with the guard edge removed.
+        let maxtablesize = fd
+            .get_arch()
+            .map_or(crate::jumptable::MAX_JUMPTABLE_SIZE, |a| {
+                a.max_jumptable_size
+            });
         let mut count = 0;
-        for jt_arc in &fd.jump_tables {
-            let is_labelled = jt_arc.read().unwrap().is_labelled();
-            if !is_labelled {
-                // jt->matchModel(&data); jt->recoverLabels(&data);
-                // jt->foldInNormalization(&data);
+        for jt_arc in fd.jump_tables.clone() {
+            {
+                let mut jt = jt_arc.write().unwrap();
+                let is_labelled = jt.is_labelled();
+                if !is_labelled {
+                    // cc:4553-4556: matchModel may report a multistage
+                    // restart or a size-mismatch warning; per Ghidra the
+                    // remaining stages still run on the current instance.
+                    let _ = jt.match_model(fd, maxtablesize);
+                    jt.recover_labels(fd, maxtablesize);
+                    jt.fold_in_normalization(fd);
+                    count += 1;
+                }
+            }
+            // cc:4557-4560: if (jt->foldInGuards(&data)) {
+            //   data.getStructure().clear(); }
+            if crate::jumptable::JumpTable::fold_in_guards_arc(&jt_arc, fd) {
+                fd.sblocks.clear();
                 count += 1;
             }
-            // if (jt->foldInGuards(&data)) { data.getStructure().clear(); }
         }
         let _ = count;
-        // cc:4559: `return 0;` — Ghidra reports no status change from this
+        // cc:4568: `return 0;` — Ghidra reports no status change from this
         // action regardless of the local counter.
         Ok(action_status::NO_CHANGE)
     }

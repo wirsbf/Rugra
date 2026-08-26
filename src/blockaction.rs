@@ -78,6 +78,14 @@ impl Action for ActionBlockStructure {
             return Ok(action_status::NO_CHANGE);
         }
 
+        // Ghidra blockaction.cc:2176: data.installSwitchDefaults(); — mark
+        // the default out-edge on each switch dispatch BlockBasic (from
+        // jt->getDefaultBlock(), computed by switchOver's most-common-target
+        // rule or foldInOneGuard) BEFORE copying the graph, so
+        // BlockSwitch::addCase's isDefaultBranch query (block.cc:3513) can
+        // resolve during structuring.
+        fd.install_switch_defaults();
+
         // Dead-flow cleanup: run the 4 dead-control-flow Actions as a
         // pre-structuring pass (Ghidra runs them inside selectGoto→
         // collapseInternal). This removes unreachable blocks, empty blocks,
@@ -181,10 +189,35 @@ fn build_copy(sblocks: &mut BlockGraph, bblocks: &BlockGraph) {
         }
     }
 
-    // Now add all edges without holding any read locks
+    // Now add all edges without holding any read guards held
     for (from_idx, to_idx) in edges_to_add {
         if let (Some(from), Some(to)) = (sblocks.get_block(from_idx), sblocks.get_block(to_idx)) {
             sblocks.add_edge(from, to);
+        }
+    }
+    if std::env::var("RUGRA_SWITCH_TRACE").is_ok() {
+        for i in 0..sblocks.get_size() {
+            if let Some(blk) = sblocks.get_block(i) {
+                let rg = blk.read().unwrap();
+                let has_bi = rg
+                    .as_any()
+                    .downcast_ref::<crate::block::BlockBasic>()
+                    .map(|b| {
+                        b.ops
+                            .iter()
+                            .any(|o| o.0.read().unwrap().opcode == OpCode::CPUI_BRANCHIND)
+                    })
+                    .unwrap_or(false);
+                if has_bi || rg.is_switch_out() {
+                    eprintln!(
+                        "[SWCP] copy block {} out={} swflag={} branchind={}",
+                        i,
+                        rg.size_out(),
+                        rg.is_switch_out(),
+                        has_bi
+                    );
+                }
+            }
         }
     }
 }
@@ -1837,6 +1870,16 @@ impl<'a> CollapseStructure<'a> {
         }
         // cc:1242
         self.likelylistfull = true;
+        if std::env::var("RUGRA_SWITCH_TRACE").is_ok() {
+            eprintln!(
+                "[SWGOTO] {} gen list: looptop={} loopbottom={} edges={} graphsz={}",
+                self.name,
+                looptop,
+                loopbottom,
+                edges.len(),
+                self.graph.get_size()
+            );
+        }
         if loopbottom == -1 && edges.is_empty() {
             // cc:1247-1250: no loops left and the trace found no gotos.
             self.finaltrace = true;
@@ -1865,6 +1908,15 @@ impl<'a> CollapseStructure<'a> {
                 // cc:1266: getCurrentEdge re-resolves against live graph.
                 if let Some((startbl_idx, outedge)) = fe.get_current_edge(self.graph) {
                     // cc:1269: setGotoBranch(outedge).
+                    if std::env::var("RUGRA_SWITCH_TRACE").is_ok() {
+                        eprintln!(
+                            "[SWGOTO] {} mark edge {} -> {} (slot {})",
+                            self.name,
+                            startbl_idx,
+                            fe.to_idx,
+                            outedge
+                        );
+                    }
                     if let Some(blk) = self.graph.get_block(startbl_idx as usize) {
                         self.set_goto_branch_on_block(&blk, outedge);
                     }
@@ -4146,6 +4198,84 @@ impl<'a> CollapseStructure<'a> {
             return false;
         }
         let sizeout = block.read().unwrap().size_out();
+        if std::env::var("RUGRA_SWITCH_TRACE").is_ok() && sizeout > 2 {
+            let mut dbg_outs = String::new();
+            for j in 0..sizeout {
+                if let Some(e) = block.read().unwrap().get_out(j) {
+                    let r = e.point.read().unwrap();
+                    dbg_outs.push_str(&format!(
+                        " [{}:in{}out{}",
+                        r.get_index(),
+                        r.size_in(),
+                        r.size_out()
+                    ));
+                    if r.size_in() > 1 {
+                        dbg_outs.push_str("<-(");
+                        for k in 0..r.size_in() {
+                            if let Some(e2) = r.get_in(k) {
+                                dbg_outs.push_str(&format!(
+                                    "{},",
+                                    e2.point.read().unwrap().get_index()
+                                ));
+                            }
+                        }
+                        dbg_outs.push(')');
+                    }
+                    if r.size_out() > 1 {
+                        dbg_outs.push('(');
+                        for k in 0..r.size_out() {
+                            if let Some(e2) = r.get_out(k) {
+                                dbg_outs.push_str(&format!(
+                                    "{},",
+                                    e2.point.read().unwrap().get_index()
+                                ));
+                            }
+                        }
+                        dbg_outs.push(')');
+                    }
+                    dbg_outs.push(']');
+                }
+            }
+            eprintln!(
+                "[SWGATE] candidate block {} size_out={}:{}",
+                i, sizeout, dbg_outs
+            );
+            if std::env::var("RUGRA_SWITCH_TRACE").as_deref() == Ok("full") && sizeout > 40 {
+                let n = self.graph.get_size();
+                for bi in 0..n {
+                    if let Some(b) = self.graph.get_block(bi) {
+                        let rg = b.read().unwrap();
+                        let mut line = format!(
+                            "[SWGRAPH] b{} t{} in{}out{}",
+                            bi,
+                            rg.get_type() as u32,
+                            rg.size_in(),
+                            rg.size_out()
+                        );
+                        for k in 0..rg.size_in() {
+                            if let Some(e) = rg.get_in(k) {
+                                line.push_str(&format!(
+                                    " <{}g{}",
+                                    e.point.read().unwrap().get_index(),
+                                    if rg.is_goto_in(k) { 1 } else { 0 }
+                                ));
+                            }
+                        }
+                        for k in 0..rg.size_out() {
+                            if let Some(e) = rg.get_out(k) {
+                                line.push_str(&format!(
+                                    " >{}g{}",
+                                    e.point.read().unwrap().get_index(),
+                                    if rg.is_goto_out(k) { 1 } else { 0 }
+                                ));
+                            }
+                        }
+                        eprintln!("{}", line);
+                    }
+                }
+                eprintln!("[SWGRAPH] --- end dump ---");
+            }
+        }
 
         // Ghidra cc:1656-1671: Find "obvious" exitblock.
         let mut exitblock: Option<i32> = None;
@@ -5669,6 +5799,120 @@ impl<'a> CollapseStructure<'a> {
 /// ops that follow unconditional BRANCH or RETURN within a basic block.
 pub struct ActionFinalStructure;
 
+// Ghidra: block.cc:3556 BlockSwitch::finalizePrinting (switch-label portion)
+/// Resolve BlockSwitch case labels/default from the owning JumpTable and
+/// stable_sort the cases by (label, depth) — CaseOrder::compare
+/// (block.hh:903-908). Mirrors BlockSwitch::finalizePrinting
+/// (block.cc:3556-3594): per case, the label list is every table entry
+/// whose out-edge position (block2addr IndexPair.block_position) matches
+/// the case's dispatch out-edge index (captured at ruleBlockSwitch
+/// construction), the default case is the block at jt->getDefaultBlock(),
+/// and NO_LABEL entries sort last (they render only when explicitly hit).
+/// Rugra stores the resolved labels in `case_values` and the default case
+/// Arc in `default_case` for emit_structured_switch.
+fn switch_finalize_labels(fd: &mut Funcdata) {
+    // Collect every BlockSwitch arc in the structure tree (switches may be
+    // nested inside BlockList/BlockIf/loop bodies).
+    let mut switch_arcs: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+    let mut worklist: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> =
+        fd.sblocks.blocks.clone();
+    while let Some(blk) = worklist.pop() {
+        let bt = blk.read().unwrap().get_type();
+        if bt == crate::block::BlockType::Switch {
+            switch_arcs.push(blk.clone());
+        }
+        // Recurse into composite children (BlockGraph::finalizePrinting
+        // recurses through every component; Rugra walks the per-type child
+        // fields the same way emit_block_structured dispatch does).
+        let rg = blk.read().unwrap();
+        if let Some(list) = rg.as_any().downcast_ref::<crate::block::BlockList>() {
+            worklist.extend(list.children.iter().cloned());
+        } else if let Some(bif) = rg.as_any().downcast_ref::<crate::block::BlockIf>() {
+            worklist.push(bif.condition.clone());
+            worklist.push(bif.if_body.clone());
+            if let Some(eb) = &bif.else_body {
+                worklist.push(eb.clone());
+            }
+        } else if let Some(wd) = rg.as_any().downcast_ref::<crate::block::BlockWhileDo>() {
+            worklist.push(wd.condition.clone());
+            worklist.push(wd.body.clone());
+        } else if let Some(sw) = rg.as_any().downcast_ref::<BlockSwitch>() {
+            worklist.push(sw.control.clone());
+            worklist.extend(sw.cases.iter().cloned());
+            if let Some(dc) = &sw.default_case {
+                worklist.push(dc.clone());
+            }
+        }
+    }
+    for sw_arc in switch_arcs {
+        let (control, cases, edge_indices) = {
+            let sw_rg = sw_arc.read().unwrap();
+            let Some(sw) = sw_rg.as_any().downcast_ref::<BlockSwitch>() else {
+                continue;
+            };
+            (
+                sw.control.clone(),
+                sw.cases.clone(),
+                sw.case_values
+                    .iter()
+                    .map(|v| v.first().copied().unwrap_or(u64::MAX))
+                    .collect::<Vec<u64>>(),
+            )
+        };
+        // Find the JumpTable whose BRANCHIND lives in the dispatch block.
+        let jt_arc = fd.jump_tables.iter().find(|jt| {
+            let jtr = jt.read().unwrap();
+            let Some(indop) = jtr.get_indirect_op() else { return false };
+            let parent = {
+                let op = indop.read().unwrap();
+                op.parent.as_ref().and_then(|w| w.upgrade())
+            };
+            parent.map(|p| Arc::ptr_eq(&p, &control)).unwrap_or(false)
+        });
+        let Some(jt_arc) = jt_arc.cloned() else {
+            continue;
+        };
+        let jt = jt_arc.read().unwrap();
+        // Per case: labels from block2addr, default flag from default_block.
+        let mut new_case_values: Vec<Vec<u64>> = Vec::with_capacity(cases.len());
+        let mut default_idx: Option<usize> = None;
+        for (ci, _case) in cases.iter().enumerate() {
+            let j = edge_indices[ci] as i32;
+            let mut labels: Vec<u64> = Vec::new();
+            for ip in &jt.block2addr {
+                if ip.block_position == j {
+                    let lab = jt.get_label_by_index(ip.address_index as usize);
+                    if lab != crate::jumptable::NO_LABEL {
+                        labels.push(lab);
+                    }
+                }
+            }
+            if jt.get_default_block() == j {
+                default_idx = Some(ci);
+            }
+            new_case_values.push(labels);
+        }
+        // cc:3592: stable_sort(caseblocks, CaseOrder::compare) — by (label,
+        // depth); Rugra has no fallthru chains yet so depth stays 0 and the
+        // first label is the key. NO_LABEL-only cases sort last via u64::MAX.
+        let mut order: Vec<usize> = (0..cases.len()).collect();
+        order.sort_by_key(|&ci| {
+            new_case_values[ci].first().copied().unwrap_or(u64::MAX)
+        });
+        let sorted_cases: Vec<_> = order.iter().map(|&ci| cases[ci].clone()).collect();
+        let sorted_values: Vec<_> = order.iter().map(|&ci| new_case_values[ci].clone()).collect();
+        let sorted_default = default_idx
+            .map(|di| order.iter().position(|&o| o == di).unwrap_or(di))
+            .map(|pos| sorted_cases[pos].clone());
+        let mut sw = sw_arc.write().unwrap();
+        if let Some(sw) = sw.as_any_mut().downcast_mut::<BlockSwitch>() {
+            sw.cases = sorted_cases;
+            sw.case_values = sorted_values;
+            sw.default_case = sorted_default;
+        }
+    }
+}
+
 impl ActionFinalStructure {
     // Ghidra: blockaction.hh:324 ActionFinalStructure::new
     pub fn new() -> Self {
@@ -5686,6 +5930,15 @@ impl Action for ActionFinalStructure {
         // markLabelBumpUp) and unconditionally returns 0. It never touches the
         // protected `count` member, so the fixture-observed count/apply/res
         // triple must stay 0 even when graph/IR mutations occur below.
+
+        // Ghidra blockaction.cc:2188/2191: graph.finalizePrinting(data) —
+        // BlockSwitch::finalizePrinting (block.cc:3556-3594) resolves each
+        // case's label/depth from the JumpTable (numIndicesByBlock /
+        // getIndexByBlock / getLabelByIndex) and stable_sorts the cases by
+        // (label, depth) — CaseOrder::compare (block.hh:903). Rugra fills
+        // BlockSwitch.case_values/default_case here from the table and sorts
+        // the case vector the same way.
+        switch_finalize_labels(fd);
 
         // Ghidra blockaction.cc:2193: graph.scopeBreak(-1,-1);
         // Walk the structure tree (sblocks) reclassifying any unstructured

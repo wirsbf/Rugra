@@ -1798,3 +1798,12 @@ PTRADD/PTRSUB 输出盖章类型。
 刷新 reverse_index 至新目标 in-edge 规模、新目标 push_back 镜像 in-edge 且
 flags 随出边携带。此前仅指针改写使 nodeSplit 复制块不可达/原块 in-edge 过剩，
 returnsplit 永久重入。
+
+
+## remove_branch 语义修正 + switch_over_jump_tables 接线（2026-08-26 wip，PRINTC-SWITCH-EMIT-0001）
+
+前任断点抢救：`remove_branch(bb,num)` 现删除 num 号出边（funcdata_block.cc:181-199
+原本移植把 num 当"保留边"删 1-num，导致 ActionDeterminedBranch 割错边）；补
+cc:192-197 目标块 MULTIEQUAL 槽位收缩（opRemoveInput+opZeroMulti）。
+`switch_over_jump_tables` 由 stub 升级为经 resolve 闭包调 `JumpTable::switch_over`
+（funcdata_op.cc:778 调用点在 flow.rs 侧）。

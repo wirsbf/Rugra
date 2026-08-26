@@ -1598,3 +1598,9 @@ numbering=0 保持；audit 错误总数 15→15（1 处形态变化见上）。
    comma 记号 spacing 0，printc.cc:57）——`fwrite(buffer,size,nmemb,__s)`。
 3. push_varnode Priority 0.5 寄存器参数名门控收紧为"本函数实际输入"
    （printlanguage.cc:218-262 pushSymbolDetail 语义）。
+
+## emitBlockSwitch default 内联（2026-08-26 wip，PRINTC-SWITCH-EMIT-0001）
+
+前任断点抢救：default case 按 Ghidra 模型内联进排序后的 cases 向量
+（addCase isdefault, block.cc:3513；emitSwitchCase cc:3140-3145 单 default: 标签），
+旧"独立尾部 default"路径仅保留给非 case-body default。

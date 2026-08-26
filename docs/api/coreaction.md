@@ -1804,3 +1804,10 @@ buildTypegrp + :1269 ELEM_DATA_ORGANIZATION + :1350 setupSizes）装配
   buildInputFromTrials → clearActiveInput 与 oracle 逐行对应。
 - `test_action_funclink_initializes_active` 更新为 oracle 行为：unlocked
   callee 仅 initActiveInput（0 trial），trial 由 heritage guardCalls 注册。
+
+## ActionSwitchNorm 表 API 接线 + removeBranch 索引修正（2026-08-26 wip，PRINTC-SWITCH-EMIT-0001）
+
+前任断点抢救：apply 现对每个 unlabelled 表依次 matchModel/recoverLabels/
+foldInNormalization，随后 foldInGuards（成功则 `sblocks.clear()`，对应
+coreaction.cc:4557-4560 `data.getStructure()->clear()`）。ActionRedundBranch 的
+全同目标收缩改 `remove_branch(&bl,1)`（cc:3523 索引语义）。
