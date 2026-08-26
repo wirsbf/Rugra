@@ -2518,90 +2518,21 @@ impl Funcdata {
         bb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         num: usize,
     ) {
-        // If 2 out-edges, destroy the CBRANCH op.
-        let n_out = bb.read().unwrap().size_out();
-        if n_out == 2 {
-            let last_op = {
-                let bb_rg = bb.read().unwrap();
-                if let Some(any) = bb_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
-                    any.last_op()
-                } else {
-                    None
-                }
-            };
-            if let Some(cbranch) = last_op {
-                self.op_destroy(&cbranch);
-            }
-        }
-
-        // cc:190-191: bbout = bb->getOut(num); removeEdge — remove edge num.
-        let remove_edge = num;
-        if remove_edge >= n_out {
-            return;
-        }
-
-        // Get the target block of the edge to remove.
-        let target = bb.read().unwrap().get_out(remove_edge).map(|e| e.point);
-        let Some(target) = target else { return };
-
-        // cc:192: blocknum = bbout->getInIndex(bb) — the in-slot of bb in
-        // the target, needed to adjust MULTIEQUAL input slots AFTER the edge
-        // is severed. Computed before the edge halves go away.
-        let bb_in_slot = {
-            let target_rg = target.read().unwrap();
-            let bb_ptr = Arc::as_ptr(bb) as *const () as usize;
-            let mut slot = None;
-            for si in 0..target_rg.size_in() {
-                if let Some(e) = target_rg.get_in(si) {
-                    if Arc::as_ptr(&e.point) as *const () as usize == bb_ptr {
-                        slot = Some(si);
-                        break;
-                    }
-                }
-            }
-            slot
-        };
-
-        // Remove the edge from bb to target.
-        // In our simplified model, we remove the outgoing edge from bb and
-        // the incoming edge from target.
-        {
-            let mut bb_rg = bb.write().unwrap();
-            if let Some(any) = bb_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
-                if remove_edge < any.outgoing.len() {
-                    any.outgoing.remove(remove_edge);
-                }
-            }
-        }
-        {
-            let mut target_rg = target.write().unwrap();
-            if let Some(any) = target_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
-                // Find and remove the incoming edge from bb.
-                let bb_ptr = Arc::as_ptr(bb) as *const () as usize;
-                any.incoming.retain(|e| {
-                    Arc::as_ptr(&e.point) as *const () as usize != bb_ptr
-                });
-            }
-        }
-
-        // cc:193-197: every MULTIEQUAL in the target loses the input that
-        // flowed along the removed edge (opRemoveInput + opZeroMulti).
-        // Skipping this strands an orphaned input slot and corrupts the
-        // downstream SSA merge for the surviving paths.
-        if let Some(blocknum) = bb_in_slot {
-            let multi_ops: Vec<crate::op::PcodeOpRef> = {
-                let target_rg = target.read().unwrap();
-                target_rg
-                    .get_ops()
-                    .into_iter()
-                    .filter(|o| o.0.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL)
-                    .collect()
-            };
-            for op in multi_ops {
-                self.op_remove_input(&op, blocknum);
-                self.op_zero_multi(&op);
-            }
-        }
+        // cc:220-223: `branchRemoveInternal(bb,num); structureReset();` —
+        // removeBranch is exactly this delegation. The former inline body
+        // severed the two edge halves with raw `Vec::remove` / `Vec::retain`,
+        // skipping the reciprocal reverse_index slide-decrements of
+        // halfDeleteInEdge/halfDeleteOutEdge (block.cc:101-127): every edge
+        // that slid past the removed slot kept a stale reverse_index. On the
+        // PRINTC-SWITCH-EMIT-0001 chain (getparameter 0x3fd5), the stale
+        // b29.out[1].reverse_index sent splice_block_basic's move_out_edge at
+        // the WRONG out-slot (BLOCK-RECIPROCAL-OOB-0001 WARN), destroying 48
+        // of the 49 switch out-edges; remove_unreachable_blocks then severed
+        // every case body as unreachable (138 bblocks → 38). Delegating to
+        // branch_remove_internal (remove_edge_blocks re-pair + bilateral
+        // half-deletes) restores Ghidra's protocol.
+        self.branch_remove_internal(bb, num);
+        self.structure_reset();
     }
 
     // Ghidra: funcdata_block.cc:704 Funcdata::structureReset

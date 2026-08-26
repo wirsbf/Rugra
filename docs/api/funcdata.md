@@ -1807,3 +1807,16 @@ returnsplit 永久重入。
 cc:192-197 目标块 MULTIEQUAL 槽位收缩（opRemoveInput+opZeroMulti）。
 `switch_over_jump_tables` 由 stub 升级为经 resolve 闭包调 `JumpTable::switch_over`
 （funcdata_op.cc:778 调用点在 flow.rs 侧）。
+
+## remove_branch 完全委托 branchRemoveInternal + structureReset（2026-08-27，PRINTC-SWITCH-EMIT-0001）
+
+`remove_branch(bb,num)` 的旧内联体用裸 `Vec::remove`/`Vec::retain` 割断两条边半边，
+跳过了 halfDeleteInEdge/halfDeleteOutEdge（block.cc:101-127）的双侧 reverse_index
+递减：所有滑过被删槽位的边都保留过期 reverse_index。在 PRINTC-SWITCH-EMIT-0001 链
+（getparameter 0x3fd5）上，过期的 b29.out[1].reverse_index 令 splice_block_basic 的
+move_out_edge 在错误 out-slot 上操作（BLOCK-RECIPROCAL-OOB-0001 WARN），摧毁 49 条
+switch 出边中的 48 条；remove_unreachable_blocks 随后把所有 case 体判为不可达割除
+（138 bblocks → 38）。现按 funcdata_block.cc:216-223 逐字委托
+`branch_remove_internal(bb,num)`（内部走 remove_edge_blocks 的半边配对删除）+
+`structure_reset()`。glob_set E2E spin（collapse_all 后 >30s）随之消失：基线
+124/124、0 timeout、defects=0。
