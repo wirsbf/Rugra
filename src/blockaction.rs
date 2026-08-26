@@ -2741,6 +2741,7 @@ impl<'a> CollapseStructure<'a> {
         if install_idx < size {
             if let Some(cb) = self.graph.get_block(install_idx) {
                 let c = cb.read().unwrap();
+                let mut install_ext_out = false;
                 for slot in 0..c.size_out() {
                     if let Some(e) = c.get_out(slot) {
                         let dst_idx = match e.point.try_read() {
@@ -2756,8 +2757,22 @@ impl<'a> CollapseStructure<'a> {
                                 flags: e.flags,
                                 reverse_index: -1,
                             });
+                            install_ext_out = true;
                         }
                     }
+                }
+                // cc:925-926: the install block is a component in Ghidra's
+                // -nodes- set, so selfIdentify's `if (mybl->isSwitchOut())
+                // setFlag(f_switch_out)` applies to it as well — e.g. an
+                // inf_loop absorbing a BRANCHIND dispatch block (whose case
+                // edges are external out edges) must keep the composite a
+                // switch-out, or downstream rules mis-structure the case
+                // edges as plain decision edges.
+                if install_ext_out
+                    && c.get_flags() & crate::block::block_flags::SWITCH_OUT != 0
+                {
+                    new_block.write().unwrap()
+                        .set_flags(crate::block::block_flags::SWITCH_OUT);
                 }
             }
         }
@@ -2789,7 +2804,7 @@ impl<'a> CollapseStructure<'a> {
             }
             // Collect this consumed block's boundary edges.
             // IN-edges: source not in consumed set → boundary incoming.
-            let (in_boundary, out_boundary): (Vec<(Arc<RwLock<dyn FlowBlock + Send + Sync>>, u32)>, Vec<(Arc<RwLock<dyn FlowBlock + Send + Sync>>, u32)>) = {
+            let (in_boundary, out_boundary, c_switch_out): (Vec<(Arc<RwLock<dyn FlowBlock + Send + Sync>>, u32)>, Vec<(Arc<RwLock<dyn FlowBlock + Send + Sync>>, u32)>, bool) = {
                 let cb = match self.graph.get_block(ci) { Some(b) => b, None => continue };
                 let c = cb.read().unwrap();
                 let mut ib = Vec::new();
@@ -2820,8 +2835,20 @@ impl<'a> CollapseStructure<'a> {
                         }
                     }
                 }
-                (ib, ob)
+                let c_switch_out =
+                    c.get_flags() & crate::block::block_flags::SWITCH_OUT != 0;
+                (ib, ob, c_switch_out)
             };
+            // cc:925-926 (selfIdentify's outofthis loop): `if
+            // (mybl->isSwitchOut()) setFlag(f_switch_out);` — inside the
+            // external-edge branch, i.e. a component that is itself a
+            // switch dispatch (BRANCHIND, block.cc:2287) AND has at least
+            // one EXTERNAL out edge propagates f_switch_out to the
+            // composite. A fully-internal dispatch does not.
+            if c_switch_out && !out_boundary.is_empty() {
+                new_block.write().unwrap()
+                    .set_flags(crate::block::block_flags::SWITCH_OUT);
+            }
             // Add boundary edges to new_block (record the external block).
             // Labels carry over per replaceInEdge/replaceOutEdge (block.cc:172,
             // 188). Duplicates are NOT collapsed here: the oracle's selfIdentify
@@ -3610,43 +3637,83 @@ impl<'a> CollapseStructure<'a> {
         false
     }
 
-    // Ghidra: blockaction.hh:46 LoopBody::tryRuleIfElse
-    /// ruleBlockIfElse: detect if-then-else pattern.
-    /// A CBRANCH block with 2 out-edges, both clause blocks have 1 in and
-    /// 1 out, and both out-edges point to the same merge block.
+    // Ghidra: blockaction.cc:1416 CollapseStructure::ruleBlockIfElse
+    /// ruleBlockIfElse: detect if-then-else pattern (cc:1416-1444).
+    /// Mirrors the oracle guard-for-guard: binary condition that is not a
+    /// switch dispatch (cc:1422), both out edges are plain decision edges
+    /// (cc:1423-1424 — no irreducible/back/goto edge labels), each clause
+    /// has exactly 1 in / 1 out (cc:1428-1432), the clauses exit to the
+    /// same block which is not the condition itself (cc:1433-1435), and
+    /// neither clause is a switch dispatch nor has an unstructured jump out
+    /// (cc:1437-1440).
     fn try_rule_if_else(&mut self, i: usize) -> bool {
         let block = match self.graph.get_block(i) {
             Some(b) => b,
             None => return false,
         };
         let b = block.read().unwrap();
-        if b.size_out() != 2 { return false; }
-
-        let ops = b.get_ops();
-        // Topological rule (cc:1481-1512): no CBRANCH-op gate.
-        let _ = ops;
+        if b.size_out() != 2 { return false; } // cc:1421 Must be binary condition
+        // cc:1422: `if (bl->isSwitchOut()) return false;`
+        if b.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { return false; }
+        // cc:1423-1424: `if (!bl->isDecisionOut(0)) return false; if
+        // (!bl->isDecisionOut(1)) return false;` — refuse structuring
+        // across unstructured/loopback edges (block.hh:336: decision =
+        // not irreducible, not back, not goto).
+        if !Self::out_edge_is_decision(&*b, 0) { return false; }
+        if !Self::out_edge_is_decision(&*b, 1) { return false; }
 
         let cond_idx = b.get_index();
-        let true_edge = match b.get_out(0) { Some(e) => e, None => return false };
-        let false_edge = match b.get_out(1) { Some(e) => e, None => return false };
-        let true_block = true_edge.point.clone();
-        let false_block = false_edge.point.clone();
+        // cc:1426-1427: `tc = bl->getTrueOut(); fc = bl->getFalseOut();`
+        // — getTrueOut() = out[1], getFalseOut() = out[0] positionally
+        // (block.hh:299-300; flow.rs:1045 pushes the fallthru edge first,
+        // so out[0] is the false path in both implementations). The old
+        // port read out[0] into the tc slot and out[1] into the fc slot,
+        // printing the FALSE-path clause under `if` — inverted C vs the
+        // oracle, which never negates here (cc:1442 newBlockIfElse(bl,tc,fc)
+        // with no negateCondition).
+        let tc = match b.get_out(1) { Some(e) => e.point.clone(), None => return false };
+        let fc = match b.get_out(0) { Some(e) => e.point.clone(), None => return false };
         drop(b);
 
-        // Check both clauses: 1 in, 1 out, same merge target
-        let tb = true_block.read().unwrap();
-        let fb = false_block.read().unwrap();
-        if tb.size_in() != 1 || fb.size_in() != 1 { return false; }
-        if tb.size_out() != 1 || fb.size_out() != 1 { return false; }
+        // cc:1428-1429: nothing else must hit either clause.
+        // cc:1431-1432: only one exit from each clause.
+        {
+            let t = tc.read().unwrap();
+            let f = fc.read().unwrap();
+            if t.size_in() != 1 || f.size_in() != 1 { return false; }
+            if t.size_out() != 1 || f.size_out() != 1 { return false; }
+            // cc:1433-1434: `outblock = tc->getOut(0); if (outblock == bl)
+            // return false;` — no loops (the common merge must not be the
+            // condition block itself).
+            let t_out0 = match t.get_out(0) {
+                Some(e) => e.point.read().unwrap().get_index(),
+                None => return false,
+            };
+            if t_out0 == cond_idx { return false; }
+            // cc:1435: `if (outblock != fc->getOut(0)) return false;` —
+            // clauses must exit to the same place.
+            let f_out0 = match f.get_out(0) {
+                Some(e) => e.point.read().unwrap().get_index(),
+                None => return false,
+            };
+            if t_out0 != f_out0 { return false; }
+            // cc:1437-1438: `if (tc->isSwitchOut()) return false; if
+            // (fc->isSwitchOut()) return false;` — don't use a switch
+            // (possibly with goto edges) as a clause.
+            if t.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { return false; }
+            if f.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { return false; }
+            // cc:1439-1440: `if (tc->isGotoOut(0)) return false; if
+            // (fc->isGotoOut(0)) return false;` — no unstructured jumps
+            // out of either clause (label-based, works on structured
+            // components too).
+            if Self::out_edge_is_goto(&*t, 0) { return false; }
+            if Self::out_edge_is_goto(&*f, 0) { return false; }
+        }
 
-        let t_out = match tb.get_out(0) { Some(e) => e.point.read().unwrap().get_index(), None => return false };
-        let f_out = match fb.get_out(0) { Some(e) => e.point.read().unwrap().get_index(), None => return false };
-        drop(tb); drop(fb);
-
-        if t_out != f_out { return false; } // both must merge to same block
-
-        // Create BlockIf (if-then-else) via factory (block.cc:1840 newBlockIfElse).
-        self.new_block_if_else(&block, &true_block, &false_block, false, i);
+        // Create BlockIf (if-then-else) via factory (block.cc:1840
+        // newBlockIfElse: nodes = {cond, tc, fc}, forceOutputNum(1), no
+        // condition negation).
+        self.new_block_if_else(&block, &tc, &fc, false, i);
         true
     }
 
@@ -3957,6 +4024,12 @@ impl<'a> CollapseStructure<'a> {
         // (BRANCHIND dispatch, set by build_copy per block.cc:2286), not the
         // invented CASE_BODY cascade marks.
         if b.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { return false; }
+        // cc:1562-1563: `if (bl->isGotoOut(0)) return false; if
+        // (bl->isGotoOut(1)) return false;` — a do/while whose back-edge or
+        // exit edge is already marked unstructured must stay a goto (the
+        // label-based test also sees marks on structured components).
+        if Self::out_edge_is_goto(&*b, 0) { return false; }
+        if Self::out_edge_is_goto(&*b, 1) { return false; }
 
         let cond_idx = b.get_index();
         for slot in 0..2 {
