@@ -2468,12 +2468,16 @@ impl<'a> CollapseStructure<'a> {
 
 
 
-    // Ghidra: blockaction.hh:46 LoopBody::clipExtraRoots
-    /// Ghidra's clipExtraRoots (blockaction.cc:1108): find distinct control-flow
-    /// roots (size_in==0, index > 0), and for the subset of blocks ONLY reachable
-    /// from that root, mark their exiting edges as goto. Handles irreducible
-    /// cross-over edges. Returns true if any new edges were marked as goto.
-    /// Pairs with try_rule_goto which consumes the marked blocks (newBlockGoto).
+    // Ghidra: blockaction.cc:1108 CollapseStructure::clipExtraRoots
+    /// Ghidra's clipExtraRoots (blockaction.cc:1108-1121): find distinct
+    /// control-flow roots (sizeIn==0, index > 0 — the canonical root 0 is
+    /// skipped), and for the subset of blocks ONLY reachable from that root
+    /// (onlyReachableFromRoot cc:1041-1067), mark their exiting edges as
+    /// goto via setGotoBranch (markExitsAsGotos cc:1070-1090). Handles
+    /// irreducible cross-over edges. Returns true if any cross-over edges
+    /// were found (counted per EDGE to a non-body target — Ghidra re-counts
+    /// already-goto edges, which keeps the collapseAll loop progressing
+    /// while try_rule_goto consumes the marked blocks).
     fn clip_extra_roots(&mut self) -> bool {
         let size = self.graph.get_size();
         for root_idx in 1..size as i32 {
@@ -2481,12 +2485,12 @@ impl<'a> CollapseStructure<'a> {
             {
                 let r = root_blk.read().unwrap();
                 if r.size_in() != 0 { continue; }
-                // Skip already-structured blocks (BlockGoto, BlockIf, etc.) — they
-                // are consumed/structured and shouldn't be re-processed by clip.
-                let rt = r.get_type();
-                if rt != crate::block::BlockType::Basic && rt != crate::block::BlockType::Copy { continue; }
+                // cc:1080: no type gate — Ghidra processes ANY sizeIn==0
+                // block, including structured composites (a wrapped
+                // BlockGoto/BlockList can be a cross-over root).
             }
-            // onlyReachableFromRoot: collect blocks reachable only from root.
+            // cc:1041-1067 onlyReachableFromRoot: collect blocks reachable
+            // only from root (visitcount reaches sizeIn exactly).
             let mut body: Vec<i32> = vec![root_idx];
             let mut in_body: std::collections::HashSet<i32> = std::collections::HashSet::new();
             in_body.insert(root_idx);
@@ -2503,42 +2507,38 @@ impl<'a> CollapseStructure<'a> {
                         let count = visit_count.entry(nxt).or_insert(0);
                         *count += 1;
                         let nxt_in = e.point.read().unwrap().size_in() as i32;
-                        if *count >= nxt_in {
+                        if *count == nxt_in {
                             in_body.insert(nxt);
                             body.push(nxt);
                         }
                     }
                 }
             }
-            // markExitsAsGotos: mark out-edges to non-body targets as goto.
+            // cc:1070-1090 markExitsAsGotos: every out-edge of a body block
+            // to a non-body target is marked goto (setGotoBranch semantics);
+            // count is per edge.
             let mut changecount = 0;
+            let mut mark_jobs: Vec<(i32, usize)> = Vec::new();
             for &bidx in &body {
                 let bb = match self.graph.get_block(bidx as usize) { Some(b) => b, None => continue };
-                let exit_edges: Vec<usize> = {
-                    let b = bb.read().unwrap();
-                    let existing = b.get_flags();
-                    let mut ex = Vec::new();
-                    for slot in 0..b.size_out() {
-                        if let Some(e) = b.get_out(slot) {
-                            let t = e.point.read().unwrap().get_index();
-                            if in_body.contains(&t) { continue; }
-                            let already_goto = (slot == 0 && existing & crate::block::block_flags::GOTO_EDGE_0 != 0)
-                                            || (slot == 1 && existing & crate::block::block_flags::GOTO_EDGE_1 != 0);
-                            if already_goto { continue; }
-                            ex.push(slot);
-                        }
+                let b = bb.read().unwrap();
+                for slot in 0..b.size_out() {
+                    if let Some(e) = b.get_out(slot) {
+                        let t = e.point.read().unwrap().get_index();
+                        if in_body.contains(&t) { continue; }
+                        mark_jobs.push((bidx, slot));
                     }
-                    ex
-                };
-                if exit_edges.is_empty() { continue; }
-                let mut bw = bb.write().unwrap();
-                let mut cur_flags = bw.get_flags();
-                for &slot in &exit_edges {
-                    if slot == 0 { cur_flags |= crate::block::block_flags::GOTO_EDGE_0; }
-                    if slot == 1 { cur_flags |= crate::block::block_flags::GOTO_EDGE_1; }
                 }
-                bw.set_flags(cur_flags);
-                changecount += 1;
+            }
+            for (bidx, slot) in mark_jobs {
+                if let Some(bb) = self.graph.get_block(bidx as usize) {
+                    // Full setGotoBranch (block.cc:305-313): edge label
+                    // f_goto_edge mirrored on both halves + interior flags,
+                    // same as selectGoto's marking.
+                    let blk = bb.clone();
+                    self.set_goto_branch_on_block(&blk, slot);
+                    changecount += 1;
+                }
             }
             if changecount > 0 {
                 eprintln!("[COLLAPSE] {} clipExtraRoots: root={} body={} gotos={}", self.name, root_idx, body.len(), changecount);
