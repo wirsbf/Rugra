@@ -218,9 +218,9 @@
       },
       "python_stdlib_root": {
         "path": "/usr/lib/python3.14",
-        "sha256": "141e577fc1cf328cef99ee4b6740de1f87d9eebbc21e2885e57bee44bd3ed376",
+        "sha256": "f80893a55085da3d5f4994dcd9516b067e8019f7b10776d8558d7b584ac01ae3",
         "entry_count": 12553,
-        "regular_bytes": 265048061
+        "regular_bytes": 265155715
       }
     },
     "zlib_link_inputs": {
