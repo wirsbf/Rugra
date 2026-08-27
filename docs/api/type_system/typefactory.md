@@ -4,13 +4,15 @@
 
 - **状态**: L2。当前单名称 map 与 immutable `Arc<Datatype>` 不等价于
   Ghidra 结构主树 + `(name,id)` 树和原位对象突变；exact-piece series D
-  已落 production walk，但在锁定 bilateral fixture 运行前保持 `NO_ORACLE`。
+  已落 production walk；锁定 bilateral fixture 已运行 32 条记录，30 条逐字节
+  一致，剩余 explicit-align struct/union 共 46 个 allowlist 字段，整体为
+  `MISMATCH`。
   layout/rekey 的 scoped A 片只保证 factory 当前 tree/name 槽
   一致，旧句柄及 factory-owned dependencies 仍绑定
   `TYPEFACTORY-ARC-IDENTITY-0001`。series B 只闭合 array/partial/virtual
   stripped 的 registry 投影；series C 增加 Pointer/PointerRel canonical
   key、ephemeral parent geometry 与 grammar 默认指针闭包。A-C 的 B2
-  投影在 series D 前均为 `NO_ORACLE`；`calcTruncate` attachment、完整
+  投影不能外推为完整函数 MATCH；`calcTruncate` attachment、完整
   Architecture/AddrSpace wiring 与 immutable Arc identity 仍是 residual，
   模块整体为 **MISMATCH / L2**，不能升 L3。
 
@@ -164,8 +166,10 @@ pointee); the relative pointer is interned by pointee/offset/parent/wordsize.
 
 Reproduces the C++ virtual call `pointer->downChain(off,par,parOff,
 allowArrayWrap,typegrp)` (virtual declaration `type.hh:429`, `TypePointerRel`
-override `type.hh:681`, production caller `TypeOpIntAdd::propagateAddIn2Out`
-`typeop.cc:1241`). Dispatch is by pointer kind exactly as the C++ vtable:
+override `type.hh:681`; production callers include
+`TypeOpIntAdd::propagateAddIn2Out` at typeop.cc:1241 and
+`TypeOpPtrsub::getOutputToken` at typeop.cc:2357). For the represented
+plain/PointerRel variants, dispatch follows the C++ vtable routing:
 a pointer carrying `pointer_rel` state (the canonical `TypePointerRel`
 representation installed by `get_type_pointer_rel_ephemeral`) or a legacy
 named `is_ptrrel` side-table entry routes to the relative override `down_chain`
@@ -208,8 +212,38 @@ included (`type.cc:2671`).
   plain 版）中 `par` 丢失 rel 身份的偏差，并消除对工厂的多余写入。
 - **签名**：`down_chain` 首参由 `&TypePointer` 改为 `&Arc<Datatype>`
   （被下降指针本身，即 C++ `this`），`down_chain_pointer` 同理保持私有。
-  两者当前仍无 production caller（B1 的 coreaction/typeop 接线是后续
-  租约任务），唯一调用方是 `down_chain_virtual`、单元测试与双侧 fixture。
+  新增 production caller 为 `TypeOpPtrsub::getOutputToken`
+  （typeop.cc:2349-2364 → Rust `TypeOpPtrsub::get_output_token`）；既有
+  `TypeOpIntAdd::propagateAddIn2Out`、PointerRel 与 exact-piece consumer 状态不变。
+
+### 2026-08-27：downChain component Arc identity 窄修复
+
+`down_chain_pointer` 的 `ptrto->getSubType(off,&off)` 现在通过
+`Datatype::get_sub_type_arc` 返回容器中实际存储的 component Arc，不再把 borrowed
+component 深拷贝成结构相等但 identity 不同的新 Arc。fixture 的普通 Struct 字段
+恰好存储 canonical core Arc，因此后续 `get_type_pointer` 在该窄路径使用与 oracle
+相同的 dependency identity；这不证明任意 component 都由 factory 拥有。
+
+`ptrsub_output_token_1204` direct projection 的 exact0/exact8/exact24 验证了
+component pointee identity、pointer token identity 和重复调用 identity；这里只
+证明 fixture 中的普通 Struct component 路径。array、PartialStruct、PointerRel、
+enum、Spacebase、stale external Arc、incomplete composite 原位突变与冷 factory
+插入仍为 MISMATCH/UNTESTED，不能关闭 `TYPEFACTORY-ARC-IDENTITY-0001` 或提升
+模块级别。该 24-record fixture 整体另因 ActionSetCasts raw return 0/1 与
+ActionInferTypes output identity 1/0 两处已登记差异而 MISMATCH；两者不属于本
+component-identity 子投影。
+
+2026-08-28 本轮五个 source overlay 合跑的 production curl A/B 暴露了另一条
+下游边界：factory 构造的匿名 `TypePointer` 允许空 `TypeBase::name`，而当前局部
+声明路径最终直接打印 `Datatype::get_name()`，没有按 Ghidra typestack 递归展开
+pointer declarator。main/getparameter/glob_word/glob_set/next_url/match_url 的
+concrete-pointer 命名前缀虽改变，声明类型 token 却为空。该 final-C 信号不能单因
+归于本节 component Arc identity 修复；六项语法 MISMATCH 绑定
+`PTRSUB-TYPED-DECL-RESIDUAL-0001`，上游 golden identity 继续由
+`TYPE-UNKNOWN-0001` / `PRINTC-SYMBOL-DECL-0001` / `ACTION-INFERTYPES-DISPATCH-0001`
+跟踪。同一 A/B 的 glob_set cast churn 绑定 `PTRSUB-SWITCH-CAST-RESIDUAL-0001`，
+也不属于本节 component Arc identity 的 MATCH 投影；禁止用打印期字符串 backfill
+掩盖任一差异。
 
 ### `pub fn get_exact_piece(&mut self, ct, offset, size) -> Option<Arc<Datatype>>`
 
@@ -231,8 +265,8 @@ representable. Immutable stale composite handles can also change descent after
 definition replacement. These whole-function differences remain
 `MISMATCH/UNTESTED` under `TYPE-0001`, `TYPEFACTORY-ARC-IDENTITY-0001`,
 `DATATYPE-SPACEBASE-SPACEID-0001`, `ARCH-0001`, `ADDRESS-0001`, and
-`DATABASE-0001`; only the composite projection is `NO_ORACLE` pending the
-series-D bilateral run.
+`DATABASE-0001`。series-D bilateral fixture 已运行：32 条记录中 30 条逐字节
+一致，explicit-align struct/union 的 46 个字段差异已登记，overall=MISMATCH。
 
 This foundation currently has no production caller. `variable.rs`,
 `database.rs`, `funcdata.rs`, and `ruleaction.rs` still carry local

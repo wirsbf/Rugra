@@ -75,8 +75,10 @@ fn as_printc_mut(lng: &mut dyn PrintLanguage) -> Option<&mut PrintC> {
 /// typeop.cc:345/351 TypeOpUnary and typeop.cc:365/371 TypeOpFunc use the same
 /// shape with the metatype their subclass constructors register). `tlst` is
 /// the TypeFactory every TypeOp constructor receives (typeop.cc:233-242);
-/// `getBase` returns the canonical interned base type, or null when no base
-/// type of that size/metatype exists (Rugra: `None`).
+/// For sizes within the architecture base limit, `getBase` returns the
+/// canonical interned base type. Ghidra converts larger requests to an
+/// unknown-byte array (type.cc:3652-3656); Rugra's remaining large-base
+/// caller closure is tracked by `TYPEFACTORY-LOCALTYPE-CACHE-0001`.
 // Ghidra: typeop.cc:264 TypeOp::getOutputLocal / typeop.cc:274 TypeOp::getInputLocal
 fn base_local_type(
     type_factory: &Arc<RwLock<TypeFactory>>,
@@ -2261,15 +2263,17 @@ impl TypeOp for TypeOpPtrsub {
     }
 
     // Ghidra: typeop.cc:2308-2312 TypeOpPtrsub::getOutputLocal
-    // The local propagation type is an INT base, never the input struct
-    // pointer. Field/gap pointer semantics belong exclusively to
-    // get_output_token below (typeop.cc:2349-2363).
+    // This requests getBase(output-size, TYPE_INT), never the input struct
+    // pointer. The covered 8-byte case is canonical int8; oversized getBase
+    // conversion remains TYPEFACTORY-LOCALTYPE-CACHE-0001. Field/gap pointer
+    // semantics belong exclusively to get_output_token below
+    // (typeop.cc:2349-2364).
     fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
         let size = op.get_out()?.read().unwrap().get_size();
         base_local_type(&self.type_factory, size, TypeMetatype::Int)
     }
 
-    // Ghidra: typeop.cc:2317 TypeOpPtrsub::getInputLocal
+    // Ghidra: typeop.cc:2314 TypeOpPtrsub::getInputLocal
     fn get_input_local(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
         let size = op.get_in(slot)?.read().unwrap().get_size();
         base_local_type(&self.type_factory, size, TypeMetatype::Int)
@@ -2316,20 +2320,24 @@ impl TypeOp for TypeOpPtrsub {
             Datatype::Pointer(p) => p,
             _ => return self.get_output_local(op),
         };
-        let raw = op.get_in(1)?.read().unwrap().get_offset() as i64;
-        let offset = crate::space::AddrSpace::address_to_byte_int(raw, pointer.wordsize as u32);
-        let mut type_offset = offset;
+        // cc:2354 assigns the unsigned addressToByte result to the signed
+        // in/out offset consumed by downChain.  The residual value written
+        // back by that one virtual call is the value tested at cc:2358.
+        let raw = op.get_in(1)?.read().unwrap().get_offset();
+        let mut type_offset =
+            crate::space::AddrSpace::address_to_byte(raw, pointer.wordsize as u32) as i64;
         let mut parent = None;
         let mut parent_off = 0;
-        let mut current = Some(high.clone());
         let mut factory = self.type_factory.write().unwrap();
-        while let Some(cur) = current {
-            let next = factory.down_chain_virtual(&cur, &mut type_offset, &mut parent, &mut parent_off, false);
-            current = next;
-            if type_offset == 0 { break; }
-        }
-        if offset == 0 {
-            if let Some(rettype) = current { return Some(rettype); }
+        let rettype = factory.down_chain_virtual(
+            &high,
+            &mut type_offset,
+            &mut parent,
+            &mut parent_off,
+            false,
+        );
+        if type_offset == 0 {
+            if let Some(rettype) = rettype { return Some(rettype); }
         }
         let pointee = factory.get_base(1, TypeMetatype::Unknown)?;
         Some(factory.get_type_pointer(op.get_out()?.read().unwrap().get_size(), pointee, pointer.wordsize))
@@ -4163,7 +4171,7 @@ mod tests {
     fn ptrsub_gap_output_token_is_unknown_pointer() {
         // FIELDCAST-TRACE-2026-08-27: ProgressData has fields at 0/8/16/24,
         // while offset 28 is a legal in-struct synthetic gap. Ghidra's
-        // TypeOpPtrsub::getOutputToken (typeop.cc:2349-2363) falls back to
+        // TypeOpPtrsub::getOutputToken (typeop.cc:2349-2364) falls back to
         // pointer-to-unknown for this nonzero unresolved offset.
         let factory = raw_factory();
         factory.write().unwrap().setup_sizes(&crate::type_system::typefactory::SizeArchInputs {
@@ -4196,6 +4204,54 @@ mod tests {
         assert_eq!(pointee.get_metatype(), TypeMetatype::Unknown);
         assert_eq!(pointee.get_size(), 1);
         assert_eq!(ptrsub.get_output_local(&gap).unwrap().get_metatype(), TypeMetatype::Int);
+    }
+
+    #[test]
+    fn ptrsub_exact_nonzero_field_output_token_is_field_pointer() {
+        // typeop.cc:2354-2359: offset 8 is passed by reference through one
+        // downChain call.  ProgressData::prev consumes the complete offset,
+        // so the residual is zero and the token is a pointer to the field.
+        let factory = raw_factory();
+        factory.write().unwrap().setup_sizes(&crate::type_system::typefactory::SizeArchInputs {
+            stack_spacebase_size: Some(8),
+            default_data_space_addr_size: 8,
+            default_size: 8,
+            far_pointer: None,
+        });
+        let progress = progress_data_t();
+        let expected = match progress.as_ref() {
+            Datatype::Struct(structure) => structure.fields[1].type_ptr.clone(),
+            _ => unreachable!(),
+        };
+        let progress_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("ProgressData *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: progress,
+            wordsize: 1,
+        }));
+        let mut field = pcodeop(OpCode::CPUI_PTRSUB);
+        let base = typed_vn(8, 0x10, Some(progress_ptr.clone()));
+        let high = Arc::new(RwLock::new(crate::variable::HighVariable::new(progress_ptr)));
+        high.write().unwrap().add_instance(base.clone());
+        base.write().unwrap().high = Some(high);
+        field.inrefs.push(base);
+        field.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(8, 8))));
+        field.output = Some(typed_vn(8, 0x20, None));
+
+        let ptrsub = TypeOpPtrsub::new(factory);
+        let token = ptrsub.get_output_token(&field).expect("exact field token");
+        let pointee = match token.as_ref() {
+            Datatype::Pointer(pointer) => &pointer.ptr_to,
+            other => panic!("expected pointer token, got {other:?}"),
+        };
+        assert!(Arc::ptr_eq(pointee, &expected));
+        assert_eq!(pointee.get_metatype(), TypeMetatype::Int);
+        assert_eq!(pointee.get_size(), 8);
+        let canonical = ptrsub
+            .type_factory
+            .write()
+            .unwrap()
+            .get_type_pointer(8, expected, 1);
+        assert!(Arc::ptr_eq(&token, &canonical));
     }
 
     #[test]

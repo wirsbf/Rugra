@@ -2584,7 +2584,10 @@ impl AddrSpace {
     // Ghidra: space.hh:514 AddrSpace::addressToByte
     /// Scale from addressable units to byte units.
     pub fn address_to_byte(val: u64, ws: u32) -> u64 {
-        val * ws as u64
+        // `uintb` is a fixed-width unsigned 64-bit value in Ghidra, so the
+        // multiplication is modulo 2^64.  Make that release/debug invariant
+        // explicit instead of relying on profile-specific overflow checks.
+        val.wrapping_mul(ws as u64)
     }
 
     // Ghidra: space.hh:523 AddrSpace::byteToAddress

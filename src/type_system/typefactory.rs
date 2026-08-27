@@ -2080,10 +2080,13 @@ impl TypeFactory {
             *par = Some(orig.clone());
             *par_off = *off;
         }
-        // pt = ptrto->getSubType(off, &off).
-        let (pt, new_off) = ptrto.get_sub_type(*off);
+        // pt = ptrto->getSubType(off, &off).  The C++ virtual returns the
+        // factory-owned component pointer directly; preserve the same Arc
+        // identity so pointer interning uses the component's canonical
+        // dependency key instead of a structurally equal clone.
+        let (pt, new_off) = Datatype::get_sub_type_arc(ptrto, *off);
         let pt = match pt {
-            Some(t) => Arc::new(t.clone()),
+            Some(t) => t,
             None => return None,
         };
         *off = new_off;

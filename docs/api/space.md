@@ -320,6 +320,16 @@ Oracle 证据：`tests/oracle/space_registry_1204.{cc,rs}` + `tools/run_space_re
 属性编解码（MARSHAL/TRANSLATE 原子）、`resolveConstant` 与 join-record 半部（留在旧 enum manager，
 待 ADDRESS-0001 统一切换）。
 
+**2026-08-27 unsigned scale 边界**：`AddrSpace::address_to_byte`
+（space.hh:514-516）的 `uintb * uint4` 是固定 64 位无符号模 2^64 运算；Rust
+现显式使用 `wrapping_mul`，消除 debug/release overflow 差异。
+`ptrsub_output_token_1204` 的 normal、wrap_zero、wrap_nonzero、max_product、
+zero_wordsize 五条 scale projection 双侧 MATCH。该证据只覆盖 unsigned 静态
+换算；`address_to_byte_int`、per-space decode/resolveConstant/join 与旧/新地址
+模型迁移仍未覆盖，space 模块保持 L2。父级 24-record fixture 因
+ActionSetCasts raw return 0/1 与 ActionInferTypes output identity 1/0 两处已登记
+差异而整体 MISMATCH；这不改变五条 scale 子投影的 MATCH 判定。
+
 ### 2026-08-15：ADDRESS-0001 配合新增（Ghidra space.cc printRaw/overlapJoin）
 
 `AddrSpace` 句柄新增两方法（供 `SpaceAddress::print_raw`/`overlap_join` 派发）：

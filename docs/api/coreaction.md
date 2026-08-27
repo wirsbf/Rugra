@@ -2,18 +2,15 @@
 
 ## 2026-08-25：STOP seal + PTRSUB downChain 接线（VARNODE-STOPUP-FLAGS-0001 / TYPE-PTRSUB-PTRSUB-0001）
 
-四项 1:1 接线，消除 progressbarinit 的「Type propagation algorithm not
-settling」警告与 7 层 `->total` 嵌套（双侧 fixture
-`tests/oracle/stop_ptrsub_wire_1204.*` MATCH）：
+以下是 `stop_ptrsub_wire_1204` 已覆盖的历史窄投影，曾消除
+progressbarinit 的「Type propagation algorithm not settling」警告与 7 层
+`->total` 嵌套；它不是四个完整映射函数的 1:1 声明：
 
-1. **`build_localtypes` 的 needsBlock 接线（coreaction.cc:5020-5031）**：每个
-   varnode 循环体内计算 `needs_block`——`Varnode::getLocalType` 内
-   blockup 的唯一写入点是定义 op 的 `stop_type_propagation`（varnode.cc:912，
-   typelock 早退之后才被咨询）；`needs_block` 为真则
-   `set_stop_up_propagation()`（varnode flag 0x800，全源码只设不清）。
-   SymbolEntry/getExactPiece 分支（cc:5022-5027，可使 needsBlock 保持
-   false）仍未接线（B2-W3 / TYPEFACTORY-EXACTPIECE-0001），故每个
-   varnode 都走 getLocalType 路径。
+1. **`build_localtypes` 的 needsBlock 窄投影（coreaction.cc:5020-5031）**：Rust
+   目前遍历 loc_tree，并直接从 defining op 的 `stop_type_propagation` 近似计算
+   `needs_block`；为真则 `set_stop_up_propagation()`。它没有调用完整
+   `Varnode::getLocalType`，也没有 oracle 的 SymbolEntry/getExactPiece 分支，
+   因而整体继续绑定 `ACTION-INFERTYPES-DISPATCH-0001`。
 2. **`propagate_type_edge` 补 cc:5093**：`outslot >= 0 &&
    stops_up_propagation()` 时拒绝传播（sealed varnode 作为输入槽目标被封禁；
    以 op 输出为目标的边不受影响——正因如此 downChain 字段指针仍能流入
@@ -33,7 +30,7 @@ settling」警告与 7 层 `->total` 嵌套（双侧 fixture
 配套修正（同一根因暴露的既有缺陷）：
 
 - **`ptr_input_reqtype` 改为 `TypeOpPtrsub::getInputCast`（typeop.cc:2320-2347）
-  / `TypeOpPtradd::getInputCast`（:2250-2266）的忠实端口**：reqtype=输入
+  / `TypeOpPtradd::getInputCast`（:2250-2266）已实现的非 resolution 窄路径**：reqtype=输入
   varnode 自身（read-facing）类型、curtype=其 HIGH 类型，PTRSUB 剥一层共享
   array 后比较基类型、PTRADD 比较 align_size——**从不咨询 op 的 output
   类型**（旧启发式用 output 指针类型，ActionInferTypes 给 PTRSUB 输出
@@ -48,18 +45,71 @@ settling」警告与 7 层 `->total` 嵌套（双侧 fixture
   顶掉 sized-int 回退会使未封禁 INT_SUB/PTRSUB 输出停留 unknown（双侧
    fixture case C/q 抓出）。
 
-## 2026-08-28：PTRSUB output-token 生产播种（TYPEOP-PTRSUB-FIELDCAST-0001）
+## 2026-08-27：PTRSUB output-token 的真实生产消费者（TYPEOP-PTRSUB-FIELDCAST-0001）
 
-`build_localtypes` 的 PTRSUB+spacebase 臂（coreaction.cc:5008-5037 对应 Rust
-:5350-5357）现在消费 `TypeOpPtrsub::get_output_token`，而不是把输出一律播成
-`int_types.sized` 指针。这样 offset 非零且无字段命中的 synthetic gap 得到
-unknown-pointer，随后 `TypeOpStore::getInputCast`（typeop.cc:520-555）按
-pointer pointee size 与 4-byte STORE 比较并保留 `undefined4 *` 地址 cast；
-PTRSUB 的 `getOutputLocal` 仍保持 INT（typeop.cc:2308-2312）。验证：锁定
-Ghidra 12.0.4 oracle `e40ed13014025f82488b1f8f7bca566894ac376b` 的 curl
-E2E 为 124/124，compare defects=0、numbering=0；progressbarinit
-目标 defects=0、numbering=0。
-  ## 2026-08-24：build_localtypes 的 CALL/CALLIND input 播种（TYPEOP-LOCALTYPE-DISPATCH-0001 D2）
+PTRSUB 字段 token 不在 `build_localtypes` 播种；oracle 的 PTRSUB output-local
+请求 `getBase(output-size, TYPE_INT)`，本 fixture 的 8-byte 输出为 canonical int8，
+而 oversized local 闭包仍受 `TYPEFACTORY-LOCALTYPE-CACHE-0001` 约束。真实
+消费点是 `ActionSetCasts::castOutput`（coreaction.cc:2532-2616）：Rust 在该
+阶段派发 `TypeOpPtrsub::get_output_token`。token 与 output High 类型相同的 case
+保持原 PTRSUB/output 不变；普通非 implied、非 resolution 的类型失配 case
+插入 CAST，并按 oracle 顺序执行
+`opSetOutput(newop,outvn) → opSetInput(newop,vn,0) →
+opSetOutput(oldop,vn) → opInsertAfter(newop,oldop)`。
+
+24-record fixture 的 selected cast graph 子投影为 MATCH：action 前两条 PTRSUB
+顺序不变；equal case 零突变；mismatch case 得
+`[ptrsub@6000,ptrsub@6001,cast@6001]`、一个新 implied 中间 Varnode、PTRSUB→mid、
+CAST(mid)→原 output 的所列 def-use/type 状态。该声明仅覆盖 fixture 列出的图
+字段，不是完整 bank/High/SeqNum/flags 状态。
+
+整体仍为 MISMATCH：Ghidra `ActionSetCasts::apply` 把变化累加到继承的 `count`
+并固定返回 0；当前 Rust 覆盖 leaf count 后返回 `CHANGE=1`。CAST opcode skip 已
+实现，但 `notPrinted` 守卫缺失；完整闭包还包括 Architecture CastStrategy（当前
+硬编码 `CastStrategyC::new(4)`）、Ghidra canonical identity 比较（当前部分使用
+`type_equal`）、block/dominance 与逐 op「所有 inputs 后 output」顺序（当前两遍）、
+非 PTRSUB token 派发、无效 PTRADD/PTRSUB 预重写、resolveUnion、
+checkPointerIssues、needs-resolution、implied/typelock、PTRSUB(0)、
+forceFacingType/inheritResolution、repeat apply 与错误路径。这些已知/未测残差继续
+绑定 `PIPE-ACTION-COUNT-0001C`，不能把 selected graph 外推为完整 MATCH。
+
+同一 fixture 的 infer_pre/infer_post 运行一遍 production
+`ActionInferTypes::apply`。unlocked SPACEBASE PTRSUB 的 base/out 均从 unknown8
+变为 int8，output STOP 与 PTRSUB 定义边字段匹配；但 canonical output identity
+为 Ghidra 1 / Rust 0。`build_localtypes` 仍是两轮 loc-tree 加一轮 op walk 的 hybrid
+projection，而非 oracle 的 VarnodeLocSet 遍历 + `Varnode::getLocalType`；Ghidra
+执行映射函数，Rust 此路径仍内联投影。PTRSUB 已从自创 spacebase pointer bootstrap
+删除，但 canonical factory identity、INT_ADD/INT_SUB bootstrap、
+SymbolEntry/getExactPiece、reader 顺序和完整状态仍属
+`ACTION-INFERTYPES-DISPATCH-0001`，所以 selected/full 函数状态均为 MISMATCH。
+
+release E2E 以 2026-08-27 pre-PTRSUB fresh baseline stdout
+`4404af6da658cc912b84070acb6354073c4649f3b266751e1be6cb81bd1bdc8e`
+对 2026-08-28 formal stdout
+`f04dee502dc0131b27b41acb5ec412c0e413515aecf3f29e0e2532b304912a73`；
+formal stdout 连续两次 2281 行/59995-byte 逐字节一致；该确定性不外推 stderr。
+全量仍为 124/124、
+76 decompiled、0 timeout/panic/worker/protocol failure，canonical compare 为
+defects=0、numbering=0、skeleton 2822→2820。该净改善只来自
+`progressbarinit` 15→13，目标字段清零现与 golden 的
+`*(undefined4 *)&bar->field_0x1c = 0;` 逐字一致。
+
+raw A/B 不是单行：`diff -U3` 为 12 grouped hunks/7 functions，`diff -U0`
+为 33 atomic hunks、42-/42+。其余六个函数的 golden skeleton 数均不变；main
+的 `"--"` literal 虽比旧 pointer arithmetic 精确，仍不等于 oracle 的
+`&DAT_001062f8`；glob_set switch cast 两版都未恢复 oracle 的 `switch(cVar3)`；
+其余多数行是 alpha-renaming。更重要的是 main/getparameter/glob_word/glob_set/
+next_url/match_url 新增六个无类型 concrete-pointer 声明。gcc pass/fail 总数仍为
+28/123 与 95 FAIL，但诊断分类从 `{other:1101, undeclared:75, syntax:73}` 变为
+`{other:1113, undeclared:79, syntax:73}`。该实质语法回归绑定
+`PTRSUB-TYPED-DECL-RESIDUAL-0001`；上游 golden identity 闭包仍由
+`ACTION-INFERTYPES-DISPATCH-0001`、`TYPE-UNKNOWN-0001` 与
+`PRINTC-SYMBOL-DECL-0001` 跟踪。glob_set 新增 outer/nested cast churn 单列
+`PTRSUB-SWITCH-CAST-RESIDUAL-0001`；main `"--"` 与 golden 的剩余差异继续由
+`TYPEOP-PTRSUB-FIELDCAST-0001` 承担。上述 raw 扩散不能作为
+production closure MATCH 或模块升级证据。
+
+## 2026-08-24：build_localtypes 的 CALL/CALLIND input 播种（TYPEOP-LOCALTYPE-DISPATCH-0001 D2）
 
 `build_localtypes` 的 `CPUI_CALL | CPUI_CALLIND` 臂在保留 output 播种之外新增
 **input 播种循环**，全部经 TypeOp local dispatch（`TypeOpCall::get_input_local` /
@@ -140,13 +190,13 @@ metatype 差异并只对上述 width projection 做字段级比较，metadata �
   BOOL_XOR）加第二读者 → E2E 351 条 `multiple descendants` WARN
   （Ghidra varnode.cc:330-338 在该状态 throw；oracle 管线中 heritage 先行
   SSA 化全部 free 读，该状态不可达）。
-- **修复**：extras 删除 `ActionSetCasts` 一行。其唯一注册留在
+- **修复**：extras 删除 `ActionSetCasts` 一项注册。其唯一注册留在
   `set_default_actions` 的 :5735 oracle 位置（action.rs，post-heritage）。
   ActionSetCasts 本体（cast_input/cast_output/apply）无任何改动。
 - **测试**：`test_build_full_pipeline_actions_nonempty` 改写——断言
   extras 不含 `setcasts`，且 `build_default_pipeline` root 恰有 1 个
   `setcasts`（oracle :5735 单注册）。
-- **E2E 证据（当前树，含 WARN-EMIT2 WIP）**：WARN 351→0；
+- **E2E 证据（2026-08-17 当时快照，含 WARN-EMIT2 WIP）**：WARN 351→0；
   75 decompiled/0 panic/1 timeout 保持；defects=0；Matched 123 不降；
   skeleton 3147→3155；numbering 0→3（glob_url 嵌套 scope 双局部声明块，
   显式登记移交 printc/varmap 域，随其修复归零；不得在 coreaction 侧加
@@ -232,19 +282,13 @@ Address-space-bearing parameter storage → resolved model ownership →
 `ActionNormalizeSetup` 平铺进默认 decompile 路径；完整 Action group 机制仍归
 `PIPE-0001`。
 
-**状态**: 已核对（当前有效，2026-07-27 ActionSetCasts 指针适配接入 apply() — PTRSUB/PTRADD slot0 CAST 插入 + castOutput 接入 + CHANGE 返回修正）
+**状态**: 🔧 L2；2026-07-27 记录已由上方 2026-08-27 oracle fixture
+纠偏。`ActionSetCasts` 仅 ordinary PTRSUB output-token no-op/CAST 的 selected
+graph 子投影为 MATCH；`ActionInferTypes` canary 仅 shape/STOP 子投影 MATCH，
+canonical output identity MISMATCH；完整 castOutput、apply、buildLocaltypes 三函数
+均为 MISMATCH，未覆盖分支另记 UNTESTED。
 **源代码路径**: `src/coreaction.rs`
 **2026-07-16**: 测试构造的 BlockWhileDo 加 `overflow_syntax: false` 字段（配合 printc P7-overflow_syntax，对齐 Ghidra hasOverflowSyntax block.hh:692）。
-
-### 2026-07-27：ActionSetCasts 指针适配接入 apply()（解锁 CPUI_CAST 在 PTRSUB/PTRADD 上产生）
-
-- **背景**：此前 `ActionSetCasts::apply` 只走 integer binary/unary input-cast 路径（`cast_input`），`cast_output` 方法已实现但**从未被 apply 调用**，PTRSUB/PTRADD 的 pointer-fit 检查完全缺失。结果：`CPUI_CAST` op 在 curl 中从不产生，printc 的 `(type)x` dispatch（包括 2026-07-27 新增的 RPN PTRSUB/CAST 路径）永不触发。
-- **修复（cast_input_ptr，coreaction.cc:2655-2720 PTRSUB/PTRADD arm）**：新增 `cast_input_ptr` 方法 + `ptr_input_reqtype` 辅助——对 PTRSUB `c = PTRSUB(a, off)` / PTRADD `c = PTRADD(a, idx, sz)`，slot 0（指针操作数）若 high-type 与 op 期望的指针类型（取自 output pointer 类型）不匹配，按 `castStandard(reqtype, curtype, care_uint_int=true, care_ptr_uint=true)` 判定是否需要 cast，需要则在 slot 0 前插入 `out = CAST(a)`（out implied，printc 内联为 `(ptype *)a`）。常量输入跳过（pointer-cast 不适用于常量）。
-- **修复（castOutput 接入 + 重写）**：apply 现在第二轮遍历对每个非 CAST op 调用 `cast_output`。`cast_output` 的 op 重写改用 `fd.op_set_output` / `fd.op_set_input` / `fd.op_insert_after`（替代旧的手动 rewire），保证 def-link/WRITTEN flag/descend xref 一致（对齐 Ghidra `Funcdata::opSetOutput/opSetInput/opInsertAfter`）。
-- **修复（output_metatype 排除指针产生 op）**：`output_metatype` 新增 PTRSUB/PTRADD/LOAD/CALL/CALLIND/COPY/INDIRECT/MULTIEQUAL/CAST → None 分支。这些 op 的 output token 是指针类型本身（由类型推断设置），强制 base-int token 会错误地把 `(long *)out` cast 成 `(long)out`。
-- **修复（apply 返回值 bug）**：apply 此前无论 count 是否 >0 都返回 `NO_CHANGE`。现按 Ghidra 行为：count>0 返回 `CHANGE`，否则 `NO_CHANGE`。
-- **测试**：新增 5 个单元测试（empty fd NO_CHANGE / PTRSUB mismatched → CAST + CHANGE / PTRSUB matching → NO_CHANGE / PTRADD mismatched → CAST / name 断言）。全部通过，全套 1292 单元测试无回归。
-- **限制（诚实声明）**：`ptr_input_reqtype` 用 output 指针类型作为 slot-0 reqtype（最常见情形：PTRSUB input/output 共享指针表示）。Ghidra 完整版用 struct-field resolution（`TypeOpSub::inputTypeLocal` 返回 pointer to outer struct），Rugra 的 Datatype 暂无该机制，待 `findTruncation`/struct 字段解析接入后升级。`resolveUnion`/`checkPointerIssues` 仍延后。
 
 ## 模块说明 (Module Doc)
 
@@ -1024,7 +1068,7 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 ### 2026-07-01（管线改造）：Action trait apply &self→&mut self + ActionDeadCode local mut
 管线架构改造的连锁签名修改：所有 Action 的 apply 签名从 &self 改为 &mut self（支持 perform 状态机）。
 
-### 2026-07-01（续 2）：ActionInferTypes 完整移植 + build_full_pipeline_actions
+### 2026-07-01（续 2，历史部分实现；后续复核已推翻完整声明）：ActionInferTypes + build_full_pipeline_actions
 ActionInferTypes::apply 移植 coreaction.cc:5374-5416：
 - build_local_types（coreaction.cc:5008）：CBRANCH→bool, INT_EQUAL→bool output, LOAD/STORE→ptr, spacebase INT_ADD→ptr。
 - propagate_type_edge（coreaction.cc:5074）：typelock+nzm guard + typeOrder。
@@ -1797,7 +1841,8 @@ continue，coreaction.cc:5018）以 `merge_min_type_order` 播种
   `*bar=0` → golden 5 行逐字段清零）。
 - **最小值合并**：`merge_min_type_order` 保持 varnode.cc:926-931 的
   `0 > newct->typeOrder(*ct)` 严格小于才替换——unknown 播种永不逐出更
-  具体的读者播种（CALL 锁定参数、downChain 字段指针）；wip 2647faac 的
+  具体的读者播种（例如 CALL 锁定参数）；PTRSUB field token 不属于 local
+  seed，而由后续 `ActionSetCasts::castOutput` 消费。wip 2647faac 的
   STORE 地址 `pointer-to-pointee` 单向 or_insert 播种（Ghidra
   buildLocaltypes 无此 op 中心播种）一并移除。
 - **FILE*+8 不误拆**：字段指针 STORE 的 outType 经 `getValueDatatype` 的

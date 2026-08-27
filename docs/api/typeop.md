@@ -3,13 +3,63 @@
 **状态**: 🔧 L2（仅逐函数核对，禁止据此宣称模块 L3）
 **源代码路径**: `src/typeop.rs`
 
-## 2026-08-27：PTRADD/PTRSUB 专用类型传播（R-TYPEOPFIX-R2）
+## 2026-08-27：PTRSUB output-token 阶段纠偏（TYPEOP-PTRSUB-FIELDCAST-0001）
 
-针对独立复核 REJECT，补齐三处 Ghidra 12.0.4 语义：PTRSUB `getInputCast` 在 array 归一化后沿 TypeFactory typedef 链逐层解包（`typeop.cc:2337-2343`）；PTRADD 非 slot-0 输入回落到 TypeOp 基类 `getInputCast`；PTRSUB output token 在 offset=0 但 `downChain` 无结果时构造 `getBase(1, TYPE_UNKNOWN)` 指针，而非返回 `None`；`typeop::tests::ptrsub_gap_output_token_is_unknown_pointer` 固定 ProgressData offset 28 synthetic gap 的 unknown-pointer fallback、4-byte STORE 前置条件、默认 size/alignment 初始化与 INT local output。
+锁定 oracle `TypeOpPtrsub::getOutputLocal`（typeop.cc:2308-2312）请求
+Architecture-owned TypeFactory 的 `getBase(output-size, TYPE_INT)`；本 fixture 的
+8 字节输出得到 canonical int8。`size > max_basetype_size` 时 Ghidra 会转成
+unknown1 数组，Rust 的完整 large-base caller 闭包仍绑定
+`TYPEFACTORY-LOCALTYPE-CACHE-0001`。字段敏感类型只由
+`getOutputToken`（typeop.cc:2349-2364）产生，并且只在
+`ActionSetCasts::castOutput`（coreaction.cc:2541）消费，不能进入
+`Varnode::getLocalType` 或 `ActionInferTypes::buildLocaltypes`。
 
-四类决定性语义：引用/输出参数为共享 canonical `TypeFactory`；遍历顺序为 downChain 的 do-while 链并保留 offset 0/非零分支；计数/累加器为无额外计数器、传播复用 `propagateAddIn2Out` 的共享 parent/parentOff；排序键不适用（类型链顺序决定结果）。`ActionSetCasts` 的 block/op 单轮遍历、union/checkPointerIssues 与 castOutput 仍归 `coreaction.rs` 租约。
+`get_output_token` 当前窄实现遵守以下顺序：从 input-0 的 High read-facing
+类型取 pointer；以 unsigned raw offset 调 `AddrSpace::address_to_byte`，按
+`uintb` 模 2^64 缩放后转为 `i64`；只调用一次
+`down_chain_virtual(..., allow_array_wrap=false)`；检查该调用原地改写后的
+residual offset。仅当 residual 为 0 且返回类型非空时返回 descended token，
+否则构造 `size=op output storage size`、`wordsize=input-0 pointer address-unit
+wordsize` 的 canonical `unknown1 *`。fixture 已覆盖 output storage=8、pointer
+storage=8、address-unit wordsize=1/2；未覆盖 output storage≠8 或 pointer
+storage≠8，不能把 storage size 与 address-unit wordsize 混为同一宽度。非 pointer 输入
+委托 `TypeOp::getOutputToken`（typeop.cc:282-286），后者再返回
+`getOutputLocal`。此前循环调用 downChain、按原始 offset 判定以及让 local
+派发表消费 token 的实现方向均已撤销。
 
-状态：PTRADD/PTRSUB typeop 域 FIXED；R2 typeop 测试 14/14 通过。生产 `varnode.rs::op_output_type_local` 对 PTRSUB 已接入 `TypeOpPtrsub::get_output_token`：offset=0 的已知字段返回字段类型，synthetic gap 返回 unknown-pointer，非指针输入按 oracle `TypeOp::getOutputToken` 回落 local INT。
+双侧 fixture `tests/oracle/ptrsub_output_token_1204.*` 固定 24 条记录：1 条
+schema、5 条 unsigned scale、14 条 direct token/local、1 条 action_pre 与 1 条
+action_post，以及 infer_pre/infer_post 各 1 条。matched direct-token 子投影中，
+exact0/exact8/exact24、单次
+下降后的 nested/non-field fallback、边界/负编码、wordsize=2 wrap、scalar0 与
+nonpointer 的 token shape、token/pointee/repeat identity，以及所有 direct case
+经 PcodeOp/local 派发取得的 canonical int8 identity/core 均为 MATCH；fixture 还
+强制直接 TypeOp local 与派发结果保持同一 identity。ordinary PTRSUB castOutput 的
+所列 def-use/type graph 字段也为 MATCH；infer canary 的 base/out int8 shape、STOP
+和定义边字段同样匹配。fixture 整体仍为 MISMATCH：line 22 raw apply return 为
+Ghidra 0 / Rust 1，line 24 infer output canonical identity 为 Ghidra 1 / Rust 0。
+
+该证据不覆盖 High/local read-facing 分歧、PointerRel、array/enum/
+PartialStruct/Spacebase、alternate-pointer truncate、冷 TypeFactory 插入副作用、
+needs-resolution 或错误路径；oversized local/base fallback 已知受
+`TYPEFACTORY-LOCALTYPE-CACHE-0001` 影响而 MISMATCH，其余列举分支仍 UNTESTED，
+所以完整 `getOutputToken` 与 typeop 模块保持 MISMATCH/L2。原 R2 的
+`getInputCast` typedef 解包历史不属于本 24-record fixture。
+
+production curl release A/B 另行保持 MISMATCH：2026-08-28 formal stdout 两次
+byte-identical（只证明 stdout），
+sha=`f04dee502dc0131b27b41acb5ec412c0e413515aecf3f29e0e2532b304912a73`，
+canonical skeleton 2822→2820、defects/numbering 0/0；raw `diff -U3` 为 12
+grouped hunks，`diff -U0` 为 33 atomic hunks、42-/42+，覆盖 7 个
+函数而非单行。除 progressbarinit 的 4-byte 字段 cast 与 main literal 精确化外，
+六个 concrete-pointer local 发射成无类型声明，glob_set switch cast 方向也未证明；
+分别绑定 `PTRSUB-TYPED-DECL-RESIDUAL-0001` 与
+`PTRSUB-SWITCH-CAST-RESIDUAL-0001`；main `"--"` 仍不同于 golden
+`&DAT_001062f8`，该差异继续由本节 `TYPEOP-PTRSUB-FIELDCAST-0001` 承担。
+上游完整类型/符号闭包仍由 `TYPE-UNKNOWN-0001`、`PRINTC-SYMBOL-DECL-0001` 与
+`ACTION-INFERTYPES-DISPATCH-0001` 跟踪。它们不是 direct TypeOp 子投影的 MATCH
+证据，也不能据 skeleton 净减 2
+外推 production 闭包对齐。
 
 ## 2026-08-26：`TypeOpStore::get_input_local` 自创 override 移除（TRI2-STORESPLIT-WHOLESTRUCT-0001）
 

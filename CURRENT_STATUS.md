@@ -1,8 +1,37 @@
 # Rugra 当前状态报告
 
-**日期**: 2026-08-21（HEAD `5dc86ba` 隔离核实）
+**日期**: 2026-08-28（PTRSUB formal release 快照）
 **版本**: 0.1.0
-**状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线运转中，本 wave 已落地 23 个原子提交**
+**状态**: 🟡 **核心库持续开发中；锁定 oracle 逐函数差分流水线运转中；全局完成度未证明**
+
+## 2026-08-28 PTRSUB 正式输出快照（当前事实源）
+
+PTRSUB formal working-tree artifact 的 release curl 正式门禁共处理 124/124 个函数，76 个成功反编译，
+0 empty/timeout/panic/worker/protocol failure。两次独立 stdout 与当前
+`result/curl_cur.c` 三份逐字节一致：SHA-256
+`f04dee502dc0131b27b41acb5ec412c0e413515aecf3f29e0e2532b304912a73`，
+59995 bytes、2281 行。确定性结论只覆盖 stdout；两次 stderr byte-different（含记录
+顺序差异），故不宣称 stderr 一致或全运行确定性。
+
+锁定 Ghidra 12.0.4 golden 的正式 compare 为 skeleton=2820、defects=0、numbering=0；
+`progressbarinit` 函数级 skeleton=13，字段清零已恢复为
+`*(undefined4 *)&bar->field_0x1c = 0;`。相对 2026-08-27 pre-PTRSUB baseline
+（stdout SHA-256 `4404af6da658cc912b84070acb6354073c4649f3b266751e1be6cb81bd1bdc8e`，
+skeleton=2822、progressbarinit=15），`diff -U3` 为 12 grouped hunks/7 functions；
+`diff -U0` 为 33 atomic hunks、42-/42+。只有 progressbarinit 的 golden skeleton
+收敛；其余六个函数的函数级 skeleton 不变，raw 类型/命名 token 有扩散。
+
+gcc 审计仍为 28/123 OK、95 FAIL，诊断类别由 baseline
+`{other:1101, undeclared:75, syntax:73}` 变为
+`{other:1113, undeclared:79, syntax:73}`。main/getparameter/glob_word/glob_set/
+next_url/match_url 出现六个无类型 concrete-pointer 声明，已登记
+`PTRSUB-TYPED-DECL-RESIDUAL-0001`；`glob_set` 新增 cast churn 另登记
+`PTRSUB-SWITCH-CAST-RESIDUAL-0001`。fixture overall 仍为 MISMATCH，production
+closure 不得据 skeleton 净减 2 升级。完整残差与依赖见 `docs/TODO_BOARD.md` 顶部。
+
+`cargo test --lib -- --test-threads=1` 为 1618 passed / 17 failed / 5 ignored；
+full suite 仍 FAIL，但 17 个失败名与 2026-08-27 归档基线完全相同，本候选新增失败=0。
+首个为既有 funcdata CONTINUE 断言，其后 16 个为锁中毒后的 `PoisonError` 级联。
 
 ## 关键指标增量（2026-08-25 第二批，master `ef26eb24`，89 项集成）
 
@@ -52,14 +81,14 @@
 
 ### 2026-08-24 严格函数字节审计
 
-对当前 `result/curl_cur.c`（SHA-256 `41aec0b7ddd8cdaddb0571f88320d811ee9530d447ace631e0d96afac61a812e`）与锁定 12.0.4 golden（SHA-256 `aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f`）按地址配对，严格比较从函数签名首字节到词法匹配闭合 `}` 的原始字节。函数内部的空格、空行与换行全部保留；函数外 header、warning、分隔空行和 summary 不计入函数体：
+对 2026-08-24 当时捕获的 `result/curl_cur.c`（SHA-256 `41aec0b7ddd8cdaddb0571f88320d811ee9530d447ace631e0d96afac61a812e`）与锁定 12.0.4 golden（SHA-256 `aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f`）按地址配对，严格比较从函数签名首字节到词法匹配闭合 `}` 的原始字节。函数内部的空格、空行与换行全部保留；函数外 header、warning、分隔空行和 summary 不计入函数体：
 
-- 当前输出 123 个函数块，golden 124 个；可比较 123 个，全部按 `Ghidra地址 - 0x100000` 命中，golden 的 `main` 在当前输出无对应成功函数体。
+- 该快照输出 123 个函数块，golden 124 个；可比较 123 个，全部按 `Ghidra地址 - 0x100000` 命中，golden 的 `main` 在该快照输出无对应成功函数体。
 - 严格函数体逐字节相同为 **52/123**：48/48 个 synthetic/import bad-instruction 桩，以及 **4/75 个真实内部函数**。
 - 四个真实内部函数为 `GetStr`、`main_free`、`__libc_csu_fini`、`_fini`；若以 golden 的全部内部函数为分母，则是 4/76，缺失的 `main` 记 `MISSING`。
 - `tools/audit_syntax.py` 的独立函数解析器复现相同的 52 项结果。旧的 47/123、内部 0/75 是错误的分段口径：它把函数外空行/warning 混入四个内部函数，并让最后一个外部桩吞入 summary。
 
-因此当前对“有多少真实函数体逐字节完全一致”的答案是 **4**。这仍只是最终 C 文本证据，不自动把对应全算法调用闭包提升为 B2 `MATCH` 或模块 L3。
+因此在该 2026-08-24 快照中，对“有多少真实函数体逐字节完全一致”的答案是 **4**。这仍只是当时的最终 C 文本证据，不自动把对应全算法调用闭包提升为 B2 `MATCH` 或模块 L3。
 
 ### 2026-08-20 当前 wave 落地
 

@@ -9,7 +9,8 @@
 >
 > 📌 **2026-07-01 更新**：并发移植 subflow.cc（SubvariableFlow + 8 Rule）、double.cc（SplitVarnode + 4 Rule）、ruleaction.cc 补 21 Rule + 修 RuleDivOpt。oppool1/cleanup 池大批补缺 Rule 已接入主管线。~~832/832 测试，curl 24/24 无回归~~（**2026-07-02 19:29 校对注**：测试数现 960/960，curl 当前 `switch` 已 18→0、`uVar` 已 0，但仍残留 2 个 `if (1) goto ;` 语法错误 + StackX/param 占位名；详见 AGENTS.md「当前反编译质量（2026-07-02 19:29）」节）。
 
-**最后核实**: 2026-08-16（session 收尾快照：以下 L1/L2/L3 为模块级算法对齐状态；本 session 89 提交后 heritage 四链与 typed-decl 链已 APPROVE 收官，逐模块行内证据已随各 commit 更新；输出质量数据见 CURRENT_STATUS.md）（逐行核对 Rugra 源码 vs Ghidra 源码）。**2026-07-02 19:29 校对注**：此日期后已 **204 commit**（含 `docs/archive/dated/QUALITY_GAP_2026-07-02.md` 质量诊断 + `28f1cfe` 全量函数级审计），本文件中模块级 L1/L2/L3 逐行状态仍反映 06-27 核实结果，**输出质量/测试数等可实测项已过时**——以 AGENTS.md「当前反编译质量（2026-07-02 19:29）」节及下方统计汇总表「2026-07-02 19:29 校对」注为准。模块级状态需重新逐行核实 Ghidra 源码后方可更新（铁律 10：禁止形式上改、实质没验证）。
+**最后核实（模块级全局快照）**: 2026-08-16（session 收尾快照：以下 L1/L2/L3 为模块级算法对齐状态；本 session 89 提交后 heritage 四链与 typed-decl 链已 APPROVE 收官，逐模块行内证据已随各 commit 更新；输出质量数据见 CURRENT_STATUS.md）（逐行核对 Rugra 源码 vs Ghidra 源码）。**2026-08-27 PTRSUB 窄证据补记**：本轮只重核 `space`/`typeop`/`varnode`/`coreaction`/`typefactory` 对应投影并保持各模块 L2；Varnode exact mapped method 在新增 infer canary 的 Rust 侧未调用，仍为 UNTESTED，production closure 为 MISMATCH，不代表路线图全局重验。**历史校对口径**：2026-07-02 的输出质量/测试数字以及本文件旧统计表均只作历史记录；当前可实测输出事实以 `CURRENT_STATUS.md` 顶部 2026-08-28 正式快照为准。模块级状态仍须重新逐行核实 Ghidra 源码后方可更新，不能由输出净变化推升。
+**2026-08-28 PTRSUB production 差分补记（不改变 L 级别）**：release curl formal stdout 两次 byte-identical（sha=`f04dee502d…`；只证明 stdout），124/124、defects=0、numbering=0、skeleton 2822→2820；raw A/B 的 `diff -U3` 为 12 grouped hunks，`diff -U0` 为 33 atomic hunks、42-/42+，跨 7 functions。progressbarinit 字段 cast 的 skeleton 15→13；main 从 pointer arithmetic 精确化为 `"--"`，但仍不等于 golden `&DAT_001062f8`，该差异继续绑定 `TYPEOP-PTRSUB-FIELDCAST-0001`；六个函数新增无类型 concrete-pointer declaration 绑定 `PTRSUB-TYPED-DECL-RESIDUAL-0001`，glob_set 新增 outer/nested cast churn 绑定 `PTRSUB-SWITCH-CAST-RESIDUAL-0001`。其完整依赖仍含 `ACTION-INFERTYPES-DISPATCH-0001`、`TYPE-UNKNOWN-0001`、`PRINTC-SYMBOL-DECL-0001`、`RULE-PTRARITH-ADDTREE-0001`、`JUMPTABLE-TABLEAPI-0001` 与 `PRINTC-SWITCH-EMIT-0001`。故 production closure 明确仍为 MISMATCH，不能据净减 2 升级模块。
 **目标**: 完整实现 Ghidra 反编译器的所有算法，不使用简化版。
 
 **2026-08-25 wave 补记（不改变 L 级别，仅登记已集成证据；逐项复核/差分证据见 TODO_BOARD 对应行）**：
@@ -17,7 +18,7 @@
 - `coreaction.rs`：ActionMarkExplicit 全量 + MarkImplied count 桥（复核 APPROVE，`cac8f60a`）；ActionPrototypeTypes Step 3 换 locked_output_storage 实现（`c95b8459`）；NAME_LOCKED 前端边界（`ef26eb24`，debugproto.rs 侧，coreaction 零改动）。
 - `printc.rs`：emitBlockIf goto 臂（复核 APPROVE，`5aac3203`）+ flat opCbranch 全臂/emitBlockBasic 尾 goto-label（`c23d4f52`）+ is_block_body_empty 三道发射门禁镜像（`e0af9d21`）+ print 侧 extern 发射删除（`9a9da74a`）。
 - `varmap.rs`/`arch.rs`：寄存器名 SLEIGH 1440 项目录移植返修中（rawquar，REJECT→返修）；overlapLoc head-flags 语义钉死+双侧 fixture（复核 APPROVE 含 mutation 实证，`46a55b1b`）。
-- 输出质量收敛数据见 CURRENT_STATUS.md「2026-08-25 第二批」节。
+- 最新正式输出事实见 CURRENT_STATUS.md 顶部「2026-08-28 PTRSUB 正式输出快照」；2026-08-25 各节仅作历史 wave 记录。
 
 ## 图例
 
@@ -82,12 +83,12 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
 | 1 | `address.cc` | `address.rs` | 🔧 L2 | **2026-08-23 锁定复审**：phase-1 bridge 仍保留两套地址模型。legacy `Address/RangeList` 被 Database、Flow、Block、Funcdata 主路径消费，却会让 `Address::new(vaddr)` 保持 null-space、Range 合并/排序丢空间、SeqNum clone/order 与 Ghidra 分离语义不等价；较完整的 `SpaceAddress/SpaceRangeList` 尚未进入这些 consumer。`PcodeOpBank::create/target`、Flow visited/bounds、Block cover 因此一起保持 `MISMATCH/UNTESTED`，按 `ADDRESS-PHASE2-CLOSURE-0001` 从完整 Address 域向上迁移。 | `address.cc`, `address.hh` |
-| 2 | `varnode.cc` | `varnode.rs` | 🔧 L2 | **2026-08-13 `VARNODE-INIT-0001`**：锁定 12.0.4 direct runner 为 `PARTIAL_MATCH`，constructor flags、unique/create counter、covered Loc/Def ordering、canonical xref/重复 slot 重接、checked setInput/setDef/makeFree/destroy，以及 synthetic LE `combineInputVarnodes` 调用闭包通过独立复核。**2026-08-15 `COVER-REBUILD-SELFLOCK-0001`**：`update_cover_locked` root-identity 重建（持锁窗口快照、无写锁重入）+ `self_ref` bank 分配 + input sentinel uindex 修正经 cover_rebuild_1204 fixture 8/8 MATCH；「Cover semantic endpoint」残差缩小为 MULTIEQUAL-tip/INDIRECT 目标 order 两项。仍有 Architecture TypeFactory、IOP/FSPEC、动态 Address/SeqNum、nullable slot、BE/ProtoModel、副本外部 Arc/public key mutation、High/query 等 `MISMATCH/UNTESTED`；继续绑定 `VARNODE-0001`/`ADDRESS-0001`/`SEQNUM-0001`/`OPBANK-0001`，模块不升 L3。 | `varnode.cc` |
+| 2 | `varnode.cc` | `varnode.rs` | 🔧 L2 | **2026-08-13 `VARNODE-INIT-0001`**：锁定 12.0.4 direct runner 为 `PARTIAL_MATCH`，constructor flags、unique/create counter、covered Loc/Def ordering、canonical xref/重复 slot 重接、checked setInput/setDef/makeFree/destroy，以及 synthetic LE `combineInputVarnodes` 调用闭包通过独立复核。**2026-08-15 `COVER-REBUILD-SELFLOCK-0001`**：`update_cover_locked` root-identity 重建（持锁窗口快照、无写锁重入）+ `self_ref` bank 分配 + input sentinel uindex 修正经 cover_rebuild_1204 fixture 8/8 MATCH；「Cover semantic endpoint」残差缩小为 MULTIEQUAL-tip/INDIRECT 目标 order 两项。**2026-08-27 PTRSUB local**：14-case PcodeOp/direct 8-byte local identity 子投影 MATCH；infer canary 执行 Ghidra `getLocalType`，但 Rust exact mapped method 未调用且 downstream canonical output identity MISMATCH。仍有 Architecture TypeFactory、IOP/FSPEC、动态 Address/SeqNum、nullable slot、BE/ProtoModel、副本外部 Arc/public key mutation、High/query 等 `MISMATCH/UNTESTED`；继续绑定 `VARNODE-0001`/`VARNODE-LOCALTYPE-RESOLUTION-0001`/`ADDRESS-0001`/`SEQNUM-0001`/`OPBANK-0001`，模块不升 L3。 | `varnode.cc` |
 | 3 | `op.cc` | `op.rs` | 🔧 **L2（2026-08-23 撤销旧 L3）** | 锁定 op/funcdata_op 全函数复审确认：`PcodeOpBank::create` 未建立 NULL slots/DEAD/deadlist，optree 与 list identity/lifecycle、deadandgone/IOP、target/fallthru/range、SeqNum copy/equality/order、special_prop、u32 CSE、collapse/execute out-state 与异常均不等价；raw injection 还绕过 changeOpcode/专用链。当前 op_insert overall=MISMATCH，须在 Flow 租约释放后执行 `OPBANK-LIFECYCLE-0001`。 | `op.cc`, `op.hh`, `funcdata_op.cc` |
 | 4 | `pcoderaw.cc` | `pcoderaw.rs` | ✅ L3 | 完整对齐 | `pcoderaw.cc` |
 | 5 | `opcodes.cc` | `opcodes.rs` | ✅ L3 | 自动生成，完整 | `opcodes.cc` |
-| 6 | `space.cc` | `space.rs` | 🔧 L2 | 固定枚举无法表达架构动态 space index/type/name/address-size/wordsize/endianness/flags，并使 Address/Range/Varnode 跨空间键失真 | `space.cc` |
-| 7 | `typeop.cc` | `typeop.rs` | 🔧 L2 | **2026-08-23 local-type 复审**：基类、Unary/Binary/Func、CBRANCH、CALL/CALLIND/CALLOTHER/RETURN、shift、INDIRECT、PTRADD/PTRSUB、CPOOLREF、INSERT/EXTRACT 的 `get*Local` 大片缺失或返回当前 Varnode/peer type；oracle 全部经 Architecture-owned TypeFactory 返回 canonical alias，并消费 callspec/space/userop/cpool 状态。必须先闭合 TypeFactory structural identity 与 FuncProto codec，再执行 `TYPEOP-LOCALTYPE-DISPATCH-0001`。**2026-08-26 STORE local 侧**：自创 `TypeOpStore::get_input_local` slot-2 pointee 回查已删（oracle typeop.hh:279 注释行=无 override，基默认 typeop.cc:271），`TYPEOP-LOCALTYPE-DISPATCH-0001` 缺口清单少一项。 | `typeop.cc`, `typeop.hh` |
+| 6 | `space.cc` | `space.rs` | 🔧 L2 | 固定枚举无法表达架构动态 space index/type/name/address-size/wordsize/endianness/flags，并使 Address/Range/Varnode 跨空间键失真。**2026-08-27**：unsigned `addressToByte` 的 normal/wrap/max/zero-wordsize 五 case 投影 MATCH；动态 space/address 调用闭包不变，模块仍 L2。 | `space.cc` |
+| 7 | `typeop.cc` | `typeop.rs` | 🔧 L2 | **2026-08-23 local-type 复审**：基类、Unary/Binary/Func、CBRANCH、CALL/CALLIND/CALLOTHER/RETURN、shift、INDIRECT、PTRADD/PTRSUB、CPOOLREF、INSERT/EXTRACT 的 `get*Local` 大片缺失或返回当前 Varnode/peer type；oracle 全部经 Architecture-owned TypeFactory 返回 canonical alias，并消费 callspec/space/userop/cpool 状态。必须先闭合 TypeFactory structural identity 与 FuncProto codec，再执行 `TYPEOP-LOCALTYPE-DISPATCH-0001`。**2026-08-26 STORE local 侧**：自创 `TypeOpStore::get_input_local` slot-2 pointee 回查已删（oracle typeop.hh:279 注释行=无 override，基默认 typeop.cc:271），`TYPEOP-LOCALTYPE-DISPATCH-0001` 缺口清单少一项。**2026-08-27 PTRSUB**：14-case direct token/local identity 子投影 MATCH；oversized local/base fallback 已知受 `TYPEFACTORY-LOCALTYPE-CACHE-0001` 影响而 MISMATCH，read-facing/PointerRel/array/enum/Spacebase/error 等其余分支仍 UNTESTED。 | `typeop.cc`, `typeop.hh` |
 | 8 | `cover.cc` | `cover.rs` | 🔧 **L2（2026-08-15 `COVER-REBUILD-SELFLOCK-0001` 核心闭合）** | **`COVER-REBUILD-SELFLOCK-0001`**：authoritative runner `MATCH covered_projection=8/8 overall=PARTIAL_MATCH`（stdout SHA=`00dba3d1…`，pinned base=235b91b+overlay）。`Cover::rebuild` worklist（root+implied outputs、addRefPoint 恒以 root 身份）、`add_ref_point_full` 的 `Arc::ptr_eq` MULTIEQUAL 槽匹配、`add_ref_recurse` setAll/尾填充、`update_cover_locked` 无写锁重入、input sentinel uindex 域 0、coverdirty 生命周期（含 no-cover-object 分支）均由 8 case fixture 行为门禁覆盖。**残差**：order-only CoverBlock 无法判别 addRefPoint 旧 stop 的 MULTIEQUAL-tip（保守放行）；INDIRECT `getOpFromConst` 目标 order 回退自身；PcodeOpSet/HighIntersectTest、回绕 cover 判空、生产 `FlowBlock::index` RPO 赋值（`BLOCK-INDEX-ASSIGN-0001`）仍缺。模块保持 L2 | `cover.cc` |
 | 9 | `block.cc` | `block.rs` | 🔧 L2 | edge flag 数值冲突，双向 reverse-index/label 不同步，parent/copy/RPO/loop/dominator/marshal 契约均有反例；CBRANCH 边顺序与 oracle 相反 | `block.cc` |
 | 10 | `rangeutil.cc` | `rangeutil.rs` (990行) | ✅ **L3（2026-06-28 完整对齐）** | **全部 CircleRange 方法覆盖**：构造/查询（empty/full/single/new/boolean/is_empty/is_full/is_single/get_*/contains_val）、集合运算（intersect/union/invert/complement/normalize）、范围分析（contains_range/widen/get_max_info/set_stride/pull_back_unary/binary/push_forward_unary/binary/trinary/translate_to_op/convert_to_boolean/set_nz_mask）、辅助函数（bit_transitions/sign_extend_size）。26 单元测试 | `rangeutil.cc` |
@@ -123,7 +124,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
-| 22 | `coreaction.cc` (5741行) | `coreaction.rs` | 🔧 **L2（2026-08-24 LOAD/STORE 宽度门已集成）** | main `92daed3` 将 `ActionInferTypes` 的 LOAD/STORE pointer→value 传播改为使用真实访问宽度：32B pointee 对16/4B访问拒绝、32B exact保持canonical identity；锁定12.0.4双侧selected projection MATCH、独立复核APPROVE。immutable curl A/B使 progressbarinit skeleton 22→20、my_fwrite 44→16、hugehelp零漂移。整体仍 `MISMATCH`：CALL local-type dispatch、DFS/reset/localcount、value→pointer、PTRSUB downChain/PointerRel、getLocalType/STOP消费、异常与Architecture完整状态均未闭合；不得据窄宽度fixture提升L3。既有 ActionSpacebase、结构清理与 MultiCse/ShadowVar 进展保留。**2026-08-26 读者派发**：`build_localtypes` LOAD/STORE 臂以 `merge_min_type_order` 播种 `getBase(ownSize,UNKNOWN)`（varnode.cc:900 descendant typeOrder-最小值投影，typeop.hh:269/279 无 override），>10 字节产 unknown1[N]（type.cc:3652）不再被 8 字节 long 饱和——RuleSplitStore 整结构常量 STORE 拆分（progressbarinit 5 行字段清零）落地，E2E defects=0（TRI2-STORESPLIT-WHOLESTRUCT-0001，双侧 fixture）；仍不改变整体 MISMATCH 判定。 | `coreaction.cc`, `coreaction.hh` |
+| 22 | `coreaction.cc` (5741行) | `coreaction.rs` | 🔧 **L2（2026-08-24 LOAD/STORE 宽度门已集成）** | main `92daed3` 将 `ActionInferTypes` 的 LOAD/STORE pointer→value 传播改为使用真实访问宽度：32B pointee 对16/4B访问拒绝、32B exact保持canonical identity；锁定12.0.4双侧selected projection MATCH、独立复核APPROVE。immutable curl A/B使 progressbarinit skeleton 22→20、my_fwrite 44→16、hugehelp零漂移。整体仍 `MISMATCH`：CALL local-type dispatch、DFS/reset/localcount、value→pointer、完整 PTRSUB downChain/PointerRel、getLocalType/STOP消费、异常与Architecture完整状态均未闭合；不得据窄宽度fixture提升L3。既有 ActionSpacebase、结构清理与 MultiCse/ShadowVar 进展保留。**2026-08-26 读者派发**：`build_localtypes` LOAD/STORE 臂以 `merge_min_type_order` 播种 `getBase(ownSize,UNKNOWN)`（varnode.cc:900 descendant typeOrder-最小值投影，typeop.hh:269/279 无 override），>10 字节产 unknown1[N]（type.cc:3652）不再被 8 字节 long 饱和——RuleSplitStore 整结构常量 STORE 拆分（progressbarinit 5 行字段清零）落地，E2E defects=0（TRI2-STORESPLIT-WHOLESTRUCT-0001，双侧 fixture）；仍不改变整体 MISMATCH 判定。**2026-08-27 PTRSUB evidence**：ordinary castOutput no-op/CAST 与 infer shape/STOP 子投影 MATCH；fresh-zero count 为 1/1 MATCH，但 raw apply return 为 Ghidra 0 / Rust 1，infer canonical output identity 为 Ghidra 1 / Rust 0；继承/重复 count、hybrid buildLocaltypes traversal、union/implied/PTRSUB0/pointer checks 仍 MISMATCH/UNTESTED。 | `coreaction.cc`, `coreaction.hh` |
 | 23 | `ruleaction.cc` | `ruleaction.rs` | 🔧 L2 | **2026-08-23 136-class 复审**：默认 decompile 三池成员/顺序现为 134/5/15，无整条活跃 Rule 漏注册；旧“98/~11 missing”已失效。仍有 5 个 opcode 集差异，并发现可见错改：IdentityEl 多注册 INT_AND 会把 `x&0` 改成 `x`；BooleanDedup 用 `4-bi` 选错边且漏 complement；SignMod2nOpt2 把 `(~c)+1` 写成 `~(c+1)`并跳 PHI；ConditionalMove 可返回0却已突变图；PieceStructure 丢 space/partial-root。另112个 raw diagnostic name 只在删下划线后相同。须在 ActionPool/OpBank 地基后由单一 ruleaction writer 串行修复。 | `ruleaction.cc`, `ruleaction.hh` |
 | 24 | `constseq.cc` | `constseq.rs` | 🔧 L2 | 部分检测/Rule 已接线，但 wordsize 转换被恒等化、space-id 不是编码指针、previousOp 以地址/顺序扫描近似；String/Heap transform 与 CALLOTHER consumer 未闭合且无 12.0.4 同输入 fixture | `constseq.cc` |
 | 25 | `transform.cc` | `transform.rs` | 🔧 L2 | 2026-08-21：createReplacement/attemptInsertion 的 immediate/follow MULTIEQUAL 块首逆序插入与普通 op 原序已由 4-record locked fixture 证明 5/5 投影 MATCH，R2 scoped Cross-Review APPROVE；整体仍 UNTESTED：output-null、op_preexisting、nested-follow、INDIRECT、异常部分状态与 SeqNum `setOrder` 重排边界绑定 `TRANSFORM-MULTIEQUAL-INSERT-RESIDUAL-0001`。其余 piece storage/endian/property/IOP、nullable slot/bank 清理等历史缺口仍在，模块不得升 L3 | `transform.cc` |
@@ -141,12 +142,12 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 > **2026-08-24 更正**：`ActionConstantPtr` 从 L3 撤下——B3 审计（`docs/alignment_docs/HUGEHELP_CONSTANTPTR_AUDIT_2026-08-24.md`）证实 Rust `coreaction.rs:615-666` 的 apply 是臆造实现（扫 LOAD/STORE 打 READONLY flag、恒返 NO_CHANGE），与 Ghidra `coreaction.cc:1167-1217` 判定链（常量空间迭代→selectInferSpace→isPointer→queryContainer→spacebaseConstant 建 PTRSUB）零对应，属铁律 1.4 违反；降为 🔧 L2，待 `B3-COREACTION-CONSTANTPTR-0001` 三段修复后重评。
 
-**真实缺失（📋 L1）— 按 Ghidra coreaction.cc 行号 + 依赖标注：**
+**尚未闭合（📋 L1 / 🔧 L2）— 按 Ghidra coreaction.cc 行号 + 依赖标注：**
 
 | Ghidra Action | coreaction.cc | 功能 | 依赖（Rugra 现状） |
 |---|---|---|---|
 | `ActionRestructureVarnode` | 2274 | 调用 ScopeLocal::restructureVarnode + syncVarnodesWithSymbols | ScopeLocal 已移植 ✅；缺 syncVarnodesWithSymbols |
-| `ActionSetCasts` | 2722 | P-code 级 Cast 插入（castInput/castOutput/resolveUnion/checkPointerIssues） | CastStrategyC 已移植 ✅；printc 发射期处理 casts |
+| `ActionSetCasts` | 2722 | P-code 级 Cast 插入 | 🔧 L2：ordinary PTRSUB output-token no-op/CAST selected graph MATCH；完整 apply/castOutput 的 count、遍历、union/resolution/implied/PTRSUB0/checkPointerIssues 仍 MISMATCH/UNTESTED |
 | `ActionRestrictLocal` | 1957 | 标记局部变量限制 | ScopeLocal 已移植 ✅ |
 | `ActionLikelyTrash` | 2140 | 识别可能垃圾变量 | HighVariable 部分 |
 | `ActionMultiCse` | 879 | MULTIEQUAL(phi) 冗余消除 | ✅ **完整算法** — preferredOutput/findMatch/processBlock/apply 全部移植（coreaction.cc:741-890），使用 functional_equality_level + total_replace + op_destroy |
@@ -179,7 +180,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | `ActionDynamicSymbols` | 4869 | 动态符号 | dynamic.cc |
 | `ActionPrototypeWarnings` | 4886 | 原型警告 | FuncProto ✅ |
 | `ActionInternalStorage` | 4938 | 内部存储 | ScopeLocal ✅ |
-| `ActionInferTypes` | 5374 | 类型推断 | LOAD/STORE pointer→value宽度投影已验证；CALL/PTRSUB/STOP/完整状态仍MISMATCH |
+| `ActionInferTypes` | 5374 | 类型推断 | 🔧 L2（2026-08-27）：PTRSUB local 阶段恢复为请求 `getBase(output-size,TYPE_INT)`，24-record canary 的 8-byte local shape/STOP 匹配但 canonical output identity 为 Ghidra 1 / Rust 0；buildLocaltypes 仍为 hybrid loc-tree/op-walk projection，完整 VarnodeLocSet/getLocalType、SymbolEntry/exact-piece、DFS/状态仍 MISMATCH |
 | `ActionLaneDivide` | 585 | 通道分割 | 缺 lane 基础设施 |
 | `ActionSegmentize` | 624 | 段化 | 缺 segment 基础设施 |
 | `ActionForceGoto` | 671 | 强制 goto | block 编辑 |
@@ -188,7 +189,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 | `ActionParamDouble` | 1597 | 参数 double | FuncProto ✅ |
 | `ActionMappedLocalSync` | 2297 | 映射局部同步 | ScopeLocal ✅ |
 
-**最易移植（依赖已就绪）**：`ActionRestructureVarnode`(2274)、`ActionSetCasts`(2722)、`ActionRestrictLocal`(1957)、`ActionStackPtrFlow`(481)。
+**最易继续推进（依赖部分就绪）**：`ActionRestructureVarnode`(2274)、`ActionSetCasts`(2722，当前 L2/MISMATCH)、`ActionRestrictLocal`(1957)、`ActionStackPtrFlow`(481)。
 
 
 ### ruleaction.cc Rule 列表（L1 → L2 → L3）— 2026-06-26 更新
@@ -219,7 +220,7 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 | # | Ghidra 模块 | Rugra 模块 | 状态 | 差距说明 | Ghidra 源码参考 |
 |---|---|---|---|---|---|
-| 28 | `type.cc` (4674行) | `type_system/datatype.rs` + `typefactory.rs` | 🔧 L2 | **2026-08-23 全文件复审**：182-record datatype 与 220-record local-cache fixture 只证明限定投影；当前仍缺稳定对象原地 completion、完整 structural tree 与同名多 ID 索引、alignment/display/typedef/field-ident 状态、Struct/Union resolve cache、TypeCode live prototype/null output、通用 `<typegrp>` decode。base `getHoleSize`、Union `getSubType` 已有静态反例；所有相关函数账本仍 UNTESTED。先完成 canonical state/tree，再接 TypeOp/Varnode/InferTypes。 | `type.cc`, `type.hh` |
+| 28 | `type.cc` (4674行) | `type_system/datatype.rs` + `typefactory.rs` | 🔧 L2 | **2026-08-23 全文件复审**：182-record datatype 与 220-record local-cache fixture 只证明限定投影；当前仍缺稳定对象原地 completion、完整 structural tree 与同名多 ID 索引、alignment/display/typedef/field-ident 状态、Struct/Union resolve cache、TypeCode live prototype/null output、通用 `<typegrp>` decode。base `getHoleSize`、Union `getSubType` 已有静态反例；所有相关函数账本仍 UNTESTED。**2026-08-27**：ordinary Struct component Arc identity 窄投影 MATCH；`TYPEFACTORY-ARC-IDENTITY-0001` 对 incomplete composite/旧 handle/其余 subtype family 仍开放。 | `type.cc`, `type.hh` |
 | 29 | `cast.cc` | `type_system/cast.rs` | 🔧 **L2（2026-08-23 撤销旧 L3）** | `base_type_for` 每次新建 Arc 且无生产调用；`is_cast_implied`/`cast_standard_full` 分别比较两个新 Arc，identity fast path 永远为 false；typedef 与 pointer-space 状态也未进入完整双侧 fixture。依赖 TypeFactory canonical handle，按 `CAST-CANONICAL-IDENTITY-0001` 修复后才可重评。 | `cast.cc`, `cast.hh` |
 | 30 | `signature.cc` + `modelrules.cc` | `modelrules.rs` (3137行) | 🟢 **L2.5（modelrules，2026-07-22 cross-reviewed）/ 📋 L1（signature）** | **modelrules Phase 1**：22 个类/特质 1:1 移植（PrimitiveExtractor + 5 DatatypeFilter + 5 QualifierFilter + 11 AssignAction + ModelRule）。提取算法 / 过滤谓词 / justify_pieces 全 1:1，29 测试。**Cross-review (Mechanism C) APPROVED**: extract/checkOverlap/SizeRestrictedFilter::filter/ModelRule::assignAddress 4 函数四类语义全 MATCH。**2 个已知 REJECT（待上游）**：(1) HomogeneousAggregate::filter 元素比较用 structural compare() 而非 Ghidra pointer-identity（extract() 每次 Arc::new 破坏 identity）；(2) MultiSlotAssign::assignAddress 是返回 Fail 的 stub（70 行算法待 ParamEntry/assignAddressFromPieces 上游）。assign_address 方法体待 ParamListStandard/TypeFactory 上游（每处已摘录 Ghidra 源码）。**signature 仍完全缺失** | `signature.cc`, `modelrules.cc` |
 | 31 | `signature_ghidra.cc` | — | 📋 L1 | **完全缺失**：Ghidra 签名格式 | `signature_ghidra.cc` |
@@ -517,12 +518,19 @@ Ghidra 反编译器共 **114 个 .cc 文件**。本路线图按**是否属于核
 
 ### P0.5（2026-07-27 新增，解锁 printc PTRSUB/CAST 发射）
 
-> **背景**：2026-07-27 完成 RPN 路径 `dispatch_op_rpn` 的 `opPtrsub`/`opTypeCast` faithful port（见 docs/api/printc.md），但实测 curl 中**不存在** `CPUI_PTRSUB`/`CPUI_CAST` op，故新 dispatch 不触发。解锁需补以下两条底层 infra：
+> **背景**：2026-07-27 完成 RPN 路径 `dispatch_op_rpn` 的 `opPtrsub`/`opTypeCast` 历史窄实现（见 docs/api/printc.md），但当时 curl 中**不存在** `CPUI_PTRSUB`/`CPUI_CAST` op，故新 dispatch 不触发。后续状态按下方 2026-08-27 双侧证据纠偏：
 
 10. **`RulePtrsub` 创建规则缺失** (L1→L3) — Rugra 只移植了消费现有 PTRSUB 的规则（`RulePtrsubUndo`/`RulePtrsubCharConstant`/`RulePtraddUndo`，见 action.rs:680-681,723），**缺** Ghidra 的 `RulePtrsub`（INT_ADD(指针,常量)→PTRSUB 的创建规则）与 `RulePtradd`。补齐后 curl 结构体字段访问 `ptr->field` 才能产生 PTRSUB op，printc dispatch 即生效。
-11. **`ActionSetCasts` PTRSUB/PTRADD pointer-fit + castOutput 延后** (✅ 已 L3, 2026-07-27) — coreaction.rs:2893-2897 注释：当前 `castInput` 只走 integer binary/unary 路径，PTRADD/PTRSUB pointer-fit 检查、resolveUnion、checkPointerIssues、castOutput 均延后。补齐后 CPUI_CAST op 在 curl 中产生，printc `(type)x` dispatch 即生效。次要：`ActionSetCasts::apply` 返回 `NO_CHANGE` 即使 count>0（coreaction.rs:2915，可能是 bug，需核实 Ghidra 返回值）。
-
-    **✅ 2026-07-27 已修复**：新增 `cast_input_ptr`（PTRSUB/PTRADD slot-0 pointer-fit + CAST 插入）+ `ptr_input_reqtype`（从 output pointer 类型派生 slot-0 reqtype）+ apply 接入 `cast_output` 第二轮遍历 + `output_metatype` 排除指针产生 op（PTRSUB/PTRADD/LOAD/CALL/COPY/etc. → None）+ apply 返回值修正（count>0 → CHANGE）+ 5 新单元测试（1292 全过）。剩余 `resolveUnion`/`checkPointerIssues`/完整 struct-field resolution 仍延后。
+11. **`ActionSetCasts` PTRSUB output token / castOutput**（🔧 L2；2026-08-27
+窄生产路径已接入）— `TypeOpPtrsub::getOutputToken` 只在 `castOutput` 消费；
+	24-record fixture 中 scale、8-byte local identity、direct token、ordinary cast
+	graph 以及 selected infer shape/STOP 子投影 MATCH，但 fixture 整体仍 MISMATCH。
+	旧“apply 返回 CHANGE 对应 Ghidra”和“模块已 L3”结论撤销：oracle raw apply
+	固定返回 0 并累加 inherited count，当前 Rust 返回 1；infer canonical output
+	identity 另为 Ghidra 1 / Rust 0。完整
+block/dominance/per-op 顺序、无效 PTRADD/PTRSUB 预重写、resolveUnion、
+checkPointerIssues、needs-resolution/implied/PTRSUB0 与异常状态继续绑定
+`PIPE-ACTION-COUNT-0001C`，不得升级 L3。
 
 10. **`transform.cc`** (已 L3) — P-code 变换基础设施（已完成）
 

@@ -24,7 +24,6 @@ use crate::op::PcodeOp;
 use crate::type_system::Datatype;
 use crate::type_system::TypeBase;
 use crate::type_system::TypeMetatype;
-use crate::typeop::{TypeOp, TypeOpPtrsub};
 
 /// First offset in Ghidra's analysis-owned unique-space region.
 /// `Translate::getUniqueStart(Translate::ANALYSIS)` returns this tag directly.
@@ -66,14 +65,15 @@ fn default_unknown_type(
 // RUGRA-GLUE: the two `PcodeOp::outputTypeLocal/inputTypeLocal` forwarders
 //   (op.hh:251-252) dispatch through `opcode->getOutputLocal/getInputLocal` —
 //   the Architecture-owned TypeOp virtual table. Rugra PcodeOp holds no
-//   TypeOp pointer, and the current `src/typeop.rs` trait impls for the
-//   binary/unary/functional macro family, COPY/LOAD/STORE/MULTIEQUAL and
-//   PTRADD/PTRSUB read the opposite varnode's v_type instead of the Ghidra
+//   TypeOp pointer, and several current `src/typeop.rs` trait impls in the
+//   binary/unary/functional macro family and COPY/LOAD/STORE/MULTIEQUAL read
+//   the opposite varnode's v_type instead of the Ghidra
 //   `getBase(size,metatype)` lookups (the registered PRINTC-CAST-OPNAME-0001
 //   M1 gap). `Varnode::getLocalType` therefore dispatches through this local
-//   table, a line-cited port of the complete Ghidra override set; when M1
-//   lands, root may consolidate by re-pointing these helpers at the typeop
-//   trait impls. CALL input delegates to the R3-approved D1 port
+//   table, with explicit line-cited override arms; when the remaining M1
+//   branches land, root may consolidate them with the typeop trait impls.
+//   PTRADD/PTRSUB already request the canonical local INT base here. CALL
+//   input delegates to the R3-approved D1 port
 //   `TypeOpCall::get_input_local` (typeop.rs:1393); CALLIND input delegates
 //   to the R19-approved D2 port `TypeOpCallind::get_input_local`
 //   (typeop.rs:2059), eliminating the former inlined slot-0 copy.
@@ -196,18 +196,15 @@ pub fn op_output_type_local(
 ) -> Option<Arc<Datatype>> {
     use crate::opcodes::OpCode;
     match op.opcode {
-        // typeop.cc:2238-2242 / 2308-2312, then the token-level
-        // override consumed by the type-inference caller (typeop.cc:282-286).
-        OpCode::CPUI_PTRADD => {
+        // typeop.cc:2238-2242 / 2308-2312. PTRADD and PTRSUB both request
+        // getBase(output-size, TYPE_INT). The bilateral fixture covers the
+        // 8-byte canonical int8 case; oversized conversion remains
+        // TYPEFACTORY-LOCALTYPE-CACHE-0001. PTRSUB's field-sensitive output
+        // token is consumed later by ActionSetCasts::castOutput
+        // (coreaction.cc:2541), never by Varnode::getLocalType.
+        OpCode::CPUI_PTRADD | OpCode::CPUI_PTRSUB => {
             let size = op.get_out()?.read().unwrap().get_size();
             local_base(type_factory, size, TypeMetatype::Int)
-        }
-        OpCode::CPUI_PTRSUB => {
-            // Ghidra's getOutputToken is the actual output type at a concrete
-            // PTRSUB: it preserves a field type at offset zero and otherwise
-            // returns an unknown pointer (typeop.cc:2349-2363), rather than
-            // exposing the INT-only local propagation seed.
-            TypeOpPtrsub::new(type_factory.clone()).get_output_token(op)
         }
         // typeop.cc:720-735 TypeOpCall::getOutputLocal.
         OpCode::CPUI_CALL => {

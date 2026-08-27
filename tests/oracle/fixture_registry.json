@@ -33,6 +33,70 @@
   },
   "fixtures": [
     {
+      "id": "ptrsub_output_token_1204",
+      "description": "AddrSpace byte scaling, PcodeOp/TypeOpPtrsub output-local plus output-token projections, selected ActionSetCasts PTRSUB output-CAST graph, and a SPACEBASE PTRSUB ActionInferTypes canary versus locked Ghidra 12.0.4; raw apply return and infer output identity remain registered mismatches",
+      "runner": [
+        "tools/run_ptrsub_output_token_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/ptrsub_output_token_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/ptrsub_output_token_1204.cc",
+          "rust_fixture": "tests/oracle/ptrsub_output_token_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_ptrsub_output_token_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/coreaction.rs",
+          "src/space.rs",
+          "src/type_system/typefactory.rs",
+          "src/typeop.rs",
+          "src/varnode.rs",
+          "docs/api/coreaction.md",
+          "docs/api/space.md",
+          "docs/api/type_system/typefactory.md",
+          "docs/api/typeop.md",
+          "docs/api/varnode.md",
+          "tests/oracle/ptrsub_output_token_1204.*",
+          "tools/run_ptrsub_output_token_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-1f1d2c43dacd6e24746b",
+          "RG-F-370b631c0c3a36e12689",
+          "RG-F-427cc4fc6889e5d13a05",
+          "RG-F-94a2b6bd1410db433619",
+          "RG-F-a5c06a03ffec24675436",
+          "RG-F-bfd1147423c0178185eb",
+          "RG-F-e1751080679995008f76",
+          "RG-F-f64771d7c6cdb9599854",
+          "RG-F-f65b5639becdaae54895"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-037664316b9c54c88dc6",
+          "GH12-F-08c6d2c1b38edb06f10a",
+          "GH12-F-1797871dee0101abf17a",
+          "GH12-F-6906b1e0b2f7f6313cd9",
+          "GH12-F-6ba3ee36df5dc24e6e87",
+          "GH12-F-6fab309639b846b85c21",
+          "GH12-F-7083d8423ccdb50e9f13",
+          "GH12-F-74ae4baf4dc35b9560f4",
+          "GH12-F-8ec47cf832464567e1a8",
+          "GH12-F-92152fa0aeb5ab2b4f06",
+          "GH12-F-a8fcc99f545d5ed11624",
+          "GH12-F-e9d9a4aaafe973736e21"
+        ]
+      }
+    },
+    {
       "id": "decompress_1204",
       "description": "Decompress streaming, replacement, alias, and error observations",
       "runner": [

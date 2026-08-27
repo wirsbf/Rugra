@@ -4574,11 +4574,10 @@ impl ActionSetCasts {
 
     // Ghidra: coreaction.cc:2532 ActionSetCasts::castOutput
     /// Insert a CAST (or PTRSUB) op after `op` to convert its output to the
-    /// token type. Faithful to `castOutput` (cc:2532-2610).
-    /// Simplified: handles the common case (token type differs from output
-    /// high type → insert CAST). Union resolution (needsResolution/
-    /// resolveInFlow/findResolve/setUnionField/forceFacingType) is deferred
-    /// (needs full union infrastructure).
+    /// token type.  `TYPEOP-PTRSUB-FIELDCAST-0001` covers the ordinary PTRSUB
+    /// token/no-op/CAST projection.  The union, implied, resolution, PTRSUB0,
+    /// and force-facing branches of `castOutput` remain open under
+    /// `PIPE-ACTION-COUNT-0001C`; this is not a whole-function match claim.
     fn cast_output(
         fd: &mut Funcdata,
         op: &crate::op::PcodeOpRef,
@@ -4601,8 +4600,29 @@ impl ActionSetCasts {
         // cast: the address (PTRSUB `stream->_IO_read_ptr`) is char**, so
         // the token is char* while the phi-merged output high is FILE*.
         let tokenct = {
+            use crate::typeop::TypeOp as _;
             let op_rg = op.0.read().unwrap();
-            if op_rg.opcode == OpCode::CPUI_LOAD {
+            if op_rg.opcode == OpCode::CPUI_PTRSUB {
+                // typeop.cc:2349-2364 supplies PTRSUB's field-sensitive token,
+                // and coreaction.cc:2541 consumes it at this exact cast stage.
+                // Type inference continues to use getOutputLocal (INT).
+                let Some(type_factory) = fd
+                    .arch
+                    .as_ref()
+                    .and_then(|architecture| architecture.types.clone())
+                else {
+                    // A Ghidra PcodeOp always owns a TypeOp with a TypeFactory.
+                    // Rugra can represent a detached Funcdata; it has no
+                    // bilateral token semantics, so do not invent a factory.
+                    return 0;
+                };
+                let Some(token) = crate::typeop::TypeOpPtrsub::new(type_factory)
+                    .get_output_token(&op_rg)
+                else {
+                    return 0;
+                };
+                token
+            } else if op_rg.opcode == OpCode::CPUI_LOAD {
                 let in1_high = op_rg
                     .get_in(1)
                     .and_then(|a| {
@@ -4710,11 +4730,12 @@ impl ActionSetCasts {
         // Rugra: use op_set_output/op_set_input so def links, WRITTEN flags
         // and descend xrefs are maintained consistently (faithful to Ghidra
         // which goes through Funcdata::opSetOutput/opSetInput).
-        // Order matters: rewire op's output to vn first (clears outvn.def),
-        // then attach outvn as newop's output, then vn as newop's input.
-        fd.op_set_output(&op, vn.clone());
+        // Order is observable: the new op first steals outvn from its old
+        // definition, then consumes the implied temporary, and only then is
+        // the original op rebound to that temporary (cc:2603-2608).
         fd.op_set_output(&newop, outvn.clone());
-        fd.op_set_input(&newop, vn, 0);
+        fd.op_set_input(&newop, vn.clone(), 0);
+        fd.op_set_output(&op, vn);
         fd.op_insert_after(&newop, op);
         1 // count += 1
     }
@@ -4923,9 +4944,11 @@ impl Action for ActionSetCasts {
 
     // Ghidra: coreaction.cc:2722 ActionSetCasts::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionSetCasts::apply (coreaction.cc:2722-2774). Iterate
-        // ops in basic-block/dominance order (Rugra iterates alivelist, which
-        // is already in block+seq order). For each non-CAST op:
+        // Partial ActionSetCasts::apply implementation.  The ordinary
+        // PTRSUB output-token graph is covered by
+        // TYPEOP-PTRSUB-FIELDCAST-0001.  PIPE-ACTION-COUNT-0001C tracks the
+        // remaining cast-phase, traversal, union/pointer-check, and count
+        // channel mismatches.  For each non-CAST op currently visited:
         //   (1) For PTRSUB/PTRADD slot 0, run the pointer-fit castInput arm
         //       (cast_input_ptr) — if the input pointer type does not match
         //       the op's expected base pointer, insert a CPUI_CAST so printc
@@ -4939,9 +4962,9 @@ impl Action for ActionSetCasts {
         // resolveUnion / checkPointerIssues remain deferred (need full union
         // + LOAD/STORE pointer-issue infrastructure).
         //
-        // Ghidra returns the per-op accumulated count (non-zero signals
-        // CHANGE to the pipeline driver). Rugra mirrors that: CHANGE when
-        // any cast was inserted, NO_CHANGE otherwise.
+        // Ghidra accumulates changes in inherited Action::count and returns 0
+        // from raw apply.  Rugra still returns CHANGE here and overwrites its
+        // leaf count, an observed PIPE-ACTION-COUNT-0001C mismatch.
         let ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.clone();
         let strategy = crate::type_system::cast::CastStrategyC::new(4);
         let mut count = 0;
@@ -4973,11 +4996,10 @@ impl Action for ActionSetCasts {
                 }
             }
         }
-        // castOutput pass: iterate the (possibly extended) alive list again
-        // so newly-inserted input CASTs are visible. Faithful to Ghidra's
-        // castOutput being applied after castInput within the same op
-        // iteration; doing it as a separate pass over the original op
-        // snapshot is observably equivalent for output-type decisions.
+        // castOutput pass over the original op snapshot.  Ghidra performs
+        // inputs then output within each op in block/dominance order; this
+        // two-pass ordering is a PIPE-ACTION-COUNT-0001C mismatch because an
+        // earlier output mutation can affect a later op's input decision.
         for op_ref in &ops {
             let opc = {
                 let op = op_ref.0.read().unwrap();
@@ -5084,9 +5106,10 @@ fn make_ptr(
 
 impl ActionInferTypes {
     // Ghidra: coreaction.cc:5008 ActionInferTypes::buildLocaltypes
-    /// Faithful to `ActionInferTypes::buildLocaltypes` (coreaction.cc:5008-5037).
-    /// Collect local data-type information on each Varnode inferred from the
-    /// PcodeOps that read/write it, storing results in the temp map.
+    /// Collect the currently implemented local type seeds.  The oracle walks
+    /// Varnodes and calls `Varnode::getLocalType`; this hybrid loc-tree/op-walk
+    /// projection is still an `ACTION-INFERTYPES-DISPATCH-0001` mismatch.  In particular,
+    /// PTRSUB local typing stays INT and its field token is not consumed here.
     fn build_localtypes(
         &self,
         fd: &Funcdata,
@@ -5316,8 +5339,9 @@ impl ActionInferTypes {
                 // STOREs into per-field STOREs
                 // (TRI2-STORESPLIT-WHOLESTRUCT-0001). merge_min_type_order
                 // keeps the varnode.cc:926-931 minimum: an unknown8 seed can
-                // never displace a more specific reader seed (CALL locked
-                // param, downChain field pointer).
+                // never displace a more specific reader seed (for example a
+                // CALL locked parameter). PTRSUB field tokens are not local
+                // seeds; ActionSetCasts::castOutput consumes them later.
                 OpCode::CPUI_LOAD | OpCode::CPUI_STORE => {
                     let type_factory = fd.arch.as_ref().and_then(|a| a.types.clone());
                     let Some(type_factory) = type_factory else {
@@ -5344,33 +5368,20 @@ impl ActionInferTypes {
                         }
                     }
                 }
-                // INT_ADD/INT_SUB/PTRSUB/PTRADD with a spacebase input →
-                // pointer output. Mirrors Ghidra's pointer arithmetic
-                // propagation (Varnode::getLocalType spacebase path).
-                OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_PTRSUB => {
+                // INT_ADD/INT_SUB with a spacebase input → pointer output.
+                // This older bootstrap remains tracked by
+                // ACTION-INFERTYPES-DISPATCH-0001.  PTRSUB is deliberately
+                // excluded: Ghidra buildLocaltypes calls
+                // Varnode::getLocalType, whose definition edge uses
+                // TypeOpPtrsub::getOutputLocal (INT).  Field-sensitive
+                // getOutputToken is consumed only later by castOutput.
+                OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB => {
                     if let (Some(in0), Some(out)) = (op.get_in(0), op.get_out()) {
                         let i0 = in0.read().unwrap();
                         if i0.is_spacebase() {
                             let ov = out.read().unwrap();
-                            let pointed = if op.opcode == OpCode::CPUI_PTRSUB {
-                                // Ghidra's concrete PTRSUB output token is
-                                // consumed here through getLocalType's def
-                                // edge (coreaction.cc:5008-5037), while
-                                // getOutputLocal remains INT
-                                // (typeop.cc:2308-2312). The token supplies
-                                // an unknown pointer for synthetic gaps.
-                                crate::typeop::TypeOpPtrsub::new(
-                                    fd.arch.as_ref().and_then(|a| a.types.clone()).unwrap_or_else(crate::type_system::typefactory::TypeFactory::shared_default),
-                                ).get_output_token(&op)
-                            } else {
-                                None
-                            };
-                            if let Some(token) = pointed {
-                                temps.insert(vn_id(&ov), token);
-                            } else {
-                                let pointed = int_types.sized(ov.get_size());
-                                temps.insert(vn_id(&ov), make_ptr(pointed, ptr_size));
-                            }
+                            let pointed = int_types.sized(ov.get_size());
+                            temps.insert(vn_id(&ov), make_ptr(pointed, ptr_size));
                         }
                     }
                 }

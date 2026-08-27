@@ -950,14 +950,17 @@ normalize 位点（LE 值与修复前逐位一致；BE 域整体 UNTESTED，登�
 `HERITAGE-BE-OVERLAP`）。跨 space 的 -1 哨兵（address.cc:161 `base != op.base`）
 为已登记残差 —— Rugra `Address` 无 space 身份，调用方自守（见函数注释）。
 
-## 2026-08-24：get_local_type 完整移植 + STOP flag 常量（VARNODE-LOCALTYPE-RESOLUTION-0001）
+## 2026-08-24：get_local_type 核心算法 + STOP flag 常量（VARNODE-LOCALTYPE-RESOLUTION-0001）
 
-完整移植 `Varnode::getLocalType`（varnode.cc:900-936），替换此前只 clone
+实现 `Varnode::getLocalType`（varnode.cc:900-936）的核心算法，并以 62-record
+selected projection 对拍；这不包含 production buildLocaltypes/SymbolEntry/特殊
+TypeOp 消费闭包。它替换此前只 clone
 `v_type` 的 stub（旧签名 `(&self, &mut bool) -> Option<Arc<Datatype>>` 无调用方，
 新签名无迁移成本）：
 
 - `get_local_type(&self, block_up: &mut bool, type_factory: &Arc<RwLock<TypeFactory>>) -> anyhow::Result<Option<Arc<Datatype>>>`
-  — 逐行对齐 varnode.cc:900-936：
+  — 已实现的核心路径逐项映射 varnode.cc:900-936（完整函数仍受下述 null/特殊
+  TypeOp/production 消费闭包残差约束）：
   1. `is_type_lock()` 早退返回锁类型（cc:906-907，不触碰 blockup）；
   2. def 存在 → `ct = def->outputTypeLocal()`（cc:910-911，经下方派发表）；
   3. `def->stopsTypePropagation()`（op flag 0x40 消费端）→ `*block_up = true` +
@@ -975,7 +978,8 @@ normalize 位点（LE 值与修复前逐位一致；BE 域整体 UNTESTED，登�
 - **派发表**（本文件私有，`// Ghidra:` 逐行引用）：`op_output_type_local` /
   `op_input_type_local`（op.hh:251-252 转发器）+ `local_meta_pair`（TypeOp
   ctor metain/metaout 表）+ `local_base`（typeop.cc:264/274 基类默认
-  `getBase(size,TYPE_UNKNOWN)`）。覆盖全部 Ghidra override：PTRADD/PTRSUB 全
+  `getBase(size,TYPE_UNKNOWN)`）。当前 selected 派发切片覆盖下列 Ghidra
+  override；CALLIND/RETURN/CPOOLREF 等完整分支仍按本节末残差开放：PTRADD/PTRSUB 全
   INT（typeop.cc:2235/2241/2311/2317）、shift slot-1
   `getBaseNoChar(size,INT)`（:1510-1516/1535-1541/1600-1606）、CBRANCH
   slot1 BOOL + slot0 code-ptr（:609-619）、INDIRECT slot1 code-ptr（:1992-2003）、
@@ -988,12 +992,32 @@ normalize 位点（LE 值与修复前逐位一致；BE 域整体 UNTESTED，登�
   单拷贝解析，消除此前 slot0 的内联重复；参数槽完整 callspec 分支
   （isTypeLocked/isThisPointer，:760-772）在 `get_input_local_in_fd`
   （ActionInferTypes coreaction 臂接线）。
-  **PTRSUB 的生产消费**：`op_output_type_local` 对 PTRSUB 调用已注册的
-   `TypeOpPtrsub::get_output_token`（typeop.cc:2349-2363），因此具体操作的输出
-   不再盲目使用 INT local：offset=0 的字段沿 pointer `downChain` 返回字段类型，
-   非零/synthetic gap 构造 unknown-pointer；非指针输入回落 `getOutputLocal`。
+  **PTRSUB local/output-token 边界**：`op_output_type_local` 对 PTRADD/PTRSUB
+  都请求 TypeFactory 的 `getBase(output-size, TYPE_INT)`（typeop.cc:2238-2242/
+  2308-2312）；它不得调用 `TypeOpPtrsub::get_output_token`。24-record bilateral
+  fixture 的 14 个 8 字节 direct case 执行该派发器并另行断言其结果与
+  `TypeOpPtrsub::get_output_local` identity 相同，均观察到 `local=int8`、
+  `local_identity=1`、`local_core=1`。超出 max-basetype-size 的闭包仍绑定
+  `TYPEFACTORY-LOCALTYPE-CACHE-0001`。
+  字段敏感 token 只由后续 `ActionSetCasts::castOutput` 消费。fixture 新增的
+  infer canary 会执行 Ghidra `Varnode::getLocalType` 与双方 production
+  `ActionInferTypes::apply`：selected base/out int8 shape、STOP 和定义边匹配，但
+  Rust build_localtypes 仍不调用映射的 `Varnode::get_local_type`，且 output
+  canonical identity 为 Ghidra 1 / Rust 0。因此它不是任一函数的完整 MATCH
+  证据。`Varnode::getLocalType` core projection 另有 62/62 双侧 MATCH；production
+  buildLocaltypes 的 SymbolEntry/exact-piece、特殊 TypeOp 派发、reader/STOP
+  消费闭包与异常状态仍绑定 `VARNODE-LOCALTYPE-RESOLUTION-0001` /
+  `ACTION-INFERTYPES-DISPATCH-0001`。
+  2026-08-28 formal release curl A/B 进一步证明 production closure 未闭合：六个
+  受影响 local 的名称前缀转为 concrete pointer 后，PrintC 声明路径从匿名 pointer
+  取得空 type name，形成无类型声明。直接语法断点绑定
+  `PTRSUB-TYPED-DECL-RESIDUAL-0001`；达到 golden 的上游 identity 闭包仍由
+  `ACTION-INFERTYPES-DISPATCH-0001`、`TYPE-UNKNOWN-0001` 与
+  `PRINTC-SYMBOL-DECL-0001` 跟踪。glob_set 同轮新增的 outer/nested cast churn 另绑
+  `PTRSUB-SWITCH-CAST-RESIDUAL-0001`。这些 final-C 信号都不属于 14-case direct
+  local identity 的 MATCH 结论，也不能单因归于本文件改动。
    **为什么本地表而非 typeop.rs trait**：现行 typeop.rs 宏族
-  （binary/unary/functional）与 COPY/LOAD/STORE/MULTIEQUAL/PTRADD/PTRSUB 的
+  （binary/unary/functional）与 COPY/LOAD/STORE/MULTIEQUAL 的
   get*Local 覆盖读对侧 varnode 的 v_type 而非 `getBase(size,metatype)`
   （登记残差 PRINTC-CAST-OPNAME-0001 M1）；M1 落地后 root 可将两张表合并。
   残差：CALLIND 参数槽经 fd-less 委托观测 fc==null 基类默认（完整 callspec
@@ -1007,15 +1031,15 @@ normalize 位点（LE 值与修复前逐位一致；BE 域整体 UNTESTED，登�
   （varnode.hh:93）—— 两个枚举同值不同义，STOP 落 `addl_flags`（u16
   `addlflags`），不得混入主 flags。
 - **访问器**：`stops_up_propagation()`（varnode.hh:267）、
-  `set_stop_up_propagation()`（:333，设置端属 coreaction STOP 任务，本任务只留
-  接口）、`clear_stop_up_propagation()`（:334，Ghidra 全源码零调用，接口对等）。
-  消费端 `ActionInferTypes::propagateTypeEdge`（coreaction.cc:5093）为 STOP 任务
-  （W4）write-set。
-- **行为影响**：`get_local_type` 及新访问器全仓零调用方，主管线行为零变化
-  （无机制 B 门禁触发）。双侧 fixture `tests/oracle/varnode_localtype_res_1204.*`
+  `set_stop_up_propagation()`（:333）和 `clear_stop_up_propagation()`（:334；Ghidra
+  全源码零调用，接口对等）。2026-08-25 的 coreaction 窄路径已在
+  `build_localtypes` 写 STOP，并在 `ActionInferTypes::propagateTypeEdge`
+  （coreaction.cc:5093）读取。
+- **行为影响**：双侧 fixture `tests/oracle/varnode_localtype_res_1204.*`
   覆盖：单 def 无 readers、typeOrder-min（两种插入序）、平局先遇（char*/int*
   等价指针）、def STOP 早退+blockup、path 指针胜整型、typelock union 直返、
-  null local type 错误通道。
+  null local type 错误通道，核心投影 62/62 MATCH。完整生产
+  buildLocaltypes/SymbolEntry/特殊 TypeOp/错误状态仍未由该 fixture 证明。
 
 ## 2026-08-25：CALLOTHER userop 闭包接线（TYPEOP-LOCALTYPE-CALLOTHER-0001，TYPEOP-LOCALTYPE-DISPATCH-0001 CALLOTHER 切片）
 
