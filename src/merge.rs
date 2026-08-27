@@ -1134,12 +1134,14 @@ impl Merge {
                           group: &Arc<RwLock<VariableGroup>>) -> Result<Arc<RwLock<VariablePiece>>> {
         let size = high.read().unwrap().instances.first()
             .map(|vn| vn.read().unwrap().size as i32).unwrap_or(0);
-        let duplicate = group.read().unwrap().pieces.iter().any(|piece| {
-            let piece = piece.read().unwrap();
-            piece.group_offset == offset && piece.size == size
-        });
-        if duplicate {
-            return Err(anyhow!("Duplicate VariablePiece"));
+        // Ghidra groupWith has no duplicate failure branch: an already
+        // represented (offset,size) piece remains the group's representative.
+        if let Some(existing) = group.read().unwrap().pieces.iter().find(|piece| {
+            let piece_read = piece.read().unwrap();
+            piece_read.group_offset == offset && piece_read.size == size
+        }).cloned() {
+            high.write().unwrap().piece = Some(existing.clone());
+            return Ok(existing);
         }
         let piece = Arc::new(RwLock::new(VariablePiece::new(
             Arc::downgrade(high), offset, size, Some(group.clone()))));
@@ -1836,15 +1838,18 @@ impl Merge {
     /// the same VariableGroup before naming (merge.cc:967-976, 1374-1407).
     pub fn group_partials(&mut self, fd: &mut Funcdata) {
         use std::collections::HashSet;
-        let candidates: Vec<_> = fd.vbank.loc_tree.iter()
-            .filter_map(|r| {
-                let vn = r.0.clone();
-                let is_partial = vn.read().unwrap().is_proto_partial();
-                is_partial.then_some(vn)
+        // `protoPartial` is populated while RulePieceStructure walks the
+        // ordered op list. Reproduce that order from the bank's alive-op
+        // sequence; loc_tree order is storage order, not registration order.
+        let candidates: Vec<_> = fd.obank.alivelist.iter()
+            .filter_map(|op_ref| {
+                let op = op_ref.0.read().unwrap();
+                (op.opcode == crate::opcodes::OpCode::CPUI_PIECE && op.is_partial_root())
+                    .then(|| op.output.clone()).flatten()
             }).collect();
         let mut roots = HashSet::new();
-        for vn in candidates {
-            let Some(root) = Self::partial_root(&vn) else { continue };
+        for candidate in candidates {
+            let root = Self::partial_root(&candidate).unwrap_or(candidate);
             let key = std::sync::Arc::as_ptr(&root) as usize;
             if !roots.insert(key) { continue; }
             let Some(def) = root.read().unwrap().get_def() else { continue };
@@ -1872,11 +1877,11 @@ impl Merge {
     fn partial_root(vn: &Arc<RwLock<crate::varnode::Varnode>>) -> Option<Arc<RwLock<crate::varnode::Varnode>>> {
         let mut current = vn.clone();
         loop {
-            let (addr, space, descendants) = {
+            let (addr, current_space, descendants) = {
                 let v = current.read().unwrap();
                 (v.get_offset(), v.get_space(), v.descend_iter().collect::<Vec<_>>())
             };
-            let mut next = None;
+            let mut next: Option<Arc<RwLock<crate::varnode::Varnode>>> = None;
             for op in descendants {
                 let o = op.read().unwrap();
                 if o.opcode != crate::opcodes::OpCode::CPUI_PIECE { continue; }
@@ -1884,9 +1889,20 @@ impl Merge {
                 let slot = (0..2).find(|&i| o.inrefs.get(i).map_or(false, |x| std::sync::Arc::ptr_eq(x, &current)));
                 let Some(slot) = slot else { continue };
                 let other_size = o.inrefs.get(1 - slot).map(|x| x.read().unwrap().get_size()).unwrap_or(0);
+                let out_space = out.read().unwrap().get_space();
                 let out_addr = out.read().unwrap().get_offset();
-                let adjusted = if space.is_big_endian() == (slot == 1) { out_addr.wrapping_add(other_size as u64) } else { out_addr };
-                if adjusted == addr { next = Some(out); break; }
+                let adjusted = if out_space.is_big_endian() == (slot == 1) { out_addr.wrapping_add(other_size as u64) } else { out_addr };
+                if adjusted != addr { continue; }
+                // PieceNode::findRoot uses compareOrder to select the
+                // earliest valid PIECE, rather than the first list entry.
+                let replace = match &next {
+                    None => true,
+                    Some(previous) => {
+                        let previous_def = previous.read().unwrap().get_def();
+                        previous_def.map_or(true, |p| o.compare_order(&p.read().unwrap()) != 0)
+                    }
+                };
+                if replace { next = Some(out); }
             }
             match next { Some(n) => current = n, None => return Some(current) }
         }
