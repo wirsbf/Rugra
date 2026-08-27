@@ -6,8 +6,8 @@
 
 `ActionRestartGroup::apply` 对齐 `action.cc:553-582`：达到 restart guard 后调用
 `Funcdata::clear_analysis`，执行 driver 安装的 raw-flow regeneration callback，随后
-调用 `start_processing`（其顺序对应 `funcdata.cc:157-168`），重置子 Action 游标并继续
-当前子树。`Funcdata::set_restart_flow` 是 Rust 驱动桥；无 loader/lifter 的纯 fixture 会
+重置子 Action 游标；重启子树的首个 `ActionStart` 再调用一次
+`start_processing`（对应 `funcdata.cc:157-168`），继续当前子树。`Funcdata::set_restart_flow` 是 Rust 驱动桥；无 loader/lifter 的纯 fixture 会
 安全返回而不在空 Funcdata 上重跑。`maxrestarts` 与 jumptable recovery guard 保持
 Ghidra 的边界语义。
 

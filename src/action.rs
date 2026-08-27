@@ -1120,7 +1120,9 @@ impl ActionRestartGroup {
                 eprintln!("[ACTION] restart pending: flow regeneration callback unavailable");
                 return Ok(0);
             }
-            fd.start_processing();
+            // ActionStart is the first child of the restarted subtree and
+            // invokes start_processing exactly once (coreaction.cc:41-43).
+            // Calling it here would double-enter the processing guard.
             self.group.reset(fd);
             self.group.reset_apply_cursor();
             // ActionRestartGroup::apply resets child derived state and starts
