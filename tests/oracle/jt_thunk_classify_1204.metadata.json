@@ -144,8 +144,8 @@
     },
     "rust_semantic_engine": {
       "librustc_driver": {
-        "path": "/usr/lib/librustc_driver-afe033052732caf2.so",
-        "sha256": "f1df5f9bd04b8cc36bb836364cce82f92129d4f49540939dd27294a85138de3d"
+        "path": "/usr/lib/librustc_driver-66a47b5a6ae9dff7.so",
+        "sha256": "902decc7402389c9fe26cdc85e7a435d1adf7224cc497c3f3a5cc8bfb1f4aad8"
       },
       "llvm": {
         "path": "/usr/lib/libLLVM.so.22.1",
