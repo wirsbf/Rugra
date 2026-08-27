@@ -1365,7 +1365,7 @@ require("build helpers", toolchain["build_helpers"], {
     "rm": {"path": "/usr/bin/rm", "sha256": "d5b182ba415bf4571cb6712c96dcee160dcb317c86814879a3fda36ef46ec36b"},
 })
 require("Rust semantic engine", toolchain["rust_semantic_engine"], {
-    "librustc_driver": {"path": "/usr/lib/librustc_driver-afe033052732caf2.so", "sha256": "f1df5f9bd04b8cc36bb836364cce82f92129d4f49540939dd27294a85138de3d"},
+    "librustc_driver": {"path": "/usr/lib/librustc_driver-66a47b5a6ae9dff7.so", "sha256": "902decc7402389c9fe26cdc85e7a435d1adf7224cc497c3f3a5cc8bfb1f4aad8"},
     "llvm": {"path": "/usr/lib/libLLVM.so.22.1", "sha256": "06662e11c1faa7b4cb199e03c9ef681b74655ad4274473273b41dfc754a6f16f"},
 })
 require("dynamic runtime closure", toolchain["dynamic_runtime_closure"], {
