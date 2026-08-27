@@ -4602,7 +4602,21 @@ impl ActionSetCasts {
         // the token is char* while the phi-merged output high is FILE*.
         let tokenct = {
             let op_rg = op.0.read().unwrap();
-            if op_rg.opcode == OpCode::CPUI_LOAD {
+            if matches!(op_rg.opcode, OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD) {
+                // cc:2541 dispatches independently to TypeOpPtrsub/Ptradd
+                // getOutputToken; unlike output_metatype this token carries
+                // the field pointer/gap-pointer datatype.
+                use crate::typeop::TypeOp;
+                let type_factory = fd.arch.as_ref().and_then(|a| a.types.clone());
+                let Some(type_factory) = type_factory else { return 0 };
+                let token = if op_rg.opcode == OpCode::CPUI_PTRSUB {
+                    crate::typeop::TypeOpPtrsub::new(type_factory).get_output_token(&op_rg)
+                } else {
+                    crate::typeop::TypeOpPtradd::new(type_factory).get_output_token(&op_rg)
+                };
+                let Some(token) = token else { return 0 };
+                token
+            } else if op_rg.opcode == OpCode::CPUI_LOAD {
                 let in1_high = op_rg
                     .get_in(1)
                     .and_then(|a| {

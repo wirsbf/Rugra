@@ -1924,3 +1924,11 @@ Register/non-spacebase parameters retain their address-space varnodes. The
 spacebase path is `UNTESTED` on the current x86-64 GCC fixture because its
 storage allocator bails out on stack spills; acceptance remains defects=0 plus
 `coreaction` tests when a constructive stack-storage fixture is available.
+
+## R-TYPEOPFIX-R2 castOutput token consumer (2026-08-27)
+
+`ActionSetCasts::cast_output` now dispatches PTRSUB/PTRADD directly to the
+opcode TypeOp `get_output_token` before the generic metatype fallback, matching
+`coreaction.cc:2532-2543`. This keeps unknown-pointer gap tokens and field
+pointer tokens visible to the cast decision; integration depends on the
+calloutfix TypeOpPtrsub/Ptradd token chain.
