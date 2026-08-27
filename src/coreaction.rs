@@ -7776,15 +7776,11 @@ impl Action for ActionPrototypeTypes {
                 .clone()
                 .or_else(|| arch.defaultfp.clone());
             if let Some(evalfp) = evalfp {
-                if !fd.funcp.has_model() {
-                    // Ghidra's FuncProto always carries a resolved model
-                    // (FuncProto::decode resolves the name; unknown names map
-                    // to createUnknownModel, fspec.cc:4697). Rugra's
-                    // DWARF/PLT locked-signature path can leave model=None
-                    // while model_locked=true, which breaks every model
-                    // consult downstream. Restore the invariant by
-                    // installing the default model; the lock only guards
-                    // against replacement, which this is not.
+                if !fd.funcp.has_model() && !fd.funcp.is_model_locked() {
+                    // cc:4618: only an unlocked prototype may bind the
+                    // evaluation model. A PLT overlay intentionally retains
+                    // the unknown-model identity while its input/output locks
+                    // remain visible to ActionPrototypeWarnings.
                     fd.funcp.set_model(Some(evalfp.clone()));
                 }
                 if !fd.funcp.is_model_locked() {

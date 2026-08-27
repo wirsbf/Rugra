@@ -1943,3 +1943,12 @@ opcode TypeOp `get_output_token` before the generic metatype fallback, matching
 `coreaction.cc:2532-2543`. This keeps unknown-pointer gap tokens and field
 pointer tokens visible to the cast decision; the calloutfix TypeOpPtrsub/Ptradd
 token chain is now integrated in master.
+
+## PLT warning model lifecycle (2026-08-27)
+
+`ActionPrototypeTypes::apply` binds the evaluation model only when the
+prototype is not model-locked, matching `coreaction.cc:4614-4619`. Locked PLT
+overlays therefore retain the unknown-model identity plus input/output lock
+bits until `ActionPrototypeWarnings`, restoring all 51 warning headers. The
+combined corpus remains defects/numbering clean; model-lifecycle-induced
+skeleton changes remain under PLTFIX verification.
