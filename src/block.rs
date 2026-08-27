@@ -3558,10 +3558,19 @@ impl BlockGraph {
         // stale child edge cannot make rpostcount underflow below.
         let known: std::collections::HashSet<usize> =
             self.blocks.iter().map(|b| key(b)).collect();
-        // cc:1023-1030: collect potential roots in list order.
+        // cc:1023-1030: collect potential roots in list order.  Ignore
+        // incoming halves whose source is no longer in the parent list; such
+        // halves are the inverse of the stale absorbed-child edges filtered by
+        // the DFS below.
         let mut rootlist: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
         for i in 0..n {
-            if self.blocks[i].read().unwrap().size_in() == 0 {
+            let has_live_pred = {
+                let block = self.blocks[i].read().unwrap();
+                (0..block.size_in()).any(|slot| {
+                    block.get_in(slot).map_or(false, |edge| known.contains(&key(&edge.point)))
+                })
+            };
+            if !has_live_pred {
                 rootlist.push(self.blocks[i].clone());
             }
         }

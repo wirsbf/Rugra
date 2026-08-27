@@ -7,7 +7,9 @@
 composite 持有、但已不在 parent list 的 stale child Arc 时跳过。否则真实运行中
 `rpostcount` 会从 `blocks.len()` 下溢至 `usize::MAX`（`block.cc:1043-1084`
 要求 list 内每个 FlowBlock 恰好入栈/出栈一次），导致 7 个函数 worker panic。
-该 guard 不改变合法 oracle 图的遍历顺序，仅恢复 parent-list ownership 边界。
+根节点扫描也同步只计算 live parent-list 前驱，避免 stale incoming 半边制造
+假根缺失并污染 dominator。该 guard 不改变合法 oracle 图的遍历顺序，仅恢复
+parent-list ownership 边界。
 
 ## 文档状态
 
