@@ -81,7 +81,9 @@ iterator advances the ordered `PcodeOpTree` (`action.rs:1400-1414`), and
 `group_partials` consumes that same order. The HashSet only deduplicates root
 identity after collection and cannot alter first-seen order. `groupWith` has
 no duplicate/failure branch (`variable.cc:574-605`), so repeated offsets are
-permitted rather than silently inventing an error path. The regression test
+permitted and both-existing groups are combined unconditionally, matching
+`combineGroups` at `variable.cc:599-604`; no duplicate error is synthesized.
+The regression test
 `test_compare_order_selects_strictly_earlier_op` asserts the -1/+1 polarity.
 5. `merge_by_cover` → merge copy-related disjoint-cover pairs
 6. `update_high_covers` → sync each HighVariable.cover from members
