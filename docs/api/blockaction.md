@@ -980,3 +980,9 @@ cleanup pool（RuleSplit* 等）插入的 STORE 对打印可见。
   借回指针让 get_ops 暴露源块当前 op：结构化时点的成员资格快照供
   collapse 消费，此后所有后续读取（打印、ActionSetCasts 等结构化后
   Action 插入）看到源块实时 op，与 BlockCopy 一致。
+
+### 回归 B 裁决（2026-08-27）
+
+活动源委托实验已撤销。Rugra 当前保留 `build_copy` 的构造时 op 快照，
+因为活动委托会令 my_fwrite 两次判空塌缩为永假合取；STORE 全宽类型
+播种仍在 `ActionInferTypes` 中保留。

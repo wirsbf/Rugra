@@ -1385,3 +1385,9 @@ BLOCK-BUILDCOPY-MIRROR-0001）。仅 build_copy 设置；`bblocks` 中的原块
   快照，结构化后插入不可见；`get_ops` 在 `source_basic` 为 Some 时改为
   读源块**当前** op 列表，恢复 BlockCopy 活委托语义。快照成员资格仍供
   collapse 自身消费（build_copy 先填 ops 再挂 source_basic）。
+
+### 回归 B 裁决（2026-08-27）
+
+活动委托实验已撤销：Rugra 的结构化时序中它把 `my_fwrite` 两次判空读
+合并为永假合取。`build_copy` 当前采用构造时 `ops` 快照；全宽 STORE
+unknown 播种仍保留，progressbarinit 的逐字段清零不回退。
