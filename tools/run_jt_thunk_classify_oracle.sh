@@ -2069,7 +2069,7 @@ done
     printf 'candidate_blob[%s]=%s sha256=%s\n' "${owned_relative_paths[$index]}" \
       "${candidate_blob_oids[$index]}" "${candidate_blob_sha256[$index]}"
   done
-  printf 'JT-THUNK-CLASSIFY-1204: bilateral PASS (24/24 byte-identical); focused jumptable tests PASS; metadata projection pending independent review; current native=%s rlib=%s; overall MISMATCH: JUMPTABLE-PIPELINE-0001,JUMPTABLE-SORT-TOOLCHAIN-0001,JUMPTABLE-EMULFN-0001\n' \
+  printf 'JT-THUNK-CLASSIFY-1204: bilateral PASS (25/25 byte-identical); focused jumptable tests PASS; metadata projection pending independent review; current native=%s rlib=%s; overall MISMATCH: JUMPTABLE-PIPELINE-0001,JUMPTABLE-SORT-TOOLCHAIN-0001,JUMPTABLE-EMULFN-0001\n' \
     "$native_sha" "$rlib_sha"
 } >"$oracle_tmp/run-record.txt"
 /usr/bin/cat "$oracle_tmp/run-record.txt"
