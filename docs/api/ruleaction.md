@@ -41,6 +41,13 @@ oppool2=5 / cleanup=15）。对拍证据：`tests/oracle/action_break_pool_1204`
 **源代码路径**: `src/ruleaction.rs`
 **2026-07-02 修复（R9）**: `RuleTrivialArith` 重写为忠实移植 Ghidra ruleaction.cc:2370-2433——同输入坍缩（`x^x→0`/`x==x→1`/`x!=x→0`/`x^^x→0`/`x&&x→x` 等），输入须 Arc::ptr_eq 或 is_cse_match。原 Rugra 实现做了 `RuleIdentityEl` 的活（`x+0→x`），从不执行同输入坍缩 → `x^x` 残留。getOpList 改为 Ghidra 16 opcode。3 个旧测试（add_zero/mult_one/sub_zero）重定向到 `RuleIdentityEl`（其本应处理），3 个新测试覆盖 x^x→0/x==x→1/distinct-no-change。
 
+## 2026-08-27：`RulePullsubMulti::buildSubpiece` JoinRecord 归属（RULE-PULLSUB-NEWVNODEOUT-0001）
+
+`buildSubpiece` 对齐 `ruleaction.cc:776-839`：join 基底在 `numPieces()>1` 时从最高索引向下扫描 piece 表，按 `skipleft` 消耗片段；只有请求范围完整落在单片内才按该片端序计算地址并创建对应空间的 `newVarnodeOut`。跨片、单片浮点扩展或缺失 JoinRecord 均保留 `newUniqueOut`；非 join 仍按基底空间端序计算。输出创建同步 `assignHigh`、laned-register 检查和属性设置。
+
+**源代码路径**: `src/ruleaction.rs`
+**Oracle**: Ghidra 12.0.4 `e40ed13014025f82488b1f8f7bca566894ac376b`
+
 Rule-based transformations for P-code operations
 
 Corresponds to Ghidra's `ruleaction.hh`. Rules are small, local

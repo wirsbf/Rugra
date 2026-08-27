@@ -7971,57 +7971,229 @@ impl Action for ActionActiveParam {
 
 /// Active return analysis. Faithful to `ActionActiveReturn`
 /// (coreaction.cc).
-pub struct ActionActiveReturn;
+pub struct ActionActiveReturn { pub count: i32 }
 impl ActionActiveReturn {
     // Ghidra: coreaction.hh:761 ActionActiveReturn (constructor mirror)
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionActiveReturn {
     // Ghidra: coreaction.cc:1773 ActionActiveReturn::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionActiveReturn::apply (coreaction.cc:1773-1792).
         // For each call spec with active output recovery:
-        // 1. checkOutputTrialUse — mark trials active/inactive
+        // 1. checkOutputTrialUse — collect the trial varnodes from the
+        //    INDIRECT ops holding them, then mark trials active/inactive
+        //    (fspec.cc:5661-5677 + fspec.cc:5536 collectOutputTrialVarnodes)
         // 2. deriveOutputMap — ProtoModel.derive_output_map resolves which is USED
-        // 3. buildOutputFromTrials — finalize the return value
+        // 3. buildOutputFromTrials — move the surviving trial varnode onto
+        //    the CALL and destroy the holding INDIRECT (fspec.cc:5770-5860)
         // 4. clearActiveOutput
-        let mut change = 0;
+        use crate::opcodes::OpCode;
+        let mut local_count = 0;
         let n_calls = fd.num_calls();
         for i in 0..n_calls {
             let needs_work = fd.get_call_specs(i).map(|fc| fc.is_output_active()).unwrap_or(false);
             if !needs_work { continue; }
-            // 1. checkOutputTrialUse: mark trials based on whether the call op
-            //    has an output varnode (if it does, the return is active).
-            let has_output = {
-                fd.get_call_specs(i)
-                    .and_then(|fc| fc.find_call_op(fd))
-                    .map(|op| op.0.read().unwrap().output.is_some())
-                    .unwrap_or(false)
+            let Some(call_op) = fd.get_call_specs(i).and_then(|fc| fc.find_call_op(fd)) else {
+                continue;
             };
-            if let Some(mut fc) = fd.get_call_specs_mut(i) {
-                if let Some(active) = fc.active_output.as_mut() {
-                    for j in 0..active.get_num_trials() {
-                        if !active.get_trial(j).is_checked() {
-                            if has_output {
-                                active.get_trial_mut(j).mark_active();
-                            } else {
-                                active.get_trial_mut(j).mark_inactive();
+            // 1a. fspec.cc:5537-5538 collectOutputTrialVarnodes prologue: an
+            // output already on the CALL at this point means recovery raced
+            // a locked install — Ghidra throws LowlevelError.
+            if call_op.0.read().unwrap().output.is_some() {
+                return Err(crate::error::Error::Lowlevel(
+                    "Output of call was determined prematurely".to_string(),
+                ));
+            }
+            // fspec.cc:5539-5540: trialvn sized to the number of trials
+            // (None = location unused).
+            let num_trials = fd
+                .get_call_specs(i)
+                .and_then(|fc| fc.active_output.as_ref().map(|a| a.get_num_trials()))
+                .unwrap_or(0);
+            let mut trial_vn: Vec<Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>> =
+                vec![None; num_trials];
+            // The trial-address resets mutate the callspec while the op walk
+            // below borrows fd.obank read-only, so take the stable Arc owner
+            // up front and edit through its own lock (Ghidra has one object;
+            // Rust borrow split). This preserves Ghidra's ordering: the
+            // reset at fspec.cc:5550-5552 happens INSIDE the collection
+            // loop, so later whichTrial calls see the reset addresses.
+            let fc_owner = fd.callspecs.get(i).cloned();
+            // fspec.cc:5541-5553: walk the ops immediately preceding the
+            // CALL with PcodeOp::previousOp (op.cc:344 — the parent block's
+            // op list via basiciter, NOT the global SeqNum tree); stop at
+            // the first non-INDIRECT op. For each INDIRECT marked
+            // indirect_creation whose output address matches a registered
+            // trial, record the varnode and reset the trial address to the
+            // exact varnode address.
+            let mut cursor = call_op.0.read().unwrap().previous_op_in_block(&fd.obank);
+            while let Some(prev) = cursor {
+                let (is_indirect, is_creation) = {
+                    let op = prev.0.read().unwrap();
+                    (op.opcode == OpCode::CPUI_INDIRECT, op.is_indirect_creation())
+                };
+                if !is_indirect {
+                    // fspec.cc:5543: if (indop->code() != CPUI_INDIRECT) break;
+                    break;
+                }
+                if is_creation {
+                    let out = prev.0.read().unwrap().output.clone();
+                    if let Some(out) = out {
+                        let (out_space, out_off, out_size) = {
+                            let v = out.read().unwrap();
+                            (v.get_space(), v.get_offset(), v.get_size())
+                        };
+                        let index = fc_owner
+                            .as_ref()
+                            .and_then(|fc| {
+                                let fc = fc.read().unwrap();
+                                fc.active_output.as_ref().map(|a| {
+                                    a.which_trial_in_space(
+                                        out_space,
+                                        crate::address::Address::new(out_off),
+                                        out_size as i32,
+                                    )
+                                })
+                            })
+                            .unwrap_or(-1);
+                        if index >= 0 && (index as usize) < trial_vn.len() {
+                            trial_vn[index as usize] = Some(out);
+                            // fspec.cc:5550-5552: the exact varnode may
+                            // have changed, so reset the trial address.
+                            if let Some(fc) = fc_owner.as_ref() {
+                                let mut fc = fc.write().unwrap();
+                                if let Some(active) = fc.active_output.as_mut() {
+                                    active.get_trial_mut(index as usize).set_address(
+                                        crate::address::Address::new(out_off),
+                                        out_size as i32,
+                                    );
+                                }
                             }
                         }
                     }
                 }
+                cursor = prev.0.read().unwrap().previous_op_in_block(&fd.obank);
             }
-            // 2. deriveOutputMap
+            // 1b. fspec.cc:5668-5676 checkOutputTrialUse: the trial is
+            // active exactly when its varnode was found (dataflow/deadcode
+            // decided whether the location survives the call).
+            if let Some(mut fc) = fd.get_call_specs_mut(i) {
+                if let Some(active) = fc.active_output.as_mut() {
+                    for j in 0..active.get_num_trials() {
+                        if active.get_trial(j).is_checked() {
+                            // fspec.cc:5670-5671.
+                            return Err(crate::error::Error::Lowlevel(
+                                "Output trial has been checked prematurely".to_string(),
+                            ));
+                        }
+                        if trial_vn[j].is_some() {
+                            active.get_trial_mut(j).mark_active();
+                        } else {
+                            // fspec.cc:5675: don't call markNoUse — the
+                            // value may be returned but not used.
+                            active.get_trial_mut(j).mark_inactive();
+                        }
+                    }
+                }
+            }
+            // 2. deriveOutputMap (coreaction.cc:1785).
             if let Some(mut fc) = fd.get_call_specs_mut(i) {
                 fc.derive_output_map();
             }
-            // 3. buildOutputFromTrials + 4. clearActiveOutput
+            // 3. buildOutputFromTrials (coreaction.cc:1786 /
+            // fspec.cc:5770-5860): reorder survivors by slot, delete unused
+            // trials, move the surviving varnode(s) onto the CALL, and
+            // destroy the holding INDIRECT ops. The dense Option list is
+            // Ghidra's `vector<Varnode*> trialvn` verbatim — position ==
+            // registration slot - 1, None == the null entries — so the
+            // slot-based indexing inside survives sortTrials unchanged.
+            // The Funcdata-editing closures need &mut fd, so take the
+            // callspec lock through the stable Arc owner (captured before
+            // the collection walk above) instead of the Funcdata borrow
+            // (Rust borrow split; Ghidra has one object).
+            if let Some(fc_owner) = fc_owner.as_ref() {
+                let mut fc = fc_owner.write().unwrap();
+                fc.build_output_from_trials(
+                    fd,
+                    &call_op,
+                    &trial_vn,
+                    // fspec.cc:5804 data.opSetOutput(op, finaloutvn).
+                    &|fd, op, vn| {
+                        fd.op_set_output(op, vn.clone());
+                    },
+                    // fspec.cc:5850-5859: destroy the INDIRECT and delete
+                    // its two input varnodes (the constant-0 and the Iop
+                    // annotation). Rugra's bank may share constants, in
+                    // which case the delete is a no-op error Ghidra never
+                    // observes (dedicated per-op constants).
+                    &|fd, dop| {
+                        let (in0, in1) = {
+                            let d = dop.0.read().unwrap();
+                            (d.get_in(0).cloned(), d.get_in(1).cloned())
+                        };
+                        fd.op_destroy(dop);
+                        for vn in in0.into_iter().chain(in1) {
+                            let _ = fd.delete_varnode(&vn);
+                        }
+                    },
+                    // fspec.cc:5823-5841: two-piece join —
+                    // constructJoinAddress, newVarnode, opSetOutput, then a
+                    // SUBPIECE per half inserted after the call.
+                    &|fd, op, hi_vn, lo_vn| {
+                        let (hi_off, hi_size, lo_off, lo_size) = {
+                            let h = hi_vn.read().unwrap();
+                            let l = lo_vn.read().unwrap();
+                            (h.get_offset(), h.get_size(), l.get_offset(), l.get_size())
+                        };
+                        let join_off = fd
+                            .get_arch()
+                            .map(|arch| arch.construct_join_address(hi_off, hi_size, lo_off, lo_size))
+                            .unwrap_or(lo_off);
+                        let whole = fd.vbank.create_with_space(
+                            (hi_size + lo_size) as usize,
+                            crate::space::AddressSpace::Unique,
+                            join_off,
+                        );
+                        fd.op_set_output(op, whole.clone());
+                        let op_addr = op.0.read().unwrap().get_addr();
+                        // fspec.cc:5829-5834: SUBPIECE(whole, 0) -> lo.
+                        let sublo = fd.new_op(2, op_addr);
+                        fd.op_set_opcode(&sublo, OpCode::CPUI_SUBPIECE);
+                        fd.op_set_output(&sublo, lo_vn.clone());
+                        fd.op_set_input(&sublo, whole.clone(), 0);
+                        let const_zero = fd.new_constant(4, 0);
+                        fd.op_set_input(&sublo, const_zero, 1);
+                        fd.op_insert_after(&sublo, op);
+                        // fspec.cc:5835-5840: SUBPIECE(whole, lo size) -> hi.
+                        let subhi = fd.new_op(2, op_addr);
+                        fd.op_set_opcode(&subhi, OpCode::CPUI_SUBPIECE);
+                        fd.op_set_output(&subhi, hi_vn.clone());
+                        fd.op_set_input(&subhi, whole.clone(), 0);
+                        let const_lo_size = fd.new_constant(4, lo_size as u64);
+                        fd.op_set_input(&subhi, const_lo_size, 1);
+                        fd.op_insert_after(&subhi, op);
+                        whole
+                    },
+                );
+            }
+            // 4. clearActiveOutput (coreaction.cc:1787).
             if let Some(mut fc) = fd.get_call_specs_mut(i) {
                 fc.clear_active_output();
             }
-            change += 1;
+            // coreaction.cc:1788: count += 1 — the inherited protected
+            // Action::count, observable through perform()'s
+            // lcount<count → issueWarning/count_apply channel
+            // (action.cc:302/322). Mirror via the take_count_delta
+            // accumulator; the apply RETURN stays 0 (coreaction.cc:1791).
+            local_count += 1;
         }
+        self.count += local_count;
         Ok(action_status::NO_CHANGE)
+    }
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count (coreaction.cc:1788) into the Rust ActionState accumulator
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "activereturn" mirrors ctor at coreaction.hh:761
     fn get_name(&self) -> &str { "activereturn" }
