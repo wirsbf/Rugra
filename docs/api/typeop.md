@@ -9,7 +9,7 @@
 
 四类决定性语义：引用/输出参数为共享 canonical `TypeFactory`；遍历顺序为 downChain 的 do-while 链并保留 offset 0/非零分支；计数/累加器为无额外计数器、传播复用 `propagateAddIn2Out` 的共享 parent/parentOff；排序键不适用（类型链顺序决定结果）。`ActionSetCasts` 的 block/op 单轮遍历、union/checkPointerIssues 与 castOutput 仍归 `coreaction.rs` 租约。
 
-状态：PTRADD/PTRSUB typeop 域 FIXED；R2 typeop 测试 14/14 通过。当前生产 `op_output_type_local` 仍由 `varnode.rs` 直接派发，仓内无 `get_output_token` 消费点；因此 synthetic-gap token 的 E2E 接线仍待调用方租约处理。
+状态：PTRADD/PTRSUB typeop 域 FIXED；R2 typeop 测试 14/14 通过。生产 `varnode.rs::op_output_type_local` 对 PTRSUB 已接入 `TypeOpPtrsub::get_output_token`：offset=0 的已知字段返回字段类型，synthetic gap 返回 unknown-pointer，非指针输入按 oracle `TypeOp::getOutputToken` 回落 local INT。
 
 ## 2026-08-26：`TypeOpStore::get_input_local` 自创 override 移除（TRI2-STORESPLIT-WHOLESTRUCT-0001）
 
