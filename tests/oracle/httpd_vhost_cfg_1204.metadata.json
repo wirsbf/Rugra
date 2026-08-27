@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "fixture_id": "HTTPD-VHOST-CFG-1204",
+  "stable_function_ids": [
+    "GH12-F-httpd-ap_fini_vhost_config",
+    "GH12-F-httpd-ap_getparents"
+  ],
+  "task_id": "HTTPD-BUCKET2-2026-08-27",
+  "oracle": {
+    "project": "Ghidra 12.0.4",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "golden": "tests/golden/ghidra_httpd_1204.c",
+    "architecture": "x86-64",
+    "compiler_spec": "x86:LE:64:default",
+    "analysis_options": "locked examples/httpd_decompile.rs options",
+    "input": "locked HTTPD ELF corpus consumed by examples/httpd_decompile.rs"
+  },
+  "observation": {
+    "phase": "before structured printing",
+    "projection": "function name, block count/type, edge slots/flags, and ordered p-code opcode stream",
+    "cases": {
+      "ap_fini_vhost_config": {"golden_lines": 217, "ifs": 22, "fors": 3, "whiles": 8, "gotos": 5, "calls": 62},
+      "ap_getparents": {"golden_lines": 149, "ifs": 18, "fors": 0, "whiles": 7, "gotos": 6, "calls": 27}
+    }
+  },
+  "rust_status": "NO_ORACLE",
+  "known_residuals": [
+    "Rust fixture is a compileable TODO placeholder until CFG recovery lands.",
+    "The C++ contract census is transcribed from the locked golden; production Funcdata harness wiring is pending.",
+    "Do not promote to MATCH without identical pre-print block/op/edge observations."
+  ]
+}
