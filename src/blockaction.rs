@@ -4322,6 +4322,7 @@ impl<'a> CollapseStructure<'a> {
     ///   (4) checkSwitchSkips (TODO: default-skip optimization)
     ///   (5) newBlockSwitch(cases, hasExit)
     pub fn try_rule_switch(&mut self, i: usize) -> bool {
+        let irred_sw = std::env::var("RUGRA_IRRED_DBG").map(|v| v == "1").unwrap_or(false);
         let block = match self.graph.get_block(i) {
             Some(b) => b,
             None => return false,
@@ -4331,6 +4332,13 @@ impl<'a> CollapseStructure<'a> {
             return false;
         }
         let sizeout = block.read().unwrap().size_out();
+        if irred_sw {
+            let r = block.read().unwrap();
+            let outs: Vec<String> = (0..r.size_out()).filter_map(|j| r.get_out(j)
+                .map(|e| format!("{}(L{:x})", e.point.read().unwrap().get_index(), e.flags))).collect();
+            eprintln!("[IRRED-SW] try blk{} fn={} ty={:?} fl={:#x} sizeout={} out=[{}]",
+                r.get_index(), self.name, r.get_type(), r.get_flags(), r.size_out(), outs.join(","));
+        }
 
         // Ghidra cc:1656-1671: Find "obvious" exitblock.
         let mut exitblock: Option<i32> = None;
@@ -4367,16 +4375,28 @@ impl<'a> CollapseStructure<'a> {
                     None => continue,
                 };
                 // cc:1679: In cannot be a goto
-                if curbl.read().unwrap().is_goto_in(0) { return false; }
+                if curbl.read().unwrap().is_goto_in(0) {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} fallback cc:1679 goto-in case blk{}", i, curbl.read().unwrap().get_index()); }
+                    return false;
+                }
                 // cc:1680: Must resolve nested switch first
-                if curbl.read().unwrap().is_switch_out() { return false; }
+                if curbl.read().unwrap().is_switch_out() {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} fallback cc:1680 nested switch blk{}", i, curbl.read().unwrap().get_index()); }
+                    return false;
+                }
                 let cur_sout = curbl.read().unwrap().size_out();
                 if cur_sout == 1 {
-                    if curbl.read().unwrap().is_goto_out(0) { return false; }
+                    if curbl.read().unwrap().is_goto_out(0) {
+                        if irred_sw { eprintln!("[IRRED-SW] reject blk{} fallback cc:1682 goto-out case blk{}", i, curbl.read().unwrap().get_index()); }
+                        return false;
+                    }
                     let out_idx = curbl.read().unwrap().get_out(0)
                         .map(|e| e.point.read().unwrap().get_index());
                     match (exitblock, out_idx) {
-                        (Some(e), Some(o)) if e != o => return false,
+                        (Some(e), Some(o)) if e != o => {
+                            if irred_sw { eprintln!("[IRRED-SW] reject blk{} fallback cc:1684 exit mismatch {} vs {}", i, e, o); }
+                            return false;
+                        }
                         (None, Some(o)) => exitblock = Some(o),
                         _ => {}
                     }
@@ -4385,17 +4405,24 @@ impl<'a> CollapseStructure<'a> {
         } else {
             // Ghidra cc:1692-1708: validate with determined exitblock.
             let exit_idx = exitblock.unwrap();
+            if irred_sw { eprintln!("[IRRED-SW] blk{} obvious exit={}", i, exit_idx); }
             let exit_block = match self.graph.get_block(exit_idx as usize) {
                 Some(b) => b,
                 None => return false,
             };
             // cc:1693-1694: no in gotos to exitblock
             for k in 0..exit_block.read().unwrap().size_in() {
-                if exit_block.read().unwrap().is_goto_in(k) { return false; }
+                if exit_block.read().unwrap().is_goto_in(k) {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1694 exit blk{} goto-in slot {}", i, exit_idx, k); }
+                    return false;
+                }
             }
             // cc:1695-1696: no out gotos from exitblock
             for k in 0..exit_block.read().unwrap().size_out() {
-                if exit_block.read().unwrap().is_goto_out(k) { return false; }
+                if exit_block.read().unwrap().is_goto_out(k) {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1696 exit blk{} goto-out slot {}", i, exit_idx, k); }
+                    return false;
+                }
             }
             for j in 0..sizeout {
                 let curbl = match block.read().unwrap().get_out(j) {
@@ -4405,20 +4432,38 @@ impl<'a> CollapseStructure<'a> {
                 let cur_idx = curbl.read().unwrap().get_index();
                 if cur_idx == exit_idx { continue; }
                 // cc:1700: case can only have switch fall into it
-                if curbl.read().unwrap().size_in() > 1 { return false; }
+                if curbl.read().unwrap().size_in() > 1 {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1700 case blk{} size_in={}", i, cur_idx, curbl.read().unwrap().size_in()); }
+                    return false;
+                }
                 // cc:1701: in cannot be goto
-                if curbl.read().unwrap().is_goto_in(0) { return false; }
+                if curbl.read().unwrap().is_goto_in(0) {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1701 case blk{} goto-in", i, cur_idx); }
+                    return false;
+                }
                 // cc:1702: at most 1 exit from case
-                if curbl.read().unwrap().size_out() > 1 { return false; }
+                if curbl.read().unwrap().size_out() > 1 {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1702 case blk{} size_out={}", i, cur_idx, curbl.read().unwrap().size_out()); }
+                    return false;
+                }
                 let cur_sout = curbl.read().unwrap().size_out();
                 if cur_sout == 1 {
-                    if curbl.read().unwrap().is_goto_out(0) { return false; }
+                    if curbl.read().unwrap().is_goto_out(0) {
+                        if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1704 case blk{} goto-out", i, cur_idx); }
+                        return false;
+                    }
                     let out_idx = curbl.read().unwrap().get_out(0)
                         .map(|e| e.point.read().unwrap().get_index());
-                    if out_idx != Some(exit_idx) { return false; }
+                    if out_idx != Some(exit_idx) {
+                        if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1705 case blk{} out={:?} != exit {}", i, cur_idx, out_idx, exit_idx); }
+                        return false;
+                    }
                 }
                 // cc:1707: nested switch must resolve first
-                if curbl.read().unwrap().is_switch_out() { return false; }
+                if curbl.read().unwrap().is_switch_out() {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1707 case blk{} nested switch", i, cur_idx); }
+                    return false;
+                }
             }
         }
 
