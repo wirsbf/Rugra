@@ -2,7 +2,32 @@
 
 本文档的顶部“活跃 wave”是当前任务唯一事实源；后文保留历史阶段记录，不能作为当前优先级。
 
-## 活跃 wave：`W-2026-08-24-TRIFUNC-GAP`（进行中；基线 = fresh `f7b3c31` artifact，三函数严格 0/3）
+## 活跃 wave：`W-2026-08-27-DSH-FLEET`（2026-08-27 10:15 起接续 TRIFUNC-GAP；goal 至周五 16:00）
+
+> 基线（root 亲测 @ master `5462eebd`）：124 函数 / defects 0 / numbering 0 / skeleton 3128 / 0 panic / 0 timeout。
+> 三函数严格字节差：hugehelp **12** / progressbarinit **6** / my_fwrite **8**。
+> **两个 P0 回归**：A=ed827938 后 hugehelp 字面量退化+progressbarinit `__nptr=` 赋值形丢失；B=c243cdef 后 my_fwrite 双判空塌缩永假合取。
+> 编排：DSH 主 Agent（root）+ 10 并发后台子 Agent；worktree 隔离 + 独占写集租约 + `/tmp/rugra-cargo-build.lock` + 专属 CARGO_TARGET_DIR；子 Agent 交付→root 串行 cherry-pick→flock 构建→E2E→差分门禁（defects 必须 0）→更新本板。本节 root 维护。
+
+### 本 wave 认领租约（10 槽，2026-08-27 10:15 派发）
+
+| ID | P | 状态 | owner | write-set（租约） | 备注 |
+|---|---|---|---|---|---|
+| `REGA-HUGEHELP-LITERAL-0001` | P0 | IN_PROGRESS | regA@rugra-wt-regressfix2 | `src/heritage.rs`+docs/api/heritage.md | 回归 A 根因修复（bumpDeadcodeDelay/restart 链嫌疑）；前任 [DBG] 插桩需清除；验收=hugehelp/progressbarinit 恢复 c10871c3 形态+defects 0 |
+| `REGB-MYFWRITE-DUALNULL-0001` | P1 | IN_PROGRESS | regB@rugra-wt-regb | `src/coreaction.rs`+`src/block.rs`（blockaction.rs 尽量少动） | 回归 B 根因修复（fieldsplit live_ops_source/STORE 播种嫌疑）；验收=my_fwrite 双判空恢复+skeleton 8→低 |
+| `PRINTC-LINEWRAP-0001` | P1 | IN_PROGRESS | strconst2@rugra-wt-strconst2 | `src/printc.rs`+`src/prettyprint.rs`（**独占 printc 租约**） | hugehelp 最后 12 行折行；交付后释放 printc 租约给 switchemit 队列 |
+| `TRI2-STRUCT-IRREDUCIBLE-TRACE-0001` | P0 | IN_PROGRESS(第6轮) | irred@rugra-wt-irreducible | `src/blockaction.rs` | exhausted 8 函数→更低；block.rs 只报告不动 |
+| `GOTO-LABEL-UNPRINTED-0001` | P1 | IN_PROGRESS | gotolabel@rugra-wt-gotolabel | `src/flow.rs`+`src/funcdata.rs`+`examples/httpd_decompile.rs` | printc.rs 冻结提交后不再编辑（租约在 strconst2）；等 root 通知 |
+| `REVIEW-DEBTS-X3-2026-08-27` | P0 | IN_PROGRESS | reviewer@rugra-wt-rfupreview | 只读+报告+TODO 三行 | R-MAINSPIN/R-ORPHANDECL/R-CALLOUT 三笔机制 C 欠账复核；附回归缩围意见 |
+| `RULE-PULLSUB-NEWVNODEOUT-0001` | P2 | IN_PROGRESS | pullsub@rugra-wt-pullsub2 | `src/ruleaction.rs` | 非 join 基底 newVnodeOut 空间归属（ruleaction.cc:798-832）；join 臂不做 |
+| `PLTSTUB-WARNLOSS-0001` | P1 | IN_PROGRESS(只读 bisect) | pltstub@rugra-wt-pltstub | 只读+报告+TODO 行 | 51→27 警告丢失二分（早于 8474ec13）；交付引入 commit+修复 write-set 建议 |
+| `HTTPD-E2E-2026-08-27` | P1 | IN_PROGRESS(只读) | httpde2e@rugra-wt-httpde2e | 只读+报告+TODO 行 | master httpd 全量复测+goto 三症状普查（喂 gotolabel） |
+| `PRINTC-SWITCH-EMIT-0001` | P0 | PHASE-A | switchemit@rugra-wt-switchemit | docs 设计+fixture C++ 侧（**printc.rs 禁改**） | 阶段 A=oracle 深读+设计文档+fixture 骨架；printc 租约释放后实施 |
+
+> printc.rs 租约队列：strconst2（持锁）→ switchemit（阶段 B）→ 后备：callindptr/microform/markimplied-printc 臂。
+> coreaction.rs 租约队列：regB（持锁）→ 后备：markimplied/deadstore/callspec-resid。
+
+## 历史 wave：`W-2026-08-24-TRIFUNC-GAP`（进行中；基线 = fresh `f7b3c31` artifact，三函数严格 0/3）
 
 > 目标：hugehelp/progressbarinit/my_fwrite 严格字节一致 + 函数体差距驱动的根因修复 + TODO 清算。
 > root 串行集成；所有 writer 走隔离 worktree + `/tmp/rugra-cargo-build.lock` + 专属 CARGO_TARGET_DIR；本节 root 维护，worker 禁改。
