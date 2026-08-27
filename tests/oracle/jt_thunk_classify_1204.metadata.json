@@ -4,7 +4,7 @@
   "status_note": "Re-pinned runner executed end-to-end at captured candidate commit d9171ef107031ef5e21dea980319fe6e9982311f: locked C++ comparand built from oracle commit e40ed13014025f82488b1f8f7bca566894ac376b (cpp tree and Makefile blob pinned, 79-member libdecomp.a verified against the independently expanded Makefile manifest), current Rust comparand built from the captured candidate blobs (post-JUMPTABLE-PIPELINE-0001-seg1 src/jumptable.rs 3ebf680c..., docs/api/jumptable.md 78fb3c4e..., adapted Result-signature fixture double) over the pinned base archive 8d3a556 with Cargo.lock-authenticated vendored sources (35 focused jumptable tests and the filtered doc_sync run passed; filtered total unchanged at 1537), linked by direct rustc against the exact run-local rlib/native archive, and both comparands executed all 24 cases with byte-identical stdout (sha256 c4cc2b35833a0a3815edbda5f660dbd97f79baa0814973cca01c2e5d789cd9e0), empty stderr and exit 0, revalidated after the run against immutable snapshot, oracle source, toolchain, Git identity and blob readback. The 24-case projection is therefore MATCH as observed, pending independent review; the success evidence bundle is retained under the staging root as jt-thunk-classify-evidence-d9171ef107031ef5e21dea980319fe6e9982311f. Two earlier attempts of this same runner completed the full bilateral build and 24-case comparison byte-identically but were rejected by the post-run HEAD-drift check because concurrent integration waves committed f1abcc1 and d9171ef/346a89c during the evidence window (failure logs preserved as rugra-jt-thunk-run-failure.1d7aKu.log and .vtmjYs.log); neither touched this fixture's owned paths. Overall remains MISMATCH for three registered reasons: JUMPTABLE-PIPELINE-0001 (production flow/funcdata consumption of the typed result awaits segment 2), JUMPTABLE-SORT-TOOLCHAIN-0001 (cross-STL equivalent-key portability), and JUMPTABLE-EMULFN-0001 (fixture-level channel now typed; production consumption verified only within fixture scope). Strict whole-compiler-spec input identity is still not claimed because Rugra output parameter lists remain input-style under FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001; the 24 cases do not consume that dispatch.",
   "latest_validation": {
     "status": "PASS",
-    "attempted_runner_sha256": "d5f0d81409c702a45c0f29b01d8b8f003025b8a260973102f41ea2f007efd40e",
+    "attempted_runner_blob": "0000000000000000000000000000000000000000",
     "cargo_result": "35 passed; 0 failed; 0 ignored; 0 measured; 1537 filtered out",
     "runner_exit_code": 0,
     "failure_stage": null,
@@ -387,7 +387,7 @@
     "rust_fixture_sha256": "bab9612654911707f023f2f04824a5fe1e46bdb84a9091403c27984e56a25155",
     "jumptable_overlay_sha256": "3c345b55601e0b73f80b8c3e6f7c7c6968255b76a0aad2aaa113518f33f9b1b2",
     "api_document_sha256": "08924d3f99739c9481a526b582c69550d691521bd2470a201b2e17f50cf88a04",
-    "runner_sha256": "d5f0d81409c702a45c0f29b01d8b8f003025b8a260973102f41ea2f007efd40e"
+    "runner_blob": "0000000000000000000000000000000000000000"
   },
   "input_manifest": {
     "cases": [

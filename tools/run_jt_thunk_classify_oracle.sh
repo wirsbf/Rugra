@@ -441,8 +441,8 @@ for index in "${!owned_relative_paths[@]}"; do
   fi
   candidate_blob_sha256+=("$blob_sha")
 done
-runner_snapshot_sha=$(/usr/bin/sha256sum "$runner_fd_path" | /usr/bin/awk '{print $1}')
-if [[ "$runner_snapshot_sha" != "${candidate_blob_sha256[5]}" ]]; then
+runner_snapshot_blob=$(git_clean -C "$repo_root" hash-object -- "$runner_source")
+if [[ "$runner_snapshot_blob" != "${candidate_blob_oids[5]}" ]]; then
   echo "runner fd differs from captured HEAD runner blob" >&2
   exit 1
 fi
@@ -1179,7 +1179,7 @@ runner="${snapshot_owned_paths[5]}"
 
 /usr/bin/env -i PATH="$clean_path" LC_ALL=C "$python_path" -I -S - \
   "$metadata" "$cpp_fixture" "$rust_fixture" "$jumptable_overlay" \
-  "$api_document" "$runner" "$runner_snapshot_sha" "$oracle_commit" \
+  "$api_document" "$runner" "$runner_snapshot_blob" "$oracle_commit" \
   "$oracle_tag" "$oracle_cpp_tree" "$oracle_makefile_blob" \
   "$oracle_cpp_archive_sha" "$rugra_source_commit" "$rugra_source_tree" \
   "$rugra_source_src_tree" "$rugra_jumptable_blob" "$rugra_cargo_toml_blob" \
@@ -1198,7 +1198,7 @@ import sys
 
 (
     metadata_raw, cpp_raw, rust_raw, overlay_raw, api_raw, runner_raw,
-    runner_fd_sha, oracle_commit, oracle_tag, cpp_tree, makefile_blob,
+    runner_fd_blob, oracle_commit, oracle_tag, cpp_tree, makefile_blob,
     oracle_archive_sha, source_commit, source_tree, source_src_tree,
     jumptable_blob, cargo_toml_blob, cargo_lock_blob, build_rs_blob,
     base_archive_sha, cxx_path, cxx_version, cxx_sha, cc_path, cc_sha,
@@ -1233,7 +1233,7 @@ if runner_preexec:
     require("projection before evidence", metadata["projection_status"], "UNTESTED")
 else:
     require("projection observed", metadata["projection_status"], "MATCH")
-    require("attempted runner is this runner", validation["attempted_runner_sha256"], runner_fd_sha)
+    require("attempted runner blob is this runner", validation["attempted_runner_blob"], runner_fd_blob)
     require("recorded runner exit", str(validation["runner_exit_code"]), "0")
     require("recorded validation status", validation["status"], "PASS")
     require("recorded failure stage", repr(validation["failure_stage"]), "None")
@@ -1286,10 +1286,9 @@ for key, path in (
     ("rust_fixture_sha256", rust_raw),
     ("jumptable_overlay_sha256", overlay_raw),
     ("api_document_sha256", api_raw),
-    ("runner_sha256", runner_raw),
 ):
     require(key, sha(regular(path)), comparand[key])
-require("runner fd", sha(regular(runner_raw)), runner_fd_sha)
+require("runner blob", runner_fd_blob, comparand["runner_blob"])
 
 toolchain = metadata["oracle_toolchain"]
 require("toolchain keys", set(toolchain), {
