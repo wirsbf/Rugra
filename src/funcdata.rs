@@ -10837,6 +10837,10 @@ mod tests {
 
     // Serialize tests that use the global CURRENT_PROGRAM to prevent
     // multi-threaded test races when `cargo test` runs in parallel.
+    // Poison recovery is intentional: FUNCDATA-TESTS-FLAKY-0001
+    // (/tmp/rugra-reports/FUNCDATA-FLAKY-2026-08-27.md) records a real
+    // assertion panic poisoning this guard and causing order-dependent
+    // cascades of unrelated PoisonError failures.
     lazy_static::lazy_static! {
         static ref FFI_TEST_LOCK: Mutex<()> = Mutex::new(());
     }
@@ -10914,7 +10918,7 @@ mod tests {
 
     #[test]
     fn test_mov_reg_reg_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let code = vec![0x48, 0x89, 0xc3]; // mov rbx, rax
         let start = Address::new(0x1000);
 
@@ -10964,7 +10968,7 @@ mod tests {
 
     #[test]
     fn test_add_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let code = vec![0x48, 0x83, 0xc0, 0x01]; // add rax, 1
         let start = Address::new(0x1000);
 
@@ -11037,7 +11041,7 @@ mod tests {
 
     #[test]
     fn test_sub_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let code = vec![0x48, 0x83, 0xe8, 0x08]; // sub rax, 8
         let start = Address::new(0x1000);
 
@@ -11113,7 +11117,7 @@ mod tests {
 
     #[test]
     fn test_and_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // and rax, 0xf  →  48 83 e0 0f
         let code = vec![0x48, 0x83, 0xe0, 0x0f];
         let start = Address::new(0x1000);
@@ -11173,7 +11177,7 @@ mod tests {
 
     #[test]
     fn test_or_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // or rax, 0x10  →  48 83 c8 10
         let code = vec![0x48, 0x83, 0xc8, 0x10];
         let start = Address::new(0x1000);
@@ -11232,7 +11236,7 @@ mod tests {
 
     #[test]
     fn test_xor_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // xor rax, 0x7  →  48 83 f0 07
         let code = vec![0x48, 0x83, 0xf0, 0x07];
         let start = Address::new(0x1000);
@@ -11291,7 +11295,7 @@ mod tests {
 
     #[test]
     fn test_shl_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // shl rax, 4  →  48 c1 e0 04
         let code = vec![0x48, 0xc1, 0xe0, 0x04];
         let start = Address::new(0x1000);
@@ -11350,7 +11354,7 @@ mod tests {
 
     #[test]
     fn test_shr_rax_imm_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // shr rax, 4  →  48 c1 e8 04
         let code = vec![0x48, 0xc1, 0xe8, 0x04];
         let start = Address::new(0x1000);
@@ -11409,7 +11413,7 @@ mod tests {
 
     #[test]
     fn test_cmp_rax_rbx_minimal_alignment_path() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // cmp rax, rbx  →  48 39 d8
         let code = vec![0x48, 0x39, 0xd8];
         let start = Address::new(0x1000);
@@ -11495,7 +11499,7 @@ mod tests {
     ///   2. CPUI_COPY(unique_tmp) -> reg(rax)
     #[test]
     fn test_load_mov_rax_mem_rbx_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let code = vec![0x48, 0x8b, 0x03]; // mov rax, [rbx]
         let start = Address::new(0x1000);
 
@@ -11577,7 +11581,7 @@ mod tests {
     ///   1. CPUI_STORE(const(ram_space_id), reg(rbx), reg(rax)) — no output
     #[test]
     fn test_store_mov_mem_rbx_rax_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let code = vec![0x48, 0x89, 0x03]; // mov [rbx], rax
         let start = Address::new(0x1000);
 
@@ -11645,7 +11649,7 @@ mod tests {
     ///   3. CPUI_COPY(tmp_val) -> rax
     #[test]
     fn test_load_mov_rax_mem_rbx_disp_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let code = vec![0x48, 0x8b, 0x43, 0x10]; // mov rax, [rbx+0x10]
         let start = Address::new(0x1000);
 
@@ -11740,7 +11744,7 @@ mod tests {
     ///   3. CPUI_STORE(ram_space_id, rbx, tmp_result)  (write back)
     #[test]
     fn test_add_mem_rbx_rax_rmw_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let code = vec![0x48, 0x01, 0x03]; // add [rbx], rax
         let start = Address::new(0x1000);
 
@@ -11846,7 +11850,7 @@ mod tests {
     /// - Varnode def/use chains are established
     #[test]
     fn test_ssa_single_block_linear() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // Build raw ops for: mov rax, rdi; add rax, rsi; ret
         let mut op1 = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
@@ -11915,7 +11919,7 @@ mod tests {
     ///   COPY(rax ← rdi), INT_ADD(tmp), COPY(rax ← tmp), RETURN
     #[test]
     fn test_seq_mov_add_ret_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // mov rax, rdi = 48 89 f8
         // add rax, rsi = 48 01 f0
         // ret          = c3
@@ -11981,7 +11985,7 @@ mod tests {
     ///   COPY(rax←rdi), INT_AND(tmp1), COPY(rax←tmp1), INT_LEFT(tmp2), COPY(rax←tmp2), RETURN
     #[test]
     fn test_seq_mov_and_shl_ret_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let code = vec![
             0x48, 0x89, 0xf8,       // mov rax, rdi
             0x48, 0x83, 0xe0, 0x0f, // and rax, 0xf
@@ -12046,7 +12050,7 @@ mod tests {
     /// Total: 9 ops, 3 blocks
     #[test]
     fn test_seq_cmp_je_multiblock_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let code = vec![
             0x48, 0x39, 0xf7,                         // cmp rdi, rsi
             0x74, 0x08,                                // je +8 → 0x100d
@@ -12148,7 +12152,7 @@ mod tests {
     /// Block 3: MULTIEQUAL (Phi for rax) + add + ret
     #[test]
     fn test_ssa_dual_block_phi_alignment() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let code = vec![
             0x48, 0x83, 0xff, 0x00,                         // cmp rdi, 0
             0x74, 0x09,                                     // je 0x100f
@@ -12211,7 +12215,7 @@ mod tests {
     ///   - op1's input[0] should be Arc::ptr_eq to op0's output
     #[test]
     fn test_ssa_rename_single_block_linear() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // Build: op0: RAX = COPY(RDI)
         let mut op0 = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
@@ -12302,7 +12306,7 @@ mod tests {
     ///   - op `add rax, rsi` in Block 3 should use the Phi output as its RAX input
     #[test]
     fn test_ssa_rename_multi_block_phi_inputs() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let code = vec![
             0x48, 0x83, 0xff, 0x00,                         // cmp rdi, 0
             0x74, 0x09,                                     // je 0x100f
@@ -12422,7 +12426,7 @@ mod tests {
     ///   Block 3 (merge): ret   (Phi for RAX should be placed here)
     #[test]
     fn test_ssa_rename_diamond_pattern() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let code = vec![
             // Block 0: cmp rdi, 0; je block2
@@ -12511,7 +12515,7 @@ mod tests {
     /// the INPUT varnode that heritage creates for uninitialized reads.
     #[test]
     fn test_ssa_rename_input_varnode_for_undefined_read() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // op0: RAX = INT_ADD(RAX, RSI)   — RAX is read before being defined
         let mut op0 = PcodeOpRaw::new(OpCode::CPUI_INT_ADD as i32);
@@ -12581,7 +12585,7 @@ mod tests {
 
     #[test]
     fn test_cbranch_condition_def_wired_via_heritage_single_block() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // Reproduce the exact P-code x86_lift.rs emits for `cmp rdi,rsi` + `je`.
         // cmp emits 3 flag writes; only ZF (Register:0x201) matters for je.
@@ -12642,7 +12646,7 @@ mod tests {
     /// curl produces.
     #[test]
     fn test_cbranch_condition_def_wired_multiblock_real_x86() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // 0x1000: cmp rdi, rsi      48 39 f7
         // 0x1003: je  0x100a        74 05     → branches over the next insn
@@ -12723,7 +12727,7 @@ mod tests {
     ///   blk[2] exit (ret)
     #[test]
     fn test_cbranch_condition_def_wired_loop_header_is_entry() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // --- blk[0] (header/entry): cmp; je exit; jmp back ---
         // cmp rdi, rsi  →  INT_EQUAL ZF = (RDI == RSI)
@@ -12938,7 +12942,7 @@ mod tests {
 
     #[test]
     fn test_normalize_branches_break_in_while_loop() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // while(rdi != rsi) { if (rax == 0x10) break; rax++; }
         //
@@ -13871,7 +13875,7 @@ mod tests {
     /// `return iVar1 ^ iVar1` defect in curl main_init.
     #[test]
     fn test_xor_eax_eax_input_identity() {
-        let _lock = FFI_TEST_LOCK.lock().unwrap();
+        let _lock = FFI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // 31 c0 = xor eax,eax ; c3 = ret
         let code = vec![0x31, 0xc0, 0xc3];
         let start = Address::new(0x1000);

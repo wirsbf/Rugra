@@ -13,6 +13,7 @@
 
 | ID | P | 状态 | owner | write-set（租约） | 备注 |
 |---|---|---|---|---|---|
+| `FUNCDATA-FLAKY-0001` | P1 | IN_PROGRESS | orphanfix@wt-orphanfix | `src/funcdata.rs` + `docs/api/funcdata.md` + 本 TODO 行 | FFI_TEST_LOCK poison-tolerant 修复；依据 `/tmp/rugra-reports/FUNCDATA-FLAKY-2026-08-27.md`，验收 12-thread 三次失败集稳定且无 PoisonError、single-thread 17 failures 不变 |
 | `REGA-HUGEHELP-LITERAL-0001` | P0 | IN_PROGRESS | regA@rugra-wt-regressfix2 | `src/heritage.rs`+docs/api/heritage.md | 回归 A 根因修复（bumpDeadcodeDelay/restart 链嫌疑）；前任 [DBG] 插桩需清除；验收=hugehelp/progressbarinit 恢复 c10871c3 形态+defects 0 |
 | `REGB-MYFWRITE-DUALNULL-0001` | P1 | IN_PROGRESS | regB@rugra-wt-regb | `src/coreaction.rs`+`src/block.rs`（blockaction.rs 尽量少动） | 回归 B 根因修复（fieldsplit live_ops_source/STORE 播种嫌疑）；验收=my_fwrite 双判空恢复+skeleton 8→低 |
 | `PRINTC-LINEWRAP-0001` | P1 | IN_PROGRESS | strconst2@rugra-wt-strconst2 | `src/printc.rs`+`src/prettyprint.rs`（**独占 printc 租约**） | hugehelp 最后 12 行折行；交付后释放 printc 租约给 switchemit 队列 |

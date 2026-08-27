@@ -1,5 +1,9 @@
 # `funcdata.rs` API Reference
 
+## 2026-08-28：FUNCDATA-FLAKY-0001 测试锁 poison 恢复
+
+测试专用 `FFI_TEST_LOCK` 的所有获取点使用 `unwrap_or_else(|e| e.into_inner())`，在保持串行化的同时恢复 poisoned mutex。依据 `/tmp/rugra-reports/FUNCDATA-FLAKY-2026-08-27.md`：`test_normalize_branches_break_in_while_loop` 的真实断言 panic 不应把后续测试转化为顺序依赖的 `PoisonError` 级联；该止血修复不改变首因断言本身。
+
 ## 2026-08-26：GOTO-LABEL-UNPRINTED-0001 收尾验证
 - `Funcdata::remove_unreachable_blocks` 保持 `funcdata_block.cc:346-393` 的 reachable 收集、DEAD 标记、出边拆除、块删除和 `structureReset` 顺序；本轮仅移除诊断用 CFG dump。
 - httpd 29/29 函数完成且 compare defects=0/numbering=0；goto 引用的未定义 label 与零地址 label 均为 0。curl 124/124 函数 compare defects=0/numbering=0。
