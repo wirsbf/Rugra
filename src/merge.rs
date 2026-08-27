@@ -1841,7 +1841,8 @@ impl Merge {
         // `protoPartial` is populated while RulePieceStructure walks the
         // ordered op list. Reproduce that order from the bank's alive-op
         // sequence; loc_tree order is storage order, not registration order.
-        let candidates: Vec<_> = fd.obank.alivelist.iter()
+        // ActionPool::processOp advances the sorted PcodeOpTree (action.rs:1400-1414).
+        let candidates: Vec<_> = fd.obank.optree.iter()
             .filter_map(|op_ref| {
                 let op = op_ref.0.read().unwrap();
                 (op.opcode == crate::opcodes::OpCode::CPUI_PIECE && op.is_partial_root())
