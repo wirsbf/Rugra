@@ -1378,12 +1378,12 @@ require("dynamic runtime closure", toolchain["dynamic_runtime_closure"], {
     "manifest_algorithm": "sort canonical resolved paths as bytes; hash u64be(path_len), path bytes, sha256(file bytes)",
 })
 require("semantic trees", toolchain["semantic_trees"], {
-    "rust_target_libdir": {"path": "/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib", "sha256": "9261fe2c4bebd994bfc48321be9143b548793edad8fd5602341d3d1e7e06a26f", "entry_count": 62, "regular_bytes": 156584595},
+    "rust_target_libdir": {"path": "/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib", "sha256": "36d8546104749e3f665ad0c51975c4076fa9c07e5df70a6264f05fbae5b2f4b2", "entry_count": 62, "regular_bytes": 160048673},
     "gcc_16_root": {"path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16", "sha256": "006e26ecb4de682155c8cc653f72d02b907027a51192cf6324273e153726ca82", "entry_count": 838, "regular_bytes": 188527599},
     "libstdcxx_include_root": {"path": "/usr/include/c++/16", "sha256": "ebff2ff8a3f2418deb1ef6015614f96a6ef67531922bd447d108667571de511d", "entry_count": 887, "regular_bytes": 14780438},
     "system_include_root": {"path": "/usr/include", "sha256": "45e87f75aec2e199ccb874a8609524d57d5ef2ff0cad4a7f82b9705468a018b1", "entry_count": 34328, "regular_bytes": 340852508},
     "local_include_root": {"path": "/usr/local/include", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "entry_count": 0, "regular_bytes": 0},
-    "python_stdlib_root": {"path": "/usr/lib/python3.14", "sha256": "141e577fc1cf328cef99ee4b6740de1f87d9eebbc21e2885e57bee44bd3ed376", "entry_count": 12553, "regular_bytes": 265048061},
+    "python_stdlib_root": {"path": "/usr/lib/python3.14", "sha256": "f80893a55085da3d5f4994dcd9516b067e8019f7b10776d8558d7b584ac01ae3", "entry_count": 12553, "regular_bytes": 265155715},
 })
 require("zlib link inputs", toolchain["zlib_link_inputs"], {
     "link_path": "/usr/lib/libz.so",
