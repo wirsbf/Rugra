@@ -1414,3 +1414,9 @@ BLOCK-BUILDCOPY-MIRROR-0001）。仅 build_copy 设置；`bblocks` 中的原块
   f_unstructured_targ 标记改走前叶路径（markCopyBlock 契约）——旧实现
   标在包装块上，叶从未带标，emitLabelStatement 永不点火（httpd label
   未打印症状的根因之一）。
+
+## TRI2-CALLOUT-ASSIGN-0001 集成：BlockCopy 活委托
+
+`BlockBasic` 镜像同时保留 `live_ops_source` 与 `source_basic` 回指源块；`get_ops`
+优先委托活动源列表，使结构化后插入的 CAST/拆分 op 对打印可见，匹配
+Ghidra `BlockCopy` 的委托语义（block.hh:520-535）。
