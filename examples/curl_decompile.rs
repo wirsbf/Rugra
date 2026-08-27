@@ -10,7 +10,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::panic::{self, AssertUnwindSafe};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use rugra::action::ActionDatabase;
@@ -2595,6 +2595,25 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         fd.obank.optree.len(),
         fd.bblocks.get_size()
     );
+    // PIPE-RESTART-0001: preserve the configured loader/lifter for Ghidra's
+    // clearAnalysis -> startProcessing -> followFlow restart cycle. The
+    // callback is installed before Funcdata moves into the worker Arc.
+    let restart_lifter = Arc::new(Mutex::new(sleigh));
+    let restart_callee_protos = callee_protos.clone();
+    fd.set_restart_flow(Arc::new(move |restart_fd| {
+        let mut lifter = restart_lifter
+            .lock()
+            .map_err(|_| rugra::Error::from("restart SLEIGH lifter lock poisoned".to_string()))?;
+        let entry = Address::new(restart_fd.baseaddr.as_u64());
+        rugra::flow::follow_flow_with_callee_protos(
+            restart_fd,
+            &mut lifter,
+            entry,
+            u64::MAX,
+            &restart_callee_protos,
+        )
+        .map_err(|error| rugra::Error::from(format!("restart flow generation failed: {error}")))
+    }));
     // CALLSPEC-DRIVER-0001: resolve every CALL/CALLIND call specification
     // against the symbol/signature front-end (Ghidra's FlowInfo::queryCall
     // boundary, flow.cc:656-672). Ghidra queries the Program database here
