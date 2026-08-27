@@ -7987,44 +7987,58 @@ impl Action for ActionActiveReturn {
     // Ghidra: coreaction.cc:1773 ActionActiveReturn::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionActiveReturn::apply (coreaction.cc:1773-1792).
-        // For each call spec with active output recovery:
-        // 1. checkOutputTrialUse — mark trials active/inactive
-        // 2. deriveOutputMap — ProtoModel.derive_output_map resolves which is USED
-        // 3. buildOutputFromTrials — finalize the return value
-        // 4. clearActiveOutput
+        // For each active call, collect the preceding INDIRECT trial outputs.
+        // This mirrors coreaction.cc:1779-1789 and fspec.cc:5536-5860;
+        // merely clearing active_output loses the recovered CALL value.
         let mut change = 0;
         let n_calls = fd.num_calls();
         for i in 0..n_calls {
             let needs_work = fd.get_call_specs(i).map(|fc| fc.is_output_active()).unwrap_or(false);
             if !needs_work { continue; }
-            // 1. checkOutputTrialUse: mark trials based on whether the call op
-            //    has an output varnode (if it does, the return is active).
-            let has_output = {
-                fd.get_call_specs(i)
-                    .and_then(|fc| fc.find_call_op(fd))
-                    .map(|op| op.0.read().unwrap().output.is_some())
-                    .unwrap_or(false)
-            };
-            if let Some(mut fc) = fd.get_call_specs_mut(i) {
-                if let Some(active) = fc.active_output.as_mut() {
-                    for j in 0..active.get_num_trials() {
-                        if !active.get_trial(j).is_checked() {
-                            if has_output {
-                                active.get_trial_mut(j).mark_active();
-                            } else {
-                                active.get_trial_mut(j).mark_inactive();
+            let Some(call_op) = fd.get_call_specs(i).and_then(|fc| fc.find_call_op(fd)) else { continue };
+            let n = fd.get_call_specs(i).and_then(|fc| fc.active_output.as_ref().map(|a| a.get_num_trials())).unwrap_or(0);
+            let mut trial_vn = vec![None; n];
+            let mut cursor = call_op.0.read().unwrap().previous_op_in_block(&fd.obank);
+            while let Some(prev) = cursor {
+                let op = prev.0.read().unwrap();
+                if op.opcode != OpCode::CPUI_INDIRECT { break; }
+                if op.is_indirect_creation() {
+                    if let Some(out) = op.output.clone() {
+                        let (sp, off, sz) = { let v = out.read().unwrap(); (v.get_space(), v.get_offset(), v.get_size()) };
+                        if let Some(fc) = fd.get_call_specs(i) {
+                            if let Some(a) = &fc.active_output {
+                                let j = a.which_trial_in_space(sp, crate::address::Address::new(off), sz as i32);
+                                if j >= 0 && (j as usize) < trial_vn.len() { trial_vn[j as usize] = Some(out); }
                             }
                         }
                     }
                 }
+                drop(op);
+                cursor = prev.0.read().unwrap().previous_op_in_block(&fd.obank);
             }
-            // 2. deriveOutputMap
-            if let Some(mut fc) = fd.get_call_specs_mut(i) {
+            let owner = fd.callspecs.get(i).cloned();
+            if let Some(owner) = owner {
+                let mut fc = owner.write().unwrap();
+                if let Some(active) = fc.active_output.as_mut() {
+                    for j in 0..active.get_num_trials() {
+                        if trial_vn[j].is_some() { active.get_trial_mut(j).mark_active(); }
+                        else { active.get_trial_mut(j).mark_inactive(); }
+                    }
+                }
                 fc.derive_output_map();
-            }
-            // 3. buildOutputFromTrials + 4. clearActiveOutput
-            if let Some(mut fc) = fd.get_call_specs_mut(i) {
-                fc.clear_active_output();
+                drop(fc);
+                if let Some(vns) = trial_vn.iter().map(|v| v.clone()).collect::<Option<Vec<_>>>() {
+                    if let Some(owner) = fd.callspecs.get(i).cloned() {
+                        let mut fc = owner.write().unwrap();
+                        fc.build_output_from_trials(fd, &call_op, &vns,
+                            &|fd, op, vn| fd.op_set_output(op, vn.clone()),
+                            &|fd, op| fd.op_destroy(op),
+                            &|_fd, _op, hi, _lo| hi.clone());
+                    }
+                }
+                if let Some(owner) = fd.callspecs.get(i).cloned() {
+                    owner.write().unwrap().clear_active_output();
+                }
             }
             change += 1;
         }

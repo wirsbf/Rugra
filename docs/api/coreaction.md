@@ -1870,3 +1870,10 @@ unknown 局部类型使 `testDatatypeCompatibility` 的分段游走
 match_url 触发后输出 oracle 同文的
 "Restarted to delay deadcode elimination for space: register" 头注释。
 此前"消息列表可证为空"的前提随 deadcode-delay override 接线失效。
+
+## MYFWRITE-TEMPVAR exploratory (2026-08-27)
+
+ActionActiveReturn 试验性补充了 preceding INDIRECT trial 收集与
+`build_output_from_trials` 调用（oracle `coreaction.cc:1773-1792`）；
+ActionMarkImplied 增加 LOAD/STORE 覆盖守卫。尚待在 BlockCopy 活委托基线
+上完成 E2E 验证。
