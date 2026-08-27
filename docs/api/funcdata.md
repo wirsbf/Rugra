@@ -1864,3 +1864,10 @@ PLT 段起点（sh_entsize 对齐）为已知函数入口，函数范围外的�
 PLT 尾）。残余自环（main 0x2BA58、ap_update_vhost_from_headers 0x2D7F0、
 ap_field_noparam 0x2DD79）为内部空块/非返回 canary 分支域，见
 docs/TODO_BOARD.md GOTO-LABEL-UNPRINTED-0001 残差登记。
+## 测试侧两级复合块搜索（master ac6e6795 并入注记，2026-08-26）
+
+`bool-fold test` 的 Or-Condition 搜索从一级复合层扩为两级：Ghidra 的规则
+序列在该 CFG 上为 ruleBlockOr → ruleBlockIfNoExit 包裹出口子句
+（blockaction.cc:1840 第二遍）→ ruleBlockCat 合并，得到
+`List[If[Condition(Or), D], C]`——Condition 位于 List 子内的 If 里，需两级
+下钻才能命中。纯测试辅助代码，无运行时行为变化。

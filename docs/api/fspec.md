@@ -861,7 +861,42 @@ INDIRECT 降至 ~5460，mainloop repeatapply 收敛轮数 37+ → 1）。
 
 - **`FuncProto::possible_input_param(addr_offset, size, addr_space)`**（fspec.cc:4366-4387）：`!isDotdotdot` 时先过 `void_input_locked` 门（→false），再遍历锁定参数 `justifiedContain(param_size, addr, size, false)==0 → true`、`locktest` 后无命中 →false；否则落到 model。锁定参数环与仓内兄弟移植 `characterize_as_input_param`（fspec.rs:410）同一降级口径：Rugra `ProtoParameter` 存无空间 `Address` 且无独立 size，锁定环 inert；protorecovery 阶段（本方法唯一调用方 ActionDirectWrite cc:1368）`numParams()==0`，控制流与 oracle 的 num==0 路径完全一致。modelless FuncProto 是 Ghidra 不存在的状态，保守返回 false。
 - **`ProtoModelFull::possible_input_param(loc_space, loc, size)`**（fspec.hh:883 内联）：`input->possibleParam(loc,size)` 一行委托。
-## 调用实参收敛链（MAINDIFF-CALLPROTO-0001，本次新增）
+
+## 2026-08-26（TRI2-CALLOUT-ASSIGN-0001）：build_output_from_trials 签名对齐 vector<Varnode*> trialvn
+
+- `trial_vn` 参数从 `&[Varnode]` 改为 `&[Option<Varnode>]`：Ghidra 的
+  `vector<Varnode*> trialvn` 是 dense 位置索引表（fspec.cc:5541-5542 pad 到
+  `getNumTrials()`），`None` 即 C++ null 槽位。slot 在 registration 时从 1 编
+  （fspec.cc:1963-1975 slotbase），随 trial 穿越 `sortTrials`，故
+  `curtrial.getSlot()-1` 恒为原 registration 位置——**禁止**压缩列表。
+- finalvn 同为 `Vec<Option<...>>`；单 trial 路径 `finalvn[0]` 依
+  used⟹active⟹非空 不变量（fspec.cc:1704 + 5672-5673）解包，空即 panic
+  （C++ 侧为解引用崩溃）。
+- 2-trial join 路径：`findPreexistingWhole`（fspec.cc:5750-5760）未移植，
+  恒走 caller-supplied join hook——TODO(FSPEC-OUTPUTJOIN-0001)；
+  `setPrecisLo/Hi` 同登记该 TODO。
+
+## 2026-08-26（续，TRI2-CALLOUT-ASSIGN-0001）：FuncCallSpecs::derive_output_map 路由到 FuncProto::model
+
+- 调用点从简化 `type_system::protomodel::ProtoModel`（"first active" 规则、
+  无排序）改路由到 Ghidra 的单一模型字段 `FuncProto::model`
+  （fspec.hh:1501-1502 `model->deriveOutputMap(active)`）→
+  `ParamListStandardOut::fillin_map`（fspec.cc:1721-1763；无输出 modelrule
+  的 legacy 模型 defer 到 `fillin_map_fallback` fspec.cc:1638-1719）。
+- 决定性语义：`fillinMapFallback` 尾部 `sortTrials()` 的 entry==null
+  比较臂（fspec.cc:1907-1908）把未匹配/inactive trial 排到队尾——这是
+  `buildOutputFromTrials` 的 `if (!curtrial.isUsed()) break;` 重排循环
+  （fspec.cc:5778）所依赖的 used-first 不变量的来源。旧路由下 myprogress
+  出现 [inactive, active] trial 序 → finalvn 空 → 越界 panic（修复后 0
+  panic、76/124 反编译恢复）。
+- `derive_input_map` 的同构路由残差登记 TODO
+  （FSPEC-DERIVEINPUT-ROUTING-0001，ActionActiveParam 域）。
+  **合并注记（2026-08-26 master 并入）**：master 侧 MAINDIFF-CALLPROTO-0001
+  已将 `derive_input_map`/`derive_output_map` 统一路由到
+  `prototype.model`（full-model 优先、简化 seam 回退），该 TODO 就此关闭，
+  以 master 实现为准。
+
+## 调用实参收敛链（MAINDIFF-CALLPROTO-0001，master 并入）
 
 `FuncCallSpecs` 输入参数收敛的完整闭环，1:1 对齐 fspec.cc:5668-5741 与
 fspec.hh:310-317/1653-1654：
