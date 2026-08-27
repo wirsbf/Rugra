@@ -12,6 +12,7 @@
 ### 本 wave 认领租约（2026-08-27 11:05 刷新；前表见 git 历史）
 
 | ID | P | 状态 | owner | write-set（租约） | 备注 |
+| `PBSTORE-TRACE-2026-08-27` | P1 | TRACE_DONE (read-only) | tri5@rugra-wt-tri5 | `/tmp/rugra-reports/PBSTORE-TRACE-2026-08-27.md` + 本行 | de26f21c 中 prev/point/width 已 direct member；真实差异集中于 0x1c synthetic gap。oracle `typeop.cc:2308-2363,520-555` 的 local/token/typeOrder 链决定三字段无需 CAST；若新快照三字段出现 CAST，优先排查 typeop token 消费/ActionInferTypes descend，不动 varmap；write-set 候选 `src/typeop.rs`→`src/coreaction.rs`，依赖 typeop/regB 租约释放；oracle e40ed13014025f82488b1f8f7bca566894ac376b；2026-08-27 |
 | `TRI5-TRIAGE-2026-08-27` | P0 | DONE (read-only) | tri5@rugra-wt-tri5 | `/tmp/rugra-reports/TRI5-2026-08-27.md` + 本行 | master `de26f21c`：124/124，defects=0，numbering=0，skeleton 2822；相对 TRI4 2499 为 +323；f133 2678→2822 净+144，受伤函数/Top20/合流预期见报告；oracle e40ed13014025f82488b1f8f7bca566894ac376b；2026-08-27 |
 |---|---|---|---|---|---|
 | `REGA-HUGEHELP-LITERAL-0001` | P0 | IN_PROGRESS | regA@rugra-wt-regressfix2 | `src/heritage.rs`+docs/api/heritage.md | 回归 A 根因修复（bumpDeadcodeDelay/restart 链嫌疑）；前任 [DBG] 插桩需清除；验收=hugehelp/progressbarinit 恢复 c10871c3 形态+defects 0 |
