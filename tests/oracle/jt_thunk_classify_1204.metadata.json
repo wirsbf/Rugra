@@ -673,7 +673,7 @@
         "model": "fixture-multi-space"
       }
     ],
-    "sha256": "0d8ee05012720aeeb0192b9ae90aebb84b967a81908f2128f7f7060b3060d6ed"
+    "sha256": "a24c75c94923b28ef037066187824d8ecafc6708e074d13f27f5441c16e09848"
   },
   "expected_results": {
     "ghidra_stdout_sha256": "c4cc2b35833a0a3815edbda5f660dbd97f79baa0814973cca01c2e5d789cd9e0",
