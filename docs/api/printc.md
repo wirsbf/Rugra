@@ -1,5 +1,16 @@
 # `printc.rs` API Reference
 
+## 2026-08-27：glob_range 诊断（TRI4 第 6 位）
+
+`--func glob_range -v` 当前 skeleton diff=98，`defects=0`、`numbering=0`。
+逐行桶对照显示主体已不是 PrintC 文本：golden 的 `URLGlob *`/`char`/`short`/
+`float` 类型与 `glob_expand->size`/`pattern[i]` 字段访问，在 Rugra 中变为
+`long`/`byte`、裸地址算术、`CONCAT`/`SUBPIECE`、寄存器临时和损坏的
+`sscanf` 输出参数；分支/循环基本结构相对保留。此前记录的 base_explicit 多实例
+声明膨胀不是本轮主因，当前差异主要归 TypeWiring/CoreAction 的字段与窄类型传播，
+并伴随上游 lift 的间接内存建模。PrintC 域无安全直接修；方案转 regB 类型域及
+必要的 IR/field resolution，修复后再做本函数差分。当前转待命储备。
+
 ## 2026-08-27：myprogress 诊断（TRI4 第 7 位）
 
 `--func myprogress -v`（oracle e40ed130，x86-64 BFD）当前为 skeleton diff 102
