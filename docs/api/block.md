@@ -1420,3 +1420,12 @@ BLOCK-BUILDCOPY-MIRROR-0001）。仅 build_copy 设置；`bblocks` 中的原块
 `BlockBasic` 镜像同时保留 `live_ops_source` 与 `source_basic` 回指源块；`get_ops`
 优先委托活动源列表，使结构化后插入的 CAST/拆分 op 对打印可见，匹配
 Ghidra `BlockCopy` 的委托语义（block.hh:520-535）。
+活动委托实验已撤销：Rugra 的结构化时序中它把 `my_fwrite` 两次判空读
+合并为永假合取。`build_copy` 当前采用构造时 `ops` 快照；全宽 STORE
+unknown 播种仍保留，progressbarinit 的逐字段清零不回退。
+
+## Edge flag collision fix（2026-08-27）
+
+Ghidra `block.hh:108-118` 定义 `f_defaultswitch_edge=4`、
+`f_tree_edge=0x10`，二者不同。Rugra 的 `F_DEFAULTSWITCH_EDGE` 改为
+`1<<11`，与现有边标志互不冲突；单测锁定所有 edge flag 两两唯一。
