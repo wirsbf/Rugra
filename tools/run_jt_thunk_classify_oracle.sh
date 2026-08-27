@@ -227,7 +227,7 @@ llvm_sha=06662e11c1faa7b4cb199e03c9ef681b74655ad4274473273b41dfc754a6f16f
 ldd_path=/usr/bin/ldd
 ldd_sha=94f332c23cf00596d0387d6f54693664f9a53334d65953b2ff308057cc8530b1
 ld_so_cache_path=/etc/ld.so.cache
-ld_so_cache_sha=7fca1d12ffa098186e7f41645435a859af2499627b18b1779ecd251b296e2e4c
+ld_so_cache_sha=04e49d85dc0f45e8804d29a63fbeec51907177d5c4f088570ed8d91839d47662
 shell_link_path=/bin/sh
 shell_path=/usr/bin/bash
 shell_sha=575e03ac834b739349a4484de481abcd06a6f7193cefc795260a32a1943f20a5
@@ -1373,7 +1373,7 @@ require("dynamic runtime closure", toolchain["dynamic_runtime_closure"], {
     "ldd_path": "/usr/bin/ldd",
     "ldd_sha256": "94f332c23cf00596d0387d6f54693664f9a53334d65953b2ff308057cc8530b1",
     "ld_so_cache_path": "/etc/ld.so.cache",
-    "ld_so_cache_sha256": "7fca1d12ffa098186e7f41645435a859af2499627b18b1779ecd251b296e2e4c",
+    "ld_so_cache_sha256": "04e49d85dc0f45e8804d29a63fbeec51907177d5c4f088570ed8d91839d47662",
     "resolved_library_count": 55,
     "path_content_manifest_sha256": "1b5f50ed130d37e9d7d937af4958eec9205d5a8f905b3f8a0eba1c4b9244d572",
     "manifest_algorithm": "sort canonical resolved paths as bytes; hash u64be(path_len), path bytes, sha256(file bytes)",
