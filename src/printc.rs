@@ -646,7 +646,7 @@ impl PrintC {
     // Ghidra: printc.cc:123 PrintC::new
     /// Create a new PrintC instance
     pub fn new(emit: Box<dyn Emit>) -> Self {
-        Self {
+        let mut printer = Self {
             emit,
             symbol_table: HashMap::new(),
             string_table: HashMap::new(),
@@ -722,7 +722,16 @@ impl PrintC {
             rpn_tok_subscript: 9,
             rpn_tok_boolean_not: 10,
             rpn_enabled: true,
-        }
+        };
+        // printc.cc:1594 resetDefaultsPrintC -> setCStyleComments
+        // (printc.hh:242) -> printlanguage.cc:96-110 setCommentDelimeter
+        // ("/* "," */", false): the else branch builds the blank fill
+        // matching the start delimiter's width ("/* " -> "   ") and calls
+        // emit->setCommentFill(spaces). No-op for plain emitters; arms the
+        // pretty printer's comment line-fill for forced breaks inside
+        // comment blocks.
+        printer.emit.set_comment_fill("   ");
+        printer
     }
 
     // Ghidra: printc.cc:123 PrintC::takeEmit
@@ -1743,7 +1752,12 @@ impl PrintC {
                 self.rpn_push_in(op_arc, op, 2, self.mods);
                 self.rpn_recurse();
             }
-            // printc.cc:508 opCall: name(args...).
+            // printc.cc:596 opCall: pushOp(&function_call) then the name
+            // atom and the implied parameters; the postsurround token's
+            // rpn_emit_op (printlanguage.cc:343-353) renders
+            // spaces(0,bump) openParen spaces(0,bump) ... closeParen, which
+            // is what arms the pretty printer's wrap indent around the
+            // argument group.
             OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
                 let target_name = if let Some(in0) = op.get_in(0) {
                     let v0 = in0.read().unwrap();
@@ -1756,31 +1770,7 @@ impl PrintC {
                 } else {
                     "FUN_unknown".to_string()
                 };
-                let atom = Atom::new(
-                    &target_name,
-                    TagType::FunToken,
-                    SyntaxHighlight::FuncnameColor,
-                );
-                self.rpn_push_atom(&atom);
-                self.emit.print("(");
-                let n = op.num_input();
-                // in(0) is the target; args are in(1..n).
-                // printc.cc:623-631: `pushOp(&comma,op)` between parameters,
-                // where `comma` is { ",", ..., spacing 0 } (printc.cc:57) —
-                // the separator is a bare "," with no trailing space, e.g.
-                // `fwrite(buffer,size,nmemb,__s)`.
-                let mut first = true;
-                for i in 1..n {
-                    if !first {
-                        self.emit.print(",");
-                    }
-                    first = false;
-                    if op.get_in(i).is_some() {
-                        self.rpn_push_in(op_arc, op, i, self.mods);
-                        self.rpn_recurse();
-                    }
-                }
-                self.emit.print(")");
+                self.rpn_op_call(op_arc, op, &target_name);
             }
             // printc.cc:754 PrintC::opReturn default plain-return arm;
             // PRINT-RPN-0001 tracks the halt/noreturn/baddata/missing variants.
@@ -2362,6 +2352,49 @@ impl PrintC {
             }
         } else {
             // printc.cc:440-441: empty blank token for void.
+            let blank = Atom::new("", TagType::BlankToken, SyntaxHighlight::NoColor);
+            self.rpn_push_atom(&blank);
+        }
+    }
+
+    // Ghidra: printc.cc:596 PrintC::opCall
+    /// RPN-path port of `PrintC::opCall(const PcodeOp*)` (printc.cc:596-636):
+    /// pushOp(&function_call,op), the fspec name atom (functoken /
+    /// funcname_color), then count-1 comma tokens and the parameter
+    /// varnodes pushed in reverse order (printc.cc:623-631; the LIFO
+    /// nodepend drain in recurse emits them forward). count==0 pushes the
+    /// empty blank atom (printc.cc:635-636). The hidden-`this` skip slot is
+    /// C++-only and stays -1 (printc.cc:620-623).
+    fn rpn_op_call(
+        &mut self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        op: &PcodeOp,
+        target_name: &str,
+    ) {
+        use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+        // printc.cc:597: pushOp(&function_call,op)
+        self.rpn_push_op(self.rpn_tok_function_call);
+        // printc.cc:605-616: the callpoint fspec name atom. Rugra resolves
+        // the name from the callpoint address (the driver's stand-in for
+        // the oracle's fspec table; the space check IPTR_FSPEC at cc:601
+        // has no Rugra counterpart — the driver only feeds resolved
+        // callpoints into this arm).
+        let name_atom = Atom::new(target_name, TagType::FunToken, SyntaxHighlight::FuncnameColor);
+        self.rpn_push_atom(&name_atom);
+        // printc.cc:620-634: skip==-1 always; count = numInput()-1.
+        let count = op.num_input() as i64 - 1;
+        if count > 0 {
+            // printc.cc:626-627: count-1 comma separators.
+            for _ in 0..(count - 1) {
+                self.rpn_push_op(self.rpn_tok_comma);
+            }
+            // printc.cc:629-633: implied vn's pushed in reverse order for
+            // efficiency (see PrintLanguage::pushVnImplied).
+            for i in (1..op.num_input()).rev() {
+                self.rpn_push_in(op_arc, op, i, self.mods);
+            }
+        } else {
+            // printc.cc:635-636: push empty token for void.
             let blank = Atom::new("", TagType::BlankToken, SyntaxHighlight::NoColor);
             self.rpn_push_atom(&blank);
         }
@@ -6059,14 +6092,14 @@ impl PrintC {
                         }
                     }
                 }
-                self.emit.open_paren();
+                self.emit.open_paren("(");
                 for i in 1..def_op.num_input() {
                     if i > 1 { self.emit.print(", "); }
                     if let Some(vn) = def_op.get_in(i) {
                         self.push_varnode(&vn.read().unwrap(), Some(def_op));
                     }
                 }
-                self.emit.close_paren();
+                self.emit.close_paren(")", 0);
             }
             // CPUI_CAST: emit `(type)input`. Faithful to Ghidra printCc's
             // op-cast handling (printc.cc): a CAST op renders as a C cast of
@@ -7824,6 +7857,13 @@ impl PrintLanguage for PrintC {
         // "once per file"; instead a process-wide AtomicBool guarantees the
         // typedefs are emitted exactly once across the whole decompile run.
         if !TYPEDEFS_EMITTED.swap(true, Ordering::SeqCst) {
+            // Ghidra: printc.cc:2621-2628 PrintC::docAllGlobals — document-
+            // level declarations ride inside beginDocument .. endDocument
+            // .. flush; the beginDocument group gives the pretty printer its
+            // base indent entry so the separating tagLine breaks resolve.
+            // Rugra's typedef preamble is the stand-in for the global
+            // declaration section (see note above).
+            self.emit.begin_document();
             self.emit.tag_line(0);
             self.emit.print("typedef unsigned char byte;");
             self.emit.tag_line(0);
@@ -7838,6 +7878,8 @@ impl PrintLanguage for PrintC {
             self.emit.print("typedef struct { char _anon[256]; } _struct;");
             self.emit.tag_line(0);
             self.emit.print("");
+            self.emit.end_document();
+            self.emit.flush();
         }
 
         // Ghidra: printc.cc:2641-2670 PrintC::docFunction — the oracle emits
@@ -7949,20 +7991,35 @@ impl PrintLanguage for PrintC {
         // so the shared emitted set prevents that entry from being replayed.
         self.emit_block_graph(graph);
 
-        // Ghidra: printc.cc:2662
+        // Ghidra: printc.cc:2662-2665
         //   emit->closeBraceIndent(CLOSE_CURLY, id);
-        // stopIndent + newline at the outer indent + `}`. The trailing
-        // tagLine (printc.cc:2663) is carried by end_function's newline.
+        //   emit->tagLine();
+        //   emit->endFunction(id1);
+        //   emit->flush();
+        // stopIndent + newline at the outer indent + `}`, then the trailing
+        // break (the oracle's source of the final newline), the function
+        // group end (no plain-text bytes), and the queue drain.
         self.emit.close_brace_indent("}");
+        // cc:2663: emit->tagLine();
+        self.emit.tag_line(0);
+        // cc:2664: emit->endFunction(id1);
+        self.emit.end_function();
 
-        // Post-process: eliminate redundant gotos and orphan labels (P3)
-        if let Some(eno) = self.emit.as_any_mut()
+        // Post-process: eliminate redundant gotos and orphan labels (P3).
+        // The pretty printer commits lazily, so drain its queue first
+        // (flush) before the legacy low-level text pass runs.
+        if let Some(epp) = self.emit.as_any_mut()
+            .and_then(|a| a.downcast_mut::<crate::prettyprint::EmitPrettyPrint>())
+        {
+            epp.post_process();
+        } else if let Some(eno) = self.emit.as_any_mut()
             .and_then(|a| a.downcast_mut::<crate::prettyprint::EmitNoMarkup>())
         {
             eno.post_process();
         }
 
-        self.emit.end_function();
+        // cc:2665: emit->flush();
+        self.emit.flush();
     }
 
     // Ghidra: printlanguage.cc:589 PrintLanguage::emitLineComment
@@ -8575,7 +8632,7 @@ impl PrintLanguage for PrintC {
                 self.emit.tag_variable("FUN_unknown", 0);
             }
         }
-        self.emit.open_paren();
+        self.emit.open_paren("(");
         // For CALL arguments (in[1..]), try to resolve the defining expression
         // instead of printing raw register names like "RDI"
         for i in 1..op.num_input() {
@@ -8592,7 +8649,7 @@ impl PrintLanguage for PrintC {
             let arg_text = self.emit_call_arg_text(op, i);
             self.emit.print(&arg_text);
         }
-        self.emit.close_paren();
+        self.emit.close_paren(")", 0);
     }
 
 
@@ -8682,7 +8739,7 @@ impl PrintLanguage for PrintC {
             }
         }
         // printc.cc:554-557 (the legacy path never sets comma_separate).
-        self.emit.open_paren();
+        self.emit.open_paren("(");
         if booleanflip {
             // printc.cc:564-565 boolean_not fallback, explicit-paren form.
             self.emit.print("!(");
@@ -8691,7 +8748,7 @@ impl PrintLanguage for PrintC {
         } else {
             self.emit_cbranch_condition(op);
         }
-        self.emit.close_paren();
+        self.emit.close_paren(")", 0);
 
         if yesif {
             // printc.cc:575-577 + emitGotoStatement fold (printc.cc:2303-2323).
@@ -9285,7 +9342,7 @@ impl PrintC {
         }
         // printc.cc:553-557: openParen(OPEN_PAREN) vs openGroup().
         let id = if yesparen {
-            self.emit.open_paren();
+            self.emit.open_paren("(");
             0
         } else {
             self.emit.open_group()
@@ -9332,7 +9389,7 @@ impl PrintC {
         self.rpn_recurse();
         // printc.cc:569-572
         if yesparen {
-            self.emit.close_paren();
+            self.emit.close_paren(")", 0);
         } else {
             self.emit.close_group(id);
         }
@@ -10815,7 +10872,7 @@ impl PrintC {
         self.emit.tag_op("for");
         self.emit.print(" ");
         // cc:2972: openParen(OPEN_PAREN)
-        self.emit.open_paren();
+        self.emit.open_paren("(");
         // cc:2973-2974: pushMod(); setMod(comma_separate);
         self.push_mod();
         self.set_mod(print_mods::COMMA_SEPARATE);
@@ -10840,7 +10897,7 @@ impl PrintC {
         // cc:2990: popMod();
         self.pop_mod();
         // cc:2991: closeParen(CLOSE_PAREN, id1)
-        self.emit.close_paren();
+        self.emit.close_paren(")", 0);
         // cc:2992: indent = openBraceIndent(OPEN_CURLY, option_brace_loop);
         // cc:2993: setMod(no_branch);
         self.set_mod(print_mods::NO_BRANCH);
@@ -11611,13 +11668,13 @@ impl PrintC {
         // emit->spaces(function_call.spacing, function_call.bump);
         // function_call.spacing==0, so no spaces between name and '('.
         // int4 id2 = emit->openParen(OPEN_PAREN);
-        self.emit.open_paren();
+        self.emit.open_paren("(");
         // emit->spaces(0, function_call.bump);
         // pushScope(fd->getScopeLocal());   // enter function's scope
         // emitPrototypeInputs(proto);
         self.emit_prototype_inputs(proto);
         // emit->closeParen(CLOSE_PAREN,id2);
-        self.emit.close_paren();
+        self.emit.close_paren(")", 0);
         // emit->closeGroup(id1);
         // emit->endFuncProto(id);
         self.emit.end_func_proto();

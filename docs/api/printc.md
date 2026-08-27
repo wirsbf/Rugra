@@ -1,5 +1,27 @@
 # `printc.rs` API Reference
 
+## 2026-08-26：RPN opCall 接通 + pretty-printer 挂接（PRINTC-LINEWRAP-0001）
+
+- `rpn_op_call`（Ghidra: printc.cc:596 PrintC::opCall）：RPN 路径的
+  CALL/CALLIND 渲染替换直写拼串——`pushOp(&function_call)`、fspec 名
+  atom（functoken/funcname_color）、`count-1` 个 comma token、参数
+  varnode 逆序 `pushVnImplied`（LIFO 排空正序出），count==0 推空
+  blank atom（cc:635-636）。postsurround token 的
+  `spaces(0,bump) openParen spaces(0,bump) … closeParen` 布局是
+  pretty printer 在参数组周围折行缩进的来源。
+- `PrintC::new` 尾部 `emit.set_comment_fill("   ")`：resetDefaultsPrintC
+  → setCStyleComments → setCommentDelimeter("/* "," */")（printc.cc:1594/
+  printlanguage.cc:96-110）的空格填充宽度，武装注释块内强制折行的填充。
+- `doc_function` 尾部改为 oracle 时序 `closeBraceIndent → tagLine →
+  endFunction → flush`（printc.cc:2662-2665）；typedef 前言包进
+  `beginDocument…endDocument…flush`（docAllGlobals 形态，printc.cc:2621-2629）。
+- 所有 `open_paren()/close_paren()` 调用点升级为带括号串与组 id 的
+  trait 新签名（`open_paren("(")` / `close_paren(")", id)`），为
+  `EmitPrettyPrint` 的 openGroup/closeGroup 配对提供 id。
+
+**验证**：hugehelp 与 golden 逐字节一致（含三个 `puts(\n      "..."\n
+      );` 折行），全量差分 defects=0/numbering=0。
+
 ## 2026-08-26：RPN 常量臂接通完整 pushConstant 分派（MAINDIFF-STRCONST-0001）
 
 RPN 叶片 `make_atom_for_vn` 的常量路径此前走自创 `format_constant_value`

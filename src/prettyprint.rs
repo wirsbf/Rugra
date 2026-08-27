@@ -31,12 +31,32 @@ pub trait Emit {
     /// End a block (e.g., '}')
     fn end_block(&mut self);
 
-    // RUGRA-GLUE: open_paren (no Ghidra counterpart found)
-    /// Emit an open parenthesis '('
-    fn open_paren(&mut self);
-    // RUGRA-GLUE: close_paren (no Ghidra counterpart found)
-    /// Emit a close parenthesis ')'
-    fn close_paren(&mut self);
+    // Ghidra: prettyprint.cc:587 EmitNoMarkup::openParen
+    /// Emit an open parenthesis. Returns the id of the printing group the
+    /// pretty printer opens around the parenthesised unit (plain-text
+    /// emitters print the paren and return 0).
+    fn open_paren(&mut self, paren: &str) -> i32 {
+        self.print(paren);
+        0
+    }
+
+    // Ghidra: prettyprint.cc:589 EmitNoMarkup::closeParen
+    /// Emit a close parenthesis, closing the group opened by the matching
+    /// `open_paren` (the id is only consumed by the pretty printer).
+    fn close_paren(&mut self, paren: &str, _id: i32) {
+        self.print(paren);
+    }
+
+    // Ghidra: prettyprint.cc:46 Emit::spaces
+    /// Emit `num` space characters. In the pretty printer this is a
+    /// \e tokenbreak: whitespace where a line break (indenting by `bump`)
+    /// may be inserted if the line overflows. Plain-text emitters just
+    /// print the spaces (prettyprint.cc:46-59's spacearray fold).
+    fn spaces(&mut self, num: i32, _bump: i32) {
+        for _ in 0..num.max(0) {
+            self.print(" ");
+        }
+    }
 
     // Ghidra: prettyprint.hh:340 Emit::openGroup
     /// Start an invisible printing group and return its matching identifier.
@@ -150,6 +170,28 @@ pub trait Emit {
     fn begin_func_proto(&mut self) {}
     // RUGRA-GLUE: end_func_proto (no Ghidra counterpart found)
     fn end_func_proto(&mut self) {}
+
+    // Ghidra: prettyprint.cc:1134 EmitPrettyPrint::startComment
+    /// Begin a comment block (the pretty printer fills forced breaks inside
+    /// comments with the comment fill string). Returns the block id.
+    fn start_comment(&mut self) -> i32 { 0 }
+
+    // Ghidra: prettyprint.cc:1144 EmitPrettyPrint::stopComment
+    /// End the comment block started by `start_comment`.
+    fn stop_comment(&mut self, _id: i32) {}
+
+    // Ghidra: prettyprint.cc:1194 EmitPrettyPrint::flush
+    /// Drain all pending print commands to the final output stream. The
+    /// pretty printer commits its whole token queue; plain emitters are
+    /// already byte-committed, so this is a no-op for them.
+    fn flush(&mut self) {}
+
+    // Ghidra: prettyprint.hh:1111 EmitPrettyPrint::setCommentFill
+    /// Set the fill string printed after a forced line break inside a
+    /// comment block (prettyprint.cc:601/690). PrintC arms this with the
+    /// width of its `commentstart` delimiter ("/* " -> "   ") via
+    /// printlanguage.cc:98-110 setCommentDelimeter.
+    fn set_comment_fill(&mut self, _fill: &str) {}
 
     // RUGRA-GLUE: emits_markup (no Ghidra counterpart found)
     /// Check if this emitter supports markup
@@ -3513,14 +3555,15 @@ impl Emit for EmitNoMarkup {
         self.output.push('}');
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::openParen
-    fn open_paren(&mut self) {
-        self.output.push('(');
+    // Ghidra: prettyprint.hh:587 EmitNoMarkup::openParen
+    fn open_paren(&mut self, paren: &str) -> i32 {
+        self.output.push_str(paren);
+        0
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::closeParen
-    fn close_paren(&mut self) {
-        self.output.push(')');
+    // Ghidra: prettyprint.hh:589 EmitNoMarkup::closeParen
+    fn close_paren(&mut self, paren: &str, _id: i32) {
+        self.output.push_str(paren);
     }
 
     // Ghidra: prettyprint.hh:547 EmitNoMarkup::beginFunction
@@ -3528,10 +3571,11 @@ impl Emit for EmitNoMarkup {
         // No-op for plain text
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::endFunction
-    fn end_function(&mut self) {
-        self.output.push('\n');
-    }
+    // Ghidra: prettyprint.hh:154 Emit::endFunction (plain-text no-op)
+    /// The oracle's `EmitNoMarkup::endFunction` writes no bytes; the final
+    /// newline of a function body comes from docFunction's trailing
+    /// `tagLine()` (printc.cc:2663), not from the group end.
+    fn end_function(&mut self) {}
 
     // Ghidra: prettyprint.hh:547 EmitNoMarkup::tagType
     fn tag_type(&mut self, text: &str, _id: u64) { self.print(text); }
@@ -3635,10 +3679,10 @@ impl Emit for NullEmit {
     fn begin_block(&mut self) {}
     // RUGRA-GLUE: end_block (no Ghidra counterpart found)
     fn end_block(&mut self) {}
-    // RUGRA-GLUE: open_paren (no Ghidra counterpart found)
-    fn open_paren(&mut self) {}
-    // RUGRA-GLUE: close_paren (no Ghidra counterpart found)
-    fn close_paren(&mut self) {}
+    // RUGRA-GLUE: open_paren (null emitter for the discovery pass)
+    fn open_paren(&mut self, _paren: &str) -> i32 { 0 }
+    // RUGRA-GLUE: close_paren (null emitter for the discovery pass)
+    fn close_paren(&mut self, _paren: &str, _id: i32) {}
     // RUGRA-GLUE: begin_function (no Ghidra counterpart found)
     fn begin_function(&mut self) {}
     // RUGRA-GLUE: end_function (no Ghidra counterpart found)
@@ -3696,10 +3740,10 @@ impl Emit for CaseDetectEmit {
     fn begin_block(&mut self) {}
     // RUGRA-GLUE: end_block (no Ghidra counterpart found)
     fn end_block(&mut self) {}
-    // RUGRA-GLUE: open_paren (no Ghidra counterpart found)
-    fn open_paren(&mut self) {}
-    // RUGRA-GLUE: close_paren (no Ghidra counterpart found)
-    fn close_paren(&mut self) {}
+    // RUGRA-GLUE: open_paren (case-detect probe emitter)
+    fn open_paren(&mut self, _paren: &str) -> i32 { 0 }
+    // RUGRA-GLUE: close_paren (case-detect probe emitter)
+    fn close_paren(&mut self, _paren: &str, _id: i32) {}
     // RUGRA-GLUE: begin_function (no Ghidra counterpart found)
     fn begin_function(&mut self) {}
     // RUGRA-GLUE: end_function (no Ghidra counterpart found)
@@ -3733,6 +3777,1099 @@ impl Emit for CaseDetectEmit {
     // RUGRA-GLUE: into_any (no Ghidra counterpart found)
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
+    }
+}
+
+// Ghidra: prettyprint.hh:612 TokenSplit::printclass
+/// The general class of a pretty-printing token (prettyprint.hh:612-622):
+/// group begin/end delimiters, content strings, breakable whitespace,
+/// indent levels, comment blocks, and no-space markup.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PrintClass {
+    Begin,
+    End,
+    TokenString,
+    TokenBreak,
+    BeginIndent,
+    EndIndent,
+    BeginComment,
+    EndComment,
+    Ignore,
+}
+
+// Ghidra: prettyprint.hh:625 TokenSplit::tag_type
+/// The exhaustive list of token types (prettyprint.hh:625-656). Rugra's
+/// plain-text low level only consumes the character data, so the markup
+/// companions (op/vn/fd/ct pointers) of the oracle TokenSplit are elided;
+/// the tag type itself drives the class switch in `EmitPrettyPrint`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TagType {
+    DocuB, DocuE, FuncB, FuncE, BlocB, BlocE, RtypB, RtypE,
+    VardB, VardE, StatB, StatE, ProtB, ProtE,
+    VariT, OpT, FnamT, TypeT, FieldT, CommT, LabelT, CaseT, SyntT,
+    OparT, CparT, OinvT, CinvT, SpacT, BumpT, LineT,
+}
+
+// Ghidra: prettyprint.hh:609 TokenSplit
+/// A token/command object in the pretty printing stream. Faithful to the
+/// oracle's TokenSplit (prettyprint.hh:609-936): every emitter method maps
+/// to one constructor here, the token carries its content characters
+/// (`tok`), the break geometry (`numspaces`, `indentbump`), and the Oppen
+/// bookkeeping `size` (content chars, or the negative scan offset while the
+/// enclosing group is uncommitted).
+#[derive(Clone, Default)]
+pub struct TokenSplit {
+    tagtype: TagType,
+    delimtype: PrintClass,
+    tok: String,
+    indentbump: i32,
+    numspaces: i32,
+    size: i32,
+    count: i32,
+}
+
+impl Default for TagType {
+    // RUGRA-GLUE: TokenSplit must be Default-constructible for the circular
+    // queue's spare slots (the oracle default-constructs TokenSplit too).
+    fn default() -> Self { TagType::SyntT }
+}
+
+impl Default for PrintClass {
+    // RUGRA-GLUE: TokenSplit must be Default-constructible for the circular
+    // queue's spare slots (the oracle default-constructs TokenSplit too).
+    fn default() -> Self { PrintClass::Ignore }
+}
+
+impl TokenSplit {
+    // Ghidra: prettyprint.hh:684 TokenSplit::beginDocument
+    fn begin_document(&mut self, countbase: i32) -> i32 {
+        self.tagtype = TagType::DocuB; self.delimtype = PrintClass::Begin; self.size = 0;
+        self.count = countbase; self.count
+    }
+    // Ghidra: prettyprint.hh:690 TokenSplit::endDocument
+    fn end_document(&mut self, id: i32) {
+        self.tagtype = TagType::DocuE; self.delimtype = PrintClass::End; self.size = 0; self.count = id;
+    }
+    // Ghidra: prettyprint.hh:696 TokenSplit::beginFunction
+    fn begin_function(&mut self, countbase: i32) -> i32 {
+        self.tagtype = TagType::FuncB; self.delimtype = PrintClass::Begin; self.size = 0;
+        self.count = countbase; self.count
+    }
+    // Ghidra: prettyprint.hh:702 TokenSplit::endFunction
+    fn end_function(&mut self, id: i32) {
+        self.tagtype = TagType::FuncE; self.delimtype = PrintClass::End; self.size = 0; self.count = id;
+    }
+    // Ghidra: prettyprint.hh:710 TokenSplit::beginBlock
+    fn begin_block(&mut self, countbase: i32) -> i32 {
+        self.tagtype = TagType::BlocB; self.delimtype = PrintClass::Ignore; self.count = countbase; self.count
+    }
+    // Ghidra: prettyprint.hh:715 TokenSplit::endBlock
+    fn end_block(&mut self, id: i32) {
+        self.tagtype = TagType::BlocE; self.delimtype = PrintClass::Ignore; self.count = id;
+    }
+    // Ghidra: prettyprint.hh:722 TokenSplit::beginReturnType
+    fn begin_return_type(&mut self, countbase: i32) -> i32 {
+        self.tagtype = TagType::RtypB; self.delimtype = PrintClass::Begin; self.count = countbase; self.count
+    }
+    // Ghidra: prettyprint.hh:728 TokenSplit::endReturnType
+    fn end_return_type(&mut self, id: i32) {
+        self.tagtype = TagType::RtypE; self.delimtype = PrintClass::End; self.count = id;
+    }
+    // Ghidra: prettyprint.hh:735 TokenSplit::beginVarDecl
+    fn begin_var_decl(&mut self, countbase: i32) -> i32 {
+        self.tagtype = TagType::VardB; self.delimtype = PrintClass::Begin; self.count = countbase; self.count
+    }
+    // Ghidra: prettyprint.hh:741 TokenSplit::endVarDecl
+    fn end_var_decl(&mut self, id: i32) {
+        self.tagtype = TagType::VardE; self.delimtype = PrintClass::End; self.count = id;
+    }
+    // Ghidra: prettyprint.hh:748 TokenSplit::beginStatement
+    fn begin_statement(&mut self, countbase: i32) -> i32 {
+        self.tagtype = TagType::StatB; self.delimtype = PrintClass::Begin; self.count = countbase; self.count
+    }
+    // Ghidra: prettyprint.hh:754 TokenSplit::endStatement
+    fn end_statement(&mut self, id: i32) {
+        self.tagtype = TagType::StatE; self.delimtype = PrintClass::End; self.count = id;
+    }
+    // Ghidra: prettyprint.hh:760 TokenSplit::beginFuncProto
+    fn begin_func_proto(&mut self, countbase: i32) -> i32 {
+        self.tagtype = TagType::ProtB; self.delimtype = PrintClass::Begin; self.count = countbase; self.count
+    }
+    // Ghidra: prettyprint.hh:766 TokenSplit::endFuncProto
+    fn end_func_proto(&mut self, id: i32) {
+        self.tagtype = TagType::ProtE; self.delimtype = PrintClass::End; self.count = id;
+    }
+
+    // Ghidra: prettyprint.hh:775 TokenSplit::tagVariable
+    fn tag_variable(&mut self, name: &str) {
+        self.tok = name.to_string(); self.size = self.tok.len() as i32;
+        self.tagtype = TagType::VariT; self.delimtype = PrintClass::TokenString;
+    }
+    // Ghidra: prettyprint.hh:784 TokenSplit::tagOp
+    fn tag_op(&mut self, name: &str) {
+        self.tok = name.to_string(); self.size = self.tok.len() as i32;
+        self.tagtype = TagType::OpT; self.delimtype = PrintClass::TokenString;
+    }
+    // Ghidra: prettyprint.hh:794 TokenSplit::tagFuncName
+    fn tag_func_name(&mut self, name: &str) {
+        self.tok = name.to_string(); self.size = self.tok.len() as i32;
+        self.tagtype = TagType::FnamT; self.delimtype = PrintClass::TokenString;
+    }
+    // Ghidra: prettyprint.hh:803 TokenSplit::tagType
+    fn tag_type(&mut self, name: &str) {
+        self.tok = name.to_string(); self.size = self.tok.len() as i32;
+        self.tagtype = TagType::TypeT; self.delimtype = PrintClass::TokenString;
+    }
+    // Ghidra: prettyprint.hh:814 TokenSplit::tagField
+    fn tag_field(&mut self, name: &str) {
+        self.tok = name.to_string(); self.size = self.tok.len() as i32;
+        self.tagtype = TagType::FieldT; self.delimtype = PrintClass::TokenString;
+    }
+    // Ghidra: prettyprint.hh:824 TokenSplit::tagComment
+    fn tag_comment(&mut self, name: &str) {
+        self.tok = name.to_string(); self.size = self.tok.len() as i32;
+        self.tagtype = TagType::CommT; self.delimtype = PrintClass::TokenString;
+    }
+    // Ghidra: prettyprint.hh:834 TokenSplit::tagLabel
+    fn tag_label(&mut self, name: &str) {
+        self.tok = name.to_string(); self.size = self.tok.len() as i32;
+        self.tagtype = TagType::LabelT; self.delimtype = PrintClass::TokenString;
+    }
+    // Ghidra: prettyprint.hh:844 TokenSplit::tagCaseLabel
+    fn tag_case_label(&mut self, name: &str) {
+        self.tok = name.to_string(); self.size = self.tok.len() as i32;
+        self.tagtype = TagType::CaseT; self.delimtype = PrintClass::TokenString;
+    }
+    // Ghidra: prettyprint.hh:852 TokenSplit::print
+    fn print(&mut self, data: &str) {
+        self.tok = data.to_string(); self.size = self.tok.len() as i32;
+        self.tagtype = TagType::SyntT; self.delimtype = PrintClass::TokenString;
+    }
+    // Ghidra: prettyprint.hh:860 TokenSplit::openParen
+    fn open_paren(&mut self, paren: &str, id: i32) {
+        self.tok = paren.to_string(); self.size = 1;
+        self.tagtype = TagType::OparT; self.delimtype = PrintClass::TokenString; self.count = id;
+    }
+    // Ghidra: prettyprint.hh:868 TokenSplit::closeParen
+    fn close_paren(&mut self, paren: &str, id: i32) {
+        self.tok = paren.to_string(); self.size = 1;
+        self.tagtype = TagType::CparT; self.delimtype = PrintClass::TokenString; self.count = id;
+    }
+    // Ghidra: prettyprint.hh:875 TokenSplit::openGroup
+    fn open_group(&mut self, countbase: i32) -> i32 {
+        self.tagtype = TagType::OinvT; self.delimtype = PrintClass::Begin; self.count = countbase; self.count
+    }
+    // Ghidra: prettyprint.hh:881 TokenSplit::closeGroup
+    fn close_group(&mut self, id: i32) {
+        self.tagtype = TagType::CinvT; self.delimtype = PrintClass::End; self.count = id;
+    }
+    // Ghidra: prettyprint.hh:888 TokenSplit::startIndent
+    fn start_indent(&mut self, bump: i32, countbase: i32) -> i32 {
+        self.tagtype = TagType::BumpT; self.delimtype = PrintClass::BeginIndent; self.indentbump = bump;
+        self.size = 0; self.count = countbase; self.count
+    }
+    // Ghidra: prettyprint.hh:895 TokenSplit::stopIndent
+    fn stop_indent(&mut self, id: i32) {
+        self.tagtype = TagType::BumpT; self.delimtype = PrintClass::EndIndent; self.size = 0; self.count = id;
+    }
+    // Ghidra: prettyprint.hh:901 TokenSplit::startComment
+    fn start_comment(&mut self, countbase: i32) -> i32 {
+        self.tagtype = TagType::OinvT; self.delimtype = PrintClass::BeginComment; self.count = countbase; self.count
+    }
+    // Ghidra: prettyprint.hh:907 TokenSplit::stopComment
+    fn stop_comment(&mut self, id: i32) {
+        self.tagtype = TagType::CinvT; self.delimtype = PrintClass::EndComment; self.count = id;
+    }
+    // Ghidra: prettyprint.hh:914 TokenSplit::spaces
+    fn spaces(&mut self, num: i32, bump: i32) {
+        self.tagtype = TagType::SpacT; self.delimtype = PrintClass::TokenBreak;
+        self.numspaces = num; self.indentbump = bump;
+    }
+    // Ghidra: prettyprint.hh:918 TokenSplit::tagLine()
+    fn tag_line(&mut self) {
+        self.tagtype = TagType::BumpT; self.delimtype = PrintClass::TokenBreak;
+        self.numspaces = 999999; self.indentbump = 0;
+    }
+    // Ghidra: prettyprint.hh:922 TokenSplit::tagLine(indent)
+    fn tag_line_indent(&mut self, indent: i32) {
+        self.tagtype = TagType::LineT; self.delimtype = PrintClass::TokenBreak;
+        self.numspaces = 999999; self.indentbump = indent;
+    }
+
+    // Ghidra: prettyprint.hh:926 TokenSplit::getIndentBump
+    fn get_indent_bump(&self) -> i32 { self.indentbump }
+    // Ghidra: prettyprint.hh:927 TokenSplit::getNumSpaces
+    fn get_num_spaces(&self) -> i32 { self.numspaces }
+    // Ghidra: prettyprint.hh:928 TokenSplit::getSize
+    fn get_size(&self) -> i32 { self.size }
+    // Ghidra: prettyprint.hh:929 TokenSplit::setSize
+    fn set_size(&mut self, sz: i32) { self.size = sz }
+    // Ghidra: prettyprint.hh:930 TokenSplit::getClass
+    fn get_class(&self) -> PrintClass { self.delimtype }
+    // Ghidra: prettyprint.hh:931 TokenSplit::getTag
+    fn get_tag(&self) -> TagType { self.tagtype }
+}
+
+// Ghidra: prettyprint.hh:944 circularqueue
+/// Faithful port of the oracle's circularqueue (prettyprint.hh:944-1027):
+/// a ring buffer used as a stack (push/pop) or queue (push/popbottom) with
+/// integer references that survive push/pop (references are slot indices
+/// modulo `max`). `expand` reallocates and compacts to reference 0, exactly
+/// like prettyprint.hh:1003-1027, so `EmitPrettyPrint::expand` can adjust
+/// the scanqueue references with the same arithmetic (prettyprint.cc:572).
+struct CircularQueue<T: Clone + Default> {
+    cache: Vec<T>,
+    left: usize,
+    right: usize,
+    max: usize,
+}
+
+impl<T: Clone + Default> CircularQueue<T> {
+    // Ghidra: prettyprint.hh:970 circularqueue::circularqueue
+    fn new(sz: usize) -> Self {
+        let mut q = CircularQueue { cache: Vec::new(), left: 1, right: 0, max: sz };
+        q.cache.resize_with(sz, T::default);
+        q
+    }
+    // Ghidra: prettyprint.hh:953 circularqueue::setMax
+    fn set_max(&mut self, sz: usize) {
+        if self.max != sz {
+            self.max = sz;
+            self.cache.clear();
+            self.cache.resize_with(sz, T::default);
+        }
+        self.left = 1;
+        self.right = 0;
+    }
+    // Ghidra: prettyprint.hh:954 circularqueue::getMax
+    fn get_max(&self) -> usize { self.max }
+    // Ghidra: prettyprint.hh:1003 circularqueue::expand
+    fn expand(&mut self, amount: usize) {
+        let mut newcache: Vec<T> = Vec::new();
+        newcache.resize_with(self.max + amount, T::default);
+        let mut i = self.left;
+        let mut j = 0usize;
+        while i != self.right {
+            newcache[j] = self.cache[i].clone();
+            j += 1;
+            i = (i + 1) % self.max;
+        }
+        newcache[j] = self.cache[i].clone();
+        self.left = 0;
+        self.right = j;
+        self.cache = newcache;
+        self.max += amount;
+    }
+    // Ghidra: prettyprint.hh:956 circularqueue::clear
+    fn clear(&mut self) { self.left = 1; self.right = 0; }
+    // Ghidra: prettyprint.hh:957 circularqueue::empty
+    fn empty(&self) -> bool { self.left == (self.right + 1) % self.max }
+    // Ghidra: prettyprint.hh:958 circularqueue::topref
+    fn topref(&self) -> i32 { self.right as i32 }
+    // Ghidra: prettyprint.hh:959 circularqueue::bottomref
+    fn bottomref(&self) -> i32 { self.left as i32 }
+    // Ghidra: prettyprint.hh:960 circularqueue::ref
+    fn ref_at(&self, r: i32) -> &T { &self.cache[r as usize] }
+    // Ghidra: prettyprint.hh:960 circularqueue::ref
+    /// (Mutable-borrow split of the oracle's `_type& ref(int4)`.)
+    fn ref_at_mut(&mut self, r: i32) -> &mut T { &mut self.cache[r as usize] }
+    // Ghidra: prettyprint.hh:963 circularqueue::push
+    fn push(&mut self) -> &mut T {
+        self.right = (self.right + 1) % self.max;
+        &mut self.cache[self.right]
+    }
+    // Ghidra: prettyprint.hh:964 circularqueue::pop
+    fn pop(&mut self) -> T {
+        let tmp = self.right;
+        self.right = (self.right + self.max - 1) % self.max;
+        self.cache[tmp].clone()
+    }
+    // Ghidra: prettyprint.hh:965 circularqueue::popbottom
+    fn popbottom(&mut self) -> T {
+        let tmp = self.left;
+        self.left = (self.left + 1) % self.max;
+        self.cache[tmp].clone()
+    }
+}
+
+// Ghidra: prettyprint.hh:1042 EmitPrettyPrint
+/// The generic source code pretty printer (prettyprint.hh:1029-1115,
+/// prettyprint.cc:541-1243), a port of the Derek C. Oppen pretty printing
+/// algorithm. Content tokens enter a queue together with begin/end group
+/// delimiters and breakable whitespace; `scan` assigns sizes, and once a
+/// group closes (or a line overflows) `advanceleft` commits tokens to the
+/// low-level emitter, inserting line breaks at the breakable whitespace of
+/// overflowing groups and indenting continuations from the indent stack.
+/// The low-level emitter is Rugra's `EmitNoMarkup` byte sink (the oracle's
+/// default low level, prettyprint.cc:545).
+pub struct EmitPrettyPrint {
+    lowlevel: EmitNoMarkup,
+    indentstack: Vec<i32>,
+    spaceremain: i32,
+    maxlinesize: i32,
+    leftotal: i32,
+    rightotal: i32,
+    needbreak: bool,
+    commentmode: bool,
+    commentfill: String,
+    scanqueue: CircularQueue<i32>,
+    tokqueue: CircularQueue<TokenSplit>,
+    countbase: std::sync::atomic::AtomicI32,
+    indentincrement: i32,
+}
+
+impl Default for EmitPrettyPrint {
+    // RUGRA-GLUE: Rust Default trait impl forwarding to EmitPrettyPrint::new
+    // (Ghidra default-constructs via `new EmitPrettyPrint()`, hh:1068).
+    fn default() -> Self { Self::new() }
+}
+
+impl EmitPrettyPrint {
+    // Ghidra: prettyprint.cc:541 EmitPrettyPrint::EmitPrettyPrint
+    pub fn new() -> Self {
+        let mut e = EmitPrettyPrint {
+            lowlevel: EmitNoMarkup::new(),
+            indentstack: Vec::new(),
+            spaceremain: 100,
+            maxlinesize: 100,
+            leftotal: 1,
+            rightotal: 1,
+            needbreak: false,
+            commentmode: false,
+            commentfill: String::new(),
+            scanqueue: CircularQueue::new(3 * 100),
+            tokqueue: CircularQueue::new(3 * 100),
+            countbase: std::sync::atomic::AtomicI32::new(0),
+            indentincrement: 2,
+        };
+        // resetDefaultsPrettyPrint (prettyprint.hh:1066) = setMaxLineSize(100)
+        e.set_max_line_size(100);
+        e
+    }
+
+    // RUGRA-GLUE: next_count (TokenSplit::countbase++, prettyprint.hh:677)
+    /// C's `countbase++` yields the pre-increment value; `fetch_add`
+    /// returns the same previous value (no +1).
+    fn next_count(&self) -> i32 {
+        self.countbase.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    // Ghidra: prettyprint.hh:346 EmitNoMarkup low-level byte write
+    /// The oracle's EmitNoMarkup::print (prettyprint.hh:585) on the wrapped
+    /// low level: raw character data to the output stream.
+    fn low_print(&mut self, data: &str) {
+        self.lowlevel.print(data);
+    }
+
+    // Ghidra: prettyprint.hh:559 EmitNoMarkup::tagLine(int4 indent)
+    /// The low level's unconditional line break: endl plus exactly `indent`
+    /// spaces (prettyprint.hh:559-560).
+    fn low_tag_line(&mut self, indent: i32) {
+        self.lowlevel.print("\n");
+        if indent > 0 {
+            self.lowlevel.print(&" ".repeat(indent as usize));
+        }
+    }
+
+    // Ghidra: prettyprint.hh:593 EmitNoMarkup spaces (Emit::spaces fold)
+    fn low_spaces(&mut self, num: i32) {
+        if num > 0 {
+            self.lowlevel.print(&" ".repeat(num as usize));
+        }
+    }
+
+    // Ghidra: prettyprint.cc:564 EmitPrettyPrint::expand
+    /// Increase the token queue capacity by 200 slots, adjusting the
+    /// scanqueue references exactly as prettyprint.cc:564-579 does
+    /// (references shift by `(ref + max - left) % max` after the compaction).
+    fn expand(&mut self) {
+        let max = self.tokqueue.get_max() as i32;
+        let left = self.tokqueue.bottomref();
+        self.tokqueue.expand(200);
+        for i in 0..max {
+            let adjusted = (self.scanqueue.ref_at(i) + max - left) % max;
+            *self.scanqueue.ref_at_mut(i) = adjusted;
+        }
+        self.scanqueue.expand(200);
+    }
+
+    // Ghidra: prettyprint.cc:584 EmitPrettyPrint::overflow
+    /// Adjust the current indent levels to guarantee at least half a line
+    /// of space and force a line break (used when an unbreakable token does
+    /// not fit). Walks the indent stack top-down, raising levels below
+    /// `maxlinesize/2`, then breaks at `indentstack.back()`.
+    fn overflow(&mut self) {
+        let half = self.maxlinesize / 2;
+        for i in (0..self.indentstack.len()).rev() {
+            if self.indentstack[i] < half {
+                self.indentstack[i] = half;
+            } else {
+                break;
+            }
+        }
+        let newspaceremain = if !self.indentstack.is_empty() {
+            *self.indentstack.last().unwrap()
+        } else {
+            self.maxlinesize
+        };
+        if newspaceremain == self.spaceremain {
+            return; // Line breaking doesn't give us any additional space
+        }
+        let fill_len = self.commentfill.len() as i32;
+        if self.commentmode && newspaceremain == self.spaceremain + fill_len {
+            return; // Line breaking doesn't give us any additional space
+        }
+        self.spaceremain = newspaceremain;
+        self.low_tag_line(self.maxlinesize - self.spaceremain);
+        if self.commentmode && !self.commentfill.is_empty() {
+            let fill = self.commentfill.clone();
+            self.low_print(&fill);
+            self.spaceremain -= fill_len;
+        }
+    }
+
+    // Ghidra: prettyprint.cc:614 EmitPrettyPrint::print
+    /// Send one committed token to the low level, adjusting the indent
+    /// stack; a content token that does not fit triggers `overflow`, and a
+    /// break token either breaks the line (reindenting) or emits its spaces
+    /// (if breaking "doesn't save that much": numspaces fit and the break
+    /// indent is within 10 of the remaining space).
+    fn print_token(&mut self, tok: &TokenSplit) {
+        let mut val: i32;
+        match tok.get_class() {
+            PrintClass::Ignore => {
+                // Markup or other that doesn't use space (begin/endBlock).
+                match tok.get_tag() {
+                    TagType::BlocB | TagType::BlocE => {}
+                    _ => {
+                        let t = tok.tok.clone();
+                        self.low_print(&t);
+                    }
+                }
+            }
+            PrintClass::BeginIndent => {
+                // val = indentstack.back() - tok.getIndentBump(); push.
+                val = *self.indentstack.last().unwrap() - tok.get_indent_bump();
+                self.indentstack.push(val);
+            }
+            PrintClass::BeginComment => {
+                self.commentmode = true;
+                self.indentstack.push(self.spaceremain);
+            }
+            PrintClass::Begin => {
+                self.indentstack.push(self.spaceremain);
+            }
+            PrintClass::EndIndent => {
+                self.indentstack.pop();
+            }
+            PrintClass::EndComment => {
+                self.commentmode = false;
+                self.indentstack.pop();
+            }
+            PrintClass::End => {
+                self.indentstack.pop();
+            }
+            PrintClass::TokenString => {
+                if tok.get_size() > self.spaceremain {
+                    self.overflow();
+                }
+                let t = tok.tok.clone();
+                self.low_print(&t);
+                self.spaceremain -= tok.get_size();
+            }
+            PrintClass::TokenBreak => {
+                if tok.get_size() > self.spaceremain {
+                    if tok.get_tag() == TagType::LineT {
+                        // Absolute indent
+                        self.spaceremain = self.maxlinesize - tok.get_indent_bump();
+                    } else {
+                        // relative indent
+                        val = *self.indentstack.last().unwrap() - tok.get_indent_bump();
+                        // If creating a line break doesn't save that much
+                        // don't do the line break
+                        if tok.get_num_spaces() <= self.spaceremain
+                            && val - self.spaceremain < 10
+                        {
+                            let n = tok.get_num_spaces();
+                            self.low_spaces(n);
+                            self.spaceremain -= n;
+                            return;
+                        }
+                        *self.indentstack.last_mut().unwrap() = val;
+                        self.spaceremain = val;
+                    }
+                    self.low_tag_line(self.maxlinesize - self.spaceremain);
+                    if self.commentmode && !self.commentfill.is_empty() {
+                        let fill = self.commentfill.clone();
+                        let fill_len = fill.len() as i32;
+                        self.low_print(&fill);
+                        self.spaceremain -= fill_len;
+                    }
+                } else {
+                    let n = tok.get_num_spaces();
+                    self.low_spaces(n);
+                    self.spaceremain -= n;
+                }
+            }
+        }
+    }
+
+    // Ghidra: prettyprint.cc:710 EmitPrettyPrint::advanceleft
+    /// Emit token groups that have been fully committed (their leading
+    /// delimiter's size turned non-negative) and purge them from the queue.
+    fn advanceleft(&mut self) {
+        if self.tokqueue.empty() {
+            return;
+        }
+        let mut l = self.tokqueue.ref_at(self.tokqueue.bottomref()).get_size();
+        while l >= 0 {
+            let tok = self.tokqueue.popbottom();
+            let is_break = tok.get_class() == PrintClass::TokenBreak;
+            let is_string = tok.get_class() == PrintClass::TokenString;
+            let nspaces = tok.get_num_spaces();
+            let size = tok.get_size();
+            self.print_token(&tok);
+            if is_break {
+                self.leftotal += nspaces;
+            } else if is_string {
+                self.leftotal += size;
+            }
+            if self.tokqueue.empty() {
+                break;
+            }
+            l = self.tokqueue.ref_at(self.tokqueue.bottomref()).get_size();
+        }
+    }
+
+    // Ghidra: prettyprint.cc:741 EmitPrettyPrint::scan
+    /// The heart of the Oppen algorithm: assign the new top-of-queue token
+    /// a size, maintain the scanqueue of open delimiters and breaks, and
+    /// force breaks (size 999999) in the uncommitted region while
+    /// `rightotal - leftotal > spaceremain`.
+    fn scan(&mut self) {
+        if self.tokqueue.empty() {
+            self.expand();
+        }
+        let class = self.tokqueue.ref_at(self.tokqueue.topref()).get_class();
+        match class {
+            PrintClass::BeginComment | PrintClass::Begin => {
+                if self.scanqueue.empty() {
+                    self.leftotal = 1;
+                    self.rightotal = 1;
+                }
+                let size = -self.rightotal;
+                self.tokqueue.ref_at_mut(self.tokqueue.topref()).set_size(size);
+                let topref = self.tokqueue.topref();
+                *self.scanqueue.push() = topref;
+            }
+            PrintClass::EndComment | PrintClass::End => {
+                self.tokqueue.ref_at_mut(self.tokqueue.topref()).set_size(0);
+                if !self.scanqueue.empty() {
+                    let popped = self.scanqueue.pop();
+                    let ref_size = self.rightotal;
+                    let ref_class = self.tokqueue.ref_at(popped).get_class();
+                    // (Borrow split of the oracle's single `ref.setSize(
+                    // ref.getSize() + rightotal)` — cc:762.)
+                    let old_size = self.tokqueue.ref_at(popped).get_size();
+                    self.tokqueue.ref_at_mut(popped).set_size(old_size + ref_size);
+                    if ref_class == PrintClass::TokenBreak && !self.scanqueue.empty() {
+                        let popped2 = self.scanqueue.pop();
+                        let ref2_size = self.rightotal;
+                        let old2_size = self.tokqueue.ref_at(popped2).get_size();
+                        self.tokqueue.ref_at_mut(popped2).set_size(old2_size + ref2_size);
+                    }
+                    if self.scanqueue.empty() {
+                        self.advanceleft();
+                    }
+                }
+            }
+            PrintClass::TokenBreak => {
+                if self.scanqueue.empty() {
+                    self.leftotal = 1;
+                    self.rightotal = 1;
+                } else {
+                    let topref = *self.scanqueue.ref_at(self.scanqueue.topref());
+                    if self.tokqueue.ref_at(topref).get_class() == PrintClass::TokenBreak {
+                        self.scanqueue.pop();
+                        let add = self.rightotal;
+                        let old_size = self.tokqueue.ref_at(topref).get_size();
+                        self.tokqueue.ref_at_mut(topref).set_size(old_size + add);
+                    }
+                }
+                let size = -self.rightotal;
+                self.tokqueue.ref_at_mut(self.tokqueue.topref()).set_size(size);
+                let topref = self.tokqueue.topref();
+                *self.scanqueue.push() = topref;
+                let n = self.tokqueue.ref_at(self.tokqueue.topref()).get_num_spaces();
+                self.rightotal += n;
+            }
+            PrintClass::BeginIndent | PrintClass::EndIndent | PrintClass::Ignore => {
+                self.tokqueue.ref_at_mut(self.tokqueue.topref()).set_size(0);
+            }
+            PrintClass::TokenString => {
+                if !self.scanqueue.empty() {
+                    let size = self.tokqueue.ref_at(self.tokqueue.topref()).get_size();
+                    self.rightotal += size;
+                    while self.rightotal - self.leftotal > self.spaceremain {
+                        let popped = self.scanqueue.popbottom();
+                        self.tokqueue.ref_at_mut(popped).set_size(999999);
+                        self.advanceleft();
+                        if self.scanqueue.empty() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Ghidra: prettyprint.cc:806 EmitPrettyPrint::checkstart
+    fn checkstart(&mut self) {
+        if self.needbreak {
+            let tok = self.tokqueue.push();
+            tok.spaces(0, 0);
+            self.scan();
+        }
+        self.needbreak = false;
+    }
+
+    // Ghidra: prettyprint.cc:819 EmitPrettyPrint::checkstring
+    fn checkstring(&mut self) {
+        if self.needbreak {
+            let tok = self.tokqueue.push();
+            tok.spaces(0, 0);
+            self.scan();
+        }
+        self.needbreak = true;
+    }
+
+    // Ghidra: prettyprint.cc:833 EmitPrettyPrint::checkend
+    fn checkend(&mut self) {
+        if !self.needbreak {
+            let tok = self.tokqueue.push();
+            tok.print("");
+            self.scan();
+        }
+        self.needbreak = true;
+    }
+
+    // Ghidra: prettyprint.cc:847 EmitPrettyPrint::checkbreak
+    fn checkbreak(&mut self) {
+        if !self.needbreak {
+            let tok = self.tokqueue.push();
+            tok.print("");
+            self.scan();
+        }
+        self.needbreak = false;
+    }
+
+    // Ghidra: prettyprint.cc:1225 EmitPrettyPrint::setMaxLineSize
+    pub fn set_max_line_size(&mut self, val: i32) {
+        if !(20..=10000).contains(&val) {
+            // The oracle throws LowlevelError (prettyprint.cc:1228-1229);
+            // Rust's emit layer has no error channel, so clamp defensively
+            // to the default instead of panicking mid-function.
+            eprintln!("[EMIT] bad maximum line size {val}; keeping default");
+            return;
+        }
+        self.maxlinesize = val;
+        self.scanqueue.set_max((3 * val) as usize);
+        self.tokqueue.set_max((3 * val) as usize);
+        self.spaceremain = self.maxlinesize;
+        self.clear();
+    }
+
+    // Ghidra: prettyprint.cc:1153 EmitPrettyPrint::clear
+    pub fn clear(&mut self) {
+        self.indentstack.clear();
+        self.scanqueue.clear();
+        self.tokqueue.clear();
+        self.leftotal = 1;
+        self.rightotal = 1;
+        self.needbreak = false;
+        self.commentmode = false;
+        self.spaceremain = self.maxlinesize;
+    }
+
+    // Ghidra: prettyprint.cc:1194 EmitPrettyPrint::flush
+    /// Commit every remaining token; an unbalanced group (negative size)
+    /// is a fatal misprint in the oracle (LowlevelError, prettyprint.cc:
+    /// 1199-1201) — Rugra logs and skips the token to keep the byte stream
+    /// flowing, since the emitter has no error channel.
+    pub fn flush_impl(&mut self) {
+        while !self.tokqueue.empty() {
+            let tok = self.tokqueue.popbottom();
+            if tok.get_size() < 0 {
+                eprintln!("[EMIT] cannot flush pretty printer: missing group end");
+                continue;
+            }
+            self.print_token(&tok);
+        }
+        self.needbreak = false;
+    }
+
+    // RUGRA-GLUE: post_process bridge (EmitNoMarkup legacy P3 passes)
+    /// Flush the token queue, then run the low-level EmitNoMarkup legacy
+    /// post-processing (redundant-goto/orphan-label cleanup) on the fully
+    /// committed byte stream.
+    pub fn post_process(&mut self) {
+        self.flush_impl();
+        self.lowlevel.post_process();
+    }
+
+    // RUGRA-GLUE: take low-level output (EmitNoMarkup::getOutput)
+    /// Flush and hand back the final C text, running the low level's
+    /// `get_output` post-processing exactly like the plain emitter did.
+    pub fn get_output(mut self) -> String {
+        self.flush_impl();
+        self.lowlevel.get_output()
+    }
+}
+
+impl Emit for EmitPrettyPrint {
+    // Ghidra: prettyprint.cc:1085 EmitPrettyPrint::print
+    fn print(&mut self, text: &str) {
+        self.checkstring();
+        let tok = self.tokqueue.push();
+        tok.print(text);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:1013 EmitPrettyPrint::tagVariable
+    fn tag_variable(&mut self, text: &str, _id: u64) {
+        self.checkstring();
+        let tok = self.tokqueue.push();
+        tok.tag_variable(text);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:1022 EmitPrettyPrint::tagOp
+    fn tag_op(&mut self, text: &str) {
+        self.checkstring();
+        let tok = self.tokqueue.push();
+        tok.tag_op(text);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:1031 EmitPrettyPrint::tagFuncName
+    fn tag_func_name(&mut self, text: &str, _id: u64) {
+        self.checkstring();
+        let tok = self.tokqueue.push();
+        tok.tag_func_name(text);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:1040 EmitPrettyPrint::tagType
+    fn tag_type(&mut self, text: &str, _id: u64) {
+        self.checkstring();
+        let tok = self.tokqueue.push();
+        tok.tag_type(text);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:1049 EmitPrettyPrint::tagField
+    fn tag_field(&mut self, text: &str, _id: u64) {
+        self.checkstring();
+        let tok = self.tokqueue.push();
+        tok.tag_field(text);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:1058 EmitPrettyPrint::tagComment
+    fn tag_comment(&mut self, text: &str) {
+        self.checkstring();
+        let tok = self.tokqueue.push();
+        tok.tag_comment(text);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:1067 EmitPrettyPrint::tagLabel
+    fn tag_label(&mut self, text: &str) {
+        self.checkstring();
+        let tok = self.tokqueue.push();
+        tok.tag_label(text);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:1076 EmitPrettyPrint::tagCaseLabel
+    fn tag_case_label(&mut self, text: &str) {
+        self.checkstring();
+        let tok = self.tokqueue.push();
+        tok.tag_case_label(text);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:1094 EmitPrettyPrint::openParen
+    fn open_paren(&mut self, paren: &str) -> i32 {
+        // id = openGroup(); Open paren automatically opens group.
+        let id = self.open_group();
+        let tok = self.tokqueue.push();
+        tok.open_paren(paren, id);
+        self.scan();
+        self.needbreak = true;
+        id
+    }
+
+    // Ghidra: prettyprint.cc:1105 EmitPrettyPrint::closeParen
+    fn close_paren(&mut self, paren: &str, id: i32) {
+        self.checkstring();
+        let tok = self.tokqueue.push();
+        tok.close_paren(paren, id);
+        self.scan();
+        self.close_group(id);
+    }
+
+    // Ghidra: prettyprint.cc:1115 EmitPrettyPrint::openGroup
+    fn open_group(&mut self) -> i32 {
+        self.checkstart();
+        let count = self.next_count();
+        let tok = self.tokqueue.push();
+        let id = tok.open_group(count);
+        self.scan();
+        id
+    }
+
+    // Ghidra: prettyprint.cc:1125 EmitPrettyPrint::closeGroup
+    fn close_group(&mut self, id: i32) {
+        self.checkend();
+        let tok = self.tokqueue.push();
+        tok.close_group(id);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:858 EmitPrettyPrint::beginDocument
+    fn begin_document(&mut self) {
+        self.checkstart();
+        let count = self.next_count();
+        let tok = self.tokqueue.push();
+        tok.begin_document(count);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:868 EmitPrettyPrint::endDocument
+    fn end_document(&mut self) {
+        self.checkend();
+        let tok = self.tokqueue.push();
+        tok.end_document(0);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:877 EmitPrettyPrint::beginFunction
+    fn begin_function(&mut self) {
+        self.checkstart();
+        let count = self.next_count();
+        let tok = self.tokqueue.push();
+        tok.begin_function(count);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:891 EmitPrettyPrint::endFunction
+    fn end_function(&mut self) {
+        self.checkend();
+        let tok = self.tokqueue.push();
+        tok.end_function(0);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:900 EmitPrettyPrint::beginBlock +
+    //          prettyprint.cc:61 Emit::openBraceIndent(same_line)
+    /// Rugra's `begin_block` helper (" {") is the collapsed form of the
+    /// oracle's markup-only `beginBlock` (bloc_b, printclass ignore — no
+    /// bytes, no indent effect) plus the same_line `openBraceIndent` the
+    /// if/loop body emitters issue right after it (printc.cc:2875/2920/
+    //  2992/...): one space, an indent level, then the brace. The
+    /// following tagLine supplies the newline.
+    fn begin_block(&mut self) {
+        self.spaces(1, 0);
+        self.bump_indent();
+        let brace = "{".to_string();
+        self.print(&brace);
+    }
+
+    // Ghidra: prettyprint.hh:481 Emit::closeBraceIndent +
+    //          prettyprint.cc:909 EmitPrettyPrint::endBlock
+    /// `}` on its own line at the (now decremented) indent — the collapsed
+    /// closeBraceIndent + endBlock form of the oracle.
+    fn end_block(&mut self) {
+        self.drop_indent();
+        self.tag_line(0);
+        let brace = "}".to_string();
+        self.print(&brace);
+    }
+
+    // Ghidra: prettyprint.cc:61 Emit::openBraceIndent
+    fn open_brace_indent(&mut self, brace: &str, style: BraceStyle) {
+        match style {
+            BraceStyle::SameLine => {
+                self.spaces(1, 0);
+            }
+            BraceStyle::SkipLine => {
+                self.tag_line(0);
+                self.tag_line(0);
+            }
+            BraceStyle::NextLine => {
+                self.tag_line(0);
+            }
+        }
+        self.bump_indent();
+        self.print(brace);
+    }
+
+    // Ghidra: prettyprint.hh:481 Emit::closeBraceIndent
+    fn close_brace_indent(&mut self, brace: &str) {
+        self.drop_indent();
+        self.tag_line(0);
+        self.print(brace);
+    }
+
+    // Ghidra: prettyprint.cc:917 EmitPrettyPrint::tagLine /
+    //          prettyprint.cc:927 EmitPrettyPrint::tagLine(int4)
+    /// `indent == 0` is the oracle's plain `tagLine()` (relative break at
+    /// the current indent level); a positive indent is the absolute
+    /// one-line override (line_t, prettyprint.hh:922-923).
+    fn tag_line(&mut self, indent: i32) {
+        self.checkbreak();
+        let tok = self.tokqueue.push();
+        if indent > 0 {
+            tok.tag_line_indent(indent);
+        } else {
+            tok.tag_line();
+        }
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:937 EmitPrettyPrint::beginReturnType
+    fn begin_return_type(&mut self) {
+        self.checkstart();
+        let count = self.next_count();
+        let tok = self.tokqueue.push();
+        tok.begin_return_type(count);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:947 EmitPrettyPrint::endReturnType
+    fn end_return_type(&mut self) {
+        self.checkend();
+        let tok = self.tokqueue.push();
+        tok.end_return_type(0);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:956 EmitPrettyPrint::beginVarDecl
+    fn begin_var_decl(&mut self) {
+        self.checkstart();
+        let count = self.next_count();
+        let tok = self.tokqueue.push();
+        tok.begin_var_decl(count);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:966 EmitPrettyPrint::endVarDecl
+    fn end_var_decl(&mut self) {
+        self.checkend();
+        let tok = self.tokqueue.push();
+        tok.end_var_decl(0);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:975 EmitPrettyPrint::beginStatement
+    fn begin_statement(&mut self) {
+        self.checkstart();
+        let count = self.next_count();
+        let tok = self.tokqueue.push();
+        tok.begin_statement(count);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:985 EmitPrettyPrint::endStatement
+    fn end_statement(&mut self) {
+        self.checkend();
+        let tok = self.tokqueue.push();
+        tok.end_statement(0);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:994 EmitPrettyPrint::beginFuncProto
+    fn begin_func_proto(&mut self) {
+        self.checkstart();
+        let count = self.next_count();
+        let tok = self.tokqueue.push();
+        tok.begin_func_proto(count);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:1004 EmitPrettyPrint::endFuncProto
+    fn end_func_proto(&mut self) {
+        self.checkend();
+        let tok = self.tokqueue.push();
+        tok.end_func_proto(0);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:1134 EmitPrettyPrint::startComment
+    fn start_comment(&mut self) -> i32 {
+        self.checkstart();
+        let count = self.next_count();
+        let tok = self.tokqueue.push();
+        let id = tok.start_comment(count);
+        self.scan();
+        id
+    }
+
+    // Ghidra: prettyprint.cc:1144 EmitPrettyPrint::stopComment
+    fn stop_comment(&mut self, id: i32) {
+        self.checkend();
+        let tok = self.tokqueue.push();
+        tok.stop_comment(id);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:1168 EmitPrettyPrint::spaces
+    fn spaces(&mut self, num: i32, bump: i32) {
+        self.checkbreak();
+        let tok = self.tokqueue.push();
+        tok.spaces(num, bump);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:1177 EmitPrettyPrint::startIndent
+    /// (Rugra trait name `bump_indent`.)
+    fn bump_indent(&mut self) {
+        let count = self.next_count();
+        let tok = self.tokqueue.push();
+        tok.start_indent(self.indentincrement, count);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:1186 EmitPrettyPrint::stopIndent
+    /// (Rugra trait name `drop_indent`.)
+    fn drop_indent(&mut self) {
+        let tok = self.tokqueue.push();
+        tok.stop_indent(0);
+        self.scan();
+    }
+
+    // Ghidra: prettyprint.cc:1194 EmitPrettyPrint::flush
+    fn flush(&mut self) {
+        self.flush_impl();
+    }
+
+    // Ghidra: prettyprint.hh:1111 EmitPrettyPrint::setCommentFill
+    fn set_comment_fill(&mut self, fill: &str) {
+        self.commentfill = fill.to_string();
+    }
+
+    // Ghidra: prettyprint.hh:1112 EmitPrettyPrint::emitsMarkup
+    fn emits_markup(&self) -> bool { false }
+
+    // RUGRA-GLUE: into_any (downcast support for the driver)
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+
+    // RUGRA-GLUE: as_any_mut (downcast support for doc_function)
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 }
 
@@ -3832,5 +4969,68 @@ void f(void)
         assert!(out.contains("  long uVar42;\n"), "uVarN no longer injected:\n{}", out);
         assert!(out.contains("  int local_10;\n"), "local_ no longer injected:\n{}", out);
         assert_eq!(out.matches("int bVar3;").count(), 1, "bVar3 re-declared:\n{}", out);
+    }
+}
+
+#[cfg(test)]
+mod linewrap_probe_tests {
+    use super::EmitPrettyPrint;
+    use crate::prettyprint::Emit;
+
+    // Probe: simulate the Ghidra emit sequence of a `puts(LONG)` statement
+    // inside a function body to trace the wrap indent (expect 6 spaces).
+    #[test]
+    fn probe_puts_wrap_indent() {
+        let mut e = EmitPrettyPrint::new();
+        e.set_comment_fill("   ");
+        // docFunction: beginFunction, tagLine, declaration, skip_line brace
+        e.begin_function();
+        e.tag_line(0);
+        e.begin_func_proto();
+        e.tag_type("void", 0);
+        e.tag_func_name("hugehelp", 0);
+        e.open_paren("(");
+        e.close_paren(")", 0);
+        e.end_func_proto();
+        // openBraceIndent(skip_line): tagLine(); tagLine(); startIndent; "{"
+        e.tag_line(0);
+        e.tag_line(0);
+        e.bump_indent();
+        e.print("{");
+        // statement: tagLine, beginStatement, puts(...)
+        e.tag_line(0);
+        e.begin_statement();
+        e.tag_func_name("puts", 0);
+        e.spaces(0, 10);
+        e.open_paren("(");
+        e.spaces(0, 10);
+        let long = "x".repeat(300);
+        e.print(&long);
+        e.close_paren(")", 0);
+        // The statement layer prints the trailing semicolon after the
+        // expression (printc.cc opFunc/emit*Statement flows).
+        e.print(";");
+        e.end_statement();
+        e.tag_line(0);
+        // closeBraceIndent: stopIndent; tagLine; "}"
+        e.drop_indent();
+        e.tag_line(0);
+        e.print("}");
+        e.tag_line(0);
+        e.end_function();
+        e.flush();
+        let out = e.get_output();
+        eprintln!("PROBE_OUTPUT<<<\n{}>>>END", out);
+        // Expect the continuation lines indented by 6 spaces
+        let lines: Vec<&str> = out.lines().collect();
+        for (i, l) in lines.iter().enumerate() {
+            eprintln!("PROBE[{}] {:?}", i, l);
+        }
+        // The converged golden form (ghidra_curl_1204.c hugehelp): the string
+        // literal and the closing `);` both continue at 6 spaces.
+        let string_line = lines.iter().find(|l| l.starts_with("      xxx")).unwrap();
+        assert_eq!(string_line.len(), 6 + 300);
+        let close_line = lines.iter().find(|l| l.starts_with("      )")).unwrap();
+        assert_eq!(close_line.trim_end(), "      );");
     }
 }
