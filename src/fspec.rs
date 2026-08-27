@@ -2755,12 +2755,37 @@ impl FuncCallSpecs {
     ///   data.opInsertInput(op,loadval,slot);
     ///   setStackPlaceholderSlot(slot);
     ///   loadval->setSpacebasePlaceholder();
+    ///
+    /// The caller supplies the post-`funcLinkInput` spacebase.  The two
+    /// guards below make the state machine explicit at this boundary:
+    /// Ghidra has one placeholder slot per call, and a locked non-varargs
+    /// stack parameter consumes the placeholder role in the parameter loop
+    /// (coreaction.cc:1498-1505), so the trailing placeholder must not be
+    /// created again.  The latter is only decidable when the transitional
+    /// Address carries a space tag; legacy spaceless addresses conservatively
+    /// retain the caller's existing oracle-compatible path.
     pub fn create_placeholder(
         &mut self,
         fd: &mut crate::funcdata::Funcdata,
         call_op: &crate::op::PcodeOpRef,
         spacebase: crate::space::AddressSpace,
     ) {
+        if self.stack_placeholder_slot >= 0 {
+            return;
+        }
+        if self.is_input_locked() && !self.is_dotdotdot() {
+            let has_locked_stack_param = self.prototype.parameters.iter().any(|param| {
+                param
+                    .address
+                    .to_space_address()
+                    .get_space()
+                    .map(|spc| spc.get_type() == SpaceType::SpaceBase && spacebase == AddressSpace::Stack)
+                    .unwrap_or(false)
+            });
+            if has_locked_stack_param {
+                return;
+            }
+        }
         let slot = call_op.0.read().unwrap().num_input();
         let loadval = fd.op_stack_load(spacebase, 0, 1, call_op, None, false);
         fd.op_insert_input(call_op, loadval.clone(), slot);

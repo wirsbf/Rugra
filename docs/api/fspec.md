@@ -9,6 +9,14 @@ The legacy `calling_convention == "unknown"` string remains a compatibility
 sentinel for existing pipeline consumers; pointer-presence observables such
 as `has_model` and `print_raw` consult the resolved `Arc`, not that sentinel.
 
+## PLTSTUB-WARNLOSS-0001 stack-placeholder gate
+
+`FuncCallSpecs::create_placeholder` now rejects duplicate placeholder slots and
+also rejects a tagged locked, non-varargs stack parameter because that parameter
+consumes the oracle placeholder role. The caller must still provide the
+post-`funcLinkInput` spacebase; the full inputlocked/varargs parameter-loop gate
+is pending in the `ActionFuncLink` slice. Evidence: `/tmp/rugra-reports/PLTSTUB-ROOTCAUSE-2026-08-27.md`.
+
 Call-effect lookup also follows the locked oracle: a non-empty local effect
 list is a complete override, while an empty list delegates to the shared
 model. Records are ordered by address-space index and offset (not Rust enum
