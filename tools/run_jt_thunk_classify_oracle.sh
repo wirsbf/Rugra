@@ -1374,7 +1374,7 @@ require("dynamic runtime closure", toolchain["dynamic_runtime_closure"], {
     "ld_so_cache_path": "/etc/ld.so.cache",
     "ld_so_cache_sha256": "04e49d85dc0f45e8804d29a63fbeec51907177d5c4f088570ed8d91839d47662",
     "resolved_library_count": 55,
-    "path_content_manifest_sha256": "1b5f50ed130d37e9d7d937af4958eec9205d5a8f905b3f8a0eba1c4b9244d572",
+    "path_content_manifest_sha256": "ec201dcbb355d03982d02869cf6db5cb56acad6bf8891f86e4a5c59a4b507788",
     "manifest_algorithm": "sort canonical resolved paths as bytes; hash u64be(path_len), path bytes, sha256(file bytes)",
 })
 require("semantic trees", toolchain["semantic_trees"], {
