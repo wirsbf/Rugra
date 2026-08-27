@@ -387,7 +387,7 @@
     "rust_fixture_sha256": "69eec8ab5661b3924fb569dbafe425a9f967098b5e9371df4993106fda5422c3",
     "jumptable_overlay_sha256": "3ebf680c41a7a0a844fe1547250291234c45b27a71f41ecd1ad512f44dc1d8e9",
     "api_document_sha256": "78fb3c4e33a2b35d01d431249ca95dd48df2354c304c60af904b5a844eae8553",
-    "runner_sha256": "dce12d50b0f7dd3f15a5f20443486b7030cce2adcacd6cac643e1b1e84b864f3"
+    "runner_sha256": "d5f0d81409c702a45c0f29b01d8b8f003025b8a260973102f41ea2f007efd40e"
   },
   "input_manifest": {
     "cases": [
