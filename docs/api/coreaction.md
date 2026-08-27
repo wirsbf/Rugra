@@ -1912,3 +1912,15 @@ ActionActiveReturn 试验性补充了 preceding INDIRECT trial 收集与
 `build_output_from_trials` 调用（oracle `coreaction.cc:1773-1792`）；
 ActionMarkImplied 增加 LOAD/STORE 覆盖守卫。尚待在 BlockCopy 活委托基线
 上完成 E2E 验证。
+
+## FSPEC-CALLPROTO-LATENT-0001 R2 spacebase leg (2026-08-27)
+
+`ActionFuncLink::func_link_input` now mirrors oracle `coreaction.cc:1494-1512`:
+locked parameters in stack/spacebase storage are created through
+`Funcdata::op_stack_load`; the first non-varargs stack parameter claims the
+spacebase-placeholder flag, subsequent parameters are appended as loads, and
+a remaining callspec spacebase creates the canonical placeholder input.
+Register/non-spacebase parameters retain their address-space varnodes. The
+spacebase path is `UNTESTED` on the current x86-64 GCC fixture because its
+storage allocator bails out on stack spills; acceptance remains defects=0 plus
+`coreaction` tests when a constructive stack-storage fixture is available.

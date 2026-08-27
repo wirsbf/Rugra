@@ -8767,7 +8767,7 @@ impl ActionFuncLink {
         fc_idx: usize,
         op: &crate::op::PcodeOpRef,
     ) {
-        use crate::space::AddressSpace;
+        use crate::space::{AddressSpace, SpaceType};
         // Ghidra cc:1475-1479: read the lock state, arm trial recovery only
         // for (!inputlocked)||varargs.
         let (inputlocked, varargs) = match fd.get_call_specs(fc_idx) {
@@ -8780,47 +8780,71 @@ impl ActionFuncLink {
             }
         }
         if inputlocked {
+            let mut spacebase = fd
+                .get_call_specs(fc_idx)
+                .and_then(|fc| fc.prototype.get_spacebase());
+            let mut setplaceholder = varargs;
             // Ghidra cc:1480-1483: snapshot the formal parameter storage
             // (address offset + type size) from the locked prototype.
-            let params: Vec<(u64, i32)> = match fd.get_call_specs(fc_idx) {
+            let params: Vec<(crate::address::Address, i32)> = match fd.get_call_specs(fc_idx) {
                 Some(fc) => fc
                     .prototype
                     .parameters
                     .iter()
-                    .map(|p| (p.address.as_u64(), p.data_type.get_size() as i32))
+                    .map(|p| (p.address, p.data_type.get_size() as i32))
                     .collect(),
                 None => Vec::new(),
             };
-            for (i, &(off, sz)) in params.iter().enumerate() {
+            for (i, &(param_addr, sz)) in params.iter().enumerate() {
+                let off = param_addr.as_u64();
+                let is_spacebase = param_addr
+                    .get_space()
+                    .map(|spc| spc.get_type() == SpaceType::SpaceBase)
+                    .unwrap_or(false);
+                let param_space = if is_spacebase {
+                    AddressSpace::Stack
+                } else {
+                    AddressSpace::Register
+                };
                 // Ghidra cc:1488-1493: varargs registers each formal as an
                 // active fixed-position trial.
                 if varargs {
                     if let Some(mut fc) = fd.get_call_specs_mut(fc_idx) {
                         if let Some(active) = fc.active_input.as_mut() {
-                            active.register_trial_in_space(
-                                AddressSpace::Register,
-                                crate::address::Address::new(off),
-                                sz,
-                            );
+                            active.register_trial_in_space(param_space, param_addr, sz);
                             let last = active.get_num_trials() - 1;
                             active.get_trial_mut(last).mark_active();
                             active.get_trial_mut(last).set_fixed_position(i as i32);
                         }
                     }
                 }
-                // Ghidra cc:1494-1508: IPTR_SPACEBASE parameters load through
-                // opStackLoad and the first claims the stack-placeholder
-                // role; every other parameter is a fresh Varnode at its
-                // storage address appended as the last CALL input
-                // (cc:1507-1508). The locked x86-64-gcc storage assigned by
-                // X86_64GccStorage is register-only (stack spill bails at
-                // debugproto assign), so the spacebase leg is unreachable
-                // until stack storage lands; the register leg below covers
-                // every installed signature.
-                let vn = fd.vbank.create_with_space(sz as usize, AddressSpace::Register, off);
-                let _ = fd.assign_high(&vn);
+                // Ghidra cc:1494-1508: IPTR_SPACEBASE parameters are loaded
+                // through the spacebase and the first such parameter claims
+                // the placeholder role. Subsequent parameters remain ordinary
+                // address varnodes; all are appended to the CALL input list.
+                let vn = if param_space.is_stack() {
+                    let loadval = fd.op_stack_load(param_space, off, sz as usize, op, None, false);
+                    if !setplaceholder {
+                        loadval.write().unwrap().set_spacebase_placeholder();
+                        setplaceholder = true;
+                        spacebase = None;
+                    }
+                    loadval
+                } else {
+                    let vn = fd.vbank.create(sz as usize, param_addr);
+                    let _ = fd.assign_high(&vn);
+                    vn
+                };
                 let num_in = op.0.read().unwrap().num_input();
                 fd.op_insert_input(op, vn, num_in);
+            }
+            if let Some(spacebase) = spacebase {
+                if let Some(fc_arc) = fd.callspecs.get(fc_idx).cloned() {
+                    fc_arc
+                        .write()
+                        .unwrap()
+                        .create_placeholder(fd, op, spacebase);
+                }
             }
         }
     }
@@ -8944,31 +8968,6 @@ impl Action for ActionFuncLink {
             // (fspec.hh:1672) reserves the placeholder's slotbase and every
             // later heritage-registered trial keeps slot == op input index.
             Self::func_link_input(fd, idx, &op_ref);
-            // Ghidra funcLinkInput tail (coreaction.cc:1511-1513):
-            // spacebase = fc->getSpacebase() stays non-null when the model's
-            // input list has a stack pentry and no locked stack parameter
-            // claimed the placeholder role (Rugra's locked storage is
-            // register-only, so the role is never claimed). Append the
-            // stack-pointer LOAD placeholder as the final CALL input exactly
-            // as cc:1512 `fc->createPlaceholder(data, spacebase)`.
-            {
-                let fc_arc = fd.callspecs.get(idx).cloned();
-                let spacebase = fc_arc
-                    .as_ref()
-                    .and_then(|a| a.read().unwrap().prototype.get_spacebase());
-                if let (Some(fc_arc), Some(spacebase)) = (fc_arc, spacebase) {
-                    let needs_placeholder = {
-                        let fc = fc_arc.read().unwrap();
-                        fc.stack_placeholder_slot < 0
-                    };
-                    if needs_placeholder {
-                        fc_arc
-                            .write()
-                            .unwrap()
-                            .create_placeholder(fd, &op_ref, spacebase);
-                    }
-                }
-            }
             Self::func_link_output(fd, idx, &op_ref);
             // Ghidra funcLinkInput ends at the placeholder: trial
             // registration for unlocked prototypes happens exclusively in
