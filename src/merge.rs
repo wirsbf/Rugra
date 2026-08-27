@@ -1212,28 +1212,15 @@ impl Merge {
                     VariablePiece::mark_intersection_dirty_read(&other_piece);
                     return Ok(());
                 }
+                // variable.cc:599-604: both groups are combined
+                // unconditionally. There is no duplicate-key rejection in
+                // HighVariable::groupWith; transfer every source piece in
+                // group order and let combineGroups handle the membership.
                 let moving = high_group.read().unwrap().pieces.clone();
-                let mut existing_keys: std::collections::BTreeSet<(i32, i32)> = other_group
-                    .read().unwrap().pieces.iter().map(|piece| {
-                        let piece = piece.read().unwrap();
-                        (piece.group_offset, piece.size)
-                    }).collect();
                 for piece in moving {
-                    let key = {
-                        let piece = piece.read().unwrap();
-                        (piece.group_offset, piece.size)
-                    };
-                    // variable.cc:179-182 transferGroup removes from the
-                    // source and rewires the piece's group pointer before
-                    // addPiece detects a duplicate and throws. Preserve this
-                    // partial mutation and the transfer iteration order.
                     high_group.write().unwrap().remove_piece(&piece);
                     piece.write().unwrap().group = Some(other_group.clone());
-                    if existing_keys.contains(&key) {
-                        return Err(anyhow!("Duplicate VariablePiece"));
-                    }
                     other_group.write().unwrap().add_piece(piece);
-                    existing_keys.insert(key);
                 }
                 VariablePiece::mark_intersection_dirty_read(&other_piece);
             }
