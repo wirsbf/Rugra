@@ -1,5 +1,20 @@
 # `heritage.rs` API Reference
 
+## 2026-08-27：myprogress SSA/heritage 半边诊断（TRI4 第 7 位）
+
+针对 `myprogress` 的 `CONCAT124`/`SUB84` 与寄存器临时，已逐行对照 oracle
+`heritage.cc:2281-2313 processJoins`、`:2479-2562 renameRecurse`。
+Rugra 的 `rename_recurse` 已实现单次 op 顺序、activeHeritage 消费、空栈 input
+promotion、INDIRECT 同时点回退、后继 leading MULTIEQUAL、dominator child 顺序和
+writelist 回弹（`heritage.rs:5213`）；当前差异不是可安全窄改的 rename 分支。
+
+关键缺口是类型/结构化上游：myprogress 无 join-space varnode（`process_joins`
+未触发），故 `splitJoinRead/Write` 不能解释 `CONCAT124/SUB84`；这些是当前
+x86 lift/类型传播产生的表达式。Rugra 输出的 `CONCAT124`、`SUB84`、浮点/数组
+类型缺失及 `if ( = iVar2 < 1)` 需要 TypeWiring/CoreAction 与结构化流水线修复，
+而非在 heritage 层删除或重写 SSA。已将 float/array/bool 类型接线依赖转交
+regB 队列；本轮未改 `heritage.rs`，避免破坏全量 `defects=0/numbering=0` 基线。
+
 **源代码路径**: `src/heritage.rs`
 
 ## 文档状态
