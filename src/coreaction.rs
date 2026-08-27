@@ -3328,13 +3328,19 @@ impl Action for ActionPrototypeWarnings {
         // coreaction.cc:4889-4892: override messages (deadcode-delay restart
         // notices). Space-name indexing needs Architecture's indexed space
         // manager (override.cc:51-56 getSpace(i)->getName()); Rugra's
-        // Architecture has no indexed space list yet and no code path inserts
-        // deadcode-delay overrides, so the message list is provably empty —
-        // the empty name table is observably identical today.
-        for message in fd
-            .localoverride
-            .generate_override_messages(&[] as &[String])
-        {
+        // Architecture has no indexed space list yet, so resolve names
+        // through the locked x86-64 corpus space table
+        // (AddressSpace::spec_space_name, same provenance as
+        // AddressSpace::get_index). Heritage::bumpDeadcodeDelay
+        // (heritage.cc:2581) is the production inserter.
+        let space_names: Vec<String> = (0..9)
+            .map(|i| {
+                crate::space::AddressSpace::spec_space_name(i)
+                    .unwrap_or("unknown")
+                    .to_string()
+            })
+            .collect();
+        for message in fd.localoverride.generate_override_messages(&space_names) {
             // coreaction.cc:4892: data.warningHeader(overridemessages[i]);
             fd.warning_header(&message);
         }
@@ -4580,6 +4586,7 @@ impl ActionSetCasts {
     ) -> i32 {
         use crate::type_system::cast::base_type_for;
         use crate::type_system::datatype::Datatype;
+        use crate::type_system::datatype::TypeMetatype;
         // cc:2542: get the output varnode.
         let outvn = match op.0.read().unwrap().output.as_ref() {
             Some(o) => o.clone(), None => return 0,
@@ -4626,6 +4633,40 @@ impl ActionSetCasts {
                         Some(t) => t,
                         None => return 0,
                     },
+                }
+            } else if matches!(op_rg.opcode, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND) {
+                // cc:2541 getOutputToken -> outputTypeLocal ->
+                // TypeOpCall::getOutputLocal (typeop.cc:720-735) /
+                // TypeOpCallind::getOutputLocal (typeop.cc:776-789): the
+                // callspec's LOCKED non-void output type, else the TypeOp
+                // base default getBase(size, TYPE_UNKNOWN) (typeop.cc:261-265).
+                // This token is what makes an unlocked (default-proto) call
+                // output print as `__nptr = (char *)curl_getenv(...)`: token
+                // undefined8 vs output high char* ->
+                // castStandard(char*, undefined8) -> CAST inserted after the
+                // CALL, whose printc spelling is the CAST output's high type
+                // (PrintC::opTypeCast, printc.cc:448-464). Locked outputs
+                // whose type equals the output high (strtol -> long) hit the
+                // type_equal short-circuit and take no cast.
+                // CALLIND reaches the callspec through Funcdata::getCallSpecs
+                // (typeop.cc:782); Rugra's get_call_specs_of_op performs the
+                // same op-identity verification through the slot-0 Iop
+                // annotation (TYPEOP-FSPEC-SPACE-0001).
+                match fd.get_call_specs_of_op(op) {
+                    Some(fc) => {
+                        let fc_r = fc.read().unwrap();
+                        if fc_r.prototype.output_type_locked {
+                            let ct = fc_r.prototype.return_type.clone();
+                            if ct.get_metatype() != TypeMetatype::Void {
+                                ct
+                            } else {
+                                base_type_for(out_size, TypeMetatype::Unknown)
+                            }
+                        } else {
+                            base_type_for(out_size, TypeMetatype::Unknown)
+                        }
+                    }
+                    None => base_type_for(out_size, TypeMetatype::Unknown),
                 }
             } else {
                 match Self::output_metatype(op_rg.opcode) {
@@ -5252,23 +5293,57 @@ impl ActionInferTypes {
                         }
                     }
                 }
-                // LOAD/STORE: Ghidra's buildLocaltypes (coreaction.cc:5008-
-                // 5037) seeds NOTHING from these ops — Varnode::getLocalType
-                // (varnode.cc:900-936) consults the DEF's outputTypeLocal
-                // (LOAD/STORE outputs: base UNKNOWN; a SEALED PTRSUB address
-                // early-returns its TYPE_INT local) plus the DESCENDANT ops'
-                // inputTypeLocal (e.g. a CALL's locked parameter type). The
-                // former op-centric seeding here bootstrapped the ADDRESS
-                // temp with pointer-to-sized-scalar (`long *`), which is not
-                // an edge write and thus BYPASSED the RulePtrArith seal
-                // (stops_up_propagation blocks only propagate_type_edge
-                // targets, outslot >= 0) — it overwrote the downChain
-                // field-pointer char** on my_fwrite's `stream->_IO_read_ptr`
-                // PTRSUB and suppressed the golden `(FILE *)`/`(char *)`
-                // casts. Outputs/addresses fall through to the generic
-                // fallback (int8) and the propagation rounds below, exactly
-                // as Ghidra's def/descendant dispatch does.
-                OpCode::CPUI_LOAD | OpCode::CPUI_STORE => {}
+                // LOAD/STORE reader dispatch (varnode.cc:918-932 descendant
+                // visits mapped onto the op-centric walk): Ghidra's
+                // buildLocaltypes (coreaction.cc:5008-5037) seeds nothing
+                // op-centrically, but every Varnode's local type IS the
+                // typeOrder-minimum over its readers'
+                // `op->inputTypeLocal(i)` — and neither TypeOpLoad nor
+                // TypeOpStore overrides getInputLocal (typeop.hh:269/279 both
+                // commented out), so each non-annotation LOAD/STORE input
+                // contributes the base default `TypeOp::getInputLocal`
+                // (typeop.cc:271-275) = `tlst->getBase(ownSize, UNKNOWN)`.
+                // For a >10-byte constant that base is an unknown1 array
+                // (type.cc:3652-3656) — NOT IntTypes::sized's saturating
+                // 8-byte long, which the generic fallback below would stamp
+                // and which Ghidra cannot produce: the pointer->value edge
+                // of TypeOpStore::propagateType -> propagateFromPointer
+                // (typeop.cc:206-228) crosses only exact-size or
+                // partial-enum matches. The full-width unknown local lets
+                // testDatatypeCompatibility's piece walk (subflow.cc:2319-
+                // 2334) cover every outType component so RuleSplitStore
+                // (subflow.cc:2991-3004) splits whole-struct constant
+                // STOREs into per-field STOREs
+                // (TRI2-STORESPLIT-WHOLESTRUCT-0001). merge_min_type_order
+                // keeps the varnode.cc:926-931 minimum: an unknown8 seed can
+                // never displace a more specific reader seed (CALL locked
+                // param, downChain field pointer).
+                OpCode::CPUI_LOAD | OpCode::CPUI_STORE => {
+                    let type_factory = fd.arch.as_ref().and_then(|a| a.types.clone());
+                    let Some(type_factory) = type_factory else {
+                        continue;
+                    };
+                    for slot in 0..op.num_input() {
+                        let input_vn = op.get_in(slot).cloned();
+                        let Some(input_vn) = input_vn else { continue };
+                        if input_vn.read().unwrap().is_annotation() {
+                            continue;
+                        }
+                        let ct = {
+                            let mut tf = type_factory
+                                .write()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            tf.get_base_result(
+                                input_vn.read().unwrap().get_size(),
+                                TypeMetatype::Unknown,
+                            )
+                        }
+                        .ok();
+                        if let Some(ct) = ct {
+                            merge_min_type_order(temps, vn_id(&input_vn.read().unwrap()), ct);
+                        }
+                    }
+                }
                 // INT_ADD/INT_SUB/PTRSUB/PTRADD with a spacebase input →
                 // pointer output. Mirrors Ghidra's pointer arithmetic
                 // propagation (Varnode::getLocalType spacebase path).
@@ -13266,9 +13341,14 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(comments.len(), 1);
+        // Oracle text: Override::generateDeadcodeDelayMessage
+        // (override.cc:51-56) resolves the space name via
+        // glb->getSpace(0)->getName() = "const" (locked x86-64 corpus
+        // table, AddressSpace::spec_space_name). The old expectation
+        // "unknown" was the empty-name-table degradation.
         assert_eq!(
             comments[0].get_text(),
-            "WARNING: Restarted to delay deadcode elimination for space: unknown"
+            "WARNING: Restarted to delay deadcode elimination for space: const"
         );
     }
 

@@ -217,6 +217,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut total_success = 0;
     let mut total_fail = 0;
 
+    // Known function entries for tail-call detection (TailCallAnalyzer
+    // transport): ELF function symbols plus every address this corpus
+    // calls (shared tail chunks Ghidra's analysis also turns into
+    // functions, e.g. sub_2c960 = suck_in_APR+0x90).
+    let func_entry_set: std::collections::HashSet<u64> = functions.iter().map(|f| f.0)
+        .chain(call_targets.iter().copied())
+        .collect();
+
+    // PLT sections for tail-call detection: PLT stubs
+    // (apr_pool_cleanup_kill@plt 0x2a970, ...) carry no .symtab entries
+    // but are thunk functions on the Ghidra side; a stub START is
+    // entry-aligned (sh_entsize), mid-stub addresses are not function
+    // entries.
+    let plt_entry_ranges: Vec<(u64, u64, u64)> = if let Object::Elf(elf) = &obj {
+        elf.section_headers.iter()
+            .filter(|h| {
+                elf.shdr_strtab.get_at(h.sh_name).map(|n| n.starts_with(".plt")).unwrap_or(false)
+            })
+            .filter(|h| (h.sh_flags & 0x4) != 0) // SHF_EXECINSTR
+            .map(|h| (h.sh_addr, h.sh_addr + h.sh_size, h.sh_entsize.max(1)))
+            .collect()
+    } else { Vec::new() };
+
     for (idx, &(vaddr, size, file_offset, ref name)) in functions.iter().enumerate() {
         if idx >= max_functions { break; }
         if size < 5 || name == "_start" || name.starts_with("register_tm_clones") || name.starts_with("deregister_tm_clones") || name == "__libc_csu_init" || name == "__libc_csu_fini" || name == "frame_dummy" {
@@ -251,12 +274,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let func_name = name.clone();
         let func_size = size;
         let proto_db = prototype_db.clone();
+        let entry_set = func_entry_set.clone();
+        let plt_ranges = plt_entry_ranges.clone();
 
         let handle = std::thread::spawn(move || -> Option<String> {
             let mut fd = Funcdata::new(&func_name, Address::new(vaddr), func_size as i32);
             fd.external_prototypes = proto_db;
             for (&addr, n) in &sym_table { fd.add_symbol(addr, n.clone()); }
             for (&addr, s) in &str_table { fd.add_string(addr, s.clone()); }
+
+            // Tail-call flow overrides — transport of Ghidra's Java-side
+            // TailCallAnalyzer writing FlowOverride CALL_RETURN entries into
+            // the program DB before decompilation: a direct `jmp` whose
+            // target is a KNOWN function entry OUTSIDE this function's own
+            // range is a tail call (PLT thunks, `jmp ap_getword` wrappers,
+            // shared tail chunks like 0x2c960 that other functions call).
+            // `inject_raw_ops` applies the override at the raw layer
+            // (flow.cc:474-475 position) rewriting BRANCH→CALL and
+            // appending the CALL_RETURN's RETURN. Without it the printer
+            // emits the dangling `code_rXXXX: goto code_rXXXX;` self-loop
+            // (GOTO-LABEL-UNPRINTED-0001 symptom family).
+            for raw in &raw_ops {
+                if rugra::opcodes::OpCode::from_i32(raw.get_opcode())
+                    != Some(rugra::opcodes::OpCode::CPUI_BRANCH)
+                {
+                    continue;
+                }
+                let Some(tgt) = raw.inputs().first() else { continue };
+                if tgt.space != rugra::space::AddressSpace::Ram { continue; }
+                let known_entry = entry_set.contains(&tgt.offset)
+                    || plt_ranges.iter().any(|&(s, e, es)| {
+                        tgt.offset >= s && tgt.offset < e && (tgt.offset - s) % es == 0
+                    });
+                if !known_entry { continue; }
+                if vaddr <= tgt.offset && tgt.offset < vaddr + func_size as u64 { continue; }
+                if let Some(seq) = raw.seq_num() {
+                    fd.localoverride.insert_flow_override(
+                        seq.get_addr(),
+                        rugra::override_rs::FlowOverride::CallReturn,
+                    );
+                }
+            }
 
             fd.inject_raw_ops(&raw_ops);
             eprintln!("[THREAD] {} inject done ops={} blocks={}", func_name, fd.obank.alivelist.len(), fd.bblocks.get_size());

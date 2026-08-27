@@ -1361,3 +1361,56 @@ max_implied_ref 取默认常量 2（与 ActionRestructureVarnode 同一先例）
   `[BLOCKSTRUCT] WARN`（BLOCK-RECIPROCAL-OOB-0001 残差，见 TODO_BOARD；
   修复路径 = selfIdentify 的 replace*Edge 完整移植 block.cc:160-191）。
   httpd 29/30 函数 0 panic；该残差 WARN 在 httpd 全量出现 28 次。
+
+## BlockBasic::live_ops_source 镜像委托（TRI2-STORESPLIT-WHOLESTRUCT-0001，2026-08-26）
+
+`BlockBasic` 新增 `live_ops_source: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>`
+字段（RUGRA-GLUE）：Ghidra 的结构图节点是 `BlockCopy` 镜像
+（`BlockGraph::buildCopy`，block.cc:1925-1938），其 `firstOp`/`lastOp`/
+`printRaw`/`emit` 全部经 `copy` 字段读**原 BlockBasic 的活动 op 列表**
+（block.hh:520-535；`PrintC::emitBlockCopy` printc.cc:2759-2764 发射
+`subBlock(0)` 即原块）。因此在 ActionBlockStructure 之后插入 PcodeOp
+（cleanup pool：RuleSplitCopy/SplitLoad/SplitStore/StringCopy/StringStore，
+coreaction.cc:5694-5712）对打印与后续读者始终可见。Rugra 的 `build_copy`
+此前对 `ops` 做快照，晚插入的拆分 STORE 在打印期丢失；该字段让新建镜像
+携带同一活动视图契约（完整 BlockCopy 移植前过渡，登记
+BLOCK-BUILDCOPY-MIRROR-0001）。仅 build_copy 设置；`bblocks` 中的原块
+永不携带镜像链，委托不递归。字段持 trait 对象（BlockGraph 块即
+`Arc<RwLock<dyn FlowBlock>>`），`get_ops` 经 trait 方法委托。
+- `BlockBasic.source_basic`（BLOCK-BUILDCOPY-MIRROR-0001 关联项）：结构图
+  副本的源基本块回指针。Ghidra 的结构图用 BlockCopy 包装器镜像基本块
+  （block.hh:520-538），其 firstOp/lastOp **委托**被包装的活块
+  （block.hh:533-534 `return copy->firstOp()`），故结构化后插入的 op
+  （如 ActionSetCasts 的 CAST，coreaction.cc:5735 晚于 blockstructure
+  :5659）对 printer 可见。Rugra 的 build_copy 原先克隆 op-list Vec 冻结
+  快照，结构化后插入不可见；`get_ops` 在 `source_basic` 为 Some 时改为
+  读源块**当前** op 列表，恢复 BlockCopy 活委托语义。快照成员资格仍供
+  collapse 自身消费（build_copy 先填 ops 再挂 source_basic）。
+
+## GOTO-LABEL-UNPRINTED-0001：goto 标记/打印族（2026-08-26）
+
+- 新增 `front_leaf`（block.cc:340 FlowBlock::getFrontLeaf）：沿
+  subBlock(0) 下行到叶。oracle 的叶是 t_copy（BlockCopy）；Rugra 结构化
+  树的叶替身是 Basic|Copy（build_copy 产 BlockBasic），下降在那里停。
+  List→children[0]、If→condition、WhileDo→condition、DoWhile/InfLoop→
+  body、Condition→first、Switch→control，与各类 subBlock(0) 一致。
+- 新增 `mark_front_leaf` / `mark_front_leaf_dyn`（block.cc:1233
+  BlockGraph::markCopyBlock：`bl->getFrontLeaf()->flags |= fl`，标记
+  落在前叶而非包装块）与 `front_leaf_basic`（getGotoTarget()->
+  getFrontLeaf() 组合的类型化形态，block.cc:2885）。
+- 新增 `BlockGraph::next_flow_after`（block.cc:1335-1353）：子块 bl
+  之后流中下一语句所在块 = 列表中 bl 的下一块前叶化；列表末尾在根处
+  返回 None（Rugra 的 BlockGraph 不是 FlowBlock，嵌套图不可能出现在
+  父图列表中，父递归臂结构性不可达）。
+- `BlockGoto::goto_prints`（block.cc:2881-2890）修正：无 parent 臂
+  oracle 返回 **false**（旧实现恒 true 恰好反转了该臂）；parent-present
+  比较移入 `goto_prints_in`（cc:2884-2888：
+  gotobl=getGotoTarget()->getFrontLeaf() vs
+  nextbl=getParent()->nextFlowAfter(this)，不等才打印）。Rugra 结构器
+  目前不接线 BlockGoto::parent（try_rule_goto 构造为 None），空 parent
+  臂承载现状。
+- `BlockGoto::mark_unstructured_target`（block.cc:2856-2863）与
+  `BlockIf::mark_unstructured_target`（block.cc:3067-3072）的
+  f_unstructured_targ 标记改走前叶路径（markCopyBlock 契约）——旧实现
+  标在包装块上，叶从未带标，emitLabelStatement 永不点火（httpd label
+  未打印症状的根因之一）。

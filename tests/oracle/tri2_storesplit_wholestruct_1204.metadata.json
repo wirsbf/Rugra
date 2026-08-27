@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "fixture_id": "TRI2-STORESPLIT-WHOLESTRUCT-0001",
+  "fixture_kind": "e2e-function-extract (oracle-side: canonical locked golden; rugra-side: full-pipeline E2E output of the same binary)",
+  "overall_status": "MISMATCH",
+  "task_projection_status": {
+    "progressbarinit_wholestruct_store_split": "MATCH",
+    "detail": "the 32-byte whole-struct constant STORE renders as the same five per-field zeroing statements as the oracle, in the same order: bar->total / bar->prev / bar->point / bar->width / bar->field_0x1c (offset-0x1c unnamed 4-byte field)",
+    "my_fwrite_file_ptr_plus_8_unsplit": "MATCH",
+    "detail": "the 8-byte pointer STORE stream->_IO_read_ptr = (char *)__s stays a single field STORE on both sides; the aligned getBase(8,UNKNOWN) reader seed cannot displace the locked FILE* call-output type and categorizeDatatype(pointer)= -1 rejects the split"
+  },
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "producer": "analyzeHeadless + tools/ghidra_decompile_all.py postScript on examples/curl; byte-identical across independent full re-imports (see tests/golden/ghidra_curl_1204.provenance.json)",
+    "golden_blob": "3bfc94d42d5501b9cff6d6c5e2313b656ae12e6b (HEAD:tests/golden/ghidra_curl_1204.c)",
+    "golden_sha256": "aca3798881fddc2ce541c3e731b88f9fcf4736451db98fdd9247366f78b6097f",
+    "sources": [
+      "coreaction.cc:5008-5037 ActionInferTypes::buildLocaltypes",
+      "varnode.cc:901-934 Varnode::getLocalType (descendant op->inputTypeLocal minimum)",
+      "typeop.cc:271-275 TypeOp::getInputLocal base default getBase(size,TYPE_UNKNOWN)",
+      "typeop.hh:269 TypeOpLoad getInputLocal commented out (no override)",
+      "typeop.hh:279 TypeOpStore getInputLocal commented out (no override)",
+      "type.cc:3631-3660 TypeFactory::getBase (size>max_basetype_size -> unknown1[size] array)",
+      "architecture.cc:1422 max_basetype_size = 10",
+      "subflow.cc:2891-2938 SplitDatatype::getValueDatatype",
+      "subflow.cc:2244-2274 SplitDatatype::categorizeDatatype (unknown1[N] acts as large primitive)",
+      "subflow.cc:2276-2345 SplitDatatype::testDatatypeCompatibility (constant piece walk over struct fields)",
+      "subflow.cc:2807-2903 SplitDatatype::splitStore",
+      "subflow.cc:2983-3004 RuleSplitStore::applyOp",
+      "typeop.cc:557-570 TypeOpStore::propagateType + typeop.cc:206-228 propagateFromPointer (exact-size gate)",
+      "block.cc:1925-1938 BlockGraph::buildCopy + block.hh:520-535 BlockCopy mirror delegation"
+    ]
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": "gcc",
+  "analysis_options": "analyzeHeadless defaults; per-function decompile timeout 30s; identical to golden provenance",
+  "input_fingerprint": "examples/curl (same binary as canonical golden; see provenance determinism record)",
+  "comparand": {
+    "rugra_commit": "76a46fa2e5355278ec5385ef7ee8ba890b47f01c (wip mechanism commits 2647faac + 76a46fa2)",
+    "rugra_tree": "3584dbf478f2a4e190083516f6e1ba61e418bdbc",
+    "rugra_src_blobs": {
+      "src/coreaction.rs": "283624d76271fcfefc64b7ec455c4f7f72c9671f",
+      "src/typeop.rs": "9d59388d6012e7a01d71ade00fa7b0f2d6e7d8c9",
+      "src/block.rs": "b4027f2015b9147b0953238a18c8a1bbaa000475",
+      "src/blockaction.rs": "7a20890217c5903e6be9f6fa0123b6adce72dcaf"
+    },
+    "e2e_output_sha256": "f6ba7c2840942f15e7917a0fec51fffb6a7b9afbc6c1adfc3df1a2611247d520 (result/curl_cur.c, gitignored archive)",
+    "extract_files": {
+      "ghidra_side": {
+        "path": "tests/oracle/tri2_storesplit_wholestruct_1204.ghidra.c",
+        "sha256": "4d8e12435123e61b17d8e2dca0a3bd92f380e27f7e71fa25e209bb09a4a310f9",
+        "extracted_from": "tests/golden/ghidra_curl_1204.c lines 2164-2190 (progressbarinit @0x1049a0) and 1104-1122 (my_fwrite @0x103460)"
+      },
+      "rugra_side": {
+        "path": "tests/oracle/tri2_storesplit_wholestruct_1204.rugra.c",
+        "sha256": "32b91bed5b3cf5f2c4dd767ac0729af05e8159dab6f7b504875ebff82ab8ad2e",
+        "extracted_from": "result/curl_cur.c lines 1499-1521 (progressbarinit @0x49a0) and 1046-1061 (my_fwrite @0x3460), full E2E run of the 124-function corpus"
+      }
+    }
+  },
+  "gate_results": {
+    "command": "python3 tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl_1204.c --summary-only",
+    "functions": 124,
+    "matched": 124,
+    "defects": 0,
+    "numbering": 0,
+    "total_skeleton_diff_lines": 3125,
+    "per_function": {
+      "progressbarinit": {"skeleton_base": 12, "skeleton_head": 9, "defects": 0},
+      "my_fwrite": {"skeleton_base": 22, "skeleton_head": 10, "defects": 0}
+    },
+    "baseline_causality": {
+      "method": "true pre-WIP base 50353b90 rebuilt and rerun in /tmp/fieldsplit-basewt with same target dir and flock",
+      "base_total_skeleton_diff_lines": 3117,
+      "changed_functions": 12,
+      "net_skeleton_delta_vs_golden": "+8 (progressbarinit -3; match_url +5, glob_set +4, next_url +2 typing/naming churn; 8 functions unchanged net)",
+      "test_set": "cargo test --lib -- --test-threads=1: stable failure set identical to base (17 pre-existing funcdata::tests failures, zero new). Flake note (re-verified 2026-08-27 on tree 3584dbf4): varnode::tests::test_copy_symbol_if_valid_equate_gating appears as an 18th collateral failure nondeterministically (~1/3 of runs) on BOTH the wip tree and the untouched true base 50353b90 (poisoned-RwLock cascade from the funcdata failures; passes in isolation) — pre-existing FUNCDATA-TESTS-FLAKY-0001 family, not a regression from this mechanism"
+    }
+  },
+  "residual_differences": [
+    {"line": "bar->field_0x1c = 0; vs *(undefined4 *)&bar->field_0x1c = 0;", "binding": "printc cast-decision domain (unnamed-field explicit cast), PRINTC family; outside InferTypes write-set"},
+    {"line": "curl_getenv(\"COLUMNS\"); vs __nptr = (char *)curl_getenv(\"COLUMNS\");", "binding": "pre-existing on true base 50353b90 (verified), call-output assignment rendering, MAINDIFF-CALLPROTO consumer family"},
+    {"line": "unused int iVar1 declaration", "binding": "VARMAP-ORPHAN-DECL-0001 family"},
+    {"line": "strtol(__nptr,0,10) arg form and bar->width = 'O' vs 0x4f", "binding": "printc constant-rendering (char literal vs hex) domain"},
+    {"line": "match_url/glob_set/next_url +11 skeleton lines vs golden", "binding": "RULE-PTRARITH-ADDTREE-0001 (golden restructures INT_ADD pointer arithmetic to typed PTRSUB so TypeOpStore::propagateType exact-size edge stamps short/int on STORE values; Rugra keeps long-typed INT_ADD pointers so the oracle-aligned undefined-N reader local survives to printing) + varmap declaration domain"}
+  ],
+  "residual_ids": [
+    "ACTION-INFERTYPES-DISPATCH-0001",
+    "BLOCK-BUILDCOPY-MIRROR-0001",
+    "RULE-PTRARITH-ADDTREE-0001",
+    "VARMAP-ORPHAN-DECL-0001"
+  ]
+}

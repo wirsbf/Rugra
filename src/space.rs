@@ -164,6 +164,85 @@ impl AddressSpace {
         self.get_delay()
     }
 
+    // Ghidra: space.hh:332 AddrSpace::getIndex
+    /// Integer identifier of this space in the locked x86-64 corpus space
+    /// table. Faithful to `AddrSpace::getIndex()` (space.hh:332) — the
+    /// index `AddrSpaceManager::insertSpace` assigns at construction:
+    ///   - translator spaces (`.sla` `<spaces>` order, probed from the live
+    ///     locked-spec translator via `SleighCtx::space_info`):
+    ///     const=0, OTHER=1, unique=2, ram=3, register=4
+    ///   - `Architecture::restoreFromSpec` appends fspec=5, iop=6, join=7
+    ///     (architecture.cc:632-634, `numSpaces()` at insert time)
+    ///   - `parseProcessorConfig` → `addSpacebase` appends stack=8
+    ///     (architecture.cc:1013 → 566-568), still within `restoreFromSpec`.
+    /// Consumers: `Override::insertDeadcodeDelay`/`hasDeadcodeDelay`
+    /// (override.cc:79-105, indexed by `spc->getIndex()`) and
+    /// `Heritage::getInfo` (heritage.hh:257).
+    /// Overlay spaces get a dynamic index at construction (space.rs
+    /// `new_overlay_space` takes the index parameter); the enum carries no
+    /// per-instance storage, so Overlay reports -1. No deadcode-delay or
+    /// heritage consumer accepts an Overlay space in the corpus
+    /// (`bumpDeadcodeDelay` gates to processor/spacebase kinds), so the
+    /// hole is unobservable.
+    pub fn get_index(&self) -> i32 {
+        match self {
+            AddressSpace::Const => 0,
+            AddressSpace::Other(_) => 1,
+            AddressSpace::Unique => 2,
+            AddressSpace::Ram => 3,
+            AddressSpace::Register => 4,
+            AddressSpace::Iop => 6,
+            AddressSpace::Join => 7,
+            AddressSpace::Stack => 8,
+            AddressSpace::Overlay => -1,
+        }
+    }
+
+    // RUGRA-GLUE: inverse of `AddressSpace::get_index` over the locked
+    /// x86-64 corpus space table (same provenance as `get_index` above) —
+    /// stands in for `AddrSpaceManager::getSpace(i)`
+    /// (translate.hh:559-561), which Rugra's `Architecture` does not own
+    /// yet. Used by `Funcdata::start_processing` to resolve
+    /// `Override::applyDeadCodeDelay` index entries back to spaces.
+    /// Index 5 (fspec) has no enum variant (Rugra models no fspec space);
+    /// a deadcode-delay override can never be installed for it
+    /// (`bumpDeadcodeDelay` gates to processor/spacebase kinds), so the
+    /// hole is unobservable.
+    pub fn from_index(index: usize) -> Option<AddressSpace> {
+        match index {
+            0 => Some(AddressSpace::Const),
+            1 => Some(AddressSpace::Other(0)),
+            2 => Some(AddressSpace::Unique),
+            3 => Some(AddressSpace::Ram),
+            4 => Some(AddressSpace::Register),
+            6 => Some(AddressSpace::Iop),
+            7 => Some(AddressSpace::Join),
+            8 => Some(AddressSpace::Stack),
+            _ => None,
+        }
+    }
+
+    // RUGRA-GLUE: locked x86-64 corpus space-name table indexed by
+    /// `AddrSpace::getIndex` — stands in for
+    /// `AddrSpaceManager::getSpace(i)->getName()` (override.cc:51-56's
+    /// message path). Same provenance as `get_index`: the live translator
+    /// reports the capitalized name "OTHER" (SLEIGH `.sla` name), distinct
+    /// from `AddressSpace::name`'s lowercase debug form.
+    pub fn spec_space_name(index: usize) -> Option<&'static str> {
+        match index {
+            0 => Some("const"),
+            1 => Some("OTHER"),
+            2 => Some("unique"),
+            3 => Some("ram"),
+            4 => Some("register"),
+            5 => Some("fspec"),
+            6 => Some("iop"),
+            7 => Some("join"),
+            8 => Some("stack"),
+            _ => None,
+        }
+    }
+
     // Ghidra: space.hh AddrSpace::isHeritaged
     /// Is this space heritaged (subject to SSA phi-placement)? Faithful to
     /// `AddrSpace::isHeritaged()` (space.hh). Ghidra's IPTR_CONSTANT,

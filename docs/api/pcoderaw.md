@@ -304,6 +304,17 @@ binary / disasm
 
 ---
 
+### `pub fn set_opcode(&mut self, opcode: i32)`（2026-08-27 新增）
+
+RUGRA-GLUE 变更器：`Funcdata::overrideFlow` raw 层传输
+（funcdata_op.cc:991-1020 的 `opSetOpcode` 表）需要原地改写 raw op 的
+opcode（BRANCH→CALL 等）。Ghidra 在块形成前直接改 dead `PcodeOp`；Rugra
+的注入路径在 `inject_raw_ops` phase-1 创建 `PcodeOp` 之前改写 raw op，
+builder API 只覆盖整 op 构造，故补此 setter。消费方：
+`Funcdata::apply_flow_overrides_raw`（见 docs/api/funcdata.md 同日节）。
+
+---
+
 ### `pub fn num_input(&self) -> usize`
 
 返回当前 raw 操作的输入数量。

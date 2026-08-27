@@ -20,7 +20,7 @@ use rugra::disasm::sleigh_lift::SleighLifter;
 use rugra::disasm::{Disassembler, X86Lifter, X86_64Disassembler};
 use rugra::funcdata::Funcdata;
 use rugra::override_rs::{FlowOverride, FlowOverrideRecord};
-use rugra::prettyprint::EmitNoMarkup;
+use rugra::prettyprint::EmitPrettyPrint;
 use rugra::printc::PrintC;
 use rugra::printlanguage::PrintLanguage;
 
@@ -2178,6 +2178,27 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     .write()
                     .unwrap()
                     .get_base(8, rugra::type_system::datatype::TypeMetatype::Unknown);
+                // STRCONST-SPANNONOVERLAP: the oracle's Program DB Data layout
+                // is strictly non-overlapping (Ghidra cannot create Data over
+                // bytes another Data covers), and the strings-analyzer
+                // char-array Data owns its whole span [S, S+len+1) — run
+                // bytes plus NUL. A per-byte DAT entry inside that span, or
+                // an 8-byte slot entry crossing the string start, would win
+                // Scope::findContainer's smallest-containing-entry pick
+                // (database.cc:2250-2270: containing entries ordered latest-
+                // start-first, smallest size wins) over the string entry at
+                // S — shadowing the char-array hit ActionConstantPtr's
+                // cc:1152-1160 string arm (and RulePtrsubCharConstant
+                // downstream) need. Witnesses: the hugehelp folding strings
+                // at 0xea40/0x11270/0x13ad0 each start right after padding
+                // NULs (0xea3f/...) whose per-byte DAT_0010ea3f-class
+                // entries previously spanned the string start and encoded
+                // the constant as `&DAT_prev + 1` (undefined8, not char*),
+                // breaking the fold. The skip/clip restores the oracle
+                // property: at a string start the only containing entry is
+                // the string entry.
+                let mut string_starts: Vec<u64> = string_addrs.keys().copied().collect();
+                string_starts.sort_unstable();
                 for (address, name) in &request.rodata_dat_entries {
                     let dtype = string_addrs.get(address).map(|value| {
                         // strings analyzer product: char array over the run
@@ -2207,6 +2228,24 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     let is_string = string_addrs.contains_key(address);
                     let dtype =
                         dtype.or_else(|| undefined8.clone());
+                    if !is_string {
+                        // STRCONST-SPANNONOVERLAP: greatest admitted string
+                        // start <= address (rodata_dat_entries iterates in
+                        // BTreeMap order, but the span test needs the
+                        // predecessor regardless).
+                        let pos = string_starts.partition_point(|&s| s <= *address);
+                        if pos > 0 {
+                            let start = string_starts[pos - 1];
+                            let span_end = start
+                                + string_addrs[&start].len() as u64
+                                + 1; // run bytes + NUL, exclusive
+                            // Interior byte of a string Data: no oracle
+                            // counterpart (the string entry owns it) — skip.
+                            if *address < span_end {
+                                continue;
+                            }
+                        }
+                    }
                     // Non-string referenced .rodata data takes the pointer
                     // slot width (8): every non-string reference in this
                     // corpus is a pointer reference (golden witnesses
@@ -2215,11 +2254,20 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     // "overlap smaller symbols" header
                     // (funcdata_varnode.cc:1717) — which a 1-byte entry
                     // under an 8-byte persist group would trigger.
-                    let entry_size = if is_string {
+                    // STRCONST-SPANNONOVERLAP: clipped so the span cannot
+                    // cross the next string start (an oracle Data can never
+                    // overlap the string Data's first byte).
+                    let mut entry_size = if is_string {
                         dtype.as_ref().map(|t| t.get_size() as i32).unwrap_or(1)
                     } else {
                         8
                     };
+                    if !is_string {
+                        let pos = string_starts.partition_point(|&s| s <= *address);
+                        if let Some(&next_start) = string_starts.get(pos) {
+                            entry_size = entry_size.min((next_start - *address) as i32);
+                        }
+                    }
                     let symbol_id =
                         db.add_symbol_mapped(global, name, dtype, Address::new(*address), entry_size);
                     if let Some(symbol_id) = symbol_id {
@@ -2643,13 +2691,17 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                             let extra = if vr.is_input() { ", INPUT" } else { "" };
                             format!("vn#{}(h={}{}:{}:{:x},{})", vr.create_index, vr.high.as_ref().map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_else(|| "?".into()), extra, vr.get_space().name(), vr.get_offset(), type_str(a))
                         }).collect();
-                        eprintln!("[DUMP]   op @0x{:x}/{} {:?} stopTP={} outStopUp={} {} = ({})", op_rg.start.addr.as_u64(), op_rg.start.order, op_rg.opcode, op_rg.stops_type_propagation(), op_rg.get_out().map(|o| o.read().unwrap().stops_up_propagation()).unwrap_or(false), out_s, in_s.join(", "));
+                        let flag_s = format!("mk={} np={} nr={} outimpl={}", op_rg.is_marker(), (op_rg.flags & rugra::op::pcodeop_flags::NONPRINTING) != 0, (op_rg.flags & rugra::op::pcodeop_flags::NORETURN) != 0, op_rg.get_out().map(|o| o.read().unwrap().is_implied()).unwrap_or(false));
+                        eprintln!("[DUMP]   op @0x{:x}/{} {:?} {} stopTP={} outStopUp={} {} = ({})", op_rg.start.addr.as_u64(), op_rg.start.order, op_rg.opcode, flag_s, op_rg.stops_type_propagation(), op_rg.get_out().map(|o| o.read().unwrap().stops_up_propagation()).unwrap_or(false), out_s, in_s.join(", "));
                     }
                 }
             }
         }
     }
-    let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
+    // Ghidra: printlanguage.cc:69 PrintLanguage::PrintLanguage —
+    // `emit = new EmitPrettyPrint()`; the decompiler always pretty-prints
+    // through the Oppen token queue, so the driver mirrors that here.
+    let mut printer = PrintC::new(Box::new(EmitPrettyPrint::new()));
     printer.set_rpn_enabled(true);
     let fd_read = fd_arc
         .read()
@@ -2661,7 +2713,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     let output_buffer = printer
         .take_emit()
         .into_any()
-        .downcast::<EmitNoMarkup>()
+        .downcast::<EmitPrettyPrint>()
         .map_err(|_| "PrintC returned an unexpected emitter type".to_string())?;
     let c_code = output_buffer.get_output();
     Ok((!c_code.trim().is_empty()).then_some(c_code))

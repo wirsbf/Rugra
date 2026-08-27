@@ -1191,3 +1191,28 @@ lower_bound/--iter/++iter 语义改用 BTreeMap range 查询（`range(..(space,a
 游标推进。分类结果（prev=0/1/2、合并后 size/pass、插入位置）与原实现逐分支
 等价：selected=prev 时不 revisit (prev, addr) 区间（prev 是 addr 前最后键），
 merge 循环前向 only 亦与 forward-only iterator 对齐。
+
+## `pub fn bump_deadcode_delay`（MAIN-POSTSTRUCT-SPIN-0001，2026-08-27）
+
+忠实移植 `Heritage::bumpDeadcodeDelay`（heritage.cc:2571，函数体
+cc:2573-2582）。签名改为携带 `&mut Funcdata`：oracle 通过 `fd` 上的
+Override/重启标志生效，而非改 `HeritageInfo`。语义链：
+
+- cc:2574-2575 空间种类门（IPTR_PROCESSOR/IPTR_SPACEBASE → 锁定 x86-64
+  的 Ram/Register/Stack）；
+- cc:2576-2577 `getDelay() != getDeadcodeDelay()` 早退（已有全局 delay）；
+- cc:2578-2579 `Override::hasDeadcodeDelay` 早退（只允许装一次，
+  override.cc:92-103，按 `AddrSpace::getIndex` 索引）；
+- cc:2580 `Override::insertDeadcodeDelay(spc, deadcodedelay+1)`
+  （override.cc:79-89）——**不**改本 pass 的 `HeritageInfo`；
+- cc:2581 `fd->setRestartPending(true)`——重启由
+  `ActionRestartGroup::apply`（action.cc:553-582）执行；Rugra 侧重启环
+  未接线（PIPE-RESTART-0001，有界完成，见 action.md）。
+
+旧实现（已删）：直接 `infolist[i].deadcodedelay += 1` 的 pass 中途变异 +
+仅打日志。该中途变异违反 oracle 的"下一遍 startProcessing 才生效"契约，
+是不健康状态的喂入源之一（MAIN-POSTSTRUCT-SPIN-0001 根因链）。调用点
+`heritage()`（cc:2710/2719 needwarning 路径）与 `removeRevisitedMarkers`
+同步传 `fd`。同步修正引注行号：`setDeadCodeDelay`=cc:2815（体 2815-2822，
+`delay < info->delay` 时 panic 镜像 LowlevelError）、`getDeadCodeDelay`
+=cc:2803、`seenDeadCode`=cc:2791。

@@ -1104,15 +1104,29 @@ impl ActionRestartGroup {
                 self.curstart = -1;
                 return Ok(0); // action.cc:568-573
             }
-            // data.getArch()->clearAnalysis(&data) (action.cc:574) — Rugra
-            // does not model analysis-clearable state; PIPE-RESTART-0001.
-            // Reset everything but ourselves (action.cc:576-579): only the
-            // children reset, the restart group's own curstart survives.
-            self.group.reset(fd);
-            // status = status_start (action.cc:580): Rugra externalizes the
-            // inherited status, so prepare the embedded group's protected
-            // iterator for the fresh pass explicitly.
-            self.group.prepare_apply(status_flags::STATUS_START);
+            // data.getArch()->clearAnalysis(&data) (action.cc:574) =
+            // Funcdata::clear (funcdata.cc:84-112: blocks/obank/vbank/
+            // callspecs/jumptables/heritage are wiped, overrides survive)
+            // plus the warning-comment clear (architecture.cc:335-341).
+            // PIPE-RESTART-0001 (conservative degradation, documented):
+            // the oracle's restart cycle re-generates the raw p-code through
+            // Funcdata::startProcessing → followFlow (funcdata.cc:157); in
+            // Rugra the flow generation lives in the driver
+            // (rugra::flow::follow_flow*) before the pipeline runs, and
+            // Funcdata::start_processing cannot re-enter it. Running the
+            // oracle's reset+rerun here on the uncleared Funcdata would
+            // re-enter ActionStart → start_processing and hit its
+            // LowlevelError guard (funcdata.cc:153-154), destroying the
+            // worker. Until clearAnalysis + in-Funcdata flow regeneration
+            // land (PIPE-RESTART-0001), complete without the restart pass.
+            // The pending flag stays set, matching the oracle's end state on
+            // the maxrestarts path (only Funcdata::clear or an explicit
+            // setRestartPending(false) ever clear it; this loop is its sole
+            // consumer — action.cc:562).
+            eprintln!(
+                "[ACTION] restart pending after convergence: clearAnalysis/followFlow restart cycle not wired (PIPE-RESTART-0001); completing without restart"
+            );
+            return Ok(0);
         }
     }
 }
