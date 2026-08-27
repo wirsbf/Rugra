@@ -23,6 +23,7 @@
 | `PLTSTUB-WARNLOSS-0001` | P1 | IN_PROGRESS(只读 bisect) | pltstub@rugra-wt-pltstub | 只读+报告+TODO 行 | 51→27 警告丢失二分（早于 8474ec13）；交付引入 commit+修复 write-set 建议 |
 | `HTTPD-E2E-2026-08-27` | P1 | IN_PROGRESS(只读) | httpde2e@rugra-wt-httpde2e | 只读+报告+TODO 行 | master httpd 全量复测+goto 三症状普查（喂 gotolabel） |
 | `PRINTC-SWITCH-EMIT-0001` | P0 | PHASE-A | switchemit@rugra-wt-switchemit | docs 设计+fixture C++ 侧（**printc.rs 禁改**） | 阶段 A=oracle 深读+设计文档+fixture 骨架；printc 租约释放后实施 |
+| `TRI2-UNNAMED-VN-IMPLIED` + `TRI2-CALLOUT-RESID-0002` | P1 | DONE（printc 侧；agent/markimplied2） | markimplied2 | `src/printc.rs` + `docs/api/printc.md` + 本行 | Oracle `e40ed13014025f82488b1f8f7bca566894ac376b`; RPN PTRADD/PIECE implied 链复核保持（printc.cc:880-893, 424-442；printlanguage.cc:197-211, 514-540），Const 发射改按 propagated TYPE_INT/UINT + isCharPrint 分派，progressbarinit `0x4f` 收敛；验收=fast-release curl E2E + compare defects/numbering 0；2026-08-27 |
 
 > printc.rs 租约队列：strconst2（持锁）→ switchemit（阶段 B）→ 后备：callindptr/microform/markimplied-printc 臂。
 > coreaction.rs 租约队列：regB（持锁）→ 后备：markimplied/deadstore/callspec-resid。
