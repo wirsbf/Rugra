@@ -19,6 +19,18 @@ Varnode 表达式发射，保留 GOT 槽的 `PTR_<name>_<addr>` 符号；直接 
 已消失，剩余 audit 失败主要是返回值调用形（如 `lVar1(*(code *)PTR_...)`）及上游
 `_IO_FILE`/声明问题，已在 TODO 保留为后续审查项。
 
+## 2026-08-27：CALLIND-DECL-0001 oracle 调查
+
+锁定 golden `tests/golden/ghidra_curl_1204.c` 中不存在 `code * PTR_...;` 或
+`undefined * PTR_...;` 的独立声明段：PTR 名称只在函数体表达式中出现（例如
+`(*(code *)PTR_free_00116e80)()`）。因此不能按“golden 头部声明”假设新增全局声明，
+否则会引入与 oracle 不符的 skeleton 行。Oracle `emitScopeVarDecls`
+（`printc.cc:2518-2575`）只发射 Scope 的非 piece、非 FunctionSymbol/LabSymbol、
+非空且 multi-entry 首 entry 符号；`docFunction` 的函数头声明链
+（`printc.cc:2641`→`emitFunctionDeclaration`）不会凭 CALLIND 地址创造 PTR 符号。
+本项剩余 audit 失败应归因于独立函数 fixture 缺少外部符号上下文及上游类型/声明差异，
+而非可从该 oracle 证明的 printc 声明缺口。
+
 ## 2026-08-27：隐含表达式与类型化常量发射（TRI2-UNNAMED-VN-IMPLIED / TRI2-CALLOUT-RESID-0002）
 
 - RPN 的 `rpn_recurse`、`rpn_op_func`、`CPUI_PTRADD` 与 `CPUI_PIECE` 臂已按
