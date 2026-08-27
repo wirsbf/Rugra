@@ -1134,15 +1134,9 @@ impl Merge {
                           group: &Arc<RwLock<VariableGroup>>) -> Result<Arc<RwLock<VariablePiece>>> {
         let size = high.read().unwrap().instances.first()
             .map(|vn| vn.read().unwrap().size as i32).unwrap_or(0);
-        // Ghidra groupWith has no duplicate failure branch: an already
-        // represented (offset,size) piece remains the group's representative.
-        if let Some(existing) = group.read().unwrap().pieces.iter().find(|piece| {
-            let piece_read = piece.read().unwrap();
-            piece_read.group_offset == offset && piece_read.size == size
-        }).cloned() {
-            high.write().unwrap().piece = Some(existing.clone());
-            return Ok(existing);
-        }
+        // Ghidra HighVariable::groupWith (variable.cc:574-605) always
+        // allocates a VariablePiece in the one-sided group cases; it has no
+        // duplicate/failure branch. Keep duplicate offsets legal here.
         let piece = Arc::new(RwLock::new(VariablePiece::new(
             Arc::downgrade(high), offset, size, Some(group.clone()))));
         group.write().unwrap().add_piece(piece.clone());
@@ -1882,7 +1876,7 @@ impl Merge {
                 let v = current.read().unwrap();
                 (v.get_offset(), v.get_space(), v.descend_iter().collect::<Vec<_>>())
             };
-            let mut next: Option<Arc<RwLock<crate::varnode::Varnode>>> = None;
+            let mut next: Option<(Arc<RwLock<crate::varnode::Varnode>>, Arc<RwLock<crate::op::PcodeOp>>)> = None;
             for op in descendants {
                 let o = op.read().unwrap();
                 if o.opcode != crate::opcodes::OpCode::CPUI_PIECE { continue; }
@@ -1894,18 +1888,15 @@ impl Merge {
                 let out_addr = out.read().unwrap().get_offset();
                 let adjusted = if out_space.is_big_endian() == (slot == 1) { out_addr.wrapping_add(other_size as u64) } else { out_addr };
                 if adjusted != addr { continue; }
-                // PieceNode::findRoot uses compareOrder to select the
-                // earliest valid PIECE, rather than the first list entry.
+                // Rust compare_order has the same polarity as C++:
+                // negative means this op strictly precedes the prior one.
                 let replace = match &next {
                     None => true,
-                    Some(previous) => {
-                        let previous_def = previous.read().unwrap().get_def();
-                        previous_def.map_or(true, |p| o.compare_order(&p.read().unwrap()) != 0)
-                    }
+                    Some((_, previous)) => o.compare_order(&previous.read().unwrap()) < 0,
                 };
-                if replace { next = Some(out); }
+                if replace { next = Some((out, op.clone())); }
             }
-            match next { Some(n) => current = n, None => return Some(current) }
+            match next { Some((n, _)) => current = n, None => return Some(current) }
         }
     }
 
