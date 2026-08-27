@@ -65,6 +65,9 @@ Perform the full merging + naming pipeline. Phase order:
 3. `ensure_all_have_high` → singleton HighVariables for EVERY Varnode in
    `loc_tree` lacking one (faithful to `Funcdata::setHighLevel`,
    funcdata_varnode.cc:595 — no live_set filter)
+4. `group_partials` → reconstruct marked PIECE/CONCAT trees into
+   offset-aware `VariableGroup`s (merge.cc:967-976, 1374-1407), allowing
+   structured pointer expressions to use the root HighVariable.
 4. `compute_varnode_covers` → per-Varnode liveness covers (precise def→use
    range, NOT propagated through CFG successors — that over-approximation
    broke ActionMarkImplied's inflateTest; `propagate_cover_through_cfg` is

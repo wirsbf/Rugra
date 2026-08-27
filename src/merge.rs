@@ -1831,13 +1831,84 @@ impl Merge {
     }
 
     // Ghidra: merge.cc:967 Merge::groupPartials
-    /// Group CONCAT-piece roots. Faithful to `Merge::groupPartials`
-    /// (merge.cc:967-976). Rugra has no `protoPartial` registry (CONCAT
-    /// reconstruction is not ported), so there is nothing to group. Kept as
-    /// a named no-op to preserve the step sequence.
-    pub fn group_partials(&mut self, _fd: &mut Funcdata) {
-        // TODO: port CONCAT partial-root grouping when PieceNode/VariablePiece
-        // machinery is available (merge.cc:967, groupPartialRoot at 1374).
+    /// Group CONCAT-piece roots.  RulePieceStructure marks each rewritten
+    /// PIECE root and its unmapped pieces as proto-partial; this pass rebuilds
+    /// the same VariableGroup before naming (merge.cc:967-976, 1374-1407).
+    pub fn group_partials(&mut self, fd: &mut Funcdata) {
+        use std::collections::HashSet;
+        let candidates: Vec<_> = fd.vbank.loc_tree.iter()
+            .filter_map(|r| {
+                let vn = r.0.clone();
+                let is_partial = vn.read().unwrap().is_proto_partial();
+                is_partial.then_some(vn)
+            }).collect();
+        let mut roots = HashSet::new();
+        for vn in candidates {
+            let Some(root) = Self::partial_root(&vn) else { continue };
+            let key = std::sync::Arc::as_ptr(&root) as usize;
+            if !roots.insert(key) { continue; }
+            let Some(def) = root.read().unwrap().get_def() else { continue };
+            if def.read().unwrap().opcode != crate::opcodes::OpCode::CPUI_PIECE { continue; }
+            let Some(root_high) = root.read().unwrap().get_high().cloned() else { continue };
+            if root_high.read().unwrap().instances.len() != 1 { continue; }
+            let mut pieces = Vec::new();
+            Self::gather_partial_pieces(&root, &crate::op::PcodeOpRef(def), 0, &mut pieces);
+            if pieces.iter().all(|(piece, _)| {
+                let p = piece.read().unwrap();
+                p.is_proto_partial() && p.get_high().map_or(false, |h| h.read().unwrap().instances.len() == 1)
+            }) {
+                for (piece, offset) in pieces {
+                    if let Some(high) = piece.read().unwrap().get_high().cloned() {
+                        let _ = Self::group_with_arcs(&high, offset, &root_high);
+                    }
+                }
+            } else {
+                for (piece, _) in pieces { piece.write().unwrap().clear_proto_partial(); }
+            }
+        }
+    }
+
+    // Ghidra: op.cc:824 PieceNode::findRoot
+    fn partial_root(vn: &Arc<RwLock<crate::varnode::Varnode>>) -> Option<Arc<RwLock<crate::varnode::Varnode>>> {
+        let mut current = vn.clone();
+        loop {
+            let (addr, space, descendants) = {
+                let v = current.read().unwrap();
+                (v.get_offset(), v.get_space(), v.descend_iter().collect::<Vec<_>>())
+            };
+            let mut next = None;
+            for op in descendants {
+                let o = op.read().unwrap();
+                if o.opcode != crate::opcodes::OpCode::CPUI_PIECE { continue; }
+                let Some(out) = o.output.clone() else { continue };
+                let slot = (0..2).find(|&i| o.inrefs.get(i).map_or(false, |x| std::sync::Arc::ptr_eq(x, &current)));
+                let Some(slot) = slot else { continue };
+                let other_size = o.inrefs.get(1 - slot).map(|x| x.read().unwrap().get_size()).unwrap_or(0);
+                let out_addr = out.read().unwrap().get_offset();
+                let adjusted = if space.is_big_endian() == (slot == 1) { out_addr.wrapping_add(other_size as u64) } else { out_addr };
+                if adjusted == addr { next = Some(out); break; }
+            }
+            match next { Some(n) => current = n, None => return Some(current) }
+        }
+    }
+
+    // Ghidra: op.cc:865 PieceNode::gatherPieces
+    fn gather_partial_pieces(root: &Arc<RwLock<crate::varnode::Varnode>>, op: &crate::op::PcodeOpRef,
+                             base: i32, out: &mut Vec<(Arc<RwLock<crate::varnode::Varnode>>, i32)>) {
+        let (big, inputs) = {
+            let r = root.read().unwrap();
+            let o = op.0.read().unwrap();
+            (r.get_space().is_big_endian(), o.inrefs.clone())
+        };
+        if inputs.len() < 2 { return; }
+        let sizes = [inputs[0].read().unwrap().get_size() as i32, inputs[1].read().unwrap().get_size() as i32];
+        for slot in 0..2 {
+            let offset = if big == (slot == 1) { base + sizes[1 - slot] } else { base };
+            let piece = inputs[slot].clone();
+            let nested = piece.read().unwrap().get_def().filter(|d| d.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_PIECE);
+            out.push((piece, offset));
+            if let Some(nested) = nested { Self::gather_partial_pieces(root, &crate::op::PcodeOpRef(nested), offset, out); }
+        }
     }
 
     // Ghidra: merge.cc:889 Merge::mergeMarker
