@@ -5355,7 +5355,8 @@ impl ActionInferTypes {
                             let pointed = if op.opcode == OpCode::CPUI_PTRSUB {
                                 // Ghidra's concrete PTRSUB output token is
                                 // consumed here through getLocalType's def
-                                // edge, while getOutputLocal remains INT
+                                // edge (coreaction.cc:5008-5037), while
+                                // getOutputLocal remains INT
                                 // (typeop.cc:2308-2312). The token supplies
                                 // an unknown pointer for synthetic gaps.
                                 crate::typeop::TypeOpPtrsub::new(
