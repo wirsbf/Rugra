@@ -11,6 +11,9 @@
 
 ### 本 wave 认领租约（10 槽，2026-08-27 10:15 派发）
 
+| `REJECT-CALLOUT-GUARDS-0001` | P0 | FIXED（typeop 域；coreaction 侧 deferred） | calloutfix@agent/calloutfix | `src/typeop.rs` + `docs/api/typeop.md` + 本行 | `TypeOpPtradd/Ptrsub` local/cast/token/propagate 对照 oracle `typeop.cc:2224-2281,2296-2378`；ActionSetCasts 遍历、resolveUnion/checkPointerIssues/castOutput 属 coreaction 租约，登记不实施；E2E 由 root 合并后执行；2026-08-27 |
+
+
 | ID | P | 状态 | owner | write-set（租约） | 备注 |
 |---|---|---|---|---|---|
 | `REGA-HUGEHELP-LITERAL-0001` | P0 | IN_PROGRESS | regA@rugra-wt-regressfix2 | `src/heritage.rs`+docs/api/heritage.md | 回归 A 根因修复（bumpDeadcodeDelay/restart 链嫌疑）；前任 [DBG] 插桩需清除；验收=hugehelp/progressbarinit 恢复 c10871c3 形态+defects 0 |

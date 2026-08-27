@@ -3,6 +3,14 @@
 **状态**: 🔧 L2（仅逐函数核对，禁止据此宣称模块 L3）
 **源代码路径**: `src/typeop.rs`
 
+## 2026-08-27：PTRADD/PTRSUB 专用类型传播（REJECT-CALLOUT-GUARDS-0001）
+
+完整对照锁定 oracle `typeop.cc:2224-2281` 与 `:2296-2378`：PTRADD/PTRSUB 现在持有 Architecture 的 `TypeFactory`，其 local 类型均为 `getBase(size, TYPE_INT)`；PTRADD 的 output token、slot-0 对齐宽度 cast guard、slot-2/双向传播 guard，以及 PTRSUB 的 typedef/array 归一化、`downChain` output token、输入 cast 与同一 `propagateAddIn2Out` 链均已接入生产 `TypeOpManager`。PTRSUB offset 0 返回 down-chain 类型，非零 offset 返回 canonical unknown-base pointer，保持 Ghidra 的输出 token 规则。
+
+四类决定性语义：引用/输出参数为共享 canonical `TypeFactory`；遍历顺序为 downChain 的 do-while 链并保留 offset 0/非零分支；计数/累加器为无额外计数器、传播复用 `propagateAddIn2Out` 的共享 parent/parentOff；排序键不适用（类型链顺序决定结果）。`ActionSetCasts` 的 block/op 单轮遍历、union/checkPointerIssues 与 castOutput 仍归 `coreaction.rs` 租约。
+
+状态：PTRADD/PTRSUB typeop 域 FIXED；端到端差分待主 Agent 合并后执行。
+
 ## 2026-08-26：`TypeOpStore::get_input_local` 自创 override 移除（TRI2-STORESPLIT-WHOLESTRUCT-0001）
 
 锁定 oracle 的 `typeop.hh:279` 中 `TypeOpStore::getInputLocal` 声明是注释行
