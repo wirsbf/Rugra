@@ -4464,6 +4464,30 @@ mod tests {
     use crate::pcoderaw::{PcodeOpRaw, VarnodeRaw};
     use crate::space::AddressSpace;
 
+    /// Rust compare_order polarity must match C++ compareOrder: only a
+    /// strictly earlier candidate replaces the selected PIECE root.
+    #[test]
+    fn test_compare_order_selects_strictly_earlier_op() {
+        let mut fd = Funcdata::new("compare_order", Address::new(0x7000), 0x20);
+        let mut first = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+        first.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
+        first.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8));
+        let mut second = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+        second.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x108, 8));
+        second.add_input(VarnodeRaw::new(AddressSpace::Register, 0x30, 8));
+        fd.inject_raw_ops(&[first, second]);
+        let ops: Vec<_> = fd.obank.optree.iter().map(|r| r.0.clone()).collect();
+        assert!(ops.len() >= 2, "two ordered ops should be present");
+        let earlier = ops[0].read().unwrap();
+        let later = ops[1].read().unwrap();
+        assert_eq!(earlier.compare_order(&later), -1);
+        assert_eq!(later.compare_order(&earlier), 1);
+        // Selection rule used by partial_root: a later candidate cannot
+        // replace the earlier one, while an earlier candidate can.
+        assert!(!(later.compare_order(&earlier) < 0));
+        assert!(earlier.compare_order(&later) < 0);
+    }
+
     /// Two COPYs feeding the same register at different times should NOT
     /// merge if their covers overlap. Concretely:
     ///   t1 = COPY(RDI)   -- block 0
