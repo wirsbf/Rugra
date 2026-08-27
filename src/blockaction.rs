@@ -139,13 +139,23 @@ fn build_copy(sblocks: &mut BlockGraph, bblocks: &BlockGraph) {
                 bb_read.get_start_addr(),
             )));
 
-            // Copy the current op view, matching BlockGraph::buildCopy's
-            // one-time node construction (block.cc:1925-1938).
+            // Link the mirror to the original's LIVE op list instead of
+            // snapshotting `ops` (Ghidra BlockGraph::buildCopy, block.cc:
+            // 1925-1938, creates BlockCopy objects whose `copy` field mirrors
+            // the original FlowBlock — op reads always delegate, so PcodeOps
+            // inserted after ActionBlockStructure (cleanup pool: RuleSplit*
+            // /StringStore, coreaction.cc:5694-5712) remain visible through
+            // the structure graph). Until the full BlockCopy port
+            // (BLOCK-BUILDCOPY-MIRROR-0001), `live_ops_source` carries the
+            // same delegation contract on the fresh BlockBasic mirror.
             {
                 let mut new_block_write = new_block.write().unwrap();
                 new_block_write.ops = bb_read.get_ops();
-                // buildCopy snapshots membership at construction time, as in
-                // Ghidra block.cc:1925-1938.
+                // Ghidra's BlockCopy delegates all later op reads to the
+                // wrapped live block (block.hh:533-534). Keep both legacy
+                // mirror links while the full BlockCopy type is pending.
+                new_block_write.live_ops_source = Some(bb.clone());
+                new_block_write.source_basic = Some(bb.clone());
                 let mut flags = bb_read.get_flags();
                 // Reconstruct the BlockBasic f_switch_out invariant (block.cc:
                 // 2286: opInsert sets f_switch_out when a BRANCHIND lands in
@@ -154,6 +164,8 @@ fn build_copy(sblocks: &mut BlockGraph, bblocks: &BlockGraph) {
                 // (ruleBlockSwitch cc:1652 isSwitchOut gate) to ever fire —
                 // previously compensated by the now-removed collapse_switches
                 // pre-pass. Live BRANCHIND presence == the oracle invariant.
+                // (Read through the source block: the mirror no longer keeps
+                // its own op snapshot.)
                 if flags & crate::block::block_flags::SWITCH_OUT == 0 {
                     let has_branchind = bb_read.get_ops().iter().any(|op_ref| {
                         op_ref.0.read().unwrap().opcode == OpCode::CPUI_BRANCHIND

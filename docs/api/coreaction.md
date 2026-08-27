@@ -1872,9 +1872,7 @@ golden 形态 `__nptr = (char *)curl_getenv("COLUMNS");` 达成。
 ## ActionInferTypes STORE 值局部类型改用工厂 getBase（TRI2-STORESPLIT-WHOLESTRUCT-0001，2026-08-26）
 
 STORE 值输入（slot 2）的局部类型种子从 `IntTypes::sized(size)`（8 字节
-`long` 封顶）改为工厂 `getBase(size, UNKNOWN)`；LOAD 不在该 op-centric
-播种臂中重复注入（其类型由 Varnode 的 def/descendant dispatch 与
-`propagateTypeEdge` 处理），避免同一值的两次 LOAD 读在条件结构化前被合并：Ghidra 的
+`long` 封顶）改为工厂 `getBase(size, UNKNOWN)`：Ghidra 的
 `Varnode::getLocalType`（varnode.cc:900-936）对每个读者取
 `op->inputTypeLocal(i)`，`TypeOpStore` 不覆写 `getInputLocal`
 （typeop.hh:279 注释掉），走默认 `TypeOp::getInputLocal`
