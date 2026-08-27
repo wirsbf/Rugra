@@ -41,6 +41,13 @@ oppool2=5 / cleanup=15）。对拍证据：`tests/oracle/action_break_pool_1204`
 **源代码路径**: `src/ruleaction.rs`
 **2026-07-02 修复（R9）**: `RuleTrivialArith` 重写为忠实移植 Ghidra ruleaction.cc:2370-2433——同输入坍缩（`x^x→0`/`x==x→1`/`x!=x→0`/`x^^x→0`/`x&&x→x` 等），输入须 Arc::ptr_eq 或 is_cse_match。原 Rugra 实现做了 `RuleIdentityEl` 的活（`x+0→x`），从不执行同输入坍缩 → `x^x` 残留。getOpList 改为 Ghidra 16 opcode。3 个旧测试（add_zero/mult_one/sub_zero）重定向到 `RuleIdentityEl`（其本应处理），3 个新测试覆盖 x^x→0/x==x→1/distinct-no-change。
 
+## 2026-08-27：`RulePullsubMulti::buildSubpiece` JoinRecord 归属（RULE-PULLSUB-NEWVNODEOUT-0001）
+
+`buildSubpiece` 对齐 `ruleaction.cc:776-839`：join 基底在 `numPieces()>1` 时从最高索引向下扫描 piece 表，按 `skipleft` 消耗片段；只有请求范围完整落在单片内才按该片端序计算地址并创建对应空间的 `newVarnodeOut`。跨片、单片浮点扩展或缺失 JoinRecord 均保留 `newUniqueOut`；非 join 仍按基底空间端序计算。输出创建同步 `assignHigh`、laned-register 检查和属性设置。
+
+**源代码路径**: `src/ruleaction.rs`
+**Oracle**: Ghidra 12.0.4 `e40ed13014025f82488b1f8f7bca566894ac376b`
+
 Rule-based transformations for P-code operations
 
 Corresponds to Ghidra's `ruleaction.hh`. Rules are small, local
@@ -763,9 +770,20 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - `acceptable_size(size)` — 检查截断大小是否合法（1/2/4/8 或 >=8）
   - `replace_descendants(orig_vn, new_vn, max_byte, min_byte)` — 用更窄的 new_vn 替换 orig_vn 的所有后代 SUBPIECE（转换为 COPY 或调整截断偏移）
   - `find_subpiece(base_vn, out_size, shift)` — 搜索预存的 SUBPIECE
-  - `build_subpiece(fd, base_vn, out_size, shift)` — 创建新 SUBPIECE op
+  - `build_subpiece(fd, base_vn, out_size, shift) -> Result<Varnode>` — 创建新 SUBPIECE op（ruleaction.cc:776-839）。
+    **2026-08-27 修正（VARMAP-ORPHAN-DECL-0001 根因）**：此前仅在 `is_written` 时 `op_insert_after`，
+    input 基底的新 SUBPIECE 从未插入任何 block，滞留 dead 列表；opDeadAndGone（funcdata.hh:476
+    `obank.destroy(op)`，与 opDestroy 不同**不销毁输出**）销毁 op 后，输出 Varnode 带 WRITTEN flag
+    滞留 vank，被 ActionNameVars::linkSymbols（coreaction.cc:2954 isFree 跳过不适用于它）铸成
+    零读 ScopeLocal 符号 → 孤儿声明（progressbarinit `int iVar1;`、my_get_token `int iVar2;`）。
+    现按 oracle 无条件插入：input 基底 `op_insert_begin`（block 0 头部，cc:834-835），
+    written 基底 `op_insert_after`（definer 之后，cc:836-837）；既非 input 也非 written 返回
+    `Err("Undefined pullsub")` 镜像 cc:788 `throw LowlevelError`。两调用点
+    （RulePullsubMulti::applyOp / RulePullsubIndirect::applyOp）`?` 传播等价 Ghidra 异常上抛。
   - `apply_op` — 主算法：检查 SUBPIECE(MULTIEQUAL)，计算使用范围，检查各分支 consume，为每个分支创建/查找 SUBPIECE，构建新的窄 MULTIEQUAL，替换后代
-  - 已知限制：hasLoopIn/isPrecisLo/isPrecisHi/isJoin/JoinRecord 用保守默认（允许变换）；opInsertBegin 用 op_insert_before 替代
+  - 已知限制：hasLoopIn/isPrecisLo/isPrecisHi/isJoin/JoinRecord 用保守默认（允许变换）；
+    非 join 基底 oracle 用 `newVarnodeOut(smalladdr1)`（同空间 base+shift，cc:826-832），
+    Rugra 恒用 `new_unique_out`（unique 空间）——残留差异，登记 TODO `RULE-PULLSUB-NEWVNODEOUT-0001`
 
 ## 2026-06-27（续 4）：RuleAndMask 完整移植
 
@@ -1290,3 +1308,12 @@ abort placeholder）。闭合 CALLSPEC-0001 中登记的
   `tools/run_ptrarith_addtree_oracle.sh`，5 用例（PTRADD 多倍数路 /
   PTRSUB 子类型路 / 非倍数 valid=false / 未类型化基座 / 未启动 type
   recovery）10 条记录与锁定 12.0.4 oracle 逐字节一致。
+
+## 2026-08-27：RulePullsubMulti 非 join 输出空间（RULE-PULLSUB-NEWVNODEOUT-0001）
+
+`RulePullsubMulti::build_subpiece` 对照 `ruleaction.cc:776-839`：非 join 基底按
+`cc:816-821` 的端序计算 `smalladdr1`，并在 `cc:828-829` 的 renormalize 后以
+`newVarnodeOut` 建立输出，因此输出保留基底的地址空间（Ram/Register/Stack 等），不再
+无条件落入 Unique。Rugra 当前 Address 是标量，renormalize 等价为空操作；本实现仅在
+`AddressSpace::Join` 仍使用 Unique fallback，因为 JoinRecord 基础设施尚未存在。该 join
+臂绑定本 TODO，不能据此宣称 RulePullsubMulti 完整 MATCH。

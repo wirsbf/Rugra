@@ -147,10 +147,23 @@ fn build_copy(sblocks: &mut BlockGraph, bblocks: &BlockGraph) {
                 bb_read.get_start_addr(),
             )));
 
-            // Copy operations
+            // Link the mirror to the original's LIVE op list instead of
+            // snapshotting `ops` (Ghidra BlockGraph::buildCopy, block.cc:
+            // 1925-1938, creates BlockCopy objects whose `copy` field mirrors
+            // the original FlowBlock — op reads always delegate, so PcodeOps
+            // inserted after ActionBlockStructure (cleanup pool: RuleSplit*
+            // /StringStore, coreaction.cc:5694-5712) remain visible through
+            // the structure graph). Until the full BlockCopy port
+            // (BLOCK-BUILDCOPY-MIRROR-0001), `live_ops_source` carries the
+            // same delegation contract on the fresh BlockBasic mirror.
             {
                 let mut new_block_write = new_block.write().unwrap();
                 new_block_write.ops = bb_read.get_ops();
+                // Ghidra's BlockCopy delegates all later op reads to the
+                // wrapped live block (block.hh:533-534). Keep both legacy
+                // mirror links while the full BlockCopy type is pending.
+                new_block_write.live_ops_source = Some(bb.clone());
+                new_block_write.source_basic = Some(bb.clone());
                 let mut flags = bb_read.get_flags();
                 // Reconstruct the BlockBasic f_switch_out invariant (block.cc:
                 // 2286: opInsert sets f_switch_out when a BRANCHIND lands in
@@ -159,8 +172,10 @@ fn build_copy(sblocks: &mut BlockGraph, bblocks: &BlockGraph) {
                 // (ruleBlockSwitch cc:1652 isSwitchOut gate) to ever fire —
                 // previously compensated by the now-removed collapse_switches
                 // pre-pass. Live BRANCHIND presence == the oracle invariant.
+                // (Read through the source block: the mirror no longer keeps
+                // its own op snapshot.)
                 if flags & crate::block::block_flags::SWITCH_OUT == 0 {
-                    let has_branchind = new_block_write.ops.iter().any(|op_ref| {
+                    let has_branchind = bb_read.get_ops().iter().any(|op_ref| {
                         op_ref.0.read().unwrap().opcode == OpCode::CPUI_BRANCHIND
                     });
                     if has_branchind {
@@ -556,34 +571,29 @@ pub struct FloatingEdge {
 
 impl FloatingEdge {
     // Ghidra: blockaction.cc:27 FloatingEdge::getCurrentEdge
-    /// Re-resolve this edge against the live graph: move top/bottom up through
-    /// the collapse hierarchy to the current graph level, then check if the
-    /// out-edge still exists. Returns Some((top_idx, outedge)) if the edge is
-    /// still present, None if it was collapsed away.
-    ///
-    /// Ghidra walks `top->getParent() != graph` (up through nested structured
-    /// blocks). Rugra's index-based model doesn't maintain a clean parent
-    /// chain at graph level (identify_internal installs structured blocks at
-    /// install_idx, consuming children which become DEAD). So we resolve by:
-    /// if the original top/bottom indices are still live (not DEAD) and top
-    /// has an out-edge to bottom, use them; otherwise None. This mirrors the
-    /// effect of Ghidra's parent-walk for the common case where the edge
-    /// hasn't been collapsed.
+    /// Re-resolve the edge against the current graph:
+    ///   - cc:28-33: walk both endpoints up the collapse hierarchy
+    ///     (`while(top->getParent() != graph) top = top->getParent();`) so an
+    ///     endpoint absorbed by a composite resolves to that composite, whose
+    ///     inherited boundary edges (selfIdentify) represent the same flow.
+    ///   - cc:34-35: find the out-slot of the resolved top that targets the
+    ///     resolved bottom; failure means the edge no longer exists.
+    /// The previous port returned None whenever the source block carried the
+    /// DEAD flag, dropping edges whose source was absorbed — diverging from
+    /// the oracle exactly where selectGoto re-resolves leftover likelygoto
+    /// entries after a collapse round.
     pub fn get_current_edge(&self, graph: &BlockGraph) -> Option<(i32, usize)> {
-        let top_i = self.from_idx as usize;
-        let bottom_i = self.to_idx as usize;
+        let top = graph.resolve_to_graph_level(self.from_idx);
+        let bottom = graph.resolve_to_graph_level(self.to_idx);
+        let top_i = top as usize;
         if top_i >= graph.get_size() { return None; }
-        let top = graph.get_block(top_i)?;
-        let top_r = top.read().unwrap();
-        // If top was consumed (DEAD), the edge is gone.
-        if top_r.get_flags() & crate::block::block_flags::DEAD != 0 { return None; }
-        // Find the out-slot whose target is bottom (by index identity or
-        // current bottom index if still live).
+        let top_blk = graph.get_block(top_i)?;
+        let top_r = top_blk.read().unwrap();
         for slot in 0..top_r.size_out() {
             if let Some(e) = top_r.get_out(slot) {
                 let dst = e.point.read().unwrap().get_index();
-                if dst == self.to_idx {
-                    return Some((self.from_idx, slot));
+                if dst == bottom {
+                    return Some((top, slot));
                 }
             }
         }
@@ -962,25 +972,58 @@ impl LoopBody {
     /// Emit edges that exit this loop body to a likely-goto list, with proper
     /// priority: exit edges first (official exit edge held last among them),
     /// then back-edges (tails→head) in reverse tail order. Faithful to
-    /// `LoopBody::emitLikelyEdges` (blockaction.cc:364-412). The resulting list
-    /// orders candidate goto edges so the structurer prefers keeping the
-    /// official loop exit structured and marks the others as goto.
-    pub fn emit_likely_edges(&self, likely: &mut Vec<FloatingEdge>, graph: &BlockGraph) {
-        // Exit edges, holding off the official exit-to-exitblock edge until the
-        // end (so it appears right before the final back-edge).
+    /// `LoopBody::emitLikelyEdges` (blockaction.cc:364-412):
+    ///   - cc:367-371: resolve head and exitblock up the collapse hierarchy.
+    ///   - cc:372-379: resolve each tail; if the exitblock was collapsed into
+    ///     a tail, the loop no longer really has an exit (exitblock = null).
+    ///   - cc:381-397: walk exit_edges in order, re-resolving each against the
+    ///     live graph via getCurrentEdge (vanished edges are skipped); the
+    ///     official exit edge (resolved target == exitblock) at the LAST
+    ///     entry is held back.
+    ///   - cc:398-409: emit the held exit edge right before the final
+    ///     back-edge, then back-edges (tail→head) in reverse tail order.
+    /// The resulting list orders candidate goto edges so the structurer
+    /// prefers keeping the official loop exit structured and marks the others
+    /// as goto.
+    pub fn emit_likely_edges(&mut self, likely: &mut Vec<FloatingEdge>, graph: &BlockGraph) {
+        // cc:367-371: resolve head and exitblock up the hierarchy.
+        self.head = graph.resolve_to_graph_level(self.head);
+        if self.exit_block >= 0 {
+            self.exit_block = graph.resolve_to_graph_level(self.exit_block);
+        }
+        // cc:372-379: resolve tails; absorbed exitblock nulls the exit.
+        for ti in 0..self.tails.len() {
+            let tail = graph.resolve_to_graph_level(self.tails[ti]);
+            self.tails[ti] = tail;
+            if tail == self.exit_block {
+                // If the exitblock was collapsed into the tail, we no longer
+                // really have an exit.
+                self.exit_block = -1;
+            }
+        }
+        // cc:381-397: exit edges, holding off the official exit edge.
         let mut hold: Option<FloatingEdge> = None;
         let n = self.exit_edges.len();
         for (i, fe) in self.exit_edges.iter().enumerate() {
-            if i == n.saturating_sub(1) && fe.to_idx == self.exit_block {
-                hold = Some(fe.clone());
-                continue;
+            // cc:388-390: re-resolve against the live graph; skip vanished.
+            let Some((top_idx, slot)) = fe.get_current_edge(graph) else { continue };
+            let Some(top_blk) = graph.get_block(top_idx as usize) else { continue };
+            let out_idx = {
+                let r = top_blk.read().unwrap();
+                r.get_out(slot).map(|e| e.point.read().unwrap().get_index())
+            };
+            let Some(out_idx) = out_idx else { continue };
+            // cc:391-397: last entry targeting the exitblock is held.
+            if i == n.saturating_sub(1) && out_idx == self.exit_block {
+                hold = Some(FloatingEdge { from_idx: top_idx, to_idx: out_idx });
+                break;
             }
-            likely.push(fe.clone());
+            likely.push(FloatingEdge { from_idx: top_idx, to_idx: out_idx });
         }
-        // Back-edges in reverse tail order; the held exit edge goes right before
-        // the final (first-tail) back-edge.
+        // cc:398-409: back-edges in reverse tail order; the held exit edge
+        // goes right before the final (first-tail) back-edge.
         let tails_len = self.tails.len();
-        for (rev_i, &tail) in self.tails.iter().rev().enumerate() {
+        for (rev_i, &tail) in self.tails.clone().iter().rev().enumerate() {
             if rev_i == tails_len - 1 {
                 if let Some(h) = hold.take() {
                     likely.push(h);
@@ -1006,32 +1049,47 @@ impl LoopBody {
     /// Update head/tails to the current graph view and return the loop's
     /// bottom (first tail not collapsed into head). Returns None if the loop
     /// has been fully collapsed (or head self-loops, returning Some(head)).
-    /// Faithful to `LoopBody::update` (blockaction.cc:94-114). Rugra's
-    /// index-based model: a block is "collapsed" if DEAD or its index no
-    /// longer holds a live block matching the loop's tail.
+    /// Faithful to `LoopBody::update` (blockaction.cc:94-114):
+    ///   - cc:95-96: `while(head->getParent() != graph) head = head->getParent();`
+    ///     — resolve the head through the collapse hierarchy to a top-level
+    ///     block. A head absorbed by a composite resolves to the composite.
+    ///   - cc:97-103: same parent-chain walk per tail; the first tail that
+    ///     does NOT resolve to (the resolved) head is the loop bottom — the
+    ///     loop still exists even if its tail was absorbed by a composite,
+    ///     because the composite holds the tail and is itself live.
+    ///   - cc:104-112: all tails resolved into the head block — the loop is
+    ///     fully collapsed; only a head self-loop edge keeps it alive.
+    ///   - cc:113: return null otherwise.
+    /// The previous port returned None as soon as a tail carried the DEAD
+    /// flag, treating absorption as loop death. In the oracle an absorbed
+    /// tail resolves to its live containing composite, so `updateLoopBody`
+    /// (cc:1214-1216) sees the loop alive and selectGoto keeps consuming the
+    /// remaining likelygoto entries. That divergence is what stranded the
+    /// irreducible jumptable-neighborhood loops (TRI2-STRUCT-IRREDUCIBLE-
+    /// TRACE-0001): the leftover candidate goto edges were dropped before
+    /// being marked, the final TraceDAG found nothing, and selectGoto hit
+    /// the cc:1275 LowlevelError site.
     pub fn update(&mut self, graph: &BlockGraph) -> Option<i32> {
-        // For each tail, if it's still live (not DEAD) and != head, it's the bottom.
+        // cc:95-96: resolve head up the hierarchy.
+        self.head = graph.resolve_to_graph_level(self.head);
+        // cc:97-103: resolve each tail; first one that is not the head is
+        // the bottom.
         for ti in 0..self.tails.len() {
-            let tail_i = self.tails[ti] as usize;
-            if tail_i >= graph.get_size() { continue; }
-            let tail_blk = match graph.get_block(tail_i) { Some(b) => b, None => continue };
-            let tail_r = tail_blk.read().unwrap();
-            if tail_r.get_flags() & crate::block::block_flags::DEAD != 0 { continue; }
-            if tail_i as i32 != self.head {
-                return Some(tail_i as i32);
+            let bottom = graph.resolve_to_graph_level(self.tails[ti]);
+            self.tails[ti] = bottom;
+            if bottom != self.head {
+                return Some(bottom); // Loop hasn't been fully collapsed yet
             }
         }
-        // Check head self-loop (cc:109-112).
+        // cc:104-109: check for head looping with itself.
         let head_i = self.head as usize;
         if head_i < graph.get_size() {
             if let Some(head_blk) = graph.get_block(head_i) {
                 let head_r = head_blk.read().unwrap();
-                if head_r.get_flags() & crate::block::block_flags::DEAD == 0 {
-                    for slot in 0..head_r.size_out() {
-                        if let Some(e) = head_r.get_out(slot) {
-                            if e.point.read().unwrap().get_index() == self.head {
-                                return Some(self.head);
-                            }
+                for slot in 0..head_r.size_out() {
+                    if let Some(e) = head_r.get_out(slot) {
+                        if e.point.read().unwrap().get_index() == self.head {
+                            return Some(self.head);
                         }
                     }
                 }
@@ -1873,15 +1931,35 @@ impl<'a> CollapseStructure<'a> {
         if std::env::var("RUGRA_SWITCH_TRACE").is_ok() {
             eprintln!(
                 "[SWGOTO] {} gen list: looptop={} loopbottom={} edges={} graphsz={}",
-                self.name,
-                looptop,
-                loopbottom,
-                edges.len(),
-                self.graph.get_size()
-            );
+                self.name, looptop, loopbottom, edges.len(), self.graph.get_size());
+        }
+        if std::env::var("RUGRA_IRRED_DBG").map(|v| v == "1").unwrap_or(false) {
+            eprintln!("[IRRED] {} trace done loopbottom={} edges={:?}", self.name, loopbottom,
+                edges.iter().map(|e| (e.top, e.bottom)).collect::<Vec<_>>());
         }
         if loopbottom == -1 && edges.is_empty() {
             // cc:1247-1250: no loops left and the trace found no gotos.
+            if std::env::var("RUGRA_IRRED_DBG").map(|v| v == "1").unwrap_or(false) {
+                let n_live = (0..self.graph.get_size()).filter(|&i| {
+                    self.graph.get_block(i).map(|b| {
+                        b.read().unwrap().get_flags() & crate::block::block_flags::DEAD == 0
+                    }).unwrap_or(false)
+                }).count();
+                eprintln!("[IRRED] {} finaltrace residual graph (live={}):", self.name, n_live);
+                for i in 0..self.graph.get_size() {
+                    let Some(b) = self.graph.get_block(i) else { continue };
+                    let r = b.read().unwrap();
+                    if r.get_flags() & crate::block::block_flags::DEAD != 0 { continue; }
+                    let outs: Vec<String> = (0..r.size_out()).filter_map(|j| {
+                        r.get_out(j).map(|e| format!("{}(L{:x})", e.point.read().unwrap().get_index(), e.flags))
+                    }).collect();
+                    let ins: Vec<String> = (0..r.size_in()).filter_map(|j| {
+                        r.get_in(j).map(|e| format!("{}(L{:x})", e.point.read().unwrap().get_index(), e.flags))
+                    }).collect();
+                    eprintln!("[IRRED]   blk{} in=[{}] out=[{}] ty={:?} fl={:#x}",
+                        r.get_index(), ins.join(","), outs.join(","), r.get_type(), r.get_flags());
+                }
+            }
             self.finaltrace = true;
             return false;
         }
@@ -2265,6 +2343,13 @@ impl<'a> CollapseStructure<'a> {
         }
         // Store into the VecDeque for updateLoopBody-style iteration.
         self.loop_order = loop_order.into_iter().collect();
+        if std::env::var("RUGRA_IRRED_DBG").map(|v| v == "1").unwrap_or(false) {
+            for (i, lb) in self.loop_order.iter().enumerate() {
+                eprintln!("[IRRED] {} loop_order[{}] head={} tails={:?} depth={} exit={} exit_edges={:?}",
+                    self.name, i, lb.head, lb.tails, lb.depth, lb.exit_block,
+                    lb.exit_edges.iter().map(|e| (e.from_idx, e.to_idx)).collect::<Vec<_>>());
+            }
+        }
         eprintln!(
             "[COLLAPSE] {} LoopBody pipeline: {} loops, depths={}",
             self.name,
@@ -2436,12 +2521,16 @@ impl<'a> CollapseStructure<'a> {
 
 
 
-    // Ghidra: blockaction.hh:46 LoopBody::clipExtraRoots
-    /// Ghidra's clipExtraRoots (blockaction.cc:1108): find distinct control-flow
-    /// roots (size_in==0, index > 0), and for the subset of blocks ONLY reachable
-    /// from that root, mark their exiting edges as goto. Handles irreducible
-    /// cross-over edges. Returns true if any new edges were marked as goto.
-    /// Pairs with try_rule_goto which consumes the marked blocks (newBlockGoto).
+    // Ghidra: blockaction.cc:1108 CollapseStructure::clipExtraRoots
+    /// Ghidra's clipExtraRoots (blockaction.cc:1108-1121): find distinct
+    /// control-flow roots (sizeIn==0, index > 0 — the canonical root 0 is
+    /// skipped), and for the subset of blocks ONLY reachable from that root
+    /// (onlyReachableFromRoot cc:1041-1067), mark their exiting edges as
+    /// goto via setGotoBranch (markExitsAsGotos cc:1070-1090). Handles
+    /// irreducible cross-over edges. Returns true if any cross-over edges
+    /// were found (counted per EDGE to a non-body target — Ghidra re-counts
+    /// already-goto edges, which keeps the collapseAll loop progressing
+    /// while try_rule_goto consumes the marked blocks).
     fn clip_extra_roots(&mut self) -> bool {
         let size = self.graph.get_size();
         for root_idx in 1..size as i32 {
@@ -2449,12 +2538,12 @@ impl<'a> CollapseStructure<'a> {
             {
                 let r = root_blk.read().unwrap();
                 if r.size_in() != 0 { continue; }
-                // Skip already-structured blocks (BlockGoto, BlockIf, etc.) — they
-                // are consumed/structured and shouldn't be re-processed by clip.
-                let rt = r.get_type();
-                if rt != crate::block::BlockType::Basic && rt != crate::block::BlockType::Copy { continue; }
+                // cc:1080: no type gate — Ghidra processes ANY sizeIn==0
+                // block, including structured composites (a wrapped
+                // BlockGoto/BlockList can be a cross-over root).
             }
-            // onlyReachableFromRoot: collect blocks reachable only from root.
+            // cc:1041-1067 onlyReachableFromRoot: collect blocks reachable
+            // only from root (visitcount reaches sizeIn exactly).
             let mut body: Vec<i32> = vec![root_idx];
             let mut in_body: std::collections::HashSet<i32> = std::collections::HashSet::new();
             in_body.insert(root_idx);
@@ -2471,42 +2560,38 @@ impl<'a> CollapseStructure<'a> {
                         let count = visit_count.entry(nxt).or_insert(0);
                         *count += 1;
                         let nxt_in = e.point.read().unwrap().size_in() as i32;
-                        if *count >= nxt_in {
+                        if *count == nxt_in {
                             in_body.insert(nxt);
                             body.push(nxt);
                         }
                     }
                 }
             }
-            // markExitsAsGotos: mark out-edges to non-body targets as goto.
+            // cc:1070-1090 markExitsAsGotos: every out-edge of a body block
+            // to a non-body target is marked goto (setGotoBranch semantics);
+            // count is per edge.
             let mut changecount = 0;
+            let mut mark_jobs: Vec<(i32, usize)> = Vec::new();
             for &bidx in &body {
                 let bb = match self.graph.get_block(bidx as usize) { Some(b) => b, None => continue };
-                let exit_edges: Vec<usize> = {
-                    let b = bb.read().unwrap();
-                    let existing = b.get_flags();
-                    let mut ex = Vec::new();
-                    for slot in 0..b.size_out() {
-                        if let Some(e) = b.get_out(slot) {
-                            let t = e.point.read().unwrap().get_index();
-                            if in_body.contains(&t) { continue; }
-                            let already_goto = (slot == 0 && existing & crate::block::block_flags::GOTO_EDGE_0 != 0)
-                                            || (slot == 1 && existing & crate::block::block_flags::GOTO_EDGE_1 != 0);
-                            if already_goto { continue; }
-                            ex.push(slot);
-                        }
+                let b = bb.read().unwrap();
+                for slot in 0..b.size_out() {
+                    if let Some(e) = b.get_out(slot) {
+                        let t = e.point.read().unwrap().get_index();
+                        if in_body.contains(&t) { continue; }
+                        mark_jobs.push((bidx, slot));
                     }
-                    ex
-                };
-                if exit_edges.is_empty() { continue; }
-                let mut bw = bb.write().unwrap();
-                let mut cur_flags = bw.get_flags();
-                for &slot in &exit_edges {
-                    if slot == 0 { cur_flags |= crate::block::block_flags::GOTO_EDGE_0; }
-                    if slot == 1 { cur_flags |= crate::block::block_flags::GOTO_EDGE_1; }
                 }
-                bw.set_flags(cur_flags);
-                changecount += 1;
+            }
+            for (bidx, slot) in mark_jobs {
+                if let Some(bb) = self.graph.get_block(bidx as usize) {
+                    // Full setGotoBranch (block.cc:305-313): edge label
+                    // f_goto_edge mirrored on both halves + interior flags,
+                    // same as selectGoto's marking.
+                    let blk = bb.clone();
+                    self.set_goto_branch_on_block(&blk, slot);
+                    changecount += 1;
+                }
             }
             if changecount > 0 {
                 eprintln!("[COLLAPSE] {} clipExtraRoots: root={} body={} gotos={}", self.name, root_idx, body.len(), changecount);
@@ -2793,6 +2878,7 @@ impl<'a> CollapseStructure<'a> {
         if install_idx < size {
             if let Some(cb) = self.graph.get_block(install_idx) {
                 let c = cb.read().unwrap();
+                let mut install_ext_out = false;
                 for slot in 0..c.size_out() {
                     if let Some(e) = c.get_out(slot) {
                         let dst_idx = match e.point.try_read() {
@@ -2808,8 +2894,22 @@ impl<'a> CollapseStructure<'a> {
                                 flags: e.flags,
                                 reverse_index: -1,
                             });
+                            install_ext_out = true;
                         }
                     }
+                }
+                // cc:925-926: the install block is a component in Ghidra's
+                // -nodes- set, so selfIdentify's `if (mybl->isSwitchOut())
+                // setFlag(f_switch_out)` applies to it as well — e.g. an
+                // inf_loop absorbing a BRANCHIND dispatch block (whose case
+                // edges are external out edges) must keep the composite a
+                // switch-out, or downstream rules mis-structure the case
+                // edges as plain decision edges.
+                if install_ext_out
+                    && c.get_flags() & crate::block::block_flags::SWITCH_OUT != 0
+                {
+                    new_block.write().unwrap()
+                        .set_flags(crate::block::block_flags::SWITCH_OUT);
                 }
             }
         }
@@ -2841,7 +2941,7 @@ impl<'a> CollapseStructure<'a> {
             }
             // Collect this consumed block's boundary edges.
             // IN-edges: source not in consumed set → boundary incoming.
-            let (in_boundary, out_boundary): (Vec<(Arc<RwLock<dyn FlowBlock + Send + Sync>>, u32)>, Vec<(Arc<RwLock<dyn FlowBlock + Send + Sync>>, u32)>) = {
+            let (in_boundary, out_boundary, c_switch_out): (Vec<(Arc<RwLock<dyn FlowBlock + Send + Sync>>, u32)>, Vec<(Arc<RwLock<dyn FlowBlock + Send + Sync>>, u32)>, bool) = {
                 let cb = match self.graph.get_block(ci) { Some(b) => b, None => continue };
                 let c = cb.read().unwrap();
                 let mut ib = Vec::new();
@@ -2872,8 +2972,20 @@ impl<'a> CollapseStructure<'a> {
                         }
                     }
                 }
-                (ib, ob)
+                let c_switch_out =
+                    c.get_flags() & crate::block::block_flags::SWITCH_OUT != 0;
+                (ib, ob, c_switch_out)
             };
+            // cc:925-926 (selfIdentify's outofthis loop): `if
+            // (mybl->isSwitchOut()) setFlag(f_switch_out);` — inside the
+            // external-edge branch, i.e. a component that is itself a
+            // switch dispatch (BRANCHIND, block.cc:2287) AND has at least
+            // one EXTERNAL out edge propagates f_switch_out to the
+            // composite. A fully-internal dispatch does not.
+            if c_switch_out && !out_boundary.is_empty() {
+                new_block.write().unwrap()
+                    .set_flags(crate::block::block_flags::SWITCH_OUT);
+            }
             // Add boundary edges to new_block (record the external block).
             // Labels carry over per replaceInEdge/replaceOutEdge (block.cc:172,
             // 188). Duplicates are NOT collapsed here: the oracle's selfIdentify
@@ -2952,6 +3064,18 @@ impl<'a> CollapseStructure<'a> {
                 bcond.incoming = new_in; bcond.outgoing = new_out;
             } else if let Some(binf) = nref.downcast_mut::<crate::block::BlockInfLoop>() {
                 binf.incoming = new_in; binf.outgoing = new_out;
+            } else if let Some(bsw) = nref.downcast_mut::<crate::block::BlockSwitch>() {
+                // Ghidra newBlockSwitch (block.cc:1913): identifyInternal(ret,cs)
+                // runs the same selfIdentify edge transfer as every other
+                // composite — the switch block's incoming/outgoing are the
+                // dispatch's external in-edge and the case/exit boundary
+                // out-edges. The missing arm left every BlockSwitch composite
+                // with sizeIn==0/sizeOut==0 (one-sided edges: pred kept its
+                // out-half, exit kept its in-half), so ruleBlockCat rejected
+                // the chain (cc:1300 `outblock->sizeIn() != 1`) and selectGoto
+                // exhausted at the residual 3-block graph (TRI2-STRUCT-
+                // IRREDUCIBLE-TRACE-0001, glob_set 19->3 live).
+                bsw.incoming = new_in; bsw.outgoing = new_out;
             }
         }
 
@@ -3080,6 +3204,11 @@ impl<'a> CollapseStructure<'a> {
                     if let Some(cb) = self.graph.get_block(i) {
                         strip_external(&cb);
                         cb.write().unwrap().set_flags(crate::block::block_flags::DEAD);
+                        // Record the containment (Ghidra: the consumed node's
+                        // `parent` becomes the new composite, block.hh:78).
+                        self.graph
+                            .absorbed_into
+                            .insert(idx, install_idx as i32);
                     }
                 }
             }
@@ -3464,12 +3593,15 @@ impl<'a> CollapseStructure<'a> {
                     structural += 1;
                     continue;
                 }
-                // Edge from a CBRANCH cascade member → structural
-                // (cascade members are blocks in switch_case_indices)
-                if self.switch_case_indices.contains(&pred.get_index()) {
-                    structural += 1;
-                    continue;
-                }
+                // NOTE: no switch_case_indices arm — Ghidra's guard is plain
+                // `clauseblock->sizeIn() != 1` (cc:1391/cc:1428 etc.) with no
+                // notion of cascade members. The invented arm counted the
+                // refreshSwitchCases CBRANCH-chain marks (no oracle
+                // counterpart) as "structural", so every else-if chain the
+                // cascade walker touched was rejected by proper_if/if_else/
+                // do_while — leaving the chain uncollapsible and selectGoto
+                // to exhaust (TRI2-STRUCT-IRREDUCIBLE-TRACE-0001,
+                // glob_range residual 1→2→3→9 with properif-legal shapes).
                 // Edge from a DEAD block (already consumed by structuring) → structural
                 if pred.get_flags() & crate::block::block_flags::DEAD != 0 {
                     structural += 1;
@@ -3662,43 +3794,83 @@ impl<'a> CollapseStructure<'a> {
         false
     }
 
-    // Ghidra: blockaction.hh:46 LoopBody::tryRuleIfElse
-    /// ruleBlockIfElse: detect if-then-else pattern.
-    /// A CBRANCH block with 2 out-edges, both clause blocks have 1 in and
-    /// 1 out, and both out-edges point to the same merge block.
+    // Ghidra: blockaction.cc:1416 CollapseStructure::ruleBlockIfElse
+    /// ruleBlockIfElse: detect if-then-else pattern (cc:1416-1444).
+    /// Mirrors the oracle guard-for-guard: binary condition that is not a
+    /// switch dispatch (cc:1422), both out edges are plain decision edges
+    /// (cc:1423-1424 — no irreducible/back/goto edge labels), each clause
+    /// has exactly 1 in / 1 out (cc:1428-1432), the clauses exit to the
+    /// same block which is not the condition itself (cc:1433-1435), and
+    /// neither clause is a switch dispatch nor has an unstructured jump out
+    /// (cc:1437-1440).
     fn try_rule_if_else(&mut self, i: usize) -> bool {
         let block = match self.graph.get_block(i) {
             Some(b) => b,
             None => return false,
         };
         let b = block.read().unwrap();
-        if b.size_out() != 2 { return false; }
-
-        let ops = b.get_ops();
-        // Topological rule (cc:1481-1512): no CBRANCH-op gate.
-        let _ = ops;
+        if b.size_out() != 2 { return false; } // cc:1421 Must be binary condition
+        // cc:1422: `if (bl->isSwitchOut()) return false;`
+        if b.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { return false; }
+        // cc:1423-1424: `if (!bl->isDecisionOut(0)) return false; if
+        // (!bl->isDecisionOut(1)) return false;` — refuse structuring
+        // across unstructured/loopback edges (block.hh:336: decision =
+        // not irreducible, not back, not goto).
+        if !Self::out_edge_is_decision(&*b, 0) { return false; }
+        if !Self::out_edge_is_decision(&*b, 1) { return false; }
 
         let cond_idx = b.get_index();
-        let true_edge = match b.get_out(0) { Some(e) => e, None => return false };
-        let false_edge = match b.get_out(1) { Some(e) => e, None => return false };
-        let true_block = true_edge.point.clone();
-        let false_block = false_edge.point.clone();
+        // cc:1426-1427: `tc = bl->getTrueOut(); fc = bl->getFalseOut();`
+        // — getTrueOut() = out[1], getFalseOut() = out[0] positionally
+        // (block.hh:299-300; flow.rs:1045 pushes the fallthru edge first,
+        // so out[0] is the false path in both implementations). The old
+        // port read out[0] into the tc slot and out[1] into the fc slot,
+        // printing the FALSE-path clause under `if` — inverted C vs the
+        // oracle, which never negates here (cc:1442 newBlockIfElse(bl,tc,fc)
+        // with no negateCondition).
+        let tc = match b.get_out(1) { Some(e) => e.point.clone(), None => return false };
+        let fc = match b.get_out(0) { Some(e) => e.point.clone(), None => return false };
         drop(b);
 
-        // Check both clauses: 1 in, 1 out, same merge target
-        let tb = true_block.read().unwrap();
-        let fb = false_block.read().unwrap();
-        if tb.size_in() != 1 || fb.size_in() != 1 { return false; }
-        if tb.size_out() != 1 || fb.size_out() != 1 { return false; }
+        // cc:1428-1429: nothing else must hit either clause.
+        // cc:1431-1432: only one exit from each clause.
+        {
+            let t = tc.read().unwrap();
+            let f = fc.read().unwrap();
+            if t.size_in() != 1 || f.size_in() != 1 { return false; }
+            if t.size_out() != 1 || f.size_out() != 1 { return false; }
+            // cc:1433-1434: `outblock = tc->getOut(0); if (outblock == bl)
+            // return false;` — no loops (the common merge must not be the
+            // condition block itself).
+            let t_out0 = match t.get_out(0) {
+                Some(e) => e.point.read().unwrap().get_index(),
+                None => return false,
+            };
+            if t_out0 == cond_idx { return false; }
+            // cc:1435: `if (outblock != fc->getOut(0)) return false;` —
+            // clauses must exit to the same place.
+            let f_out0 = match f.get_out(0) {
+                Some(e) => e.point.read().unwrap().get_index(),
+                None => return false,
+            };
+            if t_out0 != f_out0 { return false; }
+            // cc:1437-1438: `if (tc->isSwitchOut()) return false; if
+            // (fc->isSwitchOut()) return false;` — don't use a switch
+            // (possibly with goto edges) as a clause.
+            if t.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { return false; }
+            if f.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { return false; }
+            // cc:1439-1440: `if (tc->isGotoOut(0)) return false; if
+            // (fc->isGotoOut(0)) return false;` — no unstructured jumps
+            // out of either clause (label-based, works on structured
+            // components too).
+            if Self::out_edge_is_goto(&*t, 0) { return false; }
+            if Self::out_edge_is_goto(&*f, 0) { return false; }
+        }
 
-        let t_out = match tb.get_out(0) { Some(e) => e.point.read().unwrap().get_index(), None => return false };
-        let f_out = match fb.get_out(0) { Some(e) => e.point.read().unwrap().get_index(), None => return false };
-        drop(tb); drop(fb);
-
-        if t_out != f_out { return false; } // both must merge to same block
-
-        // Create BlockIf (if-then-else) via factory (block.cc:1840 newBlockIfElse).
-        self.new_block_if_else(&block, &true_block, &false_block, false, i);
+        // Create BlockIf (if-then-else) via factory (block.cc:1840
+        // newBlockIfElse: nodes = {cond, tc, fc}, forceOutputNum(1), no
+        // condition negation).
+        self.new_block_if_else(&block, &tc, &fc, false, i);
         true
     }
 
@@ -3776,8 +3948,15 @@ impl<'a> CollapseStructure<'a> {
         let goto_target = match block.read().unwrap().get_out(1) { Some(e) => e.point.clone(), None => return false };
         drop(body_edge);
 
-        // Don't extract switch case bodies
-        if self.switch_case_indices.contains(&body_idx) { return false; }
+        // NOTE: no switch_case_indices guard on body_idx here — Ghidra's
+        // ruleBlockGoto (cc:1446-1471) has no case-body pre-guard. The old
+        // invented guard (`refreshSwitchCases` cascade marking) rejected
+        // IfGoto wraps whose body was a CBRANCH-chain taken target — exactly
+        // the jumptable-neighborhood loop heads — leaving selectGoto's goto
+        // marks unconsumed and driving the cc:1275 exhausted path
+        // (TRI2-STRUCT-IRREDUCIBLE-TRACE-0001). refreshSwitchCases has no
+        // oracle counterpart at all.
+        let _ = body_idx;
 
         // Create BlockIf in newBlockIfGoto style (Ghidra block.cc:1799-1816):
         // - Only [cond] is consumed (body stays external as an out-edge)
@@ -4009,6 +4188,12 @@ impl<'a> CollapseStructure<'a> {
         // (BRANCHIND dispatch, set by build_copy per block.cc:2286), not the
         // invented CASE_BODY cascade marks.
         if b.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { return false; }
+        // cc:1562-1563: `if (bl->isGotoOut(0)) return false; if
+        // (bl->isGotoOut(1)) return false;` — a do/while whose back-edge or
+        // exit edge is already marked unstructured must stay a goto (the
+        // label-based test also sees marks on structured components).
+        if Self::out_edge_is_goto(&*b, 0) { return false; }
+        if Self::out_edge_is_goto(&*b, 1) { return false; }
 
         let cond_idx = b.get_index();
         for slot in 0..2 {
@@ -4189,6 +4374,7 @@ impl<'a> CollapseStructure<'a> {
     ///   (4) checkSwitchSkips (TODO: default-skip optimization)
     ///   (5) newBlockSwitch(cases, hasExit)
     pub fn try_rule_switch(&mut self, i: usize) -> bool {
+        let irred_sw = std::env::var("RUGRA_IRRED_DBG").map(|v| v == "1").unwrap_or(false);
         let block = match self.graph.get_block(i) {
             Some(b) => b,
             None => return false,
@@ -4276,6 +4462,13 @@ impl<'a> CollapseStructure<'a> {
                 eprintln!("[SWGRAPH] --- end dump ---");
             }
         }
+        if irred_sw {
+            let r = block.read().unwrap();
+            let outs: Vec<String> = (0..r.size_out()).filter_map(|j| r.get_out(j)
+                .map(|e| format!("{}(L{:x})", e.point.read().unwrap().get_index(), e.flags))).collect();
+            eprintln!("[IRRED-SW] try blk{} fn={} ty={:?} fl={:#x} sizeout={} out=[{}]",
+                r.get_index(), self.name, r.get_type(), r.get_flags(), r.size_out(), outs.join(","));
+        }
 
         // Ghidra cc:1656-1671: Find "obvious" exitblock.
         let mut exitblock: Option<i32> = None;
@@ -4312,16 +4505,28 @@ impl<'a> CollapseStructure<'a> {
                     None => continue,
                 };
                 // cc:1679: In cannot be a goto
-                if curbl.read().unwrap().is_goto_in(0) { return false; }
+                if curbl.read().unwrap().is_goto_in(0) {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} fallback cc:1679 goto-in case blk{}", i, curbl.read().unwrap().get_index()); }
+                    return false;
+                }
                 // cc:1680: Must resolve nested switch first
-                if curbl.read().unwrap().is_switch_out() { return false; }
+                if curbl.read().unwrap().is_switch_out() {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} fallback cc:1680 nested switch blk{}", i, curbl.read().unwrap().get_index()); }
+                    return false;
+                }
                 let cur_sout = curbl.read().unwrap().size_out();
                 if cur_sout == 1 {
-                    if curbl.read().unwrap().is_goto_out(0) { return false; }
+                    if curbl.read().unwrap().is_goto_out(0) {
+                        if irred_sw { eprintln!("[IRRED-SW] reject blk{} fallback cc:1682 goto-out case blk{}", i, curbl.read().unwrap().get_index()); }
+                        return false;
+                    }
                     let out_idx = curbl.read().unwrap().get_out(0)
                         .map(|e| e.point.read().unwrap().get_index());
                     match (exitblock, out_idx) {
-                        (Some(e), Some(o)) if e != o => return false,
+                        (Some(e), Some(o)) if e != o => {
+                            if irred_sw { eprintln!("[IRRED-SW] reject blk{} fallback cc:1684 exit mismatch {} vs {}", i, e, o); }
+                            return false;
+                        }
                         (None, Some(o)) => exitblock = Some(o),
                         _ => {}
                     }
@@ -4330,17 +4535,24 @@ impl<'a> CollapseStructure<'a> {
         } else {
             // Ghidra cc:1692-1708: validate with determined exitblock.
             let exit_idx = exitblock.unwrap();
+            if irred_sw { eprintln!("[IRRED-SW] blk{} obvious exit={}", i, exit_idx); }
             let exit_block = match self.graph.get_block(exit_idx as usize) {
                 Some(b) => b,
                 None => return false,
             };
             // cc:1693-1694: no in gotos to exitblock
             for k in 0..exit_block.read().unwrap().size_in() {
-                if exit_block.read().unwrap().is_goto_in(k) { return false; }
+                if exit_block.read().unwrap().is_goto_in(k) {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1694 exit blk{} goto-in slot {}", i, exit_idx, k); }
+                    return false;
+                }
             }
             // cc:1695-1696: no out gotos from exitblock
             for k in 0..exit_block.read().unwrap().size_out() {
-                if exit_block.read().unwrap().is_goto_out(k) { return false; }
+                if exit_block.read().unwrap().is_goto_out(k) {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1696 exit blk{} goto-out slot {}", i, exit_idx, k); }
+                    return false;
+                }
             }
             for j in 0..sizeout {
                 let curbl = match block.read().unwrap().get_out(j) {
@@ -4350,20 +4562,38 @@ impl<'a> CollapseStructure<'a> {
                 let cur_idx = curbl.read().unwrap().get_index();
                 if cur_idx == exit_idx { continue; }
                 // cc:1700: case can only have switch fall into it
-                if curbl.read().unwrap().size_in() > 1 { return false; }
+                if curbl.read().unwrap().size_in() > 1 {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1700 case blk{} size_in={}", i, cur_idx, curbl.read().unwrap().size_in()); }
+                    return false;
+                }
                 // cc:1701: in cannot be goto
-                if curbl.read().unwrap().is_goto_in(0) { return false; }
+                if curbl.read().unwrap().is_goto_in(0) {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1701 case blk{} goto-in", i, cur_idx); }
+                    return false;
+                }
                 // cc:1702: at most 1 exit from case
-                if curbl.read().unwrap().size_out() > 1 { return false; }
+                if curbl.read().unwrap().size_out() > 1 {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1702 case blk{} size_out={}", i, cur_idx, curbl.read().unwrap().size_out()); }
+                    return false;
+                }
                 let cur_sout = curbl.read().unwrap().size_out();
                 if cur_sout == 1 {
-                    if curbl.read().unwrap().is_goto_out(0) { return false; }
+                    if curbl.read().unwrap().is_goto_out(0) {
+                        if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1704 case blk{} goto-out", i, cur_idx); }
+                        return false;
+                    }
                     let out_idx = curbl.read().unwrap().get_out(0)
                         .map(|e| e.point.read().unwrap().get_index());
-                    if out_idx != Some(exit_idx) { return false; }
+                    if out_idx != Some(exit_idx) {
+                        if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1705 case blk{} out={:?} != exit {}", i, cur_idx, out_idx, exit_idx); }
+                        return false;
+                    }
                 }
                 // cc:1707: nested switch must resolve first
-                if curbl.read().unwrap().is_switch_out() { return false; }
+                if curbl.read().unwrap().is_switch_out() {
+                    if irred_sw { eprintln!("[IRRED-SW] reject blk{} cc:1707 case blk{} nested switch", i, cur_idx); }
+                    return false;
+                }
             }
         }
 
@@ -5011,6 +5241,11 @@ impl<'a> CollapseStructure<'a> {
             // structured later. finalize_structure (Phase 1.1) physically
             // removes DEAD blocks at the end of collapse_all.
             succ.write().unwrap().set_flags(crate::block::block_flags::DEAD);
+            // Record the containment (Ghidra: consumed node's `parent`
+            // becomes the composite, block.hh:78) for parent-chain walks.
+            self.graph
+                .absorbed_into
+                .insert(succ_idx as i32, block_idx_val);
             self.change_count += 1;
         }
     }

@@ -1,5 +1,9 @@
 # `funcdata.rs` API Reference
 
+## 2026-08-26：GOTO-LABEL-UNPRINTED-0001 收尾验证
+- `Funcdata::remove_unreachable_blocks` 保持 `funcdata_block.cc:346-393` 的 reachable 收集、DEAD 标记、出边拆除、块删除和 `structureReset` 顺序；本轮仅移除诊断用 CFG dump。
+- httpd 29/29 函数完成且 compare defects=0/numbering=0；goto 引用的未定义 label 与零地址 label 均为 0。curl 124/124 函数 compare defects=0/numbering=0。
+
 **源代码路径**: `src/funcdata.rs`
 **2026-07-16**: `link_symbol` + `link_symbol_reference` 已加（funcdata_varnode.cc:1156/1193）。符号链接 + PTRSUB 常量解析。
 
@@ -1699,6 +1703,20 @@ MERGE-CLEAR-LIFECYCLE-0001（上文）记录的 `funcdata::` 2 个预存在失�
 - 验收：curl E2E main 从 timeout（>10s 无输出）恢复收敛，全文件
   in_ram_* irregular-input 命名 66→0，差分门禁 defects=0/numbering=0
   （124 函数）。
+
+### 2026-08-26：mapGlobals maxvn 携带修复（R-MAPGLOBALS REJECT fix-forward）
+- 独立复核 R-MAPGLOBALS（机制 C）在 `map_globals` 判 REJECT：oracle
+  funcdata_varnode.cc:1685-1686 `if (vn->getSize() > maxvn->getSize())
+  maxvn = vn;` 携带**varnode 本体**，cc:1692-1693 的 ct 取组内最大
+  varnode 的 high 类型；Rugra 侧 `maxvn` 只取组起始且从不更新
+  （`max_size`/`max_addr` 标量是对的），ct 分支读了错源。
+- 修复：内层循环 `if n_size > max_size` 臂同步 `maxvn = next.clone()`
+  （funcdata.rs map_globals，3 行代码变更）；触发输入类为同基址双宽度
+  persist varnode（loc 序 size 升序，较小者为组起始）且最大者尾 == 组尾。
+- 判别 fixture：`FUNCDATA-MAPGLOBALS-MAXVN-0001`
+  （tests/oracle/funcdata_mapglobals_maxvn_1204）以同基址 1+8 字节
+  persist varnode 钉死 ct 取大 varnode（addSymbol 尺寸 8）与
+  entry 臂 inconsistentuse 翻转（warningHeader）。
 ## 2026-08-25：`JUMPTABLE-PIPELINE-0001` 段2 — stageJumpTable/recoverJumpTable 分级恢复
 
 `Funcdata::stage_jump_table(partial, jt, op, flow_state)`（funcdata_block.cc:491-548）
@@ -1820,3 +1838,57 @@ switch 出边中的 48 条；remove_unreachable_blocks 随后把所有 case 体�
 `branch_remove_internal(bb,num)`（内部走 remove_edge_blocks 的半边配对删除）+
 `structure_reset()`。glob_set E2E spin（collapse_all 后 >30s）随之消失：基线
 124/124、0 timeout、defects=0。
+## `start_processing` 接入 applyDeadCodeDelay（MAIN-POSTSTRUCT-SPIN-0001，2026-08-27）
+
+补齐 funcdata.cc:166 `localoverride.applyDeadCodeDelay(*this)` 腿
+（override.cc:217-231）：遍历 override 的 deadcodedelay 表（`delay >= 0`
+项），经 `AddressSpace::from_index`（`AddrSpaceManager::getSpace(i)`
+替身）解析回空间，逐项 `Heritage::set_dead_code_delay(space, delay)`
+（heritage.cc:2815；`delay < info->delay` panic 镜像 LowlevelError）。
+Override 跨 `Funcdata::clear` 存活（funcdata.cc:106 "Do not clear
+overrides"），因此 `Heritage::bump_deadcode_delay` 安装的重启延迟在下一
+遍 startProcessing 生效——与 oracle 的重启遍语义一致。先拷贝表项再改
+heritage（override 借 self 不可变而 heritage 可变）。followFlow 与
+inline-function 头警告仍属未移植基础设施（驱动侧流生成，
+PIPE-RESTART-0001）。
+
+## FlowOverride 注入期应用（GOTO-LABEL-UNPRINTED-0001 tail-call 家族，2026-08-27）
+
+`inject_raw_ops` 在 phase-1（`oneInstruction` dump 等价物）与 phase-2
+（`xrefControlFlow` 块标记等价物）之间新增 `apply_flow_overrides_raw`：
+当 `localoverride.has_flow_override()` 时，按指令地址查
+`Override::getFlowOverride`（flow.cc:415-418 的读取位置），在 raw 层执行
+`Funcdata::overrideFlow` 的改写表（funcdata_op.cc:991-1020）：
+BRANCH→CALL、BRANCHIND→CALLIND、RETURN→CALLIND；CBRANCH 不支持
+（cc:1000）；CALL_RETURN 在改写后的 call 后追加常量 0 输入的 RETURN
+（cc:1006-1011 `newOp`+`opSetInput`+`opDeadInsertAfter` 的 raw 层等价，
+SeqNum order 取 `u32::MAX` 保证位于该指令全部真实 op 之后、地址不变以进入
+同一尾块）。
+
+主 op 选择镜像 `findPrimaryBranch`（funcdata_op.cc:929-961）：每条指令只
+考虑第一个 branch-like op，BRANCH/CBRANCH 要求 in(0) 非常量（内部跳转带
+常量相对目标，cc:938）。
+
+为什么走 raw 层而不是已移植的 `Funcdata::override_flow`：Rugra 记录在案的
+create-implies-alive 分歧（op.rs `PcodeOpBank::create`）使 phase-1 op 永不
+`isDead()`，`override_flow` 的 dead 前置条件不可满足；且其
+`insert_after_dead` 插入的 RETURN 不会进 phase-2 的 op_refs 向量，会从块图
+整体丢失。raw 层改写保证 phase-2 看到与 Ghidra 相同的 op 序列。
+
+零 override（所有未播种 localoverride 的驱动——TailCallAnalyzer 角色在
+分析驱动侧）时列表原样透传：无 clone、无行为变化（curl 门禁不受影响）。
+消费方：`examples/httpd_decompile.rs` 以 ELF 函数符号 ∪ call-target 集 ∪
+PLT 段起点（sh_entsize 对齐）为已知函数入口，函数范围外的直接 `jmp` 目标
+播种 `FlowOverride::CallReturn`。消除 httpd 的
+`code_rXXXX: goto code_rXXXX;` 尾调用自环家族
+（ap_set_name_virtual_host/ap_pregfree/ap_getword_nc/ap_field_noparam 两个
+PLT 尾）。残余自环（main 0x2BA58、ap_update_vhost_from_headers 0x2D7F0、
+ap_field_noparam 0x2DD79）为内部空块/非返回 canary 分支域，见
+docs/TODO_BOARD.md GOTO-LABEL-UNPRINTED-0001 残差登记。
+## 测试侧两级复合块搜索（master ac6e6795 并入注记，2026-08-26）
+
+`bool-fold test` 的 Or-Condition 搜索从一级复合层扩为两级：Ghidra 的规则
+序列在该 CFG 上为 ruleBlockOr → ruleBlockIfNoExit 包裹出口子句
+（blockaction.cc:1840 第二遍）→ ruleBlockCat 合并，得到
+`List[If[Condition(Or), D], C]`——Condition 位于 List 子内的 If 里，需两级
+下钻才能命中。纯测试辅助代码，无运行时行为变化。

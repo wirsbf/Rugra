@@ -478,6 +478,55 @@ pub struct PrintC {
     /// Set of block addresses that are targets of BRANCH/CBRANCH goto statements.
     /// Used to emit LAB_XXXX: labels at the start of target blocks.
     goto_targets: HashSet<u64>,
+    /// Identity (&*Box contents address) of the document emitter passed to
+    /// PrintC::new. Label statements (GOTO-LABEL-UNPRINTED-0001) must print
+    /// into — and only into — this emitter: capture buffers
+    /// (capture_block_condition / negation pre-render), the CaseDetectEmit
+    /// dry-run and the NullEmit discovery pass are discarded, and a label
+    /// printed there would both vanish and block the real print via
+    /// printed_labels. A Box swapped out by mem::replace and later restored
+    /// keeps its heap allocation, so pointer identity is stable.
+    main_emit_id: usize,
+    /// Labels already printed this function, keyed by target address.
+    /// Transport for Ghidra's f_label_bumpup (block.hh:99: "any label
+    /// printed higher up in hierarchy"): Rugra's structured tree shares
+    /// Basic leaves across constructs (no BlockCopy duplication), so a
+    /// marked leaf reachable from several construct entries must print its
+    /// `code_r...:` label exactly once (printc.cc:3198-3214).
+    printed_labels: HashSet<u64>,
+    /// Basic-block starts the discovery pass (doc_function pass 1, NullEmit)
+    /// emitted, keyed by start address. The real pass emits the identical
+    /// block set, so membership answers "will any block with this start
+    /// address ever be emitted" — the never-emitted-target defense of
+    /// emit_goto_statement (GOTO-LABEL-UNPRINTED-0001) and the precondition
+    /// for the pending-label backpatch in emit_block_ops.
+    discovery_block_starts: HashSet<u64>,
+    /// Addresses whose `goto` statement has been emitted this function but
+    /// whose label is not yet defined. Drives the emit_block_ops backpatch:
+    /// when a block with a pending start address is emitted, its label
+    /// prints at that block (the oracle's own placement —
+    /// emitLabelStatement at the marked leaf, printc.cc:3198-3214) instead
+    /// of a goto-site anchor.
+    pending_goto_labels: HashSet<u64>,
+    /// Identity of the discovery pass's NullEmit (0 outside the pass). The
+    /// primary emitter of pass 1, the counterpart of main_emit_id for pass
+    /// 2: record_goto_label_pending accepts exactly these two identities so
+    /// the discovery pre-seed of pending_goto_labels mirrors the real pass's
+    /// main-output goto set — discarded contexts (CaseDetectEmit dry-runs,
+    /// capture buffers) record nothing in EITHER pass, keeping the two
+    /// passes' goto sets equal (GOTO-LABEL-UNPRINTED-0001).
+    discovery_emit_id: usize,
+    /// Start addresses of every block of the function's block graph
+    /// (collected in doc_function 2a.5). A `goto` target must be one of
+    /// these: the oracle's emitGotoStatement (printc.cc:2307-2322) always
+    /// receives a live FlowBlock of the structured tree, whose start is a
+    /// real code address. A numeric offset outside this set — however the
+    /// structurer produced it (observed: Const-space CBRANCH in(0)
+    /// rewrites carrying unique-space offsets 0x1000011F/0x100000D8/
+    /// 0x10000000, which the Const/Ram space filter of the pre-pass cannot
+    /// reject) — names a label no block can ever define
+    /// (GOTO-UNIQSPACE-TARGET-UPSTREAM-0001).
+    code_block_starts: HashSet<u64>,
     /// Restructured local-variable scope (faithful port of varmap.cc). Built
     /// once per doc_function from the function's stack varnodes. When a symbol
     /// covers a stack offset, get_stack_variable_name prefers its name over the
@@ -646,7 +695,8 @@ impl PrintC {
     // Ghidra: printc.cc:123 PrintC::new
     /// Create a new PrintC instance
     pub fn new(emit: Box<dyn Emit>) -> Self {
-        Self {
+        let main_emit_id = (&*emit) as *const dyn Emit as *const () as usize;
+        let mut printer = Self {
             emit,
             symbol_table: HashMap::new(),
             string_table: HashMap::new(),
@@ -681,6 +731,12 @@ impl PrintC {
             mod_stack: Vec::new(),
             struct_emit_depth: 0,
             goto_targets: HashSet::new(),
+            printed_labels: HashSet::new(),
+            discovery_block_starts: HashSet::new(),
+            pending_goto_labels: HashSet::new(),
+            code_block_starts: HashSet::new(),
+            discovery_emit_id: 0,
+            main_emit_id,
             scope: None,
             option_convention: true, // printc.cc:1584 resetDefaultsPrintC
             option_nocasts: false,   // printc.cc:1587 resetDefaultsPrintC
@@ -722,7 +778,16 @@ impl PrintC {
             rpn_tok_subscript: 9,
             rpn_tok_boolean_not: 10,
             rpn_enabled: true,
-        }
+        };
+        // printc.cc:1594 resetDefaultsPrintC -> setCStyleComments
+        // (printc.hh:242) -> printlanguage.cc:96-110 setCommentDelimeter
+        // ("/* "," */", false): the else branch builds the blank fill
+        // matching the start delimiter's width ("/* " -> "   ") and calls
+        // emit->setCommentFill(spaces). No-op for plain emitters; arms the
+        // pretty printer's comment line-fill for forced breaks inside
+        // comment blocks.
+        printer.emit.set_comment_fill("   ");
+        printer
     }
 
     // Ghidra: printc.cc:123 PrintC::takeEmit
@@ -1193,6 +1258,13 @@ impl PrintC {
             | OpCode::CPUI_INT_SEXT
             | OpCode::CPUI_SUBPIECE => has(0),
             OpCode::CPUI_PTRSUB => true,
+            // printc.cc:880-893 opPtradd pushes a stage-2 token and exactly
+            // two operands; printc.hh:333 opPiece→opFunc (printc.cc:424-441)
+            // pushes function_call + name atom + one input per present slot.
+            // Both arms are total (like Ghidra's virtual dispatch) when the
+            // destructured inputs exist, so mirror the binary-arm guard.
+            OpCode::CPUI_PTRADD => has(0) && has(1),
+            OpCode::CPUI_PIECE => has(0) && has(1),
             _ => false,
         }
     }
@@ -1265,11 +1337,26 @@ impl PrintC {
             cur.get_display_name().to_string()
         };
         let mut spelling = base_name;
-        // cc:290-302 + cc:319-330: emit the modifier layers outside-in
-        // (stack order is reversed here): `*` per pointer, `[n]` per array.
+        // cc:279-286 + cc:292-302: the modifier chain is emitted after ONE
+        // type_expr_space (printc.cc:73, OpToken::space spacing=1) — a
+        // single blank between the base identifier and the first modifier —
+        // then per layer: ptr_expr `*` (printc.cc:75, unary_prefix with
+        // spacing=0) or array_expr `[n]` (printc.cc:78, postsurround with
+        // spacing=1, Emit::spaces accumulates per printlanguage.cc:326-369 /
+        // prettyprint.cc:46-58). Consecutive pointer layers therefore glue:
+        // Pointer(Pointer(char)) prints `char **`, Pointer³ prints
+        // `ushort ***` — the old per-layer " *" produced the non-oracle
+        // `char * *`. The named-layer early break of buildTypeStack
+        // (printc.cc:150) is not mirrored here: Rugra's parsed nested
+        // pointers carry display names while the oracle corpus types are
+        // anonymous factory pointers, and stopping at a named layer would
+        // re-introduce `char * *` against golden `char **`.
+        if !layers.is_empty() {
+            spelling.push(' ');
+        }
         for layer in layers.iter().rev() {
             match layer {
-                Datatype::Pointer(_) => spelling.push_str(" *"),
+                Datatype::Pointer(_) => spelling.push('*'),
                 Datatype::Array(a) => spelling.push_str(&format!(" [{}]", a.num_elements)),
                 _ => unreachable!("only pointer/array layers are stacked"),
             }
@@ -1728,8 +1815,36 @@ impl PrintC {
                 self.rpn_push_in(op_arc, op, 2, self.mods);
                 self.rpn_recurse();
             }
-            // printc.cc:508 opCall: name(args...).
-            OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
+            // printc.cc:596 opCall: pushOp(&function_call) then the name
+            // atom and the implied parameters; the postsurround token's
+            // rpn_emit_op (printlanguage.cc:343-353) renders
+            // spaces(0,bump) openParen spaces(0,bump) ... closeParen, which
+            // is what arms the pretty printer's wrap indent around the
+            // argument group.
+            // Ghidra: printc.cc:637 PrintC::opCallind
+            // Indirect calls retain the target expression and dereference it;
+            // they must not resolve the target offset as a named CALL.
+            OpCode::CPUI_CALLIND => {
+                self.emit.print("(*(code *)");
+                if let Some(in0) = op.get_in(0) {
+                    let target = in0.read().unwrap();
+                    if let Some(name) = self.symbol_table.get(&target.get_offset()).cloned() {
+                        self.emit.print(&name);
+                    } else {
+                        self.rpn_push_in(op_arc, op, 0, self.mods);
+                        self.rpn_recurse();
+                    }
+                }
+                self.emit.print(")(");
+                for i in 1..op.num_input() {
+                    if i > 1 { self.emit.print(", "); }
+                    self.rpn_push_in(op_arc, op, i, self.mods);
+                    self.rpn_recurse();
+                }
+                self.emit.print(")");
+            }
+            // Ghidra: printc.cc:596 PrintC::opCall
+            OpCode::CPUI_CALL => {
                 let target_name = if let Some(in0) = op.get_in(0) {
                     let v0 = in0.read().unwrap();
                     let off = v0.get_offset();
@@ -1741,31 +1856,7 @@ impl PrintC {
                 } else {
                     "FUN_unknown".to_string()
                 };
-                let atom = Atom::new(
-                    &target_name,
-                    TagType::FunToken,
-                    SyntaxHighlight::FuncnameColor,
-                );
-                self.rpn_push_atom(&atom);
-                self.emit.print("(");
-                let n = op.num_input();
-                // in(0) is the target; args are in(1..n).
-                // printc.cc:623-631: `pushOp(&comma,op)` between parameters,
-                // where `comma` is { ",", ..., spacing 0 } (printc.cc:57) —
-                // the separator is a bare "," with no trailing space, e.g.
-                // `fwrite(buffer,size,nmemb,__s)`.
-                let mut first = true;
-                for i in 1..n {
-                    if !first {
-                        self.emit.print(",");
-                    }
-                    first = false;
-                    if op.get_in(i).is_some() {
-                        self.rpn_push_in(op_arc, op, i, self.mods);
-                        self.rpn_recurse();
-                    }
-                }
-                self.emit.print(")");
+                self.rpn_op_call(op_arc, op, &target_name);
             }
             // printc.cc:754 PrintC::opReturn default plain-return arm;
             // PRINT-RPN-0001 tracks the halt/noreturn/baddata/missing variants.
@@ -2005,6 +2096,46 @@ impl PrintC {
                     let nm = Self::rpn_operator_name_ext("SUB", op);
                     self.rpn_op_func(op_arc, op, &nm);
                 }
+            }
+            // Ghidra: printc.cc:880 PrintC::opPtradd (typeop.hh:824 TypeOpPtradd::push)
+            // Faithful port of `PrintC::opPtradd(const PcodeOp*)`
+            // (printc.cc:880-893):
+            //   bool printval = isSet(print_load_value|print_store_value);
+            //   uint4 m = mods & ~(print_load_value|print_store_value);
+            //   if (printval) pushOp(&subscript,op); else pushOp(&binary_plus,op);
+            //   pushVn(op->getIn(1),op,m); pushVn(op->getIn(0),op,m);
+            // Inputs are pushed in(1) first then in(0): nodepend is LIFO so
+            // in(0) drains first (left-to-right print order). Missing-input
+            // ops skip emission entirely (same guard as the INT_* binary
+            // arm) so the stage-2 token can never dangle unbalanced.
+            OpCode::CPUI_PTRADD => {
+                // cc:881-882: strip the load/store-value mods from the
+                // operands' mod word.
+                let m = self.mods
+                    & !(print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE);
+                if let (Some(_in0), Some(_in1)) = (op.get_in(0), op.get_in(1)) {
+                    // cc:883-886: subscript when printing a load/store value,
+                    // plain `+` (binary_plus, registry id 3) otherwise.
+                    if self.is_set(
+                        print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE,
+                    ) {
+                        self.rpn_push_op(self.rpn_tok_subscript);
+                    } else {
+                        self.rpn_push_op(Self::RPN_TOK_BINARY_BASE + 3);
+                    }
+                    self.rpn_push_in(op_arc, op, 1, m);
+                    self.rpn_push_in(op_arc, op, 0, m);
+                }
+            }
+            // Ghidra: printc.hh:333 PrintC::opPiece { opFunc(op); }
+            // (typeop.hh:787 TypeOpPiece::push). Functional syntax via
+            // PrintC::opFunc (printc.cc:424-441): function_call token + name
+            // atom + comma tokens + inputs in reverse. The operator name is
+            // TypeOpPiece::getOperatorName (typeop.cc:2048-2056):
+            // "CONCAT" + dec(in0->getSize()) + dec(in1->getSize()).
+            OpCode::CPUI_PIECE => {
+                let nm = Self::rpn_operator_name_piece(op);
+                self.rpn_op_func(op_arc, op, &nm);
             }
             // printc.cc:929 opPtrsub: struct/union field access `ptr->field`,
             // array element pointer `*ptr`/`ptr[0]`, or `&ptr->field`.
@@ -2276,9 +2407,17 @@ impl PrintC {
         if !self.option_nocasts {
             self.rpn_push_op(self.rpn_tok_typecast);
             if let Some(ref dt) = out_dt {
-                // pushType(dt) renders the type's display name as a
-                // TypeToken syntax Atom (printc.cc:2013 pushType).
-                let type_name = dt.get_name().to_string();
+                // pushType(dt) renders the structural cast spelling
+                // (printc.cc:2013 pushType -> pushTypeStart/pushTypeEnd):
+                // buildTypeStack walks the pointer/array layers and emits
+                // `char **` for nested pointers. Rugra's non-interned
+                // pointers carry per-layer display names (`char * *` on the
+                // outer of a pointer-to-pointer built by make_ptr), so the
+                // raw get_name() here must go through the same structural
+                // fold as op_type_cast's cast_type_string — else
+                // `*(char * *)stream` leaks where the oracle prints
+                // `*(char **)stream`.
+                let type_name = Self::cast_type_string(dt);
                 let type_atom = Atom::with_type(
                     &type_name,
                     TagType::TypeToken,
@@ -2344,6 +2483,49 @@ impl PrintC {
         }
     }
 
+    // Ghidra: printc.cc:596 PrintC::opCall
+    /// RPN-path port of `PrintC::opCall(const PcodeOp*)` (printc.cc:596-636):
+    /// pushOp(&function_call,op), the fspec name atom (functoken /
+    /// funcname_color), then count-1 comma tokens and the parameter
+    /// varnodes pushed in reverse order (printc.cc:623-631; the LIFO
+    /// nodepend drain in recurse emits them forward). count==0 pushes the
+    /// empty blank atom (printc.cc:635-636). The hidden-`this` skip slot is
+    /// C++-only and stays -1 (printc.cc:620-623).
+    fn rpn_op_call(
+        &mut self,
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+        op: &PcodeOp,
+        target_name: &str,
+    ) {
+        use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
+        // printc.cc:597: pushOp(&function_call,op)
+        self.rpn_push_op(self.rpn_tok_function_call);
+        // printc.cc:605-616: the callpoint fspec name atom. Rugra resolves
+        // the name from the callpoint address (the driver's stand-in for
+        // the oracle's fspec table; the space check IPTR_FSPEC at cc:601
+        // has no Rugra counterpart — the driver only feeds resolved
+        // callpoints into this arm).
+        let name_atom = Atom::new(target_name, TagType::FunToken, SyntaxHighlight::FuncnameColor);
+        self.rpn_push_atom(&name_atom);
+        // printc.cc:620-634: skip==-1 always; count = numInput()-1.
+        let count = op.num_input() as i64 - 1;
+        if count > 0 {
+            // printc.cc:626-627: count-1 comma separators.
+            for _ in 0..(count - 1) {
+                self.rpn_push_op(self.rpn_tok_comma);
+            }
+            // printc.cc:629-633: implied vn's pushed in reverse order for
+            // efficiency (see PrintLanguage::pushVnImplied).
+            for i in (1..op.num_input()).rev() {
+                self.rpn_push_in(op_arc, op, i, self.mods);
+            }
+        } else {
+            // printc.cc:635-636: push empty token for void.
+            let blank = Atom::new("", TagType::BlankToken, SyntaxHighlight::NoColor);
+            self.rpn_push_atom(&blank);
+        }
+    }
+
     // Ghidra: printc.cc:474 PrintC::opHiddenFunc
     /// RPN-path port of `PrintC::opHiddenFunc(const PcodeOp*)`
     /// (printc.cc:474-479): pushOp(&hidden) + pushVn(in0). The hidden token
@@ -2355,6 +2537,17 @@ impl PrintC {
     ) {
         self.rpn_push_op(self.rpn_tok_hidden);
         self.rpn_push_in(op_arc, op, 0, self.mods);
+    }
+
+    // Ghidra: typeop.cc:2048 TypeOpPiece::getOperatorName
+    /// `name + dec(in0->getSize()) + dec(in1->getSize())` for CPUI_PIECE
+    /// functional syntax (typeop.cc:2048-2056: `s << name << dec <<
+    /// op->getIn(0)->getSize() << op->getIn(1)->getSize()`), fed to
+    /// opFunc (printc.cc:424-441) as `CONCAT<sz0><sz1>(in0,in1)`.
+    fn rpn_operator_name_piece(op: &PcodeOp) -> String {
+        let s0 = op.get_in(0).map(|a| a.read().unwrap().get_size()).unwrap_or(0);
+        let s1 = op.get_in(1).map(|a| a.read().unwrap().get_size()).unwrap_or(0);
+        format!("CONCAT{}{}", s0, s1)
     }
 
     // Ghidra: typeop.cc:1122 TypeOpIntZext::getOperatorName
@@ -2948,7 +3141,22 @@ impl PrintC {
                         || vn.get_space() == crate::space::AddressSpace::Ram
                     {
                         let target = vn.get_offset();
-                        if self.goto_targets.contains(&target)
+                        // GOTO-LABEL-UNPRINTED-0001 never-emitted anchor for
+                        // op-level flat-tail gotos: a target whose address is
+                        // pending (this block's own `if (cond) goto ...;` tail
+                        // already recorded it — including unique-space in(0)
+                        // rewrites the goto_targets space filter misses) but
+                        // absent from discovery_block_starts has NO block that
+                        // will ever carry its label — anchor it here, after
+                        // this block's statements, the same placement
+                        // emit_goto_statement uses for its never-emitted
+                        // targets (valid C: the jump resolves to the
+                        // fall-through statement). Emitted targets stay
+                        // excluded: their label belongs at their own block
+                        // (the pending arm / backpatch), not the goto site.
+                        let needs_anchor = self.pending_goto_labels.contains(&target)
+                            && !self.discovery_block_starts.contains(&target);
+                        if (self.goto_targets.contains(&target) || needs_anchor)
                             && !targets_to_label.contains(&target)
                         {
                             targets_to_label.push(target);
@@ -3067,6 +3275,60 @@ impl PrintC {
     /// 2742): setupBlockList window, emitCommentGroup(inst) before each
     /// printed statement, emitCommentGroup(NULL) for the block tail.
     fn emit_block_ops(&mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, skip_terminal: bool) {
+        // GOTO-LABEL-UNPRINTED-0001: Ghidra prints an unstructured-target
+        // label at the enclosing construct entry (printc.cc:2762/2965/3014/
+        // 3076/3104 → emitAnyLabelStatement → emitLabelStatement,
+        // printc.cc:3198-3214), which for a marked BODY leaf is inside the
+        // braces immediately before its first statement (Ghidra bodies are
+        // BlockCopy sub-trees and emitBlockCopy prints the label there).
+        // Rugra's construct emitters emit Basic bodies/conditions directly
+        // via this function without dispatcher re-entry, so the same
+        // front-leaf check runs here; printed_labels (the f_label_bumpup
+        // transport, block.hh:99) keeps exactly one print at the earliest
+        // call site — a marked condition's label correctly lands at the
+        // construct entry because the dispatcher fires first.
+        self.emit_any_label_statement(block_arc);
+        // GOTO-LABEL-UNPRINTED-0001 discovery ledger: record every Basic/Copy
+        // start the discovery pass's PRIMARY emitter (NullEmit) emits — the
+        // real pass's main-output emission set — so emit_goto_statement can
+        // distinguish never-emitted targets. Dry-run contexts
+        // (CaseDetectEmit) inside pass 1 do not insert: a block emitted only
+        // into a discarded buffer is never emitted into the main output, and
+        // counting it here would wrongly suppress the never-emitted anchor.
+        // The real pass does not re-insert — the set must stay the discovery
+        // snapshot the defenses were specified against.
+        if self.discovery_pass
+            && (&*self.emit) as *const dyn Emit as *const () as usize == self.discovery_emit_id
+            && matches!(block_arc.read().unwrap().get_type(),
+                crate::block::BlockType::Basic | crate::block::BlockType::Copy)
+        {
+            self.discovery_block_starts
+                .insert(block_arc.read().unwrap().get_start_addr().as_u64());
+        }
+        // GOTO-LABEL-UNPRINTED-0001 backpatch: a `goto` to this block's
+        // start was already printed but its label is still undefined
+        // (pending_goto_labels) — the address-keyed twin of the oracle's
+        // marked-leaf print. Rugra's structurer leaves some if-goto edges
+        // unwrapped (no BlockIf::goto_target, so markUnstructured never
+        // marked the leaf — observed: code_r0x0002D2E4, httpd
+        // ap_fini_vhost_config); in Ghidra every unstructured edge is
+        // wrapped by ruleBlockGoto (blockaction.cc:1450) and the label
+        // prints at the leaf through emitAnyLabelStatement. The backpatch
+        // restores the oracle's placement: label at the target block's own
+        // emission point, not at the goto site. Skipped on the discovery
+        // pass and on capture buffers — emit_label_statement's gates would
+        // swallow the print but the pending removal must only happen where
+        // the label really prints.
+        if !self.discovery_pass
+            && (&*self.emit) as *const dyn Emit as *const () as usize == self.main_emit_id
+            && matches!(block_arc.read().unwrap().get_type(),
+                crate::block::BlockType::Basic | crate::block::BlockType::Copy)
+        {
+            let start = block_arc.read().unwrap().get_start_addr().as_u64();
+            if self.pending_goto_labels.remove(&start) {
+                self.emit_label_statement(start);
+            }
+        }
         // Route to RPN path if enabled
         if self.rpn_enabled {
             let ops = block_arc.read().unwrap().get_ops();
@@ -3325,7 +3587,22 @@ impl PrintC {
                         || vn.get_space() == crate::space::AddressSpace::Ram
                     {
                         let target = vn.get_offset();
-                        if self.goto_targets.contains(&target)
+                        // GOTO-LABEL-UNPRINTED-0001 never-emitted anchor for
+                        // op-level flat-tail gotos: a target whose address is
+                        // pending (this block's own `if (cond) goto ...;` tail
+                        // already recorded it — including unique-space in(0)
+                        // rewrites the goto_targets space filter misses) but
+                        // absent from discovery_block_starts has NO block that
+                        // will ever carry its label — anchor it here, after
+                        // this block's statements, the same placement
+                        // emit_goto_statement uses for its never-emitted
+                        // targets (valid C: the jump resolves to the
+                        // fall-through statement). Emitted targets stay
+                        // excluded: their label belongs at their own block
+                        // (the pending arm / backpatch), not the goto site.
+                        let needs_anchor = self.pending_goto_labels.contains(&target)
+                            && !self.discovery_block_starts.contains(&target);
+                        if (self.goto_targets.contains(&target) || needs_anchor)
                             && !targets_to_label.contains(&target)
                         {
                             targets_to_label.push(target);
@@ -3524,30 +3801,14 @@ impl PrintC {
             return;
         }
 
-        // Emit label if this block is an unstructured goto target.
-        // Faithful to Ghidra emitLabelStatement (printc.cc:3198-3214): in
-        // structured mode a `code_r0x` label is printed only for a BlockBasic
-        // (t_copy) whose front leaf carries f_unstructured_targ — i.e. it is
-        // the destination of a genuine unstructured goto (set by
-        // BlockGoto/BlockIf/BlockSwitch::markUnstructured via markCopyBlock).
-        // Loop backedges and structured-branch targets never receive this
-        // flag, so they never get a label. (The flat-mode `isJumpTarget` path
-        // is not used by Rugra's structured emitter.)
-        {
-            let block = block_arc.read().unwrap();
-            let bt = block.get_type();
-            let is_target = (block.get_flags()
-                & crate::block::block_flags::UNSTRUCTURED_TARG) != 0;
-            // Only BlockBasic can be an unstructured target leaf.
-            if is_target && bt == crate::block::BlockType::Basic {
-                let ops = block.get_ops();
-                if let Some(first_op) = ops.first() {
-                    let addr = first_op.0.read().unwrap().start.addr.as_u64();
-                    self.emit.tag_line(0);
-                    self.emit.print(&format!("{}:", self.code_label(addr)));
-                }
-            }
-        }
+        // Emit label if this block (or its front leaf) is an unstructured
+        // goto target. Faithful to Ghidra emitAnyLabelStatement
+        // (printc.cc:3219-3226) + emitLabelStatement (printc.cc:3198-3214)
+        // as ported in emit_any_label_statement: front-leaf descent,
+        // f_unstructured_targ gate, printed-once guard. This dispatcher
+        // entry is the structured-graph equivalent of Ghidra's per-construct
+        // emitAnyLabelStatement calls (printc.cc:2762/2965/3014/3076/3104).
+        self.emit_any_label_statement(block_arc);
 
         let block_type = block_arc.read().unwrap().get_type();
 
@@ -3616,6 +3877,7 @@ impl PrintC {
                         let target_addr = if_data.goto_target.as_ref()
                             .map(|t| t.read().unwrap().get_start_addr().as_u64())
                             .unwrap_or(0);
+
                         let bt = match if_data.goto_type {
                             crate::block::goto_type::BREAK_GOTO =>
                                 crate::op::branch_type::BREAK,
@@ -3673,6 +3935,12 @@ impl PrintC {
                                 Self::cbranch_goto_info(&if_data.condition)
                             {
                                 self.emit.print(" ");
+                                // Label anchoring for this goto (and every
+                                // other) lives inside emit_goto_statement:
+                                // the pending_goto_labels backpatch prints at
+                                // the target block, and only never-emitted
+                                // targets anchor at the goto site
+                                // (GOTO-LABEL-UNPRINTED-0001).
                                 self.emit_goto_statement(target_addr, bt);
                             }
                             self.emit_block_ops(&if_data.if_body, false);
@@ -6039,6 +6307,30 @@ impl PrintC {
                     self.push_input(def_op, 1);
                 }
             }
+            // Ghidra: printc.cc:637 PrintC::opCallind
+            // CALLIND is not a named CALL: opCallind pushes the function_call
+            // token, then dereference, then the target Varnode (cc:640-650),
+            // yielding `(*(code *)target)(args)`. In particular, a GOT-slot
+            // target keeps its PTR_ symbol instead of becoming FUN_<offset>.
+            OpCode::CPUI_CALLIND => {
+                self.emit.print("(*(code *)");
+                if let Some(in0) = def_op.get_in(0) {
+                    let target = in0.read().unwrap();
+                    if let Some(name) = self.symbol_table.get(&target.get_offset()).cloned() {
+                        self.emit.print(&name);
+                    } else {
+                        self.push_varnode(&target, Some(def_op));
+                    }
+                }
+                self.emit.print(")(");
+                for i in 1..def_op.num_input() {
+                    if i > 1 { self.emit.print(", "); }
+                    self.push_input(def_op, i);
+                }
+                self.emit.print(")");
+                return;
+            }
+            // Ghidra: printc.cc:596 PrintC::opCall
             OpCode::CPUI_CALL => {
                 if let Some(in0) = def_op.get_in(0) {
                     let target_vn = in0.read().unwrap();
@@ -6057,14 +6349,14 @@ impl PrintC {
                         }
                     }
                 }
-                self.emit.open_paren();
+                self.emit.open_paren("(");
                 for i in 1..def_op.num_input() {
                     if i > 1 { self.emit.print(", "); }
                     if let Some(vn) = def_op.get_in(i) {
                         self.push_varnode(&vn.read().unwrap(), Some(def_op));
                     }
                 }
-                self.emit.close_paren();
+                self.emit.close_paren(")", 0);
             }
             // CPUI_CAST: emit `(type)input`. Faithful to Ghidra printCc's
             // op-cast handling (printc.cc): a CAST op renders as a C cast of
@@ -6182,6 +6474,19 @@ impl PrintC {
     /// flat-mode tail of opCbranch (printc.cc:574-579): `goto` +
     /// pushVn(op->getIn(0)), with the keyword selection from the op's
     /// branch_type (break/continue/goto).
+    ///
+    /// GOTO-ZERO/UNIQSPACE-TARGET-UPSTREAM-0001 defense moved downstream:
+    /// the raw in(0) offset is returned unfiltered — the structurer can
+    /// rewrite in(0) into unique space while preserving a REAL code offset
+    /// (observed: 0x2D53A carried in a unique-space in(0)), so a space gate
+    /// here would suppress valid gotos. The single validity criterion is
+    /// emit_goto_statement's block-start whitelist (code_block_starts,
+    /// doc_function 2a.5): 0x0 degenerate chains and unique-space offsets
+    /// (0x10000008/10/28/0x1000011F/...) are never block starts, while a
+    /// real code offset always is. A rejected target suppresses the goto
+    /// statement (the bare `if (cond)` that remains is absorbed by the next
+    /// statement as a nested if — valid C). The upstream goto-target
+    /// rewrite is registered for the structurer domain.
     fn cbranch_goto_info(
         block_arc: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) -> Option<(u64, u8)> {
@@ -7731,15 +8036,83 @@ impl PrintLanguage for PrintC {
         self.used_varnode_names.clear();
         self.used_varnode_types.clear();
 
+        // 2a.5 ledgers, hoisted BEFORE pass 1 (GOTO-LABEL-UNPRINTED-0001):
+        // code_block_starts is a static property of the block graphs (no
+        // emission state), and the discovery pass's goto decisions consult
+        // it — flat_goto_target_valid / emit_goto_statement's whitelist —
+        // so with the whitelist empty during pass 1 the discovery walk
+        // suppressed every op-level goto and could not pre-seed
+        // pending_goto_targets for targets whose blocks print BEFORE their
+        // goto statement (observed: code_r0x0002E679 ap_getparents,
+        // code_r0x0002DB30 ap_update_vhost_given_ip — goto printed from the
+        // op-level flat tail AFTER the target block's only emission had
+        // already passed, leaving the label undefined). Populated here,
+        // pass 1 records the same goto set pass 2 prints, and the
+        // pending_goto_labels pre-seed survives into pass 2 (cleared here,
+        // NOT re-cleared at 2a.5, so the seed is not discarded).
+        self.goto_targets.clear();
+        self.printed_labels.clear();
+        self.discovery_block_starts.clear();
+        self.pending_goto_labels.clear();
+        self.code_block_starts.clear();
+        // Block-start whitelist (GOTO-UNIQSPACE-TARGET-UPSTREAM-0001): the
+        // basic-block graph holds EVERY real code block of the function —
+        // including blocks the structurer later consumed into construct
+        // sub-trees, whose wrappers do not override get_start_addr (the
+        // trait default is address 0). The structured graph's own top-level
+        // entries are unioned in for wrapper starts that do resolve.
+        for i in 0..fd.bblocks.get_size() {
+            if let Some(block_arc) = fd.bblocks.get_block(i) {
+                self.code_block_starts
+                    .insert(block_arc.read().unwrap().get_start_addr().as_u64());
+            }
+        }
+
         // Pass 1: Discovery (only collect used names silently)
         self.discovery_pass = true;
         let old_emit = std::mem::replace(&mut self.emit, Box::new(NullEmit::new()));
+        // Identity of the discovery pass's primary emitter (NullEmit) —
+        // the pass-1 counterpart of main_emit_id for record_goto_label_
+        // pending's primary-emitter gate.
+        self.discovery_emit_id = (&*self.emit) as *const dyn Emit as *const () as usize;
 
         let graph = if fd.sblocks.get_size() > 0 {
             &fd.sblocks
         } else {
             &fd.bblocks
         };
+
+        // 2a.5 (hoisted, graph half): every block of the function's graph is
+        // a possible goto destination — the block-start whitelist of
+        // emit_goto_statement (GOTO-UNIQSPACE-TARGET-UPSTREAM-0001) — plus
+        // the goto_targets pre-pass scan (CBRANCH/BRANCH in(0) Const/Ram
+        // offsets). Both are static graph reads needed BEFORE the discovery
+        // walk so pass 1's goto decisions match pass 2's (see the 2a.5
+        // hoist note above the NullEmit swap).
+        for i in 0..graph.get_size() {
+            if let Some(block_arc) = graph.get_block(i) {
+                self.code_block_starts
+                    .insert(block_arc.read().unwrap().get_start_addr().as_u64());
+                let block = block_arc.read().unwrap();
+                let ops = block.get_ops();
+                for op_ref in &ops {
+                    let op = op_ref.0.read().unwrap();
+                    if op.opcode == crate::opcodes::OpCode::CPUI_BRANCH
+                        || op.opcode == crate::opcodes::OpCode::CPUI_CBRANCH
+                    {
+                        // First input is the target address
+                        if !op.inrefs.is_empty() {
+                            let target = op.inrefs[0].read().unwrap();
+                            if target.get_space() == crate::space::AddressSpace::Const
+                                || target.get_space() == crate::space::AddressSpace::Ram
+                            {
+                                self.goto_targets.insert(target.get_offset());
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // Collect all switch case body block indices. BlockIf emit checks this
         // to avoid extracting case bodies (which pulls `case` labels out of switch).
@@ -7796,6 +8169,11 @@ impl PrintLanguage for PrintC {
         
         self.emit = old_emit;
         self.discovery_pass = false;
+        // NullEmit dropped — clear its identity so later capture buffers can
+        // never alias the discovery primary-emitter id (defense-in-depth for
+        // record_goto_label_pending's gate; the box was alive the whole pass,
+        // so no allocator reuse could alias it in practice).
+        self.discovery_emit_id = 0;
 
         // Pass 2: Final Emission
         self.seen_return = false;
@@ -7822,6 +8200,13 @@ impl PrintLanguage for PrintC {
         // "once per file"; instead a process-wide AtomicBool guarantees the
         // typedefs are emitted exactly once across the whole decompile run.
         if !TYPEDEFS_EMITTED.swap(true, Ordering::SeqCst) {
+            // Ghidra: printc.cc:2621-2628 PrintC::docAllGlobals — document-
+            // level declarations ride inside beginDocument .. endDocument
+            // .. flush; the beginDocument group gives the pretty printer its
+            // base indent entry so the separating tagLine breaks resolve.
+            // Rugra's typedef preamble is the stand-in for the global
+            // declaration section (see note above).
+            self.emit.begin_document();
             self.emit.tag_line(0);
             self.emit.print("typedef unsigned char byte;");
             self.emit.tag_line(0);
@@ -7836,6 +8221,8 @@ impl PrintLanguage for PrintC {
             self.emit.print("typedef struct { char _anon[256]; } _struct;");
             self.emit.tag_line(0);
             self.emit.print("");
+            self.emit.end_document();
+            self.emit.flush();
         }
 
         // Ghidra: printc.cc:2641-2670 PrintC::docFunction — the oracle emits
@@ -7917,50 +8304,49 @@ impl PrintLanguage for PrintC {
         // declaration type and name come from the Symbol itself.
         self.emit_local_var_decls();
 
-        // 2a.5: Collect goto targets for label emission
-        self.goto_targets.clear();
-        for i in 0..graph.get_size() {
-            if let Some(block_arc) = graph.get_block(i) {
-                let block = block_arc.read().unwrap();
-                let ops = block.get_ops();
-                for op_ref in &ops {
-                    let op = op_ref.0.read().unwrap();
-                    if op.opcode == crate::opcodes::OpCode::CPUI_BRANCH
-                        || op.opcode == crate::opcodes::OpCode::CPUI_CBRANCH
-                    {
-                        // First input is the target address
-                        if !op.inrefs.is_empty() {
-                            let target = op.inrefs[0].read().unwrap();
-                            if target.get_space() == crate::space::AddressSpace::Const
-                                || target.get_space() == crate::space::AddressSpace::Ram
-                            {
-                                self.goto_targets.insert(target.get_offset());
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // 2a.5 (moved before pass 1): the goto ledgers — code_block_starts,
+        // goto_targets, and the clears of printed_labels /
+        // discovery_block_starts / pending_goto_labels — now run BEFORE the
+        // discovery pass so pass 1 pre-seeds pending_goto_labels with the
+        // same goto set pass 2 prints into the main output (see the hoist
+        // comment above the NullEmit swap). pending_goto_labels is NOT
+        // re-cleared here: the pre-seed must survive into pass 2.
+        // pending_goto_labels is also not re-seeded here.
 
         // Ghidra docFunction calls emitBlockGraph exactly once.  The graph
         // owns the list order; structured recursion may consume another entry,
         // so the shared emitted set prevents that entry from being replayed.
         self.emit_block_graph(graph);
 
-        // Ghidra: printc.cc:2662
+        // Ghidra: printc.cc:2662-2665
         //   emit->closeBraceIndent(CLOSE_CURLY, id);
-        // stopIndent + newline at the outer indent + `}`. The trailing
-        // tagLine (printc.cc:2663) is carried by end_function's newline.
+        //   emit->tagLine();
+        //   emit->endFunction(id1);
+        //   emit->flush();
+        // stopIndent + newline at the outer indent + `}`, then the trailing
+        // break (the oracle's source of the final newline), the function
+        // group end (no plain-text bytes), and the queue drain.
         self.emit.close_brace_indent("}");
+        // cc:2663: emit->tagLine();
+        self.emit.tag_line(0);
+        // cc:2664: emit->endFunction(id1);
+        self.emit.end_function();
 
-        // Post-process: eliminate redundant gotos and orphan labels (P3)
-        if let Some(eno) = self.emit.as_any_mut()
+        // Post-process: eliminate redundant gotos and orphan labels (P3).
+        // The pretty printer commits lazily, so drain its queue first
+        // (flush) before the legacy low-level text pass runs.
+        if let Some(epp) = self.emit.as_any_mut()
+            .and_then(|a| a.downcast_mut::<crate::prettyprint::EmitPrettyPrint>())
+        {
+            epp.post_process();
+        } else if let Some(eno) = self.emit.as_any_mut()
             .and_then(|a| a.downcast_mut::<crate::prettyprint::EmitNoMarkup>())
         {
             eno.post_process();
         }
 
-        self.emit.end_function();
+        // cc:2665: emit->flush();
+        self.emit.flush();
     }
 
     // Ghidra: printlanguage.cc:589 PrintLanguage::emitLineComment
@@ -8573,7 +8959,7 @@ impl PrintLanguage for PrintC {
                 self.emit.tag_variable("FUN_unknown", 0);
             }
         }
-        self.emit.open_paren();
+        self.emit.open_paren("(");
         // For CALL arguments (in[1..]), try to resolve the defining expression
         // instead of printing raw register names like "RDI"
         for i in 1..op.num_input() {
@@ -8590,7 +8976,7 @@ impl PrintLanguage for PrintC {
             let arg_text = self.emit_call_arg_text(op, i);
             self.emit.print(&arg_text);
         }
-        self.emit.close_paren();
+        self.emit.close_paren(")", 0);
     }
 
 
@@ -8680,7 +9066,7 @@ impl PrintLanguage for PrintC {
             }
         }
         // printc.cc:554-557 (the legacy path never sets comma_separate).
-        self.emit.open_paren();
+        self.emit.open_paren("(");
         if booleanflip {
             // printc.cc:564-565 boolean_not fallback, explicit-paren form.
             self.emit.print("!(");
@@ -8689,19 +9075,36 @@ impl PrintLanguage for PrintC {
         } else {
             self.emit_cbranch_condition(op);
         }
-        self.emit.close_paren();
+        self.emit.close_paren(")", 0);
 
         if yesif {
             // printc.cc:575-577 + emitGotoStatement fold (printc.cc:2303-2323).
-            self.emit.print(" ");
+            // GOTO-UNIQSPACE/ZERO-TARGET-UPSTREAM-0001 defense: the flat
+            // goto tail prints only for a validated target
+            // (flat_goto_target_valid); otherwise the surrounding
+            // statement's `;` closes the bare `if (cond);` — valid C.
+            let target_valid = self.flat_goto_target_valid(op);
             match op.branch_type {
-                branch_type::BREAK => self.emit.print("break"),
-                branch_type::CONTINUE if self.loop_depth > 0 => self.emit.print("continue"),
-                _ => {
+                branch_type::BREAK => {
+                    self.emit.print(" ");
+                    self.emit.print("break");
+                }
+                branch_type::CONTINUE if self.loop_depth > 0 => {
+                    self.emit.print(" ");
+                    self.emit.print("continue");
+                }
+                _ if let Some(target_addr) = target_valid => {
+                    self.emit.print(" ");
                     self.emit.print("goto ");
                     if let Some(in0) = op.get_in(0) {
                         self.push_goto_target(&in0.read().unwrap());
                     }
+                    // GOTO-LABEL-UNPRINTED-0001 ledger (pending backpatch +
+                    // never-emitted anchor).
+                    self.record_goto_label_pending(target_addr);
+                }
+                _ => {
+                    // Invalid target: no goto text (see above).
                 }
             }
         }
@@ -8710,6 +9113,10 @@ impl PrintLanguage for PrintC {
     // Ghidra: printc.cc:520 PrintC::opBranch
     fn op_branch(&mut self, op: &PcodeOp) {
         use crate::op::branch_type;
+        // GOTO-UNIQSPACE/ZERO-TARGET-UPSTREAM-0001 defense: every goto arm
+        // prints only for a validated target (flat_goto_target_valid);
+        // otherwise the statement's `;` terminates a bare `;` — valid C.
+        let target_valid = self.flat_goto_target_valid(op);
         match op.branch_type {
             branch_type::BREAK => {
                 self.emit.print("break");
@@ -8717,11 +9124,12 @@ impl PrintLanguage for PrintC {
             branch_type::CONTINUE => {
                 if self.loop_depth > 0 {
                     self.emit.print("continue");
-                } else {
+                } else if let Some(target_addr) = target_valid {
                     self.emit.print("goto ");
                     if let Some(in0) = op.get_in(0) {
                         self.push_goto_target(&in0.read().unwrap());
                     }
+                    self.record_goto_label_pending(target_addr);
                 }
             }
             _ => {
@@ -8729,9 +9137,12 @@ impl PrintLanguage for PrintC {
                 // produces `goto ;` — targets come from CFG out-edges.
                 // If in(0) is None (data corruption / spliced op), skip
                 // the goto entirely rather than emit invalid C.
-                if let Some(in0) = op.get_in(0) {
+                if let Some(target_addr) = target_valid {
                     self.emit.print("goto ");
-                    self.push_goto_target(&in0.read().unwrap());
+                    if let Some(in0) = op.get_in(0) {
+                        self.push_goto_target(&in0.read().unwrap());
+                    }
+                    self.record_goto_label_pending(target_addr);
                 }
             }
         }
@@ -9050,6 +9461,9 @@ impl PrintLanguage for PrintC {
         // `uVar_<hex>`/`local_<hex>`/`param_stack_<hex>`/`DAT_<hex>`/
         // `v_<size>_<hex>` are merged into the single oracle form; the
         // param-name and inline-candidacy sub-guards below stay.)
+        let propagated_type = vn.v_type.clone().or_else(|| {
+            _op.and_then(|read_op| vn.get_high_type_read_facing(read_op, 0))
+        });
         let name = match vn.get_space() {
             AddressSpace::Register => {
                 // Priority: parameter name > unnamed location
@@ -9083,7 +9497,7 @@ impl PrintLanguage for PrintC {
                 // - A char-print base type emits a character literal ->
                 //   `'\0'` (cc:1750-1752 pushCharConstant).
                 // - Everything else is the plain integer form.
-                if let Some(ct) = &vn.v_type {
+                if let Some(ct) = &propagated_type {
                     match ct.get_metatype() {
                         crate::type_system::TypeMetatype::Pointer => {
                             if val == 0 {
@@ -9098,13 +9512,31 @@ impl PrintLanguage for PrintC {
                             }
                         }
                         crate::type_system::TypeMetatype::Int
-                        | crate::type_system::TypeMetatype::Uint
-                            if ct.get_name() == "char" =>
+                        | crate::type_system::TypeMetatype::Uint =>
                         {
-                            if !self.discovery_pass {
-                                self.emit.print(&format!("'{}'", escape_char_body(val & 0xff)));
+                            // PrintLanguage::pushVnExplicit (printlanguage.cc:225-227)
+                            // supplies the propagated read-facing datatype to
+                            // PrintC::pushConstant.  Do not reclassify every
+                            // printable ASCII integer as a character: when the
+                            // propagated type is not char-print, pushConstant
+                            // dispatches to push_integer (printc.cc:1750-1764).
+                            let signed = ct.get_metatype()
+                                == crate::type_system::TypeMetatype::Int;
+                            if !ct.is_char_print() {
+                                if !self.discovery_pass {
+                                    self.emit.print(&self.integer_text(
+                                        val, ct.get_size(), signed,
+                                        display_format::DEFAULT));
+                                }
+                                return;
                             }
-                            return;
+                            if ct.get_name() == "char" {
+                                if !self.discovery_pass {
+                                    self.emit.print(&format!(
+                                        "'{}'", escape_char_body(val & 0xff)));
+                                }
+                                return;
+                            }
                         }
                         _ => {}
                     }
@@ -9117,8 +9549,8 @@ impl PrintLanguage for PrintC {
                     format!("{}", val as i64)
                 } else if val == 0xffffffff {
                     "-1".to_string() // (uint32_t)-1
-                } else if val >= 0x20 && val <= 0x7e {
-                    // Printable ASCII — show as char literal only for clearly char-like values
+                } else if vn.get_size() == 1 && val >= 0x20 && val <= 0x7e {
+                    // Printable ASCII — show as char literal only for byte-sized values
                     // that are NEVER used as sizes/counts/flags (letters, some punctuation)
                     let ch = val as u8 as char;
                     // Brace/paren/bracket chars in single quotes ('}', '{', ')') confuse
@@ -9283,7 +9715,7 @@ impl PrintC {
         }
         // printc.cc:553-557: openParen(OPEN_PAREN) vs openGroup().
         let id = if yesparen {
-            self.emit.open_paren();
+            self.emit.open_paren("(");
             0
         } else {
             self.emit.open_group()
@@ -9330,25 +9762,54 @@ impl PrintC {
         self.rpn_recurse();
         // printc.cc:569-572
         if yesparen {
-            self.emit.close_paren();
+            self.emit.close_paren(")", 0);
         } else {
             self.emit.close_group(id);
         }
 
         if yesif {
             // printc.cc:575-577: spaces(1); print(KEYWORD_GOTO); spaces(1).
-            self.emit.print(" ");
+            // GOTO-UNIQSPACE-TARGET-UPSTREAM-0001 defense: the oracle's
+            // in(0) is a live code address (emitLabel renders it,
+            // printc.cc:2315-2318); Rugra's structurer can rewrite a
+            // CBRANCH in(0) to a Const-space constant carrying a
+            // unique-space offset (observed: 0x1000011F / 0x100000D8 /
+            // 0x10000000). The flat tail prints only when the target is a
+            // Const/Ram varnode whose offset is the start of a real block
+            // of this function (code_block_starts, doc_function 2a.5);
+            // otherwise the goto text is dropped and emit_statement_rpn's
+            // trailing `;` terminates the bare `if (cond);` — valid C.
+            let target_valid = self.flat_goto_target_valid(op);
             match op.branch_type {
                 // emitGotoStatement fold (printc.cc:2309-2314).
-                branch_type::BREAK => self.emit.print("break"),
-                branch_type::CONTINUE if self.loop_depth > 0 => self.emit.print("continue"),
-                _ => {
-                    // printc.cc:2315-2318 f_goto_goto / printc.cc:576-578.
+                branch_type::BREAK => {
+                    // printc.cc:575: spaces(1) before the keyword.
+                    self.emit.print(" ");
+                    self.emit.print("break");
+                }
+                branch_type::CONTINUE if self.loop_depth > 0 => {
+                    // printc.cc:575: spaces(1) before the keyword.
+                    self.emit.print(" ");
+                    self.emit.print("continue");
+                }
+                _ if let Some(target_addr) = target_valid => {
+                    // printc.cc:575-578: spaces(1); KEYWORD_GOTO; spaces(1);
+                    // pushVn(op->getIn(0)) — cc:2315-2318 f_goto_goto.
+                    self.emit.print(" ");
                     self.emit.print("goto");
                     self.emit.print(" ");
                     if let Some(in0) = op.get_in(0) {
                         self.push_goto_target(&in0.read().unwrap());
                     }
+                    // GOTO-LABEL-UNPRINTED-0001 ledger (pending backpatch +
+                    // never-emitted anchor).
+                    self.record_goto_label_pending(target_addr);
+                }
+                _ => {
+                    // Invalid target (GOTO-UNIQSPACE/ZERO-TARGET-UPSTREAM-
+                    // 0001): no goto text. The statement-level `;`
+                    // (emit_statement_rpn, printc.cc:2291-2292) closes the
+                    // if — `if (cond);` is valid C.
                 }
             }
         }
@@ -9508,9 +9969,17 @@ impl PrintC {
         let mut count = n_inputs.saturating_sub(1);
         if skip >= 0 { count = count.saturating_sub(1); }
         // printc.cc:649-670: three-way dispatch on count.
-        self.emit.print("(*");
+        self.emit.print("(*(code *)");
         if let Some(in0) = op.get_in(0) {
-            self.push_varnode(&in0.read().unwrap(), Some(op));
+            let target = in0.read().unwrap();
+            // A resolved GOT-slot symbol is already the oracle's printable
+            // target atom (`PTR_<name>_<addr>`). Emit it directly so an outer
+            // CALLIND assignment cannot leak its `=` into the target expr.
+            if let Some(name) = self.symbol_table.get(&target.get_offset()).cloned() {
+                self.emit.print(&name);
+            } else {
+                self.push_varnode(&target, Some(op));
+            }
         }
         self.emit.print(")(");
         if count > 1 {
@@ -10350,8 +10819,26 @@ impl PrintC {
         }
     }
 
-    // Ghidra: printc.cc:780 PrintC::pushConstant
-    pub fn push_constant(&mut self, val: u64, sz: usize, _vn: &Varnode) {
+    // Ghidra: printc.cc:1744 PrintC::pushConstant
+    pub fn push_constant(&mut self, val: u64, sz: usize, vn: &Varnode) {
+        // pushVnExplicit supplies the propagated read-facing type before
+        // PrintC::pushConstant dispatches (printlanguage.cc:225-227).  The
+        // old size-only ASCII heuristic made a non-char 4-byte integer 0x4f
+        // print as 'O'; mirror the TYPE_INT/TYPE_UINT charPrint gate from
+        // printc.cc:1749-1764 instead.
+        if let Some(ref ct) = vn.v_type {
+            match ct.get_metatype() {
+                crate::type_system::TypeMetatype::Int
+                | crate::type_system::TypeMetatype::Uint if !ct.is_char_print() => {
+                    self.emit.print(&self.integer_text(
+                        val, ct.get_size(),
+                        ct.get_metatype() == crate::type_system::TypeMetatype::Int,
+                        display_format::DEFAULT));
+                    return;
+                }
+                _ => {}
+            }
+        }
         if sz == 1 && (0x20..=0x7e).contains(&val) { self.emit.print(&format!("'{}'", val as u8 as char)); }
         else if val > 0x1000 { self.emit.print(&format!("0x{:x}", val)); }
         else { self.emit.print(&format!("{}", val)); }
@@ -10716,6 +11203,28 @@ impl PrintC {
     /// FlowBlock::isJumpTarget). `only_branch` contexts (loop-condition
     /// bodies) never call here.
     pub fn emit_label_statement(&mut self, addr: u64) {
+        // Same discarded-buffer gates as emit_any_label_statement: labels
+        // emitted into a capture buffer (condition capture, CaseDetectEmit
+        // dry-run) or the discovery NullEmit vanish, but would still commit
+        // the address into printed_labels and suppress the real print.
+        if self.discovery_pass {
+            return;
+        }
+        if (&*self.emit) as *const dyn Emit as *const () as usize != self.main_emit_id {
+            return;
+        }
+        // Shared once-per-address guard across BOTH label mechanisms (the
+        // flat-tail path here and emit_any_label_statement's structured
+        // front-leaf path). Rugra's structured tree shares Basic leaves and
+        // its flattened slices re-print blocks, so without the guard the two
+        // mechanisms double-print the same address (`重复的标号' — duplicate
+        // label — gcc errors, GOTO-LABEL-UNPRINTED-0001). This is the
+        // address-keyed transport of Ghidra's structural guarantee that a
+        // marked t_copy leaf prints exactly once (f_label_bumpup walk,
+        // block.cc:3317-3325/3426-3433/3454-3461).
+        if !self.printed_labels.insert(addr) {
+            return;
+        }
         // printc.cc:3211-3213: tagLine(0); emitLabel(bl); print(COLON).
         self.emit.tag_line(0);
         self.emit.print(&format!("{}:", self.code_label(addr)));
@@ -10723,11 +11232,90 @@ impl PrintC {
 
     // Ghidra: printc.cc:3218 PrintC::emitAnyLabelStatement
     pub fn emit_any_label_statement(&mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>) {
-        let addr = {
-            let b = block_arc.read().unwrap();
-            b.get_ops().first().map(|o| o.0.read().unwrap().start.addr.as_u64()).unwrap_or(0)
-        };
-        self.emit_label_statement(addr);
+        // printc.cc:3219-3226 emitAnyLabelStatement:
+        //   if (bl->isLabelBumpUp()) return;   — Rugra transport:
+        //   printed_labels (address-keyed) suppresses re-prints of a shared
+        //   leaf (Rugra duplicates Basics, not BlockCopies).
+        //   bl = bl->getFrontLeaf(); if (bl == 0) return;
+        //   emitLabelStatement(bl);
+        // printc.cc:3198-3214 emitLabelStatement (structured arm):
+        //   if (isSet(only_branch)) return;
+        //   if (!bl->isUnstructuredTarget()) return;
+        //   if (bl->getType() != t_copy) return;   — Rugra leaves: Basic|Copy
+        //   tagLine + emitLabel + COLON
+        if self.is_set(print_mods::ONLY_BRANCH) {
+            return;
+        }
+        // Pass-1 discovery runs the full emission into a NullEmit; labels
+        // are pure text (no discovered symbols) and must neither print nor
+        // commit to printed_labels — otherwise the real pass treats every
+        // label as already printed and goto targets lose their labels
+        // (GOTO-LABEL-UNPRINTED-0001). The main-emitter identity gate below
+        // also excludes discovery and every capture buffer mechanically.
+        if self.discovery_pass {
+            return;
+        }
+        if (&*self.emit) as *const dyn Emit as *const () as usize != self.main_emit_id {
+            return;
+        }
+        let leaf = crate::block::front_leaf(block_arc);
+        if let Some(leaf_arc) = leaf {
+            let (is_target, bt) = {
+                let l = leaf_arc.read().unwrap();
+                let is_t = (l.get_flags()
+                    & crate::block::block_flags::UNSTRUCTURED_TARG) != 0;
+                (is_t, l.get_type())
+            };
+            if is_target && matches!(bt, crate::block::BlockType::Basic
+                | crate::block::BlockType::Copy) {
+                let addr = {
+                    let l = leaf_arc.read().unwrap();
+                    l.get_start_addr().as_u64()
+                };
+                // GOTO-ZERO-TARGET-UPSTREAM-0001: a degenerate chain can
+                // mark a leaf whose start resolves to 0 (observed: a
+                // BlockIf goto_target of type BlockGoto with start 0x0).
+                // `code_r0x00000000:` is never valid C; skip (upstream
+                // goto_target resolution is registered for the structurer).
+                if addr == 0 {
+                    return;
+                }
+                if self.printed_labels.insert(addr) {
+                    self.emit.tag_line(0);
+                    self.emit.print(&format!("{}:", self.code_label(addr)));
+                }
+            } else if matches!(bt, crate::block::BlockType::Basic
+                | crate::block::BlockType::Copy) {
+                // GOTO-LABEL-UNPRINTED-0001 order-independent pending arm:
+                // the leaf is NOT f_unstructured_targ-marked (Rugra's
+                // structurer left this goto edge unwrapped at the BlockIf/
+                // BlockGoto level — no markCopyBlock ever ran on it), but a
+                // `goto <label>` referencing this address HAS printed (or,
+                // pre-seeded from the discovery pass, WILL print later in
+                // this same walk — the two passes run the identical emission
+                // decisions). Ghidra never has this shape: every
+                // unstructured edge is wrapped by ruleBlockGoto
+                // (blockaction.cc:1450) and markUnstructured marks the copy
+                // leaf, so emitAnyLabelStatement at the construct entry
+                // (printc.cc:2762/2965/3014/3076/3104) prints the label
+                // there regardless of goto/target print order. The pending
+                // membership test is the address-keyed transport of that
+                // order-independence: the label prints at THIS block's
+                // emission point (the oracle's own placement) whether the
+                // goto text comes before or after it in the output.
+                let addr = {
+                    let l = leaf_arc.read().unwrap();
+                    l.get_start_addr().as_u64()
+                };
+                if addr != 0
+                    && self.pending_goto_labels.contains(&addr)
+                    && self.printed_labels.insert(addr)
+                {
+                    self.emit.tag_line(0);
+                    self.emit.print(&format!("{}:", self.code_label(addr)));
+                }
+            }
+        }
     }
 
     // Ghidra: printc.cc:2957 PrintC::emitForLoop
@@ -10813,7 +11401,7 @@ impl PrintC {
         self.emit.tag_op("for");
         self.emit.print(" ");
         // cc:2972: openParen(OPEN_PAREN)
-        self.emit.open_paren();
+        self.emit.open_paren("(");
         // cc:2973-2974: pushMod(); setMod(comma_separate);
         self.push_mod();
         self.set_mod(print_mods::COMMA_SEPARATE);
@@ -10838,7 +11426,7 @@ impl PrintC {
         // cc:2990: popMod();
         self.pop_mod();
         // cc:2991: closeParen(CLOSE_PAREN, id1)
-        self.emit.close_paren();
+        self.emit.close_paren(")", 0);
         // cc:2992: indent = openBraceIndent(OPEN_CURLY, option_brace_loop);
         // cc:2993: setMod(no_branch);
         self.set_mod(print_mods::NO_BRANCH);
@@ -10975,6 +11563,61 @@ impl PrintC {
         self.emit_comment_group(None);
     }
 
+    // RUGRA-GLUE: flat_goto_target_valid + record_goto_label_pending (the
+    // oracle has one emitter — emitGotoStatement always receives a live
+    // FlowBlock — so it needs neither the validation nor the ledger).
+    /// Validate a statement-level goto target (CBRANCH/BRANCH in(0)) for the
+    /// flat tails: nonzero and the start of a real block of this function
+    /// (GOTO-UNIQSPACE-TARGET-UPSTREAM-0001 / GOTO-ZERO-TARGET-UPSTREAM-0001
+    /// defenses — 0x0 degenerate chains and unique-space rewrites such as
+    /// 0x1000011F/0x100000D8/0x10000000 are never block starts). The
+    /// varnode's SPACE is deliberately not consulted: the structurer can
+    /// rewrite in(0) into unique space while preserving the real code
+    /// offset (observed: httpd ap_fini_vhost_config carries 0x2D53A in a
+    /// unique-space in(0)), and the offset-vs-block-start test is the
+    /// precise oracle-side criterion (emitGotoStatement always receives a
+    /// live FlowBlock, printc.cc:2307-2322). Returns the offset when the
+    /// `goto <label>` text may print.
+    fn flat_goto_target_valid(&self, op: &PcodeOp) -> Option<u64> {
+        let in0 = op.get_in(0)?;
+        let off = in0.read().unwrap().get_offset();
+        if off != 0 && self.code_block_starts.contains(&off) {
+            Some(off)
+        } else {
+            None
+        }
+    }
+
+    // RUGRA-GLUE: goto-label pending ledger — the oracle has a single emitter
+    // whose goto targets are always live structured-tree FlowBlocks labeled
+    // via markCopyBlock/emitAnyLabelStatement; Rugra's shared-leaf tree needs
+    // this address-keyed ledger to place the same label exactly once.
+    /// GOTO-LABEL-UNPRINTED-0001 ledger step for goto STATEMENT FRAGMENTS
+    /// (legacy op_cbranch/op_branch tails, op_cbranch_rpn's flat tail):
+    /// record the address in pending_goto_labels only. These tails print
+    /// mid-statement — the terminating `;` lands after the op returns — so
+    /// an inline label anchor here would splice `label:` between the goto
+    /// and its semicolon (a syntax error). The label resolves via the
+    /// emit_block_ops backpatch (target block emitted) or the containing
+    /// block's flat-tail label scan; emit_goto_statement (a complete
+    /// statement) carries the never-emitted anchor.
+    fn record_goto_label_pending(&mut self, target_addr: u64) {
+        // Primary-emitter gate (GOTO-LABEL-UNPRINTED-0001): record only when
+        // printing into the pass's PRIMARY emitter — main_emit_id for the
+        // real pass, discovery_emit_id for the NullEmit discovery pass (the
+        // pre-seed). Discarded contexts (CaseDetectEmit dry-runs at
+        // emit_structured_if, capture_block_condition buffers) record
+        // nothing: their goto text vanishes, so a label for it would dangle
+        // unreferenced. The gate runs identically in both passes, so the
+        // discovery-seeded pending set equals the real pass's main-output
+        // goto target set.
+        let emit_id = (&*self.emit) as *const dyn Emit as *const () as usize;
+        if emit_id != self.main_emit_id && emit_id != self.discovery_emit_id {
+            return;
+        }
+        self.pending_goto_labels.insert(target_addr);
+    }
+
     // Ghidra: printc.cc:2303 PrintC::emitGotoStatement
     pub fn emit_goto_statement(&mut self, target_addr: u64, goto_type: u8) {
         use crate::op::branch_type;
@@ -10985,13 +11628,73 @@ impl PrintC {
         // after `if (cond) `). emit_block_goto already emits its own
         // tag_line(0) before calling this; keeping this function
         // tagLine-free keeps both call sites faithful.
+        // GOTO-ZERO-TARGET-UPSTREAM-0001: observed targets of 0 arise when
+        // an if-goto cascade's target chain resolves to a degenerate block
+        // (BlockIf goto_target -> BlockGoto with start 0x0, or a CBRANCH
+        // whose in(0) lost its address). Ghidra never prints `goto` with a
+        // null target because emitGotoStatement always receives a live
+        // FlowBlock (printc.cc:2307-2322); the upstream resolution gap is
+        // registered for the structurer domain. Printc-side defense: skip
+        // the statement rather than emit invalid `goto code_r0x00000000;`.
+        if target_addr == 0 && goto_type != branch_type::BREAK {
+            return;
+        }
+        // GOTO-UNIQSPACE-TARGET-UPSTREAM-0001 defense: the oracle's goto
+        // target is always a live FlowBlock of the structured tree
+        // (emitGotoStatement, printc.cc:2307-2322, receives bl directly).
+        // Rugra's structurer can wire a degenerate target — a BlockIf
+        // goto_target or a rewritten CBRANCH in(0) carrying a unique-space
+        // offset (observed: goto code_r0x1000011F / 0x100000D8 /
+        // 0x10000000) — a label no block can ever define. The
+        // code_block_starts whitelist (doc_function 2a.5) is the set of
+        // addresses a block of this function actually starts at, the
+        // printer-side equivalent of "target is a FlowBlock"; a GOTO-type
+        // target outside it is corrupted wiring and the statement is
+        // skipped (the surrounding `if (cond)` absorbs the next statement
+        // as its body, valid C — the same shape as the zero-addr defense).
+        // BREAK, and a true `continue;`, never carry labels and stay
+        // exempt.
+        if goto_type != branch_type::BREAK
+            && !self.code_block_starts.contains(&target_addr)
+            && !(goto_type == branch_type::CONTINUE && self.loop_depth > 0)
+        {
+            return;
+        }
+        // A `goto <label>;` statement (the GOTO arm, or a CONTINUE rewritten
+        // to a goto at loop_depth 0) needs its label defined somewhere; BREAK
+        // and a true `continue;` never carry one.
+        let prints_labelled_goto = goto_type != branch_type::BREAK
+            && !(goto_type == branch_type::CONTINUE && self.loop_depth > 0);
+
         match goto_type {
             branch_type::BREAK => self.emit.print("break;"),
             branch_type::CONTINUE => {
                 if self.loop_depth > 0 { self.emit.print("continue;"); }
                 else { self.emit.print(&format!("goto {};", self.code_label(target_addr))); }
             }
-            _ => self.emit.print(&format!("goto {};", self.code_label(target_addr))),
+            _ => {
+                self.emit.print(&format!("goto {};", self.code_label(target_addr)));
+            }
+        }
+        if prints_labelled_goto {
+            // GOTO-NEVEREMITTED-TARGET-UPSTREAM-0001 defense: the
+            // discovery pass (doc_function pass 1) emitted every block
+            // this printer will ever emit, into discovery_block_starts.
+            // A target absent from that set has no block to carry its
+            // label — the upstream structurer dropped the target block
+            // from the tree (observed: code_r0x0002D53A in httpd
+            // ap_fini_vhost_config). Ghidra cannot hit this: every
+            // goto target is a block of the structured tree and is
+            // emitted (ruleBlockGoto wrapping + BlockGraph::emit
+            // totality). The anchor resolves the jump to the
+            // fall-through statement — valid C, and if the real pass
+            // later emits a block here anyway the once-per-address
+            // guard keeps the single print. The upstream registration
+            // lives in docs/TODO_BOARD.md (GOTO-LABEL-UNPRINTED-0001).
+            self.record_goto_label_pending(target_addr);
+            if !self.discovery_block_starts.contains(&target_addr) {
+                self.emit_label_statement(target_addr);
+            }
         }
     }
 
@@ -11056,8 +11759,11 @@ impl PrintC {
     /// `get_ops()`). We therefore emit the wrapped block's ops with
     /// `no_branch` active (matching Ghidra's `setMod(no_branch)` before
     /// emitting the body). The `gotoPrints()` adjacency check lives on
-    /// `BlockGoto::goto_prints` (block.rs); Rugra conservatively returns true
-    /// (no `nextFlowAfter` path), so the goto is always emitted when present.
+    /// `BlockGoto::goto_prints` (block.rs): the parent-present arm compares
+    /// the target's front leaf against the parent's `nextFlowAfter`
+    /// (goto_prints_in + BlockGraph::next_flow_after); the null-parent arm
+    /// returns false (block.cc:2889). Rugra's structurer never wires
+    /// BlockGoto::parent, so the null arm carries today.
     pub fn emit_block_goto(&mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>) {
         // cc:2769-2770: pushMod(); setMod(no_branch);
         self.push_mod();
@@ -11071,7 +11777,13 @@ impl PrintC {
             let bl = block_arc.read().unwrap();
             if let Some(g) = bl.as_any().downcast_ref::<crate::block::BlockGoto>() {
                 let addr = g.goto_target.as_ref().map(|t| t.read().unwrap().start_addr.as_u64()).unwrap_or(0);
-                (g.goto_prints(), addr, g.get_goto_type())
+                // block.cc:2884-2888 parent-present comparison vs the
+                // cc:2889 null-parent false.
+                let prints = match crate::block::FlowBlock::get_parent(g) {
+                    Some(p) => g.goto_prints_in(block_arc, &p),
+                    None => g.goto_prints(),
+                };
+                (prints, addr, g.get_goto_type())
             } else {
                 (false, 0, 0)
             }
@@ -11609,13 +12321,13 @@ impl PrintC {
         // emit->spaces(function_call.spacing, function_call.bump);
         // function_call.spacing==0, so no spaces between name and '('.
         // int4 id2 = emit->openParen(OPEN_PAREN);
-        self.emit.open_paren();
+        self.emit.open_paren("(");
         // emit->spaces(0, function_call.bump);
         // pushScope(fd->getScopeLocal());   // enter function's scope
         // emitPrototypeInputs(proto);
         self.emit_prototype_inputs(proto);
         // emit->closeParen(CLOSE_PAREN,id2);
-        self.emit.close_paren();
+        self.emit.close_paren(")", 0);
         // emit->closeGroup(id1);
         // emit->endFuncProto(id);
         self.emit.end_func_proto();

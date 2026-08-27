@@ -85,6 +85,93 @@ pub fn type_to_name(bt: BlockType) -> &'static str {
     }
 }
 
+// Ghidra: block.cc:340 FlowBlock::getFrontLeaf
+/// Descend the first-component chain until reaching a leaf block. Ghidra
+/// walks `subBlock(0)` while `getType() != t_copy` — in the final structured
+/// graph every emitted path bottoms out at a BlockCopy. Rugra's structurer
+/// copies blocks as BlockBasic (build_copy), so Rugra's leaf stand-ins are
+/// Basic | Copy; the descent stops there. Returns the entering arc when it
+/// is already a leaf; when a non-leaf has no first component (empty List),
+/// returns the deepest reachable node (Ghidra returns null there — callers
+/// treat None as "no label", Rugra callers do the same via flag checks).
+pub fn front_leaf(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+    let mut cur = bl.clone();
+    loop {
+        let next = {
+            let b = cur.read().unwrap();
+            match b.get_type() {
+                BlockType::Basic | BlockType::Copy => return Some(cur.clone()),
+                BlockType::List => b.as_any()
+                    .downcast_ref::<BlockList>()
+                    .and_then(|l| l.children.first().cloned()),
+                BlockType::If => b.as_any()
+                    .downcast_ref::<BlockIf>()
+                    .map(|i| i.condition.clone()),
+                BlockType::WhileDo => b.as_any()
+                    .downcast_ref::<BlockWhileDo>()
+                    .map(|w| w.condition.clone()),
+                BlockType::DoWhile => b.as_any()
+                    .downcast_ref::<BlockDoWhile>()
+                    .map(|d| d.condition.clone()),
+                BlockType::InfLoop => b.as_any()
+                    .downcast_ref::<BlockInfLoop>()
+                    .map(|l| l.body.clone()),
+                BlockType::Condition => b.as_any()
+                    .downcast_ref::<BlockCondition>()
+                    .map(|c| c.first.clone()),
+                BlockType::Switch => b.as_any()
+                    .downcast_ref::<BlockSwitch>()
+                    .map(|sw| sw.control.clone()),
+                // BlockGoto wraps a BlockBasic body; Graph/Plain/MultiGoto are
+                // not structured-tree nodes (no subBlock(0) chain exists).
+                _ => return Some(cur.clone()),
+            }
+        };
+        match next {
+            Some(n) => cur = n,
+            None => return None,
+        }
+    }
+}
+
+// Ghidra: block.cc:1233 BlockGraph::markCopyBlock
+/// `bl->getFrontLeaf()->flags |= fl` — set a property on the given block's
+/// front leaf, never on the wrapper (block.cc:1233-1237). Dyn-FlowBlock
+/// entry used by markUnstructured ports (BlockGoto holds a typed
+/// BlockBasic arc; BlockIf holds a dyn arc — both route here).
+pub fn mark_front_leaf(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    fl: u32,
+) {
+    if let Some(leaf) = front_leaf(bl) {
+        leaf.write().unwrap().set_flags(fl);
+    }
+}
+
+// Ghidra: block.cc:1233 BlockGraph::markCopyBlock
+/// markCopyBlock for an already-typed `Arc<RwLock<BlockBasic>>` leaf.
+pub fn mark_front_leaf_dyn(
+    bl: &Arc<RwLock<BlockBasic>>,
+    fl: u32,
+) {
+    bl.write().unwrap().flags |= fl;
+}
+
+// Ghidra: block.cc:340 FlowBlock::getFrontLeaf
+/// `getFrontLeaf` for an already-typed `Arc<RwLock<BlockBasic>>` — the
+/// `getGotoTarget()->getFrontLeaf()` composition of
+/// `BlockGoto::gotoPrints` (block.cc:2885). A BlockBasic is already a leaf
+/// (Basic is one of Rugra's t_copy stand-ins), so the descent is a no-op
+/// coercion; kept as a named helper so the call site reads as the oracle.
+pub fn front_leaf_basic(
+    bl: &Arc<RwLock<BlockBasic>>,
+) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+    let coerced: Arc<RwLock<dyn FlowBlock + Send + Sync>> = bl.clone();
+    front_leaf(&coerced)
+}
+
 /// Type of flow block (corresponds to Ghidra's BlockType)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockType {
@@ -160,42 +247,30 @@ pub mod goto_type {
 /// to indicate whether the edge represents a `break`, `continue`,
 /// or plain `goto` in the final C output.
 pub mod edge_flags {
-    /// Edge represents a `break` out of the enclosing loop
-    pub const F_BREAK_EDGE: u32 = 1 << 0;
-    /// Edge represents a `continue` to the loop header
-    pub const F_CONTINUE_EDGE: u32 = 1 << 1;
-    /// Edge represents an unstructured `goto`
-    pub const F_GOTO_EDGE: u32 = 1 << 2;
-    /// Edge is a switch dispatch (from switch control block to a case body).
-    /// Blocks reached via this edge must not be structurally extracted by
-    /// interleaved rules, or their `case` label ends up outside the switch.
-    pub const F_SWITCH_DISPATCH: u32 = 1 << 3;
-    /// Edge exits the body of a loop (Ghidra `f_loop_exit_edge`). Set by
-    /// LoopBody::setExitMarks so TraceDAG knows where the loop ends.
-    pub const F_LOOP_EXIT_EDGE: u32 = 1 << 4;
-    /// Within a (reducible) graph, a back edge defining a loop (Ghidra
-    /// `f_back_edge`). Set by findSpanningTree DFS (block.cc:1101):
-    /// an edge to a node still on the DFS stack.
-    pub const F_BACK_EDGE: u32 = 1 << 5;
-    /// Irreducible edge introduced by the structurer (Ghidra `f_irreducible`).
-    /// Treated as a goto by LoopBody's isGotoIn/isGotoOut.
-    pub const F_IRREDUCIBLE_EDGE: u32 = 1 << 6;
-    /// Default edge from switch block (Ghidra `f_defaultswitch_edge` = 4).
-    /// Rugra uses bit 7 (Ghidra's bit 2 is F_GOTO_EDGE in Rugra).
-    pub const F_DEFAULTSWITCH_EDGE: u32 = 1 << 7;
-    // ---- Spanning-tree edge classification (Ghidra block.hh:108-118) ----
-    // Set by findSpanningTree (block.cc:1041-1108). These mirror Ghidra's
-    // f_tree_edge / f_forward_edge / f_cross_edge / f_loop_edge.
-    /// Edge in the DFS spanning tree (Ghidra `f_tree_edge` = 0x10).
-    pub const F_TREE_EDGE: u32 = 1 << 7;
-    /// Edge jumping forward in the spanning tree (Ghidra `f_forward_edge` = 0x20).
-    pub const F_FORWARD_EDGE: u32 = 1 << 8;
-    /// Edge crossing subtrees in the spanning tree (Ghidra `f_cross_edge` = 0x40).
-    pub const F_CROSS_EDGE: u32 = 1 << 9;
-    /// Edge that completes a loop; removing these yields a DAG (Ghidra
-    /// `f_loop_edge` = 2). A back edge is always also a loop edge, but a
-    /// loop edge may be set independently by calcLoop for irreducible cases.
-    pub const F_LOOP_EDGE: u32 = 1 << 10;
+    /// Ghidra `f_goto_edge` (block.hh:109).
+    pub const F_GOTO_EDGE: u32 = 0x01;
+    /// Ghidra `f_loop_edge` (block.hh:110).
+    pub const F_LOOP_EDGE: u32 = 0x02;
+    /// Ghidra `f_defaultswitch_edge` (block.hh:111).
+    pub const F_DEFAULTSWITCH_EDGE: u32 = 0x04;
+    /// Ghidra `f_irreducible` (block.hh:112).
+    pub const F_IRREDUCIBLE_EDGE: u32 = 0x08;
+    /// Ghidra `f_tree_edge` (block.hh:113).
+    pub const F_TREE_EDGE: u32 = 0x10;
+    /// Ghidra `f_forward_edge` (block.hh:114).
+    pub const F_FORWARD_EDGE: u32 = 0x20;
+    /// Ghidra `f_cross_edge` (block.hh:115).
+    pub const F_CROSS_EDGE: u32 = 0x40;
+    /// Ghidra `f_back_edge` (block.hh:116).
+    pub const F_BACK_EDGE: u32 = 0x80;
+    /// Ghidra `f_loop_exit_edge` (block.hh:117).
+    pub const F_LOOP_EXIT_EDGE: u32 = 0x100;
+    /// Rugra-only structured break annotation; kept outside oracle bits.
+    pub const F_BREAK_EDGE: u32 = 0x200;
+    /// Rugra-only structured continue annotation; kept outside oracle bits.
+    pub const F_CONTINUE_EDGE: u32 = 0x400;
+    /// Rugra-only switch dispatch annotation; kept outside oracle bits.
+    pub const F_SWITCH_DISPATCH: u32 = 0x800;
 
     /// All spanning-tree edge flags, for clearing (Ghidra clears these
     /// together in structureLoops, block.cc:2206).
@@ -1427,6 +1502,10 @@ pub struct BlockBasic {
     /// (block.cc:1027/1122) and repurposed as the FIND function by
     /// findIrreducible (block.cc:1161/1194).
     pub copy_map: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>,
+     /// Live op-list mirror link preserving BlockCopy delegation.
+     pub live_ops_source: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+     /// Source basic block alias for structure-graph copies.
+     pub source_basic: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
     /// Number of descendants of this block in the spanning tree (+1) (Ghidra
     /// `numdesc`, block.hh:126). -1 marks unset (Ghidra leaves the field
     /// uninitialized until findSpanningTree discovers the block).
@@ -1451,6 +1530,8 @@ impl BlockBasic {
             dom_frontier: std::collections::HashSet::new(),
             visit_count: 0,
             copy_map: None,
+             live_ops_source: None,
+             source_basic: None,
             num_desc: -1,
         }
     }
@@ -1664,8 +1745,16 @@ impl FlowBlock for BlockBasic {
         self.outgoing.push(edge);
     }
 
-    // RUGRA-GLUE: Rust helper (Ghidra BlockBasic exposes op list via begin/end iterators)
+    // RUGRA-GLUE: Rust helper (Ghidra BlockBasic exposes op list via begin/end
+    // iterators; structure-graph mirrors additionally delegate through
+    // BlockCopy::copy, block.hh:520-535 — see `live_ops_source`)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
+        if let Some(source) = &self.live_ops_source {
+            return source.read().unwrap().get_ops();
+        }
+        if let Some(source) = &self.source_basic {
+            return source.read().unwrap().get_ops();
+        }
         self.ops.clone()
     }
 
@@ -2204,6 +2293,17 @@ pub struct BlockGraph {
     /// Number of descendants in the spanning tree (+1) (Ghidra `numdesc`,
     /// block.hh:126); -1 marks unset.
     pub num_desc: i32,
+    /// Absorption map: absorbed (DEAD) block index -> index of the composite
+    /// that consumed it (the composite's install slot). This is the Rust
+    /// equivalent of Ghidra's FlowBlock `parent` chain (block.hh:78): in the
+    /// oracle every absorbed component keeps `parent` pointing at its
+    /// containing composite, and algorithms like LoopBody::update
+    /// (blockaction.cc:95-102) walk `getParent()` up to the graph level.
+    /// Rugra composites hold Arc references to their components instead of a
+    /// per-block parent pointer, so the containment relation is recorded here
+    /// at identifyInternal time and resolved transitively by
+    /// `resolve_to_graph_level`.
+    pub absorbed_into: std::collections::HashMap<i32, i32>,
 }
 
 impl BlockGraph {
@@ -2218,6 +2318,7 @@ impl BlockGraph {
             flags: 0,
             copy_map: None,
             num_desc: -1,
+            absorbed_into: std::collections::HashMap::new(),
         }
     }
 
@@ -2234,6 +2335,31 @@ impl BlockGraph {
     // RUGRA-GLUE: Rust accessor (Ghidra uses list[i] inline)
     pub fn get_block(&self, i: usize) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         self.blocks.get(i).cloned()
+    }
+
+    /// Resolve a block index to its current top-level (graph-level) form by
+    /// following the absorption chain, mirroring Ghidra's
+    /// `while (bl->getParent() != graph) bl = bl->getParent();` parent walks
+    /// (e.g. LoopBody::update blockaction.cc:95-102, FloatingEdge::
+    /// getCurrentEdge blockaction.cc:28-33, LoopBody::emitLikelyEdges
+    /// blockaction.cc:367-379). A live block resolves to itself; a block
+    /// absorbed by composite C installed at slot k resolves to k (and
+    /// transitively further if C was itself absorbed later). The chain always
+    /// terminates at a live top-level block because only live blocks can be
+    /// re-absorbed.
+    // RUGRA-GLUE: parent-chain walk over the absorbed_into map (Ghidra: block.hh:78 FlowBlock::parent)
+    pub fn resolve_to_graph_level(&self, idx: i32) -> i32 {
+        let mut cur = idx;
+        // Bound the walk by the map size: each step must make progress, and
+        // the absorption relation is acyclic (a composite is installed after
+        // its components exist), so any chain is shorter than the map.
+        for _ in 0..=self.absorbed_into.len() {
+            match self.absorbed_into.get(&cur) {
+                Some(&next) if next != cur => cur = next,
+                _ => return cur,
+            }
+        }
+        cur
     }
 
     /// Clear EVERY in-edge and out-edge label of every component block.
@@ -2860,6 +2986,42 @@ impl BlockGraph {
         Some(b1)
     }
 
+    /// Ghidra `BlockGraph::nextFlowAfter` (block.cc:1335-1353): the block
+    /// containing the next statement in flow after child `bl` — the child
+    /// following `bl` in this graph's emission list, front-leafed; when `bl`
+    /// is the last child, the oracle defers to the parent graph
+    /// (`getParent()->nextFlowAfter(this)`) and returns null at the root.
+    /// Rugra's `BlockGraph` is not a `FlowBlock` (no inheritance), so a
+    /// nested graph can never sit in another graph's `blocks` list — the
+    /// only graph the emitter walks (`sblocks`) is the root, where the
+    /// oracle's end-of-list arm is exactly the null it returns at the root.
+    /// The parent-recursion arm is therefore structurally unreachable and
+    /// resolves to `None` here. Consumed by `BlockGoto::gotoPrints`
+    /// (block.cc:2886) to detect a fall-thru goto. The C++ `for` scan stops
+    /// at the first identity hit; Rust locates by `Arc::ptr_eq`; a `bl` not
+    /// present in the list returns `None` (the C++ increment-past-end of
+    /// that case is never exercised by the oracle's callers).
+    // Ghidra: block.cc:1335 BlockGraph::nextFlowAfter
+    pub fn next_flow_after(
+        graph_arc: &Arc<RwLock<BlockGraph>>,
+        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        // cc:1339-1342: find bl in list.
+        // cc:1343: ++iter — the first block after bl.
+        let next = graph_arc
+            .read()
+            .unwrap()
+            .blocks
+            .iter()
+            .position(|b| Arc::ptr_eq(b, bl))?
+            .checked_add(1)?;
+        // cc:1344-1348: end-of-list -> parent chain, null at the root;
+        // Rugra's graph is always the root (see doc comment).
+        // cc:1349-1352: nextbl = *iter; front-leaf it.
+        let nextbl = graph_arc.read().unwrap().blocks.get(next)?.clone();
+        front_leaf(&nextbl)
+    }
+
     // Ghidra: block.cc:796 FlowBlock::findCommonBlock
     /// Find the common dominator of multiple blocks.
     /// Faithful to `FlowBlock::findCommonBlock(vector<FlowBlock*>&)`
@@ -2981,6 +3143,9 @@ impl BlockGraph {
         self.blocks.clear();
         self.incoming.clear();
         self.outgoing.clear();
+        // Absorption bookkeeping refers to the previous block population;
+        // reset with the graph (Ghidra rebuilds the parent relation per copy).
+        self.absorbed_into.clear();
     }
 
     // Ghidra: block.cc:1439 BlockGraph::addEdge
@@ -4152,10 +4317,15 @@ impl BlockGoto {
     // Ghidra: block.cc:2856 BlockGoto::markUnstructured
     pub fn mark_unstructured_target(&self) {
         // cc:2860-2863: if (gototype == f_goto_goto) { if (gotoPrints()) markCopyBlock(gototarget, f_unstructured_targ); }
+        // markCopyBlock targets the FRONT LEAF (block.cc:1233-1237), not the
+        // wrapper (GOTO-LABEL-UNPRINTED-0001). BlockGoto::goto_target is
+        // already Arc<RwLock<BlockBasic>> (a leaf), so the descent is a
+        // no-op here, but routing through the same helper keeps both call
+        // sites byte-identical to the oracle's markCopyBlock contract.
         if self.goto_type == goto_type::GOTO_GOTO {
             if self.goto_prints() {
                 if let Some(target) = &self.goto_target {
-                    target.write().unwrap().flags |= block_flags::UNSTRUCTURED_TARG;
+                    mark_front_leaf_dyn(target, block_flags::UNSTRUCTURED_TARG);
                 }
             }
         }
@@ -4180,17 +4350,43 @@ impl BlockGoto {
     /// Ghidra `BlockGoto::gotoPrints` (block.cc:2881-2890): would a formal
     /// `goto` statement be emitted for this block? Returns `false` when the
     /// emitter can place the target immediately after this block (so the goto
-    /// is a fall-thru and must not print). Rugra asks the parent for the block
-    /// following this one in flow and compares it to the target's front leaf.
-    /// Without a `nextFlowAfter` path through Rugra's `BlockGraph` parent, we
-    /// conservatively return `true` (always print) — matching the C++ behaviour
-    /// when the parent is null (block.cc:2889).
+    /// is a fall-thru and must not print). The oracle asks the parent for
+    /// the block following this one in flow and compares it to the target's
+    /// front leaf; with no parent (block.cc:2889) it returns \b false — the
+    /// previous conservative `true` inverted exactly that null-parent arm.
+    /// Rugra's structurer never wires `BlockGoto::parent` (try_rule_goto
+    /// constructs it with `parent: None`, blockaction.rs:3673), so the
+    /// parent-present comparison is currently unreachable; when the parent
+    /// wiring lands (PRINTC-GOTOPRINTS-0001), `goto_prints_in` holds the
+    /// faithful comparison.
     // Ghidra: block.cc:2881 BlockGoto::gotoPrints
     pub fn goto_prints(&self) -> bool {
-        // cc:2884-2888: parent != null ? (gototarget->getFrontLeaf() != parent->nextFlowAfter(this)) : false
-        // Rugra's BlockGraph parent does not yet implement nextFlowAfter, so we
-        // cannot compute `nextbl`; fall back to "always print" (true).
-        true
+        // cc:2889: return false — the no-parent arm of gotoPrints.
+        false
+    }
+
+    /// Parent-present half of `BlockGoto::gotoPrints` (block.cc:2884-2888):
+    /// `gotobl = getGotoTarget()->getFrontLeaf(); nextbl =
+    /// getParent()->nextFlowAfter(this); return gotobl != nextbl`. Requires
+    /// the self Arc (to locate this block in the parent's child list) and
+    /// the parent graph Arc; `goto_prints` delegates here when both exist.
+    // Ghidra: block.cc:2881 BlockGoto::gotoPrints
+    pub fn goto_prints_in(
+        &self,
+        self_arc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        parent_arc: &Arc<RwLock<BlockGraph>>,
+    ) -> bool {
+        // cc:2885: gotobl = getGotoTarget()->getFrontLeaf();
+        let gotobl = self.goto_target.as_ref().and_then(front_leaf_basic);
+        // cc:2886: nextbl = getParent()->nextFlowAfter(this);
+        let nextbl = BlockGraph::next_flow_after(parent_arc, self_arc);
+        // cc:2887: return (gotobl != nextbl) — None vs None compares equal,
+        // matching C++ null == null.
+        match (gotobl, nextbl) {
+            (Some(a), Some(b)) => !Arc::ptr_eq(&a, &b),
+            (None, None) => false,
+            _ => true,
+        }
     }
 
     /// Ghidra `BlockGoto::printHeader` (block.cc:2892-2897): emit
@@ -4352,9 +4548,14 @@ impl BlockIf {
     // Ghidra: block.cc:3067 BlockIf::markUnstructured
     pub fn mark_unstructured_target(&self) {
         // cc:3071-3072: if (gototarget != null && gototype == f_goto_goto) markCopyBlock(gototarget, f_unstructured_targ);
+        // markCopyBlock (block.cc:1233-1237) sets the flag on the target's
+        // FRONT LEAF (getFrontLeaf, block.cc:340-349: descend subBlock(0)
+        // until t_copy), never on the wrapper itself. Rugra's leaf stand-ins
+        // are Basic/Copy, so marking the wrapper leaves the leaf unmarked and
+        // emitLabelStatement never fires (GOTO-LABEL-UNPRINTED-0001).
         if self.goto_target.is_some() && self.goto_type == goto_type::GOTO_GOTO {
             if let Some(target) = &self.goto_target {
-                target.write().unwrap().set_flags(block_flags::UNSTRUCTURED_TARG);
+                mark_front_leaf(target, block_flags::UNSTRUCTURED_TARG);
             }
         }
     }
@@ -5563,5 +5764,40 @@ impl BlockSwitch {
     // Ghidra: block.cc:3596 BlockSwitch::getSwitchVar
     pub fn get_switch_varnode(&self) -> Option<Arc<RwLock<crate::varnode::Varnode>>> {
         self.index_varnode.clone()
+    }
+}
+
+#[cfg(test)]
+mod edge_flag_tests {
+    #[test]
+    fn edge_flag_values_are_pairwise_unique() {
+        let flags = [
+            super::edge_flags::F_BREAK_EDGE,
+            super::edge_flags::F_CONTINUE_EDGE,
+            super::edge_flags::F_GOTO_EDGE,
+            super::edge_flags::F_SWITCH_DISPATCH,
+            super::edge_flags::F_LOOP_EXIT_EDGE,
+            super::edge_flags::F_BACK_EDGE,
+            super::edge_flags::F_IRREDUCIBLE_EDGE,
+            super::edge_flags::F_DEFAULTSWITCH_EDGE,
+            super::edge_flags::F_TREE_EDGE,
+            super::edge_flags::F_FORWARD_EDGE,
+            super::edge_flags::F_CROSS_EDGE,
+            super::edge_flags::F_LOOP_EDGE,
+        ];
+        for (i, left) in flags.iter().enumerate() {
+            for right in flags.iter().skip(i + 1) {
+                assert_ne!(left, right, "edge flag collision: {left:#x}");
+            }
+        }
+        assert_eq!(super::edge_flags::F_GOTO_EDGE, 0x01);
+        assert_eq!(super::edge_flags::F_LOOP_EDGE, 0x02);
+        assert_eq!(super::edge_flags::F_DEFAULTSWITCH_EDGE, 0x04);
+        assert_eq!(super::edge_flags::F_IRREDUCIBLE_EDGE, 0x08);
+        assert_eq!(super::edge_flags::F_TREE_EDGE, 0x10);
+        assert_eq!(super::edge_flags::F_FORWARD_EDGE, 0x20);
+        assert_eq!(super::edge_flags::F_CROSS_EDGE, 0x40);
+        assert_eq!(super::edge_flags::F_BACK_EDGE, 0x80);
+        assert_eq!(super::edge_flags::F_LOOP_EXIT_EDGE, 0x100);
     }
 }

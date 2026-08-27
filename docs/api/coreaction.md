@@ -1765,6 +1765,35 @@ TypeFactory（`propagateAddIn2Out` downChain），E2E 驱动侧
 buildTypegrp + :1269 ELEM_DATA_ORGANIZATION + :1350 setupSizes）装配
 带 `<data_organization>` 解码的真实工厂——此前工厂缺失使全部指针传播臂
 静默失效，RulePtrArith 因此从未触发。
+## ActionInferTypes LOAD/STORE 读者派发（TRI2-STORESPLIT-WHOLESTRUCT-0001，2026-08-26）
+
+op-centric 遍历的 `CPUI_LOAD | CPUI_STORE` 臂重写为读者派发：每个非
+annotation 输入（slot 1/2；slot 0 spaceid 是 annotation 被
+`is_annotation()` 跳过，对应 buildLocaltypes 的 `vn->isAnnotation()`
+continue，coreaction.cc:5018）以 `merge_min_type_order` 播种
+`getBase(size, TYPE_UNKNOWN)`——即 `Varnode::getLocalType`
+（varnode.cc:897-936）descend 遍历 `op->inputTypeLocal(i)` 的 typeOrder
+最小值在 op-centric 走向上的投影。决定性语义：
+
+- **无 override**：`TypeOpLoad::getInputLocal`/`TypeOpStore::getInputLocal`
+  在 typeop.hh:269/:279 均为注释行，两 opcode 的每个输入局部类型都是
+  `TypeOp::getInputLocal` 基默认 `tlst->getBase(in.size, TYPE_UNKNOWN)`
+  （typeop.cc:266-276）。超过 max_base_type_size 的值的该基类型是
+  unknown1[N] 数组（type.cc:3652-3657），不是 `IntTypes::sized` 饱和的
+  8 字节 long——后者令 `testDatatypeCompatibility` 的 piece 走查
+  （subflow.cc:2314-2330）无法覆盖全部 outType 分量，`RuleSplitStore`
+  （subflow.cc:2991-3004）便不触发整结构常量 STORE 拆分（progressbarinit
+  `*bar=0` → golden 5 行逐字段清零）。
+- **最小值合并**：`merge_min_type_order` 保持 varnode.cc:926-931 的
+  `0 > newct->typeOrder(*ct)` 严格小于才替换——unknown 播种永不逐出更
+  具体的读者播种（CALL 锁定参数、downChain 字段指针）；wip 2647faac 的
+  STORE 地址 `pointer-to-pointee` 单向 or_insert 播种（Ghidra
+  buildLocaltypes 无此 op 中心播种）一并移除。
+- **FILE*+8 不误拆**：字段指针 STORE 的 outType 经 `getValueDatatype` 的
+  `getExactPiece`（subflow.cc:2910-2962）恢复出的分量与 8 字节标量值
+  兼容性不成立时不拆分——my_fwrite `stream->_IO_read_ptr` 保持单
+  STORE/LOAD。
+
 ## ActionSetCasts 类型转换输入/输出令牌 + MarkImplied cover + ReturnSplit（MYFWRITE-TEMPVAR-0001，2026-08-26）
 
 1. **castInput 专用臂**（coreaction.cc:2662 `getInputCast` 派发）：LOAD 走
@@ -1783,7 +1812,42 @@ buildTypegrp + :1269 ELEM_DATA_ORGANIZATION + :1350 setupSizes）装配
    选择走 + `fd.node_split`（此前为手工合成 RETURN，破坏 staged structurer
    稳定索引不变量的替代路径已弃用）；count 经 apply 返回值承载（Action
    count-bridge 约定）。
-## ActionFuncLink/ActionActiveParam 调用实参收敛（MAINDIFF-CALLPROTO-0001，本次新增）
+
+## 2026-08-26（TRI2-CALLOUT-ASSIGN-0001）：ActionActiveReturn::apply 完整移植（collectOutputTrialVarnodes/buildOutputFromTrials 接通）
+
+`ActionActiveReturn::apply`（coreaction.cc:1773-1792）从简化版升级为完整链：
+
+- **checkOutputTrialUse（fspec.cc:5661-5676）**：先 `collectOutputTrialVarnodes`
+  （fspec.cc:5536-5553）——CALL 已有输出则抛 `LowlevelError`（Rugra：整 apply
+  返回 `Err(Lowlevel)`，driver 侧 pipeline ABORTED 等价观察）；`trialvn` 为
+  dense `Vec<Option<Varnode>>`，长度=`getNumTrials()`，`None`=null 槽位；
+  以 `PcodeOp::previousOp`（op.cc:344，块内 basiciter 前驱，块首即停）回走
+  CALL 前驱 op 链，遇首个非 INDIRECT break；对 `indirect_creation` 标记的
+  INDIRECT，其输出经 `ParamActive::whichTrial`（fspec.cc:1982，重叠匹配+`sz<=1`
+  早退 quirk）定位 trial 槽，填入 trialvn 并**即时** `setAddress(vn addr,size)`
+  （fspec.cc:5550-5552——Rust 经 stable Arc owner 绕开 fd 借用分裂，保持
+  Ghidra 循环内即时重置序，后续 whichTrial 读到已重置地址）。随后逐 trial：
+  `trialvn[i]` 非空 → `markActive()`，空 → `markInactive()`（不调 markNoUse）；
+  已 checked → `LowlevelError`。
+- **deriveOutputMap（coreaction.cc:1785）**：`fc.derive_output_map()` 既有委托。
+- **buildOutputFromTrials（fspec.cc:5770-5860）**：按 `curtrial.getSlot()-1`
+  （registration 位置，survive sortTrials）索引 trialvn 收集 finalvn；`break`
+  于首个非 used；`deleteUnusedTrials()` 重编 1..N；==1 时 def 入 deletedops +
+  `opSetOutput(op, finaloutvn)`；==2 时 joinReverse 选 hi/lo（`findPreexistingWhole`
+  未移植——TODO(FSPEC-OUTPUTJOIN-0001)，恒走 constructJoinAddress+SUBPIECE 对）；
+  尾部统一 destroy：`opDestroy(dop)` + `deleteVarnode(in0/in1)`。
+- **count 通道**：`count += 1`（coreaction.cc:1788）经 `pub count` +
+  `take_count_delta()` 外化（同 ActionMultiCSE/ActionMarkImplied 约定，
+  perform 的 `lcount<count → count_apply` 观察链）；apply 返回值保持 0。
+
+**根因背景**：progressbarinit `curl_getenv` 输出丢失 = callspec proto 被错误
+播种为 caller 的（DWARF 锁定）`fd.funcp` → `funcLinkOutput` 走 locked 分支跳过
+`initActiveOutput()`（coreaction.cc:1571-1572）→ 无 trial → CALL 无输出 →
+裸语句形 `curl_getenv(...);`。修复后 RAX trial 经 heritage guardCalls 的
+KilledByCall INDIRECT 收集，CALL 输出恢复三下游（EQUAL/strtol/free），
+golden 形态 `__nptr = (char *)curl_getenv("COLUMNS");` 达成。
+
+## ActionFuncLink/ActionActiveParam 调用实参收敛（MAINDIFF-CALLPROTO-0001，master 并入）
 
 - `func_link_input(fd, fc_idx, op)`（coreaction.cc:1474-1513 `funcLinkInput`）
   重写：`(!inputlocked)||varargs` 才 `init_active_input`（cc:1482-1483）；
@@ -1811,3 +1875,37 @@ buildTypegrp + :1269 ELEM_DATA_ORGANIZATION + :1350 setupSizes）装配
 foldInNormalization，随后 foldInGuards（成功则 `sblocks.clear()`，对应
 coreaction.cc:4557-4560 `data.getStructure()->clear()`）。ActionRedundBranch 的
 全同目标收缩改 `remove_branch(&bl,1)`（cc:3523 索引语义）。
+## ActionInferTypes STORE 值局部类型改用工厂 getBase（TRI2-STORESPLIT-WHOLESTRUCT-0001，2026-08-26）
+
+STORE 值输入（slot 2）的局部类型种子从 `IntTypes::sized(size)`（8 字节
+`long` 封顶）改为工厂 `getBase(size, UNKNOWN)`：Ghidra 的
+`Varnode::getLocalType`（varnode.cc:900-936）对每个读者取
+`op->inputTypeLocal(i)`，`TypeOpStore` 不覆写 `getInputLocal`
+（typeop.hh:279 注释掉），走默认 `TypeOp::getInputLocal`
+（typeop.cc:271-275）= `tlst->getBase(自身尺寸, TYPE_UNKNOWN)`；尺寸 16
+经 type.cc:3652-3656 变为 unknown1 数组。指针→值方向的
+`TypeOpStore::propagateType`→`propagateFromPointer`（typeop.cc:206-228）
+只跨精确尺寸或部分枚举匹配，不会把 16 字节常量压成 8 字节整型。全宽
+unknown 局部类型使 `testDatatypeCompatibility` 的分段游走
+（subflow.cc:2319-2334）覆盖 outType 每个字段，RuleSplitStore
+（subflow.cc:2991-3004）得以把整结构常量 STORE 拆成逐字段 STORE。
+- `ActionSetCasts::cast_output` tokenct 计算补 CALL/CALLIND 臂（对齐
+  coreaction.cc:2541 getOutputToken → TypeOpCall::getOutputLocal
+  typeop.cc:720-735 / TypeOpCallind::getOutputLocal typeop.cc:776-789）：
+  callspec 的 LOCKED 非 void 输出类型，否则 TypeOp 基类默认
+  `getBase(out_size, TYPE_UNKNOWN)`（typeop.cc:261-265）。该 token 使
+  unlocked（默认 proto）call 输出打印为 `__nptr = (char *)curl_getenv(...)`
+  —— token undefined8 对输出 high char* → castStandard(char*,undefined8) →
+  CALL 后插 CAST；locked 且类型等于输出 high（strtol→long）命中
+  type_equal 短路不插。CALLIND 经 get_call_specs_of_op（slot-0 Iop 注解,
+  TYPEOP-FSPEC-SPACE-0001）取 callspec，等价 typeop.cc:782 getCallSpecs。
+## 2026-08-27（MAIN-POSTSTRUCT-SPIN-0001）：ActionPrototypeWarnings 空间名表接线
+
+`ActionPrototypeWarnings::apply`（coreaction.cc:4885-4892）的覆写消息
+生成从空名表改为按锁定 x86-64 语料空间表构造 9 项名字向量
+（`AddressSpace::spec_space_name`，索引 0-8），再交
+`Override::generate_override_messages`（override.cc:279）。
+`Heritage::bump_deadcode_delay`（heritage.cc:2580）现在是生产级插入者：
+match_url 触发后输出 oracle 同文的
+"Restarted to delay deadcode elimination for space: register" 头注释。
+此前"消息列表可证为空"的前提随 deadcode-delay override 接线失效。

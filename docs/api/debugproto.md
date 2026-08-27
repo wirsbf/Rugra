@@ -248,3 +248,12 @@ structure/union/enumeration/typedef/base_type DIE 建立名字→类型索引，
 `LibcSignatureTable::locked_proto` 解析签名基础拼写（如 `FILE`）。Ghidra 侧
 由 DWARF analyzer 填充 program type manager；重复名首见优先（锁定 curl
 语料无冲突）。
+
+## parse_c_type/split_pointer_depth：嵌套指针归一（2026-08-27）
+
+`split_pointer_depth` 逐星剥离（星 + 前导空格循环），任意间距形式
+（`char **`/`char**`/`char * *`）归一到 base+depth；旧
+`trim_end_matches(" *")` 剥不掉第二颗星，双指针落入 unknown-name 基臂产出
+`Base("char **", TYPE_UNKNOWN)` 而非结构化 Pointer-to-Pointer。
+`parse_c_type` 嵌套层显示名在前层以 `*` 结尾时粘着（`char *` → `char **`），
+匹配类型打印机右到左 C 声明形。

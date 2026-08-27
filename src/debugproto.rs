@@ -741,7 +741,14 @@ fn parse_c_type(
             }),
     };
     for _ in 0..pointer_depth {
-        let display = format!("{} *", datatype.get_name());
+        // Nested pointer spellings glue onto the previous star with no space
+        // ("char *" -> "char **"), matching the type printer's right-to-left
+        // C declaration form for pointer-to-pointer.
+        let display = if datatype.get_name().ends_with('*') {
+            format!("{}*", datatype.get_name())
+        } else {
+            format!("{} *", datatype.get_name())
+        };
         datatype = Arc::new(Datatype::Pointer(TypePointer {
             base: TypeBase::new(display, address_size, TypeMetatype::Pointer),
             ptr_to: datatype,
@@ -754,9 +761,24 @@ fn parse_c_type(
 // RUGRA-GLUE: separates trailing pointer stars from the base type name in a C type spelling
 fn split_pointer_depth(type_text: &str) -> (&str, usize) {
     let trimmed = type_text.trim();
-    let base = trimmed.trim_end_matches(" *");
-    let depth = (trimmed.len() - base.len()) / 2;
-    (base.trim(), depth)
+    // Strip one trailing '*' at a time, along with any spaces before it, so
+    // every spacing form ("char **", "char**", "char * *") reduces to the
+    // same base + depth. The old `trim_end_matches(" *")` could not strip a
+    // second star ("char **" does not END with the two-char pattern " *"),
+    // so double pointers fell through to the unknown-name base arm and
+    // produced Base("char **", TYPE_UNKNOWN) instead of a structural
+    // Pointer-to-Pointer.
+    let bytes = trimmed.as_bytes();
+    let mut end = bytes.len();
+    let mut depth = 0usize;
+    while end > 0 && bytes[end - 1] == b'*' {
+        depth += 1;
+        end -= 1;
+        while end > 0 && bytes[end - 1] == b' ' {
+            end -= 1;
+        }
+    }
+    (trimmed[..end].trim(), depth)
 }
 
 

@@ -536,3 +536,23 @@ readSpace 拒绝路径/packed+XML 双形态 join 往返/边界（unlinked、malf
 超限 piece、dedup、float 扩展 logicalsize）逐字节 MATCH）。残留（coverage 表
 UNTESTED）：寄存器名 piece 形态（SPACE-0001）、未知名 piece 空间的 C++ null-space
 UB-邻接行为（Rust 在查名点拒绝）。
+
+## `get_index` / `from_index` / `spec_space_name`（MAIN-POSTSTRUCT-SPIN-0001，2026-08-27）
+
+- `pub fn get_index`（Ghidra: space.hh:332 `AddrSpace::getIndex` 内联）：
+  锁定 x86-64 语料空间表索引。来源：translator `.sla` `<spaces>` 序
+  （const=0, OTHER=1, unique=2, ram=3, register=4，活翻译器
+  `SleighCtx::space_info` 探测）+ `Architecture::restoreFromSpec` 追加
+  fspec=5/iop=6/join=7（architecture.cc:632-634）+ `addSpacebase` 追加
+  stack=8（architecture.cc:1013→566-568）。消费者：
+  `Override::insertDeadcodeDelay`/`hasDeadcodeDelay`（override.cc:79-105）
+  与 `Heritage::getInfo`（heritage.hh:257）。Overlay 无实例存储报告 -1
+  （语料内无 deadcode/heritage 消费者接受 Overlay，洞不可观测）。
+- `pub fn from_index`（RUGRA-GLUE）：`AddrSpaceManager::getSpace(i)`
+  （translate.hh:559-561）的逆查替身，`Funcdata::start_processing` 用其把
+  `Override::applyDeadCodeDelay` 的索引项解析回空间。索引 5（fspec）无枚举
+  变体；`bumpDeadcodeDelay` 的种类门保证 fspec 永远装不上 override，洞
+  不可观测。
+- `pub fn spec_space_name`（RUGRA-GLUE）：按索引给空间名
+  （override.cc:51-56 消息路径用 `getSpace(i)->getName()`；SLEIGH `.sla`
+  名为大写 "OTHER"，与 `AddressSpace::name` 的小写 debug 形态不同）。

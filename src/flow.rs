@@ -1367,9 +1367,15 @@ impl<'a> FlowInfo<'a> {
     fn setup_call_specs(&mut self, op: &crate::op::PcodeOpRef, inject_fc: Option<usize>) -> bool {
         // flow.cc:683-684: new FuncCallSpecs(op) captures the direct target
         // before input(0) is replaced with the call-spec annotation.
-        // Rugra's FuncCallSpecs::new requires a FuncProto; use the Funcdata's
-        // own prototype as the starting point (Ghidra's ctor clones a default).
-        let proto = self.fd.funcp.clone();
+        // fspec.cc:3778-3786 FuncProto::FuncProto(): the base-class default
+        // constructor — flags = 0 (no input/output/model lock), model = null,
+        // no parameters. `new FuncCallSpecs(op)` (fspec.cc:4924-4925) builds
+        // exactly that state; it must NOT seed from the caller's own fd.funcp
+        // (which may carry DWARF-locked storage), otherwise every unknown
+        // callee inherits the caller's output lock and
+        // ActionFuncLink::funcLinkOutput's locked-void path (coreaction.cc:1538)
+        // suppresses active return recovery (coreaction.cc:1571-1572).
+        let proto = default_call_spec_proto();
         let fc = crate::fspec::FuncCallSpecs::new_for_op(op, proto);
         let new_owner = Arc::new(RwLock::new(fc));
         // flow.cc:685: data.opSetInput(op, data.newVarnodeCallSpecs(res), 0).
@@ -1417,7 +1423,10 @@ impl<'a> FlowInfo<'a> {
         op: &crate::op::PcodeOpRef,
         inject_fc: Option<usize>,
     ) -> bool {
-        let proto = self.fd.funcp.clone();
+        // fspec.cc:4924-4925 + fspec.cc:3778-3786: same default-constructed
+        // FuncProto base as the direct CALL path — never the caller's own
+        // (possibly DWARF-locked) fd.funcp.
+        let proto = default_call_spec_proto();
         let fc = crate::fspec::FuncCallSpecs::new_for_op(op, proto);
         let new_idx = self.fd.add_call_specs(fc);
         // flow.cc:711: data.getOverride().applyIndirect(data, *res).
@@ -3276,6 +3285,30 @@ impl<'a> FlowInfo<'a> {
             self.new_address(op_addr, Address::new(dest_offset));
         }
     }
+}
+
+/// Materialize the `FuncProto` base-class state that C++ `new
+/// FuncCallSpecs(op)` (fspec.cc:4924-4925) gets implicitly via
+/// `FuncProto::FuncProto()` (fspec.cc:3778-3786): flags = 0 — no input
+/// lock, no output lock, no model lock — model = null, empty parameter
+/// list. The call site's real signature arrives later through the
+/// program-database boundary (the driver's locked-signature installs or
+/// `ActionDefaultParams`, coreaction.cc:2311), and an unlocked void
+/// prototype lets `ActionFuncLink::funcLinkOutput`'s else-branch
+/// (coreaction.cc:1571-1572) start active return recovery for unknown
+/// callees.
+// RUGRA-GLUE: Rust needs an owned FuncProto value where C++ default-constructs the base class inline.
+fn default_call_spec_proto() -> crate::fspec::FuncProto {
+    crate::fspec::FuncProto::new(
+        String::new(),
+        std::sync::Arc::new(crate::type_system::datatype::Datatype::Void(
+            crate::type_system::datatype::TypeBase::new(
+                "void".to_string(),
+                0,
+                crate::type_system::TypeMetatype::Void,
+            ),
+        )),
+    )
 }
 
 /// Entry point: follow flow from entry address, generating P-code ops and CFG.

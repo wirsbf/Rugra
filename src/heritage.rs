@@ -2473,7 +2473,7 @@ impl Heritage {
         let info_idx = self.infolist.iter().position(|i| i.space == space);
         if let Some(idx) = info_idx {
             if self.infolist[idx].deadremoved > 0 {
-                self.bump_deadcode_delay(space);
+                self.bump_deadcode_delay(fd, space);
                 if !self.infolist[idx].warning_issued {
                     self.infolist[idx].warning_issued = true;
                     let mut sz = space.addr_size();
@@ -3641,29 +3641,45 @@ impl Heritage {
         true
     }
 
-    // Ghidra: heritage.cc:2572 Heritage::bumpDeadcodeDelay
-    /// Increase dead-code delay for a space, requesting a restart.
-    /// Faithful to `bumpDeadcodeDelay` (heritage.cc:2572-2583).
-    pub fn bump_deadcode_delay(&mut self, space: AddressSpace) {
-        // cc:2575: only processor/spacebase spaces
+    // Ghidra: heritage.cc:2571 Heritage::bumpDeadcodeDelay
+    /// Increase the heritage delay for the given AddrSpace and request a
+    /// restart. Faithful to `bumpDeadcodeDelay` (heritage.cc:2573-2582):
+    /// the delay is installed through the Funcdata-local Override (which
+    /// survives `Funcdata::clear`, funcdata.cc:106 "Do not clear overrides")
+    /// and consumed by `Override::applyDeadCodeDelay` at the next
+    /// `Funcdata::startProcessing` (funcdata.cc:166); the current pass's
+    /// `HeritageInfo` is deliberately NOT mutated here. The restart itself
+    /// is requested via `Funcdata::setRestartPending(true)` and executed by
+    /// `ActionRestartGroup::apply` (action.cc:553-582; the Rugra-side
+    /// restart-cycle gap is tracked by PIPE-RESTART-0001).
+    pub fn bump_deadcode_delay(&mut self, fd: &mut Funcdata, space: AddressSpace) {
+        // cc:2574-2575: if ((spc->getType() != IPTR_PROCESSOR)&&
+        // (spc->getType() != IPTR_SPACEBASE)) return;
+        // Locked x86-64 kinds: Ram/Register are IPTR_PROCESSOR, Stack is
+        // IPTR_SPACEBASE.
         if !matches!(space, AddressSpace::Ram | AddressSpace::Register | AddressSpace::Stack) {
             return;
         }
-        // cc:2577: if delay != deadcodedelay, global delay already exists
-        let info = self.infolist.iter().find(|i| i.space == space);
-        if let Some(info) = info {
-            if info.delay != info.deadcodedelay {
-                return; // Already has an override
-            }
+        // cc:2576-2577: if (spc->getDelay() != spc->getDeadcodeDelay())
+        // return;  -- there is already a global delay
+        if space.get_delay() != space.get_deadcode_delay() {
+            return;
         }
-        // cc:2581: insertDeadcodeDelay(spc, deadcodedelay+1)
-        let idx = self.infolist.iter().position(|i| i.space == space);
-        if let Some(i) = idx {
-            self.infolist[i].deadcodedelay += 1;
+        // cc:2578-2579: if (fd->getOverride().hasDeadcodeDelay(spc))
+        // return;  -- a delay has already been installed (override.cc:92-103)
+        let index = usize::try_from(space.get_index()).unwrap_or(usize::MAX);
+        if fd
+            .localoverride
+            .has_deadcode_delay(index, space.get_deadcode_delay())
+        {
+            return;
         }
-        // cc:2582: setRestartPending(true)
-        // Rugra doesn't have restart-pending flag yet; log it.
-        eprintln!("[HERITAGE] bumpDeadcodeDelay for {:?}: restart pending", space);
+        // cc:2580: fd->getOverride().insertDeadcodeDelay(spc,
+        // spc->getDeadcodeDelay()+1);  (override.cc:79-89)
+        fd.localoverride
+            .insert_deadcode_delay(index, space.get_deadcode_delay() + 1);
+        // cc:2581: fd->setRestartPending(true);
+        fd.set_restart_pending(true);
     }
 
     // Ghidra: heritage.cc:2048 Heritage::clearStackPlaceholders
@@ -4728,7 +4744,7 @@ impl Heritage {
                         && !fd.is_jumptable_recovery_on()
                     {
                         needwarning = true;
-                        self.bump_deadcode_delay(vn_arc.read().unwrap().get_space());
+                        self.bump_deadcode_delay(fd, vn_arc.read().unwrap().get_space());
                         warnvn = Some(vn_arc.clone());
                     }
                     // cc:2719
@@ -4751,7 +4767,7 @@ impl Heritage {
                             continue;
                         }
                         needwarning = true;
-                        self.bump_deadcode_delay(vn_arc.read().unwrap().get_space());
+                        self.bump_deadcode_delay(fd, vn_arc.read().unwrap().get_space());
                         warnvn = Some(vn_arc.clone());
                     }
                 }
@@ -5826,28 +5842,43 @@ impl Heritage {
         self.pass > deadcodedelay
     }
 
-    // Ghidra: heritage.cc:2829 Heritage::setDeadCodeDelay
+    // Ghidra: heritage.cc:2815 Heritage::setDeadCodeDelay
     /// Set dead code delay for a space. Faithful to `setDeadCodeDelay`
-    /// (heritage.cc:2829-2840). Used by bumpDeadcodeDelay to request a
-    /// restart with higher delay.
+    /// (heritage.cc:2815-2822): `getInfo` indexes the infolist (heritage.hh:
+    /// 257 `infolist[spc->getIndex()]`), a delay below the space's heritage
+    /// delay is a LowlevelError ("Illegal deadcode delay setting"). Used by
+    /// `Override::applyDeadCodeDelay` (via `Funcdata::startProcessing`)
+    /// to install the bumped delay after a restart.
     pub fn set_dead_code_delay(&mut self, space: AddressSpace, delay: i32) {
         let idx = self.infolist.iter().position(|i| i.space == space);
-        if let Some(i) = idx {
-            self.infolist[i].deadcodedelay = delay;
+        let Some(i) = idx else {
+            // Ghidra's getInfo reads infolist[spc->getIndex()], which throws
+            // (vector bounds) for a space without a HeritageInfo slot; every
+            // heritaged locked-spec space has one, so this is unreachable in
+            // the corpus. Mirror the throw as a panic (same convention as
+            // Funcdata::start_processing's processing-started guard).
+            panic!("Illegal deadcode delay setting");
+        };
+        // cc:2820-2821: if (delay < info->delay) throw
+        // LowlevelError("Illegal deadcode delay setting");
+        if delay < self.infolist[i].delay {
+            panic!("Illegal deadcode delay setting");
         }
+        // cc:2822: info->deadcodedelay = delay;
+        self.infolist[i].deadcodedelay = delay;
     }
 
-    // Ghidra: heritage.cc:2817 Heritage::getDeadCodeDelay
+    // Ghidra: heritage.cc:2803 Heritage::getDeadCodeDelay
     /// Get dead code delay for a space. Faithful to `getDeadCodeDelay`
-    /// (heritage.cc:2817-2827). Previously returned const 2.
+    /// (heritage.cc:2803-2813). Previously returned const 2.
     pub fn get_dead_code_delay(&self, space: AddressSpace) -> i32 {
         let info = self.infolist.iter().find(|i| i.space == space);
         info.map_or(space.get_deadcode_delay(), |i| i.deadcodedelay)
     }
 
-    // Ghidra: heritage.cc:2805 Heritage::seenDeadCode
+    // Ghidra: heritage.cc:2791 Heritage::seenDeadCode
     /// Mark that dead code was seen (removed) for a space. Faithful to
-    /// `seenDeadCode` (heritage.cc:2805-2815): `info->deadremoved = 1`.
+    /// `seenDeadCode` (heritage.cc:2791-2801): `info->deadremoved = 1`.
     /// Previously Rugra was a no-op, so removeRevisitedMarkers/bumpDeadcodeDelay
     /// warning paths could never trigger.
     pub fn seen_dead_code(&mut self, space: AddressSpace) {

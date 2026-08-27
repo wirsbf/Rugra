@@ -1,5 +1,10 @@
 # flow.rs — Reachability-based control flow tracking
 
+## 2026-08-26：GOTO-LABEL-UNPRINTED-0001 收尾验证
+- `FlowInfo::generate_ops` 的控制流恢复继续遵循 `flow.cc:785-822` 的阶段顺序；尾调用/流覆盖传输在原始 p-code 层完成后，标签发现可消费稳定的 branch/call 形态。
+- 本轮移除仅用于诊断的 `[DBG]` 原始 op/CFG 探针，避免污染 stderr；生产路径不依赖环境变量。
+- httpd（Ghidra 12.0.4 oracle `e40ed13014025f82488b1f8f7bca566894ac376b`, x86:LE:64:default）实测 29/29 函数完成，goto 未定义目标为 0，`LAB_00000000` 为 0；curl 回归 defects=0、numbering=0。
+
 ## 2026-07-04：新建 src/flow.rs — FlowInfo Phase 1（可达性流追踪核心）
 - 新建 `src/flow.rs`，实现 `FlowInfo` struct（对齐 flow.hh:58-169 FlowInfo）。
 - `generate_ops(entry)`：addrlist 工作列表驱动的指令解码主循环（对齐 flow.cc:785-822）。
@@ -685,3 +690,17 @@ resolver 经 FlowInfo::target）。
 out 块（spliceBlock 的 fl2 合并在 block.cc:1611 传播该旗标）。消费点：
 ruleBlockSwitch 的 isSwitchOut 门（blockaction.cc:1652）与
 ActionRedundBranch 的 no-splice 守卫（coreaction.cc:3507）。
+## 2026-08-26（TRI2-CALLOUT-ASSIGN-0001）：callspec 播种改为 FuncProto 默认构造态
+
+- `setup_call_specs`/`setup_callind_specs` 不再 `fd.funcp.clone()` 播种新
+  callspec，改用 `default_call_spec_proto()`：镜像 C++ `new FuncCallSpecs(op)`
+  的基类默认构造（fspec.cc:4924-4925 → FuncProto::FuncProto() fspec.cc:3778-3786，
+  flags=0——无 input/output/model 锁、model=null、空参数表）。
+- 根因：继承 caller 的（可能 DWARF/输出锁定的）`fd.funcp` 使每个未知 callee
+  误得 output-lock，`ActionFuncLink::funcLinkOutput` 走 locked 分支
+  （coreaction.cc:1538）跳过 `initActiveOutput()`（:1571-1572），active return
+  recovery 被压制——progressbarinit `curl_getenv` 因此丢输出成裸语句形。
+  真实签名后续经程序库边界到达（driver locked-signature 安装 /
+  `ActionDefaultParams` coreaction.cc:2311）。
+- 既有登记的 "CALLIND spec 名继承 caller funcp 名" 构造 quirk 随本修复消解
+  （默认构造 name 为空，setFuncdata/queryCall 边界另案 CALLSPEC-0001）。
