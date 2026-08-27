@@ -5,7 +5,12 @@
 observable effect (skeleton **3155**, main **989**, defects=0,
 numbering=0). The over-expanded shape therefore occurs before that helper's
 post-phase slot rewrite, in the preceding interleaved rule/identify chain; the
-probe was reverted without a source commit.
+probe was reverted without a source commit. A complementary `RUGRA_7PHASE=1`
+run produced skeleton **731** with defects=0 on 112/124 emitted functions, but
+12 functions timed out/missing, so it is diagnostic only. This isolates the
+canonical 5-step phase schedule as the next comparison boundary: its
+`structure_loops_first` and batch passes must be compared to oracle
+`collapseInternal` before changing absorbed ownership again.
 
 **2026-08-27 dual-null guard correction**: `ruleBlockProperIf` and `ruleBlockWhileDo` now use the raw `sizeIn()==1` clause guard required by Ghidra (`blockaction.cc:1391`, `:1531`). The prior `count_non_structural_in_edges` filter could hide live predecessors after a cat collapse, allowing an invalid clause merge and producing `my_fwrite`'s dual-null condition. Oracle has no dispatch/dead-source reclassification in these guards.
 
