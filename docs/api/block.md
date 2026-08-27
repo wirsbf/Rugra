@@ -1394,6 +1394,8 @@ unknown 播种仍保留，progressbarinit 的逐字段清零不回退。
 
 ## Edge flag collision fix（2026-08-27）
 
-Ghidra `block.hh:108-118` 定义 `f_defaultswitch_edge=4`、
-`f_tree_edge=0x10`，二者不同。Rugra 的 `F_DEFAULTSWITCH_EDGE` 改为
-`1<<11`，与现有边标志互不冲突；单测锁定所有 edge flag 两两唯一。
+Ghidra `block.hh:108-118` 定义完整 edge_flags：
+`goto=1, loop=2, default=4, irreducible=8, tree=0x10,
+forward=0x20, cross=0x40, back=0x80, loop_exit=0x100`。
+Rugra 现按 oracle 位值实现；仅 Rugra 结构化 break/continue/switch-dispatch
+标注使用高位扩展。单测锁定位值并断言全部 edge flags 两两唯一。
