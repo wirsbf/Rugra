@@ -181,8 +181,9 @@ pub mod edge_flags {
     /// Treated as a goto by LoopBody's isGotoIn/isGotoOut.
     pub const F_IRREDUCIBLE_EDGE: u32 = 1 << 6;
     /// Default edge from switch block (Ghidra `f_defaultswitch_edge` = 4).
-    /// Rugra uses bit 7 (Ghidra's bit 2 is F_GOTO_EDGE in Rugra).
-    pub const F_DEFAULTSWITCH_EDGE: u32 = 1 << 7;
+    /// Bit 11 is reserved in Rugra's edge-label namespace and does not
+    /// overlap the spanning-tree classification bits.
+    pub const F_DEFAULTSWITCH_EDGE: u32 = 1 << 11;
     // ---- Spanning-tree edge classification (Ghidra block.hh:108-118) ----
     // Set by findSpanningTree (block.cc:1041-1108). These mirror Ghidra's
     // f_tree_edge / f_forward_edge / f_cross_edge / f_loop_edge.
@@ -5563,5 +5564,31 @@ impl BlockSwitch {
     // Ghidra: block.cc:3596 BlockSwitch::getSwitchVar
     pub fn get_switch_varnode(&self) -> Option<Arc<RwLock<crate::varnode::Varnode>>> {
         self.index_varnode.clone()
+    }
+}
+
+#[cfg(test)]
+mod edge_flag_tests {
+    #[test]
+    fn edge_flag_values_are_pairwise_unique() {
+        let flags = [
+            super::edge_flags::F_BREAK_EDGE,
+            super::edge_flags::F_CONTINUE_EDGE,
+            super::edge_flags::F_GOTO_EDGE,
+            super::edge_flags::F_SWITCH_DISPATCH,
+            super::edge_flags::F_LOOP_EXIT_EDGE,
+            super::edge_flags::F_BACK_EDGE,
+            super::edge_flags::F_IRREDUCIBLE_EDGE,
+            super::edge_flags::F_DEFAULTSWITCH_EDGE,
+            super::edge_flags::F_TREE_EDGE,
+            super::edge_flags::F_FORWARD_EDGE,
+            super::edge_flags::F_CROSS_EDGE,
+            super::edge_flags::F_LOOP_EDGE,
+        ];
+        for (i, left) in flags.iter().enumerate() {
+            for right in flags.iter().skip(i + 1) {
+                assert_ne!(left, right, "edge flag collision: {left:#x}");
+            }
+        }
     }
 }
