@@ -206,9 +206,9 @@
       },
       "system_include_root": {
         "path": "/usr/include",
-        "sha256": "8816954586e40fb289a343695423183f4f76697fc78c95645876b437b343195a",
-        "entry_count": 33253,
-        "regular_bytes": 334881035
+        "sha256": "45e87f75aec2e199ccb874a8609524d57d5ef2ff0cad4a7f82b9705468a018b1",
+        "entry_count": 34328,
+        "regular_bytes": 340852508
       },
       "local_include_root": {
         "path": "/usr/local/include",

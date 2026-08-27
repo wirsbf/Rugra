@@ -260,9 +260,9 @@ libstdcpp_include_root_sha=ebff2ff8a3f2418deb1ef6015614f96a6ef67531922bd447d1086
 libstdcpp_include_root_count=887
 libstdcpp_include_root_bytes=14780438
 system_include_root=/usr/include
-system_include_root_sha=8816954586e40fb289a343695423183f4f76697fc78c95645876b437b343195a
-system_include_root_count=33253
-system_include_root_bytes=334881035
+system_include_root_sha=45e87f75aec2e199ccb874a8609524d57d5ef2ff0cad4a7f82b9705468a018b1
+system_include_root_count=34328
+system_include_root_bytes=340852508
 local_include_root=/usr/local/include
 local_include_root_sha=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 local_include_root_count=0
@@ -1382,7 +1382,7 @@ require("semantic trees", toolchain["semantic_trees"], {
     "rust_target_libdir": {"path": "/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib", "sha256": "9261fe2c4bebd994bfc48321be9143b548793edad8fd5602341d3d1e7e06a26f", "entry_count": 62, "regular_bytes": 156584595},
     "gcc_16_root": {"path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16", "sha256": "006e26ecb4de682155c8cc653f72d02b907027a51192cf6324273e153726ca82", "entry_count": 838, "regular_bytes": 188527599},
     "libstdcxx_include_root": {"path": "/usr/include/c++/16", "sha256": "ebff2ff8a3f2418deb1ef6015614f96a6ef67531922bd447d108667571de511d", "entry_count": 887, "regular_bytes": 14780438},
-    "system_include_root": {"path": "/usr/include", "sha256": "8816954586e40fb289a343695423183f4f76697fc78c95645876b437b343195a", "entry_count": 33253, "regular_bytes": 334881035},
+    "system_include_root": {"path": "/usr/include", "sha256": "45e87f75aec2e199ccb874a8609524d57d5ef2ff0cad4a7f82b9705468a018b1", "entry_count": 34328, "regular_bytes": 340852508},
     "local_include_root": {"path": "/usr/local/include", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "entry_count": 0, "regular_bytes": 0},
     "python_stdlib_root": {"path": "/usr/lib/python3.14", "sha256": "141e577fc1cf328cef99ee4b6740de1f87d9eebbc21e2885e57bee44bd3ed376", "entry_count": 12553, "regular_bytes": 265048061},
 })
