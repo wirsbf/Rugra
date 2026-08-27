@@ -221,6 +221,7 @@ enum LoadVariant {
   load_equal_three,
   load_equal_sixteen,
   load_equal_seventeen,
+  load_equal_thirtytwo,
   load_wrap,
   load_multi_space
 };
@@ -384,8 +385,10 @@ static vector<LoadTable> buildLoads(AddrSpace *code,AddrSpace *tiny,LoadVariant 
     loads.push_back(LoadTable(Address(code,0x4010),8,1));
     break;
   case load_equal_sixteen:
-  case load_equal_seventeen: {
-    int4 count = (variant == load_equal_sixteen) ? 16 : 17;
+  case load_equal_seventeen:
+  case load_equal_thirtytwo: {
+    int4 count = (variant == load_equal_sixteen) ? 16
+               : (variant == load_equal_seventeen) ? 17 : 32;
     for(int4 i=0;i<count;++i)
       loads.push_back(LoadTable(Address(code,0x4000),(i & 1) ? 8 : 4));
     break;
@@ -511,6 +514,7 @@ static void run(void)
     { "sort_equal_three", { op + 0x10, op + 0x20 }, reach_none, false, true, false, true, true, false, load_equal_three },
     { "sort_equal_sixteen", { op + 0x10, op + 0x20 }, reach_none, false, true, false, true, true, false, load_equal_sixteen },
     { "sort_equal_seventeen", { op + 0x10, op + 0x20 }, reach_none, false, true, false, true, true, false, load_equal_seventeen },
+    { "sort_equal_thirtytwo", { op + 0x10, op + 0x20 }, reach_none, false, true, false, true, true, false, load_equal_thirtytwo },
     { "wrap_one_byte", { op + 0x10, op + 0x20 }, reach_none, false, true, false, true, true, false, load_wrap },
     { "multi_space", { op + 0x10, op + 0x20 }, reach_none, false, true, false, true, true, false, load_multi_space },
   };
