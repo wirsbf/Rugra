@@ -676,9 +676,9 @@
     "sha256": "a24c75c94923b28ef037066187824d8ecafc6708e074d13f27f5441c16e09848"
   },
   "expected_results": {
-    "ghidra_stdout_sha256": "c4cc2b35833a0a3815edbda5f660dbd97f79baa0814973cca01c2e5d789cd9e0",
+    "ghidra_stdout_sha256": "1c5173591d6fda2f7b1ca1de421dbd71f9c3fea0631fd3bc7e8e9b4e3b272433",
     "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "c4cc2b35833a0a3815edbda5f660dbd97f79baa0814973cca01c2e5d789cd9e0",
+    "rugra_stdout_sha256": "1c5173591d6fda2f7b1ca1de421dbd71f9c3fea0631fd3bc7e8e9b4e3b272433",
     "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "ghidra_exit_code": 0,
