@@ -1,5 +1,7 @@
 # `blockaction.rs` API Reference
 
+**2026-08-27 round 7 — build_copy edge labels and JumpTable metadata seam**: `build_copy` now carries each source `BlockEdge.flags` through the copy and mirrors it onto the copied incoming/outgoing halves, matching Ghidra `newBlockCopy` (`block.cc:1681-1697`) and `buildCopy` (`block.cc:1921-1938`). This preserves default-switch, goto, loop, and spanning-tree labels for structure rules. The JumpTable metadata seam remains explicit and unwired pending TODO-JUMPTABLE-METADATA-WIRE.
+
 **2026-08-27 round 7 — JumpTable metadata seam (`TODO-JUMPTABLE-METADATA-WIRE`)**: `CollapseStructure::new_with_switch_metadata` now accepts optional `SwitchTableMetadata`, carrying per-edge labels and default/gototype/isexit/isdefault fields derived from `JumpTable` (`jumptable.hh:541-640`). `try_rule_switch` matches dispatch address and uses supplied labels/default target; when the seam is `None`, case labels remain empty rather than fabricated from edge ordinals. ActionBlockStructure currently passes `None` pending the Funcdata/coreaction borrow-safe wire. Oracle reference: `blockaction.cc:1649-1723`, `newBlockSwitch` `block.cc:1904-1919`.
 
 **状态**: 已核对（当前有效，2026-08-27 TRI2-STRUCT-IRREDUCIBLE-TRACE-0001 六轮审计）

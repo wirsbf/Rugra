@@ -193,7 +193,7 @@ fn build_copy(sblocks: &mut BlockGraph, bblocks: &BlockGraph) {
     }
 
     // Copy edges — collect first, then add (avoids borrow conflicts)
-    let mut edges_to_add: Vec<(usize, usize)> = Vec::new();
+    let mut edges_to_add: Vec<(usize, usize, u32)> = Vec::new();
     for i in 0..bblocks.get_size() {
         if let Some(bb) = bblocks.get_block(i) {
             let bb_read = bb.read().unwrap();
@@ -201,16 +201,23 @@ fn build_copy(sblocks: &mut BlockGraph, bblocks: &BlockGraph) {
             for j in 0..size_out {
                 if let Some(edge) = bb_read.get_out(j) {
                     let target_idx = edge.point.read().unwrap().get_index() as usize;
-                    edges_to_add.push((i, target_idx));
+                    edges_to_add.push((i, target_idx, edge.flags));
                 }
             }
         }
     }
 
     // Now add all edges without holding any read locks
-    for (from_idx, to_idx) in edges_to_add {
+    for (from_idx, to_idx, flags) in edges_to_add {
         if let (Some(from), Some(to)) = (sblocks.get_block(from_idx), sblocks.get_block(to_idx)) {
-            sblocks.add_edge(from, to);
+            let out_slot = from.read().unwrap().size_out();
+            sblocks.add_edge(from.clone(), to);
+            // Ghidra newBlockCopy copies the complete BlockEdge vectors
+            // (block.cc:1681-1695), including labels. Restore that label on
+            // both edge halves after add_edge creates the new pair.
+            if flags != 0 {
+                set_out_edge_flag_all_types(&from, out_slot, flags);
+            }
         }
     }
 }
