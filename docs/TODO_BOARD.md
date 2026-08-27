@@ -32,7 +32,7 @@
 | `TRI2-CALLOUT-RESID-0002` | P2 | IN_PROGRESS(varmap 半) | regA@rugra-wt-regressfix2 | `src/varmap.rs` | 死 `int iVar1;` 声明清零；'O'→0x4f printc 半归 markimplied2 |
 | `PRINTC-IMPLIED-CHARCONST-0001` | P1 | IN_PROGRESS | markimplied2@rugra-wt-markimplied2 | `src/printc.rs`（**独占 printc 租约**） | implied-def 折叠臂（unique 裸标识/missing-LHS）+ 'O'→0x4f char 常量形（pushCharConstant 通道） |
 | `REJECT-MAINSPIN-RESTART-0001` | P0 | IN_PROGRESS | mainspinfix@rugra-wt-mainspinfix | `src/action.rs`+`src/funcdata.rs` | R-MAINSPIN REJECT 返修：有界降级→clearAnalysis+followFlow 忠实重启环；heritage.rs 只报告 |
-| `REJECT-CALLOUT-GUARDS-0001` | P1 | IN_PROGRESS | calloutfix@rugra-wt-calloutfix | `src/typeop.rs` | R-CALLOUT REJECT 返修 typeop 域（PTRADD/PTRSUB 规范化、castOutput PTRSUB 臂等）；coreaction/printc 域只登记 |
+| `REJECT-CALLOUT-GUARDS-0001` | P1 | IN_PROGRESS | calloutfix@rugra-wt-calloutfix | `src/typeop.rs` | R-CALLOUT REJECT 返修 typeop 域（PTRADD/PTRSUB 规范化、castOutput PTRSUB 臂等）；coreaction 播种边 `TYPEOP-PTRSUB-FIELDCAST-0001` 已在 67355abd wip，待本轮 oracle/E2E 验证；printc 域只登记 |
 | `REJECT-ORPHANDECL-JOIN-0001` | P1 | IN_PROGRESS | orphanfix@rugra-wt-orphanfix | `src/ruleaction.rs` | R-ORPHANDECL REJECT 返修：join 多片段逆序扫描（ruleaction.cc:793-815）；JoinRecord 基础设施缺口评估 |
 | `REGISTRY-CONTINUITY-W2-0001` | P1 | IN_PROGRESS | registryw2@rugra-wt-registryw2 | fixture_registry+metadata | append-only 前滚+三件套再生 |
 | `REVIEW-RIRRED-RPULLSUB-0001` | P0 | IN_PROGRESS | reviewer@rugra-wt-rfupreview | 只读+报告 | R-IRREDUCIBLE（master 4a4bd5c6..4ac33d30）+ R-PULLSUB（cf5c73b8） |
