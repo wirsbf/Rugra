@@ -35,8 +35,8 @@
 | `HTTPD-E2E-2026-08-27` | P1 | IN_PROGRESS(只读) | httpde2e@rugra-wt-httpde2e | 只读+报告+TODO 行 | master httpd 全量复测+goto 三症状普查（喂 gotolabel） |
 | `PRINTC-SWITCH-EMIT-0001` | P0 | PHASE-A | switchemit@rugra-wt-switchemit | docs 设计+fixture C++ 侧（**printc.rs 禁改**） | 阶段 A=oracle 深读+设计文档+fixture 骨架；printc 租约释放后实施 |
 
-已交付集成（本轮）：LINEWRAP=master `980f0831`（**hugehelp 逐字节=golden，diff 0**）；GOTO-LABEL=master `a3cda8b9`（httpd 三症状 1→0 清零，curl 2714/0/0，httpd 2355/0/0/29）；PULLSUB=master `cf5c73b8`（待 R-PULLSUB 复核）；IRREDUCIBLE R1-6=master `4a4bd5c6..4ac33d30`（待 R-IRREDUCIBLE 复核）。
-> 基线（master `cf5c73b8`）：124 函数 / defects 0 / numbering 0 / skeleton 2714；三函数 0/6/8（progressbarinit 6 中 2 行='O' 字面量、1 行=iVar1 死声明、余=store-split 域）。
+已交付集成（本轮）：callout=master `f35f29d7`；orphanfix=`1b93bc7e`+`f27f32b9`；regB snapshot=`9f33b86e` 已由 `9ff63dcb` revert（R-REGB REJECT，不计入有效语义）；LINEWRAP=master `980f0831`；GOTO-LABEL=master `a3cda8b9`；PULLSUB=master `cf5c73b8`；IRREDUCIBLE R1-6=master `4a4bd5c6..4ac33d30`。
+> 基线（master `9ff63dcb`）：124 函数 / defects 0 / numbering 0 / skeleton 2639；httpd 29 函数 / defects 0 / numbering 0 / skeleton 2123；三函数 hugehelp/progressbarinit/my_fwrite = 0/4/8。
 > 租约队列：printc.rs = markimplied2（持锁）→ switchemit 阶段 B（等 BlockSwitch 结构侧）→ callindptr/microform；coreaction.rs = regB → markimplied/deadstore 排队；空闲 worktree 断点：switchemit（阶段 A 设计完成 0630c160/e64fc295，待结构侧+租约）、markimplied（旧 wip 仅作矿）、callindptr/microform（未启）。
 > 机制 C 复核账：R-MAINSPIN/R-ORPHANDECL/R-CALLOUT 三 REJECT（报告 /tmp/rugra-reports/R-*-2026-08-27.md）→ 返修已派；R-IRREDUCIBLE/R-PULLSUB 在途。
 
