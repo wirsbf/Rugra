@@ -86,6 +86,11 @@ fn base_local_type(
     type_factory.read().unwrap().get_base(size, metatype)
 }
 
+// Ghidra: typeop.cc:2320 TypeOp::getInputCast (base fallback)
+fn default_input_cast(_op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
+    None
+}
+
 /// Core trait representing a P-code operation type
 ///
 /// Corresponds to Ghidra's `TypeOp` class
@@ -207,8 +212,8 @@ pub trait TypeOp {
     /// Corresponds to Ghidra's `TypeOp::getInputCast(op, slot, castStrategy)`.
     /// A `None` result indicates the input does not need a cast (the default).
     // Ghidra: typeop.hh:158 TypeOp::getInputCast
-    fn get_input_cast(&self, _op: &PcodeOp, _slot: usize) -> Option<Arc<Datatype>> {
-        None
+    fn get_input_cast(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
+        default_input_cast(op, slot)
     }
 
     /// Propagate an incoming data-type across a specific PcodeOp.
@@ -2181,7 +2186,7 @@ impl TypeOp for TypeOpPtradd {
 
     // Ghidra: typeop.cc:2250 TypeOpPtradd::getInputCast
     fn get_input_cast(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
-        if slot != 0 { return None; }
+        if slot != 0 { return default_input_cast(op, slot); }
         let req = op.get_in(0)?.read().unwrap().get_type_read_facing_op(op, 0)?;
         let cur = op.get_in(0)?.read().unwrap().get_high_type_read_facing(op, 0)?;
         if req.get_metatype() != TypeMetatype::Pointer || cur.get_metatype() != TypeMetatype::Pointer {
@@ -2255,7 +2260,10 @@ impl TypeOp for TypeOpPtrsub {
         }
     }
 
-    // Ghidra: typeop.cc:2311 TypeOpPtrsub::getOutputLocal
+    // Ghidra: typeop.cc:2308-2312 TypeOpPtrsub::getOutputLocal
+    // The local propagation type is an INT base, never the input struct
+    // pointer. Field/gap pointer semantics belong exclusively to
+    // get_output_token below (typeop.cc:2349-2363).
     fn get_output_local(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
         let size = op.get_out()?.read().unwrap().get_size();
         base_local_type(&self.type_factory, size, TypeMetatype::Int)
@@ -2269,7 +2277,7 @@ impl TypeOp for TypeOpPtrsub {
 
     // Ghidra: typeop.cc:2320 TypeOpPtrsub::getInputCast
     fn get_input_cast(&self, op: &PcodeOp, slot: usize) -> Option<Arc<Datatype>> {
-        if slot != 0 { return None; }
+        if slot != 0 { return default_input_cast(op, slot); }
         let req = op.get_in(0)?.read().unwrap().get_type_read_facing_op(op, 0)?;
         let cur = op.get_in(0)?.read().unwrap().get_high_type_read_facing(op, 0)?;
         if Arc::ptr_eq(&req, &cur) { return None; }
@@ -2281,8 +2289,18 @@ impl TypeOp for TypeOpPtrsub {
             if let Datatype::Array(r) = reqbase.as_ref() { reqbase = r.array_of.clone(); }
             if let Datatype::Array(c) = curbase.as_ref() { curbase = c.array_of.clone(); }
         }
-        // Rugra's datatype model currently has no typedef target accessor;
-        // pointer identity is the available equivalent for this cast gate.
+        // Ghidra: typeop.cc:2337-2343 unwraps each typedefImm before
+        // comparing the canonical pointee identities.
+        let factory = self.type_factory.read().unwrap();
+        let unwrap_typedef = |mut base: Arc<Datatype>| {
+            while let Some(target) = factory.get_typedef_target(base.get_name()) {
+                if Arc::ptr_eq(&base, target) { break; }
+                base = target.clone();
+            }
+            base
+        };
+        reqbase = unwrap_typedef(reqbase);
+        curbase = unwrap_typedef(curbase);
         if Arc::ptr_eq(&reqbase, &curbase) { None } else { Some(req) }
     }
 
@@ -2302,10 +2320,11 @@ impl TypeOp for TypeOpPtrsub {
             current = next;
             if type_offset == 0 { break; }
         }
-        if offset == 0 { current } else {
-            let pointee = factory.get_base(1, TypeMetatype::Unknown)?;
-            Some(factory.get_type_pointer(op.get_out()?.read().unwrap().get_size(), pointee, pointer.wordsize))
+        if offset == 0 {
+            if let Some(rettype) = current { return Some(rettype); }
         }
+        let pointee = factory.get_base(1, TypeMetatype::Unknown)?;
+        Some(factory.get_type_pointer(op.get_out()?.read().unwrap().get_size(), pointee, pointer.wordsize))
     }
 
     // Ghidra: typeop.cc:2366 TypeOpPtrsub::propagateType
@@ -4130,6 +4149,45 @@ mod tests {
             TypeOpStore.propagate_type(&progress_ptr, &exact, 1, 2),
             &progress
         ));
+    }
+
+    #[test]
+    fn ptrsub_gap_output_token_is_unknown_pointer() {
+        // FIELDCAST-TRACE-2026-08-27: ProgressData has fields at 0/8/16/24,
+        // while offset 28 is a legal in-struct synthetic gap. Ghidra's
+        // TypeOpPtrsub::getOutputToken (typeop.cc:2349-2363) falls back to
+        // pointer-to-unknown for this nonzero unresolved offset.
+        let factory = raw_factory();
+        factory.write().unwrap().setup_sizes(&crate::type_system::typefactory::SizeArchInputs {
+            stack_spacebase_size: Some(8),
+            default_data_space_addr_size: 8,
+            default_size: 8,
+            far_pointer: None,
+        });
+        let progress = progress_data_t();
+        let progress_ptr = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("ProgressData *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: progress,
+            wordsize: 1,
+        }));
+        let mut gap = pcodeop(OpCode::CPUI_PTRSUB);
+        let base = typed_vn(8, 0x10, Some(progress_ptr.clone()));
+        let high = Arc::new(RwLock::new(crate::variable::HighVariable::new(progress_ptr)));
+        high.write().unwrap().add_instance(base.clone());
+        base.write().unwrap().high = Some(high);
+        gap.inrefs.push(base);
+        gap.inrefs.push(Arc::new(RwLock::new(Varnode::new_constant(28, 8))));
+        gap.output = Some(typed_vn(8, 0x20, None));
+        let ptrsub = TypeOpPtrsub::new(factory);
+        let token = ptrsub.get_output_token(&gap).expect("gap fallback token");
+        let pointee = match token.as_ref() {
+            Datatype::Pointer(pointer) => &pointer.ptr_to,
+            other => panic!("expected pointer token, got {other:?}"),
+        };
+        assert_eq!(token.get_size(), 8);
+        assert_eq!(pointee.get_metatype(), TypeMetatype::Unknown);
+        assert_eq!(pointee.get_size(), 1);
+        assert_eq!(ptrsub.get_output_local(&gap).unwrap().get_metatype(), TypeMetatype::Int);
     }
 
     #[test]

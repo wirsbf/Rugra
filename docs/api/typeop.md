@@ -3,13 +3,13 @@
 **状态**: 🔧 L2（仅逐函数核对，禁止据此宣称模块 L3）
 **源代码路径**: `src/typeop.rs`
 
-## 2026-08-27：PTRADD/PTRSUB 专用类型传播（REJECT-CALLOUT-GUARDS-0001）
+## 2026-08-27：PTRADD/PTRSUB 专用类型传播（R-TYPEOPFIX-R2）
 
-完整对照锁定 oracle `typeop.cc:2224-2281` 与 `:2296-2378`：PTRADD/PTRSUB 现在持有 Architecture 的 `TypeFactory`，其 local 类型均为 `getBase(size, TYPE_INT)`；PTRADD 的 output token、slot-0 对齐宽度 cast guard、slot-2/双向传播 guard，以及 PTRSUB 的 typedef/array 归一化、`downChain` output token、输入 cast 与同一 `propagateAddIn2Out` 链均已接入生产 `TypeOpManager`。PTRSUB offset 0 返回 down-chain 类型，非零 offset 返回 canonical unknown-base pointer，保持 Ghidra 的输出 token 规则。
+针对独立复核 REJECT，补齐三处 Ghidra 12.0.4 语义：PTRSUB `getInputCast` 在 array 归一化后沿 TypeFactory typedef 链逐层解包（`typeop.cc:2337-2343`）；PTRADD 非 slot-0 输入回落到 TypeOp 基类 `getInputCast`；PTRSUB output token 在 offset=0 但 `downChain` 无结果时构造 `getBase(1, TYPE_UNKNOWN)` 指针，而非返回 `None`；`typeop::tests::ptrsub_gap_output_token_is_unknown_pointer` 固定 ProgressData offset 28 synthetic gap 的 unknown-pointer fallback、4-byte STORE 前置条件、默认 size/alignment 初始化与 INT local output。
 
 四类决定性语义：引用/输出参数为共享 canonical `TypeFactory`；遍历顺序为 downChain 的 do-while 链并保留 offset 0/非零分支；计数/累加器为无额外计数器、传播复用 `propagateAddIn2Out` 的共享 parent/parentOff；排序键不适用（类型链顺序决定结果）。`ActionSetCasts` 的 block/op 单轮遍历、union/checkPointerIssues 与 castOutput 仍归 `coreaction.rs` 租约。
 
-状态：PTRADD/PTRSUB typeop 域 FIXED；端到端差分待主 Agent 合并后执行。
+状态：PTRADD/PTRSUB typeop 域 FIXED；R2 typeop 测试 14/14 通过。当前生产 `op_output_type_local` 仍由 `varnode.rs` 直接派发，仓内无 `get_output_token` 消费点；因此 synthetic-gap token 的 E2E 接线仍待调用方租约处理。
 
 ## 2026-08-26：`TypeOpStore::get_input_local` 自创 override 移除（TRI2-STORESPLIT-WHOLESTRUCT-0001）
 
