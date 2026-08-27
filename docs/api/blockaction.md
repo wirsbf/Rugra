@@ -1,5 +1,12 @@
 # `blockaction.rs` API Reference
 
+**2026-08-28 round-8 probe (hypothesis rejected)**: disabling the legacy
+`collapse_sequences` call was tested against the same curl fixture and had no
+observable effect (skeleton **3155**, main **989**, defects=0,
+numbering=0). The over-expanded shape therefore occurs before that helper's
+post-phase slot rewrite, in the preceding interleaved rule/identify chain; the
+probe was reverted without a source commit.
+
 **2026-08-27 dual-null guard correction**: `ruleBlockProperIf` and `ruleBlockWhileDo` now use the raw `sizeIn()==1` clause guard required by Ghidra (`blockaction.cc:1391`, `:1531`). The prior `count_non_structural_in_edges` filter could hide live predecessors after a cat collapse, allowing an invalid clause merge and producing `my_fwrite`'s dual-null condition. Oracle has no dispatch/dead-source reclassification in these guards.
 
 **2026-08-27 DEAD semantic split**: `identify_internal` now records consumed
