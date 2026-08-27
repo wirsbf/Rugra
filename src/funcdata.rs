@@ -156,7 +156,9 @@ pub fn scope_local_find_overlap(
     offset: u64,
     size: i32,
 ) -> Option<&crate::varmap::LocalSymbol> {
-    let last = offset + size as u64 - 1;
+    // Ghidra database.cc:2398 computes addr+size-1 in uintb arithmetic;
+    // preserve its wrap semantics instead of Rust debug overflow panicking.
+    let last = offset.wrapping_add(size as u64).wrapping_sub(1);
     // Records in this space's EntryMap: (first, last) inclusive.
     let candidates: Vec<&crate::varmap::LocalSymbol> = scope
         .symbols
@@ -223,7 +225,9 @@ fn scope_local_in_scope(
     size: i32,
     _usepoint: Option<u64>,
 ) -> bool {
-    let last = offset + size as u64 - 1;
+    // Ghidra database.cc:2398 computes addr+size-1 in uintb arithmetic;
+    // preserve its wrap semantics instead of Rust debug overflow panicking.
+    let last = offset.wrapping_add(size as u64).wrapping_sub(1);
     scope
         .local_range
         .iter()

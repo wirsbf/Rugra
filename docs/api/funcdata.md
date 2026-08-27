@@ -13,6 +13,13 @@ reported to the caller rather than silently regenerating stale IR.
 - httpd 29/29 函数完成且 compare defects=0/numbering=0；goto 引用的未定义 label 与零地址 label 均为 0。curl 124/124 函数 compare defects=0/numbering=0。
 
 **源代码路径**: `src/funcdata.rs`
+
+## 2026-08-27：边界算术
+
+`scope_local_find_overlap` 的结束偏移使用 wrapping `addr+size-1`，对应
+`database.cc:2392-2403` 的 `uintb` 算术，避免 Rust debug 构建在高地址/溢出输入上
+panic。
+
 **2026-07-16**: `link_symbol` + `link_symbol_reference` 已加（funcdata_varnode.cc:1156/1193）。符号链接 + PTRSUB 常量解析。
 
 ## 文档状态
