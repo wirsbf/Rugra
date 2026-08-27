@@ -1013,8 +1013,3 @@ cleanup pool（RuleSplit* 等）插入的 STORE 对打印可见。
 
 `build_copy` 同时建立 `live_ops_source`/`source_basic` 回指，并保留结构化阶段快照
 供 collapse 消费；后续 `get_ops` 读取源块活动列表，匹配 Ghidra BlockCopy 委托。
-### 回归 B 裁决（2026-08-27）
-
-活动源委托实验已撤销。Rugra 当前保留 `build_copy` 的构造时 op 快照，
-因为活动委托会令 my_fwrite 两次判空塌缩为永假合取；STORE 全宽类型
-播种仍在 `ActionInferTypes` 中保留。

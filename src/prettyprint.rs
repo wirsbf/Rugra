@@ -903,7 +903,7 @@ impl EmitNoMarkup {
                 ("0x30", "'0'"), ("0x39", "'9'"), ("0x41", "'A'"),
                 ("0x5a", "'Z'"), ("0x61", "'a'"), ("0x7a", "'z'"),
                 ("0x20", "' '"), ("0x09", "'\\t'"), ("0x0a", "'\\n'"),
-                ("0x4f", "'O'"),
+
             ];
             for (hex, ch) in &hex_chars {
                 // Replace in comparison contexts: == 0xNN, != 0xNN
