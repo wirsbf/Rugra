@@ -19,7 +19,7 @@
 | `TRI2-STRUCT-IRREDUCIBLE-TRACE-0001` | P0 | IN_PROGRESS(第6轮) | irred@rugra-wt-irreducible | `src/blockaction.rs` | exhausted 8 函数→更低；block.rs 只报告不动 |
 | `GOTO-LABEL-UNPRINTED-0001` | P1 | IN_PROGRESS | gotolabel@rugra-wt-gotolabel | `src/flow.rs`+`src/funcdata.rs`+`examples/httpd_decompile.rs` | printc.rs 冻结提交后不再编辑（租约在 strconst2）；等 root 通知 |
 | `REVIEW-DEBTS-X3-2026-08-27` | P0 | IN_PROGRESS | reviewer@rugra-wt-rfupreview | 只读+报告+TODO 三行 | R-MAINSPIN/R-ORPHANDECL/R-CALLOUT 三笔机制 C 欠账复核；附回归缩围意见 |
-| `RULE-PULLSUB-NEWVNODEOUT-0001` | P2 | IN_PROGRESS | pullsub@rugra-wt-pullsub2 | `src/ruleaction.rs` | 非 join 基底 newVnodeOut 空间归属（ruleaction.cc:798-832）；join 臂不做 |
+| `RULE-PULLSUB-NEWVNODEOUT-0001` | P2 | IN_PROGRESS | orphanfix@rugra-wt-orphanfix | `src/ruleaction.rs` + `docs/api/ruleaction.md` + 本 TODO 行 | 补齐 RulePullsubMulti::buildSubpiece join 臂：按 ruleaction.cc:793-815 逆序 piece 扫描、skipleft/端序地址计算、renormalize；单片/未命中保持 unique。依赖现有 Architecture::join_db::find_join（space.rs:503-523）。验收：cargo check/test --lib ruleaction + curl_decompile 全量 compare defects=0/numbering=0；oracle e40ed13014025f82488b1f8f7bca566894ac376b；2026-08-27 |
 | `PLTSTUB-WARNLOSS-0001` | P1 | IN_PROGRESS(只读 bisect) | pltstub@rugra-wt-pltstub | 只读+报告+TODO 行 | 51→27 警告丢失二分（早于 8474ec13）；交付引入 commit+修复 write-set 建议 |
 | `HTTPD-E2E-2026-08-27` | P1 | IN_PROGRESS(只读) | httpde2e@rugra-wt-httpde2e | 只读+报告+TODO 行 | master httpd 全量复测+goto 三症状普查（喂 gotolabel） |
 | `PRINTC-SWITCH-EMIT-0001` | P0 | PHASE-A | switchemit@rugra-wt-switchemit | docs 设计+fixture C++ 侧（**printc.rs 禁改**） | 阶段 A=oracle 深读+设计文档+fixture 骨架；printc 租约释放后实施 |
