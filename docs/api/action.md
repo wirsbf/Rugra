@@ -2,6 +2,15 @@
 
 **源代码路径**: `src/action.rs`
 
+## 2026-08-27：ActionRestartGroup 重启环
+
+`ActionRestartGroup::apply` 对齐 `action.cc:553-582`：达到 restart guard 后调用
+`Funcdata::clear_analysis`，执行 driver 安装的 raw-flow regeneration callback，随后
+调用 `start_processing`（其顺序对应 `funcdata.cc:157-168`），重置子 Action 游标并继续
+当前子树。`Funcdata::set_restart_flow` 是 Rust 驱动桥；无 loader/lifter 的纯 fixture 会
+安全返回而不在空 Funcdata 上重跑。`maxrestarts` 与 jumptable recovery guard 保持
+Ghidra 的边界语义。
+
 ## 2026-08-24：ActionPool 选择性 fresh clone 与真实基树派生
 
 锁定 Ghidra `Rule::clone`（`action.hh:230-236`）、`ActionPool::clone`

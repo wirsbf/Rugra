@@ -740,6 +740,8 @@ impl ActionGroup {
     pub fn num_actions(&self) -> usize { self.actions.len() }
     // RUGRA-GLUE: read-only fixture/debug view of Ghidra ActionGroup's protected iterator
     pub fn current_index(&self) -> usize { self.state }
+    // RUGRA-GLUE: resets the inherited ActionGroup iterator after clearAnalysis/restart
+    pub fn reset_apply_cursor(&mut self) { self.state = 0; }
     // RUGRA-GLUE: read-only fixture/debug view of a child Action's externalized executor state
     pub fn child_state(&self, index: usize) -> Option<&ActionState> {
         self.child_states.get(index)
@@ -1104,29 +1106,28 @@ impl ActionRestartGroup {
                 self.curstart = -1;
                 return Ok(0); // action.cc:568-573
             }
-            // data.getArch()->clearAnalysis(&data) (action.cc:574) =
-            // Funcdata::clear (funcdata.cc:84-112: blocks/obank/vbank/
-            // callspecs/jumptables/heritage are wiped, overrides survive)
-            // plus the warning-comment clear (architecture.cc:335-341).
-            // PIPE-RESTART-0001 (conservative degradation, documented):
-            // the oracle's restart cycle re-generates the raw p-code through
-            // Funcdata::startProcessing → followFlow (funcdata.cc:157); in
-            // Rugra the flow generation lives in the driver
-            // (rugra::flow::follow_flow*) before the pipeline runs, and
-            // Funcdata::start_processing cannot re-enter it. Running the
-            // oracle's reset+rerun here on the uncleared Funcdata would
-            // re-enter ActionStart → start_processing and hit its
-            // LowlevelError guard (funcdata.cc:153-154), destroying the
-            // worker. Until clearAnalysis + in-Funcdata flow regeneration
-            // land (PIPE-RESTART-0001), complete without the restart pass.
-            // The pending flag stays set, matching the oracle's end state on
-            // the maxrestarts path (only Funcdata::clear or an explicit
-            // setRestartPending(false) ever clear it; this loop is its sole
-            // consumer — action.cc:562).
-            eprintln!(
-                "[ACTION] restart pending after convergence: clearAnalysis/followFlow restart cycle not wired (PIPE-RESTART-0001); completing without restart"
-            );
-            return Ok(0);
+            // Ghidra action.cc:574 Architecture::clearAnalysis(&data):
+            // Funcdata::clear removes derived analysis while preserving the
+            // local override.  The driver callback is the Rust equivalent of
+            // Architecture-owned followFlow; it must run before startProcessing
+            // so the pending dead-code override is applied to the regenerated
+            // analysis (funcdata.cc:157-168).
+            fd.clear_analysis();
+            if !fd.regenerate_restart_flow()? {
+                // A standalone fixture may not have a loader/lifter bridge.
+                // Do not rerun ActionStart against an empty Funcdata; the
+                // production driver installs this callback before execution.
+                eprintln!("[ACTION] restart pending: flow regeneration callback unavailable");
+                return Ok(0);
+            }
+            fd.start_processing();
+            self.group.reset(fd);
+            self.group.reset_apply_cursor();
+            // ActionRestartGroup::apply resets child derived state and starts
+            // the ActionGroup child iterator at begin (action.cc:576-581).
+            if let Some(state) = group_state.as_deref_mut() {
+                state.status = status_flags::STATUS_START;
+            }
         }
     }
 }

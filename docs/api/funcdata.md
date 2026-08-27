@@ -1,5 +1,13 @@
 # `funcdata.rs` API Reference
 
+## 2026-08-27：clearAnalysis / restart flow seam
+
+`Funcdata::clear_analysis` mirrors `architecture.cc:335-341` by clearing the complete
+analysis state through `funcdata.cc:84-112` while retaining local overrides. The
+`set_restart_flow`/`regenerate_restart_flow` callback seam lets the driver rerun its
+loader/lifter `follow_flow` between clear and `start_processing`; callback absence is
+reported to the caller rather than silently regenerating stale IR.
+
 ## 2026-08-26：GOTO-LABEL-UNPRINTED-0001 收尾验证
 - `Funcdata::remove_unreachable_blocks` 保持 `funcdata_block.cc:346-393` 的 reachable 收集、DEAD 标记、出边拆除、块删除和 `structureReset` 顺序；本轮仅移除诊断用 CFG dump。
 - httpd 29/29 函数完成且 compare defects=0/numbering=0；goto 引用的未定义 label 与零地址 label 均为 0。curl 124/124 函数 compare defects=0/numbering=0。

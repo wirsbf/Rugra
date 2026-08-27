@@ -357,6 +357,18 @@ impl Ord for LanedStorage {
     }
 }
 
+/// Driver-owned raw-flow regeneration callback for restart cycles.
+/// RUGRA-GLUE: wraps the Architecture loader/lifter bridge and supplies a stable Debug projection.
+pub struct RestartFlow(
+    pub std::sync::Arc<dyn Fn(&mut Funcdata) -> crate::error::Result<()> + Send + Sync>,
+);
+impl std::fmt::Debug for RestartFlow {
+    // RUGRA-GLUE: Debug projection for the driver callback wrapper
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RestartFlow(<driver callback>)")
+    }
+}
+
 /// Main container for a function being decompiled
 ///
 /// Corresponds to Ghidra's `Funcdata` class. This class ties together
@@ -458,6 +470,10 @@ pub struct Funcdata {
     pub arch: Option<Arc<crate::arch::Architecture>>,
     /// Restart-pending flag for ActionRestartGroup (funcdata.hh).
     pub restart_pending: bool,
+    /// Driver-installed raw-flow regeneration hook used by ActionRestartGroup.
+    /// The Ghidra Architecture owns the loader/lifter; Rugra keeps that bridge at
+    /// the driver boundary so clear_analysis can be followed by start_processing.
+    pub restart_flow: Option<RestartFlow>,
     /// Once-per-function guard for ActionConditionalConst. The conditional
     /// constant propagation is useful but, under Rugra's repeatapply mainloop,
     /// re-running it after the first mutation can interact poorly with
@@ -543,6 +559,7 @@ impl Funcdata {
             active_output: None,
             arch: None,
             restart_pending: false,
+            restart_flow: None,
             cond_const_done: false,
             jump_tables: Vec::new(),
             union_map: std::collections::BTreeMap::new(),
@@ -6449,6 +6466,31 @@ impl Funcdata {
                 }
             }
         }
+    }
+
+    // Ghidra: architecture.cc:335 Architecture::clearAnalysis
+    /// Clear analysis through the Architecture::clearAnalysis seam.
+    pub fn clear_analysis(&mut self) {
+        self.clear();
+    }
+
+    // RUGRA-GLUE: driver callback seam for Architecture::clearAnalysis followed by Funcdata::startProcessing
+    /// Install the driver-owned flow regeneration callback used on a restart.
+    pub fn set_restart_flow(
+        &mut self,
+        callback: std::sync::Arc<dyn Fn(&mut Funcdata) -> crate::error::Result<()> + Send + Sync>,
+    ) {
+        self.restart_flow = Some(RestartFlow(callback));
+    }
+
+    // RUGRA-GLUE: invokes the driver-owned equivalent of Funcdata::followFlow after clearAnalysis
+    /// Regenerate raw p-code and blocks for a restart, if the driver installed its loader bridge.
+    pub fn regenerate_restart_flow(&mut self) -> crate::error::Result<bool> {
+        let Some(callback) = self.restart_flow.as_ref().map(|flow| flow.0.clone()) else {
+            return Ok(false);
+        };
+        callback(self)?;
+        Ok(true)
     }
 
     // Ghidra: funcdata.cc:84 Funcdata::clear
