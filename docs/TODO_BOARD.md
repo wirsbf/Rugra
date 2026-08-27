@@ -24,6 +24,16 @@
 | `REGISTRY-CONTINUITY-W2-0001` | P1 | IN_PROGRESS | registryw2@rugra-wt-registryw2 | fixture_registry+metadata | append-only 前滚+三件套再生 |
 | `REVIEW-RIRRED-RPULLSUB-0001` | P0 | IN_PROGRESS | reviewer@rugra-wt-rfupreview | 只读+报告 | R-IRREDUCIBLE（master 4a4bd5c6..4ac33d30）+ R-PULLSUB（cf5c73b8） |
 | `PLTSTUB-WARNLOSS-0001` | P1 | IN_PROGRESS(只读 bisect) | pltstub@rugra-wt-pltstub | 只读+报告 | 51→27 警告丢失二分（早于 8474ec13） |
+| `REGA-HUGEHELP-LITERAL-0001` | P0 | IN_PROGRESS | regA@rugra-wt-regressfix2 | `src/heritage.rs`+docs/api/heritage.md | 回归 A 根因修复（bumpDeadcodeDelay/restart 链嫌疑）；前任 [DBG] 插桩需清除；验收=hugehelp/progressbarinit 恢复 c10871c3 形态+defects 0 |
+| `REGB-MYFWRITE-DUALNULL-0001` | P1 | IN_PROGRESS | regB@rugra-wt-regb | `src/coreaction.rs`+`src/block.rs`（blockaction.rs 尽量少动） | 回归 B 根因修复（fieldsplit live_ops_source/STORE 播种嫌疑）；验收=my_fwrite 双判空恢复+skeleton 8→低 |
+| `PRINTC-LINEWRAP-0001` | P1 | IN_PROGRESS | strconst2@rugra-wt-strconst2 | `src/printc.rs`+`src/prettyprint.rs`（**独占 printc 租约**） | hugehelp 最后 12 行折行；交付后释放 printc 租约给 switchemit 队列 |
+| `TRI2-STRUCT-IRREDUCIBLE-TRACE-0001` | P0 | IN_PROGRESS(第6轮) | irred@rugra-wt-irreducible | `src/blockaction.rs` | exhausted 8 函数→更低；block.rs 只报告不动 |
+| `GOTO-LABEL-UNPRINTED-0001` | P1 | IN_PROGRESS | gotolabel@rugra-wt-gotolabel | `src/flow.rs`+`src/funcdata.rs`+`examples/httpd_decompile.rs` | printc.rs 冻结提交后不再编辑（租约在 strconst2）；等 root 通知 |
+| `REVIEW-DEBTS-X3-2026-08-27` | P0 | IN_PROGRESS | reviewer@rugra-wt-rfupreview | 只读+报告+TODO 三行 | R-MAINSPIN/R-ORPHANDECL/R-CALLOUT 三笔机制 C 欠账复核；附回归缩围意见 |
+| `RULE-PULLSUB-NEWVNODEOUT-0001` | P2 | IN_PROGRESS | orphanfix@rugra-wt-orphanfix | `src/ruleaction.rs` + `docs/api/ruleaction.md` + 本 TODO 行 | 补齐 RulePullsubMulti::buildSubpiece join 臂：按 ruleaction.cc:793-815 逆序 piece 扫描、skipleft/端序地址计算、renormalize；单片/未命中保持 unique。依赖现有 Architecture::join_db::find_join（space.rs:503-523）。验收：cargo check/test --lib ruleaction + curl_decompile 全量 compare defects=0/numbering=0；oracle e40ed13014025f82488b1f8f7bca566894ac376b；2026-08-27 |
+| `PLTSTUB-WARNLOSS-0001` | P1 | IN_PROGRESS(只读 bisect) | pltstub@rugra-wt-pltstub | 只读+报告+TODO 行 | 51→27 警告丢失二分（早于 8474ec13）；交付引入 commit+修复 write-set 建议 |
+| `HTTPD-E2E-2026-08-27` | P1 | IN_PROGRESS(只读) | httpde2e@rugra-wt-httpde2e | 只读+报告+TODO 行 | master httpd 全量复测+goto 三症状普查（喂 gotolabel） |
+| `PRINTC-SWITCH-EMIT-0001` | P0 | PHASE-A | switchemit@rugra-wt-switchemit | docs 设计+fixture C++ 侧（**printc.rs 禁改**） | 阶段 A=oracle 深读+设计文档+fixture 骨架；printc 租约释放后实施 |
 
 已交付集成（本轮）：LINEWRAP=master `980f0831`（**hugehelp 逐字节=golden，diff 0**）；GOTO-LABEL=master `a3cda8b9`（httpd 三症状 1→0 清零，curl 2714/0/0，httpd 2355/0/0/29）；PULLSUB=master `cf5c73b8`（待 R-PULLSUB 复核）；IRREDUCIBLE R1-6=master `4a4bd5c6..4ac33d30`（待 R-IRREDUCIBLE 复核）。
 > 基线（master `cf5c73b8`）：124 函数 / defects 0 / numbering 0 / skeleton 2714；三函数 0/6/8（progressbarinit 6 中 2 行='O' 字面量、1 行=iVar1 死声明、余=store-split 域）。
