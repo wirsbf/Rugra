@@ -9,23 +9,26 @@
 > **两个 P0 回归**：A=ed827938 后 hugehelp 字面量退化+progressbarinit `__nptr=` 赋值形丢失；B=c243cdef 后 my_fwrite 双判空塌缩永假合取。
 > 编排：DSH 主 Agent（root）+ 10 并发后台子 Agent；worktree 隔离 + 独占写集租约 + `/tmp/rugra-cargo-build.lock` + 专属 CARGO_TARGET_DIR；子 Agent 交付→root 串行 cherry-pick→flock 构建→E2E→差分门禁（defects 必须 0）→更新本板。本节 root 维护。
 
-### 本 wave 认领租约（10 槽，2026-08-27 10:15 派发）
+### 本 wave 认领租约（2026-08-27 11:05 刷新；前表见 git 历史）
 
 | ID | P | 状态 | owner | write-set（租约） | 备注 |
 |---|---|---|---|---|---|
-| `REGA-HUGEHELP-LITERAL-0001` | P0 | IN_PROGRESS | regA@rugra-wt-regressfix2 | `src/heritage.rs`+docs/api/heritage.md | 回归 A 根因修复（bumpDeadcodeDelay/restart 链嫌疑）；前任 [DBG] 插桩需清除；验收=hugehelp/progressbarinit 恢复 c10871c3 形态+defects 0 |
-| `REGB-MYFWRITE-DUALNULL-0001` | P1 | IN_PROGRESS | regB@rugra-wt-regb | `src/coreaction.rs`+`src/block.rs`（blockaction.rs 尽量少动） | 回归 B 根因修复（fieldsplit live_ops_source/STORE 播种嫌疑）；验收=my_fwrite 双判空恢复+skeleton 8→低 |
-| `PRINTC-LINEWRAP-0001` | P1 | IN_PROGRESS | strconst2@rugra-wt-strconst2 | `src/printc.rs`+`src/prettyprint.rs`（**独占 printc 租约**） | hugehelp 最后 12 行折行；交付后释放 printc 租约给 switchemit 队列 |
-| `TRI2-STRUCT-IRREDUCIBLE-TRACE-0001` | P0 | IN_PROGRESS(第6轮) | irred@rugra-wt-irreducible | `src/blockaction.rs` | exhausted 8 函数→更低；block.rs 只报告不动 |
-| `GOTO-LABEL-UNPRINTED-0001` | P1 | IN_PROGRESS | gotolabel@rugra-wt-gotolabel | `src/flow.rs`+`src/funcdata.rs`+`examples/httpd_decompile.rs` | printc.rs 冻结提交后不再编辑（租约在 strconst2）；等 root 通知 |
-| `REVIEW-DEBTS-X3-2026-08-27` | P0 | IN_PROGRESS | reviewer@rugra-wt-rfupreview | 只读+报告+TODO 三行 | R-MAINSPIN/R-ORPHANDECL/R-CALLOUT 三笔机制 C 欠账复核；附回归缩围意见 |
-| `RULE-PULLSUB-NEWVNODEOUT-0001` | P2 | IN_PROGRESS | pullsub@rugra-wt-pullsub2 | `src/ruleaction.rs` | 非 join 基底 newVnodeOut 空间归属（ruleaction.cc:798-832）；join 臂不做 |
-| `PLTSTUB-WARNLOSS-0001` | P1 | IN_PROGRESS(只读 bisect) | pltstub@rugra-wt-pltstub | 只读+报告+TODO 行 | 51→27 警告丢失二分（早于 8474ec13）；交付引入 commit+修复 write-set 建议 |
-| `HTTPD-E2E-2026-08-27` | P1 | IN_PROGRESS(只读) | httpde2e@rugra-wt-httpde2e | 只读+报告+TODO 行 | master httpd 全量复测+goto 三症状普查（喂 gotolabel） |
-| `PRINTC-SWITCH-EMIT-0001` | P0 | PHASE-A | switchemit@rugra-wt-switchemit | docs 设计+fixture C++ 侧（**printc.rs 禁改**） | 阶段 A=oracle 深读+设计文档+fixture 骨架；printc 租约释放后实施 |
+| `TRI2-CALLOUT-ASSIGN-0001` | P0 | INTEGRATING | integrator@主仓 | master 直接操作（唯一例外） | agent/callout 链 19ce09bf+c9f6337e+6230b082 入 master（__nptr 赋值形+(char **)折叠+BlockCopy 活委托）；"回归 A"证伪=集成缺位非回归（regA A/B 实证 c10871c3≡master） |
+| `REGB-MYFWRITE-DUALNULL-0001` | P1 | IN_PROGRESS | regB@rugra-wt-regb | `src/coreaction.rs`+`src/block.rs` | 回归 B（c243cdef 双判空塌缩）根因修复；coreaction/block 租约持有中 |
+| `TRI2-STRUCT-IRREDUCIBLE-TRACE-0001` | P0 | R7-IN_PROGRESS | irred@rugra-wt-irreducible | `src/blockaction.rs`+`src/jumptable.rs` | R1-6 已集成 master（4a4bd5c6..4ac33d30，exhausted 8→1）；R7=blk127 obvious-exit 拓扑+JumpTable 真实标签通道+checkSwitchSkips；复核=R-IRREDUCIBLE（reviewer 在途） |
+| `TRI2-CALLOUT-RESID-0002` | P2 | IN_PROGRESS(varmap 半) | regA@rugra-wt-regressfix2 | `src/varmap.rs` | 死 `int iVar1;` 声明清零；'O'→0x4f printc 半归 markimplied2 |
+| `PRINTC-IMPLIED-CHARCONST-0001` | P1 | IN_PROGRESS | markimplied2@rugra-wt-markimplied2 | `src/printc.rs`（**独占 printc 租约**） | implied-def 折叠臂（unique 裸标识/missing-LHS）+ 'O'→0x4f char 常量形（pushCharConstant 通道） |
+| `REJECT-MAINSPIN-RESTART-0001` | P0 | IN_PROGRESS | mainspinfix@rugra-wt-mainspinfix | `src/action.rs`+`src/funcdata.rs` | R-MAINSPIN REJECT 返修：有界降级→clearAnalysis+followFlow 忠实重启环；heritage.rs 只报告 |
+| `REJECT-CALLOUT-GUARDS-0001` | P1 | IN_PROGRESS | calloutfix@rugra-wt-calloutfix | `src/typeop.rs` | R-CALLOUT REJECT 返修 typeop 域（PTRADD/PTRSUB 规范化、castOutput PTRSUB 臂等）；coreaction/printc 域只登记 |
+| `REJECT-ORPHANDECL-JOIN-0001` | P1 | IN_PROGRESS | orphanfix@rugra-wt-orphanfix | `src/ruleaction.rs` | R-ORPHANDECL REJECT 返修：join 多片段逆序扫描（ruleaction.cc:793-815）；JoinRecord 基础设施缺口评估 |
+| `REGISTRY-CONTINUITY-W2-0001` | P1 | IN_PROGRESS | registryw2@rugra-wt-registryw2 | fixture_registry+metadata | append-only 前滚+三件套再生 |
+| `REVIEW-RIRRED-RPULLSUB-0001` | P0 | IN_PROGRESS | reviewer@rugra-wt-rfupreview | 只读+报告 | R-IRREDUCIBLE（master 4a4bd5c6..4ac33d30）+ R-PULLSUB（cf5c73b8） |
+| `PLTSTUB-WARNLOSS-0001` | P1 | IN_PROGRESS(只读 bisect) | pltstub@rugra-wt-pltstub | 只读+报告 | 51→27 警告丢失二分（早于 8474ec13） |
 
-> printc.rs 租约队列：strconst2（持锁）→ switchemit（阶段 B）→ 后备：callindptr/microform/markimplied-printc 臂。
-> coreaction.rs 租约队列：regB（持锁）→ 后备：markimplied/deadstore/callspec-resid。
+已交付集成（本轮）：LINEWRAP=master `980f0831`（**hugehelp 逐字节=golden，diff 0**）；GOTO-LABEL=master `a3cda8b9`（httpd 三症状 1→0 清零，curl 2714/0/0，httpd 2355/0/0/29）；PULLSUB=master `cf5c73b8`（待 R-PULLSUB 复核）；IRREDUCIBLE R1-6=master `4a4bd5c6..4ac33d30`（待 R-IRREDUCIBLE 复核）。
+> 基线（master `cf5c73b8`）：124 函数 / defects 0 / numbering 0 / skeleton 2714；三函数 0/6/8（progressbarinit 6 中 2 行='O' 字面量、1 行=iVar1 死声明、余=store-split 域）。
+> 租约队列：printc.rs = markimplied2（持锁）→ switchemit 阶段 B（等 BlockSwitch 结构侧）→ callindptr/microform；coreaction.rs = regB → markimplied/deadstore 排队；空闲 worktree 断点：switchemit（阶段 A 设计完成 0630c160/e64fc295，待结构侧+租约）、markimplied（旧 wip 仅作矿）、callindptr/microform（未启）。
+> 机制 C 复核账：R-MAINSPIN/R-ORPHANDECL/R-CALLOUT 三 REJECT（报告 /tmp/rugra-reports/R-*-2026-08-27.md）→ 返修已派；R-IRREDUCIBLE/R-PULLSUB 在途。
 
 ## 历史 wave：`W-2026-08-24-TRIFUNC-GAP`（进行中；基线 = fresh `f7b3c31` artifact，三函数严格 0/3）
 
