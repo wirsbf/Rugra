@@ -1,5 +1,17 @@
 # `prettyprint.rs` API Reference
 
+## 2026-08-27：移除 `0x4f` 字符后处理 workaround（TRI2-CALLOUT-RESID-0002）
+
+删除 `post_process_output_legacy` 第七趟中 `0x4f → 'O'` 的赋值替换。
+该映射没有合法消费者：它对所有 `= 0x4f;` 赋值生效，而 Ghidra 的字符形由
+`PrintC::pushConstant` 的 propagated read-facing 类型分派决定，不应由文本后处理
+猜测。现在由 `src/printc.rs` 的 `TYPE_INT/TYPE_UINT + isCharPrint` 通道负责该决定。
+
+验证记录：移除前 curl 输出有 3 个 `= '..';` 赋值（`config='&'`、
+`myprogress='#'`、`progressbarinit='O'`），移除后为 2 个；仅
+`progressbarinit` 受影响并收敛到 golden 的 `bar->width = 0x4f;`，其余两处与
+golden 保持一致。
+
 ## 2026-08-26：`EmitPrettyPrint` Oppen 折行引擎 1:1 移植（PRINTC-LINEWRAP-0001）
 
 Ghidra 反编译器的主输出走 `EmitPrettyPrint`（`printlanguage.cc:69`
