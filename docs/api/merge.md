@@ -69,10 +69,19 @@ Perform the full merging + naming pipeline. Phase order:
    PcodeOpTree order into offset-aware `VariableGroup`s (merge.cc:967-976,
    1374-1407), allowing
    structured pointer expressions to use the root HighVariable.
-4. `compute_varnode_covers` → per-Varnode liveness covers (precise def→use
+5. `compute_varnode_covers` → per-Varnode liveness covers (precise def→use
    range, NOT propagated through CFG successors — that over-approximation
    broke ActionMarkImplied's inflateTest; `propagate_cover_through_cfg` is
    now `#[allow(dead_code)]` disabled)
+
+`protoPartial` ordering evidence: Ghidra registers roots from the ordered
+`ActionPool::processOp` traversal (`action.cc:822`), and `groupPartials`
+consumes that vector without sorting (`merge.cc:970-975`). Rugra's action
+iterator advances the ordered `PcodeOpTree` (`action.rs:1400-1414`), and
+`group_partials` consumes that same order. The HashSet only deduplicates root
+identity after collection and cannot alter first-seen order. `groupWith` has
+no duplicate/failure branch (`variable.cc:574-605`), so repeated offsets are
+permitted rather than silently inventing an error path.
 5. `merge_by_cover` → merge copy-related disjoint-cover pairs
 6. `update_high_covers` → sync each HighVariable.cover from members
 7. `assign_names` → Ghidra-style auto-naming
