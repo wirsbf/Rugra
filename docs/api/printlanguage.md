@@ -1,5 +1,18 @@
 ﻿# `printlanguage.rs` API Reference
 
+## 2026-08-26：RPN emit 改用带 id 的括号/空格原语（PRINTC-LINEWRAP-0001）
+
+- `rpn_push_op` 的 postsurround/presurround 臂升级：
+  `open_paren(&tok.print1)` 返回组 id 存 `entry.id2`，back token 用
+  `close_paren(&tok.print2, entry.id2)`（printlanguage.cc:146-147/178-179
+  的 `openParen(OPEN_PAREN)` / `closeParen(CLOSE_PAREN,id)` 完整形态）。
+- binary/unary 臂的 `emit_spaces` 换 `emit.spaces(tok.spacing, tok.bump)`
+  （printlanguage.cc:338-369）；`bump` 随调用传递，pretty printer 把它
+  当折行缩进用。
+- 兼容 shim `emit_spaces` 转发到 `Emit::spaces`。
+
+**验证**：hugehelp 与 golden 逐字节一致；全量差分 defects=0/numbering=0。
+
 ## 文档状态
 
 - **状态**: 🔧 **L2（2026-08-12）**——`PRINT-RPN-0001A` 已用锁定

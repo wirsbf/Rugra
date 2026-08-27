@@ -1,5 +1,80 @@
 # `prettyprint.rs` API Reference
 
+## 2026-08-27：移除 `0x4f` 字符后处理 workaround（TRI2-CALLOUT-RESID-0002）
+
+删除 `post_process_output_legacy` 第七趟中 `0x4f → 'O'` 的赋值替换。
+该映射没有合法消费者：它对所有 `= 0x4f;` 赋值生效，而 Ghidra 的字符形由
+`PrintC::pushConstant` 的 propagated read-facing 类型分派决定，不应由文本后处理
+猜测。现在由 `src/printc.rs` 的 `TYPE_INT/TYPE_UINT + isCharPrint` 通道负责该决定。
+
+验证记录：移除前 curl 输出有 3 个 `= '..';` 赋值（`config='&'`、
+`myprogress='#'`、`progressbarinit='O'`），移除后为 2 个；仅
+`progressbarinit` 受影响并收敛到 golden 的 `bar->width = 0x4f;`，其余两处与
+golden 保持一致。
+
+## 2026-08-26：`EmitPrettyPrint` Oppen 折行引擎 1:1 移植（PRINTC-LINEWRAP-0001）
+
+Ghidra 反编译器的主输出走 `EmitPrettyPrint`（`printlanguage.cc:69`
+`emit = new EmitPrettyPrint()`），即 Derek C. Oppen 令牌队列折行算法。
+Rugra 此前只有 `EmitNoMarkup` 直写路径，长表达式永不折行（hugehelp
+长字面量为单行，golden 为 `puts(\n      "..."\n      );` 三行）。
+
+本提交补齐 emit 层行宽机制（prettyprint.cc:541-1243 / prettyprint.hh:609-1115）：
+
+- `pub struct TokenSplit`（hh:609）——令牌/命令对象：`tagtype`（28 值
+  `TagType`）+ `delimtype`（9 值 `PrintClass`）+ `tok`/`indentbump`/
+  `numspaces`/`size`/`count`。每个 emitter 方法对应一个构造器
+  （`begin_document`..`tag_line_indent`），`size` 为内容字符数或未提交
+  组的负扫描偏移。
+- `struct CircularQueue<T>`（hh:944）——环形缓冲，栈用法 `push/pop`、
+  队列用法 `push/popbottom`，整型引用在 push/pop 后仍有效；
+  `expand(amount)` 重分配并紧凑到引用 0（hh:1003-1027），
+  `EmitPrettyPrint::expand`（cc:564-579）按
+  `(ref + max - left) % max` 同步调整 scanqueue 引用。
+- `pub struct EmitPrettyPrint`——scan/advanceleft/print/overflow 四函数
+  心脏（cc:614-802）+ `checkstart/checkstring/checkend/checkbreak`（cc:806-856）
+  + 全部 emitter 方法（cc:858-1192）。`open_paren` 自动开组（cc:1094-1103:
+  `id = openGroup(); …; needbreak = true`），`close_paren` 关组；
+  `flush`（cc:1194-1211）排空队列（未闭合组在 oracle 抛 LowlevelError，
+  Rugra 记日志跳过——emit 层无错误通道的保守降级）；
+  `set_max_line_size`（cc:1225-1235，20..=10000，`3*val` 队列容量）；
+  `clear`（cc:1153-1166）。低层为 `EmitNoMarkup` 字节汇。
+- `Emit` trait 变更：`open_paren(paren) -> i32` / `close_paren(paren, id)`
+  （默认实现即打印括号、返回 0，cc:587-591）；`spaces(num, bump)`
+  （cc:46-59 spacearray 折叠，默认实现打印 `num` 个空格；pretty printer
+  里是 \e tokenbreak）；`start_comment/stop_comment/flush/set_comment_fill`
+  空默认。
+- 调用方（printc/printlanguage 的 RPN 路径）改用带 id 的
+  open/close_paren 与 `spaces(spacing, bump)`（printlanguage.cc:146-179/
+  338-369）；docFunction 尾部补 `tagLine→endFunction→flush`
+  （printc.cc:2663-2665）；typedef 前言包进 `beginDocument..endDocument`
+  （docAllGlobals 形态，printc.cc:2621-2629）；`PrintC::new` 设置
+  comment fill `"   "`（setCommentDelimeter "/* " 宽度，printlanguage.cc:96-110）。
+- 驱动（examples/curl_decompile.rs）换用 `EmitPrettyPrint`。
+
+**验证**：hugehelp 函数体与 `tests/golden/ghidra_curl_1204.c` 逐字节一致
+（`--func hugehelp` Skeleton identical）；全量差分 defects=0 /
+numbering=0；总 skeleton 2824→2776（main -24、getparameter -26、
+hugehelp -12；5 个函数 +14 行均为内容本已分叉的长表达式折行位置差）。
+逐函数 oracle 行为差分状态仍按机制 B2 记 `UNTESTED`（分支/边界未全
+覆盖），不得据此把模块升 L3；emit 层折行行为以 curl golden 为证据。
+
+## 2026-08-27：死会话遗留两处收尾（PRINTC-LINEWRAP-0001 续）
+
+- `EmitPrettyPrint::next_count`：C 的 `countbase++`（prettyprint.hh:685
+  等 TokenSplit 构造器）是后置自增，表达式值为自增**前**的旧值；
+  `AtomicI32::fetch_add(1)` 同样返回旧值——原实现 `fetch_add(1) + 1`
+  把 id 整体偏移了 1。count 只用于 begin/end 配对（非 PRETTY_DEBUG
+  构建不参与输出字节），修正为语义 1:1。
+- `post_process` 移除 `RUGRA_DBG_NO_P3` 临时旁路（机制 D：`[DBG]`
+  临时通道提交前必须删除）。
+- 驱动（examples/curl_decompile.rs）STRCONST-SPANNONOVERLAP：字符串
+  Data 严格非重叠注入（run+NUL 跨度内跳过 per-byte DAT、8 字节槽
+  entry 裁剪到下一字符串起点），恢复 oracle Program DB 的
+  findContainer 最小包含选择，使 ActionConstantPtr 字符串臂在字符串
+  起点命中——回归 A（字面量退化为指针算术）的本 worktree 侧修复，
+  供 hugehelp 折行形态 E2E 验证。
+
 ## 2026-08-26：`EmitNoMarkup` 空白折叠不进入字符串字面量（MAINDIFF-STRCONST-0001）
 
 `get_output` 后处理的取消-清理段（cancel_patterns 之后的双空格折叠与
@@ -476,3 +551,12 @@ prettyprint.hh:547 是 EmitNoMarkup 类声明，oracle 无任何 backfill
 
 验收：curl E2E 幻影声明 18→0；真未链接引用（glob_set piVar1、
 register0x/unique0x token）注入保持；defects=0/numbering=0 保持。
+
+### 2026-08-26：GOTO-LABEL — `code_r0x...:` 标号的死区保留
+
+`post_process` 死代码消除中"被引用标号行"的判定从 `LAB_` 前缀扩展到
+`code_` 前缀（PrintC::emitLabel 产出的 `code_r0x...:` 与 LAB_ 同为 goto
+目标；跳入死区是合法 C，被引用的 code_ 标号必须存活，否则所有指向它的
+goto 成为未定义标号 gcc 错误——httpd ap_update_vhost_given_ip /
+ap_strchr 观察）。判据不变：整行 `标识符:` 且无空格，且全文存在
+`goto <标识符>;` 引用。

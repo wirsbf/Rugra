@@ -1067,8 +1067,8 @@ pub fn rpn_push_atom(
                 let id = back.id;
                 rpn_emit_op(emit, token_table, revpol, revpol.len() - 1);
                 if paren {
-                    emit.close_paren();
-                    let _ = id; // Ghidra passes id to closeParen
+                    // printlanguage.cc:178-179: emit->closeParen(CLOSE_PAREN,id)
+                    emit.close_paren(")", id);
                 } else {
                     emit.close_group(id);
                 }
@@ -1128,8 +1128,8 @@ pub fn rpn_push_op(
         };
         paren = parentheses(top_tok, stage, new_tok, prev_tok);
         if paren {
-            emit.open_paren();
-            id = 0; // Ghidra: emit->openParen(OPEN_PAREN)
+            // printlanguage.cc:146-147: id = emit->openParen(OPEN_PAREN)
+            id = emit.open_paren("(");
         } else {
             id = emit.open_group();
         }
@@ -1163,9 +1163,9 @@ pub fn rpn_emit_op(
             if entry.visited != 1 {
                 return;
             }
-            emit_spaces(emit, tok.spacing, tok.bump);
+            emit.spaces(tok.spacing, tok.bump);
             emit.tag_op(&tok.print1);
-            emit_spaces(emit, tok.spacing, tok.bump);
+            emit.spaces(tok.spacing, tok.bump);
         }
         TokenType::UnaryPrefix => {
             // printlanguage.cc:338-342
@@ -1173,7 +1173,7 @@ pub fn rpn_emit_op(
                 return;
             }
             emit.tag_op(&tok.print1);
-            emit_spaces(emit, tok.spacing, tok.bump);
+            emit.spaces(tok.spacing, tok.bump);
         }
         TokenType::Postsurround => {
             // printlanguage.cc:343-353
@@ -1182,13 +1182,12 @@ pub fn rpn_emit_op(
             }
             if entry.visited == 1 {
                 // Front surround token
-                emit_spaces(emit, tok.spacing, tok.bump);
-                emit.print(&tok.print1); // openParen(print1)
-                entry.id2 = 0;
-                emit_spaces(emit, 0, tok.bump);
+                emit.spaces(tok.spacing, tok.bump);
+                entry.id2 = emit.open_paren(&tok.print1); // openParen(print1)
+                emit.spaces(0, tok.bump);
             } else {
                 // Back surround token
-                emit.print(&tok.print2); // closeParen(print2, id2)
+                emit.close_paren(&tok.print2, entry.id2); // closeParen(print2,id2)
             }
         }
         TokenType::Presurround => {
@@ -1198,12 +1197,11 @@ pub fn rpn_emit_op(
             }
             if entry.visited == 0 {
                 // Front surround token
-                entry.id2 = 0;
-                emit.print(&tok.print1); // openParen(print1)
+                entry.id2 = emit.open_paren(&tok.print1); // openParen(print1)
             } else {
                 // Back surround token
-                emit.print(&tok.print2); // closeParen(print2, id2)
-                emit_spaces(emit, tok.spacing, tok.bump);
+                emit.close_paren(&tok.print2, entry.id2); // closeParen(print2,id2)
+                emit.spaces(tok.spacing, tok.bump);
             }
         }
         TokenType::Space => {
@@ -1211,7 +1209,7 @@ pub fn rpn_emit_op(
             if entry.visited != 1 {
                 return;
             }
-            emit_spaces(emit, tok.spacing, tok.bump);
+            emit.spaces(tok.spacing, tok.bump);
         }
         TokenType::HiddenFunction => {
             // printlanguage.cc:368-369
@@ -1220,14 +1218,12 @@ pub fn rpn_emit_op(
     }
 }
 
-// RUGRA-GLUE: emit_spaces (Ghidra's Emit::spaces(spacing, bump) — Rugra Emit lacks it)
-/// Emit `spacing` space characters. Mirrors Ghidra's `emit->spaces(spacing,
-/// bump)`. The `bump` (indent-if-break) parameter is accepted for API parity
-/// but Rugra's `Emit` trait has no line-wrapping, so it is currently unused.
-fn emit_spaces(emit: &mut dyn Emit, spacing: i32, _bump: i32) {
-    for _ in 0..spacing {
-        emit.print(" ");
-    }
+// RUGRA-GLUE: emit_spaces superseded by Emit::spaces (prettyprint.cc:46)
+/// Kept for the parity callers above that have not migrated; forwards to
+/// the emitter's `spaces` (tokenbreak in the pretty printer, plain spaces
+/// otherwise). The `bump` now travels with the call.
+fn emit_spaces(emit: &mut dyn Emit, spacing: i32, bump: i32) {
+    emit.spaces(spacing, bump);
 }
 
 // Ghidra: printlanguage.cc:375 PrintLanguage::emitAtom

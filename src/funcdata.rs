@@ -5961,11 +5961,156 @@ impl Funcdata {
         eprintln!("[INJECT] {} build_blocks_from_alive done bblocks={}", self.name, self.bblocks.get_size());
     }
 
+    // Ghidra: funcdata_op.cc:969 Funcdata::overrideFlow (raw-layer transport)
+    /// Apply the function's registered flow overrides to a raw-op list,
+    /// BEFORE phase-1 creates the PcodeOps. This is the injection-path
+    /// transport of Ghidra's per-instruction override application:
+    /// `FlowInfo::processInstruction` (flow.cc:415-418) reads
+    /// `data.getOverride().getFlowOverride(curaddr)` after the SLEEF
+    /// translation and, if non-NONE, calls `data.overrideFlow(curaddr,...)`
+    /// (flow.cc:474-475) BEFORE `xrefControlFlow` — i.e. on the raw p-code,
+    /// before block formation. Rugra's `inject_raw_ops` is the transport of
+    /// that disassembly walk (phase 1 = oneInstruction's dump, phase 2 =
+    /// xrefControlFlow's block marking), so the override is applied between
+    /// the same two points, but at the raw layer: Rugra's documented
+    /// create-implies-alive divergence (op.rs `PcodeOpBank::create`) means
+    /// phase-1 ops are never `isDead()`, so the dead-op
+    /// `Funcdata::overrideFlow` port cannot run on them — and the
+    /// `opDeadInsertAfter` RETURN it inserts would not be in phase-2's
+    /// op_refs vector, dropping it from the block graph entirely. The
+    /// rewrite table below is the faithful raw-layer image of
+    /// funcdata_op.cc:991-1020 (BRANCH→CALL, BRANCHIND→CALLIND, RETURN→
+    /// CALLIND; CBRANCH unsupported; CALL_RETURN appends a RETURN with
+    /// constant-0 input right after the rewritten call, the transport of
+    /// cc:1006-1011's `newOp` + `opSetInput` + `opDeadInsertAfter`).
+    ///
+    /// Primary-op selection mirrors `Funcdata::findPrimaryBranch`
+    /// (funcdata_op.cc:929-961): only the FIRST branch-like op at an
+    /// instruction address is considered, and a BRANCH/CBRANCH counts only
+    /// when its in(0) is non-constant (internal p-code branches carry a
+    /// constant relative target, cc:938). Ghidra applies the override once
+    /// per instruction; the per-address `seen` set preserves that.
+    fn apply_flow_overrides_raw(
+        raw_ops: &[PcodeOpRaw],
+        ovr: &crate::override_rs::Override,
+    ) -> Vec<PcodeOpRaw> {
+        use crate::override_rs::FlowOverride as FO;
+        let mut out: Vec<PcodeOpRaw> = Vec::with_capacity(raw_ops.len() + 4);
+        // One application per instruction address (Ghidra looks the
+        // override up per curaddr, flow.cc:416).
+        let mut seen: std::collections::BTreeSet<Address> = std::collections::BTreeSet::new();
+        for raw in raw_ops {
+            let Some(seq) = raw.seq_num() else {
+                out.push(raw.clone());
+                continue;
+            };
+            let addr = seq.get_addr();
+            let fo = ovr.get_flow_override(addr);
+            let cur = OpCode::from_i32(raw.get_opcode());
+            let branch_like = matches!(
+                cur,
+                Some(OpCode::CPUI_BRANCH)
+                    | Some(OpCode::CPUI_CBRANCH)
+                    | Some(OpCode::CPUI_BRANCHIND)
+                    | Some(OpCode::CPUI_CALL)
+                    | Some(OpCode::CPUI_CALLIND)
+                    | Some(OpCode::CPUI_RETURN)
+            );
+            // findPrimaryBranch (cc:932-959): BRANCH/CBRANCH need a
+            // non-constant in(0); BRANCHIND/CALL/CALLIND/RETURN qualify
+            // unconditionally.
+            let primary_ok = branch_like
+                && match cur {
+                    Some(OpCode::CPUI_BRANCH) | Some(OpCode::CPUI_CBRANCH) => {
+                        raw.inputs().first().map(|vn| vn.space != AddressSpace::Const).unwrap_or(false)
+                    }
+                    _ => true,
+                };
+            if fo == FO::None || !primary_ok || !seen.insert(addr) {
+                out.push(raw.clone());
+                continue;
+            }
+            let mut rewritten = raw.clone();
+            match fo {
+                FO::Branch => match cur {
+                    Some(OpCode::CPUI_CALL) => rewritten.set_opcode(OpCode::CPUI_BRANCH as i32),
+                    Some(OpCode::CPUI_CALLIND) => rewritten.set_opcode(OpCode::CPUI_BRANCHIND as i32),
+                    Some(OpCode::CPUI_RETURN) => rewritten.set_opcode(OpCode::CPUI_BRANCHIND as i32),
+                    _ => {}
+                },
+                FO::Call | FO::CallReturn => {
+                    match cur {
+                        Some(OpCode::CPUI_BRANCH) => rewritten.set_opcode(OpCode::CPUI_CALL as i32),
+                        Some(OpCode::CPUI_BRANCHIND) => rewritten.set_opcode(OpCode::CPUI_CALLIND as i32),
+                        Some(OpCode::CPUI_RETURN) => rewritten.set_opcode(OpCode::CPUI_CALLIND as i32),
+                        Some(OpCode::CPUI_CBRANCH) => {
+                            // cc:1000-1001: "Do not currently support
+                            // CBRANCH overrides" — Ghidra throws; the raw
+                            // transport leaves the op untouched (the
+                            // injection path cannot abort mid-walk) and
+                            // reports.
+                            eprintln!("[INJECT] WARN: CBRANCH flow override unsupported at {}", addr.as_u64());
+                        }
+                        _ => {}
+                    }
+                    if fo == FO::CallReturn {
+                        // cc:1006-1011: CALL_RETURN inserts a RETURN with
+                        // constant-0 input immediately after the call.
+                        // Order `u32::MAX` keeps the SeqNum strictly after
+                        // every real op of the instruction (the lifter's
+                        // per-instruction orders are tiny) while sharing
+                        // the instruction address, so phase-2 partitions
+                        // it into the same tail block — the position
+                        // opDeadInsertAfter guarantees in Ghidra.
+                        let mut ret = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+                        ret.add_input(crate::pcoderaw::VarnodeRaw::new(
+                            AddressSpace::Const,
+                            0,
+                            8,
+                        ));
+                        ret.set_seq_num(crate::address::SeqNum::new(addr, u32::MAX));
+                        out.push(rewritten);
+                        out.push(ret);
+                        continue;
+                    }
+                }
+                FO::Return => match cur {
+                    Some(OpCode::CPUI_BRANCHIND) => rewritten.set_opcode(OpCode::CPUI_RETURN as i32),
+                    Some(OpCode::CPUI_CALLIND) => rewritten.set_opcode(OpCode::CPUI_RETURN as i32),
+                    Some(OpCode::CPUI_BRANCH) | Some(OpCode::CPUI_CBRANCH) | Some(OpCode::CPUI_CALL) => {
+                        // cc:1015-1017: complex RETURN overrides throw.
+                        eprintln!("[INJECT] WARN: complex RETURN flow override unsupported at {}", addr.as_u64());
+                    }
+                    _ => {}
+                },
+                FO::None => {}
+            }
+            out.push(rewritten);
+        }
+        out
+    }
+
     // RUGRA-GLUE: Batch raw-P-code adapter around Ghidra's PcodeEmitFd::dump conversion and Funcdata bank insertion APIs.
     pub fn inject_raw_ops(&mut self, raw_ops: &[PcodeOpRaw]) {
         if raw_ops.is_empty() {
             return;
         }
+
+        // flow.cc:415-418 + 474-475: apply registered flow overrides to the
+        // raw p-code between the instruction dump (phase 1) and the
+        // control-flow xref / block formation (phase 2) — Ghidra's exact
+        // position inside FlowInfo::processInstruction. Zero overrides
+        // (the default for every driver that does not seed
+        // localoverride — the TailCallAnalyzer role lives with the
+        // analysis driver) leaves the list untouched: no clone, no
+        // behavior change.
+        let overridden_storage;
+        let raw_ops: &[PcodeOpRaw] = if self.localoverride.has_flow_override() {
+            overridden_storage = Self::apply_flow_overrides_raw(raw_ops, &self.localoverride);
+            &overridden_storage
+        } else {
+            raw_ops
+        };
 
         // Phase 1: Convert all raw ops into PcodeOps with proper varnodes
         let mut op_refs: Vec<PcodeOpRef> = Vec::with_capacity(raw_ops.len());

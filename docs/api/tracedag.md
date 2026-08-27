@@ -1,6 +1,8 @@
 # `tracedag.rs` API Reference
 
-**状态**: 已重写核对（2026-08-24 BLOCKSTRUCT-GOTOCASCADE-CONDSTMT-0001，per-loop 驱动）
+**状态**: 已核对（当前有效；2026-08-27 TRI2-STRUCT-IRREDUCIBLE-TRACE-0001 加 [TD] 决策日志）
+**2026-08-27 追加（TRI2-STRUCT-IRREDUCIBLE-TRACE-0001）**: `push_branches` 增加 RUGRA_IRRED_DBG=1 门控的 stderr 诊断（`[TD] OPEN/RETIRE/STALL/BADEDGE` 行：trace#、bottom/dest、edgelump、visitcount、loopDAG_in/total_in、bp depth）——用于与 oracle 逐步决策对拍，无行为影响（env 未设时零开销路径不变）。
+**状态（前）**: 已重写核对（2026-08-24 BLOCKSTRUCT-GOTOCASCADE-CONDSTMT-0001，per-loop 驱动）
 **源代码路径**: `src/tracedag.rs`
 
 ## 2026-08-24 重写（BLOCKSTRUCT-GOTOCASCADE-CONDSTMT-0001）

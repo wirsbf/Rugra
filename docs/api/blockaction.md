@@ -1,6 +1,18 @@
 # `blockaction.rs` API Reference
 
-**状态**: 已核对（当前有效，2026-08-26 BLOCKSTRUCT-GUARD-GAPS-0001 三处存量守卫缺口补齐）
+**状态**: 已核对（当前有效，2026-08-27 TRI2-STRUCT-IRREDUCIBLE-TRACE-0001 六轮审计）
+**2026-08-27 追加（round 6 — TraceDAG/不可约环审计）**: 在 oracle `e40ed13014025f82488b1f8f7bca566894ac376b` 上逐行复核 `blockaction.cc:499-1014`（TraceDAG）及 `:1124-1277`（LoopBody/updateLoopBody/selectGoto）。oracle 没有 `splitDag`/duplicate 系列 API；不可约环处理是 `pushBranches` 的 `checkRetirement`→`checkOpen`→`selectBadEdge` 单边循环。当前树全量 curl E2E：124/124，`defects=0`、`numbering=0`、skeleton diff=2598；`selectGoto exhausted` 仅 `getparameter.constprop.0` 1 次（此前 8 函数残差中的其余 7 已清零）。该函数耗尽现场为 138 块/51 非孤立/86 DEAD，仍无 `BlockSwitch`（golden 1 switch/48 case）；TraceDAG 未触发迭代上限。结论：剩余差异是 jumptable 恢复及 block 边界/组合块消费，不是 TraceDAG 非终止；block.rs 由另一 agent 持有，本轮不修改。
+**2026-08-27 追加（round 5 — identify_internal 边迁移补 BlockSwitch 臂）**: `identify_internal` 的边界边安装 downcast 链补 `BlockSwitch` 臂——Ghidra `newBlockSwitch`（block.cc:1913）与所有组合块一样经 `identifyInternal(ret,cs)` 调 `selfIdentify()`（block.cc:962/895-931），switch 组合块的 incoming/outgoing = dispatch 的外部入边 + case/exit 边界出边。Rugra 侧各具体块类型各自持有 incoming/outgoing 向量，缺臂 = 每个 BlockSwitch 组合块 sizeIn==0/sizeOut==0（单侧边：pred 保留 out 半边、exit 保留 in 半边）→ ruleBlockCat 拒绝链（cc:1300 `outblock->sizeIn() != 1`）→ selectGoto 在残差 3 块图上 cc:1275 exhausted。E2E：exhausted **2→1**（glob_set 清零；残 getparameter.constprop.0），defects=0/numbering=0，skeleton 2611→2598，124/124 exit0/0 panic。
+**2026-08-27 追加（round 4 — 删除子句入边门的自创 switch_case_indices 臂）**: `count_non_structural_in_edges` 删除 `switch_case_indices.contains(pred)` "structural" 臂——Ghidra 的守卫是纯 `clauseblock->sizeIn() != 1`（blockaction.cc:1391/1428 等），无 cascade 成员概念。自创臂把 refreshSwitchCases 的 CBRANCH 级联标记（无 oracle 对应物）计为 structural，使级联 walker 触碰过的每条 else-if 链被 proper_if/if_else/do_while 拒绝——链不可折叠，selectGoto exhausted。E2E curl：exhausted 8 fns → 2（getparameter.constprop.0/glob_set），defects=0/numbering=0，skeleton 3050→2611，输出归档 result/curl_cur.c。
+**2026-08-27 追加（round 3 — 删除 try_rule_if_goto 自创 case-body 守卫）**: `try_rule_if_goto` 删除 `switch_case_indices.contains(&body_idx)` 拒绝守卫——Ghidra `ruleBlockGoto`（cc:1446-1471）对 IfGoto 包裹**无任何 case-body 预守卫**（switch 的保护在 isSwitchOut→newBlockMultiGoto 臂，cc:1456-1458，Rugra 侧 BLOCKSTRUCT-MULTIGOTO-0001 跳过）。该守卫源自自创 `refreshSwitchCases`（oracle 无此函数）的 CBRANCH 级联标记：把级联链 out[1] 目标（正是 jumptable 邻域环头，如 next_url blk17）标成 "case body"，拒绝 IfGoto 包裹 → selectGoto 的 goto 标记无人消费 → cc:1275 exhausted。E2E：exhausted **6→3**（next_url/match_url/parseconfig 清零；残 getparameter/glob_set/glob_range=switch 恢复族），defects=0/numbering=0，skeleton 2740→**2815**（main 543→735 +192 恢复体、match_url 124→95、parseconfig 171→107——更多真实结构暴露），124/124 exit0/0 panic。
+**2026-08-27 追加（round 2 — clipExtraRoots 忠实化）**: `clip_extra_roots` 对齐 cc:1108-1121 + `onlyReachableFromRoot`（cc:1041-1067）+ `markExitsAsGotos`（cc:1070-1090）逐行：①删除自创 `BlockType::Basic|Copy` 类型门（cc:1080 只有 `sizeIn()!=0` 检查——结构化复合块（被 wrap 的 BlockGoto/BlockList）同样可作 cross-over root；parseconfig 残差 blk13 in=[] 正是被该门跳过）；②`markExitsAsGotos` 计数从 per-block 改 per-edge，且不再跳过已 goto 边（cc:1078-1084 对每个指向非 body 目标的出边无条件 `setGotoBranch(j); changecount+=1`——重计已 goto 边是 collapseAll 循环推进的语义：clip 反复返回 true 直到 try_rule_goto 把标记块吸收）；③goto 标记从块级 GOTO_EDGE_0/1 flag 改为完整 `set_goto_branch_on_block`（setGotoBranch block.cc:305-313：边 label f_goto_edge 双半镜像 + f_interior_gotoout/gotoin——isGotoOut/TraceDAG 可见）；④visitcount 收敛判 `==`（cc:1063 `count == curbl->sizeIn()`）。E2E：exhausted 保持 6 hits（residual 族更深根因=双 tail 环+switch 恢复），但 parseconfig root=13 / getparameter root=3 的 clip 路径激活（`ruleBlockGoto: wrapped block 13`），defects=0/numbering=0/skeleton 2740。
+**2026-08-27 追加（TRI2-STRUCT-IRREDUCIBLE-TRACE-0001 round 1 — 折叠层级父链解析）**: 修复 selectGoto exhausted 残差族（jumptable 邻域不可约环）的分叉根因：旧端口把「tail 被复合块吸收」误判为「环死亡」，而 oracle 经 `getParent()` 链把吸收后的 tail 解析到存活的组合块上，环仍然存在：
+1. `LoopBody::update`（cc:94-114 重写）：`cc:95-96` head 父链解析 + `cc:97-103` 每 tail 父链解析（`resolve_to_graph_level`），首个解析结果 ≠ head（均解析后）即返回 bottom；`cc:104-112` 全部 tail 解析进 head 才检查 head 自环；`cc:113` 返回 None。旧实现遇 DEAD tail 直接 `continue`（自创"index-based model"），`updateLoopBody`（cc:1214-1216）视为环死亡 → `likelylistfull=false` 丢弃剩余 likelygoto 候选 → final trace 空 → cc:1275 LowlevelError。
+2. `FloatingEdge::get_current_edge`（cc:27-37 重写）：`cc:28-33` 双端点父链解析（吸收端点解析到组合块，其 selfIdentify 继承的边界边代表同一流），`cc:34-35` 找 out-slot。旧实现遇 DEAD source 直接 None——正是 selectGoto 重解析残留候选时丢边的位置。
+3. `LoopBody::emit_likely_edges`（cc:364-412 重写）：`cc:367-371` head/exitblock 解析、`cc:372-379` tails 解析 + `tail == exitblock → exitblock = -1`（exitblock 被吸收进 tail 则环无出口）、`cc:381-397` exit_edges 逐条 getCurrentEdge 重解析（消失边跳过）+ 官方 exit 边（解析后目标 == exitblock 的**最后一条**）held、`cc:398-409` held 边在最终 back-edge 前发射 + back-edges 逆 tail 序。旧实现 clone 原始条目不重解析、hold 判定用陈旧 to_idx。
+4. 吸收登记：`identify_internal` 消费块 DEAD 处 + `collapse_sequences` succ DEAD 处写 `graph.absorbed_into[idx] = install_idx`（Ghidra `FlowBlock::parent` 指向组合块的等价记录，见 block.md `resolve_to_graph_level`）。
+E2E（curl 124 fn，fast-release + RUGRA_IRRED_DBG=1）：exit 0 / 0 panic，`selectGoto exhausted` **9→6 hits**（main、glob_word 清零；getparameter/glob_set/glob_range/match_url/next_url×1(原2)/parseconfig 残留），defects=0 / numbering=0，skeleton 3050→2742。`[IRRED]`（finaltrace 残差图 dump）/`[TD]`（TraceDAG OPEN/RETIRE/STALL/BADEDGE 决策日志）为 RUGRA_IRRED_DBG=1 环境变量门控的诊断输出（stderr）。
+**状态（前）**: 已核对（2026-08-26 BLOCKSTRUCT-GUARD-GAPS-0001 三处存量守卫缺口补齐）
 **2026-08-26 追加（BLOCKSTRUCT-GUARD-GAPS-0001）**: 补齐复核登记的三处 oracle 守卫缺口（存量债，非上一轮引入）：
 1. `try_rule_if_else` 补全 ruleBlockIfElse 守卫组（blockaction.cc:1416-1444 逐行）：cc:1422 `bl->isSwitchOut()`、cc:1423-1424 双出边 `isDecisionOut`（经 `out_edge_is_decision`，block.hh:336 = 非 irreducible/back/goto）、cc:1433-1434 共同汇合点非 cond 自身（No loops）、cc:1435 两子句 exit 同点、cc:1437-1438 子句 `isSwitchOut`、cc:1439-1440 子句 `isGotoOut(0)`。**同时修正 tc/fc 位置语义**：oracle `tc = bl->getTrueOut()` = out[1]、`fc = bl->getFalseOut()` = out[0]（block.hh:299-300，位置性；Rugra flow.rs:1045 fallthru-first 同构）——旧端口把 out[0] 读进 tc 槽、out[1] 读进 fc 槽，`new_block_if_else(..., negated=false)` 把 **false 路径子句打印在 `if` 之下**，与 oracle（此处从不 negateCondition，cc:1442）相反的 C 语义。
 2. `try_rule_do_while` 补 cc:1562-1563 `bl->isGotoOut(0)/isGotoOut(1)` 拒绝守卫（经 `out_edge_is_goto` label 形态，结构块同样可见）：已标 unstructured 的回边/出边保持 goto，不再被 do/while 吸收。
@@ -981,8 +993,23 @@ cleanup pool（RuleSplit* 等）插入的 STORE 对打印可见。
   collapse 消费，此后所有后续读取（打印、ActionSetCasts 等结构化后
   Action 插入）看到源块实时 op，与 BlockCopy 一致。
 
-### 回归 B 裁决（2026-08-27）
 
-活动源委托实验已撤销。Rugra 当前保留 `build_copy` 的构造时 op 快照，
-因为活动委托会令 my_fwrite 两次判空塌缩为永假合取；STORE 全宽类型
-播种仍在 `ActionInferTypes` 中保留。
+### 2026-08-27：TRI2 round 4 — clause 入边门进一步回 oracle
+
+- `count_non_structural_in_edges` 删除自创 `switch_case_indices`（cascade
+  成员）arm：该 arm 把 refreshSwitchCases 的 CBRANCH 链标记当作"结构化"入边
+  计数排除，导致所有被级联遍历器触碰的 else-if 链被 proper_if/if_else/
+  do_while 拒判，链不可塌缩，selectGoto exhausted（TRI2-STRUCT-
+  IRREDUCIBLE-TRACE-0001，glob_range 残差 1→2→3→9 with properif-legal
+  shapes）。oracle 守卫为纯 `clauseblock->sizeIn() != 1`（blockaction.cc:
+  1391/1428 等），无 cascade 概念。
+- E2E curl：exhausted 8 函数→2（getparameter.constprop.0/glob_set），
+  defects=0/numbering=0，skeleton 3050→2611，输出回流 result/curl_cur.c。
+- 残余分叉（下一步）：Switch-dispatch arm 与 DEAD arm 在 oracle 中不存在
+  （Ghidra 用 identifyInternal 把消费块移出 graph，sizeIn() 自然不含），
+  完整 faithful 移除待续。
+
+## TRI2-CALLOUT-ASSIGN-0001 集成：build_copy 活 op 视图
+
+`build_copy` 同时建立 `live_ops_source`/`source_basic` 回指，并保留结构化阶段快照
+供 collapse 消费；后续 `get_ops` 读取源块活动列表，匹配 Ghidra BlockCopy 委托。
