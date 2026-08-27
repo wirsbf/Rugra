@@ -2258,12 +2258,12 @@ impl FuncCallSpecs {
         self.prototype.output_storage
     }
 
-    // Ghidra: fspec.cc:4924 FuncCallSpecs::isInputLocked
-    /// Is the input prototype locked (params have TYPE_LOCKED)? Faithful to
-    /// `FuncCallSpecs::isInputLocked` — true if all params are type-locked.
+    // Ghidra: fspec.cc:3906 FuncProto::isInputLocked
+    /// Is this call's input prototype locked? `FuncCallSpecs` inherits
+    /// `FuncProto`; the oracle checks the void-input lock first, then only
+    /// the first parameter's type lock (fspec.cc:3906-3914).
     pub fn is_input_locked(&self) -> bool {
-        !self.prototype.parameters.is_empty()
-            && self.prototype.parameters.iter().all(|p| p.is_type_locked())
+        self.prototype.is_input_locked()
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::isOutputLocked

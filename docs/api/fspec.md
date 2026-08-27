@@ -936,3 +936,13 @@ fspec.hh:310-317/1653-1654：
 - `characterize_as_param`（fspec.cc:1145）`max=-1` 哨兵防护：oracle
   `for(i=start;i<=max;++i)` 在无 active 试验前置链时循环体不执行，
   usize 回绕会反向饱和 hole-filling 循环（XMM0-7 unref 爆炸根因）。
+
+### FSPEC-CALLPROTO-LATENT-0001：FuncCallSpecs 输入锁定谓词
+
+`FuncCallSpecs` 继承 `FuncProto`；因此 `is_input_locked()` 必须委托
+`FuncProto::isInputLocked`（fspec.cc:3906-3914），而不能要求所有参数都
+存在且逐个 type-locked。Oracle 的顺序是：先检查 `voidinputlock`；若无参数
+返回 false；否则只检查首参数的 `isTypeLocked()`。`setInputLock(true)` 在
+无参数时设置 `voidinputlock`（fspec.cc:3921-3929），有参数时逐项设置
+type-lock。Rugra 现已通过 `prototype.is_input_locked()` 对齐该门与首参检查；
+空参数、void 锁定与多参数首参锁定均纳入域语义。

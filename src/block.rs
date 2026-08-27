@@ -247,42 +247,30 @@ pub mod goto_type {
 /// to indicate whether the edge represents a `break`, `continue`,
 /// or plain `goto` in the final C output.
 pub mod edge_flags {
-    /// Edge represents a `break` out of the enclosing loop
-    pub const F_BREAK_EDGE: u32 = 1 << 0;
-    /// Edge represents a `continue` to the loop header
-    pub const F_CONTINUE_EDGE: u32 = 1 << 1;
-    /// Edge represents an unstructured `goto`
-    pub const F_GOTO_EDGE: u32 = 1 << 2;
-    /// Edge is a switch dispatch (from switch control block to a case body).
-    /// Blocks reached via this edge must not be structurally extracted by
-    /// interleaved rules, or their `case` label ends up outside the switch.
-    pub const F_SWITCH_DISPATCH: u32 = 1 << 3;
-    /// Edge exits the body of a loop (Ghidra `f_loop_exit_edge`). Set by
-    /// LoopBody::setExitMarks so TraceDAG knows where the loop ends.
-    pub const F_LOOP_EXIT_EDGE: u32 = 1 << 4;
-    /// Within a (reducible) graph, a back edge defining a loop (Ghidra
-    /// `f_back_edge`). Set by findSpanningTree DFS (block.cc:1101):
-    /// an edge to a node still on the DFS stack.
-    pub const F_BACK_EDGE: u32 = 1 << 5;
-    /// Irreducible edge introduced by the structurer (Ghidra `f_irreducible`).
-    /// Treated as a goto by LoopBody's isGotoIn/isGotoOut.
-    pub const F_IRREDUCIBLE_EDGE: u32 = 1 << 6;
-    /// Default edge from switch block (Ghidra `f_defaultswitch_edge` = 4).
-    /// Rugra uses bit 7 (Ghidra's bit 2 is F_GOTO_EDGE in Rugra).
-    pub const F_DEFAULTSWITCH_EDGE: u32 = 1 << 7;
-    // ---- Spanning-tree edge classification (Ghidra block.hh:108-118) ----
-    // Set by findSpanningTree (block.cc:1041-1108). These mirror Ghidra's
-    // f_tree_edge / f_forward_edge / f_cross_edge / f_loop_edge.
-    /// Edge in the DFS spanning tree (Ghidra `f_tree_edge` = 0x10).
-    pub const F_TREE_EDGE: u32 = 1 << 7;
-    /// Edge jumping forward in the spanning tree (Ghidra `f_forward_edge` = 0x20).
-    pub const F_FORWARD_EDGE: u32 = 1 << 8;
-    /// Edge crossing subtrees in the spanning tree (Ghidra `f_cross_edge` = 0x40).
-    pub const F_CROSS_EDGE: u32 = 1 << 9;
-    /// Edge that completes a loop; removing these yields a DAG (Ghidra
-    /// `f_loop_edge` = 2). A back edge is always also a loop edge, but a
-    /// loop edge may be set independently by calcLoop for irreducible cases.
-    pub const F_LOOP_EDGE: u32 = 1 << 10;
+    /// Ghidra `f_goto_edge` (block.hh:109).
+    pub const F_GOTO_EDGE: u32 = 0x01;
+    /// Ghidra `f_loop_edge` (block.hh:110).
+    pub const F_LOOP_EDGE: u32 = 0x02;
+    /// Ghidra `f_defaultswitch_edge` (block.hh:111).
+    pub const F_DEFAULTSWITCH_EDGE: u32 = 0x04;
+    /// Ghidra `f_irreducible` (block.hh:112).
+    pub const F_IRREDUCIBLE_EDGE: u32 = 0x08;
+    /// Ghidra `f_tree_edge` (block.hh:113).
+    pub const F_TREE_EDGE: u32 = 0x10;
+    /// Ghidra `f_forward_edge` (block.hh:114).
+    pub const F_FORWARD_EDGE: u32 = 0x20;
+    /// Ghidra `f_cross_edge` (block.hh:115).
+    pub const F_CROSS_EDGE: u32 = 0x40;
+    /// Ghidra `f_back_edge` (block.hh:116).
+    pub const F_BACK_EDGE: u32 = 0x80;
+    /// Ghidra `f_loop_exit_edge` (block.hh:117).
+    pub const F_LOOP_EXIT_EDGE: u32 = 0x100;
+    /// Rugra-only structured break annotation; kept outside oracle bits.
+    pub const F_BREAK_EDGE: u32 = 0x200;
+    /// Rugra-only structured continue annotation; kept outside oracle bits.
+    pub const F_CONTINUE_EDGE: u32 = 0x400;
+    /// Rugra-only switch dispatch annotation; kept outside oracle bits.
+    pub const F_SWITCH_DISPATCH: u32 = 0x800;
 
     /// All spanning-tree edge flags, for clearing (Ghidra clears these
     /// together in structureLoops, block.cc:2206).
@@ -5776,5 +5764,40 @@ impl BlockSwitch {
     // Ghidra: block.cc:3596 BlockSwitch::getSwitchVar
     pub fn get_switch_varnode(&self) -> Option<Arc<RwLock<crate::varnode::Varnode>>> {
         self.index_varnode.clone()
+    }
+}
+
+#[cfg(test)]
+mod edge_flag_tests {
+    #[test]
+    fn edge_flag_values_are_pairwise_unique() {
+        let flags = [
+            super::edge_flags::F_BREAK_EDGE,
+            super::edge_flags::F_CONTINUE_EDGE,
+            super::edge_flags::F_GOTO_EDGE,
+            super::edge_flags::F_SWITCH_DISPATCH,
+            super::edge_flags::F_LOOP_EXIT_EDGE,
+            super::edge_flags::F_BACK_EDGE,
+            super::edge_flags::F_IRREDUCIBLE_EDGE,
+            super::edge_flags::F_DEFAULTSWITCH_EDGE,
+            super::edge_flags::F_TREE_EDGE,
+            super::edge_flags::F_FORWARD_EDGE,
+            super::edge_flags::F_CROSS_EDGE,
+            super::edge_flags::F_LOOP_EDGE,
+        ];
+        for (i, left) in flags.iter().enumerate() {
+            for right in flags.iter().skip(i + 1) {
+                assert_ne!(left, right, "edge flag collision: {left:#x}");
+            }
+        }
+        assert_eq!(super::edge_flags::F_GOTO_EDGE, 0x01);
+        assert_eq!(super::edge_flags::F_LOOP_EDGE, 0x02);
+        assert_eq!(super::edge_flags::F_DEFAULTSWITCH_EDGE, 0x04);
+        assert_eq!(super::edge_flags::F_IRREDUCIBLE_EDGE, 0x08);
+        assert_eq!(super::edge_flags::F_TREE_EDGE, 0x10);
+        assert_eq!(super::edge_flags::F_FORWARD_EDGE, 0x20);
+        assert_eq!(super::edge_flags::F_CROSS_EDGE, 0x40);
+        assert_eq!(super::edge_flags::F_BACK_EDGE, 0x80);
+        assert_eq!(super::edge_flags::F_LOOP_EXIT_EDGE, 0x100);
     }
 }
