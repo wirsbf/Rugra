@@ -188,9 +188,9 @@
     "semantic_trees": {
       "rust_target_libdir": {
         "path": "/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib",
-        "sha256": "9261fe2c4bebd994bfc48321be9143b548793edad8fd5602341d3d1e7e06a26f",
+        "sha256": "36d8546104749e3f665ad0c51975c4076fa9c07e5df70a6264f05fbae5b2f4b2",
         "entry_count": 62,
-        "regular_bytes": 156584595
+        "regular_bytes": 160048673
       },
       "gcc_16_root": {
         "path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16",
