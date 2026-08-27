@@ -16,7 +16,8 @@
 | `REGA-HUGEHELP-LITERAL-0001` | P0 | IN_PROGRESS | regA@rugra-wt-regressfix2 | `src/heritage.rs`+docs/api/heritage.md | 回归 A 根因修复（bumpDeadcodeDelay/restart 链嫌疑）；前任 [DBG] 插桩需清除；验收=hugehelp/progressbarinit 恢复 c10871c3 形态+defects 0 |
 | `REGB-MYFWRITE-DUALNULL-0001` | P1 | IN_PROGRESS | regB@rugra-wt-regb | `src/coreaction.rs`+`src/block.rs`（blockaction.rs 尽量少动） | 回归 B 根因修复（fieldsplit live_ops_source/STORE 播种嫌疑）；验收=my_fwrite 双判空恢复+skeleton 8→低 |
 | `PRINTC-LINEWRAP-0001` | P1 | IN_PROGRESS | strconst2@rugra-wt-strconst2 | `src/printc.rs`+`src/prettyprint.rs`（**独占 printc 租约**） | hugehelp 最后 12 行折行；交付后释放 printc 租约给 switchemit 队列 |
-| `TRI2-STRUCT-IRREDUCIBLE-TRACE-0001` | P0 | IN_PROGRESS(第6轮) | irred@rugra-wt-irreducible | `src/blockaction.rs` | exhausted 8 函数→更低；block.rs 只报告不动 |
+| `TRI2-STRUCT-IRREDUCIBLE-TRACE-0001` | P0 | IN_PROGRESS(第7轮) | irred@rugra-wt-irreducible | `src/blockaction.rs`+`src/jumptable.rs`+`docs/api/blockaction.md`+`docs/api/jumptable.md` | exhausted 1→0；switch metadata seam 与 blk127 CFG 拓扑；block.rs 只报告不动 |
+| `TODO-JUMPTABLE-METADATA-WIRE` | P1 | OPEN（blockaction seam 已落地，等待 coreaction/Funcdata 接线） | root（待分派 coreaction writer） | `src/blockaction.rs`+`src/coreaction.rs`+`src/jumptable.rs`+docs/api 两件 | `SwitchTableMetadata` 承载 label/block2addr/default/gototype/isexit/isdefault；当前调用仍 None，禁止 ordinal 伪造；验收=真实 JumpTable 驱动 BlockSwitch case_values/default 元数据并 oracle 对拍；2026-08-27 |
 | `GOTO-LABEL-UNPRINTED-0001` | P1 | IN_PROGRESS | gotolabel@rugra-wt-gotolabel | `src/flow.rs`+`src/funcdata.rs`+`examples/httpd_decompile.rs` | printc.rs 冻结提交后不再编辑（租约在 strconst2）；等 root 通知 |
 | `REVIEW-DEBTS-X3-2026-08-27` | P0 | IN_PROGRESS | reviewer@rugra-wt-rfupreview | 只读+报告+TODO 三行 | R-MAINSPIN/R-ORPHANDECL/R-CALLOUT 三笔机制 C 欠账复核；附回归缩围意见 |
 | `RULE-PULLSUB-NEWVNODEOUT-0001` | P2 | IN_PROGRESS | pullsub@rugra-wt-pullsub2 | `src/ruleaction.rs` | 非 join 基底 newVnodeOut 空间归属（ruleaction.cc:798-832）；join 臂不做 |

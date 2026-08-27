@@ -15,6 +15,22 @@ use std::sync::{Arc, RwLock};
 /// Corresponds to Ghidra's `ActionBlockStructure`. This action transforms
 /// a flat basic block graph into a hierarchical structure of if, while,
 /// and other high-level blocks.
+/// Metadata recovered by JumpTable and consumed by ruleBlockSwitch.
+///
+/// Ghidra keeps this on JumpTable/FlowBlock edge labels; the structure action
+/// receives it through an explicit seam because CollapseStructure does not own
+/// Funcdata. No ordinal-derived labels are permitted when this is absent.
+#[derive(Clone, Debug, Default)]
+pub struct SwitchTableMetadata {
+    pub dispatch_start: u64,
+    pub labels_by_edge: Vec<Vec<u64>>,
+    pub gototype_by_edge: Vec<u32>,
+    pub isexit_by_edge: Vec<bool>,
+    pub isdefault_by_edge: Vec<bool>,
+    pub default_edge: Option<usize>,
+    pub default_is_folded: bool,
+}
+
 pub struct ActionBlockStructure {
     /// CFG topology fingerprint (block count, total edge count) when we last
     /// structured. If this differs on a subsequent call, bblocks was mutated
@@ -1143,6 +1159,10 @@ pub struct CollapseStructure<'a> {
     /// Block indices that are switch case bodies.
     /// from being pulled out of switch bodies.
     switch_case_indices: std::collections::HashSet<i32>,
+    /// JumpTable metadata seam. Wired by the caller once Funcdata ownership is
+    /// available (TODO-JUMPTABLE-METADATA-WIRE); None deliberately means no
+    /// labels, never synthetic edge ordinals.
+    switch_metadata: Option<SwitchTableMetadata>,
     /// Rich loop analysis (Ghidra LoopBody), built by order_loop_bodies.
     /// Holds head/tails/exit_block/exit_edges/depth for each natural loop,
     /// sorted deepest-nesting-first. Used for nested-loop structuring and
@@ -1169,10 +1189,21 @@ pub struct CollapseStructure<'a> {
 impl<'a> CollapseStructure<'a> {
     // Ghidra: blockaction.cc:1870 CollapseStructure::CollapseStructure
     pub fn new(graph: &'a mut BlockGraph, name: &str) -> Self {
+        Self::new_with_switch_metadata(graph, name, None)
+    }
+
+    // RUGRA-GLUE: explicit Funcdata→CollapseStructure metadata seam; the
+    // caller supplies JumpTable-derived records when its borrow permits.
+    pub fn new_with_switch_metadata(
+        graph: &'a mut BlockGraph,
+        name: &str,
+        switch_metadata: Option<SwitchTableMetadata>,
+    ) -> Self {
         Self {
             graph,
             change_count: 0,
             name: name.to_string(),
+            switch_metadata,
             switch_case_indices: std::collections::HashSet::new(),
             idom: std::collections::HashMap::new(),
             loop_bodies: Vec::new(),
@@ -4489,7 +4520,11 @@ impl<'a> CollapseStructure<'a> {
 
         // Create BlockSwitch node (Ghidra cc:1721: graph.newBlockSwitch).
         let ctrl_idx = block.read().unwrap().get_index();
+        let dispatch_start = block.read().unwrap().get_start_addr().as_u64();
+        let switch_metadata = self.switch_metadata.as_ref()
+            .filter(|m| m.dispatch_start == dispatch_start);
         let mut case_values: Vec<Vec<u64>> = Vec::new();
+        let mut default_case: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = None;
         let mut index_varnode = None;
         {
             let b = block.read().unwrap();
@@ -4501,7 +4536,18 @@ impl<'a> CollapseStructure<'a> {
                 }
             }
             for j in 0..sizeout {
-                case_values.push(vec![j as u64]);
+                let target = b.get_out(j).map(|e| e.point.clone());
+                if let Some(meta) = switch_metadata {
+                    if meta.default_edge == Some(j) {
+                        default_case = target;
+                        continue;
+                    }
+                    case_values.push(meta.labels_by_edge.get(j).cloned().unwrap_or_default());
+                } else {
+                    // No metadata seam is wired yet: never invent labels from
+                    // edge ordinals (TODO-JUMPTABLE-METADATA-WIRE).
+                    case_values.push(Vec::new());
+                }
             }
         }
         // Ghidra newBlockSwitch (block.cc:1904-1919): identifyInternal(ret, cs)
@@ -4516,7 +4562,7 @@ impl<'a> CollapseStructure<'a> {
                 index: ctrl_idx,
                 control: block.clone(),
                 cases,
-                default_case: None,
+                default_case,
                 case_values,
                 index_varnode,
                 incoming: Vec::new(),

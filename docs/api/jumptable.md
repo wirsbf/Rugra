@@ -1,5 +1,15 @@
 # jumptable.rs — Jump-table recovery API
 
+## Switch-structure metadata seam (TODO-JUMPTABLE-METADATA-WIRE)
+
+`JumpTable` owns the authoritative switch metadata: `label`, `block2addr`,
+`default_block`, and `default_is_folded` (`jumptable.hh:541-640`). The
+structure-side `SwitchTableMetadata` in `blockaction.rs` mirrors these values
+plus per-edge `gototype`/`isexit`/`isdefault` projections. Wiring from
+`Funcdata.jump_tables` into `CollapseStructure::new_with_switch_metadata` is
+pending a borrow-safe `coreaction.rs` seam; no edge ordinal may be used as a
+substitute.
+
 对应 Ghidra `jumptable.hh` / `jumptable.cc`。**当前状态：🔧 L2
 （2026-08-11 锁定 12.0.4 审计）**。Override 的 start-op/trial normalization、
 PathMeld 的 SeqNum 归并截断、EmulateFunction loader/LOAD、Basic/Basic2/Assisted
