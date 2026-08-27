@@ -14,10 +14,10 @@ Varnode 表达式发射，保留 GOT 槽的 `PTR_<name>_<addr>` 符号；直接 
 ## 2026-08-27：CALLIND 实测结果
 
 重建后 PLT 样例已输出 `(*(code *)PTR_00116e80)()`（带 GOT 名称时为
-`PTR_<name>_<addr>`）。`audit_syntax.py` 从此前 5 OK/118 FAIL 改为 28 OK/95 FAIL；
-全量差分仍为 defects=0、numbering=0、124/124，skeleton=2634。剩余失败包含
-上游 `_IO_FILE`/声明问题及嵌套 CALLIND 组合时的既有文本路径（如某些赋值形），
-已在 TODO 保留为后续审查项。
+`PTR_<name>_<addr>`）。`audit_syntax.py` 维持 28 OK/95 FAIL；全量差分仍为
+ defects=0、numbering=0、124/124，skeleton=2678。嵌套 CALLIND 的错误 `= PTR_...`
+已消失，剩余 audit 失败主要是返回值调用形（如 `lVar1(*(code *)PTR_...)`）及上游
+`_IO_FILE`/声明问题，已在 TODO 保留为后续审查项。
 
 ## 2026-08-27：隐含表达式与类型化常量发射（TRI2-UNNAMED-VN-IMPLIED / TRI2-CALLOUT-RESID-0002）
 
