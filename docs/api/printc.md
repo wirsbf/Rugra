@@ -1,5 +1,21 @@
 # `printc.rs` API Reference
 
+## 2026-08-27：myprogress 诊断（TRI4 第 7 位）
+
+`--func myprogress -v`（oracle e40ed130，x86-64 BFD）当前为 skeleton diff 102
+（旧 TRI2 记录 108→94 的改善已被后续 master 分支形态变化覆盖），但
+`defects=0`、`numbering=0`。逐行对照显示主体不是 PrintC 算术格式化，而是上游
+IR/结构化结果：golden 的 `ulong/bool*/uint/float/char[40]/bool[256]` 局部与
+浮点比例、缓冲区填充循环，被 Rugra 输出为 `long/int/undefined8`、`CONCAT124`、
+`SUB84`、寄存器临时和破损条件文本（如 `if ( = iVar2 < 1)`）。同时 CFG 形态为
+`code_r0x...` 与 `goto`，而 oracle 是 `if/else` 及尾部 `LAB_...`。
+
+因此本轮没有 PrintC 侧伪修：表达式发射只能忠实渲染已有类型/操作，无法在打印层
+恢复缺失的浮点类型、局部变量、条件 CFG 或循环边界。方案归域为 TypeWiring/
+heritage/结构化流水线：先锁定 `myprogress` 的 float/array/bool 数据类型与
+`uVar8`/`uVar2` 派生 SSA，再修 selectGoto/循环结构化及寄存器保存 STORE 清理；
+完成后以本函数 oracle 差分复测，避免在 printc 添加启发式算术重写。
+
 ## 2026-08-27：CALLIND 函数指针形渲染（PRINTC-CALLIND-PTR-0001）
 
 `CPUI_CALLIND` 已与 `CPUI_CALL` 分离：按 Ghidra `PrintC::opCallind`
