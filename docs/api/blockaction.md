@@ -1,5 +1,15 @@
 # `blockaction.rs` API Reference
 
+**2026-08-27 dual-null guard correction**: `ruleBlockProperIf` and `ruleBlockWhileDo` now use the raw `sizeIn()==1` clause guard required by Ghidra (`blockaction.cc:1391`, `:1531`). The prior `count_non_structural_in_edges` filter could hide live predecessors after a cat collapse, allowing an invalid clause merge and producing `my_fwrite`'s dual-null condition. Oracle has no dispatch/dead-source reclassification in these guards.
+
+**2026-08-27 DEAD semantic split**: `identify_internal` now records consumed
+children in `BlockGraph::absorbed_into` without setting `DEAD`, matching
+Ghidra `block.cc:940-963` where `identifyInternal` removes nodes from the
+parent list but preserves their composite ownership. Collapse traversal skips
+absorbed graph subjects, while `finalize_structure` compacts both absorbed and
+legacy DEAD entries and reindexes survivors. Child Arc handles remain attached
+to composites for recursive emission (TODO `TRI2-STRUCT-IRREDUCIBLE-TRACE-0001`).
+
 **2026-08-27 round 7 — build_copy edge labels and JumpTable metadata seam**: `build_copy` now carries each source `BlockEdge.flags` through the copy and mirrors it onto the copied incoming/outgoing halves, matching Ghidra `newBlockCopy` (`block.cc:1681-1697`) and `buildCopy` (`block.cc:1921-1938`). This preserves default-switch, goto, loop, and spanning-tree labels for structure rules. The JumpTable metadata seam remains explicit and unwired pending TODO-JUMPTABLE-METADATA-WIRE.
 
 **2026-08-27 round 7 — JumpTable metadata seam (`TODO-JUMPTABLE-METADATA-WIRE`)**: `CollapseStructure::new_with_switch_metadata` now accepts optional `SwitchTableMetadata`, carrying per-edge labels and default/gototype/isexit/isdefault fields derived from `JumpTable` (`jumptable.hh:541-640`). `try_rule_switch` matches dispatch address and uses supplied labels/default target; when the seam is `None`, case labels remain empty rather than fabricated from edge ordinals. ActionBlockStructure currently passes `None` pending the Funcdata/coreaction borrow-safe wire. Oracle reference: `blockaction.cc:1649-1723`, `newBlockSwitch` `block.cc:1904-1919`.

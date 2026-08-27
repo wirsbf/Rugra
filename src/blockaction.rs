@@ -1282,6 +1282,13 @@ impl<'a> CollapseStructure<'a> {
                     };
                     if i >= size { break; }
                     let block = match self.graph.get_block(i) { Some(b) => b, None => continue };
+                    // Components removed from the oracle parent list remain
+                    // Arc-reachable from their composite, but are not graph
+                    // subjects after identifyInternal (block.cc:953-960).
+                    if self.graph.absorbed_into.contains_key(&(i as i32)) {
+                        isolated_count += 1;
+                        continue;
+                    }
                     // cc:1792-1795: completely collapsed block → isolated_count.
                     {
                         let r = block.read().unwrap();
@@ -1330,13 +1337,15 @@ impl<'a> CollapseStructure<'a> {
             }
             if !fullchange { break 'fullchange; }
         }
-        // Final isolated_count.
+        // Final isolated_count. Absorbed components are no longer graph
+        // subjects even though their Arc handles remain owned by composites.
         let mut count = 0;
         for i in 0..self.graph.get_size() {
             if let Some(blk) = self.graph.get_block(i) {
                 let r = blk.read().unwrap();
-                if r.get_flags() & crate::block::block_flags::DEAD != 0 { count += 1; }
-                else if r.size_in() == 0 && r.size_out() == 0 { count += 1; }
+                if self.graph.absorbed_into.contains_key(&(i as i32))
+                    || r.get_flags() & crate::block::block_flags::DEAD != 0
+                    || (r.size_in() == 0 && r.size_out() == 0) { count += 1; }
             }
         }
         count
@@ -1625,6 +1634,9 @@ impl<'a> CollapseStructure<'a> {
                     Some(b) => b,
                     None => continue,
                 };
+                if self.graph.absorbed_into.contains_key(&(i as i32)) {
+                    continue;
+                }
                 let bt = block.read().unwrap().get_type();
 
                 // For Basic/Copy blocks: apply rules directly
@@ -1729,18 +1741,22 @@ impl<'a> CollapseStructure<'a> {
                 b.read().unwrap().get_flags() & crate::block::block_flags::DEAD != 0
             })
         }).count();
-        // Retain only non-DEAD blocks, preserving relative order (emitBlockGraph
-        // emits in list order, matching Ghidra's preorder).
+        let absorbed: std::collections::HashSet<i32> = self.graph.absorbed_into.keys().copied().collect();
+        let absorbed_count = absorbed.len();
+        // Remove consumed nodes and legacy DEAD nodes in one parent-list
+        // compaction, preserving relative order (block.cc:953-960).
         self.graph.blocks.retain(|b| {
-            b.read().unwrap().get_flags() & crate::block::block_flags::DEAD == 0
+            let r = b.read().unwrap();
+            r.get_flags() & crate::block::block_flags::DEAD == 0
+                && !absorbed.contains(&r.get_index())
         });
         // Re-index survivors so get_index() reflects the new compacted position.
         for (i, b) in self.graph.blocks.iter().enumerate() {
             b.write().unwrap().set_index(i as i32);
         }
         let after = self.graph.get_size();
-        eprintln!("[BLOCKSTRUCT] {} finalize_structure: {} -> {} (removed {} DEAD)",
-                  self.name, before, after, before_dead);
+        eprintln!("[BLOCKSTRUCT] {} finalize_structure: {} -> {} (removed {} DEAD, {} absorbed)",
+                  self.name, before, after, before_dead, absorbed_count);
     }
 
     // Ghidra: blockaction.hh:46 LoopBody::applyRulesToBlock
@@ -1754,6 +1770,7 @@ impl<'a> CollapseStructure<'a> {
         {
             let b = match self.graph.get_block(i) { Some(b)=>b, None=>return };
             let r = b.read().unwrap();
+            if self.graph.absorbed_into.contains_key(&(i as i32)) { return; }
             if r.get_flags() & crate::block::block_flags::DEAD != 0 { return; }
             if r.size_in() == 0 && r.size_out() == 0 {
                 // Orphaned block (consumed but not DEAD-flagged). Skip it to
@@ -3194,7 +3211,10 @@ impl<'a> CollapseStructure<'a> {
                 if i < size && i != install_idx {
                     if let Some(cb) = self.graph.get_block(i) {
                         strip_external(&cb);
-                        cb.write().unwrap().set_flags(crate::block::block_flags::DEAD);
+                        // Ghidra identifyInternal removes this component from
+                        // the parent list; it does not set f_dead (block.cc:
+                        // 953-960). `absorbed_into` is the flat-graph hiding
+                        // index used until finalize_structure.
                         // Record the containment (Ghidra: the consumed node's
                         // `parent` becomes the new composite, block.hh:78).
                         self.graph
@@ -3671,13 +3691,11 @@ impl<'a> CollapseStructure<'a> {
 
             let c = clause.read().unwrap();
             let c_idx = c.get_index();
-            // Count non-structural in-edges: ignore edges from switch dispatch blocks.
-            // Switch dispatch edges come from BlockSwitch control blocks or CBRANCH
-            // cascade members. We check if any in-edge source is a BlockSwitch or
-            // a block we know is a switch dispatch (marked CASE_BODY or is a cascade
-            // member whose taken edge targets this clause).
-            let non_structural_in = self.count_non_structural_in_edges(&c);
-            if non_structural_in != 1 { continue; }
+            // Ghidra blockaction.cc:1391: the guard is the raw incoming-edge
+            // count.  No dispatch/cascade/dead-source filtering exists here;
+            // consumed components are removed from the parent graph by
+            // identifyInternal, not reclassified as structural predecessors.
+            if c.size_in() != 1 { continue; }
             if c.size_out() != 1 { continue; }
             // cc:1394: `if (clauseblock->isSwitchOut()) continue;` — don't
             // use a switch (possibly with goto edges) as the if clause.
@@ -4110,12 +4128,10 @@ impl<'a> CollapseStructure<'a> {
         for slot in 0..2 {
             let clause = match b.get_out(slot) { Some(e) => e.point.clone(), None => continue };
             let c = clause.read().unwrap();
-            // Accept both Basic and structured (BlockList) clauses. Ghidra's
-            // ruleBlockWhileDo requires sizeIn()==1, but after cat-chaining the
-            // body may be a BlockList that still has a single back-edge to cond.
-            // We use count_non_structural_in_edges to ignore DEAD/goto sources.
-            let clause_in = self.count_non_structural_in_edges(&c);
-            if clause_in != 1 { continue; }
+            // Ghidra blockaction.cc:1531 requires the raw sizeIn()==1;
+            // consumed/dead predecessors are not filtered into a separate
+            // structural count (identifyInternal removes consumed nodes).
+            if c.size_in() != 1 { continue; }
             if c.size_out() != 1 { continue; }
             // cc:1534: `if (clauseblock->isSwitchOut()) continue;`
             if c.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 { drop(c); continue; }
