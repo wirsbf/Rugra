@@ -1821,7 +1821,30 @@ impl PrintC {
             // spaces(0,bump) openParen spaces(0,bump) ... closeParen, which
             // is what arms the pretty printer's wrap indent around the
             // argument group.
-            OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
+            // Ghidra: printc.cc:637 PrintC::opCallind
+            // Indirect calls retain the target expression and dereference it;
+            // they must not resolve the target offset as a named CALL.
+            OpCode::CPUI_CALLIND => {
+                self.emit.print("(*(code *)");
+                if let Some(in0) = op.get_in(0) {
+                    let target = in0.read().unwrap();
+                    if let Some(name) = self.symbol_table.get(&target.get_offset()).cloned() {
+                        self.emit.print(&name);
+                    } else {
+                        self.rpn_push_in(op_arc, op, 0, self.mods);
+                        self.rpn_recurse();
+                    }
+                }
+                self.emit.print(")(");
+                for i in 1..op.num_input() {
+                    if i > 1 { self.emit.print(", "); }
+                    self.rpn_push_in(op_arc, op, i, self.mods);
+                    self.rpn_recurse();
+                }
+                self.emit.print(")");
+            }
+            // Ghidra: printc.cc:596 PrintC::opCall
+            OpCode::CPUI_CALL => {
                 let target_name = if let Some(in0) = op.get_in(0) {
                     let v0 = in0.read().unwrap();
                     let off = v0.get_offset();
@@ -6263,6 +6286,30 @@ impl PrintC {
                     self.push_input(def_op, 1);
                 }
             }
+            // Ghidra: printc.cc:637 PrintC::opCallind
+            // CALLIND is not a named CALL: opCallind pushes the function_call
+            // token, then dereference, then the target Varnode (cc:640-650),
+            // yielding `(*(code *)target)(args)`. In particular, a GOT-slot
+            // target keeps its PTR_ symbol instead of becoming FUN_<offset>.
+            OpCode::CPUI_CALLIND => {
+                self.emit.print("(*(code *)");
+                if let Some(in0) = def_op.get_in(0) {
+                    let target = in0.read().unwrap();
+                    if let Some(name) = self.symbol_table.get(&target.get_offset()).cloned() {
+                        self.emit.print(&name);
+                    } else {
+                        self.push_varnode(&target, Some(def_op));
+                    }
+                }
+                self.emit.print(")(");
+                for i in 1..def_op.num_input() {
+                    if i > 1 { self.emit.print(", "); }
+                    self.push_input(def_op, i);
+                }
+                self.emit.print(")");
+                return;
+            }
+            // Ghidra: printc.cc:596 PrintC::opCall
             OpCode::CPUI_CALL => {
                 if let Some(in0) = def_op.get_in(0) {
                     let target_vn = in0.read().unwrap();
@@ -9901,9 +9948,17 @@ impl PrintC {
         let mut count = n_inputs.saturating_sub(1);
         if skip >= 0 { count = count.saturating_sub(1); }
         // printc.cc:649-670: three-way dispatch on count.
-        self.emit.print("(*");
+        self.emit.print("(*(code *)");
         if let Some(in0) = op.get_in(0) {
-            self.push_varnode(&in0.read().unwrap(), Some(op));
+            let target = in0.read().unwrap();
+            // A resolved GOT-slot symbol is already the oracle's printable
+            // target atom (`PTR_<name>_<addr>`). Emit it directly so an outer
+            // CALLIND assignment cannot leak its `=` into the target expr.
+            if let Some(name) = self.symbol_table.get(&target.get_offset()).cloned() {
+                self.emit.print(&name);
+            } else {
+                self.push_varnode(&target, Some(op));
+            }
         }
         self.emit.print(")(");
         if count > 1 {

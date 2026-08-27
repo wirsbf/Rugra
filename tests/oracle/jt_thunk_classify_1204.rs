@@ -193,6 +193,7 @@ enum LoadVariant {
     EqualThree,
     EqualSixteen,
     EqualSeventeen,
+    EqualThirtyTwo,
     Wrap,
     MultiSpace,
 }
@@ -411,11 +412,12 @@ fn build_loads(code: &AddrSpace, tiny: &AddrSpace, variant: LoadVariant) -> Vec<
             LoadTable::new(Address::with_space(code, 0x4000), 4, 3),
             LoadTable::new(Address::with_space(code, 0x4010), 8, 1),
         ],
-        LoadVariant::EqualSixteen | LoadVariant::EqualSeventeen => {
-            let count = if matches!(variant, LoadVariant::EqualSixteen) {
-                16
-            } else {
-                17
+        LoadVariant::EqualSixteen | LoadVariant::EqualSeventeen | LoadVariant::EqualThirtyTwo => {
+            let count = match variant {
+                LoadVariant::EqualSixteen => 16,
+                LoadVariant::EqualSeventeen => 17,
+                LoadVariant::EqualThirtyTwo => 32,
+                _ => unreachable!(),
             };
             (0..count)
                 .map(|index| {
@@ -868,6 +870,18 @@ fn main() {
             true,
             false,
             LoadVariant::EqualSeventeen,
+        ),
+        case(
+            "sort_equal_thirtytwo",
+            vec![OP + 0x10, OP + 0x20],
+            ReachVariant::None,
+            false,
+            true,
+            false,
+            true,
+            true,
+            false,
+            LoadVariant::EqualThirtyTwo,
         ),
         case(
             "wrap_one_byte",

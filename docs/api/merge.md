@@ -65,10 +65,29 @@ Perform the full merging + naming pipeline. Phase order:
 3. `ensure_all_have_high` → singleton HighVariables for EVERY Varnode in
    `loc_tree` lacking one (faithful to `Funcdata::setHighLevel`,
    funcdata_varnode.cc:595 — no live_set filter)
-4. `compute_varnode_covers` → per-Varnode liveness covers (precise def→use
+4. `group_partials` → reconstruct marked PIECE/CONCAT trees in sorted
+   PcodeOpTree order into offset-aware `VariableGroup`s (merge.cc:967-976,
+   1374-1407), allowing
+   structured pointer expressions to use the root HighVariable.
+5. `compute_varnode_covers` → per-Varnode liveness covers (precise def→use
    range, NOT propagated through CFG successors — that over-approximation
    broke ActionMarkImplied's inflateTest; `propagate_cover_through_cfg` is
    now `#[allow(dead_code)]` disabled)
+
+`protoPartial` ordering evidence: Ghidra registers roots from the ordered
+`ActionPool::processOp` traversal (`action.cc:822`), and `groupPartials`
+consumes that vector without sorting (`merge.cc:970-975`). Rugra's action
+iterator advances the ordered `PcodeOpTree` (`action.rs:1400-1414`), and
+`group_partials` consumes that same order. The HashSet only deduplicates root
+identity after collection and cannot alter first-seen order. `groupWith` has
+no duplicate/failure branch (`variable.cc:574-605`), so repeated offsets are
+permitted and both-existing groups are combined unconditionally, matching
+`combineGroups` at `variable.cc:599-604`; no duplicate error is synthesized.
+Rust `VariableGroup::combine_groups` mirrors `variable.cc:74-89` by sorting
+source pieces by `(group_offset,size)`, rewiring each piece's group, and
+moving the complete source set before the source group is released.
+The regression test
+`test_compare_order_selects_strictly_earlier_op` asserts the -1/+1 polarity.
 5. `merge_by_cover` → merge copy-related disjoint-cover pairs
 6. `update_high_covers` → sync each HighVariable.cover from members
 7. `assign_names` → Ghidra-style auto-naming
@@ -339,10 +358,10 @@ Represents a varnode within a specific block for merging purposes
 
  
 ### 2026-07-01：补全 Merge 9 步序列
-merge_required(mergeAddrTied+groupPartials+mergeMarker)、merge_marker(MULTIEQUAL/INDIRECT IO 合并)、merge_copy(COPY 链 cover-guarded 合并)、merge_adjacent(同 op IO 推测合并)、merge_by_datatype(类型分组+线性合并)、hide_shadows(copy-shadow 分析)、copy_marker(internal COPY NONPRINTING 标记)。+merge_speculative 原语。merge_all 重排为完整 9 步。2 新测试。multi_entry/group_partials/dominant_copy 仍 stub（需 ScopeLocal 符号机器）。
+merge_required(mergeAddrTied+groupPartials+mergeMarker)、merge_marker(MULTIEQUAL/INDIRECT IO 合并)、merge_copy(COPY 链 cover-guarded 合并)、merge_adjacent(同 op IO 推测合并)、merge_by_datatype(类型分组+线性合并)、hide_shadows(copy-shadow 分析)、copy_marker(internal COPY NONPRINTING 标记)。+merge_speculative 原语。merge_all 重排为完整 9 步。group_partials 已补齐 PIECE root 的有序重建与 VariableGroup 分组。
 
 ### 2026-07-01（续 2）：merge_multi_entry + dominant_copy
-merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入口符号合并。dominant_copy（merge.cc:1415-1436）：COPY 链 cover-guarded 合并选主导。3 新测试。9 步 merge 全部实装（仅 group_partials/allocateCopyTrim 是忠实 no-op）。
+merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入口符号合并。dominant_copy（merge.cc:1415-1436）：COPY 链 cover-guarded 合并选主导。3 新测试。9 步 merge 全部实装（allocateCopyTrim 仍受缺失 union 基础设施限制）。
 
 ### 2026-07-03：命名对齐 Ghidra（camelCase→snake_case）
 - `merge_linear_speculative` → `merge_linear`（对齐 `Merge::mergeLinear` merge.hh:110。原 Rust 名多出 `_speculative` 后缀，Ghidra 方法名无此后缀）。

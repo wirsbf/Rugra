@@ -1,5 +1,24 @@
 # `printc.rs` API Reference
 
+## 2026-08-27：CALLIND 函数指针形渲染（PRINTC-CALLIND-PTR-0001）
+
+`CPUI_CALLIND` 已与 `CPUI_CALL` 分离：按 Ghidra `PrintC::opCallind`
+（`printc.cc:637-672`）输出 `(*(code *)<target>)(args)`，target 通过正常
+Varnode 表达式发射，保留 GOT 槽的 `PTR_<name>_<addr>` 符号；直接 CALL 仍按
+`opCall` 的 callspec 名称路径输出。RPN 与 legacy inline 两条路径均保持该分派。
+
+验证：oracle `e40ed13014025f82488b1f8f7bca566894ac376b`，x86-64 BFD curl；
+全量 defects=0、numbering=0、skeleton=2637。CALLIND 形态已变为函数指针调用，
+但当前整体 audit 仍受既有 `_IO_FILE` 声明与其他上游残差影响，详见 Differential。
+
+## 2026-08-27：CALLIND 实测结果
+
+重建后 PLT 样例已输出 `(*(code *)PTR_00116e80)()`（带 GOT 名称时为
+`PTR_<name>_<addr>`）。`audit_syntax.py` 维持 28 OK/95 FAIL；全量差分仍为
+ defects=0、numbering=0、124/124，skeleton=2678。嵌套 CALLIND 的错误 `= PTR_...`
+已消失，剩余 audit 失败主要是返回值调用形（如 `lVar1(*(code *)PTR_...)`）及上游
+`_IO_FILE`/声明问题，已在 TODO 保留为后续审查项。
+
 ## 2026-08-27：隐含表达式与类型化常量发射（TRI2-UNNAMED-VN-IMPLIED / TRI2-CALLOUT-RESID-0002）
 
 - RPN 的 `rpn_recurse`、`rpn_op_func`、`CPUI_PTRADD` 与 `CPUI_PIECE` 臂已按

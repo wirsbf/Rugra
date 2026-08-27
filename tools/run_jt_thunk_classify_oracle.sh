@@ -203,11 +203,11 @@ git_sha=93473c28694fd72bd889364107cd2770514de59780885a6a4aafca4d602e30ad
 python_path=/usr/bin/python3.14
 python_sha=d78f9cf7178ecff09963551399855543c297f37ac207e626228bfe43cb26a70c
 cargo_path=/usr/bin/cargo
-cargo_version='cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)'
-cargo_sha=131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93
+cargo_version='cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)'
+cargo_sha=b965d714ec3336e5321c6143c93a8e76ab952ac937f06a80ec95b145ce6194ee
 rustc_path=/usr/bin/rustc
-rustc_version='rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)'
-rustc_sha=060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618
+rustc_version='rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)'
+rustc_sha=c81a4d1946d6359e423b3cd13fcfbaead55817dec3fee0c2d9b7aeb4f6920fcc
 cc1_path=/usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1
 cc1_sha=49a325fc4c6c5aa5a8f9ea8c828e37f3900a757c6be48d997ff4af0b51ee8315
 cc1plus_path=/usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1plus
@@ -220,14 +220,14 @@ as_path=/usr/bin/as
 as_sha=3dfdf6007545ea36176c350eef201d1ece55c347a182697bb5f9bac815a1f34b
 ranlib_path=/usr/bin/ranlib
 ranlib_sha=1359d302a8d12aa2c86bf3f26047360c050ec95b0584ce084ec40bbaf9c98613
-rustc_driver_path=/usr/lib/librustc_driver-afe033052732caf2.so
-rustc_driver_sha=f1df5f9bd04b8cc36bb836364cce82f92129d4f49540939dd27294a85138de3d
+rustc_driver_path=/usr/lib/librustc_driver-66a47b5a6ae9dff7.so
+rustc_driver_sha=902decc7402389c9fe26cdc85e7a435d1adf7224cc497c3f3a5cc8bfb1f4aad8
 llvm_path=/usr/lib/libLLVM.so.22.1
 llvm_sha=06662e11c1faa7b4cb199e03c9ef681b74655ad4274473273b41dfc754a6f16f
 ldd_path=/usr/bin/ldd
 ldd_sha=94f332c23cf00596d0387d6f54693664f9a53334d65953b2ff308057cc8530b1
 ld_so_cache_path=/etc/ld.so.cache
-ld_so_cache_sha=7fca1d12ffa098186e7f41645435a859af2499627b18b1779ecd251b296e2e4c
+ld_so_cache_sha=04e49d85dc0f45e8804d29a63fbeec51907177d5c4f088570ed8d91839d47662
 shell_link_path=/bin/sh
 shell_path=/usr/bin/bash
 shell_sha=575e03ac834b739349a4484de481abcd06a6f7193cefc795260a32a1943f20a5
@@ -240,7 +240,7 @@ mkdir_sha=71b43dbb72e6ec1a509205a1ea948504cbbb76619967edc9b496798a2c600342
 rm_path=/usr/bin/rm
 rm_sha=d5b182ba415bf4571cb6712c96dcee160dcb317c86814879a3fda36ef46ec36b
 dynamic_runtime_count=55
-dynamic_runtime_sha=1b5f50ed130d37e9d7d937af4958eec9205d5a8f905b3f8a0eba1c4b9244d572
+dynamic_runtime_sha=ec201dcbb355d03982d02869cf6db5cb56acad6bf8891f86e4a5c59a4b507788
 gcc_specs_sha=c0ab03f7de3cd1a5d70e16bd0a11a71048d782fbc03dd974fa4bba6ce2ef5257
 cargo_vendor_manifest_sha=3e652e86f2ed80e9790abe3bea048f23c389052563e2ddde7a56fb59b7c5b39c
 cargo_vendor_package_count=164
@@ -248,9 +248,9 @@ libdecomp_object_manifest_sha=70393006a3c0d91392e73734abb204f8cfc8a76b37e7038ab4
 libdecomp_member_manifest_sha=019a03e343985e9883f06178c0601c9a819e9b83dae28f2ba12bcae4249acb97
 libdecomp_member_count=79
 rust_target_libdir=/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib
-rust_target_libdir_sha=9261fe2c4bebd994bfc48321be9143b548793edad8fd5602341d3d1e7e06a26f
+rust_target_libdir_sha=36d8546104749e3f665ad0c51975c4076fa9c07e5df70a6264f05fbae5b2f4b2
 rust_target_libdir_count=62
-rust_target_libdir_bytes=156584595
+rust_target_libdir_bytes=160048673
 gcc_semantic_root=/usr/lib/gcc/x86_64-pc-linux-gnu/16
 gcc_semantic_root_sha=006e26ecb4de682155c8cc653f72d02b907027a51192cf6324273e153726ca82
 gcc_semantic_root_count=838
@@ -260,17 +260,17 @@ libstdcpp_include_root_sha=ebff2ff8a3f2418deb1ef6015614f96a6ef67531922bd447d1086
 libstdcpp_include_root_count=887
 libstdcpp_include_root_bytes=14780438
 system_include_root=/usr/include
-system_include_root_sha=8816954586e40fb289a343695423183f4f76697fc78c95645876b437b343195a
-system_include_root_count=33253
-system_include_root_bytes=334881035
+system_include_root_sha=45e87f75aec2e199ccb874a8609524d57d5ef2ff0cad4a7f82b9705468a018b1
+system_include_root_count=34328
+system_include_root_bytes=340852508
 local_include_root=/usr/local/include
 local_include_root_sha=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 local_include_root_count=0
 local_include_root_bytes=0
 python_stdlib_root=/usr/lib/python3.14
-python_stdlib_root_sha=141e577fc1cf328cef99ee4b6740de1f87d9eebbc21e2885e57bee44bd3ed376
+python_stdlib_root_sha=f80893a55085da3d5f4994dcd9516b067e8019f7b10776d8558d7b584ac01ae3
 python_stdlib_root_count=12553
-python_stdlib_root_bytes=265048061
+python_stdlib_root_bytes=265155715
 libstdcpp_path=/usr/lib/libstdc++.so.6.0.36
 libstdcpp_sha=f5fc7380f2ae46fa4053a64be04e7b98109f1066a4bbfff3c37042488aa0be0e
 zlib_link_path=/usr/lib/libz.so
@@ -441,8 +441,8 @@ for index in "${!owned_relative_paths[@]}"; do
   fi
   candidate_blob_sha256+=("$blob_sha")
 done
-runner_snapshot_sha=$(/usr/bin/sha256sum "$runner_fd_path" | /usr/bin/awk '{print $1}')
-if [[ "$runner_snapshot_sha" != "${candidate_blob_sha256[5]}" ]]; then
+runner_snapshot_blob=$(git_clean -C "$repo_root" hash-object -- "$runner_source")
+if [[ "$runner_snapshot_blob" != "${candidate_blob_oids[5]}" ]]; then
   echo "runner fd differs from captured HEAD runner blob" >&2
   exit 1
 fi
@@ -1179,7 +1179,7 @@ runner="${snapshot_owned_paths[5]}"
 
 /usr/bin/env -i PATH="$clean_path" LC_ALL=C "$python_path" -I -S - \
   "$metadata" "$cpp_fixture" "$rust_fixture" "$jumptable_overlay" \
-  "$api_document" "$runner" "$runner_snapshot_sha" "$oracle_commit" \
+  "$api_document" "$runner" "$runner_snapshot_blob" "$oracle_commit" \
   "$oracle_tag" "$oracle_cpp_tree" "$oracle_makefile_blob" \
   "$oracle_cpp_archive_sha" "$rugra_source_commit" "$rugra_source_tree" \
   "$rugra_source_src_tree" "$rugra_jumptable_blob" "$rugra_cargo_toml_blob" \
@@ -1198,7 +1198,7 @@ import sys
 
 (
     metadata_raw, cpp_raw, rust_raw, overlay_raw, api_raw, runner_raw,
-    runner_fd_sha, oracle_commit, oracle_tag, cpp_tree, makefile_blob,
+    runner_fd_blob, oracle_commit, oracle_tag, cpp_tree, makefile_blob,
     oracle_archive_sha, source_commit, source_tree, source_src_tree,
     jumptable_blob, cargo_toml_blob, cargo_lock_blob, build_rs_blob,
     base_archive_sha, cxx_path, cxx_version, cxx_sha, cc_path, cc_sha,
@@ -1233,7 +1233,7 @@ if runner_preexec:
     require("projection before evidence", metadata["projection_status"], "UNTESTED")
 else:
     require("projection observed", metadata["projection_status"], "MATCH")
-    require("attempted runner is this runner", validation["attempted_runner_sha256"], runner_fd_sha)
+    require("attempted runner blob is this runner", validation["attempted_runner_blob"], runner_fd_blob)
     require("recorded runner exit", str(validation["runner_exit_code"]), "0")
     require("recorded validation status", validation["status"], "PASS")
     require("recorded failure stage", repr(validation["failure_stage"]), "None")
@@ -1286,10 +1286,9 @@ for key, path in (
     ("rust_fixture_sha256", rust_raw),
     ("jumptable_overlay_sha256", overlay_raw),
     ("api_document_sha256", api_raw),
-    ("runner_sha256", runner_raw),
 ):
     require(key, sha(regular(path)), comparand[key])
-require("runner fd", sha(regular(runner_raw)), runner_fd_sha)
+require("runner blob", runner_fd_blob, comparand["runner_blob"])
 
 toolchain = metadata["oracle_toolchain"]
 require("toolchain keys", set(toolchain), {
@@ -1365,7 +1364,7 @@ require("build helpers", toolchain["build_helpers"], {
     "rm": {"path": "/usr/bin/rm", "sha256": "d5b182ba415bf4571cb6712c96dcee160dcb317c86814879a3fda36ef46ec36b"},
 })
 require("Rust semantic engine", toolchain["rust_semantic_engine"], {
-    "librustc_driver": {"path": "/usr/lib/librustc_driver-afe033052732caf2.so", "sha256": "f1df5f9bd04b8cc36bb836364cce82f92129d4f49540939dd27294a85138de3d"},
+    "librustc_driver": {"path": "/usr/lib/librustc_driver-66a47b5a6ae9dff7.so", "sha256": "902decc7402389c9fe26cdc85e7a435d1adf7224cc497c3f3a5cc8bfb1f4aad8"},
     "llvm": {"path": "/usr/lib/libLLVM.so.22.1", "sha256": "06662e11c1faa7b4cb199e03c9ef681b74655ad4274473273b41dfc754a6f16f"},
 })
 require("dynamic runtime closure", toolchain["dynamic_runtime_closure"], {
@@ -1373,18 +1372,18 @@ require("dynamic runtime closure", toolchain["dynamic_runtime_closure"], {
     "ldd_path": "/usr/bin/ldd",
     "ldd_sha256": "94f332c23cf00596d0387d6f54693664f9a53334d65953b2ff308057cc8530b1",
     "ld_so_cache_path": "/etc/ld.so.cache",
-    "ld_so_cache_sha256": "7fca1d12ffa098186e7f41645435a859af2499627b18b1779ecd251b296e2e4c",
+    "ld_so_cache_sha256": "04e49d85dc0f45e8804d29a63fbeec51907177d5c4f088570ed8d91839d47662",
     "resolved_library_count": 55,
-    "path_content_manifest_sha256": "1b5f50ed130d37e9d7d937af4958eec9205d5a8f905b3f8a0eba1c4b9244d572",
+    "path_content_manifest_sha256": "ec201dcbb355d03982d02869cf6db5cb56acad6bf8891f86e4a5c59a4b507788",
     "manifest_algorithm": "sort canonical resolved paths as bytes; hash u64be(path_len), path bytes, sha256(file bytes)",
 })
 require("semantic trees", toolchain["semantic_trees"], {
-    "rust_target_libdir": {"path": "/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib", "sha256": "9261fe2c4bebd994bfc48321be9143b548793edad8fd5602341d3d1e7e06a26f", "entry_count": 62, "regular_bytes": 156584595},
+    "rust_target_libdir": {"path": "/usr/lib/rustlib/x86_64-unknown-linux-gnu/lib", "sha256": "36d8546104749e3f665ad0c51975c4076fa9c07e5df70a6264f05fbae5b2f4b2", "entry_count": 62, "regular_bytes": 160048673},
     "gcc_16_root": {"path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16", "sha256": "006e26ecb4de682155c8cc653f72d02b907027a51192cf6324273e153726ca82", "entry_count": 838, "regular_bytes": 188527599},
     "libstdcxx_include_root": {"path": "/usr/include/c++/16", "sha256": "ebff2ff8a3f2418deb1ef6015614f96a6ef67531922bd447d108667571de511d", "entry_count": 887, "regular_bytes": 14780438},
-    "system_include_root": {"path": "/usr/include", "sha256": "8816954586e40fb289a343695423183f4f76697fc78c95645876b437b343195a", "entry_count": 33253, "regular_bytes": 334881035},
+    "system_include_root": {"path": "/usr/include", "sha256": "45e87f75aec2e199ccb874a8609524d57d5ef2ff0cad4a7f82b9705468a018b1", "entry_count": 34328, "regular_bytes": 340852508},
     "local_include_root": {"path": "/usr/local/include", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "entry_count": 0, "regular_bytes": 0},
-    "python_stdlib_root": {"path": "/usr/lib/python3.14", "sha256": "141e577fc1cf328cef99ee4b6740de1f87d9eebbc21e2885e57bee44bd3ed376", "entry_count": 12553, "regular_bytes": 265048061},
+    "python_stdlib_root": {"path": "/usr/lib/python3.14", "sha256": "f80893a55085da3d5f4994dcd9516b067e8019f7b10776d8558d7b584ac01ae3", "entry_count": 12553, "regular_bytes": 265155715},
 })
 require("zlib link inputs", toolchain["zlib_link_inputs"], {
     "link_path": "/usr/lib/libz.so",
@@ -1442,9 +1441,9 @@ fingerprinted = {
 }
 canonical = json.dumps(fingerprinted, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 require("manifest", sha(canonical), manifest["sha256"])
-require("case count", len(manifest["cases"]), 24)
+require("case count", len(manifest["cases"]), 25)
 require("Ghidra expected provenance", metadata["expected_results_provenance"]["ghidra"],
-        "OBSERVED_LOCKED_CPP_24_CASE_OUTPUT")
+        "OBSERVED_LOCKED_CPP_25_CASE_OUTPUT")
 if runner_preexec:
     require("Rugra expected provenance", metadata["expected_results_provenance"]["rugra"],
             "PROSPECTIVE_CURRENT_CANDIDATE_EXPECTATION_NOT_YET_EXECUTED")
@@ -1452,9 +1451,9 @@ if runner_preexec:
             "PROSPECTIVE_ZERO_DIFF_EXPECTATION_NOT_YET_EXECUTED")
 else:
     require("Rugra observed provenance", metadata["expected_results_provenance"]["rugra"],
-            "OBSERVED_CURRENT_CANDIDATE_24_CASE_OUTPUT")
+            "OBSERVED_CURRENT_CANDIDATE_25_CASE_OUTPUT")
     require("diff observed provenance", metadata["expected_results_provenance"]["diff"],
-            "OBSERVED_ZERO_DIFF_24_CASE_BILATERAL")
+            "OBSERVED_ZERO_DIFF_25_CASE_BILATERAL")
 
 required_decisive = {
     "reference_output_parameters", "loop_bounds_traversal_order",
@@ -1487,18 +1486,18 @@ else:
     for key in expected_bilateral:
         require(f"coverage {key}", coverage[key]["status"], "MATCH")
         require(f"coverage {key} evidence", coverage[key]["evidence_kind"],
-                "BILATERAL_24_CASE_BYTE_IDENTICAL")
+                "BILATERAL_25_CASE_BYTE_IDENTICAL")
 for key in expected_bilateral:
     require(f"coverage {key} residuals", coverage[key]["residual_todo_ids"], [])
 for key, todo in expected_mismatch.items():
     require(f"coverage {key}", coverage[key]["status"], "MISMATCH")
     require(f"coverage {key} residuals", coverage[key]["residual_todo_ids"], [todo])
 require("pipeline evidence kind", coverage["production_typed_stage_consumption"]["evidence_kind"],
-        "LOCKED_SOURCE_AUDIT_OUTSIDE_24_CASE_FIXTURE")
+        "LOCKED_SOURCE_AUDIT_OUTSIDE_25_CASE_FIXTURE")
 require("sort evidence kind", coverage["sort_toolchain_portability"]["evidence_kind"],
         "PINNED_ORACLE_CONTRACT_WITH_CROSS_TOOLCHAIN_PORTABILITY_GAP")
 require("emulfn evidence kind", coverage["emulate_function_lowlevel_channel"]["evidence_kind"],
-        "LOCKED_SOURCE_AUDIT_OUTSIDE_24_CASE_FIXTURE")
+        "LOCKED_SOURCE_AUDIT_OUTSIDE_25_CASE_FIXTURE")
 if any(set(entry) != {"status", "evidence_kind", "covers", "residual_todo_ids"} or not entry["covers"]
        for entry in coverage.values()):
     raise SystemExit("coverage schema/text drift")
@@ -2070,7 +2069,7 @@ done
     printf 'candidate_blob[%s]=%s sha256=%s\n' "${owned_relative_paths[$index]}" \
       "${candidate_blob_oids[$index]}" "${candidate_blob_sha256[$index]}"
   done
-  printf 'JT-THUNK-CLASSIFY-1204: bilateral PASS (24/24 byte-identical); focused jumptable tests PASS; metadata projection pending independent review; current native=%s rlib=%s; overall MISMATCH: JUMPTABLE-PIPELINE-0001,JUMPTABLE-SORT-TOOLCHAIN-0001,JUMPTABLE-EMULFN-0001\n' \
+  printf 'JT-THUNK-CLASSIFY-1204: bilateral PASS (25/25 byte-identical); focused jumptable tests PASS; metadata projection pending independent review; current native=%s rlib=%s; overall MISMATCH: JUMPTABLE-PIPELINE-0001,JUMPTABLE-SORT-TOOLCHAIN-0001,JUMPTABLE-EMULFN-0001\n' \
     "$native_sha" "$rlib_sha"
 } >"$oracle_tmp/run-record.txt"
 /usr/bin/cat "$oracle_tmp/run-record.txt"

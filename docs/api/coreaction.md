@@ -46,9 +46,20 @@ settling」警告与 7 层 `->total` 嵌套（双侧 fixture
   建新 varnode 时预置 unknown-N，Ghidra 的 getLocalType
   （varnode.cc:918-934）除 typelock 早退外从不读 v_type——占位 unknown
   顶掉 sized-int 回退会使未封禁 INT_SUB/PTRSUB 输出停留 unknown（双侧
-  fixture case C/q 抓出）。
+   fixture case C/q 抓出）。
 
-## 2026-08-24：build_localtypes 的 CALL/CALLIND input 播种（TYPEOP-LOCALTYPE-DISPATCH-0001 D2）
+## 2026-08-28：PTRSUB output-token 生产播种（TYPEOP-PTRSUB-FIELDCAST-0001）
+
+`build_localtypes` 的 PTRSUB+spacebase 臂（coreaction.cc:5008-5037 对应 Rust
+:5350-5357）现在消费 `TypeOpPtrsub::get_output_token`，而不是把输出一律播成
+`int_types.sized` 指针。这样 offset 非零且无字段命中的 synthetic gap 得到
+unknown-pointer，随后 `TypeOpStore::getInputCast`（typeop.cc:520-555）按
+pointer pointee size 与 4-byte STORE 比较并保留 `undefined4 *` 地址 cast；
+PTRSUB 的 `getOutputLocal` 仍保持 INT（typeop.cc:2308-2312）。验证：锁定
+Ghidra 12.0.4 oracle `e40ed13014025f82488b1f8f7bca566894ac376b` 的 curl
+E2E 为 124/124，compare defects=0、numbering=0；progressbarinit
+目标 defects=0、numbering=0。
+  ## 2026-08-24：build_localtypes 的 CALL/CALLIND input 播种（TYPEOP-LOCALTYPE-DISPATCH-0001 D2）
 
 `build_localtypes` 的 `CPUI_CALL | CPUI_CALLIND` 臂在保留 output 播种之外新增
 **input 播种循环**，全部经 TypeOp local dispatch（`TypeOpCall::get_input_local` /
@@ -1930,5 +1941,5 @@ storage allocator bails out on stack spills; acceptance remains defects=0 plus
 `ActionSetCasts::cast_output` now dispatches PTRSUB/PTRADD directly to the
 opcode TypeOp `get_output_token` before the generic metatype fallback, matching
 `coreaction.cc:2532-2543`. This keeps unknown-pointer gap tokens and field
-pointer tokens visible to the cast decision; integration depends on the
-calloutfix TypeOpPtrsub/Ptradd token chain.
+pointer tokens visible to the cast decision; the calloutfix TypeOpPtrsub/Ptradd
+token chain is now integrated in master.

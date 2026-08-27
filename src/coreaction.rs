@@ -5366,8 +5366,25 @@ impl ActionInferTypes {
                         let i0 = in0.read().unwrap();
                         if i0.is_spacebase() {
                             let ov = out.read().unwrap();
-                            let pointed = int_types.sized(ov.get_size());
-                            temps.insert(vn_id(&ov), make_ptr(pointed, ptr_size));
+                            let pointed = if op.opcode == OpCode::CPUI_PTRSUB {
+                                // Ghidra's concrete PTRSUB output token is
+                                // consumed here through getLocalType's def
+                                // edge (coreaction.cc:5008-5037), while
+                                // getOutputLocal remains INT
+                                // (typeop.cc:2308-2312). The token supplies
+                                // an unknown pointer for synthetic gaps.
+                                crate::typeop::TypeOpPtrsub::new(
+                                    fd.arch.as_ref().and_then(|a| a.types.clone()).unwrap_or_else(crate::type_system::typefactory::TypeFactory::shared_default),
+                                ).get_output_token(&op)
+                            } else {
+                                None
+                            };
+                            if let Some(token) = pointed {
+                                temps.insert(vn_id(&ov), token);
+                            } else {
+                                let pointed = int_types.sized(ov.get_size());
+                                temps.insert(vn_id(&ov), make_ptr(pointed, ptr_size));
+                            }
                         }
                     }
                 }
