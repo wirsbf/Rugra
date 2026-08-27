@@ -9,6 +9,27 @@
 > **两个 P0 回归**：A=ed827938 后 hugehelp 字面量退化+progressbarinit `__nptr=` 赋值形丢失；B=c243cdef 后 my_fwrite 双判空塌缩永假合取。
 > 编排：DSH 主 Agent（root）+ 10 并发后台子 Agent；worktree 隔离 + 独占写集租约 + `/tmp/rugra-cargo-build.lock` + 专属 CARGO_TARGET_DIR；子 Agent 交付→root 串行 cherry-pick→flock 构建→E2E→差分门禁（defects 必须 0）→更新本板。本节 root 维护。
 
+### 2026-08-27 21:35 continuation（当前权威状态）
+
+> 本节覆盖下方 11:05 租约快照；旧 owner 在本会话无存活进程，故不继续占用写锁。master=`de26f21c765a1010276baf7fe99dff81e1616d04`，工作树 clean，gate health=OK，oracle=`e40ed13014025f82488b1f8f7bca566894ac376b`。
+> root fresh fast-release E2E（stdout sha256=`4404af6da658cc912b84070acb6354073c4649f3b266751e1be6cb81bd1bdc8e`）：124/124、defects=0、numbering=0、skeleton=2822、0 panic、0 timeout；warning=27/51；gcc syntax=28/123。`result/curl_cur.c` 已回流且与 fresh stdout byte-identical。
+> 三函数当前函数级 skeleton：hugehelp=19、progressbarinit=15、my_fwrite=20；可见语义损伤包含 synthetic `ramLIT`、`curl_getenv` 错误实参和 `fwrite` 参数链断裂，不能被 defects=0 掩盖。
+
+| ID | P | 状态 | owner | 当前 write-set / 依赖 | 验收与证据（2026-08-27） |
+|---|---|---|---|---|---|
+| `EVIDENCE-DRIFT-DE26F21C-0001` | P0 | IN_PROGRESS（只读定位） | root + postf133_regress | 当前无写集；审计 `f44f6415..de26f21c` 后再租约 | commit message 声称 skeleton=2672/progressbarinit=2，但同 commit fresh 实测 2822/15；以 sha=`4404af6d...`、`/tmp/rugra-de26f21c-curl.{c,stderr}` 和 `/tmp/rugra-reports/TRI5-2026-08-27.md` 为证。验收=定位首错提交/函数并产生可复算 A/B。 |
+| `POSTF133-REGRESSION-0001` | P0 | IN_PROGRESS（只读函数体审计） | postf133_regress | 当前无写集；候选依赖 Ghidra typeop/coreaction 完整函数审计 | pre-chain artifact skeleton=2678；现 2822，hugehelp/progressbarinit/my_fwrite 分别恶化 +19/+13/+12。验收=双侧行号、四类语义、首错函数、最小底层修复和 oracle fixture 设计。 |
+| `TYPEOP-PTRSUB-FIELDCAST-0001` | P0 | IN_REVIEW | ptrsub_review | 当前无写集；候选 `src/{typeop,varnode,coreaction}.rs` 必须等待 review 裁决 | 独立核对 `TypeOpPtrsub::{getOutputLocal,getOutputToken}`、`Varnode::getLocalType`、`ActionInferTypes::{buildLocaltypes,castOutput}` 完整调用闭包；验收=MATCH/MISMATCH/UNTESTED 清单 + production fixture。 |
+| `TRI4-MAIN-RESID-0001` | P0 | IN_PROGRESS（只读根因分层） | main_resid | 当前无写集；main_diff helper 已交付 raw diff | 当前 main skeleton=677，函数体 228 行 vs oracle 476 行，入口/参数循环/URL 主循环大量缺失；验收=最早 IR/CFG 分叉、双侧完整函数与独占修复切片。 |
+| `TRI4-GETPARAM-CALLPROTO-0001` | P0 | IN_PROGRESS（只读根因分层） | getparam_proto + getparam_diff | 当前无写集；与 typeop/coreaction 候选互斥 | 当前 getparameter skeleton=543；验收=最早 callspec/prototype/结构分叉、真实 oracle fixture 和最小 write-set。 |
+| `TRI4-FILE2STRING-IR-0001` | P0 | IN_PROGRESS（只读根因分层） | file2string_ir | 当前无写集 | 当前 file2string skeleton=121；验收=缺失语句被删除/未生成的最早 Action/Rule、IR 观察点和 oracle fixture。 |
+| `TRI4-PARSECONFIG-STRUCT-0001` | P0 | IN_PROGRESS（只读根因分层） | parseconfig_struct | 当前无写集；skeleton_diff helper 已证明入口 OR/四循环在 finalize 前仍存在 | 当前 parseconfig skeleton=123；raw 41 blocks/4 loops/入口 OR 后 finalize 41→2，验收=首个错误组合/父子关系与最小 block write-set。 |
+| `TRI4-NEXTURL-STATE-0001` | P1 | IN_PROGRESS（只读根因分层） | nexturl_state | 当前无写集 | 当前 next_url skeleton=103；验收=SSA/merge/varmap/Rule 最早状态分叉、互斥 write-set 和双侧 fixture。 |
+| `PLTSTUB-WARNLOSS-0001` | P1 | IN_PROGRESS（只读复核） | plt_warnloss | 当前无写集；候选 `src/{coreaction,fspec}.rs` 等 postf133 裁决 | fresh warning=27/51，缺失恰为 24 个 PLT thunk；验收=unknown-model+lock 状态生命周期首叉、1 PLT+1 EXTERNAL oracle fixture、51/51 E2E。 |
+| `HTTPD-ADDDESCEND-THROW-0001` | P1 | IN_REVIEW（当前 master 只读复核） | httpd_dom | 当前无写集；候选 block/funcdata/heritage 属机制 C | 验收=核清 rootlist/dominator/forceRestructure 已闭合与残余 MISMATCH，给出 httpd+curl 门禁及独立 reviewer 条件。 |
+
+> 并发计数：上述 9 个 work package 由 10 个活跃后台 worker 执行（main/getparameter/parseconfig 各含一个差分 helper，已完成 helper 立即由 POSTF133/httpd 补位）；全部处于只读阶段，当前无源码 writer、无 Cargo 竞争。首批审计交付后，root 只给 write-set 无重叠且依赖满足的任务创建隔离 writer，并保持总活跃 worker 数为 10。
+
 ### 本 wave 认领租约（2026-08-27 11:05 刷新；前表见 git 历史）
 
 | ID | P | 状态 | owner | write-set（租约） | 备注 |
