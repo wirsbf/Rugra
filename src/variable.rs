@@ -1671,9 +1671,22 @@ impl VariableGroup {
     /// Move every piece from `op2` into this. Faithful to `combineGroups`
     /// (variable.cc:78-89).
     pub fn combine_groups(&mut self, op2: &mut VariableGroup) {
-        // Faithful to variable.cc:81-88: transfer each piece's group to this.
-        let pieces = std::mem::take(&mut op2.pieces);
+        // variable.cc:81-88 iterates op2's PieceCompareByOffset set and
+        // calls transferGroup, which rewires each piece to this group before
+        // the source VariableGroup is released. Recover this group's Arc from
+        // an existing piece (both-existing callers necessarily have one).
+        let target = self.pieces.first().and_then(|piece| {
+            piece.read().unwrap().group.clone()
+        });
+        let mut pieces = std::mem::take(&mut op2.pieces);
+        pieces.sort_by_key(|piece| {
+            let r = piece.read().unwrap();
+            (r.group_offset, r.size)
+        });
         for piece in pieces {
+            if let Some(target) = &target {
+                piece.write().unwrap().group = Some(target.clone());
+            }
             self.pieces.push(piece);
         }
         self.pieces.sort_by_key(|p| {

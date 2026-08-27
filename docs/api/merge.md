@@ -83,6 +83,9 @@ identity after collection and cannot alter first-seen order. `groupWith` has
 no duplicate/failure branch (`variable.cc:574-605`), so repeated offsets are
 permitted and both-existing groups are combined unconditionally, matching
 `combineGroups` at `variable.cc:599-604`; no duplicate error is synthesized.
+Rust `VariableGroup::combine_groups` mirrors `variable.cc:74-89` by sorting
+source pieces by `(group_offset,size)`, rewiring each piece's group, and
+moving the complete source set before the source group is released.
 The regression test
 `test_compare_order_selects_strictly_earlier_op` asserts the -1/+1 polarity.
 5. `merge_by_cover` → merge copy-related disjoint-cover pairs

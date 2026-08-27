@@ -1212,16 +1212,15 @@ impl Merge {
                     VariablePiece::mark_intersection_dirty_read(&other_piece);
                     return Ok(());
                 }
-                // variable.cc:599-604: both groups are combined
-                // unconditionally. There is no duplicate-key rejection in
-                // HighVariable::groupWith; transfer every source piece in
-                // group order and let combineGroups handle the membership.
-                let moving = high_group.read().unwrap().pieces.clone();
-                for piece in moving {
-                    high_group.write().unwrap().remove_piece(&piece);
-                    piece.write().unwrap().group = Some(other_group.clone());
-                    other_group.write().unwrap().add_piece(piece);
-                }
+                // variable.cc:599-604: adjust the target group's offsets,
+                // then target.combineGroups(source) and mark dirty.
+                // VariableGroup::combineGroups owns ordered PieceSet
+                // transfer and source-group lifecycle semantics.
+                let mut target = other_group.write().unwrap();
+                let mut source = high_group.write().unwrap();
+                target.combine_groups(&mut source);
+                drop(source);
+                drop(target);
                 VariablePiece::mark_intersection_dirty_read(&other_piece);
             }
         }
