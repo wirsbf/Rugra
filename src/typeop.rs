@@ -2306,8 +2306,16 @@ impl TypeOp for TypeOpPtrsub {
 
     // Ghidra: typeop.cc:2349 TypeOpPtrsub::getOutputToken
     fn get_output_token(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
-        let high = op.get_in(0)?.read().unwrap().get_high_type_read_facing(op, 0)?;
-        let pointer = match high.as_ref() { Datatype::Pointer(p) => p, _ => return None };
+        let high = match op.get_in(0)?.read().unwrap().get_high_type_read_facing(op, 0) {
+            Some(high) => high,
+            // cc:2363 delegates non-pointer inputs to TypeOp::getOutputToken,
+            // whose cc:282-286 implementation returns outputTypeLocal().
+            None => return self.get_output_local(op),
+        };
+        let pointer = match high.as_ref() {
+            Datatype::Pointer(p) => p,
+            _ => return self.get_output_local(op),
+        };
         let raw = op.get_in(1)?.read().unwrap().get_offset() as i64;
         let offset = crate::space::AddrSpace::address_to_byte_int(raw, pointer.wordsize as u32);
         let mut type_offset = offset;

@@ -988,7 +988,11 @@ normalize 位点（LE 值与修复前逐位一致；BE 域整体 UNTESTED，登�
   单拷贝解析，消除此前 slot0 的内联重复；参数槽完整 callspec 分支
   （isTypeLocked/isThisPointer，:760-772）在 `get_input_local_in_fd`
   （ActionInferTypes coreaction 臂接线）。
-  **为什么本地表而非 typeop.rs trait**：现行 typeop.rs 宏族
+  **PTRSUB 的生产消费**：`op_output_type_local` 对 PTRSUB 调用已注册的
+   `TypeOpPtrsub::get_output_token`（typeop.cc:2349-2363），因此具体操作的输出
+   不再盲目使用 INT local：offset=0 的字段沿 pointer `downChain` 返回字段类型，
+   非零/synthetic gap 构造 unknown-pointer；非指针输入回落 `getOutputLocal`。
+   **为什么本地表而非 typeop.rs trait**：现行 typeop.rs 宏族
   （binary/unary/functional）与 COPY/LOAD/STORE/MULTIEQUAL/PTRADD/PTRSUB 的
   get*Local 覆盖读对侧 varnode 的 v_type 而非 `getBase(size,metatype)`
   （登记残差 PRINTC-CAST-OPNAME-0001 M1）；M1 落地后 root 可将两张表合并。
