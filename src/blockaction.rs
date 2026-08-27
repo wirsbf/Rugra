@@ -150,7 +150,12 @@ fn build_copy(sblocks: &mut BlockGraph, bblocks: &BlockGraph) {
             // same delegation contract on the fresh BlockBasic mirror.
             {
                 let mut new_block_write = new_block.write().unwrap();
+                new_block_write.ops = bb_read.get_ops();
+                // Ghidra's BlockCopy delegates all later op reads to the
+                // wrapped live block (block.hh:533-534). Keep both legacy
+                // mirror links while the full BlockCopy type is pending.
                 new_block_write.live_ops_source = Some(bb.clone());
+                new_block_write.source_basic = Some(bb.clone());
                 let mut flags = bb_read.get_flags();
                 // Reconstruct the BlockBasic f_switch_out invariant (block.cc:
                 // 2286: opInsert sets f_switch_out when a BRANCHIND lands in

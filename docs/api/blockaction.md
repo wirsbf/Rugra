@@ -1008,3 +1008,8 @@ cleanup pool（RuleSplit* 等）插入的 STORE 对打印可见。
 - 残余分叉（下一步）：Switch-dispatch arm 与 DEAD arm 在 oracle 中不存在
   （Ghidra 用 identifyInternal 把消费块移出 graph，sizeIn() 自然不含），
   完整 faithful 移除待续。
+
+## TRI2-CALLOUT-ASSIGN-0001 集成：build_copy 活 op 视图
+
+`build_copy` 同时建立 `live_ops_source`/`source_basic` 回指，并保留结构化阶段快照
+供 collapse 消费；后续 `get_ops` 读取源块活动列表，匹配 Ghidra BlockCopy 委托。

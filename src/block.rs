@@ -1514,25 +1514,10 @@ pub struct BlockBasic {
     /// (block.cc:1027/1122) and repurposed as the FIND function by
     /// findIrreducible (block.cc:1161/1194).
     pub copy_map: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>,
-    /// Live op-list mirror link (RUGRA-GLUE): when set, `get_ops` delegates to
-    /// the ORIGINAL `BlockBasic` this block mirrors, reproducing Ghidra's
-    /// `BlockCopy::copy` delegation (block.hh:520-535: `firstOp`/`lastOp`/
-    /// `printRaw`/`emit` all read through the mirrored block; PrintC::
-    /// emitBlockCopy, printc.cc:2759-2764, emits `subBlock(0)` — the original
-    /// BlockBasic's LIVE op list). Ghidra's structure graph nodes are BlockCopy
-    /// mirrors, so PcodeOps inserted into the basic block AFTER
-    /// ActionBlockStructure (blockaction.cc:2177 buildCopy runs inside
-    /// mainloop) stay visible to printing and every later reader — the cleanup
-    /// pool (coreaction.cc:5694-5712, RuleSplitCopy/SplitLoad/SplitStore/
-    /// StringCopy/StringStore) creates its ops exactly there. Rugra's
-    /// `build_copy` (blockaction.rs) creates fresh BlockBasic mirrors instead
-    /// of BlockCopy objects (registered gap BLOCK-BUILDCOPY-MIRROR-0001); this
-    /// link gives those mirrors the same live-view contract without the full
-    /// BlockCopy port. Only build_copy sets it; basic blocks in `bblocks`
-    /// never carry a mirror link, so delegation never recurses. Stored as the
-    /// trait object because `BlockGraph` blocks are `Arc<RwLock<dyn FlowBlock>>`;
-    /// sources are always original `BlockBasic` nodes from `bblocks`.
-    pub live_ops_source: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+     /// Live op-list mirror link preserving BlockCopy delegation.
+     pub live_ops_source: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+     /// Source basic block alias for structure-graph copies.
+     pub source_basic: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
     /// Number of descendants of this block in the spanning tree (+1) (Ghidra
     /// `numdesc`, block.hh:126). -1 marks unset (Ghidra leaves the field
     /// uninitialized until findSpanningTree discovers the block).
@@ -1557,7 +1542,8 @@ impl BlockBasic {
             dom_frontier: std::collections::HashSet::new(),
             visit_count: 0,
             copy_map: None,
-            live_ops_source: None,
+             live_ops_source: None,
+             source_basic: None,
             num_desc: -1,
         }
     }
@@ -1775,10 +1761,13 @@ impl FlowBlock for BlockBasic {
     // iterators; structure-graph mirrors additionally delegate through
     // BlockCopy::copy, block.hh:520-535 — see `live_ops_source`)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
-        match &self.live_ops_source {
-            Some(source) => source.read().unwrap().get_ops(),
-            None => self.ops.clone(),
+        if let Some(source) = &self.live_ops_source {
+            return source.read().unwrap().get_ops();
         }
+        if let Some(source) = &self.source_basic {
+            return source.read().unwrap().get_ops();
+        }
+        self.ops.clone()
     }
 
     // Ghidra: block.cc:2388 BlockBasic::isComplex
