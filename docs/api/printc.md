@@ -1,5 +1,19 @@
 # `printc.rs` API Reference
 
+## 2026-08-27：隐含表达式与类型化常量发射（TRI2-UNNAMED-VN-IMPLIED / TRI2-CALLOUT-RESID-0002）
+
+- RPN 的 `rpn_recurse`、`rpn_op_func`、`CPUI_PTRADD` 与 `CPUI_PIECE` 臂已按
+  `printlanguage.cc:197-211, 514-540` 和 `printc.cc:880-893, 424-442`
+  保持 implied 输入的逆序入栈与递归内联；当前 master 已包含该链，本次复核未重复实现。
+- `push_varnode` 的 Const 分支不再依据可打印 ASCII 猜测字符形。对传播类型为
+  `TYPE_INT/TYPE_UINT` 且非 `isCharPrint()` 的常量，直接走
+  `integer_text`，对应 `pushVnExplicit` 提供 read-facing 类型后由
+  `pushConstant` 在 `printc.cc:1744-1764` 的整数分派；因此
+  `progressbarinit` 的 `0x4f` 不会误发为 `'O'`。真正的 char-print 类型仍保留字符转义路径。
+
+**验证**：oracle `e40ed13014025f82488b1f8f7bca566894ac376b`，x86-64 BFD / locked curl
+fixture；全量 `defects=0`、`numbering=0`，`progressbarinit` 目标常量 `0x4f`。
+
 ## 2026-08-26：RPN opCall 接通 + pretty-printer 挂接（PRINTC-LINEWRAP-0001）
 
 - `rpn_op_call`（Ghidra: printc.cc:596 PrintC::opCall）：RPN 路径的

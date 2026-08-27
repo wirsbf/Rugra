@@ -35,6 +35,7 @@
 | `PLTSTUB-WARNLOSS-0001` | P1 | IN_PROGRESS(只读 bisect) | pltstub@rugra-wt-pltstub | 只读+报告+TODO 行 | 51→27 警告丢失二分（早于 8474ec13）；交付引入 commit+修复 write-set 建议 |
 | `HTTPD-E2E-2026-08-27` | P1 | IN_PROGRESS(只读) | httpde2e@rugra-wt-httpde2e | 只读+报告+TODO 行 | master httpd 全量复测+goto 三症状普查（喂 gotolabel） |
 | `PRINTC-SWITCH-EMIT-0001` | P0 | PHASE-A | switchemit@rugra-wt-switchemit | docs 设计+fixture C++ 侧（**printc.rs 禁改**） | 阶段 A=oracle 深读+设计文档+fixture 骨架；printc 租约释放后实施 |
+| `TRI2-UNNAMED-VN-IMPLIED` + `TRI2-CALLOUT-RESID-0002` | P1 | DONE（printc 侧；agent/markimplied2） | markimplied2 | `src/printc.rs` + `docs/api/printc.md` + 本行 | Oracle `e40ed13014025f82488b1f8f7bca566894ac376b`; RPN PTRADD/PIECE implied 链复核保持（printc.cc:880-893, 424-442；printlanguage.cc:197-211, 514-540），Const 发射改按 propagated TYPE_INT/UINT + isCharPrint 分派，progressbarinit `0x4f` 收敛；验收=fast-release curl E2E + compare defects/numbering 0；2026-08-27 |
 
 已交付集成（本轮）：callout=master `f35f29d7`；orphanfix=`1b93bc7e`+`f27f32b9`；regB snapshot=`9f33b86e` 已由 `9ff63dcb` revert（R-REGB REJECT，不计入有效语义）；LINEWRAP=master `980f0831`；GOTO-LABEL=master `a3cda8b9`；PULLSUB=master `cf5c73b8`；IRREDUCIBLE R1-6=master `4a4bd5c6..4ac33d30`。
 > 基线（master `9ff63dcb`）：124 函数 / defects 0 / numbering 0 / skeleton 2639；httpd 29 函数 / defects 0 / numbering 0 / skeleton 2123；三函数 hugehelp/progressbarinit/my_fwrite = 0/4/8。
