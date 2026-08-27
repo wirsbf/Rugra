@@ -1442,9 +1442,9 @@ fingerprinted = {
 }
 canonical = json.dumps(fingerprinted, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 require("manifest", sha(canonical), manifest["sha256"])
-require("case count", len(manifest["cases"]), 24)
+require("case count", len(manifest["cases"]), 25)
 require("Ghidra expected provenance", metadata["expected_results_provenance"]["ghidra"],
-        "OBSERVED_LOCKED_CPP_24_CASE_OUTPUT")
+        "OBSERVED_LOCKED_CPP_25_CASE_OUTPUT")
 if runner_preexec:
     require("Rugra expected provenance", metadata["expected_results_provenance"]["rugra"],
             "PROSPECTIVE_CURRENT_CANDIDATE_EXPECTATION_NOT_YET_EXECUTED")
@@ -1452,9 +1452,9 @@ if runner_preexec:
             "PROSPECTIVE_ZERO_DIFF_EXPECTATION_NOT_YET_EXECUTED")
 else:
     require("Rugra observed provenance", metadata["expected_results_provenance"]["rugra"],
-            "OBSERVED_CURRENT_CANDIDATE_24_CASE_OUTPUT")
+            "OBSERVED_CURRENT_CANDIDATE_25_CASE_OUTPUT")
     require("diff observed provenance", metadata["expected_results_provenance"]["diff"],
-            "OBSERVED_ZERO_DIFF_24_CASE_BILATERAL")
+            "OBSERVED_ZERO_DIFF_25_CASE_BILATERAL")
 
 required_decisive = {
     "reference_output_parameters", "loop_bounds_traversal_order",
@@ -1487,18 +1487,18 @@ else:
     for key in expected_bilateral:
         require(f"coverage {key}", coverage[key]["status"], "MATCH")
         require(f"coverage {key} evidence", coverage[key]["evidence_kind"],
-                "BILATERAL_24_CASE_BYTE_IDENTICAL")
+                "BILATERAL_25_CASE_BYTE_IDENTICAL")
 for key in expected_bilateral:
     require(f"coverage {key} residuals", coverage[key]["residual_todo_ids"], [])
 for key, todo in expected_mismatch.items():
     require(f"coverage {key}", coverage[key]["status"], "MISMATCH")
     require(f"coverage {key} residuals", coverage[key]["residual_todo_ids"], [todo])
 require("pipeline evidence kind", coverage["production_typed_stage_consumption"]["evidence_kind"],
-        "LOCKED_SOURCE_AUDIT_OUTSIDE_24_CASE_FIXTURE")
+        "LOCKED_SOURCE_AUDIT_OUTSIDE_25_CASE_FIXTURE")
 require("sort evidence kind", coverage["sort_toolchain_portability"]["evidence_kind"],
         "PINNED_ORACLE_CONTRACT_WITH_CROSS_TOOLCHAIN_PORTABILITY_GAP")
 require("emulfn evidence kind", coverage["emulate_function_lowlevel_channel"]["evidence_kind"],
-        "LOCKED_SOURCE_AUDIT_OUTSIDE_24_CASE_FIXTURE")
+        "LOCKED_SOURCE_AUDIT_OUTSIDE_25_CASE_FIXTURE")
 if any(set(entry) != {"status", "evidence_kind", "covers", "residual_todo_ids"} or not entry["covers"]
        for entry in coverage.values()):
     raise SystemExit("coverage schema/text drift")

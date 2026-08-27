@@ -637,6 +637,18 @@
         "model": "fixture-production-shape-17"
       },
       {
+        "id": "sort_equal_thirtytwo",
+        "path": "recover",
+        "targets": [
+          "op+0x10",
+          "op+0x20"
+        ],
+        "reach": "none",
+        "override": false,
+        "collect": true,
+        "model": "fixture-production-shape-32"
+      },
+      {
         "id": "wrap_one_byte",
         "path": "recover",
         "targets": [
@@ -661,7 +673,7 @@
         "model": "fixture-multi-space"
       }
     ],
-    "sha256": "7f485e6a18494b30df9e0d391102d01d950197229847c017039f71d48a5dafa2"
+    "sha256": "0d8ee05012720aeeb0192b9ae90aebb84b967a81908f2128f7f7060b3060d6ed"
   },
   "expected_results": {
     "ghidra_stdout_sha256": "c4cc2b35833a0a3815edbda5f660dbd97f79baa0814973cca01c2e5d789cd9e0",
@@ -674,74 +686,74 @@
     "diff_exit_code": 0
   },
   "expected_results_provenance": {
-    "ghidra": "OBSERVED_LOCKED_CPP_24_CASE_OUTPUT",
-    "rugra": "OBSERVED_CURRENT_CANDIDATE_24_CASE_OUTPUT",
-    "diff": "OBSERVED_ZERO_DIFF_24_CASE_BILATERAL"
+    "ghidra": "OBSERVED_LOCKED_CPP_25_CASE_OUTPUT",
+    "rugra": "OBSERVED_CURRENT_CANDIDATE_25_CASE_OUTPUT",
+    "diff": "OBSERVED_ZERO_DIFF_25_CASE_BILATERAL"
   },
   "coverage": {
     "single_target_boundary": {
       "status": "MATCH",
-      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "evidence_kind": "BILATERAL_25_CASE_BYTE_IDENTICAL",
       "covers": "The executed 24-case bilateral run observed the zero, near, 0xffff and 0x10000 single-target thunk boundary byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "multi_target_bypass": {
       "status": "MATCH",
-      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "evidence_kind": "BILATERAL_25_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed the two-target bypass of the single-target thunk check byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "is_reachable_guard_matrix": {
       "status": "MATCH",
-      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "evidence_kind": "BILATERAL_25_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed one-level false, two-level parent update, BOOLEAN_FLIP, nonzero polarity, sizeOut!=2, last-op non-CBRANCH and nonconstant-condition guards byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "override_short_circuit": {
       "status": "MATCH",
-      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "evidence_kind": "BILATERAL_25_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed the override short-circuit before reachability and success-only collapse byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "recover_preconditions_and_collect_gate": {
       "status": "MATCH",
-      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "evidence_kind": "BILATERAL_25_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed recoverModel failure, tableSize zero and collectloads=false gates byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "recover_thunk_and_model_reject": {
       "status": "MATCH",
-      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "evidence_kind": "BILATERAL_25_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed recover-driven thunk classification and model rejection with pre-error mutations byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "successful_truncation_warning_order": {
       "status": "MATCH",
-      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "evidence_kind": "BILATERAL_25_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed successful truncation, warning emission order and post-sanity collapse byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "equal_address_pinned_toolchain_order": {
       "status": "MATCH",
-      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "evidence_kind": "BILATERAL_25_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed the 3/16/17-entry address-only equal-key cases byte-identically, including the pinned GCC16 std::sort threshold permutation; heap fallback remains outside the retained cases and stays covered by the portability residual.",
       "residual_todo_ids": []
     },
     "address_space_wrap_and_order": {
       "status": "MATCH",
-      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "evidence_kind": "BILATERAL_25_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed the 1-byte-space wrap and full space-index/offset ordering byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "production_load_input_invariant": {
       "status": "MATCH",
-      "evidence_kind": "BILATERAL_24_CASE_BYTE_IDENTICAL",
+      "evidence_kind": "BILATERAL_25_CASE_BYTE_IDENTICAL",
       "covers": "The executed run observed the fresh-producer num=1 invariant and loadcounts lifecycle byte-identically on both comparands.",
       "residual_todo_ids": []
     },
     "production_typed_stage_consumption": {
       "status": "MISMATCH",
-      "evidence_kind": "LOCKED_SOURCE_AUDIT_OUTSIDE_24_CASE_FIXTURE",
+      "evidence_kind": "LOCKED_SOURCE_AUDIT_OUTSIDE_25_CASE_FIXTURE",
       "covers": "Ghidra stageJumpTable catches JumptableThunkError separately and passes one RecoveryMode domain into truncateIndirectJump; Rugra production flow/funcdata consumes bool/Option and casts the enum into a conflicting legacy u8 domain.",
       "residual_todo_ids": [
         "JUMPTABLE-PIPELINE-0001"
@@ -757,7 +769,7 @@
     },
     "emulate_function_lowlevel_channel": {
       "status": "MISMATCH",
-      "evidence_kind": "LOCKED_SOURCE_AUDIT_OUTSIDE_24_CASE_FIXTURE",
+      "evidence_kind": "LOCKED_SOURCE_AUDIT_OUTSIDE_25_CASE_FIXTURE",
       "covers": "When collection is enabled, Ghidra records a resolved LOAD address before reading its payload; executeCurrentOp DataUnavailError, start/ordinary MULTIEQUAL, non-MULTIEQUAL bad start, BRANCH and BRANCHIND have precise state/error semantics. Rust lacks the loader callback and lastOp predecessor state and converts emulate_path failure to target zero.",
       "residual_todo_ids": [
         "JUMPTABLE-EMULFN-0001"
