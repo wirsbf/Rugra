@@ -24,6 +24,7 @@ use crate::op::PcodeOp;
 use crate::type_system::Datatype;
 use crate::type_system::TypeBase;
 use crate::type_system::TypeMetatype;
+use crate::typeop::{TypeOp, TypeOpPtrsub};
 
 /// First offset in Ghidra's analysis-owned unique-space region.
 /// `Translate::getUniqueStart(Translate::ANALYSIS)` returns this tag directly.
@@ -195,10 +196,18 @@ pub fn op_output_type_local(
 ) -> Option<Arc<Datatype>> {
     use crate::opcodes::OpCode;
     match op.opcode {
-        // typeop.cc:2238-2242 / 2308-2312.
-        OpCode::CPUI_PTRADD | OpCode::CPUI_PTRSUB => {
+        // typeop.cc:2238-2242 / 2308-2312, then the token-level
+        // override consumed by the type-inference caller (typeop.cc:282-286).
+        OpCode::CPUI_PTRADD => {
             let size = op.get_out()?.read().unwrap().get_size();
             local_base(type_factory, size, TypeMetatype::Int)
+        }
+        OpCode::CPUI_PTRSUB => {
+            // Ghidra's getOutputToken is the actual output type at a concrete
+            // PTRSUB: it preserves a field type at offset zero and otherwise
+            // returns an unknown pointer (typeop.cc:2349-2363), rather than
+            // exposing the INT-only local propagation seed.
+            TypeOpPtrsub::new(type_factory.clone()).get_output_token(op)
         }
         // typeop.cc:720-735 TypeOpCall::getOutputLocal.
         OpCode::CPUI_CALL => {

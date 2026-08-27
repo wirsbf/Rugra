@@ -46,9 +46,20 @@ settling」警告与 7 层 `->total` 嵌套（双侧 fixture
   建新 varnode 时预置 unknown-N，Ghidra 的 getLocalType
   （varnode.cc:918-934）除 typelock 早退外从不读 v_type——占位 unknown
   顶掉 sized-int 回退会使未封禁 INT_SUB/PTRSUB 输出停留 unknown（双侧
-  fixture case C/q 抓出）。
+   fixture case C/q 抓出）。
 
-## 2026-08-24：build_localtypes 的 CALL/CALLIND input 播种（TYPEOP-LOCALTYPE-DISPATCH-0001 D2）
+## 2026-08-28：PTRSUB output-token 生产播种（TYPEOP-PTRSUB-FIELDCAST-0001）
+
+`build_localtypes` 的 PTRSUB+spacebase 臂（coreaction.cc:5008-5037 对应 Rust
+:5350-5357）现在消费 `TypeOpPtrsub::get_output_token`，而不是把输出一律播成
+`int_types.sized` 指针。这样 offset 非零且无字段命中的 synthetic gap 得到
+unknown-pointer，随后 `TypeOpStore::getInputCast`（typeop.cc:520-555）按
+pointer pointee size 与 4-byte STORE 比较并保留 `undefined4 *` 地址 cast；
+PTRSUB 的 `getOutputLocal` 仍保持 INT（typeop.cc:2308-2312）。验证：锁定
+Ghidra 12.0.4 oracle `e40ed13014025f82488b1f8f7bca566894ac376b` 的 curl
+E2E 为 124/124，compare defects=0、numbering=0；progressbarinit
+目标 defects=0、numbering=0。
+  ## 2026-08-24：build_localtypes 的 CALL/CALLIND input 播种（TYPEOP-LOCALTYPE-DISPATCH-0001 D2）
 
 `build_localtypes` 的 `CPUI_CALL | CPUI_CALLIND` 臂在保留 output 播种之外新增
 **input 播种循环**，全部经 TypeOp local dispatch（`TypeOpCall::get_input_local` /
@@ -1812,7 +1823,42 @@ continue，coreaction.cc:5018）以 `merge_min_type_order` 播种
    选择走 + `fd.node_split`（此前为手工合成 RETURN，破坏 staged structurer
    稳定索引不变量的替代路径已弃用）；count 经 apply 返回值承载（Action
    count-bridge 约定）。
-## ActionFuncLink/ActionActiveParam 调用实参收敛（MAINDIFF-CALLPROTO-0001，本次新增）
+
+## 2026-08-26（TRI2-CALLOUT-ASSIGN-0001）：ActionActiveReturn::apply 完整移植（collectOutputTrialVarnodes/buildOutputFromTrials 接通）
+
+`ActionActiveReturn::apply`（coreaction.cc:1773-1792）从简化版升级为完整链：
+
+- **checkOutputTrialUse（fspec.cc:5661-5676）**：先 `collectOutputTrialVarnodes`
+  （fspec.cc:5536-5553）——CALL 已有输出则抛 `LowlevelError`（Rugra：整 apply
+  返回 `Err(Lowlevel)`，driver 侧 pipeline ABORTED 等价观察）；`trialvn` 为
+  dense `Vec<Option<Varnode>>`，长度=`getNumTrials()`，`None`=null 槽位；
+  以 `PcodeOp::previousOp`（op.cc:344，块内 basiciter 前驱，块首即停）回走
+  CALL 前驱 op 链，遇首个非 INDIRECT break；对 `indirect_creation` 标记的
+  INDIRECT，其输出经 `ParamActive::whichTrial`（fspec.cc:1982，重叠匹配+`sz<=1`
+  早退 quirk）定位 trial 槽，填入 trialvn 并**即时** `setAddress(vn addr,size)`
+  （fspec.cc:5550-5552——Rust 经 stable Arc owner 绕开 fd 借用分裂，保持
+  Ghidra 循环内即时重置序，后续 whichTrial 读到已重置地址）。随后逐 trial：
+  `trialvn[i]` 非空 → `markActive()`，空 → `markInactive()`（不调 markNoUse）；
+  已 checked → `LowlevelError`。
+- **deriveOutputMap（coreaction.cc:1785）**：`fc.derive_output_map()` 既有委托。
+- **buildOutputFromTrials（fspec.cc:5770-5860）**：按 `curtrial.getSlot()-1`
+  （registration 位置，survive sortTrials）索引 trialvn 收集 finalvn；`break`
+  于首个非 used；`deleteUnusedTrials()` 重编 1..N；==1 时 def 入 deletedops +
+  `opSetOutput(op, finaloutvn)`；==2 时 joinReverse 选 hi/lo（`findPreexistingWhole`
+  未移植——TODO(FSPEC-OUTPUTJOIN-0001)，恒走 constructJoinAddress+SUBPIECE 对）；
+  尾部统一 destroy：`opDestroy(dop)` + `deleteVarnode(in0/in1)`。
+- **count 通道**：`count += 1`（coreaction.cc:1788）经 `pub count` +
+  `take_count_delta()` 外化（同 ActionMultiCSE/ActionMarkImplied 约定，
+  perform 的 `lcount<count → count_apply` 观察链）；apply 返回值保持 0。
+
+**根因背景**：progressbarinit `curl_getenv` 输出丢失 = callspec proto 被错误
+播种为 caller 的（DWARF 锁定）`fd.funcp` → `funcLinkOutput` 走 locked 分支跳过
+`initActiveOutput()`（coreaction.cc:1571-1572）→ 无 trial → CALL 无输出 →
+裸语句形 `curl_getenv(...);`。修复后 RAX trial 经 heritage guardCalls 的
+KilledByCall INDIRECT 收集，CALL 输出恢复三下游（EQUAL/strtol/free），
+golden 形态 `__nptr = (char *)curl_getenv("COLUMNS");` 达成。
+
+## ActionFuncLink/ActionActiveParam 调用实参收敛（MAINDIFF-CALLPROTO-0001，master 并入）
 
 - `func_link_input(fd, fc_idx, op)`（coreaction.cc:1474-1513 `funcLinkInput`）
   重写：`(!inputlocked)||varargs` 才 `init_active_input`（cc:1482-1483）；
@@ -1868,3 +1914,22 @@ unknown 局部类型使 `testDatatypeCompatibility` 的分段游走
 match_url 触发后输出 oracle 同文的
 "Restarted to delay deadcode elimination for space: register" 头注释。
 此前"消息列表可证为空"的前提随 deadcode-delay override 接线失效。
+
+## MYFWRITE-TEMPVAR exploratory (2026-08-27)
+
+ActionActiveReturn 试验性补充了 preceding INDIRECT trial 收集与
+`build_output_from_trials` 调用（oracle `coreaction.cc:1773-1792`）；
+ActionMarkImplied 增加 LOAD/STORE 覆盖守卫。尚待在 BlockCopy 活委托基线
+上完成 E2E 验证。
+
+## FSPEC-CALLPROTO-LATENT-0001 R2 spacebase leg (2026-08-27)
+
+`ActionFuncLink::func_link_input` now mirrors oracle `coreaction.cc:1494-1512`:
+locked parameters in stack/spacebase storage are created through
+`Funcdata::op_stack_load`; the first non-varargs stack parameter claims the
+spacebase-placeholder flag, subsequent parameters are appended as loads, and
+a remaining callspec spacebase creates the canonical placeholder input.
+Register/non-spacebase parameters retain their address-space varnodes. The
+spacebase path is `UNTESTED` on the current x86-64 GCC fixture because its
+storage allocator bails out on stack spills; acceptance remains defects=0 plus
+`coreaction` tests when a constructive stack-storage fixture is available.

@@ -1821,7 +1821,30 @@ impl PrintC {
             // spaces(0,bump) openParen spaces(0,bump) ... closeParen, which
             // is what arms the pretty printer's wrap indent around the
             // argument group.
-            OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
+            // Ghidra: printc.cc:637 PrintC::opCallind
+            // Indirect calls retain the target expression and dereference it;
+            // they must not resolve the target offset as a named CALL.
+            OpCode::CPUI_CALLIND => {
+                self.emit.print("(*(code *)");
+                if let Some(in0) = op.get_in(0) {
+                    let target = in0.read().unwrap();
+                    if let Some(name) = self.symbol_table.get(&target.get_offset()).cloned() {
+                        self.emit.print(&name);
+                    } else {
+                        self.rpn_push_in(op_arc, op, 0, self.mods);
+                        self.rpn_recurse();
+                    }
+                }
+                self.emit.print(")(");
+                for i in 1..op.num_input() {
+                    if i > 1 { self.emit.print(", "); }
+                    self.rpn_push_in(op_arc, op, i, self.mods);
+                    self.rpn_recurse();
+                }
+                self.emit.print(")");
+            }
+            // Ghidra: printc.cc:596 PrintC::opCall
+            OpCode::CPUI_CALL => {
                 let target_name = if let Some(in0) = op.get_in(0) {
                     let v0 = in0.read().unwrap();
                     let off = v0.get_offset();
@@ -6263,6 +6286,30 @@ impl PrintC {
                     self.push_input(def_op, 1);
                 }
             }
+            // Ghidra: printc.cc:637 PrintC::opCallind
+            // CALLIND is not a named CALL: opCallind pushes the function_call
+            // token, then dereference, then the target Varnode (cc:640-650),
+            // yielding `(*(code *)target)(args)`. In particular, a GOT-slot
+            // target keeps its PTR_ symbol instead of becoming FUN_<offset>.
+            OpCode::CPUI_CALLIND => {
+                self.emit.print("(*(code *)");
+                if let Some(in0) = def_op.get_in(0) {
+                    let target = in0.read().unwrap();
+                    if let Some(name) = self.symbol_table.get(&target.get_offset()).cloned() {
+                        self.emit.print(&name);
+                    } else {
+                        self.push_varnode(&target, Some(def_op));
+                    }
+                }
+                self.emit.print(")(");
+                for i in 1..def_op.num_input() {
+                    if i > 1 { self.emit.print(", "); }
+                    self.push_input(def_op, i);
+                }
+                self.emit.print(")");
+                return;
+            }
+            // Ghidra: printc.cc:596 PrintC::opCall
             OpCode::CPUI_CALL => {
                 if let Some(in0) = def_op.get_in(0) {
                     let target_vn = in0.read().unwrap();
@@ -9393,6 +9440,9 @@ impl PrintLanguage for PrintC {
         // `uVar_<hex>`/`local_<hex>`/`param_stack_<hex>`/`DAT_<hex>`/
         // `v_<size>_<hex>` are merged into the single oracle form; the
         // param-name and inline-candidacy sub-guards below stay.)
+        let propagated_type = vn.v_type.clone().or_else(|| {
+            _op.and_then(|read_op| vn.get_high_type_read_facing(read_op, 0))
+        });
         let name = match vn.get_space() {
             AddressSpace::Register => {
                 // Priority: parameter name > unnamed location
@@ -9426,7 +9476,7 @@ impl PrintLanguage for PrintC {
                 // - A char-print base type emits a character literal ->
                 //   `'\0'` (cc:1750-1752 pushCharConstant).
                 // - Everything else is the plain integer form.
-                if let Some(ct) = &vn.v_type {
+                if let Some(ct) = &propagated_type {
                     match ct.get_metatype() {
                         crate::type_system::TypeMetatype::Pointer => {
                             if val == 0 {
@@ -9441,13 +9491,31 @@ impl PrintLanguage for PrintC {
                             }
                         }
                         crate::type_system::TypeMetatype::Int
-                        | crate::type_system::TypeMetatype::Uint
-                            if ct.get_name() == "char" =>
+                        | crate::type_system::TypeMetatype::Uint =>
                         {
-                            if !self.discovery_pass {
-                                self.emit.print(&format!("'{}'", escape_char_body(val & 0xff)));
+                            // PrintLanguage::pushVnExplicit (printlanguage.cc:225-227)
+                            // supplies the propagated read-facing datatype to
+                            // PrintC::pushConstant.  Do not reclassify every
+                            // printable ASCII integer as a character: when the
+                            // propagated type is not char-print, pushConstant
+                            // dispatches to push_integer (printc.cc:1750-1764).
+                            let signed = ct.get_metatype()
+                                == crate::type_system::TypeMetatype::Int;
+                            if !ct.is_char_print() {
+                                if !self.discovery_pass {
+                                    self.emit.print(&self.integer_text(
+                                        val, ct.get_size(), signed,
+                                        display_format::DEFAULT));
+                                }
+                                return;
                             }
-                            return;
+                            if ct.get_name() == "char" {
+                                if !self.discovery_pass {
+                                    self.emit.print(&format!(
+                                        "'{}'", escape_char_body(val & 0xff)));
+                                }
+                                return;
+                            }
                         }
                         _ => {}
                     }
@@ -9460,8 +9528,8 @@ impl PrintLanguage for PrintC {
                     format!("{}", val as i64)
                 } else if val == 0xffffffff {
                     "-1".to_string() // (uint32_t)-1
-                } else if val >= 0x20 && val <= 0x7e {
-                    // Printable ASCII — show as char literal only for clearly char-like values
+                } else if vn.get_size() == 1 && val >= 0x20 && val <= 0x7e {
+                    // Printable ASCII — show as char literal only for byte-sized values
                     // that are NEVER used as sizes/counts/flags (letters, some punctuation)
                     let ch = val as u8 as char;
                     // Brace/paren/bracket chars in single quotes ('}', '{', ')') confuse
@@ -9880,9 +9948,17 @@ impl PrintC {
         let mut count = n_inputs.saturating_sub(1);
         if skip >= 0 { count = count.saturating_sub(1); }
         // printc.cc:649-670: three-way dispatch on count.
-        self.emit.print("(*");
+        self.emit.print("(*(code *)");
         if let Some(in0) = op.get_in(0) {
-            self.push_varnode(&in0.read().unwrap(), Some(op));
+            let target = in0.read().unwrap();
+            // A resolved GOT-slot symbol is already the oracle's printable
+            // target atom (`PTR_<name>_<addr>`). Emit it directly so an outer
+            // CALLIND assignment cannot leak its `=` into the target expr.
+            if let Some(name) = self.symbol_table.get(&target.get_offset()).cloned() {
+                self.emit.print(&name);
+            } else {
+                self.push_varnode(&target, Some(op));
+            }
         }
         self.emit.print(")(");
         if count > 1 {
@@ -10722,8 +10798,26 @@ impl PrintC {
         }
     }
 
-    // Ghidra: printc.cc:780 PrintC::pushConstant
-    pub fn push_constant(&mut self, val: u64, sz: usize, _vn: &Varnode) {
+    // Ghidra: printc.cc:1744 PrintC::pushConstant
+    pub fn push_constant(&mut self, val: u64, sz: usize, vn: &Varnode) {
+        // pushVnExplicit supplies the propagated read-facing type before
+        // PrintC::pushConstant dispatches (printlanguage.cc:225-227).  The
+        // old size-only ASCII heuristic made a non-char 4-byte integer 0x4f
+        // print as 'O'; mirror the TYPE_INT/TYPE_UINT charPrint gate from
+        // printc.cc:1749-1764 instead.
+        if let Some(ref ct) = vn.v_type {
+            match ct.get_metatype() {
+                crate::type_system::TypeMetatype::Int
+                | crate::type_system::TypeMetatype::Uint if !ct.is_char_print() => {
+                    self.emit.print(&self.integer_text(
+                        val, ct.get_size(),
+                        ct.get_metatype() == crate::type_system::TypeMetatype::Int,
+                        display_format::DEFAULT));
+                    return;
+                }
+                _ => {}
+            }
+        }
         if sz == 1 && (0x20..=0x7e).contains(&val) { self.emit.print(&format!("'{}'", val as u8 as char)); }
         else if val > 0x1000 { self.emit.print(&format!("0x{:x}", val)); }
         else { self.emit.print(&format!("{}", val)); }

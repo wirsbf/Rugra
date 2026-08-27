@@ -2258,12 +2258,12 @@ impl FuncCallSpecs {
         self.prototype.output_storage
     }
 
-    // Ghidra: fspec.cc:4924 FuncCallSpecs::isInputLocked
-    /// Is the input prototype locked (params have TYPE_LOCKED)? Faithful to
-    /// `FuncCallSpecs::isInputLocked` — true if all params are type-locked.
+    // Ghidra: fspec.cc:3906 FuncProto::isInputLocked
+    /// Is this call's input prototype locked? `FuncCallSpecs` inherits
+    /// `FuncProto`; the oracle checks the void-input lock first, then only
+    /// the first parameter's type lock (fspec.cc:3906-3914).
     pub fn is_input_locked(&self) -> bool {
-        !self.prototype.parameters.is_empty()
-            && self.prototype.parameters.iter().all(|p| p.is_type_locked())
+        self.prototype.is_input_locked()
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::isOutputLocked
@@ -2755,12 +2755,37 @@ impl FuncCallSpecs {
     ///   data.opInsertInput(op,loadval,slot);
     ///   setStackPlaceholderSlot(slot);
     ///   loadval->setSpacebasePlaceholder();
+    ///
+    /// The caller supplies the post-`funcLinkInput` spacebase.  The two
+    /// guards below make the state machine explicit at this boundary:
+    /// Ghidra has one placeholder slot per call, and a locked non-varargs
+    /// stack parameter consumes the placeholder role in the parameter loop
+    /// (coreaction.cc:1498-1505), so the trailing placeholder must not be
+    /// created again.  The latter is only decidable when the transitional
+    /// Address carries a space tag; legacy spaceless addresses conservatively
+    /// retain the caller's existing oracle-compatible path.
     pub fn create_placeholder(
         &mut self,
         fd: &mut crate::funcdata::Funcdata,
         call_op: &crate::op::PcodeOpRef,
         spacebase: crate::space::AddressSpace,
     ) {
+        if self.stack_placeholder_slot >= 0 {
+            return;
+        }
+        if self.is_input_locked() && !self.is_dotdotdot() {
+            let has_locked_stack_param = self.prototype.parameters.iter().any(|param| {
+                param
+                    .address
+                    .to_space_address()
+                    .get_space()
+                    .map(|spc| spc.get_type() == SpaceType::SpaceBase && spacebase == AddressSpace::Stack)
+                    .unwrap_or(false)
+            });
+            if has_locked_stack_param {
+                return;
+            }
+        }
         let slot = call_op.0.read().unwrap().num_input();
         let loadval = fd.op_stack_load(spacebase, 0, 1, call_op, None, false);
         fd.op_insert_input(call_op, loadval.clone(), slot);
@@ -3293,11 +3318,20 @@ impl FuncCallSpecs {
     /// `build_join_output` constructs the join varnode + SUBPIECE ops
     /// (Ghidra's `constructJoinAddress` / `newVarnode` / `newOp(SUBPIECE)`
     /// sequence).
+    ///
+    /// `trial_vn` is Ghidra's `vector<Varnode*> trialvn`: a DENSE
+    /// position-indexed list with `None` for locations that never produced
+    /// a varnode (fspec.cc:5541-5542 pads it to `getNumTrials()`). Slots are
+    /// assigned 1..N in registration order (fspec.cc:1963-1975, slotbase
+    /// starts at 1) and travel with the trials through `sortTrials`, so
+    /// `curtrial.getSlot() - 1` is the trial's ORIGINAL registration
+    /// position — the caller must not compact the list or the slot↔position
+    /// correspondence is lost.
     pub fn build_output_from_trials(
         &mut self,
         fd: &mut crate::funcdata::Funcdata,
         call_op: &crate::op::PcodeOpRef,
-        trial_vn: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
+        trial_vn: &[Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>],
         set_call_output: &dyn Fn(&mut crate::funcdata::Funcdata, &crate::op::PcodeOpRef, &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>),
         destroy_indirect: &dyn Fn(&mut crate::funcdata::Funcdata, &crate::op::PcodeOpRef),
         build_join_output: &dyn Fn(
@@ -3312,15 +3346,15 @@ impl FuncCallSpecs {
             None => return,
         };
         // Ghidra: reorder varnodes by trial slot; collect survivors into finalvn.
-        let mut final_vn: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
+        let mut final_vn: Vec<Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>> = Vec::new();
         for i in 0..active.get_num_trials() {
             let cur = active.get_trial(i);
             if !cur.is_used() { break; }
-            // Ghidra: vn = trialvn[ curtrial.getSlot() - 1 ].
+            // Ghidra: vn = trialvn[ curtrial.getSlot() - 1 ] — no bounds
+            // guard; slot-1 is always the original registration position
+            // and the dense list is padded to getNumTrials().
             let idx = (cur.get_slot() - 1) as usize;
-            if idx < trial_vn.len() {
-                final_vn.push(trial_vn[idx].clone());
-            }
+            final_vn.push(trial_vn[idx].clone());
         }
         // Ghidra: activeoutput.deleteUnusedTrials();  // renumbers survivors 1..N
         active.delete_unused_trials();
@@ -3330,7 +3364,13 @@ impl FuncCallSpecs {
 
         if active.get_num_trials() == 1 {
             // Single, properly justified output.
-            let finalout_vn = final_vn[0].clone();
+            // Ghidra invariant: a used trial was active (only actives are
+            // ever marked used, fspec.cc:1704) and an active trial always
+            // has its trialvn entry (fspec.cc:5672-5673), so finalvn[0] is
+            // never NULL. A NULL would be a C++ deref crash.
+            let Some(finalout_vn) = final_vn[0].clone() else {
+                panic!("buildOutputFromTrials: used trial has no varnode");
+            };
             // Ghidra: indop = finaloutvn->getDef(); deletedops.push_back(indop);
             //         data.opSetOutput(op, finaloutvn);
             if let Some(def_weak) = finalout_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
@@ -3338,15 +3378,21 @@ impl FuncCallSpecs {
             }
             set_call_output(fd, call_op, &finalout_vn);
         } else if active.get_num_trials() == 2 {
-            // Ghidra: pick hi/lo honouring isJoinReverse.
-            let (hi_vn, lo_vn) = if active.is_join_reverse() {
-                (final_vn[0].clone(), final_vn[1].clone())
+            // Ghidra: pick hi/lo honouring isJoinReverse. Both survivors
+            // carry the used⟹active⟹non-NULL invariant (fspec.cc:1704 +
+            // fspec.cc:5672-5673).
+            let (hi_slot, lo_slot) = if active.is_join_reverse() {
+                (0usize, 1usize)
             } else {
-                (final_vn[1].clone(), final_vn[0].clone())
+                (1usize, 0usize)
+            };
+            let (Some(hi_vn), Some(lo_vn)) = (final_vn[hi_slot].clone(), final_vn[lo_slot].clone())
+            else {
+                panic!("buildOutputFromTrials: used trial has no varnode");
             };
             // Ghidra: if (data.isDoublePrecisOn()) { lovn->setPrecisLo(); hivn->setPrecisHi(); }
             if fd.is_double_precis_on() {
-                // TODO(ALIGNMENT_ROADMAP): wire Varnode::setPrecisLo/Hi.
+                // TODO(FSPEC-OUTPUTJOIN-0001): wire Varnode::setPrecisLo/Hi.
             }
             // Ghidra: deletedops.push_back(hivn->getDef()); deletedops.push_back(lovn->getDef());
             if let Some(def_weak) = hi_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
@@ -3355,9 +3401,12 @@ impl FuncCallSpecs {
             if let Some(def_weak) = lo_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
                 deleted_ops.push(crate::op::PcodeOpRef(def_weak));
             }
-            // Ghidra: finaloutvn = findPreexistingWhole(hivn, lovn); else build join.
-            // Rugra has no findPreexistingWhole; always build the join via
-            // the caller-supplied hook (constructJoinAddress + SUBPIECE ops).
+            // Ghidra: finaloutvn = findPreexistingWhole(hivn, lovn); if null,
+            // build the join (constructJoinAddress + SUBPIECE pair); else
+            // reuse the preexisting PIECE whole and destroy its def too.
+            // TODO(FSPEC-OUTPUTJOIN-0001): port findPreexistingWhole
+            // (fspec.cc:5750-5760) — until then always build the join via
+            // the caller-supplied hook.
             let _finalout_vn = build_join_output(fd, call_op, &hi_vn, &lo_vn);
             // The join hook is responsible for opSetOutput(op, finaloutvn).
         } else {

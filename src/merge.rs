@@ -1134,13 +1134,9 @@ impl Merge {
                           group: &Arc<RwLock<VariableGroup>>) -> Result<Arc<RwLock<VariablePiece>>> {
         let size = high.read().unwrap().instances.first()
             .map(|vn| vn.read().unwrap().size as i32).unwrap_or(0);
-        let duplicate = group.read().unwrap().pieces.iter().any(|piece| {
-            let piece = piece.read().unwrap();
-            piece.group_offset == offset && piece.size == size
-        });
-        if duplicate {
-            return Err(anyhow!("Duplicate VariablePiece"));
-        }
+        // Ghidra HighVariable::groupWith (variable.cc:574-605) always
+        // allocates a VariablePiece in the one-sided group cases; it has no
+        // duplicate/failure branch. Keep duplicate offsets legal here.
         let piece = Arc::new(RwLock::new(VariablePiece::new(
             Arc::downgrade(high), offset, size, Some(group.clone()))));
         group.write().unwrap().add_piece(piece.clone());
@@ -1216,29 +1212,15 @@ impl Merge {
                     VariablePiece::mark_intersection_dirty_read(&other_piece);
                     return Ok(());
                 }
-                let moving = high_group.read().unwrap().pieces.clone();
-                let mut existing_keys: std::collections::BTreeSet<(i32, i32)> = other_group
-                    .read().unwrap().pieces.iter().map(|piece| {
-                        let piece = piece.read().unwrap();
-                        (piece.group_offset, piece.size)
-                    }).collect();
-                for piece in moving {
-                    let key = {
-                        let piece = piece.read().unwrap();
-                        (piece.group_offset, piece.size)
-                    };
-                    // variable.cc:179-182 transferGroup removes from the
-                    // source and rewires the piece's group pointer before
-                    // addPiece detects a duplicate and throws. Preserve this
-                    // partial mutation and the transfer iteration order.
-                    high_group.write().unwrap().remove_piece(&piece);
-                    piece.write().unwrap().group = Some(other_group.clone());
-                    if existing_keys.contains(&key) {
-                        return Err(anyhow!("Duplicate VariablePiece"));
-                    }
-                    other_group.write().unwrap().add_piece(piece);
-                    existing_keys.insert(key);
-                }
+                // variable.cc:599-604: adjust the target group's offsets,
+                // then target.combineGroups(source) and mark dirty.
+                // VariableGroup::combineGroups owns ordered PieceSet
+                // transfer and source-group lifecycle semantics.
+                let mut target = other_group.write().unwrap();
+                let mut source = high_group.write().unwrap();
+                target.combine_groups(&mut source);
+                drop(source);
+                drop(target);
                 VariablePiece::mark_intersection_dirty_read(&other_piece);
             }
         }
@@ -1831,13 +1813,96 @@ impl Merge {
     }
 
     // Ghidra: merge.cc:967 Merge::groupPartials
-    /// Group CONCAT-piece roots. Faithful to `Merge::groupPartials`
-    /// (merge.cc:967-976). Rugra has no `protoPartial` registry (CONCAT
-    /// reconstruction is not ported), so there is nothing to group. Kept as
-    /// a named no-op to preserve the step sequence.
-    pub fn group_partials(&mut self, _fd: &mut Funcdata) {
-        // TODO: port CONCAT partial-root grouping when PieceNode/VariablePiece
-        // machinery is available (merge.cc:967, groupPartialRoot at 1374).
+    /// Group CONCAT-piece roots.  RulePieceStructure marks each rewritten
+    /// PIECE root and its unmapped pieces as proto-partial; this pass rebuilds
+    /// the same VariableGroup before naming (merge.cc:967-976, 1374-1407).
+    pub fn group_partials(&mut self, fd: &mut Funcdata) {
+        use std::collections::HashSet;
+        // `protoPartial` is populated while RulePieceStructure walks the
+        // ordered op list. Reproduce that order from the bank's alive-op
+        // sequence; loc_tree order is storage order, not registration order.
+        // ActionPool::processOp advances the sorted PcodeOpTree (action.rs:1400-1414).
+        let candidates: Vec<_> = fd.obank.optree.iter()
+            .filter_map(|op_ref| {
+                let op = op_ref.0.read().unwrap();
+                (op.opcode == crate::opcodes::OpCode::CPUI_PIECE && op.is_partial_root())
+                    .then(|| op.output.clone()).flatten()
+            }).collect();
+        let mut roots = HashSet::new();
+        for candidate in candidates {
+            let root = Self::partial_root(&candidate).unwrap_or(candidate);
+            let key = std::sync::Arc::as_ptr(&root) as usize;
+            if !roots.insert(key) { continue; }
+            let Some(def) = root.read().unwrap().get_def() else { continue };
+            if def.read().unwrap().opcode != crate::opcodes::OpCode::CPUI_PIECE { continue; }
+            let Some(root_high) = root.read().unwrap().get_high().cloned() else { continue };
+            if root_high.read().unwrap().instances.len() != 1 { continue; }
+            let mut pieces = Vec::new();
+            Self::gather_partial_pieces(&root, &crate::op::PcodeOpRef(def), 0, &mut pieces);
+            if pieces.iter().all(|(piece, _)| {
+                let p = piece.read().unwrap();
+                p.is_proto_partial() && p.get_high().map_or(false, |h| h.read().unwrap().instances.len() == 1)
+            }) {
+                for (piece, offset) in pieces {
+                    if let Some(high) = piece.read().unwrap().get_high().cloned() {
+                        let _ = Self::group_with_arcs(&high, offset, &root_high);
+                    }
+                }
+            } else {
+                for (piece, _) in pieces { piece.write().unwrap().clear_proto_partial(); }
+            }
+        }
+    }
+
+    // Ghidra: op.cc:824 PieceNode::findRoot
+    fn partial_root(vn: &Arc<RwLock<crate::varnode::Varnode>>) -> Option<Arc<RwLock<crate::varnode::Varnode>>> {
+        let mut current = vn.clone();
+        loop {
+            let (addr, current_space, descendants) = {
+                let v = current.read().unwrap();
+                (v.get_offset(), v.get_space(), v.descend_iter().collect::<Vec<_>>())
+            };
+            let mut next: Option<(Arc<RwLock<crate::varnode::Varnode>>, Arc<RwLock<crate::op::PcodeOp>>)> = None;
+            for op in descendants {
+                let o = op.read().unwrap();
+                if o.opcode != crate::opcodes::OpCode::CPUI_PIECE { continue; }
+                let Some(out) = o.output.clone() else { continue };
+                let slot = (0..2).find(|&i| o.inrefs.get(i).map_or(false, |x| std::sync::Arc::ptr_eq(x, &current)));
+                let Some(slot) = slot else { continue };
+                let other_size = o.inrefs.get(1 - slot).map(|x| x.read().unwrap().get_size()).unwrap_or(0);
+                let out_space = out.read().unwrap().get_space();
+                let out_addr = out.read().unwrap().get_offset();
+                let adjusted = if out_space.is_big_endian() == (slot == 1) { out_addr.wrapping_add(other_size as u64) } else { out_addr };
+                if adjusted != addr { continue; }
+                // Rust compare_order has the same polarity as C++:
+                // negative means this op strictly precedes the prior one.
+                let replace = match &next {
+                    None => true,
+                    Some((_, previous)) => o.compare_order(&previous.read().unwrap()) < 0,
+                };
+                if replace { next = Some((out, op.clone())); }
+            }
+            match next { Some((n, _)) => current = n, None => return Some(current) }
+        }
+    }
+
+    // Ghidra: op.cc:865 PieceNode::gatherPieces
+    fn gather_partial_pieces(root: &Arc<RwLock<crate::varnode::Varnode>>, op: &crate::op::PcodeOpRef,
+                             base: i32, out: &mut Vec<(Arc<RwLock<crate::varnode::Varnode>>, i32)>) {
+        let (big, inputs) = {
+            let r = root.read().unwrap();
+            let o = op.0.read().unwrap();
+            (r.get_space().is_big_endian(), o.inrefs.clone())
+        };
+        if inputs.len() < 2 { return; }
+        let sizes = [inputs[0].read().unwrap().get_size() as i32, inputs[1].read().unwrap().get_size() as i32];
+        for slot in 0..2 {
+            let offset = if big == (slot == 1) { base + sizes[1 - slot] } else { base };
+            let piece = inputs[slot].clone();
+            let nested = piece.read().unwrap().get_def().filter(|d| d.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_PIECE);
+            out.push((piece, offset));
+            if let Some(nested) = nested { Self::gather_partial_pieces(root, &crate::op::PcodeOpRef(nested), offset, out); }
+        }
     }
 
     // Ghidra: merge.cc:889 Merge::mergeMarker
@@ -4384,6 +4449,30 @@ mod tests {
     use crate::opcodes::OpCode;
     use crate::pcoderaw::{PcodeOpRaw, VarnodeRaw};
     use crate::space::AddressSpace;
+
+    /// Rust compare_order polarity must match C++ compareOrder: only a
+    /// strictly earlier candidate replaces the selected PIECE root.
+    #[test]
+    fn test_compare_order_selects_strictly_earlier_op() {
+        let mut fd = Funcdata::new("compare_order", Address::new(0x7000), 0x20);
+        let mut first = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+        first.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
+        first.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8));
+        let mut second = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+        second.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x108, 8));
+        second.add_input(VarnodeRaw::new(AddressSpace::Register, 0x30, 8));
+        fd.inject_raw_ops(&[first, second]);
+        let ops: Vec<_> = fd.obank.optree.iter().map(|r| r.0.clone()).collect();
+        assert!(ops.len() >= 2, "two ordered ops should be present");
+        let earlier = ops[0].read().unwrap();
+        let later = ops[1].read().unwrap();
+        assert_eq!(earlier.compare_order(&later), -1);
+        assert_eq!(later.compare_order(&earlier), 1);
+        // Selection rule used by partial_root: a later candidate cannot
+        // replace the earlier one, while an earlier candidate can.
+        assert!(!(later.compare_order(&earlier) < 0));
+        assert!(earlier.compare_order(&later) < 0);
+    }
 
     /// Two COPYs feeding the same register at different times should NOT
     /// merge if their covers overlap. Concretely:

@@ -330,7 +330,7 @@ VariablePiece objects, tracks total size and symbol offset.
 - `pub fn get_size(&self) -> i32` — variable.hh:61
 - `pub fn set_symbol_offset(&mut self, val: i32)` — variable.hh:62
 - `pub fn get_symbol_offset(&self) -> i32` — variable.hh:63
-- `pub fn combine_groups(&mut self, op2: &mut VariableGroup)` — variable.cc:78 `combineGroups`
+- `pub fn combine_groups(&mut self, op2: &mut VariableGroup)` — variable.cc:78 `combineGroups`; transfers source pieces in PieceCompareByOffset order, rewires each piece's group pointer, and empties the source group
 
 ---
 
