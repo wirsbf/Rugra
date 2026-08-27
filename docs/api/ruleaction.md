@@ -1301,3 +1301,12 @@ abort placeholder）。闭合 CALLSPEC-0001 中登记的
   `tools/run_ptrarith_addtree_oracle.sh`，5 用例（PTRADD 多倍数路 /
   PTRSUB 子类型路 / 非倍数 valid=false / 未类型化基座 / 未启动 type
   recovery）10 条记录与锁定 12.0.4 oracle 逐字节一致。
+
+## 2026-08-27：RulePullsubMulti 非 join 输出空间（RULE-PULLSUB-NEWVNODEOUT-0001）
+
+`RulePullsubMulti::build_subpiece` 对照 `ruleaction.cc:776-839`：非 join 基底按
+`cc:816-821` 的端序计算 `smalladdr1`，并在 `cc:828-829` 的 renormalize 后以
+`newVarnodeOut` 建立输出，因此输出保留基底的地址空间（Ram/Register/Stack 等），不再
+无条件落入 Unique。Rugra 当前 Address 是标量，renormalize 等价为空操作；本实现仅在
+`AddressSpace::Join` 仍使用 Unique fallback，因为 JoinRecord 基础设施尚未存在。该 join
+臂绑定本 TODO，不能据此宣称 RulePullsubMulti 完整 MATCH。

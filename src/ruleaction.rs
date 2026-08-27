@@ -10916,7 +10916,7 @@ impl RulePullsubMulti {
         out_size: u32,
         shift: u64,
     ) -> Result<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
-        let (is_input, is_written, def_addr, base_addr, base_size, is_big_endian) = {
+        let (is_input, is_written, def_addr, base_addr, base_size, base_space, is_big_endian) = {
             let r = base_vn.read().unwrap();
             (
                 r.is_input(),
@@ -10924,6 +10924,7 @@ impl RulePullsubMulti {
                 r.get_def().map(|d| d.read().unwrap().get_addr()),
                 crate::address::Address::new(r.get_offset()),
                 r.get_size(),
+                r.get_space(),
                 r.space().is_big_endian(),
             )
         };
@@ -10949,7 +10950,11 @@ impl RulePullsubMulti {
             }
         };
         // Compute the small address.
-        let _small_addr = if !is_big_endian {
+        // cc:816-821: non-join bases place the result in the base's space,
+        // adjusting the byte address for endianness. JoinRecord selection is
+        // not representable in Rugra's current Address model; retain the
+        // existing unique-space fallback for that TODO path.
+        let small_addr = if !is_big_endian {
             base_addr.offset(shift as i64)
         } else {
             base_addr.offset((base_size as i64) - (shift as i64 + out_size as i64))
@@ -10957,8 +10962,33 @@ impl RulePullsubMulti {
         // Build the new SUBPIECE.
         let new_op = fd.new_op(2, new_addr);
         fd.op_set_opcode(&new_op, OpCode::CPUI_SUBPIECE);
-        // Rugra lacks isJoin/JoinRecord handling; always use new_unique_out.
-        let out_vn = fd.new_unique_out(out_size as usize, &new_op);
+        // cc:825-830: usetmp selects unique only for an unresolved join;
+        // otherwise renormalize(smalladdr1,outsize) and newVarnodeOut retain
+        // the base address space. Address is a scalar in Rugra, so its
+        // renormalization is an identity operation.
+        let out_vn = if base_vn.read().unwrap().address_space
+            == crate::space::AddressSpace::Join
+        {
+            // TODO RULE-PULLSUB-NEWVNODEOUT-0001: add JoinRecord-backed
+            // piece-address selection before replacing this fallback.
+            fd.new_unique_out(out_size as usize, &new_op)
+        } else {
+            {
+                let vn = fd.vbank.create_def_with_space(
+                    out_size as usize,
+                    base_space,
+                    small_addr.as_u64(),
+                    &new_op.0,
+                );
+                new_op.0.write().unwrap().output = Some(vn.clone());
+                let _ = fd.assign_high(&vn);
+                if out_size as usize >= fd.min_laned_size as usize {
+                    fd.check_for_laned_register(out_size as usize, base_space, small_addr);
+                }
+                fd.set_varnode_properties(&vn);
+                vn
+            }
+        };
         fd.op_set_input(&new_op, base_vn.clone(), 0);
         let shift_const = fd.new_constant(4, shift);
         fd.op_set_input(&new_op, shift_const, 1);
