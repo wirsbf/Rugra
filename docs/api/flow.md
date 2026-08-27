@@ -1,5 +1,10 @@
 # flow.rs — Reachability-based control flow tracking
 
+## 2026-08-26：GOTO-LABEL-UNPRINTED-0001 收尾验证
+- `FlowInfo::generate_ops` 的控制流恢复继续遵循 `flow.cc:785-822` 的阶段顺序；尾调用/流覆盖传输在原始 p-code 层完成后，标签发现可消费稳定的 branch/call 形态。
+- 本轮移除仅用于诊断的 `[DBG]` 原始 op/CFG 探针，避免污染 stderr；生产路径不依赖环境变量。
+- httpd（Ghidra 12.0.4 oracle `e40ed13014025f82488b1f8f7bca566894ac376b`, x86:LE:64:default）实测 29/29 函数完成，goto 未定义目标为 0，`LAB_00000000` 为 0；curl 回归 defects=0、numbering=0。
+
 ## 2026-07-04：新建 src/flow.rs — FlowInfo Phase 1（可达性流追踪核心）
 - 新建 `src/flow.rs`，实现 `FlowInfo` struct（对齐 flow.hh:58-169 FlowInfo）。
 - `generate_ops(entry)`：addrlist 工作列表驱动的指令解码主循环（对齐 flow.cc:785-822）。

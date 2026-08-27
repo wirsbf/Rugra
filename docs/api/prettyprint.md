@@ -539,3 +539,12 @@ prettyprint.hh:547 是 EmitNoMarkup 类声明，oracle 无任何 backfill
 
 验收：curl E2E 幻影声明 18→0；真未链接引用（glob_set piVar1、
 register0x/unique0x token）注入保持；defects=0/numbering=0 保持。
+
+### 2026-08-26：GOTO-LABEL — `code_r0x...:` 标号的死区保留
+
+`post_process` 死代码消除中"被引用标号行"的判定从 `LAB_` 前缀扩展到
+`code_` 前缀（PrintC::emitLabel 产出的 `code_r0x...:` 与 LAB_ 同为 goto
+目标；跳入死区是合法 C，被引用的 code_ 标号必须存活，否则所有指向它的
+goto 成为未定义标号 gcc 错误——httpd ap_update_vhost_given_ip /
+ap_strchr 观察）。判据不变：整行 `标识符:` 且无空格，且全文存在
+`goto <标识符>;` 引用。

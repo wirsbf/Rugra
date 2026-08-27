@@ -1113,7 +1113,18 @@ impl EmitNoMarkup {
             let indent = line.len() - line.trim_start().len();
 
             // Check if this line is a goto target label that's referenced
-            if t.starts_with("LAB_") && t.ends_with(':') && !t.contains(' ') {
+            // GOTO-LABEL-UNPRINTED-0001: `code_r0x...:` labels (PrintC::
+            // emitLabel, printc.rs code_label / printc.cc:3164-3193) are
+            // goto targets exactly like LAB_ labels — a referenced label in
+            // a dead zone is a live jump destination (jumping into a dead
+            // zone is legal C) and must survive, or every goto to it
+            // becomes an undefined-label gcc error (observed:
+            // code_r0x0002DB65 / 0x2E655, httpd ap_update_vhost_given_ip /
+            // ap_strchr).
+            let is_label_line = (t.starts_with("LAB_") || t.starts_with("code_"))
+                && t.ends_with(':')
+                && !t.contains(' ');
+            if is_label_line {
                 let label_name = &t[..t.len()-1];
                 let goto_ref = format!("goto {};", label_name);
                 if all_text.contains(&goto_ref) {

@@ -1636,3 +1636,73 @@ numbering=0 保持；audit 错误总数 15→15（1 处形态变化见上）。
   `dt.get_name()` 直读外层原始名（make_ptr 造的 pointer-to-pointer 外层名
   就是 `char * *`），在 `*(char * *)stream` 泄漏处 oracle 打
   `*(char **)stream`；现改走 cast_type_string 同一折叠。
+
+### 2026-08-26：GOTO-LABEL-UNPRINTED-0001 — goto 标号四症状族
+
+**症状族**（httpd 首暴露）：① goto 目标 `code_r0x...:` 标号未打印
+（undefined-label gcc 错误）；② `goto code_r0x0` 零地址；③
+`if (( = ...)` 畸形 CBRANCH 链；④ goto 超发（goto_prints 恒 true）。
+
+- `emit_any_label_statement` 重写为 cc:3219-3226 faithful 形式：
+  only_branch 早退（cc:3201）→ 前叶下降（cc:3223，block.rs
+  front_leaf）→ f_unstructured_targ + Basic|Copy 门（cc:3207-3208
+  isUnstructuredTarget/t_copy）→ tagLine(0)+emitLabel+COLON（cc:3211-
+  3213）。Rugra 侧传输层差异（均注释记录）：printed_labels 地址键
+  once-guard 是 f_label_bumpup（block.hh:99）的传输——Rugra 结构树共享
+  Basic 叶（Ghidra 复制 BlockCopy 子树），带标叶可从多个构造入口到达，
+  必须恰好打印一次；discovery_pass / main_emit_id 门排除 NullEmit 发现
+  pass 与捕获缓冲（标号打印进丢弃缓冲会既消失又占用 once-guard）。
+  addr==0 防御跳过（GOTO-ZERO-TARGET-UPSTREAM-0001）。
+- `emit_block_ops` 顶部调用 emit_any_label_statement：Ghidra 在每个
+  构造入口（emitBlockCopy cc:2762、emitBlockList/If/WhileDo/DoWhile
+  cc:2965/3014/3076/3104）对其子树调用；Rugra 构造发射器直接经
+  emit_block_ops 发射 Basic 体/条件，前叶检查在同一入口执行。
+- `emit_goto_statement`（cc:2303-2323）：零地址与非 block-start 目标
+  防御跳过（GOTO-ZERO/UNIQSPACE/NEVEREMITTED-TARGET-UPSTREAM-0001，
+  oracle 的 emitGotoStatement 总是收到活 FlowBlock，此形态无 oracle 对
+  应物；上游登记在 TODO_BOARD）；GOTO 臂后接 pending_goto_labels 账本
+  ——目标块稍后发射时 backpatch 标号（oracle 位置：带标叶自身），
+  discovery_block_starts 不含的目标（结构器丢块，上游域）在 goto 点
+  锚定（落入 fall-through，合法 C）。
+- 平面 goto 尾（op_branch / op_cbranch / op_cbranch_rpn 的
+  cc:575-578 折叠）：`flat_goto_target_valid` 白名单门——in(0) offset
+  必须非零且属于 code_block_starts（doc_function 2a.5 收集
+  fd.bblocks+结构图全部块 start；unique-space 改写 0x10000008/
+  0x1000011F 等与 0x0 退化链永不是块 start，而真代码 offset 一定是）；
+  拒绝则整段 goto 文本不打印，语句级 `;` 收尾 `if (cond);`（合法 C）。
+  空间不过滤：结构器可把 in(0) 改写进 unique space 而保留真代码 offset
+  （httpd ap_fini_vhost_config 观察 0x2D53A）。
+- `cbranch_goto_info` 移除 Const/Ram 空间过滤（同上：offset-vs-
+  block-start 是精确判据）。
+- PTRADD/PIECE RPN push 臂补齐（printc.cc:880-893 opPtradd：
+  printval→subscript 否则 binary_plus，in(1) 先 in(0) 后；printc.hh:333
+  opPiece→opFunc，CONCAT<sz0><sz1> 函数式）——此前缺失使 stage-2 token
+  悬空不平衡（`if (( = ...)` 畸形链的一环）。
+
+**发现 pass 预种子（续）**：目标块在 goto 语句**之前**发射时 backpatch
+已错过——`pending_goto_labels` 必须**先于** pass 2 预填。
+
+- 2a.5 账本（code_block_starts/goto_targets/三个 clear）**上移到 pass 1
+  之前**：白名单是结构图静态属性，发现 pass 的 goto 决策
+  （flat_goto_target_valid / emit_goto_statement）同样要查；空表会使
+  pass 1 抑制所有 op 级 goto、无法预填 pending_goto_labels（观察：
+  code_r0x0002E679 ap_getparents、code_r0x0002DB30 ap_update_vhost_
+  given_ip——goto 从平面尾打印时目标块的唯一发射已过，标号悬空）。
+  pending_goto_labels 在此处 clear 后**不在 pass 2 前重清**（种子存活）。
+- `discovery_emit_id`：发现 pass 主发射器（NullEmit）的身份。pass 1 的
+  `record_goto_label_pending` 只认 main_emit_id / discovery_emit_id 两个
+  身份——丢弃上下文（CaseDetectEmit 干跑、捕获缓冲）在**任一** pass 都
+  不记录，保持两 pass 的 goto 集合相等；discovery_block_starts 的插入
+  同样仅限 NullEmit 主发射器（只进丢弃缓冲的块不算主输出发射，误计会
+  错误抑制 never-emitted 锚）。
+- `emit_any_label_statement` 新增 Basic|Copy 挂起臂：叶未带
+  f_unstructured_targ（Rugra 结构器留下未包裹的 goto 边，oracle 中
+  ruleBlockGoto blockaction.cc:1450 总会包裹）但 pending_goto_labels
+  含其地址（pass 2 中**稍后**才打印的 goto 亦可——两 pass 决策相同）。
+  这是 oracle 顺序无关性的地址键传输：标号在本块发射点打印，与 goto
+  文本在前在后无关。addr==0 防御保持。
+- 平面尾标号扫描（emit_block_ops 两处）新增 `needs_anchor`：目标在
+  pending_goto_labels 且不在 discovery_block_starts——无块会携带其标号，
+  在本块语句后锚定（与 emit_goto_statement 的 never-emitted 锚同位，
+  合法 C：跳转落到 fall-through 语句）。已发射目标仍排除（其标号归
+  目标块自身）。
