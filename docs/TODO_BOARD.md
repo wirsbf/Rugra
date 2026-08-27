@@ -12,6 +12,7 @@
 ### 本 wave 认领租约（2026-08-27 11:05 刷新；前表见 git 历史）
 
 | ID | P | 状态 | owner | write-set（租约） | 备注 |
+| `TRI5-TRIAGE-2026-08-27` | P0 | DONE (read-only) | tri5@rugra-wt-tri5 | `/tmp/rugra-reports/TRI5-2026-08-27.md` + 本行 | master `de26f21c`：124/124，defects=0，numbering=0，skeleton 2822；相对 TRI4 2499 为 +323；f133 2678→2822 净+144，受伤函数/Top20/合流预期见报告；oracle e40ed13014025f82488b1f8f7bca566894ac376b；2026-08-27 |
 |---|---|---|---|---|---|
 | `REGA-HUGEHELP-LITERAL-0001` | P0 | IN_PROGRESS | regA@rugra-wt-regressfix2 | `src/heritage.rs`+docs/api/heritage.md | 回归 A 根因修复（bumpDeadcodeDelay/restart 链嫌疑）；前任 [DBG] 插桩需清除；验收=hugehelp/progressbarinit 恢复 c10871c3 形态+defects 0 |
 | `REGB-MYFWRITE-DUALNULL-0001` | P1 | IN_PROGRESS | regB@rugra-wt-regb | `src/coreaction.rs`+`src/block.rs`（blockaction.rs 尽量少动） | 回归 B 根因修复（fieldsplit live_ops_source/STORE 播种嫌疑）；验收=my_fwrite 双判空恢复+skeleton 8→低 |
