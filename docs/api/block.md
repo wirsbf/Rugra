@@ -2,6 +2,13 @@
 
 **源代码路径**: `src/block.rs`
 
+**2026-08-28 RPO ownership guard**：`compute_spanning_rpo` 现将当前
+`BlockGraph.blocks` 作为唯一 RPO 宇宙；DFS 遇到 identifyInternal 后仍由
+composite 持有、但已不在 parent list 的 stale child Arc 时跳过。否则真实运行中
+`rpostcount` 会从 `blocks.len()` 下溢至 `usize::MAX`（`block.cc:1043-1084`
+要求 list 内每个 FlowBlock 恰好入栈/出栈一次），导致 7 个函数 worker panic。
+该 guard 不改变合法 oracle 图的遍历顺序，仅恢复 parent-list ownership 边界。
+
 ## 文档状态
 
 - **状态**: 已核对（当前有效；2026-08-27 新增 `absorbed_into`/`resolve_to_graph_level`）

@@ -3551,6 +3551,13 @@ impl BlockGraph {
         let key = |a: &Arc<RwLock<dyn FlowBlock + Send + Sync>>| {
             Arc::as_ptr(a) as *const () as usize
         };
+        // The oracle's graph list owns every edge endpoint.  Rugra composites
+        // can retain Arc children after identifyInternal removes them from the
+        // parent list (block.cc:953-960); those children are not traversal
+        // subjects.  Keep the RPO universe closed over the current list so a
+        // stale child edge cannot make rpostcount underflow below.
+        let known: std::collections::HashSet<usize> =
+            self.blocks.iter().map(|b| key(b)).collect();
         // cc:1023-1030: collect potential roots in list order.
         let mut rootlist: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
         for i in 0..n {
@@ -3637,7 +3644,9 @@ impl BlockGraph {
                             Some(e) => e.point,
                             None => continue,
                         };
-                        if !visited.contains(&key(&childbl)) {
+                        // Ignore stale Arc edges into absorbed children; the
+                        // current parent list is the only valid RPO universe.
+                        if known.contains(&key(&childbl)) && !visited.contains(&key(&childbl)) {
                             visited.insert(key(&childbl));
                             preorder.push(childbl.clone());
                             state.push(childbl);
