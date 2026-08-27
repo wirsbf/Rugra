@@ -5318,7 +5318,14 @@ impl ActionInferTypes {
                 // keeps the varnode.cc:926-931 minimum: an unknown8 seed can
                 // never displace a more specific reader seed (CALL locked
                 // param, downChain field pointer).
-                OpCode::CPUI_LOAD | OpCode::CPUI_STORE => {
+                // LOAD readers are intentionally left to the Varnode
+                // defining/descendant traversal and later edge propagation.
+                // The op-centric mirror of LOAD inputs can conflate the
+                // independent read sites of a reused value (my_fwrite's two
+                // null checks), while Ghidra's `getLocalType` visits each
+                // Varnode's actual descend list exactly once.
+                OpCode::CPUI_LOAD => {}
+                OpCode::CPUI_STORE => {
                     let type_factory = fd.arch.as_ref().and_then(|a| a.types.clone());
                     let Some(type_factory) = type_factory else {
                         continue;

@@ -1514,10 +1514,7 @@ pub struct BlockBasic {
     /// (block.cc:1027/1122) and repurposed as the FIND function by
     /// findIrreducible (block.cc:1161/1194).
     pub copy_map: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>,
-     /// Live op-list mirror link preserving BlockCopy delegation.
-     pub live_ops_source: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
-     /// Source basic block alias for structure-graph copies.
-     pub source_basic: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+
     /// Number of descendants of this block in the spanning tree (+1) (Ghidra
     /// `numdesc`, block.hh:126). -1 marks unset (Ghidra leaves the field
     /// uninitialized until findSpanningTree discovers the block).
@@ -1542,8 +1539,7 @@ impl BlockBasic {
             dom_frontier: std::collections::HashSet::new(),
             visit_count: 0,
             copy_map: None,
-             live_ops_source: None,
-             source_basic: None,
+
             num_desc: -1,
         }
     }
@@ -1757,16 +1753,9 @@ impl FlowBlock for BlockBasic {
         self.outgoing.push(edge);
     }
 
-    // RUGRA-GLUE: Rust helper (Ghidra BlockBasic exposes op list via begin/end
-    // iterators; structure-graph mirrors additionally delegate through
-    // BlockCopy::copy, block.hh:520-535 — see `live_ops_source`)
+    // RUGRA-GLUE: Rust helper (Ghidra BlockBasic exposes op list via begin/end iterators)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
-        if let Some(source) = &self.live_ops_source {
-            return source.read().unwrap().get_ops();
-        }
-        if let Some(source) = &self.source_basic {
-            return source.read().unwrap().get_ops();
-        }
+
         self.ops.clone()
     }
 
