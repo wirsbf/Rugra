@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use rugra::action::ActionDatabase;
 use rugra::address::Address;
-use rugra::debugproto::{DebugGlobalDatabase, DebugPrototypeDatabase, X86_64GccStorage};
+use rugra::debugproto::{DebugGlobalDatabase, DebugPrototypeDatabase};
 use rugra::disasm::sleigh_lift::SleighLifter;
 use rugra::disasm::{Disassembler, X86Lifter, X86_64Disassembler};
 use rugra::funcdata::Funcdata;
@@ -823,7 +823,6 @@ fn link_call_specs(
     fd: &mut rugra::funcdata::Funcdata,
     libc_signatures: &rugra::debugproto::LibcSignatureTable,
     debug_db: &rugra::debugproto::DebugPrototypeDatabase,
-    storage: &rugra::debugproto::X86_64GccStorage,
     fn_name: &str,
     type_names: &std::collections::HashMap<String, std::sync::Arc<rugra::type_system::datatype::Datatype>>,
 ) -> (usize, usize, usize, usize, usize) {
@@ -867,21 +866,26 @@ fn link_call_specs(
         //   (b) the DWARF-analyzer locked signature for a debug-info callee
         //       (headless golden main: `glob_url(&urls,pcVar12,&urlnum)`
         //       3-arg and `curl_version()` 0-arg render from this boundary).
-        let mut installed = false;
-        match libc_signatures.locked_proto(&name, storage, Some(type_names)) {
-            Ok(Some(proto)) => {
-                owner.write().unwrap().prototype = proto;
-                signatures += 1;
-                installed = true;
+        // A call-site prototype with an explicitly selected model is already
+        // authoritative.  Signature discovery may fill an unresolved model,
+        // but must not overwrite a prior override.
+        let mut installed = owner.read().unwrap().prototype.has_model();
+        if !installed {
+            match libc_signatures.locked_proto(&name, &model_carrier, Some(type_names)) {
+                Ok(Some(proto)) => {
+                    owner.write().unwrap().prototype = proto;
+                    signatures += 1;
+                    installed = true;
+                }
+                Ok(None) => {}
+                Err(error) => eprintln!(
+                    "[PREPASS] {} callspec@0x{:x}: libc signature for {} rejected: {}",
+                    fn_name, op_addr, name, error
+                ),
             }
-            Ok(None) => {}
-            Err(error) => eprintln!(
-                "[PREPASS] {} callspec@0x{:x}: libc signature for {} rejected: {}",
-                fn_name, op_addr, name, error
-            ),
         }
         if !installed {
-            match debug_db.locked_callsite_proto(entry, &model_carrier, storage) {
+            match debug_db.locked_callsite_proto(entry, &model_carrier) {
                 Ok(Some(proto)) => {
                     owner.write().unwrap().prototype = proto;
                     dwarf_signatures += 1;
@@ -2379,10 +2383,6 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
 
     let debug_db = DebugPrototypeDatabase::parse_elf(&request.binary_image)
         .map_err(|error| format!("unable to import DWARF prototypes: {error}"))?;
-    let register_context = rugra::sleigh_ffi::SleighCtx::new()
-        .ok_or_else(|| "unable to initialize SLEIGH register catalog".to_string())?;
-    let debug_storage = X86_64GccStorage::from_sleigh(&register_context)
-        .map_err(|error| format!("unable to build compiler storage: {error}"))?;
     let mut sleigh = SleighLifter::new();
     sleigh
         .configure_x86_64(section_image, section.sh_addr)
@@ -2462,7 +2462,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         .unwrap_or_default();
     let callspec_link_enabled = std::env::var("RUGRA_DISABLE_CALLSPEC_LINK").is_err();
     let mut dwarf_applied = false;
-    match debug_db.apply(&mut fd, &debug_storage) {
+    match debug_db.apply(&mut fd) {
         Ok(true) => {
             dwarf_applied = true;
             eprintln!(
@@ -2492,7 +2492,8 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // import names) and DWARF did not already lock a prototype.
     if callspec_link_enabled && !dwarf_applied {
         if let Some(import_name) = fd.symbol_table.get(&target.vaddr).cloned() {
-            match libc_signatures.locked_proto(&import_name, &debug_storage, Some(&dwarf_type_names)) {
+            let model_carrier = fd.funcp.clone();
+            match libc_signatures.locked_proto(&import_name, &model_carrier, Some(&dwarf_type_names)) {
                 Ok(Some(proto)) => {
                     eprintln!(
                         "[PREPASS] {} applied locked PLT-import signature: {} params",
@@ -2615,7 +2616,6 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
             &mut fd,
             &libc_signatures,
             &debug_db,
-            &debug_storage,
             &target.name,
             &dwarf_type_names,
         );
@@ -3406,11 +3406,6 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     // Funcdata. Build the same known-prototype database once, then apply each
     // matching prototype before any Rugra Action runs.
     let debug_prototypes = DebugPrototypeDatabase::parse_elf(&buffer)?;
-    let register_context = rugra::sleigh_ffi::SleighCtx::new()
-        .ok_or("unable to initialize SLEIGH register catalog")?;
-    // Validate the same compiler-storage catalog that each isolated worker
-    // reconstructs before applying a DWARF prototype.
-    X86_64GccStorage::from_sleigh(&register_context)?;
     eprintln!(
         "[PREPASS] Imported {} DWARF function prototypes",
         debug_prototypes.len()

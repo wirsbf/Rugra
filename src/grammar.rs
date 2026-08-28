@@ -1151,7 +1151,7 @@ pub fn mod_type(
             collect_param_types(&mut in_types, params, types);
             let _model_name = decl.get_model(); // proto.model = getModel(glb)
             let fspec_proto = crate::fspec::PrototypePieces {
-                out_type: Some(base.as_ref()),
+                out_type: Some(&base),
                 in_types: &in_types,
                 first_var_arg_slot,
             };

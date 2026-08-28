@@ -960,3 +960,10 @@ same port (TYPEFACTORY-CODEFLAGS-DECODE-0001 residual).
   的 `scope` 字段——`TypeSpacebase::get_sub_type`（RulePtrsubUndo 的
   isPtrsubMatching 守卫）由此获得 subtype 答案。去重键不变
   （`__spacebase_{ws}_{frame}`），首次构造定格快照。
+
+## 2026-08-28：PrototypePieces 借用适配
+
+本文件的两处测试构造改为传入 `Option<&Arc<Datatype>>`，与 fspec 的
+`PrototypePieces` carrier 保持同一 Arc 身份。TypeFactory 生产算法没有因此
+改变；`TYPEFACTORY-ARC-IDENTITY-0001`、hidden-return pointer canonicalization
+和 oversized local cache 等残差不变，模块仍为 L2/MISMATCH。

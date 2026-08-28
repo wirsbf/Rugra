@@ -3679,7 +3679,7 @@ impl TypeCode {
         let voidtype = Datatype::Void(TypeBase::new("void".to_string(), 0, TypeMetatype::Void));
         let return_type = sig
             .out_type
-            .map(|t| Arc::new(t.clone()))
+            .cloned()
             .unwrap_or_else(|| Arc::new(voidtype));
         let mut proto = FuncProto::new(String::new(), return_type);
         for (i, ty) in sig.in_types.iter().enumerate() {

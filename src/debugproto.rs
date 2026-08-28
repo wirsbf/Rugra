@@ -25,8 +25,7 @@ use gimli::{
 };
 use object::{Object, ObjectSection};
 
-use crate::address::Address;
-use crate::fspec::{FuncProto, ProtoParameter};
+use crate::fspec::FuncProto;
 use crate::funcdata::Funcdata;
 use crate::type_system::datatype::{
     Datatype, TypeArray, TypeBase, TypeEnum, TypeField, TypeMetatype, TypePointer, TypeStruct,
@@ -39,6 +38,8 @@ type DwarfReader = EndianRcSlice<RunTimeEndian>;
 #[derive(Debug, Clone)]
 pub struct DebugParameter {
     pub name: String,
+    /// True only when the source record carried an explicit parameter name.
+    pub name_locked: bool,
     pub data_type: Arc<Datatype>,
 }
 
@@ -320,12 +321,12 @@ impl DebugPrototypeDatabase {
     }
 
     // RUGRA-GLUE: applies a Program-database prototype to Rugra Funcdata before Actions, matching Ghidra's externally locked prototype boundary
-    pub fn apply(&self, fd: &mut Funcdata, storage: &X86_64GccStorage) -> Result<bool> {
+    pub fn apply(&self, fd: &mut Funcdata) -> Result<bool> {
         let Some(debug_proto) = self.get(fd.baseaddr.as_u64()) else {
             return Ok(false);
         };
         let model_carrier = fd.funcp.clone();
-        fd.funcp = self.locked_proto(debug_proto, &model_carrier, storage)?;
+        fd.funcp = self.locked_proto(debug_proto, &model_carrier)?;
         Ok(true)
     }
 
@@ -354,12 +355,11 @@ impl DebugPrototypeDatabase {
         &self,
         entry: u64,
         model_carrier: &FuncProto,
-        storage: &X86_64GccStorage,
     ) -> Result<Option<FuncProto>> {
         let Some(debug_proto) = self.get(entry) else {
             return Ok(None);
         };
-        self.locked_proto(debug_proto, model_carrier, storage).map(Some)
+        self.locked_proto(debug_proto, model_carrier).map(Some)
     }
 
     // RUGRA-GLUE: shared locked-signature builder behind both halves of the
@@ -371,25 +371,51 @@ impl DebugPrototypeDatabase {
         &self,
         debug_proto: &DebugPrototype,
         model_carrier: &FuncProto,
-        storage: &X86_64GccStorage,
     ) -> Result<FuncProto> {
-        let addresses = storage.assign(&debug_proto.parameters)?;
-        let mut proto: FuncProto = model_carrier.clone();
-        proto.return_type = debug_proto.return_type.clone();
-        proto.parameters.clear();
-        for (index, (parameter, address)) in debug_proto
-            .parameters
-            .iter()
-            .zip(addresses.into_iter())
-            .enumerate()
-        {
-            let (name, dwarf_named) = if parameter.name.is_empty() {
-                (format!("param_{}", index + 1), false)
+        if !model_carrier.has_model() {
+            bail!("DWARF prototype {} has no bound ProtoModel", debug_proto.name);
+        }
+        let mut proto = FuncProto::from_model_carrier(
+            model_carrier,
+            debug_proto.name.clone(),
+            debug_proto.return_type.clone(),
+        );
+        let pieces = crate::grammar::PrototypePieces {
+            model: None,
+            name: debug_proto.name.clone(),
+            out_type: Some(debug_proto.return_type.clone()),
+            in_types: debug_proto
+                .parameters
+                .iter()
+                .map(|parameter| parameter.data_type.clone())
+                .collect(),
+            in_names: debug_proto
+                .parameters
+                .iter()
+                .map(|parameter| parameter.name.clone())
+                .collect(),
+            first_var_arg_slot: if debug_proto.is_varargs {
+                debug_proto.parameters.len() as i32
             } else {
-                (parameter.name.clone(), true)
+                -1
+            },
+        };
+        proto.name = debug_proto.name.clone();
+        proto.set_pieces(&pieces);
+        if proto.has_input_errors() {
+            bail!(
+                "compiler model cannot assign parameter storage for DWARF prototype {}",
+                debug_proto.name
+            );
+        }
+        let mut source_index = 0usize;
+        for param in &mut proto.parameters {
+            if param.is_hidden_return() {
+                continue;
+            }
+            let Some(parameter) = debug_proto.parameters.get(source_index) else {
+                break;
             };
-            let mut param =
-                ProtoParameter::new(name, parameter.data_type.clone(), address);
             // Ghidra's DWARF import locks only real DW_AT_name parameter
             // names (ProtoStoreSymbol::setInput mirrors
             // ParameterPieces::namelock onto the symbol, fspec.cc:3158/:3180);
@@ -397,122 +423,12 @@ impl DebugPrototypeDatabase {
             // naming (buildDefaultName) owns it — so the synthesized
             // param_N stand-in is NOT name-locked (lookForFuncParamNames
             // additionally filters the param_ prefix, coreaction.cc:2831).
-            if dwarf_named {
+            if parameter.name_locked {
                 param.flags |= crate::fspec::protoparam_flags::NAME_LOCKED;
             }
-            proto.add_parameter(param);
-        }
-        proto.set_dotdotdot(debug_proto.is_varargs);
-        proto.set_input_lock(true);
-        proto.set_output_lock(true);
-        proto.set_model_lock(true);
-        // Ghidra: fspec.cc:4690-4698 FuncProto::decode (ATTRIB_MODEL arm) +
-        // fspec.cc:4776 (voidinputlock → modellock) + fspec.hh:1025-1032
-        // UnknownProtoModel. A locked Program-database signature whose
-        // parameter list is explicitly void locks the model with an
-        // unresolved convention name: FuncProto::decode maps the
-        // unrecognized name to createUnknownModel (fspec.cc:4697,
-        // architecture.cc:1159-1166), producing an UnknownProtoModel that
-        // clones the default model's behavior, reports isUnknown()=true, and
-        // (for the reserved name "unknown") never prints in declarations.
-        // This is exactly the locked golden's observable split: the three
-        // void-signature DWARF functions (main_init/main_free/hugehelp) are
-        // the only real functions with the "Unknown calling convention"
-        // warning (ActionPrototypeWarnings, coreaction.cc:4901-4909), while
-        // every parameterized DWARF signature in the same corpus decompiles
-        // with a resolved model and no warning. Pin the sentinel name for the
-        // void-signature boundary only; the cloned model Arc stays in place
-        // as the UnknownProtoModel placeholder (behavior/effects/extrapop
-        // keep following the default model, and set_input_lock on an empty
-        // parameter list has already set modellock via voidinputlock,
-        // fspec.cc:4776 semantics).
-        if debug_proto.parameters.is_empty() {
-            proto.set_model_name("unknown");
+            source_index += 1;
         }
         Ok(proto)
-    }
-}
-
-/// Storage resources from the locked `x86-64-gcc.cspec` default prototype.
-#[derive(Debug, Clone)]
-pub struct X86_64GccStorage {
-    registers: HashMap<String, (u64, usize)>,
-}
-
-impl X86_64GccStorage {
-    // RUGRA-GLUE: converts the active SLEIGH register catalog into the ParamEntry resources declared by locked x86-64-gcc.cspec
-    pub fn from_sleigh(ctx: &crate::sleigh_ffi::SleighCtx) -> Result<Self> {
-        let mut registers = HashMap::new();
-        for index in 0..ctx.num_registers() {
-            let Some((name, _space, offset, size)) = ctx.register_info(index) else {
-                continue;
-            };
-            let size = usize::try_from(size).context("negative SLEIGH register size")?;
-            registers.insert(name.to_ascii_uppercase(), (offset, size));
-        }
-        Ok(Self { registers })
-    }
-
-    // RUGRA-GLUE: deterministic constructor used by fixtures to supply the same compiler-spec resource catalog without a live translator
-    pub fn from_registers(registers: impl IntoIterator<Item = (String, u64, usize)>) -> Self {
-        Self {
-            registers: registers
-                .into_iter()
-                .map(|(name, offset, size)| (name.to_ascii_uppercase(), (offset, size)))
-                .collect(),
-        }
-    }
-
-    // RUGRA-GLUE: invokes the locked x86-64 gcc ParamList resource order at the Program-to-Funcdata boundary; the underlying order is x86-64-gcc.cspec, not a guessed live-in list
-    fn assign(&self, parameters: &[DebugParameter]) -> Result<Vec<Address>> {
-        const GENERAL: [&str; 6] = ["RDI", "RSI", "RDX", "RCX", "R8", "R9"];
-        const FLOAT: [&str; 8] = [
-            "XMM0_QA", "XMM1_QA", "XMM2_QA", "XMM3_QA", "XMM4_QA", "XMM5_QA", "XMM6_QA", "XMM7_QA",
-        ];
-        let mut general_index = 0usize;
-        let mut float_index = 0usize;
-        let mut result = Vec::with_capacity(parameters.len());
-        for parameter in parameters {
-            let ty = parameter.data_type.as_ref();
-            if matches!(
-                ty.get_metatype(),
-                TypeMetatype::Struct | TypeMetatype::Union | TypeMetatype::Array
-            ) || ty.get_size() > 8
-            {
-                bail!(
-                    "compiler-spec aggregate/stack assignment is not yet representable for {}",
-                    parameter.name
-                );
-            }
-            let resource = if ty.get_metatype() == TypeMetatype::Float {
-                let name = FLOAT
-                    .get(float_index)
-                    .context("x86-64 gcc floating parameter spilled to unmodelled stack space")?;
-                float_index += 1;
-                *name
-            } else {
-                let name = GENERAL
-                    .get(general_index)
-                    .context("x86-64 gcc general parameter spilled to unmodelled stack space")?;
-                general_index += 1;
-                *name
-            };
-            let &(offset, resource_size) = self
-                .registers
-                .get(resource)
-                .with_context(|| format!("SLEIGH register catalog is missing {resource}"))?;
-            if ty.get_size() > resource_size {
-                bail!(
-                    "{}-byte parameter {} does not fit {}-byte resource {}",
-                    ty.get_size(),
-                    parameter.name,
-                    resource_size,
-                    resource
-                );
-            }
-            result.push(Address::new(offset));
-        }
-        Ok(result)
     }
 }
 
@@ -596,19 +512,19 @@ impl LibcSignatureTable {
     }
 
     /// Materialize the locked call-site `FuncProto` for an imported symbol,
-    /// mirroring what the platform side hands the decompiler: parameter
-    /// storage assigned from the locked `x86-64-gcc.cspec` resource order and
-    /// both input and output locked (`FuncProto::setPieces`, fspec.cc:3830),
-    /// then copied onto the call site (`ActionDefaultParams`,
-    /// coreaction.cc:2327). The model itself stays unlocked — the golden's
-    /// "Unknown calling convention -- yet parameter storage is locked"
-    /// warning is exactly this lock combination.
+    /// mirroring the decoded Program-database state handed to the decompiler:
+    /// missing addresses are assigned through the UnknownProtoModel's cloned
+    /// default resources (`ProtoStoreInternal::decode`, fspec.cc:3533-3541),
+    /// source markup is restored, and input/output type locks are retained.
+    /// The call site receives a copy through `ActionDefaultParams`
+    /// (coreaction.cc:2327).
     ///
     /// Returns `Ok(None)` when the symbol has no locked signature (unknown
-    /// import: stays unlocked, active recovery decides) and `Err` when a
-    /// listed signature cannot be represented (stack/aggregate spill).
-    // Ghidra: fspec.cc:3830 FuncProto::setPieces
-    // Ghidra: fspec.cc:3503-3531 FuncCallSpecs::setGenericSignature (type half)
+    /// import: stays unlocked, active recovery decides) and `Err` when the
+    /// bound compiler model cannot assign the requested prototype. Scalar
+    /// stack spill is represented by that model; aggregate/ModelRule paths
+    /// remain outside the current bilateral fixture.
+    // RUGRA-GLUE: generic-clib Program-database adapter; storage/markup state follows ProtoStoreInternal::decode (fspec.cc:3464-3567)
     /// Resolve the platform-side locked signature for an imported callee.
     /// `type_names` is the DWARF named-type index (`parse_type_names`): a
     /// signature base spelling that names a DWARF-known type resolves to that
@@ -622,7 +538,7 @@ impl LibcSignatureTable {
     pub fn locked_proto(
         &self,
         name: &str,
-        storage: &X86_64GccStorage,
+        model_carrier: &FuncProto,
         type_names: Option<&HashMap<String, Arc<Datatype>>>,
     ) -> Result<Option<FuncProto>> {
         let Some(signature) = self.lookup(name) else {
@@ -635,17 +551,38 @@ impl LibcSignatureTable {
             let (type_text, parameter_name) = split_declaration(declaration)?;
             parameters.push(DebugParameter {
                 name: parameter_name.to_string(),
+                name_locked: true,
                 data_type: parse_c_type(type_text, address_size, type_names)?,
             });
         }
-        let addresses = storage.assign(&parameters)?;
-        let mut proto = FuncProto::new(name.to_string(), return_type);
-        for (parameter, address) in parameters.iter().zip(addresses.into_iter()) {
-            let mut param = ProtoParameter::new(
-                parameter.name.clone(),
-                parameter.data_type.clone(),
-                address,
-            );
+        if !model_carrier.has_model() {
+            bail!("libc prototype {name} has no bound ProtoModel");
+        }
+        let pieces = crate::grammar::PrototypePieces {
+            model: None,
+            name: name.to_string(),
+            out_type: Some(return_type),
+            in_types: parameters
+                .iter()
+                .map(|parameter| parameter.data_type.clone())
+                .collect(),
+            in_names: parameters
+                .iter()
+                .map(|parameter| parameter.name.clone())
+                .collect(),
+            first_var_arg_slot: -1,
+        };
+        let mut proto = FuncProto::from_model_carrier(
+            model_carrier,
+            name.to_string(),
+            pieces.out_type.clone().expect("libc prototype always has output type"),
+        );
+        proto.name = name.to_string();
+        proto.update_all_types_from_pieces(&pieces);
+        if proto.has_input_errors() {
+            bail!("compiler model cannot assign parameter storage for libc prototype {name}");
+        }
+        for param in &mut proto.parameters {
             // fspec.cc:3503-3506: the platform-side signature decode reads
             // ATTRIB_NAMELOCK into ParameterPieces::namelock, and
             // fspec.cc:3564 propagates it via curparam->setNameLock(). Every
@@ -655,10 +592,10 @@ impl LibcSignatureTable {
             // ActionNameVars::lookForFuncParamNames gates on
             // (coreaction.cc:2818 param->isNameLocked()).
             param.flags |= crate::fspec::protoparam_flags::NAME_LOCKED;
-            proto.add_parameter(param);
         }
         proto.set_input_lock(true);
         proto.set_output_lock(true);
+        proto.set_model_lock(true);
         Ok(Some(proto))
     }
 }
@@ -846,13 +783,15 @@ fn read_prototype_children(
         }
         let canonical = canonical_parameter_offset(unit, entry.offset())?;
         let canonical_entry = unit.entry(canonical)?;
-        let name = entry_string(dwarf, unit, &canonical_entry, gimli::DW_AT_name)?
+        let source_name = entry_string(dwarf, unit, &canonical_entry, gimli::DW_AT_name)?;
+        let name_locked = source_name.is_some();
+        let name = source_name
             .unwrap_or_else(|| format!("param_{}", parameters.len() + 1));
         let data_type = match entry_reference(unit, &canonical_entry, gimli::DW_AT_type)? {
             Some(type_offset) => resolve_type(dwarf, unit, type_offset, 0, &mut Vec::new())?,
             None => unknown_type(unit.encoding().address_size as usize),
         };
-        parameters.push(DebugParameter { name, data_type });
+        parameters.push(DebugParameter { name, name_locked, data_type });
     }
     Ok((parameters, is_varargs))
 }
@@ -1383,23 +1322,104 @@ fn unknown_type(size: usize) -> Arc<Datatype> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::address::Address;
 
-    fn register_resources() -> X86_64GccStorage {
-        let general = [
-            ("RDI", 0x38),
-            ("RSI", 0x30),
-            ("RDX", 0x10),
-            ("RCX", 0x08),
-            ("R8", 0x80),
-            ("R9", 0x88),
-        ];
-        let floats = (0..8).map(|index| (format!("XMM{index}_QA"), 0x100 + index * 8, 8));
-        X86_64GccStorage::from_registers(
-            general
-                .into_iter()
-                .map(|(name, offset)| (name.to_string(), offset, 8))
-                .chain(floats),
-        )
+    struct TestSpecHost {
+        registers: BTreeMap<String, crate::fspec::VarnodeData>,
+    }
+
+    impl crate::arch::SpecQuery for TestSpecHost {
+        fn get_register(&self, name: &str) -> Option<crate::fspec::VarnodeData> {
+            self.registers.get(name).copied()
+        }
+
+        fn space_by_name(&self, name: &str) -> Option<crate::space::AddressSpace> {
+            use crate::space::AddressSpace;
+            match name {
+                "ram" => Some(AddressSpace::Ram),
+                "stack" => Some(AddressSpace::Stack),
+                "register" => Some(AddressSpace::Register),
+                "OTHER" | "other" => Some(AddressSpace::Other(1)),
+                "unique" => Some(AddressSpace::Unique),
+                "const" => Some(AddressSpace::Const),
+                _ => None,
+            }
+        }
+
+        fn space_highest(&self, space: crate::space::AddressSpace) -> u64 {
+            match space {
+                crate::space::AddressSpace::Unique
+                | crate::space::AddressSpace::Register
+                | crate::space::AddressSpace::Join => 0xffff_ffff,
+                _ => u64::MAX,
+            }
+        }
+
+        fn unique_inject_base(&self) -> u64 {
+            0x364_400
+        }
+    }
+
+    impl crate::pcodeparse::SleighSymbolLookup for TestSpecHost {
+        fn find_symbol(&self, name: &str) -> Option<crate::pcodeparse::SleighSymbol> {
+            self.registers.get(name).map(|data| crate::pcodeparse::SleighSymbol {
+                name: name.to_string(),
+                kind: crate::pcodeparse::SleightSymbolKind::Varnode(
+                    crate::varnode::VarnodeData {
+                        space: data.space,
+                        offset: data.offset,
+                        size: data.size.max(0) as usize,
+                    },
+                ),
+            })
+        }
+    }
+
+    fn model_carrier() -> FuncProto {
+        let cspec = std::fs::read("sleigh_specs/x86-64-gcc.cspec")
+            .expect("locked x86-64 gcc compiler spec");
+        let mut store = crate::marshal::DocumentStorage::new();
+        let document = store.parse_document(&cspec).expect("parse compiler spec");
+        let root = document.root.clone().expect("compiler spec root");
+        store.register_tag(&root);
+
+        let sleigh = crate::sleigh_ffi::SleighCtx::new().expect("SLEIGH register catalog");
+        let mut registers = BTreeMap::new();
+        for index in 0..sleigh.num_registers() {
+            let Some((name, space, offset, size)) = sleigh.register_info(index) else {
+                continue;
+            };
+            let Ok(space_id) = u8::try_from(space) else {
+                continue;
+            };
+            registers.insert(
+                name,
+                crate::fspec::VarnodeData {
+                    space: crate::space::AddressSpace::from_id(space_id),
+                    offset,
+                    size,
+                },
+            );
+        }
+        let host = Arc::new(TestSpecHost { registers });
+        let mut arch = crate::arch::Architecture::new();
+        arch.archid = "x86:LE:64:default".to_string();
+        let mut inject = crate::pcodeinject::PcodeInjectLibrary::new(0x364_400);
+        inject.set_sleigh_lookup(host.clone());
+        arch.pcodeinjectlib = Some(Arc::new(std::sync::RwLock::new(inject)));
+        let mut userops = crate::userop::UserOpManage::new();
+        userops.register_op(
+            "segment".to_string(),
+            crate::userop::UserOpType::Unspecialized,
+        );
+        arch.userops = Some(Arc::new(std::sync::RwLock::new(userops)));
+        arch.parse_compiler_config(&mut store, host.as_ref(), 8)
+            .expect("decode default ProtoModel");
+        let mut carrier = FuncProto::new("carrier".to_string(), void_type());
+        carrier.set_model(Some(
+            arch.defaultfp.clone().expect("default x86-64 gcc ProtoModel"),
+        ));
+        carrier
     }
 
     #[test]
@@ -1422,12 +1442,12 @@ mod tests {
 
     #[test]
     fn libc_locked_proto_assigns_sysv_storage_and_locks() {
-        let storage = register_resources();
+        let carrier = model_carrier();
         let table = LibcSignatureTable::default();
 
         // free: void return, one void* parameter at RDI (0x38), fully locked.
         let free = table
-            .locked_proto("free", &storage, None)
+            .locked_proto("free", &carrier, None)
             .expect("free signature represents")
             .expect("free is in the table");
         assert_eq!(free.return_type.get_metatype(), TypeMetatype::Void);
@@ -1439,7 +1459,7 @@ mod tests {
 
         // strdup: char * return (8-byte pointer), one char* parameter.
         let strdup = table
-            .locked_proto("strdup", &storage, None)
+            .locked_proto("strdup", &carrier, None)
             .expect("strdup signature represents")
             .expect("strdup is in the table");
         assert_eq!(strdup.return_type.get_metatype(), TypeMetatype::Pointer);
@@ -1448,7 +1468,7 @@ mod tests {
 
         // strtol: long return, (char*, char**, int) at RDI/RSI/RDX.
         let strtol = table
-            .locked_proto("strtol", &storage, None)
+            .locked_proto("strtol", &carrier, None)
             .expect("strtol signature represents")
             .expect("strtol is in the table");
         assert_eq!(strtol.num_params(), 3);
@@ -1458,7 +1478,7 @@ mod tests {
         // __ctype_b_loc: zero parameters, ushort ** return; the empty
         // parameter list is a locked void input.
         let ctype = table
-            .locked_proto("__ctype_b_loc", &storage, None)
+            .locked_proto("__ctype_b_loc", &carrier, None)
             .expect("__ctype_b_loc signature represents")
             .expect("__ctype_b_loc is in the table");
         assert_eq!(ctype.num_params(), 0);
@@ -1467,9 +1487,39 @@ mod tests {
 
         // Unknown imports stay unlocked (Ok(None) — active recovery decides).
         assert!(table
-            .locked_proto("not_an_import", &storage, None)
+            .locked_proto("not_an_import", &carrier, None)
             .expect("unknown import does not error")
             .is_none());
+    }
+
+    #[test]
+    fn compiler_model_spills_seventh_scalar_to_stack() {
+        let mut proto = model_carrier();
+        let scalar = base_type("long".to_string(), 8, TypeMetatype::Int);
+        let pieces = crate::grammar::PrototypePieces {
+            model: None,
+            name: "eight_scalars".to_string(),
+            out_type: Some(void_type()),
+            in_types: vec![scalar; 8],
+            in_names: (1..=8).map(|index| format!("p{index}")).collect(),
+            first_var_arg_slot: -1,
+        };
+        proto.set_pieces(&pieces);
+        assert!(!proto.has_input_errors());
+        assert_eq!(proto.num_params(), 8);
+        for (index, expected_offset) in [0x38, 0x30, 0x10, 0x08, 0x80, 0x88]
+            .into_iter()
+            .enumerate()
+        {
+            let param = proto.get_param(index).expect("register parameter");
+            assert_eq!(param.address_space, crate::space::AddressSpace::Register);
+            assert_eq!(param.address.as_u64(), expected_offset);
+        }
+        for (index, expected_offset) in [(6usize, 8u64), (7, 16)] {
+            let param = proto.get_param(index).expect("stack parameter");
+            assert_eq!(param.address_space, crate::space::AddressSpace::Stack);
+            assert_eq!(param.address.as_u64(), expected_offset);
+        }
     }
 
     #[test]
@@ -1580,13 +1630,9 @@ mod tests {
         let bytes = std::fs::read("examples/curl").expect("curl fixture");
         let db = DebugPrototypeDatabase::parse_elf(&bytes).expect("DWARF prototypes");
         // glob_url @ 0x4f70: (URLGlob **glob, char *url, int *urlnum).
-        let mut carrier = FuncProto::new("carrier".to_string(), void_type());
-        // The driver hands the callsite the same resolved default model the
-        // callee's own Funcdata would carry (FUNCPROTO-MODEL-BIND-0001):
-        // simulate the post-set_arch binding the worker performs.
-        carrier.set_model_name("__stdcall");
+        let carrier = model_carrier();
         let proto = db
-            .locked_callsite_proto(0x4f70, &carrier, &register_resources())
+            .locked_callsite_proto(0x4f70, &carrier)
             .expect("glob_url callsite prototype represents")
             .expect("glob_url has a DWARF definition");
         assert_eq!(proto.num_params(), 3);
@@ -1605,7 +1651,7 @@ mod tests {
         // A thunk/import address has no DWARF definition: the boundary
         // contributes nothing (Ok(None)) and the import table owns it.
         assert!(db
-            .locked_callsite_proto(0x2490, &carrier, &register_resources())
+            .locked_callsite_proto(0x2490, &carrier)
             .expect("thunk lookup does not error")
             .is_none());
     }
@@ -1615,8 +1661,9 @@ mod tests {
         let bytes = std::fs::read("examples/curl").expect("curl fixture");
         let db = DebugPrototypeDatabase::parse_elf(&bytes).expect("DWARF prototypes");
         let mut fd = Funcdata::new("GetStr", Address::new(0x36d0), 0x4a);
+        fd.funcp = model_carrier();
         assert!(db
-            .apply(&mut fd, &register_resources())
+            .apply(&mut fd)
             .expect("apply prototype"));
         assert!(fd.funcp.is_input_locked());
         assert!(fd.funcp.is_output_locked());
@@ -1625,22 +1672,20 @@ mod tests {
         assert_eq!(fd.funcp.parameters[1].address.as_u64(), 0x30);
 
         let mut no_args = Funcdata::new("hugehelp", Address::new(0x4a00), 0x54);
+        no_args.funcp = model_carrier();
         assert!(db
-            .apply(&mut no_args, &register_resources())
+            .apply(&mut no_args)
             .expect("apply void input"));
         assert!(no_args.funcp.parameters.is_empty());
         assert!(no_args.funcp.is_input_locked());
     }
 
-    // UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ⑤: a locked void-signature DWARF
-    // prototype pins the unknown model sentinel (FuncProto::decode
-    // fspec.cc:4690-4698 maps the unresolved convention to
-    // createUnknownModel; the void parameter list forces modellock via
-    // fspec.cc:4776), so ActionPrototypeWarnings (coreaction.cc:4901-4909)
-    // fires for exactly the three void-signature functions in the locked
-    // corpus (main_init/main_free/hugehelp).
+    // A void input list locks the model, but does not replace a model already
+    // bound by the caller. FuncProto::decode only constructs an unknown model
+    // for an explicit, unresolved ATTRIB_MODEL value; voidinputlock merely
+    // contributes to modellock (fspec.cc:4681-4698, 4737-4738, 4776-4777).
     #[test]
-    fn void_signature_dwarf_prototype_pins_unknown_model() {
+    fn void_signature_dwarf_prototype_keeps_bound_model() {
         let bytes = std::fs::read("examples/curl").expect("curl fixture");
         let db = DebugPrototypeDatabase::parse_elf(&bytes).expect("DWARF prototypes");
         for (name, address) in
@@ -1648,19 +1693,15 @@ mod tests {
         {
             let mut fd = Funcdata::new(name, Address::new(address), 8);
             // Simulate the post-set_arch default-model binding the worker
-            // performs before the DWARF overlay (FUNCPROTO-MODEL-BIND-0001):
-            // the clone must not keep the resolved name for a void signature.
-            fd.funcp.set_model_name("__stdcall");
+            // performs before the DWARF overlay.
+            fd.funcp = model_carrier();
             assert!(db
-                .apply(&mut fd, &register_resources())
+                .apply(&mut fd)
                 .expect("apply void-signature prototype"));
-            assert!(
-                fd.funcp.is_model_unknown(),
-                "{name} must carry the unknown model sentinel"
-            );
+            assert!(!fd.funcp.is_model_unknown(), "{name} keeps the bound model");
             assert!(
                 fd.funcp.is_model_locked(),
-                "{name} void parameter list locks the model (fspec.cc:4776)"
+                "{name} void parameter list locks the bound model"
             );
             assert!(fd.funcp.void_input_locked);
         }
@@ -1675,9 +1716,9 @@ mod tests {
         let bytes = std::fs::read("examples/curl").expect("curl fixture");
         let db = DebugPrototypeDatabase::parse_elf(&bytes).expect("DWARF prototypes");
         let mut fd = Funcdata::new("GetStr", Address::new(0x36d0), 0x4a);
-        fd.funcp.set_model_name("__stdcall");
+        fd.funcp = model_carrier();
         assert!(db
-            .apply(&mut fd, &register_resources())
+            .apply(&mut fd)
             .expect("apply parameterized prototype"));
         assert!(
             !fd.funcp.is_model_unknown(),
@@ -1686,49 +1727,4 @@ mod tests {
         assert_eq!(fd.funcp.get_model_name(), "__stdcall");
     }
 
-    // UNKNOWN-PROTOMODEL-WARN-EMIT-0001 ①+⑤ end-to-end: with a
-    // CommentDatabaseInternal allocated on the Architecture
-    // (SleighArchitecture::buildCommentDB, sleigh_arch.cc:244), a
-    // void-signature DWARF overlay plus ActionPrototypeWarnings stores the
-    // unknown-calling-convention warning as a WARNINGHEADER comment for the
-    // function's address — the comment printc's emitCommentFuncHeader
-    // (printc.cc:3272) drains into the C output once the print-side wiring
-    // lands.
-    #[test]
-    fn unknown_model_warning_stores_in_commentdb() {
-        use crate::action::Action as _;
-        use crate::arch::Architecture;
-
-        let bytes = std::fs::read("examples/curl").expect("curl fixture");
-        let db = DebugPrototypeDatabase::parse_elf(&bytes).expect("DWARF prototypes");
-        let mut arch = Architecture::new();
-        arch.set_commentdb(std::sync::Arc::new(std::sync::RwLock::new(
-            crate::comment::CommentDatabaseInternal::new(),
-        )));
-        let arch = std::sync::Arc::new(arch);
-
-        let mut fd = Funcdata::new("main_free", Address::new(0x4970), 5);
-        fd.set_arch(arch.clone());
-        assert!(db
-            .apply(&mut fd, &register_resources())
-            .expect("apply void-signature prototype"));
-        assert!(crate::coreaction::ActionPrototypeWarnings::new()
-            .apply(&mut fd)
-            .is_ok());
-
-        let cdb = arch.commentdb.as_ref().expect("commentdb wired");
-        let guard = cdb.read().expect("commentdb lock");
-        let comments: Vec<_> = guard.comments_for_function(fd.baseaddr).collect();
-        assert_eq!(comments.len(), 1, "one deduplicated header warning");
-        let comment = comments[0];
-        assert_eq!(
-            comment.get_text(),
-            "WARNING: Unknown calling convention -- yet parameter storage is locked"
-        );
-        assert_eq!(
-            comment.get_type(),
-            crate::comment::comment_type::WARNINGHEADER
-        );
-        assert_eq!(comment.get_func_addr().as_u64(), 0x4970);
-    }
 }

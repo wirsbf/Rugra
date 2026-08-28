@@ -151,9 +151,9 @@ impl EffectRecord {
 
 /// Flags for ProtoParameter (corresponds to flags in fspec.hh)
 pub mod protoparam_flags {
-    pub const HIDDEN_RETURN: u32 = 1 << 0;
-    pub const INDIRECT_STORAGE: u32 = 1 << 1;
-    pub const THIS_POINTER: u32 = 1 << 2;
+    pub const THIS_POINTER: u32 = 1;
+    pub const HIDDEN_RETURN: u32 = 2;
+    pub const INDIRECT_STORAGE: u32 = 4;
     pub const NAME_LOCKED: u32 = 1 << 3;
     pub const TYPE_LOCKED: u32 = 1 << 4;
 }
@@ -169,6 +169,10 @@ pub struct ProtoParameter {
     pub data_type: Arc<Datatype>,
     /// Storage location (register, stack offset, etc.)
     pub address: Address,
+    /// Address-space half of Ghidra's complete `Address`. Rugra keeps this
+    /// beside the legacy offset carrier until ADDRESS-0001 migrates the whole
+    /// comparison domain atomically.
+    pub address_space: AddressSpace,
     /// Property flags
     pub flags: u32,
 }
@@ -181,9 +185,25 @@ impl ProtoParameter {
             name,
             data_type,
             address,
+            address_space: AddressSpace::Register,
             flags: 0,
         }
     }
+
+    // RUGRA-GLUE: complete-storage constructor for the current split
+    // `(AddressSpace, Address)` representation of Ghidra's single Address.
+    pub fn new_in_space(
+        name: String,
+        data_type: Arc<Datatype>,
+        address_space: AddressSpace,
+        address: Address,
+    ) -> Self {
+        Self { name, data_type, address, address_space, flags: 0 }
+    }
+
+    // Ghidra: fspec.hh:1088 ProtoParameter::getAddress
+    // RUGRA-GLUE: address-space projection paired with the legacy offset.
+    pub fn get_address_space(&self) -> AddressSpace { self.address_space }
 
     // Ghidra: fspec.hh:1100 ProtoParameter::isThisPointer
     /// Returns true if this parameter is a "this" pointer
@@ -301,6 +321,9 @@ pub struct FuncProto {
     /// dead-code consume algorithm. RulePiecePathology records the partial
     /// consumption of a pathological PIECE here.
     pub return_bytes_consumed: u32,
+    /// Parameter-storage assignment failed while rebuilding this prototype.
+    /// Faithful to Ghidra's sticky `error_inputparam` flag.
+    error_input_param: bool,
 }
 
 impl FuncProto {
@@ -327,6 +350,7 @@ impl FuncProto {
             is_destructor: false,
             has_thisptr: false,
             return_bytes_consumed: 0,
+            error_input_param: false,
         }
     }
 
@@ -384,6 +408,27 @@ impl FuncProto {
             .as_ref()
             .expect("FuncProto::has_effect requires a prototype model")
             .has_effect(addr_space, addr_offset, size)
+    }
+
+    // Ghidra: fspec.hh:1564 FuncProto::getMaxInputDelay
+    /// Return the maximum heritage delay of an input parameter resource.
+    pub fn get_max_input_delay(&self) -> i32 {
+        self.model
+            .as_ref()
+            .map(|model| model.input.get_max_delay())
+            .unwrap_or(0)
+    }
+
+    // Ghidra: fspec.hh:1461 FuncProto::hasInputErrors
+    /// Return whether input parameter storage could not be assigned.
+    pub fn has_input_errors(&self) -> bool {
+        self.error_input_param
+    }
+
+    // Ghidra: fspec.hh:1469 FuncProto::setInputErrors
+    /// Toggle the sticky input-parameter assignment error flag.
+    pub fn set_input_errors(&mut self, val: bool) {
+        self.error_input_param = val;
     }
 
     // Ghidra: fspec.hh:1611 FuncProto::getSpacebase
@@ -729,6 +774,20 @@ impl FuncProto {
         }
     }
 
+    // RUGRA-GLUE: construct a clean callee prototype that shares only the
+    // bound ProtoModel with a carrier. Ghidra obtains the callee's own
+    // FuncProto from queryFunction; it never clones caller parameters,
+    // effects, or flow flags into the callee.
+    pub fn from_model_carrier(
+        carrier: &FuncProto,
+        name: String,
+        return_type: Arc<Datatype>,
+    ) -> Self {
+        let mut result = FuncProto::new(name, return_type);
+        result.set_model(carrier.model.clone());
+        result
+    }
+
     // Ghidra: fspec.hh:1391 FuncProto::hasMatchingModel
     /// Does \b this use the given shared model? Faithful inline accessor
     /// `hasMatchingModel` (fspec.hh:1391): `(model == op2)` pointer
@@ -889,11 +948,12 @@ impl FuncProto {
 
     // Ghidra: fspec.cc:3843 FuncProto::setPieces
     /// Set this prototype from a `PrototypePieces`, locking input, output, and
-    /// model. Faithful to `setPieces` (fspec.cc:3843). The model name (when
-    /// present) is applied via `set_model_name`; the parameter types/names are
-    /// installed via `update_all_types_from_pieces`; then all three locks are
-    /// set. Rugra has no `ProtoModel *` object reachable from here, so the
-    /// model is recorded by name.
+    /// model. This implements the model-preserving path of `setPieces`
+    /// (fspec.cc:3843): parameter types/names are installed through
+    /// `update_all_types_from_pieces`, then all three locks are set. A
+    /// different model name is currently only the serialized/display
+    /// projection; resolving it to another shared `ProtoModelFull` remains
+    /// `FSPEC-0002`.
     pub fn set_pieces(&mut self, pieces: &crate::grammar::PrototypePieces) {
         if let Some(ref nm) = pieces.model {
             if !nm.is_empty() {
@@ -954,6 +1014,7 @@ impl FuncProto {
         self.is_constructor_flag = other.is_constructor_flag;
         self.is_destructor = other.is_destructor;
         self.has_thisptr = other.has_thisptr;
+        self.error_input_param = other.error_input_param;
     }
 
     // Ghidra: fspec.cc:3994 FuncProto::clearUnlockedInput
@@ -1177,43 +1238,67 @@ impl FuncProto {
 
     // Ghidra: fspec.cc:4194 FuncProto::updateAllTypes
     /// Set this entire function prototype from a list of names and data-types.
-    /// Faithful to `updateAllTypes(PrototypePieces)` (fspec.cc:4194-4233).
-    /// Ghidra calls `model->assignParameterStorage(proto, pieces, false)` to
-    /// derive the storage locations; Rugra has no in-tree storage-assignment
-    /// pass reachable from here, so the parameters are installed carrying their
-    /// type/name with an unset (zero) address — the caller (or a later pass)
-    /// fills the storage. Existing inputs/output are cleared, the `dotdotdot`
-    /// flag is set from `first_var_arg_slot >= 0`, and the output type is taken
-    /// from `out_type` (void if absent).
+    /// This ports the model-driven scalar path of `updateAllTypes`
+    /// (fspec.cc:4194-4224): existing inputs/output are cleared, the current
+    /// model assigns storage, hidden-return inputs do not consume a
+    /// source-level name, and assignment failure sets the sticky input-error
+    /// flag. Full Address identity, ModelRules, canonical hidden-return pointer
+    /// construction, and invalid-address state remain `FSPEC-0002`.
     pub fn update_all_types_from_pieces(&mut self, proto: &crate::grammar::PrototypePieces) {
-        // setModel(model); store->clearAllInputs(); store->clearOutput();
+        // setModel(model) resets extrapop from the current model.
+        let model = self.model.clone();
+        self.set_model(model.clone());
         self.parameters.clear();
-        // flags &= ~voidinputlock; setDotdotdot(proto.firstVarArgSlot >= 0);
+        self.return_type = crate::type_system::TypeFactory::shared_default()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_type_void();
+        self.output_storage = None;
+        self.void_input_locked = false;
         self.is_dotdotdot = proto.first_var_arg_slot >= 0;
-        // Output parameter: pieces[0] → store->setOutput(pieces[0]).
-        // Ghidra's outtype is the function return type; void if None.
-        if let Some(ref ot) = proto.out_type {
-            self.return_type = ot.clone();
+
+        let Some(model) = model else {
+            self.error_input_param = true;
+            self.update_this_pointer();
+            return;
+        };
+        let borrowed = PrototypePieces {
+            out_type: proto.out_type.as_ref(),
+            in_types: &proto.in_types,
+            first_var_arg_slot: proto.first_var_arg_slot,
+        };
+        let mut assigned = Vec::new();
+        if model
+            .assign_parameter_storage(&borrowed, &mut assigned, false, None)
+            .is_err()
+        {
+            self.error_input_param = true;
+            self.update_this_pointer();
+            return;
         }
-        // Input parameters: pieces[1..] → store->setInput(i-1, nm, pieces[i]).
-        // hiddenretparm slots increment i but not the name index j.
+
+        if let Some(output) = assigned.first().cloned() {
+            if let Some(ref ty) = output.ty {
+                self.return_type = ty.clone();
+            }
+            self.output_storage = Some((output.space, output.addr.as_u64()));
+        }
+
         let mut j = 0usize;
-        for ty in &proto.in_types {
+        for (i, pieces) in assigned.into_iter().enumerate().skip(1) {
+            if (pieces.flags & HIDDEN_RET_PARM) != 0 {
+                self.set_input_parameter(i - 1, "rethidden", pieces);
+                continue;
+            }
             let nm = if j < proto.in_names.len() {
                 proto.in_names[j].as_str()
             } else {
                 ""
             };
-            let mut param = ProtoParameter::new(
-                nm.to_string(),
-                ty.clone(),
-                Address::new(0), // storage unassigned (no assignParameterStorage)
-            );
-            // Match Ghidra's typelock: updateAllTypes installs locked params.
-            param.flags |= protoparam_flags::TYPE_LOCKED;
-            self.parameters.push(param);
+            self.set_input_parameter(i - 1, nm, pieces);
             j += 1;
         }
+        self.update_this_pointer();
     }
 
     // Ghidra: fspec.cc:3857 FuncProto::getPieces
@@ -1498,7 +1583,13 @@ impl FuncProto {
         param.name = nm.to_string();
         if let Some(ty) = pieces.ty { param.data_type = ty; }
         param.address = pieces.addr;
-        param.flags = 0;
+        param.address_space = pieces.space;
+        param.flags = pieces.flags
+            & (protoparam_flags::THIS_POINTER
+                | protoparam_flags::HIDDEN_RETURN
+                | protoparam_flags::INDIRECT_STORAGE
+                | protoparam_flags::NAME_LOCKED
+                | protoparam_flags::TYPE_LOCKED);
     }
 
     // Ghidra: fspec.cc:3380 ProtoStoreInternal::setOutput
@@ -1948,12 +2039,17 @@ pub struct FuncCallSpecs {
     pub prototype: FuncProto,
     /// Flags and other metadata
     pub flags: u32,
-    /// Active-input parameter trials (ParamActive). Faithful to
-    /// `FuncCallSpecs::activeinput`. Set by ActionFuncLink::funcLinkInput.
-    pub active_input: Option<ParamActive>,
-    /// Active-output parameter trials. Faithful to
-    /// `FuncCallSpecs::activeoutput`. Set by ActionFuncLink::funcLinkOutput.
-    pub active_output: Option<ParamActive>,
+    /// Permanently embedded input-trial container. Faithful to
+    /// `FuncCallSpecs::activeinput`; its existence is independent of whether
+    /// input recovery is currently active.
+    pub active_input: ParamActive,
+    /// Permanently embedded output-trial container. Faithful to
+    /// `FuncCallSpecs::activeoutput`.
+    pub active_output: ParamActive,
+    /// Faithful to `FuncCallSpecs::isinputactive`.
+    input_recovery_active: bool,
+    /// Faithful to `FuncCallSpecs::isoutputactive`.
+    output_recovery_active: bool,
     /// Calling-convention model for this call site. Faithful to
     /// `FuncCallSpecs::model`. Set by setModel; used by resolveModel/
     /// deriveInputMap/checkInputTrialUse.
@@ -2001,8 +2097,10 @@ impl FuncCallSpecs {
             entry_addr: None,
             prototype,
             flags: 0,
-            active_input: None,
-            active_output: None,
+            active_input: ParamActive::new(true),
+            active_output: ParamActive::new(true),
+            input_recovery_active: false,
+            output_recovery_active: false,
             proto_model: None,
             stackoffset: OFFSET_UNKNOWN,
             input_consume: Vec::new(),
@@ -2282,19 +2380,22 @@ impl FuncCallSpecs {
     }
 
     // Ghidra: fspec.cc:5331 FuncCallSpecs::initActiveInput
-    /// Initialize the active-input ParamActive container if not already present.
-    /// Faithful to `FuncCallSpecs::initActiveInput`. Recovers sub-call prototypes.
+    /// Turn on input recovery and set its pass bound from the model's maximum
+    /// input heritage delay.
     pub fn init_active_input(&mut self) {
-        if self.active_input.is_none() {
-            self.active_input = Some(ParamActive::new(true));
+        self.input_recovery_active = true;
+        let mut max_delay = self.prototype.get_max_input_delay();
+        if max_delay > 0 {
+            max_delay = 3;
         }
+        self.active_input.set_max_pass(max_delay);
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::hasModel
     /// Does this call site have a calling-convention model? Faithful to
     /// `FuncCallSpecs::hasModel`.
     pub fn has_model(&self) -> bool {
-        self.proto_model.is_some()
+        self.prototype.has_model()
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::setModel
@@ -2328,13 +2429,11 @@ impl FuncCallSpecs {
     /// never mark an active trial used — the dual-model seam residual).
     pub fn derive_input_map(&mut self) {
         let full_model = self.prototype.model.clone();
-        if let Some(active) = self.active_input.as_mut() {
-            match &full_model {
-                Some(model) => model.input.fillin_map(active),
-                None => {
-                    if let Some(model) = self.proto_model.as_ref() {
-                        model.derive_input_map(active);
-                    }
+        match &full_model {
+            Some(model) => model.input.fillin_map(&mut self.active_input),
+            None => {
+                if let Some(model) = self.proto_model.as_ref() {
+                    model.derive_input_map(&mut self.active_input);
                 }
             }
         }
@@ -2350,13 +2449,11 @@ impl FuncCallSpecs {
     /// simplified seam remains the no-full-model fallback.
     pub fn derive_output_map(&mut self) {
         let full_model = self.prototype.model.clone();
-        if let Some(active) = self.active_output.as_mut() {
-            match &full_model {
-                Some(model) => model.output.fillin_map(active),
-                None => {
-                    if let Some(model) = self.proto_model.as_ref() {
-                        model.derive_output_map(active);
-                    }
+        match &full_model {
+            Some(model) => model.output.fillin_map(&mut self.active_output),
+            None => {
+                if let Some(model) = self.proto_model.as_ref() {
+                    model.derive_output_map(&mut self.active_output);
                 }
             }
         }
@@ -2385,15 +2482,13 @@ impl FuncCallSpecs {
         // Ghidra fspec.cc:5698-5701: if (isDotdotdot() && isInputLocked())
         //   activeinput.sortFixedPosition();
         if self.is_dotdotdot() && self.is_input_locked() {
-            if let Some(active) = self.active_input.as_mut() {
-                active.sort_fixed_position();
-            }
+            self.active_input.sort_fixed_position();
         }
         // Trial decisions snapshotted up front so the loop body can mutate fd
         // (SUBPIECE / newVarnode / scope) without holding the trial borrow.
         let decisions: Vec<(bool, crate::space::AddressSpace, u64, i32, bool, i32)> =
-            match self.active_input.as_ref() {
-                Some(active) => {
+            {
+                let active = &self.active_input;
                     (0..active.get_num_trials())
                         .filter_map(|i| {
                             let trial = active.get_trial(i);
@@ -2411,8 +2506,6 @@ impl FuncCallSpecs {
                             ))
                         })
                         .collect()
-                }
-                None => Vec::new(),
             };
         for (_used, space, mut off, sz, is_unref, slot) in decisions {
             // Ghidra fspec.cc:5709-5715: spacebase trials translate through
@@ -2470,37 +2563,33 @@ impl FuncCallSpecs {
         // parameter list.
         fd.op_set_all_input(call_op, &newparam);
         // Ghidra fspec.cc:5740: activeinput.deleteUnusedTrials().
-        if let Some(active) = self.active_input.as_mut() {
-            active.delete_unused_trials();
-        }
+        self.active_input.delete_unused_trials();
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::isInputActive
     /// Is the input currently in active-recovery mode? Faithful to
     /// `FuncCallSpecs::isInputActive`.
     pub fn is_input_active(&self) -> bool {
-        self.active_input.is_some()
+        self.input_recovery_active
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::isOutputActive
     /// Is the output currently in active-recovery mode? Faithful to
     /// `FuncCallSpecs::isOutputActive`.
     pub fn is_output_active(&self) -> bool {
-        self.active_output.is_some()
+        self.output_recovery_active
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::clearActiveInput
-    /// Clear the active-input container (finalize recovery). Faithful to
-    /// `FuncCallSpecs::clearActiveInput`.
+    /// Turn off input recovery without destroying the embedded trial state.
     pub fn clear_active_input(&mut self) {
-        self.active_input = None;
+        self.input_recovery_active = false;
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::clearActiveOutput
-    /// Clear the active-output container. Faithful to
-    /// `FuncCallSpecs::clearActiveOutput`.
+    /// Turn off output recovery without destroying the embedded trial state.
     pub fn clear_active_output(&mut self) {
-        self.active_output = None;
+        self.output_recovery_active = false;
     }
 
     // Ghidra: fspec.cc:5870 FuncCallSpecs::getInputBytesConsumed
@@ -2550,7 +2639,7 @@ impl FuncCallSpecs {
     /// a condexe effect; trials that fail the recheck are marked no-use.
     pub fn final_input_check(&mut self, op_ref: &crate::op::PcodeOpRef) {
         let mut ancestor_real = crate::funcdata::AncestorRealistic::new();
-        if let Some(active) = self.active_input.as_mut() {
+        let active = &mut self.active_input;
             // Collect indices of trials to recheck (isActive + hasCondExeEffect),
             // then process them. Ghidra mutates trials in-place during iteration.
             let mut recheck: Vec<usize> = Vec::new();
@@ -2570,7 +2659,6 @@ impl FuncCallSpecs {
                     active.get_trial_mut(i).mark_no_use();
                 }
             }
-        }
     }
 
     // Ghidra: fspec.cc:5585 FuncCallSpecs::checkInputTrialUse
@@ -2594,10 +2682,7 @@ impl FuncCallSpecs {
     ) -> Vec<(i32, i32)> {
         let mut replace_slots: Vec<(i32, i32)> = Vec::new();
         let mut ancestor_real = crate::funcdata::AncestorRealistic::new();
-        let active = match self.active_input.as_mut() {
-            Some(a) => a,
-            None => return replace_slots,
-        };
+        let active = &mut self.active_input;
         let mut needs_final_check = false;
         for i in 0..active.get_num_trials() {
             if active.get_trial(i).is_checked() { continue; }
@@ -2657,24 +2742,21 @@ impl FuncCallSpecs {
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::initActiveOutput
-    /// Initialize the active-output ParamActive container if not already present.
-    /// Faithful to `FuncCallSpecs::initActiveOutput`.
+    /// Turn on output recovery; the embedded trial container already exists.
     pub fn init_active_output(&mut self) {
-        if self.active_output.is_none() {
-            self.active_output = Some(ParamActive::new(false));
-        }
+        self.output_recovery_active = true;
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::getActiveInput
-    /// Get the active-input trials (if initialized).
-    pub fn get_active_input(&self) -> Option<&ParamActive> {
-        self.active_input.as_ref()
+    /// Get the permanently embedded input-trial container.
+    pub fn get_active_input(&self) -> &ParamActive {
+        &self.active_input
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::getActiveOutput
-    /// Get the active-output trials (if initialized).
-    pub fn get_active_output(&self) -> Option<&ParamActive> {
-        self.active_output.as_ref()
+    /// Get the permanently embedded output-trial container.
+    pub fn get_active_output(&self) -> &ParamActive {
+        &self.active_output
     }
 
     // Ghidra: fspec.cc:4910 FuncCallSpecs::abortSpacebaseRelative
@@ -2728,8 +2810,8 @@ impl FuncCallSpecs {
     /// op input indices.
     pub fn clear_stack_placeholder_slot(&mut self) {
         self.stack_placeholder_slot = -1;
-        if let Some(active) = self.active_input.as_mut() {
-            active.free_placeholder_slot();
+        if self.input_recovery_active {
+            self.active_input.free_placeholder_slot();
         }
     }
 
@@ -2741,8 +2823,8 @@ impl FuncCallSpecs {
     /// trials keep their slot equal to the CALL op input index.
     pub fn set_stack_placeholder_slot(&mut self, slot: i32) {
         self.stack_placeholder_slot = slot;
-        if let Some(active) = self.active_input.as_mut() {
-            active.set_placeholder_slot();
+        if self.input_recovery_active {
+            self.active_input.set_placeholder_slot();
         }
     }
 
@@ -2755,37 +2837,12 @@ impl FuncCallSpecs {
     ///   data.opInsertInput(op,loadval,slot);
     ///   setStackPlaceholderSlot(slot);
     ///   loadval->setSpacebasePlaceholder();
-    ///
-    /// The caller supplies the post-`funcLinkInput` spacebase.  The two
-    /// guards below make the state machine explicit at this boundary:
-    /// Ghidra has one placeholder slot per call, and a locked non-varargs
-    /// stack parameter consumes the placeholder role in the parameter loop
-    /// (coreaction.cc:1498-1505), so the trailing placeholder must not be
-    /// created again.  The latter is only decidable when the transitional
-    /// Address carries a space tag; legacy spaceless addresses conservatively
-    /// retain the caller's existing oracle-compatible path.
     pub fn create_placeholder(
         &mut self,
         fd: &mut crate::funcdata::Funcdata,
         call_op: &crate::op::PcodeOpRef,
         spacebase: crate::space::AddressSpace,
     ) {
-        if self.stack_placeholder_slot >= 0 {
-            return;
-        }
-        if self.is_input_locked() && !self.is_dotdotdot() {
-            let has_locked_stack_param = self.prototype.parameters.iter().any(|param| {
-                param
-                    .address
-                    .to_space_address()
-                    .get_space()
-                    .map(|spc| spc.get_type() == SpaceType::SpaceBase && spacebase == AddressSpace::Stack)
-                    .unwrap_or(false)
-            });
-            if has_locked_stack_param {
-                return;
-            }
-        }
         let slot = call_op.0.read().unwrap().num_input();
         let loadval = fd.op_stack_load(spacebase, 0, 1, call_op, None, false);
         fd.op_insert_input(call_op, loadval.clone(), slot);
@@ -2953,20 +3010,21 @@ impl FuncCallSpecs {
         ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) {
         if !self.is_input_locked() { return; }
-        // Ghidra's ProtoParameter always owns a complete Address. Rugra's
-        // transitional ProtoParameter can still carry a legacy spaceless
-        // Address, so validate every parameter before mutating the CALL or
-        // its ParamActive container. A missing space cannot be guessed.
-        let param_descs: Option<Vec<(Address, crate::space::AddressSpace, i32)>> = self
+        // ProtoParameter carries the two halves of Ghidra's Address during
+        // the ADDRESS-0001 transition.  Both halves come from the same
+        // assigned ParameterPieces; no storage class is inferred here.
+        let param_descs: Vec<(Address, crate::space::AddressSpace, i32)> = self
             .prototype
             .parameters
             .iter()
             .map(|param| {
-                ParamActive::space_from_tagged_address(param.address)
-                    .map(|space| (param.address, space, param.data_type.get_size() as i32))
+                (
+                    param.address,
+                    param.address_space,
+                    param.data_type.get_size() as i32,
+                )
             })
             .collect();
-        let Some(param_descs) = param_descs else { return; };
         // Ghidra: Varnode *stackref = getSpacebaseRelative();
         // Rugra does not yet expose getSpacebaseRelative; the placeholder
         // logic below mirrors the structure but the stackref is implicit.
@@ -2981,13 +3039,8 @@ impl FuncCallSpecs {
 
         // Ghidra: stackPlaceholderSlot = -1; activeinput.clear();
         self.stack_placeholder_slot = -1;
-        let mut num_passes = 0i32;
-        if let Some(active) = self.active_input.as_ref() {
-            num_passes = active.get_num_passes();
-        }
-        if let Some(active) = self.active_input.as_mut() {
-            active.clear();
-        }
+        let num_passes = self.active_input.get_num_passes();
+        self.active_input.clear();
         let mut no_placehold = true;
 
         // Ghidra: for each param, buildParam + registerTrial + markActive.
@@ -3005,11 +3058,9 @@ impl FuncCallSpecs {
                 new_input[1 + i] = vn.clone();
             }
             // activeinput.registerTrial(paddr, psize) + getTrial(i).markActive().
-            if let Some(active) = self.active_input.as_mut() {
-                active.register_trial_in_space(pspace, paddr, psize);
-                let trial_index = active.get_num_trials() - 1;
-                active.get_trial_mut(trial_index).mark_active();
-            }
+            self.active_input.register_trial_in_space(pspace, paddr, psize);
+            let trial_index = self.active_input.get_num_trials() - 1;
+            self.active_input.get_trial_mut(trial_index).mark_active();
             // Ghidra cc:5172-5177: the first IPTR_SPACEBASE (stack) parameter
             // claims the spacebase-placeholder role on its varnode AND nulls
             // the pending placeholder — with a locked stack parameter we
@@ -3033,9 +3084,7 @@ impl FuncCallSpecs {
         if !self.is_dotdotdot() {
             self.clear_active_input();
         } else if num_passes > 0 {
-            if let Some(active) = self.active_input.as_mut() {
-                active.finish_pass();
-            }
+            self.active_input.finish_pass();
         }
     }
 
@@ -3059,26 +3108,21 @@ impl FuncCallSpecs {
     ) {
         if !self.is_output_locked() { return; }
         if new_output.is_empty() {
-            if let Some(active) = self.active_output.as_mut() {
-                active.clear();
-            }
+            self.active_output.clear();
             return;
         }
         let (ret_addr, ret_size) = get_return_addr_size(self);
-        // A locked Ghidra ProtoParameter cannot have a null address space.
-        // Preserve that precondition: a transitional spaceless Rust Address
-        // aborts before the active-output state or CALL graph is mutated.
-        let Some(ret_space) = ParamActive::space_from_tagged_address(ret_addr) else {
+        // The flat ProtoStore keeps the address-space half separately from
+        // the legacy offset carrier.  A locked non-void output without
+        // assigned storage is the same invalid transitional state as a null
+        // Ghidra output address, so leave the graph untouched.
+        let Some((ret_space, _)) = self.get_output_storage() else {
             return;
         };
         // activeoutput.clear()
-        if let Some(active) = self.active_output.as_mut() {
-            active.clear();
-        }
+        self.active_output.clear();
         // activeoutput.registerTrial(param->getAddress(), param->getSize()).
-        if let Some(active) = self.active_output.as_mut() {
-            active.register_trial_in_space(ret_space, ret_addr, ret_size);
-        }
+        self.active_output.register_trial_in_space(ret_space, ret_addr, ret_size);
 
         // Ghidra: find an exact-size match among new_output.
         let mut exact_index: Option<usize> = None;
@@ -3135,10 +3179,7 @@ impl FuncCallSpecs {
     ///     the spacebase (stack) space: the caller must supply a stack
     ///     placeholder.
     pub fn transfer_locked_input_param(&self, param: &ProtoParameter) -> (bool, i32) {
-        let active = match self.active_input.as_ref() {
-            Some(a) => a,
-            None => return (false, 0),
-        };
+        let active = &self.active_input;
         let num_trials = active.get_num_trials();
         let start_addr = param.address;
         let sz = param.data_type.get_size() as i32;
@@ -3341,10 +3382,7 @@ impl FuncCallSpecs {
             &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, // lo
         ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, // the joined whole
     ) {
-        let active = match self.active_output.as_mut() {
-            Some(a) => a,
-            None => return,
-        };
+        let active = &mut self.active_output;
         // Ghidra: reorder varnodes by trial slot; collect survivors into finalvn.
         let mut final_vn: Vec<Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>> = Vec::new();
         for i in 0..active.get_num_trials() {
@@ -3854,6 +3892,10 @@ impl ParamTrial {
     pub fn get_entry_index(&self) -> Option<usize> { self.entry_index }
     // Ghidra: fspec.hh:210 ParamTrial::setFixedPosition
     pub fn set_fixed_position(&mut self, pos: i32) { self.fixed_position = pos; }
+    // RUGRA-GLUE: read-only projection of ParamTrial::fixedPosition for
+    // differential fixtures; Ghidra's production algorithms compare the
+    // same private field through fixedPositionCompare (fspec.cc:1920).
+    pub fn get_fixed_position(&self) -> i32 { self.fixed_position }
     // Ghidra: fspec.hh:210 ParamTrial::markUsed
     // --- flag accessors (fspec.hh:243-264) ---
     pub fn mark_used(&mut self) { self.flags |= param_trial_flags::USED; }
@@ -4083,10 +4125,24 @@ impl ParamActive {
     pub fn get_num_trials(&self) -> usize { self.trial.len() }
     // Ghidra: fspec.cc:1936 ParamActive::getTrial
     pub fn get_trial(&self, i: usize) -> &ParamTrial { &self.trial[i] }
+    // Ghidra: fspec.hh:1749 ParamActive::getTrialForInputVarnode
+    /// Map a CALL/CALLIND input slot back to its parameter trial, accounting
+    /// for input(0) and for a stack placeholder that precedes the input.
+    pub fn get_trial_for_input_varnode(&self, mut slot: i32) -> &ParamTrial {
+        slot -= if self.stackplaceholder < 0 || slot < self.stackplaceholder {
+            1
+        } else {
+            2
+        };
+        &self.trial[slot as usize]
+    }
     // Ghidra: fspec.cc:1936 ParamActive::getTrialMut
     pub fn get_trial_mut(&mut self, i: usize) -> &mut ParamTrial { &mut self.trial[i] }
     // Ghidra: fspec.cc:1936 ParamActive::getSlotBase
     pub fn get_slot_base(&self) -> i32 { self.slotbase }
+    // RUGRA-GLUE: read-only projection of ParamActive::stackplaceholder for
+    // complete differential-fixture observation of placeholder slot state.
+    pub fn get_stack_placeholder_slot(&self) -> i32 { self.stackplaceholder }
     // Ghidra: fspec.cc:1936 ParamActive::setSlotBase
     pub fn set_slot_base(&mut self, val: i32) { self.slotbase = val; }
     // Ghidra: fspec.cc:1936 ParamActive::getNumPasses
@@ -4121,7 +4177,7 @@ impl ParamActive {
     // RUGRA-GLUE: deterministic projection from Address's tagged AddrSpace
     // into the transitional coarse AddressSpace enum. Ghidra stores the
     // AddrSpace pointer directly in Address. No name-based inference occurs.
-    fn space_from_tagged_address(addr: Address) -> Option<AddressSpace> {
+    pub(crate) fn space_from_tagged_address(addr: Address) -> Option<AddressSpace> {
         let tagged = addr.get_space()?;
         if tagged.is_overlay() {
             return Some(AddressSpace::Overlay);
@@ -4487,26 +4543,24 @@ pub struct ParamEntryJoin {
 pub mod param_entry_flags {
     /// The logical value is left-justified within its container.
     pub const FORCE_LEFT_JUSTIFY: u32 = 1;
-    /// This entry contains the right-half of a small-size extension.
-    pub const FORCE_RIGHT_JUSTIFY: u32 = 2;
     /// Reverse stack: slot 0 is the highest address, growing down.
-    pub const REVERSE_STACK: u32 = 4;
-    /// This entry is part of a `<group>` of mutually-overlapping entries.
-    pub const IS_GROUPED: u32 = 8;
-    /// This entry overlaps another and shares its group set.
-    pub const OVERLAPPING: u32 = 0x10;
+    pub const REVERSE_STACK: u32 = 2;
     /// Small values in this entry are zero-extended to the full size.
-    pub const SMALLSIZE_ZEXT: u32 = 0x20;
+    pub const SMALLSIZE_ZEXT: u32 = 4;
     /// Small values in this entry are sign-extended to the full size.
-    pub const SMALLSIZE_SEXT: u32 = 0x40;
-    /// Small values in this entry are extended via the inttype's sign.
-    pub const SMALLSIZE_INTTYPE: u32 = 0x80;
+    pub const SMALLSIZE_SEXT: u32 = 8;
+    /// Small values are extended according to their integer type.
+    pub const SMALLSIZE_INTTYPE: u32 = 0x20;
     /// A small float in this entry is extended into a larger float slot.
-    pub const SMALLSIZE_FLOATEXT: u32 = 0x100;
-    /// The high half of a joined entry: an additional check is required.
-    pub const EXTRACHECK_HIGH: u32 = 0x200;
-    /// The low half of a joined entry: an additional check is required.
-    pub const EXTRACHECK_LOW: u32 = 0x400;
+    pub const SMALLSIZE_FLOATEXT: u32 = 0x40;
+    /// The high half of a joined entry requires an additional check.
+    pub const EXTRACHECK_HIGH: u32 = 0x80;
+    /// The low half of a joined entry requires an additional check.
+    pub const EXTRACHECK_LOW: u32 = 0x100;
+    /// This entry is part of a `<group>` of mutually-overlapping entries.
+    pub const IS_GROUPED: u32 = 0x200;
+    /// This entry overlaps another and shares its group set.
+    pub const OVERLAPPING: u32 = 0x400;
     /// This is the first ParamEntry in its type/storage class.
     pub const FIRST_STORAGE: u32 = 0x800;
 }
@@ -5202,7 +5256,7 @@ impl ParamEntry {
             *slot_num += slots_used;
         }
         if justify_right {
-            res = Address::new(res.as_u64() + (space_used - sz) as u64);
+            res = res.offset((space_used - sz) as i64);
         }
         Some(res)
     }
@@ -5372,6 +5426,8 @@ pub enum AssignActionResponse {
 /// `struct ParameterPieces` (fspec.hh:451-460). Local copy in `fspec`.
 #[derive(Debug, Clone)]
 pub struct ParameterPieces {
+    /// Address-space half of Ghidra's complete `Address`.
+    pub space: AddressSpace,
     pub addr: Address,
     pub ty: Option<Arc<Datatype>>,
     pub flags: u32,
@@ -5379,36 +5435,24 @@ pub struct ParameterPieces {
 
 /// `ParameterPieces::hiddenretparm = 2`. Faithful to (fspec.hh:457).
 pub const HIDDEN_RET_PARM: u32 = 2;
-/// `ParameterPieces::indirectstorage = 1`. Faithful to (fspec.hh:458).
-pub const INDIRECT_STORAGE_PIECE: u32 = 1;
+/// `ParameterPieces::indirectstorage = 4`. Faithful to (fspec.hh:364).
+pub const INDIRECT_STORAGE_PIECE: u32 = 4;
 
 impl Default for ParameterPieces {
     // RUGRA-GLUE: Rust Default initializes the local Option-based aggregate;
     // Ghidra's ParameterPieces aggregate has no default() member.
-    fn default() -> Self { Self { addr: Address::new(0), ty: None, flags: 0 } }
+    fn default() -> Self {
+        Self { space: AddressSpace::Ram, addr: Address::new(0), ty: None, flags: 0 }
+    }
 }
 
 impl ParameterPieces {
     // Ghidra: fspec.cc:2175 ParameterPieces::swapMarkup
-    /// Swap data-type/storage markup between this and another parameter.
-    /// Faithful 1:1 port of `swapMarkup` (fspec.cc:2175-2189): exchanges the
-    /// address, data-type, and the storage-markup subset of `flags`
-    /// (`isthis`/`hiddenretparm`/`indirectstorage`/`namelock`/`typelock`/
-    /// `sizelock`), leaving any other bits untouched.
+    /// Swap data-type and flags while keeping both storage addresses intact.
+    /// Faithful to `swapMarkup` (fspec.cc:2175-2184).
     pub fn swap_markup(&mut self, other: &mut ParameterPieces) {
-        std::mem::swap(&mut self.addr, &mut other.addr);
         std::mem::swap(&mut self.ty, &mut other.ty);
-        // Markup mask: all ParameterPieces flag bits (fspec.hh:362-367).
-        const MARKUP_MASK: u32 = THIS_POINTER_PIECE
-            | HIDDEN_RET_PARM
-            | INDIRECT_STORAGE_PIECE
-            | NAME_LOCK_PIECE
-            | TYPE_LOCK_PIECE
-            | SIZE_LOCK_PIECE;
-        let self_markup = self.flags & MARKUP_MASK;
-        let other_markup = other.flags & MARKUP_MASK;
-        self.flags = (self.flags & !MARKUP_MASK) | other_markup;
-        other.flags = (other.flags & !MARKUP_MASK) | self_markup;
+        std::mem::swap(&mut self.flags, &mut other.flags);
     }
 }
 
@@ -5422,7 +5466,7 @@ pub const SIZE_LOCK_PIECE: u32 = 32;
 /// Description of a function prototype consulted during assignment.
 /// Faithful to `struct PrototypePieces` (fspec.hh:445-450).
 pub struct PrototypePieces<'a> {
-    pub out_type: Option<&'a Datatype>,
+    pub out_type: Option<&'a Arc<Datatype>>,
     pub in_types: &'a [Arc<Datatype>],
     pub first_var_arg_slot: i32,
 }
@@ -5796,7 +5840,7 @@ pub fn characterize_as_param(
     /// assignment algorithm. Faithful to `assignAddressFallback`
     /// (fspec.cc:735-760).
     pub fn assign_address_fallback(
-        &self, resource: TypeClass, tp: &Datatype, match_exact: bool,
+        &self, resource: TypeClass, tp: &Arc<Datatype>, match_exact: bool,
         status: &mut [i32], param: &mut ParameterPieces,
     ) -> AssignActionResponse {
         for cur in &self.entry {
@@ -5805,21 +5849,21 @@ pub fn characterize_as_param(
             if resource != cur.get_type() {
                 if match_exact || cur.get_type() != TypeClass::General { continue; }
             }
-            // TODO(ALIGNMENT_ROADMAP): depends on unported
-            // `Datatype::getAlignSize`/`getAlignment`. Approximate with
-            // size / alignment 1.
-            let align_size = tp.get_size() as i32;
-            let type_alignment = 1i32;
+            let align_size = tp.get_align_size() as i32;
+            let type_alignment = tp.get_alignment() as i32;
             let assigned = cur.get_addr_by_slot(&mut status[grp as usize], align_size, type_alignment);
             match assigned {
                 None => continue,
-                Some(addr) => param.addr = addr,
+                Some(addr) => {
+                    param.space = cur.get_space();
+                    param.addr = addr;
+                }
             }
             if cur.is_exclusion() {
                 let group_set = cur.get_all_groups();
                 for &g in group_set { status[g as usize] = -1; }
             }
-            param.ty = None;
+            param.ty = Some(tp.clone());
             param.flags = 0;
             return AssignActionResponse::Success;
         }
@@ -5830,13 +5874,13 @@ pub fn characterize_as_param(
     /// Fill in the Address and other details for the given parameter.
     /// Faithful to `assignAddress` (fspec.cc:772-783).
     pub fn assign_address(
-        &self, dt: &Datatype, _proto: &PrototypePieces, _pos: i32,
+        &self, dt: &Arc<Datatype>, _proto: &PrototypePieces, _pos: i32,
         status: &mut [i32], res: &mut ParameterPieces,
     ) -> AssignActionResponse {
         // TODO(ALIGNMENT_ROADMAP): depends on unported `ModelRule`
         // (modelrules.hh). Ghidra iterates `modelRules` first; Rugra goes
         // straight to fallback.
-        let store = metatype_to_type_class(dt);
+        let store = metatype_to_type_class(dt.as_ref());
         self.assign_address_fallback(store, dt, false, status, res)
     }
 
@@ -5869,7 +5913,7 @@ pub fn characterize_as_param(
         for (i, dt) in proto.in_types.iter().enumerate() {
             res.push(ParameterPieces::default());
             let response = self.assign_address(
-                dt.as_ref(), proto, i as i32, &mut status, res.last_mut().unwrap(),
+                dt, proto, i as i32, &mut status, res.last_mut().unwrap(),
             );
             if response == AssignActionResponse::Fail || response == AssignActionResponse::NoAssignment {
                 return Err("Cannot assign parameter address".to_string());
@@ -6565,14 +6609,16 @@ impl ParamListStandardOut {
     }
 
     // Ghidra: fspec.cc:1569 ParamListStandardOut::assignMap
-    /// Assign storage for the single output (return) parameter. Faithful
-    /// 1:1 port of `assignMap` (fspec.cc:1569-1612). Emplaces one
+    /// Assign storage for the single output (return) parameter. The scalar
+    /// success path follows `assignMap` (fspec.cc:1569-1612) and emplaces one
     /// `ParameterPieces` for the return value; on `TYPE_VOID` it is left
     /// invalid. On `assignAddress` failure the action escalates to a hidden
     /// return: the return piece is re-typed as a pointer to the original
     /// out-type, its storage is reassigned, and a second piece is appended
     /// holding the hidden-return input pointer. `AssignAction::hiddenret_*`
     /// select between pointer-in-first-slot and special-register variants.
+    /// Architecture-owned TypeFactory pointer construction and the full
+    /// ModelRule response domain remain `FSPEC-0002`.
     pub fn assign_map(
         &self, proto: &PrototypePieces,
         _typefactory: &crate::type_system::TypeFactory,
@@ -6589,7 +6635,7 @@ impl ParamListStandardOut {
             Some(t) => t,
         };
         if matches!(out_type.get_metatype(), crate::type_system::TypeMetatype::Void) {
-            res.last_mut().unwrap().ty = Some(std::sync::Arc::new(out_type.clone()));
+            res.last_mut().unwrap().ty = Some((*out_type).clone());
             res.last_mut().unwrap().flags = 0;
             return Ok(()); // Leave the address invalid.
         }
@@ -6621,13 +6667,13 @@ impl ParamListStandardOut {
             // Ghidra: Datatype *pointertp = typefactory.getTypePointer(...).
             // Rugra has no `TypeFactory::getTypePointer`; we re-use the
             // out-type as the pointer's base and let later passes reconcile.
-            let pointer_tp: std::sync::Arc<Datatype> = std::sync::Arc::new(out_type.clone());
+            let pointer_tp: std::sync::Arc<Datatype> = (*out_type).clone();
             if matches!(response_code, HiddenRetAction::SpecialRegVoid) {
                 res.last_mut().unwrap().ty = None; // Ghidra: getTypeVoid()
             } else {
                 res.last_mut().unwrap().ty = Some(pointer_tp.clone());
                 let r2 = self.base.assign_address(
-                    out_type, proto, -1, &mut status, res.last_mut().unwrap(),
+                    &pointer_tp, proto, -1, &mut status, res.last_mut().unwrap(),
                 );
                 if r2 == AssignActionResponse::Fail {
                     return Err("Cannot assign return value as a pointer".to_string());
@@ -6914,8 +6960,9 @@ impl ParamListRegisterOut {
     pub fn get_type(&self) -> ParamListKind { ParamListKind::RegisterOut }
 
     // Ghidra: fspec.cc:1519 ParamListRegisterOut::assignMap
-    /// Assign the return value to the first fitting register entry.
-    /// Faithful 1:1 port of `assignMap` (fspec.cc:1519-1533). Emplaces one
+    /// Assign the return value to the first fitting register entry. The
+    /// no-ModelRule scalar path follows `assignMap` (fspec.cc:1519-1533) and
+    /// emplaces one
     /// `ParameterPiece`; on a non-void out-type the storage is assigned via
     /// `ParamListStandard::assignAddress` (which, with no model rules,
     /// falls through to `assignAddressFallback` — the "first entry that
@@ -6946,7 +6993,7 @@ impl ParamListRegisterOut {
                 ));
             }
         } else {
-            res.last_mut().unwrap().ty = Some(std::sync::Arc::new(out_type.clone()));
+            res.last_mut().unwrap().ty = Some(out_type.clone());
             res.last_mut().unwrap().flags = 0;
         }
         Ok(())
@@ -7367,13 +7414,14 @@ impl ProtoModelFull {
 
     // Ghidra: fspec.cc:2429 ProtoModel::assignParameterStorage
     /// Calculate input and output storage locations given a function
-    /// prototype. Faithful 1:1 port of `assignParameterStorage`
+    /// prototype. This ports the selected scalar path of `assignParameterStorage`
     /// (fspec.cc:2429-2462). The output storage is assigned first (entry 0 of
     /// `res`), then the input storages follow. If `ignore_output_error` is
     /// true, an unassignable return value collapses to a void entry instead of
     /// propagating `ParamUnassignedError`. When the model `hasThis`, the
     /// `isthis` flag is set on the appropriate input, accounting for a hidden
-    /// return pointer.
+    /// return pointer. Architecture TypeFactory identity, ModelRules, and
+    /// non-scalar storage remain `FSPEC-0002`.
     pub fn assign_parameter_storage(
         &self,
         proto: &PrototypePieces,
@@ -7393,6 +7441,7 @@ impl ProtoModelFull {
                     // single void entry with undefined address.
                     res.clear();
                     res.push(ParameterPieces {
+                        space: AddressSpace::Ram,
                         addr: Address::new(0),
                         ty: void_type.clone(),
                         flags: 0,

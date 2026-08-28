@@ -4654,6 +4654,67 @@
         "database::Database::set_property_range",
         "varmap::install_symbol_addmap"
       ]
+    },
+    {
+      "id": "action_funclink_input_1204",
+      "description": "ActionFuncLink::funcLinkInput coarse x86-64 single-Architecture projection versus locked Ghidra 12.0.4: real __stdcall storage assignment, locked register plus first-stack inputs, locked register-only trailing placeholder, locked varargs, unlocked recovery, ParamActive flags/trials/fixed positions/pass bounds, full coarse CALL locations/order/flags, ordinary-bank same-location ordering, and getTrialForInputVarnode mapping (101 records byte-identical); complete Address identity, generic newVarnode properties, non-void funcLinkOutput, and non-scalar storage remain MISMATCH/UNTESTED",
+      "runner": [
+        "tools/run_action_funclink_input_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "cache": {
+        "metadata": "tests/oracle/action_funclink_input_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/action_funclink_input_1204.cc",
+          "rust_fixture": "tests/oracle/action_funclink_input_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_action_funclink_input_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/coreaction.rs",
+          "src/debugproto.rs",
+          "src/fspec.rs",
+          "src/funcdata.rs",
+          "src/grammar.rs",
+          "src/heritage.rs",
+          "src/type_system/datatype.rs",
+          "src/type_system/typefactory.rs",
+          "src/varnode.rs",
+          "docs/api/coreaction.md",
+          "docs/api/debugproto.md",
+          "docs/api/fspec.md",
+          "docs/api/funcdata.md",
+          "docs/api/grammar.md",
+          "docs/api/heritage.md",
+          "docs/api/type_system/datatype.md",
+          "docs/api/type_system/typefactory.md",
+          "docs/api/varnode.md",
+          "tests/oracle/action_funclink_input_1204.*",
+          "tools/run_action_funclink_input_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-05ee70fc9345c44ea8de",
+          "RG-F-9e895a3a0250ae83b691",
+          "RG-F-b445c51b636b8d0099bb",
+          "RG-F-d9bbc83dfe816f361604"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-46f5d98c5746f08179f1",
+          "GH12-F-538299e12be7a39eb5ad",
+          "GH12-F-5ab16f28a9d3dd040430",
+          "GH12-F-87ee911708d59eebe61a",
+          "GH12-F-c3567cea1ed400eb7413",
+          "GH12-F-fd886b35140d95dc01f3"
+        ]
+      }
     }
   ]
 }

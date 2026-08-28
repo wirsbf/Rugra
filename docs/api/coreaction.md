@@ -890,9 +890,9 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 ### 2026-06-27（历史声明，2026-08-24 D0 审计已撤回“完整移植”）：ActionFuncLink/FuncLinkOutOnly apply()
 
-本节记录当时的阶段性判断，不再代表当前状态。实际实现只覆盖 register/basic output
-路径；stack placeholder、stack output、extension、calculated-bool 与完整 prototype
-consumer 仍为 `CALLSPEC-0001`/`UNTESTED`，以本文件 2026-08-24 D0 节为准。
+本节记录当时的阶段性判断，不再代表当前状态。选定 x86 scalar input 与
+stack-placeholder 投影已由 2026-08-28 fixture 覆盖；stack output、extension、
+calculated-bool 与完整 prototype consumer 仍为 `CALLSPEC-0001`/`UNTESTED`。
 
 - ActionFuncLink::apply（coreaction.cc:1575-1586）：遍历 callspecs，func_link_input + func_link_output
 - func_link_input（1474-1513）：unlocked→init_active_input；locked→注册 trial
@@ -902,13 +902,15 @@ consumer 仍为 `CALLSPEC-0001`/`UNTESTED`，以本文件 2026-08-24 D0 节为�
 ### 2026-06-30（历史声明，2026-08-24 D0 审计已撤回“完整移植”）：func_link_output void 门控 + known_return_type 表
 
 - 当时把 `func_link_output(fc_idx, op)` 的四个 basic 分支称为“完整 1:1”；该结论现已撤回。已覆盖：①已有 output → op_unset_output；② locked + Void → 无 output；③ locked + 非 void → new_varnode_out(sz, RAX)；④ unlocked → init_active_output。未覆盖的 stack-output、extension 与 calculated-bool 分支继续绑定 `CALLSPEC-0001`。
-- `known_return_type(name) -> Option<KnownReturn{Void,Pointer,Int(sz)}>`：编码 libc/已知函数返回类型（忠实于 Ghidra 从数据库 FuncProto 锁定 callee 原型的机制）。`ensure_callspecs` 按此设置锁定 return-type。
+- 旧 `known_return_type` / `ensure_callspecs` 是硬编码替代物，现已删除；锁定
+  return type 只来自 flow/Program-database 侧提供的 callee `FuncProto`。
 - `FuncProto.output_type_locked` + `set_output_lock` 真实置位 + `is_output_locked` 委托（见 fspec.md）。
 - 效果：curl 17→19（void-CALL 赋值 bug 消除）。剩余 5 个失败为 Gap B/C + 一个预存 func_link_input 参数丢失 bug（main 的 `curl_easy_setopt(,` 缺 arg0，非本改动引入）。
 
 ### 2026-06-29：ActionFuncLink 接入主管线 + 生产路径建立 FuncCallSpecs
 
-- **ensure_callspecs**（对齐 FlowInfo::setupCallSpecs flow.cc:680）：扫描所有 alive CALL op，为每个建 FuncCallSpecs（从 inrefs[0] 目标地址初始化 entry_addr），存入 fd.callspecs。此前 callspecs 仅单元测试填充——整个 FuncCallSpecs/trial 恢复链是死代码。
+- 历史 `ensure_callspecs` 已删除。当前 callspec 必须由 flow 的 CALL 建立路径
+  绑定 exact op；`ActionFuncLink::apply` 遇到无绑定 callspec 不再现场发明对象。
 - **接入管线**：ActionFuncLink 注册在 decompile_group 的 ActionHeritage **之前**（对齐 Ghidra coreaction.cc:5484），确保 funcLink 建的 varnode 进入 SSA rename。
 - **2026-08-16 切换（HERITAGE-DRIVER-SWITCH-0001）**：`ActionHeritage::apply` 逐字对齐 coreaction.hh:289 —— `{ fd.op_heritage(); Ok(0) }`，无 pass guard、无内嵌 DeadCode、无 direct 双 pass。该 Action 位于 repeatapply mainloop 组（coreaction.cc:5489-5492），执行器每轮迭代重跑 heritage，收敛性由 `Heritage::heritage` 自身保证（per-space delay、prev==2 老范围 heritageKnown 跳过、`pass += 1` 仅末行一次，heritage.cc:2684-2757）。下述 2026-06-29 的 direct 双 pass / discover 夹层 / 内嵌 DeadCode 描述自此作废（历史记录）：
 - **ActionHeritage 接入 discover_and_guard_stack_stores_fd**（2026-06-29，已于 2026-08-16 移除出生产路径）：~~ActionHeritage::apply 在 place_multiequals/rename 之前调 `Heritage::discover_and_guard_stack_stores_fd(fd)`~~。
@@ -1908,9 +1910,9 @@ golden 形态 `__nptr = (char *)curl_getenv("COLUMNS");` 达成。
 - `func_link_input(fd, fc_idx, op)`（coreaction.cc:1474-1513 `funcLinkInput`）
   重写：`(!inputlocked)||varargs` 才 `init_active_input`（cc:1482-1483）；
   locked 路从**锁定原型**参数表构造 stub CALL 输入
-  （`newVarnode(sz,param->getAddress())` cc:1507-1508，Rugra 侧
-  `X86_64GccStorage` 只产寄存器存储，stack 存储在 debugproto assign 处
-  fail-visible 拒绝，故 Register 空间是可达全域；varargs 形参另注册
+  （`newVarnode(sz,param->getAddress())` cc:1507-1508，Rugra 侧保留模型分配的
+  coarse register/stack 空间；stack formal 走 `op_stack_load`，非 stack formal
+  走 explicit-space Varnode 创建；varargs 形参另注册
   fixed-position active trial cc:1488-1493）。硬编码
   `known_param_count/known_param_types` 表（glob_url=2 与 DWARF 3 冲突的
   根因）从本函数删除；表中残留仅 ActionCallParams/ActionInferParams 域。
@@ -1974,7 +1976,26 @@ locked parameters in stack/spacebase storage are created through
 `Funcdata::op_stack_load`; the first non-varargs stack parameter claims the
 spacebase-placeholder flag, subsequent parameters are appended as loads, and
 a remaining callspec spacebase creates the canonical placeholder input.
-Register/non-spacebase parameters retain their address-space varnodes. The
-spacebase path is `UNTESTED` on the current x86-64 GCC fixture because its
-storage allocator bails out on stack spills; acceptance remains defects=0 plus
-`coreaction` tests when a constructive stack-storage fixture is available.
+Register/non-spacebase parameters retain their coarse address-space varnodes.
+The locked x86-64 GCC scalar register/first-stack, varargs, unlocked and
+placeholder-slot paths are covered by `ACTION-FUNCLINK-INPUT-1204`. Full
+Architecture-owned Address identity, ModelRules/non-scalars and
+`func_link_output` remain outside the approved projection, so this module
+stays L2.
+
+## 2026-08-28：GETSTR-FUNCLINK-SPACE-0001 限定证据
+
+锁定 runner `tools/run_action_funclink_input_oracle.sh` 在 Ghidra 12.0.4
+`e40ed130…` 与隔离 Rust comparand 上输出 101 records / 9268 bytes，双方
+stdout SHA-256 均为
+`6cd6ad2eff1d290c7906c6b40cd1ce7d2c818a0939f655ef6260d16b99ef4c0f`，
+raw diff 为空。批准范围仅为单 Architecture、x86:LE:64、GCC 默认模型的
+coarse `(AddressSpace, offset, size)` input 可观察投影：locked
+register/first-stack、locked register-only、locked varargs、unlocked、trial
+flags/pass/fixed-position、natural/synthetic placeholder、CALL/bank 顺序和
+placeholder 前后 trial 映射。
+
+`ActionFuncLink::apply` 不再现场创造 callspec 或使用已知函数字符串表。
+完整 `Address(AddrSpace*,offset)` 身份、generic newVarnode 属性尾、
+non-scalar/ModelRules 以及 `func_link_output` 的 extension/error 分支仍为
+`MISMATCH`/`UNTESTED`；fixture overall 正确保持 `UNTESTED`。

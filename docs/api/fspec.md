@@ -11,11 +11,11 @@ as `has_model` and `print_raw` consult the resolved `Arc`, not that sentinel.
 
 ## PLTSTUB-WARNLOSS-0001 stack-placeholder gate
 
-`FuncCallSpecs::create_placeholder` now rejects duplicate placeholder slots and
-also rejects a tagged locked, non-varargs stack parameter because that parameter
-consumes the oracle placeholder role. The caller must still provide the
-post-`funcLinkInput` spacebase; the full inputlocked/varargs parameter-loop gate
-is pending in the `ActionFuncLink` slice. Evidence: `/tmp/rugra-reports/PLTSTUB-ROOTCAUSE-2026-08-27.md`.
+`FuncCallSpecs::create_placeholder` now performs only Ghidra's canonical
+creation sequence: append a one-byte spacebase LOAD, record its CALL slot, and
+mark the result as the placeholder. Duplicate suppression and the locked-stack
+decision belong to `ActionFuncLink::funcLinkInput`; the former self-invented
+guards were removed.
 
 Call-effect lookup also follows the locked oracle: a non-empty local effect
 list is a complete override, while an empty list delegates to the shared
@@ -75,15 +75,15 @@ are defined (prototypes) and how call sites are handled (call specs).
 
 ## 导出的公共 API (Public API)
 
-### `pub const HIDDEN_RETURN: u32 = 1 << 0`
+### `pub const THIS_POINTER: u32 = 1`
 
 *暂无代码注释*
 
-### `pub const INDIRECT_STORAGE: u32 = 1 << 1`
+### `pub const HIDDEN_RETURN: u32 = 2`
 
 *暂无代码注释*
 
-### `pub const THIS_POINTER: u32 = 1 << 2`
+### `pub const INDIRECT_STORAGE: u32 = 4`
 
 *暂无代码注释*
 
@@ -193,7 +193,9 @@ consolidated into this signature.
 **ParamTrial**（30+ 方法）：参数候选存储位置的试验，含 checked/used/active/unref/killedbycall 等标志位 + splitHi/splitLo 分割。
 **ParamActive**（15+ 方法）：试验容器，registerTrial/whichTrial/splitTrial/getNumUsed 等。
 
-**关键状态**：ParamTrial/ParamActive 数据结构 + 核心方法完整移植，4 单元测试验证（标志位、split、register/split、num_used）。但 FuncCallSpecs 尚未持有 `active_input`/`active_output` 字段——这是下一个接入点，接入后即可移植 ActionFuncLink 等 Action 的 apply()。
+**关键状态**：ParamTrial/ParamActive 已接入 FuncCallSpecs。两个容器永久
+嵌入，是否处于恢复阶段由独立 boolean 表示；容器是否存在不再被错误地当成
+active 状态。
 
 当前实现已由 2026-08-23 的 output fixture 补齐 `AddressSpace`、1-based
 `slotbase`、非 spacebase `killedbycall` 标记及空 entry 的 offset=0 状态；
@@ -201,7 +203,9 @@ consolidated into this signature.
 
 ### 2026-06-27（会话3 G5 接入）：FuncCallSpecs active_input/active_output 字段 + 访问器
 
-- `FuncCallSpecs.active_input: Option<ParamActive>` / `active_output: Option<ParamActive>` — 忠实于 Ghidra `activeinput`/`activeoutput`（fspec.hh）。
+- `FuncCallSpecs.active_input: ParamActive` / `active_output: ParamActive` —
+  永久嵌入；`input_recovery_active` / `output_recovery_active` 独立承载
+  `isinputactive` / `isoutputactive`。
 - `is_input_locked()` / `is_output_locked()` — FuncCallSpecs::isInputLocked/isOutputLocked
 - `is_dotdotdot()` — isDotdotdot
 - `init_active_input()` / `init_active_output()` — initActiveInput/initActiveOutput
@@ -209,17 +213,19 @@ consolidated into this signature.
 
 ### 2026-06-27（会话3 G5 接入续）：ActionFuncLink apply() + funcLinkInput/funcLinkOutput
 
-完整移植 ActionFuncLink（coreaction.cc:1575-1586）+ funcLinkInput(1474-1513)/funcLinkOutput(1521-1572)：
+本节是历史接入记录，不再构成“完整移植”声明。当前 `funcLinkInput` 的选定
+x86 scalar 投影已有双侧门禁；`funcLinkOutput` 仍绑定 `CALLSPEC-0001`。
 
 - `func_link_input(fc)`：unlocked/varargs → init_active_input；locked → 注册每个参数为 trial 并 mark_active（Ghidra 的 opStackLoad/opInsertInput pcode 注入需 Funcdata op-edit，暂缓）
 - `func_link_output(fc_idx, op)`（2026-06-30 完整移植 coreaction.cc:1521-1572）：① 若 CALL 已有 output，op_unset_output 移除（让返回值重新决定）；② 若 `is_output_locked()`：return-type 为 Void → **不产生 output**（exit/free/__stack_chk_fail 等 void 函数永不产生返回 varnode）；非 void → `new_varnode_out(sz, RAX_addr)`；③ 若 unlocked → `init_active_output()`（不立即建 output，留给 ActionActiveReturn 试验恢复）。locked-stack-output 与 assumedOutputExtension 路径需更多 Funcdata op-edit，暂缓。
 - `ActionFuncLink::apply`：遍历 callspecs 调用 func_link_input + func_link_output
 - `ActionFuncLinkOutOnly::apply`：只调用 func_link_output
 
-### 2026-06-30：FuncProto.output_type_locked + known_return_type 表
+### 2026-06-30 历史记录：FuncProto.output_type_locked 与已删除的返回值表
 
 - `FuncProto.output_type_locked: bool` — 忠实于 Ghidra `FuncProto::isOutputLocked`（fspec.cc:3906-3914）。`set_output_lock(val)` 现真正置位（此前是空桩）。`FuncCallSpecs::is_output_locked()` 委托给 `prototype.is_output_locked()`（此前误用 `is_input_locked()` 启发式）。
-- `ensure_callspecs` 现按 `known_return_type(name)`（KnownReturn::{Void,Pointer,Int(sz)}）为已知库/curl/httpd 函数设置锁定的 return-type：Void → locked-void（无 output），Pointer → `void *` locked，Int(sz) → `int`/`long` locked，未知 → unlocked。
+- 旧 `ensure_callspecs` / `known_return_type` 是数据库原型的硬编码替代物，现已
+  删除。CALL 规范由 flow/driver 建立，返回类型来自 callee `FuncProto`。
 - 效果：curl gcc 审计 17→19（match_url/__libc_csu_init 的 void-赋值 bug 消除）。
 
 
@@ -954,3 +960,16 @@ fspec.hh:310-317/1653-1654：
 无参数时设置 `voidinputlock`（fspec.cc:3921-3929），有参数时逐项设置
 type-lock。Rugra 现已通过 `prototype.is_input_locked()` 对齐该门与首参检查；
 空参数、void 锁定与多参数首参锁定均纳入域语义。
+
+## 2026-08-28：FuncLink input 数据面限定证据
+
+`FuncCallSpecs` 的 input/output `ParamActive` 现在永久嵌入，active 状态由
+独立 boolean 表示；`init_active_input` 将正数 model max-delay 设为 3。
+`ProtoParameter` 与 `ParameterPieces` 保留 coarse space，类型以同一 `Arc`
+穿过 assignment，`swap_markup` 仅交换 type+flags。prototype flags 为
+`this=1, hidden-return=2, indirect=4, name-lock=8, type-lock=16`。
+
+`ACTION-FUNCLINK-INPUT-1204` 的 101-record 双侧输出逐字节一致，证明上述
+scalar x86 input/slot/placeholder 投影。它不批准 `commitNewInputs/Outputs` 的
+完整分支、ParamEntry join/reverse/endian/error 状态、hidden-return pointer、
+ModelRules 或 Architecture-owned Address identity；`fspec` 保持 L2。

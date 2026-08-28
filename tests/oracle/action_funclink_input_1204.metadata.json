@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "fixture_id": "ACTION-FUNCLINK-INPUT-1204",
+  "task_id": "GETSTR-FUNCLINK-SPACE-0001",
+  "overall_status": "UNTESTED",
+  "covered_projection_status": "MATCH",
+  "residual_todo_ids": [
+    "ADDRESS-0001",
+    "CALLSPEC-0001",
+    "CSPEC-MODELRULE-DECODE-0001",
+    "FSPEC-0002",
+    "FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001",
+    "TYPEFACTORY-ARC-IDENTITY-0001",
+    "VARNODE-0001"
+  ],
+  "covered_projection": "Strict byte comparison of ActionFuncLink::apply's funcLinkInput-visible mutations for four calls under the locked x86-64 GCC default model in one Architecture: a locked seven-int8 signature spanning six register parameters and the first stack parameter, a locked six-int8 register-only signature, the seven-int8 locked signature with varargs, and an unlocked signature. This is a coarse (AddressSpace enum, offset, size) projection, not a claim that Rugra Address identity is equivalent to Ghidra AddrSpace* identity.",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "rugra_base": {
+    "commit": "356fafc786bce7835e669f571e93d66797e7a069",
+    "tree": "5caa8e4fc60e50a1185e3e3e4763bcaf002dc930",
+    "snapshot_policy": "Archive the explicit Cargo/source closure from the pinned base, then overlay the nine hash-pinned live Rust source files and this Rust fixture. No unlisted working-tree file enters the comparand."
+  },
+  "sha256": {
+    "bfd_header": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+    "bfd_library": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e",
+    "cpp_fixture": "e86418f02d39b48a56745025fd970ad6fc2ee2bbf2b00f1cff98d7e544d5a1ec",
+    "runner": "dca066af6c09338f19dacdb2b731025021ceeda5f9ad1562fe1bd4d598400ffd",
+    "rust_fixture": "4647a4fc2ce04b2c349e417f0906096c17547933ac6a0e845ee82929d6e4cb79",
+    "sleigh_specs/x86-64-gcc.cspec": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+    "sleigh_specs/x86-64.pspec": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+    "sleigh_specs/x86-64.sla": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+    "sleigh_specs/x86.ldefs": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+    "src/coreaction.rs": "4b322c0b171e28654e5f05a0c47158a9f83cedb3c665d2f804ac35ab97a4f233",
+    "src/debugproto.rs": "3dd580070d8eb5c1bb966288bab3a570b60c59c430f93a59735beb665f07a4fc",
+    "src/fspec.rs": "c5130a88e9423948839c9c2cd4cae8a4a25d2122c3393d7b053b289aa1558713",
+    "src/funcdata.rs": "31fe489b04ad022a7416f58e7d2443a4facf04d1fd9f994cca9f5bc9ced58a25",
+    "src/grammar.rs": "1e0f8c142de4b0865e0be9d42586e478d2feda66cd4bf319612d2ad5675027bb",
+    "src/heritage.rs": "3ce877453fa1dd2766f5c507b0786a7cd814b99dfc2ca9d5a5b5cd4b2bf0fa37",
+    "src/type_system/datatype.rs": "f1011b9b879b52857e689e0264dcf7555244ecf48f04ec243826eda1e702a4dd",
+    "src/type_system/typefactory.rs": "bf22a41098d808f5078fa72781b88407aa415c426888476aa618f6afbd393729",
+    "src/varnode.rs": "58c99967a180dcfa717d7d78cfa19c768213fe8c14705b268b63308b347f6cd4"
+  },
+  "input_manifest_sha256": "1a5aaa43ce22726ac641e0457de5d33c6c791a065cca2a3ecf3d8f741ec9faec",
+  "external_inputs": {
+    "bfd_header": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+    "bfd_library": "/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+    "source_assets": [
+      "sleigh_specs/x86.ldefs",
+      "sleigh_specs/x86-64.pspec",
+      "sleigh_specs/x86-64-gcc.cspec",
+      "sleigh_specs/x86-64.sla"
+    ]
+  },
+  "architecture": {
+    "id": "x86:LE:64:default",
+    "endianness": "little",
+    "pointer_size": 8,
+    "ghidra_loader": "BfdArchitecture over the freshly linked C++ fixture executable plus the pinned production specification set",
+    "rugra_loader": "Production SleighCtx register table plus Architecture::parse_compiler_config over the identical cspec bytes",
+    "scope": "Exactly one Architecture instance per runtime. Multi-Architecture, overlay-space, and cross-thread SpaceTag identity are not tested."
+  },
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "default_model": "__stdcall",
+    "parameter_assignment": "Each runtime asks its production model to assign storage for seven signed eight-byte scalar inputs. No ABI register or stack offset is hard-coded by the fixture.",
+    "observed_storage_shape": "Six register parameters followed by the first stack parameter."
+  },
+  "analysis_options": {
+    "entry": "One production ActionFuncLink::apply invocation over each synthetic Funcdata containing exactly one CPUI_CALL and one FuncCallSpecs.",
+    "function_offsets": ["0x700000", "0x700600", "0x700200", "0x700400"],
+    "call_offsets": ["0x700100", "0x700700", "0x700300", "0x700500"],
+    "call_target": "ram:0x710000",
+    "output_type": "void",
+    "type_recovery": "default",
+    "debug_macros": "none",
+    "random_seed": "none",
+    "error_injection": "none",
+    "normalization": "None. Every emitted byte, record order, full coarse space descriptor, offset, size, flag, slot, fixed position, placeholder index, unique offset, object-alias boolean, and bank order is compared directly. Process-local pointer values are not emitted."
+  },
+  "input_cases": [
+    {
+      "id": "locked",
+      "prototype": "seven int8 inputs, non-varargs, input locked",
+      "expected_path": "Permanent active trials and CALL inputs for all formals; the first stack LOAD output becomes the natural placeholder and suppresses a synthetic placeholder."
+    },
+    {
+      "id": "register_only",
+      "prototype": "six int8 register inputs, non-varargs, input locked",
+      "expected_path": "Permanent trials remain inactive with maxpass 0; because no locked stack formal suppresses it, a trailing one-byte synthetic stack placeholder is appended to the CALL while the inactive ParamActive placeholder remains -1."
+    },
+    {
+      "id": "varargs",
+      "prototype": "seven int8 inputs, firstVarArgSlot=2, input locked",
+      "expected_path": "Input recovery becomes active with maxpass 3; fixed positions are 0..6; the stack formal is not the placeholder and a one-byte synthetic stack placeholder is appended."
+    },
+    {
+      "id": "unlocked",
+      "prototype": "model-bound but no fixed input parameters",
+      "expected_path": "Input and output recovery become active, no trials are registered, and a synthetic stack placeholder is input slot 1."
+    },
+    {
+      "id": "mapping_after_placeholder",
+      "prototype": "standalone ParamActive with one trial before and one trial after setPlaceholderSlot",
+      "expected_path": "getTrialForInputVarnode subtracts the target input and the preceding placeholder exactly as fspec.hh specifies."
+    }
+  ],
+  "observation_schema": {
+    "records": 101,
+    "bytes": 9268,
+    "case_state": "Model, lock/varargs flags, input/output active flags, trial count, pass/maxpass, fully-checked/final-check/recover-subcall/join-reverse, both placeholder slots, and CALL input count.",
+    "trial_state": "Registration order, coarse space name/index/type, offset, size, CALL slot, packed flags, and fixed position.",
+    "call_inputs": "Input order, full coarse location, size, annotation/input/written/spacebase-placeholder flags, and defining opcode.",
+    "formal_aliases": "Formal versus trial and formal versus CALL input coarse space and offset equality. These are not Rust Address::operator== identity claims.",
+    "bank_aliases": "An ordinary VarnodeBank::create_with_space seed at the first formal's storage is compared with the Action-created CALL input by object identity, coarse location, exact-range count, and location-tree order.",
+    "mapping": "getTrialForInputVarnode result indices for all registered CALL slots plus the explicit after-placeholder boundary."
+  },
+  "decisive_semantics": {
+    "references_and_outputs": "Ghidra FuncCallSpecs owns an embedded ParamActive and points to its CALL; Rugra owns the callspec behind Arc<RwLock<_>> and mutates the same bank/op objects. The fixture observes the caller-owned trials, callspec flags, CALL inputs, VarnodeBank objects, and placeholder slots after apply.",
+    "loop_bounds_traversal_order": "ActionFuncLink::apply traverses calls from index 0 to numCalls-1. funcLinkInput traverses locked formals from index 0 to numParams-1 and appends each input in formal order. The fixture uses one call per Funcdata and prints all trials and inputs without sorting or normalization.",
+    "counters_and_accumulators": "ParamActive begins slotbase=1, stackplaceholder=-1, numpasses=0, maxpass=0. Each registerTrial consumes one slot; setPlaceholderSlot consumes one additional slot. initActiveInput clamps any positive model delay to maxpass=3. Varargs fixed positions are assigned from the zero-based formal index.",
+    "sort_and_comparison_keys": "funcLinkInput performs no sort. ParamTrial registration order is formal order; VarnodeBank exact-location order is the production location-tree order. The fixture checks that the preexisting seed is first and the Action-created same-location input is last."
+  },
+  "ghidra_functions": [
+    {
+      "id": "GH12-F-5ab16f28a9d3dd040430",
+      "signature": "void ghidra::ActionFuncLink::funcLinkInput(FuncCallSpecs * fc,Funcdata & data)",
+      "source": "coreaction.cc:1474"
+    },
+    {
+      "id": "GH12-F-fd886b35140d95dc01f3",
+      "signature": "int4 ghidra::ActionFuncLink::apply(Funcdata & data)",
+      "source": "coreaction.cc:1575"
+    },
+    {
+      "signature": "ghidra::ParamActive::ParamActive(bool recoversub)",
+      "source": "fspec.cc:1936"
+    },
+    {
+      "signature": "void ghidra::ParamActive::registerTrial(const Address & addr,int4 sz)",
+      "source": "fspec.cc:1963"
+    },
+    {
+      "signature": "void ghidra::FuncCallSpecs::createPlaceholder(Funcdata & data,AddrSpace * spacebase)",
+      "source": "fspec.cc:4849"
+    },
+    {
+      "signature": "void ghidra::FuncCallSpecs::initActiveInput(void)",
+      "source": "fspec.cc:5331"
+    },
+    {
+      "signature": "const ParamTrial & ghidra::ParamActive::getTrialForInputVarnode(int4 slot) const",
+      "source": "fspec.hh:1749"
+    }
+  ],
+  "rugra_functions": [
+    {
+      "signature": "ActionFuncLink::func_link_input(fd, fc_idx, op)",
+      "source": "src/coreaction.rs:8585"
+    },
+    {
+      "signature": "Action for ActionFuncLink::apply(&mut self, fd)",
+      "source": "src/coreaction.rs:8753"
+    },
+    {
+      "signature": "ParamActive::register_trial_in_space(space, addr, sz)",
+      "source": "src/fspec.rs:4224"
+    },
+    {
+      "signature": "ParamActive::get_trial_for_input_varnode(slot)",
+      "source": "src/fspec.rs:4131"
+    },
+    {
+      "signature": "FuncCallSpecs::create_placeholder(fd, op, spacebase)",
+      "source": "src/fspec.rs:2840"
+    },
+    {
+      "signature": "FuncCallSpecs::init_active_input(&mut self)",
+      "source": "src/fspec.rs:2385"
+    },
+    {
+      "signature": "Funcdata::new_varnode_in_space(size, space, addr)",
+      "source": "src/funcdata.rs:646"
+    }
+  ],
+  "coverage": {
+    "locked_register_formals": "MATCH",
+    "locked_register_only_trailing_synthetic_placeholder": "MATCH",
+    "locked_first_stack_formal_and_natural_placeholder": "MATCH",
+    "locked_varargs_fixed_positions_and_synthetic_placeholder": "MATCH",
+    "unlocked_input_and_output_activation": "MATCH",
+    "paramactive_flags_trials_passes_and_maxpass": "MATCH",
+    "call_input_order_locations_flags_and_definitions": "MATCH",
+    "ordinary_bank_seed_same_coarse_location_and_order": "MATCH",
+    "get_trial_for_input_varnode_before_and_after_placeholder": "MATCH",
+    "architecture_addrspace_pointer_identity": "UNTESTED",
+    "cross_architecture_and_overlay_identity": "UNTESTED",
+    "generic_new_varnode_space_and_property_tail": "MISMATCH",
+    "func_link_output_nonvoid_existing_output_extension_and_error_paths": "UNTESTED",
+    "non_scalar_multi_piece_join_and_hidden_return_storage": "UNTESTED"
+  },
+  "residuals": [
+    {
+      "todo_id": "ADDRESS-0001",
+      "status": "UNTESTED",
+      "detail": "The Ghidra side compares complete Address values carrying Architecture-owned AddrSpace pointers. The Rust fixture deliberately compares the production split AddressSpace enum plus offset because formal/trial/CALL storage is not uniformly represented by the same tagged Address object. It therefore cannot prove full Address identity, cross-Architecture isolation, overlay identity, or cross-thread SpaceTag behavior."
+    },
+    {
+      "todo_id": "VARNODE-0001",
+      "status": "UNTESTED",
+      "detail": "The ordinary explicit-space bank seed proves only same-side coarse location order and selected object-alias observations. It does not prove the complete VarnodeBank canonical-address, lookup, xref, overlay, or cross-Architecture identity contract for every varnode construction path."
+    },
+    {
+      "todo_id": "FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001",
+      "status": "MISMATCH",
+      "detail": "Rugra's generic Funcdata::new_varnode and VarnodeBank::create paths still default spaceless Address storage to RAM, and new_varnode_in_space does not prove the full Ghidra newVarnode localmap queryProperties/setSymbolProperties/property-tail contract. This fixture checks the Action-specific explicit-space path, basic flags, and location-bank ordering only; SymbolEntry/high/property wiring remains outside the matched projection."
+    },
+    {
+      "todo_id": "CALLSPEC-0001",
+      "status": "UNTESTED",
+      "detail": "ActionFuncLink::apply also calls funcLinkOutput. Locked-void and unlocked output-activation effects are visible here, but existing CALL outputs, unique-output LowlevelError, non-void register/stack outputs, calculated booleans, assumedOutputExtension, PIECE/SEXT/ZEXT insertion, and output aliasing are not covered."
+    },
+    {
+      "todo_id": "FSPEC-0002",
+      "status": "UNTESTED",
+      "detail": "Only scalar int8 prototype inputs are assigned. Multi-piece, join, hidden-return, indirect-storage, endian, zero-size, and assignment-error partial-state paths remain outside this fixture."
+    },
+    {
+      "todo_id": "CSPEC-MODELRULE-DECODE-0001",
+      "status": "UNTESTED",
+      "detail": "The fixture uses the locked x86-64 GCC __stdcall model but does not exercise ParamList model-rule decode, rule ordering, non-standard assignment strategies, or their error and partial-mutation paths."
+    },
+    {
+      "todo_id": "TYPEFACTORY-ARC-IDENTITY-0001",
+      "status": "UNTESTED",
+      "detail": "Scalar int8 types do not prove Architecture-owned TypeFactory canonical identity for non-scalar, joined, hidden-return, or model-assigned datatype graphs."
+    }
+  ],
+  "capture": {
+    "exit_code": 0,
+    "records": 101,
+    "bytes": 9268,
+    "stdout_sha256": "6cd6ad2eff1d290c7906c6b40cd1ce7d2c818a0939f655ef6260d16b99ef4c0f",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "runner": {
+    "path": "tools/run_action_funclink_input_oracle.sh",
+    "modes": ["both", "--ghidra-only", "--validate-only"],
+    "policy": "Mode 0755 immutable-FD self-read; locked tag/tree/blob checks; dirty-oracle rejection; hash-pinned source/spec/BFD inputs; isolated base-plus-overlay snapshot; offline Cargo; raw byte diff with capture hash validation."
+  }
+}

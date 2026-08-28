@@ -1430,23 +1430,17 @@ impl Heritage {
                             .get_call_specs(i)
                             .map(|fc| {
                                 fc.active_output
-                                    .as_ref()
-                                    .map(|active| {
-                                        active.which_trial_in_space(space, Address::new(off), size)
-                                            >= 0
-                                    })
-                                    .unwrap_or(true)
+                                    .which_trial_in_space(space, Address::new(off), size)
+                                    >= 0
                             })
                             .unwrap_or(true);
                         if !already_trial {
                             if let Some(mut fc) = fd.get_call_specs_mut(i) {
-                                if let Some(active) = &mut fc.active_output {
-                                    active.register_trial_in_space(
-                                        space,
-                                        Address::new(off),
-                                        size,
-                                    );
-                                }
+                                fc.active_output.register_trial_in_space(
+                                    space,
+                                    Address::new(off),
+                                    size,
+                                );
                             }
                             possibleoutput = true;
                         }
@@ -1498,22 +1492,17 @@ impl Heritage {
                         .get_call_specs(i)
                         .map(|fc| {
                             fc.active_input
-                                .as_ref()
-                                .map(|active| {
-                                    active.which_trial_in_space(space, Address::new(off), size) >= 0
-                                })
-                                .unwrap_or(true)
+                                .which_trial_in_space(space, Address::new(off), size)
+                                >= 0
                         })
                         .unwrap_or(true);
                     if !already_trial {
                         if let Some(mut fc) = fd.get_call_specs_mut(i) {
-                            if let Some(active) = &mut fc.active_input {
-                                active.register_trial_in_space(
-                                    space,
-                                    Address::new(off),
-                                    size,
-                                );
-                            }
+                            fc.active_input.register_trial_in_space(
+                                space,
+                                Address::new(off),
+                                size,
+                            );
                         }
                         // cc:1502-1504: vn = newVarnode(size, addr);
                         // setActiveHeritage; opInsertInput(op, vn, numInput()).
@@ -2780,9 +2769,8 @@ impl Heritage {
             .get_call_specs(fc_idx)
             .map(|fc| {
                 fc.active_input
-                    .as_ref()
-                    .map(|active| active.which_trial_in_space(space, trunc_addr, size) >= 0)
-                    .unwrap_or(true)
+                    .which_trial_in_space(space, trunc_addr, size)
+                    >= 0
             })
             .unwrap_or(true);
         if already_trial {
@@ -2825,9 +2813,8 @@ impl Heritage {
         fd.op_insert_before(&subpiece_op, &call_op);
         // cc:1231: active->registerTrial(truncAddr, vData.size)
         if let Some(mut fc) = fd.get_call_specs_mut(fc_idx) {
-            if let Some(active) = &mut fc.active_input {
-                active.register_trial_in_space(space, trunc_addr, v_size);
-            }
+            fc.active_input
+                .register_trial_in_space(space, trunc_addr, v_size);
         }
         // cc:1232: opInsertInput(op, vn, op->numInput())
         let num_in = call_op.0.read().unwrap().num_input();
@@ -2973,9 +2960,8 @@ impl Heritage {
             .get_call_specs(fc_idx)
             .map(|fc| {
                 fc.active_output
-                    .as_ref()
-                    .map(|active| active.which_trial_in_space(space, trunc_addr, size) >= 0)
-                    .unwrap_or(true)
+                    .which_trial_in_space(space, trunc_addr, size)
+                    >= 0
             })
             .unwrap_or(true);
         if already_trial {
@@ -2991,9 +2977,8 @@ impl Heritage {
         );
         // cc:1307: active->registerTrial(truncAddr, vData.size)
         if let Some(mut fc) = fd.get_call_specs_mut(fc_idx) {
-            if let Some(active) = &mut fc.active_output {
-                active.register_trial_in_space(space, trunc_addr, v_size);
-            }
+            fc.active_output
+                .register_trial_in_space(space, trunc_addr, v_size);
         }
         true
     }

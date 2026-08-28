@@ -1871,3 +1871,15 @@ docs/TODO_BOARD.md GOTO-LABEL-UNPRINTED-0001 残差登记。
 （blockaction.cc:1840 第二遍）→ ruleBlockCat 合并，得到
 `List[If[Condition(Or), D], C]`——Condition 位于 List 子内的 If 里，需两级
 下钻才能命中。纯测试辅助代码，无运行时行为变化。
+
+## 2026-08-28：ActionFuncLink 显式空间 Varnode 适配
+
+`new_varnode_in_space(size, space, addr)` 是 `ADDRESS-0001` 过渡期胶水：它让
+`funcLinkInput` 创建的非 stack formal 保留当前 coarse space，并继续执行
+assign-high、lane check 与已接线的属性 flag 投影。锁定 fixture 只证明该
+Action-specific 路径的 `(space, offset, size)`、对象顺序和基础 flags。
+
+这不是完整 `Funcdata::newVarnode` 证明。通用 `new_varnode` 仍会把 spaceless
+Address 当作 RAM，且 localmap `queryProperties`、live `SymbolEntry`、
+`setSymbolProperties` 与 HighVariable symbol 反向连接尚未闭合，登记为
+`FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001`；模块保持 L2。

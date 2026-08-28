@@ -6503,7 +6503,7 @@ mod tests {
         let void_t = factory.get_type_void_result();
         let in_types = vec![int_t.clone(), int_t];
         let sig = crate::fspec::PrototypePieces {
-            out_type: Some(void_t.as_ref()),
+            out_type: Some(&void_t),
             in_types: &in_types,
             first_var_arg_slot: -1,
         };
@@ -6516,7 +6516,7 @@ mod tests {
         ];
         let void_t2 = factory.get_type_void_result();
         let sig2 = crate::fspec::PrototypePieces {
-            out_type: Some(void_t2.as_ref()),
+            out_type: Some(&void_t2),
             in_types: &in_types2,
             first_var_arg_slot: -1,
         };

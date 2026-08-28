@@ -361,3 +361,10 @@ core-type 位向指针传播。已改为 `flags & CORETYPE`；工厂核心类型
   `Scope::find_container` 签名变化传入空 usepoint（Rugra 的 null
   usepoint = `Address::new(0)`），语义不变（addrtied 符号空 uselimit
   恒 in-use）。
+
+## 2026-08-28：TypeCode prototype 返回类型 Arc 传递
+
+`TypeCode::set_prototype_pieces` 现在从借用的 `PrototypePieces::out_type`
+克隆 `Arc`，保留原返回 Datatype 身份，不再构造深拷贝对象。这是调用约定模型
+carrier 的身份修正；完整 TypeCode prototype、null output 和 dependency 行为
+没有新增双侧门禁，整体仍为 L2/MISMATCH。

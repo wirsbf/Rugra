@@ -151,3 +151,10 @@ ANN-G maps the shared Rust constructor body `CParse::new_impl` to the locked
 `CParse::CParse` definition at `grammar.cc:2585`. This is annotation-only and
 does not change parser behavior or alignment status.
 <!-- annotation-pass: 2026-07-22 -->
+
+## 2026-08-28：FunctionModifier 返回类型身份
+
+`PrototypePieces::out_type` 现在借用 `Arc<Datatype>`，因此
+`FunctionModifier::modType` 把同一返回类型句柄交给模型分配，而不再深拷贝
+Datatype。这里仅是跨模块 carrier identity 修正；没有新增 grammar 双侧
+fixture，递归下降/bison 与 Architecture 残差不变，整体仍为 L2/MISMATCH。

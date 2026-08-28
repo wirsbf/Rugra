@@ -1216,3 +1216,11 @@ Override/重启标志生效，而非改 `HeritageInfo`。语义链：
 同步传 `fd`。同步修正引注行号：`setDeadCodeDelay`=cc:2815（体 2815-2822，
 `delay < info->delay` 时 panic 镜像 LowlevelError）、`getDeadCodeDelay`
 =cc:2803、`seenDeadCode`=cc:2791。
+
+## 2026-08-28：永久 ParamActive 容器调用点适配
+
+`guard_calls`、input/output overlap guard 及 stack-output guard 已适配
+`FuncCallSpecs` 永久嵌入的 `active_input`/`active_output`；active 状态继续由
+独立 boolean 门控。这个改动只消除了 Option 容器与 Ghidra 对象生命周期的
+差异，没有为 Heritage 的 range/alias/SSA 分支新增 oracle 证据，模块状态保持
+L2/MISMATCH。

@@ -640,6 +640,24 @@ impl Funcdata {
         vn
     }
 
+    // RUGRA-GLUE: explicit-space adapter for Ghidra's Address-valued
+    // Funcdata::newVarnode; ADDRESS-0001 keeps space and offset split across
+    // Rugra until the entire comparison domain migrates atomically.
+    pub(crate) fn new_varnode_in_space(
+        &mut self,
+        size: usize,
+        space: crate::space::AddressSpace,
+        addr: crate::address::Address,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let vn = self.vbank.create_with_space(size, space, addr.as_u64());
+        let _ = self.assign_high(&vn);
+        if size >= self.min_laned_size as usize {
+            self.check_for_laned_register(size, space, addr);
+        }
+        crate::heritage::Heritage::apply_new_varnode_flags(self, &vn);
+        vn
+    }
+
     // Ghidra: funcdata_varnode.cc:340 Funcdata::setInputVarnode
     /// Promote a varnode to a function input. Faithful to
     /// `Funcdata::setInputVarnode` (funcdata_varnode.cc:340-373).
@@ -10213,24 +10231,17 @@ impl Funcdata {
             let fc = fc.read().unwrap();
             if fc.is_input_active() {
                 // cc:1784: curtrial = fc->getActiveInput()->getTrialForInputVarnode(j).
-                if let Some(active) = fc.get_active_input() {
-                    // Rugra's ParamActive lacks getTrialForInputVarnode; we
-                    // approximate by indexing trials by slot (trial index is
-                    // slot-1 since slot 0 is the call target).
-                    let trial_idx = (j as usize).saturating_sub(1);
-                    if trial_idx < active.get_num_trials() {
-                        let trial = active.get_trial(trial_idx);
-                        if trial.is_checked() {
-                            // cc:1786-1787: checked & active → reject.
-                            if trial.is_active() { return false; }
-                            return true; // checked & inactive → keep.
-                        }
-                        // cc:1789-1790: not yet checked → reject if alt path
-                        // valid; RUGRA-GAP: TraverseNode::isAlternatePathValid
-                        // not ported, so we conservatively keep the trial.
-                        return true;
-                    }
+                let trial = fc
+                    .get_active_input()
+                    .get_trial_for_input_varnode(j);
+                if trial.is_checked() {
+                    // cc:1786-1787: checked & active → reject.
+                    if trial.is_active() { return false; }
+                    return true; // checked & inactive → keep.
                 }
+                // cc:1789-1790: not yet checked → reject if alt path
+                // valid; RUGRA-GAP: TraverseNode::isAlternatePathValid
+                // not ported, so we conservatively keep the trial.
                 return true;
             }
         }
