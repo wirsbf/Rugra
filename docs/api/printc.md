@@ -1,5 +1,18 @@
 # `printc.rs` API Reference
 
+## 2026-08-28：BlockCopy 入口地址解析
+
+PrintC 的 label discovery、pending-label backpatch、graph code start、
+`emit_any_label` 与 BlockIf goto-target 路径现通过 `flow_entry_address` 取得入口：
+先沿 `front_leaf` 到 `BlockCopy`，再经 `subBlock(0)` 读取原始 Basic 的地址。
+这恢复了真实 `BlockCopy` 上线后的入口地址语义，不再依赖过去的 Basic stand-in。
+
+完整 `FlowBlock::getEntryAddr`、真实 parent/next-flow、BlockGoto/MultiGoto 和
+异常路径仍未等价，当前状态为 `MISMATCH/UNTESTED`；该 helper 不是完整 PrintC
+函数行为 `MATCH` 证明。当入口解析失败时，部分现有路径仍以
+`unwrap_or(0)` 生成零地址 sentinel；残差继续绑定
+`GOTO-LABEL-UNPRINTED-0001` / `PRINTC-GOTOPRINTS-0001`。
+
 ## 2026-08-28：结构化条件按 FlowBlock 类型分派（GETSTR-PRINTC-STRUCTCOND-0001）
 
 `emitBlockIf` 的 condition 不再抽取/拼接条件文本，而是像 Ghidra
@@ -23,11 +36,12 @@ FLAT+NOFALLTHRU tail 三类确定残差；有出边的 `nextInFlow`、markup、�
 else/if-goto、异常和其余结构子类型还未由该夹具覆盖。PrintC 继续保持 L2。
 
 真实 GetStr 已恢复独立的 `free(*string)` 语句；剩余
-`if (value != 0) { if (*value != 0) ... }` 是上游未形成
-`BlockCondition`：当前 `build_copy` 仍创建 `BlockBasic` 且丢失边槽/label/
-copymap，随后 `ruleBlockOr` 在 `is_complex` 守卫拒绝折叠。输出层不会用文本
-合并掩盖这个结构差异；后续由 `BLOCK-BUILDCOPY-MIRROR-0001` 与
-`GETSTR-PRINTC-STRUCTCOND-0001` 的上游残差继续闭合。
+`if (value != 0) { if (*value != 0) ... }` 是上游尚未形成
+`BlockCondition`。2026-08-28 已修正 `buildCopy` 的真实 Copy、边槽/label 与
+copymap 地基，但最终 GetStr 仍在后续 `identifyInternal/ruleBlockOr/isComplex`
+结构化闭包出现差异。输出层不会用文本合并掩盖这个结构差异；后续继续绑定
+`BLOCK-BUILDCOPY-MIRROR-0001` 的 overall MISMATCH 与
+`GETSTR-PRINTC-STRUCTCOND-0001` 上游残差。
 
 ## 2026-08-27：CALLIND 函数指针形渲染（PRINTC-CALLIND-PTR-0001）
 

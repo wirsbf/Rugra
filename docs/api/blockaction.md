@@ -1,6 +1,27 @@
 # `blockaction.rs` API Reference
 
-**状态**: 已核对（当前有效，2026-08-27 TRI2-STRUCT-IRREDUCIBLE-TRACE-0001 六轮审计）
+**状态**: 已核对（当前有效，2026-08-28 BLOCK-BUILDCOPY-MIRROR-0001）
+**2026-08-28 追加（真实 BlockCopy/buildCopy）**: `ActionBlockStructure::apply`
+改为调用 `BlockGraph::build_copy`；不再清空结构图、创建 Basic 替身或重放边。
+复制后的 incoming/outgoing 顺序、label、reverse slot、idom、index、numdesc、
+flags 与源 copymap 均按 block.cc:1681-1697/1925-1938 保留。边 helper 已改走
+FlowBlock 共享向量，主管线可直接处理 Copy。完整状态仍因 parent 所有权残差为
+MISMATCH；详见本文件“buildCopy 正式接线”节。
+
+**2026-08-28 收口（主管线入口与 loop-label 生命周期）**：
+`ActionBlockStructure::apply` 现严格执行 once-guard →
+`install_switch_defaults` → `build_copy` → `collapse_all` → 累加
+`getChangeCount`，删除了 oracle 不存在的拓扑指纹重建及
+Unreachable/DeterminedBranch 前置清理。`CollapseStructure::order_loop_bodies`
+只消费源 basic CFG 经 `buildCopy` 复制的 back/tree/irreducible/default 标签，
+不再对结构图重跑 `structure_loops`；这保持 blockaction.cc:1126-1188、
+1877-1892、2169-2184 的调用顺序。完整 Action/模块仍为 `MISMATCH`，因为
+`identify_internal` 的 parent/顶层列表/DEAD 模型等后续阶段尚未等价。
+`ActionBlockStructure::count` 是持久 Action 计数器：每次真正执行
+collapse 后累加 `CollapseStructure::getChangeCount()`；由 Rust 适配层
+`take_count_delta` 把这笔增量交给 `Action::perform` 的 `ActionState`。
+与 oracle 一样，`apply` 自身的返回值仍固定为 `0`，不把累计量
+当作返回值或 repeat-apply 信号。
 **2026-08-27 追加（round 6 — TraceDAG/不可约环审计）**: 在 oracle `e40ed13014025f82488b1f8f7bca566894ac376b` 上逐行复核 `blockaction.cc:499-1014`（TraceDAG）及 `:1124-1277`（LoopBody/updateLoopBody/selectGoto）。oracle 没有 `splitDag`/duplicate 系列 API；不可约环处理是 `pushBranches` 的 `checkRetirement`→`checkOpen`→`selectBadEdge` 单边循环。当前树全量 curl E2E：124/124，`defects=0`、`numbering=0`、skeleton diff=2598；`selectGoto exhausted` 仅 `getparameter.constprop.0` 1 次（此前 8 函数残差中的其余 7 已清零）。该函数耗尽现场为 138 块/51 非孤立/86 DEAD，仍无 `BlockSwitch`（golden 1 switch/48 case）；TraceDAG 未触发迭代上限。结论：剩余差异是 jumptable 恢复及 block 边界/组合块消费，不是 TraceDAG 非终止；block.rs 由另一 agent 持有，本轮不修改。
 **2026-08-27 追加（round 5 — identify_internal 边迁移补 BlockSwitch 臂）**: `identify_internal` 的边界边安装 downcast 链补 `BlockSwitch` 臂——Ghidra `newBlockSwitch`（block.cc:1913）与所有组合块一样经 `identifyInternal(ret,cs)` 调 `selfIdentify()`（block.cc:962/895-931），switch 组合块的 incoming/outgoing = dispatch 的外部入边 + case/exit 边界出边。Rugra 侧各具体块类型各自持有 incoming/outgoing 向量，缺臂 = 每个 BlockSwitch 组合块 sizeIn==0/sizeOut==0（单侧边：pred 保留 out 半边、exit 保留 in 半边）→ ruleBlockCat 拒绝链（cc:1300 `outblock->sizeIn() != 1`）→ selectGoto 在残差 3 块图上 cc:1275 exhausted。E2E：exhausted **2→1**（glob_set 清零；残 getparameter.constprop.0），defects=0/numbering=0，skeleton 2611→2598，124/124 exit0/0 panic。
 **2026-08-27 追加（round 4 — 删除子句入边门的自创 switch_case_indices 臂）**: `count_non_structural_in_edges` 删除 `switch_case_indices.contains(pred)` "structural" 臂——Ghidra 的守卫是纯 `clauseblock->sizeIn() != 1`（blockaction.cc:1391/1428 等），无 cascade 成员概念。自创臂把 refreshSwitchCases 的 CBRANCH 级联标记（无 oracle 对应物）计为 structural，使级联 walker 触碰过的每条 else-if 链被 proper_if/if_else/do_while 拒绝——链不可折叠，selectGoto exhausted。E2E curl：exhausted 8 fns → 2（getparameter.constprop.0/glob_set），defects=0/numbering=0，skeleton 3050→2611，输出归档 result/curl_cur.c。
@@ -33,7 +54,7 @@ E2E（curl 124 fn，fast-release）：exit 0 / 0 panic，defects=0 / numbering=0
 5. 三条规则补齐 oracle 守卫/取反：`try_rule_while_do` 实现 cc:1538-1542 `if ((slot==0)!=overflow) negateCondition`（旧 `negated = slot==1` 方向反且 `let _ = negated` 丢弃——while 守卫反相根因）；`try_rule_do_while` 补 cc:1566-1569 `if slot==0 negateCondition`；`try_rule_if_goto` 对齐 ruleBlockGoto cc:1450-1475（goto 落在 edge0 时 negateCondition + 交换 GOTO_EDGE 镜像 flag；删除 CBRANCH op 门槛——oracle 纯拓扑，BlockCondition 等结构块同样可被 if-goto 包裹；negated 改 false，翻转在数据层）。
 6. `try_rule_proper_if` 补 cc:1386-1389/1395-1396 守卫（自环、isGotoOut×2、isDecisionOut、子句 isGotoOut）；`try_rule_while_do` 补 cc:1526-1530；新增类型无关 `out_edge_is_goto`/`out_edge_is_decision`（trait 默认 is_goto_out 只对 BlockBasic 实现）。删除 collapseInternal 第二趟的自创 `has_switch` gate（cc:1840 无条件跑 ruleBlockIfNoExit）。
 7. `collapse_internal`/`try_rule_cat` 删除 Basic/Copy 类型 gate（cc:1781-1833/cc:1284 对所有图成员跑规则——结构块是一等规则主体，钻石 if/else 现可 cat 合并进 list）。
-8. `try_rule_switch` 真正安装 BlockSwitch（对齐 newBlockSwitch block.cc:1904-1919：identifyInternal 消费 dispatch+cases、清 f_switch_out；旧代码建完即丢，`collapse_switches` 是唯一真实安装器）；`cases` 只装 body（control 独立存），与 case_values/printc 对齐；`build_copy` 重建 f_switch_out 不变量（block.cc:2286，inject_raw_ops 路径漏设）。
+8. `try_rule_switch` 真正安装 BlockSwitch（对齐 newBlockSwitch block.cc:1904-1919：identifyInternal 消费 dispatch+cases、清 f_switch_out；旧代码建完即丢，`collapse_switches` 是唯一真实安装器）；`cases` 只装 body（control 独立存），与 case_values/printc 对齐；其中“build_copy 扫描 BRANCHIND 重建 f_switch_out”是 2026-08-24 的历史补偿，已于 2026-08-28 删除：oracle 只复制源 flags，并在 out-degree>2 时强制该位。
 9. `identify_internal` 边界修复（部分）：install↔consumed 边按 internal 处理 + 捕获 install 块外部出边（WhileDo false-exit 不再丢失）。残余边界/去重差异 → BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001。
 10. 双侧 fixture：`tests/oracle/blockstruct_goto_cascade_1204.{cc,rs,metadata.json}` + `tools/run_blockstruct_goto_cascade_oracle.sh`（6 case：级联收敛/条件体恢复/while+dowhile 守卫方向/DEAD 判定/标签提升 goto 目标）。核心可观测 MATCH（goto 目标、flip 位、whiledo/condition/properif 树形）；残余 110 行 diff 全部归因 identify_internal 边界模型 → BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001；switch 首例标签打印缺口 → PRINTC-SWITCH-EMIT-0001（funcdata test_switch_case_structuring 断言绑定）。
 11. 单测：`cargo test --lib -- --test-threads=1` 失败集与基线 ba910ed 完全一致（comment/infer_params/type_propagation，非本域）。
@@ -46,7 +67,7 @@ E2E（curl 124 fn，fast-release）：exit 0 / 0 panic，defects=0 / numbering=0
 **2026-07-16 修复（B8）**: `collapse_conditions` 改为 do-while fixpoint 循环（对齐 Ghidra `collapseConditions` blockaction.cc:1854-1865）。此前是单遍 try_rule_or，错过长度>2 的 OR 链（如 `((a||b)||c)` 需 2 轮）。现 `loop { change=false; for i in 0..size { if try_rule_or(i) { change=true } } if !change break }`。另删除自创的 `collapse_bool_conditions`（ruleBlockOr 的手搓重复实现，phase1 重复调用两次），改为 delegate stub。
 **2026-07-16 修复（B2）**: 新增 `new_block_condition`/`new_block_if`/`new_block_if_else` 工厂方法（对齐 Ghidra `BlockGraph::newBlockCondition` block.cc:1780 / `newBlockIf` :1822 / `newBlockIfElse` :1840）。此前各 `try_rule_*` 内联手搓 BlockCondition/BlockIf 并各自调 identify_internal，边继承不一致。工厂统一封装：结构体构建 + identify_internal + forceOutputNum + update_switch_case_reference + change_count。~~关键：`new_block_condition` 用 CBRANCH-aware 的 `get_false_out(cbranch)` 判定 opc（Rugra 边约定与 Ghidra 相反：edge 1=false 当 BOOLEAN_FLIP unset，而 Ghidra edge 0=false）。~~ **2026-08-23 勘误（CONDEXE-TRUEOUT-0002）**：所谓"相反边约定"不成立——Rugra 流构造 out[0]=fallthru 与 Ghidra 相同；`get_false_out` 已改纯位置（block.hh:299），`opc = (out[0]==b2) ? Or : And` 与 block.cc:1785 一一对应。注意：funcdata.rs 的 `test_bool_condition_folding_and_pattern` 以旧（错误）极性断言 And，其图（out0→第二条件块）按 Ghidra 语义折为 Or，该测试需随租约迁移重断言。另修 identify_internal 的 downcast 列表缺 BlockCondition（此前 try_rule_or 必须手装的原因）。已转换 4 个调用点：try_rule_or→new_block_condition、try_rule_proper_if/if_no_exit→new_block_if、try_rule_if_else→new_block_if_else。
 **2026-07-16 修复（B1）**: `try_rule_or` 现在实际调用 `negate_condition`（对齐 Ghidra `ruleBlockOr` blockaction.cc:1358-1365）。此前函数体含描述 negateCondition 逻辑的注释但从未调用——BlockCondition 节点以错误的 true/false 边极性创建，是 5 步 collapseAll 重写被回退时 18 处回归的根本原因。现按 Ghidra：`ii==1` 时 `block.negate_condition(true)`（让 orblock 成为 bl 的 true-out → OR 模式），`j==0` 时 `orblock.negate_condition(true)`（让 clauseblock 成为 orblock 的 true-out）。BlockBasic::negate_condition（block.rs:781）翻转 CBRANCH 的 BOOLEAN_FLIP 并 swap_edges，等价 Ghidra block.cc:2351-2358。bool_op 判定移到 negate 之后。
-**2026-08-23 修复（GETSTR-ZERODIFF-A 域，条件极性/结构收敛）**: 四项对齐修复：① `ActionBlockStructure::apply` 返回 NO_CHANGE（对齐 blockaction.cc:2183-2185 `count += …; return 0`；旧返回 CHANGE 喂给 repeatapply 循环）；staleness 信号由 op-count 改为 CFG 拓扑指纹 `(块数, 总出边数)`——op-count 会因 RuleCondNegate 插删 op 误判 stale，每轮重建重放 ruleBlockOr 的 negateCondition toggle，与 RuleCondNegate 物化乒乓死循环（GetStr 22774 轮实测）。拓扑指纹是 RUGRA-GLUE：oracle 无 staleness 检查（blockaction.cc:2173-2175 once-guard + 块变更 action 显式 clear 结构，coreaction.cc:4560/ruleaction.cc:5457；Rugra 侧缺显式 clear 架构）。② `try_rule_proper_if`/`try_rule_if_no_exit` 的 `negated = dir == 0`（对齐 blockaction.cc:1413-1415 / 1510-1512 `if (i==0) negateCondition(true)`——clause 在 out[0]=fallthrough 侧需取反；旧 `dir == 1` 极性反，被旧 PreferComplement 的无条件翻转掩盖）。③ 删除 `try_rule_if_no_exit` 的自创 cascade-member guard（commit 290d060，oracle ruleBlockIfNoExit cc:1491-1506 无此检查，仅有 isSwitchOut 子句检查）：该 guard 误杀 ruleBlockOr 折叠后的 BlockCondition 复合块（其 in 边仍指向已消费 DEAD CBRANCH 前驱），而 ruleBlockIfNoExit 正是把该复合块与退出子句包成 if 的环节（GetStr 短路钻石的 `if (A && B)` 来源）。④ 同步 funcdata.rs `test_bool_condition_folding_and_pattern` 断言（BlockCondition(Or) 现可被 BlockIf 包裹）。
+**2026-08-23 历史记录（2026-08-28 已部分废止）**: 当时的拓扑指纹重建已删除；当前严格采用 blockaction.cc:2173-2175 的非空结构 once-guard，CFG mutator 通过 `structureReset` 清结构。该轮其余条件极性与 guard 记录保留作历史证据。
 **2026-07-02 修复（R15）**: 禁用 `collapse_cbranch_cascades`（call site 注释化）。该函数是凭空捏造逻辑，Ghidra 无对应——Ghidra ruleBlockSwitch 只在 isSwitchOut()（由 BRANCHIND 独占设置）触发，从不把 CBRANCH if/else-if 链转 switch。Rugra 这么做产生 ~16/18 假 switch（curl 18 vs Ghidra 2）。禁用后 curl switch 18→0（真 switch 表因 jumptable 恢复坏 R19/R20 也无，需后续修），行数 1567→1281。CBRANCH 链现经 try_rule_* 结构化为嵌套 BlockIf（Ghidra collapseInternal 做法）。
 
 > 监控日志：collapse_all 结尾输出 `[COLLAPSE] {name} FINAL basic={} dead={} structured={}`，
@@ -793,14 +814,15 @@ out-edge 仍持有旧块的 Arc（Arc identity 不变），导致新结构化块
 
 ### 2026-07-01（管线改造）：Action apply &self→&mut self 连锁
 
-### 2026-07-01（续）：Dead-flow Actions 作为 pre-structuring pass
-ActionUnreachable + ActionDeterminedBranch 在 ActionBlockStructure::apply 开头运行（build_copy 之前）。build_dom_tree 在删除后重新索引块。ActionDoNothing/RedundBranch 实现就位但未接入（删除测试预期的块）。
+### 2026-07-01（续）：Dead-flow Actions pre-pass（历史，2026-08-28 已删除）
+该 pre-pass 不存在于 Ghidra `ActionBlockStructure::apply`，现已从生产入口移除；
+CFG 修改由对应 Action/Funcdata mutator 自己调用 `structureReset`。
 
 ### 2026-07-01（续 2）：BlockWhileDo for-loop 字段 + printc for 发射
 BlockWhileDo 加 for_init/for_iter 字段（对齐 Ghidra iterateOp/initializeOp）。printc WhileDo 发射：有 for_init+for_iter → `for(init;cond;iter)`，否则 `while(cond)`。
 
-### 2026-07-01（续 3）：ActionBlockStructure sblocks 失效重建
-ActionBlockStructure 加 last_op_count 字段。每次 apply 时检查 current op count vs last：不同则 clear sblocks 重建（防止 bblocks 变化后 sblocks 不同步）。mainloop repeatapply 仍不启用：sblocks 重建后 printc 的 emit_block_structured 在新结构上仍递归溢出。修复 printc 迭代化是前置条件。
+### 2026-07-01（续 3）：sblocks 指纹重建（历史，2026-08-28 已删除）
+当前不保存 op-count 或 topology fingerprint；严格使用非空结构 once-guard。
 
 ### 2026-07-03：修正 collapse_cbranch_cascades 的错误注释
 - 该函数的注释曾错误声称 "Corresponds to Ghidra's ruleBlockSwitch"，但 Ghidra `ruleBlockSwitch`（blockaction.cc:1649）只对 `isSwitchOut()` 块触发（由 CPUI_BRANCHIND 设置 f_switch_out），从不从 CBRANCH if/else-if 链造 switch。此函数是 fabricated logic（无 Ghidra 对应），已修正注释明确说明。函数仍禁用（:695）。**未改名**为 rule_block_switch——那会给 fabricated logic 披上 Ghidra 对应的外衣。
@@ -838,6 +860,11 @@ MATCH）。本模块的私有 TraceDAG 变体（`src/blockaction.rs:2369` 起）
 
 ### 2026-08-19：私有 `find_spanning_tree` 迁移到公共 port（`BLOCK-INDEX-WIRE-0001` 完成）
 
+> **2026-08-28 纠正**：本节以下内容记录当时的补偿实现。当前
+> `build_copy` 已创建真实 `BlockCopy` 并原样复制 edge label/index/numdesc；
+> `order_loop_bodies` 不再重算 spanning tree 或 `structure_loops`，而是像
+> `CollapseStructure::orderLoopBodies` 一样只消费复制后的标签。
+
 删除 blockaction.rs 的私有位置索引变体（原 :2369 起，局部 HashMap DFS、只写
 out-half 边 label、不写 index/visitcount/numdesc/copymap、不重排 blocks），
 `order_loop_bodies` 改调公共 `BlockGraph::find_spanning_tree`
@@ -846,11 +873,12 @@ out-half 边 label、不写 index/visitcount/numdesc/copymap、不重排 blocks�
 镜像、每遍 wipe 全部边 flag（cc:1045）、rootlist 首尾 swap（cc:1031-1035/
 1114-1116/1129-1133）、两遍 extraroots。
 
-Oracle 依据：`orderLoopBodies` 本身从不计算树——StructureGraph 路径在
+当时的 Oracle 依据：`orderLoopBodies` 本身从不计算树——StructureGraph 路径在
 CollapseStructure 前一步跑 `structureLoops`（ghidra_process.cc:354），进程内
 ActionBlockStructure 路径经 `newBlockCopy` 继承同一批 label/index/numdesc
-（block.cc:1685-1691）。Rugra `build_copy` 造全新无边 label 的边，故在
-`order_loop_bodies` 内以公共 port 重算树，重现 oracle collapseAll 的入口状态。
+（block.cc:1685-1691）。旧 Rugra `build_copy` 造全新无边 label 的边，故当时在
+`order_loop_bodies` 内以公共 port 重算树；该补偿已由 2026-08-28 的真实
+`BlockCopy/buildCopy` 接线删除。
 树调用后立即把全图 visitcount 清 0，对齐 Ghidra `collapseAll` 头部
 `graph.clearVisitCount()`（blockaction.cc:1883，oracle 在 orderLoopBodies 前
 一条语句执行）。
@@ -868,7 +896,12 @@ oracle 路径（对最终图 fresh 计算）一致。
 
 ## 2026-08-23：order_loop_bodies 接线完整 structure_loops 驱动（BLOCK-CALCLOOP-0001）
 
-`CollapseStructure::order_loop_bodies` 的生成树重算点从裸
+> **历史实现，已于 2026-08-28 被替换**：对结构图重跑
+> `structure_loops` 并不符合 `ActionBlockStructure` 的生产路径。当前实现保持
+> `Funcdata::structureReset` 在 basic CFG 上生成的标签，经 `buildCopy` 原样复制，
+> 再由 `order_loop_bodies` 消费；不会二次清除或重排 default/back/tree 标签。
+
+当时，`CollapseStructure::order_loop_bodies` 的生成树重算点从裸
 `BlockGraph::find_spanning_tree(preorder, rootlist)` 升级为完整
 `BlockGraph::structure_loops(&mut rootlist)` 驱动（block.cc:2194-2215）。
 
@@ -881,7 +914,7 @@ irreduciblecount>0 时 calcLoop 的 f_loop_edge，cc:2211-2214），
 block.cc:1685-1691）把这些标签带入结构图；StructureGraph 控制台路径
 （ghidra_process.cc:352-355）则 buildCopy 后直接
 `structureLoops + calcForwardDominator` 再 CollapseStructure。Rugra 的
-`build_copy` 造全新（无标签）边，故在 order_loop_bodies 处对结构图重跑
+旧 `build_copy` 造全新（无标签）边，故当时在 order_loop_bodies 处对结构图重跑
 完整驱动——与两条 oracle 路径"CollapseStructure 消费 structureLoops 产物"
 的入口态等价。
 
@@ -979,19 +1012,22 @@ interior-goto 标记。
   的 oracle 规则序列为 ruleBlockOr → ruleBlockIfNoExit 包 D（cc:1840 第二
   趟）→ ruleBlockCat 合并 sink C，终态 List[If[Condition(Or), D], C]（旧断
   言只搜一层，恰好匹配旧 bug 造成的 Condition 直接 List 子节点形态）。
-## build_copy 活动视图接线（TRI2-STORESPLIT-WHOLESTRUCT-0001，2026-08-26）
+## buildCopy 正式接线（BLOCK-BUILDCOPY-MIRROR-0001，2026-08-28）
 
-`build_copy` 不再快照 `ops`：镜像块经 `live_ops_source` 链接到原 bblock 的
-活动 op 列表（Ghidra `BlockGraph::buildCopy` block.cc:1925-1938 建立的
-BlockCopy 委托契约，block.hh:520-535）。BRANCHIND 的 f_switch_out 复算改从
-源块读取（镜像不再持有自己的 op 快照）。效果：ActionBlockStructure 之后由
-cleanup pool（RuleSplit* 等）插入的 STORE 对打印可见。
-- `build_copy`（block.cc:1933 newBlockCopy）：为每个结构图 BlockBasic 副本
-  挂 `source_basic` 回指针（BLOCK-BUILDCOPY-MIRROR-0001）。Ghidra
-  BlockCopy 包装器的 op 访问委托源活块（block.hh:533-534），Rugra 副本
-  借回指针让 get_ops 暴露源块当前 op：结构化时点的成员资格快照供
-  collapse 消费，此后所有后续读取（打印、ActionSetCasts 等结构化后
-  Action 插入）看到源块实时 op，与 BlockCopy 一致。
+`ActionBlockStructure::apply` 现在直接调用 `fd.sblocks.build_copy(&fd.bblocks)`；
+复制算法归属 `BlockGraph`，与 oracle 一致。旧私有 `build_copy`（清空目标、
+创建 BlockBasic、按出边顺序用 add_edge 重放、扫描 BRANCHIND 补 flag）已删除。
+
+新路径按 block.cc:1681-1697/1925-1938：保留目标 prefix；按源 list 原序追加
+真实 BlockCopy；原样复制两侧边向量、label、reverse slot、idom、index、
+numdesc 和 flags；visit-count 清零；仅在 out-degree>2 时补 switch-out；写回源块
+copymap 后只重映射新增 suffix 的端点/idom。主管线所有边修改 helper 改经
+FlowBlock 的共享 edge vectors，避免再次漏掉 Copy；loop 叶守卫接受 Basic|Copy。
+
+父指针仍是明确残差：当前 `Funcdata.sblocks` 是内联 BlockGraph，无法创建指向
+自身的稳定 Weak，故 fixture 的 covered projection 为 MATCH、整体为 MISMATCH。
+该限制绑定 `BLOCK-ADDGRAPH-SEMANTICS-0001`，不得把本次结果表述成完整 buildCopy
+函数或 Block 模块 L3。
 
 
 ### 2026-08-27：TRI2 round 4 — clause 入边门进一步回 oracle
@@ -1011,5 +1047,5 @@ cleanup pool（RuleSplit* 等）插入的 STORE 对打印可见。
 
 ## TRI2-CALLOUT-ASSIGN-0001 集成：build_copy 活 op 视图
 
-`build_copy` 同时建立 `live_ops_source`/`source_basic` 回指，并保留结构化阶段快照
-供 collapse 消费；后续 `get_ops` 读取源块活动列表，匹配 Ghidra BlockCopy 委托。
+当前由正式 `BlockCopy.original` 直接提供活动 op 视图；不再建立
+`live_ops_source`/`source_basic`，也不保留结构化阶段 ops 快照。

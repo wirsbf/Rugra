@@ -3278,6 +3278,33 @@ impl PrintC {
         }
     }
 
+    // RUGRA-GLUE: resolves Ghidra emitLabel's getFrontLeaf()->subBlock(0)->getEntryAddr chain through Rust trait objects
+    fn flow_entry_address(
+        block_arc: &std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >,
+    ) -> Option<u64> {
+        let direct_type = block_arc.read().unwrap().get_type();
+        let leaf = match crate::block::front_leaf(block_arc) {
+            Some(leaf) => leaf,
+            None if direct_type == crate::block::BlockType::Basic => block_arc.clone(),
+            None => return None,
+        };
+        let entry = {
+            let leaf_read = leaf.read().unwrap();
+            match leaf_read.get_type() {
+                crate::block::BlockType::Copy => leaf_read.sub_block(0)?,
+                crate::block::BlockType::Basic => leaf.clone(),
+                _ => return None,
+            }
+        };
+        let entry_read = entry.read().unwrap();
+        if entry_read.get_type() != crate::block::BlockType::Basic {
+            return None;
+        }
+        Some(entry_read.get_start_addr().as_u64())
+    }
+
     // RUGRA-GLUE: transports Ghidra's PrintLanguage::no_branch modifier as an explicit boolean through Rugra's structured-block dispatcher
     /// Emit a single block's operations, with dead code elimination.
     ///
@@ -3315,8 +3342,9 @@ impl PrintC {
             && matches!(block_arc.read().unwrap().get_type(),
                 crate::block::BlockType::Basic | crate::block::BlockType::Copy)
         {
-            self.discovery_block_starts
-                .insert(block_arc.read().unwrap().get_start_addr().as_u64());
+            if let Some(start) = Self::flow_entry_address(block_arc) {
+                self.discovery_block_starts.insert(start);
+            }
         }
         // GOTO-LABEL-UNPRINTED-0001 backpatch: a `goto` to this block's
         // start was already printed but its label is still undefined
@@ -3337,9 +3365,10 @@ impl PrintC {
             && matches!(block_arc.read().unwrap().get_type(),
                 crate::block::BlockType::Basic | crate::block::BlockType::Copy)
         {
-            let start = block_arc.read().unwrap().get_start_addr().as_u64();
-            if self.pending_goto_labels.remove(&start) {
-                self.emit_label_statement(start);
+            if let Some(start) = Self::flow_entry_address(block_arc) {
+                if self.pending_goto_labels.remove(&start) {
+                    self.emit_label_statement(start);
+                }
             }
         }
         // Route to RPN path if enabled
@@ -4065,7 +4094,10 @@ impl PrintC {
         if let Some(target) = goto_target {
             // printc.cc:2914-2917: a one-component BlockIf emits its formal
             // goto directly after the condition and has no structured body.
-            let target_addr = target.read().unwrap().get_start_addr().as_u64();
+            // A fully formed Ghidra structure always resolves here. Rugra's
+            // registered BlockGoto/Graph target residual can still fail the
+            // leaf chain, so preserve the existing non-panicking sentinel.
+            let target_addr = Self::flow_entry_address(&target).unwrap_or(0);
             let branch_type = match goto_type {
                 crate::block::goto_type::BREAK_GOTO => crate::op::branch_type::BREAK,
                 crate::block::goto_type::CONTINUE_GOTO => {
@@ -8075,8 +8107,9 @@ impl PrintLanguage for PrintC {
         // entries are unioned in for wrapper starts that do resolve.
         for i in 0..fd.bblocks.get_size() {
             if let Some(block_arc) = fd.bblocks.get_block(i) {
-                self.code_block_starts
-                    .insert(block_arc.read().unwrap().get_start_addr().as_u64());
+                if let Some(start) = Self::flow_entry_address(&block_arc) {
+                    self.code_block_starts.insert(start);
+                }
             }
         }
 
@@ -8103,8 +8136,9 @@ impl PrintLanguage for PrintC {
         // hoist note above the NullEmit swap).
         for i in 0..graph.get_size() {
             if let Some(block_arc) = graph.get_block(i) {
-                self.code_block_starts
-                    .insert(block_arc.read().unwrap().get_start_addr().as_u64());
+                if let Some(start) = Self::flow_entry_address(&block_arc) {
+                    self.code_block_starts.insert(start);
+                }
                 let block = block_arc.read().unwrap();
                 let ops = block.get_ops();
                 for op_ref in &ops {
@@ -11280,9 +11314,8 @@ impl PrintC {
             };
             if is_target && matches!(bt, crate::block::BlockType::Basic
                 | crate::block::BlockType::Copy) {
-                let addr = {
-                    let l = leaf_arc.read().unwrap();
-                    l.get_start_addr().as_u64()
+                let Some(addr) = Self::flow_entry_address(&leaf_arc) else {
+                    return;
                 };
                 // GOTO-ZERO-TARGET-UPSTREAM-0001: a degenerate chain can
                 // mark a leaf whose start resolves to 0 (observed: a
@@ -11315,9 +11348,8 @@ impl PrintC {
                 // order-independence: the label prints at THIS block's
                 // emission point (the oracle's own placement) whether the
                 // goto text comes before or after it in the output.
-                let addr = {
-                    let l = leaf_arc.read().unwrap();
-                    l.get_start_addr().as_u64()
+                let Some(addr) = Self::flow_entry_address(&leaf_arc) else {
+                    return;
                 };
                 if addr != 0
                     && self.pending_goto_labels.contains(&addr)
@@ -11508,7 +11540,7 @@ impl PrintC {
                 let bl = cur.read().unwrap();
                 bl.as_any().downcast_ref::<crate::block::BlockCopy>().map(|c| c.original.clone())
             };
-            // Re-cast the BlockBasic Arc to a dyn FlowBlock Arc for recursion.
+            // BlockCopy::original is already a dyn FlowBlock Arc.
             if let Some(orig) = inner {
                 let broadened: std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>> = orig as std::sync::Arc<_>;
                 cur = broadened;
@@ -11730,8 +11762,8 @@ impl PrintC {
     /// emitAnyLabelStatement(bl);
     /// bl->subBlock(0)->emit(this);
     /// ```
-    /// Rugra adaptation: `BlockCopy.original` (an `Arc<RwLock<BlockBasic>>`)
-    /// is the single sub-block (`subBlock(0)`). There is no virtual `emit`, so
+    /// Rugra adaptation: `BlockCopy.original` is the dynamic single sub-block
+    /// (`subBlock(0)`). There is no virtual `emit`, so
     /// we re-enter `emit_block_structured` on the original. `beginBlock`/
     /// `endBlock` markup ids are not tracked by Rugra's emit layer.
     pub fn emit_block_copy(&mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, graph: &crate::block::BlockGraph, emitted: &mut std::collections::HashSet<usize>) {
@@ -11743,7 +11775,7 @@ impl PrintC {
             bl.as_any().downcast_ref::<crate::block::BlockCopy>().map(|c| c.original.clone())
         };
         if let Some(orig) = sub {
-            // Re-cast Arc<RwLock<BlockBasic>> → Arc<RwLock<dyn FlowBlock>>.
+            // Preserve the dynamic FlowBlock identity for recursive dispatch.
             let broadened: std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>> =
                 orig as std::sync::Arc<_>;
             self.emit_block_structured(&broadened, graph, emitted);

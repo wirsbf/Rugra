@@ -5,6 +5,7 @@
 use crate::address::Address;
 use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
 use crate::op::PcodeOpRef;
+use crate::opcodes::OpCode;
 use std::sync::{Arc, RwLock, Weak};
 
 // ===== Marshal ElementId / AttributeId helpers (block.cc:22-28, 30-31) =====
@@ -13,38 +14,60 @@ use std::sync::{Arc, RwLock, Weak};
 
 /// `ELEM_BLOCK` (block.cc:22): a \<block> element wrapping a FlowBlock.
 // Ghidra: block.cc:22 ELEM_BLOCK
-pub fn elem_block() -> ElementId { ElementId::new("block", 134) }
+pub fn elem_block() -> ElementId {
+    ElementId::new("block", 134)
+}
 /// `ELEM_BHEAD` (block.cc:23): a \<bhead> element — header for a child block.
 // Ghidra: block.cc:23 ELEM_BHEAD
-pub fn elem_bhead() -> ElementId { ElementId::new("bhead", 135) }
+pub fn elem_bhead() -> ElementId {
+    ElementId::new("bhead", 135)
+}
 /// `ELEM_EDGE` (block.cc:31): an \<edge> element — a flow graph edge.
 // Ghidra: block.cc:31 ELEM_EDGE
-pub fn elem_edge() -> ElementId { ElementId::new("edge", 105) }
+pub fn elem_edge() -> ElementId {
+    ElementId::new("edge", 105)
+}
 /// `ELEM_TARGET` (block.cc:24): a \<target> element — a goto target ref.
 // Ghidra: block.cc:24 ELEM_TARGET
-pub fn elem_target() -> ElementId { ElementId::new("target", 136) }
+pub fn elem_target() -> ElementId {
+    ElementId::new("target", 136)
+}
 
 /// `ATTRIB_INDEX` (block.cc:26): block index attribute.
 // Ghidra: block.cc:26 ATTRIB_INDEX
-pub fn attrib_index() -> AttributeId { AttributeId::new("index", 13) }
+pub fn attrib_index() -> AttributeId {
+    AttributeId::new("index", 13)
+}
 /// `ATTRIB_END` (block.cc:27): edge endpoint reference attribute.
 // Ghidra: block.cc:27 ATTRIB_END
-pub fn attrib_end() -> AttributeId { AttributeId::new("end", 37) }
+pub fn attrib_end() -> AttributeId {
+    AttributeId::new("end", 37)
+}
 /// `ATTRIB_REV` (block.cc:28): edge reverse-index attribute.
 // Ghidra: block.cc:28 ATTRIB_REV
-pub fn attrib_rev() -> AttributeId { AttributeId::new("rev", 38) }
+pub fn attrib_rev() -> AttributeId {
+    AttributeId::new("rev", 38)
+}
 /// `ATTRIB_DEPTH` (block.hh): goto-target depth attribute.
 // Ghidra: block.hh ATTRIB_DEPTH
-pub fn attrib_depth() -> AttributeId { AttributeId::new("depth", 39) }
+pub fn attrib_depth() -> AttributeId {
+    AttributeId::new("depth", 39)
+}
 /// `ATTRIB_TYPE` (block.hh): goto-type / block-type attribute.
 // Ghidra: block.hh ATTRIB_TYPE
-pub fn attrib_type() -> AttributeId { AttributeId::new("type", 40) }
+pub fn attrib_type() -> AttributeId {
+    AttributeId::new("type", 40)
+}
 /// `ATTRIB_ALTINDEX` (block.hh): BlockCopy alt-index attribute.
 // Ghidra: block.hh ATTRIB_ALTINDEX
-pub fn attrib_altindex() -> AttributeId { AttributeId::new("altindex", 41) }
+pub fn attrib_altindex() -> AttributeId {
+    AttributeId::new("altindex", 41)
+}
 /// `ATTRIB_OPCODE` (block.hh): BlockCondition opcode attribute.
 // Ghidra: block.hh ATTRIB_OPCODE
-pub fn attrib_opcode() -> AttributeId { AttributeId::new("opcode", 42) }
+pub fn attrib_opcode() -> AttributeId {
+    AttributeId::new("opcode", 42)
+}
 
 // ===== Free functions (block.cc static dispatch) =====
 
@@ -88,10 +111,8 @@ pub fn type_to_name(bt: BlockType) -> &'static str {
 // Ghidra: block.cc:340 FlowBlock::getFrontLeaf
 /// Descend the first-component chain until reaching a leaf block. Ghidra
 /// walks `subBlock(0)` while `getType() != t_copy` — in the final structured
-/// graph every emitted path bottoms out at a BlockCopy. Rugra's structurer
-/// copies blocks as BlockBasic (build_copy), so Rugra's leaf stand-ins are
-/// Basic | Copy; the descent stops there. Returns the entering arc when it
-/// is already a leaf; when a non-leaf has no first component (empty List),
+/// graph every emitted path bottoms out at a BlockCopy. Returns the entering
+/// arc when it is already a copy; when a non-copy has no first component,
 /// returns the deepest reachable node (Ghidra returns null there — callers
 /// treat None as "no label", Rugra callers do the same via flag checks).
 pub fn front_leaf(
@@ -102,26 +123,34 @@ pub fn front_leaf(
         let next = {
             let b = cur.read().unwrap();
             match b.get_type() {
-                BlockType::Basic | BlockType::Copy => return Some(cur.clone()),
-                BlockType::List => b.as_any()
+                BlockType::Copy => return Some(cur.clone()),
+                BlockType::Basic => None,
+                BlockType::List => b
+                    .as_any()
                     .downcast_ref::<BlockList>()
                     .and_then(|l| l.children.first().cloned()),
-                BlockType::If => b.as_any()
+                BlockType::If => b
+                    .as_any()
                     .downcast_ref::<BlockIf>()
                     .map(|i| i.condition.clone()),
-                BlockType::WhileDo => b.as_any()
+                BlockType::WhileDo => b
+                    .as_any()
                     .downcast_ref::<BlockWhileDo>()
                     .map(|w| w.condition.clone()),
-                BlockType::DoWhile => b.as_any()
+                BlockType::DoWhile => b
+                    .as_any()
                     .downcast_ref::<BlockDoWhile>()
                     .map(|d| d.condition.clone()),
-                BlockType::InfLoop => b.as_any()
+                BlockType::InfLoop => b
+                    .as_any()
                     .downcast_ref::<BlockInfLoop>()
                     .map(|l| l.body.clone()),
-                BlockType::Condition => b.as_any()
+                BlockType::Condition => b
+                    .as_any()
                     .downcast_ref::<BlockCondition>()
                     .map(|c| c.first.clone()),
-                BlockType::Switch => b.as_any()
+                BlockType::Switch => b
+                    .as_any()
                     .downcast_ref::<BlockSwitch>()
                     .map(|sw| sw.control.clone()),
                 // BlockGoto wraps a BlockBasic body; Graph/Plain/MultiGoto are
@@ -141,10 +170,7 @@ pub fn front_leaf(
 /// front leaf, never on the wrapper (block.cc:1233-1237). Dyn-FlowBlock
 /// entry used by markUnstructured ports (BlockGoto holds a typed
 /// BlockBasic arc; BlockIf holds a dyn arc — both route here).
-pub fn mark_front_leaf(
-    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-    fl: u32,
-) {
+pub fn mark_front_leaf(bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, fl: u32) {
     if let Some(leaf) = front_leaf(bl) {
         leaf.write().unwrap().set_flags(fl);
     }
@@ -152,10 +178,7 @@ pub fn mark_front_leaf(
 
 // Ghidra: block.cc:1233 BlockGraph::markCopyBlock
 /// markCopyBlock for an already-typed `Arc<RwLock<BlockBasic>>` leaf.
-pub fn mark_front_leaf_dyn(
-    bl: &Arc<RwLock<BlockBasic>>,
-    fl: u32,
-) {
+pub fn mark_front_leaf_dyn(bl: &Arc<RwLock<BlockBasic>>, fl: u32) {
     bl.write().unwrap().flags |= fl;
 }
 
@@ -193,21 +216,21 @@ pub enum BlockType {
 /// Flags for PcodeBlock properties (corresponds to Ghidra's FlowBlock::block_flags)
 pub mod block_flags {
     // Ghidra-shared flags (exact bit values from block.hh:88-105)
-    pub const SWITCH_OUT: u32 = 0x10;       // f_switch_out (block.hh:92)
+    pub const SWITCH_OUT: u32 = 0x10; // f_switch_out (block.hh:92)
     pub const UNSTRUCTURED_TARG: u32 = 0x20; // f_unstructured_targ (block.hh:93)
-    pub const MARK: u32 = 0x80;              // f_mark (block.hh:94)
+    pub const MARK: u32 = 0x80; // f_mark (block.hh:94)
     /// Ghidra f_mark2 = 0x100 (block.hh:95). A secondary mark. calcLoop
     /// (block.cc:2120/2133/2138) uses f_mark = "visited" and f_mark2 =
     /// "on the current DFS path" to detect cycles.
-    pub const MARK2: u32 = 0x100;            // f_mark2 (block.hh:95)
-    pub const ENTRY_POINT: u32 = 0x200;      // f_entry_point (block.hh:96)
+    pub const MARK2: u32 = 0x100; // f_mark2 (block.hh:95)
+    pub const ENTRY_POINT: u32 = 0x200; // f_entry_point (block.hh:96)
     /// Ghidra f_interior_gotoout = 0x400 (block.hh:97). Block has an unstructured
     /// jump out of its interior. Set by setGotoBranch (block.cc:311).
     pub const INTERIOR_GOTOOUT: u32 = 0x400;
     /// Ghidra f_interior_gotoin = 0x800 (block.hh:98). Block is the target of an
     /// unstructured jump to its interior. Set by setGotoBranch (block.cc:313).
     pub const INTERIOR_GOTOIN: u32 = 0x800;
-    pub const DEAD: u32 = 0x4000;            // f_dead (block.hh:101)
+    pub const DEAD: u32 = 0x4000; // f_dead (block.hh:101)
     /// Ghidra f_label_bumpup = 0x1000 (block.hh:99). Labels for this block
     /// are printed by a parent higher in the hierarchy. Set/cleared by
     /// markLabelBumpUp (block.cc:259-263).
@@ -218,11 +241,11 @@ pub mod block_flags {
     /// Ghidra f_whiledo_overflow = 0x8000 (block.hh:102). The conditional block
     /// of a while-do is too big to print as `while(cond)`; use overflow syntax.
     pub const WHILEDO_OVERFLOW: u32 = 0x8000;
-    pub const JOINED_BLOCK: u32 = 0x20000;   // f_joined_block (block.hh:105)
+    pub const JOINED_BLOCK: u32 = 0x20000; // f_joined_block (block.hh:105)
     /// Ghidra f_duplicate_block = 0x40000 (block.hh:106). Duplicated block.
     pub const DUPLICATE_BLOCK: u32 = 0x40000;
-    // Ghidra f_flip_path = 0x80000 (block.hh:107). Path to this block was flipped.
-    pub const FLIP_PATH: u32 = 0x80000;
+    // Ghidra f_flip_path = 0x10000 (block.hh:103). Path to this block was flipped.
+    pub const FLIP_PATH: u32 = 0x10000;
     // Rugra-only flags (no Ghidra counterpart, placed at 0x100000+)
     pub const RETURN_TERMINAL: u32 = 0x100000;
     pub const CASE_BODY: u32 = 0x200000;
@@ -314,8 +337,12 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         let total = self.size_out();
         let flags = self.get_flags();
         let mut count = total;
-        if flags & block_flags::GOTO_EDGE_0 != 0 && total >= 1 { count -= 1; }
-        if flags & block_flags::GOTO_EDGE_1 != 0 && total >= 2 { count -= 1; }
+        if flags & block_flags::GOTO_EDGE_0 != 0 && total >= 1 {
+            count -= 1;
+        }
+        if flags & block_flags::GOTO_EDGE_1 != 0 && total >= 2 {
+            count -= 1;
+        }
         count
     }
 
@@ -327,9 +354,13 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         let mut effective_idx = 0usize;
         for i in 0..total {
             let is_goto = (i == 0 && flags & block_flags::GOTO_EDGE_0 != 0)
-                       || (i == 1 && flags & block_flags::GOTO_EDGE_1 != 0);
-            if is_goto { continue; }
-            if effective_idx == slot { return self.get_out(i); }
+                || (i == 1 && flags & block_flags::GOTO_EDGE_1 != 0);
+            if is_goto {
+                continue;
+            }
+            if effective_idx == slot {
+                return self.get_out(i);
+            }
             effective_idx += 1;
         }
         None
@@ -510,7 +541,9 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         // blocks (BlockIf/BlockList/BlockCondition/...) exactly as to
         // BlockBasic. Route through out_edges_mut instead of a downcast chain.
         let outs = self.out_edges_mut();
-        if slot < outs.len() { outs[slot].flags |= flag; }
+        if slot < outs.len() {
+            outs[slot].flags |= flag;
+        }
     }
 
     // Ghidra: block.hh:289 FlowBlock::clearOutEdgeFlag
@@ -519,14 +552,18 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// `set_out_edge_flag`. Used by LoopBody::clearExitMarks.
     fn clear_out_edge_flag(&mut self, slot: usize, flag: u32) {
         let outs = self.out_edges_mut();
-        if slot < outs.len() { outs[slot].flags &= !flag; }
+        if slot < outs.len() {
+            outs[slot].flags &= !flag;
+        }
     }
 
     /// Clear a mask of edge flags from ALL outgoing edges.
     /// Faithful to Ghidra's `FlowBlock::clearEdgeFlags` (block.cc).
     // Ghidra: block.cc:966 BlockGraph::clearEdgeFlags
     fn clear_edge_flags(&mut self, mask: u32) {
-        for e in self.out_edges_mut().iter_mut() { e.flags &= !mask; }
+        for e in self.out_edges_mut().iter_mut() {
+            e.flags &= !mask;
+        }
     }
 
     // Ghidra: block.cc:447 FlowBlock::eliminateInDups
@@ -538,7 +575,11 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// reciprocal reverse_index stays consistent. `self_arc` is this
     /// block's own Arc (the peer may be this block in the self-loop case;
     /// the peer write then goes through the WouldBlock arm).
-    fn eliminate_in_dups(&mut self, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, self_arc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+    fn eliminate_in_dups(
+        &mut self,
+        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        self_arc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) {
         let self_loop = Arc::ptr_eq(bl, self_arc);
         let mut indval: i64 = -1;
         let mut i = 0usize;
@@ -589,7 +630,11 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// instance and OR-merging edge labels. Faithful to
     /// `FlowBlock::eliminateOutDups` (block.cc:475-501) with the same
     /// paired half-delete protocol as `eliminate_in_dups`.
-    fn eliminate_out_dups(&mut self, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, self_arc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+    fn eliminate_out_dups(
+        &mut self,
+        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        self_arc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) {
         let self_loop = Arc::ptr_eq(bl, self_arc);
         let mut indval: i64 = -1;
         let mut i = 0usize;
@@ -762,7 +807,9 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     // Ghidra: block.cc:245 FlowBlock::setOutEdgeFlag (mirrored in-edge half)
     fn set_in_edge_flag(&mut self, slot: usize, flag: u32) {
         let ins = self.in_edges_mut();
-        if slot < ins.len() { ins[slot].flags |= flag; }
+        if slot < ins.len() {
+            ins[slot].flags |= flag;
+        }
     }
 
     /// Clear edge flags from the `slot`-th incoming edge. This is the mirrored
@@ -774,7 +821,9 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     // Ghidra: block.cc:254 FlowBlock::clearOutEdgeFlag (mirrored in-edge half)
     fn clear_in_edge_flag(&mut self, slot: usize, flag: u32) {
         let ins = self.in_edges_mut();
-        if slot < ins.len() { ins[slot].flags &= !flag; }
+        if slot < ins.len() {
+            ins[slot].flags &= !flag;
+        }
     }
 
     /// Get the copy-map reference (Ghidra `copymap`: back reference to a
@@ -801,15 +850,6 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     // private field written directly by findSpanningTree block.cc:1073/1098)
     fn set_num_desc(&mut self, _n: i32) {}
 
-    // Ghidra: block.cc:318 FlowBlock::setDefaultSwitch
-    /// Mark an outgoing edge as the switch default edge.
-    /// Faithful to `FlowBlock::setDefaultSwitch` (block.cc:318-326).
-    /// Clears any previous default marking, then sets the given slot.
-    fn set_default_switch(&mut self, pos: usize) {
-        self.clear_edge_flags(edge_flags::F_DEFAULTSWITCH_EDGE);
-        self.set_out_edge_flag(pos, edge_flags::F_DEFAULTSWITCH_EDGE);
-    }
-
     /// Is the `slot`-th outgoing edge a back edge?
     /// Faithful to Ghidra's `FlowBlock::isBackEdgeOut` (block.hh:331).
     // Ghidra: block.hh:331 FlowBlock::isBackEdgeOut
@@ -827,6 +867,17 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     // RUGRA-GLUE: Rust helper returning Vec<PcodeOpRef> (Ghidra BlockBasic exposes begin/end iterators)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
         Vec::new()
+    }
+    /// Return the indexed component of this block. This is the Rust trait
+    /// dispatch corresponding to Ghidra's virtual `FlowBlock::subBlock`.
+    // Ghidra: block.hh:190 FlowBlock::subBlock
+    fn sub_block(&self, _slot: usize) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        None
+    }
+    /// Return the first PcodeOp reached through this block.
+    // Ghidra: block.hh:233 FlowBlock::firstOp
+    fn first_op(&self) -> Option<PcodeOpRef> {
+        None
     }
     // Ghidra: block.hh:466 BlockBasic::insert
     fn add_op(&mut self, _op: PcodeOpRef) {}
@@ -942,7 +993,6 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         self.get_out(0).map(|e| e.point)
     }
 
-
     // ---- Mark / visit-count / edge-flag accessors (Ghidra block.hh:286-347) ----
     // These underpin LoopBody's body collection, exit detection, and TraceDAG
     // bounds. Defaults are no-ops; BlockBasic overrides them.
@@ -972,22 +1022,30 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
 
     // Ghidra: block.hh:316 FlowBlock::isLoopIn
     fn is_loop_in(&self, i: usize) -> bool {
-        self.get_in(i).map(|e| (e.flags & edge_flags::F_LOOP_EDGE) != 0).unwrap_or(false)
+        self.get_in(i)
+            .map(|e| (e.flags & edge_flags::F_LOOP_EDGE) != 0)
+            .unwrap_or(false)
     }
 
     // Ghidra: block.hh:317 FlowBlock::isLoopOut
     fn is_loop_out(&self, i: usize) -> bool {
-        self.get_out(i).map(|e| (e.flags & edge_flags::F_LOOP_EDGE) != 0).unwrap_or(false)
+        self.get_out(i)
+            .map(|e| (e.flags & edge_flags::F_LOOP_EDGE) != 0)
+            .unwrap_or(false)
     }
 
     // Ghidra: block.hh:320 FlowBlock::isDefaultBranch
     fn is_default_branch(&self, i: usize) -> bool {
-        self.get_out(i).map(|e| (e.flags & edge_flags::F_DEFAULTSWITCH_EDGE) != 0).unwrap_or(false)
+        self.get_out(i)
+            .map(|e| (e.flags & edge_flags::F_DEFAULTSWITCH_EDGE) != 0)
+            .unwrap_or(false)
     }
 
     // Ghidra: block.hh:336 FlowBlock::isLoopExitOut
     fn is_loop_exit_out(&self, i: usize) -> bool {
-        self.get_out(i).map(|e| (e.flags & edge_flags::F_LOOP_EXIT_EDGE) != 0).unwrap_or(false)
+        self.get_out(i)
+            .map(|e| (e.flags & edge_flags::F_LOOP_EXIT_EDGE) != 0)
+            .unwrap_or(false)
     }
 
     /// Is the i-th incoming edge a goto/irreducible edge? (Ghidra `isGotoIn`.)
@@ -1009,9 +1067,13 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// checks it directly. We also keep the in-edge goto check as a
     /// fallback for edges marked GOTO via other paths.
     fn is_interior_goto_target(&self) -> bool {
-        if (self.get_flags() & block_flags::INTERIOR_GOTOIN) != 0 { return true; }
+        if (self.get_flags() & block_flags::INTERIOR_GOTOIN) != 0 {
+            return true;
+        }
         for i in 0..self.size_in() {
-            if self.is_goto_in(i) { return true; }
+            if self.is_goto_in(i) {
+                return true;
+            }
         }
         false
     }
@@ -1049,12 +1111,11 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// `cond` — all paths reaching this block go through cond's edge, so a
     /// boolean constant holds. Faithful to `restrictedByConditional`
     /// (block.cc:405-425).
-    fn restricted_by_conditional(
-        &self,
-        cond: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-    ) -> bool {
+    fn restricted_by_conditional(&self, cond: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> bool {
         // cc:408: single in-edge → always restricted.
-        if self.size_in() == 1 { return true; }
+        if self.size_in() == 1 {
+            return true;
+        }
         // cc:409: check immedDom == cond.
         let my_dom = self.get_immed_dom().and_then(|w| w.upgrade());
         match &my_dom {
@@ -1065,23 +1126,40 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         let mut seen_cond = false;
         let self_idx = self.get_index();
         for i in 0..self.size_in() {
-            let in_block = match self.get_in(i) { Some(e) => e.point.clone(), None => continue };
+            let in_block = match self.get_in(i) {
+                Some(e) => e.point.clone(),
+                None => continue,
+            };
             if Arc::ptr_eq(&in_block, cond) {
-                if seen_cond { return false; }
+                if seen_cond {
+                    return false;
+                }
                 seen_cond = true;
                 continue;
             }
             // Walk dom chain from in_block up to self, checking if cond is hit.
             let mut cur = in_block;
             loop {
-                if Arc::ptr_eq(&cur, cond) { return false; }
+                if Arc::ptr_eq(&cur, cond) {
+                    return false;
+                }
                 let cur_idx = cur.read().unwrap().get_index();
-                if cur_idx == self_idx { break; }
-                let up = cur.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
+                if cur_idx == self_idx {
+                    break;
+                }
+                let up = cur
+                    .read()
+                    .unwrap()
+                    .get_immed_dom()
+                    .and_then(|w| w.upgrade());
                 match up {
                     Some(u) => {
-                        if Arc::ptr_eq(&u, cond) { return false; }
-                        if u.read().unwrap().get_index() == self_idx { break; }
+                        if Arc::ptr_eq(&u, cond) {
+                            return false;
+                        }
+                        if u.read().unwrap().get_index() == self_idx {
+                            break;
+                        }
                         cur = u;
                     }
                     None => break,
@@ -1097,7 +1175,9 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// `negateCondition(bool)` (block.hh:294). Base impl: if toporbottom,
     /// swap out edges + toggle f_flip_path, return false (no dataflow change).
     fn negate_condition(&mut self, toporbottom: bool) -> bool {
-        if !toporbottom { return false; }
+        if !toporbottom {
+            return false;
+        }
         self.swap_edges();
         false
     }
@@ -1175,6 +1255,14 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// BlockCondition override (block.cc:761, 2960, 3119, 3016).
     // Ghidra: block.hh FlowBlock::lastOp
     fn last_op(&self) -> Option<PcodeOpRef> {
+        None
+    }
+
+    /// Return the deepest component that performs this block's conditional
+    /// split. Implementations that return themselves keep a weak self handle
+    /// installed when the block is added to its graph.
+    // Ghidra: block.hh:243 FlowBlock::getSplitPoint
+    fn get_split_point(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         None
     }
 
@@ -1271,7 +1359,10 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     /// `next_block`. Default: no-op (no implied goto for leaf blocks without
     /// a single out-edge).
     // Ghidra: block.hh FlowBlock::printRawImpliedGoto
-    fn print_raw_implied_goto_trait(&self, _next_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> String {
+    fn print_raw_implied_goto_trait(
+        &self,
+        _next_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) -> String {
         String::new()
     }
 }
@@ -1378,7 +1469,9 @@ pub fn find_condition(
 // RUGRA-GLUE: FIND(y) read of Ghidra FlowBlock::copymap (block.hh:123 raw
 // pointer dereference at block.cc:1161/1173; Rust Weak upgrade with
 // unreachable self fallback)
-fn find_copy_map(y: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Arc<RwLock<dyn FlowBlock + Send + Sync>> {
+fn find_copy_map(
+    y: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+) -> Arc<RwLock<dyn FlowBlock + Send + Sync>> {
     y.read()
         .unwrap()
         .get_copy_map()
@@ -1414,10 +1507,14 @@ pub fn set_out_edge_flag_mirrored(
         let mut g = cur.write().unwrap();
         {
             let outs = g.out_edges_mut();
-            if i < outs.len() { outs[i].flags |= lab; }
+            if i < outs.len() {
+                outs[i].flags |= lab;
+            }
         }
         let ins = g.in_edges_mut();
-        if (rev as usize) < ins.len() { ins[rev as usize].flags |= lab; }
+        if (rev as usize) < ins.len() {
+            ins[rev as usize].flags |= lab;
+        }
     } else {
         cur.write().unwrap().set_out_edge_flag(i, lab);
         target.write().unwrap().set_in_edge_flag(rev as usize, lab);
@@ -1451,14 +1548,47 @@ pub fn clear_out_edge_flag_mirrored(
         let mut g = cur.write().unwrap();
         {
             let outs = g.out_edges_mut();
-            if i < outs.len() { outs[i].flags &= !lab; }
+            if i < outs.len() {
+                outs[i].flags &= !lab;
+            }
         }
         let ins = g.in_edges_mut();
-        if (rev as usize) < ins.len() { ins[rev as usize].flags &= !lab; }
+        if (rev as usize) < ins.len() {
+            ins[rev as usize].flags &= !lab;
+        }
     } else {
         cur.write().unwrap().clear_out_edge_flag(i, lab);
-        target.write().unwrap().clear_in_edge_flag(rev as usize, lab);
+        target
+            .write()
+            .unwrap()
+            .clear_in_edge_flag(rev as usize, lab);
     }
+}
+
+/// Mark exactly one outgoing edge as the switch default and mirror every
+/// label mutation onto the corresponding target incoming edge. Ghidra's
+/// `setDefaultSwitch` scans outgoing edges in slot order, clears only slots
+/// already carrying `f_defaultswitch_edge`, then marks `pos` through the
+/// paired `setOutEdgeFlag` operation (block.cc:318-326).
+// Ghidra: block.cc:318 FlowBlock::setDefaultSwitch
+pub fn set_default_switch_mirrored(
+    block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    pos: usize,
+) {
+    let previous_defaults = {
+        let rg = block.read().unwrap();
+        (0..rg.size_out())
+            .filter(|slot| {
+                rg.get_out(*slot)
+                    .map(|edge| edge.flags & edge_flags::F_DEFAULTSWITCH_EDGE != 0)
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>()
+    };
+    for slot in previous_defaults {
+        clear_out_edge_flag_mirrored(block, slot, edge_flags::F_DEFAULTSWITCH_EDGE);
+    }
+    set_out_edge_flag_mirrored(block, pos, edge_flags::F_DEFAULTSWITCH_EDGE);
 }
 
 /// Represents a basic block of P-code operations
@@ -1476,6 +1606,10 @@ pub struct BlockBasic {
     pub outgoing: Vec<BlockEdge>,
     /// Parent block (if nested in a composite block)
     pub parent: Option<Weak<RwLock<BlockGraph>>>,
+    /// Weak self handle used to reproduce virtual methods that return
+    /// `this` (`getExitLeaf` and `getSplitPoint`) through a trait object.
+    // RUGRA-GLUE: Rust self-reference for Ghidra methods returning `this`
+    pub self_ref: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>,
     /// Block flags
     pub flags: u32,
     /// Start address of the block
@@ -1502,10 +1636,6 @@ pub struct BlockBasic {
     /// (block.cc:1027/1122) and repurposed as the FIND function by
     /// findIrreducible (block.cc:1161/1194).
     pub copy_map: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>,
-     /// Live op-list mirror link preserving BlockCopy delegation.
-     pub live_ops_source: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
-     /// Source basic block alias for structure-graph copies.
-     pub source_basic: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
     /// Number of descendants of this block in the spanning tree (+1) (Ghidra
     /// `numdesc`, block.hh:126). -1 marks unset (Ghidra leaves the field
     /// uninitialized until findSpanningTree discovers the block).
@@ -1521,6 +1651,7 @@ impl BlockBasic {
             incoming: Vec::new(),
             outgoing: Vec::new(),
             parent: None,
+            self_ref: None,
             flags: 0,
             start_addr,
             initial_range: None,
@@ -1530,8 +1661,6 @@ impl BlockBasic {
             dom_frontier: std::collections::HashSet::new(),
             visit_count: 0,
             copy_map: None,
-             live_ops_source: None,
-             source_basic: None,
             num_desc: -1,
         }
     }
@@ -1546,14 +1675,25 @@ impl BlockBasic {
         var_array: &mut Vec<Arc<RwLock<crate::varnode::Varnode>>>,
         slot: usize,
     ) -> bool {
-        if var_array.is_empty() { return false; }
+        if var_array.is_empty() {
+            return false;
+        }
         // cc:2808: check first varnode's def op.
         let vn0 = var_array[0].clone();
-        let (opc, cvn_opt): (crate::opcodes::OpCode, (Option<Arc<RwLock<crate::varnode::Varnode>>>, Option<Arc<RwLock<crate::varnode::Varnode>>>)) = {
+        let (opc, cvn_opt): (
+            crate::opcodes::OpCode,
+            (
+                Option<Arc<RwLock<crate::varnode::Varnode>>>,
+                Option<Arc<RwLock<crate::varnode::Varnode>>>,
+            ),
+        ) = {
             let vn = vn0.read().unwrap();
-            if !vn.is_written() { return false; }
+            if !vn.is_written() {
+                return false;
+            }
             let def_arc = match vn.def.as_ref().and_then(|w| w.upgrade()) {
-                Some(d) => d, None => return false,
+                Some(d) => d,
+                None => return false,
             };
             let def = def_arc.read().unwrap();
             let opc = def.opcode;
@@ -1583,22 +1723,33 @@ impl BlockBasic {
             let vn = var_array[i].clone();
             let new_vn = {
                 let vn_r = vn.read().unwrap();
-                if !vn_r.is_written() { return false; }
+                if !vn_r.is_written() {
+                    return false;
+                }
                 let def_arc = match vn_r.def.as_ref().and_then(|w| w.upgrade()) {
-                    Some(d) => d, None => return false,
+                    Some(d) => d,
+                    None => return false,
                 };
                 let def = def_arc.read().unwrap();
-                if def.opcode != opc { return false; }
+                if def.opcode != opc {
+                    return false;
+                }
                 if let Some(ref cvn_arc) = cvn {
                     let cvn2 = match def.get_in(1 - slot) {
                         Some(v) => v.clone(),
                         None => return false,
                     };
                     let cvn2_r = cvn2.read().unwrap();
-                    if !cvn2_r.is_constant() { return false; }
+                    if !cvn2_r.is_constant() {
+                        return false;
+                    }
                     let cvn_r = cvn_arc.read().unwrap();
-                    if cvn_r.get_size() != cvn2_r.get_size() { return false; }
-                    if cvn_r.get_offset() != cvn2_r.get_offset() { return false; }
+                    if cvn_r.get_size() != cvn2_r.get_size() {
+                        return false;
+                    }
+                    if cvn_r.get_offset() != cvn2_r.get_offset() {
+                        return false;
+                    }
                 }
                 def.get_in(slot).cloned()
             };
@@ -1613,7 +1764,8 @@ impl BlockBasic {
     /// Add an operation to the end of the block
     // Ghidra: block.hh:466 BlockBasic::insert
     pub fn add_op(&mut self, op: PcodeOpRef) {
-        self.ops.push(op);
+        let index = self.ops.len();
+        <Self as FlowBlock>::insert_op(self, index, op);
     }
 
     /// Get the last operation in the block
@@ -1653,7 +1805,7 @@ impl BlockBasic {
     }
 
     /// Get the first operation in the block
-    // Ghidra: block.hh:489 BlockBasic::firstOp
+    // Ghidra: block.cc:2337 BlockBasic::firstOp
     pub fn first_op(&self) -> Option<PcodeOpRef> {
         self.ops.first().cloned()
     }
@@ -1664,9 +1816,15 @@ impl BlockBasic {
     // Ghidra: block.cc:2638 BlockBasic::setOrder
     pub fn set_order(&mut self) {
         let n = self.ops.len();
-        if n == 0 { return; }
+        if n == 0 {
+            return;
+        }
         // Ghidra: step = (UINT_MAX / n) - 1, count += step each op.
-        let step = if n > 0 { (u32::MAX / n as u32).saturating_sub(1) } else { 0 };
+        let step = if n > 0 {
+            (u32::MAX / n as u32).saturating_sub(1)
+        } else {
+            0
+        };
         let mut count = 0u32;
         for op_ref in &self.ops {
             count = count.saturating_add(step);
@@ -1730,10 +1888,13 @@ impl FlowBlock for BlockBasic {
 
     // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
     // owns outofthis/intothis for every subtype, block.hh:124-127)
-    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.outgoing
+    }
     // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
-    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
-
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.incoming
+    }
 
     // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) {
@@ -1745,17 +1906,32 @@ impl FlowBlock for BlockBasic {
         self.outgoing.push(edge);
     }
 
-    // RUGRA-GLUE: Rust helper (Ghidra BlockBasic exposes op list via begin/end
-    // iterators; structure-graph mirrors additionally delegate through
-    // BlockCopy::copy, block.hh:520-535 — see `live_ops_source`)
+    // RUGRA-GLUE: Rust helper (Ghidra BlockBasic exposes op list via begin/end iterators)
     fn get_ops(&self) -> Vec<PcodeOpRef> {
-        if let Some(source) = &self.live_ops_source {
-            return source.read().unwrap().get_ops();
-        }
-        if let Some(source) = &self.source_basic {
-            return source.read().unwrap().get_ops();
-        }
         self.ops.clone()
+    }
+
+    // Ghidra: block.hh:489 BlockBasic::firstOp
+    fn first_op(&self) -> Option<PcodeOpRef> {
+        self.get_ops().first().cloned()
+    }
+
+    // Ghidra: block.cc:2344 BlockBasic::lastOp
+    fn last_op(&self) -> Option<PcodeOpRef> {
+        self.get_ops().last().cloned()
+    }
+
+    // Ghidra: block.hh:488 BlockBasic::getExitLeaf
+    fn get_exit_leaf_trait(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        self.self_ref.as_ref().and_then(Weak::upgrade)
+    }
+
+    // Ghidra: block.cc:2361 BlockBasic::getSplitPoint
+    fn get_split_point(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        if self.outgoing.len() != 2 {
+            return None;
+        }
+        self.self_ref.as_ref().and_then(Weak::upgrade)
     }
 
     // Ghidra: block.cc:2388 BlockBasic::isComplex
@@ -1858,12 +2034,48 @@ impl FlowBlock for BlockBasic {
 
     // Ghidra: block.hh:466 BlockBasic::insert
     fn add_op(&mut self, op: PcodeOpRef) {
-        self.ops.push(op);
+        self.insert_op(self.ops.len(), op);
     }
 
-    // Ghidra: block.hh:466 BlockBasic::insert
+    // Ghidra: block.cc:2258 BlockBasic::insert
     fn insert_op(&mut self, index: usize, op: PcodeOpRef) {
+        assert!(index <= self.ops.len(), "BlockBasic insert index is out of bounds");
+        let order_before = if index == 0 {
+            2
+        } else {
+            self.ops[index - 1].0.read().unwrap().start.get_order()
+        };
+        let order_after = if index == self.ops.len() {
+            let candidate = order_before.wrapping_add(0x0100_0000);
+            if candidate <= order_before {
+                u32::MAX
+            } else {
+                candidate
+            }
+        } else {
+            self.ops[index].0.read().unwrap().start.get_order()
+        };
+        if let Some(parent) = self.self_ref.as_ref().and_then(Weak::upgrade) {
+            op.0.write().unwrap().parent = Some(Arc::downgrade(&parent));
+        }
         self.ops.insert(index, op);
+        if order_after.wrapping_sub(order_before) <= 1 {
+            self.set_order();
+        } else {
+            self.ops[index]
+                .0
+                .write()
+                .unwrap()
+                .start
+                .set_order(order_after / 2 + order_before / 2);
+        }
+        let is_branch_indirect = {
+            let inserted = self.ops[index].0.read().unwrap();
+            inserted.is_branch() && inserted.opcode == OpCode::CPUI_BRANCHIND
+        };
+        if is_branch_indirect {
+            self.flags |= block_flags::SWITCH_OUT;
+        }
     }
 
     // Ghidra: block.cc:2319 BlockBasic::getStart
@@ -1920,7 +2132,10 @@ impl FlowBlock for BlockBasic {
     }
     // Ghidra: block.hh:306 FlowBlock::getInRevIndex
     fn get_in_rev_index(&self, slot: usize) -> i32 {
-        self.incoming.get(slot).map(|e| e.reverse_index).unwrap_or(-1)
+        self.incoming
+            .get(slot)
+            .map(|e| e.reverse_index)
+            .unwrap_or(-1)
     }
 
     // ---- LoopBody mark / visit-count / edge-flag overrides ----
@@ -1990,9 +2205,7 @@ impl FlowBlock for BlockBasic {
                     let tried = target.try_write();
                     if let Ok(mut target_guard) = tried {
                         handled = true;
-                        if let Some(bb) =
-                            target_guard.as_any_mut().downcast_mut::<BlockBasic>()
-                        {
+                        if let Some(bb) = target_guard.as_any_mut().downcast_mut::<BlockBasic>() {
                             if let Some(in_edge) = bb.incoming.get_mut(rev as usize) {
                                 in_edge.reverse_index = slot as i32;
                             }
@@ -2011,15 +2224,17 @@ impl FlowBlock for BlockBasic {
     }
 
     // Ghidra: block.cc:2351 BlockBasic::negateCondition
-    fn negate_condition(&mut self, toporbottom: bool) -> bool {
-        if !toporbottom { return false; }
+    fn negate_condition(&mut self, _toporbottom: bool) -> bool {
         // cc:2354: PcodeOp *lastop = op.back();
         let last_op = self.ops.last().cloned();
         if let Some(op_ref) = last_op {
-            // cc:2355: flipFlag(boolean_flip)
-            op_ref.0.write().unwrap().flags ^= crate::op::pcodeop_flags::BOOLEAN_FLIP;
+            // cc:2355-2356: flip both the condition meaning and whether the
+            // fall-through edge represents true or false.
+            op_ref.0.write().unwrap().flags ^=
+                crate::op::pcodeop_flags::BOOLEAN_FLIP | crate::op::pcodeop_flags::FALLTHRU_TRUE;
         }
-        // cc:2357: FlowBlock::negateCondition(true) → swapEdges
+        // cc:2357: the BlockBasic override ignores its argument and always
+        // calls FlowBlock::negateCondition(true).
         self.swap_edges();
         // cc:2358: return true (dataflow changed)
         true
@@ -2027,9 +2242,10 @@ impl FlowBlock for BlockBasic {
     // Ghidra: block.hh:346 FlowBlock::isGotoIn
     fn is_goto_in(&self, i: usize) -> bool {
         // Goto-in: the i-th incoming edge is goto or irreducible (block.hh:346).
-        self.incoming.get(i).map(|e| {
-            (e.flags & (edge_flags::F_GOTO_EDGE | edge_flags::F_IRREDUCIBLE_EDGE)) != 0
-        }).unwrap_or(false)
+        self.incoming
+            .get(i)
+            .map(|e| (e.flags & (edge_flags::F_GOTO_EDGE | edge_flags::F_IRREDUCIBLE_EDGE)) != 0)
+            .unwrap_or(false)
     }
     // Ghidra: block.hh:347 FlowBlock::isGotoOut
     fn is_goto_out(&self, i: usize) -> bool {
@@ -2037,10 +2253,14 @@ impl FlowBlock for BlockBasic {
         // Rugra marks gotos via block-level GOTO_EDGE_0/GOTO_EDGE_1 flags
         // (set by run_tracedag / goto_cascade), so we check both the edge flag
         // AND the block-level flag for slot i.
-        let edge_goto = self.outgoing.get(i).map(|e| {
-            (e.flags & (edge_flags::F_GOTO_EDGE | edge_flags::F_IRREDUCIBLE_EDGE)) != 0
-        }).unwrap_or(false);
-        if edge_goto { return true; }
+        let edge_goto = self
+            .outgoing
+            .get(i)
+            .map(|e| (e.flags & (edge_flags::F_GOTO_EDGE | edge_flags::F_IRREDUCIBLE_EDGE)) != 0)
+            .unwrap_or(false);
+        if edge_goto {
+            return true;
+        }
         let block_goto = match i {
             0 => (self.flags & block_flags::GOTO_EDGE_0) != 0,
             1 => (self.flags & block_flags::GOTO_EDGE_1) != 0,
@@ -2064,83 +2284,45 @@ impl FlowBlock for BlockBasic {
 
 // RUGRA-GLUE: Rust trait-object field mutation for Ghidra's direct
 // FlowBlock::intothis/outofthis access in halfDeleteInEdge/halfDeleteOutEdge.
-fn decrement_reciprocal_reverse_index(
-    block: &mut dyn FlowBlock,
-    incoming_half: bool,
-    slot: usize,
-) {
-    macro_rules! decrement_for {
-        ($block_type:ty) => {
-            if let Some(concrete) = block.as_any_mut().downcast_mut::<$block_type>() {
-                // BLOCK-RECIPROCAL-OOB-0001 residual guard (measured
-                // degradation, documented in docs/TODO_BOARD.md): Ghidra's
-                // halfDelete slides index the peer's reciprocal list with the
-                // recorded reverse_index (block.cc:107/122) — its paired
-                // replace*Edge protocol guarantees the entry exists. Rugra's
-                // identify-capture model can still leave a stale recorded slot
-                // (e.g. a structured peer whose boundary edge list was
-                // rebuilt by identify_internal while the opposite half
-                // survived). When the recorded slot is past the peer's list,
-                // there is no peer entry to decrement — skip (log once per
-                // site) instead of indexing out of bounds. Fix path: port
-                // selfIdentify's full replace*Edge retarget protocol
-                // (block.cc:160-191 + 895-931) to eliminate the last
-                // one-sided edge mutations.
-                if incoming_half {
-                    if slot >= concrete.incoming.len() {
-                        eprintln!(
-                            "[BLOCKSTRUCT] WARN: reciprocal slot {} past peer {} in-list (len {}); skipping decrement (BLOCK-RECIPROCAL-OOB-0001 residual)",
-                            slot,
-                            concrete.get_index(),
-                            concrete.incoming.len()
-                        );
-                        return;
-                    }
-                    let edge = &mut concrete.incoming[slot];
-                    edge.reverse_index -= 1;
-                    return;
-                } else {
-                    if slot >= concrete.outgoing.len() {
-                        eprintln!(
-                            "[BLOCKSTRUCT] WARN: reciprocal slot {} past peer {} out-list (len {}); skipping decrement (BLOCK-RECIPROCAL-OOB-0001 residual)",
-                            slot,
-                            concrete.get_index(),
-                            concrete.outgoing.len()
-                        );
-                        return;
-                    }
-                    let edge = &mut concrete.outgoing[slot];
-                    edge.reverse_index -= 1;
-                    return;
-                }
-            }
-        };
+fn decrement_reciprocal_reverse_index(block: &mut dyn FlowBlock, incoming_half: bool, slot: usize) {
+    let block_index = block.get_index();
+    let edges = if incoming_half {
+        block.in_edges_mut()
+    } else {
+        block.out_edges_mut()
+    };
+    if slot >= edges.len() {
+        eprintln!(
+            "[BLOCKSTRUCT] WARN: reciprocal slot {} past peer {} {}-list (len {}); skipping decrement (BLOCK-RECIPROCAL-OOB-0001 residual)",
+            slot,
+            block_index,
+            if incoming_half { "in" } else { "out" },
+            edges.len()
+        );
+        return;
     }
-
-    decrement_for!(BlockBasic);
-    decrement_for!(BlockGoto);
-    decrement_for!(BlockIf);
-    decrement_for!(BlockWhileDo);
-    decrement_for!(BlockDoWhile);
-    decrement_for!(BlockInfLoop);
-    decrement_for!(BlockList);
-    decrement_for!(BlockCondition);
-    decrement_for!(BlockSwitch);
-
-    panic!("edge endpoint does not own a mutable reciprocal edge list");
+    edges[slot].reverse_index -= 1;
 }
 
 /// BlockBasic-specific methods for edge manipulation (Ghidra identifyInternal support)
 impl BlockBasic {
     // Ghidra: block.cc:178 FlowBlock::replaceOutEdge
-    pub fn replace_out_edge_target(&mut self, slot: usize, new_target: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+    pub fn replace_out_edge_target(
+        &mut self,
+        slot: usize,
+        new_target: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) {
         if slot < self.outgoing.len() {
             self.outgoing[slot].point = new_target;
         }
     }
 
     // Ghidra: block.cc:160 FlowBlock::replaceInEdge
-    pub fn replace_in_edge_source(&mut self, slot: usize, new_source: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+    pub fn replace_in_edge_source(
+        &mut self,
+        slot: usize,
+        new_source: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) {
         if slot < self.incoming.len() {
             self.incoming[slot].point = new_source;
         }
@@ -2174,11 +2356,7 @@ impl BlockBasic {
     /// method performs the writes directly on `self` then on the peers via
     /// their `as_any_mut()` downcasts.
     // Ghidra: block.cc:198 FlowBlock::replaceEdgesThru
-    pub fn replace_edges_thru(
-        &mut self,
-        in_slot: usize,
-        out_slot: usize,
-    ) {
+    pub fn replace_edges_thru(&mut self, in_slot: usize, out_slot: usize) {
         // Capture the four endpoints before mutation.
         let inb = self.incoming[in_slot].point.clone();
         let inblock_outslot = self.incoming[in_slot].reverse_index as usize;
@@ -2324,7 +2502,154 @@ impl BlockGraph {
 
     // Ghidra: block.cc:862 BlockGraph::addBlock
     pub fn add_block(&mut self, bl: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+        let block_index = bl.read().unwrap().get_index();
+        if self.blocks.is_empty() || block_index < self.index {
+            self.index = block_index;
+        }
+        let self_weak = Arc::downgrade(&bl);
+        {
+            let mut block = bl.write().unwrap();
+            if let Some(basic) = block.as_any_mut().downcast_mut::<BlockBasic>() {
+                basic.self_ref = Some(self_weak.clone());
+                // RUGRA-GLUE: Rust callers can populate a BlockBasic before
+                // inserting it into the graph. Complete the invariant that
+                // Ghidra establishes in BlockBasic::insert (block.cc:2266)
+                // once the block Arc identity becomes available.
+                for op in &basic.ops {
+                    op.0.write().unwrap().parent = Some(self_weak.clone());
+                }
+            } else if let Some(copy) = block.as_any_mut().downcast_mut::<BlockCopy>() {
+                copy.self_ref = Some(self_weak);
+            }
+        }
         self.blocks.push(bl);
+    }
+
+    /// Create and append an exact `BlockCopy` mirror of `source`.
+    // Ghidra: block.cc:1681 BlockGraph::newBlockCopy
+    pub fn new_block_copy(
+        &mut self,
+        source: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) -> Arc<RwLock<dyn FlowBlock + Send + Sync>> {
+        let (index, mut flags, incoming, outgoing, immed_dom, num_desc) = {
+            let block = source.read().unwrap();
+            let incoming = (0..block.size_in())
+                .map(|slot| {
+                    block
+                        .get_in(slot)
+                        .expect("FlowBlock size_in/get_in invariant violated")
+                })
+                .collect::<Vec<_>>();
+            let outgoing = (0..block.size_out())
+                .map(|slot| {
+                    block
+                        .get_out(slot)
+                        .expect("FlowBlock size_out/get_out invariant violated")
+                })
+                .collect::<Vec<_>>();
+            (
+                block.get_index(),
+                block.get_flags(),
+                incoming,
+                outgoing,
+                block.get_immed_dom(),
+                block.get_num_desc(),
+            )
+        };
+        if outgoing.len() > 2 {
+            flags |= block_flags::SWITCH_OUT;
+        }
+        let result: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(BlockCopy {
+            index,
+            flags,
+            parent: None,
+            self_ref: None,
+            original: source,
+            incoming,
+            outgoing,
+            immed_dom,
+            copy_map: None,
+            visit_count: 0,
+            num_desc,
+            dom_depth: -1,
+            dom_children: Vec::new(),
+            dom_frontier: std::collections::HashSet::new(),
+        }));
+        self.add_block(result.clone());
+        result
+    }
+
+    /// Append a structured-graph mirror of `graph`, preserving the exact
+    /// edge-vector order, labels, reciprocal slots, and copied block state.
+    // Ghidra: block.cc:1925 BlockGraph::buildCopy
+    pub fn build_copy(&mut self, graph: &BlockGraph) {
+        let start_size = self.blocks.len();
+        let originals = graph.blocks.clone();
+
+        for original in originals {
+            let copy = self.new_block_copy(original.clone());
+            original
+                .write()
+                .unwrap()
+                .set_copy_map(Some(Arc::downgrade(&copy)));
+        }
+
+        for copy in &self.blocks[start_size..] {
+            let (incoming, outgoing, immed_dom) = {
+                let block = copy.read().unwrap();
+                let incoming = (0..block.size_in())
+                    .map(|slot| {
+                        block
+                            .get_in(slot)
+                            .expect("FlowBlock size_in/get_in invariant violated")
+                    })
+                    .collect::<Vec<_>>();
+                let outgoing = (0..block.size_out())
+                    .map(|slot| {
+                        block
+                            .get_out(slot)
+                            .expect("FlowBlock size_out/get_out invariant violated")
+                    })
+                    .collect::<Vec<_>>();
+                (incoming, outgoing, block.get_immed_dom())
+            };
+            let map_point = |point: &Arc<RwLock<dyn FlowBlock + Send + Sync>>| {
+                let mapped = point.read().unwrap().get_copy_map();
+                match mapped.and_then(|weak| weak.upgrade()) {
+                    Some(result) => result,
+                    None => panic!(
+                        "BlockGraph::build_copy encountered an edge or dominator outside the source graph"
+                    ),
+                }
+            };
+            let mapped_incoming = incoming
+                .into_iter()
+                .map(|mut edge| {
+                    edge.point = map_point(&edge.point);
+                    edge
+                })
+                .collect::<Vec<_>>();
+            let mapped_outgoing = outgoing
+                .into_iter()
+                .map(|mut edge| {
+                    edge.point = map_point(&edge.point);
+                    edge
+                })
+                .collect::<Vec<_>>();
+            let mapped_dom = immed_dom.map(|weak| {
+                let original_dom = match weak.upgrade() {
+                    Some(dom) => dom,
+                    None => {
+                        panic!("BlockGraph::build_copy encountered an expired immediate dominator")
+                    }
+                };
+                Arc::downgrade(&map_point(&original_dom))
+            });
+            let mut block = copy.write().unwrap();
+            *block.in_edges_mut() = mapped_incoming;
+            *block.out_edges_mut() = mapped_outgoing;
+            block.set_immed_dom(mapped_dom);
+        }
     }
 
     // RUGRA-GLUE: Rust accessor (Ghidra uses list.size() inline)
@@ -2371,13 +2696,11 @@ impl BlockGraph {
     fn clear_edge_flags_all(&mut self) {
         for bl in &self.blocks {
             let mut g = bl.write().unwrap();
-            let any = g.as_any_mut();
-            if let Some(bb) = any.downcast_mut::<BlockBasic>() {
-                for e in bb.incoming.iter_mut() { e.flags = 0; }
-                for e in bb.outgoing.iter_mut() { e.flags = 0; }
-            } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
-                for e in bg.incoming.iter_mut() { e.flags = 0; }
-                for e in bg.outgoing.iter_mut() { e.flags = 0; }
+            for edge in g.in_edges_mut() {
+                edge.flags = 0;
+            }
+            for edge in g.out_edges_mut() {
+                edge.flags = 0;
             }
         }
     }
@@ -2422,10 +2745,8 @@ impl BlockGraph {
             // cc:1012: if (list.size()==0) return;
             return Ok(());
         }
-        let mut rpostorder: Vec<Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>> =
-            vec![None; n]; // cc:1020 rpostorder.resize(list.size())
-        let mut state: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> =
-            Vec::with_capacity(n); // cc:1021
+        let mut rpostorder: Vec<Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>> = vec![None; n]; // cc:1020 rpostorder.resize(list.size())
+        let mut state: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::with_capacity(n); // cc:1021
         let mut istate: Vec<usize> = Vec::with_capacity(n); // cc:1022
         for i in 0..n {
             // cc:1023-1030: index = -1 (reverse post-order starts at 0),
@@ -2500,7 +2821,10 @@ impl BlockGraph {
                 // cc:1069-1073: discover the start block.
                 state.push(startbl.clone());
                 istate.push(0);
-                startbl.write().unwrap().set_visit_count(preorder.len() as i32);
+                startbl
+                    .write()
+                    .unwrap()
+                    .set_visit_count(preorder.len() as i32);
                 preorder.push(startbl.clone());
                 startbl.write().unwrap().set_num_desc(1);
 
@@ -2545,7 +2869,10 @@ impl BlockGraph {
                             set_out_edge_flag_mirrored(&curbl, edgenum, edge_flags::F_TREE_EDGE);
                             state.push(childbl.clone());
                             istate.push(0);
-                            childbl.write().unwrap().set_visit_count(preorder.len() as i32);
+                            childbl
+                                .write()
+                                .unwrap()
+                                .set_visit_count(preorder.len() as i32);
                             preorder.push(childbl.clone());
                             childbl.write().unwrap().set_num_desc(1);
                         } else {
@@ -2637,13 +2964,11 @@ impl BlockGraph {
         let keep = !fl; // cc:969
         for bl in &self.blocks {
             let mut g = bl.write().unwrap();
-            let any = g.as_any_mut();
-            if let Some(bb) = any.downcast_mut::<BlockBasic>() {
-                for e in bb.incoming.iter_mut() { e.flags &= keep; }
-                for e in bb.outgoing.iter_mut() { e.flags &= keep; }
-            } else if let Some(bg) = any.downcast_mut::<BlockGraph>() {
-                for e in bg.incoming.iter_mut() { e.flags &= keep; }
-                for e in bg.outgoing.iter_mut() { e.flags &= keep; }
+            for edge in g.in_edges_mut() {
+                edge.flags &= keep;
+            }
+            for edge in g.out_edges_mut() {
+                edge.flags &= keep;
             }
         }
     }
@@ -2741,7 +3066,11 @@ impl BlockGraph {
                     let (x_visitcount, x_numdesc, yprime_visitcount) = {
                         let xg = x.read().unwrap();
                         let yg = yprime.read().unwrap();
-                        (xg.get_visit_count(), xg.get_num_desc(), yg.get_visit_count())
+                        (
+                            xg.get_visit_count(),
+                            xg.get_num_desc(),
+                            yg.get_visit_count(),
+                        )
                     };
                     if (x_visitcount > yprime_visitcount)
                         || (x_visitcount + x_numdesc <= yprime_visitcount)
@@ -2789,7 +3118,9 @@ impl BlockGraph {
             // as x (clear the mark, re-point copymap).
             for s in &reachunder {
                 s.write().unwrap().clear_mark();
-                s.write().unwrap().set_copy_map(Some(std::sync::Arc::downgrade(&x)));
+                s.write()
+                    .unwrap()
+                    .set_copy_map(Some(std::sync::Arc::downgrade(&x)));
             }
             reachunder.clear();
         }
@@ -2801,7 +3132,10 @@ impl BlockGraph {
     /// carrying the `f_entry_point` flag.
     // Ghidra: block.cc:1649 BlockGraph::getStartBlock
     pub fn get_start_block(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
-        self.blocks.iter().find(|b| b.read().unwrap().is_entry_point()).cloned()
+        self.blocks
+            .iter()
+            .find(|b| b.read().unwrap().is_entry_point())
+            .cloned()
     }
 
     /// Remove a block from the graph, first detaching all its in/out edges.
@@ -2877,8 +3211,7 @@ impl BlockGraph {
         if un {
             // Anything not marked is unreachable.
             res.clear();
-            let blocks: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> =
-                self.blocks.clone();
+            let blocks: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = self.blocks.clone();
             for blk in blocks {
                 let mut blk_rg = blk.write().unwrap();
                 if blk_rg.is_mark() {
@@ -2924,7 +3257,10 @@ impl BlockGraph {
             } else {
                 cur_exit
             };
-            self.blocks[i].write().unwrap().scope_break_trait(ind, cur_loop_exit);
+            self.blocks[i]
+                .write()
+                .unwrap()
+                .scope_break_trait(ind, cur_loop_exit);
         }
     }
 
@@ -2965,23 +3301,39 @@ impl BlockGraph {
         loop {
             let d1 = b1.read().unwrap().get_dom_depth();
             let d2 = b2.read().unwrap().get_dom_depth();
-            if d1 <= d2 { break; }
+            if d1 <= d2 {
+                break;
+            }
             let up = b1.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
-            b1 = match up { Some(u) => u, None => return None };
+            b1 = match up {
+                Some(u) => u,
+                None => return None,
+            };
         }
         loop {
             let d1 = b1.read().unwrap().get_dom_depth();
             let d2 = b2.read().unwrap().get_dom_depth();
-            if d2 <= d1 { break; }
+            if d2 <= d1 {
+                break;
+            }
             let up = b2.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
-            b2 = match up { Some(u) => u, None => return None };
+            b2 = match up {
+                Some(u) => u,
+                None => return None,
+            };
         }
         // Now equal depth; walk both up together.
         while !Arc::ptr_eq(&b1, &b2) {
             let up1 = b1.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
             let up2 = b2.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
-            b1 = match up1 { Some(u) => u, None => return None };
-            b2 = match up2 { Some(u) => u, None => return None };
+            b1 = match up1 {
+                Some(u) => u,
+                None => return None,
+            };
+            b2 = match up2 {
+                Some(u) => u,
+                None => return None,
+            };
         }
         Some(b1)
     }
@@ -3068,7 +3420,11 @@ impl BlockGraph {
                     break;
                 }
                 marked.insert(ptr);
-                let up = cur.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
+                let up = cur
+                    .read()
+                    .unwrap()
+                    .get_immed_dom()
+                    .and_then(|w| w.upgrade());
                 match up {
                     Some(u) => cur = u,
                     None => break,
@@ -3079,63 +3435,46 @@ impl BlockGraph {
         Some(res)
     }
 
-    /// Remove the edge from `src` to `dst` by symmetrically deleting both
-    /// halves. Faithful to `BlockGraph::removeEdge` (block.cc). Finds the
-    /// matching slot on each side and removes it via the half-delete helpers.
+    /// Remove the first incoming edge of `dst` whose source is `src`.
+    /// The incoming edge's stored reverse slot selects the exact paired
+    /// outgoing half, including after legal slot swaps or with parallel edges.
     // Ghidra: block.cc:1469 BlockGraph::removeEdge
     pub fn remove_edge_blocks(
         &mut self,
         src: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
         dst: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
     ) {
-        // Find src's out-slot pointing to dst.
-        let out_slot = {
-            let src_rg = src.read().unwrap();
-            (0..src_rg.size_out())
-                .find(|&i| {
-                    src_rg.get_out(i)
-                        .map(|e| Arc::ptr_eq(&e.point, dst))
-                        .unwrap_or(false)
-                })
-        };
-        // Find dst's in-slot pointing to src.
+        // cc:1477-1479: scan dst.intothis in its stored order. Do not scan
+        // src.outofthis independently: with parallel edges the two first
+        // pointer matches need not be reciprocal partners.
         let in_slot = {
             let dst_rg = dst.read().unwrap();
-            (0..dst_rg.size_in())
-                .find(|&i| {
-                    dst_rg.get_in(i)
-                        .map(|e| Arc::ptr_eq(&e.point, src))
-                        .unwrap_or(false)
-                })
+            (0..dst_rg.size_in()).find(|&i| {
+                dst_rg
+                    .get_in(i)
+                    .map(|e| Arc::ptr_eq(&e.point, src))
+                    .unwrap_or(false)
+            })
         };
-        // Re-pair the two found slots' reverse_index before the half-deletes:
-        // both slots were found BY POINTER (ground truth), so writing
-        // src.out[os].reverse_index = is_ and dst.in[is_].reverse_index = os
-        // restores exactly Ghidra's checkEdges() pairing (block.cc:545-570)
-        // for the edge being removed. Under a consistent state this is a
-        // no-op; under the identify-capture model's residual staleness it
-        // prevents the half-delete slides from reading a stale slot.
-        if let (Some(os), Some(is_)) = (out_slot, in_slot) {
-            src.write()
-                .unwrap()
-                .out_edges_mut()[os]
-                .reverse_index = is_ as i32;
-            dst.write()
-                .unwrap()
-                .in_edges_mut()[is_]
-                .reverse_index = os as i32;
-        }
-        if let Some(os) = out_slot {
-            // Trait-level half-delete: Ghidra's FlowBlock base owns
-            // outofthis/intothis for EVERY subtype (block.hh:124-127); the
-            // former BlockBasic-only downcast silently skipped structured
-            // blocks, leaving stale reciprocal indices
-            // (BLOCK-RECIPROCAL-OOB-0001).
-            src.write().unwrap().half_delete_out_edge(os);
-        }
-        if let Some(is_) = in_slot {
-            dst.write().unwrap().half_delete_in_edge(is_);
-        }
+        let Some(in_slot) = in_slot else {
+            return;
+        };
+        // FlowBlock::removeInEdge (block.cc:130-141): capture the peer and
+        // reciprocal slot, delete the incoming half, then delete exactly that
+        // outgoing half. The order matters because each half-delete repairs
+        // reverse indices of the surviving shifted entries.
+        let (source, reverse_slot) = {
+            let mut dst_guard = dst.write().unwrap();
+            let edge = dst_guard
+                .get_in(in_slot)
+                .expect("removeEdge incoming slot disappeared");
+            dst_guard.half_delete_in_edge(in_slot);
+            (edge.point, edge.reverse_index as usize)
+        };
+        source
+            .write()
+            .unwrap()
+            .half_delete_out_edge(reverse_slot);
     }
 
     // Ghidra: block.cc:1239 BlockGraph::clear
@@ -3295,9 +3634,8 @@ impl BlockGraph {
         if start_has_in_edges {
             // cc:1979-1980: if ((rootlist.size() != 1)||(rootlist[0] != b))
             //   throw LowlevelError("Problems finding root node of graph");
-            let ptr = |a: &Arc<RwLock<dyn FlowBlock + Send + Sync>>| {
-                Arc::as_ptr(a) as *const () as usize
-            };
+            let ptr =
+                |a: &Arc<RwLock<dyn FlowBlock + Send + Sync>>| Arc::as_ptr(a) as *const () as usize;
             if rootlist.len() != 1 || ptr(&rootlist[0]) != ptr(&rpo[0]) {
                 anyhow::bail!("Problems finding root node of graph");
             }
@@ -3358,9 +3696,8 @@ impl BlockGraph {
 
         // Predecessor rpo slots in in-edge order for each block (the CHK
         // "first processed predecessor" scan walks Ghidra's intothis order).
-        let ptr = |a: &Arc<RwLock<dyn FlowBlock + Send + Sync>>| {
-            Arc::as_ptr(a) as *const () as usize
-        };
+        let ptr =
+            |a: &Arc<RwLock<dyn FlowBlock + Send + Sync>>| Arc::as_ptr(a) as *const () as usize;
         let slot_of: std::collections::HashMap<usize, usize> =
             rpo.iter().enumerate().map(|(s, a)| (ptr(a), s)).collect();
         let preds: Vec<Vec<usize>> = rpo
@@ -3438,15 +3775,13 @@ impl BlockGraph {
                                         let Node::Rpo(s1) = postorder[finger1 as usize] else {
                                             unreachable!("finger escaped to virtual-root slot")
                                         };
-                                        finger1 =
-                                            numnodes - dom_index(dom[s1]);
+                                        finger1 = numnodes - dom_index(dom[s1]);
                                     }
                                     while finger2 < finger1 {
                                         let Node::Rpo(s2) = postorder[finger2 as usize] else {
                                             unreachable!("finger escaped to virtual-root slot")
                                         };
-                                        finger2 =
-                                            numnodes - dom_index(dom[s2]);
+                                        finger2 = numnodes - dom_index(dom[s2]);
                                     }
                                 }
                                 // cc:2012: new_idom = postorder[finger1];
@@ -3548,9 +3883,8 @@ impl BlockGraph {
         if n == 0 {
             return (Vec::new(), Vec::new());
         }
-        let key = |a: &Arc<RwLock<dyn FlowBlock + Send + Sync>>| {
-            Arc::as_ptr(a) as *const () as usize
-        };
+        let key =
+            |a: &Arc<RwLock<dyn FlowBlock + Send + Sync>>| Arc::as_ptr(a) as *const () as usize;
         // cc:1023-1030: collect potential roots in list order.
         let mut rootlist: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
         for i in 0..n {
@@ -3823,8 +4157,7 @@ impl BlockGraph {
             // Join-point: ≥2 predecessors, OR the entry block reached by a
             // back-edge (incoming.len() >= 1) — the implicit entry flow is the
             // "second" predecessor in CHK terms.
-            let is_join = incoming.len() >= 2
-                || (is_entry && incoming.len() >= 1);
+            let is_join = incoming.len() >= 2 || (is_entry && incoming.len() >= 1);
             if !is_join {
                 continue;
             }
@@ -3845,10 +4178,7 @@ impl BlockGraph {
                 let mut steps = 0;
                 while !Arc::ptr_eq(&runner_ref, &stop_ref) && steps < max_steps {
                     steps += 1;
-                    runner_ref
-                        .write()
-                        .unwrap()
-                        .add_to_dom_frontier(b_index);
+                    runner_ref.write().unwrap().add_to_dom_frontier(b_index);
 
                     let next_runner = runner_ref
                         .read()
@@ -4084,13 +4414,26 @@ pub struct BlockCopy {
     pub index: i32,
     pub flags: u32,
     pub parent: Option<Weak<RwLock<BlockGraph>>>,
-    pub original: Arc<RwLock<BlockBasic>>,
-    /// Ghidra's FlowBlock base edge arrays (block.hh:124-127), inherited by
-    /// BlockCopy. Rugra's structurer copies blocks as BlockBasic (build_copy),
-    /// so these stay empty; they exist so the trait-wide edge-label accessors
-    /// (out_edges_mut/in_edges_mut) are total, like the C++ base class.
+    /// Weak self handle for virtual methods returning `this`.
+    // RUGRA-GLUE: Rust self-reference for Ghidra methods returning `this`
+    pub self_ref: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>,
+    /// The live FlowBlock mirrored by this copy. Ghidra deliberately accepts
+    /// any FlowBlock here, not only BlockBasic.
+    pub original: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    /// Exact value-copies of the source FlowBlock base edge arrays.
     pub incoming: Vec<BlockEdge>,
     pub outgoing: Vec<BlockEdge>,
+    pub immed_dom: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>,
+    pub copy_map: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>,
+    pub visit_count: i32,
+    pub num_desc: i32,
+    /// Rugra's derived dominator caches; rebuilt on the copied graph.
+    // RUGRA-GLUE: Rust caches for Ghidra's external dominator vectors
+    pub dom_depth: i32,
+    // RUGRA-GLUE: Rust caches for Ghidra's external dominator vectors
+    pub dom_children: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    // RUGRA-GLUE: Rust caches for Ghidra's external dominator vectors
+    pub dom_frontier: std::collections::HashSet<i32>,
 }
 
 impl FlowBlock for BlockCopy {
@@ -4099,7 +4442,9 @@ impl FlowBlock for BlockCopy {
         self
     }
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:160 FlowBlock::getIndex
     fn get_index(&self) -> i32 {
         self.index
@@ -4108,9 +4453,33 @@ impl FlowBlock for BlockCopy {
     fn set_index(&mut self, i: i32) {
         self.index = i;
     }
+    // Ghidra: block.hh:524 BlockCopy::subBlock
+    fn sub_block(&self, _slot: usize) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        Some(self.original.clone())
+    }
     // Ghidra: block.hh:525 BlockCopy::getType
     fn get_type(&self) -> BlockType {
         BlockType::Copy
+    }
+    // RUGRA-GLUE: Rust whole-op-list view for Ghidra BlockCopy firstOp/lastOp delegation
+    fn get_ops(&self) -> Vec<PcodeOpRef> {
+        self.original.read().unwrap().get_ops()
+    }
+    // Ghidra: block.hh:532 BlockCopy::firstOp
+    fn first_op(&self) -> Option<PcodeOpRef> {
+        self.original.read().unwrap().first_op()
+    }
+    // Ghidra: block.hh:533 BlockCopy::lastOp
+    fn last_op(&self) -> Option<PcodeOpRef> {
+        self.original.read().unwrap().last_op()
+    }
+    // Ghidra: block.hh:531 BlockCopy::getExitLeaf
+    fn get_exit_leaf_trait(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        self.self_ref.as_ref().and_then(Weak::upgrade)
+    }
+    // Ghidra: block.hh:535 BlockCopy::getSplitPoint
+    fn get_split_point(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        self.original.read().unwrap().get_split_point()
     }
     // Ghidra: block.hh:536 BlockCopy::isComplex
     /// Delegates to the mirrored block (usually a BlockBasic), exactly as
@@ -4132,35 +4501,201 @@ impl FlowBlock for BlockCopy {
     }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
     fn size_in(&self) -> usize {
-        0
+        self.incoming.len()
     }
     // Ghidra: block.hh:312 FlowBlock::sizeOut
     fn size_out(&self) -> usize {
-        0
+        self.outgoing.len()
     }
     // Ghidra: block.hh:304 FlowBlock::getIn
-    fn get_in(&self, _slot: usize) -> Option<BlockEdge> {
-        None
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> {
+        self.incoming.get(slot).cloned()
     }
     // Ghidra: block.hh:301 FlowBlock::getOut
-    fn get_out(&self, _slot: usize) -> Option<BlockEdge> {
-        None
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> {
+        self.outgoing.get(slot).cloned()
     }
 
     // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
     // owns outofthis/intothis for every subtype, block.hh:124-127)
-    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.outgoing
+    }
     // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
-    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.incoming
+    }
 
     // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
     }
     // Ghidra: block.cc:73 FlowBlock::addInEdge
-    fn add_in_edge(&mut self, _edge: BlockEdge) {}
+    fn add_in_edge(&mut self, edge: BlockEdge) {
+        self.incoming.push(edge);
+    }
     // RUGRA-GLUE: Rust edge-construction helper
-    fn add_out_edge(&mut self, _edge: BlockEdge) {}
+    fn add_out_edge(&mut self, edge: BlockEdge) {
+        self.outgoing.push(edge);
+    }
+    // Ghidra: block.hh:162 FlowBlock::getImmedDom
+    fn get_immed_dom(&self) -> Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>> {
+        self.immed_dom.clone()
+    }
+    // RUGRA-GLUE: Rust mutator for Ghidra FlowBlock::immed_dom
+    fn set_immed_dom(&mut self, dom: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>) {
+        self.immed_dom = dom;
+    }
+    // Ghidra: block.hh:163 FlowBlock::getCopyMap
+    fn get_copy_map(&self) -> Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>> {
+        self.copy_map.clone()
+    }
+    // RUGRA-GLUE: Rust mutator for Ghidra FlowBlock::copymap
+    fn set_copy_map(&mut self, map: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>) {
+        self.copy_map = map;
+    }
+    // Ghidra: block.hh:283 FlowBlock::getVisitCount
+    fn get_visit_count(&self) -> i32 {
+        self.visit_count
+    }
+    // Ghidra: block.hh:282 FlowBlock::setVisitCount
+    fn set_visit_count(&mut self, count: i32) {
+        self.visit_count = count;
+    }
+    // RUGRA-GLUE: Rust accessor for Ghidra FlowBlock::numdesc
+    fn get_num_desc(&self) -> i32 {
+        self.num_desc
+    }
+    // RUGRA-GLUE: Rust mutator for Ghidra FlowBlock::numdesc
+    fn set_num_desc(&mut self, count: i32) {
+        self.num_desc = count;
+    }
+    // RUGRA-GLUE: Rugra-only dom-depth cache
+    fn get_dom_depth(&self) -> i32 {
+        self.dom_depth
+    }
+    // RUGRA-GLUE: Rugra-only dom-depth cache mutator
+    fn set_dom_depth(&mut self, depth: i32) {
+        self.dom_depth = depth;
+    }
+    // RUGRA-GLUE: Rugra-only dominator-child cache
+    fn get_dom_children(&self) -> Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        self.dom_children.clone()
+    }
+    // RUGRA-GLUE: Rugra-only dominator-child cache mutator
+    fn add_dom_child(&mut self, child: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+        self.dom_children.push(child);
+    }
+    // RUGRA-GLUE: Rugra-only dominator-child cache reset
+    fn clear_dom_children(&mut self) {
+        self.dom_children.clear();
+    }
+    // RUGRA-GLUE: Rugra-only dominance-frontier cache
+    fn get_dom_frontier(&self) -> std::collections::HashSet<i32> {
+        self.dom_frontier.clone()
+    }
+    // RUGRA-GLUE: Rugra-only dominance-frontier cache mutator
+    fn add_to_dom_frontier(&mut self, index: i32) {
+        self.dom_frontier.insert(index);
+    }
+    // RUGRA-GLUE: Rugra-only dominance-frontier cache reset
+    fn clear_dom_frontier(&mut self) {
+        self.dom_frontier.clear();
+    }
+    // Ghidra: block.hh:286 FlowBlock::isMark
+    fn is_mark(&self) -> bool {
+        self.flags & block_flags::MARK != 0
+    }
+    // Ghidra: block.hh:287 FlowBlock::setMark
+    fn set_mark(&mut self) {
+        self.flags |= block_flags::MARK;
+    }
+    // Ghidra: block.hh:288 FlowBlock::clearMark
+    fn clear_mark(&mut self) {
+        self.flags &= !block_flags::MARK;
+    }
+    // Ghidra: block.hh:306 FlowBlock::getInRevIndex
+    fn get_in_rev_index(&self, slot: usize) -> i32 {
+        self.incoming
+            .get(slot)
+            .map(|edge| edge.reverse_index)
+            .unwrap_or(-1)
+    }
+    // Ghidra: block.hh:346 FlowBlock::isGotoIn
+    fn is_goto_in(&self, slot: usize) -> bool {
+        self.incoming.get(slot).map_or(false, |edge| {
+            edge.flags & (edge_flags::F_GOTO_EDGE | edge_flags::F_IRREDUCIBLE_EDGE) != 0
+        })
+    }
+    // Ghidra: block.hh:347 FlowBlock::isGotoOut
+    fn is_goto_out(&self, slot: usize) -> bool {
+        self.outgoing.get(slot).map_or(false, |edge| {
+            edge.flags & (edge_flags::F_GOTO_EDGE | edge_flags::F_IRREDUCIBLE_EDGE) != 0
+        })
+    }
+    // Ghidra: block.hh:294 FlowBlock::setLoopExit
+    fn set_loop_exit(&mut self, slot: usize) {
+        if let Some(edge) = self.outgoing.get_mut(slot) {
+            edge.flags |= edge_flags::F_LOOP_EXIT_EDGE;
+        }
+    }
+    // Ghidra: block.hh:295 FlowBlock::clearLoopExit
+    fn clear_loop_exit(&mut self, slot: usize) {
+        if let Some(edge) = self.outgoing.get_mut(slot) {
+            edge.flags &= !edge_flags::F_LOOP_EXIT_EDGE;
+        }
+    }
+    // Ghidra: block.cc:218 FlowBlock::swapEdges
+    fn swap_edges(&mut self) {
+        if self.outgoing.len() != 2 {
+            return;
+        }
+        self.outgoing.swap(0, 1);
+        let pending = self
+            .outgoing
+            .iter()
+            .enumerate()
+            .map(|(slot, edge)| (slot, edge.point.clone(), edge.reverse_index))
+            .collect::<Vec<_>>();
+        for (slot, target, reverse_index) in pending {
+            if reverse_index < 0 {
+                continue;
+            }
+            match target.try_write() {
+                Ok(mut peer) => {
+                    if let Some(edge) = peer.in_edges_mut().get_mut(reverse_index as usize) {
+                        edge.reverse_index = slot as i32;
+                    }
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    if let Some(edge) = self.incoming.get_mut(reverse_index as usize) {
+                        edge.reverse_index = slot as i32;
+                    }
+                }
+                Err(std::sync::TryLockError::Poisoned(error)) => {
+                    panic!("poisoned reciprocal edge lock: {error}");
+                }
+            }
+        }
+        self.flags ^= block_flags::FLIP_PATH;
+    }
+    // Ghidra: block.hh:534 BlockCopy::negateCondition
+    fn negate_condition(&mut self, toporbottom: bool) -> bool {
+        let result = {
+            let mut original = self.original.write().unwrap();
+            original.negate_condition(true)
+        };
+        if toporbottom {
+            self.swap_edges();
+        }
+        result
+    }
+    // Ghidra: block.cc:2848 BlockCopy::encodeHeader
+    fn encode_header_trait(&self, encoder: &mut dyn Encoder) {
+        encoder.write_signed_integer(&attrib_index(), self.index as i64);
+        let alternate = self.original.read().unwrap().get_index();
+        encoder.write_signed_integer(&attrib_altindex(), alternate as i64);
+    }
 }
 
 // RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockCopy virtual overrides)
@@ -4178,7 +4713,12 @@ impl BlockCopy {
     pub fn print_tree(&self, level: i32) -> String {
         let indent: String = "  ".repeat(level as usize);
         let body = self.original.read().unwrap();
-        format!("{}Block_{} (copy of {})\n", indent, self.index, body.get_index())
+        format!(
+            "{}Block_{} (copy of {})\n",
+            indent,
+            self.index,
+            body.get_index()
+        )
     }
 
     /// Ghidra `BlockCopy::encodeHeader` (block.cc:2848-2854): emits the base
@@ -4215,7 +4755,9 @@ impl FlowBlock for BlockGoto {
         self
     }
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:160 FlowBlock::getIndex
     fn get_index(&self) -> i32 {
         self.index
@@ -4259,9 +4801,13 @@ impl FlowBlock for BlockGoto {
 
     // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
     // owns outofthis/intothis for every subtype, block.hh:124-127)
-    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.outgoing
+    }
     // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
-    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.incoming
+    }
 
     // Ghidra: block.cc:73 FlowBlock::addInEdge
     fn add_in_edge(&mut self, edge: BlockEdge) {
@@ -4447,42 +4993,84 @@ pub struct BlockIf {
 
 impl FlowBlock for BlockIf {
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:160 FlowBlock::getIndex
-    fn get_index(&self) -> i32 { self.index }
+    fn get_index(&self) -> i32 {
+        self.index
+    }
     // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
-    fn set_index(&mut self, i: i32) { self.index = i; }
+    fn set_index(&mut self, i: i32) {
+        self.index = i;
+    }
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:666 BlockIf::getType
-    fn get_type(&self) -> BlockType { BlockType::If }
+    fn get_type(&self) -> BlockType {
+        BlockType::If
+    }
+    // Ghidra: block.cc:3111 BlockIf::getExitLeaf
+    fn get_exit_leaf_trait(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        BlockIf::get_exit_leaf(self)
+    }
+    // Ghidra: block.cc:3119 BlockIf::lastOp
+    fn last_op(&self) -> Option<PcodeOpRef> {
+        BlockIf::last_op(self)
+    }
     // Ghidra: block.hh:165 FlowBlock::getFlags
-    fn get_flags(&self) -> u32 { self.flags }
+    fn get_flags(&self) -> u32 {
+        self.flags
+    }
     // Ghidra: block.hh:155 FlowBlock::setFlag
-    fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    fn set_flags(&mut self, f: u32) {
+        self.flags |= f;
+    }
     // Ghidra: block.hh:156 FlowBlock::clearFlag
-    fn clear_flags(&mut self, f: u32) { self.flags &= !f; }
+    fn clear_flags(&mut self, f: u32) {
+        self.flags &= !f;
+    }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
-    fn size_in(&self) -> usize { self.incoming.len() }
+    fn size_in(&self) -> usize {
+        self.incoming.len()
+    }
     // Ghidra: block.hh:312 FlowBlock::sizeOut
-    fn size_out(&self) -> usize { self.outgoing.len() }
+    fn size_out(&self) -> usize {
+        self.outgoing.len()
+    }
     // Ghidra: block.hh:304 FlowBlock::getIn
-    fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> {
+        self.incoming.get(slot).cloned()
+    }
     // Ghidra: block.hh:301 FlowBlock::getOut
-    fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> {
+        self.outgoing.get(slot).cloned()
+    }
 
     // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
     // owns outofthis/intothis for every subtype, block.hh:124-127)
-    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.outgoing
+    }
     // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
-    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.incoming
+    }
 
     // Ghidra: block.cc:73 FlowBlock::addInEdge
-    fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    fn add_in_edge(&mut self, edge: BlockEdge) {
+        self.incoming.push(edge);
+    }
     // RUGRA-GLUE: Rust edge-construction helper
-    fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    fn add_out_edge(&mut self, edge: BlockEdge) {
+        self.outgoing.push(edge);
+    }
     // Ghidra: block.hh:172 FlowBlock::getStart
-    fn get_start_addr(&self) -> Address { self.condition.read().unwrap().get_start_addr() }
+    fn get_start_addr(&self) -> Address {
+        self.condition.read().unwrap().get_start_addr()
+    }
     // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
@@ -4570,11 +5158,20 @@ impl BlockIf {
     // Ghidra: block.cc:3075 BlockIf::scopeBreak
     pub fn scope_break_goto_type(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         // cc:3078: getBlock(0)->scopeBreak(-1, curloopexit);   // condition
-        self.condition.write().unwrap().scope_break_trait(-1, cur_loop_exit);
+        self.condition
+            .write()
+            .unwrap()
+            .scope_break_trait(-1, cur_loop_exit);
         // cc:3080-3081: for (i=1; i<getSize(); ++i) getBlock(i)->scopeBreak(curexit, curloopexit);
-        self.if_body.write().unwrap().scope_break_trait(cur_exit, cur_loop_exit);
+        self.if_body
+            .write()
+            .unwrap()
+            .scope_break_trait(cur_exit, cur_loop_exit);
         if let Some(else_body) = &self.else_body {
-            else_body.write().unwrap().scope_break_trait(cur_exit, cur_loop_exit);
+            else_body
+                .write()
+                .unwrap()
+                .scope_break_trait(cur_exit, cur_loop_exit);
         }
         // cc:3082-3083: if (gototarget != null && gototarget->getIndex() == curloopexit) gototype = f_break_goto;
         if let Some(target) = &self.goto_target {
@@ -4708,42 +5305,76 @@ pub struct BlockWhileDo {
 
 impl FlowBlock for BlockWhileDo {
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:160 FlowBlock::getIndex
-    fn get_index(&self) -> i32 { self.index }
+    fn get_index(&self) -> i32 {
+        self.index
+    }
     // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
-    fn set_index(&mut self, i: i32) { self.index = i; }
+    fn set_index(&mut self, i: i32) {
+        self.index = i;
+    }
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:707 BlockWhileDo::getType
-    fn get_type(&self) -> BlockType { BlockType::WhileDo }
+    fn get_type(&self) -> BlockType {
+        BlockType::WhileDo
+    }
     // Ghidra: block.hh:165 FlowBlock::getFlags
-    fn get_flags(&self) -> u32 { self.flags }
+    fn get_flags(&self) -> u32 {
+        self.flags
+    }
     // Ghidra: block.hh:155 FlowBlock::setFlag
-    fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    fn set_flags(&mut self, f: u32) {
+        self.flags |= f;
+    }
     // Ghidra: block.hh:156 FlowBlock::clearFlag
-    fn clear_flags(&mut self, f: u32) { self.flags &= !f; }
+    fn clear_flags(&mut self, f: u32) {
+        self.flags &= !f;
+    }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
-    fn size_in(&self) -> usize { self.incoming.len() }
+    fn size_in(&self) -> usize {
+        self.incoming.len()
+    }
     // Ghidra: block.hh:312 FlowBlock::sizeOut
-    fn size_out(&self) -> usize { self.outgoing.len() }
+    fn size_out(&self) -> usize {
+        self.outgoing.len()
+    }
     // Ghidra: block.hh:304 FlowBlock::getIn
-    fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> {
+        self.incoming.get(slot).cloned()
+    }
     // Ghidra: block.hh:301 FlowBlock::getOut
-    fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> {
+        self.outgoing.get(slot).cloned()
+    }
 
     // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
     // owns outofthis/intothis for every subtype, block.hh:124-127)
-    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.outgoing
+    }
     // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
-    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.incoming
+    }
 
     // Ghidra: block.cc:73 FlowBlock::addInEdge
-    fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    fn add_in_edge(&mut self, edge: BlockEdge) {
+        self.incoming.push(edge);
+    }
     // RUGRA-GLUE: Rust edge-construction helper
-    fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    fn add_out_edge(&mut self, edge: BlockEdge) {
+        self.outgoing.push(edge);
+    }
     // Ghidra: block.hh:172 FlowBlock::getStart
-    fn get_start_addr(&self) -> Address { self.condition.read().unwrap().get_start_addr() }
+    fn get_start_addr(&self) -> Address {
+        self.condition.read().unwrap().get_start_addr()
+    }
     // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
@@ -4812,8 +5443,14 @@ impl BlockWhileDo {
     // Ghidra: block.cc:3316 BlockWhileDo::markLabelBumpUp
     pub fn mark_label_bump_up(&mut self, bump: bool) {
         // cc:3319: BlockGraph::markLabelBumpUp(true);  -- recurse into children
-        self.condition.write().unwrap().set_flags(block_flags::LABEL_BUMPUP);
-        self.body.write().unwrap().set_flags(block_flags::LABEL_BUMPUP);
+        self.condition
+            .write()
+            .unwrap()
+            .set_flags(block_flags::LABEL_BUMPUP);
+        self.body
+            .write()
+            .unwrap()
+            .set_flags(block_flags::LABEL_BUMPUP);
         // cc:3320-3321: if (!bump) clearFlag(f_label_bumpup);
         if bump {
             self.flags |= block_flags::LABEL_BUMPUP;
@@ -4830,10 +5467,16 @@ impl BlockWhileDo {
     // Ghidra: block.cc:3324 BlockWhileDo::scopeBreak
     pub fn scope_break_children(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         // cc:3328: getBlock(0)->scopeBreak(-1, curexit);   // condition, new scope
-        self.condition.write().unwrap().scope_break_trait(-1, cur_exit);
+        self.condition
+            .write()
+            .unwrap()
+            .scope_break_trait(-1, cur_exit);
         // cc:3329: getBlock(1)->scopeBreak(getBlock(0)->getIndex(), curexit);  // body exits into condition
         let cond_idx = self.condition.read().unwrap().get_index();
-        self.body.write().unwrap().scope_break_trait(cond_idx, cur_exit);
+        self.body
+            .write()
+            .unwrap()
+            .scope_break_trait(cond_idx, cur_exit);
         // Note: cur_loop_exit is the enclosing loop's exit, unused here because
         // this block establishes a NEW loop scope (cur_exit becomes the loop exit).
         let _ = cur_loop_exit;
@@ -4886,42 +5529,76 @@ pub struct BlockDoWhile {
 
 impl FlowBlock for BlockDoWhile {
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:160 FlowBlock::getIndex
-    fn get_index(&self) -> i32 { self.index }
+    fn get_index(&self) -> i32 {
+        self.index
+    }
     // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
-    fn set_index(&mut self, i: i32) { self.index = i; }
+    fn set_index(&mut self, i: i32) {
+        self.index = i;
+    }
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:723 BlockDoWhile::getType
-    fn get_type(&self) -> BlockType { BlockType::DoWhile }
+    fn get_type(&self) -> BlockType {
+        BlockType::DoWhile
+    }
     // Ghidra: block.hh:165 FlowBlock::getFlags
-    fn get_flags(&self) -> u32 { self.flags }
+    fn get_flags(&self) -> u32 {
+        self.flags
+    }
     // Ghidra: block.hh:155 FlowBlock::setFlag
-    fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    fn set_flags(&mut self, f: u32) {
+        self.flags |= f;
+    }
     // Ghidra: block.hh:156 FlowBlock::clearFlag
-    fn clear_flags(&mut self, f: u32) { self.flags &= !f; }
+    fn clear_flags(&mut self, f: u32) {
+        self.flags &= !f;
+    }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
-    fn size_in(&self) -> usize { self.incoming.len() }
+    fn size_in(&self) -> usize {
+        self.incoming.len()
+    }
     // Ghidra: block.hh:312 FlowBlock::sizeOut
-    fn size_out(&self) -> usize { self.outgoing.len() }
+    fn size_out(&self) -> usize {
+        self.outgoing.len()
+    }
     // Ghidra: block.hh:304 FlowBlock::getIn
-    fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> {
+        self.incoming.get(slot).cloned()
+    }
     // Ghidra: block.hh:301 FlowBlock::getOut
-    fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> {
+        self.outgoing.get(slot).cloned()
+    }
 
     // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
     // owns outofthis/intothis for every subtype, block.hh:124-127)
-    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.outgoing
+    }
     // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
-    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.incoming
+    }
 
     // Ghidra: block.cc:73 FlowBlock::addInEdge
-    fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    fn add_in_edge(&mut self, edge: BlockEdge) {
+        self.incoming.push(edge);
+    }
     // RUGRA-GLUE: Rust edge-construction helper
-    fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    fn add_out_edge(&mut self, edge: BlockEdge) {
+        self.outgoing.push(edge);
+    }
     // Ghidra: block.hh:172 FlowBlock::getStart
-    fn get_start_addr(&self) -> Address { self.condition.read().unwrap().get_start_addr() }
+    fn get_start_addr(&self) -> Address {
+        self.condition.read().unwrap().get_start_addr()
+    }
     // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
@@ -4954,7 +5631,10 @@ impl BlockDoWhile {
     // Ghidra: block.cc:3426 BlockDoWhile::markLabelBumpUp
     pub fn mark_label_bump_up(&mut self, bump: bool) {
         // cc:3429: BlockGraph::markLabelBumpUp(true);  -- recurse into children
-        self.condition.write().unwrap().set_flags(block_flags::LABEL_BUMPUP);
+        self.condition
+            .write()
+            .unwrap()
+            .set_flags(block_flags::LABEL_BUMPUP);
         // cc:3430-3431: if (!bump) clearFlag(f_label_bumpup);
         if bump {
             self.flags |= block_flags::LABEL_BUMPUP;
@@ -4971,7 +5651,10 @@ impl BlockDoWhile {
     // Ghidra: block.cc:3434 BlockDoWhile::scopeBreak
     pub fn scope_break_body(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         // cc:3438: getBlock(0)->scopeBreak(-1, curexit);   // Multiple exits
-        self.condition.write().unwrap().scope_break_trait(-1, cur_exit);
+        self.condition
+            .write()
+            .unwrap()
+            .scope_break_trait(-1, cur_exit);
         let _ = cur_loop_exit;
     }
 
@@ -5014,42 +5697,76 @@ pub struct BlockInfLoop {
 
 impl FlowBlock for BlockInfLoop {
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:160 FlowBlock::getIndex
-    fn get_index(&self) -> i32 { self.index }
+    fn get_index(&self) -> i32 {
+        self.index
+    }
     // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
-    fn set_index(&mut self, i: i32) { self.index = i; }
+    fn set_index(&mut self, i: i32) {
+        self.index = i;
+    }
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:737 BlockInfLoop::getType
-    fn get_type(&self) -> BlockType { BlockType::InfLoop }
+    fn get_type(&self) -> BlockType {
+        BlockType::InfLoop
+    }
     // Ghidra: block.hh:165 FlowBlock::getFlags
-    fn get_flags(&self) -> u32 { self.flags }
+    fn get_flags(&self) -> u32 {
+        self.flags
+    }
     // Ghidra: block.hh:155 FlowBlock::setFlag
-    fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    fn set_flags(&mut self, f: u32) {
+        self.flags |= f;
+    }
     // Ghidra: block.hh:156 FlowBlock::clearFlag
-    fn clear_flags(&mut self, f: u32) { self.flags &= !f; }
+    fn clear_flags(&mut self, f: u32) {
+        self.flags &= !f;
+    }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
-    fn size_in(&self) -> usize { self.incoming.len() }
+    fn size_in(&self) -> usize {
+        self.incoming.len()
+    }
     // Ghidra: block.hh:312 FlowBlock::sizeOut
-    fn size_out(&self) -> usize { self.outgoing.len() }
+    fn size_out(&self) -> usize {
+        self.outgoing.len()
+    }
     // Ghidra: block.hh:304 FlowBlock::getIn
-    fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> {
+        self.incoming.get(slot).cloned()
+    }
     // Ghidra: block.hh:301 FlowBlock::getOut
-    fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> {
+        self.outgoing.get(slot).cloned()
+    }
 
     // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
     // owns outofthis/intothis for every subtype, block.hh:124-127)
-    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.outgoing
+    }
     // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
-    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.incoming
+    }
 
     // Ghidra: block.cc:73 FlowBlock::addInEdge
-    fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    fn add_in_edge(&mut self, edge: BlockEdge) {
+        self.incoming.push(edge);
+    }
     // RUGRA-GLUE: Rust edge-construction helper
-    fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    fn add_out_edge(&mut self, edge: BlockEdge) {
+        self.outgoing.push(edge);
+    }
     // Ghidra: block.hh:172 FlowBlock::getStart
-    fn get_start_addr(&self) -> Address { self.body.read().unwrap().get_start_addr() }
+    fn get_start_addr(&self) -> Address {
+        self.body.read().unwrap().get_start_addr()
+    }
     // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
@@ -5082,7 +5799,10 @@ impl BlockInfLoop {
     // Ghidra: block.cc:3454 BlockInfLoop::markLabelBumpUp
     pub fn mark_label_bump_up(&mut self, bump: bool) {
         // cc:3457: BlockGraph::markLabelBumpUp(true);  -- recurse into children
-        self.body.write().unwrap().set_flags(block_flags::LABEL_BUMPUP);
+        self.body
+            .write()
+            .unwrap()
+            .set_flags(block_flags::LABEL_BUMPUP);
         // cc:3458-3459: if (!bump) clearFlag(f_label_bumpup);
         if bump {
             self.flags |= block_flags::LABEL_BUMPUP;
@@ -5100,7 +5820,10 @@ impl BlockInfLoop {
     pub fn scope_break_body(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         // cc:3466: getBlock(0)->scopeBreak(getBlock(0)->getIndex(), curexit);   // Exits into itself
         let body_idx = self.body.read().unwrap().get_index();
-        self.body.write().unwrap().scope_break_trait(body_idx, cur_exit);
+        self.body
+            .write()
+            .unwrap()
+            .scope_break_trait(body_idx, cur_exit);
         let _ = cur_loop_exit;
     }
 
@@ -5158,7 +5881,9 @@ impl BlockList {
     // Ghidra: block.cc:2953 BlockList::getExitLeaf
     pub fn get_exit_leaf(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         // cc:2956-2957: if (getSize()==0) return null; return getBlock(getSize()-1)->getExitLeaf();
-        self.children.last().and_then(|c| c.read().unwrap().get_exit_leaf_trait())
+        self.children
+            .last()
+            .and_then(|c| c.read().unwrap().get_exit_leaf_trait())
     }
 
     /// Ghidra `BlockList::lastOp` (block.cc:2960-2965): the last op is the
@@ -5166,7 +5891,9 @@ impl BlockList {
     // Ghidra: block.cc:2960 BlockList::lastOp
     pub fn last_op(&self) -> Option<PcodeOpRef> {
         // cc:2963-2964: if (getSize()==0) return null; return getBlock(getSize()-1)->lastOp();
-        self.children.last().and_then(|c| c.read().unwrap().last_op())
+        self.children
+            .last()
+            .and_then(|c| c.read().unwrap().last_op())
     }
 
     /// Ghidra `BlockList::negateCondition` (block.cc:2967-2974): negate the
@@ -5223,43 +5950,88 @@ impl BlockList {
 
 impl FlowBlock for BlockList {
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:160 FlowBlock::getIndex
-    fn get_index(&self) -> i32 { self.index }
+    fn get_index(&self) -> i32 {
+        self.index
+    }
     // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
-    fn set_index(&mut self, i: i32) { self.index = i; }
+    fn set_index(&mut self, i: i32) {
+        self.index = i;
+    }
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:602 BlockList::getType
-    fn get_type(&self) -> BlockType { BlockType::List }
+    fn get_type(&self) -> BlockType {
+        BlockType::List
+    }
+    // Ghidra: block.cc:2953 BlockList::getExitLeaf
+    fn get_exit_leaf_trait(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        BlockList::get_exit_leaf(self)
+    }
+    // Ghidra: block.cc:2960 BlockList::lastOp
+    fn last_op(&self) -> Option<PcodeOpRef> {
+        BlockList::last_op(self)
+    }
+    // Ghidra: block.cc:2976 BlockList::getSplitPoint
+    fn get_split_point(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        BlockList::get_split_point(self)
+    }
     // Ghidra: block.hh:165 FlowBlock::getFlags
-    fn get_flags(&self) -> u32 { self.flags }
+    fn get_flags(&self) -> u32 {
+        self.flags
+    }
     // Ghidra: block.hh:155 FlowBlock::setFlag
-    fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    fn set_flags(&mut self, f: u32) {
+        self.flags |= f;
+    }
     // Ghidra: block.hh:156 FlowBlock::clearFlag
-    fn clear_flags(&mut self, f: u32) { self.flags &= !f; }
+    fn clear_flags(&mut self, f: u32) {
+        self.flags &= !f;
+    }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
-    fn size_in(&self) -> usize { self.incoming.len() }
+    fn size_in(&self) -> usize {
+        self.incoming.len()
+    }
     // Ghidra: block.hh:312 FlowBlock::sizeOut
-    fn size_out(&self) -> usize { self.outgoing.len() }
+    fn size_out(&self) -> usize {
+        self.outgoing.len()
+    }
     // Ghidra: block.hh:304 FlowBlock::getIn
-    fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> {
+        self.incoming.get(slot).cloned()
+    }
     // Ghidra: block.hh:301 FlowBlock::getOut
-    fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> {
+        self.outgoing.get(slot).cloned()
+    }
 
     // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
     // owns outofthis/intothis for every subtype, block.hh:124-127)
-    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.outgoing
+    }
     // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
-    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.incoming
+    }
 
     // Ghidra: block.cc:73 FlowBlock::addInEdge
-    fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    fn add_in_edge(&mut self, edge: BlockEdge) {
+        self.incoming.push(edge);
+    }
     // RUGRA-GLUE: Rust edge-construction helper
-    fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    fn add_out_edge(&mut self, edge: BlockEdge) {
+        self.outgoing.push(edge);
+    }
     // Ghidra: block.hh:172 FlowBlock::getStart
     fn get_start_addr(&self) -> Address {
-        self.children.first()
+        self.children
+            .first()
             .map(|c| c.read().unwrap().get_start_addr())
             .unwrap_or_else(|| Address::new(0))
     }
@@ -5291,7 +6063,10 @@ impl FlowBlock for BlockList {
             } else {
                 cur_exit
             };
-            self.children[i].write().unwrap().scope_break_trait(ind, cur_loop_exit);
+            self.children[i]
+                .write()
+                .unwrap()
+                .scope_break_trait(ind, cur_loop_exit);
         }
     }
     // Ghidra: block.cc BlockList inherits BlockGraph::markUnstructured
@@ -5352,42 +6127,80 @@ pub struct BlockCondition {
 
 impl FlowBlock for BlockCondition {
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:160 FlowBlock::getIndex
-    fn get_index(&self) -> i32 { self.index }
+    fn get_index(&self) -> i32 {
+        self.index
+    }
     // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
-    fn set_index(&mut self, i: i32) { self.index = i; }
+    fn set_index(&mut self, i: i32) {
+        self.index = i;
+    }
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:626 BlockCondition::getType
-    fn get_type(&self) -> BlockType { BlockType::Condition }
+    fn get_type(&self) -> BlockType {
+        BlockType::Condition
+    }
+    // Ghidra: block.cc:3016 BlockCondition::lastOp
+    fn last_op(&self) -> Option<PcodeOpRef> {
+        BlockCondition::last_op(self)
+    }
     // Ghidra: block.hh:165 FlowBlock::getFlags
-    fn get_flags(&self) -> u32 { self.flags }
+    fn get_flags(&self) -> u32 {
+        self.flags
+    }
     // Ghidra: block.hh:155 FlowBlock::setFlag
-    fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    fn set_flags(&mut self, f: u32) {
+        self.flags |= f;
+    }
     // Ghidra: block.hh:156 FlowBlock::clearFlag
-    fn clear_flags(&mut self, f: u32) { self.flags &= !f; }
+    fn clear_flags(&mut self, f: u32) {
+        self.flags &= !f;
+    }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
-    fn size_in(&self) -> usize { self.incoming.len() }
+    fn size_in(&self) -> usize {
+        self.incoming.len()
+    }
     // Ghidra: block.hh:312 FlowBlock::sizeOut
-    fn size_out(&self) -> usize { self.outgoing.len() }
+    fn size_out(&self) -> usize {
+        self.outgoing.len()
+    }
     // Ghidra: block.hh:304 FlowBlock::getIn
-    fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> {
+        self.incoming.get(slot).cloned()
+    }
     // Ghidra: block.hh:301 FlowBlock::getOut
-    fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> {
+        self.outgoing.get(slot).cloned()
+    }
 
     // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
     // owns outofthis/intothis for every subtype, block.hh:124-127)
-    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.outgoing
+    }
     // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
-    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.incoming
+    }
 
     // Ghidra: block.cc:73 FlowBlock::addInEdge
-    fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    fn add_in_edge(&mut self, edge: BlockEdge) {
+        self.incoming.push(edge);
+    }
     // RUGRA-GLUE: Rust edge-construction helper
-    fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    fn add_out_edge(&mut self, edge: BlockEdge) {
+        self.outgoing.push(edge);
+    }
     // Ghidra: block.hh:172 FlowBlock::getStart
-    fn get_start_addr(&self) -> Address { self.first.read().unwrap().get_start_addr() }
+    fn get_start_addr(&self) -> Address {
+        self.first.read().unwrap().get_start_addr()
+    }
     // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
@@ -5486,8 +6299,14 @@ impl BlockCondition {
     // Ghidra: block.cc:3034 BlockCondition::scopeBreak
     pub fn scope_break_children(&mut self, _cur_exit: i32, cur_loop_exit: i32) {
         // cc:3037-3038: getBlock(0)->scopeBreak(-1, curloopexit); getBlock(1)->scopeBreak(-1, curloopexit);
-        self.first.write().unwrap().scope_break_trait(-1, cur_loop_exit);
-        self.second.write().unwrap().scope_break_trait(-1, cur_loop_exit);
+        self.first
+            .write()
+            .unwrap()
+            .scope_break_trait(-1, cur_loop_exit);
+        self.second
+            .write()
+            .unwrap()
+            .scope_break_trait(-1, cur_loop_exit);
     }
 
     /// Ghidra `BlockCondition::printHeader` (block.cc:3041-3051): emit
@@ -5565,42 +6384,76 @@ pub struct BlockSwitch {
 
 impl FlowBlock for BlockSwitch {
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:160 FlowBlock::getIndex
-    fn get_index(&self) -> i32 { self.index }
+    fn get_index(&self) -> i32 {
+        self.index
+    }
     // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
-    fn set_index(&mut self, i: i32) { self.index = i; }
+    fn set_index(&mut self, i: i32) {
+        self.index = i;
+    }
     // RUGRA-GLUE: Rust trait-object downcast glue
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
     // Ghidra: block.hh:793 BlockSwitch::getType
-    fn get_type(&self) -> BlockType { BlockType::Switch }
+    fn get_type(&self) -> BlockType {
+        BlockType::Switch
+    }
     // Ghidra: block.hh:165 FlowBlock::getFlags
-    fn get_flags(&self) -> u32 { self.flags }
+    fn get_flags(&self) -> u32 {
+        self.flags
+    }
     // Ghidra: block.hh:155 FlowBlock::setFlag
-    fn set_flags(&mut self, f: u32) { self.flags |= f; }
+    fn set_flags(&mut self, f: u32) {
+        self.flags |= f;
+    }
     // Ghidra: block.hh:156 FlowBlock::clearFlag
-    fn clear_flags(&mut self, f: u32) { self.flags &= !f; }
+    fn clear_flags(&mut self, f: u32) {
+        self.flags &= !f;
+    }
     // Ghidra: block.hh:313 FlowBlock::sizeIn
-    fn size_in(&self) -> usize { self.incoming.len() }
+    fn size_in(&self) -> usize {
+        self.incoming.len()
+    }
     // Ghidra: block.hh:312 FlowBlock::sizeOut
-    fn size_out(&self) -> usize { self.outgoing.len() }
+    fn size_out(&self) -> usize {
+        self.outgoing.len()
+    }
     // Ghidra: block.hh:304 FlowBlock::getIn
-    fn get_in(&self, slot: usize) -> Option<BlockEdge> { self.incoming.get(slot).cloned() }
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> {
+        self.incoming.get(slot).cloned()
+    }
     // Ghidra: block.hh:301 FlowBlock::getOut
-    fn get_out(&self, slot: usize) -> Option<BlockEdge> { self.outgoing.get(slot).cloned() }
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> {
+        self.outgoing.get(slot).cloned()
+    }
 
     // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
     // owns outofthis/intothis for every subtype, block.hh:124-127)
-    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.outgoing }
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.outgoing
+    }
     // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
-    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> { &mut self.incoming }
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.incoming
+    }
 
     // Ghidra: block.cc:73 FlowBlock::addInEdge
-    fn add_in_edge(&mut self, edge: BlockEdge) { self.incoming.push(edge); }
+    fn add_in_edge(&mut self, edge: BlockEdge) {
+        self.incoming.push(edge);
+    }
     // RUGRA-GLUE: Rust edge-construction helper
-    fn add_out_edge(&mut self, edge: BlockEdge) { self.outgoing.push(edge); }
+    fn add_out_edge(&mut self, edge: BlockEdge) {
+        self.outgoing.push(edge);
+    }
     // Ghidra: block.hh:172 FlowBlock::getStart
-    fn get_start_addr(&self) -> Address { self.control.read().unwrap().get_start_addr() }
+    fn get_start_addr(&self) -> Address {
+        self.control.read().unwrap().get_start_addr()
+    }
     // Ghidra: block.hh:161 FlowBlock::getParent
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
@@ -5715,7 +6568,10 @@ impl BlockSwitch {
     // Ghidra: block.cc:3613 BlockSwitch::scopeBreak
     pub fn scope_break_break_cases(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         // cc:3617: getBlock(0)->scopeBreak(-1, curexit);   // Top block has multiple exits
-        self.control.write().unwrap().scope_break_trait(-1, cur_exit);
+        self.control
+            .write()
+            .unwrap()
+            .scope_break_trait(-1, cur_exit);
         // cc:3618-3629: for each case, scopeBreak(curexit, curexit) for exit cases.
         for case in &self.cases {
             case.write().unwrap().scope_break_trait(cur_exit, cur_exit);
@@ -5769,6 +6625,10 @@ impl BlockSwitch {
 
 #[cfg(test)]
 mod edge_flag_tests {
+    use super::{BlockBasic, BlockGraph, FlowBlock};
+    use crate::address::Address;
+    use std::sync::{Arc, RwLock};
+
     #[test]
     fn edge_flag_values_are_pairwise_unique() {
         let flags = [
@@ -5799,5 +6659,58 @@ mod edge_flag_tests {
         assert_eq!(super::edge_flags::F_CROSS_EDGE, 0x40);
         assert_eq!(super::edge_flags::F_BACK_EDGE, 0x80);
         assert_eq!(super::edge_flags::F_LOOP_EXIT_EDGE, 0x100);
+    }
+
+    #[test]
+    fn default_switch_label_is_mirrored_and_preserved_by_build_copy() {
+        type BlockArc = Arc<RwLock<dyn FlowBlock + Send + Sync>>;
+        let source = Arc::new(RwLock::new(BlockBasic::new(0, Address::new(0x1000)))) as BlockArc;
+        let first = Arc::new(RwLock::new(BlockBasic::new(1, Address::new(0x1100)))) as BlockArc;
+        let second = Arc::new(RwLock::new(BlockBasic::new(2, Address::new(0x1200)))) as BlockArc;
+        let mut graph = BlockGraph::new();
+        graph.add_block(source.clone());
+        graph.add_block(first.clone());
+        graph.add_block(second.clone());
+        graph.add_edge(source.clone(), first.clone());
+        graph.add_edge(source.clone(), second.clone());
+
+        super::set_default_switch_mirrored(&source, 0);
+        super::set_default_switch_mirrored(&source, 1);
+        let default_flag = super::edge_flags::F_DEFAULTSWITCH_EDGE;
+        let source_read = source.read().unwrap();
+        let out0 = source_read.get_out(0).unwrap();
+        let out1 = source_read.get_out(1).unwrap();
+        assert_eq!(out0.flags & default_flag, 0);
+        assert_ne!(out1.flags & default_flag, 0);
+        assert_eq!(out0.reverse_index, 0);
+        assert_eq!(out1.reverse_index, 0);
+        drop(source_read);
+        assert_eq!(first.read().unwrap().get_in(0).unwrap().flags & default_flag, 0);
+        assert_ne!(
+            second.read().unwrap().get_in(0).unwrap().flags & default_flag,
+            0
+        );
+
+        let mut copy = BlockGraph::new();
+        copy.build_copy(&graph);
+        let copy_source = copy.get_block(0).unwrap();
+        let copy_first = copy.get_block(1).unwrap();
+        let copy_second = copy.get_block(2).unwrap();
+        assert_eq!(
+            copy_source.read().unwrap().get_out(0).unwrap().flags & default_flag,
+            0
+        );
+        assert_ne!(
+            copy_source.read().unwrap().get_out(1).unwrap().flags & default_flag,
+            0
+        );
+        assert_eq!(
+            copy_first.read().unwrap().get_in(0).unwrap().flags & default_flag,
+            0
+        );
+        assert_ne!(
+            copy_second.read().unwrap().get_in(0).unwrap().flags & default_flag,
+            0
+        );
     }
 }

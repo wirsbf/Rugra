@@ -1,0 +1,184 @@
+{
+  "schema_version": 2,
+  "fixture_id": "BLOCK-BUILDCOPY-STATE-0001",
+  "covered_projection_status": "MATCH",
+  "overall_status": "MISMATCH",
+  "status_note": "The five covered cases require byte-identical locked-oracle records for BlockGraph::newBlockCopy/buildCopy edge-vector and state copying, append-only suffix remapping, source copymap writes, selected live BlockCopy delegation through a complete custom Basic probe, legal BlockBasic end insertion with SeqNum order/parent/SWITCH_OUT mutation, and reciprocal parallel-edge deletion after a legal BlockBasic swapEdges. Complete behavior remains MISMATCH because Rugra's inline-owned BlockGraph cannot install the oracle's stable child parent pointer; packed block marshal IDs differ from the locked oracle; and BlockCopy printRaw/printRawImpliedGoto/printTree/emit delegation is not implemented equivalently. Parent/print/marshal differences are deliberately not normalized or falsely observed and remain bound to BLOCK-ADDGRAPH-SEMANTICS-0001/BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001/BLOCK-BUILDCOPY-MIRROR-0001. Non-Basic structured sources with non-default copied state, BlockCopy swapEdges/negateCondition, ActionBlockStructure through Action::perform count state, non-end/renumber/overflow insertion branches, MULTIEQUAL caller repair, textual/tree encoding paths, null/expired references, self-loop remap/removal, and the full structuring consumer closure remain UNTESTED or known residuals as detailed below.",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "block_cc_blob": "bf7103d9169097b2d879d04513a2690c6d9b1a62",
+    "block_hh_blob": "8319d83b9afa2b5ecdd9008bbc48ba3df72b93e2"
+  },
+  "rugra_source": {
+    "base_commit": "a5362afcfcccc25d87e4853552440d4fad619d1b",
+    "base_tree": "4b1174a8fdd53c5835f304ac5bab0732ea81713c",
+    "base_src_tree": "bcd7c6846e4c34834265f3999a326389adbc4882",
+    "base_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "base_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "overlays": [
+      {
+        "path": "src/block.rs",
+        "sha256": "44787063a824af3bb17ae5feb6cae51b7f73c69e6e5ececccba33e3f5efed028"
+      },
+      {
+        "path": "src/blockaction.rs",
+        "sha256": "23c81642a379dd293571f76211ea465f257327739227ba5eed109b7b6ebcbca1"
+      },
+      {
+        "path": "src/funcdata.rs",
+        "sha256": "39b5494b7e1e493a95169aad20cb8a9239690099a8057073d192249283875f5c"
+      }
+    ],
+    "isolation": "Archive pinned base a5362af and replace exactly src/block.rs, src/blockaction.rs, and the required build-closure src/funcdata.rs with their hash-pinned live candidates; copy the fixture separately. No other live Rust source enters the Cargo snapshot. funcdata.rs is included because the pinned base calls the superseded FlowBlock::set_default_switch trait method, while the candidate block API and frozen live Funcdata use set_default_switch_mirrored."
+  },
+  "architecture": {
+    "id": "language-independent-synthetic-flowblock-pcode-state",
+    "binary_architecture": "not applicable: the covered functions consume only FlowBlock/BlockEdge state plus PcodeOp opcode and SeqNum order",
+    "address_spaces": "none consumed; BlockBasic and inserted PcodeOps carry invalid/scalar-zero fixture addresses that are never inspected",
+    "pointer_identity": "C++ FlowBlock/PcodeOp pointers and Rust Arc allocations are normalized only to deterministic creation names sN/cN/pN/dN/opN",
+    "host_width": "pointer width is not observed or serialized"
+  },
+  "compiler_spec": {
+    "id": "not-applicable-pure-flowblock-state",
+    "prototype_model": "none",
+    "calling_convention": "none",
+    "reason": "None of newBlockCopy/buildCopy, BlockBasic::insert, swapEdges, removeInEdge, or BlockGraph::removeEdge reads Architecture, symbols, types, or a compiler specification; the insert case consumes only opcode-derived branch flags and SeqNum order"
+  },
+  "analysis_options": {
+    "entry": "Direct BlockGraph::buildCopy/build_copy, legal BlockBasic end-insert/add_op, FlowBlock::swapEdges/swap_edges, and BlockGraph::removeEdge/remove_edge_blocks calls on synthetic graphs; no Action, Rule, loop structuring, SSA, printing, or decompile pipeline",
+    "prestate": "All observed source indices, visit counts, numdesc values, raw flags, immediate dominators, edge insertion order, labels, reciprocal indices, inserted op creation times/opcodes, and empty BlockBasic op state are explicitly initialized. Original copymap is null except the destination prefix sentinels. The parallel-edge source has exactly two outgoing edges before swapEdges, satisfying its legal precondition.",
+    "observation": "One envelope plus fixed-order graph/source/copy/insert/removal records. Every covered copy node reports type/index/raw flags/visit/numdesc/idom, complete ordered in/out vectors as peer:reverse_index:label, reciprocal validity, source copymap where defined, and BlockCopy subBlock identity. The live case reports exit-self, first/last op tokens, isComplex, and split-point delegation before and after source mutation. The insert case reports exact op list/time/order/parent, lastOp, raw block flags and SWITCH_OUT. The parallel-removal case reports explicit local slots, peer/reverse slot/label on both halves, raw source flags, and reciprocal validity before swap, after swap, and after deletion.",
+    "normalization": "Only raw pointer/Arc identity and opaque PcodeOp token identity are replaced by creation-order names. No block order, edge order, label, reverse slot, state field, delegate result, or output line is sorted, removed, or rewritten.",
+    "random_seed": "none; all construction and iteration order is fixed",
+    "error_injection": "none",
+    "excluded_undefined_input": "buildCopy invoked with source and destination as the same graph is excluded: the locked C++ body appends into the vector it is iterating and provides no supported alias guard"
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+    "cases": [
+      {
+        "id": "incoming_order_6_2",
+        "nodes": "s0..s7 in source-list order; indices=[70,11,52,34,26,63,45,18], visit=[90..97], numdesc=[300..307], raw flags=[0x280,0x40000,0x20100,0x1000,0x20,0x2000,0x400,0x800], idom=[null,s0,s0,s1,s2,s2,s0,s6]",
+        "edges_in_insertion_order": "s6->s4:0x81, s2->s4:0x102, s0->s1:0x10, s1->s3:0x21, s1->s5:0x42, s1->s6:0x84, s1->s7:0x108, s7->s5:0x49",
+        "purpose": "Locks target incoming order [s6,s2] against source-list-major replay; observes every edge label/reverse slot, mapped idom, source copymap, copied state, visit reset, Copy type/subBlock, and >2-out automatic SWITCH_OUT"
+      },
+      {
+        "id": "append_prefix_untouched",
+        "source": "s0..s2 indices 31..33 with visit 41..43, numdesc 51..53, flags ENTRY/MARK/DUPLICATE, idom null/s0/s1, and edges s2->s1:0x62 then s0->s2:0x23",
+        "destination_prefix": "p0 index901 visit71 desc81 JOINED and p1 index902 visit72 desc82 LABEL_BUMPUP/idom=p0; p1->p0 label0x141; sentinel copymap p0->p1 and p1->p0",
+        "purpose": "Locks append-only [p0,p1,c0,c1,c2], untouched prefix state/edges/copymap, suffix-only endpoint/idom mapping, and destination graph minimum index update to 31"
+      },
+      {
+        "id": "live_delegate",
+        "source": "A legal FlowBlock subclass s0 index401/visit99/desc77/MARK/idom=s1 and Basic s1 index402/visit98/desc76/DUPLICATE/idom=s0",
+        "before": "s0 first=op0,last=op1,isComplex=false,getSplitPoint=s1",
+        "after": "after buildCopy only s0 changes to first=op2,last=op2,isComplex=true,getSplitPoint=null",
+        "purpose": "Locks selected live delegation from a custom ProbeBasic that provides complete edge/copymap/idom/numdesc overrides: subBlock(any slot), firstOp, lastOp, isComplex and getSplitPoint; getExitLeaf must remain the BlockCopy itself. This does not establish support for built-in non-Basic structured source types."
+      },
+      {
+        "id": "blockbasic_insert_end",
+        "source": "A graph-owned empty BlockBasic s0 receives COPY op0 time10, COPY op1 time11, then BRANCHIND op2 time12 through BlockBasic::insert(endOp) / concrete Rust BlockBasic::add_op; each opcode has its canonical opcode-derived flags before insertion",
+        "expected_order": "op list [op0,op1,op2], orders [0x00800002,0x01000002,0x01800002], and every PcodeOp parent is the same graph-owned s0 identity",
+        "purpose": "Locks the legal end-insert order formula, immediate parent assignment after graph ownership is established, lastOp identity, and BRANCHIND-triggered f_switch_out. Non-end, setOrder-renumber, and overflow branches remain untested."
+      },
+      {
+        "id": "parallel_remove_after_swap",
+        "source": "Graph-owned s0 and d0 with exactly two parallel s0->d0 edges inserted as labels 0x31 then 0x62; s0.swapEdges is called before removeEdge(s0,d0)",
+        "expected_slots": "Before: s0.out=[d0/rev0/0x31,d0/rev1/0x62], d0.in=[s0/rev0/0x31,s0/rev1/0x62]. After swap: s0.out=[0x62/rev1,0x31/rev0], d0.in order unchanged with reverse=[1,0]. removeEdge scans d0.in and removes its first s0 edge (0x31) plus the exact reciprocal s0.out slot1, leaving 0x62 at slot0/rev0 on both halves.",
+        "purpose": "Locks whole-edge swap order, reciprocal reverse-index repair, f_flip_path toggling, first destination-incoming match, exact reciprocal source-half deletion, slide repair, labels, and reciprocal validity with parallel endpoints."
+      }
+    ],
+    "sha256": "522446c6a7412718e1d4c0a179746cb1fc364728ba62bfa42e970820aff45df9"
+  },
+  "observation_schema": {
+    "records": "37 fixed-order UTF-8 lines with a final newline: one envelope, one graph and eight source/eight copy records for incoming_order_6_2, twelve append-prefix records, two live-delegate records, two end-insert records, and three parallel-edge swap/removal records",
+    "node_state": "type,index,raw flags,visitcount,numdesc,mapped idom, optionally source copymap, ordered incoming/outgoing edge vectors, reciprocal checks, and subBlock(0)/subBlock(7)",
+    "edge_state": "Each vector position is preserved and encoded as normalized endpoint:reverse_index:raw-label on both halves",
+    "live_state": "Copy type/source identity/exit-self plus first/last opaque op identity, isComplex boolean, and split-point identity before and after source-only mutation",
+    "insert_state": "Exact BlockBasic op vector slots, PcodeOp creation name/time/order/parent identity, lastOp, raw block flags, and SWITCH_OUT before and after three legal end insertions",
+    "parallel_remove_state": "Explicit source-out and destination-in vector slots encoded as slot>peer:reverse_index:raw-label, raw source flags, and bilateral reciprocal checks before swapEdges, after swapEdges, and after removeEdge",
+    "parent_residual": "Parent is not printed because Rugra cannot currently represent the locked oracle's stable BlockGraph parent pointer. This omission is not normalization: it forces fixture overall=MISMATCH and is explicitly bound to residual TODOs."
+  },
+  "decisive_semantics": {
+    "reference_output_parameters": "buildCopy mutates the destination graph by appending live BlockCopy objects and mutates every source FlowBlock copymap; source edge/state vectors remain shared originals and BlockCopy keeps a strong live source alias. BlockBasic::insert writes the exact graph-owned block identity into each PcodeOp parent and mutates order/flags. swapEdges mutates both source slots and destination reverse indices; removeEdge removes one exact bilateral edge. Rust uses the same Arc allocations through trait dispatch and records all listed mutations.",
+    "loop_bounds_traversal_order": "The source list is traversed exactly begin-to-end once to create all copies; after all source copymaps exist, only destination slots [startsize,end) are traversed in order for endpoint/idom remap. Incoming and outgoing vectors retain their original slot order and prefix nodes are never revisited. End insertion appends in call order. removeEdge scans destination incoming slots from zero and stops at the first source-identity match; each half-delete slides survivors left in original order while repairing their reciprocal slots.",
+    "counter_accumulator_lifecycle": "startsize is captured once before appending; every BlockCopy visitcount starts at constructor value zero while index/numdesc/flags are copied; destination graph index is updated by addBlock as the running minimum; SWITCH_OUT is added only when copied outgoing length is strictly greater than two. End insertion derives each order from the preceding order and a 0x01000000 end gap, with parent set before list insertion; BRANCHIND then adds SWITCH_OUT. swapEdges toggles FLIP_PATH once; removeEdge captures the reciprocal slot before either half is slid.",
+    "sorting_comparison_keys": "No sort, hash walk, deduplication, or index-as-vector-slot lookup occurs. Copy mapping uses source object identity through copymap; labels and reciprocal indices are copied verbatim, including the source-list/incoming-order disagreement in incoming_order_6_2. Parallel removal compares destination incoming peer identity only, then trusts that matched edge's reverse_index to select the exact source half; it never independently chooses the first source outgoing peer match."
+  },
+  "coverage": {
+    "incoming_order_6_2": "MATCH",
+    "append_prefix_untouched": "MATCH",
+    "live_delegate": "MATCH",
+    "blockbasic_insert_end": "MATCH",
+    "parallel_remove_after_swap": "MATCH"
+  },
+  "function_ids": {
+    "ghidra": [
+      "GH12-F-c383cc5920210f3af188",
+      "GH12-F-ee11121becf5c5e68b1e",
+      "GH12-F-dfad49538bfd7a86c74d",
+      "GH12-F-a23029f695be48e0ab8f",
+      "GH12-F-f00b6f9bd8fd95cee538",
+      "GH12-F-a4618caa71eea5ab856b",
+      "GH12-F-db7781786a0e07339eee",
+      "GH12-F-9a4833adb691e48e8ec2",
+      "GH12-F-351637d5b4dc649ae3bb",
+      "GH12-F-eaf7f657372d8e10970f",
+      "GH12-F-4d70c4b4c4d5d79ea24a",
+      "GH12-F-797e2880f17884a55344",
+      "GH12-F-a79a5ed692922aac2e11",
+      "GH12-F-a00ad0d88b1cd779d056",
+      "GH12-F-19b869d71b3262a1d874",
+      "GH12-F-57e16f2008cf6107b609",
+      "GH12-F-676ff315779d4671feeb",
+      "GH12-F-a1d975fa03e158464c37"
+    ],
+    "rugra": [],
+    "rugra_note": "The authoritative function ledger predates this uncommitted candidate: its existing BlockBasic insert/edge-helper mappings point at superseded implementations and it has no stable IDs for the new buildCopy/BlockCopy trait entries. Empty rather than stale or invented IDs preserves fail-closed continuity; registry paths still select the fixture for all three source overlays."
+  },
+  "uncovered": [
+    "Stable BlockCopy/child parent identity and parent-driven nextFlowAfter behavior: known MISMATCH",
+    "Built-in non-Basic structured sources with non-default edges, copymap, immediate dominator, or numdesc: known implementation residual because several Rust FlowBlock implementations still inherit no-op/default state accessors; the custom Basic probe does not cover this",
+    "BlockCopy printRaw, printRawImpliedGoto, printTree, and emit delegation: known MISMATCH because the oracle delegates to the original block while Rust uses defaults or a non-oracle inherent string; complete print delegation is not approved",
+    "Packed block encode/marshal identifiers: known MISMATCH (Rugra elem_block/attrib_index/altindex/end/rev = 134/13/41/37/38 versus locked oracle 103/10/75/77/79; only EDGE=105 agrees). Text/TreeEncoder and decode/error paths remain UNTESTED",
+    "BlockCopy negateCondition edge/boolean mutation, BlockCopy swapEdges with two outgoing edges (including parallel/self-loop targets), printHeader, and source-null/error paths",
+    "BlockBasic non-end insertion, forced setOrder renumbering, end-order overflow saturation, insertion before a flow break, unattached-block parent behavior, removeOp, and non-BRANCHIND branch flag behavior",
+    "MULTIEQUAL input repair belongs to Funcdata::branchRemoveInternal rather than BlockGraph::removeEdge and is not exercised; parallel removal without swap, missing-edge invalid input, self-loops, more than two parallel edges, and poisoned/expired Rust references remain untested",
+    "ActionBlockStructure::apply through Action::perform, including raw apply return zero, inherited Action count delta, ActionState count/count_apply, repeat/breakpoint status, and warnings; direct build_copy does not cover this executor closure",
+    "Self-loop/parallel-edge endpoint remapping, self immediate-dominator remapping, expired Weak references, malformed source edges, and unsupported buildCopy(this) aliasing",
+    "ActionBlockStructure reset/entry wiring, loop ordering, condition collapse, identifyInternal, goto selection, final structure, PrintC, and complete GetStr/parseconfig/curl/httpd closures"
+  ],
+  "residual_todo_ids": [
+    "BLOCK-BUILDCOPY-MIRROR-0001",
+    "BLOCK-ADDGRAPH-SEMANTICS-0001",
+    "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
+  ],
+  "comparand": {
+    "cpp_fixture_sha256": "6c3a4d32257904eed15d989f066a4ef9912099c33dd6469955e93e18c5121214",
+    "rust_fixture_sha256": "4de261d99551465dbeba6b0647c6d73d1d4073a69a3d0357c4f51057d640ec9b",
+    "runner_sha256": "4ed834f279e5baa0625f5ca568a041fd9fa846c1d83fd75690a9927947d2b803",
+    "block_rs_sha256": "44787063a824af3bb17ae5feb6cae51b7f73c69e6e5ececccba33e3f5efed028",
+    "blockaction_rs_sha256": "23c81642a379dd293571f76211ea465f257327739227ba5eed109b7b6ebcbca1",
+    "funcdata_rs_sha256": "39b5494b7e1e493a95169aad20cb8a9239690099a8057073d192249283875f5c",
+    "host_cxx": "g++ (GCC) 16.2.1 20260810",
+    "host_rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
+    "host_cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
+  },
+  "capture": {
+    "records": 37,
+    "bytes": 5577,
+    "stdout_sha256": "650c8aa6bc4e15ee6e57cdbed07268117d446a676a88b0bee46634e9249bfe21",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "build": {
+    "ghidra": "Archive and rebuild only the locked 12.0.4 decompiler C++ tree; link the fixture with libdecomp.cc, sleigh_arch.cc, inject_sleigh.cc, whole-archive libdecomp.a, and zlib",
+    "rugra": "Offline locked Cargo library build from pinned base a5362af plus exactly three hash-pinned source overlays (block, blockaction, and required funcdata build closure); rustc links the resulting rlib and the unique rugra_sleigh native archive",
+    "temporary_root": "$HOME/.cache/rugra-block-buildcopy-1204; /tmp is never used",
+    "drift_check": "Metadata, both fixtures, runner, and all three source overlays are hashed before and after the full bilateral execution"
+  }
+}

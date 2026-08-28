@@ -4,8 +4,9 @@
 
 ## 文档状态
 
-- **状态**: 已核对（当前有效；2026-08-27 新增 `absorbed_into`/`resolve_to_graph_level`）
-- **2026-08-27 追加（TRI2-STRUCT-IRREDUCIBLE-TRACE-0001）**: `BlockGraph` 新增 `absorbed_into: HashMap<i32,i32>` 字段（吸收块索引 → 吸收它的组合块 install 槽位）+ `resolve_to_graph_level(&self, idx) -> i32`（沿链传递解析；live 块返回自身；`clear()` 一并重置）。这是 Ghidra `FlowBlock::parent` 链（block.hh:78）的 Rugra 等价物：oracle 中被组合块吸收的组件保持 `parent` 指向包含它的组合块，`LoopBody::update`（blockaction.cc:95-102）、`FloatingEdge::getCurrentEdge`（cc:28-33）、`LoopBody::emitLikelyEdges`（cc:367-379）等经 `getParent()` 上溯到 graph 级；Rugra 组合块以 children Arc 引用组件而非每块父指针，包含关系在 identify_internal/collapse_sequences 吸收时登记到该 map。语义：链必终止于 live 顶层块（只有 live 块可被再吸收）。
+- **状态**: 已核对（当前有效；2026-08-28 真实 BlockCopy/buildCopy）
+- **2026-08-28 追加（BLOCK-BUILDCOPY-MIRROR-0001）**: `BlockGraph::new_block_copy/build_copy` 与真实 `BlockCopy` 已接入。锁定 12.0.4 的 5-case fixture 对边向量/标签/reverse slot、状态复制、copymap、append-prefix、实时委托、Basic end-insert 及 swap 后平行边删除产生 37 records / 5577 bytes，双侧逐字节相同（covered projection `MATCH`），并获得独立 scoped review APPROVE。default-switch 标签以 Ghidra 的 `0x04` 同步写入出入两半边，`BlockBasic::insert_op` 对 `BRANCHIND` 设置 `f_switch_out`。完整状态仍为 `MISMATCH`：真实 parent 身份、内建 structured source 状态、BlockCopy negate/print/marshal、Action executor 与完整结构化消费闭包均未取得完整行为门禁。
+- **2026-08-27 追加（TRI2-STRUCT-IRREDUCIBLE-TRACE-0001）**: `BlockGraph` 新增 `absorbed_into: HashMap<i32,i32>` 字段（吸收块索引 → 吸收它的组合块 install 槽位）+ `resolve_to_graph_level(&self, idx) -> i32`（沿链传递解析；live 块返回自身；`clear()` 一并重置）。该 map 只是对 Ghidra `FlowBlock::parent` 链的索引近似，不能保存对象身份、真实别名或父对象状态，因此不算等价 parent 实现；完整修复绑定 `BLOCK-ADDGRAPH-SEMANTICS-0001`。
 - **Ghidra 12.0.4 对齐级别**: L2；edge flags、双向 reverse-index、parent、RPO/loop/dominator 与 marshal 均有已复现反例
 - **文档目标**: 说明 Rugra 当前控制流块模型、CFG 相关对象和结构化块表示
 - **可信边界**: 本文档描述的是当前 `block.rs` 在工程中的职责与公开接口角色，不代表“控制流恢复已经与 Ghidra 完全一致”
@@ -165,12 +166,11 @@ raw ops / PcodeOp
 
 ### 当前公开常量
 
-- `TERMINAL`
-- `GOTO_TERMINAL`
-- `RETURN_TERMINAL`
-- `ENTRY_POINT`
-- `DEAD`
-- `MARK`
+Ghidra 共享位包括 `SWITCH_OUT`、`UNSTRUCTURED_TARG`、`MARK`、
+`MARK2`、`ENTRY_POINT`、`INTERIOR_GOTOOUT`、`INTERIOR_GOTOIN`、
+`LABEL_BUMPUP`、`DONOTHING_LOOP`、`DEAD`、`WHILEDO_OVERFLOW`、
+`FLIP_PATH`、`JOINED_BLOCK` 与 `DUPLICATE_BLOCK`。Rugra 专用位为
+`RETURN_TERMINAL`、`CASE_BODY`、`GOTO_EDGE_0` 与 `GOTO_EDGE_1`。
 
 ### 这些标志的作用
 
@@ -186,9 +186,7 @@ raw ops / PcodeOp
 ### 推荐理解方式
 
 #### A. 终结性质相关
-- `TERMINAL`
-- `GOTO_TERMINAL`
-- `RETURN_TERMINAL`
+- `RETURN_TERMINAL`（Rugra 胶水位）
 
 这些标志主要帮助判断 block 的控制流结束方式。
 
@@ -219,6 +217,14 @@ raw ops / PcodeOp
 ### `pub trait FlowBlock: std::fmt::Debug + Send + Sync`
 
 所有块类型的共同抽象接口。
+
+2026-08-28 的 Copy 闭包新增/接通了 `sub_block`、`first_op`、
+`get_split_point` 与边/状态访问。`BlockGraph::add_block` 为块建立
+`self_ref`，并给已在 Basic 中的 op 写入 parent；
+`BlockBasic::add_op` 统一经 `insert_op`，保持 `SeqNum` 顺序、op parent，
+并在插入 `BRANCHIND` 时设置 `SWITCH_OUT`。图本身的真实
+parent 仍未等价；`BlockCopy` 的 print/raw/marshal 及所有取反组合
+路径仍为 `UNTESTED/MISMATCH`。
 
 ## 角色
 
@@ -485,7 +491,29 @@ cover 才是合法状态）。
 将一个块加入图中。
 
 #### 作用
-把基础块或结构化块纳入当前图容器管理。
+把基础块或结构化块纳入当前图容器管理；保持插入顺序，并按
+`BlockGraph::addBlock`（block.cc:862-875）把 graph index 更新为所有组件
+index 的最小值。当前内联 `BlockGraph` 所有权仍不能生成指向自身的稳定
+`Weak<RwLock<BlockGraph>>`，所以 Ghidra 的 `bl->parent=this` 是已登记的
+`BLOCK-ADDGRAPH-SEMANTICS-0001` 剩余差异。
+
+---
+
+### `pub fn new_block_copy(&mut self, source: Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> Arc<RwLock<dyn FlowBlock + Send + Sync>>`
+
+对应 `BlockGraph::newBlockCopy`（block.cc:1681-1697）。创建真实
+`BlockCopy`，原序复制 incoming/outgoing 全向量（端点、label、reverse slot）、
+immediate dominator、index、numdesc 与 flags；visit-count 从 0 开始，输出超过
+2 条时补 `f_switch_out`，然后追加到目标图。
+
+---
+
+### `pub fn build_copy(&mut self, graph: &BlockGraph)`
+
+对应 `BlockGraph::buildCopy`（block.cc:1925-1938）。保存目标图原长度，不清空
+prefix；按源列表顺序追加副本并写回每个源块的 `copymap`。全部映射建立后，
+仅处理本轮追加 suffix，把边端点和 idom 经 `copymap` 替换。边的顺序、label、
+reverse index 以及既有 prefix 均不归一化、不重建。
 
 ---
 
@@ -666,17 +694,19 @@ end-to-end/structureReset 链含支配树）双侧投影 byte-MATCH。
 
 ## `pub struct BlockCopy`
 
-表示另一个块的复制或包装结构。
+表示结构图中对原 `FlowBlock` 的实时镜像，对应 block.hh:510-538。
 
 ### 作用
-通常用于：
-
-- 保留结构变换中的映射关系
-- 对某个块做结构化包装
-- 在图转换时临时或辅助性复用已有块语义
+当前字段保存完整 FlowBlock 基础状态：incoming/outgoing、immed_dom、copymap、
+index、numdesc、visit_count、flags，以及指向任意源 `FlowBlock` 的强引用。
+`sub_block(i)` 对任意 i 都返回源块；`get_ops`、first/last op、isComplex 与
+getSplitPoint 都实时委托源块；getExitLeaf 返回副本自身。negateCondition 先
+无条件取反源块，再按 top-or-bottom 参数交换副本自身的两条边。
 
 ### 注意
-这类对象通常更偏内部结构组织工具，不应直接当成最终用户语义节点。
+`BlockCopy` 是结构化主管线的正式叶节点，不再用带回指字段的 `BlockBasic`
+替身。完整函数级状态仍为 `MISMATCH`：目标图 parent 指针受当前 Rust 所有权
+模型阻塞；covered buildCopy 状态由 `block_buildcopy_1204` 双侧 fixture 门禁。
 
 ---
 
@@ -930,7 +960,10 @@ end-to-end/structureReset 链含支配树）双侧投影 byte-MATCH。
 
 BlockGraph 新增：
 - `remove_block_arc(bl)` — `BlockGraph::removeBlock`（block.cc:1517）：先断开所有入/出边，再从 blocks 列表移除（不 drop Arc）。
-- `remove_edge_blocks(src, dst)` — `BlockGraph::removeEdge`：对称删除 src→dst 边的两端。
+- `remove_edge_blocks(src, dst)` — `BlockGraph::removeEdge`：按 `dst`
+  incoming 原顺序选中第一条来自 `src` 的边，先记住它的
+  reciprocal source slot，再删除 target half 和那一条精确配对的
+  source half。平行边不能分别在两端独立查“第一条”。
 
 ### 2026-06-27（会话2 续）：find_common_block（解锁 RuleOrPredicate）
 
@@ -945,8 +978,13 @@ BlockGraph 新增：
 - `F_LOOP_EXIT_EDGE`（Ghidra f_loop_exit_edge）— LoopBody::setExitMarks 标记
 - `F_BACK_EDGE`（Ghidra f_back_edge）— 可归约图的回边
 - `F_IRREDUCIBLE_EDGE`（Ghidra f_irreducible）— 结构化器引入的不可归约边
-- **修正 bug**：`F_GOTO_EDGE` 原为 1<<1（与 F_CONTINUE_EDGE 重复），改为 1<<2
-- **2026-06-28 新增 spanning-tree 边分类**（对齐 Ghidra block.hh:108-118）：`F_TREE_EDGE`(1<<7)/`F_FORWARD_EDGE`(1<<8)/`F_CROSS_EDGE`(1<<9)/`F_LOOP_EDGE`(1<<10) + `SPANNING_MASK`。由 `CollapseStructure::find_spanning_tree`（DFS）标记，`order_loop_bodies` 读 `F_BACK_EDGE` 检测循环。
+- **历史修正**：早期文档曾把 `F_GOTO_EDGE` 和 spanning-tree
+  分类写成与 Ghidra 不同的位值；该记录已失效。
+- **当前精确 edge bits**：`F_GOTO_EDGE=0x01`、`F_LOOP_EDGE=0x02`、
+  `F_DEFAULTSWITCH_EDGE=0x04`、`F_IRREDUCIBLE_EDGE=0x08`、
+  `F_TREE_EDGE=0x10`、`F_FORWARD_EDGE=0x20`、`F_CROSS_EDGE=0x40`、
+  `F_BACK_EDGE=0x80`、`F_LOOP_EXIT_EDGE=0x100`。`SPANNING_MASK` 仅包含
+  tree/forward/cross/back/loop 分类位。
 
 **FlowBlock trait 新增方法（2026-06-28）**（对齐 Ghidra block.hh:288/331）：
 - `set_out_edge_flag(slot, flag)` — 对第 slot 条出边 OR-set 边 flag（Ghidra setOutEdgeFlag）。默认实现用 `as_any_mut` downcast 到 `BlockBasic`/`BlockGraph` 的 `outgoing` 字段。
@@ -1000,9 +1038,10 @@ block_flags: +JOINED_BLOCK (1<<9, block.hh:97)。Funcdata: +create_new_block。
 - 新增 `BlockBasic::set_order`：重置块内所有 op 的 SeqNum::order，均匀分布。对齐 Ghidra block.cc:2638-2651。用于 spliceBlockBasic 后。
 
 ### SWITCH_OUT / UNSTRUCTURED_TARG flags（2026-07-03 续 7）
-- `block_flags` 新增 `SWITCH_OUT`（1<<10）和 `UNSTRUCTURED_TARG`（1<<11）。
+- **历史记录**：当时曾临时用 `1<<10`/`1<<11`。
 - 对齐 Ghidra `f_switch_out`（block.hh:92）/`f_unstructured_targ`（block.hh:93）。
-- **位值偏离技术债**：Ghidra 用 0x10/0x20，但 Rugra 早期把 0x10/0x20 分配给了 DEAD/MARK。本次用新位 1<<10/1<<11，**语义对齐，位值待统一重排**。
+- 当前实现已用 oracle 精确位 `0x10`/`0x20`；早期“位值待重排”
+  技术债已失效。
 - 用于 `splice_block_basic` 的 flags 合并（block.cc:1609-1619）：splice 后 `bl->flags = (bl & (unstructured_targ|entry_point)) | (outbl & switch_out)`。
 
 ### 2026-07-04（续）：find_common_block_n + get_stop_addr（历史状态）
@@ -1013,13 +1052,14 @@ block_flags: +JOINED_BLOCK (1<<9, block.hh:97)。Funcdata: +create_new_block。
 
 ### 2026-07-04：block_flags 位值完整对齐 Ghidra block.hh:88-105
 - 所有 Ghidra 共享 flags 用精确位值：SWITCH_OUT=0x10, UNSTRUCTURED_TARG=0x20, MARK=0x80, ENTRY_POINT=0x200, DEAD=0x4000, JOINED_BLOCK=0x20000。
-- Rugra 独有 flags 移到 0x80000+（避免与 Ghidra 未来 flags 冲突）：RETURN_TERMINAL=0x80000, CASE_BODY=0x100000, GOTO_EDGE_0=0x200000, GOTO_EDGE_1=0x400000。
+- Rugra 独有 flags 当前位值：RETURN_TERMINAL=0x100000,
+  CASE_BODY=0x200000, GOTO_EDGE_0=0x400000, GOTO_EDGE_1=0x800000。
 - 删除死代码 TERMINAL/GOTO_TERMINAL（从未被读取）。
 - 验证：所有 flag 访问通过命名的 `block_flags::*` 常量（无原始十六进制掩码），所以位值变更不影响任何调用点语义。952/952 测试通过，curl 无回归。
 
-### 2026-07-04（续）：移植 block-graph 重写方法
-- `set_default_switch(pos)`（block.cc:318）：标记出边为 switch 默认边（设 F_DEFAULTSWITCH_EDGE）。
-- 新增 `edge_flags::F_DEFAULTSWITCH_EDGE = 1<<7`（Ghidra f_defaultswitch_edge=4，Rugra 用新位避免与 F_GOTO_EDGE 冲突）。
+### 2026-07-04（续，2026-08-28 纠正）：block-graph 默认边重写
+- 当前入口为 `set_default_switch_mirrored(block, pos)`（block.cc:318-320）：把 `F_DEFAULTSWITCH_EDGE` 同步写到 source out-half 与 target in-half；reverse index 和槽位顺序不变。
+- `edge_flags::F_DEFAULTSWITCH_EDGE = 0x04`，与 Ghidra `f_defaultswitch_edge` 完全相同；`F_TREE_EDGE = 0x10`，两者不存在位碰撞。旧文档所述 `1<<7` 是已纠正的历史错误。
 
 ### 2026-07-04（续 2）：新增 DUPLICATE_BLOCK flag
 - `block_flags::DUPLICATE_BLOCK = 0x40000`（f_duplicate_block, block.hh:106）。nodeSplit 创建的重复块。
@@ -1251,12 +1291,11 @@ reachunder 成员恒在 x 的 DFS 子树内，其树父不可能既是 x 的真�
 - ~~`calcLoop`（block.cc:2104-2147）未移植~~ → 2026-08-23 完整移植
   （见下方 BLOCK-CALCLOOP-0001 节 + oracle fixture `block_calcloop_1204`
   全 case MATCH）。
-- `EDGEFLAG-BIT7-COLLISION-0001`（预存）：F_TREE_EDGE 与
-  F_DEFAULTSWITCH_EDGE 共享 bit 7。本域投影内 bit 7 只可能是 tree
-  （wipe-first 后无 default-switch 写者），与 block_index fixture 同一处理；
-  重分配需独立任务审计全部使用点。
-- ~~生产管线未消费~~ → 2026-08-23 blockaction.rs `order_loop_bodies` 接线
-  完整 `structure_loops` 驱动（见 docs/api/blockaction.md）。
+- ~~`EDGEFLAG-BIT7-COLLISION-0001`~~ → 2026-08-28 复核确认旧登记无效：
+  `F_DEFAULTSWITCH_EDGE=0x04`、`F_TREE_EDGE=0x10`；default-switch 现双半边镜像。
+- ~~生产管线未消费~~ → 2026-08-28 真实 `buildCopy` 直接复制 basic CFG 已有的
+  tree/back/irreducible/default 标签；`order_loop_bodies` 只消费这些标签，不再
+  重跑 `structure_loops`。完整结构化闭包仍保持 MISMATCH。
 
 **对齐证据：** `tools/run_block_findirreducible_oracle.sh` 权威差分（锁定
 oracle e40ed130 导出重建 libdecomp.a + pinned base 296c128 + overlay
@@ -1294,9 +1333,11 @@ outindex)`（block.cc:1451-1464，替换原先误标 addLoopEdge 的"加新边"�
 - `FlowBlock::clear_flags(f)`（trait 必选方法，block.hh:156 clearFlag
   `flags &= ~fl`；全部 10 个 FlowBlock 实现类落地）。
 
-**生产接线：** `structure_loops` 内 cc:2211-2214 调用点闭环（此前 stub）；
-blockaction.rs 侧 `order_loop_bodies` 改调完整 `structure_loops` 驱动
-（见 docs/api/blockaction.md BLOCK-CALCLOOP-0001 节）。
+**生产接线历史：** `structure_loops` 内 cc:2211-2214 调用点仍闭环；
+本节原记录 blockaction.rs 在 `order_loop_bodies` 重跑
+`structure_loops` 的补偿路径，该路径已于 2026-08-28 撤销。
+当前由 basic CFG 上的 `structureReset` 生成 loop/tree/back 标签，
+`buildCopy` 原样复制，`order_loop_bodies` 仅消费它们。
 
 **对齐证据：** `tools/run_block_calcloop_1204_oracle.sh` 权威差分（锁定
 oracle e40ed130 导出重建 libdecomp.a + pinned base + overlay
@@ -1362,36 +1403,20 @@ max_implied_ref 取默认常量 2（与 ActionRestructureVarnode 同一先例）
   修复路径 = selfIdentify 的 replace*Edge 完整移植 block.cc:160-191）。
   httpd 29/30 函数 0 panic；该残差 WARN 在 httpd 全量出现 28 次。
 
-## BlockBasic::live_ops_source 镜像委托（TRI2-STORESPLIT-WHOLESTRUCT-0001，2026-08-26）
+## BlockCopy 活视图（2026-08-28）
 
-`BlockBasic` 新增 `live_ops_source: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>`
-字段（RUGRA-GLUE）：Ghidra 的结构图节点是 `BlockCopy` 镜像
-（`BlockGraph::buildCopy`，block.cc:1925-1938），其 `firstOp`/`lastOp`/
-`printRaw`/`emit` 全部经 `copy` 字段读**原 BlockBasic 的活动 op 列表**
-（block.hh:520-535；`PrintC::emitBlockCopy` printc.cc:2759-2764 发射
-`subBlock(0)` 即原块）。因此在 ActionBlockStructure 之后插入 PcodeOp
-（cleanup pool：RuleSplitCopy/SplitLoad/SplitStore/StringCopy/StringStore，
-coreaction.cc:5694-5712）对打印与后续读者始终可见。Rugra 的 `build_copy`
-此前对 `ops` 做快照，晚插入的拆分 STORE 在打印期丢失；该字段让新建镜像
-携带同一活动视图契约（完整 BlockCopy 移植前过渡，登记
-BLOCK-BUILDCOPY-MIRROR-0001）。仅 build_copy 设置；`bblocks` 中的原块
-永不携带镜像链，委托不递归。字段持 trait 对象（BlockGraph 块即
-`Arc<RwLock<dyn FlowBlock>>`），`get_ops` 经 trait 方法委托。
-- `BlockBasic.source_basic`（BLOCK-BUILDCOPY-MIRROR-0001 关联项）：结构图
-  副本的源基本块回指针。Ghidra 的结构图用 BlockCopy 包装器镜像基本块
-  （block.hh:520-538），其 firstOp/lastOp **委托**被包装的活块
-  （block.hh:533-534 `return copy->firstOp()`），故结构化后插入的 op
-  （如 ActionSetCasts 的 CAST，coreaction.cc:5735 晚于 blockstructure
-  :5659）对 printer 可见。Rugra 的 build_copy 原先克隆 op-list Vec 冻结
-  快照，结构化后插入不可见；`get_ops` 在 `source_basic` 为 Some 时改为
-  读源块**当前** op 列表，恢复 BlockCopy 活委托语义。快照成员资格仍供
-  collapse 自身消费（build_copy 先填 ops 再挂 source_basic）。
+2026-08-26 曾在 `BlockBasic` 上增加 `live_ops_source`/`source_basic` 作为
+临时过渡。`BLOCK-BUILDCOPY-MIRROR-0001` 已删除这两个非 oracle 字段：
+`BlockGraph::build_copy` 现在创建正式 `BlockCopy`，其 `original` 保存通用
+FlowBlock 引用，`get_ops`/firstOp/lastOp 直接读取源块当前 op 列表。因此
+ActionBlockStructure 之后插入的 CAST、SplitStore 等仍可见，但结构图本身不再
+保存 op 快照，也不存在 Basic 回指链。
 
 ## GOTO-LABEL-UNPRINTED-0001：goto 标记/打印族（2026-08-26）
 
 - 新增 `front_leaf`（block.cc:340 FlowBlock::getFrontLeaf）：沿
-  subBlock(0) 下行到叶。oracle 的叶是 t_copy（BlockCopy）；Rugra 结构化
-  树的叶替身是 Basic|Copy（build_copy 产 BlockBasic），下降在那里停。
+  subBlock(0) 下行到叶。oracle 与当前 Rugra 的结构树叶均为 t_copy
+  (`BlockCopy`)；Basic 不再充当结构图叶替身。
   List→children[0]、If→condition、WhileDo→condition、DoWhile/InfLoop→
   body、Condition→first、Switch→control，与各类 subBlock(0) 一致。
 - 新增 `mark_front_leaf` / `mark_front_leaf_dyn`（block.cc:1233
@@ -1417,12 +1442,10 @@ BLOCK-BUILDCOPY-MIRROR-0001）。仅 build_copy 设置；`bblocks` 中的原块
 
 ## TRI2-CALLOUT-ASSIGN-0001 集成：BlockCopy 活委托
 
-`BlockBasic` 镜像同时保留 `live_ops_source` 与 `source_basic` 回指源块；`get_ops`
-优先委托活动源列表，使结构化后插入的 CAST/拆分 op 对打印可见，匹配
-Ghidra `BlockCopy` 的委托语义（block.hh:520-535）。
-活动委托实验已撤销：Rugra 的结构化时序中它把 `my_fwrite` 两次判空读
-合并为永假合取。`build_copy` 当前采用构造时 `ops` 快照；全宽 STORE
-unknown 播种仍保留，progressbarinit 的逐字段清零不回退。
+正式 `BlockCopy` 直接委托活动源列表，使结构化后插入的 CAST/拆分 op 对打印
+可见，匹配 block.hh:520-535。旧的 `BlockBasic` 回指实验与构造时 ops 快照均已
+删除；任何由真实副本暴露出的结构化差异必须在上游 Rule/parent 模型修复，不能
+再通过冻结 op 快照规避。
 
 ## Edge flag collision fix（2026-08-27）
 

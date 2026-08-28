@@ -4221,7 +4221,7 @@
     },
     {
       "id": "block_calcloop_1204",
-      "description": "BlockGraph::calcLoop cycle-breaking DFS + structureLoops production wiring vs locked 12.0.4: reducible marking, nested loops, irreducible component lb overlay, structureReset end-to-end chain with dominator projection (7/7 MATCH)",
+      "description": "Historical BlockGraph::calcLoop/structureLoops semantic-label projection vs locked 12.0.4: reducible marking, nested loops, irreducible component lb overlay, and structureReset+dominator chain (7/7 covered MATCH); excludes current orderLoopBodies production wiring and raw edge-bit equality",
       "runner": [
         "tools/run_block_calcloop_oracle.sh"
       ],
@@ -4757,6 +4757,59 @@
           "GH12-F-87ee911708d59eebe61a",
           "GH12-F-c3567cea1ed400eb7413",
           "GH12-F-fd886b35140d95dc01f3"
+        ]
+      }
+    },
+    {
+      "id": "block_buildcopy_1204",
+      "description": "BlockGraph::buildCopy, selected live BlockCopy delegation, legal BlockBasic end insertion, and reciprocal parallel-edge removal after swapEdges versus locked Ghidra 12.0.4: incoming order/labels/reverse slots, idom/copymap/index/numdesc/flags/visitcount/SWITCH_OUT/type/subBlock, append-only prefix, live delegate mutation, PcodeOp parent/SeqNum order, FLIP_PATH, first destination match, and exact paired-half deletion are byte-identical; parent, structured-source, print/marshal, Action executor, and consumer-closure residuals keep the complete function status MISMATCH",
+      "runner": [
+        "tools/run_block_buildcopy_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/block_buildcopy_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/block_buildcopy_1204.cc",
+          "rust_fixture": "tests/oracle/block_buildcopy_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_block_buildcopy_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/block.rs",
+          "src/blockaction.rs",
+          "src/funcdata.rs",
+          "tests/oracle/block_buildcopy_1204.*",
+          "tools/run_block_buildcopy_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": [
+          "GH12-F-c383cc5920210f3af188",
+          "GH12-F-ee11121becf5c5e68b1e",
+          "GH12-F-dfad49538bfd7a86c74d",
+          "GH12-F-a23029f695be48e0ab8f",
+          "GH12-F-f00b6f9bd8fd95cee538",
+          "GH12-F-a4618caa71eea5ab856b",
+          "GH12-F-db7781786a0e07339eee",
+          "GH12-F-9a4833adb691e48e8ec2",
+          "GH12-F-351637d5b4dc649ae3bb",
+          "GH12-F-eaf7f657372d8e10970f",
+          "GH12-F-4d70c4b4c4d5d79ea24a",
+          "GH12-F-797e2880f17884a55344",
+          "GH12-F-a79a5ed692922aac2e11",
+          "GH12-F-a00ad0d88b1cd779d056",
+          "GH12-F-19b869d71b3262a1d874",
+          "GH12-F-57e16f2008cf6107b609",
+          "GH12-F-676ff315779d4671feeb",
+          "GH12-F-a1d975fa03e158464c37"
         ]
       }
     }

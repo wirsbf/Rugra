@@ -1,5 +1,18 @@
 # `funcdata.rs` API Reference
 
+## 2026-08-28：分支删除与 switch-default 镜像语义
+
+`Funcdata::remove_branch(bb, num)` 现把 `num` 解释为**要删除的 out-edge slot**，
+按 `funcdata_block.cc:220-226` 调用 `branch_remove_internal` 后执行
+`structure_reset`。内部路径销毁两出口 CBRANCH、以目标 incoming slot 删除对应
+MULTIEQUAL 输入，并由该 incoming edge 的 `reverse_index` 删除准确配对的
+source out-half。`install_switch_defaults` 通过双半边 helper 写入
+`F_DEFAULTSWITCH_EDGE=0x04`，不再产生 source/target 标签不一致。
+
+锁定 fixture 仅覆盖本轮列出的 buildCopy/insert/remove-edge 投影；错误路径、
+完整 MULTIEQUAL/Action 调用闭包和所有 jump-table 状态仍为
+`MISMATCH/UNTESTED`，因此本模块状态不升级。
+
 ## 2026-08-26：GOTO-LABEL-UNPRINTED-0001 收尾验证
 - `Funcdata::remove_unreachable_blocks` 保持 `funcdata_block.cc:346-393` 的 reachable 收集、DEAD 标记、出边拆除、块删除和 `structureReset` 顺序；本轮仅移除诊断用 CFG dump。
 - httpd 29/29 函数完成且 compare defects=0/numbering=0；goto 引用的未定义 label 与零地址 label 均为 0。curl 124/124 函数 compare defects=0/numbering=0。
@@ -820,7 +833,7 @@ input-slot 状态仍是 **MISMATCH**，不能由插入或 collapse fixture 推�
 
 ## 2026-06-27（续 2）：remove_branch
 
-- `remove_branch(bb, num)`（funcdata_block.cc branchRemoveInternal）：销毁 CBRANCH op（如果 2 out-edges）+ 移除非选中 out-edge + 更新目标块 incoming。解锁 ActionDeterminedBranch。
+- `remove_branch(bb, num)`（funcdata_block.cc:220）：`num` 是要删除的 out-edge slot；先执行 `branch_remove_internal`（必要时销毁 CBRANCH、删除该 out-edge，并按目标 incoming slot 删除 MULTIEQUAL 输入），再执行 `structure_reset`。旧文档“移除非选中边”的说法会把参数方向反转，已纠正。
 
 ## 2026-06-27（续 3）：FuncCallSpecs 集成
 
@@ -1046,7 +1059,7 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - `mark_indirect_creation(indop, possible_output)`（funcdata.hh:451）：把已存在的 INDIRECT op 标记为 indirect creation。
 
 ### 2026-07-04（续 2）：移植 block-graph 重写 API
-- `install_switch_defaults`（funcdata_block.cc:688）：遍历 jump_tables，标记每个 switch 块的默认边。
+- `install_switch_defaults`（funcdata_block.cc:687）：遍历 jump_tables，按槽位清除旧 default 后，通过 reciprocal reverse index 在 source out-half 与 target in-half 同步标记唯一默认边。
 - `remove_do_nothing_block(bb)`（funcdata_block.cc:328）：移除 do-nothing 块（setDead + opDestroy + removeBlock + structureReset）。
 - `node_join_create_block(...)`（funcdata_block.cc:790）：创建合并块（newBlockBasic + removeEdge + moveOutEdge + addEdge）。
 - 文件级 helper `find_out_index`（对应 FlowBlock::getOutIndex）。

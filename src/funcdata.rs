@@ -2518,64 +2518,16 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::removeBranch
-    /// Remove a branch edge from a basic block. Faithful to
-    /// `Funcdata::removeBranch` / `branchRemoveInternal`
-    /// (funcdata_block.cc). If the block has 2 out-edges (CBRANCH), the
-    /// branch op is destroyed. The edge to the un-selected out-block is
-    /// severed.
-    ///
-    /// `bb` is the block with the branch; `num` is the out-edge index to
-    /// KEEP (0 or 1). The OTHER edge is removed.
+    // Ghidra: funcdata_block.cc:220 Funcdata::removeBranch
+    /// Remove outgoing edge `num`, patch the target MULTIEQUAL inputs, then
+    /// rebuild loop/dominator state and clear the structured hierarchy.
     pub fn remove_branch(
         &mut self,
         bb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         num: usize,
     ) {
-        // If 2 out-edges, destroy the CBRANCH op.
-        let n_out = bb.read().unwrap().size_out();
-        if n_out == 2 {
-            let last_op = {
-                let bb_rg = bb.read().unwrap();
-                if let Some(any) = bb_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
-                    any.last_op()
-                } else {
-                    None
-                }
-            };
-            if let Some(cbranch) = last_op {
-                self.op_destroy(&cbranch);
-            }
-        }
-
-        // The out-edge to REMOVE is (1 - num) if num is the kept one.
-        let remove_edge = if n_out == 2 { 1 - num } else { return };
-
-        // Get the target block of the edge to remove.
-        let target = bb.read().unwrap().get_out(remove_edge).map(|e| e.point);
-        let Some(target) = target else { return };
-
-        // Remove the edge from bb to target.
-        // In our simplified model, we remove the outgoing edge from bb and
-        // the incoming edge from target.
-        {
-            let mut bb_rg = bb.write().unwrap();
-            if let Some(any) = bb_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
-                if remove_edge < any.outgoing.len() {
-                    any.outgoing.remove(remove_edge);
-                }
-            }
-        }
-        {
-            let mut target_rg = target.write().unwrap();
-            if let Some(any) = target_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
-                // Find and remove the incoming edge from bb.
-                let bb_ptr = Arc::as_ptr(bb) as *const () as usize;
-                any.incoming.retain(|e| {
-                    Arc::as_ptr(&e.point) as *const () as usize != bb_ptr
-                });
-            }
-        }
+        self.branch_remove_internal(bb, num);
+        self.structure_reset();
     }
 
     // Ghidra: funcdata_block.cc:704 Funcdata::structureReset
@@ -2677,9 +2629,9 @@ impl Funcdata {
         (self.flags & funcdata_flags::BLOCKS_UNREACHABLE) != 0
     }
 
-    // Ghidra: funcdata_block.cc:688 Funcdata::installSwitchDefaults
+    // Ghidra: funcdata_block.cc:687 Funcdata::installSwitchDefaults
     /// Mark default switch edges for all jump tables. Faithful to
-    /// `Funcdata::installSwitchDefaults` (funcdata_block.cc:688-700).
+    /// `Funcdata::installSwitchDefaults` (funcdata_block.cc:687-700).
     pub fn install_switch_defaults(&mut self) {
         for jt_arc in &self.jump_tables {
             let jt = jt_arc.read().unwrap();
@@ -2695,7 +2647,7 @@ impl Funcdata {
                 op.parent.as_ref().and_then(|w| w.upgrade())
             };
             let Some(parent_blk) = parent else { continue };
-            parent_blk.write().unwrap().set_default_switch(default_block as usize);
+            crate::block::set_default_switch_mirrored(&parent_blk, default_block as usize);
         }
     }
 

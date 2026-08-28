@@ -1,5 +1,18 @@
 # `coreaction.rs` API Reference
 
+## 2026-08-28：真实 BlockCopy 的结构变换调用闭包
+
+`ActionStructureTransform::apply` 现对子块树做 child-first/postorder 遍历，
+通过 `BlockCopy::subBlock(0)` 取得真实 basic loop head，并以
+`BlockWhileDo::has_overflow_syntax()` 执行 oracle 的 overflow 守卫；配套测试从
+真实 CFG 经 `build_copy` 构造嵌套 WhileDo。`ActionRedundBranch` 与
+`ActionDeterminedBranch` 传给 `Funcdata::remove_branch` 的参数现统一解释为
+“要删除的 out-edge slot”。
+
+这不是完整函数 `MATCH`：Ghidra `finalTransform` 的 init/iterate op 移动、
+moveability/alias 检查、identity 与错误路径尚未由锁定 oracle fixture 覆盖；
+本切片保持 `MISMATCH/UNTESTED`，不能据 unit test 升级模块。
+
 ## 2026-08-25：STOP seal + PTRSUB downChain 接线（VARNODE-STOPUP-FLAGS-0001 / TYPE-PTRSUB-PTRSUB-0001）
 
 以下是 `stop_ptrsub_wire_1204` 已覆盖的历史窄投影，曾消除
@@ -609,7 +622,7 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 ## 2026-06-27（续 2）：ActionDeterminedBranch 完整算法
 
 - **ActionDeterminedBranch**：不再是 stub。完整实现 coreaction.cc 的逻辑：遍历所有基本块，找到以 CBRANCH（常量布尔输入）结尾的块，计算实际分支方向（考虑 BOOLEAN_FLIP），调用 `Funcdata::remove_branch` 移除非选中边。
-- **Funcdata::remove_branch**：新增 CFG 编辑方法（funcdata_block.cc branchRemoveInternal）——销毁 CBRANCH op + 移除 out-edge + 更新目标 incoming。
+- **Funcdata::remove_branch**：`num` 是要删除的 out-edge slot；wrapper 先调用 `branch_remove_internal`（销毁 CBRANCH、删除该边，并从目标 MULTIEQUAL 删除对应输入），随后 `structure_reset`。
 
 ## 2026-06-27（续 3）：ActionUnreachable + ActionDoNothing 算法逻辑
 
@@ -1118,13 +1131,13 @@ build_full_pipeline_actions 新增 ActionStartTypes/AssignHigh/DominantCopy/Copy
 ActionSwitchNorm::apply 开头调用 JumpTable::recover_jump_tables(fd)，接入跳转表恢复。
 
 ### 2026-07-01（续 6）：Dead-flow Actions 接入方式
-4 个 dead-flow Action（Unreachable/DoNothing/RedundBranch/DeterminedBranch）的 apply() 全部实现。Unreachable+DeterminedBranch 在 ActionBlockStructure 内运行（pre-structuring pass）。DoNothing/RedundBranch 不在管线（破坏测试预期）。block.rs build_dom_tree 加 reindex 防止越界。heritage.rs block-not-found 优雅降级。ruleaction.rs empty-pairs 防越界。
+4 个 dead-flow Action（Unreachable/DoNothing/RedundBranch/DeterminedBranch）的 apply() 均有实现。本段原称 Unreachable+DeterminedBranch 在 `ActionBlockStructure` 内作 pre-pass；该自创入口已于 2026-08-28 删除，当前 `ActionBlockStructure::apply` 严格从 `installSwitchDefaults → buildCopy → collapseAll` 开始。DoNothing/RedundBranch 的历史管线位置说明不构成行为等价证据。
 
 ### 2026-07-01（续 7）：6 个结构化 Action apply 实现
 - ActionMarkIndirectOnly：**真实实现**。遍历 input varnode，check_indirect_use（funcdata_varnode.cc:771-811），全 INDIRECT descend 则设 INDIRECTONLY flag。
 - ActionMapGlobals：**务实最小**。遍历 vbank，RAM+persist varnode 设 PERSIST+READONLY。
 - ActionPreferComplement：**务实最小**。遍历 sblocks 找 CBRANCH 候选，TODO: preferComplement flipInPlace。
-- ActionStructureTransform：**务实最小**。遍历 WhileDo 候选，TODO: finalTransform while→for。
+- ActionStructureTransform：**历史最小实现（已被后续版本替换）**。当时只遍历 WhileDo 候选；当前状态见本文件顶部 2026-08-28 节，完整 finalTransform 仍为 MISMATCH/UNTESTED。
 - ActionReturnSplit：**goto 前驱创建 RETURN op**。isSplittable 判定 + RETURN 候选检测，`Funcdata::node_split` 已移植 (funcdata.rs:1215) 但调用会破坏 staged structurer 稳定索引不变量，故改用 op API 合成 RETURN。
 - ActionNodeJoin：**务实最小**。ConditionalJoin 候选检测，TODO: ConditionalJoin 类。
 2 新测试。
@@ -1138,8 +1151,8 @@ ActionSwitchNorm::apply 开头调用 JumpTable::recover_jump_tables(fd)，接入
 
 ### 2026-07-01（续 9）：StructureTransform 测试 BlockWhileDo for_init/for_iter
 
-### 2026-07-01（续 10）：StructureTransform 实际填充 for_init/for_iter
-ActionStructureTransform::apply 现在在检测到归纳变量后：
+### 2026-07-01（续 10，历史切片）：StructureTransform 填充 for_init/for_iter
+当时的 `ActionStructureTransform::apply` 在检测到归纳变量后：
 1. 构建 init 字符串（MULTIEQUAL entry-block input）
 2. 构建 iter 字符串（INT_ADD 表达式 `var = var + N`）
 3. 设置 BlockWhileDo.for_init/for_iter
