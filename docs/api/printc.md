@@ -1,5 +1,34 @@
 # `printc.rs` API Reference
 
+## 2026-08-28：结构化条件按 FlowBlock 类型分派（GETSTR-PRINTC-STRUCTCOND-0001）
+
+`emitBlockIf` 的 condition 不再抽取/拼接条件文本，而是像 Ghidra
+`PrintC::emitBlockIf`（`printc.cc:2878-2949`）一样，对同一个 condition
+对象先在 `no_branch` 下虚分派一次，再在 `only_branch` 下分派一次；body
+同样按其真实结构类型递归发射。配套实现了当前 Rust trait-object 需要的
+dispatcher，并按 `emitBlockBasic`（`:2678-2744`）、`emitBlockLs`
+（`:2781-2834`）和 `emitBlockCondition`（`:2836-2870`）恢复 non-flat
+路径的 modifier、语句分隔、遍历顺序和条件括号协议。旧的打印期
+`capture_block_condition`/De Morgan 文本重写不再承担这条路径。
+
+锁定 12.0.4 bilateral fixture
+`PRINTC-STRUCTURED-IF-CONDITION-0001` 覆盖 Basic condition、condition
+本身为 BlockIf、BlockCondition 和 GetStr 形 BlockList 四种 non-flat、
+zero-edge、`EmitNoMarkup` 图。双方输出均为 5 records / 9284 bytes，SHA-256
+`1440f27ef73ffc13d2dfcf319576f8d4dd17102c6fcc9a25911cf4657f129758`，raw
+diff 为空；重复发射、CALL/STORE/comment 顺序、modifier 恢复和树快照在该
+投影内 `MATCH`。完整结构发射状态为 `MISMATCH`：独立复核已确认
+Graph/MultiGoto 分派、带 condition prelude 的 pending-brace else-if，以及
+FLAT+NOFALLTHRU tail 三类确定残差；有出边的 `nextInFlow`、markup、普通
+else/if-goto、异常和其余结构子类型还未由该夹具覆盖。PrintC 继续保持 L2。
+
+真实 GetStr 已恢复独立的 `free(*string)` 语句；剩余
+`if (value != 0) { if (*value != 0) ... }` 是上游未形成
+`BlockCondition`：当前 `build_copy` 仍创建 `BlockBasic` 且丢失边槽/label/
+copymap，随后 `ruleBlockOr` 在 `is_complex` 守卫拒绝折叠。输出层不会用文本
+合并掩盖这个结构差异；后续由 `BLOCK-BUILDCOPY-MIRROR-0001` 与
+`GETSTR-PRINTC-STRUCTCOND-0001` 的上游残差继续闭合。
+
 ## 2026-08-27：CALLIND 函数指针形渲染（PRINTC-CALLIND-PTR-0001）
 
 `CPUI_CALLIND` 已与 `CPUI_CALL` 分离：按 Ghidra `PrintC::opCallind`

@@ -3055,6 +3055,7 @@ impl PrintC {
         // drain the old block's tail comments, then open the new block's
         // window with the op's live parent index.
         let mut cur_block: Option<i32> = None;
+        let mut separator = false;
         for op_ref in ops {
             let op_block = Self::op_parent_block_index(&op_ref.0.read().unwrap());
             if op_block != cur_block {
@@ -3106,15 +3107,27 @@ impl PrintC {
                     continue;
                 }
             }
-            // printc.cc:2712/2717: emitCommentGroup(inst); — drain the
-            // comments the sorter positioned at/before this statement's op
-            // (instr_comment_type = user2|warning, so the noreturn warning
-            // lands here on its own indented line before the statement).
-            self.emit_comment_group(Some(op_ref));
-            // printc.cc:2713/2718: emit->tagLine();
-            self.emit.tag_line(0);
+            if separator {
+                if self.is_set(print_mods::COMMA_SEPARATE) {
+                    // printc.cc:2707-2709: comma-separated expressions stay
+                    // in one group and are delimited by `, `.
+                    self.emit.print(", ");
+                } else {
+                    // printc.cc:2712-2713: comments and a new line precede
+                    // every statement after the first.
+                    self.emit_comment_group(Some(op_ref));
+                    self.emit.tag_line(0);
+                }
+            } else if !self.is_set(print_mods::COMMA_SEPARATE) {
+                // printc.cc:2716-2718: the first ordinary statement receives
+                // the same comment/line treatment unless this is a comma
+                // expression.
+                self.emit_comment_group(Some(op_ref));
+                self.emit.tag_line(0);
+            }
             // printc.cc:2720: emitStatement(inst);
             self.emit_statement_rpn(&op_ref.0, &op_guard);
+            separator = true;
         }
 
         // ===== printc.cc:2685 emitLabelStatement(bb) + cc:2723-2741 tail =====
@@ -3125,7 +3138,7 @@ impl PrintC {
         // BRANCH that the cc:2701 rule skipped is emitted as an explicit
         // `goto <label>;` statement (cc:2723-2741) so the non-fallthru
         // continuation is preserved. Reverse scan keeps label order stable.
-        if !suppress_branch {
+        if !suppress_branch && self.is_set(print_mods::FLAT) {
             let mut targets_to_label: Vec<u64> = Vec::new();
             for op_ref in ops.iter().rev() {
                 let op = op_ref.0.read().unwrap();
@@ -3665,471 +3678,450 @@ impl PrintC {
         }
     }
 
-    // Ghidra: printc.cc:2878 PrintC::emitBlockIf (via printc.cc:2678 emitBlockBasic body-statement set)
-    /// Check if a block body has no emittable ops (all ops are dead, skipped, or branch-only).
-    /// Used to suppress empty `if () {} else {}` blocks.
-    ///
-    /// PRINTC-EMPTYELSE-0001 root cause: this predicate decides whether
-    /// emit_structured_if prints the then/else arms at all, but it previously
-    /// ran a SELF-INVENTED dead-output filter (global_used_outputs + a pure-
-    /// computation opcode list) that has NO Ghidra counterpart. Ghidra's
-    /// emitBlockBasic (printc.cc:2678-2742) prints every op that survives
-    /// exactly three gates — notPrinted() (cc:2696), branch suppression
-    /// (cc:2697-2702) and implied-output (cc:2704-2705) — and never drops a
-    /// STORE/CALL/comparison statement for being "unused": ActionDeadCode in
-    /// the oracle has already removed truly dead computations from the
-    /// PcodeOpBank before printing. Rugra keeps dead ops in the block's op
-    /// list, so the equivalent predicate must mirror the emission gates of
-    /// emit_block_basic_rpn (the default emission path, printc.cc:2696-2705)
-    /// EXACTLY: dead / marker+NONPRINTING+NORETURN / branch-under-no_branch /
-    /// implied-output — nothing else. The legacy-path skips (COPY folding,
-    /// RIP-relative, stack-frame setup, inlined_ops) are deliberately NOT
-    /// applied here: the RPN path that actually emits arms has no such skips,
-    /// and any extra skip here would classify a body as empty whose
-    /// statements the RPN loop then emits — hiding real code (the same
-    /// failure class as the removed dead-output filter, e.g. a lone
-    /// `((bool)(x == 0));` comparison statement is a real C statement in
-    /// the oracle and keeps its arm non-empty).
-    fn is_block_body_empty(&self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>) -> bool {
-        let block = block_arc.read().unwrap();
-        let ops = block.get_ops();
-
+    // RUGRA-GLUE: legacy Rust structure-gap predicate retained for BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 fallbacks; Ghidra emitBlockIf never suppresses an owned body
+    fn is_block_body_empty(
+        &self,
+        block_arc: &std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >,
+    ) -> bool {
+        let ops = block_arc.read().unwrap().get_ops();
         for op_ref in &ops {
             let op = op_ref.0.read().unwrap();
-            // Destroyed ops are not part of a Ghidra block (opDestroy unlinks
-            // them), so they must not count as emittable body content. Same
-            // guard as emit_block_ops / emit_block_basic_rpn.
-            if op.is_dead() {
-                continue;
-            }
-            // printc.cc:2696 notPrinted(): marker (MULTIEQUAL/INDIRECT),
-            // NONPRINTING and NORETURN ops are never statements.
-            if op.is_marker()
+            if op.is_dead()
+                || op.is_marker()
                 || (op.flags & crate::op::pcodeop_flags::NONPRINTING) != 0
                 || (op.flags & crate::op::pcodeop_flags::NORETURN) != 0
+                || op.is_branch()
             {
                 continue;
             }
-            // printc.cc:2697-2702: branch ops are suppressed under no_branch
-            // (body emission context) and a straight BRANCH is always printed
-            // by the block classes.
-            if op.is_branch() {
+            if op
+                .output
+                .as_ref()
+                .map(|out| out.read().unwrap().is_implied())
+                .unwrap_or(false)
+            {
                 continue;
             }
-            // printc.cc:2704-2705: implied outputs are inlined at the read
-            // site, not emitted as standalone statements.
-            if let Some(ref out_arc) = op.output {
-                if out_arc.read().unwrap().is_implied() { continue; }
-            }
-            // If we reach here, emit_block_basic_rpn would emit this op as a
-            // statement — the body is NOT empty. Note: deliberately NO
-            // dead-output filter. Ghidra emits `lhs = rhs;` / `f(x);`
-            // statements whose outputs nobody reads (STORE/CALL/effectful
-            // comparisons all survive), and emitBlockIf (printc.cc:2920-2924)
-            // always opens the arm braces when the BlockIf was formed.
             return false;
         }
         true
     }
 
-    // Ghidra: printc.cc:123 PrintC::emitBlockStructured
-    /// Emit a block with structured control flow detection.
-    ///
-    /// Recursively walks structured block types (`BlockIf`, `BlockWhileDo`,
-    /// `BlockList`) produced by `CollapseStructure`. Falls back to flat
-    /// statement emission for `BlockBasic` nodes.
+    // RUGRA-GLUE: top-level ownership ledger around Ghidra FlowBlock::emit virtual dispatch (block.hh:221 and subtype overrides)
     fn emit_block_structured(
         &mut self,
-        block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        block_arc: &std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >,
         graph: &crate::block::BlockGraph,
         emitted: &mut std::collections::HashSet<usize>,
     ) {
-        // Depth guard: prevent stack overflow on deeply nested structures.
-        // Fallback to sequential ops emission when depth exceeds safe limit.
-        // Uses thread_local to avoid borrow conflicts with &mut self.
-        thread_local! {
-            static EMIT_DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0);
-        }
-        let depth = EMIT_DEPTH.with(|d| { let v = d.get(); d.set(v + 1); v });
-        if depth > 200 {
-            EMIT_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
-            self.emit_block_ops(block_arc, false);
+        let identity =
+            std::sync::Arc::as_ptr(block_arc) as *const () as usize;
+        if !emitted.insert(identity) {
             return;
         }
-        // Ensure decrement happens on all exit paths via a scope guard.
-        struct DepthDec;
-        impl Drop for DepthDec {
-            // RUGRA-GLUE: drop (no Ghidra counterpart found)
-            fn drop(&mut self) {
-                EMIT_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        self.emit_any_label_statement(block_arc);
+        self.emit_flow_block(block_arc, graph, emitted);
+    }
+
+    // RUGRA-GLUE: Rust downcast shim for Ghidra FlowBlock::emit virtual dispatch (block.hh:221 and subtype overrides)
+    fn emit_flow_block(
+        &mut self,
+        block_arc: &std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<usize>,
+    ) {
+        use crate::block::BlockType;
+
+        match block_arc.read().unwrap().get_type() {
+            BlockType::Plain => {}
+            BlockType::Basic => self.emit_flow_basic(block_arc),
+            BlockType::Copy => {
+                self.emit_any_label_statement(block_arc);
+                let original = {
+                    let block = block_arc.read().unwrap();
+                    block
+                        .as_any()
+                        .downcast_ref::<crate::block::BlockCopy>()
+                        .map(|copy| copy.original.clone())
+                };
+                if let Some(original) = original {
+                    let original: std::sync::Arc<
+                        std::sync::RwLock<
+                            dyn crate::block::FlowBlock + Send + Sync,
+                        >,
+                    > = original;
+                    emitted.insert(
+                        std::sync::Arc::as_ptr(&original) as *const () as usize,
+                    );
+                    self.emit_flow_block(&original, graph, emitted);
+                }
+            }
+            BlockType::Goto => self.emit_block_goto(block_arc),
+            BlockType::If => {
+                self.emit_structured_if(block_arc, graph, emitted)
+            }
+            BlockType::WhileDo => {
+                self.emit_structured_whiledo(block_arc, graph, emitted)
+            }
+            BlockType::DoWhile => {
+                self.emit_structured_dowhile(block_arc, graph, emitted)
+            }
+            BlockType::InfLoop => {
+                self.emit_structured_infloop(block_arc, graph, emitted)
+            }
+            BlockType::List => {
+                self.emit_structured_list(block_arc, graph, emitted)
+            }
+            BlockType::Condition => {
+                self.emit_structured_condition(block_arc, graph, emitted)
+            }
+            BlockType::Switch => {
+                self.emit_structured_switch(block_arc, graph, emitted)
+            }
+            BlockType::Graph | BlockType::MultiGoto => {
+                self.emit_structured_basic(block_arc, graph, emitted)
             }
         }
-        let _dec = DepthDec;
+    }
 
-        use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
-
-        let block_idx = std::sync::Arc::as_ptr(&block_arc) as *const () as usize;
-        if emitted.contains(&block_idx) {
-            return;
-        }
-        emitted.insert(block_idx);
-
-        // Skip blocks that have been consumed by structuring (DEAD flag set by
-        // CollapseStructure when a block is absorbed into a BlockIf/BlockList/etc.)
-        // NOTE: this guard belongs to the TOP-LEVEL graph walks only. Ghidra's
-        // emit tree has no dead-block concept at all — emitBlockIf calls
-        // bl->getBlock(1)->emit(this) unconditionally (printc.cc:2921-2922),
-        // emitBlockList likewise for every child. A structured parent OWNS its
-        // children and is their sole emitter, consumed flag or not, so the
-        // parent-directed recursion below must never consult this flag. The
-        // entry walks (emit_block_graph and doc_function's root/unreachable
-        // loops) apply the DEAD skip themselves before calling in.
-        let bt = block_arc.read().unwrap().get_type();
-        let _ = bt;
-
-        // Skip all emission after RETURN — prevents dead-code blocks from appearing.
-        // BUT control structures (WhileDo/DoWhile/If/etc) must still render even
-        // after a RETURN, because they represent reachable code paths. For these,
-        // save/restore seen_return so the RETURN doesn't suppress the structure.
-        let bt = block_arc.read().unwrap().get_type();
-        let is_control_struct = matches!(bt,
-            crate::block::BlockType::WhileDo
-            | crate::block::BlockType::DoWhile
-            | crate::block::BlockType::If
-            | crate::block::BlockType::List);
-        if self.seen_return && !is_control_struct {
-            return;
-        }
-
-        // Emit label if this block (or its front leaf) is an unstructured
-        // goto target. Faithful to Ghidra emitAnyLabelStatement
-        // (printc.cc:3219-3226) + emitLabelStatement (printc.cc:3198-3214)
-        // as ported in emit_any_label_statement: front-leaf descent,
-        // f_unstructured_targ gate, printed-once guard. This dispatcher
-        // entry is the structured-graph equivalent of Ghidra's per-construct
-        // emitAnyLabelStatement calls (printc.cc:2762/2965/3014/3076/3104).
+    // Ghidra: printc.cc:2678 PrintC::emitBlockBasic
+    fn emit_flow_basic(
+        &mut self,
+        block_arc: &std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >,
+    ) {
         self.emit_any_label_statement(block_arc);
+        if self.is_set(print_mods::ONLY_BRANCH) {
+            let terminal = block_arc.read().unwrap().get_ops().last().cloned();
+            if let Some(op_ref) = terminal {
+                let op = op_ref.0.read().unwrap();
+                if op.is_branch() {
+                    if self.rpn_enabled {
+                        self.emit_expression_rpn(&op_ref.0, &op);
+                    } else {
+                        self.emit_expression(&op);
+                    }
+                }
+            }
+            return;
+        }
 
-        let block_type = block_arc.read().unwrap().get_type();
+        let suppress_branch = self.is_set(print_mods::NO_BRANCH);
+        if self.is_set(print_mods::FLAT) {
+            self.emit_block_ops(block_arc, suppress_branch);
+            return;
+        }
 
+        let ops = block_arc.read().unwrap().get_ops();
+        if self.rpn_enabled {
+            self.emit_block_basic_rpn(&ops, suppress_branch);
+        } else {
+            self.emit_flow_basic_legacy(&ops, suppress_branch);
+        }
+    }
 
-        match block_type {
-            BlockType::If => self.emit_structured_if(block_arc, graph, emitted),
-            BlockType::WhileDo => self.emit_structured_whiledo(block_arc, graph, emitted),
-            BlockType::DoWhile => self.emit_structured_dowhile(block_arc, graph, emitted),
-            BlockType::InfLoop => self.emit_structured_infloop(block_arc, graph, emitted),
-            BlockType::List => self.emit_structured_list(block_arc, graph, emitted),
-            BlockType::Condition => self.emit_structured_condition(block_arc, graph, emitted),
-            BlockType::Switch => self.emit_structured_switch(block_arc, graph, emitted),
-            _ => self.emit_structured_basic(block_arc, graph, emitted),
+    // Ghidra: printc.cc:2678 PrintC::emitBlockBasic
+    fn emit_flow_basic_legacy(
+        &mut self,
+        ops: &[crate::op::PcodeOpRef],
+        suppress_branch: bool,
+    ) {
+        let comma_separate = self.is_set(print_mods::COMMA_SEPARATE);
+        let mut separator = false;
+        let mut current_block = None;
+
+        for op_ref in ops {
+            let op_block = Self::op_parent_block_index(&op_ref.0.read().unwrap());
+            if op_block != current_block {
+                if current_block.is_some() {
+                    self.emit_comment_group(None);
+                }
+                if let Some(index) = op_block {
+                    self.comment_sorter.setup_block_bounds(index);
+                }
+                current_block = op_block;
+            }
+
+            let op = op_ref.0.read().unwrap();
+            if op.is_dead()
+                || op.is_marker()
+                || (op.flags & crate::op::pcodeop_flags::NONPRINTING) != 0
+                || (op.flags & crate::op::pcodeop_flags::NORETURN) != 0
+            {
+                continue;
+            }
+            if op.is_branch() {
+                if suppress_branch
+                    || op.opcode == crate::opcodes::OpCode::CPUI_BRANCH
+                {
+                    continue;
+                }
+            }
+            if op
+                .output
+                .as_ref()
+                .map(|out| out.read().unwrap().is_implied())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
+            if separator {
+                if comma_separate {
+                    self.emit.print(", ");
+                } else {
+                    self.emit_comment_group(Some(op_ref));
+                    self.emit.tag_line(0);
+                }
+            } else if !comma_separate {
+                self.emit_comment_group(Some(op_ref));
+                self.emit.tag_line(0);
+            }
+            self.emit_statement(&op);
+            separator = true;
+        }
+
+        if current_block.is_some() {
+            self.emit_comment_group(None);
+        }
+    }
+
+    // RUGRA-GLUE: Rust trait-object transport for the FlowBlock::lastOp virtual family (block.hh:239 and subtype overrides)
+    fn flow_last_op(
+        block_arc: &std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >,
+    ) -> Option<crate::op::PcodeOpRef> {
+        use crate::block::BlockType;
+
+        match block_arc.read().unwrap().get_type() {
+            BlockType::Basic
+            | BlockType::Copy
+            | BlockType::Goto
+            | BlockType::MultiGoto => {
+                block_arc.read().unwrap().get_ops().last().cloned()
+            }
+            BlockType::List => {
+                let last = {
+                    let block = block_arc.read().unwrap();
+                    block
+                        .as_any()
+                        .downcast_ref::<crate::block::BlockList>()
+                        .and_then(|list| list.children.last().cloned())
+                }?;
+                Self::flow_last_op(&last)
+            }
+            BlockType::Condition => {
+                let second = {
+                    let block = block_arc.read().unwrap();
+                    block
+                        .as_any()
+                        .downcast_ref::<crate::block::BlockCondition>()
+                        .map(|condition| condition.second.clone())
+                }?;
+                Self::flow_last_op(&second)
+            }
+            BlockType::If => {
+                let condition = {
+                    let block = block_arc.read().unwrap();
+                    block
+                        .as_any()
+                        .downcast_ref::<crate::block::BlockIf>()
+                        .and_then(|if_block| {
+                            if if_block.goto_target.is_some() {
+                                Some(if_block.condition.clone())
+                            } else {
+                                None
+                            }
+                        })
+                }?;
+                Self::flow_last_op(&condition)
+            }
+            _ => None,
+        }
+    }
+
+    // Ghidra: block.cc:2514 FlowBlock::nextInFlow
+    fn flow_next_in_flow(
+        block_arc: &std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >,
+    ) -> Option<
+        std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >,
+    > {
+        let (size_out, out0, out1) = {
+            let block = block_arc.read().unwrap();
+            (
+                block.size_out(),
+                block.get_out(0).map(|edge| edge.point),
+                block.get_out(1).map(|edge| edge.point),
+            )
+        };
+        if size_out == 1 {
+            return out0;
+        }
+        if size_out != 2 {
+            return None;
+        }
+        let last_op = Self::flow_last_op(block_arc)?;
+        let op = last_op.0.read().unwrap();
+        if op.opcode != crate::opcodes::OpCode::CPUI_CBRANCH {
+            return None;
+        }
+        if op.is_fallthru_true() {
+            out1
+        } else {
+            out0
         }
     }
     // Ghidra: printc.cc:2878 PrintC::emitBlockIf
-    // (graph-walking emit framework dispatch; the goto_target branch below is
-    // the direct port of cc:2905-2917, the brace/else branch of cc:2918-2944)
+    /// Emit an if block by replaying the identical condition object under
+    /// NO_BRANCH and ONLY_BRANCH, then emitting the owned body blocks under
+    /// NO_BRANCH.  This is the Rust trait-object form of FlowBlock::emit;
+    /// parent-directed visits deliberately bypass the top-level once ledger.
     fn emit_structured_if(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         graph: &crate::block::BlockGraph,
         emitted: &mut std::collections::HashSet<usize>,
     ) {
-        use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
-                // Structured if-then or if-then-else
-                let block = block_arc.read().unwrap();
-                let if_block = block.as_any().downcast_ref::<BlockIf>();
-                if let Some(if_data) = if_block {
-                    // If-goto (newBlockIfGoto style): emit `if (cond) goto target;`
-                    // The goto_target is set, body is external (not embedded).
-                    if if_data.goto_target.is_some() {
-                        // Faithful port of emitBlockIf's goto branch
-                        // (printc.cc:2878-2949, esp. 2907-2917):
-                        //   cc:2894-2898  pushMod(); setMod(no_branch);
-                        //                 condBlock->emit(); popMod();
-                        //   cc:2905       tagLine();
-                        //   cc:2907-2913  tagOp(KEYWORD_IF) + spaces(1) +
-                        //                 only_branch emission of condBlock
-                        //                 (opCbranch printc.cc:536-580 in
-                        //                 non-flat mode prints `(cond)`)
-                        //   cc:2914-2916  spaces(1) + emitGotoStatement(
-                        //                 condBlock, gotoTarget, gotoType)
-                        // The previous code emitted the condition block with
-                        // skip_terminal=false (leaking the CBRANCH as a bare
-                        // `(cond);` statement) and returned without ever
-                        // printing `if`/`goto` — every try_rule_if_goto wrap
-                        // was discarded on the emit side (A93 diagnostic).
-                        // cc:2894-2898: condition block body with no_branch.
-                        self.emit_block_ops(&if_data.condition, true);
-                        // cc:2905: start the `if` on a new line (the
-                        // pending_brace "else if" merge of cc:2900-2903 is
-                        // the parent chain's concern, not the goto branch).
-                        self.emit.tag_line(0);
-                        // cc:2907-2913: `if (` + only_branch condition + `)`.
-                        self.emit.print("if (");
-                        self.emit_block_condition(&if_data.condition);
-                        self.emit.print(")");
-                        // cc:2914-2916: spaces(1) + emitGotoStatement with
-                        // the BlockIf's own gotoType (block.hh:89-91:
-                        // f_goto_goto=1 / f_break_goto=2 / f_continue_goto=4
-                        // → op::branch_type), the same mapping as the
-                        // emit_block_goto port. Ghidra passes
-                        // bl->getGotoType() straight through and never
-                        // mutates the CBRANCH op.
-                        let target_addr = if_data.goto_target.as_ref()
-                            .map(|t| t.read().unwrap().get_start_addr().as_u64())
-                            .unwrap_or(0);
+        let fields = {
+            let block = block_arc.read().unwrap();
+            block
+                .as_any()
+                .downcast_ref::<crate::block::BlockIf>()
+                .map(|if_block| {
+                    (
+                        if_block.condition.clone(),
+                        if_block.if_body.clone(),
+                        if_block.else_body.clone(),
+                        if_block.negated,
+                        if_block.goto_target.clone(),
+                        if_block.goto_type,
+                    )
+                })
+        };
+        let Some((condition, if_body, else_body, negated, goto_target, goto_type)) = fields
+        else {
+            self.emit_block_ops(block_arc, false);
+            return;
+        };
 
-                        let bt = match if_data.goto_type {
-                            crate::block::goto_type::BREAK_GOTO =>
-                                crate::op::branch_type::BREAK,
-                            crate::block::goto_type::CONTINUE_GOTO =>
-                                crate::op::branch_type::CONTINUE,
-                            _ => crate::op::branch_type::GOTO,
-                        };
-                        self.emit.print(" ");
-                        self.emit_goto_statement(target_addr, bt);
-                        return;
-                    }
-                    // Goto-cascade protection: if the condition block has
-                    // GOTO_EDGE_1 flag (created by selectGoto), dry-run emit
-                    // the if_body to check for case labels. If found, fall
-                    // back to sequential emit to avoid pulling case labels
-                    // out of switch bodies.
-                    let cond_has_goto = if_data.condition.read().unwrap().get_flags()
-                        & crate::block::block_flags::GOTO_EDGE_1 != 0;
-                    let seq_emit = if cond_has_goto {
-                        let saved_emit = std::mem::replace(&mut self.emit, Box::new(crate::prettyprint::CaseDetectEmit::new()));
-                        // Use emit_block_structured for full recursion (covers
-                        // nested BlockSwitch/BlockIf case label emission)
-                        let if_type = if_data.if_body.read().unwrap().get_type();
-                        if matches!(if_type, BlockType::Basic) {
-                            self.emit_block_ops(&if_data.if_body, false);
-                        } else {
-                            let mut dry_emitted: HashSet<usize> = HashSet::new();
-                            self.emit_block_structured(&if_data.if_body, graph, &mut dry_emitted);
-                        }
-                        let has_case = self.emit.as_any_mut()
-                            .and_then(|a| a.downcast_mut::<crate::prettyprint::CaseDetectEmit>())
-                            .map_or(false, |d| d.has_case());
-                        self.emit = saved_emit;
-                        if has_case {
-                            let if_idx = std::sync::Arc::as_ptr(&if_data.if_body) as *const () as usize;
-                            let ibt = if_data.if_body.read().unwrap().get_type();
-                            if ibt == crate::block::BlockType::Basic || ibt == crate::block::BlockType::Copy {
-                                emitted.insert(if_idx);
-                            }
-                            // Same emitBlockIf goto pattern (printc.cc:2894-
-                            // 2916): the structurer left this goto edge
-                            // unwrapped (no BlockIf.goto_target), but the
-                            // golden form is still `if (cond) goto <target>;`
-                            // — the goto target/type come from the condition
-                            // block's own CBRANCH (in(0) + branch_type),
-                            // i.e. the flat-mode tail of opCbranch
-                            // (printc.cc:574-579). Previously the CBRANCH
-                            // leaked as a bare `(cond);` statement here.
-                            self.emit_block_ops(&if_data.condition, true);
-                            self.emit.tag_line(0);
-                            self.emit.print("if (");
-                            self.emit_block_condition(&if_data.condition);
-                            self.emit.print(")");
-                            if let Some((target_addr, bt)) =
-                                Self::cbranch_goto_info(&if_data.condition)
-                            {
-                                self.emit.print(" ");
-                                // Label anchoring for this goto (and every
-                                // other) lives inside emit_goto_statement:
-                                // the pending_goto_labels backpatch prints at
-                                // the target block, and only never-emitted
-                                // targets anchor at the goto site
-                                // (GOTO-LABEL-UNPRINTED-0001).
-                                self.emit_goto_statement(target_addr, bt);
-                            }
-                            self.emit_block_ops(&if_data.if_body, false);
-                            true
-                        } else { false }
-                    } else { false };
-                    if seq_emit {
-                        // Already emitted sequentially, skip normal BlockIf processing
-                    } else {
-                    // Check if bodies have any emittable ops — skip empty if/else
-                    // blocks. Ghidra's emitBlockIf (printc.cc:2878-2943) has no
-                    // empty-body skip at all: getBlock(1)->emit(this) runs
-                    // unconditionally. The emptiness scan is only meaningful
-                    // for leaf bodies (Basic/Copy, where get_ops() lists real
-                    // ops); a structured body (BlockIf/BlockList/...) has no
-                    // direct ops of its own, so the scan must report non-empty
-                    // and let the recursive emit decide — previously the scan
-                    // mis-classified every structured body as empty and
-                    // swallowed the entire then-branch (e.g. my_fwrite's
-                    // nested fopen/return-if lost with only `if (cond) {}`).
-                    let body_empty = |pself: &Self, b: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>| {
-                        let is_leaf = matches!(
-                            b.read().unwrap().get_type(),
-                            BlockType::Basic | BlockType::Copy
-                        );
-                        is_leaf && pself.is_block_body_empty(b)
-                    };
-                    let if_body_empty = body_empty(self, &if_data.if_body);
-                    let else_body_empty = if_data.else_body.as_ref()
-                        .map_or(true, |eb| body_empty(self, eb));
+        // printc.cc:2884-2891: pending-brace is consumed by this level, and
+        // no_branch/only_branch from the parent are not propagated into the
+        // if components.  Rugra has no deferred Emit callback, so the parent
+        // marks an else-if with PENDING_BRACE and this child suppresses only
+        // the otherwise mandatory leading tagLine.
+        let merge_else_if = self.is_set(print_mods::PENDING_BRACE);
+        self.push_mod();
+        self.unset_mod(
+            print_mods::NO_BRANCH
+                | print_mods::ONLY_BRANCH
+                | print_mods::PENDING_BRACE,
+        );
 
-                    if if_body_empty && else_body_empty {
-                        // Both bodies empty — skip entire if/else, just emit condition block's ops
-                        let ibt = if_data.if_body.read().unwrap().get_type();
-                        if ibt == crate::block::BlockType::Basic || ibt == crate::block::BlockType::Copy {
-                            emitted.insert(std::sync::Arc::as_ptr(&if_data.if_body) as *const () as usize);
-                        }
-                        if let Some(ref eb) = if_data.else_body {
-                            let ebt = eb.read().unwrap().get_type();
-                            if ebt == crate::block::BlockType::Basic || ebt == crate::block::BlockType::Copy {
-                                emitted.insert(std::sync::Arc::as_ptr(&eb) as *const () as usize);
-                            }
-                        }
-                        self.emit_block_ops(&if_data.condition, true);
-                    } else if if_body_empty && !else_body_empty && if_data.else_body.is_some() {
-                        // if_body is empty, else_body has code.
-                        self.emit_block_ops(&if_data.condition, true);
-                        let ibt = if_data.if_body.read().unwrap().get_type();
-                        if ibt == crate::block::BlockType::Basic || ibt == crate::block::BlockType::Copy {
-                            emitted.insert(std::sync::Arc::as_ptr(&if_data.if_body) as *const () as usize);
-                        }
-                        let else_body = if_data.else_body.as_ref().unwrap();
-                        self.emit.tag_line(0);
-                        if if_data.negated {
-                            // Triangle-reverse + empty false branch: else_body is the true edge.
-                            // Emit with the original (un-negated) condition.
-                            self.emit.print("if (");
-                            self.emit_block_condition(&if_data.condition);
-                            self.emit.print(")");
-                        } else {
-                            // Standard: negate condition → if (!cond) { else_code }
-                            let orig_emit = std::mem::replace(&mut self.emit,
-                                Box::new(crate::prettyprint::EmitNoMarkup::new()));
-                            self.emit_block_condition(&if_data.condition);
-                            let cond_text = {
-                                let buf = std::mem::replace(&mut self.emit, orig_emit);
-                                buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-                                    .map(|b| b.get_output()).unwrap_or_default()
-                            };
-                            let trimmed = cond_text.trim();
-                            let negated_cond = Self::negate_condition_text(trimmed)
-                                .unwrap_or_else(|| format!("!({})", trimmed));
-                            self.emit.print(&format!("if ({})", negated_cond));
-                        }
-                        self.emit.begin_block();
-                        let else_body_type = else_body.read().unwrap().get_type();
-                        if matches!(else_body_type, BlockType::Basic) {
-                            emitted.insert(std::sync::Arc::as_ptr(else_body) as *const () as usize);
-                            self.emit_block_ops(else_body, true);
-                        } else {
-                            self.emit_block_structured(else_body, graph, emitted);
-                        }
-                        self.emit.end_block();
-                    } else {
-                        // Emit the condition block's non-branch ops
-                        self.emit_block_ops(&if_data.condition, true);
+        // printc.cc:2894-2898: first visit of the same condition subtree,
+        // emitting its ordinary statements but suppressing its final branch.
+        self.push_mod();
+        self.set_mod(print_mods::NO_BRANCH);
+        emitted.insert(std::sync::Arc::as_ptr(&condition) as *const () as usize);
+        self.emit_flow_block(&condition, graph, emitted);
+        self.pop_mod();
 
-                        // Emit: if (condition) — handles both simple and compound conditions
-                        // When negated=true (Triangle-reverse), negate the condition textually
-                        self.emit.tag_line(0);
-                        if if_data.negated {
-                            // Capture condition text and negate it. For a
-                            // composite (BlockCondition) the negation is the
-                            // De Morgan distribution of Ghidra's
-                            // BlockCondition::negateCondition (block.cc:3023:
-                            // NOT to both sides + op AND<->OR) with each side
-                            // printed via opCbranch's negatetoken
-                            // (printc.cc:555-560): `!((A) || (B))` renders as
-                            // `(!A) && (!B)`.
-                            let orig_emit = std::mem::replace(&mut self.emit,
-                                Box::new(crate::prettyprint::EmitNoMarkup::new()));
-                            self.emit_block_condition(&if_data.condition);
-                            let cond_text = {
-                                let buf = std::mem::replace(&mut self.emit, orig_emit);
-                                buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-                                    .map(|b| b.get_output()).unwrap_or_default()
-                            };
-                            let trimmed = cond_text.trim();
-                            let negated_cond = Self::demorgan_negate_text(trimmed)
-                                .or_else(|| Self::negate_condition_text(trimmed))
-                                .unwrap_or_else(|| format!("!({})", trimmed));
-                            self.emit.print(&format!("if ({})", negated_cond));
-                        } else {
-                            self.emit.print("if (");
-                            self.emit_block_condition(&if_data.condition);
-                            self.emit.print(")");
-                        }
+        // printc.cc:2899-2905: comments in the condition tree are drained
+        // before the if keyword.  A pending else-if stays on the current line.
+        self.emit_comment_block_tree(&condition);
+        if merge_else_if {
+            self.emit.print(" ");
+        } else {
+            self.emit.tag_line(0);
+        }
 
-                        // Emit true body.
-                        // seen_return must be scoped to this branch: a RETURN
-                        // in a sibling/preceding path must NOT suppress the
-                        // then-body. Mirrors the else-body save/restore below.
-                        self.emit.begin_block();
-                        let if_body_type = if_data.if_body.read().unwrap().get_type();
-                        if matches!(if_body_type, BlockType::Basic) {
-                            emitted.insert(std::sync::Arc::as_ptr(&if_data.if_body) as *const () as usize);
-                            let saved = self.seen_return;
-                            self.seen_return = false;
-                            self.emit_block_ops(&if_data.if_body, true);
-                            self.seen_return = saved;
-                        } else {
-                            let saved = self.seen_return;
-                            self.seen_return = false;
-                            self.emit_block_structured(&if_data.if_body, graph, emitted);
-                            self.seen_return = saved;
-                        }
-                        self.emit.end_block();
+        // printc.cc:2907-2913: second visit of the identical condition object,
+        // now selecting only its terminal branch expression.
+        self.emit.tag_op("if");
+        self.emit.print(" ");
+        self.push_mod();
+        self.set_mod(print_mods::ONLY_BRANCH);
+        if negated {
+            // BLOCKIF.negated is Rugra representation glue.  The oracle
+            // normally records this polarity in the condition itself; the
+            // modifier preserves the simple-condition observable projection.
+            self.set_mod(print_mods::NEGATETOKEN);
+        }
+        emitted.insert(std::sync::Arc::as_ptr(&condition) as *const () as usize);
+        self.emit_flow_block(&condition, graph, emitted);
+        self.pop_mod();
 
-                        // Emit else body if present and non-empty.
-                        // seen_return from the then-branch must NOT suppress the else.
-                        if let Some(ref else_body) = if_data.else_body {
-                            if !else_body_empty {
-                                // P9: else-if chaining (Ghidra emitBlockIf cc:2928-2935).
-                                // When the else body is itself a BlockIf, emit
-                                // `else if (...)` (no braces around the nested if)
-                                // instead of `else { if (...) }`. Ghidra does this
-                                // via the pending_brace mod + PendingBrace callback;
-                                // Rugra detects the BlockIf else body directly.
-                                let else_is_if = else_body.read().unwrap().get_type() == BlockType::If;
-                                if else_is_if {
-                                    self.emit.print(" else ");
-                                    let saved = self.seen_return;
-                                    self.seen_return = false;
-                                    self.emit_structured_if(else_body, graph, emitted);
-                                    self.seen_return = saved;
-                                } else {
-                                    self.emit.print(" else");
-                                    self.emit.begin_block();
-                                    let else_body_type = else_body.read().unwrap().get_type();
-                                    if matches!(else_body_type, BlockType::Basic) {
-                                        emitted.insert(std::sync::Arc::as_ptr(else_body) as *const () as usize);
-                                        let saved = self.seen_return;
-                                        self.seen_return = false;
-                                        self.emit_block_ops(else_body, true);
-                                        self.seen_return = saved;
-                                    } else {
-                                        let saved = self.seen_return;
-                                        self.seen_return = false;
-                                        self.emit_block_structured(else_body, graph, emitted);
-                                        self.seen_return = saved;
-                                    }
-                                    self.emit.end_block();
-                                }
-                            } else {
-                                let ebt = else_body.read().unwrap().get_type();
-                                if ebt == crate::block::BlockType::Basic || ebt == crate::block::BlockType::Copy {
-                                    emitted.insert(std::sync::Arc::as_ptr(else_body) as *const () as usize);
-                                }
-                            }
-                        }
-                    }
-                    } // end seq_emit else
-                } else {
-                    // Fallback: emit flat
-                    self.emit_block_ops(block_arc, false);
+        if let Some(target) = goto_target {
+            // printc.cc:2914-2917: a one-component BlockIf emits its formal
+            // goto directly after the condition and has no structured body.
+            let target_addr = target.read().unwrap().get_start_addr().as_u64();
+            let branch_type = match goto_type {
+                crate::block::goto_type::BREAK_GOTO => crate::op::branch_type::BREAK,
+                crate::block::goto_type::CONTINUE_GOTO => {
+                    crate::op::branch_type::CONTINUE
                 }
+                _ => crate::op::branch_type::GOTO,
+            };
+            self.emit.print(" ");
+            self.emit_goto_statement(target_addr, branch_type);
+            self.pop_mod();
+            return;
+        }
+
+        // printc.cc:2918-2925: both body visits inherit NO_BRANCH.  The body
+        // object is emitted even when its direct op list is empty because it
+        // may itself own a structured subtree.
+        self.set_mod(print_mods::NO_BRANCH);
+        self.emit.open_brace_indent(
+            "{",
+            crate::prettyprint::BraceStyle::SameLine,
+        );
+        emitted.insert(std::sync::Arc::as_ptr(&if_body) as *const () as usize);
+        let saved_return = self.seen_return;
+        self.seen_return = false;
+        self.emit_flow_block(&if_body, graph, emitted);
+        self.seen_return = saved_return;
+        self.emit.close_brace_indent("}");
+
+        if let Some(else_block) = else_body {
+            // printc.cc:2926-2944: an if-valued else block is replayed with
+            // pending-brace syntax; every other subtype gets its own braces.
+            self.emit.tag_line(0);
+            self.emit.tag_op("else");
+            emitted.insert(
+                std::sync::Arc::as_ptr(&else_block) as *const () as usize,
+            );
+            if else_block.read().unwrap().get_type()
+                == crate::block::BlockType::If
+            {
+                self.set_mod(print_mods::PENDING_BRACE);
+                self.emit_flow_block(&else_block, graph, emitted);
+            } else {
+                self.emit.open_brace_indent(
+                    "{",
+                    crate::prettyprint::BraceStyle::SameLine,
+                );
+                let saved_return = self.seen_return;
+                self.seen_return = false;
+                self.emit_flow_block(&else_block, graph, emitted);
+                self.seen_return = saved_return;
+                self.emit.close_brace_indent("}");
+            }
+        }
+
+        self.pop_mod();
     }
-
-
     // RUGRA-GLUE: emit_structured_whiledo (no Ghidra counterpart found)
     fn emit_structured_whiledo(
         &mut self,
@@ -4329,94 +4321,135 @@ impl PrintC {
     }
 
 
-    // RUGRA-GLUE: emit_structured_list (no Ghidra counterpart found)
+    // Ghidra: printc.cc:2781 PrintC::emitBlockLs
+    /// Emit a sequential structured list with modifier-sensitive virtual
+    /// dispatch. ONLY_BRANCH selects only the final child; otherwise all
+    /// preceding children receive NO_BRANCH while the final child receives
+    /// the caller's original modifier state.
     fn emit_structured_list(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         graph: &crate::block::BlockGraph,
         emitted: &mut std::collections::HashSet<usize>,
     ) {
-        use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
-                // Sequence of blocks — emit children in order
-                let block = block_arc.read().unwrap();
-                let list_block = block.as_any().downcast_ref::<BlockList>();
-                if let Some(list_data) = list_block {
-                    for child in &list_data.children {
-                        self.emit_block_structured(child, graph, emitted);
-                    }
-                    // After emitting all children, follow the List's out-edges to
-                    // structured blocks (WhileDo etc). The List's out-edges come
-                    // from self_identify and may point to a WhileDo that was
-                    // structured before the List was formed.
-                    let outs: Vec<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = {
-                        let b = block_arc.read().unwrap();
-                        (0..b.size_out()).filter_map(|s| b.get_out(s).map(|e| e.point.clone())).collect()
-                    };
-                    for succ in &outs {
-                        let succ_idx = std::sync::Arc::as_ptr(succ) as *const () as usize;
-                        if emitted.contains(&succ_idx) { continue; }
-                        let st = succ.read().unwrap().get_type();
-                        if st != crate::block::BlockType::Basic
-                           && st != crate::block::BlockType::Copy {
-                            self.emit_block_structured(succ, graph, emitted);
-                        }
-                    }
-                } else {
-                    self.emit_block_ops(block_arc, false);
-                }
+        let children = {
+            let block = block_arc.read().unwrap();
+            block
+                .as_any()
+                .downcast_ref::<crate::block::BlockList>()
+                .map(|list| list.children.clone())
+        };
+        let Some(children) = children else {
+            self.emit_block_ops(block_arc, false);
+            return;
+        };
+        if children.is_empty() {
+            return;
+        }
+
+        if self.is_set(print_mods::ONLY_BRANCH) {
+            let last = children.last().unwrap();
+            emitted.insert(std::sync::Arc::as_ptr(last) as *const () as usize);
+            self.emit_flow_block(last, graph, emitted);
+            return;
+        }
+
+        if children.len() == 1 {
+            let only = &children[0];
+            emitted.insert(std::sync::Arc::as_ptr(only) as *const () as usize);
+            self.emit_flow_block(only, graph, emitted);
+            return;
+        }
+
+        self.push_mod();
+        if !self.is_set(print_mods::FLAT) {
+            self.set_mod(print_mods::NO_BRANCH);
+        }
+
+        let mut i = 0usize;
+        while i < children.len() - 1 {
+            let child = &children[i];
+            let next = &children[i + 1];
+            i += 1;
+
+            emitted.insert(std::sync::Arc::as_ptr(child) as *const () as usize);
+            let is_fallthrough = Self::flow_next_in_flow(child)
+                .map(|flow| std::sync::Arc::ptr_eq(&flow, next))
+                .unwrap_or(false);
+            if is_fallthrough {
+                self.emit_flow_block(child, graph, emitted);
+            } else {
+                self.push_mod();
+                self.set_mod(print_mods::NOFALLTHRU);
+                self.emit_flow_block(child, graph, emitted);
+                self.pop_mod();
+            }
+        }
+
+        self.pop_mod();
+        let last = &children[i];
+        emitted.insert(std::sync::Arc::as_ptr(last) as *const () as usize);
+        self.emit_flow_block(last, graph, emitted);
     }
-
-
-    // RUGRA-GLUE: emit_structured_condition (no Ghidra counterpart found)
+    // Ghidra: printc.cc:2836 PrintC::emitBlockCondition
+    /// Emit a compound condition under the caller's modifier state. NO_BRANCH
+    /// emits only child zero's ordinary statements; ONLY_BRANCH or
+    /// COMMA_SEPARATE emits the complete left-operator-right expression.
     fn emit_structured_condition(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         graph: &crate::block::BlockGraph,
         emitted: &mut std::collections::HashSet<usize>,
     ) {
-        use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
-                // P8 fix: BlockCondition at top level is a compound &&/|| condition.
-                // Ghidra's emitBlockCondition (printc.cc:2836) emits the combined
-                // condition `(sub0) && (sub1)` when only_branch/comma_separate are
-                // set. Previously Rugra emitted the two sub-blocks as independent
-                // statements, losing the &&/|| glue. Now capture each sub-condition
-                // and emit the combined form.
-                let block = block_arc.read().unwrap();
-                if let Some(cond_data) = block.as_any().downcast_ref::<BlockCondition>() {
-                    let op_str = match cond_data.op_type {
-                        crate::block::BoolOp::And => " && ",
-                        crate::block::BoolOp::Or => " || ",
-                    };
-                    let first = cond_data.first.clone();
-                    let second = cond_data.second.clone();
-                    drop(block);
-                    // Capture each sub-condition's text (recursively handles
-                    // nested BlockCondition via emit_block_condition_inner).
-                    let left_text = self.capture_block_condition(&first);
-                    let right_text = self.capture_block_condition(&second);
-                    let lt = left_text.trim();
-                    let rt = right_text.trim();
-                    if !lt.is_empty() && !rt.is_empty() {
-                        self.emit.tag_line(0);
-                        self.emit.print("if (");
-                        self.emit.print(lt);
-                        self.emit.print(op_str);
-                        self.emit.print(rt);
-                        self.emit.print(")");
-                        self.emit.begin_block();
-                        self.emit.end_block();
-                    } else {
-                        // Fallback: emit sub-block ops flat (old behavior).
-                        self.emit_block_structured(&first, graph, emitted);
-                        self.emit_block_structured(&second, graph, emitted);
-                    }
-                } else {
-                    drop(block);
-                    self.emit_block_ops(block_arc, false);
-                }
+        let fields = {
+            let block = block_arc.read().unwrap();
+            block
+                .as_any()
+                .downcast_ref::<crate::block::BlockCondition>()
+                .map(|condition| {
+                    (
+                        condition.first.clone(),
+                        condition.second.clone(),
+                        condition.op_type,
+                    )
+                })
+        };
+        let Some((first, second, op_type)) = fields else {
+            self.emit_block_ops(block_arc, false);
+            return;
+        };
+
+        if self.is_set(print_mods::NO_BRANCH) {
+            emitted.insert(std::sync::Arc::as_ptr(&first) as *const () as usize);
+            self.emit_flow_block(&first, graph, emitted);
+            return;
+        }
+
+        if !self.is_set(print_mods::ONLY_BRANCH)
+            && !self.is_set(print_mods::COMMA_SEPARATE)
+        {
+            return;
+        }
+
+        let outer = self.emit.open_paren("(");
+        emitted.insert(std::sync::Arc::as_ptr(&first) as *const () as usize);
+        self.emit_flow_block(&first, graph, emitted);
+
+        self.push_mod();
+        self.unset_mod(print_mods::ONLY_BRANCH);
+        self.set_mod(print_mods::COMMA_SEPARATE);
+        match op_type {
+            crate::block::BoolOp::And => self.emit.print(" && "),
+            crate::block::BoolOp::Or => self.emit.print(" || "),
+        }
+
+        let right = self.emit.open_paren("(");
+        emitted.insert(std::sync::Arc::as_ptr(&second) as *const () as usize);
+        self.emit_flow_block(&second, graph, emitted);
+        self.emit.close_paren(")", right);
+        self.pop_mod();
+        self.emit.close_paren(")", outer);
     }
-
-
     // Ghidra: printc.cc:3313 PrintC::emitBlockSwitch
     fn emit_structured_switch(
         &mut self,

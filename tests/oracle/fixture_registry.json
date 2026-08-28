@@ -320,6 +320,50 @@
       }
     },
     {
+      "id": "printc_structured_if_condition_1204",
+      "description": "Locked Ghidra 12.0.4 comparison for the zero-edge, non-FLAT Basic, direct nested BlockIf, BlockCondition, and getstr-shaped BlockList structured-condition routing projection; the covered projection is MATCH while complete PrintC structured emission remains MISMATCH",
+      "runner": [
+        "tools/run_printc_structured_if_condition_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/printc_structured_if_condition_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/printc_structured_if_condition_1204.cc",
+          "rust_fixture": "tests/oracle/printc_structured_if_condition_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_printc_structured_if_condition_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/printc.rs",
+          "tests/oracle/printc_structured_if_condition_1204.*",
+          "tools/run_printc_structured_if_condition_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-d3cbdd1c0f4c699102a4",
+          "RG-F-e32609c6e6aa96eb3250",
+          "RG-F-5c67bfa2b4dafad127e9",
+          "RG-F-299676bea37a2595fd77",
+          "RG-F-07d2d89e04793cfd340c",
+          "RG-F-54a3d214ac312361eab5"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-1bcf1c228ba3eb0b1d0e",
+          "GH12-F-bd812d638e2de548abdc",
+          "GH12-F-d397e290308fb9b68af1",
+          "GH12-F-4d8cc97e20565da1fe65"
+        ]
+      }
+    },
+    {
       "id": "userop_index_1204",
       "description": "Global userop selector, parameter order, and output ownership",
       "runner": [
