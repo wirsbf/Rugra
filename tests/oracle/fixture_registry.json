@@ -4176,7 +4176,7 @@
     },
     {
       "id": "nodejoin_condjoin_1204",
-      "description": "ConditionalJoin/ActionNodeJoin bilateral projection driven through production perform: same-condition full join (count=1, joinblock composition, exit COPY/INT_ADD), six findDups gate rejections, triple-diamond re-join, versus locked Ghidra 12.0.4",
+      "description": "ConditionalJoin/ActionNodeJoin bilateral projection driven through production perform: same-condition full join (count=1, joinblock composition, exit COPY/INT_ADD), six findDups gate rejections, triple-diamond re-join, versus locked Ghidra 12.0.4. TODOs NODEJOIN-F2-EXECUTE-STEPS-0001/F3-SAMECOND-FULLJOIN-0001/F4-MATCH-GATES-0001/F5-DYNAMIC-SIZE-0001 delivered by w-nodejoin-f234 (9/9 records MATCH, pristine oracle rebuild); NJF234 cross-review follow-ups closed by w-registry6 (runner pin + --validate-only).",
       "runner": [
         "tools/run_nodejoin_condjoin_oracle.sh"
       ],
@@ -4188,20 +4188,35 @@
       "evidence_status": "MATCH",
       "cache": {
         "metadata": "tests/oracle/nodejoin_condjoin_1204.metadata.json",
-        "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-        "rust_base_commit": "82e81ec8fb5eab19ed880bc0df2ede8bbad1512d"
+        "tools": {
+          "runner": "tools/run_nodejoin_condjoin_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/nodejoin_condjoin_1204.cc",
+          "fixture_source_2": "tests/oracle/nodejoin_condjoin_1204.rs"
+        }
       },
       "impact": {
-        "todo_ids": [
-          "NODEJOIN-F2-EXECUTE-STEPS-0001",
-          "NODEJOIN-F3-SAMECOND-FULLJOIN-0001",
-          "NODEJOIN-F4-MATCH-GATES-0001",
-          "NODEJOIN-F5-DYNAMIC-SIZE-0001"
-        ],
-        "src_files": [
+        "paths": [
           "src/coreaction.rs"
         ],
-        "notes": "delivered by w-nodejoin-f234; 9/9 records MATCH (pristine oracle rebuild); cross-review PENDING"
+        "rust_function_ids": [
+          "RG-F-8fd7cc62c810fb242a5a",
+          "RG-F-de05b7ef5a84b6c2c139",
+          "RG-F-040dd6a4963caea0f64f",
+          "RG-F-1fcc10e325a7fac374ec",
+          "RG-F-03c2e475c288ae37c5ee",
+          "RG-F-e7cb855a090805b40db6",
+          "RG-F-62a55372c4fd4fadf642"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-29862f94d124a7c5707b",
+          "GH12-F-c2dd6a9878854a3cb8e9",
+          "GH12-F-e605fa06da306ffafedd",
+          "GH12-F-e38aa1a948fcaacaf3fb",
+          "GH12-F-87d69cbc5a36669257d2",
+          "GH12-F-9898c3e5526ae9013343"
+        ]
       }
     },
     {
@@ -4928,11 +4943,16 @@
       },
       "impact": {
         "paths": [
-          "tools/run_printc_whiledo_body_emit_oracle.sh"
+          "src/printc.rs",
+          "src/prettyprint.rs"
         ],
-        "rust_function_ids": [],
+        "rust_function_ids": [
+          "RG-F-da5c1171cbcfda770c9b",
+          "RG-F-4e6712f8e73ebad664ba"
+        ],
         "ghidra_function_ids": [
-          "GH12-F-49e341af37f7b0534a20"
+          "GH12-F-01ad63043fb45522e3b6",
+          "GH12-F-46a917bb01bb5856b3f7"
         ]
       }
     },

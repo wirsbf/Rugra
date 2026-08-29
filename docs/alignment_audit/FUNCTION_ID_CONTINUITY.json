@@ -11,16 +11,16 @@
     "src_tree": "004b20c8ed6da74cf6457a4386570bae4801bc78"
   },
   "checkpoint": {
-    "commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
-    "commit_tree": "37538e5b20846db971c2ca780619a77e619ee4bc",
-    "rust_function_records": 10496,
-    "rust_projection_sha256": "4c05b372f148281f7f76fa7b83f3dd5436e6f22f36f15d596338bf084b401e46",
-    "src_tree": "4e34c9b82928d6a79c603330ae351534d583f649"
+    "commit": "45cf2962eadea0da9cc91b81918ee04a522231b7",
+    "commit_tree": "7ec708488fda6676dcacffcaee0cefebec47f4b7",
+    "rust_function_records": 10505,
+    "rust_projection_sha256": "4b3938a79248f8a2e06e7fd1ba86129dd6a4a1261a0e896b697966c436c2a831",
+    "src_tree": "fb561d9f958267794a5c1d094f67e5c0f0436216"
   },
   "history": {
-    "commit_count": 415,
+    "commit_count": 424,
     "first_commit": "7ae30f5bcfba5e1adce2a4e8cdeebc23d96964cb",
-    "last_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+    "last_commit": "45cf2962eadea0da9cc91b81918ee04a522231b7",
     "mode": "first_parent"
   },
   "id_scheme": {
@@ -2346,6 +2346,18 @@
       "signature": "fn input_vn(n: u64) -> VnRef"
     },
     {
+      "base_id": "RG-F-334734e6707b98e65537",
+      "child_blob": "2d2c573f4c98ce04529030da49ae3136119a7f0b",
+      "introduced_at_commit": "6fcec613bcc7be42dbc0d2621aeee90ec88b6b8e",
+      "module": "printc",
+      "name": "rpn_operator_name_carry",
+      "new_id": "RG-F-334734e6707b98e65537",
+      "owner": "impl:PrintC",
+      "parent_blob": "344642c0c1abc177c8e9bff8a67d75283d826591",
+      "path": "src/printc.rs",
+      "signature": "fn rpn_operator_name_carry(op: &PcodeOp) -> String"
+    },
+    {
       "base_id": "RG-F-3364b2b484f2fafba596",
       "child_blob": "5cde46e8aa9a67d5c19e80566aeead7cbbda72db",
       "introduced_at_commit": "e956e963b167ed1d57a7a4daed2a3566f2425999",
@@ -3546,6 +3558,18 @@
       "signature": "fn get_exit_leaf_trait(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>"
     },
     {
+      "base_id": "RG-F-4e6712f8e73ebad664ba",
+      "child_blob": "38bdc875983849bcfafe58830144ee965db35ba8",
+      "introduced_at_commit": "6fcec613bcc7be42dbc0d2621aeee90ec88b6b8e",
+      "module": "prettyprint",
+      "name": "pretty_print_overflow_whiledo_header_spaces",
+      "new_id": "RG-F-4e6712f8e73ebad664ba",
+      "owner": "free",
+      "parent_blob": "fdcded1c889d35585b88c87e4240be674c2ad957",
+      "path": "src/prettyprint.rs",
+      "signature": "fn pretty_print_overflow_whiledo_header_spaces()"
+    },
+    {
       "base_id": "RG-F-4e9f597e3cbe737fd971",
       "child_blob": "d135ae48b234a97c157a019368b938ef5a5c0ac9",
       "introduced_at_commit": "17e0a639318c0d1248ace608f6a975b8ced85d2c",
@@ -3880,6 +3904,18 @@
       "parent_blob": "9caf3207ac72015b8e46a4e397bf514cac75377a",
       "path": "src/typeop.rs",
       "signature": "fn print_raw(&self, op: &PcodeOp) -> String"
+    },
+    {
+      "base_id": "RG-F-57e3bb9bb87773938b62",
+      "child_blob": "b049306db3ec357e268982a51549a1fe943841e3",
+      "introduced_at_commit": "739aada44fdc19f428f349890e2d7e02d26a8df5",
+      "module": "funcdata",
+      "name": "test_branch_remove_internal_destroys_cbranch_at_two_out",
+      "new_id": "RG-F-57e3bb9bb87773938b62",
+      "owner": "free",
+      "parent_blob": "521e92d8d4ba90076c7f0ecf15124d55d15a4ac3",
+      "path": "src/funcdata.rs",
+      "signature": "fn test_branch_remove_internal_destroys_cbranch_at_two_out()"
     },
     {
       "base_id": "RG-F-58305d699a1d71bcd4ce",
@@ -5466,6 +5502,18 @@
       "signature": "fn execute_current_op(&mut self) -> Result<(), EmulateFailure>"
     },
     {
+      "base_id": "RG-F-7d22c5b6d380c46be69e",
+      "child_blob": "4f70431cfcc1514d44947048c84dfd20dded852d",
+      "introduced_at_commit": "6fcec613bcc7be42dbc0d2621aeee90ec88b6b8e",
+      "module": "coreaction",
+      "name": "test_determinedbranch_removes_not_taken_edge_and_counts",
+      "new_id": "RG-F-7d22c5b6d380c46be69e",
+      "owner": "free",
+      "parent_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "path": "src/coreaction.rs",
+      "signature": "fn test_determinedbranch_removes_not_taken_edge_and_counts()"
+    },
+    {
       "base_id": "RG-F-7d4bd7950f4297ec32b6",
       "child_blob": "f7760d99ae8f2ddaf0690e786d0b7cf964737b0f",
       "introduced_at_commit": "3b6e3139f3f6e9ba3d8d999b046fe7d30310c224",
@@ -5512,6 +5560,18 @@
       "parent_blob": "f8215674fd7558ef4d609c8a296dd8b4d67ea47b",
       "path": "src/funcdata.rs",
       "signature": "fn set_arch_injects_architecture_type_factory_before_varnode_allocation()"
+    },
+    {
+      "base_id": "RG-F-7e71e31324297f001c9d",
+      "child_blob": "1e8fe1c3bc1908fc26a0a7cda58eb22e5b3844e2",
+      "introduced_at_commit": "6fcec613bcc7be42dbc0d2621aeee90ec88b6b8e",
+      "module": "blockaction",
+      "name": "bs_trace_cfg_sig",
+      "new_id": "RG-F-7e71e31324297f001c9d",
+      "owner": "free",
+      "parent_blob": "59f306915bd12fb278710b13a2aca876e7023817",
+      "path": "src/blockaction.rs",
+      "signature": "fn bs_trace_cfg_sig(graph: &BlockGraph) -> String"
     },
     {
       "base_id": "RG-F-7e73ad7e651aaf595505",
@@ -5980,6 +6040,18 @@
       "parent_blob": "15d1b123a975915a62ee661414b16c4e9cbba5dc",
       "path": "src/action.rs",
       "signature": "fn clear_rule_break_points(&mut self)"
+    },
+    {
+      "base_id": "RG-F-8749f746dfd02373363d",
+      "child_blob": "4f70431cfcc1514d44947048c84dfd20dded852d",
+      "introduced_at_commit": "6fcec613bcc7be42dbc0d2621aeee90ec88b6b8e",
+      "module": "coreaction",
+      "name": "take_count_delta",
+      "new_id": "RG-F-8749f746dfd02373363d",
+      "owner": "impl:ActionDeterminedBranch as Action",
+      "parent_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "path": "src/coreaction.rs",
+      "signature": "fn take_count_delta(&mut self) -> i32"
     },
     {
       "base_id": "RG-F-87c6821a687f43ed3cca",
@@ -9270,6 +9342,18 @@
       "signature": "fn get_sub_type_arc( datatype: &Arc<Datatype>, off: i64, ) -> (Option<Arc<Datatype>>, i64)"
     },
     {
+      "base_id": "RG-F-d9aeb8302e862ae5189f",
+      "child_blob": "4f70431cfcc1514d44947048c84dfd20dded852d",
+      "introduced_at_commit": "6fcec613bcc7be42dbc0d2621aeee90ec88b6b8e",
+      "module": "coreaction",
+      "name": "test_determinedbranch_skips_malformed_decision_block",
+      "new_id": "RG-F-d9aeb8302e862ae5189f",
+      "owner": "free",
+      "parent_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "path": "src/coreaction.rs",
+      "signature": "fn test_determinedbranch_skips_malformed_decision_block()"
+    },
+    {
       "base_id": "RG-F-d9d3da946c12ed8260f7",
       "child_blob": "318e0bbaa7a27381f2cd75b1df149da82835f1f6",
       "introduced_at_commit": "8e09e5987abb4412383e22b558c291c58097e611",
@@ -10554,6 +10638,18 @@
       "signature": "fn split_action_toggles(config: u32) -> (bool, bool)"
     },
     {
+      "base_id": "RG-F-f638f5fbf25254ea4a2d",
+      "child_blob": "b049306db3ec357e268982a51549a1fe943841e3",
+      "introduced_at_commit": "739aada44fdc19f428f349890e2d7e02d26a8df5",
+      "module": "funcdata",
+      "name": "test_build_blocks_synthetic_target_creates_block_no_zombie",
+      "new_id": "RG-F-f638f5fbf25254ea4a2d",
+      "owner": "free",
+      "parent_blob": "521e92d8d4ba90076c7f0ecf15124d55d15a4ac3",
+      "path": "src/funcdata.rs",
+      "signature": "fn test_build_blocks_synthetic_target_creates_block_no_zombie()"
+    },
+    {
       "base_id": "RG-F-f674a1d032dd73a99351",
       "child_blob": "4113567d9b6d26baff83ff10cdaab691b26d2e9b",
       "introduced_at_commit": "a3cda8b996dad8ff6418cf2c63b539a89866a84c",
@@ -10816,6 +10912,18 @@
       "parent_blob": "8b0b009a152525dae09c3977072ce86742b8b86c",
       "path": "src/typeop.rs",
       "signature": "fn load_value_to_pointer_checks_output_source_spacebase()"
+    },
+    {
+      "base_id": "RG-F-fd0bd9bd27931e1b8240",
+      "child_blob": "b049306db3ec357e268982a51549a1fe943841e3",
+      "introduced_at_commit": "739aada44fdc19f428f349890e2d7e02d26a8df5",
+      "module": "funcdata",
+      "name": "test_build_blocks_external_target_edge_still_dropped",
+      "new_id": "RG-F-fd0bd9bd27931e1b8240",
+      "owner": "free",
+      "parent_blob": "521e92d8d4ba90076c7f0ecf15124d55d15a4ac3",
+      "path": "src/funcdata.rs",
+      "signature": "fn test_build_blocks_external_target_edge_still_dropped()"
     },
     {
       "base_id": "RG-F-fd18c72db47c3fe0c86b",
@@ -26739,9 +26847,9 @@
     "ambiguous": 0,
     "baseline_records": 9639,
     "collisions": 0,
-    "current_records": 10496,
+    "current_records": 10505,
     "events": 504,
-    "introduced_live": 912,
+    "introduced_live": 921,
     "lineages": 489,
     "reviewed_transitions": 238,
     "tombstones": 56
