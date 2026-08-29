@@ -1230,6 +1230,19 @@ impl<'a> CollapseStructure<'a> {
                     }
                     let slot = self.virtual_list[idx] as usize;
                     idx += 1;
+                    // w-rc4 probe (RUGRA_BS_VISIT=1): mirror oracle
+                    // BS_ORACLE_VISIT — per-visit position/slot dump.
+                    if std::env::var("RUGRA_BS_VISIT")
+                        .map(|v| v == "1")
+                        .unwrap_or(false)
+                    {
+                        eprintln!(
+                            "[BLOCKSTRUCT] {} visit pos={} idx={}",
+                            self.name,
+                            idx - 1,
+                            slot
+                        );
+                    }
                     let block = match self.graph.get_block(slot) {
                         Some(b) => b,
                         None => continue,

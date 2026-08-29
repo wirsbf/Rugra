@@ -1,5 +1,20 @@
 # `blockaction.rs` API Reference
 
+
+### 2026-08-30 追加（seam #2/#3 定缝结论, 未修）
+
+双侧 visit 级 trace（oracle BS_ORACLE_VISIT vs Rugra RUGRA_BS_VISIT，均 env 门控）：
+- Or-cond 创建序列双侧**完全一致**（6,26,29,89,95,101,117,120,123,126,132,141 + 重触发 89→91,
+  126→128），此前"顺序发散"判断系 dump 误读（重触发把首代 cond 移到尾部）。
+- properif/cat 消费集逐事件**完全一致**（105→106, 109→110, ..., 29→31, 117→119, 132→134,
+  126→129; cat35→37, 55→57, 109→111, 139→141, 117→120）。
+- 事件 22 处（cat@139 后 oracle 访问 if@117, Rugra 访问 if@132）的残余错位 =
+  **@339e 块缺失**（oracle main 图 150 块 vs Rugra 149；列表尾部少一个条目使 shift 算术差 1 位）。
+  @339e = main/_start 重叠区的 hlt（fallthrough 过 noreturn call），Rugra 按符号尺寸截断不含。
+  修复域 = funcdata/flow（函数尺寸/跟随策略），非 blockaction —— 已登记移交。
+- do-while 吸收链（goto67→cat67→dowhile67 ... ifelse12→cat12→dowhile12, oracle 事件 53-80）
+  在该错位下游；@339e 修复后继续用同一双侧 visit trace 定缝。
+
 ## 2026-08-30：Ghidra 列表序镜像 virtual_list（MAIN-RC4-DOWHILE-TRACE-0001, P1）
 
 **根因（双侧 trace 定缝, oracle 插桩 /tmp/w-rc4-ore + RUGRA_BS_TRACE）**：Ghidra 的 collapse
