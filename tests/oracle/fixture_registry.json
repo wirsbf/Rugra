@@ -5188,7 +5188,8 @@
         "inputs": {
           "fixture_source_1": "tests/oracle/ptrsub_switch_cast_1204.cc",
           "fixture_source_2": "tests/oracle/ptrsub_switch_cast_1204.rs"
-        }
+        },
+        "rust_base_commit": "9ab3be941acd3e6dba463191792eab348319c110"
       },
       "impact": {
         "paths": [
