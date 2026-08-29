@@ -562,6 +562,23 @@ def collect_rust_identities(relative: str, text: str, module: str) -> list[dict[
         full_module = "::".join([module, *inner_mods])
         scopes = [f"{kind}:{name}" for kind, name in chain if kind != "mod"]
         owner = "/".join(scopes) if scopes else "free"
+        enclosing = [pos for pos, close in pairs.items() if pos < record.start < close]
+        if enclosing:
+            innermost = max(enclosing)
+            boundary = max(
+                code.rfind("{", 0, innermost),
+                code.rfind("}", 0, innermost),
+                code.rfind(";", 0, innermost),
+            )
+            # Raw header of the nearest enclosing item, attributes included.
+            # ``rust_render_scope_header`` deliberately drops attribute-decorated
+            # headers (``#[test]``/``#[cfg(test)]``) from the owner chain, so this
+            # raw segment is the only content-derived context that separates
+            # identically named helpers nested inside two different attributed
+            # scopes.  Whitespace-normalized and position-independent.
+            scope_context = " ".join(code[boundary + 1:innermost].split())
+        else:
+            scope_context = ""
         records.append(
             {
                 "path": relative,
@@ -576,6 +593,7 @@ def collect_rust_identities(relative: str, text: str, module: str) -> list[dict[
                 "module": full_module,
                 "owner": owner,
                 "signature": signature,
+                "scope_context": scope_context,
             }
         )
     return records
@@ -592,20 +610,49 @@ def assign_rust_locked_ids(records: list[dict[str, object]]) -> None:
     collisions: dict[str, list[dict[str, object]]] = defaultdict(list)
     for record in records:
         collisions[str(record["id"])].append(record)
-    duplicates = {key: group for key, group in collisions.items() if len(group) > 1}
-    if duplicates:
+    unresolved: list[list[dict[str, object]]] = []
+    for group in collisions.values():
+        if len(group) < 2:
+            continue
+        # Content-derived fallback in the spirit of the Ghidra preprocessor
+        # guard disambiguator: attribute-decorated scope headers are dropped
+        # from the owner chain by design, so identically named helpers nested
+        # inside two different attributed scopes (e.g. two #[test] functions)
+        # collide on (module, owner, signature) alone.  The raw nearest
+        # enclosing item header separates them by content; if it cannot, the
+        # assignment fails closed rather than guessing an ordinal.
+        contexts = [str(record.get("scope_context") or "") for record in group]
+        if len(set(contexts)) == len(contexts):
+            for record, context in zip(group, contexts):
+                record["id"] = stable_id(
+                    "RG-F",
+                    (
+                        record["module"],
+                        record["owner"],
+                        record["signature"],
+                        context,
+                    ),
+                )
+                record["id_disambiguator"] = {
+                    "kind": "enclosing_scope_header",
+                    "value": context,
+                }
+            continue
+        unresolved.append(group)
+    if unresolved:
         details = []
-        for group in duplicates.values():
+        for group in unresolved:
             for record in group:
                 details.append(
                     f"  {record['path']}:{record['line']} {record['name']} "
                     f"module={record['module']} owner={record['owner']} "
-                    f"signature={record['signature']}"
+                    f"signature={record['signature']} "
+                    f"scope_context={record.get('scope_context')!r}"
                 )
         raise RuntimeError(
             "indistinguishable Rust function items share one ID key (module + owner "
-            "+ signature); refusing to guess an ordinal-free disambiguator:\n"
-            + "\n".join(details)
+            "+ signature + enclosing scope header); refusing to guess an "
+            "ordinal-free disambiguator:\n" + "\n".join(details)
         )
 
 
@@ -7604,6 +7651,76 @@ fn after_macros() {}
         assert "indistinguishable" in str(error)
     else:
         raise AssertionError("identical Rust items must fail closed")
+
+    # Identical helpers nested in two different #[test] scopes collide on
+    # (module, owner, signature) -- the attribute-decorated headers never
+    # enter the owner chain -- and must be separated by the raw enclosing
+    # scope header, mirroring the Ghidra preprocessor-guard disambiguator.
+    test_scope_fixture = (
+        "#[test]\n"
+        "fn test_alpha() {\n"
+        "    fn helper(v: u64) -> u8 { v as u8 }\n"
+        "    helper(1);\n"
+        "}\n"
+        "#[test]\n"
+        "fn test_beta() {\n"
+        "    fn helper(v: u64) -> u8 { v as u8 }\n"
+        "    helper(2);\n"
+        "}\n"
+    )
+    records = collect_rust_identities(
+        "src/test_scope.rs", test_scope_fixture, "test_scope"
+    )
+    assign_rust_locked_ids(records)
+    helpers = [record for record in records if record["name"] == "helper"]
+    assert len(helpers) == 2
+    assert len({record["id"] for record in helpers}) == 2, (
+        "enclosing scope headers must separate identical test-local helpers"
+    )
+    assert all(record["owner"] == "free" for record in helpers)
+    assert {record["id_disambiguator"]["kind"] for record in helpers} == {
+        "enclosing_scope_header"
+    }
+    assert {record["id_disambiguator"]["value"] for record in helpers} == {
+        "#[test] fn test_alpha()",
+        "#[test] fn test_beta()",
+    }, "disambiguator value is the whitespace-normalized raw enclosing header"
+    # Inserting unrelated lines above must not change any ID (content-derived,
+    # position-independent disambiguator).
+    padded_records = collect_rust_identities(
+        "src/test_scope.rs",
+        "// new\n// new\n" + test_scope_fixture,
+        "test_scope",
+    )
+    assign_rust_locked_ids(padded_records)
+    padded_ids = [
+        record["id"]
+        for record in padded_records
+        if record["name"] == "helper"
+    ]
+    assert sorted(padded_ids) == sorted(
+        record["id"] for record in helpers
+    ), "IDs must survive line insertion"
+    # Two identical helpers nested inside the SAME scope are genuinely
+    # indistinguishable and must still fail closed.
+    try:
+        assign_rust_locked_ids(
+            collect_rust_identities(
+                "src/test_twin_helper.rs",
+                "#[test]\n"
+                "fn test_gamma() {\n"
+                "    fn helper(v: u64) -> u8 { v as u8 }\n"
+                "    fn helper(v: u64) -> u8 { v as u8 }\n"
+                "}\n",
+                "test_twin_helper",
+            )
+        )
+    except RuntimeError as error:
+        assert "indistinguishable" in str(error)
+    else:
+        raise AssertionError(
+            "identical helpers inside one scope must fail closed"
+        )
 
     # --- staged / base / dirty git states -----------------------------------
     with tempfile.TemporaryDirectory() as tmp:
