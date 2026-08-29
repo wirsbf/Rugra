@@ -2418,12 +2418,16 @@ impl Merge {
     /// other Varnode in `blocksort` (same storage). If so, mark the reader for
     /// snipping. Then call `snip_reads`.
     /// Faithful to `Merge::eliminateIntersect` (merge.cc:489-571).
+    // RUGRA-GLUE: returns the marked-read count (Ghidra's eliminateIntersect
+    // returns void) so the [UNIFY] diagnostic can print a direct marked=
+    // field without re-deriving it; pure diagnostic return, callers ignore
+    // it when RUGRA_MERGE_DIAG is unset.
     fn eliminate_intersect(
         &mut self,
         fd: &mut Funcdata,
         vn: &Arc<RwLock<Varnode>>,
         blocksort: &[BlockVarnode],
-    ) {
+    ) -> usize {
         let marked_ops: Vec<crate::op::PcodeOpRef> = {
             // Collect descendant (reader) ops of vn.
             let descend: Vec<crate::op::PcodeOpRef> = {
@@ -2639,7 +2643,9 @@ impl Merge {
             }
             marked
         };
+        let marked_count = marked_ops.len();
         self.snip_reads(fd, vn, &marked_ops);
+        marked_count
     }
 
     // Ghidra: merge.cc:581 Merge::unifyAddress
@@ -2667,15 +2673,17 @@ impl Merge {
                 0
             };
             let pre_ops = if diag { fd.obank.optree.len() } else { 0 };
-            self.eliminate_intersect(fd, vn, &blocksort);
+            let marked_count = self.eliminate_intersect(fd, vn, &blocksort);
             // Registered debug TAG [UNIFY] (stderr, env-gated by
             // RUGRA_MERGE_DIAG; registry: docs/api/merge.md "诊断 TAG
-            // 登记"). One line per Ram varnode: readers, snipped readers,
-            // op-bank delta and flags.
+            // 登记"). One line per Ram varnode: readers, snipped readers
+            // (marked), op-bank delta and flags. The marked= field is the
+            // direct snip-read count, comparable 1:1 with the oracle's
+            // [ORE-MARK] probe lines (one per marked op).
             if diag {
                 let r = vn.read().unwrap();
                 eprintln!(
-                    "[UNIFY] vn@{:#x}/{} def={:?} descend={} ops_delta={} flags={:#x}",
+                    "[UNIFY] vn@{:#x}/{} def={:?} descend={} marked={} ops_delta={} flags={:#x}",
                     r.get_offset(),
                     r.get_size(),
                     r.get_def().map(|d| {
@@ -2683,6 +2691,7 @@ impl Merge {
                         format!("{:?}@{:#x}", dr.opcode, dr.get_addr().as_u64())
                     }),
                     pre_desc,
+                    marked_count,
                     fd.obank.optree.len().saturating_sub(pre_ops),
                     r.flags,
                 );

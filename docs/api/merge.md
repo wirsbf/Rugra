@@ -730,7 +730,7 @@ MULTIEQUAL@0x37b4），归 heritage place_multiequals/rename 代际差异，
 |---|---|---|---|
 | `[MERGE-FAIL]` | `RUGRA_MERGE_DIAG` | `merge_range_must` 失败前 | 整组 `(space,offset,size)` 成员转储（def/flags/high 实例数，`*FAIL*` 标注） |
 | `[MERGE-PAIR]` | `RUGRA_MERGE_DIAG` | `[MERGE-FAIL]` 之后 | 每对相交实例的 def/cover 与读者 op/order |
-| `[UNIFY]` | `RUGRA_MERGE_DIAG` | `unify_address` 逐 Ram vn | `descend/ops_delta/flags`（eliminateIntersect 后 op-bank 增量） |
+| `[UNIFY]` | `RUGRA_MERGE_DIAG` | `unify_address` 逐 Ram vn | `descend/marked/ops_delta/flags`（marked = snip_reads 实际剪断的读 op 数，可与 oracle `[ORE-MARK]` 逐行对拍） |
 | `[H-GRET]` | `RUGRA_HERITAGE_TRACE` | heritage.rs `rebuild` 通 return 后缀 | pass/range/RETURN 地址（登记于本表以便检索；canonical 归属 heritage 模块文档） |
 
 oracle 侧等价探针（插桩 decomp_opt 的 `[ORE-UNIFY]`/`[ORE-MARK]`/
