@@ -229,21 +229,26 @@ wrapper。当前 corpus 的迁移计划应为 `auto=9`、`manual=0`、`tombstone
 
 后续 raw scheme-2 变化写入独立、append-only 的
 `FUNCTION_ID_CONTINUITY.json`，绝不覆盖上述历史 migration。当前 checkpoint 固定为
-`00fba40ceb073a0a4a452f8156b6827a0d05facc`（src tree
-`bdafc0c4ceac4bbe29158edac665ca41d8294546`，ORACLE-REGISTRY-IMPACT-CONTINUITY-0001
-收尾推进越过合并的 HTTPD-TFALIGN TypeFactory guard 窗口），从 baseline target 连续重放 412 个
+`420174438fdf3ae4f7e09b483af14cc04215316d`（分支线锚 merge，src tree
+`4e34c9b82928d6a79c603330ae351534d583f649`，REGISTRY-CHECKPOINT-ADVANCE 第五窗：
+并入 master 884208b8 的 nodejoin F2-F5 / printc INT_NEGATE / BlockGoto wrapped /
+GLOBWORD-C5 / heritage lattice 窗口），从 baseline target 连续重放 415 个
 first-parent commit。checkpoint 推进是幂等重跑流程：advance 五常量(commit/tree/src/parent/
 count)→重生成 ledger→零漂移 probe 枚举窗口移除/新增→逐条 git 证据定性(reviewed transition/
 tombstone/ephemeral/automatic)→以 probe 全量重算 EXPECTED_* allowlist→`--reconcile-continuity`
 →重生成→`--check`。自动 continuity 仅接受同 path/module/owner/name 的唯一 1→1，且签名
 差异严格限于参数 pattern 起始的 binding `mut` 或 rustfmt 尾分隔符，同时必须独立复算同 patch hunk 与相同非空
 annotation；`&mut`、`&'a mut`、`*mut` 和 `&mut pattern` 不规范化，也不改变 raw ID 公式。
-当前文件记录 489 条 lineage、883 个 `introduced_live` 与 55 个 tombstone。loader 先解析 baseline alias，再组合 continuity terminal；任一
+当前文件记录 489 条 lineage、912 个 `introduced_live` 与 56 个 tombstone。loader 先解析 baseline alias，再组合 continuity terminal；任一
 chain 断裂、1→2/2→1、跨层 token 复用、terminal collision/缺失、event commit/blob、
 first-parent、projection hash/count、dirty/src tree 漂移均 rc=2。continuity tombstone 只作
-诊断，永不进入自动 replacement。schema 1 只允许 baseline origin 进入 tombstone；若某个
-`introduced_live` 在同一 replay 区间后续又被删除，生成器会 rc=2，必须先评审能保留其
-introduction proof 的 schema 扩展，不能静默丢掉 origin。
+诊断，永不进入自动 replacement。schema 2 允许 reviewed tombstone 覆盖 post-baseline
+introduced 谱系（行内 `origin` 块携带完整 introduced_live provenance，oracle_registry 对
+origin 做 commit/blob/记录字段/token 唯一性全量校验）；schema 1 行为不变。若某个
+`introduced_live` 在同一 replay 区间后续又被删除且无 reviewed 规则，生成器会 rc=2，不能
+静默丢掉 origin。Rust 侧 raw ID 碰撞（同 module+owner+signature，如两个 #[test] 域内的
+同名 helper）由 `enclosing_scope_header` 内容消解器分离（最近包裹 item 的原始头部，
+position-independent；不能分离仍 rc=2），与 Ghidra 侧 preprocessor guard 消解器同构。
 
 metadata 的未闭合证据必须结构化放在 `coverage.<case>.status`、`observation_scope`、
 `known_dependencies`、`residuals`、`known_residuals`、`uncovered_boundaries` 或

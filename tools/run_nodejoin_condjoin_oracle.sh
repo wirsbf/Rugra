@@ -8,6 +8,28 @@ set -euo pipefail
 # runs both over the same nine synthetic diamond cases and requires
 # byte-identical stdout projections.
 
+usage() {
+  echo "usage: $0 [--validate-only]" >&2
+}
+
+validate_only=false
+case ${1:-} in
+  "")
+    ;;
+  --validate-only)
+    validate_only=true
+    shift
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
+if [[ $# -ne 0 ]]; then
+  usage
+  exit 2
+fi
+
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
@@ -44,6 +66,45 @@ if [[ "$actual_commit" != "$oracle_commit" || "$actual_tag" != "$oracle_commit" 
   "$actual_makefile" != "$oracle_makefile_blob" ]]; then
   echo "locked Ghidra oracle identity mismatch" >&2
   exit 1
+fi
+
+# Metadata comparand pins (sha256 over file content) are enforced on every
+# invocation; --validate-only stops here, mirroring the sibling runner
+# convention (run_heritage_callguard_oracle.sh).
+metadata_pins=$(python3 - "$metadata" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    comparand = json.load(handle)["comparand"]
+for key in ("cpp_fixture_sha256", "rust_fixture_sha256", "runner_sha256"):
+    print(key, comparand[key])
+PY
+)
+pin_error=0
+while read -r pin_key pin_expected; do
+  case "$pin_key" in
+    cpp_fixture_sha256) pin_target="$cpp_fixture" ;;
+    rust_fixture_sha256) pin_target="$rust_fixture" ;;
+    runner_sha256) pin_target="$runner" ;;
+    *)
+      echo "unknown metadata comparand key: $pin_key" >&2
+      pin_error=1
+      continue
+      ;;
+  esac
+  pin_actual=$(sha256sum "$pin_target" | awk '{print $1}')
+  if [[ "$pin_actual" != "$pin_expected" ]]; then
+    echo "metadata pin mismatch: $pin_key expected=$pin_expected actual=$pin_actual ($pin_target)" >&2
+    pin_error=1
+  fi
+done <<< "$metadata_pins"
+if [[ "$pin_error" -ne 0 ]]; then
+  exit 1
+fi
+if [[ "$validate_only" == true ]]; then
+  echo "nodejoin_condjoin_1204 metadata/source lock validation passed"
+  exit 0
 fi
 
 oracle_tmp=${NODEJOIN_ORACLE_TMP:-/tmp/rugra-nodejoin-condjoin-oracle}

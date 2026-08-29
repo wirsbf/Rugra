@@ -1873,6 +1873,10 @@
       "to": "subflow"
     },
     {
+      "from": "action",
+      "to": "varnode"
+    },
+    {
       "from": "address",
       "to": "marshal"
     },
@@ -2398,6 +2402,10 @@
     },
     {
       "from": "cover",
+      "to": "space"
+    },
+    {
+      "from": "cover",
       "to": "varnode"
     },
     {
@@ -2443,6 +2451,10 @@
     {
       "from": "debugproto",
       "to": "arch"
+    },
+    {
+      "from": "debugproto",
+      "to": "database"
     },
     {
       "from": "debugproto",

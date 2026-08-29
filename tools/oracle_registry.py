@@ -756,8 +756,8 @@ def _load_and_validate_continuity(
         continuity = load_json(path)
     except json.JSONDecodeError as exc:
         raise HarnessError(f"continuity table is not valid JSON: {exc}") from exc
-    if not isinstance(continuity, dict) or continuity.get("schema") != 1:
-        raise HarnessError("function continuity root must be schema 1 object")
+    if not isinstance(continuity, dict) or continuity.get("schema") not in (1, 2):
+        raise HarnessError("function continuity root must be a schema 1 or 2 object")
     if continuity.get("oracle_commit") != LOCKED_ORACLE_COMMIT:
         raise HarnessError("function continuity oracle commit pin mismatch")
     if (continuity.get("id_scheme") != migration.get("id_scheme")
@@ -1012,8 +1012,55 @@ def _load_and_validate_continuity(
         if base_id in tombstone_bases or base_id in lineage_bases:
             raise HarnessError(f"continuity duplicate live/tombstone base {base_id}")
         tombstone_bases.add(base_id)
+        # Schema 2: a tombstone of a post-baseline introduced class carries its
+        # origin provenance inline (the class no longer has an introduced_live
+        # row), validated here exactly like a live introduction.
+        origin_minimum_order = -1
         if base_id not in baseline_ids and base_id not in introduced_by_base:
-            raise HarnessError(f"continuity tombstone base has no known origin: {base_id}")
+            origin = row.get("origin")
+            if not isinstance(origin, dict) or origin.get("kind") != "introduced_live":
+                raise HarnessError(
+                    f"continuity tombstone base has no known origin: {base_id}"
+                )
+            origin_required = (
+                "kind", "introduced_at_commit", "path", "module", "owner",
+                "name", "signature", "parent_blob", "child_blob",
+            )
+            if any(not origin.get(field) for field in origin_required):
+                raise HarnessError(
+                    f"malformed continuity tombstone origin {base_id}"
+                )
+            origin_commit = origin["introduced_at_commit"]
+            if (origin_commit not in history_commits
+                    or not COMMIT_RE.fullmatch(str(origin_commit))):
+                raise HarnessError(
+                    f"continuity tombstone origin commit outside history: {base_id}"
+                )
+            origin_parent = _registry_git(
+                root, ["rev-parse", f"{origin_commit}^1"]
+            ).strip()
+            if (_git_path_blob(root, origin_parent, origin["path"]) != origin["parent_blob"]
+                    or _git_path_blob(root, origin_commit, origin["path"])
+                    != origin["child_blob"]):
+                raise HarnessError(
+                    f"continuity tombstone origin blob pin mismatch: {base_id}"
+                )
+            origin_parent_records = _scan_rust_blob(
+                root, origin["path"], origin["parent_blob"], generator, blob_cache
+            )
+            origin_child_records = _scan_rust_blob(
+                root, origin["path"], origin["child_blob"], generator, blob_cache
+            )
+            if base_id in origin_parent_records or base_id not in origin_child_records:
+                raise HarnessError(
+                    f"continuity tombstone origin {base_id} is not newly added in its event"
+                )
+            _validate_record_fields(
+                origin_child_records[base_id], origin,
+                "", f"tombstone origin {base_id}",
+            )
+            claim(base_id, class_owner(base_id), "tombstone origin base")
+            origin_minimum_order = commit_order[origin_commit]
         if (not isinstance(aliases, list)
                 or not isinstance(events, list) or not row["reason"]):
             raise HarnessError(f"malformed continuity tombstone {base_id}")
@@ -1022,7 +1069,7 @@ def _load_and_validate_continuity(
         )
         minimum_order = (
             commit_order[introduced_by_base[base_id]["introduced_at_commit"]]
-            if base_id in introduced_by_base else -1
+            if base_id in introduced_by_base else origin_minimum_order
         )
         last_event_order = validate_events(
             base_id, aliases[:len(events)], events, final_deleted, minimum_order

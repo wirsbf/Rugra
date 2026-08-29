@@ -9,10 +9,10 @@
 - Declaration references: 6317
 - Raw Ctags function records: 15811
 - Ghidra IDs carrying a guard disambiguator: 12
-- Rugra functions: 10467
-  (8675 production + 1792 test)
-- Exact definition-start mappings: 3971
-- Body-line references requiring audit: 353
+- Rugra functions: 10496
+  (8700 production + 1796 test)
+- Exact definition-start mappings: 3978
+- Body-line references requiring audit: 354
 
 The old hand-maintained `~2055` denominator is not a completion metric. The generated
 9494-definition denominator remains entirely `UNTESTED` unless a locked behavior fixture
@@ -32,9 +32,9 @@ records complete same-input/same-output evidence.
 | `architecture.hh` | 9 | 0 | 0 | 9 |
 | `bfd_arch.cc` | 11 | 0 | 0 | 11 |
 | `bfd_arch.hh` | 1 | 0 | 0 | 1 |
-| `block.cc` | 204 | 120 | 4 | 80 |
-| `block.hh` | 171 | 79 | 0 | 92 |
-| `blockaction.cc` | 83 | 48 | 0 | 35 |
+| `block.cc` | 204 | 120 | 5 | 79 |
+| `block.hh` | 171 | 80 | 0 | 91 |
+| `blockaction.cc` | 83 | 54 | 0 | 29 |
 | `blockaction.hh` | 29 | 3 | 0 | 26 |
 | `callgraph.cc` | 26 | 22 | 0 | 4 |
 | `callgraph.hh` | 19 | 0 | 0 | 19 |
