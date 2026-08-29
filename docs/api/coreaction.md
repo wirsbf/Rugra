@@ -2121,3 +2121,13 @@ findSpanningTree 会把块表**重排为逆后序并重索引**(Ghidra block.cc:
 `list = rpostorder`)——joinblock 不在追加位置;测试按 JOINED_BLOCK flag 定位。
 测试:`test_nodejoin_execute_runs_all_four_steps`(joinblock=[ME,ME,CBRANCH] 序、
 cbranch1 读合并输出、b2 cbranch2 销毁、exit [COPY,INT_ADD] 且 COPY 读 (v1,v2) 合并)。
+
+## 2026-08-29:NODEJOIN-F5-DYNAMIC-SIZE-0001 外层循环动态 graph.getSize()
+
+`ActionNodeJoin::apply` 外层改为 `while i < fd.bblocks.get_size()`(cc:2334
+`for(int4 i=0;i<graph.getSize();++i)` 每次迭代重新求值)。join 会 append 新块
+(尺寸+1)且 structureReset→findSpanningTree 重排块表(block.cc:1015-1137),冻结的
+pre-loop 尺寸会漏访问 joinblock —— 而它持有移动后的 cbranch1 和两条出边,自身
+可再次 join。测试:`test_nodejoin_dynamic_size_rejoins_joinblock`(三同条件菱形
+→ count==2、两个 JOINED_BLOCK;oracle 侧 I_triple 同为 count=2,见
+nodejoin_condjoin_1204 双侧 fixture)。

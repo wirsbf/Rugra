@@ -13749,21 +13749,36 @@ impl Action for ActionNodeJoin {
             return Ok(action_status::NO_CHANGE);
         }
         let mut condjoin = ConditionalJoin::new();
-        let n_blocks = fd.bblocks.get_size();
-        for i in 0..n_blocks {
+        // cc:2334: `for(int4 i=0;i<graph.getSize();++i)` — the loop bound is
+        // RE-EVALUATED every iteration. nodeJoinCreateBlock appends the join
+        // block (list grows) and its structureReset → findSpanningTree
+        // reorders/reindexes the list (block.cc:1015-1137), so the walk must
+        // keep consulting the CURRENT size to reach newly joined blocks —
+        // a join block itself ends in a CBRANCH with two out edges and can
+        // join again. NODEJOIN-F5-DYNAMIC-SIZE-0001: the former port froze
+        // the pre-loop size and never visited appended join blocks.
+        let mut i = 0usize;
+        while i < fd.bblocks.get_size() {
             let bl_arc = match fd.bblocks.get_block(i) {
                 Some(b) => b,
-                None => continue,
+                None => {
+                    i += 1;
+                    continue;
+                }
             };
             // bb->sizeOut() != 2 → skip (blockaction.cc:2336).
             let (out0, out1) = {
                 let bl_rg = bl_arc.read().unwrap();
                 if bl_rg.size_out() != 2 {
+                    i += 1;
                     continue;
                 }
                 match (bl_rg.get_out(0), bl_rg.get_out(1)) {
                     (Some(a), Some(b)) => (a, b),
-                    _ => continue,
+                    _ => {
+                        i += 1;
+                        continue;
+                    }
                 }
             };
             // Pick the output with the smaller in-edge count
@@ -13787,6 +13802,7 @@ impl Action for ActionNodeJoin {
             // leastout->sizeIn()==1 → skip (blockaction.cc:2349).
             let leastout_in = leastout.read().unwrap().size_in();
             if leastout_in <= 1 {
+                i += 1;
                 continue;
             }
             // bb's last op must be a CBRANCH (ConditionalJoin::findDups,
@@ -13802,6 +13818,7 @@ impl Action for ActionNodeJoin {
                     .map(|o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
                     .unwrap_or(false);
                 if !last_is_cb {
+                    i += 1;
                     continue;
                 }
             }
@@ -13964,6 +13981,7 @@ impl Action for ActionNodeJoin {
                 break;
             }
             let _ = joined_this;
+            i += 1;
         }
         // Ghidra always returns 0.
         Ok(action_status::NO_CHANGE)
@@ -16019,6 +16037,89 @@ mod tests {
             std::sync::Arc::ptr_eq(&copy_in, &me_v_out),
             "exit COPY reads the merged (v1,v2) replacement"
         );
+    }
+
+    /// NODEJOIN-F5-DYNAMIC-SIZE-0001 Rugra regression leg: the outer
+    /// walk's loop bound is re-evaluated every iteration
+    /// (`for(int4 i=0;i<graph.getSize();++i)`, blockaction.cc:2334), so a
+    /// join block appended by nodeJoinCreateBlock is itself visited — and
+    /// having inherited cbranch1 and the two out edges (moveCbranch
+    /// cc:2043), it can join with a third same-condition sibling. Fixture:
+    /// THREE CBRANCH blocks b1/b2/b3 converging on the same two exits with
+    /// the identical condition Varnode. First pass joins b1+b2 into J1; the
+    /// walk then reaches J1 and joins it with b3 into J2 — count == 2 and
+    /// TWO JOINED_BLOCK blocks exist. The frozen pre-loop bound of the
+    /// former port stopped after the first join (count == 1).
+    #[test]
+    fn test_nodejoin_dynamic_size_rejoins_joinblock() {
+        use crate::address::{Address, SeqNum};
+        use crate::block::{BlockBasic, FlowBlock};
+        use crate::op::{PcodeOp, PcodeOpRef};
+        use crate::opcodes::OpCode;
+        use crate::varnode::Varnode;
+
+        let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
+        let cond_vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(
+            1,
+            Address::new(0x50),
+        )));
+        let mut blocks = Vec::new();
+        for (i, a) in [0x1000u64, 0x2000, 0x3000, 0x4000, 0x5000]
+            .iter()
+            .enumerate()
+        {
+            blocks.push(std::sync::Arc::new(std::sync::RwLock::new(
+                BlockBasic::new((i + 1) as i32, Address::new(*a)),
+            )));
+        }
+        let (b1, b2, b3, exita, exitb) = (
+            blocks[0].clone(),
+            blocks[1].clone(),
+            blocks[2].clone(),
+            blocks[3].clone(),
+            blocks[4].clone(),
+        );
+        for blk in [&b1, &b2, &b3] {
+            let mut cb = PcodeOp::new(
+                SeqNum::new(blk.read().unwrap().get_start_addr(), 5),
+                OpCode::CPUI_CBRANCH,
+            );
+            cb.inrefs = vec![
+                std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(
+                    0x3000, 8,
+                ))),
+                cond_vn.clone(),
+            ];
+            blk.write().unwrap().add_op(PcodeOpRef(std::sync::Arc::new(
+                std::sync::RwLock::new(cb),
+            )));
+        }
+        for b in &blocks {
+            fd.bblocks.add_block(b.clone());
+        }
+        fd.bblocks.add_edge(b1.clone(), exita.clone());
+        fd.bblocks.add_edge(b1.clone(), exitb.clone());
+        fd.bblocks.add_edge(b2.clone(), exita.clone());
+        fd.bblocks.add_edge(b2.clone(), exitb.clone());
+        fd.bblocks.add_edge(b3.clone(), exita.clone());
+        fd.bblocks.add_edge(b3.clone(), exitb.clone());
+
+        let mut a = ActionNodeJoin::new();
+        let _ = a.apply(&mut fd).unwrap();
+        let joined_count = (0..fd.bblocks.get_size())
+            .filter(|&pos| {
+                fd.bblocks.get_block(pos)
+                    .expect("block")
+                    .read()
+                    .unwrap()
+                    .get_flags()
+                    & crate::block::block_flags::JOINED_BLOCK
+                    != 0
+            })
+            .count();
+        eprintln!("[F5PROBE] count={} joined_blocks={}", a.count, joined_count);
+        assert_eq!(a.count, 2, "join block must itself be revisited and re-joined");
+        assert_eq!(joined_count, 2, "two JOINED_BLOCK blocks (J1 and J2)");
     }
 
     /// NODEJOIN-F4-MATCH-GATES-0001 Rugra regression leg: every
