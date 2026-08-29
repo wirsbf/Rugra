@@ -28,6 +28,14 @@
   两条语句变为 `*puVar10 + 0xfefefeff & ~*puVar10`（=golden token 序）；
   全量 skeleton 2911→**2905**、defects 1（预存 empty-else，与本改无关）、
   numbering 0；cargo test --lib 1627/17/5 与基线逐项相同。
+- **双侧 fixture（PRINTC-INTNOT-TOKEN-0001，`tests/oracle/printc_intnot_token_1204.*`）**：
+  C++ 侧驱动真 PrintC::emitExpression（printc.cc:2468）于无输出顶层 op（跳过赋值臂，
+  纯 token 序），Rust 侧驱动其移植 `emit_expression_rpn`（本 commit 起为 pub，同
+  `op_subpiece_rpn` 的 fixture 再暴露惯例）。5 case：AND(ADD(LOAD,c),NEGATE(LOAD))/
+  NEGATE(c)/INT_2COMP(c)/OR(NEG,ADD)/ADD(c,NEG)，常量叶 uint4 定型、子表达式输出
+  implied。Runner `tools/run_printc_intnot_token_oracle.sh` 输出 **MATCH**（6/6 记录
+  逐字节一致，expected_stdout_sha256 锁定）。注意：Rust 侧 `Varnode.def` 为 Weak，
+  fixture 的 def op Arc 必须 `_op*` 绑定保活，否则递归 implied 升级失败静默丢弃。
 
 ## 2026-08-28：字符常量 read-facing 类型与条件极性
 

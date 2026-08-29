@@ -1620,7 +1620,10 @@ impl PrintC {
     /// push the assignment token + the output atom; then dispatch the opcode;
     /// then recurse. The in-place-op and constructor special-printing
     /// branches (printc.cc:2473/2477) are omitted from this first cut.
-    fn emit_expression_rpn(
+    /// Public for the PRINTC-INTNOT-TOKEN-0001 oracle fixture (same
+    /// re-exposure pattern as op_subpiece_rpn: drives the exact emitExpression
+    /// port over hand-built expression graphs).
+    pub fn emit_expression_rpn(
         &mut self,
         op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         op: &PcodeOp,
