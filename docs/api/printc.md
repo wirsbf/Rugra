@@ -1847,3 +1847,12 @@ buildTypeStack 钻取为多层栈 → ptr_expr(spacing=0)与标识符 glue;Rugra
   暴露（+404 skeleton、numbering 1→2，main 1100）——该区域与
   NONCONVERGE-GETPARAM-MATCHURL-0001 同族，属结构化既有缺口，修复后可切换回
   oracle 规定的结构化发射。
+parent of 7c3df2ce (fix: composed-name pointer declarations glue identifiers to the star run)
+
+## 2026-08-29:组合名 glue 兜底撤销(DECL-SPACING-NAMEFLOW-0001 闭环)
+
+根治修复 e331a5c5(w-anondecl3,六处构造点匿名化:coreaction make_pointer_type/make_ptr/COPY-spacebase、
+typeop propagate_to_pointer、debugproto parse_c_type/pointer_type/DWARF 数组,全部改走 3 参
+getTypePointer 空名形态)落地后,渲染层 glue 兜底(7c3df2ce)不再必要——生产指针已匿名,
+buildTypeStack 钻取多层栈走 ptr_expr 原生 glue;命名单层指针(仅显式具名构造)恢复 oracle 的
+type_expr_space 形态(`char * x`),与 fixture named_ptr_contrast 记录重新一致。
