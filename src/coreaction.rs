@@ -13348,6 +13348,92 @@ impl Action for ActionReturnSplit {
     }
 }
 
+/// Outcome of the `ConditionalJoin::findDups` condition comparison.
+/// `SameCondition` is the `vn1 == vn2` fast path (blockaction.cc:1926-1927),
+/// `MergeNeeded` additionally registers the pair in `mergeneed`
+/// (blockaction.cc:1943).
+pub(crate) enum NodeJoinFindDups {
+    SameCondition,
+    MergeNeeded,
+    NoMatch,
+}
+
+// Ghidra: blockaction.cc:1912 ConditionalJoin::findDups
+/// Given the two CBRANCH ops of a ConditionalJoin candidate pair, decide
+/// whether the conditional expressions are equivalent up to Varnodes that
+/// need to be merged. Faithful to `ConditionalJoin::findDups`
+/// (blockaction.cc:1912-1945). Callers have already verified both ops are
+/// CBRANCH (blockaction.cc:1915-1918); this port covers the remaining gate
+/// sequence verbatim:
+///   - `isBooleanFlip()` on either cbranch rejects the pair (cc:1920-1921,
+///     "flip hasn't propagated through yet")
+///   - identical condition Varnodes are a complete match (cc:1926-1927)
+///   - otherwise both conditions must be written (cc:1930-1931), not
+///     spacebase (cc:1932-1933), functionally equal at level 0 or 1 via
+///     `functionalEqualityLevel` (cc:1936-1938), and the first condition's
+///     defining op must not be SUBPIECE or COPY (cc:1939-1941)
+pub(crate) fn nodejoin_find_dups(
+    cb1: &crate::op::PcodeOpRef,
+    cb2: &crate::op::PcodeOpRef,
+) -> NodeJoinFindDups {
+    use std::sync::Arc;
+    // cc:1920-1921: boolean-flipped branches are rejected outright.
+    if cb1.0.read().unwrap().is_boolean_flip() {
+        return NodeJoinFindDups::NoMatch;
+    }
+    if cb2.0.read().unwrap().is_boolean_flip() {
+        return NodeJoinFindDups::NoMatch;
+    }
+    let vn1 = cb1.0.read().unwrap().get_in(1).cloned();
+    let vn2 = cb2.0.read().unwrap().get_in(1).cloned();
+    let (Some(vn1), Some(vn2)) = (vn1, vn2) else {
+        return NodeJoinFindDups::NoMatch;
+    };
+    // cc:1926-1927: vn1 == vn2 is a COMPLETE match — the join still runs the
+    // full execute() (nodeJoinCreateBlock + setupMultiequals +
+    // moveCbranch + cutDownMultiequals); only mergeneed stays empty.
+    if Arc::ptr_eq(&vn1, &vn2) {
+        return NodeJoinFindDups::SameCondition;
+    }
+    // cc:1930-1931: "Parallel RulePushMulti, so we know it will apply if we
+    // do the join" — both conditions must be written Varnodes.
+    if !vn1.read().unwrap().is_written() {
+        return NodeJoinFindDups::NoMatch;
+    }
+    if !vn2.read().unwrap().is_written() {
+        return NodeJoinFindDups::NoMatch;
+    }
+    // cc:1932-1933: spacebase conditions (stack-pointer rewrites) reject.
+    if vn1.read().unwrap().is_spacebase() {
+        return NodeJoinFindDups::NoMatch;
+    }
+    if vn2.read().unwrap().is_spacebase() {
+        return NodeJoinFindDups::NoMatch;
+    }
+    // cc:1936-1938: functionalEqualityLevel must return 0 or 1.
+    let res = crate::expression::functional_equality_level(&vn1, &vn2);
+    if res.code < 0 {
+        return NodeJoinFindDups::NoMatch;
+    }
+    if res.code > 1 {
+        return NodeJoinFindDups::NoMatch;
+    }
+    // cc:1939-1941: vn1's defining op must not be SUBPIECE or COPY.
+    let op1_opcode = vn1
+        .read()
+        .unwrap()
+        .get_def()
+        .map(|d| d.read().unwrap().opcode);
+    match op1_opcode {
+        Some(OpCode::CPUI_SUBPIECE) => return NodeJoinFindDups::NoMatch,
+        Some(OpCode::CPUI_COPY) => return NodeJoinFindDups::NoMatch,
+        _ => {}
+    }
+    // cc:1943: mergeneed[MergePair(vn1,vn2)] = null (pair registered by the
+    // ConditionalJoin state in ActionNodeJoin::apply).
+    NodeJoinFindDups::MergeNeeded
+}
+
 /// Rejoin Varnodes split across converging conditional branches.
 ///
 /// Faithful to `ActionNodeJoin` (blockaction.hh:350). Ghidra's `apply`
@@ -13358,18 +13444,6 @@ impl Action for ActionReturnSplit {
 /// merged at the convergence point, then executes the merge. The
 /// `ConditionalJoin` class (~200 lines) tracks definition/cover, creates a
 /// new join block (`nodeJoinCreateBlock`), and rewrites MULTIEQUAL inputs.
-///
-/// Rugra port: `nodeJoinCreateBlock`/CFG-rewriting is unported, so we cannot
-/// perform the full structural join. We port the *candidate detection*
-/// (blockaction.cc:2334-2360) and, for the safe simple case, the data-flow
-/// merge that needs no new block: `ConditionalJoin::findDups`
-/// (blockaction.cc:1912-1945) returns `true` immediately when the two
-/// CBRANCH conditions are the *same* varnode (`vn1 == vn2`); in that case
-/// the two branches already agree on the condition and the only join needed
-/// is at the convergence exit blocks. We detect the diamond (two CBRANCH
-/// blocks converging on the same two exits) and, when both CBRANCHes read
-/// the identical condition varnode, record the join candidate (count). The
-/// full `nodeJoinCreateBlock`-based merge remains gated on that CFG API.
 pub struct ActionNodeJoin {
     pub count: i32,
 }
@@ -13452,22 +13526,21 @@ impl Action for ActionNodeJoin {
                 continue;
             }
             // bb's last op must be a CBRANCH (ConditionalJoin::findDups,
-            // blockaction.cc:1915-1916). Get its condition varnode (in[1]).
-            let bb_cond = {
+            // blockaction.cc:1915-1916). This per-bb pre-check is equivalent
+            // to findDups' per-pair check: block1->lastOp() is invariant
+            // across the sibling loop. The condition varnode itself is read
+            // inside nodejoin_find_dups (cc:1923-1924).
+            {
                 let bl_rg = bl_arc.read().unwrap();
                 let ops = bl_rg.get_ops();
-                let last = ops.last().cloned();
-                match last {
-                    Some(o) => {
-                        let is_cb = o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH;
-                        if !is_cb {
-                            continue;
-                        }
-                        o.0.read().unwrap().get_in(1).cloned()
-                    }
-                    None => continue,
+                let last_is_cb = ops
+                    .last()
+                    .map(|o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                    .unwrap_or(false);
+                if !last_is_cb {
+                    continue;
                 }
-            };
+            }
             // Try each sibling predecessor j (j != inslot) of leastout as
             // bb2 (blockaction.cc:2351-2360). We need bb2 as an Arc to
             // inspect it; collect them first to avoid holding leastout's
@@ -13506,8 +13579,8 @@ impl Action for ActionNodeJoin {
                 if !Arc::ptr_eq(&b2o0.point, &exita) || !Arc::ptr_eq(&b2o1.point, &exitb) {
                     continue;
                 }
-                // bb2's last op must be a CBRANCH (findDups).
-                let bb2_cond = {
+                // bb2's last op must be a CBRANCH (findDups, cc:1917-1918).
+                let bb2_cbranch = {
                     let ops = bb2_rg.get_ops();
                     let last = ops.last().cloned();
                     match last {
@@ -13516,28 +13589,38 @@ impl Action for ActionNodeJoin {
                             if !is_cb {
                                 continue;
                             }
-                            o.0.read().unwrap().get_in(1).cloned()
+                            o
                         }
                         None => continue,
                     }
                 };
                 drop(bb2_rg);
-                // findDups fast path (blockaction.cc:1926-1927): if the two
-                // CBRANCH conditions are the same varnode, the join is
-                // data-flow-only.
-                let same_cond = bb_cond
-                    .as_ref()
-                    .zip(bb2_cond.as_ref())
-                    .map(|(a, b)| Arc::ptr_eq(a, b))
-                    .unwrap_or(false);
-                if same_cond {
-                    // Same-condition join: data-flow only, no new block needed.
-                    // (Ghidra's setupMultiequals with identical inputs is a no-op.)
-                    self.count += 1;
-                    joined_this = true;
-                    break;
+                // findDups (blockaction.cc:1912-1945) decides the pair:
+                // booleanFlip gate, vn1==vn2 fast path, then the written /
+                // spacebase / functionalEqualityLevel / def-opcode gates.
+                // NODEJOIN-F4-MATCH-GATES-0001: the former port joined ANY
+                // different-condition diamond, missing every cc:1920-1941
+                // gate (over-join).
+                let bb_cbranch = {
+                    let ops = bl_arc.read().unwrap().get_ops();
+                    match ops.last().cloned() {
+                        Some(o) => o,
+                        None => continue,
+                    }
+                };
+                match nodejoin_find_dups(&bb_cbranch, &bb2_cbranch) {
+                    NodeJoinFindDups::NoMatch => continue,
+                    NodeJoinFindDups::SameCondition => {
+                        // cc:1926-1927: same condition varnode is a complete
+                        // match; execute() runs the full join.
+                        self.count += 1;
+                        joined_this = true;
+                        break;
+                    }
+                    NodeJoinFindDups::MergeNeeded => {}
                 }
-                // Different-condition diamond: execute nodeJoinCreateBlock
+                // Different-condition diamond whose conditions pass the
+                // findDups gates: execute nodeJoinCreateBlock
                 // (blockaction.cc:2094-2097 ConditionalJoin::execute →
                 // funcdata_block.cc:779-826). The faithful
                 // Funcdata::node_join_create_block twin (funcdata.rs) performs
@@ -15395,6 +15478,204 @@ mod tests {
         assert!(a.count >= 1, "diamond join candidate must be detected");
     }
 
+    /// NODEJOIN-F4-MATCH-GATES-0001 Rugra regression leg: every
+    /// ConditionalJoin::findDups gate (blockaction.cc:1920-1941) must reject
+    /// its ineligible diamond — booleanFlip (cc:1920-1921), unwritten
+    /// condition (cc:1930-1931), spacebase condition (cc:1932-1933),
+    /// functionalEqualityLevel outside {0,1} (cc:1936-1938), and SUBPIECE or
+    /// COPY defining op (cc:1939-1941) — while an identical INT_LESS pair
+    /// (res=0) passes and joins exactly once. The oracle-side behavior is
+    /// pinned by the locked nodejoin_condjoin_1204 fixture; this test is the
+    /// single-side regression leg (mechanism B2: cannot lift NO_ORACLE).
+    #[test]
+    fn test_nodejoin_finddups_gates() {
+        use crate::address::{Address, SeqNum};
+        use crate::block::{BlockBasic, FlowBlock};
+        use crate::op::{PcodeOp, PcodeOpRef};
+        use crate::opcodes::OpCode;
+        use crate::varnode::{varnode_flags, Varnode};
+        type VnRef = std::sync::Arc<std::sync::RwLock<Varnode>>;
+        type OpArc = std::sync::Arc<std::sync::RwLock<PcodeOp>>;
+
+        // RUGRA-GLUE: test-fixture constant Varnode builder (no Ghidra counterpart)
+        fn const_vn(val: u64) -> VnRef {
+            std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(
+                val, 8,
+            )))
+        }
+        // Written condition varnode with a defining op (mirrors
+        // Funcdata::newUniqueOut + opSetOutput wiring in the oracle fixture).
+        // RUGRA-GLUE: test-fixture written Varnode + defining op (mirrors the oracle driver's newUniqueOut/opSetOutput setup)
+        fn written_vn(opcode: OpCode, inputs: Vec<VnRef>, seq_ord: u32) -> (OpArc, VnRef) {
+            let out = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(
+                8,
+                Address::new(0x9000 + seq_ord as u64),
+            )));
+            out.write().unwrap().set_flags(varnode_flags::WRITTEN);
+            let mut def = PcodeOp::new(SeqNum::new(Address::new(0x1000), seq_ord), opcode);
+            def.inrefs = inputs;
+            def.output = Some(out.clone());
+            let def_arc = std::sync::Arc::new(std::sync::RwLock::new(def));
+            out.write().unwrap().def = Some(std::sync::Arc::downgrade(&def_arc));
+            (def_arc, out)
+        }
+        struct Diamond {
+            fd: Funcdata,
+            cb_ops: [PcodeOpRef; 2],
+        }
+        // Two CBRANCH blocks converging on the same two exits; cond1/cond2
+        // are the in(1) conditions, flip1/flip2 set the boolean_flip flag.
+        // RUGRA-GLUE: test-fixture diamond CFG builder (mirrors the oracle driver's block/edge setup)
+        fn diamond(cond1: VnRef, cond2: VnRef, flip1: bool, flip2: bool) -> Diamond {
+            let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
+            let blocks: Vec<_> = [0x1000u64, 0x2000, 0x3000, 0x4000]
+                .iter()
+                .enumerate()
+                .map(|(i, a)| {
+                    std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+                        (i + 1) as i32,
+                        Address::new(*a),
+                    )))
+                })
+                .collect();
+            let mut cb_ops = Vec::new();
+            for (blk, cond, flip, ord) in [
+                (blocks[0].clone(), cond1, flip1, 5u32),
+                (blocks[1].clone(), cond2, flip2, 6),
+            ] {
+                let mut cb = PcodeOp::new(
+                    SeqNum::new(blk.read().unwrap().get_start_addr(), ord),
+                    OpCode::CPUI_CBRANCH,
+                );
+                cb.inrefs = vec![const_vn(0x3000), cond];
+                if flip {
+                    cb.flags |= crate::op::pcodeop_flags::BOOLEAN_FLIP;
+                }
+                let cb_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(cb)));
+                blk.write().unwrap().add_op(cb_ref.clone());
+                cb_ops.push(cb_ref);
+            }
+            for b in &blocks {
+                fd.bblocks.add_block(b.clone());
+            }
+            fd.bblocks.add_edge(blocks[0].clone(), blocks[2].clone());
+            fd.bblocks.add_edge(blocks[0].clone(), blocks[3].clone());
+            fd.bblocks.add_edge(blocks[1].clone(), blocks[2].clone());
+            fd.bblocks.add_edge(blocks[1].clone(), blocks[3].clone());
+            Diamond {
+                fd,
+                cb_ops: [cb_ops[0].clone(), cb_ops[1].clone()],
+            }
+        }
+        // Function-input style varnode: written flag off, is_free false.
+        // RUGRA-GLUE: test-fixture function-input style Varnode (INPUT flag)
+        fn input_vn(n: u64) -> VnRef {
+            let v = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(
+                8,
+                Address::new(0x8000 + n),
+            )));
+            v.write().unwrap().set_flags(varnode_flags::INPUT);
+            v
+        }
+        let run = |d: &mut Diamond| -> (i32, usize) {
+            let size_before = d.fd.bblocks.get_size();
+            let mut a = ActionNodeJoin::new();
+            let _ = a.apply(&mut d.fd).unwrap();
+            (a.count, size_before)
+        };
+        // Defining ops must outlive the apply (Varnode::def is a Weak; the
+        // real op bank owns them, the fixture keeps them here).
+        let mut keep: Vec<OpArc> = Vec::new();
+
+        // cc:1920-1921: booleanFlip on either cbranch rejects the pair.
+        let (d1, c1) = written_vn(OpCode::CPUI_INT_LESS, vec![const_vn(1), const_vn(2)], 1);
+        let (d2, c2) = written_vn(OpCode::CPUI_INT_LESS, vec![const_vn(1), const_vn(2)], 2);
+        keep.extend([d1, d2]);
+        for (f1, f2) in [(true, false), (false, true), (true, true)] {
+            let mut d = diamond(c1.clone(), c2.clone(), f1, f2);
+            let (count, size) = run(&mut d);
+            assert_eq!(count, 0, "booleanFlip gate ({f1},{f2}) must reject");
+            assert_eq!(d.fd.bblocks.get_size(), size, "no join block created");
+        }
+
+        // cc:1930-1931: unwritten (constant, distinct) conditions reject.
+        let mut d = diamond(const_vn(11), const_vn(22), false, false);
+        let (count, size) = run(&mut d);
+        assert_eq!(count, 0, "unwritten conditions must reject");
+        assert_eq!(d.fd.bblocks.get_size(), size);
+
+        // cc:1932-1933: spacebase conditions reject even when written.
+        let (d1, c1) = written_vn(OpCode::CPUI_INT_LESS, vec![const_vn(1), const_vn(2)], 3);
+        let (d2, c2) = written_vn(OpCode::CPUI_INT_LESS, vec![const_vn(1), const_vn(2)], 4);
+        keep.extend([d1, d2]);
+        c1.write().unwrap().set_flags(varnode_flags::SPACEBASE);
+        let mut d = diamond(c1, c2, false, false);
+        let (count, size) = run(&mut d);
+        assert_eq!(count, 0, "spacebase condition must reject");
+        assert_eq!(d.fd.bblocks.get_size(), size);
+
+        // cc:1937 (res < 0): INT_ADD sharing one input but with different
+        // constant addends — functionalEqualityLevel's first pair matches,
+        // second returns -1 → overall -1.
+        let x = const_vn(0x10);
+        let (d1, c1) = written_vn(OpCode::CPUI_INT_ADD, vec![x.clone(), const_vn(1)], 5);
+        let (d2, c2) = written_vn(OpCode::CPUI_INT_ADD, vec![x, const_vn(2)], 6);
+        keep.extend([d1, d2]);
+        let mut d = diamond(c1, c2, false, false);
+        let (count, size) = run(&mut d);
+        assert_eq!(count, 0, "functionalEqualityLevel<0 must reject");
+        assert_eq!(d.fd.bblocks.get_size(), size);
+
+        // cc:1938 (res > 1): commutative INT_ADD over four distinct written
+        // inputs — both orderings stay contingent (res==2).
+        let (d1, c1) = written_vn(
+            OpCode::CPUI_INT_ADD,
+            vec![input_vn(1), input_vn(2)],
+            11,
+        );
+        let (d2, c2) = written_vn(
+            OpCode::CPUI_INT_ADD,
+            vec![input_vn(3), input_vn(4)],
+            12,
+        );
+        keep.extend([d1, d2]);
+        let mut d = diamond(c1, c2, false, false);
+        let (count, size) = run(&mut d);
+        assert_eq!(count, 0, "functionalEqualityLevel>1 must reject");
+        assert_eq!(d.fd.bblocks.get_size(), size);
+
+        // cc:1939-1941: defining op SUBPIECE or COPY rejects even at res=0.
+        let x = const_vn(0x10);
+        for (opcode, ord) in [(OpCode::CPUI_SUBPIECE, 7u32), (OpCode::CPUI_COPY, 13)] {
+            let inputs = if opcode == OpCode::CPUI_COPY {
+                vec![x.clone()]
+            } else {
+                vec![x.clone(), const_vn(0)]
+            };
+            let (d1, c1) = written_vn(opcode, inputs.clone(), ord);
+            let (d2, c2) = written_vn(opcode, inputs, ord + 1);
+            keep.extend([d1, d2]);
+            let mut d = diamond(c1, c2, false, false);
+            let (count, size) = run(&mut d);
+            assert_eq!(count, 0, "{opcode:?} def must reject");
+            assert_eq!(d.fd.bblocks.get_size(), size);
+        }
+
+        // Positive control: identical INT_LESS pairs give res=0 and a
+        // single join (blockaction.cc:1943-1944 → execute()).
+        let (d1, c1) = written_vn(OpCode::CPUI_INT_LESS, vec![const_vn(1), const_vn(2)], 9);
+        let (d2, c2) = written_vn(OpCode::CPUI_INT_LESS, vec![const_vn(1), const_vn(2)], 10);
+        keep.extend([d1, d2]);
+        let mut d = diamond(c1, c2, false, false);
+        let (count, size) = run(&mut d);
+        assert_eq!(count, 1, "identical INT_LESS pair must join once");
+        assert_eq!(
+            d.fd.bblocks.get_size(),
+            size + 1,
+            "join block appended by nodeJoinCreateBlock"
+        );
+    }
+
     // Ghidra: coreaction.cc:692-704 ActionConstbase::apply (tracked COPY loop)
     /// Single-side regression pin of the tracked-COPY insertion form: after
     /// ingesting the production x86-64.pspec tracked_set shape (DF=0 resolved
@@ -15509,3 +15790,4 @@ mod tests {
         // Idempotence shape: a second apply inserts a second COPY (Ghidra
         // has no guard either), so only the single-run form is pinned here.
     }
+

@@ -2070,3 +2070,18 @@ E2E：curl 全语料 star-blank 声明 58 → 0，compare defects=0/numbering=0�
 
 structure_reset(twin 内)已执行 calcForwardDominator(funcdata_block.cc:712),新块为 append 索引未变;
 额外的 build_dom_tree 调用对未突变 CFG 幂等且不可观测,按复核建议删除。
+
+## 2026-08-29:NODEJOIN-F4-MATCH-GATES-0001 findDups 全门补齐
+
+ActionNodeJoin::apply 的 match 谓词此前只查双方 last op 是 CBRANCH + 同条件短路,
+不同条件菱形**无条件 join**(over-join)。新增 `nodejoin_find_dups`(coreaction.rs,
+Ghidra: blockaction.cc:1912 ConditionalJoin::findDups)按 oracle 顺序补齐全部门:
+1. `isBooleanFlip()` 任一 cbranch 置位即拒(cc:1920-1921,"flip hasn't propagated
+   through yet");
+2. `vn1 == vn2` 是**完整 match**(cc:1926-1927,见 F3);
+3. 双方条件必须 `isWritten()`(cc:1930-1931)、非 `isSpacebase()`(cc:1932-1933);
+4. `functionalEqualityLevel(vn1,vn2)` 必须 ∈ {0,1}(cc:1936-1938);
+5. vn1 定义 op 不得为 SUBPIECE/COPY(cc:1939-1941)。
+通过后返回 `MergeNeeded`(cc:1943 mergeneed 注册由 ConditionalJoin 状态承接,F2)。
+测试:`test_nodejoin_finddups_gates`(booleanFlip×3/unwritten/spacebase/res<0/
+res>1/SUBPIECE/COPY 全拒 + 相同 INT_LESS 正对照 join 1 次且块数 +1)。
