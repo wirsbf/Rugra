@@ -15376,17 +15376,24 @@ mod tests {
 
         let mut a = ActionSetCasts::new();
         let status = a.apply(&mut fd).unwrap();
-        // The varnode type (int *) differs from the high type (long *) one
-        // level down, so a CAST to reqtype = the varnode's own (int *) is
-        // inserted (castInput takes the getInputCast return directly,
-        // coreaction.cc:2672-2675).
+        // cc:2747-2756: the read-facing type (int *) does not satisfy
+        // isPtrsubMatching (pointer to base int, offset 8), so the PTRSUB is
+        // demoted to INT_ADD BEFORE any input cast; the slot-0 cast is then
+        // the INT_ADD metain cast to base int of the input size (the
+        // pre-preflight (int *) cast no longer exists — bilateral fixture
+        // ptrsub_switch_cast_1204 pins the oracle shape).
         assert_eq!(
         status, action_status::NO_CHANGE,
         "Ghidra raw apply returns 0"
     );
         assert!(a.count >= 1, "at least one CAST must be inserted");
+        assert_eq!(
+        op_ref.0.read().unwrap().opcode,
+        OpCode::CPUI_INT_ADD,
+        "non-matching PTRSUB is demoted to INT_ADD (cc:2747-2756)"
+    );
 
-        // Verify a CPUI_CAST op now feeds slot 0 of the PTRSUB.
+        // Verify a CPUI_CAST op now feeds slot 0 of the demoted INT_ADD.
         let new_in0 = op_ref.0.read().unwrap().get_in(0).map(|a| a.clone());
         let cast_op_arc = {
             let in0_rg = new_in0.as_ref().unwrap().read().unwrap();
@@ -15402,23 +15409,29 @@ mod tests {
         Arc::ptr_eq(&cast_op.read().unwrap().get_in(0).unwrap(), &in0),
             "the CAST reads the original input varnode"
     );
+        let ct = new_in0
+            .as_ref()
+            .unwrap()
+            .read()
+            .unwrap()
+            .v_type
+            .clone()
+            .unwrap();
+        // After the cc:2747-2756 demotion the slot-0 cast is the INT_ADD
+        // metain cast (base int of the input size), not the old ic0
+        // (int *) reqtype.
         assert!(
-        Arc::ptr_eq(
-            &new_in0
-                .as_ref()
-                .unwrap()
-                .read()
-                .unwrap()
-                .v_type
-                .as_ref()
-                .unwrap(),
-            &int_ptr,
-        ), "the CAST output carries the varnode's own type as reqtype"
+        ct.get_metatype() == TypeMetatype::Int && ct.get_size() == 8,
+        "the CAST output carries the INT_ADD metain base int (8 bytes), got {ct:?}"
     );
     }
 
-    /// PTRSUB where input(0) already has the matching pointer type → no cast
-    /// inserted (NO_CHANGE). Guards against spurious casts when types agree.
+    /// PTRSUB whose input(0) pointer does not satisfy isPtrsubMatching
+    /// (pointer to base int at offset 8) is demoted to INT_ADD and takes the
+    /// INT_ADD metain casts (cc:2747-2756 + cc:2758-2770). The pre-preflight
+    /// "no cast when ic0 matches" expectation is superseded by the demotion;
+    /// the matching-pointer projection is covered bilaterally by the
+    /// ptrsub_switch_cast_1204 `aligned` case (count=0 with a struct field).
     #[test]
     fn test_action_setcasts_ptrsub_no_cast_when_matching() {
         use crate::address::{Address, SeqNum};
@@ -15455,14 +15468,21 @@ mod tests {
         op.output = Some(out.clone());
         let op_arc = Arc::new(RwLock::new(op));
         out.write().unwrap().def = Some(Arc::downgrade(&op_arc));
-        fd.obank.alivelist.push(PcodeOpRef(op_arc));
+        fd.obank.alivelist.push(PcodeOpRef(op_arc.clone()));
 
         let mut a = ActionSetCasts::new();
         let status = a.apply(&mut fd).unwrap();
         assert_eq!(
-        status, action_status::NO_CHANGE, "no cast expected for matching types"
+        status, action_status::NO_CHANGE, "Ghidra raw apply returns 0"
     );
-        assert_eq!(a.count, 0);
+        // cc:2747-2756: a (long *) with no struct pointee never satisfies
+        // isPtrsubMatching, so the op is demoted to INT_ADD and takes the
+        // metain slot-0 cast plus the token-vs-outHigh output cast (count 2).
+        assert_eq!(
+        op_arc.read().unwrap().opcode, OpCode::CPUI_INT_ADD,
+        "pointer-to-base-int PTRSUB is demoted to INT_ADD"
+    );
+        assert_eq!(a.count, 2);
     }
 
     /// PTRADD with mismatched input(0) pointer type → CAST op inserted.
@@ -15527,8 +15547,17 @@ mod tests {
         status, action_status::NO_CHANGE,
         "Ghidra raw apply returns 0"
     );
+        // cc:2740-2746: the HIGH (char *) pointee alignSize 1 != 4 = the
+        // scale, so the PTRADD is undone to INT_ADD (constant index folded
+        // with the scale) before the casts; the slot-0 cast is then the
+        // INT_ADD metain base int, not the preflight-era ic0 (int *).
+        assert_eq!(
+        op_ref.0.read().unwrap().opcode,
+        OpCode::CPUI_INT_ADD,
+        "misfit PTRADD is undone to INT_ADD (cc:2740-2746)"
+    );
         assert!(a.count >= 1);
-        // Verify CAST op now feeds slot 0 with the varnode's own type.
+        // Verify CAST op now feeds slot 0 with the metain base-int type.
         let new_in0 = op_ref.0.read().unwrap().get_in(0).map(|a| a.clone());
         let cast_op_arc = {
             let in0_rg = new_in0.as_ref().unwrap().read().unwrap();
@@ -15538,19 +15567,19 @@ mod tests {
         assert_eq!(
         cast_op_arc.unwrap().read().unwrap().opcode, OpCode::CPUI_CAST
     );
+        let ct = new_in0
+            .as_ref()
+            .unwrap()
+            .read()
+            .unwrap()
+            .v_type
+            .clone()
+            .unwrap();
         assert!(
-        Arc::ptr_eq(
-            &new_in0
-                .as_ref()
-                .unwrap()
-                .read()
-                .unwrap()
-                .v_type
-                .as_ref()
-                .unwrap(),
-            &int_ptr,
-        ), "the CAST output carries the varnode's own type as reqtype"
+        ct.get_metatype() == TypeMetatype::Int && ct.get_size() == 8,
+        "the CAST output carries the INT_ADD metain base int (8 bytes), got {ct:?}"
     );
+        let _ = &int_ptr;
     }
 
     // ---- ActionInferTypes + default-pipeline tree tests ----
