@@ -1,0 +1,79 @@
+{
+ "schema": 1,
+ "fixture_id": "MAIN-RC3-STRUCTURED-EMIT-0001",
+ "stable_function_id": "GH12-F-49e341af37f7b0534a20",
+ "stable_function_closure": [
+  "ghidra::PrintC::emitBlockWhileDo printc.cc:3001",
+  "ghidra::PrintC::emitForLoop printc.cc:2957",
+  "ghidra::PrintC::emitBlockLs printc.cc:2781",
+  "ghidra::PrintC::emitBlockIf printc.cc:2878",
+  "ghidra::PrintC::emitBlockBasic printc.cc:2678",
+  "ghidra::PrintC::opCbranch printc.cc:536",
+  "ghidra::PrintC::emitStatement printc.cc:2285",
+  "ghidra::BlockGraph::newBlockWhileDo block.cc:1858",
+  "ghidra::BlockGraph::newBlockList block.cc:1798",
+  "ghidra::BlockGraph::identifyInternal block.cc:940",
+  "ghidra::BlockGraph::newBlockCopy block.cc:1776",
+  "ghidra::BlockGraph::buildCopy block.cc:1925"
+ ],
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{printc.cc:2957-3066,2878-2949,2781-2810,2678-2744,536-580,2285-2293,printc.hh:292-295,block.cc:940-963,1776-1938,block.hh:660-712}"
+ },
+ "rugra_base_commit": "99ce6b74478136cb04f62adbc138f5bd94783ead",
+ "architecture": "language-independent PrintC structured-block emission (emitBlockWhileDo on a hand-built production-shape BlockWhileDo: BlockBasic originals, BlockCopy mirrors via newBlockCopy/copymap/replaceUsingMap as buildCopy block.cc:1925-1938, BlockIf via identifyInternal+addBlock like ruleBlockProperIf, body list via newBlockList, loop via newBlockWhileDo block.cc:1858-1870); no Funcdata, no Architecture",
+ "compiler_spec": "none: the CBRANCH conditions and RETURN values are Constant-space varnodes with int Datatypes attached via new HighVariable (Rugra: v_type-free const path), so both sides render them through their constant paths",
+ "analysis_options": {
+  "entrypoint": "PrintC::emitBlockWhileDo driven directly per case (Rugra: emit_block_graph on a graph whose sole top-level block is the BlockWhileDo, dispatching to emit_structured_whiledo and the flipped unconditional emit_block_structured body gate); no Action pipeline runs",
+  "prestate": "shared shape: cond BlockBasic ending in CBRANCH(code placeholder, const 3), stmt BlockBasic with 2-input RETURN(const 10), properif(cond CBRANCH const 7, RETURN 20, RETURN 30); case 2 additionally sets iterateOp (CBRANCH const 5) for the emitForLoop dispatch, case 3 additionally sets f_whiledo_overflow (setOverflowSyntax)",
+  "observation": "two layers per case: (statement) the full EmitNoMarkup byte stream with newlines preserved; (raw) hex of the same stream. No normalization is needed — both layers are byte-identical between the oracle and Rugra"
+ },
+ "input": "MAIN-RC3-STRUCTURED-EMIT-0001 cases=whiledo_structured_body[cond=3 body=list[ret10,properif(7,ret20,ret30)]],forloop_structured_body[same+iterateOp=const5 init=null],overflow_structured_body[same+f_whiledo_overflow];condvars=const:1byte;retvars=const:4byte;emit=EmitNoMarkup;layer=statement+raw",
+ "input_fingerprint": "sha256:f0a92cba221a3ab4595fbfba4fb0f3545e42a05b586f6a7623037117eb0a317a",
+ "input_manifest": {
+  "canonicalization": "sha256 over the canonical input description above",
+  "cases": [
+   "whiledo_structured_body: while (3) header + structured body — locks printc.cc:3061-3062 getBlock(1)->emit(this) unconditional structured dispatch (the flipped legacy body_is_dead gate)",
+   "forloop_structured_body: for (; 3; 5) header (null init slot, iterateOp set) + same body — locks printc.cc:2994-2995 (emitForLoop body) and the header slot layout cc:2970-2991",
+   "overflow_structured_body: compact while( true ) header bytes (cc:3023-3028: tagOp+openParen with no spaces between, spaces(1) around KEYWORD_TRUE) + if (3) break; arm (cc:3035-3043) + same structured body"
+  ]
+ },
+ "observation_schema": {
+  "format": "per case: '<name>=' followed by the byte stream (statement mode, newlines preserved) or its hex (--raw mode)",
+  "normalization": "none — statement and raw layers are compared byte-for-byte; both MATCH"
+ },
+ "host": {
+  "cxx": "g++ (GCC) 16.2.1 20260810",
+  "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)"
+ },
+ "observation": {
+  "overall_status": "MATCH",
+  "layers": {
+   "statement": "MATCH",
+   "raw": "MATCH"
+  },
+  "evidence": "oracle binary built from the locked tree (libdecomp.a at e40ed130) and Rugra rlib at 99ce6b74 produce identical statement and raw streams for all three cases (2026-08-30, w-rc3)"
+ },
+ "known_divergences": [],
+ "comparand_sha256": {
+  "cpp_fixture_sha256": "cdd79e6d4cff2177b21f1ebcc0f55f4675367378db32e7d778881b7f8be8ef34",
+  "rust_fixture_sha256": "e1ee7fc3f04574c779047e01697fadcbd85f8990aa3820a606850f3d99e0b3bf",
+  "runner_sha256": "af94080ba662bb2b10c6da8d3835e5e75a76d4c77ab43695dc6d51cdf73dc495",
+  "rugra_printc": "f9ed7a3634f779573c3017a31441e408a6512b108a82091ba515559a6cba5823",
+  "rugra_prettyprint": "c39ace2c509bed65b939fab33a1103f7cad1120b6a68884e694f55d15019ac40",
+  "ghidra_printc_cc": "2c0f5565bb76c8ec4dc291e3166dec924fa063c9d86f4d14f06e1fc1550c12b4",
+  "ghidra_printc_hh": "efbc5aaa7c1a8f4a2072401689bf0c6de053705d90bfc85d79aba295554558b8",
+  "ghidra_block_cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",
+  "ghidra_block_hh": "103d023e88e88986c8d7bb6a4309eaee91d0f627636838f25452763e1212b139",
+  "ghidra_prettyprint_cc": "1a9466456f0a229639625e9f8e70507e83815e49b19bfb1fea6945978074189f",
+  "ghidra_prettyprint_hh": "016017194282caea38ff7a52466e54b340036ff93e33ba2378d9917b0c5bc8fc"
+ },
+ "expected_statement_stdout_sha256": "2394f1cc2bc7074f687d1750ff28c60d22217e18aacedffbe3a6b2b13bd92a4a",
+ "expected_ghidra_raw_sha256": "4d6f74984a8bf08673da86747ab7cd9084471757a2610052175551a450d30664",
+ "expected_rugra_raw_sha256": "4d6f74984a8bf08673da86747ab7cd9084471757a2610052175551a450d30664",
+ "cpp_fixture_sha256": "cdd79e6d4cff2177b21f1ebcc0f55f4675367378db32e7d778881b7f8be8ef34",
+ "rust_fixture_sha256": "e1ee7fc3f04574c779047e01697fadcbd85f8990aa3820a606850f3d99e0b3bf",
+ "expected_exit_code": 0
+}
