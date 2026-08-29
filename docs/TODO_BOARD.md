@@ -64,7 +64,7 @@
 > "保护格代际"假设被双侧证据否定——console oracle 缺 Java NoReturnAnalyzer 数据造成的假差异)后:
 > **defects 0/numbering 0/0 panic/124/124 全反编译**。同窗口集成:RC2(main 体 245→643,51×setopt 级联恢复)+
 > C4(INT_NOT token 序,非法形态 2→0)+goto 发射 target_dyn 切换+njf234 复核单门补齐(cc:2076)。
-> **当前权威基线(master `9d419f3a`)**:curl E2E skeleton **3089**/defects **0**/numbering **0**——**三项全零**(do-while 吸收链修复-30)
+> **当前权威基线(master `9d419f3a`)**:curl E2E skeleton **3089**/defects **0**/numbering **0**——**三项全零**(do-while 吸收链修复-30);registry 第七窗已并(lint 0 findings@分支锚,dowhile/push88 窗例行待批)
 > (PendingBrace 动态机制 1:1 移植+backfill 签号门修 numbering;+9=8 处裸 else 恢复 golden 括号结构);
 > httpd 2325/7/0(iced 链:cmp/test 旧 flag 偏移全错修正+js/jns 曾零 op+c5 零 op 臂;-46 空投影;+2 defects=下游结构化残差已解释)。历史链:2911→…→3110→**3119(0/0)**。(main iVar4 dup,
 > PRINTC-STRUCTEMIT 残差簇已登记);CARRY 泄漏 5→**0**(CARRY1 形态×3);main URL-glob 区与 golden 结构 1:1;
