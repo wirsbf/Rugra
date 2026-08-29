@@ -22,6 +22,12 @@
 > worktree 隔离（`/home/wirs/.cache/rugra-w2-*`）+ 独占写集租约 + 专属 CARGO_TARGET_DIR + flock 共享资源；
 > 子 Agent 交付（branch commit + 报告 `/tmp/rugra-reports/<name>-2026-08-29.md`）→ root 串行 cherry-pick →
 > flock 构建 → E2E → 差分门禁（defects 必须 0）→ 更新本板。板面 wave 节 root 维护，子 Agent 不直接改本板。
+> **已集成(2026-08-29 21:45)**:`FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001` 实现半(w-newvarnode2 交付 2a55097b:queryProperties/
+> setSymbolProperties/setFlags 完整接线,含三处 review 修正;cherry-pick 到 master 编译绿/测试=已知17/E2E 2134·0·1 无回归;
+> 双侧 fixture 未交付→状态 PARTIAL,fixture 验收仍开放)。
+> **舰队轮换(2026-08-29 21:50,第二轮预算耗尽后)**:myprog(存活)+新派 w-identify3/w-anondecl3/w-registry3(收尾交付)
+> +w-nonconverge(NONCONVERGE-P0,merge/action 域);全舰队改用【里程碑即时 commit+报告增量追加】纪律防预算耗尽丢工作;
+> 20 分钟周期监控自动化已建立(探活/抢救/验收/补位)。
 > Agent 完成即由 root 从队列补位。**并发上限 2026-08-29 下午起调整为 5(用户指令)**;当前 5 活跃:
 > w-anondecl2/w-newvarnode2/w-identify2/w-registry2(续作 writer)+w-myprog-cluster(myprogress/glob_range 簇)。
 > **机制 C 复核已闭环**:`R-DESCEND-CROSSREVIEW-2026-08-29.md` 对 `55783411` 判 **APPROVE**(五 Rule+簿记链
