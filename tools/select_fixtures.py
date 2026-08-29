@@ -96,7 +96,10 @@ def hunk_ranges(root: Path, args: argparse.Namespace, path: str) -> list[tuple[i
 
 def load_json(path: Path) -> dict[str, object]:
     document = json.loads(path.read_text(encoding="utf-8"))
-    if document.get("schema") != 1:
+    # The fixture registry migrated to the "fixture-v1" contract (a429d6d2);
+    # FUNCTION_LEDGER.json remains schema 1.  The selector maps changes to
+    # fixtures and reads both forms; schema policing stays in oracle_registry.
+    if document.get("schema") not in (1, "fixture-v1"):
         raise ValueError(f"unsupported schema in {path}")
     return document
 
