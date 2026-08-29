@@ -52,7 +52,14 @@
 > 机制 C 复核=reviewer-identify 在途);③myprog 交付获 R-MYPROG-CROSSREVIEW **APPROVE**(P-FLOW-1 登记欠账见下)。
 > **NONCONVERGE-GETPARAM-MATCHURL-0001 已修(root `96e8e1a8`)**:join-block 路径接入 node_join_create_block(含
 > structureReset,funcdata_block.cc:816);w-nonconverge 因果证明+fixture 红绿双态;0 panic/timeout,124/124 全反编译。
-> **当前权威基线(master `96e8e1a8`,诚实口径)**:curl E2E skeleton **2866**(全函数计入)/defects **1**(getparameter
+> **2026-08-29 深夜集成burst**:①anondecl3 根治(e331a5c5 六处构造匿名化)+glue 兜底撤销(46412358)+DECL-SPACING-NAMEFLOW-0001
+> 闭环(fixture 撤 residual 回 MATCH);②nodejoin 修复获 R-NODEJOIN-CROSSREVIEW **REJECT**——致命 F1(索引求值序)已整改
+> (faea03b0:语句序索引+响亮断言+CFG形状断言+删冗余build_dom_tree),F2-F5 登记如下,待重审;③w-globword 交付:B 部 5 提案
+> (C1-C5)登记,A 部匿名化与 e331a5c5 同根被覆盖(其 named_return_pointer twin 洞察记录于报告);④registry:check/strict 双绿
+> (2889e048+再生,definitions=9494/raw=15811/rust=10467),lint=2 仅剩 checkpoint 治理推进(10ea407d..HEAD 窗口审查)。
+> **当前权威基线(master `2889e048`)**:curl E2E skeleton **2911**/defects **1**(GETPARAM-EMPTYELSE 在修)/numbering **0**/
+> 0 panic/timeout/ABORTED,124/124 全反编译;httpd 仍 5/30(HTTPD-TFALIGN-PANIC 待重派)。
+> 历史权威基线(master `96e8e1a8`,诚实口径)**:curl E2E skeleton **2866**(全函数计入)/defects **1**(getparameter
 > empty else,GETPARAM-EMPTYELSE-0001 已派 w-nonconverge2)/numbering **0**;registry 138 条目。
 > identify3 获 R-IDENTIFY-CROSSREVIEW **APPROVE**(五项含 fixture full 双侧独立复跑 MATCH);nodejoin 修复 Cross-Review PENDING。
 > **fleet 纪律(事故后)**:禁用 git stash(跨 worktree refs 共享碰撞),一律 per-worktree commit;stash@{0}(ifgoto-wip)保留勿动。
@@ -70,6 +77,16 @@
 | Agent | ID | 类型 | 独占 write-set | 交付物 |
 |---|---|---|---|---|
 | w-newvarnode2(续作)+root | `VARNODE-DESCEND-BOOKKEEPING-0001` | **FIXED @ master `55783411`**(root 修复;w-newvarnode 审计立功:簿记基础设施本就完备,真凶=ruleaction.rs 五处直接 inrefs 写) | `src/ruleaction.rs`+`docs/api/ruleaction.md`(已落库) | 修复:Piece2Zext/Sext→`fd.op_remove_input(0)`+`op_set_opcode`;TrivialBool 六分支完整移植(仅 slot1 常量+`V&&0→#0`/`V||1→#1`/`V^^1→NEGATE` 补齐);NegateIdentity→`fd.new_constant`+三步簿记;NotDistribute→`op_set_input`+`op_insert_input`。E2E@55783411:ABORTED 10→**0**、raw 命名 1077→**16**、defects 2→**0**(getparameter/glob_word else 缺陷证实为簿记腐蚀下游,随修复消失)、skeleton 3528→**2134**(优于 2d78b5af 健康基线 2881);cargo test 失败集=已知 17 零新增。Cross-Review: PENDING(机制 C,待派);审计证据=/tmp/w-newvarnode-curl-probe.err(49 条悬空);coreaction.rs:1371(ActionCse)核实未注册非生产者不动 |
+| unassigned | `NODEJOIN-F2-EXECUTE-STEPS-0001` | OPEN(复核F2) | 待认领(`src/coreaction.rs`) | ConditionalJoin::execute 四步仅做1(nodeJoinCreateBlock);setupMultiequals/moveCbranch/cutDownMultiequalities(blockaction.cc:2098-2101)全缺,cbranch未迁入join块 |
+| unassigned | `NODEJOIN-F3-SAMECOND-FULLJOIN-0001` | OPEN(复核F3) | 待认领(`src/coreaction.rs`) | same_cond 臂误读 findDups:cc:1926-1927 vn1==vn2→return true 是完整 match,Ghidra 照跑全套 join;Rugra 只 count+=1 |
+| unassigned | `NODEJOIN-F4-MATCH-GATES-0001` | OPEN(复核F4) | 待认领(`src/coreaction.rs`) | match 谓词缺 isBooleanFlip/isWritten/spacebase/functionalEqualityLevel/def-opcode 门(cc:1920-1941),过度 join |
+| unassigned | `NODEJOIN-F5-DYNAMIC-SIZE-0001` | OPEN(复核F5) | 待认领(`src/coreaction.rs`) | 外层 n_blocks 快照 vs Ghidra 动态 graph.getSize()(cc:2334) |
+| unassigned | `GLOBWORD-C1-PUSH-TYPE-STRUCTURAL-0001` | OPEN(w-globword提案) | 待认领(`src/printc.rs`) | push_type 按名渲染改结构化(全匿名化后可收紧;26 返回头保持) |
+| unassigned | `GLOBWORD-C2-LOOP-LIFT-0001` | OPEN(w-globword提案) | 待认领(`src/blockaction.rs`) | my_get_line 外层 do-while 整环丢失(语义级)+glob_word 尾块不提升+死 goto;oracle 行号见 w-globword 报告 B.3 |
+| unassigned | `GLOBWORD-C3-CARRY-INJECT-0001` | OPEN(w-globword提案) | 待认领(`src/heritage.rs`或`coreaction.rs`) | x86 flags CARRY inject:`register0x00000200` RFLAGS 泄漏 vs oracle CARRY1 宏 |
+| unassigned | `GLOBWORD-C4-INTNOT-TOKEN-0001` | OPEN(w-globword提案) | 待认领(`src/printc.rs`) | INT_NOT token 序:`0xfefefeff~` 非法 C 形,oracle `~*puVar4` |
+| unassigned | `GLOBWORD-C5-GLOBAL-TYPEFLOW-0001` | OPEN(w-globword提案) | 待认领(类型流域) | glob_expand 的 URLGlob 字段不传播→`*(int*)(glob_expand+0x128)` 原始偏移 |
+| unassigned | `REGISTRY-CHECKPOINT-ADVANCE-0001` | OPEN(lint 残项) | 待认领(`tools/generate_function_ledger.py` 钉) | CONTINUITY_CHECKPOINT 治理推进:10ea407d..2889e048 窗口 src delta 的 transition/tombstone/introduced 逐条审查后改钉+reconcile+再生;验收=lint exit 0 三链全绿 |
 | unassigned | `SUBFLOAT-TRANSFORM-RESIDUAL-0001` | OPEN(P-FLOW-1 复核发现) | 待认领(`src/subflow.rs`) | RuleSubfloatConvert 非常量路径 defer 为保守降级(Ghidra transform 链只新建 Varnode 不 retype);完整移植 TransformManager 语义后撤销 defer;证据=R-MYPROG-CROSSREVIEW 报告第 2 节 |
 | unassigned | `TRI4-MYPROGRESS-SETTLE-0001` | PARTIAL(666afd3b 已修 settle 契约) | — | temp 类型经 TypeFactory 规范化已落地;残差=myprogress 的 DWARF 局部名(format/line/outline)三层环境缺口(DW_OP_fbreg 解析/导入/消费)+ in_RSP/Var8/extraout 多余声明(funcdata/heritage 域) |
 | w-myprog-cluster(已集成) | `VARMAP-GLOBRANGE-DUPDECL-0001` | **FIXED**(65d72291;根因=prettyprint 两 GLUE pass:if 条件续行误判签名+uVar 无词界;非 varmap 计数器) | `src/prettyprint.rs`(跨lease最小化已声明) | varmap_dupdecl_1204 双侧 MATCH;numbering 1→0 |
