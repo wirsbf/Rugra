@@ -4667,89 +4667,368 @@ impl ActionSetCasts {
             .get_arch()
             .and_then(|architecture| architecture.types.clone())
             .unwrap_or_else(crate::type_system::typefactory::TypeFactory::shared_default);
-        // (1) Compute reqtype = op->inputTypeLocal(slot) = getBase(size, metain).
-        let (in_vn, reqtype, curtype, op_pc, in_size) = {
+        // (1) cc:2662: ct = op->getOpcode()->getInputCast(op,slot,strategy)
+        // — the virtual dispatch mirror. The specialized arms (LOAD/STORE
+        // slot overrides, comparison) already ran castStandard internally,
+        // and the base TypeOp::getInputCast (typeop.cc:293-300) is
+        // castStandard(inputTypeLocal(slot), highReadFacing, false, true):
+        // a null ct means no cast is needed. Annotations get a null ct
+        // (typeop.cc:295).
+        let (in_vn, ct_opt, op_pc, in_size) = {
             let op = op_ref.0.read().unwrap();
             let Some(in_arc_ref) = op.get_in(slot) else { return false; };
             let in_arc = in_arc_ref.clone();
             let op_pc = op.get_addr();
-            // TypeOpLoad::getInputCast / TypeOpStore::getInputCast arms. A
-            // Some(reqtype) here is already the final cast decision (the
-            // override ran castStandard internally — coreaction.cc:2662-2669
-            // does not re-gate getInputCast's return), so step (2)'s
-            // castStandard must be skipped for it.
-            let specialized = match op.opcode {
+            let in_size = in_arc.read().unwrap().get_size();
+            let ct = match op.opcode {
                 OpCode::CPUI_LOAD => Self::load_input_cast(&op, slot, strategy),
                 OpCode::CPUI_STORE => Self::store_input_cast(&op, slot, strategy),
                 OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
                     crate::typeop::comparison_input_cast(&op, slot, strategy)
                 }
-                _ => None,
+                opc => match Self::input_metatype(opc) {
+                    Some(meta) => {
+                        let curtype = in_arc
+                            .read()
+                            .unwrap()
+                            .get_high_type_read_facing(&op, slot as i32)
+                            .or_else(|| in_arc.read().unwrap().v_type.clone())
+                            .or_else(|| {
+                                type_factory.read().unwrap().get_base(in_size, meta)
+                            });
+                        let reqtype =
+                            type_factory.read().unwrap().get_base(in_size, meta);
+                        match (curtype, reqtype) {
+                            (Some(cur), Some(req))
+                                if strategy
+                                    .cast_standard_full(&req, &cur, false, true)
+                                    .is_some() =>
+                            {
+                                Some(req)
+                            }
+                            _ => None,
+                        }
+                    }
+                    None => None,
+                },
             };
-            if let Some(reqtype) = specialized {
-                let in_size = in_arc.read().unwrap().get_size();
-                if in_arc.read().unwrap().is_annotation() { return false; }
-                // Release the op read guard before the Funcdata mutations
-                // below take their own write locks on this op.
-                drop(op);
-                // (3) Insert CPUI_CAST op: out = CAST(in), out implied.
-                //     Faithful to coreaction.cc:2702-2712.
-                if in_arc.read().unwrap().is_constant() {
-                    // Constants just get their type updated (castInput
-                    // const path).
-                    return in_arc.write().unwrap().update_type(reqtype);
-                }
-                let new_op = fd.new_op(1, op_pc);
-                let out_vn = fd.new_unique_out(in_size, &new_op);
-                out_vn.write().unwrap().v_type = Some(reqtype);
-                out_vn.write().unwrap().set_implied();
-                fd.op_set_opcode(&new_op, OpCode::CPUI_CAST);
-                fd.op_set_input(&new_op, in_arc.clone(), 0);
-                fd.op_set_input(op_ref, out_vn, slot);
-                fd.op_insert_before(&new_op, op_ref);
+            let ct = if in_arc.read().unwrap().is_annotation() {
+                None
+            } else {
+                ct
+            };
+            // Release the op read guard before the Funcdata mutations below
+            // take their own write locks on this op.
+            drop(op);
+            (in_arc, ct, op_pc, in_size)
+        };
+        // (2) cc:2663-2668: null ct — mark explicit-print constants; that is
+        // the only change this path can make.
+        let Some(ct) = ct_opt else {
+            return Self::mark_explicit_unsigned(op_ref, slot, strategy)
+                || Self::mark_explicit_long_size(op_ref, slot, strategy);
+        };
+        // (3) cc:2671: vnin = vn = op->getIn(slot).
+        let mut vnin = in_vn.clone();
+        // (4) cc:2672-2686: double-cast guard — a Varnode that is already an
+        // implied CAST output is retyped in place (lone reader) or rewired to
+        // the earlier CAST input; never stack a second CAST.
+        let def_is_cast = {
+            let rg = in_vn.read().unwrap();
+            rg.is_written()
+                && rg.def
+                    .as_ref()
+                    .and_then(|d| d.upgrade())
+                    .map(|d| d.read().unwrap().opcode == OpCode::CPUI_CAST)
+                    .unwrap_or(false)
+        };
+        if def_is_cast && in_vn.read().unwrap().is_implied() {
+            // cc:2675-2678: lone-descend retype ends the count on success.
+            let lone_is_op = in_vn
+                .read()
+                .unwrap()
+                .lone_descend()
+                .map(|d| std::sync::Arc::ptr_eq(&d, &op_ref.0))
+                .unwrap_or(false);
+            if lone_is_op {
+                in_vn.write().unwrap().update_type(ct.clone());
+                if in_vn
+                    .read()
+                    .unwrap()
+                    .get_type()
+                    .map(|t| Arc::ptr_eq(&t, &ct))
+                    .unwrap_or(false)
+                {
                     return true;
                 }
-                let meta_opt = Self::input_metatype(op.opcode);
-            drop(op);
-            let Some(meta) = meta_opt else { return false; };
-            let (in_size, curtype, is_annot) = {
-                let in_rg = in_arc.read().unwrap();
-                let is_annot = in_rg.is_annotation();
-                let in_size = in_rg.get_size();
-                let curtype = in_rg
-                    .get_high_type_read_facing(&op_ref.0.read().unwrap(), slot as i32)
-                    .or_else(|| in_rg.v_type.clone())
-                    .or_else(|| type_factory.read().unwrap().get_base(in_size, meta));
-                let Some(curtype) = curtype else { return false; }
-            ;
-                (in_size, curtype, is_annot)
-            };
-            if is_annot {
-            return false;
+            }
+            // cc:2680-2684: cast directly from the input of the previous cast.
+            if let Some(prev) = in_vn
+                .read()
+                .unwrap()
+                .def
+                .as_ref()
+                .and_then(|d| d.upgrade())
+                .and_then(|d| d.read().unwrap().get_in(0).cloned())
+            {
+                vnin = prev;
+                if vnin
+                    .read()
+                    .unwrap()
+                    .get_type()
+                    .map(|t| Arc::ptr_eq(&t, &ct))
+                    .unwrap_or(false)
+                {
+                    fd.op_set_input(op_ref, vnin, slot);
+                    return true;
+                }
+            }
         }
-            let Some(reqtype) = type_factory.read().unwrap().get_base(in_size, meta) else {
-                return false;
-            };
-            (in_arc, reqtype, curtype, op_pc, in_size)
-        };
-        // (2) castStandard(reqtype, curtype, care_uint_int=false, care_ptr_uint=true)
-        let Some(_cast_type) = strategy.cast_standard_full(&reqtype, &curtype, false, true) else {
-            return false;
-        };
-        // (3) Insert CPUI_CAST op: out = CAST(in), out implied.
-        //     Faithful to coreaction.cc:2702-2712.
-        if in_vn.read().unwrap().is_constant() {
-            // Constants just get their type updated (castInput const path).
-            return in_vn.write().unwrap().update_type(reqtype);
+        // (5) cc:2687-2691: constants update in place when they can take the
+        // type; a locked constant falls through to a CAST op.
+        else if in_vn.read().unwrap().is_constant() {
+            in_vn.write().unwrap().update_type(ct.clone());
+            if in_vn
+                .read()
+                .unwrap()
+                .get_type()
+                .map(|t| Arc::ptr_eq(&t, &ct))
+                .unwrap_or(false)
+            {
+                return true;
+            }
         }
+        // (6) cc:2692-2698 (ct PTR + testStructOffset0 → insertPtrsubZero)
+        // and cc:2699-2701 (tryResolutionAdjustment) remain registered
+        // residuals (input-side PTRSUB-zero / union resolution forms).
+        // (7) cc:2702-2718: insert CPUI_CAST op: out = CAST(vnin), out
+        // implied, inserted before op.
         let new_op = fd.new_op(1, op_pc);
-        let out_vn = fd.new_unique_out(in_size, &new_op);
-        out_vn.write().unwrap().v_type = Some(reqtype);
+        let out_vn = fd.new_unique_out(vnin.read().unwrap().get_size(), &new_op);
+        out_vn.write().unwrap().v_type = Some(ct);
         out_vn.write().unwrap().set_implied();
         fd.op_set_opcode(&new_op, OpCode::CPUI_CAST);
-        fd.op_set_input(&new_op, in_vn, 0);
+        fd.op_set_input(&new_op, vnin, 0);
         fd.op_set_input(op_ref, out_vn, slot);
         fd.op_insert_before(&new_op, op_ref);
+        true
+    }
+
+    // RUGRA-GLUE: addlflags predicates from the Ghidra TypeOp constructors
+    /// `TypeOp::inheritsSign` (typeop.hh:131): the addlflags bit assigned by
+    /// the comparison/arithmetic/logic/shift ctor `addlflags` lines in
+    /// typeop.cc (928-1695) and read by markExplicitUnsigned (cast.cc:42).
+    fn op_inherits_sign(opc: OpCode) -> bool {
+        matches!(
+            opc,
+            OpCode::CPUI_INT_EQUAL
+                | OpCode::CPUI_INT_NOTEQUAL
+                | OpCode::CPUI_INT_SLESS
+                | OpCode::CPUI_INT_SLESSEQUAL
+                | OpCode::CPUI_INT_LESS
+                | OpCode::CPUI_INT_LESSEQUAL
+                | OpCode::CPUI_INT_ADD
+                | OpCode::CPUI_INT_SUB
+                | OpCode::CPUI_INT_2COMP
+                | OpCode::CPUI_INT_NEGATE
+                | OpCode::CPUI_INT_XOR
+                | OpCode::CPUI_INT_AND
+                | OpCode::CPUI_INT_OR
+                | OpCode::CPUI_INT_LEFT
+                | OpCode::CPUI_INT_RIGHT
+                | OpCode::CPUI_INT_SRIGHT
+                | OpCode::CPUI_INT_MULT
+                | OpCode::CPUI_INT_DIV
+                | OpCode::CPUI_INT_SDIV
+                | OpCode::CPUI_INT_REM
+                | OpCode::CPUI_INT_SREM
+        )
+    }
+
+    /// `TypeOp::inheritsSignFirstParamOnly` (typeop.hh:134,
+    /// `inherits_sign_zero`): shifts and INT_REM/INT_SREM only inherit sign
+    /// from their first parameter.
+    // RUGRA-GLUE: addlflags predicate mirror of TypeOp::inheritsSignFirstParamOnly (typeop.hh:134)
+    fn op_inherits_sign_first_param_only(opc: OpCode) -> bool {
+        matches!(
+            opc,
+            OpCode::CPUI_INT_LEFT
+                | OpCode::CPUI_INT_RIGHT
+                | OpCode::CPUI_INT_SRIGHT
+                | OpCode::CPUI_INT_REM
+                | OpCode::CPUI_INT_SREM
+        )
+    }
+
+    /// `TypeOp::isShiftOp` (typeop.hh:137, `shift_op`).
+    // RUGRA-GLUE: addlflags predicate mirror of TypeOp::isShiftOp (typeop.hh:137)
+    fn op_is_shift(opc: OpCode) -> bool {
+        matches!(
+            opc,
+            OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT
+        )
+    }
+
+    // Ghidra: cast.cc:38 CastStrategy::markExplicitUnsigned
+    /// Check if the input constant must be coerced to an unsigned token:
+    /// the op must inherit sign, the constant's read-facing HIGH type must
+    /// be unsigned-family (UINT/UNKNOWN/PARTIAL*), not char/enum, the other
+    /// operand must not already force unsigned, and the output must not be
+    /// explicit nor feed a non-inheriting lone reader. On success the
+    /// Varnode is flagged `unsignedprint`. Faithful to
+    /// `CastStrategy::markExplicitUnsigned` (cast.cc:38-77).
+    fn mark_explicit_unsigned(
+        op_ref: &crate::op::PcodeOpRef,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+    ) -> bool {
+        use crate::type_system::datatype::TypeMetatype;
+        let unsigned_family = |m: TypeMetatype| {
+            matches!(
+                m,
+                TypeMetatype::Uint
+                    | TypeMetatype::Unknown
+                    | TypeMetatype::PartialStruct
+                    | TypeMetatype::PartialUnion
+            )
+        };
+        let op = op_ref.0.read().unwrap();
+        // cc:41-44: inheritsSign gate; slot-1 of firstParamOnly ops never
+        // coerces.
+        if !Self::op_inherits_sign(op.opcode) {
+            return false;
+        }
+        let first_param_only = Self::op_inherits_sign_first_param_only(op.opcode);
+        if slot == 1 && first_param_only {
+            return false;
+        }
+        // cc:45-46: constants only.
+        let Some(vn) = op.get_in(slot).cloned() else {
+            return false;
+        };
+        if !vn.read().unwrap().is_constant() {
+            return false;
+        }
+        // cc:47-52: unsigned-family read-facing HIGH type, not char/enum.
+        let Some(dt) = vn
+            .read()
+            .unwrap()
+            .get_high_type_read_facing(&op, slot as i32)
+            .or_else(|| vn.read().unwrap().v_type.clone())
+        else {
+            return false;
+        };
+        if !unsigned_family(dt.get_metatype()) {
+            return false;
+        }
+        if strategy.is_char_type(&dt) || strategy.is_enum_type(&dt) {
+            return false;
+        }
+        // cc:53-58: binary op (not firstParamOnly) — if the other side is
+        // unsigned-family it forces the unsigned already.
+        if op.num_input() == 2 && !first_param_only && slot <= 1 {
+            if let Some(other) = op.get_in(1 - slot) {
+                if let Some(ot) = other
+                    .read()
+                    .unwrap()
+                    .get_high_type_read_facing(&op, (1 - slot) as i32)
+                    .or_else(|| other.read().unwrap().v_type.clone())
+                {
+                    if unsigned_family(ot.get_metatype()) {
+                        return false;
+                    }
+                }
+            }
+        }
+        // cc:59-67: explicit outputs and outputs whose lone reader does not
+        // inherit sign never coerce.
+        if let Some(outvn) = op.get_out().cloned() {
+            if outvn.read().unwrap().is_explicit() {
+                return false;
+            }
+            if let Some(lone) = outvn.read().unwrap().lone_descend() {
+                if !Self::op_inherits_sign(lone.read().unwrap().opcode) {
+                    return false;
+                }
+            }
+        }
+        drop(op);
+        // cc:68-69: vn->setUnsignedPrint(); return true.
+        vn.write().unwrap().addlflags |= crate::varnode::addl_flags::UNSIGNED_PRINT;
+        true
+    }
+
+    // Ghidra: cast.cc:79 CastStrategy::markExplicitLongSize
+    /// Check if a shift-amount (slot 0) constant of a shift op must print as
+    /// an explicitly long token: size > promote size, integer-family HIGH
+    /// type, and the value's most significant bit below the promote width
+    /// (sign-adjusted for signed values). On success the Varnode is flagged
+    /// `longprint`. Faithful to `CastStrategy::markExplicitLongSize`
+    /// (cast.cc:79-105).
+    fn mark_explicit_long_size(
+        op_ref: &crate::op::PcodeOpRef,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+    ) -> bool {
+        use crate::type_system::datatype::TypeMetatype;
+        let op = op_ref.0.read().unwrap();
+        // cc:82-84: shift ops, slot 0 only.
+        if !Self::op_is_shift(op.opcode) || slot != 0 {
+            return false;
+        }
+        // cc:85-86: constants only.
+        let Some(vn) = op.get_in(slot).cloned() else {
+            return false;
+        };
+        if !vn.read().unwrap().is_constant() {
+            return false;
+        }
+        let size = vn.read().unwrap().get_size();
+        // cc:87: vn->getSize() <= promoteSize → false.
+        if size <= strategy.get_promote_size() {
+            return false;
+        }
+        // cc:87-91: HIGH type (not read-facing) must be integer-family.
+        let dt = vn
+            .read()
+            .unwrap()
+            .high
+            .as_ref()
+            .map(|h| h.read().unwrap().v_type.get())
+            .or_else(|| vn.read().unwrap().v_type.clone());
+        let Some(dt) = dt else {
+            return false;
+        };
+        if !matches!(
+            dt.get_metatype(),
+            TypeMetatype::Uint
+                | TypeMetatype::Int
+                | TypeMetatype::Unknown
+                | TypeMetatype::PartialStruct
+                | TypeMetatype::PartialUnion
+        ) {
+            return false;
+        }
+        // cc:92-101: most-significant-bit threshold against the promote
+        // width; signed values compare after two's-complement negation.
+        let off = vn.read().unwrap().get_offset();
+        let promote_bits = (strategy.get_promote_size() * 8) as i32;
+        if dt.get_metatype() == TypeMetatype::Int
+            && crate::address::signbit_negative(off, size)
+        {
+            // cc:93-94: off = uintb_negate(off, size) (address.cc:654:
+            // ~off & calc_mask(size)); opbehavior's Rust twin is private, so
+            // inline the same masked complement.
+            let negated = !off & crate::address::calc_mask(size);
+            if crate::address::mostsigbit_set(negated) >= promote_bits - 1 {
+                return false;
+            }
+        } else if crate::address::mostsigbit_set(off) >= promote_bits {
+            return false;
+        }
+        drop(op);
+        // cc:103-104: vn->setLongPrint(); return true.
+        vn.write().unwrap().addlflags |= crate::varnode::addl_flags::LONG_PRINT;
         true
     }
 
@@ -4773,10 +5052,16 @@ impl ActionSetCasts {
 
     // Ghidra: coreaction.cc:2532 ActionSetCasts::castOutput
     /// Insert a CAST (or PTRSUB) op after `op` to convert its output to the
-    /// token type.  `TYPEOP-PTRSUB-FIELDCAST-0001` covers the ordinary PTRSUB
-    /// token/no-op/CAST projection.  The union, implied, resolution, PTRSUB0,
-    /// and force-facing branches of `castOutput` remain open under
-    /// `PIPE-ACTION-COUNT-0001C`; this is not a whole-function match claim.
+    /// token type (cc:2532-2616): token via the TypeOp virtual dispatch
+    /// (PTRSUB field-sensitive, PTRADD in0-high, arithmetic family via
+    /// cast.cc:394, LOAD pointee, CALL callspec, metatype fallback), the
+    /// token==outHigh short-circuit, the implied varnode retype arms
+    /// (cc:2559-2582, incl. the typelock/RETURN force case), the
+    /// testStructOffset0 PTRSUB form (cc:2586-2588), and the observable
+    /// rewiring order (cc:2595-2609). The union needsResolution arms
+    /// (cc:2545-2548, 2553-2557, 2610-2613) remain registered residuals
+    /// (`PIPE-ACTION-COUNT-0001C`); this is not a whole-function match
+    /// claim.
     fn cast_output(
         fd: &mut Funcdata,
         op: &crate::op::PcodeOpRef,
@@ -4801,22 +5086,59 @@ impl ActionSetCasts {
         let tokenct = {
             use crate::typeop::TypeOp as _;
             let op_rg = op.0.read().unwrap();
+            // A Ghidra PcodeOp always owns a TypeOp with a TypeFactory; Rugra
+            // can represent a detached Funcdata, whose factory-dependent
+            // token arms bail out (no bilateral token semantics).
+            let type_factory = fd
+                .arch
+                .as_ref()
+                .and_then(|architecture| architecture.types.clone());
             if op_rg.opcode == OpCode::CPUI_PTRSUB {
                 // typeop.cc:2349-2364 supplies PTRSUB's field-sensitive token,
                 // and coreaction.cc:2541 consumes it at this exact cast stage.
                 // Type inference continues to use getOutputLocal (INT).
-                let Some(type_factory) = fd
-                    .arch
-                    .as_ref()
-                    .and_then(|architecture| architecture.types.clone())
-                else {
-                    // A Ghidra PcodeOp always owns a TypeOp with a TypeFactory.
-                    // Rugra can represent a detached Funcdata; it has no
-                    // bilateral token semantics, so do not invent a factory.
+                let Some(type_factory) = type_factory else {
                     return 0;
                 };
                 let Some(token) = crate::typeop::TypeOpPtrsub::new(type_factory)
                     .get_output_token(&op_rg)
+                else {
+                    return 0;
+                };
+                token
+            } else if op_rg.opcode == OpCode::CPUI_PTRADD {
+                // typeop.cc:2244: the PTRADD token is the input-0 HIGH
+                // read-facing type ("cast to the input data-type"), not the
+                // output type.
+                let Some(type_factory) = type_factory else {
+                    return 0;
+                };
+                let Some(token) = crate::typeop::TypeOpPtradd::new(type_factory)
+                    .get_output_token(&op_rg)
+                else {
+                    return 0;
+                };
+                token
+            } else if matches!(
+                op_rg.opcode,
+                OpCode::CPUI_INT_ADD
+                    | OpCode::CPUI_INT_SUB
+                    | OpCode::CPUI_INT_2COMP
+                    | OpCode::CPUI_INT_NEGATE
+                    | OpCode::CPUI_INT_XOR
+                    | OpCode::CPUI_INT_AND
+                    | OpCode::CPUI_INT_OR
+                    | OpCode::CPUI_INT_MULT
+            ) {
+                // typeop.cc:1175/1326/1388/1402/1416/1449/1482/1625 route the
+                // arithmetic family through
+                // CastStrategyC::arithmeticOutputStandard (cast.cc:394): the
+                // earliest-ordering input HIGH type, bool demoted to base int.
+                let Some(type_factory) = type_factory else {
+                    return 0;
+                };
+                let Some(token) =
+                    crate::type_system::cast::arithmetic_output_standard(&op_rg, &type_factory)
                 else {
                     return 0;
                 };
@@ -4915,22 +5237,92 @@ impl ActionSetCasts {
         if tokenct.type_equal(&out_high_type) {
             return 0;
         }
-        // cc:2559-2582: implied varnode handling (deferred — needs full
-        // implied/union resolution chain).
-        // cc:2584-2592: check if standard cast is needed.
-        let _cast_type = match strategy.cast_standard_full(&out_high_type, &tokenct, false, true) {
-            Some(ct) => ct,
-            None => return 0, // No cast needed.
-        };
-        // cc:2595-2609: insert CAST op after `op`.
+        // cc:2553-2557: outHighResolve starts as outHighType; the union
+        // needsResolution resolution arm is a registered residual (no union
+        // resolution infrastructure yet).
+        let mut out_high_resolve = out_high_type.clone();
+        // cc:2559-2582: implied varnode must have parse type.
+        let mut force = false;
+        {
+            let (out_implied, out_typelock) = {
+                let r = outvn.read().unwrap();
+                (r.is_implied(), r.is_type_lock())
+            };
+            if out_implied {
+                if out_typelock {
+                    // cc:2562-2567: the Varnode input to a CPUI_RETURN is
+                    // marked implied but casts as if explicit.
+                    let lone_is_return = outvn
+                        .read()
+                        .unwrap()
+                        .lone_descend()
+                        .map(|d| d.read().unwrap().opcode == OpCode::CPUI_RETURN)
+                        .unwrap_or(false);
+                    if !lone_is_return {
+                        force = !Self::is_op_identical(&out_high_resolve, &tokenct);
+                    }
+                } else if out_high_resolve.get_metatype() != TypeMetatype::Pointer {
+                    // cc:2569-2571: implied atomic (non-pointer) out — ignore
+                    // its type in favor of the token type.
+                    outvn.write().unwrap().update_type(tokenct.clone());
+                    out_high_resolve = Self::refresh_out_high_resolve(
+                        &outvn,
+                        &out_high_resolve,
+                        &tokenct,
+                    );
+                } else if tokenct.get_metatype() == TypeMetatype::Pointer {
+                    // cc:2573-2580: implied pointer out AND pointer token —
+                    // preserve the implied pointer only when it points to a
+                    // composite; otherwise retype to the token.
+                    let pointee_composite = match out_high_resolve.as_ref() {
+                        Datatype::Pointer(p) => matches!(
+                            p.ptr_to.get_metatype(),
+                            TypeMetatype::Array
+                                | TypeMetatype::Struct
+                                | TypeMetatype::Union
+                        ),
+                        _ => false,
+                    };
+                    if !pointee_composite {
+                        outvn.write().unwrap().update_type(tokenct.clone());
+                        out_high_resolve = Self::refresh_out_high_resolve(
+                            &outvn,
+                            &out_high_resolve,
+                            &tokenct,
+                        );
+                    }
+                }
+            }
+        }
+        // cc:2583-2592: CAST unless forced; a pointer out whose first
+        // field/array base matches the token takes the PTRSUB(#0) form.
+        let mut num_inputs = 1;
+        if !force {
+            if out_high_resolve.get_metatype() == TypeMetatype::Pointer
+                && Self::test_struct_offset0(&out_high_resolve, &tokenct, strategy)
+            {
+                num_inputs = 2; // CPUI_PTRSUB form
+            } else if strategy
+                .cast_standard_full(&out_high_resolve, &tokenct, false, true)
+                .is_none()
+            {
+                return 0; // No cast needed.
+            }
+        }
+        // cc:2595-2609: insert CAST/PTRSUB op after `op`.
         // vn = newUnique(outvn->getSize()); vn->updateType(tokenct); vn->setImplied()
         let vn = fd.new_unique(out_size);
         vn.write().unwrap().v_type = Some(tokenct.clone());
         vn.write().unwrap().set_implied();
-        // newop = newOp(1, op->getAddr()); opSetOpcode(CAST)
+        // cc:2598: newOp(2) for the PTRSUB form, newOp(1) for CAST.
         let op_addr = op.0.read().unwrap().get_addr();
-        let newop = fd.new_op(1, op_addr);
-        fd.op_set_opcode(&newop, OpCode::CPUI_CAST);
+        let newop = fd.new_op(num_inputs, op_addr);
+        let opc = if num_inputs == 2 {
+            OpCode::CPUI_PTRSUB
+        } else {
+            OpCode::CPUI_CAST
+        };
+        fd.op_set_opcode(&newop, opc);
         // opSetOutput(newop, outvn); opSetInput(newop, vn, 0)
         // opSetOutput(op, vn)
         // opInsertAfter(newop, op)
@@ -4942,9 +5334,90 @@ impl ActionSetCasts {
         // the original op rebound to that temporary (cc:2603-2608).
         fd.op_set_output(&newop, outvn.clone());
         fd.op_set_input(&newop, vn.clone(), 0);
+        if opc == OpCode::CPUI_PTRSUB {
+            // cc:2605-2607: PTRSUB form reads the constant 0 in slot 1.
+            let zero = fd.new_constant(4, 0);
+            fd.op_set_input(&newop, zero, 1);
+        }
         fd.op_set_output(&op, vn);
         fd.op_insert_after(&newop, op);
         1 // count += 1
+    }
+
+    // RUGRA-GLUE: cc:2570-2571/2578-2579 refresh helper — Varnode::updateType
+    // calls high->typeDirty() in Ghidra so the following
+    // getHighTypeDefFacing() recomputes from the just-written instance type;
+    // Rugra's typeDirty is a no-op, so a high still reporting the pre-update
+    /// type (single-instance implied temp) is projected as the token type.
+    fn refresh_out_high_resolve(
+        outvn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        stale: &Arc<crate::type_system::datatype::Datatype>,
+        tokenct: &Arc<crate::type_system::datatype::Datatype>,
+    ) -> Arc<crate::type_system::datatype::Datatype> {
+        match outvn.read().unwrap().get_high_type_def_facing() {
+            Some(t) if Arc::ptr_eq(&t, stale) => tokenct.clone(),
+            Some(t) => t,
+            None => tokenct.clone(),
+        }
+    }
+
+    // Ghidra: coreaction.cc:2384 ActionSetCasts::testStructOffset0
+    /// Test if the cast conflict can be resolved by passing to the first
+    /// structure/array field: `curtype` (the token) must be a pointer whose
+    /// pointee is a struct with a field at offset 0 (or an array); descending
+    /// one pointer level on `reqtype` (the out type) and unwrapping one array
+    /// layer on both sides, the cast must vanish under
+    /// castStandard(req, cur, true, true). Faithful to
+    /// `ActionSetCasts::testStructOffset0` (coreaction.cc:2384-2413).
+    fn test_struct_offset0(
+        reqtype: &Arc<crate::type_system::datatype::Datatype>,
+        curtype: &Arc<crate::type_system::datatype::Datatype>,
+        strategy: &crate::type_system::cast::CastStrategyC,
+    ) -> bool {
+        use crate::type_system::datatype::{Datatype, TypeMetatype};
+        // cc:2387: curtype must be a pointer.
+        let Datatype::Pointer(cur_ptr) = curtype.as_ref() else {
+            return false;
+        };
+        let high_ptr_to = &cur_ptr.ptr_to;
+        let (req_inner, cur_inner) = match high_ptr_to.as_ref() {
+            Datatype::Struct(st) => {
+                // cc:2391: numDepend() == 0 → false.
+                if st.fields.is_empty() {
+                    return false;
+                }
+                // cc:2392-2393: beginField() (offset-sorted) must sit at 0.
+                let first = st.fields.iter().min_by_key(|f| f.offset).unwrap();
+                if first.offset != 0 {
+                    return false;
+                }
+                // cc:2394-2399: descend one pointer level on reqtype, unwrap
+                // one array layer on both sides.
+                let Datatype::Pointer(req_ptr) = reqtype.as_ref() else {
+                    return false;
+                };
+                let peel_array = |t: &Arc<Datatype>| match t.as_ref() {
+                    Datatype::Array(a) => a.array_of.clone(),
+                    _ => t.clone(),
+                };
+                (peel_array(&req_ptr.ptr_to), peel_array(&first.type_ptr))
+            }
+            Datatype::Array(arr) => {
+                let Datatype::Pointer(req_ptr) = reqtype.as_ref() else {
+                    return false;
+                };
+                (req_ptr.ptr_to.clone(), arr.array_of.clone())
+            }
+            _ => return false,
+        };
+        // cc:2409-2410: never induce PTRSUB for "void *".
+        if req_inner.get_metatype() == TypeMetatype::Void {
+            return false;
+        }
+        // cc:2412: the resolved pair must not need a standard cast.
+        strategy
+            .cast_standard_full(&req_inner, &cur_inner, true, true)
+            .is_none()
     }
 
     /// Faithful port of the PTRSUB/PTRADD pointer-fit arm of
@@ -5165,8 +5638,10 @@ impl Action for ActionSetCasts {
         };
         let strategy = crate::type_system::cast::CastStrategyC::new(4);
         let mut changes = 0;
+        // cc:2728: startCastPhase() records the cast-phase Varnode index.
+        fd.start_cast_phase();
         for op_ref in &ops {
-            let (opcode, input_count, skip) = {
+            let (opcode, skip) = {
                 let op = op_ref.0.read().unwrap();
                 let not_printed = op.flags
                     & (crate::op::pcodeop_flags::MARKER
@@ -5175,17 +5650,107 @@ impl Action for ActionSetCasts {
                     != 0;
                 (
                     op.opcode,
-                    op.num_input(),
                     op.is_dead() || not_printed || op.opcode == OpCode::CPUI_CAST,
                 )
             };
             if skip { continue; }
-                // coreaction.cc:2756-2759: every operation is handled atomically:
+            // cc:2740-2746: PTRADD that no longer fits its pointer — in0's
+            // read-facing HIGH type must be a pointer whose pointee alignSize
+            // equals addressToByteInt(scale, wordSize); otherwise the op is
+            // rewritten in place through opUndoPtradd(op, true) (an implied
+            // INT_MULT folds the scale in, constants folded outright).
+            if opcode == OpCode::CPUI_PTRADD {
+                let undo = {
+                    let op = op_ref.0.read().unwrap();
+                    match (op.get_in(2), op.get_in(0)) {
+                        (Some(scale_vn), Some(base_vn)) => {
+                            // cc:2741: int4 sz = (int4)op->getIn(2)->getOffset()
+                            let sz = scale_vn.read().unwrap().get_offset() as u32 as i64;
+                            // cc:2742: ct = op->getIn(0)->getHighTypeReadFacing(op)
+                            let ct = base_vn
+                                .read()
+                                .unwrap()
+                                .get_high_type_read_facing(&op, 0)
+                                .or_else(|| base_vn.read().unwrap().v_type.clone());
+                            match ct.as_deref() {
+                                Some(crate::type_system::datatype::Datatype::Pointer(pt)) => {
+                                    pt.ptr_to.get_align_size() as i64
+                                        != crate::space::AddrSpace::address_to_byte_int(
+                                            sz,
+                                            pt.wordsize as u32,
+                                        )
+                                }
+                                // cc:2743: ct->getMetatype() != TYPE_PTR → undo
+                                _ => true,
+                            }
+                        }
+                        // Malformed PTRADD: Ghidra reads slots 2/0 blind; the
+                        // defensive no-op keeps detached fixtures alive.
+                        _ => false,
+                    }
+                };
+                if undo {
+                    fd.op_undo_ptradd_full(op_ref, true);
+                }
+            }
+            // cc:2747-2756: PTRSUB that no longer fits its pointer — demote
+            // offset 0 to COPY (dropping the offset input), else INT_ADD.
+            // The demoted op keeps flowing through this iteration's
+            // castInput/castOutput under its NEW opcode (Ghidra re-reads
+            // code()/numInput() live after the rewrite).
+            else if opcode == OpCode::CPUI_PTRSUB {
+                let (demote, offset_is_zero) = {
+                    let op = op_ref.0.read().unwrap();
+                    match (op.get_in(0), op.get_in(1)) {
+                        (Some(base_vn), Some(off_vn)) => {
+                            // cc:2748: isPtrsubMatching(in(1) offset, 0, 0)
+                            let off = off_vn.read().unwrap().get_offset() as i64;
+                            let t = base_vn
+                                .read()
+                                .unwrap()
+                                .get_type_read_facing_op(&op, 0)
+                                .or_else(|| base_vn.read().unwrap().v_type.clone());
+                            let matches = match t.as_deref() {
+                                Some(crate::type_system::datatype::Datatype::Pointer(pt)) => {
+                                    crate::type_system::datatype::pointer_is_ptrsub_matching(
+                                        &pt.ptr_to,
+                                        pt.wordsize,
+                                        off,
+                                        0,
+                                        0,
+                                    )
+                                }
+                                // Base Datatype::isPtrsubMatching returns false.
+                                _ => false,
+                            };
+                            (!matches, off == 0)
+                        }
+                        _ => (false, false),
+                    }
+                };
+                if demote {
+                    if offset_is_zero {
+                        fd.op_remove_input(op_ref, 1);
+                        fd.op_set_opcode(op_ref, OpCode::CPUI_COPY);
+                    } else {
+                        fd.op_set_opcode(op_ref, OpCode::CPUI_INT_ADD);
+                    }
+                }
+            }
+            // coreaction.cc:2756-2759: every operation is handled atomically:
             // all of its input casts precede its output cast. In particular,
             // a later op observes the output mutation of an earlier op.
+            // The input count and the slot-0 dispatch opcode are re-read
+            // AFTER the preflight (Ghidra evaluates op->numInput() live in
+            // the loop condition and dispatches virtually on the current
+            // opcode).
+            let (live_opcode, input_count) = {
+                let op = op_ref.0.read().unwrap();
+                (op.opcode, op.num_input())
+            };
             for slot in 0..input_count {
                 let changed =
-                    if slot == 0 && matches!(opcode, OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD) {
+                    if slot == 0 && matches!(live_opcode, OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD) {
                         Self::ptr_input_reqtype(op_ref).is_some_and(|required| {
                             self.cast_input_ptr(fd, op_ref, slot, &strategy, required)
                         })
@@ -5196,10 +5761,9 @@ impl Action for ActionSetCasts {
                 }
             }
 
-            // The PTRADD/PTRSUB fit preflight, resolveUnion, and
-            // checkPointerIssues branches remain separately registered
-            // residuals; the ordering here now matches the oracle for the
-            // implemented castInput/castOutput closure.
+            // resolveUnion and checkPointerIssues remain separately
+            // registered residuals; the ordering here now matches the oracle
+            // for the implemented castInput/castOutput closure.
             changes += Self::cast_output(fd, op_ref, &strategy);
         }
 
@@ -14814,17 +15378,24 @@ mod tests {
 
         let mut a = ActionSetCasts::new();
         let status = a.apply(&mut fd).unwrap();
-        // The varnode type (int *) differs from the high type (long *) one
-        // level down, so a CAST to reqtype = the varnode's own (int *) is
-        // inserted (castInput takes the getInputCast return directly,
-        // coreaction.cc:2672-2675).
+        // cc:2747-2756: the read-facing type (int *) does not satisfy
+        // isPtrsubMatching (pointer to base int, offset 8), so the PTRSUB is
+        // demoted to INT_ADD BEFORE any input cast; the slot-0 cast is then
+        // the INT_ADD metain cast to base int of the input size (the
+        // pre-preflight (int *) cast no longer exists — bilateral fixture
+        // ptrsub_switch_cast_1204 pins the oracle shape).
         assert_eq!(
         status, action_status::NO_CHANGE,
         "Ghidra raw apply returns 0"
     );
         assert!(a.count >= 1, "at least one CAST must be inserted");
+        assert_eq!(
+        op_ref.0.read().unwrap().opcode,
+        OpCode::CPUI_INT_ADD,
+        "non-matching PTRSUB is demoted to INT_ADD (cc:2747-2756)"
+    );
 
-        // Verify a CPUI_CAST op now feeds slot 0 of the PTRSUB.
+        // Verify a CPUI_CAST op now feeds slot 0 of the demoted INT_ADD.
         let new_in0 = op_ref.0.read().unwrap().get_in(0).map(|a| a.clone());
         let cast_op_arc = {
             let in0_rg = new_in0.as_ref().unwrap().read().unwrap();
@@ -14840,23 +15411,29 @@ mod tests {
         Arc::ptr_eq(&cast_op.read().unwrap().get_in(0).unwrap(), &in0),
             "the CAST reads the original input varnode"
     );
+        let ct = new_in0
+            .as_ref()
+            .unwrap()
+            .read()
+            .unwrap()
+            .v_type
+            .clone()
+            .unwrap();
+        // After the cc:2747-2756 demotion the slot-0 cast is the INT_ADD
+        // metain cast (base int of the input size), not the old ic0
+        // (int *) reqtype.
         assert!(
-        Arc::ptr_eq(
-            &new_in0
-                .as_ref()
-                .unwrap()
-                .read()
-                .unwrap()
-                .v_type
-                .as_ref()
-                .unwrap(),
-            &int_ptr,
-        ), "the CAST output carries the varnode's own type as reqtype"
+        ct.get_metatype() == TypeMetatype::Int && ct.get_size() == 8,
+        "the CAST output carries the INT_ADD metain base int (8 bytes), got {ct:?}"
     );
     }
 
-    /// PTRSUB where input(0) already has the matching pointer type → no cast
-    /// inserted (NO_CHANGE). Guards against spurious casts when types agree.
+    /// PTRSUB whose input(0) pointer does not satisfy isPtrsubMatching
+    /// (pointer to base int at offset 8) is demoted to INT_ADD and takes the
+    /// INT_ADD metain casts (cc:2747-2756 + cc:2758-2770). The pre-preflight
+    /// "no cast when ic0 matches" expectation is superseded by the demotion;
+    /// the matching-pointer projection is covered bilaterally by the
+    /// ptrsub_switch_cast_1204 `aligned` case (count=0 with a struct field).
     #[test]
     fn test_action_setcasts_ptrsub_no_cast_when_matching() {
         use crate::address::{Address, SeqNum};
@@ -14893,14 +15470,21 @@ mod tests {
         op.output = Some(out.clone());
         let op_arc = Arc::new(RwLock::new(op));
         out.write().unwrap().def = Some(Arc::downgrade(&op_arc));
-        fd.obank.alivelist.push(PcodeOpRef(op_arc));
+        fd.obank.alivelist.push(PcodeOpRef(op_arc.clone()));
 
         let mut a = ActionSetCasts::new();
         let status = a.apply(&mut fd).unwrap();
         assert_eq!(
-        status, action_status::NO_CHANGE, "no cast expected for matching types"
+        status, action_status::NO_CHANGE, "Ghidra raw apply returns 0"
     );
-        assert_eq!(a.count, 0);
+        // cc:2747-2756: a (long *) with no struct pointee never satisfies
+        // isPtrsubMatching, so the op is demoted to INT_ADD and takes the
+        // metain slot-0 cast plus the token-vs-outHigh output cast (count 2).
+        assert_eq!(
+        op_arc.read().unwrap().opcode, OpCode::CPUI_INT_ADD,
+        "pointer-to-base-int PTRSUB is demoted to INT_ADD"
+    );
+        assert_eq!(a.count, 2);
     }
 
     /// PTRADD with mismatched input(0) pointer type → CAST op inserted.
@@ -14965,8 +15549,17 @@ mod tests {
         status, action_status::NO_CHANGE,
         "Ghidra raw apply returns 0"
     );
+        // cc:2740-2746: the HIGH (char *) pointee alignSize 1 != 4 = the
+        // scale, so the PTRADD is undone to INT_ADD (constant index folded
+        // with the scale) before the casts; the slot-0 cast is then the
+        // INT_ADD metain base int, not the preflight-era ic0 (int *).
+        assert_eq!(
+        op_ref.0.read().unwrap().opcode,
+        OpCode::CPUI_INT_ADD,
+        "misfit PTRADD is undone to INT_ADD (cc:2740-2746)"
+    );
         assert!(a.count >= 1);
-        // Verify CAST op now feeds slot 0 with the varnode's own type.
+        // Verify CAST op now feeds slot 0 with the metain base-int type.
         let new_in0 = op_ref.0.read().unwrap().get_in(0).map(|a| a.clone());
         let cast_op_arc = {
             let in0_rg = new_in0.as_ref().unwrap().read().unwrap();
@@ -14976,19 +15569,19 @@ mod tests {
         assert_eq!(
         cast_op_arc.unwrap().read().unwrap().opcode, OpCode::CPUI_CAST
     );
+        let ct = new_in0
+            .as_ref()
+            .unwrap()
+            .read()
+            .unwrap()
+            .v_type
+            .clone()
+            .unwrap();
         assert!(
-        Arc::ptr_eq(
-            &new_in0
-                .as_ref()
-                .unwrap()
-                .read()
-                .unwrap()
-                .v_type
-                .as_ref()
-                .unwrap(),
-            &int_ptr,
-        ), "the CAST output carries the varnode's own type as reqtype"
+        ct.get_metatype() == TypeMetatype::Int && ct.get_size() == 8,
+        "the CAST output carries the INT_ADD metain base int (8 bytes), got {ct:?}"
     );
+        let _ = &int_ptr;
     }
 
     // ---- ActionInferTypes + default-pipeline tree tests ----

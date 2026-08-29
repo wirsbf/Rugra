@@ -452,6 +452,10 @@ macro_rules! binary_op {
                 let size = op.get_in(slot)?.read().unwrap().get_size();
                 base_local_type(type_factory, size, TypeMetatype::$metain)
             }
+            // Ghidra: typeop.cc:1175 TypeOpIntAdd::getOutputToken (arithmetic family)
+            fn get_output_token(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+                macro_arith_output_token(OpCode::$opcode, op, &self.type_factory)
+            }
         }
     };
 }
@@ -524,6 +528,10 @@ macro_rules! unary_op {
                 let type_factory = self.local_type_factory()?;
                 let size = op.get_in(slot)?.read().unwrap().get_size();
                 base_local_type(type_factory, size, TypeMetatype::$metain)
+            }
+            // Ghidra: typeop.cc:1175 TypeOpIntAdd::getOutputToken (arithmetic family)
+            fn get_output_token(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
+                macro_arith_output_token(OpCode::$opcode, op, &self.type_factory)
             }
         }
     };
@@ -1175,6 +1183,33 @@ unary_op!(
     Uint,
     Uint
 );
+
+// Ghidra: typeop.cc:1175 TypeOpIntAdd::getOutputToken (arithmetic family)
+/// Shared arithmetic-output-token dispatch backing the macro-generated
+/// `get_output_token` overrides: INT_ADD/SUB/2COMP/NEGATE/XOR/AND/OR/MULT
+/// each override `getOutputToken` with the identical one-liner
+/// `return castStrategy->arithmeticOutputStandard(op);` (typeop.cc:1175,
+/// 1326, 1388, 1402, 1416, 1449, 1482, 1625); every other macro op keeps the
+/// base-class "no token override" (None) default.
+fn macro_arith_output_token(
+    opc: OpCode,
+    op: &PcodeOp,
+    factory: &Arc<RwLock<TypeFactory>>,
+) -> Option<Arc<Datatype>> {
+    match opc {
+        OpCode::CPUI_INT_ADD
+        | OpCode::CPUI_INT_SUB
+        | OpCode::CPUI_INT_2COMP
+        | OpCode::CPUI_INT_NEGATE
+        | OpCode::CPUI_INT_XOR
+        | OpCode::CPUI_INT_AND
+        | OpCode::CPUI_INT_OR
+        | OpCode::CPUI_INT_MULT => {
+            crate::type_system::cast::arithmetic_output_standard(op, factory)
+        }
+        _ => None,
+    }
+}
 // Shift Operations — hand-written instead of `binary_op!` because Ghidra's
 // TypeOpIntLeft/TypeOpIntRight/TypeOpIntSright override getInputLocal
 // (typeop.cc:1509/:1536/:1600): slot 1 (the shift amount) must come back as
@@ -3434,14 +3469,13 @@ impl TypeOp for TypeOpIntAdd {
         base_local_type(type_factory, size, TypeMetatype::Int)
     }
 
-    /// The output token of an ADD follows the arithmetic typing rule, i.e. the
-    /// output varnode's own resolved high type.
-    /// Faithful to `TypeOpIntAdd::getOutputToken` (typeop.cc:1175-1179), which
-    /// returns `castStrategy->arithmeticOutputStandard(op)`.
+    /// The output token of an ADD follows the arithmetic typing rule: the
+    /// earliest-ordering input HIGH type (bool demoted to base int).
+    /// Faithful to `TypeOpIntAdd::getOutputToken` (typeop.cc:1175-1179),
+    /// which returns `castStrategy->arithmeticOutputStandard(op)`.
     // Ghidra: typeop.cc:1175 TypeOpIntAdd::getOutputToken
     fn get_output_token(&self, op: &PcodeOp) -> Option<Arc<Datatype>> {
-        op.get_out()
-            .and_then(|vn| vn.read().unwrap().v_type.clone())
+        crate::type_system::cast::arithmetic_output_standard(op, &self.type_factory)
     }
 
     /// Pointer arithmetic rule. A pointer propagates input->output when the

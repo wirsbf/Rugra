@@ -21,3 +21,94 @@
   `docs/alignment_docs/CARRY-PRINT-ROOTCAUSE-2026-08-30.md` §2.1)。
 - 旧值 0x200 与 1-bit flags 区(CF..F5)别名:所有 rip 相对内存操作数的地址计算
   曾落在 flags 区 varnode 上。curl E2E 实测输出字节不变(3104/0/0)。
+
+### 2026-08-30：X86LIFT-FLAG-PCODE-0001 — add/sub/neg/not 全量 flag pcode(w-iced)
+- `add`/`sub`/`neg`/`not` 离开旧的 "temp+COPY 无 flags" 形态,按锁定 oracle
+  `sleigh_specs/x86-64.sla`(12.0.4 语言)逐 op 提升:
+  - `add` = ia.sinc `addflags`(CF=INT_CARRY, OF=INT_SCARRY)+ INT_ADD 直写
+    dst(寄存器形式无 temp/COPY 链)+ 32-bit dst 的 INT_ZEXT 进 64-bit 父寄存器
+    (check_Reg32_dest)+ `resultflags`(SF=INT_SLESS(r,0), ZF=INT_EQUAL(r,0),
+    PF=INT_AND(r,0xff)→POPCOUNT→INT_AND(1)→INT_EQUAL(0))。
+  - `sub` = `subflags`(CF=INT_LESS, OF=INT_SBORROW)+ INT_SUB + zext + resultflags。
+  - `neg` = `negflags`(CF=INT_NOTEQUAL(a,0), OF=INT_SBORROW(0,a))+ INT_2COMP +
+    resultflags + zext(NEG 的 zext 在 resultflags 之后,ia.sinc:4134)。
+  - `not` = INT_NEGATE 直写,无 flags,32-bit dst zext。
+- flag 寄存器偏移修正为 sla 布局:CF=0x200 PF=0x202 AF=0x204 ZF=0x206 SF=0x207
+  OF=0x20b(各 1 字节;全量 dump 见 examples/x86flag_probe.rs)。
+- 内存 dst 按 SLEIGH rm-操作数逐用重求值:每次宏使用重新 LOAD(add/sub 每
+  flag 对、值 op、STORE 后每个 flag 组各一次),共用同一地址 varnode。
+- 立即数尺寸规范化到操作数尺寸(`sub rsp,0x98` 的 imm8 → const 0x98:8)。
+- 新增高字节寄存器 ah=0x1/ch=0x9/dh=0x11/bh=0x19。
+- 新 helper:flag_cf/pf/zf/sf/of、const_vn、ram_space_const、parent64_name、
+  compute_mem_addr、emit_load/emit_store_v、emit_resultflags(sf/zf/pf 三段)、
+  emit_addflags/subflags/negflags/logicalflags、AluDst/Op1Ref + materialize、
+  resolve_alu、emit_alu_tail、lift_add/sub/neg/not。
+- 双侧证据:SLEIGH 直通 dump vs iced 提升投影,add/sub/neg/not 的 reg+mem 形态
+  op-for-op 一致(唯一差异为可规范化的 uniq 临时 id)——
+  /tmp/w-iced-flagprobe3.out(oracle 段)与 examples/x86flag_probe.rs。
+
+### 2026-08-30:X86LIFT-FLAG-PCODE-0001 — logic/cmp/test + jcc cc 表(w-iced c2)
+- `and`/`or`/`xor` = ia.sinc `logicalflags()`(COPY CF=0, COPY OF=0,在操作数
+  LOAD 之前)+ 值 op 直写 dst + 32-bit zext + resultflags;mem dst STORE 后逐
+  flag 组重新 LOAD(mem src 逐用重 LOAD,同 add/sub)。
+- `cmp` 重写:旧实现 ZF=INT_EQUAL(dst,src)/CF=INT_LESS/SF=INT_SLESS 全部错位
+  (偏移 0x201/0x203/0x202 非 sla 布局,且 ZF/SF 语义错误)。新实现 =
+  `local temp = rm; subflags(temp,src); local diff = temp - src;
+  resultflags(diff)`:INT_LESS(CF=0x200) + INT_SBORROW(OF=0x20b) +
+  INT_SUB→uniq + SF/ZF/PF 链;双操作数 reg 直用 / mem 单次 LOAD+COPY 局部缓存。
+- `test` 重写:logicalflags + 单次操作数读取 + INT_AND→uniq + resultflags
+  (mem dst 地址计算在 COPY CF/OF 之前,LOAD 在其后)。
+- `jCC` 全族重写为 ia.sinc cc 条件表(ia.sinc:1523-1539):je=ZF、jne=
+  BOOL_NEGATE(ZF)、jl=INT_NOTEQUAL(OF,SF)、jge=INT_EQUAL(OF,SF)、jle=
+  BOOL_OR(ZF,NOTEQUAL(OF,SF))、jg=BOOL_AND(!ZF,EQUAL(OF,SF))、ja=!BOOL_OR
+  (CF,ZF)、jb=CF 等;修正旧错位偏移(ZF 0x201→0x206 等)与旧简化条件
+  (jl 只用 SF、jge 只用 !SF 等);新增 js/jns/jo/jno/jp/jnp(此前完全未
+  处理,js/jns 在 httpd 语料 47 处,直接丢控制流)。
+- cmp 与 jcc 的偏移修正必须原子落地:cmp 写 0x206 而 je 读 0x201 会断链。
+- 双侧投影:17 个 jcc/cmp/test/logic 形态 op-for-op MATCH(探针
+  /tmp/w-iced-flagprobe8.out vs flagprobe6 oracle 段)。
+
+### 2026-08-30:X86LIFT-FLAG-PCODE-0001 — sbb/adc(w-iced c3)
+- `adc` = ia.sinc `addCarryFlags(op1,op2)` 全加器进位链 + zext + resultflags:
+  CFcopy=zext(CF)(size==1 时 COPY)→ CF=INT_CARRY(op1,op2) → OF=INT_SCARRY
+  → result=INT_ADD(op1,op2) → CF=BOOL_OR(CF,INT_CARRY(result,CFcopy)) →
+  OF=BOOL_XOR(OF,INT_SCARRY(result,CFcopy)) → dst=INT_ADD(result,CFcopy)。
+- `sbb` = `subCarryFlags(op1,op2)` 同构(INT_LESS/INT_SBORROW/INT_LESS/
+  BOOL_OR/INT_SBORROW/BOOL_XOR/INT_SUB)。
+- 此前两族完全未实现(0 op,直接丢指令)。双侧投影:adc(16 op)/
+  sbb(15 op)op-for-op MATCH(flagprobe9)。
+
+### 2026-08-30:X86LIFT-FLAG-PCODE-0001 — cmovcc/setcc(w-iced c4)
+- `cmovCC` = ia.sinc `:CMOV^cc Reg,rm`(ia.sinc:3043-3046)`{ local tmp = rm;
+  if (!cc) goto inst_next; Reg = tmp; }`:cc 条件 op 序 → tmp(COPY 源寄存器
+  /LOAD 源内存)→ 32-bit dst 旧值 INT_ZEXT 进父寄存器 → BOOL_NEGATE(cond) →
+  CBRANCH(inst_next,!cc) → COPY dst←tmp。此前完全未实现(0 op;httpd 语料
+  90 处)。
+- `setCC` = ia.sinc `:SET^cc rm8`(ia.sinc:4595)`{ rm8 = cc; }`:cc 条件 op
+  序 → COPY dst:1←cond(reg dst)/STORE(addr,cond)(mem dst)。此前完全未
+  实现(0 op;httpd 语料 90 处)。
+- 复用 emit_cc_cond(与 jcc 同一 cc 表);双侧投影 11 个采样变体 op-for-op
+  MATCH(flagprobe10),其余变体走同一代码路径。
+
+### 2026-08-30:X86LIFT-ZEROOP-ARMS — pop/movzx/movsx/movsxd/cbw-cwde-cdqe/cdq-cqo(w-iced c5,coordinator 扩展)
+- 背景(w-zombie 根因链):CBRANCH 目标指令提升为 0 个 p-code op → 边丢弃 →
+  僵尸决策块(funcdata 侧合成块修复已入 master);这些目标(0x2e010/0x2e022/
+  0x2e06a/0x2e0b9/0x2e0c8)是 movzbl/movslq/pop —— 本提交补齐其提升臂,使
+  Ghidra 侧 LAB_0012e022 形态的标签区域获得真实语句而非空投影。
+- `pop` = ia.sinc:4215 `local val=0; pop88(val); Rmr=val;`(pop88:`x=*:8 RSP;
+  RSP=RSP+8`):COPY val=0(局部死初始化,保 op 序)→ LOAD val=(ram,RSP)→
+  INT_ADD RSP+=size → COPY reg=val / STORE addr=val(mem dst)。此前 0 op
+  (httpd 语料 1903 处)。
+- `movzx`/`movsx`/`movsxd` = ia.sinc:4092-4115 `Reg=zext/sext(rm)`(+32-bit
+  dst 的 check_Reg32_dest zext;同尺寸形式(Reg16,rm16 / Reg32,rm32)为
+  纯 COPY)。此前 0 op(movzx 462 处 + movsx 13 处)。
+- `cbw`/`cwde`/`cdqe` = 累加器 INT_SEXT(cwde 另有 check_EAX_dest zext);
+  `cdq`/`cqo` = INT_SEXT 双宽 temp + SUBPIECE 低半 → EDX/RDX(cdq 另有
+  check_EDX_dest zext)。此前 0 op(cdqe 18 处、cqo 2 处)。
+- 新增 iced REX 低字节寄存器别名 r8l..r15l(iced 在 REX 前缀下用 "r8l"
+  而非 "r8b" 命名,此前 movsx eax,r8b 整条丢弃)。
+- 双侧投影:pop(4 op)/movsx(2 op)/cdqe(1 op)op-for-op MATCH;movzx 唯一
+  差异为地址临时操作数序 (disp,base) vs (base,disp)(INT_ADD 交换律,与
+  compute_memaddr 既有形态一致,值等价)。
+- 残余:push(push88:mysave=x;RSP-=8;STORE)仍在零-op 状态 — 影响
+  httpd 全部函数序言(1385 处),单独 commit 评估爆炸半径后再落。

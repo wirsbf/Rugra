@@ -1,0 +1,73 @@
+{
+ "schema": 1,
+ "fixture_id": "PRINTC-STRUCTEMIT-MAIN-IVAR4-DUP-0001",
+ "stable_function_id": "GH12-F-8c31d0f4e2a95b60c1a7",
+ "stable_function_closure": [
+  "ghidra::PrintC::emitBlockIf printc.cc:2878",
+  "ghidra::PrintC::emitStatement printc.cc:2285",
+  "ghidra::PrintC::emitBlockBasic printc.cc:2678",
+  "ghidra::EmitPrettyPrint::tagLine prettyprint.cc:917",
+  "ghidra::Emit::emitPending prettyprint.hh:1129",
+  "ghidra::PrintC::PendingBrace::callback printc.cc:2872",
+  "ghidra::EmitNoMarkup::tagLine prettyprint.hh:557",
+  "ghidra::BlockGraph::identifyInternal block.cc:940",
+  "ghidra::BlockGraph::newBlockCopy block.cc:1776"
+ ],
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{printc.cc:2878-2948,2285-2293,2678-2744,prettyprint.cc:917-935,prettyprint.hh:443-457,547-560,102-106,1122-1137,block.cc:940-963,1776-1938}"
+ },
+ "rugra_base_commit": "56736b9de2a76ee1b8057c88d9523c264d881f27",
+ "architecture": "language-independent PrintC emitBlockIf PendingBrace emission on a hand-built production-shape 3-component BlockIf (BlockBasic originals, BlockCopy mirrors via newBlockCopy/copymap/replaceUsingMap as buildCopy block.cc:1925-1938, nested child BlockIf via identifyInternal+addBlock like ruleBlockProperIf bottom-up, parent via identifyInternal over [cond copy, then copy, child BlockIf]); no Funcdata, no Architecture",
+ "compiler_spec": "none: the CBRANCH conditions and RETURN values are Constant-space varnodes with int Datatypes attached via new HighVariable (Rugra: v_type-free const path), so both sides render them through their constant paths",
+ "analysis_options": {
+  "entrypoint": "PrintC::emitBlockIf driven directly per case (Rugra: PrintC::emit_block_graph on a graph whose sole top-level block is the parent BlockIf, dispatching to emit_structured_if); both sides wrap emission in beginFunction/endFunction (printc.cc:2651/2664 docFunction group context, required by EmitPrettyPrint's indent stack); no Action pipeline runs",
+  "prestate": "shared shape: parent properif(cond BlockBasic ending CBRANCH const 3, then BlockBasic 2-input RETURN const 20, else = child properif); child condition varies: [RETURN 21, CBRANCH 9] (cases 1,3) or [CBRANCH 9] alone (case 2); child then = RETURN 40; child has no else; emitter varies: EmitPrettyPrint (cases 1-2, production per printlanguage.cc:69) or EmitNoMarkup (case 3)",
+  "observation": "two layers per case: (statement) the full byte stream with newlines preserved; (raw) hex of the same stream. No normalization \u2014 both layers are byte-identical between the oracle and Rugra"
+ },
+ "input": "PRINTC-STRUCTEMIT-MAIN-IVAR4-DUP-0001 cases=elseif_stmtcond_pretty[cond=[ret21,cbr9] emit=EmitPrettyPrint],elseif_emptycond_pretty[cond=[cbr9] emit=EmitPrettyPrint],elseif_stmtcond_nomarkup[cond=[ret21,cbr9] emit=EmitNoMarkup];condvars=const:1byte;retvars=const:4byte;group=beginFunction/endFunction wrapper;layer=statement+raw",
+ "input_fingerprint": "sha256:34eb4acd7a767392775707addd9c575099795bdd4148cc60dada2422851f211f",
+ "input_manifest": {
+  "canonicalization": "sha256 over the canonical input description above",
+  "cases": [
+   "elseif_stmtcond_pretty: child condition statement's tagLine FIRES the installed PendingBrace (emitPending prettyprint.cc:920 -> openBraceIndent same_line printc.cc:2872-2876) -> `else {` + `return 0x15;` + newline `if (9) {` + deferred closeBraceIndent (printc.cc:2946-2948); the main-region golden shape",
+   "elseif_emptycond_pretty: nothing fires the brace -> printc.cc:2900-2902 cancelPendingPrint + spaces(1) -> merged `else if (9) {`, no deferred close",
+   "elseif_stmtcond_nomarkup: EmitNoMarkup::tagLine (prettyprint.hh:557) never calls emitPending -> slot stays installed through the condition statements -> cc:2900-2902 merges after inline statements, indentId stays -1 so cc:2946 closes nothing; locks the base-class-slot-without-fire semantics"
+  ]
+ },
+ "observation_schema": {
+  "format": "per case: '<name>=' followed by the byte stream (statement mode, newlines preserved) or its hex (--raw mode)",
+  "normalization": "none \u2014 statement and raw layers are compared byte-for-byte; both MATCH"
+ },
+ "host": {
+  "cxx": "g++ (GCC) 16.2.1 20260810",
+  "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)"
+ },
+ "observation": {
+  "overall_status": "MATCH",
+  "layers": {
+   "statement": "MATCH",
+   "raw": "MATCH"
+  },
+  "evidence": "oracle binary built from the locked tree (libdecomp.a at e40ed130) and Rugra rlib (src at the printc_pending_brace_emit_1204 fixture commit, incl. the while-break-fold regression test) produce identical statement and raw streams for all three cases (2026-08-30, w-printc2)"
+ },
+ "known_divergences": [],
+ "comparand_sha256": {
+  "cpp_fixture_sha256": "6ef6480d73dd01715d022b1e8a9301c4e2ba4c634df2460a91effbb9febc06db",
+  "rust_fixture_sha256": "ca5f0df32da95788e012d64bc87b75b8c31486c95490e4da76e2bfff7faea5bc",
+  "rugra_printc": "8089431e07e39dc65cc2b2d6ff5da9b66d33f814be5a2f0647a952acca001048",
+  "rugra_prettyprint": "04317434844c73a8a70fff44f61ddfd419b1f72a45cf51feae462f8d2529cdd6",
+  "ghidra_printc_cc": "2c0f5565bb76c8ec4dc291e3166dec924fa063c9d86f4d14f06e1fc1550c12b4",
+  "ghidra_printc_hh": "efbc5aaa7c1a8f4a2072401689bf0c6de053705d90bfc85d79aba295554558b8",
+  "ghidra_prettyprint_cc": "1a9466456f0a229639625e9f8e70507e83815e49b19bfb1fea6945978074189f",
+  "ghidra_prettyprint_hh": "016017194282caea38ff7a52466e54b340036ff93e33ba2378d9917b0c5bc8fc"
+ },
+ "expected_statement_stdout_sha256": "cc1b20c08d55ef5ab90e8caa179f99175fc2a72ac88f25c5b674f56fed1f00e4",
+ "expected_ghidra_raw_sha256": "18deb0abad3b730dc0c9d4e3b362f8e2653fabfaaf4c967958aded55d3e08b9c",
+ "expected_rugra_raw_sha256": "18deb0abad3b730dc0c9d4e3b362f8e2653fabfaaf4c967958aded55d3e08b9c",
+ "cpp_fixture_sha256": "6ef6480d73dd01715d022b1e8a9301c4e2ba4c634df2460a91effbb9febc06db",
+ "rust_fixture_sha256": "ca5f0df32da95788e012d64bc87b75b8c31486c95490e4da76e2bfff7faea5bc",
+ "expected_exit_code": 0
+}

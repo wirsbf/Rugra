@@ -383,7 +383,9 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 ### 2026-07-04（续）：移植 snip/trim 子系统（copyTrims 填充链路）
 移植 Ghidra merge.cc 的 forced-merge + snip 数据流改写子系统：
 - `allocate_copy_trim`（merge.cc:411）：创建 COPY op + unique 输出，push 进 copy_trims。union 解析路径省略（无 union 基础设施）。
-- `snip_reads`（merge.cc:443）：截断一组读取到临时变量。
+- `snip_reads`（merge.cc:443）：截断一组读取到临时变量。INPUT 分支新 COPY 的
+  SeqNum pc 取 block-0 `getStart()`（cc:456，2026-08-30 修正——原先传
+  `Address::new(0)`，仅新 COPY 的 SeqNum 地址错，cover order 域不受影响）。
 - `eliminate_intersect`（merge.cc:489）：检测单读 cover 相交并标记 snip（含 copy_shadow/partial_copy_shadow 检查）。
 - `unify_address`（merge.cc:581）：对同地址组消除相交。
 - `merge_addr_tied` 接入 unify_address（forced merge 前 snip，对齐 merge.cc:631-632）。
@@ -417,6 +419,30 @@ main/glob_range/next_url 3 panic）、defects 0/numbering 0。
 读取端点重合于 call order → 相邻 cover 块 touch 而非 overlap；
 `add_def_point_full`/`add_ref_point_full` 转 `pub(crate)` 供 merge 调用。
 `RUGRA_MERGE_DIAG` 诊断扩展（MERGE-PAIR：失败对实例 cover + 读者 order）。
+
+## 2026-08-30：同域残留清理——aCover/range 两处切 _full 入口（R-LATTICE-CROSSREVIEW MINOR-4）
+
+`build_dominant_copy` 的 aCover（merge.cc:1202-1207）与 `check_copy_pair` 的
+range（merge.cc:1119-1121）仍用 order 域便捷入口构造，是上文单读 cover 改造
+的同域残留。两处均切为 op-based 全量入口：
+
+1. **aCover**：`add_def_point_full(domVn.def, is_input)` +
+   逐读者 `add_ref_point_full(reader, outVn)`。补齐 endpoint 身份
+   （MULTIEQUAL→order-0 marker、INDIRECT→被守护 op order）与 addRefPoint 的
+   前驱回填——旧入口只标读点所在块，def 块与读点块之间的中间块完全缺失，
+   `bCover.intersect_char(aCover)>1` 的相交计数可能偏低（漏标 → 多替换）。
+2. **range**：`add_def_point_full(domOp.out.def, …)` +
+   `add_ref_point_full(subOp, subOp.in(0))`；contain 查询点从裸
+   `get_seq_num().order` 改为 `CoverBlock::get_u_index(&def)`（oracle
+   `CoverBlock::contain(op)` 内部即走 getUIndex，cover.cc:107-120）——
+   u_index 域一致性：INDIRECT def 的中间写入判定从此落在被守护 op 的
+   order 上。
+3. boundtype-2 的 `getSeqNum().getOrder()` 比较（merge.cc:536-538）保持裸
+   order——oracle 该处即裸 `getOrder()`，非 u_index 域，勿改。
+
+curl/httpd E2E 输出字节不变（见 w-lminors 报告），即语料上两处入口结果
+一致；切换后构造域与查询域与 oracle 统一，消除未观测行为差。
+
 
 ### 2026-07-04（续 3）：完整移植 dominant-copy 替换子系统
 - 移植 `process_high_dominant_copy`（merge.cc:1316）：对收到 ≥2 trim COPY 的 high，按同源 Varnode 分组，对每组调 build_dominant_copy。
@@ -696,13 +722,18 @@ NONCONVERGE-GETPARAM-MATCHURL-0001 用它锁定终态：MULTIEQUAL slot-2
 （仅 `is_addr_force` 一道守卫，其余按"视为交叉"保守处理）补齐为
 merge.cc:543-562 的完整五行守卫链：
 
-1. `vn2.is_addr_force()`（cc:547，原有）；
-2. `vn2.is_written()`（cc:548）；
-3. vn2 的 def 必须是 `CPUI_INDIRECT`（cc:549-550）；
+1. `vn2.is_addr_force()`（cc:549，原有）；
+2. `vn2.is_written()`（cc:550）；
+3. vn2 的 def 必须是 `CPUI_INDIRECT`（cc:551-552）；
 4. 该 INDIRECT 必须标注（mark）的是**正在处理的读 op**——
-   `op == get_op_from_const(indop->getIn(1))`（cc:552）；
+   `op == get_op_from_const(indop->getIn(1))`（cc:554）；
 5. INDIRECT 的 in(0) 对 vn 的 copy shadow /
-   partial copy shadow 豁免（cc:553-561，overlaptype 1 与非 1 两形态）。
+   partial copy shadow 豁免（cc:555-561，overlaptype 1 与非 1 两形态）。
+
+> 行号勘误（2026-08-30，R-LATTICE-CROSSREVIEW MINOR-1）：上列 cc: 引用原为
+> 547/548/549-550/552/553-561（-2 系统漂移），已按锁定 oracle
+> `e40ed130` 的 grep -n 实测行号修正为 549/550/551-552/554/555-561；
+> src/merge.rs 行内 `cc:` 注释同步修正。守卫顺序与语义不受影响。
 
 此前该分支处于死路径（heritage guard 修复落地前没有 varnode 携带
 addrforce 进入该分支），NONCONVERGE 修复后 Ram 全局版本首次激活它，
@@ -714,12 +745,20 @@ addrforce 进入该分支），NONCONVERGE 修复后 Ram 全局版本首次激�
 MULTIEQUAL@0x37b4），归 heritage place_multiequals/rename 代际差异，
 另行登记。
 
-## RUGRA_MERGE_DIAG（worktree 临时诊断，非对齐面）
+## 诊断 TAG 登记（RUGRA_MERGE_DIAG / RUGRA_HERITAGE_TRACE）
 
-`RUGRA_MERGE_DIAG=1` 时：`merge_range_must` 失败前转储整组
-`(space,offset,size)` 成员（def/flags/high 实例数，标注 *FAIL* 成员）；
-`unify_address` 对 Ram 组逐 vn 转储 `descend/ops_delta/flags`
-（eliminateIntersect 剪了多少）。oracle 侧等价探针（插桩
-decomp_opt 的 `[ORE-UNIFY]`/`[AF-CLEAR]`/`[DEADCODE-ENTER|KILL]`/
-`[GLOBALTRACE]`）见 /tmp/w-nonconverge2-ore/cpp-dbg。默认关闭，
-合入 root 前必须移除。
+> 2026-08-30 转正（R-LATTICE-CROSSREVIEW MINOR-3）：原先标注
+> "TEMPORARY … 合入 root 前必须移除" 的 env 门控 stderr 诊断已在集成
+> commit 中保留并按 AGENTS.md 调试输出规范（eprintln + 登记 TAG）转正。
+> 全部 env 门控、只写 stderr，不污染 stdout 的 C 输出；默认关闭。
+
+| TAG | 门控 | 位置 | 内容 |
+|---|---|---|---|
+| `[MERGE-FAIL]` | `RUGRA_MERGE_DIAG` | `merge_range_must` 失败前 | 整组 `(space,offset,size)` 成员转储（def/flags/high 实例数，`*FAIL*` 标注） |
+| `[MERGE-PAIR]` | `RUGRA_MERGE_DIAG` | `[MERGE-FAIL]` 之后 | 每对相交实例的 def/cover 与读者 op/order |
+| `[UNIFY]` | `RUGRA_MERGE_DIAG` | `unify_address` 逐 Ram vn | `descend/marked/ops_delta/flags`（marked = snip_reads 实际剪断的读 op 数，可与 oracle `[ORE-MARK]` 逐行对拍） |
+| `[H-GRET]` | `RUGRA_HERITAGE_TRACE` | heritage.rs `rebuild` 通 return 后缀 | pass/range/RETURN 地址（登记于本表以便检索；canonical 归属 heritage 模块文档） |
+
+oracle 侧等价探针（插桩 decomp_opt 的 `[ORE-UNIFY]`/`[ORE-MARK]`/
+`[AF-CLEAR]`/`[DEADCODE-ENTER|KILL]`/`[GLOBALTRACE]`）见
+/tmp/w-nonconverge2-ore/cpp-dbg（非版本化，重建方式见对拍手册）。

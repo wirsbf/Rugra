@@ -9,9 +9,9 @@
 - Declaration references: 6317
 - Raw Ctags function records: 15811
 - Ghidra IDs carrying a guard disambiguator: 12
-- Rugra functions: 10505
-  (8703 production + 1802 test)
-- Exact definition-start mappings: 3979
+- Rugra functions: 10574
+  (8771 production + 1803 test)
+- Exact definition-start mappings: 3987
 - Body-line references requiring audit: 354
 
 The old hand-maintained `~2055` denominator is not a completion metric. The generated
@@ -40,7 +40,7 @@ records complete same-input/same-output evidence.
 | `callgraph.hh` | 19 | 0 | 0 | 19 |
 | `capability.cc` | 3 | 0 | 0 | 3 |
 | `capability.hh` | 1 | 0 | 0 | 1 |
-| `cast.cc` | 16 | 10 | 0 | 6 |
+| `cast.cc` | 16 | 12 | 0 | 4 |
 | `cast.hh` | 3 | 0 | 0 | 3 |
 | `codedata.cc` | 41 | 0 | 0 | 41 |
 | `codedata.hh` | 11 | 0 | 0 | 11 |
@@ -57,7 +57,7 @@ records complete same-input/same-output evidence.
 | `constseq.hh` | 10 | 3 | 0 | 7 |
 | `context.cc` | 11 | 0 | 0 | 11 |
 | `context.hh` | 57 | 0 | 0 | 57 |
-| `coreaction.cc` | 129 | 106 | 0 | 23 |
+| `coreaction.cc` | 129 | 107 | 0 | 22 |
 | `coreaction.hh` | 151 | 54 | 0 | 97 |
 | `cover.cc` | 22 | 19 | 0 | 3 |
 | `cover.hh` | 16 | 12 | 0 | 4 |
@@ -90,9 +90,9 @@ records complete same-input/same-output evidence.
 | `fspec.cc` | 243 | 151 | 1 | 91 |
 | `fspec.hh` | 271 | 80 | 0 | 191 |
 | `funcdata.cc` | 43 | 25 | 0 | 18 |
-| `funcdata.hh` | 136 | 28 | 0 | 108 |
+| `funcdata.hh` | 136 | 29 | 0 | 107 |
 | `funcdata_block.cc` | 34 | 7 | 20 | 7 |
-| `funcdata_op.cc` | 49 | 32 | 4 | 13 |
+| `funcdata_op.cc` | 49 | 33 | 4 | 12 |
 | `funcdata_varnode.cc` | 60 | 57 | 0 | 3 |
 | `ghidra_arch.cc` | 43 | 1 | 0 | 42 |
 | `ghidra_arch.hh` | 10 | 0 | 0 | 10 |
@@ -132,7 +132,7 @@ records complete same-input/same-output evidence.
 | `marshal.hh` | 33 | 3 | 0 | 30 |
 | `memstate.cc` | 29 | 27 | 0 | 2 |
 | `memstate.hh` | 10 | 4 | 0 | 6 |
-| `merge.cc` | 48 | 40 | 0 | 8 |
+| `merge.cc` | 48 | 39 | 0 | 9 |
 | `merge.hh` | 6 | 1 | 0 | 5 |
 | `modelrules.cc` | 92 | 76 | 0 | 16 |
 | `modelrules.hh` | 38 | 32 | 0 | 6 |
@@ -161,7 +161,7 @@ records complete same-input/same-output evidence.
 | `prefersplit.cc` | 26 | 24 | 0 | 2 |
 | `prefersplit.hh` | 1 | 0 | 0 | 1 |
 | `prettyprint.cc` | 85 | 47 | 0 | 38 |
-| `prettyprint.hh` | 124 | 58 | 1 | 65 |
+| `prettyprint.hh` | 124 | 61 | 1 | 62 |
 | `printc.cc` | 106 | 82 | 0 | 24 |
 | `printc.hh` | 66 | 0 | 0 | 66 |
 | `printjava.cc` | 16 | 0 | 0 | 16 |
@@ -173,7 +173,7 @@ records complete same-input/same-output evidence.
 | `rangeutil.hh` | 39 | 26 | 0 | 13 |
 | `raw_arch.cc` | 11 | 0 | 0 | 11 |
 | `raw_arch.hh` | 1 | 0 | 0 | 1 |
-| `ruleaction.cc` | 340 | 99 | 128 | 113 |
+| `ruleaction.cc` | 340 | 100 | 127 | 113 |
 | `ruleaction.hh` | 272 | 14 | 0 | 258 |
 | `rulecompile.cc` | 58 | 0 | 0 | 58 |
 | `rulecompile.hh` | 22 | 0 | 0 | 22 |

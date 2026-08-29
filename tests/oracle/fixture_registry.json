@@ -5188,7 +5188,8 @@
         "inputs": {
           "fixture_source_1": "tests/oracle/ptrsub_switch_cast_1204.cc",
           "fixture_source_2": "tests/oracle/ptrsub_switch_cast_1204.rs"
-        }
+        },
+        "rust_base_commit": "9ab3be941acd3e6dba463191792eab348319c110"
       },
       "impact": {
         "paths": [
@@ -7477,6 +7478,129 @@
           "GH12-F-f115e14245520328995e",
           "GH12-F-094e73150d05f9176dad"
         ]
+      }
+    },
+    {
+      "id": "printc_pending_brace_emit_1204",
+      "description": "PRINTC-STRUCTEMIT-MAIN-IVAR4-DUP-0001 bilateral fixture: PrintC::emitBlockIf PendingBrace dynamic behavior (printc.cc:2878-2948) — fired-brace `else {` + deferred close (EmitPrettyPrint, statement in else-if condition), merged `else if(` (empty condition, cc:2900-2902 cancel+spaces), and the never-fires EmitNoMarkup form (prettyprint.hh:557); statement and raw layers both MATCH",
+      "runner": [
+        "tools/run_printc_pending_brace_emit_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/printc_pending_brace_emit_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_printc_pending_brace_emit_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/printc_pending_brace_emit_1204.cc",
+          "fixture_source_2": "tests/oracle/printc_pending_brace_emit_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "tools/run_printc_pending_brace_emit_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": [
+          "GH12-F-8c31d0f4e2a95b60c1a7"
+        ]
+      }
+    },
+    {
+      "id": "flow_overlap_hlt_1204",
+      "description": "followFlow overlap-region fallthrough seam: direct-fallthrough/direct-call+nopl+endbr64+call *[rip]+hlt self-loop constructions produce byte-identical 3-block graphs versus locked Ghidra 12.0.4 (flow boundary = full code space both sides; symbol size never participates)",
+      "runner": [
+        "tools/run_flow_overlap_hlt_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/flow_overlap_hlt_1204.metadata.json",
+        "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+        "rust_base_commit": "a87d2dbe53347895af798b5cda67b5bba10ff010"
+      },
+      "impact": {
+        "todo_ids": [
+          "FLOW-339E-OVERLAP-HLT-0001"
+        ],
+        "src_files": [
+          "src/flow.rs"
+        ],
+        "notes": "root cause re-adjudicated: Rugra's 149-block main is CORRECT vs the full-analysis golden (known-noreturn data); the fixture oracle (no Java analyzers) falls through to hlt=150 blocks. Gated driver env RUGRA_ORACLE_FIXTURE_DATA for parity."
+      }
+    },
+    {
+      "id": "rule_2comp2sub_1204",
+      "description": "RULE-2COMP2SUB-0001 oracle: Rule2Comp2Sub lone-INT_ADD gate, both rewrite orientations, three reject shapes",
+      "runner": [
+        "tools/run_rule_2comp2sub_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/rule_2comp2sub_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/rule_2comp2sub_1204.cc",
+          "rust_fixture": "tests/oracle/rule_2comp2sub_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_rule_2comp2sub_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/ruleaction.rs",
+          "tests/oracle/rule_2comp2sub_1204.*",
+          "tools/run_rule_2comp2sub_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": []
+      }
+    },
+    {
+      "id": "varnode_getusepoint_1204",
+      "description": "VARNODE-GETUSEPOINT-0001 (O-2) oracle: Varnode::getUsePoint written leg and fd.getAddress()+-1 sentinel incl. ram:0 wrap",
+      "runner": [
+        "tools/run_varnode_getusepoint_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/varnode_getusepoint_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/varnode_getusepoint_1204.cc",
+          "rust_fixture": "tests/oracle/varnode_getusepoint_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_varnode_getusepoint_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/varnode.rs",
+          "tests/oracle/varnode_getusepoint_1204.*",
+          "tools/run_varnode_getusepoint_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": []
       }
     }
   ]

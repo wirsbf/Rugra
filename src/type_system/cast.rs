@@ -7,8 +7,60 @@
 use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
 use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+use crate::type_system::typefactory::TypeFactory;
 use crate::varnode::Varnode;
 use std::sync::Arc;
+
+// Ghidra: cast.cc:394 CastStrategyC::arithmeticOutputStandard
+/// The arithmetic typing rule: the output type of an arithmetic op is the
+/// input HIGH (read-facing) type that orders earliest under
+/// `Datatype::typeOrder` (bigger/more specific wins — unsigned over signed
+/// of equal size, bigger size first, pointers over base types), with BOOL
+/// inputs demoted to a base int of the same size (and skipped as
+/// competitors). Faithful to `CastStrategyC::arithmeticOutputStandard`
+/// (cast.cc:394-409); Ghidra reaches it through the TypeOp getOutputToken
+/// overrides (typeop.cc:1175/1326/1388/1402/1416/1449/1482/1625).
+// RUGRA-GLUE: free function instead of a CastStrategyC method — Rugra's
+// CastStrategyC carries no TypeFactory member (tlst), so the factory is
+// passed in by the caller.
+pub fn arithmetic_output_standard(
+    op: &PcodeOp,
+    tlst: &Arc<std::sync::RwLock<TypeFactory>>,
+) -> Option<Arc<Datatype>> {
+    // cc:397-399: res1 = in(0) high read-facing; BOOL → base int of its size.
+    let in0 = op.get_in(0)?;
+    let mut res1 = in0
+        .read()
+        .unwrap()
+        .get_high_type_read_facing(op, 0)
+        .or_else(|| in0.read().unwrap().v_type.clone())?;
+    if res1.get_metatype() == TypeMetatype::Bool {
+        res1 = tlst
+            .read()
+            .unwrap()
+            .get_base(res1.get_size(), TypeMetatype::Int)?;
+    }
+    // cc:402-407: each later input replaces res1 when it orders strictly
+    // earlier (0 > res2->typeOrder(*res1), i.e. typeOrder < 0); BOOL skips.
+    for i in 1..op.num_input() {
+        let Some(vn) = op.get_in(i) else { continue };
+        let Some(res2) = vn
+            .read()
+            .unwrap()
+            .get_high_type_read_facing(op, i as i32)
+            .or_else(|| vn.read().unwrap().v_type.clone())
+        else {
+            continue;
+        };
+        if res2.get_metatype() == TypeMetatype::Bool {
+            continue;
+        }
+        if res2.type_order(&res1) < 0 {
+            res1 = res2;
+        }
+    }
+    Some(res1)
+}
 
 // RUGRA-GLUE: base_type_for (no Ghidra counterpart found)
 /// Build a base integer/unsigned type for a given size and metatype.
@@ -272,14 +324,14 @@ impl CastStrategyC {
 
     // RUGRA-GLUE: is_char_type (no Ghidra counterpart found)
     /// Check if the type is a character type
-    fn is_char_type(&self, dt: &Datatype) -> bool {
+    pub fn is_char_type(&self, dt: &Datatype) -> bool {
         // In Rugra, this would check the CHARTYPE flag in TypeBase
         (dt.get_flags() & crate::type_system::datatype::type_flags::CHARTYPE) != 0
     }
 
     // RUGRA-GLUE: is_enum_type (no Ghidra counterpart found)
     /// Check if the type is an enumeration type
-    fn is_enum_type(&self, dt: &Datatype) -> bool {
+    pub fn is_enum_type(&self, dt: &Datatype) -> bool {
         matches!(dt.get_metatype(), TypeMetatype::Enum)
     }
     // Ghidra: cast.cc:411 CastStrategyC::isSubpieceCast

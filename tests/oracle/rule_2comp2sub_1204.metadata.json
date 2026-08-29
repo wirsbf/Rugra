@@ -1,0 +1,114 @@
+{
+ "schema_version": 2,
+ "fixture_id": "RULE-2COMP2SUB-0001",
+ "projection_status": "MATCH",
+ "overall_status": "MATCH: (B2 canonicalization)",
+ "status_note": "The eleven-line covered projection matches Rule2Comp2Sub::getOpList and all five applyOp shapes (two orientations of the lone-INT_ADD transform plus three rejects) against locked Ghidra 12.0.4 byte for byte. Pool-repeat convergence and pipeline scheduling are outside this projection (the rule runs one-shot per case).",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_base_commit": "1531f3ada1a0cf10b3446fee07d9c540435c2e13",
+ "architecture": {
+  "id": "synthetic-le64-rule-fixture",
+  "endianness": "little",
+  "pointer_size": 8,
+  "spaces": "const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; byte addressed",
+  "type_factory": "one architecture-owned factory shared by all cases; canonical xunknown1/2/4/8 (no case reads a datatype)"
+ },
+ "compiler_spec": {
+  "id": "fixture",
+  "prototype_xml": "<prototype name=\"fixture\" extrapop=\"0\"><input/><output/></prototype>",
+  "calling_convention": "empty input/output records; no effects, symbols, or injections"
+ },
+ "analysis_options": {
+  "api": "Direct production Rule2Comp2Sub::getOpList once and Rule2Comp2Sub::applyOp once per case; no ActionGroup, pool repeat, or other Rule runs",
+  "funcdata": "Fresh synthetic Funcdata and BlockBasic per case; high-level mode disabled",
+  "ir": "V=register:0x40 and W=register:0x50 four-byte inputs; a CPUI_INT_2COMP(W) at ram:0x2000 with a four-byte unique output; case-specific consumers at ram:0x2010/0x2020 with unique outputs; all edges installed through Funcdata APIs",
+  "normalization": "None. The emitted projection uses semantic scalar values and exact within-case identity booleans; opcode numbers, list counts, dead flags, and def-use counts are not normalized. The 2COMP output is not touched after a firing applyOp (Funcdata::opDestroy frees it); its descendant count prints '-' there by contract on both sides.",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent",
+  "random_seed": "none; construction and rule execution are deterministic",
+  "error_injection": "none"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+  "cases": [
+   {
+    "id": "v_plus_negw",
+    "shape": "add_in1",
+    "ir": "V,W register inputs; 2COMP(W) at ram:0x2000 with unique out; ADD(V,2COMP-out) at ram:0x2010 with unique out; both ops inserted in one block",
+    "expect": "return 1; the ADD becomes INT_SUB with V in slot 0 and W in slot 1; the 2COMP op is destroyed (dead, inputs unset, out varnode freed)"
+   },
+   {
+    "id": "negw_plus_v",
+    "shape": "add_in0",
+    "ir": "same skeleton; ADD(2COMP-out,V) with the negation in slot 0",
+    "expect": "return 1; the slot-0 swap moves V to slot 0; the ADD becomes INT_SUB(V,W); the 2COMP is destroyed"
+   },
+   {
+    "id": "nonadd_lone",
+    "shape": "mult_lone",
+    "ir": "same skeleton; INT_MULT(2COMP-out, 2) as the lone consumer",
+    "expect": "return 0; lone consumer is not an INT_ADD; nothing changes"
+   },
+   {
+    "id": "no_descend",
+    "shape": "none",
+    "ir": "same skeleton; the 2COMP output has no consumers",
+    "expect": "return 0; loneDescend is null; nothing changes"
+   },
+   {
+    "id": "two_descend",
+    "shape": "two_adds",
+    "ir": "same skeleton; two INT_ADDs both read the 2COMP output",
+    "expect": "return 0; more than one descendant; nothing changes"
+   }
+  ],
+  "sha256": "40d0e733d805923acc2f6f0915bb52fe76d2dd515ff69cc3e0708c526b6cb9f9"
+ },
+ "observation_schema": {
+  "format": "Eleven fixed-order UTF-8 lines with final newline: one getOpList record followed by before/after records for the five cases",
+  "rule_result_and_opcode": "Exact getOpList count/opcode, applyOp return, both ops' opcode and dead state",
+  "identity": "Slot-0/slot-1 identity booleans of each consumer against V, W, and the 2COMP output",
+  "def_use_and_lifecycle": "V/W/2COMP-output descendant counts, alive/dead op counts, and block op counts"
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "MATCH for all five cases: the destroyed 2COMP (dead op, freed output) and the rewritten consumer op; opDestroy's freed-output contract is projected as '-' rather than dereferenced.",
+  "loop_bounds_and_order": "MATCH for getOpList's single push and the straight-line applyOp guards; loneDescend's zero-or-many reject is covered by no_descend/two_descend.",
+  "counters_and_accumulators": "MATCH for alive/dead/block counts: each fired case moves exactly one op from alive to dead.",
+  "sort_and_comparison_keys": "MATCH for the covered pointer-identity comparisons (consumer slot identity against V/W/2COMP-out) and the CPUI_INT_ADD opcode gate."
+ },
+ "coverage": {
+  "getoplist_2comp_only": "MATCH",
+  "v_plus_negw_transform": "MATCH",
+  "negw_plus_v_swap_transform": "MATCH",
+  "nonadd_lone_reject": "MATCH",
+  "no_descend_reject": "MATCH",
+  "two_descend_reject": "MATCH",
+  "pool_repeat_convergence": "UNTESTED: direct one-shot Rule invocation only",
+  "malformed_ir_and_exceptions": "OUT_OF_DOMAIN: locked applyOp assumes a binary INT_2COMP dispatched by the Rule pool"
+ },
+ "residual_todo_ids": [],
+ "comparand": {
+  "cpp_fixture_sha256": "d9e7c371f6e9da4e83090b5b9bbe456b6b6bb43625c7c59f4a172a6f9e5ee000",
+  "rust_fixture_sha256": "373f7b0017ef9df0229d85d8b3ef64885330c7d1c3b23c44ad379e24b93ef9ee",
+  "ruleaction_rs_sha256": "a12a9e1a041d675f4f90c8b45e2d222088590bf8f72a1e8e85a1fa8b2ce7e0d9",
+  "runner_sha256": "79d608a9c69e6aa4f6b21cbb3cbce41ffcdd7fc807e132298cc96581f44d1e9e",
+  "cargo_toml_sha256": "b5e6dea467d92c03e3bee43dbf24fd237119f28186ad663f90c197494eb8c3de",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "expected_ghidra_stdout_sha256": "69b45e38845d6e1f1909ad2cbd2b8d8c75205c77daf7c501b5de2f82da5d09db",
+  "expected_rugra_stdout_sha256": "69b45e38845d6e1f1909ad2cbd2b8d8c75205c77daf7c501b5de2f82da5d09db",
+  "host_cxx": "g++ (GCC) 16.2.1 20260810",
+  "host_rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
+  "host_cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
+ },
+ "build": {
+  "rust_overlay": "Archive Rugra base 1531f3ada1a0cf10b3446fee07d9c540435c2e13 and overlay only the owned src/ruleaction.rs candidate before the isolated offline build",
+  "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler",
+  "expected_stdout_lines": 11
+ }
+}

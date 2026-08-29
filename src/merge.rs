@@ -1069,8 +1069,11 @@ impl Merge {
             }
             Self::merge_test_must(&member.read().unwrap())?;
                 if !self.merge_required_result(&high, &candidate)? {
-                    // TEMPORARY diagnostic (GETPARAM-EMPTYELSE follow-on, revert
-                    // or keep env-gated before commit)
+                    // Registered debug TAG [MERGE-FAIL]/[MERGE-PAIR]
+                    // (stderr, env-gated by RUGRA_MERGE_DIAG; registry:
+                    // docs/api/merge.md "诊断 TAG 登记"). Dumps the failing
+                    // (space,offset,size) group and every intersecting
+                    // instance pair for forced-merge triage.
                     if std::env::var("RUGRA_MERGE_DIAG").is_ok() {
                         // Dump every intersecting instance pair between the
                         // accumulated high and the failing candidate high.
@@ -2382,11 +2385,19 @@ impl Merge {
                 }
             }
         };
-        // pc = address of the insertion point.
+        // pc = address of the insertion point (merge.cc:450/456/461).
+        // cc:456 (input branch): pc = bl->getStart() — the insert-begin
+        // block's start address. cc:461 (defined branch): pc = def's SeqNum
+        // addr; for an INDIRECT def, newIndirectOp (funcdata_op.cc:691)
+        // mints the INDIRECT with the effect op's addr, so after_op's addr
+        // equals the def's addr on every reachable path.
         let pc = if let Some(ao) = &after_op {
             ao.0.read().unwrap().get_addr()
         } else {
-            crate::address::Address::new(0)
+            insert_begin_bb
+                .as_ref()
+                .map(|bb| bb.read().unwrap().get_start_addr())
+                .unwrap_or_else(|| crate::address::Address::new(0))
         };
         let copyop = self.allocate_copy_trim(fd, vn, pc, &marked_ops[0]);
         // Insert the COPY into the P-code stream.
@@ -2415,12 +2426,16 @@ impl Merge {
     /// other Varnode in `blocksort` (same storage). If so, mark the reader for
     /// snipping. Then call `snip_reads`.
     /// Faithful to `Merge::eliminateIntersect` (merge.cc:489-571).
+    // RUGRA-GLUE: returns the marked-read count (Ghidra's eliminateIntersect
+    // returns void) so the [UNIFY] diagnostic can print a direct marked=
+    // field without re-deriving it; pure diagnostic return, callers ignore
+    // it when RUGRA_MERGE_DIAG is unset.
     fn eliminate_intersect(
         &mut self,
         fd: &mut Funcdata,
         vn: &Arc<RwLock<Varnode>>,
         blocksort: &[BlockVarnode],
-    ) {
+    ) -> usize {
         let marked_ops: Vec<crate::op::PcodeOpRef> = {
             // Collect descendant (reader) ops of vn.
             let descend: Vec<crate::op::PcodeOpRef> = {
@@ -2569,20 +2584,20 @@ impl Merge {
                             let vn2_def = {
                                 let v2 = vn2_arc.read().unwrap();
                                 if !v2.is_addr_force() {
-                                    continue; // cc:547
+                                    continue; // cc:549
                                 }
                                 v2.def.as_ref().and_then(|w| w.upgrade())
                             };
-                            // cc:548 if (!vn2->isWritten()) continue;
+                            // cc:550 if (!vn2->isWritten()) continue;
                             let vn2_def = match vn2_def {
                                 Some(d) => d,
                                 None => continue,
                             };
-                            // cc:549-550 if (indop->code() != CPUI_INDIRECT) continue;
+                            // cc:551-552 if (indop->code() != CPUI_INDIRECT) continue;
                             if vn2_def.read().unwrap().opcode != crate::opcodes::OpCode::CPUI_INDIRECT {
                                 continue;
                             }
-                            // cc:552 The vn2 INDIRECT must be linked to the
+                            // cc:554 The vn2 INDIRECT must be linked to the
                             // read op: op == PcodeOp::getOpFromConst(
                             //   indop->getIn(1)->getAddr()).
                             let ind_target = {
@@ -2596,7 +2611,7 @@ impl Merge {
                             if !linked {
                                 continue;
                             }
-                            // cc:553-561 shadow checks against the
+                            // cc:555-561 shadow checks against the
                             // INDIRECT's input (in(0)).
                             let ind_in0 = {
                                 let d = vn2_def.read().unwrap();
@@ -2636,7 +2651,9 @@ impl Merge {
             }
             marked
         };
+        let marked_count = marked_ops.len();
         self.snip_reads(fd, vn, &marked_ops);
+        marked_count
     }
 
     // Ghidra: merge.cc:581 Merge::unifyAddress
@@ -2664,12 +2681,17 @@ impl Merge {
                 0
             };
             let pre_ops = if diag { fd.obank.optree.len() } else { 0 };
-            self.eliminate_intersect(fd, vn, &blocksort);
-            // TEMPORARY diagnostic (GETPARAM-EMPTYELSE follow-on, env-gated)
+            let marked_count = self.eliminate_intersect(fd, vn, &blocksort);
+            // Registered debug TAG [UNIFY] (stderr, env-gated by
+            // RUGRA_MERGE_DIAG; registry: docs/api/merge.md "诊断 TAG
+            // 登记"). One line per Ram varnode: readers, snipped readers
+            // (marked), op-bank delta and flags. The marked= field is the
+            // direct snip-read count, comparable 1:1 with the oracle's
+            // [ORE-MARK] probe lines (one per marked op).
             if diag {
                 let r = vn.read().unwrap();
                 eprintln!(
-                    "[UNIFY] vn@{:#x}/{} def={:?} descend={} ops_delta={} flags={:#x}",
+                    "[UNIFY] vn@{:#x}/{} def={:?} descend={} marked={} ops_delta={} flags={:#x}",
                     r.get_offset(),
                     r.get_size(),
                     r.get_def().map(|d| {
@@ -2677,6 +2699,7 @@ impl Merge {
                         format!("{:?}@{:#x}", dr.opcode, dr.get_addr().as_u64())
                     }),
                     pre_desc,
+                    marked_count,
                     fd.obank.optree.len().saturating_sub(pre_ops),
                     r.flags,
                 );
@@ -3306,22 +3329,22 @@ impl Merge {
                 (ov, ds)
             };
             let Some(out_vn_arc) = out_vn_arc else { continue };
-            // aCover: addDefPoint(domVn) + addRefPoint(each reader of outVn).
+            // aCover: addDefPoint(domVn) + addRefPoint(each reader of outVn)
+            // (merge.cc:1202-1207), both via the full op-based entries:
+            // endpoint identity (MULTIEQUAL order-0 marker, INDIRECT ->
+            // guarded-op order, cover.cc:29-49) plus the backward CFG
+            // recursion of addRefPoint (cover.cc:565-612), which fills
+            // every block between each reader and the def point — the
+            // order-domain entries silently dropped both.
             let mut a_cover = Cover::new();
-            // domVn def loc:
-            let (dvn_blk, dvn_ord, dvn_is_input) = varnode_def_loc(&dom_vn.read().unwrap());
-            if dvn_is_input {
-                a_cover.add_def_point(0, 2);
-            } else {
-                a_cover.add_def_point(dvn_blk, dvn_ord);
+            {
+                let dv = dom_vn.read().unwrap();
+                let def = dv.def.as_ref().and_then(|w| w.upgrade());
+                let is_input = def.is_none() && dv.is_input();
+                a_cover.add_def_point_full(def.as_ref(), is_input);
             }
             for d_ref in &descends {
-                let (rb, ro) = {
-                    let op = d_ref.0.read().unwrap();
-                    let blk = op.parent.as_ref().and_then(|w| w.upgrade()).map(|p| p.read().unwrap().get_index()).unwrap_or(0);
-                    (blk, op.get_seq_num().order)
-                };
-                a_cover.add_ref_point(rb, ro);
+                a_cover.add_ref_point_full(&d_ref.0, &out_vn_arc);
             }
             if b_cover.intersect_char(&a_cover) > 1 {
                 count -= 1;
@@ -4115,22 +4138,16 @@ impl Merge {
         };
         let mut range = Cover::new();
         if let Some(dov) = &dom_out {
-            let (blk, ord, is_input) = varnode_def_loc(&dov.read().unwrap());
-            if is_input {
-                range.add_def_point(0, 2);
-            } else {
-                range.add_def_point(blk, ord);
-            }
+            let dv = dov.read().unwrap();
+            let def = dv.def.as_ref().and_then(|w| w.upgrade());
+            let is_input = def.is_none() && dv.is_input();
+            range.add_def_point_full(def.as_ref(), is_input);
         }
         if let Some(siv) = &sub_in0 {
-            // addRefPoint: sub_op reads sub_in0 at sub_op's loc.
-            let (s_blk, s_ord) = {
-                let s = sub_op.0.read().unwrap();
-                let blk = s.parent.as_ref().and_then(|w| w.upgrade())
-                    .map(|p| p.read().unwrap().get_index()).unwrap_or(0);
-                (blk, s.get_seq_num().order)
-            };
-            range.add_ref_point(s_blk, s_ord);
+            // addRefPoint(subOp, subOp->getIn(0)) via the full op-based
+            // entry (merge.cc:1121): endpoint identity + backward CFG
+            // recursion, matching the oracle's intervening-write window.
+            range.add_ref_point_full(&sub_op.0, siv);
         }
         // Look for high instances with intervening writes (merge.cc:1124-1134).
         let h = high.read().unwrap();
@@ -4151,7 +4168,11 @@ impl Merge {
                         }).unwrap_or(false);
                         let blk = def.parent.as_ref().and_then(|w| w.upgrade())
                             .map(|p| p.read().unwrap().get_index()).unwrap_or(0);
-                        (true, cc, eq, blk, def.get_seq_num().order)
+                        // contain(op,1) maps the op through getUIndex
+                        // (cover.cc:107-120): MULTIEQUAL->0, INDIRECT->
+                        // guarded-op order — raw SeqNum order would leave
+                        // the u_index domain.
+                        (true, cc, eq, blk, crate::cover::CoverBlock::get_u_index(&def))
                     }
                     None => (false, false, false, 0, 0),
                 }

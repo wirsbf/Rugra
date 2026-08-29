@@ -1165,3 +1165,16 @@ heritage/pool 的 setDef 路径在大函数上呈二次方。现 `transition_def
 
 需要的调用方（funcdata.rs new_varnode_symbol_tail / mapGlobals 路径）全部改为
 `Varnode::set_symbol_properties_arc(vn, &entry_arc)` 形态。
+
+## 2026-08-30:get_use_point 自由腿哨兵(VARNODE-GETUSEPOINT-FREELEG-0001, O-2)
+
+varnode.rs `get_use_point` 此前自由腿(非 written varnode)返回 `Address::new(0)`
+(对应 oracle 中被注释掉的旧行 `constant(0)`),oracle varnode.cc:690-703 实为
+`fd.getAddress()+-1` —— 输入 varnode 视作在函数入口前一个地址able 单元处进入作用域。
+修正为 `fd.get_address().offset(-1)`(Address::offset 即 address.hh:423 `operator+`,
+带空间的偏移经 wrapOffset 包装)。written 腿仍返回 def op 地址。注意 funcdata.rs 内
+`varnode_use_point_offset` 等本地重实现本就是 baseaddr-1,本修正消除双轨。
+双侧 fixture:tests/oracle/varnode_getusepoint_1204.{cc,rs} +
+tools/run_varnode_getusepoint_oracle.sh(written/input/free/zero_base 回绕四形态,MATCH)。
+E2E:curl 3119→3115,defects/numbering 保持 0(此前因祸得福的 Address(0) 未掩盖任何
+queryProperties/inUse 差异)。

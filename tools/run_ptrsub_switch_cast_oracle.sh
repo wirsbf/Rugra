@@ -2,11 +2,11 @@
 set -euo pipefail
 umask 077
 
-# Bilateral diagnostic runner for PTRSUB-SWITCH-CAST-RESIDUAL-0001 (phase A:
-# diagnostic fixture only, no src fix claimed).  A successful run verifies
-# that both sides produced their pinned byte streams and that every raw
-# difference is one of the registered known differences; the fixture remains
-# overall=MISMATCH until the underlying apply-side gaps are fixed.
+# Bilateral runner for PTRSUB-SWITCH-CAST-RESIDUAL-0001 (phase B: apply-side
+# gaps fixed).  A successful run verifies that both sides produced their
+# pinned byte streams and that the two streams are byte-identical
+# (overall=MATCH); under MATCH any raw difference, and any registered
+# known_raw_differences entry, is a failure.
 runner_fd=/proc/$$/fd/3
 if [[ ${1:-} != --captured ]]; then
   case ${1:-} in
@@ -153,7 +153,9 @@ def require(label, actual, expected):
 
 require("schema", meta["schema_version"], 2)
 require("fixture", meta["fixture_id"], "PTRSUB-SWITCH-CAST-0001")
-require("overall status", meta["overall_status"], "MISMATCH")
+require("overall status", meta["overall_status"], "MATCH")
+if meta.get("known_raw_differences"):
+    raise SystemExit("MATCH metadata may not carry known_raw_differences")
 require("oracle commit", meta["oracle"]["commit"], "e40ed13014025f82488b1f8f7bca566894ac376b")
 require("oracle tag", meta["oracle"]["tag"], "Ghidra_12.0.4_build")
 require("oracle cpp tree", meta["oracle"]["decompiler_cpp_tree"], "b02e230a539c65de14e50f357d0ba834d8184f4f")
@@ -196,7 +198,7 @@ for binding in \
 done
 
 if [[ "$mode" == validate-only ]]; then
-  echo "PTRSUB-SWITCH-CAST evidence pins validated; overall=MISMATCH (phase A diagnostic)"
+  echo "PTRSUB-SWITCH-CAST evidence pins validated; overall=MATCH (phase B fixed)"
   exit 0
 fi
 
@@ -257,7 +259,7 @@ if len(lines) != exp["record_count"] or not out.read_bytes().endswith(b"\n"):
 PY
 
 if [[ "$mode" == ghidra-only ]]; then
-  echo "PTRSUB-SWITCH-CAST Ghidra oracle verified records=17 overall=MISMATCH"
+  echo "PTRSUB-SWITCH-CAST Ghidra oracle verified records=17 overall=MATCH"
   exit 0
 fi
 
@@ -358,6 +360,6 @@ if unregistered:
     raise SystemExit(f"unregistered raw differences: {unregistered}")
 PY
 
-echo "PTRSUB-SWITCH-CAST bilateral diagnostic run complete"
-echo "records=17 overall=MISMATCH (phase A; known differences pinned in metadata)"
+echo "PTRSUB-SWITCH-CAST bilateral run complete"
+echo "records=17 overall=MATCH (byte-identical streams; no known differences)"
 echo "raw_diff_sha256=$(/usr/bin/sha256sum "$run_root/raw.diff" | /usr/bin/awk '{print $1}')"

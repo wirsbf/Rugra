@@ -1,0 +1,99 @@
+{
+ "schema_version": 2,
+ "fixture_id": "FLOW-OVERLAP-HLT-1204",
+ "stable_function_id": "GH12-F-9e5a4a32694bcfc6",
+ "status_note": "Basic-block-graph adjudication of FLOW-339E-OVERLAP-HLT-0001 (w-rc4 handover: curl main oracle 150 vs Rugra 149 blocks, missing @339e hlt). The seam is NOT a symbol-size truncation and NOT a Rugra flow-code gap: with the callee unmarked (golden_dump_1204 per-function fixture oracle) both sides fall through the 0x3366-style direct call into the _start overlap and produce the hlt self-loop block; with the 'Non-Returning Functions - Known' analyzer attribute set (full-analysis E2E golden) both sides halt at the call. The two cases isolate that data variable on one minimal reproduction of the curl main tail; projections are byte-identical between the locked oracle and Rugra follow_flow_with_callee_protos.",
+ "decisive_semantics": {
+  "reference_output_parameters": "followFlow mutates the Funcdata in place (obank/bblocks/qlst via the FlowInfo reference; Ghidra: flow.cc:756-783); checkForFlowModification reads the FuncCallSpecs reference and dead-inserts the artificial halt after the CALL op (opDeadInsertAfter, flow.cc:644), and queryCall copies callee flow effects through the FuncProto reference (flow.cc:663-664) — the fixture observes the resulting shared state (blocks, ops, specs, comments), never copies",
+  "loop_bounds_traversal_order": "xrefControlFlow walks the dead list forward and, on a noreturn CALL, backs the iterator up one op (--oiter, flow.cc:338-342) to xref the inserted halt so the final RETURN makes isfallthru false; fallthru() pops addrlist LIFO until a non-fallthru instruction; the block projection iterates BlockGraph::getBlock index order (creation order) on both sides",
+  "counter_accumulator_lifecycle": "no counters; insn_count only feeds the max-instruction guard (not hit); the noreturn/inline bits are a pure bit pair whose lifecycle is queryCall's gated one-way copyFlowEffects overwrite, read once by checkForFlowModification at flow time",
+  "sorting_comparison_keys": "no sorts; the comparisons exercised are isNoReturn() (checkForFlowModification flow.cc:641), hasModel()/isInline() (queryCall flow.cc:663 gate), and setFallthruBound's visited-map Address ordering (upper_bound then one step back, flow.cc:495-507), exercised through the two-out-edge cmp/jne block whose duplicate target must dedup to one successor"
+ },
+ "oracle": {
+  "project": "Ghidra 12.0.4",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source_files": "ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/{flow.cc,flow.hh,funcdata_op.cc,funcdata.cc,op.cc,op.hh,block.cc,block.hh}",
+  "signature": "void Funcdata::followFlow(const Address &baddr,const Address &eaddr); bool FlowInfo::checkForFlowModification(FuncCallSpecs &fspecs); void FlowInfo::queryCall(FuncCallSpecs &fspecs); PcodeOp *FlowInfo::xrefControlFlow(list<PcodeOp *>::const_iterator oiter,bool &startbasic,bool &isfallthru,FuncCallSpecs *fc); PcodeOp *FlowInfo::firstOp-adjacent BlockGraph surface via FlowBlock::firstOp/getIn/getOut"
+ },
+ "rugra_source": {
+  "base_commit": "4356e6d5ea31a47859961355794ccfec1cb738bb",
+  "base_tree": "d1cacbed42c004dd28c86e5c3a28537596178deb",
+  "base_src_tree": "fb561d9f958267794a5c1d094f67e5c0f0436216",
+  "base_blobs": {
+   "Cargo.toml": "bb22dd03e7519b9465d046f8bb0cdd86a7a54a6f",
+   "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+   "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+  },
+  "archive_paths": [],
+  "overlays": {},
+  "snapshot_build_link": {
+   "path": "ghidra",
+   "target": "the repository's locked ghidra worktree (satisfies build.rs's sleigh_shim source check)",
+   "note": "symlink only; the Rust fixture resolves sleigh_specs from the run cwd (repo root)"
+  },
+  "archive_policy": "git archive of the pinned base commit (no src overlays: the seam adjudication found Rugra's flow code already matches the oracle in both data environments); the fixture is compiled directly with rustc against the freshly built librugra.rlib"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "9012ccd3410b45004eab5b0b882c22ceb227c0d76936d4446d8169ae49727176",
+  "rust_fixture_sha256": "322334c920b2982d9ef50a807082ac1313c13db05fd04c0e175a0532fb89d701",
+  "runner_sha256": "53c18f73e090d2d0e11ca6e8b574417e16fc0452f258a8dec633eec74e7bb141"
+ },
+ "architecture": "x86:LE:64:default (locked fixture binary: gcc -fno-pie naked-function probes; SLEIGH x86-64 via sleigh_specs on both sides)",
+ "compiler_spec": {
+  "id": "gcc",
+  "note": "fixture binary built with g++ -std=c++11 -fno-pie -no-pie; both sides decode the same .text bytes"
+ },
+ "analysis_options": {
+  "driver": "C++: BfdArchitecture(binary,'default') + init + readLoaderSymbols('::'), the marked callee's FuncProto flag set directly (setNoReturn, the analyzer-side producer), Funcdata::followFlow over the whole code space; Rust: SleighLifter x86-64 + driver-seeded symbol_table + follow_flow_with_callee_protos callee table (clean entry vs no_return entry), eaddr=u64::MAX",
+  "access_observer": "none: only the public followFlow / BlockGraph surface is observed on both sides",
+  "random_seed": "none: deterministic flow; blocks/specs iterated in index/insertion order on both sides",
+  "error_injection": "none: all probes are well-formed x86-64 code",
+  "diagnostics": "both sides must exit 0 with byte-empty stderr",
+  "normalization": "address projections reduced to base-relative deltas (Rugra legacy spaceless Address); unique-space varnode offsets projected as the bare space name (allocator-relative SLEIGH temporaries carry no addressable meaning); opcode ids and halt flag nibble values verified bit-identical"
+ },
+ "input_manifest": {
+  "cases": [
+   "ohlt_user_plain: unmarked callee (golden_dump_1204 fixture data environment: BfdArchitecture + readLoaderSymbols, no Java analyzers): flow falls through the direct call into the overlap tail (nopl+endbr64+xor+mov+CALLIND) and lifts the trailing hlt as a self-loop basic block; followFlow (funcdata_op.cc:756-783) bounds are the whole code space and never consult the ELF symbol size; 3 blocks with blk@31 in=[7,31] out=[31]",
+   "ohlt_user_marked: callee FuncProto setNoReturn(true) set before flow (the 'Non-Returning Functions - Known' analyzer DB attribute of the full-analysis environment, checked-in ghidra_curl_1204.c): queryCall copyFlowEffects (flow.cc:663-664) + checkForFlowModification (flow.cc:636-651) insert the PcodeOp::noreturn artificial halt dead-inserted after the CALL (flow.cc:641-648); 2 blocks, call block has no out-edge, tail never lifted, 'Subroutine does not return' warning present"
+  ],
+  "sha256": "e135e75428206ea6a41fbee9daea6c4141fd7916c331cba4e35b8513689f1724"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "157ad3689fb3702bea914443b9bf65b806d1bcb5cb11ca85744211526d9fabd2",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "157ad3689fb3702bea914443b9bf65b806d1bcb5cb11ca85744211526d9fabd2",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0
+ },
+ "coverage": {
+  "ohlt_user_plain": {
+   "status": "MATCH",
+   "covers": "fall-through past an unmarked direct call into a symbol-overlap region; the trailing hlt lifted as a BRANCH-to-self self-loop basic block (the curl-main @339e seam); no symbol-size truncation anywhere in the flow path (bounds are the whole code space); block-graph projection (count, first-op addr deltas, in/out edge deltas) byte-identical",
+   "residual_todo_ids": []
+  },
+  "ohlt_user_marked": {
+   "status": "MATCH",
+   "covers": "the analyzer-marked dual: checkForFlowModification's artificialHalt(NORETURN) + opDeadInsertAfter + 'Subroutine does not return' warning (flow.cc:641-648); graph truncated at the call block (no out-edge, no tail ops) exactly like the checked-in full-analysis golden's curl main; callspec noret bit propagation through queryCall's copyFlowEffects gate",
+   "residual_todo_ids": []
+  }
+ },
+ "residual_todo_ids": [],
+ "out_of_scope_observations": [
+  {
+   "id": "curl-main-150-adjudication",
+   "note": "The curl main 150-vs-149 block count is a data-environment property, not a flow-code gap: with the 'Non-Returning Functions - Known' analyzer attribute present (E2E full-analysis golden) both sides stop at the 0x3366 __stack_chk_fail call (149 blocks + warning); with it absent (golden_dump_1204 fixture oracle) both sides fall through into the _start overlap and contain the @339e hlt self-loop (150 blocks). RUGRA_ORACLE_FIXTURE_DATA=1 in examples/curl_decompile.rs reproduces the fixture environment for visit-trace comparisons (main verified 150 blocks, blk#147 self-loop, matching oracle BS-OR block-for-block)."
+  },
+  {
+   "id": "blockaction-dowhile-seam",
+   "note": "With the 150-block parity restored (RUGRA_ORACLE_FIXTURE_DATA=1 + RUGRA_BS_TRACE=1), main's collapse rule-event sequence matches the oracle through event 53; first divergence at #54 (oracle goto@67 vs Rugra if_goto@67), then the missing dowhile@67/@70 absorption chain (oracle events 56/60). Remaining seam is blockaction domain (w-rc4 lease)."
+  }
+ ],
+ "projection_status": "MATCH",
+ "overall_status": "MATCH"
+}

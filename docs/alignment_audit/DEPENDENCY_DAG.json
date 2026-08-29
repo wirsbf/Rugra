@@ -3762,6 +3762,10 @@
     },
     {
       "from": "type_system::cast",
+      "to": "type_system::typefactory"
+    },
+    {
+      "from": "type_system::cast",
       "to": "varnode"
     },
     {

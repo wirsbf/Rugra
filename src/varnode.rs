@@ -2417,14 +2417,17 @@ impl Varnode {
     /// (only when use_annotation is true).
     // Ghidra: varnode.cc:696 Varnode::getUsePoint
     /// Get the use-point address for this Varnode. Faithful to
-    /// `getUsePoint` (varnode.cc:696-703).
-    pub fn get_use_point(&self, _fd: &crate::funcdata::Funcdata) -> Address {
+    /// `getUsePoint` (varnode.cc:696-703). Written Varnodes come into scope
+    /// at their defining op's address; everything else (inputs/free legs)
+    /// comes into scope at the sentinel `fd.getAddress()+-1` — one addressable
+    /// unit before the function entry.
+    pub fn get_use_point(&self, fd: &crate::funcdata::Funcdata) -> Address {
         if self.is_written() {
             if let Some(def_weak) = self.def.as_ref().and_then(|w| w.upgrade()) {
                 return def_weak.read().unwrap().get_addr();
             }
         }
-        Address::new(0)
+        fd.get_address().offset(-1)
     }
 
     // Ghidra: varnode.cc:958 Varnode::isZeroExtended

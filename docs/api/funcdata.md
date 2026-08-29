@@ -1040,6 +1040,15 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 - `find_jump_table(op)`（funcdata_block.cc:446）+ `remove_jump_table(jt)`（funcdata_block.cc:65）。
 - `get_store_guard(op)/get_load_guard(op)`（funcdata.hh:269-270）— 转发到 Heritage。
 
+### 2026-08-30：cast_phase_index + start_cast_phase（step 2）
+- `cast_phase_index: u32` 字段（funcdata.hh:77）+ `start_cast_phase()`（funcdata.hh:183 一行式
+  `cast_phase_index = vbank.getCreateIndex()`）+ `clear()` 复位（funcdata.cc:90-92）。由
+  `ActionSetCasts::apply`（coreaction.cc:2728）调用。
+
+### 2026-08-30：op_undo_ptradd 全参忠实化（PTRSUB-SWITCH-CAST-RESIDUAL-0001 step 1）
+- `op_undo_ptradd_full(op, finalize)`（funcdata_op.cc:579-609）— 完整 `finalize` 语义：scale 常量原样复用为 INT_MULT 第二输入（不再伪造 8 字节常量）；offset 常量时折叠 `multSize * offset & calc_mask(size)` 并继承 read-facing 类型；乘积 varnode 取 offset 尺寸、finalize 时取 scale 类型并 `set_implied`；`multSize` 按 `int4` 截断读取 `get_offset()`（不做 is_constant 门控）。
+- `op_undo_ptradd(op)` 保留 1 参形式（ruleaction.rs 调用方兼容 shim），委托 `op_undo_ptradd_full(op, false)` — 与 Ghidra ruleaction.cc:6925/7115 的 `finalize=false` 一致。
+
 ### 2026-07-01（续 3）：combine_input_varnodes + DOUBLE_PRECIS_ON + new_varnode + warning_header
 - `combine_input_varnodes(vn_hi, vn_lo) -> Result<()>`（funcdata_varnode.cc:381-454）—
   校验 input/同空间连续性（按 endian 选择合并地址），PIECE→COPY，非 PIECE reader
@@ -1993,3 +2002,31 @@ funcdata_block.cc:808-809 是语句序求值——第二个 `getOutIndex(exitb)`
 - fixture(nodejoin_join_block_forces_heritage_restructure)补 CFG 形状断言:canonical 终态=join 块
   2 出边、两分支各 1 出边(仅 join 边)。
 E2E:2911/1/0,0 panic/timeout,124/124 反编译。
+
+## 2026-08-30:X86LIFT-FLAG-PCODE-0001 连带测试期望更新(w-iced,测试专用)
+
+src/funcdata.rs 生产代码零改动;仅更新 `#[cfg(test)]` 内两个直接编码旧 iced
+提升形态的回归测试,使其断言新的 oracle-faithful 形态(来源
+src/disasm/x86_lift.rs 的 X86LIFT-FLAG-PCODE-0001 改动):
+
+- `test_add_rax_imm_minimal_alignment_path`:`add rax,1` 期望 2 op(INT_ADD→
+  uniq+COPY)改为 9 op(INT_CARRY/INT_SCARRY/INT_ADD 直写 rax/imm 规范化为
+  8 字节/SF/ZF/PF popcount 链)。
+- `test_add_mem_rbx_rax_rmw_alignment`:`add [rbx],rax` 期望 3 op 改为 16 op
+  (逐用重 LOAD:LOAD+CARRY+LOAD+SCARRY+LOAD+INT_ADD+STORE+LOAD+SF+LOAD+ZF+
+  LOAD+AND+POPCOUNT+AND+PF)。
+
+背景:FFI_TEST_LOCK 为普通 Mutex,任一断言失败会毒化锁并级联失败后续所有持锁
+测试(master 全量即有 15~18 的 flaky 窗口);这两条测试是 add 形态的确定性
+失败源,更新后全量回到 17 failed(17±1 达标)。手写期望仅为 Rugra 回归信号,
+非 oracle 对拍(机制 B2)。
+
+### 2026-08-30 补充(w-iced c2):同族测试期望批量更新(测试专用)
+
+c2 落地 logic/cmp/test/jcc 后,以下测试的旧形态断言更新为 oracle-faithful
+形态(生产代码零改动):test_sub_rax_imm(9 op)、test_and/or/xor_rax_imm
+(9 op:CF=0/OF=0/值 op 直写/SF/ZF/PF)、test_xor_eax_eax(11 op 含 zext)、
+test_cmp_rax_rbx(9 op:LESS/SBORROW/SUB→tmp/SF/ZF/PF)、test_seq_mov_add_ret
+(11 op)、test_seq_mov_and_shl_ret(13 op)、test_seq_cmp_je_multiblock
+(22 op;块0=10 op)、cbranch 条件接线三测试(ZF 0x201→0x206,sla 布局)。
+全量 17 failed,回到 master flaky 窗口(15~18)内。

@@ -3,6 +3,17 @@
 **状态**: 🔧 L2（仅逐函数核对，禁止据此宣称模块 L3）
 **源代码路径**: `src/typeop.rs`
 
+## 2026-08-30：算术族 get_output_token → arithmeticOutputStandard（PTRSUB-SWITCH-CAST-RESIDUAL-0001 step 5）
+
+- `TypeOpIntAdd::get_output_token`（typeop.cc:1175）改调
+  `cast::arithmetic_output_standard`（cast.cc:394），不再返回 out varnode 类型。
+- `binary_op!`/`unary_op!` 宏统一生成 `get_output_token` 覆盖，经
+  `macro_arith_output_token` 分发：INT_ADD/SUB/2COMP/NEGATE/XOR/AND/OR/MULT 八个
+  opcode（typeop.cc:1175/1326/1388/1402/1416/1449/1482/1625）走 arithmetic token，
+  其余宏 op 保持基类 "无 token 覆盖"（None）默认。
+- INT_LEFT/RIGHT/SRIGHT 的 oracle token 是 in0-high（bool→base int），尚未覆盖
+  （走 cast_output 的 metatype fallback），属 TYPEOP-ARITH-TOKEN 家族残余。
+
 ## 2026-08-28：比较输入的 read-facing cast
 
 `INT_EQUAL`/`INT_NOTEQUAL` 的 cast 选择现在读取两个精确 reader slot 的 High 类型，

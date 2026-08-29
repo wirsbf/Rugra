@@ -1,5 +1,39 @@
 # `coreaction.rs` API Reference
 
+## 2026-08-30：castOutput 完整臂 + castInput guard/const/explicit（PTRSUB-SWITCH-CAST-RESIDUAL-0001 steps 3+4）
+
+- `cast_output`（cc:2532-2616）：token 分发补 PTRADD 臂（typeop.cc:2244 = in0 high
+  read-facing，经真实 `TypeOpPtradd`）与算术族臂（cast.cc:394）；补 implied varnode
+  三臂（cc:2559-2582：typelock+非 RETURN lone reader → `force = !isOpIdentical`；非
+  指针 out → 原地 `updateType(tokenct)`；指针 out 且 pointee 非复合 → 同样重类型，
+  复合 ARRAY/STRUCT/UNION 保留）；补 `testStructOffset0`（cc:2384-2413 全移植：struct
+  首字段 offset==0 / array 下探一层 + 双侧 array 剥离 + VOID 拒绝 + castStandard
+  (req,cur,true,true)==null 判定）→ PTRSUB(#0) 形态（cc:2586-2588/2605-2607）。刷新
+  用 `refresh_out_high_resolve`（Rugra 的 typeDirty 为 no-op 的单实例投影，登记残差）。
+- `cast_input`（cc:2655-2720）重构为 oracle 臂序：ct=null → `markExplicitUnsigned`
+  /`markExplicitLongSize`（cast.cc:38-105 全移植，含 inheritsSign/
+  inheritsSignZero/shiftOp 的 addlflags 集合与 mostsigbit 阈值）返回计数；double-cast
+  guard（cc:2673-2686：implied CAST 输出 lone-descend 原地重类型 / 回接更早 varnode）；
+  常量臂（cc:2687-2691：updateType 成功即计 1，锁定常量跌落到 CAST 插入）；插入用
+  `vnin`（可能是更早 CAST 的输入）。
+- fixture `ptrsub_switch_cast_1204` 全部 17 条记录与锁定 oracle 字节一致（13 条
+  known_raw_differences 全部撤销，见重钉提交）。
+
+## 2026-08-30：ActionSetCasts::apply 的 PTRADD/PTRSUB fit preflight（PTRSUB-SWITCH-CAST-RESIDUAL-0001 step 2）
+
+- `apply` 开头调用 `fd.start_cast_phase()`（coreaction.cc:2728 / funcdata.hh:183，Rugra 新增
+  `Funcdata::cast_phase_index` 字段 + `clear()` 复位）。
+- PTRADD preflight（cc:2740-2746）：in0 的 read-facing HIGH 类型非指针、或 ptrTo 的
+  `align_size != addressToByteInt(scale, wordsize)` 时，`op_undo_ptradd_full(op, true)` 原地
+  撤销（implied INT_MULT / 常量折叠）。scale 按 `int4` 截断读 `get_offset()`（cc:2741）。
+- PTRSUB 降级（cc:2747-2756）：in0 read-facing 类型 `isPtrsubMatching(offset,0,0)` 不成立时，
+  offset==0 → 删 slot1 + COPY，否则 INT_ADD；复用 Rugra 的
+  `pointer_is_ptrsub_matching`（type.cc:1123 投影）。
+- 撤销/降级后按**当前** opcode/numInput 继续本 op 的 castInput/castOutput（Ghidra 的
+  `numInput()`/虚分派在循环条件处活读）；resolveUnion/checkPointerIssues 仍是登记残差。
+- 效果：fixture `globform|post`/`swexpr_post` 双侧字节一致（count 7 对齐）；curl E2E
+  3110/0/1 保持基线。
+
 ## 2026-08-28：GetStr read-facing char 子图
 
 `ActionInferTypes` 的 GetStr 聚焦路径现在按 `Varnode::getLocalType` reader 顺序建立
