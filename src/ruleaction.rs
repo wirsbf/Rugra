@@ -6372,35 +6372,67 @@ impl Rule for Rule2Comp2Mult {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_2COMP] }
 }
 
-/// Cleanup: Convert INT_2COMP to INT_SUB: `-V => 0 - V`. Faithful to
-/// Ghidra's `Rule2Comp2Sub` (ruleaction.cc:7236-7256).
+/// Cleanup: Convert INT_ADD back to INT_SUB: `V + -W ==> V - W`. Faithful to
+/// Ghidra's `Rule2Comp2Sub` (ruleaction.cc:7216-7237). The rule fires only
+/// when the INT_2COMP output feeds exactly one INT_ADD; the ADD is rewritten
+/// in place into `V - W` and the 2COMP op is destroyed. A 2COMP without a
+/// lone INT_ADD descendant is left alone (it keeps its unary `-V` form).
 pub struct Rule2Comp2Sub;
 
 impl Rule2Comp2Sub {
-    // Ghidra: ruleaction.cc:7234 Rule2Comp2Sub
+    // Ghidra: ruleaction.cc:7216 Rule2Comp2Sub
     pub fn new() -> Self { Self }
 }
 
 impl Rule for Rule2Comp2Sub {
-    // Ghidra: ruleaction.cc:7242 Rule2Comp2Sub::applyOp
+    // Ghidra: ruleaction.cc:7224 Rule2Comp2Sub::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
-        // Faithful to Rule2Comp2Sub::applyOp (ruleaction.cc:7242-7256).
-        let in0 = {
+        // Faithful to Rule2Comp2Sub::applyOp (ruleaction.cc:7224-7237).
+        // PcodeOp *addop = op->getOut()->loneDescend();
+        let (out_vn, in0) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_2COMP {
                 return Ok(action_status::NO_CHANGE);
             }
-            match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            match (op.output.as_ref(), op.inrefs.get(0)) {
+                (Some(o), Some(v)) => (o.clone(), v.clone()),
+                _ => return Ok(action_status::NO_CHANGE),
             }
         };
-        let size = in0.read().unwrap().get_size();
-        let follow = crate::op::PcodeOpRef(op_arc.clone());
-        fd.op_set_opcode(&follow, OpCode::CPUI_INT_SUB);
-        // Insert a zero constant as the first input.
-        let zero = fd.new_constant(size, 0);
-        fd.op_insert_input(&follow, zero, 0);
+        let addop_arc = match out_vn.read().unwrap().lone_descend() {
+            Some(a) => a,
+            None => return Ok(action_status::NO_CHANGE), // no lone descendant
+        };
+        if addop_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+            return Ok(action_status::NO_CHANGE);
+        }
+        let addop = crate::op::PcodeOpRef(addop_arc.clone());
+        // if (addop->getIn(0) == op->getOut()) swap the ADD inputs so the
+        // non-negated operand lands in slot 0 (`-W + V ==> V - W`).  Bind the
+        // cloned input before op_set_input: an `if let` scrutinee temporary
+        // would keep the read guard alive across the write-locking call.
+        let swap_in1 = {
+            let addop_guard = addop_arc.read().unwrap();
+            if addop_guard
+                .inrefs
+                .get(0)
+                .is_some_and(|v| std::sync::Arc::ptr_eq(v, &out_vn))
+            {
+                addop_guard.inrefs.get(1).cloned()
+            } else {
+                None
+            }
+        };
+        if let Some(v) = swap_in1 {
+            fd.op_set_input(&addop, v, 0);
+        }
+        // Slot 1 becomes the 2COMP input, the ADD becomes INT_SUB, and the
+        // 2COMP op is destroyed completely.
+        fd.op_set_input(&addop, in0, 1);
+        fd.op_set_opcode(&addop, OpCode::CPUI_INT_SUB);
+        fd.op_destroy(&crate::op::PcodeOpRef(op_arc.clone()));
         Ok(action_status::CHANGE)
     }
 

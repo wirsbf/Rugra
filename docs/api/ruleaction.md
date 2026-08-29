@@ -1385,3 +1385,15 @@ trial 失活 → CALL 无 output → varmap 忠实产出 extraout_var_00。patch
 改调 new_indirect_creation_in_space 传 vn 空间。效果:main 与 golden 逐 token 同形
 (`iVar4 = strnequal("--",pCVar6,2); if ((iVar4 == 0) && ...`),3 个 extraout_var* 全消,
 skeleton 3108→3068。
+
+## 2026-08-30:Rule2Comp2Sub 重写为忠实形态(RULEACTION-NEGATION-FORM-0001)
+
+w-printc2 C3 残差落地:此前 Rugra 的 Rule2Comp2Sub 把**每个** INT_2COMP 无条件改写成
+`INT_SUB(0, V)`(2comp→sub+插 0),而 oracle(ruleaction.cc:7224-7237)只在 2COMP 输出
+有**唯一** INT_ADD 父时触发:把该 ADD 原地改写成 `V - W`(槽 0 是 2COMP 输出时先交换),
+并 `opDestroy` 彻底删除 2COMP;无 ADD 父的 2COMP 保留一元 `-V` 形。错误改写使 curl 输出
+产生 30 处 `x + (0 - y)`(golden 应为 `x - y`/`-y`)。修正后 Rule2Comp2Sub::apply_op
+逐行对齐 loneDescend 门 + 槽交换 + opDestroy。双侧 fixture:
+tests/oracle/rule_2comp2sub_1204.{cc,rs} + tools/run_rule_2comp2sub_oracle.sh
+(五形态:两种改写方向 + 非 ADD/无后代/双后代三拒绝,MATCH)。curl 门禁 3119→3115,
+defects/numbering 保持 0,`(0 - ` 残留 30→0。
