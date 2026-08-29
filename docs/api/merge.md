@@ -696,13 +696,18 @@ NONCONVERGE-GETPARAM-MATCHURL-0001 用它锁定终态：MULTIEQUAL slot-2
 （仅 `is_addr_force` 一道守卫，其余按"视为交叉"保守处理）补齐为
 merge.cc:543-562 的完整五行守卫链：
 
-1. `vn2.is_addr_force()`（cc:547，原有）；
-2. `vn2.is_written()`（cc:548）；
-3. vn2 的 def 必须是 `CPUI_INDIRECT`（cc:549-550）；
+1. `vn2.is_addr_force()`（cc:549，原有）；
+2. `vn2.is_written()`（cc:550）；
+3. vn2 的 def 必须是 `CPUI_INDIRECT`（cc:551-552）；
 4. 该 INDIRECT 必须标注（mark）的是**正在处理的读 op**——
-   `op == get_op_from_const(indop->getIn(1))`（cc:552）；
+   `op == get_op_from_const(indop->getIn(1))`（cc:554）；
 5. INDIRECT 的 in(0) 对 vn 的 copy shadow /
-   partial copy shadow 豁免（cc:553-561，overlaptype 1 与非 1 两形态）。
+   partial copy shadow 豁免（cc:555-561，overlaptype 1 与非 1 两形态）。
+
+> 行号勘误（2026-08-30，R-LATTICE-CROSSREVIEW MINOR-1）：上列 cc: 引用原为
+> 547/548/549-550/552/553-561（-2 系统漂移），已按锁定 oracle
+> `e40ed130` 的 grep -n 实测行号修正为 549/550/551-552/554/555-561；
+> src/merge.rs 行内 `cc:` 注释同步修正。守卫顺序与语义不受影响。
 
 此前该分支处于死路径（heritage guard 修复落地前没有 varnode 携带
 addrforce 进入该分支），NONCONVERGE 修复后 Ram 全局版本首次激活它，

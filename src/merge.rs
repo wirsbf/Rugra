@@ -2569,20 +2569,20 @@ impl Merge {
                             let vn2_def = {
                                 let v2 = vn2_arc.read().unwrap();
                                 if !v2.is_addr_force() {
-                                    continue; // cc:547
+                                    continue; // cc:549
                                 }
                                 v2.def.as_ref().and_then(|w| w.upgrade())
                             };
-                            // cc:548 if (!vn2->isWritten()) continue;
+                            // cc:550 if (!vn2->isWritten()) continue;
                             let vn2_def = match vn2_def {
                                 Some(d) => d,
                                 None => continue,
                             };
-                            // cc:549-550 if (indop->code() != CPUI_INDIRECT) continue;
+                            // cc:551-552 if (indop->code() != CPUI_INDIRECT) continue;
                             if vn2_def.read().unwrap().opcode != crate::opcodes::OpCode::CPUI_INDIRECT {
                                 continue;
                             }
-                            // cc:552 The vn2 INDIRECT must be linked to the
+                            // cc:554 The vn2 INDIRECT must be linked to the
                             // read op: op == PcodeOp::getOpFromConst(
                             //   indop->getIn(1)->getAddr()).
                             let ind_target = {
@@ -2596,7 +2596,7 @@ impl Merge {
                             if !linked {
                                 continue;
                             }
-                            // cc:553-561 shadow checks against the
+                            // cc:555-561 shadow checks against the
                             // INDIRECT's input (in(0)).
                             let ind_in0 = {
                                 let d = vn2_def.read().unwrap();
