@@ -53,7 +53,13 @@ impl X86Lifter {
             "r13" | "r13d" | "r13w" | "r13b" => 0xA8,
             "r14" | "r14d" | "r14w" | "r14b" => 0xB0,
             "r15" | "r15d" | "r15w" | "r15b" => 0xB8,
-            "rip" | "eip" => 0x200, // Instruction pointer
+            // RIP/EIP live at register offset 0x288 in the locked oracle
+            // layout (sleigh_specs/x86-64.sla getAllRegisters: RIP=0x288:8,
+            // EIP=0x288:4, rflags=0x280, CF=0x200..ID=0x214 — dumped by
+            // examples/x86carry_probe.rs). The former 0x200 encoding aliased
+            // the 1-bit flags region (CF..F5), so every rip-relative memory
+            // operand built its address off a varnode overlapping the flags.
+            "rip" | "eip" => 0x288, // Instruction pointer
             _ => return None,
         };
         Some(VarnodeRaw::new(AddressSpace::Register, offset, size))

@@ -12,3 +12,12 @@
 - Memory 操作数：先 LOAD 再 BRANCHIND。
 - 新增 `reg_offset` helper（复用 get_register 的映射表）。
 <!-- annotation-pass: 2026-07-04 -->
+
+### 2026-08-30：RIP/EIP 偏移修正(0x200 → 0x288)
+- `get_register` 表中 `"rip" | "eip"` 的寄存器空间偏移由 0x200 改为 **0x288**。
+- 依据:锁定 oracle `sleigh_specs/x86-64.sla` getAllRegisters 全量 dump
+  (RIP=0x288:8 / EIP=0x288:4 / rflags=0x280 / CF=0x200..ID=0x214 各 1 字节;
+  证据见 `examples/x86carry_probe.rs` 与
+  `docs/alignment_docs/CARRY-PRINT-ROOTCAUSE-2026-08-30.md` §2.1)。
+- 旧值 0x200 与 1-bit flags 区(CF..F5)别名:所有 rip 相对内存操作数的地址计算
+  曾落在 flags 区 varnode 上。curl E2E 实测输出字节不变(3104/0/0)。
