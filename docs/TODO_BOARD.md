@@ -22,9 +22,13 @@
 > worktree 隔离（`/home/wirs/.cache/rugra-w2-*`）+ 独占写集租约 + 专属 CARGO_TARGET_DIR + flock 共享资源；
 > 子 Agent 交付（branch commit + 报告 `/tmp/rugra-reports/<name>-2026-08-29.md`）→ root 串行 cherry-pick →
 > flock 构建 → E2E → 差分门禁（defects 必须 0）→ 更新本板。板面 wave 节 root 维护，子 Agent 不直接改本板。
-> Agent 完成即由 root 从队列补位(保持 10 并发)。**2026-08-29 下午舰队状态**:首批 5 writer 因执行预算耗尽中断
-> (各留未提交 WIP),已派 5 个续作 Agent(w-anondecl2/w-newvarnode2/w-identify2/w-registry2/w-switchfix2)接管
-> 同名 worktree(先 WIP 提交再 merge master 55783411);5 reader 继续在跑。补位队列(按 55783411 基线 diff 排序):
+> Agent 完成即由 root 从队列补位。**并发上限 2026-08-29 下午起调整为 5(用户指令)**;当前 5 活跃:
+> w-anondecl2/w-newvarnode2/w-identify2/w-registry2(续作 writer)+reviewer-descend(机制 C 复核 55783411)。
+> 首批 5 reader 已终止(r-getparam 交付 jumptable 256→88 截断/cmp $0x57 guard/BOOL_AND pullback 情报;
+> r-f2s/r-plt 留 diag 分支 agent/reader-*;r-main/r-parseconfig 无报告,结论需重查)。
+> **已集成**:`PTRSUB-SWITCH-CAST-RESIDUAL-0001` phase A(w-switchfix2,fixture+runner 三模式绿,
+> master `46dd1f02..c6939910`,registry 已登记,overall=MISMATCH 13 条登记差异)。
+> 补位队列(按 55783411 基线 diff 排序):
 > ①descend 修复的机制 C 独立 Cross-Review(ruleaction.rs,优先);②myprogress(102)+glob_range(93,含 DUPDECL)簇;
 > ③glob_word(83)+my_get_line(82);④helpf(73)+my_get_token;⑤REGA-HUGEHELP(heritage.rs);
 > ⑥剩余 inrefs 直接写点 sweep(清单=/tmp/rugra-reports/INREFS_SWEEP_INVENTORY_2026-08-29.md,已知生产者已清,剩余点需逐个对照 Ghidra 判定)。
