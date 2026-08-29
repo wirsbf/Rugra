@@ -1,54 +1,58 @@
 {
-  "schema": 1,
-  "fixture_id": "PRINT-RPN-0001B",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
-  },
-  "architecture": "language-independent PrintC P-code block",
-  "compiler_spec": "none",
-  "analysis_options": {
-    "language": "PrintC",
-    "emitter": "EmitNoMarkup",
-    "markup": false,
-    "no_branch": [false, true]
-  },
-  "input": "{\"cases\":[{\"name\":\"cbranch_visible\",\"ops\":[\"CBRANCH\"],\"no_branch\":false},{\"name\":\"cbranch_suppressed\",\"ops\":[\"CBRANCH\"],\"no_branch\":true},{\"name\":\"branch_visible\",\"ops\":[\"BRANCH\"],\"no_branch\":false},{\"name\":\"return_suppressed\",\"ops\":[\"RETURN\"],\"no_branch\":true},{\"name\":\"mixed_visible\",\"ops\":[\"RETURN\",\"CBRANCH\"],\"no_branch\":false},{\"name\":\"mixed_suppressed\",\"ops\":[\"RETURN\",\"CBRANCH\"],\"no_branch\":true}],\"emitter\":\"EmitNoMarkup\",\"observation\":\"semicolon_statement_count_and_raw_hex\",\"op_order\":\"insertion_order\"}",
-  "input_fingerprint": "sha256:cacf627682c19bbd14763cb4d6b39d49ce9b7a73b1bd6de1e6420509ada1129d",
-  "observation": {
-    "schema": "case-name=semicolon-count plus separately hashed raw output",
-    "normalization": "statement-selection view counts semicolons only; raw output is retained and must remain different until the expression-text mismatch is fixed",
-    "ordering": "BlockBasic/PcodeOpRef insertion order",
-    "aliasing": "the same target and condition Varnodes are shared by every CBRANCH in each Ghidra case; Rugra constructs equivalent constant inputs per PcodeOp",
-    "covered_status": "MATCH",
-    "overall_status": "MISMATCH",
-    "covered": [
-      "no_branch suppresses branch-flagged CBRANCH operations",
-      "CPUI_BRANCH is omitted regardless of no_branch",
-      "CPUI_RETURN is retained because it does not carry the branch flag",
-      "mixed blocks preserve insertion-order traversal while filtering only the terminal branch"
-    ],
-    "mismatch": [
-      "visible CBRANCH raw text is (true) in Ghidra and (vn_1) in Rugra",
-      "comments, markup payloads, implied-output handling, and full structured CFG single-emission behavior are not closed by this fixture"
-    ]
-  },
-  "cpp_fixture_sha256": "f204aefa18888fe1908f8d4bb4a3338dc944fa24d44503dcaa1856aa15323ccb",
-  "rust_fixture_sha256": "4244c2d999dc99d242f7fb467e1fd9650c0b9ae87d18b3f46a03b5f448295140",
-  "comparand_sha256": {
-    "rugra_printc": "1ca3262cecf85bde30f4b7d5a5cae7f1ab84969ffba59512b2a8aac6a11ec53b",
-    "ghidra_printc_cc": "2c0f5565bb76c8ec4dc291e3166dec924fa063c9d86f4d14f06e1fc1550c12b4",
-    "ghidra_printc_hh": "efbc5aaa7c1a8f4a2072401689bf0c6de053705d90bfc85d79aba295554558b8",
-    "ghidra_block_cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",
-    "ghidra_block_hh": "103d023e88e88986c8d7bb6a4309eaee91d0f627636838f25452763e1212b139",
-    "ghidra_op_cc": "38ac521423d01b295b3020d9e4ee73da34197c6ae5c4b369022a64ada7680b4c",
-    "ghidra_op_hh": "8723d7548edf6a643bc8a6891c64ea6e7dbfb137d0d48d8c4ac868d8fe2f3a6d",
-    "ghidra_typeop_cc": "4cab1c2706eb48360df21b77a47f053cc637e6c0772a8b71ce12732897cf6b84",
-    "ghidra_typeop_hh": "abbc9432b150636063b06a0ace54518a6e6d883604e0f45e446a5293c33de931"
-  },
-  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-  "expected_statement_stdout_sha256": "3e8aac60015fbc1de8387f58f7abd333cdd24c527ae0353ec2207462da37e3cd",
-  "expected_ghidra_raw_sha256": "17834fd44e228d2bd68662041324d15937f0a5f7850d56406acb7a822019b198",
-  "expected_rugra_raw_sha256": "8bae748682d179f529725f09733ff323c3f70194ae6386cb969e7797f140a5fb"
+ "schema": 1,
+ "fixture_id": "PRINT-RPN-0001B",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "architecture": "language-independent PrintC P-code block",
+ "compiler_spec": "none",
+ "analysis_options": {
+  "language": "PrintC",
+  "emitter": "EmitNoMarkup",
+  "markup": false,
+  "no_branch": [
+   false,
+   true
+  ]
+ },
+ "input": "{\"cases\":[{\"name\":\"cbranch_visible\",\"ops\":[\"CBRANCH\"],\"no_branch\":false},{\"name\":\"cbranch_suppressed\",\"ops\":[\"CBRANCH\"],\"no_branch\":true},{\"name\":\"branch_visible\",\"ops\":[\"BRANCH\"],\"no_branch\":false},{\"name\":\"return_suppressed\",\"ops\":[\"RETURN\"],\"no_branch\":true},{\"name\":\"mixed_visible\",\"ops\":[\"RETURN\",\"CBRANCH\"],\"no_branch\":false},{\"name\":\"mixed_suppressed\",\"ops\":[\"RETURN\",\"CBRANCH\"],\"no_branch\":true}],\"emitter\":\"EmitNoMarkup\",\"observation\":\"semicolon_statement_count_and_raw_hex\",\"op_order\":\"insertion_order\"}",
+ "input_fingerprint": "sha256:cacf627682c19bbd14763cb4d6b39d49ce9b7a73b1bd6de1e6420509ada1129d",
+ "observation": {
+  "schema": "case-name=semicolon-count plus separately hashed raw output",
+  "normalization": "statement-selection view counts semicolons only; raw output is retained and must remain different until the expression-text mismatch is fixed",
+  "ordering": "BlockBasic/PcodeOpRef insertion order",
+  "aliasing": "the same target and condition Varnodes are shared by every CBRANCH in each Ghidra case; Rugra constructs equivalent constant inputs per PcodeOp",
+  "covered_status": "MATCH",
+  "overall_status": "MISMATCH",
+  "covered": [
+   "no_branch suppresses branch-flagged CBRANCH operations",
+   "CPUI_BRANCH is omitted regardless of no_branch",
+   "CPUI_RETURN is retained because it does not carry the branch flag",
+   "mixed blocks preserve insertion-order traversal while filtering only the terminal branch"
+  ],
+  "mismatch": [
+   "visible CBRANCH raw text is (true) in Ghidra and (vn_1) in Rugra",
+   "comments, markup payloads, implied-output handling, and full structured CFG single-emission behavior are not closed by this fixture"
+  ]
+ },
+ "cpp_fixture_sha256": "f204aefa18888fe1908f8d4bb4a3338dc944fa24d44503dcaa1856aa15323ccb",
+ "rust_fixture_sha256": "4244c2d999dc99d242f7fb467e1fd9650c0b9ae87d18b3f46a03b5f448295140",
+ "comparand_sha256": {
+  "rugra_printc": "1ca3262cecf85bde30f4b7d5a5cae7f1ab84969ffba59512b2a8aac6a11ec53b",
+  "ghidra_printc_cc": "2c0f5565bb76c8ec4dc291e3166dec924fa063c9d86f4d14f06e1fc1550c12b4",
+  "ghidra_printc_hh": "efbc5aaa7c1a8f4a2072401689bf0c6de053705d90bfc85d79aba295554558b8",
+  "ghidra_block_cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",
+  "ghidra_block_hh": "103d023e88e88986c8d7bb6a4309eaee91d0f627636838f25452763e1212b139",
+  "ghidra_op_cc": "38ac521423d01b295b3020d9e4ee73da34197c6ae5c4b369022a64ada7680b4c",
+  "ghidra_op_hh": "8723d7548edf6a643bc8a6891c64ea6e7dbfb137d0d48d8c4ac868d8fe2f3a6d",
+  "ghidra_typeop_cc": "4cab1c2706eb48360df21b77a47f053cc637e6c0772a8b71ce12732897cf6b84",
+  "ghidra_typeop_hh": "abbc9432b150636063b06a0ace54518a6e6d883604e0f45e446a5293c33de931"
+ },
+ "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+ "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+ "expected_statement_stdout_sha256": "3e8aac60015fbc1de8387f58f7abd333cdd24c527ae0353ec2207462da37e3cd",
+ "expected_ghidra_raw_sha256": "17834fd44e228d2bd68662041324d15937f0a5f7850d56406acb7a822019b198",
+ "expected_rugra_raw_sha256": "8bae748682d179f529725f09733ff323c3f70194ae6386cb969e7797f140a5fb",
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

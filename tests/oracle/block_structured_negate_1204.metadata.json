@@ -1,140 +1,145 @@
 {
-  "schema": 2,
-  "fixture_id": "BLOCK-STRUCTURED-NEGATE-0001",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "sources": {
-      "block.cc": {
-        "blob": "bf7103d9169097b2d879d04513a2690c6d9b1a62",
-        "sha256": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7"
-      },
-      "block.hh": {
-        "blob": "8319d83b9afa2b5ecdd9008bbc48ba3df72b93e2",
-        "sha256": "103d023e88e88986c8d7bb6a4309eaee91d0f627636838f25452763e1212b139"
-      },
-      "blockaction.cc": {
-        "blob": "c8acd865d3ab88ae0a862e7c02a8678740b517db",
-        "sha256": "501e8d9a3caec9172b1fdfa421f6cbc96cf8eb481fa3b40acbd186db4bab9dd6"
-      },
-      "blockaction.hh": {
-        "blob": "53392446bd7b3200786d690f29bb90593aafb049",
-        "sha256": "3993011793101ed3e4cadb6cc31ef1a88daea34d86d454984dc885c6fe62460d"
-      }
-    }
-  },
-  "architecture": "x86:LE:64:default",
-  "compiler_spec": {
-    "id": "gcc",
-    "fixture_abi": "x86_64 host C++11 synthetic control-flow objects; no source-language decompilation"
-  },
-  "analysis_options": {
-    "actions": [
-      "direct virtual FlowBlock::negateCondition",
-      "direct virtual BlockList::negateCondition",
-      "direct virtual BlockCondition::negateCondition",
-      "CollapseStructure::collapseAll for Cat/ProperIf counter projections"
-    ],
-    "debug_macros": "BLOCKCONSISTENT_DEBUG is unset, matching the release oracle",
-    "random_seed": "none",
-    "error_injection": "none",
-    "initial_parent_policy": "structured children and counter graph nodes are directly owned in order with parent=null on both sides"
-  },
-  "input_manifest": {
-    "fixture_id": "BLOCK-STRUCTURED-NEGATE-0001",
-    "architecture": "x86:LE:64:default",
-    "compiler_spec": "gcc",
-    "analysis_options": "direct locked virtual calls plus two CollapseStructure::collapseAll counter paths",
-    "cases": [
-      "flow_top_false",
-      "flow_top_true",
-      "flow_double_true_roundtrip",
-      "flow_parallel_true",
-      "flow_self_true",
-      "list_top_false_child_true",
-      "list_top_true_child_true",
-      "list_double_true_roundtrip",
-      "condition_and_top_false",
-      "condition_or_top_true",
-      "condition_double_true_roundtrip",
-      "collapse_cat_counter_zero",
-      "collapse_proper_if_counter_one"
-    ],
-    "edge_labels": "distinct raw oracle bits on both halves, including parallel and self edges",
-    "block_flags": "f_mark/f_label_bumpup sentinels plus observed f_flip_path",
-    "virtual_children": "fixed-return probes record every toporbottom argument; true/false return combinations are explicit",
-    "counter_indices": [0, 1, 2]
-  },
-  "input_fingerprint": "sha256:2a31673d9a6db14c8794f6e9223b15b7e18f22a81893b0fdb49d399d33a6ddeb",
-  "normalization": {
-    "pointer_identity": "Only raw pointer/Arc addresses are replaced by fixed construction names (top, f, t, p, list, cond, c0, c1)",
-    "edge_order": "none; every in/out slot is emitted in stored order",
-    "labels_reverse_indices_flags_opcode": "none; emitted as exact raw values",
-    "counter_projection": "none; count, final graph size, and child-call sequence are emitted directly"
-  },
-  "observation_schema": {
-    "stdout": "Fourteen fixed-order UTF-8 lines with final newline: envelope, eleven negate cases, two counter cases",
-    "negate_state": "virtual return sequence, top identity, raw BOOL opcode, every named node raw flags/calls, complete ordered out and in halves with peer name/raw label/reverse_index",
-    "counter_state": "CollapseStructure public dataflow change count, final BlockGraph size, and condition virtual-call sequence",
-    "stderr": "Ghidra must be empty; Rugra's four current production diagnostics are pinned separately and retained as a full-process residual"
-  },
-  "rugra_source": {
-    "base_commit": "7e91aef6aa28cbf0a77b9812858c276cafa7fbd3",
-    "base_tree": "fd155bc4dd996000d3012c2d49f7244c3a6308ec",
-    "overlay": {
-      "policy": "All 95 live src/**/*.rs regular files are length-prefixed and overlaid on the pinned base; this freezes the coherent uncommitted source state needed by the fixture",
-      "hash_scheme": "sha256 of rugra-block-structured-negate-full-src-overlay-v1 NUL plus sorted length-prefixed relative path/content pairs",
-      "file_count": 95,
-      "tree_sha256": "2b673387caffbf4c591c17e1f92425a283d3369be31ff1506bb8251c7c75f221"
-    }
-  },
-  "comparand": {
-    "cpp_fixture_sha256": "732c4e63d3dddce2bced11a97d3b152dea0a7cd55df045754a74743bc1b0c30f",
-    "rust_fixture_sha256": "1b3f7d05edf9ff1fb052763fd6171b04b612daf802f062e82166c952daeed361",
-    "runner_sha256": "e82f9e60a5515790d475a9712759b9239cd4d29c0069046a143d9fba1bd327c2",
-    "block_rs_sha256": "71eec00c4e98bb69a35f6cc1fd3e8de7e24768c78d9d56419be8bd8e8477d010",
-    "blockaction_rs_sha256": "9379d8fbc526da4c7226185523ad9fc4863912cc55ffa87df5ca10bc3eb2e534",
-    "block_cc_sha256": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",
-    "block_hh_sha256": "103d023e88e88986c8d7bb6a4309eaee91d0f627636838f25452763e1212b139",
-    "blockaction_cc_sha256": "501e8d9a3caec9172b1fdfa421f6cbc96cf8eb481fa3b40acbd186db4bab9dd6",
-    "blockaction_hh_sha256": "3993011793101ed3e4cadb6cc31ef1a88daea34d86d454984dc885c6fe62460d",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "readme_sha256": "982834e841730ee7dc44e2740774e517d8ffc55deb9069e5a424a21c9a16155a",
-    "bench_decompile_sha256": "66868d6c9ae470625d46896f24dd6d9da7d3c00e52a850b17e42736727f0a66a",
-    "example_decompress_sha256": "7eca5ca75a1dc23a9a72d02ae542852a4ed3c79656a3dbf6bd966ae864747c80",
-    "example_funcproto_sha256": "094fb3cfe277fc3b395c5f0cb0df18bee27f269306bc3deff8a2fc7584bbdc2f"
-  },
-  "host": {
-    "cxx": "g++ (GCC) 16.2.1 20260810",
-    "cxx_target": "x86_64-pc-linux-gnu",
-    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
-    "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
-  },
-  "expected_stdout_sha256": "d47ef9da438012d850b3374dddf6d54cf7bdbaaf82b145b5b7c280ab5151c57d",
-  "expected_rugra_stderr_sha256": "03a128b338e72c589c8a22c04e678827f0bad8c4ce205bc22d90b36574cc34f3",
-  "expected_exit_code": 0,
-  "coverage": {
-    "scoped_status": "MATCH",
-    "full_status": "MISMATCH",
-    "covered": {
-      "flow_base_top_gate": "MATCH: false performs no mutation; true swaps the two full out half-edges, repairs both reciprocal in-half reverse indices, toggles only f_flip_path, and returns false",
-      "distinct_parallel_self_edges": "MATCH: labels travel with the swapped out-half object and exact reciprocal slots are repaired for distinct targets, two parallel edges to one target, and two legal self edges",
-      "double_negate": "MATCH: distinct-edge FlowBlock, BlockList, and BlockCondition cases round-trip edge order, reverse indices, f_flip_path, and BOOL opcode",
-      "blocklist_dispatch": "MATCH: only the last child receives negateCondition(false); its exact virtual return is propagated; only toporbottom=true swaps the BlockList exits",
-      "blockcondition_dispatch": "MATCH: both children receive negateCondition(false) in first/second order without short-circuit, returns are OR-combined, BOOL_AND/BOOL_OR always toggle, and only toporbottom=true swaps exits",
-      "dataflow_counter_split": "MATCH: a three-node Cat structural collapse reaches graph_size=1 with count=0; a three-node ProperIf requiring one true virtual negate return reaches graph_size=1 with count=1"
-    },
-    "residual": {
-      "rugra_diagnostic_stderr": "MISMATCH: scoped method/state stdout is byte-identical, but Rugra currently emits four deterministic [COLLAPSE]/[BLOCKSTRUCT] stderr lines while Ghidra emits none; stderr is pinned, not normalized away",
-      "blockbasic_blockcopy": "UNTESTED: BlockBasic's PcodeOp flag mutation and BlockCopy's two-level delegation are outside this fixture",
-      "nonbinary_error_path": "UNTESTED: Ghidra's size assertion exists only under BLOCKCONSISTENT_DEBUG; release invalid-arity behavior is not invoked",
-      "factory_opcode_seed": "UNTESTED: BlockGraph::newBlockCondition's constructor-time opcode choice is outside the direct BOOL_AND/BOOL_OR virtual-method cases",
-      "collapse_full_state": "UNTESTED: the two counter cases intentionally project public count/final graph size/call order, not every post-collapse hierarchy field or every structuring rule",
-      "production_parent_wiring": "UNTESTED: the isolated structured children start parent=null on both sides; BlockGraph::addBlock/identifyInternal parent wiring is covered by separate fixtures"
-    }
+ "schema": 2,
+ "fixture_id": "BLOCK-STRUCTURED-NEGATE-0001",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "sources": {
+   "block.cc": {
+    "blob": "bf7103d9169097b2d879d04513a2690c6d9b1a62",
+    "sha256": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7"
+   },
+   "block.hh": {
+    "blob": "8319d83b9afa2b5ecdd9008bbc48ba3df72b93e2",
+    "sha256": "103d023e88e88986c8d7bb6a4309eaee91d0f627636838f25452763e1212b139"
+   },
+   "blockaction.cc": {
+    "blob": "c8acd865d3ab88ae0a862e7c02a8678740b517db",
+    "sha256": "501e8d9a3caec9172b1fdfa421f6cbc96cf8eb481fa3b40acbd186db4bab9dd6"
+   },
+   "blockaction.hh": {
+    "blob": "53392446bd7b3200786d690f29bb90593aafb049",
+    "sha256": "3993011793101ed3e4cadb6cc31ef1a88daea34d86d454984dc885c6fe62460d"
+   }
   }
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "fixture_abi": "x86_64 host C++11 synthetic control-flow objects; no source-language decompilation"
+ },
+ "analysis_options": {
+  "actions": [
+   "direct virtual FlowBlock::negateCondition",
+   "direct virtual BlockList::negateCondition",
+   "direct virtual BlockCondition::negateCondition",
+   "CollapseStructure::collapseAll for Cat/ProperIf counter projections"
+  ],
+  "debug_macros": "BLOCKCONSISTENT_DEBUG is unset, matching the release oracle",
+  "random_seed": "none",
+  "error_injection": "none",
+  "initial_parent_policy": "structured children and counter graph nodes are directly owned in order with parent=null on both sides"
+ },
+ "input_manifest": {
+  "fixture_id": "BLOCK-STRUCTURED-NEGATE-0001",
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": "gcc",
+  "analysis_options": "direct locked virtual calls plus two CollapseStructure::collapseAll counter paths",
+  "cases": [
+   "flow_top_false",
+   "flow_top_true",
+   "flow_double_true_roundtrip",
+   "flow_parallel_true",
+   "flow_self_true",
+   "list_top_false_child_true",
+   "list_top_true_child_true",
+   "list_double_true_roundtrip",
+   "condition_and_top_false",
+   "condition_or_top_true",
+   "condition_double_true_roundtrip",
+   "collapse_cat_counter_zero",
+   "collapse_proper_if_counter_one"
+  ],
+  "edge_labels": "distinct raw oracle bits on both halves, including parallel and self edges",
+  "block_flags": "f_mark/f_label_bumpup sentinels plus observed f_flip_path",
+  "virtual_children": "fixed-return probes record every toporbottom argument; true/false return combinations are explicit",
+  "counter_indices": [
+   0,
+   1,
+   2
+  ]
+ },
+ "input_fingerprint": "sha256:2a31673d9a6db14c8794f6e9223b15b7e18f22a81893b0fdb49d399d33a6ddeb",
+ "normalization": {
+  "pointer_identity": "Only raw pointer/Arc addresses are replaced by fixed construction names (top, f, t, p, list, cond, c0, c1)",
+  "edge_order": "none; every in/out slot is emitted in stored order",
+  "labels_reverse_indices_flags_opcode": "none; emitted as exact raw values",
+  "counter_projection": "none; count, final graph size, and child-call sequence are emitted directly"
+ },
+ "observation_schema": {
+  "stdout": "Fourteen fixed-order UTF-8 lines with final newline: envelope, eleven negate cases, two counter cases",
+  "negate_state": "virtual return sequence, top identity, raw BOOL opcode, every named node raw flags/calls, complete ordered out and in halves with peer name/raw label/reverse_index",
+  "counter_state": "CollapseStructure public dataflow change count, final BlockGraph size, and condition virtual-call sequence",
+  "stderr": "Ghidra must be empty; Rugra's four current production diagnostics are pinned separately and retained as a full-process residual"
+ },
+ "rugra_source": {
+  "base_commit": "7e91aef6aa28cbf0a77b9812858c276cafa7fbd3",
+  "base_tree": "fd155bc4dd996000d3012c2d49f7244c3a6308ec",
+  "overlay": {
+   "policy": "All 95 live src/**/*.rs regular files are length-prefixed and overlaid on the pinned base; this freezes the coherent uncommitted source state needed by the fixture",
+   "hash_scheme": "sha256 of rugra-block-structured-negate-full-src-overlay-v1 NUL plus sorted length-prefixed relative path/content pairs",
+   "file_count": 95,
+   "tree_sha256": "2b673387caffbf4c591c17e1f92425a283d3369be31ff1506bb8251c7c75f221"
+  }
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "732c4e63d3dddce2bced11a97d3b152dea0a7cd55df045754a74743bc1b0c30f",
+  "rust_fixture_sha256": "1b3f7d05edf9ff1fb052763fd6171b04b612daf802f062e82166c952daeed361",
+  "runner_sha256": "e82f9e60a5515790d475a9712759b9239cd4d29c0069046a143d9fba1bd327c2",
+  "block_rs_sha256": "71eec00c4e98bb69a35f6cc1fd3e8de7e24768c78d9d56419be8bd8e8477d010",
+  "blockaction_rs_sha256": "9379d8fbc526da4c7226185523ad9fc4863912cc55ffa87df5ca10bc3eb2e534",
+  "block_cc_sha256": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",
+  "block_hh_sha256": "103d023e88e88986c8d7bb6a4309eaee91d0f627636838f25452763e1212b139",
+  "blockaction_cc_sha256": "501e8d9a3caec9172b1fdfa421f6cbc96cf8eb481fa3b40acbd186db4bab9dd6",
+  "blockaction_hh_sha256": "3993011793101ed3e4cadb6cc31ef1a88daea34d86d454984dc885c6fe62460d",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "readme_sha256": "982834e841730ee7dc44e2740774e517d8ffc55deb9069e5a424a21c9a16155a",
+  "bench_decompile_sha256": "66868d6c9ae470625d46896f24dd6d9da7d3c00e52a850b17e42736727f0a66a",
+  "example_decompress_sha256": "7eca5ca75a1dc23a9a72d02ae542852a4ed3c79656a3dbf6bd966ae864747c80",
+  "example_funcproto_sha256": "094fb3cfe277fc3b395c5f0cb0df18bee27f269306bc3deff8a2fc7584bbdc2f"
+ },
+ "host": {
+  "cxx": "g++ (GCC) 16.2.1 20260810",
+  "cxx_target": "x86_64-pc-linux-gnu",
+  "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
+  "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
+ },
+ "expected_stdout_sha256": "d47ef9da438012d850b3374dddf6d54cf7bdbaaf82b145b5b7c280ab5151c57d",
+ "expected_rugra_stderr_sha256": "03a128b338e72c589c8a22c04e678827f0bad8c4ce205bc22d90b36574cc34f3",
+ "expected_exit_code": 0,
+ "coverage": {
+  "scoped_status": "MATCH",
+  "full_status": "MISMATCH",
+  "covered": {
+   "flow_base_top_gate": "MATCH: false performs no mutation; true swaps the two full out half-edges, repairs both reciprocal in-half reverse indices, toggles only f_flip_path, and returns false",
+   "distinct_parallel_self_edges": "MATCH: labels travel with the swapped out-half object and exact reciprocal slots are repaired for distinct targets, two parallel edges to one target, and two legal self edges",
+   "double_negate": "MATCH: distinct-edge FlowBlock, BlockList, and BlockCondition cases round-trip edge order, reverse indices, f_flip_path, and BOOL opcode",
+   "blocklist_dispatch": "MATCH: only the last child receives negateCondition(false); its exact virtual return is propagated; only toporbottom=true swaps the BlockList exits",
+   "blockcondition_dispatch": "MATCH: both children receive negateCondition(false) in first/second order without short-circuit, returns are OR-combined, BOOL_AND/BOOL_OR always toggle, and only toporbottom=true swaps exits",
+   "dataflow_counter_split": "MATCH: a three-node Cat structural collapse reaches graph_size=1 with count=0; a three-node ProperIf requiring one true virtual negate return reaches graph_size=1 with count=1"
+  },
+  "residual": {
+   "rugra_diagnostic_stderr": "MISMATCH: scoped method/state stdout is byte-identical, but Rugra currently emits four deterministic [COLLAPSE]/[BLOCKSTRUCT] stderr lines while Ghidra emits none; stderr is pinned, not normalized away",
+   "blockbasic_blockcopy": "UNTESTED: BlockBasic's PcodeOp flag mutation and BlockCopy's two-level delegation are outside this fixture",
+   "nonbinary_error_path": "UNTESTED: Ghidra's size assertion exists only under BLOCKCONSISTENT_DEBUG; release invalid-arity behavior is not invoked",
+   "factory_opcode_seed": "UNTESTED: BlockGraph::newBlockCondition's constructor-time opcode choice is outside the direct BOOL_AND/BOOL_OR virtual-method cases",
+   "collapse_full_state": "UNTESTED: the two counter cases intentionally project public count/final graph size/call order, not every post-collapse hierarchy field or every structuring rule",
+   "production_parent_wiring": "UNTESTED: the isolated structured children start parent=null on both sides; BlockGraph::addBlock/identifyInternal parent wiring is covered by separate fixtures"
+  }
+ },
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

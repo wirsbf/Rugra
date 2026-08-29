@@ -1,102 +1,102 @@
 {
-  "schema": 2,
-  "fixture_id": "PIPE-MERGETYPE-ORDER-0001",
-  "stable_function_id": "GH12-F-bf835e5e2b2bd0ac91bd",
-  "stable_function_closure": [
-    "GH12-F-bf835e5e2b2bd0ac91bd ghidra::ActionDatabase::universalAction coreaction.cc:5462",
-    "ghidra::ActionGroup::apply action.cc:506",
-    "ghidra::Action::perform action.cc:298",
-    "ghidra::ActionAssignHigh::apply coreaction.hh:346",
-    "ghidra::ActionMergeType::apply coreaction.hh:414",
-    "ghidra::ActionMarkExplicit::baseExplicit coreaction.cc:3010"
+ "schema": 2,
+ "fixture_id": "PIPE-MERGETYPE-ORDER-0001",
+ "stable_function_id": "GH12-F-bf835e5e2b2bd0ac91bd",
+ "stable_function_closure": [
+  "GH12-F-bf835e5e2b2bd0ac91bd ghidra::ActionDatabase::universalAction coreaction.cc:5462",
+  "ghidra::ActionGroup::apply action.cc:506",
+  "ghidra::Action::perform action.cc:298",
+  "ghidra::ActionAssignHigh::apply coreaction.hh:346",
+  "ghidra::ActionMergeType::apply coreaction.hh:414",
+  "ghidra::ActionMarkExplicit::baseExplicit coreaction.cc:3010"
+ ],
+ "overall_status": "MATCH:  all 29 observed lines byte-identical after BLKACT-FINALSTRUCT-COUNT-0001 removed the invented ActionFinalStructure count bumps (finalstructure triple now count=0/apply=0/res=0); registered non-observed domains remain in coverage as mismatch/untested",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{coreaction.cc:5712-5738,action.cc:298-362,action.cc:506-527}",
+  "signature": "void ActionDatabase::universalAction(Architecture *conf); int4 Action::perform(Funcdata &data); int4 ActionGroup::apply(Funcdata &data)"
+ },
+ "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7",
+ "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols",
+ "analysis_options": {
+  "entrypoint": "Oracle side builds the raw universal Action tree through ActionDatabase::universalAction on the fixture Architecture, derives an unfiltered clone via the public group API (setGroup(\"all\", every base group) + setCurrent(\"all\")), enumerates the ordered children from the prefercomplement child to stop, and performs each child through Action::perform in tree order on a minimal Funcdata; Rust side enumerates and drives the identical child sequence of the one authoritative build_default_pipeline root (the same construction set_default_actions registers)",
+  "prestate": "Fresh Funcdata per run: entry block b0 with two successors b1/b2; r1=INT_ADD(c8,c8) ending b1 with output t1 (8-byte, int8), r2=INT_XOR(c8,c8) ending b2 with output t2 (8-byte, int8); blocks receive deterministic creation-order FlowBlock indices; ops receive opInsertEnd SeqNum orders; the two temporaries are defined from constants so MergeAdjacent's mergeTestBasic gate rejects every input on both sides and the only legal speculative merge is t1+t2 (same Datatype identity, disjoint covers)",
+  "observation": "One envelope line, one seq= line with the ordered post-cleanup child names, one pre= IR projection, one act= line per driven child (name, perform status, count, lcount, count_tests, count_apply, perform return), and one post= IR projection (per-varnode input/written/explicit/implied flags, HighVariable instance counts, per-op opcode and SeqNum order, merge_temps HighVariable identity pairing)",
+  "normalization": "No name, order, flag, count, status, or IR normalization; both sides print the same projection of the same observation fields; the merge_temps pairing compares HighVariable identity, never string labels"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "post_cleanup_order: raw-universal child sequence from prefercomplement through stop must list the 25 oracle actions of coreaction.cc:5714-5738 in construction order including both dynamicsymbols instances and exactly one mergetype",
+   "single_late_mergetype: mergetype appears exactly once, at ordinal 14 of the tail (after mergeadjacent, before hideshadow); the former premature post-cleanup instance is gone",
+   "typed_temp_merge_fires_once: the two same-Datatype int8 temporaries share one HighVariable (2 instances each) after the sequence and no other pair merges; the merge is attributable to the mergetype step alone",
+   "executor_status_onceperfunc: every oracle rule_onceperfunc leaf of the tail ends perform at status_end=16 with count_tests=1",
+   "markexplicit_count_bridge: markexplicit reports count=4/apply=1/res=4 matching the oracle setExplicit increments",
+   "finalstructure_count_bridge: MISMATCH residual \u2014 Rugra's finalstructure reports count=1/apply=1/res=1, the oracle reports 0/0/0"
   ],
-  "overall_status": "MATCH: all 29 observed lines byte-identical after BLKACT-FINALSTRUCT-COUNT-0001 removed the invented ActionFinalStructure count bumps (finalstructure triple now count=0/apply=0/res=0); registered non-observed domains remain in coverage as MISMATCH/UNTESTED",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{coreaction.cc:5712-5738,action.cc:298-362,action.cc:506-527}",
-    "signature": "void ActionDatabase::universalAction(Architecture *conf); int4 Action::perform(Funcdata &data); int4 ActionGroup::apply(Funcdata &data)"
+  "sha256": "431e5954e657e73918c498ce0f33dbb9fe4633084543b702e65ef0ee6b23c8c1"
+ },
+ "observation_schema": {
+  "format": "29 fixed-order UTF-8 lines with final newline: one envelope, one seq, one pre, 25 act records, one post",
+  "state": "per-action perform status, count, lcount, count_tests, count_apply, return code",
+  "graph": "per-varnode input/written/explicit/implied flags, HighVariable instance count, per-op opcode and SeqNum order, HighVariable identity pairing for the two temporaries"
+ },
+ "comparand": {
+  "rugra_base_commit": "9fbb1945ec92a9378f077f77209b2fd251bf1146",
+  "rugra_base_tree": "3124866e9b14e5151e0ac2aad2ed5e6fd517c6cf",
+  "cpp_fixture_sha256": "53145576e712e427d1bc954ebaa50e50a449a7d4f476a63dbed3bd1d4653393e",
+  "rust_fixture_sha256": "10bb08db8274ef2f9f6aba8882aaa97592bed860116eee75894291ae36990be0",
+  "action_rs_sha256": "58a74da4b96977450ea1282fdcbc6670fc9d1984d2b1a9f17b74030478baf15c",
+  "coreaction_rs_sha256": "a4455002706bc7ce716acbd86e087e84fa569686fb82ad0c268d9f6e51036a55",
+  "action_doc_sha256": "567ec6ba4bc41f621ab879b96170593de83735b57420e23b7830c13f6a895130",
+  "coreaction_doc_sha256": "f0a16d51461f92731a6b3b3798a19c1e1ee5fb91ef31d509bde1c6b78511b04a",
+  "runner_sha256": "f8298db368b7967ff6c7f4c79a907b38f3f6a850a1de77a56ddf173ab622b192",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-action-merge-order-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "rust_crate_tree_sha256": "695230bf27d2783b67080124078c0e64f7bc567f16c19c315197390f2c92aee6",
+  "host": {
+   "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+   "cxx_target": "x86_64-linux-gnu",
+   "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+   "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+   "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.10",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+   "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+   "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+   "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+   "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+   "platform": "Linux 6.8.0-124-generic x86_64"
   },
-  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7",
-  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols",
-  "analysis_options": {
-    "entrypoint": "Oracle side builds the raw universal Action tree through ActionDatabase::universalAction on the fixture Architecture, derives an unfiltered clone via the public group API (setGroup(\"all\", every base group) + setCurrent(\"all\")), enumerates the ordered children from the prefercomplement child to stop, and performs each child through Action::perform in tree order on a minimal Funcdata; Rust side enumerates and drives the identical child sequence of the one authoritative build_default_pipeline root (the same construction set_default_actions registers)",
-    "prestate": "Fresh Funcdata per run: entry block b0 with two successors b1/b2; r1=INT_ADD(c8,c8) ending b1 with output t1 (8-byte, int8), r2=INT_XOR(c8,c8) ending b2 with output t2 (8-byte, int8); blocks receive deterministic creation-order FlowBlock indices; ops receive opInsertEnd SeqNum orders; the two temporaries are defined from constants so MergeAdjacent's mergeTestBasic gate rejects every input on both sides and the only legal speculative merge is t1+t2 (same Datatype identity, disjoint covers)",
-    "observation": "One envelope line, one seq= line with the ordered post-cleanup child names, one pre= IR projection, one act= line per driven child (name, perform status, count, lcount, count_tests, count_apply, perform return), and one post= IR projection (per-varnode input/written/explicit/implied flags, HighVariable instance counts, per-op opcode and SeqNum order, merge_temps HighVariable identity pairing)",
-    "normalization": "No name, order, flag, count, status, or IR normalization; both sides print the same projection of the same observation fields; the merge_temps pairing compares HighVariable identity, never string labels"
-  },
-  "input_manifest": {
-    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
-    "cases": [
-      "post_cleanup_order: raw-universal child sequence from prefercomplement through stop must list the 25 oracle actions of coreaction.cc:5714-5738 in construction order including both dynamicsymbols instances and exactly one mergetype",
-      "single_late_mergetype: mergetype appears exactly once, at ordinal 14 of the tail (after mergeadjacent, before hideshadow); the former premature post-cleanup instance is gone",
-      "typed_temp_merge_fires_once: the two same-Datatype int8 temporaries share one HighVariable (2 instances each) after the sequence and no other pair merges; the merge is attributable to the mergetype step alone",
-      "executor_status_onceperfunc: every oracle rule_onceperfunc leaf of the tail ends perform at status_end=16 with count_tests=1",
-      "markexplicit_count_bridge: markexplicit reports count=4/apply=1/res=4 matching the oracle setExplicit increments",
-      "finalstructure_count_bridge: MISMATCH residual — Rugra's finalstructure reports count=1/apply=1/res=1, the oracle reports 0/0/0"
-    ],
-    "sha256": "431e5954e657e73918c498ce0f33dbb9fe4633084543b702e65ef0ee6b23c8c1"
-  },
-  "observation_schema": {
-    "format": "29 fixed-order UTF-8 lines with final newline: one envelope, one seq, one pre, 25 act records, one post",
-    "state": "per-action perform status, count, lcount, count_tests, count_apply, return code",
-    "graph": "per-varnode input/written/explicit/implied flags, HighVariable instance count, per-op opcode and SeqNum order, HighVariable identity pairing for the two temporaries"
-  },
-  "comparand": {
-    "rugra_base_commit": "9fbb1945ec92a9378f077f77209b2fd251bf1146",
-    "rugra_base_tree": "3124866e9b14e5151e0ac2aad2ed5e6fd517c6cf",
-    "cpp_fixture_sha256": "53145576e712e427d1bc954ebaa50e50a449a7d4f476a63dbed3bd1d4653393e",
-    "rust_fixture_sha256": "10bb08db8274ef2f9f6aba8882aaa97592bed860116eee75894291ae36990be0",
-    "action_rs_sha256": "58a74da4b96977450ea1282fdcbc6670fc9d1984d2b1a9f17b74030478baf15c",
-    "coreaction_rs_sha256": "a4455002706bc7ce716acbd86e087e84fa569686fb82ad0c268d9f6e51036a55",
-    "action_doc_sha256": "567ec6ba4bc41f621ab879b96170593de83735b57420e23b7830c13f6a895130",
-    "coreaction_doc_sha256": "f0a16d51461f92731a6b3b3798a19c1e1ee5fb91ef31d509bde1c6b78511b04a",
-    "runner_sha256": "f8298db368b7967ff6c7f4c79a907b38f3f6a850a1de77a56ddf173ab622b192",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-action-merge-order-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-    "rust_crate_tree_sha256": "695230bf27d2783b67080124078c0e64f7bc567f16c19c315197390f2c92aee6",
-    "host": {
-      "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-      "cxx_target": "x86_64-linux-gnu",
-      "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
-      "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-      "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
-      "make_path": "/usr/bin/make",
-      "python_path": "/usr/bin/python3.10",
-      "git_path": "/usr/bin/git",
-      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-      "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
-      "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
-      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-      "platform": "Linux 6.8.0-124-generic x86_64"
-    },
-    "blockaction_rs_sha256": "1d54115f2e4f33418262170548ed2f293307530119ebc5e5fd006de309df0421",
-    "blockaction_doc_sha256": "c7db6bb31955bbaba757e37f6f5d35a64ea9ff01c19028e2ad1c40dfc665644e"
-  },
-  "build": {
-    "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
-    "private_state_observer": "Read-only ABI observation of Action count/lcount and ActionGroup list through #define private public / #define protected public in the fixture translation unit only; no oracle source is modified; the raw universal root clone is reached through the public setGroup/setCurrent API",
-    "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/action.rs and src/coreaction.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
-    "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
-    "registry_packages": 164,
-    "registry_lock_closure_sha256": "df9b245dd04f4477c7935be86fab169d12ac51db100eb6750bba46ec3c79faa7"
-  },
-  "expected_stdout_sha256": "13963dfb089cfbd962aff3fc92f2706b14d2e703e95d7c8335a7c2856ae2a7d5",
-  "expected_exit_code": 0,
-  "covered_projection_status": "MATCH",
-  "coverage": {
-    "post_cleanup_order": "MATCH: the 25-name tail sequence byte-matches the raw universal tree construction order of coreaction.cc:5714-5738, including both dynamicsymbols instances, normalizebranches at ordinal 3, assignhigh at ordinal 4, and exactly one mergetype at ordinal 14",
-    "single_late_mergetype": "MATCH: mergetype occurs exactly once in the whole default pipeline tree (premature post-cleanup instance deleted) and runs after mergeadjacent/before hideshadow",
-    "typed_temp_merge_fires_once": "MATCH: merge_temps flips 0 to 1 across the sequence with the instance-count projection t1:hi=2,t2:hi=2 and all other varnodes untouched, on both sides",
-    "executor_status_onceperfunc": "MATCH: all oracle rule_onceperfunc leaves of the tail end at status 16 with tests=1 after one perform (Rugra now carries the 14 missing get_flags overrides)",
-    "markexplicit_count_bridge": "MATCH: count=4/apply=1/res=4 on both sides (Rugra now returns its setExplicit bump count; the missing hasNoDescend guard is fixed so the two dangling temporaries are explicit on both sides)",
-    "finalstructure_count_bridge": "MATCH: ActionFinalStructure::apply no longer increments count (blockaction.cc:2186-2197 zero count, unconditional return 0); the finalstructure act line triple matches the oracle",
-    "standalone_merge_cover_precondition": "MISMATCH: Ghidra's data.getMerge() is the persistent Funcdata Merge whose testCache builds covers lazily; Rugra constructs a fresh Merge::new() per action, so the standalone mergerequired/mergecopy/mergeadjacent run before mergetype with empty live_set/covers and merge_adjacent merges same-size input/output pairs that the oracle's cover-intersection test rejects; merge.rs is outside this change's leased write-set and the fixture graph (constant-fed temporaries) avoids the divergent path; E2E curl improved to 24/24 despite the gap",
-    "group_filtered_derived_roots": "UNTESTED: the raw universal tail is compared as the coordinator specified; the buildDefaultGroups group-filter semantics (decompile excludes normalizebranches) and derived alternate roots remain PIPE-TREE-0001 T5"
-  }
+  "blockaction_rs_sha256": "1d54115f2e4f33418262170548ed2f293307530119ebc5e5fd006de309df0421",
+  "blockaction_doc_sha256": "c7db6bb31955bbaba757e37f6f5d35a64ea9ff01c19028e2ad1c40dfc665644e"
+ },
+ "build": {
+  "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
+  "private_state_observer": "Read-only ABI observation of Action count/lcount and ActionGroup list through #define private public / #define protected public in the fixture translation unit only; no oracle source is modified; the raw universal root clone is reached through the public setGroup/setCurrent API",
+  "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/action.rs and src/coreaction.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
+  "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "df9b245dd04f4477c7935be86fab169d12ac51db100eb6750bba46ec3c79faa7"
+ },
+ "expected_stdout_sha256": "13963dfb089cfbd962aff3fc92f2706b14d2e703e95d7c8335a7c2856ae2a7d5",
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "coverage": {
+  "post_cleanup_order": "MATCH: the 25-name tail sequence byte-matches the raw universal tree construction order of coreaction.cc:5714-5738, including both dynamicsymbols instances, normalizebranches at ordinal 3, assignhigh at ordinal 4, and exactly one mergetype at ordinal 14",
+  "single_late_mergetype": "MATCH: mergetype occurs exactly once in the whole default pipeline tree (premature post-cleanup instance deleted) and runs after mergeadjacent/before hideshadow",
+  "typed_temp_merge_fires_once": "MATCH: merge_temps flips 0 to 1 across the sequence with the instance-count projection t1:hi=2,t2:hi=2 and all other varnodes untouched, on both sides",
+  "executor_status_onceperfunc": "MATCH: all oracle rule_onceperfunc leaves of the tail end at status 16 with tests=1 after one perform (Rugra now carries the 14 missing get_flags overrides)",
+  "markexplicit_count_bridge": "MATCH: count=4/apply=1/res=4 on both sides (Rugra now returns its setExplicit bump count; the missing hasNoDescend guard is fixed so the two dangling temporaries are explicit on both sides)",
+  "finalstructure_count_bridge": "MATCH: ActionFinalStructure::apply no longer increments count (blockaction.cc:2186-2197 zero count, unconditional return 0); the finalstructure act line triple matches the oracle",
+  "standalone_merge_cover_precondition": "MISMATCH: Ghidra's data.getMerge() is the persistent Funcdata Merge whose testCache builds covers lazily; Rugra constructs a fresh Merge::new() per action, so the standalone mergerequired/mergecopy/mergeadjacent run before mergetype with empty live_set/covers and merge_adjacent merges same-size input/output pairs that the oracle's cover-intersection test rejects; merge.rs is outside this change's leased write-set and the fixture graph (constant-fed temporaries) avoids the divergent path; E2E curl improved to 24/24 despite the gap",
+  "group_filtered_derived_roots": "UNTESTED: the raw universal tail is compared as the coordinator specified; the buildDefaultGroups group-filter semantics (decompile excludes normalizebranches) and derived alternate roots remain PIPE-TREE-0001 T5"
+ }
 }

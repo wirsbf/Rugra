@@ -1,100 +1,100 @@
 {
-  "schema": 2,
-  "fixture_id": "VARMAP-NAMING-0001",
-  "stable_function_id": "GH12-F-dcd573e991c714936f10",
-  "stable_function_closure": [
-    "GH12-F-dcd573e991c714936f10 ghidra::Scope::buildDefaultName database.cc:1756",
-    "GH12-F-fb0a49c54683c9652e96 ghidra::ScopeInternal::assignDefaultNames database.cc:2850",
-    "GH12-F-da1f5c1cb324abd14245 ghidra::ScopeInternal::buildVariableName database.cc:2434",
-    "GH12-F-78ec062f72c8b07e99dc ghidra::ScopeInternal::makeNameUnique database.cc:2553",
-    "GH12-F-b2a1d8f9d11d6a13442b ghidra::ScopeInternal::insertNameTree database.cc:2712",
-    "GH12-F-29143592e9dbebe02a60 ghidra::ScopeLocal::buildVariableName varmap.cc:548"
+ "schema": 2,
+ "fixture_id": "VARMAP-NAMING-0001",
+ "stable_function_id": "GH12-F-dcd573e991c714936f10",
+ "stable_function_closure": [
+  "GH12-F-dcd573e991c714936f10 ghidra::Scope::buildDefaultName database.cc:1756",
+  "GH12-F-fb0a49c54683c9652e96 ghidra::ScopeInternal::assignDefaultNames database.cc:2850",
+  "GH12-F-da1f5c1cb324abd14245 ghidra::ScopeInternal::buildVariableName database.cc:2434",
+  "GH12-F-78ec062f72c8b07e99dc ghidra::ScopeInternal::makeNameUnique database.cc:2553",
+  "GH12-F-b2a1d8f9d11d6a13442b ghidra::ScopeInternal::insertNameTree database.cc:2712",
+  "GH12-F-29143592e9dbebe02a60 ghidra::ScopeLocal::buildVariableName varmap.cc:548"
+ ],
+ "overall_status": "UNTESTED:  (B2 migration of partial match state) the six-case naming projection (SymbolNameTree walk order, name/displayName mutation, category and catindex effects, nameDedup sequencing, shared int4 base counter across prefixes, idempotence, and the twelve buildVariableName flag branches) byte-matches the locked oracle; the buildDefaultName representative-Varnode path with a live Funcdata/HighVariable, the real Translate register-table plumbing, multiEntrySet maintenance, and symbolId allocation remain outside this atomic change",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{database.cc:1756-1786,2152-2164,2434-2518,2520-2551,2553-2614,2712-2742,2814-2845,2850-2865,varmap.cc:548-581}",
+  "signature": "string Scope::buildDefaultName(Symbol *sym,int4 &base,Varnode *vn) const; void ScopeInternal::assignDefaultNames(int4 &base); string ScopeInternal::buildVariableName(const Address &addr,const Address &pc,Datatype *ct,int4 &index,uint4 flags) const; string ScopeInternal::makeNameUnique(const string &nm) const; void ScopeInternal::insertNameTree(Symbol *sym); string ScopeLocal::buildVariableName(const Address &addr,const Address &pc,Datatype *ct,int4 &index,uint4 flags) const"
+ },
+ "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; fixture register table (0x100,8)=SREG1 (0x108,4)=SREG2",
+ "compiler_spec": "synthetic prototype fixtures decoded per case with explicit <localrange/> windows (empty or one/two disjoint stack ranges) and extrapop=0; stack grows negative",
+ "analysis_options": {
+  "entrypoint": "Direct invocation of locked ScopeLocal::addSymbol/setCategory/assignDefaultNames/makeNameUnique/buildVariableName on real ScopeLocal scopes bound to Funcdata with prototype-local ranges; no Actions or C emission",
+  "prestate": "Per-case fresh Funcdata + ScopeLocal(0x102, stack) with the case's local window installed through the production ProtoModel XML decode path and parameter boundaries through markNotMapped(parameter=true); symbols added via Scope::addSymbol with empty or explicit names and invalid/valid usepoints",
+  "observation": "Per case: pre-assignment SymbolNameTree walk (name:displayName:category:catindex:nameDedup), the same walk after assignDefaultNames, the shared int4 base value, a second idempotence run, and direct-call extras (makeNameUnique sequencing or the twelve buildVariableName flag-branch results)",
+  "normalization": "No normalization; both sides print the same projection of the same state"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "cross_category_shared_base: two function_parameter symbols take param_<catindex+1> from the category index while three unnamed locals split across the ScopeLocal Stack path (no counter) and the default branch drawing cVar1/lVar2 from the single shared base",
+   "sequential_increment_shared_base: four use-pointed locals with interleaved int/char/int/long prefixes number 1-4 across prefixes (per-prefix counters would restart), plus an address-tied symbol outside the local range taking the ScopeInternal addrtied form without consuming the counter",
+   "typelock_display_and_bump: a named category-0 cust_lock symbol survives assignDefaultNames with displayName mirroring name; the buildVariableName bump loop walks the shared counter past a colliding iVar1; makeNameUnique observes the _02/_00 suffix sequencing on fresh and taken bases",
+   "scopelocal_stack_paths: two disjoint local windows drive the Y region (positive start with raw offset below minParamOffset), the X region (start<=0), and the plain positive start; markNotMapped(parameter=true) installs the parameter window; a stack param via category and a use-pointed local cover the fall-through branches",
+   "direct_flag_paths: direct buildVariableName calls cover unaffected+return_address, unaffected with and without a register name, persist with and without a register name, irregular input (index<0) both ways, regular parameter (index>=0), indirect_creation both ways, the default local branch, and the pointer-to-array printNameBase recursion",
+   "undef_dedup_and_shared_base: three empty-name symbols receive the $$undef placeholder sequence, three named duplicates take nameDedup 0/1/2, and the shared base numbers only the unnamed ones"
   ],
-  "overall_status": "PARTIAL_MATCH: the six-case naming projection (SymbolNameTree walk order, name/displayName mutation, category and catindex effects, nameDedup sequencing, shared int4 base counter across prefixes, idempotence, and the twelve buildVariableName flag branches) byte-matches the locked oracle; the buildDefaultName representative-Varnode path with a live Funcdata/HighVariable, the real Translate register-table plumbing, multiEntrySet maintenance, and symbolId allocation remain outside this atomic change",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{database.cc:1756-1786,2152-2164,2434-2518,2520-2551,2553-2614,2712-2742,2814-2845,2850-2865,varmap.cc:548-581}",
-    "signature": "string Scope::buildDefaultName(Symbol *sym,int4 &base,Varnode *vn) const; void ScopeInternal::assignDefaultNames(int4 &base); string ScopeInternal::buildVariableName(const Address &addr,const Address &pc,Datatype *ct,int4 &index,uint4 flags) const; string ScopeInternal::makeNameUnique(const string &nm) const; void ScopeInternal::insertNameTree(Symbol *sym); string ScopeLocal::buildVariableName(const Address &addr,const Address &pc,Datatype *ct,int4 &index,uint4 flags) const"
-  },
-  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; fixture register table (0x100,8)=SREG1 (0x108,4)=SREG2",
-  "compiler_spec": "synthetic prototype fixtures decoded per case with explicit <localrange/> windows (empty or one/two disjoint stack ranges) and extrapop=0; stack grows negative",
-  "analysis_options": {
-    "entrypoint": "Direct invocation of locked ScopeLocal::addSymbol/setCategory/assignDefaultNames/makeNameUnique/buildVariableName on real ScopeLocal scopes bound to Funcdata with prototype-local ranges; no Actions or C emission",
-    "prestate": "Per-case fresh Funcdata + ScopeLocal(0x102, stack) with the case's local window installed through the production ProtoModel XML decode path and parameter boundaries through markNotMapped(parameter=true); symbols added via Scope::addSymbol with empty or explicit names and invalid/valid usepoints",
-    "observation": "Per case: pre-assignment SymbolNameTree walk (name:displayName:category:catindex:nameDedup), the same walk after assignDefaultNames, the shared int4 base value, a second idempotence run, and direct-call extras (makeNameUnique sequencing or the twelve buildVariableName flag-branch results)",
-    "normalization": "No normalization; both sides print the same projection of the same state"
-  },
-  "input_manifest": {
-    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
-    "cases": [
-      "cross_category_shared_base: two function_parameter symbols take param_<catindex+1> from the category index while three unnamed locals split across the ScopeLocal Stack path (no counter) and the default branch drawing cVar1/lVar2 from the single shared base",
-      "sequential_increment_shared_base: four use-pointed locals with interleaved int/char/int/long prefixes number 1-4 across prefixes (per-prefix counters would restart), plus an address-tied symbol outside the local range taking the ScopeInternal addrtied form without consuming the counter",
-      "typelock_display_and_bump: a named category-0 cust_lock symbol survives assignDefaultNames with displayName mirroring name; the buildVariableName bump loop walks the shared counter past a colliding iVar1; makeNameUnique observes the _02/_00 suffix sequencing on fresh and taken bases",
-      "scopelocal_stack_paths: two disjoint local windows drive the Y region (positive start with raw offset below minParamOffset), the X region (start<=0), and the plain positive start; markNotMapped(parameter=true) installs the parameter window; a stack param via category and a use-pointed local cover the fall-through branches",
-      "direct_flag_paths: direct buildVariableName calls cover unaffected+return_address, unaffected with and without a register name, persist with and without a register name, irregular input (index<0) both ways, regular parameter (index>=0), indirect_creation both ways, the default local branch, and the pointer-to-array printNameBase recursion",
-      "undef_dedup_and_shared_base: three empty-name symbols receive the $$undef placeholder sequence, three named duplicates take nameDedup 0/1/2, and the shared base numbers only the unnamed ones"
-    ],
-    "sha256": "43dfdef1b5367351ee3677e59509da8937b79b9eb4f44e32a81d324d6b77a909"
-  },
-  "observation_schema": {
-    "format": "Seven fixed-order UTF-8 lines with final newline: one envelope plus six case records",
-    "state": "per-symbol name, displayName, category, catindex, nameDedup in SymbolNameTree order; shared base counter",
-    "direct": "makeNameUnique sequencing and the twelve buildVariableName flag-branch return strings"
-  },
-  "comparand": {
-    "rugra_base_commit": "4fcfc1bc5f72ea2491320ab0bb5d03735eebb5c8",
-    "rugra_base_tree": "7983ee9291900870415d6818851b9d2dad668a5f",
-    "cpp_fixture_sha256": "491153b5da864d65fe010fce55e0481327bc61d5339812cbd5b5b79b153f6dcd",
-    "rust_fixture_sha256": "7681ac2d24a40c88f921c47de2c1525a67248824c763c1a8063d3e16f69fcd54",
-    "varmap_rs_sha256": "f11177c6d3def2dc05105f7bbb2c62443416a31bb019194821f0823f0cca5acf",
-    "printc_rs_sha256": "ebd11ccac6252abdabdb3be01b2bbc61a36abd1a33712ee0bed3f4c4b27c139e",
-    "varmap_doc_sha256": "15466dbcc5ff6b6e1d469637f8ce00ff1ab335cbb817d9416cbed55fc288ec74",
-    "printc_doc_sha256": "3ddcc1313b0c20d54ed4f3c83d418d80d47080c724fdd2206abcf5c71eccee65",
-    "runner_sha256": "a3e5ee5a075421e80c33f85314ab5c5f283c0d4c4f6f1dca4ee92e2879e0e3e5",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-varmap-naming-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-    "rust_crate_tree_sha256": "305d71247387eac6cfd4a72d7384feb622cdd59bd16de146dc08e96a0823601a",
-    "host": {
-      "cxx": "g++ (GCC) 16.2.1 20260810",
-      "cxx_target": "x86_64-pc-linux-gnu",
-      "cxx_path": "/usr/bin/g++",
-      "cc_path": "/usr/bin/gcc",
-      "ar_path": "/usr/bin/ar",
-      "make_path": "/usr/bin/make",
-      "python_path": "/usr/bin/python3.14",
-      "git_path": "/usr/bin/git",
-      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-      "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-      "cargo_path": "/usr/bin/cargo",
-      "rustc_path": "/usr/bin/rustc",
-      "rust_toolchain": "system",
-      "platform": "Linux 7.1.8-arch1-3 x86_64"
-    }
-  },
-  "build": {
-    "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
-    "private_state_observer": "Read-only ABI observation of Symbol::nameDedup and the ScopeInternal::nametree walk through #define private/protected public in the fixture translation unit only; no oracle source is modified",
-    "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/varmap.rs and src/printc.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
-    "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
-    "registry_packages": 164,
-    "registry_lock_closure_sha256": "b32459fbeb7b63312759dd34687862c6a3c4ed849ae1768671fefbc7ef0db499"
-  },
-  "expected_stdout_sha256": "1a9039060d20792b09a7660a3824c89661d4e3b13ff554bc3d2c476852d27101",
-  "expected_exit_code": 0,
-  "covered_projection_status": "MATCH",
-  "coverage": {
-    "shared_base_counter_across_prefixes": "MATCH: sequential_increment shows iVar1,cVar2,iVar3,lVar4 (one counter across prefixes) and the bump loop advances the same counter past a collision (typelock case: iVar2/iVar3 with base ending at 4)",
-    "cross_category_param_naming": "MATCH: function_parameter symbols name from catindex+1 (param_1,param_2,param_3) without consuming the base, and the same-typed unnamed locals still draw from the shared counter",
-    "nametree_walk_order_and_dedup": "MATCH: $$undef placeholder sequencing (00000000/1/2), nameDedup 0/1/2 on duplicate names, and the assign walk visiting symbols in SymbolNameTree order",
-    "locked_display_name_preservation": "MATCH: named category-0 cust_lock survives assignDefaultNames with displayName==name; makeNameUnique on the taken base yields _02 and on a fresh suffix base yields _00",
-    "stack_y_x_plain_paths": "MATCH: the ScopeLocal override produces iStackY_f0 (start>0, raw offset below minParamOffset), iStackX_1000000000000020 (start<=0), and iStack_10 (plain positive start) with two disjoint local windows, while out-of-range addrtied symbols fall through to the 16-hex-digit ScopeInternal form",
-    "assign_idempotence": "MATCH: a second assignDefaultNames run leaves every name and the base counter unchanged in all six cases",
-    "builddefaultname_vn_path": "UNTESTED: the representative-Varnode branch (database.cc:1759-1771, usepoint from getUsePoint and HighVariable::isInput) is ported but not fixture-driven; it requires a live Funcdata/HighVariable graph and remains bound to the ActionNameVars caller closure",
-    "translate_register_table_plumbing": "UNTESTED: register-name lookup is ported against a caller-installed table; production wiring of the real Translate register table into ScopeLocal is pending Architecture plumbing"
+  "sha256": "43dfdef1b5367351ee3677e59509da8937b79b9eb4f44e32a81d324d6b77a909"
+ },
+ "observation_schema": {
+  "format": "Seven fixed-order UTF-8 lines with final newline: one envelope plus six case records",
+  "state": "per-symbol name, displayName, category, catindex, nameDedup in SymbolNameTree order; shared base counter",
+  "direct": "makeNameUnique sequencing and the twelve buildVariableName flag-branch return strings"
+ },
+ "comparand": {
+  "rugra_base_commit": "4fcfc1bc5f72ea2491320ab0bb5d03735eebb5c8",
+  "rugra_base_tree": "7983ee9291900870415d6818851b9d2dad668a5f",
+  "cpp_fixture_sha256": "491153b5da864d65fe010fce55e0481327bc61d5339812cbd5b5b79b153f6dcd",
+  "rust_fixture_sha256": "7681ac2d24a40c88f921c47de2c1525a67248824c763c1a8063d3e16f69fcd54",
+  "varmap_rs_sha256": "f11177c6d3def2dc05105f7bbb2c62443416a31bb019194821f0823f0cca5acf",
+  "printc_rs_sha256": "ebd11ccac6252abdabdb3be01b2bbc61a36abd1a33712ee0bed3f4c4b27c139e",
+  "varmap_doc_sha256": "15466dbcc5ff6b6e1d469637f8ce00ff1ab335cbb817d9416cbed55fc288ec74",
+  "printc_doc_sha256": "3ddcc1313b0c20d54ed4f3c83d418d80d47080c724fdd2206abcf5c71eccee65",
+  "runner_sha256": "a3e5ee5a075421e80c33f85314ab5c5f283c0d4c4f6f1dca4ee92e2879e0e3e5",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-varmap-naming-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "rust_crate_tree_sha256": "305d71247387eac6cfd4a72d7384feb622cdd59bd16de146dc08e96a0823601a",
+  "host": {
+   "cxx": "g++ (GCC) 16.2.1 20260810",
+   "cxx_target": "x86_64-pc-linux-gnu",
+   "cxx_path": "/usr/bin/g++",
+   "cc_path": "/usr/bin/gcc",
+   "ar_path": "/usr/bin/ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.14",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+   "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+   "cargo_path": "/usr/bin/cargo",
+   "rustc_path": "/usr/bin/rustc",
+   "rust_toolchain": "system",
+   "platform": "Linux 7.1.8-arch1-3 x86_64"
   }
+ },
+ "build": {
+  "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
+  "private_state_observer": "Read-only ABI observation of Symbol::nameDedup and the ScopeInternal::nametree walk through #define private/protected public in the fixture translation unit only; no oracle source is modified",
+  "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/varmap.rs and src/printc.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
+  "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "b32459fbeb7b63312759dd34687862c6a3c4ed849ae1768671fefbc7ef0db499"
+ },
+ "expected_stdout_sha256": "1a9039060d20792b09a7660a3824c89661d4e3b13ff554bc3d2c476852d27101",
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "coverage": {
+  "shared_base_counter_across_prefixes": "MATCH: sequential_increment shows iVar1,cVar2,iVar3,lVar4 (one counter across prefixes) and the bump loop advances the same counter past a collision (typelock case: iVar2/iVar3 with base ending at 4)",
+  "cross_category_param_naming": "MATCH: function_parameter symbols name from catindex+1 (param_1,param_2,param_3) without consuming the base, and the same-typed unnamed locals still draw from the shared counter",
+  "nametree_walk_order_and_dedup": "MATCH: $$undef placeholder sequencing (00000000/1/2), nameDedup 0/1/2 on duplicate names, and the assign walk visiting symbols in SymbolNameTree order",
+  "locked_display_name_preservation": "MATCH: named category-0 cust_lock survives assignDefaultNames with displayName==name; makeNameUnique on the taken base yields _02 and on a fresh suffix base yields _00",
+  "stack_y_x_plain_paths": "MATCH: the ScopeLocal override produces iStackY_f0 (start>0, raw offset below minParamOffset), iStackX_1000000000000020 (start<=0), and iStack_10 (plain positive start) with two disjoint local windows, while out-of-range addrtied symbols fall through to the 16-hex-digit ScopeInternal form",
+  "assign_idempotence": "MATCH: a second assignDefaultNames run leaves every name and the base counter unchanged in all six cases",
+  "builddefaultname_vn_path": "UNTESTED: the representative-Varnode branch (database.cc:1759-1771, usepoint from getUsePoint and HighVariable::isInput) is ported but not fixture-driven; it requires a live Funcdata/HighVariable graph and remains bound to the ActionNameVars caller closure",
+  "translate_register_table_plumbing": "UNTESTED: register-name lookup is ported against a caller-installed table; production wiring of the real Translate register table into ScopeLocal is pending Architecture plumbing"
+ }
 }

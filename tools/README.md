@@ -37,7 +37,9 @@ python3 tools/rugra_build.py check --dry-run
 `select_fixtures.py` 使用生成式 `FUNCTION_LEDGER.json` 的 Rust 函数 span 和稳定 ID，
 把 git diff 映射到 `tests/oracle/fixture_registry.json`。删除、顶层改动或没有已登记
 fixture 的 `src/*.rs` 改动会 fail-closed：选择全部 fixture，并在 `--strict` 下返回 2，
-不会用“没选中测试”冒充无影响。
+不会用“没选中测试”冒充无影响。缺少 `impact` 的迁移前 legacy 条目只按 global/tier
+参与选择（其 schema 违规仍由 `oracle_registry.py lint` fail-closed 跟踪，直至
+ORACLE-METADATA-MIGRATE-0001 完成）。
 
 ```bash
 # 当前工作树，机器可读结果

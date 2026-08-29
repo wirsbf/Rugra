@@ -1,81 +1,81 @@
 {
-  "schema": 2,
-  "fixture_id": "HERITAGE-TRYOUTPUT-STACKGUARD-CONTAINS",
-  "description": "Full proto-store output storage chain of the locked stack output: Heritage::tryOutputStackGuard output-contains branch (heritage.cc:1406-1430, the fourth justifiedContain touchpoint at cc:1420) over six trigger geometries with the return storage read from the call spec's own proto-store output parameter (cc:1407/cc:1410); the cc:1420 LE/BE call-shape constants; the locked-branch storage reads of FuncProto::characterizeAsOutput/getBiggestContainedOutput (fspec.cc:4339-4353/4495-4506) over five containment geometries; and the production entry — ActionFuncLink::funcLinkOutput (coreaction.cc:1538-1553: spacebase storage -> setStackOutputLock + delayed output varnode, register storage -> immediate newVarnodeOut) followed by Heritage::guardCalls (heritage.cc:1443-1527) with the cc:1466 spacebase rebase: the stack-lock geometry upgrades to unaffected (SUBPIECE guard, no INDIRECT), the register-storage control keeps unknown_effect (INDIRECT guard)",
-  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5 (spacebase over ram), ram_be=6 (big-endian), iop=7; stack delay=1",
-  "compiler_spec": "synthetic prototype fixture: tryoutputguard (inputs RSI 0x30/RDI 0x38, output RAX 0x0 — model entries inert for the locked-output characterization); the guarded call carries a locked non-void output whose storage Address is the stack spacebase at callee 0x1000:8 (ParameterPieces typelock + setOutputLock + setStackOutputLock, the coreaction.cc:1546-1549 shape) with stackoffset 0x10 caller/callee rebase",
-  "analysis_options": {
-    "boundary": "direct drive of the production functions end to end: case 1 drives Heritage::tryOutputStackGuard with the pre-state installed through setOutput/setOutputLock (ProtoStoreInternal::setOutput shape) and the outputCharacter derived through the production FuncProto::characterizeAsOutput locked branch on both sides; case 3 drives the locked-branch storage reads directly; case 4 drives ActionFuncLink::funcLinkOutput then the full Heritage::guardCalls loop (production entry, heritage.cc:1487-1494)",
-    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
-    "staging": "none: the return storage is recorded on the call spec's FuncProto (output_storage) and read back through get_output_storage inside try_output_stack_guard (the cc:1407/cc:1410 getOutput() reads); the stackoutputlock flag is set by the real funcLinkOutput producer in case 4, and the spacebase rebase uses stackoffset 0x10 (setSpacebaseRelative shape). The legacy Address carries no space identity, so the storage records (AddressSpace, offset) pairs — the registered ADDRESS-0001-family staging note; the decode channel (FuncProto::decode returnsym) still discards its spaceless address and funcLinkOutput falls to its no-storage leg there"
+ "schema": 2,
+ "fixture_id": "HERITAGE-TRYOUTPUT-STACKGUARD-CONTAINS",
+ "description": "Full proto-store output storage chain of the locked stack output: Heritage::tryOutputStackGuard output-contains branch (heritage.cc:1406-1430, the fourth justifiedContain touchpoint at cc:1420) over six trigger geometries with the return storage read from the call spec's own proto-store output parameter (cc:1407/cc:1410); the cc:1420 LE/BE call-shape constants; the locked-branch storage reads of FuncProto::characterizeAsOutput/getBiggestContainedOutput (fspec.cc:4339-4353/4495-4506) over five containment geometries; and the production entry \u2014 ActionFuncLink::funcLinkOutput (coreaction.cc:1538-1553: spacebase storage -> setStackOutputLock + delayed output varnode, register storage -> immediate newVarnodeOut) followed by Heritage::guardCalls (heritage.cc:1443-1527) with the cc:1466 spacebase rebase: the stack-lock geometry upgrades to unaffected (SUBPIECE guard, no INDIRECT), the register-storage control keeps unknown_effect (INDIRECT guard)",
+ "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5 (spacebase over ram), ram_be=6 (big-endian), iop=7; stack delay=1",
+ "compiler_spec": "synthetic prototype fixture: tryoutputguard (inputs RSI 0x30/RDI 0x38, output RAX 0x0 \u2014 model entries inert for the locked-output characterization); the guarded call carries a locked non-void output whose storage Address is the stack spacebase at callee 0x1000:8 (ParameterPieces typelock + setOutputLock + setStackOutputLock, the coreaction.cc:1546-1549 shape) with stackoffset 0x10 caller/callee rebase",
+ "analysis_options": {
+  "boundary": "direct drive of the production functions end to end: case 1 drives Heritage::tryOutputStackGuard with the pre-state installed through setOutput/setOutputLock (ProtoStoreInternal::setOutput shape) and the outputCharacter derived through the production FuncProto::characterizeAsOutput locked branch on both sides; case 3 drives the locked-branch storage reads directly; case 4 drives ActionFuncLink::funcLinkOutput then the full Heritage::guardCalls loop (production entry, heritage.cc:1487-1494)",
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "staging": "none: the return storage is recorded on the call spec's FuncProto (output_storage) and read back through get_output_storage inside try_output_stack_guard (the cc:1407/cc:1410 getOutput() reads); the stackoutputlock flag is set by the real funcLinkOutput producer in case 4, and the spacebase rebase uses stackoffset 0x10 (setSpacebaseRelative shape). The legacy Address carries no space identity, so the storage records (AddressSpace, offset) pairs \u2014 the registered ADDRESS-0001-family staging note; the decode channel (FuncProto::decode returnsym) still discards its spaceless address and funcLinkOutput falls to its no-storage leg there"
+ },
+ "overall_status": "UNTESTED:  (B2 migration of partial match state) covered-tryoutput-fullchain-projection-match",
+ "covered_projection_status": "MATCH",
+ "expected_stdout_sha256": "0163da94d2d0fcc2f18bdcdaeb3b20cdd3a7847f889e14866d67ad29c316f558",
+ "expected_exit_code": 0,
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "comparand": {
+  "rugra_base_commit": "dc6f0bfa57ee8d4b20d4edbab9d486b603253cc6",
+  "rugra_base_tree": "ad32215a6c807c5fe4a11bb923251d41fd905818",
+  "cpp_fixture_sha256": "c9aed47800a4f9ec3559d7081ebc050f1dfaaca3c1772c078289efe7685c7bab",
+  "rust_fixture_sha256": "de3052f6ae9ca50646e30979b1cd251d0a8825fe4877b41c25f97a474bbd5db2",
+  "heritage_rs_sha256": "530895a3e14224a2fdbcdf7da421917fe7756a6c1fb3e7eab533f761eedb2bc9",
+  "heritage_doc_sha256": "c3f73a66c3ecffed2d519d7c4562e9466235e402cd45328c0880e0ed9dc08003",
+  "runner_sha256": "657da527b05c4f362638528f10e5442d4bfec2e99347d4c98d05a6676d67b91f",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_sha256": "ed00a6017ee3b25d70496994a6948e388f994b5f6da9b529ec6911360311caec",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-tryoutput-d0-base-overlay-v2 plus base commit and sorted length-prefixed paths and contents",
+  "host": {
+   "cxx": "g++ (GCC) 16.2.1 20260810",
+   "cxx_target": "x86_64-pc-linux-gnu",
+   "cxx_path": "/usr/bin/g++",
+   "cc_path": "/usr/bin/gcc",
+   "ar_path": "/usr/bin/ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.14",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+   "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+   "cargo_path": "/usr/bin/cargo",
+   "rustc_path": "/usr/bin/rustc",
+   "rust_toolchain": "system-arch-linux",
+   "platform": "Linux 7.1.8-arch1-3 x86_64"
   },
-  "overall_status": "PARTIAL_MATCH:covered-tryoutput-fullchain-projection-MATCH",
-  "covered_projection_status": "MATCH",
-  "expected_stdout_sha256": "0163da94d2d0fcc2f18bdcdaeb3b20cdd3a7847f889e14866d67ad29c316f558",
-  "expected_exit_code": 0,
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
-  },
-  "comparand": {
-    "rugra_base_commit": "dc6f0bfa57ee8d4b20d4edbab9d486b603253cc6",
-    "rugra_base_tree": "ad32215a6c807c5fe4a11bb923251d41fd905818",
-    "cpp_fixture_sha256": "c9aed47800a4f9ec3559d7081ebc050f1dfaaca3c1772c078289efe7685c7bab",
-    "rust_fixture_sha256": "de3052f6ae9ca50646e30979b1cd251d0a8825fe4877b41c25f97a474bbd5db2",
-    "heritage_rs_sha256": "530895a3e14224a2fdbcdf7da421917fe7756a6c1fb3e7eab533f761eedb2bc9",
-    "heritage_doc_sha256": "c3f73a66c3ecffed2d519d7c4562e9466235e402cd45328c0880e0ed9dc08003",
-    "runner_sha256": "657da527b05c4f362638528f10e5442d4bfec2e99347d4c98d05a6676d67b91f",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "rust_crate_tree_sha256": "ed00a6017ee3b25d70496994a6948e388f994b5f6da9b529ec6911360311caec",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-tryoutput-d0-base-overlay-v2 plus base commit and sorted length-prefixed paths and contents",
-    "host": {
-      "cxx": "g++ (GCC) 16.2.1 20260810",
-      "cxx_target": "x86_64-pc-linux-gnu",
-      "cxx_path": "/usr/bin/g++",
-      "cc_path": "/usr/bin/gcc",
-      "ar_path": "/usr/bin/ar",
-      "make_path": "/usr/bin/make",
-      "python_path": "/usr/bin/python3.14",
-      "git_path": "/usr/bin/git",
-      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-      "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-      "cargo_path": "/usr/bin/cargo",
-      "rustc_path": "/usr/bin/rustc",
-      "rust_toolchain": "system-arch-linux",
-      "platform": "Linux 7.1.8-arch1-3 x86_64"
-    },
-    "fspec_rs_sha256": "cf42e209bc7eb1d7de265f49b26b7b5d3bc9fe641021430e15f6416330015599",
-    "coreaction_rs_sha256": "4d51a19672d8f329d5d8f0a83e998080d86f8ac0c211697f99cd9103d5865eff"
-  },
-  "build": {
-    "registry_packages": 164,
-    "registry_lock_closure_sha256": "0c4903da86a0c935e9f8a6132a6049d065945a66aaa4a96744122729382af304"
-  },
-  "input_manifest": {
-    "cases": [
-      "stack_output_contains_full",
-      "cc1420_constant",
-      "output_storage_projection",
-      "production_entry_guardcalls"
-    ],
-    "sha256": "b8197806bcb99eaa41965881f042698c0aca280b56b6860fe3245b43b83d0901"
-  },
-  "coverage": {
-    "output_contains_branch": "MATCH: six geometries through the production Heritage::tryOutputStackGuard output-contains branch (heritage.cc:1406-1430) — op order (CALL then opInsertAfter'd SUBPIECE, cc:1424), inputs/outputs per op, write-list entries with the vnFinal-only active-heritage flag (cc:1426-1429), and the cc:1430 return value true on every geometry including the no-op; the return storage is read from the call spec's recorded proto-store output (cc:1407/cc:1410 getOutput() through get_output_storage), not staged",
-    "cc1420_truncate_constant": "MATCH: the fourth justifiedContain touchpoint retAddr.justifiedContain(retSize, addr, size, false) — LE start distances 0/2/4 (SUBPIECE in[1] constants c4(0)/c4(2)/c4(4) in the drive projection) and the BE end distances 4/2/0 pinned by case=cc1420_constant",
-    "missing_outvn_creation": "MATCH: cc:1413-1416 — the call output is created at (caller-perspective retAddr, retSize) only when callOp->getOut() is null; the created varnode is written but not active-heritage when the SUBPIECE overwrites vnFinal",
-    "preexisting_outvn_reuse": "MATCH: cc:1411-1412 — a pre-existing call output is reused as SUBPIECE in[0] (geom 4) with no second output created",
-    "vnfinal_null_noop": "MATCH: cc:1426 guard — a pre-existing output with size==retSize (geom 5) creates no ops, leaves the write list empty, and cc:1430 still returns true",
-    "caller_perspective_translation": "MATCH: cc:1407-1410 — the callee-perspective locked storage 0x1000 is translated by diff = addr - transAddr = 0x10 to the caller perspective 0x1010 (the created output varnode offset and the retc header field)",
-    "output_storage_locked_reads": "MATCH: case=output_storage_projection — FuncProto::characterizeAsOutput (fspec.cc:4339-4353: TYPE_VOID gate, cc:4346 justifiedContain with the storage space endianness, cc:4351 containedBy) and FuncProto::getBiggestContainedOutput (fspec.cc:4495-4506: cc:4500 containedBy + space equality) over five containment geometries, including the contained_by geometry (occ=3, biggest=1000:8) that triggers the cc:1398 branch of tryOutputStackGuard",
-    "func_link_output_stacklock_producer": "MATCH: case=production_entry_guardcalls — the coreaction.cc:1538-1553 leg: a locked non-void output with spacebase storage sets setStackOutputLock(true) and delays the output varnode (stacklock=1, pre_out=0); a register-storage locked output creates the output varnode immediately at the recorded offset (stacklock=0, pre_out=1)",
-    "guardcalls_unaffected_upgrade": "MATCH: the full production entry (heritage.cc:1487-1494) — with the stack-output lock the effect upgrades to unaffected: no INDIRECT op is created, the call output is created caller-perspective (8@0x1010) and the guarded subrange truncated by SUBPIECE c4(0), write-list entry 0x1010:4 with the active-heritage flag",
-    "guardcalls_register_control_indirect": "MATCH: the control geometry — a locked register-storage output (no stack lock) keeps the unknown_effect path of heritage.cc:1511-1519: an INDIRECT op (61) with the free guarded-range varnode as in[0] and the IOP annotation as in[1] inserted before the CALL, write-list entry 0x1010:4 with the active-heritage flag",
-    "production_entry_wiring": "MATCH: guard_calls reaches try_output_stack_guard through the isStackOutputLock gate with the return storage read from the call spec's proto-store output parameter (FuncProto.output_storage via get_output_storage) — the FSPEC-OUTPUT-STORAGE-0001 None fallback is removed; the no-recorded-storage arm remains a Rust-only regression test (conservative false, a state Ghidra cannot reach)",
-    "be_stack_space": "UNTESTED: a big-endian spacebase space cannot be staged in Rugra's transitional AddressSpace enum (Stack is LE, is_big_endian() is a constant false), so the BE routing of cc:1420 is pinned only at helper level (case=cc1420_constant), mirroring the heritage_subpiece_const_1204 convention"
-  }
+  "fspec_rs_sha256": "cf42e209bc7eb1d7de265f49b26b7b5d3bc9fe641021430e15f6416330015599",
+  "coreaction_rs_sha256": "4d51a19672d8f329d5d8f0a83e998080d86f8ac0c211697f99cd9103d5865eff"
+ },
+ "build": {
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "0c4903da86a0c935e9f8a6132a6049d065945a66aaa4a96744122729382af304"
+ },
+ "input_manifest": {
+  "cases": [
+   "stack_output_contains_full",
+   "cc1420_constant",
+   "output_storage_projection",
+   "production_entry_guardcalls"
+  ],
+  "sha256": "b8197806bcb99eaa41965881f042698c0aca280b56b6860fe3245b43b83d0901"
+ },
+ "coverage": {
+  "output_contains_branch": "MATCH: six geometries through the production Heritage::tryOutputStackGuard output-contains branch (heritage.cc:1406-1430) \u2014 op order (CALL then opInsertAfter'd SUBPIECE, cc:1424), inputs/outputs per op, write-list entries with the vnFinal-only active-heritage flag (cc:1426-1429), and the cc:1430 return value true on every geometry including the no-op; the return storage is read from the call spec's recorded proto-store output (cc:1407/cc:1410 getOutput() through get_output_storage), not staged",
+  "cc1420_truncate_constant": "MATCH: the fourth justifiedContain touchpoint retAddr.justifiedContain(retSize, addr, size, false) \u2014 LE start distances 0/2/4 (SUBPIECE in[1] constants c4(0)/c4(2)/c4(4) in the drive projection) and the BE end distances 4/2/0 pinned by case=cc1420_constant",
+  "missing_outvn_creation": "MATCH: cc:1413-1416 \u2014 the call output is created at (caller-perspective retAddr, retSize) only when callOp->getOut() is null; the created varnode is written but not active-heritage when the SUBPIECE overwrites vnFinal",
+  "preexisting_outvn_reuse": "MATCH: cc:1411-1412 \u2014 a pre-existing call output is reused as SUBPIECE in[0] (geom 4) with no second output created",
+  "vnfinal_null_noop": "MATCH: cc:1426 guard \u2014 a pre-existing output with size==retSize (geom 5) creates no ops, leaves the write list empty, and cc:1430 still returns true",
+  "caller_perspective_translation": "MATCH: cc:1407-1410 \u2014 the callee-perspective locked storage 0x1000 is translated by diff = addr - transAddr = 0x10 to the caller perspective 0x1010 (the created output varnode offset and the retc header field)",
+  "output_storage_locked_reads": "MATCH: case=output_storage_projection \u2014 FuncProto::characterizeAsOutput (fspec.cc:4339-4353: TYPE_VOID gate, cc:4346 justifiedContain with the storage space endianness, cc:4351 containedBy) and FuncProto::getBiggestContainedOutput (fspec.cc:4495-4506: cc:4500 containedBy + space equality) over five containment geometries, including the contained_by geometry (occ=3, biggest=1000:8) that triggers the cc:1398 branch of tryOutputStackGuard",
+  "func_link_output_stacklock_producer": "MATCH: case=production_entry_guardcalls \u2014 the coreaction.cc:1538-1553 leg: a locked non-void output with spacebase storage sets setStackOutputLock(true) and delays the output varnode (stacklock=1, pre_out=0); a register-storage locked output creates the output varnode immediately at the recorded offset (stacklock=0, pre_out=1)",
+  "guardcalls_unaffected_upgrade": "MATCH: the full production entry (heritage.cc:1487-1494) \u2014 with the stack-output lock the effect upgrades to unaffected: no INDIRECT op is created, the call output is created caller-perspective (8@0x1010) and the guarded subrange truncated by SUBPIECE c4(0), write-list entry 0x1010:4 with the active-heritage flag",
+  "guardcalls_register_control_indirect": "MATCH: the control geometry \u2014 a locked register-storage output (no stack lock) keeps the unknown_effect path of heritage.cc:1511-1519: an INDIRECT op (61) with the free guarded-range varnode as in[0] and the IOP annotation as in[1] inserted before the CALL, write-list entry 0x1010:4 with the active-heritage flag",
+  "production_entry_wiring": "MATCH: guard_calls reaches try_output_stack_guard through the isStackOutputLock gate with the return storage read from the call spec's proto-store output parameter (FuncProto.output_storage via get_output_storage) \u2014 the FSPEC-OUTPUT-STORAGE-0001 None fallback is removed; the no-recorded-storage arm remains a Rust-only regression test (conservative false, a state Ghidra cannot reach)",
+  "be_stack_space": "UNTESTED: a big-endian spacebase space cannot be staged in Rugra's transitional AddressSpace enum (Stack is LE, is_big_endian() is a constant false), so the BE routing of cc:1420 is pinned only at helper level (case=cc1420_constant), mirroring the heritage_subpiece_const_1204 convention"
+ }
 }

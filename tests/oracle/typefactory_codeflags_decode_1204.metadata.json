@@ -1,128 +1,129 @@
 {
-  "schema_version": 2,
-  "fixture_id": "TYPEFACTORY-CODEFLAGS-DECODE-0001",
-  "todo_ids": [
-    "TYPEFACTORY-CODEFLAGS-DECODE-0001"
+ "schema_version": 2,
+ "fixture_id": "TYPEFACTORY-CODEFLAGS-DECODE-0001",
+ "todo_ids": [
+  "TYPEFACTORY-CODEFLAGS-DECODE-0001"
+ ],
+ "status_note": "decodeTypeWithCodeFlags (type.cc:4193-4212) + the decodeCode stub/compare/define chain (type.cc:4401-4429, 2903-2931) + XmlDecode cursor/exception partial state. 89 records byte-identical on both sides. The locked oracle's kludge entry throws \"Bad size for type \" for every nested pointer->code XML (decodeStub re-reads the attribute-exhausted outer element; empirically verified against the pinned build), so the constructor/destructor flag chain has no reachable public success observation in 12.0.4 \u2014 the flag-indifference records are its full observable set. Overall stays open: live <prototype> decoding is gated on the fspec.rs FuncProto::decode lease.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_source": {
+  "base_commit": "d915255e200006c9a99dceed0b11311410ef63bb",
+  "base_tree": "76b42aa10bbc483630138a1b11cebba4ba8d569f",
+  "base_typefactory_blob": "c7f80d486e3393b4722dc5654a082421046c8c09",
+  "base_datatype_blob": "03980bc2f8b7fabb4af486018c2a68a85f763dc0",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "d4feea9a84ab1f6f22baecb00a478591601975505102d55cb111af3634a97d9f",
+  "rust_fixture_sha256": "6bcf975e77d1f6e3b69208d8a85caf46aebb590a6584f6167887610bb89e1b5a",
+  "typefactory_overlay_sha256": "296b0835a989fe501f46561ce133b2021a970aef666d7e248ee6beb25e5211c4",
+  "datatype_overlay_sha256": "474bf205807ff846f5d09b72ee3db88e58552b214f085d7dcf207c6eb288b70f",
+  "api_typefactory_document_sha256": "09fecbadc3f300e55bed2c6a54aef87b9711f3b2c9b6796123a271b145ffebc9",
+  "api_datatype_document_sha256": "64b9b81a032bc6236b7ccafbd9e6f834f1fac79f8cca35ff0885ad82f42e5cd7",
+  "runner_sha256": "80da874db333c993d6cea3f436cba7b4546437d778d95e35ff4d894ef329817c",
+  "build_mode": "Archive the pinned Rugra base commit/tree, overlay only the two hash-verified live files (src/type_system/typefactory.rs, src/type_system/datatype.rs), build --locked --offline in a temporary target directory, and compile the hash-verified standalone Rust fixture against that isolated library. Other live dirty Rust files are never consumed."
+ },
+ "assets": {
+  "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+  "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+  "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+  "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8efeb34f0de0cde25702",
+  "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+ },
+ "architecture": "x86:LE:64:default:gcc",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec"
+ },
+ "analysis_options": {
+  "apis": [
+   "TypeFactory::decodeTypeWithCodeFlags(Decoder &,bool,bool) (type.cc:4193-4212)",
+   "TypeFactory::decodeCode(Decoder &,bool,bool,bool) (type.cc:4401-4429, private entry type.hh:791)",
+   "TypeCode::decodeStub(Decoder &) (type.cc:2903-2911)",
+   "TypeCode::decodePrototype(Decoder &,bool,bool,TypeFactory &) (type.cc:2918-2931)",
+   "Datatype::decodeBasic(Decoder &) (type.cc:623-683, incl. the 671-672 Bad size throw)",
+   "TypeFactory::findByIdLocal(const string &,uint8) (type.cc:3326-3344)",
+   "TypeFactory::findAdd(Datatype &) (type.cc:3412-3439)",
+   "TypeFactory::setPrototype(const FuncProto *,TypeCode *,uint4) (type.cc:3518-3528)",
+   "TypeCode::compareDependency (type.cc:2860-2886)",
+   "TypeFactory::decodeType / decodeTypeNoRef (type.cc:4155-4184, 4436-4548)",
+   "TypePointer::decode wordsize rewind path (type.cc:1010-1032)",
+   "XmlDecode cursor: openElement/peekElement/getNextAttributeId/rewindAttributes/closeElementSkipping (marshal.cc:126-241)"
   ],
-  "status_note": "decodeTypeWithCodeFlags (type.cc:4193-4212) + the decodeCode stub/compare/define chain (type.cc:4401-4429, 2903-2931) + XmlDecode cursor/exception partial state. 89 records byte-identical on both sides. The locked oracle's kludge entry throws \"Bad size for type \" for every nested pointer->code XML (decodeStub re-reads the attribute-exhausted outer element; empirically verified against the pinned build), so the constructor/destructor flag chain has no reachable public success observation in 12.0.4 — the flag-indifference records are its full observable set. Overall stays open: live <prototype> decoding is gated on the fspec.rs FuncProto::decode lease.",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
-  },
-  "rugra_source": {
-    "base_commit": "d915255e200006c9a99dceed0b11311410ef63bb",
-    "base_tree": "76b42aa10bbc483630138a1b11cebba4ba8d569f",
-    "base_typefactory_blob": "c7f80d486e3393b4722dc5654a082421046c8c09",
-    "base_datatype_blob": "03980bc2f8b7fabb4af486018c2a68a85f763dc0",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
-  },
-  "comparand": {
-    "cpp_fixture_sha256": "d4feea9a84ab1f6f22baecb00a478591601975505102d55cb111af3634a97d9f",
-    "rust_fixture_sha256": "6bcf975e77d1f6e3b69208d8a85caf46aebb590a6584f6167887610bb89e1b5a",
-    "typefactory_overlay_sha256": "296b0835a989fe501f46561ce133b2021a970aef666d7e248ee6beb25e5211c4",
-    "datatype_overlay_sha256": "474bf205807ff846f5d09b72ee3db88e58552b214f085d7dcf207c6eb288b70f",
-    "api_typefactory_document_sha256": "09fecbadc3f300e55bed2c6a54aef87b9711f3b2c9b6796123a271b145ffebc9",
-    "api_datatype_document_sha256": "64b9b81a032bc6236b7ccafbd9e6f834f1fac79f8cca35ff0885ad82f42e5cd7",
-    "runner_sha256": "80da874db333c993d6cea3f436cba7b4546437d778d95e35ff4d894ef329817c",
-    "build_mode": "Archive the pinned Rugra base commit/tree, overlay only the two hash-verified live files (src/type_system/typefactory.rs, src/type_system/datatype.rs), build --locked --offline in a temporary target directory, and compile the hash-verified standalone Rust fixture against that isolated library. Other live dirty Rust files are never consumed."
-  },
-  "assets": {
-    "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-    "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-    "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-    "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-    "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8efeb34f0de0cde25702",
-    "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-  },
-  "architecture": "x86:LE:64:default:gcc",
-  "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec"
-  },
-  "analysis_options": {
-    "apis": [
-      "TypeFactory::decodeTypeWithCodeFlags(Decoder &,bool,bool) (type.cc:4193-4212)",
-      "TypeFactory::decodeCode(Decoder &,bool,bool,bool) (type.cc:4401-4429, private entry type.hh:791)",
-      "TypeCode::decodeStub(Decoder &) (type.cc:2903-2911)",
-      "TypeCode::decodePrototype(Decoder &,bool,bool,TypeFactory &) (type.cc:2918-2931)",
-      "Datatype::decodeBasic(Decoder &) (type.cc:623-683, incl. the 671-672 Bad size throw)",
-      "TypeFactory::findByIdLocal(const string &,uint8) (type.cc:3326-3344)",
-      "TypeFactory::findAdd(Datatype &) (type.cc:3412-3439)",
-      "TypeFactory::setPrototype(const FuncProto *,TypeCode *,uint4) (type.cc:3518-3528)",
-      "TypeCode::compareDependency (type.cc:2860-2886)",
-      "TypeFactory::decodeType / decodeTypeNoRef (type.cc:4155-4184, 4436-4548)",
-      "TypePointer::decode wordsize rewind path (type.cc:1010-1032)",
-      "XmlDecode cursor: openElement/peekElement/getNextAttributeId/rewindAttributes/closeElementSkipping (marshal.cc:126-241)"
-    ],
-    "factory_state": "Ghidra side: locked BfdArchitecture over the pinned examples/curl (production TypeFactory, alignment map, core types; fixture-owned cf_*/clash_t/vp names). Rust side: TypeFactory::new(8) plus the production <size_alignment_map> decode (1/1,2/2,4/4,8/8,16/16) mirroring decodeDataOrganization; every compared name is fixture-owned so core inventories never collide (the oracle's core \"code\" entry has a hashName id that cannot collide with the anonymous id-0 probe).",
-    "ordering": "Wave order fixed: 8 decodeTypeWithCodeFlags probes (a_plain/a_varargs/a_model/a_thiscall/b_code/b_unspec/c_nosize_named/c_nosize_anon), then decodeType waves (d_named, d_dedup, d_redefine + survivor, d_clash int/code + survivor, d_varlength + dedup, d_unnamed + dedup), then the pointer->code chain (w3.chain, w3.ptr, w3.ptr_ws).",
-    "normalization": "None. Verbatim single-line LowlevelError texts (including the trailing space of \"Bad size for type \"), unsigned decimal ids, locked numeric metatypes, boolean flags, and pointer/Arc identity are emitted in fixed order and compared byte-for-byte. The Rust wave-1 resume observation compares the sibling element by NAME because the Rust decoder registry and the type-system ElementId table assign ids independently; the C++ side uses the throwing openElement(ELEM_VOID) — same observable, no behavioral normalization.",
-    "random_seed": "none; decode walks and name hashing are deterministic",
-    "error_injection": "nested pointer->code XML under four flag combinations (constructor/destructor arguments crossed with dotdotdot/model/__thiscall attributes), non-ptr metatype, unspecified metatype, missing size (named and anonymous), same-name-different-size redecode, non-code occupant of a name"
-  },
-  "decisive_semantics": {
-    "reference_output_parameters": "decodeTypeWithCodeFlags' decoder cursor is mutated across the throw (element stays open, attributes consumed, children unread) — observed via peek + close + sibling open on the SAME decoder (marshal.cc:126-241: getNextAttributeId never restarts without rewindAttributes, closeElementSkipping pops without a child check); TypeCode::decodePrototype's factory&/voidtype feed the (unreached) proto construction; setPrototype(fp,newCode,flags) mutates the container entry in place (Rust replaces both Arc channels — factory-mediated view equivalent, stale external handles are the registered immutable-Arc residual).",
-    "loop_bounds_traversal_order": "decodeBasic's attribute for(;;) runs the index to exhaustion before any caller loop re-reads (type.cc:629-670); the WORDSIZE loop at type.cc:4201-4207 follows WITHOUT rewindAttributes, so with XmlDecode/TreeDecoder it reads nothing — wordsize stays the TypePointer ctor default 1; decodeCode's decodeStub then re-enumerates the same exhausted element and hits the size<0 throw at type.cc:671; the struct/union/code arms of resolveIncompleteTypedefs walk the incompleteTypedef list front-to-back with erase-advance (type.cc:3780-3808).",
-    "counter_accumulator_lifecycle": "no counters in this family; the only accumulating state is the incompleteTypedef list (appended by getTypedef type.cc:3837-3838 only when the clone is type_incomplete, drained by resolveIncompleteTypedefs on referenced-type completion).",
-    "sorting_comparison_keys": "findAdd's named path keys on (name,id) with compareDependency equality (submeta then size, type.cc:227-234; differing definitions raise); the unnamed path probes the ordered tree by DatatypeCompare (submeta asc, size desc, id asc, type.hh:306-310) so the anonymous id-0 code stub dedups structurally; TypeCode::compareDependency then compareBasic (proto presence, model name, param count, getComparableFlags = dotdotdot|is_constructor|is_destructor|has_thisptr, fspec.hh:1618)."
-  },
-  "input_manifest": {
-    "binary": "examples/curl @ d915255 (sha256 8af50bca…)",
-    "cases": [
-      "w1.a_plain <type ptr 8><type code 1/></type> ctor=1 dtor=0",
-      "w1.a_varargs nested prototype model=__stdcall dotdotdot=true + returnsym, ctor=0 dtor=1",
-      "w1.a_model nested prototype model=unknown_cc constructor=true destructor=true (no returnsym), ctor=1 dtor=1",
-      "w1.a_thiscall outer wordsize=1 attr, nested prototype model=__thiscall + returnsym, ctor=0 dtor=0",
-      "w1.b_code <type metatype=code size=1/>",
-      "w1.b_unspec <type size=4/> (metatype absent -> TYPE_VOID)",
-      "w1.c_nosize_named <type metatype=ptr name=vp/>",
-      "w1.c_nosize_anon <type metatype=ptr/>",
-      "w2.d_named/d_dedup <type code cf_one 1/> twice",
-      "w2.d_redefine <type code cf_one 2/> after the size-1 completion",
-      "w2.d_clash int4 clash_t then code clash_t",
-      "w2.d_varlength <type code cf_v 1 varlength=true/> twice",
-      "w2.d_unnamed <type code 1/> (anonymous, id 0) twice",
-      "w3 chain: <type code cf_chain 1/>, then <type ptr 8> and <type ptr 8 wordsize=4> wrappers"
-    ]
-  },
-  "observation_schema": {
-    "format": "89 newline-terminated key=value records in fixed order",
-    "error_records": "w1: thrown flag + verbatim text + peek (unread-children presence) + resume_void (sibling readable after the cursor repair); w2: thrown flag + verbatim text for the redefine/clash paths with surviving-definition records",
-    "type_record": "exact name, unsigned decimal id, byte size, locked numeric metatype, incomplete/varlength flags, proto presence",
-    "identity": "Ghidra pointer equality and Rust Arc::ptr_eq for the re-decode dedups (named, varlength, anonymous) and the pointer->code pointee"
-  },
-  "coverage": {
-    "nested_pointer_code_bad_size_all_flag_combinations": "MATCH: a_plain/a_varargs/a_model/a_thiscall all throw \"Bad size for type \" (empty name) with identical cursor partial state — decodeStub's decodeBasic re-read of the attribute-exhausted outer element; the constructor/destructor arguments and every <prototype> flag attribute are never consulted (type.cc:4193-4212 + 2903-2911 + 623-683)",
-    "dead_wordsize_loop": "MATCH: the outer wordsize=\"1\" attribute in a_thiscall and the identical a_plain outcome prove the WORDSIZE loop (type.cc:4201-4207, no rewindAttributes) reads nothing under XmlDecode/TreeDecode exhaustion; wordsize stays the ctor default",
-    "non_pointer_metatype_error": "MATCH: metatype=\"code\" and the metatype-absent form both raise \"Special type decode does not see pointer\" before any child is read (peek=0)",
-    "first_decode_basic_bad_size": "MATCH: missing size raises \"Bad size for type vp\" (named) and \"Bad size for type \" (anonymous) from the first decodeBasic (type.cc:671-672)",
-    "cursor_partial_state_after_throw": "MATCH: every error leaves the element open with unread children observable (peek), the close succeeds, and the <void/> sibling behind it reads — the CPoolRecord::decode caller's recovery view (marshal.cc:126-241)",
-    "code_stub_completion_without_prototype": "MATCH: prototype-less decodeCode creates the findAdd stub and completes it in place through the setPrototype wrapper — type_incomplete cleared even for a null prototype, variable_length absent (type.cc:3518-3528, 4401-4429)",
-    "redecode_dedup_identity": "MATCH: named (cf_one), varlength-folded (cf_v, hashSize id), and anonymous (id-0 structural probe) re-decodes all return the identical container object (type.cc:3412-3439)",
-    "redefinition_compare_dependency": "MATCH: same name+id different size on the completed entry raises \"Redefinition of code data-type: cf_one\" and the size-1 definition survives (type.cc:4419-4421, 2860-2886)",
-    "find_by_id_local_metatype_check": "MATCH: the named int4 occupant makes the code decode raise \"Trying to redefine type: clash_t\" with the int surviving intact (type.cc:4412-4417)",
-    "pointer_to_code_chain": "MATCH: the pointer wrapper decode keeps size 8/metatype ptr, honors the wordsize attribute through the rewind path (type.cc:1015-1025), and the pointee is the canonical factory code object",
-    "prototype_child_decode": "MISSING: FuncProto::decode (fspec.cc:4675-4839) is not ported (fspec.rs lease); a present <prototype> child errors in Rugra after being consumed while Ghidra builds the prototype — excluded from the byte-compared records; live ctor/dtor/has_thisptr observation is gated on the same port (TYPEFACTORY-CODEFLAGS-DECODE-0001 residual)",
-    "calc_truncate_field": "UNTESTED: TypePointer.truncate is the TYPE-0001 structural residual; unreachable through decodeTypeWithCodeFlags on the locked oracle anyway (the decodeCode call throws first)",
-    "resolve_incomplete_typedefs_drain": "UNTESTED: the list population (getTypedef) and the code/struct/union drain arms are ported but not exercised — needs an incomplete code typedef decode, itself gated on the <prototype> port",
-    "external_stale_handle_completion_flag": "MISMATCH: registered immutable-Arc residual TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001; only factory-mediated observations are compared"
-  },
-  "residual_todo_ids": [
-    "TYPEFACTORY-CODEFLAGS-DECODE-0001",
-    "TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001",
-    "FUNCPROTO-MODEL-BIND-0001",
-    "TYPE-0001"
-  ],
-  "expected_stdout_sha256": "c9f23b75f7a3085067d1a27e5575e685a3a0a4aa31608e74fdbb58ab24c546cd",
-  "expected_exit_code": 0,
-  "projection_status": "MATCH"
+  "factory_state": "Ghidra side: locked BfdArchitecture over the pinned examples/curl (production TypeFactory, alignment map, core types; fixture-owned cf_*/clash_t/vp names). Rust side: TypeFactory::new(8) plus the production <size_alignment_map> decode (1/1,2/2,4/4,8/8,16/16) mirroring decodeDataOrganization; every compared name is fixture-owned so core inventories never collide (the oracle's core \"code\" entry has a hashName id that cannot collide with the anonymous id-0 probe).",
+  "ordering": "Wave order fixed: 8 decodeTypeWithCodeFlags probes (a_plain/a_varargs/a_model/a_thiscall/b_code/b_unspec/c_nosize_named/c_nosize_anon), then decodeType waves (d_named, d_dedup, d_redefine + survivor, d_clash int/code + survivor, d_varlength + dedup, d_unnamed + dedup), then the pointer->code chain (w3.chain, w3.ptr, w3.ptr_ws).",
+  "normalization": "None. Verbatim single-line LowlevelError texts (including the trailing space of \"Bad size for type \"), unsigned decimal ids, locked numeric metatypes, boolean flags, and pointer/Arc identity are emitted in fixed order and compared byte-for-byte. The Rust wave-1 resume observation compares the sibling element by NAME because the Rust decoder registry and the type-system ElementId table assign ids independently; the C++ side uses the throwing openElement(ELEM_VOID) \u2014 same observable, no behavioral normalization.",
+  "random_seed": "none; decode walks and name hashing are deterministic",
+  "error_injection": "nested pointer->code XML under four flag combinations (constructor/destructor arguments crossed with dotdotdot/model/__thiscall attributes), non-ptr metatype, unspecified metatype, missing size (named and anonymous), same-name-different-size redecode, non-code occupant of a name"
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "decodeTypeWithCodeFlags' decoder cursor is mutated across the throw (element stays open, attributes consumed, children unread) \u2014 observed via peek + close + sibling open on the SAME decoder (marshal.cc:126-241: getNextAttributeId never restarts without rewindAttributes, closeElementSkipping pops without a child check); TypeCode::decodePrototype's factory&/voidtype feed the (unreached) proto construction; setPrototype(fp,newCode,flags) mutates the container entry in place (Rust replaces both Arc channels \u2014 factory-mediated view equivalent, stale external handles are the registered immutable-Arc residual).",
+  "loop_bounds_traversal_order": "decodeBasic's attribute for(;;) runs the index to exhaustion before any caller loop re-reads (type.cc:629-670); the WORDSIZE loop at type.cc:4201-4207 follows WITHOUT rewindAttributes, so with XmlDecode/TreeDecoder it reads nothing \u2014 wordsize stays the TypePointer ctor default 1; decodeCode's decodeStub then re-enumerates the same exhausted element and hits the size<0 throw at type.cc:671; the struct/union/code arms of resolveIncompleteTypedefs walk the incompleteTypedef list front-to-back with erase-advance (type.cc:3780-3808).",
+  "counter_accumulator_lifecycle": "no counters in this family; the only accumulating state is the incompleteTypedef list (appended by getTypedef type.cc:3837-3838 only when the clone is type_incomplete, drained by resolveIncompleteTypedefs on referenced-type completion).",
+  "sorting_comparison_keys": "findAdd's named path keys on (name,id) with compareDependency equality (submeta then size, type.cc:227-234; differing definitions raise); the unnamed path probes the ordered tree by DatatypeCompare (submeta asc, size desc, id asc, type.hh:306-310) so the anonymous id-0 code stub dedups structurally; TypeCode::compareDependency then compareBasic (proto presence, model name, param count, getComparableFlags = dotdotdot|is_constructor|is_destructor|has_thisptr, fspec.hh:1618)."
+ },
+ "input_manifest": {
+  "binary": "examples/curl @ d915255 (sha256 8af50bca\u2026)",
+  "cases": [
+   "w1.a_plain <type ptr 8><type code 1/></type> ctor=1 dtor=0",
+   "w1.a_varargs nested prototype model=__stdcall dotdotdot=true + returnsym, ctor=0 dtor=1",
+   "w1.a_model nested prototype model=unknown_cc constructor=true destructor=true (no returnsym), ctor=1 dtor=1",
+   "w1.a_thiscall outer wordsize=1 attr, nested prototype model=__thiscall + returnsym, ctor=0 dtor=0",
+   "w1.b_code <type metatype=code size=1/>",
+   "w1.b_unspec <type size=4/> (metatype absent -> TYPE_VOID)",
+   "w1.c_nosize_named <type metatype=ptr name=vp/>",
+   "w1.c_nosize_anon <type metatype=ptr/>",
+   "w2.d_named/d_dedup <type code cf_one 1/> twice",
+   "w2.d_redefine <type code cf_one 2/> after the size-1 completion",
+   "w2.d_clash int4 clash_t then code clash_t",
+   "w2.d_varlength <type code cf_v 1 varlength=true/> twice",
+   "w2.d_unnamed <type code 1/> (anonymous, id 0) twice",
+   "w3 chain: <type code cf_chain 1/>, then <type ptr 8> and <type ptr 8 wordsize=4> wrappers"
+  ]
+ },
+ "observation_schema": {
+  "format": "89 newline-terminated key=value records in fixed order",
+  "error_records": "w1: thrown flag + verbatim text + peek (unread-children presence) + resume_void (sibling readable after the cursor repair); w2: thrown flag + verbatim text for the redefine/clash paths with surviving-definition records",
+  "type_record": "exact name, unsigned decimal id, byte size, locked numeric metatype, incomplete/varlength flags, proto presence",
+  "identity": "Ghidra pointer equality and Rust Arc::ptr_eq for the re-decode dedups (named, varlength, anonymous) and the pointer->code pointee"
+ },
+ "coverage": {
+  "nested_pointer_code_bad_size_all_flag_combinations": "MATCH: a_plain/a_varargs/a_model/a_thiscall all throw \"Bad size for type \" (empty name) with identical cursor partial state \u2014 decodeStub's decodeBasic re-read of the attribute-exhausted outer element; the constructor/destructor arguments and every <prototype> flag attribute are never consulted (type.cc:4193-4212 + 2903-2911 + 623-683)",
+  "dead_wordsize_loop": "MATCH: the outer wordsize=\"1\" attribute in a_thiscall and the identical a_plain outcome prove the WORDSIZE loop (type.cc:4201-4207, no rewindAttributes) reads nothing under XmlDecode/TreeDecode exhaustion; wordsize stays the ctor default",
+  "non_pointer_metatype_error": "MATCH: metatype=\"code\" and the metatype-absent form both raise \"Special type decode does not see pointer\" before any child is read (peek=0)",
+  "first_decode_basic_bad_size": "MATCH: missing size raises \"Bad size for type vp\" (named) and \"Bad size for type \" (anonymous) from the first decodeBasic (type.cc:671-672)",
+  "cursor_partial_state_after_throw": "MATCH: every error leaves the element open with unread children observable (peek), the close succeeds, and the <void/> sibling behind it reads \u2014 the CPoolRecord::decode caller's recovery view (marshal.cc:126-241)",
+  "code_stub_completion_without_prototype": "MATCH: prototype-less decodeCode creates the findAdd stub and completes it in place through the setPrototype wrapper \u2014 type_incomplete cleared even for a null prototype, variable_length absent (type.cc:3518-3528, 4401-4429)",
+  "redecode_dedup_identity": "MATCH: named (cf_one), varlength-folded (cf_v, hashSize id), and anonymous (id-0 structural probe) re-decodes all return the identical container object (type.cc:3412-3439)",
+  "redefinition_compare_dependency": "MATCH: same name+id different size on the completed entry raises \"Redefinition of code data-type: cf_one\" and the size-1 definition survives (type.cc:4419-4421, 2860-2886)",
+  "find_by_id_local_metatype_check": "MATCH: the named int4 occupant makes the code decode raise \"Trying to redefine type: clash_t\" with the int surviving intact (type.cc:4412-4417)",
+  "pointer_to_code_chain": "MATCH: the pointer wrapper decode keeps size 8/metatype ptr, honors the wordsize attribute through the rewind path (type.cc:1015-1025), and the pointee is the canonical factory code object",
+  "prototype_child_decode": "MISSING: FuncProto::decode (fspec.cc:4675-4839) is not ported (fspec.rs lease); a present <prototype> child errors in Rugra after being consumed while Ghidra builds the prototype \u2014 excluded from the byte-compared records; live ctor/dtor/has_thisptr observation is gated on the same port (TYPEFACTORY-CODEFLAGS-DECODE-0001 residual)",
+  "calc_truncate_field": "UNTESTED: TypePointer.truncate is the TYPE-0001 structural residual; unreachable through decodeTypeWithCodeFlags on the locked oracle anyway (the decodeCode call throws first)",
+  "resolve_incomplete_typedefs_drain": "UNTESTED: the list population (getTypedef) and the code/struct/union drain arms are ported but not exercised \u2014 needs an incomplete code typedef decode, itself gated on the <prototype> port",
+  "external_stale_handle_completion_flag": "MISMATCH: registered immutable-Arc residual TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001; only factory-mediated observations are compared"
+ },
+ "residual_todo_ids": [
+  "TYPEFACTORY-CODEFLAGS-DECODE-0001",
+  "TYPEFACTORY-CORE-PROMOTION-IDENTITY-0001",
+  "FUNCPROTO-MODEL-BIND-0001",
+  "TYPE-0001"
+ ],
+ "expected_stdout_sha256": "c9f23b75f7a3085067d1a27e5575e685a3a0a4aa31608e74fdbb58ab24c546cd",
+ "expected_exit_code": 0,
+ "projection_status": "MATCH",
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

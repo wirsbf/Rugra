@@ -1,127 +1,127 @@
 {
-  "schema_version": 1,
-  "fixture_id": "CSPEC-TYPEORG-STATE-0001",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ "schema_version": 1,
+ "fixture_id": "CSPEC-TYPEORG-STATE-0001",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "x86:LE:64:default (SLEIGH x86-64)",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec",
+  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "ingestion": "Ghidra decodes through its production DocumentStorage/XML parser inside BfdArchitecture::init. Rugra's fixture parses the locked text into the structured Element DOM (fixture-local, same model as cspec_param_model_1204.rs) and drives the production TreeDecoder through the mapped decode functions; production cspec text ingestion remains CSPEC-TEXT-INGEST-0001's MISMATCH."
+ },
+ "analysis_options": {
+  "apis": [
+   "TypeFactory::decodeDataOrganization(Decoder &)",
+   "TypeFactory::decodeAlignmentMap(Decoder &)",
+   "TypeFactory::setDefaultAlignmentMap(void)",
+   "TypeFactory::setupSizes(void)",
+   "TypeFactory::getAlignment(uint4) const",
+   "TypeFactory::getPrimitiveAlignSize(uint4) const",
+   "TypeFactory::getSizeOfInt/Long/Char/WChar/Pointer/AltPointer (type.hh:813-818)",
+   "Architecture::parseCompilerConfig dispatch of <data_organization> (architecture.cc:1268)"
+  ],
+  "document_selection": "The complete locked x86-64-gcc.cspec is ingested on the C++ side; observations select the <data_organization> subtree (real production bytes including skipped machine_alignment/default_alignment/default_pointer_alignment/short_size/long_long_size/float_size/double_size/long_double_size children) plus seven synthetic <data_organization> documents.",
+  "arch_inputs": "C++ observes setupSizes' Architecture lookups live (default size 8, stack spacebase size 8 via RSP, default data space ram address size 8, no far-pointer segment op) and serializes them. Rust receives the same values as locked-spec constants in the fixture; live Architecture input derivation is not wired on the Rust side.",
+  "setup_model": "The C++ 'production' group is the real chain (init -> parseCompilerConfig -> decodeDataOrganization -> setupSizes). The Rust 'production' group emulates it as decode_data_organization(production element) + setup_sizes(locked arch inputs); the byte diff pins both to the same factory state.",
+  "normalization": "No ids, orders, values, or exception texts are normalized. The alignment map is observed through getAlignment probes (sizes 0..17 production/raw, per-case ranges) because alignMap is private; the empty-map LowlevelError text is compared verbatim."
+ },
+ "assets": {
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "git_blob": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
   },
-  "architecture": "x86:LE:64:default (SLEIGH x86-64)",
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "git_blob": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
+  },
   "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec",
-    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-    "ingestion": "Ghidra decodes through its production DocumentStorage/XML parser inside BfdArchitecture::init. Rugra's fixture parses the locked text into the structured Element DOM (fixture-local, same model as cspec_param_model_1204.rs) and drives the production TreeDecoder through the mapped decode functions; production cspec text ingestion remains CSPEC-TEXT-INGEST-0001's MISMATCH."
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "git_blob": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
   },
-  "analysis_options": {
-    "apis": [
-      "TypeFactory::decodeDataOrganization(Decoder &)",
-      "TypeFactory::decodeAlignmentMap(Decoder &)",
-      "TypeFactory::setDefaultAlignmentMap(void)",
-      "TypeFactory::setupSizes(void)",
-      "TypeFactory::getAlignment(uint4) const",
-      "TypeFactory::getPrimitiveAlignSize(uint4) const",
-      "TypeFactory::getSizeOfInt/Long/Char/WChar/Pointer/AltPointer (type.hh:813-818)",
-      "Architecture::parseCompilerConfig dispatch of <data_organization> (architecture.cc:1268)"
-    ],
-    "document_selection": "The complete locked x86-64-gcc.cspec is ingested on the C++ side; observations select the <data_organization> subtree (real production bytes including skipped machine_alignment/default_alignment/default_pointer_alignment/short_size/long_long_size/float_size/double_size/long_double_size children) plus seven synthetic <data_organization> documents.",
-    "arch_inputs": "C++ observes setupSizes' Architecture lookups live (default size 8, stack spacebase size 8 via RSP, default data space ram address size 8, no far-pointer segment op) and serializes them. Rust receives the same values as locked-spec constants in the fixture; live Architecture input derivation is not wired on the Rust side.",
-    "setup_model": "The C++ 'production' group is the real chain (init -> parseCompilerConfig -> decodeDataOrganization -> setupSizes). The Rust 'production' group emulates it as decode_data_organization(production element) + setup_sizes(locked arch inputs); the byte diff pins both to the same factory state.",
-    "normalization": "No ids, orders, values, or exception texts are normalized. The alignment map is observed through getAlignment probes (sizes 0..17 production/raw, per-case ranges) because alignMap is private; the empty-map LowlevelError text is compared verbatim."
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "git_blob": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
-  "assets": {
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "git_blob": "e39b57baeb410b529c5b1397c06526b4d32cca94",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-      "size": 5390
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "git_blob": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-      "size": 11721
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "git_blob": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-      "size": 12182
-    },
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "git_blob": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "binary": {
-      "path": "examples/curl",
-      "git_blob": "76d9343ea3add321aa4134856323663b36365807",
-      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-      "size": 161728
-    }
+  "binary": {
+   "path": "examples/curl",
+   "git_blob": "76d9343ea3add321aa4134856323663b36365807",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "size": 161728
+  }
+ },
+ "external_inputs": {
+  "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+  "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+ },
+ "input_manifest": {
+  "cases": {
+   "production": "Full BfdArchitecture::init chain on the locked spec set and curl binary; the architecture factory's six sizes plus getAlignment probes 0..17 and getPrimitiveAlignSize probes 1..17 after parseCompilerConfig + setupSizes.",
+   "raw_decode": "Standalone TypeFactory decoding the production <data_organization> element pre-setupSizes: char stays 0 (no defaulting at decode), align[0] stays -1.",
+   "c1_sparse_map": "Synthetic map with entries at sizes 3 and 7 only: forward fill from nearest earlier explicit value, indices 0..2 keep -1/1/1.",
+   "c2_empty_map": "Empty <size_alignment_map>: oracle LowlevelError text from getAlignment, then setupSizes installs setDefaultAlignmentMap (align[0] == 0).",
+   "c3_zero_entry": "Explicit <entry size=\"0\">: align[0] becomes observable (1) and getPrimitiveAlignSize(0) is a safe probe returning 0.",
+   "c4_duplicate_zero_align": "Out-of-order entries with a later duplicate size=8 winning and an explicit alignment=0 kept; no primitive probes (align 0 divides by zero in the oracle).",
+   "c5_char_only_setup": "Only <char_size value=\"3\"> decoded; setupSizes derives int 4 (stack 8 clamped), long 8, wchar 2, pointer 8, default map.",
+   "c6_unknown_children_setup": "machine_alignment/default_alignment/short_size/float_size/double_size skipped around one consumed integer_size=2; int != 4 makes sizeOfLong copy 2 instead of 8.",
+   "c7_negative_setup": "integer_size=-2 survives decode as int4 and flows through sizeOfLong = (int==4) ? 8 : int.",
+   "c8_sam_followed_by_child": "Synthetic document with <size_alignment_map> followed by <char_size value=\"3\">: children after the map are still consumed (oracle sam branch falls through to closeElement, type.cc:4604-4612); char reads 3 and align probes [-1,1] on both sides. Added in the review rework: a stray continue used to leave Rugra's TreeDecoder on the map element and silently drop the trailing child."
   },
-  "external_inputs": {
-    "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-    "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-  },
-  "input_manifest": {
-    "cases": {
-      "production": "Full BfdArchitecture::init chain on the locked spec set and curl binary; the architecture factory's six sizes plus getAlignment probes 0..17 and getPrimitiveAlignSize probes 1..17 after parseCompilerConfig + setupSizes.",
-      "raw_decode": "Standalone TypeFactory decoding the production <data_organization> element pre-setupSizes: char stays 0 (no defaulting at decode), align[0] stays -1.",
-      "c1_sparse_map": "Synthetic map with entries at sizes 3 and 7 only: forward fill from nearest earlier explicit value, indices 0..2 keep -1/1/1.",
-      "c2_empty_map": "Empty <size_alignment_map>: oracle LowlevelError text from getAlignment, then setupSizes installs setDefaultAlignmentMap (align[0] == 0).",
-      "c3_zero_entry": "Explicit <entry size=\"0\">: align[0] becomes observable (1) and getPrimitiveAlignSize(0) is a safe probe returning 0.",
-      "c4_duplicate_zero_align": "Out-of-order entries with a later duplicate size=8 winning and an explicit alignment=0 kept; no primitive probes (align 0 divides by zero in the oracle).",
-      "c5_char_only_setup": "Only <char_size value=\"3\"> decoded; setupSizes derives int 4 (stack 8 clamped), long 8, wchar 2, pointer 8, default map.",
-      "c6_unknown_children_setup": "machine_alignment/default_alignment/short_size/float_size/double_size skipped around one consumed integer_size=2; int != 4 makes sizeOfLong copy 2 instead of 8.",
-      "c7_negative_setup": "integer_size=-2 survives decode as int4 and flows through sizeOfLong = (int==4) ? 8 : int.",
-      "c8_sam_followed_by_child": "Synthetic document with <size_alignment_map> followed by <char_size value=\"3\">: children after the map are still consumed (oracle sam branch falls through to closeElement, type.cc:4604-4612); char reads 3 and align probes [-1,1] on both sides. Added in the review rework: a stray continue used to leave Rugra's TreeDecoder on the map element and silently drop the trailing child."
-    },
-    "sha256": "21572366d57dd31edd887a298288833a474d9e65cef69d9358cb14d42a032e72"
-  },
-  "observation_schema": {
-    "format": "One compact UTF-8 JSON object with fixed key and array order plus final newline.",
-    "sizes": "The six persisted size fields (int/long/char/wchar/pointer/alt_pointer) via the getSizeOf* getters.",
-    "align": "getAlignment probes reconstructing the private alignMap slot by slot, including the >= size fallback to the last entry and the -1 sentinel at index 0.",
-    "primitive": "getPrimitiveAlignSize probes (sizeof-style padding), including size 17 padding to 32 under a 16-byte alignment.",
-    "errors": "Verbatim oracle LowlevelError text for the uninitialized alignment map."
-  },
-  "comparand": {
-    "rugra_base_commit": "9dadb2a32b02216a25e5af4483782d8f5f7d3027",
-    "rugra_base_tree": "7c7518f8adddb10d1075d4d2942fb9b4d7e0becc",
-    "locked_libdecomp_a_sha256": "b9f4fd84a8dab0101e746a08be81ddcb990585765addbaab7d4ab35acaa0ea5a",
-    "runner_sha256": "d3861954655eb410ad045c1780bef8325e79e87415bc44bd0e42150dfb8502d1",
-    "cpp_fixture_sha256": "f500bcf61699ae11f916581afb39302450bb36533e271213ec65656a3a8324b3",
-    "rust_fixture_sha256": "c17f1252d7ed1e1c2ab99c09b310ba7d8a203716c4e69f52bc2e5d32128b48a4",
-    "typefactory_rs_sha256": "9c04b919088231ef2acdaf85c72c8c2d4ae542cc1565a669f11e56ff59bc1cd5",
-    "typefactory_doc_sha256": "36e8414fe5bb8198dd9d4cc6f6a1acb31877bca1ba62bb58cb2439531261c2cb",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
-  },
-  "expected_stdout_sha256": "6158e6ab2d450f61c3a478c3ec9ec65238c0fb760fb38b97571d544d817f0675",
-  "expected_exit_code": 0,
-  "coverage": {
-    "production_cspec_data_organization_state": "MATCH: six sizes plus 18 alignment and 17 primitive probes of the real init chain, byte-identical.",
-    "raw_decode_pre_setup_state": "MATCH: decode stores parsed values only; absent char_size leaves char 0; align[0] is -1.",
-    "sparse_forward_fill_and_index0_minus1": "MATCH: fill starts at index 1 with curAlign 1; index 0 keeps -1.",
-    "empty_map_error_and_default_install": "MATCH: verbatim 'TypeFactory alignment map not initialized', empty map stays empty through decode, setupSizes installs [0,1,2,2,4,4,4,4,8].",
-    "explicit_zero_entry_and_primitive_zero": "MATCH: explicit size-0 entry sets align[0]=1; getPrimitiveAlignSize(0) returns 0.",
-    "duplicate_entry_and_zero_alignment": "MATCH: later duplicate size entry wins; explicit alignment=0 preserved by the fill pass.",
-    "unknown_children_skip": "MATCH: machine_alignment/default_alignment/short_size/float_size/double_size children consumed-and-skipped without touching state.",
-    "post_sam_child_consumption": "MATCH: children following <size_alignment_map> are consumed after the unified close (c8: char_size after sam reads 3; align [-1,1]). Fixed in review rework — the sam branch previously skipped close_element, leaving the decoder stack on the map and dropping trailing children (Ghidra reads 3, old Rugra read 0).",
-    "setup_sizes_derivation": "MATCH: int from stack spacebase clamped to 4, long via the (int==4)?8:int branch, char 1, wchar 2, pointer from default data space address size, default map install.",
-    "negative_signed_sizes": "MATCH: readSignedInteger values survive as int4 (-2) through decode and setup.",
-    "primitive_align_size_padding": "MATCH: unsigned 32-bit modulo semantics of size % align reproduced (17 pads to 32).",
-    "enum_config_state": "UNTESTED: enumsize/enumtype are private with no oracle getters; parseEnumConfig state exists on both sides but is not serializable from the locked C++ class.",
-    "architecture_input_derivation": "UNTESTED: Rust setup_sizes receives locked-spec constants; the live glb->getStackSpace/getDefaultDataSpace/getSegmentOp lookups have no Rugra Architecture wiring yet.",
-    "illformed_non_entry_child_in_map": "MISMATCH (conservative): on a non-<entry> child Ghidra breaks leaving the element open; only debug-assert builds (CPUI_DEBUG) diagnose the mis-nested parent close, and release-build stream positions are not proven divergent from Rugra's close-and-skip. No equivalence proof exists for either build mode, the path is unreachable via well-formed compiler specs, and it is not exercised by this fixture.",
-    "get_primitive_align_size_zero_alignment": "UNTESTED: alignment 0 is a division by zero (SIGFPE in the oracle, panic in Rust); abnormal termination on both sides, not serializable.",
-    "production_rugra_cspec_text_ingestion": "MISMATCH: the Rust fixture builds the Element DOM locally; production XML text ingest into parse_compiler_config is CSPEC-TEXT-INGEST-0001's residual."
-  },
-  "overall_status": "MATCH: every declared observation (production state, raw decode state, all seven synthetic cases, error text, and all probe arrays) is byte-identical to locked Ghidra 12.0.4 output. Residuals: enum state unobservable in the oracle, live architecture-input derivation unwired on Rust, ill-formed non-entry map children diverge (unreachable via well-formed specs), zero-alignment primitive queries abort on both sides, and production text ingestion remains the text-ingest domain's MISMATCH."
+  "sha256": "21572366d57dd31edd887a298288833a474d9e65cef69d9358cb14d42a032e72"
+ },
+ "observation_schema": {
+  "format": "One compact UTF-8 JSON object with fixed key and array order plus final newline.",
+  "sizes": "The six persisted size fields (int/long/char/wchar/pointer/alt_pointer) via the getSizeOf* getters.",
+  "align": "getAlignment probes reconstructing the private alignMap slot by slot, including the >= size fallback to the last entry and the -1 sentinel at index 0.",
+  "primitive": "getPrimitiveAlignSize probes (sizeof-style padding), including size 17 padding to 32 under a 16-byte alignment.",
+  "errors": "Verbatim oracle LowlevelError text for the uninitialized alignment map."
+ },
+ "comparand": {
+  "rugra_base_commit": "9dadb2a32b02216a25e5af4483782d8f5f7d3027",
+  "rugra_base_tree": "7c7518f8adddb10d1075d4d2942fb9b4d7e0becc",
+  "locked_libdecomp_a_sha256": "b9f4fd84a8dab0101e746a08be81ddcb990585765addbaab7d4ab35acaa0ea5a",
+  "runner_sha256": "d3861954655eb410ad045c1780bef8325e79e87415bc44bd0e42150dfb8502d1",
+  "cpp_fixture_sha256": "f500bcf61699ae11f916581afb39302450bb36533e271213ec65656a3a8324b3",
+  "rust_fixture_sha256": "c17f1252d7ed1e1c2ab99c09b310ba7d8a203716c4e69f52bc2e5d32128b48a4",
+  "typefactory_rs_sha256": "9c04b919088231ef2acdaf85c72c8c2d4ae542cc1565a669f11e56ff59bc1cd5",
+  "typefactory_doc_sha256": "36e8414fe5bb8198dd9d4cc6f6a1acb31877bca1ba62bb58cb2439531261c2cb",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
+ },
+ "expected_stdout_sha256": "6158e6ab2d450f61c3a478c3ec9ec65238c0fb760fb38b97571d544d817f0675",
+ "expected_exit_code": 0,
+ "coverage": {
+  "production_cspec_data_organization_state": "MATCH: six sizes plus 18 alignment and 17 primitive probes of the real init chain, byte-identical.",
+  "raw_decode_pre_setup_state": "MATCH: decode stores parsed values only; absent char_size leaves char 0; align[0] is -1.",
+  "sparse_forward_fill_and_index0_minus1": "MATCH: fill starts at index 1 with curAlign 1; index 0 keeps -1.",
+  "empty_map_error_and_default_install": "MATCH: verbatim 'TypeFactory alignment map not initialized', empty map stays empty through decode, setupSizes installs [0,1,2,2,4,4,4,4,8].",
+  "explicit_zero_entry_and_primitive_zero": "MATCH: explicit size-0 entry sets align[0]=1; getPrimitiveAlignSize(0) returns 0.",
+  "duplicate_entry_and_zero_alignment": "MATCH: later duplicate size entry wins; explicit alignment=0 preserved by the fill pass.",
+  "unknown_children_skip": "MATCH: machine_alignment/default_alignment/short_size/float_size/double_size children consumed-and-skipped without touching state.",
+  "post_sam_child_consumption": "MATCH: children following <size_alignment_map> are consumed after the unified close (c8: char_size after sam reads 3; align [-1,1]). Fixed in review rework \u2014 the sam branch previously skipped close_element, leaving the decoder stack on the map and dropping trailing children (Ghidra reads 3, old Rugra read 0).",
+  "setup_sizes_derivation": "MATCH: int from stack spacebase clamped to 4, long via the (int==4)?8:int branch, char 1, wchar 2, pointer from default data space address size, default map install.",
+  "negative_signed_sizes": "MATCH: readSignedInteger values survive as int4 (-2) through decode and setup.",
+  "primitive_align_size_padding": "MATCH: unsigned 32-bit modulo semantics of size % align reproduced (17 pads to 32).",
+  "enum_config_state": "UNTESTED: enumsize/enumtype are private with no oracle getters; parseEnumConfig state exists on both sides but is not serializable from the locked C++ class.",
+  "architecture_input_derivation": "UNTESTED: Rust setup_sizes receives locked-spec constants; the live glb->getStackSpace/getDefaultDataSpace/getSegmentOp lookups have no Rugra Architecture wiring yet.",
+  "illformed_non_entry_child_in_map": "MISMATCH (conservative): on a non-<entry> child Ghidra breaks leaving the element open; only debug-assert builds (CPUI_DEBUG) diagnose the mis-nested parent close, and release-build stream positions are not proven divergent from Rugra's close-and-skip. No equivalence proof exists for either build mode, the path is unreachable via well-formed compiler specs, and it is not exercised by this fixture.",
+  "get_primitive_align_size_zero_alignment": "UNTESTED: alignment 0 is a division by zero (SIGFPE in the oracle, panic in Rust); abnormal termination on both sides, not serializable.",
+  "production_rugra_cspec_text_ingestion": "MISMATCH: the Rust fixture builds the Element DOM locally; production XML text ingest into parse_compiler_config is CSPEC-TEXT-INGEST-0001's residual."
+ },
+ "overall_status": "MATCH:  every declared observation (production state, raw decode state, all seven synthetic cases, error text, and all probe arrays) is byte-identical to locked Ghidra 12.0.4 output. Residuals: enum state unobservable in the oracle, live architecture-input derivation unwired on Rust, ill-formed non-entry map children diverge (unreachable via well-formed specs), zero-alignment primitive queries abort on both sides, and production text ingestion remains the text-ingest domain's mismatch."
 }

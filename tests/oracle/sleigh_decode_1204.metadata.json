@@ -1,336 +1,336 @@
 {
-  "schema_version": 1,
-  "fixture_id": "SLEIGH-0002B",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ "schema_version": 1,
+ "fixture_id": "SLEIGH-0002B",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "Ghidra/Processors/x86/data/languages/x86-64-gcc.cspec",
+  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "usage": "Selected and recorded for oracle identity; raw Sleigh::oneInstruction does not consume the compiler specification."
+ },
+ "analysis_options": {
+  "api": "Sleigh::oneInstruction",
+  "context_initialization": "Explicit defaults in order: addrsize=2, opsize=1, rexprefix=0, longMode=1",
+  "processor_spec": "Not decoded in SLEIGH-0002B; complete ContextInternal::decodeFromSpec coverage is SLEIGH-0002C",
+  "load_image": "Owned bytes; relative offset is uint64 start-base modulo exactly like RawLoadImage; an in-range result copies available bytes then zero-fills the tail, while an out-of-range result throws DataUnavailError",
+  "state": "Fresh Sleigh/ContextInternal/LoadImage per case except the named shared-engine success-then-error sequence",
+  "call_order": "Exactly one oneInstruction call per ordinary case; no preceding instructionLength or printAssembly call",
+  "decompiler_passes": "None"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
-  "architecture": "x86:LE:64:default",
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+  },
   "compiler_spec": {
-    "id": "gcc",
-    "path": "Ghidra/Processors/x86/data/languages/x86-64-gcc.cspec",
-    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-    "usage": "Selected and recorded for oracle identity; raw Sleigh::oneInstruction does not consume the compiler specification."
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
   },
-  "analysis_options": {
-    "api": "Sleigh::oneInstruction",
-    "context_initialization": "Explicit defaults in order: addrsize=2, opsize=1, rexprefix=0, longMode=1",
-    "processor_spec": "Not decoded in SLEIGH-0002B; complete ContextInternal::decodeFromSpec coverage is SLEIGH-0002C",
-    "load_image": "Owned bytes; relative offset is uint64 start-base modulo exactly like RawLoadImage; an in-range result copies available bytes then zero-fills the tail, while an out-of-range result throws DataUnavailError",
-    "state": "Fresh Sleigh/ContextInternal/LoadImage per case except the named shared-engine success-then-error sequence",
-    "call_order": "Exactly one oneInstruction call per ordinary case; no preceding instructionLength or printAssembly call",
-    "decompiler_passes": "None"
-  },
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
-    },
-    "language_definitions_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
-  },
-  "input_manifest": {
-    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,context,cases}, sort_keys=True, separators=(',',':'))",
-    "sha256": "ed2eba6cda51d90ccaf162c7ce9c2c514e5afd0bd7db65654acb3c7042cfa46b",
-    "context": [
-      {
-        "name": "addrsize",
-        "value": 2
-      },
-      {
-        "name": "opsize",
-        "value": 1
-      },
-      {
-        "name": "rexprefix",
-        "value": 0
-      },
-      {
-        "name": "longMode",
-        "value": 1
-      }
-    ],
-    "cases": [
-      {
-        "id": "cpuid_78_ops",
-        "base": "0x0000000000001000",
-        "offset": "0x0000000000001000",
-        "image_hex": "0fa2000000000000000000000000000000000000000000000000000000000000",
-        "image_sha256": "14ccfec470ee23093cc1f8d012600da47d772d4914cfbd1b21e4d0f46898bf7a",
-        "setup": "fresh-owned-image",
-        "source_after_hex": null,
-        "expected": {
-          "status": "OK",
-          "step": 2,
-          "op_count": 78,
-          "total_inputs": 134
-        }
-      },
-      {
-        "id": "nop_zero_ops",
-        "base": "0x0000000000001000",
-        "offset": "0x0000000000001000",
-        "image_hex": "9000000000000000000000000000000000000000000000000000000000000000",
-        "image_sha256": "a3a2808c37da4f9cab6a51e07ddfc6c34f725988fe2486199d6a190c1be473a4",
-        "setup": "fresh-owned-image",
-        "source_after_hex": null,
-        "expected": {
-          "status": "OK",
-          "step": 1,
-          "op_count": 0
-        }
-      },
-      {
-        "id": "jmp_short_one_byte_tail_zero_fill",
-        "base": "0x0000000000001000",
-        "offset": "0x0000000000001000",
-        "image_hex": "eb",
-        "image_sha256": "f8d20e598df20877e4d826246fc31ffb4615cbc059aec9ec8e5b28951d844a3f",
-        "setup": "fresh-owned-image-tail-zero-fill",
-        "source_after_hex": null,
-        "expected": {
-          "status": "OK",
-          "step": 2,
-          "op_count": 1
-        }
-      },
-      {
-        "id": "nop_uint64_modulo_wrap",
-        "base": "0xffffffffffffffff",
-        "offset": "0x0000000000000000",
-        "image_hex": "0690",
-        "image_sha256": "b54d7f43052bd9abe02ed4947f9c2c22cf2de16b1e20b5539b891dbfaea26571",
-        "setup": "fresh-owned-image-uint64-modulo-wrap",
-        "source_after_hex": null,
-        "expected": {
-          "status": "OK",
-          "step": 1,
-          "op_count": 0
-        }
-      },
-      {
-        "id": "mov_rax_ptr_rbx_pointer_alias",
-        "base": "0x0000000000001000",
-        "offset": "0x0000000000001000",
-        "image_hex": "488b030000000000000000000000000000000000000000000000000000000000",
-        "image_sha256": "5d2820090d89afc6a0c12333ec23d6a40bb6d63b0dd8829d9153fc45dd8b3a30",
-        "setup": "fresh-owned-image-pointer-alias",
-        "source_after_hex": null,
-        "expected": {
-          "status": "OK",
-          "step": 3
-        }
-      },
-      {
-        "id": "bad_data",
-        "base": "0x0000000000001000",
-        "offset": "0x0000000000001000",
-        "image_hex": "0f04000000000000000000000000000000000000000000000000000000000000",
-        "image_sha256": "5804d1599a661578dbf83f3e674619c04e71d36df54c5172d75ecd8df992f2b9",
-        "setup": "fresh-owned-image",
-        "source_after_hex": null,
-        "expected": {
-          "status": "BAD_DATA",
-          "step": null,
-          "op_count": 0,
-          "explain": "r0x00001000: Unable to resolve constructor"
-        }
-      },
-      {
-        "id": "data_unavailable_empty_image",
-        "base": "0x0000000000001000",
-        "offset": "0x0000000000001000",
-        "image_hex": "",
-        "image_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "setup": "fresh-owned-empty-image",
-        "source_after_hex": null,
-        "expected": {
-          "status": "DATA_UNAVAILABLE",
-          "step": null,
-          "op_count": 0,
-          "explain": "Unable to load 16 bytes at r0x00001000"
-        }
-      },
-      {
-        "id": "data_unavailable_below_base",
-        "base": "0x0000000000001000",
-        "offset": "0x0000000000000fff",
-        "image_hex": "90",
-        "image_sha256": "9e076ceaf246b6003d9c2680a2b4cf0bffd069805902b0b5edeebf49039fe4bd",
-        "setup": "fresh-owned-image-decode-below-base",
-        "source_after_hex": null,
-        "expected": {
-          "status": "DATA_UNAVAILABLE",
-          "step": null,
-          "op_count": 0,
-          "explain": "Unable to load 16 bytes at r0x00000fff"
-        }
-      },
-      {
-        "id": "data_unavailable_at_end",
-        "base": "0x0000000000001000",
-        "offset": "0x0000000000001001",
-        "image_hex": "90",
-        "image_sha256": "9e076ceaf246b6003d9c2680a2b4cf0bffd069805902b0b5edeebf49039fe4bd",
-        "setup": "fresh-owned-image-decode-at-end",
-        "source_after_hex": null,
-        "expected": {
-          "status": "DATA_UNAVAILABLE",
-          "step": null,
-          "op_count": 0,
-          "explain": "Unable to load 16 bytes at r0x00001001"
-        }
-      },
-      {
-        "id": "owned_source_mutation",
-        "base": "0x0000000000001000",
-        "offset": "0x0000000000001000",
-        "image_hex": "90",
-        "image_sha256": "9e076ceaf246b6003d9c2680a2b4cf0bffd069805902b0b5edeebf49039fe4bd",
-        "setup": "RUGRA-GLUE owned copy; caller mutates 90 to 06 then releases source",
-        "source_after_hex": "06",
-        "expected": {
-          "status": "OK",
-          "step": 1,
-          "op_count": 0,
-          "scope": "ABI glue ownership contract, not a native Ghidra set_image API"
-        }
-      },
-      {
-        "id": "success_then_error_0_success",
-        "base": "0x0000000000001000",
-        "offset": "0x0000000000001000",
-        "image_hex": "4889f800000000000000000000000000000000000000000000000000000000000f04000000000000000000000000000000000000000000000000000000000000",
-        "image_sha256": "308f821b209c6665e83718770fe5117e2d270fae4f9f3bf39111ba7f06c58290",
-        "setup": "shared-engine-sequence-step-0",
-        "source_after_hex": null,
-        "expected": {
-          "status": "OK",
-          "step": 3,
-          "op_count": 1
-        }
-      },
-      {
-        "id": "success_then_error_1_error",
-        "base": "0x0000000000001000",
-        "offset": "0x0000000000001020",
-        "image_hex": "4889f800000000000000000000000000000000000000000000000000000000000f04000000000000000000000000000000000000000000000000000000000000",
-        "image_sha256": "308f821b209c6665e83718770fe5117e2d270fae4f9f3bf39111ba7f06c58290",
-        "setup": "shared-engine-sequence-step-1; error result must publish zero ops",
-        "source_after_hex": null,
-        "expected": {
-          "status": "BAD_DATA",
-          "step": null,
-          "op_count": 0,
-          "explain": "r0x00001020: Unable to resolve constructor"
-        }
-      }
-    ]
-  },
-  "observation_schema": {
-    "format": "UTF-8 NDJSON; one object per case; fixed key order; lowercase fixed-width hexadecimal offsets; final newline required",
-    "success": "status=OK with signed int32 step and complete ordered operations",
-    "errors": "Typed status and exact explain bytes; only UNIMPL carries signed int32 instruction_length; no fabricated step or retained operations",
-    "operation": "Callback address, numeric and named opcode, declared input count, nullable output, and every input in callback order",
-    "varnode_identity": "Per-oneInstruction pointer alias identity: assign uint64 IDs from 0 in emitter order, output before inputs; same VarnodeData pointer reuses its ID; equal locations with distinct pointers retain distinct IDs",
-    "space_id_normalization": "For LOAD/STORE input zero only, decode the AddrSpace pointer stored in VarnodeData.offset to stable target space index/name/type; never expose the process pointer",
-    "location_alias": "alias_key redundantly records normalized location equality; it does not replace pointer identity",
-    "other_normalization": "None"
-  },
-  "build": {
-    "extraction": "git archive of the exact oracle commit into a fresh temporary directory",
-    "environment_policy": "immutable runner + hashed workspace snapshot; env -i; Cargo.lock-checksummed crate archives extracted into an isolated vendor and CARGO_HOME; pinned direct Rust toolchain and explicit CXX/CC/AR/RUSTC; locked offline Cargo",
-    "registry_packages": 160,
-    "source_units": [
-      "xml.cc",
-      "marshal.cc",
-      "space.cc",
-      "float.cc",
-      "address.cc",
-      "pcoderaw.cc",
-      "translate.cc",
-      "opcodes.cc",
-      "globalcontext.cc",
-      "sleigh.cc",
-      "pcodeparse.cc",
-      "pcodecompile.cc",
-      "sleighbase.cc",
-      "slghsymbol.cc",
-      "slghpatexpress.cc",
-      "slghpattern.cc",
-      "semantics.cc",
-      "context.cc",
-      "slaformat.cc",
-      "compression.cc",
-      "filemanage.cc"
-    ],
-    "cxx_flags": [
-      "-std=c++11",
-      "-O2",
-      "-Wall",
-      "-Wno-sign-compare",
-      "-m64"
-    ],
-    "preprocessor_macros": [],
-    "link_flags": [
-      "-lz"
-    ],
-    "oracle_linkage": "Direct locked Ghidra source; no rugra_sleigh.cpp and no Cargo-produced archive"
-  },
-  "comparand": {
-    "cpp_fixture_sha256": "3bbd3ffd1f14c297a675d5e2896c4dd79b5b3fdba99d4b52bc7f1a2f831b7e9f",
-    "rust_fixture_sha256": "e435ed8604fda311433cbc17a5c78ea3719deee9cd1dd10a23d518ca5a4abd38",
-    "runner_sha256": "1fa1d1c512f7d9e1b61860640682b24c43f388c028c89459ba7b5f3c8d948d7a",
-    "shim_sha256": "3fb24f83a3fbbb3e5e68a6aad43372cba06494cfcc7a9609d3c612663ab05496",
-    "rust_sleigh_ffi_sha256": "2ceee00099fdb81ae8ec3d845166903ad578b112478bc86a9b4f64cfd314297c",
-    "rust_opcodes_sha256": "c28d4275286d3f8a351904204ec5a3ed9b930cb96364d51510b5c8036a41d41b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "cargo_toml_sha256": "330c98a61ba0ad9f2fea4ec9e1574db6d5ddbc4182dac5dbc1541ea0a020106a",
-    "cargo_lock_sha256": "2d7d796197714e2d80cbbafaf654b1bf5620e21a130a5548f69d0daeecb1bc01",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-crate-snapshot-v1 plus sorted length-prefixed relative paths and contents",
-    "rust_crate_tree_sha256": "599aa1369d4109668391304727ccadfee2b8a1403bba8b3dc872ae29a55fe8e3",
-    "repo_cargo_config_files": [],
-    "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "host_cxx_target": "x86_64-linux-gnu",
-    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-    "host_platform": "Linux 6.8.0-124-generic x86_64",
-    "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
-    "host_cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
-    "host_rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
-    "host_python_path": "/usr/bin/python3.10",
-    "host_cc": "x86_64-linux-gnu-gcc-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "host_ar": "GNU ar (GNU Binutils for Ubuntu) 2.38",
-    "host_cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-    "host_ar_path": "/usr/bin/x86_64-linux-gnu-ar",
-    "host_rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-    "host_home": "/home/ls",
-    "clean_path": "/usr/bin:/bin"
-  },
-  "expected_stdout_sha256": "5302cc9cd35e24094f9cbc888479c52c8ac04e70d49646bca9dd70c8d71a505a",
-  "expected_exit_code": 0,
-  "coverage": {
-    "cpuid": "MATCH: 78 complete ordered operations and 134 inputs",
-    "zero_op": "MATCH: padded and uint64 modulo-wrapped NOP return step=1 with zero operations",
-    "tail_zero_fill": "MATCH: one-byte EB consumes a zero-filled relative displacement and returns step=2 with one BRANCH",
-    "pointer_alias": "MATCH: dynamic memory operand reuses VarnodeData pointer identity across emitted operations",
-    "bad_data": "MATCH",
-    "data_unavailable": "MATCH: empty, below-base, and at-end decode starts",
-    "owned_source_mutation": "MATCH; RUGRA-GLUE contract",
-    "success_then_error_atomicity": "MATCH",
-    "unimplemented": "UNTESTED: locked x86-64 SLA has alignment=1 and 0 null templates across 236 subtables/5707 constructors"
-  },
-  "overall_status": "PARTIAL_MATCH: every reachable locked x86-64 fixture case is a byte-for-byte match; Unimpl remains explicitly UNTESTED"
+  "language_definitions_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,context,cases}, sort_keys=True, separators=(',',':'))",
+  "sha256": "ed2eba6cda51d90ccaf162c7ce9c2c514e5afd0bd7db65654acb3c7042cfa46b",
+  "context": [
+   {
+    "name": "addrsize",
+    "value": 2
+   },
+   {
+    "name": "opsize",
+    "value": 1
+   },
+   {
+    "name": "rexprefix",
+    "value": 0
+   },
+   {
+    "name": "longMode",
+    "value": 1
+   }
+  ],
+  "cases": [
+   {
+    "id": "cpuid_78_ops",
+    "base": "0x0000000000001000",
+    "offset": "0x0000000000001000",
+    "image_hex": "0fa2000000000000000000000000000000000000000000000000000000000000",
+    "image_sha256": "14ccfec470ee23093cc1f8d012600da47d772d4914cfbd1b21e4d0f46898bf7a",
+    "setup": "fresh-owned-image",
+    "source_after_hex": null,
+    "expected": {
+     "status": "OK",
+     "step": 2,
+     "op_count": 78,
+     "total_inputs": 134
+    }
+   },
+   {
+    "id": "nop_zero_ops",
+    "base": "0x0000000000001000",
+    "offset": "0x0000000000001000",
+    "image_hex": "9000000000000000000000000000000000000000000000000000000000000000",
+    "image_sha256": "a3a2808c37da4f9cab6a51e07ddfc6c34f725988fe2486199d6a190c1be473a4",
+    "setup": "fresh-owned-image",
+    "source_after_hex": null,
+    "expected": {
+     "status": "OK",
+     "step": 1,
+     "op_count": 0
+    }
+   },
+   {
+    "id": "jmp_short_one_byte_tail_zero_fill",
+    "base": "0x0000000000001000",
+    "offset": "0x0000000000001000",
+    "image_hex": "eb",
+    "image_sha256": "f8d20e598df20877e4d826246fc31ffb4615cbc059aec9ec8e5b28951d844a3f",
+    "setup": "fresh-owned-image-tail-zero-fill",
+    "source_after_hex": null,
+    "expected": {
+     "status": "OK",
+     "step": 2,
+     "op_count": 1
+    }
+   },
+   {
+    "id": "nop_uint64_modulo_wrap",
+    "base": "0xffffffffffffffff",
+    "offset": "0x0000000000000000",
+    "image_hex": "0690",
+    "image_sha256": "b54d7f43052bd9abe02ed4947f9c2c22cf2de16b1e20b5539b891dbfaea26571",
+    "setup": "fresh-owned-image-uint64-modulo-wrap",
+    "source_after_hex": null,
+    "expected": {
+     "status": "OK",
+     "step": 1,
+     "op_count": 0
+    }
+   },
+   {
+    "id": "mov_rax_ptr_rbx_pointer_alias",
+    "base": "0x0000000000001000",
+    "offset": "0x0000000000001000",
+    "image_hex": "488b030000000000000000000000000000000000000000000000000000000000",
+    "image_sha256": "5d2820090d89afc6a0c12333ec23d6a40bb6d63b0dd8829d9153fc45dd8b3a30",
+    "setup": "fresh-owned-image-pointer-alias",
+    "source_after_hex": null,
+    "expected": {
+     "status": "OK",
+     "step": 3
+    }
+   },
+   {
+    "id": "bad_data",
+    "base": "0x0000000000001000",
+    "offset": "0x0000000000001000",
+    "image_hex": "0f04000000000000000000000000000000000000000000000000000000000000",
+    "image_sha256": "5804d1599a661578dbf83f3e674619c04e71d36df54c5172d75ecd8df992f2b9",
+    "setup": "fresh-owned-image",
+    "source_after_hex": null,
+    "expected": {
+     "status": "BAD_DATA",
+     "step": null,
+     "op_count": 0,
+     "explain": "r0x00001000: Unable to resolve constructor"
+    }
+   },
+   {
+    "id": "data_unavailable_empty_image",
+    "base": "0x0000000000001000",
+    "offset": "0x0000000000001000",
+    "image_hex": "",
+    "image_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "setup": "fresh-owned-empty-image",
+    "source_after_hex": null,
+    "expected": {
+     "status": "DATA_UNAVAILABLE",
+     "step": null,
+     "op_count": 0,
+     "explain": "Unable to load 16 bytes at r0x00001000"
+    }
+   },
+   {
+    "id": "data_unavailable_below_base",
+    "base": "0x0000000000001000",
+    "offset": "0x0000000000000fff",
+    "image_hex": "90",
+    "image_sha256": "9e076ceaf246b6003d9c2680a2b4cf0bffd069805902b0b5edeebf49039fe4bd",
+    "setup": "fresh-owned-image-decode-below-base",
+    "source_after_hex": null,
+    "expected": {
+     "status": "DATA_UNAVAILABLE",
+     "step": null,
+     "op_count": 0,
+     "explain": "Unable to load 16 bytes at r0x00000fff"
+    }
+   },
+   {
+    "id": "data_unavailable_at_end",
+    "base": "0x0000000000001000",
+    "offset": "0x0000000000001001",
+    "image_hex": "90",
+    "image_sha256": "9e076ceaf246b6003d9c2680a2b4cf0bffd069805902b0b5edeebf49039fe4bd",
+    "setup": "fresh-owned-image-decode-at-end",
+    "source_after_hex": null,
+    "expected": {
+     "status": "DATA_UNAVAILABLE",
+     "step": null,
+     "op_count": 0,
+     "explain": "Unable to load 16 bytes at r0x00001001"
+    }
+   },
+   {
+    "id": "owned_source_mutation",
+    "base": "0x0000000000001000",
+    "offset": "0x0000000000001000",
+    "image_hex": "90",
+    "image_sha256": "9e076ceaf246b6003d9c2680a2b4cf0bffd069805902b0b5edeebf49039fe4bd",
+    "setup": "RUGRA-GLUE owned copy; caller mutates 90 to 06 then releases source",
+    "source_after_hex": "06",
+    "expected": {
+     "status": "OK",
+     "step": 1,
+     "op_count": 0,
+     "scope": "ABI glue ownership contract, not a native Ghidra set_image API"
+    }
+   },
+   {
+    "id": "success_then_error_0_success",
+    "base": "0x0000000000001000",
+    "offset": "0x0000000000001000",
+    "image_hex": "4889f800000000000000000000000000000000000000000000000000000000000f04000000000000000000000000000000000000000000000000000000000000",
+    "image_sha256": "308f821b209c6665e83718770fe5117e2d270fae4f9f3bf39111ba7f06c58290",
+    "setup": "shared-engine-sequence-step-0",
+    "source_after_hex": null,
+    "expected": {
+     "status": "OK",
+     "step": 3,
+     "op_count": 1
+    }
+   },
+   {
+    "id": "success_then_error_1_error",
+    "base": "0x0000000000001000",
+    "offset": "0x0000000000001020",
+    "image_hex": "4889f800000000000000000000000000000000000000000000000000000000000f04000000000000000000000000000000000000000000000000000000000000",
+    "image_sha256": "308f821b209c6665e83718770fe5117e2d270fae4f9f3bf39111ba7f06c58290",
+    "setup": "shared-engine-sequence-step-1; error result must publish zero ops",
+    "source_after_hex": null,
+    "expected": {
+     "status": "BAD_DATA",
+     "step": null,
+     "op_count": 0,
+     "explain": "r0x00001020: Unable to resolve constructor"
+    }
+   }
+  ]
+ },
+ "observation_schema": {
+  "format": "UTF-8 NDJSON; one object per case; fixed key order; lowercase fixed-width hexadecimal offsets; final newline required",
+  "success": "status=OK with signed int32 step and complete ordered operations",
+  "errors": "Typed status and exact explain bytes; only UNIMPL carries signed int32 instruction_length; no fabricated step or retained operations",
+  "operation": "Callback address, numeric and named opcode, declared input count, nullable output, and every input in callback order",
+  "varnode_identity": "Per-oneInstruction pointer alias identity: assign uint64 IDs from 0 in emitter order, output before inputs; same VarnodeData pointer reuses its ID; equal locations with distinct pointers retain distinct IDs",
+  "space_id_normalization": "For LOAD/STORE input zero only, decode the AddrSpace pointer stored in VarnodeData.offset to stable target space index/name/type; never expose the process pointer",
+  "location_alias": "alias_key redundantly records normalized location equality; it does not replace pointer identity",
+  "other_normalization": "None"
+ },
+ "build": {
+  "extraction": "git archive of the exact oracle commit into a fresh temporary directory",
+  "environment_policy": "immutable runner + hashed workspace snapshot; env -i; Cargo.lock-checksummed crate archives extracted into an isolated vendor and CARGO_HOME; pinned direct Rust toolchain and explicit CXX/CC/AR/RUSTC; locked offline Cargo",
+  "registry_packages": 160,
+  "source_units": [
+   "xml.cc",
+   "marshal.cc",
+   "space.cc",
+   "float.cc",
+   "address.cc",
+   "pcoderaw.cc",
+   "translate.cc",
+   "opcodes.cc",
+   "globalcontext.cc",
+   "sleigh.cc",
+   "pcodeparse.cc",
+   "pcodecompile.cc",
+   "sleighbase.cc",
+   "slghsymbol.cc",
+   "slghpatexpress.cc",
+   "slghpattern.cc",
+   "semantics.cc",
+   "context.cc",
+   "slaformat.cc",
+   "compression.cc",
+   "filemanage.cc"
+  ],
+  "cxx_flags": [
+   "-std=c++11",
+   "-O2",
+   "-Wall",
+   "-Wno-sign-compare",
+   "-m64"
+  ],
+  "preprocessor_macros": [],
+  "link_flags": [
+   "-lz"
+  ],
+  "oracle_linkage": "Direct locked Ghidra source; no rugra_sleigh.cpp and no Cargo-produced archive"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "3bbd3ffd1f14c297a675d5e2896c4dd79b5b3fdba99d4b52bc7f1a2f831b7e9f",
+  "rust_fixture_sha256": "e435ed8604fda311433cbc17a5c78ea3719deee9cd1dd10a23d518ca5a4abd38",
+  "runner_sha256": "1fa1d1c512f7d9e1b61860640682b24c43f388c028c89459ba7b5f3c8d948d7a",
+  "shim_sha256": "3fb24f83a3fbbb3e5e68a6aad43372cba06494cfcc7a9609d3c612663ab05496",
+  "rust_sleigh_ffi_sha256": "2ceee00099fdb81ae8ec3d845166903ad578b112478bc86a9b4f64cfd314297c",
+  "rust_opcodes_sha256": "c28d4275286d3f8a351904204ec5a3ed9b930cb96364d51510b5c8036a41d41b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "cargo_toml_sha256": "330c98a61ba0ad9f2fea4ec9e1574db6d5ddbc4182dac5dbc1541ea0a020106a",
+  "cargo_lock_sha256": "2d7d796197714e2d80cbbafaf654b1bf5620e21a130a5548f69d0daeecb1bc01",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-crate-snapshot-v1 plus sorted length-prefixed relative paths and contents",
+  "rust_crate_tree_sha256": "599aa1369d4109668391304727ccadfee2b8a1403bba8b3dc872ae29a55fe8e3",
+  "repo_cargo_config_files": [],
+  "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_cxx_target": "x86_64-linux-gnu",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+  "host_platform": "Linux 6.8.0-124-generic x86_64",
+  "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+  "host_cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+  "host_rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+  "host_python_path": "/usr/bin/python3.10",
+  "host_cc": "x86_64-linux-gnu-gcc-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_ar": "GNU ar (GNU Binutils for Ubuntu) 2.38",
+  "host_cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+  "host_ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+  "host_rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+  "host_home": "/home/ls",
+  "clean_path": "/usr/bin:/bin"
+ },
+ "expected_stdout_sha256": "5302cc9cd35e24094f9cbc888479c52c8ac04e70d49646bca9dd70c8d71a505a",
+ "expected_exit_code": 0,
+ "coverage": {
+  "cpuid": "MATCH: 78 complete ordered operations and 134 inputs",
+  "zero_op": "MATCH: padded and uint64 modulo-wrapped NOP return step=1 with zero operations",
+  "tail_zero_fill": "MATCH: one-byte EB consumes a zero-filled relative displacement and returns step=2 with one BRANCH",
+  "pointer_alias": "MATCH: dynamic memory operand reuses VarnodeData pointer identity across emitted operations",
+  "bad_data": "MATCH",
+  "data_unavailable": "MATCH: empty, below-base, and at-end decode starts",
+  "owned_source_mutation": "MATCH; RUGRA-GLUE contract",
+  "success_then_error_atomicity": "MATCH",
+  "unimplemented": "UNTESTED: locked x86-64 SLA has alignment=1 and 0 null templates across 236 subtables/5707 constructors"
+ },
+ "overall_status": "UNTESTED:  (B2 migration of partial match state) every reachable locked x86-64 fixture case is a byte-for-byte match; Unimpl remains explicitly untested"
 }

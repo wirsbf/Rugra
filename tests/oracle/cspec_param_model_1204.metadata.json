@@ -1,133 +1,133 @@
 {
-  "schema_version": 1,
-  "fixture_id": "CSPEC-PARAMMODEL-0001",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ "schema_version": 1,
+ "fixture_id": "CSPEC-PARAMMODEL-0001",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec",
+  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "ingestion": "Ghidra uses its production DocumentStorage/XML parser. Rugra's fixture parses the locked text into the existing structured Element DOM, then invokes the production TreeDecoder and mapped decode functions; production cspec text ingestion is absent and remains MISMATCH."
+ },
+ "analysis_options": {
+  "apis": [
+   "ParamEntry::decode(Decoder &,bool,bool,list<ParamEntry> &)",
+   "ParamEntry::resolveFirst(list<ParamEntry> &)",
+   "ParamEntry::resolveOverlap(list<ParamEntry> &)",
+   "ParamEntry::orderWithinGroup(const ParamEntry &,const ParamEntry &)",
+   "ParamListStandard::parsePentry(Decoder &,vector<EffectRecord> &,int4,bool,bool,bool)",
+   "ParamListStandard::parseGroup(Decoder &,vector<EffectRecord> &,int4,bool,bool)",
+   "ParamListStandard::getRangeList(AddrSpace *,RangeList &) const",
+   "ParamListStandard::decode(Decoder &,vector<EffectRecord> &,bool)",
+   "ProtoModel::decode(Decoder &)",
+   "Architecture::getModel(const string &) const",
+   "Architecture::setDefaultModel(ProtoModel *)",
+   "Architecture::decodeProto(Decoder &)",
+   "Architecture::decodeDefaultProto(Decoder &)"
+  ],
+  "document_selection": "The complete locked x86-64-gcc.cspec is parsed. Observations select default_proto/prototype/input and the top-level MSABI/prototype/input subtrees without reconstructing either resource list.",
+  "stack_direction": "Locked x86-64 negative-growing stack plus one explicit positive-growing ParamListStandard boundary case.",
+  "model_rules": "Ghidra decodes every <rule> into ModelRule objects. Rugra currently consumes <rule> subtrees without constructing ModelRule state; rule-dependent assignment behavior remains MISMATCH and is not serialized as a match.",
+  "normalization": "No temporary ids, pointers, ordering, groups, offsets, or exception text are normalized. Default model identity is serialized as exact map/default pointer or Arc identity."
+ },
+ "assets": {
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "git_blob": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
   },
-  "architecture": "x86:LE:64:default",
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "git_blob": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
+  },
   "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec",
-    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-    "ingestion": "Ghidra uses its production DocumentStorage/XML parser. Rugra's fixture parses the locked text into the existing structured Element DOM, then invokes the production TreeDecoder and mapped decode functions; production cspec text ingestion is absent and remains MISMATCH."
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "git_blob": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
   },
-  "analysis_options": {
-    "apis": [
-      "ParamEntry::decode(Decoder &,bool,bool,list<ParamEntry> &)",
-      "ParamEntry::resolveFirst(list<ParamEntry> &)",
-      "ParamEntry::resolveOverlap(list<ParamEntry> &)",
-      "ParamEntry::orderWithinGroup(const ParamEntry &,const ParamEntry &)",
-      "ParamListStandard::parsePentry(Decoder &,vector<EffectRecord> &,int4,bool,bool,bool)",
-      "ParamListStandard::parseGroup(Decoder &,vector<EffectRecord> &,int4,bool,bool)",
-      "ParamListStandard::getRangeList(AddrSpace *,RangeList &) const",
-      "ParamListStandard::decode(Decoder &,vector<EffectRecord> &,bool)",
-      "ProtoModel::decode(Decoder &)",
-      "Architecture::getModel(const string &) const",
-      "Architecture::setDefaultModel(ProtoModel *)",
-      "Architecture::decodeProto(Decoder &)",
-      "Architecture::decodeDefaultProto(Decoder &)"
-    ],
-    "document_selection": "The complete locked x86-64-gcc.cspec is parsed. Observations select default_proto/prototype/input and the top-level MSABI/prototype/input subtrees without reconstructing either resource list.",
-    "stack_direction": "Locked x86-64 negative-growing stack plus one explicit positive-growing ParamListStandard boundary case.",
-    "model_rules": "Ghidra decodes every <rule> into ModelRule objects. Rugra currently consumes <rule> subtrees without constructing ModelRule state; rule-dependent assignment behavior remains MISMATCH and is not serialized as a match.",
-    "normalization": "No temporary ids, pointers, ordering, groups, offsets, or exception text are normalized. Default model identity is serialized as exact map/default pointer or Arc identity."
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "git_blob": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
-  "assets": {
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "git_blob": "e39b57baeb410b529c5b1397c06526b4d32cca94",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-      "size": 5390
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "git_blob": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-      "size": 11721
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "git_blob": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-      "size": 12182
-    },
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "git_blob": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "binary": {
-      "path": "examples/curl",
-      "git_blob": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544
-    }
+  "binary": {
+   "path": "examples/curl",
+   "git_blob": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544
+  }
+ },
+ "external_inputs": {
+  "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+  "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+ },
+ "input_manifest": {
+  "cases": {
+   "default_input": "Exact <default_proto>/<prototype name='__stdcall'>/<input> subtree from the locked compiler spec, including 8 floating registers, 6 integer registers, one stack pentry, and two model rules.",
+   "msabi_input": "Exact top-level <prototype name='MSABI'>/<input> subtree from the locked compiler spec, including four two-entry groups, one stack pentry, pointermax, and one model rule.",
+   "flipped_stack": "Synthetic structured <input> with stack base 100, maxsize 16, align 4 decoded with normalstack=false.",
+   "stable_default_identity": "Hold the ProtoModel handle returned by decodeProto plus the pre-existing default handle across two setDefaultModel transitions; observe returned/map/default pointer identity and both handles' print-in-declaration mutations.",
+   "errors": [
+    "missing maxsize",
+    "unknown extension value",
+    "positive-growth size not divisible by alignment",
+    "pentry after a valid model rule",
+    "indistinguishable pentries in one group"
+   ]
   },
-  "external_inputs": {
-    "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-    "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-  },
-  "input_manifest": {
-    "cases": {
-      "default_input": "Exact <default_proto>/<prototype name='__stdcall'>/<input> subtree from the locked compiler spec, including 8 floating registers, 6 integer registers, one stack pentry, and two model rules.",
-      "msabi_input": "Exact top-level <prototype name='MSABI'>/<input> subtree from the locked compiler spec, including four two-entry groups, one stack pentry, pointermax, and one model rule.",
-      "flipped_stack": "Synthetic structured <input> with stack base 100, maxsize 16, align 4 decoded with normalstack=false.",
-      "stable_default_identity": "Hold the ProtoModel handle returned by decodeProto plus the pre-existing default handle across two setDefaultModel transitions; observe returned/map/default pointer identity and both handles' print-in-declaration mutations.",
-      "errors": [
-        "missing maxsize",
-        "unknown extension value",
-        "positive-growth size not divisible by alignment",
-        "pentry after a valid model rule",
-        "indistinguishable pentries in one group"
-      ]
-    },
-    "sha256": "d6e5da72298b20abf1510eb99c3910468e534473b85e2cb0a8e4d23d43f37c6c"
-  },
-  "observation_schema": {
-    "format": "One compact UTF-8 JSON object with fixed key and array order plus final newline.",
-    "entries": "Every ParamEntry in document order with space, offset, size, minsize, alignment, type class, complete group vector, reverse/grouped/overlap flags, and first-in-class flag.",
-    "ranges": "All getRangeList stack intervals with inclusive endpoints and source space, retaining iterator order.",
-    "model": "Decoded name/extrapop/derived parameter ranges; Architecture default model name; returned/map/default shared identity; and old/new external handles' print-in-declaration state across default switches.",
-    "errors": "Exact locked exception message for five malformed/order boundary inputs."
-  },
-  "comparand": {
-    "rugra_base_commit": "5730ee8227bc72c8621bd2d8487cc19b0147ca6c",
-    "rugra_base_tree": "afe57e7f0148d683ac26af3248595cb0cacc044e",
-    "locked_libdecomp_a_sha256": "8ebf4390380a2759145100bb4b1b34bfade1cfb55af58dc364196b797457018d",
-    "runner_sha256": "bd2a1f1fa79614eb65c5dc03b7388e644f4aedafacbd945d126a735596059de3",
-    "cpp_fixture_sha256": "7d914d1ea845af39a7242e0b8c83d7bf004cf45dd5f91d90298b688b45d111ea",
-    "rust_fixture_sha256": "80db23ae74cbe641764abe9bb1ba9ff9a3a726ca997ee25d4fb70944dbcdd420",
-    "fspec_rs_sha256": "fa8811f9ef6beccb23fae04ae587f662c121890edd51063d46d0a9ee5b002af3",
-    "arch_rs_sha256": "e7191612c8c8e66aa7589ecac2f90f2cafb63a17fcbdd5d036df652e4547ddc5",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
-  },
-  "expected_stdout_sha256": "a7d29c1ee558834a968d5b6099e6ea03618bbacdd0b6b796ecf964148fc82278",
-  "expected_exit_code": 0,
-  "coverage": {
-    "real_cspec_default_param_entries_order_groups_and_ranges": "MATCH",
-    "real_cspec_msabi_group_counter_and_order": "MATCH",
-    "positive_and_negative_stack_range_boundaries": "MATCH",
-    "paramentry_malformed_attributes_and_group_order_errors": "MATCH",
-    "protomodel_input_output_decode_and_derived_paramrange": "MATCH for serialized state",
-    "architecture_default_model_map_arc_identity": "MATCH: decodeProto return, map entry, and default retain one stable object; old and new external handles observe both print-flag transitions.",
-    "production_rugra_cspec_text_ingestion": "MISMATCH: no production XML text parser or parseCompilerConfig dispatch exists; only the immutable fixture builds Element DOM before TreeDecoder.",
-    "modelrule_decode_and_assignment_state": "MISMATCH: <rule> children are consumed but no ModelRule objects are constructed.",
-    "resolveprototype_and_merged_models": "UNTESTED",
-    "join_space_pentry_resolution": "UNTESTED",
-    "default_return_address_injection": "UNTESTED",
-    "decode_error_partial_mutation": "UNTESTED: exact error text is covered, but object/decoder state remaining after each exception is not serialized.",
-    "reverse_justified_big_endian_pentry": "UNTESTED: the locked x86-64 compiler spec is little-endian and does not exercise reverse-justified big-endian address spaces.",
-    "register_strategy_paramlists": "UNTESTED: all serialized prototype/resource observations use the standard strategy; ParamListRegister/ParamListRegisterOut subclass behavior is not represented.",
-    "create_model_alias_and_is_compatible": "MISMATCH: payload copying is present, but the Rust bool adapter does not preserve Ghidra's alias-parent identity or merged/alias-parent/duplicate/missing-parent exception domain; this API is outside the declared fixture observations.",
-    "set_default_model_unknown_name_adapter": "MISMATCH: the Rust &str adapter silently returns for an unknown map name; Ghidra's setDefaultModel takes an already-resolved ProtoModel pointer and has no equivalent unknown-name input."
-  },
-  "overall_status": "MISMATCH: every declared observation is byte-identical to locked Ghidra 12.0.4, but production x86-64-gcc.cspec text ingestion, <modelrule> construction/behavior, alias compatibility/error semantics, and the unknown-name default adapter remain mismatched; resolveprototype, join, default-return, exception partial-state, reverse-justified big-endian, and register-strategy branches remain UNTESTED."
+  "sha256": "d6e5da72298b20abf1510eb99c3910468e534473b85e2cb0a8e4d23d43f37c6c"
+ },
+ "observation_schema": {
+  "format": "One compact UTF-8 JSON object with fixed key and array order plus final newline.",
+  "entries": "Every ParamEntry in document order with space, offset, size, minsize, alignment, type class, complete group vector, reverse/grouped/overlap flags, and first-in-class flag.",
+  "ranges": "All getRangeList stack intervals with inclusive endpoints and source space, retaining iterator order.",
+  "model": "Decoded name/extrapop/derived parameter ranges; Architecture default model name; returned/map/default shared identity; and old/new external handles' print-in-declaration state across default switches.",
+  "errors": "Exact locked exception message for five malformed/order boundary inputs."
+ },
+ "comparand": {
+  "rugra_base_commit": "5730ee8227bc72c8621bd2d8487cc19b0147ca6c",
+  "rugra_base_tree": "afe57e7f0148d683ac26af3248595cb0cacc044e",
+  "locked_libdecomp_a_sha256": "8ebf4390380a2759145100bb4b1b34bfade1cfb55af58dc364196b797457018d",
+  "runner_sha256": "bd2a1f1fa79614eb65c5dc03b7388e644f4aedafacbd945d126a735596059de3",
+  "cpp_fixture_sha256": "7d914d1ea845af39a7242e0b8c83d7bf004cf45dd5f91d90298b688b45d111ea",
+  "rust_fixture_sha256": "80db23ae74cbe641764abe9bb1ba9ff9a3a726ca997ee25d4fb70944dbcdd420",
+  "fspec_rs_sha256": "fa8811f9ef6beccb23fae04ae587f662c121890edd51063d46d0a9ee5b002af3",
+  "arch_rs_sha256": "e7191612c8c8e66aa7589ecac2f90f2cafb63a17fcbdd5d036df652e4547ddc5",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
+ },
+ "expected_stdout_sha256": "a7d29c1ee558834a968d5b6099e6ea03618bbacdd0b6b796ecf964148fc82278",
+ "expected_exit_code": 0,
+ "coverage": {
+  "real_cspec_default_param_entries_order_groups_and_ranges": "MATCH",
+  "real_cspec_msabi_group_counter_and_order": "MATCH",
+  "positive_and_negative_stack_range_boundaries": "MATCH",
+  "paramentry_malformed_attributes_and_group_order_errors": "MATCH",
+  "protomodel_input_output_decode_and_derived_paramrange": "MATCH for serialized state",
+  "architecture_default_model_map_arc_identity": "MATCH: decodeProto return, map entry, and default retain one stable object; old and new external handles observe both print-flag transitions.",
+  "production_rugra_cspec_text_ingestion": "MISMATCH: no production XML text parser or parseCompilerConfig dispatch exists; only the immutable fixture builds Element DOM before TreeDecoder.",
+  "modelrule_decode_and_assignment_state": "MISMATCH: <rule> children are consumed but no ModelRule objects are constructed.",
+  "resolveprototype_and_merged_models": "UNTESTED",
+  "join_space_pentry_resolution": "UNTESTED",
+  "default_return_address_injection": "UNTESTED",
+  "decode_error_partial_mutation": "UNTESTED: exact error text is covered, but object/decoder state remaining after each exception is not serialized.",
+  "reverse_justified_big_endian_pentry": "UNTESTED: the locked x86-64 compiler spec is little-endian and does not exercise reverse-justified big-endian address spaces.",
+  "register_strategy_paramlists": "UNTESTED: all serialized prototype/resource observations use the standard strategy; ParamListRegister/ParamListRegisterOut subclass behavior is not represented.",
+  "create_model_alias_and_is_compatible": "MISMATCH: payload copying is present, but the Rust bool adapter does not preserve Ghidra's alias-parent identity or merged/alias-parent/duplicate/missing-parent exception domain; this API is outside the declared fixture observations.",
+  "set_default_model_unknown_name_adapter": "MISMATCH: the Rust &str adapter silently returns for an unknown map name; Ghidra's setDefaultModel takes an already-resolved ProtoModel pointer and has no equivalent unknown-name input."
+ },
+ "overall_status": "MISMATCH:  every declared observation is byte-identical to locked Ghidra 12.0.4, but production x86-64-gcc.cspec text ingestion, <modelrule> construction/behavior, alias compatibility/error semantics, and the unknown-name default adapter remain mismatched; resolveprototype, join, default-return, exception partial-state, reverse-justified big-endian, and register-strategy branches remain untested."
 }

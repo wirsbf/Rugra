@@ -1,104 +1,104 @@
 {
-  "schema": 2,
-  "fixture_id": "HERITAGE-DRIVER-SWITCH-0001",
-  "stable_function_id": "GH12-F-c8e1d0a9f4b27e63521c",
-  "stable_function_closure": [
-    "ghidra::ActionHeritage::apply coreaction.hh:289",
-    "ghidra::Funcdata::opHeritage funcdata.hh:462",
-    "ghidra::Heritage::heritage heritage.cc:2663",
-    "ghidra::Heritage::placeMultiequals heritage.cc:2599",
-    "ghidra::Heritage::collect heritage.cc:307",
-    "ghidra::Heritage::guard heritage.cc:1156",
-    "ghidra::Heritage::normalizeReadSize heritage.cc:383",
-    "ghidra::Heritage::rename heritage.cc:2587",
-    "ghidra::Heritage::renameRecurse heritage.cc:2479",
-    "ghidra::LocationMap::add heritage.cc:34",
-    "ghidra::LocationMap::findPass heritage.cc:91",
-    "ghidra::HeritageInfo::HeritageInfo heritage.cc:180"
+ "schema": 2,
+ "fixture_id": "HERITAGE-DRIVER-SWITCH-0001",
+ "stable_function_id": "GH12-F-74ff07e591f14d56721e",
+ "stable_function_closure": [
+  "ghidra::ActionHeritage::apply coreaction.hh:289",
+  "ghidra::Funcdata::opHeritage funcdata.hh:462",
+  "ghidra::Heritage::heritage heritage.cc:2663",
+  "ghidra::Heritage::placeMultiequals heritage.cc:2599",
+  "ghidra::Heritage::collect heritage.cc:307",
+  "ghidra::Heritage::guard heritage.cc:1156",
+  "ghidra::Heritage::normalizeReadSize heritage.cc:383",
+  "ghidra::Heritage::rename heritage.cc:2587",
+  "ghidra::Heritage::renameRecurse heritage.cc:2479",
+  "ghidra::LocationMap::add heritage.cc:34",
+  "ghidra::LocationMap::findPass heritage.cc:91",
+  "ghidra::HeritageInfo::HeritageInfo heritage.cc:180"
+ ],
+ "overall_status": "UNTESTED:  (B2 migration of partial match state) rework-r2 (review M1/M2) \u2014 the canonical production driver chain is byte-matched end to end on all five boundary shapes, including the refinement live-visibility case (a partial-width write forces cc:2610-2616 refinement; the oracle's live beginLoc/endLoc re-collect sees the cc:1902-1906 pieces, second piece gets its own promoted input, PIECE reassembles the read; the pre-rework frozen-snapshot collect failed this case, proving discriminating power), single-pass write-read linking, three-pass repeatapply re-entry idempotence (stable op set, pass 0->3), cross-space LocationMap identity at a colliding register/stack offset (hp_reg=0/hp_stack=1, each space's read linked to its own write), and prev==2 old-range re-entry absorbing a late-injected free read with zero new ops. The E2E switch state (curl 124/124 processed, multiple-descendants WARN 351 = HEAD baseline, defects=0, deterministic sha, 1 reproducible helpf opSetOutput panic registered as HELPF-NONFREE-NORMALIZE-0001) is reported as evidence but is NOT oracle-compared; residuals keep the module at L2: production callspecs have no resolved ProtoModel so FuncCallSpecs::has_effect conservatively returns unknown_effect and canonical guardCalls emits an INDIRECT per call x range (main pass 0: 13,462 INDIRECT + 4,098 MULTIEQUAL, 674->22,186 ops, 8K->68K varnodes), which with the O(descend) Weak-upgrade has_no_descend/eraseDescend bank costs makes corpus functions exceed the example's 10s worker budget and shifts skeleton diff on the text-changed functions (defects stay 0) \u2014 both bound to FUNCPROTO-MODEL-BIND-0001/CSPEC-TEXT-INGEST-0001 and a varnode-bank performance TODO",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{coreaction.hh:281-290,funcdata.hh:231,462,heritage.cc:34-100,180-204,307-401,1156-1200,2587-2645,2663-2758,funcdata_varnode.cc:340-371}",
+  "signature": "int4 ActionHeritage::apply(Funcdata &data); void Funcdata::opHeritage(void); void Heritage::heritage(void); int4 LocationMap::findPass(const Address &addr) const"
+ },
+ "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; register delay=0, stack delay=1",
+ "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level disabled",
+ "analysis_options": {
+  "entrypoint": "Direct invocation of the production boundary Funcdata::opHeritage (funcdata.hh:462) once (case A), three times (case B), twice (case C/D) on a fresh Funcdata; no Action tree, no C emission; the pass counter is read after the calls (C++ getHeritagePass / Rust num_heritage_passes)",
+  "prestate": "Per-case fresh Funcdata built through production APIs (newOp/opSetOpcode/opSetInput/opSetOutput/newUniqueOut/newConstant/newVarnode/opInsertEnd/newBlockBasic/addEdge). Both sides apply the startProcessing steps a synthetic graph can reach: structureLoops+calcForwardDominator (Ghidra) mirrors as find_spanning_tree (BLOCK-INDEX-ASSIGN-0001) + BlockGraph::build_dom_tree, then heritage.buildInfoList (funcdata.cc:166). Every read is a fresh free Varnode with exactly one descendant, mirroring the PcodeEmitFd::dump single-descendant invariant (funcdata.cc:878-908)",
+  "observation": "Per case: pass counter; Heritage::heritagePass (heritage.hh:325) at the same offset in the register and the stack space (C++ LocationMap::findPass / Rugra globaldisjoint.find_pass); read input descriptors after rename; live op count; whole-bank free-with-descendant census (varnode.cc:334-336 throw precondition); phi projection (block-index/block-position order, output descriptor, per-slot input descriptor with the in-edge predecessor index); full op list in SeqNum order as name.OPCODE(input descriptors); sorted Varnode descriptor multiset. Case D additionally prints the op count captured after pass 0 (re-entry must not add ops)",
+  "normalization": "No order, flag, list, or membership normalization; absolute unique-space offsets are not printed because allocation bases differ between the implementations; descriptors carry space class, offset or size, def-use class, and defining opcode"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "switch_written_read: single block b0 with w=INT_SUB(C1:0,C1:1) writing register 0x30:8 and r=INT_OR(fresh free R0x30:8, C8:11) with unique output plus a CBRANCH; ONE opHeritage (pass 0). The read links to the write (R30:8:W+INT_SUB), hp_reg=0, hp_stack=-1, free_with_reader=0.",
+   "switch_diamond_reherit: b0->{b1,b2}->b3 diamond with w1=INT_SUB and w2=INT_OR both writing register 0x38:8 and r=INT_ADD(fresh free R0x38:8, C8:6) at the join; THREE opHeritage calls (the repeatapply mainloop re-entry shape). pass=3, one phi at b3 head with reverse-predecessor slot wiring, op set stable across re-runs (idempotence).",
+   "switch_cross_space: b0->b1 chain with wr=INT_SUB writing register 0x30:8 and ws=INT_OR writing STACK 0x30:8 in b0, and rr=INT_ADD(free R0x30:8)/rs=INT_ADD(free S0x30:8) in b1 plus RETURN; TWO opHeritage calls (register delay 0, stack delay 1). hp_reg=0 and hp_stack=1 \u2014 two disjoint LocationMap entries at the same offset (the space identity of map<Address,SizePass>); each read links to its OWN space's write.",
+   "switch_late_free_reentry: b0->b1 with w=INT_SUB writing register 0x40:8, r1=INT_OR(free R0x40:8) and RETURN; opHeritage (pass 0); then a NEW free read r2=INT_ADD(R0x40:8) is injected (post-heritage churn) and opHeritage runs again (pass 1). The prev==2 OLD range re-enters (heritage.cc:2711-2719) and absorbs the fresh read into the existing write with zero new ops.",
+   "switch_refinement_recollect: b0->b1 with w=INT_SUB writing register 0x50:4 (partial write) and r=INT_ADD(fresh free R0x50:8) plus RETURN; ONE opHeritage. The 8-byte range has max write 4 < 8 so placeMultiequals refines it into two 4-byte pieces (cc:2610-2616); the LIVE beginLoc/endLoc re-collect (cc:2615) sees the refineRead/refineWrite pieces (cc:1902-1906) \u2014 the second piece gets its own promoted input (R54:4:I) and a PIECE op reassembles the full-width read (U8:W+PIECE). An entry-frozen snapshot hides the pieces (review M1): the fixture asserts free_with_reader=0, which the frozen implementation fails."
   ],
-  "overall_status": "PARTIAL_MATCH: rework-r2 (review M1/M2) — the canonical production driver chain is byte-matched end to end on all five boundary shapes, including the refinement live-visibility case (a partial-width write forces cc:2610-2616 refinement; the oracle's live beginLoc/endLoc re-collect sees the cc:1902-1906 pieces, second piece gets its own promoted input, PIECE reassembles the read; the pre-rework frozen-snapshot collect failed this case, proving discriminating power), single-pass write-read linking, three-pass repeatapply re-entry idempotence (stable op set, pass 0->3), cross-space LocationMap identity at a colliding register/stack offset (hp_reg=0/hp_stack=1, each space's read linked to its own write), and prev==2 old-range re-entry absorbing a late-injected free read with zero new ops. The E2E switch state (curl 124/124 processed, multiple-descendants WARN 351 = HEAD baseline, defects=0, deterministic sha, 1 reproducible helpf opSetOutput panic registered as HELPF-NONFREE-NORMALIZE-0001) is reported as evidence but is NOT oracle-compared; residuals keep the module at L2: production callspecs have no resolved ProtoModel so FuncCallSpecs::has_effect conservatively returns unknown_effect and canonical guardCalls emits an INDIRECT per call x range (main pass 0: 13,462 INDIRECT + 4,098 MULTIEQUAL, 674->22,186 ops, 8K->68K varnodes), which with the O(descend) Weak-upgrade has_no_descend/eraseDescend bank costs makes corpus functions exceed the example's 10s worker budget and shifts skeleton diff on the text-changed functions (defects stay 0) — both bound to FUNCPROTO-MODEL-BIND-0001/CSPEC-TEXT-INGEST-0001 and a varnode-bank performance TODO",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{coreaction.hh:281-290,funcdata.hh:231,462,heritage.cc:34-100,180-204,307-401,1156-1200,2587-2645,2663-2758,funcdata_varnode.cc:340-371}",
-    "signature": "int4 ActionHeritage::apply(Funcdata &data); void Funcdata::opHeritage(void); void Heritage::heritage(void); int4 LocationMap::findPass(const Address &addr) const"
-  },
-  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; register delay=0, stack delay=1",
-  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level disabled",
-  "analysis_options": {
-    "entrypoint": "Direct invocation of the production boundary Funcdata::opHeritage (funcdata.hh:462) once (case A), three times (case B), twice (case C/D) on a fresh Funcdata; no Action tree, no C emission; the pass counter is read after the calls (C++ getHeritagePass / Rust num_heritage_passes)",
-    "prestate": "Per-case fresh Funcdata built through production APIs (newOp/opSetOpcode/opSetInput/opSetOutput/newUniqueOut/newConstant/newVarnode/opInsertEnd/newBlockBasic/addEdge). Both sides apply the startProcessing steps a synthetic graph can reach: structureLoops+calcForwardDominator (Ghidra) mirrors as find_spanning_tree (BLOCK-INDEX-ASSIGN-0001) + BlockGraph::build_dom_tree, then heritage.buildInfoList (funcdata.cc:166). Every read is a fresh free Varnode with exactly one descendant, mirroring the PcodeEmitFd::dump single-descendant invariant (funcdata.cc:878-908)",
-    "observation": "Per case: pass counter; Heritage::heritagePass (heritage.hh:325) at the same offset in the register and the stack space (C++ LocationMap::findPass / Rugra globaldisjoint.find_pass); read input descriptors after rename; live op count; whole-bank free-with-descendant census (varnode.cc:334-336 throw precondition); phi projection (block-index/block-position order, output descriptor, per-slot input descriptor with the in-edge predecessor index); full op list in SeqNum order as name.OPCODE(input descriptors); sorted Varnode descriptor multiset. Case D additionally prints the op count captured after pass 0 (re-entry must not add ops)",
-    "normalization": "No order, flag, list, or membership normalization; absolute unique-space offsets are not printed because allocation bases differ between the implementations; descriptors carry space class, offset or size, def-use class, and defining opcode"
-  },
-  "input_manifest": {
-    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
-    "cases": [
-      "switch_written_read: single block b0 with w=INT_SUB(C1:0,C1:1) writing register 0x30:8 and r=INT_OR(fresh free R0x30:8, C8:11) with unique output plus a CBRANCH; ONE opHeritage (pass 0). The read links to the write (R30:8:W+INT_SUB), hp_reg=0, hp_stack=-1, free_with_reader=0.",
-      "switch_diamond_reherit: b0->{b1,b2}->b3 diamond with w1=INT_SUB and w2=INT_OR both writing register 0x38:8 and r=INT_ADD(fresh free R0x38:8, C8:6) at the join; THREE opHeritage calls (the repeatapply mainloop re-entry shape). pass=3, one phi at b3 head with reverse-predecessor slot wiring, op set stable across re-runs (idempotence).",
-      "switch_cross_space: b0->b1 chain with wr=INT_SUB writing register 0x30:8 and ws=INT_OR writing STACK 0x30:8 in b0, and rr=INT_ADD(free R0x30:8)/rs=INT_ADD(free S0x30:8) in b1 plus RETURN; TWO opHeritage calls (register delay 0, stack delay 1). hp_reg=0 and hp_stack=1 — two disjoint LocationMap entries at the same offset (the space identity of map<Address,SizePass>); each read links to its OWN space's write.",
-      "switch_late_free_reentry: b0->b1 with w=INT_SUB writing register 0x40:8, r1=INT_OR(free R0x40:8) and RETURN; opHeritage (pass 0); then a NEW free read r2=INT_ADD(R0x40:8) is injected (post-heritage churn) and opHeritage runs again (pass 1). The prev==2 OLD range re-enters (heritage.cc:2711-2719) and absorbs the fresh read into the existing write with zero new ops.",
-      "switch_refinement_recollect: b0->b1 with w=INT_SUB writing register 0x50:4 (partial write) and r=INT_ADD(fresh free R0x50:8) plus RETURN; ONE opHeritage. The 8-byte range has max write 4 < 8 so placeMultiequals refines it into two 4-byte pieces (cc:2610-2616); the LIVE beginLoc/endLoc re-collect (cc:2615) sees the refineRead/refineWrite pieces (cc:1902-1906) — the second piece gets its own promoted input (R54:4:I) and a PIECE op reassembles the full-width read (U8:W+PIECE). An entry-frozen snapshot hides the pieces (review M1): the fixture asserts free_with_reader=0, which the frozen implementation fails."
-    ],
-    "sha256": "679c848b40c8fde7fbb0c7f169b04d0c3677ad86b3cc2096cd647e48b76e8eda"
-  },
-  "observation_schema": {
-    "format": "Six fixed-order UTF-8 lines with final newline: one envelope plus five case records",
-    "state": "pass counter; per-space heritagePass at colliding offsets; read input descriptor(s); live op count (plus ops_after_pass0 for the re-entry case); free_with_reader census; phi projection; op list (SeqNum order); sorted Varnode descriptor multiset",
-    "graph": "def-use class and defining opcode per op input slot, Varnode space class, offset or size, def-use class and defining opcode multiset, phi slot <-> merge-block in-edge predecessor mapping"
-  },
-  "comparand": {
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-driver-switch-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-    "rugra_base_commit": "9dadb2a32b02216a25e5af4483782d8f5f7d3027",
-    "rugra_base_tree": "7c7518f8adddb10d1075d4d2942fb9b4d7e0becc",
-    "cpp_fixture_sha256": "57f34a6cafb3a2c7101f51666cf379f74ed2097dfc91d39e6fb1f29c13e7b1fb",
-    "rust_fixture_sha256": "199135bc3139d611a72a453bd128855bc872ee9d3c19e940abeedf0cbcd03e96",
-    "heritage_rs_sha256": "09dbf88bec6d789de79d4bc688bbe8822bfcfb5ba80f7d7957383e5a7b4378b2",
-    "coreaction_rs_sha256": "332ca8364986c93217a95daac29dc7ccd2730033d078771b019b303fb8beea8e",
-    "funcdata_rs_sha256": "c8ecad5bd8a17d1f5437550e2038d5c4b160d3ae1750d28edc3ab495b90f7912",
-    "heritage_doc_sha256": "1d42a516a4f3d1e829d99e9f258f757cb8c995ed92d0654699500de881fbbd9b",
-    "coreaction_doc_sha256": "fc1c99d6be8e23a0a15eac8720283317881e9bd6d1d6f337e30fa3b6f06a0dd7",
-    "funcdata_doc_sha256": "e1a6a9e57c26c3453cd9fa7ab6fe33dafef7f15b3abe7b17fd952040845b850c",
-    "runner_sha256": "9652ddb4c8314901b8b7260027606a30320931e0941c4f4e0583af7b4079398f",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "rust_crate_tree_sha256": "9c29f681f1bb264945c47795c751c2026fb3ce5ee3640b85c9068add3134d9d4",
-    "host": {
-      "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-      "cxx_target": "x86_64-linux-gnu",
-      "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
-      "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-      "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
-      "make_path": "/usr/bin/make",
-      "python_path": "/usr/bin/python3.10",
-      "git_path": "/usr/bin/git",
-      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-      "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
-      "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
-      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-      "platform": "Linux 6.8.0-124-generic x86_64"
-    }
-  },
-  "build": {
-    "registry_packages": 164,
-    "registry_lock_closure_sha256": "1c14a23ed645803e17c3430bd19f8db87446a7097d2613dd56621f8714212e2a",
-    "registry_lock_closure_scheme": "sha256 of rugra-heritage-driver-switch-registry-lock-v1 plus sorted length-prefixed name/version/checksum records from the pinned-base Cargo.lock"
-  },
-  "expected_stdout_sha256": "325f22860b985370ba87f95f513f49fc205de7b2d6c6e1a15b447e3d69785738",
-  "expected_exit_code": 0,
-  "covered_projection_status": "MATCH",
-  "coverage": {
-    "single_pass_written_link": "MATCH: case A read_in=R30:8:W+INT_SUB, hp_reg=0, hp_stack=-1, free_with_reader=0",
-    "reentry_idempotence_diamond": "MATCH: case B pass=3 with one b3 phi, slot wiring s0<INT_SUB>#p2,s1<INT_OR>#p1, op set identical across the three boundary calls",
-    "cross_space_location_map": "MATCH: case C hp_reg=0/hp_stack=1 at the same offset 0x30, register read links to wr.INT_SUB and stack read to ws.INT_OR — Ghidra map<Address,SizePass> space identity and Rugra (AddressSpace,Address) key agree",
-    "late_free_reentry_absorption": "MATCH: case D pass=2, ops=ops_after_pass0=4, the late free R0x40:8 read re-linked to w.INT_SUB with no new phi (heritage.cc:2711-2719 prev==2 re-entry)",
-    "free_with_reader_census": "MATCH: zero free-with-descendant varnodes over the whole bank in all four cases (varnode.cc:334-336 throw precondition)",
-    "production_action_switch": "MATCH: Rugra ActionHeritage::apply is now the verbatim coreaction.hh:289 body (fd.op_heritage(); Ok(0)) with no pass guard / embedded DeadCode / direct double pass; verified by the E2E evidence in overall_status (not oracle-compared)",
-    "e2e_throughput_residual": "MISMATCH: 8 corpus functions exceed the 10s worker budget (76->68 decompiled) from the modelless-callspec guardCalls INDIRECT storm + O(descend) bank costs; skeleton diff +1..+277 on 11 text-changed functions with defects=0 — bound to FUNCPROTO-MODEL-BIND-0001/CSPEC-TEXT-INGEST-0001 and the varnode-bank performance TODO",
-    "refinement_live_recollect": "MATCH: case E read_in=U8:W+PIECE with phi.PIECE(R54:4:I,R50:4:W+INT_SUB) — the refinement pieces created mid-walk are consumed by the live re-collect in the same pass (discriminating: the frozen-snapshot implementation fails the case-E free_with_reader=0 assertion and prints no case line)"
+  "sha256": "679c848b40c8fde7fbb0c7f169b04d0c3677ad86b3cc2096cd647e48b76e8eda"
+ },
+ "observation_schema": {
+  "format": "Six fixed-order UTF-8 lines with final newline: one envelope plus five case records",
+  "state": "pass counter; per-space heritagePass at colliding offsets; read input descriptor(s); live op count (plus ops_after_pass0 for the re-entry case); free_with_reader census; phi projection; op list (SeqNum order); sorted Varnode descriptor multiset",
+  "graph": "def-use class and defining opcode per op input slot, Varnode space class, offset or size, def-use class and defining opcode multiset, phi slot <-> merge-block in-edge predecessor mapping"
+ },
+ "comparand": {
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-driver-switch-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "rugra_base_commit": "9dadb2a32b02216a25e5af4483782d8f5f7d3027",
+  "rugra_base_tree": "7c7518f8adddb10d1075d4d2942fb9b4d7e0becc",
+  "cpp_fixture_sha256": "57f34a6cafb3a2c7101f51666cf379f74ed2097dfc91d39e6fb1f29c13e7b1fb",
+  "rust_fixture_sha256": "199135bc3139d611a72a453bd128855bc872ee9d3c19e940abeedf0cbcd03e96",
+  "heritage_rs_sha256": "09dbf88bec6d789de79d4bc688bbe8822bfcfb5ba80f7d7957383e5a7b4378b2",
+  "coreaction_rs_sha256": "332ca8364986c93217a95daac29dc7ccd2730033d078771b019b303fb8beea8e",
+  "funcdata_rs_sha256": "c8ecad5bd8a17d1f5437550e2038d5c4b160d3ae1750d28edc3ab495b90f7912",
+  "heritage_doc_sha256": "1d42a516a4f3d1e829d99e9f258f757cb8c995ed92d0654699500de881fbbd9b",
+  "coreaction_doc_sha256": "fc1c99d6be8e23a0a15eac8720283317881e9bd6d1d6f337e30fa3b6f06a0dd7",
+  "funcdata_doc_sha256": "e1a6a9e57c26c3453cd9fa7ab6fe33dafef7f15b3abe7b17fd952040845b850c",
+  "runner_sha256": "9652ddb4c8314901b8b7260027606a30320931e0941c4f4e0583af7b4079398f",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_sha256": "9c29f681f1bb264945c47795c751c2026fb3ce5ee3640b85c9068add3134d9d4",
+  "host": {
+   "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+   "cxx_target": "x86_64-linux-gnu",
+   "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+   "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+   "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.10",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+   "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+   "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+   "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+   "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+   "platform": "Linux 6.8.0-124-generic x86_64"
   }
+ },
+ "build": {
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "1c14a23ed645803e17c3430bd19f8db87446a7097d2613dd56621f8714212e2a",
+  "registry_lock_closure_scheme": "sha256 of rugra-heritage-driver-switch-registry-lock-v1 plus sorted length-prefixed name/version/checksum records from the pinned-base Cargo.lock"
+ },
+ "expected_stdout_sha256": "325f22860b985370ba87f95f513f49fc205de7b2d6c6e1a15b447e3d69785738",
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "coverage": {
+  "single_pass_written_link": "MATCH: case A read_in=R30:8:W+INT_SUB, hp_reg=0, hp_stack=-1, free_with_reader=0",
+  "reentry_idempotence_diamond": "MATCH: case B pass=3 with one b3 phi, slot wiring s0<INT_SUB>#p2,s1<INT_OR>#p1, op set identical across the three boundary calls",
+  "cross_space_location_map": "MATCH: case C hp_reg=0/hp_stack=1 at the same offset 0x30, register read links to wr.INT_SUB and stack read to ws.INT_OR \u2014 Ghidra map<Address,SizePass> space identity and Rugra (AddressSpace,Address) key agree",
+  "late_free_reentry_absorption": "MATCH: case D pass=2, ops=ops_after_pass0=4, the late free R0x40:8 read re-linked to w.INT_SUB with no new phi (heritage.cc:2711-2719 prev==2 re-entry)",
+  "free_with_reader_census": "MATCH: zero free-with-descendant varnodes over the whole bank in all four cases (varnode.cc:334-336 throw precondition)",
+  "production_action_switch": "MATCH: Rugra ActionHeritage::apply is now the verbatim coreaction.hh:289 body (fd.op_heritage(); Ok(0)) with no pass guard / embedded DeadCode / direct double pass; verified by the E2E evidence in overall_status (not oracle-compared)",
+  "e2e_throughput_residual": "MISMATCH: 8 corpus functions exceed the 10s worker budget (76->68 decompiled) from the modelless-callspec guardCalls INDIRECT storm + O(descend) bank costs; skeleton diff +1..+277 on 11 text-changed functions with defects=0 \u2014 bound to FUNCPROTO-MODEL-BIND-0001/CSPEC-TEXT-INGEST-0001 and the varnode-bank performance TODO",
+  "refinement_live_recollect": "MATCH: case E read_in=U8:W+PIECE with phi.PIECE(R54:4:I,R50:4:W+INT_SUB) \u2014 the refinement pieces created mid-walk are consumed by the live re-collect in the same pass (discriminating: the frozen-snapshot implementation fails the case-E free_with_reader=0 assertion and prints no case line)"
+ }
 }

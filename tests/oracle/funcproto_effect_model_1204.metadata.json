@@ -1,110 +1,136 @@
 {
-  "schema_version": 1,
-  "fixture_id": "PROTO-EFFECT-MODEL-0001",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ "schema_version": 1,
+ "fixture_id": "PROTO-EFFECT-MODEL-0001",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "role": "Loads the locked AddrSpaceManager and TypeFactory only; the tested ProtoModel definitions are explicit fixture XML and contain no ABI register names",
+  "path": "sleigh_specs/x86-64-gcc.cspec",
+  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+ },
+ "analysis_options": {
+  "apis": [
+   "FuncProto::FuncProto(void)",
+   "FuncProto::copy(const FuncProto &)",
+   "FuncProto::setModel(ProtoModel *)",
+   "FuncProto::hasEffect(const Address &,int4)",
+   "FuncProto::effectBegin(void)",
+   "FuncProto::effectEnd(void)",
+   "FuncProto::hasModel(void)",
+   "FuncProto::getExtraPop(void)",
+   "FuncProto::isAutoKilledByCall(void)",
+   "ProtoModel::lookupEffect(const vector<EffectRecord> &,const Address &,int4)",
+   "ProtoModel::lookupRecord(const vector<EffectRecord> &,int4,const Address &,int4)",
+   "ProtoModel::hasEffect(const Address &,int4)",
+   "EffectRecord::compareByAddress(const EffectRecord &,const EffectRecord &)"
+  ],
+  "model": "One explicit symbol-free model object shared by the source and copied FuncProto; a separately decoded same-definition model proves identity is not structural equality",
+  "effects": "Sorted full-address records over ram/register/stack plus implicit IPTR_INTERNAL handling; local override lists are completed through FuncProto::decodeEffect",
+  "normalization": "Pointer values are not serialized. Ghidra model identity is observed through FuncProto::hasMatchingModel against the exact source ProtoModel pointer; Rugra observes Arc identity directly. All semantic arrays retain declared order."
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
-  "architecture": "x86:LE:64:default",
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+  },
   "compiler_spec": {
-    "id": "gcc",
-    "role": "Loads the locked AddrSpaceManager and TypeFactory only; the tested ProtoModel definitions are explicit fixture XML and contain no ABI register names",
-    "path": "sleigh_specs/x86-64-gcc.cspec",
-    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
   },
-  "analysis_options": {
-    "apis": [
-      "FuncProto::FuncProto(void)",
-      "FuncProto::copy(const FuncProto &)",
-      "FuncProto::setModel(ProtoModel *)",
-      "FuncProto::hasEffect(const Address &,int4)",
-      "FuncProto::effectBegin(void)",
-      "FuncProto::effectEnd(void)",
-      "FuncProto::hasModel(void)",
-      "FuncProto::getExtraPop(void)",
-      "FuncProto::isAutoKilledByCall(void)",
-      "ProtoModel::lookupEffect(const vector<EffectRecord> &,const Address &,int4)",
-      "ProtoModel::lookupRecord(const vector<EffectRecord> &,int4,const Address &,int4)",
-      "ProtoModel::hasEffect(const Address &,int4)",
-      "EffectRecord::compareByAddress(const EffectRecord &,const EffectRecord &)"
-    ],
-    "model": "One explicit symbol-free model object shared by the source and copied FuncProto; a separately decoded same-definition model proves identity is not structural equality",
-    "effects": "Sorted full-address records over ram/register/stack plus implicit IPTR_INTERNAL handling; local override lists are completed through FuncProto::decodeEffect",
-    "normalization": "Pointer values are not serialized. Ghidra model identity is observed through FuncProto::hasMatchingModel against the exact source ProtoModel pointer; Rugra observes Arc identity directly. All semantic arrays retain declared order."
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
   },
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
-    },
-    "binary": {
-      "path": "examples/curl",
-      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-      "size": 161728
-    }
+  "binary": {
+   "path": "examples/curl",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "size": 161728
+  }
+ },
+ "input_manifest": {
+  "cases": {
+   "spaces_in_probe_order": [
+    "unique",
+    "const",
+    "ram",
+    "register",
+    "register",
+    "register",
+    "register",
+    "register",
+    "register",
+    "stack",
+    "register",
+    "register"
+   ],
+   "range_kinds": [
+    "internal-always-unaffected",
+    "same-offset-constant-space",
+    "size-zero-whole-space",
+    "exact",
+    "contained",
+    "partial-left",
+    "partial-right",
+    "exact-killed",
+    "exact-return-address",
+    "same-offset-other-space",
+    "same-offset-register",
+    "before-first"
+   ],
+   "override_a": "register:0x10/8 unaffected -> killedbycall",
+   "override_b": "register:0x30/8 return_address -> unaffected",
+   "lookup_record_before_first": "single register:0x10/8 record queried by register:0x08/16 partial overlap and register:0x00/8 disjoint range",
+   "set_model": "known extrapop=16/hasthis/constructor/auto-killed -> existing unknown-extrapop legacy-output(auto-killed) model -> known extrapop=24 legacy-output(auto-killed) model -> null; separate internally-backed null-model output-lock false-to-true probe",
+   "copy_nonmember_state": "source returnBytesConsumed=7 and destination=3; copy must preserve the destination constructor-only field"
   },
-  "input_manifest": {
-    "cases": {
-      "spaces_in_probe_order": ["unique", "const", "ram", "register", "register", "register", "register", "register", "register", "stack", "register", "register"],
-      "range_kinds": ["internal-always-unaffected", "same-offset-constant-space", "size-zero-whole-space", "exact", "contained", "partial-left", "partial-right", "exact-killed", "exact-return-address", "same-offset-other-space", "same-offset-register", "before-first"],
-      "override_a": "register:0x10/8 unaffected -> killedbycall",
-      "override_b": "register:0x30/8 return_address -> unaffected",
-      "lookup_record_before_first": "single register:0x10/8 record queried by register:0x08/16 partial overlap and register:0x00/8 disjoint range",
-      "set_model": "known extrapop=16/hasthis/constructor/auto-killed -> existing unknown-extrapop legacy-output(auto-killed) model -> known extrapop=24 legacy-output(auto-killed) model -> null; separate internally-backed null-model output-lock false-to-true probe",
-      "copy_nonmember_state": "source returnBytesConsumed=7 and destination=3; copy must preserve the destination constructor-only field"
-    },
-    "sha256": "495072779b32ad0c7b7a6b76a84d3de961a0e01829168b3f46943dc4867cc805"
-  },
-  "observation_schema": {
-    "format": "One compact UTF-8 JSON object with fixed key and array order plus final newline",
-    "model_effects": "effect type for every full (AddrSpace, offset, size) probe; const-before-ram ordering distinguishes AddrSpace index from Rust enum declaration order",
-    "effective_records": "effectBegin/effectEnd delegation order for the model fallback and completed local override",
-    "model_identity": "copy shares the exact model object; independently decoded same-definition model does not",
-    "override_copy": "FuncProto::copy shares model identity but value-copies the completed local EffectRecord vector",
-    "lookup_record_before_first": "direct -2 partial-overlap versus -1 disjoint classification when upper_bound returns begin",
-    "set_model": "extrapop unknown retention, later known-value replacement, sticky derived flags, null-model extrapop/name transition, and output-lock-only auto-kill",
-    "copy_nonmember_state": "returnBytesConsumed remains destination-local because locked FuncProto::copy does not assign it"
-  },
-  "comparand": {
-    "rugra_base_commit": "8ce126c3be09235f1c25f6baf79f71e736a83b82",
-    "rugra_base_tree": "dc3deea10753d6bb19db5273f68c65ec4aa7afab",
-    "locked_libdecomp_a_sha256": "8ebf4390380a2759145100bb4b1b34bfade1cfb55af58dc364196b797457018d",
-    "runner_sha256": "bddf29034ae69c9f758dacdd57a380ad9e2281e7eac2d5013b207397207e9df8",
-    "cpp_fixture_sha256": "ec3e359794c203e25b5b381ec7e7745d72d0fc27f15a51d35352e361effb12ad",
-    "rust_fixture_sha256": "ad17e0615d0ecf69f67c8f5b448a555ea855ff5530a21ba97968d83cc0569e61",
-    "fspec_rs_sha256": "ee3b85386b48fe2cf9328bfd90f6cc2b0f579945d9539caf785c2e041efccc46",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
-  },
-  "expected_stdout_sha256": "c334a069509eef1070245e9e0f151ea821af7d97eac484b4d31ee5109e4b8951",
-  "expected_exit_code": 0,
-  "coverage": {
-    "constructor_zero_state": "MATCH (indirectly observed by first setModel guard)",
-    "copy_model_identity_and_effect_values": "MATCH",
-    "set_model_derived_state": "MATCH",
-    "model_effect_fallback": "MATCH",
-    "override_precedence": "MATCH",
-    "full_address_space_and_range_boundaries": "MATCH",
-    "malformed_unsorted_effect_input": "UNTESTED",
-    "null_model_has_effect_precondition_violation": "UNTESTED"
-  },
-  "overall_status": "PARTIAL_MATCH: every declared semantic observation is byte-identical to locked Ghidra; malformed-input and precondition-violation behavior remain UNTESTED"
+  "sha256": "495072779b32ad0c7b7a6b76a84d3de961a0e01829168b3f46943dc4867cc805"
+ },
+ "observation_schema": {
+  "format": "One compact UTF-8 JSON object with fixed key and array order plus final newline",
+  "model_effects": "effect type for every full (AddrSpace, offset, size) probe; const-before-ram ordering distinguishes AddrSpace index from Rust enum declaration order",
+  "effective_records": "effectBegin/effectEnd delegation order for the model fallback and completed local override",
+  "model_identity": "copy shares the exact model object; independently decoded same-definition model does not",
+  "override_copy": "FuncProto::copy shares model identity but value-copies the completed local EffectRecord vector",
+  "lookup_record_before_first": "direct -2 partial-overlap versus -1 disjoint classification when upper_bound returns begin",
+  "set_model": "extrapop unknown retention, later known-value replacement, sticky derived flags, null-model extrapop/name transition, and output-lock-only auto-kill",
+  "copy_nonmember_state": "returnBytesConsumed remains destination-local because locked FuncProto::copy does not assign it"
+ },
+ "comparand": {
+  "rugra_base_commit": "8ce126c3be09235f1c25f6baf79f71e736a83b82",
+  "rugra_base_tree": "dc3deea10753d6bb19db5273f68c65ec4aa7afab",
+  "locked_libdecomp_a_sha256": "8ebf4390380a2759145100bb4b1b34bfade1cfb55af58dc364196b797457018d",
+  "runner_sha256": "bddf29034ae69c9f758dacdd57a380ad9e2281e7eac2d5013b207397207e9df8",
+  "cpp_fixture_sha256": "ec3e359794c203e25b5b381ec7e7745d72d0fc27f15a51d35352e361effb12ad",
+  "rust_fixture_sha256": "ad17e0615d0ecf69f67c8f5b448a555ea855ff5530a21ba97968d83cc0569e61",
+  "fspec_rs_sha256": "ee3b85386b48fe2cf9328bfd90f6cc2b0f579945d9539caf785c2e041efccc46",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
+ },
+ "expected_stdout_sha256": "c334a069509eef1070245e9e0f151ea821af7d97eac484b4d31ee5109e4b8951",
+ "expected_exit_code": 0,
+ "coverage": {
+  "constructor_zero_state": "MATCH (indirectly observed by first setModel guard)",
+  "copy_model_identity_and_effect_values": "MATCH",
+  "set_model_derived_state": "MATCH",
+  "model_effect_fallback": "MATCH",
+  "override_precedence": "MATCH",
+  "full_address_space_and_range_boundaries": "MATCH",
+  "malformed_unsorted_effect_input": "UNTESTED",
+  "null_model_has_effect_precondition_violation": "UNTESTED"
+ },
+ "overall_status": "UNTESTED:  (B2 migration of partial match state) every declared semantic observation is byte-identical to locked Ghidra; malformed-input and precondition-violation behavior remain untested"
 }

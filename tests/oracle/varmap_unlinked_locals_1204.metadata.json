@@ -1,103 +1,103 @@
 {
-  "schema": 2,
-  "fixture_id": "PRINTC-UNLINKED-REF-0001",
-  "stable_function_id": "GH12-F-8c2f4a91b0e3d5721469",
-  "stable_function_closure": [
-    "ghidra::HighVariable::hasName variable.cc:718",
-    "ghidra::Funcdata::linkSymbol funcdata_varnode.cc:1156",
-    "ghidra::Funcdata::handleSymbolConflict funcdata_varnode.cc:997",
-    "ghidra::Scope::queryProperties database.cc:1263",
-    "ghidra::Scope::addSymbol database.cc:1530",
-    "ghidra::Scope::addMapPoint database.cc:1548",
-    "ghidra::Scope::addMap database.cc:1116",
-    "ghidra::Scope::buildDefaultName database.cc:1756",
-    "ghidra::ScopeLocal::buildVariableName varmap.cc:548",
-    "ghidra::ScopeInternal::buildVariableName database.cc:2434",
-    "ghidra::ScopeInternal::renameSymbol database.cc:2152",
-    "ghidra::ActionNameVars::apply naming loop coreaction.cc:2988"
+ "schema": 2,
+ "fixture_id": "PRINTC-UNLINKED-REF-0001",
+ "stable_function_id": "GH12-F-69052102ef187116abea",
+ "stable_function_closure": [
+  "ghidra::HighVariable::hasName variable.cc:718",
+  "ghidra::Funcdata::linkSymbol funcdata_varnode.cc:1156",
+  "ghidra::Funcdata::handleSymbolConflict funcdata_varnode.cc:997",
+  "ghidra::Scope::queryProperties database.cc:1263",
+  "ghidra::Scope::addSymbol database.cc:1530",
+  "ghidra::Scope::addMapPoint database.cc:1548",
+  "ghidra::Scope::addMap database.cc:1116",
+  "ghidra::Scope::buildDefaultName database.cc:1756",
+  "ghidra::ScopeLocal::buildVariableName varmap.cc:548",
+  "ghidra::ScopeInternal::buildVariableName database.cc:2434",
+  "ghidra::ScopeInternal::renameSymbol database.cc:2152",
+  "ghidra::ActionNameVars::apply naming loop coreaction.cc:2988"
+ ],
+ "overall_status": "MATCH: the ActionNameVars local-entry judgment chain (HighVariable::hasName at variable.cc:718-747, Funcdata::linkSymbol at funcdata_varnode.cc:1156-1186 with queryProperties/handleSymbolConflict/addSymbol, and the coreaction.cc:2988-2997 buildDefaultName+renameSymbol loop) byte-matches the locked 12.0.4 oracle on all six local shapes of the PRINTC-UNLINKED-REF-0001 family. Every nameable high (explicit register local -> lVar1, illegal register input -> in_SREG1, address-tied stack local in the local window -> lStack_b8, input whose storage already carries a category-0 function_parameter symbol -> attach with no new symbol) DOES get its ScopeLocal symbol through the Rugra chain, and every high the oracle refuses to name (implied Unique-space temporary, unaffected legal spacebase input) gets none on either side. This locks the diagnosis that the E2E 'unlinked local' backfill names (glob_url uVar_9100/uVar_1000004a Unique-space temps, RSP-copy uVar20, cast-shadow widths, and the piVar1 print-side rewrite of the already-symbolized uVar1) are NOT a varmap/variable symbol-coverage defect: those highs fail the same hasName gate in the oracle. Residuals routed elsewhere (see docs/TODO_BOARD.md PRINTC-UNLINKED-REF-0001): printc's get_varnode_display_name_inner fallback names implied/non-nameable varnodes and prettyprint's backfill_missing_locals injects their declarations (printc/prettyprint lease); ScopeLocal::register_names is a hardcoded 25-entry GPR table installed by ActionRestructureVarnode instead of the SLEIGH register catalog (golden in_XMM0_Qa vs in_register_00000110, coreaction/varmap wiring); Rugra's FuncProto has no ProtoStoreSymbol equivalent so formal parameters never pre-enter ScopeLocal and unaffected inputs symbolize as in_XXX (funcdata/fspec lease).",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{variable.cc:718-747,funcdata_varnode.cc:997-1029,1156-1186,database.cc:1116-1176,1263-1281,1530-1561,1756-1786,2152-2165,2434-2518,varmap.cc:548-577,coreaction.cc:2961-2963,2988-2997,funcdata.cc:34-96}"
+ },
+ "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5 (spacebase over ram, pointer register 0x0 size 8, negative growth), join=6, iop=7; register catalog SREG1@0x100/8, SREG2@0x108/4",
+ "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, one stack localrange [0xffffffffffffff00, 0xffffffffffffffff] decoded through the production ProtoModel XML path",
+ "analysis_options": {
+  "entrypoint": "Direct invocation of the ActionNameVars judgment chain per candidate: high->hasName() (the coreaction.cc:2961-2962 gate; for single-instance highs the name-representative check at cc:2959-2960 is trivially satisfied), then data.linkSymbol(vn) (cc:2963), then for a linked name-undefined symbol the cc:2988-2997 loop: buildDefaultName(sym, base=1, vn) + renameSymbol. No Action tree, no C emission",
+  "prestate": "Per-case fresh Ghidra Funcdata built through the production ctor (funcdata.cc:34-96: ScopeLocal localmap + symbol-backed prototype store + resetLocalWindow against the decoded model). Each candidate Varnode is created with fd.newVarnode(size, addr, long), then carries its case flag set (insert always; implied / input / directwrite+spacebase+unaffected / addrtied per case) and fd.setHighLevel() assigns the HighVariable. The Rust comparand mirrors the same post-restructure state: a ScopeLocal installed into fd.scope with the same local window, negative growth, and register catalog, a vbank Varnode with the same flags and type, and set_high_level assigning the high",
+  "observation": "Per case: the gate verdicts (hasName, linked) and the complete ScopeLocal contents after the naming loop - every symbol's name, storage space, offset, size, category, dynamic flag, and first-use point - printed in canonical (space-name, offset, size, name) order with multi-entry symbols deduplicated to their first whole map, followed by the dynamic-entry list",
+  "normalization": "No order, flag, list, or membership normalization; symbol rows are re-sorted by the canonical key on both sides because the underlying storage (Ghidra per-space EntryMap lists vs Rugra Vec) orders differently while the set membership is the compared observable"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "explicit_register_local: register 0x0 size 8, insert only, type long - the strlen-result shape (glob_url piVar1's underlying merged high); linked and named lVar1 through the default-local branch with the shared base counter",
+   "implied_unique_temp: unique 0x9100 size 8, insert+implied, type long - the malloc-result temporary behind the backfilled uVar_9100 name; variable.cc:729-733 refuses the name, the scope stays empty on both sides",
+   "spacebase_stack_pointer: register 0x0 size 8, insert+input+directwrite+spacebase+unaffected - the stack-pointer input behind the backfilled uVar20 family; variable.cc:743 refuses the name (legal unaffected input that is the spacebase), the scope stays empty",
+   "irregular_input: register 0x100 size 8, insert+input (illegal: no directwrite), type long - the in_XXX shape; linked and named in_SREG1 through the irregular-input branch (database.cc:2467-2474 via translate getRegisterName)",
+   "addrtied_stack_local: stack 0xffffffffffffff48 size 8, insert+addrtied, type long, inside the local window; linked with an unrestricted use (funcdata_varnode.cc:1175-1176) and named lStack_b8 through ScopeLocal::buildVariableName's Stack branch (varmap.cc:548-577)",
+   "formal_param_attach: a p0 function_parameter symbol (category 0) pre-created at register 0x100 with usepoint base-1, then an input high at the same storage; queryProperties finds the entry and handleSymbolConflict attaches the input - no new symbol is created and the parameter category survives (the no_category decl-walk exclusion invariant behind the golden signature carrying parameters)"
   ],
-  "overall_status": "MATCH: the ActionNameVars local-entry judgment chain (HighVariable::hasName at variable.cc:718-747, Funcdata::linkSymbol at funcdata_varnode.cc:1156-1186 with queryProperties/handleSymbolConflict/addSymbol, and the coreaction.cc:2988-2997 buildDefaultName+renameSymbol loop) byte-matches the locked 12.0.4 oracle on all six local shapes of the PRINTC-UNLINKED-REF-0001 family. Every nameable high (explicit register local -> lVar1, illegal register input -> in_SREG1, address-tied stack local in the local window -> lStack_b8, input whose storage already carries a category-0 function_parameter symbol -> attach with no new symbol) DOES get its ScopeLocal symbol through the Rugra chain, and every high the oracle refuses to name (implied Unique-space temporary, unaffected legal spacebase input) gets none on either side. This locks the diagnosis that the E2E 'unlinked local' backfill names (glob_url uVar_9100/uVar_1000004a Unique-space temps, RSP-copy uVar20, cast-shadow widths, and the piVar1 print-side rewrite of the already-symbolized uVar1) are NOT a varmap/variable symbol-coverage defect: those highs fail the same hasName gate in the oracle. Residuals routed elsewhere (see docs/TODO_BOARD.md PRINTC-UNLINKED-REF-0001): printc's get_varnode_display_name_inner fallback names implied/non-nameable varnodes and prettyprint's backfill_missing_locals injects their declarations (printc/prettyprint lease); ScopeLocal::register_names is a hardcoded 25-entry GPR table installed by ActionRestructureVarnode instead of the SLEIGH register catalog (golden in_XMM0_Qa vs in_register_00000110, coreaction/varmap wiring); Rugra's FuncProto has no ProtoStoreSymbol equivalent so formal parameters never pre-enter ScopeLocal and unaffected inputs symbolize as in_XXX (funcdata/fspec lease).",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{variable.cc:718-747,funcdata_varnode.cc:997-1029,1156-1186,database.cc:1116-1176,1263-1281,1530-1561,1756-1786,2152-2165,2434-2518,varmap.cc:548-577,coreaction.cc:2961-2963,2988-2997,funcdata.cc:34-96}"
-  },
-  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5 (spacebase over ram, pointer register 0x0 size 8, negative growth), join=6, iop=7; register catalog SREG1@0x100/8, SREG2@0x108/4",
-  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, one stack localrange [0xffffffffffffff00, 0xffffffffffffffff] decoded through the production ProtoModel XML path",
-  "analysis_options": {
-    "entrypoint": "Direct invocation of the ActionNameVars judgment chain per candidate: high->hasName() (the coreaction.cc:2961-2962 gate; for single-instance highs the name-representative check at cc:2959-2960 is trivially satisfied), then data.linkSymbol(vn) (cc:2963), then for a linked name-undefined symbol the cc:2988-2997 loop: buildDefaultName(sym, base=1, vn) + renameSymbol. No Action tree, no C emission",
-    "prestate": "Per-case fresh Ghidra Funcdata built through the production ctor (funcdata.cc:34-96: ScopeLocal localmap + symbol-backed prototype store + resetLocalWindow against the decoded model). Each candidate Varnode is created with fd.newVarnode(size, addr, long), then carries its case flag set (insert always; implied / input / directwrite+spacebase+unaffected / addrtied per case) and fd.setHighLevel() assigns the HighVariable. The Rust comparand mirrors the same post-restructure state: a ScopeLocal installed into fd.scope with the same local window, negative growth, and register catalog, a vbank Varnode with the same flags and type, and set_high_level assigning the high",
-    "observation": "Per case: the gate verdicts (hasName, linked) and the complete ScopeLocal contents after the naming loop - every symbol's name, storage space, offset, size, category, dynamic flag, and first-use point - printed in canonical (space-name, offset, size, name) order with multi-entry symbols deduplicated to their first whole map, followed by the dynamic-entry list",
-    "normalization": "No order, flag, list, or membership normalization; symbol rows are re-sorted by the canonical key on both sides because the underlying storage (Ghidra per-space EntryMap lists vs Rugra Vec) orders differently while the set membership is the compared observable"
-  },
-  "input_manifest": {
-    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
-    "cases": [
-      "explicit_register_local: register 0x0 size 8, insert only, type long - the strlen-result shape (glob_url piVar1's underlying merged high); linked and named lVar1 through the default-local branch with the shared base counter",
-      "implied_unique_temp: unique 0x9100 size 8, insert+implied, type long - the malloc-result temporary behind the backfilled uVar_9100 name; variable.cc:729-733 refuses the name, the scope stays empty on both sides",
-      "spacebase_stack_pointer: register 0x0 size 8, insert+input+directwrite+spacebase+unaffected - the stack-pointer input behind the backfilled uVar20 family; variable.cc:743 refuses the name (legal unaffected input that is the spacebase), the scope stays empty",
-      "irregular_input: register 0x100 size 8, insert+input (illegal: no directwrite), type long - the in_XXX shape; linked and named in_SREG1 through the irregular-input branch (database.cc:2467-2474 via translate getRegisterName)",
-      "addrtied_stack_local: stack 0xffffffffffffff48 size 8, insert+addrtied, type long, inside the local window; linked with an unrestricted use (funcdata_varnode.cc:1175-1176) and named lStack_b8 through ScopeLocal::buildVariableName's Stack branch (varmap.cc:548-577)",
-      "formal_param_attach: a p0 function_parameter symbol (category 0) pre-created at register 0x100 with usepoint base-1, then an input high at the same storage; queryProperties finds the entry and handleSymbolConflict attaches the input - no new symbol is created and the parameter category survives (the no_category decl-walk exclusion invariant behind the golden signature carrying parameters)"
-    ],
-    "sha256": "792bb1d900da566b9a305162bec84114d268a3f8e1b0a306a3d4db6e5f4a3f99"
-  },
-  "observation_schema": {
-    "format": "Twelve fixed-order UTF-8 lines with final newline: one envelope plus six case records (gate line plus zero or one symbol rows) covering the per-candidate verdicts and the resulting scope contents",
-    "state": "per-symbol name, storage space, offset, size, category, dynamic flag, first-use point in canonical sort order",
-    "direct": "hasName/linkSymbol gate verdicts per candidate"
-  },
-  "comparand": {
-    "rugra_base_commit": "4fcfc1bc5f72ea2491320ab0bb5d03735eebb5c8",
-    "rugra_base_tree": "7983ee9291900870415d6818851b9d2dad668a5f",
-    "cpp_fixture_sha256": "a95e1844a2216996721ffd47f46f462664578d4e280ee7ecaec09ae66dabc0fd",
-    "rust_fixture_sha256": "1411f3decc64dac5206038653e86fdcf1b4c59ec232c39a5e8eec9a87d5c2ef0",
-    "varmap_rs_sha256": "f11177c6d3def2dc05105f7bbb2c62443416a31bb019194821f0823f0cca5acf",
-    "variable_rs_sha256": "198d234a3f6284403214accc5eda2ad6fe12fbbdfb490f5f8533fdd7eb2c8bbc",
-    "varmap_doc_sha256": "15466dbcc5ff6b6e1d469637f8ce00ff1ab335cbb817d9416cbed55fc288ec74",
-    "variable_doc_sha256": "25652b742d45f1b75edd4468232a9e6fea7afaa271db6942e985fa73297d5272",
-    "runner_sha256": "73a8e6d1bd0a6f9fb290b57d289cc0b905ec6ff1dd345c28ccb3a3663e726139",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "rust_crate_tree_sha256": "ffc50cb94fe3f3ce71be1a2f5516c80aa5a087195da87bcaff2cd310c5aa2a1e",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-varmap-unlinked-locals-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-    "host": {
-      "cxx": "g++ (GCC) 16.2.1 20260810",
-      "cxx_target": "x86_64-pc-linux-gnu",
-      "cxx_path": "/usr/bin/g++",
-      "cc_path": "/usr/bin/gcc",
-      "ar_path": "/usr/bin/ar",
-      "make_path": "/usr/bin/make",
-      "python_path": "/usr/bin/python3.14",
-      "git_path": "/usr/bin/git",
-      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-      "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-      "cargo_path": "/usr/bin/cargo",
-      "rustc_path": "/usr/bin/rustc",
-      "rust_toolchain": "system",
-      "platform": "Linux 7.1.8-arch1-3 x86_64"
-    }
-  },
-  "build": {
-    "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
-    "private_state_observer": "Read-only ABI observation of the ScopeLocal symbol table through the production MapIterator/beginDynamic walks via #define private/protected public in the fixture translation unit only; no oracle source is modified",
-    "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/varmap.rs and src/variable.rs overlaid live; the fixture links the freshly built librugra.rlib and native librugra_sleigh.a the same way the production runners do",
-    "registry_packages": 164,
-    "registry_lock_closure_sha256": "b32cb41062a17194d9a5c0793b91a7400d891a7416a6b38c4d0feb16c0fcca9a",
-    "registry_lock_scheme": "sha256 of rugra-varmap-unlinked-locals-registry-lock-v1 plus sorted length-prefixed name/version/checksum records"
-  },
-  "expected_stdout_sha256": "a46e0263d84f3fe9f4d56caca0ceaf29955b082851de1cb3dfa92f07a7083cf4",
-  "expected_exit_code": 0,
-  "covered_projection_status": "MATCH",
-  "coverage": {
-    "explicit_local_entry": "MATCH: the strlen-result shape links and names lVar1 on both sides (default-local branch, shared base counter consuming exactly one index)",
-    "implied_temp_refusal": "MATCH: the unique-space implied temporary (uVar_9100 shape) is refused by hasName on both sides - no symbol, empty scope",
-    "spacebase_refusal": "MATCH: the unaffected legal spacebase input (uVar20 shape) is refused via variable.cc:743 on both sides - no symbol, empty scope",
-    "irregular_input_entry": "MATCH: the illegal register input links and names in_SREG1 on both sides (translate getRegisterName catalog consulted by the irregular-input branch)",
-    "stack_local_entry": "MATCH: the address-tied stack local inside the local window links with an unrestricted use and names lStack_b8 (negated positive start, no X/Y marker) on both sides",
-    "param_attach_no_duplicate": "MATCH: the pre-existing category-0 parameter symbol absorbs the input via queryProperties/handleSymbolConflict on both sides - no new symbol, category 0 survives the no_category walk"
+  "sha256": "792bb1d900da566b9a305162bec84114d268a3f8e1b0a306a3d4db6e5f4a3f99"
+ },
+ "observation_schema": {
+  "format": "Twelve fixed-order UTF-8 lines with final newline: one envelope plus six case records (gate line plus zero or one symbol rows) covering the per-candidate verdicts and the resulting scope contents",
+  "state": "per-symbol name, storage space, offset, size, category, dynamic flag, first-use point in canonical sort order",
+  "direct": "hasName/linkSymbol gate verdicts per candidate"
+ },
+ "comparand": {
+  "rugra_base_commit": "4fcfc1bc5f72ea2491320ab0bb5d03735eebb5c8",
+  "rugra_base_tree": "7983ee9291900870415d6818851b9d2dad668a5f",
+  "cpp_fixture_sha256": "a95e1844a2216996721ffd47f46f462664578d4e280ee7ecaec09ae66dabc0fd",
+  "rust_fixture_sha256": "1411f3decc64dac5206038653e86fdcf1b4c59ec232c39a5e8eec9a87d5c2ef0",
+  "varmap_rs_sha256": "f11177c6d3def2dc05105f7bbb2c62443416a31bb019194821f0823f0cca5acf",
+  "variable_rs_sha256": "198d234a3f6284403214accc5eda2ad6fe12fbbdfb490f5f8533fdd7eb2c8bbc",
+  "varmap_doc_sha256": "15466dbcc5ff6b6e1d469637f8ce00ff1ab335cbb817d9416cbed55fc288ec74",
+  "variable_doc_sha256": "25652b742d45f1b75edd4468232a9e6fea7afaa271db6942e985fa73297d5272",
+  "runner_sha256": "73a8e6d1bd0a6f9fb290b57d289cc0b905ec6ff1dd345c28ccb3a3663e726139",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_sha256": "ffc50cb94fe3f3ce71be1a2f5516c80aa5a087195da87bcaff2cd310c5aa2a1e",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-varmap-unlinked-locals-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "host": {
+   "cxx": "g++ (GCC) 16.2.1 20260810",
+   "cxx_target": "x86_64-pc-linux-gnu",
+   "cxx_path": "/usr/bin/g++",
+   "cc_path": "/usr/bin/gcc",
+   "ar_path": "/usr/bin/ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.14",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+   "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+   "cargo_path": "/usr/bin/cargo",
+   "rustc_path": "/usr/bin/rustc",
+   "rust_toolchain": "system",
+   "platform": "Linux 7.1.8-arch1-3 x86_64"
   }
+ },
+ "build": {
+  "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
+  "private_state_observer": "Read-only ABI observation of the ScopeLocal symbol table through the production MapIterator/beginDynamic walks via #define private/protected public in the fixture translation unit only; no oracle source is modified",
+  "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/varmap.rs and src/variable.rs overlaid live; the fixture links the freshly built librugra.rlib and native librugra_sleigh.a the same way the production runners do",
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "b32cb41062a17194d9a5c0793b91a7400d891a7416a6b38c4d0feb16c0fcca9a",
+  "registry_lock_scheme": "sha256 of rugra-varmap-unlinked-locals-registry-lock-v1 plus sorted length-prefixed name/version/checksum records"
+ },
+ "expected_stdout_sha256": "a46e0263d84f3fe9f4d56caca0ceaf29955b082851de1cb3dfa92f07a7083cf4",
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "coverage": {
+  "explicit_local_entry": "MATCH: the strlen-result shape links and names lVar1 on both sides (default-local branch, shared base counter consuming exactly one index)",
+  "implied_temp_refusal": "MATCH: the unique-space implied temporary (uVar_9100 shape) is refused by hasName on both sides - no symbol, empty scope",
+  "spacebase_refusal": "MATCH: the unaffected legal spacebase input (uVar20 shape) is refused via variable.cc:743 on both sides - no symbol, empty scope",
+  "irregular_input_entry": "MATCH: the illegal register input links and names in_SREG1 on both sides (translate getRegisterName catalog consulted by the irregular-input branch)",
+  "stack_local_entry": "MATCH: the address-tied stack local inside the local window links with an unrestricted use and names lStack_b8 (negated positive start, no X/Y marker) on both sides",
+  "param_attach_no_duplicate": "MATCH: the pre-existing category-0 parameter symbol absorbs the input via queryProperties/handleSymbolConflict on both sides - no new symbol, category 0 survives the no_category walk"
+ }
 }

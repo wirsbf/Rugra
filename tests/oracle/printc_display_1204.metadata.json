@@ -1,19 +1,20 @@
 {
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
-  },
-  "architecture": "architecture-independent PrintC integer-token fixture; 64-bit uintb host ABI",
-  "compiler_spec": "N/A: PrintC::push_integer with a synthetic Datatype/HighVariable does not inspect a compiler specification",
-  "analysis_options": "PrintC default options; null Architecture/PcodeOp; non-annotation Varnode; datatype-forced display format",
-  "observation_scope": "MATCH only for wire constants, valid-domain Datatype string codec observations, and resolved-format scalar rendering; codec error behavior is UNTESTED",
-  "input_model_difference": "Ghidra resolves the format through Datatype -> Varnode -> HighVariable; Rugra's simplified helper accepts the resolved u32 directly, so the object graph, aliases, and state are not same-input observations",
-  "marshal_round_trip": "UNTESTED: the fixture calls Datatype::encodeIntegerFormat/decodeIntegerFormat directly and does not exercise Encoder/Decoder persistence",
-  "input": "wire values 0..5 plus value=65 unsigned size=1 in hex/dec/oct/bin/char, value=0xff signed size=1 in char/octal/binary formats",
-  "input_fingerprint": "sha256:880fdee1b1fc39bab359da1bf61cbf6937bfd03d9b8e327da4a66e85378e4bf4",
-  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-  "cpp_fixture_sha256": "f7c96379896df1522cfa293e20fcf0f7b732a1c3e9a00246b6a55ec6e7a1a6c4",
-  "rust_fixture_sha256": "ee139bc8371a9886498716a7f9d71dc53c122a23f91ede7796104b4e45b553a1",
-  "expected_stdout_sha256": "598394d34ccc31f70696eb9a872ec37ff7cd87811de2e946d397caaee8e016ca"
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "architecture": "architecture-independent PrintC integer-token fixture; 64-bit uintb host ABI",
+ "compiler_spec": "N/A: PrintC::push_integer with a synthetic Datatype/HighVariable does not inspect a compiler specification",
+ "analysis_options": "PrintC default options; null Architecture/PcodeOp; non-annotation Varnode; datatype-forced display format",
+ "observation_scope": "MATCH only for wire constants, valid-domain Datatype string codec observations, and resolved-format scalar rendering; codec error behavior is UNTESTED",
+ "input_model_difference": "Ghidra resolves the format through Datatype -> Varnode -> HighVariable; Rugra's simplified helper accepts the resolved u32 directly, so the object graph, aliases, and state are not same-input observations",
+ "marshal_round_trip": "UNTESTED: the fixture calls Datatype::encodeIntegerFormat/decodeIntegerFormat directly and does not exercise Encoder/Decoder persistence",
+ "input": "wire values 0..5 plus value=65 unsigned size=1 in hex/dec/oct/bin/char, value=0xff signed size=1 in char/octal/binary formats",
+ "input_fingerprint": "sha256:880fdee1b1fc39bab359da1bf61cbf6937bfd03d9b8e327da4a66e85378e4bf4",
+ "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+ "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+ "cpp_fixture_sha256": "f7c96379896df1522cfa293e20fcf0f7b732a1c3e9a00246b6a55ec6e7a1a6c4",
+ "rust_fixture_sha256": "ee139bc8371a9886498716a7f9d71dc53c122a23f91ede7796104b4e45b553a1",
+ "expected_stdout_sha256": "598394d34ccc31f70696eb9a872ec37ff7cd87811de2e946d397caaee8e016ca",
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

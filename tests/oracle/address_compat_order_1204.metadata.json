@@ -1,95 +1,95 @@
 {
-  "schema": 2,
-  "fixture_id": "ADDRESS-COMPAT-ORDER-1204",
-  "stable_function_id": "GH12-F-085d210dd52f0abac240",
-  "stable_function_closure": [
-    "GH12-F-4229397753b648900fb3 ghidra::Address::operator ==(const Address & op2) const address.hh:356",
-    "GH12-F-085d210dd52f0abac240 ghidra::Address::operator <(const Address & op2) const address.hh:375",
-    "GH12-F-08391149aa882a6f06c0 ghidra::Address::operator <=(const Address & op2) const address.hh:398",
-    "GH12-F-2faf5cbda4db0052d36e ghidra::Address::operator +(int8 off) const address.hh:423",
-    "GH12-F-31e4ade44b94f1bcfbf7 ghidra::Address::operator -(int8 off) const address.hh:433",
-    "GH12-F-6705d3384285c188e6cd ghidra::Address::overlap(int4 skip,const Address & op,int4 size) const address.cc:153",
-    "GH12-F-aa123c11dfc923746aea ghidra::Address::Address(mach_extreme ex) address.cc:91",
-    "GH12-F-051888f69e032b143d58 ghidra::Address::isInvalid(void) const address.hh:285",
-    "GH12-F-2b904805d0c1e63c5ed2 ghidra::Address::printRaw(ostream & s) const address.hh:305",
-    "GH12-F-9418442f62007fa121a5 ghidra::AddrSpace::wrapOffset(uintb off) const space.hh:383"
+ "schema": 2,
+ "fixture_id": "ADDRESS-COMPAT-ORDER-1204",
+ "stable_function_id": "GH12-F-085d210dd52f0abac240",
+ "stable_function_closure": [
+  "GH12-F-4229397753b648900fb3 ghidra::Address::operator ==(const Address & op2) const address.hh:356",
+  "GH12-F-085d210dd52f0abac240 ghidra::Address::operator <(const Address & op2) const address.hh:375",
+  "GH12-F-08391149aa882a6f06c0 ghidra::Address::operator <=(const Address & op2) const address.hh:398",
+  "GH12-F-2faf5cbda4db0052d36e ghidra::Address::operator +(int8 off) const address.hh:423",
+  "GH12-F-31e4ade44b94f1bcfbf7 ghidra::Address::operator -(int8 off) const address.hh:433",
+  "GH12-F-6705d3384285c188e6cd ghidra::Address::overlap(int4 skip,const Address & op,int4 size) const address.cc:153",
+  "GH12-F-aa123c11dfc923746aea ghidra::Address::Address(mach_extreme ex) address.cc:91",
+  "GH12-F-051888f69e032b143d58 ghidra::Address::isInvalid(void) const address.hh:285",
+  "GH12-F-2b904805d0c1e63c5ed2 ghidra::Address::printRaw(ostream & s) const address.hh:305",
+  "GH12-F-9418442f62007fa121a5 ghidra::AddrSpace::wrapOffset(uintb off) const space.hh:383"
+ ],
+ "overall_status": "UNTESTED:  (B2 migration of partial match state) the six-case legacy-Address space-bridge ordering projection (null-base None model equality/ordering, cross-space sorted walk with the null base first, same-space offset order, wrapOffset arithmetic, overlap gates, SeqNum ordering delegation) byte-matches the locked oracle; residuals: None-None offset-only compatibility has no oracle counterpart (single-side regression in address.rs unit tests), consumer migration is phase 2 (SeqNum/BlockBasic mint sites, context partitions, varnode/comment/override/jumptable domains), Address::read/encode/decode stay with MARSHAL-XML-TEXT-0001",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source": "Ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/{address.cc,address.hh,space.cc:206,space.hh:383,op.cc:33}",
+  "signature": "bool ghidra::Address::operator <(const Address & op2) const; bool ghidra::Address::operator ==(const Address & op2) const; Address ghidra::Address::operator +(int8 off) const; int4 ghidra::Address::overlap(int4 skip,const Address & op,int4 size) const; bool ghidra::SeqNum::operator <(const SeqNum & op2) const"
+ },
+ "architecture": "locked synthetic AddrSpaceManager/Translate: const=0, OTHER=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7 plus flash4 (4-byte) at index 8; little-endian host",
+ "compiler_spec": "none: address-ordering fixture, no Architecture/ProtoModel/symbols involved",
+ "analysis_options": {
+  "entrypoint": "Direct invocation of the locked Address/SeqNum ordering surface over a minimal Translate subclass (C++) / SpaceRegistry (Rust); the Rust side mints the null-base model through the ADDRESS-0001 phase-1 legacy bridge (Address::new for None, Address::with_space for tagged spaces)",
+  "prestate": "Per-case fresh manager with the same nine spaces inserted in index order via insertSpace; addresses constructed through the public constructors only (m_minimal null base included)",
+  "observation": "Per case: boolean/integer/hex observations of operator==/!=/</<=, sorted-container walks, wrap arithmetic through wrapOffset, overlap gates and SeqNum ordering, printed in the shared line format for byte-equal comparison"
+ },
+ "input_manifest": {
+  "cases": [
+   "null_base_vs_real: the m_minimal null-base address (the oracle model of the phase-1 None tag) vs ram/constant addresses; ==/!=/</<= outcomes, null-null equality and invalid_addr printRaw",
+   "cross_space_walk: 14 addresses (null base plus const/OTHER/unique/ram/register/stack/join/iop at scrambled offsets) inserted into a sorted container; walk prints index-then-offset order with the null base first, plus explicit cross-space operator< results",
+   "same_space_offset_order: same-space pairs including the highest-offset boundary and same-offset equality, and cross-space same-offset inequality",
+   "wrap_arithmetic: operator+/- through AddrSpace::wrapOffset on a 4-byte space and 8-byte ram including subtraction below zero and space preservation after wrap",
+   "overlap_gates: overlap wrap/negative-skip/far on the 4-byte space, constant-space exclusion, cross-space -1 and a plain same-space hit",
+   "seqnum_order: SeqNum operator< ladder across pc spaces and the uniq tiebreak, equality on an identical (pc,uniq) pair, and the operator<< pc.printRaw:uniq decimal form"
   ],
-  "overall_status": "PARTIAL_MATCH: the six-case legacy-Address space-bridge ordering projection (null-base None model equality/ordering, cross-space sorted walk with the null base first, same-space offset order, wrapOffset arithmetic, overlap gates, SeqNum ordering delegation) byte-matches the locked oracle; residuals: None-None offset-only compatibility has no oracle counterpart (single-side regression in address.rs unit tests), consumer migration is phase 2 (SeqNum/BlockBasic mint sites, context partitions, varnode/comment/override/jumptable domains), Address::read/encode/decode stay with MARSHAL-XML-TEXT-0001",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source": "Ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/{address.cc,address.hh,space.cc:206,space.hh:383,op.cc:33}",
-    "signature": "bool ghidra::Address::operator <(const Address & op2) const; bool ghidra::Address::operator ==(const Address & op2) const; Address ghidra::Address::operator +(int8 off) const; int4 ghidra::Address::overlap(int4 skip,const Address & op,int4 size) const; bool ghidra::SeqNum::operator <(const SeqNum & op2) const"
-  },
-  "architecture": "locked synthetic AddrSpaceManager/Translate: const=0, OTHER=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7 plus flash4 (4-byte) at index 8; little-endian host",
-  "compiler_spec": "none: address-ordering fixture, no Architecture/ProtoModel/symbols involved",
-  "analysis_options": {
-    "entrypoint": "Direct invocation of the locked Address/SeqNum ordering surface over a minimal Translate subclass (C++) / SpaceRegistry (Rust); the Rust side mints the null-base model through the ADDRESS-0001 phase-1 legacy bridge (Address::new for None, Address::with_space for tagged spaces)",
-    "prestate": "Per-case fresh manager with the same nine spaces inserted in index order via insertSpace; addresses constructed through the public constructors only (m_minimal null base included)",
-    "observation": "Per case: boolean/integer/hex observations of operator==/!=/</<=, sorted-container walks, wrap arithmetic through wrapOffset, overlap gates and SeqNum ordering, printed in the shared line format for byte-equal comparison"
-  },
-  "input_manifest": {
-    "cases": [
-      "null_base_vs_real: the m_minimal null-base address (the oracle model of the phase-1 None tag) vs ram/constant addresses; ==/!=/</<= outcomes, null-null equality and invalid_addr printRaw",
-      "cross_space_walk: 14 addresses (null base plus const/OTHER/unique/ram/register/stack/join/iop at scrambled offsets) inserted into a sorted container; walk prints index-then-offset order with the null base first, plus explicit cross-space operator< results",
-      "same_space_offset_order: same-space pairs including the highest-offset boundary and same-offset equality, and cross-space same-offset inequality",
-      "wrap_arithmetic: operator+/- through AddrSpace::wrapOffset on a 4-byte space and 8-byte ram including subtraction below zero and space preservation after wrap",
-      "overlap_gates: overlap wrap/negative-skip/far on the 4-byte space, constant-space exclusion, cross-space -1 and a plain same-space hit",
-      "seqnum_order: SeqNum operator< ladder across pc spaces and the uniq tiebreak, equality on an identical (pc,uniq) pair, and the operator<< pc.printRaw:uniq decimal form"
-    ],
-    "sha256": "7c1fe841824061b82470819245f454e3a74c3c0608bedda57c31973ee6fd81b4"
-  },
-  "expected_stdout_sha256": "ecf18075e05423b809fdae5d1231523698dd201d5317e4de1b6f2016f8cc2569",
-  "expected_exit_code": 0,
-  "covered_projection_status": "MATCH",
-  "coverage": {
-    "null_base_vs_real": "MATCH: eq_null_null=1, null never equals or is surpassed by a real-space address, le_null_ram0=1 and print_null=invalid_addr byte-match; the C++ indeterminate default-ctor offset is never observed (m_minimal only)",
-    "cross_space_walk": "MATCH: 14-element sorted-container walk orders the null base first then const/OTHER/unique/ram/register/stack/join/iop by index then offset; explicit cross-space operator< results including lt(null,all)=1 match",
-    "same_space_offset_order": "MATCH: same-space offset comparisons incl. the highest-offset boundary, same-offset equality and cross-space same-offset inequality",
-    "wrap_arithmetic": "MATCH: 4-byte-space boundaries (fffffffe+2/ffffffff+1/10-11), 8-byte ram maxff+1/0-1 and space preservation after wrap through the phase-1 tag",
-    "overlap_gates": "MATCH: wrap=1/negskip=3/far=-1 on the 4-byte space, constant exclusion -1, cross-space -1, plain same-space hit=2",
-    "seqnum_order": "MATCH: operator< ladder (pc spaces before uniq tiebreak), identical-pair equality, and the 0x00001000:5 printRaw:decimal-uniq form",
-    "none_none_offset_compat": "UNTESTED: None-None offset-only ordering/hash compatibility has no Ghidra counterpart (Ghidra has no spaceless address); proven single-side by src/address.rs phase-1 regression tests",
-    "consumer_migration": "UNTESTED: SeqNum.addr/BlockBasic.start_addr mint sites, context partitions, varnode/comment/override/jumptable comparison domains still produce None addresses (phase 2)"
-  },
-  "comparand": {
-    "rugra_base_commit": "197b34cb6bde4959e93a8606eaa1f41f57814b82",
-    "rugra_base_tree": "f3e7c3c3db80178cf71f3e719f9508d16e10a638",
-    "cpp_fixture_sha256": "6f21f4a0173a6e341f713cb8839d99100b1357650e94dfe5b6a8098e498c59e5",
-    "rust_fixture_sha256": "1f565c59451b46ebcfb5ff7e635d33402cd59e2159719d6a1f4588181dcf21e4",
-    "address_rs_sha256": "83fa59d9d0aad7d455dceb284fe563b3ec840b85d54b7d4a599e941aa7da75b6",
-    "address_doc_sha256": "507cc5ad8da8cc023b92664e550f6a4d29ebae85a60d0b556dc8d57dd94b527c",
-    "runner_sha256": "d4e5edd2de8a993e778e041cfa3599faf5d004d5ff178e585e65503b9ab18846",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-address-compat-order-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-    "rust_crate_tree_sha256": "1664f1e5fd5a00b14b30ecf73f713282c384b2eb27b17fa3e7b0d99f128a33a5",
-    "host": {
-      "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-      "cxx_target": "x86_64-linux-gnu",
-      "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
-      "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-      "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
-      "make_path": "/usr/bin/make",
-      "python_path": "/usr/bin/python3.10",
-      "git_path": "/usr/bin/git",
-      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-      "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
-      "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
-      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-      "platform": "Linux 6.8.0-124-generic x86_64"
-    }
-  },
-  "build": {
-    "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and linked with the fixture through the same compile flags as the space_registry oracle",
-    "private_state_observer": "No private-state reads are required: ordering observations go through the public operator surface only; the class->struct hack merely re-exports protected members for the Translate subclass, matching the space_registry precedent",
-    "rust_comparand": "The Rust crate is rebuilt offline from the pinned base commit with src/address.rs overlaid from the working tree; the fixture links the fresh librugra.rlib plus the native rugra_sleigh archive exactly like the space_registry oracle",
-    "environment_policy": "Runner re-execs itself through an immutable fd, pins the Ghidra oracle identity (commit/tag/cpp-tree/Makefile blob) and the Rugra base commit+tree, vendors the locked Cargo registry closure, and forbids ambient cargo configs",
-    "registry_packages": 164,
-    "registry_lock_closure_sha256": "6836b645d70cc31eb8049408365e1f9ce9cd6aa5ace0484894b767da2ff3b171"
+  "sha256": "7c1fe841824061b82470819245f454e3a74c3c0608bedda57c31973ee6fd81b4"
+ },
+ "expected_stdout_sha256": "ecf18075e05423b809fdae5d1231523698dd201d5317e4de1b6f2016f8cc2569",
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "coverage": {
+  "null_base_vs_real": "MATCH: eq_null_null=1, null never equals or is surpassed by a real-space address, le_null_ram0=1 and print_null=invalid_addr byte-match; the C++ indeterminate default-ctor offset is never observed (m_minimal only)",
+  "cross_space_walk": "MATCH: 14-element sorted-container walk orders the null base first then const/OTHER/unique/ram/register/stack/join/iop by index then offset; explicit cross-space operator< results including lt(null,all)=1 match",
+  "same_space_offset_order": "MATCH: same-space offset comparisons incl. the highest-offset boundary, same-offset equality and cross-space same-offset inequality",
+  "wrap_arithmetic": "MATCH: 4-byte-space boundaries (fffffffe+2/ffffffff+1/10-11), 8-byte ram maxff+1/0-1 and space preservation after wrap through the phase-1 tag",
+  "overlap_gates": "MATCH: wrap=1/negskip=3/far=-1 on the 4-byte space, constant exclusion -1, cross-space -1, plain same-space hit=2",
+  "seqnum_order": "MATCH: operator< ladder (pc spaces before uniq tiebreak), identical-pair equality, and the 0x00001000:5 printRaw:decimal-uniq form",
+  "none_none_offset_compat": "UNTESTED: None-None offset-only ordering/hash compatibility has no Ghidra counterpart (Ghidra has no spaceless address); proven single-side by src/address.rs phase-1 regression tests",
+  "consumer_migration": "UNTESTED: SeqNum.addr/BlockBasic.start_addr mint sites, context partitions, varnode/comment/override/jumptable comparison domains still produce None addresses (phase 2)"
+ },
+ "comparand": {
+  "rugra_base_commit": "197b34cb6bde4959e93a8606eaa1f41f57814b82",
+  "rugra_base_tree": "f3e7c3c3db80178cf71f3e719f9508d16e10a638",
+  "cpp_fixture_sha256": "6f21f4a0173a6e341f713cb8839d99100b1357650e94dfe5b6a8098e498c59e5",
+  "rust_fixture_sha256": "1f565c59451b46ebcfb5ff7e635d33402cd59e2159719d6a1f4588181dcf21e4",
+  "address_rs_sha256": "83fa59d9d0aad7d455dceb284fe563b3ec840b85d54b7d4a599e941aa7da75b6",
+  "address_doc_sha256": "507cc5ad8da8cc023b92664e550f6a4d29ebae85a60d0b556dc8d57dd94b527c",
+  "runner_sha256": "d4e5edd2de8a993e778e041cfa3599faf5d004d5ff178e585e65503b9ab18846",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-address-compat-order-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "rust_crate_tree_sha256": "1664f1e5fd5a00b14b30ecf73f713282c384b2eb27b17fa3e7b0d99f128a33a5",
+  "host": {
+   "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+   "cxx_target": "x86_64-linux-gnu",
+   "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+   "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+   "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.10",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+   "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+   "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+   "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+   "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+   "platform": "Linux 6.8.0-124-generic x86_64"
   }
+ },
+ "build": {
+  "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and linked with the fixture through the same compile flags as the space_registry oracle",
+  "private_state_observer": "No private-state reads are required: ordering observations go through the public operator surface only; the class->struct hack merely re-exports protected members for the Translate subclass, matching the space_registry precedent",
+  "rust_comparand": "The Rust crate is rebuilt offline from the pinned base commit with src/address.rs overlaid from the working tree; the fixture links the fresh librugra.rlib plus the native rugra_sleigh archive exactly like the space_registry oracle",
+  "environment_policy": "Runner re-execs itself through an immutable fd, pins the Ghidra oracle identity (commit/tag/cpp-tree/Makefile blob) and the Rugra base commit+tree, vendors the locked Cargo registry closure, and forbids ambient cargo configs",
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "6836b645d70cc31eb8049408365e1f9ce9cd6aa5ace0484894b767da2ff3b171"
+ }
 }

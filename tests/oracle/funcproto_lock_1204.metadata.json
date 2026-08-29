@@ -1,14 +1,15 @@
 {
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
-  },
-  "architecture": "architecture-independent FuncProto lock-state fixture",
-  "compiler_spec": "N/A: no ProtoModel or storage assignment is consulted",
-  "analysis_options": "direct FuncProto/ProtoStoreInternal calls in recorded order; no decompiler Actions",
-  "input": "fresh zero-input prototype; input lock; clearUnlockedInput; copy; clearInput; output lock/unlock",
-  "cpp_fixture_sha256": "1253cb741188ab3eea5dfc1e2475645d5a2168116b9f31a17a55275d8d3c6be7",
-  "rust_fixture_sha256": "094fb3cfe277fc3b395c5f0cb0df18bee27f269306bc3deff8a2fc7584bbdc2f",
-  "expected_stdout_sha256": "03255c22cda9cf11fed6590cef7a8e53f3f1527e517bc180840ade99f9bb6425",
-  "status": "MATCH"
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "architecture": "architecture-independent FuncProto lock-state fixture",
+ "compiler_spec": "N/A: no ProtoModel or storage assignment is consulted",
+ "analysis_options": "direct FuncProto/ProtoStoreInternal calls in recorded order; no decompiler Actions",
+ "input": "fresh zero-input prototype; input lock; clearUnlockedInput; copy; clearInput; output lock/unlock",
+ "cpp_fixture_sha256": "1253cb741188ab3eea5dfc1e2475645d5a2168116b9f31a17a55275d8d3c6be7",
+ "rust_fixture_sha256": "094fb3cfe277fc3b395c5f0cb0df18bee27f269306bc3deff8a2fc7584bbdc2f",
+ "expected_stdout_sha256": "03255c22cda9cf11fed6590cef7a8e53f3f1527e517bc180840ade99f9bb6425",
+ "status": "MATCH",
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

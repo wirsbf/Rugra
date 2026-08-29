@@ -1,44 +1,45 @@
 {
-  "schema": 1,
-  "fixture_id": "PRINT-RPN-0001A",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
-  },
-  "architecture": "language-independent PrintLanguage RPN",
-  "compiler_spec": "none",
-  "analysis_options": {
-    "language": "PrintC",
-    "emitter": "plain text",
-    "markup": false,
-    "max_line_size": 100
-  },
-  "input": "{\"cases\":[\"root_unary\",\"root_binary\",\"nested_invisible\",\"nested_parenthesized\"],\"emitter\":\"plain_text\",\"group_observation\":\"visible_text\",\"markup\":false,\"max_line_size\":100}",
-  "input_fingerprint": "sha256:621d5b2f30cd13394d02360de519ec491bcbdc0e07c91cad1a0027cf31e12c1f",
-  "observation": {
-    "schema": "case-name=verbatim-visible-text",
-    "normalization": "none",
-    "ordering": "fixture declaration order",
-    "aliasing": "no PcodeOp or Varnode objects; operator and atom references remain live through each call",
-    "covered_status": "MATCH",
-    "overall_status": "UNTESTED",
-    "untested": [
-      "EmitPrettyPrint TokenSplit queue and exact group identifiers",
-      "line wrapping and break placement",
-      "markup payloads"
-    ]
-  },
-  "cpp_fixture_sha256": "1c59a0544ef6b5e4893197979782291bea9db00263e273a3b3adf99f298192c1",
-  "rust_fixture_sha256": "034340b0b0563e099c407e8d56e85e101c16785088de3ae66584d00145bf4bfd",
-  "comparand_sha256": {
-    "rugra_prettyprint": "b7714ca1a7736991a9ac93a2616a31d3e8c8bda7a4a65e292a5cf35bd8663470",
-    "rugra_printlanguage": "1358d7edca7808d6cc1c4841bb7a66cfac99bcf621aadd33dc567e5d6ad0f5b3",
-    "ghidra_printlanguage_cc": "9b798824258eda4f8e767c6903903a773e0b5c804d13fb30cdede0c2a40e75a0",
-    "ghidra_printlanguage_hh": "93572c8293f7d2a3ef03e2f1b9cf179a7f3ebd61755f45c0ad37de05f675bafe",
-    "ghidra_prettyprint_cc": "1a9466456f0a229639625e9f8e70507e83815e49b19bfb1fea6945978074189f",
-    "ghidra_prettyprint_hh": "016017194282caea38ff7a52466e54b340036ff93e33ba2378d9917b0c5bc8fc"
-  },
-  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-  "expected_stdout_sha256": "bf0c65db05915c9ccc2740cbddc0744f66846a5e5ef78eec6683d57a3d677b1a"
+ "schema": 1,
+ "fixture_id": "PRINT-RPN-0001A",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "architecture": "language-independent PrintLanguage RPN",
+ "compiler_spec": "none",
+ "analysis_options": {
+  "language": "PrintC",
+  "emitter": "plain text",
+  "markup": false,
+  "max_line_size": 100
+ },
+ "input": "{\"cases\":[\"root_unary\",\"root_binary\",\"nested_invisible\",\"nested_parenthesized\"],\"emitter\":\"plain_text\",\"group_observation\":\"visible_text\",\"markup\":false,\"max_line_size\":100}",
+ "input_fingerprint": "sha256:621d5b2f30cd13394d02360de519ec491bcbdc0e07c91cad1a0027cf31e12c1f",
+ "observation": {
+  "schema": "case-name=verbatim-visible-text",
+  "normalization": "none",
+  "ordering": "fixture declaration order",
+  "aliasing": "no PcodeOp or Varnode objects; operator and atom references remain live through each call",
+  "covered_status": "MATCH",
+  "overall_status": "UNTESTED",
+  "untested": [
+   "EmitPrettyPrint TokenSplit queue and exact group identifiers",
+   "line wrapping and break placement",
+   "markup payloads"
+  ]
+ },
+ "cpp_fixture_sha256": "1c59a0544ef6b5e4893197979782291bea9db00263e273a3b3adf99f298192c1",
+ "rust_fixture_sha256": "034340b0b0563e099c407e8d56e85e101c16785088de3ae66584d00145bf4bfd",
+ "comparand_sha256": {
+  "rugra_prettyprint": "b7714ca1a7736991a9ac93a2616a31d3e8c8bda7a4a65e292a5cf35bd8663470",
+  "rugra_printlanguage": "1358d7edca7808d6cc1c4841bb7a66cfac99bcf621aadd33dc567e5d6ad0f5b3",
+  "ghidra_printlanguage_cc": "9b798824258eda4f8e767c6903903a773e0b5c804d13fb30cdede0c2a40e75a0",
+  "ghidra_printlanguage_hh": "93572c8293f7d2a3ef03e2f1b9cf179a7f3ebd61755f45c0ad37de05f675bafe",
+  "ghidra_prettyprint_cc": "1a9466456f0a229639625e9f8e70507e83815e49b19bfb1fea6945978074189f",
+  "ghidra_prettyprint_hh": "016017194282caea38ff7a52466e54b340036ff93e33ba2378d9917b0c5bc8fc"
+ },
+ "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+ "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+ "expected_stdout_sha256": "bf0c65db05915c9ccc2740cbddc0744f66846a5e5ef78eec6683d57a3d677b1a",
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

@@ -1,164 +1,167 @@
 {
-  "schema_version": 1,
-  "fixture_id": "RETURNFOLD-GAPA-UPSTREAM-0001",
-  "task_id": "RETURNFOLD-GAPA-UPSTREAM-0001",
-  "fixture_kind": "bilateral_function_fixture",
-  "created": "2026-08-25",
-  "overall_status": "MATCH",
-  "scope": "e2e return-value fold chain: ActionMarkExplicit::baseExplicit multi-instance rule (coreaction.cc:3020-3021) + addr-tied/mapped/protoPartial/PIECE-base/maxref branches (cc:3022-3081) + multipleInteraction (cc:3091-3132) + processMultiplier (cc:3166-3199) + checkNewToConstructor (cc:3205-3235, projection only) + ActionMarkImplied count bridge (cc:3416-3455, count+=1 at cc:3434) + PrintC implied inlining (printlanguage.cc:526-534 recurse, printc.cc:754 opReturn, printc.cc:2703-2705 emitBlockBasic statement omission)",
-  "oracle": {
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "tag": "Ghidra_12.0.4_build",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ "schema_version": 1,
+ "fixture_id": "RETURNFOLD-GAPA-UPSTREAM-0001",
+ "task_id": "RETURNFOLD-GAPA-UPSTREAM-0001",
+ "fixture_kind": "bilateral_function_fixture",
+ "created": "2026-08-25",
+ "overall_status": "MATCH",
+ "scope": "e2e return-value fold chain: ActionMarkExplicit::baseExplicit multi-instance rule (coreaction.cc:3020-3021) + addr-tied/mapped/protoPartial/PIECE-base/maxref branches (cc:3022-3081) + multipleInteraction (cc:3091-3132) + processMultiplier (cc:3166-3199) + checkNewToConstructor (cc:3205-3235, projection only) + ActionMarkImplied count bridge (cc:3416-3455, count+=1 at cc:3434) + PrintC implied inlining (printlanguage.cc:526-534 recurse, printc.cc:754 opReturn, printc.cc:2703-2705 emitBlockBasic statement omission)",
+ "oracle": {
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "tag": "Ghidra_12.0.4_build",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "covered_projection": {
+  "oracle_capture": {
+   "status": "ORACLE_CAPTURED",
+   "detail": "C++ fixture drives production ActionMarkExplicit::perform + ActionMarkImplied::perform + PrintC::emitBlockBasic on four hand-built Funcdata scenarios against the locked 12.0.4 oracle tree"
   },
-  "covered_projection": {
-    "oracle_capture": {
-      "status": "ORACLE_CAPTURED",
-      "detail": "C++ fixture drives production ActionMarkExplicit::perform + ActionMarkImplied::perform + PrintC::emitBlockBasic on four hand-built Funcdata scenarios against the locked 12.0.4 oracle tree"
-    },
-    "rugra_execution": {
-      "status": "EXECUTED",
-      "detail": "Rust fixture drives production ActionMarkExplicit::apply + ActionMarkImplied::apply + PrintC::emit_block_graph (rpn path) on mirrored Funcdata scenarios"
-    },
-    "bilateral_comparison": {
-      "status": "MATCH",
-      "detail": "22 stdout records byte-identical (flag/mark/text projections), both stderr empty, diff rc=0, two deterministic runs per side"
-    }
+  "rugra_execution": {
+   "status": "EXECUTED",
+   "detail": "Rust fixture drives production ActionMarkExplicit::apply + ActionMarkImplied::apply + PrintC::emit_block_graph (rpn path) on mirrored Funcdata scenarios"
   },
-  "build": {
-    "rugra_build_status": "EXECUTED",
-    "cargo_invoked": true,
-    "cargo_target_dir": "/home/wirs/.cache/returnfold-upstream-target",
-    "cargo_tmp_dir": "/home/wirs/.cache/returnfold-upstream-tmp",
-    "build_flock": "/tmp/rugra-cargo-build.lock",
-    "cargo_timeout_s": 600,
-    "make_timeout_s": 600
-  },
-  "comparand": {
-    "rugra_base_commit": "5943dc6b36560c82d2519f617cdfb5dcfbb1366a",
-    "rugra_base_tree": "13fa95d3e8b426a7c85e4a568e30f279f1811e3c",
-    "rugra_base_src_tree": "7ce946070bb0535d1367d004f2c7d7b1224aaec4",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "snapshot_model": "immutable partial crate snapshot: git archive of master base 5943dc6b plus the live src/coreaction.rs overlay (MarkExplicit/MarkImplied port)",
-    "archive_paths": [
-      "Cargo.toml",
-      "Cargo.lock",
-      "build.rs",
-      "README.md",
-      "benches/decompile_bench.rs",
-      "tests/oracle/decompress_1204.rs",
-      "tests/oracle/funcproto_lock_1204.rs",
-      "examples/curl",
-      "sleigh_specs",
-      "src",
-      "sleigh_shim"
-    ],
-    "overlays": [
-      {
-        "path": "src/coreaction.rs",
-        "sha256": "b012fa71b6ea6e925292f53c0219c1498dcf532abc818e8d1bea398ae5417fe9",
-        "reason": "MarkExplicit full port (baseExplicit branches, multipleInteraction, processMultiplier, checkNewToConstructor, multlist apply) + MarkImplied count bridge"
-      }
-    ],
-    "base_source_sha256": {
-      "src/printc.rs": "01b49d39de11193cf8ea3cbdc40f7bae1ed03d876a5ed78d00f6a23b00522e06"
-    },
-    "snapshot_build_link": {
-      "path": "ghidra",
-      "target": "repo ghidra checkout at e40ed13014025f82488b1f8f7bca566894ac376b"
-    },
-    "cpp_fixture_sha256": "736f6bdd7d8c25f1305fce3f74be053b9ee692e92d8d990b0c14aec74430771a",
-    "rust_fixture_sha256": "0e5792feb3604f0e4c0757a82bc8409b82807c7102a68082cb4d20e56d4e3005",
-    "runner_sha256": "e0e26dcb5c4bd76098ed8ebf6d3411790587e1c91004483ef93f6b99d706ca04"
-  },
-  "locked_capture": {
-    "status": "ORACLE_CAPTURED",
-    "records": 22,
-    "bytes": 1521,
-    "stdout_sha256": "c1472b991fac668f098f5ecb082124ab30e9257dc77be6a12c106fe417ecaef5",
-    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "deterministic_runs": 2
-  },
-  "paired_expected": {
-    "ghidra": {
-      "status": "ORACLE_CAPTURED",
-      "deterministic_runs": 2,
-      "records": 22,
-      "bytes": 1521,
-      "stdout_sha256": "c1472b991fac668f098f5ecb082124ab30e9257dc77be6a12c106fe417ecaef5",
-      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    "rugra": {
-      "status": "EXECUTED",
-      "deterministic_runs": 2,
-      "records": 22,
-      "bytes": 1521,
-      "stdout_sha256": "c1472b991fac668f098f5ecb082124ab30e9257dc77be6a12c106fe417ecaef5",
-      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    "bilateral": {
-      "status": "MATCH",
-      "diff_exit_code": 0,
-      "records": 0,
-      "bytes": 0,
-      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    }
-  },
-  "coverage": {
-    "s1_fold": {
-      "status": "MATCH",
-      "detail": "single-instance COPY output feeding one RETURN: t implied (flag line), me_count=0/mi_count=1 (mark line), print text return+lit10 with zero assign statements (emitBlockBasic cc:2704-2705 skip + opReturn pushVn inlining through recurse cc:526-534)"
-    },
-    "s2_merged": {
-      "status": "MATCH",
-      "detail": "two COPY-written instances merged into one HighVariable: baseExplicit cc:3020-3021 forces both explicit, me_count=2/mi_count=0, both assign statements print and returns read the variable token"
-    },
-    "s3_dup3": {
-      "status": "MATCH",
-      "detail": "three RETURN readers exceed max_implied_ref=2: cc:3078 returns -1 (explicit), me_count=1/mi_count=0, one assign+lit10 and three return+var lines"
-    },
-    "s4_mult2": {
-      "status": "MATCH",
-      "detail": "two RETURN readers == maxref: multlist candidate survives multipleInteraction (COPY def not bool/zext/sext/ptradd) and processMultiplier (1 term <= max_term_duplication=2), implied, me_count=0/mi_count=1, both returns fold to return+lit10"
-    },
-    "case_new_constructor": {
-      "status": "UNTESTED",
-      "detail": "checkNewToConstructor (cc:3205-3235, CPUI_NEW + CALLIND special print) not driven; needs NEW call machinery"
-    },
-    "case_addrtied_branches": {
-      "status": "UNTESTED",
-      "detail": "baseExplicit addr-tied SUBPIECE/ZEXT/PIECE sub-branches (cc:3022-3049) need addrtied varnodes + PieceNode/partialroot infra (MERGE-ADDRTIED-CLOSURE-0001 residual; Rugra PcodeOp::partialroot flag absent)"
-    },
-    "case_cover_crossing": {
-      "status": "UNTESTED",
-      "detail": "checkImpliedCover LOAD/STORE/CALL crossing (cc:3384-3412) not driven; Rugra block-level approximations stand (is_possible_alias reserved) — RETURNFOLD-GAPA-UPSTREAM-0001 residual"
-    },
-    "case_marking_order": {
-      "status": "UNTESTED",
-      "detail": "Rugra MarkImplied iterates loc order flat vs Ghidra DFS post-order cc:3430-3451; flags and total count argued equal, not pinned by this fixture — RETURNFOLD-GAPA-UPSTREAM-0001 residual"
-    }
-  },
-  "residual_ids": [
-    "RETURNFOLD-GAPA-UPSTREAM-0001",
-    "MERGE-ADDRTIED-CLOSURE-0001"
-  ],
-  "host_tools": {
-    "cxx": "g++ (GCC) 16.2.1 20260810",
-    "cxx_target": "x86_64-pc-linux-gnu",
-    "cc": "gcc (GCC) 16.2.1 20260810",
-    "cc_target": "x86_64-pc-linux-gnu",
-    "ar": "GNU ar (GNU Binutils) 2.47",
-    "make": "GNU Make 4.4.1",
-    "python": "Python 3.14.7",
-    "git": "git version 2.55.0",
-    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-    "tool_binary_sha256": {
-      "cargo": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
-      "rustc": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618"
-    }
+  "bilateral_comparison": {
+   "status": "MATCH",
+   "detail": "22 stdout records byte-identical (flag/mark/text projections), both stderr empty, diff rc=0, two deterministic runs per side"
   }
+ },
+ "build": {
+  "rugra_build_status": "EXECUTED",
+  "cargo_invoked": true,
+  "cargo_target_dir": "/home/wirs/.cache/returnfold-upstream-target",
+  "cargo_tmp_dir": "/home/wirs/.cache/returnfold-upstream-tmp",
+  "build_flock": "/tmp/rugra-cargo-build.lock",
+  "cargo_timeout_s": 600,
+  "make_timeout_s": 600
+ },
+ "comparand": {
+  "rugra_base_commit": "5943dc6b36560c82d2519f617cdfb5dcfbb1366a",
+  "rugra_base_tree": "13fa95d3e8b426a7c85e4a568e30f279f1811e3c",
+  "rugra_base_src_tree": "7ce946070bb0535d1367d004f2c7d7b1224aaec4",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "snapshot_model": "immutable partial crate snapshot: git archive of master base 5943dc6b plus the live src/coreaction.rs overlay (MarkExplicit/MarkImplied port)",
+  "archive_paths": [
+   "Cargo.toml",
+   "Cargo.lock",
+   "build.rs",
+   "README.md",
+   "benches/decompile_bench.rs",
+   "tests/oracle/decompress_1204.rs",
+   "tests/oracle/funcproto_lock_1204.rs",
+   "examples/curl",
+   "sleigh_specs",
+   "src",
+   "sleigh_shim"
+  ],
+  "overlays": [
+   {
+    "path": "src/coreaction.rs",
+    "sha256": "b012fa71b6ea6e925292f53c0219c1498dcf532abc818e8d1bea398ae5417fe9",
+    "reason": "MarkExplicit full port (baseExplicit branches, multipleInteraction, processMultiplier, checkNewToConstructor, multlist apply) + MarkImplied count bridge"
+   }
+  ],
+  "base_source_sha256": {
+   "src/printc.rs": "01b49d39de11193cf8ea3cbdc40f7bae1ed03d876a5ed78d00f6a23b00522e06"
+  },
+  "snapshot_build_link": {
+   "path": "ghidra",
+   "target": "repo ghidra checkout at e40ed13014025f82488b1f8f7bca566894ac376b"
+  },
+  "cpp_fixture_sha256": "736f6bdd7d8c25f1305fce3f74be053b9ee692e92d8d990b0c14aec74430771a",
+  "rust_fixture_sha256": "0e5792feb3604f0e4c0757a82bc8409b82807c7102a68082cb4d20e56d4e3005",
+  "runner_sha256": "e0e26dcb5c4bd76098ed8ebf6d3411790587e1c91004483ef93f6b99d706ca04"
+ },
+ "locked_capture": {
+  "status": "ORACLE_CAPTURED",
+  "records": 22,
+  "bytes": 1521,
+  "stdout_sha256": "c1472b991fac668f098f5ecb082124ab30e9257dc77be6a12c106fe417ecaef5",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "deterministic_runs": 2
+ },
+ "paired_expected": {
+  "ghidra": {
+   "status": "ORACLE_CAPTURED",
+   "deterministic_runs": 2,
+   "records": 22,
+   "bytes": 1521,
+   "stdout_sha256": "c1472b991fac668f098f5ecb082124ab30e9257dc77be6a12c106fe417ecaef5",
+   "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "rugra": {
+   "status": "EXECUTED",
+   "deterministic_runs": 2,
+   "records": 22,
+   "bytes": 1521,
+   "stdout_sha256": "c1472b991fac668f098f5ecb082124ab30e9257dc77be6a12c106fe417ecaef5",
+   "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "bilateral": {
+   "status": "MATCH",
+   "diff_exit_code": 0,
+   "records": 0,
+   "bytes": 0,
+   "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+ },
+ "coverage": {
+  "s1_fold": {
+   "status": "MATCH",
+   "detail": "single-instance COPY output feeding one RETURN: t implied (flag line), me_count=0/mi_count=1 (mark line), print text return+lit10 with zero assign statements (emitBlockBasic cc:2704-2705 skip + opReturn pushVn inlining through recurse cc:526-534)"
+  },
+  "s2_merged": {
+   "status": "MATCH",
+   "detail": "two COPY-written instances merged into one HighVariable: baseExplicit cc:3020-3021 forces both explicit, me_count=2/mi_count=0, both assign statements print and returns read the variable token"
+  },
+  "s3_dup3": {
+   "status": "MATCH",
+   "detail": "three RETURN readers exceed max_implied_ref=2: cc:3078 returns -1 (explicit), me_count=1/mi_count=0, one assign+lit10 and three return+var lines"
+  },
+  "s4_mult2": {
+   "status": "MATCH",
+   "detail": "two RETURN readers == maxref: multlist candidate survives multipleInteraction (COPY def not bool/zext/sext/ptradd) and processMultiplier (1 term <= max_term_duplication=2), implied, me_count=0/mi_count=1, both returns fold to return+lit10"
+  },
+  "case_new_constructor": {
+   "status": "UNTESTED",
+   "detail": "checkNewToConstructor (cc:3205-3235, CPUI_NEW + CALLIND special print) not driven; needs NEW call machinery"
+  },
+  "case_addrtied_branches": {
+   "status": "UNTESTED",
+   "detail": "baseExplicit addr-tied SUBPIECE/ZEXT/PIECE sub-branches (cc:3022-3049) need addrtied varnodes + PieceNode/partialroot infra (MERGE-ADDRTIED-CLOSURE-0001 residual; Rugra PcodeOp::partialroot flag absent)"
+  },
+  "case_cover_crossing": {
+   "status": "UNTESTED",
+   "detail": "checkImpliedCover LOAD/STORE/CALL crossing (cc:3384-3412) not driven; Rugra block-level approximations stand (is_possible_alias reserved) \u2014 RETURNFOLD-GAPA-UPSTREAM-0001 residual"
+  },
+  "case_marking_order": {
+   "status": "UNTESTED",
+   "detail": "Rugra MarkImplied iterates loc order flat vs Ghidra DFS post-order cc:3430-3451; flags and total count argued equal, not pinned by this fixture \u2014 RETURNFOLD-GAPA-UPSTREAM-0001 residual"
+  }
+ },
+ "residual_ids": [
+  "RETURNFOLD-GAPA-UPSTREAM-0001",
+  "MERGE-ADDRTIED-CLOSURE-0001"
+ ],
+ "host_tools": {
+  "cxx": "g++ (GCC) 16.2.1 20260810",
+  "cxx_target": "x86_64-pc-linux-gnu",
+  "cc": "gcc (GCC) 16.2.1 20260810",
+  "cc_target": "x86_64-pc-linux-gnu",
+  "ar": "GNU ar (GNU Binutils) 2.47",
+  "make": "GNU Make 4.4.1",
+  "python": "Python 3.14.7",
+  "git": "git version 2.55.0",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+  "tool_binary_sha256": {
+   "cargo": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
+   "rustc": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618"
+  }
+ },
+ "architecture": "language-independent return-folding projection on hand-built IR",
+ "compiler_spec": "none: ActionReturnSplit folding harness; no compiler spec decode",
+ "analysis_options": "none: return-fold upstream projection; no decompilation pipeline options"
 }

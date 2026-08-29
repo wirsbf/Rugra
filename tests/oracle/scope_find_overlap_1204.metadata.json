@@ -1,88 +1,89 @@
 {
-  "schema_version": 1,
-  "fixture_id": "SCOPE-FINDOVERLAP-1204",
-  "todo_ids": [
-    "SCOPE-FINDOVERLAP-KEY-0001",
-    "SCOPE-FINDOVERLAP-DYNAMIC-0001"
-  ],
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
-  },
-  "rugra_base_commit": "9ea2a78",
-  "architecture": "x86:LE:64:default",
-  "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec"
-  },
-  "analysis_options": {
-    "api": "Direct ScopeLocal::findOverlap / rugra::funcdata::scope_local_find_overlap invocation with explicit (space, offset, size) queries over a hand-installed symbol table; no ActionGroup or other Action runs",
-    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
-    "error_injection": "none",
-    "ghidra_funcdata": "Locked BfdArchitecture over the pinned examples/curl input supplies the Ghidra Funcdata, address spaces, TypeFactory, and the persistent ScopeLocal (function GetStr at 0x36d0); symbols are installed through public production paths (Scope::addSymbol with invalid usepoint -> empty uselimit -> Symbol flag addrtied, database.cc:1149-1150; Scope::addSymbol with a code usepoint -> single-address uselimit; Scope::addDynamicSymbol -> dynamicentry, database.cc:1690-1701)",
-    "rugra_scope": "Rugra builds an isolated ScopeLocal with hand-constructed LocalSymbols (pub fields), one SymbolEntry per Symbol: usepoint=None models the empty uselimit / addrtied symbol flag, usepoint=Some(pc) models the first uselimit range, is_dynamic=true models a dynamicentry record",
-    "ir": "No P-code ops are constructed; the observable is exclusively the findOverlap return identity (symbol name, first, last, isDynamic) per query",
-    "normalization": "No Ghidra/Rugra behavior difference of findOverlap is normalized or removed. The C++ dump keeps std::hex sticky across offset and size; the Rust fixture formats both as hex to match. Pointer/Arc addresses are internal identities and never appear in the records.",
-    "random_seed": "none; findOverlap and fixture construction are deterministic"
-  },
-  "cases": [
-    "partition_usepoint: wide [0x300,0x30f] usepoint 0x1010 vs narrow [0x308,0x30b] usepoint 0x1000, query 0x309:2 — the EntrySubsort(usepoint)-minimum record covering the partition unit containing the query start wins (narrow), not the minimum-start overlapping record (wide)",
-    "partition_usepoint_far: query 0x300:2 lands in the wide-only unit [0x300,0x307] — wide answers",
-    "addrtied_wins: use-limited 'used' inserted before address-tied 'tied' over [0x320,0x327], query 0x322:4 — the minimal (0,0) subsort of the address-tied symbol wins regardless of insertion order",
-    "gap_query: query start 0x338 uncovered, range [0x338,0x347] — the leftmost partition unit [0x340,0x343] (gapend) answers because its first <= query end",
-    "gap_query_short: query [0x338,0x33d] reaches no partition unit — null",
-    "dynamic_null: dynamic symbol present (hash 0x1234, caddr 0x1000), stack query 0x0:8 — null; dynamic entries never enter the static map table (database.cc:1866-1876)",
-    "dynamic_no_shadow: static 'staticfar' [0x360,0x363] answers 0x360:4 with the dynamic symbol present"
-  ],
-  "input_manifest": {
-    "binary": "examples/curl @ 9ea2a78 (Ghidra side; the Rust side needs no binary)",
-    "function": "GetStr @ 0x36d0 (scope carrier only)",
-    "queries": [
-      {
-        "case": "partition_usepoint",
-        "offset": 777,
-        "size": 2
-      },
-      {
-        "case": "partition_usepoint_far",
-        "offset": 768,
-        "size": 2
-      },
-      {
-        "case": "addrtied_wins",
-        "offset": 802,
-        "size": 4
-      },
-      {
-        "case": "gap_query",
-        "offset": 824,
-        "size": 16
-      },
-      {
-        "case": "gap_query_short",
-        "offset": 824,
-        "size": 6
-      },
-      {
-        "case": "dynamic_null",
-        "offset": 0,
-        "size": 8
-      },
-      {
-        "case": "dynamic_no_shadow",
-        "offset": 864,
-        "size": 4
-      }
-    ]
-  },
-  "comparand_sha256": {
-    "cpp_fixture": "524ed4a54300465d7558f04138792626a4848817be79a133a04dd8ac7a18bba2",
-    "rust_fixture": "14750e3165848ad94a8275a682618db7245d9738af9e47909ff62f2a26afd20f",
-    "rugra_funcdata_source": "5e784c135946576e3640387ec32a1f4f0cd02030d092a5c600ee2906830ff378",
-    "api_document": "833d5ba7160490fdf7a3e0a213c728c77c5aec058856df2d6062d1c5430e10e7",
-    "runner": "8a1f23b0f65fba8e92388154d2a3b55f9505bb498f074edbd22b7f850934a614"
-  },
-  "expected_stdout_sha256": "369cdf8eff0804031c84790aa9f79277fa277ecc7cad29261c6b6fdbc6291244",
-  "expected_record_count": 7
+ "schema_version": 1,
+ "fixture_id": "SCOPE-FINDOVERLAP-1204",
+ "todo_ids": [
+  "SCOPE-FINDOVERLAP-KEY-0001",
+  "SCOPE-FINDOVERLAP-DYNAMIC-0001"
+ ],
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "rugra_base_commit": "9ea2a78",
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec"
+ },
+ "analysis_options": {
+  "api": "Direct ScopeLocal::findOverlap / rugra::funcdata::scope_local_find_overlap invocation with explicit (space, offset, size) queries over a hand-installed symbol table; no ActionGroup or other Action runs",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
+  "error_injection": "none",
+  "ghidra_funcdata": "Locked BfdArchitecture over the pinned examples/curl input supplies the Ghidra Funcdata, address spaces, TypeFactory, and the persistent ScopeLocal (function GetStr at 0x36d0); symbols are installed through public production paths (Scope::addSymbol with invalid usepoint -> empty uselimit -> Symbol flag addrtied, database.cc:1149-1150; Scope::addSymbol with a code usepoint -> single-address uselimit; Scope::addDynamicSymbol -> dynamicentry, database.cc:1690-1701)",
+  "rugra_scope": "Rugra builds an isolated ScopeLocal with hand-constructed LocalSymbols (pub fields), one SymbolEntry per Symbol: usepoint=None models the empty uselimit / addrtied symbol flag, usepoint=Some(pc) models the first uselimit range, is_dynamic=true models a dynamicentry record",
+  "ir": "No P-code ops are constructed; the observable is exclusively the findOverlap return identity (symbol name, first, last, isDynamic) per query",
+  "normalization": "No Ghidra/Rugra behavior difference of findOverlap is normalized or removed. The C++ dump keeps std::hex sticky across offset and size; the Rust fixture formats both as hex to match. Pointer/Arc addresses are internal identities and never appear in the records.",
+  "random_seed": "none; findOverlap and fixture construction are deterministic"
+ },
+ "cases": [
+  "partition_usepoint: wide [0x300,0x30f] usepoint 0x1010 vs narrow [0x308,0x30b] usepoint 0x1000, query 0x309:2 \u2014 the EntrySubsort(usepoint)-minimum record covering the partition unit containing the query start wins (narrow), not the minimum-start overlapping record (wide)",
+  "partition_usepoint_far: query 0x300:2 lands in the wide-only unit [0x300,0x307] \u2014 wide answers",
+  "addrtied_wins: use-limited 'used' inserted before address-tied 'tied' over [0x320,0x327], query 0x322:4 \u2014 the minimal (0,0) subsort of the address-tied symbol wins regardless of insertion order",
+  "gap_query: query start 0x338 uncovered, range [0x338,0x347] \u2014 the leftmost partition unit [0x340,0x343] (gapend) answers because its first <= query end",
+  "gap_query_short: query [0x338,0x33d] reaches no partition unit \u2014 null",
+  "dynamic_null: dynamic symbol present (hash 0x1234, caddr 0x1000), stack query 0x0:8 \u2014 null; dynamic entries never enter the static map table (database.cc:1866-1876)",
+  "dynamic_no_shadow: static 'staticfar' [0x360,0x363] answers 0x360:4 with the dynamic symbol present"
+ ],
+ "input_manifest": {
+  "binary": "examples/curl @ 9ea2a78 (Ghidra side; the Rust side needs no binary)",
+  "function": "GetStr @ 0x36d0 (scope carrier only)",
+  "queries": [
+   {
+    "case": "partition_usepoint",
+    "offset": 777,
+    "size": 2
+   },
+   {
+    "case": "partition_usepoint_far",
+    "offset": 768,
+    "size": 2
+   },
+   {
+    "case": "addrtied_wins",
+    "offset": 802,
+    "size": 4
+   },
+   {
+    "case": "gap_query",
+    "offset": 824,
+    "size": 16
+   },
+   {
+    "case": "gap_query_short",
+    "offset": 824,
+    "size": 6
+   },
+   {
+    "case": "dynamic_null",
+    "offset": 0,
+    "size": 8
+   },
+   {
+    "case": "dynamic_no_shadow",
+    "offset": 864,
+    "size": 4
+   }
+  ]
+ },
+ "comparand_sha256": {
+  "cpp_fixture": "524ed4a54300465d7558f04138792626a4848817be79a133a04dd8ac7a18bba2",
+  "rust_fixture": "14750e3165848ad94a8275a682618db7245d9738af9e47909ff62f2a26afd20f",
+  "rugra_funcdata_source": "5e784c135946576e3640387ec32a1f4f0cd02030d092a5c600ee2906830ff378",
+  "api_document": "833d5ba7160490fdf7a3e0a213c728c77c5aec058856df2d6062d1c5430e10e7",
+  "runner": "8a1f23b0f65fba8e92388154d2a3b55f9505bb498f074edbd22b7f850934a614"
+ },
+ "expected_stdout_sha256": "369cdf8eff0804031c84790aa9f79277fa277ecc7cad29261c6b6fdbc6291244",
+ "expected_record_count": 7,
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

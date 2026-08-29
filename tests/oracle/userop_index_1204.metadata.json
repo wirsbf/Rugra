@@ -1,12 +1,13 @@
 {
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
-  },
-  "architecture": "architecture-independent PcodeCompile unit fixture; configured constant/unique AddrSpace identities are opaque and compared by identity",
-  "compiler_spec": "N/A: createUserOp/createUserOpNoOut and SleighCompile::addUserOp do not read a .cspec",
-  "analysis_options": "direct locked-source execution; little-endian SleighCompile initialization; no decompiler analysis passes",
-  "host_compiler": "g++ 11.4.0; -std=c++11 -O2 -ffunction-sections -fdata-sections; link --gc-sections",
-  "input": "addUserOp batches [alpha,beta] then [gamma]; UserOpSymbol indices 37 and 91, each with INT_NEGATE and INT_2COMP nested parameters",
-  "input_sha256": "aa7ca0a081e96bdcf8b994014208c938b2e40f4da1d3a26ff799d12155edca95"
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "architecture": "architecture-independent PcodeCompile unit fixture; configured constant/unique AddrSpace identities are opaque and compared by identity",
+ "compiler_spec": "N/A: createUserOp/createUserOpNoOut and SleighCompile::addUserOp do not read a .cspec",
+ "analysis_options": "direct locked-source execution; little-endian SleighCompile initialization; no decompiler analysis passes",
+ "host_compiler": "g++ 11.4.0; -std=c++11 -O2 -ffunction-sections -fdata-sections; link --gc-sections",
+ "input": "addUserOp batches [alpha,beta] then [gamma]; UserOpSymbol indices 37 and 91, each with INT_NEGATE and INT_2COMP nested parameters",
+ "input_sha256": "aa7ca0a081e96bdcf8b994014208c938b2e40f4da1d3a26ff799d12155edca95",
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

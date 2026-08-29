@@ -1,93 +1,190 @@
 {
-  "schema_version": 1,
-  "fixture_id": "SCOPE-CAT0-0001",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ "schema_version": 1,
+ "fixture_id": "SCOPE-CAT0-0001",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "architecture": "architecture-independent in-memory ScopeInternal with a zero-address-space fixture Architecture",
+ "compiler_spec": "N/A: category operations do not consult a compiler specification",
+ "analysis_options": "direct calls only; no decompiler Action pipeline",
+ "input": {
+  "scope": {
+   "id": 4660,
+   "name": "fixture",
+   "owner": "self",
+   "address_spaces": 0
   },
-  "architecture": "architecture-independent in-memory ScopeInternal with a zero-address-space fixture Architecture",
-  "compiler_spec": "N/A: category operations do not consult a compiler specification",
-  "analysis_options": "direct calls only; no decompiler Action pipeline",
-  "input": {
-    "scope": {
-      "id": 4660,
-      "name": "fixture",
-      "owner": "self",
-      "address_spaces": 0
-    },
-    "symbols": ["a", "b", "c", "d", "e", "f"],
-    "datatype": {
-      "name": "fixture_i32",
-      "metatype": "TYPE_INT",
-      "size": 4
-    },
-    "operations": [
-      ["setCategory", "a", 0, 2],
-      ["setCategory", "b", 0, 0],
-      ["setCategory", "c", 0, 5],
-      ["setCategory", "d", 2, 99],
-      ["setCategory", "e", 2, 0],
-      ["setCategory", "f", 1, 77],
-      ["setCategory", "a", 2, 123],
-      ["setCategory", "d", 2, 999],
-      ["setCategory", "e", -1, 444],
-      ["setCategory", "a", 0, 1],
-      ["setCategory", "b", 0, 4],
-      ["removeSymbol", "c"],
-      ["removeSymbol", "b"],
-      ["setCategory", "a", -1, -2],
-      ["removeSymbol", "d"],
-      ["setCategory", "f", -1, 7],
-      ["setCategory", "e", 0, 1],
-      ["setCategory", "f", 0, 65537],
-      ["setCategory", "f", -1, 7]
-    ]
+  "symbols": [
+   "a",
+   "b",
+   "c",
+   "d",
+   "e",
+   "f"
+  ],
+  "datatype": {
+   "name": "fixture_i32",
+   "metatype": "TYPE_INT",
+   "size": 4
   },
-  "input_fingerprint": "sha256:6a069148cd909b01d29410e74e53fd546c7b59bd579c0bf3b65c2da087978fbd",
-  "observation": {
-    "functions": [
-      "ScopeInternal::getCategorySize(int4) const",
-      "ScopeInternal::getCategorySymbol(int4,int4) const",
-      "ScopeInternal::setCategory(Symbol *,int4,int4)",
-      "ScopeInternal::removeSymbol(Symbol *)",
-      "ScopeInternal::~ScopeInternal(void)"
-    ],
-    "state": [
-      "outer category vector size",
-      "category sizes including invalid categories",
-      "every category-0/1/2 slot including null holes",
-      "negative category/index and out-of-range query results",
-      "Symbol category and uint2 category-index fields",
-      "exact Symbol identity returned by category slots",
-      "name-tree ownership and destruction count"
-    ],
-    "overall_status": "MATCH"
-  },
-  "exact_function_boundaries": {
-    "getCategorySize": "Covers negative category, absent/empty categories, categories containing null holes, populated category 0, and append-only categories 1/2.",
-    "getCategorySymbol": "Covers negative category/index, absent category, index equal to or beyond size, null hole, occupied slot, repeated exact object identity, and a category-0 occupied-slot replacement.",
-    "setCategory": "Covers initially uncategorized symbols, category-0 explicit placement/padding, category>0 ignored input index and append order, same-category re-append, cross-category movement, negative-category removal, uint2 index conversion (-2 and 65537), trailing-null cascade trimming, outer-table retention, and occupied category-0 replacement semantics.",
-    "ownership": "TrackingSymbol/Weak observations cover removal from the owning name tree, non-owning category references after removeSymbol, exactly-once deletion, and final ScopeInternal destruction of remaining symbols.",
-    "excluded": "Category values outside the documented Symbol enum {-1,0,1,2,3}, allocation failure, corrupt pre-state (category/index not naming an allocated slot), lock poisoning, concurrent access, and categorySanity/clearCategory are outside this fixture."
-  },
-  "comparand": {
-    "rugra_base_commit": "3efb1398d8955959f71e8694609cbc38059295cb",
-    "rugra_base_tree": "00117c8be4103f58fc3e534b0b6d0fa5c052e567",
-    "cpp_fixture_sha256": "1aafafb9a6f9ae90ad9666966131adf616423c21ef2c43d87037a75ee9a163b6",
-    "rust_fixture_sha256": "7aa15e164f09e342b11c145e3a0cd4d6dd06b22f51f40138d4efbcfc9ea61520",
-    "runner_sha256": "9a701930c4b2038609cb1eafa2875b1439f0bbc1219a237c7676663f56846ec2",
-    "database_rs_sha256": "835b46d51c1bb4d8bbd8ad9dca6032c61c801a85725087e15110979b05561fa0",
-    "database_doc_sha256": "d9a12e5d56c2a96c27e75ea3a0142e62c0cec686deb1b6f877e118d4f8a63d27",
-    "ghidra_database_cc_blob": "c6529baea5667369341b52113283ae9ae9eea8c0",
-    "ghidra_database_hh_blob": "ab13b02522e6e3e99ecb5a8e17a12138553ef060",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "host_cxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "host_cxx_target": "x86_64-linux-gnu",
-    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-    "host_platform": "Linux 6.8.0-124-generic x86_64"
-  },
-  "expected_stdout_sha256": "7ce3d2f0fe29b86ab596f3a966e0d0fe322fb94e55e0ab218627090b2eb762ca"
+  "operations": [
+   [
+    "setCategory",
+    "a",
+    0,
+    2
+   ],
+   [
+    "setCategory",
+    "b",
+    0,
+    0
+   ],
+   [
+    "setCategory",
+    "c",
+    0,
+    5
+   ],
+   [
+    "setCategory",
+    "d",
+    2,
+    99
+   ],
+   [
+    "setCategory",
+    "e",
+    2,
+    0
+   ],
+   [
+    "setCategory",
+    "f",
+    1,
+    77
+   ],
+   [
+    "setCategory",
+    "a",
+    2,
+    123
+   ],
+   [
+    "setCategory",
+    "d",
+    2,
+    999
+   ],
+   [
+    "setCategory",
+    "e",
+    -1,
+    444
+   ],
+   [
+    "setCategory",
+    "a",
+    0,
+    1
+   ],
+   [
+    "setCategory",
+    "b",
+    0,
+    4
+   ],
+   [
+    "removeSymbol",
+    "c"
+   ],
+   [
+    "removeSymbol",
+    "b"
+   ],
+   [
+    "setCategory",
+    "a",
+    -1,
+    -2
+   ],
+   [
+    "removeSymbol",
+    "d"
+   ],
+   [
+    "setCategory",
+    "f",
+    -1,
+    7
+   ],
+   [
+    "setCategory",
+    "e",
+    0,
+    1
+   ],
+   [
+    "setCategory",
+    "f",
+    0,
+    65537
+   ],
+   [
+    "setCategory",
+    "f",
+    -1,
+    7
+   ]
+  ]
+ },
+ "input_fingerprint": "sha256:6a069148cd909b01d29410e74e53fd546c7b59bd579c0bf3b65c2da087978fbd",
+ "observation": {
+  "functions": [
+   "ScopeInternal::getCategorySize(int4) const",
+   "ScopeInternal::getCategorySymbol(int4,int4) const",
+   "ScopeInternal::setCategory(Symbol *,int4,int4)",
+   "ScopeInternal::removeSymbol(Symbol *)",
+   "ScopeInternal::~ScopeInternal(void)"
+  ],
+  "state": [
+   "outer category vector size",
+   "category sizes including invalid categories",
+   "every category-0/1/2 slot including null holes",
+   "negative category/index and out-of-range query results",
+   "Symbol category and uint2 category-index fields",
+   "exact Symbol identity returned by category slots",
+   "name-tree ownership and destruction count"
+  ],
+  "overall_status": "MATCH"
+ },
+ "exact_function_boundaries": {
+  "getCategorySize": "Covers negative category, absent/empty categories, categories containing null holes, populated category 0, and append-only categories 1/2.",
+  "getCategorySymbol": "Covers negative category/index, absent category, index equal to or beyond size, null hole, occupied slot, repeated exact object identity, and a category-0 occupied-slot replacement.",
+  "setCategory": "Covers initially uncategorized symbols, category-0 explicit placement/padding, category>0 ignored input index and append order, same-category re-append, cross-category movement, negative-category removal, uint2 index conversion (-2 and 65537), trailing-null cascade trimming, outer-table retention, and occupied category-0 replacement semantics.",
+  "ownership": "TrackingSymbol/Weak observations cover removal from the owning name tree, non-owning category references after removeSymbol, exactly-once deletion, and final ScopeInternal destruction of remaining symbols.",
+  "excluded": "Category values outside the documented Symbol enum {-1,0,1,2,3}, allocation failure, corrupt pre-state (category/index not naming an allocated slot), lock poisoning, concurrent access, and categorySanity/clearCategory are outside this fixture."
+ },
+ "comparand": {
+  "rugra_base_commit": "3efb1398d8955959f71e8694609cbc38059295cb",
+  "rugra_base_tree": "00117c8be4103f58fc3e534b0b6d0fa5c052e567",
+  "cpp_fixture_sha256": "1aafafb9a6f9ae90ad9666966131adf616423c21ef2c43d87037a75ee9a163b6",
+  "rust_fixture_sha256": "7aa15e164f09e342b11c145e3a0cd4d6dd06b22f51f40138d4efbcfc9ea61520",
+  "runner_sha256": "9a701930c4b2038609cb1eafa2875b1439f0bbc1219a237c7676663f56846ec2",
+  "database_rs_sha256": "835b46d51c1bb4d8bbd8ad9dca6032c61c801a85725087e15110979b05561fa0",
+  "database_doc_sha256": "d9a12e5d56c2a96c27e75ea3a0142e62c0cec686deb1b6f877e118d4f8a63d27",
+  "ghidra_database_cc_blob": "c6529baea5667369341b52113283ae9ae9eea8c0",
+  "ghidra_database_hh_blob": "ab13b02522e6e3e99ecb5a8e17a12138553ef060",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "host_cxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_cxx_target": "x86_64-linux-gnu",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+  "host_platform": "Linux 6.8.0-124-generic x86_64"
+ },
+ "expected_stdout_sha256": "7ce3d2f0fe29b86ab596f3a966e0d0fe322fb94e55e0ab218627090b2eb762ca",
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

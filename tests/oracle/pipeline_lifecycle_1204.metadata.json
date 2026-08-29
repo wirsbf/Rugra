@@ -1,79 +1,80 @@
 {
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
-  },
-  "architecture": "x86:LE:64:default",
-  "compiler_spec": "gcc",
-  "analysis_options": {
-    "architecture_constructor": "BfdArchitecture(examples/curl, default)",
-    "loader_symbol_namespace": "::",
-    "action_group": "base",
-    "action_sequence": [
-      "ActionStart::apply",
-      "insert one dead zero-input CPUI_COPY at the function entry",
-      "ActionStop::apply"
-    ],
-    "normalization": "none"
-  },
-  "input": {
-    "binary": "examples/curl",
-    "binary_sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-    "function": "GetStr",
-    "entry": "ram:00000000000036d0",
-    "elf_symbol_size": 74,
-    "funcdata_size": 0,
-    "initial_state": "fresh Funcdata; processing flags clear; op, varnode, basic-block, and call banks empty; prototype input/output/model unlocked",
-    "rugra_context_gap": "Rugra Funcdata does not retain the x86 Translate/LoadImage/Architecture context required by followFlow"
-  },
-  "input_fingerprint": "sha256:e81a8a24233af2179a44486c16a8471164ffd545ed685e0323e70a0b712670a5",
-  "comparand_sha256": {
-    "cpp_fixture": "9320974dc3291ccb1e278e2bc6adec3ad4885b46508d75fcc0b424d06e77cea4",
-    "rust_fixture": "73f51753d5ff87d2b52b20a40a5b504e72428c8fef9c06ce1167c2b8d1418980",
-    "coreaction_rs": "79364848c7c134da6ba97e594ab0be2d486be35776d4abd657c23d568befdfe7"
-  },
-  "assets": {
-    "binary_sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-    "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-    "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-    "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-    "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-    "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-    "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-  },
-  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-  "observation": {
-    "wrapper_fields_status": "MATCH",
-    "full_mutation_status": "MISMATCH",
-    "overall_status": "MISMATCH",
-    "matched_fields": [
-      "ActionStart return value",
-      "processing-started and processing-complete transitions",
-      "heritage global/register/stack pass initialization",
-      "prototype input/output/model lock state",
-      "ActionStop return value",
-      "dead-op count before stop and destruction after stop"
-    ],
-    "known_differences": [
-      "After ActionStart and ActionStop, locked Ghidra has 103 alive/all ops, 272 varnodes, 6 basic blocks, and 2 calls; Rugra has zero because Funcdata::start_processing cannot invoke followFlow without owned translator state",
-      "Rugra lifecycle still lacks the inline-function header warning, exact ScopeLocal::clearUnlocked semantics, LocalOverride::applyDeadCodeDelay, and backed datatype warning iteration"
-    ],
-    "action_prototype_types": {
-      "status": "UNTESTED",
-      "reason": "Exact locked-input materialization cannot be expressed by the current Rugra data model without guessing",
-      "dependency_dag": [
-        "address-space-bearing ProtoParameter storage",
-        "resolved ProtoModel and input ParamList ownership",
-        "FuncProto/ProtoModel::assumedInputExtension routing to input ParamList::assumedExtension",
-        "property-aware Funcdata::newVarnode and setInputVarnode",
-        "ActionPrototypeTypes locked-input creation, extension, and ptrflow"
-      ]
-    }
-  },
-  "expected_stdout_sha256": {
-    "ghidra": "efc70313c4683f139e9c1011ff5a3db0b973ae24417c25d01678c345e9c3528b",
-    "rugra": "f99bfb049e1d3f231129a63aa01ecbe9fc38edebdfca4c892917c43f382bb08f",
-    "diff": "7b8069246ff3ef28c0638efdb3571f9380839c044bd071a8b5086f4597ca05f4"
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": "gcc",
+ "analysis_options": {
+  "architecture_constructor": "BfdArchitecture(examples/curl, default)",
+  "loader_symbol_namespace": "::",
+  "action_group": "base",
+  "action_sequence": [
+   "ActionStart::apply",
+   "insert one dead zero-input CPUI_COPY at the function entry",
+   "ActionStop::apply"
+  ],
+  "normalization": "none"
+ },
+ "input": {
+  "binary": "examples/curl",
+  "binary_sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+  "function": "GetStr",
+  "entry": "ram:00000000000036d0",
+  "elf_symbol_size": 74,
+  "funcdata_size": 0,
+  "initial_state": "fresh Funcdata; processing flags clear; op, varnode, basic-block, and call banks empty; prototype input/output/model unlocked",
+  "rugra_context_gap": "Rugra Funcdata does not retain the x86 Translate/LoadImage/Architecture context required by followFlow"
+ },
+ "input_fingerprint": "sha256:e81a8a24233af2179a44486c16a8471164ffd545ed685e0323e70a0b712670a5",
+ "comparand_sha256": {
+  "cpp_fixture": "9320974dc3291ccb1e278e2bc6adec3ad4885b46508d75fcc0b424d06e77cea4",
+  "rust_fixture": "73f51753d5ff87d2b52b20a40a5b504e72428c8fef9c06ce1167c2b8d1418980",
+  "coreaction_rs": "79364848c7c134da6ba97e594ab0be2d486be35776d4abd657c23d568befdfe7"
+ },
+ "assets": {
+  "binary_sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+  "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+  "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+  "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+  "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+  "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+ },
+ "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+ "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+ "observation": {
+  "wrapper_fields_status": "MATCH",
+  "full_mutation_status": "MISMATCH",
+  "overall_status": "MISMATCH",
+  "matched_fields": [
+   "ActionStart return value",
+   "processing-started and processing-complete transitions",
+   "heritage global/register/stack pass initialization",
+   "prototype input/output/model lock state",
+   "ActionStop return value",
+   "dead-op count before stop and destruction after stop"
+  ],
+  "known_differences": [
+   "After ActionStart and ActionStop, locked Ghidra has 103 alive/all ops, 272 varnodes, 6 basic blocks, and 2 calls; Rugra has zero because Funcdata::start_processing cannot invoke followFlow without owned translator state",
+   "Rugra lifecycle still lacks the inline-function header warning, exact ScopeLocal::clearUnlocked semantics, LocalOverride::applyDeadCodeDelay, and backed datatype warning iteration"
+  ],
+  "action_prototype_types": {
+   "status": "UNTESTED",
+   "reason": "Exact locked-input materialization cannot be expressed by the current Rugra data model without guessing",
+   "dependency_dag": [
+    "address-space-bearing ProtoParameter storage",
+    "resolved ProtoModel and input ParamList ownership",
+    "FuncProto/ProtoModel::assumedInputExtension routing to input ParamList::assumedExtension",
+    "property-aware Funcdata::newVarnode and setInputVarnode",
+    "ActionPrototypeTypes locked-input creation, extension, and ptrflow"
+   ]
   }
+ },
+ "expected_stdout_sha256": {
+  "ghidra": "efc70313c4683f139e9c1011ff5a3db0b973ae24417c25d01678c345e9c3528b",
+  "rugra": "f99bfb049e1d3f231129a63aa01ecbe9fc38edebdfca4c892917c43f382bb08f",
+  "diff": "7b8069246ff3ef28c0638efdb3571f9380839c044bd071a8b5086f4597ca05f4"
+ },
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

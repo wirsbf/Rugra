@@ -889,10 +889,15 @@ def _load_and_validate_continuity(
                                     f"event {index} from")
             _validate_record_fields(after[event["to_id"]], event, "to",
                                     f"event {index} to")
+            automatic_kind = None
             if "parameter_binding_mut_only" in evidence:
+                automatic_kind = "parameter_binding_mut_only"
+            elif "signature_trailing_comma_only" in evidence:
+                automatic_kind = "signature_trailing_comma_only"
+            if automatic_kind is not None:
                 required_auto = {
                     "same_patch_hunk", "identical_nonempty_annotation",
-                    "parameter_binding_mut_only",
+                    automatic_kind,
                 }
                 if set(evidence) != required_auto:
                     raise HarnessError(f"continuity automatic evidence set drift for {origin}")
@@ -901,10 +906,16 @@ def _load_and_validate_continuity(
                     raise HarnessError(f"continuity automatic identity context drift for {origin}")
                 old_signature = event["from_signature"]
                 new_signature = event["to_signature"]
-                if (old_signature == new_signature
-                        or generator.rust_parameter_binding_mut_normalized_signature(old_signature)
-                        != generator.rust_parameter_binding_mut_normalized_signature(new_signature)):
-                    raise HarnessError(f"continuity non-mut signature change for {origin}")
+                if automatic_kind == "parameter_binding_mut_only":
+                    if (old_signature == new_signature
+                            or generator.rust_parameter_binding_mut_normalized_signature(old_signature)
+                            != generator.rust_parameter_binding_mut_normalized_signature(new_signature)):
+                        raise HarnessError(f"continuity non-mut signature change for {origin}")
+                elif (old_signature == new_signature
+                        or generator.rust_trailing_comma_normalized_signature(old_signature)
+                        != generator.rust_trailing_comma_normalized_signature(new_signature)):
+                    raise HarnessError(
+                        f"continuity non-separator signature change for {origin}")
                 hunks = generator._diff_hunks(
                     generator.Path(root), parent, commit, event["from_path"], {}
                 )
@@ -943,7 +954,11 @@ def _load_and_validate_continuity(
             raise HarnessError(f"continuity lineage origin kind/base mismatch for {base_id}")
         if new_id not in current_ids:
             raise HarnessError(f"continuity live terminal absent current ledger: {new_id}")
-        if base_id in current_ids:
+        if base_id in current_ids and new_id != base_id:
+            # A base token that still lives while its lineage terminates
+            # elsewhere is stale.  new_id == base_id is the proven round-trip
+            # (param added then reverted, e.g. try_output_stack_guard
+            # 3dc4b2ae -> 8b387a8d): the original identity is current again.
             raise HarnessError(f"continuity stale base remains in current ledger: {base_id}")
         owner = class_owner(base_id)
         previous_final = final_owner.get(new_id)
@@ -953,7 +968,9 @@ def _load_and_validate_continuity(
             )
         if new_id in baseline_ids and new_id != base_id:
             raise HarnessError(f"continuity terminal collides with baseline class: {new_id}")
-        if new_id in baseline_token_owner:
+        if new_id in baseline_token_owner and new_id != base_id:
+            # new_id == base_id is the proven round-trip return: the class
+            # terminates on its own historical token, which it never left.
             raise HarnessError(f"continuity terminal reuses a historical migration token: {new_id}")
         minimum_order = (
             commit_order[introduced_by_base[base_id]["introduced_at_commit"]]
@@ -962,7 +979,10 @@ def _load_and_validate_continuity(
         validate_events(base_id, aliases, events, new_id, minimum_order)
         claim(base_id, owner, "lineage base")
         for alias_index, alias in enumerate(aliases):
-            if alias in current_ids:
+            if alias in current_ids and alias != new_id:
+                # An alias equal to the terminal is the live record; a
+                # round-trip lineage (param added then reverted) terminates on
+                # its own base, which is also aliases[0].
                 raise HarnessError(f"continuity stale alias remains current: {alias}")
             if (alias in baseline_token_owner
                     and not (alias_index == 0 and alias == base_id)):
@@ -1058,7 +1078,12 @@ def _load_and_validate_continuity(
 
     for base_id in baseline_ids:
         if base_id in current_ids:
-            if base_id in live_map or base_id in tombstone_map:
+            if base_id in tombstone_map:
+                raise HarnessError(f"continuity current baseline ID also has a terminal: {base_id}")
+            if base_id in live_map and live_map[base_id] != base_id:
+                # live_map[base_id] == base_id is the proven round-trip return;
+                # any other terminal means the token is current while its
+                # lineage claims it moved on.
                 raise HarnessError(f"continuity current baseline ID also has a terminal: {base_id}")
         elif base_id not in live_map and base_id not in tombstone_map:
             raise HarnessError(

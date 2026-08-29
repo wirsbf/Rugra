@@ -302,7 +302,7 @@ require("fixture id", metadata["fixture_id"], "VARMAP-LOCALWINDOW-0001")
 require(
     "stable function id",
     metadata["stable_function_id"],
-    "GH12-F-76f7192d736e6eaa29f7",
+    "GH12-F-2a6f55228a2d38d1f1c6",
 )
 require("overall status", metadata["overall_status"].split(":", 1)[0], "PARTIAL_MATCH")
 oracle = metadata["oracle"]
