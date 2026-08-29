@@ -9,8 +9,8 @@
 - Declaration references: 6317
 - Raw Ctags function records: 15811
 - Ghidra IDs carrying a guard disambiguator: 12
-- Rugra functions: 10457
-  (8668 production + 1789 test)
+- Rugra functions: 10459
+  (8670 production + 1789 test)
 - Exact definition-start mappings: 3969
 - Body-line references requiring audit: 352
 

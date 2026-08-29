@@ -2418,6 +2418,10 @@
     },
     {
       "from": "database",
+      "to": "space"
+    },
+    {
+      "from": "database",
       "to": "type_system::datatype"
     },
     {
