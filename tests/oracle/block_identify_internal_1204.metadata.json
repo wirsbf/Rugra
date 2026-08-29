@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "fixture_id": "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001",
+  "stable_function_id": "GH12-F-blockgraph-identifyinternal",
+  "stable_function_closure": [
+    "ghidra::BlockGraph::identifyInternal block.cc:940",
+    "ghidra::BlockGraph::selfIdentify block.cc:895",
+    "ghidra::FlowBlock::dedup block.cc:525",
+    "ghidra::FlowBlock::eliminateInDups block.cc:446",
+    "ghidra::FlowBlock::eliminateOutDups block.cc:475",
+    "ghidra::FlowBlock::replaceInEdge block.cc:160",
+    "ghidra::FlowBlock::replaceOutEdge block.cc:178",
+    "ghidra::FlowBlock::halfDeleteInEdge block.cc:100",
+    "ghidra::FlowBlock::halfDeleteOutEdge block.cc:115",
+    "ghidra::BlockGraph::addBlock block.cc:862",
+    "ghidra::BlockGraph::newBlockList block.cc:1758",
+    "ghidra::CollapseStructure::collapseInternal blockaction.cc:1770 (consumption: rule sweep sees only top-level blocks)",
+    "ghidra::LoopBody::update blockaction.cc:94 (consumption: parent-chain resolution)",
+    "ghidra::FloatingEdge::getCurrentEdge blockaction.cc:27 (consumption: parent-chain resolution)"
+  ],
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{block.cc:862-875,895-963,100-127,160-191,446-539,1758-1774; blockaction.cc:27-38,94-114,1770-1851}"
+  },
+  "rugra_base_commit": "547e3fe3a0fe1966a4ae156d2121e74b0de6fce7",
+  "rugra_base_tree": "75d924e5e814d982e18c9e3d13efd482b6c7fa1a",
+  "architecture": "locked synthetic plain FlowBlock graphs built through production BlockGraph APIs (newBlock/addEdge); no AddrSpace, no Funcdata, no PcodeOps",
+  "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
+  "analysis_options": {
+    "entrypoint": "BlockGraph::newBlockList (block.cc:1758-1774) = identifyInternal + addBlock + forceOutputNum; forceOutputNum is a no-op in all 4 cases (nodes.back()->sizeOut() <= 1 before identify), so the Rust comparand drives CollapseStructure::identify_internal directly",
+    "prestate": "per-case fresh BlockGraph, edges added in a fixed creation order via addLabeledEdge (label set symmetrically on both halves after addEdge)",
+    "observation": "per case: sorted top-level membership + graph size, composite index, sorted children, parent ownership of components and top-level blocks, raw flags hex (components are NEVER f_dead), boundary edge lists as name:reverse_index:label on composite and peers, reciprocal edge consistency (checkEdges projection), dedup label merge"
+  },
+  "input_manifest": {
+    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+    "cases": [
+      "cat_basic: P->A->B->C->Q chain with labeled boundary edges (0x21 in, 0x42 out), consumed {A,B} — boundary half rehoming to composite, peer retargets, internal A<->B edge retention, component flag state",
+      "parallel_dedup: A and B both edge to M (labels 0x5, 0x9) — selfIdentify's final dedup keeps the FIRST slot, ORs labels on the composite half (0xd) while the peer's kept half keeps its own label (0x5), removes the mirrored duplicate",
+      "flag_propagation: f_switch_out propagates only from a component WITH an external out edge (block.cc:925-926 inside the external branch); f_interior_gotoout/f_interior_gotoin OR-accumulate from every component (block.cc:951)",
+      "self_edge_internal: component self-loop stays component-internal, never inherited by the composite, and survives with intact reciprocal indices"
+    ]
+  },
+  "observation_schema": {
+    "format": "schema header line + one 'case=<name>|k=v|...' line per case; edges print as [name:reverse_index:label] with DECIMAL labels (C++ edgeList formats into a fresh ostringstream); flags print hex",
+    "normalization": "top-level membership prints as SORTED names (Ghidra appends the composite at list end via addBlock, Rugra installs it at the first component's slot — the registered install-in-place model divergence BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001, position-normalized here); children print as SORTED names only in case 1/2 where construction order is alphabetical anyway; every other observation is raw"
+  },
+  "comparand_sha256": {
+    "cpp_fixture_sha256": "9538705d394563c04cacbf1fa194f6a29a5a03f90d79b3650cb3cc5a4c0b114a",
+    "rust_fixture_sha256": "c67dcbb10aed429fd7c762d492d3221f1d30ac5a7d3394422b49729b1060b8df",
+    "rugra_block_rs_sha256": "00ca6531166bbe75e1362c289ed297c09a58edbf40b11c65ceaea6d4eeaeb3e4",
+    "rugra_blockaction_rs_sha256": "f620ddabeb4ceda35058442458de0bf44cf23a9760145f4c2de8bd4076a28188",
+    "runner_sha256": "946d087aaf92e1c4e89c4df9100706fc49c1d240551dfb89b6b30fdf1e939b97",
+    "ghidra_block_cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",
+    "ghidra_block_hh": "103d023e88e88986c8d7bb6a4309eaee91d0f627636838f25452763e1212b139",
+    "ghidra_blockaction_cc": "501e8d9a3caec9172b1fdfa421f6cbc96cf8eb481fa3b40acbd186db4bab9dd6",
+    "ghidra_blockaction_hh": "3993011793101ed3e4cadb6cc31ef1a88daea34d86d454984dc885c6fe62460d"
+  },
+  "host": {
+    "cxx": "g++ (GCC) 16.2.1 20260810",
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
+    "bfd_root": "/tmp/rugra-ghidra-bfd-2.38"
+  },
+  "oracle_stdout_sha256": "710def24376458ee287642643b33d81b4992e5d6b8ca696e53beff9d54ce003a",
+  "expected_exit_code": 0,
+  "covered_projection_status": "covered_projection=MATCH on all 4 cases (raw state projection, byte-identical stdout)",
+  "coverage": {
+    "scoped_status": "MATCH",
+    "full_status": "MISMATCH",
+    "no_f_dead": "MATCH: components keep raw flags 0 (case 1/2/4) and f_interior_* only where set (case 3); identifyInternal sets NO flag (block.cc:940-963); f_dead stays exclusively Funcdata's dead basic-block removal (funcdata_block.cc:333/370)",
+    "parent_ownership": "MATCH: every component's parent is the composite (Ghidra FlowBlock::parent via addBlock block.cc:873; Rugra BlockList children + absorbed_into record); top-level blocks' parent is the graph",
+    "component_order": "MATCH: composite children order = nodes order (identifyInternal addBlock loop block.cc:944-952)",
+    "top_level_membership": "MATCH-after-normalization: sorted membership + size; position differs by the registered install-in-place model divergence (Ghidra appends at end, Rugra installs at first component slot) — outside the covered projection",
+    "boundary_edge_rehoming": "MATCH: composite in/out lists carry the external half-edges with original labels and correct reverse slots; peer halves retargeted (replaceInEdge/replaceOutEdge projection); component-to-component edges NEVER rewritten (selfIdentify skips otherbl->parent == this — the b_in=[A] retention)",
+    "paired_dedup": "MATCH: parallel boundary edges through one peer collapse on the composite side keeping the FIRST slot with OR'd label while the peer keeps its own first-half label; mirrored duplicate removed",
+    "flag_propagation": "MATCH: f_switch_out only from a component with an external out edge; f_interior_goto* OR from every component",
+    "internal_edge_retention": "MATCH: self-loop and chain edges inside the consumed set survive with intact reciprocal indices; external halves stripped",
+    "residuals": "full_status stays MISMATCH: composite position within the graph list (install-in-place vs append), real parent object identity (index map vs pointer), and the CollapseStructure closure (rule sweeps against absorbed membership rather than Ghidra's compacted list) remain registered to BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 follow-ups (BLOCK-ADDGRAPH-SEMANTICS-0001)"
+  },
+  "residual_diffs": [
+    {
+      "todo_id": "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001",
+      "status": "scoped-projection MATCH achieved on this fixture; full closure tracked under BLOCK-ADDGRAPH-SEMANTICS-0001 (real parent identity) and BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 (install position model)"
+    }
+  ]
+}

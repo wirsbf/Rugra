@@ -1,0 +1,16 @@
+{
+  "oracle": {
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+  },
+  "architecture": "x86:LE:64:default fixture translate (register/ram/stack spaces, 8-byte pointers); TypeFactory with SLEIGH-named core int4/uint4/float4/char/int8 and xunknownN",
+  "compiler_spec": "N/A: fixture <prototype name=fixture extrapop=0><input/><output/>; no storage model consulted",
+  "analysis_options": "direct ActionInferTypes apply rounds (coreaction.cc:5374-5416) on a frozen op graph; 8 applications; no other Actions",
+  "input": "INT2FLOAT -> FLOAT_MULT -> FLOAT_FLOAT2FLOAT(4->8) chain plus type-locked ProgressData* LOAD/STORE edges",
+  "cpp_fixture_sha256": "02ff0b6df05447c5af6f0bd19cdf166a0818def03303a162823fdcb9c488ce86",
+  "rust_fixture_sha256": "44055ad6d0cb40a4dca36daa27b6ec612a3f493aad1808bcedb4c32a95d219eb",
+  "expected_stdout_sha256": "c387b59f0ef8fdd047b44aefd2d2124dff1e2407f5f2e18b97a99f5cc285a23b",
+  "status": "MATCH",
+  "covered": "ActionInferTypes settle observables: per-round metatype/size table plus Datatype instance identity stability (writeBack interned-type contract, varnode.cc:459 type==ct); Rust-only local_count<7 guard",
+  "notes": "INFERTYPES-SETTLE-0001. The oracle settles because every propagated Datatype is TypeFactory-interned; Rugra matches via canonicalize_temp_type routing temp types through the architecture factory (coreaction.rs). The pointer/loaded8 cells pin the propagateToPointer/FromPointer edges where fresh non-interned Arcs previously churned writeBack into the localcount>=7 'Type propagation algorithm not settling' cap (myprogress warning)."
+}

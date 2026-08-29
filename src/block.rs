@@ -2510,16 +2510,20 @@ pub struct BlockGraph {
     /// Number of descendants in the spanning tree (+1) (Ghidra `numdesc`,
     /// block.hh:126); -1 marks unset.
     pub num_desc: i32,
-    /// Absorption map: absorbed (DEAD) block index -> index of the composite
-    /// that consumed it (the composite's install slot). This is the Rust
-    /// equivalent of Ghidra's FlowBlock `parent` chain (block.hh:78): in the
-    /// oracle every absorbed component keeps `parent` pointing at its
-    /// containing composite, and algorithms like LoopBody::update
-    /// (blockaction.cc:95-102) walk `getParent()` up to the graph level.
-    /// Rugra composites hold Arc references to their components instead of a
-    /// per-block parent pointer, so the containment relation is recorded here
-    /// at identifyInternal time and resolved transitively by
-    /// `resolve_to_graph_level`.
+    /// Parent chain (Rugra's equivalent of Ghidra `FlowBlock::parent`,
+    /// block.hh:78): consumed block index -> index of the composite that
+    /// absorbed it (the composite's install slot). Ghidra's
+    /// `BlockGraph::addBlock` sets `bl->parent = this` when
+    /// identifyInternal moves each component into the composite
+    /// (block.cc:873/950), and components keep only their internal
+    /// (component-to-component) edges — they are NEVER flagged f_dead
+    /// (identifyInternal sets no flag; f_dead is exclusively Funcdata's
+    /// dead basic-block removal, funcdata_block.cc:333/370). Algorithms
+    /// like LoopBody::update (blockaction.cc:95-102) walk `getParent()`
+    /// up to the graph level; Rugra resolves the same chain transitively
+    /// via `resolve_to_graph_level`, and rule sweeps use map membership
+    /// (`is_consumed`) in place of Ghidra's incremental list compaction
+    /// (block.cc:953-960).
     pub absorbed_into: std::collections::HashMap<i32, i32>,
 }
 

@@ -1150,8 +1150,25 @@ the ports follow the real current signatures:
 
 Helper ports (text-faithful render path; the Atom/OpToken expression-stack
 model is not present in Rugra's print layer):
-- `push_type_start_opt` — printc.cc:264 `pushTypeStart`
-- `push_type_end_opt` — printc.cc:313 `pushTypeEnd`
+- `build_type_stack` — printc.cc:143 `buildTypeStack`（匿名 PTR/ARRAY/CODE
+  下钻至命名 base；无 proto 的 CODE 层以合成 `void` 替代
+  `glb->types->getTypeVoid()`，见函数内 DIVERGENCE 注记）
+- `type_stack_for` — RUGRA-GLUE 借用适配器（Arc 入栈/出栈配对）
+- `push_type_start_opt` — printc.cc:264 `pushTypeStart`（签名
+  `Option<&Arc<Datatype>>`，buildTypeStack 型栈渲染；匿名 base 走
+  `generic_type_name`；单层栈按 cc:275-278 仅由 `noident` 决定
+  type_expr_space/nospace — 命名单层指针 `char *` 因此渲染 `char * x`，
+  oracle named_ptr_contrast 锁定；原 `emit_type_prefix` 组合名捷径与
+  `datatype_name_ends_with_star` 连接启发式已移除）
+- `decl_prefix_ends_with_star` — RUGRA-GLUE 连接判定（多层栈 = 空白已由
+  type_expr_space 发射；单层栈 = 需补一个空白）
+- `push_type_end_opt` — printc.cc:313 `pushTypeEnd`（含 PTR-under-ARRAY/CODE
+  的括号闭合 + `[N]`/`(params)` 后缀走；无 proto 匿名 CODE 的
+  上游死循环见函数内 DIVERGENCE 注记）
+- `push_prototype_inputs` — printc.cc:169 `pushPrototypeInputs`（类型表达式
+  内的参数表；与顶层 `emit_prototype_inputs` printc.cc:2222 相对）
+- `debug_render_type_decl` / `debug_render_type_start_only` —
+  RUGRA-GLUE fixture 观察面（对应 oracle fixture 的 FixturePrintC 子类）
 - `emit_integer_value` — printc.cc:1288 `push_integer` (null-vn path)
 - `most_natural_base` — printlanguage.cc `mostNaturalBase`
 
@@ -1798,3 +1815,35 @@ numbering=0 保持；audit 错误总数 15→15（1 处形态变化见上）。
   在本块语句后锚定（与 emit_goto_statement 的 never-emitted 锚同位，
   合法 C：跳转落到 fall-through 语句）。已发射目标仍排除（其标号归
   目标块自身）。
+
+## 2026-08-29:组合名指针的声明 join 恢复 golden 形态(DECL-SPACING-NAMEFLOW-0001)
+
+集成 w-anondecl3 匿名声明渲染后 E2E 出现 `char * pcVar4` 形(golden 为 glued `char *pcVar1`)。
+根因分层:Ghidra `TypePointer(s,pt,ws)` 构造名为空(type.hh:412),生产指针皆匿名 →
+buildTypeStack 钻取为多层栈 → ptr_expr(spacing=0)与标识符 glue;Rugra 的 debugproto 导入器
+两处本地 helper(src/debugproto.rs:696 深度循环/:1337 pointer_type)组合名 "char *" 绕过工厂
+直建命名指针 → 单层栈走了 type_expr_space。修复(printc.rs):`decl_prefix_ends_with_star`
+与 push_type_start_opt 单层分支对"尾随 `*` 的组合名"按 drilled 语义 glue 标识符。
+效果:skeleton 2198→2114(优于集成前 2118),六函数 typeless 装声明保持 0。
+残差:fixture `printc_anonymous_pointer_decl_1204` 的 named_ptr_contrast 记录(真实 oracle
+直驱动命名单层指针输出 `char * x`)与本修复的组合名 glue 可能分歧——待 full runner 复核;
+根治方向=让 debugproto 指针构造改走工厂匿名路径(需核对 Ghidra DWARF 类型名的 XML 流转),
+登记 DECL-SPACING-NAMEFLOW-0001。
+
+### 2026-08-29：WhileDo body 门固定为 legacy flatten 路径（BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 residual）
+
+- 背景：`identify_internal`/序列合并不再对被消费组件置 `DEAD`（oracle
+  `BlockGraph::identifyInternal` block.cc:940-963 不设任何 flag；Ghidra 全仓
+  `setDead()` 仅 funcdata_block.cc:333/370 的死基本块删除），printc 的 whiledo
+  body 门（emit_structured_whiledo 及 overflow 臂的 `body_is_dead`）失去判定来源。
+- 语义事实：BlockWhileDo 的 body 恒为被消费组件——旧 `DEAD` 测试在打印期恒为
+  true，structured 分支从未在验证基线中执行过；拍平路径（`emit_block_ops`）
+  才是 2134/0/1 基线的实际行为。
+- 修改：两处 `body_is_dead` 固定为 `true`（保留 structured 分支供后续切换），
+  附 BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 residual 注释。
+- A/B 证据（2026-08-29 w-identify3）：no-f_dead WIP + 本固定 → curl E2E 输出与
+  merge-base（9dbaf51d）**逐字节相同**（2134/0/1，main 696）；若改走
+  printc.cc:2994-2995 规定的结构化发射，main 残留未结构化组件以 raw goto 形态
+  暴露（+404 skeleton、numbering 1→2，main 1100）——该区域与
+  NONCONVERGE-GETPARAM-MATCHURL-0001 同族，属结构化既有缺口，修复后可切换回
+  oracle 规定的结构化发射。

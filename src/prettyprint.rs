@@ -2673,7 +2673,19 @@ impl EmitNoMarkup {
                 || trimmed.starts_with("else")
                 || trimmed.starts_with("case ")
                 || trimmed.starts_with("default:");
+            // WARN-EMIT2 R3 (glob_range `int iVar1;`/`int iVar3;` mid-block
+            // double declarations, numbering 1): a multi-line if-condition
+            // CONTINUATION line — e.g. `&& \n (SEXT14(...) < 0x1a)) {` —
+            // starts with `(` yet satisfies sig_shape via `contains(" *")`
+            // (the `*(char *)` dereference text). A C function signature
+            // never starts with `(`, so gate condition-continuation fragments
+            // out of signature detection entirely; otherwise the pass treats
+            // the nested block as a function body, finds its auto-prefixed
+            // names "undeclared" (the declared-name walk only covers the
+            // fragment), and re-injects the declarations INSIDE the block.
+            let cond_continuation = trimmed.starts_with('(');
             let sig_shape = !control_flow_opener
+                && !cond_continuation
                 && trimmed.contains('(')
                 && (trimmed.starts_with("int ") || trimmed.starts_with("long ")
                     || trimmed.starts_with("void ") || trimmed.starts_with("char ")
@@ -3528,13 +3540,20 @@ impl EmitNoMarkup {
         while search_pos + 4 < body_bytes.len() {
             if let Some(pos) = body_text[search_pos..].find("uVar") {
                 let abs_pos = search_pos + pos;
+                // Word-boundary left check: a "uVar" match preceded by an
+                // identifier byte is the interior of a longer token (e.g.
+                // "ppuVar4" contains "uVar4") and must NOT register a phantom
+                // `int uVar4;` injection (glob_range stray pre-brace decl).
+                let boundary_ok = abs_pos == 0
+                    || !(body_bytes[abs_pos - 1].is_ascii_alphanumeric()
+                        || body_bytes[abs_pos - 1] == b'_');
                 let name_start = abs_pos;
                 let mut name_end = abs_pos + 4;
                 // Collect digits after "uVar"
                 while name_end < body_bytes.len() && body_bytes[name_end].is_ascii_digit() {
                     name_end += 1;
                 }
-                if name_end > abs_pos + 4 {
+                if name_end > abs_pos + 4 && boundary_ok {
                     // Only match uVarNNN (digits), not uVar_hex (underscore)
                     let name = &body_text[name_start..name_end];
                     if !declared_names.contains(name) && !missing.contains(&name.to_string()) {

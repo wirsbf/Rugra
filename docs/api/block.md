@@ -2,6 +2,20 @@
 
 **源代码路径**: `src/block.rs`
 
+## 2026-08-29：absorbed_into 升级为唯一消费记录（不再依赖 f_dead）
+
+`identify_internal`/序列合并不再对被组合块吸收的子块置 `block_flags::DEAD`
+（Ghidra `BlockGraph::identifyInternal` block.cc:940-963 对组件不设任何 flag；
+`f_dead` 专属于 Funcdata 死基本块移除 funcdata_block.cc:333/370）。组件的
+"已被消费、对规则不可见"状态由 `BlockGraph::absorbed_into`（消费索引 → 组合块
+install 槽）这一 parent 记录承担：`is_consumed()` 成员测试替代 Ghidra
+`list = newlist` 列表压缩（block.cc:953-960）的可观测效果，
+`finalize_structure` 用同一成员关系做末端物理压缩。组件保留 component-to-component
+内部边（selfIdentify block.cc:905-928 对 `parent == this` 的对端从不重写）；
+边界半边由 `replaceOutEdge/replaceInEdge`（block.cc:160-191）成对迁移到组合块，
+平行边按 `dedup`（block.cc:525-539）首槽保留 + 单侧标签 OR 合并。
+双侧 fixture 全量观测 MATCH（详见 docs/api/blockaction.md 2026-08-29 节）。
+
 ## 2026-08-28：结构化条件真实取反
 
 `BlockList` 与 `BlockCondition` 现通过 `FlowBlock` 虚派发实现

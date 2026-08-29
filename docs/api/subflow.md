@@ -290,3 +290,18 @@ input-locked/varargs guards 与 `ParameterPatch`，`try_call_return_push` 也仍
 output-locked/output-active guards 与 `addPush`。两者继续保守返回 false；源码审计
 确认它们尚未等价，但没有同输入双侧 fixture，证据状态为 `UNTESTED`，统一绑定
 已登记的 `CALLSPEC-0001`，不计入 D0 的 identity `MATCH` 投影。
+
+## 2026-08-29：SUBFLOAT-TRANSFORM-NOT-PORTED-0001 — RuleSubfloatConvert 非常量路径改为 defer
+
+`RuleSubfloatConvert::applyOp`（subflow.cc:3489-3507）在 oracle 中构造完整
+`SubfloatFlow` 追踪并**重写数据流**至较小精度（`setReplacement` 的
+`newPiece` + `TransformManager::apply`，subflow.cc:3194-3237）——它从不给
+原较宽 Varnode 重新定类型。Rugra 未移植 transform 层，此前的"pragmatic
+minimum"把较小精度 float 类型直接 `update_type` 到较宽 root 上：一方面
+Datatype 尺寸错配，另一方面与 `ActionInferTypes::writeBack`（每轮重推导
+尺寸正确的 interned 类型）永久振荡，把 float 密集函数（myprogress）的
+`localcount` 推到 7 上限发出「Type propagation algorithm not settling」。
+现非常量、非等宽输入一律 `NO_CHANGE` defer（等宽早退、常量折叠路径保持），
+两个旧断言盖章行为的单测改为断言 defer 且不出现小尺寸 float 盖章。
+遗留：完整 `SubfloatFlow` trace/transform 移植登记于
+SUBFLOAT-TRANSFORM-NOT-PORTED-0001。

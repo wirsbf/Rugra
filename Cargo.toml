@@ -81,6 +81,14 @@ path = "tests/oracle/decompress_1204.rs"
 name = "funcproto_lock_1204_oracle"
 path = "tests/oracle/funcproto_lock_1204.rs"
 
+[[example]]
+name = "infertypes_settle_1204_oracle"
+path = "tests/oracle/infertypes_settle_1204.rs"
+
+[[example]]
+name = "varmap_dupdecl_1204_oracle"
+path = "tests/oracle/varmap_dupdecl_1204.rs"
+
 [profile.release]
 opt-level = 3
 lto = "fat"
