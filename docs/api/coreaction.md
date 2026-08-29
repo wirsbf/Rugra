@@ -2065,3 +2065,8 @@ printc_anonymous_pointer_decl_1204 named_ptr_contrast 形），偏离 golden 的
 inheritable flags）。同批：typeop.rs `propagate_to_pointer`、debugproto.rs
 `parse_c_type`/`pointer_type`/DWARF 数组（见各自 docs/api 文件）。
 E2E：curl 全语料 star-blank 声明 58 → 0，compare defects=0/numbering=0。
+
+## 2026-08-29:nodejoin 臂移除冗余 build_dom_tree(R-NODEJOIN-CROSSREVIEW 问题4)
+
+structure_reset(twin 内)已执行 calcForwardDominator(funcdata_block.cc:712),新块为 append 索引未变;
+额外的 build_dom_tree 调用对未突变 CFG 幂等且不可观测,按复核建议删除。

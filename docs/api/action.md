@@ -1310,3 +1310,5 @@ bump register，见 heritage.md）。真实重启环（clearAnalysis + in-Funcda
 root 集成时去 ignore):构造不同条件菱形 CFG,断言 ActionNodeJoin 走 join-block 路径后
 `fd.heritage.maxdepth == -1`(Ghidra nodeJoinCreateBlock 尾部 structureReset 契约,
 funcdata_block.cc:816)。修复前红/修复后绿双态已验;配套修复见 coreaction.md 同日条目。
+
+nodejoin fixture 补 CFG 形状断言(F1 整改):canonical(swapa==swapb)终态=join 块 2 出边、两分支各 1 出边(仅 join 边)。

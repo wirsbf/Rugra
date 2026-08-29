@@ -2843,5 +2843,30 @@ mod tests {
             fd.heritage.maxdepth, -1,
             "ActionNodeJoin must force-restructure heritage (maxdepth=-1) after creating a join block"
         );
+        // CFG shape contract (R-NODEJOIN-CROSSREVIEW F1): the canonical
+        // diamond exercises the swapa==swapb statement-order path, where the
+        // second getOutIndex must be taken AFTER the first move. The correct
+        // terminal shape is the clean triangle: the join block holds BOTH
+        // moved exit edges (size_out==2), and both branch blocks are left
+        // with only their new edge into the join (size_out==1 each).
+        let join = fd
+            .bblocks
+            .blocks
+            .iter()
+            .find(|b| b.read().unwrap().get_flags() & crate::block::block_flags::JOINED_BLOCK != 0)
+            .expect("join block created")
+            .clone();
+        assert_eq!(
+            join.read().unwrap().size_out(),
+            2,
+            "join block must own both moved exit edges (statement-order F1 regression)"
+        );
+        for branch in [bb, bb2] {
+            assert_eq!(
+                branch.read().unwrap().size_out(),
+                1,
+                "canonical diamond (swapa==swapb): branch blocks keep only the join edge"
+            );
+        }
     }
 }

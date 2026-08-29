@@ -13578,8 +13578,10 @@ impl Action for ActionNodeJoin {
                     b_in1 > b_in2,
                     cbranch_addr,
                 );
-                // Rebuild dom tree (indices changed).
-                fd.bblocks.build_dom_tree();
+                // No extra build_dom_tree: structureReset() already runs
+                // calcForwardDominator (funcdata_block.cc:712 via the twin),
+                // and the new block is appended so indices did not change
+                // (R-NODEJOIN-CROSSREVIEW problem 4).
                 self.count += 1;
                 joined_this = true;
                 break;

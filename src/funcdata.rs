@@ -2905,16 +2905,20 @@ impl Funcdata {
             self.bblocks.remove_edge_blocks(block2, exitb);
             block1.clone()
         };
-        // Move remaining edges to newblock (merge.cc:820-821).
-        // swapa->getOutIndex(exita) — find exita in swapa's outgoing.
-        let out_idx_a = find_out_index(&swapa, exita);
-        let out_idx_b = find_out_index(&swapb, exitb);
-        if let Some(idx_a) = out_idx_a {
-            self.move_out_edge(&swapa, idx_a, &newblock);
-        }
-        if let Some(idx_b) = out_idx_b {
-            self.move_out_edge(&swapb, idx_b, &newblock);
-        }
+        // Move remaining edges to newblock (funcdata_block.cc:807-809).
+        // Statement-order evaluation: Ghidra takes the SECOND
+        // `getOutIndex(exitb)` only AFTER the first moveOutEdge has already
+        // mutated the shared swap's out-edge list (C++ argument evaluation
+        // per full-expression). Hoisting both indices — as this code
+        // previously did — feeds a stale slot to the half-delete left shift
+        // when swapa==swapb, and move_out_edge then silently skipped the
+        // second transfer (found by R-NODEJOIN-CROSSREVIEW F1).
+        let idx_a = find_out_index(&swapa, exita)
+            .unwrap_or_else(|| panic!("nodeJoinCreateBlock: exita edge missing after surgery"));
+        self.move_out_edge(&swapa, idx_a, &newblock);
+        let idx_b = find_out_index(&swapb, exitb)
+            .unwrap_or_else(|| panic!("nodeJoinCreateBlock: exitb edge missing after surgery"));
+        self.move_out_edge(&swapb, idx_b, &newblock);
         // Add edges from block1/block2 to newblock.
         self.bblocks.add_edge(block1.clone(), newblock.clone());
         self.bblocks.add_edge(block2.clone(), newblock.clone());
