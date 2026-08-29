@@ -5165,8 +5165,10 @@ impl Action for ActionSetCasts {
         };
         let strategy = crate::type_system::cast::CastStrategyC::new(4);
         let mut changes = 0;
+        // cc:2728: startCastPhase() records the cast-phase Varnode index.
+        fd.start_cast_phase();
         for op_ref in &ops {
-            let (opcode, input_count, skip) = {
+            let (opcode, skip) = {
                 let op = op_ref.0.read().unwrap();
                 let not_printed = op.flags
                     & (crate::op::pcodeop_flags::MARKER
@@ -5175,17 +5177,107 @@ impl Action for ActionSetCasts {
                     != 0;
                 (
                     op.opcode,
-                    op.num_input(),
                     op.is_dead() || not_printed || op.opcode == OpCode::CPUI_CAST,
                 )
             };
             if skip { continue; }
-                // coreaction.cc:2756-2759: every operation is handled atomically:
+            // cc:2740-2746: PTRADD that no longer fits its pointer — in0's
+            // read-facing HIGH type must be a pointer whose pointee alignSize
+            // equals addressToByteInt(scale, wordSize); otherwise the op is
+            // rewritten in place through opUndoPtradd(op, true) (an implied
+            // INT_MULT folds the scale in, constants folded outright).
+            if opcode == OpCode::CPUI_PTRADD {
+                let undo = {
+                    let op = op_ref.0.read().unwrap();
+                    match (op.get_in(2), op.get_in(0)) {
+                        (Some(scale_vn), Some(base_vn)) => {
+                            // cc:2741: int4 sz = (int4)op->getIn(2)->getOffset()
+                            let sz = scale_vn.read().unwrap().get_offset() as u32 as i64;
+                            // cc:2742: ct = op->getIn(0)->getHighTypeReadFacing(op)
+                            let ct = base_vn
+                                .read()
+                                .unwrap()
+                                .get_high_type_read_facing(&op, 0)
+                                .or_else(|| base_vn.read().unwrap().v_type.clone());
+                            match ct.as_deref() {
+                                Some(crate::type_system::datatype::Datatype::Pointer(pt)) => {
+                                    pt.ptr_to.get_align_size() as i64
+                                        != crate::space::AddrSpace::address_to_byte_int(
+                                            sz,
+                                            pt.wordsize as u32,
+                                        )
+                                }
+                                // cc:2743: ct->getMetatype() != TYPE_PTR → undo
+                                _ => true,
+                            }
+                        }
+                        // Malformed PTRADD: Ghidra reads slots 2/0 blind; the
+                        // defensive no-op keeps detached fixtures alive.
+                        _ => false,
+                    }
+                };
+                if undo {
+                    fd.op_undo_ptradd_full(op_ref, true);
+                }
+            }
+            // cc:2747-2756: PTRSUB that no longer fits its pointer — demote
+            // offset 0 to COPY (dropping the offset input), else INT_ADD.
+            // The demoted op keeps flowing through this iteration's
+            // castInput/castOutput under its NEW opcode (Ghidra re-reads
+            // code()/numInput() live after the rewrite).
+            else if opcode == OpCode::CPUI_PTRSUB {
+                let (demote, offset_is_zero) = {
+                    let op = op_ref.0.read().unwrap();
+                    match (op.get_in(0), op.get_in(1)) {
+                        (Some(base_vn), Some(off_vn)) => {
+                            // cc:2748: isPtrsubMatching(in(1) offset, 0, 0)
+                            let off = off_vn.read().unwrap().get_offset() as i64;
+                            let t = base_vn
+                                .read()
+                                .unwrap()
+                                .get_type_read_facing_op(&op, 0)
+                                .or_else(|| base_vn.read().unwrap().v_type.clone());
+                            let matches = match t.as_deref() {
+                                Some(crate::type_system::datatype::Datatype::Pointer(pt)) => {
+                                    crate::type_system::datatype::pointer_is_ptrsub_matching(
+                                        &pt.ptr_to,
+                                        pt.wordsize,
+                                        off,
+                                        0,
+                                        0,
+                                    )
+                                }
+                                // Base Datatype::isPtrsubMatching returns false.
+                                _ => false,
+                            };
+                            (!matches, off == 0)
+                        }
+                        _ => (false, false),
+                    }
+                };
+                if demote {
+                    if offset_is_zero {
+                        fd.op_remove_input(op_ref, 1);
+                        fd.op_set_opcode(op_ref, OpCode::CPUI_COPY);
+                    } else {
+                        fd.op_set_opcode(op_ref, OpCode::CPUI_INT_ADD);
+                    }
+                }
+            }
+            // coreaction.cc:2756-2759: every operation is handled atomically:
             // all of its input casts precede its output cast. In particular,
             // a later op observes the output mutation of an earlier op.
+            // The input count and the slot-0 dispatch opcode are re-read
+            // AFTER the preflight (Ghidra evaluates op->numInput() live in
+            // the loop condition and dispatches virtually on the current
+            // opcode).
+            let (live_opcode, input_count) = {
+                let op = op_ref.0.read().unwrap();
+                (op.opcode, op.num_input())
+            };
             for slot in 0..input_count {
                 let changed =
-                    if slot == 0 && matches!(opcode, OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD) {
+                    if slot == 0 && matches!(live_opcode, OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD) {
                         Self::ptr_input_reqtype(op_ref).is_some_and(|required| {
                             self.cast_input_ptr(fd, op_ref, slot, &strategy, required)
                         })
@@ -5196,10 +5288,9 @@ impl Action for ActionSetCasts {
                 }
             }
 
-            // The PTRADD/PTRSUB fit preflight, resolveUnion, and
-            // checkPointerIssues branches remain separately registered
-            // residuals; the ordering here now matches the oracle for the
-            // implemented castInput/castOutput closure.
+            // resolveUnion and checkPointerIssues remain separately
+            // registered residuals; the ordering here now matches the oracle
+            // for the implemented castInput/castOutput closure.
             changes += Self::cast_output(fd, op_ref, &strategy);
         }
 

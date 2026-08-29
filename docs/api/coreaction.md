@@ -1,5 +1,20 @@
 # `coreaction.rs` API Reference
 
+## 2026-08-30：ActionSetCasts::apply 的 PTRADD/PTRSUB fit preflight（PTRSUB-SWITCH-CAST-RESIDUAL-0001 step 2）
+
+- `apply` 开头调用 `fd.start_cast_phase()`（coreaction.cc:2728 / funcdata.hh:183，Rugra 新增
+  `Funcdata::cast_phase_index` 字段 + `clear()` 复位）。
+- PTRADD preflight（cc:2740-2746）：in0 的 read-facing HIGH 类型非指针、或 ptrTo 的
+  `align_size != addressToByteInt(scale, wordsize)` 时，`op_undo_ptradd_full(op, true)` 原地
+  撤销（implied INT_MULT / 常量折叠）。scale 按 `int4` 截断读 `get_offset()`（cc:2741）。
+- PTRSUB 降级（cc:2747-2756）：in0 read-facing 类型 `isPtrsubMatching(offset,0,0)` 不成立时，
+  offset==0 → 删 slot1 + COPY，否则 INT_ADD；复用 Rugra 的
+  `pointer_is_ptrsub_matching`（type.cc:1123 投影）。
+- 撤销/降级后按**当前** opcode/numInput 继续本 op 的 castInput/castOutput（Ghidra 的
+  `numInput()`/虚分派在循环条件处活读）；resolveUnion/checkPointerIssues 仍是登记残差。
+- 效果：fixture `globform|post`/`swexpr_post` 双侧字节一致（count 7 对齐）；curl E2E
+  3110/0/1 保持基线。
+
 ## 2026-08-28：GetStr read-facing char 子图
 
 `ActionInferTypes` 的 GetStr 聚焦路径现在按 `Varnode::getLocalType` reader 顺序建立

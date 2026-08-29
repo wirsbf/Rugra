@@ -1040,6 +1040,11 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 - `find_jump_table(op)`（funcdata_block.cc:446）+ `remove_jump_table(jt)`（funcdata_block.cc:65）。
 - `get_store_guard(op)/get_load_guard(op)`（funcdata.hh:269-270）— 转发到 Heritage。
 
+### 2026-08-30：cast_phase_index + start_cast_phase（step 2）
+- `cast_phase_index: u32` 字段（funcdata.hh:77）+ `start_cast_phase()`（funcdata.hh:183 一行式
+  `cast_phase_index = vbank.getCreateIndex()`）+ `clear()` 复位（funcdata.cc:90-92）。由
+  `ActionSetCasts::apply`（coreaction.cc:2728）调用。
+
 ### 2026-08-30：op_undo_ptradd 全参忠实化（PTRSUB-SWITCH-CAST-RESIDUAL-0001 step 1）
 - `op_undo_ptradd_full(op, finalize)`（funcdata_op.cc:579-609）— 完整 `finalize` 语义：scale 常量原样复用为 INT_MULT 第二输入（不再伪造 8 字节常量）；offset 常量时折叠 `multSize * offset & calc_mask(size)` 并继承 read-facing 类型；乘积 varnode 取 offset 尺寸、finalize 时取 scale 类型并 `set_implied`；`multSize` 按 `int4` 截断读取 `get_offset()`（不做 is_constant 门控）。
 - `op_undo_ptradd(op)` 保留 1 参形式（ruleaction.rs 调用方兼容 shim），委托 `op_undo_ptradd_full(op, false)` — 与 Ghidra ruleaction.cc:6925/7115 的 `finalize=false` 一致。

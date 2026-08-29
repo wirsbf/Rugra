@@ -393,6 +393,12 @@ pub struct Funcdata {
     /// (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
     pub high_level_index: u32,
 
+    /// Creation index of the Varnode bank when the cast insertion phase
+    /// started (Ghidra `cast_phase_index`, funcdata.hh:77). Recorded by
+    /// `start_cast_phase` (funcdata.hh:183) at the head of
+    /// `ActionSetCasts::apply` (coreaction.cc:2728).
+    pub cast_phase_index: u32,
+
     /// Bank of all varnodes in this function
     pub vbank: VarnodeBank,
     /// Bank of all P-code operations in this function
@@ -534,6 +540,7 @@ impl Funcdata {
             size,
             flags: 0,
             high_level_index: 0,
+            cast_phase_index: 0,
             vbank: VarnodeBank::new(),
             obank: PcodeOpBank::new(),
             bblocks: BlockGraph::new(),
@@ -1244,6 +1251,15 @@ impl Funcdata {
             // stay high-less, exactly as in Ghidra.
             let _ = self.assign_high(&vn_arc);
         }
+    }
+
+    // Ghidra: funcdata.hh:183 Funcdata::startCastPhase
+    /// Start the \b cast insertion phase: records the Varnode bank creation
+    /// index (funcdata.hh:183, one-liner
+    /// `cast_phase_index = vbank.getCreateIndex();`). Called at the head of
+    /// `ActionSetCasts::apply` (coreaction.cc:2728).
+    pub fn start_cast_phase(&mut self) {
+        self.cast_phase_index = self.vbank.get_create_index();
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::getName
@@ -6918,9 +6934,9 @@ impl Funcdata {
     /// die), so a restarted function keeps its completion/limit markers.
     /// Rugra's remapped `funcdata_flags` bit values differ from Ghidra's raw
     /// bit positions, but the logical mask is the same seven flags.
-    /// `clean_up_index`/`cast_phase_index` have no Rugra fields (the
-    /// startCleanUp/ActionSetCasts markers in coreaction.rs are faithful
-    /// no-ops), so their reset here is a no-op.
+    /// `clean_up_index` has no Rugra field (the startCleanUp marker in
+    /// coreaction.rs is a faithful no-op), so only its reset is a no-op;
+    /// `cast_phase_index` (funcdata.hh:77) is reset below.
     pub fn clear(&mut self) {
         // cc:88-89: clear the seven analysis-phase flag bits (Ghidra mask
         // highlevel_on|blocks_generated|processing_started|typerecovery_start|
@@ -6937,10 +6953,11 @@ impl Funcdata {
         // (funcdata.hh:216 hasRestartPending accessor counterpart), so the
         // same masked bit must clear both projections.
         self.restart_pending = false;
-        // cc:90-92: counter resets. clean_up_index and cast_phase_index have
-        // no Rugra storage (coreaction.rs no-op markers), so only
-        // high_level_index is reset here.
+        // cc:90-92: counter resets. clean_up_index has no Rugra storage
+        // (coreaction.rs no-op marker), so high_level_index and
+        // cast_phase_index are the two resets here.
         self.high_level_index = 0;
+        self.cast_phase_index = 0;
         // cc:93: minLanedSize = glb->getMinimumLanedRegisterSize()
         // (architecture.cc:312-317: -1 when lanerecords is empty; u32::MAX is
         // the same sentinel in Rugra's unsigned representation).
