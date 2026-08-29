@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "fixture_id": "PTRSUB-TYPED-DECL-RESIDUAL-0001",
-  "overall_status": "MATCH",
+  "overall_status": "MISMATCH",
   "oracle": {
     "tag": "Ghidra_12.0.4_build",
     "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
@@ -133,5 +133,18 @@
     "g++": "g++ (GCC) 16.2.1 20260810",
     "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
     "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
-  }
+  },
+  "known_raw_differences": [
+    {
+      "id": "DECL-SPACING-NAMEFLOW-0001",
+      "category": "render_spacing",
+      "cause": "Rugra composes pointer names in the debugproto importer (char *) bypassing the factory's anonymous TypePointer construction (Ghidra type.hh:412 leaves names empty); after the golden-matching glue fix, the named single-layer case renders `char *x` where the directly-driven oracle emits `char * x`",
+      "oracle_behavior": "named single-layer pointer via type_expr_space: ONE blank before the identifier",
+      "rugra_behavior": "composed-name pointers glue (production golden form); the fixture's directly-constructed named pointer follows the same glue",
+      "residual_ids": [
+        "DECL-SPACING-NAMEFLOW-0001"
+      ]
+    }
+  ],
+  "status_note": "2026-08-29: named_ptr_contrast record diverges after the golden-matching composed-name glue (root: importer pointer naming, DECL-SPACING-NAMEFLOW-0001)."
 }
