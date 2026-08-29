@@ -4267,8 +4267,22 @@ impl PrintC {
                     // A loop body is an independent control-flow path: a RETURN
                     // seen before the loop (or in a sibling branch) must NOT
                     // suppress the loop body. Scope seen_return to the body.
-                    let body_is_dead = while_data.body.read().unwrap().get_flags()
-                        & crate::block::block_flags::DEAD != 0;
+                    // BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 residual: with
+                    // identifyInternal no longer flagging consumed
+                    // components f_dead (oracle block.cc:940-963 sets no
+                    // flag), this gate cannot key on block_flags::DEAD.
+                    // Every BlockWhileDo body is a consumed component, so
+                    // the old DEAD test was always true at print time and
+                    // the structured branch below was never operative in
+                    // the validated baseline. Keep the legacy flatten
+                    // emission (curl E2E 2134/0/1, byte-identical A/B
+                    // evidence 2026-08-29 w-identify3) until the
+                    // main-region structuring gap is fixed: the
+                    // structured emission printc.cc:2994-2995 prescribes
+                    // exposes leftover raw goto components there
+                    // (+404 skeleton / +1 numbering on main, NONCONVERGE-
+                    // GETPARAM-MATCHURL-0001 family neighborhood).
+                    let body_is_dead = true;
                     let saved = self.seen_return;
                     self.seen_return = false;
                     if body_is_dead {
@@ -11879,8 +11893,17 @@ impl PrintC {
         self.loop_depth += 1;
         // Scope seen_return: a loop body is re-entered each iteration; a prior
         // RETURN must not suppress it (mirrors emit_structured_whiledo).
-        let body_is_dead = bl.body.read().unwrap().get_flags()
-            & crate::block::block_flags::DEAD != 0;
+        // BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 residual: same gate as the
+        // overflow whiledo emission above — identifyInternal no longer
+        // flags consumed components f_dead (oracle block.cc:940-963 sets
+        // no flag), and every BlockWhileDo body is a consumed component,
+        // so the legacy DEAD test was always true at print time. Keep the
+        // legacy flatten emission (byte-identical to the validated 2134/0/1
+        // baseline, A/B evidence 2026-08-29 w-identify3) until the
+        // main-region structuring gap is fixed; the structured emission
+        // printc.cc:2994-2995 prescribes exposes leftover raw goto
+        // components there (+404 skeleton / +1 numbering on main).
+        let body_is_dead = true;
         let saved = self.seen_return;
         self.seen_return = false;
         if body_is_dead {

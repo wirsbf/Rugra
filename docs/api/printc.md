@@ -1829,3 +1829,21 @@ buildTypeStack 钻取为多层栈 → ptr_expr(spacing=0)与标识符 glue;Rugra
 直驱动命名单层指针输出 `char * x`)与本修复的组合名 glue 可能分歧——待 full runner 复核;
 根治方向=让 debugproto 指针构造改走工厂匿名路径(需核对 Ghidra DWARF 类型名的 XML 流转),
 登记 DECL-SPACING-NAMEFLOW-0001。
+
+### 2026-08-29：WhileDo body 门固定为 legacy flatten 路径（BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 residual）
+
+- 背景：`identify_internal`/序列合并不再对被消费组件置 `DEAD`（oracle
+  `BlockGraph::identifyInternal` block.cc:940-963 不设任何 flag；Ghidra 全仓
+  `setDead()` 仅 funcdata_block.cc:333/370 的死基本块删除），printc 的 whiledo
+  body 门（emit_structured_whiledo 及 overflow 臂的 `body_is_dead`）失去判定来源。
+- 语义事实：BlockWhileDo 的 body 恒为被消费组件——旧 `DEAD` 测试在打印期恒为
+  true，structured 分支从未在验证基线中执行过；拍平路径（`emit_block_ops`）
+  才是 2134/0/1 基线的实际行为。
+- 修改：两处 `body_is_dead` 固定为 `true`（保留 structured 分支供后续切换），
+  附 BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 residual 注释。
+- A/B 证据（2026-08-29 w-identify3）：no-f_dead WIP + 本固定 → curl E2E 输出与
+  merge-base（9dbaf51d）**逐字节相同**（2134/0/1，main 696）；若改走
+  printc.cc:2994-2995 规定的结构化发射，main 残留未结构化组件以 raw goto 形态
+  暴露（+404 skeleton、numbering 1→2，main 1100）——该区域与
+  NONCONVERGE-GETPARAM-MATCHURL-0001 同族，属结构化既有缺口，修复后可切换回
+  oracle 规定的结构化发射。
