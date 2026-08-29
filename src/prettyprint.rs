@@ -365,7 +365,7 @@ impl EmitNoMarkup {
         }
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::debugCountWhile
+    // RUGRA-GLUE: RUGRA_LOOP_DEBUG 诊断 helper(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Debug helper: count "while" and "\ndo " occurrences in the raw output.
     /// Used by RUGRA_LOOP_DEBUG diagnostics to track loop rendering.
     #[allow(dead_code)]
@@ -375,14 +375,14 @@ impl EmitNoMarkup {
         (w, d)
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::debugGetOutputRef
+    // RUGRA-GLUE: RUGRA_LOOP_DEBUG 诊断 helper(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Debug helper: borrow the raw output string for diagnostics.
     #[allow(dead_code)]
     pub fn debug_get_output_ref(&self) -> &str {
         &self.output
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::getOutput
+    // RUGRA-GLUE: 缓冲输出访问器 + 文本后处理挂载点②(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物——oracle EmitNoMarkup 直写 ostream,无 getOutput)
     pub fn get_output(mut self) -> String {
         // Always run post-processing so callers that forget to invoke
         // post_process() still get the normalized output (struct deref rewrite,
@@ -393,7 +393,7 @@ impl EmitNoMarkup {
         self.output
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::postProcess
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Post-process the output to eliminate redundant gotos and labels.
     /// P3: Remove `goto LAB_X;` when `LAB_X:` is on the immediately next non-empty line.
     /// Also removes labels that are never referenced by any goto.
@@ -413,7 +413,7 @@ impl EmitNoMarkup {
         t.starts_with("switch ") || t.starts_with("switch(")
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::postProcessOutput
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     pub fn post_process_output(input: &str) -> String {
         // Ghidra's EmitMarkup (prettyprint.cc) does ZERO post-processing.
         // All structure is produced by Action-phase + structured emit.
@@ -424,12 +424,14 @@ impl EmitNoMarkup {
         Self::post_process_output_legacy(input)
     }
 
-    // RUGRA-GLUE: 旧的 27 趟文本后处理（违反铁律 5.5），保留供参考。
-    // 已被 post_process_output 的空操作替代。不要调用。
-    /// **DEAD CODE** — kept for reference. These were the 27+ text-level
-    /// post-processing passes that violated rule 5.5. Do NOT call.
-    /// To be removed once emit-layer fixes are verified.
-    #[allow(dead_code)]
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物——
+    // oracle 发射路径零后处理:prettyprint.hh:547-594 的 EmitNoMarkup 是无缓冲直写
+    // emitter,printc.cc:2665 docFunction 以 flush() 结束,无任何 post-process)。
+    // 状态如实记录:本函数是 post_process_output 的唯一实现并被其调用,是**活链**,
+    // 不是死代码。上方曾有的 "_legacy + DEAD CODE + Do NOT call + #[allow(dead_code)]"
+    // 标记是 2026-07-04 一次被放弃的退役尝试(先改空操作,gcc 审计 23/24→5/24 后
+    // 回退)留下的误导脚手架,已随 W0 清除。整层退役按 POSTFIX-RETIRE-0001 路线图
+    // W1-WT 顺序推进(先修上游→计数证明零突变→逐 pass 删除,尾部先行)。
     fn post_process_output_legacy(input: &str) -> String {
         let lines: Vec<&str> = input.lines().collect();
         let mut result: Vec<String> = Vec::with_capacity(lines.len());
@@ -1965,7 +1967,7 @@ impl EmitNoMarkup {
         after_case
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::removeOrphanCaseLabels
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Remove `case N:` and `default:` lines that appear outside any switch
     /// statement. Uses a precise switch-depth tracker that counts `switch (...) {`
     /// openers and their matching `}` closers.
@@ -2024,7 +2026,7 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::removeIllegalLvalueAssignments
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Remove assignment lines whose left-hand side is not a valid C lvalue.
     /// Detects patterns like 'IDENT + ... = ' or 'IDENT * ... = ' at the start
     /// of a statement (not inside parens/casts).
@@ -2144,7 +2146,7 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::fixPointerArithmetic
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Detect `IDENT + IDENT` and `IDENT * IDENT` patterns where both operands
     /// are declared as pointer types, and cast the right operand to `(long)`.
     fn fix_pointer_arithmetic(text: &str) -> String {
@@ -2197,7 +2199,7 @@ impl EmitNoMarkup {
         out
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::tryFixOnePtrArith
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Try to fix one `ptrA <op> ptrB` occurrence in the line. Returns Some(fixed)
     /// if a fix was applied, None otherwise. Scans the entire line (both LHS
     /// cast expressions and RHS).
@@ -2241,7 +2243,7 @@ impl EmitNoMarkup {
         None
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::removeOrphanBreaks
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Remove `break;`/`continue;` statements not within any loop or switch.
     /// Uses a pre-scan to mark line ranges that fall inside a loop/switch body
     /// (via brace matching), which is more reliable than a line-level context
@@ -2671,7 +2673,7 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::fixUnaryDerefDeclarations
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Rewrite declarations of variables appearing in `*IDENT` unary dereference
     /// patterns to pointer type, so `*param_N` is legal C.
     fn fix_unary_deref_declarations(text: &str) -> String {
@@ -2789,7 +2791,6 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::hasEnclosingLoopCtx
     /// Scans backward through already-emitted lines.
     // RUGRA-GLUE: signature_opens_function_body (format-layer helper for the
     //   oracle's two-line function-header layout: printc.cc:1590 sets
@@ -2995,7 +2996,7 @@ impl EmitNoMarkup {
         false
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::negateSimpleCondition
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Negate a simple C condition expression for goto-to-if folding.
     /// Handles common patterns: ==, !=, <, >, <=, >=, and compound && / ||.
     fn negate_simple_condition(cond: &str) -> String {
@@ -3031,7 +3032,7 @@ impl EmitNoMarkup {
         format!("!({})", cond)
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::flushFuncRemoveUnused
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Remove unused variable declarations from a function's lines
     /// AND add missing declarations for uVarNNN that appear in body but have no declaration
     fn flush_func_remove_unused(func_lines: &[String], out: &mut Vec<String>) {
@@ -3164,20 +3165,20 @@ impl EmitNoMarkup {
         }
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::doIndent
+    // RUGRA-GLUE: 缓冲 emitter 缩进绘制(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物——oracle tagLine 直写 ostream 缩进空格)
     fn do_indent(&mut self) {
         for _ in 0..self.indent {
             self.output.push_str("  ");
         }
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::isWordBoundary
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物;P6 词频内联的支撑 helper)
     /// Check if char is a word boundary (not alphanumeric or underscore)
     fn is_word_boundary(c: char) -> bool {
         !c.is_ascii_alphanumeric() && c != '_'
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::countWordOccurrences
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物;P6 词频内联的支撑 helper)
     /// Count word-boundary-respecting occurrences of `word` in `text`
     fn count_word_occurrences(text: &str, word: &str) -> usize {
         let mut count = 0;
@@ -3197,7 +3198,7 @@ impl EmitNoMarkup {
         count
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::replaceWord
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物;P6 词频内联的支撑 helper)
     /// Replace word-boundary-respecting occurrences of `word` with `replacement`
     fn replace_word(text: &str, word: &str, replacement: &str) -> String {
         let bytes = text.as_bytes();
@@ -3358,12 +3359,12 @@ impl Emit for EmitNoMarkup {
         self.indent -= 1;
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::intoAny
+    // RUGRA-GLUE: Rust Box<dyn Any> downcast 胶水(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::asAnyMut
+    // RUGRA-GLUE: Rust Box<dyn Any> downcast 胶水(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
     }

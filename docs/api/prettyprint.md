@@ -25,6 +25,29 @@ EmitNoMarkup::<方法>` 注解（锁定 oracle 的 `EmitNoMarkup`（hh:547-594�
   其 `depth<0`/`else` 两臂均为逐行 verbatim 输出（读码证实恒等，naive 计数
   无法越过 char/string 字面量故从不改写）——事实 no-op。后续空行折叠
   （B4）改为直接消费 pass 18。
+- **伪造 `// Ghidra:` 注解改正（机制 D 红旗清除，20 处）**：锁定 oracle 的
+  `EmitNoMarkup`（prettyprint.hh:547-594）只有 `Emit` 虚方法族，以下注解
+  引用了 oracle 根本不存在的方法，全部改标 `// RUGRA-GLUE:`（登记
+  POSTFIX-RETIRE-0001 W0）：路线图点名的 16 处中，`rewriteStructDeref`/
+  `canonicalizeStructDeref` 2 处随死函数删除，`postProcess`/
+  `postProcessOutput`/`removeOrphanCaseLabels`/`removeIllegalLvalueAssignments`/
+  `fixPointerArithmetic`/`tryFixOnePtrArith`/`removeOrphanBreaks`/
+  `fixUnaryDerefDeclarations`/`negateSimpleCondition`/`flushFuncRemoveUnused`/
+  `doIndent`/`isWordBoundary`/`countWordOccurrences`/`replaceWord` 14 处改标；
+  另有 8 处同准则伪造注解一并处置（`recoverStructFieldsAnon`/
+  `tryConvertPtrAdd` 随死函数删除；`debugCountWhile`/`debugGetOutputRef`/
+  `getOutput`/`intoAny`/`asAnyMut` 5 处改标；`hasEnclosingLoopCtx` 是悬空
+  残留行——真函数在 :3478 一带本就有 RUGRA-GLUE 注解——直接删除）。
+  保留的 15 处 hh:547 注解（print/beginBlock/tagLine 等虚方法 + default/new
+  →构造器 hh:550）均为 oracle 真实方法，不动。
+- **`post_process_output_legacy` 误导标记清除**：其顶部
+  "**DEAD CODE** — Do NOT call / 已被空操作替代 / `#[allow(dead_code)]`"
+  注释是 2026-07-04 一次被放弃的退役尝试（改空操作→gcc 审计 23/24→5/24→
+  回退）留下的脚手架，与事实矛盾——它是 `post_process_output` 的唯一实现
+  并被其调用，是活链。改为如实状态注释 + RUGRA-GLUE 登记（oracle 发射
+  路径零后处理的证据链：hh:547-594 无缓冲直写 emitter + printc.cc:2665
+  docFunction 以 flush() 结束），`#[allow(dead_code)]` 一并移除（函数可达，
+  属性本就无效）。退役仍按路线图 W1-WT 顺序推进。
 
 ## 2026-08-28：RPN variable metadata bridge
 
