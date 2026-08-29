@@ -345,7 +345,7 @@ require("fixture id", metadata["fixture_id"], "VARIABLE-GETTYPE-LAZY-UPDATETYPE-
 require(
     "stable function id",
     metadata["stable_function_id"],
-    "GH12-F-0f4c6b1e77c9a8d1e",
+    "GH12-F-aef408bd5a04dd091c3d",
 )
 require("covered projection status", metadata["covered_projection_status"], "MATCH")
 require("overall status prefix", metadata["overall_status"].split(":", 1)[0], "UNTESTED")
