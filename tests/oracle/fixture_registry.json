@@ -5059,6 +5059,35 @@
         ],
         "notes": "delivered by w-myprog-cluster; integrated by root"
       }
+    },
+    {
+      "id": "block_identify_internal_1204",
+      "description": "BlockGraph::identifyInternal bilateral projection: top members/children order/parent ownership/no-f_dead/boundary edge label+reverse slot/peer redirect/parallel-edge dedup (label OR)/flag propagation/internal+self edges/checkChecks, versus locked Ghidra 12.0.4",
+      "runner": [
+        "tools/run_block_identify_internal_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/block_identify_internal_1204.metadata.json",
+        "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+        "rust_base_commit": "bc2db403f551fd658fe2d6a8815656866f19e01c"
+      },
+      "impact": {
+        "todo_ids": [
+          "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
+        ],
+        "src_files": [
+          "src/block.rs",
+          "src/blockaction.rs",
+          "src/printc.rs"
+        ],
+        "notes": "delivered by w-identify3; whiledo body emission gate pinned to legacy flatten (residual registered); mechanism-C cross-review still PENDING"
+      }
     }
   ]
 }
