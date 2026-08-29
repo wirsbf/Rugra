@@ -1,19 +1,20 @@
 {
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
-  },
-  "architecture": "x86:LE:64:default",
-  "compiler_spec": "gcc",
-  "analysis_options": "direct PcodeOp::previousOp/op.cc:344 and PcodeOp::nextOp/op.cc:323 observation over a synthetic guarded chain; ops prepended late via opInsertBefore (INDIRECT-guard pattern) so block-list order and alivelist mark-alive order diverge; block-out-degree driven nextOp termination and out(0) fall-thru crossing; opUninsert relink; no Actions",
-  "input": {
-    "binary": "examples/curl",
-    "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-    "function": "GetStr@0x36d0+74",
-    "synthetic_block": "seven blocks (guarded chain b1, fall-thru successor b2, alternate successor b3, three-way switch b4->b5/b6/b7) and eight named ops exercising opInsertEnd/opInsertBefore/opUninsert, INDIRECT(const,iop) guard pairs, prev/next probes per stage, plus b1/b4 out-degree observation"
-  },
-  "cpp_fixture_sha256": "448d7a17d7790350de4e4dd98a5aa7289e8546e1849dbcbe494104816887c453",
-  "rust_fixture_sha256": "5878a3d0d3193c3d73afb57615173c8d49de52d8d1a08886331d1920755af878",
-  "expected_stdout_sha256": "42deb93b2b935777c7d8cbf10bb2a81878fba49226ce7919faa946fa77f3c68d",
-  "status": "MATCH"
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": "gcc",
+ "analysis_options": "direct PcodeOp::previousOp/op.cc:344 and PcodeOp::nextOp/op.cc:323 observation over a synthetic guarded chain; ops prepended late via opInsertBefore (INDIRECT-guard pattern) so block-list order and alivelist mark-alive order diverge; block-out-degree driven nextOp termination and out(0) fall-thru crossing; opUninsert relink; no Actions",
+ "input": {
+  "binary": "examples/curl",
+  "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+  "function": "GetStr@0x36d0+74",
+  "synthetic_block": "seven blocks (guarded chain b1, fall-thru successor b2, alternate successor b3, three-way switch b4->b5/b6/b7) and eight named ops exercising opInsertEnd/opInsertBefore/opUninsert, INDIRECT(const,iop) guard pairs, prev/next probes per stage, plus b1/b4 out-degree observation"
+ },
+ "cpp_fixture_sha256": "448d7a17d7790350de4e4dd98a5aa7289e8546e1849dbcbe494104816887c453",
+ "rust_fixture_sha256": "5878a3d0d3193c3d73afb57615173c8d49de52d8d1a08886331d1920755af878",
+ "expected_stdout_sha256": "42deb93b2b935777c7d8cbf10bb2a81878fba49226ce7919faa946fa77f3c68d",
+ "status": "MATCH",
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

@@ -8,7 +8,7 @@
   "boundary": "PrintC::docFunction over synthetic Funcdata built through production APIs (Funcdata ctor via Scope::addFunction, FuncProto::setOutput/setParam, newOp/opSetOpcode/opInsertEnd, startProcessing flag); flat print mod",
   "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases"
  },
- "overall_status": "PARTIAL_MATCH:covered-format-projection-MATCH",
+ "overall_status": "UNTESTED: (B2 migration of PARTIAL_MATCH) covered-format-projection-MATCH",
  "covered_projection_status": "MATCH",
  "expected_stdout_sha256": "de0fd94ec411a0d2a6e709dc74af862f0cafeef36e80ba9681280bad29a4a831",
  "expected_exit_code": 0,

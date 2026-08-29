@@ -1,7 +1,7 @@
 {
  "schema": 2,
  "fixture_id": "HTTPD-ADDDESCEND-THROW-0001",
- "stable_function_id": "GH12-F-cfd29a1e6f04b3f2c1e4",
+ "stable_function_id": "GH12-F-47d3aef5a439918f5a3f",
  "stable_function_closure": [
   "GH12-F-53bf522d4708a537d1f7 ghidra::BlockGraph::findSpanningTree block.cc:1009",
   "GH12-F-d15c438a75b11b67ab99 ghidra::BlockGraph::calcForwardDominator block.cc:1954",

@@ -1,105 +1,105 @@
 {
-  "schema": 2,
-  "fixture_id": "SUBFLOW-OUTVN-UNWRAP-0001",
-  "created": "2026-08-15",
-  "stable_function_id": "GH12-F-444049fe7206a4153d13",
-  "stable_function_names": [
-    "ghidra::SubvariableFlow::traceForwardSext subflow.cc:867",
-    "ghidra::SubvariableFlow::traceForward subflow.cc:373",
-    "ghidra::SubvariableFlow::createLink subflow.cc:1022",
-    "ghidra::SubvariableFlow::setReplacement subflow.cc:66",
-    "ghidra::SubvariableFlow::getReplaceVarnode subflow.cc:1316",
-    "ghidra::SubvariableFlow::useSameAddress subflow.cc:1274",
-    "ghidra::SubvariableFlow::doReplacement subflow.cc:1435"
+ "schema": 2,
+ "fixture_id": "SUBFLOW-OUTVN-UNWRAP-0001",
+ "created": "2026-08-15",
+ "stable_function_id": "GH12-F-444049fe7206a4153d13",
+ "stable_function_names": [
+  "ghidra::SubvariableFlow::traceForwardSext subflow.cc:867",
+  "ghidra::SubvariableFlow::traceForward subflow.cc:373",
+  "ghidra::SubvariableFlow::createLink subflow.cc:1022",
+  "ghidra::SubvariableFlow::setReplacement subflow.cc:66",
+  "ghidra::SubvariableFlow::getReplaceVarnode subflow.cc:1316",
+  "ghidra::SubvariableFlow::useSameAddress subflow.cc:1274",
+  "ghidra::SubvariableFlow::doReplacement subflow.cc:1435"
+ ],
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "build": "g++ -std=c++11 -O2 against libdecomp.a rebuilt from the locked tree"
+ },
+ "comparand": {
+  "rugra_base_commit": "07efbff6af58fbea91b27a99fb3ecfbe39690e19",
+  "rugra_base_tree": "c3ea7960436d72c9fce3631f9b36c3e49b1b4265",
+  "overlay_files": [
+   "src/subflow.rs",
+   "docs/api/subflow.md"
   ],
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "build": "g++ -std=c++11 -O2 against libdecomp.a rebuilt from the locked tree"
-  },
-  "comparand": {
-    "rugra_base_commit": "07efbff6af58fbea91b27a99fb3ecfbe39690e19",
-    "rugra_base_tree": "c3ea7960436d72c9fce3631f9b36c3e49b1b4265",
-    "overlay_files": [
-      "src/subflow.rs",
-      "docs/api/subflow.md"
-    ],
-    "cpp_fixture_sha256": "94a3952ed498f8c97ef3969cd014b871f023fb0c3550a80b8e85ff5f93064493",
-    "rust_fixture_sha256": "05ad3cc5ee2fdf016d160ebd2286c9ffef85b48f2657b29d50940d1f12d2959d",
-    "subflow_rs_sha256": "4f6ac0110c9a6e4697416f828271353cc4a443aca1d4e7f84e603d10396fd9d1",
-    "subflow_doc_sha256": "35d3f0f0ea926e11c86af8cd4fd77f824fc69c184a62ddd2679d9825fc7654d8",
-    "runner_sha256": "21ca04096f41fb4c80d5a98f8f793361ef1730e14df54c939256991b246c701d",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "rust_crate_tree_sha256": "29a8254d71221dfa60a1ed8b676b9132708d3b6fa90f7a2f82c156aee0f9acc3",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-subflow-outvn-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-    "host": {
-      "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-      "cxx_target": "x86_64-linux-gnu",
-      "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
-      "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-      "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
-      "make_path": "/usr/bin/make",
-      "python_path": "/usr/bin/python3.10",
-      "git_path": "/usr/bin/git",
-      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-      "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
-      "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
-      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-      "platform": "Linux 6.8.0-124-generic x86_64"
-    }
-  },
-  "build": {
-    "registry_packages": 164,
-    "registry_lock_closure_sha256": "fe21d0c6faca76972f1e63bd35631e1ea2dc39234570221609bce1809ac99952"
-  },
-  "input_manifest": {
-    "cases": [
-      "sext_some_copy",
-      "sext_some_multiequal",
-      "sext_some_int_negate",
-      "sext_some_int_xor",
-      "sext_some_int_or",
-      "sext_some_int_and",
-      "sext_none_copy",
-      "sext_none_multiequal",
-      "sext_none_int_negate",
-      "sext_none_int_xor",
-      "sext_none_int_or",
-      "sext_none_int_and",
-      "plain_some_copy",
-      "plain_some_int_or",
-      "plain_some_int_and"
-    ],
-    "sha256": "8f09d93bc04536a903725e1f452a1b8177ff82d127d1f97cc10e5ea08dc9d0cc"
-  },
-  "expected_stdout_sha256": "eeb58785d7f5612ce78fb2133a30e440cae9f5053c14766adc65ff93125281a3",
-  "expected_exit_code": 0,
-  "covered_projection_status": "MATCH",
-  "overall_status": "PARTIAL_MATCH:none-precondition behavior has no runnable Ghidra oracle (null deref subflow.cc:895->70); shared state projection and all Some-precondition replacements byte-match",
-  "coverage": {
-    "sext_some_copy": "MATCH:traced=1 full doReplacement op layout byte-equal",
-    "sext_some_multiequal": "MATCH:traced=1 full doReplacement op layout byte-equal",
-    "sext_some_int_negate": "MATCH:traced=1 full doReplacement op layout byte-equal",
-    "sext_some_int_xor": "MATCH:traced=1 full doReplacement op layout byte-equal",
-    "sext_some_int_or": "MATCH:traced=1 full doReplacement op layout byte-equal",
-    "sext_some_int_and": "MATCH:traced=1 full doReplacement op layout byte-equal",
-    "plain_some_copy": "MATCH:traced=1 full doReplacement op layout byte-equal",
-    "plain_some_int_or": "MATCH:traced=1 doesOrSet non-truncate path byte-equal",
-    "plain_some_int_and": "MATCH:traced=1 doesAndClear non-truncate path byte-equal",
-    "outvn_none_precondition": "NO_ORACLE:Ghidra traceForwardSext passes null outvn into createLink (subflow.cc:895) whose setReplacement dereferences it (subflow.cc:70); pre-trace state (t_out_null/t_alive/tout4_written/root_desc) byte-matched on all six opcodes; Rugra aborts doTrace and leaves the IR untouched (fixture-asserted)",
-    "replacement_space_and_usesame": "MATCH:getReplaceVarnode inherits the original varnode space and useSameAddress bitsize/aggressive ordering; sext multiequal unique replacements byte-equal",
-    "copypatch_input_removal": "MATCH:doReplacement copy_patch opRemoveInput loop (SUBPIECE 2-input terminal) byte-equal after guard hoisting"
-  },
-  "evidence": {
-    "e2e": "curl my_get_token(0x3720): worker panic src/subflow.rs:1737 eliminated; normal output MATCH bytes=1597 (was panic before fix)",
-    "notes": "Ghidra invariant chain: Funcdata::opDestroy (funcdata_op.cc:203-222) unsets inputs erasing descend links; opSetOutput previous-def strip (funcdata_op.cc:82-84) and ActionDeadCode call-output removal (coreaction.cc:3828/4042) leave only calls output-less; the alive output-less MULTIEQUAL/COPY seen in Rugra E2E is an upstream IR divergence registered for leased-file owners"
-  },
-  "architecture": "fixture-synthetic (FixtureTranslate spaces: ram/register/unique/stack; little-endian)",
-  "compiler_spec": "none (production Funcdata/SubvariableFlow APIs driven directly; RuleSubvarSext entry shape subflow.cc:1729-1740)",
-  "analysis_options": "SubvariableFlow(fd, root, calc_mask(invn), aggressive=false, sext=true, big=false) for sext cases; (fd, root, 0xff, true, false, false) for plain cases; None-precondition via Funcdata::opUnsetOutput (funcdata_op.cc:52-66)"
+  "cpp_fixture_sha256": "94a3952ed498f8c97ef3969cd014b871f023fb0c3550a80b8e85ff5f93064493",
+  "rust_fixture_sha256": "05ad3cc5ee2fdf016d160ebd2286c9ffef85b48f2657b29d50940d1f12d2959d",
+  "subflow_rs_sha256": "4f6ac0110c9a6e4697416f828271353cc4a443aca1d4e7f84e603d10396fd9d1",
+  "subflow_doc_sha256": "35d3f0f0ea926e11c86af8cd4fd77f824fc69c184a62ddd2679d9825fc7654d8",
+  "runner_sha256": "21ca04096f41fb4c80d5a98f8f793361ef1730e14df54c939256991b246c701d",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_sha256": "29a8254d71221dfa60a1ed8b676b9132708d3b6fa90f7a2f82c156aee0f9acc3",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-subflow-outvn-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "host": {
+   "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+   "cxx_target": "x86_64-linux-gnu",
+   "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+   "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+   "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.10",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+   "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+   "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+   "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+   "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+   "platform": "Linux 6.8.0-124-generic x86_64"
+  }
+ },
+ "build": {
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "fe21d0c6faca76972f1e63bd35631e1ea2dc39234570221609bce1809ac99952"
+ },
+ "input_manifest": {
+  "cases": [
+   "sext_some_copy",
+   "sext_some_multiequal",
+   "sext_some_int_negate",
+   "sext_some_int_xor",
+   "sext_some_int_or",
+   "sext_some_int_and",
+   "sext_none_copy",
+   "sext_none_multiequal",
+   "sext_none_int_negate",
+   "sext_none_int_xor",
+   "sext_none_int_or",
+   "sext_none_int_and",
+   "plain_some_copy",
+   "plain_some_int_or",
+   "plain_some_int_and"
+  ],
+  "sha256": "8f09d93bc04536a903725e1f452a1b8177ff82d127d1f97cc10e5ea08dc9d0cc"
+ },
+ "expected_stdout_sha256": "eeb58785d7f5612ce78fb2133a30e440cae9f5053c14766adc65ff93125281a3",
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "overall_status": "UNTESTED: (B2 migration of PARTIAL_MATCH) none-precondition behavior has no runnable Ghidra oracle (null deref subflow.cc:895->70); shared state projection and all Some-precondition replacements byte-match",
+ "coverage": {
+  "sext_some_copy": "MATCH:traced=1 full doReplacement op layout byte-equal",
+  "sext_some_multiequal": "MATCH:traced=1 full doReplacement op layout byte-equal",
+  "sext_some_int_negate": "MATCH:traced=1 full doReplacement op layout byte-equal",
+  "sext_some_int_xor": "MATCH:traced=1 full doReplacement op layout byte-equal",
+  "sext_some_int_or": "MATCH:traced=1 full doReplacement op layout byte-equal",
+  "sext_some_int_and": "MATCH:traced=1 full doReplacement op layout byte-equal",
+  "plain_some_copy": "MATCH:traced=1 full doReplacement op layout byte-equal",
+  "plain_some_int_or": "MATCH:traced=1 doesOrSet non-truncate path byte-equal",
+  "plain_some_int_and": "MATCH:traced=1 doesAndClear non-truncate path byte-equal",
+  "outvn_none_precondition": "NO_ORACLE:Ghidra traceForwardSext passes null outvn into createLink (subflow.cc:895) whose setReplacement dereferences it (subflow.cc:70); pre-trace state (t_out_null/t_alive/tout4_written/root_desc) byte-matched on all six opcodes; Rugra aborts doTrace and leaves the IR untouched (fixture-asserted)",
+  "replacement_space_and_usesame": "MATCH:getReplaceVarnode inherits the original varnode space and useSameAddress bitsize/aggressive ordering; sext multiequal unique replacements byte-equal",
+  "copypatch_input_removal": "MATCH:doReplacement copy_patch opRemoveInput loop (SUBPIECE 2-input terminal) byte-equal after guard hoisting"
+ },
+ "evidence": {
+  "e2e": "curl my_get_token(0x3720): worker panic src/subflow.rs:1737 eliminated; normal output MATCH bytes=1597 (was panic before fix)",
+  "notes": "Ghidra invariant chain: Funcdata::opDestroy (funcdata_op.cc:203-222) unsets inputs erasing descend links; opSetOutput previous-def strip (funcdata_op.cc:82-84) and ActionDeadCode call-output removal (coreaction.cc:3828/4042) leave only calls output-less; the alive output-less MULTIEQUAL/COPY seen in Rugra E2E is an upstream IR divergence registered for leased-file owners"
+ },
+ "architecture": "fixture-synthetic (FixtureTranslate spaces: ram/register/unique/stack; little-endian)",
+ "compiler_spec": "none (production Funcdata/SubvariableFlow APIs driven directly; RuleSubvarSext entry shape subflow.cc:1729-1740)",
+ "analysis_options": "SubvariableFlow(fd, root, calc_mask(invn), aggressive=false, sext=true, big=false) for sext cases; (fd, root, 0xff, true, false, false) for plain cases; None-precondition via Funcdata::opUnsetOutput (funcdata_op.cc:52-66)"
 }

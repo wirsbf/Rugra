@@ -1,102 +1,102 @@
 {
-  "schema": 2,
-  "fixture_id": "HERITAGE-OWNERSHIP-0001",
-  "stable_function_id": "GH12-F-04e4a7fe8cd549e26cb7",
-  "stable_function_closure": [
-    "ghidra::Funcdata::opHeritage funcdata.hh:462",
-    "ghidra::Heritage::heritage heritage.cc:2663",
-    "ghidra::Heritage::Heritage heritage.cc:218",
-    "ghidra::Heritage::buildADT heritage.cc:2316",
-    "ghidra::Heritage::rename heritage.cc:2587",
-    "ghidra::Heritage::placeMultiequals heritage.cc:2599",
-    "ghidra::BlockGraph::buildDomDepth block.cc:2056",
-    "ghidra::Funcdata::startProcessing funcdata.cc:150"
+ "schema": 2,
+ "fixture_id": "HERITAGE-OWNERSHIP-0001",
+ "stable_function_id": "GH12-F-04e4a7fe8cd549e26cb7",
+ "stable_function_closure": [
+  "ghidra::Funcdata::opHeritage funcdata.hh:462",
+  "ghidra::Heritage::heritage heritage.cc:2663",
+  "ghidra::Heritage::Heritage heritage.cc:218",
+  "ghidra::Heritage::buildADT heritage.cc:2316",
+  "ghidra::Heritage::rename heritage.cc:2587",
+  "ghidra::Heritage::placeMultiequals heritage.cc:2599",
+  "ghidra::BlockGraph::buildDomDepth block.cc:2056",
+  "ghidra::Funcdata::startProcessing funcdata.cc:150"
+ ],
+ "overall_status": "UNTESTED: (B2 migration of PARTIAL_MATCH) the ownership boundary (Funcdata::opHeritage -> one Heritage::heritage pass per call, three consecutive calls on the same &mut Funcdata driving pass 0->1->2->3) byte-matches the locked oracle on all three cases, including the full op-list/Varnode-bank state projection of register_free_promote (input promotion, def-use rewiring, consumed-free deletion); the MULTIEQUAL self-reference cycle completes without hang on both sides; Heritage no longer stores or upgrades any Weak<RwLock<Funcdata>> and no nested lock path exists. NOT claimed: production ActionHeritage still uses the direct recipe (HERITAGE-DRIVER-SWITCH), placeMultiequals/rename algorithm equivalence (HERITAGE-ADT-RENAME-0001), guardCalls/discovery (HERITAGE-CALLGUARD-0001)",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{funcdata.hh:462,heritage.cc:218-224,2316-2385,2587-2593,2599-2645,2663-2758,funcdata.cc:150-167,block.cc:1954-2075}",
+  "signature": "void Funcdata::opHeritage(void) { heritage.heritage(); }; void Heritage::heritage(void)"
+ },
+ "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; register delay=0, stack delay=1",
+ "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level disabled",
+ "analysis_options": {
+  "entrypoint": "Direct invocation of the production boundary Funcdata::opHeritage (the funcdata.hh:462 inline wrapper) three consecutive times on the same Funcdata; no Action tree, no C emission",
+  "prestate": "Per-case fresh Funcdata built through production APIs (newOp/opSetOpcode/opSetInput/opSetOutput/newUniqueOut/newConstant/newVarnode/opInsertEnd/newBlockBasic/addEdge); the startProcessing steps a synthetic graph can reach are applied on both sides: structureLoops+calcForwardDominator (Rugra: BlockGraph::build_dom_tree) and heritage.buildInfoList (funcdata.cc:166). Two separate size-4 constants and one free Varnode per read mirror the raw-p-code single-descendant invariants (opSetInput constant clone, addDescend free check)",
+  "observation": "Per case: the pass counter after each of the three boundary calls (C++ public getHeritagePass / Rust num_heritage_passes); for empty_entry and register_free_promote the complete projection: op count, op list in PcodeOpBank SeqNum order as name.OPCODE(input descriptors), Varnode count, and the sorted Varnode descriptor multiset (C<size>/R<off>:<I|W|F>/U<size>:<I|W|F>); for phi_cycle_selfref the no-hang witness completed=1. The Rust comparand additionally asserts (abort on violation, before printing) the internals Ghidra cannot print because they live in the unlabeled default-private region: ctor/clear maxdepth==-1, exactly one ADT rebuild (maxdepth constant across the three passes: 1/2/4 per case), and the persistent globaldisjoint entry count (0/3/3 per case) surviving every mem::take round-trip",
+  "normalization": "No order, flag, list, or membership normalization; absolute unique-space offsets are not printed because allocation bases differ between the implementations; descriptors carry space class, size or offset, and def-use class"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "empty_entry: one entry block, no IR; three boundary calls each increment pass exactly once and leave the banks empty",
+   "register_free_promote: two-block chain; two free reads of register 0x30 (one per reader, raw-p-code shape), a write at 0x30, and two unread unique writes; canonical rename promotes one input, rewires the second reader onto the write, deletes both consumed frees; later passes are inert (prev==2 heritage-known skip)",
+   "phi_cycle_selfref: b0->b1->b2->b1 back edge plus b2->b3; MULTIEQUAL m output at register 0x28 read by INT_ADD r in b2 whose output feeds m slot 1 (loop-carried def-use cycle m_out -> r -> t3 -> m, cover-fixture slot2 topology); all three boundary calls return (no hang)"
   ],
-  "overall_status": "PARTIAL_MATCH: the ownership boundary (Funcdata::opHeritage -> one Heritage::heritage pass per call, three consecutive calls on the same &mut Funcdata driving pass 0->1->2->3) byte-matches the locked oracle on all three cases, including the full op-list/Varnode-bank state projection of register_free_promote (input promotion, def-use rewiring, consumed-free deletion); the MULTIEQUAL self-reference cycle completes without hang on both sides; Heritage no longer stores or upgrades any Weak<RwLock<Funcdata>> and no nested lock path exists. NOT claimed: production ActionHeritage still uses the direct recipe (HERITAGE-DRIVER-SWITCH), placeMultiequals/rename algorithm equivalence (HERITAGE-ADT-RENAME-0001), guardCalls/discovery (HERITAGE-CALLGUARD-0001)",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{funcdata.hh:462,heritage.cc:218-224,2316-2385,2587-2593,2599-2645,2663-2758,funcdata.cc:150-167,block.cc:1954-2075}",
-    "signature": "void Funcdata::opHeritage(void) { heritage.heritage(); }; void Heritage::heritage(void)"
-  },
-  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; register delay=0, stack delay=1",
-  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level disabled",
-  "analysis_options": {
-    "entrypoint": "Direct invocation of the production boundary Funcdata::opHeritage (the funcdata.hh:462 inline wrapper) three consecutive times on the same Funcdata; no Action tree, no C emission",
-    "prestate": "Per-case fresh Funcdata built through production APIs (newOp/opSetOpcode/opSetInput/opSetOutput/newUniqueOut/newConstant/newVarnode/opInsertEnd/newBlockBasic/addEdge); the startProcessing steps a synthetic graph can reach are applied on both sides: structureLoops+calcForwardDominator (Rugra: BlockGraph::build_dom_tree) and heritage.buildInfoList (funcdata.cc:166). Two separate size-4 constants and one free Varnode per read mirror the raw-p-code single-descendant invariants (opSetInput constant clone, addDescend free check)",
-    "observation": "Per case: the pass counter after each of the three boundary calls (C++ public getHeritagePass / Rust num_heritage_passes); for empty_entry and register_free_promote the complete projection: op count, op list in PcodeOpBank SeqNum order as name.OPCODE(input descriptors), Varnode count, and the sorted Varnode descriptor multiset (C<size>/R<off>:<I|W|F>/U<size>:<I|W|F>); for phi_cycle_selfref the no-hang witness completed=1. The Rust comparand additionally asserts (abort on violation, before printing) the internals Ghidra cannot print because they live in the unlabeled default-private region: ctor/clear maxdepth==-1, exactly one ADT rebuild (maxdepth constant across the three passes: 1/2/4 per case), and the persistent globaldisjoint entry count (0/3/3 per case) surviving every mem::take round-trip",
-    "normalization": "No order, flag, list, or membership normalization; absolute unique-space offsets are not printed because allocation bases differ between the implementations; descriptors carry space class, size or offset, and def-use class"
-  },
-  "input_manifest": {
-    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
-    "cases": [
-      "empty_entry: one entry block, no IR; three boundary calls each increment pass exactly once and leave the banks empty",
-      "register_free_promote: two-block chain; two free reads of register 0x30 (one per reader, raw-p-code shape), a write at 0x30, and two unread unique writes; canonical rename promotes one input, rewires the second reader onto the write, deletes both consumed frees; later passes are inert (prev==2 heritage-known skip)",
-      "phi_cycle_selfref: b0->b1->b2->b1 back edge plus b2->b3; MULTIEQUAL m output at register 0x28 read by INT_ADD r in b2 whose output feeds m slot 1 (loop-carried def-use cycle m_out -> r -> t3 -> m, cover-fixture slot2 topology); all three boundary calls return (no hang)"
-    ],
-    "sha256": "aa129624c22675cc158ad06104c1bc369ac042fd6106d1fc6caea2a0843831f4"
-  },
-  "observation_schema": {
-    "format": "Four fixed-order UTF-8 lines with final newline: one envelope plus three case records",
-    "state": "pass counter sequence; op count; op list (SeqNum order, name.OPCODE + per-slot input descriptors); Varnode count and sorted descriptor multiset; completed flag",
-    "graph": "def-use class per op input slot (input/written/free/constant), Varnode space class and def-use class multiset"
-  },
-  "comparand": {
-    "rugra_base_commit": "6597db0afc5b8ca234d65ba6ac29ce328daa62f5",
-    "rugra_base_tree": "a83ff098d35e4efd6d4e32c50cccbbbeb27f8295",
-    "cpp_fixture_sha256": "3f8e6d199ab3495c11ddf86d704ae7225c436e03e96841386626f54935bd5250",
-    "rust_fixture_sha256": "435c25ed6d97b9534c028e80cdbd966f08a3af0f83d643966e9ec5fd48ccc321",
-    "heritage_rs_sha256": "09dbf88bec6d789de79d4bc688bbe8822bfcfb5ba80f7d7957383e5a7b4378b2",
-    "funcdata_rs_sha256": "c8ecad5bd8a17d1f5437550e2038d5c4b160d3ae1750d28edc3ab495b90f7912",
-    "heritage_doc_sha256": "1d42a516a4f3d1e829d99e9f258f757cb8c995ed92d0654699500de881fbbd9b",
-    "funcdata_doc_sha256": "e1a6a9e57c26c3453cd9fa7ab6fe33dafef7f15b3abe7b17fd952040845b850c",
-    "runner_sha256": "92b84f0a8e0238db3e4cb108d3315440d54139210bfdadf36e22a8ef4786eaf0",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-ownership-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-    "rust_crate_tree_sha256": "496720d99504d99a4fc6cf4206615115af955405cc81efd1aee1018629d7b3ab",
-    "host": {
-      "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-      "cxx_target": "x86_64-linux-gnu",
-      "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
-      "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-      "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
-      "make_path": "/usr/bin/make",
-      "python_path": "/usr/bin/python3.10",
-      "git_path": "/usr/bin/git",
-      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-      "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
-      "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
-      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-      "platform": "Linux 6.8.0-124-generic x86_64"
-    }
-  },
-  "build": {
-    "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
-    "private_state_observer": "Ghidra's Funcdata/Heritage state members live in an unlabeled default-private access region, so no preprocessor shim can print them; the C++ side observes only public APIs (getHeritagePass, beginOpAll, beginLoc). The single production startProcessing step a synthetic graph cannot reach otherwise (heritage.buildInfoList, funcdata.cc:166) is applied through a fixture-local layout mirror of the locked-oracle Funcdata member sequence (funcdata.hh:57-95) whose layout is pinned to the verified oracle commit; no oracle source is modified",
-    "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/heritage.rs and src/funcdata.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
-    "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs both fixtures under a 300s timeout (the no-hang witness), compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
-    "registry_packages": 164,
-    "registry_lock_closure_sha256": "6a3df79b164561dd4423211936ac14f618f7459bf28f22476789ae9e56b27ec2"
-  },
-  "expected_stdout_sha256": "7df41b6441c3ce05ae5e09e10f672430417aeeb07b02a793c792102b5ec250f7",
-  "expected_exit_code": 0,
-  "covered_projection_status": "MATCH",
-  "coverage": {
-    "ownership_bridge_single_pass_per_call": "MATCH: one opHeritage boundary call performs exactly one Heritage::heritage pass; three consecutive calls on the same Funcdata drive pass 0->1->2->3 on both sides",
-    "no_lock_reentry": "MATCH (structural, HERITAGE-OWNERSHIP-0001): Heritage stores no Funcdata handle; the pass threads one &mut Funcdata; funcdata.rs set_self_ref no longer feeds heritage; the pre-refactor nominal driver's double write-lock acquisition is deleted; the phi-cycle case completes under timeout where the old path self-deadlocked",
-    "empty_entry_ir_inert": "MATCH: no ops/varnodes; banks stay empty across all three passes",
-    "register_free_promote_full_projection": "MATCH: op list d1.INT_ADD(R30:I,C4);w2.COPY(C8);r1.INT_OR(R30:W,C4) and Varnode multiset C4,C4,C8,R30:I,R30:W,U8:W,U8:W after three passes — canonical input promotion, def-use rewiring, and consumed-free deletion identical to the oracle",
-    "later_pass_inertness": "MATCH: pass 2/3 leave the projection unchanged (prev==2 heritage-known skip in the per-space scan; stack delay=1 clears call placeholders at pass 2 with no calls)",
-    "adt_rebuild_sentinel": "MATCH (Rust-asserted + oracle-source-verified): ctor/clear maxdepth=-1; exactly one buildADT across the three passes (maxdepth 1/2/4 per case, constant after pass 1); Ghidra cannot print the unlabeled-private field, so this leg is not part of the byte-compared stdout",
-    "persistent_globaldisjoint": "MATCH (Rust-asserted + oracle-source-verified): the LocationMap cover (0/3/3 entries per case) survives every mem::take round-trip of the Heritage object",
-    "old_recipe_difference_record": "RECORDED: the pre-refactor production recipe embedded ActionDeadCode between two direct passes; the canonical boundary leaves dead ops to the executor (pinned by unit test test_op_heritage_leaves_deadcode_to_the_action_executor); production switch is HERITAGE-DRIVER-SWITCH",
-    "phi_cycle_full_projection": "MISMATCH (registered HERITAGE-ADT-RENAME-0001): on the phi self-reference cycle the oracle skips the already-heritaged (old-marker) register range while Rugra's place_multiequals still places a redundant parentless MULTIEQUAL + placeholder inputs; the op/vn projection is therefore not byte-compared for this case, only the no-hang witness and pass counter are",
-    "production_action_switch": "UNTESTED: ActionHeritage::apply still runs the direct two-pass + DeadCode recipe; switching it to fd.op_heritage() is HERITAGE-DRIVER-SWITCH and depends on HERITAGE-CALLGUARD-0001 / HERITAGE-ADT-RENAME-0001",
-    "guardcalls_discovery_loadguards": "UNTESTED (registered HERITAGE-CALLGUARD-0001): discoverIndexedStackPointers, guardCalls/guardReturns/guardStores/guardLoads canonical wiring, and reprocessFreeStores have no fixture case; the driver keeps the reprocess conditional wired with a zero counter"
+  "sha256": "aa129624c22675cc158ad06104c1bc369ac042fd6106d1fc6caea2a0843831f4"
+ },
+ "observation_schema": {
+  "format": "Four fixed-order UTF-8 lines with final newline: one envelope plus three case records",
+  "state": "pass counter sequence; op count; op list (SeqNum order, name.OPCODE + per-slot input descriptors); Varnode count and sorted descriptor multiset; completed flag",
+  "graph": "def-use class per op input slot (input/written/free/constant), Varnode space class and def-use class multiset"
+ },
+ "comparand": {
+  "rugra_base_commit": "6597db0afc5b8ca234d65ba6ac29ce328daa62f5",
+  "rugra_base_tree": "a83ff098d35e4efd6d4e32c50cccbbbeb27f8295",
+  "cpp_fixture_sha256": "3f8e6d199ab3495c11ddf86d704ae7225c436e03e96841386626f54935bd5250",
+  "rust_fixture_sha256": "435c25ed6d97b9534c028e80cdbd966f08a3af0f83d643966e9ec5fd48ccc321",
+  "heritage_rs_sha256": "09dbf88bec6d789de79d4bc688bbe8822bfcfb5ba80f7d7957383e5a7b4378b2",
+  "funcdata_rs_sha256": "c8ecad5bd8a17d1f5437550e2038d5c4b160d3ae1750d28edc3ab495b90f7912",
+  "heritage_doc_sha256": "1d42a516a4f3d1e829d99e9f258f757cb8c995ed92d0654699500de881fbbd9b",
+  "funcdata_doc_sha256": "e1a6a9e57c26c3453cd9fa7ab6fe33dafef7f15b3abe7b17fd952040845b850c",
+  "runner_sha256": "92b84f0a8e0238db3e4cb108d3315440d54139210bfdadf36e22a8ef4786eaf0",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-heritage-ownership-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "rust_crate_tree_sha256": "496720d99504d99a4fc6cf4206615115af955405cc81efd1aee1018629d7b3ab",
+  "host": {
+   "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+   "cxx_target": "x86_64-linux-gnu",
+   "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+   "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+   "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.10",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+   "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+   "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+   "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+   "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+   "platform": "Linux 6.8.0-124-generic x86_64"
   }
+ },
+ "build": {
+  "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
+  "private_state_observer": "Ghidra's Funcdata/Heritage state members live in an unlabeled default-private access region, so no preprocessor shim can print them; the C++ side observes only public APIs (getHeritagePass, beginOpAll, beginLoc). The single production startProcessing step a synthetic graph cannot reach otherwise (heritage.buildInfoList, funcdata.cc:166) is applied through a fixture-local layout mirror of the locked-oracle Funcdata member sequence (funcdata.hh:57-95) whose layout is pinned to the verified oracle commit; no oracle source is modified",
+  "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/heritage.rs and src/funcdata.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
+  "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs both fixtures under a 300s timeout (the no-hang witness), compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "6a3df79b164561dd4423211936ac14f618f7459bf28f22476789ae9e56b27ec2"
+ },
+ "expected_stdout_sha256": "7df41b6441c3ce05ae5e09e10f672430417aeeb07b02a793c792102b5ec250f7",
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "coverage": {
+  "ownership_bridge_single_pass_per_call": "MATCH: one opHeritage boundary call performs exactly one Heritage::heritage pass; three consecutive calls on the same Funcdata drive pass 0->1->2->3 on both sides",
+  "no_lock_reentry": "MATCH (structural, HERITAGE-OWNERSHIP-0001): Heritage stores no Funcdata handle; the pass threads one &mut Funcdata; funcdata.rs set_self_ref no longer feeds heritage; the pre-refactor nominal driver's double write-lock acquisition is deleted; the phi-cycle case completes under timeout where the old path self-deadlocked",
+  "empty_entry_ir_inert": "MATCH: no ops/varnodes; banks stay empty across all three passes",
+  "register_free_promote_full_projection": "MATCH: op list d1.INT_ADD(R30:I,C4);w2.COPY(C8);r1.INT_OR(R30:W,C4) and Varnode multiset C4,C4,C8,R30:I,R30:W,U8:W,U8:W after three passes \u2014 canonical input promotion, def-use rewiring, and consumed-free deletion identical to the oracle",
+  "later_pass_inertness": "MATCH: pass 2/3 leave the projection unchanged (prev==2 heritage-known skip in the per-space scan; stack delay=1 clears call placeholders at pass 2 with no calls)",
+  "adt_rebuild_sentinel": "MATCH (Rust-asserted + oracle-source-verified): ctor/clear maxdepth=-1; exactly one buildADT across the three passes (maxdepth 1/2/4 per case, constant after pass 1); Ghidra cannot print the unlabeled-private field, so this leg is not part of the byte-compared stdout",
+  "persistent_globaldisjoint": "MATCH (Rust-asserted + oracle-source-verified): the LocationMap cover (0/3/3 entries per case) survives every mem::take round-trip of the Heritage object",
+  "old_recipe_difference_record": "RECORDED: the pre-refactor production recipe embedded ActionDeadCode between two direct passes; the canonical boundary leaves dead ops to the executor (pinned by unit test test_op_heritage_leaves_deadcode_to_the_action_executor); production switch is HERITAGE-DRIVER-SWITCH",
+  "phi_cycle_full_projection": "MISMATCH (registered HERITAGE-ADT-RENAME-0001): on the phi self-reference cycle the oracle skips the already-heritaged (old-marker) register range while Rugra's place_multiequals still places a redundant parentless MULTIEQUAL + placeholder inputs; the op/vn projection is therefore not byte-compared for this case, only the no-hang witness and pass counter are",
+  "production_action_switch": "UNTESTED: ActionHeritage::apply still runs the direct two-pass + DeadCode recipe; switching it to fd.op_heritage() is HERITAGE-DRIVER-SWITCH and depends on HERITAGE-CALLGUARD-0001 / HERITAGE-ADT-RENAME-0001",
+  "guardcalls_discovery_loadguards": "UNTESTED (registered HERITAGE-CALLGUARD-0001): discoverIndexedStackPointers, guardCalls/guardReturns/guardStores/guardLoads canonical wiring, and reprocessFreeStores have no fixture case; the driver keeps the reprocess conditional wired with a zero counter"
+ }
 }

@@ -1,178 +1,179 @@
 {
-  "schema_version": 1,
-  "fixture_id": "CSPEC-TEXT-INGEST-0001",
-  "title": "Production compiler-spec text ingestion (parseCompilerConfig) parity",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "entry": "BfdArchitecture::init -> Architecture::parseCompilerConfig (real spec-dir scan of x86-64-gcc.cspec)"
-  },
-  "architecture": "x86:LE:64:default (SLEIGH x86-64)",
-  "compiler_spec": "x86-64-gcc.cspec (production bytes)",
-  "analysis_options": "default BfdArchitecture target=default; no option overrides",
-  "input_fingerprints": {
-    "x86-64-gcc.cspec": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-    "x86-64.sla": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-    "curl": "pinned from locked base examples/curl"
-  },
-  "comparand": {
-    "rugra_base_commit": "1f65b9d76c2e7e5214257c98d82791c2150a8989",
-    "rugra_base_tree": "e33b9f272fa6513bb417f39653d1ccd7bd9b464f",
-    "snapshot_model": "git archive locked base tree plus exact owned-file overlays",
-    "overlay_paths": [
-      "src/arch.rs",
-      "src/fspec.rs",
-      "src/marshal.rs",
-      "src/pcodeinject.rs",
-      "src/pcodeparse.rs",
-      "src/userop.rs",
-      "docs/api/arch.md",
-      "docs/api/fspec.md",
-      "docs/api/marshal.md",
-      "docs/api/pcodeinject.md",
-      "docs/api/pcodeparse.md",
-      "docs/api/userop.md",
-      "tests/oracle/cspec_text_ingest_1204.cc",
-      "tests/oracle/cspec_text_ingest_1204.rs",
-      "tests/oracle/cspec_text_ingest_1204.metadata.json",
-      "tools/run_cspec_text_ingest_oracle.sh"
-    ],
-    "cpp_fixture_sha256": "316834b62fde057296ae58325890141659fca17bd7f763ffbf621173bcd7d9c5",
-    "rust_fixture_sha256": "92a6828e62099413a50c9a838b84fc3f2eb7a5515b33d2e2aecb658b7f2fe586",
-    "arch_rs_sha256": "655d7c8fbc8e7c23aacb1befa27d4bd301699e8d9217978e03225da31ae5381b",
-    "fspec_rs_sha256": "ea64e121b9919d47e7dc054e015da8f87797bad96c2d327cd4dd7ecad78963a3",
-    "pcodeinject_rs_sha256": "25e815cbd61d51875a1fc7baf1d68e9204307d80f549827f2ab9706292a77441",
-    "pcodeparse_rs_sha256": "76ca52952c42b89a696a0be3586bce8217bd9cb93678e4090433c59f4968c342",
-    "userop_rs_sha256": "2e02d4705c616306e124455ec3fb547bc0dc72934fb8a633a52fa787ccb23423",
-    "arch_doc_sha256": "7e9de8a1c1b7cde2f47af81e8b5245b87ac4d68ab30a1b5ac089ffb15b8f1872",
-    "fspec_doc_sha256": "6851b1c33ac690c50df4f5e947e0b336b982993f800b6d766a2efc4c7f122d57",
-    "pcodeinject_doc_sha256": "34200dafeff3f61f503be71203325aaf6e68ade97eaa3fed0513c799ef117d22",
-    "pcodeparse_doc_sha256": "6664ec8ba289bd1b454b1907a47f637197a69463d19c89fe7bdb2707b4d20434",
-    "userop_doc_sha256": "1fb1f244de6ad834f8e60b3f7b3039e046b8e5cb0586820641f0c8de5d1ae2bb",
-    "runner_sha256": "bc9c6321d241aa50bb520886a59bf1e326102fe8c4ce4da4d4c29d5e60bb6aac",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-    "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-    "marshal_rs_sha256": "7e5e35450c985133ac77ad09808414bfbd13999226374ecd181acd93eb767f2d",
-    "marshal_doc_sha256": "8db58a773e3245ac8249f9180991ced66e18211183d2a2d6ec6f8c98dfca08b7"
-  },
-  "host_tools": {
-    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "cxx_target": "x86_64-linux-gnu",
-    "cc": "x86_64-linux-gnu-gcc-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "cc_target": "x86_64-linux-gnu",
-    "ar": "GNU ar (GNU Binutils for Ubuntu) 2.38",
-    "make": "GNU Make 4.3",
-    "python": "Python 3.10.12",
-    "git": "git version 2.34.1",
-    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu"
-  },
-  "build": {
-    "registry_packages": 164
-  },
-  "coverage": {
-    "text_ingest_status": "MATCH",
-    "record_counts": {
-      "SPACE": 9,
-      "GLOBAL": 3,
-      "RET": 1,
-      "STACK": 1,
-      "MODELRET": 5,
-      "THISCALL": 1,
-      "FIXUP": 16,
-      "TPL": 16,
-      "CALLOTHER_COUNT_BEFORE": 1,
-      "CALLOTHER_COMPILEFAIL": 1,
-      "CALLOTHER_COUNT_AFTER": 1,
-      "CALLOTHER_RESIDUE_ID": 1,
-      "CALLOTHER_UNKNOWN": 1,
-      "CALLOTHER_COUNT_AFTER2": 1,
-      "CALLOTHER_RESIDUE_ID2": 1,
-      "CALLOTHER_SEGMENT": 1,
-      "CALLOTHER_COUNT_AFTER3": 1,
-      "CALLOTHER_SEGMENT_TYPE": 1,
-      "VOLATILE1": 1,
-      "VOLATILE_NAMES": 1,
-      "VOLATILE2": 1,
-      "CALLFIXUP_PARAMNAME": 1,
-      "CALLFIXUP_PARAMNAME_ID": 1,
-      "RA_EMPTY_CHAIN": 1,
-      "NOHIGHPTR_HEX": 1,
-      "RA_DOUBLE_CHAIN": 1,
-      "SCHEMA": 1,
-      "DONE": 1
-    },
-    "observations": [
-      "SPACE table (locked x86-64 language facts mirrored by the Rust SpecQuery host)",
-      "GLOBAL scope range triples sorted by (space index, first) like Scope::printBounds",
-      "RET defaultReturnAddr space/offset/size (CSPEC-DEFAULT-RETURN-0001)",
-      "STACK space name + growth (CSPEC stackpointer decode)",
-      "MODELRET per-model return_address effect records incl. the fspec.cc:2689 default injection and processEntry's own RBP",
-      "THISCALL alias clone presence + print flag",
-      "FIXUP registrations (ids/names/params) for all 16 <callfixup>",
-      "TPL compiled template XML byte-identical for all 16 payloads",
-      "CALLOTHER probes: compile-failure residue, unknown-target error, segment customization",
-      "VOLATILE probes: registration names + duplicate error",
-      "Reviewer probes: nameless <input> aborts the callfixup decode (F1); empty <returnaddress><varnode/> twice decodes to unset without the multiple-tag error (F2); hex <nohighptr> range exercises the marshal integer hex auto-detection (F3); double real returnaddress tags throw the multiple-tag error (F2)."
-    ]
-  },
-  "residuals": [
-    {
-      "id": "CSPEC-TYPEORG-STATE-0001",
-      "status": "MISMATCH",
-      "note": "<data_organization>/<enum> decode + types->setupSizes skipped-with-record (1 of 24 production cspec children); owned by the TypeFactory slice"
-    },
-    {
-      "id": "CSPEC-GLOBAL-APPLY-0001-DB",
-      "status": "MISMATCH",
-      "note": "Database-side space-keyed global scope range application; applied triples recorded on Architecture::global_scope_ranges"
-    },
-    {
-      "id": "CSPEC-SPACE-WIRING",
-      "status": "MISMATCH",
-      "note": "<spacebase>/<deadcodedelay>/<inferptrbounds> and initializeSegments resolvers need AddrSpaceManager wiring; recorded skips"
-    },
-    {
-      "id": "CSPEC-PARAMMODEL-0001",
-      "status": "MISMATCH",
-      "note": "<resolveprototype>/ProtoModelMerged decode recorded skip; readonly/context_data recorded skips pending DB/context domains"
-    },
-    {
-      "id": "CSPEC-SPECEXT-ORACLE-BUG",
-      "status": "MISMATCH",
-      "note": "Known oracle-bug divergence (reviewer F4): Ghidra architecture.cc:1316-1323 passes the exhausted main decoder for specextensions <callfixup>/<callotherfixup> (variable-misuse -> DecoderError); Rugra decodes from the correct per-child extension decoder. Intentional divergence from the buggy oracle, registered per the MARSHAL-XML-TEXT precedent"
-    },
-    {
-      "id": "CSPEC-UNIVERSAL-SEGJUMP",
-      "status": "UNTESTED",
-      "note": "decode_segment_op/decode_jump_assist ported but not oracle-observed (no synthetic probes; no segmentop/jumpassist in the production cspec)"
-    },
-    {
-      "id": "MARSHAL-ATTRIB-CONTENT",
-      "status": "UNTESTED",
-      "note": "<body> character content threaded via paired DOM handle instead of readString(ATTRIB_CONTENT); TreeDecoder content gap owned by the MARSHAL domain"
-    },
-    {
-      "id": "CSPEC-INFERPTR-POSTINIT",
-      "status": "UNTESTED",
-      "note": "inferPtrSpaces post-init filtering (cacheAddrSpaceProperties) not observable through the post-init projection"
-    },
-    {
-      "id": "CSPEC-JUMPDEST-INSTSYM",
-      "status": "UNTESTED",
-      "note": "PcodeSnippet jumpdest inst_start/inst_next need SLEIGH language symbol exposure in the fixture Host (reviewer minor 7); not exercised by the production cspec bodies"
-    }
+ "schema_version": 1,
+ "fixture_id": "CSPEC-TEXT-INGEST-0001",
+ "title": "Production compiler-spec text ingestion (parseCompilerConfig) parity",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "entry": "BfdArchitecture::init -> Architecture::parseCompilerConfig (real spec-dir scan of x86-64-gcc.cspec)"
+ },
+ "architecture": "x86:LE:64:default (SLEIGH x86-64)",
+ "compiler_spec": "x86-64-gcc.cspec (production bytes)",
+ "analysis_options": "default BfdArchitecture target=default; no option overrides",
+ "input_fingerprints": {
+  "x86-64-gcc.cspec": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "x86-64.sla": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+  "curl": "pinned from locked base examples/curl"
+ },
+ "comparand": {
+  "rugra_base_commit": "1f65b9d76c2e7e5214257c98d82791c2150a8989",
+  "rugra_base_tree": "e33b9f272fa6513bb417f39653d1ccd7bd9b464f",
+  "snapshot_model": "git archive locked base tree plus exact owned-file overlays",
+  "overlay_paths": [
+   "src/arch.rs",
+   "src/fspec.rs",
+   "src/marshal.rs",
+   "src/pcodeinject.rs",
+   "src/pcodeparse.rs",
+   "src/userop.rs",
+   "docs/api/arch.md",
+   "docs/api/fspec.md",
+   "docs/api/marshal.md",
+   "docs/api/pcodeinject.md",
+   "docs/api/pcodeparse.md",
+   "docs/api/userop.md",
+   "tests/oracle/cspec_text_ingest_1204.cc",
+   "tests/oracle/cspec_text_ingest_1204.rs",
+   "tests/oracle/cspec_text_ingest_1204.metadata.json",
+   "tools/run_cspec_text_ingest_oracle.sh"
   ],
-  "locked_capture": {
-    "records": 72,
-    "bytes": 7069,
-    "stdout_sha256": "a1391a1d7117eac3e81b03f04b7b10df714f0ac891fa7936c8b7caded7d874c0",
-    "note": "re-pinned after the reviewer rework probes (F1/F2/F3 records added)"
+  "cpp_fixture_sha256": "316834b62fde057296ae58325890141659fca17bd7f763ffbf621173bcd7d9c5",
+  "rust_fixture_sha256": "92a6828e62099413a50c9a838b84fc3f2eb7a5515b33d2e2aecb658b7f2fe586",
+  "arch_rs_sha256": "655d7c8fbc8e7c23aacb1befa27d4bd301699e8d9217978e03225da31ae5381b",
+  "fspec_rs_sha256": "ea64e121b9919d47e7dc054e015da8f87797bad96c2d327cd4dd7ecad78963a3",
+  "pcodeinject_rs_sha256": "25e815cbd61d51875a1fc7baf1d68e9204307d80f549827f2ab9706292a77441",
+  "pcodeparse_rs_sha256": "76ca52952c42b89a696a0be3586bce8217bd9cb93678e4090433c59f4968c342",
+  "userop_rs_sha256": "2e02d4705c616306e124455ec3fb547bc0dc72934fb8a633a52fa787ccb23423",
+  "arch_doc_sha256": "7e9de8a1c1b7cde2f47af81e8b5245b87ac4d68ab30a1b5ac089ffb15b8f1872",
+  "fspec_doc_sha256": "6851b1c33ac690c50df4f5e947e0b336b982993f800b6d766a2efc4c7f122d57",
+  "pcodeinject_doc_sha256": "34200dafeff3f61f503be71203325aaf6e68ade97eaa3fed0513c799ef117d22",
+  "pcodeparse_doc_sha256": "6664ec8ba289bd1b454b1907a47f637197a69463d19c89fe7bdb2707b4d20434",
+  "userop_doc_sha256": "1fb1f244de6ad834f8e60b3f7b3039e046b8e5cb0586820641f0c8de5d1ae2bb",
+  "runner_sha256": "bc9c6321d241aa50bb520886a59bf1e326102fe8c4ce4da4d4c29d5e60bb6aac",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+  "marshal_rs_sha256": "7e5e35450c985133ac77ad09808414bfbd13999226374ecd181acd93eb767f2d",
+  "marshal_doc_sha256": "8db58a773e3245ac8249f9180991ced66e18211183d2a2d6ec6f8c98dfca08b7"
+ },
+ "host_tools": {
+  "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "cxx_target": "x86_64-linux-gnu",
+  "cc": "x86_64-linux-gnu-gcc-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "cc_target": "x86_64-linux-gnu",
+  "ar": "GNU ar (GNU Binutils for Ubuntu) 2.38",
+  "make": "GNU Make 4.3",
+  "python": "Python 3.10.12",
+  "git": "git version 2.34.1",
+  "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+  "rust_toolchain": "nightly-x86_64-unknown-linux-gnu"
+ },
+ "build": {
+  "registry_packages": 164
+ },
+ "coverage": {
+  "text_ingest_status": "MATCH",
+  "record_counts": {
+   "SPACE": 9,
+   "GLOBAL": 3,
+   "RET": 1,
+   "STACK": 1,
+   "MODELRET": 5,
+   "THISCALL": 1,
+   "FIXUP": 16,
+   "TPL": 16,
+   "CALLOTHER_COUNT_BEFORE": 1,
+   "CALLOTHER_COMPILEFAIL": 1,
+   "CALLOTHER_COUNT_AFTER": 1,
+   "CALLOTHER_RESIDUE_ID": 1,
+   "CALLOTHER_UNKNOWN": 1,
+   "CALLOTHER_COUNT_AFTER2": 1,
+   "CALLOTHER_RESIDUE_ID2": 1,
+   "CALLOTHER_SEGMENT": 1,
+   "CALLOTHER_COUNT_AFTER3": 1,
+   "CALLOTHER_SEGMENT_TYPE": 1,
+   "VOLATILE1": 1,
+   "VOLATILE_NAMES": 1,
+   "VOLATILE2": 1,
+   "CALLFIXUP_PARAMNAME": 1,
+   "CALLFIXUP_PARAMNAME_ID": 1,
+   "RA_EMPTY_CHAIN": 1,
+   "NOHIGHPTR_HEX": 1,
+   "RA_DOUBLE_CHAIN": 1,
+   "SCHEMA": 1,
+   "DONE": 1
+  },
+  "observations": [
+   "SPACE table (locked x86-64 language facts mirrored by the Rust SpecQuery host)",
+   "GLOBAL scope range triples sorted by (space index, first) like Scope::printBounds",
+   "RET defaultReturnAddr space/offset/size (CSPEC-DEFAULT-RETURN-0001)",
+   "STACK space name + growth (CSPEC stackpointer decode)",
+   "MODELRET per-model return_address effect records incl. the fspec.cc:2689 default injection and processEntry's own RBP",
+   "THISCALL alias clone presence + print flag",
+   "FIXUP registrations (ids/names/params) for all 16 <callfixup>",
+   "TPL compiled template XML byte-identical for all 16 payloads",
+   "CALLOTHER probes: compile-failure residue, unknown-target error, segment customization",
+   "VOLATILE probes: registration names + duplicate error",
+   "Reviewer probes: nameless <input> aborts the callfixup decode (F1); empty <returnaddress><varnode/> twice decodes to unset without the multiple-tag error (F2); hex <nohighptr> range exercises the marshal integer hex auto-detection (F3); double real returnaddress tags throw the multiple-tag error (F2)."
+  ]
+ },
+ "residuals": [
+  {
+   "id": "CSPEC-TYPEORG-STATE-0001",
+   "status": "MISMATCH",
+   "note": "<data_organization>/<enum> decode + types->setupSizes skipped-with-record (1 of 24 production cspec children); owned by the TypeFactory slice"
+  },
+  {
+   "id": "CSPEC-GLOBAL-APPLY-0001-DB",
+   "status": "MISMATCH",
+   "note": "Database-side space-keyed global scope range application; applied triples recorded on Architecture::global_scope_ranges"
+  },
+  {
+   "id": "CSPEC-SPACE-WIRING",
+   "status": "MISMATCH",
+   "note": "<spacebase>/<deadcodedelay>/<inferptrbounds> and initializeSegments resolvers need AddrSpaceManager wiring; recorded skips"
+  },
+  {
+   "id": "CSPEC-PARAMMODEL-0001",
+   "status": "MISMATCH",
+   "note": "<resolveprototype>/ProtoModelMerged decode recorded skip; readonly/context_data recorded skips pending DB/context domains"
+  },
+  {
+   "id": "CSPEC-SPECEXT-ORACLE-BUG",
+   "status": "MISMATCH",
+   "note": "Known oracle-bug divergence (reviewer F4): Ghidra architecture.cc:1316-1323 passes the exhausted main decoder for specextensions <callfixup>/<callotherfixup> (variable-misuse -> DecoderError); Rugra decodes from the correct per-child extension decoder. Intentional divergence from the buggy oracle, registered per the MARSHAL-XML-TEXT precedent"
+  },
+  {
+   "id": "CSPEC-UNIVERSAL-SEGJUMP",
+   "status": "UNTESTED",
+   "note": "decode_segment_op/decode_jump_assist ported but not oracle-observed (no synthetic probes; no segmentop/jumpassist in the production cspec)"
+  },
+  {
+   "id": "MARSHAL-ATTRIB-CONTENT",
+   "status": "UNTESTED",
+   "note": "<body> character content threaded via paired DOM handle instead of readString(ATTRIB_CONTENT); TreeDecoder content gap owned by the MARSHAL domain"
+  },
+  {
+   "id": "CSPEC-INFERPTR-POSTINIT",
+   "status": "UNTESTED",
+   "note": "inferPtrSpaces post-init filtering (cacheAddrSpaceProperties) not observable through the post-init projection"
+  },
+  {
+   "id": "CSPEC-JUMPDEST-INSTSYM",
+   "status": "UNTESTED",
+   "note": "PcodeSnippet jumpdest inst_start/inst_next need SLEIGH language symbol exposure in the fixture Host (reviewer minor 7); not exercised by the production cspec bodies"
   }
+ ],
+ "locked_capture": {
+  "records": 72,
+  "bytes": 7069,
+  "stdout_sha256": "a1391a1d7117eac3e81b03f04b7b10df714f0ac891fa7936c8b7caded7d874c0",
+  "note": "re-pinned after the reviewer rework probes (F1/F2/F3 records added)"
+ },
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

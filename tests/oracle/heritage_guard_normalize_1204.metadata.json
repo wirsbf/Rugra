@@ -1,7 +1,7 @@
 {
  "schema": 2,
  "fixture_id": "HERITAGE-GUARD-NORMALIZE-0001",
- "stable_function_id": "GH12-F-a4d8ea08f2f1b7c29e66",
+ "stable_function_id": "GH12-F-0813bbc828190d5fa6a0",
  "stable_function_closure": [
   "GH12-F-0813bbc828190d5fa6a0 ghidra::Heritage::guard heritage.cc:1156",
   "GH12-F-5be526231572bad63ab3 ghidra::Heritage::guardReturns heritage.cc:1652",

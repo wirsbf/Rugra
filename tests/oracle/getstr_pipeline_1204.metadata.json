@@ -1,197 +1,312 @@
 {
-  "schema": 1,
-  "fixture_id": "PIPE-SNAPSHOT-0001",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
-  },
+ "schema": 1,
+ "fixture_id": "PIPE-SNAPSHOT-0001",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": "gcc",
+ "analysis_options": {
+  "action": "decompile",
+  "ghidra_loader": "BfdArchitecture",
+  "ghidra_symbols": "ELF/BFD symbols only; no Java DWARF analyzer",
+  "rugra_symbols": "ELF symbols only; no DWARF importer",
+  "rugra_build_profile": "release; debug currently exposes VARMAP-GATHEROFFSET-0001 and RULE-COLLECTTERMS-0001 overflow defects",
+  "function": "GetStr",
+  "stages": [
+   "00_raw_pcode",
+   "01_cfg",
+   "02_heritage_ssa",
+   "03_action_ir",
+   "04_structure",
+   "05_c"
+  ]
+ },
+ "input": {
   "architecture": "x86:LE:64:default",
+  "binary": "examples/curl",
+  "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
   "compiler_spec": "gcc",
-  "analysis_options": {
-    "action": "decompile",
-    "ghidra_loader": "BfdArchitecture",
-    "ghidra_symbols": "ELF/BFD symbols only; no Java DWARF analyzer",
-    "rugra_symbols": "ELF symbols only; no DWARF importer",
-    "rugra_build_profile": "release; debug currently exposes VARMAP-GATHEROFFSET-0001 and RULE-COLLECTTERMS-0001 overflow defects",
-    "function": "GetStr",
-    "stages": [
-      "00_raw_pcode",
-      "01_cfg",
-      "02_heritage_ssa",
-      "03_action_ir",
-      "04_structure",
-      "05_c"
+  "function": {
+   "entry": 14032,
+   "name": "GetStr",
+   "size": 74
+  },
+  "raw_code_policy": {
+   "ghidra": "Funcdata::followFlow reachable instructions",
+   "rugra": "FlowInfo reachable instructions from the function entry, using one configured SleighCtx and the atomic Sleigh::oneInstruction step plus emitted ops"
+  },
+  "symbol_source": "ELF/BFD symbols only; no DWARF"
+ },
+ "input_fingerprint": "sha256:7a771b95e63f26ef9a7d3e379f9dd7b1e528d2ff717232960c0551027807da5b",
+ "observation": {
+  "schema": "ordered JSON object graph with stable per-run PcodeOp/Varnode IDs",
+  "normalization": "JSON object keys/whitespace plus LOAD/STORE input0 AddrSpace pointer to registered space index; array order, object identity, aliasing, edge slots, flags, state and text are preserved",
+  "overall_status": "MISMATCH",
+  "stage_boundary_status": {
+   "00_raw_pcode": "MISMATCH",
+   "01_cfg": "MISMATCH",
+   "02_heritage_ssa": "NO_ORACLE",
+   "03_action_ir": "MISMATCH",
+   "04_structure": "MISMATCH",
+   "05_c": "MISMATCH"
+  },
+  "heritage_boundary_note": "Ghidra stops the real decompile Action at paramdouble immediately after heritage; Rugra replays ActionHeritage directly because its Action tree has no stage observer, so this layer is diagnostic and cannot be promoted to MATCH.",
+  "rugra_determinism_status": "STABLE_TWO_RUNS",
+  "rugra_determinism_note": "Two independent release-profile Rugra executions produce byte-identical ordered JSON at all six layers; the runner still retains the second run and rejects any future difference.",
+  "first_difference": {
+   "stage": "00_raw_pcode",
+   "path": "$.ops[0].opcode_name",
+   "ghidra": "copy",
+   "rugra": "COPY"
+  },
+  "first_substantive_op_difference": null,
+  "numeric_op_signature_sequence": {
+   "status": "MATCH",
+   "ops": 103,
+   "fields": [
+    "address.offset",
+    "opcode",
+    "input_count",
+    "has_output"
+   ]
+  },
+  "first_op_storage_difference": {
+   "index": 31,
+   "ghidra": {
+    "output": null,
+    "inputs": [
+     {
+      "space": 5,
+      "offset": 8944,
+      "size": 8,
+      "pointer_ref_kind": "fspec"
+     }
     ]
-  },
-  "input": {
-    "architecture": "x86:LE:64:default",
-    "binary": "examples/curl",
-    "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-    "compiler_spec": "gcc",
-    "function": {
-      "entry": 14032,
-      "name": "GetStr",
-      "size": 74
-    },
-    "raw_code_policy": {
-      "ghidra": "Funcdata::followFlow reachable instructions",
-      "rugra": "FlowInfo reachable instructions from the function entry, using one configured SleighCtx and the atomic Sleigh::oneInstruction step plus emitted ops"
-    },
-    "symbol_source": "ELF/BFD symbols only; no DWARF"
-  },
-  "input_fingerprint": "sha256:7a771b95e63f26ef9a7d3e379f9dd7b1e528d2ff717232960c0551027807da5b",
-  "observation": {
-    "schema": "ordered JSON object graph with stable per-run PcodeOp/Varnode IDs",
-    "normalization": "JSON object keys/whitespace plus LOAD/STORE input0 AddrSpace pointer to registered space index; array order, object identity, aliasing, edge slots, flags, state and text are preserved",
-    "overall_status": "MISMATCH",
-    "stage_boundary_status": {
-      "00_raw_pcode": "MISMATCH",
-      "01_cfg": "MISMATCH",
-      "02_heritage_ssa": "NO_ORACLE",
-      "03_action_ir": "MISMATCH",
-      "04_structure": "MISMATCH",
-      "05_c": "MISMATCH"
-    },
-    "heritage_boundary_note": "Ghidra stops the real decompile Action at paramdouble immediately after heritage; Rugra replays ActionHeritage directly because its Action tree has no stage observer, so this layer is diagnostic and cannot be promoted to MATCH.",
-    "rugra_determinism_status": "STABLE_TWO_RUNS",
-    "rugra_determinism_note": "Two independent release-profile Rugra executions produce byte-identical ordered JSON at all six layers; the runner still retains the second run and rejects any future difference.",
-    "first_difference": {
-      "stage": "00_raw_pcode",
-      "path": "$.ops[0].opcode_name",
-      "ghidra": "copy",
-      "rugra": "COPY"
-    },
-    "first_substantive_op_difference": null,
-    "numeric_op_signature_sequence": {
-      "status": "MATCH",
-      "ops": 103,
-      "fields": ["address.offset", "opcode", "input_count", "has_output"]
-    },
-    "first_op_storage_difference": {
-      "index": 31,
-      "ghidra": {
-        "output": null,
-        "inputs": [
-          {"space": 5, "offset": 8944, "size": 8, "pointer_ref_kind": "fspec"}
-        ]
-      },
-      "rugra": {
-        "output": null,
-        "inputs": [
-          {"space": 7, "offset": 8944, "size": 8, "pointer_ref_kind": "fspec"}
-        ]
-      },
-      "diagnosis": "Both sides resolve the first direct CALL to 0x22f0, but locked Ghidra encodes FuncCallSpecs in dynamic fspace index 5 while Rugra's fixed AddressSpace enum has no Fspec variant and uses synthetic Iop index 7 (ADDR-0001/CALLSPEC-0001)."
-    },
-    "first_varnode_state_difference": null,
-    "closed_varnode_state_difference": {
-      "status": "MATCH",
-      "ordered_nodes": 272,
-      "ghidra_type_histogram": {"xunknown8": 174, "xunknown1": 93, "code": 5},
-      "rugra_type_histogram": {"xunknown8": 174, "xunknown1": 93, "code": 5},
-      "diagnosis": "Funcdata::set_arch now injects the Architecture-owned standalone TypeFactory into VarnodeBank before allocation. All ordered raw Varnode flags and complete type records match; storage, create index and traversal order are unchanged."
-    },
-    "covered": [
-      "PcodeOp order, opcode, address, input order, output identity and selected flags",
-      "Varnode identity, location, flags, definition and descendant order",
-      "basic-block order, edge slot/reverse index/flags and op membership",
-      "recursive structured-block kind/order",
-      "final unmarked C text",
-      "focused 0x36ee NOTEQUAL stored char types, per-input High read-facing char types, exact def-use roles, and producer-local short-circuit character-literal line"
-    ],
-    "untested": [
-      "Full Ghidra token/markup event metadata; the focused final character literal text is covered separately",
-      "all private PcodeOp and edge flags not exposed by both implementations",
-      "same-boundary Rugra Action-tree pause immediately after Heritage",
-      "Java Program DB/DWARF-derived symbols and prototypes",
-      "debug-profile Action execution until VARMAP-GATHEROFFSET-0001 and RULE-COLLECTTERMS-0001 receive independent core review",
-      "full FlowInfo error/injection/override/jump-table and generateBlocks state covered by SLEIGH-FLOW-0001"
+   },
+   "rugra": {
+    "output": null,
+    "inputs": [
+     {
+      "space": 7,
+      "offset": 8944,
+      "size": 8,
+      "pointer_ref_kind": "fspec"
+     }
     ]
+   },
+   "diagnosis": "Both sides resolve the first direct CALL to 0x22f0, but locked Ghidra encodes FuncCallSpecs in dynamic fspace index 5 while Rugra's fixed AddressSpace enum has no Fspec variant and uses synthetic Iop index 7 (ADDR-0001/CALLSPEC-0001)."
   },
-  "focused_projections": {
-    "char_zero_read_facing": {
-      "status": "MATCH",
-      "stage": "03_action_ir",
-      "locator": {
-        "value_pointer_guard": {"address_offset": 14057, "opcode": 12, "input_count": 2},
-        "character_load": {"address_offset": 14062, "opcode": 2, "input_count": 2},
-        "character_compare": {"address_offset": 14062, "opcode": 12, "input_count": 2},
-        "consumer_branch": {"address_offset": 14066, "opcode": 5, "input_count": 2}
-      },
-      "value_pointer_storage": {"space": 4, "space_name": "register", "offset": 48, "size": 8},
-      "pointer_zero_storage": {"space": 0, "space_name": "const", "offset": 0, "size": 8, "def": null},
-      "character_zero_storage": {"space": 0, "space_name": "const", "offset": 0, "size": 1, "def": null},
-      "stored_character_type": {"name": "char", "size": 1, "metatype": "int"},
-      "input_high_read_types": [
-        {"name": "char", "size": 1, "metatype": "int"},
-        {"name": "char", "size": 1, "metatype": "int"}
-      ],
-      "identity_contract": "The pointer guard slot 0 and LOAD slot 1 are the same Varnode identity; the character compare slot 0 is defined directly by that LOAD, slot 1 is the size-1 zero constant, and the compare output is consumed in branch slot 1. No op id, time, order, or opcode spelling is normalized."
+  "first_varnode_state_difference": null,
+  "closed_varnode_state_difference": {
+   "status": "MATCH",
+   "ordered_nodes": 272,
+   "ghidra_type_histogram": {
+    "xunknown8": 174,
+    "xunknown1": 93,
+    "code": 5
+   },
+   "rugra_type_histogram": {
+    "xunknown8": 174,
+    "xunknown1": 93,
+    "code": 5
+   },
+   "diagnosis": "Funcdata::set_arch now injects the Architecture-owned standalone TypeFactory into VarnodeBank before allocation. All ordered raw Varnode flags and complete type records match; storage, create index and traversal order are unchanged."
+  },
+  "covered": [
+   "PcodeOp order, opcode, address, input order, output identity and selected flags",
+   "Varnode identity, location, flags, definition and descendant order",
+   "basic-block order, edge slot/reverse index/flags and op membership",
+   "recursive structured-block kind/order",
+   "final unmarked C text",
+   "focused 0x36ee NOTEQUAL stored char types, per-input High read-facing char types, exact def-use roles, and producer-local short-circuit character-literal line"
+  ],
+  "untested": [
+   "Full Ghidra token/markup event metadata; the focused final character literal text is covered separately",
+   "all private PcodeOp and edge flags not exposed by both implementations",
+   "same-boundary Rugra Action-tree pause immediately after Heritage",
+   "Java Program DB/DWARF-derived symbols and prototypes",
+   "debug-profile Action execution until VARMAP-GATHEROFFSET-0001 and RULE-COLLECTTERMS-0001 receive independent core review",
+   "full FlowInfo error/injection/override/jump-table and generateBlocks state covered by SLEIGH-FLOW-0001"
+  ]
+ },
+ "focused_projections": {
+  "char_zero_read_facing": {
+   "status": "MATCH",
+   "stage": "03_action_ir",
+   "locator": {
+    "value_pointer_guard": {
+     "address_offset": 14057,
+     "opcode": 12,
+     "input_count": 2
     },
-    "short_circuit_character_token": {
-      "status": "MATCH",
-      "stage": "05_c",
-      "producer_lines": {
-        "ghidra": "  if ((param_2 != (char *)0x0) && (*param_2 != '\\0')) {",
-        "rugra": "  if ((param_1 != (char *)0x0) && (*param_1 != '\\0')) {"
-      },
-      "role_projection": "if ((value_pointer != (char *)0x0) && (*value_pointer != '\\0')) {",
-      "normalization": "Only the producer-local spelling proven by the 03_action_ir register:48:8 def-use chain is projected to the value_pointer role. Both original lines remain in comparison.json; no global identifier replacement, regex text rewrite, whitespace removal, cast removal, or literal normalization is permitted."
+    "character_load": {
+     "address_offset": 14062,
+     "opcode": 2,
+     "input_count": 2
     },
-    "does_not_override_overall_status": true,
-    "residual_ids": [
-      "PARAM-RECOVERY-0001",
-      "PRINT-SIGNATURE-0001",
-      "ACTION-INFERTYPES-DISPATCH-0001",
-      "VARNODE-LOCALTYPE-RESOLUTION-0001",
-      "SEQNUM-0001",
-      "VARNODE-0001",
-      "ADDR-0001",
-      "CALLSPEC-0001",
-      "GETSTR-PRINTC-STRUCTCOND-0001",
-      "PRINT-RPN-0001"
-    ]
-  },
-  "assets": {
-    "ghidra_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "ghidra_x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-    "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-    "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-    "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-    "bfd_package_version": "2.38-4ubuntu2.12",
-    "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-    "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-  },
-  "comparand_sha256": {
-    "cpp_fixture": "ae1c6a577f78d898c22648a71516bec54d454cbd1c397a7ada80e5aeadcd23ac",
-    "rust_example": "1a0913898f284680a513a661a35762740ce7abd964cd85dfa56d9a1c0a591902",
-    "runner": "412051ec3e586874db1a04393f12cfe0efd4fd71cd07a4207bbb3c8f1b759e75",
-    "stage_diff": "658aab9684166e3250799984bac453a25cf4edcdaec4d3ba62b0aaa5f66acdca",
-    "cargo_manifest": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_script": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "rugra_src_tree": "a98fed3355bd591b53c27c716c6ff2df0be3f99518c0f79b305e87a11a0f7293",
-    "sleigh_shim_tree": "d09a9aa127082e64e5a1fdee29eaf9987ce6fb10cb223acce56815139675351b"
-  },
-  "expected": {
-    "ghidra": {
-      "00_raw_pcode": {"sha256": "f83cde23a583f7175216a9ea5b6c90f2d8883cb15e9f9a98b12b3fe692dfe7a8", "ops": 103, "varnodes": 272},
-      "01_cfg": {"sha256": "445ec8886322181c7d229ec36e2147cd76118a0481e8852695a1b75cd443ff2a", "blocks": 6},
-      "02_heritage_ssa": {"sha256": "938ca78a5ec3783bf2eac7fbdee7299a5bb08c9efb9a6aff8dfd34f6db8594f5", "ops": 156, "varnodes": 273, "blocks": 6},
-      "03_action_ir": {"sha256": "3cefb22a581da9af7a80b43bc350c32371a498fb270f12eb5c2089104bc567a4", "ops": 14, "varnodes": 23, "blocks": 6},
-      "04_structure": {"sha256": "89f1348c63a94c276af6ed89570eee5f5204fa488b0d39918769636799d74cc3", "root_children": 1},
-      "05_c": {"sha256": "8d289a843a24673e8e0e6a25a44574a418f36e8fd567193d2a5f01ad14242855", "text_bytes": 272}
+    "character_compare": {
+     "address_offset": 14062,
+     "opcode": 12,
+     "input_count": 2
     },
-    "rugra": {
-      "00_raw_pcode": {"sha256": "df3b258102e4850799687f4a3c51b50b8d602c8e1768ea25de82b0a002a9af80", "ops": 103, "varnodes": 272},
-      "01_cfg": {"sha256": "690f6aa7fd73f1c54f9dce4333027242a4d39f91110410f7966328b2912589c6", "blocks": 6},
-      "02_heritage_ssa": {"sha256": "f31a9381b78142b487321888ced223ea0a2330d01bd1f9a0c80e5aef253be096", "ops": 103, "varnodes": 272, "blocks": 6},
-      "03_action_ir": {"sha256": "ac48b27e392abe4f13c49e917d3a61c9cee8d3da1ca76a67419bc13709ed2d4e", "ops": 14, "varnodes": 23, "blocks": 6},
-      "04_structure": {"sha256": "685ed1eb09f34e0d40658222f39f44d25044bb74829010099f8b8ebd28a2b678", "root_children": 1},
-      "05_c": {"sha256": "0b2ef681ab07448cc1b7659762f2aa78715e42b5a77dd79969bbdbfe502435eb", "text_bytes": 523}
+    "consumer_branch": {
+     "address_offset": 14066,
+     "opcode": 5,
+     "input_count": 2
     }
+   },
+   "value_pointer_storage": {
+    "space": 4,
+    "space_name": "register",
+    "offset": 48,
+    "size": 8
+   },
+   "pointer_zero_storage": {
+    "space": 0,
+    "space_name": "const",
+    "offset": 0,
+    "size": 8,
+    "def": null
+   },
+   "character_zero_storage": {
+    "space": 0,
+    "space_name": "const",
+    "offset": 0,
+    "size": 1,
+    "def": null
+   },
+   "stored_character_type": {
+    "name": "char",
+    "size": 1,
+    "metatype": "int"
+   },
+   "input_high_read_types": [
+    {
+     "name": "char",
+     "size": 1,
+     "metatype": "int"
+    },
+    {
+     "name": "char",
+     "size": 1,
+     "metatype": "int"
+    }
+   ],
+   "identity_contract": "The pointer guard slot 0 and LOAD slot 1 are the same Varnode identity; the character compare slot 0 is defined directly by that LOAD, slot 1 is the size-1 zero constant, and the compare output is consumed in branch slot 1. No op id, time, order, or opcode spelling is normalized."
   },
-  "host_compiler": "g++ (GCC) 16.2.1 20260810",
-  "host_rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)"
+  "short_circuit_character_token": {
+   "status": "MATCH",
+   "stage": "05_c",
+   "producer_lines": {
+    "ghidra": "  if ((param_2 != (char *)0x0) && (*param_2 != '\\0')) {",
+    "rugra": "  if ((param_1 != (char *)0x0) && (*param_1 != '\\0')) {"
+   },
+   "role_projection": "if ((value_pointer != (char *)0x0) && (*value_pointer != '\\0')) {",
+   "normalization": "Only the producer-local spelling proven by the 03_action_ir register:48:8 def-use chain is projected to the value_pointer role. Both original lines remain in comparison.json; no global identifier replacement, regex text rewrite, whitespace removal, cast removal, or literal normalization is permitted."
+  },
+  "does_not_override_overall_status": true,
+  "residual_ids": [
+   "PARAM-RECOVERY-0001",
+   "PRINT-SIGNATURE-0001",
+   "ACTION-INFERTYPES-DISPATCH-0001",
+   "VARNODE-LOCALTYPE-RESOLUTION-0001",
+   "SEQNUM-0001",
+   "VARNODE-0001",
+   "ADDR-0001",
+   "CALLSPEC-0001",
+   "GETSTR-PRINTC-STRUCTCOND-0001",
+   "PRINT-RPN-0001"
+  ]
+ },
+ "assets": {
+  "ghidra_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "ghidra_x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+  "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+  "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+  "bfd_package_version": "2.38-4ubuntu2.12",
+  "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+  "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+ },
+ "comparand_sha256": {
+  "cpp_fixture": "ae1c6a577f78d898c22648a71516bec54d454cbd1c397a7ada80e5aeadcd23ac",
+  "rust_example": "1a0913898f284680a513a661a35762740ce7abd964cd85dfa56d9a1c0a591902",
+  "runner": "412051ec3e586874db1a04393f12cfe0efd4fd71cd07a4207bbb3c8f1b759e75",
+  "stage_diff": "658aab9684166e3250799984bac453a25cf4edcdaec4d3ba62b0aaa5f66acdca",
+  "cargo_manifest": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_script": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rugra_src_tree": "a98fed3355bd591b53c27c716c6ff2df0be3f99518c0f79b305e87a11a0f7293",
+  "sleigh_shim_tree": "d09a9aa127082e64e5a1fdee29eaf9987ce6fb10cb223acce56815139675351b"
+ },
+ "expected": {
+  "ghidra": {
+   "00_raw_pcode": {
+    "sha256": "f83cde23a583f7175216a9ea5b6c90f2d8883cb15e9f9a98b12b3fe692dfe7a8",
+    "ops": 103,
+    "varnodes": 272
+   },
+   "01_cfg": {
+    "sha256": "445ec8886322181c7d229ec36e2147cd76118a0481e8852695a1b75cd443ff2a",
+    "blocks": 6
+   },
+   "02_heritage_ssa": {
+    "sha256": "938ca78a5ec3783bf2eac7fbdee7299a5bb08c9efb9a6aff8dfd34f6db8594f5",
+    "ops": 156,
+    "varnodes": 273,
+    "blocks": 6
+   },
+   "03_action_ir": {
+    "sha256": "3cefb22a581da9af7a80b43bc350c32371a498fb270f12eb5c2089104bc567a4",
+    "ops": 14,
+    "varnodes": 23,
+    "blocks": 6
+   },
+   "04_structure": {
+    "sha256": "89f1348c63a94c276af6ed89570eee5f5204fa488b0d39918769636799d74cc3",
+    "root_children": 1
+   },
+   "05_c": {
+    "sha256": "8d289a843a24673e8e0e6a25a44574a418f36e8fd567193d2a5f01ad14242855",
+    "text_bytes": 272
+   }
+  },
+  "rugra": {
+   "00_raw_pcode": {
+    "sha256": "df3b258102e4850799687f4a3c51b50b8d602c8e1768ea25de82b0a002a9af80",
+    "ops": 103,
+    "varnodes": 272
+   },
+   "01_cfg": {
+    "sha256": "690f6aa7fd73f1c54f9dce4333027242a4d39f91110410f7966328b2912589c6",
+    "blocks": 6
+   },
+   "02_heritage_ssa": {
+    "sha256": "f31a9381b78142b487321888ced223ea0a2330d01bd1f9a0c80e5aef253be096",
+    "ops": 103,
+    "varnodes": 272,
+    "blocks": 6
+   },
+   "03_action_ir": {
+    "sha256": "ac48b27e392abe4f13c49e917d3a61c9cee8d3da1ca76a67419bc13709ed2d4e",
+    "ops": 14,
+    "varnodes": 23,
+    "blocks": 6
+   },
+   "04_structure": {
+    "sha256": "685ed1eb09f34e0d40658222f39f44d25044bb74829010099f8b8ebd28a2b678",
+    "root_children": 1
+   },
+   "05_c": {
+    "sha256": "0b2ef681ab07448cc1b7659762f2aa78715e42b5a77dd79969bbdbfe502435eb",
+    "text_bytes": 523
+   }
+  }
+ },
+ "host_compiler": "g++ (GCC) 16.2.1 20260810",
+ "host_rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

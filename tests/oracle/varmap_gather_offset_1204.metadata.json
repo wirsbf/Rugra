@@ -1,58 +1,59 @@
 {
-  "schema": 1,
-  "fixture_id": "VARMAP-GATHEROFFSET-0001",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
-  },
-  "rugra_base_commit": "d972d7ffee980218f4b30a9c93bfeb1fdb215bfb",
-  "rugra_build_input_files": 103,
-  "architecture": "synthetic little-endian uintb64 P-code IR; const and unique spaces; byte sizes 7 and 8",
-  "compiler_spec": "N/A: direct AliasChecker::gatherOffset state fixture; no prototype or calling convention consulted",
-  "analysis_options": {
-    "entrypoint": "direct AliasChecker::gatherOffset/gather_offset calls",
-    "actions": false,
-    "normalization": "none; stdout is byte-compared",
-    "external_input_assets": "none; the complete direct-IR input vector is embedded in and fingerprinted with both fixture sources"
-  },
-  "input": {
-    "sequence": [
-      "COPY size=8 constant=0xfedcba9876543210",
-      "INT_ADD size=8 left=0xfffffffffffffff0 right=0x35",
-      "INT_ADD size=7 left=0x00fffffffffffff0 right=0x35"
-    ],
-    "state": "each output is a written unique varnode with one def; every input slot and descendant cross-reference is attached before the call; each case shares one fixture_unknown TYPE_UNKNOWN object across output and all inputs; COPY SeqNum is unique:0x1000/order=0 and ADD SeqNum is unique:0x1100/order=0; both comparands explicitly receive consumed=uintb::MAX and nzm=constant-offset/uintb::MAX rather than inheriting constructor differences tracked outside this fixture",
-    "fingerprint": "sha256:c8954b6ae0ecf1bcd77936338d9d8591f941aee6fe5722941d7d4e26a1b981c4"
-  },
-  "observation": {
-    "status": "MATCH",
-    "covered": [
-      "8-byte calc_mask clamp returns the full uint64 mask without a 64-bit shift",
-      "7-byte adjacent boundary truncates the wrapped sum",
-      "unsigned recursive addition wraps before the size mask",
-      "output offset/size/flags/consumed/nzm and def/output aliases before and after",
-      "shared unknown datatype presence/name/size/metatype and output-input/input-input pointer aliasing before and after",
-      "input offset/size/flags/consumed/nzm, slot aliases, descendant counts and pair aliasing before and after",
-      "opcode arity, dead/eval/commutative state and exact SeqNum address/order before and after"
-    ],
-    "untested": [
-      "COPY/INT_ADD recursion beyond the direct depth used here",
-      "INT_SUB/PTRSUB/PTRADD/SEGMENTOP/default branches",
-      "32-bit UINTB4 builds",
-      "AliasChecker gather/sort/boundary state outside this static pure function"
-    ]
-  },
-  "comparand_sha256": {
-    "cpp_fixture": "2a123a38ae9b84b6f1f02b8315e433094926c052aa7fda9751ea2736aa7048b0",
-    "rust_fixture": "920318252ffed9c0a6f06d54535568695860c670672cf895a7ccc524e1fef90b",
-    "rugra_varmap_source": "ee6ef1f65d543eb2082cf29cedeceb071ab284e10c692c6a4f0441387447fe2b",
-    "api_document": "656037ea44ee95c72575a47f6ce4174504cb8b9ee2722e577b643c688f604286",
-    "runner": "74fe0f9004e0d086b363d18e29fa157c4b27984003e44c971a546f19b5ff5c90",
-    "rugra_build_inputs": "ea602739a7d17d2b9ed3d967a1b5aadd359ac528bea346d516540742160a02cb",
-    "cargo_lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "ghidra_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f"
-  },
-  "expected_stdout_sha256": "daf47afc1dcfc96bb3fdcd96675fa0c2a08556ebeafdb75ab14d6ea608dcf013",
-  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)"
+ "schema": 1,
+ "fixture_id": "VARMAP-GATHEROFFSET-0001",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "rugra_base_commit": "d972d7ffee980218f4b30a9c93bfeb1fdb215bfb",
+ "rugra_build_input_files": 103,
+ "architecture": "synthetic little-endian uintb64 P-code IR; const and unique spaces; byte sizes 7 and 8",
+ "compiler_spec": "N/A: direct AliasChecker::gatherOffset state fixture; no prototype or calling convention consulted",
+ "analysis_options": {
+  "entrypoint": "direct AliasChecker::gatherOffset/gather_offset calls",
+  "actions": false,
+  "normalization": "none; stdout is byte-compared",
+  "external_input_assets": "none; the complete direct-IR input vector is embedded in and fingerprinted with both fixture sources"
+ },
+ "input": {
+  "sequence": [
+   "COPY size=8 constant=0xfedcba9876543210",
+   "INT_ADD size=8 left=0xfffffffffffffff0 right=0x35",
+   "INT_ADD size=7 left=0x00fffffffffffff0 right=0x35"
+  ],
+  "state": "each output is a written unique varnode with one def; every input slot and descendant cross-reference is attached before the call; each case shares one fixture_unknown TYPE_UNKNOWN object across output and all inputs; COPY SeqNum is unique:0x1000/order=0 and ADD SeqNum is unique:0x1100/order=0; both comparands explicitly receive consumed=uintb::MAX and nzm=constant-offset/uintb::MAX rather than inheriting constructor differences tracked outside this fixture",
+  "fingerprint": "sha256:c8954b6ae0ecf1bcd77936338d9d8591f941aee6fe5722941d7d4e26a1b981c4"
+ },
+ "observation": {
+  "status": "MATCH",
+  "covered": [
+   "8-byte calc_mask clamp returns the full uint64 mask without a 64-bit shift",
+   "7-byte adjacent boundary truncates the wrapped sum",
+   "unsigned recursive addition wraps before the size mask",
+   "output offset/size/flags/consumed/nzm and def/output aliases before and after",
+   "shared unknown datatype presence/name/size/metatype and output-input/input-input pointer aliasing before and after",
+   "input offset/size/flags/consumed/nzm, slot aliases, descendant counts and pair aliasing before and after",
+   "opcode arity, dead/eval/commutative state and exact SeqNum address/order before and after"
+  ],
+  "untested": [
+   "COPY/INT_ADD recursion beyond the direct depth used here",
+   "INT_SUB/PTRSUB/PTRADD/SEGMENTOP/default branches",
+   "32-bit UINTB4 builds",
+   "AliasChecker gather/sort/boundary state outside this static pure function"
+  ]
+ },
+ "comparand_sha256": {
+  "cpp_fixture": "2a123a38ae9b84b6f1f02b8315e433094926c052aa7fda9751ea2736aa7048b0",
+  "rust_fixture": "920318252ffed9c0a6f06d54535568695860c670672cf895a7ccc524e1fef90b",
+  "rugra_varmap_source": "ee6ef1f65d543eb2082cf29cedeceb071ab284e10c692c6a4f0441387447fe2b",
+  "api_document": "656037ea44ee95c72575a47f6ce4174504cb8b9ee2722e577b643c688f604286",
+  "runner": "74fe0f9004e0d086b363d18e29fa157c4b27984003e44c971a546f19b5ff5c90",
+  "rugra_build_inputs": "ea602739a7d17d2b9ed3d967a1b5aadd359ac528bea346d516540742160a02cb",
+  "cargo_lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "ghidra_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f"
+ },
+ "expected_stdout_sha256": "daf47afc1dcfc96bb3fdcd96675fa0c2a08556ebeafdb75ab14d6ea608dcf013",
+ "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+ "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

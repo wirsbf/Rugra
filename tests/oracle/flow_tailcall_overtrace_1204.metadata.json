@@ -1,89 +1,90 @@
 {
-  "schema_version": 2,
-  "fixture_id": "FLOW-TAILCALL-OVERTRACE-0001",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
-  },
+ "schema_version": 2,
+ "fixture_id": "FLOW-TAILCALL-OVERTRACE-0001",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": "gcc",
+ "input": {
   "architecture": "x86:LE:64:default",
   "compiler_spec": "gcc",
-  "input": {
-    "architecture": "x86:LE:64:default",
-    "compiler_spec": "gcc",
-    "analysis_options": {
-      "apis": [
-        "FlowInfo::queryCall (flow.cc:656-672)",
-        "FlowInfo::checkContainedCall (flow.cc:1361-1405)",
-        "FlowInfo::setupCallSpecs (flow.cc:680-695)",
-        "FlowInfo::checkForFlowModification (flow.cc:636-651)",
-        "FuncCallSpecs::setFuncdata (fspec.cc:4949-4960)"
-      ],
-      "funcdata": "BfdArchitecture shells over the fixture-binary .text compiled from the probes in this fixture (g++ -O0 -fno-pie -no-pie); readLoaderSymbols(::) populates the symbol database queryCall reads; each shell follows flow from the probe symbol over the full default code space",
-      "sleigh_goto_spec_rule": true
-    },
-    "probes": [
-      "tailover_sym_user",
-      "tailover_sym_callee",
-      "tailover_offcut_user"
-    ],
-    "cases": [
-      {
-        "id": "tailjmp_symbol",
-        "probe": "tailover_sym_user",
-        "spec_after": 2,
-        "warnings": 0
-      },
-      {
-        "id": "tailjmp_offcut_control",
-        "probe": "tailover_offcut_user",
-        "spec_after": 0,
-        "warnings": 1
-      }
-    ]
+  "analysis_options": {
+   "apis": [
+    "FlowInfo::queryCall (flow.cc:656-672)",
+    "FlowInfo::checkContainedCall (flow.cc:1361-1405)",
+    "FlowInfo::setupCallSpecs (flow.cc:680-695)",
+    "FlowInfo::checkForFlowModification (flow.cc:636-651)",
+    "FuncCallSpecs::setFuncdata (fspec.cc:4949-4960)"
+   ],
+   "funcdata": "BfdArchitecture shells over the fixture-binary .text compiled from the probes in this fixture (g++ -O0 -fno-pie -no-pie); readLoaderSymbols(::) populates the symbol database queryCall reads; each shell follows flow from the probe symbol over the full default code space",
+   "sleigh_goto_spec_rule": true
   },
-  "input_fingerprint": "sha256:ef34e6aad325cbed9ce5c503e8ef38978bddeeca5d7fc64b80f49c0a33f2383f",
-  "observation": {
-    "producer": "official Ghidra 12.0.4 decompiler library (libdecomp.a at locked commit) driven by this fixture's BfdArchitecture shells",
-    "format": "Two case records in fixed probe order, pipe-free key=value lines: case/calls/spec/warn/blocks/block/op, final newline; 61 lines total",
-    "record_order": [
-      "tailover_sym_user",
-      "tailover_offcut_user"
-    ],
-    "overall_status": "MATCH",
-    "covered": [
-      "tail jump into another function body: flow follows the branch, the callee body becomes blocks/ops of the caller (visited pollution is faithful Ghidra behavior, observable via op addr deltas and block ranges)",
-      "direct call whose entry is a visited instruction start AND a real loader symbol: queryCall resolves the callee, checkContainedCall's fd != 0 guard (flow.cc:1367-1368) skips it - the spec survives with the setFuncdata display name and the op keeps CPUI_CALL, zero warnings",
-      "recursive call back into the caller's own entry (trivially visited): same fd-resolved skip",
-      "control: direct call to a visited non-symbol interior start: no queryFunction hit, checkContainedCall converts CALL->BRANCH, emits the warningheader, restores the code-ref input, and erases the spec (calls=0)",
-      "spec creation order follows the LIFO addrlist: the callee-body recursion spec precedes the caller's direct-call spec"
-    ],
-    "discrimination": "Against the pre-fix Rugra tree (query_call a documented no-op), the symbol case misfires: calls=1, warn text=pic:15, restructured blocks - the fixture fails. Against the fixed tree the output is byte-identical to the oracle."
-  },
-  "decisive_semantics": {
-    "reference_output_parameters": "qlst is Funcdata-owned and passed by reference into FlowInfo (Rugra: fd.callspecs); visited is read-only in checkContainedCall; queryCall mutates the spec in place (setFuncdata entry+name, Rugra: set_funcdata + FlowInfo.resolved_funcdata set); data.warningHeader writes shared commentdb state; opSetOpcode/opMarkStartBasic/opSetInput/newCodeRef mutate shared PcodeOps - all observed through spec lists (op/entry deltas, display name), warning comments, op opcode/flag/input projections and the block graph.",
-    "loop_bounds_traversal_order": "checkContainedCall iterates qlst in creation order (spec=0 is the callee-body recursion spec because the LIFO addrlist pops the tail-jump target before the je target); queryCall runs inside setupCallSpecs before checkForFlowModification; visited.upper_bound(addr) then one decrement equals BTreeMap range(..=addr).next_back().",
-    "counter_accumulator_lifecycle": "No counters in the covered APIs; the resolved-callee marker (Ghidra fd pointer, Rugra resolved_funcdata set entry) is written once per spec by queryCall and never reset; entries for specs later erased by the offcut conversion are inert.",
-    "sorting_comparison_keys": "visited is an address-ordered map keyed by instruction start; the containment test compares start + stat.size <= addr (byte range) and start == addr (exact instruction start); spec order is creation order, not address order."
-  },
-  "status_note": "Both behavioral projections (2 cases, 61 stdout lines) match the locked Ghidra 12.0.4 oracle byte-for-byte. The observation deliberately maps Ghidra's IPTR_FSPEC annotation and Rugra's Iop annotation to one callspec token (TYPEOP-FSPEC-SPACE-0001 residual, same precedent as flow_containedcall_1204); neither numeric payload is identity. Rugra's queryFunction equivalent is the driver-seeded Funcdata::symbol_table (CALLSPEC-DRIVER-0001 boundary); copyFlowEffects' inline/no-return flag copy has no data source at flow time yet (FLOW-NORETURN-DATA-0001).",
-  "residual_todo_ids": [
-    "TYPEOP-FSPEC-SPACE-0001",
-    "FLOW-NORETURN-DATA-0001"
+  "probes": [
+   "tailover_sym_user",
+   "tailover_sym_callee",
+   "tailover_offcut_user"
   ],
-  "out_of_scope_observations": [
-    {
-      "id": "FLOW-NORETURN-DATA-0001",
-      "note": "Ghidra's oracle environment marks exit-class functions no-return via the name-driven 'Non-Returning Functions - Known' analyzer (locked program_flow_metadata_1204 fixture), and queryCall's copyFlowEffects then makes checkForFlowModification halt flow after those calls. Rugra's flow.rs now delegates is_inline/is_no_return to the real FuncProto flag bits, but no front-end feeds them at flow time, so a function ending in 'call exit' still falls through into the next function body (curl glob_word traces 344 vs golden 323 bytes). Fix requires driver-side seeding of known no-return names (out of this lease's write-set)."
-    }
+  "cases": [
+   {
+    "id": "tailjmp_symbol",
+    "probe": "tailover_sym_user",
+    "spec_after": 2,
+    "warnings": 0
+   },
+   {
+    "id": "tailjmp_offcut_control",
+    "probe": "tailover_offcut_user",
+    "spec_after": 0,
+    "warnings": 1
+   }
+  ]
+ },
+ "input_fingerprint": "sha256:ef34e6aad325cbed9ce5c503e8ef38978bddeeca5d7fc64b80f49c0a33f2383f",
+ "observation": {
+  "producer": "official Ghidra 12.0.4 decompiler library (libdecomp.a at locked commit) driven by this fixture's BfdArchitecture shells",
+  "format": "Two case records in fixed probe order, pipe-free key=value lines: case/calls/spec/warn/blocks/block/op, final newline; 61 lines total",
+  "record_order": [
+   "tailover_sym_user",
+   "tailover_offcut_user"
   ],
-  "capture_toolchain": {
-    "gxx": "g++ (GCC) 16.2.1 20260810",
-    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)"
-  },
-  "comparand_sha256": {
-    "cpp_fixture": "06b48f3d5305a50ad1abfd8f4ab99e1ccde35ad7e0ffb950f4d22078e9ca1447",
-    "rust_fixture": "c1db34c7d19b218bfa2ccd8ce167e9e2e9692de7618d6499918c81f3cdbea65d",
-    "runner": "b83e5b5135ff73b4f41d29ff8d72046d0ee395873e5b8c0a0c771ab2d7e22963"
-  },
-  "expected_stdout_sha256": "f9153a942231e0ae34da7ffacdc8d57fd099031573d192e7a62a4f9da93e68f8"
+  "overall_status": "MATCH",
+  "covered": [
+   "tail jump into another function body: flow follows the branch, the callee body becomes blocks/ops of the caller (visited pollution is faithful Ghidra behavior, observable via op addr deltas and block ranges)",
+   "direct call whose entry is a visited instruction start AND a real loader symbol: queryCall resolves the callee, checkContainedCall's fd != 0 guard (flow.cc:1367-1368) skips it - the spec survives with the setFuncdata display name and the op keeps CPUI_CALL, zero warnings",
+   "recursive call back into the caller's own entry (trivially visited): same fd-resolved skip",
+   "control: direct call to a visited non-symbol interior start: no queryFunction hit, checkContainedCall converts CALL->BRANCH, emits the warningheader, restores the code-ref input, and erases the spec (calls=0)",
+   "spec creation order follows the LIFO addrlist: the callee-body recursion spec precedes the caller's direct-call spec"
+  ],
+  "discrimination": "Against the pre-fix Rugra tree (query_call a documented no-op), the symbol case misfires: calls=1, warn text=pic:15, restructured blocks - the fixture fails. Against the fixed tree the output is byte-identical to the oracle."
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "qlst is Funcdata-owned and passed by reference into FlowInfo (Rugra: fd.callspecs); visited is read-only in checkContainedCall; queryCall mutates the spec in place (setFuncdata entry+name, Rugra: set_funcdata + FlowInfo.resolved_funcdata set); data.warningHeader writes shared commentdb state; opSetOpcode/opMarkStartBasic/opSetInput/newCodeRef mutate shared PcodeOps - all observed through spec lists (op/entry deltas, display name), warning comments, op opcode/flag/input projections and the block graph.",
+  "loop_bounds_traversal_order": "checkContainedCall iterates qlst in creation order (spec=0 is the callee-body recursion spec because the LIFO addrlist pops the tail-jump target before the je target); queryCall runs inside setupCallSpecs before checkForFlowModification; visited.upper_bound(addr) then one decrement equals BTreeMap range(..=addr).next_back().",
+  "counter_accumulator_lifecycle": "No counters in the covered APIs; the resolved-callee marker (Ghidra fd pointer, Rugra resolved_funcdata set entry) is written once per spec by queryCall and never reset; entries for specs later erased by the offcut conversion are inert.",
+  "sorting_comparison_keys": "visited is an address-ordered map keyed by instruction start; the containment test compares start + stat.size <= addr (byte range) and start == addr (exact instruction start); spec order is creation order, not address order."
+ },
+ "status_note": "Both behavioral projections (2 cases, 61 stdout lines) match the locked Ghidra 12.0.4 oracle byte-for-byte. The observation deliberately maps Ghidra's IPTR_FSPEC annotation and Rugra's Iop annotation to one callspec token (TYPEOP-FSPEC-SPACE-0001 residual, same precedent as flow_containedcall_1204); neither numeric payload is identity. Rugra's queryFunction equivalent is the driver-seeded Funcdata::symbol_table (CALLSPEC-DRIVER-0001 boundary); copyFlowEffects' inline/no-return flag copy has no data source at flow time yet (FLOW-NORETURN-DATA-0001).",
+ "residual_todo_ids": [
+  "TYPEOP-FSPEC-SPACE-0001",
+  "FLOW-NORETURN-DATA-0001"
+ ],
+ "out_of_scope_observations": [
+  {
+   "id": "FLOW-NORETURN-DATA-0001",
+   "note": "Ghidra's oracle environment marks exit-class functions no-return via the name-driven 'Non-Returning Functions - Known' analyzer (locked program_flow_metadata_1204 fixture), and queryCall's copyFlowEffects then makes checkForFlowModification halt flow after those calls. Rugra's flow.rs now delegates is_inline/is_no_return to the real FuncProto flag bits, but no front-end feeds them at flow time, so a function ending in 'call exit' still falls through into the next function body (curl glob_word traces 344 vs golden 323 bytes). Fix requires driver-side seeding of known no-return names (out of this lease's write-set)."
+  }
+ ],
+ "capture_toolchain": {
+  "gxx": "g++ (GCC) 16.2.1 20260810",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)"
+ },
+ "comparand_sha256": {
+  "cpp_fixture": "06b48f3d5305a50ad1abfd8f4ab99e1ccde35ad7e0ffb950f4d22078e9ca1447",
+  "rust_fixture": "c1db34c7d19b218bfa2ccd8ce167e9e2e9692de7618d6499918c81f3cdbea65d",
+  "runner": "b83e5b5135ff73b4f41d29ff8d72046d0ee395873e5b8c0a0c771ab2d7e22963"
+ },
+ "expected_stdout_sha256": "f9153a942231e0ae34da7ffacdc8d57fd099031573d192e7a62a4f9da93e68f8",
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

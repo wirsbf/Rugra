@@ -1,143 +1,143 @@
 {
-  "schema_version": 2,
-  "fixture_id": "CALLSPEC-NORETURN-1204",
-  "stable_function_id": "GH12-F-callspec-noreturn-lifecycle",
-  "status_note": "FuncProto/FuncCallSpecs no-return flag lifecycle projection for CALLSPEC-NORETURN-WIRE-0001 slice (a): constructor defaults, explicit set/clear/idempotence through the FuncCallSpecs inherited surface, copyFlowEffects' is_inline|no_return one-way subset overwrite (the flow.cc:664 queryCall channel), full-copy and callspec-clone propagation with op rebind and active-input reset, the documented absence of any void->noreturn inference, and the decode/encode attribute channel. Byte-matches the locked oracle on all six cases with empty stderr on both sides. The flow.rs consumption wiring (checkForFlowModification's is_no_return read, queryCall's copyFlowEffects call, truncateIndirectJump's setNoReturn) is slice (b) under the flow lease.",
-  "decisive_semantics": {
-    "reference_output_parameters": "Ghidra copyFlowEffects mutates the destination flags through the C++ reference receiver and reads the source through a const FuncProto&; Rugra takes &mut self / &FuncProto and delegates to the composed prototype - both are in-place mutations of a single callspec object, no output parameters.",
-    "loop_bounds_traversal_order": "the covered functions have no loops except FuncProto::decode's attribute walk (document order over the <prototype> attributes, breaking on attribId==0) and clone's fresh-constructor path; Rugra's decode mirrors the same attribute loop with next_attribute_id()==0 termination and the same element order for <returnsym> children.",
-    "counter_accumulator_lifecycle": "no counters or accumulators in the covered slice; the flags uint4 is a pure bit set whose per-bit clear-then-OR lifecycle is exercised stepwise (set, idempotent re-set, clear, subset overwrite in both directions).",
-    "sorting_comparison_keys": "no sort keys; the flag comparisons exercised are isNoReturn/isInline equality observations and encode's attribute-presence decision, mirroring fspec.cc:4567's (flags&(is_inline|no_return)) subset comparison which Rugra models as direct bool equality (fspec.rs is_compatible)."
+ "schema_version": 2,
+ "fixture_id": "CALLSPEC-NORETURN-1204",
+ "stable_function_id": "GH12-F-fded7431c06858082894",
+ "status_note": "FuncProto/FuncCallSpecs no-return flag lifecycle projection for CALLSPEC-NORETURN-WIRE-0001 slice (a): constructor defaults, explicit set/clear/idempotence through the FuncCallSpecs inherited surface, copyFlowEffects' is_inline|no_return one-way subset overwrite (the flow.cc:664 queryCall channel), full-copy and callspec-clone propagation with op rebind and active-input reset, the documented absence of any void->noreturn inference, and the decode/encode attribute channel. Byte-matches the locked oracle on all six cases with empty stderr on both sides. The flow.rs consumption wiring (checkForFlowModification's is_no_return read, queryCall's copyFlowEffects call, truncateIndirectJump's setNoReturn) is slice (b) under the flow lease.",
+ "decisive_semantics": {
+  "reference_output_parameters": "Ghidra copyFlowEffects mutates the destination flags through the C++ reference receiver and reads the source through a const FuncProto&; Rugra takes &mut self / &FuncProto and delegates to the composed prototype - both are in-place mutations of a single callspec object, no output parameters.",
+  "loop_bounds_traversal_order": "the covered functions have no loops except FuncProto::decode's attribute walk (document order over the <prototype> attributes, breaking on attribId==0) and clone's fresh-constructor path; Rugra's decode mirrors the same attribute loop with next_attribute_id()==0 termination and the same element order for <returnsym> children.",
+  "counter_accumulator_lifecycle": "no counters or accumulators in the covered slice; the flags uint4 is a pure bit set whose per-bit clear-then-OR lifecycle is exercised stepwise (set, idempotent re-set, clear, subset overwrite in both directions).",
+  "sorting_comparison_keys": "no sort keys; the flag comparisons exercised are isNoReturn/isInline equality observations and encode's attribute-presence decision, mirroring fspec.cc:4567's (flags&(is_inline|no_return)) subset comparison which Rugra models as direct bool equality (fspec.rs is_compatible)."
+ },
+ "oracle": {
+  "project": "Ghidra 12.0.4",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source_files": "ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/{fspec.cc,fspec.hh,op.cc,op.hh,type.cc,type.hh,marshal.cc,marshal.hh,libdecomp.cc}",
+  "signature": "void FuncProto::copyFlowEffects(const FuncProto &op2); bool FuncProto::isNoReturn(void) const; void FuncProto::setNoReturn(bool val); void FuncProto::copy(const FuncProto &op2); FuncCallSpecs *FuncCallSpecs::clone(PcodeOp *newop) const; void FuncCallSpecs::initActiveInput(void); void FuncProto::decode(Decoder &decoder,Architecture *glb); void FuncProto::encode(Encoder &encoder) const"
+ },
+ "rugra_source": {
+  "base_commit": "584dcea6cccd9ec3c04db92654de32e67a6924fa",
+  "base_tree": "b087f84437e23d9af148c5f5930c282edde8d9fd",
+  "base_src_tree": "809870ba18a4d2ca19eaef8e320a651acd68a1dc",
+  "base_blobs": {
+   "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
+   "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+   "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
   },
-  "oracle": {
-    "project": "Ghidra 12.0.4",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source_files": "ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/{fspec.cc,fspec.hh,op.cc,op.hh,type.cc,type.hh,marshal.cc,marshal.hh,libdecomp.cc}",
-    "signature": "void FuncProto::copyFlowEffects(const FuncProto &op2); bool FuncProto::isNoReturn(void) const; void FuncProto::setNoReturn(bool val); void FuncProto::copy(const FuncProto &op2); FuncCallSpecs *FuncCallSpecs::clone(PcodeOp *newop) const; void FuncCallSpecs::initActiveInput(void); void FuncProto::decode(Decoder &decoder,Architecture *glb); void FuncProto::encode(Encoder &encoder) const"
+  "archive_paths": [
+   "Cargo.toml",
+   "Cargo.lock",
+   "build.rs",
+   "README.md",
+   "benches/decompile_bench.rs",
+   "tests/oracle/decompress_1204.rs",
+   "tests/oracle/funcproto_lock_1204.rs",
+   "src",
+   "sleigh_shim"
+  ],
+  "overlays": {
+   "src/fspec.rs": "5d49169dfd5bbb674b0ee1e58b9545f4ca7adbab9cd0da4b279e5ce761dcb6c3"
   },
-  "rugra_source": {
-    "base_commit": "584dcea6cccd9ec3c04db92654de32e67a6924fa",
-    "base_tree": "b087f84437e23d9af148c5f5930c282edde8d9fd",
-    "base_src_tree": "809870ba18a4d2ca19eaef8e320a651acd68a1dc",
-    "base_blobs": {
-      "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
-      "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-      "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
-    },
-    "archive_paths": [
-      "Cargo.toml",
-      "Cargo.lock",
-      "build.rs",
-      "README.md",
-      "benches/decompile_bench.rs",
-      "tests/oracle/decompress_1204.rs",
-      "tests/oracle/funcproto_lock_1204.rs",
-      "src",
-      "sleigh_shim"
-    ],
-    "overlays": {
-      "src/fspec.rs": "5d49169dfd5bbb674b0ee1e58b9545f4ca7adbab9cd0da4b279e5ce761dcb6c3"
-    },
-    "snapshot_build_link": {
-      "path": "ghidra",
-      "target": "the repository's locked ghidra worktree (satisfies build.rs's sleigh_shim source check)",
-      "note": "symlink only: the fspec fixture consumes no sleigh artifacts"
-    },
-    "archive_policy": "git archive of the pinned base commit plus the src/fspec.rs overlay; the fixture is compiled directly with rustc against the freshly built librugra.rlib"
+  "snapshot_build_link": {
+   "path": "ghidra",
+   "target": "the repository's locked ghidra worktree (satisfies build.rs's sleigh_shim source check)",
+   "note": "symlink only: the fspec fixture consumes no sleigh artifacts"
   },
-  "comparand": {
-    "cpp_fixture_sha256": "537529dce610365a1e9a40154885bf61ffafdb1514bec822e6b25c30197f862b",
-    "rust_fixture_sha256": "33a2a3d818daba87aa0c85b777598427bdf60ce0f0235e056d4253998fefa410",
-    "runner_sha256": "794efbcbaa0c9e62bad6dd855c56a13b16acdabdabf5b0b3d28a098efc43a20b"
+  "archive_policy": "git archive of the pinned base commit plus the src/fspec.rs overlay; the fixture is compiled directly with rustc against the freshly built librugra.rlib"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "537529dce610365a1e9a40154885bf61ffafdb1514bec822e6b25c30197f862b",
+  "rust_fixture_sha256": "33a2a3d818daba87aa0c85b777598427bdf60ce0f0235e056d4253998fefa410",
+  "runner_sha256": "794efbcbaa0c9e62bad6dd855c56a13b16acdabdabf5b0b3d28a098efc43a20b"
+ },
+ "architecture": "locked synthetic LE 64-bit fixture (const/other/unique/ram/register/stack/join/iop spaces, TypeFactory, decoded 'fixture' ProtoModel); no sleigh",
+ "compiler_spec": {
+  "id": "none",
+  "note": "fspec-layer flag lifecycle fixture: no ProtoModel-per-callspec binding, no compiler spec bytes"
+ },
+ "analysis_options": {
+  "driver": "direct locked-source execution of the FuncProto/FuncCallSpecs surface through a fixture Architecture (spaces + TypeFactory + decoded 'fixture' ProtoModel) with startDecompilerLibrary attribute-id tables; no decompiler analysis passes",
+  "access_observer": "test-only #define class struct / private public around op.hh for PcodeOp::setOpcode (op.cc:276) - layout unchanged, mangled symbol resolves against the locked archive",
+  "random_seed": "none: deterministic flag lifecycle, no iteration-order dependence",
+  "error_injection": "none: all decode inputs are well-formed fixture XML",
+  "diagnostics": "both sides must exit 0 with byte-empty stderr",
+  "normalization": "none: raw stdout byte comparison"
+ },
+ "input_manifest": {
+  "cases": [
+   "default_ctor: FuncProto::FuncProto (fspec.cc:3778) flags==0 so isNoReturn/isInline default false; FuncCallSpecs(PcodeOp*) (fspec.cc:4924) inherits the same false defaults through the FuncProto base and leaves the CALLIND entry address invalid",
+   "explicit_set_idempotent: setNoReturn(true) (fspec.hh:1439) sets the bit, a repeated set is idempotent, setNoReturn(false) clears it; driven both on a plain FuncProto and through the FuncCallSpecs inherited surface (the flow.cc:747 truncateIndirectJump surface)",
+   "copy_flow_effects: FuncProto::copyFlowEffects (fspec.cc:3806-3812) copies only the is_inline|no_return subset as a one-way overwrite (clear-then-OR: callee{1,1}->fc{0,0} gives {1,1}; callee{0,0} clears back to {0,0}; callee{0,1} gives {0,1}) and never leaks the source's modellock (non-subset flag); this is the flow.cc:664 queryCall noreturn propagation channel",
+   "full_copy_and_clone: FuncProto::copy (fspec.cc:3789) copies the flags wholesale; FuncCallSpecs::clone (fspec.cc:4964-4977) preserves the copied FuncProto bits, rebinds to the new op, and resets the active-input recovery state",
+   "void_no_inference: a void-returning prototype (setInternal + a decoded <prototype> with a void <returnsym>) stays isNoReturn()==false - Ghidra's fspec layer has no void->noreturn inference; the bit's only producers are the XML attribute, OptionNoReturn, direct setNoReturn, and copyFlowEffects/copy propagation",
+   "decode_encode_channel: FuncProto::decode (fspec.cc:4720-4722) sets the bit from noreturn=\"true\", leaves it clear when the attribute is absent, and leaves it clear for noreturn=\"false\"; FuncProto::encode (fspec.cc:4642-4643) emits the attribute only when the bit is set"
+  ],
+  "sha256": "b89aaae3236d7733d7c61355bebdb66e7cc60ce453758b590bd98bc4d4ae5907"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "97f1fd247b716d0159a88dc4b25ff89ad6824fe077fdbcd808e3afd45db07cf4",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "97f1fd247b716d0159a88dc4b25ff89ad6824fe077fdbcd808e3afd45db07cf4",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0
+ },
+ "projection_status": "MATCH",
+ "overall_status": "MATCH",
+ "coverage": {
+  "default_ctor": {
+   "status": "MATCH",
+   "covers": "FuncProto::FuncProto (fspec.cc:3778) flags==0 defaults; FuncCallSpecs ctor (fspec.cc:4924) inherited false defaults + invalid CALLIND entry",
+   "residual_todo_ids": []
   },
-  "architecture": "locked synthetic LE 64-bit fixture (const/other/unique/ram/register/stack/join/iop spaces, TypeFactory, decoded 'fixture' ProtoModel); no sleigh",
-  "compiler_spec": {
-    "id": "none",
-    "note": "fspec-layer flag lifecycle fixture: no ProtoModel-per-callspec binding, no compiler spec bytes"
+  "explicit_set_idempotent": {
+   "status": "MATCH",
+   "covers": "setNoReturn (fspec.hh:1439) / isNoReturn (fspec.hh:1434) set, idempotent re-set, clear; via the FuncCallSpecs inherited surface used by flow.cc:747",
+   "residual_todo_ids": []
   },
-  "analysis_options": {
-    "driver": "direct locked-source execution of the FuncProto/FuncCallSpecs surface through a fixture Architecture (spaces + TypeFactory + decoded 'fixture' ProtoModel) with startDecompilerLibrary attribute-id tables; no decompiler analysis passes",
-    "access_observer": "test-only #define class struct / private public around op.hh for PcodeOp::setOpcode (op.cc:276) - layout unchanged, mangled symbol resolves against the locked archive",
-    "random_seed": "none: deterministic flag lifecycle, no iteration-order dependence",
-    "error_injection": "none: all decode inputs are well-formed fixture XML",
-    "diagnostics": "both sides must exit 0 with byte-empty stderr",
-    "normalization": "none: raw stdout byte comparison"
+  "copy_flow_effects": {
+   "status": "MATCH",
+   "covers": "FuncProto::copyFlowEffects (fspec.cc:3806-3812) is_inline|no_return one-way subset overwrite; modellock non-leak; the flow.cc:664 queryCall channel",
+   "residual_todo_ids": []
   },
-  "input_manifest": {
-    "cases": [
-      "default_ctor: FuncProto::FuncProto (fspec.cc:3778) flags==0 so isNoReturn/isInline default false; FuncCallSpecs(PcodeOp*) (fspec.cc:4924) inherits the same false defaults through the FuncProto base and leaves the CALLIND entry address invalid",
-      "explicit_set_idempotent: setNoReturn(true) (fspec.hh:1439) sets the bit, a repeated set is idempotent, setNoReturn(false) clears it; driven both on a plain FuncProto and through the FuncCallSpecs inherited surface (the flow.cc:747 truncateIndirectJump surface)",
-      "copy_flow_effects: FuncProto::copyFlowEffects (fspec.cc:3806-3812) copies only the is_inline|no_return subset as a one-way overwrite (clear-then-OR: callee{1,1}->fc{0,0} gives {1,1}; callee{0,0} clears back to {0,0}; callee{0,1} gives {0,1}) and never leaks the source's modellock (non-subset flag); this is the flow.cc:664 queryCall noreturn propagation channel",
-      "full_copy_and_clone: FuncProto::copy (fspec.cc:3789) copies the flags wholesale; FuncCallSpecs::clone (fspec.cc:4964-4977) preserves the copied FuncProto bits, rebinds to the new op, and resets the active-input recovery state",
-      "void_no_inference: a void-returning prototype (setInternal + a decoded <prototype> with a void <returnsym>) stays isNoReturn()==false - Ghidra's fspec layer has no void->noreturn inference; the bit's only producers are the XML attribute, OptionNoReturn, direct setNoReturn, and copyFlowEffects/copy propagation",
-      "decode_encode_channel: FuncProto::decode (fspec.cc:4720-4722) sets the bit from noreturn=\"true\", leaves it clear when the attribute is absent, and leaves it clear for noreturn=\"false\"; FuncProto::encode (fspec.cc:4642-4643) emits the attribute only when the bit is set"
-    ],
-    "sha256": "b89aaae3236d7733d7c61355bebdb66e7cc60ce453758b590bd98bc4d4ae5907"
+  "full_copy_and_clone": {
+   "status": "MATCH",
+   "covers": "FuncProto::copy (fspec.cc:3789) wholesale flags copy; FuncCallSpecs::clone (fspec.cc:4964-4977) bit propagation + op rebind + active-input reset",
+   "residual_todo_ids": []
   },
-  "expected_results": {
-    "ghidra_stdout_sha256": "97f1fd247b716d0159a88dc4b25ff89ad6824fe077fdbcd808e3afd45db07cf4",
-    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "97f1fd247b716d0159a88dc4b25ff89ad6824fe077fdbcd808e3afd45db07cf4",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "diff_exit_code": 0
+  "void_no_inference": {
+   "status": "MATCH",
+   "covers": "proof that setInternal(void) and a decoded void prototype never set noreturn - the fspec layer has no void inference; documents the bit's producer set",
+   "residual_todo_ids": []
   },
-  "projection_status": "MATCH",
-  "overall_status": "MATCH",
-  "coverage": {
-    "default_ctor": {
-      "status": "MATCH",
-      "covers": "FuncProto::FuncProto (fspec.cc:3778) flags==0 defaults; FuncCallSpecs ctor (fspec.cc:4924) inherited false defaults + invalid CALLIND entry",
-      "residual_todo_ids": []
-    },
-    "explicit_set_idempotent": {
-      "status": "MATCH",
-      "covers": "setNoReturn (fspec.hh:1439) / isNoReturn (fspec.hh:1434) set, idempotent re-set, clear; via the FuncCallSpecs inherited surface used by flow.cc:747",
-      "residual_todo_ids": []
-    },
-    "copy_flow_effects": {
-      "status": "MATCH",
-      "covers": "FuncProto::copyFlowEffects (fspec.cc:3806-3812) is_inline|no_return one-way subset overwrite; modellock non-leak; the flow.cc:664 queryCall channel",
-      "residual_todo_ids": []
-    },
-    "full_copy_and_clone": {
-      "status": "MATCH",
-      "covers": "FuncProto::copy (fspec.cc:3789) wholesale flags copy; FuncCallSpecs::clone (fspec.cc:4964-4977) bit propagation + op rebind + active-input reset",
-      "residual_todo_ids": []
-    },
-    "void_no_inference": {
-      "status": "MATCH",
-      "covers": "proof that setInternal(void) and a decoded void prototype never set noreturn - the fspec layer has no void inference; documents the bit's producer set",
-      "residual_todo_ids": []
-    },
-    "decode_encode_channel": {
-      "status": "MATCH",
-      "covers": "FuncProto::decode noreturn attribute (fspec.cc:4720-4722) true/absent/false; FuncProto::encode (fspec.cc:4642-4643) attribute presence iff bit set",
-      "residual_todo_ids": []
-    }
+  "decode_encode_channel": {
+   "status": "MATCH",
+   "covers": "FuncProto::decode noreturn attribute (fspec.cc:4720-4722) true/absent/false; FuncProto::encode (fspec.cc:4642-4643) attribute presence iff bit set",
+   "residual_todo_ids": []
+  }
+ },
+ "residual_todo_ids": [],
+ "out_of_scope_observations": [
+  {
+   "id": "injectid-propagation",
+   "note": "Ghidra copyFlowEffects also copies injectid (fspec.cc:3811); Rugra's FuncProto has no injection-id storage (set_inject_id is the INJECT-0001 stub) so the copy cannot be projected; owned by INJECT-0001."
   },
-  "residual_todo_ids": [],
-  "out_of_scope_observations": [
-    {
-      "id": "injectid-propagation",
-      "note": "Ghidra copyFlowEffects also copies injectid (fspec.cc:3811); Rugra's FuncProto has no injection-id storage (set_inject_id is the INJECT-0001 stub) so the copy cannot be projected; owned by INJECT-0001."
-    },
-    {
-      "id": "iscompatible-noreturn-arm",
-      "note": "FuncProto::isCompatible's (fspec.cc:4567) noreturn-arm comparison is mirrored as a direct bool compare in fspec.rs is_compatible; projecting it through this fixture needs model-bearing prototypes on both sides, covered by the FUNCPROTO-MODEL-BIND-0001 fixture family."
-    },
-    {
-      "id": "options-noreturn-channel",
-      "note": "OptionNoReturn (options.cc:347-366) sets the bit on a named function's FuncProto through the symbol table; Rugra's options layer has no registered noreturn option yet - the call-site effect of that channel is identical to the decode channel projected here."
-    },
-    {
-      "id": "slice-b-flow-consumption",
-      "note": "flow.rs consumption wiring (check_for_flow_modification's is_no_return read at the flow.rs:120-123 FuncCallSpecsExt stub, query_call's copy_flow_effects integration, truncate_indirect_jump's set_no_return(true)) is CALLSPEC-NORETURN-WIRE-0001 slice (b), blocked on the flow lease."
-    }
-  ]
+  {
+   "id": "iscompatible-noreturn-arm",
+   "note": "FuncProto::isCompatible's (fspec.cc:4567) noreturn-arm comparison is mirrored as a direct bool compare in fspec.rs is_compatible; projecting it through this fixture needs model-bearing prototypes on both sides, covered by the FUNCPROTO-MODEL-BIND-0001 fixture family."
+  },
+  {
+   "id": "options-noreturn-channel",
+   "note": "OptionNoReturn (options.cc:347-366) sets the bit on a named function's FuncProto through the symbol table; Rugra's options layer has no registered noreturn option yet - the call-site effect of that channel is identical to the decode channel projected here."
+  },
+  {
+   "id": "slice-b-flow-consumption",
+   "note": "flow.rs consumption wiring (check_for_flow_modification's is_no_return read at the flow.rs:120-123 FuncCallSpecsExt stub, query_call's copy_flow_effects integration, truncate_indirect_jump's set_no_return(true)) is CALLSPEC-NORETURN-WIRE-0001 slice (b), blocked on the flow lease."
+  }
+ ]
 }

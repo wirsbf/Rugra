@@ -1,7 +1,7 @@
 {
  "schema": 2,
  "fixture_id": "VARNODE-COPYSYMBOL-FIELDS-0001",
- "stable_function_id": "GH12-F-aa7e5e32b19125cfeab6",
+ "stable_function_id": "GH12-F-edea5e55c75b6fc66820",
  "overall_status": "MATCH: opSetInput const-dedup copySymbol field semantics (type pointer, mapentry pointer, typelock|namelock bit masking, identity early-return, spacebase exemption) byte-match the locked oracle; copySymbol cc:500-504 high bookkeeping registered NO_ORACLE (see coverage)",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
@@ -38,10 +38,10 @@
   "opsetinput_dedup_mapentry_lock_bits_only": "MATCH",
   "opsetinput_identity_early_return": "MATCH",
   "opsetinput_spacebase_exemption": "MATCH",
-  "copysymbol_high_type_dirty_and_setsymbol": "NO_ORACLE: cc:500-504 requires a HighVariable on the fresh copy; Ghidra attaches one only when highlevel_on (funcdata_varnode.cc:48-59 via newConstant cc:72), which this fixture never enables, and Rugra's new_constant has no assignHigh call yet — dual-side unreachable state, no oracle observation possible this round",
-  "funcdata_newconstant_assignhigh": "NO_ORACLE: Rugra Funcdata::new_constant (funcdata.rs, Ghidra funcdata_varnode.cc:66-76) omits the assignHigh(vn) call; existing assign_high helper also never wires vn.high/instances — residual R1 on VARNODE-COPYSYMBOL-FIELDS-0001, fix path: complete assignHigh wiring and call it from new_constant/newVarnode family per funcdata_varnode.cc:72,89,110,135,157,182,196,212,231,604 (separate task, high E2E blast radius)",
+  "copysymbol_high_type_dirty_and_setsymbol": "NO_ORACLE: cc:500-504 requires a HighVariable on the fresh copy; Ghidra attaches one only when highlevel_on (funcdata_varnode.cc:48-59 via newConstant cc:72), which this fixture never enables, and Rugra's new_constant has no assignHigh call yet \u2014 dual-side unreachable state, no oracle observation possible this round",
+  "funcdata_newconstant_assignhigh": "NO_ORACLE: Rugra Funcdata::new_constant (funcdata.rs, Ghidra funcdata_varnode.cc:66-76) omits the assignHigh(vn) call; existing assign_high helper also never wires vn.high/instances \u2014 residual R1 on VARNODE-COPYSYMBOL-FIELDS-0001, fix path: complete assignHigh wiring and call it from new_constant/newVarnode family per funcdata_varnode.cc:72,89,110,135,157,182,196,212,231,604 (separate task, high E2E blast radius)",
   "copysymbolifvalid_equate_valueclose": "NO_ORACLE: distinct call-site family (varnode.cc:510-522, EquateSymbol::isValueClose) not driven here; RulePropagateCopy follow-up",
-  "mapentry_equate_category": "NO_ORACLE: fixture builds an equate-shaped static entry (name-locked symbol at the constant's own address); production equate entries are dynamic hash maps built by buildDynamicSymbol (funcdata_varnode.cc:1283-1305) — pointer-copy mechanics observed identical either way, category itself unobserved"
+  "mapentry_equate_category": "NO_ORACLE: fixture builds an equate-shaped static entry (name-locked symbol at the constant's own address); production equate entries are dynamic hash maps built by buildDynamicSymbol (funcdata_varnode.cc:1283-1305) \u2014 pointer-copy mechanics observed identical either way, category itself unobserved"
  },
  "exact_function_boundaries": {
   "op_set_input": "Funcdata::opSetInput (funcdata_op.cc:104-125) is the entry under test: cc:107 identity early return, cc:108-115 constant dedup guard incl. spacebase exemption, cc:111 newConstant fresh copy, cc:112 copySymbol. opUnsetInput/addDescend/setInput legs are exercised as side effects but their exhaustive coverage belongs to other fixtures.",
