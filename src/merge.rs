@@ -2385,11 +2385,19 @@ impl Merge {
                 }
             }
         };
-        // pc = address of the insertion point.
+        // pc = address of the insertion point (merge.cc:450/456/461).
+        // cc:456 (input branch): pc = bl->getStart() — the insert-begin
+        // block's start address. cc:461 (defined branch): pc = def's SeqNum
+        // addr; for an INDIRECT def, newIndirectOp (funcdata_op.cc:691)
+        // mints the INDIRECT with the effect op's addr, so after_op's addr
+        // equals the def's addr on every reachable path.
         let pc = if let Some(ao) = &after_op {
             ao.0.read().unwrap().get_addr()
         } else {
-            crate::address::Address::new(0)
+            insert_begin_bb
+                .as_ref()
+                .map(|bb| bb.read().unwrap().get_start_addr())
+                .unwrap_or_else(|| crate::address::Address::new(0))
         };
         let copyop = self.allocate_copy_trim(fd, vn, pc, &marked_ops[0]);
         // Insert the COPY into the P-code stream.

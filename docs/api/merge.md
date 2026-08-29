@@ -383,7 +383,9 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 ### 2026-07-04（续）：移植 snip/trim 子系统（copyTrims 填充链路）
 移植 Ghidra merge.cc 的 forced-merge + snip 数据流改写子系统：
 - `allocate_copy_trim`（merge.cc:411）：创建 COPY op + unique 输出，push 进 copy_trims。union 解析路径省略（无 union 基础设施）。
-- `snip_reads`（merge.cc:443）：截断一组读取到临时变量。
+- `snip_reads`（merge.cc:443）：截断一组读取到临时变量。INPUT 分支新 COPY 的
+  SeqNum pc 取 block-0 `getStart()`（cc:456，2026-08-30 修正——原先传
+  `Address::new(0)`，仅新 COPY 的 SeqNum 地址错，cover order 域不受影响）。
 - `eliminate_intersect`（merge.cc:489）：检测单读 cover 相交并标记 snip（含 copy_shadow/partial_copy_shadow 检查）。
 - `unify_address`（merge.cc:581）：对同地址组消除相交。
 - `merge_addr_tied` 接入 unify_address（forced merge 前 snip，对齐 merge.cc:631-632）。
