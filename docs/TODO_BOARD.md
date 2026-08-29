@@ -63,7 +63,7 @@
 > 0 panic/timeout/ABORTED,124/124 全反编译;httpd 仍 5/30(HTTPD-TFALIGN-PANIC 待重派)。
 > 历史权威基线(master `96e8e1a8`,诚实口径)**:curl E2E skeleton **2866**(全函数计入)/defects **1**(getparameter
 > empty else,GETPARAM-EMPTYELSE-0001 已派 w-nonconverge2)/numbering **0**;registry 138 条目。
-> identify3 获 R-IDENTIFY-CROSSREVIEW **APPROVE**(五项含 fixture full 双侧独立复跑 MATCH);nodejoin 修复 Cross-Review PENDING。
+> identify3 获 R-IDENTIFY-CROSSREVIEW **APPROVE**;nodejoin 链闭环:REJECT(F1)→整改(faea03b0)→R-NODEJOIN-CROSSREVIEW2 **APPROVE**(语句序等价独立推导+断言双组合验证+门禁全绿 2911/1/0);F2-F5 维持在册。getparameter 两函数 F1 后=678/1/0(残差含 F2/F4 贡献)。
 > **fleet 纪律(事故后)**:禁用 git stash(跨 worktree refs 共享碰撞),一律 per-worktree commit;stash@{0}(ifgoto-wip)保留勿动。
 > **P-FLOW-1 登记欠账(复核发现,root 待落)**:`SUBFLOAT-TRANSFORM` 残差与 `TRI4-MYPROGRESS-SETTLE-0001` 需补板行。
 > 舰队(5):w-nonconverge2/w-globword/w-main2/w-registry4/reviewer-identify。
