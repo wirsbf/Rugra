@@ -1330,3 +1330,33 @@ abort placeholder）。闭合 CALLSPEC-0001 中登记的
 无条件落入 Unique。Rugra 当前 Address 是标量，renormalize 等价为空操作；本实现仅在
 `AddressSpace::Join` 仍使用 Unique fallback，因为 JoinRecord 基础设施尚未存在。该 join
 臂绑定本 TODO，不能据此宣称 RulePullsubMulti 完整 MATCH。
+
+## 2026-08-29：五个 Rule 的输入改写接入 descend 簿记（VARNODE-DESCEND-BOOKKEEPING-0001）
+
+直接 `op.inrefs` 写点绕过 `op_set_input`/`op_remove_input` 的 descend/coverdirty 簿记，
+在 Varnode 上留下悬空 descend 条目（w-newvarnode 审计：curl 全语料 49 条，全部为
+Const/4@0x0 悬挂在 INT_ZEXT(43)/INT_AND/INT_RIGHT 上）。悬空条目使
+`ActionInferTypes::build_localtypes` 的忠实 descendant 折叠抛
+`Lowlevel("NULL local type")`、10 个函数管线中止，并且在此前就静默腐蚀一切基于
+descend 的下游逻辑（getparameter 非法嵌套 else 即其下游）。逐 Rule 修复（全部镜像
+Ghidra 的簿记 API 调用序）：
+
+- `RulePiece2Zext::apply_op`（ruleaction.cc:227-228）：`opRemoveInput(op,0)`+
+  `opSetOpcode(ZEXT)`——原直接 `inrefs.remove(0)` 是 43/49 悬空条目的来源。
+- `RulePiece2Sext::apply_op`（ruleaction.cc:256-257）：同上（SEXT）。
+- `RuleTrivialBool::apply_op`（ruleaction.cc:2431-2469）：完整六分支移植——常量仅从
+  slot 1 读（Ghidra 不检查 slot 0），`V&&0→#0`、`V||1→#1`、`V^^1→NEGATE` 三分支补齐；
+  改写序 `opRemoveInput(op,1)`→`opSetOpcode`→`opSetInput(op,vn,0)`。
+- `RuleNegateIdentity::apply_op`（ruleaction.cc:468-470）：`newConstant` 后经
+  `opSetInput(logic,const,0)`+`opRemoveInput(logic,1)`+`opSetOpcode(COPY)` 改写；
+  常量创建从 `vbank.create_constant` 改为 `fd.new_constant`（镜像 `data.newConstant`
+  的 assignHigh）。
+- `RuleNotDistribute::apply_op`（ruleaction.cc:1179-1181）：`opSetInput(op,newout1,0)`+
+  `opInsertInput(op,newout2,1)` 替代直接重建 inrefs。
+
+E2E（3fb97c11+本修复，`/dev/shm/rugra-descendfix-curl.c`）：管线中止 10→0；
+raw `register0x|unique0x` 命名 1077→16；defects 2→0（getparameter/glob_word 的
+else 缺陷随悬空清除消失）；skeleton 3528→2134（优于 2d78b5af 健康基线 2881）；
+glob_range 新出现 1 个重复声明 `iVar3`（numbering，登记
+VARMAP-GLOBRANGE-DUPDECL-0001 待查）；`cargo test --lib -- --test-threads=1` 失败集
+与已知 17 个逐项相同，零新增。

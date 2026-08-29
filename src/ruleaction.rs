@@ -121,56 +121,68 @@ impl RuleTrivialBool {
 impl Rule for RuleTrivialBool {
     // Ghidra: ruleaction.cc:2451 RuleTrivialBool::applyOp
     fn apply_op(
-        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata,
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
-        let mut op = op_arc.write().unwrap();
-        if op.inrefs.len() != 2 {
-            return Ok(action_status::NO_CHANGE);
-        }
-
-        let mut identity_slot = -1i32;
-        let mut constant_val = 0u64;
-
-        if op.inrefs[0].read().unwrap().is_constant() {
-            constant_val = op.inrefs[0].read().unwrap().get_val();
-            identity_slot = 1;
-        } else if op.inrefs[1].read().unwrap().is_constant() {
-            constant_val = op.inrefs[1].read().unwrap().get_val();
-            identity_slot = 0;
-        }
-
-        if identity_slot == -1 {
-            return Ok(action_status::NO_CHANGE);
-        }
-
-        let mut changed = false;
-        match op.opcode {
-            OpCode::CPUI_BOOL_AND => {
-                if constant_val == 1 {
-                    // x && 1 -> x
-                    let identity_vn = op.inrefs[identity_slot as usize].clone();
-                    op.opcode = OpCode::CPUI_COPY;
-                    op.inrefs = vec![identity_vn];
-                    changed = true;
-                }
+        let (val, vn, opc): (
+            u64,
+            Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+            OpCode,
+        ) = {
+            let op = op_arc.read().unwrap();
+            if op.inrefs.len() != 2 {
+                return Ok(action_status::NO_CHANGE);
             }
-            OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR => {
-                if constant_val == 0 {
-                    // x || 0 -> x, x ^^ 0 -> x
-                    let identity_vn = op.inrefs[identity_slot as usize].clone();
-                    op.opcode = OpCode::CPUI_COPY;
-                    op.inrefs = vec![identity_vn];
-                    changed = true;
-                }
+            let vnconst = op.inrefs[1].clone();
+            if !vnconst.read().unwrap().is_constant() {
+                return Ok(action_status::NO_CHANGE);
             }
-            _ => {}
-        }
-
-        if changed {
-            Ok(action_status::CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+            let val = vnconst.read().unwrap().get_val();
+            match op.opcode {
+                // ruleaction.cc:2443-2446
+                OpCode::CPUI_BOOL_XOR => (
+                    val,
+                    Some(op.inrefs[0].clone()),
+                    if val == 1 {
+                        OpCode::CPUI_BOOL_NEGATE
+                    } else {
+                        OpCode::CPUI_COPY
+                    },
+                ),
+                // ruleaction.cc:2447-2453: val==1 keeps V, val==0 => #0
+                OpCode::CPUI_BOOL_AND => (
+                    val,
+                    if val == 1 {
+                        Some(op.inrefs[0].clone())
+                    } else {
+                        None
+                    },
+                    OpCode::CPUI_COPY,
+                ),
+                // ruleaction.cc:2454-2460: val==1 => #1, val==0 keeps V
+                OpCode::CPUI_BOOL_OR => (
+                    val,
+                    if val == 1 {
+                        None
+                    } else {
+                        Some(op.inrefs[0].clone())
+                    },
+                    OpCode::CPUI_COPY,
+                ),
+                _ => return Ok(action_status::NO_CHANGE),
+            }
+        };
+        // `None` is only produced by AND-with-0 (false) or OR-with-1 (true).
+        let vn = match vn {
+            Some(v) => v,
+            None if opc == OpCode::CPUI_COPY && val == 0 => fd.new_constant(1, 0), // Copy false
+            None => fd.new_constant(1, 1),                                          // Copy true
+        };
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        // ruleaction.cc:2465-2467: remove slot 1, set opcode, set slot 0.
+        fd.op_remove_input(&op_ref, 1);
+        fd.op_set_opcode(&op_ref, opc);
+        fd.op_set_input(&op_ref, vn, 0);
+        Ok(action_status::CHANGE)
     }
 
     // Ghidra: ruleaction.cc:2435 RuleTrivialBool
@@ -916,12 +928,18 @@ impl Rule for RuleNegateIdentity {
                 let mask = if size >= 64 { u64::MAX } else { (1u64 << (size * 8)) - 1 };
                 mask
             };
-            let const_vn = fd.vbank.create_constant(size, value);
-            // Ghidra: opSetInput(logicOp, const, 0); opRemoveInput(logicOp, 1);
-            //         opSetOpcode(logicOp, COPY);
-            logic.opcode = OpCode::CPUI_COPY;
-            logic.inrefs = vec![const_vn];
+            // Ghidra ruleaction.cc:468-470: newConstant then the three-step
+            // rewrite through the bookkeeping API — data.opSetInput(logicOp,
+            // const, 0); data.opRemoveInput(logicOp,1);
+            // data.opSetOpcode(logicOp,CPUI_COPY). The old direct
+            // `logic.inrefs = vec![const_vn]` dropped both inputs' descend
+            // entries.
             drop(logic);
+            let const_vn = fd.new_constant(size, value);
+            let logic_ref = crate::op::PcodeOpRef(logic_arc.clone());
+            fd.op_set_input(&logic_ref, const_vn, 0);
+            fd.op_remove_input(&logic_ref, 1);
+            fd.op_set_opcode(&logic_ref, OpCode::CPUI_COPY);
             return Ok(action_status::CHANGE);
         }
         Ok(action_status::NO_CHANGE)
@@ -1011,11 +1029,13 @@ impl Rule for RuleNotDistribute {
         fd.op_insert_before(&newneg2, &follow);
 
         // Rewrite the original op: opcode := dual, inputs := [newout1, newout2].
+        // Ghidra ruleaction.cc:1179-1181: opSetOpcode(op,opc);
+        // opSetInput(op,newout1,0); opInsertInput(op,newout2,1); — the op
+        // held one input (the compop output), so op_set_input replaces slot 0
+        // with bookkeeping and op_insert_input appends slot 1.
         fd.op_set_opcode(&follow, new_opcode);
-        {
-            let mut op = op_arc.write().unwrap();
-            op.inrefs = vec![newout1, newout2];
-        }
+        fd.op_set_input(&follow, newout1, 0);
+        fd.op_insert_input(&follow, newout2, 1);
         Ok(action_status::CHANGE)
     }
 
@@ -1749,7 +1769,7 @@ impl RulePiece2Zext {
 impl Rule for RulePiece2Zext {
     // Ghidra: ruleaction.cc:219 RulePiece2Zext::applyOp
     fn apply_op(
-        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata,
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
         let is_zero_high = {
             let op = op_arc.read().unwrap();
@@ -1762,11 +1782,14 @@ impl Rule for RulePiece2Zext {
         if !is_zero_high {
             return Ok(action_status::NO_CHANGE);
         }
-        {
-            let mut op = op_arc.write().unwrap();
-            op.inrefs.remove(0);
-            op.opcode = OpCode::CPUI_INT_ZEXT;
-        }
+        // Ghidra: ruleaction.cc:227-228 `data.opRemoveInput(op,0);
+        // data.opSetOpcode(op,CPUI_INT_ZEXT);` — the remove must run through
+        // op_remove_input so the appended constant's descend entry is erased
+        // (funcdata_op.cc:95-99); a raw inrefs.remove leaves the dangling
+        // entry that aborts ActionInferTypes::build_localtypes.
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_remove_input(&op_ref, 0);
+        fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_ZEXT);
         Ok(action_status::CHANGE)
     }
 
@@ -1799,7 +1822,7 @@ impl RulePiece2Sext {
 impl Rule for RulePiece2Sext {
     // Ghidra: ruleaction.cc:240 RulePiece2Sext::applyOp
     fn apply_op(
-        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata,
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
         let matches = {
             let op = op_arc.read().unwrap();
@@ -1846,11 +1869,12 @@ impl Rule for RulePiece2Sext {
         if !matches {
             return Ok(action_status::NO_CHANGE);
         }
-        {
-            let mut op = op_arc.write().unwrap();
-            op.inrefs.remove(0);
-            op.opcode = OpCode::CPUI_INT_SEXT;
-        }
+        // Ghidra: ruleaction.cc:256-257 `data.opRemoveInput(op,0);
+        // data.opSetOpcode(op,CPUI_INT_SEXT);` — same descend-bookkeeping
+        // requirement as RulePiece2Zext above.
+        let op_ref = crate::op::PcodeOpRef(op_arc.clone());
+        fd.op_remove_input(&op_ref, 0);
+        fd.op_set_opcode(&op_ref, OpCode::CPUI_INT_SEXT);
         Ok(action_status::CHANGE)
     }
 
