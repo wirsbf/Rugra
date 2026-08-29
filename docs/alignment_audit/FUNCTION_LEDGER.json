@@ -328812,7 +328812,7 @@
     "schema": 2
   },
   "inputs": {
-    "generator_sha256": "5cc9cd4ffdd1938137b32d9aa9be6571299ce5fcd5045fe93217d170e1f4b26f",
+    "generator_sha256": "4f7f38662e43de9d19e17581335bc27d08980c025297d77ab8a959742629f3ce",
     "rust_scanner_sha256": "73c95af107cfc866492b78d87de93a72de8c3f83733f371eb8fbbccd419d479e"
   },
   "oracle": {
