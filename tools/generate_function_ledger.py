@@ -1215,18 +1215,47 @@ REKEY_TOMBSTONE_COUNT = 47
 # continuity document to schema 2 (introduced-origin tombstones carry an
 # inline origin block).  Evidence: zero-drift probe (ambiguous=0, collisions=0,
 # all rules consumed exactly) + per-token git log -S origin pinning.
-CONTINUITY_CHECKPOINT_COMMIT = "420174438fdf3ae4f7e09b483af14cc04215316d"
-CONTINUITY_CHECKPOINT_COMMIT_TREE = "37538e5b20846db971c2ca780619a77e619ee4bc"
-CONTINUITY_CHECKPOINT_SRC_TREE = "4e34c9b82928d6a79c603330ae351534d583f649"
-CONTINUITY_CHECKPOINT_PARENT = "7c1a20ed84e69b55faa916b6a9010e73dd17dbc7"
+# Sixth extension window, 2026-08-30 (REGISTRY-CHECKPOINT-ADVANCE, w-registry7):
+# branch-line anchor merge 6fcec613 (first parent 52f5321e) folds 1288e9d4,
+# which carries the rc3 printc/prettyprint bundle (db090828..edee039c: whiledo
+# body gates, carry-family opFunc CARRY1/SCARRY/SBORROW, oracle-compact
+# while( true ) overflow header) plus the httpd determinedbranch lineage
+# (484f752c/863c0741/ac03a64c).  Master then advanced past the anchor with
+# 48bbdaf1 (artifact regen to the anchor tree), 739aada4 (funcdata synthetic
+# block boundaries at no-op jump targets, the FUNCDATA-ZOMBIE-DECISION-ORIGIN
+# root-cause fix) and 45cf2962 (docs).  The checkpoint is pinned to 45cf2962
+# rather than the anchor itself because the HEAD:src invariant requires the
+# pinned checkpoint src tree to equal the worktree src tree, and the mandated
+# final tree (merge of master 45cf2962) already contains the zombie fix.
+# Window effect across 42017443..45cf2962 (first-parent replay, 9 commits,
+# count 415 -> 424): exactly nine introduced records and nothing else —
+# six appearing at the 6fcec613 merge replay step (printc.rs
+# rpn_operator_name_carry [origin 6b9fc9d8], prettyprint.rs
+# pretty_print_overflow_whiledo_header_spaces [origin 8aba975c], coreaction.rs
+# test_determinedbranch_removes_not_taken_edge_and_counts and
+# test_determinedbranch_skips_malformed_decision_block [origin 863c0741],
+# coreaction.rs take_count_delta [origin 484f752c], blockaction.rs
+# bs_trace_cfg_sig [origin ac03a64c]) and three at 739aada4 (funcdata.rs
+# test_branch_remove_internal_destroys_cbranch_at_two_out,
+# test_build_blocks_synthetic_target_creates_block_no_zombie,
+# test_build_blocks_external_target_edge_still_dropped).  Zero transitions,
+# zero tombstones, zero unproved removals; the 1232 (rc3 fold) + 151 (zombie
+# fix) same-ID line shifts are ledger line-field-only because the raw ID
+# identity projection excludes line numbers.  Evidence: zero-drift probe
+# (ambiguous=0, collisions=0, all reviewed rules consumed exactly) with
+# per-token git log -S origin pinning; EXPECTED_INTRODUCED 912 -> 921.
+CONTINUITY_CHECKPOINT_COMMIT = "45cf2962eadea0da9cc91b81918ee04a522231b7"
+CONTINUITY_CHECKPOINT_COMMIT_TREE = "7ec708488fda6676dcacffcaee0cefebec47f4b7"
+CONTINUITY_CHECKPOINT_SRC_TREE = "fb561d9f958267794a5c1d094f67e5c0f0436216"
+CONTINUITY_CHECKPOINT_PARENT = "739aada44fdc19f428f349890e2d7e02d26a8df5"
 CONTINUITY_BASELINE_MIGRATION_BLOB = "8ecab1e6160b7d4d28a15aba0cad89c2fe8fc171"
 CONTINUITY_BASELINE_MIGRATION_SHA256 = (
     "16236201f0b4920d2a3e33a848df05d3d601ee60998f7f7c51464d4eeb7739e9"
 )
-CONTINUITY_FIRST_PARENT_COMMIT_COUNT = 415
+CONTINUITY_FIRST_PARENT_COMMIT_COUNT = 424
 CONTINUITY_FIRST_COMMIT = "7ae30f5bcfba5e1adce2a4e8cdeebc23d96964cb"
 CONTINUITY_BASELINE_RUST_RECORDS = 9_639
-CONTINUITY_CHECKPOINT_RUST_RECORDS = 10_496
+CONTINUITY_CHECKPOINT_RUST_RECORDS = 10_505
 CONTINUITY_EXPECTED_TRANSITIONS = {
     ("RG-F-003416535aaee2f83d44", "RG-F-81062ccc03179475b483"),
     ("RG-F-014e421b9237134489e2", "RG-F-a0058e4a4e7ff0e25ce6"),
@@ -1970,6 +1999,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-324dc7e55c75bc7ef877",
     "RG-F-32695f03c6864b0f1fe0",
     "RG-F-32de656f55dfeabcf796",
+    "RG-F-334734e6707b98e65537",
     "RG-F-3364b2b484f2fafba596",
     "RG-F-341bb1c0dfdc97575206",
     "RG-F-348572e48805a57c238a",
@@ -2070,6 +2100,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-4d4627dace046260c244",
     "RG-F-4d8a7817de76229c59cc",
     "RG-F-4d8c1521cc6856f70e53",
+    "RG-F-4e6712f8e73ebad664ba",
     "RG-F-4e9f597e3cbe737fd971",
     "RG-F-4eb231db0ce3dbc0e317",
     "RG-F-4f24b91261d816418d21",
@@ -2098,6 +2129,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-56e570a8b6bb4de29de4",
     "RG-F-56edae331542672fea78",
     "RG-F-57cd91545cb9a99bf507",
+    "RG-F-57e3bb9bb87773938b62",
     "RG-F-58305d699a1d71bcd4ce",
     "RG-F-5840c92b94183fda5078",
     "RG-F-58423e675d1c5c2e4ae7",
@@ -2230,10 +2262,12 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-7c9be11d61453260cff9",
     "RG-F-7cb6625ae84bc31cae67",
     "RG-F-7d16faddb640f830df37",
+    "RG-F-7d22c5b6d380c46be69e",
     "RG-F-7d4bd7950f4297ec32b6",
     "RG-F-7d949a2dc82972bb9f60",
     "RG-F-7de827d003e76d6c30e5",
     "RG-F-7e31ad5922751fb790cb",
+    "RG-F-7e71e31324297f001c9d",
     "RG-F-7e73ad7e651aaf595505",
     "RG-F-7ec7d8e3acf6434eb376",
     "RG-F-7ed78f16069a0f084e9b",
@@ -2273,6 +2307,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-86f399f00416ec6e471e",
     "RG-F-87173d6e5ef99c5289ec",
     "RG-F-872e0420b1f365b847b9",
+    "RG-F-8749f746dfd02373363d",
     "RG-F-87c6821a687f43ed3cca",
     "RG-F-880eb0ffbe6138519833",
     "RG-F-88afc95ae2cd730cbcbc",
@@ -2547,6 +2582,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-d8b7326c097a95362d3c",
     "RG-F-d8e0a50ea15b7f15c23f",
     "RG-F-d8ffb7a35df5c67c2d49",
+    "RG-F-d9aeb8302e862ae5189f",
     "RG-F-d9d3da946c12ed8260f7",
     "RG-F-da41a32aa74380f61ec8",
     "RG-F-dae4c854f1f8dcc4fc43",
@@ -2654,6 +2690,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-f5093044d5e344d8211f",
     "RG-F-f58a503bf0dbaaadedc3",
     "RG-F-f596e70e9ca6b6981c7d",
+    "RG-F-f638f5fbf25254ea4a2d",
     "RG-F-f674a1d032dd73a99351",
     "RG-F-f686327ca3b831d8151e",
     "RG-F-f6be8154ecf0cdae791b",
@@ -2676,6 +2713,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-fbc21ba2af6028d4782b",
     "RG-F-fc1399613f96ca3e9fcb",
     "RG-F-fc9614ae62a5ca22047d",
+    "RG-F-fd0bd9bd27931e1b8240",
     "RG-F-fd18c72db47c3fe0c86b",
     "RG-F-fd6d96df7d494a7a3b22",
     "RG-F-fd82c9d5598cf4e2837b",
