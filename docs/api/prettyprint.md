@@ -1,5 +1,34 @@
 # `prettyprint.rs` API Reference
 
+## 2026-08-30：POSTFIX-RETIRE-0001 W1 — 逐 pass 突变计数器（env 门控，零行为差）
+
+路线图 W1 节（`/tmp/rugra-reports/w-postfix-2026-08-30.md` §5）：为 W0 后幸存的
+全部 **33 个**后处理 pass 加突变计数器，作为 W2 零突变退役的判定依据。验收门禁：
+curl/httpd E2E 输出与 master **sha256 逐字节一致**（`f6e35fcd…` / `5200602a…`），
+`cargo test --lib` 17 失败全部为 funcdata 预存项。
+
+- **新增 `PostfixStats` 诊断族**（全部 `// RUGRA-GLUE:`，Ghidra 无对应物——oracle
+  `EmitNoMarkup`（prettyprint.hh:542-594）是无缓冲直写 emitter，发射路径以
+  `flush`（prettyprint.cc:1194-1213）结束，无任何文本后处理）：
+  - `RUGRA_POSTFIX_STATS` 环境变量设置时，`post_process_output_legacy` 每次调用
+    向 stderr 输出一行 `[POSTFIX] pid=<pid> inv=<n> rpt=<0|1> fn=<name> lines=<n>
+    P1=<d> … P27=<d>`（33 个 pass 的行级突变计数）；未设置时全部插桩点短路
+    （不 clone、不比较、不打印），输出字节与未插桩版本完全一致。
+  - 计数语义：等长输入逐行比较（改写型 pass 精确）；不等长输入先裁公共前后缀
+    再计中间差异块（删除/插入型）。**零突变检测在两种度量下均精确**。
+  - 熔合在首扫循环里的 P1/P1b/P2 无法取边界快照，在其三个改写点直接 `bump`
+    （每次 = 删 1 行或改写 1 行）；其余 27 个 pass 在边界快照
+    （`PostfixStats::snap`）→ 输出对比（`observe`/`observe_str`）。
+  - `rpt=1` 标记双重执行（本次输入 == 上次调用的输出，DefaultHasher 指纹）；
+    生产路径存在两类调用轮（curl 190 次调用中 84 次 rpt=1，httpd 102 中 33），
+    W2 判定以 rpt=0（首轮）为准，rpt=1 计数作为幂等性信号。
+- **双语料实证结果**（rpt=0 首轮）：**21/33 pass 双语料双轮全部零突变**
+  （P1 P1b P2 P3 B1 P4 P5 P12 P13 P14 P15 P16 B3 P18 B4 Pwbfold Pecase P24
+  P25 Pdl P26）——含整条 LAB_ goto 族（P16c 除外，curl 单函数 264 行突变）。
+  P13（void 拆分,硬编码 libc 表）在双语料零突变,但按路线图仍须等
+  PRINTC-VOIDCALL-0001 落地后退役。非零 pass 明细见 W1 报告
+  （`/tmp/rugra-reports/w-w1-2026-08-30.md`）。
+
 ## 2026-08-30：POSTFIX-RETIRE-0001 W0 — 死代码清除（字节级零行为差）
 
 路线图 `/tmp/rugra-reports/w-postfix-2026-08-30.md` W0 第一刀：删除全仓零引用的

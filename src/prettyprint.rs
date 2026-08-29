@@ -332,6 +332,208 @@ fn reconcile_int_minus_pointer(line: &str) -> String {
     result
 }
 
+// ============================================================================
+// POSTFIX-RETIRE-0001 W1 / POSTFIX-INSTRUMENT-0001: per-pass mutation counters
+// ============================================================================
+// RUGRA-GLUE: 纯诊断插桩,Ghidra 无对应物(oracle 的 EmitNoMarkup 是无缓冲直写
+// emitter,prettyprint.hh:542-594,唯一字段 ostream *s;发射路径以 flush 结束,
+// prettyprint.cc:1194-1213,之后零扫描)。W2 零突变退役的判定基础:设置
+// RUGRA_POSTFIX_STATS 环境变量时,post_process_output_legacy 每次调用向 stderr
+// 输出一行 [POSTFIX] 统计(逐 pass 行级突变计数);未设置时所有插桩点均为
+// no-option 短路(不 clone、不比较、不打印),输出字节与未插桩版本完全一致。
+// 语义:计数器只度量、绝不改变管线行为 —— 退役判定以计数=0 为必要证据。
+
+// RUGRA-GLUE: 幸存 pass 名单(管线顺序),见 post_process_output_legacy 内同序插桩
+const POSTFIX_PASS_NAMES: [&str; 33] = [
+    "P1", "P1b", "P2", "P3", "B1", "P4", "P5", "P6", "B2", "P7",
+    "P8", "P9", "P10", "P11", "P12", "P13", "P14", "P15", "P16", "P16c",
+    "B3", "P17", "P18", "B4", "Pwbfold", "Pecase", "P22", "P23", "P24",
+    "P25", "Pdl", "P26", "P27",
+];
+
+// RUGRA-GLUE: pass 索引常量(与 POSTFIX_PASS_NAMES 同序)
+const PF_P1: usize = 0;
+const PF_P1B: usize = 1;
+const PF_P2: usize = 2;
+const PF_P3: usize = 3;
+const PF_B1: usize = 4;
+const PF_P4: usize = 5;
+const PF_P5: usize = 6;
+const PF_P6: usize = 7;
+const PF_B2: usize = 8;
+const PF_P7: usize = 9;
+const PF_P8: usize = 10;
+const PF_P9: usize = 11;
+const PF_P10: usize = 12;
+const PF_P11: usize = 13;
+const PF_P12: usize = 14;
+const PF_P13: usize = 15;
+const PF_P14: usize = 16;
+const PF_P15: usize = 17;
+const PF_P16: usize = 18;
+const PF_P16C: usize = 19;
+const PF_B3: usize = 20;
+const PF_P17: usize = 21;
+const PF_P18: usize = 22;
+const PF_B4: usize = 23;
+const PF_WBFOLD: usize = 24;
+const PF_ECASE: usize = 25;
+const PF_P22: usize = 26;
+const PF_P23: usize = 27;
+const PF_P24: usize = 28;
+const PF_P25: usize = 29;
+const PF_PDL: usize = 30;
+const PF_P26: usize = 31;
+const PF_P27: usize = 32;
+
+// RUGRA-GLUE: 逐 pass 突变计数器(每次 post_process_output 调用一个实例)
+struct PostfixStats {
+    enabled: bool,
+    counts: [u64; POSTFIX_PASS_NAMES.len()],
+}
+
+impl PostfixStats {
+    // RUGRA-GLUE: env 门控,每进程求值一次(RUGRA_POSTFIX_STATS 是否设置)
+    fn stats_enabled() -> bool {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var_os("RUGRA_POSTFIX_STATS").is_some())
+    }
+
+    // RUGRA-GLUE: Rust 结构体构造器(Ghidra 无对应物)
+    fn new() -> Self {
+        Self {
+            enabled: Self::stats_enabled(),
+            counts: [0; POSTFIX_PASS_NAMES.len()],
+        }
+    }
+
+    // RUGRA-GLUE: 站点级计数 —— 首扫循环里 P1/P1b/P2 三 pass 与行复制熔合,
+    // 无法取边界快照,在各自改写点直接累加(每次 bump = 删 1 行或改写 1 行)
+    #[inline]
+    fn bump(&mut self, pass: usize) {
+        if self.enabled {
+            self.counts[pass] += 1;
+        }
+    }
+
+    // RUGRA-GLUE: 惰性快照 —— 统计未启用时返回 None(零 clone 成本)
+    fn snap<S: AsRef<str>>(lines: &[S]) -> Option<Vec<String>> {
+        if Self::stats_enabled() {
+            Some(lines.iter().map(|s| s.as_ref().to_string()).collect())
+        } else {
+            None
+        }
+    }
+
+    // RUGRA-GLUE: 边界级计数 —— pass 输入快照 vs 输出的行级突变数
+    fn observe(&mut self, pass: usize, before: &Option<Vec<String>>, after: &[String]) {
+        if let Some(b) = before {
+            self.counts[pass] += postfix_line_mutations(b, after);
+        }
+    }
+
+    // RUGRA-GLUE: 字符串级计数 —— 尾部外置 helper pass(P22-P27)的 str→str 边界;
+    // 两侧统一用 split('\n')(与 remove_orphan_case_labels 等实现一致),往返
+    // 差异相互抵消,只计真实突变
+    fn observe_str(&mut self, pass: usize, before: &str, after: &str) {
+        if !self.enabled {
+            return;
+        }
+        let b: Vec<&str> = before.split('\n').collect();
+        let a: Vec<&str> = after.split('\n').collect();
+        self.counts[pass] += postfix_line_mutations(&b, &a);
+    }
+
+    // RUGRA-GLUE: 每次 post_process_output 调用向 stderr 输出一行 [POSTFIX]
+    // 统计;inv=进程内调用序号,rpt=1 表示本次输入与上次调用的输出相同
+    // (双重执行标记;当前生产路径单次执行,rpt 恒 0)
+    fn emit(self, input: &str, output: &str) {
+        if !self.enabled {
+            return;
+        }
+        static INVOCATIONS: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        static LAST_OUT_HASH: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        use std::sync::atomic::Ordering;
+        let inv = INVOCATIONS.fetch_add(1, Ordering::Relaxed) + 1;
+        let in_hash = postfix_hash(input);
+        let prev_out = LAST_OUT_HASH.swap(postfix_hash(output), Ordering::Relaxed);
+        let rpt = prev_out == in_hash;
+        let fn_name = postfix_fn_name(input);
+        let mut line = format!(
+            "[POSTFIX] pid={} inv={} rpt={} fn={} lines={}",
+            std::process::id(),
+            inv,
+            if rpt { 1 } else { 0 },
+            fn_name,
+            input.lines().count()
+        );
+        for (name, count) in POSTFIX_PASS_NAMES.iter().zip(self.counts.iter()) {
+            line.push_str(&format!(" {}={}", name, count));
+        }
+        eprintln!("{}", line);
+    }
+}
+
+// RUGRA-GLUE: 行级突变计数(Ghidra 无对应物)—— 等长输入逐位比较(精确,
+// 适用于不改行数的改写型 pass);不等长输入先裁公共前后缀,再计中间差异块
+// 行数(删除/插入型)。零突变检测在两种度量下均精确。
+fn postfix_line_mutations<S: AsRef<str>>(before: &[S], after: &[S]) -> u64 {
+    if before.len() == after.len() {
+        return before
+            .iter()
+            .zip(after.iter())
+            .filter(|(b, a)| b.as_ref() != a.as_ref())
+            .count() as u64;
+    }
+    let mut p = 0usize;
+    while p < before.len() && p < after.len() && before[p].as_ref() == after[p].as_ref() {
+        p += 1;
+    }
+    let mut s = 0usize;
+    while s < before.len() - p
+        && s < after.len() - p
+        && before[before.len() - 1 - s].as_ref() == after[after.len() - 1 - s].as_ref()
+    {
+        s += 1;
+    }
+    before.len().max(after.len()) as u64 - p as u64 - s as u64
+}
+
+// RUGRA-GLUE: 输入文本指纹(DefaultHasher,仅用于 rpt 标记的相等性判断)
+fn postfix_hash(s: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+// RUGRA-GLUE: 从函数文本提取函数名(第一个含 '(' 的行的 '(' 前最后一个词 ——
+// curl 语料每个函数文本带 typedef 前导块,首行是 `typedef unsigned char
+// byte;`,直接取首行会全部误报为 byte;;取首个含括号行可跳过前导块命中签名
+// 行或 `/* ---- addr: name (size) ---- */` 头注释。纯诊断元数据,提取失败
+// 不参与任何判定)
+fn postfix_fn_name(input: &str) -> &str {
+    let candidate = input
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && l.contains('('))
+        .or_else(|| {
+            input
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+        })
+        .unwrap_or("");
+    let head = candidate.split('(').next().unwrap_or(candidate).trim();
+    head.rsplit(' ')
+        .next()
+        .filter(|w| !w.is_empty())
+        .unwrap_or("?")
+}
+
 /// Simple emitter that produces plain text with no markup
 pub struct EmitNoMarkup {
     output: String,
@@ -433,6 +635,7 @@ impl EmitNoMarkup {
     // 回退)留下的误导脚手架,已随 W0 清除。整层退役按 POSTFIX-RETIRE-0001 路线图
     // W1-WT 顺序推进(先修上游→计数证明零突变→逐 pass 删除,尾部先行)。
     fn post_process_output_legacy(input: &str) -> String {
+        let mut pfx = PostfixStats::new();
         let lines: Vec<&str> = input.lines().collect();
         let mut result: Vec<String> = Vec::with_capacity(lines.len());
         let mut i = 0;
@@ -486,6 +689,7 @@ impl EmitNoMarkup {
 
                 if next_real < lines.len() && lines[next_real].trim() == expected_label {
                     // Skip this goto — it's redundant (falls through to its target)
+                    pfx.bump(PF_P1);
                     i += 1;
                     continue;
                 }
@@ -503,6 +707,7 @@ impl EmitNoMarkup {
                         } else {
                             result.push(format!("{}return;", indent_str));
                         }
+                        pfx.bump(PF_P1B);
                         i += 1;
                         continue;
                     }
@@ -525,6 +730,7 @@ impl EmitNoMarkup {
                         } else {
                             result.push(format!("{}{} return;", indent_str, cond_part));
                         }
+                        pfx.bump(PF_P2);
                         i += 1;
                         continue;
                     }
@@ -538,6 +744,7 @@ impl EmitNoMarkup {
         // Second pass: remove labels that are never referenced by any goto
         let output_text = result.join("\n");
         let result_lines: Vec<&str> = output_text.lines().collect();
+        let snap_p3 = PostfixStats::snap(&result_lines);
         let mut final_result: Vec<String> = Vec::with_capacity(result_lines.len());
 
         for line in &result_lines {
@@ -553,8 +760,10 @@ impl EmitNoMarkup {
             }
             final_result.push(line.to_string());
         }
+        pfx.observe(PF_P3, &snap_p3, &final_result);
 
         // Third pass: collapse consecutive blank lines
+        let snap_b1 = PostfixStats::snap(&final_result);
         let mut collapsed: Vec<String> = Vec::with_capacity(final_result.len());
         let mut prev_blank = false;
         for line in final_result {
@@ -568,10 +777,12 @@ impl EmitNoMarkup {
                 collapsed.push(line);
             }
         }
+        pfx.observe(PF_B1, &snap_b1, &collapsed);
 
         // Fourth pass: detect backward goto patterns and convert to loops
         // Pattern: LAB_X: ... goto LAB_X; → do { ... } while(true);
         // Pattern: LAB_X: ... if (cond) goto LAB_X; → do { ... } while(cond);
+        let snap_p4 = PostfixStats::snap(&collapsed);
         let mut looped = collapsed;
         let max_loop_passes = 5;
         for _pass in 0..max_loop_passes {
@@ -716,8 +927,10 @@ impl EmitNoMarkup {
             looped = new_lines;
             if !changed { break; }
         }
+        pfx.observe(PF_P4, &snap_p4, &looped);
 
         // Fifth pass: remove unreferenced labels (again, after loop conversion)
+        let snap_p5 = PostfixStats::snap(&looped);
         let mut final_pass: Vec<String> = Vec::with_capacity(looped.len());
         for line in &looped {
             let trimmed = line.trim();
@@ -731,10 +944,12 @@ impl EmitNoMarkup {
             }
             final_pass.push(line.clone());
         }
+        pfx.observe(PF_P5, &snap_p5, &final_pass);
 
         // Sixth pass: text-level single-use variable inlining
         // For `uVarX = EXPR;` where uVarX appears exactly twice (1 def + 1 use),
         // substitute EXPR at the use site and remove the assignment + declaration
+        let snap_p6 = PostfixStats::snap(&final_pass);
         let mut inlined = final_pass;
         {
             // Collect all uVar assignments: (line_index, var_name, rhs_expr)
@@ -808,8 +1023,10 @@ impl EmitNoMarkup {
                 }
             }
         }
+        pfx.observe(PF_P6, &snap_p6, &inlined);
 
         // Final: collapse blank lines again
+        let snap_b2 = PostfixStats::snap(&inlined);
         let mut result_final: Vec<String> = Vec::with_capacity(inlined.len());
         let mut prev_blank2 = false;
         for line in inlined {
@@ -823,8 +1040,10 @@ impl EmitNoMarkup {
                 result_final.push(line);
             }
         }
+        pfx.observe(PF_B2, &snap_b2, &result_final);
 
         // Seventh pass: textual cleanup transformations
+        let snap_p7 = PostfixStats::snap(&result_final);
         let mut cleaned: Vec<String> = Vec::with_capacity(result_final.len());
         for line in &result_final {
             let mut s = line.clone();
@@ -934,9 +1153,11 @@ impl EmitNoMarkup {
 
             cleaned.push(s);
         }
+        pfx.observe(PF_P7, &snap_p7, &cleaned);
 
         // Eighth pass: remove blank lines within declaration blocks
         // (between type declarations at function start)
+        let snap_p8 = PostfixStats::snap(&cleaned);
         let mut final_cleaned: Vec<String> = Vec::with_capacity(cleaned.len());
         let mut in_decl_block = false;
         let mut decl_count = 0usize;
@@ -988,7 +1209,9 @@ impl EmitNoMarkup {
                 final_cleaned.push(line.clone());
             }
         }
+        pfx.observe(PF_P8, &snap_p8, &final_cleaned);
         // Ninth pass: structural cleanup
+        let snap_p9 = PostfixStats::snap(&final_cleaned);
         let mut structural: Vec<String> = Vec::with_capacity(final_cleaned.len());
         let mut i9 = 0;
         while i9 < final_cleaned.len() {
@@ -1123,10 +1346,12 @@ impl EmitNoMarkup {
             structural.push(line);
             i9 += 1;
         }
+        pfx.observe(PF_P9, &snap_p9, &structural);
 
         // Tenth pass: remove dead code after return/break/continue
         // If we see `return;` at indent level N, subsequent lines at the same indent
         // are dead unless they are labels (goto targets), closing braces, or case labels.
+        let snap_p10 = PostfixStats::snap(&structural);
         let mut alive: Vec<String> = Vec::with_capacity(structural.len());
         let mut dead_after_return = false;
         let mut dead_indent = 0usize;
@@ -1202,9 +1427,11 @@ impl EmitNoMarkup {
                 dead_indent = indent;
             }
         }
+        pfx.observe(PF_P10, &snap_p10, &alive);
 
         // Eleventh pass: remove unused variable declarations
         // For each function, collect declared uVar names and remove those never referenced in body
+        let snap_p11 = PostfixStats::snap(&alive);
         let mut cleaned: Vec<String> = Vec::with_capacity(alive.len());
         let mut func_start: Option<usize> = None;
         let mut func_lines: Vec<String> = Vec::new();
@@ -1237,8 +1464,10 @@ impl EmitNoMarkup {
         if func_start.is_some() {
             Self::flush_func_remove_unused(&func_lines, &mut cleaned);
         }
+        pfx.observe(PF_P11, &snap_p11, &cleaned);
 
         // Twelfth pass: remove blank line after "} else {"
+        let snap_p12 = PostfixStats::snap(&cleaned);
         let mut final_out: Vec<String> = Vec::with_capacity(cleaned.len());
         let mut skip_next_blank = false;
         for line in &cleaned {
@@ -1250,6 +1479,7 @@ impl EmitNoMarkup {
             skip_next_blank = t == "} else {";
             final_out.push(line.clone());
         }
+        pfx.observe(PF_P12, &snap_p12, &final_out);
 
         // Thirteenth pass: split "return func();" into "func(); return;" for void functions
         let void_funcs = [
@@ -1257,6 +1487,7 @@ impl EmitNoMarkup {
             "rewind", "perror", "abort", "qsort", "curl_easy_cleanup",
             "curl_slist_free_all", "curl_global_cleanup",
         ];
+        let snap_p13 = PostfixStats::snap(&final_out);
         let mut pass13: Vec<String> = Vec::with_capacity(final_out.len());
         for line in &final_out {
             let t = line.trim();
@@ -1275,8 +1506,10 @@ impl EmitNoMarkup {
             }
             pass13.push(line.clone());
         }
+        pfx.observe(PF_P13, &snap_p13, &pass13);
 
         // Fourteenth pass: remove dead code after goto (consecutive goto, or code after goto on same indent)
+        let snap_p14 = PostfixStats::snap(&pass13);
         let mut pass14: Vec<String> = Vec::with_capacity(pass13.len());
         let mut prev_was_goto = false;
         for line in &pass13 {
@@ -1293,18 +1526,22 @@ impl EmitNoMarkup {
             }
             pass14.push(line.clone());
         }
+        pfx.observe(PF_P14, &snap_p14, &pass14);
 
         // Fifteenth pass: fix double-close-paren "func());" → "func();"
+        let snap_p15 = PostfixStats::snap(&pass14);
         let mut pass15: Vec<String> = Vec::with_capacity(pass14.len());
         for line in &pass14 {
             let fixed = line.replace("());", "();");
             pass15.push(fixed);
         }
+        pfx.observe(PF_P15, &snap_p15, &pass15);
 
         // Sixteenth pass: forward goto-to-if folding
         // Pattern: `if (cond) goto LAB_X;` followed by code, then `LAB_X:` appears below.
         // Fold into: `if (!cond) { ... code ... }` and remove the goto + label.
         // Also handles plain `goto LAB_X;` → wraps remaining code in else-like block.
+        let snap_p16 = PostfixStats::snap(&pass15);
         let mut pass16 = pass15;
         let max_fold_passes = 3; // iterate a few times for nested patterns
         for _fold_iter in 0..max_fold_passes {
@@ -1429,10 +1666,12 @@ impl EmitNoMarkup {
             pass16 = new_lines;
             if !changed { break; }
         }
+        pfx.observe(PF_P16, &snap_p16, &pass16);
 
         // Sixteenth pass cleanup: remove now-unreferenced labels and empty if blocks
         let pass16_text = pass16.join("\n");
         let pass16_lines: Vec<&str> = pass16_text.lines().collect();
+        let snap_p16c = PostfixStats::snap(&pass16_lines);
         let mut pass16_final: Vec<String> = Vec::with_capacity(pass16_lines.len());
         let mut i16c = 0;
         while i16c < pass16_lines.len() {
@@ -1459,8 +1698,10 @@ impl EmitNoMarkup {
             pass16_final.push(pass16_lines[i16c].to_string());
             i16c += 1;
         }
+        pfx.observe(PF_P16C, &snap_p16c, &pass16_final);
 
         // Final collapse of consecutive blank lines
+        let snap_b3 = PostfixStats::snap(&pass16_final);
         let mut output_final: Vec<String> = Vec::with_capacity(pass16_final.len());
         let mut prev_blank_final = false;
         for line in pass16_final {
@@ -1474,12 +1715,14 @@ impl EmitNoMarkup {
                 output_final.push(line);
             }
         }
+        pfx.observe(PF_B3, &snap_b3, &output_final);
 
         // Seventeenth pass: remove orphan `break;` / `continue;` at function body start.
         // Pattern: function opening `{`, then declarations, then immediately `break;` or `continue;`
         // with no loop/switch context — these are block-structure artifacts.
         // Also: remove `return;` immediately followed by orphan `}` at body indent level
         //       (artifact from do-while blocks emitting an extra close)
+        let snap_p17 = PostfixStats::snap(&output_final);
         let mut pass17: Vec<String> = Vec::with_capacity(output_final.len());
         {
             let lines = &output_final;
@@ -1632,10 +1875,12 @@ impl EmitNoMarkup {
                 i17 += 1;
             }
         }
+        pfx.observe(PF_P17, &snap_p17, &pass17);
 
         // Eighteenth pass: remove unreachable `return;` at very start of function body.
         // Pattern: after the last declaration line, if the first statement is `return;`
         // but is followed by more non-empty lines — it's dead code from a misrouted block.
+        let snap_p18 = PostfixStats::snap(&pass17);
         let mut pass18: Vec<String> = Vec::with_capacity(pass17.len());
         {
             let lines = &pass17;
@@ -1716,6 +1961,7 @@ impl EmitNoMarkup {
                 i18 += 1;
             }
         }
+        pfx.observe(PF_P18, &snap_p18, &pass18);
 
         // Nineteenth pass (brace-balance scaffold) removed in
         // POSTFIX-RETIRE-0001 W0: since 2026-06-26 both arms of its
@@ -1724,6 +1970,7 @@ impl EmitNoMarkup {
         // trusted past char/string literals, so it never rewrote).
 
         // Final collapse of consecutive blank lines
+        let snap_b4 = PostfixStats::snap(&pass18);
         let mut output_final2: Vec<String> = Vec::with_capacity(pass18.len());
         let mut prev_blank_final2 = false;
         for line in pass18 {
@@ -1737,6 +1984,7 @@ impl EmitNoMarkup {
                 output_final2.push(line);
             }
         }
+        pfx.observe(PF_B4, &snap_b4, &output_final2);
 
         // While-break collapse pass: fold `while (cond) { ... break; }` into `if (cond) { ... }`.
         //
@@ -1759,6 +2007,7 @@ impl EmitNoMarkup {
         //
         // We only fold when the matching `}` directly follows the `break;`, ensuring
         // the break truly terminates the loop body.
+        let snap_wbfold = PostfixStats::snap(&output_final2);
         let mut collapsed: Vec<String> = Vec::with_capacity(output_final2.len());
         let mut iwb = 0usize;
         while iwb < output_final2.len() {
@@ -1869,6 +2118,7 @@ impl EmitNoMarkup {
             iwb += 1;
         }
         let output_final2 = collapsed;
+        pfx.observe(PF_WBFOLD, &snap_wbfold, &output_final2);
 
         // Empty switch-case removal pass.
         // Pattern (3 consecutive lines, same case indent):
@@ -1878,6 +2128,7 @@ impl EmitNoMarkup {
         // These contribute nothing (the switch falls through). Remove the whole
         // 3-line group. Also handle the `default:` variant with only a blank line
         // before `break;`. Ghidra does not emit cases whose body is solely `break;`.
+        let snap_ecase = PostfixStats::snap(&output_final2);
         let mut no_empty_cases: Vec<String> = Vec::with_capacity(output_final2.len());
         let mut ie = 0usize;
         while ie < output_final2.len() {
@@ -1908,6 +2159,7 @@ impl EmitNoMarkup {
             ie += 1;
         }
         let output_final2 = no_empty_cases;
+        pfx.observe(PF_ECASE, &snap_ecase, &output_final2);
 
         // Passes 20+21 (canonicalize_struct_deref + rewrite_struct_deref) REMOVED.
         // These were mutual inverses: pass 20 converted *(ptr+N) → ptr->field_N,
@@ -1926,6 +2178,7 @@ impl EmitNoMarkup {
         // (Ghidra print layer never rewrites symbol declarations; the oracle
         // prints sym->getType() verbatim at printc.cc:2503-2506).
         let after_unary = Self::fix_unary_deref_declarations(&struct_pass);
+        pfx.observe_str(PF_P22, &struct_pass, &after_unary);
 
         // Twenty-third pass: backfill missing local-variable declarations.
         // Scan each function body for `local_XX` identifiers used but not declared,
@@ -1937,6 +2190,7 @@ impl EmitNoMarkup {
         // block (unlinked-symbol body references, PRINTC-UNLINKED-REF-0001),
         // which keeps those functions compilable.
         let after_backfill = Self::backfill_missing_locals(&after_unary);
+        pfx.observe_str(PF_P23, &after_unary, &after_backfill);
 
         // Twenty-fourth pass: remove orphan break/continue statements that are
         // not within any loop or switch. These arise from incomplete control-flow
@@ -1950,20 +2204,26 @@ impl EmitNoMarkup {
         // type contradiction where a variable is used both as a struct base (for
         // ->field access) and as an array index.
         let after_orphan = Self::remove_orphan_breaks(&after_backfill);
+        pfx.observe_str(PF_P24, &after_backfill, &after_orphan);
         let after_ptr_arith = Self::fix_pointer_arithmetic(&after_orphan);
+        pfx.observe_str(PF_P25, &after_orphan, &after_ptr_arith);
         // Remove duplicate label definitions (splice residue can cause two
         // blocks to share the same first-op address → duplicate LAB_ lines).
         let after_dup_labels = Self::remove_duplicate_labels(&after_ptr_arith);
+        pfx.observe_str(PF_PDL, &after_ptr_arith, &after_dup_labels);
         // Twenty-sixth pass: remove lines with illegal lvalue assignments.
         let after_lvalue = Self::remove_illegal_lvalue_assignments(&after_dup_labels);
+        pfx.observe_str(PF_P26, &after_dup_labels, &after_lvalue);
         // Twenty-seventh pass: remove case labels outside switch bodies.
         let after_case = Self::remove_orphan_case_labels(&after_lvalue);
+        pfx.observe_str(PF_P27, &after_lvalue, &after_case);
         // Struct field recovery (-> operator) requires struct type definitions
         // at file scope. post_process runs per-function, so struct typedefs
         // end up inside function bodies (illegal C). Keep *(long *)(ptr + offset)
         // which is valid C for all pointer types. Struct field recovery needs
         // type propagation engine (ActionTypePropagate) at P-code level, not
         // text post-processing.
+        pfx.emit(input, &after_case);
         after_case
     }
 
