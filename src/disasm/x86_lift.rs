@@ -996,6 +996,191 @@ impl X86Lifter {
         }
     }
 
+    // RUGRA-GLUE: ia.sinc macro addCarryFlags(op1,op2) — `local CFcopy =
+    // zext(CF); CF = carry(op1,op2); OF = scarry(op1,op2); local result =
+    // op1 + op2; CF = CF || carry(result,CFcopy); OF = OF ^^ scarry(result,
+    // CFcopy); op1 = result + CFcopy;` — the full-adder carry chain. CFcopy
+    /// Lift `adc` (addCarryFlags + zext + resultflags).
+    fn lift_adc(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        let Some((dst, op1, op2)) = self.resolve_alu(inst, ops) else {
+            return;
+        };
+        let size = match &dst {
+            AluDst::Reg { vn, .. } => vn.size,
+            AluDst::Mem { addr: _, } => match &op1 {
+                Op1Ref::Direct(vn) => vn.size,
+                Op1Ref::MemLoad { size, .. } => *size,
+            },
+        };
+        // local CFcopy = zext(CF)  (COPY when sizes match)
+        let cfcopy = if size == 1 {
+            let tmp = self.alloc_tmp(1);
+            let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+            op.add_input(Self::flag_cf());
+            op.set_output(tmp.clone());
+            ops.push(op);
+            tmp
+        } else {
+            let tmp = self.alloc_tmp(size);
+            let mut op = PcodeOpRaw::new(OpCode::CPUI_INT_ZEXT as i32);
+            op.add_input(Self::flag_cf());
+            op.set_output(tmp.clone());
+            ops.push(op);
+            tmp
+        };
+        // CF = carry(op1,op2); OF = scarry(op1,op2) — operands re-materialized
+        let a1 = self.materialize(&op1, ops);
+        let b1 = self.materialize(&op2, ops);
+        let mut op_cf = PcodeOpRaw::new(OpCode::CPUI_INT_CARRY as i32);
+        op_cf.add_input(a1);
+        op_cf.add_input(b1);
+        op_cf.set_output(Self::flag_cf());
+        ops.push(op_cf);
+        let a2 = self.materialize(&op1, ops);
+        let b2 = self.materialize(&op2, ops);
+        let mut op_of = PcodeOpRaw::new(OpCode::CPUI_INT_SCARRY as i32);
+        op_of.add_input(a2);
+        op_of.add_input(b2);
+        op_of.set_output(Self::flag_of());
+        ops.push(op_of);
+        // local result = op1 + op2
+        let a3 = self.materialize(&op1, ops);
+        let b3 = self.materialize(&op2, ops);
+        let result = self.alloc_tmp(size);
+        let mut op_add = PcodeOpRaw::new(OpCode::CPUI_INT_ADD as i32);
+        op_add.add_input(a3);
+        op_add.add_input(b3);
+        op_add.set_output(result.clone());
+        ops.push(op_add);
+        // CF = CF || carry(result, CFcopy)
+        let c2 = self.alloc_tmp(1);
+        let mut op_c2 = PcodeOpRaw::new(OpCode::CPUI_INT_CARRY as i32);
+        op_c2.add_input(result.clone());
+        op_c2.add_input(cfcopy.clone());
+        op_c2.set_output(c2.clone());
+        ops.push(op_c2);
+        let mut op_or = PcodeOpRaw::new(OpCode::CPUI_BOOL_OR as i32);
+        op_or.add_input(Self::flag_cf());
+        op_or.add_input(c2);
+        op_or.set_output(Self::flag_cf());
+        ops.push(op_or);
+        // OF = OF ^^ scarry(result, CFcopy)
+        let s2 = self.alloc_tmp(1);
+        let mut op_s2 = PcodeOpRaw::new(OpCode::CPUI_INT_SCARRY as i32);
+        op_s2.add_input(result.clone());
+        op_s2.add_input(cfcopy.clone());
+        op_s2.set_output(s2.clone());
+        ops.push(op_s2);
+        let mut op_xor = PcodeOpRaw::new(OpCode::CPUI_BOOL_XOR as i32);
+        op_xor.add_input(Self::flag_of());
+        op_xor.add_input(s2);
+        op_xor.set_output(Self::flag_of());
+        ops.push(op_xor);
+        // op1 = result + CFcopy
+        let out = match &dst {
+            AluDst::Reg { vn, .. } => vn.clone(),
+            AluDst::Mem { .. } => result.clone(),
+        };
+        let mut op_fin = PcodeOpRaw::new(OpCode::CPUI_INT_ADD as i32);
+        op_fin.add_input(result);
+        op_fin.add_input(cfcopy);
+        op_fin.set_output(out.clone());
+        ops.push(op_fin);
+        self.emit_alu_tail(dst, out, false, ops);
+    }
+
+    // RUGRA-GLUE: ia.sinc macro subCarryFlags(op1,op2) — `local CFcopy =
+    // zext(CF); CF = op1 < op2; OF = sborrow(op1,op2); local result = op1 -
+    // op2; CF = CF || (result < CFcopy); OF = OF ^^ sborrow(result,CFcopy);
+    /// Lift `sbb` (subCarryFlags + zext + resultflags).
+    fn lift_sbb(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        let Some((dst, op1, op2)) = self.resolve_alu(inst, ops) else {
+            return;
+        };
+        let size = match &dst {
+            AluDst::Reg { vn, .. } => vn.size,
+            AluDst::Mem { addr: _ } => match &op1 {
+                Op1Ref::Direct(vn) => vn.size,
+                Op1Ref::MemLoad { size, .. } => *size,
+            },
+        };
+        // local CFcopy = zext(CF)  (COPY when sizes match)
+        let cfcopy = if size == 1 {
+            let tmp = self.alloc_tmp(1);
+            let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+            op.add_input(Self::flag_cf());
+            op.set_output(tmp.clone());
+            ops.push(op);
+            tmp
+        } else {
+            let tmp = self.alloc_tmp(size);
+            let mut op = PcodeOpRaw::new(OpCode::CPUI_INT_ZEXT as i32);
+            op.add_input(Self::flag_cf());
+            op.set_output(tmp.clone());
+            ops.push(op);
+            tmp
+        };
+        // CF = op1 < op2; OF = sborrow(op1,op2)
+        let a1 = self.materialize(&op1, ops);
+        let b1 = self.materialize(&op2, ops);
+        let mut op_cf = PcodeOpRaw::new(OpCode::CPUI_INT_LESS as i32);
+        op_cf.add_input(a1);
+        op_cf.add_input(b1);
+        op_cf.set_output(Self::flag_cf());
+        ops.push(op_cf);
+        let a2 = self.materialize(&op1, ops);
+        let b2 = self.materialize(&op2, ops);
+        let mut op_of = PcodeOpRaw::new(OpCode::CPUI_INT_SBORROW as i32);
+        op_of.add_input(a2);
+        op_of.add_input(b2);
+        op_of.set_output(Self::flag_of());
+        ops.push(op_of);
+        // local result = op1 - op2
+        let a3 = self.materialize(&op1, ops);
+        let b3 = self.materialize(&op2, ops);
+        let result = self.alloc_tmp(size);
+        let mut op_sub = PcodeOpRaw::new(OpCode::CPUI_INT_SUB as i32);
+        op_sub.add_input(a3);
+        op_sub.add_input(b3);
+        op_sub.set_output(result.clone());
+        ops.push(op_sub);
+        // CF = CF || (result < CFcopy)
+        let c2 = self.alloc_tmp(1);
+        let mut op_c2 = PcodeOpRaw::new(OpCode::CPUI_INT_LESS as i32);
+        op_c2.add_input(result.clone());
+        op_c2.add_input(cfcopy.clone());
+        op_c2.set_output(c2.clone());
+        ops.push(op_c2);
+        let mut op_or = PcodeOpRaw::new(OpCode::CPUI_BOOL_OR as i32);
+        op_or.add_input(Self::flag_cf());
+        op_or.add_input(c2);
+        op_or.set_output(Self::flag_cf());
+        ops.push(op_or);
+        // OF = OF ^^ sborrow(result, CFcopy)
+        let s2 = self.alloc_tmp(1);
+        let mut op_s2 = PcodeOpRaw::new(OpCode::CPUI_INT_SBORROW as i32);
+        op_s2.add_input(result.clone());
+        op_s2.add_input(cfcopy.clone());
+        op_s2.set_output(s2.clone());
+        ops.push(op_s2);
+        let mut op_xor = PcodeOpRaw::new(OpCode::CPUI_BOOL_XOR as i32);
+        op_xor.add_input(Self::flag_of());
+        op_xor.add_input(s2);
+        op_xor.set_output(Self::flag_of());
+        ops.push(op_xor);
+        // op1 = result - CFcopy
+        let out = match &dst {
+            AluDst::Reg { vn, .. } => vn.clone(),
+            AluDst::Mem { .. } => result.clone(),
+        };
+        let mut op_fin = PcodeOpRaw::new(OpCode::CPUI_INT_SUB as i32);
+        op_fin.add_input(result);
+        op_fin.add_input(cfcopy);
+        op_fin.set_output(out.clone());
+        ops.push(op_fin);
+        self.emit_alu_tail(dst, out, false, ops);
+    }
+
     // RUGRA-GLUE: ia.sinc :AND/:OR/:XOR constructors — `logicalflags(); Rmr =
     // Rmr OP imm; [check_*32_dest]; resultflags(Rmr)`; CF/OF cleared before
     // any operand LOAD; memory forms re-LOAD per use like add.
@@ -1411,6 +1596,12 @@ impl X86Lifter {
                         }
                     }
                 }
+            }
+            "adc" => {
+                self.lift_adc(inst, &mut ops);
+            }
+            "sbb" => {
+                self.lift_sbb(inst, &mut ops);
             }
             "cmp" => {
                 self.lift_cmp(inst, &mut ops);

@@ -67,3 +67,13 @@
 - cmp 与 jcc 的偏移修正必须原子落地:cmp 写 0x206 而 je 读 0x201 会断链。
 - 双侧投影:17 个 jcc/cmp/test/logic 形态 op-for-op MATCH(探针
   /tmp/w-iced-flagprobe8.out vs flagprobe6 oracle 段)。
+
+### 2026-08-30:X86LIFT-FLAG-PCODE-0001 — sbb/adc(w-iced c3)
+- `adc` = ia.sinc `addCarryFlags(op1,op2)` 全加器进位链 + zext + resultflags:
+  CFcopy=zext(CF)(size==1 时 COPY)→ CF=INT_CARRY(op1,op2) → OF=INT_SCARRY
+  → result=INT_ADD(op1,op2) → CF=BOOL_OR(CF,INT_CARRY(result,CFcopy)) →
+  OF=BOOL_XOR(OF,INT_SCARRY(result,CFcopy)) → dst=INT_ADD(result,CFcopy)。
+- `sbb` = `subCarryFlags(op1,op2)` 同构(INT_LESS/INT_SBORROW/INT_LESS/
+  BOOL_OR/INT_SBORROW/BOOL_XOR/INT_SUB)。
+- 此前两族完全未实现(0 op,直接丢指令)。双侧投影:adc(16 op)/
+  sbb(15 op)op-for-op MATCH(flagprobe9)。
