@@ -16978,6 +16978,11 @@ impl Rule for RuleLoadVarnode {
         // Rugra's new_varnode takes (size, Address) and defaults to Ram space.
         // We create a varnode in the resolved space at the byte offset.
         let newvn = fd.vbank.create_with_space(out_size, baseoff, offoff);
+        // funcdata_varnode.cc:148-172 newVarnode's symbol tail
+        // (localmap->queryProperties -> setSymbolProperties), which attaches
+        // the DWARF global's typelocked symbol type to the address varnode
+        // (verified patch from w-typeflow; RULE-LOADVARNODE-SYMBOLTAIL-0001).
+        fd.set_varnode_properties(&newvn);
 
         // data.opSetInput(op, newvn, 0);
         fd.op_set_input(&op_ref, newvn, 0);

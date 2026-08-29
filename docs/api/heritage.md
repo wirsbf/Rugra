@@ -1269,3 +1269,9 @@ RETURN 打印 `[H-GRET] pass=<pass> range=<off>/<size> return=<addr>`（heritage
 w-carry-ore，CARRY_FAKE_NORET_ADDRS 供给 golden headless 环境的 {exit,
 __stack_chk_fail} noreturn 数据）的等价 [ORE-GRET]/[ORE-RETLIST] 输出。默认关
 闭，合入 root 前按需移除或保留为 env-gated 诊断。
+
+## 2026-08-30:multiequal 输入补符号尾(HERITAGE-MULTIEQ-VNIN-SYMBOLTAIL-0001)
+
+w-typeflow 根因④落地:heritage.rs vnin(heritage.cc:2638 经 data.newVarnode 带符号尾)裸建
+create_with_space;实证幸存 phi 输入 varnode 无 mapentry → 只读全局类型流断。补
+`fd.set_varnode_properties(&vnin)`。

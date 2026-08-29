@@ -1368,3 +1368,10 @@ VARMAP-GLOBRANGE-DUPDECL-0001 待查）；`cargo test --lib -- --test-threads=1`
 Ghidra `calc_mask`(address.hh:499,经 ruleaction.cc:467 调用)阈值是 **8 字节**——size∈[8,63] 时
 release 下 `(1u64 << (size*8)) - 1` 移位溢出为错值(应全 1)。修正为调用本模块已有的忠实
 `calc_mask`(ruleaction.rs:1346 镜像)。curl 语料未命中该 corner,属未覆盖分支修复。
+
+## 2026-08-30:RuleLoadVarnode 补符号尾(RULE-LOADVARNODE-SYMBOLTAIL-0001)
+
+w-typeflow 根因③落地:ruleaction.rs RuleLoadVarnode::apply_op 的 create_with_space 裸建全局地址
+varnode 丢掉了 oracle newVarnode(funcdata_varnode.cc:148-172)的符号尾(queryProperties→
+setSymbolProperties→updateType,typelock 门控);同文件 RuleStoreVarnode(:17080)本就正确。
+补 `fd.set_varnode_properties(&newvn)`(A/B 预验证补丁)。

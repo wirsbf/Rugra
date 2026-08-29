@@ -5115,6 +5115,14 @@ impl Heritage {
                         .create_with_space(
                         size as usize, memrange.space, memrange.addr.as_u64(),
                     );
+                    // heritage.cc:2638 routes through Funcdata::newVarnode,
+                    // whose symbol tail (queryProperties -> setSymbolProperties,
+                    // funcdata_varnode.cc:148-172) attaches the typelocked
+                    // global type; the bare bank create left surviving phi
+                    // inputs without a mapentry and broke read-only global
+                    // typeflow (w-typeflow verified patch;
+                    // HERITAGE-MULTIEQ-VNIN-SYMBOLTAIL-0001).
+                    fd.set_varnode_properties(&vnin);
                     fd.op_set_input(&multiop, vnin, j);
                 }
                 // cc:2641: opInsertBegin(multiop, bl)
