@@ -57,6 +57,8 @@
 > (faea03b0:语句序索引+响亮断言+CFG形状断言+删冗余build_dom_tree),F2-F5 登记如下,待重审;③w-globword 交付:B 部 5 提案
 > (C1-C5)登记,A 部匿名化与 e331a5c5 同根被覆盖(其 named_return_pointer twin 洞察记录于报告);④registry:check/strict 双绿
 > (2889e048+再生,definitions=9494/raw=15811/rust=10467),lint=2 仅剩 checkpoint 治理推进(10ea407d..HEAD 窗口审查)。
+> **基线修正(w-main2)**:main 在当前 master 结构化已完整(finalize 149→1,无 selectGoto exhausted;
+> result/curl_cur.err 是 8/27 陈旧 stderr);仍耗尽的是 getparameter(已修)。main 结构段计数:golden if65/while6/do5/for2/goto19/label8/helpf8 vs Rugra if14/while1/do0/for1/goto4/label2/helpf0。
 > **当前权威基线(master `2889e048`)**:curl E2E skeleton **2911**/defects **1**(GETPARAM-EMPTYELSE 在修)/numbering **0**/
 > 0 panic/timeout/ABORTED,124/124 全反编译;httpd 仍 5/30(HTTPD-TFALIGN-PANIC 待重派)。
 > 历史权威基线(master `96e8e1a8`,诚实口径)**:curl E2E skeleton **2866**(全函数计入)/defects **1**(getparameter
@@ -77,6 +79,10 @@
 | Agent | ID | 类型 | 独占 write-set | 交付物 |
 |---|---|---|---|---|
 | w-newvarnode2(续作)+root | `VARNODE-DESCEND-BOOKKEEPING-0001` | **FIXED @ master `55783411`**(root 修复;w-newvarnode 审计立功:簿记基础设施本就完备,真凶=ruleaction.rs 五处直接 inrefs 写) | `src/ruleaction.rs`+`docs/api/ruleaction.md`(已落库) | 修复:Piece2Zext/Sext→`fd.op_remove_input(0)`+`op_set_opcode`;TrivialBool 六分支完整移植(仅 slot1 常量+`V&&0→#0`/`V||1→#1`/`V^^1→NEGATE` 补齐);NegateIdentity→`fd.new_constant`+三步簿记;NotDistribute→`op_set_input`+`op_insert_input`。E2E@55783411:ABORTED 10→**0**、raw 命名 1077→**16**、defects 2→**0**(getparameter/glob_word else 缺陷证实为簿记腐蚀下游,随修复消失)、skeleton 3528→**2134**(优于 2d78b5af 健康基线 2881);cargo test 失败集=已知 17 零新增。Cross-Review: PENDING(机制 C,待派);审计证据=/tmp/w-newvarnode-curl-probe.err(49 条悬空);coreaction.rs:1371(ActionCse)核实未注册非生产者不动 |
+| w-maingo(新派) | `MAIN-RC2-BLOCKGOTO-WRAPPED-0001` | **P0**(w-main2 探针实测:helpf 0→8/8,main 体 251→736 行) | `src/blockaction.rs`(try_rule_goto)+`src/block.rs`(BlockGoto)+fixture;printc.rs 侧(emit_block_goto 消费)经 root 与 GETPARAM-EMPTYELSE 租约协调 | Ghidra `BlockGoto : BlockGraph`(block.hh:546)持有被包装块组件+删边前捕获 gototarget(block.cc:1702-1713),发射 body+goto 完整(printc.cc:2766-2771)。Rugra 构造 `BlockGoto{goto_target:None}` 无 wrapped 字段、get_ops 返回空、goto_prints 硬编码 false→main 14 个包装块(helpf×8/bVar3=false/break)全部蒸发。证据=/tmp/rugra-reports/w-main2-2026-08-29.md |
+| unassigned | `MAIN-RC3-STRUCTURED-EMIT-0001` | P0(探针:if 14→55) | `src/block.rs`(BlockIf::get_ops 丢 if/else body)+printc.rs 翻门(依赖 RC2) | whiledo/if 体发射:printc.rs:4285 body_is_dead=true 硬编码 flatten(=identify3 residual 翻门条件);BlockIf::get_ops(block.rs:5119)只返回 condition 丢弃 body→50×curl_easy_setopt 级联+嵌套 if 丢失;oracle cc:3061-3063/2994-2995 structured 递归 |
+| unassigned | `MAIN-RC4-DOWHILE-TRACE-0001` | P1(main 0 命中 vs golden 5 do-while) | TraceDAG 回边分类/吸收顺序(需 oracle 运行时定缝;RUGRA_BS_TRACE 已有) | try_rule_do_while 与 cc:1555-1574 逐条对齐无缺陷,但 argv 循环头被 if_else 消费成 `if(1){}else{}`,自环复合体永不出现 |
+| unassigned | `MAIN-RC5-LOOPCOND-VARMAP-0001` | P1 | varmap/heritage 域 | 循环条件错接:`extraout_var_00 != 0` 应为 `iVar17 < argc-1` |
 | unassigned | `NODEJOIN-F2-EXECUTE-STEPS-0001` | OPEN(复核F2) | 待认领(`src/coreaction.rs`) | ConditionalJoin::execute 四步仅做1(nodeJoinCreateBlock);setupMultiequals/moveCbranch/cutDownMultiequalities(blockaction.cc:2098-2101)全缺,cbranch未迁入join块 |
 | unassigned | `NODEJOIN-F3-SAMECOND-FULLJOIN-0001` | OPEN(复核F3) | 待认领(`src/coreaction.rs`) | same_cond 臂误读 findDups:cc:1926-1927 vn1==vn2→return true 是完整 match,Ghidra 照跑全套 join;Rugra 只 count+=1 |
 | unassigned | `NODEJOIN-F4-MATCH-GATES-0001` | OPEN(复核F4) | 待认领(`src/coreaction.rs`) | match 谓词缺 isBooleanFlip/isWritten/spacebase/functionalEqualityLevel/def-opcode 门(cc:1920-1941),过度 join |
