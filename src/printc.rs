@@ -4333,11 +4333,22 @@ impl PrintC {
                     } else if overflow {
                         // cc:3022: emit->tagLine();
                         self.emit.tag_line(0);
-                        // cc:3017-3044: overflow syntax — condition too complex
-                        // to print inline, so emit while(true) + explicit break.
-                        self.emit.print("while (");
-                        self.emit.print(" true");
-                        self.emit.print(")");
+                        // cc:3023-3028: tagOp(KEYWORD_WHILE) + openParen +
+                        // spaces(1) + print(KEYWORD_TRUE) + spaces(1) +
+                        // closeParen — the overflow header is the COMPACT
+                        // `while( true )` (no space before the paren, one on
+                        // each side of `true`), unlike the normal arm's
+                        // `while (cond)`. The inner spaces are explicit
+                        // space TOKENS (cc:3025/3027), matching the oracle
+                        // call sequence byte-for-byte at the emit layer
+                        // (the legacy post-process ` )` trim is gated off
+                        // the compact `while(` header line in prettyprint).
+                        self.emit.tag_op("while");
+                        let id1 = self.emit.open_paren("(");
+                        self.emit.spaces(1, 0);
+                        self.emit.print("true");
+                        self.emit.spaces(1, 0);
+                        self.emit.close_paren(")", id1);
                     } else {
                         // cc:3049: emit->tagLine();
                         self.emit.tag_line(0);

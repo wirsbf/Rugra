@@ -592,3 +592,27 @@ ap_strchr 观察）。判据不变：整行 `标识符:` 且无空格，且全�
 验收：curl E2E numbering 1→0，glob_range diff 93→89，全量 skeleton
 2134→2118 零回归。varmap 侧共享计数器不变式另由双侧 fixture
 `varmap_dupdecl_1204`（MATCH）钉住。
+
+### 2026-08-30：MAIN-RC3-STRUCTURED-EMIT-0001 — 紧凑 `while(` 头的四处后处理承认 + ` )` 修剪豁免
+
+oracle 的 overflow whiledo 头是紧凑 `while( true )`(printc.cc:3023-3028:
+tagOp(KEYWORD_WHILE)+openParen 之间无 spaces(1),`true` 两侧各 spaces(1))。
+printc 侧已按该字节序列发射(显式空格 token);遗留文本后处理层需同步承认:
+
+- **` )` 修剪豁免**(whitespace-normalization pass):该 pass 无条件折叠
+  `"  "→" "` 并修剪 `" )"→")"` —— 会摧毁 `while( true )` 的尾空格
+  (Ghidra 输出中唯一合法的 ` )` 形态)。现对 `while(` 开头的行整段豁免
+  (`while` 是关键字,只有该形态以 `while(` 开头,词安全论证同
+  is_switch_stmt_prefix)。
+- **四处循环上下文检测补紧凑形**:`has_enclosing_loop_ctx`(:3410 一带)、
+  dead-zone 结构行(:1198 一带)、pass17 loop-ctx(:1601 一带)、
+  is_loop_hdr(:2531 一带)原先只认 `while (`;紧凑形下
+  `if (cond) break;` 被当作无循环上下文的孤儿 break 剥除(E2E main 等
+  3 处 if-break 消失)。四处均加 `starts_with("while(")`。
+- while→if 折叠扫描(:1852 一带)同样补紧凑形(检测前提,路径本身未触发)。
+
+回归测试 `pretty_print_overflow_whiledo_header_spaces`:按 oracle 调用序列
+(tag_op/open_paren/spaces(1)/print("true")/spaces(1)/close_paren)发射,
+断言最终输出同时含 `while( true ) {` 与 `if (c) break;`(两层都锁)。
+E2E:curl `while( true )` ×3 与 golden 逐字节一致,3 处 if-break 保持,
+3104→3162(翻转提交之后)/0/1 不变;httpd 与基线逐字节相同(2178/4/0)。

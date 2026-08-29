@@ -1952,3 +1952,13 @@ type_expr_space 形态(`char * x`),与 fixture named_ptr_contrast 记录重新�
   外包 `(0 - (int *)(bool)(long)CARRY1(...))` vs `-(ulong)CARRY1(...)`
   (cast 链域)。typeop.rs functional_binary_op push 路由 opFunc(规格 §3.2)
   与上述两域均在 printc 租约外,登记残差待相应 owner。
+
+### 2026-08-30:MAIN-RC3-STRUCTURED-EMIT-0001 补充 — overflow 头字节对齐
+
+emit_structured_whiledo 的 overflow 臂头序列按 printc.cc:3023-3028 逐调用
+对齐:`tag_op("while") + open_paren + spaces(1) + print("true") + spaces(1)
++ close_paren`(id1 配对传递)= 紧凑 `while( true )`(原实现拼字面量
+`while ( true)`,两侧空格均错)。空格走显式 space token(oracle spaces(1)),
+遗留后处理层的配套承认见 docs/api/prettyprint.md 同日条目(` )` 修剪豁免 +
+四处 loop-ctx 检测补紧凑形)。回归:curl `while( true )` ×3 逐字节匹配
+golden,3 处 if-break 保持,httpd 逐字节不变。
