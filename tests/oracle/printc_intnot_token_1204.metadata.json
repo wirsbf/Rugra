@@ -1,0 +1,39 @@
+{
+ "schema": 2,
+ "fixture_id": "PRINTC-INTNOT-TOKEN-0001",
+ "description": "PrintC unary-prefix operator token-order oracle: emitExpression over constant-leaf expression graphs locks the PrintLanguage::opUnary semantics (printlanguage.cc:566-573 pushOp+pushVn, no direct emit) against eager-emission regressions that produce the illegal-C `0xfefefeff~ & *p` form (GLOBWORD-C4-INTNOT-TOKEN-0001)",
+ "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7 (same as printc_format_1204)",
+ "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level via Funcdata::setHighLevel",
+ "analysis_options": {
+  "boundary": "PrintC::emitExpression (printc.cc:2468-2495) driven directly on hand-built top ops with NO output varnode (assignment arm skipped), sub-expression outputs implied, constants typed uint4; Rugra side drives the exact port PrintC::emit_expression_rpn",
+  "canonicalization": "none — full stdout byte-compared"
+ },
+ "overall_status": "MATCH: 6/6 stdout records byte-identical between the locked Ghidra oracle binary and the Rugra fixture (schema + 5 cases)",
+ "covered_projection_status": "MATCH",
+ "expected_stdout_sha256": "9811c63d546e5394ad04d898d794025fd75f29812726bbf2971de859201605fc",
+ "expected_exit_code": 0,
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "cpp_fixture_sha256": "6ebd7534d531c3f0200ad7a0f1731486b7329c787997407debe5cfded1605721",
+ "rust_fixture_sha256": "bcb73c269ef6b5f2b3734e48cf0539ee3f12ca7f4305ad2e0bdf92602161e025",
+ "input_manifest": {
+  "cases": [
+   "intnot_deref: AND(ADD(LOAD(0x20),0xfefefeff), NEGATE(LOAD(0x20))) -> *0x20 + 0xfefefeff & ~*0x20",
+   "intnot_const: NEGATE(0x10) -> ~0x10",
+   "int2comp_const: INT_2COMP(0x10) -> -0x10",
+   "intnot_left: OR(NEGATE(0x30), ADD(0x11,0x22)) -> ~0x30 | 0x11 + 0x22",
+   "intnot_addright: ADD(0x11, NEGATE(0x10)) -> 0x11 + ~0x10"
+  ]
+ },
+ "coverage": {
+  "unary_prefix_stage0": "MATCH: bitwise_not/unary_minus tokens print at visited==0 before the operand (printlanguage.cc:338-342 via entry emitOp cc:143/171) in all 5 cases",
+  "unary_under_binary_rpn": "MATCH: AND/OR/ADD parents emit their stage-1 binary token (printlanguage.cc:332-337) at the correct position relative to an implied unary operand (both operand slots)",
+  "intnot_curl_shape": "MATCH: the GLOBWORD-C4 getparameter.constprop.0 statement shape AND(ADD(load,const), NEGATE(load)) renders `*0x20 + 0xfefefeff & ~*0x20` — the exact pre-fix output was `0xfefefeff~ & ...`",
+  "int2comp_unary_minus": "MATCH: CPUI_INT_2COMP pushes unary_minus (printc.hh:296)",
+  "bool_negate_flip_paths": "UNTESTED: PrintC::opBoolNegate negatetoken/checkPrintNegation short-circuits (printc.cc:814-823) not ported to Rugra; not exercised by these cases",
+  "float_unary_opfunc": "UNTESTED: FLOAT_ABS/SQRT/CEIL/FLOOR/ROUND are opFunc calls in Ghidra (printc.hh:323-327); Rugra emits operand only",
+  "markup_emitter_projection": "UNTESTED: EmitMarkup/EmitPrettyPrint token projections outside this atomic"
+ }
+}

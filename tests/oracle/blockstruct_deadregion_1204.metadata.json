@@ -16,8 +16,8 @@
   "cpp_fixture_sha256": "c2f8f38f21c8fb04c62e621fd909ec07e31518975538c5979efeac8ec2547efc",
   "rust_fixture_sha256": "ebad29436404bdb8fd70a1b3b6d1c0d1cd0c44f4a81eb68b1052e9317f218304",
   "runner_sha256": "ef6df87bd7d6487a8ff321046562d31925b65dce1dbd0046b8328d2981548e02",
-  "rugra_blockaction_sha256": "f00470def78ec95560b9a8430a495eadb8ae40fd8609b508a0d38ed884c6666b",
-  "rugra_tracedag_sha256": "74c18ec1fba5b1db5bec31a0d07372a2affabeb461f08f9ad4857936500ffa3c"
+  "rugra_blockaction_sha256": "408d39d2dbd55e58aacf5367e306e5783a43acbbfb2bd67088b3f6b6a2231101",
+  "rugra_tracedag_sha256": "9030b5f5e412028db2f827b34aafb78418a40d525ce31e7e403075f44727f615"
  },
  "covered_projection_status": "MISMATCH",
  "coverage": {
@@ -47,16 +47,13 @@
  "residual_diffs": [
   {
    "todo_id": "BLOCKSTRUCT-DEADREGION-COLLAPSE-SHAPE-0001",
-   "note": "case noret_halt_loop_body: oracle collapses to 1 top-level component (list > properif > dowhile chain); Rugra produces 2 components \u2014 the back-edge chain never forms the DoWhile (ruleBlockDoWhile needs the cat chain to feed back onto itself; the selectGoto edge-selection order still diverges from TraceDAG's)"
+   "note": "case noret_halt_loop_body: oracle collapses to 1 top-level component (list > properif > dowhile chain); Rugra produces 2 components — the back-edge chain never forms the DoWhile (ruleBlockDoWhile needs the cat chain to feed back onto itself; the selectGoto edge-selection order still diverges from TraceDAG's)"
   },
   {
    "todo_id": "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001",
    "note": "consumed vertices keep their out edges (labelled) in Rugra's install-in-place model while the oracle's identifyInternal removes them from the top-level list; cond flip flag on the canary/partial arms"
   }
  ],
- "unit_tests": "cargo test --lib: 23 failures vs master's 2 \u2014 the shape change (halt-tail cat chains, IfNoExit on structured clauses, BlockGoto sink) breaks shallow-traversal expectations in funcdata tests (BlockCondition depth, CONTINUE tagging via DoWhile, type inference); registered as BLOCKSTRUCT-DEADREGION-TESTEXPECT-0001 for root adjudication",
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
- "compiler_spec": "none: CollapseStructure::collapseAll graph harness; no compiler spec decode",
- "analysis_options": "none: structured-collapse projection over hand-built graphs; no decompilation pipeline options",
- "input_sha256": "f06f1424b545a06f4aebfd7175ef7b388d8859a57a87a654276b14cd6d990f60"
+ "unit_tests": "cargo test --lib: 23 failures vs master's 2 — the shape change (halt-tail cat chains, IfNoExit on structured clauses, BlockGoto sink) breaks shallow-traversal expectations in funcdata tests (BlockCondition depth, CONTINUE tagging via DoWhile, type inference); registered as BLOCKSTRUCT-DEADREGION-TESTEXPECT-0001 for root adjudication",
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

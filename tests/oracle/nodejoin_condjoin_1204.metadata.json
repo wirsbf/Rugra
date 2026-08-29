@@ -1,0 +1,68 @@
+{
+ "schema_version": 2,
+ "fixture_id": "NODEJOIN-CONDJOIN-1204",
+ "overall_status": "MATCH",
+ "status_note": "9/9 cases byte-identical projections: two same-condition diamonds join fully (F3), mergeable-condition diamond runs all four execute steps (F2: BUILD pair order + moved CBRANCH reading ME1 out + exit COPY reading ME2 out), all six findDups gates reject (F4: flip/unwritten/spacebase/fel==2/SUBPIECE/COPY), triple diamond joins twice via the dynamic graph.getSize() bound (F5, J1 in=[1,2] out=[J2], J2 holds the relocated CBRANCH)",
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source_ranges": [
+   "blockaction.cc:1898-1945",
+   "blockaction.cc:1954-2019",
+   "blockaction.cc:2023-2057",
+   "blockaction.cc:2065-2108",
+   "blockaction.cc:2326-2364",
+   "block.cc:1015-1137",
+   "expression.cc:432-512"
+  ]
+ },
+ "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7",
+ "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols",
+ "analysis_options": {
+  "entrypoint": "ActionNodeJoin driven directly through Action::perform (ActionNodeJoin(\"fixture\")); startDecompilerLibrary with empty spec paths registers the PrintC capability; no heritage pass, no ActionGroup",
+  "prestate": "Per-case Funcdata built from scratch through the production Funcdata op API (newOp/opSetOpcode/newUniqueOut/opSetInput/opInsertEnd) and BlockGraph::newBlockBasic/addEdge: diamond CFGs of two or three CBRANCH blocks converging on the same two exit blocks; condition varnodes are written (INT_LESS/INT_ADD/SUBPIECE/COPY defs inside the branch blocks or an isolated pre block); B additionally merges two COPY-written varnodes through an exit MULTIEQUAL followed by an INT_ADD stop op",
+  "observation": "per case: count (Action::count), blocks (list size), and per block: positional in/out neighbor list and the ordered op list (get_opname opcode, per-input structural descriptor label|const:0xoff:size|def:B<block>:<oppos>|vn:0xoff:size, and ->descriptor for the output); neighbor identity and def-parent identity are resolved positionally because FlowBlock::index is only assigned by a findSpanningTree pass",
+  "normalization": "none; both sides print the same projection of the same fields; op names come from Ghidra's get_opname table (MULTIEQUAL prints as BUILD)"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "A_samecond: two CBRANCH blocks reading the identical written condition varnode -> full join (findDups cc:1926-1927 complete match; F3)",
+   "B_mergeable: identical INT_LESS conditions (res=0) + exit MULTIEQUAL merging COPY-written v1/v2 -> four execute steps observable (F2)",
+   "C_flip: cbranch1 carries boolean_flip -> no join (cc:1920)",
+   "D_unwritten: distinct constant conditions -> no join (cc:1930-1931)",
+   "E_spacebase: cond1 flagged spacebase -> no join (cc:1932)",
+   "F_fel2: INT_ADD(r1,r2) vs INT_ADD(r3,r4) distinct written inputs -> functionalEqualityLevel==2 -> no join (cc:1938)",
+   "G_subpiece: identical SUBPIECE(x,0) defs -> no join (cc:1940)",
+   "H_copy: identical COPY(x) defs -> no join (cc:1941)",
+   "I_triple: three same-condition diamonds -> count==2, join block rejoined through the dynamic graph.getSize() bound (cc:2334; F5)"
+  ],
+  "sha256": "557fe53ed1e501c39ccb6d03469e726bd65f1485f0a1fc294c5ca627b4a169ce"
+ },
+ "rugra_source": {
+  "coreaction_blob": "2c9cf4996a729ad44ecf5107dfd1979e8c7e65cf",
+  "note": "ActionNodeJoin::apply + nodejoin_find_dups + ConditionalJoin{mergeneed} in src/coreaction.rs; Funcdata op twins and node_join_create_block in src/funcdata.rs"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "0926f81042baac7f1be63181bef240c046a4c84fb93b19997fee7038b81ebdc5",
+  "rust_fixture_sha256": "a7a789b4cb568902e046b66b715b68ed84b8fbc9c1681773e7f36027f12d20a7",
+  "runner_sha256": "f44eb76f378831f64d0665da01096943f2a622bffdb836b2650e1ead6b0c96f7",
+  "ghidra_stdout_sha256": "a5fdf6f3a09638e736a4aa2fffa2f0f6399b12f3bc9df7492a4a4ec05dd272b7",
+  "rugra_stdout_sha256": "a5fdf6f3a09638e736a4aa2fffa2f0f6399b12f3bc9df7492a4a4ec05dd272b7"
+ },
+ "decisive_semantics": {
+  "references": "mergeneed map<MergePair,Varnode*> carried between checkExitBlock and execute; opSetInput/opRemoveInput/opDestroy mutations observable in the projection",
+  "iteration_order": "mergeneed map order = (side1.createIndex, side2.createIndex); checkExitBlock/cutDownMultiequals walk exit ops from the block start stopping at the first non-MULTIEQUAL non-COPY",
+  "counters": "Action::count +1 per executed join; loop bound i<graph.getSize() re-evaluated per iteration",
+  "comparison_keys": "vn1==vn2 pointer identity; boolean_flip/written/spacebase flag bits; functionalEqualityLevel in {0,1}; def opcode not SUBPIECE/COPY; cutDown removes the hi slot"
+ },
+ "residual_todo_ids": [
+  "NODEJOIN-F2-EXECUTE-STEPS-0001",
+  "NODEJOIN-F3-SAMECOND-FULLJOIN-0001",
+  "NODEJOIN-F4-MATCH-GATES-0001",
+  "NODEJOIN-F5-DYNAMIC-SIZE-0001"
+ ]
+}

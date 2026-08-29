@@ -2070,3 +2070,78 @@ E2E：curl 全语料 star-blank 声明 58 → 0，compare defects=0/numbering=0�
 
 structure_reset(twin 内)已执行 calcForwardDominator(funcdata_block.cc:712),新块为 append 索引未变;
 额外的 build_dom_tree 调用对未突变 CFG 幂等且不可观测,按复核建议删除。
+
+## 2026-08-29:NODEJOIN-F4-MATCH-GATES-0001 findDups 全门补齐
+
+ActionNodeJoin::apply 的 match 谓词此前只查双方 last op 是 CBRANCH + 同条件短路,
+不同条件菱形**无条件 join**(over-join)。新增 `nodejoin_find_dups`(coreaction.rs,
+Ghidra: blockaction.cc:1912 ConditionalJoin::findDups)按 oracle 顺序补齐全部门:
+1. `isBooleanFlip()` 任一 cbranch 置位即拒(cc:1920-1921,"flip hasn't propagated
+   through yet");
+2. `vn1 == vn2` 是**完整 match**(cc:1926-1927,见 F3);
+3. 双方条件必须 `isWritten()`(cc:1930-1931)、非 `isSpacebase()`(cc:1932-1933);
+4. `functionalEqualityLevel(vn1,vn2)` 必须 ∈ {0,1}(cc:1936-1938);
+5. vn1 定义 op 不得为 SUBPIECE/COPY(cc:1939-1941)。
+通过后返回 `MergeNeeded`(cc:1943 mergeneed 注册由 ConditionalJoin 状态承接,F2)。
+测试:`test_nodejoin_finddups_gates`(booleanFlip×3/unwritten/spacebase/res<0/
+res>1/SUBPIECE/COPY 全拒 + 相同 INT_LESS 正对照 join 1 次且块数 +1)。
+
+## 2026-08-29:NODEJOIN-F3-SAMECOND-FULLJOIN-0001 同条件菱形执行完整 join
+
+旧代码把 findDups 的 `vn1 == vn2` 快路径(cc:1926-1927)误读为 "data-flow-only",
+same-cond 菱形只 count+=1 不做任何 CFG/op 变换。oracle 语义:vn1==vn2 是**完整
+match**,返回 true 后调用方照样走 `ConditionalJoin::execute` 全部四步
+(cc:2354-2358 match→execute→clear),仅 mergeneed 为空(setupMultiequals 无新
+MULTIEQUAL、moveCbranch 的 `vn1!=vn2` 查表走 else 分支直接用 vn1)。现
+`NodeJoinFindDups::SameCondition` 与 `MergeNeeded` 一样落入 nodeJoinCreateBlock
+路径。测试:`test_nodejoin_counts_diamond_candidate` 追加断言(块数 4→5)。
+
+## 2026-08-29:NODEJOIN-F2-EXECUTE-STEPS-0001 ConditionalJoin::execute 四步齐全
+
+新增 `ConditionalJoin` 状态结构(coreaction.rs,Ghidra: blockaction.hh:234 ConditionalJoin):
+mergeneed(`map<MergePair,Varnode*>`)以 Vec 按 (side1.createIndex, side2.createIndex)
+有序维护 = MergePair::operator<(cc:1898-1906)的 C++ map 语义(等键覆盖/排序迭代)。
+
+`ActionNodeJoin::apply` 的 join 路径现执行全部四步(cc:2094-2102):
+1. nodeJoinCreateBlock(cc:2097,已有 twin)+ 此前按 match 顺序(cc:2079-2082)先算
+   a_in1..b_in2;
+2. `setup_multiequals`(cc:2023-2040):mergeneed 每对建 MULTIEQUAL(cbranch1 地址,
+   side1=slot0/side2=slot1,newUniqueOut 输出)按 map 序 opInsertEnd 进 joinblock;
+3. `move_cbranch`(cc:2043-2057):cbranch1 opUninsert→opInsertEnd 进 joinblock,条件
+   输入换成合并输出(vn1==vn2 时保持 vn1),cbranch2 opDestroy;
+4. `cut_down_multiequals` ×2(cc:1981-2019):exit 的 MULTIEQUAL 去掉 hi 槽输入、lo 槽
+   换成合并输出;1 输入的 MULTIEQUAL 转 COPY 并 opInsertBegin 回块首。
+
+match 尾部补 `check_exit_block` ×2(cc:1954-1972,cc:2088-2089):exit 里从两根块
+流入不同 Varnode 的 MULTIEQUAL 对注册进 mergeneed;findDups 失败路径 condjoin.clear()
+(cc:2084-2087)与 execute 后 clear()(cc:2357)同样移植。
+
+关键发现(双侧一致):nodeJoinCreateBlock 尾部 structureReset→structureLoops→
+findSpanningTree 会把块表**重排为逆后序并重索引**(Ghidra block.cc:1015-1137
+`list = rpostorder`)——joinblock 不在追加位置;测试按 JOINED_BLOCK flag 定位。
+测试:`test_nodejoin_execute_runs_all_four_steps`(joinblock=[ME,ME,CBRANCH] 序、
+cbranch1 读合并输出、b2 cbranch2 销毁、exit [COPY,INT_ADD] 且 COPY 读 (v1,v2) 合并)。
+
+## 2026-08-29:NODEJOIN-F5-DYNAMIC-SIZE-0001 外层循环动态 graph.getSize()
+
+`ActionNodeJoin::apply` 外层改为 `while i < fd.bblocks.get_size()`(cc:2334
+`for(int4 i=0;i<graph.getSize();++i)` 每次迭代重新求值)。join 会 append 新块
+(尺寸+1)且 structureReset→findSpanningTree 重排块表(block.cc:1015-1137),冻结的
+pre-loop 尺寸会漏访问 joinblock —— 而它持有移动后的 cbranch1 和两条出边,自身
+可再次 join。测试:`test_nodejoin_dynamic_size_rejoins_joinblock`(三同条件菱形
+→ count==2、两个 JOINED_BLOCK;oracle 侧 I_triple 同为 count=2,见
+nodejoin_condjoin_1204 双侧 fixture)。
+
+## 2026-08-29:NODEJOIN F2-F5 簇差分收尾
+E2E curl(124/124,0 panic):defects=1(getparameter 空 else,他人项,不变)、
+numbering=0、skeleton 2911→2884(−27,向 golden)。per-func:next_url 150→134、
+getparameter.constprop.0 678→669、my_get_token 57→55,其余 121 函数零变化。
+双侧 fixture nodejoin_condjoin_1204 9/9 MATCH(sha256 a5fdf6f3...)。
+
+## 2026-08-30:ConditionalJoin match 补 cc:2076 同目标门(R-NJF234-CROSSREVIEW MISMATCH #1)
+
+复核 REJECT 项:Ghidra blockaction.cc:2076 `if (exita == exitb) return false;` 在 Rugra 缺失。
+可达性:CBRANCH 目标==fallthru 时 flow.cc:960-967 无条件登记两条同块出边(仅 BRANCHIND 去重),
+构造出 sizeOut==2 且双出口同块的输入;Ghidra 拒绝一切 match,缺门则对同一边做两次
+removeEdge/moveOutEdge 手术 → find_out_index panic 或 CFG 损坏。修复=计算出 exita/exitb 后
+立即 `Arc::ptr_eq(&exita,&exitb) → continue`。当前语料不触发(单向加门,零新 join 路径)。

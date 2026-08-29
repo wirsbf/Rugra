@@ -4445,39 +4445,42 @@ impl<'a> CollapseStructure<'a> {
             None => return false,
         };
 
-        // Build a BlockGoto wrapping the block. Store the goto target.
-        // The BlockGoto is installed at i; the original block (Basic) is consumed.
-        // Per Ghidra newBlockGoto: identifyInternal([bl]) + forceOutputNum(1) +
-        // removeEdge(ret, ret->getOut(0)). We model forceOutputNum(1)+removeEdge
-        // by giving the BlockGoto an empty out-edge list (the goto is "absorbed").
-        let goto_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> = {
-            // BlockGoto.goto_target is Option<Arc<BlockBasic>>; downcast target.
-            let target_bb = goto_target.clone();
-            let target_basic = target_bb
-                .read()
-                .unwrap()
-                .as_any()
-                .downcast_ref::<crate::block::BlockBasic>()
-                .map(|_| {
-                    // We can't easily get the Arc<BlockBasic> from dyn; store None
-                    // and rely on the original block's ops for emit. The goto
-                    // target is implicit via the consumed block's out-edge.
-                    None::<Arc<RwLock<crate::block::BlockBasic>>>
-                })
-                .flatten();
-            let _ = target_basic; // BlockGoto target kept implicit for now
+        // Ghidra newBlockGoto (block.cc:1702-1713), in oracle order:
+        //   1. cc:1705 `BlockGoto *ret = new BlockGoto(bl->getOut(0));`
+        //      — capture the target BEFORE identifyInternal/removeEdge can
+        //      destroy the out-edge; stored as the live dyn Arc (target_dyn)
+        //      so getIndex (scopeBreak cc:2872) and getFrontLeaf (gotoPrints
+        //      cc:2886) read the same object the oracle's pointer would.
+        //   2. cc:1706-1708 `identifyInternal(ret,[bl])` — bl becomes the
+        //      BlockGoto's single list component (getBlock(0) = wrapped);
+        //      Rust holds it via the `wrapped` field so it survives
+        //      identify_internal replacing its graph slot.
+        //   3. cc:1709 `addBlock(ret)` — the install at slot i below.
+        //   4. cc:1710 `forceOutputNum(1)` — after identify the composite
+        //      inherits exactly one out-edge (to the target), so this is a
+        //      no-op; modeled implicitly.
+        //   5. cc:1711 `removeEdge(ret, ret->getOut(0))` — the bilateral
+        //      removal below, leaving sizeOut==0 for downstream rules.
+        // The legacy typed `goto_target` stays None: the collapse graph's
+        // leaves are BlockCopy nodes whose originals are dyn-coerced, so a
+        // shared-identity typed Arc is not recoverable; the frozen printc
+        // emit path reads target_dyn once PRINTC-GOTOPRINTS-0001 lands.
+        let goto_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
             Arc::new(RwLock::new(crate::block::BlockGoto {
                 index: idx,
                 flags: 0,
                 parent: None,
-                goto_target: None, // implicit; emit uses wrapped block's BRANCH op
+                goto_target: None,
+                target_dyn: Some(goto_target.clone()),
+                wrapped: Some(block.clone()),
                 goto_type: crate::block::goto_type::GOTO_GOTO,
+                prints_precomputed: false,
                 incoming: Vec::new(),
                 outgoing: Vec::new(),
-            }))
-        };
-        // Consume the original block (at i). self_identify captures its boundary
-        // edges onto the BlockGoto so it has correct size_in for further merging.
+            }));
+        // Consume the original block (at i). identify_internal captures its
+        // boundary edges onto the BlockGoto so it has correct size_in for
+        // further merging.
         self.identify_internal(&goto_block, &[idx], i);
         self.update_switch_case_reference(idx, &goto_block);
         // Faithful to Ghidra newBlockGoto: forceOutputNum(1) +
@@ -6853,6 +6856,17 @@ impl Action for ActionFinalStructure {
         // conversion; without it, every BlockGoto keeps its default
         // f_goto_goto and emits a `code_r0x` label.
         fd.sblocks.scope_break(-1, -1);
+        // gotoPrints transport (block.cc:2881-2890 evaluated tree-wide):
+        // Ghidra reads `getParent()->nextFlowAfter(this)` lazily at
+        // markUnstructured/emit time; Rugra composites cannot sit in a
+        // BlockGraph::blocks list (no parent wiring), so the identical
+        // comparison (front_leaf(target) != next-in-flow successor,
+        // block.cc:1335-1353) is evaluated once here — after scopeBreak,
+        // before markUnstructured, the oracle's own first evaluation point —
+        // and stored on BlockGoto::prints_precomputed for both consumers
+        // (markUnstructured's cc:2861 gate and printc's emitBlockGoto
+        // cc:2775).
+        fd.sblocks.compute_goto_prints();
         // Ghidra blockaction.cc:2194: graph.markUnstructured();
         // Recurse the structure tree marking, for each unconverted
         // (f_goto_goto) goto / if-goto / switch-case-goto, its target block's

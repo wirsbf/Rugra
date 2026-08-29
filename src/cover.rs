@@ -58,11 +58,17 @@ impl CoverEndpoint {
     /// Build the endpoint identity of a live PcodeOp, applying the marker
     /// rules of `CoverBlock::getUIndex` (cover.cc:29-49): MULTIEQUALs are
     /// considered very beginning (order collapses to 0, marker identity
-    /// kept for the tip tests); INDIRECTs should map to the order of the op
-    /// they are indirect for, which requires a Funcdata op-bank lookup
-    /// Rugra cannot perform here (registered residual — see `from_op`
-    /// callers), so this constructor falls back to the INDIRECT's own
-    /// SeqNum order exactly like `CoverBlock::get_u_index`.
+    /// kept for the tip tests); INDIRECTs map to the order of the op they
+    /// are indirect for, decoded from the Iop-space input(1) constant via
+    /// the same `Arc::as_ptr` encoding `Funcdata::get_op_from_const`
+    /// reads (OPBANK-0001 contract). This is load-bearing for merge
+    /// boundary semantics: a call-guard INDIRECT that both defines a new
+    /// global version and reads the previous version (as guard input, or
+    /// as the guarded call's parameter-trial read) must put ALL those
+    /// endpoints at the guarded call's order so the adjacent cover blocks
+    /// only touch (intersect==1, allowed, merge.cc:1571) instead of
+    /// overlapping (intersect==2 -> merge.cc:315 "Forced merge caused
+    /// intersection").
     // Ghidra: cover.cc:29 CoverBlock::getUIndex
     pub fn from_op(op: &crate::op::PcodeOp) -> Self {
         if op.is_marker() {
@@ -71,11 +77,22 @@ impl CoverEndpoint {
                 crate::opcodes::OpCode::CPUI_MULTIEQUAL => {
                     CoverEndpoint::Op { order: 0, multiequal: true }
                 }
-                // Ghidra: INDIRECTs are at the location of the op they are
-                // indirect for: PcodeOp::getOpFromConst(op->getIn(1)->getAddr())
-                //   ->getSeqNum().getOrder(). Rugra cannot resolve that here
-                // without Funcdata access; fall back to the INDIRECT's own
-                // SeqNum order (order-only residual, same as get_u_index).
+                // Ghidra: INDIRECTs are considered to be at the location of
+                // the op they are indirect for (cover.cc:41-43):
+                //   PcodeOp::getOpFromConst(op->getIn(1)->getAddr())
+                //     ->getSeqNum().getOrder()
+                crate::opcodes::OpCode::CPUI_INDIRECT => {
+                    if let Some(guarded_order) = indirect_target_order(op) {
+                        CoverEndpoint::Op { order: guarded_order, multiequal: false }
+                    } else {
+                        // Unresolvable iop input (typed call_spec annotation
+                        // or absent): keep the INDIRECT's own SeqNum order.
+                        CoverEndpoint::Op {
+                            order: op.get_seq_num().get_order(),
+                            multiequal: false,
+                        }
+                    }
+                }
                 _ => CoverEndpoint::Op {
                     order: op.get_seq_num().get_order(),
                     multiequal: false,
@@ -89,6 +106,30 @@ impl CoverEndpoint {
             }
         }
     }
+}
+
+/// Resolve the SeqNum order of the op an INDIRECT marker is guarding,
+/// mirroring `PcodeOp::getOpFromConst(op->getIn(1)->getAddr())->getSeqNum()
+/// ->getOrder()` (cover.cc:41-43). Rugra's Iop-space constants encode the
+/// target PcodeOp with `Arc::as_ptr` — the same legacy OPBANK-0001 encoding
+/// `Funcdata::get_op_from_const` decodes; typed `call_spec` annotations are
+/// excluded exactly like that function's guard.
+// RUGRA-GLUE: pointer-decode helper for the Iop constant without Funcdata
+fn indirect_target_order(op: &crate::op::PcodeOp) -> Option<u32> {
+    let iop_vn = op.get_in(1)?;
+    let (space, offset, typed) = {
+        let v = iop_vn.read().ok()?;
+        (v.get_space(), v.get_offset() as usize, v.call_spec.is_some())
+    };
+    if typed || space != crate::space::AddressSpace::Iop || offset == 0 {
+        return None;
+    }
+    let raw = offset as *const std::sync::RwLock<crate::op::PcodeOp>;
+    // SAFETY: OPBANK-0001 — the Iop producer encoded `Arc::as_ptr` and the
+    // op bank keeps the owner alive for every consumer of the constant.
+    let target = unsafe { &*raw };
+    let order = target.read().ok()?.get_seq_num().get_order();
+    Some(order)
 }
 
 /// Range of P-code ops within a single basic block where a varnode is alive
@@ -742,7 +783,7 @@ impl Cover {
     /// to `Cover::addDefPoint` (cover.cc:501-519). Clears the cover first.
     /// `def` is the original Varnode's defining op. If it is absent and
     /// `is_input` is true, the input-varnode convention is block 0/order 2.
-    fn add_def_point_full(
+    pub(crate) fn add_def_point_full(
         &mut self,
         def: Option<&std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>>,
         is_input: bool,
@@ -782,7 +823,7 @@ impl Cover {
     /// `root` is the original Varnode passed to `rebuild`, even when `op` is a
     /// descendant of an implied output. It selects every exact-identity
     /// MULTIEQUAL input slot whose predecessor branch must be traversed.
-    fn add_ref_point_full(
+    pub(crate) fn add_ref_point_full(
         &mut self,
         op_arc: &std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>,
         root: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,

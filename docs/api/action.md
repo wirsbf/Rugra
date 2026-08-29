@@ -1312,3 +1312,7 @@ root 集成时去 ignore):构造不同条件菱形 CFG,断言 ActionNodeJoin 走
 funcdata_block.cc:816)。修复前红/修复后绿双态已验;配套修复见 coreaction.md 同日条目。
 
 nodejoin fixture 补 CFG 形状断言(F1 整改):canonical(swapa==swapb)终态=join 块 2 出边、两分支各 1 出边(仅 join 边)。
+
+nodejoin fixture 测试构造修正(njf2 移交项):原 fixture 用不同常量条件(修复前 over-join 行为的编码);
+F4 门序落地后常量条件 !isWritten 不 join(双侧 fixture D_unwritten 锁定 count=0)。改为共享 written 条件
+varnode(INT_EQUAL 输出)供两 CBRANCH 读取——F3 语义 vn1==vn2 完整 match 走全套 join,断言不变。

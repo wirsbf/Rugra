@@ -1969,11 +1969,36 @@ fn build_worker_architecture(
                 for (&address, global) in globals.iter() {
                     let size = global.data_type.get_size().max(1) as i32;
                     let scope = db.global_scope_id;
-                    let _ = db.add_symbol_mapped(
+                    // GLOBWORD-C5: when the front-end supplied a query
+                    // channel Database, its DWARF layer already installed
+                    // the authoritative (typed, typelocked) entry at this
+                    // address; re-adding here created a duplicate untyped
+                    // entry that won Scope::queryContainer's smallest-
+                    // containing-entry pick, severing the symbol→Varnode
+                    // type attach (SymbolEntry::updateType is
+                    // typelock-gated, database.cc:135-141). One entry per
+                    // address keeps the pick unambiguous — the same
+                    // invariant the request-side layers enforce.
+                    if db
+                        .query_container(
+                            scope,
+                            Address::new(address),
+                            1,
+                            Address::new(0),
+                        )
+                        .is_some()
+                    {
+                        seen.insert(address);
+                        continue;
+                    }
+                    // GLOBWORD-C5: typelocked seeding via the front-end
+                    // semantic (see DebugGlobalDatabase::seed_global_locked).
+                    DebugGlobalDatabase::seed_global_locked(
+                        &mut db,
                         scope,
+                        address,
                         &global.name,
-                        Some(global.data_type.clone()),
-                        Address::new(address),
+                        global.data_type.clone(),
                         size,
                     );
                     seen.insert(address);
@@ -2372,9 +2397,22 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                 // Configurable 304B with member offsets, glob_buffer ->
                 // char[4096], ...).
                 for (&address, (name, dtype, size)) in &dwarf_display_names {
-                    db.add_symbol_mapped(
-                        global, name, Some(dtype.clone()), Address::new(address), *size,
+                    // GLOBWORD-C5: the DWARF front-end's committed data
+                    // types reach the decompiler as typelocked symbols
+                    // (ATTRIB_TYPELOCK, database.cc:439-442) —
+                    // SymbolEntry::updateType and buildLocaltypes'
+                    // exact-piece branch are both typelock-gated.
+                    DebugGlobalDatabase::seed_global_locked(
+                        &mut db,
+                        global,
+                        address,
+                        name,
+                        dtype.clone(),
+                        *size,
                     );
+                    if std::env::var("RUGRA_DBG_TYPEFLOW").is_ok() && address == 0x17660 {
+                        eprintln!("[DBG-TYPEFLOW] DWARF layer seeded glob_expand (locked)");
+                    }
                 }
                 if let Some((base, size)) = request.rodata_span {
                     if let Some(rng) = rugra::address::Range::new(

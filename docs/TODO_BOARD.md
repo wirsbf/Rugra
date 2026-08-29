@@ -59,7 +59,14 @@
 > (2889e048+再生,definitions=9494/raw=15811/rust=10467),lint=2 仅剩 checkpoint 治理推进(10ea407d..HEAD 窗口审查)。
 > **基线修正(w-main2)**:main 在当前 master 结构化已完整(finalize 149→1,无 selectGoto exhausted;
 > result/curl_cur.err 是 8/27 陈旧 stderr);仍耗尽的是 getparameter(已修)。main 结构段计数:golden if65/while6/do5/for2/goto19/label8/helpf8 vs Rugra if14/while1/do0/for1/goto4/label2/helpf0。
-> **当前权威基线(master `2889e048`)**:curl E2E skeleton **2911**/defects **1**(GETPARAM-EMPTYELSE 在修)/numbering **0**/
+> **2026-08-30 凌晨全绿里程碑**:集成 w-carry 的 guard-lattice+LATTICE-GEN 修复链(c7d1c1a0+8ca7bb57:
+> 根因三层=单读 cover 缺 addRefPoint CFG 前驱递归/vn2 def 比较序缺 getUIndex marker 规则/from_op INDIRECT 端点回退;
+> "保护格代际"假设被双侧证据否定——console oracle 缺 Java NoReturnAnalyzer 数据造成的假差异)后:
+> **defects 0/numbering 0/0 panic/124/124 全反编译**。同窗口集成:RC2(main 体 245→643,51×setopt 级联恢复)+
+> C4(INT_NOT token 序,非法形态 2→0)+goto 发射 target_dyn 切换+njf234 复核单门补齐(cc:2076)。
+> **当前权威基线**:curl E2E skeleton **3104**/defects **0**/numbering **0**;httpd 2148/4/0;
+> 历史链:2911→2884(F2-F5)→3374(RC2 内容恢复)→**3104(0/0)**。
+> 旧基线(master `2889e048`)**:**
 > 0 panic/timeout/ABORTED,124/124 全反编译;httpd 仍 5/30(HTTPD-TFALIGN-PANIC 待重派)。
 > 历史权威基线(master `96e8e1a8`,诚实口径)**:curl E2E skeleton **2866**(全函数计入)/defects **1**(getparameter
 > empty else,GETPARAM-EMPTYELSE-0001 已派 w-nonconverge2)/numbering **0**;registry 138 条目。
@@ -87,16 +94,17 @@
 | unassigned | `MAIN-RC3-STRUCTURED-EMIT-0001` | P0(探针:if 14→55) | `src/block.rs`(BlockIf::get_ops 丢 if/else body)+printc.rs 翻门(依赖 RC2) | whiledo/if 体发射:printc.rs:4285 body_is_dead=true 硬编码 flatten(=identify3 residual 翻门条件);BlockIf::get_ops(block.rs:5119)只返回 condition 丢弃 body→50×curl_easy_setopt 级联+嵌套 if 丢失;oracle cc:3061-3063/2994-2995 structured 递归 |
 | unassigned | `MAIN-RC4-DOWHILE-TRACE-0001` | P1(main 0 命中 vs golden 5 do-while) | TraceDAG 回边分类/吸收顺序(需 oracle 运行时定缝;RUGRA_BS_TRACE 已有) | try_rule_do_while 与 cc:1555-1574 逐条对齐无缺陷,但 argv 循环头被 if_else 消费成 `if(1){}else{}`,自环复合体永不出现 |
 | unassigned | `MAIN-RC5-LOOPCOND-VARMAP-0001` | P1 | varmap/heritage 域 | 循环条件错接:`extraout_var_00 != 0` 应为 `iVar17 < argc-1` |
-| unassigned | `NODEJOIN-F2-EXECUTE-STEPS-0001` | OPEN(复核F2) | 待认领(`src/coreaction.rs`) | ConditionalJoin::execute 四步仅做1(nodeJoinCreateBlock);setupMultiequals/moveCbranch/cutDownMultiequalities(blockaction.cc:2098-2101)全缺,cbranch未迁入join块 |
-| unassigned | `NODEJOIN-F3-SAMECOND-FULLJOIN-0001` | OPEN(复核F3) | 待认领(`src/coreaction.rs`) | same_cond 臂误读 findDups:cc:1926-1927 vn1==vn2→return true 是完整 match,Ghidra 照跑全套 join;Rugra 只 count+=1 |
-| unassigned | `NODEJOIN-F4-MATCH-GATES-0001` | OPEN(复核F4) | 待认领(`src/coreaction.rs`) | match 谓词缺 isBooleanFlip/isWritten/spacebase/functionalEqualityLevel/def-opcode 门(cc:1920-1941),过度 join |
-| unassigned | `NODEJOIN-F5-DYNAMIC-SIZE-0001` | OPEN(复核F5) | 待认领(`src/coreaction.rs`) | 外层 n_blocks 快照 vs Ghidra 动态 graph.getSize()(cc:2334) |
+| 已集成+复核中 | `NODEJOIN-F2/F3/F4/F5-0001` | **FIXED**(798466b1..92ad5358;双侧 fixture 9/9 MATCH;Cross-Review=reviewer-njf234 在途) | `src/coreaction.rs`(已落库) | F4 findDups 六门序/F3 same-cond 全 join/F2 execute 四步+mergeneed 有序/F5 动态 size;E2E 2911→**2884**(next_url 150→134/getparameter 678→669/my_get_token 57→55,余零变化,全向 golden);移交项 action.rs fixture 改共享 written 条件已修 | ConditionalJoin::execute 四步仅做1(nodeJoinCreateBlock);setupMultiequals/moveCbranch/cutDownMultiequalities(blockaction.cc:2098-2101)全缺,cbranch未迁入join块 |
+| 已集成+APPROVED | `GLOBWORD-C5-GLOBAL-TYPEFLOW-0001`+`GETPARAM-EMPTYELSE→LATTICE` | **DONE**(1a5504c1+a4694407;R-LATTICE-CROSSREVIEW **APPROVE**) | debugproto/ruleaction/heritage(已落库) | glob_word 字段化(`->size/->literal`);glob_set/range/url 的 subscript 形态绑 PRINTC-ARRAYDEREF-SUBSCRIPT(rc3 租约);六条 MINOR 跟进项见复核报告 |
+| w-rc3(接) | `PRINTC-ARRAYDEREF-SUBSCRIPT-0001` | OPEN(P2,w-typeflow 提案) | `src/printc.rs`(w-rc3 租约) | opStore/opLoad 的 checkArrayDeref→print_store_value mod 设定链(printc.cc:500-515/353-367);症状=`->literal + size/2 =` 应为 `literal[...]=` |
+| unassigned | `MAIN-RC5-LOOPCOND-VARMAP-0001` | OPEN(P1) | 待认领(varmap 域) | 循环条件错接:`extraout_var_00 != 0` 应为 `iVar17 < argc-1` |
 | unassigned | `GLOBWORD-C1-PUSH-TYPE-STRUCTURAL-0001` | OPEN(w-globword提案) | 待认领(`src/printc.rs`) | push_type 按名渲染改结构化(全匿名化后可收紧;26 返回头保持) |
 | unassigned | `GLOBWORD-C2-LOOP-LIFT-0001` | OPEN(w-globword提案) | 待认领(`src/blockaction.rs`) | my_get_line 外层 do-while 整环丢失(语义级)+glob_word 尾块不提升+死 goto;oracle 行号见 w-globword 报告 B.3 |
-| unassigned | `GLOBWORD-C3-CARRY-INJECT-0001` | OPEN(w-globword提案) | 待认领(`src/heritage.rs`或`coreaction.rs`) | x86 flags CARRY inject:`register0x00000200` RFLAGS 泄漏 vs oracle CARRY1 宏 |
+| w-rc3(接print侧) | `GLOBWORD-C3-CARRY-INJECT-0001` | 根因已双侧证伪定位=**printc发射缺INT_CARRY/SCARRY/SBORROW分支**(提升/折叠双侧逐op一致;RIP偏移0x288修正已集成319862a8) | `src/printc.rs`(w-rc3租约) | 规格=docs/alignment_docs/CARRY-PRINT-ROOTCAUSE-2026-08-30.md §3;判据=泄漏5→0+CARRY1出现+3108/0/0;残差=CARRY参数piece-split(heritage)+CAST链(coreaction) |
+| unassigned | `X86LIFT-FLAG-PCODE-0001` | OPEN(iced路径缺口) | 待认领(`src/disasm/x86_lift.rs`) | iced路径(httpd语料)add/sub/logic无flag pcode、sbb/adc/cmovcc/setcc未实现;httpd golden有CARRY1(:39307)/CARRY8(:35777);须按ia.sinc全量补(档案CARRY-PRINT §4) |
 | unassigned | `GLOBWORD-C4-INTNOT-TOKEN-0001` | OPEN(w-globword提案) | 待认领(`src/printc.rs`) | INT_NOT token 序:`0xfefefeff~` 非法 C 形,oracle `~*puVar4` |
 | unassigned | `GLOBWORD-C5-GLOBAL-TYPEFLOW-0001` | OPEN(w-globword提案) | 待认领(类型流域) | glob_expand 的 URLGlob 字段不传播→`*(int*)(glob_expand+0x128)` 原始偏移 |
-| unassigned | `REGISTRY-CHECKPOINT-ADVANCE-0001` | OPEN(lint 残项) | 待认领(`tools/generate_function_ledger.py` 钉) | CONTINUITY_CHECKPOINT 治理推进:10ea407d..2889e048 窗口 src delta 的 transition/tombstone/introduced 逐条审查后改钉+reconcile+再生;验收=lint exit 0 三链全绿 |
+| 已闭环(master `2da6a86b`) | `REGISTRY-CHECKPOINT-ADVANCE-0001`+`ORACLE-REGISTRY-IMPACT-CONTINUITY-0001` | **DONE**(w-registry5+root) | tools 钉+生成物 | 全链绿:generate --check 0/lint **0 findings**/select --strict 0/reconcile 幂等(baseline 9639→current 10467/lineages 489/introduced 883/tombstones 55);分支线锚配方(no-ff,first-parent 411)实战固化;重跑序列见 /tmp/rugra-reports/w-registry5-2026-08-29.md | CONTINUITY_CHECKPOINT 治理推进:10ea407d..2889e048 窗口 src delta 的 transition/tombstone/introduced 逐条审查后改钉+reconcile+再生;验收=lint exit 0 三链全绿 |
 | unassigned | `SUBFLOAT-TRANSFORM-RESIDUAL-0001` | OPEN(P-FLOW-1 复核发现) | 待认领(`src/subflow.rs`) | RuleSubfloatConvert 非常量路径 defer 为保守降级(Ghidra transform 链只新建 Varnode 不 retype);完整移植 TransformManager 语义后撤销 defer;证据=R-MYPROG-CROSSREVIEW 报告第 2 节 |
 | unassigned | `TRI4-MYPROGRESS-SETTLE-0001` | PARTIAL(666afd3b 已修 settle 契约) | — | temp 类型经 TypeFactory 规范化已落地;残差=myprogress 的 DWARF 局部名(format/line/outline)三层环境缺口(DW_OP_fbreg 解析/导入/消费)+ in_RSP/Var8/extraout 多余声明(funcdata/heritage 域) |
 | w-myprog-cluster(已集成) | `VARMAP-GLOBRANGE-DUPDECL-0001` | **FIXED**(65d72291;根因=prettyprint 两 GLUE pass:if 条件续行误判签名+uVar 无词界;非 varmap 计数器) | `src/prettyprint.rs`(跨lease最小化已声明) | varmap_dupdecl_1204 双侧 MATCH;numbering 1→0 |

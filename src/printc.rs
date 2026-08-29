@@ -717,6 +717,14 @@ pub struct PrintC {
     /// (printc.cc:564-565) when the branch condition survives
     /// checkPrintNegation still flipped.
     rpn_tok_boolean_not: usize,
+    /// Index of the bitwise-not token (~, unary prefix, prec 62). Mirrors
+    /// PrintC::bitwise_not (printc.cc:29). Pushed by dispatch_op_rpn's
+    /// opUnary arm for CPUI_INT_NEGATE (printc.hh:297).
+    rpn_tok_bitwise_not: usize,
+    /// Index of the unary-minus token (-, unary prefix, prec 62). Mirrors
+    /// PrintC::unary_minus (printc.cc:31). Pushed by dispatch_op_rpn's
+    /// opUnary arm for CPUI_INT_2COMP/CPUI_FLOAT_NEG (printc.hh:296/322).
+    rpn_tok_unary_minus: usize,
     /// True when doc_function emits via the RPN path. Default false.
     rpn_enabled: bool,
 }
@@ -807,6 +815,8 @@ impl PrintC {
             rpn_tok_comma: 8,
             rpn_tok_subscript: 9,
             rpn_tok_boolean_not: 10,
+            rpn_tok_bitwise_not: 31,
+            rpn_tok_unary_minus: 32,
             rpn_enabled: true,
         };
         // printc.cc:1594 resetDefaultsPrintC -> setCStyleComments
@@ -945,6 +955,19 @@ impl PrintC {
                 negate,
             ));
         }
+        // indices 31/32 - bitwise_not "~" (printc.cc:29) and unary_minus "-"
+        // (printc.cc:31): unary_prefix, stage=1, prec 62, spacing/bump 0,
+        // field-for-field from
+        // { "~", "", 1, 62, false, unary_prefix, 0, 0, (OpToken*)0 } and
+        // { "-", "", 1, 62, false, unary_prefix, 0, 0, (OpToken*)0 }.
+        // boolean_not "!" already sits at index 10. Appended AFTER the binary
+        // block so RPN_TOK_BINARY_BASE (=11) and the registry negate-id
+        // arithmetic stay stable. Consumed by dispatch_op_rpn's opUnary arm
+        // (GLOBWORD-C4-INTNOT-TOKEN-0001): the unary token must ride the RPN
+        // stack (pushOp) so emitOp prints it at stage 0 — immediately before
+        // its operand's first atom — never eagerly at dispatch time.
+        tokens.push(OpToken::unary_prefix("~", 62, 0, 0));
+        tokens.push(OpToken::unary_prefix("-", 62, 0, 0));
         tokens
     }
 
@@ -1597,7 +1620,10 @@ impl PrintC {
     /// push the assignment token + the output atom; then dispatch the opcode;
     /// then recurse. The in-place-op and constructor special-printing
     /// branches (printc.cc:2473/2477) are omitted from this first cut.
-    fn emit_expression_rpn(
+    /// Public for the PRINTC-INTNOT-TOKEN-0001 oracle fixture (same
+    /// re-exposure pattern as op_subpiece_rpn: drives the exact emitExpression
+    /// port over hand-built expression graphs).
+    pub fn emit_expression_rpn(
         &mut self,
         op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         op: &PcodeOp,
@@ -1751,7 +1777,35 @@ impl PrintC {
                     self.rpn_push_in(op_arc, op, 0, self.mods);
                 }
             }
-            // printlanguage.cc:566 opUnary.
+            // printlanguage.cc:566 opUnary: pushOp(tok,op) then
+            // pushVn(op->getIn(0),op,mods). The unary_prefix token rides the
+            // RPN stack — emitOp prints it at stage 0 (printlanguage.cc:
+            // 338-342) when the operand's first pushOp/pushAtom fires the
+            // entry emitOp(revpol.back()) (printlanguage.cc:143/171), i.e.
+            // immediately BEFORE the operand text.
+            //
+            // GLOBWORD-C4-INTNOT-TOKEN-0001: this arm previously called
+            // emit.tag_op("~") eagerly at dispatch time. Under the nodepend
+            // LIFO drain, an INT_NEGATE operand of a binary op (e.g.
+            // AND(ADD(load,0xfefefeff), NEGATE(load))) dispatches AFTER the
+            // left subtree drained, so "~" landed after the left operand's
+            // constant and BEFORE the parent's stage-1 " & " — emitting the
+            // illegal-C form `0xfefefeff~ & *p` where the oracle prints
+            // `... & ~*p` (golden ghidra_curl_1204.c:1309).
+            //
+            // Token mapping (printc.hh virtual emitters):
+            //   INT_NEGATE → bitwise_not (printc.hh:297, printc.cc:29)
+            //   INT_2COMP / FLOAT_NEG → unary_minus (printc.hh:296/322,
+            //     printc.cc:31)
+            //   BOOL_NEGATE → boolean_not (printc.cc:814-825 else branch,
+            //     printc.cc:30). Rugra does not port the negatetoken /
+            //     checkPrintNegation short-circuits of PrintC::opBoolNegate
+            //     yet — the always-print-token arm here matches that
+            //     function's final else for the non-flipped case.
+            //   FLOAT_ABS/SQRT/CEIL/FLOOR/ROUND are opFunc calls in Ghidra
+            //     (printc.hh:323-327); Rugra has no function-call form for
+            //     them, so no token is pushed and only the operand drains —
+            //     byte-identical to the previous behavior for these opcodes.
             OpCode::CPUI_INT_NEGATE
             | OpCode::CPUI_BOOL_NEGATE
             | OpCode::CPUI_INT_2COMP
@@ -1761,14 +1815,18 @@ impl PrintC {
             | OpCode::CPUI_FLOAT_CEIL
             | OpCode::CPUI_FLOAT_FLOOR
             | OpCode::CPUI_FLOAT_ROUND => {
-                let prefix = match op.opcode {
-                    OpCode::CPUI_INT_NEGATE => "~",
-                    OpCode::CPUI_BOOL_NEGATE => "!",
-                    OpCode::CPUI_INT_2COMP => "-",
-                    OpCode::CPUI_FLOAT_NEG => "-",
-                    _ => "",
-                };
-                self.emit.tag_op(prefix);
+                match op.opcode {
+                    OpCode::CPUI_INT_NEGATE => {
+                        self.rpn_push_op(self.rpn_tok_bitwise_not);
+                    }
+                    OpCode::CPUI_BOOL_NEGATE => {
+                        self.rpn_push_op(self.rpn_tok_boolean_not);
+                    }
+                    OpCode::CPUI_INT_2COMP | OpCode::CPUI_FLOAT_NEG => {
+                        self.rpn_push_op(self.rpn_tok_unary_minus);
+                    }
+                    _ => {} // FLOAT_ABS/SQRT/CEIL/FLOOR/ROUND: opFunc in Ghidra
+                }
                 // printlanguage.cc:572: pushVn(op->getIn(0),op,mods) — record
                 // into nodepend so an implied operand is inlined by the
                 // enclosing rpn_recurse drain; explicit operands drain as

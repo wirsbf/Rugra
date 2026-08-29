@@ -1,5 +1,42 @@
 # `printc.rs` API Reference
 
+## 2026-08-29：INT_NEGATE 一元 token 序（GLOBWORD-C4-INTNOT-TOKEN-0001）
+
+`dispatch_op_rpn` 一元臂（INT_NEGATE/BOOL_NEGATE/INT_2COMP/FLOAT_NEG 等）此前
+`emit.tag_op("~")` **dispatch 时刻直发**，违反 Ghidra `PrintLanguage::opUnary`
+（printlanguage.cc:566-573：`pushOp(tok,op)` + `pushVn(in(0),op,mods)`，零直接
+输出）。unary_prefix token 必须进 revpol 栈，由下一次 pushOp/pushAtom 入口的
+`emitOp(revpol.back())`（printlanguage.cc:143/171）在 `visited==0`（cc:338-342）
+打印——即操作数首个 atom 之前。nodepend 是 LIFO drain：二元 op 的右操作数
+`AND(ADD(load,0xfefefeff), NEGATE(load))` 中 NEGATE 在左子树排空后才 dispatch，
+直发的 `~` 落在左操作数常量之后、父 op 的 stage-1 ` & ` 之前——产出非法 C 形态
+`0xfefefeff~ & *puVar10`（oracle/golden 为 `... & ~*puVar10`，ghidra_curl_1204.c:1309）。
+
+- `build_rpn_token_table` 追加 `bitwise_not`（`~`，printc.cc:29）与 `unary_minus`
+  （`-`，printc.cc:31），unary_prefix/stage=1/prec 62，追加在 binary 块之后
+  （索引 31/32，`RPN_TOK_BINARY_BASE=11` 与 negate-id 算术保持稳定）；
+  新增字段 `rpn_tok_bitwise_not`/`rpn_tok_unary_minus`。
+- 一元臂改为 `rpn_push_op(tok)`：INT_NEGATE→bitwise_not（printc.hh:297）、
+  INT_2COMP/FLOAT_NEG→unary_minus（printc.hh:296/322）、BOOL_NEGATE→boolean_not
+  （printc.cc:814-825 else 臂；negatetoken/checkPrintNegation 短路尚未移植，
+  现为该函数最终 else 的恒打 token 行为）。FLOAT_ABS/SQRT/CEIL/FLOOR/ROUND 在
+  Ghidra 为 opFunc（printc.hh:323-327），Rugra 无函数调用形，不推 token 只排
+  操作数——与旧行为逐字节一致。
+- 括号决策：unary(62) 嵌于 binary(如 `&`34) 下走 `34<62 → false` 免括号，
+  `~*p` 与 golden `& ~*puVar4` 形态逐字一致。
+- **验收**：curl E2E `[0-9a-f]~` 非法形态 2→**0**；getparameter.constprop.0 的
+  两条语句变为 `*puVar10 + 0xfefefeff & ~*puVar10`（=golden token 序）；
+  全量 skeleton 2911→**2905**、defects 1（预存 empty-else，与本改无关）、
+  numbering 0；cargo test --lib 1627/17/5 与基线逐项相同。
+- **双侧 fixture（PRINTC-INTNOT-TOKEN-0001，`tests/oracle/printc_intnot_token_1204.*`）**：
+  C++ 侧驱动真 PrintC::emitExpression（printc.cc:2468）于无输出顶层 op（跳过赋值臂，
+  纯 token 序），Rust 侧驱动其移植 `emit_expression_rpn`（本 commit 起为 pub，同
+  `op_subpiece_rpn` 的 fixture 再暴露惯例）。5 case：AND(ADD(LOAD,c),NEGATE(LOAD))/
+  NEGATE(c)/INT_2COMP(c)/OR(NEG,ADD)/ADD(c,NEG)，常量叶 uint4 定型、子表达式输出
+  implied。Runner `tools/run_printc_intnot_token_oracle.sh` 输出 **MATCH**（6/6 记录
+  逐字节一致，expected_stdout_sha256 锁定）。注意：Rust 侧 `Varnode.def` 为 Weak，
+  fixture 的 def op Arc 必须 `_op*` 绑定保活，否则递归 implied 升级失败静默丢弃。
+
 ## 2026-08-28：字符常量 read-facing 类型与条件极性
 
 RPN 常量叶现在用 consuming op 的精确 input slot 查询 High read-facing type，并以

@@ -391,6 +391,33 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 - 新增 Merge.copy_trims 字段（对齐 merge.hh:87）。
 - 基础设施：BlockVarnode 完善（Ord/set/find_front）、varnode_def_loc/op_loc helpers。
 
+## 2026-08-30：eliminate_intersect 单读 cover 全量构造（LATTICE-GEN 阻塞①）
+
+`eliminate_intersect` 的单读 cover 从 order 域便捷入口
+（`add_def_point`/`add_ref_point`，无 CFG 递归）改为 merge.cc:501-505 的
+op-based 全量构造（`add_def_point_full` + `add_ref_point_full`）：
+
+1. **CFG 递归**（cover.cc:565-612 addRefPoint / cover.cc:524-558 addRefRecurse）：
+   INPUT varnode 的单读 cover 必须从 block-0 输入哨兵沿前驱回填到读点。
+   旧实现只含读点所在块，中间块的 guard 定义永不 `contain_varnode_def`，
+   oracle 会 snip 的读（glob_range INPUT marked=8）未 snip → mergeRangeMust
+   panic（merge.cc:315）。
+2. **marker-aware vn2 def order**（cover.cc:29-49 getUIndex）：MULTIEQUAL→0、
+   INDIRECT→被守护 op 的 order（`fd.get_op_from_const` 解码）；旧
+   `varnode_def_loc` 的裸 `get_seq_num().order` 两条规则都缺。
+
+双侧证据（cpp-dbg oracle，CARRY_FAKE_NORET 补 noreturn 数据后）：glob_range
+Ram/0x17660 组 23 成员 1:1（def/flags/desc 全同，INPUT marked 8=8）；
+main Ram/0x17500 组 140 共享成员 desc/marked 全同，残余差异仅 `rep movsq`
+pcode 提升差（INDIRECT+MULTIEQUAL@0x30d0 对）。curl E2E 0 panic（原
+main/glob_range/next_url 3 panic）、defects 0/numbering 0。
+
+配套（cover.rs）：`CoverEndpoint::from_op` 的 INDIRECT 端点改为解析被守护 op
+的 order（原「回退自身 order」残留），使 call-guard 的新版定义端点与旧版
+读取端点重合于 call order → 相邻 cover 块 touch 而非 overlap；
+`add_def_point_full`/`add_ref_point_full` 转 `pub(crate)` 供 merge 调用。
+`RUGRA_MERGE_DIAG` 诊断扩展（MERGE-PAIR：失败对实例 cover + 读者 order）。
+
 ### 2026-07-04（续 3）：完整移植 dominant-copy 替换子系统
 - 移植 `process_high_dominant_copy`（merge.cc:1316）：对收到 ≥2 trim COPY 的 high，按同源 Varnode 分组，对每组调 build_dominant_copy。
 - 移植 `find_all_into_copies`（merge.cc:1295）+ `compare_copy_by_in_varnode`（merge.cc:1045）：收集 high 的所有外来 COPY，按输入 Varnode + block index + order 排序。
@@ -651,3 +678,48 @@ HighVariable 的 `v_type` 缓存迁入 `TypeCell`（`RwLock<Arc<Datatype>>`，Gh
 `cache_core_types()` 显式构造：非 ASCII int 自填 typecache[1][INT] 并被选为
 `type_nochar`（type.cc:3240-3242），`get_base(1,INT)` 与其同对象 → 判 NOT
 distinct 的覆盖保持不变。仅测试构造方式变化，`factory_nochar_distinct` 生产语义零改动。
+
+## RUGRA_MERGE_FREEVN_DIAG（worktree 临时诊断，非对齐面）
+
+`RUGRA_MERGE_FREEVN_DIAG=1` 时，`allocate_copy_trim` 在接线前检测
+「被剪输入为 free 且已有活 descendant」的 panic 前状态，向 stderr 转储
+in_vn（地址/尺寸/flags/def/high）、每个活 desc op（opcode/地址/dead/
+parent/inrefs 标 *THIS*）以及该地址全部触碰 op（读/写史）。
+NONCONVERGE-GETPARAM-MATCHURL-0001 用它锁定终态：MULTIEQUAL slot-2
+读 Stack/0x130 free vn（flags=COVERDIRTY、def=None、descs=1）。
+镜像 Ghidra merge.cc:411 allocateCopyTrim 观察位；默认关闭，合入 root
+前必须移除。
+
+## 2026-08-29：eliminate_intersect boundtype==3 全量移植（GETPARAM-EMPTYELSE-0001 后续）
+
+`Merge::eliminateIntersect` 的 boundtype==3（tail 交叉）分支从截断形态
+（仅 `is_addr_force` 一道守卫，其余按"视为交叉"保守处理）补齐为
+merge.cc:543-562 的完整五行守卫链：
+
+1. `vn2.is_addr_force()`（cc:547，原有）；
+2. `vn2.is_written()`（cc:548）；
+3. vn2 的 def 必须是 `CPUI_INDIRECT`（cc:549-550）；
+4. 该 INDIRECT 必须标注（mark）的是**正在处理的读 op**——
+   `op == get_op_from_const(indop->getIn(1))`（cc:552）；
+5. INDIRECT 的 in(0) 对 vn 的 copy shadow /
+   partial copy shadow 豁免（cc:553-561，overlaptype 1 与非 1 两形态）。
+
+此前该分支处于死路径（heritage guard 修复落地前没有 varnode 携带
+addrforce 进入该分支），NONCONVERGE 修复后 Ram 全局版本首次激活它，
+截断形态把大量非交叉误判为交叉。全量移植后 next_url 的
+"Forced merge caused intersection" panic 4→3。残余 3 例
+（my_get_token/glob_range/main）的触发=Rugra 保留了第一代 guard 格
+（oracle 在 deadcode pass=2 摧毁后由 pass≥3 heritage 重建第二代，
+成员里没有 Rugra 多出的 phi——如 my_get_token 0x17510 组的
+MULTIEQUAL@0x37b4），归 heritage place_multiequals/rename 代际差异，
+另行登记。
+
+## RUGRA_MERGE_DIAG（worktree 临时诊断，非对齐面）
+
+`RUGRA_MERGE_DIAG=1` 时：`merge_range_must` 失败前转储整组
+`(space,offset,size)` 成员（def/flags/high 实例数，标注 *FAIL* 成员）；
+`unify_address` 对 Ram 组逐 vn 转储 `descend/ops_delta/flags`
+（eliminateIntersect 剪了多少）。oracle 侧等价探针（插桩
+decomp_opt 的 `[ORE-UNIFY]`/`[AF-CLEAR]`/`[DEADCODE-ENTER|KILL]`/
+`[GLOBALTRACE]`）见 /tmp/w-nonconverge2-ore/cpp-dbg。默认关闭，
+合入 root 前必须移除。

@@ -1096,3 +1096,31 @@ FlowBlock 的共享 edge vectors，避免再次漏掉 Copy；loop 叶守卫接�
 
 当前由正式 `BlockCopy.original` 直接提供活动 op 视图；不再建立
 `live_ops_source`/`source_basic`，也不保留结构化阶段 ops 快照。
+
+## MAIN-RC2-BLOCKGOTO-WRAPPED-0001：try_rule_goto 忠实捕获序 + gotoPrints 树遍（2026-08-30）
+
+oracle：`CollapseStructure::ruleBlockGoto`（blockaction.cc:1450-1475）逐出边扫
+isGotoOut(i)：switchOut→newBlockMultiGoto（Rugra 无对应物，BLOCKSTRUCT-
+MULTIGOTO-0001，维持 skip）；sizeout==2→（非 isGotoOut(1) 先 negateCondition
++dataflow_changecount）+newBlockIfGoto；sizeout==1→newBlockGoto(bl)。
+`newBlockGoto`（block.cc:1702-1713）顺序：先捕获
+`new BlockGoto(bl->getOut(0))`，`identifyInternal(ret,[bl])`（bl 成为组件），
+`addBlock(ret)`，`forceOutputNum(1)`（identify 后恰 1 出边，无操作），
+`removeEdge(ret,ret->getOut(0))`（双侧删除→sizeOut==0）。
+
+- `try_rule_goto`：构造时填 `wrapped: Some(block.clone())`（组件持有，修复
+  identify_internal 换槽后整体蒸发）与 `target_dyn: Some(goto_target.clone())`
+  （block.cc:1705 删边前捕获序）；类型化 `goto_target` 保持 None（见
+  docs/api/block.md PRINTC-GOTOPRINTS-0001 投影说明）。identify_internal→
+  update_switch_case_reference→remove_edge_blocks 顺序不变（cc:1708-1711）。
+  旧实现的 downcast-then-None 死代码删除。
+- `ActionFinalStructure::apply`：在 `scope_break(-1,-1)` 与 `mark_unstructured()`
+  之间（blockaction.cc:2193-2194 oracle 求值序）调用
+  `fd.sblocks.compute_goto_prints()` —— gotoPrints（block.cc:2881-2890）的
+  parent-present 臂需要 getParent()->nextFlowAfter(this)，Rugra 复合块不接线
+  parent，故在最终树上一次性求值并存 prints_precomputed，供 markUnstructured
+  cc:2861 门与 printc emitBlockGoto cc:2775 消费。
+
+机制 C：blockaction.rs 属核心算法白名单，本改动 Cross-Review: PENDING
+（待独立复核 agent 逐行读 block.cc:1702-1713/2856-2903 与 printc.cc:2766-2779
+后出 APPROVE）。

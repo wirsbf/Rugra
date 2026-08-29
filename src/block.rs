@@ -153,8 +153,15 @@ pub fn front_leaf(
                     .as_any()
                     .downcast_ref::<BlockSwitch>()
                     .map(|sw| sw.control.clone()),
-                // BlockGoto wraps a BlockBasic body; Graph/Plain/MultiGoto are
-                // not structured-tree nodes (no subBlock(0) chain exists).
+                // BlockGoto : BlockGraph — getFrontLeaf descends subBlock(0)
+                // = the wrapped component (block.hh:559/561-562 delegate every
+                // leaf/first/last query to getBlock(0)). Graph/Plain/MultiGoto
+                // are not structured-tree nodes (no subBlock(0) chain exists;
+                // MultiGoto has no Rugra counterpart, BLOCKSTRUCT-MULTIGOTO-0001).
+                BlockType::Goto => b
+                    .as_any()
+                    .downcast_ref::<BlockGoto>()
+                    .and_then(|g| g.wrapped.clone()),
                 _ => return Some(cur.clone()),
             }
         };
@@ -168,18 +175,12 @@ pub fn front_leaf(
 // Ghidra: block.cc:1233 BlockGraph::markCopyBlock
 /// `bl->getFrontLeaf()->flags |= fl` — set a property on the given block's
 /// front leaf, never on the wrapper (block.cc:1233-1237). Dyn-FlowBlock
-/// entry used by markUnstructured ports (BlockGoto holds a typed
-/// BlockBasic arc; BlockIf holds a dyn arc — both route here).
+/// entry used by markUnstructured ports (BlockGoto holds the real dyn
+/// target capture; BlockIf holds a dyn arc — both route here).
 pub fn mark_front_leaf(bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, fl: u32) {
     if let Some(leaf) = front_leaf(bl) {
         leaf.write().unwrap().set_flags(fl);
     }
-}
-
-// Ghidra: block.cc:1233 BlockGraph::markCopyBlock
-/// markCopyBlock for an already-typed `Arc<RwLock<BlockBasic>>` leaf.
-pub fn mark_front_leaf_dyn(bl: &Arc<RwLock<BlockBasic>>, fl: u32) {
-    bl.write().unwrap().flags |= fl;
 }
 
 // Ghidra: block.cc:340 FlowBlock::getFrontLeaf
@@ -193,6 +194,60 @@ pub fn front_leaf_basic(
 ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
     let coerced: Arc<RwLock<dyn FlowBlock + Send + Sync>> = bl.clone();
     front_leaf(&coerced)
+}
+
+// RUGRA-GLUE: one nesting level of the `getParent()->nextFlowAfter(this)`
+// recursion (block.cc:1335-1353) used by the tree-wide gotoPrints evaluation.
+/// For each component, its in-flow successor is the next sibling's front leaf
+/// (cc:1349-1352); for the last component it is `tail_next` — the successor
+/// the enclosing composite itself received (cc:1344-1348's parent recursion,
+/// null at the root). Each component is then visited with its successor.
+fn goto_prints_walk_level(
+    components: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
+    tail_next: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+) {
+    let n = components.len();
+    for i in 0..n {
+        // cc:1340-1343: find the block after this one; cc:1349-1352:
+        // front-leaf it. Last component: cc:1344-1348 parent arm, precomputed
+        // by the caller as tail_next (None at the root = the oracle's null).
+        let succ = if i + 1 < n {
+            front_leaf(&components[i + 1])
+        } else {
+            tail_next.clone()
+        };
+        goto_prints_visit(&components[i], succ);
+    }
+}
+
+// RUGRA-GLUE: per-block step of the tree-wide gotoPrints evaluation.
+/// A `BlockGoto` evaluates block.cc:2884-2888 here:
+/// `gotobl = getGotoTarget()->getFrontLeaf(); nextbl = <successor>;
+/// return gotobl != nextbl` (pointer identity; None vs None compares equal,
+/// matching C++ null == null). Every block then recurses into its component
+/// list with its own successor as the nested tail (the last component of a
+/// composite flows into whatever follows the composite — block.cc:1347).
+fn goto_prints_visit(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    succ: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+) {
+    if bl.read().unwrap().get_type() == BlockType::Goto {
+        let mut guard = bl.write().unwrap();
+        if let Some(g) = guard.as_any_mut().downcast_mut::<BlockGoto>() {
+            // cc:2885: gotobl = getGotoTarget()->getFrontLeaf();
+            let gotobl = g.target_dyn.clone().and_then(|t| front_leaf(&t));
+            // cc:2887: return (gotobl != nextbl);
+            g.prints_precomputed = match (gotobl, succ.clone()) {
+                (Some(a), Some(b)) => !Arc::ptr_eq(&a, &b),
+                (None, None) => false,
+                _ => true,
+            };
+        }
+    }
+    let components = BlockGraph::component_list_dyn(bl);
+    if !components.is_empty() {
+        goto_prints_walk_level(&components, succ);
+    }
 }
 
 /// Type of flow block (corresponds to Ghidra's BlockType)
@@ -3417,6 +3472,102 @@ impl BlockGraph {
         front_leaf(&nextbl)
     }
 
+    // RUGRA-GLUE: Ghidra's uniform BlockGraph::list / getBlock(i) component
+    // protocol (block.hh:365-380, factories block.cc:1758-1918), projected
+    // onto Rugra's typed composite fields. Order matches the -nodes- vector
+    // each factory passes to identifyInternal: BlockList [nodes in order],
+    // BlockIf [cond] for if-goto (newBlockIfGoto cc:1799-1810) / [cond, tc]
+    // (newBlockIf cc:1822-1830) / [cond, tc, fc] (newBlockIfElse cc:1840-
+    // 1849), BlockWhileDo [cond, cl] (cc:1858), BlockDoWhile [condcl]
+    // (cc:1874), BlockInfLoop [body] (cc:1889), BlockCondition [b1, b2]
+    // (cc:1780), BlockSwitch [cs..., default] (cc:1904 — the control stays
+    // outside the list; Rugra's default_case models the default arm),
+    // BlockGoto [bl] (cc:1702). Leaves (Basic/Copy) return an empty list:
+    // Ghidra's walk only recurses through BlockGraph subtypes.
+    //
+    // pub for the bilateral blockstruct_blockgoto_wrapped_1204 fixture —
+    // the oracle side walks getBlock(i) directly, and this is the only
+    // Rust-visible projection of that uniform protocol.
+    pub fn component_list_dyn(
+        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) -> Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        let guard = bl.read().unwrap();
+        let any = guard.as_any();
+        match guard.get_type() {
+            BlockType::List => any
+                .downcast_ref::<BlockList>()
+                .map(|l| l.children.clone())
+                .unwrap_or_default(),
+            BlockType::If => any
+                .downcast_ref::<BlockIf>()
+                .map(|i| {
+                    // if-goto: nodes=[cond] only (newBlockIfGoto); if_body is
+                    // a placeholder aliasing condition in that form.
+                    if i.goto_target.is_some() {
+                        vec![i.condition.clone()]
+                    } else {
+                        let mut v = vec![i.condition.clone(), i.if_body.clone()];
+                        if let Some(eb) = &i.else_body {
+                            v.push(eb.clone());
+                        }
+                        v
+                    }
+                })
+                .unwrap_or_default(),
+            BlockType::WhileDo => any
+                .downcast_ref::<BlockWhileDo>()
+                .map(|w| vec![w.condition.clone(), w.body.clone()])
+                .unwrap_or_default(),
+            BlockType::DoWhile => any
+                .downcast_ref::<BlockDoWhile>()
+                .map(|d| vec![d.condition.clone()])
+                .unwrap_or_default(),
+            BlockType::InfLoop => any
+                .downcast_ref::<BlockInfLoop>()
+                .map(|l| vec![l.body.clone()])
+                .unwrap_or_default(),
+            BlockType::Condition => any
+                .downcast_ref::<BlockCondition>()
+                .map(|c| vec![c.first.clone(), c.second.clone()])
+                .unwrap_or_default(),
+            BlockType::Switch => any
+                .downcast_ref::<BlockSwitch>()
+                .map(|s| {
+                    let mut v: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = s.cases.clone();
+                    if let Some(dc) = &s.default_case {
+                        v.push(dc.clone());
+                    }
+                    v
+                })
+                .unwrap_or_default(),
+            BlockType::Goto => any
+                .downcast_ref::<BlockGoto>()
+                .and_then(|g| g.wrapped.clone())
+                .into_iter()
+                .collect(),
+            // Basic/Copy/Plain/Graph/MultiGoto: leaves or non-walkable nodes
+            // (Ghidra's nextFlowAfter recursion only crosses BlockGraph lists).
+            _ => Vec::new(),
+        }
+    }
+
+    // Ghidra: block.cc:2881 BlockGoto::gotoPrints (tree-wide evaluation form)
+    /// Evaluate every tree-resident `BlockGoto::gotoPrints` (block.cc:2881-
+    /// 2890) once over the final structured tree: `prints = (front_leaf(target)
+    /// != next-in-flow successor)` where the successor is
+    /// `getParent()->nextFlowAfter(this)` (block.cc:1335-1353) — the next
+    /// sibling's front leaf, or, for a last child, the enclosing composite's
+    /// own successor, up to the root where it is null. Called by
+    /// ActionFinalStructure after `scopeBreak(-1,-1)` and before
+    /// `markUnstructured()` (blockaction.cc:2193-2194) — the oracle's own
+    /// first lazy evaluation point — so `markUnstructured`'s `gotoPrints()`
+    /// gate (block.cc:2861) and the emitter read the same value the oracle
+    /// computes on demand. Results are stored on `BlockGoto::prints_precomputed`.
+    pub fn compute_goto_prints(&mut self) {
+        let components = self.blocks.clone();
+        goto_prints_walk_level(&components, None);
+    }
+
     // Ghidra: block.cc:796 FlowBlock::findCommonBlock
     /// Find the common dominator of multiple blocks.
     /// Faithful to `FlowBlock::findCommonBlock(vector<FlowBlock*>&)`
@@ -4782,12 +4933,50 @@ pub struct BlockGoto {
     pub index: i32,
     pub flags: u32,
     pub parent: Option<Weak<RwLock<BlockGraph>>>,
+    /// PRINTC-GOTOPRINTS-0001 legacy projection: the goto target's front leaf
+    /// as a typed `BlockBasic` Arc, consumed by `printc.rs` `emit_block_goto`
+    /// (frozen write-set) via a `.start_addr` field read. The collapse graph's
+    /// leaves are `BlockCopy` nodes whose originals were coerced to
+    /// `Arc<RwLock<dyn FlowBlock>>` at creation, so a shared-identity typed Arc
+    /// is not recoverable; this stays `None` and the real target lives in
+    /// `target_dyn` (below) exactly as Ghidra's `gototarget` pointer
+    /// (block.hh:548). The printc side switches to `target_dyn` +
+    /// `FlowBlock::get_start_addr()` under PRINTC-GOTOPRINTS-0001.
     pub goto_target: Option<Arc<RwLock<BlockBasic>>>,
+    /// Ghidra `BlockGoto::gototarget` (block.hh:548): the target FlowBlock of
+    /// the unstructured branch, captured from the wrapped block's out-edge
+    /// BEFORE the edge removal (`new BlockGoto(bl->getOut(0))`,
+    /// block.cc:1705 precedes `removeEdge`, block.cc:1711). Held as the live
+    /// dyn Arc so `getIndex()` (scopeBreak, block.cc:2872-2873) and
+    /// `getFrontLeaf()` (gotoPrints, block.cc:2886) read the same object the
+    /// oracle's pointer would.
+    pub target_dyn: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    /// Ghidra `BlockGoto : BlockGraph` list component (block.hh:547): the
+    /// wrapped block (`getBlock(0)`), moved into the BlockGoto by
+    /// `identifyInternal(ret, [bl])` (block.cc:1706-1708). Every delegated
+    /// virtual (`emit` via printc.cc:2771, `lastOp`, `getExitLeaf`,
+    /// `firstOp`, `printRaw`, `nextFlowAfter` recursion in scopeBreak) reads
+    /// this component; without it the wrapped block evaporates when
+    /// `identify_internal` replaces its graph slot
+    /// (MAIN-RC2-BLOCKGOTO-WRAPPED-0001).
+    pub wrapped: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
     /// Ghidra `BlockGoto::gototype` (block.hh:549): classification of the
     /// unstructured branch (one of `goto_type::GOTO_GOTO` /
     /// `goto_type::BREAK_GOTO` / `goto_type::CONTINUE_GOTO`). Defaults to
     /// `GOTO_GOTO`; mutated by scope_break to BREAK_GOTO (block.cc:2873).
     pub goto_type: u32,
+    /// Transport for the oracle's lazy `gotoPrints()` evaluation
+    /// (block.cc:2881-2890). Ghidra reads `getParent()->nextFlowAfter(this)`
+    /// at emit time; Rugra composites other than the root `BlockGraph` cannot
+    /// sit in a `BlockGraph::blocks` list, so `BlockGoto::parent` is never
+    /// wired and the parent-present arm cannot run on demand. Instead
+    /// `BlockGraph::compute_goto_prints` evaluates the identical comparison
+    /// (`front_leaf(target) != next-in-flow successor`) once over the final
+    /// tree in `ActionFinalStructure` (after scopeBreak, before
+    /// markUnstructured — the oracle's own first evaluation point), and stores
+    /// the result here. Default `false` is the oracle's null-parent arm
+    /// (block.cc:2889) for BlockGotos outside a computed tree.
+    pub prints_precomputed: bool,
     pub incoming: Vec<BlockEdge>,
     pub outgoing: Vec<BlockEdge>,
 }
@@ -4864,6 +5053,40 @@ impl FlowBlock for BlockGoto {
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
     }
+    // RUGRA-GLUE: Rust helper (Ghidra has no getOps; BlockGoto : BlockGraph
+    // emits via the virtual chain `getBlock(0)->emit(this)` — printc.cc:2771 —
+    // and BlockGraph::firstOp/lastOp delegate to getBlock(0) (block.cc:1330-
+    // 1333). The flatten projection of that delegation is the wrapped block's
+    // full op list, in component order; the trait default (empty Vec) dropped
+    // every wrapped block's ops (MAIN-RC2-BLOCKGOTO-WRAPPED-0001).
+    fn get_ops(&self) -> Vec<PcodeOpRef> {
+        match &self.wrapped {
+            // Ghidra block.hh:547: BlockGoto's single list component.
+            Some(w) => w.read().unwrap().get_ops(),
+            None => Vec::new(),
+        }
+    }
+    // Ghidra: block.hh:190 FlowBlock::subBlock — BlockGoto's component list
+    // holds exactly the wrapped block (identifyInternal(ret,[bl]),
+    // block.cc:1706-1708), so subBlock(0) is the wrapped Arc.
+    fn sub_block(&self, slot: usize) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        if slot == 0 {
+            self.wrapped.clone()
+        } else {
+            None
+        }
+    }
+    // Ghidra: block.cc:1330 BlockGraph::firstOp — getBlock(0)->firstOp()
+    fn first_op(&self) -> Option<PcodeOpRef> {
+        self.wrapped.as_ref().map(|w| w.read().unwrap().first_op())?
+    }
+    // Ghidra: block.hh:561 BlockGoto::getExitLeaf — getBlock(0)->getExitLeaf()
+    fn get_exit_leaf_trait(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        match &self.wrapped {
+            Some(w) => w.read().unwrap().get_exit_leaf_trait(),
+            None => None,
+        }
+    }
     // Ghidra: block.cc:2866 BlockGoto::scopeBreak — delegate to the inherent
     // helper which holds the faithful port (cc:2869 recurse, cc:2872-2873
     // reclassify as f_break_goto when target == curloopexit).
@@ -4897,39 +5120,58 @@ impl BlockGoto {
         self.goto_type
     }
 
-    /// Ghidra `BlockGoto::markUnstructured` (block.cc:2856-2864): if the goto
-    /// is a plain `goto` (not a `break`/`continue`) and it actually prints,
-    /// mark its target block with `f_unstructured_targ`. The C++ first recurses
-    /// via `BlockGraph::markUnstructured`, but Rugra's `BlockGoto` wraps a
-    /// `BlockBasic` (no structured children), so only the target-marking step
-    /// is needed.
+    /// Ghidra `BlockGoto::markUnstructured` (block.cc:2856-2864): recurse
+    /// into the wrapped component (`BlockGraph::markUnstructured`, cc:2859),
+    /// then — if the goto is a plain `goto` (not `break`/`continue`) and it
+    /// actually prints — mark its target block's front leaf with
+    /// `f_unstructured_targ` via `markCopyBlock(gototarget, ...)`
+    /// (cc:2860-2863). The target is the real dyn capture (`target_dyn`,
+    /// block.cc:1705) so the flag lands on the live tree node's front leaf;
+    /// `mark_front_leaf` performs the descent markCopyBlock does.
     // Ghidra: block.cc:2856 BlockGoto::markUnstructured
-    pub fn mark_unstructured_target(&self) {
-        // cc:2860-2863: if (gototype == f_goto_goto) { if (gotoPrints()) markCopyBlock(gototarget, f_unstructured_targ); }
-        // markCopyBlock targets the FRONT LEAF (block.cc:1233-1237), not the
-        // wrapper (GOTO-LABEL-UNPRINTED-0001). BlockGoto::goto_target is
-        // already Arc<RwLock<BlockBasic>> (a leaf), so the descent is a
-        // no-op here, but routing through the same helper keeps both call
-        // sites byte-identical to the oracle's markCopyBlock contract.
+    pub fn mark_unstructured_target(&mut self) {
+        // cc:2859: BlockGraph::markUnstructured() — recurse into list=[wrapped].
+        if let Some(w) = &self.wrapped {
+            w.write().unwrap().mark_unstructured_trait();
+        }
+        // cc:2860-2863: if (gototype == f_goto_goto) { if (gotoPrints())
+        //   markCopyBlock(gototarget, f_unstructured_targ); }
         if self.goto_type == goto_type::GOTO_GOTO {
             if self.goto_prints() {
-                if let Some(target) = &self.goto_target {
-                    mark_front_leaf_dyn(target, block_flags::UNSTRUCTURED_TARG);
+                if let Some(target) = &self.target_dyn {
+                    mark_front_leaf(target, block_flags::UNSTRUCTURED_TARG);
                 }
             }
         }
     }
 
-    /// Ghidra `BlockGoto::scopeBreak` (block.cc:2866-2874): classify this goto
-    /// as a `break` if its target index equals the current loop's exit index.
-    /// The C++ first line recurses into the wrapped child via
-    /// `getBlock(0)->scopeBreak(...)`; Rugra's `BlockGoto` wraps a `BlockBasic`
-    /// with no structured children, so that recursion is a no-op and only the
-    /// classification step (cc:2872-2873) is performed.
+    /// Ghidra `BlockGoto::scopeBreak` (block.cc:2866-2874): first recurse into
+    /// the wrapped component passing the goto target's index as the curexit
+    /// (cc:2869 `getBlock(0)->scopeBreak(gototarget->getIndex(),curloopexit)`)
+    /// — the wrapped block is the only component, so its "block after me in
+    /// flow" is the goto target; then reclassify this goto as `break` when
+    /// its target index equals the current loop's exit index (cc:2872-2873).
+    /// Indices are read live from the dyn Arc, matching the oracle's pointer
+    /// read at scopeBreak time.
     // Ghidra: block.cc:2866 BlockGoto::scopeBreak
     pub fn scope_break_goto_type(&mut self, _cur_exit: i32, cur_loop_exit: i32) {
-        // cc:2872-2873: if (curloopexit == gototarget->getIndex()) gototype = f_break_goto;
-        if let Some(target) = &self.goto_target {
+        let target_idx = self
+            .target_dyn
+            .as_ref()
+            .map(|t| t.read().unwrap().get_index());
+        // cc:2869: getBlock(0)->scopeBreak(gototarget->getIndex(), curloopexit);
+        if let (Some(w), Some(gt_idx)) = (&self.wrapped, target_idx) {
+            w.write().unwrap().scope_break_trait(gt_idx, cur_loop_exit);
+        }
+        // cc:2872-2873: if (curloopexit == gototarget->getIndex())
+        //   gototype = f_break_goto;
+        if let Some(gt_idx) = target_idx {
+            if gt_idx == cur_loop_exit {
+                self.goto_type = goto_type::BREAK_GOTO;
+            }
+        } else if let Some(target) = &self.goto_target {
+            // Legacy typed fallback (never populated by try_rule_goto; kept
+            // for hand-built fixtures): same comparison via the typed leaf.
             if target.read().unwrap().index == cur_loop_exit {
                 self.goto_type = goto_type::BREAK_GOTO;
             }
@@ -4937,21 +5179,19 @@ impl BlockGoto {
     }
 
     /// Ghidra `BlockGoto::gotoPrints` (block.cc:2881-2890): would a formal
-    /// `goto` statement be emitted for this block? Returns `false` when the
-    /// emitter can place the target immediately after this block (so the goto
-    /// is a fall-thru and must not print). The oracle asks the parent for
-    /// the block following this one in flow and compares it to the target's
-    /// front leaf; with no parent (block.cc:2889) it returns \b false — the
-    /// previous conservative `true` inverted exactly that null-parent arm.
-    /// Rugra's structurer never wires `BlockGoto::parent` (try_rule_goto
-    /// constructs it with `parent: None`, blockaction.rs:3673), so the
-    /// parent-present comparison is currently unreachable; when the parent
-    /// wiring lands (PRINTC-GOTOPRINTS-0001), `goto_prints_in` holds the
-    /// faithful comparison.
+    /// `goto` statement be emitted for this block? The oracle asks the parent
+    /// for the block following this one in flow and compares it (pointer
+    /// identity) to the target's front leaf; with no parent (block.cc:2889)
+    /// it returns \b false. Rugra composites cannot sit in a
+    /// `BlockGraph::blocks` list, so the parent-present comparison is
+    /// evaluated once over the final tree by
+    /// `BlockGraph::compute_goto_prints` (run in ActionFinalStructure between
+    /// scopeBreak and markUnstructured — the oracle's own first evaluation
+    /// point) and transported on `prints_precomputed`; the default `false`
+    /// here is exactly the oracle's null-parent arm.
     // Ghidra: block.cc:2881 BlockGoto::gotoPrints
     pub fn goto_prints(&self) -> bool {
-        // cc:2889: return false — the no-parent arm of gotoPrints.
-        false
+        self.prints_precomputed
     }
 
     /// Parent-present half of `BlockGoto::gotoPrints` (block.cc:2884-2888):
@@ -4959,6 +5199,8 @@ impl BlockGoto {
     /// getParent()->nextFlowAfter(this); return gotobl != nextbl`. Requires
     /// the self Arc (to locate this block in the parent's child list) and
     /// the parent graph Arc; `goto_prints` delegates here when both exist.
+    /// The target side reads the real dyn capture (`target_dyn`,
+    /// block.cc:1705), falling back to the typed leaf projection.
     // Ghidra: block.cc:2881 BlockGoto::gotoPrints
     pub fn goto_prints_in(
         &self,
@@ -4966,7 +5208,11 @@ impl BlockGoto {
         parent_arc: &Arc<RwLock<BlockGraph>>,
     ) -> bool {
         // cc:2885: gotobl = getGotoTarget()->getFrontLeaf();
-        let gotobl = self.goto_target.as_ref().and_then(front_leaf_basic);
+        let gotobl = self
+            .target_dyn
+            .as_ref()
+            .and_then(front_leaf)
+            .or_else(|| self.goto_target.as_ref().and_then(front_leaf_basic));
         // cc:2886: nextbl = getParent()->nextFlowAfter(this);
         let nextbl = BlockGraph::next_flow_after(parent_arc, self_arc);
         // cc:2887: return (gotobl != nextbl) — None vs None compares equal,
@@ -4988,12 +5234,18 @@ impl BlockGoto {
 
     /// Ghidra `BlockGoto::nextFlowAfter` (block.cc:2899-2903): the block
     /// containing the next statement in flow is the goto target's front leaf.
-    /// Rugra returns the target's index (the front-leaf concept does not yet
-    /// have a Rust counterpart), or `None` if no target is set.
+    /// Reads the real dyn capture (`target_dyn`, block.cc:1705); the typed
+    /// leaf projection is the fallback. Returns the front leaf's index or
+    /// `None` if no target is set.
     // Ghidra: block.cc:2899 BlockGoto::nextFlowAfter
     pub fn next_flow_after_index(&self) -> Option<i32> {
         // cc:2902: return getGotoTarget()->getFrontLeaf();
-        self.goto_target.as_ref().map(|t| t.read().unwrap().index)
+        if let Some(t) = &self.target_dyn {
+            return front_leaf(t).map(|leaf| leaf.read().unwrap().get_index());
+        }
+        self.goto_target
+            .as_ref()
+            .map(|t| t.read().unwrap().index)
     }
 }
 
@@ -5115,10 +5367,26 @@ impl FlowBlock for BlockIf {
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
     }
-    // RUGRA-GLUE: Rust helper (Ghidra has no getOps; structured blocks delegate emit to components)
+    // RUGRA-GLUE: Rust helper (Ghidra has no getOps; the flatten projection
+    // of BlockIf's component list). Ghidra's factories hold exactly
+    // [cond] for an if-goto (newBlockIfGoto block.cc:1799-1810 — the body
+    // stays external as the out-edge, and Rugra's if_body is a placeholder
+    // aliasing condition there) and [cond, tc(, fc)] otherwise
+    // (newBlockIf block.cc:1822 / newBlockIfElse block.cc:1840). The emit
+    // order those lists induce (printc.cc:2900+: condition, then clause
+    // bodies) is what this returns; the previous condition-only form dropped
+    // every body op in flatten contexts (MAIN-RC3).
     fn get_ops(&self) -> Vec<PcodeOpRef> {
-        // Return condition block ops for the conditional test
-        self.condition.read().unwrap().get_ops()
+        if self.goto_target.is_some() {
+            // if-goto: single component [cond].
+            return self.condition.read().unwrap().get_ops();
+        }
+        let mut ops = self.condition.read().unwrap().get_ops();
+        ops.extend(self.if_body.read().unwrap().get_ops());
+        if let Some(else_b) = &self.else_body {
+            ops.extend(else_b.read().unwrap().get_ops());
+        }
+        ops
     }
     // Ghidra: block.cc:3075 BlockIf::scopeBreak — delegate to the inherent
     // helper which holds the faithful port (cc:3078 condition recurse,
@@ -5419,9 +5687,17 @@ impl FlowBlock for BlockWhileDo {
     fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
         self.parent.as_ref().and_then(|p| p.upgrade())
     }
-    // RUGRA-GLUE: Rust helper (Ghidra has no getOps; structured blocks delegate emit to components)
+    // RUGRA-GLUE: Rust helper (Ghidra has no getOps; the flatten projection
+    // of BlockWhileDo's component list). newBlockWhileDo passes
+    // nodes=[cond, cl] to identifyInternal (block.cc:1858-1865), so the
+    // flatten is condition ops followed by body ops — the emit order
+    // printc.cc:3001-3063 (emitBlockWhileDo: condition, then body) induces.
+    // The previous condition-only form dropped the loop body in flatten
+    // contexts (e.g. a BlockGoto wrapping a WhileDo, MAIN-RC2).
     fn get_ops(&self) -> Vec<PcodeOpRef> {
-        self.condition.read().unwrap().get_ops()
+        let mut ops = self.condition.read().unwrap().get_ops();
+        ops.extend(self.body.read().unwrap().get_ops());
+        ops
     }
     // Ghidra: block.cc:3324 BlockWhileDo::scopeBreak — delegate to the
     // inherent helper which holds the faithful port (cc:3328 condition

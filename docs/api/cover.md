@@ -47,8 +47,17 @@ CoverBlock 边界的指针身份域：
 
 #### `pub fn from_op(op: &PcodeOp) -> Self`
 
-从活动 PcodeOp 构造端点身份：MULTIEQUAL → order 0 + marker；INDIRECT 回退到
-自身 order（已知残留）；普通 op → SeqNum order。
+从活动 PcodeOp 构造端点身份：MULTIEQUAL → order 0 + marker；INDIRECT → 被
+守护 op 的 order（cover.cc:41-43，经 Iop 空间 input(1) 常量按 `Arc::as_ptr`
+编码解码，与 `Funcdata::get_op_from_const` 同一 OPBANK-0001 契约；不可解析的
+typed `call_spec` 注记回退自身 order）；普通 op → SeqNum order。
+
+**2026-08-30 `LATTICE-GEN` 修复**：此前 INDIRECT 回退自身 order 是已登记残留，
+main 的 mergeAddrTied 因此把「call-guard INDIRECT 定义新版 + 读旧版 + 被守护
+call 的参数 trial 读」三个端点摊到不同 order 上，相邻 cover 块从 touch
+（intersect==1，允许）变 overlap（intersect==2 → "Forced merge caused
+intersection"，merge.cc:315）。映射到被守护 op 的 order 后三端点重合，
+与 oracle 边界语义一致。
 
 ### `pub struct CoverBlock`
 
