@@ -66,7 +66,7 @@
 > C4(INT_NOT token 序,非法形态 2→0)+goto 发射 target_dyn 切换+njf234 复核单门补齐(cc:2076)。
 > **当前权威基线(master `9d419f3a`)**:curl E2E skeleton **3119**/defects **0**/numbering **0**——**三项全零**
 > (PendingBrace 动态机制 1:1 移植+backfill 签号门修 numbering;+9=8 处裸 else 恢复 golden 括号结构);
-> httpd 2371/5/0。历史链:2911→…→3110→**3119(0/0)**。(main iVar4 dup,
+> httpd 2325/7/0(iced 链:cmp/test 旧 flag 偏移全错修正+js/jns 曾零 op+c5 零 op 臂;-46 空投影;+2 defects=下游结构化残差已解释)。历史链:2911→…→3110→**3119(0/0)**。(main iVar4 dup,
 > PRINTC-STRUCTEMIT 残差簇已登记);CARRY 泄漏 5→**0**(CARRY1 形态×3);main URL-glob 区与 golden 结构 1:1;
 > while(true) 头逐字节匹配;双侧 fixture printc_whiledo_body_emit MATCH;httpd 2212/5/0。
 > 历史链:2911→2884→3374→3104→3108→3068→3060→**3110**(内容恢复优先)(virtual_list 可变列表
@@ -99,6 +99,10 @@
 | 已集成(4e78a2fb) | `HTTPD-TFALIGN-PANIC-0001` | **FIXED**(Cross-Review: PENDING) | `src/type_system/typefactory.rs`(已落库) | 根因=shared_default() 工厂停留 raw 态(align_map 空);Ghidra 保证 Architecture::decode 尾 setupSizes 的 guard(type.cc:3164-3165 setDefaultAlignmentMap)使 LowlevelError 仅 raw→decode 间可达;修复=get_or_init 内同 guard。httpd 4/29→**28/29 输出 0 panic**,首个可比基线 2148/4/0;curl 2911/1/0 零劣化;测试失败集逐名一致。 |
 | 已集成(484f752c..863c0741) | `HTTPD-STRCASECMP-NONCONVERGE-0001` | **FIXED**(**httpd 29/29 达成**,0 panic/timeout;Cross-Review: PENDING) | `src/coreaction.rs`(root 裁定接受:regB 租约属久亡会话,文件实际空闲) | 三层根因(gdb+BSTRACE):僵尸决策块(CBRANCH<2出边,Rugra独有状态,违反 Ghidra 隐式契约 coreaction.cc:3544)+DeterminedBranch 空转 reset(58877 次)+if_no_exit 每轮 negate 喂 count(24.6万轮);修复=size_out<2 守卫+cc:3546 count 恢复;死循环→5 轮;附带 ap_pregsub 退化语句恢复;26/28 函数字节相同;curl 3068/0/0 精确不变 |
 | 已集成(7786a8e0,Cross-Review: PENDING) | `FUNCDATA-ZOMBIE-DECISION-ORIGIN-0001` | **FIXED**(真因=lifter 零-op 目标→边丢弃;Ghidra flow 合成块边界语义;僵尸 260→0;ap_strcasecmp 垃圾常量消失+do-while 骨架恢复;curl 字节级不变) | `src/funcdata.rs`(已落库) | 残余:httpd 2372/5/0(+160=正确 CFG 暴露 lifter 空投影,绑 X86LIFT-ZEROOP-ARMS) |
+| 已集成(0c80ad5c..56f77d1b,Cross-Review: PENDING) | `X86LIFT-FLAG-PCODE`+`ZEROOP-ARMS` | **DONE**(c1-c5 五笔;语义 oracle=x86-64.sla 直通 dump 双侧 op-for-op MATCH;curl 字节不变) | `src/disasm/x86_lift.rs`(已落库) | 重大发现:cmp/test 旧 flag 偏移全错(ZF 写 0x201=F1 级);js/jns 此前零 op 丢控制流;cmovcc/setcc/sbb/adc/pop/movzx/movsx/REX 低字节别名全补;CARRY 存活最终 IR(golden CARRY8 函数 1×INT_CARRY+22 flag 写 vs 旧 0) |
+| unassigned | `ZF-LOOP-OSCILL-0001` | OPEN(iced 移交,被 c5 掩盖未根治) | 待认领(规则域定位) | ap_strcasestr >5min 不收敛:ZF 写链×jcc 读×循环头触发 rule_repeatapply 震荡;oracle 同 IR 收敛 ⇒ Rugra 规则缺陷 |
+| unassigned | `X86LIFT-PUSH88-0001` | OPEN(爆炸半径大,独立任务) | 待认领(`src/disasm/x86_lift.rs`) | push 仍零-op(push88 语义,1385 处,影响全部函数序言) |
+| unassigned | `X86LIFT-SHIFTS-FLAGS-0001` | OPEN(后续 family) | 待认领(同上) | shl/shr/sar 的 flag 语义(~38 op/条)未实现 |
 | w-iced(接) | `X86LIFT-ZEROOP-ARMS-0001` | OPEN(P1,已路由 iced) | `src/disasm/x86_lift.rs`(w-iced 租约) | movzx/movsx/pop 等零-op 指令臂补齐(对照 ia.sinc);消解 httpd +160 空投影;golden 在这些地址设 LAB 标签为证 | 僵尸决策块成因=上游断边路径跳过 op-destroy(rounds 27-30 逐轮退化 o2→o1→o0);oracle 由 branchRemoveInternal(funcdata_block.cc:203-204)在 sizeOut==2 时先销毁 cbranch;ap_strcasecmp_match 输出数据流仍退化(垃圾常量 0xbaadef)属其下游 | | OPEN(被掩盖的既有缺陷) | 待认领(blockaction/collapse 域;现租约=maingo) | ap_strcasecmp_match(第29函数)collapse restart 不收敛:orderLoopBodies→finalize 3→1 零进展无限重复(15s 112,865 次);证据=/tmp/w-httpd-fix1.err |
 | unassigned | `HTTPD-DEFECTS-QUAD-0001` | OPEN | 待认领 | httpd 4 defects 函数(ap_fini_vhost_config/ap_strcmp_match/ap_getparents/ap_make_dirstr_prefix);首个可比基线后暴露 |
 | w-maingo(新派) | `MAIN-RC2-BLOCKGOTO-WRAPPED-0001` | **P0**(w-main2 探针实测:helpf 0→8/8,main 体 251→736 行) | `src/blockaction.rs`(try_rule_goto)+`src/block.rs`(BlockGoto)+fixture;printc.rs 侧(emit_block_goto 消费)经 root 与 GETPARAM-EMPTYELSE 租约协调 | Ghidra `BlockGoto : BlockGraph`(block.hh:546)持有被包装块组件+删边前捕获 gototarget(block.cc:1702-1713),发射 body+goto 完整(printc.cc:2766-2771)。Rugra 构造 `BlockGoto{goto_target:None}` 无 wrapped 字段、get_ops 返回空、goto_prints 硬编码 false→main 14 个包装块(helpf×8/bVar3=false/break)全部蒸发。证据=/tmp/rugra-reports/w-main2-2026-08-29.md |
