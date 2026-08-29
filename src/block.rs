@@ -3484,7 +3484,11 @@ impl BlockGraph {
     // outside the list; Rugra's default_case models the default arm),
     // BlockGoto [bl] (cc:1702). Leaves (Basic/Copy) return an empty list:
     // Ghidra's walk only recurses through BlockGraph subtypes.
-    fn component_list_dyn(
+    //
+    // pub for the bilateral blockstruct_blockgoto_wrapped_1204 fixture —
+    // the oracle side walks getBlock(i) directly, and this is the only
+    // Rust-visible projection of that uniform protocol.
+    pub fn component_list_dyn(
         bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
     ) -> Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         let guard = bl.read().unwrap();

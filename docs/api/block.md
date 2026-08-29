@@ -1542,3 +1542,14 @@ E2E curl（124/124，0 panic）：skeleton 2911→3416，defects 1→1（__cxa_f
 body_is_dead 门禁 + RC-4 循环形态 + RC-5 条件错接均未修），内容本身完整
 （main 体 245→643 行，0x2a8a..0x2ff9 区 51×setopt 级联/perform/cleanup 全部
 恢复，无双重发射）。
+
+- `component_list_dyn` 提升为 pub（Ghidra 统一 getBlock(i) 协议的唯一 Rust 可见
+  投影）：双侧 fixture blockstruct_blockgoto_wrapped_1204 的树遍历入口。fixture
+  状态 MISMATCH（14 行），登记于 BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 —— 两个
+  探针形态上 oracle 的 collapseAll 留下纯 BlockGoto 包装（double_back_goto:
+  wrapped=b3 basic/target=whiledo 复合；loop_exit_conflict_gotos: wrapped=list
+  与 properif 复合、其一 target 指向另一 goto 节点），Rugra 侧同图结构化不产
+  t_goto（与 goto_cascade 185 行/deadregion 149 行同根因族，两 fixture 在
+  master 上即 MISMATCH，本次重钉 comparand sha 后复核数字不变）。oracle 侧
+  观测同时实证了 target 为复合块（whiledo/list/goto）—— dyn target 设计的
+  直接依据。
