@@ -49,9 +49,9 @@
  "comparand": {
   "cpp_fixture_sha256": "0926f81042baac7f1be63181bef240c046a4c84fb93b19997fee7038b81ebdc5",
   "rust_fixture_sha256": "a7a789b4cb568902e046b66b715b68ed84b8fbc9c1681773e7f36027f12d20a7",
-  "runner_sha256": "f44eb76f378831f64d0665da01096943f2a622bffdb836b2650e1ead6b0c96f7",
-  "ghidra_stdout_sha256": "a5fdf6f3a09638e736a4aa2fffa2f0f6399b12f3bc9df7492a4a4ec05dd272b7",
-  "rugra_stdout_sha256": "a5fdf6f3a09638e736a4aa2fffa2f0f6399b12f3bc9df7492a4a4ec05dd272b7"
+  "runner_sha256": "390bd28fe915817e3239a811515a6ffcc160f43060895d241455637a257a1b50",
+  "expected_ghidra_stdout_sha256": "a5fdf6f3a09638e736a4aa2fffa2f0f6399b12f3bc9df7492a4a4ec05dd272b7",
+  "expected_rugra_stdout_sha256": "a5fdf6f3a09638e736a4aa2fffa2f0f6399b12f3bc9df7492a4a4ec05dd272b7"
  },
  "decisive_semantics": {
   "references": "mergeneed map<MergePair,Varnode*> carried between checkExitBlock and execute; opSetInput/opRemoveInput/opDestroy mutations observable in the projection",
