@@ -264,7 +264,10 @@ def select_fixtures(
 
     for fixture in fixtures:
         fixture_id = str(fixture["id"])
-        impact = fixture["impact"]
+        # Legacy pre-migration entries may lack `impact` entirely; the schema
+        # gate (tools/oracle_registry.py lint) stays fail-closed on them, the
+        # selector only maps changes to fixtures and must not crash.
+        impact = fixture.get("impact", {})
         if global_change:
             reasons[fixture_id].add("global-path")
         if tier and tier in fixture.get("always_tiers", []):
@@ -280,7 +283,7 @@ def select_fixtures(
     covered_ids = {
         str(function_id)
         for fixture in fixtures
-        for function_id in fixture["impact"].get("rust_function_ids", [])
+        for function_id in fixture.get("impact", {}).get("rust_function_ids", [])
     }
     uncovered: list[dict[str, object]] = []
     for change in changed:
@@ -290,7 +293,7 @@ def select_fixtures(
         path_fixtures = [
             fixture
             for fixture in fixtures
-            if matches_any(path, fixture["impact"].get("paths", []))
+            if matches_any(path, fixture.get("impact", {}).get("paths", []))
         ]
         if path_fixtures:
             continue
@@ -341,7 +344,7 @@ def selection_document(root: Path, args: argparse.Namespace) -> dict[str, object
     registered_ids = {
         str(function_id)
         for fixture in registry["fixtures"]
-        for function_id in fixture["impact"].get("rust_function_ids", [])
+        for function_id in fixture.get("impact", {}).get("rust_function_ids", [])
     }
     ledger_ids = {str(entry["id"]) for entry in ledger["rugra_functions"]}
     stale_ids = sorted(registered_ids - ledger_ids)
