@@ -1,111 +1,111 @@
 {
-  "schema": 2,
-  "fixture_id": "COVER-TWOPIECE-RESIDUAL-0001",
-  "stable_function_id": "GH12-F-7c3e9d14a2f58b60c4e1",
-  "stable_function_closure": [
-    "GH12-F-7c3e9d14a2f58b60c4e1 ghidra::CoverBlock::merge cover.cc:147",
-    "GH12-F-2f9a41c7e0b8d35a6f12 ghidra::CoverBlock::intersect cover.cc:59",
-    "GH12-F-4c88b1e9f207d3a5c8b0 ghidra::CoverBlock::contain cover.cc:107",
-    "GH12-F-9d52a70b3c14e6f8a513 ghidra::CoverBlock::boundary cover.cc:129",
-    "GH12-F-7bbe28b1702f29bcfe3d ghidra::Cover::addRefRecurse cover.cc:524",
-    "GH12-F-1c7e2d100750ac446e34 ghidra::Cover::addRefPoint cover.cc:565",
-    "GH12-F-9b81a59531050a2a040d ghidra::Cover::addDefPoint cover.cc:501"
-  ],
-  "overall_status": "MATCH: all thirteen cases (eight CoverBlock unit-level construct/merge/contain/boundary/intersect quadrants plus five production rebuild/merge paths) byte-match the locked oracle, including the two-piece wrap state itself (empty==0 on ustop<ustart), the disjoint/internal4 merge wrap productions, the wrap fall-through recursion of addRefPoint (cover.cc:584-599), the pointer-level boundary discriminators (begin sentinel vs input marker), the precise old-stop MULTIEQUAL-tip discrimination of addRefPoint/addRefRecurse, and a production Cover::merge one-piece+two-piece union; remaining residuals are the INDIRECT getOpFromConst target-order fallback and production FlowBlock index assignment, both outside this fixture's write-set",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/cover.cc:29-215,465-612",
-    "signature": "void CoverBlock::merge(const CoverBlock &op2); int4 CoverBlock::intersect(const CoverBlock &op2) const; bool CoverBlock::contain(const PcodeOp *point) const; int4 CoverBlock::boundary(const PcodeOp *point) const; void Cover::addRefPoint(const PcodeOp *ref,const Varnode *vn); void Cover::addRefRecurse(const FlowBlock *bl); void Cover::merge(const Cover &op2)"
+ "schema": 2,
+ "fixture_id": "COVER-TWOPIECE-RESIDUAL-0001",
+ "stable_function_id": "GH12-F-86162380900e2cca1e46",
+ "stable_function_closure": [
+  "GH12-F-86162380900e2cca1e46 ghidra::CoverBlock::merge cover.cc:147",
+  "GH12-F-a8941169255720fb9cf3 ghidra::CoverBlock::intersect cover.cc:59",
+  "GH12-F-759a0b118ecded62b85f ghidra::CoverBlock::contain cover.cc:107",
+  "GH12-F-3e38939f62f4e47b9699 ghidra::CoverBlock::boundary cover.cc:129",
+  "GH12-F-7bbe28b1702f29bcfe3d ghidra::Cover::addRefRecurse cover.cc:524",
+  "GH12-F-1c7e2d100750ac446e34 ghidra::Cover::addRefPoint cover.cc:565",
+  "GH12-F-9b81a59531050a2a040d ghidra::Cover::addDefPoint cover.cc:501"
+ ],
+ "overall_status": "MATCH: all thirteen cases (eight CoverBlock unit-level construct/merge/contain/boundary/intersect quadrants plus five production rebuild/merge paths) byte-match the locked oracle, including the two-piece wrap state itself (empty==0 on ustop<ustart), the disjoint/internal4 merge wrap productions, the wrap fall-through recursion of addRefPoint (cover.cc:584-599), the pointer-level boundary discriminators (begin sentinel vs input marker), the precise old-stop MULTIEQUAL-tip discrimination of addRefPoint/addRefRecurse, and a production Cover::merge one-piece+two-piece union; remaining residuals are the INDIRECT getOpFromConst target-order fallback and production FlowBlock index assignment, both outside this fixture's write-set",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/cover.cc:29-215,465-612",
+  "signature": "void CoverBlock::merge(const CoverBlock &op2); int4 CoverBlock::intersect(const CoverBlock &op2) const; bool CoverBlock::contain(const PcodeOp *point) const; int4 CoverBlock::boundary(const PcodeOp *point) const; void Cover::addRefPoint(const PcodeOp *ref,const Varnode *vn); void Cover::addRefRecurse(const FlowBlock *bl); void Cover::merge(const Cover &op2)"
+ },
+ "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7",
+ "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level disabled",
+ "analysis_options": {
+  "entrypoint": "Part A: direct CoverBlock construction with real block-inserted PcodeOp boundary pointers and the three Ghidra sentinels; Part B: locked Varnode::updateCover -> Cover::rebuild on synthetic def-use/CFG graphs built through production Funcdata APIs (newOp/opSetInput/newUniqueOut/opInsertEnd/newBlockBasic/addEdge/setInputVarnode/calcCover) plus one production Cover::merge call; no Actions, SSA, or C emission",
+  "prestate": "Per-case fresh Funcdata; blocks receive deterministic creation-order FlowBlock indices as a precondition (BLOCK-INDEX-ASSIGN-0001); ops receive BlockBasic::insert midpoint SeqNum orders via opInsertEnd (first op 0x800002, append midpoints per block.cc:2269-2284)",
+  "observation": "Part A per case: endpoint identity pairs (b/e/i/order/0m) at each construction stage, contain sampled at uindex {0, each real op order, ~0}, boundary sampled at the same points plus the input sentinel; merge results include empty flag. Part B per case: per-op SeqNum orders and the complete Cover as ascending per-block index start-end endpoint identity pairs",
+  "normalization": "No order, flag, membership, or endpoint normalization; both sides print the same identity-classified projection of the same observation fields"
+ },
+ "input_manifest": {
+  "cases": {
+   "a1_construct": "empty construction, setBegin's stop-promotion side effect (stop==begin-sentinel promotes to end sentinel), one-piece contain/boundary samples",
+   "a2_twopiece_construct": "directly constructed wrap interval [6,2]: non-empty, wrap contain (b/2/6/e inside, mid outside), boundary 2 at start / 1 at stop",
+   "a3_boundary_sentinels": "begin-sentinel start must NOT report a defining point at uindex 0 (pointer-level start!=0 test of cover.cc:137); input-sentinel block reports 2 for both uindex-0 probes",
+   "a4_merge_disjoint_wrap": "disjoint branch of merge (cover.cc:175-181): one-piece [3,4] takes two-piece [6,2]'s stop producing wrap [3,2]",
+   "a5_merge_internal4_wrap": "internal4 path (ustart==0 with op2.stop==end sentinel) picks the other start, leaving [4,3] wrap",
+   "a6_merge_setall": "internal3+mutual-containment setAll (b-e) and equal-start mutual containment keeping the wider interval",
+   "a7_intersect_quadrants": "all four one-piece/two-piece quadrants of intersect (cover.cc:59-102): overlap 2, disjoint 0, touch 1, one/two gap 0, one/two touch 1, one/two interval 2, two/two 2",
+   "a8_merge_empty_copy": "merging into an empty block copies the two-piece endpoint identities wholesale",
+   "b1_wrap_join_multiequal_reader": "production rebuild: join-block MULTIEQUAL reading a same-block earlier-defined varnode wraps the stop to the marker (d-0m) and falls through cover.cc:584-599 to slot recursion filling the predecessor",
+   "b2_wrap_then_contained_reader": "a later ordinary reader at a higher order is contained by the wrap range [d,~0]u[0,0] and returns without extending",
+   "b3_multiequal_tip_precise": "addRefPoint MULTIEQUAL-tip discrimination via the OLD stop's marker identity (cover.cc:590-597): a second reader after a (Begin, MULTIEQUAL) cover recurses ALL predecessors, filling the untouched one",
+   "b4_merge_wrap_internal": "production Cover::merge unioning a one-piece [2,2] def-only cover with a rebuild-produced two-piece [3,0m] cover yields wrap [2,0m]"
   },
-  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7",
-  "compiler_spec": "synthetic prototype fixture: extrapop=0, empty input/output, no effect records, no symbols, high-level disabled",
-  "analysis_options": {
-    "entrypoint": "Part A: direct CoverBlock construction with real block-inserted PcodeOp boundary pointers and the three Ghidra sentinels; Part B: locked Varnode::updateCover -> Cover::rebuild on synthetic def-use/CFG graphs built through production Funcdata APIs (newOp/opSetInput/newUniqueOut/opInsertEnd/newBlockBasic/addEdge/setInputVarnode/calcCover) plus one production Cover::merge call; no Actions, SSA, or C emission",
-    "prestate": "Per-case fresh Funcdata; blocks receive deterministic creation-order FlowBlock indices as a precondition (BLOCK-INDEX-ASSIGN-0001); ops receive BlockBasic::insert midpoint SeqNum orders via opInsertEnd (first op 0x800002, append midpoints per block.cc:2269-2284)",
-    "observation": "Part A per case: endpoint identity pairs (b/e/i/order/0m) at each construction stage, contain sampled at uindex {0, each real op order, ~0}, boundary sampled at the same points plus the input sentinel; merge results include empty flag. Part B per case: per-op SeqNum orders and the complete Cover as ascending per-block index start-end endpoint identity pairs",
-    "normalization": "No order, flag, membership, or endpoint normalization; both sides print the same identity-classified projection of the same observation fields"
-  },
-  "input_manifest": {
-    "cases": {
-      "a1_construct": "empty construction, setBegin's stop-promotion side effect (stop==begin-sentinel promotes to end sentinel), one-piece contain/boundary samples",
-      "a2_twopiece_construct": "directly constructed wrap interval [6,2]: non-empty, wrap contain (b/2/6/e inside, mid outside), boundary 2 at start / 1 at stop",
-      "a3_boundary_sentinels": "begin-sentinel start must NOT report a defining point at uindex 0 (pointer-level start!=0 test of cover.cc:137); input-sentinel block reports 2 for both uindex-0 probes",
-      "a4_merge_disjoint_wrap": "disjoint branch of merge (cover.cc:175-181): one-piece [3,4] takes two-piece [6,2]'s stop producing wrap [3,2]",
-      "a5_merge_internal4_wrap": "internal4 path (ustart==0 with op2.stop==end sentinel) picks the other start, leaving [4,3] wrap",
-      "a6_merge_setall": "internal3+mutual-containment setAll (b-e) and equal-start mutual containment keeping the wider interval",
-      "a7_intersect_quadrants": "all four one-piece/two-piece quadrants of intersect (cover.cc:59-102): overlap 2, disjoint 0, touch 1, one/two gap 0, one/two touch 1, one/two interval 2, two/two 2",
-      "a8_merge_empty_copy": "merging into an empty block copies the two-piece endpoint identities wholesale",
-      "b1_wrap_join_multiequal_reader": "production rebuild: join-block MULTIEQUAL reading a same-block earlier-defined varnode wraps the stop to the marker (d-0m) and falls through cover.cc:584-599 to slot recursion filling the predecessor",
-      "b2_wrap_then_contained_reader": "a later ordinary reader at a higher order is contained by the wrap range [d,~0]u[0,0] and returns without extending",
-      "b3_multiequal_tip_precise": "addRefPoint MULTIEQUAL-tip discrimination via the OLD stop's marker identity (cover.cc:590-597): a second reader after a (Begin, MULTIEQUAL) cover recurses ALL predecessors, filling the untouched one",
-      "b4_merge_wrap_internal": "production Cover::merge unioning a one-piece [2,2] def-only cover with a rebuild-produced two-piece [3,0m] cover yields wrap [2,0m]"
-    },
-    "sha256": "e2e24183faf9d9e3c9d81a75eb43194ee34a113e8e56a1ba63a68c6353ee9e06"
-  },
-  "observation_schema": {
-    "format": "Thirteen fixed-order UTF-8 lines with final newline: one envelope plus twelve case records",
-    "part_a": "construction-stage endpoint pairs, contain/boundary sample vectors over uindex {b,orders,e,i}, merge outcome states with empty flag, intersect characterization per quadrant",
-    "part_b": "per-op SeqNum orders and per-block endpoint identity pairs (b/e/i/order/0m) of the rebuilt or merged Cover"
-  },
-  "comparand": {
-    "rugra_base_commit": "a301036407de8f1b2291abf600f0ac72335a1912",
-    "rugra_base_tree": "b8ea38f30882068bb2e902db2a5cc836b28c6891",
-    "cpp_fixture_sha256": "23ded8939901206c7e323056df69567f1d32a0c0c738588fba9b632c3b573cd3",
-    "rust_fixture_sha256": "62f10a4a6d9e1b693258bb4b27487bd746c22cb5a0d1f4cd1deb453a310fe2a7",
-    "cover_rs_sha256": "8c6b9d9dd076afb5ebb45418275fb3fa3f21d949f3ba19ac8d73dd6f2e0e2033",
-    "merge_rs_sha256": "6c7671aaee1f0f8f2378bcd8416b6795f030c04a8e1610ad8d8ee30d2cdae354",
-    "cover_doc_sha256": "e3c7a9e7d7da7ee25fe208e3f1303dcc773b68ac1f7c58de3200a80755bcda1f",
-    "merge_doc_sha256": "07c8100e778bb7f5cb990556c84ab11c72774cde1ce6d98ca9016f5c973d064b",
-    "runner_sha256": "47b1970f420d506d8a2dcaaa1707847becb578997ace1d928cf8b65585d3e10c",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-cover-twopiece-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-    "rust_crate_tree_sha256": "0d0385de6492352d2570b4b4a7f347b231c15bf1e2a9dc9e95e8165a29cbca56",
-    "host": {
-      "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-      "cxx_target": "x86_64-linux-gnu",
-      "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
-      "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-      "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
-      "make_path": "/usr/bin/make",
-      "python_path": "/usr/bin/python3.10",
-      "git_path": "/usr/bin/git",
-      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-      "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
-      "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
-      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-      "platform": "Linux 6.8.0-124-generic x86_64"
-    }
-  },
-  "build": {
-    "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
-    "private_state_observer": "Read-only ABI observation of CoverBlock::start/stop and Varnode::cover through #define private public in the fixture translation unit only; no oracle source is modified",
-    "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/cover.rs and src/merge.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
-    "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
-    "registry_packages": 164,
-    "registry_lock_closure_sha256": "8ba71da48715a891ca02354d1c56a763a81c919ea25946146f155c0f1eb75c99"
-  },
-  "expected_stdout_sha256": "65cf1b9268aa0ed7625925152263d1b1bbf7b8b695c76df2089d576536b5c167",
-  "expected_exit_code": 0,
-  "covered_projection_status": "MATCH",
-  "coverage": {
-    "construct_setbegin_setend_sentinel_side_effect": "MATCH: fresh (b,b) empty; setBegin promotes a begin-sentinel stop to the end sentinel exactly as cover.hh:86-87",
-    "twopiece_construct_empty_and_contain": "MATCH: the wrap interval [6,2] is non-empty with the wrap-around contain membership of cover.cc:117-119",
-    "boundary_pointer_identity_discriminators": "MATCH: begin-sentinel start suppresses the defining-point return at uindex 0 while the input marker reports it (pointer-level start!=0, cover.cc:137)",
-    "merge_disjoint_wrap": "MATCH: disjoint intervals pick the earliest start plus the other stop, producing the wrap [3,2] (cover.cc:175-181)",
-    "merge_internal4_wrap": "MATCH: internal4 (ustart==0 with op2.stop==end sentinel) replaces start, leaving the wrap [4,3]",
-    "merge_setall_and_equal_start": "MATCH: internal3 mutual-containment setAll covers (b,e) and equal-start mutual containment keeps the wider interval without setAll",
-    "intersect_four_quadrants": "MATCH: one/one overlap, disjoint, touch; one/two gap, touch, interval; two/two interval — all seven characterizations of cover.cc:59-102",
-    "merge_empty_identity_copy": "MATCH: merging into an empty CoverBlock copies both endpoint identities of the two-piece operand",
-    "rebuild_wrap_join_multiequal_reader": "MATCH: production updateCover/rebuild wraps the join-block stop to the MULTIEQUAL marker (d-0m) and falls through cover.cc:584-599 to the slot recursion filling the predecessor",
-    "rebuild_wrap_then_contained_reader": "MATCH: a later ordinary reader is contained by the wrap range and returns without extending the cover",
-    "rebuild_multiequal_tip_old_stop_discrimination": "MATCH: the old stop's marker identity drives the tip recursion of cover.cc:590-597, filling the predecessor branch the slot match skipped; the prior order-only conservative fallback is retired by this fixture",
-    "rebuild_cover_merge_onepiece_twopiece_union": "MATCH: production Cover::merge unions a one-piece def-only cover with a rebuild two-piece cover into the wrap [2,0m]",
-    "indirect_target_order": "MISMATCH: CoverEndpoint::from_op falls back to the INDIRECT op's own SeqNum order instead of resolving the getOpFromConst target order (order-only limitation family; requires Funcdata op-bank access at insertion time)"
+  "sha256": "e2e24183faf9d9e3c9d81a75eb43194ee34a113e8e56a1ba63a68c6353ee9e06"
+ },
+ "observation_schema": {
+  "format": "Thirteen fixed-order UTF-8 lines with final newline: one envelope plus twelve case records",
+  "part_a": "construction-stage endpoint pairs, contain/boundary sample vectors over uindex {b,orders,e,i}, merge outcome states with empty flag, intersect characterization per quadrant",
+  "part_b": "per-op SeqNum orders and per-block endpoint identity pairs (b/e/i/order/0m) of the rebuilt or merged Cover"
+ },
+ "comparand": {
+  "rugra_base_commit": "a301036407de8f1b2291abf600f0ac72335a1912",
+  "rugra_base_tree": "b8ea38f30882068bb2e902db2a5cc836b28c6891",
+  "cpp_fixture_sha256": "23ded8939901206c7e323056df69567f1d32a0c0c738588fba9b632c3b573cd3",
+  "rust_fixture_sha256": "62f10a4a6d9e1b693258bb4b27487bd746c22cb5a0d1f4cd1deb453a310fe2a7",
+  "cover_rs_sha256": "8c6b9d9dd076afb5ebb45418275fb3fa3f21d949f3ba19ac8d73dd6f2e0e2033",
+  "merge_rs_sha256": "6c7671aaee1f0f8f2378bcd8416b6795f030c04a8e1610ad8d8ee30d2cdae354",
+  "cover_doc_sha256": "e3c7a9e7d7da7ee25fe208e3f1303dcc773b68ac1f7c58de3200a80755bcda1f",
+  "merge_doc_sha256": "07c8100e778bb7f5cb990556c84ab11c72774cde1ce6d98ca9016f5c973d064b",
+  "runner_sha256": "68cb6951e6ce2ba901807dfc1a1d5347ab4ad0e1480b3508362eaf9e7d199705",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-cover-twopiece-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "rust_crate_tree_sha256": "0d0385de6492352d2570b4b4a7f347b231c15bf1e2a9dc9e95e8165a29cbca56",
+  "host": {
+   "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+   "cxx_target": "x86_64-linux-gnu",
+   "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+   "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+   "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.10",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+   "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+   "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+   "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+   "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+   "platform": "Linux 6.8.0-124-generic x86_64"
   }
+ },
+ "build": {
+  "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
+  "private_state_observer": "Read-only ABI observation of CoverBlock::start/stop and Varnode::cover through #define private public in the fixture translation unit only; no oracle source is modified",
+  "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/cover.rs and src/merge.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
+  "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "8ba71da48715a891ca02354d1c56a763a81c919ea25946146f155c0f1eb75c99"
+ },
+ "expected_stdout_sha256": "65cf1b9268aa0ed7625925152263d1b1bbf7b8b695c76df2089d576536b5c167",
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "coverage": {
+  "construct_setbegin_setend_sentinel_side_effect": "MATCH: fresh (b,b) empty; setBegin promotes a begin-sentinel stop to the end sentinel exactly as cover.hh:86-87",
+  "twopiece_construct_empty_and_contain": "MATCH: the wrap interval [6,2] is non-empty with the wrap-around contain membership of cover.cc:117-119",
+  "boundary_pointer_identity_discriminators": "MATCH: begin-sentinel start suppresses the defining-point return at uindex 0 while the input marker reports it (pointer-level start!=0, cover.cc:137)",
+  "merge_disjoint_wrap": "MATCH: disjoint intervals pick the earliest start plus the other stop, producing the wrap [3,2] (cover.cc:175-181)",
+  "merge_internal4_wrap": "MATCH: internal4 (ustart==0 with op2.stop==end sentinel) replaces start, leaving the wrap [4,3]",
+  "merge_setall_and_equal_start": "MATCH: internal3 mutual-containment setAll covers (b,e) and equal-start mutual containment keeps the wider interval without setAll",
+  "intersect_four_quadrants": "MATCH: one/one overlap, disjoint, touch; one/two gap, touch, interval; two/two interval \u2014 all seven characterizations of cover.cc:59-102",
+  "merge_empty_identity_copy": "MATCH: merging into an empty CoverBlock copies both endpoint identities of the two-piece operand",
+  "rebuild_wrap_join_multiequal_reader": "MATCH: production updateCover/rebuild wraps the join-block stop to the MULTIEQUAL marker (d-0m) and falls through cover.cc:584-599 to the slot recursion filling the predecessor",
+  "rebuild_wrap_then_contained_reader": "MATCH: a later ordinary reader is contained by the wrap range and returns without extending the cover",
+  "rebuild_multiequal_tip_old_stop_discrimination": "MATCH: the old stop's marker identity drives the tip recursion of cover.cc:590-597, filling the predecessor branch the slot match skipped; the prior order-only conservative fallback is retired by this fixture",
+  "rebuild_cover_merge_onepiece_twopiece_union": "MATCH: production Cover::merge unions a one-piece def-only cover with a rebuild two-piece cover into the wrap [2,0m]",
+  "indirect_target_order": "MISMATCH: CoverEndpoint::from_op falls back to the INDIRECT op's own SeqNum order instead of resolving the getOpFromConst target order (order-only limitation family; requires Funcdata op-bank access at insertion time)"
+ }
 }

@@ -310,7 +310,7 @@ require("fixture id", metadata["fixture_id"], "FSPEC-SPACE-IDENTITY-1204")
 require(
     "stable function id",
     metadata["stable_function_id"],
-    "GH12-F-1a24634964d022030397",
+    "GH12-F-29b4564b065202fc2482",
 )
 require("overall status", metadata["overall_status"].split(":", 1)[0], "PARTIAL_MATCH")
 oracle = metadata["oracle"]

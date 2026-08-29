@@ -314,7 +314,7 @@ require("fixture id", metadata["fixture_id"], "COVER-TWOPIECE-RESIDUAL-0001")
 require(
     "stable function id",
     metadata["stable_function_id"],
-    "GH12-F-7c3e9d14a2f58b60c4e1",
+    "GH12-F-86162380900e2cca1e46",
 )
 require("overall status", metadata["overall_status"].split(":", 1)[0], "MATCH")
 oracle = metadata["oracle"]

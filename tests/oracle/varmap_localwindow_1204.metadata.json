@@ -1,100 +1,100 @@
 {
-  "schema": 2,
-  "fixture_id": "VARMAP-LOCALWINDOW-0001",
-  "stable_function_id": "GH12-F-76f7192d736e6eaa29f7",
-  "stable_function_closure": [
-    "GH12-F-76f7192d736e6eaa29f7 ghidra::ScopeLocal::resetLocalWindow varmap.cc:432",
-    "GH12-F-38c080ff1f358783493c ghidra::ProtoModel::defaultLocalRange fspec.cc:2263",
-    "GH12-F-4c0d61b26049e4864833 ghidra::MapState::MapState varmap.cc:864",
-    "GH12-F-332e3a168fb0200796ff ghidra::RangeList::inRange address.cc:468",
-    "GH12-F-72e57acfdcb7954f3f5e ghidra::RangeList::getLastSignedRange address.cc:562",
-    "GH12-F-57d8745907b09a895acf ghidra::MapState::addRange varmap.cc:896",
-    "GH12-F-cb79934b729ec33b8e23 ghidra::MapState::reconcileDatatypes varmap.cc:960",
-    "GH12-F-5ae2a22f39884c7a4bcf ghidra::MapState::initialize varmap.cc:1063",
-    "GH12-F-821613e41ec8c8365f73 ghidra::ScopeLocal::restructureVarnode varmap.cc:1256",
-    "GH12-F-df370047d0c698033aa8 ghidra::ScopeLocal::restructure varmap.cc:1294",
-    "GH12-F-55c6524cd476ebceb185 ghidra::ScopeLocal::buildVariableName varmap.cc:548"
+ "schema": 2,
+ "fixture_id": "VARMAP-LOCALWINDOW-0001",
+ "stable_function_id": "GH12-F-2a6f55228a2d38d1f1c6",
+ "stable_function_closure": [
+  "GH12-F-2a6f55228a2d38d1f1c6 ghidra::ScopeLocal::resetLocalWindow varmap.cc:432",
+  "GH12-F-52ca883c7033ba735200 ghidra::ProtoModel::defaultLocalRange fspec.cc:2263",
+  "GH12-F-51374cb248bd82904a39 ghidra::MapState::MapState varmap.cc:864",
+  "GH12-F-5a896b15b2a1348bf042 ghidra::RangeList::inRange address.cc:468",
+  "GH12-F-f54a71995b07f49cd385 ghidra::RangeList::getLastSignedRange address.cc:562",
+  "GH12-F-e9fcfaca7f36b7e9baf8 ghidra::MapState::addRange varmap.cc:896",
+  "GH12-F-726eab7f07e437990f98 ghidra::MapState::reconcileDatatypes varmap.cc:960",
+  "GH12-F-bffc4992ccaab3aae834 ghidra::MapState::initialize varmap.cc:1063",
+  "GH12-F-82803dfc618c4d66fd58 ghidra::ScopeLocal::restructureVarnode varmap.cc:1256",
+  "GH12-F-7524cb1d212bf93af537 ghidra::ScopeLocal::restructure varmap.cc:1294",
+  "GH12-F-da1f5c1cb324abd14245 ghidra::ScopeLocal::buildVariableName varmap.cc:548"
+ ],
+ "overall_status": "UNTESTED: (B2 migration of PARTIAL_MATCH) the five-case local-window projection (default window values, the union range tree, the negative-offset hint gate, the open-array extension and endpoint bounding, and the buildVariableName branch split) byte-matches the locked oracle through the production resetLocalWindow/restructureVarnode path; the LoadGuard/StoreGuard open hints (MapState::addGuard, varmap.cc:1003) and the typelocked-symbol re-feed (MapState::gatherSymbols, varmap.cc:1269) remain outside this atomic change and are bound to VARMAP-GATHEROPEN-GUARD-0001",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{fspec.cc:2263-2319,varmap.cc:432-460,548-581,864-919,960-996,1063-1082,1256-1325,address.cc:468-487,512-537,562-583}",
+  "signature": "void ProtoModel::defaultLocalRange(void); void ScopeLocal::resetLocalWindow(void); string ScopeLocal::buildVariableName(const Address &addr,const Address &pc,Datatype *ct,int4 &index,uint4 flags) const; MapState::MapState(AddrSpace *spc,const RangeList &rn,const RangeList &pm,Datatype *dt); void MapState::addRange(uintb st,Datatype *ct,uint4 fl,RangeHint::RangeType rt,int4 hi); void MapState::reconcileDatatypes(void); bool MapState::initialize(void); void ScopeLocal::restructureVarnode(bool aliasyes); bool ScopeLocal::restructure(MapState &state)"
+ },
+ "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5 (8-byte SpacebaseSpace, stack pointer register:0), join=6, iop=7; core types char(1)/int(4)/long(8)/xunknownN",
+ "compiler_spec": "prototype model decoded per case from <prototype name=\"lw_default\" extrapop=\"0\"><input/><output/></prototype> with NO <localrange>/<paramrange> elements, so the model carries the default windows of the negative-growth 8-byte stack (locals [0xfffffffffff0bdc0,0xffffffffffffffff], params [0,0x1ff])",
+ "analysis_options": {
+  "entrypoint": "Direct invocation of locked ScopeLocal::resetLocalWindow / Funcdata P-code construction (newOp/opSetOpcode/opSetInput/opSetOutput/newVarnode/setInputVarnode) / ScopeLocal::restructureVarnode(false) / ScopeLocal::buildVariableName on real Funcdata+ScopeLocal bound through FuncProto::setModel; no Actions or C emission",
+  "prestate": "Per-case fresh Funcdata (unique entry address) + ScopeLocal(0x102, stack) with the default-model prototype; synthetic written stack Varnodes are COPY-of-constant outputs at chosen offsets; the gatherOpen shape is an input stack-pointer Varnode (register:0 size 8 / Rugra register:0x20 size 8), an INT_SUB by a constant whose result is typed int*, consumed by a non-additive INT_EQUAL",
+  "observation": "Per case: the prototype local/param windows and the union range tree (first-last hex pairs); the created symbol entries (start:size:typename with arrays as element[num]) after restructureVarnode; and the buildVariableName return strings for in-window vs parameter/out-of-window offsets",
+  "normalization": "No normalization; both sides print the same projection of the same state"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "default_windows: the default model windows of a negative-growth 8-byte stack \u2014 locals [u64::MAX-999999, u64::MAX], params [0,511] \u2014 and resetLocalWindow's union range tree",
+   "gate_and_symbols: stack slots at the window's first byte, a mid negative offset, and an 8-byte slot spanning to the last byte become Symbols through the production restructureVarnode path, while one byte below the window and the positive-offset parameter region (subtracted from the MapState analysis range) produce nothing",
+   "open_array: an open int reference at sp-0x1010 (gatherOpen path: stack pointer INT_SUB consumed non-additively, typed int*) extends up to the canary-shaped fixed long at sp-8 and becomes int[1026]; with no later fixed hint the open reference at sp-0x10 is bounded by initialize()'s endpoint at wrapOffset(lastSigned+1)=0 into int[4]",
+   "naming_branches: buildVariableName against the default window \u2014 the negative-offset local takes the ScopeLocal Stack branch (iStack_f0, iStack_f4240 at the window's first byte), the parameter region and out-of-window offsets fall through to the ScopeInternal 16-hex-digit addrtied form"
   ],
-  "overall_status": "PARTIAL_MATCH: the five-case local-window projection (default window values, the union range tree, the negative-offset hint gate, the open-array extension and endpoint bounding, and the buildVariableName branch split) byte-matches the locked oracle through the production resetLocalWindow/restructureVarnode path; the LoadGuard/StoreGuard open hints (MapState::addGuard, varmap.cc:1003) and the typelocked-symbol re-feed (MapState::gatherSymbols, varmap.cc:1269) remain outside this atomic change and are bound to VARMAP-GATHEROPEN-GUARD-0001",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{fspec.cc:2263-2319,varmap.cc:432-460,548-581,864-919,960-996,1063-1082,1256-1325,address.cc:468-487,512-537,562-583}",
-    "signature": "void ProtoModel::defaultLocalRange(void); void ScopeLocal::resetLocalWindow(void); string ScopeLocal::buildVariableName(const Address &addr,const Address &pc,Datatype *ct,int4 &index,uint4 flags) const; MapState::MapState(AddrSpace *spc,const RangeList &rn,const RangeList &pm,Datatype *dt); void MapState::addRange(uintb st,Datatype *ct,uint4 fl,RangeHint::RangeType rt,int4 hi); void MapState::reconcileDatatypes(void); bool MapState::initialize(void); void ScopeLocal::restructureVarnode(bool aliasyes); bool ScopeLocal::restructure(MapState &state)"
-  },
-  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5 (8-byte SpacebaseSpace, stack pointer register:0), join=6, iop=7; core types char(1)/int(4)/long(8)/xunknownN",
-  "compiler_spec": "prototype model decoded per case from <prototype name=\"lw_default\" extrapop=\"0\"><input/><output/></prototype> with NO <localrange>/<paramrange> elements, so the model carries the default windows of the negative-growth 8-byte stack (locals [0xfffffffffff0bdc0,0xffffffffffffffff], params [0,0x1ff])",
-  "analysis_options": {
-    "entrypoint": "Direct invocation of locked ScopeLocal::resetLocalWindow / Funcdata P-code construction (newOp/opSetOpcode/opSetInput/opSetOutput/newVarnode/setInputVarnode) / ScopeLocal::restructureVarnode(false) / ScopeLocal::buildVariableName on real Funcdata+ScopeLocal bound through FuncProto::setModel; no Actions or C emission",
-    "prestate": "Per-case fresh Funcdata (unique entry address) + ScopeLocal(0x102, stack) with the default-model prototype; synthetic written stack Varnodes are COPY-of-constant outputs at chosen offsets; the gatherOpen shape is an input stack-pointer Varnode (register:0 size 8 / Rugra register:0x20 size 8), an INT_SUB by a constant whose result is typed int*, consumed by a non-additive INT_EQUAL",
-    "observation": "Per case: the prototype local/param windows and the union range tree (first-last hex pairs); the created symbol entries (start:size:typename with arrays as element[num]) after restructureVarnode; and the buildVariableName return strings for in-window vs parameter/out-of-window offsets",
-    "normalization": "No normalization; both sides print the same projection of the same state"
-  },
-  "input_manifest": {
-    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
-    "cases": [
-      "default_windows: the default model windows of a negative-growth 8-byte stack — locals [u64::MAX-999999, u64::MAX], params [0,511] — and resetLocalWindow's union range tree",
-      "gate_and_symbols: stack slots at the window's first byte, a mid negative offset, and an 8-byte slot spanning to the last byte become Symbols through the production restructureVarnode path, while one byte below the window and the positive-offset parameter region (subtracted from the MapState analysis range) produce nothing",
-      "open_array: an open int reference at sp-0x1010 (gatherOpen path: stack pointer INT_SUB consumed non-additively, typed int*) extends up to the canary-shaped fixed long at sp-8 and becomes int[1026]; with no later fixed hint the open reference at sp-0x10 is bounded by initialize()'s endpoint at wrapOffset(lastSigned+1)=0 into int[4]",
-      "naming_branches: buildVariableName against the default window — the negative-offset local takes the ScopeLocal Stack branch (iStack_f0, iStack_f4240 at the window's first byte), the parameter region and out-of-window offsets fall through to the ScopeInternal 16-hex-digit addrtied form"
-    ],
-    "sha256": "7e43a778d61b675c9343bc23950adf5db02c566f9938f3524569fa4ce6af1403"
-  },
-  "observation_schema": {
-    "format": "Five fixed-order UTF-8 lines with final newline: one envelope plus four case records",
-    "state": "range windows as first-last hex pairs; symbol entries as start:size:typename",
-    "direct": "buildVariableName return strings joined by ';'"
-  },
-  "comparand": {
-    "rugra_base_commit": "dfd27ad7fb53f1ebb878b491f6b289db22917440",
-    "rugra_base_tree": "8ccc92a6cf24d9bbd71c16e6bd64c25533de874d",
-    "cpp_fixture_sha256": "c94f515346c12b00a506a1362b3f6c7718d012688412a619a65cb8ce16d08643",
-    "rust_fixture_sha256": "35b53254663f0a696450bea0e9cac44d96c1bd501ff9f241d75fdfc0b6eedc3f",
-    "varmap_rs_sha256": "f11177c6d3def2dc05105f7bbb2c62443416a31bb019194821f0823f0cca5acf",
-    "varmap_doc_sha256": "15466dbcc5ff6b6e1d469637f8ce00ff1ab335cbb817d9416cbed55fc288ec74",
-    "runner_sha256": "e505e372a84d6d0ff66691b2889fa092d3c614431855b455e4e4480b8f61717c",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-varmap-localwindow-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-    "rust_crate_tree_sha256": "fe2a08b28737f88a2f226f956a3a927480bf5293b69aa0caaa08e30e3605d1bb",
-    "host": {
-      "cxx": "g++ (GCC) 16.2.1 20260810",
-      "cxx_target": "x86_64-pc-linux-gnu",
-      "cxx_path": "/usr/bin/g++",
-      "cc_path": "/usr/bin/gcc",
-      "ar_path": "/usr/bin/ar",
-      "make_path": "/usr/bin/make",
-      "python_path": "/usr/bin/python3.14",
-      "git_path": "/usr/bin/git",
-      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-      "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-      "cargo_path": "/usr/bin/cargo",
-      "rustc_path": "/usr/bin/rustc",
-      "rust_toolchain": "system",
-      "platform": "Linux 7.1.8-arch1-3 x86_64"
-    }
-  },
-  "build": {
-    "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
-    "private_state_observer": "Read-only ABI observation of Funcdata/ScopeLocal state through #define private/protected public in the fixture translation unit only (MapState's default-private members are never touched; all observation goes through the public resetLocalWindow/restructureVarnode/buildVariableName APIs); no oracle source is modified",
-    "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/varmap.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
-    "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
-    "registry_packages": 164,
-    "registry_lock_closure_sha256": "157922f59748093c6620df7996fe8fa2a664b46550e40d7ab0dbd0397ac75ffd"
-  },
-  "expected_stdout_sha256": "83c3d7423e23b6c4de3ec792b9f5bf9955f9be57bc043c720a3fe75e04977853",
-  "expected_exit_code": 0,
-  "covered_projection_status": "MATCH",
-  "coverage": {
-    "default_windows_union_tree": "MATCH: defaultLocalRange/defaultParamRange of the negative-growth 8-byte stack (locals ffffffffffff0bdc0-ffffffffffffffff, params 0-1ff) and resetLocalWindow's union tree print identically",
-    "negative_offset_gate": "MATCH: sign-extended negative-offset slots at the window's first byte / mid-window / spanning to the last byte become char/int/long symbols through the production path, while one byte below the window and the positive parameter region (0x0, 0x1ff) are dropped by the MapState analysis-range subtraction",
-    "open_array_extension": "MATCH: the gatherOpen open int reference at sp-0x1010 extends to the fixed long at sp-8 and creates int[1026] (start ffffffffffffeff0, size 4104), the 4096-byte-buffer shape",
-    "endpoint_bounding": "MATCH: with no later fixed hint the open reference at sp-0x10 is bounded by initialize()'s endpoint at wrapOffset(lastSigned+1)=0 into int[4] (size 16)",
-    "naming_branch_split": "MATCH: in-window negative offsets take iStack_f0 / iStack_f4240 while the parameter region (0x10, 0x1ff) and out-of-window (0x200) fall through to the ScopeInternal 16-hex-digit addrtied form",
-    "loadguard_addguard_open_hints": "UNTESTED: MapState::addGuard (varmap.cc:1003-1039) LoadGuard/StoreGuard open hints are not wired (Rugra gather_open omits them, varmap.rs gather_open note); bound to VARMAP-GATHEROPEN-GUARD-0001",
-    "gather_symbols_reinput": "UNTESTED: MapState::gatherSymbols (varmap.cc:1269, typelocked symbol re-feed) and annotateRawStackPtr/checkUnaliasedReturn (varmap.cc:1282-1285) are not fixture-driven; bound to VARMAP-GATHEROPEN-GUARD-0001"
+  "sha256": "7e43a778d61b675c9343bc23950adf5db02c566f9938f3524569fa4ce6af1403"
+ },
+ "observation_schema": {
+  "format": "Five fixed-order UTF-8 lines with final newline: one envelope plus four case records",
+  "state": "range windows as first-last hex pairs; symbol entries as start:size:typename",
+  "direct": "buildVariableName return strings joined by ';'"
+ },
+ "comparand": {
+  "rugra_base_commit": "dfd27ad7fb53f1ebb878b491f6b289db22917440",
+  "rugra_base_tree": "8ccc92a6cf24d9bbd71c16e6bd64c25533de874d",
+  "cpp_fixture_sha256": "c94f515346c12b00a506a1362b3f6c7718d012688412a619a65cb8ce16d08643",
+  "rust_fixture_sha256": "35b53254663f0a696450bea0e9cac44d96c1bd501ff9f241d75fdfc0b6eedc3f",
+  "varmap_rs_sha256": "f11177c6d3def2dc05105f7bbb2c62443416a31bb019194821f0823f0cca5acf",
+  "varmap_doc_sha256": "15466dbcc5ff6b6e1d469637f8ce00ff1ab335cbb817d9416cbed55fc288ec74",
+  "runner_sha256": "ad51dd4fc7dbe9a90936e528701ce7a3d97421a95546c10adde88ce00673ceda",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-varmap-localwindow-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "rust_crate_tree_sha256": "fe2a08b28737f88a2f226f956a3a927480bf5293b69aa0caaa08e30e3605d1bb",
+  "host": {
+   "cxx": "g++ (GCC) 16.2.1 20260810",
+   "cxx_target": "x86_64-pc-linux-gnu",
+   "cxx_path": "/usr/bin/g++",
+   "cc_path": "/usr/bin/gcc",
+   "ar_path": "/usr/bin/ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.14",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+   "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+   "cargo_path": "/usr/bin/cargo",
+   "rustc_path": "/usr/bin/rustc",
+   "rust_toolchain": "system",
+   "platform": "Linux 7.1.8-arch1-3 x86_64"
   }
+ },
+ "build": {
+  "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
+  "private_state_observer": "Read-only ABI observation of Funcdata/ScopeLocal state through #define private/protected public in the fixture translation unit only (MapState's default-private members are never touched; all observation goes through the public resetLocalWindow/restructureVarnode/buildVariableName APIs); no oracle source is modified",
+  "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/varmap.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
+  "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "157922f59748093c6620df7996fe8fa2a664b46550e40d7ab0dbd0397ac75ffd"
+ },
+ "expected_stdout_sha256": "83c3d7423e23b6c4de3ec792b9f5bf9955f9be57bc043c720a3fe75e04977853",
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "coverage": {
+  "default_windows_union_tree": "MATCH: defaultLocalRange/defaultParamRange of the negative-growth 8-byte stack (locals ffffffffffff0bdc0-ffffffffffffffff, params 0-1ff) and resetLocalWindow's union tree print identically",
+  "negative_offset_gate": "MATCH: sign-extended negative-offset slots at the window's first byte / mid-window / spanning to the last byte become char/int/long symbols through the production path, while one byte below the window and the positive parameter region (0x0, 0x1ff) are dropped by the MapState analysis-range subtraction",
+  "open_array_extension": "MATCH: the gatherOpen open int reference at sp-0x1010 extends to the fixed long at sp-8 and creates int[1026] (start ffffffffffffeff0, size 4104), the 4096-byte-buffer shape",
+  "endpoint_bounding": "MATCH: with no later fixed hint the open reference at sp-0x10 is bounded by initialize()'s endpoint at wrapOffset(lastSigned+1)=0 into int[4] (size 16)",
+  "naming_branch_split": "MATCH: in-window negative offsets take iStack_f0 / iStack_f4240 while the parameter region (0x10, 0x1ff) and out-of-window (0x200) fall through to the ScopeInternal 16-hex-digit addrtied form",
+  "loadguard_addguard_open_hints": "UNTESTED: MapState::addGuard (varmap.cc:1003-1039) LoadGuard/StoreGuard open hints are not wired (Rugra gather_open omits them, varmap.rs gather_open note); bound to VARMAP-GATHEROPEN-GUARD-0001",
+  "gather_symbols_reinput": "UNTESTED: MapState::gatherSymbols (varmap.cc:1269, typelocked symbol re-feed) and annotateRawStackPtr/checkUnaliasedReturn (varmap.cc:1282-1285) are not fixture-driven; bound to VARMAP-GATHEROPEN-GUARD-0001"
+ }
 }
