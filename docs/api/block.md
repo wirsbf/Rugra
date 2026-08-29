@@ -1480,3 +1480,65 @@ Ghidra `block.hh:108-118` 定义完整 edge_flags：
 forward=0x20, cross=0x40, back=0x80, loop_exit=0x100`。
 Rugra 现按 oracle 位值实现；仅 Rugra 结构化 break/continue/switch-dispatch
 标注使用高位扩展。单测锁定位值并断言全部 edge flags 两两唯一。
+
+## MAIN-RC2-BLOCKGOTO-WRAPPED-0001：BlockGoto 持有 wrapped 组件 + 真实 goto target（2026-08-30）
+
+oracle：`BlockGoto : BlockGraph`（block.hh:547），`newBlockGoto(bl)`（block.cc:1702-1713）
+先 `new BlockGoto(bl->getOut(0))` 捕获 gototarget，再 `identifyInternal(ret,[bl])`
+使 bl 成为唯一 list 组件（getBlock(0)），`addBlock(ret)`、`forceOutputNum(1)`、
+`removeEdge(ret,ret->getOut(0))`。旧 Rugra 实现三者全缺：无 wrapped 字段
+（identify_internal 换槽后组件蒸发）、`goto_target=None`、get_ops 走 trait 默认
+空 Vec、goto_prints 硬编码 false —— main 的 14 个包装块整体静默丢失。
+
+- `BlockGoto` 新增 `wrapped`（block.hh:547 组件 = getBlock(0)；emit
+  printc.cc:2771 `bl->getBlock(0)->emit(this)`、lastOp/firstOp/getExitLeaf 委托
+  源）与 `target_dyn`（block.hh:548 gototarget，按 block.cc:1705 在删边前捕获
+  的活 dyn Arc；scopeBreak cc:2872 的 getIndex 与 gotoPrints cc:2886 的
+  getFrontLeaf 都读它）。旧类型化 `goto_target: Option<Arc<BlockBasic>>>` 保留
+  为 printc 遗留投影但恒 None（结构树叶为 BlockCopy，typed Arc 不可恢复共享
+  身份；printc 发射侧切 target_dyn+get_start_addr() 属 PRINTC-GOTOPRINTS-0001，
+  另一 agent 协调）。
+- `impl FlowBlock for BlockGoto`：`get_ops` 委托 wrapped（getBlock(0) 虚链的
+  flatten 投影）；`sub_block(0)` 返回 wrapped；`first_op`（block.cc:1330
+  BlockGraph::firstOp）与 `get_exit_leaf_trait`（block.hh:561）委托 wrapped。
+- `BlockGoto::mark_unstructured_target`（block.cc:2856-2864）：先递归
+  wrapped（cc:2859 BlockGraph::markUnstructured），再在 gototype==f_goto_goto
+  且 goto_prints() 时经 mark_front_leaf(target_dyn) 标记前叶
+  （markCopyBlock 契约 cc:2860-2863）。签名 &self → &mut self（递归需要）。
+- `BlockGoto::scope_break_goto_type`（block.cc:2866-2874）：先
+  wrapped.scope_break(gototarget->getIndex(), curloopexit)（cc:2869 —— 包装
+  组件可为复合块，旧"wrapped 是 Basic 递归无操作"注释过时），再
+  gototarget->getIndex()==curloopexit 时置 f_break_goto（cc:2872-2873），
+  target 侧读 target_dyn 活索引；类型化字段仅作手搭 fixture 回退。
+- `BlockGoto::goto_prints`（block.cc:2881-2890）不再硬编码 false：返回
+  `prints_precomputed` —— `BlockGraph::compute_goto_prints` 在最终结构树上
+  一次性求值同一比较（front_leaf(target) != 流中后继，后继按 block.cc:1335-
+  1353 nextFlowAfter 递归：下一兄弟前叶 / 末子沿父链 / 根为 null），由
+  ActionFinalStructure 在 scopeBreak 之后、markUnstructured 之前调用（oracle
+  首次求值点）。默认 false 即 oracle 无 parent 臂（cc:2889）。新增
+  `goto_prints_walk_level`/`goto_prints_visit`（RUGRA-GLUE：上述递归的
+  Rust 投影）与 `component_list_dyn`（RUGRA-GLUE：Ghidra 统一 list/getBlock(i)
+  协议在 Rust 类型化字段上的投影，顺序 = 各工厂 identifyInternal 的 nodes 序：
+  List[nodes]、If goto 时 [cond]（newBlockIfGoto cc:1799）否则 [cond,tc(,fc)]、
+  WhileDo[cond,cl]、DoWhile[condcl]、InfLoop[body]、Condition[b1,b2]、
+  Switch[cases...,default]、Goto[bl]）。
+- `front_leaf` 增加 Goto 臂：下钻 wrapped（block.hh:559 printRaw/561 getExitLeaf
+  均按 getBlock(0) 链），修正旧“BlockGoto 包装 Basic”注释（ruleBlockGoto 纯
+  拓扑，可包装任意单出块）。删除无引用的 `mark_front_leaf_dyn`。
+- `BlockIf::get_ops`（MAIN-RC3 block.rs 半）：if-goto（goto_target Some）仅
+  [cond]（newBlockIfGoto nodes=[cond]，if_body 为 condition 占位别名）；否则
+  cond+if_body+else_body 全量 —— 旧实现只返回 condition，flatten 路径丢弃全部
+  嵌套 body ops（main 50×curl_easy_setopt 级联消失的直接根因之一）。
+- `BlockWhileDo::get_ops`：condition+body（newBlockWhileDo nodes=[cond,cl]，
+  block.cc:1858-1865）—— 旧实现丢 body（BlockGoto 包装 WhileDo 时同样蒸发）。
+  BlockDoWhile/BlockCondition/BlockList/BlockInfLoop/BlockCopy 保持不变（单组件
+  或已按组件序拼接）。
+
+E2E curl（124/124，0 panic）：skeleton 2911→3416，defects 1→1（__cxa_finalize，
+基线即有），numbering 0→1（main iVar3 重复声明，w-main2 预告的 RC-2 暴露类
+编号 issue，登记 TODO）。per-func vs golden：main +386/getparameter.constprop
++58/parseconfig +23/glob_set +10/glob_word +4/glob_range +2，其余 118 函数全部
+0 变化 —— skeleton 增量全部来自被救回内容的形态仍偏离 golden（RC-3 printc
+body_is_dead 门禁 + RC-4 循环形态 + RC-5 条件错接均未修），内容本身完整
+（main 体 245→643 行，0x2a8a..0x2ff9 区 51×setopt 级联/perform/cleanup 全部
+恢复，无双重发射）。
