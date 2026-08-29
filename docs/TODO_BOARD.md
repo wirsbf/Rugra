@@ -64,7 +64,9 @@
 > "保护格代际"假设被双侧证据否定——console oracle 缺 Java NoReturnAnalyzer 数据造成的假差异)后:
 > **defects 0/numbering 0/0 panic/124/124 全反编译**。同窗口集成:RC2(main 体 245→643,51×setopt 级联恢复)+
 > C4(INT_NOT token 序,非法形态 2→0)+goto 发射 target_dyn 切换+njf234 复核单门补齐(cc:2076)。
-> **当前权威基线**:curl E2E skeleton **3104**/defects **0**/numbering **0**;httpd 2148/4/0;
+> **当前权威基线(master `586c3e5e`)**:curl E2E skeleton **3068**/defects **0**/numbering **0**;
+> extraout_var 全消(RULEACTION-PULLSUB-SPACE 已修:main 循环守卫与 golden 逐 token 同形);httpd 2148/4/0;
+> 历史链:2911→2884→3374→3104(0/0)→3108(C5)→**3068**。
 > 历史链:2911→2884(F2-F5)→3374(RC2 内容恢复)→**3104(0/0)**。
 > 旧基线(master `2889e048`)**:**
 > 0 panic/timeout/ABORTED,124/124 全反编译;httpd 仍 5/30(HTTPD-TFALIGN-PANIC 待重派)。
