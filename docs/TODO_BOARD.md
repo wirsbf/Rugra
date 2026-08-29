@@ -64,7 +64,9 @@
 > "保护格代际"假设被双侧证据否定——console oracle 缺 Java NoReturnAnalyzer 数据造成的假差异)后:
 > **defects 0/numbering 0/0 panic/124/124 全反编译**。同窗口集成:RC2(main 体 245→643,51×setopt 级联恢复)+
 > C4(INT_NOT token 序,非法形态 2→0)+goto 发射 target_dyn 切换+njf234 复核单门补齐(cc:2076)。
-> **当前权威基线(master `edee039c`)**:curl E2E skeleton **3110**/defects **0**/numbering **1**(main iVar4 dup,
+> **当前权威基线(master `9d419f3a`)**:curl E2E skeleton **3119**/defects **0**/numbering **0**——**三项全零**
+> (PendingBrace 动态机制 1:1 移植+backfill 签号门修 numbering;+9=8 处裸 else 恢复 golden 括号结构);
+> httpd 2371/5/0。历史链:2911→…→3110→**3119(0/0)**。(main iVar4 dup,
 > PRINTC-STRUCTEMIT 残差簇已登记);CARRY 泄漏 5→**0**(CARRY1 形态×3);main URL-glob 区与 golden 结构 1:1;
 > while(true) 头逐字节匹配;双侧 fixture printc_whiledo_body_emit MATCH;httpd 2212/5/0。
 > 历史链:2911→2884→3374→3104→3108→3068→3060→**3110**(内容恢复优先)(virtual_list 可变列表
@@ -103,6 +105,8 @@
 | unassigned | `MAIN-RC3-STRUCTURED-EMIT-0001` | P0(探针:if 14→55) | `src/block.rs`(BlockIf::get_ops 丢 if/else body)+printc.rs 翻门(依赖 RC2) | whiledo/if 体发射:printc.rs:4285 body_is_dead=true 硬编码 flatten(=identify3 residual 翻门条件);BlockIf::get_ops(block.rs:5119)只返回 condition 丢弃 body→50×curl_easy_setopt 级联+嵌套 if 丢失;oracle cc:3061-3063/2994-2995 structured 递归 |
 | unassigned | `MAIN-RC4-DOWHILE-TRACE-0001` | P1(main 0 命中 vs golden 5 do-while) | TraceDAG 回边分类/吸收顺序(需 oracle 运行时定缝;RUGRA_BS_TRACE 已有) | try_rule_do_while 与 cc:1555-1574 逐条对齐无缺陷,但 argv 循环头被 if_else 消费成 `if(1){}else{}`,自环复合体永不出现 |
 | 已闭环 | `BATCH1-CROSSREVIEW`(五笔) | **全部 APPROVE**(R-BATCH1:5/5,零REJECT;六消费者逐一/全调用点路由/收敛数学等价核毕) | — | #1 PULLSUB空间/#2双符号尾/#3 httpd守卫(定性=防御性,正当性锚在良构路径逐行+成因TODO)/#4 cc2076门/#5 virtual_list;建议登记 O-2/O-5b 如下 |
+| 已闭环(642e6156..9d419f3a) | `PRINTC-STRUCTEMIT-RESIDUALS-0001`(主项) | **DONE**(numbering 1→0;双侧 fixture MATCH;WHILEIF-FOLD 同修) | printc/prettyprint(已落库) | 残差诊断外移:FORHDR→coreaction(switchb 租约);C3 三件→ruleaction`(0-…)`负号形/heritage cast 形 |
+| w-minis(新派) | `RULEACTION-NEGATION-FORM-0001`+`VARNODE-GETUSEPOINT-FREELEG-0001` | OPEN(C3 残差+O-2 批) | `src/ruleaction.rs`+`src/varnode.rs`(均空闲) | ①`(0 - x)` vs `-x` 负号形(w-printc2 诊断,ruleaction 域);②get_use_point 自由腿 Address(0) vs varnode.cc:701 fd.getAddress()+-1 |
 | unassigned | `PRINTC-WHILEDO-MODS-STACK-0001` | OPEN(O-1,P2,复核发现) | 待认领(`src/printc.rs`) | emit_structured_whiledo 缺 cc:3012-3013/3060 mods 栈操作(db090828 Evidence 对 whiledo 过度声明,仅 for 成立);当前零触发(CPUI_BRANCH 双侧无条件跳过)但属缺失守卫;rc3 bundle 其余 4/4 APPROVE,R-RC3 报告含定性(prettyprint 后处理=GLUE 兜底,终极路径=退役) |
 | unassigned | `VARNODE-GETUSEPOINT-FREELEG-0001` | OPEN(O-2) | 待认领(`src/varnode.rs`) | get_use_point 自由腿返回 Address(0) vs oracle varnode.cc:701 fd.getAddress()+-1;未登记潜在分歧 |
 | unassigned | `BLOCKACTION-CASEFALLTHRU-INTERLEAVE-0001` | OPEN(O-5b,预存) | 待认领(`src/blockaction.rs`) | cc:1844 caseFallthru per-block 交错 vs Rugra 批处理;预存未登记 |
