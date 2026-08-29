@@ -2811,18 +2811,33 @@ mod tests {
             .collect();
         let (bb, bb2, exita, exitb) = (&blocks[0], &blocks[1], &blocks[2], &blocks[3]);
         // One CBRANCH per branch block (in[0]=target const, in[1]=condition).
-        let cbranch = |fd: &mut Funcdata, addr: u64, cond_val: u64| {
+        let cbranch = |fd: &mut Funcdata, addr: u64, cond: &Arc<std::sync::RwLock<crate::varnode::Varnode>>| {
             let op = fd.new_op(2, Address::new(addr));
             fd.op_set_opcode(&op, OpCode::CPUI_CBRANCH);
             let target = fd.new_constant(8, 0x1020);
-            let cond = fd.new_constant(1, cond_val);
             fd.op_set_input(&op, target, 0);
-            fd.op_set_input(&op, cond, 1);
+            fd.op_set_input(&op, cond.clone(), 1);
             op
         };
-        let cb1 = cbranch(&mut fd, 0x1000, 1);
+        // Shared WRITTEN condition varnode for both cbranches: F3/F4 port
+        // the oracle findDups gates — vn1==vn2 is a complete match, but
+        // constant conditions are !isWritten and must NOT join (bilateral
+        // fixture D_unwritten locks count=0). Build INT_EQUAL(const,const)
+        // so the condition is a written varnode read by both CBRANCHes.
+        let cond_def = {
+            let op = fd.new_op(2, Address::new(0x1005));
+            fd.op_set_opcode(&op, OpCode::CPUI_INT_EQUAL);
+            let lhs = fd.new_constant(4, 7);
+            let rhs = fd.new_constant(4, 7);
+            fd.op_set_input(&op, lhs, 0);
+            fd.op_set_input(&op, rhs, 1);
+            let out = fd.new_unique_out(1, &op);
+            fd.op_insert_begin(&op, bb);
+            out
+        };
+        let cb1 = cbranch(&mut fd, 0x1000, &cond_def);
         fd.op_insert_end(&cb1, bb);
-        let cb2 = cbranch(&mut fd, 0x1010, 2);
+        let cb2 = cbranch(&mut fd, 0x1010, &cond_def);
         fd.op_insert_end(&cb2, bb2);
         // Same out-edge order for both branch blocks.
         fd.bblocks.add_edge(bb.clone(), exita.clone());
