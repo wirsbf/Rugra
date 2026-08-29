@@ -85,5 +85,6 @@
    "status": "scoped-projection MATCH achieved on this fixture; full closure tracked under BLOCK-ADDGRAPH-SEMANTICS-0001 (real parent identity) and BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 (install position model)"
   }
  ],
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "input_sha256": "54d6a51549387fa76ca638e9d2b27a7ae3537da8cb88192d68296daee92ff0be"
 }

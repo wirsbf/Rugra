@@ -1,152 +1,152 @@
 {
-  "schema": 2,
-  "fixture_id": "CPOOL-TYPED-RECORD-0001",
-  "projection_status": "MATCH",
-  "overall_status": "MISMATCH",
-  "status_note": "The 16-record CPoolRecord/ConstantPoolInternal behavior projection byte-matches locked Ghidra 12.0.4, including canonical type identity, all tags, reference projection/order, misses, duplicate/clear-recreate, and two exception partial-state paths. Overall remains MISMATCH because Datatype::encode_ref still emits private dynamic packed IDs, constructor/destructor decode cannot call TypeFactory::decodeTypeWithCodeFlags, and byte-data >=0x80 cannot be represented as Ghidra's raw one-byte string through the current UTF-8 Encoder API.",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
-  },
-  "rugra_base_commit": "71971b2a2bf8e3611f8690bcb6a0bcad34d29f34",
-  "architecture": "x86:LE:64:default:gcc; locked BfdArchitecture over examples/curl; byte-addressed 64-bit little-endian spaces",
-  "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec",
-    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-    "usage": "The C++ fixture initializes the production BfdArchitecture and asserts its full archid. Cpool operations then use the architecture TypeFactory's canonical int4 and bool types; no function analysis option is changed."
-  },
-  "analysis_options": {
-    "entrypoints": "CPoolRecord::{encode,decode}; ConstantPool::{putRecord,decodeRecord}; CheapSorter::{encode,decode,apply,operator<}; ConstantPoolInternal::{createRecord,getRecord,encode,decode}; TypeFactory::{decodeType,decodeTypeWithCodeFlags}; Datatype::encodeRef",
-    "fixture_model": "The C++ side decodes production XML with XmlDecode. The Rust side builds the identical ordered element/attribute graph with TreeEncoder/TreeDecoder because TreeDecoder does not expose parsed character content as Ghidra's synthetic ATTRIB_CONTENT. Both sides resolve int4 and bool through their production TypeFactory and compare factory-owned pointer/Arc identity.",
-    "normalization": "None inside the 16 covered records: stdout lines, ordering, values, names, exception text, and identity booleans are byte-compared. The complete raw packed and codeflags lines are excluded as whole registered residual records and are required to remain unequal.",
-    "debug_macros": "none"
-  },
-  "input_manifest": {
-    "canonicalization": "UTF-8 JSON array, sorted keys, compact separators, ensure_ascii=false",
-    "cases": [
-      "production factory: Ghidra BfdArchitecture and Rust TypeFactory resolve canonical int4(size=4,TYPE_INT) and bool(size=1,TYPE_BOOL); observations compare raw pointer identity vs Arc::ptr_eq",
-      "typed tags: nine records supplied out of map order cover primitive, string_literal, class_reference, pointer_method, pointer_field, array_length, instance_of, check_cast, and unknown-tag fallback; primitive value=287454020; string bytes=0x00..0x10",
-      "reference projection: [4] aliases [4,0], [4,0,77] aliases [4,0], [0,4] and [100,1] miss; encode walks lexicographic CheapSorter(a,b) order",
-      "duplicate/replacement: putRecord [42,7] field/original/int4; duplicate check_cast/replacement/bool throws exact token-bearing error and preserves old record; clear then recreate installs replacement/bool",
-      "missing-data partial state: valid [1,1] prefix; [13,6] string with token instead of data throws after insertion/tag/token and before type; [20,1] is not visited",
-      "type-resolution partial state: [14,6] field token typed-before-error with missing_cpool_type typeref throws after insertion/tag/token and leaves null type",
-      "packed wire: complete ConstantPoolInternal::encode bytes include every ref/record/value/token/data/type reference without normalization; Cpool-owned prefix matches and Datatype private dynamic IDs remain an explicit residual",
-      "codeflags: [30,1] method has constructor+destructor and pointer-to-code with prototype; locked decodeTypeWithCodeFlags errors with null type while Rugra generic canonical decode succeeds without a prototype"
-    ],
-    "sha256": "27e71276d415ea365e9e2f4c6c62a2fd7e409ab5c8e86a37d1edafc0a4ef0071"
-  },
-  "decisive_semantics": {
-    "references_and_outputs": "MATCH for canonical type object identity, type-name display, tag/flags/token/value/data, duplicate return/error, all queried records, and exception-time partial map state. Code TypeFactory flags remain MISMATCH under TYPEFACTORY-CODEFLAGS-DECODE-0001.",
-    "loop_bounds_and_order": "MATCH for byte-data loop 0..length, wrap reset after each 16th byte, decode child sequence, and BTreeMap/C++ map begin-to-end lexicographic iteration. >=0x80 raw-byte encoding remains UNTESTED under MARSHAL-PACKED-0001.",
-    "counters_and_accumulators": "MATCH for byte wrap initialization/increment/reset, byte count, primitive value initialization, and one record allocation per decoded ref. No hidden counter is normalized.",
-    "sort_and_comparison_keys": "MATCH: CheapSorter compares a first, then b; one-component refs supply b=0 and all components after index 1 are ignored. Packed type-ID comparison remains MISMATCH under MARSHAL-ID-0001."
-  },
-  "coverage": {
-    "typed_tags_and_order": {
-      "status": "MATCH",
-      "records": 9,
-      "covers": "all eight tags, unknown-tag primitive fallback, primitive value, token/data selection, 17-byte data including wrap boundary, canonical int4/bool identity, instance_of storage, lexicographic encode order"
-    },
-    "lookup_projection": {
-      "status": "MATCH",
-      "records": 1,
-      "covers": "miss, reversed miss, one-component alias, ignored third reference component"
-    },
-    "duplicate_and_replacement": {
-      "status": "MATCH",
-      "records": 2,
-      "covers": "exact duplicate exception, old-record preservation, clear and same-key recreation with new canonical type"
-    },
-    "missing_data_partial_state": {
-      "status": "MATCH",
-      "records": 1,
-      "covers": "exact error, valid prefix retention, bad-record tag/token/null-type retention, later record not visited"
-    },
-    "type_resolution_partial_state": {
-      "status": "MATCH",
-      "records": 1,
-      "covers": "exact unresolved-type error and insertion/tag/token/null-type partial state"
-    },
-    "packed_wire": {
-      "status": "MISMATCH",
-      "records": 1,
-      "covers": "complete raw PackedEncode record retained on both sides",
-      "residual_todo_ids": [
-        "MARSHAL-ID-0001",
-        "MARSHAL-PACKED-0001"
-      ]
-    },
-    "constructor_destructor_codeflags": {
-      "status": "MISMATCH",
-      "records": 1,
-      "covers": "record flags and the complete TypeFactory decode result/error/partial state",
-      "residual_todo_ids": [
-        "TYPEFACTORY-CODEFLAGS-DECODE-0001"
-      ]
-    },
-    "byte_data_ge_0x80": {
-      "status": "UNTESTED",
-      "covers": "Ghidra std::string can carry arbitrary raw uint1 bytes but Rugra Encoder accepts UTF-8 str; fixture proves the exact ostream behavior only for 0x00..0x10",
-      "residual_todo_ids": [
-        "MARSHAL-PACKED-0001"
-      ]
-    }
-  },
-  "residual_todo_ids": [
-    "MARSHAL-ID-0001",
-    "MARSHAL-PACKED-0001",
-    "TYPEFACTORY-CODEFLAGS-DECODE-0001"
+ "schema": 2,
+ "fixture_id": "CPOOL-TYPED-RECORD-0001",
+ "projection_status": "MATCH",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
+ "status_note": "The 16-record CPoolRecord/ConstantPoolInternal behavior projection byte-matches locked Ghidra 12.0.4, including canonical type identity, all tags, reference projection/order, misses, duplicate/clear-recreate, and two exception partial-state paths. Overall remains MISMATCH because Datatype::encode_ref still emits private dynamic packed IDs, constructor/destructor decode cannot call TypeFactory::decodeTypeWithCodeFlags, and byte-data >=0x80 cannot be represented as Ghidra's raw one-byte string through the current UTF-8 Encoder API.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_base_commit": "71971b2a2bf8e3611f8690bcb6a0bcad34d29f34",
+ "architecture": "x86:LE:64:default:gcc; locked BfdArchitecture over examples/curl; byte-addressed 64-bit little-endian spaces",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec",
+  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "usage": "The C++ fixture initializes the production BfdArchitecture and asserts its full archid. Cpool operations then use the architecture TypeFactory's canonical int4 and bool types; no function analysis option is changed."
+ },
+ "analysis_options": {
+  "entrypoints": "CPoolRecord::{encode,decode}; ConstantPool::{putRecord,decodeRecord}; CheapSorter::{encode,decode,apply,operator<}; ConstantPoolInternal::{createRecord,getRecord,encode,decode}; TypeFactory::{decodeType,decodeTypeWithCodeFlags}; Datatype::encodeRef",
+  "fixture_model": "The C++ side decodes production XML with XmlDecode. The Rust side builds the identical ordered element/attribute graph with TreeEncoder/TreeDecoder because TreeDecoder does not expose parsed character content as Ghidra's synthetic ATTRIB_CONTENT. Both sides resolve int4 and bool through their production TypeFactory and compare factory-owned pointer/Arc identity.",
+  "normalization": "None inside the 16 covered records: stdout lines, ordering, values, names, exception text, and identity booleans are byte-compared. The complete raw packed and codeflags lines are excluded as whole registered residual records and are required to remain unequal.",
+  "debug_macros": "none"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON array, sorted keys, compact separators, ensure_ascii=false",
+  "cases": [
+   "production factory: Ghidra BfdArchitecture and Rust TypeFactory resolve canonical int4(size=4,TYPE_INT) and bool(size=1,TYPE_BOOL); observations compare raw pointer identity vs Arc::ptr_eq",
+   "typed tags: nine records supplied out of map order cover primitive, string_literal, class_reference, pointer_method, pointer_field, array_length, instance_of, check_cast, and unknown-tag fallback; primitive value=287454020; string bytes=0x00..0x10",
+   "reference projection: [4] aliases [4,0], [4,0,77] aliases [4,0], [0,4] and [100,1] miss; encode walks lexicographic CheapSorter(a,b) order",
+   "duplicate/replacement: putRecord [42,7] field/original/int4; duplicate check_cast/replacement/bool throws exact token-bearing error and preserves old record; clear then recreate installs replacement/bool",
+   "missing-data partial state: valid [1,1] prefix; [13,6] string with token instead of data throws after insertion/tag/token and before type; [20,1] is not visited",
+   "type-resolution partial state: [14,6] field token typed-before-error with missing_cpool_type typeref throws after insertion/tag/token and leaves null type",
+   "packed wire: complete ConstantPoolInternal::encode bytes include every ref/record/value/token/data/type reference without normalization; Cpool-owned prefix matches and Datatype private dynamic IDs remain an explicit residual",
+   "codeflags: [30,1] method has constructor+destructor and pointer-to-code with prototype; locked decodeTypeWithCodeFlags errors with null type while Rugra generic canonical decode succeeds without a prototype"
   ],
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
-    },
-    "binary": {
-      "path": "examples/curl",
-      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-      "usage": "BfdArchitecture initialization and archid assertion only; no function byte, symbol, or analysis result is consumed"
-    },
-    "bfd": {
-      "package_version": "2.38-4ubuntu2.12",
-      "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
-      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
-      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so"
-    }
+  "sha256": "27e71276d415ea365e9e2f4c6c62a2fd7e409ab5c8e86a37d1edafc0a4ef0071"
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "MATCH for canonical type object identity, type-name display, tag/flags/token/value/data, duplicate return/error, all queried records, and exception-time partial map state. Code TypeFactory flags remain MISMATCH under TYPEFACTORY-CODEFLAGS-DECODE-0001.",
+  "loop_bounds_and_order": "MATCH for byte-data loop 0..length, wrap reset after each 16th byte, decode child sequence, and BTreeMap/C++ map begin-to-end lexicographic iteration. >=0x80 raw-byte encoding remains UNTESTED under MARSHAL-PACKED-0001.",
+  "counters_and_accumulators": "MATCH for byte wrap initialization/increment/reset, byte count, primitive value initialization, and one record allocation per decoded ref. No hidden counter is normalized.",
+  "sort_and_comparison_keys": "MATCH: CheapSorter compares a first, then b; one-component refs supply b=0 and all components after index 1 are ignored. Packed type-ID comparison remains MISMATCH under MARSHAL-ID-0001."
+ },
+ "coverage": {
+  "typed_tags_and_order": {
+   "status": "MATCH",
+   "records": 9,
+   "covers": "all eight tags, unknown-tag primitive fallback, primitive value, token/data selection, 17-byte data including wrap boundary, canonical int4/bool identity, instance_of storage, lexicographic encode order"
   },
-  "comparand": {
-    "cpp_fixture_sha256": "deec44664f4700440970718ed1817db2cf6282dbd7cef38eac740b78e3a8fb04",
-    "rust_fixture_sha256": "a462a15f78bc0abaf6d95df53d3561615b258be6f68fc53605b6c17895b4cd66",
-    "cpool_rs_sha256": "e1d79dc41c661861639ce7a65449725769ad7ec16625b78cd179442e5d724206",
-    "base_cpool_rs_sha256": "3382a34f19ad311980bf03184c0cd539ecc9eebbbb42bce739a772139d405bcf",
-    "api_document_sha256": "ac4f6fc51023b7314ebb198a604c77a0d5cc2348c7b1acc7a5325bb7a9bfeda2",
-    "runner_sha256": "cf993684e98cbb7605ed9ebcf8f48e32b031c50d4e5497af57fd60f77356f6e2",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "expected_ghidra_stdout_sha256": "178321fe361dd5c2bb2916b7d56c330c7a035bd66a861f2827b9a9a4867972fd",
-    "expected_rugra_stdout_sha256": "4948a42ecc81b4f2ab1e653e801df0578b2bbd88e3d51b906e4a233fb186c5b7",
-    "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+  "lookup_projection": {
+   "status": "MATCH",
+   "records": 1,
+   "covers": "miss, reversed miss, one-component alias, ignored third reference component"
   },
-  "build": {
-    "snapshot_policy": "complete git archive of rugra_base_commit; locked Ghidra C++ subtree archived from oracle commit; only src/cpool.rs overlaid from the leased working tree",
-    "fixture_policy": "both fixture sources are copied to the runner temporary directory and compiled only from those workspace-external copies",
-    "live_source_exclusions": "no live typefactory.rs, datatype.rs, userop.rs, or any other non-owned src file is read or copied",
-    "cargo_policy": "--offline --locked; clean snapshot cpool tests run before the comparand is built",
-    "runner_mode": "755"
+  "duplicate_and_replacement": {
+   "status": "MATCH",
+   "records": 2,
+   "covers": "exact duplicate exception, old-record preservation, clear and same-key recreation with new canonical type"
+  },
+  "missing_data_partial_state": {
+   "status": "MATCH",
+   "records": 1,
+   "covers": "exact error, valid prefix retention, bad-record tag/token/null-type retention, later record not visited"
+  },
+  "type_resolution_partial_state": {
+   "status": "MATCH",
+   "records": 1,
+   "covers": "exact unresolved-type error and insertion/tag/token/null-type partial state"
+  },
+  "packed_wire": {
+   "status": "MISMATCH",
+   "records": 1,
+   "covers": "complete raw PackedEncode record retained on both sides",
+   "residual_todo_ids": [
+    "MARSHAL-ID-0001",
+    "MARSHAL-PACKED-0001"
+   ]
+  },
+  "constructor_destructor_codeflags": {
+   "status": "MISMATCH",
+   "records": 1,
+   "covers": "record flags and the complete TypeFactory decode result/error/partial state",
+   "residual_todo_ids": [
+    "TYPEFACTORY-CODEFLAGS-DECODE-0001"
+   ]
+  },
+  "byte_data_ge_0x80": {
+   "status": "UNTESTED",
+   "covers": "Ghidra std::string can carry arbitrary raw uint1 bytes but Rugra Encoder accepts UTF-8 str; fixture proves the exact ostream behavior only for 0x00..0x10",
+   "residual_todo_ids": [
+    "MARSHAL-PACKED-0001"
+   ]
   }
+ },
+ "residual_todo_ids": [
+  "MARSHAL-ID-0001",
+  "MARSHAL-PACKED-0001",
+  "TYPEFACTORY-CODEFLAGS-DECODE-0001"
+ ],
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
+  },
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+  },
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
+  },
+  "binary": {
+   "path": "examples/curl",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "usage": "BfdArchitecture initialization and archid assertion only; no function byte, symbol, or analysis result is consumed"
+  },
+  "bfd": {
+   "package_version": "2.38-4ubuntu2.12",
+   "include_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include",
+   "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+   "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so"
+  }
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "deec44664f4700440970718ed1817db2cf6282dbd7cef38eac740b78e3a8fb04",
+  "rust_fixture_sha256": "a462a15f78bc0abaf6d95df53d3561615b258be6f68fc53605b6c17895b4cd66",
+  "cpool_rs_sha256": "e1d79dc41c661861639ce7a65449725769ad7ec16625b78cd179442e5d724206",
+  "base_cpool_rs_sha256": "3382a34f19ad311980bf03184c0cd539ecc9eebbbb42bce739a772139d405bcf",
+  "api_document_sha256": "ac4f6fc51023b7314ebb198a604c77a0d5cc2348c7b1acc7a5325bb7a9bfeda2",
+  "runner_sha256": "cf993684e98cbb7605ed9ebcf8f48e32b031c50d4e5497af57fd60f77356f6e2",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "expected_ghidra_stdout_sha256": "178321fe361dd5c2bb2916b7d56c330c7a035bd66a861f2827b9a9a4867972fd",
+  "expected_rugra_stdout_sha256": "4948a42ecc81b4f2ab1e653e801df0578b2bbd88e3d51b906e4a233fb186c5b7",
+  "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+ },
+ "build": {
+  "snapshot_policy": "complete git archive of rugra_base_commit; locked Ghidra C++ subtree archived from oracle commit; only src/cpool.rs overlaid from the leased working tree",
+  "fixture_policy": "both fixture sources are copied to the runner temporary directory and compiled only from those workspace-external copies",
+  "live_source_exclusions": "no live typefactory.rs, datatype.rs, userop.rs, or any other non-owned src file is read or copied",
+  "cargo_policy": "--offline --locked; clean snapshot cpool tests run before the comparand is built",
+  "runner_mode": "755"
+ }
 }

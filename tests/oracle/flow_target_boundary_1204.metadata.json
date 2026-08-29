@@ -54,7 +54,7 @@
   "normalization": "block addresses are signed offsets from each function symbol; object identity is preserved as insertion ordinal; raw Ghidra BlockBasic index is intentionally omitted because it remains zero until later indexing",
   "ordering": "BlockGraph list order and edge insertion/slot order are observed without sorting",
   "aliasing": "entry_ordinal identifies the exact getStartBlock object; peer ordinals and reverse slots preserve both ends of each edge",
-  "overall_status": "MATCH",
+  "overall_status": "UNTESTED",
   "covered": [
    "newAddress queues an unseen direct branch target",
    "setFallthruBound marks an exact already-visited target STARTBASIC before dropping its duplicate work-list entry",

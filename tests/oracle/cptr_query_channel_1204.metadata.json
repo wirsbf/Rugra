@@ -1,224 +1,224 @@
 {
-  "schema_version": 2,
-  "fixture_id": "CPTR-QUERY-CHANNEL-1204",
-  "todo_ids": [
-    "B3-COREACTION-CONSTANTPTR-0001"
-  ],
-  "status_note": "Segment (a1) projection of the Funcdata symbol query channel: Database-level Scope::queryContainer/queryProperties/isReadOnly/queryByName behind Funcdata::{query_container_parent_scope,query_properties_parent_scope,is_scope_read_only/query_name_parent_scope}, populated through the production addSymbol/addRange/removeRange/setPropertyRange/findCreateScope paths. 18 records byte-identical on both sides. Overall UNTESTED: the production driver does not populate arch.symboltab yet (segment a0 owns the .rodata DAT data source) and ActionConstantPtr does not consume the channel yet (segment b), so link_symbol_reference still falls back to the symbol_table name proxy in production runs.",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ "schema_version": 2,
+ "fixture_id": "CPTR-QUERY-CHANNEL-1204",
+ "todo_ids": [
+  "B3-COREACTION-CONSTANTPTR-0001"
+ ],
+ "status_note": "Segment (a1) projection of the Funcdata symbol query channel: Database-level Scope::queryContainer/queryProperties/isReadOnly/queryByName behind Funcdata::{query_container_parent_scope,query_properties_parent_scope,is_scope_read_only/query_name_parent_scope}, populated through the production addSymbol/addRange/removeRange/setPropertyRange/findCreateScope paths. 18 records byte-identical on both sides. Overall UNTESTED: the production driver does not populate arch.symboltab yet (segment a0 owns the .rodata DAT data source) and ActionConstantPtr does not consume the channel yet (segment b), so link_symbol_reference still falls back to the symbol_table name proxy in production runs.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_source": {
+  "base_commit": "a5446455990f95c70f97a360d96fa22f602d9223",
+  "base_tree": "ba4af5b19e844f37e7d85d5fb47d836df209dc21",
+  "base_src_tree": "5ac2b51c096a2312185ebfb814911ea663e8d231",
+  "base_database_blob": "a04143bf057efb5dadac186e89446b30505c7139",
+  "base_funcdata_blob": "9d3462025e11e47da872d6bb7fa05e75181074dc",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "d661713654bb13301c150a1e7f91b486238ca3e0aab047dba9d739f8a4bcd7d4",
+  "rust_fixture_sha256": "51b4c2e291fb80b42552ea60239ed267f42f9b703d6442d827deab40a9315c68",
+  "api_database_sha256": "493f961373f0756b3196b627639c5db3b505e7634c8eb2b0fab32b31f4d57e52",
+  "api_funcdata_sha256": "6539fa993a8959c54806a0b5bdebb9667040e5d631927a1365cdedc847b974b7",
+  "runner_sha256": "be3dbaf5b61aef3085db489aea6e828b3e7b6b4aed4bf7cae9903f9d8f5251a6"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "source_repository_commit": "c4a89fa88a48dba18601c17a8648fe688f981131",
+   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
-  "rugra_source": {
-    "base_commit": "a5446455990f95c70f97a360d96fa22f602d9223",
-    "base_tree": "ba4af5b19e844f37e7d85d5fb47d836df209dc21",
-    "base_src_tree": "5ac2b51c096a2312185ebfb814911ea663e8d231",
-    "base_database_blob": "a04143bf057efb5dadac186e89446b30505c7139",
-    "base_funcdata_blob": "9d3462025e11e47da872d6bb7fa05e75181074dc",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "source_repository_commit": "c4a89fa88a48dba18601c17a8648fe688f981131",
+   "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
   },
-  "comparand": {
-    "cpp_fixture_sha256": "d661713654bb13301c150a1e7f91b486238ca3e0aab047dba9d739f8a4bcd7d4",
-    "rust_fixture_sha256": "51b4c2e291fb80b42552ea60239ed267f42f9b703d6442d827deab40a9315c68",
-    "api_database_sha256": "493f961373f0756b3196b627639c5db3b505e7634c8eb2b0fab32b31f4d57e52",
-    "api_funcdata_sha256": "6539fa993a8959c54806a0b5bdebb9667040e5d631927a1365cdedc847b974b7",
-    "runner_sha256": "be3dbaf5b61aef3085db489aea6e828b3e7b6b4aed4bf7cae9903f9d8f5251a6"
-  },
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "source_repository_commit": "c4a89fa88a48dba18601c17a8648fe688f981131",
-      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "source_repository_commit": "c4a89fa88a48dba18601c17a8648fe688f981131",
-      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-      "size": 11721
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "source_repository_commit": "c4a89fa88a48dba18601c17a8648fe688f981131",
-      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-      "size": 12182
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "source_repository_commit": "c4a89fa88a48dba18601c17a8648fe688f981131",
-      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-      "size": 5390
-    },
-    "binary": {
-      "path": "examples/curl",
-      "source_repository_commit": "c4a89fa88a48dba18601c17a8648fe688f981131",
-      "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
-      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-      "size": 161728
-    },
-    "bfd": {
-      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-    }
-  },
-  "architecture": "x86:LE:64:default",
   "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec"
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "source_repository_commit": "c4a89fa88a48dba18601c17a8648fe688f981131",
+   "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
   },
-  "analysis_options": {
-    "api": "Real BfdArchitecture (C++) / Funcdata+Database+Architecture channel (Rugra): getScopeLocal()->getParent()->queryContainer / Scope::queryProperties / Scope::isReadOnly / Scope::queryByName and the Funcdata channel equivalents; symbols/ranges/property-ranges installed through production addSymbol/addRange/removeRange/setPropertyRange/findCreateScope paths; no ActionGroup or other Action runs",
-    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
-    "error_injection": "none",
-    "ghidra_funcdata": "GetStr (0x36d0, size 0) from readLoaderSymbols(\"::\"), identity hard-verified on the oracle side",
-    "rugra_scope": "fresh Database::new(false) + Architecture{symboltab} + Funcdata::new(\"GetStr\",0x36d0,0) with set_arch; queries go through Funcdata::{query_container_parent_scope,query_properties_parent_scope,query_name_parent_scope}",
-    "ir": "no P-code IR involved; pure symbol-database query layer",
-    "normalization": "none; raw pipe-separated records",
-    "random_seed": "none (deterministic query layer)"
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "source_repository_commit": "c4a89fa88a48dba18601c17a8648fe688f981131",
+   "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
   },
-  "decisive_semantics": {
-    "reference_output_parameters": "queryContainer/queryProperties return the scope-owned SymbolEntry (Rugra: by-value QueryContainerHit projection); queryProperties' flags is an out-parameter folded from getAllFlags / mapped|addrtied|persist|getProperty / getProperty alone (database.cc:1269-1280)",
-    "loop_bounds_traversal_order": "mapScope picks the base scope (empty resolvemap or miss falls back to the querying scope, database.cc:3188/3195); stackContainer walks parent links innermost-first with findContainer before inScope per scope, discovery returns a NULL entry and stops the walk (database.cc:943-962)",
-    "counter_accumulator_lifecycle": "no counters in the query layer; the readonly bit is folded into symbol flags ONCE at addMap time (database.cc:1153) — install order decides, later property ranges never contaminate",
-    "sorting_comparison_keys": "findContainer takes the smallest entry containing [addr,addr+size); needexacthit compares entry->getAddr()==rampoint by byte address (coreaction.cc:1160); char-array exception checks TYPE_ARRAY metatype then base isCharPrint (coreaction.cc:1153-1159)"
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "c4a89fa88a48dba18601c17a8648fe688f981131",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "size": 161728
   },
-  "input_manifest": {
-    "binary": {
-      "path": "examples/curl",
-      "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
-      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-      "size": 161728
-    },
-    "functions": [
-      "GetStr"
-    ],
-    "cases": [
-      "setup",
-      "qc_exact",
-      "qc_mid_needexact",
-      "qc_miss",
-      "qc_chararray_mid",
-      "qc_intarray_mid",
-      "qc_after_range_fold",
-      "ro_symbol_before_range",
-      "ro_symbol_after_range",
-      "ro_scope_only",
-      "ro_prop_only",
-      "ro_none",
-      "name_hit",
-      "name_miss",
-      "name_child_shadowed",
-      "trav_child_wins",
-      "trav_discovery_shadow",
-      "trav_plain_global"
-    ],
-    "sha256": "1e04be49bcf2d5bac714a2aa259ea1499705abd7091fcec53bc2e624d2b73733"
+  "bfd": {
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  }
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec"
+ },
+ "analysis_options": {
+  "api": "Real BfdArchitecture (C++) / Funcdata+Database+Architecture channel (Rugra): getScopeLocal()->getParent()->queryContainer / Scope::queryProperties / Scope::isReadOnly / Scope::queryByName and the Funcdata channel equivalents; symbols/ranges/property-ranges installed through production addSymbol/addRange/removeRange/setPropertyRange/findCreateScope paths; no ActionGroup or other Action runs",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
+  "error_injection": "none",
+  "ghidra_funcdata": "GetStr (0x36d0, size 0) from readLoaderSymbols(\"::\"), identity hard-verified on the oracle side",
+  "rugra_scope": "fresh Database::new(false) + Architecture{symboltab} + Funcdata::new(\"GetStr\",0x36d0,0) with set_arch; queries go through Funcdata::{query_container_parent_scope,query_properties_parent_scope,query_name_parent_scope}",
+  "ir": "no P-code IR involved; pure symbol-database query layer",
+  "normalization": "none; raw pipe-separated records",
+  "random_seed": "none (deterministic query layer)"
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "queryContainer/queryProperties return the scope-owned SymbolEntry (Rugra: by-value QueryContainerHit projection); queryProperties' flags is an out-parameter folded from getAllFlags / mapped|addrtied|persist|getProperty / getProperty alone (database.cc:1269-1280)",
+  "loop_bounds_traversal_order": "mapScope picks the base scope (empty resolvemap or miss falls back to the querying scope, database.cc:3188/3195); stackContainer walks parent links innermost-first with findContainer before inScope per scope, discovery returns a NULL entry and stops the walk (database.cc:943-962)",
+  "counter_accumulator_lifecycle": "no counters in the query layer; the readonly bit is folded into symbol flags ONCE at addMap time (database.cc:1153) \u2014 install order decides, later property ranges never contaminate",
+  "sorting_comparison_keys": "findContainer takes the smallest entry containing [addr,addr+size); needexacthit compares entry->getAddr()==rampoint by byte address (coreaction.cc:1160); char-array exception checks TYPE_ARRAY metatype then base isCharPrint (coreaction.cc:1153-1159)"
+ },
+ "input_manifest": {
+  "binary": {
+   "path": "examples/curl",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "size": 161728
   },
-  "coverage": {
-    "query_container_exact_hit": {
-      "status": "MATCH",
-      "covers": "qc_exact: exact entry start hit with all observables (name/first/last/off/sz/exact/meta/charbase/flags/scope)",
-      "residual_todo_ids": []
-    },
-    "query_container_miss": {
-      "status": "MATCH",
-      "covers": "qc_miss: no containing entry returns NULL",
-      "residual_todo_ids": []
-    },
-    "needexacthit_entry_start_input": {
-      "status": "MATCH",
-      "covers": "qc_mid_needexact: mid-entry hit yields the same entry with exact=0 — the coreaction.cc:1160 rejection input",
-      "residual_todo_ids": []
-    },
-    "char_array_middle_exception": {
-      "status": "MATCH",
-      "covers": "qc_chararray_mid: TYPE_ARRAY + base isCharPrint observed through the channel (coreaction.cc:1153-1159)",
-      "residual_todo_ids": []
-    },
-    "nonchar_array_contrast": {
-      "status": "MATCH",
-      "covers": "qc_intarray_mid: int4-array base gives charbase=0 (no exception)",
-      "residual_todo_ids": []
-    },
-    "getbase_unknown16_array_product": {
-      "status": "MATCH",
-      "covers": "DAT_exact's getBase(16,TYPE_UNKNOWN) materializes an ARRAY of sixteen 1-byte unknowns (type.cc:3652-3657) — meta=7 with charbase=0 on both sides",
-      "residual_todo_ids": []
-    },
-    "addmap_property_fold_order": {
-      "status": "MATCH",
-      "covers": "qc_after_range_fold/ro_symbol_before_range vs ro_symbol_after_range: readonly folded into symbol flags only when mapped after the property range (database.cc:1153)",
-      "residual_todo_ids": []
-    },
-    "readonly_symbol_branches": {
-      "status": "MATCH",
-      "covers": "ro_symbol_*: entry-branch isReadOnly reads getAllFlags",
-      "residual_todo_ids": []
-    },
-    "readonly_scope_only_branch": {
-      "status": "MATCH",
-      "covers": "ro_scope_only: mapped|addrtied|persist|readonly over an owned window with no symbol (database.cc:1271-1276)",
-      "residual_todo_ids": []
-    },
-    "readonly_property_only_branch": {
-      "status": "MATCH",
-      "covers": "ro_prop_only: bare getProperty after removeRange carves the window out of global ram ownership (database.cc:1278-1279)",
-      "residual_todo_ids": []
-    },
-    "name_query_parent_visibility": {
-      "status": "MATCH",
-      "covers": "name_hit/name_miss/name_child_shadowed: queryByName walks up only; a namespace child's symbols are invisible from the parent (database.cc:1198-1206)",
-      "residual_todo_ids": []
-    },
-    "mapscope_resolvemap_split": {
-      "status": "MATCH",
-      "covers": "trav_child_wins/trav_plain_global: the namespace child's owned range wins mapScope (ScopeResolve rangemap insert splits the overlap); outside it the qpoint fallback answers",
-      "residual_todo_ids": []
-    },
-    "stackcontainer_discovery_stop": {
-      "status": "MATCH",
-      "covers": "trav_discovery_shadow: the child's inScope discovery returns NULL before the parent's shadowing entry is consulted (database.cc:957-958)",
-      "residual_todo_ids": []
-    },
-    "query_properties_flag_bits": {
-      "status": "MATCH",
-      "covers": "flags fields across all ro_* records: bit-for-bit mapped(0x200000)/persist(0x4000)/addrtied(0x8000)/readonly(0x2000) folds",
-      "residual_todo_ids": []
-    },
-    "production_consumer_threading": {
-      "status": "UNTESTED",
-      "covers": "production E2E threading: the curl/httpd drivers do not populate arch.symboltab, and ActionConstantPtr (segment b) does not consume the channel yet — link_symbol_reference still runs the symbol_table name proxy fallback in production",
-      "residual_todo_ids": [
-        "B3-COREACTION-CONSTANTPTR-0001",
-        "B3-HUGEHELP-CONSTANTPTR"
-      ]
-    }
+  "functions": [
+   "GetStr"
+  ],
+  "cases": [
+   "setup",
+   "qc_exact",
+   "qc_mid_needexact",
+   "qc_miss",
+   "qc_chararray_mid",
+   "qc_intarray_mid",
+   "qc_after_range_fold",
+   "ro_symbol_before_range",
+   "ro_symbol_after_range",
+   "ro_scope_only",
+   "ro_prop_only",
+   "ro_none",
+   "name_hit",
+   "name_miss",
+   "name_child_shadowed",
+   "trav_child_wins",
+   "trav_discovery_shadow",
+   "trav_plain_global"
+  ],
+  "sha256": "1e04be49bcf2d5bac714a2aa259ea1499705abd7091fcec53bc2e624d2b73733"
+ },
+ "coverage": {
+  "query_container_exact_hit": {
+   "status": "MATCH",
+   "covers": "qc_exact: exact entry start hit with all observables (name/first/last/off/sz/exact/meta/charbase/flags/scope)",
+   "residual_todo_ids": []
   },
-  "projection_status": "MATCH",
-  "overall_status": "UNTESTED",
-  "residual_todo_ids": [
+  "query_container_miss": {
+   "status": "MATCH",
+   "covers": "qc_miss: no containing entry returns NULL",
+   "residual_todo_ids": []
+  },
+  "needexacthit_entry_start_input": {
+   "status": "MATCH",
+   "covers": "qc_mid_needexact: mid-entry hit yields the same entry with exact=0 \u2014 the coreaction.cc:1160 rejection input",
+   "residual_todo_ids": []
+  },
+  "char_array_middle_exception": {
+   "status": "MATCH",
+   "covers": "qc_chararray_mid: TYPE_ARRAY + base isCharPrint observed through the channel (coreaction.cc:1153-1159)",
+   "residual_todo_ids": []
+  },
+  "nonchar_array_contrast": {
+   "status": "MATCH",
+   "covers": "qc_intarray_mid: int4-array base gives charbase=0 (no exception)",
+   "residual_todo_ids": []
+  },
+  "getbase_unknown16_array_product": {
+   "status": "MATCH",
+   "covers": "DAT_exact's getBase(16,TYPE_UNKNOWN) materializes an ARRAY of sixteen 1-byte unknowns (type.cc:3652-3657) \u2014 meta=7 with charbase=0 on both sides",
+   "residual_todo_ids": []
+  },
+  "addmap_property_fold_order": {
+   "status": "MATCH",
+   "covers": "qc_after_range_fold/ro_symbol_before_range vs ro_symbol_after_range: readonly folded into symbol flags only when mapped after the property range (database.cc:1153)",
+   "residual_todo_ids": []
+  },
+  "readonly_symbol_branches": {
+   "status": "MATCH",
+   "covers": "ro_symbol_*: entry-branch isReadOnly reads getAllFlags",
+   "residual_todo_ids": []
+  },
+  "readonly_scope_only_branch": {
+   "status": "MATCH",
+   "covers": "ro_scope_only: mapped|addrtied|persist|readonly over an owned window with no symbol (database.cc:1271-1276)",
+   "residual_todo_ids": []
+  },
+  "readonly_property_only_branch": {
+   "status": "MATCH",
+   "covers": "ro_prop_only: bare getProperty after removeRange carves the window out of global ram ownership (database.cc:1278-1279)",
+   "residual_todo_ids": []
+  },
+  "name_query_parent_visibility": {
+   "status": "MATCH",
+   "covers": "name_hit/name_miss/name_child_shadowed: queryByName walks up only; a namespace child's symbols are invisible from the parent (database.cc:1198-1206)",
+   "residual_todo_ids": []
+  },
+  "mapscope_resolvemap_split": {
+   "status": "MATCH",
+   "covers": "trav_child_wins/trav_plain_global: the namespace child's owned range wins mapScope (ScopeResolve rangemap insert splits the overlap); outside it the qpoint fallback answers",
+   "residual_todo_ids": []
+  },
+  "stackcontainer_discovery_stop": {
+   "status": "MATCH",
+   "covers": "trav_discovery_shadow: the child's inScope discovery returns NULL before the parent's shadowing entry is consulted (database.cc:957-958)",
+   "residual_todo_ids": []
+  },
+  "query_properties_flag_bits": {
+   "status": "MATCH",
+   "covers": "flags fields across all ro_* records: bit-for-bit mapped(0x200000)/persist(0x4000)/addrtied(0x8000)/readonly(0x2000) folds",
+   "residual_todo_ids": []
+  },
+  "production_consumer_threading": {
+   "status": "UNTESTED",
+   "covers": "production E2E threading: the curl/httpd drivers do not populate arch.symboltab, and ActionConstantPtr (segment b) does not consume the channel yet \u2014 link_symbol_reference still runs the symbol_table name proxy fallback in production",
+   "residual_todo_ids": [
     "B3-COREACTION-CONSTANTPTR-0001",
     "B3-HUGEHELP-CONSTANTPTR"
-  ],
-  "expected_results": {
-    "ghidra_stdout_sha256": "3cb10bf6fd2026a9bfc01f6b77b9f8a4f08b822496934843adc860488523fbda",
-    "ghidra_stderr_sha256": "2f683a2c41c244556c83ea906a009e461c6444930ab93653608be67a65e12ff9",
-    "rugra_stdout_sha256": "3cb10bf6fd2026a9bfc01f6b77b9f8a4f08b822496934843adc860488523fbda",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "diff_exit_code": 0,
-    "record_count": 18
+   ]
   }
+ },
+ "projection_status": "MATCH",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "residual_todo_ids": [
+  "B3-COREACTION-CONSTANTPTR-0001",
+  "B3-HUGEHELP-CONSTANTPTR"
+ ],
+ "expected_results": {
+  "ghidra_stdout_sha256": "3cb10bf6fd2026a9bfc01f6b77b9f8a4f08b822496934843adc860488523fbda",
+  "ghidra_stderr_sha256": "2f683a2c41c244556c83ea906a009e461c6444930ab93653608be67a65e12ff9",
+  "rugra_stdout_sha256": "3cb10bf6fd2026a9bfc01f6b77b9f8a4f08b822496934843adc860488523fbda",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0,
+  "record_count": 18
+ }
 }

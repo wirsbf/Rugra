@@ -1,276 +1,276 @@
 {
-  "schema_version": 2,
-  "fixture_id": "SCOPELOCAL-QUERY-1204",
-  "todo_ids": [
-    "SCOPELOCAL-QUERY-0001"
-  ],
-  "status_note": "r2 projection of the entry-granular ScopeLocal query layer (findOverlap/findAddr/findContainer/queryProperties over the oracle-proven rangemap). 27 records byte-identical on both sides. Overall UNTESTED: production funcdata consumers still use the second hand-rolled helper (r1 REJECT item 4, off-lease this round) and five residual domains stay UNTESTED below.",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ "schema_version": 2,
+ "fixture_id": "SCOPELOCAL-QUERY-1204",
+ "todo_ids": [
+  "SCOPELOCAL-QUERY-0001"
+ ],
+ "status_note": "r2 projection of the entry-granular ScopeLocal query layer (findOverlap/findAddr/findContainer/queryProperties over the oracle-proven rangemap). 27 records byte-identical on both sides. Overall UNTESTED: production funcdata consumers still use the second hand-rolled helper (r1 REJECT item 4, off-lease this round) and five residual domains stay UNTESTED below.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_source": {
+  "base_commit": "73955299b71a101596eb68fac3c293537b280558",
+  "base_tree": "924fc28bff10fb69a5865423108f352684a158f6",
+  "base_src_tree": "eb3e4847768140433ec9f6c418b5d66eede783e0",
+  "base_varmap_blob": "7aa83b206a40d1e9e79ec27aeea8dd6dd77685d2",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "b16dd2b026859863e83ef4b6b23b2421596f45fbab3f48fe83921215374054e5",
+  "rust_fixture_sha256": "a025041ee6a74084943400d682ce4b698d6579f9554be690f7f929713da78c82",
+  "varmap_overlay_sha256": "b4a7c86ab51009279529f0038d40376396b6a7c013b945065dda328e2c3eddc8",
+  "api_document_sha256": "abe63ab8b90d5da99367332b2b1506b26309b3cdecd7caaa764398717b5a18d3",
+  "runner_sha256": "2e92a975b98406be1bd69ba33709ffde4687772530557a5b97e06a779d9f61b8"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "source_repository_commit": "73955299b71a101596eb68fac3c293537b280558",
+   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
-  "rugra_source": {
-    "base_commit": "73955299b71a101596eb68fac3c293537b280558",
-    "base_tree": "924fc28bff10fb69a5865423108f352684a158f6",
-    "base_src_tree": "eb3e4847768140433ec9f6c418b5d66eede783e0",
-    "base_varmap_blob": "7aa83b206a40d1e9e79ec27aeea8dd6dd77685d2",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "source_repository_commit": "73955299b71a101596eb68fac3c293537b280558",
+   "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
   },
-  "comparand": {
-    "cpp_fixture_sha256": "b16dd2b026859863e83ef4b6b23b2421596f45fbab3f48fe83921215374054e5",
-    "rust_fixture_sha256": "a025041ee6a74084943400d682ce4b698d6579f9554be690f7f929713da78c82",
-    "varmap_overlay_sha256": "b4a7c86ab51009279529f0038d40376396b6a7c013b945065dda328e2c3eddc8",
-    "api_document_sha256": "abe63ab8b90d5da99367332b2b1506b26309b3cdecd7caaa764398717b5a18d3",
-    "runner_sha256": "2e92a975b98406be1bd69ba33709ffde4687772530557a5b97e06a779d9f61b8"
-  },
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "source_repository_commit": "73955299b71a101596eb68fac3c293537b280558",
-      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "source_repository_commit": "73955299b71a101596eb68fac3c293537b280558",
-      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-      "size": 11721
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "source_repository_commit": "73955299b71a101596eb68fac3c293537b280558",
-      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-      "size": 12182
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "source_repository_commit": "73955299b71a101596eb68fac3c293537b280558",
-      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-      "size": 5390
-    },
-    "binary": {
-      "path": "examples/curl",
-      "source_repository_commit": "73955299b71a101596eb68fac3c293537b280558",
-      "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
-      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-      "size": 161728
-    },
-    "bfd": {
-      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-    }
-  },
-  "architecture": "x86:LE:64:default",
   "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec"
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "source_repository_commit": "73955299b71a101596eb68fac3c293537b280558",
+   "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
   },
-  "analysis_options": {
-    "api": "Direct ScopeLocal::findOverlap / findAddr / Scope::queryProperties and rugra::varmap::ScopeLocal::{find_overlap_entry, find_addr_entry, query_properties_ex} invocations with explicit (space, offset, size, usepoint) queries over hand-installed symbol/entry tables; no ActionGroup or other Action runs",
-    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
-    "error_injection": "none",
-    "ghidra_funcdata": "Locked BfdArchitecture over the pinned examples/curl input supplies the Ghidra Funcdata, address spaces, TypeFactory, Database flagbase and the persistent ScopeLocal (function GetStr at 0x36d0); symbols are installed through public production paths (Scope::addSymbol, Scope::addMapPoint, SymbolEntry::setUseLimit, Architecture::findAddJoin, Database::setPropertyRange, SymbolTable::addRange, ScopeLocal::markNotMapped, Scope::removeSymbol); every qp observable comes from the REAL Scope::queryProperties return (entry identity + flags), the answering scope is derived from that return (entry owner scope / persist bit / mapped|addrtied bits / property-only)",
-    "rugra_scope": "Rugra builds an isolated ScopeLocal with an insertion-ordered LocalMapEntry log (maptable stand-in); per-entry uselimit range lists; parent global scope modeled as a second ScopeLocal with is_global_scope=true (space=ram); Database flagbase modeled as a closure over the readonly range; ghidra_space_index pins const=0 unique=2 ram=3 stack=8 as printed by the live oracle",
-    "ir": "No P-code ops are constructed; the observable is exclusively per-query return identity (symbol name, entry first/last/offset/size, flags hex, answering scope)",
-    "normalization": "No Ghidra/Rugra behavior difference is normalized or removed. The C++ dump keeps std::hex sticky across offset/size/flags; the Rust fixture formats all of them as hex explicitly. Ghidra-side BFD loader warnings stay on stderr (hash-pinned, byte-deterministic for the pinned binary); the Rust fixture emits none. Pointer/Arc addresses never appear in the records.",
-    "random_seed": "none; all queries and construction are deterministic"
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "source_repository_commit": "73955299b71a101596eb68fac3c293537b280558",
+   "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
   },
-  "decisive_semantics": {
-    "reference_output_parameters": "queryProperties' uint4 &flags side-output is observed in all three branches (database.cc:1270 getAllFlags, 1273-1276 scope-derived mapped|addrtied(|persist)|property, 1279 property-only); findOverlap/findAddr return SymbolEntry identity (first/last/offset/size) not Symbol identity; the answering scope of the stackContainer walk (database.cc:951-961) is derived from the real queryProperties return.",
-    "loop_bounds_traversal_order": "findOverlap walks the (last,subsort) multiset FORWARD from lower_bound(AddrRange(point)) (database.cc:2398, rangemap.hh:418); findAddr and findContainer walk the subsort-bounded window BACKWARD via --res.second (database.cc:2238-2245, 2267-2279); the equal-subsort bracketing quirk (second insert's hinted+tail double part, rangemap.hh:253-273 break-without-advancing-f) makes both walks answer the SECOND inserted; stackContainer walks this scope then parent (database.cc:951-961).",
-    "counter_accumulator_lifecycle": "findContainer's oldsize starts at the -1 sentinel, is updated ONLY after an in-use accept (database.cc:2271-2276), and the walk breaks on an exact-size hit (database.cc:2274); markNotMapped re-issues findOverlap after every removal (varmap.cc:528-544) and the parameter-offset window update happens before the removal loop (varmap.cc:520-524); wholeCount/multiEntrySet maintenance has no query observable and is not modeled.",
-    "sorting_comparison_keys": "AddrRange::operator< orders the multiset by (last, subsort) (rangemap.hh:88-91); EntrySubsort::operator< orders by (useindex, useoffset) (database.hh:129-133) with addrtied symbols minimal (0,0) (database.cc:100-107); the findAddr/findContainer upper subsort bound is EntrySubsort(usepoint) built from the QUERY address (database.cc:2232-2237); inUse is uselimit RANGE containment in the usepoint's space (database.cc:114-120); removeRange splits bridging ownership ranges (address.cc:438-448)."
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "73955299b71a101596eb68fac3c293537b280558",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "size": 161728
   },
-  "input_manifest": {
-    "binary": "examples/curl @ 3bea8db (git blob 76d9343e, sha256 8af50bca, 161728 bytes)",
-    "functions": [
-      "GetStr @ 0x36d0 (scope carrier only; identity asserted on the Ghidra side)"
-    ],
-    "cases": [
-      "setup: live space indices const=0 unique=2 ram=3 stack=8 — the EntrySubsort useindex dimension and the per-space maptable dimension both key on them",
-      "equal_subsort_overlap/findaddr: two entries with identical range AND subsort — both walks answer the SECOND inserted (hinted+tail bracketing)",
-      "wide_narrow_overlap(+_wide_cell): the EntrySubsort-minimum record (narrow, first use 0x1000) owns the shared cell [0x328,0x32b] although wide (first use 0x1100) was inserted first with the smaller start; the wide-only cell answers wide",
-      "wide_narrow_findaddr_midrange/wide_use/nouse: exact-start + RANGE-containment inUse — narrow admits 0x1050 mid-range, wide admits 0x1150, nothing admits 0x1050 at 0x320",
-      "multi_uselimit_second_range/gap: uselimit {[0x1000,0x100f],[0x2000,0x200f]} — usepoint 0x2005 answers (subsort from the first range), the 0x1500 gap does not",
-      "cross_space_stack_query/ram_query: a ram entry never answers a stack query and vice versa (maptable[space])",
-      "multi_mapping_first/second: ONE symbol with entries at [0x500,0x503] and [0x510,0x513] answers both queries with the respective entry extents",
-      "remove_requery_first/second/survivor: removeSymbol drops both mappings of the symbol and the survivor keeps answering (entry-log re-keying)",
-      "find_container_smallest: smallc [0x604,0x607] beats containing bigc [0x600,0x60f]; flags 0x208000 = mapped|addrtied",
-      "find_container_equal_tie: equal-size equal-subsort tie resolves to the LAST inserted (tieB) via the backward walk",
-      "partial_offset_piece_hi: the join symbol's [0x644,0x647] piece answers with getOffset()=4 and flags 0x4008000 = precishi|addrtied (mapped NOT set on pieces, database.cc:1172)",
-      "qp_local_symbol: getAllFlags = 0x208100 = mapped|addrtied|typelock",
-      "qp_scope_symbol_victim: victim symbol answers with 0x208000 (no readonly fold — installed before the property range)",
-      "marknotmapped_window: after markNotMapped(stack,0x900,4) the victim is gone and 0x902 answers property-only 0x2000 with scope=none (ownership window split)",
-      "qp_scope_only_property: 0x910 inside the owned window answers 0x20a000 = mapped|addrtied|readonly with scope=this",
-      "qp_parent_symbol: the global scope's gpar answers through the local query with 0x20c000 = mapped|addrtied|persist, scope=parent",
-      "qp_none: unique-space query with no symbol and no ownership answers flags=0 scope=none",
-      "qp_constant: constant-space address short-circuits to property-only flags=0 scope=none (database.cc:950)"
-    ],
-    "sha256": "4b7759deb976d1429d4f437290670ada34369bb02d95266ae9cd47ba50d71dd1"
-  },
-  "coverage": {
-    "setup_space_indices": {
-      "status": "MATCH",
-      "covers": "setup record: live oracle indices const=0 unique=2 ram=3 stack=8 equal Rugra's ghidra_space_index constants",
-      "residual_todo_ids": []
-    },
-    "equal_subsort_both_walks": {
-      "status": "MATCH",
-      "covers": "equal_subsort_overlap + equal_subsort_findaddr: the bracketing quirk — both the forward findOverlap walk and the backward findAddr walk answer the second inserted",
-      "residual_todo_ids": []
-    },
-    "wide_narrow_dual_order": {
-      "status": "MATCH",
-      "covers": "wide_narrow_overlap, wide_narrow_overlap_wide_cell, wide_narrow_findaddr_midrange, wide_narrow_findaddr_wide_use, wide_narrow_findaddr_nouse: cell ownership by EntrySubsort minimum vs exact-start backward walk with RANGE-containment inUse",
-      "residual_todo_ids": []
-    },
-    "multi_uselimit_containment": {
-      "status": "MATCH",
-      "covers": "multi_uselimit_second_range + multi_uselimit_gap: two disjoint uselimit ranges, subsort from the first, containment admission",
-      "residual_todo_ids": []
-    },
-    "cross_space_maptable": {
-      "status": "MATCH",
-      "covers": "cross_space_stack_query + cross_space_ram_query: maptable[space] dimension",
-      "residual_todo_ids": []
-    },
-    "multi_mapping_removal": {
-      "status": "MATCH",
-      "covers": "multi_mapping_first/second + remove_requery_first/second/survivor: multi-entry symbols, removeSymbol dropping every mapping, survivor re-keying",
-      "residual_todo_ids": []
-    },
-    "find_container_smallest_tie": {
-      "status": "MATCH",
-      "covers": "find_container_smallest + find_container_equal_tie: smallest-container selection, oldsize sentinel, exact-size break, equal-size equal-subsort tie to the last inserted",
-      "residual_todo_ids": []
-    },
-    "partial_offset_piece": {
-      "status": "MATCH",
-      "covers": "partial_offset_piece_hi: piece entries with getOffset()=4 and precishi extraflags (no mapped bit)",
-      "residual_todo_ids": []
-    },
-    "query_properties_local_branches": {
-      "status": "MATCH",
-      "covers": "qp_local_symbol + qp_scope_symbol_victim + qp_scope_only_property: getAllFlags branch, scope-owned mapped|addrtied|property branch, addMap property-fold avoidance",
-      "residual_todo_ids": []
-    },
-    "query_properties_parent_walk": {
-      "status": "MATCH",
-      "covers": "qp_parent_symbol + qp_none + qp_constant: parent (global scope) findContainer walk with persist, no-scope property-only, constant-space short-circuit",
-      "residual_todo_ids": []
-    },
-    "marknotmapped_window": {
-      "status": "MATCH",
-      "covers": "marknotmapped_window: markNotMapped removes overlapping symbols and splits the ownership window, flipping the scope-only branch to property-only",
-      "residual_todo_ids": []
-    },
-    "production_consumer_threading": {
-      "status": "UNTESTED",
-      "covers": "Funcdata::mapGlobals / linkSymbol / sync_varnodes_with_symbols still call the second hand-rolled funcdata.rs helper (scope_local_find_overlap, symbol-level, first-inserted tie — deviates from the bracketing quirk) and the spaceless has_overlap shim; production does not thread the parent scope or the query space",
-      "residual_todo_ids": [
-        "SCOPELOCAL-QUERY-RESIDUAL-0002"
-      ]
-    },
-    "multientryset_wholecount": {
-      "status": "UNTESTED",
-      "covers": "wholeCount/multiEntrySet maintenance (database.cc:1866-1885, 2123) has no query observable in this domain and is not modeled; begin/endMultiEntry iteration consumers are untested",
-      "residual_todo_ids": [
-        "SCOPELOCAL-QUERY-RESIDUAL-0002"
-      ]
-    },
-    "addmap_property_fold": {
-      "status": "UNTESTED",
-      "covers": "addMap folds Database property bits into address-tied symbol flags at construction time (database.cc:1153); Rugra's entry_all_flags has no fold (the fixture dodges it by construction ordering)",
-      "residual_todo_ids": [
-        "DB-LOCALSCOPE-MAP-0001"
-      ]
-    },
-    "database_flagbase_partmap": {
-      "status": "UNTESTED",
-      "covers": "glb->symboltab->getProperty(addr) is a closure parameter in query_properties_ex; the Database flagbase partmap (database.hh:946, setPropertyRange state machine) is not ported",
-      "residual_todo_ids": [
-        "DB-LOCALSCOPE-MAP-0001"
-      ]
-    },
-    "space_index_unverified_variants": {
-      "status": "UNTESTED",
-      "covers": "ghidra_space_index pins Register=4 Join=9 Iop=10 Overlay=11 Other=12 without oracle verification (inert for subsort comparisons — only uselimit spaces feed EntrySubsort); verified indices are const=0 unique=2 ram=3 stack=8",
-      "residual_todo_ids": [
-        "ADDRESS-0001"
-      ]
-    }
-  },
-  "projection_status": "MATCH",
-  "overall_status": "UNTESTED",
-  "residual_todo_ids": [
-    "SCOPELOCAL-QUERY-RESIDUAL-0002",
-    "DB-LOCALSCOPE-MAP-0001",
-    "ADDRESS-0001"
-  ],
-  "residual_union": [
-    {
-      "todo_id": "SCOPELOCAL-QUERY-RESIDUAL-0002",
-      "status": "UNTESTED",
-      "branches": [
-        {
-          "id": "production_consumer_threading",
-          "status": "UNTESTED",
-          "detail": "funcdata.rs (off-lease in r2) still carries the second hand-rolled scope_local_find_overlap (symbol-level, first-inserted equal-subsort tie — the oracle answers the second) and the spaceless has_overlap shim; mapGlobals/linkSymbol do not thread parent scope or query space. Fix = funcdata round: delegate to varmap::{find_overlap_entry, find_addr_entry, query_properties_ex, has_overlap_in} and delete the duplicate."
-        },
-        {
-          "id": "multientryset_wholecount",
-          "status": "UNTESTED",
-          "detail": "wholeCount/multiEntrySet (database.cc:1866-1885) unmodeled — no query in this domain observes it; register when porting begin/endMultiEntry consumers (XML encode / assignDefaultNames chains)."
-        }
-      ]
-    },
-    {
-      "todo_id": "DB-LOCALSCOPE-MAP-0001",
-      "status": "UNTESTED",
-      "branches": [
-        {
-          "id": "addmap_property_fold",
-          "status": "UNTESTED",
-          "detail": "addMap's symbol-flag property fold (database.cc:1153) needs the Database flagbase; model when the Database-owned local scope lands."
-        },
-        {
-          "id": "database_flagbase_partmap",
-          "status": "UNTESTED",
-          "detail": "Database::flagbase partmap + setPropertyRange (database.cc:3220) not ported; query_properties_ex takes a property closure instead."
-        }
-      ]
-    },
-    {
-      "todo_id": "ADDRESS-0001",
-      "status": "UNTESTED",
-      "branches": [
-        {
-          "id": "space_index_unverified_variants",
-          "status": "UNTESTED",
-          "detail": "ghidra_space_index constants for Register/Join/Iop/Overlay/Other are unverified (inert for subsort); re-derive from the registry-backed space model when ADDRESS-0001/SPACE-0001 land."
-        }
-      ]
-    }
-  ],
-  "expected_results": {
-    "ghidra_stdout_sha256": "b301a7585fabc229bcc5b68eb011669ff19b29edc32ac02a60f0c9f5696b81e1",
-    "ghidra_stderr_sha256": "2f683a2c41c244556c83ea906a009e461c6444930ab93653608be67a65e12ff9",
-    "rugra_stdout_sha256": "b301a7585fabc229bcc5b68eb011669ff19b29edc32ac02a60f0c9f5696b81e1",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "diff_exit_code": 0,
-    "record_count": 27
+  "bfd": {
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
   }
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec"
+ },
+ "analysis_options": {
+  "api": "Direct ScopeLocal::findOverlap / findAddr / Scope::queryProperties and rugra::varmap::ScopeLocal::{find_overlap_entry, find_addr_entry, query_properties_ex} invocations with explicit (space, offset, size, usepoint) queries over hand-installed symbol/entry tables; no ActionGroup or other Action runs",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
+  "error_injection": "none",
+  "ghidra_funcdata": "Locked BfdArchitecture over the pinned examples/curl input supplies the Ghidra Funcdata, address spaces, TypeFactory, Database flagbase and the persistent ScopeLocal (function GetStr at 0x36d0); symbols are installed through public production paths (Scope::addSymbol, Scope::addMapPoint, SymbolEntry::setUseLimit, Architecture::findAddJoin, Database::setPropertyRange, SymbolTable::addRange, ScopeLocal::markNotMapped, Scope::removeSymbol); every qp observable comes from the REAL Scope::queryProperties return (entry identity + flags), the answering scope is derived from that return (entry owner scope / persist bit / mapped|addrtied bits / property-only)",
+  "rugra_scope": "Rugra builds an isolated ScopeLocal with an insertion-ordered LocalMapEntry log (maptable stand-in); per-entry uselimit range lists; parent global scope modeled as a second ScopeLocal with is_global_scope=true (space=ram); Database flagbase modeled as a closure over the readonly range; ghidra_space_index pins const=0 unique=2 ram=3 stack=8 as printed by the live oracle",
+  "ir": "No P-code ops are constructed; the observable is exclusively per-query return identity (symbol name, entry first/last/offset/size, flags hex, answering scope)",
+  "normalization": "No Ghidra/Rugra behavior difference is normalized or removed. The C++ dump keeps std::hex sticky across offset/size/flags; the Rust fixture formats all of them as hex explicitly. Ghidra-side BFD loader warnings stay on stderr (hash-pinned, byte-deterministic for the pinned binary); the Rust fixture emits none. Pointer/Arc addresses never appear in the records.",
+  "random_seed": "none; all queries and construction are deterministic"
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "queryProperties' uint4 &flags side-output is observed in all three branches (database.cc:1270 getAllFlags, 1273-1276 scope-derived mapped|addrtied(|persist)|property, 1279 property-only); findOverlap/findAddr return SymbolEntry identity (first/last/offset/size) not Symbol identity; the answering scope of the stackContainer walk (database.cc:951-961) is derived from the real queryProperties return.",
+  "loop_bounds_traversal_order": "findOverlap walks the (last,subsort) multiset FORWARD from lower_bound(AddrRange(point)) (database.cc:2398, rangemap.hh:418); findAddr and findContainer walk the subsort-bounded window BACKWARD via --res.second (database.cc:2238-2245, 2267-2279); the equal-subsort bracketing quirk (second insert's hinted+tail double part, rangemap.hh:253-273 break-without-advancing-f) makes both walks answer the SECOND inserted; stackContainer walks this scope then parent (database.cc:951-961).",
+  "counter_accumulator_lifecycle": "findContainer's oldsize starts at the -1 sentinel, is updated ONLY after an in-use accept (database.cc:2271-2276), and the walk breaks on an exact-size hit (database.cc:2274); markNotMapped re-issues findOverlap after every removal (varmap.cc:528-544) and the parameter-offset window update happens before the removal loop (varmap.cc:520-524); wholeCount/multiEntrySet maintenance has no query observable and is not modeled.",
+  "sorting_comparison_keys": "AddrRange::operator< orders the multiset by (last, subsort) (rangemap.hh:88-91); EntrySubsort::operator< orders by (useindex, useoffset) (database.hh:129-133) with addrtied symbols minimal (0,0) (database.cc:100-107); the findAddr/findContainer upper subsort bound is EntrySubsort(usepoint) built from the QUERY address (database.cc:2232-2237); inUse is uselimit RANGE containment in the usepoint's space (database.cc:114-120); removeRange splits bridging ownership ranges (address.cc:438-448)."
+ },
+ "input_manifest": {
+  "binary": "examples/curl @ 3bea8db (git blob 76d9343e, sha256 8af50bca, 161728 bytes)",
+  "functions": [
+   "GetStr @ 0x36d0 (scope carrier only; identity asserted on the Ghidra side)"
+  ],
+  "cases": [
+   "setup: live space indices const=0 unique=2 ram=3 stack=8 \u2014 the EntrySubsort useindex dimension and the per-space maptable dimension both key on them",
+   "equal_subsort_overlap/findaddr: two entries with identical range AND subsort \u2014 both walks answer the SECOND inserted (hinted+tail bracketing)",
+   "wide_narrow_overlap(+_wide_cell): the EntrySubsort-minimum record (narrow, first use 0x1000) owns the shared cell [0x328,0x32b] although wide (first use 0x1100) was inserted first with the smaller start; the wide-only cell answers wide",
+   "wide_narrow_findaddr_midrange/wide_use/nouse: exact-start + RANGE-containment inUse \u2014 narrow admits 0x1050 mid-range, wide admits 0x1150, nothing admits 0x1050 at 0x320",
+   "multi_uselimit_second_range/gap: uselimit {[0x1000,0x100f],[0x2000,0x200f]} \u2014 usepoint 0x2005 answers (subsort from the first range), the 0x1500 gap does not",
+   "cross_space_stack_query/ram_query: a ram entry never answers a stack query and vice versa (maptable[space])",
+   "multi_mapping_first/second: ONE symbol with entries at [0x500,0x503] and [0x510,0x513] answers both queries with the respective entry extents",
+   "remove_requery_first/second/survivor: removeSymbol drops both mappings of the symbol and the survivor keeps answering (entry-log re-keying)",
+   "find_container_smallest: smallc [0x604,0x607] beats containing bigc [0x600,0x60f]; flags 0x208000 = mapped|addrtied",
+   "find_container_equal_tie: equal-size equal-subsort tie resolves to the LAST inserted (tieB) via the backward walk",
+   "partial_offset_piece_hi: the join symbol's [0x644,0x647] piece answers with getOffset()=4 and flags 0x4008000 = precishi|addrtied (mapped NOT set on pieces, database.cc:1172)",
+   "qp_local_symbol: getAllFlags = 0x208100 = mapped|addrtied|typelock",
+   "qp_scope_symbol_victim: victim symbol answers with 0x208000 (no readonly fold \u2014 installed before the property range)",
+   "marknotmapped_window: after markNotMapped(stack,0x900,4) the victim is gone and 0x902 answers property-only 0x2000 with scope=none (ownership window split)",
+   "qp_scope_only_property: 0x910 inside the owned window answers 0x20a000 = mapped|addrtied|readonly with scope=this",
+   "qp_parent_symbol: the global scope's gpar answers through the local query with 0x20c000 = mapped|addrtied|persist, scope=parent",
+   "qp_none: unique-space query with no symbol and no ownership answers flags=0 scope=none",
+   "qp_constant: constant-space address short-circuits to property-only flags=0 scope=none (database.cc:950)"
+  ],
+  "sha256": "4b7759deb976d1429d4f437290670ada34369bb02d95266ae9cd47ba50d71dd1"
+ },
+ "coverage": {
+  "setup_space_indices": {
+   "status": "MATCH",
+   "covers": "setup record: live oracle indices const=0 unique=2 ram=3 stack=8 equal Rugra's ghidra_space_index constants",
+   "residual_todo_ids": []
+  },
+  "equal_subsort_both_walks": {
+   "status": "MATCH",
+   "covers": "equal_subsort_overlap + equal_subsort_findaddr: the bracketing quirk \u2014 both the forward findOverlap walk and the backward findAddr walk answer the second inserted",
+   "residual_todo_ids": []
+  },
+  "wide_narrow_dual_order": {
+   "status": "MATCH",
+   "covers": "wide_narrow_overlap, wide_narrow_overlap_wide_cell, wide_narrow_findaddr_midrange, wide_narrow_findaddr_wide_use, wide_narrow_findaddr_nouse: cell ownership by EntrySubsort minimum vs exact-start backward walk with RANGE-containment inUse",
+   "residual_todo_ids": []
+  },
+  "multi_uselimit_containment": {
+   "status": "MATCH",
+   "covers": "multi_uselimit_second_range + multi_uselimit_gap: two disjoint uselimit ranges, subsort from the first, containment admission",
+   "residual_todo_ids": []
+  },
+  "cross_space_maptable": {
+   "status": "MATCH",
+   "covers": "cross_space_stack_query + cross_space_ram_query: maptable[space] dimension",
+   "residual_todo_ids": []
+  },
+  "multi_mapping_removal": {
+   "status": "MATCH",
+   "covers": "multi_mapping_first/second + remove_requery_first/second/survivor: multi-entry symbols, removeSymbol dropping every mapping, survivor re-keying",
+   "residual_todo_ids": []
+  },
+  "find_container_smallest_tie": {
+   "status": "MATCH",
+   "covers": "find_container_smallest + find_container_equal_tie: smallest-container selection, oldsize sentinel, exact-size break, equal-size equal-subsort tie to the last inserted",
+   "residual_todo_ids": []
+  },
+  "partial_offset_piece": {
+   "status": "MATCH",
+   "covers": "partial_offset_piece_hi: piece entries with getOffset()=4 and precishi extraflags (no mapped bit)",
+   "residual_todo_ids": []
+  },
+  "query_properties_local_branches": {
+   "status": "MATCH",
+   "covers": "qp_local_symbol + qp_scope_symbol_victim + qp_scope_only_property: getAllFlags branch, scope-owned mapped|addrtied|property branch, addMap property-fold avoidance",
+   "residual_todo_ids": []
+  },
+  "query_properties_parent_walk": {
+   "status": "MATCH",
+   "covers": "qp_parent_symbol + qp_none + qp_constant: parent (global scope) findContainer walk with persist, no-scope property-only, constant-space short-circuit",
+   "residual_todo_ids": []
+  },
+  "marknotmapped_window": {
+   "status": "MATCH",
+   "covers": "marknotmapped_window: markNotMapped removes overlapping symbols and splits the ownership window, flipping the scope-only branch to property-only",
+   "residual_todo_ids": []
+  },
+  "production_consumer_threading": {
+   "status": "UNTESTED",
+   "covers": "Funcdata::mapGlobals / linkSymbol / sync_varnodes_with_symbols still call the second hand-rolled funcdata.rs helper (scope_local_find_overlap, symbol-level, first-inserted tie \u2014 deviates from the bracketing quirk) and the spaceless has_overlap shim; production does not thread the parent scope or the query space",
+   "residual_todo_ids": [
+    "SCOPELOCAL-QUERY-RESIDUAL-0002"
+   ]
+  },
+  "multientryset_wholecount": {
+   "status": "UNTESTED",
+   "covers": "wholeCount/multiEntrySet maintenance (database.cc:1866-1885, 2123) has no query observable in this domain and is not modeled; begin/endMultiEntry iteration consumers are untested",
+   "residual_todo_ids": [
+    "SCOPELOCAL-QUERY-RESIDUAL-0002"
+   ]
+  },
+  "addmap_property_fold": {
+   "status": "UNTESTED",
+   "covers": "addMap folds Database property bits into address-tied symbol flags at construction time (database.cc:1153); Rugra's entry_all_flags has no fold (the fixture dodges it by construction ordering)",
+   "residual_todo_ids": [
+    "DB-LOCALSCOPE-MAP-0001"
+   ]
+  },
+  "database_flagbase_partmap": {
+   "status": "UNTESTED",
+   "covers": "glb->symboltab->getProperty(addr) is a closure parameter in query_properties_ex; the Database flagbase partmap (database.hh:946, setPropertyRange state machine) is not ported",
+   "residual_todo_ids": [
+    "DB-LOCALSCOPE-MAP-0001"
+   ]
+  },
+  "space_index_unverified_variants": {
+   "status": "UNTESTED",
+   "covers": "ghidra_space_index pins Register=4 Join=9 Iop=10 Overlay=11 Other=12 without oracle verification (inert for subsort comparisons \u2014 only uselimit spaces feed EntrySubsort); verified indices are const=0 unique=2 ram=3 stack=8",
+   "residual_todo_ids": [
+    "ADDRESS-0001"
+   ]
+  }
+ },
+ "projection_status": "MATCH",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "residual_todo_ids": [
+  "SCOPELOCAL-QUERY-RESIDUAL-0002",
+  "DB-LOCALSCOPE-MAP-0001",
+  "ADDRESS-0001"
+ ],
+ "residual_union": [
+  {
+   "todo_id": "SCOPELOCAL-QUERY-RESIDUAL-0002",
+   "status": "UNTESTED",
+   "branches": [
+    {
+     "id": "production_consumer_threading",
+     "status": "UNTESTED",
+     "detail": "funcdata.rs (off-lease in r2) still carries the second hand-rolled scope_local_find_overlap (symbol-level, first-inserted equal-subsort tie \u2014 the oracle answers the second) and the spaceless has_overlap shim; mapGlobals/linkSymbol do not thread parent scope or query space. Fix = funcdata round: delegate to varmap::{find_overlap_entry, find_addr_entry, query_properties_ex, has_overlap_in} and delete the duplicate."
+    },
+    {
+     "id": "multientryset_wholecount",
+     "status": "UNTESTED",
+     "detail": "wholeCount/multiEntrySet (database.cc:1866-1885) unmodeled \u2014 no query in this domain observes it; register when porting begin/endMultiEntry consumers (XML encode / assignDefaultNames chains)."
+    }
+   ]
+  },
+  {
+   "todo_id": "DB-LOCALSCOPE-MAP-0001",
+   "status": "UNTESTED",
+   "branches": [
+    {
+     "id": "addmap_property_fold",
+     "status": "UNTESTED",
+     "detail": "addMap's symbol-flag property fold (database.cc:1153) needs the Database flagbase; model when the Database-owned local scope lands."
+    },
+    {
+     "id": "database_flagbase_partmap",
+     "status": "UNTESTED",
+     "detail": "Database::flagbase partmap + setPropertyRange (database.cc:3220) not ported; query_properties_ex takes a property closure instead."
+    }
+   ]
+  },
+  {
+   "todo_id": "ADDRESS-0001",
+   "status": "UNTESTED",
+   "branches": [
+    {
+     "id": "space_index_unverified_variants",
+     "status": "UNTESTED",
+     "detail": "ghidra_space_index constants for Register/Join/Iop/Overlay/Other are unverified (inert for subsort); re-derive from the registry-backed space model when ADDRESS-0001/SPACE-0001 land."
+    }
+   ]
+  }
+ ],
+ "expected_results": {
+  "ghidra_stdout_sha256": "b301a7585fabc229bcc5b68eb011669ff19b29edc32ac02a60f0c9f5696b81e1",
+  "ghidra_stderr_sha256": "2f683a2c41c244556c83ea906a009e461c6444930ab93653608be67a65e12ff9",
+  "rugra_stdout_sha256": "b301a7585fabc229bcc5b68eb011669ff19b29edc32ac02a60f0c9f5696b81e1",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0,
+  "record_count": 27
+ }
 }

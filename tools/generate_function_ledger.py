@@ -1142,18 +1142,26 @@ REKEY_TOMBSTONE_COUNT = 47
 # exact commit/path/blob evidence.  Advanced again the same day to the merge
 # commit that folded master's switchcast/varnode-symbol-tail window
 # (3fb97c11..05a8bafa src delta replayed through first-parent 65422a62).
-CONTINUITY_CHECKPOINT_COMMIT = "10ea407df05d4f92cbd71ffe4df20aac70b5afb8"
-CONTINUITY_CHECKPOINT_COMMIT_TREE = "596c2f4c2b0ae01a566803d9cf56f72d59c938be"
-CONTINUITY_CHECKPOINT_SRC_TREE = "9c85c1cb77d3962f81a4704d5b4ca19787a13671"
-CONTINUITY_CHECKPOINT_PARENT = "40cdd3a85cf147bfd2f905094b8e1ca47c07e971"
+# Advanced again 2026-08-30 (REGISTRY-CHECKPOINT-ADVANCE-0001) to the merge
+# commit that folded master's nodejoin-F1/anondecl window (10ea407d..e3a9c421
+# src delta replayed through first-parent ed3fed6a; merge 0c5091f5): the net
+# window effect is exactly three introduced records — action.rs
+# nodejoin_join_block_forces_heritage_restructure (96e8e1a8) and debugproto.rs
+# ptr_drill_base_name trait+impl pair (e331a5c5) — with zero transitions,
+# tombstones, or unproved removals (the 46412358 revert nets out inside the
+# window).  Evidence: zero-drift probe + git log -S origin pinning per token.
+CONTINUITY_CHECKPOINT_COMMIT = "0c5091f5a8eba7f5a2dbbebfcdada08a5e3034fb"
+CONTINUITY_CHECKPOINT_COMMIT_TREE = "8f052f7add35042b6e892875a642a2145c1b94d1"
+CONTINUITY_CHECKPOINT_SRC_TREE = "ec6bed6fb1f2f7812ebdb498653e3fd5431bb3d4"
+CONTINUITY_CHECKPOINT_PARENT = "ed3fed6a4311be0dd09e192aabab8ff1a2fb06ae"
 CONTINUITY_BASELINE_MIGRATION_BLOB = "8ecab1e6160b7d4d28a15aba0cad89c2fe8fc171"
 CONTINUITY_BASELINE_MIGRATION_SHA256 = (
     "16236201f0b4920d2a3e33a848df05d3d601ee60998f7f7c51464d4eeb7739e9"
 )
-CONTINUITY_FIRST_PARENT_COMMIT_COUNT = 397
+CONTINUITY_FIRST_PARENT_COMMIT_COUNT = 406
 CONTINUITY_FIRST_COMMIT = "7ae30f5bcfba5e1adce2a4e8cdeebc23d96964cb"
 CONTINUITY_BASELINE_RUST_RECORDS = 9_639
-CONTINUITY_CHECKPOINT_RUST_RECORDS = 10_464
+CONTINUITY_CHECKPOINT_RUST_RECORDS = 10_467
 CONTINUITY_EXPECTED_TRANSITIONS = {
     ("RG-F-003416535aaee2f83d44", "RG-F-81062ccc03179475b483"),
     ("RG-F-014e421b9237134489e2", "RG-F-a0058e4a4e7ff0e25ce6"),
@@ -1796,7 +1804,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-255c1493a10ab3495460", "RG-F-25896af002d768c087df", "RG-F-259a9c49bba099f03b24", "RG-F-25b5a88855b12eec4e4b",
     "RG-F-2646dcd008a8290bb207", "RG-F-264acf75a501ce87dedd", "RG-F-2691568ac3a23b372685", "RG-F-2712f2145ebb3e4de196",
     "RG-F-27430607a20acf228b93", "RG-F-27b427b38ad2b76de539", "RG-F-27f807b8573d302b02d7", "RG-F-280545c5aee718dfbb72",
-    "RG-F-284a84451afcf57c7972", "RG-F-28a09579aa1e40998b98", "RG-F-28e4a783fb75dcdf2f04", "RG-F-291817f8baaf83e11472",
+    "RG-F-284a84451afcf57c7972", "RG-F-28a09579aa1e40998b98", "RG-F-28e4a783fb75dcdf2f04", "RG-F-291817f8baaf83e11472", "RG-F-296043d82a41ee18ae3b",
     "RG-F-29cbee7248ef3411c05b", "RG-F-29dc4b50b4e765955d48", "RG-F-29dd30a286d080d5a21a", "RG-F-2a2388a99f562160cf0b",
     "RG-F-2a2d8b272db8d55177f9", "RG-F-2abc0abb279c6e994743", "RG-F-2b15c8cc63a6cc45d95c", "RG-F-2ba4ec98a4a3ef35e7ba",
     "RG-F-2c1c46e7eb41d9d0fba1", "RG-F-2c614e4f0fe5fd220752", "RG-F-2cae510ca54daac7111b", "RG-F-2d396aa34969d8131811",
@@ -1866,7 +1874,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-769776db0caf758a7fac", "RG-F-777aeae0f3f078555f0f", "RG-F-7795ec675c08d08fadc1", "RG-F-77d7e1929d84d8a9308a",
     "RG-F-78f87617e0afc9bc8e20", "RG-F-7909a29462b00fbbdb9c", "RG-F-79123f1b829342ee6c79", "RG-F-7956dcf231ce5f01e9fd",
     "RG-F-7992af31f20c424f1c26", "RG-F-79a328c9773747e00c6b", "RG-F-7a3b472134bccd5a97f6", "RG-F-7be175134af266d24a85",
-    "RG-F-7c17950c834ea9504242", "RG-F-7c79e5490d051ae0608d", "RG-F-7cb6625ae84bc31cae67", "RG-F-7d16faddb640f830df37",
+    "RG-F-7c17950c834ea9504242", "RG-F-7c79e5490d051ae0608d", "RG-F-7c9be11d61453260cff9", "RG-F-7cb6625ae84bc31cae67", "RG-F-7d16faddb640f830df37",
     "RG-F-7d4bd7950f4297ec32b6", "RG-F-7d949a2dc82972bb9f60", "RG-F-7de827d003e76d6c30e5", "RG-F-7e31ad5922751fb790cb",
     "RG-F-7e73ad7e651aaf595505", "RG-F-7ec7d8e3acf6434eb376", "RG-F-7ed78f16069a0f084e9b", "RG-F-7f11b51548c81dde1997",
     "RG-F-7f26061ab9a7abb64ed7", "RG-F-7f3ca6e8ede84e9dc429", "RG-F-7f4499a24e9d5f6e00f6", "RG-F-7f4c48378d23c1a5e5ea",
@@ -1907,7 +1915,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-a7b190a9cc6699355ab8", "RG-F-a7f678a9f1d3c48ba8e1", "RG-F-a89ee9a4c7cb592ddd30", "RG-F-a8ad618fb8ab0a87d030",
     "RG-F-a90a8498ecb52ff4ac8c", "RG-F-a92016e1f7d5546f5f4a", "RG-F-a9520a718c2bdf58a5f4", "RG-F-aa0a2cbe229a6f291d54",
     "RG-F-aa76ee351792ed513e3e", "RG-F-aa8e430d8b38a8f2a140", "RG-F-aa9136995b0e2b2c2d4a", "RG-F-aac3e8659132fb196a16",
-    "RG-F-aad4662f2d4def75a3fd", "RG-F-abd70ae0f0a63378c816", "RG-F-ac385b3896fbc69af1ad", "RG-F-ac69b64441781fc5ee72",
+    "RG-F-aad4662f2d4def75a3fd", "RG-F-abd70ae0f0a63378c816", "RG-F-ac385b3896fbc69af1ad", "RG-F-ac69b64441781fc5ee72", "RG-F-ac7f4ffeac8f8ef49e9d",
     "RG-F-ada8b71bab89cd3b8c6d", "RG-F-adba82208d7b6be78431", "RG-F-ae975f5c15f5bea65bd1", "RG-F-af1e44fa513e12f2bb5a",
     "RG-F-af1fad6c42c639175c6f", "RG-F-af80018ee474fe10259f", "RG-F-af844086a72c72c05543", "RG-F-b0ea87f1b544cf77eed5",
     "RG-F-b0f297ffd0622fb16d72", "RG-F-b26561ea983223f81dcf", "RG-F-b34be787885cf85b976b", "RG-F-b3947087ae26a6f102b2",

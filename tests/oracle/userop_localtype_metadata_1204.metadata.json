@@ -1,98 +1,99 @@
 {
-  "schema_version": 1,
-  "fixture_id": "USEROP-LOCALTYPE-METADATA-0001",
-  "title": "DatatypeUserOp canonical local-type metadata and UserOpManage registration parity",
+ "schema_version": 1,
+ "fixture_id": "USEROP-LOCALTYPE-METADATA-0001",
+ "title": "DatatypeUserOp canonical local-type metadata and UserOpManage registration parity",
+ "projection_status": "MATCH",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "status_note": "All 61 projected DatatypeUserOp/UserOpManage records byte-match locked Ghidra 12.0.4 from a clean pinned Rugra base plus the sole src/userop.rs overlay. Overall remains UNTESTED because the production PcodeOp -> TypeOpCallother -> Architecture-owned UserOpManage caller closure and its TypeOp fallback are not connected or bilaterally observed; this evidence must not be used to claim module L3 or TYPEOP-LOCALTYPE-DISPATCH-0001 completion.",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "entrypoints": [
+   "DatatypeUserOp::DatatypeUserOp/getOutputLocal/getInputLocal (userop.cc:55-83)",
+   "UserOpManage::getOp/registerBuiltin/registerOp (userop.cc:408-527)",
+   "TypeOpCallother::getInputLocal/getOutputLocal fallback contract (typeop.cc:855-875)"
+  ]
+ },
+ "architecture": "x86:LE:64:default:gcc",
+ "compiler_spec": "x86-64-gcc.cspec",
+ "analysis_options": "BfdArchitecture target=default; no option overrides; fixture-owned secondary UserOpManage for sparse/custom registration probes",
+ "fixture_access": "C++11 explicit-template private-member bridge invokes the locked UserOpManage::registerOp body without copying or modifying oracle code",
+ "comparand": {
+  "rugra_base_commit": "a29f5b76079b95acd52b176456c1f52772c511e7",
+  "rugra_base_tree": "6438abb6a421296eff5b8c74ffff7f3b88363dcf",
+  "snapshot_model": "git archive locked base tree plus src/userop.rs overlay",
+  "overlay_paths": [
+   "src/userop.rs"
+  ],
+  "cpp_fixture_sha256": "6b140065af9e0357b0ea6cf49931d96d2969bbbc52ded53b5cce7bb096a27c9e",
+  "rust_fixture_sha256": "fcce61fdfb0feac03ae11a5561fb8f0a69f9b4bf4bfa6f0192312cacce6aaf35",
+  "userop_rs_sha256": "0d434b311b303b7c6db0f7971bc7a32962e6122c07c4790b46bec4e704489396",
+  "runner_sha256": "5a93441518bddb12ba6ba7d28b6bf98b7b731240a03e1188f850478c7d607002",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
+ },
+ "assets": {
+  "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+  "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+  "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+  "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+  "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+  "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+ },
+ "host_tools": {
+  "cxx": "g++ (GCC) 16.2.1 20260810",
+  "cxx_target": "x86_64-pc-linux-gnu",
+  "cc": "gcc (GCC) 16.2.1 20260810",
+  "cc_target": "x86_64-pc-linux-gnu",
+  "ar": "GNU ar (GNU Binutils) 2.47",
+  "make": "GNU Make 4.4.1",
+  "python": "Python 3.14.7",
+  "git": "git version 2.55.0",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+  "rust_toolchain": "system-x86_64-unknown-linux-gnu"
+ },
+ "build": {
+  "registry_packages": 164
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "MATCH for the projection: builtin output/input Datatype* values are compared with the same pinned-base TypeFactory getters; Rust compares the corresponding factory-owned Arc identities. Index and name queries resolve the same descriptor object, and boxed descriptors remain stable across builtin-map growth. The production TypeOp caller closure is UNTESTED.",
+  "loop_bounds_and_order": "MATCH for the projection: DatatypeUserOp constructor visits in0,in1,in2,in3 in that order and appends only non-null inputs; [null,char,null,int] becomes slot1=char, slot2=int, then null. registerOp grows sparse slots through <= index and preserves null gaps.",
+  "counters_and_accumulators": "MATCH for the projection: CALLOTHER slot is decremented exactly once before bounds lookup; registration replacement uses the existing index, while name/index conflict errors leave the prior descriptor and sparse-list extent unchanged.",
+  "sort_and_comparison_keys": "MATCH for the projection: name conflicts compare name->descriptor index first; index conflicts compare the occupied descriptor name second; builtin lookup keys by the exact uint4 sentinel id and first registration wins. No independent metadata lookup key exists."
+ },
+ "coverage": {
   "projection_status": "MATCH",
   "overall_status": "UNTESTED",
-  "status_note": "All 61 projected DatatypeUserOp/UserOpManage records byte-match locked Ghidra 12.0.4 from a clean pinned Rugra base plus the sole src/userop.rs overlay. Overall remains UNTESTED because the production PcodeOp -> TypeOpCallother -> Architecture-owned UserOpManage caller closure and its TypeOp fallback are not connected or bilaterally observed; this evidence must not be used to claim module L3 or TYPEOP-LOCALTYPE-DISPATCH-0001 completion.",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "entrypoints": [
-      "DatatypeUserOp::DatatypeUserOp/getOutputLocal/getInputLocal (userop.cc:55-83)",
-      "UserOpManage::getOp/registerBuiltin/registerOp (userop.cc:408-527)",
-      "TypeOpCallother::getInputLocal/getOutputLocal fallback contract (typeop.cc:855-875)"
-    ]
-  },
-  "architecture": "x86:LE:64:default:gcc",
-  "compiler_spec": "x86-64-gcc.cspec",
-  "analysis_options": "BfdArchitecture target=default; no option overrides; fixture-owned secondary UserOpManage for sparse/custom registration probes",
-  "fixture_access": "C++11 explicit-template private-member bridge invokes the locked UserOpManage::registerOp body without copying or modifying oracle code",
-  "comparand": {
-    "rugra_base_commit": "a29f5b76079b95acd52b176456c1f52772c511e7",
-    "rugra_base_tree": "6438abb6a421296eff5b8c74ffff7f3b88363dcf",
-    "snapshot_model": "git archive locked base tree plus src/userop.rs overlay",
-    "overlay_paths": [
-      "src/userop.rs"
-    ],
-    "cpp_fixture_sha256": "6b140065af9e0357b0ea6cf49931d96d2969bbbc52ded53b5cce7bb096a27c9e",
-    "rust_fixture_sha256": "fcce61fdfb0feac03ae11a5561fb8f0a69f9b4bf4bfa6f0192312cacce6aaf35",
-    "userop_rs_sha256": "0d434b311b303b7c6db0f7971bc7a32962e6122c07c4790b46bec4e704489396",
-    "runner_sha256": "5a93441518bddb12ba6ba7d28b6bf98b7b731240a03e1188f850478c7d607002",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
-  },
-  "assets": {
-    "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-    "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-    "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-    "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-    "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-    "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-    "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-  },
-  "host_tools": {
-    "cxx": "g++ (GCC) 16.2.1 20260810",
-    "cxx_target": "x86_64-pc-linux-gnu",
-    "cc": "gcc (GCC) 16.2.1 20260810",
-    "cc_target": "x86_64-pc-linux-gnu",
-    "ar": "GNU ar (GNU Binutils) 2.47",
-    "make": "GNU Make 4.4.1",
-    "python": "Python 3.14.7",
-    "git": "git version 2.55.0",
-    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-    "rust_toolchain": "system-x86_64-unknown-linux-gnu"
-  },
-  "build": {
-    "registry_packages": 164
-  },
-  "decisive_semantics": {
-    "references_and_outputs": "MATCH for the projection: builtin output/input Datatype* values are compared with the same pinned-base TypeFactory getters; Rust compares the corresponding factory-owned Arc identities. Index and name queries resolve the same descriptor object, and boxed descriptors remain stable across builtin-map growth. The production TypeOp caller closure is UNTESTED.",
-    "loop_bounds_and_order": "MATCH for the projection: DatatypeUserOp constructor visits in0,in1,in2,in3 in that order and appends only non-null inputs; [null,char,null,int] becomes slot1=char, slot2=int, then null. registerOp grows sparse slots through <= index and preserves null gaps.",
-    "counters_and_accumulators": "MATCH for the projection: CALLOTHER slot is decremented exactly once before bounds lookup; registration replacement uses the existing index, while name/index conflict errors leave the prior descriptor and sparse-list extent unchanged.",
-    "sort_and_comparison_keys": "MATCH for the projection: name conflicts compare name->descriptor index first; index conflicts compare the occupied descriptor name second; builtin lookup keys by the exact uint4 sentinel id and first registration wins. No independent metadata lookup key exists."
-  },
-  "coverage": {
-    "projection_status": "MATCH",
-    "overall_status": "UNTESTED",
-    "records": 61,
-    "observations": [
-      "MEMCPY/STRNCPY/WCSNCPY descriptor type/index and pinned-base TypeFactory pointer identity",
-      "CALLOTHER slot 0 exclusion, slots 1-3 mapping, and slot 4 metadata miss",
-      "duplicate builtin descriptor identity and first-registration metadata before and after map growth",
-      "bad builtin exact exception and no-mutation state",
-      "sparse useroplist null slots",
-      "DatatypeUserOp null-input compaction and missing-output/input metadata",
-      "same-name/same-index descriptor replacement",
-      "same-name/new-index, same-index/new-name, and negative-index exact errors plus post-error state"
-    ],
-    "untested_caller_closure": "PcodeOp -> TypeOpCallother::getInputLocal/getOutputLocal -> Architecture-owned UserOpManage, including canonical TYPE_UNKNOWN fallback when descriptor metadata is absent"
-  },
-  "locked_capture": {
-    "records": 61,
-    "bytes": 1753,
-    "stdout_sha256": "e643b1e1ccaf4c54db6e2dba9c53e817c4f822378296001a9ce0813d9a96e5ac",
-    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  },
-  "residuals": [
-    {
-      "id": "TYPEOP-LOCALTYPE-DISPATCH-0001",
-      "status": "UNTESTED",
-      "note": "This fixture closes only the UserOpManage metadata projection. Architecture-owned TypeOpCallother dispatch and canonical size-derived fallback remain unconnected and have no bilateral caller-closure observation."
-    }
-  ]
+  "records": 61,
+  "observations": [
+   "MEMCPY/STRNCPY/WCSNCPY descriptor type/index and pinned-base TypeFactory pointer identity",
+   "CALLOTHER slot 0 exclusion, slots 1-3 mapping, and slot 4 metadata miss",
+   "duplicate builtin descriptor identity and first-registration metadata before and after map growth",
+   "bad builtin exact exception and no-mutation state",
+   "sparse useroplist null slots",
+   "DatatypeUserOp null-input compaction and missing-output/input metadata",
+   "same-name/same-index descriptor replacement",
+   "same-name/new-index, same-index/new-name, and negative-index exact errors plus post-error state"
+  ],
+  "untested_caller_closure": "PcodeOp -> TypeOpCallother::getInputLocal/getOutputLocal -> Architecture-owned UserOpManage, including canonical TYPE_UNKNOWN fallback when descriptor metadata is absent"
+ },
+ "locked_capture": {
+  "records": 61,
+  "bytes": 1753,
+  "stdout_sha256": "e643b1e1ccaf4c54db6e2dba9c53e817c4f822378296001a9ce0813d9a96e5ac",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+ },
+ "residuals": [
+  {
+   "id": "TYPEOP-LOCALTYPE-DISPATCH-0001",
+   "status": "UNTESTED",
+   "note": "This fixture closes only the UserOpManage metadata projection. Architecture-owned TypeOpCallother dispatch and canonical size-derived fallback remain unconnected and have no bilateral caller-closure observation."
+  }
+ ],
+ "input_sha256": "c84b17fa1831650e716a49db65b882c530c142ab8e9e891e36571dcb993cb9d1"
 }

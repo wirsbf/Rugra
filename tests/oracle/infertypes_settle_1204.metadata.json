@@ -10,8 +10,9 @@
  "cpp_fixture_sha256": "02ff0b6df05447c5af6f0bd19cdf166a0818def03303a162823fdcb9c488ce86",
  "rust_fixture_sha256": "44055ad6d0cb40a4dca36daa27b6ec612a3f493aad1808bcedb4c32a95d219eb",
  "expected_stdout_sha256": "c387b59f0ef8fdd047b44aefd2d2124dff1e2407f5f2e18b97a99f5cc285a23b",
- "status": "MATCH",
  "covered": "ActionInferTypes settle observables: per-round metatype/size table plus Datatype instance identity stability (writeBack interned-type contract, varnode.cc:459 type==ct); Rust-only local_count<7 guard",
  "notes": "INFERTYPES-SETTLE-0001. The oracle settles because every propagated Datatype is TypeFactory-interned; Rugra matches via canonicalize_temp_type routing temp types through the architecture factory (coreaction.rs). The pointer/loaded8 cells pin the propagateToPointer/FromPointer edges where fresh non-interned Arcs previously churned writeBack into the localcount>=7 'Type propagation algorithm not settling' cap (myprogress warning).",
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "fixture_id": "INFERTYPES-SETTLE-1204-1204",
+ "input_sha256": "e432abc7ef18e1a1b928e46162613a86770989cbc13897ef2a0ab91ac0e22561"
 }

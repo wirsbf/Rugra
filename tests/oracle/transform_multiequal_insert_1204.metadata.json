@@ -410,7 +410,7 @@
  },
  "projection_status": "MATCH",
  "residual_todo_ids": [],
- "overall_status": "MATCH",
+ "overall_status": "MATCH: (B2 canonicalization)",
  "out_of_scope_observations": [
   {
    "id": "FUNCDATA-MARKINDIRECT-STRICT-0001",

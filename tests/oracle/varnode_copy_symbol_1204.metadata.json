@@ -2,7 +2,7 @@
  "schema": 2,
  "fixture_id": "VARNODE-COPYSYMBOL-FIELDS-0001",
  "stable_function_id": "GH12-F-edea5e55c75b6fc66820",
- "overall_status": "MATCH:  opSetInput const-dedup copySymbol field semantics (type pointer, mapentry pointer, typelock|namelock bit masking, identity early-return, spacebase exemption) byte-match the locked oracle; copySymbol cc:500-504 high bookkeeping registered no_oracle (see coverage)",
+ "overall_status": "UNTESTED: opSetInput const-dedup copySymbol field semantics (type pointer, mapentry pointer, typelock|namelock bit masking, identity early-return, spacebase exemption) byte-match the locked oracle; copySymbol cc:500-504 high bookkeeping registered no_oracle (see coverage)",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
@@ -54,7 +54,7 @@
   "rust_fixture_sha256": "d244b0e4eb422dbc5f57cc2c480c01e393a32f9a174162890bfb20c77eeb15fd",
   "funcdata_rs_sha256": "c8ecad5bd8a17d1f5437550e2038d5c4b160d3ae1750d28edc3ab495b90f7912",
   "funcdata_doc_sha256": "e1a6a9e57c26c3453cd9fa7ab6fe33dafef7f15b3abe7b17fd952040845b850c",
-  "runner_sha256": "454cb2a37eb4b142a65ac05bea6def484b273a7048ddb1a94985b17f03067600",
+  "runner_sha256": "3011c97ee0fbfa207686d43fa191413862386c798cf81003444f3e71f1ee3c41",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

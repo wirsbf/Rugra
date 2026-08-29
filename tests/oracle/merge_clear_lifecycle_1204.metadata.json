@@ -1,146 +1,146 @@
 {
-  "schema_version": 2,
-  "fixture_id": "MERGE-CLEAR-LIFECYCLE-0001",
-  "projection_status": "MATCH",
-  "overall_status": "MISMATCH",
-  "status_note": "4/6 projected observation lines byte-match the locked 12.0.4 oracle (both before-stage lines, the full after-stage core lifecycle line). The two remaining lines are the registered MISMATCH domains: localmap typelock survival (Ghidra keeps the typelock+namelock symbol through clearUnlocked, Rugra's wholesale scope.symbols.clear() model drops it) and funcproto returnBytesConsumed (Ghidra zeroes it in clearUnlockedOutput, Rugra's fspec.rs simplification leaves it). A byte-identical line here must not be read as proof of the UNTESTED coverage entries (reset_local_window_range_rederive, clean_up_and_cast_phase_index, merge_channel_production_population, localoverride_persistence).",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
-  },
-  "rugra_base_commit": "92daed300bcce3c4d855b311cf9667ba21eb475a",
-  "rugra_base_tree": "6aea6d3b5b1421170d1bdc5a766c9568483a66af",
-  "rugra_base_src_tree": "367bb531746f630fe4de5fddc0365c2c2f27eeda",
-  "rugra_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-  "rugra_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-  "rugra_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-  "rugra_base_merge_blob": "365be16020196337d386eb215f0b280ece383847",
-  "architecture": "synthetic little-endian 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; xunknown{1,2,4,8} core types; one LanedRegister(4,0xa)",
-  "compiler_spec": "synthetic prototype named fixture, extrapop=0, empty input/output, no effect records, no symbols",
-  "analysis_options": {
-    "entrypoint": "single lifecycle event: Funcdata::clear (funcdata.cc:84-112) driven directly on the constructed Funcdata; no Action pipeline run",
-    "premise": "state deposited through production APIs where they exist (newOp/newVarnodeOut/setHighLevel/HighIntersectTest::intersection/StackAffectingOps::populate/exact FuncCallSpecs::new_for_op + add_call_specs Arc qlst owner/addSymbol/setAttribute/LanedRegister registration) and through direct member writes where the production producer is not ported (copyTrims/protoPartial deposits, heritage pass/maxdepth, flag bits, counters)",
-    "normalization": "none; stdout is byte-diffed and both stderr streams must be empty"
-  },
-  "input_manifest": {
-    "canonicalization": "UTF-8 JSON array, compact separators, ensure_ascii=false",
-    "cases": [
-      "case lifecycle: one Funcdata 'lifecycle' at ram:0x7000 size 0x100 over a synthetic 64-bit LE architecture (spaces: const=0,other=1,unique=2,ram=3,register=4,stack=5,join=6,iop=7; one LanedRegister(4,0xa))",
-      "graph: b0->b1; b0: op1 reg:0x10 vnP = COPY const 0x11; b1: op2 reg:0x20 vnQ = COPY const 0x22; b1: callop = CALL const 0xdeadbeef",
-      "persistent domains deposited before clear: setHighLevel; testCache via HighIntersectTest::intersection(vnP,vnQ) caching both HighEdge directions; copyTrims=[op1]; protoPartial=[op2]; stackAffectingOps populated via StackAffectingOps::populate picking up the CALL through qlst; callspecs=[one exact PcodeOpRef-bound FuncCallSpecs Arc owner added through add_call_specs, with the original raw CALL target preserved like the C++ fixture]; jumpvec=[override JumpTable(ram:0x7100,JumperBasicOverride,maxaddsub=7,collectloads=true), plain JumpTable(ram:0x7200)]; localmap symbols [unlocked_a, locked_b(typelock+namelock)] with minParamOffset=0x40 maxParamOffset=0x80; flags |= {highlevel_on,blocks_generated,processing_started,typerecovery_start,typerecovery_on,double_precis_on,restart_pending} + preserved {blocks_unreachable,processing_complete,jumptablerecovery_dont}; clean_up_index=3 high_level_index=7 cast_phase_index=5; setLanedRegGenerated(); lanedMap manual entry reg:0x30/4; activeoutput=ParamActive(false); funcp.returnBytesConsumed=7; unionMap one ResolveEdge(int4,op1,slot 0); heritage pass=3 maxdepth=5",
-      "event: fd.clear() (funcdata.cc:84-112)",
-      "observation: 6 stdout lines (core before, localmap before, funcproto before, core after, localmap after, funcproto after); after-stage localmap and funcproto lines are the registered MISMATCH domains"
-    ],
-    "sha256": "4f148fd2cd8656debeb0bde8d893732abc177de02c0a4058a2b34476c2d48edf"
-  },
-  "decisive_semantics": {
-    "references_and_outputs": "MATCH for every projected reference domain: override JumpTable handle stays dereferenceable after clear with permanent maxaddsub/collectloads intact; locked symbol handle queried by name survives on the Ghidra side; banks hand out fresh uniqid/create_index bases (obank uniqid=0, vbank create_index=0); Merge channels hold no dangling producer state after clear",
-    "loop_bounds_and_order": "clear executes the Ghidra statement order (flags->counters->minLanedSize->localmap clearUnlocked/resetLocalWindow->clearActiveOutput->clearUnlockedOutput->unionMap->clearBlocks->obank->vbank->clearCallSpecs->clearJumpTables->heritage->covermerge); the projected after-state is order-insensitive except that covermerge.clear runs after obank/vbank clear so the channels never dereference freed ops",
-    "counters_and_accumulators": "MATCH for high_level_index (7->0), minLanedSize (1000000->re-derived 4), obank uniqid (3->0), vbank create_index (5->0), heritage pass (3->0) and maxdepth (5->-1), merge channel counts (testCache 2->0, copyTrims 1->0, protoPartial 1->0, stackAffectingOps 1->0 + is_pop 1->0); clean_up_index/cast_phase_index are not projected (no Rugra fields)",
-    "sort_and_comparison_keys": "flags tested by logical bit name, not raw bit position (Rugra's funcdata_flags remap); JumpTable retention keyed on isOverride(); symbol survival keyed on typelock|namelock (database.cc:2051); no ordering-sensitive projection beyond the fixed 6-line emission order"
-  },
-  "coverage": {
-    "flags_mask_and_preserved_bits": "MATCH",
-    "counters_high_level_index": "MATCH",
-    "min_laned_size_rederive": "MATCH",
-    "laned_map_persistence": "MATCH",
-    "localmap_clear_window_scalars": "MATCH",
-    "localmap_typelock_survival": "MISMATCH",
-    "localmap_typelock_survival_note": "Ghidra keeps the typelock+namelock symbol (database.cc:2042-2064), Rugra drops it; bound to MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001",
-    "reset_local_window_range_rederive": "UNTESTED",
-    "reset_local_window_range_rederive_note": "stackGrowsNegative/local-range re-derivation needs FuncProto getLocalRange/isStackGrowsNegative accessors Rugra does not expose; no Rust writer drifts those fields; bound to MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001",
-    "active_output_clear": "MATCH",
-    "funcproto_unlocked_output": "MISMATCH",
-    "funcproto_unlocked_output_note": "fspec.cc:4012 zeroes returnBytesConsumed and clears the unlocked output store; Rugra fspec.rs clear_unlocked_output is a simplification; bound to MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001",
-    "union_map_clear": "MATCH",
-    "banks_reset_uniqid_create_index": "MATCH",
-    "callspecs_clear": "MATCH",
-    "jumptables_override_permanents": "MATCH",
-    "heritage_reset": "MATCH",
-    "merge_channels_clear": "MATCH",
-    "merge_channels_clear_note": "channel lifecycle only; production population paths are separate entries",
-    "merge_channel_production_population": "UNTESTED",
-    "merge_channel_production_population_note": "testCache entry deposited synthetically on the Rust side (production intersection population covered by merge_persistent_1204); protoPartial/stackAffectingOps deposits simulate not-yet-ported producers (MERGE-PROTOPARTIAL-GROUP-0001, StackAffectingOps::populate unported); bound to MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001",
-    "restart_gate_procstart": "MATCH",
-    "clean_up_and_cast_phase_index": "UNTESTED",
-    "clean_up_and_cast_phase_index_note": "Rugra has no clean_up_index/cast_phase_index fields (coreaction.rs markers are faithful no-ops); bound to MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001",
-    "localoverride_persistence": "UNTESTED",
-    "localoverride_persistence_note": "localoverride survives clear by construction (no clear call in funcdata.cc:106 comment path) but the fixture does not populate it; bound to MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001"
-  },
-  "residual_todo_ids": [
-    "MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001"
+ "schema_version": 2,
+ "fixture_id": "MERGE-CLEAR-LIFECYCLE-0001",
+ "projection_status": "MATCH",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
+ "status_note": "4/6 projected observation lines byte-match the locked 12.0.4 oracle (both before-stage lines, the full after-stage core lifecycle line). The two remaining lines are the registered MISMATCH domains: localmap typelock survival (Ghidra keeps the typelock+namelock symbol through clearUnlocked, Rugra's wholesale scope.symbols.clear() model drops it) and funcproto returnBytesConsumed (Ghidra zeroes it in clearUnlockedOutput, Rugra's fspec.rs simplification leaves it). A byte-identical line here must not be read as proof of the UNTESTED coverage entries (reset_local_window_range_rederive, clean_up_and_cast_phase_index, merge_channel_production_population, localoverride_persistence).",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_base_commit": "92daed300bcce3c4d855b311cf9667ba21eb475a",
+ "rugra_base_tree": "6aea6d3b5b1421170d1bdc5a766c9568483a66af",
+ "rugra_base_src_tree": "367bb531746f630fe4de5fddc0365c2c2f27eeda",
+ "rugra_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+ "rugra_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+ "rugra_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+ "rugra_base_merge_blob": "365be16020196337d386eb215f0b280ece383847",
+ "architecture": "synthetic little-endian 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; xunknown{1,2,4,8} core types; one LanedRegister(4,0xa)",
+ "compiler_spec": "synthetic prototype named fixture, extrapop=0, empty input/output, no effect records, no symbols",
+ "analysis_options": {
+  "entrypoint": "single lifecycle event: Funcdata::clear (funcdata.cc:84-112) driven directly on the constructed Funcdata; no Action pipeline run",
+  "premise": "state deposited through production APIs where they exist (newOp/newVarnodeOut/setHighLevel/HighIntersectTest::intersection/StackAffectingOps::populate/exact FuncCallSpecs::new_for_op + add_call_specs Arc qlst owner/addSymbol/setAttribute/LanedRegister registration) and through direct member writes where the production producer is not ported (copyTrims/protoPartial deposits, heritage pass/maxdepth, flag bits, counters)",
+  "normalization": "none; stdout is byte-diffed and both stderr streams must be empty"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON array, compact separators, ensure_ascii=false",
+  "cases": [
+   "case lifecycle: one Funcdata 'lifecycle' at ram:0x7000 size 0x100 over a synthetic 64-bit LE architecture (spaces: const=0,other=1,unique=2,ram=3,register=4,stack=5,join=6,iop=7; one LanedRegister(4,0xa))",
+   "graph: b0->b1; b0: op1 reg:0x10 vnP = COPY const 0x11; b1: op2 reg:0x20 vnQ = COPY const 0x22; b1: callop = CALL const 0xdeadbeef",
+   "persistent domains deposited before clear: setHighLevel; testCache via HighIntersectTest::intersection(vnP,vnQ) caching both HighEdge directions; copyTrims=[op1]; protoPartial=[op2]; stackAffectingOps populated via StackAffectingOps::populate picking up the CALL through qlst; callspecs=[one exact PcodeOpRef-bound FuncCallSpecs Arc owner added through add_call_specs, with the original raw CALL target preserved like the C++ fixture]; jumpvec=[override JumpTable(ram:0x7100,JumperBasicOverride,maxaddsub=7,collectloads=true), plain JumpTable(ram:0x7200)]; localmap symbols [unlocked_a, locked_b(typelock+namelock)] with minParamOffset=0x40 maxParamOffset=0x80; flags |= {highlevel_on,blocks_generated,processing_started,typerecovery_start,typerecovery_on,double_precis_on,restart_pending} + preserved {blocks_unreachable,processing_complete,jumptablerecovery_dont}; clean_up_index=3 high_level_index=7 cast_phase_index=5; setLanedRegGenerated(); lanedMap manual entry reg:0x30/4; activeoutput=ParamActive(false); funcp.returnBytesConsumed=7; unionMap one ResolveEdge(int4,op1,slot 0); heritage pass=3 maxdepth=5",
+   "event: fd.clear() (funcdata.cc:84-112)",
+   "observation: 6 stdout lines (core before, localmap before, funcproto before, core after, localmap after, funcproto after); after-stage localmap and funcproto lines are the registered MISMATCH domains"
   ],
-  "comparand": {
-    "cpp_fixture_sha256": "f8a9f11e5c36bf9dabe31727d44a62c0bdde2fe038d446ffd55bb552bfe8364c",
-    "rust_fixture_sha256": "7786e6213f276ee0280bd65b4ac15b62adc9ec54b076b4d6af8d8d6b174b978d",
-    "d0_overlay_sha256": {
-      "src/coreaction.rs": "70c1e111ae0a6aa11ff577ade8d89c944eb9df25bf5e5dab3b91fe52884f808f",
-      "src/flow.rs": "07db323acc4efaca0ad972d6f2686bff557af4c8a37f36d880dd931f222df7b7",
-      "src/fspec.rs": "1db5638cd05ce2ae5ee142cff9b5d64bb2968156daed02410a319b91f93b0ae1",
-      "src/funcdata.rs": "eaac8c60b95ad1b3b6f444ac8d113e8c183a8e3f085e73bc7bd87916f9b2a416",
-      "src/heritage.rs": "1277fa22ec9345fdbde2154d0ce8a255a552627a2475441a97e6349bb14acd30",
-      "src/ruleaction.rs": "204bf76592f7c338fe4c53c9ddaec178c3a1cecd837b78f4a09eae6eab4e3b59",
-      "src/signature.rs": "4b5dc69c304b1bd0aeca76fdfbf3fc660dc26ab3003e4aa626e92c4f1ec274f9",
-      "src/unionresolve.rs": "9b28b04a5c007014511d67b2cb063bb0154fd8c4be34a20ac4bb6c8cc56aa9fd",
-      "src/varnode.rs": "62d84d9313e99e8abd5885c4bb7222378bee2637a16fc7bd7e0ef299359f53d9"
-    },
-    "base_merge_rs_sha256": "524cee88deef602c38e687929d54a41e810e1030a0a0db3e19645b55bf47105c",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "expected_ghidra_stdout_sha256": "a5f5d4497696cf3333503136c56a7f6145913d38f0fa1943cb6c1aad7f76b3b8",
-    "expected_rugra_stdout_sha256": "b0e99fb4be2f785830bc514dcb14c10a8fd3e63db641aca64dadfe921ffe362b",
-    "runner_sha256": "9031c2e5a22976c146b9b1209c902700429e36522be4f72877f99ec2999ab54a",
-    "host_cxx": "g++ (GCC) 16.2.1 20260810",
-    "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-    "host_cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-    "host_cxx_path": "/usr/bin/g++",
-    "host_cargo_path": "/usr/bin/cargo",
-    "host_rustc_path": "/usr/bin/rustc",
-    "host_make_path": "/usr/bin/make",
-    "host_git_path": "/usr/bin/git",
-    "host_python_path": "/usr/bin/python3.14"
+  "sha256": "4f148fd2cd8656debeb0bde8d893732abc177de02c0a4058a2b34476c2d48edf"
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "MATCH for every projected reference domain: override JumpTable handle stays dereferenceable after clear with permanent maxaddsub/collectloads intact; locked symbol handle queried by name survives on the Ghidra side; banks hand out fresh uniqid/create_index bases (obank uniqid=0, vbank create_index=0); Merge channels hold no dangling producer state after clear",
+  "loop_bounds_and_order": "clear executes the Ghidra statement order (flags->counters->minLanedSize->localmap clearUnlocked/resetLocalWindow->clearActiveOutput->clearUnlockedOutput->unionMap->clearBlocks->obank->vbank->clearCallSpecs->clearJumpTables->heritage->covermerge); the projected after-state is order-insensitive except that covermerge.clear runs after obank/vbank clear so the channels never dereference freed ops",
+  "counters_and_accumulators": "MATCH for high_level_index (7->0), minLanedSize (1000000->re-derived 4), obank uniqid (3->0), vbank create_index (5->0), heritage pass (3->0) and maxdepth (5->-1), merge channel counts (testCache 2->0, copyTrims 1->0, protoPartial 1->0, stackAffectingOps 1->0 + is_pop 1->0); clean_up_index/cast_phase_index are not projected (no Rugra fields)",
+  "sort_and_comparison_keys": "flags tested by logical bit name, not raw bit position (Rugra's funcdata_flags remap); JumpTable retention keyed on isOverride(); symbol survival keyed on typelock|namelock (database.cc:2051); no ordering-sensitive projection beyond the fixed 6-line emission order"
+ },
+ "coverage": {
+  "flags_mask_and_preserved_bits": "MATCH",
+  "counters_high_level_index": "MATCH",
+  "min_laned_size_rederive": "MATCH",
+  "laned_map_persistence": "MATCH",
+  "localmap_clear_window_scalars": "MATCH",
+  "localmap_typelock_survival": "MISMATCH",
+  "localmap_typelock_survival_note": "Ghidra keeps the typelock+namelock symbol (database.cc:2042-2064), Rugra drops it; bound to MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001",
+  "reset_local_window_range_rederive": "UNTESTED",
+  "reset_local_window_range_rederive_note": "stackGrowsNegative/local-range re-derivation needs FuncProto getLocalRange/isStackGrowsNegative accessors Rugra does not expose; no Rust writer drifts those fields; bound to MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001",
+  "active_output_clear": "MATCH",
+  "funcproto_unlocked_output": "MISMATCH",
+  "funcproto_unlocked_output_note": "fspec.cc:4012 zeroes returnBytesConsumed and clears the unlocked output store; Rugra fspec.rs clear_unlocked_output is a simplification; bound to MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001",
+  "union_map_clear": "MATCH",
+  "banks_reset_uniqid_create_index": "MATCH",
+  "callspecs_clear": "MATCH",
+  "jumptables_override_permanents": "MATCH",
+  "heritage_reset": "MATCH",
+  "merge_channels_clear": "MATCH",
+  "merge_channels_clear_note": "channel lifecycle only; production population paths are separate entries",
+  "merge_channel_production_population": "UNTESTED",
+  "merge_channel_production_population_note": "testCache entry deposited synthetically on the Rust side (production intersection population covered by merge_persistent_1204); protoPartial/stackAffectingOps deposits simulate not-yet-ported producers (MERGE-PROTOPARTIAL-GROUP-0001, StackAffectingOps::populate unported); bound to MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001",
+  "restart_gate_procstart": "MATCH",
+  "clean_up_and_cast_phase_index": "UNTESTED",
+  "clean_up_and_cast_phase_index_note": "Rugra has no clean_up_index/cast_phase_index fields (coreaction.rs markers are faithful no-ops); bound to MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001",
+  "localoverride_persistence": "UNTESTED",
+  "localoverride_persistence_note": "localoverride survives clear by construction (no clear call in funcdata.cc:106 comment path) but the fixture does not populate it; bound to MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001"
+ },
+ "residual_todo_ids": [
+  "MERGE-CLEAR-LIFECYCLE-RESIDUAL-0001"
+ ],
+ "comparand": {
+  "cpp_fixture_sha256": "f8a9f11e5c36bf9dabe31727d44a62c0bdde2fe038d446ffd55bb552bfe8364c",
+  "rust_fixture_sha256": "7786e6213f276ee0280bd65b4ac15b62adc9ec54b076b4d6af8d8d6b174b978d",
+  "d0_overlay_sha256": {
+   "src/coreaction.rs": "70c1e111ae0a6aa11ff577ade8d89c944eb9df25bf5e5dab3b91fe52884f808f",
+   "src/flow.rs": "07db323acc4efaca0ad972d6f2686bff557af4c8a37f36d880dd931f222df7b7",
+   "src/fspec.rs": "1db5638cd05ce2ae5ee142cff9b5d64bb2968156daed02410a319b91f93b0ae1",
+   "src/funcdata.rs": "eaac8c60b95ad1b3b6f444ac8d113e8c183a8e3f085e73bc7bd87916f9b2a416",
+   "src/heritage.rs": "1277fa22ec9345fdbde2154d0ce8a255a552627a2475441a97e6349bb14acd30",
+   "src/ruleaction.rs": "204bf76592f7c338fe4c53c9ddaec178c3a1cecd837b78f4a09eae6eab4e3b59",
+   "src/signature.rs": "4b5dc69c304b1bd0aeca76fdfbf3fc660dc26ab3003e4aa626e92c4f1ec274f9",
+   "src/unionresolve.rs": "9b28b04a5c007014511d67b2cb063bb0154fd8c4be34a20ac4bb6c8cc56aa9fd",
+   "src/varnode.rs": "62d84d9313e99e8abd5885c4bb7222378bee2637a16fc7bd7e0ef299359f53d9"
   },
-  "build": {
-    "registry_packages": 164,
-    "archive_paths": [
-      "Cargo.toml",
-      "Cargo.lock",
-      "build.rs",
-      "README.md",
-      "src",
-      "sleigh_shim",
-      "benches",
-      "tests/oracle/decompress_1204.rs",
-      "tests/oracle/funcproto_lock_1204.rs"
-    ],
-    "d0_overlay_paths": [
-      "src/coreaction.rs",
-      "src/flow.rs",
-      "src/fspec.rs",
-      "src/funcdata.rs",
-      "src/heritage.rs",
-      "src/ruleaction.rs",
-      "src/signature.rs",
-      "src/unionresolve.rs",
-      "src/varnode.rs"
-    ],
-    "tmpdir_policy": {
-      "caller_variable": "TMPDIR",
-      "default_relative_to_home": ".cache/rugra-merge-clear-lifecycle-1204/tmp",
-      "resolved_root_constraint": "strict_descendant_of_passwd_home",
-      "leaf_symlink_allowed": false,
-      "creation_order": "canonicalize_and_validate_before_mkdir_then_revalidate",
-      "required_access": "directory,writable,searchable",
-      "explicit_build_commands": [
-        "make",
-        "g++",
-        "cargo",
-        "rustc"
-      ]
-    },
-    "overlay_note": "The immutable 92daed3 crate archive receives the complete nine-file D0 callspec identity closure. src/merge.rs remains the hash-verified base file; no unrelated live worktree source is admitted."
-  }
+  "base_merge_rs_sha256": "524cee88deef602c38e687929d54a41e810e1030a0a0db3e19645b55bf47105c",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "expected_ghidra_stdout_sha256": "a5f5d4497696cf3333503136c56a7f6145913d38f0fa1943cb6c1aad7f76b3b8",
+  "expected_rugra_stdout_sha256": "b0e99fb4be2f785830bc514dcb14c10a8fd3e63db641aca64dadfe921ffe362b",
+  "runner_sha256": "9031c2e5a22976c146b9b1209c902700429e36522be4f72877f99ec2999ab54a",
+  "host_cxx": "g++ (GCC) 16.2.1 20260810",
+  "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+  "host_cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+  "host_cxx_path": "/usr/bin/g++",
+  "host_cargo_path": "/usr/bin/cargo",
+  "host_rustc_path": "/usr/bin/rustc",
+  "host_make_path": "/usr/bin/make",
+  "host_git_path": "/usr/bin/git",
+  "host_python_path": "/usr/bin/python3.14"
+ },
+ "build": {
+  "registry_packages": 164,
+  "archive_paths": [
+   "Cargo.toml",
+   "Cargo.lock",
+   "build.rs",
+   "README.md",
+   "src",
+   "sleigh_shim",
+   "benches",
+   "tests/oracle/decompress_1204.rs",
+   "tests/oracle/funcproto_lock_1204.rs"
+  ],
+  "d0_overlay_paths": [
+   "src/coreaction.rs",
+   "src/flow.rs",
+   "src/fspec.rs",
+   "src/funcdata.rs",
+   "src/heritage.rs",
+   "src/ruleaction.rs",
+   "src/signature.rs",
+   "src/unionresolve.rs",
+   "src/varnode.rs"
+  ],
+  "tmpdir_policy": {
+   "caller_variable": "TMPDIR",
+   "default_relative_to_home": ".cache/rugra-merge-clear-lifecycle-1204/tmp",
+   "resolved_root_constraint": "strict_descendant_of_passwd_home",
+   "leaf_symlink_allowed": false,
+   "creation_order": "canonicalize_and_validate_before_mkdir_then_revalidate",
+   "required_access": "directory,writable,searchable",
+   "explicit_build_commands": [
+    "make",
+    "g++",
+    "cargo",
+    "rustc"
+   ]
+  },
+  "overlay_note": "The immutable 92daed3 crate archive receives the complete nine-file D0 callspec identity closure. src/merge.rs remains the hash-verified base file; no unrelated live worktree source is admitted."
+ }
 }

@@ -10,8 +10,9 @@
  "cpp_fixture_sha256": "84e6e92b55137874ad8e14ce589a5de62af16d732ad33b8bd3401243bfae57ff",
  "rust_fixture_sha256": "a7708c5a2784cb9924fba5a0f40b4426e8546bb9c6ed1d353d4070870326e538",
  "expected_stdout_sha256": "766c175f8aba4d6e0a6cf5edea2a13079fb11ceb7e57acf6e2f67ff61028c6b1",
- "status": "MATCH",
  "covered": "single shared int4 base counter across every printNameBase prefix (database.cc:2501-2504 s << \"Var\" << index++): phase-1 names iVar1/uVar2, phase-2 continues fVar3/cVar4/iVar5/piVar6, base=7 \u2014 distinct symbols can never share a <prefix>Var<num> name",
  "notes": "VARMAP-DUPDECL-0001. Pins the 181538f-family invariant behind duplicate C declarations (glob_range 'int iVar3; declared twice'). The Rugra-side duplicate-decl elimination itself (prettyprint backfill signature gate + uVar word-boundary scan) is Rugra GLUE with no Ghidra counterpart and is covered by the E2E numbering gate (compare_ghidra.py numbering=0) rather than this bilateral fixture.",
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "fixture_id": "VARMAP-DUPDECL-1204-1204",
+ "input_sha256": "301a0e6adb65dd92bc3856b272cf994a72b540cbe6e45c06f44e609cc4b59394"
 }

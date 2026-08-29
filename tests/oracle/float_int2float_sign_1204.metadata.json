@@ -1,230 +1,230 @@
 {
-  "schema_version": 2,
-  "fixture_id": "FLOAT-OPINT2FLOAT-SIGN-0001",
-  "projection_status": "MATCH",
-  "overall_status": "MATCH",
-  "status_note": "Closes the FLOAT-OPINT2FLOAT-SIGN-0001 residual of RULE-COLLAPSECONSTANTS-0001: Ghidra FloatFormat::opInt2Float sign-extends its integer input from sizein bytes (float.cc:611-617, sign_extend at address.hh:543) and opFloat2Float runs the bit-level convertEncoding ladder (float.cc:622-626 -> 352-419) — both driven directly on the public FloatFormat(4)/FloatFormat(8) constructors (the same IEEE 754 defaults Translate::getFloatFormat serves, translate.cc:966-971) with same-input/same-output bit patterns on both sides. 36 cases: negative INT2FLOAT at every input width (1/2/4/8 bytes) and both 4/8-byte targets, sign_extend's discard of bits above the sizein sign bit, INT32_MIN/INT32_MAX/2^24+1 and i64::MIN/MIN+1/MAX cast rounding (RNE is the oracle's overflow semantics), FLOAT2FLOAT widening/narrowing with negatives, negative zero, negative NaN (sign preserved), infinity, subnormal normalize, exact RNE ties and one-ULP-above-tie, denormalized output, underflow zero, and the DBL_MAX uintb wrap-carry overflow to infinity.",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
-  },
-  "rugra_base_commit": "1fc8af3df85ddac9bc87ff4606a27672fd97f675",
-  "rugra_source": {
-    "base_src_tree": "8b32e893ffe956565db26a1f0a1e5d5ac1ccd446",
-    "base_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "base_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "rust_overlay": "Archive Rugra base 1fc8af3df85ddac9bc87ff4606a27672fd97f675 and overlay only the owned src/float_emulate.rs candidate (commit 2d85fa8) before the isolated offline build",
-    "base_commit": "1fc8af3df85ddac9bc87ff4606a27672fd97f675"
-  },
-  "architecture": {
-    "id": "synthetic-floatformat-fixture",
-    "endianness": "little",
-    "pointer_size": 8,
-    "spaces": "none; FloatFormat is constructed directly (public constructor) — no Architecture, Translate, or spec loading on either side",
-    "type_factory": "none required"
-  },
-  "compiler_spec": {
-    "id": "fixture",
-    "prototype_xml": "none; pure FloatFormat arithmetic with no Funcdata or calling convention",
-    "calling_convention": "none"
-  },
-  "analysis_options": {
-    "api": "Direct production FloatFormat::opInt2Float(a, sizein) and opFloat2Float(a, outformat) calls on both sides; no PrintC, Action, or Rule pipeline (the rule integration is RULE-COLLAPSECONSTANTS-0001's covered projection)",
-    "formats": "FloatFormat(4) and FloatFormat(8) constructed via the public default IEEE 754 settings constructor on both sides; identical to Translate::getFloatFormat defaults",
-    "normalization": "None. Results are the full uintb/u64 return values printed as 0x%016llX; no ID, order, or state normalization",
-    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent",
-    "random_seed": "none; pure functions over explicit bit patterns",
-    "error_injection": "none; neither function throws"
-  },
-  "input_manifest": {
-    "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
-    "cases": [
-      {
-        "id": "i2f4_pos7",
-        "call": "opInt2Float(0x00000007,4)->f32"
-      },
-      {
-        "id": "i2f8_pos7",
-        "call": "opInt2Float(0x00000007,4)->f64"
-      },
-      {
-        "id": "i2f4_zero",
-        "call": "opInt2Float(0x00000000,4)->f32"
-      },
-      {
-        "id": "i2f4_neg7",
-        "call": "opInt2Float(0xFFFFFFF9,4)->f32"
-      },
-      {
-        "id": "i2f8_neg7",
-        "call": "opInt2Float(0xFFFFFFF9,4)->f64"
-      },
-      {
-        "id": "i2f4_neg7_size1",
-        "call": "opInt2Float(0xF9,1)->f32"
-      },
-      {
-        "id": "i2f4_neg9_size2",
-        "call": "opInt2Float(0xFFF7,2)->f32"
-      },
-      {
-        "id": "i2f4_neg7_size8",
-        "call": "opInt2Float(0xFFFFFFFFFFFFFFF9,8)->f32"
-      },
-      {
-        "id": "i2f8_neg1",
-        "call": "opInt2Float(0xFFFFFFFF,4)->f64"
-      },
-      {
-        "id": "i2f8_neg7_junk",
-        "call": "opInt2Float(0xABCDFFFFFFF9,4)->f64"
-      },
-      {
-        "id": "i2f4_int32_min",
-        "call": "opInt2Float(0x80000000,4)->f32"
-      },
-      {
-        "id": "i2f4_int32_max",
-        "call": "opInt2Float(0x7FFFFFFF,4)->f32"
-      },
-      {
-        "id": "i2f4_2p24p1",
-        "call": "opInt2Float(0x01000001,4)->f32"
-      },
-      {
-        "id": "i2f8_int64_min",
-        "call": "opInt2Float(0x8000000000000000,8)->f64"
-      },
-      {
-        "id": "i2f8_int64_min1",
-        "call": "opInt2Float(0x8000000000000001,8)->f64"
-      },
-      {
-        "id": "i2f8_int64_max",
-        "call": "opInt2Float(0x7FFFFFFFFFFFFFFF,8)->f64"
-      },
-      {
-        "id": "f2f_4to8_onefive",
-        "call": "opFloat2Float(0x3FC00000,f32->f64)"
-      },
-      {
-        "id": "f2f_4to8_neg1",
-        "call": "opFloat2Float(0xBF800000,f32->f64)"
-      },
-      {
-        "id": "f2f_4to8_negzero",
-        "call": "opFloat2Float(0x80000000,f32->f64)"
-      },
-      {
-        "id": "f2f_4to8_nan",
-        "call": "opFloat2Float(0x7FC00000,f32->f64)"
-      },
-      {
-        "id": "f2f_4to8_negnan",
-        "call": "opFloat2Float(0xFFC00000,f32->f64)"
-      },
-      {
-        "id": "f2f_4to8_posinf",
-        "call": "opFloat2Float(0x7F800000,f32->f64)"
-      },
-      {
-        "id": "f2f_4to8_sub_min",
-        "call": "opFloat2Float(0x00000001,f32->f64)"
-      },
-      {
-        "id": "f2f_4to8_sub_max",
-        "call": "opFloat2Float(0x007FFFFF,f32->f64)"
-      },
-      {
-        "id": "f2f_8to4_neg1",
-        "call": "opFloat2Float(0xBFF0000000000000,f64->f32)"
-      },
-      {
-        "id": "f2f_8to4_negthird",
-        "call": "opFloat2Float(0xBFD5555555555555,f64->f32)"
-      },
-      {
-        "id": "f2f_8to4_tie_even",
-        "call": "opFloat2Float(0x3FF0000010000000,f64->f32)"
-      },
-      {
-        "id": "f2f_8to4_above_tie",
-        "call": "opFloat2Float(0x3FF0000018000000,f64->f32)"
-      },
-      {
-        "id": "f2f_8to4_negtie",
-        "call": "opFloat2Float(0xBFF0000010000000,f64->f32)"
-      },
-      {
-        "id": "f2f_8to4_sub_out",
-        "call": "opFloat2Float(0x3800000000000000,f64->f32)"
-      },
-      {
-        "id": "f2f_8to4_too_small",
-        "call": "opFloat2Float(0x2100000000000000,f64->f32)"
-      },
-      {
-        "id": "f2f_8to4_dbl_max",
-        "call": "opFloat2Float(0x7FEFFFFFFFFFFFFF,f64->f32)"
-      },
-      {
-        "id": "f2f_8to4_negdbl_max",
-        "call": "opFloat2Float(0xFFEFFFFFFFFFFFFF,f64->f32)"
-      },
-      {
-        "id": "f2f_8to4_negnan",
-        "call": "opFloat2Float(0xFFF8000000000000,f64->f32)"
-      },
-      {
-        "id": "f2f_8to4_neginf",
-        "call": "opFloat2Float(0xFFF0000000000000,f64->f32)"
-      },
-      {
-        "id": "f2f_8to4_negzero",
-        "call": "opFloat2Float(0x8000000000000000,f64->f32)"
-      }
-    ],
-    "sha256": "832a07b40bd836459fafb16992c327a51c850b01df37a0342df1d015b4807211"
-  },
-  "observation_schema": {
-    "format": "37 fixed-order UTF-8 lines with final newline: one banner (schema=1|fixture=...|oracle=e40ed13...) then 36 `case=<id>|res=0x<16 uppercase hex>` records",
-    "projection": "res is the complete uintb/u64 return value of the mapped function for the exact same input bits, input byte width, and output format on both sides"
-  },
-  "decisive_semantics": {
-    "reference_output_parameters": "Both functions are const pure methods returning uintb by value; opFloat2Float takes the output FloatFormat by reference and reads (never writes) it; convertEncoding reads formin fields via pointer. No shared state, no output parameters. Rugra mirrors with &self/&outformat reads and a u64 return.",
-    "loop_bounds_traversal_order": "No loops in either function. opInt2Float is a straight line: sign_extend -> (double) cast -> getEncoding. convertEncoding branch order is decisive: NaN/Inf (exp==formin.maxexponent) -> subnormal normalize (exp==0) -> normal jbit room -> exp+=bias -> too-small (exp < -frac_size) -> denormalized (exp<1) -> roundToNearestEven -> overflow (exp>=maxexponent) -> pack. Rugra keeps the identical branch order.",
-    "counter_accumulator_lifecycle": "exp is a signed int4 accumulator across the ladder (-bias-lz | -bias, then +bias, +1 only on round-carry); signif is a shift-state accumulator whose roundToNearestEven `+= midbitmask` relies on uintb wrap-around, detected by (signif>>63)==0 and rebalanced to 1<<63 with exp+=1 (float.cc:391/403). Rugra uses i32 exp arithmetic and wrapping_add on u64 signif with the same rebalance.",
-    "sorting_comparison_keys": "No sorts. The decisive comparisons: sign_extend bit index 8*sizein-1 with shift amount 64-8*sizein (address.hh:543-549); roundToNearestEven predicate (signif&midbitmask)!=0 && ((signif&epsmask)!=0 || odd) with lowbitmask=1<<lowbitpos when lowbitpos<64 else 0 (float.cc:279-287); jbitimplied tested on the OUTPUT format (float.cc:379) not formin; oracle extractFractionalCode top-aligns the fraction (float.cc:113-119) and setFractionalCode consumes top-aligned codes (float.cc:144-153) — the convertEncoding ladder is written entirely in that convention."
-  },
-  "coverage": {
-    "int2float_signed_negatives": "MATCH",
-    "int2float_sign_extend_discard": "MATCH",
-    "int2float_boundary_rounding": "MATCH",
-    "float2float_widening": "MATCH",
-    "float2float_narrowing_rounding": "MATCH",
-    "float2float_special_clamps": "MATCH"
-  },
-  "residual_todo_ids": [],
-  "comparand": {
-    "cpp_fixture_sha256": "ec41f575500ab7112cfe8f418f44d59738ee6fa25be69ef2d85b54798f712ce4",
-    "rust_fixture_sha256": "2e84a3395c19cac476910fb6f5692ffa4f54c724dc5afdeecaa7d8045d8cc50a",
-    "float_emulate_rs_sha256": "bb211619653cbd1f7d24f382b63fc92452ba7f73f37e83bf47ffeb3f16ef4be4",
-    "runner_sha256": "c8235ac0014dee0c1c53a2e69ce1876bcae0ceb28212e76fe4eb4f242e8d9f56",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "expected_ghidra_stdout_sha256": "87088a2babd11759d5f1664107a2364b12ef378a79a731df036516b4dd4faefc",
-    "expected_rugra_stdout_sha256": "87088a2babd11759d5f1664107a2364b12ef378a79a731df036516b4dd4faefc",
-    "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
-  },
-  "build": {
-    "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler; fixture links libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + whole-archive libdecomp.a",
-    "expected_stdout_lines": 37
-  }
+ "schema_version": 2,
+ "fixture_id": "FLOAT-OPINT2FLOAT-SIGN-0001",
+ "projection_status": "MATCH",
+ "overall_status": "MATCH: (B2 canonicalization)",
+ "status_note": "Closes the FLOAT-OPINT2FLOAT-SIGN-0001 residual of RULE-COLLAPSECONSTANTS-0001: Ghidra FloatFormat::opInt2Float sign-extends its integer input from sizein bytes (float.cc:611-617, sign_extend at address.hh:543) and opFloat2Float runs the bit-level convertEncoding ladder (float.cc:622-626 -> 352-419) \u2014 both driven directly on the public FloatFormat(4)/FloatFormat(8) constructors (the same IEEE 754 defaults Translate::getFloatFormat serves, translate.cc:966-971) with same-input/same-output bit patterns on both sides. 36 cases: negative INT2FLOAT at every input width (1/2/4/8 bytes) and both 4/8-byte targets, sign_extend's discard of bits above the sizein sign bit, INT32_MIN/INT32_MAX/2^24+1 and i64::MIN/MIN+1/MAX cast rounding (RNE is the oracle's overflow semantics), FLOAT2FLOAT widening/narrowing with negatives, negative zero, negative NaN (sign preserved), infinity, subnormal normalize, exact RNE ties and one-ULP-above-tie, denormalized output, underflow zero, and the DBL_MAX uintb wrap-carry overflow to infinity.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_base_commit": "1fc8af3df85ddac9bc87ff4606a27672fd97f675",
+ "rugra_source": {
+  "base_src_tree": "8b32e893ffe956565db26a1f0a1e5d5ac1ccd446",
+  "base_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "base_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "rust_overlay": "Archive Rugra base 1fc8af3df85ddac9bc87ff4606a27672fd97f675 and overlay only the owned src/float_emulate.rs candidate (commit 2d85fa8) before the isolated offline build",
+  "base_commit": "1fc8af3df85ddac9bc87ff4606a27672fd97f675"
+ },
+ "architecture": {
+  "id": "synthetic-floatformat-fixture",
+  "endianness": "little",
+  "pointer_size": 8,
+  "spaces": "none; FloatFormat is constructed directly (public constructor) \u2014 no Architecture, Translate, or spec loading on either side",
+  "type_factory": "none required"
+ },
+ "compiler_spec": {
+  "id": "fixture",
+  "prototype_xml": "none; pure FloatFormat arithmetic with no Funcdata or calling convention",
+  "calling_convention": "none"
+ },
+ "analysis_options": {
+  "api": "Direct production FloatFormat::opInt2Float(a, sizein) and opFloat2Float(a, outformat) calls on both sides; no PrintC, Action, or Rule pipeline (the rule integration is RULE-COLLAPSECONSTANTS-0001's covered projection)",
+  "formats": "FloatFormat(4) and FloatFormat(8) constructed via the public default IEEE 754 settings constructor on both sides; identical to Translate::getFloatFormat defaults",
+  "normalization": "None. Results are the full uintb/u64 return values printed as 0x%016llX; no ID, order, or state normalization",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent",
+  "random_seed": "none; pure functions over explicit bit patterns",
+  "error_injection": "none; neither function throws"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+  "cases": [
+   {
+    "id": "i2f4_pos7",
+    "call": "opInt2Float(0x00000007,4)->f32"
+   },
+   {
+    "id": "i2f8_pos7",
+    "call": "opInt2Float(0x00000007,4)->f64"
+   },
+   {
+    "id": "i2f4_zero",
+    "call": "opInt2Float(0x00000000,4)->f32"
+   },
+   {
+    "id": "i2f4_neg7",
+    "call": "opInt2Float(0xFFFFFFF9,4)->f32"
+   },
+   {
+    "id": "i2f8_neg7",
+    "call": "opInt2Float(0xFFFFFFF9,4)->f64"
+   },
+   {
+    "id": "i2f4_neg7_size1",
+    "call": "opInt2Float(0xF9,1)->f32"
+   },
+   {
+    "id": "i2f4_neg9_size2",
+    "call": "opInt2Float(0xFFF7,2)->f32"
+   },
+   {
+    "id": "i2f4_neg7_size8",
+    "call": "opInt2Float(0xFFFFFFFFFFFFFFF9,8)->f32"
+   },
+   {
+    "id": "i2f8_neg1",
+    "call": "opInt2Float(0xFFFFFFFF,4)->f64"
+   },
+   {
+    "id": "i2f8_neg7_junk",
+    "call": "opInt2Float(0xABCDFFFFFFF9,4)->f64"
+   },
+   {
+    "id": "i2f4_int32_min",
+    "call": "opInt2Float(0x80000000,4)->f32"
+   },
+   {
+    "id": "i2f4_int32_max",
+    "call": "opInt2Float(0x7FFFFFFF,4)->f32"
+   },
+   {
+    "id": "i2f4_2p24p1",
+    "call": "opInt2Float(0x01000001,4)->f32"
+   },
+   {
+    "id": "i2f8_int64_min",
+    "call": "opInt2Float(0x8000000000000000,8)->f64"
+   },
+   {
+    "id": "i2f8_int64_min1",
+    "call": "opInt2Float(0x8000000000000001,8)->f64"
+   },
+   {
+    "id": "i2f8_int64_max",
+    "call": "opInt2Float(0x7FFFFFFFFFFFFFFF,8)->f64"
+   },
+   {
+    "id": "f2f_4to8_onefive",
+    "call": "opFloat2Float(0x3FC00000,f32->f64)"
+   },
+   {
+    "id": "f2f_4to8_neg1",
+    "call": "opFloat2Float(0xBF800000,f32->f64)"
+   },
+   {
+    "id": "f2f_4to8_negzero",
+    "call": "opFloat2Float(0x80000000,f32->f64)"
+   },
+   {
+    "id": "f2f_4to8_nan",
+    "call": "opFloat2Float(0x7FC00000,f32->f64)"
+   },
+   {
+    "id": "f2f_4to8_negnan",
+    "call": "opFloat2Float(0xFFC00000,f32->f64)"
+   },
+   {
+    "id": "f2f_4to8_posinf",
+    "call": "opFloat2Float(0x7F800000,f32->f64)"
+   },
+   {
+    "id": "f2f_4to8_sub_min",
+    "call": "opFloat2Float(0x00000001,f32->f64)"
+   },
+   {
+    "id": "f2f_4to8_sub_max",
+    "call": "opFloat2Float(0x007FFFFF,f32->f64)"
+   },
+   {
+    "id": "f2f_8to4_neg1",
+    "call": "opFloat2Float(0xBFF0000000000000,f64->f32)"
+   },
+   {
+    "id": "f2f_8to4_negthird",
+    "call": "opFloat2Float(0xBFD5555555555555,f64->f32)"
+   },
+   {
+    "id": "f2f_8to4_tie_even",
+    "call": "opFloat2Float(0x3FF0000010000000,f64->f32)"
+   },
+   {
+    "id": "f2f_8to4_above_tie",
+    "call": "opFloat2Float(0x3FF0000018000000,f64->f32)"
+   },
+   {
+    "id": "f2f_8to4_negtie",
+    "call": "opFloat2Float(0xBFF0000010000000,f64->f32)"
+   },
+   {
+    "id": "f2f_8to4_sub_out",
+    "call": "opFloat2Float(0x3800000000000000,f64->f32)"
+   },
+   {
+    "id": "f2f_8to4_too_small",
+    "call": "opFloat2Float(0x2100000000000000,f64->f32)"
+   },
+   {
+    "id": "f2f_8to4_dbl_max",
+    "call": "opFloat2Float(0x7FEFFFFFFFFFFFFF,f64->f32)"
+   },
+   {
+    "id": "f2f_8to4_negdbl_max",
+    "call": "opFloat2Float(0xFFEFFFFFFFFFFFFF,f64->f32)"
+   },
+   {
+    "id": "f2f_8to4_negnan",
+    "call": "opFloat2Float(0xFFF8000000000000,f64->f32)"
+   },
+   {
+    "id": "f2f_8to4_neginf",
+    "call": "opFloat2Float(0xFFF0000000000000,f64->f32)"
+   },
+   {
+    "id": "f2f_8to4_negzero",
+    "call": "opFloat2Float(0x8000000000000000,f64->f32)"
+   }
+  ],
+  "sha256": "832a07b40bd836459fafb16992c327a51c850b01df37a0342df1d015b4807211"
+ },
+ "observation_schema": {
+  "format": "37 fixed-order UTF-8 lines with final newline: one banner (schema=1|fixture=...|oracle=e40ed13...) then 36 `case=<id>|res=0x<16 uppercase hex>` records",
+  "projection": "res is the complete uintb/u64 return value of the mapped function for the exact same input bits, input byte width, and output format on both sides"
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "Both functions are const pure methods returning uintb by value; opFloat2Float takes the output FloatFormat by reference and reads (never writes) it; convertEncoding reads formin fields via pointer. No shared state, no output parameters. Rugra mirrors with &self/&outformat reads and a u64 return.",
+  "loop_bounds_traversal_order": "No loops in either function. opInt2Float is a straight line: sign_extend -> (double) cast -> getEncoding. convertEncoding branch order is decisive: NaN/Inf (exp==formin.maxexponent) -> subnormal normalize (exp==0) -> normal jbit room -> exp+=bias -> too-small (exp < -frac_size) -> denormalized (exp<1) -> roundToNearestEven -> overflow (exp>=maxexponent) -> pack. Rugra keeps the identical branch order.",
+  "counter_accumulator_lifecycle": "exp is a signed int4 accumulator across the ladder (-bias-lz | -bias, then +bias, +1 only on round-carry); signif is a shift-state accumulator whose roundToNearestEven `+= midbitmask` relies on uintb wrap-around, detected by (signif>>63)==0 and rebalanced to 1<<63 with exp+=1 (float.cc:391/403). Rugra uses i32 exp arithmetic and wrapping_add on u64 signif with the same rebalance.",
+  "sorting_comparison_keys": "No sorts. The decisive comparisons: sign_extend bit index 8*sizein-1 with shift amount 64-8*sizein (address.hh:543-549); roundToNearestEven predicate (signif&midbitmask)!=0 && ((signif&epsmask)!=0 || odd) with lowbitmask=1<<lowbitpos when lowbitpos<64 else 0 (float.cc:279-287); jbitimplied tested on the OUTPUT format (float.cc:379) not formin; oracle extractFractionalCode top-aligns the fraction (float.cc:113-119) and setFractionalCode consumes top-aligned codes (float.cc:144-153) \u2014 the convertEncoding ladder is written entirely in that convention."
+ },
+ "coverage": {
+  "int2float_signed_negatives": "MATCH",
+  "int2float_sign_extend_discard": "MATCH",
+  "int2float_boundary_rounding": "MATCH",
+  "float2float_widening": "MATCH",
+  "float2float_narrowing_rounding": "MATCH",
+  "float2float_special_clamps": "MATCH"
+ },
+ "residual_todo_ids": [],
+ "comparand": {
+  "cpp_fixture_sha256": "ec41f575500ab7112cfe8f418f44d59738ee6fa25be69ef2d85b54798f712ce4",
+  "rust_fixture_sha256": "2e84a3395c19cac476910fb6f5692ffa4f54c724dc5afdeecaa7d8045d8cc50a",
+  "float_emulate_rs_sha256": "bb211619653cbd1f7d24f382b63fc92452ba7f73f37e83bf47ffeb3f16ef4be4",
+  "runner_sha256": "c8235ac0014dee0c1c53a2e69ce1876bcae0ceb28212e76fe4eb4f242e8d9f56",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "expected_ghidra_stdout_sha256": "87088a2babd11759d5f1664107a2364b12ef378a79a731df036516b4dd4faefc",
+  "expected_rugra_stdout_sha256": "87088a2babd11759d5f1664107a2364b12ef378a79a731df036516b4dd4faefc",
+  "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+ },
+ "build": {
+  "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler; fixture links libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + whole-archive libdecomp.a",
+  "expected_stdout_lines": 37
+ }
 }

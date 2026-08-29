@@ -16,5 +16,6 @@
  "cpp_fixture_sha256": "f7c96379896df1522cfa293e20fcf0f7b732a1c3e9a00246b6a55ec6e7a1a6c4",
  "rust_fixture_sha256": "ee139bc8371a9886498716a7f9d71dc53c122a23f91ede7796104b4e45b553a1",
  "expected_stdout_sha256": "598394d34ccc31f70696eb9a872ec37ff7cd87811de2e946d397caaee8e016ca",
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "fixture_id": "PRINTC-DISPLAY-1204-1204"
 }

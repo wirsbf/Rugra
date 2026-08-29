@@ -157,7 +157,7 @@
    "exact Symbol identity returned by category slots",
    "name-tree ownership and destruction count"
   ],
-  "overall_status": "MATCH"
+  "overall_status": "UNTESTED"
  },
  "exact_function_boundaries": {
   "getCategorySize": "Covers negative category, absent/empty categories, categories containing null holes, populated category 0, and append-only categories 1/2.",

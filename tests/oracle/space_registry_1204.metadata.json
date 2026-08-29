@@ -14,7 +14,7 @@
   "GH12-F-d48c7db469ca72003de1 ghidra::AddrSpace::AddrSpace space.cc:58",
   "GH12-F-e00c9988e5b26882cdc7 ghidra::ConstantSpace::ConstantSpace space.cc:356"
  ],
- "overall_status": "UNTESTED:  (B2 migration of partial match state) the eight-case registry projection (insert/index allocation, rejection messages with partial baselist growth, dead-hole skipping and late fill, shortcut assignment incl. 'z' reuse, wordsize/addrsize/endian/flag/truncation/overlay projection, spacebase pointer bridge, copySpaces refcounting) byte-matches the locked oracle; per-space decode/read/printRaw attribute codecs, resolveConstant, and the join-record/resolver halves of AddrSpaceManager remain with the legacy enum manager and are owned by MARSHAL/TRANSLATE/ADDRESS follow-up atoms",
+ "overall_status": "UNTESTED: (B2 migration of partial match state) the eight-case registry projection (insert/index allocation, rejection messages with partial baselist growth, dead-hole skipping and late fill, shortcut assignment incl. 'z' reuse, wordsize/addrsize/endian/flag/truncation/overlay projection, spacebase pointer bridge, copySpaces refcounting) byte-matches the locked oracle; per-space decode/read/printRaw attribute codecs, resolveConstant, and the join-record/resolver halves of AddrSpaceManager remain with the legacy enum manager and are owned by MARSHAL/TRANSLATE/ADDRESS follow-up atoms",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",

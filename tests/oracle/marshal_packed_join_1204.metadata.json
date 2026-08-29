@@ -24,7 +24,7 @@
   "ghidra::AddrSpaceManager::getSpace translate.hh:268",
   "ghidra::VarnodeData::decodeFromAttributes pcoderaw.cc:33"
  ],
- "overall_status": "UNTESTED:  (B2 migration of partial match state) the five-case packed/join codec projection (special-space byte images for const/unique/ram/register/stack/regbase/fspec/iop/join, readSpace round-trips and every rejection path including the encode-writes/decode-rejects special-code asymmetry, packed and XML join piece round-trips with the float-extension logicalsize form and findAddJoin dedup, and the four edge rejections) byte-matches the locked oracle; the register-name join piece form (Translate register table) stays with SPACE-0001, and the C++ null-space unknown-piece-name behavior is rejected at the lookup point in Rust (non-optional space handle)",
+ "overall_status": "UNTESTED: (B2 migration of partial match state) the five-case packed/join codec projection (special-space byte images for const/unique/ram/register/stack/regbase/fspec/iop/join, readSpace round-trips and every rejection path including the encode-writes/decode-rejects special-code asymmetry, packed and XML join piece round-trips with the float-extension logicalsize form and findAddJoin dedup, and the four edge rejections) byte-matches the locked oracle; the register-name join piece form (Translate register table) stays with SPACE-0001, and the C++ null-space unknown-piece-name behavior is rejected at the lookup point in Rust (non-optional space handle)",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",

@@ -311,7 +311,7 @@ require("fixture id", metadata["fixture_id"], "PRINTC-UNLINKED-REF-0001")
 require(
     "stable function id",
     metadata["stable_function_id"],
-    "GH12-F-8c2f4a91b0e3d5721469",
+    "GH12-F-69052102ef187116abea",
 )
 require("overall status", metadata["overall_status"].split(":", 1)[0], "MATCH")
 oracle = metadata["oracle"]

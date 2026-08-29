@@ -14,7 +14,7 @@
   "GH12-F-2b904805d0c1e63c5ed2 ghidra::Address::printRaw(ostream & s) const address.hh:305",
   "GH12-F-9418442f62007fa121a5 ghidra::AddrSpace::wrapOffset(uintb off) const space.hh:383"
  ],
- "overall_status": "UNTESTED:  (B2 migration of partial match state) the six-case legacy-Address space-bridge ordering projection (null-base None model equality/ordering, cross-space sorted walk with the null base first, same-space offset order, wrapOffset arithmetic, overlap gates, SeqNum ordering delegation) byte-matches the locked oracle; residuals: None-None offset-only compatibility has no oracle counterpart (single-side regression in address.rs unit tests), consumer migration is phase 2 (SeqNum/BlockBasic mint sites, context partitions, varnode/comment/override/jumptable domains), Address::read/encode/decode stay with MARSHAL-XML-TEXT-0001",
+ "overall_status": "UNTESTED: (B2 migration of partial match state) the six-case legacy-Address space-bridge ordering projection (null-base None model equality/ordering, cross-space sorted walk with the null base first, same-space offset order, wrapOffset arithmetic, overlap gates, SeqNum ordering delegation) byte-matches the locked oracle; residuals: None-None offset-only compatibility has no oracle counterpart (single-side regression in address.rs unit tests), consumer migration is phase 2 (SeqNum/BlockBasic mint sites, context partitions, varnode/comment/override/jumptable domains), Address::read/encode/decode stay with MARSHAL-XML-TEXT-0001",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",

@@ -9,7 +9,7 @@
   "rugra::fspec::ParamEntry::justified_contain src/fspec.rs (fspec.cc:248-283)",
   "rugra::fspec::ParamListStandard::characterize_as_param src/fspec.rs (fspec.cc:682-719)"
  ],
- "overall_status": "UNTESTED",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
  "status_detail": "The three-case covered projection byte-matches Ghidra 12.0.4's Address::justifiedContain one-sided-violation polarity and branch arithmetic (LE/BE x forceleft over 17 geometries including 1/4/8/cross-4 size boundaries), the ParamEntry alignment==0 wrapper, and the characterizeAsParam three-way classification. Re-pinned after FSPEC-JUSTIFIED-ENDIAN-0002 threaded the space endianness through justified_contain_range: view=start rows now exercise force_left=false on a little-endian space (the defect route), and the be=1 rows pin the BE arithmetic through the helper because the transitional enum AddressSpace cannot stage a BE ParamEntry. Overall remains UNTESTED because the space-mismatch base check and resolver-gated foreign-start characterize queries are not exercised by this fixture (both are covered by the successor fixture fspec_endian_resolver_1204).",
  "oracle": {
   "repository": "NationalSecurityAgency/ghidra",
@@ -99,7 +99,7 @@
  "observation_schema": {
   "format": "63 fixed-order UTF-8 lines with final newline: one envelope, three case headers, then 34 jc rows (17 geometries x view=start/end), 17 pe rows (11 LE-flagged + 6 BE-unflagged) and 8 ch rows",
   "polarity": "jc/pe off values expose the independent one-sided -1 checks (address.cc:133/137) versus the branch arithmetic for contained ranges",
-  "branches": "jc/pe off values expose the independent one-sided -1 checks (address.cc:133/137) versus the branch arithmetic for contained ranges; view=start pins the op2.offset - offset arithmetic (Ghidra LE forceleft=false/true and BE forceleft=true; Rust force_left=false with a little-endian space — re-pinned by FSPEC-JUSTIFIED-ENDIAN-0002); view=end pins off1 - off2 (Ghidra BE forceleft=false; Rust force_left=false with a big-endian space); the be=1 pe rows pin the same BE arithmetic via the helper (the enum-space model cannot stage a BE ParamEntry); the C++ harness additionally verifies LE(false)==LE(true)==BE(true) internally and exits non-zero on violation",
+  "branches": "jc/pe off values expose the independent one-sided -1 checks (address.cc:133/137) versus the branch arithmetic for contained ranges; view=start pins the op2.offset - offset arithmetic (Ghidra LE forceleft=false/true and BE forceleft=true; Rust force_left=false with a little-endian space \u2014 re-pinned by FSPEC-JUSTIFIED-ENDIAN-0002); view=end pins off1 - off2 (Ghidra BE forceleft=false; Rust force_left=false with a big-endian space); the be=1 pe rows pin the same BE arithmetic via the helper (the enum-space model cannot stage a BE ParamEntry); the C++ harness additionally verifies LE(false)==LE(true)==BE(true) internally and exits non-zero on violation",
   "classification": "ch rows print the numeric characterizeAsParam code (no_containment=0, contains_unjustified=1, contains_justified=2, contained_by=3); equal-start pokes demonstrate the FSPEC-JUSTIFIED-CONTAIN-0001 fix (off=-1 -> contained_by)"
  },
  "decisive_semantics": {
@@ -113,8 +113,8 @@
   "param_entry_justified_contain": "MATCH",
   "characterize_projection": "MATCH",
   "space_mismatch_base_branch": "UNTESTED (proposed residual: Address::justifiedContain's base != op2.base early -1 is caller-side in Rugra; the spaceless helper cannot express it - ADDRESS-0001 transitional)",
-  "le_forceleft_false_flag_routing": "UNTESTED at wrapper/heritage level by this fixture (helper-level arithmetic pinned by the re-pinned view=start rows: force_left=false + little-endian space returns the start distance; the wrapper/heritage routing is covered by the successor fixture tests/oracle/fspec_endian_resolver_1204 — FSPEC-JUSTIFIED-ENDIAN-0002)",
-  "characterize_resolver_foreign_start": "UNTESTED by this fixture (queries keep loc inside the entry extent; extent-out resolver gating is covered by the successor fixture tests/oracle/fspec_endian_resolver_1204 — FSPEC-CHARACTERIZE-RESOLVER-GATE-0003)"
+  "le_forceleft_false_flag_routing": "UNTESTED at wrapper/heritage level by this fixture (helper-level arithmetic pinned by the re-pinned view=start rows: force_left=false + little-endian space returns the start distance; the wrapper/heritage routing is covered by the successor fixture tests/oracle/fspec_endian_resolver_1204 \u2014 FSPEC-JUSTIFIED-ENDIAN-0002)",
+  "characterize_resolver_foreign_start": "UNTESTED by this fixture (queries keep loc inside the entry extent; extent-out resolver gating is covered by the successor fixture tests/oracle/fspec_endian_resolver_1204 \u2014 FSPEC-CHARACTERIZE-RESOLVER-GATE-0003)"
  },
  "residuals": [
   {

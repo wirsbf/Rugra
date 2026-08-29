@@ -1,128 +1,129 @@
 {
-  "schema_version": 1,
-  "fixture_id": "SPACE-PRINTRAW-WORDSIZE-1204",
-  "todo_ids": [
-    "SPACE-PRINTRAW-WORDSIZE-0001"
+ "schema_version": 1,
+ "fixture_id": "SPACE-PRINTRAW-WORDSIZE-1204",
+ "todo_ids": [
+  "SPACE-PRINTRAW-WORDSIZE-0001"
+ ],
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "rugra_base_commit": "dce02f7897757ba647105987b40a839425d30219",
+ "architecture": "locked synthetic LE 64-bit fixture architecture: const=0, OTHER=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7 (x86-64-shaped ram/register/stack sizes); printRaw wordsize cases use synthetic IPTR_PROCESSOR spaces with addrsize 2/4/8 and wordsize 1/2/4",
+ "compiler_spec": "none: AddrSpace::printRaw / getAddrSize are pure space methods; no Funcdata, P-code, or cspec input",
+ "analysis_options": {
+  "api": "Direct AddrSpace::printRaw / rugra::space::AddrSpace::print_raw and getAddrSize / get_addr_size + flat-enum addr_size/word_size invocation; no ActionGroup or other Action runs",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
+  "error_injection": "none",
+  "normalization": "No Ghidra/Rugra behavior difference is normalized or removed. Both sides print the raw byte offset unpadded lowercase hex; the printRaw result string is embedded verbatim (including setw zero-fill and the +cut suffix).",
+  "random_seed": "none; printRaw and the constructors are deterministic"
+ },
+ "cases": [
+  "addrsize_projection: getAddrSize/getWordSize over the real constructors \u2014 const=8/1 (sizeof(uintb), space.cc:357), OTHER=8/1 (space.cc:397), unique=4/1 (UniqueSpace::SIZE, space.cc:418/428), ram/register/stack=8/1 (x86-64 shape), join=4/1 (sizeof(uintm), types.h:27 + space.cc:447), iop=8/1 (sizeof(void*), op.cc:36), overlay copies its base (space.cc:661-680); plus the nine flat-enum legacy mappings",
+  "printraw_wordsize1: fixed 2*addrsize zero-filled hex width for addrsize<=4 spaces, the addrsize>4 shrink rule (offset>>32==0 -> 4 bytes, else offset>>48==0 -> 6 bytes, shrink tested on the raw byte offset), and setw minimum-width semantics (a value wider than the field prints un-padded)",
+  "printraw_wordsize2: byteToAddress(offset,2) scaling with the +cut suffix (offset%2) across addrsize 2/4/8, including the shrink rule interacting with scaling and 0xffffffff wrap",
+  "printraw_wordsize4: byteToAddress(offset,4) scaling with +cut across addrsize 4/8, including the 6-byte shrink band and 0xffffffffffffffff",
+  "printraw_overrides: ConstantSpace::printRaw / OtherSpace::printRaw overrides (space.cc:372/410) print plain unpadded hex with no scaling and no suffix"
+ ],
+ "reachability_note": "printRaw wordsize>1 is unreachable in the current x86-64 production closure (all loaded spec spaces and hardwired spaces are wordsize 1); the flat-enum addr_size divergence (unique/join = 4, previously hardcoded 8) was observable only in the heritage deadcode-revisit warning width, translate resolveConstant wrapping, and pcodeparse addressOf corners, never in the E2E C output. Fixed and locked per the SPACE-PRINTRAW-WORDSIZE-0001 registration.",
+ "input_manifest": {
+  "spaces": [
+   {
+    "name": "const",
+    "addrsize": 8,
+    "wordsize": 1,
+    "source": "ConstantSpace ctor space.cc:356"
+   },
+   {
+    "name": "OTHER",
+    "addrsize": 8,
+    "wordsize": 1,
+    "source": "OtherSpace ctor space.cc:396"
+   },
+   {
+    "name": "unique",
+    "addrsize": 4,
+    "wordsize": 1,
+    "source": "UniqueSpace ctor space.cc:427"
+   },
+   {
+    "name": "ram",
+    "addrsize": 8,
+    "wordsize": 1,
+    "source": "AddrSpace ctor, x86-64 shape"
+   },
+   {
+    "name": "register",
+    "addrsize": 8,
+    "wordsize": 1,
+    "source": "AddrSpace ctor, x86-64 shape"
+   },
+   {
+    "name": "stack",
+    "addrsize": 8,
+    "wordsize": 1,
+    "source": "SpacebaseSpace ctor translate.cc:57"
+   },
+   {
+    "name": "join",
+    "addrsize": 4,
+    "wordsize": 1,
+    "source": "JoinSpace ctor space.cc:446"
+   },
+   {
+    "name": "iop",
+    "addrsize": 8,
+    "wordsize": 1,
+    "source": "IopSpace ctor op.cc:33"
+   },
+   {
+    "name": "ovram",
+    "addrsize": 8,
+    "wordsize": 1,
+    "source": "overlay over ram, space.cc:661-680 field flow"
+   },
+   {
+    "name": "ram8/ram4/ram2",
+    "addrsize": "8/4/2",
+    "wordsize": 1,
+    "source": "AddrSpace ctor"
+   },
+   {
+    "name": "ws2x4/ws2x8/ws2x2",
+    "addrsize": "4/8/2",
+    "wordsize": 2,
+    "source": "AddrSpace ctor"
+   },
+   {
+    "name": "ws4x8/ws4x4",
+    "addrsize": "8/4",
+    "wordsize": 4,
+    "source": "AddrSpace ctor"
+   }
   ],
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
-  },
-  "rugra_base_commit": "dce02f7897757ba647105987b40a839425d30219",
-  "architecture": "locked synthetic LE 64-bit fixture architecture: const=0, OTHER=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7 (x86-64-shaped ram/register/stack sizes); printRaw wordsize cases use synthetic IPTR_PROCESSOR spaces with addrsize 2/4/8 and wordsize 1/2/4",
-  "compiler_spec": "none: AddrSpace::printRaw / getAddrSize are pure space methods; no Funcdata, P-code, or cspec input",
-  "analysis_options": {
-    "api": "Direct AddrSpace::printRaw / rugra::space::AddrSpace::print_raw and getAddrSize / get_addr_size + flat-enum addr_size/word_size invocation; no ActionGroup or other Action runs",
-    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
-    "error_injection": "none",
-    "normalization": "No Ghidra/Rugra behavior difference is normalized or removed. Both sides print the raw byte offset unpadded lowercase hex; the printRaw result string is embedded verbatim (including setw zero-fill and the +cut suffix).",
-    "random_seed": "none; printRaw and the constructors are deterministic"
-  },
-  "cases": [
-    "addrsize_projection: getAddrSize/getWordSize over the real constructors — const=8/1 (sizeof(uintb), space.cc:357), OTHER=8/1 (space.cc:397), unique=4/1 (UniqueSpace::SIZE, space.cc:418/428), ram/register/stack=8/1 (x86-64 shape), join=4/1 (sizeof(uintm), types.h:27 + space.cc:447), iop=8/1 (sizeof(void*), op.cc:36), overlay copies its base (space.cc:661-680); plus the nine flat-enum legacy mappings",
-    "printraw_wordsize1: fixed 2*addrsize zero-filled hex width for addrsize<=4 spaces, the addrsize>4 shrink rule (offset>>32==0 -> 4 bytes, else offset>>48==0 -> 6 bytes, shrink tested on the raw byte offset), and setw minimum-width semantics (a value wider than the field prints un-padded)",
-    "printraw_wordsize2: byteToAddress(offset,2) scaling with the +cut suffix (offset%2) across addrsize 2/4/8, including the shrink rule interacting with scaling and 0xffffffff wrap",
-    "printraw_wordsize4: byteToAddress(offset,4) scaling with +cut across addrsize 4/8, including the 6-byte shrink band and 0xffffffffffffffff",
-    "printraw_overrides: ConstantSpace::printRaw / OtherSpace::printRaw overrides (space.cc:372/410) print plain unpadded hex with no scaling and no suffix"
-  ],
-  "reachability_note": "printRaw wordsize>1 is unreachable in the current x86-64 production closure (all loaded spec spaces and hardwired spaces are wordsize 1); the flat-enum addr_size divergence (unique/join = 4, previously hardcoded 8) was observable only in the heritage deadcode-revisit warning width, translate resolveConstant wrapping, and pcodeparse addressOf corners, never in the E2E C output. Fixed and locked per the SPACE-PRINTRAW-WORDSIZE-0001 registration.",
-  "input_manifest": {
-    "spaces": [
-      {
-        "name": "const",
-        "addrsize": 8,
-        "wordsize": 1,
-        "source": "ConstantSpace ctor space.cc:356"
-      },
-      {
-        "name": "OTHER",
-        "addrsize": 8,
-        "wordsize": 1,
-        "source": "OtherSpace ctor space.cc:396"
-      },
-      {
-        "name": "unique",
-        "addrsize": 4,
-        "wordsize": 1,
-        "source": "UniqueSpace ctor space.cc:427"
-      },
-      {
-        "name": "ram",
-        "addrsize": 8,
-        "wordsize": 1,
-        "source": "AddrSpace ctor, x86-64 shape"
-      },
-      {
-        "name": "register",
-        "addrsize": 8,
-        "wordsize": 1,
-        "source": "AddrSpace ctor, x86-64 shape"
-      },
-      {
-        "name": "stack",
-        "addrsize": 8,
-        "wordsize": 1,
-        "source": "SpacebaseSpace ctor translate.cc:57"
-      },
-      {
-        "name": "join",
-        "addrsize": 4,
-        "wordsize": 1,
-        "source": "JoinSpace ctor space.cc:446"
-      },
-      {
-        "name": "iop",
-        "addrsize": 8,
-        "wordsize": 1,
-        "source": "IopSpace ctor op.cc:33"
-      },
-      {
-        "name": "ovram",
-        "addrsize": 8,
-        "wordsize": 1,
-        "source": "overlay over ram, space.cc:661-680 field flow"
-      },
-      {
-        "name": "ram8/ram4/ram2",
-        "addrsize": "8/4/2",
-        "wordsize": 1,
-        "source": "AddrSpace ctor"
-      },
-      {
-        "name": "ws2x4/ws2x8/ws2x2",
-        "addrsize": "4/8/2",
-        "wordsize": 2,
-        "source": "AddrSpace ctor"
-      },
-      {
-        "name": "ws4x8/ws4x4",
-        "addrsize": "8/4",
-        "wordsize": 4,
-        "source": "AddrSpace ctor"
-      }
-    ],
-    "print_queries": 43
-  },
-  "comparand_sha256": {
-    "cpp_fixture": "c1891cf540f49f9865b2ff9cf3335d9b21ba21212f37067994f24424c37236b7",
-    "rust_fixture": "7ba0f7a7e8164d48c913362320314cb5b533e9f9e8fc7be22df1b57a830431b1",
-    "rugra_space_source": "7fcede1465e99a4467ce991067675a9a3325aea9233b9c5874fb3a5798205e8b",
-    "api_document": "d727d55667d7dcde51aa28482fcd911abaca428516748a010864d41125490acc",
-    "runner": "df76be8f897deb3398804e47ae17950e05e6bd01f3005a0f9a65926572baabdd"
-  },
-  "expected_stdout_sha256": "6ee9ab9889c05a302b011f26bc78d192c22f21956cdfe2b4d4475de10c5993cf",
-  "expected_line_count": 61,
-  "expected_exit_code": 0,
-  "coverage": {
-    "addrsize_projection": "MATCH",
-    "printraw_wordsize1": "MATCH",
-    "printraw_wordsize2": "MATCH",
-    "printraw_wordsize4": "MATCH",
-    "printraw_overrides": "MATCH",
-    "join_printraw_pieces_form": "UNTESTED (JoinSpace::printRaw space.cc:590 needs the join-record database; no manager backlink on the registry handle)",
-    "iop_printraw_op_form": "UNTESTED (IopSpace::printRaw op.cc:41 needs PcodeOp/BlockBasic dereference)",
-    "e2e_closure": "MATCH (wordsize>1 unreachable in the x86-64 production closure; E2E curl defects=0/numbering=0 unchanged)"
-  },
-  "overall_status": "MATCH"
+  "print_queries": 43
+ },
+ "comparand_sha256": {
+  "cpp_fixture": "c1891cf540f49f9865b2ff9cf3335d9b21ba21212f37067994f24424c37236b7",
+  "rust_fixture": "7ba0f7a7e8164d48c913362320314cb5b533e9f9e8fc7be22df1b57a830431b1",
+  "rugra_space_source": "7fcede1465e99a4467ce991067675a9a3325aea9233b9c5874fb3a5798205e8b",
+  "api_document": "d727d55667d7dcde51aa28482fcd911abaca428516748a010864d41125490acc",
+  "runner": "df76be8f897deb3398804e47ae17950e05e6bd01f3005a0f9a65926572baabdd"
+ },
+ "expected_stdout_sha256": "6ee9ab9889c05a302b011f26bc78d192c22f21956cdfe2b4d4475de10c5993cf",
+ "expected_line_count": 61,
+ "expected_exit_code": 0,
+ "coverage": {
+  "addrsize_projection": "MATCH",
+  "printraw_wordsize1": "MATCH",
+  "printraw_wordsize2": "MATCH",
+  "printraw_wordsize4": "MATCH",
+  "printraw_overrides": "MATCH",
+  "join_printraw_pieces_form": "UNTESTED (JoinSpace::printRaw space.cc:590 needs the join-record database; no manager backlink on the registry handle)",
+  "iop_printraw_op_form": "UNTESTED (IopSpace::printRaw op.cc:41 needs PcodeOp/BlockBasic dereference)",
+  "e2e_closure": "MATCH (wordsize>1 unreachable in the x86-64 production closure; E2E curl defects=0/numbering=0 unchanged)"
+ },
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "input_sha256": "88a8f41749c68766f854823c80bbd928c1b4bf2da7a45b602bd4315dda21866e"
 }

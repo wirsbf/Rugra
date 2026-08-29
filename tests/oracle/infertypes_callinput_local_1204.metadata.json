@@ -1,186 +1,291 @@
 {
-  "schema_version": 1,
-  "fixture_id": "INFERTYPES-CALLINPUT-LOCAL-0001",
-  "overall_status": "MATCH",
-  "overall_scope": "CALL/CALLIND input local-type seeding path of ActionInferTypes::buildLocaltypes via the TypeOp local dispatch only; not a buildLocaltypes whole-function MATCH (op-centric vs varnode-centric structure residual ACTION-INFERTYPES-DISPATCH-0001 / VARNODE-LOCALTYPE-RESOLUTION-0001)",
-  "covered_projection": {
-    "oracle_capture": {"status": "ORACLE_CAPTURED"},
-    "rugra_execution": {"status": "EXECUTED"},
-    "bilateral_comparison": {"status": "MATCH"}
+ "schema_version": 1,
+ "fixture_id": "INFERTYPES-CALLINPUT-LOCAL-0001",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "overall_scope": "CALL/CALLIND input local-type seeding path of ActionInferTypes::buildLocaltypes via the TypeOp local dispatch only; not a buildLocaltypes whole-function MATCH (op-centric vs varnode-centric structure residual ACTION-INFERTYPES-DISPATCH-0001 / VARNODE-LOCALTYPE-RESOLUTION-0001)",
+ "covered_projection": {
+  "oracle_capture": {
+   "status": "ORACLE_CAPTURED"
   },
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "sources": [
-      "coreaction.cc:5008-5037 ActionInferTypes::buildLocaltypes",
-      "varnode.cc:900-936 Varnode::getLocalType",
-      "typeop.cc:687-718 TypeOpCall::getInputLocal",
-      "typeop.cc:745-774 TypeOpCallind::getInputLocal",
-      "typeop.cc:271-275 TypeOp::getInputLocal base default",
-      "fspec.cc:4924-4947 FuncCallSpecs::FuncCallSpecs",
-      "funcdata.cc:484-497 Funcdata::getCallSpecs(op)"
-    ]
+  "rugra_execution": {
+   "status": "EXECUTED"
   },
-  "architecture": {
-    "language": "synthetic-fixture-x86-64",
-    "endianness": "little",
-    "spaces": "constant,other,unique,ram(3,wordsize 1),register,stack,join,iop,fspec",
-    "type_factory": "FixtureArchitecture: xunknownN core set + setupSizes + decoded <size_alignment_map> entries 1,2,4,8,16 (index 0 stays -1); Rugra: new_flavor(Standalone) + decode_data_organization + setup_sizes(SizeArchInputs{8,8,8,None})"
-  },
-  "compiler_spec": {
-    "id": "synthetic-fixture-empty-proto",
-    "ghidra_prototype": "fixture; extrapop=0; empty input/output lists; per-call FuncCallSpecs constructed with setInternal(defaultfp,void) + setParam/setOutput",
-    "rugra_prototype": "FuncProto::new(name,void) + ProtoParameter flags TYPE_LOCKED/THIS_POINTER + output_type_locked/return_type mutation",
-    "scope": "locked parameter/output state is fixture-authored on both sides through the production callspec objects"
-  },
-  "analysis_options": {
-    "action": "production ActionInferTypes instance",
-    "type_recovery_started": true,
-    "action_reset_before_first_apply": true,
-    "action_apply_count": 2,
-    "dispatch_probes": "pre-apply PcodeOp::inputTypeLocal / TypeOpCall::get_input_local / TypeOpCallind::get_input_local_in_fd",
-    "random_seed": "none",
-    "error_injection": "none",
-    "stop_up_layer": "deliberately absent; case7 recorded as UNTESTED (VARNODE-STOPUP-FLAGS-0001)"
-  },
-  "input_manifest": {
-    "graph": {
-      "function": "real Funcdata with type recovery started",
-      "block": "one real BlockBasic containing C1,C2,C3,C4,C5(CALLIND),C6A,C6B,C8 in creation order",
-      "arguments": "A1/A2/A4/A8 4-byte and A3/A6/P5 8-byte register INPUT varnodes; C6B rebinds C6A's A6 so the shared descendant order is C6A,C6B",
-      "outputs": "OUT1 = 8-byte unique output of C1 with type-locked callspec output",
-      "callspecs": "8 heap FuncCallSpecs registered in qlst/callspecs with slot-1 params; CALL in(0) = fspec annotation, CALLIND in(0) = real code-pointer varnode P5"
-    },
-    "cases": [
-      {"label": "C1", "construct": "CALL param0 typelock int4, arg A1 4B", "expected": "A1 v_type = int4"},
-      {"label": "C2", "construct": "CALL param0 typelock int8, arg A2 4B", "expected": "CALL size gate rejects (typeop.cc:707), A2 stays unknown4"},
-      {"label": "C3", "construct": "CALL param0 isthis ptr->struct, arg A3 8B", "expected": "this-pointer seed, A3 = ptr8"},
-      {"label": "C4", "construct": "CALL param0 typelock void, arg A4 4B", "expected": "VOID gate rejects, A4 stays unknown4"},
-      {"label": "C5", "construct": "CALLIND param0 typelock int8, arg A5 4B", "expected": "no size check on CALLIND (typeop.cc:764), A5 = int8"},
-      {"label": "C5S0", "construct": "CALLIND slot 0", "expected": "code pointer local, P5 = ptr8, canonical identity"},
-      {"label": "C6", "construct": "A6 feeds C6A (typelock ptr->struct) then C6B (typelock uint8)", "expected": "typeOrder-min: ptr submeta beats uint, A6 = ptr8"},
-      {"label": "C7", "construct": "stop-up chain", "expected": "UNTESTED note line only (VARNODE-STOPUP-FLAGS-0001)"},
-      {"label": "C8", "construct": "CALL param0 completely unlocked, arg A8 4B", "expected": "canonical UNKNOWN base fallback (never INT/UINT), A8 = unknown4"},
-      {"label": "OUT1", "construct": "C1 output, callspec output typelock ptr->struct", "expected": "locked output seed, OUT1 = ptr8"}
-    ]
-  },
-  "observation_schema": {
-    "records": "schema=1, pre, case7, pass1, pass2",
-    "pre": "per-arg v_type token (Ghidra metatype2string spellings + size), def token, block order, A6 descendant order, callspec resolution identity, direct dispatch probes with canonical identity bits",
-    "pass1_pass2": "apply return, exception, type tokens, same_before identity projection vs previous pass, types_stable (pass2), block/descendant order stability, callspec identity stability",
-    "normalization": "metatype names projected to Ghidra metatype2string spellings on the Rust side (Pointer/ptr divergence); no raw flags or type names are printed"
-  },
-  "locked_capture": {
-    "status": "ORACLE_CAPTURED",
-    "deterministic_runs": 2,
-    "records": 5,
-    "bytes": 1115,
-    "stdout_sha256": "90b68819b4eaca9ff9fb9781b8c417e2bb39ca6da1e8c6ce7f2fe7106ab11f42",
-    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  },
-  "paired_expected": {
-    "ghidra": {
-      "status": "ORACLE_CAPTURED",
-      "deterministic_runs": 2,
-      "records": 5,
-      "bytes": 1115,
-      "stdout_sha256": "90b68819b4eaca9ff9fb9781b8c417e2bb39ca6da1e8c6ce7f2fe7106ab11f42",
-      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    "rugra": {
-      "status": "EXECUTED",
-      "deterministic_runs": 2,
-      "records": 5,
-      "bytes": 1115,
-      "stdout_sha256": "90b68819b4eaca9ff9fb9781b8c417e2bb39ca6da1e8c6ce7f2fe7106ab11f42",
-      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    "bilateral": {
-      "status": "MATCH",
-      "diff_exit_code": 0,
-      "records": 0,
-      "bytes": 0,
-      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    }
-  },
-  "comparand": {
-    "rugra_base_commit": "a95562f1df660e2a729c626a1e7867d6d090dbb8",
-    "rugra_base_tree": "f2ea0a35bcd0b42c28720e9083e1b3376adc9b7d",
-    "rugra_base_src_tree": "f3784cd761de3bca48d1e330362e0941704fa79c",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "snapshot_model": "immutable partial D2 crate snapshot: git archive of the frozen production commit a95562f with the buildLocaltypes CALL/CALLIND input dispatch; no source overlays",
-    "archive_paths": [
-      "Cargo.toml", "Cargo.lock", "build.rs", "README.md",
-      "benches/decompile_bench.rs", "tests/oracle/decompress_1204.rs",
-      "tests/oracle/funcproto_lock_1204.rs", "examples/curl",
-      "sleigh_specs", "src", "sleigh_shim"
-    ],
-    "overlays": [],
-    "base_source_sha256": {
-      "Cargo.toml": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-      "Cargo.lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-      "build.rs": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-      "src/typeop.rs": "04d6fa2cc99e4f965e58943856f23bc0c8dbcd1fbfddd41dbd6a896bf841d43c",
-      "src/coreaction.rs": "3888ec1af64905dcdd9407ff1097adbcb18bcf7a8cf54be02f1a80d10b98234c"
-    },
-    "snapshot_build_link": {"path": "ghidra", "target": "repo ghidra symlink"},
-    "cpp_fixture_sha256": "bd268c8bbbce93456241412a65430f54de6029990332d09eeb5d8baf1053d930",
-    "rust_fixture_sha256": "f1ff8606d7d6da6b554f9f29959425a17b1533155778f3748c9bb32b45323f1b",
-    "runner_sha256": "94fc44a191b1fc591837a412dfbdb9de8997e489a5d190fa6e5ca12d12bde15b"
-  },
-  "build": {
-    "rugra_build_status": "EXECUTED",
-    "cargo_invoked": true,
-    "cargo_target_dir": "/home/wirs/.cache/a21-d2-target",
-    "cargo_tmp_dir": "/home/wirs/.cache/a21-d2-tmp",
-    "cargo_lock": "/tmp/rugra-cargo-build.lock",
-    "timeout_per_build_seconds": 600
-  },
-  "host_tools": {
-    "cxx": "g++ (GCC) 16.2.1 20260810",
-    "cxx_target": "x86_64-pc-linux-gnu",
-    "cc": "gcc (GCC) 16.2.1 20260810",
-    "cc_target": "x86_64-pc-linux-gnu",
-    "ar": "GNU ar (GNU Binutils) 2.47",
-    "make": "GNU Make 4.4.1",
-    "python": "Python 3.14.7",
-    "git": "git version 2.55.0",
-    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-    "tool_binary_sha256": {
-      "cargo": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
-      "rustc": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618"
-    }
-  },
-  "coverage": {
-    "call_locked_param_seed": {"status": "MATCH", "detail": "C1: A1 becomes canonical int4 through the production pipeline writeBack"},
-    "call_size_gate_reject": {"status": "MATCH", "detail": "C2: locked int8 on a 4-byte argument stays unknown4 (typeop.cc:707 gate)"},
-    "call_this_pointer_seed": {"status": "MATCH", "detail": "C3: unlocked isthis ptr->struct seeds ptr8 (typeop.cc:710-714)"},
-    "call_void_gate_reject": {"status": "MATCH", "detail": "C4: locked void param stays unknown4"},
-    "callind_no_size_gate_asymmetry": {"status": "MATCH", "detail": "C5: locked int8 on a 4-byte argument becomes int8 (typeop.cc:764 has no size check, deliberate CALL asymmetry)"},
-    "callind_slot0_code_pointer": {"status": "MATCH", "detail": "C5S0: code pointer local via getTypeCode+getTypePointer(in0.size,code,ram.wordsize=1), canonical identity, and P5 seeded ptr8 through the pipeline"},
-    "callind_callspec_lookup_path": {"status": "MATCH", "detail": "C5: spec resolved through getCallSpecs(op)/get_call_specs_of_op op-identity, not the fspec const decode"},
-    "multi_use_typeorder_min_merge": {"status": "MATCH", "detail": "C6: A6 becomes ptr8 not uint8; merge_min_type_order replaces only on strictly negative typeOrder"},
-    "unlocked_param_canonical_unknown_fallback": {"status": "MATCH", "detail": "C8: A8 stays canonical unknown4; the IntTypes INT/UINT fallback never fires on the dispatch path"},
-    "locked_output_seed_min_merged": {"status": "MATCH", "detail": "OUT1 becomes ptr8 via the output arm unified on merge_min_type_order"},
-    "direct_dispatch_probes": {"status": "MATCH", "detail": "pre-apply C1/C2/C5S0/C5S1/C8 inputTypeLocal/get_input_local* tokens and canonical identity bits"},
-    "pipeline_evolution_and_stability": {"status": "MATCH", "detail": "pass1 seeds, pass2 stable (same_before/types_stable identity projections), block and descendant order stable, callspec identity stable"},
-    "exception_paths": {"status": "UNTESTED", "detail": "no injected LowlevelError; the NULL-local-type throw (varnode.cc:933-934) is unreachable in this matrix and stays a residual of ACTION-INFERTYPES-DISPATCH-0001"},
-    "stop_up_three_layer_chain": {"status": "UNTESTED", "detail": "PcodeOp stop_type_propagation / Varnode stop_uppropagation / propagateTypeEdge gate are out of the D2 lease; recorded as the fixed case7 note line (VARNODE-STOPUP-FLAGS-0001)"},
-    "varnode_centric_getlocaltype_structure": {"status": "UNTESTED", "detail": "buildLocaltypes is still op-centric in Rugra; def-output-first/descendant-order competition and the exact-piece symbol branch are outside this slice (ACTION-INFERTYPES-DISPATCH-0001, VARNODE-LOCALTYPE-RESOLUTION-0001)"},
-    "other_op_local_arms": {"status": "UNTESTED", "detail": "RETURN slot>=1, CBRANCH slot0 code pointer, shift getBaseNoChar, Binary/Unary/Func metain/metaout arms are separate gaps (ACTION-INFERTYPES-DISPATCH-0001)"}
-  },
-  "residual_ids": [
-    "ACTION-INFERTYPES-DISPATCH-0001",
-    "VARNODE-STOPUP-FLAGS-0001",
-    "VARNODE-LOCALTYPE-RESOLUTION-0001"
-  ],
-  "execution_evidence": [
-    "bilateral run 2026-08-24: ghidra stdout sha256 90b68819b4eaca9ff9fb9781b8c417e2bb39ca6da1e8c6ce7f2fe7106ab11f42 == rugra stdout sha256, diff exit 0, both binaries deterministic across two runs"
+  "bilateral_comparison": {
+   "status": "MATCH"
+  }
+ },
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "sources": [
+   "coreaction.cc:5008-5037 ActionInferTypes::buildLocaltypes",
+   "varnode.cc:900-936 Varnode::getLocalType",
+   "typeop.cc:687-718 TypeOpCall::getInputLocal",
+   "typeop.cc:745-774 TypeOpCallind::getInputLocal",
+   "typeop.cc:271-275 TypeOp::getInputLocal base default",
+   "fspec.cc:4924-4947 FuncCallSpecs::FuncCallSpecs",
+   "funcdata.cc:484-497 Funcdata::getCallSpecs(op)"
   ]
+ },
+ "architecture": {
+  "language": "synthetic-fixture-x86-64",
+  "endianness": "little",
+  "spaces": "constant,other,unique,ram(3,wordsize 1),register,stack,join,iop,fspec",
+  "type_factory": "FixtureArchitecture: xunknownN core set + setupSizes + decoded <size_alignment_map> entries 1,2,4,8,16 (index 0 stays -1); Rugra: new_flavor(Standalone) + decode_data_organization + setup_sizes(SizeArchInputs{8,8,8,None})"
+ },
+ "compiler_spec": {
+  "id": "synthetic-fixture-empty-proto",
+  "ghidra_prototype": "fixture; extrapop=0; empty input/output lists; per-call FuncCallSpecs constructed with setInternal(defaultfp,void) + setParam/setOutput",
+  "rugra_prototype": "FuncProto::new(name,void) + ProtoParameter flags TYPE_LOCKED/THIS_POINTER + output_type_locked/return_type mutation",
+  "scope": "locked parameter/output state is fixture-authored on both sides through the production callspec objects"
+ },
+ "analysis_options": {
+  "action": "production ActionInferTypes instance",
+  "type_recovery_started": true,
+  "action_reset_before_first_apply": true,
+  "action_apply_count": 2,
+  "dispatch_probes": "pre-apply PcodeOp::inputTypeLocal / TypeOpCall::get_input_local / TypeOpCallind::get_input_local_in_fd",
+  "random_seed": "none",
+  "error_injection": "none",
+  "stop_up_layer": "deliberately absent; case7 recorded as UNTESTED (VARNODE-STOPUP-FLAGS-0001)"
+ },
+ "input_manifest": {
+  "graph": {
+   "function": "real Funcdata with type recovery started",
+   "block": "one real BlockBasic containing C1,C2,C3,C4,C5(CALLIND),C6A,C6B,C8 in creation order",
+   "arguments": "A1/A2/A4/A8 4-byte and A3/A6/P5 8-byte register INPUT varnodes; C6B rebinds C6A's A6 so the shared descendant order is C6A,C6B",
+   "outputs": "OUT1 = 8-byte unique output of C1 with type-locked callspec output",
+   "callspecs": "8 heap FuncCallSpecs registered in qlst/callspecs with slot-1 params; CALL in(0) = fspec annotation, CALLIND in(0) = real code-pointer varnode P5"
+  },
+  "cases": [
+   {
+    "label": "C1",
+    "construct": "CALL param0 typelock int4, arg A1 4B",
+    "expected": "A1 v_type = int4"
+   },
+   {
+    "label": "C2",
+    "construct": "CALL param0 typelock int8, arg A2 4B",
+    "expected": "CALL size gate rejects (typeop.cc:707), A2 stays unknown4"
+   },
+   {
+    "label": "C3",
+    "construct": "CALL param0 isthis ptr->struct, arg A3 8B",
+    "expected": "this-pointer seed, A3 = ptr8"
+   },
+   {
+    "label": "C4",
+    "construct": "CALL param0 typelock void, arg A4 4B",
+    "expected": "VOID gate rejects, A4 stays unknown4"
+   },
+   {
+    "label": "C5",
+    "construct": "CALLIND param0 typelock int8, arg A5 4B",
+    "expected": "no size check on CALLIND (typeop.cc:764), A5 = int8"
+   },
+   {
+    "label": "C5S0",
+    "construct": "CALLIND slot 0",
+    "expected": "code pointer local, P5 = ptr8, canonical identity"
+   },
+   {
+    "label": "C6",
+    "construct": "A6 feeds C6A (typelock ptr->struct) then C6B (typelock uint8)",
+    "expected": "typeOrder-min: ptr submeta beats uint, A6 = ptr8"
+   },
+   {
+    "label": "C7",
+    "construct": "stop-up chain",
+    "expected": "UNTESTED note line only (VARNODE-STOPUP-FLAGS-0001)"
+   },
+   {
+    "label": "C8",
+    "construct": "CALL param0 completely unlocked, arg A8 4B",
+    "expected": "canonical UNKNOWN base fallback (never INT/UINT), A8 = unknown4"
+   },
+   {
+    "label": "OUT1",
+    "construct": "C1 output, callspec output typelock ptr->struct",
+    "expected": "locked output seed, OUT1 = ptr8"
+   }
+  ]
+ },
+ "observation_schema": {
+  "records": "schema=1, pre, case7, pass1, pass2",
+  "pre": "per-arg v_type token (Ghidra metatype2string spellings + size), def token, block order, A6 descendant order, callspec resolution identity, direct dispatch probes with canonical identity bits",
+  "pass1_pass2": "apply return, exception, type tokens, same_before identity projection vs previous pass, types_stable (pass2), block/descendant order stability, callspec identity stability",
+  "normalization": "metatype names projected to Ghidra metatype2string spellings on the Rust side (Pointer/ptr divergence); no raw flags or type names are printed"
+ },
+ "locked_capture": {
+  "status": "ORACLE_CAPTURED",
+  "deterministic_runs": 2,
+  "records": 5,
+  "bytes": 1115,
+  "stdout_sha256": "90b68819b4eaca9ff9fb9781b8c417e2bb39ca6da1e8c6ce7f2fe7106ab11f42",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+ },
+ "paired_expected": {
+  "ghidra": {
+   "status": "ORACLE_CAPTURED",
+   "deterministic_runs": 2,
+   "records": 5,
+   "bytes": 1115,
+   "stdout_sha256": "90b68819b4eaca9ff9fb9781b8c417e2bb39ca6da1e8c6ce7f2fe7106ab11f42",
+   "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "rugra": {
+   "status": "EXECUTED",
+   "deterministic_runs": 2,
+   "records": 5,
+   "bytes": 1115,
+   "stdout_sha256": "90b68819b4eaca9ff9fb9781b8c417e2bb39ca6da1e8c6ce7f2fe7106ab11f42",
+   "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "bilateral": {
+   "status": "MATCH",
+   "diff_exit_code": 0,
+   "records": 0,
+   "bytes": 0,
+   "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+ },
+ "comparand": {
+  "rugra_base_commit": "a95562f1df660e2a729c626a1e7867d6d090dbb8",
+  "rugra_base_tree": "f2ea0a35bcd0b42c28720e9083e1b3376adc9b7d",
+  "rugra_base_src_tree": "f3784cd761de3bca48d1e330362e0941704fa79c",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "snapshot_model": "immutable partial D2 crate snapshot: git archive of the frozen production commit a95562f with the buildLocaltypes CALL/CALLIND input dispatch; no source overlays",
+  "archive_paths": [
+   "Cargo.toml",
+   "Cargo.lock",
+   "build.rs",
+   "README.md",
+   "benches/decompile_bench.rs",
+   "tests/oracle/decompress_1204.rs",
+   "tests/oracle/funcproto_lock_1204.rs",
+   "examples/curl",
+   "sleigh_specs",
+   "src",
+   "sleigh_shim"
+  ],
+  "overlays": [],
+  "base_source_sha256": {
+   "Cargo.toml": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+   "Cargo.lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+   "build.rs": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+   "src/typeop.rs": "04d6fa2cc99e4f965e58943856f23bc0c8dbcd1fbfddd41dbd6a896bf841d43c",
+   "src/coreaction.rs": "3888ec1af64905dcdd9407ff1097adbcb18bcf7a8cf54be02f1a80d10b98234c"
+  },
+  "snapshot_build_link": {
+   "path": "ghidra",
+   "target": "repo ghidra symlink"
+  },
+  "cpp_fixture_sha256": "bd268c8bbbce93456241412a65430f54de6029990332d09eeb5d8baf1053d930",
+  "rust_fixture_sha256": "f1ff8606d7d6da6b554f9f29959425a17b1533155778f3748c9bb32b45323f1b",
+  "runner_sha256": "94fc44a191b1fc591837a412dfbdb9de8997e489a5d190fa6e5ca12d12bde15b"
+ },
+ "build": {
+  "rugra_build_status": "EXECUTED",
+  "cargo_invoked": true,
+  "cargo_target_dir": "/home/wirs/.cache/a21-d2-target",
+  "cargo_tmp_dir": "/home/wirs/.cache/a21-d2-tmp",
+  "cargo_lock": "/tmp/rugra-cargo-build.lock",
+  "timeout_per_build_seconds": 600
+ },
+ "host_tools": {
+  "cxx": "g++ (GCC) 16.2.1 20260810",
+  "cxx_target": "x86_64-pc-linux-gnu",
+  "cc": "gcc (GCC) 16.2.1 20260810",
+  "cc_target": "x86_64-pc-linux-gnu",
+  "ar": "GNU ar (GNU Binutils) 2.47",
+  "make": "GNU Make 4.4.1",
+  "python": "Python 3.14.7",
+  "git": "git version 2.55.0",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+  "tool_binary_sha256": {
+   "cargo": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
+   "rustc": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618"
+  }
+ },
+ "coverage": {
+  "call_locked_param_seed": {
+   "status": "MATCH",
+   "detail": "C1: A1 becomes canonical int4 through the production pipeline writeBack"
+  },
+  "call_size_gate_reject": {
+   "status": "MATCH",
+   "detail": "C2: locked int8 on a 4-byte argument stays unknown4 (typeop.cc:707 gate)"
+  },
+  "call_this_pointer_seed": {
+   "status": "MATCH",
+   "detail": "C3: unlocked isthis ptr->struct seeds ptr8 (typeop.cc:710-714)"
+  },
+  "call_void_gate_reject": {
+   "status": "MATCH",
+   "detail": "C4: locked void param stays unknown4"
+  },
+  "callind_no_size_gate_asymmetry": {
+   "status": "MATCH",
+   "detail": "C5: locked int8 on a 4-byte argument becomes int8 (typeop.cc:764 has no size check, deliberate CALL asymmetry)"
+  },
+  "callind_slot0_code_pointer": {
+   "status": "MATCH",
+   "detail": "C5S0: code pointer local via getTypeCode+getTypePointer(in0.size,code,ram.wordsize=1), canonical identity, and P5 seeded ptr8 through the pipeline"
+  },
+  "callind_callspec_lookup_path": {
+   "status": "MATCH",
+   "detail": "C5: spec resolved through getCallSpecs(op)/get_call_specs_of_op op-identity, not the fspec const decode"
+  },
+  "multi_use_typeorder_min_merge": {
+   "status": "MATCH",
+   "detail": "C6: A6 becomes ptr8 not uint8; merge_min_type_order replaces only on strictly negative typeOrder"
+  },
+  "unlocked_param_canonical_unknown_fallback": {
+   "status": "MATCH",
+   "detail": "C8: A8 stays canonical unknown4; the IntTypes INT/UINT fallback never fires on the dispatch path"
+  },
+  "locked_output_seed_min_merged": {
+   "status": "MATCH",
+   "detail": "OUT1 becomes ptr8 via the output arm unified on merge_min_type_order"
+  },
+  "direct_dispatch_probes": {
+   "status": "MATCH",
+   "detail": "pre-apply C1/C2/C5S0/C5S1/C8 inputTypeLocal/get_input_local* tokens and canonical identity bits"
+  },
+  "pipeline_evolution_and_stability": {
+   "status": "MATCH",
+   "detail": "pass1 seeds, pass2 stable (same_before/types_stable identity projections), block and descendant order stable, callspec identity stable"
+  },
+  "exception_paths": {
+   "status": "UNTESTED",
+   "detail": "no injected LowlevelError; the NULL-local-type throw (varnode.cc:933-934) is unreachable in this matrix and stays a residual of ACTION-INFERTYPES-DISPATCH-0001"
+  },
+  "stop_up_three_layer_chain": {
+   "status": "UNTESTED",
+   "detail": "PcodeOp stop_type_propagation / Varnode stop_uppropagation / propagateTypeEdge gate are out of the D2 lease; recorded as the fixed case7 note line (VARNODE-STOPUP-FLAGS-0001)"
+  },
+  "varnode_centric_getlocaltype_structure": {
+   "status": "UNTESTED",
+   "detail": "buildLocaltypes is still op-centric in Rugra; def-output-first/descendant-order competition and the exact-piece symbol branch are outside this slice (ACTION-INFERTYPES-DISPATCH-0001, VARNODE-LOCALTYPE-RESOLUTION-0001)"
+  },
+  "other_op_local_arms": {
+   "status": "UNTESTED",
+   "detail": "RETURN slot>=1, CBRANCH slot0 code pointer, shift getBaseNoChar, Binary/Unary/Func metain/metaout arms are separate gaps (ACTION-INFERTYPES-DISPATCH-0001)"
+  }
+ },
+ "residual_ids": [
+  "ACTION-INFERTYPES-DISPATCH-0001",
+  "VARNODE-STOPUP-FLAGS-0001",
+  "VARNODE-LOCALTYPE-RESOLUTION-0001"
+ ],
+ "execution_evidence": [
+  "bilateral run 2026-08-24: ghidra stdout sha256 90b68819b4eaca9ff9fb9781b8c417e2bb39ca6da1e8c6ce7f2fe7106ab11f42 == rugra stdout sha256, diff exit 0, both binaries deterministic across two runs"
+ ],
+ "input_sha256": "cf0dc09906d9897fbeab4a6a7e5b7b83785f940fcbc6c4a6d504ac1915343bf3"
 }

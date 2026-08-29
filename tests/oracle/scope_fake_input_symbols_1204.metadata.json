@@ -28,7 +28,8 @@
    "flipped_wrap: paramrange [0xffffffffffffff00,0xffffffffffffffff]; stack inputs 0xffffffffffffff9c+8 and 0xfffffffffffffffd+8 (extent wraps the 2^64 boundary)"
   ],
   "state": "each case builds a fresh Funcdata whose constructor attaches a fresh ScopeLocal (FuncProto gets the architecture default model via setScope's fallback, then the per-case model via setModel); input Varnodes are created through Funcdata::newVarnode + VarnodeBank::setInput (Rugra: VarnodeBank create + set_input) with the production unknown base type and no defining op; parameter symbols are added through Scope::addSymbol(\"\", int-N, stack-addr, invalid-usepoint) + setCategory(function_parameter, 0); typelock is set directly on the Varnode flags; observation covers every whole symbol mapping in (space,first,last) order with name/displayName/category/catindex/size/typelock, the function_parameter category size, and the warning-header texts",
-  "fingerprint": "sha256:2f0c644fdaa5b133847d67cccd73ef1880f489699daa983044290e46a25ea869"
+  "fingerprint": "sha256:2f0c644fdaa5b133847d67cccd73ef1880f489699daa983044290e46a25ea869",
+  "sha256": "7db455829dc7c5009f6381a060546c1f6e1fb324a50ce8330cab147de3781487"
  },
  "observation": {
   "status": "MATCH",

@@ -1,111 +1,111 @@
 {
-  "schema": 2,
-  "fixture_id": "BLOCK-INDEX-ASSIGN-0001",
-  "stable_function_id": "GH12-F-53bf522d4708a537d1f7",
-  "stable_function_closure": [
-    "GH12-F-53bf522d4708a537d1f7 ghidra::BlockGraph::findSpanningTree block.cc:1009",
-    "GH12-F-49056a46f355bb8dc2e8 ghidra::FlowBlock::setOutEdgeFlag block.cc:240",
-    "GH12-F-8f4549050d423d0a738b ghidra::BlockGraph::clearEdgeFlags block.cc:966",
-    "GH12-F-87a41fef4304d7480649 ghidra::FlowBlock::isIrreducibleOut block.hh:332",
-    "GH12-F-e15329b458470f919b73 ghidra::FlowBlock::getCopyMap block.hh:163",
-    "GH12-F-87c9a5900b5ff9dbb9d1 ghidra::FlowBlock::FlowBlock block.cc:61"
+ "schema": 2,
+ "fixture_id": "BLOCK-INDEX-ASSIGN-0001",
+ "stable_function_id": "GH12-F-53bf522d4708a537d1f7",
+ "stable_function_closure": [
+  "GH12-F-53bf522d4708a537d1f7 ghidra::BlockGraph::findSpanningTree block.cc:1009",
+  "GH12-F-49056a46f355bb8dc2e8 ghidra::FlowBlock::setOutEdgeFlag block.cc:240",
+  "GH12-F-8f4549050d423d0a738b ghidra::BlockGraph::clearEdgeFlags block.cc:966",
+  "GH12-F-87a41fef4304d7480649 ghidra::FlowBlock::isIrreducibleOut block.hh:332",
+  "GH12-F-e15329b458470f919b73 ghidra::FlowBlock::getCopyMap block.hh:163",
+  "GH12-F-87c9a5900b5ff9dbb9d1 ghidra::FlowBlock::FlowBlock block.cc:61"
+ ],
+ "overall_status": "UNTESTED: the eight-case post-call projection (preorder, final rootlist, reordered component list, per-block index/visitcount/numdesc/copymap, out-edge and mirrored in-edge label classification, distinct-in-range index invariant) byte-matches the locked oracle; findIrreducible's copymap reuse, the structureLoops caller closure, and wiring the production pipeline onto the public port remain separate tasks",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{block.cc:1009-1136,block.cc:240-246,block.cc:966-978,block.hh:332,block.hh:61-69}",
+  "signature": "void BlockGraph::findSpanningTree(vector<FlowBlock *> &preorder,vector<FlowBlock *> &rootlist)"
+ },
+ "architecture": "locked synthetic plain FlowBlock graphs built through production BlockGraph::newBlock/addBlock; no AddrSpace, no Funcdata, no PcodeOps (findSpanningTree touches only blocks, edges, and FlowBlock scalar state)",
+ "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
+ "analysis_options": {
+  "entrypoint": "Direct invocation of locked BlockGraph::findSpanningTree on synthetic component graphs built through production BlockGraph APIs (newBlock/addEdge/setOutEdgeFlag); no Actions, SSA, or C emission",
+  "prestate": "Per-case fresh BlockGraph; one case pre-corrupts index=99/visitcount=5/copymap=other-block/numdesc=77 to observe the reset, and one case pre-labels out edges (f_irreducible|f_back_edge and f_goto_edge|f_loop_exit_edge, mirrored onto the in halves) to observe the pass-start wipe",
+  "observation": "Per case: preorder vector, final rootlist order, final component list order (list = rpostorder), per-block index/visitcount/numdesc/copymap (self/other:name/null), every out edge slot->target with semantic label letters (g l d i t f c b x, '-' when unlabeled), every mirrored in edge slot<source with the same letters, and the distinct-index-in-[0,n) invariant",
+  "normalization": "Block identity prints as creation-order names (b0..bn), never pointers. Edge labels print as semantic flag-set membership letters, not raw bits: Rugra's edge_flags bit assignments intentionally differ from Ghidra's (documented remap in src/block.rs edge_flags), and Rugra's F_TREE_EDGE shares bit 7 with F_DEFAULTSWITCH_EDGE (pre-existing collision); within this projection bit 7 is classified as tree because findSpanningTree wipes every edge label at the start of each pass and never sets default-switch labels. C++ numdesc/copymap garbage before the call is never observed (Ghidra leaves both uninitialized; Rugra marks them -1/None)."
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "empty_graph_early_return: list.size()==0 immediate return leaves preorder/rootlist/list empty (block.cc:1012)",
+   "single_block: trivial root DFS assigns index 0, visitcount 0, numdesc 1, copymap self",
+   "single_entry_dag_corrupt_reset: diamond plus forward edge; tree/forward/cross classification, numdesc accumulation, and reset of pre-corrupted index=99, visitcount=5, copymap=b0, numdesc=77",
+   "multi_entry_rootlist_swap: two sizeIn()==0 roots; initial rootlist head/tail swap makes the original head finish last (RPO index 0) and the final swap puts it back at the front",
+   "no_root_assume_first_loop: every block has in-edges, so list[0] is assumed the entry; back edges labeled f_back_edge|f_loop_edge on both edge halves",
+   "unreachable_extraroots_twopass: an unreachable cycle component forces extraroots promotion and the second pass with the entry-block/origrootpos rootlist swap so the entry regains RPO index 0",
+   "stale_root_machinery: assumed entry plus cross/self-loop components exercise multi-root scanning order, tree edge into a previously finished entry, and self-edge label mirroring",
+   "irreducible_prelabel_wiped: pre-set f_irreducible|f_back_edge and f_goto_edge|f_loop_exit_edge labels on both edge halves are wiped by the pass-start clearEdgeFlags(~0) and the edges are classified afresh (RPO still covers every block)"
   ],
-  "overall_status": "MATCH: the eight-case post-call projection (preorder, final rootlist, reordered component list, per-block index/visitcount/numdesc/copymap, out-edge and mirrored in-edge label classification, distinct-in-range index invariant) byte-matches the locked oracle; findIrreducible's copymap reuse, the structureLoops caller closure, and wiring the production pipeline onto the public port remain separate tasks",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{block.cc:1009-1136,block.cc:240-246,block.cc:966-978,block.hh:332,block.hh:61-69}",
-    "signature": "void BlockGraph::findSpanningTree(vector<FlowBlock *> &preorder,vector<FlowBlock *> &rootlist)"
-  },
-  "architecture": "locked synthetic plain FlowBlock graphs built through production BlockGraph::newBlock/addBlock; no AddrSpace, no Funcdata, no PcodeOps (findSpanningTree touches only blocks, edges, and FlowBlock scalar state)",
-  "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
-  "analysis_options": {
-    "entrypoint": "Direct invocation of locked BlockGraph::findSpanningTree on synthetic component graphs built through production BlockGraph APIs (newBlock/addEdge/setOutEdgeFlag); no Actions, SSA, or C emission",
-    "prestate": "Per-case fresh BlockGraph; one case pre-corrupts index=99/visitcount=5/copymap=other-block/numdesc=77 to observe the reset, and one case pre-labels out edges (f_irreducible|f_back_edge and f_goto_edge|f_loop_exit_edge, mirrored onto the in halves) to observe the pass-start wipe",
-    "observation": "Per case: preorder vector, final rootlist order, final component list order (list = rpostorder), per-block index/visitcount/numdesc/copymap (self/other:name/null), every out edge slot->target with semantic label letters (g l d i t f c b x, '-' when unlabeled), every mirrored in edge slot<source with the same letters, and the distinct-index-in-[0,n) invariant",
-    "normalization": "Block identity prints as creation-order names (b0..bn), never pointers. Edge labels print as semantic flag-set membership letters, not raw bits: Rugra's edge_flags bit assignments intentionally differ from Ghidra's (documented remap in src/block.rs edge_flags), and Rugra's F_TREE_EDGE shares bit 7 with F_DEFAULTSWITCH_EDGE (pre-existing collision); within this projection bit 7 is classified as tree because findSpanningTree wipes every edge label at the start of each pass and never sets default-switch labels. C++ numdesc/copymap garbage before the call is never observed (Ghidra leaves both uninitialized; Rugra marks them -1/None)."
-  },
-  "input_manifest": {
-    "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
-    "cases": [
-      "empty_graph_early_return: list.size()==0 immediate return leaves preorder/rootlist/list empty (block.cc:1012)",
-      "single_block: trivial root DFS assigns index 0, visitcount 0, numdesc 1, copymap self",
-      "single_entry_dag_corrupt_reset: diamond plus forward edge; tree/forward/cross classification, numdesc accumulation, and reset of pre-corrupted index=99, visitcount=5, copymap=b0, numdesc=77",
-      "multi_entry_rootlist_swap: two sizeIn()==0 roots; initial rootlist head/tail swap makes the original head finish last (RPO index 0) and the final swap puts it back at the front",
-      "no_root_assume_first_loop: every block has in-edges, so list[0] is assumed the entry; back edges labeled f_back_edge|f_loop_edge on both edge halves",
-      "unreachable_extraroots_twopass: an unreachable cycle component forces extraroots promotion and the second pass with the entry-block/origrootpos rootlist swap so the entry regains RPO index 0",
-      "stale_root_machinery: assumed entry plus cross/self-loop components exercise multi-root scanning order, tree edge into a previously finished entry, and self-edge label mirroring",
-      "irreducible_prelabel_wiped: pre-set f_irreducible|f_back_edge and f_goto_edge|f_loop_exit_edge labels on both edge halves are wiped by the pass-start clearEdgeFlags(~0) and the edges are classified afresh (RPO still covers every block)"
-    ],
-    "sha256": "d7739ee72b043fe87fe23e3432e1ba826ad403ed98dc9a4f65ae16b09c871503"
-  },
-  "observation_schema": {
-    "format": "Nine fixed-order UTF-8 lines with final newline: one envelope plus eight case records",
-    "state": "per-block index (reverse post order), visitcount (preorder number), numdesc, copymap identity",
-    "graph": "preorder vector, final rootlist, final list order after list = rpostorder, per-slot out-edge and mirrored in-edge label classification, distinct-index invariant"
-  },
-  "comparand": {
-    "rugra_base_commit": "07efbff6af58fbea91b27a99fb3ecfbe39690e19",
-    "rugra_base_tree": "c3ea7960436d72c9fce3631f9b36c3e49b1b4265",
-    "cpp_fixture_sha256": "223b584f631f9f7567fbc73a4739758a35136ce2b63fdb3affb7b04d39587bcd",
-    "rust_fixture_sha256": "cb3c342571287f657b4b15e0cb036f343c129ce1e9418e86b3d731f5e4f3e193",
-    "block_rs_sha256": "19f14f8f8287e4cebe3b3ef6487d8fa27286c990644dc317080861d04e693b51",
-    "block_doc_sha256": "d7e3795243aacd68a5edc021e285b93592a3f2fbc61e98fc0ba22836c81c5d9e",
-    "runner_sha256": "1b42433778bffa6ebf8971c6cf980887cca0c7a6f75155503a44d0d43eca4f15",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-block-index-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-    "rust_crate_tree_sha256": "f650b02adfe99e3d9de446437ffc80a48efa46d59f3668f2d3ddafc566cad5f9",
-    "host": {
-      "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-      "cxx_target": "x86_64-linux-gnu",
-      "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
-      "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
-      "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
-      "make_path": "/usr/bin/make",
-      "python_path": "/usr/bin/python3.10",
-      "git_path": "/usr/bin/git",
-      "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-      "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-      "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
-      "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
-      "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-      "platform": "Linux 6.8.0-124-generic x86_64"
-    }
-  },
-  "build": {
-    "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
-    "private_state_observer": "Read-only ABI observation of FlowBlock scalar fields (index/visitcount/numdesc/copymap) and both BlockEdge halves through #define private public and #define class struct (BlockGraph helper members are implicitly private without an access label) in the fixture translation unit only; no oracle source is modified",
-    "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/block.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
-    "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
-    "registry_packages": 164,
-    "registry_lock_closure_sha256": "94b8087161993a99a270413046a142809cfa931043d9583bcbf3cd39ac0254f9"
-  },
-  "expected_stdout_sha256": "57a9e8d693c25644f607b82617d61c9509a3d5cb241baf94847d158f4f22d139",
-  "expected_exit_code": 0,
-  "covered_projection_status": "MATCH",
-  "coverage": {
-    "empty_graph_early_return": "MATCH: list.size()==0 returns before touching any state (block.cc:1012)",
-    "single_block_trivial_dfs": "MATCH: index 0, visitcount 0, numdesc 1, copymap self on a lone root",
-    "state_corruption_reset": "MATCH: pre-corrupted index=99, visitcount=5, copymap=other-block, numdesc=77 are all reset by the init loop and DFS before the final projection",
-    "multi_entry_rootlist_head_tail_swap": "MATCH: the initial swap visits the original head last so it takes RPO index 0 and the final swap restores it to the front of rootlist",
-    "no_root_assume_first_block": "MATCH: with no sizeIn()==0 block, list[0] is assumed the entry (block.cc:1036-1038) and loop back edges carry f_back_edge|f_loop_edge on both halves",
-    "unreachable_two_pass_extraroots": "MATCH: an unreachable cycle forces extraroots=true, the entry/origrootpos rootlist swap, the full state reset, and a second pass that gives the entry RPO index 0",
-    "stale_root_list_machinery": "MATCH: multi-root scanning order with an entry reached by a later root's tree edge plus self-loop back-edge labeling on a single lock guard",
-    "irreducible_prelabel_wipe": "MATCH: pass-start clearEdgeFlags(~0) wipes pre-set irreducible/back/goto/loop-exit labels on both halves and the edges are classified afresh with full RPO coverage",
-    "index_distinct_in_range": "MATCH: every case's final index set is a permutation of 0..n-1",
-    "list_rpo_reorder": "MATCH: the component list order after the call is exactly the reverse post order (list = rpostorder, block.cc:1135)",
-    "preorder_and_visitcount_projection": "MATCH: preorder vector order equals per-block visitcount ranks in every case",
-    "numdesc_accumulation": "MATCH: numdesc equals subtree size +1 along the DFS tree in every case",
-    "copymap_self_reset": "MATCH: copymap returns to self for every block regardless of pre-corruption",
-    "stale_root_removal_branch": "UNTESTED: the stale-root removal (block.cc:1053-1055) requires a pass-2 root already covered while uncovered blocks remain; pass-2 root scanning stops as soon as coverage completes and every in-list edge label is wiped at pass start, so no externally constructible single-graph state reaches it",
-    "irreducible_skip_branch": "UNTESTED: the isIrreducibleOut skip (block.cc:1089) is inert for externally pre-labeled in-list edges because the pass-start wipe clears all labels first; findIrreducible (block.cc:1178, the only f_irreducible writer) runs after findSpanningTree in structureLoops",
-    "lowlevel_error_path": "UNTESTED: LowlevelError at block.cc:1110-1111 requires a third effective pass, which the two-pass bound makes unreachable from constructible inputs",
-    "findIrreducible_copymap_reuse": "UNTESTED: findIrreducible repurposes copymap as the FIND function after findSpanningTree returns; covered by a separate task",
-    "production_pipeline_wiring": "UNTESTED: blockaction.rs keeps its private position-index find_spanning_tree; migrating the structurer onto the public port requires unifying the index domain and re-running the pipeline differential gate",
-    "single_entry_tree_forward_cross_classification": "MATCH: single-entry diamond plus bypass classifies tree/forward/cross per block.cc:1092-1105 with the mirrored in-edge halves labeled identically"
+  "sha256": "d7739ee72b043fe87fe23e3432e1ba826ad403ed98dc9a4f65ae16b09c871503"
+ },
+ "observation_schema": {
+  "format": "Nine fixed-order UTF-8 lines with final newline: one envelope plus eight case records",
+  "state": "per-block index (reverse post order), visitcount (preorder number), numdesc, copymap identity",
+  "graph": "preorder vector, final rootlist, final list order after list = rpostorder, per-slot out-edge and mirrored in-edge label classification, distinct-index invariant"
+ },
+ "comparand": {
+  "rugra_base_commit": "07efbff6af58fbea91b27a99fb3ecfbe39690e19",
+  "rugra_base_tree": "c3ea7960436d72c9fce3631f9b36c3e49b1b4265",
+  "cpp_fixture_sha256": "223b584f631f9f7567fbc73a4739758a35136ce2b63fdb3affb7b04d39587bcd",
+  "rust_fixture_sha256": "cb3c342571287f657b4b15e0cb036f343c129ce1e9418e86b3d731f5e4f3e193",
+  "block_rs_sha256": "19f14f8f8287e4cebe3b3ef6487d8fa27286c990644dc317080861d04e693b51",
+  "block_doc_sha256": "d7e3795243aacd68a5edc021e285b93592a3f2fbc61e98fc0ba22836c81c5d9e",
+  "runner_sha256": "1b42433778bffa6ebf8971c6cf980887cca0c7a6f75155503a44d0d43eca4f15",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-block-index-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "rust_crate_tree_sha256": "f650b02adfe99e3d9de446437ffc80a48efa46d59f3668f2d3ddafc566cad5f9",
+  "host": {
+   "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+   "cxx_target": "x86_64-linux-gnu",
+   "cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+   "cc_path": "/usr/bin/x86_64-linux-gnu-gcc-11",
+   "ar_path": "/usr/bin/x86_64-linux-gnu-ar",
+   "make_path": "/usr/bin/make",
+   "python_path": "/usr/bin/python3.10",
+   "git_path": "/usr/bin/git",
+   "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+   "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+   "cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+   "rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+   "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+   "platform": "Linux 6.8.0-124-generic x86_64"
   }
+ },
+ "build": {
+  "cpp_oracle": "The complete decompiler C++ subtree is exported from the locked commit into a fresh temporary directory and libdecomp.a is rebuilt there before the fixture is linked; no live worktree archive is consumed",
+  "private_state_observer": "Read-only ABI observation of FlowBlock scalar fields (index/visitcount/numdesc/copymap) and both BlockEdge halves through #define private public and #define class struct (BlockGraph helper members are implicitly private without an access label) in the fixture translation unit only; no oracle source is modified",
+  "rust_comparand": "A SHA-256-pinned full Rust crate snapshot is materialized from the pinned Rugra Git base with only src/block.rs overlaid; every registry archive is checked against Cargo.lock, safely expanded to a private vendor tree, and used through a private CARGO_HOME",
+  "environment_policy": "Runner re-executes from an open file descriptor under an empty environment, verifies fixed toolchain/oracle/base identities, snapshots every mutable input, rebuilds the oracle archive, runs Cargo locked+offline against only the checksum-verified vendor tree, compares exact bytes, then hashes all owned inputs and the full Rust snapshot again",
+  "registry_packages": 164,
+  "registry_lock_closure_sha256": "94b8087161993a99a270413046a142809cfa931043d9583bcbf3cd39ac0254f9"
+ },
+ "expected_stdout_sha256": "57a9e8d693c25644f607b82617d61c9509a3d5cb241baf94847d158f4f22d139",
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "coverage": {
+  "empty_graph_early_return": "MATCH: list.size()==0 returns before touching any state (block.cc:1012)",
+  "single_block_trivial_dfs": "MATCH: index 0, visitcount 0, numdesc 1, copymap self on a lone root",
+  "state_corruption_reset": "MATCH: pre-corrupted index=99, visitcount=5, copymap=other-block, numdesc=77 are all reset by the init loop and DFS before the final projection",
+  "multi_entry_rootlist_head_tail_swap": "MATCH: the initial swap visits the original head last so it takes RPO index 0 and the final swap restores it to the front of rootlist",
+  "no_root_assume_first_block": "MATCH: with no sizeIn()==0 block, list[0] is assumed the entry (block.cc:1036-1038) and loop back edges carry f_back_edge|f_loop_edge on both halves",
+  "unreachable_two_pass_extraroots": "MATCH: an unreachable cycle forces extraroots=true, the entry/origrootpos rootlist swap, the full state reset, and a second pass that gives the entry RPO index 0",
+  "stale_root_list_machinery": "MATCH: multi-root scanning order with an entry reached by a later root's tree edge plus self-loop back-edge labeling on a single lock guard",
+  "irreducible_prelabel_wipe": "MATCH: pass-start clearEdgeFlags(~0) wipes pre-set irreducible/back/goto/loop-exit labels on both halves and the edges are classified afresh with full RPO coverage",
+  "index_distinct_in_range": "MATCH: every case's final index set is a permutation of 0..n-1",
+  "list_rpo_reorder": "MATCH: the component list order after the call is exactly the reverse post order (list = rpostorder, block.cc:1135)",
+  "preorder_and_visitcount_projection": "MATCH: preorder vector order equals per-block visitcount ranks in every case",
+  "numdesc_accumulation": "MATCH: numdesc equals subtree size +1 along the DFS tree in every case",
+  "copymap_self_reset": "MATCH: copymap returns to self for every block regardless of pre-corruption",
+  "stale_root_removal_branch": "UNTESTED: the stale-root removal (block.cc:1053-1055) requires a pass-2 root already covered while uncovered blocks remain; pass-2 root scanning stops as soon as coverage completes and every in-list edge label is wiped at pass start, so no externally constructible single-graph state reaches it",
+  "irreducible_skip_branch": "UNTESTED: the isIrreducibleOut skip (block.cc:1089) is inert for externally pre-labeled in-list edges because the pass-start wipe clears all labels first; findIrreducible (block.cc:1178, the only f_irreducible writer) runs after findSpanningTree in structureLoops",
+  "lowlevel_error_path": "UNTESTED: LowlevelError at block.cc:1110-1111 requires a third effective pass, which the two-pass bound makes unreachable from constructible inputs",
+  "findIrreducible_copymap_reuse": "UNTESTED: findIrreducible repurposes copymap as the FIND function after findSpanningTree returns; covered by a separate task",
+  "production_pipeline_wiring": "UNTESTED: blockaction.rs keeps its private position-index find_spanning_tree; migrating the structurer onto the public port requires unifying the index domain and re-running the pipeline differential gate",
+  "single_entry_tree_forward_cross_classification": "MATCH: single-entry diamond plus bypass classifies tree/forward/cross per block.cc:1092-1105 with the mirrored in-edge halves labeled identically"
+ }
 }

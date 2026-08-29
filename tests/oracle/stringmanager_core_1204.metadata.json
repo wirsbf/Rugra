@@ -1,116 +1,116 @@
 {
-  "schema_version": 1,
-  "fixture_id": "STRINGMANAGER-CORE-JAVACONTRACT-0001",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "stringmanage_cc_blob": "f042000ba2b55f050e62748e1806acc68a8a9ab5",
-    "string_ghidra_cc_blob": "a13260cd6b742c0eb218a38f579ad6339f656bec"
-  },
-  "rugra_baseline": {
-    "commit": "a800c80c487186be3f40e45e435fae852fc37a6e",
-    "tree": "3310f0fb78178f0b62957af681b20e5874ee5c27",
-    "stringmanage_rs_blob": "a5c0c6f9557598bc6a1de70606b74d5d71c7f8ab",
-    "arch_rs_blob": "cd3fd77747d6377e14f2e672956ddfbc9ff17877"
-  },
-  "architecture": "synthetic little-endian 64-bit address-space model: byte-addressed ram space, constant space; no processor instruction decoding",
-  "compiler_spec": "N/A: manager-level fixture constructs the StringManager objects directly (native StringManagerUnicode(this,2048) and the declared-contract StringManager subclass) and never invokes a prototype model",
-  "analysis_options": {
-    "declared_detection_contract": "JAVA CONTRACT (explicitly declared, B4 decisive finding): the production manager implements the GhidraStringManager/Java semantics (string_ghidra.cc:42-56 via GETSTRINGDATA ghidra_arch.cc:780-810) — detection is charset-valid + NUL-terminated with NO 2048 search bound; maximumChars=2048 truncates only the returned bytes (assignStringData/writeUnicode count cap) and sets isTruncated. The native StringManagerUnicode 2048-byte search clamp (stringmanage.cc:452-457) is NOT the oracle golden behavior: tests/golden/ghidra_curl_1204.c hugehelp prints 2048-char TRUNCATED literals for strings whose NUL is at byte 3354-10329, impossible under the clamp. Both behaviors are locked side by side by this fixture (c5).",
-    "string_manager": "maximumChars=2048 for both managers; incremental 32-byte loadimage reads; per-block hasCharTerminator; full-buffer checkCharacters; assignStringData block-copy/truncate; cache keyed by full Address with entry allocation before the read (negative cache)",
-    "loader_regions": [
-      "ram:[0x2000,0x20ff] 'alpha\\0' zero-padded to 0x100",
-      "ram:[0x2100,0x21ff] 'b 0xAD 00' zero-padded to 0x100",
-      "ram:[0x2400,0x2c40] 2050 'A' + NUL, padded 0x40 (the >2048 case)",
-      "ram:[0x2e00,0x2e3f] 64 'X', no NUL (unbounded-search image-end case)"
-    ],
-    "attempt_counting": "fixture loader counts loadFill attempts per start offset including attempts that throw DataUnavailError, so cached-query proofs show zero further attempts"
-  },
-  "input": "ordered manager queries on one shared attempt-counting loadimage: native+contract at 0x2000 (ascii, twice), 0x2100 (0xAD invalid, twice), 0x2400 (2050-char string: native clamp vs contract truncation); fresh contract manager two-consumer share at 0x2000; contract at 0x3000 (data unavail, twice), 0x2E00 (no terminator, twice), 0x2080 (opaque, once); registerInternalStringData at ram:0x1000 for 'internal\\0' and illegal 0xAD bytes; calcInternalHash determinism value; final entry counts",
-  "input_fingerprint": "sha256:8d182f44848dd2af9b3c1aa8e7232fd3a9d42770d533246d8802a53f373bf645",
-  "cases": [
-    {
-      "id": "c1_c2_ascii_positive_cache_and_repeat",
-      "status": "MATCH",
-      "covers": "pure ASCII NUL-terminated string caches the whole first 32-byte read block verbatim (stringmanage.cc:69-72) with isTruncated=false; a repeat query performs zero further loader attempts on both managers"
-    },
-    {
-      "id": "c3_c4_invalid_0xad_negative_cache",
-      "status": "MATCH",
-      "covers": "byte 0xAD matches no UTF-8 lead-byte prefix (stringmanage.cc:390-391 -> -1 -> checkCharacters -1); the map entry allocated BEFORE the read (stringmanage.cc:437) stays cached empty; the repeat query performs zero further attempts — the negative-cache occupancy proof and the hugehelp 0x7180/0x99a8/0xc1d8 rule"
-    },
-    {
-      "id": "c5_long_string_native_clamp_vs_java_contract",
-      "status": "MATCH",
-      "covers": "2050-char string with NUL at byte 2050: native StringManagerUnicode returns the empty negative buffer (search clamped at 2048 bytes, stringmanage.cc:452-457) while the declared GhidraStringManager/Java contract returns 2048 'A' + explicit NUL (2049 bytes) with isTruncated=1 (return truncation only) — both oracle behaviors locked on identical bytes"
-    },
-    {
-      "id": "c6_two_consumers_share_one_manager",
-      "status": "MATCH",
-      "covers": "rule-side isString (ruleaction.cc:7375 shape) followed by print-side getStringData (printc.cc:1537 shape) on one Architecture-owned manager: the print query is served from the rule query's cache entry, attempts unchanged — the B4 shared-model proof"
-    },
-    {
-      "id": "c7_c8_data_unavail_and_no_terminator",
-      "status": "MATCH",
-      "covers": "DataUnavailError (address outside every region) and the unbounded search reaching the image end without a terminator both leave the occupied empty entry cached; repeats perform zero further attempts"
-    },
-    {
-      "id": "c9_opaque_early_exit",
-      "status": "MATCH",
-      "covers": "a real Datatype carrying the opaque_string flag (type.hh:176) takes the stringmanage.cc:441-442 early exit: empty entry cached with zero loader attempts"
-    },
-    {
-      "id": "c10_c11_register_internal_string_data",
-      "status": "MATCH",
-      "covers": "registerInternalStringData (stringmanage.cc:185-199): legal bytes return the non-zero CRC32^offset<<32 hash (init 0x7b7c66a9) and cache at the constant hash address; illegal 0xAD bytes return 0; hash value identical to Rust calc_internal_hash"
-    },
-    {
-      "id": "deterministic_order",
-      "status": "MATCH",
-      "covers": "runner executes each side twice and compares the complete ordered stdout byte-for-byte before the bilateral comparison"
-    }
+ "schema_version": 1,
+ "fixture_id": "STRINGMANAGER-CORE-JAVACONTRACT-0001",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "stringmanage_cc_blob": "f042000ba2b55f050e62748e1806acc68a8a9ab5",
+  "string_ghidra_cc_blob": "a13260cd6b742c0eb218a38f579ad6339f656bec"
+ },
+ "rugra_baseline": {
+  "commit": "a800c80c487186be3f40e45e435fae852fc37a6e",
+  "tree": "3310f0fb78178f0b62957af681b20e5874ee5c27",
+  "stringmanage_rs_blob": "a5c0c6f9557598bc6a1de70606b74d5d71c7f8ab",
+  "arch_rs_blob": "cd3fd77747d6377e14f2e672956ddfbc9ff17877"
+ },
+ "architecture": "synthetic little-endian 64-bit address-space model: byte-addressed ram space, constant space; no processor instruction decoding",
+ "compiler_spec": "N/A: manager-level fixture constructs the StringManager objects directly (native StringManagerUnicode(this,2048) and the declared-contract StringManager subclass) and never invokes a prototype model",
+ "analysis_options": {
+  "declared_detection_contract": "JAVA CONTRACT (explicitly declared, B4 decisive finding): the production manager implements the GhidraStringManager/Java semantics (string_ghidra.cc:42-56 via GETSTRINGDATA ghidra_arch.cc:780-810) \u2014 detection is charset-valid + NUL-terminated with NO 2048 search bound; maximumChars=2048 truncates only the returned bytes (assignStringData/writeUnicode count cap) and sets isTruncated. The native StringManagerUnicode 2048-byte search clamp (stringmanage.cc:452-457) is NOT the oracle golden behavior: tests/golden/ghidra_curl_1204.c hugehelp prints 2048-char TRUNCATED literals for strings whose NUL is at byte 3354-10329, impossible under the clamp. Both behaviors are locked side by side by this fixture (c5).",
+  "string_manager": "maximumChars=2048 for both managers; incremental 32-byte loadimage reads; per-block hasCharTerminator; full-buffer checkCharacters; assignStringData block-copy/truncate; cache keyed by full Address with entry allocation before the read (negative cache)",
+  "loader_regions": [
+   "ram:[0x2000,0x20ff] 'alpha\\0' zero-padded to 0x100",
+   "ram:[0x2100,0x21ff] 'b 0xAD 00' zero-padded to 0x100",
+   "ram:[0x2400,0x2c40] 2050 'A' + NUL, padded 0x40 (the >2048 case)",
+   "ram:[0x2e00,0x2e3f] 64 'X', no NUL (unbounded-search image-end case)"
   ],
-  "covered_projection": {
-    "status": "MATCH",
-    "records": 18,
-    "observation": "per-query byteData length + hex head/tail + isTruncated + isString + cache-entry existence + per-offset loader attempt counts + final entry counts",
-    "comparison": "both sides run twice for determinism, then complete stdout is compared byte-for-byte"
+  "attempt_counting": "fixture loader counts loadFill attempts per start offset including attempts that throw DataUnavailError, so cached-query proofs show zero further attempts"
+ },
+ "input": "ordered manager queries on one shared attempt-counting loadimage: native+contract at 0x2000 (ascii, twice), 0x2100 (0xAD invalid, twice), 0x2400 (2050-char string: native clamp vs contract truncation); fresh contract manager two-consumer share at 0x2000; contract at 0x3000 (data unavail, twice), 0x2E00 (no terminator, twice), 0x2080 (opaque, once); registerInternalStringData at ram:0x1000 for 'internal\\0' and illegal 0xAD bytes; calcInternalHash determinism value; final entry counts",
+ "input_fingerprint": "sha256:8d182f44848dd2af9b3c1aa8e7232fd3a9d42770d533246d8802a53f373bf645",
+ "cases": [
+  {
+   "id": "c1_c2_ascii_positive_cache_and_repeat",
+   "status": "MATCH",
+   "covers": "pure ASCII NUL-terminated string caches the whole first 32-byte read block verbatim (stringmanage.cc:69-72) with isTruncated=false; a repeat query performs zero further loader attempts on both managers"
   },
-  "residuals": {
-    "consumer_wiring": {
-      "status": "MISSING",
-      "todo_id": "TYPEOP-LOCALTYPE-DISPATCH-0001",
-      "related_todo_ids": [
-        "PRINT-TYPED-CONSTANT-CLOSURE-0001"
-      ],
-      "detail": "ruleaction.rs applyOp guard chain, printc.rs pushPtrCharConstant/printCharacterConstant, funcdata get_internal_string hash swap, and driver string_table retirement are D3 wiring on in-flight leases; this slice ships the Architecture-owned manager they will consume"
-    },
-    "utf16_utf32_manager_paths": {
-      "status": "UNTESTED",
-      "todo_id": "TYPEOP-LOCALTYPE-DISPATCH-0001",
-      "detail": "charsize 2/4 manager-level reads (L-prefix, surrogate pairs, endian conversion) are locked at unit level (get_codepoint/write_unicode tests) but not yet by a bilateral fixture case; add when a real wchar charType consumer lands"
-    },
-    "xml_space_name_restore": {
-      "status": "MISMATCH",
-      "todo_id": "STRINGMANAGER-CORE-JAVACONTRACT-0001",
-      "detail": "encode/decode round-trips offsets in Rugra's transitional form; Ghidra's <addr space=\"name\"> restore needs the architecture space registry"
-    },
-    "address_form": {
-      "status": "MISMATCH",
-      "todo_id": "ADDRESS-0001",
-      "detail": "fixture addresses are ram-space on the C++ side and spaceless legacy Address::new on the Rust side (ADDRESS-0001 transitional single-space discipline); cache-key ordering is observably identical within one space; cross-space key isolation is covered by the Rust unit test only"
-    }
+  {
+   "id": "c3_c4_invalid_0xad_negative_cache",
+   "status": "MATCH",
+   "covers": "byte 0xAD matches no UTF-8 lead-byte prefix (stringmanage.cc:390-391 -> -1 -> checkCharacters -1); the map entry allocated BEFORE the read (stringmanage.cc:437) stays cached empty; the repeat query performs zero further attempts \u2014 the negative-cache occupancy proof and the hugehelp 0x7180/0x99a8/0xc1d8 rule"
   },
-  "host_compiler": "g++ (GCC) 16.2.1 20260810",
-  "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-  "stringmanage_rs_sha256": "689b8b41e1e6bce1b0d0cc11214f1ef57b262fbbd75ae3b2586ac159bab29681",
-  "arch_rs_sha256": "74fa6d643d1dfdc46f9cfc2b7e612fadf9971e1fca577976896007a62ce82fea",
-  "cpp_fixture_sha256": "c0560e56da1a4ff29d378b5da50b2bac08f446a5731b3498f412951027cf3ff7",
-  "rust_fixture_sha256": "04456f3e9a754b28a91018adb75da16b40847b8bb111300a1ce5f8c63eb01786",
-  "expected_stdout_sha256": "3e29ddb2fe53a582b082cdb97832ef26bb12a667f5e28c9aaedf329add0eeda0",
-  "ghidra_expected_stdout_sha256": "3e29ddb2fe53a582b082cdb97832ef26bb12a667f5e28c9aaedf329add0eeda0",
-  "rugra_expected_stdout_sha256": "3e29ddb2fe53a582b082cdb97832ef26bb12a667f5e28c9aaedf329add0eeda0",
-  "overall_status": "MATCH"
+  {
+   "id": "c5_long_string_native_clamp_vs_java_contract",
+   "status": "MATCH",
+   "covers": "2050-char string with NUL at byte 2050: native StringManagerUnicode returns the empty negative buffer (search clamped at 2048 bytes, stringmanage.cc:452-457) while the declared GhidraStringManager/Java contract returns 2048 'A' + explicit NUL (2049 bytes) with isTruncated=1 (return truncation only) \u2014 both oracle behaviors locked on identical bytes"
+  },
+  {
+   "id": "c6_two_consumers_share_one_manager",
+   "status": "MATCH",
+   "covers": "rule-side isString (ruleaction.cc:7375 shape) followed by print-side getStringData (printc.cc:1537 shape) on one Architecture-owned manager: the print query is served from the rule query's cache entry, attempts unchanged \u2014 the B4 shared-model proof"
+  },
+  {
+   "id": "c7_c8_data_unavail_and_no_terminator",
+   "status": "MATCH",
+   "covers": "DataUnavailError (address outside every region) and the unbounded search reaching the image end without a terminator both leave the occupied empty entry cached; repeats perform zero further attempts"
+  },
+  {
+   "id": "c9_opaque_early_exit",
+   "status": "MATCH",
+   "covers": "a real Datatype carrying the opaque_string flag (type.hh:176) takes the stringmanage.cc:441-442 early exit: empty entry cached with zero loader attempts"
+  },
+  {
+   "id": "c10_c11_register_internal_string_data",
+   "status": "MATCH",
+   "covers": "registerInternalStringData (stringmanage.cc:185-199): legal bytes return the non-zero CRC32^offset<<32 hash (init 0x7b7c66a9) and cache at the constant hash address; illegal 0xAD bytes return 0; hash value identical to Rust calc_internal_hash"
+  },
+  {
+   "id": "deterministic_order",
+   "status": "MATCH",
+   "covers": "runner executes each side twice and compares the complete ordered stdout byte-for-byte before the bilateral comparison"
+  }
+ ],
+ "covered_projection": {
+  "status": "MATCH",
+  "records": 18,
+  "observation": "per-query byteData length + hex head/tail + isTruncated + isString + cache-entry existence + per-offset loader attempt counts + final entry counts",
+  "comparison": "both sides run twice for determinism, then complete stdout is compared byte-for-byte"
+ },
+ "residuals": {
+  "consumer_wiring": {
+   "status": "MISSING",
+   "todo_id": "TYPEOP-LOCALTYPE-DISPATCH-0001",
+   "related_todo_ids": [
+    "PRINT-TYPED-CONSTANT-CLOSURE-0001"
+   ],
+   "detail": "ruleaction.rs applyOp guard chain, printc.rs pushPtrCharConstant/printCharacterConstant, funcdata get_internal_string hash swap, and driver string_table retirement are D3 wiring on in-flight leases; this slice ships the Architecture-owned manager they will consume"
+  },
+  "utf16_utf32_manager_paths": {
+   "status": "UNTESTED",
+   "todo_id": "TYPEOP-LOCALTYPE-DISPATCH-0001",
+   "detail": "charsize 2/4 manager-level reads (L-prefix, surrogate pairs, endian conversion) are locked at unit level (get_codepoint/write_unicode tests) but not yet by a bilateral fixture case; add when a real wchar charType consumer lands"
+  },
+  "xml_space_name_restore": {
+   "status": "MISMATCH",
+   "todo_id": "STRINGMANAGER-CORE-JAVACONTRACT-0001",
+   "detail": "encode/decode round-trips offsets in Rugra's transitional form; Ghidra's <addr space=\"name\"> restore needs the architecture space registry"
+  },
+  "address_form": {
+   "status": "MISMATCH",
+   "todo_id": "ADDRESS-0001",
+   "detail": "fixture addresses are ram-space on the C++ side and spaceless legacy Address::new on the Rust side (ADDRESS-0001 transitional single-space discipline); cache-key ordering is observably identical within one space; cross-space key isolation is covered by the Rust unit test only"
+  }
+ },
+ "host_compiler": "g++ (GCC) 16.2.1 20260810",
+ "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+ "stringmanage_rs_sha256": "689b8b41e1e6bce1b0d0cc11214f1ef57b262fbbd75ae3b2586ac159bab29681",
+ "arch_rs_sha256": "74fa6d643d1dfdc46f9cfc2b7e612fadf9971e1fca577976896007a62ce82fea",
+ "cpp_fixture_sha256": "c0560e56da1a4ff29d378b5da50b2bac08f446a5731b3498f412951027cf3ff7",
+ "rust_fixture_sha256": "04456f3e9a754b28a91018adb75da16b40847b8bb111300a1ce5f8c63eb01786",
+ "expected_stdout_sha256": "3e29ddb2fe53a582b082cdb97832ef26bb12a667f5e28c9aaedf329add0eeda0",
+ "ghidra_expected_stdout_sha256": "3e29ddb2fe53a582b082cdb97832ef26bb12a667f5e28c9aaedf329add0eeda0",
+ "rugra_expected_stdout_sha256": "3e29ddb2fe53a582b082cdb97832ef26bb12a667f5e28c9aaedf329add0eeda0",
+ "overall_status": "MISMATCH: (B2 canonicalization)"
 }

@@ -1,109 +1,109 @@
 {
-  "schema_version": 2,
-  "fixture_id": "PIPE-DERIVED-TREE-0001",
-  "status_note": "Derived default pipeline tree projection MATCH: the locked Ghidra 12.0.4 oracle (real ActionDatabase::universalAction -> resetDefaults -> getCurrent, action.cc:986/action.hh:313) and Rugra's real default action database produce byte-identical pre-order DFS observations of all 78 Action nodes (path, ordinal, kind, name, basegroup, flags), duplicates preserved and unsorted. Registered non-observed domains remain in coverage as NO_ORACLE/UNTESTED and are bound to their residual TODO ids.",
-  "decisive_semantics": {
-    "reference_output_parameters": "The observation reads the derived tree returned by ActionDatabase::getCurrent() after resetDefaults (action.cc:986-1004) — no output parameters; the tree itself is the shared observable, read through Action::getName/getGroup/flags and the group child list (action.hh:108-109, 145).",
-    "loop_bounds_traversal_order": "DFS is pre-order over each ActionGroup::list in registration order (vector begin()->end(), action.hh:145); ordinal increments once per node starting at 0 at the root; duplicate names at distinct slots (unreachable/directwrite/deadcode/dynamicsymbols) are kept verbatim with no sort or dedup.",
-    "counter_accumulator_lifecycle": "The only counter is the global pre-order ordinal; it is initialized to 0 before the root visit, incremented after each node print, and never reset (final line count=78).",
-    "sorting_comparison_keys": "No sorting or comparison is applied anywhere in the observation; node order is exactly the ActionGroup::list insertion order produced by universalAction (coreaction.cc:5477-5738) filtered by the decompile grouplist clone survival (action.cc:391-406/899-914/529-544)."
+ "schema_version": 2,
+ "fixture_id": "PIPE-DERIVED-TREE-0001",
+ "status_note": "Derived default pipeline tree projection MATCH: the locked Ghidra 12.0.4 oracle (real ActionDatabase::universalAction -> resetDefaults -> getCurrent, action.cc:986/action.hh:313) and Rugra's real default action database produce byte-identical pre-order DFS observations of all 78 Action nodes (path, ordinal, kind, name, basegroup, flags), duplicates preserved and unsorted. Registered non-observed domains remain in coverage as NO_ORACLE/UNTESTED and are bound to their residual TODO ids.",
+ "decisive_semantics": {
+  "reference_output_parameters": "The observation reads the derived tree returned by ActionDatabase::getCurrent() after resetDefaults (action.cc:986-1004) \u2014 no output parameters; the tree itself is the shared observable, read through Action::getName/getGroup/flags and the group child list (action.hh:108-109, 145).",
+  "loop_bounds_traversal_order": "DFS is pre-order over each ActionGroup::list in registration order (vector begin()->end(), action.hh:145); ordinal increments once per node starting at 0 at the root; duplicate names at distinct slots (unreachable/directwrite/deadcode/dynamicsymbols) are kept verbatim with no sort or dedup.",
+  "counter_accumulator_lifecycle": "The only counter is the global pre-order ordinal; it is initialized to 0 before the root visit, incremented after each node print, and never reset (final line count=78).",
+  "sorting_comparison_keys": "No sorting or comparison is applied anywhere in the observation; node order is exactly the ActionGroup::list insertion order produced by universalAction (coreaction.cc:5477-5738) filtered by the decompile grouplist clone survival (action.cc:391-406/899-914/529-544)."
+ },
+ "oracle": {
+  "repository": "ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "fixture:universal-action-database",
+ "compiler_spec": {
+  "id": "none",
+  "model": "fixture"
+ },
+ "analysis_options": {
+  "reset_defaults": true,
+  "root": "decompile",
+  "extra_pool_rules": []
+ },
+ "rugra_source": {
+  "base_commit": "dd76d37866dcd2e4dc0a354323e0f016bb62fb35",
+  "base_tree": "fa3a6d4aeb186599eb00895700b45b47d6862fba",
+  "base_src_tree": "1fb9e4fa6c609fc1f54a3fc38ed3a39379768963",
+  "base_action_blob": "e3032afaf92f065314e6b59747658ebf761d9ebc",
+  "base_coreaction_blob": "fe08e78049f24cf010172b393111281ac600262d",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "4dfb916fb7e38d85f677944f87209c6da3a1e268f5cd5129cc16e38c54696d79",
+  "rust_fixture_sha256": "4f5120e58c43dfbfc1081ef15070c742ce0d67669dc304e52271b947624769ee",
+  "action_overlay_sha256": "f8d932b75a7cc84747b2e1e7f4c8bdfceaffcbc5ac8a187dcba24b2447c854e9",
+  "coreaction_overlay_sha256": "3cec83f038c9dccb8e06afda0ccd9ebd80f859f4397ff9027e25937e05f0c310",
+  "runner_sha256": "2a8c1900fb936baf669c631226907e9a0a22ab58c568d5c38f0bc7f867c723a3"
+ },
+ "input_manifest": {
+  "inputs": {
+   "binary": null,
+   "sleigh_specs": null,
+   "functions": null,
+   "ghidra_fixture_architecture": "FixtureArchitecture/FixtureTranslate (spaces: constant/other/unique/ram/register/stack/join/iop)",
+   "rugra_entry": "ActionDatabase::set_default_actions -> get_current"
   },
-  "oracle": {
-    "repository": "ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
-  },
-  "architecture": "fixture:universal-action-database",
-  "compiler_spec": {
-    "id": "none",
-    "model": "fixture"
-  },
-  "analysis_options": {
-    "reset_defaults": true,
-    "root": "decompile",
-    "extra_pool_rules": []
-  },
-  "rugra_source": {
-    "base_commit": "dd76d37866dcd2e4dc0a354323e0f016bb62fb35",
-    "base_tree": "fa3a6d4aeb186599eb00895700b45b47d6862fba",
-    "base_src_tree": "1fb9e4fa6c609fc1f54a3fc38ed3a39379768963",
-    "base_action_blob": "e3032afaf92f065314e6b59747658ebf761d9ebc",
-    "base_coreaction_blob": "fe08e78049f24cf010172b393111281ac600262d",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
-  },
-  "comparand": {
-    "cpp_fixture_sha256": "4dfb916fb7e38d85f677944f87209c6da3a1e268f5cd5129cc16e38c54696d79",
-    "rust_fixture_sha256": "4f5120e58c43dfbfc1081ef15070c742ce0d67669dc304e52271b947624769ee",
-    "action_overlay_sha256": "f8d932b75a7cc84747b2e1e7f4c8bdfceaffcbc5ac8a187dcba24b2447c854e9",
-    "coreaction_overlay_sha256": "3cec83f038c9dccb8e06afda0ccd9ebd80f859f4397ff9027e25937e05f0c310",
-    "runner_sha256": "2a8c1900fb936baf669c631226907e9a0a22ab58c568d5c38f0bc7f867c723a3"
-  },
-  "input_manifest": {
-    "inputs": {
-      "binary": null,
-      "sleigh_specs": null,
-      "functions": null,
-      "ghidra_fixture_architecture": "FixtureArchitecture/FixtureTranslate (spaces: constant/other/unique/ram/register/stack/join/iop)",
-      "rugra_entry": "ActionDatabase::set_default_actions -> get_current"
-    },
-    "sha256": "ef2522fce3787e847b0eb10b00a12e64fd06288106de950e3e310f2f93c3b0ad"
-  },
-  "expected_results": {
-    "ghidra_stdout_sha256": "60af6c04db98fa622f4ecf7645fd9b44b651243b17f3f9eff4b23b162d13c3c1",
-    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "60af6c04db98fa622f4ecf7645fd9b44b651243b17f3f9eff4b23b162d13c3c1",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "diff_exit_code": 0
-  },
-  "observation_schema": {
-    "header": "schema=1|fixture=PIPE-DERIVED-TREE-0001|oracle=<commit>",
-    "root": [
-      "root_key=<actionmap key>",
-      "root_name=<cloned ActionRestartGroup name>",
-      "root_flags=<rule flags>"
-    ],
-    "node": "node|ordinal=<pre-order index>|path=<colon-joined names>|kind=<group|pool|leaf>|name=<getName()>|basegroup=<getGroup()>|flags=<rule flags>",
-    "trailer": "count=<node total>"
-  },
-  "coverage": {
-    "derived_tree_projection": {
-      "status": "MATCH",
-      "covers": "All 78 Action nodes of the derived decompile root identical on both sides: universal head after decompile-grouplist filtering (6 leaves; normalizesetup/normalanalysis and funclink_outonly/noproto dropped), fullloop->mainloop oracle order with unreachable(base) first, forcegoto/dynamicmapping registered, restrictlocal->deadcode->restructure_varnode->spacebase->nonzeromask->infertypes sequence, stackstall children oppool1/lanedivide/multicse/shadowvar/deindirect/stackptrflow, constantptr after blockstructure, oppool2 slot, fullloop tail with deadcode at coreaction.cc:5682 before donothing, post-fullloop tail with normalizebranches filtered and both dynamicsymbols instances, root key 'decompile' vs root node name 'universal' with flags 8.",
-      "residual_todo_ids": []
-    },
-    "rule_level_clone_filtering": {
-      "status": "NO_ORACLE",
-      "covers": "Rule-level clone survival inside ActionPool for non-decompile grouplists (jumptable/normalize/paramid/register/firstpass roots) has no oracle observation in this fixture; the decompile grouplist contains every registered rule group so the default root is unaffected.",
-      "residual_todo_ids": [
-        "PIPE-RULE-CLONE-FILTER-0001"
-      ]
-    },
-    "pool_rule_membership": {
-      "status": "UNTESTED",
-      "covers": "oppool1/oppool2/cleanup rule lists still contain Rugra-local rules with no oracle counterpart (RuleSextEliminate/RuleEquality in oppool1, a second RuleTrivialArith in cleanup); Action-node DFS does not observe rule membership.",
-      "residual_todo_ids": [
-        "PIPE-POOL-LOCAL-RULES-0001"
-      ]
-    },
-    "action_apply_bodies": {
-      "status": "UNTESTED",
-      "covers": "Node bodies beyond tree identity (apply behavior, count/lcount propagation, stackstall fixed-point feedback, LaneDivide stub no-op) are outside this fixture's domain.",
-      "residual_todo_ids": [
-        "PIPE-STACKSTALL-COUNT-0001"
-      ]
-    }
-  },
-  "residual_todo_ids": [
-    "PIPE-RULE-CLONE-FILTER-0001",
-    "PIPE-POOL-LOCAL-RULES-0001",
-    "PIPE-STACKSTALL-COUNT-0001"
+  "sha256": "ef2522fce3787e847b0eb10b00a12e64fd06288106de950e3e310f2f93c3b0ad"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "60af6c04db98fa622f4ecf7645fd9b44b651243b17f3f9eff4b23b162d13c3c1",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "60af6c04db98fa622f4ecf7645fd9b44b651243b17f3f9eff4b23b162d13c3c1",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0
+ },
+ "observation_schema": {
+  "header": "schema=1|fixture=PIPE-DERIVED-TREE-0001|oracle=<commit>",
+  "root": [
+   "root_key=<actionmap key>",
+   "root_name=<cloned ActionRestartGroup name>",
+   "root_flags=<rule flags>"
   ],
-  "overall_status": "MATCH"
+  "node": "node|ordinal=<pre-order index>|path=<colon-joined names>|kind=<group|pool|leaf>|name=<getName()>|basegroup=<getGroup()>|flags=<rule flags>",
+  "trailer": "count=<node total>"
+ },
+ "coverage": {
+  "derived_tree_projection": {
+   "status": "MATCH",
+   "covers": "All 78 Action nodes of the derived decompile root identical on both sides: universal head after decompile-grouplist filtering (6 leaves; normalizesetup/normalanalysis and funclink_outonly/noproto dropped), fullloop->mainloop oracle order with unreachable(base) first, forcegoto/dynamicmapping registered, restrictlocal->deadcode->restructure_varnode->spacebase->nonzeromask->infertypes sequence, stackstall children oppool1/lanedivide/multicse/shadowvar/deindirect/stackptrflow, constantptr after blockstructure, oppool2 slot, fullloop tail with deadcode at coreaction.cc:5682 before donothing, post-fullloop tail with normalizebranches filtered and both dynamicsymbols instances, root key 'decompile' vs root node name 'universal' with flags 8.",
+   "residual_todo_ids": []
+  },
+  "rule_level_clone_filtering": {
+   "status": "NO_ORACLE",
+   "covers": "Rule-level clone survival inside ActionPool for non-decompile grouplists (jumptable/normalize/paramid/register/firstpass roots) has no oracle observation in this fixture; the decompile grouplist contains every registered rule group so the default root is unaffected.",
+   "residual_todo_ids": [
+    "PIPE-RULE-CLONE-FILTER-0001"
+   ]
+  },
+  "pool_rule_membership": {
+   "status": "UNTESTED",
+   "covers": "oppool1/oppool2/cleanup rule lists still contain Rugra-local rules with no oracle counterpart (RuleSextEliminate/RuleEquality in oppool1, a second RuleTrivialArith in cleanup); Action-node DFS does not observe rule membership.",
+   "residual_todo_ids": [
+    "PIPE-POOL-LOCAL-RULES-0001"
+   ]
+  },
+  "action_apply_bodies": {
+   "status": "UNTESTED",
+   "covers": "Node bodies beyond tree identity (apply behavior, count/lcount propagation, stackstall fixed-point feedback, LaneDivide stub no-op) are outside this fixture's domain.",
+   "residual_todo_ids": [
+    "PIPE-STACKSTALL-COUNT-0001"
+   ]
+  }
+ },
+ "residual_todo_ids": [
+  "PIPE-RULE-CLONE-FILTER-0001",
+  "PIPE-POOL-LOCAL-RULES-0001",
+  "PIPE-STACKSTALL-COUNT-0001"
+ ],
+ "overall_status": "UNTESTED: (B2 canonicalization)"
 }

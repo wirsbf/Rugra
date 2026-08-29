@@ -1,105 +1,106 @@
 {
-  "schema_version": 2,
-  "fixture_id": "CPTR-B-1204",
-  "todo_ids": [
-    "B3-COREACTION-CONSTANTPTR-0001"
-  ],
-  "status_note": "Bilateral ActionConstantPtr::apply oracle (segment b): the six hugehelp alias shapes, needexacthit/char-array/bounds/bit-form/skip gates, the spacebaseConstant COPY-reuse INT_ADD chain and the CALL arms, observed through the real locked 12.0.4 apply() and the Rugra rewrite.",
-  "decisive_semantics": {
-    "reference_output_parameters": "isPointer(rampoint/fullEncoding out params, returns scope-owned SymbolEntry*); spacebaseConstant mutates op and inserts PTRSUB/INT_ADD/ZEXT/SUBPIECE; apply returns 0 with change flowing through the base-class count.",
-    "loop_bounds_traversal_order": "apply iterates the constant-space VarnodeLocSet window once (offset-ordered snapshot); selectInferSpace walks inferPtrSpaces in registration order (default data space first); searchForSpaceAttribute walks at most 3 data-flow steps then scans descendants.",
-    "counter_accumulator_lifecycle": "localcount is an Action instance member reset per function, >=4 early exit; count increments once per spacebaseConstant rewrite; setPtrCheck is set AFTER the search (cc:1208) for both hit and reject.",
-    "sorting_comparison_keys": "queryContainer takes the smallest containing entry; needexacthit compares entry->getAddr()==rampoint (byte equality); bounds use calcScaleMask's 0x1000/high-0x1000; bit gate requires bit_transitions>=3."
+ "schema_version": 2,
+ "fixture_id": "CPTR-B-1204",
+ "todo_ids": [
+  "B3-COREACTION-CONSTANTPTR-0001"
+ ],
+ "status_note": "Bilateral ActionConstantPtr::apply oracle (segment b): the six hugehelp alias shapes, needexacthit/char-array/bounds/bit-form/skip gates, the spacebaseConstant COPY-reuse INT_ADD chain and the CALL arms, observed through the real locked 12.0.4 apply() and the Rugra rewrite.",
+ "decisive_semantics": {
+  "reference_output_parameters": "isPointer(rampoint/fullEncoding out params, returns scope-owned SymbolEntry*); spacebaseConstant mutates op and inserts PTRSUB/INT_ADD/ZEXT/SUBPIECE; apply returns 0 with change flowing through the base-class count.",
+  "loop_bounds_traversal_order": "apply iterates the constant-space VarnodeLocSet window once (offset-ordered snapshot); selectInferSpace walks inferPtrSpaces in registration order (default data space first); searchForSpaceAttribute walks at most 3 data-flow steps then scans descendants.",
+  "counter_accumulator_lifecycle": "localcount is an Action instance member reset per function, >=4 early exit; count increments once per spacebaseConstant rewrite; setPtrCheck is set AFTER the search (cc:1208) for both hit and reject.",
+  "sorting_comparison_keys": "queryContainer takes the smallest containing entry; needexacthit compares entry->getAddr()==rampoint (byte equality); bounds use calcScaleMask's 0x1000/high-0x1000; bit gate requires bit_transitions>=3."
+ },
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc"
+ },
+ "analysis_options": "BfdArchitecture init + readLoaderSymbols('::'); fixture installs .rodata-shaped entries on the global scope through Scope::addSymbol and the readonly range through Database::setPropertyRange.",
+ "expected_results": {
+  "record_count": 17
+ },
+ "projection_status": "MATCH",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "coverage": {
+  "six_alias_ptrsub_rewrites": {
+   "status": "MATCH",
+   "residual_todo_ids": []
   },
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  "invalid_utf8_dat_shapes": {
+   "status": "MATCH",
+   "residual_todo_ids": []
   },
-  "architecture": "x86:LE:64:default",
-  "compiler_spec": {
-    "id": "gcc"
+  "string_alias_charptr_output": {
+   "status": "MATCH",
+   "residual_todo_ids": []
   },
-  "analysis_options": "BfdArchitecture init + readLoaderSymbols('::'); fixture installs .rodata-shaped entries on the global scope through Scope::addSymbol and the readonly range through Database::setPropertyRange.",
-  "expected_results": {
-    "record_count": 17
+  "needexacthit_mid_rejection": {
+   "status": "MATCH",
+   "residual_todo_ids": []
   },
-  "projection_status": "MATCH",
-  "overall_status": "MATCH",
-  "coverage": {
-    "six_alias_ptrsub_rewrites": {
-      "status": "MATCH",
-      "residual_todo_ids": []
-    },
-    "invalid_utf8_dat_shapes": {
-      "status": "MATCH",
-      "residual_todo_ids": []
-    },
-    "string_alias_charptr_output": {
-      "status": "MATCH",
-      "residual_todo_ids": []
-    },
-    "needexacthit_mid_rejection": {
-      "status": "MATCH",
-      "residual_todo_ids": []
-    },
-    "chararray_middle_exception_intadd_chain": {
-      "status": "MATCH",
-      "residual_todo_ids": []
-    },
-    "pointer_lower_bound_rejection": {
-      "status": "MATCH",
-      "residual_todo_ids": []
-    },
-    "bit_transitions_rejection": {
-      "status": "MATCH",
-      "residual_todo_ids": []
-    },
-    "zero_ptrsub_intadd_skips_no_ptrcheck": {
-      "status": "MATCH",
-      "residual_todo_ids": []
-    },
-    "call_locked_ptr_accepts": {
-      "status": "MATCH",
-      "residual_todo_ids": []
-    },
-    "call_locked_notptr_rejects": {
-      "status": "MATCH",
-      "residual_todo_ids": []
-    },
-    "call_no_spec_infer_pointers": {
-      "status": "MATCH",
-      "residual_todo_ids": []
-    },
-    "set_ptrcheck_after_search": {
-      "status": "MATCH",
-      "residual_todo_ids": []
-    },
-    "count_localcount_semantics": {
-      "status": "MATCH",
-      "residual_todo_ids": []
-    },
-    "string_literal_fold_chain": {
-      "status": "UNTESTED",
-      "residual_todo_ids": [
-        "PRINTC-PTRCHAR-CONSTANT-0001"
-      ]
-    },
-    "link_symbol_reference_high_attachment": {
-      "status": "UNTESTED",
-      "residual_todo_ids": [
-        "FUNCDATA-LINKSYMBOL-TYPED-0001"
-      ]
-    }
+  "chararray_middle_exception_intadd_chain": {
+   "status": "MATCH",
+   "residual_todo_ids": []
   },
-  "residual_todo_ids": [
+  "pointer_lower_bound_rejection": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "bit_transitions_rejection": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "zero_ptrsub_intadd_skips_no_ptrcheck": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "call_locked_ptr_accepts": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "call_locked_notptr_rejects": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "call_no_spec_infer_pointers": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "set_ptrcheck_after_search": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "count_localcount_semantics": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "string_literal_fold_chain": {
+   "status": "UNTESTED",
+   "residual_todo_ids": [
     "PRINTC-PTRCHAR-CONSTANT-0001"
-  ],
-  "comparand": {
-    "cpp_fixture_sha256": "a3c1fa0354e635458ca740e20ab917b957cb3e48b131a8bdc3ba1afe81ab29c7",
-    "rust_fixture_sha256": "ed00b080ee9d58c5c0405012e1a22f35c8f9aa517849358add2ab3db2d8ca231",
-    "runner_sha256": "6fd773ff2de0e98747e1dad59d3d7041acb088190f517dcc8070bfa94254b9aa"
+   ]
+  },
+  "link_symbol_reference_high_attachment": {
+   "status": "UNTESTED",
+   "residual_todo_ids": [
+    "FUNCDATA-LINKSYMBOL-TYPED-0001"
+   ]
   }
+ },
+ "residual_todo_ids": [
+  "PRINTC-PTRCHAR-CONSTANT-0001"
+ ],
+ "comparand": {
+  "cpp_fixture_sha256": "a3c1fa0354e635458ca740e20ab917b957cb3e48b131a8bdc3ba1afe81ab29c7",
+  "rust_fixture_sha256": "ed00b080ee9d58c5c0405012e1a22f35c8f9aa517849358add2ab3db2d8ca231",
+  "runner_sha256": "6fd773ff2de0e98747e1dad59d3d7041acb088190f517dcc8070bfa94254b9aa"
+ },
+ "input_sha256": "27348fa2acdb4141fe32c421dc5c4a4f387d3623d443b767f8676bbc4330e909"
 }

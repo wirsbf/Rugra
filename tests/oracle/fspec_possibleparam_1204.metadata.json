@@ -12,7 +12,7 @@
   "rugra::fspec::ParamEntry::assumed_extension src/fspec.rs (fspec.cc:366-394 with the space-aware cc:377 gate)",
   "rugra::fspec::ParamEntry::justified_contain_in_space src/fspec.rs (fspec.cc:248-283 with the address.cc:133/cc:269 space guards)"
  ],
- "overall_status": "UNTESTED",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
  "status_detail": "The four-case covered projection byte-matches Ghidra 12.0.4: possibleParam's raw entry-list iteration (>= 0 acceptance, no minSize gate, join entries reachable through the per-piece join walk, cross-space ram query offset 4 accepted) and assumedExtension's space-aware cc:377 gate (foreign-space numerically-justified query -> CPUI_COPY), cc:376 join guard, sz gates, list minSize skip, both container shapes and the cc:389-393 flag precedence. Overall remains UNTESTED because big-endian space rows are unreachable (the transitional enum AddressSpace is little-endian only, ADDRESS-0001) and the remaining spaceless justified_contain callers (unjustified_container cc:1411, ParamListStandard::fillin_map cc:1382-1410) are outside this fixture's closure.",
  "oracle": {
   "repository": "NationalSecurityAgency/ghidra",
@@ -60,12 +60,12 @@
  "compiler_spec": {
   "id": "fixture",
   "prototype_xml": "no cspec decode; staged ParamEntry resources (plain_out_entries: reg [0x200,0x207] min4 exclusion force-left + reg [0x1000,0x100F] min4 align8 + ram [0x2000,0x200F] min2 exclusion force-left; join_out_entries: join reg:0x104+reg:0x100 min4 plus plain reg [0x200,0x207] min4; cross_space_join: join ram:0x200+reg:0x200 min4; assumed_extension: reg [0x100,0x11F] min2 align8 smallsize-zext + join reg:0x204+reg:0x200 min2 smallsize-sext + ram [0x2000,0x200F] min2 exclusion smallsize-inttype + reg [0x3000,0x3007] min2 exclusion smallsize-sext + reg [0x4000,0x4007] min2 exclusion zext|inttype + reg [0x5000,0x5007] min2 exclusion inttype|sext)",
-  "calling_convention": "hand-built ParamEntry/ParamListStandardOut/JoinRecord via the staged loader (C++ direct field writes under the class->struct access hack, Rust pub builder setters + set_join_pieces); populateResolver is intentionally NOT called — possibleParam and assumedExtension never touch the resolver"
+  "calling_convention": "hand-built ParamEntry/ParamListStandardOut/JoinRecord via the staged loader (C++ direct field writes under the class->struct access hack, Rust pub builder setters + set_join_pieces); populateResolver is intentionally NOT called \u2014 possibleParam and assumedExtension never touch the resolver"
  },
  "analysis_options": {
   "api": "Direct production ParamListStandardOut::possibleParam and ParamListStandard::assumedExtension calls on both sides; no Action, Rule, PrintC or Funcdata pipeline",
   "model_state": "case1: three plain output entries, 10 (space,offset,size) queries; case2: join + overlapping plain entry, 6 queries; case3: cross-space join, 5 queries; case4: six entries (aligned zext / join sext / ram inttype / sext / zext|inttype / inttype|sext), 13 queries",
-  "normalization": "None. possibleParam rows print true/false verbatim; assumedExtension rows print get_opname (COPY/INT_ZEXT/INT_SEXT/PIECE — no CPUI_ prefix on either side) and, for non-COPY rows only, the res container as space:0xoffset/size",
+  "normalization": "None. possibleParam rows print true/false verbatim; assumedExtension rows print get_opname (COPY/INT_ZEXT/INT_SEXT/PIECE \u2014 no CPUI_ prefix on either side) and, for non-COPY rows only, the res container as space:0xoffset/size",
   "debug_macros": "none on either side",
   "random_seed": "none; construction and queries are deterministic",
   "error_injection": "none; all queries stay on valid inputs"
@@ -90,7 +90,7 @@
     "id": "join_out_entries",
     "setup": "join ParamEntry (pieces MS-first reg:0x104 high + reg:0x100 low, min4) followed by plain reg [0x200,0x207] min4 exclusion force-left, NO populateResolver",
     "queries": "6 rows: pp spc/off/sz -> true|false",
-    "expect": "join entries ARE reachable: reg 0x100/4 hits the low piece (join walk offset 0) and reg 0x104/4 hits the high piece (walk offset 4 >= 0 — possibleParam accepts any non-negative containment, unlike findEntry just=true == 0); reg 0x100/8 (walk -1, pokes out of both pieces against the plain entry too) and reg 0x102/4 (pokes out) return false; the plain entry hit returns true; a stack query is rejected by the per-piece address.cc:133 guard"
+    "expect": "join entries ARE reachable: reg 0x100/4 hits the low piece (join walk offset 0) and reg 0x104/4 hits the high piece (walk offset 4 >= 0 \u2014 possibleParam accepts any non-negative containment, unlike findEntry just=true == 0); reg 0x100/8 (walk -1, pokes out of both pieces against the plain entry too) and reg 0x102/4 (pokes out) return false; the plain entry hit returns true; a stack query is rejected by the per-piece address.cc:133 guard"
    },
    {
     "id": "cross_space_join",
@@ -102,20 +102,20 @@
     "id": "assumed_extension",
     "setup": "ParamListStandard with six entries: reg [0x100,0x11F] min2 alignment 8 smallsize-zext; join reg:0x204+reg:0x200 min2 smallsize-sext; ram [0x2000,0x200F] min2 exclusion smallsize-inttype; reg [0x3000,0x3007] min2 exclusion smallsize-sext; reg [0x4000,0x4007] min2 exclusion zext|inttype; reg [0x5000,0x5007] min2 exclusion inttype|sext",
     "queries": "13 rows: ae spc/off/sz -> opcode (+ res space:0xoffset/size for non-COPY)",
-    "expect": "fspec.cc:366-394 with the list wrapper cc:1426-1437: justified small values extend with the whole-alignment container (reg 0x100/2 and 0x108/2 -> INT_ZEXT res register:0x100/8 and 0x108/8); the exclusion entry passes back the whole entry (ram 0x2000/4 -> PIECE res ram:0x2000/16); the cc:377 justifiedContain call is SPACE-AWARE — a stack query at a numerically justified offset returns COPY (fspec.cc:269 route), a stack query on the exclusion entry returns COPY (address.cc:133 route); unjustified offsets (0x102/2, ram 0x2002/4) return COPY; the sz gates return COPY (reg 0x100/8 sz>=alignment); the list minSize skip (cc:1431) returns COPY for reg 0x100/1; the join entry returns COPY at cc:376 even though its low piece justifies reg 0x200/2; flag precedence zext > inttype > sext (0x4000/2 -> INT_ZEXT, 0x5000/2 -> PIECE, 0x3000/2 -> INT_SEXT res register:0x3000/8)"
+    "expect": "fspec.cc:366-394 with the list wrapper cc:1426-1437: justified small values extend with the whole-alignment container (reg 0x100/2 and 0x108/2 -> INT_ZEXT res register:0x100/8 and 0x108/8); the exclusion entry passes back the whole entry (ram 0x2000/4 -> PIECE res ram:0x2000/16); the cc:377 justifiedContain call is SPACE-AWARE \u2014 a stack query at a numerically justified offset returns COPY (fspec.cc:269 route), a stack query on the exclusion entry returns COPY (address.cc:133 route); unjustified offsets (0x102/2, ram 0x2002/4) return COPY; the sz gates return COPY (reg 0x100/8 sz>=alignment); the list minSize skip (cc:1431) returns COPY for reg 0x100/1; the join entry returns COPY at cc:376 even though its low piece justifies reg 0x200/2; flag precedence zext > inttype > sext (0x4000/2 -> INT_ZEXT, 0x5000/2 -> PIECE, 0x3000/2 -> INT_SEXT res register:0x3000/8)"
    }
   ]
  },
  "observation_schema": {
   "format": "39 fixed-order UTF-8 lines with final newline: one envelope, four case headers, then 10 pp rows, 6 pp rows, 5 pp rows and 13 ae rows",
-  "branches": "pp rows print possibleParam's true/false; ae rows print get_opname and, for non-COPY only, the res container (space:0xoffset/size) — res is never read on the COPY paths (Ghidra leaves it unwritten)",
+  "branches": "pp rows print possibleParam's true/false; ae rows print get_opname and, for non-COPY only, the res container (space:0xoffset/size) \u2014 res is never read on the COPY paths (Ghidra leaves it unwritten)",
   "classification": "opcodes COPY/INT_ZEXT/INT_SEXT/PIECE (get_opname prints without the CPUI_ prefix on both sides)"
  },
  "decisive_semantics": {
-  "references_and_outputs": "possibleParam returns bool, no state mutation; assumedExtension writes res (VarnodeData&) ONLY after passing the cc:377 != 0 gate — COPY paths leave res untouched on both sides; the list wrapper returns the first non-COPY entry's opcode",
+  "references_and_outputs": "possibleParam returns bool, no state mutation; assumedExtension writes res (VarnodeData&) ONLY after passing the cc:377 != 0 gate \u2014 COPY paths leave res untouched on both sides; the list wrapper returns the first non-COPY entry's opcode",
   "loop_bounds_traversal_order": "possibleParam (cc:1769) and assumedExtension (cc:1430) both iterate entry.begin()..entry.end() in list order with no space/minSize prefilter (only the cc:1431 getMinSize() > size skip inside assumedExtension's loop); the join walk (cc:253) runs pieces from least significant (numPieces()-1) to most",
   "counters_and_accumulators": "the join walk accumulator res (cc:252) adds vdata.size only for pieces the query does not contain (cur < 0, including the address.cc:133 foreign-space -1) and returns res + cur on the first containing piece; assumedExtension's alignAdjust (cc:385) is computed per call from (addr.getOffset() - addressbase) % alignment",
-  "sort_and_comparison_keys": "possibleParam's acceptance key is justifiedContain >= 0 (NOT == 0 — unjustified containment qualifies); assumedExtension's gate is justifiedContain == 0 exactly; space equality keys are per-piece address.cc:133 (joins), fspec.cc:269 (alignment!=0) and address.cc:133 via the entry Address (alignment==0); the smallsize flag precedence is zext (cc:389) then inttype (cc:391) then sext (cc:393)"
+  "sort_and_comparison_keys": "possibleParam's acceptance key is justifiedContain >= 0 (NOT == 0 \u2014 unjustified containment qualifies); assumedExtension's gate is justifiedContain == 0 exactly; space equality keys are per-piece address.cc:133 (joins), fspec.cc:269 (alignment!=0) and address.cc:133 via the entry Address (alignment==0); the smallsize flag precedence is zext (cc:389) then inttype (cc:391) then sext (cc:393)"
  },
  "coverage": {
   "plain_space_guards": "MATCH (10/10 rows: >= 0 acceptance incl. two unjustified rows, no-minSize rows, both foreign-space guard routes at numerically coincident offsets, out-of-extent and no-entry negatives)",

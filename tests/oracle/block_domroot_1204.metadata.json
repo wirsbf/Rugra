@@ -10,7 +10,7 @@
   "GH12-F-49056a46f355bb8dc2e8 ghidra::FlowBlock::setOutEdgeFlag block.cc:240",
   "GH12-F-26fccebb96adfe9b30fb ghidra::BlockGraph::createVirtualRoot block.cc:988"
  ],
- "overall_status": "MATCH: the four-case projection (reverse post order with per-block index, final rootlist, per-block immediate dominator) byte-matches the locked oracle on both entries \u2014 the structureLoops->findSpanningTree reorder chain consumed by Funcdata::structureReset, and the side-effect-free build_dom_tree entry (local-RPO path) used by heritage/blockaction/coreaction glue callers; findIrreducible/calcLoop (irreducible-CFG rebuild) and the removeUnreachableBlocks consumer of the blocks_unreachable flag are outside this fixture and registered separately",
+ "overall_status": "UNTESTED: the four-case projection (reverse post order with per-block index, final rootlist, per-block immediate dominator) byte-matches the locked oracle on both entries \u2014 the structureLoops->findSpanningTree reorder chain consumed by Funcdata::structureReset, and the side-effect-free build_dom_tree entry (local-RPO path) used by heritage/blockaction/coreaction glue callers; findIrreducible/calcLoop (irreducible-CFG rebuild) and the removeUnreachableBlocks consumer of the blocks_unreachable flag are outside this fixture and registered separately",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
@@ -73,5 +73,6 @@
   "root_with_inedges_throw": "UNTESTED: the LowlevelError('Problems finding root node of graph') branch (block.cc:1979-1980) requires rootlist.size()!=1 or rootlist[0]!=b with a mismatched caller; both production call paths derive rootlist from the same spanning tree, so no constructible production state reaches it",
   "second_virtualroot_after_multiroot": "UNTESTED: with rootlist.size()>1 the start node is the fresh virtual root (sizeIn()==0), so the second createVirtualRoot (block.cc:1981) is unreachable from constructible production inputs; exercised logically in cases A/C where the first branch already created it",
   "removeUnreachableBlocks_consumer": "UNTESTED: the blocks_unreachable flag consumer (funcdata_block.cc:360) is not ported yet; residual httpd throws from unreachable-block CBRANCHs are registered on the follow-up TODO family"
- }
+ },
+ "input_sha256": "7cce41368cfa087332cdb3820576b7123e156c9b723ed8a967190e9c4418019b"
 }

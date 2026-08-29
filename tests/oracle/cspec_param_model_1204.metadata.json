@@ -129,5 +129,5 @@
   "create_model_alias_and_is_compatible": "MISMATCH: payload copying is present, but the Rust bool adapter does not preserve Ghidra's alias-parent identity or merged/alias-parent/duplicate/missing-parent exception domain; this API is outside the declared fixture observations.",
   "set_default_model_unknown_name_adapter": "MISMATCH: the Rust &str adapter silently returns for an unknown map name; Ghidra's setDefaultModel takes an already-resolved ProtoModel pointer and has no equivalent unknown-name input."
  },
- "overall_status": "MISMATCH:  every declared observation is byte-identical to locked Ghidra 12.0.4, but production x86-64-gcc.cspec text ingestion, <modelrule> construction/behavior, alias compatibility/error semantics, and the unknown-name default adapter remain mismatched; resolveprototype, join, default-return, exception partial-state, reverse-justified big-endian, and register-strategy branches remain untested."
+ "overall_status": "MISMATCH: every declared observation is byte-identical to locked Ghidra 12.0.4, but production x86-64-gcc.cspec text ingestion, <modelrule> construction/behavior, alias compatibility/error semantics, and the unknown-name default adapter remain mismatched; resolveprototype, join, default-return, exception partial-state, reverse-justified big-endian, and register-strategy branches remain untested."
 }

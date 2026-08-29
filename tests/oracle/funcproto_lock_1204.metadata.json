@@ -10,6 +10,7 @@
  "cpp_fixture_sha256": "1253cb741188ab3eea5dfc1e2475645d5a2168116b9f31a17a55275d8d3c6be7",
  "rust_fixture_sha256": "094fb3cfe277fc3b395c5f0cb0df18bee27f269306bc3deff8a2fc7584bbdc2f",
  "expected_stdout_sha256": "03255c22cda9cf11fed6590cef7a8e53f3f1527e517bc180840ade99f9bb6425",
- "status": "MATCH",
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "fixture_id": "FUNCPROTO-LOCK-1204-1204",
+ "input_sha256": "9f9658fb5a23dcab00d8b76a90eb0e7fc1d6f1a305c8765171c360129503a289"
 }

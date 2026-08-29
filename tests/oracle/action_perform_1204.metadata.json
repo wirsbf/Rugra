@@ -304,5 +304,5 @@
   "opaction_debug_paths": "UNTESTED",
   "action_restart_group_and_action_pool": "UNTESTED"
  },
- "overall_status": "UNTESTED:  (B2 migration of partial match state) all targeted Action executor cases match; explicitly listed branches remain untested"
+ "overall_status": "UNTESTED: (B2 migration of partial match state) all targeted Action executor cases match; explicitly listed branches remain untested"
 }

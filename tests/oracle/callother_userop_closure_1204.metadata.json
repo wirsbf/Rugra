@@ -1,249 +1,250 @@
 {
-  "schema_version": 1,
-  "fixture_id": "TYPEOP-CALLOTHER-USEROP-CLOSURE-0001",
-  "title": "TypeOpCallother get*Local caller closure: PcodeOp -> Architecture-owned UserOpManage descriptor metadata (DatatypeUserOp void*/void*/void*/int4 and slot-minus-one mapping) or TypeOp base canonical TYPE_UNKNOWN fallback, observed at the PcodeOp level and through Varnode::getLocalType on both the def and reader sides",
-  "overall_status": "MATCH",
-  "status_note": "Production commit 5cba7550 wires the A48-located caller closure: src/varnode.rs op_output_type_local/op_input_type_local gain the CPUI_CALLOTHER arm (typeop.cc:855-873) and get_local_type plus both dispatch helpers gain the userops Option<&Arc<RwLock<UserOpManage>>> thread (the tlst->getArch()->userops edge; a TypeFactory arch backlink was rejected because Architecture::ensure_types installs the process-canonical TypeFactory::shared_default() singleton and set_types runs before the Architecture is Arc-wrapped). The locked Ghidra 12.0.4 oracle and the frozen Rugra snapshot were each executed twice with deterministic stdout/stderr. Both sides produced 72 records / 2495 bytes with identical sha256 and empty stderr; the bilateral byte diff is empty (exit 0). All 13 cases match: memcpy closure def/direct/reader (registered void* through registerBuiltin(BUILTIN_MEMCPY)), input slots 1/2 (void*), slot 3 (int4), slot 0 (the CALLOTHER index constant, xunknown4 through the base default), slot 4 (past the fixed inputs, xunknown1), and the metadataless UnspecializedPcodeOp closure (def/direct/reader and both input slots all canonical xunknown fallback).",
-  "covered_projection": {
-    "status": "MATCH",
-    "name": "TypeOpCallother::getOutputLocal/getInputLocal (typeop.cc:855-873) through the real PcodeOp/Varnode/Funcdata structures, the Architecture-owned TypeFactory, and the Architecture-owned UserOpManage",
-    "oracle_capture": {
-      "status": "ORACLE_CAPTURED",
-      "note": "Every observation runs inside a real BfdArchitecture x86:LE:64:default:gcc: CALLOTHER ops are installed with fd->opSetOpcode (installing glb->inst[CPUI_CALLOTHER], funcdata_op.cc:25), the memcpy descriptor comes from the production registerBuiltin(BUILTIN_MEMCPY) (userop.cc:449-457), and the metadataless descriptor is registered into the same Architecture-owned manager through the unmodified private registerOp body (C++11 explicit-template bridge, first free slot located by probing past the 1756 x86-64 SLEIGH basicops; the resolved index value is never projected)."
-    },
-    "rugra_source_observation": {
-      "status": "MATCH",
-      "note": "src/varnode.rs op_output_type_local/op_input_type_local CPUI_CALLOTHER arms (typeop.cc:865-873/855-863): slot-0 offset truncated to 32 bits exactly as UserOpManage::getOp(uint4) (userop.cc:408-415), descriptor metadata via UserOpManage::get_output_local/get_input_local (slot-1 compaction in UserPcodeOp::get_input_local, userop.cc:79), None -> local_base getBase(size,TYPE_UNKNOWN) (typeop.cc:261-275) including slot 0 and past-the-end slots; get_local_type threads userops to both helpers; the unregistered-index state (Ghidra null-descriptor dereference UB before typeop.cc:859, unreachable in production) is conservatively covered by the same canonical fallback with an in-body comment."
-    },
-    "rugra_execution": {
-      "status": "EXECUTED",
-      "note": "The complete frozen crate snapshot (git archive of 5cba7550) was built with pinned Cargo/rustc and the Rust fixture executed twice identically through the production get_local_type/op_output_type_local/op_input_type_local entry points with the Architecture-owned userops handle: 72 records, 2495 stdout bytes, empty stderr."
-    },
-    "bilateral_comparison": {
-      "status": "MATCH",
-      "note": "The locked Ghidra and Rugra stdout streams were byte-diffed with exit code 0: all 72 lines identical, including both blockup=0 families, every canonical identity bit (void*/int4/xunknown4/xunknown2/xunknown1), the builtin descriptor type/index table records, and the metadataless fallback records."
-    }
-  },
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "varnode_cc_blob": "a04614c582a1fd987d615dcec4a8b47d3501f95f",
-    "typeop_cc_blob": "5197e3eefd185ed39c58e65af0687d605e34ec5e",
-    "type_cc_blob": "962c525b7f9c6a901d84d6396de245a0bf6e5d60",
-    "userop_cc_blob": "9fe8b78d03cbeac63b02bd424261fb1404ddc8f5",
-    "entrypoints": [
-      "Datatype *TypeOpCallother::getInputLocal(const PcodeOp *op,int4 slot) const (typeop.cc:855-863)",
-      "Datatype *TypeOpCallother::getOutputLocal(const PcodeOp *op) const (typeop.cc:865-873)",
-      "TypeOp::getOutputLocal/getInputLocal base defaults getBase(size,TYPE_UNKNOWN) (typeop.cc:261-275)",
-      "Datatype *DatatypeUserOp::getOutputLocal/getInputLocal (userop.cc:70-83, slot-1 compaction)",
-      "UserPcodeOp *UserOpManage::getOp(uint4 i) const (userop.cc:408-415)",
-      "UserPcodeOp *UserOpManage::registerBuiltin(uint4 i) (userop.cc:432-484, BUILTIN_MEMCPY case 449-457)",
-      "void UserOpManage::registerOp(UserPcodeOp *op) (userop.cc:490-527, private-body bridge)",
-      "Datatype *Varnode::getLocalType(bool &blockup) def seed and descend walk (varnode.cc:900-936)"
-    ]
-  },
-  "architecture": "x86:LE:64:default:gcc",
-  "compiler_spec": "x86-64-gcc.cspec",
-  "analysis_options": "BfdArchitecture target=default; no option overrides; one fixture Funcdata with two CPUI_CALLOTHER ops (5-input memcpy closure and 2-input metadataless closure), the Architecture-owned TypeFactory/TypeOp table, and the Architecture-owned UserOpManage",
-  "comparand": {
-    "rugra_base_commit": "5cba75501abab7b7f17e81dd8ae1dc45dc5e209a",
-    "rugra_base_tree": "518475282f4c9630acbab4fea6b178563acb45f6",
-    "rugra_base_src_tree": "928e4e186961f5462144de1f5def8854c281fe52",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "binary_blob": "76d9343ea3add321aa4134856323663b36365807",
-    "snapshot_model": "immutable complete crate snapshot: git archive of the frozen production commit 5cba7550 with the TypeOpCallother get*Local CALLOTHER arm, userops parameter thread, and pub op_output_type_local/op_input_type_local entry points; no source overlays",
-    "archive_paths": [
-      "Cargo.toml",
-      "Cargo.lock",
-      "build.rs",
-      "README.md",
-      "benches/decompile_bench.rs",
-      "tests/oracle/decompress_1204.rs",
-      "tests/oracle/funcproto_lock_1204.rs",
-      "examples/curl",
-      "sleigh_specs",
-      "src",
-      "sleigh_shim"
-    ],
-    "overlays": [],
-    "base_source_sha256": {
-      "src/varnode.rs": "9c30a5873551ed7b9161ed5d1eb2eaf0495b77970f7d0907562cdbc4909ec695",
-      "src/typeop.rs": "3687fb6cf964587d64801f61bc72e0b180ecb65a6b01c392f7c77e05a812059f",
-      "src/userop.rs": "0d434b311b303b7c6db0f7971bc7a32962e6122c07c4790b46bec4e704489396",
-      "src/arch.rs": "74fa6d643d1dfdc46f9cfc2b7e612fadf9971e1fca577976896007a62ce82fea",
-      "src/type_system/datatype.rs": "a9a64334d952782ae58f076244477e4c69084582d822987f962d3a0679d2ddb5",
-      "src/type_system/typefactory.rs": "27975d9f8fee16a8c91b4753c1cad6afa2d86f9adf774dacc5acc9d9d8734383",
-      "src/fspec.rs": "ba7723dda0e9a1bb8f7a40348d26a9f0602a495e700ca0f4b7fda6030d5ccaa1",
-      "src/funcdata.rs": "db71fb43a6d5e38c1e16d0b20d296a93c8516e36921a3a5c2d358ec278ef983c",
-      "src/op.rs": "2a61dbb4977c19db5746ebf98050dfbfb253626657ce8228856df1646858eca5",
-      "src/space.rs": "0e65152fd2f37429e3b6b8ae4c48328a1099558af5cd475e1c2a5c7db51b778d",
-      "src/address.rs": "ee88af6e7b072a1767d17477e96aecb05ace947809b2ee7b6cbcc051cc11cf98"
-    },
-    "snapshot_build_link": {
-      "path": "ghidra",
-      "target": "the live ghidra_root after locked HEAD/tag/tree/Makefile and clean-worktree verification",
-      "purpose": "build.rs C++ shim header discovery; the executable oracle is built from the separately archived locked commit"
-    },
-    "cpp_fixture_sha256": "0049037347a5e5a28701c66ffe902b96ea52f76c2994d04bc07776512b6cda89",
-    "rust_fixture_sha256": "47080509e7d06ace6cb2dd7f83c3bcf844a79c217759dffd86b3f381be82fbcb",
-    "runner_sha256": "1578fb488e8c95f4191db3fff28cf8f5d9215e924d7542045dd5d78eaf4fcaec"
-  },
-  "assets": {
-    "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-    "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-    "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-    "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-    "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-    "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-    "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-  },
-  "host_tools": {
-    "cxx": "g++ (GCC) 16.2.1 20260810",
-    "cxx_target": "x86_64-pc-linux-gnu",
-    "cc": "gcc (GCC) 16.2.1 20260810",
-    "cc_target": "x86_64-pc-linux-gnu",
-    "ar": "GNU ar (GNU Binutils) 2.47",
-    "make": "GNU Make 4.4.1",
-    "python": "Python 3.14.7",
-    "git": "git version 2.55.0",
-    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-    "tool_binary_sha256": {
-      "cxx": "f04191f6a7b2cd7d9a62e1745872b8a6088791e5af6955488c692b2c4668bc9",
-      "cc": "8aac907d6fbf40394b424b5fa4a2ad1aa291dac7d3a0315c5b415c1f5ace1287",
-      "ar": "41861189eb10fb9fe73ffcb8c82bdbbe5f6084de78e03f15acddd1d33071c3a4",
-      "make": "9018663161af324a74326c035cfd05408cba13a26c1f6b801cf5f3195f2bee40",
-      "python": "d78f9cf7178ecff09963551399855543c297f37ac207e626228bfe4cb26a70c",
-      "git": "93473c28694fd72bd889364107cd2770514de59780885a6a4aafca4d602e30ad",
-      "cargo": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
-      "rustc": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618"
-    }
-  },
-  "build": {
-    "oracle_language": "C++11",
-    "make_target": "libdecomp.a",
-    "make_jobs": 4,
-    "fixture_flags": [
-      "-std=c++11",
-      "-O2",
-      "-Wall",
-      "-Wno-sign-compare",
-      "-m64"
-    ],
-    "rugra_build_status": "EXECUTED",
-    "cargo_invoked": true
-  },
-  "input_model": {
-    "opcode_observations": [
-      "CPUI_CALLOTHER memcpy closure: 5 inputs (slot 0 = 4-byte BUILTIN_MEMCPY index constant, slots 1/2 = 8-byte operands, slot 3 = 4-byte size, slot 4 = 1-byte extra) with an 8-byte output",
-      "CPUI_CALLOTHER metadataless closure: 2 inputs (slot 0 = 4-byte first-free-index constant, slot 1 = 4-byte operand) with a 2-byte output",
-      "def-side observations through Varnode::getLocalType(blockup) on each CALLOTHER output varnode",
-      "reader-side observations through Varnode::getLocalType(blockup) on the slot-1 input varnodes (function inputs, single descendant each)",
-      "direct PcodeOp-level observations through outputTypeLocal()/inputTypeLocal(0..4)"
-    ],
-    "representation": {
-      "ghidra": "Every observation runs against the real Architecture-owned userops table; the memcpy descriptor is created by the production registerBuiltin(BUILTIN_MEMCPY) (out=void*, in0..1=void*, in2=int4 from glb->types); the metadataless descriptor is an UnspecializedPcodeOp registered through the unmodified private registerOp body at the first free slot past the 1756 x86-64 SLEIGH basicops (registerOp does not take ownership on the exception paths; the probe deletes the candidate itself).",
-      "rugra": "Every observation calls the production get_local_type(block_up, type_factory, userops) / pub op_output_type_local / op_input_type_local entry points with the Architecture-owned userops handle (Architecture::set_userops; the Option thread stands in for Ghidra's tlst->getArch()->userops edge); the memcpy descriptor is created by register_builtin_with_local_types(BUILTIN_MEMCPY, void*, [void*, void*, int4]) with canonical factory Arcs and the metadataless descriptor by register_op (fresh manager, auto index 0); the resolved index values differ between sides and are never projected — the closure behavior is index-independent.",
-      "varnote": "Unregistered CALLOTHER indexes are a null-descriptor dereference in Ghidra (UB before typeop.cc:859) and are deliberately not projected on either side; the Rust arm conservatively covers that state with the same canonical fallback as the metadata-less descriptor (in-body comment)."
-    }
-  },
-  "oracle_expected": {
-    "memcpy_def": "void * — getLocalType def seed -> TypeOpCallother::getOutputLocal -> DatatypeUserOp::getOutputLocal returns the registered void* (factory-canonical identity); blockup=0",
-    "memcpy_out_direct": "void * — direct outputTypeLocal() on the same op, same canonical identity",
-    "memcpy_in0": "xunknown4 — the index constant slot: DatatypeUserOp slot-1 = -1 -> null -> TypeOp base default getBase(4,TYPE_UNKNOWN) (typeop.cc:271-275)",
-    "memcpy_in1": "void * — inTypes[0], factory-canonical identity",
-    "memcpy_in2": "void * — inTypes[1], factory-canonical identity",
-    "memcpy_in3": "int4 — inTypes[2], factory-canonical identity",
-    "memcpy_in4": "xunknown1 — slot-1 = 3 >= inTypes.size() = 3 -> null -> base default over the 1-byte slot-4 varnode",
-    "memcpy_reader": "void * — the slot-1 operand input varnode descends into its single CALLOTHER reader -> inputTypeLocal(1) -> the registered void*; blockup=0",
-    "metadataless_def": "xunknown2 — UnspecializedPcodeOp base virtual returns null -> base default getBase(2,TYPE_UNKNOWN); blockup=0",
-    "metadataless_out_direct": "xunknown2 — direct outputTypeLocal(), same canonical identity",
-    "metadataless_in0": "xunknown4 — base default over the 4-byte index constant",
-    "metadataless_in1": "xunknown4 — base default over the 4-byte operand",
-    "metadataless_reader": "xunknown4 — reader-side descent -> inputTypeLocal(1) -> base default; blockup=0"
+ "schema_version": 1,
+ "fixture_id": "TYPEOP-CALLOTHER-USEROP-CLOSURE-0001",
+ "title": "TypeOpCallother get*Local caller closure: PcodeOp -> Architecture-owned UserOpManage descriptor metadata (DatatypeUserOp void*/void*/void*/int4 and slot-minus-one mapping) or TypeOp base canonical TYPE_UNKNOWN fallback, observed at the PcodeOp level and through Varnode::getLocalType on both the def and reader sides",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "status_note": "Production commit 5cba7550 wires the A48-located caller closure: src/varnode.rs op_output_type_local/op_input_type_local gain the CPUI_CALLOTHER arm (typeop.cc:855-873) and get_local_type plus both dispatch helpers gain the userops Option<&Arc<RwLock<UserOpManage>>> thread (the tlst->getArch()->userops edge; a TypeFactory arch backlink was rejected because Architecture::ensure_types installs the process-canonical TypeFactory::shared_default() singleton and set_types runs before the Architecture is Arc-wrapped). The locked Ghidra 12.0.4 oracle and the frozen Rugra snapshot were each executed twice with deterministic stdout/stderr. Both sides produced 72 records / 2495 bytes with identical sha256 and empty stderr; the bilateral byte diff is empty (exit 0). All 13 cases match: memcpy closure def/direct/reader (registered void* through registerBuiltin(BUILTIN_MEMCPY)), input slots 1/2 (void*), slot 3 (int4), slot 0 (the CALLOTHER index constant, xunknown4 through the base default), slot 4 (past the fixed inputs, xunknown1), and the metadataless UnspecializedPcodeOp closure (def/direct/reader and both input slots all canonical xunknown fallback).",
+ "covered_projection": {
+  "status": "MATCH",
+  "name": "TypeOpCallother::getOutputLocal/getInputLocal (typeop.cc:855-873) through the real PcodeOp/Varnode/Funcdata structures, the Architecture-owned TypeFactory, and the Architecture-owned UserOpManage",
+  "oracle_capture": {
+   "status": "ORACLE_CAPTURED",
+   "note": "Every observation runs inside a real BfdArchitecture x86:LE:64:default:gcc: CALLOTHER ops are installed with fd->opSetOpcode (installing glb->inst[CPUI_CALLOTHER], funcdata_op.cc:25), the memcpy descriptor comes from the production registerBuiltin(BUILTIN_MEMCPY) (userop.cc:449-457), and the metadataless descriptor is registered into the same Architecture-owned manager through the unmodified private registerOp body (C++11 explicit-template bridge, first free slot located by probing past the 1756 x86-64 SLEIGH basicops; the resolved index value is never projected)."
   },
   "rugra_source_observation": {
-    "callother_arms": "src/varnode.rs CPUI_CALLOTHER arms in op_output_type_local/op_input_type_local: op.get_in(0) offset truncated as i32 (the uint4 truncation of getOp), UserOpManage::get_output_local(index)/get_input_local(index, slot as i32) inside the manager read lock, Some -> returned Arc, None -> local_base(size, TYPE_UNKNOWN) exactly as typeop.cc:872/862 fall through TypeOp::getOutputLocal/getInputLocal",
-    "thread": "get_local_type(block_up, type_factory, userops) forwards the handle to both dispatch helpers; None (no owning Architecture) routes CALLOTHER defs/readers to the same base default as a metadata-less descriptor — the varnode_localtype_res_1204 fixture re-pin proves zero drift for the None path",
-    "observed_execution": "Both deterministic Rugra runs reproduced the oracle byte-for-byte on all 72 lines, including all canonical identity bits and both fallback families."
+   "status": "MATCH",
+   "note": "src/varnode.rs op_output_type_local/op_input_type_local CPUI_CALLOTHER arms (typeop.cc:865-873/855-863): slot-0 offset truncated to 32 bits exactly as UserOpManage::getOp(uint4) (userop.cc:408-415), descriptor metadata via UserOpManage::get_output_local/get_input_local (slot-1 compaction in UserPcodeOp::get_input_local, userop.cc:79), None -> local_base getBase(size,TYPE_UNKNOWN) (typeop.cc:261-275) including slot 0 and past-the-end slots; get_local_type threads userops to both helpers; the unregistered-index state (Ghidra null-descriptor dereference UB before typeop.cc:859, unreachable in production) is conservatively covered by the same canonical fallback with an in-body comment."
   },
-  "decisive_semantics": {
-    "references_and_outputs": "TypeOpCallother::get*Local return borrowed factory-canonical Datatype* pointers; the fixture compares pointer/Arc identity against the same factory getters Ghidra's registerBuiltin uses (void*, int4, xunknown1/2/4). The userOp descriptor reference is queried fresh and never held across calls; no out-parameters exist on the TypeOp path (blockup is a Varnode::getLocalType concern only and stays 0 in every closure case).",
-    "loop_bounds_and_order": "No loops in the closure itself: in(0) is read exactly once per query, its offset truncated to the getOp(uint4) 32-bit domain; slot passes through unchanged to the descriptor virtual. The reader-side observations rely on the single-descendant walk of Varnode::getLocalType (varnode.cc:921) in addDescend insertion order — one reader each, so order cannot vary.",
-    "counters_and_accumulators": "DatatypeUserOp::getInputLocal performs exactly one slot -= 1 before the bounds check (userop.cc:79); builtin_memcpy's inTypes has exactly 3 entries (null-compaction in the constructor, userop.cc:60-67), so slots 0 and 4 miss and slots 1-3 hit. No other counters exist.",
-    "sort_and_comparison_keys": "No sorting anywhere in the closure; the only comparison is the res != null binary gate selecting between descriptor metadata and the TypeOp base default (typeop.cc:860-862/870-872). Descriptor lookup keys are the truncated CALLOTHER index (exact integer match, useroplist bounds then builtinmap, userop.cc:408-415) and nothing else."
+  "rugra_execution": {
+   "status": "EXECUTED",
+   "note": "The complete frozen crate snapshot (git archive of 5cba7550) was built with pinned Cargo/rustc and the Rust fixture executed twice identically through the production get_local_type/op_output_type_local/op_input_type_local entry points with the Architecture-owned userops handle: 72 records, 2495 stdout bytes, empty stderr."
   },
-  "coverage": {
-    "oracle_cases": 13,
-    "oracle_records": 72,
-    "observations": [
-      "registered DatatypeUserOp output metadata through the full closure (def side, direct op level, reader side)",
-      "registered input metadata slots 1-3 with factory-canonical void*/void*/int4 identity",
-      "slot 0 (the CALLOTHER index constant) falling through to the TypeOp base default xunknown4",
-      "past-the-end slot 4 falling through to the base default xunknown1",
-      "metadata-less UnspecializedPcodeOp closure: every query (def/direct/reader/both input slots) on the canonical TYPE_UNKNOWN fallback",
-      "builtin descriptor identity: registerBuiltin return equals userops.getOp(BUILTIN_MEMCPY); type code 8 (datatype) vs 1 (unspecialized)",
-      "both blockup out-parameters staying 0 (no STOP flags, no locked varnodes)"
-    ],
-    "untested": [
-      "unregistered CALLOTHER index (Ghidra null-descriptor dereference UB before typeop.cc:859; production-unreachable — SLEIGH registers every userop index before any CALLOTHER is emitted; the Rust arm covers the state with the same canonical fallback, documented in-body)",
-      "the Rust None-userops thread state through this fixture (no owning Architecture; byte-drift covered by the varnode_localtype_res_1204 re-pin instead)",
-      "InjectedUserOp/VolatileReadOp/VolatileWriteOp/SegmentOp/JumpAssistOp/InternalStringOp descriptors on the closure (all return null metadata, i.e. the same base-default path the unspecialized case already projects)",
-      "typeOrder interaction between CALLOTHER metadata and competing readers (merge mechanics already covered by varnode_localtype_res_1204)"
-    ]
-  },
-  "locked_capture": {
-    "deterministic_runs": 2,
-    "records": 72,
-    "bytes": 2495,
-    "stdout_sha256": "45d97341b96c72c59681c0c4dd010ae308602c05b8f5041bc3b9ead59ccb114f",
-    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  },
-  "paired_expected": {
-    "ghidra": {
-      "status": "ORACLE_CAPTURED",
-      "deterministic_runs": 2,
-      "records": 72,
-      "bytes": 2495,
-      "stdout_sha256": "45d97341b96c72c59681c0c4dd010ae308602c05b8f5041bc3b9ead59ccb114f",
-      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    "rugra": {
-      "status": "EXECUTED",
-      "deterministic_runs": 2,
-      "records": 72,
-      "bytes": 2495,
-      "stdout_sha256": "45d97341b96c72c59681c0c4dd010ae308602c05b8f5041bc3b9ead59ccb114f",
-      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    "bilateral": {
-      "status": "MATCH",
-      "diff_exit_code": 0,
-      "records": 0,
-      "bytes": 0,
-      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "differing_lines": []
-    }
-  },
-  "residuals": [
-    {
-      "id": "TYPEOP-LOCALTYPE-CALLOTHER-0001",
-      "status": "MATCH",
-      "note": "The CALLOTHER caller closure is bilaterally byte-identical on 72 records across 13 cases. The caller wiring has zero production consumers yet (get_local_type remains call-free until the coreaction build_localtypes/D2 STOP chain lands); module stays below L3 until that integration is bilaterally observed. The USEROP-LOCALTYPE-METADATA-0001 untested_caller_closure residual is closed by this fixture; its own pinned metadata's overall_status promotion belongs to the root re-pin batch."
-    },
-    {
-      "id": "TYPEOP-CALLOTHER-PRINTNAME-0001",
-      "status": "UNTESTED",
-      "note": "typeop.rs TypeOpCallother::get_operator_name still consults the callother_userop_name None-stub: its host TypeOpManager is never instantiated anywhere in the crate, and the live print path (PrintC::op_callother, printc.rs) already resolves names through its own faithful userops handle. Out of this write-set (src/typeop.rs is leased by D2/a21); registered on the TODO board."
-    },
-    {
-      "id": "TYPEOP-LOCALTYPE-DISPATCH-0001",
-      "status": "PARTIAL_INTEGRATED",
-      "note": "With the CALLOTHER arm landed, the varnode.rs dispatch table's remaining special paths are CALLIND parameter slots, RETURN parameter slots (both need parent->Funcdata; both fall to the Ghidra fc==null/bb==null base-default paths) and CPOOLREF records (no cpool infrastructure)."
-    }
+  "bilateral_comparison": {
+   "status": "MATCH",
+   "note": "The locked Ghidra and Rugra stdout streams were byte-diffed with exit code 0: all 72 lines identical, including both blockup=0 families, every canonical identity bit (void*/int4/xunknown4/xunknown2/xunknown1), the builtin descriptor type/index table records, and the metadataless fallback records."
+  }
+ },
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "varnode_cc_blob": "a04614c582a1fd987d615dcec4a8b47d3501f95f",
+  "typeop_cc_blob": "5197e3eefd185ed39c58e65af0687d605e34ec5e",
+  "type_cc_blob": "962c525b7f9c6a901d84d6396de245a0bf6e5d60",
+  "userop_cc_blob": "9fe8b78d03cbeac63b02bd424261fb1404ddc8f5",
+  "entrypoints": [
+   "Datatype *TypeOpCallother::getInputLocal(const PcodeOp *op,int4 slot) const (typeop.cc:855-863)",
+   "Datatype *TypeOpCallother::getOutputLocal(const PcodeOp *op) const (typeop.cc:865-873)",
+   "TypeOp::getOutputLocal/getInputLocal base defaults getBase(size,TYPE_UNKNOWN) (typeop.cc:261-275)",
+   "Datatype *DatatypeUserOp::getOutputLocal/getInputLocal (userop.cc:70-83, slot-1 compaction)",
+   "UserPcodeOp *UserOpManage::getOp(uint4 i) const (userop.cc:408-415)",
+   "UserPcodeOp *UserOpManage::registerBuiltin(uint4 i) (userop.cc:432-484, BUILTIN_MEMCPY case 449-457)",
+   "void UserOpManage::registerOp(UserPcodeOp *op) (userop.cc:490-527, private-body bridge)",
+   "Datatype *Varnode::getLocalType(bool &blockup) def seed and descend walk (varnode.cc:900-936)"
   ]
+ },
+ "architecture": "x86:LE:64:default:gcc",
+ "compiler_spec": "x86-64-gcc.cspec",
+ "analysis_options": "BfdArchitecture target=default; no option overrides; one fixture Funcdata with two CPUI_CALLOTHER ops (5-input memcpy closure and 2-input metadataless closure), the Architecture-owned TypeFactory/TypeOp table, and the Architecture-owned UserOpManage",
+ "comparand": {
+  "rugra_base_commit": "5cba75501abab7b7f17e81dd8ae1dc45dc5e209a",
+  "rugra_base_tree": "518475282f4c9630acbab4fea6b178563acb45f6",
+  "rugra_base_src_tree": "928e4e186961f5462144de1f5def8854c281fe52",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "binary_blob": "76d9343ea3add321aa4134856323663b36365807",
+  "snapshot_model": "immutable complete crate snapshot: git archive of the frozen production commit 5cba7550 with the TypeOpCallother get*Local CALLOTHER arm, userops parameter thread, and pub op_output_type_local/op_input_type_local entry points; no source overlays",
+  "archive_paths": [
+   "Cargo.toml",
+   "Cargo.lock",
+   "build.rs",
+   "README.md",
+   "benches/decompile_bench.rs",
+   "tests/oracle/decompress_1204.rs",
+   "tests/oracle/funcproto_lock_1204.rs",
+   "examples/curl",
+   "sleigh_specs",
+   "src",
+   "sleigh_shim"
+  ],
+  "overlays": [],
+  "base_source_sha256": {
+   "src/varnode.rs": "9c30a5873551ed7b9161ed5d1eb2eaf0495b77970f7d0907562cdbc4909ec695",
+   "src/typeop.rs": "3687fb6cf964587d64801f61bc72e0b180ecb65a6b01c392f7c77e05a812059f",
+   "src/userop.rs": "0d434b311b303b7c6db0f7971bc7a32962e6122c07c4790b46bec4e704489396",
+   "src/arch.rs": "74fa6d643d1dfdc46f9cfc2b7e612fadf9971e1fca577976896007a62ce82fea",
+   "src/type_system/datatype.rs": "a9a64334d952782ae58f076244477e4c69084582d822987f962d3a0679d2ddb5",
+   "src/type_system/typefactory.rs": "27975d9f8fee16a8c91b4753c1cad6afa2d86f9adf774dacc5acc9d9d8734383",
+   "src/fspec.rs": "ba7723dda0e9a1bb8f7a40348d26a9f0602a495e700ca0f4b7fda6030d5ccaa1",
+   "src/funcdata.rs": "db71fb43a6d5e38c1e16d0b20d296a93c8516e36921a3a5c2d358ec278ef983c",
+   "src/op.rs": "2a61dbb4977c19db5746ebf98050dfbfb253626657ce8228856df1646858eca5",
+   "src/space.rs": "0e65152fd2f37429e3b6b8ae4c48328a1099558af5cd475e1c2a5c7db51b778d",
+   "src/address.rs": "ee88af6e7b072a1767d17477e96aecb05ace947809b2ee7b6cbcc051cc11cf98"
+  },
+  "snapshot_build_link": {
+   "path": "ghidra",
+   "target": "the live ghidra_root after locked HEAD/tag/tree/Makefile and clean-worktree verification",
+   "purpose": "build.rs C++ shim header discovery; the executable oracle is built from the separately archived locked commit"
+  },
+  "cpp_fixture_sha256": "0049037347a5e5a28701c66ffe902b96ea52f76c2994d04bc07776512b6cda89",
+  "rust_fixture_sha256": "47080509e7d06ace6cb2dd7f83c3bcf844a79c217759dffd86b3f381be82fbcb",
+  "runner_sha256": "1578fb488e8c95f4191db3fff28cf8f5d9215e924d7542045dd5d78eaf4fcaec"
+ },
+ "assets": {
+  "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+  "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+  "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+  "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+  "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+  "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+ },
+ "host_tools": {
+  "cxx": "g++ (GCC) 16.2.1 20260810",
+  "cxx_target": "x86_64-pc-linux-gnu",
+  "cc": "gcc (GCC) 16.2.1 20260810",
+  "cc_target": "x86_64-pc-linux-gnu",
+  "ar": "GNU ar (GNU Binutils) 2.47",
+  "make": "GNU Make 4.4.1",
+  "python": "Python 3.14.7",
+  "git": "git version 2.55.0",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+  "tool_binary_sha256": {
+   "cxx": "f04191f6a7b2cd7d9a62e1745872b8a6088791e5af6955488c692b2c4668bc9",
+   "cc": "8aac907d6fbf40394b424b5fa4a2ad1aa291dac7d3a0315c5b415c1f5ace1287",
+   "ar": "41861189eb10fb9fe73ffcb8c82bdbbe5f6084de78e03f15acddd1d33071c3a4",
+   "make": "9018663161af324a74326c035cfd05408cba13a26c1f6b801cf5f3195f2bee40",
+   "python": "d78f9cf7178ecff09963551399855543c297f37ac207e626228bfe4cb26a70c",
+   "git": "93473c28694fd72bd889364107cd2770514de59780885a6a4aafca4d602e30ad",
+   "cargo": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
+   "rustc": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618"
+  }
+ },
+ "build": {
+  "oracle_language": "C++11",
+  "make_target": "libdecomp.a",
+  "make_jobs": 4,
+  "fixture_flags": [
+   "-std=c++11",
+   "-O2",
+   "-Wall",
+   "-Wno-sign-compare",
+   "-m64"
+  ],
+  "rugra_build_status": "EXECUTED",
+  "cargo_invoked": true
+ },
+ "input_model": {
+  "opcode_observations": [
+   "CPUI_CALLOTHER memcpy closure: 5 inputs (slot 0 = 4-byte BUILTIN_MEMCPY index constant, slots 1/2 = 8-byte operands, slot 3 = 4-byte size, slot 4 = 1-byte extra) with an 8-byte output",
+   "CPUI_CALLOTHER metadataless closure: 2 inputs (slot 0 = 4-byte first-free-index constant, slot 1 = 4-byte operand) with a 2-byte output",
+   "def-side observations through Varnode::getLocalType(blockup) on each CALLOTHER output varnode",
+   "reader-side observations through Varnode::getLocalType(blockup) on the slot-1 input varnodes (function inputs, single descendant each)",
+   "direct PcodeOp-level observations through outputTypeLocal()/inputTypeLocal(0..4)"
+  ],
+  "representation": {
+   "ghidra": "Every observation runs against the real Architecture-owned userops table; the memcpy descriptor is created by the production registerBuiltin(BUILTIN_MEMCPY) (out=void*, in0..1=void*, in2=int4 from glb->types); the metadataless descriptor is an UnspecializedPcodeOp registered through the unmodified private registerOp body at the first free slot past the 1756 x86-64 SLEIGH basicops (registerOp does not take ownership on the exception paths; the probe deletes the candidate itself).",
+   "rugra": "Every observation calls the production get_local_type(block_up, type_factory, userops) / pub op_output_type_local / op_input_type_local entry points with the Architecture-owned userops handle (Architecture::set_userops; the Option thread stands in for Ghidra's tlst->getArch()->userops edge); the memcpy descriptor is created by register_builtin_with_local_types(BUILTIN_MEMCPY, void*, [void*, void*, int4]) with canonical factory Arcs and the metadataless descriptor by register_op (fresh manager, auto index 0); the resolved index values differ between sides and are never projected \u2014 the closure behavior is index-independent.",
+   "varnote": "Unregistered CALLOTHER indexes are a null-descriptor dereference in Ghidra (UB before typeop.cc:859) and are deliberately not projected on either side; the Rust arm conservatively covers that state with the same canonical fallback as the metadata-less descriptor (in-body comment)."
+  }
+ },
+ "oracle_expected": {
+  "memcpy_def": "void * \u2014 getLocalType def seed -> TypeOpCallother::getOutputLocal -> DatatypeUserOp::getOutputLocal returns the registered void* (factory-canonical identity); blockup=0",
+  "memcpy_out_direct": "void * \u2014 direct outputTypeLocal() on the same op, same canonical identity",
+  "memcpy_in0": "xunknown4 \u2014 the index constant slot: DatatypeUserOp slot-1 = -1 -> null -> TypeOp base default getBase(4,TYPE_UNKNOWN) (typeop.cc:271-275)",
+  "memcpy_in1": "void * \u2014 inTypes[0], factory-canonical identity",
+  "memcpy_in2": "void * \u2014 inTypes[1], factory-canonical identity",
+  "memcpy_in3": "int4 \u2014 inTypes[2], factory-canonical identity",
+  "memcpy_in4": "xunknown1 \u2014 slot-1 = 3 >= inTypes.size() = 3 -> null -> base default over the 1-byte slot-4 varnode",
+  "memcpy_reader": "void * \u2014 the slot-1 operand input varnode descends into its single CALLOTHER reader -> inputTypeLocal(1) -> the registered void*; blockup=0",
+  "metadataless_def": "xunknown2 \u2014 UnspecializedPcodeOp base virtual returns null -> base default getBase(2,TYPE_UNKNOWN); blockup=0",
+  "metadataless_out_direct": "xunknown2 \u2014 direct outputTypeLocal(), same canonical identity",
+  "metadataless_in0": "xunknown4 \u2014 base default over the 4-byte index constant",
+  "metadataless_in1": "xunknown4 \u2014 base default over the 4-byte operand",
+  "metadataless_reader": "xunknown4 \u2014 reader-side descent -> inputTypeLocal(1) -> base default; blockup=0"
+ },
+ "rugra_source_observation": {
+  "callother_arms": "src/varnode.rs CPUI_CALLOTHER arms in op_output_type_local/op_input_type_local: op.get_in(0) offset truncated as i32 (the uint4 truncation of getOp), UserOpManage::get_output_local(index)/get_input_local(index, slot as i32) inside the manager read lock, Some -> returned Arc, None -> local_base(size, TYPE_UNKNOWN) exactly as typeop.cc:872/862 fall through TypeOp::getOutputLocal/getInputLocal",
+  "thread": "get_local_type(block_up, type_factory, userops) forwards the handle to both dispatch helpers; None (no owning Architecture) routes CALLOTHER defs/readers to the same base default as a metadata-less descriptor \u2014 the varnode_localtype_res_1204 fixture re-pin proves zero drift for the None path",
+  "observed_execution": "Both deterministic Rugra runs reproduced the oracle byte-for-byte on all 72 lines, including all canonical identity bits and both fallback families."
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "TypeOpCallother::get*Local return borrowed factory-canonical Datatype* pointers; the fixture compares pointer/Arc identity against the same factory getters Ghidra's registerBuiltin uses (void*, int4, xunknown1/2/4). The userOp descriptor reference is queried fresh and never held across calls; no out-parameters exist on the TypeOp path (blockup is a Varnode::getLocalType concern only and stays 0 in every closure case).",
+  "loop_bounds_and_order": "No loops in the closure itself: in(0) is read exactly once per query, its offset truncated to the getOp(uint4) 32-bit domain; slot passes through unchanged to the descriptor virtual. The reader-side observations rely on the single-descendant walk of Varnode::getLocalType (varnode.cc:921) in addDescend insertion order \u2014 one reader each, so order cannot vary.",
+  "counters_and_accumulators": "DatatypeUserOp::getInputLocal performs exactly one slot -= 1 before the bounds check (userop.cc:79); builtin_memcpy's inTypes has exactly 3 entries (null-compaction in the constructor, userop.cc:60-67), so slots 0 and 4 miss and slots 1-3 hit. No other counters exist.",
+  "sort_and_comparison_keys": "No sorting anywhere in the closure; the only comparison is the res != null binary gate selecting between descriptor metadata and the TypeOp base default (typeop.cc:860-862/870-872). Descriptor lookup keys are the truncated CALLOTHER index (exact integer match, useroplist bounds then builtinmap, userop.cc:408-415) and nothing else."
+ },
+ "coverage": {
+  "oracle_cases": 13,
+  "oracle_records": 72,
+  "observations": [
+   "registered DatatypeUserOp output metadata through the full closure (def side, direct op level, reader side)",
+   "registered input metadata slots 1-3 with factory-canonical void*/void*/int4 identity",
+   "slot 0 (the CALLOTHER index constant) falling through to the TypeOp base default xunknown4",
+   "past-the-end slot 4 falling through to the base default xunknown1",
+   "metadata-less UnspecializedPcodeOp closure: every query (def/direct/reader/both input slots) on the canonical TYPE_UNKNOWN fallback",
+   "builtin descriptor identity: registerBuiltin return equals userops.getOp(BUILTIN_MEMCPY); type code 8 (datatype) vs 1 (unspecialized)",
+   "both blockup out-parameters staying 0 (no STOP flags, no locked varnodes)"
+  ],
+  "untested": [
+   "unregistered CALLOTHER index (Ghidra null-descriptor dereference UB before typeop.cc:859; production-unreachable \u2014 SLEIGH registers every userop index before any CALLOTHER is emitted; the Rust arm covers the state with the same canonical fallback, documented in-body)",
+   "the Rust None-userops thread state through this fixture (no owning Architecture; byte-drift covered by the varnode_localtype_res_1204 re-pin instead)",
+   "InjectedUserOp/VolatileReadOp/VolatileWriteOp/SegmentOp/JumpAssistOp/InternalStringOp descriptors on the closure (all return null metadata, i.e. the same base-default path the unspecialized case already projects)",
+   "typeOrder interaction between CALLOTHER metadata and competing readers (merge mechanics already covered by varnode_localtype_res_1204)"
+  ]
+ },
+ "locked_capture": {
+  "deterministic_runs": 2,
+  "records": 72,
+  "bytes": 2495,
+  "stdout_sha256": "45d97341b96c72c59681c0c4dd010ae308602c05b8f5041bc3b9ead59ccb114f",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+ },
+ "paired_expected": {
+  "ghidra": {
+   "status": "ORACLE_CAPTURED",
+   "deterministic_runs": 2,
+   "records": 72,
+   "bytes": 2495,
+   "stdout_sha256": "45d97341b96c72c59681c0c4dd010ae308602c05b8f5041bc3b9ead59ccb114f",
+   "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "rugra": {
+   "status": "EXECUTED",
+   "deterministic_runs": 2,
+   "records": 72,
+   "bytes": 2495,
+   "stdout_sha256": "45d97341b96c72c59681c0c4dd010ae308602c05b8f5041bc3b9ead59ccb114f",
+   "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "bilateral": {
+   "status": "MATCH",
+   "diff_exit_code": 0,
+   "records": 0,
+   "bytes": 0,
+   "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "differing_lines": []
+  }
+ },
+ "residuals": [
+  {
+   "id": "TYPEOP-LOCALTYPE-CALLOTHER-0001",
+   "status": "MATCH",
+   "note": "The CALLOTHER caller closure is bilaterally byte-identical on 72 records across 13 cases. The caller wiring has zero production consumers yet (get_local_type remains call-free until the coreaction build_localtypes/D2 STOP chain lands); module stays below L3 until that integration is bilaterally observed. The USEROP-LOCALTYPE-METADATA-0001 untested_caller_closure residual is closed by this fixture; its own pinned metadata's overall_status promotion belongs to the root re-pin batch."
+  },
+  {
+   "id": "TYPEOP-CALLOTHER-PRINTNAME-0001",
+   "status": "UNTESTED",
+   "note": "typeop.rs TypeOpCallother::get_operator_name still consults the callother_userop_name None-stub: its host TypeOpManager is never instantiated anywhere in the crate, and the live print path (PrintC::op_callother, printc.rs) already resolves names through its own faithful userops handle. Out of this write-set (src/typeop.rs is leased by D2/a21); registered on the TODO board."
+  },
+  {
+   "id": "TYPEOP-LOCALTYPE-DISPATCH-0001",
+   "status": "PARTIAL_INTEGRATED",
+   "note": "With the CALLOTHER arm landed, the varnode.rs dispatch table's remaining special paths are CALLIND parameter slots, RETURN parameter slots (both need parent->Funcdata; both fall to the Ghidra fc==null/bb==null base-default paths) and CPOOLREF records (no cpool infrastructure)."
+  }
+ ],
+ "input_sha256": "e5ebbf3d90e8ec032f4888af57030e4bfec0c8549b7122fe0208e2fc090fae77"
 }

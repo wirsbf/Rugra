@@ -43,7 +43,7 @@
  "observation": {
   "schema": "ordered JSON object graph with stable per-run PcodeOp/Varnode IDs",
   "normalization": "JSON object keys/whitespace plus LOAD/STORE input0 AddrSpace pointer to registered space index; array order, object identity, aliasing, edge slots, flags, state and text are preserved",
-  "overall_status": "MISMATCH",
+  "overall_status": "UNTESTED",
   "stage_boundary_status": {
    "00_raw_pcode": "MISMATCH",
    "01_cfg": "MISMATCH",

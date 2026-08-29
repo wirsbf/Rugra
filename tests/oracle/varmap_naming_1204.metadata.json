@@ -10,7 +10,7 @@
   "GH12-F-b2a1d8f9d11d6a13442b ghidra::ScopeInternal::insertNameTree database.cc:2712",
   "GH12-F-29143592e9dbebe02a60 ghidra::ScopeLocal::buildVariableName varmap.cc:548"
  ],
- "overall_status": "UNTESTED:  (B2 migration of partial match state) the six-case naming projection (SymbolNameTree walk order, name/displayName mutation, category and catindex effects, nameDedup sequencing, shared int4 base counter across prefixes, idempotence, and the twelve buildVariableName flag branches) byte-matches the locked oracle; the buildDefaultName representative-Varnode path with a live Funcdata/HighVariable, the real Translate register-table plumbing, multiEntrySet maintenance, and symbolId allocation remain outside this atomic change",
+ "overall_status": "UNTESTED: (B2 migration of partial match state) the six-case naming projection (SymbolNameTree walk order, name/displayName mutation, category and catindex effects, nameDedup sequencing, shared int4 base counter across prefixes, idempotence, and the twelve buildVariableName flag branches) byte-matches the locked oracle; the buildDefaultName representative-Varnode path with a live Funcdata/HighVariable, the real Translate register-table plumbing, multiEntrySet maintenance, and symbolId allocation remain outside this atomic change",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",

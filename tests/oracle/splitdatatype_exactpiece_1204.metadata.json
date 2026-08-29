@@ -1,7 +1,7 @@
 {
  "schema": 2,
  "fixture_id": "SPLITDATATYPE-EXACTPIECE-0001",
- "overall_status": "MATCH: covered projection) after the SUBFLOW-ROOTPOINTER-PORT-0001 port on the locked 12.0.4 oracle the full RuleSplitLoad/RuleSplitStore gate chain (getValueDatatype -> canonical getExactPiece -> categorize/testDatatypeCompatibility), the RootPointer family (find/backUpPointer multi-hop, duplicateToTemp, freePointerChain), buildPointers PTRADD/PTRSUB chains, buildInConstants, the splitStore LOAD-value trace with retry-without-load, and the splitLoad COPY-follow; 31 records byte-identical. Remaining registered gaps: value/output-side raw op-DAG shapes (buildInSubpieces addressing/generateConstants, buildOutVarnodes/buildOutConcats protoPartial stacks), R15 S-1/S-2 items",
+ "overall_status": "UNTESTED: covered projection) after the SUBFLOW-ROOTPOINTER-PORT-0001 port on the locked 12.0.4 oracle the full RuleSplitLoad/RuleSplitStore gate chain (getValueDatatype -> canonical getExactPiece -> categorize/testDatatypeCompatibility), the RootPointer family (find/backUpPointer multi-hop, duplicateToTemp, freePointerChain), buildPointers PTRADD/PTRSUB chains, buildInConstants, the splitStore LOAD-value trace with retry-without-load, and the splitLoad COPY-follow; 31 records byte-identical. Remaining registered gaps: value/output-side raw op-DAG shapes (buildInSubpieces addressing/generateConstants, buildOutVarnodes/buildOutConcats protoPartial stacks), R15 S-1/S-2 items",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",

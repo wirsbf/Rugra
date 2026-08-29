@@ -4,7 +4,7 @@
  "task_id": "RETURNFOLD-GAPA-UPSTREAM-0001",
  "fixture_kind": "bilateral_function_fixture",
  "created": "2026-08-25",
- "overall_status": "MATCH",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
  "scope": "e2e return-value fold chain: ActionMarkExplicit::baseExplicit multi-instance rule (coreaction.cc:3020-3021) + addr-tied/mapped/protoPartial/PIECE-base/maxref branches (cc:3022-3081) + multipleInteraction (cc:3091-3132) + processMultiplier (cc:3166-3199) + checkNewToConstructor (cc:3205-3235, projection only) + ActionMarkImplied count bridge (cc:3416-3455, count+=1 at cc:3434) + PrintC implied inlining (printlanguage.cc:526-534 recurse, printc.cc:754 opReturn, printc.cc:2703-2705 emitBlockBasic statement omission)",
  "oracle": {
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
@@ -163,5 +163,6 @@
  },
  "architecture": "language-independent return-folding projection on hand-built IR",
  "compiler_spec": "none: ActionReturnSplit folding harness; no compiler spec decode",
- "analysis_options": "none: return-fold upstream projection; no decompilation pipeline options"
+ "analysis_options": "none: return-fold upstream projection; no decompilation pipeline options",
+ "input_sha256": "10c5e46480c52ffddc0aa8f16ff7411ef868c6713d5953502b00510ecdb6f1f6"
 }

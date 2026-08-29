@@ -1,700 +1,700 @@
 {
-  "schema_version": 2,
-  "fixture_id": "FLOAT-FMT-STRUCT-0001",
-  "projection_status": "MATCH",
-  "overall_status": "MATCH",
-  "status_note": "Closes the FLOAT-FMT-STRUCT-0001 structural residual of FLOAT-OPINT2FLOAT-SIGN-0001: the oracle's host conversions run bit ladders, not host casts. Directly observed on both sides with same-input/same-output bit patterns: FloatFormat(4)/FloatFormat(8) field initialization incl. jbitimplied; the 64-bit TOP-ALIGNED fractional code convention (extractFractionalCode float.cc:113-119, setFractionalCode float.cc:144-153 with OR packing and no masking of x); setSign identity-when-false (float.cc:158-166); setExponentCode OR pack (float.cc:171-177); getZero/getInfinity/getNaNEncoding 3-setter structure with the quiet-NaN mask created top-aligned 1<<63 (float.cc:181-215); static createFloat incl. ldexp gradual underflow (2^-1074 exact, 2^-1075 ties-to-even flush, 1.5x tie keeps the even 2x) and overflow saturation (float.cc:67-80); static extractExpSig with sentinel out-params proving zero/infinity/NaN early returns never write signif/exp (float.cc:89-109); static roundToNearestEven incl. the uintb wrap-around carry and lowbitpos==64 zero lowbitmask (float.cc:276-288); the convertEncoding subnormal-normalize intermediate state via count_leading_zeros of the top-aligned signif with exp = -bias - lz (float.cc:368-376, address.cc:773); getHostFloat across all five floatclasses incl. the denormalized createFloat path (the pre-port implementation returned denormals scaled by 2^frac_size too large); getEncoding incl. RNE ties, denormalized outputs, and NaN payload canonicalization through getNaNEncoding (the pre-port bit-cast passed payloads through); and the full 36-case FLOAT-OPINT2FLOAT-SIGN-0001 replay proving the structural refactor changed no value behavior. Rugra binds the same host libm ldexp/frexp the oracle uses (float.cc:25-26) so the ladder's saturation semantics are bit-identical; a powi product cannot reproduce ldexp(2^11,-1085)==2^-1074. FLOAT-OPTRUNC-OOB-0001 extension: opTrunc (float.cc:631-640) is now observed across the (intb) cast range on both sides — the normal tier proves calc_mask(sizeout) keeps the two's-complement low bytes (e.g. -7.0f at sizeout 1 -> 0xF9, -300.0 at sizeout 2 -> 0xFED4, the largest double below 2^63 at sizeout 4 -> 0xFFFFFC00); the large out-of-range tier and the NaN/Inf tier prove the x86-64 oracle host compiles (intb) val to cvttsd2si, whose integer-indefinite INT64_MIN (0x8000000000000000) survives calc_mask(8) verbatim and masks to 0 for every sizeout < 8 (FLT_MAX/1e300/ 2^63 boundary/NaN/+Inf/-Inf). The pre-fix Rust saturated `as` cast (NaN -> 0, +overflow -> i64::MAX) and the missing sizeout mask diverged on these tiers; both are now fixed in op_trunc.",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
-  },
-  "rugra_base_commit": "d3a7353e8d2c0e8de95bad3f0887b219728b647a",
-  "rugra_source": {
-    "base_src_tree": "25fecf9375e3af5af0570246b840936d5d68f0a8",
-    "base_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "base_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "rust_overlay": "Archive Rugra base d3a7353e8d2c0e8de95bad3f0887b219728b647a (the FLOAT-FMT-STRUCT-0001 bit-ladder commit) and overlay only the owned src/float_emulate.rs candidate before the isolated offline build",
-    "base_commit": "d3a7353e8d2c0e8de95bad3f0887b219728b647a"
-  },
-  "architecture": {
-    "id": "synthetic-floatformat-fixture",
-    "endianness": "little",
-    "pointer_size": 8,
-    "spaces": "none; FloatFormat is constructed directly (public constructor) and the private statics/members are reached with the private->public translation-unit access hack (address_space_phase1/block_index_assign fixture precedent) — no Architecture, Translate, or spec loading on either side",
-    "type_factory": "none required"
-  },
-  "compiler_spec": {
-    "id": "fixture",
-    "prototype_xml": "none; pure FloatFormat bit manipulation with no Funcdata or calling convention",
-    "calling_convention": "none"
-  },
-  "analysis_options": {
-    "api": "Direct production FloatFormat calls on both sides (fields/extractors/setters/encodings/createFloat/extractExpSig/roundToNearestEven/getHostFloat/getEncoding/opInt2Float/opFloat2Float + count_leading_zeros); no PrintC, Action, or Rule pipeline",
-    "formats": "FloatFormat(4) and FloatFormat(8) constructed via the public default IEEE 754 settings constructor on both sides; identical to Translate::getFloatFormat defaults",
-    "normalization": "None. Results are full uintb/u64/i32/f64-bit values printed as 0x%016llX / %d; no ID, order, or state normalization (the extractExpSig sentinel out-params 0xAAAAAAAAAAAAAAAA / -559038737 are part of the observation)",
-    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent",
-    "random_seed": "none; pure functions over explicit bit patterns",
-    "error_injection": "none; no examined function throws"
-  },
-  "input_manifest": {
-    "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
-    "cases": [
-      {
-        "id": "fields4",
-        "call": "FloatFormat(4) constructor field dump: size/signbit_pos/exp_pos/exp_size/frac_pos/frac_size/bias/maxexponent/jbitimplied (float.cc:36-61)"
-      },
-      {
-        "id": "fields8",
-        "call": "FloatFormat(8) constructor field dump: size/signbit_pos/exp_pos/exp_size/frac_pos/frac_size/bias/maxexponent/jbitimplied (float.cc:36-61)"
-      },
-      {
-        "id": "xfrac4_minfrac",
-        "call": "extractFractionalCode top-aligned read, fmt4 (float.cc:113-119)"
-      },
-      {
-        "id": "xfrac4_maxfrac",
-        "call": "extractFractionalCode top-aligned read, fmt4 (float.cc:113-119)"
-      },
-      {
-        "id": "xfrac4_3fc00001",
-        "call": "extractFractionalCode top-aligned read, fmt4 (float.cc:113-119)"
-      },
-      {
-        "id": "xfrac8_one_ulp",
-        "call": "extractFractionalCode top-aligned read, fmt8 (float.cc:113-119)"
-      },
-      {
-        "id": "xfrac8_maxsub",
-        "call": "extractFractionalCode top-aligned read, fmt8 (float.cc:113-119)"
-      },
-      {
-        "id": "xsign4_pos",
-        "call": "extractSign, fmt4 (float.cc:123-128)"
-      },
-      {
-        "id": "xsign4_neg",
-        "call": "extractSign, fmt4 (float.cc:123-128)"
-      },
-      {
-        "id": "xsign8_neg",
-        "call": "extractSign, fmt8 (float.cc:123-128)"
-      },
-      {
-        "id": "xexp4_onefive",
-        "call": "extractExponentCode masked read, fmt4 (float.cc:132-139)"
-      },
-      {
-        "id": "xexp4_inf",
-        "call": "extractExponentCode masked read, fmt4 (float.cc:132-139)"
-      },
-      {
-        "id": "xexp4_sub",
-        "call": "extractExponentCode masked read, fmt4 (float.cc:132-139)"
-      },
-      {
-        "id": "xexp8_max",
-        "call": "extractExponentCode masked read, fmt8 (float.cc:132-139)"
-      },
-      {
-        "id": "sfrac4_into_zero",
-        "call": "setFractionalCode top-aligned OR pack, fmt4 (float.cc:144-153)"
-      },
-      {
-        "id": "sfrac4_or_dirty",
-        "call": "setFractionalCode top-aligned OR pack, fmt4 (float.cc:144-153)"
-      },
-      {
-        "id": "sfrac8_into_zero",
-        "call": "setFractionalCode top-aligned OR pack, fmt8 (float.cc:144-153)"
-      },
-      {
-        "id": "sfrac8_or_dirty",
-        "call": "setFractionalCode top-aligned OR pack, fmt8 (float.cc:144-153)"
-      },
-      {
-        "id": "ssign4_set",
-        "call": "setSign set/identity semantics (float.cc:158-166)"
-      },
-      {
-        "id": "ssign4_identity",
-        "call": "setSign set/identity semantics (float.cc:158-166)"
-      },
-      {
-        "id": "sexp4_or",
-        "call": "setExponentCode OR pack, no masking (float.cc:171-177)"
-      },
-      {
-        "id": "sexp4_into_zero",
-        "call": "setExponentCode OR pack, no masking (float.cc:171-177)"
-      },
-      {
-        "id": "z4_pos",
-        "call": "getZeroEncoding via 3-setter structure, fmt4 (float.cc:181/193/205)"
-      },
-      {
-        "id": "z4_neg",
-        "call": "getZeroEncoding via 3-setter structure, fmt4 (float.cc:181/193/205)"
-      },
-      {
-        "id": "inf4_pos",
-        "call": "getInfinityEncoding via 3-setter structure, fmt4 (float.cc:181/193/205)"
-      },
-      {
-        "id": "inf4_neg",
-        "call": "getInfinityEncoding via 3-setter structure, fmt4 (float.cc:181/193/205)"
-      },
-      {
-        "id": "nan4_pos",
-        "call": "getNaNEncoding via 3-setter structure, fmt4 (float.cc:181/193/205)"
-      },
-      {
-        "id": "nan4_neg",
-        "call": "getNaNEncoding via 3-setter structure, fmt4 (float.cc:181/193/205)"
-      },
-      {
-        "id": "z8_pos",
-        "call": "getZeroEncoding via 3-setter structure, fmt8 (float.cc:181/193/205)"
-      },
-      {
-        "id": "z8_neg",
-        "call": "getZeroEncoding via 3-setter structure, fmt8 (float.cc:181/193/205)"
-      },
-      {
-        "id": "inf8_pos",
-        "call": "getInfinityEncoding via 3-setter structure, fmt8 (float.cc:181/193/205)"
-      },
-      {
-        "id": "inf8_neg",
-        "call": "getInfinityEncoding via 3-setter structure, fmt8 (float.cc:181/193/205)"
-      },
-      {
-        "id": "nan8_pos",
-        "call": "getNaNEncoding via 3-setter structure, fmt8 (float.cc:181/193/205)"
-      },
-      {
-        "id": "nan8_neg",
-        "call": "getNaNEncoding via 3-setter structure, fmt8 (float.cc:181/193/205)"
-      },
-      {
-        "id": "cf_pos7",
-        "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
-      },
-      {
-        "id": "cf_neg7",
-        "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
-      },
-      {
-        "id": "cf_onefive",
-        "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
-      },
-      {
-        "id": "cf_min_denorm",
-        "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
-      },
-      {
-        "id": "cf_half_below",
-        "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
-      },
-      {
-        "id": "cf_tie_even",
-        "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
-      },
-      {
-        "id": "cf_overflow",
-        "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
-      },
-      {
-        "id": "cf_neg_overflow",
-        "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
-      },
-      {
-        "id": "esig_7",
-        "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
-      },
-      {
-        "id": "esig_neg7",
-        "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
-      },
-      {
-        "id": "esig_half",
-        "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
-      },
-      {
-        "id": "esig_onefive",
-        "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
-      },
-      {
-        "id": "esig_min_denorm",
-        "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
-      },
-      {
-        "id": "esig_max_normal",
-        "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
-      },
-      {
-        "id": "esig_zero",
-        "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
-      },
-      {
-        "id": "esig_negzero",
-        "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
-      },
-      {
-        "id": "esig_inf",
-        "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
-      },
-      {
-        "id": "esig_neginf",
-        "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
-      },
-      {
-        "id": "esig_nan",
-        "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
-      },
-      {
-        "id": "esig_negnan",
-        "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
-      },
-      {
-        "id": "rtne_even_stay",
-        "call": "static roundToNearestEven(&signif, lowbitpos) direct drive incl. uintb wrap carry and lowbitpos==64 (float.cc:276-288)"
-      },
-      {
-        "id": "rtne_odd_carry",
-        "call": "static roundToNearestEven(&signif, lowbitpos) direct drive incl. uintb wrap carry and lowbitpos==64 (float.cc:276-288)"
-      },
-      {
-        "id": "rtne_eps_carry",
-        "call": "static roundToNearestEven(&signif, lowbitpos) direct drive incl. uintb wrap carry and lowbitpos==64 (float.cc:276-288)"
-      },
-      {
-        "id": "rtne_wrap",
-        "call": "static roundToNearestEven(&signif, lowbitpos) direct drive incl. uintb wrap carry and lowbitpos==64 (float.cc:276-288)"
-      },
-      {
-        "id": "rtne_lowbit64_wrap",
-        "call": "static roundToNearestEven(&signif, lowbitpos) direct drive incl. uintb wrap carry and lowbitpos==64 (float.cc:276-288)"
-      },
-      {
-        "id": "rtne_lowbit64_stay",
-        "call": "static roundToNearestEven(&signif, lowbitpos) direct drive incl. uintb wrap carry and lowbitpos==64 (float.cc:276-288)"
-      },
-      {
-        "id": "lz4_min",
-        "call": "convertEncoding subnormal-normalize intermediate: count_leading_zeros of top-aligned signif (address.cc:773), <<lz normalized signif, exp = -bias - lz (float.cc:368-376)"
-      },
-      {
-        "id": "lz4_two",
-        "call": "convertEncoding subnormal-normalize intermediate: count_leading_zeros of top-aligned signif (address.cc:773), <<lz normalized signif, exp = -bias - lz (float.cc:368-376)"
-      },
-      {
-        "id": "lz4_max",
-        "call": "convertEncoding subnormal-normalize intermediate: count_leading_zeros of top-aligned signif (address.cc:773), <<lz normalized signif, exp = -bias - lz (float.cc:368-376)"
-      },
-      {
-        "id": "lz4_zero",
-        "call": "convertEncoding subnormal-normalize intermediate: count_leading_zeros of top-aligned signif (address.cc:773), <<lz normalized signif, exp = -bias - lz (float.cc:368-376)"
-      },
-      {
-        "id": "gh4_onefive",
-        "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
-      },
-      {
-        "id": "gh4_neg7",
-        "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
-      },
-      {
-        "id": "gh4_denorm_min",
-        "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
-      },
-      {
-        "id": "gh4_denorm_max",
-        "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
-      },
-      {
-        "id": "gh4_zero_pos",
-        "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
-      },
-      {
-        "id": "gh4_zero_neg",
-        "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
-      },
-      {
-        "id": "gh4_inf_pos",
-        "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
-      },
-      {
-        "id": "gh4_inf_neg",
-        "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
-      },
-      {
-        "id": "gh4_nan_pos",
-        "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
-      },
-      {
-        "id": "gh4_nan_neg",
-        "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
-      },
-      {
-        "id": "gh8_one",
-        "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt8 (float.cc:228-268)"
-      },
-      {
-        "id": "gh8_denorm_min",
-        "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt8 (float.cc:228-268)"
-      },
-      {
-        "id": "gh8_denorm_max",
-        "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt8 (float.cc:228-268)"
-      },
-      {
-        "id": "gh8_zero_neg",
-        "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt8 (float.cc:228-268)"
-      },
-      {
-        "id": "gh8_nan_neg",
-        "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt8 (float.cc:228-268)"
-      },
-      {
-        "id": "ge4_pos7",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge4_neg7",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge4_tie_even",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge4_above_tie",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge4_min_denorm",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge4_half_denorm",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge4_tie_denorm",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge4_exp_zero",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge4_too_small",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge4_overflow",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge4_dbl_max",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge4_snan",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge4_negsnan",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge4_zero",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge4_negzero",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge4_inf",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
-      },
-      {
-        "id": "ge8_pi",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt8 (float.cc:293-346)"
-      },
-      {
-        "id": "ge8_neg7",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt8 (float.cc:293-346)"
-      },
-      {
-        "id": "ge8_min_denorm",
-        "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt8 (float.cc:293-346)"
-      },
-      {
-        "id": "i2f4_pos7",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "i2f8_pos7",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "i2f4_zero",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "i2f4_neg7",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "i2f8_neg7",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "i2f4_neg7_size1",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "i2f4_neg9_size2",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "i2f4_neg7_size8",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "i2f8_neg1",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "i2f8_neg7_junk",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "i2f4_int32_min",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "i2f4_int32_max",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "i2f4_2p24p1",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "i2f8_int64_min",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "i2f8_int64_min1",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "i2f8_int64_max",
-        "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
-      },
-      {
-        "id": "f2f_4to8_onefive",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_4to8_neg1",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_4to8_negzero",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_4to8_nan",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_4to8_negnan",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_4to8_posinf",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_4to8_sub_min",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_4to8_sub_max",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_8to4_neg1",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_8to4_negthird",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_8to4_tie_even",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_8to4_above_tie",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_8to4_negtie",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_8to4_sub_out",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_8to4_too_small",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_8to4_dbl_max",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_8to4_negdbl_max",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_8to4_negnan",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_8to4_neginf",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "f2f_8to4_negzero",
-        "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
-      },
-      {
-        "id": "tr4_pos7_sz4",
-        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
-      },
-      {
-        "id": "tr4_neg7_sz4",
-        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
-      },
-      {
-        "id": "tr4_neg7_sz1",
-        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
-      },
-      {
-        "id": "tr8_frac_sz8",
-        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
-      },
-      {
-        "id": "tr8_neg300_sz2",
-        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
-      },
-      {
-        "id": "tr4_negzero_sz4",
-        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
-      },
-      {
-        "id": "tr4_denorm_sz1",
-        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
-      },
-      {
-        "id": "tr8_maxi64_sz4",
-        "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
-      },
-      {
-        "id": "tr4_max_sz4",
-        "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
-      },
-      {
-        "id": "tr4_max_sz8",
-        "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
-      },
-      {
-        "id": "tr4_negmax_sz4",
-        "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
-      },
-      {
-        "id": "tr8_1e300_sz8",
-        "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
-      },
-      {
-        "id": "tr8_1e300_sz2",
-        "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
-      },
-      {
-        "id": "tr8_2p63_sz8",
-        "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
-      },
-      {
-        "id": "tr4_nan_sz4",
-        "call": "opTrunc NaN/Inf tier: same integer-indefinite INT64_MIN semantics then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638)"
-      },
-      {
-        "id": "tr8_nan_sz8",
-        "call": "opTrunc NaN/Inf tier: same integer-indefinite INT64_MIN semantics then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638)"
-      },
-      {
-        "id": "tr8_nan_sz4",
-        "call": "opTrunc NaN/Inf tier: same integer-indefinite INT64_MIN semantics then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638)"
-      },
-      {
-        "id": "tr8_inf_sz8",
-        "call": "opTrunc NaN/Inf tier: same integer-indefinite INT64_MIN semantics then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638)"
-      },
-      {
-        "id": "tr8_neginf_sz4",
-        "call": "opTrunc NaN/Inf tier: same integer-indefinite INT64_MIN semantics then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638)"
-      }
-    ],
-    "sha256": "299b5a6d2f736069572dbd661c7cf87591493ebf8bec809a21608a9526d175fe"
-  },
-  "observation_schema": "One line per case. fields: decimal field dump. x*: res=0x%016llX (top-aligned fraction) or %d (sign/exponent). s*/z*/inf*/nan*/cf*/ge*/i2f*/f2f*: res=0x%016llX (cf* is the f64 bit pattern of the created double). esig*: cls/sgn decimal + signif 0x%016llX + exp decimal (sentinels preserved on early returns). rtne*: up decimal + signif after mutation. lz*: lz decimal + normalized signif + rebased exponent. gh*: cls decimal + f64 bit pattern of the host double. tr*: res=0x%016llX (opTrunc uintb result after the (intb) cast and calc_mask). Banner line first; 154 lines total.",
-  "decisive_semantics": {
-    "reference_output_parameters": "extractExpSig writes sgn/signif/exp through pointers — the zero/infinity/NaN early returns (float.cc:95-97) return BEFORE any write, proven by sentinel out-params surviving; roundToNearestEven mutates signif by reference including uintb wrap-around; getHostFloat writes the floatclass out-param on every path; setFractionalCode/setSign/setExponentCode take x BY VALUE and return the packed word (no in-place mutation, no masking of x — OR only). opTrunc writes the floatclass out-param through getHostFloat but ignores it afterward; calc_mask(sizeout) is applied by value to a local uintb.",
-    "loop_bounds_traversal_order": "No loops in the ported ladder; all order is statement order. getHostFloat declares sgn then frac (top-aligned extract) then exp, classifies exp==0 (frac==0 ? zero : denormalized) before exp==maxexponent (frac==0 ? infinity : nan) before normalized, then exp -= bias and the jbit room apply to every non-early-return path (normal flag gates only the jbit room). getEncoding: extractExpSig -> zero/infinity/nan encodings -> exp += bias -> exp < -frac_size zero -> exp < 1 denormal branch (RNE at 64-frac_size-exp, signif >> -exp) -> RNE at 64-frac_size-1 with wrap-carry rebalance -> exp >= maxexponent infinity -> jbitimplied <<1 cut -> 3-setter pack. createFloat: >>=1 then (double) then ldexp then sign. extractExpSig: signbit -> x==0.0 -> isinf -> isnan -> negate -> frexp -> ldexp(.,63) -> (uintb) -> <<1 -> e-=1. opTrunc is straight-line: getHostFloat -> (intb) cast -> (uintb) reinterpret -> &= calc_mask(sizeout) (float.cc:634-638).",
-    "counter_accumulator_lifecycle": "No accumulators. precis = 8*sizeof(uintb)-1 = 63 and expchange = exp - precis + 1 are per-call constants in createFloat; the extractExpSig exponent is rebased once (e -= 1) per call; roundToNearestEven's single signif += midbitmask either wraps (caller detects (signif>>63)==0 and sets signif = 1<<63, exp += 1) or does not; lz/exp in the subnormal normalize are per-input with exp = -formin->bias - lz. opTrunc has no accumulators.",
-    "sorting_comparison_keys": "No sort; all comparisons are exact integer thresholds copied verbatim: exp == 0, exp == maxexponent, frac == 0 (zero vs denormal / infinity vs nan); exp < -frac_size, exp < 1, exp >= maxexponent, exp != 0 (jbitimplied cut); roundToNearestEven tests (signif & midbitmask) != 0 && ((signif & epsmask) != 0 || odd) with lowbitmask == 0 when lowbitpos == 64. opTrunc's only comparison is implicit in the (intb) cast: on the x86-64 oracle host (g++ -O2, cvttsd2si) NaN/Inf/magnitude >= 2^63 yield the integer-indefinite INT64_MIN; calc_mask indexes uintbmasks[size < 8 ? size : 8] (address.hh:499, address.cc:631-634)."
-  },
-  "coverage": {
-    "fmt_fields_and_extractors": "MATCH",
-    "setters_or_semantics": "MATCH",
-    "special_encodings": "MATCH",
-    "createfloat_ldexp_saturation": "MATCH",
-    "extractexpsig_intermediates": "MATCH",
-    "rtne_direct_incl_wrap": "MATCH",
-    "subnormal_normalize_intermediate": "MATCH",
-    "hostfloat_denormal_ladder": "MATCH",
-    "getencoding_ladder_nan_canonical": "MATCH",
-    "int2float_36case_value_regression": "MATCH",
-    "trunc_integer_indefinite_mask": "MATCH"
-  },
-  "residual_todo_ids": [],
-  "comparand": {
-    "cpp_fixture_sha256": "8db6e3cecd015e94020e00f030a21e514c03a732e0dad3eca73fd759cfe91fa6",
-    "rust_fixture_sha256": "6c0ee6ea1beb01247b904ab6203a2153427c727387161df2115a30ba77150c26",
-    "float_emulate_rs_sha256": "e4737bc563f0dd44b9f96e34bf49e8cd158694f5a5e63a94cc76aced79837ed9",
-    "runner_sha256": "80031689848a52f2bbb87cbd071b0a5738a797eecde92c779da5527eb9640015",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "expected_ghidra_stdout_sha256": "2348667280e9fb5263420c0be33c651b1051071e87b633346b5736e2908453ad",
-    "expected_rugra_stdout_sha256": "2348667280e9fb5263420c0be33c651b1051071e87b633346b5736e2908453ad",
-    "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
-  },
-  "build": {
-    "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler; fixture links libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + whole-archive libdecomp.a (private->public access hack confined to the fixture translation unit)",
-    "expected_stdout_lines": 154
-  }
+ "schema_version": 2,
+ "fixture_id": "FLOAT-FMT-STRUCT-0001",
+ "projection_status": "MATCH",
+ "overall_status": "MATCH: (B2 canonicalization)",
+ "status_note": "Closes the FLOAT-FMT-STRUCT-0001 structural residual of FLOAT-OPINT2FLOAT-SIGN-0001: the oracle's host conversions run bit ladders, not host casts. Directly observed on both sides with same-input/same-output bit patterns: FloatFormat(4)/FloatFormat(8) field initialization incl. jbitimplied; the 64-bit TOP-ALIGNED fractional code convention (extractFractionalCode float.cc:113-119, setFractionalCode float.cc:144-153 with OR packing and no masking of x); setSign identity-when-false (float.cc:158-166); setExponentCode OR pack (float.cc:171-177); getZero/getInfinity/getNaNEncoding 3-setter structure with the quiet-NaN mask created top-aligned 1<<63 (float.cc:181-215); static createFloat incl. ldexp gradual underflow (2^-1074 exact, 2^-1075 ties-to-even flush, 1.5x tie keeps the even 2x) and overflow saturation (float.cc:67-80); static extractExpSig with sentinel out-params proving zero/infinity/NaN early returns never write signif/exp (float.cc:89-109); static roundToNearestEven incl. the uintb wrap-around carry and lowbitpos==64 zero lowbitmask (float.cc:276-288); the convertEncoding subnormal-normalize intermediate state via count_leading_zeros of the top-aligned signif with exp = -bias - lz (float.cc:368-376, address.cc:773); getHostFloat across all five floatclasses incl. the denormalized createFloat path (the pre-port implementation returned denormals scaled by 2^frac_size too large); getEncoding incl. RNE ties, denormalized outputs, and NaN payload canonicalization through getNaNEncoding (the pre-port bit-cast passed payloads through); and the full 36-case FLOAT-OPINT2FLOAT-SIGN-0001 replay proving the structural refactor changed no value behavior. Rugra binds the same host libm ldexp/frexp the oracle uses (float.cc:25-26) so the ladder's saturation semantics are bit-identical; a powi product cannot reproduce ldexp(2^11,-1085)==2^-1074. FLOAT-OPTRUNC-OOB-0001 extension: opTrunc (float.cc:631-640) is now observed across the (intb) cast range on both sides \u2014 the normal tier proves calc_mask(sizeout) keeps the two's-complement low bytes (e.g. -7.0f at sizeout 1 -> 0xF9, -300.0 at sizeout 2 -> 0xFED4, the largest double below 2^63 at sizeout 4 -> 0xFFFFFC00); the large out-of-range tier and the NaN/Inf tier prove the x86-64 oracle host compiles (intb) val to cvttsd2si, whose integer-indefinite INT64_MIN (0x8000000000000000) survives calc_mask(8) verbatim and masks to 0 for every sizeout < 8 (FLT_MAX/1e300/ 2^63 boundary/NaN/+Inf/-Inf). The pre-fix Rust saturated `as` cast (NaN -> 0, +overflow -> i64::MAX) and the missing sizeout mask diverged on these tiers; both are now fixed in op_trunc.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_base_commit": "d3a7353e8d2c0e8de95bad3f0887b219728b647a",
+ "rugra_source": {
+  "base_src_tree": "25fecf9375e3af5af0570246b840936d5d68f0a8",
+  "base_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "base_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "rust_overlay": "Archive Rugra base d3a7353e8d2c0e8de95bad3f0887b219728b647a (the FLOAT-FMT-STRUCT-0001 bit-ladder commit) and overlay only the owned src/float_emulate.rs candidate before the isolated offline build",
+  "base_commit": "d3a7353e8d2c0e8de95bad3f0887b219728b647a"
+ },
+ "architecture": {
+  "id": "synthetic-floatformat-fixture",
+  "endianness": "little",
+  "pointer_size": 8,
+  "spaces": "none; FloatFormat is constructed directly (public constructor) and the private statics/members are reached with the private->public translation-unit access hack (address_space_phase1/block_index_assign fixture precedent) \u2014 no Architecture, Translate, or spec loading on either side",
+  "type_factory": "none required"
+ },
+ "compiler_spec": {
+  "id": "fixture",
+  "prototype_xml": "none; pure FloatFormat bit manipulation with no Funcdata or calling convention",
+  "calling_convention": "none"
+ },
+ "analysis_options": {
+  "api": "Direct production FloatFormat calls on both sides (fields/extractors/setters/encodings/createFloat/extractExpSig/roundToNearestEven/getHostFloat/getEncoding/opInt2Float/opFloat2Float + count_leading_zeros); no PrintC, Action, or Rule pipeline",
+  "formats": "FloatFormat(4) and FloatFormat(8) constructed via the public default IEEE 754 settings constructor on both sides; identical to Translate::getFloatFormat defaults",
+  "normalization": "None. Results are full uintb/u64/i32/f64-bit values printed as 0x%016llX / %d; no ID, order, or state normalization (the extractExpSig sentinel out-params 0xAAAAAAAAAAAAAAAA / -559038737 are part of the observation)",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent",
+  "random_seed": "none; pure functions over explicit bit patterns",
+  "error_injection": "none; no examined function throws"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+  "cases": [
+   {
+    "id": "fields4",
+    "call": "FloatFormat(4) constructor field dump: size/signbit_pos/exp_pos/exp_size/frac_pos/frac_size/bias/maxexponent/jbitimplied (float.cc:36-61)"
+   },
+   {
+    "id": "fields8",
+    "call": "FloatFormat(8) constructor field dump: size/signbit_pos/exp_pos/exp_size/frac_pos/frac_size/bias/maxexponent/jbitimplied (float.cc:36-61)"
+   },
+   {
+    "id": "xfrac4_minfrac",
+    "call": "extractFractionalCode top-aligned read, fmt4 (float.cc:113-119)"
+   },
+   {
+    "id": "xfrac4_maxfrac",
+    "call": "extractFractionalCode top-aligned read, fmt4 (float.cc:113-119)"
+   },
+   {
+    "id": "xfrac4_3fc00001",
+    "call": "extractFractionalCode top-aligned read, fmt4 (float.cc:113-119)"
+   },
+   {
+    "id": "xfrac8_one_ulp",
+    "call": "extractFractionalCode top-aligned read, fmt8 (float.cc:113-119)"
+   },
+   {
+    "id": "xfrac8_maxsub",
+    "call": "extractFractionalCode top-aligned read, fmt8 (float.cc:113-119)"
+   },
+   {
+    "id": "xsign4_pos",
+    "call": "extractSign, fmt4 (float.cc:123-128)"
+   },
+   {
+    "id": "xsign4_neg",
+    "call": "extractSign, fmt4 (float.cc:123-128)"
+   },
+   {
+    "id": "xsign8_neg",
+    "call": "extractSign, fmt8 (float.cc:123-128)"
+   },
+   {
+    "id": "xexp4_onefive",
+    "call": "extractExponentCode masked read, fmt4 (float.cc:132-139)"
+   },
+   {
+    "id": "xexp4_inf",
+    "call": "extractExponentCode masked read, fmt4 (float.cc:132-139)"
+   },
+   {
+    "id": "xexp4_sub",
+    "call": "extractExponentCode masked read, fmt4 (float.cc:132-139)"
+   },
+   {
+    "id": "xexp8_max",
+    "call": "extractExponentCode masked read, fmt8 (float.cc:132-139)"
+   },
+   {
+    "id": "sfrac4_into_zero",
+    "call": "setFractionalCode top-aligned OR pack, fmt4 (float.cc:144-153)"
+   },
+   {
+    "id": "sfrac4_or_dirty",
+    "call": "setFractionalCode top-aligned OR pack, fmt4 (float.cc:144-153)"
+   },
+   {
+    "id": "sfrac8_into_zero",
+    "call": "setFractionalCode top-aligned OR pack, fmt8 (float.cc:144-153)"
+   },
+   {
+    "id": "sfrac8_or_dirty",
+    "call": "setFractionalCode top-aligned OR pack, fmt8 (float.cc:144-153)"
+   },
+   {
+    "id": "ssign4_set",
+    "call": "setSign set/identity semantics (float.cc:158-166)"
+   },
+   {
+    "id": "ssign4_identity",
+    "call": "setSign set/identity semantics (float.cc:158-166)"
+   },
+   {
+    "id": "sexp4_or",
+    "call": "setExponentCode OR pack, no masking (float.cc:171-177)"
+   },
+   {
+    "id": "sexp4_into_zero",
+    "call": "setExponentCode OR pack, no masking (float.cc:171-177)"
+   },
+   {
+    "id": "z4_pos",
+    "call": "getZeroEncoding via 3-setter structure, fmt4 (float.cc:181/193/205)"
+   },
+   {
+    "id": "z4_neg",
+    "call": "getZeroEncoding via 3-setter structure, fmt4 (float.cc:181/193/205)"
+   },
+   {
+    "id": "inf4_pos",
+    "call": "getInfinityEncoding via 3-setter structure, fmt4 (float.cc:181/193/205)"
+   },
+   {
+    "id": "inf4_neg",
+    "call": "getInfinityEncoding via 3-setter structure, fmt4 (float.cc:181/193/205)"
+   },
+   {
+    "id": "nan4_pos",
+    "call": "getNaNEncoding via 3-setter structure, fmt4 (float.cc:181/193/205)"
+   },
+   {
+    "id": "nan4_neg",
+    "call": "getNaNEncoding via 3-setter structure, fmt4 (float.cc:181/193/205)"
+   },
+   {
+    "id": "z8_pos",
+    "call": "getZeroEncoding via 3-setter structure, fmt8 (float.cc:181/193/205)"
+   },
+   {
+    "id": "z8_neg",
+    "call": "getZeroEncoding via 3-setter structure, fmt8 (float.cc:181/193/205)"
+   },
+   {
+    "id": "inf8_pos",
+    "call": "getInfinityEncoding via 3-setter structure, fmt8 (float.cc:181/193/205)"
+   },
+   {
+    "id": "inf8_neg",
+    "call": "getInfinityEncoding via 3-setter structure, fmt8 (float.cc:181/193/205)"
+   },
+   {
+    "id": "nan8_pos",
+    "call": "getNaNEncoding via 3-setter structure, fmt8 (float.cc:181/193/205)"
+   },
+   {
+    "id": "nan8_neg",
+    "call": "getNaNEncoding via 3-setter structure, fmt8 (float.cc:181/193/205)"
+   },
+   {
+    "id": "cf_pos7",
+    "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
+   },
+   {
+    "id": "cf_neg7",
+    "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
+   },
+   {
+    "id": "cf_onefive",
+    "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
+   },
+   {
+    "id": "cf_min_denorm",
+    "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
+   },
+   {
+    "id": "cf_half_below",
+    "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
+   },
+   {
+    "id": "cf_tie_even",
+    "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
+   },
+   {
+    "id": "cf_overflow",
+    "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
+   },
+   {
+    "id": "cf_neg_overflow",
+    "call": "static createFloat(sign, top-aligned signif, exp) incl. ldexp gradual underflow/overflow and RNE ties (float.cc:67-80)"
+   },
+   {
+    "id": "esig_7",
+    "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
+   },
+   {
+    "id": "esig_neg7",
+    "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
+   },
+   {
+    "id": "esig_half",
+    "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
+   },
+   {
+    "id": "esig_onefive",
+    "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
+   },
+   {
+    "id": "esig_min_denorm",
+    "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
+   },
+   {
+    "id": "esig_max_normal",
+    "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
+   },
+   {
+    "id": "esig_zero",
+    "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
+   },
+   {
+    "id": "esig_negzero",
+    "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
+   },
+   {
+    "id": "esig_inf",
+    "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
+   },
+   {
+    "id": "esig_neginf",
+    "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
+   },
+   {
+    "id": "esig_nan",
+    "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
+   },
+   {
+    "id": "esig_negnan",
+    "call": "static extractExpSig(x, &sgn, &signif, &exp) with sentinel out-params proving zero/inf/NaN early returns never write (float.cc:89-109)"
+   },
+   {
+    "id": "rtne_even_stay",
+    "call": "static roundToNearestEven(&signif, lowbitpos) direct drive incl. uintb wrap carry and lowbitpos==64 (float.cc:276-288)"
+   },
+   {
+    "id": "rtne_odd_carry",
+    "call": "static roundToNearestEven(&signif, lowbitpos) direct drive incl. uintb wrap carry and lowbitpos==64 (float.cc:276-288)"
+   },
+   {
+    "id": "rtne_eps_carry",
+    "call": "static roundToNearestEven(&signif, lowbitpos) direct drive incl. uintb wrap carry and lowbitpos==64 (float.cc:276-288)"
+   },
+   {
+    "id": "rtne_wrap",
+    "call": "static roundToNearestEven(&signif, lowbitpos) direct drive incl. uintb wrap carry and lowbitpos==64 (float.cc:276-288)"
+   },
+   {
+    "id": "rtne_lowbit64_wrap",
+    "call": "static roundToNearestEven(&signif, lowbitpos) direct drive incl. uintb wrap carry and lowbitpos==64 (float.cc:276-288)"
+   },
+   {
+    "id": "rtne_lowbit64_stay",
+    "call": "static roundToNearestEven(&signif, lowbitpos) direct drive incl. uintb wrap carry and lowbitpos==64 (float.cc:276-288)"
+   },
+   {
+    "id": "lz4_min",
+    "call": "convertEncoding subnormal-normalize intermediate: count_leading_zeros of top-aligned signif (address.cc:773), <<lz normalized signif, exp = -bias - lz (float.cc:368-376)"
+   },
+   {
+    "id": "lz4_two",
+    "call": "convertEncoding subnormal-normalize intermediate: count_leading_zeros of top-aligned signif (address.cc:773), <<lz normalized signif, exp = -bias - lz (float.cc:368-376)"
+   },
+   {
+    "id": "lz4_max",
+    "call": "convertEncoding subnormal-normalize intermediate: count_leading_zeros of top-aligned signif (address.cc:773), <<lz normalized signif, exp = -bias - lz (float.cc:368-376)"
+   },
+   {
+    "id": "lz4_zero",
+    "call": "convertEncoding subnormal-normalize intermediate: count_leading_zeros of top-aligned signif (address.cc:773), <<lz normalized signif, exp = -bias - lz (float.cc:368-376)"
+   },
+   {
+    "id": "gh4_onefive",
+    "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
+   },
+   {
+    "id": "gh4_neg7",
+    "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
+   },
+   {
+    "id": "gh4_denorm_min",
+    "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
+   },
+   {
+    "id": "gh4_denorm_max",
+    "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
+   },
+   {
+    "id": "gh4_zero_pos",
+    "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
+   },
+   {
+    "id": "gh4_zero_neg",
+    "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
+   },
+   {
+    "id": "gh4_inf_pos",
+    "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
+   },
+   {
+    "id": "gh4_inf_neg",
+    "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
+   },
+   {
+    "id": "gh4_nan_pos",
+    "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
+   },
+   {
+    "id": "gh4_nan_neg",
+    "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt4 (float.cc:228-268)"
+   },
+   {
+    "id": "gh8_one",
+    "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt8 (float.cc:228-268)"
+   },
+   {
+    "id": "gh8_denorm_min",
+    "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt8 (float.cc:228-268)"
+   },
+   {
+    "id": "gh8_denorm_max",
+    "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt8 (float.cc:228-268)"
+   },
+   {
+    "id": "gh8_zero_neg",
+    "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt8 (float.cc:228-268)"
+   },
+   {
+    "id": "gh8_nan_neg",
+    "call": "getHostFloat bit ladder incl. denormalized createFloat path, fmt8 (float.cc:228-268)"
+   },
+   {
+    "id": "ge4_pos7",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge4_neg7",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge4_tie_even",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge4_above_tie",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge4_min_denorm",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge4_half_denorm",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge4_tie_denorm",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge4_exp_zero",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge4_too_small",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge4_overflow",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge4_dbl_max",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge4_snan",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge4_negsnan",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge4_zero",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge4_negzero",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge4_inf",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt4 (float.cc:293-346)"
+   },
+   {
+    "id": "ge8_pi",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt8 (float.cc:293-346)"
+   },
+   {
+    "id": "ge8_neg7",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt8 (float.cc:293-346)"
+   },
+   {
+    "id": "ge8_min_denorm",
+    "call": "getEncoding extractExpSig+roundToNearestEven ladder incl. RNE ties, denormal outputs, NaN payload canonicalization, fmt8 (float.cc:293-346)"
+   },
+   {
+    "id": "i2f4_pos7",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "i2f8_pos7",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "i2f4_zero",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "i2f4_neg7",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "i2f8_neg7",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "i2f4_neg7_size1",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "i2f4_neg9_size2",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "i2f4_neg7_size8",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "i2f8_neg1",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "i2f8_neg7_junk",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "i2f4_int32_min",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "i2f4_int32_max",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "i2f4_2p24p1",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "i2f8_int64_min",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "i2f8_int64_min1",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "i2f8_int64_max",
+    "call": "opInt2Float value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:611-617)"
+   },
+   {
+    "id": "f2f_4to8_onefive",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_4to8_neg1",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_4to8_negzero",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_4to8_nan",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_4to8_negnan",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_4to8_posinf",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_4to8_sub_min",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_4to8_sub_max",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_8to4_neg1",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_8to4_negthird",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_8to4_tie_even",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_8to4_above_tie",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_8to4_negtie",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_8to4_sub_out",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_8to4_too_small",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_8to4_dbl_max",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_8to4_negdbl_max",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_8to4_negnan",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_8to4_neginf",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "f2f_8to4_negzero",
+    "call": "opFloat2Float convertEncoding value regression (FLOAT-OPINT2FLOAT-SIGN-0001 replay, float.cc:622-626/352-419)"
+   },
+   {
+    "id": "tr4_pos7_sz4",
+    "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+   },
+   {
+    "id": "tr4_neg7_sz4",
+    "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+   },
+   {
+    "id": "tr4_neg7_sz1",
+    "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+   },
+   {
+    "id": "tr8_frac_sz8",
+    "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+   },
+   {
+    "id": "tr8_neg300_sz2",
+    "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+   },
+   {
+    "id": "tr4_negzero_sz4",
+    "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+   },
+   {
+    "id": "tr4_denorm_sz1",
+    "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+   },
+   {
+    "id": "tr8_maxi64_sz4",
+    "call": "opTrunc normal-tier value regression incl. calc_mask(sizeout) low-byte truncation (FLOAT-OPTRUNC-OOB-0001, float.cc:631-640)"
+   },
+   {
+    "id": "tr4_max_sz4",
+    "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
+   },
+   {
+    "id": "tr4_max_sz8",
+    "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
+   },
+   {
+    "id": "tr4_negmax_sz4",
+    "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
+   },
+   {
+    "id": "tr8_1e300_sz8",
+    "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
+   },
+   {
+    "id": "tr8_1e300_sz2",
+    "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
+   },
+   {
+    "id": "tr8_2p63_sz8",
+    "call": "opTrunc large out-of-range tier: x86-64 cvttsd2si integer-indefinite INT64_MIN, then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638, address.hh:499)"
+   },
+   {
+    "id": "tr4_nan_sz4",
+    "call": "opTrunc NaN/Inf tier: same integer-indefinite INT64_MIN semantics then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638)"
+   },
+   {
+    "id": "tr8_nan_sz8",
+    "call": "opTrunc NaN/Inf tier: same integer-indefinite INT64_MIN semantics then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638)"
+   },
+   {
+    "id": "tr8_nan_sz4",
+    "call": "opTrunc NaN/Inf tier: same integer-indefinite INT64_MIN semantics then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638)"
+   },
+   {
+    "id": "tr8_inf_sz8",
+    "call": "opTrunc NaN/Inf tier: same integer-indefinite INT64_MIN semantics then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638)"
+   },
+   {
+    "id": "tr8_neginf_sz4",
+    "call": "opTrunc NaN/Inf tier: same integer-indefinite INT64_MIN semantics then calc_mask(sizeout) (FLOAT-OPTRUNC-OOB-0001, float.cc:636-638)"
+   }
+  ],
+  "sha256": "299b5a6d2f736069572dbd661c7cf87591493ebf8bec809a21608a9526d175fe"
+ },
+ "observation_schema": "One line per case. fields: decimal field dump. x*: res=0x%016llX (top-aligned fraction) or %d (sign/exponent). s*/z*/inf*/nan*/cf*/ge*/i2f*/f2f*: res=0x%016llX (cf* is the f64 bit pattern of the created double). esig*: cls/sgn decimal + signif 0x%016llX + exp decimal (sentinels preserved on early returns). rtne*: up decimal + signif after mutation. lz*: lz decimal + normalized signif + rebased exponent. gh*: cls decimal + f64 bit pattern of the host double. tr*: res=0x%016llX (opTrunc uintb result after the (intb) cast and calc_mask). Banner line first; 154 lines total.",
+ "decisive_semantics": {
+  "reference_output_parameters": "extractExpSig writes sgn/signif/exp through pointers \u2014 the zero/infinity/NaN early returns (float.cc:95-97) return BEFORE any write, proven by sentinel out-params surviving; roundToNearestEven mutates signif by reference including uintb wrap-around; getHostFloat writes the floatclass out-param on every path; setFractionalCode/setSign/setExponentCode take x BY VALUE and return the packed word (no in-place mutation, no masking of x \u2014 OR only). opTrunc writes the floatclass out-param through getHostFloat but ignores it afterward; calc_mask(sizeout) is applied by value to a local uintb.",
+  "loop_bounds_traversal_order": "No loops in the ported ladder; all order is statement order. getHostFloat declares sgn then frac (top-aligned extract) then exp, classifies exp==0 (frac==0 ? zero : denormalized) before exp==maxexponent (frac==0 ? infinity : nan) before normalized, then exp -= bias and the jbit room apply to every non-early-return path (normal flag gates only the jbit room). getEncoding: extractExpSig -> zero/infinity/nan encodings -> exp += bias -> exp < -frac_size zero -> exp < 1 denormal branch (RNE at 64-frac_size-exp, signif >> -exp) -> RNE at 64-frac_size-1 with wrap-carry rebalance -> exp >= maxexponent infinity -> jbitimplied <<1 cut -> 3-setter pack. createFloat: >>=1 then (double) then ldexp then sign. extractExpSig: signbit -> x==0.0 -> isinf -> isnan -> negate -> frexp -> ldexp(.,63) -> (uintb) -> <<1 -> e-=1. opTrunc is straight-line: getHostFloat -> (intb) cast -> (uintb) reinterpret -> &= calc_mask(sizeout) (float.cc:634-638).",
+  "counter_accumulator_lifecycle": "No accumulators. precis = 8*sizeof(uintb)-1 = 63 and expchange = exp - precis + 1 are per-call constants in createFloat; the extractExpSig exponent is rebased once (e -= 1) per call; roundToNearestEven's single signif += midbitmask either wraps (caller detects (signif>>63)==0 and sets signif = 1<<63, exp += 1) or does not; lz/exp in the subnormal normalize are per-input with exp = -formin->bias - lz. opTrunc has no accumulators.",
+  "sorting_comparison_keys": "No sort; all comparisons are exact integer thresholds copied verbatim: exp == 0, exp == maxexponent, frac == 0 (zero vs denormal / infinity vs nan); exp < -frac_size, exp < 1, exp >= maxexponent, exp != 0 (jbitimplied cut); roundToNearestEven tests (signif & midbitmask) != 0 && ((signif & epsmask) != 0 || odd) with lowbitmask == 0 when lowbitpos == 64. opTrunc's only comparison is implicit in the (intb) cast: on the x86-64 oracle host (g++ -O2, cvttsd2si) NaN/Inf/magnitude >= 2^63 yield the integer-indefinite INT64_MIN; calc_mask indexes uintbmasks[size < 8 ? size : 8] (address.hh:499, address.cc:631-634)."
+ },
+ "coverage": {
+  "fmt_fields_and_extractors": "MATCH",
+  "setters_or_semantics": "MATCH",
+  "special_encodings": "MATCH",
+  "createfloat_ldexp_saturation": "MATCH",
+  "extractexpsig_intermediates": "MATCH",
+  "rtne_direct_incl_wrap": "MATCH",
+  "subnormal_normalize_intermediate": "MATCH",
+  "hostfloat_denormal_ladder": "MATCH",
+  "getencoding_ladder_nan_canonical": "MATCH",
+  "int2float_36case_value_regression": "MATCH",
+  "trunc_integer_indefinite_mask": "MATCH"
+ },
+ "residual_todo_ids": [],
+ "comparand": {
+  "cpp_fixture_sha256": "8db6e3cecd015e94020e00f030a21e514c03a732e0dad3eca73fd759cfe91fa6",
+  "rust_fixture_sha256": "6c0ee6ea1beb01247b904ab6203a2153427c727387161df2115a30ba77150c26",
+  "float_emulate_rs_sha256": "e4737bc563f0dd44b9f96e34bf49e8cd158694f5a5e63a94cc76aced79837ed9",
+  "runner_sha256": "80031689848a52f2bbb87cbd071b0a5738a797eecde92c779da5527eb9640015",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "expected_ghidra_stdout_sha256": "2348667280e9fb5263420c0be33c651b1051071e87b633346b5736e2908453ad",
+  "expected_rugra_stdout_sha256": "2348667280e9fb5263420c0be33c651b1051071e87b633346b5736e2908453ad",
+  "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+ },
+ "build": {
+  "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler; fixture links libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + whole-archive libdecomp.a (private->public access hack confined to the fixture translation unit)",
+  "expected_stdout_lines": 154
+ }
 }

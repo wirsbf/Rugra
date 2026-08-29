@@ -175,5 +175,6 @@
   "stdout_sha256": "a1391a1d7117eac3e81b03f04b7b10df714f0ac891fa7936c8b7caded7d874c0",
   "note": "re-pinned after the reviewer rework probes (F1/F2/F3 records added)"
  },
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "input_sha256": "edb819cc1498d9931393bdfce935d2c29276da2599ec8fb919c5b547776af537"
 }

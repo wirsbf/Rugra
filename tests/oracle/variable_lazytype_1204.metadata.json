@@ -1,7 +1,7 @@
 {
  "schema": 2,
  "fixture_id": "VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001",
- "stable_function_id": "GH12-F-0f4c6b1e77c9a8d1e",
+ "stable_function_id": "GH12-F-aef408bd5a04dd091c3d",
  "stable_function": "ghidra::HighVariable::getType variable.hh:174 (lazy updateType trigger variable.cc:400-416; companions: isTypeLock variable.hh:222, typeDirty variable.hh:166, finalizeDatatype variable.cc:551-566, stripType variable.cc:302-320, setSymbol variable.cc:245-275)",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
@@ -11,7 +11,7 @@
  },
  "status_note": "Closes the VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001 residual of the varnode_highbranch_1204 fixture: HighVariable::get_type was a plain cached read; the lazy updateType re-derivation of variable.hh:174 now fires through the &self path via a TypeCell (RwLock<Arc<Datatype>>) lock domain standing in for Ghidra's mutable cache (variable.hh:141), with the transient typelock derivation for isTypeLock (variable.cc:413-415).",
  "covered_projection_status": "MATCH",
- "overall_status": "UNTESTED:  all four covered projections are byte-equal match against the locked oracle; two no_oracle residuals remain (raw-bit clear-by-gettype under the plain-u32 word; the unported Varnode::updateType high->typeDirty legs) and are registered as TODOs.",
+ "overall_status": "UNTESTED: all four covered projections are byte-equal match against the locked oracle; two no_oracle residuals remain (raw-bit clear-by-gettype under the plain-u32 word; the unported Varnode::updateType high->typeDirty legs) and are registered as TODOs.",
  "expected_exit_code": 0,
  "expected_stdout_sha256": "262b863f84e82bc50b4e681688c8f1f320ed6a3fe496c314bdb012f5b42f7212",
  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; xunknown{1,2,4,8} core types; fixture prototype extrapop=0",
@@ -46,7 +46,7 @@
   "type_infer_doc_sha256": "809d04aaa3bfaab3e5c7949f042a4c0939c7ae12244af7428c416cf71bcbe395",
   "coreaction_doc_sha256": "96a4ecc130a200f25f6aabac77385aada259a99c28acd55f4d492ca9e4fb0d97",
   "merge_doc_sha256": "15387e3d95284264662623c6dedcef338e171fadcc40d0b27d44408729b9a67b",
-  "runner_sha256": "2510f59d98aba959f2820ca5be90946b30e86654615bca180ecf58d1b1b6d2a3",
+  "runner_sha256": "63d55541cbbab7cb49f67fc459bfc680cfabee6e7dec39a5b124684db1b694de",
   "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
   "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
   "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",

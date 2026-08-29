@@ -1,345 +1,345 @@
 {
-  "schema_version": 2,
-  "fixture_id": "CONDEXE-TRUEOUT-0002",
-  "status_note": "The four targeted projections (helper polarity, init2a_true, camethruposta_slot, zero_path_is_true) are byte-identical MATCH over 22 records, but five condexe areas remain UNTESTED under CONDEXE-TRUEOUT-RESIDUAL-0001, so the fixture-level B2 status is UNTESTED.",
-  "decisive_semantics": {
-    "reference_output_parameters": "getTrueOut/getFalseOut are zero-argument positional accessors (block.hh:299-300); findInitPre writes the member init2a_true from one pointer comparison; discoverPathIsTrue writes the member zeroPathIsTrue; verify writes camethruposta_slot, posta_block and postb_block. No output parameters; fixture reads the members directly (#define private public on the Ghidra side, #[doc(hidden)] glue on the Rugra side).",
-    "loop_bounds_traversal_order": "findInitPre walks up two in-edge chains with while((sizeOut()==1)&&(sizeIn()==1)), updating last only on the prea chain; verify fixes prea_inslot=0 before the walk; discoverPathIsTrue has no loop (fixed if/else-if/else order); swapEdges fixes out slot 0 before slot 1.",
-    "counter_accumulator_lifecycle": "No counters; matchflip is a pure boolean composition (complementary XOR op_flip XOR iop_flip, expression.cc:224-230) applied exactly once to init2a_true in verifySameCondition (condexe.cc:93).",
-    "sorting_comparison_keys": "All decisions are pointer-equality comparisons against positional out[0]/out[1] targets; BOOLEAN_FLIP is never consulted by the getters (verified by the H2/F2/F4/Z2/Z4/Z6 flip-invariance records)."
-  },
-  "oracle": {
-    "project": "Ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source_files": [
-      "Ghidra/Features/Decompiler/src/decompile/cpp/block.hh",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/block.cc",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/condexe.cc",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/condexe.hh",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/expression.cc",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/heritage.cc"
-    ]
-  },
-  "rugra_source": {
-    "base_commit": "10dac8e1d237763855e7d8c68c1bb89dfedbd82b",
-    "base_tree": "f819bdcf35ca262ab8a896b33063e2993fee6f6b",
-    "base_src_tree": "d1153332bc3ae2f138c3a19e13f9721ed697f738",
-    "base_condexe_blob": "5cde46e8aa9a67d5c19e80566aeead7cbbda72db",
-    "base_block_blob": "10c0da4840eced04ed54701fe73c7bf355d0d738",
-    "base_double_precis_blob": "9d4ffe1a072d45accd3e7eb87e3d9942d43d054c",
-    "base_blockaction_blob": "76c7fd80219848d352c7ee156e2cbfa5a90ad221",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "archive_paths": [
-      "Cargo.toml",
-      "Cargo.lock",
-      "build.rs",
-      "README.md",
-      "benches/decompile_bench.rs",
-      "tests/oracle/decompress_1204.rs",
-      "tests/oracle/funcproto_lock_1204.rs",
-      "src",
-      "sleigh_shim"
-    ],
-    "overlays": [
-      {
-        "path": "src/condexe.rs",
-        "policy": "primary file under test; hash-verify before replacing the pinned base copy"
-      },
-      {
-        "path": "src/block.rs",
-        "policy": "getTrueOut/getFalseOut + swapEdges under test; hash-verify"
-      },
-      {
-        "path": "src/double_precis.rs",
-        "policy": "get_true_false consumer under test; hash-verify"
-      },
-      {
-        "path": "src/blockaction.rs",
-        "policy": "new_block_condition consumer under test; hash-verify"
-      }
-    ],
-    "archive_policy": "Immutable explicit dependency closure plus four hash-verified source overlays; unrelated worktree files are excluded"
-  },
-  "architecture": "fixture-synthetic (FixtureArchitecture, no loader)",
-  "compiler_spec": {
-    "id": "none (FixtureArchitecture built-in prototype model)"
-  },
-  "analysis_options": {
-    "apis": [
-      "FlowBlock::getTrueOut",
-      "FlowBlock::getFalseOut",
-      "FlowBlock::getOut",
-      "FlowBlock::getOutRevIndex",
-      "FlowBlock::getInRevIndex",
-      "BlockBasic::negateCondition",
-      "PcodeOp::flipFlag(PcodeOp::boolean_flip)",
-      "ConditionalExecution::findInitPre",
-      "ConditionalExecution::verify",
-      "MultiPredicate::discoverPathIsTrue"
-    ],
-    "funcdata": "One synthetic Funcdata over FixtureArchitecture; no followFlow, no Action pass; synthetic BlockBasic graph plus terminal CBRANCH / MULTIEQUAL ops per case; Heritage::buildInfoList precondition replicated (the real pipeline populates Heritage::infolist during the first heritage() pass, which buildHeritageArray reads)",
-    "case_matrix": "helper flip x2 + double negateCondition; findInitPre a2prea/a2preb x init_flip x2 + prea_inslot 1 + direct-edge + negative; verify (ib_flip, init_flip) 2x2 over a shared WRITTEN boolean varnode; discoverPathIsTrue zero-on-true/false/condBlock x flip",
-    "random_seed": "none",
-    "error_injection": "none",
-    "normalization": "Only block creation ordinals (bN) replace raw pointers; every boolean, slot and reverse index is byte-compared"
-  },
-  "input_manifest": {
-    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,cases}, sort_keys=True, separators=(',',':'))",
-    "sha256": "3ae7a88e0c1a81ecb75877ca0d6a05d71202a684757d1bda78297228886daf5b",
-    "cases": [
-      {
-        "id": "H1",
-        "family": "helper"
-      },
-      {
-        "id": "H2",
-        "family": "helper"
-      },
-      {
-        "id": "H3",
-        "family": "helper_neg"
-      },
-      {
-        "id": "H4",
-        "family": "helper_neg"
-      },
-      {
-        "id": "F1",
-        "family": "findinit"
-      },
-      {
-        "id": "F2",
-        "family": "findinit"
-      },
-      {
-        "id": "F3",
-        "family": "findinit"
-      },
-      {
-        "id": "F4",
-        "family": "findinit"
-      },
-      {
-        "id": "F5",
-        "family": "findinit"
-      },
-      {
-        "id": "F6",
-        "family": "findinit"
-      },
-      {
-        "id": "F7",
-        "family": "findinit"
-      },
-      {
-        "id": "V1",
-        "family": "verify"
-      },
-      {
-        "id": "V2",
-        "family": "verify"
-      },
-      {
-        "id": "V3",
-        "family": "verify"
-      },
-      {
-        "id": "V4",
-        "family": "verify"
-      },
-      {
-        "id": "Z1",
-        "family": "zeropath"
-      },
-      {
-        "id": "Z2",
-        "family": "zeropath"
-      },
-      {
-        "id": "Z3",
-        "family": "zeropath"
-      },
-      {
-        "id": "Z4",
-        "family": "zeropath"
-      },
-      {
-        "id": "Z5",
-        "family": "zeropath"
-      },
-      {
-        "id": "Z6",
-        "family": "zeropath"
-      },
-      {
-        "id": "Z7",
-        "family": "zeropath"
-      }
-    ]
-  },
-  "observation_schema": {
-    "format": "22 fixed-order pipe-delimited UTF-8 records with final newline",
-    "record_order": [
-      "H1",
-      "H2",
-      "H3",
-      "H4",
-      "F1",
-      "F2",
-      "F3",
-      "F4",
-      "F5",
-      "F6",
-      "F7",
-      "V1",
-      "V2",
-      "V3",
-      "V4",
-      "Z1",
-      "Z2",
-      "Z3",
-      "Z4",
-      "Z5",
-      "Z6",
-      "Z7"
-    ],
-    "helper_projection": "getTrueOut/getFalseOut/getOut(0)/getOut(1) targets by creation ordinal, out-edge reverse indices, target in-edge reverse indices, flip bit; before and after negateCondition",
-    "findinit_projection": "ok and init2a_true booleans (init2a_true omitted on failure: Ghidra leaves it unassigned when findInitPre returns false and the real pipeline never reads it there)",
-    "verify_projection": "ok, init2a_true, camethruposta_slot, posta/postb ordinals over the (ib_flip, init_flip) matrix",
-    "zeropath_projection": "zero_path_is_true boolean for the three discovery branches under both flips",
-    "preserved": "No boolean, slot, ordinal-order, reverse-index or flip field is normalized; only raw pointers are replaced by creation ordinals"
-  },
-  "build": {
-    "oracle_archive": "Exact locked Ghidra commit archive and locked Makefile libdecomp.a",
-    "supplemental_source_units": [
-      "libdecomp.cc",
-      "sleigh_arch.cc",
-      "inject_sleigh.cc"
-    ],
-    "cxx_flags": [
-      "-std=c++11",
-      "-O2",
-      "-Wall",
-      "-Wno-sign-compare"
-    ],
-    "access_leverage": "#define private public + #define class struct (ConditionalExecution and the nested MultiPredicate use the implicit class-private section)",
-    "rust_build": "Cargo --locked --offline in isolated target, then rustc with the librugra_sleigh native link"
-  },
-  "comparand": {
-    "cpp_fixture_sha256": "068dc2933c4f5e7f1d362410214619f2409f71c1a15ff80e02dddfc453fadf11",
-    "rust_fixture_sha256": "c7430c23b66951304119caff24a413ffa4442266ba88c7eccd890516190499f6",
-    "condexe_overlay_sha256": "1c5e7c4341e7e911b61f0c0726ab14cc2754ab6d9e0914526542f27ad5987a22",
-    "block_overlay_sha256": "b70d0e9b5ee07ae5f982cde8f4246bd7b85dcb3069a971c35ae5bf4b321aff82",
-    "double_precis_overlay_sha256": "48c71587eb22e8cc652e65a725d5601c911a5a23d1d3a30d4d064a5b71ed295e",
-    "blockaction_overlay_sha256": "5b149fab0291bb6ef4c57768a5fc072f2c515b0af872a26c1765c8582c8e97b1",
-    "runner_sha256": "02bbf2b7825f029210df4755218f4819659e311db031c01171a6252b47511541"
-  },
-  "expected_results": {
-    "ghidra_stdout_sha256": "44f6e9da1abec8d18171c54b7b806ffa3945a57f6da3f668098dd86451d9f57f",
-    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "44f6e9da1abec8d18171c54b7b806ffa3945a57f6da3f668098dd86451d9f57f",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "diff_exit_code": 0
-  },
-  "coverage": {
-    "trueout_helper_positional": {
-      "status": "MATCH",
-      "covers": "H1-H4: getTrueOut=out[1]/getFalseOut=out[0] invariant under flip 0/1, negateCondition edge swap and the swapEdges reverse-index fixup (block.cc:218-233/2351)",
-      "residual_todo_ids": []
-    },
-    "findinit_init2a_true": {
-      "status": "MATCH",
-      "covers": "F1-F7: findInitPre (condexe.cc:55-75) positional init2a_true for both chain shapes, both init flips, prea_inslot 1, direct-edge shape, and the negative meet-different-blocks rejection",
-      "residual_todo_ids": []
-    },
-    "verify_camethruposta_slot": {
-      "status": "MATCH",
-      "covers": "V1-V4: verify (condexe.cc:402-428) composes ib_flip XOR init_flip exactly once into init2a_true (expression.cc:224-230, condexe.cc:93) and derives camethruposta_slot/posta/postb",
-      "residual_todo_ids": []
-    },
-    "zeropath_is_true": {
-      "status": "MATCH",
-      "covers": "Z1-Z7: discoverPathIsTrue (condexe.cc:572-582) three branches under both CBRANCH flips (positional getters ignore flip; the flip is consumed once in discoverConditionalZero, outside this fixture)",
-      "residual_todo_ids": []
-    },
-    "execute_and_flow_split": {
-      "status": "UNTESTED",
-      "covers": "ConditionalExecution::execute / doReplacement / removeFromFlowSplit are not exercised (defect F, CONDEXE-CFG-0001)",
-      "residual_todo_ids": [
-        "CONDEXE-TRUEOUT-RESIDUAL-0001"
-      ]
-    },
-    "heritage_gating": {
-      "status": "UNTESTED",
-      "covers": "buildHeritageArray per-space heritageyes semantics and testRemovability gating are not exercised (CONDEXE-HERITAGE-0004); the fixture only replicates the Heritage::buildInfoList precondition",
-      "residual_todo_ids": [
-        "CONDEXE-TRUEOUT-RESIDUAL-0001"
-      ]
-    },
-    "pullback_storage": {
-      "status": "UNTESTED",
-      "covers": "pullbackOp newVarnodeOut storage / opInsertEnd placement are not exercised (CONDEXE-PULLBACK-0005)",
-      "residual_todo_ids": [
-        "CONDEXE-TRUEOUT-RESIDUAL-0001"
-      ]
-    },
-    "error_channels": {
-      "status": "UNTESTED",
-      "covers": "LowlevelError paths (illegal iblock op, missing dominator, non-empty block split) are not exercised (CONDEXE-ERROR-0006)",
-      "residual_todo_ids": [
-        "CONDEXE-TRUEOUT-RESIDUAL-0001"
-      ]
-    },
-    "orpredicate_applyop_end_to_end": {
-      "status": "UNTESTED",
-      "covers": "RuleOrPredicate::applyOp end-to-end rewrite and discoverConditionalZero flip consumption are not exercised (CONDEXE-FIXTURE-0007)",
-      "residual_todo_ids": [
-        "CONDEXE-TRUEOUT-RESIDUAL-0001"
-      ]
-    }
-  },
-  "projection_status": "MATCH",
-  "residual_todo_ids": [
-    "CONDEXE-TRUEOUT-RESIDUAL-0001"
+ "schema_version": 2,
+ "fixture_id": "CONDEXE-TRUEOUT-0002",
+ "status_note": "The four targeted projections (helper polarity, init2a_true, camethruposta_slot, zero_path_is_true) are byte-identical MATCH over 22 records, but five condexe areas remain UNTESTED under CONDEXE-TRUEOUT-RESIDUAL-0001, so the fixture-level B2 status is UNTESTED.",
+ "decisive_semantics": {
+  "reference_output_parameters": "getTrueOut/getFalseOut are zero-argument positional accessors (block.hh:299-300); findInitPre writes the member init2a_true from one pointer comparison; discoverPathIsTrue writes the member zeroPathIsTrue; verify writes camethruposta_slot, posta_block and postb_block. No output parameters; fixture reads the members directly (#define private public on the Ghidra side, #[doc(hidden)] glue on the Rugra side).",
+  "loop_bounds_traversal_order": "findInitPre walks up two in-edge chains with while((sizeOut()==1)&&(sizeIn()==1)), updating last only on the prea chain; verify fixes prea_inslot=0 before the walk; discoverPathIsTrue has no loop (fixed if/else-if/else order); swapEdges fixes out slot 0 before slot 1.",
+  "counter_accumulator_lifecycle": "No counters; matchflip is a pure boolean composition (complementary XOR op_flip XOR iop_flip, expression.cc:224-230) applied exactly once to init2a_true in verifySameCondition (condexe.cc:93).",
+  "sorting_comparison_keys": "All decisions are pointer-equality comparisons against positional out[0]/out[1] targets; BOOLEAN_FLIP is never consulted by the getters (verified by the H2/F2/F4/Z2/Z4/Z6 flip-invariance records)."
+ },
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source_files": [
+   "Ghidra/Features/Decompiler/src/decompile/cpp/block.hh",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/block.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/condexe.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/condexe.hh",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/expression.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/heritage.cc"
+  ]
+ },
+ "rugra_source": {
+  "base_commit": "10dac8e1d237763855e7d8c68c1bb89dfedbd82b",
+  "base_tree": "f819bdcf35ca262ab8a896b33063e2993fee6f6b",
+  "base_src_tree": "d1153332bc3ae2f138c3a19e13f9721ed697f738",
+  "base_condexe_blob": "5cde46e8aa9a67d5c19e80566aeead7cbbda72db",
+  "base_block_blob": "10c0da4840eced04ed54701fe73c7bf355d0d738",
+  "base_double_precis_blob": "9d4ffe1a072d45accd3e7eb87e3d9942d43d054c",
+  "base_blockaction_blob": "76c7fd80219848d352c7ee156e2cbfa5a90ad221",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "archive_paths": [
+   "Cargo.toml",
+   "Cargo.lock",
+   "build.rs",
+   "README.md",
+   "benches/decompile_bench.rs",
+   "tests/oracle/decompress_1204.rs",
+   "tests/oracle/funcproto_lock_1204.rs",
+   "src",
+   "sleigh_shim"
   ],
-  "residual_union": {
-    "todo_id": "CONDEXE-TRUEOUT-RESIDUAL-0001",
-    "status": "UNTESTED",
-    "branches": [
-      {
-        "id": "execute_and_flow_split",
-        "status": "UNTESTED",
-        "detail": "execute/doReplacement/removeFromFlowSplit need CONDEXE-CFG-0001's corrected swap sequence before they can be projected"
-      },
-      {
-        "id": "heritage_gating",
-        "status": "UNTESTED",
-        "detail": "per-space heritageyes gating (buildHeritageArray) is stubbed in Rugra until CONDEXE-HERITAGE-0004"
-      },
-      {
-        "id": "pullback_storage",
-        "status": "UNTESTED",
-        "detail": "pullbackOp output storage and insertion position differ from cc:181-187 until CONDEXE-PULLBACK-0005"
-      },
-      {
-        "id": "error_channels",
-        "status": "UNTESTED",
-        "detail": "LowlevelError propagation through the resolve chain until CONDEXE-ERROR-0006"
-      },
-      {
-        "id": "orpredicate_applyop_end_to_end",
-        "status": "UNTESTED",
-        "detail": "full RuleOrPredicate applyOp corpus until CONDEXE-FIXTURE-0007"
-      }
-    ]
+  "overlays": [
+   {
+    "path": "src/condexe.rs",
+    "policy": "primary file under test; hash-verify before replacing the pinned base copy"
+   },
+   {
+    "path": "src/block.rs",
+    "policy": "getTrueOut/getFalseOut + swapEdges under test; hash-verify"
+   },
+   {
+    "path": "src/double_precis.rs",
+    "policy": "get_true_false consumer under test; hash-verify"
+   },
+   {
+    "path": "src/blockaction.rs",
+    "policy": "new_block_condition consumer under test; hash-verify"
+   }
+  ],
+  "archive_policy": "Immutable explicit dependency closure plus four hash-verified source overlays; unrelated worktree files are excluded"
+ },
+ "architecture": "fixture-synthetic (FixtureArchitecture, no loader)",
+ "compiler_spec": {
+  "id": "none (FixtureArchitecture built-in prototype model)"
+ },
+ "analysis_options": {
+  "apis": [
+   "FlowBlock::getTrueOut",
+   "FlowBlock::getFalseOut",
+   "FlowBlock::getOut",
+   "FlowBlock::getOutRevIndex",
+   "FlowBlock::getInRevIndex",
+   "BlockBasic::negateCondition",
+   "PcodeOp::flipFlag(PcodeOp::boolean_flip)",
+   "ConditionalExecution::findInitPre",
+   "ConditionalExecution::verify",
+   "MultiPredicate::discoverPathIsTrue"
+  ],
+  "funcdata": "One synthetic Funcdata over FixtureArchitecture; no followFlow, no Action pass; synthetic BlockBasic graph plus terminal CBRANCH / MULTIEQUAL ops per case; Heritage::buildInfoList precondition replicated (the real pipeline populates Heritage::infolist during the first heritage() pass, which buildHeritageArray reads)",
+  "case_matrix": "helper flip x2 + double negateCondition; findInitPre a2prea/a2preb x init_flip x2 + prea_inslot 1 + direct-edge + negative; verify (ib_flip, init_flip) 2x2 over a shared WRITTEN boolean varnode; discoverPathIsTrue zero-on-true/false/condBlock x flip",
+  "random_seed": "none",
+  "error_injection": "none",
+  "normalization": "Only block creation ordinals (bN) replace raw pointers; every boolean, slot and reverse index is byte-compared"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,cases}, sort_keys=True, separators=(',',':'))",
+  "sha256": "3ae7a88e0c1a81ecb75877ca0d6a05d71202a684757d1bda78297228886daf5b",
+  "cases": [
+   {
+    "id": "H1",
+    "family": "helper"
+   },
+   {
+    "id": "H2",
+    "family": "helper"
+   },
+   {
+    "id": "H3",
+    "family": "helper_neg"
+   },
+   {
+    "id": "H4",
+    "family": "helper_neg"
+   },
+   {
+    "id": "F1",
+    "family": "findinit"
+   },
+   {
+    "id": "F2",
+    "family": "findinit"
+   },
+   {
+    "id": "F3",
+    "family": "findinit"
+   },
+   {
+    "id": "F4",
+    "family": "findinit"
+   },
+   {
+    "id": "F5",
+    "family": "findinit"
+   },
+   {
+    "id": "F6",
+    "family": "findinit"
+   },
+   {
+    "id": "F7",
+    "family": "findinit"
+   },
+   {
+    "id": "V1",
+    "family": "verify"
+   },
+   {
+    "id": "V2",
+    "family": "verify"
+   },
+   {
+    "id": "V3",
+    "family": "verify"
+   },
+   {
+    "id": "V4",
+    "family": "verify"
+   },
+   {
+    "id": "Z1",
+    "family": "zeropath"
+   },
+   {
+    "id": "Z2",
+    "family": "zeropath"
+   },
+   {
+    "id": "Z3",
+    "family": "zeropath"
+   },
+   {
+    "id": "Z4",
+    "family": "zeropath"
+   },
+   {
+    "id": "Z5",
+    "family": "zeropath"
+   },
+   {
+    "id": "Z6",
+    "family": "zeropath"
+   },
+   {
+    "id": "Z7",
+    "family": "zeropath"
+   }
+  ]
+ },
+ "observation_schema": {
+  "format": "22 fixed-order pipe-delimited UTF-8 records with final newline",
+  "record_order": [
+   "H1",
+   "H2",
+   "H3",
+   "H4",
+   "F1",
+   "F2",
+   "F3",
+   "F4",
+   "F5",
+   "F6",
+   "F7",
+   "V1",
+   "V2",
+   "V3",
+   "V4",
+   "Z1",
+   "Z2",
+   "Z3",
+   "Z4",
+   "Z5",
+   "Z6",
+   "Z7"
+  ],
+  "helper_projection": "getTrueOut/getFalseOut/getOut(0)/getOut(1) targets by creation ordinal, out-edge reverse indices, target in-edge reverse indices, flip bit; before and after negateCondition",
+  "findinit_projection": "ok and init2a_true booleans (init2a_true omitted on failure: Ghidra leaves it unassigned when findInitPre returns false and the real pipeline never reads it there)",
+  "verify_projection": "ok, init2a_true, camethruposta_slot, posta/postb ordinals over the (ib_flip, init_flip) matrix",
+  "zeropath_projection": "zero_path_is_true boolean for the three discovery branches under both flips",
+  "preserved": "No boolean, slot, ordinal-order, reverse-index or flip field is normalized; only raw pointers are replaced by creation ordinals"
+ },
+ "build": {
+  "oracle_archive": "Exact locked Ghidra commit archive and locked Makefile libdecomp.a",
+  "supplemental_source_units": [
+   "libdecomp.cc",
+   "sleigh_arch.cc",
+   "inject_sleigh.cc"
+  ],
+  "cxx_flags": [
+   "-std=c++11",
+   "-O2",
+   "-Wall",
+   "-Wno-sign-compare"
+  ],
+  "access_leverage": "#define private public + #define class struct (ConditionalExecution and the nested MultiPredicate use the implicit class-private section)",
+  "rust_build": "Cargo --locked --offline in isolated target, then rustc with the librugra_sleigh native link"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "068dc2933c4f5e7f1d362410214619f2409f71c1a15ff80e02dddfc453fadf11",
+  "rust_fixture_sha256": "c7430c23b66951304119caff24a413ffa4442266ba88c7eccd890516190499f6",
+  "condexe_overlay_sha256": "1c5e7c4341e7e911b61f0c0726ab14cc2754ab6d9e0914526542f27ad5987a22",
+  "block_overlay_sha256": "b70d0e9b5ee07ae5f982cde8f4246bd7b85dcb3069a971c35ae5bf4b321aff82",
+  "double_precis_overlay_sha256": "48c71587eb22e8cc652e65a725d5601c911a5a23d1d3a30d4d064a5b71ed295e",
+  "blockaction_overlay_sha256": "5b149fab0291bb6ef4c57768a5fc072f2c515b0af872a26c1765c8582c8e97b1",
+  "runner_sha256": "02bbf2b7825f029210df4755218f4819659e311db031c01171a6252b47511541"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "44f6e9da1abec8d18171c54b7b806ffa3945a57f6da3f668098dd86451d9f57f",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "44f6e9da1abec8d18171c54b7b806ffa3945a57f6da3f668098dd86451d9f57f",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0
+ },
+ "coverage": {
+  "trueout_helper_positional": {
+   "status": "MATCH",
+   "covers": "H1-H4: getTrueOut=out[1]/getFalseOut=out[0] invariant under flip 0/1, negateCondition edge swap and the swapEdges reverse-index fixup (block.cc:218-233/2351)",
+   "residual_todo_ids": []
   },
-  "overall_status": "UNTESTED"
+  "findinit_init2a_true": {
+   "status": "MATCH",
+   "covers": "F1-F7: findInitPre (condexe.cc:55-75) positional init2a_true for both chain shapes, both init flips, prea_inslot 1, direct-edge shape, and the negative meet-different-blocks rejection",
+   "residual_todo_ids": []
+  },
+  "verify_camethruposta_slot": {
+   "status": "MATCH",
+   "covers": "V1-V4: verify (condexe.cc:402-428) composes ib_flip XOR init_flip exactly once into init2a_true (expression.cc:224-230, condexe.cc:93) and derives camethruposta_slot/posta/postb",
+   "residual_todo_ids": []
+  },
+  "zeropath_is_true": {
+   "status": "MATCH",
+   "covers": "Z1-Z7: discoverPathIsTrue (condexe.cc:572-582) three branches under both CBRANCH flips (positional getters ignore flip; the flip is consumed once in discoverConditionalZero, outside this fixture)",
+   "residual_todo_ids": []
+  },
+  "execute_and_flow_split": {
+   "status": "UNTESTED",
+   "covers": "ConditionalExecution::execute / doReplacement / removeFromFlowSplit are not exercised (defect F, CONDEXE-CFG-0001)",
+   "residual_todo_ids": [
+    "CONDEXE-TRUEOUT-RESIDUAL-0001"
+   ]
+  },
+  "heritage_gating": {
+   "status": "UNTESTED",
+   "covers": "buildHeritageArray per-space heritageyes semantics and testRemovability gating are not exercised (CONDEXE-HERITAGE-0004); the fixture only replicates the Heritage::buildInfoList precondition",
+   "residual_todo_ids": [
+    "CONDEXE-TRUEOUT-RESIDUAL-0001"
+   ]
+  },
+  "pullback_storage": {
+   "status": "UNTESTED",
+   "covers": "pullbackOp newVarnodeOut storage / opInsertEnd placement are not exercised (CONDEXE-PULLBACK-0005)",
+   "residual_todo_ids": [
+    "CONDEXE-TRUEOUT-RESIDUAL-0001"
+   ]
+  },
+  "error_channels": {
+   "status": "UNTESTED",
+   "covers": "LowlevelError paths (illegal iblock op, missing dominator, non-empty block split) are not exercised (CONDEXE-ERROR-0006)",
+   "residual_todo_ids": [
+    "CONDEXE-TRUEOUT-RESIDUAL-0001"
+   ]
+  },
+  "orpredicate_applyop_end_to_end": {
+   "status": "UNTESTED",
+   "covers": "RuleOrPredicate::applyOp end-to-end rewrite and discoverConditionalZero flip consumption are not exercised (CONDEXE-FIXTURE-0007)",
+   "residual_todo_ids": [
+    "CONDEXE-TRUEOUT-RESIDUAL-0001"
+   ]
+  }
+ },
+ "projection_status": "MATCH",
+ "residual_todo_ids": [
+  "CONDEXE-TRUEOUT-RESIDUAL-0001"
+ ],
+ "residual_union": {
+  "todo_id": "CONDEXE-TRUEOUT-RESIDUAL-0001",
+  "status": "UNTESTED",
+  "branches": [
+   {
+    "id": "execute_and_flow_split",
+    "status": "UNTESTED",
+    "detail": "execute/doReplacement/removeFromFlowSplit need CONDEXE-CFG-0001's corrected swap sequence before they can be projected"
+   },
+   {
+    "id": "heritage_gating",
+    "status": "UNTESTED",
+    "detail": "per-space heritageyes gating (buildHeritageArray) is stubbed in Rugra until CONDEXE-HERITAGE-0004"
+   },
+   {
+    "id": "pullback_storage",
+    "status": "UNTESTED",
+    "detail": "pullbackOp output storage and insertion position differ from cc:181-187 until CONDEXE-PULLBACK-0005"
+   },
+   {
+    "id": "error_channels",
+    "status": "UNTESTED",
+    "detail": "LowlevelError propagation through the resolve chain until CONDEXE-ERROR-0006"
+   },
+   {
+    "id": "orpredicate_applyop_end_to_end",
+    "status": "UNTESTED",
+    "detail": "full RuleOrPredicate applyOp corpus until CONDEXE-FIXTURE-0007"
+   }
+  ]
+ },
+ "overall_status": "UNTESTED: (B2 canonicalization)"
 }

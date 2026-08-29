@@ -11,7 +11,7 @@
   "GH12-F-1c7e2d100750ac446e34 ghidra::Cover::addRefPoint cover.cc:565",
   "GH12-F-9b81a59531050a2a040d ghidra::Cover::addDefPoint cover.cc:501"
  ],
- "overall_status": "MATCH: all thirteen cases (eight CoverBlock unit-level construct/merge/contain/boundary/intersect quadrants plus five production rebuild/merge paths) byte-match the locked oracle, including the two-piece wrap state itself (empty==0 on ustop<ustart), the disjoint/internal4 merge wrap productions, the wrap fall-through recursion of addRefPoint (cover.cc:584-599), the pointer-level boundary discriminators (begin sentinel vs input marker), the precise old-stop MULTIEQUAL-tip discrimination of addRefPoint/addRefRecurse, and a production Cover::merge one-piece+two-piece union; remaining residuals are the INDIRECT getOpFromConst target-order fallback and production FlowBlock index assignment, both outside this fixture's write-set",
+ "overall_status": "MISMATCH: all thirteen cases (eight CoverBlock unit-level construct/merge/contain/boundary/intersect quadrants plus five production rebuild/merge paths) byte-match the locked oracle, including the two-piece wrap state itself (empty==0 on ustop<ustart), the disjoint/internal4 merge wrap productions, the wrap fall-through recursion of addRefPoint (cover.cc:584-599), the pointer-level boundary discriminators (begin sentinel vs input marker), the precise old-stop MULTIEQUAL-tip discrimination of addRefPoint/addRefRecurse, and a production Cover::merge one-piece+two-piece union; remaining residuals are the INDIRECT getOpFromConst target-order fallback and production FlowBlock index assignment, both outside this fixture's write-set",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",

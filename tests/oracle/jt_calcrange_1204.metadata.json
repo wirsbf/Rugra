@@ -1,129 +1,129 @@
 {
-  "schema_version": 2,
-  "fixture_id": "JT-CALCRANGE-1204",
-  "status_note": "calcRange/markFoldableGuards/markModel differential fixture for JUMPTABLE-CALCRANGE-0001. Rugra side pinned as base commit f6fd4ea plus the working-tree src/jumptable.rs overlay recorded in comparand.jumptable_overlay_sha256; update that sha (and expected_results) whenever src/jumptable.rs changes. All three scenarios project MATCH with zero residual diffs, so the residuals list is empty (the runner allows an empty residuals list exactly when every coverage entry is MATCH and known_diffs is empty). Coverage limitation to keep in mind: sc2's constant-input guard intersection is an identity intersection (single(1) cap {1}), so the empty-result behavior of the removed constant early-return is not discriminated until CircleRange::intersect gains the oracle's disjoint/wrap handling (RANGE-0001, rangeutil.rs owner); signed-comparison guards stay covered by JT-GUARDS-1204 and were deliberately kept out of this fixture to avoid the RANGE-PULLBACK-SLESS-0001 dependency.",
-  "decisive_semantics": {
-    "reference_output_parameters": "calcRange(Varnode*,CircleRange&) takes rng by reference and writes the initial range, every guard intersection and the positive truncation back into it (no early return for constants); markModel(bool) mutates PcodeOp mark flags via setMark/clearMark and consults getBranch() before getReadOp(); markFoldableGuards clear()s in place (nulls cbranch only, keeps readOp/vn/range).",
-    "loop_bounds_traversal_order": "calcRange iterates selectguards in push order (per CBRANCH: boolean guard first, then one guard per pullBack level); findSmallestNormal walks common varnodes 0..numCommonVarnode-1 with the maxsize==matchsize early return; analyzeGuards walk-back traverses i=0..maxbranch-1 consuming pathout once.",
-    "counter_accumulator_lifecycle": "stride starts at 1 and is only updated by the getMaxValue/getStride else-branch (constant and isBoolOutput varnodes keep stride 1 into the positive truncation); the positive truncation fires once when rng.getSize() > 0x10000 and keeps the previous range when the intersected positive range is empty.",
-    "sorting_comparison_keys": "guard applicability is ordered by valueMatch's early returns: vn pointer identity -> bitsPreserved equality plus baseVn pointer identity -> oneOffMatch opcode/in(0)/matching_constants -> LOAD equivalence; markModel skip is keyed on getBranch()==null."
+ "schema_version": 2,
+ "fixture_id": "JT-CALCRANGE-1204",
+ "status_note": "calcRange/markFoldableGuards/markModel differential fixture for JUMPTABLE-CALCRANGE-0001. Rugra side pinned as base commit f6fd4ea plus the working-tree src/jumptable.rs overlay recorded in comparand.jumptable_overlay_sha256; update that sha (and expected_results) whenever src/jumptable.rs changes. All three scenarios project MATCH with zero residual diffs, so the residuals list is empty (the runner allows an empty residuals list exactly when every coverage entry is MATCH and known_diffs is empty). Coverage limitation to keep in mind: sc2's constant-input guard intersection is an identity intersection (single(1) cap {1}), so the empty-result behavior of the removed constant early-return is not discriminated until CircleRange::intersect gains the oracle's disjoint/wrap handling (RANGE-0001, rangeutil.rs owner); signed-comparison guards stay covered by JT-GUARDS-1204 and were deliberately kept out of this fixture to avoid the RANGE-PULLBACK-SLESS-0001 dependency.",
+ "decisive_semantics": {
+  "reference_output_parameters": "calcRange(Varnode*,CircleRange&) takes rng by reference and writes the initial range, every guard intersection and the positive truncation back into it (no early return for constants); markModel(bool) mutates PcodeOp mark flags via setMark/clearMark and consults getBranch() before getReadOp(); markFoldableGuards clear()s in place (nulls cbranch only, keeps readOp/vn/range).",
+  "loop_bounds_traversal_order": "calcRange iterates selectguards in push order (per CBRANCH: boolean guard first, then one guard per pullBack level); findSmallestNormal walks common varnodes 0..numCommonVarnode-1 with the maxsize==matchsize early return; analyzeGuards walk-back traverses i=0..maxbranch-1 consuming pathout once.",
+  "counter_accumulator_lifecycle": "stride starts at 1 and is only updated by the getMaxValue/getStride else-branch (constant and isBoolOutput varnodes keep stride 1 into the positive truncation); the positive truncation fires once when rng.getSize() > 0x10000 and keeps the previous range when the intersected positive range is empty.",
+  "sorting_comparison_keys": "guard applicability is ordered by valueMatch's early returns: vn pointer identity -> bitsPreserved equality plus baseVn pointer identity -> oneOffMatch opcode/in(0)/matching_constants -> LOAD equivalence; markModel skip is keyed on getBranch()==null."
+ },
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc"
+ },
+ "analysis_options": {
+  "default": true
+ },
+ "rugra_source": {
+  "base_commit": "f6fd4ea9bcac9309433a98afb1e7a98776b6edf0",
+  "base_tree": "fc5743cdbf7913faf7df486efc6d187351492eda",
+  "base_src_tree": "2d192788d1fa667255f4fad8d12f377d5b50fa88",
+  "base_jumptable_blob": "b921fd5371eca15af0d2950e3494a1037bc60931",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "4b7fdc55866bd5b8ebc58a45fa78c61a12e1a7ae32de751ad3e40fd4e99268be",
+  "rust_fixture_sha256": "e4c01e7325970056c5a2f69b82018969fcaed34b27a5fa08f6a438a46c7d8b26",
+  "jumptable_overlay_sha256": "3ebf680c41a7a0a844fe1547250291234c45b27a71f41ecd1ad512f44dc1d8e9",
+  "runner_sha256": "495bd35297bdfef26db6bcf650ed5997112cf5dde586fd19fedecf9f907051c8"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
   },
-  "architecture": "x86:LE:64:default",
   "compiler_spec": {
-    "id": "gcc"
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
   },
-  "analysis_options": {
-    "default": true
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
   },
-  "rugra_source": {
-    "base_commit": "f6fd4ea9bcac9309433a98afb1e7a98776b6edf0",
-    "base_tree": "fc5743cdbf7913faf7df486efc6d187351492eda",
-    "base_src_tree": "2d192788d1fa667255f4fad8d12f377d5b50fa88",
-    "base_jumptable_blob": "b921fd5371eca15af0d2950e3494a1037bc60931",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544
   },
-  "comparand": {
-    "cpp_fixture_sha256": "4b7fdc55866bd5b8ebc58a45fa78c61a12e1a7ae32de751ad3e40fd4e99268be",
-    "rust_fixture_sha256": "e4c01e7325970056c5a2f69b82018969fcaed34b27a5fa08f6a438a46c7d8b26",
-    "jumptable_overlay_sha256": "3ebf680c41a7a0a844fe1547250291234c45b27a71f41ecd1ad512f44dc1d8e9",
-    "runner_sha256": "495bd35297bdfef26db6bcf650ed5997112cf5dde586fd19fedecf9f907051c8"
+  "bfd": {
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  }
+ },
+ "input_manifest": {
+  "binary": {
+   "path": "examples/curl",
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544
   },
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-      "size": 11721
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-      "size": 12182
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-      "size": 5390
-    },
-    "binary": {
-      "path": "examples/curl",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544
-    },
-    "bfd": {
-      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-    }
+  "functions": [
+   "GetStr"
+  ],
+  "cases": [
+   "sc1_range_guard",
+   "sc2_constant_input",
+   "sc3_markmodel_skip"
+  ],
+  "sha256": "370c9a285e23cd1777382b60d5b4c6f13f82a05cf0da73e79ea2d90d472ad3b3"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "3c8a1967bcd9667d63b7e5ca20f8e2149139b61a7f794db77285cf171b7cdef3",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "3c8a1967bcd9667d63b7e5ca20f8e2149139b61a7f794db77285cf171b7cdef3",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0
+ },
+ "coverage": {
+  "sc1_range_guard": {
+   "status": "MATCH",
+   "covers": "Two chained unsigned range guards (x<8, x<10) over the BRANCHIND input: recoverModel -> findDeterminingVarnodes/analyzeGuards/findSmallestNormal/markFoldableGuards; guard intersection written back into the range (cr_x=[0,8), both guard ranges applied in push order); isBoolOutput branch (cr_b0/cr_b1=[1,2) from CircleRange(0,2,1,1) intersected with the boolean guard {1}); positive truncation on a guard-free input (cr_u=[0,0x80000000)); jrange size 8 with startVn/startOp.",
+   "residual_todo_ids": []
   },
-  "input_manifest": {
-    "binary": {
-      "path": "examples/curl",
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544
-    },
-    "functions": [
-      "GetStr"
-    ],
-    "cases": [
-      "sc1_range_guard",
-      "sc2_constant_input",
-      "sc3_markmodel_skip"
-    ],
-    "sha256": "370c9a285e23cd1777382b60d5b4c6f13f82a05cf0da73e79ea2d90d472ad3b3"
+  "sc2_constant_input": {
+   "status": "MATCH",
+   "covers": "Constant varnode as CBRANCH boolean: the constant guard record (vn==k1, valueMatch 1 via pointer identity) is intersected into single(1) instead of early-returning (identity result here; the disjoint/empty discrimination needs the full CircleRange::intersect port, RANGE-0001); a 4-byte constant with no matching guard keeps its single range and skips the positive truncation (size 1).",
+   "residual_todo_ids": []
   },
-  "expected_results": {
-    "ghidra_stdout_sha256": "3c8a1967bcd9667d63b7e5ca20f8e2149139b61a7f794db77285cf171b7cdef3",
-    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "3c8a1967bcd9667d63b7e5ca20f8e2149139b61a7f794db77285cf171b7cdef3",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "diff_exit_code": 0
-  },
-  "coverage": {
-    "sc1_range_guard": {
-      "status": "MATCH",
-      "covers": "Two chained unsigned range guards (x<8, x<10) over the BRANCHIND input: recoverModel -> findDeterminingVarnodes/analyzeGuards/findSmallestNormal/markFoldableGuards; guard intersection written back into the range (cr_x=[0,8), both guard ranges applied in push order); isBoolOutput branch (cr_b0/cr_b1=[1,2) from CircleRange(0,2,1,1) intersected with the boolean guard {1}); positive truncation on a guard-free input (cr_u=[0,0x80000000)); jrange size 8 with startVn/startOp.",
-      "residual_todo_ids": []
-    },
-    "sc2_constant_input": {
-      "status": "MATCH",
-      "covers": "Constant varnode as CBRANCH boolean: the constant guard record (vn==k1, valueMatch 1 via pointer identity) is intersected into single(1) instead of early-returning (identity result here; the disjoint/empty discrimination needs the full CircleRange::intersect port, RANGE-0001); a 4-byte constant with no matching guard keeps its single range and skips the positive truncation (size 1).",
-      "residual_todo_ids": []
-    },
-    "sc3_markmodel_skip": {
-      "status": "MATCH",
-      "covers": "markModel skip semantics after markFoldableGuards: the two valueMatch==0 boolean guards are cleared (getBranch()==null) and their readOps (B.cb/E.cb) must stay unmarked, while pathMeld ops (S.bi) and surviving guards' readOps (B.cmp2/E.cmp1) are marked; markModel(false) clears every mark again.",
-      "residual_todo_ids": []
-    }
-  },
-  "known_diffs": [],
-  "residuals": [],
-  "projection_status": "MATCH",
-  "overall_status": "MATCH"
+  "sc3_markmodel_skip": {
+   "status": "MATCH",
+   "covers": "markModel skip semantics after markFoldableGuards: the two valueMatch==0 boolean guards are cleared (getBranch()==null) and their readOps (B.cb/E.cb) must stay unmarked, while pathMeld ops (S.bi) and surviving guards' readOps (B.cmp2/E.cmp1) are marked; markModel(false) clears every mark again.",
+   "residual_todo_ids": []
+  }
+ },
+ "known_diffs": [],
+ "residuals": [],
+ "projection_status": "MATCH",
+ "overall_status": "MATCH: (B2 canonicalization)"
 }

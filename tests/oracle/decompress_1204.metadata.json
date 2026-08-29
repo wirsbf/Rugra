@@ -12,5 +12,7 @@
  "cpp_fixture_sha256": "9dc74277645c62cef5781e896b3a795a43a7e80fa80c1d85ceee252fff61f847",
  "rust_fixture_sha256": "7eca5ca75a1dc23a9a72d02ae542852a4ed3c79656a3dbf6bd966ae864747c80",
  "expected_stdout_sha256": "f4ecf1ff6a0e6d64d09375c8562c2be9db8dc38b0164545b5c09d5d044732855",
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "fixture_id": "DECOMPRESS-1204-1204",
+ "input_sha256": "665e5ba84a32b753abaa996adcdced81b6e798242531d3468b82e115365641c3"
 }

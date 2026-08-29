@@ -1,127 +1,127 @@
 {
-  "schema_version": 1,
-  "fixture_id": "PRINTC-PTRCONST-DAT-SYMBOL-0001",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "printc_cc_blob": "dfdc6b4bed7226110f0696c85e31a1f12d066b2d",
-    "printlanguage_cc_blob": "79642ef234ffa59fa4a9b03b9b7ea57e3948982d",
-    "database_cc_blob": "c6529baea5667369341b52113283ae9ae9eea8c0"
-  },
-  "rugra_baseline": {
-    "commit": "11371d512e9b374ec73d5a7e7181e6ed52eba296",
-    "tree": "98b69134e94126a652858d19d6da339d294bbac1",
-    "printc_rs_blob": "2c664422614089f21dc74d6444c220ce2e650266"
-  },
-  "architecture": "synthetic little-endian 64-bit model (FixtureTranslate): ram index 3 default code+data space, constant/unique/register/stack/join/iop spaces, contextual AddressResolver registered on ram",
-  "compiler_spec": "N/A: printer-level fixture drives pushConstant/opPtrsub directly with one empty prototype model",
-  "analysis_options": {
-    "string_manager": "the DECLARED GhidraStringManager/Java contract (same subclass shape as tests/oracle/stringmanager_core_1204.cc): detection charset-valid + NUL-terminated with NO 2048 search bound, return truncated at 2048 chars by assignStringData with isTruncated; cache keyed by full Address with entry allocation before the read (negative cache); the native StringManagerUnicode 2048-byte search clamp is NOT exercised here (locked by the stringmanager_core fixture)",
-    "readonly_map": "Database flagbase Varnode::readonly over ram [0x2000,0x21ff], [0x2300,0x23ff], [0x2400,0x2fff]; 0x2200 writable",
-    "dat_symbol": "Symbol DAT_00002100 (char) at ram:0x2100; the PTRSUB offset constant carries it as a HighVariable symbol reference at offset 0 (variable.cc:283-289, the ActionMapGlobals constant-address form)",
-    "loader_regions": [
-      "ram:[0x2000,0x20ff] 'alpha\\0' zero-padded to 0x100",
-      "ram:[0x2100,0x21ff] 'b 0xAD 00' zero-padded to 0x100",
-      "ram:[0x2200,0x22ff] 'writable\\0' zero-padded to 0x100",
-      "ram:[0x2300,0x23ff] 'prefix\\0' zero-padded to 0x100",
-      "ram:[0x2400,0x2fff] 2050 'A' + NUL, zero-padded to 0xc00 (the >2048 truncation case)"
-    ],
-    "attempt_counting": "fixture loader counts loadFill attempts per start offset"
-  },
-  "input": "ordered PrintC::pushConstant records on one shared attempt-counting loadimage and one Architecture-owned Java-contract StringManager (maximumChars=2048): (char*)0x2000 valid ascii twice, (char*)0x2100 invalid 0xAD twice, (char*)0x2400 2050-char truncation once, (char*)0x2200 non-readonly once, (char*)0x0 null once, (char*)0x2303 substring once, (char*)0x40 resolved by consuming-op context at usepoints 0x5000/0x5008, PTRSUB(global spacebase, const 0x2100) with DAT symbol reference at offset 0 and without a symbol, then per-offset loader attempt counts for 0x2000/0x2100/0x2200/0x2303/0x2400",
-  "input_fingerprint": "sha256:d9d2952f3347a1b5216e220a0429cafc293d4a692494b188c2260a6dfa6451d6",
-  "cases": [
-    {
-      "id": "c1_c2_valid_ascii_positive",
-      "status": "MATCH",
-      "covers": "pushConstant TYPE_PTR -> subtype isCharPrint -> pushPtrCharConstant (printc.cc:1698-1719): resolveConstant in the default data space, global-scope isReadOnly, printCharacterConstant -> \\\"alpha\\\"; the repeat query is served from the cache (reads.2000==1)"
-    },
-    {
-      "id": "c3_c4_invalid_0xad_negative_cache",
-      "status": "MATCH",
-      "covers": "0xAD fails getCodepoint (stringmanage.cc:390-391) -> empty buffer -> printCharacterConstant false (printc.cc:1542-1543) -> default cast (char *)0x2100; the repeat query performs zero further reads (reads.2100==1) \u2014 the hugehelp 0x7180/0x99a8/0xc1d8 print-side rule"
-    },
-    {
-      "id": "c5_trunc_literal",
-      "status": "MATCH",
-      "covers": "2050-char string: detection unbounded (Java contract), return truncated at 2048 chars with isTruncated -> the full 2048-char literal followed by ...\\\" /* TRUNCATED STRING LITERAL */ (printc.cc:1548-1549); byte-identical 2098-char record"
-    },
-    {
-      "id": "c6_nonreadonly",
-      "status": "MATCH",
-      "covers": "writable ram address fails Scope::isReadOnly (printc.cc:1709-1710 via database.cc:1796-1801) -> default cast (char *)0x2200; the manager is never queried (reads.2200==0)"
-    },
-    {
-      "id": "c7_null",
-      "status": "MATCH",
-      "covers": "option_NULL=false and val==0: pushPtrCharConstant rejects at printc.cc:1701 -> default cast (char *)0x0"
-    },
-    {
-      "id": "c8_substring",
-      "status": "MATCH",
-      "covers": "pointer into the middle of a string: resolved address 0x2303 yields \\\"fix\\\" (manager keyed by exact Address)"
-    },
-    {
-      "id": "c9_c10_contextual_resolution",
-      "status": "MATCH",
-      "covers": "value 0x40 resolved through the registered AddressResolver by the consuming op's address (translate.cc:628-641): usepoint 0x5000 -> 0x2000 -> \\\"alpha\\\", usepoint 0x5008 -> 0x2303 -> \\\"fix\\\"; both served from existing cache entries (no new reads)"
-    },
-    {
-      "id": "c11_c12_ptrsub_spacebase_dat_symbol",
-      "status": "MATCH",
-      "covers": "the &DAT_* form (printc.cc:1057-1097): PTRSUB off the global spacebase, in(1) HighVariable symbol reference at offset 0 -> &DAT_00002100; without a symbol -> TypeSpacebase::getAddress + pushUnnamedLocation -> &ram0x00002100 (AddrSpace::printRaw zero-padded 2*sz form, space.cc:206-218)"
-    },
-    {
-      "id": "deterministic_order",
-      "status": "MATCH",
-      "covers": "runner executes each side twice and compares the complete ordered stdout byte-for-byte before the bilateral comparison"
-    }
+ "schema_version": 1,
+ "fixture_id": "PRINTC-PTRCONST-DAT-SYMBOL-0001",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "printc_cc_blob": "dfdc6b4bed7226110f0696c85e31a1f12d066b2d",
+  "printlanguage_cc_blob": "79642ef234ffa59fa4a9b03b9b7ea57e3948982d",
+  "database_cc_blob": "c6529baea5667369341b52113283ae9ae9eea8c0"
+ },
+ "rugra_baseline": {
+  "commit": "11371d512e9b374ec73d5a7e7181e6ed52eba296",
+  "tree": "98b69134e94126a652858d19d6da339d294bbac1",
+  "printc_rs_blob": "2c664422614089f21dc74d6444c220ce2e650266"
+ },
+ "architecture": "synthetic little-endian 64-bit model (FixtureTranslate): ram index 3 default code+data space, constant/unique/register/stack/join/iop spaces, contextual AddressResolver registered on ram",
+ "compiler_spec": "N/A: printer-level fixture drives pushConstant/opPtrsub directly with one empty prototype model",
+ "analysis_options": {
+  "string_manager": "the DECLARED GhidraStringManager/Java contract (same subclass shape as tests/oracle/stringmanager_core_1204.cc): detection charset-valid + NUL-terminated with NO 2048 search bound, return truncated at 2048 chars by assignStringData with isTruncated; cache keyed by full Address with entry allocation before the read (negative cache); the native StringManagerUnicode 2048-byte search clamp is NOT exercised here (locked by the stringmanager_core fixture)",
+  "readonly_map": "Database flagbase Varnode::readonly over ram [0x2000,0x21ff], [0x2300,0x23ff], [0x2400,0x2fff]; 0x2200 writable",
+  "dat_symbol": "Symbol DAT_00002100 (char) at ram:0x2100; the PTRSUB offset constant carries it as a HighVariable symbol reference at offset 0 (variable.cc:283-289, the ActionMapGlobals constant-address form)",
+  "loader_regions": [
+   "ram:[0x2000,0x20ff] 'alpha\\0' zero-padded to 0x100",
+   "ram:[0x2100,0x21ff] 'b 0xAD 00' zero-padded to 0x100",
+   "ram:[0x2200,0x22ff] 'writable\\0' zero-padded to 0x100",
+   "ram:[0x2300,0x23ff] 'prefix\\0' zero-padded to 0x100",
+   "ram:[0x2400,0x2fff] 2050 'A' + NUL, zero-padded to 0xc00 (the >2048 truncation case)"
   ],
-  "covered_projection": {
-    "status": "MATCH",
-    "records": 19,
-    "observation": "14 rendered expression records + 5 per-offset loader attempt counts",
-    "comparison": "both sides run twice for determinism, then complete stdout is compared byte-for-byte"
+  "attempt_counting": "fixture loader counts loadFill attempts per start offset"
+ },
+ "input": "ordered PrintC::pushConstant records on one shared attempt-counting loadimage and one Architecture-owned Java-contract StringManager (maximumChars=2048): (char*)0x2000 valid ascii twice, (char*)0x2100 invalid 0xAD twice, (char*)0x2400 2050-char truncation once, (char*)0x2200 non-readonly once, (char*)0x0 null once, (char*)0x2303 substring once, (char*)0x40 resolved by consuming-op context at usepoints 0x5000/0x5008, PTRSUB(global spacebase, const 0x2100) with DAT symbol reference at offset 0 and without a symbol, then per-offset loader attempt counts for 0x2000/0x2100/0x2200/0x2303/0x2400",
+ "input_fingerprint": "sha256:d9d2952f3347a1b5216e220a0429cafc293d4a692494b188c2260a6dfa6451d6",
+ "cases": [
+  {
+   "id": "c1_c2_valid_ascii_positive",
+   "status": "MATCH",
+   "covers": "pushConstant TYPE_PTR -> subtype isCharPrint -> pushPtrCharConstant (printc.cc:1698-1719): resolveConstant in the default data space, global-scope isReadOnly, printCharacterConstant -> \\\"alpha\\\"; the repeat query is served from the cache (reads.2000==1)"
   },
-  "residuals": {
-    "production_call_site_wiring": {
-      "status": "MISSING",
-      "todo_id": "TYPEOP-LOCALTYPE-DISPATCH-0001",
-      "related_todo_ids": [
-        "PRINTC-PTRCONST-DAT-SYMBOL-0001"
-      ],
-      "detail": "push_constant_typed has no production callers yet (the legacy direct-emit and RPN leaf paths still render constants through make_atom_for_vn/typed_constant_literal); wiring those call sites and retiring the driver string_table is D3 \u2014 E2E curl output is unchanged by this slice"
-    },
-    "push_ptr_code_constant": {
-      "status": "UNTESTED",
-      "todo_id": "PRINTC-PTRCONST-DAT-SYMBOL-0001",
-      "detail": "the ptr-to-code arm (printc.cc:1786-1788 -> 1730-1742) is ported (global-scope queryFunction + display-name atom) but has no fixture case; add one when a Funcdata-bearing symbol snapshot lands"
-    },
-    "wide_char_L_prefix": {
-      "status": "UNTESTED",
-      "todo_id": "PRINTC-PTRCONST-DAT-SYMBOL-0001",
-      "detail": "the L-prefix (printc.cc:1543-1545, charsize>1 non-opaque) and CALLOTHER display_string entry (printc.cc:701-714) are ported but not fixture-covered; add wchar2/wchar4 cases when a typed-constant consumer exists"
-    },
-    "m4_promote_size_accessor": {
-      "status": "RESOLVED",
-      "todo_id": "PRINTC-PTRCONST-DAT-SYMBOL-0001",
-      "detail": "resolved 2026-08-25 (agent/cast-promotesize): CastStrategyC gained get_promote_size() (src/type_system/cast.rs, Rust visibility glue for the protected cast.hh:57 promoteSize field) and printc.rs is_extension_cast_implied now routes the cast.cc:284 comparison through it instead of the literal 4; behavior identical on every locked corpus (x86/x64 int == 4). This fixture does not exercise is_extension_cast_implied (it was never covered here); the accessor is pinned by type_system::cast::tests::test_get_promote_size_matches_constructor"
-    },
-    "address_form": {
-      "status": "MISMATCH",
-      "todo_id": "ADDRESS-0001",
-      "detail": "resolved string addresses are ram-space on the C++ side and spaceless legacy Address::new on the Rust side (transitional single-space discipline, same key form as the rule-side consumer); printc.cc:1708 isInvalid arm is vacuous in Rust"
-    }
+  {
+   "id": "c3_c4_invalid_0xad_negative_cache",
+   "status": "MATCH",
+   "covers": "0xAD fails getCodepoint (stringmanage.cc:390-391) -> empty buffer -> printCharacterConstant false (printc.cc:1542-1543) -> default cast (char *)0x2100; the repeat query performs zero further reads (reads.2100==1) \u2014 the hugehelp 0x7180/0x99a8/0xc1d8 print-side rule"
   },
-  "host_compiler": "g++ (GCC) 16.2.1 20260810",
-  "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-  "printc_rs_sha256": "81163278fcc80dc55314b290f6ec83467327aec988ac9017af18ce02ccb76f9b",
-  "cpp_fixture_sha256": "07ac7dc8f11e6d38fc6fc74cbaa8df346b93dbc6cc1074b0cb2e28d7acaaaf20",
-  "rust_fixture_sha256": "d833f4babc0ee6db10b24d93a61d2c8d3d1775567a294e66f49ed4dc75b49723",
-  "expected_stdout_sha256": "315a09017e63b8e506e07cee9bb05ddd3f93e7ee06485bad06dc624923a93585",
-  "ghidra_expected_stdout_sha256": "315a09017e63b8e506e07cee9bb05ddd3f93e7ee06485bad06dc624923a93585",
-  "rugra_expected_stdout_sha256": "315a09017e63b8e506e07cee9bb05ddd3f93e7ee06485bad06dc624923a93585",
-  "overall_status": "MATCH"
+  {
+   "id": "c5_trunc_literal",
+   "status": "MATCH",
+   "covers": "2050-char string: detection unbounded (Java contract), return truncated at 2048 chars with isTruncated -> the full 2048-char literal followed by ...\\\" /* TRUNCATED STRING LITERAL */ (printc.cc:1548-1549); byte-identical 2098-char record"
+  },
+  {
+   "id": "c6_nonreadonly",
+   "status": "MATCH",
+   "covers": "writable ram address fails Scope::isReadOnly (printc.cc:1709-1710 via database.cc:1796-1801) -> default cast (char *)0x2200; the manager is never queried (reads.2200==0)"
+  },
+  {
+   "id": "c7_null",
+   "status": "MATCH",
+   "covers": "option_NULL=false and val==0: pushPtrCharConstant rejects at printc.cc:1701 -> default cast (char *)0x0"
+  },
+  {
+   "id": "c8_substring",
+   "status": "MATCH",
+   "covers": "pointer into the middle of a string: resolved address 0x2303 yields \\\"fix\\\" (manager keyed by exact Address)"
+  },
+  {
+   "id": "c9_c10_contextual_resolution",
+   "status": "MATCH",
+   "covers": "value 0x40 resolved through the registered AddressResolver by the consuming op's address (translate.cc:628-641): usepoint 0x5000 -> 0x2000 -> \\\"alpha\\\", usepoint 0x5008 -> 0x2303 -> \\\"fix\\\"; both served from existing cache entries (no new reads)"
+  },
+  {
+   "id": "c11_c12_ptrsub_spacebase_dat_symbol",
+   "status": "MATCH",
+   "covers": "the &DAT_* form (printc.cc:1057-1097): PTRSUB off the global spacebase, in(1) HighVariable symbol reference at offset 0 -> &DAT_00002100; without a symbol -> TypeSpacebase::getAddress + pushUnnamedLocation -> &ram0x00002100 (AddrSpace::printRaw zero-padded 2*sz form, space.cc:206-218)"
+  },
+  {
+   "id": "deterministic_order",
+   "status": "MATCH",
+   "covers": "runner executes each side twice and compares the complete ordered stdout byte-for-byte before the bilateral comparison"
+  }
+ ],
+ "covered_projection": {
+  "status": "MATCH",
+  "records": 19,
+  "observation": "14 rendered expression records + 5 per-offset loader attempt counts",
+  "comparison": "both sides run twice for determinism, then complete stdout is compared byte-for-byte"
+ },
+ "residuals": {
+  "production_call_site_wiring": {
+   "status": "MISSING",
+   "todo_id": "TYPEOP-LOCALTYPE-DISPATCH-0001",
+   "related_todo_ids": [
+    "PRINTC-PTRCONST-DAT-SYMBOL-0001"
+   ],
+   "detail": "push_constant_typed has no production callers yet (the legacy direct-emit and RPN leaf paths still render constants through make_atom_for_vn/typed_constant_literal); wiring those call sites and retiring the driver string_table is D3 \u2014 E2E curl output is unchanged by this slice"
+  },
+  "push_ptr_code_constant": {
+   "status": "UNTESTED",
+   "todo_id": "PRINTC-PTRCONST-DAT-SYMBOL-0001",
+   "detail": "the ptr-to-code arm (printc.cc:1786-1788 -> 1730-1742) is ported (global-scope queryFunction + display-name atom) but has no fixture case; add one when a Funcdata-bearing symbol snapshot lands"
+  },
+  "wide_char_L_prefix": {
+   "status": "UNTESTED",
+   "todo_id": "PRINTC-PTRCONST-DAT-SYMBOL-0001",
+   "detail": "the L-prefix (printc.cc:1543-1545, charsize>1 non-opaque) and CALLOTHER display_string entry (printc.cc:701-714) are ported but not fixture-covered; add wchar2/wchar4 cases when a typed-constant consumer exists"
+  },
+  "m4_promote_size_accessor": {
+   "status": "RESOLVED",
+   "todo_id": "PRINTC-PTRCONST-DAT-SYMBOL-0001",
+   "detail": "resolved 2026-08-25 (agent/cast-promotesize): CastStrategyC gained get_promote_size() (src/type_system/cast.rs, Rust visibility glue for the protected cast.hh:57 promoteSize field) and printc.rs is_extension_cast_implied now routes the cast.cc:284 comparison through it instead of the literal 4; behavior identical on every locked corpus (x86/x64 int == 4). This fixture does not exercise is_extension_cast_implied (it was never covered here); the accessor is pinned by type_system::cast::tests::test_get_promote_size_matches_constructor"
+  },
+  "address_form": {
+   "status": "MISMATCH",
+   "todo_id": "ADDRESS-0001",
+   "detail": "resolved string addresses are ram-space on the C++ side and spaceless legacy Address::new on the Rust side (transitional single-space discipline, same key form as the rule-side consumer); printc.cc:1708 isInvalid arm is vacuous in Rust"
+  }
+ },
+ "host_compiler": "g++ (GCC) 16.2.1 20260810",
+ "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+ "printc_rs_sha256": "81163278fcc80dc55314b290f6ec83467327aec988ac9017af18ce02ccb76f9b",
+ "cpp_fixture_sha256": "07ac7dc8f11e6d38fc6fc74cbaa8df346b93dbc6cc1074b0cb2e28d7acaaaf20",
+ "rust_fixture_sha256": "d833f4babc0ee6db10b24d93a61d2c8d3d1775567a294e66f49ed4dc75b49723",
+ "expected_stdout_sha256": "315a09017e63b8e506e07cee9bb05ddd3f93e7ee06485bad06dc624923a93585",
+ "ghidra_expected_stdout_sha256": "315a09017e63b8e506e07cee9bb05ddd3f93e7ee06485bad06dc624923a93585",
+ "rugra_expected_stdout_sha256": "315a09017e63b8e506e07cee9bb05ddd3f93e7ee06485bad06dc624923a93585",
+ "overall_status": "MISMATCH: (B2 canonicalization)"
 }

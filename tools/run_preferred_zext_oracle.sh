@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# tracked metadata: tests/oracle/preferred_zext_1204.metadata.json
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 ghidra_root="$repo_root/ghidra"
 cpp_root="$ghidra_root/Ghidra/Features/Decompiler/src/decompile/cpp"

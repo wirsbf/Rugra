@@ -40,6 +40,5 @@
    "scope": "remaining SeqNum ordering boundaries are not covered by this fixture"
   }
  ],
- "status": "MISMATCH",
  "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
 }

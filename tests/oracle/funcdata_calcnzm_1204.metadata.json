@@ -66,7 +66,7 @@
    },
    {
     "key": "loopand",
-    "description": "clip precision observable: phi(const 0xff00, phi&0xf0f0) converges clipped to (0xff00,0xf000) with the loop-edge label vs (0xfff0,0xf0f0) for the identical unlabeled graph — clipping starts phase 2 from a lower seed and INT_AND prunes to a strictly tighter fixed point"
+    "description": "clip precision observable: phi(const 0xff00, phi&0xf0f0) converges clipped to (0xff00,0xf000) with the loop-edge label vs (0xfff0,0xf0f0) for the identical unlabeled graph \u2014 clipping starts phase 2 from a lower seed and INT_AND prunes to a strictly tighter fixed point"
    }
   ],
   "sha256": "6332736f32377a40ae82ea9c5322bf40c4bc08f871323e2725b991882843aa8e"
@@ -99,7 +99,7 @@
   }
  },
  "projection_status": "MATCH",
- "overall_status": "MATCH",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
  "residual_todo_ids": [
   "FUNCDATA-CALCNZM-0003"
  ],

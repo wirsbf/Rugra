@@ -55,5 +55,8 @@
   }
  ],
  "unit_tests": "cargo test --lib: 23 failures vs master's 2 \u2014 the shape change (halt-tail cat chains, IfNoExit on structured clauses, BlockGoto sink) breaks shallow-traversal expectations in funcdata tests (BlockCondition depth, CONTINUE tagging via DoWhile, type inference); registered as BLOCKSTRUCT-DEADREGION-TESTEXPECT-0001 for root adjudication",
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "compiler_spec": "none: CollapseStructure::collapseAll graph harness; no compiler spec decode",
+ "analysis_options": "none: structured-collapse projection over hand-built graphs; no decompilation pipeline options",
+ "input_sha256": "f06f1424b545a06f4aebfd7175ef7b388d8859a57a87a654276b14cd6d990f60"
 }

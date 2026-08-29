@@ -1,393 +1,394 @@
 {
-  "schema_version": 2,
-  "fixture_id": "PTRSUB-SWITCH-CAST-0001",
-  "todo_id": "PTRSUB-SWITCH-CAST-RESIDUAL-0001",
-  "phase": "A-diagnostic-fixture-only",
-  "overall_status": "MISMATCH",
-  "summary": "Bilateral diagnostic fixture for the curl glob_set switch-expression (int*) cast churn. Seven synthetic IR/CFG/type states (aligned, pa_out_int8, pa_in_churn, pa_both_churn, ia_token, cast_chain, globform) are seeded identically on both sides and run through the real ActionSetCasts::apply; each op's inputs/outputs (varnode + high, read-facing), TypeOp output token, apply-side output token, PTRSUB/PTRADD slot-0 input cast, the post-apply op graph with inserted CASTs, the count delta, and (globform) the rendered switch-expression tree are dumped. The pre-stage seeds and globform swexpr_pre are byte-identical; all 13 changed records are the registered known_raw_differences below. This is phase A: the fixture locks the divergence, no src fix is claimed.",
-  "oracle": {
-    "repository": "ghidra symlink -> main repo ghidra/ (Ghidra upstream source tree)",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "sources": [
-      "coreaction.cc",
-      "op.hh",
-      "typeop.cc",
-      "typeop.hh",
-      "varnode.cc",
-      "varnode.hh",
-      "variable.hh",
-      "cast.cc",
-      "printc.cc"
-    ],
-    "source_blobs": {
-      "coreaction.cc": "a392076ad23ddad3350e0fe7a2ebe96a8868f74b",
-      "op.hh": "7e516fdf57185c74ea4efac8d9d3b324f259ade8",
-      "typeop.cc": "5197e3eefd185ed39c58e65af0687d605e34ec5e",
-      "typeop.hh": "90ac4ed35194c5fd9bbb86759481c89a5388cb52",
-      "varnode.cc": "a04614c582a1fd987d615dcec4a8b47d3501f95f",
-      "varnode.hh": "b78368fc8c3fbdda2a419122b759b4dcd44fe8d2",
-      "variable.hh": "5e833b633aa81b169a27273aba587906704e5a91",
-      "cast.cc": "2f3590aee76b84d2cf398b60e66e80639111eb4c",
-      "printc.cc": "dfdc6b4bed7226110f0696c85e31a1f12d066b2d"
-    }
-  },
-  "architecture": {
-    "language": "fixture synthetic (x86-64-like): little-endian, 8-byte address spaces, wordsize 1",
-    "endianness": "little",
-    "pointer_storage_bytes": 8,
-    "selected_varnode_storage_bytes": 8,
-    "address_arithmetic_bits": 64,
-    "pointer_wordsizes": [
-      1
-    ],
-    "spaces": {
-      "constant": "constant space (index 0)",
-      "other": "processor 8-byte 1-word (index 1)",
-      "unique": "unique space (index 2)",
-      "ram": "processor 8-byte 1-word (index 3, default code space)",
-      "register": "processor 8-byte 1-word (index 4)",
-      "stack": "spacebase over ram (index 5)",
-      "join": "join space (index 6)",
-      "iop": "iop space (index 7)"
-    },
-    "scope": "both sides construct the same TypeFactory core-type bootstrap (xunknown1/2/4/8, int4, int8, max_basetype_size 10) and the same TableStruct{sel:int4@0, pad:int4@4}"
-  },
-  "compiler_spec": {
-    "id": "fixture synthetic proto <prototype name=fixture extrapop=0>",
-    "ghidra": "ProtoModel decoded from inline XML in the .cc fixture",
-    "rugra": "no proto model needed; fixture drives Funcdata directly",
-    "scope": "ActionSetCasts::apply only (cast phase entry, no full pipeline)"
-  },
-  "analysis_options": {
-    "type_factory_max_basetype_size": 10,
-    "high_level": "fd.setHighLevel() after seeding; pa_in_churn/pa_both_churn additionally poke HighVariable::type directly (variable.hh:141) plus type_finalized to reproduce the production post-propagation state where a varnode's read-facing type differs from its merged high type",
-    "cast_strategy": "arch.print->getCastStrategy() (Ghidra) vs CastStrategyC::new(4) (Rugra coreaction.rs apply)",
-    "direct_action_entry": "ActionSetCasts::apply invoked directly per case; no ActionGroup wrapper",
-    "initial_action_count": 0,
-    "initial_action_lcount": 0,
-    "action_apply_count": "ProbeSetCasts::apply == ActionSetCasts::apply per case; count drained via takeCountDelta",
-    "infer_action_apply_count": 0,
-    "random_seed": "deterministic construction, no randomness",
-    "error_injection": "none",
-    "output_normalization": "none: raw stdout lines compared byte-for-byte; stable seeded op/varnode names plus discovery-order n*/v* names for apply-created objects"
-  },
-  "observation_schema": {
-    "record_count": 17,
-    "record_order": "schema header, then per case in program order: aligned(pre,post), pa_out_int8(pre,post), pa_in_churn(pre,post), pa_both_churn(pre,post), ia_token(pre,post), cast_chain(pre,post), globform(pre,swexpr_pre,post,swexpr_post)",
-    "scale": "per-op fields: i<slot>[t=varnode-type,h=high-read-facing], out[t=,h=], token=TypeOp::getOutputToken, atok=apply-side output token, ic0=PTRSUB/PTRADD slot-0 getInputCast; post: impl=/out=/in= plus count delta; globform adds swexpr pre/post rendered trees",
-    "direct": "seeded IR/CFG/type state is identical on both sides (pre dumps match modulo the registered token-field divergences); globform swexpr_pre is byte-identical",
-    "action_pre": "per-op type/token dump before apply",
-    "action_post": "per-op graph dump after apply with inserted CAST ops, implied flags, and count delta",
-    "mutation_boundary": "apply is the only mutation; the same Funcdata is dumped pre and post"
-  },
-  "bootstrap_scope": {
-    "status": "MATCH",
-    "calls": "startDecompilerLibrary + FixtureArchitecture/FixtureTranslate on the C++ side; raw TypeFactory bootstrap + Architecture::new on the Rust side",
-    "projection": "the 4 identical records (schema, aligned|post, pa_in_churn|post, globform|swexpr_pre) plus the identical pre-state seed fields",
-    "exclusions": "translate/inject/loader layers are fixture stubs on both sides and not compared beyond the seeded state"
-  },
-  "function_scope": [
-    {
-      "ghidra_id": "GH12-F-9d3e1b0c2f4a5b6c7d8e",
-      "ghidra_signature": "int4 ActionSetCasts::apply(Funcdata &data) [coreaction.cc:2722]",
-      "rust_id": "RG-F-4c8a1e7d2b9f0a3c5e6d",
-      "fixture_projection_status": "MISMATCH",
-      "full_behavior_status": "MISMATCH"
-    },
-    {
-      "ghidra_id": "GH12-F-7f2c4a9e1d5b8c3a6e0f",
-      "ghidra_signature": "int4 ActionSetCasts::castOutput(PcodeOp *op,Funcdata &data,CastStrategy *castStrategy) [coreaction.cc:2532]",
-      "rust_id": "RG-F-2b6e8d4a0c7f1e9c3a5d",
-      "fixture_projection_status": "MISMATCH",
-      "full_behavior_status": "MISMATCH"
-    },
-    {
-      "ghidra_id": "GH12-F-4e9d2c7b6a1f8e0c3d5a",
-      "ghidra_signature": "int4 ActionSetCasts::castInput(PcodeOp *op,int4 slot,Funcdata &data,CastStrategy *castStrategy) [coreaction.cc:2655]",
-      "rust_id": "RG-F-8c1f5e3b9d7a2c4e6b0d",
-      "fixture_projection_status": "MISMATCH",
-      "full_behavior_status": "MISMATCH"
-    },
-    {
-      "ghidra_id": "GH12-F-6b8a0f2e5c9d1a7c4e3f",
-      "ghidra_signature": "void Funcdata::opUndoPtradd(PcodeOp *op,bool finalize) [funcdata_op.cc:579]",
-      "rust_id": "RG-F-0a7c3e1f8b5d9c2e4a6b",
-      "fixture_projection_status": "MISSING",
-      "full_behavior_status": "MISSING"
-    },
-    {
-      "ghidra_id": "GH12-F-1c4e7b0a9f3d6e2c5a8d",
-      "ghidra_signature": "Datatype *TypeOpPtradd::getOutputToken(const PcodeOp *op,CastStrategy *castStrategy) const [typeop.cc:2244]",
-      "rust_id": "RG-F-9e2b5d8c1a7f4e0c3b6a",
-      "fixture_projection_status": "MISMATCH",
-      "full_behavior_status": "MISMATCH"
-    },
-    {
-      "ghidra_id": "GH12-F-8d5c2f1b4a9e7c0d3e6b",
-      "ghidra_signature": "Datatype *TypeOpIntAdd::getOutputToken(const PcodeOp *op,CastStrategy *castStrategy) const [typeop.cc:1175 -> CastStrategyC::arithmeticOutputStandard cast.cc:394]",
-      "rust_id": "RG-F-5b1e8a4d2c7f9e3a0d6c",
-      "fixture_projection_status": "MISMATCH",
-      "full_behavior_status": "MISMATCH"
-    },
-    {
-      "ghidra_id": "GH12-F-3f7a1c5e9b2d8a6c0e4d",
-      "ghidra_signature": "Datatype *TypeOpPtrsub::getInputCast(const PcodeOp *op,int4 slot,const CastStrategy *castStrategy) const [typeop.cc:2320] (and TypeOpPtradd::getInputCast typeop.cc:2250)",
-      "rust_id": "RG-F-7a4d1f8c3b6e2a9c5d0f",
-      "fixture_projection_status": "MATCH",
-      "full_behavior_status": "UNTESTED"
-    },
-    {
-      "ghidra_id": "GH12-F-0e6b4a2d8f1c7e3a9b5c",
-      "ghidra_signature": "Datatype *TypeOpPtrsub::getOutputToken(const PcodeOp *op,CastStrategy *castStrategy) const [typeop.cc:2349]",
-      "rust_id": "RG-F-6c0f3e7b1a9d4c2e8f5b",
-      "fixture_projection_status": "MATCH",
-      "full_behavior_status": "UNTESTED"
-    }
+ "schema_version": 2,
+ "fixture_id": "PTRSUB-SWITCH-CAST-0001",
+ "todo_id": "PTRSUB-SWITCH-CAST-RESIDUAL-0001",
+ "phase": "A-diagnostic-fixture-only",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
+ "summary": "Bilateral diagnostic fixture for the curl glob_set switch-expression (int*) cast churn. Seven synthetic IR/CFG/type states (aligned, pa_out_int8, pa_in_churn, pa_both_churn, ia_token, cast_chain, globform) are seeded identically on both sides and run through the real ActionSetCasts::apply; each op's inputs/outputs (varnode + high, read-facing), TypeOp output token, apply-side output token, PTRSUB/PTRADD slot-0 input cast, the post-apply op graph with inserted CASTs, the count delta, and (globform) the rendered switch-expression tree are dumped. The pre-stage seeds and globform swexpr_pre are byte-identical; all 13 changed records are the registered known_raw_differences below. This is phase A: the fixture locks the divergence, no src fix is claimed.",
+ "oracle": {
+  "repository": "ghidra symlink -> main repo ghidra/ (Ghidra upstream source tree)",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "sources": [
+   "coreaction.cc",
+   "op.hh",
+   "typeop.cc",
+   "typeop.hh",
+   "varnode.cc",
+   "varnode.hh",
+   "variable.hh",
+   "cast.cc",
+   "printc.cc"
   ],
-  "known_raw_differences": [
-    {
-      "record": "case=aligned|stage=pre",
-      "category": "diagnostic-field+real-residual",
-      "cause": "mult token=int8 vs oracle unknown8: Ghidra TypeOpIntMult::getOutputToken -> CastStrategyC::arithmeticOutputStandard (typeop.cc:1628, cast.cc:394) keeps the max typeOrder input high metatype (unknown8 stays unknown8); Rugra has no TypeOp INT_* token impl, fixture mirrors the apply-side base-int token (coreaction.rs output_metatype). pa atok=null vs oracle ptr8w1->int4: documents that Rugra cast_output skips PTRADD (output_metatype None) while Ghidra coreaction.cc:2541 consumes TypeOpPtradd::getOutputToken (typeop.cc:2244 = in0 high read-facing). Behaviorally neutral in this case (aligned post identical).",
-      "residual_ids": [
-        "PTRSUB-SWITCH-CAST-RESIDUAL-0001",
-        "TYPEOP-ARITH-TOKEN-0001",
-        "COREACTION-PTRADD-OUTCAST-0001"
-      ]
-    },
-    {
-      "record": "case=pa_out_int8|stage=pre",
-      "category": "diagnostic-field+real-residual",
-      "cause": "same mult token and pa atok field divergences as aligned|pre. pa out high is int8 here, so the oracle token (ptr8w1->int4 = in0 high) differs from out high: castOutput will fire on the oracle side.",
-      "residual_ids": [
-        "TYPEOP-ARITH-TOKEN-0001",
-        "COREACTION-PTRADD-OUTCAST-0001"
-      ]
-    },
-    {
-      "record": "case=pa_out_int8|stage=post",
-      "category": "real-behavior",
-      "cause": "FIRST BEHAVIORAL DIVERGENCE. Oracle count=1: castOutput(pa) with token ptr8w1->int4 (TypeOpPtradd::getOutputToken, typeop.cc:2244) vs out high int8 -> implied arm (coreaction.cc:2569-2571) retypes the implied PTRADD output in place to the token (updateType) and inserts CAST(int8) AFTER the ptradd (cc:2595-2609 rewiring: pa->new int8 vn, CAST out = old outvn). Rugra count=0: cast_output has no PTRADD arm (output_metatype None) so nothing happens; pa out stays int8, no CAST.",
-      "residual_ids": [
-        "COREACTION-PTRADD-OUTCAST-0001",
-        "COREACTION-CASTOUT-IMPLIED-0001"
-      ]
-    },
-    {
-      "record": "case=pa_in_churn|stage=pre",
-      "category": "diagnostic-field+real-residual",
-      "cause": "same mult token / pa atok field divergences; the ic0=ptr8w1->int4 slot-0 input cast (typeop.cc:2250-2263) MATCHES on both sides (seed state identical).",
-      "residual_ids": [
-        "TYPEOP-ARITH-TOKEN-0001",
-        "COREACTION-PTRADD-OUTCAST-0001"
-      ]
-    },
-    {
-      "record": "case=pa_both_churn|stage=pre",
-      "category": "diagnostic-field+real-residual",
-      "cause": "same mult token / pa atok field divergences.",
-      "residual_ids": [
-        "TYPEOP-ARITH-TOKEN-0001",
-        "COREACTION-PTRADD-OUTCAST-0001"
-      ]
-    },
-    {
-      "record": "case=pa_both_churn|stage=post",
-      "category": "real-behavior",
-      "cause": "Oracle count=2: input CAST(ptr8w1->int4)(gB) before the ptradd (both sides do this, identical) PLUS castOutput: implied ptradd output retyped to token ptr8w1->int4 in place and CAST(int8) inserted after (the formal nested (T)(T) shape). Rugra count=1: only the input cast; ptradd output stays int8 and no output CAST (missing PTRADD castOutput arm).",
-      "residual_ids": [
-        "COREACTION-PTRADD-OUTCAST-0001",
-        "COREACTION-CASTOUT-IMPLIED-0001"
-      ]
-    },
-    {
-      "record": "case=ia_token|stage=pre",
-      "category": "real-behavior",
-      "cause": "INT_ADD token: oracle int8 (TypeOpIntAdd::getOutputToken typeop.cc:1175 -> arithmeticOutputStandard cast.cc:394: max typeOrder over INPUT read-facing highs; bool demoted to int) vs Rugra ptr8w1->int4 (Rust TypeOpIntAdd::get_output_token returns the OUTPUT high instead of the arithmetic standard of the inputs). atok (apply side) matches at int8 by coincidence of the base-int fallback.",
-      "residual_ids": [
-        "TYPEOP-INTADD-TOKEN-0001",
-        "TYPEOP-ARITH-TOKEN-0001"
-      ]
-    },
-    {
-      "record": "case=ia_token|stage=post",
-      "category": "real-behavior",
-      "cause": "Final op graphs are textually IDENTICAL (ia implied int8 + CAST(ptr8w1->int4)); oracle count=2 vs Rugra count=1. The missing +1 is the constant slot: oracle castInput slot1 gets ct from TypeOp::getInputCast (typeop.cc:295: castStandard(inputTypeLocal=int8, const high unknown8) -> non-null) and the constant arm (cc:2687-2691) updateTypes the constant to int8 and returns 1; Rugra's cast_input returns no ct for the INT_ADD constant slot so no count unit. The retyped constant is invisible in the dump (constants print as c#offset).",
-      "residual_ids": [
-        "COREACTION-CASTIN-CONST-0001"
-      ]
-    },
-    {
-      "record": "case=cast_chain|stage=pre",
-      "category": "diagnostic-field",
-      "cause": "cast0 atok: oracle prints unknown8 (TypeOpCast token via base getOutputToken -> outputTypeLocal) while the Rust fixture prints na because CAST ops never reach cast_output on the apply side (both Ghidra apply at cc:2739 and Rugra apply skip CPUI_CAST; the oracle field is the never-consumed virtual value, the Rust field documents the skip). mult token int8 vs oracle ptr8w1->int4: arithmeticOutputStandard picks the ptr input high as the max typeOrder type.",
-      "residual_ids": [
-        "TYPEOP-ARITH-TOKEN-0001"
-      ]
-    },
-    {
-      "record": "case=cast_chain|stage=post",
-      "category": "real-behavior",
-      "cause": "MISSING DOUBLE-CAST GUARD. Oracle: castInput(mult,0) sees the input is an implied CAST output with loneDescend==mult -> retypes the existing CAST output IN PLACE to ct=int8 (cc:2673-2679: vn->updateType(ct); if type==ct return 1) and mult keeps reading cast0_o; count=2 (retype + const slot unit). Rugra: stacks a SECOND CAST(int8) on top of the existing CAST(ptr8w1->int4) -> renders as the (int8)(int8*) churn nesting; count=1. This is a direct churn generator: every re-cast of an already-cast expression nests instead of retyping.",
-      "residual_ids": [
-        "COREACTION-CASTIN-DOUBLECAST-GUARD-0001"
-      ]
-    },
-    {
-      "record": "case=globform|stage=pre",
-      "category": "diagnostic-field+real-residual",
-      "cause": "mult token (arithmeticOutputStandard unknown8 vs base-int int8), pa atok (PTRADD arm skipped), and ia token (out-high unknown8 vs arithmetic max ptr8w1->int4). The full seed state (types, highs, ic0s, load token, ps token) otherwise matches; swexpr_pre is byte-identical.",
-      "residual_ids": [
-        "TYPEOP-ARITH-TOKEN-0001",
-        "TYPEOP-INTADD-TOKEN-0001",
-        "COREACTION-PTRADD-OUTCAST-0001"
-      ]
-    },
-    {
-      "record": "case=globform|stage=post",
-      "category": "real-behavior",
-      "cause": "EARLIEST apply-step divergence inside globform: the PTRADD fit preflight (cc:2740-2746) fires on the oracle BEFORE pa's input casts - in0 high ptr8w1->int8 has ptrTo alignSize 8 != addressToByteInt(4,1)=4 -> Funcdata::opUndoPtradd(pa,true) (funcdata_op.cc:579) rewrites pa to INT_ADD and inserts the implied INT_MULT scale op (n2, out typed from multVn, inserted before pa). Oracle then inserts int8 input CASTs on both new INT_ADD arms (n3 on ps_o, n4 on the scale-mult out) and the CAST(ptr8w1->int8) after pa (n8). count=7. Rugra has no preflight and no opUndoPtradd: pa stays PTRADD, no scale mult, no int8 input casts, no output CAST; count=4. The load/ia-level casts (ptr8w1->int4 after load, int8 on load_o, int8 on gA) MATCH on both sides, as does the ps output cast n0 (the landed TypeOpPtrsub cast_output arm behaves identically to oracle here).",
-      "residual_ids": [
-        "COREACTION-PTRADD-UNDO-PREFLIGHT-0001",
-        "FUNCDATA-OPUNDOPTRADD-0001",
-        "COREACTION-PTRADD-OUTCAST-0001"
-      ]
-    },
-    {
-      "record": "case=globform|stage=swexpr_post",
-      "category": "real-behavior",
-      "cause": "Rendered switch-expression tree divergence caused entirely by the globform|post op-graph divergence: oracle '((int8)(ptr8w1->int4)*((ptr8w1->int8)((int8)(ptr8w1->int8)PTRSUB(gs,#0) + (int8)((SEXT(idx) * #4) * #4))) + (int8)gA)' vs Rugra '((int8)(ptr8w1->int4)*(((ptr8w1->int8)PTRSUB(gs,#0) + (SEXT(idx) * #4))) + (int8)gA)'. The oracle form is the same mechanical (T)(T) nesting the production glob_set switch exhibits; Rugra's flatter form here is the absence of the undo-ptradd rewrite plus the missing int8 wrappers, NOT a superior normalization. Both differ from production golden 'switch(cVar3)' which requires the upstream jumptable guard normalization outside this fixture's scope.",
-      "residual_ids": [
-        "COREACTION-PTRADD-UNDO-PREFLIGHT-0001",
-        "COREACTION-PTRADD-OUTCAST-0001",
-        "COREACTION-CASTIN-CONST-0001"
-      ]
-    }
+  "source_blobs": {
+   "coreaction.cc": "a392076ad23ddad3350e0fe7a2ebe96a8868f74b",
+   "op.hh": "7e516fdf57185c74ea4efac8d9d3b324f259ade8",
+   "typeop.cc": "5197e3eefd185ed39c58e65af0687d605e34ec5e",
+   "typeop.hh": "90ac4ed35194c5fd9bbb86759481c89a5388cb52",
+   "varnode.cc": "a04614c582a1fd987d615dcec4a8b47d3501f95f",
+   "varnode.hh": "b78368fc8c3fbdda2a419122b759b4dcd44fe8d2",
+   "variable.hh": "5e833b633aa81b169a27273aba587906704e5a91",
+   "cast.cc": "2f3590aee76b84d2cf398b60e66e80639111eb4c",
+   "printc.cc": "dfdc6b4bed7226110f0696c85e31a1f12d066b2d"
+  }
+ },
+ "architecture": {
+  "language": "fixture synthetic (x86-64-like): little-endian, 8-byte address spaces, wordsize 1",
+  "endianness": "little",
+  "pointer_storage_bytes": 8,
+  "selected_varnode_storage_bytes": 8,
+  "address_arithmetic_bits": 64,
+  "pointer_wordsizes": [
+   1
   ],
-  "comparand": {
-    "rust_base_commit": "473a3567f2d3f1f14a4c6ff76b7e0febfb808d93",
-    "rust_base_tree": "59e0ad0ba85fa47dc59e597deea98a8a5d85234c",
-    "rust_base_src_tree": "52715372990c7d69d1edb227eb05f1acd42af109",
-    "rust_base_blobs": {
-      "Cargo.toml": "see rust_base_tree",
-      "Cargo.lock": "see rust_base_tree"
-    },
-    "runner_sha256": "a224fb626c1530edbe188c117815a62c77609326ade27efe679c8055a7398715",
-    "overlay_sha256": {},
-    "fixture_sha256": {
-      "tests/oracle/ptrsub_switch_cast_1204.cc": "f810fab0a0d0472c713a02623b34275356f5176dfb2a026a62b4536305c354c9",
-      "tests/oracle/ptrsub_switch_cast_1204.rs": "479af334f262bb8623a8710053399a267a3fa5d1cf0af496c8942b31d17d0c04"
-    },
-    "source_policy": "head-clean: runner builds git archive HEAD + the committed .rs fixture verbatim, no overlays"
+  "spaces": {
+   "constant": "constant space (index 0)",
+   "other": "processor 8-byte 1-word (index 1)",
+   "unique": "unique space (index 2)",
+   "ram": "processor 8-byte 1-word (index 3, default code space)",
+   "register": "processor 8-byte 1-word (index 4)",
+   "stack": "spacebase over ram (index 5)",
+   "join": "join space (index 6)",
+   "iop": "iop space (index 7)"
   },
-  "expected_results": {
-    "record_count": 17,
-    "record_order": [
-      "schema",
-      "case=aligned|stage=pre",
-      "case=aligned|stage=post",
-      "case=pa_out_int8|stage=pre",
-      "case=pa_out_int8|stage=post",
-      "case=pa_in_churn|stage=pre",
-      "case=pa_in_churn|stage=post",
-      "case=pa_both_churn|stage=pre",
-      "case=pa_both_churn|stage=post",
-      "case=ia_token|stage=pre",
-      "case=ia_token|stage=post",
-      "case=cast_chain|stage=pre",
-      "case=cast_chain|stage=post",
-      "case=globform|stage=pre",
-      "case=globform|stage=swexpr_pre",
-      "case=globform|stage=post",
-      "case=globform|stage=swexpr_post"
-    ],
-    "ghidra_stdout_sha256": "3f48b47f922e23b2c351fc7ebb8b0360acf3d883edd2e5f5c434ab3fe40d2387",
-    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "8dcc0839126eb817331428ece1b3c6e9dedef7e6c2031dfe20e5d7772f2093b6",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "da2b2cfa637b2809ea77b2907382fdbcb1cc34fa866ce9ca3a7719d8524871f1",
-    "raw_diff_labels": [
-      "ghidra.stdout",
-      "rugra.stdout"
-    ],
-    "stdout_bytes_each": {
-      "ghidra": 5634,
-      "rugra": 5322
-    },
-    "raw_diff_bytes": 10347,
-    "exit_codes": {
-      "ghidra": 0,
-      "rugra": 0
-    },
-    "determinism": "each side run twice, byte-identical; debug-built Rugra fixture output equals release-built output"
+  "scope": "both sides construct the same TypeFactory core-type bootstrap (xunknown1/2/4/8, int4, int8, max_basetype_size 10) and the same TableStruct{sel:int4@0, pad:int4@4}"
+ },
+ "compiler_spec": {
+  "id": "fixture synthetic proto <prototype name=fixture extrapop=0>",
+  "ghidra": "ProtoModel decoded from inline XML in the .cc fixture",
+  "rugra": "no proto model needed; fixture drives Funcdata directly",
+  "scope": "ActionSetCasts::apply only (cast phase entry, no full pipeline)"
+ },
+ "analysis_options": {
+  "type_factory_max_basetype_size": 10,
+  "high_level": "fd.setHighLevel() after seeding; pa_in_churn/pa_both_churn additionally poke HighVariable::type directly (variable.hh:141) plus type_finalized to reproduce the production post-propagation state where a varnode's read-facing type differs from its merged high type",
+  "cast_strategy": "arch.print->getCastStrategy() (Ghidra) vs CastStrategyC::new(4) (Rugra coreaction.rs apply)",
+  "direct_action_entry": "ActionSetCasts::apply invoked directly per case; no ActionGroup wrapper",
+  "initial_action_count": 0,
+  "initial_action_lcount": 0,
+  "action_apply_count": "ProbeSetCasts::apply == ActionSetCasts::apply per case; count drained via takeCountDelta",
+  "infer_action_apply_count": 0,
+  "random_seed": "deterministic construction, no randomness",
+  "error_injection": "none",
+  "output_normalization": "none: raw stdout lines compared byte-for-byte; stable seeded op/varnode names plus discovery-order n*/v* names for apply-created objects"
+ },
+ "observation_schema": {
+  "record_count": 17,
+  "record_order": "schema header, then per case in program order: aligned(pre,post), pa_out_int8(pre,post), pa_in_churn(pre,post), pa_both_churn(pre,post), ia_token(pre,post), cast_chain(pre,post), globform(pre,swexpr_pre,post,swexpr_post)",
+  "scale": "per-op fields: i<slot>[t=varnode-type,h=high-read-facing], out[t=,h=], token=TypeOp::getOutputToken, atok=apply-side output token, ic0=PTRSUB/PTRADD slot-0 getInputCast; post: impl=/out=/in= plus count delta; globform adds swexpr pre/post rendered trees",
+  "direct": "seeded IR/CFG/type state is identical on both sides (pre dumps match modulo the registered token-field divergences); globform swexpr_pre is byte-identical",
+  "action_pre": "per-op type/token dump before apply",
+  "action_post": "per-op graph dump after apply with inserted CAST ops, implied flags, and count delta",
+  "mutation_boundary": "apply is the only mutation; the same Funcdata is dumped pre and post"
+ },
+ "bootstrap_scope": {
+  "status": "MATCH",
+  "calls": "startDecompilerLibrary + FixtureArchitecture/FixtureTranslate on the C++ side; raw TypeFactory bootstrap + Architecture::new on the Rust side",
+  "projection": "the 4 identical records (schema, aligned|post, pa_in_churn|post, globform|swexpr_pre) plus the identical pre-state seed fields",
+  "exclusions": "translate/inject/loader layers are fixture stubs on both sides and not compared beyond the seeded state"
+ },
+ "function_scope": [
+  {
+   "ghidra_id": "GH12-F-9d3e1b0c2f4a5b6c7d8e",
+   "ghidra_signature": "int4 ActionSetCasts::apply(Funcdata &data) [coreaction.cc:2722]",
+   "rust_id": "RG-F-4c8a1e7d2b9f0a3c5e6d",
+   "fixture_projection_status": "MISMATCH",
+   "full_behavior_status": "MISMATCH"
   },
-  "coverage": {
-    "seed_state_projection": "MATCH (identical IR/CFG/types/highs; ic0 slot-0 input casts identical on all cases)",
-    "ptrsub_output_token_projection": "MATCH (ps token ptr8w1->int4 via downChain offset 0 field, typeop.cc:2349)",
-    "ptrsub_input_cast_projection": "MATCH (typeop.cc:2320 semantics incl. cur==req null, base identity check)",
-    "ptradd_input_cast_projection": "MATCH (typeop.cc:2250 semantics: alignSize comparison key)",
-    "ptradd_output_cast_projection": "MISMATCH (missing cast_output PTRADD arm + implied in-place retype)",
-    "int_add_token_projection": "MISMATCH (out-high vs arithmeticOutputStandard)",
-    "arith_token_projection": "MISMATCH (INT_MULT base-int fallback vs unknown8/ptr preservation)",
-    "castin_doublecast_guard_projection": "MISMATCH (stacks a second CAST instead of retyping in place)",
-    "castin_const_projection": "MISMATCH (missing constant updateType count unit)",
-    "ptradd_undo_preflight_projection": "MISSING (no opUndoPtradd; pa stays PTRADD, no scale INT_MULT)",
-    "switch_expr_render_projection": "MISMATCH (downstream of the above)",
-    "count_bridge_projection": "MISMATCH (count deltas 0/1/1/1/2 vs 1/1/2/2/7 across cases)"
+  {
+   "ghidra_id": "GH12-F-7f2c4a9e1d5b8c3a6e0f",
+   "ghidra_signature": "int4 ActionSetCasts::castOutput(PcodeOp *op,Funcdata &data,CastStrategy *castStrategy) [coreaction.cc:2532]",
+   "rust_id": "RG-F-2b6e8d4a0c7f1e9c3a5d",
+   "fixture_projection_status": "MISMATCH",
+   "full_behavior_status": "MISMATCH"
   },
-  "residual_ids": [
+  {
+   "ghidra_id": "GH12-F-4e9d2c7b6a1f8e0c3d5a",
+   "ghidra_signature": "int4 ActionSetCasts::castInput(PcodeOp *op,int4 slot,Funcdata &data,CastStrategy *castStrategy) [coreaction.cc:2655]",
+   "rust_id": "RG-F-8c1f5e3b9d7a2c4e6b0d",
+   "fixture_projection_status": "MISMATCH",
+   "full_behavior_status": "MISMATCH"
+  },
+  {
+   "ghidra_id": "GH12-F-6b8a0f2e5c9d1a7c4e3f",
+   "ghidra_signature": "void Funcdata::opUndoPtradd(PcodeOp *op,bool finalize) [funcdata_op.cc:579]",
+   "rust_id": "RG-F-0a7c3e1f8b5d9c2e4a6b",
+   "fixture_projection_status": "MISSING",
+   "full_behavior_status": "MISSING"
+  },
+  {
+   "ghidra_id": "GH12-F-1c4e7b0a9f3d6e2c5a8d",
+   "ghidra_signature": "Datatype *TypeOpPtradd::getOutputToken(const PcodeOp *op,CastStrategy *castStrategy) const [typeop.cc:2244]",
+   "rust_id": "RG-F-9e2b5d8c1a7f4e0c3b6a",
+   "fixture_projection_status": "MISMATCH",
+   "full_behavior_status": "MISMATCH"
+  },
+  {
+   "ghidra_id": "GH12-F-8d5c2f1b4a9e7c0d3e6b",
+   "ghidra_signature": "Datatype *TypeOpIntAdd::getOutputToken(const PcodeOp *op,CastStrategy *castStrategy) const [typeop.cc:1175 -> CastStrategyC::arithmeticOutputStandard cast.cc:394]",
+   "rust_id": "RG-F-5b1e8a4d2c7f9e3a0d6c",
+   "fixture_projection_status": "MISMATCH",
+   "full_behavior_status": "MISMATCH"
+  },
+  {
+   "ghidra_id": "GH12-F-3f7a1c5e9b2d8a6c0e4d",
+   "ghidra_signature": "Datatype *TypeOpPtrsub::getInputCast(const PcodeOp *op,int4 slot,const CastStrategy *castStrategy) const [typeop.cc:2320] (and TypeOpPtradd::getInputCast typeop.cc:2250)",
+   "rust_id": "RG-F-7a4d1f8c3b6e2a9c5d0f",
+   "fixture_projection_status": "MATCH",
+   "full_behavior_status": "UNTESTED"
+  },
+  {
+   "ghidra_id": "GH12-F-0e6b4a2d8f1c7e3a9b5c",
+   "ghidra_signature": "Datatype *TypeOpPtrsub::getOutputToken(const PcodeOp *op,CastStrategy *castStrategy) const [typeop.cc:2349]",
+   "rust_id": "RG-F-6c0f3e7b1a9d4c2e8f5b",
+   "fixture_projection_status": "MATCH",
+   "full_behavior_status": "UNTESTED"
+  }
+ ],
+ "known_raw_differences": [
+  {
+   "record": "case=aligned|stage=pre",
+   "category": "diagnostic-field+real-residual",
+   "cause": "mult token=int8 vs oracle unknown8: Ghidra TypeOpIntMult::getOutputToken -> CastStrategyC::arithmeticOutputStandard (typeop.cc:1628, cast.cc:394) keeps the max typeOrder input high metatype (unknown8 stays unknown8); Rugra has no TypeOp INT_* token impl, fixture mirrors the apply-side base-int token (coreaction.rs output_metatype). pa atok=null vs oracle ptr8w1->int4: documents that Rugra cast_output skips PTRADD (output_metatype None) while Ghidra coreaction.cc:2541 consumes TypeOpPtradd::getOutputToken (typeop.cc:2244 = in0 high read-facing). Behaviorally neutral in this case (aligned post identical).",
+   "residual_ids": [
     "PTRSUB-SWITCH-CAST-RESIDUAL-0001",
+    "TYPEOP-ARITH-TOKEN-0001",
+    "COREACTION-PTRADD-OUTCAST-0001"
+   ]
+  },
+  {
+   "record": "case=pa_out_int8|stage=pre",
+   "category": "diagnostic-field+real-residual",
+   "cause": "same mult token and pa atok field divergences as aligned|pre. pa out high is int8 here, so the oracle token (ptr8w1->int4 = in0 high) differs from out high: castOutput will fire on the oracle side.",
+   "residual_ids": [
+    "TYPEOP-ARITH-TOKEN-0001",
+    "COREACTION-PTRADD-OUTCAST-0001"
+   ]
+  },
+  {
+   "record": "case=pa_out_int8|stage=post",
+   "category": "real-behavior",
+   "cause": "FIRST BEHAVIORAL DIVERGENCE. Oracle count=1: castOutput(pa) with token ptr8w1->int4 (TypeOpPtradd::getOutputToken, typeop.cc:2244) vs out high int8 -> implied arm (coreaction.cc:2569-2571) retypes the implied PTRADD output in place to the token (updateType) and inserts CAST(int8) AFTER the ptradd (cc:2595-2609 rewiring: pa->new int8 vn, CAST out = old outvn). Rugra count=0: cast_output has no PTRADD arm (output_metatype None) so nothing happens; pa out stays int8, no CAST.",
+   "residual_ids": [
     "COREACTION-PTRADD-OUTCAST-0001",
-    "COREACTION-CASTOUT-IMPLIED-0001",
-    "COREACTION-CASTIN-DOUBLECAST-GUARD-0001",
-    "COREACTION-CASTIN-CONST-0001",
-    "COREACTION-PTRADD-UNDO-PREFLIGHT-0001",
-    "FUNCDATA-OPUNDOPTRADD-0001",
+    "COREACTION-CASTOUT-IMPLIED-0001"
+   ]
+  },
+  {
+   "record": "case=pa_in_churn|stage=pre",
+   "category": "diagnostic-field+real-residual",
+   "cause": "same mult token / pa atok field divergences; the ic0=ptr8w1->int4 slot-0 input cast (typeop.cc:2250-2263) MATCHES on both sides (seed state identical).",
+   "residual_ids": [
+    "TYPEOP-ARITH-TOKEN-0001",
+    "COREACTION-PTRADD-OUTCAST-0001"
+   ]
+  },
+  {
+   "record": "case=pa_both_churn|stage=pre",
+   "category": "diagnostic-field+real-residual",
+   "cause": "same mult token / pa atok field divergences.",
+   "residual_ids": [
+    "TYPEOP-ARITH-TOKEN-0001",
+    "COREACTION-PTRADD-OUTCAST-0001"
+   ]
+  },
+  {
+   "record": "case=pa_both_churn|stage=post",
+   "category": "real-behavior",
+   "cause": "Oracle count=2: input CAST(ptr8w1->int4)(gB) before the ptradd (both sides do this, identical) PLUS castOutput: implied ptradd output retyped to token ptr8w1->int4 in place and CAST(int8) inserted after (the formal nested (T)(T) shape). Rugra count=1: only the input cast; ptradd output stays int8 and no output CAST (missing PTRADD castOutput arm).",
+   "residual_ids": [
+    "COREACTION-PTRADD-OUTCAST-0001",
+    "COREACTION-CASTOUT-IMPLIED-0001"
+   ]
+  },
+  {
+   "record": "case=ia_token|stage=pre",
+   "category": "real-behavior",
+   "cause": "INT_ADD token: oracle int8 (TypeOpIntAdd::getOutputToken typeop.cc:1175 -> arithmeticOutputStandard cast.cc:394: max typeOrder over INPUT read-facing highs; bool demoted to int) vs Rugra ptr8w1->int4 (Rust TypeOpIntAdd::get_output_token returns the OUTPUT high instead of the arithmetic standard of the inputs). atok (apply side) matches at int8 by coincidence of the base-int fallback.",
+   "residual_ids": [
     "TYPEOP-INTADD-TOKEN-0001",
     "TYPEOP-ARITH-TOKEN-0001"
+   ]
+  },
+  {
+   "record": "case=ia_token|stage=post",
+   "category": "real-behavior",
+   "cause": "Final op graphs are textually IDENTICAL (ia implied int8 + CAST(ptr8w1->int4)); oracle count=2 vs Rugra count=1. The missing +1 is the constant slot: oracle castInput slot1 gets ct from TypeOp::getInputCast (typeop.cc:295: castStandard(inputTypeLocal=int8, const high unknown8) -> non-null) and the constant arm (cc:2687-2691) updateTypes the constant to int8 and returns 1; Rugra's cast_input returns no ct for the INT_ADD constant slot so no count unit. The retyped constant is invisible in the dump (constants print as c#offset).",
+   "residual_ids": [
+    "COREACTION-CASTIN-CONST-0001"
+   ]
+  },
+  {
+   "record": "case=cast_chain|stage=pre",
+   "category": "diagnostic-field",
+   "cause": "cast0 atok: oracle prints unknown8 (TypeOpCast token via base getOutputToken -> outputTypeLocal) while the Rust fixture prints na because CAST ops never reach cast_output on the apply side (both Ghidra apply at cc:2739 and Rugra apply skip CPUI_CAST; the oracle field is the never-consumed virtual value, the Rust field documents the skip). mult token int8 vs oracle ptr8w1->int4: arithmeticOutputStandard picks the ptr input high as the max typeOrder type.",
+   "residual_ids": [
+    "TYPEOP-ARITH-TOKEN-0001"
+   ]
+  },
+  {
+   "record": "case=cast_chain|stage=post",
+   "category": "real-behavior",
+   "cause": "MISSING DOUBLE-CAST GUARD. Oracle: castInput(mult,0) sees the input is an implied CAST output with loneDescend==mult -> retypes the existing CAST output IN PLACE to ct=int8 (cc:2673-2679: vn->updateType(ct); if type==ct return 1) and mult keeps reading cast0_o; count=2 (retype + const slot unit). Rugra: stacks a SECOND CAST(int8) on top of the existing CAST(ptr8w1->int4) -> renders as the (int8)(int8*) churn nesting; count=1. This is a direct churn generator: every re-cast of an already-cast expression nests instead of retyping.",
+   "residual_ids": [
+    "COREACTION-CASTIN-DOUBLECAST-GUARD-0001"
+   ]
+  },
+  {
+   "record": "case=globform|stage=pre",
+   "category": "diagnostic-field+real-residual",
+   "cause": "mult token (arithmeticOutputStandard unknown8 vs base-int int8), pa atok (PTRADD arm skipped), and ia token (out-high unknown8 vs arithmetic max ptr8w1->int4). The full seed state (types, highs, ic0s, load token, ps token) otherwise matches; swexpr_pre is byte-identical.",
+   "residual_ids": [
+    "TYPEOP-ARITH-TOKEN-0001",
+    "TYPEOP-INTADD-TOKEN-0001",
+    "COREACTION-PTRADD-OUTCAST-0001"
+   ]
+  },
+  {
+   "record": "case=globform|stage=post",
+   "category": "real-behavior",
+   "cause": "EARLIEST apply-step divergence inside globform: the PTRADD fit preflight (cc:2740-2746) fires on the oracle BEFORE pa's input casts - in0 high ptr8w1->int8 has ptrTo alignSize 8 != addressToByteInt(4,1)=4 -> Funcdata::opUndoPtradd(pa,true) (funcdata_op.cc:579) rewrites pa to INT_ADD and inserts the implied INT_MULT scale op (n2, out typed from multVn, inserted before pa). Oracle then inserts int8 input CASTs on both new INT_ADD arms (n3 on ps_o, n4 on the scale-mult out) and the CAST(ptr8w1->int8) after pa (n8). count=7. Rugra has no preflight and no opUndoPtradd: pa stays PTRADD, no scale mult, no int8 input casts, no output CAST; count=4. The load/ia-level casts (ptr8w1->int4 after load, int8 on load_o, int8 on gA) MATCH on both sides, as does the ps output cast n0 (the landed TypeOpPtrsub cast_output arm behaves identically to oracle here).",
+   "residual_ids": [
+    "COREACTION-PTRADD-UNDO-PREFLIGHT-0001",
+    "FUNCDATA-OPUNDOPTRADD-0001",
+    "COREACTION-PTRADD-OUTCAST-0001"
+   ]
+  },
+  {
+   "record": "case=globform|stage=swexpr_post",
+   "category": "real-behavior",
+   "cause": "Rendered switch-expression tree divergence caused entirely by the globform|post op-graph divergence: oracle '((int8)(ptr8w1->int4)*((ptr8w1->int8)((int8)(ptr8w1->int8)PTRSUB(gs,#0) + (int8)((SEXT(idx) * #4) * #4))) + (int8)gA)' vs Rugra '((int8)(ptr8w1->int4)*(((ptr8w1->int8)PTRSUB(gs,#0) + (SEXT(idx) * #4))) + (int8)gA)'. The oracle form is the same mechanical (T)(T) nesting the production glob_set switch exhibits; Rugra's flatter form here is the absence of the undo-ptradd rewrite plus the missing int8 wrappers, NOT a superior normalization. Both differ from production golden 'switch(cVar3)' which requires the upstream jumptable guard normalization outside this fixture's scope.",
+   "residual_ids": [
+    "COREACTION-PTRADD-UNDO-PREFLIGHT-0001",
+    "COREACTION-PTRADD-OUTCAST-0001",
+    "COREACTION-CASTIN-CONST-0001"
+   ]
+  }
+ ],
+ "comparand": {
+  "rust_base_commit": "473a3567f2d3f1f14a4c6ff76b7e0febfb808d93",
+  "rust_base_tree": "59e0ad0ba85fa47dc59e597deea98a8a5d85234c",
+  "rust_base_src_tree": "52715372990c7d69d1edb227eb05f1acd42af109",
+  "rust_base_blobs": {
+   "Cargo.toml": "see rust_base_tree",
+   "Cargo.lock": "see rust_base_tree"
+  },
+  "runner_sha256": "a224fb626c1530edbe188c117815a62c77609326ade27efe679c8055a7398715",
+  "overlay_sha256": {},
+  "fixture_sha256": {
+   "tests/oracle/ptrsub_switch_cast_1204.cc": "f810fab0a0d0472c713a02623b34275356f5176dfb2a026a62b4536305c354c9",
+   "tests/oracle/ptrsub_switch_cast_1204.rs": "479af334f262bb8623a8710053399a267a3fa5d1cf0af496c8942b31d17d0c04"
+  },
+  "source_policy": "head-clean: runner builds git archive HEAD + the committed .rs fixture verbatim, no overlays"
+ },
+ "expected_results": {
+  "record_count": 17,
+  "record_order": [
+   "schema",
+   "case=aligned|stage=pre",
+   "case=aligned|stage=post",
+   "case=pa_out_int8|stage=pre",
+   "case=pa_out_int8|stage=post",
+   "case=pa_in_churn|stage=pre",
+   "case=pa_in_churn|stage=post",
+   "case=pa_both_churn|stage=pre",
+   "case=pa_both_churn|stage=post",
+   "case=ia_token|stage=pre",
+   "case=ia_token|stage=post",
+   "case=cast_chain|stage=pre",
+   "case=cast_chain|stage=post",
+   "case=globform|stage=pre",
+   "case=globform|stage=swexpr_pre",
+   "case=globform|stage=post",
+   "case=globform|stage=swexpr_post"
   ],
-  "status_note": "Phase A diagnostic fixture for PTRSUB-SWITCH-CAST-RESIDUAL-0001. A normal runner exit of zero means both pinned byte streams were reproduced and every raw difference is one of the registered known_raw_differences; the fixture remains overall=MISMATCH until the apply-side gaps (PTRADD castOutput arm + implied retype, castInput double-cast guard, castInput constant arm, PTRADD undo preflight/opUndoPtradd, TypeOpIntAdd/arithmetic output tokens) are fixed in src and the pins are re-observed. The production golden for glob_set is switch(cVar3); reaching it additionally requires the upstream jumptable guard normalization which is outside this fixture's direct observation.",
-  "host_toolchain": {
-    "git": "/usr/bin/git",
-    "python": "/usr/bin/python3",
-    "cxx": "/usr/bin/g++",
-    "cc": "/usr/bin/gcc",
-    "ar": "/usr/bin/ar",
-    "make": "/usr/bin/make",
-    "cargo": "/usr/bin/cargo",
-    "rustc": "/usr/bin/rustc",
-    "flock": "/usr/bin/flock"
+  "ghidra_stdout_sha256": "3f48b47f922e23b2c351fc7ebb8b0360acf3d883edd2e5f5c434ab3fe40d2387",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "8dcc0839126eb817331428ece1b3c6e9dedef7e6c2031dfe20e5d7772f2093b6",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "da2b2cfa637b2809ea77b2907382fdbcb1cc34fa866ce9ca3a7719d8524871f1",
+  "raw_diff_labels": [
+   "ghidra.stdout",
+   "rugra.stdout"
+  ],
+  "stdout_bytes_each": {
+   "ghidra": 5634,
+   "rugra": 5322
   },
-  "build_environment": {
-    "PATH": "/usr/bin:/bin",
-    "locale": "LC_ALL=C",
-    "cpp": "make libdecomp.a (CXX g++ -std=c++11) then g++ -std=c++11 -O2 fixture.cc libdecomp.cc sleigh_arch.cc inject_sleigh.cc libdecomp.a -lz",
-    "cargo": "cargo build --offline --locked --frozen --jobs 2 --lib (dev profile, CARGO_INCREMENTAL=0)",
-    "rust_fixture": "rustc --edition=2021 -C opt-level=0 -C overflow-checks=yes fixture.rs --extern rugra=<debug rlib> -L dependency=<debug deps>",
-    "cargo_lock": "committed Cargo.lock, frozen build",
-    "temp_policy": "per-run mktemp dirs under target/oracle-runs, deleted on exit"
+  "raw_diff_bytes": 10347,
+  "exit_codes": {
+   "ghidra": 0,
+   "rugra": 0
   },
-  "execution_evidence": [
-    {
-      "date": "2026-08-29",
-      "command": "tools/run_ptrsub_switch_cast_oracle.sh --validate-only",
-      "exit_code": 0,
-      "result": "all locked oracle/runner/fixture pins validated; overall=MISMATCH (phase A)"
-    },
-    {
-      "date": "2026-08-29",
-      "command": "tools/run_ptrsub_switch_cast_oracle.sh --ghidra-only",
-      "exit_code": 0,
-      "result": "locked oracle rebuilt from e40ed130 and produced the pinned 17-record stream"
-    },
-    {
-      "date": "2026-08-29",
-      "command": "tools/run_ptrsub_switch_cast_oracle.sh",
-      "exit_code": 0,
-      "result": "bilateral run reproduced both pinned streams; all 13 changed records covered by registered known differences; overall=MISMATCH"
-    }
-  ]
+  "determinism": "each side run twice, byte-identical; debug-built Rugra fixture output equals release-built output"
+ },
+ "coverage": {
+  "seed_state_projection": "MATCH (identical IR/CFG/types/highs; ic0 slot-0 input casts identical on all cases)",
+  "ptrsub_output_token_projection": "MATCH (ps token ptr8w1->int4 via downChain offset 0 field, typeop.cc:2349)",
+  "ptrsub_input_cast_projection": "MATCH (typeop.cc:2320 semantics incl. cur==req null, base identity check)",
+  "ptradd_input_cast_projection": "MATCH (typeop.cc:2250 semantics: alignSize comparison key)",
+  "ptradd_output_cast_projection": "MISMATCH (missing cast_output PTRADD arm + implied in-place retype)",
+  "int_add_token_projection": "MISMATCH (out-high vs arithmeticOutputStandard)",
+  "arith_token_projection": "MISMATCH (INT_MULT base-int fallback vs unknown8/ptr preservation)",
+  "castin_doublecast_guard_projection": "MISMATCH (stacks a second CAST instead of retyping in place)",
+  "castin_const_projection": "MISMATCH (missing constant updateType count unit)",
+  "ptradd_undo_preflight_projection": "MISSING (no opUndoPtradd; pa stays PTRADD, no scale INT_MULT)",
+  "switch_expr_render_projection": "MISMATCH (downstream of the above)",
+  "count_bridge_projection": "MISMATCH (count deltas 0/1/1/1/2 vs 1/1/2/2/7 across cases)"
+ },
+ "residual_ids": [
+  "PTRSUB-SWITCH-CAST-RESIDUAL-0001",
+  "COREACTION-PTRADD-OUTCAST-0001",
+  "COREACTION-CASTOUT-IMPLIED-0001",
+  "COREACTION-CASTIN-DOUBLECAST-GUARD-0001",
+  "COREACTION-CASTIN-CONST-0001",
+  "COREACTION-PTRADD-UNDO-PREFLIGHT-0001",
+  "FUNCDATA-OPUNDOPTRADD-0001",
+  "TYPEOP-INTADD-TOKEN-0001",
+  "TYPEOP-ARITH-TOKEN-0001"
+ ],
+ "status_note": "Phase A diagnostic fixture for PTRSUB-SWITCH-CAST-RESIDUAL-0001. A normal runner exit of zero means both pinned byte streams were reproduced and every raw difference is one of the registered known_raw_differences; the fixture remains overall=MISMATCH until the apply-side gaps (PTRADD castOutput arm + implied retype, castInput double-cast guard, castInput constant arm, PTRADD undo preflight/opUndoPtradd, TypeOpIntAdd/arithmetic output tokens) are fixed in src and the pins are re-observed. The production golden for glob_set is switch(cVar3); reaching it additionally requires the upstream jumptable guard normalization which is outside this fixture's direct observation.",
+ "host_toolchain": {
+  "git": "/usr/bin/git",
+  "python": "/usr/bin/python3",
+  "cxx": "/usr/bin/g++",
+  "cc": "/usr/bin/gcc",
+  "ar": "/usr/bin/ar",
+  "make": "/usr/bin/make",
+  "cargo": "/usr/bin/cargo",
+  "rustc": "/usr/bin/rustc",
+  "flock": "/usr/bin/flock"
+ },
+ "build_environment": {
+  "PATH": "/usr/bin:/bin",
+  "locale": "LC_ALL=C",
+  "cpp": "make libdecomp.a (CXX g++ -std=c++11) then g++ -std=c++11 -O2 fixture.cc libdecomp.cc sleigh_arch.cc inject_sleigh.cc libdecomp.a -lz",
+  "cargo": "cargo build --offline --locked --frozen --jobs 2 --lib (dev profile, CARGO_INCREMENTAL=0)",
+  "rust_fixture": "rustc --edition=2021 -C opt-level=0 -C overflow-checks=yes fixture.rs --extern rugra=<debug rlib> -L dependency=<debug deps>",
+  "cargo_lock": "committed Cargo.lock, frozen build",
+  "temp_policy": "per-run mktemp dirs under target/oracle-runs, deleted on exit"
+ },
+ "execution_evidence": [
+  {
+   "date": "2026-08-29",
+   "command": "tools/run_ptrsub_switch_cast_oracle.sh --validate-only",
+   "exit_code": 0,
+   "result": "all locked oracle/runner/fixture pins validated; overall=MISMATCH (phase A)"
+  },
+  {
+   "date": "2026-08-29",
+   "command": "tools/run_ptrsub_switch_cast_oracle.sh --ghidra-only",
+   "exit_code": 0,
+   "result": "locked oracle rebuilt from e40ed130 and produced the pinned 17-record stream"
+  },
+  {
+   "date": "2026-08-29",
+   "command": "tools/run_ptrsub_switch_cast_oracle.sh",
+   "exit_code": 0,
+   "result": "bilateral run reproduced both pinned streams; all 13 changed records covered by registered known differences; overall=MISMATCH"
+  }
+ ],
+ "input_sha256": "6255b0e6dedfc516d9b3a311d1b762932d31f0f65c30d6ee915a42acad644adf"
 }

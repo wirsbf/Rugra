@@ -1,168 +1,168 @@
 {
-  "schema_version": 2,
-  "fixture_id": "PRINTLANGUAGE-ATOM-METADATA-0001",
-  "overall_status": "MISMATCH",
-  "covered_projection_status": "MATCH",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source_blobs": {
-      "printlanguage.cc": "79642ef234ffa59fa4a9b03b9b7ea57e3948982d",
-      "printlanguage.hh": "af6e87cb041a777309541000691d86655f0a8a9d",
-      "prettyprint.cc": "ad8a6ded10382bb4792deba67a2f41007d45c5dc",
-      "prettyprint.hh": "9f6ac1b999d5e0406ae7ab9bedccce2defbf700a"
-    }
-  },
-  "architecture": "language-independent PrintLanguage RPN",
-  "compiler_spec": "none",
-  "analysis_options": {
-    "emitter": "metadata-aware recording Emit boundary",
-    "markup": false,
-    "rpn": "explicit stage-1 hidden operator before each vartoken Atom; empty stack for syntax control",
-    "random_seed": "none",
-    "error_injection": "none"
-  },
-  "input_manifest": {
-    "manifest": {
-      "architecture": "language-independent PrintLanguage RPN",
-      "compiler_spec": "none",
-      "identity_graph": {
-        "global_creation_order": [
-          {
-            "id": "obj0",
-            "kind": "varnode"
-          },
-          {
-            "id": "obj1",
-            "kind": "pcodeop"
-          }
-        ],
-        "relation": {
-          "consumer": "obj1",
-          "input_slot_0": "obj0"
-        },
-        "rugra_transport_ids": {
-          "varnode": 0,
-          "consuming_op": 1,
-          "consuming_op_input_0": 0
-        }
-      },
-      "operator_token": {
-        "print1": "",
-        "print2": "",
-        "stage": 1,
-        "precedence": 70,
-        "associative": false,
-        "type": "hiddenfunction",
-        "spacing": 0,
-        "bump": 0,
-        "negate": null
-      },
-      "atom_sequence": [
-        {
-          "kind": "vartoken",
-          "text_hex": "275c3027",
-          "highlight": "const_color",
-          "varnode": "obj0",
-          "consuming_op": "obj1",
-          "int_value_argument": 0
-        },
-        {
-          "kind": "vartoken",
-          "text_hex": "275c3027",
-          "highlight": "const_color",
-          "varnode": "obj0",
-          "consuming_op": "obj1",
-          "int_value_argument": 0,
-          "purpose": "repeat identity stability"
-        },
-        {
-          "kind": "syntax",
-          "text_hex": "3b",
-          "highlight": "no_color",
-          "annotations": "none"
-        }
-      ],
-      "normalization": {
-        "native_pointer_identity": "single global fixture creation-order IDs obj0/obj1",
-        "event_order": "preserved",
-        "text_bytes": "preserved as lowercase hexadecimal",
-        "other_fields": "not normalized"
-      },
-      "random_seed": "none",
-      "error_injection": "none"
-    },
-    "sha256": "39ca78fff53d289296d0daa858138ecb9c6e3dc5df73db61da2e9ce56b5454ec"
-  },
-  "rugra_source": {
-    "base_commit": "7e91aef6aa28cbf0a77b9812858c276cafa7fbd3",
-    "base_tree": "fd155bc4dd996000d3012c2d49f7244c3a6308ec",
-    "base_src_tree": "c6a2eb0fb690ff9ac693d12d6ea45b606bc713ae",
-    "base_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "base_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "overlays": {
-      "src/prettyprint.rs": "50487a98c79d462370efd38e129963250b486e740e392f004e669bc5e86353c3",
-      "src/printlanguage.rs": "5b9ad5ed18a5d1f4346b1f6452ef370e036796c2f067c362c38f0425c816a142"
-    }
-  },
-  "comparand": {
-    "overlay_sha256": {
-      "src/prettyprint.rs": "50487a98c79d462370efd38e129963250b486e740e392f004e669bc5e86353c3",
-      "src/printlanguage.rs": "5b9ad5ed18a5d1f4346b1f6452ef370e036796c2f067c362c38f0425c816a142"
-    },
-    "fixture_sha256": {
-      "tests/oracle/printlanguage_atom_metadata_1204.cc": "a90408a261e7006f083363123e3c1e7997980bd1ffba094dcb4bab5bddeb6e27",
-      "tests/oracle/printlanguage_atom_metadata_1204.rs": "8c717b256a35fbbf171504fb6f71a7ce37f210795169d3ad687871640ed06a77"
-    },
-    "runner_sha256": "4f8f5e2b2d3b22b6d6bd849f5ccb2c93029ef5ca46299eceb29b750b5b332efa",
-    "host_cxx": "g++ (GCC) 16.2.1 20260810",
-    "host_rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
-    "host_cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
-  },
-  "coverage": {
-    "Atom_vartoken_op_vn_int_constructor": "MATCH",
-    "PrintLanguage_pushAtom_stage1_hidden_group_sequence_and_drain": "MATCH",
-    "PrintLanguage_emitAtom_vartoken_dispatch": "MATCH",
-    "Emit_tagVariable_text_highlight_vn_op_tuple": "MATCH",
-    "repeated_vn_op_identity": "MATCH",
-    "syntax_Atom_without_metadata": "MATCH"
-  },
-  "expected_results": {
-    "record_count": 8,
-    "event_order": [
-      "open_group:g0",
-      "variable:obj0:obj1",
-      "close_group:g0",
-      "open_group:g1",
-      "variable:obj0:obj1",
-      "close_group:g1",
-      "syntax:none:none"
+ "schema_version": 2,
+ "fixture_id": "PRINTLANGUAGE-ATOM-METADATA-0001",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
+ "covered_projection_status": "MATCH",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source_blobs": {
+   "printlanguage.cc": "79642ef234ffa59fa4a9b03b9b7ea57e3948982d",
+   "printlanguage.hh": "af6e87cb041a777309541000691d86655f0a8a9d",
+   "prettyprint.cc": "ad8a6ded10382bb4792deba67a2f41007d45c5dc",
+   "prettyprint.hh": "9f6ac1b999d5e0406ae7ab9bedccce2defbf700a"
+  }
+ },
+ "architecture": "language-independent PrintLanguage RPN",
+ "compiler_spec": "none",
+ "analysis_options": {
+  "emitter": "metadata-aware recording Emit boundary",
+  "markup": false,
+  "rpn": "explicit stage-1 hidden operator before each vartoken Atom; empty stack for syntax control",
+  "random_seed": "none",
+  "error_injection": "none"
+ },
+ "input_manifest": {
+  "manifest": {
+   "architecture": "language-independent PrintLanguage RPN",
+   "compiler_spec": "none",
+   "identity_graph": {
+    "global_creation_order": [
+     {
+      "id": "obj0",
+      "kind": "varnode"
+     },
+     {
+      "id": "obj1",
+      "kind": "pcodeop"
+     }
     ],
-    "stdout_bytes_each": 678,
-    "stdout_sha256_each": "d84d1ae86bad70fc570630ebbc8a65f172f97655d129a6b49b2faded09c9acbd",
-    "stderr_sha256_each": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "exit_codes": {
-      "ghidra": 0,
-      "rugra": 0,
-      "raw_diff": 0,
-      "normal_runner": 0
+    "relation": {
+     "consumer": "obj1",
+     "input_slot_0": "obj0"
+    },
+    "rugra_transport_ids": {
+     "varnode": 0,
+     "consuming_op": 1,
+     "consuming_op_input_0": 0
     }
-  },
-  "residual_boundary": [
+   },
+   "operator_token": {
+    "print1": "",
+    "print2": "",
+    "stage": 1,
+    "precedence": 70,
+    "associative": false,
+    "type": "hiddenfunction",
+    "spacing": 0,
+    "bump": 0,
+    "negate": null
+   },
+   "atom_sequence": [
     {
-      "id": "PRINTLANGUAGE-ATOM-METADATA-0001-R1",
-      "status": "MISMATCH",
-      "scope": "EmitPrettyPrint/TokenSplit variable metadata transport",
-      "reason": "Ghidra TokenSplit stores highlight, Varnode, and PcodeOp and replays them to its low-level emitter; the pinned Rugra TokenSplit/EmitPrettyPrint path retains only variable text before low-level emission. This fixture ends at the metadata-aware Emit boundary."
+     "kind": "vartoken",
+     "text_hex": "275c3027",
+     "highlight": "const_color",
+     "varnode": "obj0",
+     "consuming_op": "obj1",
+     "int_value_argument": 0
     },
     {
-      "id": "PRINTLANGUAGE-ATOM-METADATA-0001-R2",
-      "status": "UNTESTED",
-      "scope": "other pushAtom branches, Atom tag variants, and EmitMarkup XML encoding",
-      "reason": "The fixture covers only an empty pending-node list, a stage-1 hidden RPN operator, vartoken dispatch, and a syntax no-annotation control."
+     "kind": "vartoken",
+     "text_hex": "275c3027",
+     "highlight": "const_color",
+     "varnode": "obj0",
+     "consuming_op": "obj1",
+     "int_value_argument": 0,
+     "purpose": "repeat identity stability"
+    },
+    {
+     "kind": "syntax",
+     "text_hex": "3b",
+     "highlight": "no_color",
+     "annotations": "none"
     }
-  ]
+   ],
+   "normalization": {
+    "native_pointer_identity": "single global fixture creation-order IDs obj0/obj1",
+    "event_order": "preserved",
+    "text_bytes": "preserved as lowercase hexadecimal",
+    "other_fields": "not normalized"
+   },
+   "random_seed": "none",
+   "error_injection": "none"
+  },
+  "sha256": "39ca78fff53d289296d0daa858138ecb9c6e3dc5df73db61da2e9ce56b5454ec"
+ },
+ "rugra_source": {
+  "base_commit": "7e91aef6aa28cbf0a77b9812858c276cafa7fbd3",
+  "base_tree": "fd155bc4dd996000d3012c2d49f7244c3a6308ec",
+  "base_src_tree": "c6a2eb0fb690ff9ac693d12d6ea45b606bc713ae",
+  "base_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "base_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "overlays": {
+   "src/prettyprint.rs": "50487a98c79d462370efd38e129963250b486e740e392f004e669bc5e86353c3",
+   "src/printlanguage.rs": "5b9ad5ed18a5d1f4346b1f6452ef370e036796c2f067c362c38f0425c816a142"
+  }
+ },
+ "comparand": {
+  "overlay_sha256": {
+   "src/prettyprint.rs": "50487a98c79d462370efd38e129963250b486e740e392f004e669bc5e86353c3",
+   "src/printlanguage.rs": "5b9ad5ed18a5d1f4346b1f6452ef370e036796c2f067c362c38f0425c816a142"
+  },
+  "fixture_sha256": {
+   "tests/oracle/printlanguage_atom_metadata_1204.cc": "a90408a261e7006f083363123e3c1e7997980bd1ffba094dcb4bab5bddeb6e27",
+   "tests/oracle/printlanguage_atom_metadata_1204.rs": "8c717b256a35fbbf171504fb6f71a7ce37f210795169d3ad687871640ed06a77"
+  },
+  "runner_sha256": "4f8f5e2b2d3b22b6d6bd849f5ccb2c93029ef5ca46299eceb29b750b5b332efa",
+  "host_cxx": "g++ (GCC) 16.2.1 20260810",
+  "host_rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
+  "host_cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
+ },
+ "coverage": {
+  "Atom_vartoken_op_vn_int_constructor": "MATCH",
+  "PrintLanguage_pushAtom_stage1_hidden_group_sequence_and_drain": "MATCH",
+  "PrintLanguage_emitAtom_vartoken_dispatch": "MATCH",
+  "Emit_tagVariable_text_highlight_vn_op_tuple": "MATCH",
+  "repeated_vn_op_identity": "MATCH",
+  "syntax_Atom_without_metadata": "MATCH"
+ },
+ "expected_results": {
+  "record_count": 8,
+  "event_order": [
+   "open_group:g0",
+   "variable:obj0:obj1",
+   "close_group:g0",
+   "open_group:g1",
+   "variable:obj0:obj1",
+   "close_group:g1",
+   "syntax:none:none"
+  ],
+  "stdout_bytes_each": 678,
+  "stdout_sha256_each": "d84d1ae86bad70fc570630ebbc8a65f172f97655d129a6b49b2faded09c9acbd",
+  "stderr_sha256_each": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "exit_codes": {
+   "ghidra": 0,
+   "rugra": 0,
+   "raw_diff": 0,
+   "normal_runner": 0
+  }
+ },
+ "residual_boundary": [
+  {
+   "id": "PRINTLANGUAGE-ATOM-METADATA-0001-R1",
+   "status": "MISMATCH",
+   "scope": "EmitPrettyPrint/TokenSplit variable metadata transport",
+   "reason": "Ghidra TokenSplit stores highlight, Varnode, and PcodeOp and replays them to its low-level emitter; the pinned Rugra TokenSplit/EmitPrettyPrint path retains only variable text before low-level emission. This fixture ends at the metadata-aware Emit boundary."
+  },
+  {
+   "id": "PRINTLANGUAGE-ATOM-METADATA-0001-R2",
+   "status": "UNTESTED",
+   "scope": "other pushAtom branches, Atom tag variants, and EmitMarkup XML encoding",
+   "reason": "The fixture covers only an empty pending-node list, a stage-1 hidden RPN operator, vartoken dispatch, and a syntax no-annotation control."
+  }
+ ]
 }

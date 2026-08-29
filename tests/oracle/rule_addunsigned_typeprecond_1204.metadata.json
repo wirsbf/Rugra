@@ -1,116 +1,116 @@
 {
-  "schema_version": 2,
-  "fixture_id": "RULE-ADDUNSIGNED-TYPEPRECOND-0001",
-  "projection_status": "MATCH",
-  "overall_status": "MISMATCH",
-  "status_note": "The seven-line covered projection matches RuleAddUnsigned::getOpList and three base-type applyOp paths against locked Ghidra 12.0.4. Overall is MISMATCH because source-proven differences remain in Rust's type-less None path, op-aware union resolution, named EquateSymbol rejection, enum named-value polarity, and rule-name spelling; printable-character and pool-repeat paths are untested under the same TODO.",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
-  },
-  "rugra_base_commit": "8012627083360e0111506dc70d891552383a8c65",
-  "architecture": {
-    "id": "synthetic-le64-rule-fixture",
-    "endianness": "little",
-    "pointer_size": 8,
-    "spaces": "const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; byte addressed",
-    "type_factory": "one architecture-owned factory shared by all cases; canonical xunknown1/2/4/8 plus getBase(1,TYPE_UINT)"
-  },
-  "compiler_spec": {
-    "id": "fixture",
-    "prototype_xml": "<prototype name=\"fixture\" extrapop=\"0\"><input/><output/></prototype>",
-    "calling_convention": "empty input/output records; no effects, symbols, or injections"
-  },
-  "analysis_options": {
-    "api": "Direct production RuleAddUnsigned::getOpList once and RuleAddUnsigned::applyOp once per case; no ActionGroup, pool repeat, type propagation, or other Rule runs",
-    "funcdata": "Fresh synthetic Funcdata and BlockBasic per case; one shared architecture TypeFactory; high-level mode disabled",
-    "ir": "One alive CPUI_INT_ADD with a one-byte register input, a one-byte constant in slot 1, and one written unique output. All edges are installed through Funcdata APIs. uint_ff installs the same-factory canonical TYPE_UINT with typelock+namelock flags but no SymbolEntry; uint_7f installs canonical TYPE_UINT unlocked; unknown_ff retains newConstant's canonical TYPE_UNKNOWN.",
-    "normalization": "None. The emitted projection uses semantic scalar values and exact within-case identity booleans; opcode numbers, create indices, list counts/order membership, flags, and def-use counts are not normalized.",
-    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent",
-    "random_seed": "none; construction and rule execution are deterministic",
-    "error_injection": "none"
-  },
-  "input_manifest": {
-    "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
-    "cases": [
-      {
-        "id": "unknown_ff",
-        "constant_size": 1,
-        "constant_value": 255,
-        "read_facing_type": "same-factory canonical TYPE_UNKNOWN from newConstant",
-        "locks": "typelock=0, namelock=0, SymbolEntry=null",
-        "expect": "return 0; INT_ADD and slot-1 identity unchanged"
-      },
-      {
-        "id": "uint_ff",
-        "constant_size": 1,
-        "constant_value": 255,
-        "read_facing_type": "same-factory canonical TYPE_UINT",
-        "locks": "typelock=1, namelock=1, SymbolEntry=null",
-        "expect": "return 1; INT_SUB with fresh constant 1; type and both locks copied; old/new def-use updated"
-      },
-      {
-        "id": "uint_7f",
-        "constant_size": 1,
-        "constant_value": 127,
-        "read_facing_type": "same-factory canonical TYPE_UINT",
-        "locks": "typelock=0, namelock=0, SymbolEntry=null",
-        "expect": "return 0 at high-quarter guard; INT_ADD and slot-1 identity unchanged"
-      }
-    ],
-    "sha256": "ae485d18ac6d0461f9bbd093c8a4d28e1a9386f340491e288a5a0304b03e6e33"
-  },
-  "observation_schema": {
-    "format": "Seven fixed-order UTF-8 lines with final newline: one getOpList record followed by before/after records for unknown_ff, uint_ff, and uint_7f",
-    "rule_result_and_opcode": "Exact getOpList count/opcode, applyOp return, and post-call opcode",
-    "identity_and_constant": "Slot-0, slot-1 source/fresh, output identities plus current constant value/size/class",
-    "type_and_symbol": "Current metatype/size, source/canonical-uint pointer identity, typelock, namelock, SymbolEntry presence and source/replacement identity",
-    "def_use_and_lifecycle": "Source/current/input descendant counts, output definition, current definition-null state, alive/dead counts and membership, block/parent/dead state, and exact source/current/input/output create indices"
-  },
-  "decisive_semantics": {
-    "references_and_outputs": "MATCH for the three covered cases: op and input0/output identities persist; uint_ff replaces only slot 1, copySymbol preserves the canonical datatype and lock bits, opSetInput removes the source descendant and adds the replacement descendant.",
-    "loop_bounds_and_order": "MATCH for getOpList's single push and the straight-line covered applyOp guards. No iteration occurs in the covered applyOp paths; alive/dead/block membership remains exact.",
-    "counters_and_accumulators": "MATCH for calc_mask, sa=size*6, quarter=(mask>>sa)<<sa, negatedVal=(-val)&mask and VarnodeBank create-index progression in all three cases.",
-    "sort_and_comparison_keys": "MATCH for covered pointer-identity comparisons (source/replacement datatype and SymbolEntry) and exact TYPE_UINT metatype/value masks. Enum named-value lookup and op-aware union field selection remain outside the projection."
-  },
-  "coverage": {
-    "getoplist_int_add_only": "MATCH",
-    "default_unknown_ff_reject": "MATCH",
-    "canonical_uint_ff_transform": "MATCH",
-    "canonical_uint_7f_high_quarter_reject": "MATCH",
-    "copy_symbol_type_and_lock_fields": "MATCH for a null-SymbolEntry constant carrying typelock+namelock; real mapentry/high-variable bookkeeping is not covered",
-    "rust_none_type_path": "MISMATCH: Rust's Option::None falls through to the numeric transform, while valid Ghidra Varnodes always carry a Datatype pointer; RULE-ADDUNSIGNED-TYPEPRECOND-0001",
-    "op_aware_union_resolution": "MISMATCH: Ghidra calls getTypeReadFacing(op), while RuleAddUnsigned currently calls the parameterless degenerate Rust accessor; RULE-ADDUNSIGNED-TYPEPRECOND-0001",
-    "char_print_reject": "UNTESTED: no canonical printable character case; RULE-ADDUNSIGNED-TYPEPRECOND-0001",
-    "named_equate_reject": "MISSING: production Rust applyOp does not implement the SymbolEntry/EquateSymbol name-lock guard at ruleaction.cc:7196-7201; RULE-ADDUNSIGNED-TYPEPRECOND-0001",
-    "enum_named_value_polarity": "MISSING: production Rust applyOp does not implement ruleaction.cc:7204-7207; RULE-ADDUNSIGNED-TYPEPRECOND-0001",
-    "rule_name": "MISMATCH: Ghidra constructor registers addunsigned (ruleaction.hh:1145), while Rust get_name returns add_unsigned; RULE-ADDUNSIGNED-TYPEPRECOND-0001",
-    "pool_repeat_convergence": "UNTESTED: direct one-shot Rule invocation only; RULE-ADDUNSIGNED-TYPEPRECOND-0001",
-    "malformed_ir_and_exceptions": "OUT_OF_DOMAIN: locked applyOp assumes a binary INT_ADD dispatched by the Rule pool"
-  },
-  "residual_todo_ids": [
-    "RULE-ADDUNSIGNED-TYPEPRECOND-0001"
+ "schema_version": 2,
+ "fixture_id": "RULE-ADDUNSIGNED-TYPEPRECOND-0001",
+ "projection_status": "MATCH",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
+ "status_note": "The seven-line covered projection matches RuleAddUnsigned::getOpList and three base-type applyOp paths against locked Ghidra 12.0.4. Overall is MISMATCH because source-proven differences remain in Rust's type-less None path, op-aware union resolution, named EquateSymbol rejection, enum named-value polarity, and rule-name spelling; printable-character and pool-repeat paths are untested under the same TODO.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_base_commit": "8012627083360e0111506dc70d891552383a8c65",
+ "architecture": {
+  "id": "synthetic-le64-rule-fixture",
+  "endianness": "little",
+  "pointer_size": 8,
+  "spaces": "const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; byte addressed",
+  "type_factory": "one architecture-owned factory shared by all cases; canonical xunknown1/2/4/8 plus getBase(1,TYPE_UINT)"
+ },
+ "compiler_spec": {
+  "id": "fixture",
+  "prototype_xml": "<prototype name=\"fixture\" extrapop=\"0\"><input/><output/></prototype>",
+  "calling_convention": "empty input/output records; no effects, symbols, or injections"
+ },
+ "analysis_options": {
+  "api": "Direct production RuleAddUnsigned::getOpList once and RuleAddUnsigned::applyOp once per case; no ActionGroup, pool repeat, type propagation, or other Rule runs",
+  "funcdata": "Fresh synthetic Funcdata and BlockBasic per case; one shared architecture TypeFactory; high-level mode disabled",
+  "ir": "One alive CPUI_INT_ADD with a one-byte register input, a one-byte constant in slot 1, and one written unique output. All edges are installed through Funcdata APIs. uint_ff installs the same-factory canonical TYPE_UINT with typelock+namelock flags but no SymbolEntry; uint_7f installs canonical TYPE_UINT unlocked; unknown_ff retains newConstant's canonical TYPE_UNKNOWN.",
+  "normalization": "None. The emitted projection uses semantic scalar values and exact within-case identity booleans; opcode numbers, create indices, list counts/order membership, flags, and def-use counts are not normalized.",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent",
+  "random_seed": "none; construction and rule execution are deterministic",
+  "error_injection": "none"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+  "cases": [
+   {
+    "id": "unknown_ff",
+    "constant_size": 1,
+    "constant_value": 255,
+    "read_facing_type": "same-factory canonical TYPE_UNKNOWN from newConstant",
+    "locks": "typelock=0, namelock=0, SymbolEntry=null",
+    "expect": "return 0; INT_ADD and slot-1 identity unchanged"
+   },
+   {
+    "id": "uint_ff",
+    "constant_size": 1,
+    "constant_value": 255,
+    "read_facing_type": "same-factory canonical TYPE_UINT",
+    "locks": "typelock=1, namelock=1, SymbolEntry=null",
+    "expect": "return 1; INT_SUB with fresh constant 1; type and both locks copied; old/new def-use updated"
+   },
+   {
+    "id": "uint_7f",
+    "constant_size": 1,
+    "constant_value": 127,
+    "read_facing_type": "same-factory canonical TYPE_UINT",
+    "locks": "typelock=0, namelock=0, SymbolEntry=null",
+    "expect": "return 0 at high-quarter guard; INT_ADD and slot-1 identity unchanged"
+   }
   ],
-  "comparand": {
-    "cpp_fixture_sha256": "49731c02f192ae6da1b055202a01f70b6f9d2add039be8192e2118bf3d72d938",
-    "rust_fixture_sha256": "587346f7b4bf2b2c12cb07c72f0ad17b4cd1cf8f1ebfb3fd8c01f69e8b83dfe4",
-    "ruleaction_rs_sha256": "b119f29eb5a6127d0b2c8c079c579b31310a045060271f7e72f06efdf4e0f236",
-    "runner_sha256": "06a0c10e6fdc4e5050999455526a7e1b8673aeb950a21380ab59889fdacba1b1",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "expected_ghidra_stdout_sha256": "eb119897c44a70ba77d0006840caa4cbd7d83dc40625aef6da19f4cb8e25241b",
-    "expected_rugra_stdout_sha256": "eb119897c44a70ba77d0006840caa4cbd7d83dc40625aef6da19f4cb8e25241b",
-    "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
-  },
-  "build": {
-    "rust_overlay": "Archive Rugra base 8012627083360e0111506dc70d891552383a8c65 and overlay only the owned src/ruleaction.rs candidate before the isolated offline build",
-    "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler",
-    "expected_stdout_lines": 7
-  }
+  "sha256": "ae485d18ac6d0461f9bbd093c8a4d28e1a9386f340491e288a5a0304b03e6e33"
+ },
+ "observation_schema": {
+  "format": "Seven fixed-order UTF-8 lines with final newline: one getOpList record followed by before/after records for unknown_ff, uint_ff, and uint_7f",
+  "rule_result_and_opcode": "Exact getOpList count/opcode, applyOp return, and post-call opcode",
+  "identity_and_constant": "Slot-0, slot-1 source/fresh, output identities plus current constant value/size/class",
+  "type_and_symbol": "Current metatype/size, source/canonical-uint pointer identity, typelock, namelock, SymbolEntry presence and source/replacement identity",
+  "def_use_and_lifecycle": "Source/current/input descendant counts, output definition, current definition-null state, alive/dead counts and membership, block/parent/dead state, and exact source/current/input/output create indices"
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "MATCH for the three covered cases: op and input0/output identities persist; uint_ff replaces only slot 1, copySymbol preserves the canonical datatype and lock bits, opSetInput removes the source descendant and adds the replacement descendant.",
+  "loop_bounds_and_order": "MATCH for getOpList's single push and the straight-line covered applyOp guards. No iteration occurs in the covered applyOp paths; alive/dead/block membership remains exact.",
+  "counters_and_accumulators": "MATCH for calc_mask, sa=size*6, quarter=(mask>>sa)<<sa, negatedVal=(-val)&mask and VarnodeBank create-index progression in all three cases.",
+  "sort_and_comparison_keys": "MATCH for covered pointer-identity comparisons (source/replacement datatype and SymbolEntry) and exact TYPE_UINT metatype/value masks. Enum named-value lookup and op-aware union field selection remain outside the projection."
+ },
+ "coverage": {
+  "getoplist_int_add_only": "MATCH",
+  "default_unknown_ff_reject": "MATCH",
+  "canonical_uint_ff_transform": "MATCH",
+  "canonical_uint_7f_high_quarter_reject": "MATCH",
+  "copy_symbol_type_and_lock_fields": "MATCH for a null-SymbolEntry constant carrying typelock+namelock; real mapentry/high-variable bookkeeping is not covered",
+  "rust_none_type_path": "MISMATCH: Rust's Option::None falls through to the numeric transform, while valid Ghidra Varnodes always carry a Datatype pointer; RULE-ADDUNSIGNED-TYPEPRECOND-0001",
+  "op_aware_union_resolution": "MISMATCH: Ghidra calls getTypeReadFacing(op), while RuleAddUnsigned currently calls the parameterless degenerate Rust accessor; RULE-ADDUNSIGNED-TYPEPRECOND-0001",
+  "char_print_reject": "UNTESTED: no canonical printable character case; RULE-ADDUNSIGNED-TYPEPRECOND-0001",
+  "named_equate_reject": "MISSING: production Rust applyOp does not implement the SymbolEntry/EquateSymbol name-lock guard at ruleaction.cc:7196-7201; RULE-ADDUNSIGNED-TYPEPRECOND-0001",
+  "enum_named_value_polarity": "MISSING: production Rust applyOp does not implement ruleaction.cc:7204-7207; RULE-ADDUNSIGNED-TYPEPRECOND-0001",
+  "rule_name": "MISMATCH: Ghidra constructor registers addunsigned (ruleaction.hh:1145), while Rust get_name returns add_unsigned; RULE-ADDUNSIGNED-TYPEPRECOND-0001",
+  "pool_repeat_convergence": "UNTESTED: direct one-shot Rule invocation only; RULE-ADDUNSIGNED-TYPEPRECOND-0001",
+  "malformed_ir_and_exceptions": "OUT_OF_DOMAIN: locked applyOp assumes a binary INT_ADD dispatched by the Rule pool"
+ },
+ "residual_todo_ids": [
+  "RULE-ADDUNSIGNED-TYPEPRECOND-0001"
+ ],
+ "comparand": {
+  "cpp_fixture_sha256": "49731c02f192ae6da1b055202a01f70b6f9d2add039be8192e2118bf3d72d938",
+  "rust_fixture_sha256": "587346f7b4bf2b2c12cb07c72f0ad17b4cd1cf8f1ebfb3fd8c01f69e8b83dfe4",
+  "ruleaction_rs_sha256": "b119f29eb5a6127d0b2c8c079c579b31310a045060271f7e72f06efdf4e0f236",
+  "runner_sha256": "06a0c10e6fdc4e5050999455526a7e1b8673aeb950a21380ab59889fdacba1b1",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "expected_ghidra_stdout_sha256": "eb119897c44a70ba77d0006840caa4cbd7d83dc40625aef6da19f4cb8e25241b",
+  "expected_rugra_stdout_sha256": "eb119897c44a70ba77d0006840caa4cbd7d83dc40625aef6da19f4cb8e25241b",
+  "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+ },
+ "build": {
+  "rust_overlay": "Archive Rugra base 8012627083360e0111506dc70d891552383a8c65 and overlay only the owned src/ruleaction.rs candidate before the isolated offline build",
+  "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler",
+  "expected_stdout_lines": 7
+ }
 }

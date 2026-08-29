@@ -45,7 +45,7 @@
   "normalization": "block addresses are signed offsets from the function symbol; object identity is preserved as insertion ordinal",
   "ordering": "BlockGraph list order and edge insertion/slot order are observed without sorting",
   "aliasing": "entry_ordinal identifies the exact object returned by getStartBlock; peer ordinals preserve self-edge and synthetic-entry identity",
-  "overall_status": "MATCH",
+  "overall_status": "UNTESTED",
   "covered": [
    "ordinary one-block function registers list[0] as the sole f_entry_point block",
    "a back-edge into the initial block creates an empty synthetic front block",

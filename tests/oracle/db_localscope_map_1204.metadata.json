@@ -1,344 +1,344 @@
 {
-  "schema_version": 2,
-  "fixture_id": "DB-LOCALSCOPE-MAP-1204",
-  "todo_ids": [
-    "DB-LOCALSCOPE-MAP-0001"
-  ],
-  "status_note": "First oracle pin of the Scope::addMap property fold (database.cc:1149-1153) and the Database flagbase partmap (database.cc:3220-3265, partmap.hh:50-160): 24 records byte-identical on both sides, including the hole-vs-mapsym document-order interleave, the partition accumulate/sub-range-clear semantics, the encode/decode changepoint round-trip, the victim construction order and the global-discovery uselimit clear. Overall UNTESTED: production install call sites still thread the zero-property context (the arch→Database unification gap) and the space-top open-end sentinel stays unported.",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ "schema_version": 2,
+ "fixture_id": "DB-LOCALSCOPE-MAP-1204",
+ "todo_ids": [
+  "DB-LOCALSCOPE-MAP-0001"
+ ],
+ "status_note": "First oracle pin of the Scope::addMap property fold (database.cc:1149-1153) and the Database flagbase partmap (database.cc:3220-3265, partmap.hh:50-160): 24 records byte-identical on both sides, including the hole-vs-mapsym document-order interleave, the partition accumulate/sub-range-clear semantics, the encode/decode changepoint round-trip, the victim construction order and the global-discovery uselimit clear. Overall UNTESTED: production install call sites still thread the zero-property context (the arch\u2192Database unification gap) and the space-top open-end sentinel stays unported.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_source": {
+  "base_commit": "813a30e67d925b285c8596b07d6420c81ebc2e2d",
+  "base_tree": "5882eff4846f478c77fed0b5457490cff1a56d59",
+  "base_src_tree": "65d3f282ed79a0085d21d6518ad33454ef8aefcf",
+  "base_database_blob": "2a35b4e5911f42251936df383161bd67b0c862e0",
+  "base_varmap_blob": "7aa83b206a40d1e9e79ec27aeea8dd6dd77685d2",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "addMap mutates entry.symbol->flags by REFERENCE (symbol-level, shared across the Symbol's entries) and clears entry.uselimit in place on a global-discovery hit (database.cc:1131-1142); setPropertyRange/clearPropertyRange mutate the shared flagbase partitions in place; queryProperties' uint4&flags side-output observes getAllFlags (database.hh:271) or the scope/property branches (database.cc:1270/1273-1276/1279).",
+  "loop_bounds_traversal_order": "The set/clear walk runs aiter=flagbase.begin(addr1) (lower_bound, partmap.hh:70) to biter=begin(addr2)|end() \u2014 partitions of [getFirstAddr, getLastAddrOpen) in Address natural order; <hole> children apply setPropertyRange at their DOCUMENT POSITION inside <symbollist> (database.cc:2768-2784) so a mapsym before the hole never folds and one after does; the fold reads the property at entry.addr (the mapping START) exactly once.",
+  "counter_accumulator_lifecycle": "Partition values accumulate bitwise: |= flags on set (database.cc:3236), &= ~flags on clear (database.cc:3261) \u2014 overlapping ranges stack (readonly|volatile=0x2800) and a sub-range clear leaves neighbours' bits intact; symbol flags accumulate per mapping (|= persist at 1132/1139, |= addrtied|property at 1150-1153) and never un-fold, so construction order is observable (the victim case).",
+  "sorting_comparison_keys": "The flagbase is std::map<Address,uint4> under Address natural ordering \u2014 space index first, then offset (address.hh:375-396); getValue is upper_bound-then-step-back with the 0 default before the first split (partmap.hh:83-93, database.cc:2929); split copies the preceding partition's value (partmap.hh:119-134); encode emits the split points in that order."
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec"
+ },
+ "analysis_options": {
+  "api": "Direct Database::{setPropertyRange, clearPropertyRange, getProperty, encode, decode}, Scope::addMapSym (via <db>/<scope> decode), Scope::addSymbol/addMapPoint -> Scope::addMap and rugra::database::{Database, Scope, PartMap, AddMapContext} + rugra::varmap::ScopeLocal::{install_symbol_addmap, add_map_entry_with_property, query_properties_ex} invocations; no ActionGroup or other Action runs",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
+  "error_injection": "none",
+  "ghidra_funcdata": "Locked BfdArchitecture over the pinned examples/curl input supplies the Ghidra Funcdata, address spaces, TypeFactory, live symboltab flagbase and the persistent ScopeLocal (function GetStr at 0x36d0); property ranges go through the production Database::setPropertyRange / decodeHole paths; symbols install through Scope::addSymbol (production addMap); every qp observable comes from the REAL Scope::queryProperties return",
+  "rugra_scope": "Rugra drives rugra::database::Database with the PartMap flagbase (set/clear/encode/decode), hand-built marshal <db> documents for the hole/mapsym interleave, and an isolated ScopeLocal whose install paths carry the flagbase closure (the production seam models the glb->symboltab handle); ghidra_space_index pins const=0 unique=2 ram=3 stack=8 as printed by the live oracle",
+  "ir": "No P-code ops are constructed; the observable is exclusively flagbase partition values, changepoint sequences, per-query queryProperties returns (entry identity + flags hex + answering scope) and decoded getAllFlags projections",
+  "normalization": "No Ghidra/Rugra behavior difference is normalized or removed. The C++ dump keeps std::hex sticky across offset/size/flags; the Rust fixture formats all of them as hex explicitly. Loader warnings route into an in-fixture ostringstream (both stderr streams empty and hash-pinned); the decodeInterleave property samples read glb->symboltab \u2014 the seam ScopeInternal::decodeHole actually writes through (database.cc:2684) \u2014 which the production Rust decode models as the Database being decoded itself. Pointer/Arc addresses never appear in the records.",
+  "random_seed": "none; all queries and construction are deterministic"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "01f123b8715e0dd1059dababf49436f42f9d662f38a4a3525d6c502406030e3b",
+  "rust_fixture_sha256": "47a0b3850982b0bccf53c5edd2f9a9536e1498a86cc5d8c6de6ab5f3451ef6ce",
+  "runner_sha256": "631c66e8198732cf01b003fccf4da09ee3d8b62338cdb3c3fd153f623f455c4d"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
-  "rugra_source": {
-    "base_commit": "813a30e67d925b285c8596b07d6420c81ebc2e2d",
-    "base_tree": "5882eff4846f478c77fed0b5457490cff1a56d59",
-    "base_src_tree": "65d3f282ed79a0085d21d6518ad33454ef8aefcf",
-    "base_database_blob": "2a35b4e5911f42251936df383161bd67b0c862e0",
-    "base_varmap_blob": "7aa83b206a40d1e9e79ec27aeea8dd6dd77685d2",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
   },
-  "decisive_semantics": {
-    "reference_output_parameters": "addMap mutates entry.symbol->flags by REFERENCE (symbol-level, shared across the Symbol's entries) and clears entry.uselimit in place on a global-discovery hit (database.cc:1131-1142); setPropertyRange/clearPropertyRange mutate the shared flagbase partitions in place; queryProperties' uint4&flags side-output observes getAllFlags (database.hh:271) or the scope/property branches (database.cc:1270/1273-1276/1279).",
-    "loop_bounds_traversal_order": "The set/clear walk runs aiter=flagbase.begin(addr1) (lower_bound, partmap.hh:70) to biter=begin(addr2)|end() — partitions of [getFirstAddr, getLastAddrOpen) in Address natural order; <hole> children apply setPropertyRange at their DOCUMENT POSITION inside <symbollist> (database.cc:2768-2784) so a mapsym before the hole never folds and one after does; the fold reads the property at entry.addr (the mapping START) exactly once.",
-    "counter_accumulator_lifecycle": "Partition values accumulate bitwise: |= flags on set (database.cc:3236), &= ~flags on clear (database.cc:3261) — overlapping ranges stack (readonly|volatile=0x2800) and a sub-range clear leaves neighbours' bits intact; symbol flags accumulate per mapping (|= persist at 1132/1139, |= addrtied|property at 1150-1153) and never un-fold, so construction order is observable (the victim case).",
-    "sorting_comparison_keys": "The flagbase is std::map<Address,uint4> under Address natural ordering — space index first, then offset (address.hh:375-396); getValue is upper_bound-then-step-back with the 0 default before the first split (partmap.hh:83-93, database.cc:2929); split copies the preceding partition's value (partmap.hh:119-134); encode emits the split points in that order."
-  },
-  "architecture": "x86:LE:64:default",
   "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec"
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
   },
-  "analysis_options": {
-    "api": "Direct Database::{setPropertyRange, clearPropertyRange, getProperty, encode, decode}, Scope::addMapSym (via <db>/<scope> decode), Scope::addSymbol/addMapPoint -> Scope::addMap and rugra::database::{Database, Scope, PartMap, AddMapContext} + rugra::varmap::ScopeLocal::{install_symbol_addmap, add_map_entry_with_property, query_properties_ex} invocations; no ActionGroup or other Action runs",
-    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
-    "error_injection": "none",
-    "ghidra_funcdata": "Locked BfdArchitecture over the pinned examples/curl input supplies the Ghidra Funcdata, address spaces, TypeFactory, live symboltab flagbase and the persistent ScopeLocal (function GetStr at 0x36d0); property ranges go through the production Database::setPropertyRange / decodeHole paths; symbols install through Scope::addSymbol (production addMap); every qp observable comes from the REAL Scope::queryProperties return",
-    "rugra_scope": "Rugra drives rugra::database::Database with the PartMap flagbase (set/clear/encode/decode), hand-built marshal <db> documents for the hole/mapsym interleave, and an isolated ScopeLocal whose install paths carry the flagbase closure (the production seam models the glb->symboltab handle); ghidra_space_index pins const=0 unique=2 ram=3 stack=8 as printed by the live oracle",
-    "ir": "No P-code ops are constructed; the observable is exclusively flagbase partition values, changepoint sequences, per-query queryProperties returns (entry identity + flags hex + answering scope) and decoded getAllFlags projections",
-    "normalization": "No Ghidra/Rugra behavior difference is normalized or removed. The C++ dump keeps std::hex sticky across offset/size/flags; the Rust fixture formats all of them as hex explicitly. Loader warnings route into an in-fixture ostringstream (both stderr streams empty and hash-pinned); the decodeInterleave property samples read glb->symboltab — the seam ScopeInternal::decodeHole actually writes through (database.cc:2684) — which the production Rust decode models as the Database being decoded itself. Pointer/Arc addresses never appear in the records.",
-    "random_seed": "none; all queries and construction are deterministic"
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
   },
-  "comparand": {
-    "cpp_fixture_sha256": "01f123b8715e0dd1059dababf49436f42f9d662f38a4a3525d6c502406030e3b",
-    "rust_fixture_sha256": "47a0b3850982b0bccf53c5edd2f9a9536e1498a86cc5d8c6de6ab5f3451ef6ce",
-    "runner_sha256": "631c66e8198732cf01b003fccf4da09ee3d8b62338cdb3c3fd153f623f455c4d"
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544
   },
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-      "size": 11721
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-      "size": 12182
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-      "size": 5390
-    },
-    "binary": {
-      "path": "examples/curl",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544
-    },
-    "bfd": {
-      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-    }
+  "bfd": {
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  }
+ },
+ "input_manifest": {
+  "binary": {
+   "path": "examples/curl",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544,
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd"
   },
-  "input_manifest": {
-    "binary": {
-      "path": "examples/curl",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544,
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd"
-    },
-    "functions": [
-      "GetStr@0x36d0"
-    ],
-    "cases": [
-      {
-        "case": "setup",
-        "record_count": 1
-      },
-      {
-        "case": "fb_accumulate",
-        "record_count": 1
-      },
-      {
-        "case": "fb_clear_subrange",
-        "record_count": 1
-      },
-      {
-        "case": "fb_roundtrip",
-        "record_count": 1
-      },
-      {
-        "case": "fb_roundtrip_prop",
-        "record_count": 1
-      },
-      {
-        "case": "fb_hole_interleave",
-        "record_count": 1
-      },
-      {
-        "case": "fb_hole_interleave",
-        "record_count": 1
-      },
-      {
-        "case": "fb_hole_interleave-prop",
-        "record_count": 1
-      },
-      {
-        "case": "fb_hole_interleave_flipped",
-        "record_count": 1
-      },
-      {
-        "case": "fb_hole_interleave_flipped",
-        "record_count": 1
-      },
-      {
-        "case": "fb_hole_interleave_flipped-prop",
-        "record_count": 1
-      },
-      {
-        "case": "fold_ro_after",
-        "record_count": 1
-      },
-      {
-        "case": "fold_vol_after",
-        "record_count": 1
-      },
-      {
-        "case": "fold_overlap_both",
-        "record_count": 1
-      },
-      {
-        "case": "fold_overlap_ro_only",
-        "record_count": 1
-      },
-      {
-        "case": "fold_overlap_vol_only",
-        "record_count": 1
-      },
-      {
-        "case": "fold_tail_overlap",
-        "record_count": 1
-      },
-      {
-        "case": "fold_usepoint_guard_hit",
-        "record_count": 1
-      },
-      {
-        "case": "fold_usepoint_guard_miss",
-        "record_count": 1
-      },
-      {
-        "case": "fold_victim_before",
-        "record_count": 1
-      },
-      {
-        "case": "fold_victim_scope_only",
-        "record_count": 1
-      },
-      {
-        "case": "fold_global_persist",
-        "record_count": 1
-      },
-      {
-        "case": "fold_discovery_clear",
-        "record_count": 1
-      },
-      {
-        "case": "fold_discovery_uselimit",
-        "record_count": 1
-      }
-    ],
-    "sha256": "1cca14e3b10d709656eb91c1739cb93324569b736eabc163c86d691a9c7f8804"
-  },
-  "expected_results": {
-    "ghidra_stdout_sha256": "e7ba6e2caf61256df80ef6e688236f5bc10a12a0cdcefe07bc130cc09c2e2b34",
-    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "e7ba6e2caf61256df80ef6e688236f5bc10a12a0cdcefe07bc130cc09c2e2b34",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "diff_exit_code": 0,
-    "record_count": 24,
-    "case_order": [
-      "setup",
-      "fb_accumulate",
-      "fb_clear_subrange",
-      "fb_roundtrip",
-      "fb_roundtrip_prop",
-      "fb_hole_interleave",
-      "fb_hole_interleave",
-      "fb_hole_interleave-prop",
-      "fb_hole_interleave_flipped",
-      "fb_hole_interleave_flipped",
-      "fb_hole_interleave_flipped-prop",
-      "fold_ro_after",
-      "fold_vol_after",
-      "fold_overlap_both",
-      "fold_overlap_ro_only",
-      "fold_overlap_vol_only",
-      "fold_tail_overlap",
-      "fold_usepoint_guard_hit",
-      "fold_usepoint_guard_miss",
-      "fold_victim_before",
-      "fold_victim_scope_only",
-      "fold_global_persist",
-      "fold_discovery_clear",
-      "fold_discovery_uselimit"
-    ]
-  },
-  "coverage": {
-    "setup_space_indices": {
-      "status": "MATCH",
-      "covers": "setup record: live oracle indices const=0 unique=2 ram=3 stack=8 equal Rugra ghidra_space_index",
-      "residual_todo_ids": []
-    },
-    "flagbase_partition_accumulate": {
-      "status": "MATCH",
-      "covers": "fb_accumulate: overlapping setPropertyRange calls OR into shared partitions (0x2000/0x2800/0x800/0x0 sampled around both boundaries, database.cc:3236)",
-      "residual_todo_ids": []
-    },
-    "flagbase_subrange_clear": {
-      "status": "MATCH",
-      "covers": "fb_clear_subrange: clearPropertyRange ANDs away only the listed bits inside [first,last_open) — the hole drops to 0 while both neighbours and the volatile overlap bit survive (database.cc:3260-3265)",
-      "residual_todo_ids": []
-    },
-    "flagbase_roundtrip_changepoints": {
-      "status": "MATCH",
-      "covers": "fb_roundtrip(+_prop): encode emits one <property_changepoint> per split point with the cumulative value; decode assigns each split its exact value (database.cc:3273-3288/3325-3335) — the 6-point sequence and 4 samples byte-equal",
-      "residual_todo_ids": []
-    },
-    "hole_document_order_interleave": {
-      "status": "MATCH",
-      "covers": "fb_hole_interleave(_flipped): <hole> applies setPropertyRange at its document position (database.cc:2768-2784→2683-2685) — mapsym BEFORE the hole installs without the fold (0x20c000), AFTER folds (0x20e000); hole-first folds both",
-      "residual_todo_ids": []
-    },
-    "fold_readonly_after": {
-      "status": "MATCH",
-      "covers": "fold_ro_after: property-first construction — empty-uselimit static map ORs the flagbase bits at entry.addr into the SYMBOL (getAllFlags 0x20a000, database.cc:1149-1153)",
-      "residual_todo_ids": []
-    },
-    "fold_volatile_after": {
-      "status": "MATCH",
-      "covers": "fold_vol_after: the volatile variant (0x208800)",
-      "residual_todo_ids": []
-    },
-    "fold_overlap_partitions": {
-      "status": "MATCH",
-      "covers": "fold_overlap_both/ro_only/vol_only: the fold reads the property at each mapping START — both bits / readonly-only / volatile-only from the accumulated partitions",
-      "residual_todo_ids": []
-    },
-    "fold_tail_start_address": {
-      "status": "MATCH",
-      "covers": "fold_tail_overlap: a range starting INSIDE the symbol extent folds nothing (entry.addr only, 0x208000)",
-      "residual_todo_ids": []
-    },
-    "fold_usepoint_guard": {
-      "status": "MATCH",
-      "covers": "fold_usepoint_guard_hit/miss: a usepoint-restricted map takes NEITHER addrtied NOR the fold (bare 0x200000 at the usepoint; scope-only 0x20a000 at invalid)",
-      "residual_todo_ids": []
-    },
-    "fold_victim_construction_order": {
-      "status": "MATCH",
-      "covers": "fold_victim_before/scope_only: symbol installed BEFORE the range never folds (0x208000); the property shows only through the query-time getProperty of the scope-only branch (0x20a000, database.cc:1273-1276)",
-      "residual_todo_ids": []
-    },
-    "fold_global_persist": {
-      "status": "MATCH",
-      "covers": "fold_global_persist: global-scope symbol in a readonly ram range — persist AND the fold both land (0x20e000, database.cc:1131-1132+1153)",
-      "residual_todo_ids": []
-    },
-    "fold_discovery_uselimit_clear": {
-      "status": "MATCH",
-      "covers": "fold_discovery_clear/uselimit: database.cc:1133-1142 — local symbol in the global discovery range with a usepoint gets persist AND its uselimit CLEARED, feeding addrtied+fold so the entry answers at an INVALID usepoint (0x20e000, uselimit_empty=1)",
-      "residual_todo_ids": []
-    },
-    "production_database_threading": {
-      "status": "UNTESTED",
-      "covers": "The fixture injects the flagbase closure / AddMapContext at every fold site; production map-install call sites (varmap add_symbol / add_fake_input paths, database.rs overrideSizeType re-add) still pass the zero-property / None context, so the fold is not observable on the production pipeline until the arch→Database wiring lands.",
-      "residual_todo_ids": [
-        "DB-LOCALSCOPE-MAP-0001"
-      ]
-    },
-    "space_top_open_end_sentinel": {
-      "status": "UNTESTED",
-      "covers": "The partmap walk uses Range::get_last_addr_open = last.next() as the open end; the Address::m_maximal sentinel for a range running to the exact space top with no later space (address.cc:265-279) is unported — equivalent for getValue queries, but encode would emit a changepoint at space-top+1 for that corner. No fixture case reaches the corner.",
-      "residual_todo_ids": [
-        "DB-LOCALSCOPE-MAP-0001"
-      ]
-    }
-  },
-  "projection_status": "MATCH",
-  "overall_status": "UNTESTED",
-  "residual_todo_ids": [
-    "DB-LOCALSCOPE-MAP-0001"
+  "functions": [
+   "GetStr@0x36d0"
   ],
-  "residual_union": [
-    {
-      "todo_id": "DB-LOCALSCOPE-MAP-0001",
-      "status": "UNTESTED",
-      "branches": [
-        {
-          "id": "production_database_threading",
-          "status": "UNTESTED",
-          "detail": "Production map-install call sites (varmap add_symbol/add_fake_input paths, database.rs overrideSizeType re-add) pass the zero-property / None context — the arch→Database wiring that supplies the real flagbase lookup is the DB-LOCALSCOPE-MAP-0001 unification itself; fixtures inject the flagbase closure, production cannot yet. Fix = thread the Architecture symboltab handle through the production install paths."
-        },
-        {
-          "id": "space_top_open_end_sentinel",
-          "status": "UNTESTED",
-          "detail": "Range::get_last_addr_open has no Address::m_maximal sentinel for the \"range runs to the space top and no later space exists\" corner (address.cc:265-279): last.next() is used as the open end — equivalent for getValue queries; the residual is a changepoint emitted at space-top+1 in encode for that corner. Fix = port the m_maximal sentinel + getNextSpaceInOrder roll into address.rs."
-        }
-      ]
-    }
+  "cases": [
+   {
+    "case": "setup",
+    "record_count": 1
+   },
+   {
+    "case": "fb_accumulate",
+    "record_count": 1
+   },
+   {
+    "case": "fb_clear_subrange",
+    "record_count": 1
+   },
+   {
+    "case": "fb_roundtrip",
+    "record_count": 1
+   },
+   {
+    "case": "fb_roundtrip_prop",
+    "record_count": 1
+   },
+   {
+    "case": "fb_hole_interleave",
+    "record_count": 1
+   },
+   {
+    "case": "fb_hole_interleave",
+    "record_count": 1
+   },
+   {
+    "case": "fb_hole_interleave-prop",
+    "record_count": 1
+   },
+   {
+    "case": "fb_hole_interleave_flipped",
+    "record_count": 1
+   },
+   {
+    "case": "fb_hole_interleave_flipped",
+    "record_count": 1
+   },
+   {
+    "case": "fb_hole_interleave_flipped-prop",
+    "record_count": 1
+   },
+   {
+    "case": "fold_ro_after",
+    "record_count": 1
+   },
+   {
+    "case": "fold_vol_after",
+    "record_count": 1
+   },
+   {
+    "case": "fold_overlap_both",
+    "record_count": 1
+   },
+   {
+    "case": "fold_overlap_ro_only",
+    "record_count": 1
+   },
+   {
+    "case": "fold_overlap_vol_only",
+    "record_count": 1
+   },
+   {
+    "case": "fold_tail_overlap",
+    "record_count": 1
+   },
+   {
+    "case": "fold_usepoint_guard_hit",
+    "record_count": 1
+   },
+   {
+    "case": "fold_usepoint_guard_miss",
+    "record_count": 1
+   },
+   {
+    "case": "fold_victim_before",
+    "record_count": 1
+   },
+   {
+    "case": "fold_victim_scope_only",
+    "record_count": 1
+   },
+   {
+    "case": "fold_global_persist",
+    "record_count": 1
+   },
+   {
+    "case": "fold_discovery_clear",
+    "record_count": 1
+   },
+   {
+    "case": "fold_discovery_uselimit",
+    "record_count": 1
+   }
+  ],
+  "sha256": "1cca14e3b10d709656eb91c1739cb93324569b736eabc163c86d691a9c7f8804"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "e7ba6e2caf61256df80ef6e688236f5bc10a12a0cdcefe07bc130cc09c2e2b34",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "e7ba6e2caf61256df80ef6e688236f5bc10a12a0cdcefe07bc130cc09c2e2b34",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0,
+  "record_count": 24,
+  "case_order": [
+   "setup",
+   "fb_accumulate",
+   "fb_clear_subrange",
+   "fb_roundtrip",
+   "fb_roundtrip_prop",
+   "fb_hole_interleave",
+   "fb_hole_interleave",
+   "fb_hole_interleave-prop",
+   "fb_hole_interleave_flipped",
+   "fb_hole_interleave_flipped",
+   "fb_hole_interleave_flipped-prop",
+   "fold_ro_after",
+   "fold_vol_after",
+   "fold_overlap_both",
+   "fold_overlap_ro_only",
+   "fold_overlap_vol_only",
+   "fold_tail_overlap",
+   "fold_usepoint_guard_hit",
+   "fold_usepoint_guard_miss",
+   "fold_victim_before",
+   "fold_victim_scope_only",
+   "fold_global_persist",
+   "fold_discovery_clear",
+   "fold_discovery_uselimit"
   ]
+ },
+ "coverage": {
+  "setup_space_indices": {
+   "status": "MATCH",
+   "covers": "setup record: live oracle indices const=0 unique=2 ram=3 stack=8 equal Rugra ghidra_space_index",
+   "residual_todo_ids": []
+  },
+  "flagbase_partition_accumulate": {
+   "status": "MATCH",
+   "covers": "fb_accumulate: overlapping setPropertyRange calls OR into shared partitions (0x2000/0x2800/0x800/0x0 sampled around both boundaries, database.cc:3236)",
+   "residual_todo_ids": []
+  },
+  "flagbase_subrange_clear": {
+   "status": "MATCH",
+   "covers": "fb_clear_subrange: clearPropertyRange ANDs away only the listed bits inside [first,last_open) \u2014 the hole drops to 0 while both neighbours and the volatile overlap bit survive (database.cc:3260-3265)",
+   "residual_todo_ids": []
+  },
+  "flagbase_roundtrip_changepoints": {
+   "status": "MATCH",
+   "covers": "fb_roundtrip(+_prop): encode emits one <property_changepoint> per split point with the cumulative value; decode assigns each split its exact value (database.cc:3273-3288/3325-3335) \u2014 the 6-point sequence and 4 samples byte-equal",
+   "residual_todo_ids": []
+  },
+  "hole_document_order_interleave": {
+   "status": "MATCH",
+   "covers": "fb_hole_interleave(_flipped): <hole> applies setPropertyRange at its document position (database.cc:2768-2784\u21922683-2685) \u2014 mapsym BEFORE the hole installs without the fold (0x20c000), AFTER folds (0x20e000); hole-first folds both",
+   "residual_todo_ids": []
+  },
+  "fold_readonly_after": {
+   "status": "MATCH",
+   "covers": "fold_ro_after: property-first construction \u2014 empty-uselimit static map ORs the flagbase bits at entry.addr into the SYMBOL (getAllFlags 0x20a000, database.cc:1149-1153)",
+   "residual_todo_ids": []
+  },
+  "fold_volatile_after": {
+   "status": "MATCH",
+   "covers": "fold_vol_after: the volatile variant (0x208800)",
+   "residual_todo_ids": []
+  },
+  "fold_overlap_partitions": {
+   "status": "MATCH",
+   "covers": "fold_overlap_both/ro_only/vol_only: the fold reads the property at each mapping START \u2014 both bits / readonly-only / volatile-only from the accumulated partitions",
+   "residual_todo_ids": []
+  },
+  "fold_tail_start_address": {
+   "status": "MATCH",
+   "covers": "fold_tail_overlap: a range starting INSIDE the symbol extent folds nothing (entry.addr only, 0x208000)",
+   "residual_todo_ids": []
+  },
+  "fold_usepoint_guard": {
+   "status": "MATCH",
+   "covers": "fold_usepoint_guard_hit/miss: a usepoint-restricted map takes NEITHER addrtied NOR the fold (bare 0x200000 at the usepoint; scope-only 0x20a000 at invalid)",
+   "residual_todo_ids": []
+  },
+  "fold_victim_construction_order": {
+   "status": "MATCH",
+   "covers": "fold_victim_before/scope_only: symbol installed BEFORE the range never folds (0x208000); the property shows only through the query-time getProperty of the scope-only branch (0x20a000, database.cc:1273-1276)",
+   "residual_todo_ids": []
+  },
+  "fold_global_persist": {
+   "status": "MATCH",
+   "covers": "fold_global_persist: global-scope symbol in a readonly ram range \u2014 persist AND the fold both land (0x20e000, database.cc:1131-1132+1153)",
+   "residual_todo_ids": []
+  },
+  "fold_discovery_uselimit_clear": {
+   "status": "MATCH",
+   "covers": "fold_discovery_clear/uselimit: database.cc:1133-1142 \u2014 local symbol in the global discovery range with a usepoint gets persist AND its uselimit CLEARED, feeding addrtied+fold so the entry answers at an INVALID usepoint (0x20e000, uselimit_empty=1)",
+   "residual_todo_ids": []
+  },
+  "production_database_threading": {
+   "status": "UNTESTED",
+   "covers": "The fixture injects the flagbase closure / AddMapContext at every fold site; production map-install call sites (varmap add_symbol / add_fake_input paths, database.rs overrideSizeType re-add) still pass the zero-property / None context, so the fold is not observable on the production pipeline until the arch\u2192Database wiring lands.",
+   "residual_todo_ids": [
+    "DB-LOCALSCOPE-MAP-0001"
+   ]
+  },
+  "space_top_open_end_sentinel": {
+   "status": "UNTESTED",
+   "covers": "The partmap walk uses Range::get_last_addr_open = last.next() as the open end; the Address::m_maximal sentinel for a range running to the exact space top with no later space (address.cc:265-279) is unported \u2014 equivalent for getValue queries, but encode would emit a changepoint at space-top+1 for that corner. No fixture case reaches the corner.",
+   "residual_todo_ids": [
+    "DB-LOCALSCOPE-MAP-0001"
+   ]
+  }
+ },
+ "projection_status": "MATCH",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "residual_todo_ids": [
+  "DB-LOCALSCOPE-MAP-0001"
+ ],
+ "residual_union": [
+  {
+   "todo_id": "DB-LOCALSCOPE-MAP-0001",
+   "status": "UNTESTED",
+   "branches": [
+    {
+     "id": "production_database_threading",
+     "status": "UNTESTED",
+     "detail": "Production map-install call sites (varmap add_symbol/add_fake_input paths, database.rs overrideSizeType re-add) pass the zero-property / None context \u2014 the arch\u2192Database wiring that supplies the real flagbase lookup is the DB-LOCALSCOPE-MAP-0001 unification itself; fixtures inject the flagbase closure, production cannot yet. Fix = thread the Architecture symboltab handle through the production install paths."
+    },
+    {
+     "id": "space_top_open_end_sentinel",
+     "status": "UNTESTED",
+     "detail": "Range::get_last_addr_open has no Address::m_maximal sentinel for the \"range runs to the space top and no later space exists\" corner (address.cc:265-279): last.next() is used as the open end \u2014 equivalent for getValue queries; the residual is a changepoint emitted at space-top+1 in encode for that corner. Fix = port the m_maximal sentinel + getNextSpaceInOrder roll into address.rs."
+    }
+   ]
+  }
+ ]
 }

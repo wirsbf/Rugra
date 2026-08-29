@@ -1,266 +1,267 @@
 {
-  "schema_version": 1,
-  "fixture_id": "RETURNFOLD-GAPB-CONDCONST-0001",
-  "overall_status": "MATCH",
-  "overall_scope": "CPUI_RETURN special case of ActionConditionalConst::propagateConstant (coreaction.cc:4439-4448 copyBeforeRet COPY insertion) driven through the production apply/findConstCompare path, plus the RulePropagateCopy cc:3933 RETURN guard composition; not a whole-ActionConditionalConst MATCH (phi arm, implied-boolean arm, apply return value out of lease)",
-  "covered_projection": {
-    "oracle_capture": {
-      "status": "ORACLE_CAPTURED"
-    },
-    "rugra_execution": {
-      "status": "EXECUTED"
-    },
-    "bilateral_comparison": {
-      "status": "MATCH"
-    }
+ "schema_version": 1,
+ "fixture_id": "RETURNFOLD-GAPB-CONDCONST-0001",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "overall_scope": "CPUI_RETURN special case of ActionConditionalConst::propagateConstant (coreaction.cc:4439-4448 copyBeforeRet COPY insertion) driven through the production apply/findConstCompare path, plus the RulePropagateCopy cc:3933 RETURN guard composition; not a whole-ActionConditionalConst MATCH (phi arm, implied-boolean arm, apply return value out of lease)",
+ "covered_projection": {
+  "oracle_capture": {
+   "status": "ORACLE_CAPTURED"
   },
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "sources": [
-      "coreaction.cc:4383-4467 ActionConditionalConst::propagateConstant (RETURN arm 4439-4448)",
-      "coreaction.cc:4478-4511 ActionConditionalConst::findConstCompare",
-      "coreaction.cc:4514-4546 ActionConditionalConst::apply",
-      "ruleaction.cc:3926-3957 RulePropagateCopy::applyOp (isReturnCopy guard :3933)",
-      "typeop.cc:875-879 TypeOpReturn opflags (return_copy on every RETURN)",
-      "funcdata_varnode.cc:104-122 Funcdata::newVarnodeOut",
-      "funcdata_op.cc:104-125 Funcdata::opSetInput (const single-descendant dedup)",
-      "action.cc:298-350 Action::perform (count=0 at status_start :306)"
-    ]
+  "rugra_execution": {
+   "status": "EXECUTED"
   },
-  "architecture": {
-    "language": "synthetic-fixture-x86-64",
-    "endianness": "little",
-    "spaces": "constant,other,unique,ram(3,wordsize 1),register,stack,join,iop",
-    "type_factory": "FixtureArchitecture: xunknownN core set + setupSizes (Rugra standalone Funcdata needs no TypeFactory for this action)"
-  },
-  "compiler_spec": {
-    "id": "synthetic-fixture-empty-proto",
-    "ghidra_prototype": "fixture; extrapop=0; empty input/output lists (no FuncCallSpecs involved)",
-    "rugra_prototype": "default FuncProto (no callsites)",
-    "scope": "no prototype interaction: condconst reads only the block graph, CBRANCH booleans and varnode data-flow"
-  },
-  "analysis_options": {
-    "action": "production ActionConditionalConst (apply + findConstCompare + propagateConstant) invoked directly twice with per-apply count zeroing",
-    "structure_reset": true,
-    "heritage_info_list": "built before apply (C++ numHeritagePasses dereferences getInfo unconditionally)",
-    "heritage_passes": 0,
-    "use_multiequal": false,
-    "rule_pass": "full RulePropagateCopy sweep over all live ops after the second apply",
-    "random_seed": "none",
-    "error_injection": "none"
-  },
-  "input_manifest": {
-    "graph": {
-      "function": "gapb at ram:0x60000, 5 BlockBasic blocks",
-      "blocks": "b0 entry [INT_EQUAL X,5 -> t; CBRANCH t] out0=b4(false) out1=b1(true); b1 constBlock [CBRANCH q] out0=b2 out1=b3; b2 [INT_ADD X,1; RETURN X]; b3 [RETURN X]; b4 [RETURN X] (not dominated)",
-      "varnodes": "X = register:0x0:4 input read by 5 ops (descend order INT_EQUAL,INT_ADD,RETURN(b2),RETURN(b3),RETURN(b4)); q = register:0x8:1 input (unwritten, blocks b1's CBRANCH from producing points); t = unique:0x900:1 INT_EQUAL output; y = unique:0x904:4 INT_ADD output; const5 = const 4-byte 5; INT_ADD in1 = const 4-byte 1; RETURN in(0) = const 1-byte 0",
-      "pcs": "eq 0x60000, add 0x60008, ret_b2 0x60010, ret_b3 0x60018, ret_b4 0x60020, cbranch_b1 0x60028, cbranch_b0 0x60030"
-    },
-    "cases": [
-      {
-        "label": "RET-COPY",
-        "construct": "dominated RETURN reads X",
-        "expected": "copyBeforeRet COPY inserted before the RETURN; slot 1 holds the COPY output at X's (space,offset,size); COPY pc == RETURN pc; no return_copy flag on the COPY; RETURN keeps its own return_copy flag"
-      },
-      {
-        "label": "NO-CONST-RETURN",
-        "construct": "post-state scan",
-        "expected": "no RETURN holds a constant in any slot >= 1 anywhere (the GAP-B defect form RETURN const never appears)"
-      },
-      {
-        "label": "NON-RETURN",
-        "construct": "dominated INT_ADD reads X",
-        "expected": "direct slot replacement with the constant (cc:4449-4452), no COPY inserted for it"
-      },
-      {
-        "label": "MULTI-RET",
-        "construct": "two dominated RETURNs in the same ConstPoint",
-        "expected": "one COPY each; the two COPY input-0 constants are distinct varnodes (opSetInput const dedup)"
-      },
-      {
-        "label": "NEG-CTL",
-        "construct": "non-dominated RETURN in b4",
-        "expected": "untouched: keeps reading X, no COPY in b4"
-      },
-      {
-        "label": "COUNT",
-        "construct": "per-apply count",
-        "expected": "pass1 count=3 (1 INT_ADD + 2 RETURN arms); pass2 count=0 (loneDescend gate rejects X after severance)"
-      },
-      {
-        "label": "RULEPROP",
-        "construct": "full RulePropagateCopy sweep post-propagation",
-        "expected": "hits=0: cc:3933 isReturnCopy skips the RETURN targets, the copyBeforeRet inputs are never folded into the RETURNs"
-      }
-    ]
-  },
-  "observation_schema": {
-    "records": "schema=1, pre, pass1, ret x3 (b2,b3,b4), add, pass2, ruleprop, case_apply_return, case_phi_arm, case_implied_bool, case_print_fold",
-    "normalization": "varnode descriptors use Ghidra space names (register/unique/const) on both sides; op pcs printed as hex offsets (space pinned by construction: C++ code space ram index 3); per-apply count zeroed on both sides (C++ CountProbe::zeroCount mirroring Action::perform action.cc:306, Rust apply zeroes internally) — accumulator reset-point asymmetry recorded as CONDCONST-APPLY-RETURN-0001",
-    "pre_state": "RPO block inventory (creation names pin the reorder b0,b1,b3,b2,b4), X location + descend order, per-block op orders, return_copy flags on all three RETURNs"
-  },
-  "locked_capture": {
-    "status": "ORACLE_CAPTURED",
-    "deterministic_runs": 2,
-    "records": 13,
-    "bytes": 1895,
-    "stdout_sha256": "112c47dae77b59227da160b6e2f44933e21d71b1b768873aa362384d69eef73c",
-    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  },
-  "paired_expected": {
-    "ghidra": {
-      "status": "ORACLE_CAPTURED",
-      "deterministic_runs": 2,
-      "records": 13,
-      "bytes": 1895,
-      "stdout_sha256": "112c47dae77b59227da160b6e2f44933e21d71b1b768873aa362384d69eef73c",
-      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    "rugra": {
-      "status": "EXECUTED",
-      "deterministic_runs": 2,
-      "records": 13,
-      "bytes": 1895,
-      "stdout_sha256": "112c47dae77b59227da160b6e2f44933e21d71b1b768873aa362384d69eef73c",
-      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    "bilateral": {
-      "status": "MATCH",
-      "diff_exit_code": 0,
-      "records": 0,
-      "bytes": 0,
-      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    }
-  },
-  "comparand": {
-    "rugra_base_commit": "c2a4a652566c361ff97a34e222ecff7f336588e2",
-    "rugra_base_tree": "0a331f5f17dfa149811067cbd5ec81171f92b9c3",
-    "rugra_base_src_tree": "3b8cfb862c0e5283c0c70bc33d0a97b699a586ff",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "snapshot_model": "immutable partial GAP-B crate snapshot: git archive of commit c2a4a652 carrying the propagateConstant CPUI_RETURN copyBeforeRet arm; no source overlays",
-    "archive_paths": [
-      "Cargo.toml",
-      "Cargo.lock",
-      "build.rs",
-      "README.md",
-      "benches/decompile_bench.rs",
-      "tests/oracle/decompress_1204.rs",
-      "tests/oracle/funcproto_lock_1204.rs",
-      "examples/curl",
-      "sleigh_specs",
-      "src",
-      "sleigh_shim"
-    ],
-    "overlays": [],
-    "base_source_sha256": {
-      "Cargo.toml": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-      "Cargo.lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-      "build.rs": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-      "src/coreaction.rs": "7e4d7195744f3fa6a08a37a6c5cecd48a3a8e09e3feb372ffe427ab9548b5769"
-    },
-    "snapshot_build_link": {
-      "path": "ghidra",
-      "target": "repo ghidra symlink"
-    },
-    "cpp_fixture_sha256": "f1cfc5ccc943beea1134d9c7576d6350749a64fce5fb7a18b70ece2b2be7071a",
-    "rust_fixture_sha256": "d5ea276790b2ef80a7a5a635b23ce2a3da8a7ed32668391dd9045aadd82707ae",
-    "runner_sha256": "34b41a800e232718edd5f7e17a550622dc98c9808a16a98c092648db2c691bdc"
-  },
-  "build": {
-    "rugra_build_status": "EXECUTED",
-    "cargo_invoked": true,
-    "cargo_target_dir": "/home/wirs/.cache/a67-gapb-target",
-    "cargo_tmp_dir": "/home/wirs/.cache/a67-gapb-tmp",
-    "cargo_lock": "/tmp/rugra-cargo-build.lock",
-    "timeout_per_build_seconds": 600
-  },
-  "host_tools": {
-    "cxx": "g++ (GCC) 16.2.1 20260810",
-    "cxx_target": "x86_64-pc-linux-gnu",
-    "cc": "gcc (GCC) 16.2.1 20260810",
-    "cc_target": "x86_64-pc-linux-gnu",
-    "ar": "GNU ar (GNU Binutils) 2.47",
-    "make": "GNU Make 4.4.1",
-    "python": "Python 3.14.7",
-    "git": "git version 2.55.0",
-    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-    "tool_binary_sha256": {
-      "cargo": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
-      "rustc": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618"
-    }
-  },
-  "coverage": {
-    "return_copy_insertion_form": {
-      "status": "MATCH",
-      "detail": "b2/b3 dominated RETURNs: slot 1 = copyBeforeRet COPY output at register:0x0:4, copy_pc==ret_pc, blk_ops gains COPY immediately before RETURN (cc:4442-4447)"
-    },
-    "return_never_takes_constant": {
-      "status": "MATCH",
-      "detail": "in1_const=0 on all three RETURNs and returns_const_value_slot=0 function-wide; the pre-fix GAP-B defect form (RETURN const) is designed-observable and would flip these bits"
-    },
-    "non_return_direct_slot": {
-      "status": "MATCH",
-      "detail": "INT_ADD in0 becomes const:0x5:4 directly (cc:4449-4452), no COPY introduced for it (b2 order INT_ADD,COPY,RETURN — the COPY belongs to the RETURN)"
-    },
-    "multi_return_distinct_consts": {
-      "status": "MATCH",
-      "detail": "copies=b2:1,b3:1 with distinct_copy_in0=1: each COPY input 0 is a fresh constant varnode (opSetInput const dedup, funcdata_op.cc:108-115)"
-    },
-    "non_dominated_return_untouched": {
-      "status": "MATCH",
-      "detail": "b4 RETURN keeps in1=X (in1_def=input), no COPY in b4 (constBlock does not dominate b4)"
-    },
-    "copy_flag_split": {
-      "status": "MATCH",
-      "detail": "copy_retflag=0 (condconst copyBeforeRet is never marked return_copy) vs ret_retflag=1 (TypeOpReturn opflags, typeop.cc:879) — the two COPY species are distinguishable downstream"
-    },
-    "count_semantics": {
-      "status": "MATCH",
-      "detail": "pass1 count=3 (1 INT_ADD + 2 RETURN arms, cc:4453 outside the if/else); pass2 count=0 after the loneDescend gate rejects the severed X"
-    },
-    "pre_state_parity": {
-      "status": "MATCH",
-      "detail": "identical RPO inventory (b0:2,b1:1,b3:1,b2:2,b4:1), X descend order, per-block op orders, and return_copy flags before apply (same-input proof)"
-    },
-    "rulepropagatecopy_return_guard": {
-      "status": "MATCH",
-      "detail": "full sweep hits=0; cc:3933 isReturnCopy skips the RETURN targets so the COPY inputs are never folded into the RETURNs; b2/b3 op orders unchanged by the rule pass"
-    },
-    "idempotency_pass2": {
-      "status": "MATCH",
-      "detail": "second apply: count=0, x_desc_after/b2_ops/b3_ops/b4_ops/returns_const_value_slot all identical to pass1"
-    },
-    "apply_return_value": {
-      "status": "UNTESTED",
-      "detail": "Ghidra apply returns 0 unconditionally (cc:4545) while Rugra returns count>0; count accumulator zeroing also differs (perform :306 vs apply start). Both out of the GAP-B lease (CONDCONST-APPLY-RETURN-0001); the fixture projects per-apply count with fixture-side zeroing instead"
-    },
-    "phi_arm": {
-      "status": "UNTESTED",
-      "detail": "MULTIEQUAL phi replacement (handlePhiNodes/placeCopy) not exercised; use_multiequal=false on both sides in this matrix (heritage pass 0); Rugra additionally force-disables the arm as a documented convergence guard (CONDCONST-MULTIEQUAL-GUARD-0001)"
-    },
-    "implied_bool_arm": {
-      "status": "UNTESTED",
-      "detail": "implied-boolean points need boolVn without a lone descendant; fixture boolVn t is read only by its CBRANCH on both sides (CONDCONST-IMPLIEDBOOL-0001); Rugra force-disables this arm too"
-    },
-    "print_fold": {
-      "status": "UNTESTED",
-      "detail": "the return 10 print fold needs MarkExplicit/MarkImplied/PrintC downstream plus the still-missing ActionPrototypeTypes output-locked arm (GAP-A) and the BASEEXPLICIT-NUMINST/MARKIMPLIED-COUNT counters (GAP-D: COREACTION-BASEEXPLICIT-NUMINST-0001, COREACTION-MARKIMPLIED-COUNT-0001); this fixture is IR-level only"
-    }
-  },
-  "residual_ids": [
-    "CONDCONST-APPLY-RETURN-0001",
-    "CONDCONST-MULTIEQUAL-GUARD-0001",
-    "CONDCONST-IMPLIEDBOOL-0001"
-  ],
-  "execution_evidence": [
-    "manual dual-side run 2026-08-25: locked oracle (git archive e40ed130 + make libdecomp.a) vs live worktree rlib (c2a4a652), stdout sha256 112c47dae77b59227da160b6e2f44933e21d71b1b768873aa362384d69eef73c on both sides, diff exit 0, both stderr empty",
-    "runner run 2026-08-25 (tools/run_returnfold_gapb_oracle.sh): snapshot git-archive build of c2a4a652, oracle make libdecomp.a + g++ fixture, cargo --offline --locked + rustc fixture, both binaries run twice deterministically; ghidra stdout sha256 112c47da... == rugra stdout sha256, diff exit 0, overall_status=MATCH"
+  "bilateral_comparison": {
+   "status": "MATCH"
+  }
+ },
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "sources": [
+   "coreaction.cc:4383-4467 ActionConditionalConst::propagateConstant (RETURN arm 4439-4448)",
+   "coreaction.cc:4478-4511 ActionConditionalConst::findConstCompare",
+   "coreaction.cc:4514-4546 ActionConditionalConst::apply",
+   "ruleaction.cc:3926-3957 RulePropagateCopy::applyOp (isReturnCopy guard :3933)",
+   "typeop.cc:875-879 TypeOpReturn opflags (return_copy on every RETURN)",
+   "funcdata_varnode.cc:104-122 Funcdata::newVarnodeOut",
+   "funcdata_op.cc:104-125 Funcdata::opSetInput (const single-descendant dedup)",
+   "action.cc:298-350 Action::perform (count=0 at status_start :306)"
   ]
+ },
+ "architecture": {
+  "language": "synthetic-fixture-x86-64",
+  "endianness": "little",
+  "spaces": "constant,other,unique,ram(3,wordsize 1),register,stack,join,iop",
+  "type_factory": "FixtureArchitecture: xunknownN core set + setupSizes (Rugra standalone Funcdata needs no TypeFactory for this action)"
+ },
+ "compiler_spec": {
+  "id": "synthetic-fixture-empty-proto",
+  "ghidra_prototype": "fixture; extrapop=0; empty input/output lists (no FuncCallSpecs involved)",
+  "rugra_prototype": "default FuncProto (no callsites)",
+  "scope": "no prototype interaction: condconst reads only the block graph, CBRANCH booleans and varnode data-flow"
+ },
+ "analysis_options": {
+  "action": "production ActionConditionalConst (apply + findConstCompare + propagateConstant) invoked directly twice with per-apply count zeroing",
+  "structure_reset": true,
+  "heritage_info_list": "built before apply (C++ numHeritagePasses dereferences getInfo unconditionally)",
+  "heritage_passes": 0,
+  "use_multiequal": false,
+  "rule_pass": "full RulePropagateCopy sweep over all live ops after the second apply",
+  "random_seed": "none",
+  "error_injection": "none"
+ },
+ "input_manifest": {
+  "graph": {
+   "function": "gapb at ram:0x60000, 5 BlockBasic blocks",
+   "blocks": "b0 entry [INT_EQUAL X,5 -> t; CBRANCH t] out0=b4(false) out1=b1(true); b1 constBlock [CBRANCH q] out0=b2 out1=b3; b2 [INT_ADD X,1; RETURN X]; b3 [RETURN X]; b4 [RETURN X] (not dominated)",
+   "varnodes": "X = register:0x0:4 input read by 5 ops (descend order INT_EQUAL,INT_ADD,RETURN(b2),RETURN(b3),RETURN(b4)); q = register:0x8:1 input (unwritten, blocks b1's CBRANCH from producing points); t = unique:0x900:1 INT_EQUAL output; y = unique:0x904:4 INT_ADD output; const5 = const 4-byte 5; INT_ADD in1 = const 4-byte 1; RETURN in(0) = const 1-byte 0",
+   "pcs": "eq 0x60000, add 0x60008, ret_b2 0x60010, ret_b3 0x60018, ret_b4 0x60020, cbranch_b1 0x60028, cbranch_b0 0x60030"
+  },
+  "cases": [
+   {
+    "label": "RET-COPY",
+    "construct": "dominated RETURN reads X",
+    "expected": "copyBeforeRet COPY inserted before the RETURN; slot 1 holds the COPY output at X's (space,offset,size); COPY pc == RETURN pc; no return_copy flag on the COPY; RETURN keeps its own return_copy flag"
+   },
+   {
+    "label": "NO-CONST-RETURN",
+    "construct": "post-state scan",
+    "expected": "no RETURN holds a constant in any slot >= 1 anywhere (the GAP-B defect form RETURN const never appears)"
+   },
+   {
+    "label": "NON-RETURN",
+    "construct": "dominated INT_ADD reads X",
+    "expected": "direct slot replacement with the constant (cc:4449-4452), no COPY inserted for it"
+   },
+   {
+    "label": "MULTI-RET",
+    "construct": "two dominated RETURNs in the same ConstPoint",
+    "expected": "one COPY each; the two COPY input-0 constants are distinct varnodes (opSetInput const dedup)"
+   },
+   {
+    "label": "NEG-CTL",
+    "construct": "non-dominated RETURN in b4",
+    "expected": "untouched: keeps reading X, no COPY in b4"
+   },
+   {
+    "label": "COUNT",
+    "construct": "per-apply count",
+    "expected": "pass1 count=3 (1 INT_ADD + 2 RETURN arms); pass2 count=0 (loneDescend gate rejects X after severance)"
+   },
+   {
+    "label": "RULEPROP",
+    "construct": "full RulePropagateCopy sweep post-propagation",
+    "expected": "hits=0: cc:3933 isReturnCopy skips the RETURN targets, the copyBeforeRet inputs are never folded into the RETURNs"
+   }
+  ]
+ },
+ "observation_schema": {
+  "records": "schema=1, pre, pass1, ret x3 (b2,b3,b4), add, pass2, ruleprop, case_apply_return, case_phi_arm, case_implied_bool, case_print_fold",
+  "normalization": "varnode descriptors use Ghidra space names (register/unique/const) on both sides; op pcs printed as hex offsets (space pinned by construction: C++ code space ram index 3); per-apply count zeroed on both sides (C++ CountProbe::zeroCount mirroring Action::perform action.cc:306, Rust apply zeroes internally) \u2014 accumulator reset-point asymmetry recorded as CONDCONST-APPLY-RETURN-0001",
+  "pre_state": "RPO block inventory (creation names pin the reorder b0,b1,b3,b2,b4), X location + descend order, per-block op orders, return_copy flags on all three RETURNs"
+ },
+ "locked_capture": {
+  "status": "ORACLE_CAPTURED",
+  "deterministic_runs": 2,
+  "records": 13,
+  "bytes": 1895,
+  "stdout_sha256": "112c47dae77b59227da160b6e2f44933e21d71b1b768873aa362384d69eef73c",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+ },
+ "paired_expected": {
+  "ghidra": {
+   "status": "ORACLE_CAPTURED",
+   "deterministic_runs": 2,
+   "records": 13,
+   "bytes": 1895,
+   "stdout_sha256": "112c47dae77b59227da160b6e2f44933e21d71b1b768873aa362384d69eef73c",
+   "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "rugra": {
+   "status": "EXECUTED",
+   "deterministic_runs": 2,
+   "records": 13,
+   "bytes": 1895,
+   "stdout_sha256": "112c47dae77b59227da160b6e2f44933e21d71b1b768873aa362384d69eef73c",
+   "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "bilateral": {
+   "status": "MATCH",
+   "diff_exit_code": 0,
+   "records": 0,
+   "bytes": 0,
+   "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+ },
+ "comparand": {
+  "rugra_base_commit": "c2a4a652566c361ff97a34e222ecff7f336588e2",
+  "rugra_base_tree": "0a331f5f17dfa149811067cbd5ec81171f92b9c3",
+  "rugra_base_src_tree": "3b8cfb862c0e5283c0c70bc33d0a97b699a586ff",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "snapshot_model": "immutable partial GAP-B crate snapshot: git archive of commit c2a4a652 carrying the propagateConstant CPUI_RETURN copyBeforeRet arm; no source overlays",
+  "archive_paths": [
+   "Cargo.toml",
+   "Cargo.lock",
+   "build.rs",
+   "README.md",
+   "benches/decompile_bench.rs",
+   "tests/oracle/decompress_1204.rs",
+   "tests/oracle/funcproto_lock_1204.rs",
+   "examples/curl",
+   "sleigh_specs",
+   "src",
+   "sleigh_shim"
+  ],
+  "overlays": [],
+  "base_source_sha256": {
+   "Cargo.toml": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+   "Cargo.lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+   "build.rs": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+   "src/coreaction.rs": "7e4d7195744f3fa6a08a37a6c5cecd48a3a8e09e3feb372ffe427ab9548b5769"
+  },
+  "snapshot_build_link": {
+   "path": "ghidra",
+   "target": "repo ghidra symlink"
+  },
+  "cpp_fixture_sha256": "f1cfc5ccc943beea1134d9c7576d6350749a64fce5fb7a18b70ece2b2be7071a",
+  "rust_fixture_sha256": "d5ea276790b2ef80a7a5a635b23ce2a3da8a7ed32668391dd9045aadd82707ae",
+  "runner_sha256": "34b41a800e232718edd5f7e17a550622dc98c9808a16a98c092648db2c691bdc"
+ },
+ "build": {
+  "rugra_build_status": "EXECUTED",
+  "cargo_invoked": true,
+  "cargo_target_dir": "/home/wirs/.cache/a67-gapb-target",
+  "cargo_tmp_dir": "/home/wirs/.cache/a67-gapb-tmp",
+  "cargo_lock": "/tmp/rugra-cargo-build.lock",
+  "timeout_per_build_seconds": 600
+ },
+ "host_tools": {
+  "cxx": "g++ (GCC) 16.2.1 20260810",
+  "cxx_target": "x86_64-pc-linux-gnu",
+  "cc": "gcc (GCC) 16.2.1 20260810",
+  "cc_target": "x86_64-pc-linux-gnu",
+  "ar": "GNU ar (GNU Binutils) 2.47",
+  "make": "GNU Make 4.4.1",
+  "python": "Python 3.14.7",
+  "git": "git version 2.55.0",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+  "tool_binary_sha256": {
+   "cargo": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
+   "rustc": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618"
+  }
+ },
+ "coverage": {
+  "return_copy_insertion_form": {
+   "status": "MATCH",
+   "detail": "b2/b3 dominated RETURNs: slot 1 = copyBeforeRet COPY output at register:0x0:4, copy_pc==ret_pc, blk_ops gains COPY immediately before RETURN (cc:4442-4447)"
+  },
+  "return_never_takes_constant": {
+   "status": "MATCH",
+   "detail": "in1_const=0 on all three RETURNs and returns_const_value_slot=0 function-wide; the pre-fix GAP-B defect form (RETURN const) is designed-observable and would flip these bits"
+  },
+  "non_return_direct_slot": {
+   "status": "MATCH",
+   "detail": "INT_ADD in0 becomes const:0x5:4 directly (cc:4449-4452), no COPY introduced for it (b2 order INT_ADD,COPY,RETURN \u2014 the COPY belongs to the RETURN)"
+  },
+  "multi_return_distinct_consts": {
+   "status": "MATCH",
+   "detail": "copies=b2:1,b3:1 with distinct_copy_in0=1: each COPY input 0 is a fresh constant varnode (opSetInput const dedup, funcdata_op.cc:108-115)"
+  },
+  "non_dominated_return_untouched": {
+   "status": "MATCH",
+   "detail": "b4 RETURN keeps in1=X (in1_def=input), no COPY in b4 (constBlock does not dominate b4)"
+  },
+  "copy_flag_split": {
+   "status": "MATCH",
+   "detail": "copy_retflag=0 (condconst copyBeforeRet is never marked return_copy) vs ret_retflag=1 (TypeOpReturn opflags, typeop.cc:879) \u2014 the two COPY species are distinguishable downstream"
+  },
+  "count_semantics": {
+   "status": "MATCH",
+   "detail": "pass1 count=3 (1 INT_ADD + 2 RETURN arms, cc:4453 outside the if/else); pass2 count=0 after the loneDescend gate rejects the severed X"
+  },
+  "pre_state_parity": {
+   "status": "MATCH",
+   "detail": "identical RPO inventory (b0:2,b1:1,b3:1,b2:2,b4:1), X descend order, per-block op orders, and return_copy flags before apply (same-input proof)"
+  },
+  "rulepropagatecopy_return_guard": {
+   "status": "MATCH",
+   "detail": "full sweep hits=0; cc:3933 isReturnCopy skips the RETURN targets so the COPY inputs are never folded into the RETURNs; b2/b3 op orders unchanged by the rule pass"
+  },
+  "idempotency_pass2": {
+   "status": "MATCH",
+   "detail": "second apply: count=0, x_desc_after/b2_ops/b3_ops/b4_ops/returns_const_value_slot all identical to pass1"
+  },
+  "apply_return_value": {
+   "status": "UNTESTED",
+   "detail": "Ghidra apply returns 0 unconditionally (cc:4545) while Rugra returns count>0; count accumulator zeroing also differs (perform :306 vs apply start). Both out of the GAP-B lease (CONDCONST-APPLY-RETURN-0001); the fixture projects per-apply count with fixture-side zeroing instead"
+  },
+  "phi_arm": {
+   "status": "UNTESTED",
+   "detail": "MULTIEQUAL phi replacement (handlePhiNodes/placeCopy) not exercised; use_multiequal=false on both sides in this matrix (heritage pass 0); Rugra additionally force-disables the arm as a documented convergence guard (CONDCONST-MULTIEQUAL-GUARD-0001)"
+  },
+  "implied_bool_arm": {
+   "status": "UNTESTED",
+   "detail": "implied-boolean points need boolVn without a lone descendant; fixture boolVn t is read only by its CBRANCH on both sides (CONDCONST-IMPLIEDBOOL-0001); Rugra force-disables this arm too"
+  },
+  "print_fold": {
+   "status": "UNTESTED",
+   "detail": "the return 10 print fold needs MarkExplicit/MarkImplied/PrintC downstream plus the still-missing ActionPrototypeTypes output-locked arm (GAP-A) and the BASEEXPLICIT-NUMINST/MARKIMPLIED-COUNT counters (GAP-D: COREACTION-BASEEXPLICIT-NUMINST-0001, COREACTION-MARKIMPLIED-COUNT-0001); this fixture is IR-level only"
+  }
+ },
+ "residual_ids": [
+  "CONDCONST-APPLY-RETURN-0001",
+  "CONDCONST-MULTIEQUAL-GUARD-0001",
+  "CONDCONST-IMPLIEDBOOL-0001"
+ ],
+ "execution_evidence": [
+  "manual dual-side run 2026-08-25: locked oracle (git archive e40ed130 + make libdecomp.a) vs live worktree rlib (c2a4a652), stdout sha256 112c47dae77b59227da160b6e2f44933e21d71b1b768873aa362384d69eef73c on both sides, diff exit 0, both stderr empty",
+  "runner run 2026-08-25 (tools/run_returnfold_gapb_oracle.sh): snapshot git-archive build of c2a4a652, oracle make libdecomp.a + g++ fixture, cargo --offline --locked + rustc fixture, both binaries run twice deterministically; ghidra stdout sha256 112c47da... == rugra stdout sha256, diff exit 0, overall_status=MATCH"
+ ],
+ "input_sha256": "552205bdcd23379bc7e2060cb9a2fcb8459b0fde0d0c83d34c31839127f94925"
 }

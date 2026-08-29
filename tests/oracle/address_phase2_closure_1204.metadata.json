@@ -157,7 +157,7 @@
   "sort_comparison_keys": "Address ordering is space index then offset; SeqNum optree ordering is Address then time; equal-offset RAM/stack/overlay and equal-address R0/R1 provide both primary and tie-break cases."
  },
  "observation": {
-  "overall_status": "MISMATCH",
+  "overall_status": "UNTESTED",
   "completion_claim": false,
   "cases": [
    {

@@ -10,11 +10,12 @@
   "binary": "examples/curl",
   "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
   "function": "GetStr@0x36d0+74",
-  "synthetic_block": "seven blocks (guarded chain b1, fall-thru successor b2, alternate successor b3, three-way switch b4->b5/b6/b7) and eight named ops exercising opInsertEnd/opInsertBefore/opUninsert, INDIRECT(const,iop) guard pairs, prev/next probes per stage, plus b1/b4 out-degree observation"
+  "synthetic_block": "seven blocks (guarded chain b1, fall-thru successor b2, alternate successor b3, three-way switch b4->b5/b6/b7) and eight named ops exercising opInsertEnd/opInsertBefore/opUninsert, INDIRECT(const,iop) guard pairs, prev/next probes per stage, plus b1/b4 out-degree observation",
+  "sha256": "50231080e1cd645320f20fdf487be6c33c3ec892fe6649cd0da2842017607d63"
  },
  "cpp_fixture_sha256": "448d7a17d7790350de4e4dd98a5aa7289e8546e1849dbcbe494104816887c453",
  "rust_fixture_sha256": "5878a3d0d3193c3d73afb57615173c8d49de52d8d1a08886331d1920755af878",
  "expected_stdout_sha256": "42deb93b2b935777c7d8cbf10bb2a81878fba49226ce7919faa946fa77f3c68d",
- "status": "MATCH",
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "fixture_id": "OP-PREVIOUS-BLOCK-ORDER-1204-1204"
 }
