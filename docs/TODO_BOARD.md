@@ -64,7 +64,9 @@
 > "保护格代际"假设被双侧证据否定——console oracle 缺 Java NoReturnAnalyzer 数据造成的假差异)后:
 > **defects 0/numbering 0/0 panic/124/124 全反编译**。同窗口集成:RC2(main 体 245→643,51×setopt 级联恢复)+
 > C4(INT_NOT token 序,非法形态 2→0)+goto 发射 target_dyn 切换+njf234 复核单门补齐(cc:2076)。
-> **当前权威基线(master `586c3e5e`)**:curl E2E skeleton **3068**/defects **0**/numbering **0**;
+> **当前权威基线(master `42685b49`)**:curl E2E skeleton **3060**/defects **0**/numbering **0**(virtual_list 可变列表
+> 语义已修:collapse 消费组件移除+组合块尾接+6 扫描点 shift-skip;do-while 阻塞定缝到 @339e 缺块);httpd 2214/5/0;
+> 历史链:2911→2884→3374→3104→3108→3068→**3060**。
 > extraout_var 全消(RULEACTION-PULLSUB-SPACE 已修:main 循环守卫与 golden 逐 token 同形);httpd **2214/5/0**(29/29,strcasecmp 收敛;+66 恢复内容;defects 5 含僵尸下游);
 > 历史链:2911→2884→3374→3104(0/0)→3108(C5)→**3068**。
 > 历史链:2911→2884(F2-F5)→3374(RC2 内容恢复)→**3104(0/0)**。
@@ -96,6 +98,7 @@
 | w-maingo(新派) | `MAIN-RC2-BLOCKGOTO-WRAPPED-0001` | **P0**(w-main2 探针实测:helpf 0→8/8,main 体 251→736 行) | `src/blockaction.rs`(try_rule_goto)+`src/block.rs`(BlockGoto)+fixture;printc.rs 侧(emit_block_goto 消费)经 root 与 GETPARAM-EMPTYELSE 租约协调 | Ghidra `BlockGoto : BlockGraph`(block.hh:546)持有被包装块组件+删边前捕获 gototarget(block.cc:1702-1713),发射 body+goto 完整(printc.cc:2766-2771)。Rugra 构造 `BlockGoto{goto_target:None}` 无 wrapped 字段、get_ops 返回空、goto_prints 硬编码 false→main 14 个包装块(helpf×8/bVar3=false/break)全部蒸发。证据=/tmp/rugra-reports/w-main2-2026-08-29.md |
 | unassigned | `MAIN-RC3-STRUCTURED-EMIT-0001` | P0(探针:if 14→55) | `src/block.rs`(BlockIf::get_ops 丢 if/else body)+printc.rs 翻门(依赖 RC2) | whiledo/if 体发射:printc.rs:4285 body_is_dead=true 硬编码 flatten(=identify3 residual 翻门条件);BlockIf::get_ops(block.rs:5119)只返回 condition 丢弃 body→50×curl_easy_setopt 级联+嵌套 if 丢失;oracle cc:3061-3063/2994-2995 structured 递归 |
 | unassigned | `MAIN-RC4-DOWHILE-TRACE-0001` | P1(main 0 命中 vs golden 5 do-while) | TraceDAG 回边分类/吸收顺序(需 oracle 运行时定缝;RUGRA_BS_TRACE 已有) | try_rule_do_while 与 cc:1555-1574 逐条对齐无缺陷,但 argv 循环头被 if_else 消费成 `if(1){}else{}`,自环复合体永不出现 |
+| unassigned(与zombie同域排队) | `FLOW-339E-OVERLAP-HLT-0001` | OPEN(P1,do-while 最终阻塞) | 待认领(`src/funcdata.rs`/`src/flow.rs`;zombie 完成后接) | main(0x25a0,3531B)/_start(0x3374) 重叠区的 `hlt`:oracle flow-follow 越 noreturn __libc_start_main 落入(oracle 150 vs Rugra 149 块);修复后用 w-rc4 固化的双侧 visit-trace 对拍法可快速续缝 do-while 吸收链(oracle 事件 53-80) |
 | unassigned | `MAIN-RC5-LOOPCOND-VARMAP-0001` | P1 | varmap/heritage 域 | 循环条件错接:`extraout_var_00 != 0` 应为 `iVar17 < argc-1` |
 | 已集成+复核中 | `NODEJOIN-F2/F3/F4/F5-0001` | **FIXED**(798466b1..92ad5358;双侧 fixture 9/9 MATCH;Cross-Review=reviewer-njf234 在途) | `src/coreaction.rs`(已落库) | F4 findDups 六门序/F3 same-cond 全 join/F2 execute 四步+mergeneed 有序/F5 动态 size;E2E 2911→**2884**(next_url 150→134/getparameter 678→669/my_get_token 57→55,余零变化,全向 golden);移交项 action.rs fixture 改共享 written 条件已修 | ConditionalJoin::execute 四步仅做1(nodeJoinCreateBlock);setupMultiequals/moveCbranch/cutDownMultiequalities(blockaction.cc:2098-2101)全缺,cbranch未迁入join块 |
 | 已集成+APPROVED | `GLOBWORD-C5-GLOBAL-TYPEFLOW-0001`+`GETPARAM-EMPTYELSE→LATTICE` | **DONE**(1a5504c1+a4694407;R-LATTICE-CROSSREVIEW **APPROVE**) | debugproto/ruleaction/heritage(已落库) | glob_word 字段化(`->size/->literal`);glob_set/range/url 的 subscript 形态绑 PRINTC-ARRAYDEREF-SUBSCRIPT(rc3 租约);六条 MINOR 跟进项见复核报告 |
