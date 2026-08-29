@@ -1,5 +1,36 @@
 # `blockaction.rs` API Reference
 
+## 2026-08-29：identify_internal 消费状态去 f_dead 化 + 组件内边保留（BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001）
+
+对齐 Ghidra `BlockGraph::identifyInternal`（block.cc:940-963）与 `selfIdentify`
+（block.cc:895-931）：oracle 把组件移入组合块（`addBlock` 设 `parent`，block.cc:873/950）
+并从列表剔除（block.cc:953-960），**从不给组件设 f_dead**；selfIdentify 的
+in/out 扫描对 `otherbl->parent == this` 的对端**不做任何重写**（block.cc:907-909/919-920
+——组件到组件的边永远原样保留），只有外部块的两半经
+`replaceOutEdge/replaceInEdge`（block.cc:160-191）成对迁移到组合块，最后
+`dedup`（block.cc:525-539）按"保留首槽、OR 标签、成对半删"合并平行边
+（注意：oracle 的标签 OR 只发生在被 dedup 一侧的保留半边上，对端保留半边
+标签不变——case 2 fixture 观测 `w_out=13` vs `m_in=5`）。Rugra 侧改动：
+1. `identify_internal`/序列合并不再 `set_flags(DEAD)`；消费关系只写
+   `graph.absorbed_into`（跳过 install 槽位处的自映射，避免毒化成员测试）。
+2. 新增 `is_consumed(idx)`（对齐 Ghidra 列表压缩 block.cc:953-960 的可观测
+   成员语义）：collapseInternal 扫描、isolated_count、selectGoto trace、goto
+   判定、finalize_structure 等全部消费点从 `f & DEAD` 改为成员测试。
+3. 组件保留内部（component-to-component）边；外部半边成对迁移（selfIdentify
+   block.cc:895-931 + replace*Edge block.cc:160-191），标签/逆槽随迁，
+   组合块边界边经 `dedup`（block.cc:525-539）合并。
+4. install 阶段的全图索引重写循环**跳过 consumed 组件**：旧版把组件指向
+   install 块的内部边也劫持到组合块（fixture case 1 `b_in=[W]` vs oracle
+   `[A]`，reciprocal 断链 consistent_A/B=0）——Ghidra 的 selfIdentify 从不
+   重写 parent==this 的对端。
+
+双侧 fixture `tests/oracle/block_identify_internal_1204.{cc,rs,metadata.json}` +
+`tools/run_block_identify_internal_oracle.sh`：4 case（cat 基本迁移/平行边 dedup
+标签合并/flag 传播/自环内边保留），顶层成员、children 顺序、parent、raw flags
+（无 f_dead）、边界边 slot/label/reverse、对端重定向、dedup、一致性全量观测
+**字节级 MATCH**（stdout sha256 `710def24…`）。归一化仅顶层列表位置
+（Ghidra 追加 vs Rugra install-in-place，登记的模型分歧）。
+
 ## 2026-08-28：条件极性与变更计数分离
 
 `ruleBlockProperIf`/`ruleBlockIfNoExit` 不再把极性塞入 Rust-only

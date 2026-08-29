@@ -1126,9 +1126,12 @@ impl<'a> CollapseStructure<'a> {
                         None => continue,
                     };
                     // cc:1792-1795: completely collapsed block → isolated_count.
+                    // Ghidra never sees consumed components here (removed from
+                    // the list, block.cc:953-960); Rugra's flat-Vec equivalent
+                    // is the absorbed_into membership test.
                     {
                         let r = block.read().unwrap();
-                        if r.get_flags() & crate::block::block_flags::DEAD != 0 {
+                        if self.is_consumed(r.get_index()) {
                             isolated_count += 1;
                             continue;
                         }
@@ -1180,7 +1183,7 @@ impl<'a> CollapseStructure<'a> {
         for i in 0..self.graph.get_size() {
             if let Some(blk) = self.graph.get_block(i) {
                 let r = blk.read().unwrap();
-                if r.get_flags() & crate::block::block_flags::DEAD != 0 {
+                if self.is_consumed(r.get_index()) {
                     count += 1;
                 } else if r.size_in() == 0 && r.size_out() == 0 {
                     count += 1;
@@ -1276,7 +1279,7 @@ impl<'a> CollapseStructure<'a> {
                 None => continue,
             };
             let r = b.read().unwrap();
-            let dead = r.get_flags() & crate::block::block_flags::DEAD != 0;
+            let dead = self.is_consumed(r.get_index());
             let mut outs = String::new();
             for s in 0..r.size_out() {
                 if let Some(e) = r.get_out(s) {
@@ -1623,10 +1626,14 @@ impl<'a> CollapseStructure<'a> {
     }
 
     // Ghidra: blockaction.hh:46 LoopBody::finalizeStructure
-    /// Remove DEAD-flagged blocks from the top-level structure graph and
-    /// re-index survivors. Faithful to Ghidra's identifyInternal list compaction
-    /// (block.cc:953-960: `list = newlist`), applied as a single final sweep
-    /// rather than incrementally.
+    /// Remove consumed (absorbed) blocks from the top-level structure graph
+    /// and re-index survivors. Faithful to Ghidra's identifyInternal list
+    /// compaction (block.cc:953-960: `list = newlist`), applied as a single
+    /// final sweep rather than incrementally. Membership is the absorbed_into
+    /// parent record — NOT block_flags::DEAD (identifyInternal never sets
+    /// f_dead; that flag is exclusively Funcdata's dead basic-block removal,
+    /// funcdata_block.cc:333/370, whose blocks must SURVIVE this sweep for
+    /// their own bookkeeping).
     ///
     /// After this, `graph.get_size()` returns only the count of surviving
     /// roots + structured blocks, and each survivor's `get_index()` reflects
@@ -1634,49 +1641,73 @@ impl<'a> CollapseStructure<'a> {
     /// pointer identity, not indices).
     fn finalize_structure(&mut self) {
         let before = self.graph.get_size();
-        let before_dead = (0..before)
+        let before_consumed = (0..before)
             .filter(|&i| {
                 self.graph.get_block(i).map_or(false, |b| {
-                    b.read().unwrap().get_flags() & crate::block::block_flags::DEAD != 0
+                    let idx = b.read().unwrap().get_index();
+                    self.is_consumed(idx)
                 })
             })
             .count();
-        // Retain only non-DEAD blocks, preserving relative order (emitBlockGraph
-        // emits in list order, matching Ghidra's preorder).
-        self.graph
-            .blocks
-            .retain(|b| b.read().unwrap().get_flags() & crate::block::block_flags::DEAD == 0);
+        // Retain only top-level blocks (not absorbed into a composite),
+        // preserving relative order (emitBlockGraph emits in list order,
+        // matching Ghidra's preorder).
+        let consumed = std::mem::take(&mut self.graph.absorbed_into);
+        self.graph.blocks.retain(|b| {
+            let idx = b.read().unwrap().get_index();
+            !consumed.contains_key(&idx)
+        });
+        self.graph.absorbed_into = consumed;
         // Re-index survivors so get_index() reflects the new compacted position.
         for (i, b) in self.graph.blocks.iter().enumerate() {
             b.write().unwrap().set_index(i as i32);
         }
         let after = self.graph.get_size();
         eprintln!(
-            "[BLOCKSTRUCT] {} finalize_structure: {} -> {} (removed {} DEAD)",
-            self.name, before, after, before_dead
+            "[BLOCKSTRUCT] {} finalize_structure: {} -> {} (removed {} consumed)",
+            self.name, before, after, before_consumed
         );
+    }
+
+    // Ghidra: block.cc:953-960 BlockGraph::identifyInternal (list compaction)
+    /// Top-level membership test replacing Ghidra's incremental list
+    /// compaction. Ghidra's identifyInternal rebuilds `list` without the
+    /// identified nodes (block.cc:953-960), so every list walk
+    /// (collapseInternal's `graph.getBlock(index)`, blockaction.cc:1781-
+    /// 1833) only ever visits top-level blocks. Rugra's flat `blocks` Vec
+    /// keeps every node at its slot, so the equivalent observable test is
+    /// the absorbed_into parent record (written by identify_internal /
+    /// the sequence-merge pass): a block with an absorbed_into entry is a
+    /// component inside some composite and must be invisible to rules.
+    /// NEVER use block_flags::DEAD for this: Ghidra's f_dead is exclusively
+    /// Funcdata's dead basic-block removal (funcdata_block.cc:333/370),
+    /// not a structuring state.
+    fn is_consumed(&self, idx: i32) -> bool {
+        self.graph.absorbed_into.contains_key(&idx)
     }
 
     // Ghidra: blockaction.hh:46 LoopBody::applyRulesToBlock
     /// Apply interleaved rules to a single block at graph index i.
     fn apply_rules_to_block(&mut self, i: usize) {
-        // Skip blocks whose edges were already cleared by an earlier
-        // identify_internal (consumed/orphaned but not yet marked DEAD). These
-        // blocks have size_in==0 && size_out==0 but aren't the function entry,
-        // so they can't match any rule — and matching them would corrupt the
-        // graph (e.g. a loop head whose edges got cleared mid-structuring).
+        // Skip blocks consumed by an earlier identify_internal (Ghidra: they
+        // are no longer in the graph list, block.cc:953-960). These blocks
+        // keep only their component-to-component edges, so they can't match
+        // any rule — and matching them would corrupt the graph (e.g. a loop
+        // head absorbed into a composite mid-structuring).
         {
             let b = match self.graph.get_block(i) {
                 Some(b) => b,
                 None => return,
             };
             let r = b.read().unwrap();
-            if r.get_flags() & crate::block::block_flags::DEAD != 0 {
+            if self.is_consumed(r.get_index()) {
                 return;
             }
             if r.size_in() == 0 && r.size_out() == 0 {
-                // Orphaned block (consumed but not DEAD-flagged). Skip it to
-                // avoid corrupting the graph via spurious matches.
+                // Orphaned block (no edges at all). Ghidra's collapseInternal
+                // also skips rules on completely isolated blocks
+                // (blockaction.cc:1792-1795). Skip to avoid corrupting the
+                // graph via spurious matches.
                 return;
             }
         }
@@ -1886,7 +1917,8 @@ impl<'a> CollapseStructure<'a> {
                         self.graph
                             .get_block(i)
                             .map(|b| {
-                                b.read().unwrap().get_flags() & crate::block::block_flags::DEAD == 0
+                                let idx = b.read().unwrap().get_index();
+                                !self.is_consumed(idx)
                             })
                             .unwrap_or(false)
                     })
@@ -1900,7 +1932,7 @@ impl<'a> CollapseStructure<'a> {
                         continue;
                     };
                     let r = b.read().unwrap();
-                    if r.get_flags() & crate::block::block_flags::DEAD != 0 {
+                    if self.is_consumed(r.get_index()) {
                         continue;
                     }
                     let outs: Vec<String> = (0..r.size_out())
@@ -2395,7 +2427,7 @@ impl<'a> CollapseStructure<'a> {
             };
             {
                 let h = head_blk.read().unwrap();
-                if h.get_flags() & crate::block::block_flags::DEAD != 0 {
+                if self.is_consumed(h.get_index()) {
                     continue;
                 }
                 if !matches!(
@@ -2454,7 +2486,7 @@ impl<'a> CollapseStructure<'a> {
                     let bt = bd.get_type();
                     (bt == crate::block::BlockType::Basic || bt == crate::block::BlockType::Copy)
                         && bd.get_flags() & crate::block::block_flags::CASE_BODY == 0
-                        && bd.get_flags() & crate::block::block_flags::DEAD == 0
+                        && !self.is_consumed(bd.get_index())
                 };
                 if !body_ok {
                     continue;
@@ -2934,9 +2966,17 @@ impl<'a> CollapseStructure<'a> {
     ///    external blocks' edges to point to new_block. This gives new_block
     ///    correct size_in/size_out so subsequent rules can match against it.
     /// 3. Dedup new_block's edges.
-    /// 4. Clear consumed blocks' edges and mark DEAD (matching Ghidra's
-    ///    list removal — consumed blocks become invisible).
-    fn identify_internal(
+    /// 4. Strip each component's external edge halves (Ghidra's replace*Edge
+    ///    half-deletes, block.cc:160-191, move them onto the composite) and
+    ///    record the containment in absorbed_into (Ghidra: addBlock sets the
+    ///    component's `parent` to the composite, block.hh:78 / block.cc:873).
+    ///    Components keep their component-to-component (internal) edges and
+    ///    are NEVER flagged f_dead — Ghidra's identifyInternal (block.cc:940-
+    ///    963) sets no flag on them; f_dead is exclusively Funcdata's dead
+    ///    basic-block removal (funcdata_block.cc:333/370). The equivalent of
+    ///    Ghidra's incremental `list = newlist` compaction (block.cc:953-960)
+    ///    is the absorbed_into membership test (see is_consumed).
+    pub fn identify_internal(
         &mut self,
         new_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
         consumed_indices: &[i32],
@@ -3265,6 +3305,18 @@ impl<'a> CollapseStructure<'a> {
                 if gi == install_idx {
                     continue;
                 }
+                // Ghidra selfIdentify (block.cc:905-928) never rewrites a
+                // component-to-component edge: the in/out loops skip peers
+                // with `otherbl->parent == this` — only EXTERNAL blocks'
+                // halves are replace*Edge'd onto the composite. A consumed
+                // component's edge to the install block (B <- A in a
+                // cat/newBlockList) is internal and must keep pointing at
+                // the component; rewriting it here stranded the reciprocal
+                // half (consistent_A/B=0 in the identify fixture) and
+                // corrupted sub-block edge walks.
+                if consumed_set.contains(&(gi as i32)) {
+                    continue;
+                }
                 let gb = match self.graph.get_block(gi) {
                     Some(b) => b,
                     None => continue,
@@ -3309,8 +3361,11 @@ impl<'a> CollapseStructure<'a> {
         // consumed set plus the install block — instead of blanket-clearing,
         // so per-component in/out counts match the oracle (internal edges
         // like cond->clause stay; external ones like clause->merge move to
-        // the composite). Consumed components are then DEAD-flagged (Ghidra
-        // removes them from the list, block.cc:953-960).
+        // the composite). Components are NOT flagged DEAD: identifyInternal
+        // (block.cc:940-963) sets no flag; containment is recorded in
+        // absorbed_into (Ghidra: addBlock sets `parent`, block.cc:873),
+        // which is_consumed/finalize_structure use in place of Ghidra's
+        // incremental list compaction (block.cc:953-960).
         {
             let is_component = |idx: i32| consumed_set.contains(&idx) || idx == install_idx as i32;
             let strip_external = |bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>| {
@@ -3336,11 +3391,13 @@ impl<'a> CollapseStructure<'a> {
                 if i < size && i != install_idx {
                     if let Some(cb) = self.graph.get_block(i) {
                         strip_external(&cb);
-                        cb.write()
-                            .unwrap()
-                            .set_flags(crate::block::block_flags::DEAD);
                         // Record the containment (Ghidra: the consumed node's
-                        // `parent` becomes the new composite, block.hh:78).
+                        // `parent` becomes the new composite via addBlock,
+                        // block.hh:78 / block.cc:873). Self-mappings (a
+                        // component consumed at its own install slot — the
+                        // composite now owns that index) are skipped: they
+                        // would poison membership walks that treat any key
+                        // as "not top-level".
                         self.graph.absorbed_into.insert(idx, install_idx as i32);
                     }
                 }
@@ -3820,8 +3877,10 @@ impl<'a> CollapseStructure<'a> {
                 // do_while — leaving the chain uncollapsible and selectGoto
                 // to exhaust (TRI2-STRUCT-IRREDUCIBLE-TRACE-0001,
                 // glob_range residual 1→2→3→9 with properif-legal shapes).
-                // Edge from a DEAD block (already consumed by structuring) → structural
-                if pred.get_flags() & crate::block::block_flags::DEAD != 0 {
+                // Edge from a consumed component (already absorbed by a
+                // composite; Ghidra removed it from the list, block.cc:953-
+                // 960) → structural
+                if self.is_consumed(pred.get_index()) {
                     structural += 1;
                     continue;
                 }
@@ -5770,18 +5829,15 @@ impl<'a> CollapseStructure<'a> {
 
             self.graph.blocks[i] = list_block;
             merged[succ_idx] = true;
-            // Mark succ DEAD so subsequent collapse passes (collapse_loops,
-            // collapse_conditions, etc.) skip it as a consumed child, matching
-            // Ghidra identifyInternal which removes consumed nodes from the
-            // parent's list. Do NOT clear_edges — BlockList.children[1] still
-            // holds succ's Arc and the edges are needed if succ is itself
-            // structured later. finalize_structure (Phase 1.1) physically
-            // removes DEAD blocks at the end of collapse_all.
-            succ.write()
-                .unwrap()
-                .set_flags(crate::block::block_flags::DEAD);
-            // Record the containment (Ghidra: consumed node's `parent`
-            // becomes the composite, block.hh:78) for parent-chain walks.
+            // Record the containment (Ghidra: identifyInternal removes the
+            // consumed node from the parent's list, block.cc:953-960, and
+            // addBlock sets its `parent` to the composite, block.hh:78) so
+            // subsequent collapse passes (collapse_loops, collapse_conditions,
+            // etc.) skip it via the is_consumed membership test. NO f_dead
+            // flag: identifyInternal never sets one. Do NOT clear_edges —
+            // BlockList.children[1] still holds succ's Arc and the edges are
+            // needed if succ is itself structured later. finalize_structure
+            // physically removes consumed blocks at the end of collapse_all.
             self.graph
                 .absorbed_into
                 .insert(succ_idx as i32, block_idx_val);
