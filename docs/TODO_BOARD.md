@@ -40,8 +40,10 @@
 > 而 golden 无(ActionInferTypes 传播不收敛本身是分歧);(b) golden 有 DWARF 局部名 `format/line/outline`(typed stack 数组),
 > Rugra 全 raw `auStack_*`(DWARF 局部符号未接线到 varmap);(c) 多余寄存器 temp 声明(`int8 in_RSP`/`Var8`/`extraout_XMM1_Qa`)。
 > glob_range=`int iVar3;` 声明两次(golden 用 iVar4,per-prefix 计数器回退,VARMAP-GLOBRANGE-DUPDECL-0001)。
-> **当前权威基线(master `55783411`)**:skeleton **2134**/defects **0**/numbering 1(glob_range DUPDECL)/ABORTED 0/
-> raw 命名 16;httpd 仍 5/30+24 panics(HTTPD-TFALIGN-PANIC-0001 在查)。Top:main 696/next_url 144/file2string 134/
+> **当前权威基线(master `99ae9c35`,2026-08-29 21 时口径修正)**:curl E2E skeleton **2134**/defects **0**/numbering 1(glob_range
+> DUPDECL)/ABORTED 0/raw 命名 16——【口径警告】getparameter+match_url 因 `NONCONVERGE-GETPARAM-MATCHURL-0001`
+> 超时无输出,其 ~672+83 diff 未计入,可比口径≈2889(与 2d78b5af 的 2881 相当;descend 修复的真实收益=10 函数命名/结构/defects
+> 质量+2 函数转入待修非收敛);httpd 仍 5/30+24 panics(HTTPD-TFALIGN-PANIC-0001 在查)。Top:main 696/next_url 144/file2string 134/
 > parseconfig 131/myprogress 102/glob_range 93/glob_set 88/glob_word 83/my_get_line 82/helpf 73;PLT stub 族 ~24×9-11。
 > 历史参考:2d78b5af=skeleton 2881/defects 1;3fb97c11=skeleton 3528/defects 2(簿记腐蚀期)。
 
@@ -50,7 +52,9 @@
 | Agent | ID | 类型 | 独占 write-set | 交付物 |
 |---|---|---|---|---|
 | w-newvarnode2(续作)+root | `VARNODE-DESCEND-BOOKKEEPING-0001` | **FIXED @ master `55783411`**(root 修复;w-newvarnode 审计立功:簿记基础设施本就完备,真凶=ruleaction.rs 五处直接 inrefs 写) | `src/ruleaction.rs`+`docs/api/ruleaction.md`(已落库) | 修复:Piece2Zext/Sext→`fd.op_remove_input(0)`+`op_set_opcode`;TrivialBool 六分支完整移植(仅 slot1 常量+`V&&0→#0`/`V||1→#1`/`V^^1→NEGATE` 补齐);NegateIdentity→`fd.new_constant`+三步簿记;NotDistribute→`op_set_input`+`op_insert_input`。E2E@55783411:ABORTED 10→**0**、raw 命名 1077→**16**、defects 2→**0**(getparameter/glob_word else 缺陷证实为簿记腐蚀下游,随修复消失)、skeleton 3528→**2134**(优于 2d78b5af 健康基线 2881);cargo test 失败集=已知 17 零新增。Cross-Review: PENDING(机制 C,待派);审计证据=/tmp/w-newvarnode-curl-probe.err(49 条悬空);coreaction.rs:1371(ActionCse)核实未注册非生产者不动 |
-| unassigned | `VARMAP-GLOBRANGE-DUPDECL-0001` | OPEN(55783411 新观察) | 待认领(`src/varmap.rs`+docs) | glob_range `iVar3 declared twice`(numbering=1);descend 修复后管线完整运行暴露;验收=numbering 回 0+双侧 fixture |
+| unassigned | `VARMAP-GLOBRANGE-DUPDECL-0001` | IN_PROGRESS(w-myprog-cluster 认领中) | `src/varmap.rs`+docs(w-myprog-cluster 租约) | glob_range `iVar3 declared twice`(numbering=1);descend 修复后管线完整运行暴露;验收=numbering 回 0+双侧 fixture |
+| unassigned(P0) | `NONCONVERGE-GETPARAM-MATCHURL-0001` | OPEN(root 亲证,descend 修复暴露) | 待认领(嫌疑 `src/merge.rs` allocate_copy_trim/trim_op_input 域+循环源待定位) | getparameter+match_url 在 55783411+ 非收敛(180s 仍未完成→watchdog TIMEOUT,无输出)。主仓构建:worker panic 于 `Merge::allocate_copy_trim→op_set_input→add_descend`"Free varnode has multiple descendants"(varnode.rs:2500=Ghidra varnode.cc:336 自身不变量);诊断构建(同源码!):不 panic 但 ~120s 内 19+ 轮完整管线重启/oppool1×77,ops 稳定 1246,mid-pass 被杀——**同一源码两个构建行为分歧(panic vs 不收敛)=codegen/堆布局敏感的迭代序依赖,红旗单独登记**。golden 两函数均无 "Exceeded maximum restarts"/"Type propagation" 警告=Ghidra 干净收敛;Rugra 的 maxrestarts cap 已在位(action.rs:1103 镜像 cc:565-575,universal=1)。诊断工具:worktree /tmp/rugra-freediag(census 钩子 6150cdc8+freevn 探针),`RUGRA_ACTION_CENSUS=1`;证据=/dev/shm/rugra-census2.err+rugra-bt.stderr.log。验收:两函数在 30s 内收敛或按 Ghidra 语义停机+输出与 golden 对比;panic 消除且不引入绕过。 |
+| unassigned | `CODEGEN-DIVERGENCE-REDFLAG-0001` | OPEN(登记) | 无(调查项) | 同源码两构建(主仓 target vs /tmp/rugra-freediag-target)对 getparameter 确定性地产 panic vs 不收敛——指向 Arc 指针作键的有序容器/迭代序依赖(堆布局=codegen 相关)。凡"测试偶发/不可复现"类问题先对照此项。 |
 | w-anondecl | `PTRSUB-TYPED-DECL-RESIDUAL-0001` | writer | `src/printc.rs`, `docs/api/printc.md`, `tests/oracle/printc_anonymous_pointer_decl_1204.{cc,rs,metadata.json}`, `tools/run_printc_anonymous_pointer_decl_oracle.sh`, branch `agent/anondecl-0001` | 匿名 PTR/ARRAY/CODE 声明 type-token 修复（printc.cc:143-166 buildTypeStack + :264-303 pushTypeStart/genericTypeName）；验收=六函数 typeless decl 清零 + gcc 诊断不劣化 + defects/numbering=0 |
 | w-newvarnode | `FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001` | writer | `src/{funcdata,varnode,database}.rs`, 对应 `docs/api`, fixture 三件套+runner+registry, branch `agent/newvarnode-tail` | newVarnode symbol tail 完整移植（create→assignHigh→lane check→localmap queryProperties→setSymbolProperties/setFlags）；验收=双侧 fixture datatype/mapentry/high symbol/flags/异常 MATCH |
 | w-identify | `BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001` | writer | `src/{block,blockaction}.rs`, `docs/api/{block,blockaction}.md`, `tests/oracle/block_identify_internal_1204.*`+runner+registry, branch `agent/identify-boundary` | identifyInternal 真实 parent/成对边重写/组件顺序/无 f_dead（block.cc:940-963）；验收=双侧 fixture 完整突变 MATCH + goto fixture 110 行 diff→0 |
