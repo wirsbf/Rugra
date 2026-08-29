@@ -977,3 +977,25 @@ same port (TYPEFACTORY-CODEFLAGS-DECODE-0001 residual).
 `PrototypePieces` carrier 保持同一 Arc 身份。TypeFactory 生产算法没有因此
 改变；`TYPEFACTORY-ARC-IDENTITY-0001`、hidden-return pointer canonicalization
 和 oversized local cache 等残差不变，模块仍为 L2/MISMATCH。
+
+## 2026-08-29：shared_default attach 时补齐 setupSizes 对齐 guard（HTTPD-TFALIGN-PANIC-0001）
+
+- `TypeFactory::shared_default`（typefactory.rs）的 `get_or_init` 在构造
+  `TypeFactory::new(8)` 后执行 `if factory.align_map.is_empty() {
+  factory.set_default_alignment_map(); }`——对应 oracle 的
+  `Architecture::decode` 尾部 `types->setupSizes();`（architecture.cc:1350）
+  的对齐 guard `if (alignMap.empty()) setDefaultAlignmentMap();`
+  （type.cc:3164-3165，默认阶梯 type.cc:4644-4656）。
+- 语义依据：Ghidra 中管线可达的工厂必经 decode→setupSizes，`alignMap` 永不
+  为空；`"TypeFactory alignment map not initialized"` LowlevelError
+  （type.cc:3296-3305 getAlignment，经 findAdd type.cc:3433-3436 触发）只在
+  raw 构造与 decode 之间可达，绝不会出现在被反编译函数内。Rugra 的
+  httpd 驱动没有 Architecture，进程级工厂此前停在 raw 构造态，首个
+  `getTypePointer` 树 miss 即触发该错误（panic 桥）→ 共享工厂 RwLock 中毒
+  → 后续 worker PoisonError 级联（master 上 httpd 仅 4/29 函数输出）。
+- 修复后该工厂与 curl 驱动手工接线（curl_decompile.rs
+  `set_default_alignment_map`）的同一实例状态一致：guard 幂等，非空
+  `size_alignment_map` 不被覆盖。httpd E2E 恢复为 28/29 函数输出、0 panic。
+- 附带发现（不在本修复范围）：ap_strcasecmp_match 在 collapse restart
+  循环不收敛（`orderLoopBodies`→`finalize_structure: 3 -> 1` 无限重复），
+  属 blockaction/collapse 模块缺陷，需独立 TODO 跟踪。
