@@ -2011,3 +2011,13 @@ src/disasm/x86_lift.rs 的 X86LIFT-FLAG-PCODE-0001 改动):
 测试(master 全量即有 15~18 的 flaky 窗口);这两条测试是 add 形态的确定性
 失败源,更新后全量回到 17 failed(17±1 达标)。手写期望仅为 Rugra 回归信号,
 非 oracle 对拍(机制 B2)。
+
+### 2026-08-30 补充(w-iced c2):同族测试期望批量更新(测试专用)
+
+c2 落地 logic/cmp/test/jcc 后,以下测试的旧形态断言更新为 oracle-faithful
+形态(生产代码零改动):test_sub_rax_imm(9 op)、test_and/or/xor_rax_imm
+(9 op:CF=0/OF=0/值 op 直写/SF/ZF/PF)、test_xor_eax_eax(11 op 含 zext)、
+test_cmp_rax_rbx(9 op:LESS/SBORROW/SUB→tmp/SF/ZF/PF)、test_seq_mov_add_ret
+(11 op)、test_seq_mov_and_shl_ret(13 op)、test_seq_cmp_je_multiblock
+(22 op;块0=10 op)、cbranch 条件接线三测试(ZF 0x201→0x206,sla 布局)。
+全量 17 failed,回到 master flaky 窗口(15~18)内。

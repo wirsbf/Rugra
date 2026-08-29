@@ -11802,10 +11802,24 @@ mod tests {
 
         let mut lifter = X86Lifter::new();
         let raw_ops = lifter.lift(inst);
-        // Expect INT_SUB + COPY (same pattern as add)
-        assert_eq!(raw_ops.len(), 2);
+        // X86LIFT-FLAG-PCODE-0001: sub lifts with full flag pcode (ia.sinc
+        // `subflags; op1 = op1 - op2; resultflags(op1)`): INT_LESS CF,
+        // INT_SBORROW OF, INT_SUB writing rax directly (imm canonicalized to
+        // 8 bytes), SF/ZF and the PF popcount chain — 9 ops.
+        assert_eq!(raw_ops.len(), 9);
 
-        let raw_sub = &raw_ops[0];
+        assert_eq!(
+            OpCode::from_i32(raw_ops[0].get_opcode()),
+            Some(OpCode::CPUI_INT_LESS)
+        );
+        assert_eq!(raw_ops[0].output().as_ref().unwrap().offset, 0x200); // CF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[1].get_opcode()),
+            Some(OpCode::CPUI_INT_SBORROW)
+        );
+        assert_eq!(raw_ops[1].output().as_ref().unwrap().offset, 0x20b); // OF
+
+        let raw_sub = &raw_ops[2];
         assert_eq!(
             OpCode::from_i32(raw_sub.get_opcode()),
             Some(OpCode::CPUI_INT_SUB)
@@ -11813,7 +11827,8 @@ mod tests {
 
         let sub_out_binding = raw_sub.output();
         let sub_out = sub_out_binding.as_ref().unwrap();
-        assert_eq!(sub_out.space, AddressSpace::Unique);
+        assert_eq!(sub_out.space, AddressSpace::Register);
+        assert_eq!(sub_out.offset, 0x00); // RAX
         assert_eq!(sub_out.size, 8);
 
         let sub_inputs = raw_sub.inputs();
@@ -11823,30 +11838,33 @@ mod tests {
         assert_eq!(sub_inputs[0].size, 8);
         assert_eq!(sub_inputs[1].space, AddressSpace::Const);
         assert_eq!(sub_inputs[1].offset, 0x08);
-        assert_eq!(sub_inputs[1].size, 1);
+        assert_eq!(sub_inputs[1].size, 8);
 
-        let raw_copy = &raw_ops[1];
+        // SF/ZF from the destination varnode; PF popcount chain
         assert_eq!(
-            OpCode::from_i32(raw_copy.get_opcode()),
-            Some(OpCode::CPUI_COPY)
+            OpCode::from_i32(raw_ops[3].get_opcode()),
+            Some(OpCode::CPUI_INT_SLESS)
         );
-
-        let copy_out_binding = raw_copy.output();
-        let copy_out = copy_out_binding.as_ref().unwrap();
-        assert_eq!(copy_out.space, AddressSpace::Register);
-        assert_eq!(copy_out.offset, 0x00); // RAX
-        assert_eq!(copy_out.size, 8);
-
-        let copy_inputs = raw_copy.inputs();
-        assert_eq!(copy_inputs.len(), 1);
-        assert_eq!(copy_inputs[0].space, AddressSpace::Unique);
-        assert_eq!(copy_inputs[0].offset, sub_out.offset);
-        assert_eq!(copy_inputs[0].size, 8);
+        assert_eq!(raw_ops[3].output().as_ref().unwrap().offset, 0x207); // SF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[4].get_opcode()),
+            Some(OpCode::CPUI_INT_EQUAL)
+        );
+        assert_eq!(raw_ops[4].output().as_ref().unwrap().offset, 0x206); // ZF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[6].get_opcode()),
+            Some(OpCode::CPUI_POPCOUNT)
+        );
+        assert_eq!(
+            OpCode::from_i32(raw_ops[8].get_opcode()),
+            Some(OpCode::CPUI_INT_EQUAL)
+        );
+        assert_eq!(raw_ops[8].output().as_ref().unwrap().offset, 0x202); // PF
 
         let mut fd = Funcdata::new("sub_rax_imm", start, code.len() as i32);
         fd.inject_raw_ops(&raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 2);
+        assert_eq!(fd.obank.alivelist.len(), 9);
         assert_eq!(fd.bblocks.get_size(), 1);
 
         let verifier = RuntimeVerifier::new();
@@ -11854,7 +11872,7 @@ mod tests {
 
         ffi::set_current_program(fd);
 
-        let result = verifier.verify_pcode_generation("sub_rax_8_minimal", start, &rugra_ops, 2);
+        let result = verifier.verify_pcode_generation("sub_rax_8_minimal", start, &rugra_ops, 9);
 
         assert!(matches!(result, VerifyResult::Match));
     }
@@ -11877,10 +11895,26 @@ mod tests {
 
         let mut lifter = X86Lifter::new();
         let raw_ops = lifter.lift(inst);
-        // Expect INT_AND + COPY
-        assert_eq!(raw_ops.len(), 2);
+        // X86LIFT-FLAG-PCODE-0001: and lifts with full flag pcode (ia.sinc
+        // `logicalflags(); Rmr = Rmr & imm; resultflags(Rmr)`): COPY CF=0,
+        // COPY OF=0, INT_AND writing rax directly, SF/ZF and the PF popcount
+        // chain — 9 ops.
+        assert_eq!(raw_ops.len(), 9);
 
-        let raw_op = &raw_ops[0];
+        assert_eq!(
+            OpCode::from_i32(raw_ops[0].get_opcode()),
+            Some(OpCode::CPUI_COPY)
+        );
+        assert_eq!(raw_ops[0].output().as_ref().unwrap().offset, 0x200); // CF
+        assert_eq!(raw_ops[0].inputs()[0].space, AddressSpace::Const);
+        assert_eq!(raw_ops[0].inputs()[0].offset, 0x0);
+        assert_eq!(
+            OpCode::from_i32(raw_ops[1].get_opcode()),
+            Some(OpCode::CPUI_COPY)
+        );
+        assert_eq!(raw_ops[1].output().as_ref().unwrap().offset, 0x20b); // OF
+
+        let raw_op = &raw_ops[2];
         assert_eq!(
             OpCode::from_i32(raw_op.get_opcode()),
             Some(OpCode::CPUI_INT_AND)
@@ -11888,7 +11922,8 @@ mod tests {
 
         let op_out_binding = raw_op.output();
         let op_out = op_out_binding.as_ref().unwrap();
-        assert_eq!(op_out.space, AddressSpace::Unique);
+        assert_eq!(op_out.space, AddressSpace::Register);
+        assert_eq!(op_out.offset, 0x00); // RAX
         assert_eq!(op_out.size, 8);
 
         let op_inputs = raw_op.inputs();
@@ -11897,17 +11932,28 @@ mod tests {
         assert_eq!(op_inputs[0].offset, 0x00); // RAX
         assert_eq!(op_inputs[1].space, AddressSpace::Const);
         assert_eq!(op_inputs[1].offset, 0x0f);
+        assert_eq!(op_inputs[1].size, 8);
 
-        let raw_copy = &raw_ops[1];
         assert_eq!(
-            OpCode::from_i32(raw_copy.get_opcode()),
-            Some(OpCode::CPUI_COPY)
+            OpCode::from_i32(raw_ops[3].get_opcode()),
+            Some(OpCode::CPUI_INT_SLESS)
         );
+        assert_eq!(raw_ops[3].output().as_ref().unwrap().offset, 0x207); // SF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[4].get_opcode()),
+            Some(OpCode::CPUI_INT_EQUAL)
+        );
+        assert_eq!(raw_ops[4].output().as_ref().unwrap().offset, 0x206); // ZF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[8].get_opcode()),
+            Some(OpCode::CPUI_INT_EQUAL)
+        );
+        assert_eq!(raw_ops[8].output().as_ref().unwrap().offset, 0x202); // PF
 
         let mut fd = Funcdata::new("and_rax_imm", start, code.len() as i32);
         fd.inject_raw_ops(&raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 2);
+        assert_eq!(fd.obank.alivelist.len(), 9);
         assert_eq!(fd.bblocks.get_size(), 1);
 
         let verifier = RuntimeVerifier::new();
@@ -11916,7 +11962,7 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("and_rax_0xf_minimal", start, &rugra_ops, 2);
+            verifier.verify_pcode_generation("and_rax_0xf_minimal", start, &rugra_ops, 9);
 
         assert!(matches!(result, VerifyResult::Match));
     }
@@ -11937,9 +11983,22 @@ mod tests {
 
         let mut lifter = X86Lifter::new();
         let raw_ops = lifter.lift(inst);
-        assert_eq!(raw_ops.len(), 2);
+        // X86LIFT-FLAG-PCODE-0001: or = logicalflags + INT_OR direct-dst +
+        // resultflags — 9 ops (same shape as and).
+        assert_eq!(raw_ops.len(), 9);
 
-        let raw_op = &raw_ops[0];
+        assert_eq!(
+            OpCode::from_i32(raw_ops[0].get_opcode()),
+            Some(OpCode::CPUI_COPY)
+        );
+        assert_eq!(raw_ops[0].output().as_ref().unwrap().offset, 0x200); // CF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[1].get_opcode()),
+            Some(OpCode::CPUI_COPY)
+        );
+        assert_eq!(raw_ops[1].output().as_ref().unwrap().offset, 0x20b); // OF
+
+        let raw_op = &raw_ops[2];
         assert_eq!(
             OpCode::from_i32(raw_op.get_opcode()),
             Some(OpCode::CPUI_INT_OR)
@@ -11947,7 +12006,8 @@ mod tests {
 
         let op_out_binding = raw_op.output();
         let op_out = op_out_binding.as_ref().unwrap();
-        assert_eq!(op_out.space, AddressSpace::Unique);
+        assert_eq!(op_out.space, AddressSpace::Register);
+        assert_eq!(op_out.offset, 0x00); // RAX
         assert_eq!(op_out.size, 8);
 
         let op_inputs = raw_op.inputs();
@@ -11956,17 +12016,26 @@ mod tests {
         assert_eq!(op_inputs[0].offset, 0x00); // RAX
         assert_eq!(op_inputs[1].space, AddressSpace::Const);
         assert_eq!(op_inputs[1].offset, 0x10);
+        assert_eq!(op_inputs[1].size, 8);
 
-        let raw_copy = &raw_ops[1];
         assert_eq!(
-            OpCode::from_i32(raw_copy.get_opcode()),
-            Some(OpCode::CPUI_COPY)
+            OpCode::from_i32(raw_ops[3].get_opcode()),
+            Some(OpCode::CPUI_INT_SLESS)
         );
+        assert_eq!(
+            OpCode::from_i32(raw_ops[4].get_opcode()),
+            Some(OpCode::CPUI_INT_EQUAL)
+        );
+        assert_eq!(
+            OpCode::from_i32(raw_ops[8].get_opcode()),
+            Some(OpCode::CPUI_INT_EQUAL)
+        );
+        assert_eq!(raw_ops[8].output().as_ref().unwrap().offset, 0x202); // PF
 
         let mut fd = Funcdata::new("or_rax_imm", start, code.len() as i32);
         fd.inject_raw_ops(&raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 2);
+        assert_eq!(fd.obank.alivelist.len(), 9);
         assert_eq!(fd.bblocks.get_size(), 1);
 
         let verifier = RuntimeVerifier::new();
@@ -11975,7 +12044,7 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("or_rax_0x10_minimal", start, &rugra_ops, 2);
+            verifier.verify_pcode_generation("or_rax_0x10_minimal", start, &rugra_ops, 9);
 
         assert!(matches!(result, VerifyResult::Match));
     }
@@ -11996,36 +12065,35 @@ mod tests {
 
         let mut lifter = X86Lifter::new();
         let raw_ops = lifter.lift(inst);
-        assert_eq!(raw_ops.len(), 2);
 
-        let raw_op = &raw_ops[0];
+        // X86LIFT-FLAG-PCODE-0001: xor = logicalflags + INT_XOR direct-dst +
+        // resultflags — 9 ops (same shape as and/or).
+        assert_eq!(raw_ops.len(), 9);
         assert_eq!(
-            OpCode::from_i32(raw_op.get_opcode()),
-            Some(OpCode::CPUI_INT_XOR)
-        );
-
-        let op_out_binding = raw_op.output();
-        let op_out = op_out_binding.as_ref().unwrap();
-        assert_eq!(op_out.space, AddressSpace::Unique);
-        assert_eq!(op_out.size, 8);
-
-        let op_inputs = raw_op.inputs();
-        assert_eq!(op_inputs.len(), 2);
-        assert_eq!(op_inputs[0].space, AddressSpace::Register);
-        assert_eq!(op_inputs[0].offset, 0x00); // RAX
-        assert_eq!(op_inputs[1].space, AddressSpace::Const);
-        assert_eq!(op_inputs[1].offset, 0x07);
-
-        let raw_copy = &raw_ops[1];
-        assert_eq!(
-            OpCode::from_i32(raw_copy.get_opcode()),
+            OpCode::from_i32(raw_ops[0].get_opcode()),
             Some(OpCode::CPUI_COPY)
         );
+        assert_eq!(raw_ops[0].output().as_ref().unwrap().offset, 0x200); // CF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[1].get_opcode()),
+            Some(OpCode::CPUI_COPY)
+        );
+        assert_eq!(raw_ops[1].output().as_ref().unwrap().offset, 0x20b); // OF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[2].get_opcode()),
+            Some(OpCode::CPUI_INT_XOR)
+        );
+        assert_eq!(raw_ops[2].output().as_ref().unwrap().space, AddressSpace::Register);
+        assert_eq!(
+            OpCode::from_i32(raw_ops[8].get_opcode()),
+            Some(OpCode::CPUI_INT_EQUAL)
+        );
+        assert_eq!(raw_ops[8].output().as_ref().unwrap().offset, 0x202); // PF
 
         let mut fd = Funcdata::new("xor_rax_imm", start, code.len() as i32);
         fd.inject_raw_ops(&raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 2);
+        assert_eq!(fd.obank.alivelist.len(), 9);
         assert_eq!(fd.bblocks.get_size(), 1);
 
         let verifier = RuntimeVerifier::new();
@@ -12034,7 +12102,7 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("xor_rax_0x7_minimal", start, &rugra_ops, 2);
+            verifier.verify_pcode_generation("xor_rax_0x7_minimal", start, &rugra_ops, 9);
 
         assert!(matches!(result, VerifyResult::Match));
     }
@@ -12173,30 +12241,14 @@ mod tests {
 
         let mut lifter = X86Lifter::new();
         let raw_ops = lifter.lift(inst);
-        // cmp produces 3 flag-setting ops: INT_EQUAL(ZF), INT_LESS(CF), INT_SLESS(SF)
-        assert_eq!(raw_ops.len(), 3);
+        // X86LIFT-FLAG-PCODE-0001: cmp lifts per ia.sinc `local temp = rm;
+        // subflags(temp,src); local diff = temp - src; resultflags(diff)`:
+        // INT_LESS CF (0x200), INT_SBORROW OF (0x20b), INT_SUB to a unique
+        // diff, then SF/ZF/PF from the diff — 9 ops.
+        assert_eq!(raw_ops.len(), 9);
 
-        // Op 0: ZF = INT_EQUAL(rax, rbx)
-        let raw_zf = &raw_ops[0];
-        assert_eq!(
-            OpCode::from_i32(raw_zf.get_opcode()),
-            Some(OpCode::CPUI_INT_EQUAL)
-        );
-        let zf_out_binding = raw_zf.output();
-        let zf_out = zf_out_binding.as_ref().unwrap();
-        assert_eq!(zf_out.space, AddressSpace::Register);
-        assert_eq!(zf_out.offset, 0x201); // ZF register
-        assert_eq!(zf_out.size, 1);
-
-        let zf_inputs = raw_zf.inputs();
-        assert_eq!(zf_inputs.len(), 2);
-        assert_eq!(zf_inputs[0].space, AddressSpace::Register);
-        assert_eq!(zf_inputs[0].offset, 0x00); // RAX
-        assert_eq!(zf_inputs[1].space, AddressSpace::Register);
-        assert_eq!(zf_inputs[1].offset, 0x18); // RBX
-
-        // Op 1: CF = INT_LESS(rax, rbx)
-        let raw_cf = &raw_ops[1];
+        // Op 0: CF = INT_LESS(rax, rbx)
+        let raw_cf = &raw_ops[0];
         assert_eq!(
             OpCode::from_i32(raw_cf.get_opcode()),
             Some(OpCode::CPUI_INT_LESS)
@@ -12204,25 +12256,55 @@ mod tests {
         let cf_out_binding = raw_cf.output();
         let cf_out = cf_out_binding.as_ref().unwrap();
         assert_eq!(cf_out.space, AddressSpace::Register);
-        assert_eq!(cf_out.offset, 0x203); // CF register
+        assert_eq!(cf_out.offset, 0x200); // CF (sla layout)
         assert_eq!(cf_out.size, 1);
+        let cf_inputs = raw_cf.inputs();
+        assert_eq!(cf_inputs.len(), 2);
+        assert_eq!(cf_inputs[0].space, AddressSpace::Register);
+        assert_eq!(cf_inputs[0].offset, 0x00); // RAX
+        assert_eq!(cf_inputs[1].space, AddressSpace::Register);
+        assert_eq!(cf_inputs[1].offset, 0x18); // RBX
 
-        // Op 2: SF = INT_SLESS(rax, rbx)
-        let raw_sf = &raw_ops[2];
+        // Op 1: OF = INT_SBORROW(rax, rbx)
+        let raw_of = &raw_ops[1];
         assert_eq!(
-            OpCode::from_i32(raw_sf.get_opcode()),
+            OpCode::from_i32(raw_of.get_opcode()),
+            Some(OpCode::CPUI_INT_SBORROW)
+        );
+        assert_eq!(raw_of.output().as_ref().unwrap().offset, 0x20b); // OF
+
+        // Op 2: diff = INT_SUB(rax, rbx) to unique
+        let raw_sub = &raw_ops[2];
+        assert_eq!(
+            OpCode::from_i32(raw_sub.get_opcode()),
+            Some(OpCode::CPUI_INT_SUB)
+        );
+        let sub_out_binding = raw_sub.output();
+        let sub_out = sub_out_binding.as_ref().unwrap();
+        assert_eq!(sub_out.space, AddressSpace::Unique);
+        assert_eq!(sub_out.size, 8);
+
+        // SF/ZF/PF read the diff
+        assert_eq!(
+            OpCode::from_i32(raw_ops[3].get_opcode()),
             Some(OpCode::CPUI_INT_SLESS)
         );
-        let sf_out_binding = raw_sf.output();
-        let sf_out = sf_out_binding.as_ref().unwrap();
-        assert_eq!(sf_out.space, AddressSpace::Register);
-        assert_eq!(sf_out.offset, 0x202); // SF register
-        assert_eq!(sf_out.size, 1);
+        assert_eq!(raw_ops[3].output().as_ref().unwrap().offset, 0x207); // SF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[4].get_opcode()),
+            Some(OpCode::CPUI_INT_EQUAL)
+        );
+        assert_eq!(raw_ops[4].output().as_ref().unwrap().offset, 0x206); // ZF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[8].get_opcode()),
+            Some(OpCode::CPUI_INT_EQUAL)
+        );
+        assert_eq!(raw_ops[8].output().as_ref().unwrap().offset, 0x202); // PF
 
         let mut fd = Funcdata::new("cmp_rax_rbx", start, code.len() as i32);
         fd.inject_raw_ops(&raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 3);
+        assert_eq!(fd.obank.alivelist.len(), 9);
         assert_eq!(fd.bblocks.get_size(), 1);
 
         let verifier = RuntimeVerifier::new();
@@ -12231,7 +12313,7 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("cmp_rax_rbx_minimal", start, &rugra_ops, 3);
+            verifier.verify_pcode_generation("cmp_rax_rbx_minimal", start, &rugra_ops, 9);
 
         assert!(matches!(result, VerifyResult::Match));
     }
@@ -12741,28 +12823,29 @@ mod tests {
             let ops = lifter.lift(inst);
             all_raw_ops.extend(ops);
         }
-        // mov→1(COPY) + add→2(INT_ADD+COPY) + ret→1(RETURN) = 4
-        assert_eq!(all_raw_ops.len(), 4);
+        // X86LIFT-FLAG-PCODE-0001: mov→1(COPY) + add→9(CARRY/SCARRY/ADD
+        // direct-dst/SF/ZF/PF chain) + ret→1(RETURN) = 11
+        assert_eq!(all_raw_ops.len(), 11);
 
         // Verify op sequence
         assert_eq!(
             OpCode::from_i32(all_raw_ops[0].get_opcode()), Some(OpCode::CPUI_COPY)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[1].get_opcode()), Some(OpCode::CPUI_INT_ADD)
+            OpCode::from_i32(all_raw_ops[1].get_opcode()), Some(OpCode::CPUI_INT_CARRY)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[2].get_opcode()), Some(OpCode::CPUI_COPY)
+            OpCode::from_i32(all_raw_ops[3].get_opcode()), Some(OpCode::CPUI_INT_ADD)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[3].get_opcode()), Some(OpCode::CPUI_RETURN)
+            OpCode::from_i32(all_raw_ops[10].get_opcode()), Some(OpCode::CPUI_RETURN)
         );
 
         // Phase 3: Inject into Funcdata
         let mut fd = Funcdata::new("seq_mov_add_ret", start, code.len() as i32);
         fd.inject_raw_ops(&all_raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 4);
+        assert_eq!(fd.obank.alivelist.len(), 11);
         // RETURN terminates, all ops in one block
         assert_eq!(fd.bblocks.get_size(), 1);
 
@@ -12773,7 +12856,7 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("seq_mov_add_ret", start, &rugra_ops, 4);
+            verifier.verify_pcode_generation("seq_mov_add_ret", start, &rugra_ops, 11);
 
         assert!(matches!(result, VerifyResult::Match));
     }
@@ -12806,32 +12889,33 @@ mod tests {
         for inst in &instructions {
             all_raw_ops.extend(lifter.lift(inst));
         }
-        // mov→1 + and→2 + shl→2 + ret→1 = 6
-        assert_eq!(all_raw_ops.len(), 6);
+        // X86LIFT-FLAG-PCODE-0001: mov→1 + and→9(logicalflags+AND direct-dst
+        // +SF/ZF/PF) + shl→2(INT_LEFT+COPY, flags 未实现=后续任务) + ret→1 = 13
+        assert_eq!(all_raw_ops.len(), 13);
 
         assert_eq!(
             OpCode::from_i32(all_raw_ops[0].get_opcode()), Some(OpCode::CPUI_COPY)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[1].get_opcode()), Some(OpCode::CPUI_INT_AND)
+            OpCode::from_i32(all_raw_ops[1].get_opcode()), Some(OpCode::CPUI_COPY) // CF=0
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[2].get_opcode()), Some(OpCode::CPUI_COPY)
+            OpCode::from_i32(all_raw_ops[3].get_opcode()), Some(OpCode::CPUI_INT_AND)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[3].get_opcode()), Some(OpCode::CPUI_INT_LEFT)
+            OpCode::from_i32(all_raw_ops[10].get_opcode()), Some(OpCode::CPUI_INT_LEFT)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[4].get_opcode()), Some(OpCode::CPUI_COPY)
+            OpCode::from_i32(all_raw_ops[11].get_opcode()), Some(OpCode::CPUI_COPY)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[5].get_opcode()), Some(OpCode::CPUI_RETURN)
+            OpCode::from_i32(all_raw_ops[12].get_opcode()), Some(OpCode::CPUI_RETURN)
         );
 
         let mut fd = Funcdata::new("seq_and_shl_ret", start, code.len() as i32);
         fd.inject_raw_ops(&all_raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 6);
+        assert_eq!(fd.obank.alivelist.len(), 13);
         assert_eq!(fd.bblocks.get_size(), 1);
 
         let verifier = RuntimeVerifier::new();
@@ -12840,7 +12924,7 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("seq_and_shl_ret", start, &rugra_ops, 6);
+            verifier.verify_pcode_generation("seq_and_shl_ret", start, &rugra_ops, 13);
 
         assert!(matches!(result, VerifyResult::Match));
     }
@@ -12897,51 +12981,52 @@ mod tests {
         for inst in &instructions {
             all_raw_ops.extend(lifter.lift(inst));
         }
-        // cmp→3(INT_EQUAL+INT_LESS+INT_SLESS)
+        // X86LIFT-FLAG-PCODE-0001:
+        // cmp→9(LESS/SBORROW/SUB→tmp/SF/ZF/PF)
         // je→1(CBRANCH)
         // mov→1(COPY)
         // ret→1(RETURN)
-        // xor→2(INT_XOR+COPY)
+        // xor→9(logicalflags/XOR direct-dst/SF/ZF/PF)
         // ret→1(RETURN)
-        // Total: 9
-        assert_eq!(all_raw_ops.len(), 9);
+        // Total: 22
+        assert_eq!(all_raw_ops.len(), 22);
 
         // Verify key opcodes
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[0].get_opcode()), Some(OpCode::CPUI_INT_EQUAL)
+            OpCode::from_i32(all_raw_ops[0].get_opcode()), Some(OpCode::CPUI_INT_LESS)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[3].get_opcode()), Some(OpCode::CPUI_CBRANCH)
+            OpCode::from_i32(all_raw_ops[9].get_opcode()), Some(OpCode::CPUI_CBRANCH)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[4].get_opcode()), Some(OpCode::CPUI_COPY)
+            OpCode::from_i32(all_raw_ops[10].get_opcode()), Some(OpCode::CPUI_COPY)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[5].get_opcode()), Some(OpCode::CPUI_RETURN)
+            OpCode::from_i32(all_raw_ops[11].get_opcode()), Some(OpCode::CPUI_RETURN)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[6].get_opcode()), Some(OpCode::CPUI_INT_XOR)
+            OpCode::from_i32(all_raw_ops[14].get_opcode()), Some(OpCode::CPUI_INT_XOR)
         );
 
         // Phase 3: Inject and verify block structure
         let mut fd = Funcdata::new("seq_cmp_je_multi", start, code.len() as i32);
         fd.inject_raw_ops(&all_raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 9);
+        assert_eq!(fd.obank.alivelist.len(), 22);
         // CBRANCH terminates block 0, RETURN terminates block 1 and block 2 → 3 blocks
         assert_eq!(fd.bblocks.get_size(), 3);
 
-        // Verify block 0 has 4 ops (cmp: 3 flag ops + CBRANCH)
+        // Verify block 0 has 10 ops (cmp: 9 flag ops + CBRANCH)
         let block0 = fd.bblocks.get_block(0).unwrap();
-        assert_eq!(block0.read().unwrap().get_ops().len(), 4);
+        assert_eq!(block0.read().unwrap().get_ops().len(), 10);
 
         // Verify block 1 has 2 ops (mov + ret)
         let block1 = fd.bblocks.get_block(1).unwrap();
         assert_eq!(block1.read().unwrap().get_ops().len(), 2);
 
-        // Verify block 2 has 3 ops (xor: INT_XOR+COPY + ret)
+        // Verify block 2 has 10 ops (xor: 9 ops + ret)
         let block2 = fd.bblocks.get_block(2).unwrap();
-        assert_eq!(block2.read().unwrap().get_ops().len(), 3);
+        assert_eq!(block2.read().unwrap().get_ops().len(), 10);
 
         // Phase 4: Verify via RuntimeVerifier
         let verifier = RuntimeVerifier::new();
@@ -12950,7 +13035,7 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("seq_cmp_je_multiblock", start, &rugra_ops, 9);
+            verifier.verify_pcode_generation("seq_cmp_je_multiblock", start, &rugra_ops, 22);
 
         assert!(matches!(result, VerifyResult::Match));
     }
@@ -13444,24 +13529,25 @@ mod tests {
     // Diagnostic for the curl `while (local_0 == local_0)` dead-loop root cause:
     // does Heritage rename wire CBRANCH in(1) (the condition) to the op that
     // defines it? Mirrors exactly what x86_lift.rs emits for `cmp rdi, rsi`
-    // followed by `je target` (ZF lives at Register:0x201).
+    // followed by `je target` (ZF lives at Register:0x206, sla layout).
 
     #[test]
     fn test_cbranch_condition_def_wired_via_heritage_single_block() {
         let _lock = FFI_TEST_LOCK.lock().unwrap();
 
-        // Reproduce the exact P-code x86_lift.rs emits for `cmp rdi,rsi` + `je`.
-        // cmp emits 3 flag writes; only ZF (Register:0x201) matters for je.
+        // Reproduce the P-code x86_lift.rs emits for `cmp rdi,rsi` + `je`
+        // (X86LIFT-FLAG-PCODE-0001 sla layout): cmp's resultflags writes
+        // ZF (Register:0x206); je reads ZF at the same offset.
         let mut cmp_zf = PcodeOpRaw::new(OpCode::CPUI_INT_EQUAL as i32);
         cmp_zf.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8)); // RDI
         cmp_zf.add_input(VarnodeRaw::new(AddressSpace::Register, 0x30, 8)); // RSI
-        cmp_zf.set_output(VarnodeRaw::new(AddressSpace::Register, 0x201, 1)); // ZF
+        cmp_zf.set_output(VarnodeRaw::new(AddressSpace::Register, 0x206, 1)); // ZF
 
         // je target  → CBRANCH(target, ZF). in(1) is a FREE zf varnode distinct
         // from the cmp's written ZF (find_or_create_input_space filters out written).
         let mut cbranch = PcodeOpRaw::new(OpCode::CPUI_CBRANCH as i32);
         cbranch.add_input(VarnodeRaw::new(AddressSpace::Ram, 0x1010, 8)); // target
-        cbranch.add_input(VarnodeRaw::new(AddressSpace::Register, 0x201, 1)); // ZF
+        cbranch.add_input(VarnodeRaw::new(AddressSpace::Register, 0x206, 1)); // ZF
 
         let start = Address::new(0x1000);
         let mut fd = Funcdata::new("cbranch_cond", start, 10);
@@ -13491,7 +13577,7 @@ mod tests {
         assert!(
             cond_is_written && cond_def.is_some(),
             "CBRANCH condition varnode lost its SSA def after heritage. \
-             is_written={}, def={:?} (Register:0x201, size 1). \
+             is_written={}, def={:?} (Register:0x206, size 1). \
              This is the root cause of the `while(local_0==local_0)` dead loop.",
             cond_is_written,
             if cond_def.is_some() { "Some" } else { "None/dead" },
@@ -13607,13 +13693,13 @@ mod tests {
         let mut cmp_zf = PcodeOpRaw::new(OpCode::CPUI_INT_EQUAL as i32);
         cmp_zf.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8)); // RDI
         cmp_zf.add_input(VarnodeRaw::new(AddressSpace::Register, 0x30, 8)); // RSI
-        cmp_zf.set_output(VarnodeRaw::new(AddressSpace::Register, 0x201, 1)); // ZF
+        cmp_zf.set_output(VarnodeRaw::new(AddressSpace::Register, 0x206, 1)); // ZF
         cmp_zf.set_seq_num(crate::address::SeqNum::new(Address::new(0x1000), 0));
 
         // je exit (0x100a)  →  CBRANCH(exit, ZF)  — conditional exit from loop
         let mut cbranch = PcodeOpRaw::new(OpCode::CPUI_CBRANCH as i32);
         cbranch.add_input(VarnodeRaw::new(AddressSpace::Ram, 0x100a, 8)); // exit target
-        cbranch.add_input(VarnodeRaw::new(AddressSpace::Register, 0x201, 1)); // ZF
+        cbranch.add_input(VarnodeRaw::new(AddressSpace::Register, 0x206, 1)); // ZF
         cbranch.set_seq_num(crate::address::SeqNum::new(Address::new(0x1003), 0));
 
         // --- blk[1] (loop body): cmp2 ZF=... (a SECOND writer of ZF) ---
@@ -13624,7 +13710,7 @@ mod tests {
         let mut cmp2_zf = PcodeOpRaw::new(OpCode::CPUI_INT_EQUAL as i32);
         cmp2_zf.add_input(VarnodeRaw::new(AddressSpace::Register, 0x40, 8)); // RAX
         cmp2_zf.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));        // 0
-        cmp2_zf.set_output(VarnodeRaw::new(AddressSpace::Register, 0x201, 1)); // ZF
+        cmp2_zf.set_output(VarnodeRaw::new(AddressSpace::Register, 0x206, 1)); // ZF
         cmp2_zf.set_seq_num(crate::address::SeqNum::new(Address::new(0x1005), 0));
 
         // jmp back to 0x1000 (header) — terminates the loop body.
@@ -13730,7 +13816,7 @@ mod tests {
             header_idx, body_idx, body_df, dump_cfg()
         );
 
-        // A MULTIEQUAL (phi) for ZF (Register:0x201) must have been inserted at
+        // A MULTIEQUAL (phi) for ZF (Register:0x206) must have been inserted at
         // the header, because ZF is written in both the header and the body.
         // We look at the header block's op list directly (the phi's `parent`
         // back-pointer is not always set by insert_op, so iterating the block's
@@ -13750,18 +13836,18 @@ mod tests {
             if o.get_opcode() != OpCode::CPUI_MULTIEQUAL {
                 return false;
             }
-            // The phi's output must be at Register:0x201 (ZF).
+            // The phi's output must be at Register:0x206 (ZF).
             o.output
                 .as_ref()
                 .map(|out| {
                     let v = out.read().unwrap();
-                    v.get_space() == AddressSpace::Register && v.get_offset() == 0x201
+                    v.get_space() == AddressSpace::Register && v.get_offset() == 0x206
                 })
                 .unwrap_or(false)
         });
         assert!(
             phi_at_header,
-            "Expected a MULTIEQUAL (phi) for ZF (Register:0x201) at the loop \
+            "Expected a MULTIEQUAL (phi) for ZF (Register:0x206) at the loop \
              header blk[{}], but found none. This means calc_dom_frontier's \
              fix is not propagating into phi placement. Header block ops: [{}] \
              CFG:{}",
@@ -14837,9 +14923,10 @@ mod tests {
         let mut lifter = X86Lifter::new();
         let mut raw_ops = Vec::new();
         for inst in &instructions { raw_ops.extend(lifter.lift(inst)); }
-        // xor→2(INT_XOR+COPY), ret→1(RETURN)
+        // X86LIFT-FLAG-PCODE-0001: xor→10 (COPY CF=0, COPY OF=0, INT_XOR
+        // direct-dst, INT_ZEXT rax←eax, SF, ZF, PF chain), ret→1 — 11 ops.
         assert_eq!(
-            raw_ops.len(), 3, "expected 3 raw ops, got {}", raw_ops.len()
+            raw_ops.len(), 11, "expected 11 raw ops, got {}", raw_ops.len()
         );
         let mut fd = Funcdata::new("xor_eax_eax", start, code.len() as i32);
         fd.inject_raw_ops(&raw_ops);

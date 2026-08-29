@@ -39,6 +39,17 @@ enum Op1Ref {
     MemLoad { addr: VarnodeRaw, size: usize },
 }
 
+// RUGRA-GLUE: SLEIGH binds operand expressions (memory address computation)
+// BEFORE the constructor body runs, but the value read LOADs happen at each
+// use inside the body — e.g. `test byte [rcx+rdx*2+1],8` lifts addr-ops,
+// COPY CF, COPY OF, LOAD, INT_AND. BoundOperand is the bound form;
+// read_bound() materializes one use.
+enum BoundOperand {
+    Reg(VarnodeRaw),
+    Const(VarnodeRaw),
+    MemAddr { addr: VarnodeRaw, size: usize },
+}
+
 impl Default for X86Lifter {
     // RUGRA-GLUE: src/disasm/x86_lift.rs helper (no direct Ghidra counterpart)
     fn default() -> Self {
@@ -355,36 +366,41 @@ impl X86Lifter {
     // RUGRA-GLUE: port of ia.sinc macro addflags(op1,op2) — CF = carry(op1,
     // op2) = INT_CARRY, OF = scarry(op1,op2) = INT_SCARRY; emitted BEFORE the
     // value op (oracle op order: flags, ADD, [zext], resultflags); each use
-    /// Emit CF/OF for add (ia.sinc addflags; op1 re-materialized per use).
-    fn emit_addflags(&mut self, op1: &Op1Ref, op2: &VarnodeRaw, ops: &mut Vec<PcodeOpRaw>) {
+    // of each operand re-materializes (memory operands re-LOAD).
+    /// Emit CF/OF for add (ia.sinc addflags; operands re-materialized per use).
+    fn emit_addflags(&mut self, op1: &Op1Ref, op2: &Op1Ref, ops: &mut Vec<PcodeOpRaw>) {
         let a1 = self.materialize(op1, ops);
+        let b1 = self.materialize(op2, ops);
         let mut op_cf = PcodeOpRaw::new(OpCode::CPUI_INT_CARRY as i32);
         op_cf.add_input(a1);
-        op_cf.add_input(op2.clone());
+        op_cf.add_input(b1);
         op_cf.set_output(Self::flag_cf());
         ops.push(op_cf);
         let a2 = self.materialize(op1, ops);
+        let b2 = self.materialize(op2, ops);
         let mut op_of = PcodeOpRaw::new(OpCode::CPUI_INT_SCARRY as i32);
         op_of.add_input(a2);
-        op_of.add_input(op2.clone());
+        op_of.add_input(b2);
         op_of.set_output(Self::flag_of());
         ops.push(op_of);
     }
 
     // RUGRA-GLUE: port of ia.sinc macro subflags(op1,op2) — CF = op1 < op2 =
-    // INT_LESS, OF = sborrow(op1,op2) = INT_SBORROW; op1 re-materialized per
-    /// Emit CF/OF for sub/cmp (ia.sinc subflags; op1 re-materialized per use).
-    fn emit_subflags(&mut self, op1: &Op1Ref, op2: &VarnodeRaw, ops: &mut Vec<PcodeOpRaw>) {
+    // INT_LESS, OF = sborrow(op1,op2) = INT_SBORROW; operands re-materialized
+    /// Emit CF/OF for sub/cmp (ia.sinc subflags; operands re-materialized per use).
+    fn emit_subflags(&mut self, op1: &Op1Ref, op2: &Op1Ref, ops: &mut Vec<PcodeOpRaw>) {
         let a1 = self.materialize(op1, ops);
+        let b1 = self.materialize(op2, ops);
         let mut op_cf = PcodeOpRaw::new(OpCode::CPUI_INT_LESS as i32);
         op_cf.add_input(a1);
-        op_cf.add_input(op2.clone());
+        op_cf.add_input(b1);
         op_cf.set_output(Self::flag_cf());
         ops.push(op_cf);
         let a2 = self.materialize(op1, ops);
+        let b2 = self.materialize(op2, ops);
         let mut op_of = PcodeOpRaw::new(OpCode::CPUI_INT_SBORROW as i32);
         op_of.add_input(a2);
-        op_of.add_input(op2.clone());
+        op_of.add_input(b2);
         op_of.set_output(Self::flag_of());
         ops.push(op_of);
     }
@@ -617,15 +633,16 @@ impl X86Lifter {
         ops.push(op);
     }
 
-    // RUGRA-GLUE: resolve ALU dst + op1 reference + src value (oracle order:
-    // src value ops first, then dst access; immediate canonicalized to dst
+    // RUGRA-GLUE: resolve ALU dst + operand references (both memory operands
+    // re-LOAD per macro use — oracle `add rdi,[rax+8]` re-LOADs the source
+    // for CARRY, SCARRY and the value op; immediates canonicalized to dst
     /// Resolve operands for a 2-operand ALU instruction; returns
-    /// (dst access, op1 reference, src value varnode).
+    /// (dst access, op1 reference, src reference).
     fn resolve_alu(
         &mut self,
         inst: &Instruction,
         ops: &mut Vec<PcodeOpRaw>,
-    ) -> Option<(AluDst, Op1Ref, VarnodeRaw)> {
+    ) -> Option<(AluDst, Op1Ref, Op1Ref)> {
         if inst.operands.len() != 2 {
             return None;
         }
@@ -635,24 +652,34 @@ impl X86Lifter {
             _ => return None,
         };
 
-        // Source value at the destination size (immediates canonicalized).
-        let src = match &inst.operands[1] {
-            crate::disasm::Operand::Register { name, size } => {
-                Self::get_register(name, *size)?
+        // Operand binding: register/immediate direct, memory as per-use LOAD
+        // (address computation emitted once here, at bind time).
+        let mut bind_ref = |lifter: &mut Self, op: &crate::disasm::Operand| -> Option<Op1Ref> {
+            match op {
+                crate::disasm::Operand::Register { name, size } => {
+                    Some(Op1Ref::Direct(Self::get_register(name, *size)?))
+                }
+                crate::disasm::Operand::Immediate { value, .. } => {
+                    Some(Op1Ref::Direct(Self::const_vn(*value as u64, dst_size)))
+                }
+                crate::disasm::Operand::Memory {
+                    base,
+                    index,
+                    scale,
+                    displacement,
+                    size,
+                } => {
+                    let addr = lifter.compute_mem_addr(base, index, scale, displacement, ops)?;
+                    Some(Op1Ref::MemLoad {
+                        addr,
+                        size: *size,
+                    })
+                }
             }
-            crate::disasm::Operand::Immediate { value, .. } => {
-                Self::const_vn(*value as u64, dst_size)
-            }
-            crate::disasm::Operand::Memory {
-                base,
-                index,
-                scale,
-                displacement,
-                size,
-            } => {
-                let addr = self.compute_mem_addr(base, index, scale, displacement, ops)?;
-                self.emit_load(*size, &addr, ops)
-            }
+        };
+
+        let Some(src) = bind_ref(self, &inst.operands[1]) else {
+            return None;
         };
 
         match &inst.operands[0] {
@@ -763,13 +790,14 @@ impl X86Lifter {
         };
         self.emit_addflags(&op1, &src, ops);
         let a = self.materialize(&op1, ops);
+        let b = self.materialize(&src, ops);
         let out = match &dst {
             AluDst::Reg { vn, .. } => vn.clone(),
             AluDst::Mem { .. } => a.clone(),
         };
         let mut op = PcodeOpRaw::new(OpCode::CPUI_INT_ADD as i32);
         op.add_input(a);
-        op.add_input(src);
+        op.add_input(b);
         op.set_output(out.clone());
         ops.push(op);
         self.emit_alu_tail(dst, out, false, ops);
@@ -784,13 +812,14 @@ impl X86Lifter {
         };
         self.emit_subflags(&op1, &src, ops);
         let a = self.materialize(&op1, ops);
+        let b = self.materialize(&src, ops);
         let out = match &dst {
             AluDst::Reg { vn, .. } => vn.clone(),
             AluDst::Mem { .. } => a.clone(),
         };
         let mut op = PcodeOpRaw::new(OpCode::CPUI_INT_SUB as i32);
         op.add_input(a);
-        op.add_input(src);
+        op.add_input(b);
         op.set_output(out.clone());
         ops.push(op);
         self.emit_alu_tail(dst, out, false, ops);
@@ -918,6 +947,352 @@ impl X86Lifter {
         }
     }
 
+    // RUGRA-GLUE: bind an operand (emits address computation for memory;
+    // immediates canonicalized to `canonical_size` — iced reports the
+    /// Bind `op` without reading its value.
+    fn bind_operand(
+        &mut self,
+        op: &crate::disasm::Operand,
+        canonical_size: usize,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) -> Option<BoundOperand> {
+        match op {
+            crate::disasm::Operand::Register { name, size } => {
+                Some(BoundOperand::Reg(Self::get_register(name, *size)?))
+            }
+            crate::disasm::Operand::Immediate { value, .. } => {
+                Some(BoundOperand::Const(Self::const_vn(
+                    *value as u64,
+                    canonical_size,
+                )))
+            }
+            crate::disasm::Operand::Memory {
+                base,
+                index,
+                scale,
+                displacement,
+                size,
+            } => {
+                let addr = self.compute_mem_addr(base, index, scale, displacement, ops)?;
+                Some(BoundOperand::MemAddr {
+                    addr,
+                    size: *size,
+                })
+            }
+        }
+    }
+
+    // RUGRA-GLUE: read a bound operand at one use (LOAD for memory).
+    /// Materialize one use of a bound operand.
+    fn read_bound(
+        &mut self,
+        bound: &BoundOperand,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) -> VarnodeRaw {
+        match bound {
+            BoundOperand::Reg(vn) => vn.clone(),
+            BoundOperand::Const(vn) => vn.clone(),
+            BoundOperand::MemAddr { addr, size } => self.emit_load(*size, addr, ops),
+        }
+    }
+
+    // RUGRA-GLUE: ia.sinc :AND/:OR/:XOR constructors — `logicalflags(); Rmr =
+    // Rmr OP imm; [check_*32_dest]; resultflags(Rmr)`; CF/OF cleared before
+    // any operand LOAD; memory forms re-LOAD per use like add.
+    /// Lift and/or/xor (logicalflags + value + zext + resultflags).
+    fn lift_logic(
+        &mut self,
+        inst: &Instruction,
+        value_opcode: OpCode,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) {
+        if inst.operands.len() != 2 {
+            return;
+        }
+        let dst_size = match &inst.operands[0] {
+            crate::disasm::Operand::Register { size, .. } => *size,
+            crate::disasm::Operand::Memory { size, .. } => *size,
+            _ => return,
+        };
+        // operand binding (address computation) precedes the body
+        let src_b = match self.bind_operand(&inst.operands[1], dst_size, ops) {
+            Some(b) => b,
+            None => return,
+        };
+        let (dst, op1_bound) = match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, size } => {
+                let vn = match Self::get_register(name, *size) {
+                    Some(v) => v,
+                    None => return,
+                };
+                let parent64 = if *size == 4 {
+                    Self::parent64_name(name).and_then(|p| Self::get_register(p, 8))
+                } else {
+                    None
+                };
+                (
+                    AluDst::Reg { vn, parent64 },
+                    BoundOperand::Reg(vn),
+                )
+            }
+            crate::disasm::Operand::Memory {
+                base,
+                index,
+                scale,
+                displacement,
+                size,
+            } => {
+                let Some(addr) =
+                    self.compute_mem_addr(base, index, scale, displacement, ops)
+                else {
+                    return;
+                };
+                (
+                    AluDst::Mem { addr },
+                    BoundOperand::MemAddr {
+                        addr,
+                        size: *size,
+                    },
+                )
+            }
+            _ => return,
+        };
+        // logicalflags() is the body's first statement: CF = 0, OF = 0
+        self.emit_logicalflags(ops);
+        let src = self.read_bound(&src_b, ops);
+        let a = self.read_bound(&op1_bound, ops);
+        let out = match &dst {
+            AluDst::Reg { vn, .. } => vn.clone(),
+            AluDst::Mem { .. } => a.clone(),
+        };
+        let mut op = PcodeOpRaw::new(value_opcode as i32);
+        op.add_input(a);
+        op.add_input(src);
+        op.set_output(out.clone());
+        ops.push(op);
+        self.emit_alu_tail(dst, out, false, ops);
+    }
+
+    // RUGRA-GLUE: ia.sinc :CMP constructors — `local temp = rm; subflags
+    // (temp,src); local diff = temp - src; resultflags(diff)`; BOTH operands
+    // take the local-cached form: register direct (SLEIGH elides the local),
+    // memory is a single LOAD + COPY reused by every use (oracle `cmp
+    // esi,[rcx+r12*4]`: addr, LOAD, COPY, INT_LESS, INT_SBORROW, INT_SUB...).
+    /// Lift `cmp` (subflags + INT_SUB to temp + resultflags; no store/zext).
+    fn lift_cmp(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        if inst.operands.len() != 2 {
+            return;
+        }
+        let dst_size = match &inst.operands[0] {
+            crate::disasm::Operand::Register { size, .. } => *size,
+            crate::disasm::Operand::Memory { size, .. } => *size,
+            _ => return,
+        };
+        // local cache: register/immediate direct, memory LOAD + COPY
+        let cache_operand =
+            |lifter: &mut Self, op: &crate::disasm::Operand, ops: &mut Vec<PcodeOpRaw>| -> Option<VarnodeRaw> {
+                match op {
+                    crate::disasm::Operand::Register { name, size } => {
+                        Self::get_register(name, *size)
+                    }
+                    crate::disasm::Operand::Immediate { value, .. } => {
+                        Some(Self::const_vn(*value as u64, dst_size))
+                    }
+                    crate::disasm::Operand::Memory {
+                        base,
+                        index,
+                        scale,
+                        displacement,
+                        size,
+                    } => {
+                        let addr = lifter.compute_mem_addr(base, index, scale, displacement, ops)?;
+                        let loaded = lifter.emit_load(*size, &addr, ops);
+                        let temp = lifter.alloc_tmp(*size);
+                        let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+                        op.add_input(loaded);
+                        op.set_output(temp.clone());
+                        ops.push(op);
+                        Some(temp)
+                    }
+                }
+            };
+        let Some(src) = cache_operand(self, &inst.operands[1], ops) else {
+            return;
+        };
+        let Some(temp) = cache_operand(self, &inst.operands[0], ops) else {
+            return;
+        };
+        let op1 = Op1Ref::Direct(temp.clone());
+        let op2 = Op1Ref::Direct(src.clone());
+        self.emit_subflags(&op1, &op2, ops);
+        let diff = self.alloc_tmp(dst_size);
+        let mut op = PcodeOpRaw::new(OpCode::CPUI_INT_SUB as i32);
+        op.add_input(temp);
+        op.add_input(src);
+        op.set_output(diff.clone());
+        ops.push(op);
+        self.emit_resultflags(diff, ops);
+    }
+
+    // RUGRA-GLUE: ia.sinc :TEST constructors — `logicalflags(); local
+    // tmpflag = rm & imm; resultflags(tmpflag)`; single operand read.
+    /// Lift `test` (logicalflags + INT_AND to temp + resultflags; no store).
+    fn lift_test(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        if inst.operands.len() != 2 {
+            return;
+        }
+        let dst_size = match &inst.operands[0] {
+            crate::disasm::Operand::Register { size, .. } => *size,
+            crate::disasm::Operand::Memory { size, .. } => *size,
+            _ => return,
+        };
+        // operand binding (address computation) precedes the body
+        let src_b = match self.bind_operand(&inst.operands[1], dst_size, ops) {
+            Some(b) => b,
+            None => return,
+        };
+        let op0_b = match self.bind_operand(&inst.operands[0], dst_size, ops) {
+            Some(b) => b,
+            None => return,
+        };
+        // logicalflags(): CF = 0, OF = 0 (body's first statement)
+        self.emit_logicalflags(ops);
+        let src = self.read_bound(&src_b, ops);
+        let a = self.read_bound(&op0_b, ops);
+        let tmp = self.alloc_tmp(dst_size);
+        let mut op = PcodeOpRaw::new(OpCode::CPUI_INT_AND as i32);
+        op.add_input(a);
+        op.add_input(src);
+        op.set_output(tmp.clone());
+        ops.push(op);
+        self.emit_resultflags(tmp, ops);
+    }
+
+    // RUGRA-GLUE: port of the ia.sinc cc condition table (ia.sinc:1523-1539,
+    // `cc: "O" is cond=0 { export OF; }` ... `cc: "G" is cond=15 { local tmp
+    // = !ZF && (OF == SF); export tmp; }`); executed semantics verified
+    /// Emit the condition computation for a cc suffix; returns the 1-byte
+    /// condition varnode. Suffix set: o no c(b) nc(ae) e(z) ne(nz) be(na)
+    /// a(nbe) s ns p(pe) np(po) l(nge) ge(nl) le(ng) g(nle).
+    fn emit_cc_cond(&mut self, cc: &str, ops: &mut Vec<PcodeOpRaw>) -> Option<VarnodeRaw> {
+        match cc {
+            "o" => Some(Self::flag_of()),
+            "no" => Some(self.emit_bool_not(Self::flag_of(), ops)),
+            "c" | "b" | "nae" => Some(Self::flag_cf()),
+            "nc" | "ae" | "nb" => Some(self.emit_bool_not(Self::flag_cf(), ops)),
+            "e" | "z" => Some(Self::flag_zf()),
+            "ne" | "nz" => Some(self.emit_bool_not(Self::flag_zf(), ops)),
+            "be" | "na" => Some(self.emit_bool_binary(
+                Self::flag_cf(),
+                Self::flag_zf(),
+                OpCode::CPUI_BOOL_OR,
+                ops,
+            )),
+            "a" | "nbe" => {
+                let or = self.emit_bool_binary(
+                    Self::flag_cf(),
+                    Self::flag_zf(),
+                    OpCode::CPUI_BOOL_OR,
+                    ops,
+                );
+                Some(self.emit_bool_not(or, ops))
+            }
+            "s" => Some(Self::flag_sf()),
+            "ns" => Some(self.emit_bool_not(Self::flag_sf(), ops)),
+            "p" | "pe" => Some(Self::flag_pf()),
+            "np" | "po" => Some(self.emit_bool_not(Self::flag_pf(), ops)),
+            "l" | "nge" => Some(self.emit_flag_pair(
+                Self::flag_of(),
+                Self::flag_sf(),
+                OpCode::CPUI_INT_NOTEQUAL,
+                ops,
+            )),
+            "ge" | "nl" => Some(self.emit_flag_pair(
+                Self::flag_of(),
+                Self::flag_sf(),
+                OpCode::CPUI_INT_EQUAL,
+                ops,
+            )),
+            "le" | "ng" => {
+                let ne = self.emit_flag_pair(
+                    Self::flag_of(),
+                    Self::flag_sf(),
+                    OpCode::CPUI_INT_NOTEQUAL,
+                    ops,
+                );
+                Some(self.emit_bool_binary(
+                    Self::flag_zf(),
+                    ne,
+                    OpCode::CPUI_BOOL_OR,
+                    ops,
+                ))
+            }
+            "g" | "nle" => {
+                let not_zf = self.emit_bool_not(Self::flag_zf(), ops);
+                let eq = self.emit_flag_pair(
+                    Self::flag_of(),
+                    Self::flag_sf(),
+                    OpCode::CPUI_INT_EQUAL,
+                    ops,
+                );
+                Some(self.emit_bool_binary(
+                    not_zf,
+                    eq,
+                    OpCode::CPUI_BOOL_AND,
+                    ops,
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    // RUGRA-GLUE: cc-table helper — BOOL_NEGATE into a fresh 1-byte temp
+    /// Emit boolean negation of `v`.
+    fn emit_bool_not(&mut self, v: VarnodeRaw, ops: &mut Vec<PcodeOpRaw>) -> VarnodeRaw {
+        let tmp = self.alloc_tmp(1);
+        let mut op = PcodeOpRaw::new(OpCode::CPUI_BOOL_NEGATE as i32);
+        op.add_input(v);
+        op.set_output(tmp.clone());
+        ops.push(op);
+        tmp
+    }
+
+    // RUGRA-GLUE: cc-table helper — BOOL_AND / BOOL_OR over two 1-byte
+    /// Emit a boolean binary op over two condition varnodes.
+    fn emit_bool_binary(
+        &mut self,
+        a: VarnodeRaw,
+        b: VarnodeRaw,
+        opcode: OpCode,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) -> VarnodeRaw {
+        let tmp = self.alloc_tmp(1);
+        let mut op = PcodeOpRaw::new(opcode as i32);
+        op.add_input(a);
+        op.add_input(b);
+        op.set_output(tmp.clone());
+        ops.push(op);
+        tmp
+    }
+
+    // RUGRA-GLUE: cc-table helper — INT_EQUAL / INT_NOTEQUAL over two flags
+    /// Emit a flag-pair comparison (OF vs SF family).
+    fn emit_flag_pair(
+        &mut self,
+        a: VarnodeRaw,
+        b: VarnodeRaw,
+        opcode: OpCode,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) -> VarnodeRaw {
+        let tmp = self.alloc_tmp(1);
+        let mut op = PcodeOpRaw::new(opcode as i32);
+        op.add_input(a);
+        op.add_input(b);
+        op.set_output(tmp.clone());
+        ops.push(op);
+        tmp
+    }
+
     // RUGRA-GLUE: src/disasm/x86_lift.rs helper (no direct Ghidra counterpart)
     /// Lift a single instruction to P-code
     pub fn lift(&mut self, inst: &Instruction) -> Vec<PcodeOpRaw> {
@@ -955,7 +1330,16 @@ impl X86Lifter {
             "not" => {
                 self.lift_not(inst, &mut ops);
             }
-            "shl" | "shr" | "sal" | "sar" | "and" | "or" | "xor" => {
+            "and" => {
+                self.lift_logic(inst, OpCode::CPUI_INT_AND, &mut ops);
+            }
+            "or" => {
+                self.lift_logic(inst, OpCode::CPUI_INT_OR, &mut ops);
+            }
+            "xor" => {
+                self.lift_logic(inst, OpCode::CPUI_INT_XOR, &mut ops);
+            }
+            "shl" | "shr" | "sal" | "sar" => {
                 if inst.operands.len() == 2 {
                     if let Some(src) = self.parse_operand(&inst.operands[1], &mut ops) {
                         if let Some((dst, mem_size)) =
@@ -1029,76 +1413,10 @@ impl X86Lifter {
                 }
             }
             "cmp" => {
-                if inst.operands.len() == 2 {
-                    if let Some(src) = self.parse_operand(&inst.operands[1], &mut ops) {
-                        if let Some((dst_addr, mem_size)) =
-                            self.parse_dest_operand(&inst.operands[0], &mut ops)
-                        {
-                            let dst = if mem_size.is_some() {
-                                self.parse_operand(&inst.operands[0], &mut ops).unwrap()
-                            } else {
-                                dst_addr
-                            };
-
-                            // ZF = (dst == src)
-                            let mut op_zf = PcodeOpRaw::new(OpCode::CPUI_INT_EQUAL as i32);
-                            op_zf.add_input(dst.clone());
-                            op_zf.add_input(src.clone());
-                            op_zf.set_output(VarnodeRaw::new(AddressSpace::Register, 0x201, 1));
-                            ops.push(op_zf);
-
-                            // CF = (dst < src) unsigned
-                            let mut op_cf = PcodeOpRaw::new(OpCode::CPUI_INT_LESS as i32);
-                            op_cf.add_input(dst.clone());
-                            op_cf.add_input(src.clone());
-                            op_cf.set_output(VarnodeRaw::new(AddressSpace::Register, 0x203, 1));
-                            ops.push(op_cf);
-
-                            // SF = (dst < src) signed
-                            let mut op_sf = PcodeOpRaw::new(OpCode::CPUI_INT_SLESS as i32);
-                            op_sf.add_input(dst);
-                            op_sf.add_input(src);
-                            op_sf.set_output(VarnodeRaw::new(AddressSpace::Register, 0x202, 1));
-                            ops.push(op_sf);
-                        }
-                    }
-                }
+                self.lift_cmp(inst, &mut ops);
             }
             "test" => {
-                if inst.operands.len() == 2 {
-                    if let Some(src) = self.parse_operand(&inst.operands[1], &mut ops) {
-                        if let Some((dst_addr, mem_size)) =
-                            self.parse_dest_operand(&inst.operands[0], &mut ops)
-                        {
-                            let dst = if mem_size.is_some() {
-                                self.parse_operand(&inst.operands[0], &mut ops).unwrap()
-                            } else {
-                                dst_addr
-                            };
-
-                            let tmp = self.alloc_tmp(dst.size);
-                            let mut op_and = PcodeOpRaw::new(OpCode::CPUI_INT_AND as i32);
-                            op_and.add_input(dst);
-                            op_and.add_input(src);
-                            op_and.set_output(tmp.clone());
-                            ops.push(op_and);
-
-                            // ZF = (tmp == 0)
-                            let mut op_zf = PcodeOpRaw::new(OpCode::CPUI_INT_EQUAL as i32);
-                            op_zf.add_input(tmp.clone());
-                            op_zf.add_input(VarnodeRaw::new(AddressSpace::Const, 0, tmp.size));
-                            op_zf.set_output(VarnodeRaw::new(AddressSpace::Register, 0x201, 1));
-                            ops.push(op_zf);
-
-                            // SF = (tmp < 0) signed
-                            let mut op_sf = PcodeOpRaw::new(OpCode::CPUI_INT_SLESS as i32);
-                            op_sf.add_input(tmp.clone());
-                            op_sf.add_input(VarnodeRaw::new(AddressSpace::Const, 0, tmp.size));
-                            op_sf.set_output(VarnodeRaw::new(AddressSpace::Register, 0x202, 1));
-                            ops.push(op_sf);
-                        }
-                    }
-                }
+                self.lift_test(inst, &mut ops);
             }
             "jmp" => {
                 if inst.operands.len() == 1 {
@@ -1150,119 +1468,24 @@ impl X86Lifter {
                     }
                 }
             }
-            "je" | "jz" | "jne" | "jnz" | "jl" | "jle" | "jg" | "jge" | "jb" | "ja" | "jbe"
-            | "jae" => {
+            "je" | "jz" | "jne" | "jnz" | "jl" | "jle" | "jg" | "jge" | "jb" | "jc" | "jna"
+            | "ja" | "jnb" | "jbe" | "jae" | "jnc" | "js" | "jns" | "jo" | "jno" | "jp" | "jpe"
+            | "jnp" | "jpo" | "jnge" | "jnl" | "jng" | "jnle" | "jnae" | "jnbe" => {
+                // X86LIFT-FLAG-PCODE-0001: conditions per the ia.sinc cc
+                // table (jCC reads CF=0x200/PF=0x202/ZF=0x206/SF=0x207/
+                // OF=0x20b; e.g. je = CBRANCH(target, ZF), jne =
+                // BOOL_NEGATE(ZF), jl = INT_NOTEQUAL(OF,SF), ja =
+                // BOOL_NEGATE(BOOL_OR(CF,ZF))). The old arm used wrong flag
+                // offsets (0x201/0x202/0x203) and SF-only signed conditions.
                 if inst.operands.len() == 1 {
                     if let crate::disasm::Operand::Immediate { value, .. } = inst.operands[0] {
                         let target = VarnodeRaw::new(AddressSpace::Ram, value as u64, 8);
-                        let zf = VarnodeRaw::new(AddressSpace::Register, 0x201, 1);
-                        let sf = VarnodeRaw::new(AddressSpace::Register, 0x202, 1);
-                        let cf = VarnodeRaw::new(AddressSpace::Register, 0x203, 1);
-
-                        let cond_vn = match mnemonic {
-                            "je" | "jz" => zf,
-                            "jne" | "jnz" => {
-                                let tmp = self.alloc_tmp(1);
-                                let mut op_not = PcodeOpRaw::new(OpCode::CPUI_BOOL_NEGATE as i32); // Or we can use INT_EQUAL zf, 0
-                                op_not.add_input(zf);
-                                op_not.set_output(tmp.clone());
-                                ops.push(op_not);
-                                tmp
-                            }
-                            "jl" => {
-                                // SF != OF, simplified to SF for now
-                                sf
-                            }
-                            "jle" => {
-                                // ZF || SF
-                                let tmp = self.alloc_tmp(1);
-                                let mut op_or = PcodeOpRaw::new(OpCode::CPUI_BOOL_OR as i32);
-                                op_or.add_input(zf);
-                                op_or.add_input(sf); // Simplified
-                                op_or.set_output(tmp.clone());
-                                ops.push(op_or);
-                                tmp
-                            }
-                            "jg" => {
-                                // !ZF && SF == OF. Simplified to !ZF && !SF
-                                let tmp1 = self.alloc_tmp(1);
-                                let mut op_not_z = PcodeOpRaw::new(OpCode::CPUI_BOOL_NEGATE as i32);
-                                op_not_z.add_input(zf);
-                                op_not_z.set_output(tmp1.clone());
-                                ops.push(op_not_z);
-
-                                let tmp2 = self.alloc_tmp(1);
-                                let mut op_not_s = PcodeOpRaw::new(OpCode::CPUI_BOOL_NEGATE as i32);
-                                op_not_s.add_input(sf);
-                                op_not_s.set_output(tmp2.clone());
-                                ops.push(op_not_s);
-
-                                let tmp3 = self.alloc_tmp(1);
-                                let mut op_and = PcodeOpRaw::new(OpCode::CPUI_BOOL_AND as i32);
-                                op_and.add_input(tmp1);
-                                op_and.add_input(tmp2);
-                                op_and.set_output(tmp3.clone());
-                                ops.push(op_and);
-                                tmp3
-                            }
-                            "jge" => {
-                                // SF == OF. Simplified to !SF
-                                let tmp = self.alloc_tmp(1);
-                                let mut op_not_s = PcodeOpRaw::new(OpCode::CPUI_BOOL_NEGATE as i32);
-                                op_not_s.add_input(sf);
-                                op_not_s.set_output(tmp.clone());
-                                ops.push(op_not_s);
-                                tmp
-                            }
-                            "jb" => cf,
-                            "ja" => {
-                                // !CF && !ZF
-                                let tmp1 = self.alloc_tmp(1);
-                                let mut op_not_c = PcodeOpRaw::new(OpCode::CPUI_BOOL_NEGATE as i32);
-                                op_not_c.add_input(cf);
-                                op_not_c.set_output(tmp1.clone());
-                                ops.push(op_not_c);
-
-                                let tmp2 = self.alloc_tmp(1);
-                                let mut op_not_z = PcodeOpRaw::new(OpCode::CPUI_BOOL_NEGATE as i32);
-                                op_not_z.add_input(zf);
-                                op_not_z.set_output(tmp2.clone());
-                                ops.push(op_not_z);
-
-                                let tmp3 = self.alloc_tmp(1);
-                                let mut op_and = PcodeOpRaw::new(OpCode::CPUI_BOOL_AND as i32);
-                                op_and.add_input(tmp1);
-                                op_and.add_input(tmp2);
-                                op_and.set_output(tmp3.clone());
-                                ops.push(op_and);
-                                tmp3
-                            }
-                            "jbe" => {
-                                // CF || ZF
-                                let tmp = self.alloc_tmp(1);
-                                let mut op_or = PcodeOpRaw::new(OpCode::CPUI_BOOL_OR as i32);
-                                op_or.add_input(cf);
-                                op_or.add_input(zf);
-                                op_or.set_output(tmp.clone());
-                                ops.push(op_or);
-                                tmp
-                            }
-                            "jae" => {
-                                // !CF
-                                let tmp = self.alloc_tmp(1);
-                                let mut op_not = PcodeOpRaw::new(OpCode::CPUI_BOOL_NEGATE as i32);
-                                op_not.add_input(cf);
-                                op_not.set_output(tmp.clone());
-                                ops.push(op_not);
-                                tmp
-                            }
-                            _ => zf, // Fallback
-                        };
-
-                        let mut op = PcodeOpRaw::new(OpCode::CPUI_CBRANCH as i32);
-                        op.add_input(target);
-                        op.add_input(cond_vn);
-                        ops.push(op);
+                        if let Some(cond_vn) = self.emit_cc_cond(&mnemonic[1..], &mut ops) {
+                            let mut op = PcodeOpRaw::new(OpCode::CPUI_CBRANCH as i32);
+                            op.add_input(target);
+                            op.add_input(cond_vn);
+                            ops.push(op);
+                        }
                     }
                 }
             }

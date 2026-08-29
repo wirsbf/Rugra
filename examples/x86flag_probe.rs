@@ -134,6 +134,25 @@ fn main() -> anyhow::Result<()> {
                         samples.push((key, inst.address.as_u64(), fo, inst.text.clone()));
                     }
                 }
+                // Memory-SOURCE variants (op2 re-LOAD semantics).
+                if alu_set.contains(&m)
+                    && inst.operands.len() == 2
+                    && matches!(
+                        inst.operands.get(1),
+                        Some(rugra::disasm::Operand::Memory { .. })
+                    )
+                    && !matches!(
+                        inst.operands.first(),
+                        Some(rugra::disasm::Operand::Memory { .. })
+                    )
+                {
+                    let key = format!("{m}-memsrc");
+                    if !seen.contains(&key) && samples.len() < 64 {
+                        seen.insert(key.clone());
+                        let fo = file_offset + (inst.address.as_u64() - vaddr);
+                        samples.push((key, inst.address.as_u64(), fo, inst.text.clone()));
+                    }
+                }
             }
         }
     }

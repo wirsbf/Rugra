@@ -46,3 +46,24 @@
 - 双侧证据:SLEIGH 直通 dump vs iced 提升投影,add/sub/neg/not 的 reg+mem 形态
   op-for-op 一致(唯一差异为可规范化的 uniq 临时 id)——
   /tmp/w-iced-flagprobe3.out(oracle 段)与 examples/x86flag_probe.rs。
+
+### 2026-08-30:X86LIFT-FLAG-PCODE-0001 — logic/cmp/test + jcc cc 表(w-iced c2)
+- `and`/`or`/`xor` = ia.sinc `logicalflags()`(COPY CF=0, COPY OF=0,在操作数
+  LOAD 之前)+ 值 op 直写 dst + 32-bit zext + resultflags;mem dst STORE 后逐
+  flag 组重新 LOAD(mem src 逐用重 LOAD,同 add/sub)。
+- `cmp` 重写:旧实现 ZF=INT_EQUAL(dst,src)/CF=INT_LESS/SF=INT_SLESS 全部错位
+  (偏移 0x201/0x203/0x202 非 sla 布局,且 ZF/SF 语义错误)。新实现 =
+  `local temp = rm; subflags(temp,src); local diff = temp - src;
+  resultflags(diff)`:INT_LESS(CF=0x200) + INT_SBORROW(OF=0x20b) +
+  INT_SUB→uniq + SF/ZF/PF 链;双操作数 reg 直用 / mem 单次 LOAD+COPY 局部缓存。
+- `test` 重写:logicalflags + 单次操作数读取 + INT_AND→uniq + resultflags
+  (mem dst 地址计算在 COPY CF/OF 之前,LOAD 在其后)。
+- `jCC` 全族重写为 ia.sinc cc 条件表(ia.sinc:1523-1539):je=ZF、jne=
+  BOOL_NEGATE(ZF)、jl=INT_NOTEQUAL(OF,SF)、jge=INT_EQUAL(OF,SF)、jle=
+  BOOL_OR(ZF,NOTEQUAL(OF,SF))、jg=BOOL_AND(!ZF,EQUAL(OF,SF))、ja=!BOOL_OR
+  (CF,ZF)、jb=CF 等;修正旧错位偏移(ZF 0x201→0x206 等)与旧简化条件
+  (jl 只用 SF、jge 只用 !SF 等);新增 js/jns/jo/jno/jp/jnp(此前完全未
+  处理,js/jns 在 httpd 语料 47 处,直接丢控制流)。
+- cmp 与 jcc 的偏移修正必须原子落地:cmp 写 0x206 而 je 读 0x201 会断链。
+- 双侧投影:17 个 jcc/cmp/test/logic 形态 op-for-op MATCH(探针
+  /tmp/w-iced-flagprobe8.out vs flagprobe6 oracle 段)。
