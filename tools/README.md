@@ -229,17 +229,19 @@ wrapper。当前 corpus 的迁移计划应为 `auto=9`、`manual=0`、`tombstone
 
 后续 raw scheme-2 变化写入独立、append-only 的
 `FUNCTION_ID_CONTINUITY.json`，绝不覆盖上述历史 migration。当前 checkpoint 固定为
-`420174438fdf3ae4f7e09b483af14cc04215316d`（分支线锚 merge，src tree
-`4e34c9b82928d6a79c603330ae351534d583f649`，REGISTRY-CHECKPOINT-ADVANCE 第五窗：
-并入 master 884208b8 的 nodejoin F2-F5 / printc INT_NEGATE / BlockGoto wrapped /
-GLOBWORD-C5 / heritage lattice 窗口），从 baseline target 连续重放 415 个
+`45cf2962eadea0da9cc91b81918ee04a522231b7`（src tree
+`fb561d9f958267794a5c1d094f67e5c0f0436216`，REGISTRY-CHECKPOINT-ADVANCE 第六窗：
+经分支线锚 6fcec613（^1=52f5321e）并入 rc3 printc/prettyprint 窗口与 httpd
+determinedbranch 谱系，再越过 master 侧 48bbdaf1 regen 与 739aada4 funcdata
+zombie-decision 修复——checkpoint 必须钉在 HEAD:src 不变量可达的 45cf2962，
+不能停在锚树），从 baseline target 连续重放 424 个
 first-parent commit。checkpoint 推进是幂等重跑流程：advance 五常量(commit/tree/src/parent/
 count)→重生成 ledger→零漂移 probe 枚举窗口移除/新增→逐条 git 证据定性(reviewed transition/
 tombstone/ephemeral/automatic)→以 probe 全量重算 EXPECTED_* allowlist→`--reconcile-continuity`
 →重生成→`--check`。自动 continuity 仅接受同 path/module/owner/name 的唯一 1→1，且签名
 差异严格限于参数 pattern 起始的 binding `mut` 或 rustfmt 尾分隔符，同时必须独立复算同 patch hunk 与相同非空
 annotation；`&mut`、`&'a mut`、`*mut` 和 `&mut pattern` 不规范化，也不改变 raw ID 公式。
-当前文件记录 489 条 lineage、912 个 `introduced_live` 与 56 个 tombstone。loader 先解析 baseline alias，再组合 continuity terminal；任一
+当前文件记录 489 条 lineage、921 个 `introduced_live` 与 56 个 tombstone。loader 先解析 baseline alias，再组合 continuity terminal；任一
 chain 断裂、1→2/2→1、跨层 token 复用、terminal collision/缺失、event commit/blob、
 first-parent、projection hash/count、dirty/src tree 漂移均 rc=2。continuity tombstone 只作
 诊断，永不进入自动 replacement。schema 2 允许 reviewed tombstone 覆盖 post-baseline
