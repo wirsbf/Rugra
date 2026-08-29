@@ -22,7 +22,7 @@ use rugra::space::{space_flags, AddrSpace, AddressSpace, SpaceType};
 use rugra::type_system::cast::base_type_for;
 use rugra::type_system::datatype::{Datatype, TypeBase, TypeField, TypeMetatype, TypeStruct};
 use rugra::type_system::typefactory::{SizeArchInputs, TypeFactory};
-use rugra::typeop::{TypeOp, TypeOpIntAdd, TypeOpLoad, TypeOpPtradd, TypeOpPtrsub};
+use rugra::typeop::{TypeOp, TypeOpIntAdd, TypeOpIntMult, TypeOpLoad, TypeOpPtradd, TypeOpPtrsub};
 use rugra::variable::high_internal_flags;
 use rugra::varnode::Varnode;
 
@@ -183,10 +183,12 @@ fn input_cell(vn: &VnRef) -> String {
 }
 
 /// The apply-side output token dispatch, mirroring src/coreaction.rs
-/// ActionSetCasts::cast_output: PTRSUB consults TypeOpPtrsub, PTRADD is
-/// skipped (returns None), LOAD uses the inline pointee/out-high arm, and
-/// INT_* falls to base_type_for(size, Int).  CAST ops never reach
-/// cast_output (apply skips them), which maps to `na`.
+/// ActionSetCasts::cast_output: PTRSUB/PTRADD consult the real TypeOp
+/// impls, the arithmetic family (INT_ADD/INT_MULT/...) routes through
+/// cast::arithmetic_output_standard (cast.cc:394), LOAD uses the inline
+/// pointee/out-high arm, and INT_SEXT falls to base_type_for(size, Int).
+/// CAST ops never reach cast_output (apply skips them), which maps to the
+/// same base-unknown token the virtual call yields.
 fn apply_side_token(
     op: &rugra::op::PcodeOp,
     factory: &Arc<RwLock<TypeFactory>>,
@@ -195,7 +197,9 @@ fn apply_side_token(
         OpCode::CPUI_PTRSUB => {
             TypeOpPtrsub::new(factory.clone()).get_output_token(op)
         }
-        OpCode::CPUI_PTRADD => None,
+        OpCode::CPUI_PTRADD => {
+            TypeOpPtradd::new(factory.clone()).get_output_token(op)
+        }
         OpCode::CPUI_LOAD => {
             let out_size = op.get_out()?.read().unwrap().get_size();
             let in1_high = op.get_in(1).and_then(|a| {
@@ -229,9 +233,10 @@ fn apply_side_token(
                 _ => out_high(),
             }
         }
-        OpCode::CPUI_INT_ADD
-        | OpCode::CPUI_INT_MULT
-        | OpCode::CPUI_INT_SEXT => {
+        OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_MULT => {
+            rugra::type_system::cast::arithmetic_output_standard(op, factory)
+        }
+        OpCode::CPUI_INT_SEXT => {
             let size = op.get_out()?.read().unwrap().get_size();
             Some(base_type_for(size, TypeMetatype::Int))
         }
@@ -272,11 +277,13 @@ fn pre_op_dump(
         out.push_str(":token=na:atok=na");
     } else if rg.opcode == OpCode::CPUI_CAST {
         // TypeOpCast has no token override: base getOutputLocal is the
-        // unknown base (typeop.cc:261-265 via TypeOp::getOutputToken).
+        // unknown base (typeop.cc:261-265 via TypeOp::getOutputToken). The
+        // .cc dumps token==atok for CAST (same virtual call).
         let size = outvn.as_ref().unwrap().read().unwrap().get_size();
         let token = base_type_for(size, TypeMetatype::Unknown);
         out.push_str(&format!(
-            ":token={}:atok=na",
+            ":token={}:atok={}",
+            type_proj(Some(&token)),
             type_proj(Some(&token))
         ));
     } else {
@@ -291,9 +298,14 @@ fn pre_op_dump(
             OpCode::CPUI_INT_ADD => {
                 TypeOpIntAdd::new(factory.clone()).get_output_token(&rg)
             }
-            OpCode::CPUI_INT_MULT | OpCode::CPUI_INT_SEXT => {
-                // No Rust TypeOp impl; mirror the apply-side base-int token
-                // (coreaction.rs output_metatype => Int for INT_*).
+            OpCode::CPUI_INT_MULT => {
+                // Real Rust TypeOp impl since the arithmetic-token port
+                // (typeop.cc:1625 via cast.cc:394).
+                TypeOpIntMult::new(factory.clone()).get_output_token(&rg)
+            }
+            OpCode::CPUI_INT_SEXT => {
+                // No token override: base getOutputLocal is the base int
+                // (TypeOpFunc metaout TYPE_INT).
                 let size = outvn.as_ref().unwrap().read().unwrap().get_size();
                 Some(base_type_for(size, TypeMetatype::Int))
             }
