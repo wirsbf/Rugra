@@ -572,3 +572,23 @@ register0x/unique0x token）注入保持；defects=0/numbering=0 保持。
 goto 成为未定义标号 gcc 错误——httpd ap_update_vhost_given_ip /
 ap_strchr 观察）。判据不变：整行 `标识符:` 且无空格，且全文存在
 `goto <标识符>;` 引用。
+
+## 2026-08-29：WARN-EMIT2 R3 + DUPDECL-uVar 边界 — glob_range 双重声明修复
+
+两处 legacy GLUE 文本 pass 缺陷（oracle prettyprint 无对应物，见各 pass
+头部注释的退役计划）：
+
+1. **`backfill_missing_locals` 签名误判（WARN-EMIT2 R3）**：多行 if 条件的
+   续行（如 `&& \n (SEXT14(...) < 0x1a)) {`）以 `(` 开头却经
+   `contains(" *")`（解引用 `*(char *)` 文本）命中 `sig_shape`，被当成函数
+   签名后其"声明块"walk 只覆盖片段本体，块内 auto 前缀名全判 missing，
+   在 if 块内部重复注入 `int iVar1; int iVar3;`（glob_range
+   numbering=1 的直接来源）。C 函数签名永不以 `(` 开头，新增
+   `cond_continuation` 门禁。
+2. **uVar 扫描缺左词界（DUPDECL-uVar）**：`ppuVar4` 内部子串 `uVar4` 被判
+   为未声明并在签名与 `{` 之间注入游离 `int uVar4;`。补齐与
+   NUMDECL-DOUBLE-V6 左边界一致的 identifier 字节检查。
+
+验收：curl E2E numbering 1→0，glob_range diff 93→89，全量 skeleton
+2134→2118 零回归。varmap 侧共享计数器不变式另由双侧 fixture
+`varmap_dupdecl_1204`（MATCH）钉住。
