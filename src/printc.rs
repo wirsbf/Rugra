@@ -11,7 +11,7 @@ use crate::prettyprint::{Emit, NullEmit};
 use crate::printlanguage::PrintLanguage;
 use crate::space::AddressSpace;
 use crate::type_system::cast::CastStrategyC;
-use crate::type_system::datatype::TypeMetatype;
+use crate::type_system::datatype::{TypeBase, TypeMetatype};
 use crate::type_system::Datatype;
 use crate::varnode::Varnode;
 use std::collections::{HashMap, HashSet};
@@ -5073,12 +5073,12 @@ impl PrintC {
         self.emit.begin_var_decl();
         // pushTypeStart(sym->getType(),false);
         let dt = sym.dtype.clone();
-        self.push_type_start_opt(dt.as_deref(), false);
+        self.push_type_start_opt(dt.as_ref(), false);
         // pushSymbol(sym,(Varnode*)0,(PcodeOp*)0) — push the symbol's
         // displayName (printc.cc:1935 pushAtom(Atom(sym->getDisplayName(),...))).
         self.emit.tag_variable(&sym.display_name, 0);
         // pushTypeEnd(sym->getType());
-        self.push_type_end_opt(dt.as_deref());
+        self.push_type_end_opt(dt.as_ref());
         // emit->endVarDecl(id);
         self.emit.end_var_decl();
     }
@@ -12704,11 +12704,11 @@ impl PrintC {
         self.emit.begin_var_decl();
         // pushTypeStart(sym->getType(),false); pushSymbol(sym,...); pushTypeEnd(...); recurse();
         let dt = sym.get_type();
-        self.push_type_start_opt(dt.as_deref(), false);
+        self.push_type_start_opt(dt.as_ref(), false);
         // pushSymbol(sym,(Varnode*)0,(PcodeOp*)0) — push the symbol's display name.
         self.emit
             .tag_variable(sym.get_display_name(), sym.symbol_id);
-        self.push_type_end_opt(dt.as_deref());
+        self.push_type_end_opt(dt.as_ref());
         // emit->endVarDecl(id);
         self.emit.end_var_decl();
     }
@@ -12916,7 +12916,7 @@ impl PrintC {
                 // so a trailing-`*` type renders `char *pattern` while a
                 // base type renders `int argc`.
                 let pname = sanitize_c_ident(&param.name);
-                if !Self::type_name_ends_with_star(&param.data_type) {
+                if !Self::decl_prefix_ends_with_star(&param.data_type) {
                     self.emit.print(" ");
                 }
                 self.emit.tag_variable(&pname, 0);
@@ -13148,6 +13148,107 @@ impl PrintC {
     // emit_var_decl / emit_prototype_inputs / emit_struct_definition /
     // emit_enum_definition above.
 
+    // RUGRA-GLUE: fixture observation surface for the declarator projection
+    //   of PrintC::pushTypeStart/pushTypeEnd — the C++ oracle fixtures
+    //   subclass PrintC (FixturePrintC::renderTypeDecl) to drive the
+    //   protected pair around an identifier atom, mirroring emitVarDecl's
+    //   push sequence (printc.cc:2502-2505); Rust fixtures cannot subclass,
+    //   so this pub projection exposes the identical call sequence.
+    pub fn debug_render_type_decl(&mut self, ct: &Arc<Datatype>, ident: &str) {
+        self.push_type_start_opt(Some(ct), false);
+        // pushAtom(Atom(ident, syntax, var_color)) — the identifier slot.
+        self.emit.tag_variable(ident, 0);
+        self.push_type_end_opt(Some(ct));
+    }
+
+    // RUGRA-GLUE: fixture observation surface (start-only variant). The C++
+    // oracle fixture drives pushTypeStart WITHOUT pushTypeEnd for the
+    // proto-less anonymous TypeCode: Ghidra 12.0.4's pushTypeEnd loop never
+    // advances `ct` on that shape (printc.cc:337-339 pushes a blank atom but
+    // leaves ct as the CODE type), so the pair-driven record would hang the
+    // oracle; the start half alone still observes buildTypeStack's
+    // cc:158-159 no-proto drill (the canonical void substitution).
+    pub fn debug_render_type_start_only(&mut self, ct: &Arc<Datatype>) {
+        self.push_type_start_opt(Some(ct), false);
+    }
+
+    // Ghidra: printc.cc:143 PrintC::buildTypeStack
+    /// Push nested components of a data-type declaration onto a stack, so we
+    /// can access it bottom up. Faithful to `PrintC::buildTypeStack(const
+    /// Datatype*, vector<const Datatype*>&)` (printc.cc:143-164).
+    ///
+    /// Ghidra loops `for(;;)`: push `ct`, then break if `ct->getName()` is
+    /// non-empty (a named type — including a named pointer — IS a base type,
+    /// cc:148-149); otherwise drill: TYPE_PTR to `getPtrTo()` (cc:150-151),
+    /// TYPE_ARRAY to `getBase()` (cc:152-153), TYPE_CODE to the prototype's
+    /// output type — or the architecture's canonical `void` when there is no
+    /// prototype (cc:154-160); any other anonymous metatype breaks
+    /// (cc:161-162). The stack is base-type-last: `typestack[0]` is the full
+    /// declared type, `typestack.back()` the identifier's base type.
+    ///
+    /// Rugra stores `ptr_to`/`array_of` as `Arc<Datatype>` and `TypeCode`
+    /// prototypes as `Option<Arc<FuncProto>>`, so the stack holds cloned
+    /// `Arc` handles (identity-preserving reference count, no deep copy)
+    /// instead of C++ pointers. The CODE arm reads `proto->getOutputType()`
+    /// through the public `return_type` field; the no-proto arm substitutes a
+    /// locally constructed `void` (`Datatype("void",0,TYPE_VOID)`, the
+    /// constructor shape of Ghidra's `TypeVoid`) because Rugra's PrintC holds
+    /// no Architecture reference (documented P2-5 gap), so the canonical
+    /// factory void is unavailable. The substitution is print-faithful: the
+    /// void type's non-empty name ends the drill on the next iteration and it
+    /// can never reach `genericTypeName`.
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `typestack` is the caller's out-param
+    ///   vector, appended in traversal order exactly like the C++ `&` param.
+    /// - Loop bounds/order: infinite loop, push-then-test; break on named
+    ///   base or non-PTR/ARRAY/CODE anonymous metatype.
+    /// - Counter/accumulator: none (stack length IS the depth).
+    /// - Sort/compare key: metatype dispatch TYPE_PTR/TYPE_ARRAY/TYPE_CODE in
+    ///   that source order.
+    fn build_type_stack(ct: &Arc<Datatype>, typestack: &mut Vec<Arc<Datatype>>) {
+        let mut cur: Arc<Datatype> = ct.clone();
+        loop {
+            typestack.push(cur.clone());
+            // cc:148-149: a named type is a base type.
+            if !cur.get_name().is_empty() {
+                break;
+            }
+            // cc:150-162: drill anonymous PTR/ARRAY/CODE; other anonymous
+            // metatypes terminate the stack.
+            let next: Option<Arc<Datatype>> = match cur.as_ref() {
+                Datatype::Pointer(p) => Some(p.ptr_to.clone()),
+                Datatype::Array(a) => Some(a.array_of.clone()),
+                Datatype::Code(c) => match &c.proto {
+                    // cc:155-157: ct = proto->getOutputType();
+                    Some(proto) => Some(proto.return_type.clone()),
+                    // cc:158-159: ct = glb->types->getTypeVoid();
+                    None => Some(Arc::new(Datatype::Void(TypeBase::new(
+                        "void".to_string(),
+                        0,
+                        TypeMetatype::Void,
+                    )))),
+                },
+                _ => None,
+            };
+            match next {
+                Some(n) => cur = n,
+                None => break,
+            }
+        }
+    }
+
+    // RUGRA-GLUE: type_stack_for — Rust borrow adapter pairing with
+    //   build_type_stack: C++ passes the same `const Datatype*` into
+    //   pushTypeStart and out into the typestack vector; Rust's stack owns
+    //   Arc handles, so the caller's handle is cloned in and returned by
+    //   value, keeping `&Arc`/`&Datatype` call sites out of borrow knots.
+    fn type_stack_for(dt: &Arc<Datatype>) -> Vec<Arc<Datatype>> {
+        let mut typestack = Vec::new();
+        Self::build_type_stack(dt, &mut typestack);
+        typestack
+    }
+
     // Ghidra: printc.cc:264 PrintC::pushTypeStart
     /// Emit the "start" half of a type declaration: the base type name and any
     /// prefix modifiers, leaving an identifier slot for `push_type_end_opt` to
@@ -13156,26 +13257,35 @@ impl PrintC {
     ///
     /// Ghidra builds a `typestack` via `buildTypeStack` (base→modifier order),
     /// then pushes an OpToken (`type_expr_space` or `type_expr_nospace` when
-    /// `noident && typestack.size()==1`) followed by the base-type atom, then
-    /// walks the stack back down pushing `ptr_expr`/`array_expr`/
-    /// `function_call` OpTokens for each pointer/array/code modifier. The
+    /// `noident && typestack.size()==1`) followed by the base-type atom —
+    /// `getDisplayName()` when named, `genericTypeName` when anonymous
+    /// (cc:280-289) — then walks the stack back down pushing
+    /// `ptr_expr`/`array_expr`/`function_call` OpTokens for each
+    /// pointer/array/code modifier (cc:290-302), throwing
+    /// `LowlevelError("Bad type expression")` for any other metatype. The
     /// identifier slot sits between start and end.
     ///
     /// Rugra adaptation: the Atom/expression-stack + OpToken recurse() model is
-    /// not present, so we emit the equivalent TEXT directly. For the common
-    /// declaration cases (named base/struct/enum/void types and pointers-to-
-    /// named-types) this produces identical text to Ghidra. The `noident`
-    /// flag controls the trailing space (type_expr_nospace omits it).
+    /// not present, so we emit the equivalent TEXT directly. The token text
+    /// semantics (printc.cc:73-77): the base-type atom is followed by
+    /// `type_expr_space`'s single blank, then each `ptr_expr` `*` glues
+    /// (spacing=0) to what follows — `char **p`. `array_expr` brackets and
+    /// `function_call` parens wrap the IDENTIFIER, so in the flat text model
+    /// their size/parameter payloads stay in `push_type_end_opt`'s suffix walk
+    /// (`[numElements]` after the identifier, printc.cc:324-328); a modifier
+    /// layer therefore contributes prefix text only when it is a PTR layer.
+    /// The `noident` flag drops the trailing separator exactly as
+    /// `type_expr_nospace` (spacing=0) does.
     ///
     /// Alignment Evidence:
     /// - References/output params: `ct` borrowed read-only (Option allows the
     ///   "no type" case Ghidra never hits but Rugra's optional Symbol.dtype
     ///   can). Emits via `self.emit`.
     /// - Loop bounds/order: Ghidra walks typestack `size-2 .. 0` (outermost
-    ///   modifier first). We recurse pointer-to-... chains outermost-first.
+    ///   modifier first); we walk the drilled stack in the same order.
     /// - Counter/accumulator: none.
     /// - Sort key: metatype dispatch (TYPE_PTR / TYPE_ARRAY / TYPE_CODE).
-    fn push_type_start_opt(&mut self, ct: Option<&Datatype>, noident: bool) {
+    fn push_type_start_opt(&mut self, ct: Option<&Arc<Datatype>>, noident: bool) {
         let dt = match ct {
             Some(d) => d,
             None => {
@@ -13188,34 +13298,105 @@ impl PrintC {
                 return;
             }
         };
-        // Emit any prefix pointer modifiers (outermost first), then the base
-        // name. For `int *` we emit `int *` then the ident slot.
-        self.emit_type_prefix(dt);
-        // Trailing-separator spacing per the type OpTokens (printc.cc:73-77):
-        // type_expr_space (spacing=1) separates the base type from the next
-        // token; ptr_expr (spacing=0) glues the identifier to a trailing `*`,
-        // so `char *pattern` gets no space while `int argc` keeps one.
-        if !noident && !Self::datatype_name_ends_with_star(dt) {
+        // printc.cc:269-270: build the declarator stack, then render from the
+        // base type (stack back) out to the outermost modifier (stack front).
+        let typestack = Self::type_stack_for(dt);
+        let base = typestack
+            .last()
+            .expect("buildTypeStack always pushes the input type");
+        // printc.cc:280-289: anonymous base types spell genericTypeName;
+        // named bases spell getDisplayName.
+        let base_text = if base.get_name().is_empty() {
+            Self::generic_type_name(base)
+        } else {
+            base.get_display_name().to_string()
+        };
+        self.emit
+            .tag_type(&Self::normalize_pointer_run(&base_text), base.get_id());
+        // printc.cc:275-278 + 73-77 token spacing. With a drilled modifier
+        // chain (typestack.size()>1) the token is always type_expr_space:
+        // ONE blank between the base atom and the modifier chain, then each
+        // ptr_expr `*` glues (spacing=0) to the next piece — `char **p`.
+        // With a single-type stack the identifier join follows the legacy
+        // composed-name rule: a named pointer ("char *") carries its base
+        // blank inside the name and ptr_expr glues the identifier to the
+        // trailing `*`, so `char *pattern` gets no blank while `int argc`
+        // keeps one; noident selects type_expr_nospace (spacing=0).
+        if typestack.len() > 1 {
             self.emit.print(" ");
+            // printc.cc:290-302: emit each modifier layer outermost-first.
+            // The parenthesization comes from PrintLanguage::parentheses
+            // (printlanguage.cc:269-323) evaluated at every pushOp of
+            // pushTypeStart's loop: the only paren that ever fires in a
+            // declarator is a PTR layer (ptr_expr, precedence 62,
+            // printc.cc:75) whose syntactic parent is an ARRAY or CODE layer
+            // (array_expr/function_call, postsurround, precedence 66,
+            // printc.cc:28/76) — top.prec(66) > op2.prec(62) → paren
+            // (printlanguage.cc:295). The openParen is printed at pushOp time,
+            // i.e. immediately BEFORE that ptr layer's `*` text, so in the
+            // flat prefix walk each paren flag emits "(" then the star run
+            // wraps: `int (*x) [4]`. Every other parent/child combination
+            // (postsurround-under-postsurround cc:299, unary-under-unary
+            // cc:291, anything under the space token cc:278-279) is paren-free.
+            // ARRAY/CODE layers contribute no prefix text — array_expr/
+            // function_call are postsurround tokens whose `[N]`/`(params)`
+            // payloads belong to push_type_end_opt's suffix walk.
+            for i in (0..typestack.len() - 1).rev() {
+                let parent_wraps = i + 1 < typestack.len() - 1
+                    && matches!(
+                        typestack[i + 1].as_ref(),
+                        Datatype::Array(_) | Datatype::Code(_)
+                    );
+                match typestack[i].as_ref() {
+                    Datatype::Pointer(_) => {
+                        if parent_wraps {
+                            self.emit.print("(");
+                        }
+                        self.emit.print("*");
+                    }
+                    Datatype::Array(_) | Datatype::Code(_) => {}
+                    _ => {
+                        // printc.cc:298-300: clear(); throw
+                        // LowlevelError("Bad type expression"). Unreachable:
+                        // every stacked layer is by construction
+                        // PTR/ARRAY/CODE (buildTypeStack's drill set);
+                        // mirror the abort as a loud stderr bail-out instead
+                        // of a panic in the printer.
+                        eprintln!("[DECOMP] Bad type expression");
+                        return;
+                    }
+                }
+            }
+        } else {
+            // printc.cc:275-278: the single-layer token is type_expr_nospace
+            // exactly when noident, else type_expr_space — Ghidra selects by
+            // STACK SIZE and noident only, never by the name text, so a NAMED
+            // single-layer pointer ("char *") takes the blank too and renders
+            // `char * x` (oracle printc_anonymous_pointer_decl_1204
+            // named_ptr_contrast). Anonymous pointers are multi-layer stacks
+            // (factory names are empty) and glue via ptr_expr instead.
+            if !noident {
+                self.emit.print(" ");
+            }
         }
     }
 
-    // RUGRA-GLUE: type_name_ends_with_star / datatype_name_ends_with_star
-    //   (join-spacing helper for the type-OpToken rule at printc.cc:73-77)
-    /// Whether a data-type's rendered name ends with `*` (a pointer type).
-    /// Used to decide identifier join spacing: a trailing `*` carries
-    /// ptr_expr's spacing=0 (no space before the identifier).
-    fn type_name_ends_with_star(dt: &Datatype) -> bool {
-        Self::datatype_name_ends_with_star(dt)
-    }
-
-    /// Free-function variant of `type_name_ends_with_star`.
-    // RUGRA-GLUE: datatype_name_ends_with_star (join-spacing helper for the
-    //   type-OpToken rule at printc.cc:73-77; Rust text emitters decide the
-    //   identifier join from the rendered type name, which Ghidra derives
-    //   structurally from the typestack instead)
-    fn datatype_name_ends_with_star(dt: &Datatype) -> bool {
-        dt.get_name().ends_with('*')
+    // RUGRA-GLUE: decl_prefix_ends_with_star — structural form of the join
+    //   rule above: whether the identifier following the declarator prefix
+    //   rendered by push_type_start_opt(noident=true) needs NO additional
+    //   blank. With a drilled modifier chain (typestack.len()>1)
+    //   push_type_start_opt's type_expr_space branch has ALREADY emitted
+    //   exactly one blank after the base atom (printc.cc:73 spacing=1; the
+    //   branch fires for every multi-layer stack regardless of noident,
+    //   mirroring Ghidra's `noident && typestack.size()==1` token selection
+    //   at cc:275-278), so the prefix ends with either that blank (ARRAY/CODE
+    //   outermost — they emit no prefix text, cc:294-297) or a ptr_expr `*`
+    //   (spacing=0, printc.cc:75) — either way the identifier joins with
+    //   nothing between; with a single-type stack the noident=true path
+    //   printed NO blank, so Ghidra's emitVarDecl spelling (pushTypeStart
+    //   noident=false -> type_expr_space) adds exactly one.
+    fn decl_prefix_ends_with_star(dt: &Arc<Datatype>) -> bool {
+        Self::type_stack_for(dt).len() > 1
     }
 
     // RUGRA-GLUE: normalize_pointer_run (format helper for the typestack
@@ -13236,58 +13417,163 @@ impl PrintC {
     }
 
     // Ghidra: printc.cc:313 PrintC::pushTypeEnd
-    /// Emit the "end" half of a type declaration: trailing array subscripts /
-    /// function-param lists that follow the identifier. Faithful to
-    /// `PrintC::pushTypeEnd(const Datatype*)` (printc.cc:313-346).
+    /// Emit the "end" half of a type declaration: the paren closes of any
+    /// pointer-group wrapped by an array/code layer, then trailing array
+    /// subscripts / function-param lists that follow the identifier.
+    /// Faithful to `PrintC::pushTypeEnd(const Datatype*)` (printc.cc:313-346).
     ///
-    /// For the common cases (base/struct/enum/void/pointer-to-named) there is
-    /// nothing trailing — the identifier completes the declaration. Array
-    /// types emit `[numElements]` here.
+    /// Ghidra's RPN mechanics for the same text: the identifier atom pops
+    /// every pending unary ptr_expr entry (printlanguage.cc:173-185), closing
+    /// each paren group opened under an ARRAY/CODE parent immediately after
+    /// the identifier; the remaining postsurround entries then emit their
+    /// `[numElements]` / `(paramlist)` payloads as pushTypeEnd's drill walks
+    /// the type from the outermost layer (typestack[0]) to the base — outer
+    /// suffix first, so array-of-array spells `x [N2] [N1]`.
+    ///
+    /// Array subscripts keep array_expr's spacing=1 (printc.cc:76): ONE blank
+    /// before each `[` (emitOp postsurround front token, printlanguage.cc:345),
+    /// matching golden `undefined1 auVar21 [24]`. function_call has spacing=0
+    /// (printc.cc:28), so `(` glues directly. The param list inside a CODE
+    /// suffix is `PrintC::pushPrototypeInputs` (printc.cc:169-197) — see
+    /// [`Self::push_prototype_inputs`].
     ///
     /// Alignment Evidence:
-    /// - References/output params: `ct` borrowed read-only.
-    /// - Loop bounds/order: Ghidra loops `for(;;)` unwrapping PTR/ARRAY/CODE
-    ///   until it hits a named base type. We mirror the loop for arrays.
+    /// - References/output params: `ct` borrowed read-only (Option for Rugra's
+    ///   optional Symbol.dtype). Emits via `self.emit`.
+    /// - Loop bounds/order: Ghidra loops `for(;;)` unwrapping
+    ///   PTR/ARRAY/CODE until it hits a named base type (cc:319-343); we walk
+    ///   the identical buildTypeStack drill order (typestack index ascending
+    ///   = outermost modifier first). Paren closes precede the suffixes,
+    ///   mirroring the RPN pop order at the identifier atom.
     /// - Counter: none.
-    /// - Sort key: metatype dispatch.
-    fn push_type_end_opt(&mut self, ct: Option<&Datatype>) {
-        let mut dt = match ct {
+    /// - Sort key: metatype dispatch (TYPE_PTR/TYPE_ARRAY/TYPE_CODE in
+    ///   cc:322/324/330 source order).
+    fn push_type_end_opt(&mut self, ct: Option<&Arc<Datatype>>) {
+        let dt = match ct {
             Some(d) => d,
             None => return,
         };
-        // for(;;) { if named -> break; PTR -> ptrTo; ARRAY -> emit [N], base;
-        //           CODE -> proto inputs + output; else break; }
-        loop {
-            if !dt.get_name().is_empty() {
+        let typestack = Self::type_stack_for(dt);
+        let n = typestack.len();
+        // The identifier atom popped every pending ptr_expr entry, closing
+        // each paren group whose PTR layer sits under an ARRAY/CODE parent
+        // (the paren flags of push_type_start_opt) right after the ident.
+        for i in 0..n.saturating_sub(1) {
+            if i + 1 < n - 1
+                && matches!(typestack[i].as_ref(), Datatype::Pointer(_))
+                && matches!(
+                    typestack[i + 1].as_ref(),
+                    Datatype::Array(_) | Datatype::Code(_)
+                )
+            {
+                self.emit.print(")");
+            }
+        }
+        // for(;;) { if named -> break; PTR -> ptrTo; ARRAY -> ' [N]' + base;
+        //           CODE -> prototype inputs + output type; else break; }
+        for layer in &typestack {
+            if !layer.get_name().is_empty() {
                 break;
             }
-            match dt {
-                Datatype::Pointer(p) => dt = &p.ptr_to,
+            match layer.as_ref() {
+                Datatype::Pointer(_) => {}
                 Datatype::Array(a) => {
-                    // push_integer(numElements, 4, false, ...)
-                    self.emit.print(&format!("[{}]", a.num_elements));
-                    dt = &a.array_of;
+                    // push_integer(numElements,4,false,syntax,...) (cc:327)
+                    // inside array_expr's postsurround: spacing=1 before '['.
+                    self.emit.print(&format!(" [{}]", a.num_elements));
                 }
+                Datatype::Code(c) => match &c.proto {
+                    Some(proto) => {
+                        self.emit.print("(");
+                        self.push_prototype_inputs(proto);
+                        self.emit.print(")");
+                    }
+                    // cc:337-339: an empty list of parameters — the
+                    // EMPTY_STRING blank atom prints nothing between the
+                    // function_call parens. DIVERGENCE: Ghidra 12.0.4's loop
+                    // does NOT advance `ct` on this arm, so a proto-less
+                    // ANONYMOUS TypeCode spins forever pushing blank atoms
+                    // (verified: the oracle fixture hangs). Rugra instead
+                    // walks buildTypeStack's stack, whose no-proto CODE layer
+                    // drills to the named `void` (cc:158-159) and terminates.
+                    // Conservative, documented divergence: the oracle has no
+                    // terminating output for this input, so no behavior can
+                    // be matched; production never renders declarations of
+                    // proto-less anonymous code types (function-pointer decls
+                    // always carry prototypes). Fixture coverage of the drill
+                    // itself is stage=startonly
+                    // (printc_anonymous_pointer_decl_1204).
+                    None => self.emit.print("()"),
+                },
                 _ => break,
             }
         }
     }
 
-    // RUGRA-GLUE: emit_type_prefix — Rust text-render helper for the
-    //   typestack walk inside `PrintC::pushTypeStart` (printc.cc:290-302).
-    //   Ghidra pushes ptr_expr/array_expr OpTokens for each modifier; Rugra's
-    //   Datatype stores the full rendered name (e.g. "int *", "char **"), so
-    //   emitting get_name() is the text-faithful equivalent for the named-type
-    //   and single-level-pointer cases these batch-2 emit methods hit.
-    /// Recursively emit a type's pointer prefix (the `* ` run that precedes
-    /// the base name in a declaration like `int **`). Used by
-    /// `push_type_start_opt`. For Rugra's pointer representation the name
-    /// already includes `* ` (e.g. "int *"), so emitting `get_name()` is the
-    /// text-faithful render for the cases these emit methods hit.
-    fn emit_type_prefix(&mut self, dt: &Datatype) {
-        self.emit
-            .tag_type(&Self::normalize_pointer_run(dt.get_name()), dt.get_id());
+    // Ghidra: printc.cc:169 PrintC::pushPrototypeInputs
+    /// Push the comma separated list of data-type declarations for a
+    /// function prototype — the payload inside a CODE suffix's
+    /// `function_call` parens. Faithful to
+    /// `PrintC::pushPrototypeInputs(const FuncProto*)` (printc.cc:169-197):
+    /// zero params and no dotdotdot emit the `void` keyword atom (cc:175);
+    /// otherwise each param is pushTypeStart(type, true) + blank atom +
+    /// pushTypeEnd (cc:183-185) — recursive anonymous-declarator rendering
+    /// with NO identifier — and dotdotdot appends `,` (when sz!=0) then
+    /// `...` (cc:187-195), with a lone dotdotdot leaving the parens empty
+    /// (the ANSI C unspecified-parameters convention, cc:191-193).
+    ///
+    /// This is the RPN pusher inside type expressions; the top-level
+    /// parameter list of a function definition is
+    /// [`Self::emit_prototype_inputs`] (printc.cc:2222), which additionally
+    /// emits parameter names.
+    ///
+    /// Alignment Evidence:
+    /// - References/output params: `proto` borrowed read-only.
+    /// - Loop bounds/order: `for(int4 i=0;i<sz;++i)` over getParam(i) in
+    ///   declaration order (cc:181); commas precede every param above the
+    ///   first (the comma OpToken pushes at cc:177-180, spacing=0 per
+    ///   printc.cc:57 — bare `,`).
+    /// - Counter: none (sz is the param count itself).
+    /// - Sort key: none.
+    fn push_prototype_inputs(&mut self, proto: &crate::fspec::FuncProto) {
+        let sz = proto.num_params();
+        if sz == 0 && !proto.is_dotdotdot {
+            // pushAtom(Atom(KEYWORD_VOID,syntax,keyword_color)) (cc:175)
+            self.emit.print("void");
+            return;
+        }
+        for i in 0..sz {
+            let param = match proto.get_param(i) {
+                Some(p) => p,
+                None => continue,
+            };
+            if i > 0 {
+                // pushOp(&comma) — bare ',' (spacing=0, printc.cc:57)
+                self.emit.print(",");
+            }
+            // pushTypeStart(param->getType(),true) (cc:183)
+            self.push_type_start_opt(Some(&param.data_type), true);
+            // pushAtom(Atom(EMPTY_STRING,blanktoken,no_color)) (cc:184) —
+            // the blank token prints nothing (the param NAME would sit here
+            // in emit_prototype_inputs' named path).
+            // pushTypeEnd(param->getType()) (cc:185)
+            self.push_type_end_opt(Some(&param.data_type));
+        }
+        if proto.is_dotdotdot {
+            if sz != 0 {
+                // pushOp(&comma) for the dotdotdot (cc:179-180), then
+                // pushAtom(DOTDOTDOT) (cc:189).
+                self.emit.print(",...");
+            }
+            // sz==0: EMPTY_STRING blank atom (cc:193) — nothing.
+        }
     }
+
+    // RUGRA-GLUE: emit_type_prefix was removed — its single caller
+    //   push_type_start_opt now renders the full declarator stack itself
+    //   (buildTypeStack port above); the composed-name shortcut it
+    //   implemented is preserved by the named-single-type path there
+    //   (displayName render + ends-with-star join rule).
 
     // Ghidra: printc.cc:1288 PrintC::push_integer
     /// Emit an integer constant value as text. Faithful to the null-vn /

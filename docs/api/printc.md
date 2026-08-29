@@ -1150,8 +1150,25 @@ the ports follow the real current signatures:
 
 Helper ports (text-faithful render path; the Atom/OpToken expression-stack
 model is not present in Rugra's print layer):
-- `push_type_start_opt` — printc.cc:264 `pushTypeStart`
-- `push_type_end_opt` — printc.cc:313 `pushTypeEnd`
+- `build_type_stack` — printc.cc:143 `buildTypeStack`（匿名 PTR/ARRAY/CODE
+  下钻至命名 base；无 proto 的 CODE 层以合成 `void` 替代
+  `glb->types->getTypeVoid()`，见函数内 DIVERGENCE 注记）
+- `type_stack_for` — RUGRA-GLUE 借用适配器（Arc 入栈/出栈配对）
+- `push_type_start_opt` — printc.cc:264 `pushTypeStart`（签名
+  `Option<&Arc<Datatype>>`，buildTypeStack 型栈渲染；匿名 base 走
+  `generic_type_name`；单层栈按 cc:275-278 仅由 `noident` 决定
+  type_expr_space/nospace — 命名单层指针 `char *` 因此渲染 `char * x`，
+  oracle named_ptr_contrast 锁定；原 `emit_type_prefix` 组合名捷径与
+  `datatype_name_ends_with_star` 连接启发式已移除）
+- `decl_prefix_ends_with_star` — RUGRA-GLUE 连接判定（多层栈 = 空白已由
+  type_expr_space 发射；单层栈 = 需补一个空白）
+- `push_type_end_opt` — printc.cc:313 `pushTypeEnd`（含 PTR-under-ARRAY/CODE
+  的括号闭合 + `[N]`/`(params)` 后缀走；无 proto 匿名 CODE 的
+  上游死循环见函数内 DIVERGENCE 注记）
+- `push_prototype_inputs` — printc.cc:169 `pushPrototypeInputs`（类型表达式
+  内的参数表；与顶层 `emit_prototype_inputs` printc.cc:2222 相对）
+- `debug_render_type_decl` / `debug_render_type_start_only` —
+  RUGRA-GLUE fixture 观察面（对应 oracle fixture 的 FixturePrintC 子类）
 - `emit_integer_value` — printc.cc:1288 `push_integer` (null-vn path)
 - `most_natural_base` — printlanguage.cc `mostNaturalBase`
 
