@@ -13350,11 +13350,14 @@ impl Action for ActionReturnSplit {
 
 /// Outcome of the `ConditionalJoin::findDups` condition comparison.
 /// `SameCondition` is the `vn1 == vn2` fast path (blockaction.cc:1926-1927),
-/// `MergeNeeded` additionally registers the pair in `mergeneed`
+/// `MergeNeeded` carries the `(vn1, vn2)` pair registered in `mergeneed`
 /// (blockaction.cc:1943).
 pub(crate) enum NodeJoinFindDups {
     SameCondition,
-    MergeNeeded,
+    MergeNeeded(
+        std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ),
     NoMatch,
 }
 
@@ -13429,9 +13432,273 @@ pub(crate) fn nodejoin_find_dups(
         Some(OpCode::CPUI_COPY) => return NodeJoinFindDups::NoMatch,
         _ => {}
     }
-    // cc:1943: mergeneed[MergePair(vn1,vn2)] = null (pair registered by the
-    // ConditionalJoin state in ActionNodeJoin::apply).
-    NodeJoinFindDups::MergeNeeded
+    // cc:1943: mergeneed[MergePair(vn1,vn2)] = null — the pair travels with
+    // the result so the ConditionalJoin state registers it
+    // (blockaction.cc:1943 insertion inside findDups, before return true).
+    NodeJoinFindDups::MergeNeeded(vn1, vn2)
+}
+
+/// `ConditionalJoin::MergePair` map entry: the two Varnode sides plus the
+/// joined replacement (`null` until setupMultiequals creates it,
+/// blockaction.cc:1943/2037).
+struct NodeJoinMergePairEntry {
+    /// Sort key: side1 create index then side2 create index — exactly
+    /// `MergePair::operator<` (blockaction.cc:1898-1906). C++ `map` key
+    /// equivalence is this ordering's equality, so equal `(ci1, ci2)` is the
+    /// same key even for distinct pointers.
+    ci1: u32,
+    ci2: u32,
+    side1: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    side2: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    outvn: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+}
+
+// Ghidra: blockaction.hh:234 ConditionalJoin (state carrier)
+/// Per-candidate state of Ghidra's `ConditionalJoin` helper class
+/// (blockaction.hh:234-269): the `mergeneed` map from Varnode pairs to their
+/// joined replacement. The match-shape fields (`block1/block2/exita/exitb/
+/// a_in1..b_in2/cbranch1/cbranch2`) live as locals in
+/// `ActionNodeJoin::apply`'s loop in this port; only the map needs to
+/// outlive the individual checks (`checkExitBlock` fills it, `execute`
+/// consumes it, `clear` empties it — blockaction.cc:1954/2094/2104).
+pub(crate) struct ConditionalJoin {
+    /// `map<MergePair, Varnode *> mergeneed` kept sorted by
+    /// `(side1.createIndex, side2.createIndex)` — C++ map iteration order
+    /// (setupMultiequals inserts MULTIEQUALs in this order, cc:2028).
+    mergeneed: Vec<NodeJoinMergePairEntry>,
+}
+
+impl ConditionalJoin {
+    // RUGRA-GLUE: default-constructed state mirror (C++ member init)
+    pub(crate) fn new() -> Self {
+        Self {
+            mergeneed: Vec::new(),
+        }
+    }
+
+    // Ghidra: blockaction.cc:2104 ConditionalJoin::clear
+    /// Clear out data from a previous join. Faithful to
+    /// `ConditionalJoin::clear` (blockaction.cc:2104-2108):
+    /// `mergeneed.clear()`.
+    pub(crate) fn clear(&mut self) {
+        self.mergeneed.clear();
+    }
+
+    /// `mergeneed[MergePair(side1,side2)] = (Varnode*)0` — insert-or-reset
+    /// with C++ `map::operator[]` semantics under the `MergePair::operator<`
+    /// key (blockaction.cc:1898-1906): an existing equivalent key has its
+    /// value reset to null; otherwise the entry is inserted in sorted
+    /// position.
+    // RUGRA-GLUE: C++ map<MergePair,Varnode*>::operator[] insert-or-reset realized on a sorted Vec (map semantics preserved)
+    fn mergeneed_set_null(
+        &mut self,
+        side1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        side2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        let (ci1, ci2) = (
+            side1.read().unwrap().get_create_index(),
+            side2.read().unwrap().get_create_index(),
+        );
+        match self
+            .mergeneed
+            .binary_search_by(|e| (e.ci1, e.ci2).cmp(&(ci1, ci2)))
+        {
+            Ok(pos) => self.mergeneed[pos].outvn = None,
+            Err(pos) => self.mergeneed.insert(
+                pos,
+                NodeJoinMergePairEntry {
+                    ci1,
+                    ci2,
+                    side1: side1.clone(),
+                    side2: side2.clone(),
+                    outvn: None,
+                },
+            ),
+        }
+    }
+
+    /// `mergeneed[MergePair(side1,side2)]` read: joined replacement for the
+    /// pair, `None` when the key is absent. In Ghidra an absent key
+    /// default-inserts a NULL which `opSetInput` would then store — that
+    /// state is unreachable when `checkExitBlock` preceded
+    /// `cutDownMultiequals` with identical slots (cc:1954-1972 run before
+    /// cc:1981-2019 with the same `(in1,in2)`), so `None` here simply skips
+    /// the substitution (RUGRA-GLUE: Rust input Vecs cannot hold a NULL
+    /// Varnode slot).
+    // RUGRA-GLUE: C++ map<MergePair,Varnode*> lookup realized on a sorted Vec (key = (side1.ci,side2.ci) equivalence)
+    fn mergeneed_get(
+        &self,
+        side1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        side2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+        let (ci1, ci2) = (
+            side1.read().unwrap().get_create_index(),
+            side2.read().unwrap().get_create_index(),
+        );
+        self.mergeneed
+            .binary_search_by(|e| (e.ci1, e.ci2).cmp(&(ci1, ci2)))
+            .ok()
+            .map(|pos| self.mergeneed[pos].outvn.clone())
+            .flatten()
+    }
+
+    // Ghidra: blockaction.cc:1954 ConditionalJoin::checkExitBlock
+    /// Look for additional Varnode pairs in an exit block that need to be
+    /// merged. Faithful to `ConditionalJoin::checkExitBlock`
+    /// (blockaction.cc:1954-1972): walk the exit block's ops from the start;
+    /// every MULTIEQUAL merging different Varnodes from our two root blocks
+    /// (slots `in1`/`in2`) registers the pair in `mergeneed`; the walk stops
+    /// at the first op that is neither MULTIEQUAL nor COPY.
+    pub(crate) fn check_exit_block(
+        &mut self,
+        exit: &std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >,
+        in1: usize,
+        in2: usize,
+    ) {
+        let ops = exit.read().unwrap().get_ops();
+        for op in ops {
+            let opcode = op.0.read().unwrap().opcode;
+            if opcode == OpCode::CPUI_MULTIEQUAL {
+                let (vn1, vn2) = {
+                    let o = op.0.read().unwrap();
+                    (o.get_in(in1).cloned(), o.get_in(in2).cloned())
+                };
+                if let (Some(vn1), Some(vn2)) = (vn1, vn2) {
+                    if !std::sync::Arc::ptr_eq(&vn1, &vn2) {
+                        self.mergeneed_set_null(&vn1, &vn2);
+                    }
+                }
+            } else if opcode != OpCode::CPUI_COPY {
+                break;
+            }
+        }
+    }
+
+    // Ghidra: blockaction.cc:2023 ConditionalJoin::setupMultiequals
+    /// Create a new Varnode and its defining MULTIEQUAL operation for each
+    /// MergePair in the map. Faithful to `ConditionalJoin::setupMultiequals`
+    /// (blockaction.cc:2023-2040): entries already holding a replacement are
+    /// skipped; each new MULTIEQUAL takes `cbranch1`'s address, side1 at
+    /// slot 0 / side2 at slot 1, an output of side1's size, and is inserted
+    /// at the end of the join block — in map order (sorted by create
+    /// indices).
+    pub(crate) fn setup_multiequals(
+        &mut self,
+        fd: &mut Funcdata,
+        joinblock: &std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >,
+        cbranch1: &crate::op::PcodeOpRef,
+    ) {
+        let addr = cbranch1.0.read().unwrap().get_addr();
+        for i in 0..self.mergeneed.len() {
+            if self.mergeneed[i].outvn.is_some() {
+                continue; // cc:2029
+            }
+            let vn1 = self.mergeneed[i].side1.clone();
+            let vn2 = self.mergeneed[i].side2.clone();
+            let size = vn1.read().unwrap().get_size();
+            let multi = fd.new_op(2, addr);
+            fd.op_set_opcode(&multi, OpCode::CPUI_MULTIEQUAL);
+            let outvn = fd.new_unique_out(size, &multi);
+            fd.op_set_input(&multi, vn1, 0);
+            fd.op_set_input(&multi, vn2, 1);
+            self.mergeneed[i].outvn = Some(outvn);
+            fd.op_insert_end(&multi, joinblock);
+        }
+    }
+
+    // Ghidra: blockaction.cc:2043 ConditionalJoin::moveCbranch
+    /// Remove the other CBRANCH. Faithful to `ConditionalJoin::moveCbranch`
+    /// (blockaction.cc:2043-2057): cbranch1 moves to the end of the join
+    /// block, its condition input is replaced by the merged Varnode (or
+    /// vn1 itself when both branches shared the condition), and cbranch2 is
+    /// destroyed.
+    pub(crate) fn move_cbranch(
+        &mut self,
+        fd: &mut Funcdata,
+        joinblock: &std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >,
+        cbranch1: &crate::op::PcodeOpRef,
+        cbranch2: &crate::op::PcodeOpRef,
+    ) {
+        let vn1 = cbranch1.0.read().unwrap().get_in(1).cloned();
+        let vn2 = cbranch2.0.read().unwrap().get_in(1).cloned();
+        fd.op_uninsert(cbranch1);
+        fd.op_insert_end(cbranch1, joinblock);
+        // cc:2051-2055: vn = (vn1 != vn2) ? mergeneed[MergePair(vn1,vn2)]
+        //                                 : vn1;
+        // opSetInput(cbranch1, vn, 1). The vn1==vn2 case early-outs inside
+        // opSetInput (same Varnode at slot 1).
+        if let (Some(vn1), Some(vn2)) = (&vn1, &vn2) {
+            if std::sync::Arc::ptr_eq(vn1, vn2) {
+                fd.op_set_input(cbranch1, vn1.clone(), 1);
+            } else if let Some(subvn) = self.mergeneed_get(vn1, vn2) {
+                fd.op_set_input(cbranch1, subvn, 1);
+            }
+        }
+        fd.op_destroy(cbranch2);
+    }
+
+    // Ghidra: blockaction.cc:1981 ConditionalJoin::cutDownMultiequals
+    /// Substitute the new joined Varnode in the given exit block. Faithful
+    /// to `ConditionalJoin::cutDownMultiequals` (blockaction.cc:1981-2019):
+    /// walk the exit block's ops from the start (stopping at the first op
+    /// that is neither MULTIEQUAL nor COPY); for every MULTIEQUAL, remove
+    /// the `hi` input slot and put the merged replacement into `lo`; a
+    /// 1-input MULTIEQUAL converts to COPY and moves to the block start.
+    /// The op-list walk uses a snapshot — Ghidra advances its iterator
+    /// before the inserts, and the only list mutation (the COPY conversion)
+    /// moves an already-visited op to the front.
+    pub(crate) fn cut_down_multiequals(
+        &mut self,
+        fd: &mut Funcdata,
+        exit: &std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >,
+        in1: usize,
+        in2: usize,
+    ) {
+        let (lo, hi) = if in1 > in2 {
+            (in2, in1)
+        } else {
+            (in1, in2)
+        };
+        let ops = exit.read().unwrap().get_ops();
+        for op in ops {
+            let opcode = op.0.read().unwrap().opcode;
+            if opcode == OpCode::CPUI_MULTIEQUAL {
+                let (vn1, vn2) = {
+                    let o = op.0.read().unwrap();
+                    (o.get_in(in1).cloned(), o.get_in(in2).cloned())
+                };
+                match (vn1, vn2) {
+                    (Some(vn1), Some(vn2)) => {
+                        if std::sync::Arc::ptr_eq(&vn1, &vn2) {
+                            fd.op_remove_input(&op, hi);
+                        } else {
+                            let subvn = self.mergeneed_get(&vn1, &vn2);
+                            fd.op_remove_input(&op, hi);
+                            if let Some(subvn) = subvn {
+                                fd.op_set_input(&op, subvn, lo);
+                            }
+                        }
+                    }
+                    _ => continue,
+                }
+                if op.0.read().unwrap().num_input() == 1 {
+                    fd.op_uninsert(&op);
+                    fd.op_set_opcode(&op, OpCode::CPUI_COPY);
+                    fd.op_insert_begin(&op, exit);
+                }
+            } else if opcode != OpCode::CPUI_COPY {
+                break;
+            }
+        }
+    }
 }
 
 /// Rejoin Varnodes split across converging conditional branches.
@@ -13468,23 +13735,20 @@ impl Action for ActionNodeJoin {
         //     if (leastout->sizeIn()==1) continue;
         //     for each other in-edge j (j != inslot):
         //       bb2 = leastout->getIn(j);
-        //       if (condjoin.match(bb, bb2)) { condjoin.execute(); count+=1; break; }
+        //       if (condjoin.match(bb, bb2)) { count+=1; condjoin.execute(); condjoin.clear(); break; }
         //
-        // Rugra port: run Ghidra's candidate-finding loop, and for each
-        // sibling predecessor bb2 run a simplified `condjoin.match`
-        // (ConditionalJoin::match, blockaction.cc:2065-2091): verify the
-        // diamond shape (bb and bb2 both sizeOut==2, converging on the same
-        // two exit blocks) and that both CBRANCHes read a condition varnode
-        // (findDups, blockaction.cc:1912). When the two conditions are the
-        // SAME varnode (findDups's vn1==vn2 fast path, blockaction.cc:1926-
-        // 1927), the join is data-flow-only and needs no new block: we
-        // synthesize a MULTIEQUAL merge at the convergence exit (the
-        // substantive `setupMultiequals` step, blockaction.cc:2023). The full
-        // CFG-rewriting join (nodeJoinCreateBlock) is not portable here.
+        // Rugra port: run Ghidra's candidate-finding loop with a faithful
+        // ConditionalJoin state object (cc:2332). `condjoin.match` expands to
+        // the diamond shape check (blockaction.cc:2071-2082), the full
+        // findDups gate sequence (cc:1912-1945, nodejoin_find_dups) and the
+        // two checkExitBlock calls (cc:2088-2089); `condjoin.execute` runs
+        // all four steps (cc:2094-2102): nodeJoinCreateBlock,
+        // setupMultiequals, moveCbranch, cutDownMultiequals x2.
         use std::sync::Arc;
         if fd.bblocks.blocks.is_empty() {
             return Ok(action_status::NO_CHANGE);
         }
+        let mut condjoin = ConditionalJoin::new();
         let n_blocks = fd.bblocks.get_size();
         for i in 0..n_blocks {
             let bl_arc = match fd.bblocks.get_block(i) {
@@ -13595,43 +13859,11 @@ impl Action for ActionNodeJoin {
                     }
                 };
                 drop(bb2_rg);
-                // findDups (blockaction.cc:1912-1945) decides the pair:
-                // booleanFlip gate, vn1==vn2 fast path, then the written /
-                // spacebase / functionalEqualityLevel / def-opcode gates.
-                // NODEJOIN-F4-MATCH-GATES-0001: the former port joined ANY
-                // different-condition diamond, missing every cc:1920-1941
-                // gate (over-join).
-                let bb_cbranch = {
-                    let ops = bl_arc.read().unwrap().get_ops();
-                    match ops.last().cloned() {
-                        Some(o) => o,
-                        None => continue,
-                    }
-                };
-                match nodejoin_find_dups(&bb_cbranch, &bb2_cbranch) {
-                    NodeJoinFindDups::NoMatch => continue,
-                    // cc:1926-1927: vn1 == vn2 is a COMPLETE match — Ghidra
-                    // returns true immediately and the caller runs the FULL
-                    // execute() (nodeJoinCreateBlock + setupMultiequals +
-                    // moveCbranch + cutDownMultiequals), identical to the
-                    // different-condition path; only mergeneed stays empty.
-                    // NODEJOIN-F3-SAMECOND-FULLJOIN-0001: the former port
-                    // misread this fast path as "data-flow-only" and merely
-                    // bumped count without joining.
-                    NodeJoinFindDups::SameCondition | NodeJoinFindDups::MergeNeeded => {}
-                }
-                // findDups accepted the pair (same or mergeable conditions):
-                // execute nodeJoinCreateBlock
-                // (blockaction.cc:2094-2097 ConditionalJoin::execute →
-                // funcdata_block.cc:779-826). The faithful
-                // Funcdata::node_join_create_block twin (funcdata.rs) performs
-                // the fora/forb edge surgery and — critically — the trailing
-                // structureReset() (funcdata_block.cc:816) whose absence left
-                // the join block out of the next heritage pass
-                // (NODEJOIN-STRUCTURERESET-0001): free phi placeholder inputs
-                // survived into ActionMergeRequired, tripping "Free varnode
-                // has multiple descendants" and stalling
-                // getparameter/match_url convergence.
+                // a_in1..b_in2 are the reverse edge indices of block1/block2
+                // into exita/exitb (ConditionalJoin::match cc:2079-2082) —
+                // computed before findDups like the oracle, and used by both
+                // checkExitBlock/cutDownMultiequals (input slots) and
+                // nodeJoinCreateBlock (fora/forb flags, cc:2097).
                 let (a_in1, b_in1) = {
                     let rg = bl_arc.read().unwrap();
                     (
@@ -13646,14 +13878,61 @@ impl Action for ActionNodeJoin {
                         rg.get_out(1).map(|e| e.reverse_index).unwrap_or(-1),
                     )
                 };
-                let cbranch_addr = {
-                    let rg = bl_arc.read().unwrap();
-                    rg.get_ops()
-                        .last()
-                        .map(|o| o.0.read().unwrap().start.get_addr())
-                        .unwrap_or_else(|| crate::address::Address::new(0))
+                // findDups (blockaction.cc:1912-1945) decides the pair:
+                // booleanFlip gate, vn1==vn2 fast path, then the written /
+                // spacebase / functionalEqualityLevel / def-opcode gates.
+                // NODEJOIN-F4-MATCH-GATES-0001: the former port joined ANY
+                // different-condition diamond, missing every cc:1920-1941
+                // gate (over-join).
+                let bb_cbranch = {
+                    let ops = bl_arc.read().unwrap().get_ops();
+                    match ops.last().cloned() {
+                        Some(o) => o,
+                        None => continue,
+                    }
                 };
-                fd.node_join_create_block(
+                match nodejoin_find_dups(&bb_cbranch, &bb2_cbranch) {
+                    NodeJoinFindDups::NoMatch => {
+                        // match() clears the state when findDups fails
+                        // (blockaction.cc:2084-2087).
+                        condjoin.clear();
+                        continue;
+                    }
+                    // cc:1926-1927: vn1 == vn2 is a COMPLETE match — Ghidra
+                    // returns true immediately and the caller runs the FULL
+                    // execute() (nodeJoinCreateBlock + setupMultiequals +
+                    // moveCbranch + cutDownMultiequals), identical to the
+                    // different-condition path; only mergeneed stays empty.
+                    // NODEJOIN-F3-SAMECOND-FULLJOIN-0001: the former port
+                    // misread this fast path as "data-flow-only" and merely
+                    // bumped count without joining.
+                    NodeJoinFindDups::SameCondition => {}
+                    // cc:1943: mergeneed[MergePair(vn1,vn2)] = null.
+                    NodeJoinFindDups::MergeNeeded(vn1, vn2) => {
+                        condjoin.mergeneed_set_null(&vn1, &vn2);
+                    }
+                }
+                // ConditionalJoin::match tail (cc:2088-2089): Varnodes merged
+                // in the exit blocks flowing from block1/block2 must also be
+                // merged in the joined block — register them in mergeneed.
+                // NODEJOIN-F2-EXECUTE-STEPS-0001.
+                condjoin.check_exit_block(&exita, a_in1.max(0) as usize, a_in2.max(0) as usize);
+                condjoin.check_exit_block(&exitb, b_in1.max(0) as usize, b_in2.max(0) as usize);
+                // count += 1 (cc:2355) — indicate change has been made.
+                self.count += 1;
+                // ConditionalJoin::execute (blockaction.cc:2094-2102), all
+                // four steps. Step 1 nodeJoinCreateBlock
+                // (cc:2097 → funcdata_block.cc:779-826). The faithful
+                // Funcdata::node_join_create_block twin (funcdata.rs) performs
+                // the fora/forb edge surgery and — critically — the trailing
+                // structureReset() (funcdata_block.cc:816) whose absence left
+                // the join block out of the next heritage pass
+                // (NODEJOIN-STRUCTURERESET-0001): free phi placeholder inputs
+                // survived into ActionMergeRequired, tripping "Free varnode
+                // has multiple descendants" and stalling
+                // getparameter/match_url convergence.
+                let cbranch_addr = bb_cbranch.0.read().unwrap().get_addr();
+                let joinblock = fd.node_join_create_block(
                     &bl_arc,
                     &bb2_arc,
                     &exita,
@@ -13666,7 +13945,21 @@ impl Action for ActionNodeJoin {
                 // calcForwardDominator (funcdata_block.cc:712 via the twin),
                 // and the new block is appended so indices did not change
                 // (R-NODEJOIN-CROSSREVIEW problem 4).
-                self.count += 1;
+                // Step 2 setupMultiequals (cc:2098 → cc:2023-2040): new
+                // MULTIEQUAL + output Varnode per mergeneed pair, appended to
+                // the join block in map order.
+                condjoin.setup_multiequals(fd, &joinblock, &bb_cbranch);
+                // Step 3 moveCbranch (cc:2099 → cc:2043-2057): cbranch1 into
+                // the join block reading the merged condition; cbranch2
+                // destroyed.
+                condjoin.move_cbranch(fd, &joinblock, &bb_cbranch, &bb2_cbranch);
+                // Step 4 cutDownMultiequals (cc:2100-2101 → cc:1981-2019):
+                // exit MULTIEQUALs lose the hi input and read the merged
+                // replacement at lo; single-input ones become COPYs.
+                condjoin.cut_down_multiequals(fd, &exita, a_in1.max(0) as usize, a_in2.max(0) as usize);
+                condjoin.cut_down_multiequals(fd, &exitb, b_in1.max(0) as usize, b_in2.max(0) as usize);
+                // condjoin.clear() (cc:2357).
+                condjoin.clear();
                 joined_this = true;
                 break;
             }
@@ -15486,6 +15779,245 @@ mod tests {
             fd.bblocks.get_size(),
             5,
             "same-condition join must create the join block"
+        );
+    }
+
+    /// NODEJOIN-F2-EXECUTE-STEPS-0001 Rugra regression leg:
+    /// `ConditionalJoin::execute` must run ALL FOUR steps
+    /// (blockaction.cc:2094-2102). Fixture: a mergeable-condition diamond
+    /// (identical INT_LESS conditions, res=0) whose exita merges two distinct
+    /// Varnodes v1/v2 through a MULTIEQUAL. After apply:
+    /// - setupMultiequals (cc:2023-2040): the join block holds MULTIEQUALs
+    ///   for (cond1,cond2) and (v1,v2) in mergeneed map order (createIndex
+    ///   of side1), THEN the relocated cbranch1 (cc:2098 before cc:2099);
+    /// - moveCbranch (cc:2043-2057): cbranch1 reads the (cond1,cond2)
+    ///   MULTIEQUAL output; cbranch2 is destroyed (b2 left with no ops);
+    /// - cutDownMultiequals (cc:1981-2019): exita's 2-input MULTIEQUAL loses
+    ///   its hi input, reads the (v1,v2) replacement at lo, and becomes a
+    ///   COPY moved to the block start (cc:2011-2015).
+    /// Oracle side pinned by nodejoin_condjoin_1204 (mechanism B2).
+    #[test]
+    fn test_nodejoin_execute_runs_all_four_steps() {
+        use crate::address::{Address, SeqNum};
+        use crate::block::{BlockBasic, FlowBlock};
+        use crate::op::{PcodeOp, PcodeOpRef};
+        use crate::opcodes::OpCode;
+        use crate::varnode::{varnode_flags, Varnode};
+        type VnRef = std::sync::Arc<std::sync::RwLock<Varnode>>;
+
+        // RUGRA-GLUE: test-fixture constant Varnode builder (no Ghidra counterpart)
+        fn const_vn(val: u64) -> VnRef {
+            std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(
+                val, 8,
+            )))
+        }
+        // Written condition with a defining op; create_index controls the
+        // mergeneed map order (MergePair::operator< cc:1898-1906).
+        // RUGRA-GLUE: test-fixture written Varnode + defining op (mirrors oracle driver newUniqueOut/opSetOutput)
+        fn written_vn(
+            opcode: OpCode,
+            inputs: Vec<VnRef>,
+            seq_ord: u32,
+            create_index: u32,
+        ) -> (std::sync::Arc<std::sync::RwLock<PcodeOp>>, VnRef) {
+            let out = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(
+                8,
+                Address::new(0x9000 + seq_ord as u64),
+            )));
+            {
+                let mut o = out.write().unwrap();
+                o.set_flags(varnode_flags::WRITTEN);
+                o.create_index = create_index;
+            }
+            let mut def = PcodeOp::new(SeqNum::new(Address::new(0x1000), seq_ord), opcode);
+            def.inrefs = inputs;
+            def.output = Some(out.clone());
+            let def_arc = std::sync::Arc::new(std::sync::RwLock::new(def));
+            out.write().unwrap().def = Some(std::sync::Arc::downgrade(&def_arc));
+            (def_arc, out)
+        }
+        // RUGRA-GLUE: test-fixture function-input style Varnode (INPUT flag, explicit createIndex)
+        fn input_vn(addr: u64, create_index: u32) -> VnRef {
+            let v = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(
+                8,
+                Address::new(addr),
+            )));
+            {
+                let mut g = v.write().unwrap();
+                g.set_flags(varnode_flags::INPUT);
+                g.create_index = create_index;
+            }
+            v
+        }
+
+        let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
+        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            1,
+            Address::new(0x1000),
+        )));
+        let b2 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            2,
+            Address::new(0x2000),
+        )));
+        let exita = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            3,
+            Address::new(0x3000),
+        )));
+        let exitb = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            4,
+            Address::new(0x4000),
+        )));
+
+        // Mergeable conditions: identical INT_LESS(k1, k2) → res=0.
+        let (def1, cond1) = written_vn(
+            OpCode::CPUI_INT_LESS,
+            vec![const_vn(1), const_vn(2)],
+            1,
+            10,
+        );
+        let (def2, cond2) = written_vn(
+            OpCode::CPUI_INT_LESS,
+            vec![const_vn(1), const_vn(2)],
+            2,
+            11,
+        );
+        // Exit merge inputs (v1 from b1, v2 from b2), createIndex AFTER the
+        // condition pair so the join-block MULTIEQUAL order is ME(cond) then
+        // ME(v1,v2) (map order by side1 createIndex).
+        let v1 = input_vn(0x8100, 20);
+        let v2 = input_vn(0x8200, 21);
+
+        // CBRANCHes on the two conditions.
+        for (blk, cond, ord) in
+            [(b1.clone(), cond1.clone(), 5u32), (b2.clone(), cond2.clone(), 6)]
+        {
+            let mut cb = PcodeOp::new(
+                SeqNum::new(blk.read().unwrap().get_start_addr(), ord),
+                OpCode::CPUI_CBRANCH,
+            );
+            cb.inrefs = vec![const_vn(0x3000), cond];
+            blk.write().unwrap().add_op(PcodeOpRef(std::sync::Arc::new(
+                std::sync::RwLock::new(cb),
+            )));
+        }
+        // exita: MULTIEQUAL merging v1 (b1 slot) / v2 (b2 slot), then a
+        // non-COPY op stops the checkExitBlock/cutDown walk (cc:1970/2017).
+        {
+            let mut me = PcodeOp::new(
+                SeqNum::new(Address::new(0x3000), 7),
+                OpCode::CPUI_MULTIEQUAL,
+            );
+            me.inrefs = vec![v1.clone(), v2.clone()];
+            let mut stop = PcodeOp::new(
+                SeqNum::new(Address::new(0x3000), 8),
+                OpCode::CPUI_INT_ADD,
+            );
+            stop.inrefs = vec![const_vn(1), const_vn(2)];
+            let mut eg = exita.write().unwrap();
+            eg.add_op(PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(me))));
+            eg.add_op(PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(stop))));
+        }
+        for b in [&b1, &b2, &exita, &exitb] {
+            fd.bblocks.add_block(b.clone());
+        }
+        fd.bblocks.add_edge(b1.clone(), exita.clone());
+        fd.bblocks.add_edge(b1.clone(), exitb.clone());
+        fd.bblocks.add_edge(b2.clone(), exita.clone());
+        fd.bblocks.add_edge(b2.clone(), exitb.clone());
+
+        let mut a = ActionNodeJoin::new();
+        let _ = a.apply(&mut fd).unwrap();
+        assert_eq!(a.count, 1, "mergeable pair joins once");
+        let _ = (&def1, &def2);
+
+        // Join block appended (nodeJoinCreateBlock, cc:2097).
+        // nodeJoinCreateBlock appends the join block, but its trailing
+        // structureReset → structureLoops → findSpanningTree REORDERS the
+        // block list into reverse post order and reindexes (block.cc:1015-
+        // 1137 `list = rpostorder`) — in Ghidra too. Locate the join block
+        // by its f_joined_block flag, not by position.
+        let joinblock = (0..fd.bblocks.get_size())
+            .map(|pos| fd.bblocks.get_block(pos).expect("block"))
+            .find(|b| {
+                b.read().unwrap().get_flags()
+                    & crate::block::block_flags::JOINED_BLOCK
+                    != 0
+            })
+            .expect("join block present with JOINED_BLOCK flag");
+        let join_ops = joinblock.read().unwrap().get_ops();
+        let opcodes: Vec<OpCode> = join_ops
+            .iter()
+            .map(|o| o.0.read().unwrap().opcode)
+            .collect();
+        assert_eq!(
+            opcodes,
+            vec![
+                OpCode::CPUI_MULTIEQUAL,
+                OpCode::CPUI_MULTIEQUAL,
+                OpCode::CPUI_CBRANCH
+            ],
+            "setupMultiequals inserts the two MULTIEQUALs in map order, then moveCbranch appends cbranch1"
+        );
+        // ME(cond1,cond2) first (createIndex 10 < 20): its output replaces
+        // cbranch1's condition input (cc:2051-2055).
+        let me_cond_out = join_ops[0].0.read().unwrap().output.clone().expect("me out");
+        let cb_cond = join_ops[2]
+            .0
+            .read()
+            .unwrap()
+            .get_in(1)
+            .cloned()
+            .expect("cbranch cond");
+        assert!(
+            std::sync::Arc::ptr_eq(&me_cond_out, &cb_cond),
+            "cbranch1 condition is the merged MULTIEQUAL output"
+        );
+        // ME(v1,v2) second.
+        let me_v_out = join_ops[1].0.read().unwrap().output.clone().expect("me out");
+        let me_v_ins: Vec<VnRef> = join_ops[1]
+            .0
+            .read()
+            .unwrap()
+            .inrefs
+            .iter()
+            .cloned()
+            .collect();
+        assert!(std::sync::Arc::ptr_eq(&me_v_ins[0], &v1));
+        assert!(std::sync::Arc::ptr_eq(&me_v_ins[1], &v2));
+
+        // moveCbranch: b1 lost its CBRANCH (moved), b2's CBRANCH destroyed.
+        assert!(
+            b1.read().unwrap().get_ops().is_empty(),
+            "cbranch1 moved out of block1"
+        );
+        assert!(
+            b2.read().unwrap().get_ops().is_empty(),
+            "cbranch2 destroyed"
+        );
+
+        // cutDownMultiequals: exita's MULTIEQUAL became a COPY at the block
+        // start reading the (v1,v2) replacement (cc:2007-2015); the INT_ADD
+        // stop op is untouched after it.
+        let exit_ops = exita.read().unwrap().get_ops();
+        let exit_opcodes: Vec<OpCode> = exit_ops
+            .iter()
+            .map(|o| o.0.read().unwrap().opcode)
+            .collect();
+        assert_eq!(
+            exit_opcodes,
+            vec![OpCode::CPUI_COPY, OpCode::CPUI_INT_ADD],
+            "2-input MULTIEQUAL trimmed to 1 input converts to COPY at block start"
+        );
+        let copy_in = exit_ops[0]
+            .0
+            .read()
+            .unwrap()
+            .get_in(0)
+            .cloned()
+            .expect("copy in");
+        assert!(
+            std::sync::Arc::ptr_eq(&copy_in, &me_v_out),
+            "exit COPY reads the merged (v1,v2) replacement"
         );
     }
 
