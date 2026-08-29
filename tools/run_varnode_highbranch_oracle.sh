@@ -324,7 +324,7 @@ require("fixture id", metadata["fixture_id"], "VARNODE-COPYSYMBOL-HIGHBRANCH-000
 require(
     "stable function id",
     metadata["stable_function_id"],
-    "GH12-F-aa7e5e32b19125cfeab6",
+    "GH12-F-edea5e55c75b6fc66820",
 )
 require("covered projection status", metadata["covered_projection_status"], "MATCH")
 require("overall status prefix", metadata["overall_status"].split(":", 1)[0], "UNTESTED")

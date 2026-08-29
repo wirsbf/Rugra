@@ -11,16 +11,16 @@
     "src_tree": "004b20c8ed6da74cf6457a4386570bae4801bc78"
   },
   "checkpoint": {
-    "commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
-    "commit_tree": "596c2f4c2b0ae01a566803d9cf56f72d59c938be",
-    "rust_function_records": 10464,
-    "rust_projection_sha256": "e5da44de7e5c7ec67707b8e348b5a81c707e002cfe7967a73c3377653a322c25",
-    "src_tree": "9c85c1cb77d3962f81a4704d5b4ca19787a13671"
+    "commit": "0c5091f5a8eba7f5a2dbbebfcdada08a5e3034fb",
+    "commit_tree": "8f052f7add35042b6e892875a642a2145c1b94d1",
+    "rust_function_records": 10467,
+    "rust_projection_sha256": "e187f35ebefcd2d615d59770e2b82cda1a22b29e5f49cc1f76b6774470844c9e",
+    "src_tree": "ec6bed6fb1f2f7812ebdb498653e3fd5431bb3d4"
   },
   "history": {
-    "commit_count": 397,
+    "commit_count": 406,
     "first_commit": "7ae30f5bcfba5e1adce2a4e8cdeebc23d96964cb",
-    "last_commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
+    "last_commit": "0c5091f5a8eba7f5a2dbbebfcdada08a5e3034fb",
     "mode": "first_parent"
   },
   "id_scheme": {
@@ -1900,6 +1900,18 @@
       "parent_blob": "5294bda8f0e39fa14facd6b59d066c379a416b35",
       "path": "src/block.rs",
       "signature": "fn add_dom_child(&mut self, child: Arc<RwLock<dyn FlowBlock + Send + Sync>>)"
+    },
+    {
+      "base_id": "RG-F-296043d82a41ee18ae3b",
+      "child_blob": "93d6d65eadfaa22e7d71a8b764e826174df56a8b",
+      "introduced_at_commit": "0c5091f5a8eba7f5a2dbbebfcdada08a5e3034fb",
+      "module": "action",
+      "name": "nodejoin_join_block_forces_heritage_restructure",
+      "new_id": "RG-F-296043d82a41ee18ae3b",
+      "owner": "free",
+      "parent_blob": "52b7814a20d0141fd077b3e315ae25215412a6c1",
+      "path": "src/action.rs",
+      "signature": "fn nodejoin_join_block_forces_heritage_restructure()"
     },
     {
       "base_id": "RG-F-29cbee7248ef3411c05b",
@@ -5238,6 +5250,18 @@
       "signature": "fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>>"
     },
     {
+      "base_id": "RG-F-7c9be11d61453260cff9",
+      "child_blob": "f292b44de827c534d21665935e0357ce573430cd",
+      "introduced_at_commit": "0c5091f5a8eba7f5a2dbbebfcdada08a5e3034fb",
+      "module": "debugproto",
+      "name": "ptr_drill_base_name",
+      "new_id": "RG-F-7c9be11d61453260cff9",
+      "owner": "impl:Arc<Datatype> as PtrDrillBaseName",
+      "parent_blob": "8b2a04b760d597af61bf579be997d5b3bd6f8c3e",
+      "path": "src/debugproto.rs",
+      "signature": "fn ptr_drill_base_name(&self) -> String"
+    },
+    {
       "base_id": "RG-F-7cb6625ae84bc31cae67",
       "child_blob": "e3b1f2e6ccef0b43a587da95a051fc6e677be8e9",
       "introduced_at_commit": "594ed4fa74e895390cbe105e1b0af8afed3aeb7f",
@@ -7228,6 +7252,18 @@
       "parent_blob": "a5c0c6f9557598bc6a1de70606b74d5d71c7f8ab",
       "path": "src/stringmanage.rs",
       "signature": "fn test_java_contract_data_unavail_negative_cache()"
+    },
+    {
+      "base_id": "RG-F-ac7f4ffeac8f8ef49e9d",
+      "child_blob": "f292b44de827c534d21665935e0357ce573430cd",
+      "introduced_at_commit": "0c5091f5a8eba7f5a2dbbebfcdada08a5e3034fb",
+      "module": "debugproto",
+      "name": "ptr_drill_base_name",
+      "new_id": "RG-F-ac7f4ffeac8f8ef49e9d",
+      "owner": "trait:PtrDrillBaseName",
+      "parent_blob": "8b2a04b760d597af61bf579be997d5b3bd6f8c3e",
+      "path": "src/debugproto.rs",
+      "signature": "fn ptr_drill_base_name(&self) -> String"
     },
     {
       "base_id": "RG-F-ada8b71bab89cd3b8c6d",
@@ -26356,9 +26392,9 @@
     "ambiguous": 0,
     "baseline_records": 9639,
     "collisions": 0,
-    "current_records": 10464,
+    "current_records": 10467,
     "events": 504,
-    "introduced_live": 880,
+    "introduced_live": 883,
     "lineages": 489,
     "reviewed_transitions": 237,
     "tombstones": 55

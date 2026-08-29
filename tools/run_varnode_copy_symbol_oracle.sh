@@ -311,7 +311,7 @@ require("fixture id", metadata["fixture_id"], "VARNODE-COPYSYMBOL-FIELDS-0001")
 require(
     "stable function id",
     metadata["stable_function_id"],
-    "GH12-F-aa7e5e32b19125cfeab6",
+    "GH12-F-edea5e55c75b6fc66820",
 )
 require("overall status", metadata["overall_status"].split(":", 1)[0], "MATCH")
 oracle = metadata["oracle"]
