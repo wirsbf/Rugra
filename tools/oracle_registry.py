@@ -1543,12 +1543,20 @@ def classify_function_ids(refs, ledger_ids, old_to_new, tombstones=None):
     return classes
 
 
-def rekey_gap_family(migration, ledger_ids, effective_live=None) -> list:
-    """Migration live entries whose final target misses the current ledger."""
+def rekey_gap_family(migration, ledger_ids, effective_live=None, tombstones=None) -> list:
+    """Migration live entries whose final target misses the current ledger.
+
+    Tombstoned lineages are deliberately excluded: they are dead by review
+    and already carry the TOMBSTONED_FUNCTION_ID diagnostic; counting them
+    here would conflate retirement with a missing replacement target.
+    """
     effective_live = effective_live or {}
+    tombstones = tombstones or {}
     family = []
     for entry in migration.get("entries", []):
         old_id = entry.get("old_id")
+        if old_id in tombstones:
+            continue
         new_id = effective_live.get(old_id, entry.get("new_id"))
         if isinstance(new_id, str) and new_id not in ledger_ids:
             family.append({
@@ -2263,7 +2271,7 @@ def build_plan(root: str) -> dict:
         })
     tombstoned.sort(key=lambda r: (r["file"], r["line"], r["column"], r["old_id"]))
 
-    family = rekey_gap_family(migration, ledger_ids, old_to_new)
+    family = rekey_gap_family(migration, ledger_ids, old_to_new, tombstones)
     referenced = {ref["id"] for ref in classes["rekey_gap"]}
     family_out = []
     for entry in family:
