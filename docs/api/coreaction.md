@@ -2085,3 +2085,13 @@ Ghidra: blockaction.cc:1912 ConditionalJoin::findDups)按 oracle 顺序补齐全
 通过后返回 `MergeNeeded`(cc:1943 mergeneed 注册由 ConditionalJoin 状态承接,F2)。
 测试:`test_nodejoin_finddups_gates`(booleanFlip×3/unwritten/spacebase/res<0/
 res>1/SUBPIECE/COPY 全拒 + 相同 INT_LESS 正对照 join 1 次且块数 +1)。
+
+## 2026-08-29:NODEJOIN-F3-SAMECOND-FULLJOIN-0001 同条件菱形执行完整 join
+
+旧代码把 findDups 的 `vn1 == vn2` 快路径(cc:1926-1927)误读为 "data-flow-only",
+same-cond 菱形只 count+=1 不做任何 CFG/op 变换。oracle 语义:vn1==vn2 是**完整
+match**,返回 true 后调用方照样走 `ConditionalJoin::execute` 全部四步
+(cc:2354-2358 match→execute→clear),仅 mergeneed 为空(setupMultiequals 无新
+MULTIEQUAL、moveCbranch 的 `vn1!=vn2` 查表走 else 分支直接用 vn1)。现
+`NodeJoinFindDups::SameCondition` 与 `MergeNeeded` 一样落入 nodeJoinCreateBlock
+路径。测试:`test_nodejoin_counts_diamond_candidate` 追加断言(块数 4→5)。

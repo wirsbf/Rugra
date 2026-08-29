@@ -13610,17 +13610,18 @@ impl Action for ActionNodeJoin {
                 };
                 match nodejoin_find_dups(&bb_cbranch, &bb2_cbranch) {
                     NodeJoinFindDups::NoMatch => continue,
-                    NodeJoinFindDups::SameCondition => {
-                        // cc:1926-1927: same condition varnode is a complete
-                        // match; execute() runs the full join.
-                        self.count += 1;
-                        joined_this = true;
-                        break;
-                    }
-                    NodeJoinFindDups::MergeNeeded => {}
+                    // cc:1926-1927: vn1 == vn2 is a COMPLETE match — Ghidra
+                    // returns true immediately and the caller runs the FULL
+                    // execute() (nodeJoinCreateBlock + setupMultiequals +
+                    // moveCbranch + cutDownMultiequals), identical to the
+                    // different-condition path; only mergeneed stays empty.
+                    // NODEJOIN-F3-SAMECOND-FULLJOIN-0001: the former port
+                    // misread this fast path as "data-flow-only" and merely
+                    // bumped count without joining.
+                    NodeJoinFindDups::SameCondition | NodeJoinFindDups::MergeNeeded => {}
                 }
-                // Different-condition diamond whose conditions pass the
-                // findDups gates: execute nodeJoinCreateBlock
+                // findDups accepted the pair (same or mergeable conditions):
+                // execute nodeJoinCreateBlock
                 // (blockaction.cc:2094-2097 ConditionalJoin::execute →
                 // funcdata_block.cc:779-826). The faithful
                 // Funcdata::node_join_create_block twin (funcdata.rs) performs
@@ -15476,6 +15477,16 @@ mod tests {
         let mut a = ActionNodeJoin::new();
         let _ = a.apply(&mut fd).unwrap();
         assert!(a.count >= 1, "diamond join candidate must be detected");
+        // NODEJOIN-F3-SAMECOND-FULLJOIN-0001: vn1==vn2 (findDups cc:1926-1927)
+        // is a COMPLETE match — the full join runs: nodeJoinCreateBlock
+        // appends the join block (cc:2097) and moveCbranch relocates
+        // cbranch1 into it / destroys cbranch2 (cc:2043-2057, op effects in
+        // F2). The structural half is observable already: block count grows.
+        assert_eq!(
+            fd.bblocks.get_size(),
+            5,
+            "same-condition join must create the join block"
+        );
     }
 
     /// NODEJOIN-F4-MATCH-GATES-0001 Rugra regression leg: every
