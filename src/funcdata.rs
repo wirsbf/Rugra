@@ -3932,51 +3932,92 @@ impl Funcdata {
         }
     }
 
-    // Ghidra: funcdata.cc:34 Funcdata::opUndoPtradd
-    /// Undo a PTRADD op, converting it back to INT_ADD/INT_MULT.
-    /// Faithful to `Funcdata::opUndoPtradd` (funcdata_op.cc:579).
+    // RUGRA-GLUE: 1-arg compat shim over Funcdata::opUndoPtradd
+    /// Ghidra's RulePtraddUndo/RulePtrsubUndo call `opUndoPtradd(op,false)`
+    /// (ruleaction.cc:6925, ruleaction.cc:7115). ruleaction.rs is outside
+    /// this change's write-set, so its single-argument calls delegate to the
+    /// faithful 2-arg port with finalize=false.
     pub fn op_undo_ptradd(&mut self, op: &crate::op::PcodeOpRef) {
+        self.op_undo_ptradd_full(op, false);
+    }
+
+    // Ghidra: funcdata_op.cc:579 Funcdata::opUndoPtradd
+    /// Convert the given CPUI_PTRADD into the equivalent CPUI_INT_ADD. This
+    /// may involve inserting a CPUI_INT_MULT PcodeOp. If finalization is
+    /// requested and a new PcodeOp is needed, the output Varnode is marked as
+    /// implied and has its data-type set. Faithful to
+    /// `Funcdata::opUndoPtradd` (funcdata_op.cc:579-609).
+    pub fn op_undo_ptradd_full(&mut self, op: &crate::op::PcodeOpRef, finalize: bool) {
         use crate::opcodes::OpCode;
-        // PTRADD has 3 inputs: base, index, multiplier.
-        // Get multiplier (input[2]).
-        let mult_size = {
+        // cc:582-583: multVn = op->getIn(2); int4 multSize = multVn->getOffset()
+        // (raw offset read; the scale Varnode is a constant by PTRADD shape,
+        // Ghidra does not gate on isConstant here).
+        let (mult_vn, mult_size) = {
             let g = op.0.read().unwrap();
-            if g.inrefs.len() < 3 {
-                return; // malformed PTRADD
+            if g.num_input() < 3 {
+                return; // malformed PTRADD (defensive; Ghidra reads slot 2 blind)
             }
             let vn = g.inrefs[2].clone();
             drop(g);
-            let vn_rg = vn.read().unwrap();
-            if vn_rg.is_constant() {
-                vn_rg.get_offset() as usize
-            } else {
-                1
-            }
+            let off = vn.read().unwrap().get_offset();
+            // int4 truncation of the uintb offset (C++ int4 cast).
+            (vn, off as u32 as i32)
         };
-        // Remove input[2] (the multiplier).
+        // cc:585-586: drop the scale input, PTRADD becomes INT_ADD.
         self.op_remove_input(op, 2);
-        // Change opcode to INT_ADD.
         self.op_set_opcode(op, OpCode::CPUI_INT_ADD);
+        // cc:587: scale 1 means plain INT_ADD(base, index).
         if mult_size == 1 {
-            return; // INT_ADD(base, index) is correct.
+            return;
         }
-        // The index input is now slot 1; scale it by mult_size via INT_MULT.
-        let index_vn = {
+        // cc:588: offVn = op->getIn(1) (after the slot-2 removal).
+        let off_vn = {
             let g = op.0.read().unwrap();
-            if g.inrefs.len() < 2 { return; }
+            if g.num_input() < 2 { return; }
             g.inrefs[1].clone()
         };
-        let mult_const = self.new_constant(8, mult_size as u64);
-        let mult_op = self.new_op(2, op.0.read().unwrap().get_seq_num().get_addr());
+        let (off_is_const, off_val, off_size) = {
+            let r = off_vn.read().unwrap();
+            (r.is_constant(), r.get_offset(), r.get_size())
+        };
+        if off_is_const {
+            // cc:589-597: fold multSize * offset into one masked constant,
+            // inheriting the read-facing type of the old offset when
+            // finalizing.
+            let new_val =
+                ((mult_size as i64) as u64).wrapping_mul(off_val)
+                    & crate::address::calc_mask(off_size);
+            let new_off_vn = self.new_constant(off_size, new_val);
+            if finalize {
+                let read_facing = off_vn
+                    .read()
+                    .unwrap()
+                    .get_type_read_facing_op(&op.0.read().unwrap(), 1);
+                if let Some(ct) = read_facing {
+                    new_off_vn.write().unwrap().update_type(ct);
+                }
+            }
+            self.op_set_input(op, new_off_vn, 1);
+            return;
+        }
+        // cc:598-608: implied INT_MULT(offVn, multVn) feeding slot 1 of the
+        // new INT_ADD, inserted before it. The scale Varnode itself is reused
+        // as the multiplier input (no fresh constant), and the product
+        // Varnode takes the offset's size and (finalized) the scale's type.
+        let mult_op = self.new_op(2, op.0.read().unwrap().get_addr());
         self.op_set_opcode(&mult_op, OpCode::CPUI_INT_MULT);
-        let mult_out = self.new_unique_out(8, &mult_op);
-        // mult_op inputs: index, mult_const
-        self.op_set_input(&mult_op, index_vn, 0);
-        self.op_set_input(&mult_op, mult_const, 1);
-        // Insert mult_op before op.
+        let add_vn = self.new_unique_out(off_size, &mult_op);
+        if finalize {
+            let mult_type = mult_vn.read().unwrap().get_type();
+            if let Some(ct) = mult_type {
+                add_vn.write().unwrap().update_type(ct);
+            }
+            add_vn.write().unwrap().set_implied();
+        }
+        self.op_set_input(&mult_op, off_vn, 0);
+        self.op_set_input(&mult_op, mult_vn, 1);
+        self.op_set_input(op, add_vn, 1);
         self.op_insert_before(&mult_op, op);
-        // Replace op's index input with mult_out.
-        self.op_set_input(op, mult_out, 1);
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::opMarkCpoolTransformed
