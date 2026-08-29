@@ -1019,6 +1019,12 @@ interior-goto 标记。
 
 ### selectGoto exhausted 调试注桩（2026-08-26，TRI2-STRUCT-SELECTGOTO-SELFLOOP-0001）
 - `debug_type_name` / `CollapseStructure::debug_dump_graph`（RUGRA-GLUE，
+- `bs_trace_cfg_sig` + `ActionBlockStructure::apply` pre/post witness（RUGRA-GLUE，
+  无 Ghidra 对应物，debug-only）：`RUGRA_BS_TRACE=1` 时在每次 blockstructure 施加
+  前后打印 bblocks 完整签名（槽位/索引/起始地址/类型/入出边及 GOTO 标记/末位
+  CBRANCH 及其 const/val/BOOLEAN_FLIP/块 flags），用于 mainloop 不收敛/CFG 往复
+  症状的逐轮夹逼（HTTPD-STRCASECMP-NONCONVERGE-0001 定位中引入：识别出
+  DeterminedBranch→remove_branch 空转 reset + if_no_exit 每轮 negate 的乒乓）。
   无 Ghidra 对应物）：`RUGRA_BS_DUMP=1` 时在 selectGoto exhausted 位点
   （blockaction.cc:1275 LowlevelError 站点）dump 全图 in/out/flags 状态，
   用于结构化分叉 triage。

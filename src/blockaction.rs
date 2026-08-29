@@ -40,6 +40,19 @@ impl Action for ActionBlockStructure {
             return Ok(action_status::NO_CHANGE);
         }
 
+        // RUGRA-GLUE: env-gated (RUGRA_BS_TRACE=1) CFG signature dumper for
+        // mainloop non-convergence triage; no Ghidra counterpart (debug-only).
+        if std::env::var("RUGRA_BS_TRACE")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+        {
+            static ROUND: std::sync::atomic::AtomicUsize =
+                std::sync::atomic::AtomicUsize::new(0);
+            let round = ROUND.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let sig = bs_trace_cfg_sig(&fd.bblocks);
+            eprintln!("[BSTRACE] {} round={} pre  {}", fd.name, round, sig);
+        }
+
         // blockaction.cc:2176 installs the default switch-edge labels on the
         // basic graph before buildCopy snapshots its ordered edge vectors.
         fd.install_switch_defaults();
@@ -51,6 +64,15 @@ impl Action for ActionBlockStructure {
         let mut collapse = CollapseStructure::new(&mut fd.sblocks, &fd.name);
         collapse.collapse_all();
         self.count += collapse.get_change_count() as i32;
+
+        // RUGRA-GLUE: post-collapse witness for the RUGRA_BS_TRACE dumper.
+        if std::env::var("RUGRA_BS_TRACE")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+        {
+            let sig = bs_trace_cfg_sig(&fd.bblocks);
+            eprintln!("[BSTRACE] {} post  {}", fd.name, sig);
+        }
 
         // Ghidra blockaction.cc:2184: `count += collapse.getChangeCount();
         // return 0;` — the structurer NEVER feeds the repeatapply loop
@@ -70,6 +92,63 @@ impl Action for ActionBlockStructure {
     fn get_name(&self) -> &str {
         "blockstructure"
     }
+}
+
+// RUGRA-GLUE: env-gated (RUGRA_BS_TRACE=1) CFG signature helper for
+// mainloop non-convergence triage; no Ghidra counterpart (debug-only).
+fn bs_trace_cfg_sig(graph: &BlockGraph) -> String {
+    let mut sig = format!("bbsize={}", graph.get_size());
+    for i in 0..graph.get_size() {
+        if let Some(b) = graph.get_block(i) {
+            let r = b.read().unwrap();
+            let addr = r
+                .as_any()
+                .downcast_ref::<BlockBasic>()
+                .map(|bb| format!("{:x}", bb.get_start_addr().as_u64()))
+                .unwrap_or_else(|| "-".to_string());
+            sig.push_str(&format!(
+                " {}#{}@{}<{}>i{}o{}",
+                i,
+                r.get_index(),
+                addr,
+                debug_type_name(&*r),
+                r.size_in(),
+                r.size_out()
+            ));
+            for s in 0..r.size_out() {
+                if let Some(e) = r.get_out(s) {
+                    let dst = e.point.read().unwrap().get_index();
+                    sig.push_str(&format!(
+                        "->{}{}",
+                        dst,
+                        if r.is_goto_out(s) { "G" } else { "" }
+                    ));
+                }
+            }
+            let cb = r
+                .get_ops()
+                .last()
+                .map(|o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                .unwrap_or(false);
+            if cb {
+                sig.push('C');
+                if let Some(o) = r.get_ops().last() {
+                    let op = o.0.read().unwrap();
+                    let (konst, val) = op
+                        .get_in(1)
+                        .map(|v| {
+                            let vg = v.read().unwrap();
+                            (vg.is_constant(), vg.get_offset())
+                        })
+                        .unwrap_or((false, 0));
+                    let flip = (op.flags & crate::op::pcodeop_flags::BOOLEAN_FLIP) != 0;
+                    sig.push_str(&format!("[cbr const={} val={:x} flip={}]", konst, val, flip));
+                }
+            }
+            sig.push_str(&format!("F{:#x}", r.get_flags()));
+        }
+    }
+    sig
 }
 
 // RUGRA-GLUE: short type tag for the env-gated RUGRA_BS_DUMP graph dumper
