@@ -2131,3 +2131,9 @@ pre-loop 尺寸会漏访问 joinblock —— 而它持有移动后的 cbranch1 �
 可再次 join。测试:`test_nodejoin_dynamic_size_rejoins_joinblock`(三同条件菱形
 → count==2、两个 JOINED_BLOCK;oracle 侧 I_triple 同为 count=2,见
 nodejoin_condjoin_1204 双侧 fixture)。
+
+## 2026-08-29:NODEJOIN F2-F5 簇差分收尾
+E2E curl(124/124,0 panic):defects=1(getparameter 空 else,他人项,不变)、
+numbering=0、skeleton 2911→2884(−27,向 golden)。per-func:next_url 150→134、
+getparameter.constprop.0 678→669、my_get_token 57→55,其余 121 函数零变化。
+双侧 fixture nodejoin_condjoin_1204 9/9 MATCH(sha256 a5fdf6f3...)。
