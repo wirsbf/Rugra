@@ -64,7 +64,7 @@
 > "保护格代际"假设被双侧证据否定——console oracle 缺 Java NoReturnAnalyzer 数据造成的假差异)后:
 > **defects 0/numbering 0/0 panic/124/124 全反编译**。同窗口集成:RC2(main 体 245→643,51×setopt 级联恢复)+
 > C4(INT_NOT token 序,非法形态 2→0)+goto 发射 target_dyn 切换+njf234 复核单门补齐(cc:2076)。
-> **当前权威基线(master `9d419f3a`)**:curl E2E skeleton **3119**/defects **0**/numbering **0**——**三项全零**
+> **当前权威基线(master `9d419f3a`)**:curl E2E skeleton **3089**/defects **0**/numbering **0**——**三项全零**(do-while 吸收链修复-30)
 > (PendingBrace 动态机制 1:1 移植+backfill 签号门修 numbering;+9=8 处裸 else 恢复 golden 括号结构);
 > httpd 2325/7/0(iced 链:cmp/test 旧 flag 偏移全错修正+js/jns 曾零 op+c5 零 op 臂;-46 空投影;+2 defects=下游结构化残差已解释)。历史链:2911→…→3110→**3119(0/0)**。(main iVar4 dup,
 > PRINTC-STRUCTEMIT 残差簇已登记);CARRY 泄漏 5→**0**(CARRY1 形态×3);main URL-glob 区与 golden 结构 1:1;
@@ -117,7 +117,9 @@
 | unassigned | `BLOCKACTION-CASEFALLTHRU-INTERLEAVE-0001` | OPEN(O-5b,预存) | 待认领(`src/blockaction.rs`) | cc:1844 caseFallthru per-block 交错 vs Rugra 批处理;预存未登记 |
 | w-printc2(新派) | `PRINTC-STRUCTEMIT-RESIDUALS-0001`(簇) | OPEN(w-rc3 登记) | `src/printc.rs`(已释放) | ①MAIN-IVAR4-DUP(numbering+1 源根)②MAIN-FORHDR ③WHILEIF-FOLD-PREFIX ④C3 残差三件(cast链/piece-split/typeop push路由)⑤C3-HTTPD-FLAGS |
 | 已闭环(诊断改判+fixture MATCH) | `FLOW-339E-OVERLAP-HLT-0001` | **DONE**(根因改判:flow 已对齐;缺块=known-noreturn 数据差,Rugra 149 块=对全分析 golden 正确;fixture oracle 无 Java 分析器才落穿 150 块;双侧 3 块图逐字节同) | fixture 已登记 | 门控 RUGRA_ORACLE_FIXTURE_DATA 供 fixture 对齐 |
-| w-dowhile(新派) | `BLOCKACTION-DOWHILE-ABSORB-0001` | OPEN(do-while 精确位移) | `src/blockaction.rs`(rc4 释放) | w-339e 续缝:事件对齐前缀 53(#15 infloop@147 双侧同位);**首分歧 #54:oracle goto@67 vs Rugra if_goto@67**,其后 oracle #56 dowhile@67/#60 dowhile@70 吸收链全缺;门控下 main 规则计数 53cat/29properif/1infloop/0dowhile(golden 5);续缝命令与证据=/tmp/rugra-reports/w-339e-2026-08-30.md;工具=/tmp/w-rc4-ore+RUGRA_BS_VISIT |
+| 已集成(b3dd0c3c+4829107c,Cross-Review: PENDING) | `BLOCKACTION-DOWHILE-ABSORB-0001` | **FIXED**(**main do_while 0→5=golden**;126/126 规则事件双侧对齐;真缝=cat 后 force 步缺失(forceOutputNum 复合自环+forceFalseEdge,block.cc:880-889)非 goto 分类;fixture MATCH) | `src/blockaction.rs`(已落库) | 残差:①printc 渲染 do{4 vs 6(嵌套 DoWhile 发射平铺,printc 域);②oracle 二轮 collapseAll(管线中段重结构化,登记) |
+| unassigned | `PRINTC-NESTED-DOWHILE-EMIT-0001` | OPEN(残差①) | 待认领(`src/printc.rs`) | main 渲染 `do {` 4 vs oracle 6:两个嵌套 DoWhile 复合体被发射层平铺成单次迭代(规则级已对齐) |
+| unassigned | `PIPELINE-SECOND-COLLAPSE-0001` | OPEN(残差②,观察) | 无(登记) | oracle 对 main 有第二轮 collapseAll(146 块重启,事件 127-250)=管线中段 CFG 变更触发 structureReset 的重结构化 | | OPEN(do-while 精确位移) | `src/blockaction.rs`(rc4 释放) | w-339e 续缝:事件对齐前缀 53(#15 infloop@147 双侧同位);**首分歧 #54:oracle goto@67 vs Rugra if_goto@67**,其后 oracle #56 dowhile@67/#60 dowhile@70 吸收链全缺;门控下 main 规则计数 53cat/29properif/1infloop/0dowhile(golden 5);续缝命令与证据=/tmp/rugra-reports/w-339e-2026-08-30.md;工具=/tmp/w-rc4-ore+RUGRA_BS_VISIT |
  | OPEN(P1,do-while 最终阻塞) | 待认领(`src/funcdata.rs`/`src/flow.rs`;zombie 完成后接) | main(0x25a0,3531B)/_start(0x3374) 重叠区的 `hlt`:oracle flow-follow 越 noreturn __libc_start_main 落入(oracle 150 vs Rugra 149 块);修复后用 w-rc4 固化的双侧 visit-trace 对拍法可快速续缝 do-while 吸收链(oracle 事件 53-80) |
 | unassigned | `MAIN-RC5-LOOPCOND-VARMAP-0001` | P1 | varmap/heritage 域 | 循环条件错接:`extraout_var_00 != 0` 应为 `iVar17 < argc-1` |
 | 已集成+复核中 | `NODEJOIN-F2/F3/F4/F5-0001` | **FIXED**(798466b1..92ad5358;双侧 fixture 9/9 MATCH;Cross-Review=reviewer-njf234 在途) | `src/coreaction.rs`(已落库) | F4 findDups 六门序/F3 same-cond 全 join/F2 execute 四步+mergeneed 有序/F5 动态 size;E2E 2911→**2884**(next_url 150→134/getparameter 678→669/my_get_token 57→55,余零变化,全向 golden);移交项 action.rs fixture 改共享 written 条件已修 | ConditionalJoin::execute 四步仅做1(nodeJoinCreateBlock);setupMultiequals/moveCbranch/cutDownMultiequalities(blockaction.cc:2098-2101)全缺,cbranch未迁入join块 |
