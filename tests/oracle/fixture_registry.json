@@ -6666,7 +6666,7 @@
   },
   {
    "id": "printc_anonymous_pointer_decl",
-   "description": "PTRSUB-TYPED-DECL-RESIDUAL-0001 oracle fixture (registered during fixture-v1 migration; was orphaned metadata)",
+   "description": "PTRSUB-TYPED-DECL-RESIDUAL-0001 oracle fixture (registered during fixture-v1 migration; was orphaned metadata; evidence_status synced to MATCH per 98837deb residual withdrawal)",
    "runner": [
     "tools/run_printc_anonymous_pointer_decl_oracle.sh"
    ],
@@ -6675,7 +6675,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MISMATCH",
+   "evidence_status": "MATCH",
    "cache": {
     "metadata": "tests/oracle/printc_anonymous_pointer_decl_1204.metadata.json",
     "tools": {
