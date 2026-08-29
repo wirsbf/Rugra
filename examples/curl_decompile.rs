@@ -2576,6 +2576,19 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
             }
         }
     }
+    // FLOW-339E-OVERLAP-HLT-0001 fixture-parity gate: the per-function
+    // fixture oracle (golden_dump_1204) runs BfdArchitecture +
+    // readLoaderSymbols WITHOUT any Java-side analyzer, so no callee carries
+    // the "Non-Returning Functions - Known" DB attribute at flow time and
+    // `FlowInfo::checkForFlowModification` (flow.cc:636-651) never halts
+    // flow at those call sites — main's graph then falls through the
+    // `__stack_chk_fail@plt` call into the _start overlap and contains the
+    // @339e `hlt` self-loop block (150 blocks vs the analyzer-marked
+    // environment's 149). Setting RUGRA_ORACLE_FIXTURE_DATA=1 skips both
+    // halves of FLOW-NORETURN-DATA-0001 (segments (b) and (c)) to reproduce
+    // that data environment for fixture/visit-trace comparisons; the E2E
+    // golden (full Ghidra analysis) keeps the analyzer emulation by default.
+    let oracle_fixture_data = std::env::var("RUGRA_ORACLE_FIXTURE_DATA").is_ok();
     // FLOW-NORETURN-DATA-0001, pre-flow function-attribute half (merge
     // adjudication, root c1598da follow-up): Ghidra's "Non-Returning
     // Functions - Known" analyzer marks the matched function's own DB
@@ -2602,7 +2615,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         .get(&target.vaddr)
         .cloned()
         .unwrap_or_else(|| target.name.clone());
-    if mark_known_no_return_function(&mut fd, &target_symbol_name) {
+    if !oracle_fixture_data && mark_known_no_return_function(&mut fd, &target_symbol_name) {
         eprintln!(
             "[PREPASS] {} marked known no-return ({} matches Non-Returning Functions - Known)",
             target.name, target_symbol_name
@@ -2639,7 +2652,11 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // Rugra's Funcdata owns no per-callee Funcdata at flow time, so the
     // driver passes the callee `funcp` slices through the extended entry
     // point (empty table = the old behavior).
-    let callee_protos = known_no_return_callee_protos(&fd.symbol_table);
+    let callee_protos = if oracle_fixture_data {
+        std::collections::BTreeMap::new()
+    } else {
+        known_no_return_callee_protos(&fd.symbol_table)
+    };
     if !callee_protos.is_empty() {
         eprintln!(
             "[PREPASS] {} flow callee table: {} known no-return callees",
