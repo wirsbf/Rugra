@@ -9,9 +9,9 @@
 - Declaration references: 6317
 - Raw Ctags function records: 15811
 - Ghidra IDs carrying a guard disambiguator: 12
-- Rugra functions: 10496
-  (8700 production + 1796 test)
-- Exact definition-start mappings: 3978
+- Rugra functions: 10502
+  (8703 production + 1799 test)
+- Exact definition-start mappings: 3979
 - Body-line references requiring audit: 354
 
 The old hand-maintained `~2055` denominator is not a completion metric. The generated
@@ -220,7 +220,7 @@ records complete same-input/same-output evidence.
 | `type.hh` | 132 | 30 | 0 | 102 |
 | `typegrp_ghidra.cc` | 1 | 0 | 0 | 1 |
 | `typegrp_ghidra.hh` | 2 | 0 | 0 | 2 |
-| `typeop.cc` | 210 | 77 | 4 | 129 |
+| `typeop.cc` | 210 | 78 | 4 | 128 |
 | `typeop.hh` | 102 | 27 | 0 | 75 |
 | `unify.cc` | 142 | 133 | 0 | 9 |
 | `unify.hh` | 163 | 148 | 0 | 15 |
