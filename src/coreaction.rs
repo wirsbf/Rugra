@@ -13857,6 +13857,17 @@ impl Action for ActionNodeJoin {
                 // exita/exitb must match between bb and bb2 (false/true exits).
                 let exita = out0.point.clone();
                 let exitb = out1.point.clone();
+                // blockaction.cc:2076: `if (exita == exitb) return false;` —
+                // a CBRANCH whose target equals its fallthru registers BOTH
+                // out-edges to the same block (flow.cc:960-967 registers
+                // fallthru+branch unconditionally; only BRANCHIND dedups),
+                // constructing sizeOut==2 with identical exits. Ghidra
+                // rejects every match there; without the gate the join would
+                // run removeEdge/moveOutEdge surgery twice on the same edge
+                // and corrupt the CFG (R-NJF234-CROSSREVIEW MISMATCH #1).
+                if Arc::ptr_eq(&exita, &exitb) {
+                    continue;
+                }
                 if !Arc::ptr_eq(&b2o0.point, &exita) || !Arc::ptr_eq(&b2o1.point, &exitb) {
                     continue;
                 }

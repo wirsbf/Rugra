@@ -2137,3 +2137,11 @@ E2E curl(124/124,0 panic):defects=1(getparameter 空 else,他人项,不变)、
 numbering=0、skeleton 2911→2884(−27,向 golden)。per-func:next_url 150→134、
 getparameter.constprop.0 678→669、my_get_token 57→55,其余 121 函数零变化。
 双侧 fixture nodejoin_condjoin_1204 9/9 MATCH(sha256 a5fdf6f3...)。
+
+## 2026-08-30:ConditionalJoin match 补 cc:2076 同目标门(R-NJF234-CROSSREVIEW MISMATCH #1)
+
+复核 REJECT 项:Ghidra blockaction.cc:2076 `if (exita == exitb) return false;` 在 Rugra 缺失。
+可达性:CBRANCH 目标==fallthru 时 flow.cc:960-967 无条件登记两条同块出边(仅 BRANCHIND 去重),
+构造出 sizeOut==2 且双出口同块的输入;Ghidra 拒绝一切 match,缺门则对同一边做两次
+removeEdge/moveOutEdge 手术 → find_out_index panic 或 CFG 损坏。修复=计算出 exita/exitb 后
+立即 `Arc::ptr_eq(&exita,&exitb) → continue`。当前语料不触发(单向加门,零新 join 路径)。
