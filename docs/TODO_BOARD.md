@@ -64,7 +64,7 @@
 > "保护格代际"假设被双侧证据否定——console oracle 缺 Java NoReturnAnalyzer 数据造成的假差异)后:
 > **defects 0/numbering 0/0 panic/124/124 全反编译**。同窗口集成:RC2(main 体 245→643,51×setopt 级联恢复)+
 > C4(INT_NOT token 序,非法形态 2→0)+goto 发射 target_dyn 切换+njf234 复核单门补齐(cc:2076)。
-> **当前权威基线(master `9d419f3a`)**:curl E2E skeleton **3089**/defects **0**/numbering **0**——**三项全零**(do-while 吸收链修复-30);registry 第七窗已并(lint 0 findings@分支锚,dowhile/push88 窗例行待批)
+> **当前权威基线(master `e2450ea5`)**:curl E2E skeleton **3095**/defects **0**/numbering **0**——**三项全零**(hdefects DoNothing 忠实重写-13+ndo 嵌套发射恢复+19;main `do {` 3→5=golden、corpus do 17→23);httpd **2231/3/0**(defects 7→3:ActionDoNothing 忠实重写+blockRemoveInternal 完整移植;剩3=活臂else新族);历史链:3528→2911→…→3089→3076→**3095(0/0)**;registry 第七窗已并,dowhile/push88/hdef/ndo 窗例行待批
 > (PendingBrace 动态机制 1:1 移植+backfill 签号门修 numbering;+9=8 处裸 else 恢复 golden 括号结构);
 > httpd 2325/7/0(iced 链:cmp/test 旧 flag 偏移全错修正+js/jns 曾零 op+c5 零 op 臂;-46 空投影;+2 defects=下游结构化残差已解释)。历史链:2911→…→3110→**3119(0/0)**。(main iVar4 dup,
 > PRINTC-STRUCTEMIT 残差簇已登记);CARRY 泄漏 5→**0**(CARRY1 形态×3);main URL-glob 区与 golden 结构 1:1;
@@ -103,6 +103,8 @@
 | unassigned | `ZF-LOOP-OSCILL-0001` | OPEN(iced 移交,被 c5 掩盖未根治) | 待认领(规则域定位) | ap_strcasestr >5min 不收敛:ZF 写链×jcc 读×循环头触发 rule_repeatapply 震荡;oracle 同 IR 收敛 ⇒ Rugra 规则缺陷 |
 | 已集成(01b2bc95) | `X86LIFT-PUSH88-0001` | **DONE**(push 33/33 形态 op-for-op vs sla dump;万能尾 INT_SUB(RSP)→STORE;SIB scale=1 也发射;rip displacement 已解析坑规避;curl 字节不变) | `src/disasm/x86_lift.rs`(已落库) | httpd 2325→2546(+221=暴露既有共享管线缺口,非 lifter 缺陷;defects 7→5 改善) |
 | 已集成(0e7acc89) | `HTTPD-STACKSLOT-FOLD-0001` | **FIXED**(根因改判:httpd runner 从未 attach Architecture→RuleStore/LoadVarnode 的 getArch 解引用走 None miss;curl 自带 worker arch 故无泄漏;一行 runner 修复) | `examples/httpd_decompile.rs`(已落库) | httpd 2546→**2230**(−316,逐函数只降不升)、in_RSP 行 148→**0**;curl 3089/0/0 字节一致 |
+| unassigned | `BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001` | OPEN(ndo 残差) | 待认领(`src/blockaction.rs`;已释放) | `goto X; X:` 自指标(next_url/glob_word/getparameter 新暴露)=scopeBreak 的 goto_type 缺失(block.cc:2866-2874) |
+| unassigned | `HTTPD-EMPTYELSE-LIVEARM-0001` | OPEN(hdefects 残差,3 defects) | 待认领(ruleaction 域) | else 臂含活 PIECE/COPY(非 do-nothing);oracle 同区域=复合条件链;数据流/implied 时机分歧;探桩复用路径=/tmp/rugra-reports/w-hdef-2026-08-30.md |
 | unassigned | `FUNCDATA-CANONICAL-ARCH-0001` | OPEN(stackfold 移交,已原型验证) | 待认领(`src/funcdata.rs`+subflow 测试一行) | Funcdata::new 自动绑 canonical Architecture(oracle 不变式 glb=scope->getArch());原型 E2E 数字相同;翻转 subflow::tests::test_split_datatype_constructs 的过时 arch-less 断言 | 待认领(`src/heritage.rs`空间基域;hdefects 完成后接) | `*RSP-k` STORE 未重索引进 stack 空间→以指针表达式打印(in_RSP 行 52→150);Ghidra 经 spacebase/heritage 折叠+死码消 push/pop 序言 |
 | unassigned | `COREACTION-CALLIN0-CLOBBER-0001` | OPEN(P1) | 待认领(`src/coreaction.rs`;f23 完成后接) | "analysis"组 STORE 压力下把 CALL coderef 换 const:0(FUN_0 症状);前缀二分 DECOMPILE prefix 18→19;复现工具 examples/x86push_dbg.rs | | OPEN(爆炸半径大,独立任务) | 待认领(`src/disasm/x86_lift.rs`) | push 仍零-op(push88 语义,1385 处,影响全部函数序言) |
 | unassigned | `X86LIFT-SHIFTS-FLAGS-0001` | OPEN(后续 family) | 待认领(同上) | shl/shr/sar 的 flag 语义(~38 op/条)未实现 |
