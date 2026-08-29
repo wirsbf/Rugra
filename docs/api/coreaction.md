@@ -2022,3 +2022,32 @@ placeholder 前后 trial 映射。
 完整 `Address(AddrSpace*,offset)` 身份、generic newVarnode 属性尾、
 non-scalar/ModelRules 以及 `func_link_output` 的 extension/error 分支仍为
 `MISMATCH`/`UNTESTED`；fixture overall 正确保持 `UNTESTED`。
+
+## 2026-08-29：INFERTYPES-SETTLE-0001 — temp 类型经 TypeFactory 规范化（interned-pointer 收敛契约）
+
+`ActionInferTypes` 的 `writeBack`（coreaction.cc:5043-5060）依赖
+`Varnode::updateType` 的 C++ 指针比较 `type == ct`（varnode.cc:459）判收敛。
+oracle 里该比较成立的前提是**所有流经 temp 系统的 `Datatype*` 都出自
+TypeFactory 的 intern**：`buildLocaltypes` 的种子来自
+`getOutputLocal/getInputLocal`（终归 `tlst->getBase`，typeop.cc:264），每个
+`propagateType` override 的产物也经工厂构造（`TypeOp::propagateToPointer`
+终归 `t->getTypePointer`，typeop.cc:197）。Rugra 的 temp 生产线含免工厂构造
+（COPY-spacebase 指针臂、`typeop::propagate_to_pointer`），裸 `Arc::ptr_eq`
+跨轮永假，`writeBack` 每轮报 change，`localcount` 撞 7 触发
+「Type propagation algorithm not settling」（coreaction.cc:5390-5392，
+myprogress 实证：同名 `old==new` 而 Arc 指针不同）。
+
+修复：新增 `canonicalize_temp_type`（对应 oracle 全类型经
+`TypeFactory::findAdd` 规范化的事实，type.cc:3392），在两个 temp 写入
+choke point 生效 —— `build_localtypes` 的 `temps.insert`（cc:5035
+setTempType）与 `propagate_type_edge` 的 `temps.insert`（cc:5108）。规范化
+保守：命名 Base 走 `get_base_named`（nametree name+id intern，type.cc:3667），
+无名 Base 走 `get_base` 且要求 size/metatype/name 三相等；命名 Pointer 先
+`find_by_name` 命中且结构相容才替换（Ghidra 侧不符会 raise
+"Trying to alter definition of type"，type.cc:3423；Rugra 保守保留原 Arc，
+稳定生产方 Arc 同样收敛），无名 Pointer 递归规范化 pointee 后走 `get_ptr`
+（type.cc:3867-3883）。fixture：`infertypes_settle_1204`（双侧 MATCH，
+8 轮 apply 的 metatype/size 表 + 实例身份稳定性逐字节一致）。
+
+证据边界：本切片只证明 interned 收敛契约；`ACTION-INFERTYPES-DISPATCH-0001`
+等完整 dispatch 闭包状态不变。

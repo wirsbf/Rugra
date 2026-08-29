@@ -5259,6 +5259,127 @@ fn make_ptr(
     }))
 }
 
+// Ghidra: type.cc:3392 TypeFactory::findAdd (canonical interning every propagateType product flows through)
+/// Canonicalize a temporary data-type through the architecture TypeFactory.
+///
+/// In the oracle, every `Datatype*` that ActionInferTypes handles is
+/// TypeFactory-interned: `buildLocaltypes` seeds from `getOutputLocal`/
+/// `getInputLocal`, which end in `tlst->getBase(...)` (typeop.cc:264), and
+/// every `propagateType` override builds its result through the factory
+/// (`TypeOp::propagateToPointer` ends in `t->getTypePointer`, typeop.cc:197).
+/// `Varnode::updateType` then settles on the C++ pointer comparison
+/// `type == ct` (varnode.cc:459) — structurally identical types are the
+/// same interned pointer, so a second writeBack pass reports no change and
+/// the `localcount >= 7` "not settling" warning (coreaction.cc:5390-5392)
+/// stays cold.
+///
+/// Rugra's temp-type producers include factory-free constructors (the
+/// COPY-spacebase pointer arm below, `typeop::propagate_to_pointer`), so a
+/// raw `Arc::ptr_eq` in `Varnode::updateType` never matches across passes
+/// and writeBack reported a change on every round forever. Routing every
+/// temp type through the factory here restores the interned-pointer
+/// invariant the oracle's settle behavior depends on. Canonicalization is
+/// conservative: a factory answer is accepted only when it is structurally
+/// equal (same metatype/size/name for scalars, same size/wordsize for
+/// pointers with a recursively canonical pointee); anything else passes
+/// through unchanged.
+fn canonicalize_temp_type(
+    dt: &std::sync::Arc<crate::type_system::datatype::Datatype>,
+    type_factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
+) -> std::sync::Arc<crate::type_system::datatype::Datatype> {
+    use crate::type_system::datatype::{Datatype, TypeMetatype};
+    let Some(factory) = type_factory else {
+        return dt.clone();
+    };
+    match dt.as_ref() {
+        Datatype::Base(_) => {
+            let size = dt.get_size();
+            let meta = dt.get_metatype();
+            if !matches!(
+                meta,
+                TypeMetatype::Bool
+                    | TypeMetatype::Uint
+                    | TypeMetatype::Int
+                    | TypeMetatype::Float
+                    | TypeMetatype::Unknown
+            ) {
+                return dt.clone();
+            }
+            let mut factory = factory
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let name = dt.get_name();
+            if !name.is_empty() {
+                // Named scalar (e.g. "size_t"): the oracle keeps every named
+                // Datatype in the factory nametree (type.cc:3404-3405), so
+                // getBase(s,m,n) (type.cc:3667-3673) returns the same interned
+                // instance on every call.
+                match factory.get_base_named(size, meta, name) {
+                    Ok(canonical)
+                        if canonical.get_size() == size && canonical.get_metatype() == meta =>
+                    {
+                        return canonical;
+                    }
+                    _ => return dt.clone(),
+                }
+            }
+            match factory.get_base(size, meta) {
+                Some(canonical)
+                    if canonical.get_size() == size
+                        && canonical.get_metatype() == meta
+                        && canonical.get_name() == dt.get_name() =>
+                {
+                    canonical
+                }
+                _ => dt.clone(),
+            }
+        }
+        Datatype::Pointer(ptr) => {
+            let pointee =
+                canonicalize_temp_type(&ptr.ptr_to, type_factory);
+            // Preserve the pointer's own name: named pointers (e.g. the
+            // signature table's "char *") intern by (name,id) in the factory
+            // nametree (type.cc:3404-3405/3417-3425), and the print layer
+            // renders a named pointer through its name. Look the name up in
+            // the factory and accept only a structurally compatible entry
+            // (Ghidra would raise "Trying to alter definition of type"
+            // otherwise, type.cc:3423); on any miss keep the original Arc —
+            // stable producer Arcs still settle under ptr_eq. Unnamed
+            // pointers take the structural getTypePointer(s,pt,ws) form
+            // (type.cc:3867-3883).
+            if !ptr.base.name.is_empty() {
+                let existing = factory
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .find_by_name(&ptr.base.name);
+                if let Some(canonical) = existing {
+                    let compatible = canonical.get_size() == dt.get_size()
+                        && canonical.get_metatype() == TypeMetatype::Pointer
+                        && matches!(canonical.as_ref(), Datatype::Pointer(cp)
+                            if std::sync::Arc::ptr_eq(&cp.ptr_to, &pointee)
+                                || cp.ptr_to.type_order(&pointee) == 0);
+                    if compatible {
+                        return canonical;
+                    }
+                }
+                return dt.clone();
+            }
+            let mut factory = factory
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let canonical = factory.get_ptr(pointee);
+            if canonical.get_size() == dt.get_size()
+                && canonical.get_metatype() == TypeMetatype::Pointer
+            {
+                canonical
+            } else {
+                dt.clone()
+            }
+        }
+        _ => dt.clone(),
+    }
+}
+
 impl ActionInferTypes {
     // Ghidra: coreaction.cc:5008 ActionInferTypes::buildLocaltypes
     /// Collect the local data-type for each eligible Varnode in loc-set order.
@@ -5358,7 +5479,14 @@ impl ActionInferTypes {
                 vn_arc.write().unwrap().set_stop_up_propagation();
             }
             if let Some(local_type) = local_type {
-                        temps.insert(id , local_type);
+                // The oracle seeds temp types exclusively from factory types
+                // (typeop.cc:264 tlst->getBase); canonicalize so identical
+                // locals share one Arc across passes (writeBack settle).
+                let local_type = canonicalize_temp_type(
+                    &local_type,
+                    fd.arch.as_ref().and_then(|a| a.types.as_ref()),
+                );
+                temps.insert(id , local_type);
             }
         }
         Ok(())
@@ -5461,7 +5589,11 @@ impl ActionInferTypes {
 
         // coreaction.cc:5106-5110: setTempType happens even if this Varnode is
         // already marked. The mark suppresses only recursive descent; it must
-        // not suppress the better temporary type itself.
+        // not suppress the better temporary type itself. The oracle's temp
+        // type is factory-interned (every propagateType override builds
+        // through the TypeFactory); canonicalize here so structurally equal
+        // types share one Arc and writeBack's updateType settles.
+        let newtype = canonicalize_temp_type(&newtype, type_factory);
         let out_id = vn_id(&out_vn_arc.read().unwrap());
         temps.insert(out_id, newtype);
         (!active_path.contains(&out_id)).then_some(out_vn_arc)
@@ -5893,7 +6025,7 @@ impl ActionInferTypes {
         let mut changed = false;
         for vn_arc in fd.vbank.loc_tree.iter().map(|v| v.0.clone()) {
             let id = vn_id(&vn_arc.read().unwrap());
-            
+
             if let Some(ct) = temps.get(&id) {
                 let mut vn = vn_arc.write().unwrap();
                 if vn.is_annotation() {
