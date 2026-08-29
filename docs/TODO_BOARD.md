@@ -23,7 +23,11 @@
 > 子 Agent 交付（branch commit + 报告 `/tmp/rugra-reports/<name>-2026-08-29.md`）→ root 串行 cherry-pick →
 > flock 构建 → E2E → 差分门禁（defects 必须 0）→ 更新本板。板面 wave 节 root 维护，子 Agent 不直接改本板。
 > Agent 完成即由 root 从队列补位。**并发上限 2026-08-29 下午起调整为 5(用户指令)**;当前 5 活跃:
-> w-anondecl2/w-newvarnode2/w-identify2/w-registry2(续作 writer)+reviewer-descend(机制 C 复核 55783411)。
+> w-anondecl2/w-newvarnode2/w-identify2/w-registry2(续作 writer)+w-myprog-cluster(myprogress/glob_range 簇)。
+> **机制 C 复核已闭环**:`R-DESCEND-CROSSREVIEW-2026-08-29.md` 对 `55783411` 判 **APPROVE**(五 Rule+簿记链
+> 四类语义全 MATCH,复核者独立重跑 E2E 确认 defects=0/numbering=1/skeleton=2134);其 F1 跟进项已修——
+> `RULE-NEGATEIDENTITY-CALCMASK-BOUNDARY-0001`(f91eb0265 引入的 `size>=64` bits/bytes 混淆,改用忠实
+> calc_mask 8 字节饱和,master `99ae9c35`,Cross-Review: APPROVE 随附)。
 > 首批 5 reader 已终止(r-getparam 交付 jumptable 256→88 截断/cmp $0x57 guard/BOOL_AND pullback 情报;
 > r-f2s/r-plt 留 diag 分支 agent/reader-*;r-main/r-parseconfig 无报告,结论需重查)。
 > **已集成**:`PTRSUB-SWITCH-CAST-RESIDUAL-0001` phase A(w-switchfix2,fixture+runner 三模式绿,
