@@ -4848,6 +4848,7 @@ impl ActionSetCasts {
     /// `TypeOp::inheritsSignFirstParamOnly` (typeop.hh:134,
     /// `inherits_sign_zero`): shifts and INT_REM/INT_SREM only inherit sign
     /// from their first parameter.
+    // RUGRA-GLUE: addlflags predicate mirror of TypeOp::inheritsSignFirstParamOnly (typeop.hh:134)
     fn op_inherits_sign_first_param_only(opc: OpCode) -> bool {
         matches!(
             opc,
@@ -4860,6 +4861,7 @@ impl ActionSetCasts {
     }
 
     /// `TypeOp::isShiftOp` (typeop.hh:137, `shift_op`).
+    // RUGRA-GLUE: addlflags predicate mirror of TypeOp::isShiftOp (typeop.hh:137)
     fn op_is_shift(opc: OpCode) -> bool {
         matches!(
             opc,
