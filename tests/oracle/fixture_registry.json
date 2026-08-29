@@ -5004,6 +5004,61 @@
         ],
         "notes": "phase A diagnostic fixture delivered by w-switchfix2; phase B dependency-ordered fix plan in /tmp/rugra-reports/w-switchfix2-2026-08-29.md section 4"
       }
+    },
+    {
+      "id": "infertypes_settle_1204",
+      "description": "ActionInferTypes temp-type canonicalization settle contract: TypeFactory-interned pointer equality across propagation rounds versus locked Ghidra 12.0.4; covers RuleSubfloatConvert defer path",
+      "runner": [
+        "tools/run_infertypes_settle_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/infertypes_settle_1204.metadata.json",
+        "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+        "rust_base_commit": "93bf5daac8ac16d8e812de43194e462f2dee1c54"
+      },
+      "impact": {
+        "todo_ids": [
+          "TRI4-MYPROGRESS-SETTLE-0001",
+          "SUBFLOAT-TRANSFORM-NOT-PORTED-0001"
+        ],
+        "src_files": [
+          "src/coreaction.rs"
+        ],
+        "notes": "delivered by w-myprog-cluster; integrated by root"
+      }
+    },
+    {
+      "id": "varmap_dupdecl_1204",
+      "description": "prettyprint backfill duplicate-declaration gates: condition-continuation line misread as signature and uVar substring word-boundary scan versus locked Ghidra 12.0.4",
+      "runner": [
+        "tools/run_varmap_dupdecl_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/varmap_dupdecl_1204.metadata.json",
+        "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+        "rust_base_commit": "93bf5daac8ac16d8e812de43194e462f2dee1c54"
+      },
+      "impact": {
+        "todo_ids": [
+          "VARMAP-GLOBRANGE-DUPDECL-0001"
+        ],
+        "src_files": [
+          "src/coreaction.rs"
+        ],
+        "notes": "delivered by w-myprog-cluster; integrated by root"
+      }
     }
   ]
 }
