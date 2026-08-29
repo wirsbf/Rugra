@@ -1318,6 +1318,12 @@ impl PrintC {
             // destructured inputs exist, so mirror the binary-arm guard.
             OpCode::CPUI_PTRADD => has(0) && has(1),
             OpCode::CPUI_PIECE => has(0) && has(1),
+            // printc.hh:292-294 opIntCarry/opIntScarry/opIntSborrow → opFunc
+            // (printc.cc:424-441): binary functional syntax; the dispatch arm
+            // is total when both inputs exist, like the other binary arms.
+            OpCode::CPUI_INT_CARRY
+            | OpCode::CPUI_INT_SCARRY
+            | OpCode::CPUI_INT_SBORROW => has(0) && has(1),
             _ => false,
         }
     }
@@ -2242,6 +2248,17 @@ impl PrintC {
                 let nm = Self::rpn_operator_name_piece(op);
                 self.rpn_op_func(op_arc, op, &nm);
             }
+            // Ghidra: printc.hh:292-294 PrintC::opIntCarry/opIntScarry/
+            // opIntSborrow { opFunc(op); } (typeop.hh:299-307 TypeOpIntCarry
+            // ::push → lng->opIntCarry). Functional syntax via opFunc with
+            // the carry-family getOperatorName (CARRY1/SCARRY4/SBORROW2).
+            // GLOBWORD-C3: without this arm the implied INT_CARRY def was
+            // not inline-reachable and the CF flag leaked its unnamed
+            // location `register0x00000200` (5 sites in the curl corpus).
+            OpCode::CPUI_INT_CARRY | OpCode::CPUI_INT_SCARRY | OpCode::CPUI_INT_SBORROW => {
+                let nm = Self::rpn_operator_name_carry(op);
+                self.rpn_op_func(op_arc, op, &nm);
+            }
             // printc.cc:929 opPtrsub: struct/union field access `ptr->field`,
             // array element pointer `*ptr`/`ptr[0]`, or `&ptr->field`.
             // Faithful port of `PrintC::opPtrsub(const PcodeOp*)`
@@ -2667,6 +2684,29 @@ impl PrintC {
             .map(|a| a.read().unwrap().get_size())
             .unwrap_or(0);
         format!("CONCAT{}{}", s0, s1)
+    }
+
+    // Ghidra: typeop.cc:1340 TypeOpIntCarry::getOperatorName (and 1356/1372
+    // for TypeOpIntScarry/TypeOpIntSborrow)
+    /// `name + dec(in0->getSize())` for the carry-family functional syntax:
+    /// CARRY/SCARRY/SBORROW append the decimal size of input 0
+    /// (typeop.cc:1340-1346, 1356-1362, 1372-1378 all build
+    /// `s << name << dec << op->getIn(0)->getSize()`), fed to opFunc
+    /// (printc.cc:424-441) as `CARRY1(a,b)` / `SCARRY4(a,b)` / `SBORROW2(a,b)`.
+    /// GLOBWORD-C3: previously no printc arm existed for these opcodes, so
+    /// the implied INT_CARRY descent fell to the unnamed-location fallback
+    /// and leaked the CF flag as `register0x00000200`.
+    fn rpn_operator_name_carry(op: &PcodeOp) -> String {
+        let base = match op.opcode {
+            OpCode::CPUI_INT_CARRY => "CARRY",
+            OpCode::CPUI_INT_SCARRY => "SCARRY",
+            _ => "SBORROW",
+        };
+        let s0 = op
+            .get_in(0)
+            .map(|a| a.read().unwrap().get_size())
+            .unwrap_or(0);
+        format!("{}{}", base, s0)
     }
 
     // Ghidra: typeop.cc:1122 TypeOpIntZext::getOperatorName
@@ -6658,6 +6698,26 @@ impl PrintC {
                 if !def_op.inrefs.is_empty() {
                     self.push_input(def_op, 0);
                 }
+                return;
+            }
+            // Ghidra: printc.hh:292-294 opIntCarry/opIntScarry/opIntSborrow →
+            // opFunc (printc.cc:424-448): functional syntax
+            // CARRY1(a,b)/SCARRY4(a,b)/SBORROW2(a,b) with the comma token's
+            // spacing=0 separator (printc.cc:54). GLOBWORD-C3: this arm
+            // replaces the `_ =>` unnamed-location fallback for the carry
+            // family, which printed the CF flag as `register0x00000200`.
+            OpCode::CPUI_INT_CARRY | OpCode::CPUI_INT_SCARRY | OpCode::CPUI_INT_SBORROW => {
+                let nm = Self::rpn_operator_name_carry(def_op);
+                self.emit.print(&nm);
+                self.emit.print("(");
+                for i in 0..def_op.num_input() {
+                    if i > 0 {
+                        // comma token spacing=0 (printc.cc:54): `,` no space.
+                        self.emit.print(",");
+                    }
+                    self.push_input(def_op, i);
+                }
+                self.emit.print(")");
                 return;
             }
             _ => {
@@ -10824,14 +10884,26 @@ impl PrintC {
             self.is_lhs = false;
             self.emit.tag_op(" = ");
         }
-        // printc.cc:430: nm = op->getOpcode()->getOperatorName(op).
-        self.emit.print(op.opcode.name());
-        // printc.cc:432-438: inputs in comma-separated parens.
+        // printc.cc:430: nm = op->getOpcode()->getOperatorName(op) — the
+        // carry family overrides the TypeOp base name with CARRY/SCARRY/
+        // SBORROW + dec(in0 size) (typeop.cc:1340/1356/1372); other opcodes
+        // use the base name (OpCode::name() port).
+        if matches!(
+            op.opcode,
+            OpCode::CPUI_INT_CARRY | OpCode::CPUI_INT_SCARRY | OpCode::CPUI_INT_SBORROW
+        ) {
+            self.emit.print(&Self::rpn_operator_name_carry(op));
+        } else {
+            self.emit.print(op.opcode.name());
+        }
+        // printc.cc:432-438: inputs in comma-separated parens. The comma
+        // OpToken has spacing=0 (printc.cc:54), so the separator is `,`
+        // with no trailing space.
         self.emit.print("(");
         let n = op.num_input();
         if n > 0 {
             for i in 0..n {
-                if i > 0 { self.emit.print(", "); }
+                if i > 0 { self.emit.print(","); }
                 if let Some(vn) = op.get_in(i) {
                     self.push_varnode(&vn.read().unwrap(), Some(op));
                 }

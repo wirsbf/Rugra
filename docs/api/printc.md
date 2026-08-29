@@ -1927,3 +1927,28 @@ type_expr_space 形态(`char * x`),与 fixture named_ptr_contrast 记录重新�
   - main 的 for 头部畸形(`for (var_8; iVar11 != 0; ...)`,golden 为
     `for (lVar13 = 0x26; lVar13 != 0; lVar13 + -1)`)——varmap for-init/iterate
     数据侧残差,先前被 flatten 汤掩盖。
+
+### 2026-08-30:GLOBWORD-C3 — carry 族 opFunc 打印(printc.rs)
+
+- **根因**(w-x86carry 双侧证明,docs/alignment_docs/CARRY-PRINT-ROOTCAUSE-2026-08-30.md):
+  SLEIGH 提升的 INT_CARRY 完整存活到最终 IR(输出 implied),但 printc 无
+  CARRY/SCARRY/SBORROW 分支——RPN 侧 `rpn_def_inline_reachable` 无臂(不可内联,
+  叶 atom 走未命名位置)、`dispatch_op_rpn` 无臂、legacy 侧 `emit_inline_expr`
+  落 `_ =>` fallback,CF(:register:200)打成 `register0x00000200`(curl 5 处)。
+- **修复**(5 处,全在 printc.rs):
+  1. `dispatch_op_rpn` 新臂 → `rpn_op_func`(opFunc printc.cc:424-442 的既有
+     RPN 端口);
+  2. `rpn_def_inline_reachable` 同族 → `has(0)&&has(1)`;
+  3. 新 `rpn_operator_name_carry`:`CARRY/SCARRY/SBORROW + dec(in0 size)`
+     (typeop.cc:1340/1356/1372 getOperatorName 移植,产出 CARRY1/SCARRY4/SBORROW2,
+     大写非 pcode 名);
+  4. `emit_inline_expr` legacy 臂:函数式语法,逗号 token spacing=0
+     (printc.cc:54,`,` 无空格);
+  5. 语句级 `op_func`:carry 族名 + 逗号改 `,`(原 `", "` 偏离 spacing=0)。
+- **E2E 判据**:泄漏 `register0x00000200` 5→0;`CARRY1(` ×3;skeleton
+  3162→3164(+2 = file2string.part.0/my_get_line 各 +1);defects=0;numbering
+  不变。+2 行为规格 §3.3 预告的 cast 链残差现形(原泄漏行位置):
+  参数 `(int *)uVar6` vs oracle `(byte)uVar7`(heritage piece-split 域)、
+  外包 `(0 - (int *)(bool)(long)CARRY1(...))` vs `-(ulong)CARRY1(...)`
+  (cast 链域)。typeop.rs functional_binary_op push 路由 opFunc(规格 §3.2)
+  与上述两域均在 printc 租约外,登记残差待相应 owner。
