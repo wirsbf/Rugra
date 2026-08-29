@@ -9,10 +9,10 @@
 - Declaration references: 6317
 - Raw Ctags function records: 15811
 - Ghidra IDs carrying a guard disambiguator: 12
-- Rugra functions: 10459
-  (8670 production + 1789 test)
-- Exact definition-start mappings: 3969
-- Body-line references requiring audit: 352
+- Rugra functions: 10464
+  (8675 production + 1789 test)
+- Exact definition-start mappings: 3971
+- Body-line references requiring audit: 353
 
 The old hand-maintained `~2055` denominator is not a completion metric. The generated
 9494-definition denominator remains entirely `UNTESTED` unless a locked behavior fixture
@@ -162,7 +162,7 @@ records complete same-input/same-output evidence.
 | `prefersplit.hh` | 1 | 0 | 0 | 1 |
 | `prettyprint.cc` | 85 | 47 | 0 | 38 |
 | `prettyprint.hh` | 124 | 58 | 1 | 65 |
-| `printc.cc` | 106 | 80 | 0 | 26 |
+| `printc.cc` | 106 | 82 | 0 | 24 |
 | `printc.hh` | 66 | 0 | 0 | 66 |
 | `printjava.cc` | 16 | 0 | 0 | 16 |
 | `printjava.hh` | 1 | 0 | 0 | 1 |

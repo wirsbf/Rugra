@@ -11,16 +11,16 @@
     "src_tree": "004b20c8ed6da74cf6457a4386570bae4801bc78"
   },
   "checkpoint": {
-    "commit": "65422a62350d774dc3af93d4e194b7717b5ab352",
-    "commit_tree": "b9f88c5119b8ddcb426140ca026bf2b6e6587729",
-    "rust_function_records": 10459,
-    "rust_projection_sha256": "b47247d52d517fcf9d19ff7b0568b958c5fd7da1acbc5645442c5f71bf5a7f86",
-    "src_tree": "a943a333e89908c41bb9c9f23c819ac5bc8ffe9f"
+    "commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
+    "commit_tree": "596c2f4c2b0ae01a566803d9cf56f72d59c938be",
+    "rust_function_records": 10464,
+    "rust_projection_sha256": "e5da44de7e5c7ec67707b8e348b5a81c707e002cfe7967a73c3377653a322c25",
+    "src_tree": "9c85c1cb77d3962f81a4704d5b4ca19787a13671"
   },
   "history": {
-    "commit_count": 394,
+    "commit_count": 397,
     "first_commit": "7ae30f5bcfba5e1adce2a4e8cdeebc23d96964cb",
-    "last_commit": "65422a62350d774dc3af93d4e194b7717b5ab352",
+    "last_commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
     "mode": "first_parent"
   },
   "id_scheme": {
@@ -4350,6 +4350,18 @@
       "signature": "fn get_size(&self) -> i32"
     },
     {
+      "base_id": "RG-F-6a06fcc4b93cc09ba795",
+      "child_blob": "505d7a3bfd57ae00f5f6171f66576c56dd494a0e",
+      "introduced_at_commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
+      "module": "printc",
+      "name": "type_stack_for",
+      "new_id": "RG-F-6a06fcc4b93cc09ba795",
+      "owner": "impl:PrintC",
+      "parent_blob": "9e2caa708db715036ac2abda12f8d33317935dfb",
+      "path": "src/printc.rs",
+      "signature": "fn type_stack_for(dt: &Arc<Datatype>) -> Vec<Arc<Datatype>>"
+    },
+    {
       "base_id": "RG-F-6a6339cc2bfa77c6f794",
       "child_blob": "7677154d56ee1df699b9fd86635e10f8be74d146",
       "introduced_at_commit": "73b5ef26453372a2b562051f113f9b299bcebeef",
@@ -4602,6 +4614,18 @@
       "signature": "fn debug_dump_graph(&self, when: &str)"
     },
     {
+      "base_id": "RG-F-6f6f937f8d97de2bc51a",
+      "child_blob": "388698295a4dfeea1eb938376ed30a14a46640c9",
+      "introduced_at_commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
+      "module": "blockaction",
+      "name": "is_consumed",
+      "new_id": "RG-F-6f6f937f8d97de2bc51a",
+      "owner": "impl:CollapseStructure<'a>",
+      "parent_blob": "a7dea226400f647d5db435bc4f1302236c6ecb16",
+      "path": "src/blockaction.rs",
+      "signature": "fn is_consumed(&self, idx: i32) -> bool"
+    },
+    {
       "base_id": "RG-F-6f7f59e3cda2fc6eb79b",
       "child_blob": "365be16020196337d386eb215f0b280ece383847",
       "introduced_at_commit": "e9a0b7a8911af7f85fb180bef7b50d43f19712c5",
@@ -4732,6 +4756,18 @@
       "parent_blob": "9caf3207ac72015b8e46a4e397bf514cac75377a",
       "path": "src/typeop.rs",
       "signature": "fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self"
+    },
+    {
+      "base_id": "RG-F-7124d84b3ecc262815ec",
+      "child_blob": "6ba363d92dcc0383fc249619a681c461a1f413fd",
+      "introduced_at_commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
+      "module": "coreaction",
+      "name": "canonicalize_temp_type",
+      "new_id": "RG-F-7124d84b3ecc262815ec",
+      "owner": "free",
+      "parent_blob": "8c3af8f0602f09477975f38d601c803c60a2375c",
+      "path": "src/coreaction.rs",
+      "signature": "fn canonicalize_temp_type( dt: &std::sync::Arc<crate::type_system::datatype::Datatype>, type_factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>, ) -> std::sync::Arc<crate::type_system::datatype::Datatype>"
     },
     {
       "base_id": "RG-F-71aaf4c2c8a8f3873677",
@@ -8442,6 +8478,18 @@
       "signature": "fn typedef_and_qualifier_aliases_preserve_character_semantics_and_shape()"
     },
     {
+      "base_id": "RG-F-cf89bc751903461d0ca8",
+      "child_blob": "505d7a3bfd57ae00f5f6171f66576c56dd494a0e",
+      "introduced_at_commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
+      "module": "printc",
+      "name": "debug_render_type_start_only",
+      "new_id": "RG-F-cf89bc751903461d0ca8",
+      "owner": "impl:PrintC",
+      "parent_blob": "9e2caa708db715036ac2abda12f8d33317935dfb",
+      "path": "src/printc.rs",
+      "signature": "fn debug_render_type_start_only(&mut self, ct: &Arc<Datatype>)"
+    },
+    {
       "base_id": "RG-F-d02a2e8f5374b72249cf",
       "child_blob": "26c211cac1fad628f68535da8f0ab0d3e3f4357d",
       "introduced_at_commit": "900b2d0417e32b3d0883deb95490e5145340bf59",
@@ -8790,6 +8838,18 @@
       "signature": "fn contained_by_range(base: u64, sz2: i32, addr: u64, sz: i32) -> bool"
     },
     {
+      "base_id": "RG-F-d71d3c5ba226b67dbd28",
+      "child_blob": "505d7a3bfd57ae00f5f6171f66576c56dd494a0e",
+      "introduced_at_commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
+      "module": "printc",
+      "name": "debug_render_type_decl",
+      "new_id": "RG-F-d71d3c5ba226b67dbd28",
+      "owner": "impl:PrintC",
+      "parent_blob": "9e2caa708db715036ac2abda12f8d33317935dfb",
+      "path": "src/printc.rs",
+      "signature": "fn debug_render_type_decl(&mut self, ct: &Arc<Datatype>, ident: &str)"
+    },
+    {
       "base_id": "RG-F-d71eced7a31c275ba4a5",
       "child_blob": "5f43cf8954f5a62b8573be019c88a3a608d9ccd2",
       "introduced_at_commit": "2d78b5afc4333180187c1c764b9b23fd71289487",
@@ -8812,6 +8872,18 @@
       "parent_blob": "8fd771c35277d4ff21739b78b3a3859cfc65ad2b",
       "path": "src/printc.rs",
       "signature": "fn emit_flow_basic_legacy( &mut self, ops: &[crate::op::PcodeOpRef], suppress_branch: bool, )"
+    },
+    {
+      "base_id": "RG-F-d7e42f6cd54d2d8ef40a",
+      "child_blob": "505d7a3bfd57ae00f5f6171f66576c56dd494a0e",
+      "introduced_at_commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
+      "module": "printc",
+      "name": "build_type_stack",
+      "new_id": "RG-F-d7e42f6cd54d2d8ef40a",
+      "owner": "impl:PrintC",
+      "parent_blob": "9e2caa708db715036ac2abda12f8d33317935dfb",
+      "path": "src/printc.rs",
+      "signature": "fn build_type_stack(ct: &Arc<Datatype>, typestack: &mut Vec<Arc<Datatype>>)"
     },
     {
       "base_id": "RG-F-d84d923a6982ef17c93e",
@@ -9304,6 +9376,18 @@
       "parent_blob": "dd96fa9045a1c139a553a12d011fb5e2206b2db0",
       "path": "src/fspec.rs",
       "signature": "fn get_stack_placeholder_slot(&self) -> i32"
+    },
+    {
+      "base_id": "RG-F-e6aac6160036788b58db",
+      "child_blob": "505d7a3bfd57ae00f5f6171f66576c56dd494a0e",
+      "introduced_at_commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
+      "module": "printc",
+      "name": "push_prototype_inputs",
+      "new_id": "RG-F-e6aac6160036788b58db",
+      "owner": "impl:PrintC",
+      "parent_blob": "9e2caa708db715036ac2abda12f8d33317935dfb",
+      "path": "src/printc.rs",
+      "signature": "fn push_prototype_inputs(&mut self, proto: &crate::fspec::FuncProto)"
     },
     {
       "base_id": "RG-F-e6d44fe6157734ea6fa8",
@@ -15518,6 +15602,37 @@
     },
     {
       "aliases": [
+        "RG-F-4dffb2ed510f8cb9b14b"
+      ],
+      "base_id": "RG-F-4dffb2ed510f8cb9b14b",
+      "events": [
+        {
+          "child_blob": "505d7a3bfd57ae00f5f6171f66576c56dd494a0e",
+          "commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "datatype_name_ends_with_star -> decl_prefix_ends_with_star: name-string check replaced by its structural form over type_stack_for, per the inline comment 'structural form of the join rule above' (printc.cc:73-77 join-spacing rule) (10ea407d)"
+          ],
+          "from_id": "RG-F-4dffb2ed510f8cb9b14b",
+          "from_module": "printc",
+          "from_name": "datatype_name_ends_with_star",
+          "from_owner": "impl:PrintC",
+          "from_path": "src/printc.rs",
+          "from_signature": "fn datatype_name_ends_with_star(dt: &Datatype) -> bool",
+          "parent_blob": "9e2caa708db715036ac2abda12f8d33317935dfb",
+          "to_id": "RG-F-b011bf03cc992c741479",
+          "to_module": "printc",
+          "to_name": "decl_prefix_ends_with_star",
+          "to_owner": "impl:PrintC",
+          "to_path": "src/printc.rs",
+          "to_signature": "fn decl_prefix_ends_with_star(dt: &Arc<Datatype>) -> bool"
+        }
+      ],
+      "new_id": "RG-F-b011bf03cc992c741479",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
         "RG-F-4e99381ad31c66523ecd"
       ],
       "base_id": "RG-F-4e99381ad31c66523ecd",
@@ -20698,6 +20813,37 @@
     },
     {
       "aliases": [
+        "RG-F-9b9931881b1b3c044009"
+      ],
+      "base_id": "RG-F-9b9931881b1b3c044009",
+      "events": [
+        {
+          "child_blob": "505d7a3bfd57ae00f5f6171f66576c56dd494a0e",
+          "commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "push_type_end_opt: param retyped ct: Option<&Datatype> -> Option<&Arc<Datatype>> with the typestack rework; metatype dispatch order cc:322/324/330 preserved (10ea407d)"
+          ],
+          "from_id": "RG-F-9b9931881b1b3c044009",
+          "from_module": "printc",
+          "from_name": "push_type_end_opt",
+          "from_owner": "impl:PrintC",
+          "from_path": "src/printc.rs",
+          "from_signature": "fn push_type_end_opt(&mut self, ct: Option<&Datatype>)",
+          "parent_blob": "9e2caa708db715036ac2abda12f8d33317935dfb",
+          "to_id": "RG-F-dcdbfeefb263f3c27d3a",
+          "to_module": "printc",
+          "to_name": "push_type_end_opt",
+          "to_owner": "impl:PrintC",
+          "to_path": "src/printc.rs",
+          "to_signature": "fn push_type_end_opt(&mut self, ct: Option<&Arc<Datatype>>)"
+        }
+      ],
+      "new_id": "RG-F-dcdbfeefb263f3c27d3a",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
         "RG-F-9b9f309fc6f60e4b3272"
       ],
       "base_id": "RG-F-9b9f309fc6f60e4b3272",
@@ -22440,6 +22586,37 @@
       ],
       "new_id": "RG-F-9abcbe19cd51f069dcce",
       "origin_kind": "introduced_live"
+    },
+    {
+      "aliases": [
+        "RG-F-baa0434992c1363b8d95"
+      ],
+      "base_id": "RG-F-baa0434992c1363b8d95",
+      "events": [
+        {
+          "child_blob": "505d7a3bfd57ae00f5f6171f66576c56dd494a0e",
+          "commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "push_type_start_opt: param retyped ct: Option<&Datatype> -> Option<&Arc<Datatype>> with the typestack rework; anchor printc.cc:264 PrintC::pushTypeStart unchanged (10ea407d)"
+          ],
+          "from_id": "RG-F-baa0434992c1363b8d95",
+          "from_module": "printc",
+          "from_name": "push_type_start_opt",
+          "from_owner": "impl:PrintC",
+          "from_path": "src/printc.rs",
+          "from_signature": "fn push_type_start_opt(&mut self, ct: Option<&Datatype>, noident: bool)",
+          "parent_blob": "9e2caa708db715036ac2abda12f8d33317935dfb",
+          "to_id": "RG-F-6ad94d26468d36295c26",
+          "to_module": "printc",
+          "to_name": "push_type_start_opt",
+          "to_owner": "impl:PrintC",
+          "to_path": "src/printc.rs",
+          "to_signature": "fn push_type_start_opt(&mut self, ct: Option<&Arc<Datatype>>, noident: bool)"
+        }
+      ],
+      "new_id": "RG-F-6ad94d26468d36295c26",
+      "origin_kind": "baseline"
     },
     {
       "aliases": [
@@ -26175,16 +26352,16 @@
   "schema": 1,
   "semantics": "Raw scheme-2 IDs remain stable_id(module, owner, normalized_signature). This separate post-baseline layer composes historical aliases to the raw checkpoint IDs. Automatic transitions require a unique 1-to-1, same path/module/owner/name pair whose only signature difference is either a leading parameter binding mut or the trailing parameter separator, in the same patch hunk with the same non-empty annotation. Tombstones are diagnostic only; introduced_live rows are new checkpoint definitions, not fabricated historical origins.",
   "stats": {
-    "alias_tokens": 501,
+    "alias_tokens": 504,
     "ambiguous": 0,
     "baseline_records": 9639,
     "collisions": 0,
-    "current_records": 10459,
-    "events": 501,
-    "introduced_live": 873,
-    "lineages": 486,
-    "reviewed_transitions": 234,
-    "tombstones": 53
+    "current_records": 10464,
+    "events": 504,
+    "introduced_live": 880,
+    "lineages": 489,
+    "reviewed_transitions": 237,
+    "tombstones": 55
   },
   "tombstones": [
     {
@@ -26474,6 +26651,22 @@
       "path": "src/printc.rs",
       "reason": "RPN constant formatting folded into constant_leaf_text/integer_text; no 1:1 successor (4d1bcf29)",
       "signature": "fn format_constant_value(val: u64) -> String"
+    },
+    {
+      "aliases": [
+        "RG-F-6d0b423a6eb30f204ebc"
+      ],
+      "base_id": "RG-F-6d0b423a6eb30f204ebc",
+      "child_blob": "505d7a3bfd57ae00f5f6171f66576c56dd494a0e",
+      "deleted_at_commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
+      "events": [],
+      "module": "printc",
+      "name": "emit_type_prefix",
+      "owner": "impl:PrintC",
+      "parent_blob": "9e2caa708db715036ac2abda12f8d33317935dfb",
+      "path": "src/printc.rs",
+      "reason": "emit_type_prefix: one-statement Rust text-render helper inlined into push_type_start_opt's type_expr_space branch during the DECL-SPACING-NAMEFLOW rework; no same-role successor exists (10ea407d)",
+      "signature": "fn emit_type_prefix(&mut self, dt: &Datatype)"
     },
     {
       "aliases": [
@@ -26922,6 +27115,22 @@
       "path": "src/blockaction.rs",
       "reason": "goto-cascade internals replaced by the TraceDAG oracle chain; no successor (cddcefd8)",
       "signature": "fn apply_loop_exit_marks(&mut self)"
+    },
+    {
+      "aliases": [
+        "RG-F-cf22821ce96008ff0c7e"
+      ],
+      "base_id": "RG-F-cf22821ce96008ff0c7e",
+      "child_blob": "505d7a3bfd57ae00f5f6171f66576c56dd494a0e",
+      "deleted_at_commit": "10ea407df05d4f92cbd71ffe4df20aac70b5afb8",
+      "events": [],
+      "module": "printc",
+      "name": "type_name_ends_with_star",
+      "owner": "impl:PrintC",
+      "parent_blob": "9e2caa708db715036ac2abda12f8d33317935dfb",
+      "path": "src/printc.rs",
+      "reason": "type_name_ends_with_star: deleted pure-delegation Rust wrapper (RUGRA-GLUE marked, body was one call to datatype_name_ends_with_star); its join-spacing role succeeded to decl_prefix_ends_with_star (10ea407d)",
+      "signature": "fn type_name_ends_with_star(dt: &Datatype) -> bool"
     },
     {
       "aliases": [
