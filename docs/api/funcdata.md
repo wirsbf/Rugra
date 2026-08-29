@@ -1993,3 +1993,21 @@ funcdata_block.cc:808-809 是语句序求值——第二个 `getOutIndex(exitb)`
 - fixture(nodejoin_join_block_forces_heritage_restructure)补 CFG 形状断言:canonical 终态=join 块
   2 出边、两分支各 1 出边(仅 join 边)。
 E2E:2911/1/0,0 panic/timeout,124/124 反编译。
+
+## 2026-08-30:X86LIFT-FLAG-PCODE-0001 连带测试期望更新(w-iced,测试专用)
+
+src/funcdata.rs 生产代码零改动;仅更新 `#[cfg(test)]` 内两个直接编码旧 iced
+提升形态的回归测试,使其断言新的 oracle-faithful 形态(来源
+src/disasm/x86_lift.rs 的 X86LIFT-FLAG-PCODE-0001 改动):
+
+- `test_add_rax_imm_minimal_alignment_path`:`add rax,1` 期望 2 op(INT_ADD→
+  uniq+COPY)改为 9 op(INT_CARRY/INT_SCARRY/INT_ADD 直写 rax/imm 规范化为
+  8 字节/SF/ZF/PF popcount 链)。
+- `test_add_mem_rbx_rax_rmw_alignment`:`add [rbx],rax` 期望 3 op 改为 16 op
+  (逐用重 LOAD:LOAD+CARRY+LOAD+SCARRY+LOAD+INT_ADD+STORE+LOAD+SF+LOAD+ZF+
+  LOAD+AND+POPCOUNT+AND+PF)。
+
+背景:FFI_TEST_LOCK 为普通 Mutex,任一断言失败会毒化锁并级联失败后续所有持锁
+测试(master 全量即有 15~18 的 flaky 窗口);这两条测试是 add 形态的确定性
+失败源,更新后全量回到 17 failed(17±1 达标)。手写期望仅为 Rugra 回归信号,
+非 oracle 对拍(机制 B2)。

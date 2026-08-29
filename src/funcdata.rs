@@ -11690,9 +11690,40 @@ mod tests {
 
         let mut lifter = X86Lifter::new();
         let raw_ops = lifter.lift(inst);
-        assert_eq!(raw_ops.len(), 2);
+        // X86LIFT-FLAG-PCODE-0001: add now lifts with full flag pcode per the
+        // locked 12.0.4 x86-64.sla (ia.sinc `addflags; op1 = op1 + op2;
+        // resultflags(op1)`): INT_CARRY CF, INT_SCARRY OF, INT_ADD writing
+        // rax directly (no temp/COPY chain, imm canonicalized to 8 bytes),
+        // then SF/ZF and the PF popcount chain — 9 ops total.
+        assert_eq!(raw_ops.len(), 9);
 
-        let raw_add = &raw_ops[0];
+        let raw_carry = &raw_ops[0];
+        assert_eq!(
+            OpCode::from_i32(raw_carry.get_opcode()),
+            Some(OpCode::CPUI_INT_CARRY)
+        );
+        let carry_out_binding = raw_carry.output();
+        let carry_out = carry_out_binding.as_ref().unwrap();
+        assert_eq!(carry_out.space, AddressSpace::Register);
+        assert_eq!(carry_out.offset, 0x200); // CF
+        assert_eq!(carry_out.size, 1);
+        let carry_inputs = raw_carry.inputs();
+        assert_eq!(carry_inputs.len(), 2);
+        assert_eq!(carry_inputs[0].space, AddressSpace::Register);
+        assert_eq!(carry_inputs[0].offset, 0x00); // rax
+        assert_eq!(carry_inputs[0].size, 8);
+        assert_eq!(carry_inputs[1].space, AddressSpace::Const);
+        assert_eq!(carry_inputs[1].offset, 0x01);
+        assert_eq!(carry_inputs[1].size, 8);
+
+        let raw_scarry = &raw_ops[1];
+        assert_eq!(
+            OpCode::from_i32(raw_scarry.get_opcode()),
+            Some(OpCode::CPUI_INT_SCARRY)
+        );
+        assert_eq!(raw_scarry.output().as_ref().unwrap().offset, 0x20b); // OF
+
+        let raw_add = &raw_ops[2];
         assert_eq!(
             OpCode::from_i32(raw_add.get_opcode()),
             Some(OpCode::CPUI_INT_ADD)
@@ -11700,7 +11731,8 @@ mod tests {
 
         let add_out_binding = raw_add.output();
         let add_out = add_out_binding.as_ref().unwrap();
-        assert_eq!(add_out.space, AddressSpace::Unique);
+        assert_eq!(add_out.space, AddressSpace::Register);
+        assert_eq!(add_out.offset, 0x00);
         assert_eq!(add_out.size, 8);
 
         let add_inputs = raw_add.inputs();
@@ -11710,30 +11742,37 @@ mod tests {
         assert_eq!(add_inputs[0].size, 8);
         assert_eq!(add_inputs[1].space, AddressSpace::Const);
         assert_eq!(add_inputs[1].offset, 0x01);
-        assert_eq!(add_inputs[1].size, 1);
+        assert_eq!(add_inputs[1].size, 8);
 
-        let raw_copy = &raw_ops[1];
+        // SF/ZF from the destination varnode; PF popcount chain.
         assert_eq!(
-            OpCode::from_i32(raw_copy.get_opcode()),
-            Some(OpCode::CPUI_COPY)
+            OpCode::from_i32(raw_ops[3].get_opcode()),
+            Some(OpCode::CPUI_INT_SLESS)
         );
-
-        let copy_out_binding = raw_copy.output();
-        let copy_out = copy_out_binding.as_ref().unwrap();
-        assert_eq!(copy_out.space, AddressSpace::Register);
-        assert_eq!(copy_out.offset, 0x00);
-        assert_eq!(copy_out.size, 8);
-
-        let copy_inputs = raw_copy.inputs();
-        assert_eq!(copy_inputs.len(), 1);
-        assert_eq!(copy_inputs[0].space, AddressSpace::Unique);
-        assert_eq!(copy_inputs[0].offset, add_out.offset);
-        assert_eq!(copy_inputs[0].size, 8);
+        assert_eq!(raw_ops[3].output().as_ref().unwrap().offset, 0x207); // SF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[4].get_opcode()),
+            Some(OpCode::CPUI_INT_EQUAL)
+        );
+        assert_eq!(raw_ops[4].output().as_ref().unwrap().offset, 0x206); // ZF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[5].get_opcode()),
+            Some(OpCode::CPUI_INT_AND)
+        );
+        assert_eq!(
+            OpCode::from_i32(raw_ops[6].get_opcode()),
+            Some(OpCode::CPUI_POPCOUNT)
+        );
+        assert_eq!(
+            OpCode::from_i32(raw_ops[8].get_opcode()),
+            Some(OpCode::CPUI_INT_EQUAL)
+        );
+        assert_eq!(raw_ops[8].output().as_ref().unwrap().offset, 0x202); // PF
 
         let mut fd = Funcdata::new("add_rax_imm", start, code.len() as i32);
         fd.inject_raw_ops(&raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 2);
+        assert_eq!(fd.obank.alivelist.len(), 9);
         assert_eq!(fd.bblocks.get_size(), 1);
 
         let verifier = RuntimeVerifier::new();
@@ -11741,7 +11780,7 @@ mod tests {
 
         ffi::set_current_program(fd);
 
-        let result = verifier.verify_pcode_generation("add_rax_1_minimal", start, &rugra_ops, 2);
+        let result = verifier.verify_pcode_generation("add_rax_1_minimal", start, &rugra_ops, 9);
 
         assert!(matches!(result, VerifyResult::Match));
     }
@@ -12470,19 +12509,19 @@ mod tests {
         let mut lifter = X86Lifter::new();
         let raw_ops = lifter.lift(inst);
 
-        // For `add [rbx], rax`:
-        // - parse_dest_operand([rbx]) returns (rbx_vn, Some(size_vn)) — memory target
-        // - parse_operand(rax) returns rax_vn — register source
-        // - Because mem_size.is_some(), it calls parse_operand([rbx]) again for reading
-        //   → this generates a LOAD op and returns tmp
-        // - INT_ADD(tmp, rax) → tmp_result
-        // - emit_store(rbx_vn, tmp_result, size_vn) → STORE
-        // Total: LOAD + INT_ADD + STORE = 3 ops
+        // X86LIFT-FLAG-PCODE-0001: `add [rbx], rax` lifts per the locked
+        // 12.0.4 x86-64.sla rm-operand re-evaluation — every macro use of the
+        // memory operand re-LOADs (addflags reads it twice, the value op once,
+        // and resultflags re-LOADs per flag group after the STORE):
+        // LOAD, INT_CARRY, LOAD, INT_SCARRY, LOAD, INT_ADD, STORE,
+        // LOAD, SF, LOAD, ZF, LOAD, AND, POPCOUNT, AND, PF = 16 ops.
         assert_eq!(
-            raw_ops.len(), 3, "Expected LOAD + INT_ADD + STORE, got {} ops", raw_ops.len()
+            raw_ops.len(), 16,
+            "Expected LOAD+CARRY+LOAD+SCARRY+LOAD+ADD+STORE+3x(LOAD+flag)+PF-chain, got {} ops",
+            raw_ops.len()
         );
 
-        // Op 0: CPUI_LOAD (read original value from [rbx])
+        // Op 0: CPUI_LOAD (first materialization for addflags INT_CARRY)
         let raw_load = &raw_ops[0];
         assert_eq!(
             OpCode::from_i32(raw_load.get_opcode()),
@@ -12500,8 +12539,24 @@ mod tests {
         assert_eq!(load_inputs[1].space, AddressSpace::Register);
         assert_eq!(load_inputs[1].offset, 0x18); // rbx
 
-        // Op 1: CPUI_INT_ADD
-        let raw_add = &raw_ops[1];
+        // Op 1: INT_CARRY CF; op 2: re-LOAD; op 3: INT_SCARRY OF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[1].get_opcode()),
+            Some(OpCode::CPUI_INT_CARRY)
+        );
+        assert_eq!(raw_ops[1].output().as_ref().unwrap().offset, 0x200); // CF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[2].get_opcode()),
+            Some(OpCode::CPUI_LOAD)
+        );
+        assert_eq!(
+            OpCode::from_i32(raw_ops[3].get_opcode()),
+            Some(OpCode::CPUI_INT_SCARRY)
+        );
+        assert_eq!(raw_ops[3].output().as_ref().unwrap().offset, 0x20b); // OF
+
+        // Op 4: re-LOAD; op 5: CPUI_INT_ADD writing the load temp
+        let raw_add = &raw_ops[5];
         assert_eq!(
             OpCode::from_i32(raw_add.get_opcode()),
             Some(OpCode::CPUI_INT_ADD)
@@ -12510,18 +12565,17 @@ mod tests {
         let add_out_binding = raw_add.output();
         let add_out = add_out_binding.as_ref().unwrap();
         assert_eq!(add_out.space, AddressSpace::Unique);
+        assert_eq!(add_out.offset, raw_ops[4].output().as_ref().unwrap().offset);
 
         let add_inputs = raw_add.inputs();
         assert_eq!(add_inputs.len(), 2);
-        // Input 0: loaded value (unique tmp from LOAD)
         assert_eq!(add_inputs[0].space, AddressSpace::Unique);
-        assert_eq!(add_inputs[0].offset, load_out.offset);
-        // Input 1: rax
+        assert_eq!(add_inputs[0].offset, add_out.offset);
         assert_eq!(add_inputs[1].space, AddressSpace::Register);
         assert_eq!(add_inputs[1].offset, 0x00); // rax
 
-        // Op 2: CPUI_STORE (write result back to [rbx])
-        let raw_store = &raw_ops[2];
+        // Op 6: CPUI_STORE (write result back to [rbx])
+        let raw_store = &raw_ops[6];
         assert_eq!(
             OpCode::from_i32(raw_store.get_opcode()),
             Some(OpCode::CPUI_STORE)
@@ -12535,11 +12589,32 @@ mod tests {
         assert_eq!(store_inputs[1].offset, 0x18); // rbx (address)
         assert_eq!(store_inputs[2].space, AddressSpace::Unique); // result
 
+        // Post-store flag re-LOADs: SF (ops 7-8), ZF (ops 9-10), PF (11-15)
+        assert_eq!(
+            OpCode::from_i32(raw_ops[7].get_opcode()),
+            Some(OpCode::CPUI_LOAD)
+        );
+        assert_eq!(
+            OpCode::from_i32(raw_ops[8].get_opcode()),
+            Some(OpCode::CPUI_INT_SLESS)
+        );
+        assert_eq!(raw_ops[8].output().as_ref().unwrap().offset, 0x207); // SF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[10].get_opcode()),
+            Some(OpCode::CPUI_INT_EQUAL)
+        );
+        assert_eq!(raw_ops[10].output().as_ref().unwrap().offset, 0x206); // ZF
+        assert_eq!(
+            OpCode::from_i32(raw_ops[15].get_opcode()),
+            Some(OpCode::CPUI_INT_EQUAL)
+        );
+        assert_eq!(raw_ops[15].output().as_ref().unwrap().offset, 0x202); // PF
+
         // Inject and verify
         let mut fd = Funcdata::new("add_mem_rbx_rax_rmw", start, code.len() as i32);
         fd.inject_raw_ops(&raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 3);
+        assert_eq!(fd.obank.alivelist.len(), 16);
         assert_eq!(fd.bblocks.get_size(), 1);
 
         let verifier = RuntimeVerifier::new();
@@ -12548,7 +12623,7 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("add_mem_rbx_rax_rmw", start, &rugra_ops, 3);
+            verifier.verify_pcode_generation("add_mem_rbx_rax_rmw", start, &rugra_ops, 16);
 
         assert!(matches!(result, VerifyResult::Match));
     }
