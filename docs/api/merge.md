@@ -651,3 +651,48 @@ HighVariable 的 `v_type` 缓存迁入 `TypeCell`（`RwLock<Arc<Datatype>>`，Gh
 `cache_core_types()` 显式构造：非 ASCII int 自填 typecache[1][INT] 并被选为
 `type_nochar`（type.cc:3240-3242），`get_base(1,INT)` 与其同对象 → 判 NOT
 distinct 的覆盖保持不变。仅测试构造方式变化，`factory_nochar_distinct` 生产语义零改动。
+
+## RUGRA_MERGE_FREEVN_DIAG（worktree 临时诊断，非对齐面）
+
+`RUGRA_MERGE_FREEVN_DIAG=1` 时，`allocate_copy_trim` 在接线前检测
+「被剪输入为 free 且已有活 descendant」的 panic 前状态，向 stderr 转储
+in_vn（地址/尺寸/flags/def/high）、每个活 desc op（opcode/地址/dead/
+parent/inrefs 标 *THIS*）以及该地址全部触碰 op（读/写史）。
+NONCONVERGE-GETPARAM-MATCHURL-0001 用它锁定终态：MULTIEQUAL slot-2
+读 Stack/0x130 free vn（flags=COVERDIRTY、def=None、descs=1）。
+镜像 Ghidra merge.cc:411 allocateCopyTrim 观察位；默认关闭，合入 root
+前必须移除。
+
+## 2026-08-29：eliminate_intersect boundtype==3 全量移植（GETPARAM-EMPTYELSE-0001 后续）
+
+`Merge::eliminateIntersect` 的 boundtype==3（tail 交叉）分支从截断形态
+（仅 `is_addr_force` 一道守卫，其余按"视为交叉"保守处理）补齐为
+merge.cc:543-562 的完整五行守卫链：
+
+1. `vn2.is_addr_force()`（cc:547，原有）；
+2. `vn2.is_written()`（cc:548）；
+3. vn2 的 def 必须是 `CPUI_INDIRECT`（cc:549-550）；
+4. 该 INDIRECT 必须标注（mark）的是**正在处理的读 op**——
+   `op == get_op_from_const(indop->getIn(1))`（cc:552）；
+5. INDIRECT 的 in(0) 对 vn 的 copy shadow /
+   partial copy shadow 豁免（cc:553-561，overlaptype 1 与非 1 两形态）。
+
+此前该分支处于死路径（heritage guard 修复落地前没有 varnode 携带
+addrforce 进入该分支），NONCONVERGE 修复后 Ram 全局版本首次激活它，
+截断形态把大量非交叉误判为交叉。全量移植后 next_url 的
+"Forced merge caused intersection" panic 4→3。残余 3 例
+（my_get_token/glob_range/main）的触发=Rugra 保留了第一代 guard 格
+（oracle 在 deadcode pass=2 摧毁后由 pass≥3 heritage 重建第二代，
+成员里没有 Rugra 多出的 phi——如 my_get_token 0x17510 组的
+MULTIEQUAL@0x37b4），归 heritage place_multiequals/rename 代际差异，
+另行登记。
+
+## RUGRA_MERGE_DIAG（worktree 临时诊断，非对齐面）
+
+`RUGRA_MERGE_DIAG=1` 时：`merge_range_must` 失败前转储整组
+`(space,offset,size)` 成员（def/flags/high 实例数，标注 *FAIL* 成员）；
+`unify_address` 对 Ram 组逐 vn 转储 `descend/ops_delta/flags`
+（eliminateIntersect 剪了多少）。oracle 侧等价探针（插桩
+decomp_opt 的 `[ORE-UNIFY]`/`[AF-CLEAR]`/`[DEADCODE-ENTER|KILL]`/
+`[GLOBALTRACE]`）见 /tmp/w-nonconverge2-ore/cpp-dbg。默认关闭，
+合入 root 前必须移除。

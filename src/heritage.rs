@@ -2199,12 +2199,18 @@ impl Heritage {
     ///       addrtied` (+persist for a global scope; ScopeLocal never is) |
     ///       getProperty(addr);
     ///   (3) else -> getProperty(addr).
-    /// Residuals: Ghidra continues the stackContainer walk into the parent
-    /// (global) scope; Rugra's ScopeLocal has no parent linkage, so a
-    /// global symbol containing the range is not visible here (fixtures
-    /// and the stack/register pipeline never rely on it). The
-    /// `getProperty` flagbase fallback reads Architecture::symboltab when
-    /// present; an arch-less Funcdata gets 0.
+    /// The mapScope/stackContainer routing is projected as: a range in the
+    /// local scope's own (stack) space hits (1)/(2); any other Ram-space
+    /// range resolves — as in the oracle, where `Database::mapScope` hands
+    /// it to the global scope and the walk terminates there — to the
+    /// global-scope tail `mapped | addrtied | persist | getProperty(addr)`
+    /// (see the (3) branch below). Residuals: a global SymbolEntry
+    /// containing the range (branch (1) in the global scope) and
+    /// register/unique-scope routing keep the flagbase-only tail; Rugra's
+    /// ScopeLocal has no parent linkage (fixtures and the stack/register
+    /// pipeline never rely on it). The `getProperty` flagbase fallback
+    /// reads Architecture::symboltab when present; an arch-less Funcdata
+    /// gets 0.
     // RUGRA-GLUE: static scope-local projection of the oracle's
     // fd->getScopeLocal()->queryProperties call; Funcdata owns ScopeLocal
     // by value (varmap.rs), not through the Database scope graph.
@@ -2283,7 +2289,37 @@ impl Heritage {
                 return f;
             }
         }
-        // (3) global property flagbase.
+        // (3) oracle database.cc:1271-1276's finalscope tail: an address
+        // outside the function-local scope routes through
+        // `Database::mapScope` to its owning scope, and the
+        // `stackContainer` walk terminates on the GLOBAL scope for the
+        // default (ram) space — `finalscope != null` — so the oracle
+        // returns `mapped | addrtied | persist | getProperty(addr)` for
+        // global ranges. This is load-bearing for Heritage::guard
+        // (heritage.cc:1451 `holdind = addrtied`, cc:1516-1517
+        // `out->setAddrForce()`): the addr-force mark makes every guard
+        // INDIRECT output `isAutoLive`, so ActionDeadCode's seeding loop
+        // (coreaction.cc:3947-3950 pushConsumed on autolive outputs)
+        // consumes the whole call-guard lattice and, through
+        // propagateConsumed's marker cases, every global write feeding it.
+        // Without this branch the write-only globals of the corpus (e.g.
+        // getparameter's `config.timecond = TIMECOND_NONE`) lose their
+        // lattice at the first removal-allowed deadcode pass and vanish
+        // (GETPARAM-EMPTYELSE-0001). Residual: register/unique spaces keep
+        // the flagbase-only tail (the oracle's scope chain for those
+        // spaces is not modeled in Rugra).
+        if space == AddressSpace::Ram {
+            let mut f = varnode_flags::MAPPED
+                | varnode_flags::ADDRTIED
+                | varnode_flags::PERSIST;
+            if let Some(a) = fd.get_arch() {
+                if let Some(db) = a.symboltab.as_ref() {
+                    f |= db.read().unwrap().get_property(addr);
+                }
+            }
+            return f;
+        }
+        // (4) property flagbase only.
         if let Some(a) = fd.get_arch() {
             if let Some(db) = a.symboltab.as_ref() {
                 return db.read().unwrap().get_property(addr);

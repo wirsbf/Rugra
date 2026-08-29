@@ -1062,13 +1062,45 @@ impl Merge {
         let first = &range.members[0];
         Self::merge_test_must(&first.read().unwrap())?;
         let high = Self::required_high(first)?;
-        for member in range.members.iter().skip(1) {
+        for (fail_idx, member) in range.members.iter().enumerate().skip(1) {
             let candidate = Self::required_high(member)?;
             if Arc::ptr_eq(&high, &candidate) {
                 continue;
             }
             Self::merge_test_must(&member.read().unwrap())?;
             if !self.merge_required_result(&high, &candidate)? {
+                // TEMPORARY diagnostic (GETPARAM-EMPTYELSE follow-on, revert
+                // or keep env-gated before commit)
+                if std::env::var("RUGRA_MERGE_DIAG").is_ok() {
+                    let dump: Vec<String> = range
+                        .members
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, m)| {
+                            let r = m.read().unwrap();
+                            format!(
+                                "#{idx} {:?}/{:#x}/{} flags={:#x} def={:?} high_inst={}{}",
+                                r.get_space(),
+                                r.get_offset(),
+                                r.get_size(),
+                                r.flags,
+                                r.get_def().map(|d| {
+                                    let dr = d.read().unwrap();
+                                    format!("{:?}@{:#x}", dr.opcode, dr.get_addr().as_u64())
+                                }),
+                                r.high
+                                    .as_ref()
+                                    .map(|h| h.read().unwrap().num_instances())
+                                    .unwrap_or(0),
+                                if idx == fail_idx { " *FAIL*" } else { "" },
+                            )
+                        })
+                        .collect();
+                    eprintln!(
+                        "[MERGE-FAIL] range {:?}/{:#x}/{} members: {:?}",
+                        range.space, range.offset, range.size, dump
+                    );
+                }
                 return Err(anyhow!("Forced merge caused intersection"));
             }
         }
@@ -2442,14 +2474,70 @@ impl Merge {
                                 continue;
                             }
                         } else if boundtype == 3 {
-                            // merge.cc:543-562
-                            let v2 = vn2_arc.read().unwrap();
-                            if !v2.is_addr_force() {
+                            // merge.cc:543-562 (full port; previously
+                            // truncated at the addrforce check — the tail
+                            // guards below sat on a dead path until the
+                            // heritage guard's addrforce marking landed):
+                            // a tail intersection only counts when vn2's
+                            // write is an INDIRECT marking the READING op
+                            // itself, and the INDIRECT's input does not
+                            // shadow vn.
+                            let vn2_def = {
+                                let v2 = vn2_arc.read().unwrap();
+                                if !v2.is_addr_force() {
+                                    continue; // cc:547
+                                }
+                                v2.def.as_ref().and_then(|w| w.upgrade())
+                            };
+                            // cc:548 if (!vn2->isWritten()) continue;
+                            let vn2_def = match vn2_def {
+                                Some(d) => d,
+                                None => continue,
+                            };
+                            // cc:549-550 if (indop->code() != CPUI_INDIRECT) continue;
+                            if vn2_def.read().unwrap().opcode != crate::opcodes::OpCode::CPUI_INDIRECT {
                                 continue;
                             }
-                            // Conservative: skip the full INDIRECT-linkage check;
-                            // treat as intersection (insertop=true below).
-                            drop(v2);
+                            // cc:552 The vn2 INDIRECT must be linked to the
+                            // read op: op == PcodeOp::getOpFromConst(
+                            //   indop->getIn(1)->getAddr()).
+                            let ind_target = {
+                                let d = vn2_def.read().unwrap();
+                                d.get_in(1)
+                                    .and_then(|c| fd.get_op_from_const(c))
+                            };
+                            let linked = ind_target
+                                .map(|t| Arc::ptr_eq(&t.0, &op_ref.0))
+                                .unwrap_or(false);
+                            if !linked {
+                                continue;
+                            }
+                            // cc:553-561 shadow checks against the
+                            // INDIRECT's input (in(0)).
+                            let ind_in0 = {
+                                let d = vn2_def.read().unwrap();
+                                d.get_in(0).cloned()
+                            };
+                            if let Some(shadow_vn) = ind_in0 {
+                                if overlaptype != 1 {
+                                    if vn.read().unwrap().copy_shadow(&shadow_vn.read().unwrap()) {
+                                        continue;
+                                    }
+                                } else {
+                                    let off = {
+                                        let v = vn.read().unwrap();
+                                        let v2 = vn2_arc.read().unwrap();
+                                        (v.get_offset() as i64 - v2.get_offset() as i64) as i32
+                                    };
+                                    if vn
+                                        .read()
+                                        .unwrap()
+                                        .partial_copy_shadow(&shadow_vn.read().unwrap(), off)
+                                    {
+                                        continue;
+                                    }
+                                }
+                            }
                         }
                         insertop = true;
                         break;
@@ -2479,7 +2567,36 @@ impl Merge {
         // eliminateIntersect for each vn in the group.
         let vns: Vec<Arc<RwLock<Varnode>>> = group.to_vec();
         for vn in &vns {
+            let diag = std::env::var("RUGRA_MERGE_DIAG").is_ok()
+                && vn.read().unwrap().get_space() == crate::space::AddressSpace::Ram;
+            let pre_desc = if diag {
+                vn.read()
+                    .unwrap()
+                    .descend
+                    .iter()
+                    .filter(|w| w.strong_count() > 0)
+                    .count()
+            } else {
+                0
+            };
+            let pre_ops = if diag { fd.obank.optree.len() } else { 0 };
             self.eliminate_intersect(fd, vn, &blocksort);
+            // TEMPORARY diagnostic (GETPARAM-EMPTYELSE follow-on, env-gated)
+            if diag {
+                let r = vn.read().unwrap();
+                eprintln!(
+                    "[UNIFY] vn@{:#x}/{} def={:?} descend={} ops_delta={} flags={:#x}",
+                    r.get_offset(),
+                    r.get_size(),
+                    r.get_def().map(|d| {
+                        let dr = d.read().unwrap();
+                        format!("{:?}@{:#x}", dr.opcode, dr.get_addr().as_u64())
+                    }),
+                    pre_desc,
+                    fd.obank.optree.len().saturating_sub(pre_ops),
+                    r.flags,
+                );
+            }
         }
     }
 

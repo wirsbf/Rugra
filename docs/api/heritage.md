@@ -876,8 +876,11 @@ provenance，不改变 guard 行为或对齐状态。
   driver_pass_gating 第二趟 0 新 INDIRECT 与 oracle 一致。
 - 锁定 oracle fixture `tests/oracle/heritage_callguard_1204`（7 case 双侧逐
   字节 MATCH，GetStr 形态 2 calls × 10 ranges = 20 INDIRECT 全对象投影）。
-- 残差：ScopeLocal queryProperties 的 fl（addrtied → ADDRFORCE）未建模
-  （fixture 投影中 `af` 双侧省略）；reprocessFreeStores 的
+- 残差：ScopeLocal queryProperties 的 fl（addrtied → ADDRFORCE）——2026-08-29
+  GETPARAM-EMPTYELSE-0001 已补 Ram 空间 global-scope 尾巴（见
+  HERITAGE-GUARD-NORMALIZE-0001 节 2026-08-29 补记）；该 fixture 投影中
+  `af` 仍双侧省略，未随fixture重钉（fixture 重钉归 heritage owner）；
+  reprocessFreeStores 的
   discoverIndexedStackPointers 触发链与生产 Action 切换归后续任务。
 
 ### 2026-08-15: HERITAGE-ADT-RENAME-0001 — canonical placeMultiequals/rename 消费 disjoint
@@ -1002,6 +1005,22 @@ normalizeWriteSize/callOpIndirectEffect 的 1:1 移植：
   flagbase（persist 等属性带）。残余：Ghidra 的 stackContainer 会继续走到
   父（global）scope，Rugra ScopeLocal 无父链，global 符号不可见（管线内
   stack/register 路径不依赖）；`fd.scope` 为空时属性查询走 arch flagbase。
+- **2026-08-29 补（GETPARAM-EMPTYELSE-0001）**：上条"global scope 不可见"
+  残差被 oracle 实测证为行为缺口——oracle 的 `Scope::queryProperties`
+  （database.cc:1271-1276）对 ram 空间地址经 `Database::mapScope` 落到
+  global scope 且 `finalscope != null`，返回 `mapped|addrtied|persist|
+  getProperty(addr)`。`guard_query_properties` 新增该 Ram 分支（原走纯
+  flagbase 尾），使 `guard_calls` 的 `holdind`（cc:1451 addrtied）为真 →
+  每个 guard INDIRECT 输出被 `set_addr_force`（cc:1516-1517）→
+  `isAutoLive` → ActionDeadCode 播种（coreaction.cc:3947-3950）consume 整个
+  call-guard 格，并经 propagateConsumed 的 marker 分支消费全部全局写。
+  缺失该分支时第一个 removal-allowed deadcode pass（pass=2，ram delay=1）
+  把 write-only 全局写连同 INDIRECT 格一起删除——语料级症状=
+  getparameter 空 else（timecond/condtime 赋值消失）+ 全语料所有
+  `::config.X = ...` write-only 赋值丢失。oracle 侧证据=插桩 decomp_opt
+  （/tmp/w-nonconverge2-ore）：18 次 deadcode ENTER（pass 1..9 含一次
+  restart 归 1），ram:delay=1/1，17620/17628 从非 deletion 候选。
+  register/unique 空间仍走 flagbase 尾巴（residual，scope 链未建模）。
 - **`guard_range`**：fl 改为真实查询（原硬编码 0）；调用顺序
   guardCalls → **guardReturns**（新接入）→ `high_ptr_possible` 门控
   guardStores/guardLoads（cc:1194，原无条件调用）；write 表项由
