@@ -1260,3 +1260,12 @@ Override/重启标志生效，而非改 `HeritageInfo`。语义链：
 独立 boolean 门控。这个改动只消除了 Option 容器与 Ghidra 对象生命周期的
 差异，没有为 Heritage 的 range/alias/SSA 分支新增 oracle 证据，模块状态保持
 L2/MISMATCH。
+
+## RUGRA_HERITAGE_TRACE（worktree 临时诊断，非对齐面）
+
+`RUGRA_HERITAGE_TRACE=1` 时，`guard_returns` 的 persist 循环对每个非 dead
+RETURN 打印 `[H-GRET] pass=<pass> range=<off>/<size> return=<addr>`（heritage.cc
+1677-1691 的观察位）。用于 LATTICE-GEN 阻塞①双侧对拍：锁定 oracle 探针（/tmp/
+w-carry-ore，CARRY_FAKE_NORET_ADDRS 供给 golden headless 环境的 {exit,
+__stack_chk_fail} noreturn 数据）的等价 [ORE-GRET]/[ORE-RETLIST] 输出。默认关
+闭，合入 root 前按需移除或保留为 env-gated 诊断。

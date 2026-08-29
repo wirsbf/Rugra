@@ -391,6 +391,33 @@ merge_multi_entry（merge.cc:908-963）：按 SymbolEntry Symbol 分组，多入
 - 新增 Merge.copy_trims 字段（对齐 merge.hh:87）。
 - 基础设施：BlockVarnode 完善（Ord/set/find_front）、varnode_def_loc/op_loc helpers。
 
+## 2026-08-30：eliminate_intersect 单读 cover 全量构造（LATTICE-GEN 阻塞①）
+
+`eliminate_intersect` 的单读 cover 从 order 域便捷入口
+（`add_def_point`/`add_ref_point`，无 CFG 递归）改为 merge.cc:501-505 的
+op-based 全量构造（`add_def_point_full` + `add_ref_point_full`）：
+
+1. **CFG 递归**（cover.cc:565-612 addRefPoint / cover.cc:524-558 addRefRecurse）：
+   INPUT varnode 的单读 cover 必须从 block-0 输入哨兵沿前驱回填到读点。
+   旧实现只含读点所在块，中间块的 guard 定义永不 `contain_varnode_def`，
+   oracle 会 snip 的读（glob_range INPUT marked=8）未 snip → mergeRangeMust
+   panic（merge.cc:315）。
+2. **marker-aware vn2 def order**（cover.cc:29-49 getUIndex）：MULTIEQUAL→0、
+   INDIRECT→被守护 op 的 order（`fd.get_op_from_const` 解码）；旧
+   `varnode_def_loc` 的裸 `get_seq_num().order` 两条规则都缺。
+
+双侧证据（cpp-dbg oracle，CARRY_FAKE_NORET 补 noreturn 数据后）：glob_range
+Ram/0x17660 组 23 成员 1:1（def/flags/desc 全同，INPUT marked 8=8）；
+main Ram/0x17500 组 140 共享成员 desc/marked 全同，残余差异仅 `rep movsq`
+pcode 提升差（INDIRECT+MULTIEQUAL@0x30d0 对）。curl E2E 0 panic（原
+main/glob_range/next_url 3 panic）、defects 0/numbering 0。
+
+配套（cover.rs）：`CoverEndpoint::from_op` 的 INDIRECT 端点改为解析被守护 op
+的 order（原「回退自身 order」残留），使 call-guard 的新版定义端点与旧版
+读取端点重合于 call order → 相邻 cover 块 touch 而非 overlap；
+`add_def_point_full`/`add_ref_point_full` 转 `pub(crate)` 供 merge 调用。
+`RUGRA_MERGE_DIAG` 诊断扩展（MERGE-PAIR：失败对实例 cover + 读者 order）。
+
 ### 2026-07-04（续 3）：完整移植 dominant-copy 替换子系统
 - 移植 `process_high_dominant_copy`（merge.cc:1316）：对收到 ≥2 trim COPY 的 high，按同源 Varnode 分组，对每组调 build_dominant_copy。
 - 移植 `find_all_into_copies`（merge.cc:1295）+ `compare_copy_by_in_varnode`（merge.cc:1045）：收集 high 的所有外来 COPY，按输入 Varnode + block index + order 排序。

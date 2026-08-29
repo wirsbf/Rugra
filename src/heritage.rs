@@ -1791,6 +1791,15 @@ impl Heritage {
             if dead {
                 continue; // cc:1680
             }
+            if std::env::var("RUGRA_HERITAGE_TRACE").is_ok() {
+                eprintln!(
+                    "[H-GRET] pass={} range={:#x}/{} return@{:#x}",
+                    self.pass,
+                    addr.as_u64(),
+                    size,
+                    op_addr.as_u64()
+                );
+            }
             // cc:1681: copyop = fd->newOp(1, op->getAddr())
             let copyop = fd.new_op(1, op_addr);
             // cc:1682: vn = fd->newVarnodeOut(size, addr, copyop)
