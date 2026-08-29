@@ -2030,3 +2030,14 @@ test_cmp_rax_rbx(9 op:LESS/SBORROW/SUB→tmp/SF/ZF/PF)、test_seq_mov_add_ret
 (11 op)、test_seq_mov_and_shl_ret(13 op)、test_seq_cmp_je_multiblock
 (22 op;块0=10 op)、cbranch 条件接线三测试(ZF 0x201→0x206,sla 布局)。
 全量 17 failed,回到 master flaky 窗口(15~18)内。
+
+## 2026-08-30:block_remove_internal 完整移植(HTTPD-EMPTYELSE-DONOTHING-0001)
+
+`Funcdata::blockRemoveInternal`(funcdata_block.cc:254-320)从不完整版(无
+removeFromFlow、无 MULTIEQUAL 拼接、双 removeBlock、panic)补齐:BRANCHIND 跳表
+清理(cc:264-269)、pushMultiequals(cc:271)、每出块 MULTIEQUAL 输入拼接
+(删除 bb 槽位 + 按 bb 入边追加 deadop 穿插输入或 deadvn 拷贝,cc:273-294)、
+removeFromFlow 边重定向循环(cc:296,block.cc:1545-1560 形状:自末尾出边起,
+switch_edge 双半语义重定向入边)、op 销毁(unreachable 路径 descend2Undef +
+descendants 检查;cc:311-312 LowlevelError 降级为警告+跳过)、removeBlock。
+`remove_do_nothing_block` 返回 bool 并接通 blockRemoveInternal。

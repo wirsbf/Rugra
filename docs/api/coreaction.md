@@ -2190,3 +2190,21 @@ getparameter.constprop.0 678→669、my_get_token 57→55,其余 121 函数零�
 构造出 sizeOut==2 且双出口同块的输入;Ghidra 拒绝一切 match,缺门则对同一边做两次
 removeEdge/moveOutEdge 手术 → find_out_index panic 或 CFG 损坏。修复=计算出 exita/exitb 后
 立即 `Arc::ptr_eq(&exita,&exitb) → continue`。当前语料不触发(单向加门,零新 join 路径)。
+
+## 2026-08-30:ActionDoNothing 忠实重写(HTTPD-EMPTYELSE-DONOTHING-0001)
+
+httpd 空 else 缺陷族根因:旧实现调 `splice_block_basic`(其自创单入守卫拒绝一切
+join 目标),而 Ghidra `ActionDoNothing::apply`(coreaction.cc:3466-3490)走
+`removeDoNothingBlock` → `blockRemoveInternal`(funcdata_block.cc:254-320,支持多入
+目标:pushMultiequals + 出块 MULTIEQUAL 输入拼接 + removeFromFlow 边重定向)。
+守卫补齐:`BlockBasic::isDoNothing` switch-target 门(block.cc:2604-2613,辅助
+`block_is_do_nothing`)、自环 f_donothing_loop 置位+警告(block.hh:100)、
+`BlockBasic::unblockedMulti`(block.cc:2534-2571,辅助 `block_unblocked_multi`,
+MULTIEQUAL 同一性解析)。移除返回 CHANGE 镜像 count+=1,驱动 rule_repeatapply
+fullloop 重跑 → mainloop → ActionBlockStructure 在 structureReset 清空后的
+sblocks 上对净化 CFG 二次结构化(oracle 探桩实证:
+ap_make_dirstr_prefix 第一轮 IfElse MATCH(空 fc),donothing 删 0x2e8d6/0x2e902
+后第二轮 PROPERIF MATCH 单臂 if)。测试:
+`test_action_donothing_removes_join_targeted_jmp_island`。
+E2E:httpd defects 7→3、skeleton 2317→2257;curl 3076/0/0(基线 3089,−13)。
+机制 C 白名单(主管线 Action):Cross-Review PENDING。

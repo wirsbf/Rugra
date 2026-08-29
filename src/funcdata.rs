@@ -2857,18 +2857,188 @@ impl Funcdata {
     // Ghidra: funcdata_block.cc:328 Funcdata::removeDoNothingBlock
     /// Remove a basic block that does nothing (only marker ops + optional
     /// single branch). Faithful to `Funcdata::removeDoNothingBlock`
-    /// (funcdata_block.cc:328-337).
+    /// (funcdata_block.cc:328-337): setDead, blockRemoveInternal(bb,false),
+    /// structureReset. Returns true when the block was actually removed.
     pub fn remove_do_nothing_block(
         &mut self,
         bb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
-    ) {
+    ) -> bool {
         if bb.read().unwrap().size_out() > 1 {
-            eprintln!("[BLOCK] Cannot delete block with >1 out edge");
-            return;
+            // cc:330-331 LowlevelError("Cannot delete a reachable block
+            // unless it has 1 out or less") — degrade to a log (worker
+            // survives one bad block; the divergence is visible on stderr).
+            eprintln!(
+                "[BLOCK] Cannot delete block with >1 out edge (LowlevelError site, funcdata_block.cc:330)"
+            );
+            return false;
         }
         bb.write()
             .unwrap()
             .set_flags(crate::block::block_flags::DEAD);
+        self.block_remove_internal(bb, false);
+        self.structure_reset();
+        true
+    }
+
+    // Ghidra: funcdata_block.cc:254 Funcdata::blockRemoveInternal
+    /// Remove an active basic block, patching up data-flow and control-flow
+    /// (funcdata_block.cc:254-320): pushMultiequals, per-out-block
+    /// MULTIEQUAL input splice (remove bb's slot, append bb's in-edge
+    /// varnodes), opZeroMulti, removeFromFlow retarget, op destruction,
+    /// removeBlock. `unreachable` mirrors the C++ flag (stranded-descendant
+    /// warning path; Rugra degrades the LowlevelError throw to a warning +
+    /// removal abort so one function cannot kill the worker).
+    pub fn block_remove_internal(
+        &mut self,
+        bb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        unreachable: bool,
+    ) {
+        use crate::opcodes::OpCode;
+        // cc:264-269: a BRANCHIND last op may own a jumptable — drop it with
+        // the block. (A do-nothing block can never reach this —
+        // hasOnlyMarkers excludes BRANCHIND — but the port keeps the guard.)
+        {
+            let lastop = {
+                let rg = bb.read().unwrap();
+                rg.as_any()
+                    .downcast_ref::<crate::block::BlockBasic>()
+                    .and_then(|b2| b2.last_op())
+            };
+            if let Some(op_ref) = lastop {
+                if op_ref.0.read().unwrap().opcode == OpCode::CPUI_BRANCHIND {
+                    if let Some(jt) = self.find_jump_table_arc(&op_ref) {
+                        self.remove_jump_table(&jt);
+                    }
+                }
+            }
+        }
+        if !unreachable {
+            // cc:271: pushMultiequals(bb) — make sure data flow is preserved.
+            self.push_multiequals(bb);
+            // cc:273-294: patch every MULTIEQUAL in bb's out-blocks so the
+            // removed edge's slot is replaced by bb's in-edge varnodes
+            // (spliced through bb's own MULTIEQUAL when present).
+            let out_blocks: Vec<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = {
+                let rg = bb.read().unwrap();
+                (0..rg.size_out())
+                    .filter_map(|s| rg.get_out(s).map(|e| e.point.clone()))
+                    .collect()
+            };
+            let bb_in_count = bb.read().unwrap().size_in();
+            for bbout in out_blocks {
+                let dead = {
+                    let rg = bbout.read().unwrap();
+                    (rg.get_flags() & crate::block::block_flags::DEAD) != 0
+                };
+                if dead {
+                    continue; // cc:275
+                }
+                // cc:276: blocknum = bbout->getInIndex(bb)
+                let blocknum = {
+                    let rg = bbout.read().unwrap();
+                    (0..rg.size_in()).find(|&i| {
+                        rg.get_in(i).map(|e| Arc::ptr_eq(&e.point, bb)).unwrap_or(false)
+                    })
+                };
+                let Some(blocknum) = blocknum else { continue };
+                let multi_ops: Vec<crate::op::PcodeOpRef> = {
+                    let rg = bbout.read().unwrap();
+                    match rg
+                        .as_any()
+                        .downcast_ref::<crate::block::BlockBasic>()
+                    {
+                        Some(b2) => b2
+                            .get_ops()
+                            .into_iter()
+                            .filter(|o| o.0.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL)
+                            .collect(),
+                        None => Vec::new(),
+                    }
+                };
+                for op in multi_ops {
+                    let deadvn = {
+                        let o = op.0.read().unwrap();
+                        o.inrefs.get(blocknum).cloned()
+                    };
+                    let Some(deadvn) = deadvn else { continue };
+                    self.op_remove_input(&op, blocknum); // cc:281
+                    // cc:282-287: if deadvn is defined by a MULTIEQUAL
+                    // inside bb, splice that phi's inputs through; otherwise
+                    // append copies of deadvn — one per bb in-edge.
+                    let deadop = deadvn.read().unwrap().get_def();
+                    let splice_phi = deadop.as_ref().map(|d| {
+                        let d_rg = d.read().unwrap();
+                        let parent_is_bb = d_rg
+                            .parent
+                            .as_ref()
+                            .and_then(|w| w.upgrade())
+                            .map(|p| Arc::ptr_eq(&p, bb))
+                            .unwrap_or(false);
+                        d_rg.opcode == OpCode::CPUI_MULTIEQUAL && parent_is_bb
+                    });
+                    if splice_phi == Some(true) {
+                        let deadop = deadop.unwrap();
+                        let phi_ins: Vec<Arc<RwLock<crate::varnode::Varnode>>> = {
+                            let d_rg = deadop.read().unwrap();
+                            d_rg.inrefs.clone()
+                        };
+                        // cc:284-286: append deadop->getIn(j), one per bb
+                        // in-edge (the phi in bb has one input per in-edge).
+                        for j in 0..bb_in_count.min(phi_ins.len()) {
+                            let slot = op.0.read().unwrap().inrefs.len();
+                            self.op_insert_input(&op, phi_ins[j].clone(), slot);
+                        }
+                    } else {
+                        for _ in 0..bb_in_count {
+                            let slot = op.0.read().unwrap().inrefs.len();
+                            self.op_insert_input(&op, deadvn.clone(), slot); // cc:290
+                        }
+                    }
+                    self.op_zero_multi(&op); // cc:292
+                }
+            }
+        }
+        // cc:296: bblocks.removeFromFlow(bb) — for each out-edge (from the
+        // last slot), remove the out-edge and retarget every in-edge of bb
+        // to that out target (block.cc:1545-1560). For the unreachable path
+        // the caller already severed all out-edges, so this loop is a no-op
+        // exactly as in the C++.
+        loop {
+            let (bbout, has_out) = {
+                let rg = bb.read().unwrap();
+                let n = rg.size_out();
+                if n == 0 {
+                    (None, false)
+                } else {
+                    (rg.get_out(n - 1).map(|e| e.point), true)
+                }
+            };
+            if !has_out {
+                break;
+            }
+            let Some(bbout) = bbout else { break };
+            self.bblocks.remove_edge_blocks(bb, &bbout);
+            loop {
+                let bbin = {
+                    let rg = bb.read().unwrap();
+                    if rg.size_in() == 0 {
+                        None
+                    } else {
+                        rg.get_in(0).map(|e| e.point)
+                    }
+                };
+                let Some(bbin) = bbin else { break };
+                // FlowBlock::replaceOutEdge(slot,bbout) — both-half
+                // semantics via switch_edge (block.cc:178-191).
+                self.switch_edge(&bbin, bb, &bbout);
+            }
+        }
+        // cc:298-318: finally remove all the ops. The C++ throws
+        // LowlevelError("Deleting op with descendants") when an op still has
+        // descendants outside bb; Rugra degrades the throw to a warning +
+        // skips destroying the stranded op (worker survives; divergence
+        // visible on stderr for fixture differencing).
+        let mut desc_warning = false;
         let ops_to_destroy: Vec<crate::op::PcodeOpRef> = {
             let rg = bb.read().unwrap();
             if let Some(bb2) = rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
@@ -2878,10 +3048,38 @@ impl Funcdata {
             }
         };
         for op_ref in &ops_to_destroy {
+            let (is_assignment, is_call, out_vn) = {
+                let o = op_ref.0.read().unwrap();
+                (o.is_assignment(), o.is_call(), o.get_out().cloned())
+            };
+            if is_assignment {
+                if let Some(ref deadvn) = out_vn {
+                    if unreachable {
+                        // cc:304-310: mark descendants as undefined first.
+                        let undef = self.descend2_undef(deadvn);
+                        if undef && !desc_warning {
+                            self.warning_header(
+                                "Creating undefined varnodes in (possibly) reachable block",
+                            );
+                            desc_warning = true;
+                        }
+                    }
+                    if self.descendants_outside(deadvn) {
+                        // cc:311-312 LowlevelError site — degraded.
+                        eprintln!(
+                            "[BLOCK] Deleting op with descendants (LowlevelError site, funcdata_block.cc:311-312); leaving op"
+                        );
+                        continue;
+                    }
+                }
+            }
+            if is_call {
+                self.delete_call_specs(op_ref);
+            }
             self.op_destroy(op_ref);
         }
+        // cc:319: bblocks.removeBlock(bb)
         self.bblocks.remove_block_arc(bb);
-        self.structure_reset();
     }
 
     // Ghidra: funcdata_block.cc:790 Funcdata::nodeJoinCreateBlock
@@ -9205,87 +9403,6 @@ impl Funcdata {
     /// the reachable parts: jump-table removal for a trailing BRANCHIND,
     /// call-spec deletion, op destruction, and final block removal. The
     /// unreachable-warning path is preserved.
-    pub fn block_remove_internal(
-        &mut self,
-        bb: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-        unreachable_flag: bool,
-    ) {
-        // If the last op is a BRANCHIND with an attached jump-table, remove it.
-        let last_op = {
-            let bb_rg = bb.read().unwrap();
-            if let Some(bb_basic) = bb_rg.as_any().downcast_ref::<BlockBasic>() {
-                bb_basic.last_op()
-            } else {
-                None
-            }
-        };
-        if let Some(ref op) = last_op {
-            let is_branchind = op.0.read().unwrap().opcode == OpCode::CPUI_BRANCHIND;
-            if is_branchind {
-                if let Some(jt) = self.find_jump_table_arc(op) {
-                    self.remove_jump_table(&jt);
-                }
-            }
-        }
-
-        if !unreachable_flag {
-            self.push_multiequals(bb);
-            // For each output block, splice MULTIEQUAL inputs. RUGRA-GAP: the
-            // full splice (opInsertInput with each in-edge) requires owning
-            // the input varnodes across the edge removal, which depends on
-            // `bblocks.removeFromFlow`. Deferred.
-        }
-        // Ghidra: bblocks.removeFromFlow(bb);  RUGRA-GAP: not ported.
-        // Approximate by detaching bb's edges.
-        self.bblocks.remove_block_arc(bb);
-
-        // Finally remove all the ops.
-        let mut desc_warning = false;
-        let ops: Vec<PcodeOpRef> = {
-            let bb_rg = bb.read().unwrap();
-            if let Some(bb_basic) = bb_rg.as_any().downcast_ref::<BlockBasic>() {
-                bb_basic.get_ops()
-            } else {
-                Vec::new()
-            }
-        };
-        for op in ops {
-            let (is_assignment, is_call, out_vn) = {
-                let op_rg = op.0.read().unwrap();
-                (
-                    op_rg.is_assignment(), op_rg.is_call(), op_rg.get_out().cloned(),
-                )
-            };
-            if is_assignment {
-                if let Some(deadvn) = out_vn {
-                    if unreachable_flag {
-                        // cc:304-310: mark descendants as undefined first.
-                        let undef = self.descend2_undef(&deadvn);
-                        if undef && !desc_warning {
-                            // Print the warning only once.
-                            self.warning_header(
-                                "Creating undefined varnodes in (possibly) reachable block",
-                            );
-                            desc_warning = true;
-                        }
-                    }
-                    if self.descendants_outside(&deadvn) {
-                        // If any descendants outside of bb
-                        // Ghidra throws LowlevelError here.
-                        panic!("Deleting op with descendants");
-                    }
-                }
-            }
-            if is_call {
-                self.delete_call_specs(&op);
-            }
-            self.op_destroy(&op);
-        }
-
-        // Remove the block altogether. Rugra exposes `remove_block_arc`
-        // (BlockGraph::removeBlock) rather than `remove_block`.
-        self.bblocks.remove_block_arc(bb);
-    }
 
     // =========================================================================
     // Helpers used by the ported methods (no Ghidra line — these adapt the

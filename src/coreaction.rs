@@ -3025,57 +3025,242 @@ pub struct ActionDoNothing { pub count: i32 ,
 impl ActionDoNothing {
     // Ghidra: coreaction.hh:504 ActionDoNothing (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
+
+    // Ghidra: block.cc:2596 BlockBasic::isDoNothing
+    /// `BlockBasic::isDoNothing` (block.cc:2596-2619): exactly one out-edge,
+    /// at least one in-edge, no live switch-target propagation edge
+    /// (block.cc:2604-2613), last op not BRANCHIND, and hasOnlyMarkers
+    /// (block.cc:2578-2592: every op is a marker or a branch).
+    fn block_is_do_nothing(
+        &self,
+        bl: &Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) -> bool {
+        use crate::opcodes::OpCode;
+        use crate::block::FlowBlock as _;
+        let bl_rg = bl.read().unwrap();
+        if bl_rg.size_out() != 1 {
+            return false; // block.cc:2599
+        }
+        if bl_rg.size_in() == 0 {
+            return false; // block.cc:2601
+        }
+        // block.cc:2604-2613: switch-target guard — if any in-edge comes
+        // from a multi-out switch block and the out target is a join, the
+        // switch edge may still be propagating a unique value.
+        let out_target = bl_rg.get_out(0).map(|e| e.point);
+        let Some(out_target) = out_target else {
+            return false;
+        };
+        let out_n_in = out_target.read().unwrap().size_in();
+        for s in 0..bl_rg.size_in() {
+            let switchbl = bl_rg.get_in(s).map(|e| e.point);
+            let Some(switchbl) = switchbl else { continue };
+            let is_switch_out = {
+                let rg = switchbl.read().unwrap();
+                (rg.get_flags() & crate::block::block_flags::SWITCH_OUT) != 0
+            };
+            if !is_switch_out {
+                continue;
+            }
+            if switchbl.read().unwrap().size_out() > 1 && out_n_in > 1 {
+                return false; // block.cc:2611
+            }
+        }
+        // block.cc:2615-2617: BRANCHIND last op never removed.
+        let (ops, last_op) = {
+            let bb2 = bl_rg
+                .as_any()
+                .downcast_ref::<crate::block::BlockBasic>();
+            match bb2 {
+                Some(bb) => (bb.get_ops(), bb.last_op()),
+                None => return false,
+            }
+        };
+        if let Some(op_ref) = last_op {
+            if op_ref.0.read().unwrap().opcode == OpCode::CPUI_BRANCHIND {
+                return false;
+            }
+        }
+        // block.cc:2618 hasOnlyMarkers.
+        for op_ref in &ops {
+            let o = op_ref.0.read().unwrap();
+            let is_marker = (o.flags & crate::op::pcodeop_flags::MARKER) != 0;
+            let is_branch = matches!(
+                o.opcode,
+                OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCHIND
+            );
+            if !is_marker && !is_branch {
+                return false;
+            }
+        }
+        true
+    }
+
+    // Ghidra: block.cc:2534 BlockBasic::unblockedMulti
+    /// `BlockBasic::unblockedMulti` (block.cc:2534-2571): true when removing
+    /// this block cannot change data-flow through the out-block — for every
+    /// MULTIEQUAL in the out-block, the varnode contributed via this block
+    /// (resolved through this block's own MULTIEQUAL when present) must be
+    /// pointer-identical to the varnode contributed by each other in-block
+    /// that also branches directly to the out-block.
+    fn block_unblocked_multi(
+        &self,
+        bl: &Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        outslot: usize,
+    ) -> bool {
+        use crate::opcodes::OpCode;
+        use crate::block::FlowBlock as _;
+        let bl_rg = bl.read().unwrap();
+        let blout = match bl_rg.get_out(outslot) {
+            Some(e) => e.point,
+            None => return true,
+        };
+        // block.cc:2545-2553: build redundlist — in-blocks of this block
+        // that also branch directly to blout.
+        let mut redundlist: Vec<
+            Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        > = Vec::new();
+        for s in 0..bl_rg.size_in() {
+            let inbl = match bl_rg.get_in(s) {
+                Some(e) => e.point,
+                None => continue,
+            };
+            let in_rg = inbl.read().unwrap();
+            for j in 0..in_rg.size_out() {
+                if let Some(e) = in_rg.get_out(j) {
+                    if Arc::ptr_eq(&e.point, &blout) {
+                        redundlist.push(inbl.clone());
+                    }
+                }
+            }
+        }
+        // block.cc:2554
+        if redundlist.is_empty() {
+            return true;
+        }
+        // block.cc:2555-2569: for each MULTIEQUAL in blout, compare the
+        // varnode from this block against each redundant in-block's.
+        let multi_ops: Vec<crate::op::PcodeOpRef> = {
+            let out_rg = blout.read().unwrap();
+            match out_rg
+                .as_any()
+                .downcast_ref::<crate::block::BlockBasic>()
+            {
+                Some(bb) => bb
+                    .get_ops()
+                    .into_iter()
+                    .filter(|o| o.0.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL)
+                    .collect(),
+                None => return true,
+            }
+        };
+        for multiop in &multi_ops {
+            for red in &redundlist {
+                // block.cc:2560-2561
+                let vnredund = {
+                    let out_rg = blout.read().unwrap();
+                    let idx = (0..out_rg.size_in()).find(|&k| {
+                        out_rg
+                            .get_in(k)
+                            .map(|e| Arc::ptr_eq(&e.point, red))
+                            .unwrap_or(false)
+                    });
+                    match idx {
+                        Some(idx) => {
+                            let o = multiop.0.read().unwrap();
+                            o.inrefs.get(idx).cloned()
+                        }
+                        None => None,
+                    }
+                };
+                let vnremove = {
+                    let out_rg = blout.read().unwrap();
+                    let idx = (0..out_rg.size_in()).find(|&k| {
+                        out_rg
+                            .get_in(k)
+                            .map(|e| Arc::ptr_eq(&e.point, bl))
+                            .unwrap_or(false)
+                    });
+                    match idx {
+                        Some(idx) => {
+                            let o = multiop.0.read().unwrap();
+                            o.inrefs.get(idx).cloned()
+                        }
+                        None => None,
+                    }
+                };
+                let (Some(vnredund), Some(vnremove)) = (vnredund, vnremove) else {
+                    continue;
+                };
+                // block.cc:2562-2566: resolve vnremove through this block's
+                // own MULTIEQUAL when it is defined by one.
+                let vnremove_resolved = {
+                    let def = vnremove.read().unwrap().get_def();
+                    match def {
+                        Some(d) => {
+                            let (is_multi, parent_is_bl) = {
+                                let d_rg = d.read().unwrap();
+                                let parent_is_bl = d_rg
+                                    .parent
+                                    .as_ref()
+                                    .and_then(|w| w.upgrade())
+                                    .map(|p| Arc::ptr_eq(&p, bl))
+                                    .unwrap_or(false);
+                                (d_rg.opcode == OpCode::CPUI_MULTIEQUAL, parent_is_bl)
+                            };
+                            if is_multi && parent_is_bl {
+                                // othermulti->getIn(getInIndex(bl))
+                                let bl_rg2 = bl.read().unwrap();
+                                let in_idx = (0..bl_rg2.size_in()).find(|&k| {
+                                    bl_rg2
+                                        .get_in(k)
+                                        .map(|e| Arc::ptr_eq(&e.point, red))
+                                        .unwrap_or(false)
+                                });
+                                match in_idx {
+                                    Some(in_idx) => {
+                                        let d_rg = d.read().unwrap();
+                                        d_rg.inrefs.get(in_idx).cloned()
+                                    }
+                                    None => Some(vnremove.clone()),
+                                }
+                            } else {
+                                Some(vnremove.clone())
+                            }
+                        }
+                        None => Some(vnremove.clone()),
+                    }
+                };
+                let Some(vnremove_resolved) = vnremove_resolved else { continue };
+                // block.cc:2567: redundant branches must be identical.
+                if !Arc::ptr_eq(&vnremove_resolved, &vnredund) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
 }
 impl Action for ActionDoNothing {
     // Ghidra: coreaction.cc:3466 ActionDoNothing::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        use crate::opcodes::OpCode;
         let n = fd.bblocks.get_size();
         for i in 0..n {
             let bl = match fd.bblocks.get_block(i) {
                 Some(b) => b,
                 None => continue,
             };
-            // Check isDoNothing conditions.
-            let is_do_nothing = {
-                let bl_rg = bl.read().unwrap();
-                // Must have exactly 1 out-edge.
-                if bl_rg.size_out() != 1 { false }
-                // Must have at least 1 in-edge.
-                else if bl_rg.size_in() == 0 { false }
-                else {
-                    // Check ops: only markers + branches allowed.
-                    if let Some(any) = bl_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
-                        let mut ok = true;
-                        for op_ref in &any.ops {
-                            let op_rg = op_ref.0.read().unwrap();
-                            // Skip markers (MULTIEQUAL/INDIRECT).
-                            let is_marker = (op_rg.flags & crate::op::pcodeop_flags::MARKER) != 0;
-                            // Skip branches.
-                            let is_branch = matches!(
-                                op_rg.opcode,
-                                OpCode::CPUI_BRANCH | OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCHIND
-                            );
-                            if !is_marker && !is_branch {
-                                ok = false;
-                                break;
-                            }
-                            // Don't remove if last op is BRANCHIND.
-                            if op_rg.opcode == OpCode::CPUI_BRANCHIND {
-                                ok = false;
-                                break;
-                            }
-                        }
-                        ok
-                    } else {
-                        false
-                    }
-                }
-            };
+            // cc:3475 bb->isDoNothing() — BlockBasic::isDoNothing
+            // (block.cc:2596-2619): sizeOut==1, sizeIn>0, no
+            // switch-target propagation edge, last op not BRANCHIND, and
+            // hasOnlyMarkers (markers + branches only).
+            let is_do_nothing = self.block_is_do_nothing(&bl);
             if !is_do_nothing {
                 continue;
             }
-            // Check for infinite loop (out → self).
+            // cc:3476-3481: a self-looping do-nothing block is an infinite
+            // loop — flag f_donothing_loop once (block.hh:100) and warn,
+            // never remove.
             let is_self_loop = {
                 let bl_rg = bl.read().unwrap();
                 if let Some(edge) = bl_rg.get_out(0) {
@@ -3085,14 +3270,40 @@ impl Action for ActionDoNothing {
                 }
             };
             if is_self_loop {
-                // Don't remove infinite do-nothing loops, just warn.
-                eprintln!("[ACTION] donothing: infinite loop at block, skipping");
+                let already = {
+                    let bl_rg = bl.read().unwrap();
+                    (bl_rg.get_flags() & crate::block::block_flags::DONOTHING_LOOP) != 0
+                };
+                if !already {
+                    bl.write()
+                        .unwrap()
+                        .set_flags(crate::block::block_flags::DONOTHING_LOOP);
+                    let start = crate::block::front_leaf(&bl)
+                        .map(|l| l.read().unwrap().get_start_addr().as_u64())
+                        .unwrap_or(0);
+                    fd.warning(
+                        "Do nothing block with infinite loop",
+                        crate::address::Address::new(start),
+                    );
+                }
                 continue;
             }
-            // Faithful to ActionDoNothing::apply (coreaction.cc:3466-3490):
-            // splice the do-nothing block out of the CFG.
-            if fd.splice_block_basic(&bl) {
-                return Ok(action_status::NO_CHANGE);
+            // cc:3482 bb->unblockedMulti(0) — BlockBasic::unblockedMulti
+            // (block.cc:2534-2571): every MULTIEQUAL in the out-block must
+            // see identical varnodes from this block (resolved through this
+            // block's own MULTIEQUAL) and from each other in-block that also
+            // branches directly to the out-block.
+            if self.block_unblocked_multi(&bl, 0) {
+                // cc:3483-3485 removeDoNothingBlock + count += 1. The count
+                // growth feeds Action::perform's repeat loop (action.cc:339)
+                // so the rule_repeatapply fullloop re-runs mainloop and
+                // ActionBlockStructure re-structures the purged CFG
+                // (structureReset cleared sblocks). Returning CHANGE(1)
+                // mirrors the C++ count increment through Rugra's
+                // state.count += res adapter.
+                fd.remove_do_nothing_block(&bl);
+                self.count += 1;
+                return Ok(action_status::CHANGE);
             }
         }
         Ok(action_status::NO_CHANGE)
@@ -14959,6 +15170,133 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0);
         let mut a = ActionDoNothing::new();
         assert_eq!(a.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// HTTPD-EMPTYELSE-DONOTHING-0001 regression lock: the empty-else
+    /// defect shape — a branch-only do-nothing block whose single out-edge
+    /// targets a JOIN (multiple in-edges). The pre-fix ActionDoNothing
+    /// called splice_block_basic, whose invented single-in guard refused
+    /// every join target, so the block survived to ActionBlockStructure,
+    /// which matched ruleBlockIfElse with an empty false clause and printed
+    /// `if (...) { ... } else { }`. Ghidra's ActionDoNothing
+    /// (coreaction.cc:3482-3485) removes the block via
+    /// removeDoNothingBlock/blockRemoveInternal (funcdata_block.cc:254-320)
+    /// — removeFromFlow retargets the in-edge to the join and the join's
+    /// MULTIEQUAL inputs are spliced — then structureReset + the
+    /// rule_repeatapply fullloop re-run restructure the purged CFG.
+    /// Faithful behavior: block removed, edge retargeted, phi inputs
+    /// preserved (remove+append = identity for a no-op block), CHANGE
+    /// returned so the repeat loop re-runs the pipeline.
+    #[test]
+    fn test_action_donothing_removes_join_targeted_jmp_island() {
+        use crate::address::Address;
+        use crate::block::BlockBasic;
+        use crate::opcodes::OpCode;
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
+        let mk = |idx: i32, addr: u64| {
+            std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+                idx,
+                Address::new(addr),
+            ))) as std::sync::Arc<
+                std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+            >
+        };
+        let b0 = mk(0, 0x1000); // entry, CBRANCH
+        let tt = mk(1, 0x1010); // true clause: has a real op (not donothing)
+        let jj = mk(2, 0x1020); // branch-only jmp island -> JOIN
+        let join = mk(3, 0x1030); // JOIN: MULTIEQUAL head
+        b0.write()
+            .unwrap()
+            .set_flags(crate::block::block_flags::ENTRY_POINT);
+        for b in [&b0, &tt, &jj, &join] {
+            fd.bblocks.add_block(b.clone());
+        }
+        fd.bblocks.add_edge(b0.clone(), tt.clone());
+        fd.bblocks.add_edge(b0.clone(), jj.clone());
+        fd.bblocks.add_edge(tt.clone(), join.clone());
+        fd.bblocks.add_edge(jj.clone(), join.clone());
+        // b0 ends with a CBRANCH (2 out-edges, so b0 itself is not donothing).
+        let cb = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&cb, OpCode::CPUI_CBRANCH);
+        let addr_vn = fd.new_constant(8, 0x1010);
+        fd.op_set_input(&cb, addr_vn, 0);
+        let cond = fd.new_constant(1, 1);
+        fd.op_set_input(&cb, cond, 1);
+        fd.op_insert_end(&cb, &b0);
+        // tt has a real COPY op (not donothing).
+        let cp = fd.new_op(1, Address::new(0x1010));
+        fd.op_set_opcode(&cp, OpCode::CPUI_COPY);
+        let src_vn = fd.new_constant(4, 0x42);
+        fd.op_set_input(&cp, src_vn, 0);
+        let cp_out = fd.new_unique(4);
+        fd.op_set_output(&cp, cp_out);
+        fd.op_insert_end(&cp, &tt);
+        // jj: BRANCH-only (hasOnlyMarkers).
+        let br = fd.new_op(1, Address::new(0x1020));
+        fd.op_set_opcode(&br, OpCode::CPUI_BRANCH);
+        let br_addr = fd.new_constant(8, 0x1030);
+        fd.op_set_input(&br, br_addr, 0);
+        fd.op_insert_end(&br, &jj);
+        // join: MULTIEQUAL with one input per in-edge (tt, jj).
+        let phi = fd.new_op(2, Address::new(0x1030));
+        fd.op_set_opcode(&phi, OpCode::CPUI_MULTIEQUAL);
+        let vn_tt = fd.new_unique(4);
+        fd.op_set_input(&phi, vn_tt, 0);
+        let vn_jj = fd.new_unique(4);
+        fd.op_set_input(&phi, vn_jj.clone(), 1);
+        let phi_out = fd.new_unique(4);
+        fd.op_set_output(&phi, phi_out);
+        fd.op_insert_end(&phi, &join);
+
+        let mut a = ActionDoNothing::new();
+        assert_eq!(
+            a.apply(&mut fd).unwrap(),
+            action_status::CHANGE,
+            "join-targeted jmp island must be removed and counted"
+        );
+        assert_eq!(a.count, 1);
+        // The island is gone from the graph.
+        assert_eq!(fd.bblocks.get_size(), 3, "b0, tt, join remain");
+        let b0_outs = {
+            let rg = b0.read().unwrap();
+            (0..rg.size_out())
+                .filter_map(|s| rg.get_out(s).map(|e| e.point))
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            b0_outs
+                .iter()
+                .any(|o| std::sync::Arc::ptr_eq(o, &tt))
+                && b0_outs.iter().any(|o| std::sync::Arc::ptr_eq(o, &join)),
+            "b0's false edge retargeted to the join"
+        );
+        assert_eq!(
+            join.read().unwrap().size_in(),
+            2,
+            "join still has 2 in-edges (tt + retargeted b0)"
+        );
+        // MULTIEQUAL splice: remove+append is an identity for a no-op block.
+        use crate::block::FlowBlock as _;
+        let phi_state = {
+            let rg = join.read().unwrap();
+            let bb = rg.as_any().downcast_ref::<BlockBasic>().unwrap();
+            bb.get_ops()
+                .into_iter()
+                .find(|o| o.0.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL)
+                .map(|o| {
+                    let o_rg = o.0.read().unwrap();
+                    (o_rg.inrefs.len(), o_rg.inrefs.get(1).map(|v| v.read().unwrap().get_offset()))
+                })
+        };
+        let Some((n_ins, second)) = phi_state else {
+            panic!("join MULTIEQUAL vanished");
+        };
+        assert_eq!(n_ins, 2, "phi input count preserved (remove+append)");
+        assert_eq!(
+            second,
+            Some(vn_jj.read().unwrap().get_offset()),
+            "the through-island value is preserved at the appended slot"
+        );
     }
 
     /// ActionRedundBranch on an empty Funcdata returns NO_CHANGE.
