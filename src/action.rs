@@ -2778,4 +2778,70 @@ mod tests {
         assert_eq!(action.perform(&mut fd, &mut state).unwrap(), 0);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
+
+    // the CFG without that reset, so the stale ADT never contains the new
+    // joined block; renameRecurse (heritage.cc:2522-2540) then never fills
+    // the joined edge's MULTIEQUAL input slots, leaving free-with-descendant
+    // phi inputs that make Merge::allocateCopyTrim (merge.cc:411) trip the
+    // "Free varnode has multiple descendants" invariant (varnode.cc:333-336)
+    // in ActionMergeRequired — the curl match_url/getparameter P0 panic.
+    // This fixture locks the oracle contract: after ActionNodeJoin creates
+    // a join block, heritage MUST be force-restructured. It is #[ignore]d
+    // until the coreaction.rs owner lands the structure_reset call; remove
+    // the attribute together with that fix.
+    #[test]
+    fn nodejoin_join_block_forces_heritage_restructure() {
+        use crate::block::BlockBasic;
+        use crate::coreaction::ActionNodeJoin;
+        use crate::opcodes::OpCode;
+        use std::sync::RwLock as StdRwLock;
+
+        let mut fd = Funcdata::new("nodejoin_structurereset", Address::new(0x1000), 1);
+        // Diamond: bb and bb2 both branch to exita/exitb on DIFFERENT
+        // conditions, so ActionNodeJoin takes the join-block path.
+        let blocks: Vec<_> = [0x1000u64, 0x1010, 0x1020, 0x1030]
+            .iter()
+            .map(|&off| {
+                let b: Arc<StdRwLock<dyn crate::block::FlowBlock + Send + Sync>> = Arc::new(
+                    StdRwLock::new(BlockBasic::new(0, Address::new(off))),
+                );
+                fd.bblocks.add_block(b.clone());
+                b
+            })
+            .collect();
+        let (bb, bb2, exita, exitb) = (&blocks[0], &blocks[1], &blocks[2], &blocks[3]);
+        // One CBRANCH per branch block (in[0]=target const, in[1]=condition).
+        let cbranch = |fd: &mut Funcdata, addr: u64, cond_val: u64| {
+            let op = fd.new_op(2, Address::new(addr));
+            fd.op_set_opcode(&op, OpCode::CPUI_CBRANCH);
+            let target = fd.new_constant(8, 0x1020);
+            let cond = fd.new_constant(1, cond_val);
+            fd.op_set_input(&op, target, 0);
+            fd.op_set_input(&op, cond, 1);
+            op
+        };
+        let cb1 = cbranch(&mut fd, 0x1000, 1);
+        fd.op_insert_end(&cb1, bb);
+        let cb2 = cbranch(&mut fd, 0x1010, 2);
+        fd.op_insert_end(&cb2, bb2);
+        // Same out-edge order for both branch blocks.
+        fd.bblocks.add_edge(bb.clone(), exita.clone());
+        fd.bblocks.add_edge(bb.clone(), exitb.clone());
+        fd.bblocks.add_edge(bb2.clone(), exita.clone());
+        fd.bblocks.add_edge(bb2.clone(), exitb.clone());
+        // Simulate an already-built augmented dominator tree (post-first
+        // ActionHeritage state): maxdepth is a real depth, not the -1
+        // restructure sentinel.
+        fd.heritage.maxdepth = 3;
+
+        let mut action = ActionNodeJoin::new();
+        let _ = action.apply(&mut fd).expect("nodejoin apply must not fail");
+
+        // Ghidra contract: the join-block creation ends in structureReset(),
+        // which forces the next heritage pass to rebuild the ADT.
+        assert_eq!(
+            fd.heritage.maxdepth, -1,
+            "ActionNodeJoin must force-restructure heritage (maxdepth=-1) after creating a join block"
+        );
+    }
 }

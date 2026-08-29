@@ -2051,3 +2051,18 @@ setTempType）与 `propagate_type_edge` 的 `temps.insert`（cc:5108）。规范
 
 证据边界：本切片只证明 interned 收敛契约；`ACTION-INFERTYPES-DISPATCH-0001`
 等完整 dispatch 闭包状态不变。
+
+## 2026-08-29:ActionNodeJoin join-block 路径接入 node_join_create_block(NODEJOIN-STRUCTURERESET-0001)
+
+w-nonconverge 因果证明(探针链 FREECHECK/null-addr block#census/HG-TRACE):join-block 路径改 CFG 后
+只调 build_dom_tree,漏了 Ghidra `nodeJoinCreateBlock` 尾部 `structureReset()`(funcdata_block.cc:816,
+heritage maxdepth=-1 → 下轮重建 ADT)。级联:join 块(地址 0、空 ops)永不被 renameRecurse 访问 →
+其入边 phi slot-2 占位输入保持 free+desc=1 → ActionMergeRequired 的 allocateCopyTrim 触发
+"Free varnode has multiple descendants"(varnode.cc:333-336)→ getparameter/match_url 管线中止/不收敛。
+修复:内联手写边手术(含"简化:从 block1 删边"的 fora/forb 偏差)替换为对零调用者忠实实现
+`Funcdata::node_join_create_block` 的调用,fora/forb 按 Ghidra blockaction.cc:2097 的
+`(a_in1 > a_in2)/(b_in1 > b_in2)`(getOutRevIndex)计算,addr 取 cbranch 地址。
+E2E:两函数恢复反编译(match_url 98/0/0,getparameter 644/1/0——empty else 为 printc 级既有缺陷
+另案),0 panic/timeout;诚实口径 skeleton 2866(2114+两函数 diff 计入)。
+锁定 fixture `action::tests::nodejoin_join_block_forces_heritage_restructure` 去 ignore 后绿
+(修复前红,双态已验)。

@@ -13528,29 +13528,48 @@ impl Action for ActionNodeJoin {
                     break;
                 }
                 // Different-condition diamond: execute nodeJoinCreateBlock
-                // (funcdata_block.cc:790-826). Create a new join block,
-                // rewire edges so block1 and block2 both flow through it.
-                {
-                    // Create new basic block (f_joined_block).
-                    let join_arc = fd.create_new_block();
-                    join_arc
-                        .write()
-                        .unwrap()
-                        .set_flags(crate::block::block_flags::JOINED_BLOCK);
-                    // Remove one edge from block1→exita and one from block2→exitb
-                    // (or vice versa). We keep the edges that are "lower priority".
-                    // Ghidra's fora_block1ishigh/forb logic: remove from the block
-                    // with the higher in-slot index. Simplified: remove from block1.
-                    fd.bblocks.remove_edge_blocks(&bl_arc, &exita);
-                    fd.bblocks.remove_edge_blocks(&bb2_arc, &exitb);
-                    // Rewire: block1→join, block2→join, join→exita, join→exitb.
-                    fd.bblocks.add_edge(bl_arc.clone(), join_arc.clone());
-                    fd.bblocks.add_edge(bb2_arc.clone(), join_arc.clone());
-                    fd.bblocks.add_edge(join_arc.clone(), exita.clone());
-                    fd.bblocks.add_edge(join_arc.clone(), exitb.clone());
-                    // Rebuild dom tree (indices changed).
-                    fd.bblocks.build_dom_tree();
-                }
+                // (blockaction.cc:2094-2097 ConditionalJoin::execute →
+                // funcdata_block.cc:779-826). The faithful
+                // Funcdata::node_join_create_block twin (funcdata.rs) performs
+                // the fora/forb edge surgery and — critically — the trailing
+                // structureReset() (funcdata_block.cc:816) whose absence left
+                // the join block out of the next heritage pass
+                // (NODEJOIN-STRUCTURERESET-0001): free phi placeholder inputs
+                // survived into ActionMergeRequired, tripping "Free varnode
+                // has multiple descendants" and stalling
+                // getparameter/match_url convergence.
+                let (a_in1, b_in1) = {
+                    let rg = bl_arc.read().unwrap();
+                    (
+                        rg.get_out(0).map(|e| e.reverse_index).unwrap_or(-1),
+                        rg.get_out(1).map(|e| e.reverse_index).unwrap_or(-1),
+                    )
+                };
+                let (a_in2, b_in2) = {
+                    let rg = bb2_arc.read().unwrap();
+                    (
+                        rg.get_out(0).map(|e| e.reverse_index).unwrap_or(-1),
+                        rg.get_out(1).map(|e| e.reverse_index).unwrap_or(-1),
+                    )
+                };
+                let cbranch_addr = {
+                    let rg = bl_arc.read().unwrap();
+                    rg.get_ops()
+                        .last()
+                        .map(|o| o.0.read().unwrap().start.get_addr())
+                        .unwrap_or_else(|| crate::address::Address::new(0))
+                };
+                fd.node_join_create_block(
+                    &bl_arc,
+                    &bb2_arc,
+                    &exita,
+                    &exitb,
+                    a_in1 > a_in2,
+                    b_in1 > b_in2,
+                    cbranch_addr,
+                );
+                // Rebuild dom tree (indices changed).
+                fd.bblocks.build_dom_tree();
                 self.count += 1;
                 joined_this = true;
                 break;
