@@ -471,10 +471,12 @@ pub struct Funcdata {
     /// are the function's return value.
     pub active_output: Option<crate::fspec::ParamActive>,
 
-    /// Architecture configuration (Ghidra `glb` / funcdata.hh:80). Optional:
-    /// legacy callers/tests construct Funcdata without it. Set via
-    /// `set_arch` before running Rules that need cpool/funcptr_align/
-    /// nan_ignore_all/userops/types.
+    /// Architecture configuration (Ghidra `glb` / funcdata.hh:80). Never
+    /// None after construction: `Funcdata::new` binds the canonical default
+    /// Architecture — the stand-in for the oracle's unconditional
+    /// `glb = scope->getArch()` (funcdata.cc:48). Callers that own a real
+    /// architecture replace it via `set_arch` before running Rules that
+    /// need cpool/funcptr_align/nan_ignore_all/userops/types.
     pub arch: Option<Arc<crate::arch::Architecture>>,
     /// Restart-pending flag for ActionRestartGroup (funcdata.hh).
     pub restart_pending: bool,
@@ -517,9 +519,10 @@ pub struct Funcdata {
     pub localoverride: crate::override_rs::Override,
 
     // ---- Stack space / spacebase configuration (from Architecture, defaults to x86-64) ----
-    // Faithful to Architecture's cspec <stackpointer> fields. Funcdata does
-    // not yet hold an Architecture reference (L3 gap), so these are defaults
-    // matching x86-64-gcc.cspec: <stackpointer register="RSP" space="ram"/>.
+    // Faithful to Architecture's cspec <stackpointer> fields. These mirror
+    // the canonical Architecture's x86-64-gcc.cspec defaults (identical
+    // values in `Architecture::new`): Rugra snapshots them as Funcdata
+    // fields rather than reading `glb` per query.
     /// The stack address space (IPTR_SPACEBASE). Stack varnodes live here.
     pub stack_space: crate::space::AddressSpace,
     /// Stack pointer register: (space, offset, size) = (Register, 0x20, 8) for RSP.
@@ -530,11 +533,36 @@ pub struct Funcdata {
     pub stack_grows_negative: bool,
 }
 
+// RUGRA-GLUE: canonical default Architecture shared by every Funcdata
+// constructed without a caller-owned one. Ghidra's Funcdata constructor
+// takes its Architecture unconditionally from the Scope
+// (`glb = scope->getArch()`, funcdata.cc:48; `Scope::getArch` is the
+// database.hh:775 inline) and every Funcdata decompiled under one database
+// shares that single pointer. Rugra's Funcdata::new has no Scope parameter
+// yet (FUNCDATA-LOCALSCOPE-OWNERSHIP-0001), so this lazily-built
+// `Architecture::new()` (architecture.cc:150 ctor + `resetDefaultsInternal`
+// defaults, architecture.cc:1416-1432) restores both the never-null `glb`
+// invariant and the single-database pointer sharing; `set_arch` overwrites
+// the binding with a caller's real Architecture.
+fn canonical_arch() -> Arc<crate::arch::Architecture> {
+    static CANONICAL: std::sync::OnceLock<Arc<crate::arch::Architecture>> =
+        std::sync::OnceLock::new();
+    CANONICAL
+        .get_or_init(|| Arc::new(crate::arch::Architecture::new()))
+        .clone()
+}
+
 impl Funcdata {
-    // Ghidra: funcdata.cc:34 Funcdata::new
-    /// Create a new Funcdata instance
+    // Ghidra: funcdata.cc:34 Funcdata::Funcdata
+    /// Create a new Funcdata instance. Faithful to the constructor
+    /// (funcdata.cc:34-82): every C++ Funcdata is constructed with its
+    /// Scope's Architecture (`glb = scope->getArch()`, funcdata.cc:48) and
+    /// immediately sources `minLanedSize` from it (funcdata.cc:49). Rugra
+    /// binds the canonical default Architecture through `set_arch` (which
+    /// runs the same ctor tail: model binding + `min_laned_size`); callers
+    /// that own a real architecture replace it via a later `set_arch`.
     pub fn new(name: &str, addr: Address, size: i32) -> Self {
-        Self {
+        let mut fd = Self {
             name: name.to_string(),
             baseaddr: addr,
             size,
@@ -578,7 +606,14 @@ impl Funcdata {
             stack_pointer_offset: 0x20, // x86-64 RSP
             stack_pointer_size: 8,
             stack_grows_negative: true,
-        }
+        };
+        // Ghidra: funcdata.cc:48 Funcdata::Funcdata
+        // `glb = scope->getArch();` — construction-time Architecture
+        // binding (funcdata.cc:49 `minLanedSize = glb->...` tail runs in
+        // set_arch). Canonical default stands in until a caller attaches
+        // its real Architecture.
+        fd.set_arch(canonical_arch());
+        fd
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::isTypeRecoveryOn

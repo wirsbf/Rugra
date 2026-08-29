@@ -6944,14 +6944,17 @@ mod tests {
 
     #[test]
     fn test_split_datatype_constructs() {
-        // Without an attached Architecture there is no factory/config, so
-        // both split flags stay false (subflow.cc:2701-2709; the C++
-        // Funcdata always has an Architecture, whose default config sets
-        // struct|array|pointer — architecture.rs reset_defaults pins that).
+        // Funcdata::new binds the canonical default Architecture (the
+        // stand-in for `glb = scope->getArch()`, funcdata.cc:48 — the C++
+        // Funcdata always has an Architecture). Its resetDefaultsInternal
+        // config sets struct|array|pointer (architecture.cc:1430-1432), so
+        // both split gates are on by construction (subflow.cc:2704-2707);
+        // the canonical instance carries no TypeFactory, so `types` stays
+        // None until a caller attaches a real Architecture via set_arch.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let s = SplitDatatype::new(&mut fd);
-        assert!(!s.split_structures);
-        assert!(!s.split_arrays);
+        assert!(s.split_structures);
+        assert!(s.split_arrays);
         assert!(!s.is_load_store);
         assert!(s.data_type_pieces.is_empty());
         assert!(s.types.is_none());
