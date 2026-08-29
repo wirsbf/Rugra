@@ -1,7 +1,7 @@
 {
  "schema": 1,
  "fixture_id": "MAIN-RC2-BLOCKGOTO-WRAPPED-0001",
- "stable_function_id": "GH12-F-blockgoto-wrapped-0001",
+ "stable_function_id": "GH12-F-4d611d7dfc4a6a64a5ef",
  "stable_function_closure": [
   "ghidra::BlockGraph::newBlockGoto block.cc:1702",
   "ghidra::BlockGraph::identifyInternal block.cc:940",
@@ -33,7 +33,8 @@
   "cases": [
    "double_back_goto: b0->b1->b2->{b0,b3}, b3->b1 — oracle probe: one pure BlockGoto (wrapped=b3 basic, gototarget=b0)",
    "loop_exit_conflict_gotos: b0->b1, b1->{b2,b3}, b2->{b1,b4}, b3->b4, b4->b1 — oracle probe: TWO BlockGotos, one wrapping a properif composite, one wrapping a list composite"
-  ]
+  ],
+  "sha256": "c069a3cf8d8b77b171fe7c0514a6a4ba422de2f453585757c11022717ed0211b"
  },
  "known_divergences": [
   {
@@ -47,5 +48,6 @@
   "rust_fixture_sha256": "2a3903c5afa1fa2df79f8b56008422d9ae1b10eac6bd7f27f49a24b131dd7265",
   "rugra_blockaction_sha256": "408d39d2dbd55e58aacf5367e306e5783a43acbbfb2bd67088b3f6b6a2231101",
   "rugra_block_sha256": "537054fa68d8d3d5baed80d0c40bdef3c2e61e77ebd92fe6d0f684a0c0bae821"
- }
+ },
+ "overall_status": "MISMATCH: BlockGoto wrapped-component semantics (wrapped retention, dyn target capture, gototype, prints plumbing) locked on the oracle side, but on both probe shapes Rugra's collapse path structures the graphs without producing t_goto nodes (gotos=0) — registered divergence BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 (same family as the goto_cascade bilateral MISMATCH)"
 }

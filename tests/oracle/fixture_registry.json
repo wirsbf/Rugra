@@ -7314,7 +7314,7 @@
     },
     {
       "id": "nodejoin_condjoin_1204",
-      "description": "ConditionalJoin/ActionNodeJoin bilateral projection driven through production perform: same-condition full join (count=1, joinblock composition, exit COPY/INT_ADD), six findDups gate rejections, triple-diamond re-join, versus locked Ghidra 12.0.4",
+      "description": "ConditionalJoin/ActionNodeJoin bilateral projection driven through production perform: same-condition full join (count=1, joinblock composition, exit COPY/INT_ADD), six findDups gate rejections, triple-diamond re-join, versus locked Ghidra 12.0.4. TODOs NODEJOIN-F2-EXECUTE-STEPS-0001/F3-SAMECOND-FULLJOIN-0001/F4-MATCH-GATES-0001/F5-DYNAMIC-SIZE-0001 delivered by w-nodejoin-f234 (9/9 records MATCH, pristine oracle rebuild); NJF234 cross-review follow-ups closed by w-registry6 (runner pin + --validate-only).",
       "runner": [
         "tools/run_nodejoin_condjoin_oracle.sh"
       ],
@@ -7326,20 +7326,120 @@
       "evidence_status": "MATCH",
       "cache": {
         "metadata": "tests/oracle/nodejoin_condjoin_1204.metadata.json",
-        "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-        "rust_base_commit": "82e81ec8fb5eab19ed880bc0df2ede8bbad1512d"
+        "tools": {
+          "runner": "tools/run_nodejoin_condjoin_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/nodejoin_condjoin_1204.cc",
+          "fixture_source_2": "tests/oracle/nodejoin_condjoin_1204.rs"
+        }
       },
       "impact": {
-        "todo_ids": [
-          "NODEJOIN-F2-EXECUTE-STEPS-0001",
-          "NODEJOIN-F3-SAMECOND-FULLJOIN-0001",
-          "NODEJOIN-F4-MATCH-GATES-0001",
-          "NODEJOIN-F5-DYNAMIC-SIZE-0001"
-        ],
-        "src_files": [
+        "paths": [
           "src/coreaction.rs"
         ],
-        "notes": "delivered by w-nodejoin-f234; 9/9 records MATCH (pristine oracle rebuild); cross-review PENDING"
+        "rust_function_ids": [
+          "RG-F-8fd7cc62c810fb242a5a",
+          "RG-F-de05b7ef5a84b6c2c139",
+          "RG-F-040dd6a4963caea0f64f",
+          "RG-F-1fcc10e325a7fac374ec",
+          "RG-F-03c2e475c288ae37c5ee",
+          "RG-F-e7cb855a090805b40db6",
+          "RG-F-62a55372c4fd4fadf642"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-29862f94d124a7c5707b",
+          "GH12-F-c2dd6a9878854a3cb8e9",
+          "GH12-F-e605fa06da306ffafedd",
+          "GH12-F-e38aa1a948fcaacaf3fb",
+          "GH12-F-87d69cbc5a36669257d2",
+          "GH12-F-9898c3e5526ae9013343"
+        ]
+      }
+    },
+    {
+      "id": "printc_intnot_token_1204",
+      "description": "PRINTC-INTNOT-TOKEN-0001 unary-prefix operator token-order oracle: emitExpression over constant-leaf expression graphs locks PrintLanguage::opUnary semantics (printlanguage.cc:566-573 pushOp+pushVn, no direct emit) against eager-emission regressions producing the illegal-C `0xfefefeff~ & *p` form (GLOBWORD-C4-INTNOT-TOKEN-0001); delivered on master by ba3fd74f/1bc1d530; residual branches UNTESTED per B2 residual-container rule (bool_negate_flip_paths, float_unary_opfunc, markup_emitter_projection).",
+      "runner": [
+        "tools/run_printc_intnot_token_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "UNTESTED",
+      "cache": {
+        "metadata": "tests/oracle/printc_intnot_token_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_printc_intnot_token_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/printc_intnot_token_1204.cc",
+          "fixture_source_2": "tests/oracle/printc_intnot_token_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/printc.rs",
+          "src/printlanguage.rs"
+        ],
+        "rust_function_ids": [
+          "RG-F-aa26c07c6ab34a24a004",
+          "RG-F-d4238160ddd1db99a878"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-6c9605d310c0734aa09d",
+          "GH12-F-4aa26d1751eeeeb74004"
+        ]
+      }
+    },
+    {
+      "id": "blockstruct_blockgoto_wrapped_1204",
+      "description": "MAIN-RC2-BLOCKGOTO-WRAPPED-0001 bilateral BlockGoto lifecycle fixture: oracle-side locked wrapped-component retention, dyn gototarget capture, gototype, prints plumbing (block.cc:2856-2916, blockaction.cc:1446-1475); Rugra collapse path diverges on both probe shapes (gotos=0), registered BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 — same family as goto_cascade; delivered on master by a2c5ce26/056dd651.",
+      "runner": [
+        "tools/run_blockstruct_blockgoto_wrapped_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/blockstruct_blockgoto_wrapped_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_blockstruct_blockgoto_wrapped_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/blockstruct_blockgoto_wrapped_1204.cc",
+          "fixture_source_2": "tests/oracle/blockstruct_blockgoto_wrapped_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/block.rs",
+          "src/blockaction.rs"
+        ],
+        "rust_function_ids": [
+          "RG-F-124cd34d55249816790d",
+          "RG-F-29f85471e683fa65142b",
+          "RG-F-4888aa18f6c00f918567",
+          "RG-F-243665bc9f7a02f6d02c",
+          "RG-F-2a1c4c6151d8d8414480"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-4d611d7dfc4a6a64a5ef",
+          "GH12-F-8e8ac9c56d5d075a553b",
+          "GH12-F-ba09f6888a6bb05d540b",
+          "GH12-F-b84f07a06f4a514c77a9",
+          "GH12-F-790f33122290d19d41c1",
+          "GH12-F-01274f347f157249de7f",
+          "GH12-F-fc1cedcd0a0087800f1d",
+          "GH12-F-6e1c56bb19aa1ddf9894",
+          "GH12-F-f115e14245520328995e",
+          "GH12-F-094e73150d05f9176dad"
+        ]
       }
     }
   ]
