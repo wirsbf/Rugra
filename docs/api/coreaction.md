@@ -1,5 +1,24 @@
 # `coreaction.rs` API Reference
 
+## 2026-08-30：castOutput 完整臂 + castInput guard/const/explicit（PTRSUB-SWITCH-CAST-RESIDUAL-0001 steps 3+4）
+
+- `cast_output`（cc:2532-2616）：token 分发补 PTRADD 臂（typeop.cc:2244 = in0 high
+  read-facing，经真实 `TypeOpPtradd`）与算术族臂（cast.cc:394）；补 implied varnode
+  三臂（cc:2559-2582：typelock+非 RETURN lone reader → `force = !isOpIdentical`；非
+  指针 out → 原地 `updateType(tokenct)`；指针 out 且 pointee 非复合 → 同样重类型，
+  复合 ARRAY/STRUCT/UNION 保留）；补 `testStructOffset0`（cc:2384-2413 全移植：struct
+  首字段 offset==0 / array 下探一层 + 双侧 array 剥离 + VOID 拒绝 + castStandard
+  (req,cur,true,true)==null 判定）→ PTRSUB(#0) 形态（cc:2586-2588/2605-2607）。刷新
+  用 `refresh_out_high_resolve`（Rugra 的 typeDirty 为 no-op 的单实例投影，登记残差）。
+- `cast_input`（cc:2655-2720）重构为 oracle 臂序：ct=null → `markExplicitUnsigned`
+  /`markExplicitLongSize`（cast.cc:38-105 全移植，含 inheritsSign/
+  inheritsSignZero/shiftOp 的 addlflags 集合与 mostsigbit 阈值）返回计数；double-cast
+  guard（cc:2673-2686：implied CAST 输出 lone-descend 原地重类型 / 回接更早 varnode）；
+  常量臂（cc:2687-2691：updateType 成功即计 1，锁定常量跌落到 CAST 插入）；插入用
+  `vnin`（可能是更早 CAST 的输入）。
+- fixture `ptrsub_switch_cast_1204` 全部 17 条记录与锁定 oracle 字节一致（13 条
+  known_raw_differences 全部撤销，见重钉提交）。
+
 ## 2026-08-30：ActionSetCasts::apply 的 PTRADD/PTRSUB fit preflight（PTRSUB-SWITCH-CAST-RESIDUAL-0001 step 2）
 
 - `apply` 开头调用 `fd.start_cast_phase()`（coreaction.cc:2728 / funcdata.hh:183，Rugra 新增
