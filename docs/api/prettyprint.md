@@ -1,5 +1,17 @@
 # `prettyprint.rs` API Reference
 
+## 2026-08-30：POSTFIX-RETIRE-0001 W0 — 死代码清除（字节级零行为差）
+
+路线图 `/tmp/rugra-reports/w-postfix-2026-08-30.md` W0 第一刀：删除全仓零引用的
+死函数与 no-op scaffold，并改正伪造的 `// Ghidra: prettyprint.hh:547
+EmitNoMarkup::<方法>` 注解（锁定 oracle 的 `EmitNoMarkup`（hh:547-594）只有
+`Emit` 虚方法族，无任何 postProcess/文本 pass 方法）。验收门禁：curl/httpd E2E
+输出与删除前 **sha256 逐字节一致**。
+
+- 删除 `reconcile_pointer_arith()`（原 :255-320）：唯一调用点早在
+  mark_varnode_used LOAD 检测修复后即被注释（原 :917），仅存自递归引用。
+  第七 pass 区域的注释同步改为"已删除"记录。
+
 ## 2026-08-28：RPN variable metadata bridge
 
 `Emit::tag_variable_with_metadata` 为 Ghidra
@@ -178,9 +190,11 @@ post_process 第七 pass 调用。C 禁止 `int - pointer`。当行匹配 `<整�
 
 **实现**：前向扫描（`find(" - ")`），i 只前进不回退。早期版本有回退 bug 导致死循环，已修复。
 
-### `fn reconcile_pointer_arith(line: &str) -> String` （2026-06-28，**已禁用**）
+### `fn reconcile_pointer_arith(line: &str) -> String` （2026-06-28，**已删除**）
 
-**已禁用**——mark_varnode_used 的 LOAD 结果检测让 LOAD 输出正确声明为 int/long（非指针），消除了 pointer/int 除法错误。此函数保留但不再调用。
+**已删除**（2026-08-30，POSTFIX-RETIRE-0001 W0）——mark_varnode_used 的 LOAD
+结果检测让 LOAD 输出正确声明为 int/long（非指针）后，唯一调用点已被注释，
+函数仅存自递归引用，属全仓零引用死代码。
 
 ### `fn reconcile_int_times_string(line: &str) -> String` （2026-06-28）
 

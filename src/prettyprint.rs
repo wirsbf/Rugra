@@ -252,73 +252,6 @@ pub trait Emit {
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { None }
 }
 
-// RUGRA-GLUE: reconcile_pointer_arith (no Ghidra counterpart found)
-/// Reconcile `int - pointer` arithmetic (illegal in C) by casting the integer
-/// constant to a pointer type. Only acts on the pattern
-///   <sep><int-literal> - <pointer-prefix>Var...
-/// where <sep> is space/=/(/, and <pointer-prefix> is pi/pc/ps/pp/pv. This is
-/// a print-layer stopgap for missing type propagation (ActionTypePropagate).
-/// Reconcile illegal pointer arithmetic: `ptrvar / int` and `ptrvar % int`.
-/// C forbids pointer division/modulo (only +, -, and comparisons are legal
-/// on pointers). This casts the pointer operand to (long). Triggered by
-/// LOAD results wrongly typed as pointers (e.g. `*(int*)addr` typed as ptr).
-fn reconcile_pointer_arith(line: &str) -> String {
-    let ptr_prefixes = ["piVar", "pcVar", "psVar", "ppVar", "pvVar"];
-    // Find "<ptrvar> / <int>" or "<ptrvar> % <int>".
-    for op in ["/ ", "% "] {
-        let mut search_from = 0;
-        loop {
-            // Find " <op>" patterns.
-            let needle = format!(" {}{}", op.trim_end(), " ");
-            if let Some(rel) = line[search_from..].find(&needle) {
-                let op_pos = search_from + rel;
-                // The pointer var precedes the operator. Scan backwards.
-                let bytes = line.as_bytes();
-                let mut var_end = op_pos;
-                while var_end > 0 && bytes[var_end - 1] == b' ' { var_end -= 1; }
-                let mut var_start = var_end;
-                while var_end - var_start < 20 && var_start > 0
-                    && (bytes[var_start - 1].is_ascii_alphanumeric() || bytes[var_start - 1] == b'_') {
-                    var_start -= 1;
-                }
-                let var_name = &line[var_start..var_end];
-                let is_ptr = ptr_prefixes.iter().any(|p| var_name.starts_with(p));
-                // Verify the operand after the operator is an integer.
-                let after_op = op_pos + needle.len();
-                let rest = &line[after_op..];
-                let int_len = rest
-                    .bytes()
-                    .take_while(|b| {
-                        b.is_ascii_digit() || *b == b'x'
-                    || (*b >= b'a' && *b <= b'f') || *b == b' '
-                    })
-                    .count();
-                let int_part = rest[..int_len].trim();
-                let is_int = !int_part.is_empty()
-                    && (int_part.chars().all(|c| c.is_ascii_digit())
-                        || (int_part.starts_with("0x") && int_part.len() > 2
-                            && int_part[2..].chars().all(|c| c.is_ascii_hexdigit())));
-                if is_ptr && is_int {
-                    // Check var_start is preceded by a separator (standalone operand).
-                    let sep_ok = var_start == 0 || matches!(bytes[var_start - 1],
-                        b' ' | b'=' | b'(' | b',' | b'\t');
-                    if sep_ok {
-                        // Insert (long) before var_name.
-                        let new_line = format!(
-                            "{}(long){}{}", &line[..var_start], var_name, &line[var_end..]
-                        );
-                        return reconcile_pointer_arith(&new_line); // recurse for more
-                    }
-                }
-                search_from = op_pos + needle.len();
-            } else {
-                break;
-            }
-        }
-    }
-    line.to_string()
-}
-
 // RUGRA-GLUE: reconcile_int_times_string (no Ghidra counterpart found)
 /// Reconcile `X * "string"` — int * string-literal is illegal C. Cast the
 /// string literal to (long). Only matches quoted strings, never pointer vars.
@@ -911,10 +844,10 @@ impl EmitNoMarkup {
             // reconcile_int_minus_pointer still needed for non-LOAD pointers
             // (e.g. function parameters typed as int* used in subtraction).
             s = reconcile_int_minus_pointer(&s);
-            // reconcile_pointer_arith no longer needed: LOAD results are now
-            // correctly typed as int/long (not pointer) via mark_varnode_used
-            // LOAD detection, so ptr/int division doesn't occur.
-            // s = reconcile_pointer_arith(&s);
+            // reconcile_pointer_arith (ptr/int division-modulo reconcile)
+            // removed in POSTFIX-RETIRE-0001 W0: its only call site was
+            // commented out after mark_varnode_used LOAD detection made LOAD
+            // results correctly typed as int/long (not pointer).
             // reconcile_int_times_string still needed for copy-propagation
             // artifacts (string address inlined into MULT operand).
             if s.contains(" * \"") {
