@@ -229,13 +229,13 @@ wrapper。当前 corpus 的迁移计划应为 `auto=9`、`manual=0`、`tombstone
 
 后续 raw scheme-2 变化写入独立、append-only 的
 `FUNCTION_ID_CONTINUITY.json`，绝不覆盖上述历史 migration。当前 checkpoint 固定为
-`36633d9dd88ea5ee1c85d39b7cdf515f4309e3ba`（src tree
-`ae8f4a750f671d6b875dacba308877321540ed8d`），从 baseline target 连续重放 31 个
+`0c5091f5a8eba7f5a2dbbebfcdada08a5e3034fb`（src tree
+`ec6bed6fb1f2f7812ebdb498653e3fd5431bb3d4`，REGISTRY-CHECKPOINT-ADVANCE-0001 推进越过
+master nodejoin-F1/anondecl 窗口 10ea407d..e3a9c421），从 baseline target 连续重放 406 个
 first-parent commit。自动 continuity 仅接受同 path/module/owner/name 的唯一 1→1，且签名
-差异严格限于参数 pattern 起始的 binding `mut`，同时必须独立复算同 patch hunk 与相同非空
+差异严格限于参数 pattern 起始的 binding `mut` 或 rustfmt 尾分隔符，同时必须独立复算同 patch hunk 与相同非空
 annotation；`&mut`、`&'a mut`、`*mut` 和 `&mut pattern` 不规范化，也不改变 raw ID 公式。
-当前文件记录 2 条 Block lineage（旧 ID 分别解析到 raw 新 ID）与 1 个
-`introduced_live` helper。loader 先解析 baseline alias，再组合 continuity terminal；任一
+当前文件记录 489 条 lineage、883 个 `introduced_live` 与 55 个 tombstone。loader 先解析 baseline alias，再组合 continuity terminal；任一
 chain 断裂、1→2/2→1、跨层 token 复用、terminal collision/缺失、event commit/blob、
 first-parent、projection hash/count、dirty/src tree 漂移均 rc=2。continuity tombstone 只作
 诊断，永不进入自动 replacement。schema 1 只允许 baseline origin 进入 tombstone；若某个
