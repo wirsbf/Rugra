@@ -178,13 +178,17 @@ public:
     FixtureTranslate *fixtureTranslate = new FixtureTranslate();
     translate = fixtureTranslate;
     copySpaces(fixtureTranslate);
-    max_basetype_size = 10;
+    max_basetype_size = 16;
     types = new TypeFactory(this);
     types->setupSizes();
-    types->setCoreType("xunknown1", 1, TYPE_UNKNOWN, false);
-    types->setCoreType("xunknown2", 2, TYPE_UNKNOWN, false);
-    types->setCoreType("xunknown4", 4, TYPE_UNKNOWN, false);
-    types->setCoreType("xunknown8", 8, TYPE_UNKNOWN, false);
+    // Production "undefinedN" spellings so the untyped unique-out symbols
+    // the decls cases create get the same default-name prefix character as
+    // the x86 spec ('u' from "undefined8") — ptrsub's xunknownN spelling
+    // would name them xVar1 instead of uVar1.
+    types->setCoreType("undefined1", 1, TYPE_UNKNOWN, false);
+    types->setCoreType("undefined2", 2, TYPE_UNKNOWN, false);
+    types->setCoreType("undefined4", 4, TYPE_UNKNOWN, false);
+    types->setCoreType("undefined8", 8, TYPE_UNKNOWN, false);
     types->setCoreType("char", 1, TYPE_INT, true);
     types->setCoreType("uint1", 1, TYPE_UINT, false);
     types->setCoreType("uint2", 2, TYPE_UINT, false);
