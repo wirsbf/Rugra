@@ -762,6 +762,30 @@ fn run_cast_chain(ctx: &CaseCtx) {
     run_post("cast_chain", &mut action, &block, &mut tracker);
 }
 
+fn run_typedef_typelock(ctx: &CaseCtx, td_int8: Arc<Datatype>) {
+    let (mut fd, block) = new_case(ctx, "sw_td_lock", 0x5700);
+    let mut tracker = CaseTracker::new();
+    let g_a = typed_input(&mut fd, AddressSpace::Ram, 0x10000119, 8, ctx.t.int8_t.clone());
+    tracker.vn(&g_a, "gA8");
+    let ia = make_op(&mut fd, &block, OpCode::CPUI_INT_ADD, 2, 0x5700, 8);
+    fd.op_set_input(&ia, g_a.clone(), 0);
+    let zero = fd.new_constant(8, 0);
+    fd.op_set_input(&ia, zero, 1);
+    {
+        let out = ia.0.read().unwrap().get_out().expect("ia out").clone();
+        out.write().unwrap().update_type_lock(td_int8.clone(), true, false);
+        out.write().unwrap().set_implied();
+    }
+    tracker.op(&ia, "ia");
+    let ia_out = ia.0.read().unwrap().get_out().expect("ia out").clone();
+    tracker.vn(&ia_out, "ia_o");
+    fd.set_high_level();
+    run_pre(&fd, "typedef_typelock", &block, &mut tracker, ctx.factory);
+    let mut action = ActionSetCasts::new();
+    let _ = action.apply(&mut fd).expect("ActionSetCasts::apply");
+    run_post("typedef_typelock", &mut action, &block, &mut tracker);
+}
+
 fn main() {
     println!(
         "schema=1|fixture=PTRSUB-SWITCH-CAST-0001|oracle=e40ed13014025f82488b1f8f7bca566894ac376b"
@@ -831,6 +855,10 @@ fn main() {
             p_table,
         }
     };
+    let td_int8 = factory
+        .write()
+        .unwrap()
+        .get_typedef("td_int8", t.int8_t.clone());
 
     let mut architecture = Architecture::new();
     architecture.archid = "x86:LE:64:default:gcc".to_string();
@@ -857,4 +885,5 @@ fn main() {
     run_cast_chain(&ctx);
     run_case(&ctx, "globform", 0x5600, true, true, true, true,
              Some(t.p_int8.clone()), Some(t.p_int8.clone()), 4, true);
+    run_typedef_typelock(&ctx, td_int8);
 }

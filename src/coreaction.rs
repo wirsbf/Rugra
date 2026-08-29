@@ -4954,25 +4954,26 @@ impl ActionSetCasts {
                     .unwrap_or(false)
         };
         if def_is_cast && in_vn.read().unwrap().is_implied() {
-            // cc:2675-2678: lone-descend retype ends the count on success.
-            let lone_is_op = in_vn
-                .read()
-                .unwrap()
-                .lone_descend()
-                .map(|d| std::sync::Arc::ptr_eq(&d, &op_ref.0))
-                .unwrap_or(false);
-            if lone_is_op {
-                in_vn.write().unwrap().update_type(ct.clone());
-                if in_vn
+                // cc:2675-2678: lone-descend retype ends the count on
+                // success.
+                let lone_is_op = in_vn
                     .read()
                     .unwrap()
-                    .get_type()
-                    .map(|t| Arc::ptr_eq(&t, &ct))
-                    .unwrap_or(false)
-                {
-                    return true;
+                    .lone_descend()
+                    .map(|d| std::sync::Arc::ptr_eq(&d, &op_ref.0))
+                    .unwrap_or(false);
+                if lone_is_op {
+                    in_vn.write().unwrap().update_type(ct.clone());
+                    if in_vn
+                        .read()
+                        .unwrap()
+                        .get_type()
+                        .map(|t| Arc::ptr_eq(&t, &ct))
+                        .unwrap_or(false)
+                    {
+                        return true;
+                    }
                 }
-            }
             // cc:2680-2684: cast directly from the input of the previous cast.
             if let Some(prev) = in_vn
                 .read()
@@ -5245,9 +5246,19 @@ impl ActionSetCasts {
 
     // Ghidra: coreaction.cc:2469 ActionSetCasts::isOpIdentical
     /// Check if two types are identical after unwrapping pointer layers and
-    /// typedef aliases. Faithful to `isOpIdentical` (cc:2469-2481).
+    /// typedef aliases. Faithful to `isOpIdentical` (cc:2469-2481): the
+    /// synchronized double-PTR descent runs first (cc:2472-2474), then each
+    /// side independently walks its own typedef chain (cc:2476-2479:
+    /// `while(ct->getTypedef() != 0) ct = ct->getTypedef();`) before the
+    /// identity comparison (cc:2480). Ghidra's `typedefImm` is a per-instance
+    /// field; Rugra resolves the same chain through the TypeFactory typedef
+    /// table (name -> stripped target, populated by `get_typedef`,
+    /// typefactory.rs), which is identity-equivalent for factory-interned
+    /// types. A detached Funcdata without an architecture factory keeps the
+    /// bare pointer comparison (Ghidra always has a factory).
     fn is_op_identical(
         ct1: &Arc<crate::type_system::datatype::Datatype>, ct2: &Arc<crate::type_system::datatype::Datatype>,
+        factory: Option<&crate::type_system::typefactory::TypeFactory>,
     ) -> bool {
         use crate::type_system::datatype::Datatype;
         let mut t1 = ct1.clone();
@@ -5257,6 +5268,17 @@ impl ActionSetCasts {
                 t1 = p1.ptr_to.clone();
                 t2 = p2.ptr_to.clone();
             } else { break; }
+        }
+        // cc:2476-2479: strip typedef aliases independently on each side
+        // after the pointer descent (a typedef-of-pointer loses its alias
+        // when descended; a typedef pointee keeps it until stripped here).
+        if let Some(factory) = factory {
+            while let Some(target) = factory.get_typedef_target(t1.get_name()) {
+                t1 = target.clone();
+            }
+            while let Some(target) = factory.get_typedef_target(t2.get_name()) {
+                t2 = target.clone();
+            }
         }
         Arc::ptr_eq(&t1, &t2)
     }
@@ -5470,7 +5492,20 @@ impl ActionSetCasts {
                         .map(|d| d.read().unwrap().opcode == OpCode::CPUI_RETURN)
                         .unwrap_or(false);
                     if !lone_is_return {
-                        force = !Self::is_op_identical(&out_high_resolve, &tokenct);
+                        // cc:2566: force = !isOpIdentical(outHighResolve,
+                        // tokenct) — the typedef-chain stripping inside
+                        // isOpIdentical (cc:2476-2479) runs through the
+                        // architecture's TypeFactory typedef table.
+                        let factory_arc = fd
+                            .get_arch()
+                            .and_then(|architecture| architecture.types.clone());
+                        let factory_guard =
+                            factory_arc.as_ref().map(|types| types.read().unwrap());
+                        force = !Self::is_op_identical(
+                            &out_high_resolve,
+                            &tokenct,
+                            factory_guard.as_deref(),
+                        );
                     }
                 } else if out_high_resolve.get_metatype() != TypeMetatype::Pointer {
                     // cc:2569-2571: implied atomic (non-pointer) out — ignore
@@ -17545,3 +17580,50 @@ mod tests {
         // has no guard either), so only the single-run form is pinned here.
     }
 
+
+    // Ghidra: coreaction.cc:2469 ActionSetCasts::isOpIdentical (cc:2476-2479)
+    /// Typedef chains must be stripped independently on both sides after the
+    /// double-PTR descent: a typedef alias of a base is op-identical to the
+    /// base (cc:2476-2479 walks getTypedef() to the end, cc:2480 compares),
+    /// including a typedef pointee reached through the pointer descent, and
+    /// chained typedefs. Distinct bases stay non-identical.
+    #[test]
+    fn test_is_op_identical_strips_typedef_chain() {
+        use crate::type_system::datatype::TypeMetatype;
+        use crate::type_system::typefactory::{SizeArchInputs, TypeFactory};
+        let mut factory = TypeFactory::raw();
+        factory.setup_sizes(&SizeArchInputs {
+            stack_spacebase_size: Some(8),
+            default_data_space_addr_size: 8,
+            default_size: 8,
+            far_pointer: None,
+        });
+        let int4 = factory.get_base(4, TypeMetatype::Int).expect("int4");
+        let int8 = factory.get_base(8, TypeMetatype::Int).expect("int8");
+        let td_int8 = factory.get_typedef("td_int8", int8.clone());
+        let td_td_int8 = factory.get_typedef("td_td_int8", td_int8.clone());
+        // Pointer forms (built before the shared immutable borrow below): a
+        // typedef of a pointer loses its alias when descended, and a typedef
+        // pointee keeps it until the strip loop.
+        let p_int8 = factory.get_type_pointer(8, int8.clone(), 1);
+        let p_td = factory.get_type_pointer(8, td_int8.clone(), 1);
+        let td_p = factory.get_typedef("td_p_int8", p_int8.clone());
+        let p_int4 = factory.get_type_pointer(8, int4.clone(), 1);
+        let f = &factory;
+        // cc:2476-2479: alias vs base strips to the same interned target.
+        assert!(ActionSetCasts::is_op_identical(&td_int8, &int8, Some(f)));
+        assert!(ActionSetCasts::is_op_identical(&int8, &td_int8, Some(f)));
+        // A chained typedef walks the whole getTypedef() chain.
+        assert!(ActionSetCasts::is_op_identical(&td_td_int8, &int8, Some(f)));
+        assert!(ActionSetCasts::is_op_identical(&td_int8, &td_td_int8, Some(f)));
+        // Distinct bases are still not op-identical.
+        assert!(!ActionSetCasts::is_op_identical(&td_td_int8, &int4, Some(f)));
+        // Pointer descent runs first (cc:2472-2474).
+        assert!(ActionSetCasts::is_op_identical(&td_p, &p_int8, Some(f)));
+        assert!(ActionSetCasts::is_op_identical(&p_td, &p_int8, Some(f)));
+        assert!(!ActionSetCasts::is_op_identical(&p_int8, &p_int4, Some(f)));
+        // Without a factory (detached Funcdata) the bare pointer comparison
+        // remains — the pre-fix observable that this test pins as negative
+        // control for the typedef arms above.
+        assert!(!ActionSetCasts::is_op_identical(&td_int8, &int8, None));
+    }

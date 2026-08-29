@@ -1,5 +1,24 @@
 # `coreaction.rs` API Reference
 
+## 2026-08-30：isOpIdentical typedef 链剥离（COREACTION-ISOPIDENTICAL-TYPEDEF-0001 / F2）
+
+- `is_op_identical`（cc:2469-2481）新增第三参数 `Option<&TypeFactory>`，在双 PTR 同步
+  下探（cc:2472-2474）之后、身份比较（cc:2480）之前，逐侧独立执行
+  `while(getTypedef())` typedef 链剥离（cc:2476-2479）。Ghidra 的 `typedefImm` 是
+  Datatype 实例字段（type.hh:244）；Rugra 经 TypeFactory 的 typedef 表
+  （`get_typedef_target(name)`，typefactory.rs，`get_typedef` 建立的 name→stripped
+  映射）解析同一链，对 factory-interned 类型与对象身份等价（名字碰撞由
+  `get_typedef` 的 find_by_name 检查 panic 拒绝，链无环）。detached Funcdata（无
+  arch factory）保持裸指针比较（RUGRA-GLUE 防御；Ghidra 恒有 factory）。
+- 语义顺序：typedef-of-pointer 在 PTR 下探中丢失别名；typedef pointee 保留下探后
+  剥离。typedef 输入下 `cast_output` 的 typelock force 判定（cc:2566）由误真
+  （多插 CAST）修正为 Ghidra 的不插。
+- 单测 `test_is_op_identical_strips_typedef_chain` 锁定：alias↔base、链式 typedef、
+  指针下探优先序、distinct base 负例、无 factory 退化负例。
+- fixture：`ptrsub_switch_cast_1204` 新增 `typedef_typelock` case（implied+typelock
+  的 typedef 输出走 force 判定），17→19 records 与锁定 oracle 字节一致（负控：
+  修复前该 case 双侧分叉——Rugra 误插 CAST）。
+
 ## 2026-08-30：castOutput 完整臂 + castInput guard/const/explicit（PTRSUB-SWITCH-CAST-RESIDUAL-0001 steps 3+4）
 
 - `cast_output`（cc:2532-2616）：token 分发补 PTRADD 臂（typeop.cc:2244 = in0 high

@@ -751,6 +751,37 @@ static void caseGlobForm(FixtureArchitecture &arch, FixtureTypes &T)
   delete fd;
 }
 
+// typedef_typelock: implied + typelock output typed as a typedef of the
+// token base.  castOutput's cc:2562-2567 force path must run isOpIdentical,
+// which strips the typedef chain (cc:2476-2479) and reports the alias
+// op-identical to the base: force stays false, the !force gate's
+// castStandard also strips typedefs (cast.cc:325-329) and returns null, so
+// no CAST is inserted and the count is 0.  A divergent implementation that
+// skips the typedef strip forces a spurious CAST here.
+static void caseTypedefTypelock(FixtureArchitecture &arch, FixtureTypes &T,
+                                Datatype *tdInt8)
+{
+  Funcdata *fd = makeFuncdata(arch, "sw_td_lock", 0x5700);
+  BlockBasic *block = makeSingleBlock(fd);
+  CaseTracker tracker;
+  AddrSpace *ram = arch.getSpace(3);
+  Varnode *gA = typedInput(*fd, ram, 0x10000119, 8, T.int8T);
+  tracker.vn(gA, "gA8");
+  PcodeOp *ia = makeOp(*fd, block, CPUI_INT_ADD, 2, 0x5700, 8);
+  fd->opSetInput(ia, gA, 0);
+  fd->opSetInput(ia, fd->newConstant(8, 0), 1);
+  ia->getOut()->updateType(tdInt8, true, false); // typelock + implied
+  ia->getOut()->setImplied();
+  tracker.op(ia, "ia");
+  tracker.vn(ia->getOut(), "ia_o");
+  fd->setHighLevel();
+  runPre(*fd, "typedef_typelock", arch, tracker);
+  ProbeSetCasts action;
+  action.apply(*fd);
+  runPost(*fd, "typedef_typelock", action, tracker);
+  delete fd;
+}
+
 int main(void)
 {
   std::cout << std::unitbuf;
@@ -771,6 +802,8 @@ int main(void)
     T.P_int4 = architecture.types->getTypePointer(8, T.int4T, 1);
     T.P_int8 = architecture.types->getTypePointer(8, T.int8T, 1);
     T.P_table = architecture.types->getTypePointer(8, table, 1);
+    Datatype *tdInt8 = architecture.types->getTypedef(
+        T.int8T, "td_int8", Datatype::hashName("td_int8"), 0);
 
     caseAligned(architecture, T);
     casePaOutInt8(architecture, T);
@@ -779,6 +812,7 @@ int main(void)
     caseIaToken(architecture, T);
     caseCastChain(architecture, T);
     caseGlobForm(architecture, T);
+    caseTypedefTypelock(architecture, T, tdInt8);
   }
   catch (const std::exception &error) {
     std::cerr << "fixture error: " << error.what() << '\n';

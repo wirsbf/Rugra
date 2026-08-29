@@ -2,9 +2,9 @@
  "schema_version": 2,
  "fixture_id": "PTRSUB-SWITCH-CAST-0001",
  "todo_id": "PTRSUB-SWITCH-CAST-RESIDUAL-0001",
- "phase": "B-fixed-bilateral-match",
+ "phase": "B-fixed-bilateral-match; F2-isOpIdentical-typedef-strip",
  "overall_status": "MATCH",
- "summary": "Bilateral fixture for the curl glob_set switch-expression (int*) cast churn. Seven synthetic IR/CFG/type states (aligned, pa_out_int8, pa_in_churn, pa_both_churn, ia_token, cast_chain, globform) are seeded identically on both sides and run through the real ActionSetCasts::apply; each op's inputs/outputs (varnode + high, read-facing), TypeOp output token, apply-side output token, PTRSUB/PTRADD slot-0 input cast, the post-apply op graph with inserted CASTs, the count delta, and (globform) the rendered switch-expression tree are dumped. Phase B fixed the apply-side gaps (opUndoPtradd finalize semantics, apply PTRADD/PTRSUB fit preflight, castOutput PTRADD/implied/testStructOffset0 arms, castInput double-cast guard + const arm + markExplicit, TypeOpIntAdd/arithmetic-family arithmeticOutputStandard tokens); both streams are byte-identical and all 13 former known_raw_differences are retired.",
+ "summary": "Bilateral fixture for the curl glob_set switch-expression (int*) cast churn. Eight synthetic IR/CFG/type states (aligned, pa_out_int8, pa_in_churn, pa_both_churn, ia_token, cast_chain, globform, typedef_typelock) are seeded identically on both sides and run through the real ActionSetCasts::apply; each op's inputs/outputs (varnode + high, read-facing), TypeOp output token, apply-side output token, PTRSUB/PTRADD slot-0 input cast, the post-apply op graph with inserted CASTs, the count delta, and (globform) the rendered switch-expression tree are dumped. Phase B fixed the apply-side gaps (opUndoPtradd finalize semantics, apply PTRADD/PTRSUB fit preflight, castOutput PTRADD/implied/testStructOffset0 arms, castInput double-cast guard + const arm + markExplicit, TypeOpIntAdd/arithmetic-family arithmeticOutputStandard tokens); both streams are byte-identical and all 13 former known_raw_differences are retired. F2 follow-up (COREACTION-ISOPIDENTICAL-TYPEDEF-0001): the typedef_typelock case locks cc:2562-2567 force=!isOpIdentical(td_int8,int8) over an implied+typelock typedef-typed output; isOpIdentical's typedef-chain strip (cc:2476-2479) keeps force false so no CAST is inserted (count=1 comes from slot1 markExplicitUnsigned; negative control: the pre-fix pointer-only comparison forces a spurious CAST, count=2 + extra cast op).",
  "oracle": {
   "repository": "ghidra symlink -> main repo ghidra/ (Ghidra upstream source tree)",
   "tag": "Ghidra_12.0.4_build",
@@ -75,8 +75,8 @@
   "output_normalization": "none: raw stdout lines compared byte-for-byte; stable seeded op/varnode names plus discovery-order n*/v* names for apply-created objects"
  },
  "observation_schema": {
-  "record_count": 17,
-  "record_order": "schema header, then per case in program order: aligned(pre,post), pa_out_int8(pre,post), pa_in_churn(pre,post), pa_both_churn(pre,post), ia_token(pre,post), cast_chain(pre,post), globform(pre,swexpr_pre,post,swexpr_post)",
+  "record_count": 19,
+  "record_order": "schema header, then per case in program order: aligned(pre,post), pa_out_int8(pre,post), pa_in_churn(pre,post), pa_both_churn(pre,post), ia_token(pre,post), cast_chain(pre,post), globform(pre,swexpr_pre,post,swexpr_post), typedef_typelock(pre,post)",
   "scale": "per-op fields: i<slot>[t=varnode-type,h=high-read-facing], out[t=,h=], token=TypeOp::getOutputToken, atok=apply-side output token, ic0=PTRSUB/PTRADD slot-0 getInputCast; post: impl=/out=/in= plus count delta; globform adds swexpr pre/post rendered trees",
   "direct": "seeded IR/CFG/type state is identical on both sides (pre dumps match modulo the registered token-field divergences); globform swexpr_pre is byte-identical",
   "action_pre": "per-op type/token dump before apply",
@@ -145,6 +145,13 @@
    "rust_id": "RG-F-6c0f3e7b1a9d4c2e8f5b",
    "fixture_projection_status": "MATCH",
    "full_behavior_status": "UNTESTED"
+  },
+  {
+   "ghidra_id": "GH12-F-a2f8c4e61d9b7a3c5e0f",
+   "ghidra_signature": "bool ActionSetCasts::isOpIdentical(Datatype *ct1,Datatype *ct2) [coreaction.cc:2469]",
+   "rust_id": "RG-F-f1e9d3b7a5c2e4d6b801",
+   "fixture_projection_status": "MATCH",
+   "full_behavior_status": "UNTESTED"
   }
  ],
  "known_raw_differences": [],
@@ -156,16 +163,16 @@
    "Cargo.toml": "see rust_base_tree",
    "Cargo.lock": "see rust_base_tree"
   },
-  "runner_sha256": "ec6dfc959b118f9f99c82ad39df15c192e3b88c29f34675791cb0ac501c0e14e",
+  "runner_sha256": "fd98349277299650417785ca8e937995e9ce843e150f7ca10dcc697de30543ec",
   "overlay_sha256": {},
   "fixture_sha256": {
-   "tests/oracle/ptrsub_switch_cast_1204.cc": "f810fab0a0d0472c713a02623b34275356f5176dfb2a026a62b4536305c354c9",
-   "tests/oracle/ptrsub_switch_cast_1204.rs": "dcbb48b3f918c9ecea4c2c5b666286b2c4ec476d30a958c9d2f30dd4a25de19e"
+   "tests/oracle/ptrsub_switch_cast_1204.cc": "5d5a0d4947a29c5af315d0ea7d1c4d757d4617bd847e02051be9930b1325f54f",
+   "tests/oracle/ptrsub_switch_cast_1204.rs": "76cce6a55e25f3cdc10cb43edba6775ca22fc8b087c9d98b74eda7442f6691be"
   },
   "source_policy": "head-clean: runner builds git archive HEAD + the committed .rs fixture verbatim, no overlays"
  },
  "expected_results": {
-  "record_count": 17,
+  "record_count": 19,
   "record_order": [
    "schema",
    "case=aligned|stage=pre",
@@ -183,11 +190,13 @@
    "case=globform|stage=pre",
    "case=globform|stage=swexpr_pre",
    "case=globform|stage=post",
-   "case=globform|stage=swexpr_post"
+   "case=globform|stage=swexpr_post",
+   "case=typedef_typelock|stage=pre",
+   "case=typedef_typelock|stage=post"
   ],
-  "ghidra_stdout_sha256": "3f48b47f922e23b2c351fc7ebb8b0360acf3d883edd2e5f5c434ab3fe40d2387",
+  "ghidra_stdout_sha256": "bd81eb18b8331084c38614f3ffbffa6c381d4f141ba4d0f41f4a21363f521259",
   "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "rugra_stdout_sha256": "3f48b47f922e23b2c351fc7ebb8b0360acf3d883edd2e5f5c434ab3fe40d2387",
+  "rugra_stdout_sha256": "bd81eb18b8331084c38614f3ffbffa6c381d4f141ba4d0f41f4a21363f521259",
   "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "raw_diff_labels": [
@@ -195,29 +204,30 @@
    "rugra.stdout"
   ],
   "stdout_bytes_each": {
-   "ghidra": 5634,
-   "rugra": 5634
+   "ghidra": 5837,
+   "rugra": 5837
   },
   "raw_diff_bytes": 0,
   "exit_codes": {
    "ghidra": 0,
    "rugra": 0
   },
-  "determinism": "each side run twice, byte-identical; debug-built Rugra fixture output equals release-built output; phase B streams are byte-identical across sides"
+  "determinism": "each side run twice, byte-identical; debug-built Rugra fixture output equals release-built output; phase B streams are byte-identical across sides; F2 rerun 2026-08-30: 19/19 byte-identical (typedef strip via TypeFactory typedef table)"
  },
  "coverage": {
   "seed_state_projection": "MATCH (identical IR/CFG/types/highs; ic0 slot-0 input casts identical on all cases)",
   "ptrsub_output_token_projection": "MATCH (ps token ptr8w1->int4 via downChain offset 0 field, typeop.cc:2349)",
   "ptrsub_input_cast_projection": "MATCH (typeop.cc:2320 semantics incl. cur==req null, base identity check)",
   "ptradd_input_cast_projection": "MATCH (typeop.cc:2250 semantics: alignSize comparison key)",
-  "ptradd_output_cast_projection": "MATCH (phase B: castOutput implied/testStructOffset0 arms ported, 13884cc7; retired at the 9ab3be94 re-pin where both 17-record streams are byte-identical)",
-  "int_add_token_projection": "MATCH (phase B: arithmeticOutputStandard family tokens ported, ad65b957)",
-  "arith_token_projection": "MATCH (phase B: arithmeticOutputStandard family tokens ported, ad65b957)",
-  "castin_doublecast_guard_projection": "MATCH (phase B: castInput guard arm ported, 13884cc7)",
-  "castin_const_projection": "MATCH (phase B: castInput const/explicit arms ported, 13884cc7)",
-  "ptradd_undo_preflight_projection": "MATCH (phase B: opUndoPtradd full finalize semantics 3a10c583 + apply PTRADD/PTRSUB fit preflight d251532e)",
-  "switch_expr_render_projection": "MATCH (downstream of the retired arms; byte-identical at the 9ab3be94 re-pin)",
-  "count_bridge_projection": "MATCH (count deltas identical across cases at the 9ab3be94 re-pin)"
+  "ptradd_output_cast_projection": "MISMATCH (missing cast_output PTRADD arm + implied in-place retype)",
+  "int_add_token_projection": "MISMATCH (out-high vs arithmeticOutputStandard)",
+  "arith_token_projection": "MISMATCH (INT_MULT base-int fallback vs unknown8/ptr preservation)",
+  "castin_doublecast_guard_projection": "MISMATCH (stacks a second CAST instead of retyping in place)",
+  "castin_const_projection": "MISMATCH (missing constant updateType count unit)",
+  "ptradd_undo_preflight_projection": "MISSING (no opUndoPtradd; pa stays PTRADD, no scale INT_MULT)",
+  "switch_expr_render_projection": "MISMATCH (downstream of the above)",
+  "count_bridge_projection": "MISMATCH (count deltas 0/1/1/1/2 vs 1/1/2/2/7 across cases)",
+  "typedef_typelock_force_projection": "MATCH (isOpIdentical strips the typedef chain cc:2476-2479: force stays false over the implied+typelock typedef-typed output, no spurious CAST; negative control on the pre-fix pointer-only compare shows count=2 + extra n0:cast)"
  },
  "residual_ids": [],
  "status_note": "Phase B final: the apply-side projections this fixture observes are fully matched (17/17 records byte-identical, count and op graphs included). E2E curl glob_set switch-expression normalization (jumptable guard, unique->symbol recovery) is tracked under the parent PTRSUB-SWITCH-CAST-RESIDUAL-0001 outside this fixture's observation scope.",
@@ -259,7 +269,25 @@
    "command": "tools/run_ptrsub_switch_cast_oracle.sh",
    "exit_code": 0,
    "result": "bilateral run reproduced both pinned streams; all 13 changed records covered by registered known differences; overall=MISMATCH"
+  },
+  {
+   "date": "2026-08-30",
+   "command": "tools/run_ptrsub_switch_cast_oracle.sh --validate-only",
+   "exit_code": 0,
+   "result": "F2 repin: all locked oracle/runner/fixture pins validated; overall=MATCH (19 records)"
+  },
+  {
+   "date": "2026-08-30",
+   "command": "tools/run_ptrsub_switch_cast_oracle.sh --ghidra-only",
+   "exit_code": 0,
+   "result": "locked oracle rebuilt from e40ed130 and produced the pinned 19-record stream (typedef_typelock: count=1, no inserted CAST)"
+  },
+  {
+   "date": "2026-08-30",
+   "command": "tools/run_ptrsub_switch_cast_oracle.sh",
+   "exit_code": 0,
+   "result": "F2 bilateral run: 19/19 byte-identical; negative control with the typedef strip disabled (pre-fix behaviour) diverges on case=typedef_typelock|stage=post (count=2, spurious n0:cast)"
   }
  ],
- "input_sha256": "6255b0e6dedfc516d9b3a311d1b762932d31f0f65c30d6ee915a42acad644adf"
+ "input_sha256": "e9a2f1475c478991ae302b47a43bd90c9abf128a565cce91da986378b0ff9d49"
 }
