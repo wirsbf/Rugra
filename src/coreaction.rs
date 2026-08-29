@@ -14406,6 +14406,137 @@ mod tests {
         assert_eq!(a.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
     }
 
+    /// HTTPD-STRCASECMP-NONCONVERGE-0001 regression lock: a malformed
+    /// "zombie decision block" (CBRANCH lastOp + constant condition + fewer
+    /// than 2 out-edges — a state Ghidra's coreaction.cc:3538-3547 contract
+    /// forbids) must be SKIPPED by ActionDeterminedBranch without calling
+    /// remove_branch: the no-op remove_branch would still run structureReset,
+    /// clearing sblocks every mainloop round and re-arming
+    /// ActionBlockStructure + ruleBlockIfNoExit's per-round negateCondition
+    /// into an infinite rule_repeatapply loop.
+    #[test]
+    fn test_determinedbranch_skips_malformed_decision_block() {
+        use crate::address::Address;
+        use crate::block::BlockBasic;
+        use crate::opcodes::OpCode;
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
+        let b0c = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            0, Address::new(0x1000),
+        )));
+        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            1, Address::new(0x1010),
+        ))) as std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
+        b0c.write().unwrap().flags |= crate::block::block_flags::ENTRY_POINT;
+        let b0 = b0c as std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
+        fd.bblocks.add_block(b0.clone());
+        fd.bblocks.add_block(b1.clone());
+        fd.bblocks.add_edge(b0.clone(), b1.clone());
+        // b1 = zombie decision block: ends in CBRANCH with constant
+        // condition (val=1) but ZERO out-edges.
+        let cb = fd.new_op(2, Address::new(0x1010));
+        fd.op_set_opcode(&cb, OpCode::CPUI_CBRANCH);
+        let addr_vn = fd.new_constant(8, 0x1020);
+        fd.op_set_input(&cb, addr_vn, 0);
+        let cond = fd.new_constant(1, 1);
+        fd.op_set_input(&cb, cond, 1);
+        fd.op_insert_end(&cb, &b1);
+        // Populate sblocks with a witness block: a faithful run must NOT
+        // reset the structure (remove_branch's structureReset is the bug's
+        // per-round sblocks wipe).
+        let witness = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            0, Address::new(0x1000),
+        ))) as std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
+        fd.sblocks.add_block(witness);
+        assert_eq!(fd.sblocks.get_size(), 1);
+
+        let mut action = ActionDeterminedBranch::new();
+        assert_eq!(action.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
+
+        assert_eq!(fd.sblocks.get_size(), 1, "zombie skip must not structureReset");
+        assert_eq!(fd.bblocks.get_size(), 2, "graph untouched");
+        assert_eq!(b1.read().unwrap().size_out(), 0, "no edge to remove");
+        let last_is_cb = {
+            let rg = b1.read().unwrap();
+            rg.as_any()
+                .downcast_ref::<BlockBasic>()
+                .and_then(|bb| bb.last_op())
+                .map(|o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                .unwrap_or(false)
+        };
+        assert!(last_is_cb, "zombie cbranch left in place (skip, not destroy)");
+        assert_eq!(action.count, 0, "no change counted for skipped malformed block");
+    }
+
+    /// Well-formed determined branch (CBRANCH + constant condition + exactly
+    /// 2 out-edges): faithful cc:3544-3546 behavior — the not-taken edge is
+    /// removed, the cbranch destroyed (branchRemoveInternal cc:203-204),
+    /// count += 1 per removal.
+    #[test]
+    fn test_determinedbranch_removes_not_taken_edge_and_counts() {
+        use crate::address::Address;
+        use crate::block::BlockBasic;
+        use crate::opcodes::OpCode;
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
+        let b0c = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            0, Address::new(0x1000),
+        )));
+        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            1, Address::new(0x1010),
+        ))) as std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
+        let b2 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            2, Address::new(0x1020),
+        ))) as std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
+        b0c.write().unwrap().flags |= crate::block::block_flags::ENTRY_POINT;
+        let b0 = b0c as std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
+        for b in [&b0, &b1, &b2] {
+            fd.bblocks.add_block(b.clone());
+        }
+        fd.bblocks.add_edge(b0.clone(), b1.clone());
+        fd.bblocks.add_edge(b0.clone(), b2.clone());
+        // b0: CBRANCH, condition constant 1, no boolean flip ->
+        // num = ((1!=0) != false) = true -> 0: edge to b1 (out[0]) removed.
+        let cb = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&cb, OpCode::CPUI_CBRANCH);
+        let addr_vn = fd.new_constant(8, 0x1010);
+        fd.op_set_input(&cb, addr_vn, 0);
+        let cond = fd.new_constant(1, 1);
+        fd.op_set_input(&cb, cond, 1);
+        fd.op_insert_end(&cb, &b0);
+
+        let mut action = ActionDeterminedBranch::new();
+        assert_eq!(action.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
+
+        assert_eq!(
+            b0.read().unwrap().size_out(),
+            1,
+            "not-taken edge removed (cc:3545)"
+        );
+        assert_eq!(action.count, 1, "count += 1 per removeBranch (cc:3546)");
+        assert_eq!(action.take_count_delta(), 1, "delta harvest returns the count");
+        assert_eq!(action.take_count_delta(), 0, "second harvest is zero (taken)");
+        let last_is_cb = {
+            let rg = b0.read().unwrap();
+            rg.as_any()
+                .downcast_ref::<BlockBasic>()
+                .and_then(|bb| bb.last_op())
+                .map(|o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                .unwrap_or(false)
+        };
+        assert!(!last_is_cb, "cbranch destroyed at sizeOut==2 (cc:203-204)");
+    }
+
     /// remove_unreachable_blocks: a 3-block CFG where block 2 is unreachable
     /// from entry 0. After the call, block 2 should be removed.
     #[test]

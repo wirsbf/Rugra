@@ -641,6 +641,10 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - 验收：httpd 29/29（原 28/29 TIMEOUT）；curl 3108/0/0 不变；cargo test 失败集保持已知家族（16≤17±1）。僵尸块成因（上游断边未销毁决策 op）登记后续 TODO。
 - ⚠️ write-set 越界披露：coreaction.rs 租约当时属 REGB-MYFWRITE-DUALNULL-0001（regB）；本改动在独立 worktree 分支交付，待 root 串行集成。
 
+- 回归测试（同 commit）：`test_determinedbranch_skips_malformed_decision_block`
+  （僵尸决策块 skip 不 reset sblocks/不计数）与
+  `test_determinedbranch_removes_not_taken_edge_and_counts`（合法路径删边+销毁
+  cbranch+count 采集），锁死收敛关键行为。
 ## 2026-06-27（续 3）：ActionUnreachable + ActionDoNothing 算法逻辑
 
 - **ActionUnreachable**：实现不可达块检测逻辑（coreaction.cc）——遍历所有基本块，检查 `get_immed_dom()` 为 None 的块（跳过 ENTRY_POINT），快速返回无可达块的情况。完整移除需要 `collectReachable` + 块删除（待 spliceBlockBasic）。
