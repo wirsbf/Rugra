@@ -2051,3 +2051,22 @@ setTempType）与 `propagate_type_edge` 的 `temps.insert`（cc:5108）。规范
 
 证据边界：本切片只证明 interned 收敛契约；`ACTION-INFERTYPES-DISPATCH-0001`
 等完整 dispatch 闭包状态不变。
+
+## 2026-08-29：类型推断指针构造改匿名（PTRSUB-TYPED-DECL-RESIDUAL-0001）
+
+`make_pointer_type`、`make_ptr` 与 COPY-spacebase 指针臂（TypeOpCopy::
+propagateType 的 spacebase 分支，typeop.cc:411-423）此前构造带组合名
+（`"char *"`）的 Pointer。Ghidra 对应路径全部终归 3-arg
+`TypeFactory::getTypePointer`（type.cc:3867-3875，空名）——推断产物的指针名
+在任何 Ghidra 输出中都不可观测。组合名使这些指针成为命名单层指针，被忠实的
+printc 声明渲染为 `char * pcVar5`（oracle
+printc_anonymous_pointer_decl_1204 named_ptr_contrast 形），偏离 golden 的
+`char *pcVar5`。三处均改 `TypePointer::new`（空名 + calc_submeta +
+inheritable flags）。同批：typeop.rs `propagate_to_pointer`、debugproto.rs
+`parse_c_type`/`pointer_type`/DWARF 数组（见各自 docs/api 文件）。
+E2E：curl 全语料 star-blank 声明 58 → 0，compare defects=0/numbering=0。
+
+## 2026-08-29:nodejoin 臂移除冗余 build_dom_tree(R-NODEJOIN-CROSSREVIEW 问题4)
+
+structure_reset(twin 内)已执行 calcForwardDominator(funcdata_block.cc:712),新块为 append 索引未变;
+额外的 build_dom_tree 调用对未突变 CFG 幂等且不可观测,按复核建议删除。

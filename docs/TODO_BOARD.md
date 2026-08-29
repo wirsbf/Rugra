@@ -50,8 +50,21 @@
 > +root 间距根治兜底(7c3df2ce:组合名指针 glue,skeleton 2198→2114,DECL-SPACING-NAMEFLOW-0001 登记根治方向=导入器匿名化,已派 w-globword);
 > ②identify3 完整交付(f19bac86/bc2db403:identifyInternal 无 f_dead+双侧 fixture MATCH+E2E 逐字节零劣化;whiledo 门保守固定+residual 登记;
 > 机制 C 复核=reviewer-identify 在途);③myprog 交付获 R-MYPROG-CROSSREVIEW **APPROVE**(P-FLOW-1 登记欠账见下)。
-> **当前权威基线(master `9f2b5d34`)**:curl E2E skeleton **2114**/defects **0**/numbering **0**;registry 138 条目;
-> getparameter/match_url 仍超时(NONCONVERGE-P0,w-nonconverge2 在修,前任 action.rs 线索已锚定 39010fd1)。
+> **NONCONVERGE-GETPARAM-MATCHURL-0001 已修(root `96e8e1a8`)**:join-block 路径接入 node_join_create_block(含
+> structureReset,funcdata_block.cc:816);w-nonconverge 因果证明+fixture 红绿双态;0 panic/timeout,124/124 全反编译。
+> **2026-08-29 深夜集成burst**:①anondecl3 根治(e331a5c5 六处构造匿名化)+glue 兜底撤销(46412358)+DECL-SPACING-NAMEFLOW-0001
+> 闭环(fixture 撤 residual 回 MATCH);②nodejoin 修复获 R-NODEJOIN-CROSSREVIEW **REJECT**——致命 F1(索引求值序)已整改
+> (faea03b0:语句序索引+响亮断言+CFG形状断言+删冗余build_dom_tree),F2-F5 登记如下,待重审;③w-globword 交付:B 部 5 提案
+> (C1-C5)登记,A 部匿名化与 e331a5c5 同根被覆盖(其 named_return_pointer twin 洞察记录于报告);④registry:check/strict 双绿
+> (2889e048+再生,definitions=9494/raw=15811/rust=10467),lint=2 仅剩 checkpoint 治理推进(10ea407d..HEAD 窗口审查)。
+> **基线修正(w-main2)**:main 在当前 master 结构化已完整(finalize 149→1,无 selectGoto exhausted;
+> result/curl_cur.err 是 8/27 陈旧 stderr);仍耗尽的是 getparameter(已修)。main 结构段计数:golden if65/while6/do5/for2/goto19/label8/helpf8 vs Rugra if14/while1/do0/for1/goto4/label2/helpf0。
+> **当前权威基线(master `2889e048`)**:curl E2E skeleton **2911**/defects **1**(GETPARAM-EMPTYELSE 在修)/numbering **0**/
+> 0 panic/timeout/ABORTED,124/124 全反编译;httpd 仍 5/30(HTTPD-TFALIGN-PANIC 待重派)。
+> 历史权威基线(master `96e8e1a8`,诚实口径)**:curl E2E skeleton **2866**(全函数计入)/defects **1**(getparameter
+> empty else,GETPARAM-EMPTYELSE-0001 已派 w-nonconverge2)/numbering **0**;registry 138 条目。
+> identify3 获 R-IDENTIFY-CROSSREVIEW **APPROVE**(五项含 fixture full 双侧独立复跑 MATCH);nodejoin 修复 Cross-Review PENDING。
+> **fleet 纪律(事故后)**:禁用 git stash(跨 worktree refs 共享碰撞),一律 per-worktree commit;stash@{0}(ifgoto-wip)保留勿动。
 > **P-FLOW-1 登记欠账(复核发现,root 待落)**:`SUBFLOAT-TRANSFORM` 残差与 `TRI4-MYPROGRESS-SETTLE-0001` 需补板行。
 > 舰队(5):w-nonconverge2/w-globword/w-main2/w-registry4/reviewer-identify。
 > **当前权威基线(master HEAD,2026-08-29 22 时)**:curl E2E skeleton **2118**/defects **0**/numbering **0**(DUPDECL 已修)/
@@ -66,6 +79,22 @@
 | Agent | ID | 类型 | 独占 write-set | 交付物 |
 |---|---|---|---|---|
 | w-newvarnode2(续作)+root | `VARNODE-DESCEND-BOOKKEEPING-0001` | **FIXED @ master `55783411`**(root 修复;w-newvarnode 审计立功:簿记基础设施本就完备,真凶=ruleaction.rs 五处直接 inrefs 写) | `src/ruleaction.rs`+`docs/api/ruleaction.md`(已落库) | 修复:Piece2Zext/Sext→`fd.op_remove_input(0)`+`op_set_opcode`;TrivialBool 六分支完整移植(仅 slot1 常量+`V&&0→#0`/`V||1→#1`/`V^^1→NEGATE` 补齐);NegateIdentity→`fd.new_constant`+三步簿记;NotDistribute→`op_set_input`+`op_insert_input`。E2E@55783411:ABORTED 10→**0**、raw 命名 1077→**16**、defects 2→**0**(getparameter/glob_word else 缺陷证实为簿记腐蚀下游,随修复消失)、skeleton 3528→**2134**(优于 2d78b5af 健康基线 2881);cargo test 失败集=已知 17 零新增。Cross-Review: PENDING(机制 C,待派);审计证据=/tmp/w-newvarnode-curl-probe.err(49 条悬空);coreaction.rs:1371(ActionCse)核实未注册非生产者不动 |
+| w-maingo(新派) | `MAIN-RC2-BLOCKGOTO-WRAPPED-0001` | **P0**(w-main2 探针实测:helpf 0→8/8,main 体 251→736 行) | `src/blockaction.rs`(try_rule_goto)+`src/block.rs`(BlockGoto)+fixture;printc.rs 侧(emit_block_goto 消费)经 root 与 GETPARAM-EMPTYELSE 租约协调 | Ghidra `BlockGoto : BlockGraph`(block.hh:546)持有被包装块组件+删边前捕获 gototarget(block.cc:1702-1713),发射 body+goto 完整(printc.cc:2766-2771)。Rugra 构造 `BlockGoto{goto_target:None}` 无 wrapped 字段、get_ops 返回空、goto_prints 硬编码 false→main 14 个包装块(helpf×8/bVar3=false/break)全部蒸发。证据=/tmp/rugra-reports/w-main2-2026-08-29.md |
+| unassigned | `MAIN-RC3-STRUCTURED-EMIT-0001` | P0(探针:if 14→55) | `src/block.rs`(BlockIf::get_ops 丢 if/else body)+printc.rs 翻门(依赖 RC2) | whiledo/if 体发射:printc.rs:4285 body_is_dead=true 硬编码 flatten(=identify3 residual 翻门条件);BlockIf::get_ops(block.rs:5119)只返回 condition 丢弃 body→50×curl_easy_setopt 级联+嵌套 if 丢失;oracle cc:3061-3063/2994-2995 structured 递归 |
+| unassigned | `MAIN-RC4-DOWHILE-TRACE-0001` | P1(main 0 命中 vs golden 5 do-while) | TraceDAG 回边分类/吸收顺序(需 oracle 运行时定缝;RUGRA_BS_TRACE 已有) | try_rule_do_while 与 cc:1555-1574 逐条对齐无缺陷,但 argv 循环头被 if_else 消费成 `if(1){}else{}`,自环复合体永不出现 |
+| unassigned | `MAIN-RC5-LOOPCOND-VARMAP-0001` | P1 | varmap/heritage 域 | 循环条件错接:`extraout_var_00 != 0` 应为 `iVar17 < argc-1` |
+| unassigned | `NODEJOIN-F2-EXECUTE-STEPS-0001` | OPEN(复核F2) | 待认领(`src/coreaction.rs`) | ConditionalJoin::execute 四步仅做1(nodeJoinCreateBlock);setupMultiequals/moveCbranch/cutDownMultiequalities(blockaction.cc:2098-2101)全缺,cbranch未迁入join块 |
+| unassigned | `NODEJOIN-F3-SAMECOND-FULLJOIN-0001` | OPEN(复核F3) | 待认领(`src/coreaction.rs`) | same_cond 臂误读 findDups:cc:1926-1927 vn1==vn2→return true 是完整 match,Ghidra 照跑全套 join;Rugra 只 count+=1 |
+| unassigned | `NODEJOIN-F4-MATCH-GATES-0001` | OPEN(复核F4) | 待认领(`src/coreaction.rs`) | match 谓词缺 isBooleanFlip/isWritten/spacebase/functionalEqualityLevel/def-opcode 门(cc:1920-1941),过度 join |
+| unassigned | `NODEJOIN-F5-DYNAMIC-SIZE-0001` | OPEN(复核F5) | 待认领(`src/coreaction.rs`) | 外层 n_blocks 快照 vs Ghidra 动态 graph.getSize()(cc:2334) |
+| unassigned | `GLOBWORD-C1-PUSH-TYPE-STRUCTURAL-0001` | OPEN(w-globword提案) | 待认领(`src/printc.rs`) | push_type 按名渲染改结构化(全匿名化后可收紧;26 返回头保持) |
+| unassigned | `GLOBWORD-C2-LOOP-LIFT-0001` | OPEN(w-globword提案) | 待认领(`src/blockaction.rs`) | my_get_line 外层 do-while 整环丢失(语义级)+glob_word 尾块不提升+死 goto;oracle 行号见 w-globword 报告 B.3 |
+| unassigned | `GLOBWORD-C3-CARRY-INJECT-0001` | OPEN(w-globword提案) | 待认领(`src/heritage.rs`或`coreaction.rs`) | x86 flags CARRY inject:`register0x00000200` RFLAGS 泄漏 vs oracle CARRY1 宏 |
+| unassigned | `GLOBWORD-C4-INTNOT-TOKEN-0001` | OPEN(w-globword提案) | 待认领(`src/printc.rs`) | INT_NOT token 序:`0xfefefeff~` 非法 C 形,oracle `~*puVar4` |
+| unassigned | `GLOBWORD-C5-GLOBAL-TYPEFLOW-0001` | OPEN(w-globword提案) | 待认领(类型流域) | glob_expand 的 URLGlob 字段不传播→`*(int*)(glob_expand+0x128)` 原始偏移 |
+| unassigned | `REGISTRY-CHECKPOINT-ADVANCE-0001` | OPEN(lint 残项) | 待认领(`tools/generate_function_ledger.py` 钉) | CONTINUITY_CHECKPOINT 治理推进:10ea407d..2889e048 窗口 src delta 的 transition/tombstone/introduced 逐条审查后改钉+reconcile+再生;验收=lint exit 0 三链全绿 |
+| unassigned | `SUBFLOAT-TRANSFORM-RESIDUAL-0001` | OPEN(P-FLOW-1 复核发现) | 待认领(`src/subflow.rs`) | RuleSubfloatConvert 非常量路径 defer 为保守降级(Ghidra transform 链只新建 Varnode 不 retype);完整移植 TransformManager 语义后撤销 defer;证据=R-MYPROG-CROSSREVIEW 报告第 2 节 |
+| unassigned | `TRI4-MYPROGRESS-SETTLE-0001` | PARTIAL(666afd3b 已修 settle 契约) | — | temp 类型经 TypeFactory 规范化已落地;残差=myprogress 的 DWARF 局部名(format/line/outline)三层环境缺口(DW_OP_fbreg 解析/导入/消费)+ in_RSP/Var8/extraout 多余声明(funcdata/heritage 域) |
 | w-myprog-cluster(已集成) | `VARMAP-GLOBRANGE-DUPDECL-0001` | **FIXED**(65d72291;根因=prettyprint 两 GLUE pass:if 条件续行误判签名+uVar 无词界;非 varmap 计数器) | `src/prettyprint.rs`(跨lease最小化已声明) | varmap_dupdecl_1204 双侧 MATCH;numbering 1→0 |
 | unassigned(P0) | `NONCONVERGE-GETPARAM-MATCHURL-0001` | OPEN(root 亲证,descend 修复暴露) | 待认领(嫌疑 `src/merge.rs` allocate_copy_trim/trim_op_input 域+循环源待定位) | getparameter+match_url 在 55783411+ 非收敛(180s 仍未完成→watchdog TIMEOUT,无输出)。主仓构建:worker panic 于 `Merge::allocate_copy_trim→op_set_input→add_descend`"Free varnode has multiple descendants"(varnode.rs:2500=Ghidra varnode.cc:336 自身不变量);诊断构建(同源码!):不 panic 但 ~120s 内 19+ 轮完整管线重启/oppool1×77,ops 稳定 1246,mid-pass 被杀——**同一源码两个构建行为分歧(panic vs 不收敛)=codegen/堆布局敏感的迭代序依赖,红旗单独登记**。golden 两函数均无 "Exceeded maximum restarts"/"Type propagation" 警告=Ghidra 干净收敛;Rugra 的 maxrestarts cap 已在位(action.rs:1103 镜像 cc:565-575,universal=1)。诊断工具:worktree /tmp/rugra-freediag(census 钩子 6150cdc8+freevn 探针),`RUGRA_ACTION_CENSUS=1`;证据=/dev/shm/rugra-census2.err+rugra-bt.stderr.log。验收:两函数在 30s 内收敛或按 Ghidra 语义停机+输出与 golden 对比;panic 消除且不引入绕过。 |
 | unassigned | `CODEGEN-DIVERGENCE-REDFLAG-0001` | OPEN(登记) | 无(调查项) | 同源码两构建(主仓 target vs /tmp/rugra-freediag-target)对 getparameter 确定性地产 panic vs 不收敛——指向 Arc 指针作键的有序容器/迭代序依赖(堆布局=codegen 相关)。凡"测试偶发/不可复现"类问题先对照此项。 |

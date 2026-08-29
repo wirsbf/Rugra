@@ -1954,3 +1954,14 @@ ScopeLocal 腿 entry 命中因 DB-LOCALSCOPE-MAP-0001 分裂（ScopeLocal 无 li
 SymbolEntry 对象）降级为 flags 折叠。遗留：非 RAM 空间不进 Database 腿、
 newVarnodeOut 的 usepoint 以 spaceless Address 进 Database 腿恒 invalid
 （ADDRESS-0001，use-limited 全局 entry 不被承认）——两项均登记为残余。
+
+## 2026-08-29:node_join_create_block 语句序索引修正(R-NODEJOIN-CROSSREVIEW F1 整改)
+
+复核 REJECT 的致命项:两个 `find_out_index` 此前被提前到两次 `move_out_edge` 之前求值;Ghidra
+funcdata_block.cc:808-809 是语句序求值——第二个 `getOutIndex(exitb)` 在第一次 move **之后**取新鲜值。
+当 swapa==swapb(规范菱形恰好命中)且首个被移边在槽 0 时,陈旧索引在 move_out_edge 的 None 分支
+**静默跳过第二次边转移**(swap 保留 2 出边、newblock 只有 1)。整改:
+- 两个索引各自在 move 前即时求值,缺失即 panic(响亮断言,不再静默 return);
+- fixture(nodejoin_join_block_forces_heritage_restructure)补 CFG 形状断言:canonical 终态=join 块
+  2 出边、两分支各 1 出边(仅 join 边)。
+E2E:2911/1/0,0 panic/timeout,124/124 反编译。

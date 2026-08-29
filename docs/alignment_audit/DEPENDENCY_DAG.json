@@ -1826,6 +1826,10 @@
     },
     {
       "from": "action",
+      "to": "block"
+    },
+    {
+      "from": "action",
       "to": "blockaction"
     },
     {

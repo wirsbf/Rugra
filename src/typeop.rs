@@ -985,15 +985,13 @@ pub fn propagate_to_pointer(alt_type: &Arc<Datatype>) -> Arc<Datatype> {
         ))),
         _ => alt_type.clone(),
     };
-    Arc::new(Datatype::Pointer(TypePointer {
-        base: crate::type_system::TypeBase::new(
-            format!("{} *", pointee.get_name()),
-            sz,
-            TypeMetatype::Pointer,
-        ),
-        ptr_to: pointee,
-        wordsize: 1,
-    }))
+    // cc:197: t->getTypePointer(sz,dt,wordsz) — the 3-arg overload's
+    // `TypePointer tmp(s,pt,ws)` carries an EMPTY name (type.cc:3867-3875);
+    // the former composed-name spelling ("char *") surfaced as a NAMED
+    // single-layer pointer in every decl/cast built from this propagation,
+    // diverging from Ghidra's anonymous drilled rendering (oracle
+    // printc_anonymous_pointer_decl_1204 named_ptr_contrast).
+    Arc::new(Datatype::Pointer(TypePointer::new(sz, pointee, 1)))
 }
 
 /// Unwrap a pointer data-type to its pointee (used by LOAD/STORE input->output

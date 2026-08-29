@@ -2967,15 +2967,22 @@ fn get_pointed_type(
 }
 
 // RUGRA-GLUE: helper mirroring TypeFactory::getTypePointer (type.hh); used by Rugra type inference
+// Ghidra: type.cc:3867 TypeFactory::getTypePointer(int4,Datatype*,uint4) — the 3-arg
+// overload constructs `TypePointer tmp(s,pt,ws)` with an EMPTY name (only the
+// 4-arg overload at type.cc:3885 attaches a name), so every type-inference
+// pointer the Actions build is ANONYMOUS. The former composed-name spelling
+// ("char *") made Rugra's pointers named, which the print layer then rendered
+// through the single-layer named-pointer path (`char * p`, oracle
+// printc_anonymous_pointer_decl_1204 named_ptr_contrast) instead of Ghidra's
+// drilled multi-layer `char *p` — the pointer NAME is not observable in any
+// Ghidra output for these types, so the empty name is the faithful form.
 fn make_pointer_type(
     base: &Arc<crate::type_system::datatype::Datatype>,
 ) -> Arc<crate::type_system::datatype::Datatype> {
-    use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
-    Arc::new(Datatype::Pointer(TypePointer {
-        base: TypeBase::new(format!("{} *", base.get_name()), 8, TypeMetatype::Pointer),
-        ptr_to: base.clone(),
-        wordsize: 1,
-    }))
+    use crate::type_system::datatype::Datatype;
+    Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer::new(
+        8, base.clone(), 1,
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -5246,17 +5253,18 @@ fn merge_min_type_order(
 /// Build a pointer type to `base` with the architecture pointer size, using a
 /// fresh factory-free TypePointer. Faithful to `TypeFactory::getTypePointer`.
 // RUGRA-GLUE: helper mirroring TypeFactory::getTypePointer (type.hh)
+// Ghidra: type.cc:3867 TypeFactory::getTypePointer(int4,Datatype*,uint4) — the
+// 3-arg overload's `TypePointer tmp(s,pt,ws)` carries an EMPTY name (names
+// attach only via the 4-arg overload, type.cc:3885); see make_pointer_type's
+// note for why the former composed-name spelling diverged from the oracle.
 fn make_ptr(
     base: std::sync::Arc<crate::type_system::datatype::Datatype>,
     ptr_size: usize,
 ) -> std::sync::Arc<crate::type_system::datatype::Datatype> {
-    use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
-    let name = format!("{} *", base.get_name());
-    std::sync::Arc::new(Datatype::Pointer(TypePointer {
-        base: TypeBase::new(name, ptr_size, TypeMetatype::Pointer),
-        ptr_to: base,
-        wordsize: 1,
-    }))
+    use crate::type_system::datatype::Datatype;
+    std::sync::Arc::new(Datatype::Pointer(
+        crate::type_system::datatype::TypePointer::new(ptr_size, base, 1),
+    ))
 }
 
 // Ghidra: type.cc:3392 TypeFactory::findAdd (canonical interning every propagateType product flows through)
@@ -5653,17 +5661,19 @@ impl ActionInferTypes {
                             ))
                         });
                     let mut factory = factory.write().unwrap();
+                    let _ = &mut factory;
                     return Some(std::sync::Arc::new(
                         crate::type_system::datatype::Datatype::Pointer(
-                            crate::type_system::datatype::TypePointer {
-                                base: crate::type_system::datatype::TypeBase::new(
-                                    format!("{} *", unknown1.get_name()),
-                                    alttype.get_size(),
-                                    TypeMetatype::Pointer,
-                                ),
-                                ptr_to: unknown1,
-                                wordsize: 1,
-                            },
+                            // typeop.cc:418: tlst->getTypePointer(sz, getBase(1,
+                            // TYPE_UNKNOWN), ws) — the 3-arg overload is
+                            // anonymous (type.cc:3867-3875); the composed-name
+                            // spelling diverged from the oracle (see
+                            // make_pointer_type's note).
+                            crate::type_system::datatype::TypePointer::new(
+                                alttype.get_size(),
+                                unknown1,
+                                1,
+                            ),
                         ),
                     ));
                     // (get_type_pointer interning form; wordsize from the
@@ -13528,29 +13538,50 @@ impl Action for ActionNodeJoin {
                     break;
                 }
                 // Different-condition diamond: execute nodeJoinCreateBlock
-                // (funcdata_block.cc:790-826). Create a new join block,
-                // rewire edges so block1 and block2 both flow through it.
-                {
-                    // Create new basic block (f_joined_block).
-                    let join_arc = fd.create_new_block();
-                    join_arc
-                        .write()
-                        .unwrap()
-                        .set_flags(crate::block::block_flags::JOINED_BLOCK);
-                    // Remove one edge from block1→exita and one from block2→exitb
-                    // (or vice versa). We keep the edges that are "lower priority".
-                    // Ghidra's fora_block1ishigh/forb logic: remove from the block
-                    // with the higher in-slot index. Simplified: remove from block1.
-                    fd.bblocks.remove_edge_blocks(&bl_arc, &exita);
-                    fd.bblocks.remove_edge_blocks(&bb2_arc, &exitb);
-                    // Rewire: block1→join, block2→join, join→exita, join→exitb.
-                    fd.bblocks.add_edge(bl_arc.clone(), join_arc.clone());
-                    fd.bblocks.add_edge(bb2_arc.clone(), join_arc.clone());
-                    fd.bblocks.add_edge(join_arc.clone(), exita.clone());
-                    fd.bblocks.add_edge(join_arc.clone(), exitb.clone());
-                    // Rebuild dom tree (indices changed).
-                    fd.bblocks.build_dom_tree();
-                }
+                // (blockaction.cc:2094-2097 ConditionalJoin::execute →
+                // funcdata_block.cc:779-826). The faithful
+                // Funcdata::node_join_create_block twin (funcdata.rs) performs
+                // the fora/forb edge surgery and — critically — the trailing
+                // structureReset() (funcdata_block.cc:816) whose absence left
+                // the join block out of the next heritage pass
+                // (NODEJOIN-STRUCTURERESET-0001): free phi placeholder inputs
+                // survived into ActionMergeRequired, tripping "Free varnode
+                // has multiple descendants" and stalling
+                // getparameter/match_url convergence.
+                let (a_in1, b_in1) = {
+                    let rg = bl_arc.read().unwrap();
+                    (
+                        rg.get_out(0).map(|e| e.reverse_index).unwrap_or(-1),
+                        rg.get_out(1).map(|e| e.reverse_index).unwrap_or(-1),
+                    )
+                };
+                let (a_in2, b_in2) = {
+                    let rg = bb2_arc.read().unwrap();
+                    (
+                        rg.get_out(0).map(|e| e.reverse_index).unwrap_or(-1),
+                        rg.get_out(1).map(|e| e.reverse_index).unwrap_or(-1),
+                    )
+                };
+                let cbranch_addr = {
+                    let rg = bl_arc.read().unwrap();
+                    rg.get_ops()
+                        .last()
+                        .map(|o| o.0.read().unwrap().start.get_addr())
+                        .unwrap_or_else(|| crate::address::Address::new(0))
+                };
+                fd.node_join_create_block(
+                    &bl_arc,
+                    &bb2_arc,
+                    &exita,
+                    &exitb,
+                    a_in1 > a_in2,
+                    b_in1 > b_in2,
+                    cbranch_addr,
+                );
+                // No extra build_dom_tree: structureReset() already runs
+                // calcForwardDominator (funcdata_block.cc:712 via the twin),
+                // and the new block is appended so indices did not change
+                // (R-NODEJOIN-CROSSREVIEW problem 4).
                 self.count += 1;
                 joined_this = true;
                 break;
