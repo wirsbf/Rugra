@@ -1,0 +1,103 @@
+{
+ "schema_version": 2,
+ "fixture_id": "VARNODE-GETUSEPOINT-0001",
+ "projection_status": "MATCH",
+ "overall_status": "MATCH: (B2 canonicalization)",
+ "status_note": "The four-line covered projection matches Varnode::getUsePoint (varnode.cc:690-703) on the locked Ghidra 12.0.4: the written leg returns the defining op address, and the input/free legs return the fd.getAddress()+-1 sentinel, including the ram:0 underflow wrap through AddrSpace::wrapOffset. Downstream consumers (setVarnodeProperties queryProperties, Scope::inUse, findLinkedVarnodes) are exercised end-to-end by the curl/httpd differential gates, not by this fixture.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_base_commit": "1531f3ada1a0cf10b3446fee07d9c540435c2e13",
+ "architecture": {
+  "id": "synthetic-le64-rule-fixture",
+  "endianness": "little",
+  "pointer_size": 8,
+  "spaces": "const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; byte addressed; the Rust side builds the same SpaceRegistry and tags the Funcdata base address with the ram handle so space identity is projected unnormalized",
+  "type_factory": "no case reads a datatype"
+ },
+ "compiler_spec": {
+  "id": "fixture",
+  "prototype_xml": "<prototype name=\"fixture\" extrapop=\"0\"><input/><output/></prototype>",
+  "calling_convention": "empty input/output records; no effects, symbols, or injections"
+ },
+ "analysis_options": {
+  "api": "Direct production Varnode::get_use_point calls; no Action or Rule runs",
+  "funcdata": "Fresh synthetic Funcdata per base address; high-level mode disabled",
+  "ir": "COPY(unique-out,4) at ram:0x2000 with constant 7; register-space varnodes at 0x40/0x50/0x60 for the input/free/zero-base cases",
+  "normalization": "None. The emitted projection prints the use-point space name and hex offset. Space identity is compared for real (both sides carry ram).",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent",
+  "random_seed": "none; construction is deterministic",
+  "error_injection": "none"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+  "cases": [
+   {
+    "id": "written_def",
+    "leg": "written",
+    "ir": "Funcdata based at ram:0x1000; COPY(unique-out) at ram:0x2000; the unique out is written",
+    "expect": "getUsePoint == ram:0x2000 (the defining op address)"
+   },
+   {
+    "id": "input_param",
+    "leg": "input",
+    "ir": "same Funcdata; register:0x40 four-byte input varnode via setInputVarnode",
+    "expect": "getUsePoint == fd.getAddress()+-1 == ram:0xfff"
+   },
+   {
+    "id": "free_vn",
+    "leg": "free",
+    "ir": "same Funcdata; register:0x50 four-byte varnode, never written, never marked input",
+    "expect": "getUsePoint == fd.getAddress()+-1 == ram:0xfff"
+   },
+   {
+    "id": "zero_base",
+    "leg": "free",
+    "ir": "second Funcdata based at ram:0; register:0x60 free varnode",
+    "expect": "getUsePoint == wrapOffset(0-1) == ram:0xffffffffffffffff (operator+ wrap, address.hh:423)"
+   }
+  ],
+  "sha256": "5177f4bd0183cabad105cfc7920a0e0622a1c1e9c8eab7504c9fde7eb25daef2"
+ },
+ "observation_schema": {
+  "format": "Four fixed-order UTF-8 lines with final newline",
+  "fields": "case, leg, use-point space name, use-point hex offset"
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "MATCH for all four cases: getUsePoint returns an Address by value carrying the fd/def-op space and offset; no state mutation.",
+  "loop_bounds_and_order": "MATCH: straight-line decision, no iteration.",
+  "counters_and_accumulators": "MATCH: none involved.",
+  "sort_and_comparison_keys": "MATCH: the sentinel arithmetic fd.getAddress()+-1 goes through Address::operator+ (address.hh:423) and AddrSpace::wrapOffset on both sides; the ram:0 base wraps to 0xffffffffffffffff on both."
+ },
+ "coverage": {
+  "written_def_leg": "MATCH",
+  "input_param_sentinel": "MATCH",
+  "free_vn_sentinel": "MATCH",
+  "zero_base_wrap": "MATCH",
+  "downstream_consumers": "OUT_OF_DOMAIN: setVarnodeProperties/Scope::inUse/findLinkedVarnodes are covered by the curl/httpd differential gates"
+ },
+ "residual_todo_ids": [],
+ "comparand": {
+  "cpp_fixture_sha256": "40349a739cc3546bdacb93560b0e0309f4bbfd415a1d3efab7cdba85b57af54f",
+  "rust_fixture_sha256": "e7fb0707571e5ab0207a03f7aeab3502deb05333448c86620e95c9e68e5de190",
+  "varnode_rs_sha256": "427b4f978ecbd9992b22f7d80d19488f30834f3b8aa7f4b58017bb847d0b17bb",
+  "runner_sha256": "b23797b52570cc5841608b0fdbacd867a53d1f20d9e0836f29452f791925a74c",
+  "cargo_toml_sha256": "b5e6dea467d92c03e3bee43dbf24fd237119f28186ad663f90c197494eb8c3de",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "expected_ghidra_stdout_sha256": "7c4528054710f3b23691f647247328141a60c4ad4573f9eb605530deb4011e44",
+  "expected_rugra_stdout_sha256": "7c4528054710f3b23691f647247328141a60c4ad4573f9eb605530deb4011e44",
+  "host_cxx": "g++ (GCC) 16.2.1 20260810",
+  "host_rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
+  "host_cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
+ },
+ "build": {
+  "rust_overlay": "Archive Rugra base 1531f3ada1a0cf10b3446fee07d9c540435c2e13 and overlay only the owned src/varnode.rs candidate before the isolated offline build",
+  "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler",
+  "expected_stdout_lines": 4
+ }
+}
