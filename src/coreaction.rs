@@ -3221,6 +3221,7 @@ impl Action for ActionDeterminedBranch {
                 }
             };
             let Some(cbranch) = last_op else { continue };
+            let size_out = bl.read().unwrap().size_out();
 
             // Check it's a CBRANCH with constant boolean input (slot 1).
             let (is_cbranch, is_const, val, is_flip) = {
@@ -3241,6 +3242,33 @@ impl Action for ActionDeterminedBranch {
                 continue;
             }
 
+            // HTTPD-STRCASECMP-NONCONVERGE-0001: Ghidra's implicit contract at
+            // coreaction.cc:3544-3545 is that a block whose lastOp is CBRANCH
+            // has exactly 2 out-edges — `data.removeBranch(bb,num)` with
+            // num∈{0,1} derefs `bb->getOut(num)` unconditionally
+            // (funcdata_block.cc:206), and the oracle maintains the invariant
+            // by construction (branchRemoveInternal destroys the cbranch at
+            // sizeOut==2 BEFORE any edge count drop, cc:203-204). Rugra can
+            // carry malformed "zombie decision" blocks (CBRANCH lastOp with
+            // <2 out-edges, left behind by edge-severing paths that skip the
+            // op-destroy step); calling remove_branch on them mutates nothing
+            // (get_out(num)→None early-return) yet still runs structureReset,
+            // clearing sblocks every mainloop round. That re-arms
+            // ActionBlockStructure + ruleBlockIfNoExit's negateCondition (a
+            // real dataflow change whose count feeds rule_repeatapply), so
+            // the mainloop never converges (ap_strcasecmp_match: 100k+ rounds
+            // of orderLoopBodies 0-loops / finalize 3->1). Ghidra would crash
+            // on this input (null deref of an impossible state); the faithful
+            // Rust degradation is skip + log, mirroring the LowlevelError
+            // degradation precedent (selectGoto exhausted, blockaction.cc:1275).
+            if size_out < 2 {
+                eprintln!(
+                    "[ACTION] {}: determinedbranch skipped malformed decision block (CBRANCH lastOp with {} out-edges; Ghidra contract coreaction.cc:3538-3547 requires 2)",
+                    fd.name, size_out
+                );
+                continue;
+            }
+
             // Determine which branch is taken.
             // num = ((val != 0) != isBooleanFlip) ? 0 : 1
             // Faithful to Ghidra: if val!=0 XOR is_flip → take edge 0 (fallthrough).
@@ -3250,11 +3278,20 @@ impl Action for ActionDeterminedBranch {
             // `num` is the edge to remove (funcdata_block.cc:220), leaving
             // the statically selected successor as the sole outgoing edge.
             fd.remove_branch(&bl, num);
+            // cc:3546: `count += 1` — indicate change has been made; harvested
+            // by take_count_delta into the mainloop repeatapply accumulator.
+            self.count += 1;
         }
         Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "determinedbranch" mirrors ctor at coreaction.hh:526
     fn get_name(&self) -> &str { "determinedbranch" }
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:3546 `count += 1`) into the ActionState accumulator
+    // harvested by Action::perform, same pattern as ActionBlockStructure.
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
+    }
 }
 
 /// Hide shadow varnodes. Faithful to `ActionHideShadow` (coreaction.cc).
