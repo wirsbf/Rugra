@@ -1071,7 +1071,13 @@ impl EmitNoMarkup {
             // indents), so the collapse and the ` )` trim must not reach
             // inside a quoted region. Escapes (`\"`, `\\`, `\'`) do not
             // toggle the quote state.
-            {
+            // MAIN-RC3-STRUCTURED-EMIT-0001: a compact `while(` header line
+            // is exempt entirely — the oracle's overflow header is
+            // `while( true )` (printc.cc:3023-3028: openParen then
+            // spaces(1) on each side of `true`), the one Ghidra form whose
+            // bytes include ` )`; the trim/collapse would destroy it.
+            // `while` is a keyword, so only that form starts with `while(`.
+            if !t.starts_with("while(") {
                 let trimmed_start = line.len() - line.trim_start().len();
                 let indent_part = &line[..trimmed_start];
                 let content = &line[trimmed_start..];
@@ -1195,7 +1201,7 @@ impl EmitNoMarkup {
                     // Switch case label — end dead zone (reachable via case fallthrough)
                     dead_after_return = false;
                     alive.push(line.clone());
-                } else if t.starts_with("while (") || t.starts_with("do ") || t.starts_with("for (") || Self::is_switch_stmt_prefix(t) {
+                } else if t.starts_with("while (") || t.starts_with("while(") || t.starts_with("do ") || t.starts_with("for (") || Self::is_switch_stmt_prefix(t) {
                     // Control-flow structures (loops/switches) are not dead code even
                     // after a return — they may be reachable via fallthrough or represent
                     // structured control flow that the emit traversal placed after a return.
@@ -1592,7 +1598,11 @@ impl EmitNoMarkup {
                             let mut has_loop_ctx = false;
                             for prev in pass17.iter().rev().take(20) {
                                 let pt = prev.trim();
-                                if pt.starts_with("while ") || pt.starts_with("do ")
+                                // MAIN-RC3-STRUCTURED-EMIT-0001: the compact
+                                // `while(` (oracle overflow header,
+                                // printc.cc:3023-3028) counts as loop context.
+                                if pt.starts_with("while ") || pt.starts_with("while(")
+                                    || pt.starts_with("do ")
                                     || pt.starts_with("for ") || Self::is_switch_stmt_prefix(pt)
                                     || pt.contains("} while (")
                                 {
@@ -1849,7 +1859,10 @@ impl EmitNoMarkup {
             let line = &output_final2[iwb];
             let t = line.trim();
             // Detect a `while (...) {` opener (not `do {` or `} while (...)`).
-            if t.starts_with("while (") && t.ends_with('{') {
+            // Both header spellings count: the spaced `while (cond)` and the
+            // oracle's COMPACT overflow form `while( true )` (printc.cc:
+            // 3023-3028 — tagOp + openParen with no spaces(1) between).
+            if (t.starts_with("while (") || t.starts_with("while(")) && t.ends_with('{') {
                 let indent = line.len() - line.trim_start().len();
                 let body_indent = indent + 2;
                 // Scan forward for the matching close brace at the same indent as the while.
@@ -2519,7 +2532,12 @@ impl EmitNoMarkup {
             // Skip lines that start with '}' (like "} else {") — they're handled below
             // by the closing-brace logic to avoid double-counting the brace delta.
             if t.ends_with('{') && !t.starts_with('}') {
+                // MAIN-RC3-STRUCTURED-EMIT-0001: the compact `while(` (the
+                // oracle overflow header, printc.cc:3023-3028) is a loop
+                // opener too — without it the second pass below strips every
+                // `break;` in its body as unprotected.
                 let is_loop_hdr = t.starts_with("while ")
+                    || t.starts_with("while(")
                     || t.starts_with("for ")
                     || t.starts_with("do ")
                     || Self::is_switch_stmt_prefix(t)
@@ -3407,7 +3425,13 @@ impl EmitNoMarkup {
             }
             // When we find an opening keyword at an indent level <= target (one level up)
             if ind < target_indent {
-                if t.starts_with("while (") || t.starts_with("do {")
+                // MAIN-RC3-STRUCTURED-EMIT-0001: accept the compact
+                // `while(` too — the oracle's overflow header (printc.cc:
+                // 3023-3028) is `while( true )`, and `while` is a C keyword
+                // so `while(` can never be an identifier (same word-safety
+                // argument as is_switch_stmt_prefix above).
+                if t.starts_with("while (") || t.starts_with("while(")
+                    || t.starts_with("do {")
                     || t.starts_with("for (") || Self::is_switch_stmt_prefix(t)
                     || t.contains("} while (")
                 {
@@ -5002,6 +5026,49 @@ impl Emit for EmitPrettyPrint {
 #[cfg(test)]
 mod tests {
     use super::EmitNoMarkup;
+
+    // MAIN-RC3-STRUCTURED-EMIT-0001 regression: the overflow whiledo header
+    // is the compact `while( true )` (printc.cc:3023-3028 — tagOp +
+    // openParen with no spaces(1) between, then one space on each side of
+    // `true`). Locks both layers: (a) the emit sequence with explicit
+    // space TOKENS produces those exact bytes in the raw low-level stream,
+    // and (b) the legacy post-processing no longer destroys them — the
+    // whitespace-normalization pass is gated off `while(` header lines and
+    // the loop-context detectors accept the compact form, so the
+    // `if (cond) break;` statement inside the loop body survives.
+    // Statement shape mirrors production: every statement inside the block
+    // opens with its own tag_line (emit_block_ops tag_line per statement).
+    #[test]
+    fn pretty_print_overflow_whiledo_header_spaces() {
+        use crate::prettyprint::Emit;
+        let mut e = super::EmitPrettyPrint::new();
+        e.begin_function();
+        e.tag_line(0);
+        e.tag_op("while");
+        let id1 = e.open_paren("(");
+        e.spaces(1, 0);
+        e.print("true");
+        e.spaces(1, 0);
+        e.close_paren(")", id1);
+        e.begin_block();
+        e.tag_line(0);
+        e.print("stmt;");
+        e.tag_line(0);
+        e.print("if (c) break;");
+        e.end_block();
+        e.end_function();
+        let out = e.get_output();
+        assert!(
+            out.contains("while( true ) {"),
+            "overflow header must be the compact `while( true )`, got:\n{}",
+            out
+        );
+        assert!(
+            out.contains("if (c) break;"),
+            "the loop's if-break statement must survive post-processing, got:\n{}",
+            out
+        );
+    }
 
     // RUGRA-GLUE: backfill_missing_locals unit tests (legacy text-pass
     // compensation layer; the oracle has no counterpart — Ghidra's

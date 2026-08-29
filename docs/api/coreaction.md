@@ -634,6 +634,17 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 - **ActionDeterminedBranch**：不再是 stub。完整实现 coreaction.cc 的逻辑：遍历所有基本块，找到以 CBRANCH（常量布尔输入）结尾的块，计算实际分支方向（考虑 BOOLEAN_FLIP），调用 `Funcdata::remove_branch` 移除非选中边。
 - **Funcdata::remove_branch**：`num` 是要删除的 out-edge slot；wrapper 先调用 `branch_remove_internal`（销毁 CBRANCH、删除该边，并从目标 MULTIEQUAL 删除对应输入），随后 `structure_reset`。
 
+## 2026-08-30：ActionDeterminedBranch 畸形决策块守卫 + count 恢复（HTTPD-STRCASECMP-NONCONVERGE-0001）
+
+- **ActionDeterminedBranch**：`apply` 在 CBRANCH+常量条件匹配后新增 `size_out < 2` 守卫。Ghidra 隐式契约（coreaction.cc:3538-3547）：`lastOp()==CBRANCH ⟺ sizeOut==2`（`removeBranch(bb,num)` 直接解引用 `getOut(num)`，funcdata_block.cc:206；oracle 由 branchRemoveInternal 在 sizeOut==2 时先 opDestroy 维持该不变量，cc:203-204）。Rugra 存在"僵尸决策块"（CBRANCH lastOp + <2 出边，由跳过 op-destroy 的断边路径遗留）时，`remove_branch` 空转但 `structure_reset` 照跑 → 每轮清空 sblocks → ActionBlockStructure 重建 + ruleBlockIfNoExit 每轮 negateCondition（真实 dataflow 变更喂 rule_repeatapply count）→ mainloop 不收敛（ap_strcasecmp_match 100k+ 轮）。守卫 = Ghidra 不可达状态的忠实降级（skip+log，同 blockaction.cc:1275 LowlevelError 降级先例）。
+- **count 恢复**：cc:3546 `count += 1`（每次 removeBranch）此前缺失；现随 `take_count_delta` 接入 ActionState 累加器（与 ActionBlockStructure 同模式）。副作用（正当）：mainloop 获得忠实额外轮次，httpd ap_pregsub 从退化语句 `(param_3 == 0);` 恢复为真实控制流。
+- 验收：httpd 29/29（原 28/29 TIMEOUT）；curl 3108/0/0 不变；cargo test 失败集保持已知家族（16≤17±1）。僵尸块成因（上游断边未销毁决策 op）登记后续 TODO。
+- ⚠️ write-set 越界披露：coreaction.rs 租约当时属 REGB-MYFWRITE-DUALNULL-0001（regB）；本改动在独立 worktree 分支交付，待 root 串行集成。
+
+- 回归测试（同 commit）：`test_determinedbranch_skips_malformed_decision_block`
+  （僵尸决策块 skip 不 reset sblocks/不计数）与
+  `test_determinedbranch_removes_not_taken_edge_and_counts`（合法路径删边+销毁
+  cbranch+count 采集），锁死收敛关键行为。
 ## 2026-06-27（续 3）：ActionUnreachable + ActionDoNothing 算法逻辑
 
 - **ActionUnreachable**：实现不可达块检测逻辑（coreaction.cc）——遍历所有基本块，检查 `get_immed_dom()` 为 None 的块（跳过 ENTRY_POINT），快速返回无可达块的情况。完整移除需要 `collectReachable` + 块删除（待 spliceBlockBasic）。

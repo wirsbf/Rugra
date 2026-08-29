@@ -13947,8 +13947,10 @@ impl Rule for RulePullsubIndirect {
                 (f & (varnode_flags::INDIRECT_CREATION | varnode_flags::CONSTANT))
                     != (varnode_flags::INDIRECT_CREATION | varnode_flags::CONSTANT)
             };
-            let new_ind = fd.new_indirect_creation(
+            let vn_space = vn.read().unwrap().address_space;
+            let new_ind = fd.new_indirect_creation_in_space(
                 &targ_op,
+                vn_space,
                 smalladdr2.as_u64(),
                 new_size as usize,
                 possibleout,

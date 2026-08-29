@@ -813,14 +813,22 @@ impl<'a> TraceDAG<'a> {
 // whole-DAG branch, blockaction.cc:1233-1239: roots = every sizeIn==0 block).
 /// Generate likely goto edges for a function's control-flow graph (no loop
 /// restriction). Returns (source, dest) edges to consider as unstructured.
+/// NOTE: the collapse pipeline inlines this in update_loop_body so the root
+/// collection can walk the CollapseStructure's virtual list order (Ghidra's
+/// mutating list has composites appended at the end); this free function
+/// walks physical slot order and is kept only as a standalone helper.
 pub fn generate_likely_gotos(graph: &BlockGraph) -> Vec<FloatingEdge> {
     // Find root blocks (size_in == 0). No size gate: the oracle traces any
     // graph (the previous `< 10` skip was invented, no oracle counterpart).
+    // Consumed slots are skipped — Ghidra's list never contains components
+    // that were folded into a composite (identifyInternal, block.cc:953-960),
+    // and a stripped zombie can otherwise surface as a phantom sizeIn==0
+    // root and poison the trace.
     let roots: Vec<i32> = (0..graph.get_size())
         .filter_map(|i| {
             graph.get_block(i).and_then(|b| {
                 let r = b.read().unwrap();
-                if r.size_in() == 0 {
+                if r.size_in() == 0 && !graph.absorbed_into.contains_key(&r.get_index()) {
                     Some(r.get_index())
                 } else {
                     None

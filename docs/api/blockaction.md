@@ -1,5 +1,52 @@
 # `blockaction.rs` API Reference
 
+
+### 2026-08-30 追加（seam #2/#3 定缝结论, 未修）
+
+双侧 visit 级 trace（oracle BS_ORACLE_VISIT vs Rugra RUGRA_BS_VISIT，均 env 门控）：
+- Or-cond 创建序列双侧**完全一致**（6,26,29,89,95,101,117,120,123,126,132,141 + 重触发 89→91,
+  126→128），此前"顺序发散"判断系 dump 误读（重触发把首代 cond 移到尾部）。
+- properif/cat 消费集逐事件**完全一致**（105→106, 109→110, ..., 29→31, 117→119, 132→134,
+  126→129; cat35→37, 55→57, 109→111, 139→141, 117→120）。
+- 事件 22 处（cat@139 后 oracle 访问 if@117, Rugra 访问 if@132）的残余错位 =
+  **@339e 块缺失**（oracle main 图 150 块 vs Rugra 149；列表尾部少一个条目使 shift 算术差 1 位）。
+  @339e = main/_start 重叠区的 hlt（fallthrough 过 noreturn call），Rugra 按符号尺寸截断不含。
+  修复域 = funcdata/flow（函数尺寸/跟随策略），非 blockaction —— 已登记移交。
+- do-while 吸收链（goto67→cat67→dowhile67 ... ifelse12→cat12→dowhile12, oracle 事件 53-80）
+  在该错位下游；@339e 修复后继续用同一双侧 visit trace 定缝。
+
+## 2026-08-30：Ghidra 列表序镜像 virtual_list（MAIN-RC4-DOWHILE-TRACE-0001, P1）
+
+**根因（双侧 trace 定缝, oracle 插桩 /tmp/w-rc4-ore + RUGRA_BS_TRACE）**：Ghidra 的 collapse
+图是**可变列表**——`identifyInternal` 从 `list` 移除被消费组件（block.cc:953-960），每个
+`newBlock*` 工厂经 `addBlock` 把组合块**追加到列表尾部**（block.cc:862-875 `list.push_back`）；
+`collapseInternal`（cc:1776-1811）、`collapseConditions`（cc:1858）、IfNoExit 二趟（cc:1838）、
+`clipExtraRoots`（cc:1111）、`labelLoops`（cc:1129）、`updateLoopBody` 根收集（cc:1234）全部按
+**列表位置**迭代。Rugra 平铺 Vec（块固定 slot + absorbed_into 僵尸 + 组合块 in-place 安装）使
+位置≡索引，组合块在 pass 早期被扫描（oracle 在尾部），且无法产生 oracle 的
+**shift-skip 语义**（规则吃掉当前块+相邻块时，幸存者左移滑过已自增的扫描指针, 下一 pass 才补扫）。
+main 实测：首个分歧 pass1 位置 3（Rugra 过早命中 properif blk#29 cond 复合体; oracle 在 pass
+末尾才扫到它）→ 后续吸收序全偏 → argv 循环头（idx=12）cat 后的自环复合体无法在同 pass 尾部
+被再扫到 → try_rule_do_while 0 命中（golden 5 个 do-while）。
+
+**修复**：`CollapseStructure` 新增 `virtual_list: Vec<i32>`（slot 序）——`new()` 初始化为拷贝图
+顺序 0..n；`identify_internal` 尾部 `retain(非 consumed 且非 install) + push(install_idx)` 精确
+镜像 oracle 的 remove+append；上述 6 个位置序消费者全部改为迭代 virtual_list（含
+`while idx < virtual_list.len()` 的动态边界重读 = Ghidra `index < graph.getSize()` 每次求值；
+target 模式 `idx = len()`（事后重读）= cc:1790 `index = graph.getSize()`）。顺带修复
+`generate_likely_gotos`（tracedag.rs）的僵尸幻影根（consumed 过滤）。
+
+**验证**：main 规则序列与 oracle 对齐前缀 14（原始）/22（滤除 oracle-only 的 @339e 事件后;
+@339e=main/_start 重叠区的 hlt 块, Rugra 按符号尺寸截断不含, flow 域缺口另行登记）；
+E2E 124/124、0 panic、76 decompiled、defects=0/numbering=0、skeleton 3104→3096；
+cargo test --lib 10 failed（全部为已知 funcdata 基线, 无 blockaction/tracedag 新失败）。
+main do-while 仍为 0：剩余分歧在 oracle 事件 22+（cat@117/properif@139 次序、properif@137、
+cat@146 339e 关联），继续定缝中。双侧探针证据：/tmp/w-rc4-ore-main{,2,3}.stderr（oracle
+BS_ORACLE/BS_ORACLE_DUMP/BS_ORACLE_VISIT）vs /tmp/w-rc4-{trace2,fix1,fix2}.stderr（Rugra
+RUGRA_BS_TRACE/RUGRA_BS_DUMP=2）。
+
+# `blockaction.rs` API Reference
+
 ## 2026-08-29：identify_internal 消费状态去 f_dead 化 + 组件内边保留（BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001）
 
 对齐 Ghidra `BlockGraph::identifyInternal`（block.cc:940-963）与 `selfIdentify`
@@ -1019,6 +1066,12 @@ interior-goto 标记。
 
 ### selectGoto exhausted 调试注桩（2026-08-26，TRI2-STRUCT-SELECTGOTO-SELFLOOP-0001）
 - `debug_type_name` / `CollapseStructure::debug_dump_graph`（RUGRA-GLUE，
+- `bs_trace_cfg_sig` + `ActionBlockStructure::apply` pre/post witness（RUGRA-GLUE，
+  无 Ghidra 对应物，debug-only）：`RUGRA_BS_TRACE=1` 时在每次 blockstructure 施加
+  前后打印 bblocks 完整签名（槽位/索引/起始地址/类型/入出边及 GOTO 标记/末位
+  CBRANCH 及其 const/val/BOOLEAN_FLIP/块 flags），用于 mainloop 不收敛/CFG 往复
+  症状的逐轮夹逼（HTTPD-STRCASECMP-NONCONVERGE-0001 定位中引入：识别出
+  DeterminedBranch→remove_branch 空转 reset + if_no_exit 每轮 negate 的乒乓）。
   无 Ghidra 对应物）：`RUGRA_BS_DUMP=1` 时在 selectGoto exhausted 位点
   （blockaction.cc:1275 LowlevelError 站点）dump 全图 in/out/flags 状态，
   用于结构化分叉 triage。

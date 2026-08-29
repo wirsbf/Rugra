@@ -3221,6 +3221,7 @@ impl Action for ActionDeterminedBranch {
                 }
             };
             let Some(cbranch) = last_op else { continue };
+            let size_out = bl.read().unwrap().size_out();
 
             // Check it's a CBRANCH with constant boolean input (slot 1).
             let (is_cbranch, is_const, val, is_flip) = {
@@ -3241,6 +3242,33 @@ impl Action for ActionDeterminedBranch {
                 continue;
             }
 
+            // HTTPD-STRCASECMP-NONCONVERGE-0001: Ghidra's implicit contract at
+            // coreaction.cc:3544-3545 is that a block whose lastOp is CBRANCH
+            // has exactly 2 out-edges — `data.removeBranch(bb,num)` with
+            // num∈{0,1} derefs `bb->getOut(num)` unconditionally
+            // (funcdata_block.cc:206), and the oracle maintains the invariant
+            // by construction (branchRemoveInternal destroys the cbranch at
+            // sizeOut==2 BEFORE any edge count drop, cc:203-204). Rugra can
+            // carry malformed "zombie decision" blocks (CBRANCH lastOp with
+            // <2 out-edges, left behind by edge-severing paths that skip the
+            // op-destroy step); calling remove_branch on them mutates nothing
+            // (get_out(num)→None early-return) yet still runs structureReset,
+            // clearing sblocks every mainloop round. That re-arms
+            // ActionBlockStructure + ruleBlockIfNoExit's negateCondition (a
+            // real dataflow change whose count feeds rule_repeatapply), so
+            // the mainloop never converges (ap_strcasecmp_match: 100k+ rounds
+            // of orderLoopBodies 0-loops / finalize 3->1). Ghidra would crash
+            // on this input (null deref of an impossible state); the faithful
+            // Rust degradation is skip + log, mirroring the LowlevelError
+            // degradation precedent (selectGoto exhausted, blockaction.cc:1275).
+            if size_out < 2 {
+                eprintln!(
+                    "[ACTION] {}: determinedbranch skipped malformed decision block (CBRANCH lastOp with {} out-edges; Ghidra contract coreaction.cc:3538-3547 requires 2)",
+                    fd.name, size_out
+                );
+                continue;
+            }
+
             // Determine which branch is taken.
             // num = ((val != 0) != isBooleanFlip) ? 0 : 1
             // Faithful to Ghidra: if val!=0 XOR is_flip → take edge 0 (fallthrough).
@@ -3250,11 +3278,20 @@ impl Action for ActionDeterminedBranch {
             // `num` is the edge to remove (funcdata_block.cc:220), leaving
             // the statically selected successor as the sole outgoing edge.
             fd.remove_branch(&bl, num);
+            // cc:3546: `count += 1` — indicate change has been made; harvested
+            // by take_count_delta into the mainloop repeatapply accumulator.
+            self.count += 1;
         }
         Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "determinedbranch" mirrors ctor at coreaction.hh:526
     fn get_name(&self) -> &str { "determinedbranch" }
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:3546 `count += 1`) into the ActionState accumulator
+    // harvested by Action::perform, same pattern as ActionBlockStructure.
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
+    }
 }
 
 /// Hide shadow varnodes. Faithful to `ActionHideShadow` (coreaction.cc).
@@ -14367,6 +14404,137 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0);
         let mut a = ActionRedundBranch::new();
         assert_eq!(a.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
+    }
+
+    /// HTTPD-STRCASECMP-NONCONVERGE-0001 regression lock: a malformed
+    /// "zombie decision block" (CBRANCH lastOp + constant condition + fewer
+    /// than 2 out-edges — a state Ghidra's coreaction.cc:3538-3547 contract
+    /// forbids) must be SKIPPED by ActionDeterminedBranch without calling
+    /// remove_branch: the no-op remove_branch would still run structureReset,
+    /// clearing sblocks every mainloop round and re-arming
+    /// ActionBlockStructure + ruleBlockIfNoExit's per-round negateCondition
+    /// into an infinite rule_repeatapply loop.
+    #[test]
+    fn test_determinedbranch_skips_malformed_decision_block() {
+        use crate::address::Address;
+        use crate::block::BlockBasic;
+        use crate::opcodes::OpCode;
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
+        let b0c = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            0, Address::new(0x1000),
+        )));
+        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            1, Address::new(0x1010),
+        ))) as std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
+        b0c.write().unwrap().flags |= crate::block::block_flags::ENTRY_POINT;
+        let b0 = b0c as std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
+        fd.bblocks.add_block(b0.clone());
+        fd.bblocks.add_block(b1.clone());
+        fd.bblocks.add_edge(b0.clone(), b1.clone());
+        // b1 = zombie decision block: ends in CBRANCH with constant
+        // condition (val=1) but ZERO out-edges.
+        let cb = fd.new_op(2, Address::new(0x1010));
+        fd.op_set_opcode(&cb, OpCode::CPUI_CBRANCH);
+        let addr_vn = fd.new_constant(8, 0x1020);
+        fd.op_set_input(&cb, addr_vn, 0);
+        let cond = fd.new_constant(1, 1);
+        fd.op_set_input(&cb, cond, 1);
+        fd.op_insert_end(&cb, &b1);
+        // Populate sblocks with a witness block: a faithful run must NOT
+        // reset the structure (remove_branch's structureReset is the bug's
+        // per-round sblocks wipe).
+        let witness = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            0, Address::new(0x1000),
+        ))) as std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
+        fd.sblocks.add_block(witness);
+        assert_eq!(fd.sblocks.get_size(), 1);
+
+        let mut action = ActionDeterminedBranch::new();
+        assert_eq!(action.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
+
+        assert_eq!(fd.sblocks.get_size(), 1, "zombie skip must not structureReset");
+        assert_eq!(fd.bblocks.get_size(), 2, "graph untouched");
+        assert_eq!(b1.read().unwrap().size_out(), 0, "no edge to remove");
+        let last_is_cb = {
+            let rg = b1.read().unwrap();
+            rg.as_any()
+                .downcast_ref::<BlockBasic>()
+                .and_then(|bb| bb.last_op())
+                .map(|o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                .unwrap_or(false)
+        };
+        assert!(last_is_cb, "zombie cbranch left in place (skip, not destroy)");
+        assert_eq!(action.count, 0, "no change counted for skipped malformed block");
+    }
+
+    /// Well-formed determined branch (CBRANCH + constant condition + exactly
+    /// 2 out-edges): faithful cc:3544-3546 behavior — the not-taken edge is
+    /// removed, the cbranch destroyed (branchRemoveInternal cc:203-204),
+    /// count += 1 per removal.
+    #[test]
+    fn test_determinedbranch_removes_not_taken_edge_and_counts() {
+        use crate::address::Address;
+        use crate::block::BlockBasic;
+        use crate::opcodes::OpCode;
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
+        let b0c = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            0, Address::new(0x1000),
+        )));
+        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            1, Address::new(0x1010),
+        ))) as std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
+        let b2 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            2, Address::new(0x1020),
+        ))) as std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
+        b0c.write().unwrap().flags |= crate::block::block_flags::ENTRY_POINT;
+        let b0 = b0c as std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
+        for b in [&b0, &b1, &b2] {
+            fd.bblocks.add_block(b.clone());
+        }
+        fd.bblocks.add_edge(b0.clone(), b1.clone());
+        fd.bblocks.add_edge(b0.clone(), b2.clone());
+        // b0: CBRANCH, condition constant 1, no boolean flip ->
+        // num = ((1!=0) != false) = true -> 0: edge to b1 (out[0]) removed.
+        let cb = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&cb, OpCode::CPUI_CBRANCH);
+        let addr_vn = fd.new_constant(8, 0x1010);
+        fd.op_set_input(&cb, addr_vn, 0);
+        let cond = fd.new_constant(1, 1);
+        fd.op_set_input(&cb, cond, 1);
+        fd.op_insert_end(&cb, &b0);
+
+        let mut action = ActionDeterminedBranch::new();
+        assert_eq!(action.apply(&mut fd).unwrap(), action_status::NO_CHANGE);
+
+        assert_eq!(
+            b0.read().unwrap().size_out(),
+            1,
+            "not-taken edge removed (cc:3545)"
+        );
+        assert_eq!(action.count, 1, "count += 1 per removeBranch (cc:3546)");
+        assert_eq!(action.take_count_delta(), 1, "delta harvest returns the count");
+        assert_eq!(action.take_count_delta(), 0, "second harvest is zero (taken)");
+        let last_is_cb = {
+            let rg = b0.read().unwrap();
+            rg.as_any()
+                .downcast_ref::<BlockBasic>()
+                .and_then(|bb| bb.last_op())
+                .map(|o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                .unwrap_or(false)
+        };
+        assert!(!last_is_cb, "cbranch destroyed at sizeOut==2 (cc:203-204)");
     }
 
     /// remove_unreachable_blocks: a 3-block CFG where block 2 is unreachable

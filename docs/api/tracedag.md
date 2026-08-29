@@ -107,3 +107,11 @@ check_open 使用简化近似（size_in <= edgelump），select_bad_edge 选第�
 - 新增 `is_loop_dag_in` helper（对齐 block.hh:345 isLoopDAGIn）。
 - `opened` 集合保留为保守安全网（Ghidra 无此机制，靠纯 visit-count 终止；Rugra 的 visit-count 终止性待验证后可移除）。
 <!-- annotation-pass: 2026-07-04 -->
+
+## 2026-08-30：generate_likely_gotos 僵尸幻影根过滤（MAIN-RC4-DOWHILE-TRACE-0001）
+
+`generate_likely_gotos` 的根收集补 `graph.absorbed_into` 过滤：Ghidra 的列表从不包含已被
+折叠进组合块的组件（identifyInternal 移除, block.cc:953-960），Rugra 平铺 Vec 里被剥光的
+僵尸 size_in()==0 时会伪装成 sizeIn==0 根并污染 final-DAG trace。collapse 管线的
+`update_loop_body` final-DAG 分支已改为内联收集（virtual_list 顺序, 见 blockaction.md
+2026-08-30 条目），此自由函数仅作独立 helper 保留。

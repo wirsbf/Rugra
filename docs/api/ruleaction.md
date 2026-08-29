@@ -1375,3 +1375,13 @@ w-typeflow 根因③落地:ruleaction.rs RuleLoadVarnode::apply_op 的 create_wi
 varnode 丢掉了 oracle newVarnode(funcdata_varnode.cc:148-172)的符号尾(queryProperties→
 setSymbolProperties→updateType,typelock 门控);同文件 RuleStoreVarnode(:17080)本就正确。
 补 `fd.set_varnode_properties(&newvn)`(A/B 预验证补丁)。
+
+## 2026-08-30:RulePullsubIndirect 恢复寄存器空间(RULEACTION-PULLSUB-SPACE-0001)
+
+w-rc5 双侧实证:Ghidra ruleaction.cc:996-1002 的 smalladdr2 是带空间全 Address,经
+newIndirectCreation(funcdata_op.cc:710)输出落 register:0;Rugra 用无空间 Address 调 legacy
+new_indirect_creation(硬编码 Unique)→ which_trial_in_space 同空间匹配(fspec.cc:1982)永不命中 →
+trial 失活 → CALL 无 output → varmap 忠实产出 extraout_var_00。patch(w-rc5 fixsim 预验证):
+改调 new_indirect_creation_in_space 传 vn 空间。效果:main 与 golden 逐 token 同形
+(`iVar4 = strnequal("--",pCVar6,2); if ((iVar4 == 0) && ...`),3 个 extraout_var* 全消,
+skeleton 3108→3068。

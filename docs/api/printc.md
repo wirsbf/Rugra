@@ -1896,3 +1896,69 @@ type_expr_space 形态(`char * x`),与 fixture named_ptr_contrast 记录重新�
 
 测试 `printc::tests::test_doc_function_leaves_action_scope_unchanged` 的 pcVar1 构造改为工厂匿名
 `TypePointer::new(8, char, 1)`(生产形态,匹配 e331a5c5 匿名化),断言的 glued 输出不变。
+
+### 2026-08-30：MAIN-RC3-STRUCTURED-EMIT-0001 — WhileDo/For body 门翻转为 oracle 结构化发射
+
+- **翻转**:2026-08-29 固定的两处 `body_is_dead = true`(emit_structured_whiledo
+  的 body 门,含 overflow 臂;emit_for_loop 的 body 门)按 oracle 条件评估——
+  printc.cc:3061-3062 / 2994-2995 规定 `setMod(no_branch); beginBlock(getBlock(1));
+  getBlock(1)->emit(this)`,**无条件结构化虚派发,oracle 没有 flatten 旁臂**。
+  两处改为无条件 `emit_block_structured`(seen_return 域作用域保持)。
+- **触发时机**:RC2(BlockGoto wrapped,MAIN-RC2-BLOCKGOTO-WRAPPED-0001)+
+  guard-lattice 落地后,2026-08-29 记录的暴露面(+404 skeleton、numbering 1→2、
+  main 1100)缩小为 **+58 skeleton、numbering 0→1、main 838→926**。
+- **emit_comment_block_tree 的 BlockGoto 子表修正**:Ghidra `BlockGoto :
+  BlockGraph`(block.hh:547),cc:3257-3263 的非 basic 递归走 `subBlock(i)` =
+  BlockGraph 列表 = identifyInternal(ret,[bl])(block.cc:1706-1708)移入的
+  **wrapped 组件**;旧代码取 `goto_target`(legacy 投影,实践恒 None)——改为
+  `wrapped`。goto TARGET 不参与子块遍历。
+- **E2E 差分(curl 12.0.4 golden)**:defects=0 保持;numbering 0→1(main 的
+  `iVar4 declared twice`,见下残差);skeleton 3104→3162。逐函数:
+  main +88、file2string.part.0 −16、parseconfig.constprop.0 −14、my_get_token −2、
+  next_url +2。main 的 URL-glob 区现在与 golden 1:1 结构形态(含 golden 自身的
+  `goto LAB_0010282a` 反向边、`LAB_00102873:` 标签、if/else 嵌套链、for 循环);
+  next_url +2 = golden 的 `if (glob->size <= (int)uVar8) goto LAB_001050e7;`
+  循环守卫首次发射(Rugra 以 `==0 || <` 规范两行形态)。httpd:baseline 与翻转
+  **逐字节相同**(2178/4/0,4 defects 均为 master 既有)。
+- **残差登记**(不回退,新 TODO):
+  - `PRINTC-STRUCTEMIT-MAIN-IVAR4-DUP-0001`:main 结构化暴露区内 mid-block
+    `int iVar4;` 二次声明(numbering +1),伴随 `fopen(...); if (...)` 同行
+    (缺 tagLine 断行)——声明发射/行断点在结构化路径的缺口。
+  - main 的 for 头部畸形(`for (var_8; iVar11 != 0; ...)`,golden 为
+    `for (lVar13 = 0x26; lVar13 != 0; lVar13 + -1)`)——varmap for-init/iterate
+    数据侧残差,先前被 flatten 汤掩盖。
+
+### 2026-08-30:GLOBWORD-C3 — carry 族 opFunc 打印(printc.rs)
+
+- **根因**(w-x86carry 双侧证明,docs/alignment_docs/CARRY-PRINT-ROOTCAUSE-2026-08-30.md):
+  SLEIGH 提升的 INT_CARRY 完整存活到最终 IR(输出 implied),但 printc 无
+  CARRY/SCARRY/SBORROW 分支——RPN 侧 `rpn_def_inline_reachable` 无臂(不可内联,
+  叶 atom 走未命名位置)、`dispatch_op_rpn` 无臂、legacy 侧 `emit_inline_expr`
+  落 `_ =>` fallback,CF(:register:200)打成 `register0x00000200`(curl 5 处)。
+- **修复**(5 处,全在 printc.rs):
+  1. `dispatch_op_rpn` 新臂 → `rpn_op_func`(opFunc printc.cc:424-442 的既有
+     RPN 端口);
+  2. `rpn_def_inline_reachable` 同族 → `has(0)&&has(1)`;
+  3. 新 `rpn_operator_name_carry`:`CARRY/SCARRY/SBORROW + dec(in0 size)`
+     (typeop.cc:1340/1356/1372 getOperatorName 移植,产出 CARRY1/SCARRY4/SBORROW2,
+     大写非 pcode 名);
+  4. `emit_inline_expr` legacy 臂:函数式语法,逗号 token spacing=0
+     (printc.cc:54,`,` 无空格);
+  5. 语句级 `op_func`:carry 族名 + 逗号改 `,`(原 `", "` 偏离 spacing=0)。
+- **E2E 判据**:泄漏 `register0x00000200` 5→0;`CARRY1(` ×3;skeleton
+  3162→3164(+2 = file2string.part.0/my_get_line 各 +1);defects=0;numbering
+  不变。+2 行为规格 §3.3 预告的 cast 链残差现形(原泄漏行位置):
+  参数 `(int *)uVar6` vs oracle `(byte)uVar7`(heritage piece-split 域)、
+  外包 `(0 - (int *)(bool)(long)CARRY1(...))` vs `-(ulong)CARRY1(...)`
+  (cast 链域)。typeop.rs functional_binary_op push 路由 opFunc(规格 §3.2)
+  与上述两域均在 printc 租约外,登记残差待相应 owner。
+
+### 2026-08-30:MAIN-RC3-STRUCTURED-EMIT-0001 补充 — overflow 头字节对齐
+
+emit_structured_whiledo 的 overflow 臂头序列按 printc.cc:3023-3028 逐调用
+对齐:`tag_op("while") + open_paren + spaces(1) + print("true") + spaces(1)
++ close_paren`(id1 配对传递)= 紧凑 `while( true )`(原实现拼字面量
+`while ( true)`,两侧空格均错)。空格走显式 space token(oracle spaces(1)),
+遗留后处理层的配套承认见 docs/api/prettyprint.md 同日条目(` )` 修剪豁免 +
+四处 loop-ctx 检测补紧凑形)。回归:curl `while( true )` ×3 逐字节匹配
+golden,3 处 if-break 保持,httpd 逐字节不变。
