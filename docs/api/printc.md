@@ -1856,3 +1856,6 @@ typeop propagate_to_pointer、debugproto parse_c_type/pointer_type/DWARF 数组,
 getTypePointer 空名形态)落地后,渲染层 glue 兜底(7c3df2ce)不再必要——生产指针已匿名,
 buildTypeStack 钻取多层栈走 ptr_expr 原生 glue;命名单层指针(仅显式具名构造)恢复 oracle 的
 type_expr_space 形态(`char * x`),与 fixture named_ptr_contrast 记录重新一致。
+
+测试 `printc::tests::test_doc_function_leaves_action_scope_unchanged` 的 pcVar1 构造改为工厂匿名
+`TypePointer::new(8, char, 1)`(生产形态,匹配 e331a5c5 匿名化),断言的 glued 输出不变。

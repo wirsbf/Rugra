@@ -15291,9 +15291,18 @@ mod tests {
             let scope = fd.scope.as_mut().unwrap();
             let mut s1 = LocalSymbol::new(
                 "pcVar1", 0x30, 8,
-                Some(std::sync::Arc::new(Datatype::Base(TypeBase::new(
-                    "char *".to_string(), 8, TypeMetatype::Pointer,
-                )))),
+                // Production pointer form is the factory's anonymous
+                // TypePointer (type.hh:412 leaves the name empty); the
+                // drilled stack renders the glued `char *pcVar1` form.
+                Some(std::sync::Arc::new(Datatype::Pointer(
+                    crate::type_system::datatype::TypePointer::new(
+                        8,
+                        std::sync::Arc::new(Datatype::Base(TypeBase::new(
+                            "char".to_string(), 1, TypeMetatype::Int,
+                        ))),
+                        1,
+                    ),
+                ))),
                 -1,
             );
             s1.space = AddressSpace::Register;
