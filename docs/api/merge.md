@@ -719,12 +719,20 @@ addrforce 进入该分支），NONCONVERGE 修复后 Ram 全局版本首次激�
 MULTIEQUAL@0x37b4），归 heritage place_multiequals/rename 代际差异，
 另行登记。
 
-## RUGRA_MERGE_DIAG（worktree 临时诊断，非对齐面）
+## 诊断 TAG 登记（RUGRA_MERGE_DIAG / RUGRA_HERITAGE_TRACE）
 
-`RUGRA_MERGE_DIAG=1` 时：`merge_range_must` 失败前转储整组
-`(space,offset,size)` 成员（def/flags/high 实例数，标注 *FAIL* 成员）；
-`unify_address` 对 Ram 组逐 vn 转储 `descend/ops_delta/flags`
-（eliminateIntersect 剪了多少）。oracle 侧等价探针（插桩
-decomp_opt 的 `[ORE-UNIFY]`/`[AF-CLEAR]`/`[DEADCODE-ENTER|KILL]`/
-`[GLOBALTRACE]`）见 /tmp/w-nonconverge2-ore/cpp-dbg。默认关闭，
-合入 root 前必须移除。
+> 2026-08-30 转正（R-LATTICE-CROSSREVIEW MINOR-3）：原先标注
+> "TEMPORARY … 合入 root 前必须移除" 的 env 门控 stderr 诊断已在集成
+> commit 中保留并按 AGENTS.md 调试输出规范（eprintln + 登记 TAG）转正。
+> 全部 env 门控、只写 stderr，不污染 stdout 的 C 输出；默认关闭。
+
+| TAG | 门控 | 位置 | 内容 |
+|---|---|---|---|
+| `[MERGE-FAIL]` | `RUGRA_MERGE_DIAG` | `merge_range_must` 失败前 | 整组 `(space,offset,size)` 成员转储（def/flags/high 实例数，`*FAIL*` 标注） |
+| `[MERGE-PAIR]` | `RUGRA_MERGE_DIAG` | `[MERGE-FAIL]` 之后 | 每对相交实例的 def/cover 与读者 op/order |
+| `[UNIFY]` | `RUGRA_MERGE_DIAG` | `unify_address` 逐 Ram vn | `descend/ops_delta/flags`（eliminateIntersect 后 op-bank 增量） |
+| `[H-GRET]` | `RUGRA_HERITAGE_TRACE` | heritage.rs `rebuild` 通 return 后缀 | pass/range/RETURN 地址（登记于本表以便检索；canonical 归属 heritage 模块文档） |
+
+oracle 侧等价探针（插桩 decomp_opt 的 `[ORE-UNIFY]`/`[ORE-MARK]`/
+`[AF-CLEAR]`/`[DEADCODE-ENTER|KILL]`/`[GLOBALTRACE]`）见
+/tmp/w-nonconverge2-ore/cpp-dbg（非版本化，重建方式见对拍手册）。

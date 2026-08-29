@@ -1069,8 +1069,11 @@ impl Merge {
             }
             Self::merge_test_must(&member.read().unwrap())?;
                 if !self.merge_required_result(&high, &candidate)? {
-                    // TEMPORARY diagnostic (GETPARAM-EMPTYELSE follow-on, revert
-                    // or keep env-gated before commit)
+                    // Registered debug TAG [MERGE-FAIL]/[MERGE-PAIR]
+                    // (stderr, env-gated by RUGRA_MERGE_DIAG; registry:
+                    // docs/api/merge.md "诊断 TAG 登记"). Dumps the failing
+                    // (space,offset,size) group and every intersecting
+                    // instance pair for forced-merge triage.
                     if std::env::var("RUGRA_MERGE_DIAG").is_ok() {
                         // Dump every intersecting instance pair between the
                         // accumulated high and the failing candidate high.
@@ -2665,7 +2668,10 @@ impl Merge {
             };
             let pre_ops = if diag { fd.obank.optree.len() } else { 0 };
             self.eliminate_intersect(fd, vn, &blocksort);
-            // TEMPORARY diagnostic (GETPARAM-EMPTYELSE follow-on, env-gated)
+            // Registered debug TAG [UNIFY] (stderr, env-gated by
+            // RUGRA_MERGE_DIAG; registry: docs/api/merge.md "诊断 TAG
+            // 登记"). One line per Ram varnode: readers, snipped readers,
+            // op-bank delta and flags.
             if diag {
                 let r = vn.read().unwrap();
                 eprintln!(
