@@ -1,7 +1,7 @@
 {
  "schema_version": 2,
  "fixture_id": "FLOW-OVERLAP-HLT-1204",
- "stable_function_id": "GH12-F-9e5a4a32694bcfc6",
+ "stable_function_id": "GH12-F-9ffed95df3ea88f2e9eb",
  "status_note": "Basic-block-graph adjudication of FLOW-339E-OVERLAP-HLT-0001 (w-rc4 handover: curl main oracle 150 vs Rugra 149 blocks, missing @339e hlt). The seam is NOT a symbol-size truncation and NOT a Rugra flow-code gap: with the callee unmarked (golden_dump_1204 per-function fixture oracle) both sides fall through the 0x3366-style direct call into the _start overlap and produce the hlt self-loop block; with the 'Non-Returning Functions - Known' analyzer attribute set (full-analysis E2E golden) both sides halt at the call. The two cases isolate that data variable on one minimal reproduction of the curl main tail; projections are byte-identical between the locked oracle and Rugra follow_flow_with_callee_protos.",
  "decisive_semantics": {
   "reference_output_parameters": "followFlow mutates the Funcdata in place (obank/bblocks/qlst via the FlowInfo reference; Ghidra: flow.cc:756-783); checkForFlowModification reads the FuncCallSpecs reference and dead-inserts the artificial halt after the CALL op (opDeadInsertAfter, flow.cc:644), and queryCall copies callee flow effects through the FuncProto reference (flow.cc:663-664) — the fixture observes the resulting shared state (blocks, ops, specs, comments), never copies",

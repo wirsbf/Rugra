@@ -88,8 +88,12 @@
   "nonadd_lone_reject": "MATCH",
   "no_descend_reject": "MATCH",
   "two_descend_reject": "MATCH",
-  "pool_repeat_convergence": "UNTESTED: direct one-shot Rule invocation only",
-  "malformed_ir_and_exceptions": "OUT_OF_DOMAIN: locked applyOp assumes a binary INT_2COMP dispatched by the Rule pool"
+  "pool_repeat_convergence": {
+   "scope": "direct one-shot Rule invocation only; rule-pool repeat convergence is not exercised by this fixture"
+  },
+  "malformed_ir_and_exceptions": {
+   "scope": "locked applyOp assumes a binary INT_2COMP dispatched by the Rule pool; malformed-IR and exception paths are outside this fixture's domain"
+  }
  },
  "residual_todo_ids": [],
  "comparand": {

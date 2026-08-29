@@ -1,7 +1,7 @@
 {
  "schema": 1,
  "fixture_id": "PRINTC-STRUCTEMIT-MAIN-IVAR4-DUP-0001",
- "stable_function_id": "GH12-F-8c31d0f4e2a95b60c1a7",
+ "stable_function_id": "GH12-F-4d8cc97e20565da1fe65",
  "stable_function_closure": [
   "ghidra::PrintC::emitBlockIf printc.cc:2878",
   "ghidra::PrintC::emitStatement printc.cc:2285",
@@ -54,9 +54,12 @@
   "evidence": "oracle binary built from the locked tree (libdecomp.a at e40ed130) and Rugra rlib (src at the printc_pending_brace_emit_1204 fixture commit, incl. the while-break-fold regression test) produce identical statement and raw streams for all three cases (2026-08-30, w-printc2)"
  },
  "known_divergences": [],
- "comparand_sha256": {
+ "comparand": {
   "cpp_fixture_sha256": "6ef6480d73dd01715d022b1e8a9301c4e2ba4c634df2460a91effbb9febc06db",
   "rust_fixture_sha256": "ca5f0df32da95788e012d64bc87b75b8c31486c95490e4da76e2bfff7faea5bc",
+  "runner_sha256": "7da22ec825c20b0cecebe09144d5498fa561839d1c6a7336761af535d0df33bd"
+ },
+ "source_snapshot_sha256": {
   "rugra_printc": "8089431e07e39dc65cc2b2d6ff5da9b66d33f814be5a2f0647a952acca001048",
   "rugra_prettyprint": "04317434844c73a8a70fff44f61ddfd419b1f72a45cf51feae462f8d2529cdd6",
   "ghidra_printc_cc": "2c0f5565bb76c8ec4dc291e3166dec924fa063c9d86f4d14f06e1fc1550c12b4",

@@ -5170,7 +5170,7 @@
     },
     {
       "id": "ptrsub_switch_cast_1204",
-      "description": "ActionSetCasts switch-expression (int*) cast churn bilateral diagnostic: 7 synthetic IR/CFG/type states through real apply, per-op token/atok/ic0 dumps, post-apply CAST graph, count delta and rendered switch trees versus locked Ghidra 12.0.4; seed projections and swexpr_pre are MATCH, 13 records registered as known apply-side divergences (PTRADD output-cast arm, implied retype, double-cast guard, const arm, ptradd-undo preflight, TypeOpIntAdd/arithmetic tokens) [PTRSUB-SWITCH-CAST-RESIDUAL-0001; COREACTION-PTRADD-OUTCAST-0001; COREACTION-CASTOUT-IMPLIED-0001; COREACTION-CASTIN-DOUBLECAST-GUARD-0001; COREACTION-CASTIN-CONST-0001; COREACTION-PTRADD-UNDO-PREFLIGHT-0001; FUNCDATA-OPUNDOPTRADD-0001; TYPEOP-INTADD-TOKEN-0001; TYPEOP-ARITH-TOKEN-0001] — phase A diagnostic fixture delivered by w-switchfix2; phase B dependency-ordered fix plan in /tmp/rugra-reports/w-switchfix2-2026-08-29.md section 4",
+      "description": "ActionSetCasts switch-expression (int*) cast churn bilateral diagnostic: 7 synthetic IR/CFG/type states through real apply, per-op token/atok/ic0 dumps, post-apply CAST graph, count delta and rendered switch trees versus locked Ghidra 12.0.4; seed projections and swexpr_pre are MATCH, 13 records registered as known apply-side divergences (PTRADD output-cast arm, implied retype, double-cast guard, const arm, ptradd-undo preflight, TypeOpIntAdd/arithmetic tokens) [PTRSUB-SWITCH-CAST-RESIDUAL-0001; COREACTION-PTRADD-OUTCAST-0001; COREACTION-CASTOUT-IMPLIED-0001; COREACTION-CASTIN-DOUBLECAST-GUARD-0001; COREACTION-CASTIN-CONST-0001; COREACTION-PTRADD-UNDO-PREFLIGHT-0001; FUNCDATA-OPUNDOPTRADD-0001; TYPEOP-INTADD-TOKEN-0001; TYPEOP-ARITH-TOKEN-0001] — phase A diagnostic fixture delivered by w-switchfix2; phase B executed on master (3a10c583 opUndoPtradd finalize, d251532e SetCasts PTRADD/PTRSUB preflight, ad65b957 arithmeticOutputStandard family tokens, 13884cc7 castOutput implied/testStructOffset0 + castInput guard/const/explicit arms) and re-pinned bilateral MATCH at 9ab3be94: both 17-record streams byte-identical (rugra_stdout_sha256 == ghidra_stdout_sha256, raw_diff empty), all three runner modes green, all 13 known_raw_differences retired",
       "runner": [
         "tools/run_ptrsub_switch_cast_oracle.sh"
       ],
@@ -5179,7 +5179,7 @@
         "wave",
         "nightly"
       ],
-      "evidence_status": "MISMATCH",
+      "evidence_status": "MATCH",
       "cache": {
         "metadata": "tests/oracle/ptrsub_switch_cast_1204.metadata.json",
         "tools": {
@@ -5188,8 +5188,7 @@
         "inputs": {
           "fixture_source_1": "tests/oracle/ptrsub_switch_cast_1204.cc",
           "fixture_source_2": "tests/oracle/ptrsub_switch_cast_1204.rs"
-        },
-        "rust_base_commit": "9ab3be941acd3e6dba463191792eab348319c110"
+        }
       },
       "impact": {
         "paths": [
@@ -7504,17 +7503,32 @@
       },
       "impact": {
         "paths": [
-          "tools/run_printc_pending_brace_emit_oracle.sh"
+          "tools/run_printc_pending_brace_emit_oracle.sh",
+          "src/printc.rs",
+          "src/prettyprint.rs"
         ],
-        "rust_function_ids": [],
+        "rust_function_ids": [
+          "RG-F-008eae3b0ba4d12666a2",
+          "RG-F-548dbddabf2cb58f43e3",
+          "RG-F-5889d352de12bc64a91e",
+          "RG-F-59bb7728de73efb30458",
+          "RG-F-5d999c09619be29bf43c",
+          "RG-F-949799a34501700c4178",
+          "RG-F-ac9fd9012e6ee802132b",
+          "RG-F-b40b937681743f6e2665",
+          "RG-F-be4fb6bac4aa0d1906a6",
+          "RG-F-cac945ca8266a08b1dfa",
+          "RG-F-eef41041ac8e520895ee",
+          "RG-F-f0131826bce98f80cda8"
+        ],
         "ghidra_function_ids": [
-          "GH12-F-8c31d0f4e2a95b60c1a7"
+          "GH12-F-4d8cc97e20565da1fe65"
         ]
       }
     },
     {
       "id": "flow_overlap_hlt_1204",
-      "description": "followFlow overlap-region fallthrough seam: direct-fallthrough/direct-call+nopl+endbr64+call *[rip]+hlt self-loop constructions produce byte-identical 3-block graphs versus locked Ghidra 12.0.4 (flow boundary = full code space both sides; symbol size never participates)",
+      "description": "followFlow overlap-region fallthrough seam: direct-fallthrough/direct-call+nopl+endbr64+call *[rip]+hlt self-loop constructions produce byte-identical 3-block graphs versus locked Ghidra 12.0.4 (flow boundary = full code space both sides; symbol size never participates) [FLOW-339E-OVERLAP-HLT-0001; root cause re-adjudicated: Rugra's 149-block main is CORRECT vs the full-analysis golden (known-noreturn data); the fixture oracle (no Java analyzers) falls through to hlt=150 blocks; gated driver env RUGRA_ORACLE_FIXTURE_DATA for parity]",
       "runner": [
         "tools/run_flow_overlap_hlt_oracle.sh"
       ],
@@ -7526,17 +7540,27 @@
       "evidence_status": "MATCH",
       "cache": {
         "metadata": "tests/oracle/flow_overlap_hlt_1204.metadata.json",
-        "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-        "rust_base_commit": "a87d2dbe53347895af798b5cda67b5bba10ff010"
+        "tools": {
+          "runner": "tools/run_flow_overlap_hlt_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/flow_overlap_hlt_1204.cc",
+          "fixture_source_2": "tests/oracle/flow_overlap_hlt_1204.rs"
+        }
       },
       "impact": {
-        "todo_ids": [
-          "FLOW-339E-OVERLAP-HLT-0001"
+        "paths": [
+          "src/flow.rs",
+          "tests/oracle/flow_overlap_hlt_1204.cc",
+          "tests/oracle/flow_overlap_hlt_1204.rs",
+          "tools/run_flow_overlap_hlt_oracle.sh"
         ],
-        "src_files": [
-          "src/flow.rs"
+        "rust_function_ids": [
+          "RG-F-1f22a873b53c9605f9f5"
         ],
-        "notes": "root cause re-adjudicated: Rugra's 149-block main is CORRECT vs the full-analysis golden (known-noreturn data); the fixture oracle (no Java analyzers) falls through to hlt=150 blocks. Gated driver env RUGRA_ORACLE_FIXTURE_DATA for parity."
+        "ghidra_function_ids": [
+          "GH12-F-9ffed95df3ea88f2e9eb"
+        ]
       }
     },
     {
