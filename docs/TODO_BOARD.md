@@ -22,7 +22,13 @@
 > worktree 隔离（`/home/wirs/.cache/rugra-w2-*`）+ 独占写集租约 + 专属 CARGO_TARGET_DIR + flock 共享资源；
 > 子 Agent 交付（branch commit + 报告 `/tmp/rugra-reports/<name>-2026-08-29.md`）→ root 串行 cherry-pick →
 > flock 构建 → E2E → 差分门禁（defects 必须 0）→ 更新本板。板面 wave 节 root 维护，子 Agent 不直接改本板。
-> Agent 完成即由 root 从队列补位（下批候选：REGA-HUGEHELP(heritage.rs)、REGB-MYFWRITE(coreaction/block，等 w-identify 释放)）。
+> Agent 完成即由 root 从队列补位(保持 10 并发)。补位队列(按 2d78b5af 健康基线 diff 排序):
+> ①myprogress(105)+glob_range(104) 根因分析;②glob_word(86)+my_get_line(93) 簇;③helpf(82)+my_get_token(61);
+> ④inrefs 直接写点 sweep(340 处清单=/tmp/rugra-reports/INREFS_SWEEP_INVENTORY_2026-08-29.md,须在 descend 修复 API 落地后);
+> ⑤REGA-HUGEHELP(heritage.rs);⑥REGB-MYFWRITE(等 w-identify 释放 block)。
+> 健康基线(2d78b5af)参考数字:skeleton 2881 / defects 1(getparameter 嵌套 else,真实缺陷非中止伪影)/ numbering 0;
+> main 701 / getparameter 672 / file2string 134 / parseconfig 118 / next_url 111 / myprogress 105 / glob_range 104 /
+> my_get_line 93 / glob_set 92 / glob_word 86 / match_url 83 / helpf 82 / my_get_token 61;PLT stub 族 ~24×9-11(归 PLTSTUB-WARNLOSS)。
 
 ### W-2026-08-29-FLEET10 认领租约（10 并发；write-set 互斥已核）
 
