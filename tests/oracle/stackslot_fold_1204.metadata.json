@@ -1,0 +1,47 @@
+{
+ "schema_version": 2,
+ "fixture_id": "HTTPD-STACKSLOT-FOLD-0001",
+ "status_note": "Spacebase-relative STORE/LOAD reindex fixture. Root cause: Rugra's httpd runner constructed Funcdata without an Architecture, so RuleLoadVarnode::correctSpacebase/RuleStoreVarnode (ruleaction.cc:4173-4341) took the Option-None miss branch for the input-RSP case and spacebase-relative STORE/LOAD never reindexed into the stack space (printed as raw *(..)(in_RSP-8) pointer expressions; 148 in_RSP lines corpus-wide). Fix: examples/httpd_decompile.rs attaches the canonical x86-64 Architecture via fd.set_arch before inject_raw_ops, mirroring the oracle invariant (glb = scope->getArch(), funcdata.cc:48) that the headless oracle (which produced tests/golden/ghidra_httpd_1204.c with full provenance) satisfies by construction. Observable verified: corpus in_RSP lines 148 -> 0 (golden has 0); ap_parse_vhost_addrs surviving LOAD/STORE after pipeline 7 -> 1 (the survivor is INT_ADD(in_RDX,param_1)+0x60, a legitimate non-stack pointer, matching golden's *(param_3 + 0x60) form); push/pop prologue STOREs now fold to stack-space COPYs and dead-eliminate. Per-function B2 status: MISMATCH with registered differences — the pinned comparands still differ by skeleton diff 46 (param inference 6->2 vs golden 3, loop-rotation shape, deref print form *param_1 + 0x60), which belong to PARAM-INFERENCE/PRINTC-DEREF/loop-structure gap families outside this TODO's write-set; the spacebase-fold observable itself is zero-diff. Deterministic regression runner: examples/stackfold_dbg.rs (exit 0; stderr census 'total surviving LOAD/STORE: 1' with RUGRA default arch present; '7' reproduces the pre-fix break only by removing the set_arch call).",
+ "decisive_semantics": {
+  "reference_output_parameters": "RuleStoreVarnode::applyOp (ruleaction.cc:4319-4341) creates the stack-space output via data.newVarnodeOut(size, Address(baseoff, offoff), op), removes STORE inputs 1 and 0, sets opcode COPY and marks the output setStackStore; RuleLoadVarnode::applyOp (cc:4277-4305) symmetric via data.newVarnode(size, baseoff, offoff); correctSpacebase (cc:4173-4184) requires vn->isSpacebase() && vn->isInput() and resolves glb->getSpaceBySpacebase(addr,size) with assoc->getContain() == the STORE/LOAD spaceid space; Funcdata::spacebase() (funcdata.cc:230-269) marks ALL varnodes at the spacebase register location (not just input) so written-RSP chains collapse onto the input spacebase first.",
+  "loop_bounds_traversal_order": "vnSpacebase (cc:4194-4227) tries getIn(0) as spacebase then getIn(1); Funcdata::spacebase iterates beginLoc/endLoc per spacebase record ascending (cc:248-250); no per-prefix or split counting is involved in the reindex itself.",
+  "counter_accumulator_lifecycle": "No counters; the reindex is per-op idempotent (converted STORE no longer matches CPUI_STORE oplist on later passes).",
+  "sorting_comparison_keys": "getSpaceBySpacebase matches (space, offset, size) equality against the stackpointer record (Architecture fields: Stack space, Register:0x20, size 8 for x86-64-gcc.cspec); word_size conversions use AddrSpace::addressToByte/byteToAddress."
+ },
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": "gcc",
+  "oracle_output_source": "tests/golden/ghidra_httpd_1204.c (pinned headless run; provenance: tests/golden/ghidra_httpd_1204.provenance.json)",
+  "source_files": [
+   "Ghidra/Features/Decompiler/src/decompile/cpp/ruleaction.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/architecture.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/heritage.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_op.cc"
+  ]
+ },
+ "rugra": {
+  "worktree_base": "d4e83496 (master)",
+  "changed_files": [
+   "examples/httpd_decompile.rs",
+   "examples/stackfold_dbg.rs",
+   "tests/oracle/stackslot_fold_1204.ghidra.c",
+   "tests/oracle/stackslot_fold_1204.rugra.c"
+  ],
+  "verification": {
+   "httpd_e2e": "skeleton 2546 -> 2230, defects 5 -> 5 (<=5), numbering 0 -> 0, in_RSP lines 148 -> 0 (compare_ghidra.py vs tests/golden/ghidra_httpd_1204.c)",
+   "curl_e2e": "3089/0/0 exact hold (compare_ghidra.py vs tests/golden/ghidra_curl_1204.c); curl runner sets its own worker Architecture so is unaffected by construction",
+   "cargo_test_lib": "examples-only diff; the lib test binary is identical to master, failure-set identity holds by construction (observed run-to-run jitter 15 vs 11 matches the documented pre-existing 15-17 flakiness band)"
+  },
+  "cross_review": "PENDING (mechanism C is not triggered by this commit: no src/*.rs core-algorithm file changed; final diff is runner + fixture only. The Funcdata constructor-level invariant restoration in src/funcdata.rs — canonical Architecture auto-attach at Funcdata::new — was prototyped and measured (identical E2E 2230/5/0) but withheld: it deterministically flips subflow::tests::test_split_datatype_constructs (stale arch-less premise, subflow.rs outside this lease) and belongs in a dedicated wave with that test update.)"
+ },
+ "residuals": [
+  "HTTPD param inference: ap_parse_vhost_addrs 2 params vs golden 3 (baseline over-inferred 6); param domain, separate TODO family",
+  "PRINTC-DEREF form *param_1 + 0x60 vs golden *(param_3 + 0x60): print family, outside write-set",
+  "in_RSP idiom now absent from Rugra httpd output exactly as in golden; remaining per-function skeleton diffs are loop-rotation/param/cast families already registered on the board"
+ ],
+ "last_updated": "2026-08-30"
+}
