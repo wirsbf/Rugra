@@ -1,5 +1,22 @@
 # `coreaction.rs` API Reference
 
+## 2026-08-30：castInput 双层 double-cast guard 臂序（CASTINPUT-ARMORDER-0001 / F3）
+
+- `cast_input` 的 double-cast guard 恢复 oracle 的**两层嵌套**（cc:2673-2686）：外层
+  `isWritten && def==CAST`（cc:2673）无论 implied 与否都占用该臂；只有内层（cc:2674）
+  判 `isImplied`。def=CAST 且非 implied 时整条 else-if 链（常量臂 cc:2687 /
+  PTRSUB0 / tryResolutionAdjustment）被跳过，vnin 保持 vn 直接落穿 CAST 插入。
+  此前 Rugra 把两层合并成 `def==CAST && isImplied` 单条件（合并臂序缺陷），使
+  "def=CAST 非 implied + isConstant" 误入常量臂（原地 retype、无插入）。
+- 单测 `test_cast_input_def_cast_non_implied_constant_skips_const_arm`：手工 wiring
+  （绕过双侧 bank 对 const 输出的同构拒绝，镜像 Ghidra `PcodeOp::setOutput +
+  Varnode::setDef`——setDef 设 WRITTEN flag）构造 CAST 产出的非 implied 常量空间
+  varnode，断言常量臂未触发（类型保持 ptr）+ 落穿插入 CAST（其输入经
+  `opSetInput` 的 const dedup（funcdata_op.cc:108-115，双侧同构）为同值复制）。
+- fixture：`ptrsub_switch_cast_1204` 新增 `cast_arm_fork` case，19→21 records
+  与锁定 oracle 字节一致（负控：合并形态下 constC 被常量臂 retype 成 int8 且
+  无 CAST 插入，与 oracle 分叉）。
+
 ## 2026-08-30：isOpIdentical typedef 链剥离（COREACTION-ISOPIDENTICAL-TYPEDEF-0001 / F2）
 
 - `is_op_identical`（cc:2469-2481）新增第三参数 `Option<&TypeFactory>`，在双 PTR 同步

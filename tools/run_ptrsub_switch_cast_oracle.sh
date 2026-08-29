@@ -168,7 +168,7 @@ expected_fixtures = [
 require("fixture set", sorted(meta["comparand"]["fixture_sha256"]), sorted(expected_fixtures))
 for relative, expected in meta["comparand"]["fixture_sha256"].items():
     require(f"fixture {relative}", sha(evidence / relative), expected)
-require("record count", meta["expected_results"]["record_count"], 19)
+require("record count", meta["expected_results"]["record_count"], 21)
 require("raw diff labels", meta["expected_results"]["raw_diff_labels"], ["ghidra.stdout", "rugra.stdout"])
 require("exit codes", meta["expected_results"]["exit_codes"], {
     "ghidra": 0, "rugra": 0,
@@ -259,7 +259,7 @@ if len(lines) != exp["record_count"] or not out.read_bytes().endswith(b"\n"):
 PY
 
 if [[ "$mode" == ghidra-only ]]; then
-  echo "PTRSUB-SWITCH-CAST Ghidra oracle verified records=19 overall=MATCH"
+  echo "PTRSUB-SWITCH-CAST Ghidra oracle verified records=21 overall=MATCH"
   exit 0
 fi
 
@@ -361,5 +361,5 @@ if unregistered:
 PY
 
 echo "PTRSUB-SWITCH-CAST bilateral run complete"
-echo "records=19 overall=MATCH (byte-identical streams; no known differences)"
+echo "records=21 overall=MATCH (byte-identical streams; no known differences)"
 echo "raw_diff_sha256=$(/usr/bin/sha256sum "$run_root/raw.diff" | /usr/bin/awk '{print $1}')"

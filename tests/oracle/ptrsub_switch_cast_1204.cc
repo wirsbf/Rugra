@@ -782,6 +782,46 @@ static void caseTypedefTypelock(FixtureArchitecture &arch, FixtureTypes &T,
   delete fd;
 }
 
+// cast_arm_fork: castInput's double-cast guard is TWO nested levels
+// (cc:2673 outer isWritten&&def==CAST, cc:2674 inner isImplied).  A
+// CAST-produced varnode that is NOT implied — here a pathological
+// constant-space output hand-wired via PcodeOp::setOutput +
+// Varnode::setDef (the bank would reject opSetOutput on a constant) —
+// must skip the ENTIRE else-if chain (constant arm included) and fall
+// through to the CAST insert with vnin = vn.  A merged single-level
+// condition diverts this input into the constant arm (cc:2687) instead.
+static void caseCastArmFork(FixtureArchitecture &arch, FixtureTypes &T)
+{
+  Funcdata *fd = makeFuncdata(arch, "sw_arm_fork", 0x5800);
+  BlockBasic *block = makeSingleBlock(fd);
+  CaseTracker tracker;
+  AddrSpace *reg = arch.getSpace(4);
+  Varnode *src = typedInput(*fd, reg, 0x40, 8, T.int8T);
+  tracker.vn(src, "src");
+  PcodeOp *castOp = makeOp(*fd, block, CPUI_CAST, 1, 0x5800, 0);
+  fd->opSetInput(castOp, src, 0);
+  Varnode *constC = fd->newConstant(8, 0x30);
+  constC->updateType(T.P_int4);
+  // Hand-built wiring: bank-level opSetOutput would reject a constant
+  // output; the oracle arm order is only reachable through the direct
+  // setters (setDef sets the written flag).
+  constC->setDef(castOp);
+  castOp->setOutput(constC);
+  PcodeOp *mult = makeOp(*fd, block, CPUI_INT_MULT, 2, 0x5801, 8);
+  fd->opSetInput(mult, constC, 0);
+  fd->opSetInput(mult, fd->newConstant(8, 4), 1);
+  tracker.op(castOp, "cast0");
+  tracker.op(mult, "mult");
+  tracker.vn(constC, "constC");
+  tracker.vn(mult->getOut(), "mult_o");
+  fd->setHighLevel();
+  runPre(*fd, "cast_arm_fork", arch, tracker);
+  ProbeSetCasts action;
+  action.apply(*fd);
+  runPost(*fd, "cast_arm_fork", action, tracker);
+  delete fd;
+}
+
 int main(void)
 {
   std::cout << std::unitbuf;
@@ -813,6 +853,7 @@ int main(void)
     caseCastChain(architecture, T);
     caseGlobForm(architecture, T);
     caseTypedefTypelock(architecture, T, tdInt8);
+    caseCastArmFork(architecture, T);
   }
   catch (const std::exception &error) {
     std::cerr << "fixture error: " << error.what() << '\n';

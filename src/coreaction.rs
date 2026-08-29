@@ -4941,9 +4941,14 @@ impl ActionSetCasts {
         };
         // (3) cc:2671: vnin = vn = op->getIn(slot).
         let mut vnin = in_vn.clone();
-        // (4) cc:2672-2686: double-cast guard — a Varnode that is already an
-        // implied CAST output is retyped in place (lone reader) or rewired to
-        // the earlier CAST input; never stack a second CAST.
+        // (4) cc:2672-2686: double-cast guard — TWO nested levels, faithful
+        // to the oracle arm order. The OUTER level (cc:2673) is
+        // `isWritten && def==CAST` and consumes the arm regardless of
+        // implied; only the INNER level (cc:2674) is `isImplied`. When the
+        // producer is a CAST but the varnode is NOT implied, the whole
+        // else-if chain below (constant arm, PTRSUB-zero, resolution
+        // adjustment) is skipped and control falls through to the CAST
+        // insert with vnin still = vn.
         let def_is_cast = {
             let rg = in_vn.read().unwrap();
             rg.is_written()
@@ -4953,7 +4958,8 @@ impl ActionSetCasts {
                     .map(|d| d.read().unwrap().opcode == OpCode::CPUI_CAST)
                     .unwrap_or(false)
         };
-        if def_is_cast && in_vn.read().unwrap().is_implied() {
+        if def_is_cast {
+            if in_vn.read().unwrap().is_implied() {
                 // cc:2675-2678: lone-descend retype ends the count on
                 // success.
                 let lone_is_op = in_vn
@@ -4974,30 +4980,35 @@ impl ActionSetCasts {
                         return true;
                     }
                 }
-            // cc:2680-2684: cast directly from the input of the previous cast.
-            if let Some(prev) = in_vn
-                .read()
-                .unwrap()
-                .def
-                .as_ref()
-                .and_then(|d| d.upgrade())
-                .and_then(|d| d.read().unwrap().get_in(0).cloned())
-            {
-                vnin = prev;
-                if vnin
+                // cc:2680-2684: cast directly from the input of the
+                // previous cast.
+                if let Some(prev) = in_vn
                     .read()
                     .unwrap()
-                    .get_type()
-                    .map(|t| Arc::ptr_eq(&t, &ct))
-                    .unwrap_or(false)
+                    .def
+                    .as_ref()
+                    .and_then(|d| d.upgrade())
+                    .and_then(|d| d.read().unwrap().get_in(0).cloned())
                 {
-                    fd.op_set_input(op_ref, vnin, slot);
-                    return true;
+                    vnin = prev;
+                    if vnin
+                        .read()
+                        .unwrap()
+                        .get_type()
+                        .map(|t| Arc::ptr_eq(&t, &ct))
+                        .unwrap_or(false)
+                    {
+                        fd.op_set_input(op_ref, vnin, slot);
+                        return true;
+                    }
                 }
             }
+            // def==CAST but NOT implied: no inner action; fall through to
+            // the CAST insert below (vnin stays vn).
         }
         // (5) cc:2687-2691: constants update in place when they can take the
-        // type; a locked constant falls through to a CAST op.
+        // type; a locked constant falls through to a CAST op. This arm is
+        // the OUTER else: unreachable when def==CAST (see cc:2673/2687).
         else if in_vn.read().unwrap().is_constant() {
             in_vn.write().unwrap().update_type(ct.clone());
             if in_vn
@@ -17626,4 +17637,105 @@ mod tests {
         // remains — the pre-fix observable that this test pins as negative
         // control for the typedef arms above.
         assert!(!ActionSetCasts::is_op_identical(&td_int8, &int8, None));
+    }
+
+    // Ghidra: coreaction.cc:2673 ActionSetCasts::castInput arm order
+    /// The double-cast guard is TWO nested levels: the outer arm
+    /// `isWritten && def==CAST` (cc:2673) consumes the branch regardless of
+    /// implied, and only the inner level tests isImplied (cc:2674). A
+    /// CAST-produced varnode that is NOT implied skips the whole else-if
+    /// chain (constant arm cc:2687 included) and falls through to the CAST
+    /// insert with vnin = vn — it must NOT be retyped in place by the
+    /// constant arm even when it lives in the constant space.
+    #[test]
+    fn test_cast_input_def_cast_non_implied_constant_skips_const_arm() {
+        use crate::type_system::cast::CastStrategyC;
+        use crate::type_system::datatype::TypeMetatype;
+        use crate::type_system::typefactory::{SizeArchInputs, TypeFactory};
+        let mut factory = TypeFactory::raw();
+        factory.setup_sizes(&SizeArchInputs {
+            stack_spacebase_size: Some(8),
+            default_data_space_addr_size: 8,
+            default_size: 8,
+            far_pointer: None,
+        });
+        let int4 = factory.get_base(4, TypeMetatype::Int).expect("int4");
+        let int8 = factory.get_base(8, TypeMetatype::Int).expect("int8");
+        let p_int4 = factory.get_type_pointer(8, int4, 1);
+        let factory = std::sync::Arc::new(std::sync::RwLock::new(factory));
+        let mut arch = crate::arch::Architecture::new();
+        arch.set_types(factory.clone());
+        let arch = std::sync::Arc::new(arch);
+
+        let mut fd = Funcdata::new("cast_arm", crate::address::Address::new(0x6000), 0x10);
+        fd.vbank.set_type_factory(factory.clone());
+        fd.set_arch(arch);
+        let block = fd.create_new_block();
+
+        // cast0: CAST(src) whose output is a NON-implied constant-space
+        // varnode typed as a pointer (the pathological fork input).
+        let src_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x40);
+        let src = fd.set_input_varnode(src_vn);
+        src.write().unwrap().update_type(int8.clone());
+        let cast0 = fd.new_op(1, crate::address::Address::new(0x6000));
+        fd.op_set_opcode(&cast0, OpCode::CPUI_CAST);
+        fd.op_set_input(&cast0, src.clone(), 0);
+        let const_c = fd.new_constant(8, 0x30);
+        const_c.write().unwrap().update_type(p_int4.clone());
+        // Hand-built wiring bypassing VarnodeBank::set_def's constant-space
+        // rejection (the C++ fixture mirrors this with #define private
+        // public PcodeOp::setOutput + Varnode::setDef, which sets the
+        // written flag the same way).
+        const_c.write().unwrap().def = Some(std::sync::Arc::downgrade(&cast0.0));
+        const_c.write().unwrap().flags |= crate::varnode::varnode_flags::WRITTEN;
+        cast0.0.write().unwrap().output = Some(const_c.clone());
+
+        // mult: INT_MULT(const_c, #4) — slot 0 expects int8, cur is ptr.
+        let mult = fd.new_op(2, crate::address::Address::new(0x6001));
+        fd.op_set_opcode(&mult, OpCode::CPUI_INT_MULT);
+        fd.op_set_input(&mult, const_c.clone(), 0);
+        let four = fd.new_constant(8, 4);
+        fd.op_set_input(&mult, four.clone(), 1);
+        fd.new_unique_out(8, &mult);
+        fd.op_insert_end(&cast0, &block);
+        fd.op_insert_end(&mult, &block);
+        fd.set_high_level();
+
+        let strategy = CastStrategyC::new(4);
+        let mut action = ActionSetCasts::new();
+        assert!(action.cast_input(&mut fd, &mult, 0, &strategy));
+        // The constant arm must NOT have fired: const_c keeps its pointer
+        // type (a constant-arm updateType would have replaced it with int8).
+        let const_type = const_c.read().unwrap().get_type();
+        assert!(
+            const_type.as_ref().is_some_and(|t| t.get_metatype()
+                == crate::type_system::datatype::TypeMetatype::Pointer),
+            "def=CAST non-implied input must skip the constant arm"
+        );
+        // Fall-through inserted a CAST reading const_c before the mult.
+        let in0 = mult.0.read().unwrap().get_in(0).cloned().expect("mult in0");
+        assert!(
+            !std::sync::Arc::ptr_eq(&in0, &const_c),
+            "mult slot 0 is rewired to the inserted CAST output"
+        );
+        let in0_def = in0
+            .read()
+            .unwrap()
+            .def
+            .as_ref()
+            .and_then(|d| d.upgrade())
+            .map(crate::op::PcodeOpRef)
+            .expect("new input is op-written");
+        assert_eq!(in0_def.0.read().unwrap().opcode, OpCode::CPUI_CAST);
+        // opSetInput's constant dedup (funcdata_op.cc:108-115, mirrored
+        // in Rugra op_set_input) copies a many-descendant constant, so the
+        // inserted CAST reads a same-value copy of const_c.
+        let cast_in0 = in0_def.0.read().unwrap().get_in(0).cloned().expect("cast in0");
+        let ci = cast_in0.read().unwrap();
+        assert!(ci.is_constant(), "inserted CAST reads the constant");
+        assert_eq!(ci.get_offset(), 0x30);
+        assert_eq!(ci.get_size(), 8);
+        assert!(!ci.is_written(), "the copy is a fresh unwritten constant");
     }

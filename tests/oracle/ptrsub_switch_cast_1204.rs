@@ -786,6 +786,37 @@ fn run_typedef_typelock(ctx: &CaseCtx, td_int8: Arc<Datatype>) {
     run_post("typedef_typelock", &mut action, &block, &mut tracker);
 }
 
+fn run_cast_arm_fork(ctx: &CaseCtx) {
+    let (mut fd, block) = new_case(ctx, "sw_arm_fork", 0x5800);
+    let mut tracker = CaseTracker::new();
+    let src = typed_input(&mut fd, AddressSpace::Register, 0x40, 8, ctx.t.int8_t.clone());
+    tracker.vn(&src, "src");
+    let cast_op = make_op(&mut fd, &block, OpCode::CPUI_CAST, 1, 0x5800, 0);
+    fd.op_set_input(&cast_op, src.clone(), 0);
+    let const_c = fd.new_constant(8, 0x30);
+    const_c.write().unwrap().update_type(ctx.t.p_int4.clone());
+    // Hand-built wiring bypassing VarnodeBank::set_def's constant-space
+    // rejection, mirroring the .cc fixture's PcodeOp::setOutput +
+    // Varnode::setDef (setDef sets the written flag the same way).
+    const_c.write().unwrap().def = Some(Arc::downgrade(&cast_op.0));
+    const_c.write().unwrap().flags |= rugra::varnode::varnode_flags::WRITTEN;
+    cast_op.0.write().unwrap().output = Some(const_c.clone());
+    let mult = make_op(&mut fd, &block, OpCode::CPUI_INT_MULT, 2, 0x5801, 8);
+    fd.op_set_input(&mult, const_c.clone(), 0);
+    let four = fd.new_constant(8, 4);
+    fd.op_set_input(&mult, four, 1);
+    tracker.op(&cast_op, "cast0");
+    tracker.op(&mult, "mult");
+    tracker.vn(&const_c, "constC");
+    let mult_out = mult.0.read().unwrap().get_out().expect("mult out").clone();
+    tracker.vn(&mult_out, "mult_o");
+    fd.set_high_level();
+    run_pre(&fd, "cast_arm_fork", &block, &mut tracker, ctx.factory);
+    let mut action = ActionSetCasts::new();
+    let _ = action.apply(&mut fd).expect("ActionSetCasts::apply");
+    run_post("cast_arm_fork", &mut action, &block, &mut tracker);
+}
+
 fn main() {
     println!(
         "schema=1|fixture=PTRSUB-SWITCH-CAST-0001|oracle=e40ed13014025f82488b1f8f7bca566894ac376b"
@@ -886,4 +917,5 @@ fn main() {
     run_case(&ctx, "globform", 0x5600, true, true, true, true,
              Some(t.p_int8.clone()), Some(t.p_int8.clone()), 4, true);
     run_typedef_typelock(&ctx, td_int8);
+    run_cast_arm_fork(&ctx);
 }
