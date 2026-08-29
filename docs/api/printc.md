@@ -1815,3 +1815,17 @@ numbering=0 保持；audit 错误总数 15→15（1 处形态变化见上）。
   在本块语句后锚定（与 emit_goto_statement 的 never-emitted 锚同位，
   合法 C：跳转落到 fall-through 语句）。已发射目标仍排除（其标号归
   目标块自身）。
+
+## 2026-08-29:组合名指针的声明 join 恢复 golden 形态(DECL-SPACING-NAMEFLOW-0001)
+
+集成 w-anondecl3 匿名声明渲染后 E2E 出现 `char * pcVar4` 形(golden 为 glued `char *pcVar1`)。
+根因分层:Ghidra `TypePointer(s,pt,ws)` 构造名为空(type.hh:412),生产指针皆匿名 →
+buildTypeStack 钻取为多层栈 → ptr_expr(spacing=0)与标识符 glue;Rugra 的 debugproto 导入器
+两处本地 helper(src/debugproto.rs:696 深度循环/:1337 pointer_type)组合名 "char *" 绕过工厂
+直建命名指针 → 单层栈走了 type_expr_space。修复(printc.rs):`decl_prefix_ends_with_star`
+与 push_type_start_opt 单层分支对"尾随 `*` 的组合名"按 drilled 语义 glue 标识符。
+效果:skeleton 2198→2114(优于集成前 2118),六函数 typeless 装声明保持 0。
+残差:fixture `printc_anonymous_pointer_decl_1204` 的 named_ptr_contrast 记录(真实 oracle
+直驱动命名单层指针输出 `char * x`)与本修复的组合名 glue 可能分歧——待 full runner 复核;
+根治方向=让 debugproto 指针构造改走工厂匿名路径(需核对 Ghidra DWARF 类型名的 XML 流转),
+登记 DECL-SPACING-NAMEFLOW-0001。

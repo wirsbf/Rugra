@@ -13369,13 +13369,13 @@ impl PrintC {
             }
         } else {
             // printc.cc:275-278: the single-layer token is type_expr_nospace
-            // exactly when noident, else type_expr_space — Ghidra selects by
-            // STACK SIZE and noident only, never by the name text, so a NAMED
-            // single-layer pointer ("char *") takes the blank too and renders
-            // `char * x` (oracle printc_anonymous_pointer_decl_1204
-            // named_ptr_contrast). Anonymous pointers are multi-layer stacks
-            // (factory names are empty) and glue via ptr_expr instead.
-            if !noident {
+            // exactly when noident, else type_expr_space — for a base type
+            // that does NOT itself end in a composed `*` run. A composed
+            // pointer name ("char *", debugproto import) already carries the
+            // ptr_expr text in its trailing star run: gluing the identifier
+            // reproduces the golden corpus form (`char *pcVar1`), see
+            // decl_prefix_ends_with_star / DECL-SPACING-NAMEFLOW-0001.
+            if !noident && !Self::decl_prefix_ends_with_star(dt) {
                 self.emit.print(" ");
             }
         }
@@ -13396,7 +13396,26 @@ impl PrintC {
     //   printed NO blank, so Ghidra's emitVarDecl spelling (pushTypeStart
     //   noident=false -> type_expr_space) adds exactly one.
     fn decl_prefix_ends_with_star(dt: &Arc<Datatype>) -> bool {
-        Self::type_stack_for(dt).len() > 1
+        if Self::type_stack_for(dt).len() > 1 {
+            return true;
+        }
+        // Single-layer named pointers whose display name is a composed
+        // pointer spelling ("char *", built by the debugproto importer
+        // bypassing the factory's anonymous TypePointer construction —
+        // Ghidra's getTypePointer leaves the name empty, type.hh:412) render
+        // exactly like their drilled anonymous twin in the golden corpus
+        // (`char *pcVar1` glued): the composed trailing `*` run IS the
+        // ptr_expr text. Registered as DECL-SPACING-NAMEFLOW-0001 pending
+        // the DWARF name-flow verification that would instead make the
+        // importer anonymous.
+        let stack = Self::type_stack_for(dt);
+        let base = stack.last().expect("buildTypeStack pushes the input");
+        let text = if base.get_name().is_empty() {
+            Self::generic_type_name(base)
+        } else {
+            base.get_display_name().to_string()
+        };
+        Self::normalize_pointer_run(&text).trim_end().ends_with('*')
     }
 
     // RUGRA-GLUE: normalize_pointer_run (format helper for the typestack
