@@ -14,6 +14,10 @@
 > printc 侧知会 w-anondecl)。输出体量 60KB→97.8KB(golden 96.2KB),内容恢复大幅推进。
 > Top skeleton:getparameter 715 / main 710 / next_url 284 / glob_range 226 / file2string 191 /
 > myprogress 186 / match_url 148 / glob_word 135 / parseconfig 129 / glob_set 124。
+> **httpd 回归(root 亲测 @ `3fb97c11`)**:仅输出 5/30 函数(08-28 基线 29)——首因
+> `ap_parse_vhost_addrs` panic `typefactory.rs:1999 LowlevelError: TypeFactory alignment map not
+> initialized`(get_type_pointer enforce=true 打在 align_map 未接线工厂)→锁中毒→23 worker PoisonError
+> 级联;归 `HTTPD-TFALIGN-PANIC-0001`(路由 r-plt-httpd);curl corpus 无此 panic。
 > 编排:root(主 Agent,唯一 master writer + 集成者)+ **10 个常驻后台子 Agent**(5 writer + 5 reader);
 > worktree 隔离（`/home/wirs/.cache/rugra-w2-*`）+ 独占写集租约 + 专属 CARGO_TARGET_DIR + flock 共享资源；
 > 子 Agent 交付（branch commit + 报告 `/tmp/rugra-reports/<name>-2026-08-29.md`）→ root 串行 cherry-pick →
