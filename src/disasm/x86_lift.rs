@@ -83,14 +83,14 @@ impl X86Lifter {
             "rbp" | "ebp" | "bp" | "bpl" => 0x28,
             "rsi" | "esi" | "si" | "sil" => 0x30,
             "rdi" | "edi" | "di" | "dil" => 0x38,
-            "r8" | "r8d" | "r8w" | "r8b" => 0x80,
-            "r9" | "r9d" | "r9w" | "r9b" => 0x88,
-            "r10" | "r10d" | "r10w" | "r10b" => 0x90,
-            "r11" | "r11d" | "r11w" | "r11b" => 0x98,
-            "r12" | "r12d" | "r12w" | "r12b" => 0xA0,
-            "r13" | "r13d" | "r13w" | "r13b" => 0xA8,
-            "r14" | "r14d" | "r14w" | "r14b" => 0xB0,
-            "r15" | "r15d" | "r15w" | "r15b" => 0xB8,
+            "r8" | "r8d" | "r8w" | "r8b" | "r8l" => 0x80,
+            "r9" | "r9d" | "r9w" | "r9b" | "r9l" => 0x88,
+            "r10" | "r10d" | "r10w" | "r10b" | "r10l" => 0x90,
+            "r11" | "r11d" | "r11w" | "r11b" | "r11l" => 0x98,
+            "r12" | "r12d" | "r12w" | "r12b" | "r12l" => 0xA0,
+            "r13" | "r13d" | "r13w" | "r13b" | "r13l" => 0xA8,
+            "r14" | "r14d" | "r14w" | "r14b" | "r14l" => 0xB0,
+            "r15" | "r15d" | "r15w" | "r15b" | "r15l" => 0xB8,
             // High-byte sub-registers: AH/CH/DH/BH sit one byte above their
             // GPR base in the locked sla layout (dumped via
             // examples/x86flag_probe.rs, `and dh,1` oracle pcode reads
@@ -1181,6 +1181,194 @@ impl X86Lifter {
         self.emit_alu_tail(dst, out, false, ops);
     }
 
+    // RUGRA-GLUE: ia.sinc :MOVZX/:MOVSX/:MOVSXD constructors (ia.sinc:4092-
+    // 4115) — `Reg = zext/sext(rm)` (+ check_Reg32_dest for 32-bit
+    // destinations); the same-size forms (MOVZX Reg16,rm16 / MOVSXD
+    /// Lift movzx/movsx/movsxd (INT_ZEXT / INT_SEXT; COPY for same-size).
+    fn lift_movx(
+        &mut self,
+        inst: &Instruction,
+        extend_opcode: OpCode,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) {
+        if inst.operands.len() != 2 {
+            return;
+        }
+        let (dst_vn, parent64) = match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, size } => {
+                let vn = match Self::get_register(name, *size) {
+                    Some(v) => v,
+                    None => return,
+                };
+                let parent64 = if *size == 4 {
+                    Self::parent64_name(name).and_then(|p| Self::get_register(p, 8))
+                } else {
+                    None
+                };
+                (vn, parent64)
+            }
+            _ => return,
+        };
+        // source (register direct / memory LOAD; address ops bind first)
+        let src_b = match self.bind_operand(&inst.operands[1], dst_vn.size, ops) {
+            Some(b) => b,
+            None => return,
+        };
+        let src = self.read_bound(&src_b, ops);
+        if src.size == dst_vn.size {
+            // MOVZX Reg16,rm16 / MOVSXD Reg32,rm32 → plain COPY
+            let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+            op.add_input(src);
+            op.set_output(dst_vn.clone());
+            ops.push(op);
+        } else {
+            let mut op = PcodeOpRaw::new(extend_opcode as i32);
+            op.add_input(src);
+            op.set_output(dst_vn.clone());
+            ops.push(op);
+        }
+        if let Some(parent) = parent64 {
+            let mut op_zext = PcodeOpRaw::new(OpCode::CPUI_INT_ZEXT as i32);
+            op_zext.add_input(dst_vn.clone());
+            op_zext.set_output(parent);
+            ops.push(op_zext);
+        }
+    }
+
+    // RUGRA-GLUE: ia.sinc :POP Rmr constructors (ia.sinc:4205-4215) —
+    // `local val = 0; popNN(val); Rmr = val;` with pop88 `{ x = *:8 RSP;
+    /// Lift pop (val init COPY, stack LOAD, RSP += size, COPY to register or
+    /// STORE to memory).
+    fn lift_pop(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        let Some(op0) = inst.operands.first() else {
+            return;
+        };
+        let size = match op0 {
+            crate::disasm::Operand::Register { size, .. } => *size,
+            crate::disasm::Operand::Memory { size, .. } => *size,
+            _ => return,
+        };
+        // bind memory destination address first (operand binding)
+        let dst_bound = match self.bind_operand(op0, size, ops) {
+            Some(b) => b,
+            None => return,
+        };
+        // local val:size = 0  (constructor's dead local init — kept for
+        // op-sequence parity with the sla lift)
+        let val = self.alloc_tmp(size);
+        let mut op_init = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+        op_init.add_input(Self::const_vn(0, size));
+        op_init.set_output(val.clone());
+        ops.push(op_init);
+        // val = *:size RSP
+        let rsp = match Self::get_register("rsp", 8) {
+            Some(v) => v,
+            None => return,
+        };
+        let mut op_load = PcodeOpRaw::new(OpCode::CPUI_LOAD as i32);
+        op_load.add_input(Self::ram_space_const());
+        op_load.add_input(rsp.clone());
+        op_load.set_output(val.clone());
+        ops.push(op_load);
+        // RSP = RSP + size
+        let mut op_add = PcodeOpRaw::new(OpCode::CPUI_INT_ADD as i32);
+        op_add.add_input(rsp);
+        op_add.add_input(Self::const_vn(size as u64, 8));
+        op_add.set_output(match Self::get_register("rsp", 8) {
+            Some(v) => v,
+            None => return,
+        });
+        ops.push(op_add);
+        // Rmr = val
+        match &dst_bound {
+            BoundOperand::Reg(vn) => {
+                let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+                op.add_input(val);
+                op.set_output(vn.clone());
+                ops.push(op);
+            }
+            BoundOperand::MemAddr { addr, .. } => {
+                self.emit_store_v(addr, val, ops);
+            }
+            BoundOperand::Const(_) => {}
+        }
+    }
+
+    // RUGRA-GLUE: ia.sinc :CWDE/:CDQE (ia.sinc:3004-3006) — `EAX = sext(AX)`
+    /// Lift cwde/cdqe (INT_SEXT into the wider accumulator; 32-bit cwde adds
+    /// the check_EAX_dest zext).
+    fn lift_widen_acc(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        let size = match inst.mnemonic.as_str() {
+            "cbw" => (2, 1),   // AX = sext(AL)
+            "cwde" => (4, 2),  // EAX = sext(AX)
+            "cdqe" => (8, 4),  // RAX = sext(EAX)
+            _ => return,
+        };
+        let (dst_size, src_size) = size;
+        let Some(acc) = Self::get_register("rax", dst_size) else {
+            return;
+        };
+        let Some(src) = Self::get_register("rax", src_size) else {
+            return;
+        };
+        let mut op = PcodeOpRaw::new(OpCode::CPUI_INT_SEXT as i32);
+        op.add_input(src);
+        op.set_output(acc.clone());
+        ops.push(op);
+        if inst.mnemonic == "cwde" {
+            // check_EAX_dest: RAX = zext(EAX)
+            if let (Some(eax), Some(rax)) = (
+                Self::get_register("eax", 4),
+                Self::get_register("rax", 8),
+            ) {
+                let mut op_z = PcodeOpRaw::new(OpCode::CPUI_INT_ZEXT as i32);
+                op_z.add_input(eax);
+                op_z.set_output(rax);
+                ops.push(op_z);
+            }
+        }
+    }
+
+    // RUGRA-GLUE: ia.sinc :CDQ/:CQO (ia.sinc:3010-3012) — `tmp:16 =
+    /// Lift cdq/cqo (INT_SEXT into a double-width temp, SUBPIECE the low
+    /// half into EDX/RDX).
+    fn lift_sign_dividend(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        let (dst_size, src_size, dst_name, src_name) = match inst.mnemonic.as_str() {
+            "cdq" => (4usize, 4usize, "edx", "eax"),
+            "cqo" => (8, 8, "rdx", "rax"),
+            _ => return,
+        };
+        let Some(src) = Self::get_register(src_name, src_size) else {
+            return;
+        };
+        // tmp = sext(src)
+        let tmp = self.alloc_tmp(src_size * 2);
+        let mut op_sext = PcodeOpRaw::new(OpCode::CPUI_INT_SEXT as i32);
+        op_sext.add_input(src);
+        op_sext.set_output(tmp.clone());
+        ops.push(op_sext);
+        // RDX = tmp(0)  → SUBPIECE low half
+        let Some(dst) = Self::get_register(dst_name, dst_size) else {
+            return;
+        };
+        let mut op_piece = PcodeOpRaw::new(OpCode::CPUI_SUBPIECE as i32);
+        op_piece.add_input(tmp);
+        op_piece.add_input(Self::const_vn(0, 4));
+        op_piece.set_output(dst.clone());
+        ops.push(op_piece);
+        // 32-bit cdq: check_EDX_dest → RDX = zext(EDX)
+        if inst.mnemonic == "cdq" {
+            if let (Some(edx), Some(rdx)) =
+                (Self::get_register("edx", 4), Self::get_register("rdx", 8))
+            {
+                let mut op_z = PcodeOpRaw::new(OpCode::CPUI_INT_ZEXT as i32);
+                op_z.add_input(edx);
+                op_z.set_output(rdx);
+                ops.push(op_z);
+            }
+        }
+    }
+
     // RUGRA-GLUE: ia.sinc :CMOV^cc constructors (ia.sinc:3043-3046) —
     // `{ local tmp = rm; if (!cc) goto inst_next; Reg = tmp; }` — lifted
     /// Lift cmovcc (cond ops, tmp copy, old-dst zext for 32-bit, negate,
@@ -1705,6 +1893,21 @@ impl X86Lifter {
             other if other.starts_with("cmov") => {
                 self.lift_cmov(inst, &other[4..], &mut ops);
             }
+            "movzx" => {
+                self.lift_movx(inst, OpCode::CPUI_INT_ZEXT, &mut ops);
+            }
+            "movsx" | "movsxd" => {
+                self.lift_movx(inst, OpCode::CPUI_INT_SEXT, &mut ops);
+            }
+            "pop" => {
+                self.lift_pop(inst, &mut ops);
+            }
+            "cbw" | "cwde" | "cdqe" => {
+                self.lift_widen_acc(inst, &mut ops);
+            }
+            "cdq" | "cqo" => {
+                self.lift_sign_dividend(inst, &mut ops);
+            }
             other if other.starts_with("set") => {
                 self.lift_setcc(inst, &other[3..], &mut ops);
             }
@@ -1785,7 +1988,7 @@ impl X86Lifter {
                     }
                 }
             }
-            "push" | "pop" | "call" | "ret" => {
+            "push" | "call" | "ret" => {
                 if mnemonic == "call" {
                     // Emit CPUI_CALL with target address
                     let target_addr = if let Some(ref bt) = inst.metadata.branch_target {

@@ -89,3 +89,26 @@
   实现(0 op;httpd 语料 90 处)。
 - 复用 emit_cc_cond(与 jcc 同一 cc 表);双侧投影 11 个采样变体 op-for-op
   MATCH(flagprobe10),其余变体走同一代码路径。
+
+### 2026-08-30:X86LIFT-ZEROOP-ARMS — pop/movzx/movsx/movsxd/cbw-cwde-cdqe/cdq-cqo(w-iced c5,coordinator 扩展)
+- 背景(w-zombie 根因链):CBRANCH 目标指令提升为 0 个 p-code op → 边丢弃 →
+  僵尸决策块(funcdata 侧合成块修复已入 master);这些目标(0x2e010/0x2e022/
+  0x2e06a/0x2e0b9/0x2e0c8)是 movzbl/movslq/pop —— 本提交补齐其提升臂,使
+  Ghidra 侧 LAB_0012e022 形态的标签区域获得真实语句而非空投影。
+- `pop` = ia.sinc:4215 `local val=0; pop88(val); Rmr=val;`(pop88:`x=*:8 RSP;
+  RSP=RSP+8`):COPY val=0(局部死初始化,保 op 序)→ LOAD val=(ram,RSP)→
+  INT_ADD RSP+=size → COPY reg=val / STORE addr=val(mem dst)。此前 0 op
+  (httpd 语料 1903 处)。
+- `movzx`/`movsx`/`movsxd` = ia.sinc:4092-4115 `Reg=zext/sext(rm)`(+32-bit
+  dst 的 check_Reg32_dest zext;同尺寸形式(Reg16,rm16 / Reg32,rm32)为
+  纯 COPY)。此前 0 op(movzx 462 处 + movsx 13 处)。
+- `cbw`/`cwde`/`cdqe` = 累加器 INT_SEXT(cwde 另有 check_EAX_dest zext);
+  `cdq`/`cqo` = INT_SEXT 双宽 temp + SUBPIECE 低半 → EDX/RDX(cdq 另有
+  check_EDX_dest zext)。此前 0 op(cdqe 18 处、cqo 2 处)。
+- 新增 iced REX 低字节寄存器别名 r8l..r15l(iced 在 REX 前缀下用 "r8l"
+  而非 "r8b" 命名,此前 movsx eax,r8b 整条丢弃)。
+- 双侧投影:pop(4 op)/movsx(2 op)/cdqe(1 op)op-for-op MATCH;movzx 唯一
+  差异为地址临时操作数序 (disp,base) vs (base,disp)(INT_ADD 交换律,与
+  compute_memaddr 既有形态一致,值等价)。
+- 残余:push(push88:mysave=x;RSP-=8;STORE)仍在零-op 状态 — 影响
+  httpd 全部函数序言(1385 处),单独 commit 评估爆炸半径后再落。

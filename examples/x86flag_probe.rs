@@ -77,7 +77,8 @@ fn main() -> anyhow::Result<()> {
     // iced-side census + sample addresses (first occurrence per mnemonic).
     let family_prefixes = [
         "add", "sub", "and", "or", "xor", "shl", "shr", "sal", "sar", "sbb", "adc", "cmp", "test",
-        "cmov", "set", "neg", "not", "inc", "dec", "j",
+        "cmov", "set", "neg", "not", "inc", "dec", "j", "pop", "push", "movzx", "movsx", "leave",
+        "cdq", "cdqe", "cwde", "cbw", "cqo",
     ];
     let mut census: std::collections::BTreeMap<String, usize> = Default::default();
     let mut samples: Vec<(String, u64, u64, String)> = Vec::new(); // (mnemonic, vaddr, file_off, text)
