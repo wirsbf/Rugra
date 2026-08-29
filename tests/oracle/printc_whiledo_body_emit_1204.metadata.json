@@ -1,7 +1,7 @@
 {
  "schema": 1,
  "fixture_id": "MAIN-RC3-STRUCTURED-EMIT-0001",
- "stable_function_id": "GH12-F-49e341af37f7b0534a20",
+ "stable_function_id": "GH12-F-01ad63043fb45522e3b6",
  "stable_function_closure": [
   "ghidra::PrintC::emitBlockWhileDo printc.cc:3001",
   "ghidra::PrintC::emitForLoop printc.cc:2957",
@@ -57,10 +57,18 @@
   "evidence": "oracle binary built from the locked tree (libdecomp.a at e40ed130) and Rugra rlib at 99ce6b74 produce identical statement and raw streams for all three cases (2026-08-30, w-rc3)"
  },
  "known_divergences": [],
- "comparand_sha256": {
+ "expected_statement_stdout_sha256": "2394f1cc2bc7074f687d1750ff28c60d22217e18aacedffbe3a6b2b13bd92a4a",
+ "expected_ghidra_raw_sha256": "4d6f74984a8bf08673da86747ab7cd9084471757a2610052175551a450d30664",
+ "expected_rugra_raw_sha256": "4d6f74984a8bf08673da86747ab7cd9084471757a2610052175551a450d30664",
+ "cpp_fixture_sha256": "cdd79e6d4cff2177b21f1ebcc0f55f4675367378db32e7d778881b7f8be8ef34",
+ "rust_fixture_sha256": "e1ee7fc3f04574c779047e01697fadcbd85f8990aa3820a606850f3d99e0b3bf",
+ "expected_exit_code": 0,
+ "comparand": {
   "cpp_fixture_sha256": "cdd79e6d4cff2177b21f1ebcc0f55f4675367378db32e7d778881b7f8be8ef34",
   "rust_fixture_sha256": "e1ee7fc3f04574c779047e01697fadcbd85f8990aa3820a606850f3d99e0b3bf",
-  "runner_sha256": "af94080ba662bb2b10c6da8d3835e5e75a76d4c77ab43695dc6d51cdf73dc495",
+  "runner_sha256": "af94080ba662bb2b10c6da8d3835e5e75a76d4c77ab43695dc6d51cdf73dc495"
+ },
+ "source_snapshot_sha256": {
   "rugra_printc": "f9ed7a3634f779573c3017a31441e408a6512b108a82091ba515559a6cba5823",
   "rugra_prettyprint": "c39ace2c509bed65b939fab33a1103f7cad1120b6a68884e694f55d15019ac40",
   "ghidra_printc_cc": "2c0f5565bb76c8ec4dc291e3166dec924fa063c9d86f4d14f06e1fc1550c12b4",
@@ -69,11 +77,5 @@
   "ghidra_block_hh": "103d023e88e88986c8d7bb6a4309eaee91d0f627636838f25452763e1212b139",
   "ghidra_prettyprint_cc": "1a9466456f0a229639625e9f8e70507e83815e49b19bfb1fea6945978074189f",
   "ghidra_prettyprint_hh": "016017194282caea38ff7a52466e54b340036ff93e33ba2378d9917b0c5bc8fc"
- },
- "expected_statement_stdout_sha256": "2394f1cc2bc7074f687d1750ff28c60d22217e18aacedffbe3a6b2b13bd92a4a",
- "expected_ghidra_raw_sha256": "4d6f74984a8bf08673da86747ab7cd9084471757a2610052175551a450d30664",
- "expected_rugra_raw_sha256": "4d6f74984a8bf08673da86747ab7cd9084471757a2610052175551a450d30664",
- "cpp_fixture_sha256": "cdd79e6d4cff2177b21f1ebcc0f55f4675367378db32e7d778881b7f8be8ef34",
- "rust_fixture_sha256": "e1ee7fc3f04574c779047e01697fadcbd85f8990aa3820a606850f3d99e0b3bf",
- "expected_exit_code": 0
+ }
 }
