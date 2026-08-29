@@ -4966,6 +4966,44 @@
           "GH12-F-ca7a77b1213f6edb57e6"
         ]
       }
+    },
+    {
+      "id": "ptrsub_switch_cast_1204",
+      "description": "ActionSetCasts switch-expression (int*) cast churn bilateral diagnostic: 7 synthetic IR/CFG/type states through real apply, per-op token/atok/ic0 dumps, post-apply CAST graph, count delta and rendered switch trees versus locked Ghidra 12.0.4; seed projections and swexpr_pre are MATCH, 13 records registered as known apply-side divergences (PTRADD output-cast arm, implied retype, double-cast guard, const arm, ptradd-undo preflight, TypeOpIntAdd/arithmetic tokens)",
+      "runner": [
+        "tools/run_ptrsub_switch_cast_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/ptrsub_switch_cast_1204.metadata.json",
+        "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+        "rust_base_commit": "b2b5302224f269be8c97e407cc6117a6cc9e9553"
+      },
+      "impact": {
+        "todo_ids": [
+          "PTRSUB-SWITCH-CAST-RESIDUAL-0001",
+          "COREACTION-PTRADD-OUTCAST-0001",
+          "COREACTION-CASTOUT-IMPLIED-0001",
+          "COREACTION-CASTIN-DOUBLECAST-GUARD-0001",
+          "COREACTION-CASTIN-CONST-0001",
+          "COREACTION-PTRADD-UNDO-PREFLIGHT-0001",
+          "FUNCDATA-OPUNDOPTRADD-0001",
+          "TYPEOP-INTADD-TOKEN-0001",
+          "TYPEOP-ARITH-TOKEN-0001"
+        ],
+        "src_files": [
+          "src/coreaction.rs",
+          "src/funcdata.rs",
+          "src/typeop.rs",
+          "src/type_system/cast.rs"
+        ],
+        "notes": "phase A diagnostic fixture delivered by w-switchfix2; phase B dependency-ordered fix plan in /tmp/rugra-reports/w-switchfix2-2026-08-29.md section 4"
+      }
     }
   ]
 }

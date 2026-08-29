@@ -1928,3 +1928,29 @@ Action-specific 路径的 `(space, offset, size)`、对象顺序和基础 flags�
 Address 当作 RAM，且 localmap `queryProperties`、live `SymbolEntry`、
 `setSymbolProperties` 与 HighVariable symbol 反向连接尚未闭合，登记为
 `FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001`；模块保持 L2。
+
+## 2026-08-29（FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001）：newVarnode 族 symbol tail 闭合
+
+`Funcdata::newVarnode`（funcdata_varnode.cc:148-169）在 create→assignHigh→lane
+check 之后固定执行 `localmap->queryProperties(addr,size,usepoint,vflags)`，entry
+命中走 `setSymbolProperties`，否则 `setFlags(vflags & ~typelock)`。本次把该尾段
+落为 `Funcdata::new_varnode_symbol_tail(vn, usepoint)` 并接线到三处调用面：
+
+- `new_varnode(size, addr)`（cc:148）— usepoint = cc:162 的 INVALID `Address()`。
+- `new_varnode_in_space(size, space, addr)`（cc:239-246 `newVarnode(s,base,off)`
+  委托形态）— 同 INVALID usepoint 的完整尾段，替代旧的
+  `Heritage::apply_new_varnode_flags` flags-only 投影。
+- `new_varnode_out(size, addr, op)`（cc:104-122）— **无条件** 以 `op->getAddr()`
+  为 usepoint 的 queryProperties（cc:114-119），替代此前错误委托的
+  `set_varnode_property`（setVarnodeProperties cc:25-42 是 isMapped-guarded
+  getUsePoint 形态的另一个函数）。
+
+Rugra 的 walk 组合与 Ghidra 单一 `Scope::queryProperties`（database.cc:1263-1281，
+`mapScope` 空 resolvemap 返回查询 scope 自身，database.cc:3187）等价：ScopeLocal 腿
+（`query_properties_ex`，parent=None）未应答时接 Database 全局腿
+（`query_properties_parent_scope`/`query_container_entry_parent_scope`）。全局腿
+entry 命中执行完整 `set_symbol_properties_arc`（含 HighVariable symbol 反连）；
+ScopeLocal 腿 entry 命中因 DB-LOCALSCOPE-MAP-0001 分裂（ScopeLocal 无 live
+SymbolEntry 对象）降级为 flags 折叠。遗留：非 RAM 空间不进 Database 腿、
+newVarnodeOut 的 usepoint 以 spaceless Address 进 Database 腿恒 invalid
+（ADDRESS-0001，use-limited 全局 entry 不被承认）——两项均登记为残余。

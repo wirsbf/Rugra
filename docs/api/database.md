@@ -458,3 +458,20 @@ equate-pipeline 测试随 VARNODE-COPYSYMBOL-HIGHBRANCH-0001 的关联函数签�
   `query_properties`/`discover_scope`（database.cc:1246/1263/1353）是
   `Funcdata::mapGlobals`（funcdata_varnode.cc:1701/1703）与
   `linkSymbol`（cc:1169）的查询通道。
+
+## 2026-08-29（FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001）：inUse 三腿 + addMap 折叠接线 + same_storage_identity
+
+- `SymbolEntry::in_use(usepoint)` 修正为 database.cc:114-120 全三腿：
+  `isAddrTied()`（symbol 的 addrtied 位）恒 true；Ghidra-invalid usepoint
+  （legacy spaceless Address 即 is_invalid）恒 false；否则
+  `uselimit.in_range(usepoint)`。旧"空 uselimit = 全程有效"读法与 cc:118-119
+  矛盾——空 uselimit 的 entry 只因 addMap 的 addrtied 折叠才有效。
+- `SymbolEntry::same_storage_identity(other)`（RUGRA-GLUE）：C++
+  `SymbolEntry*` 指针比较的稳定恒等代理（symbol Arc ptr_eq + addr + offset +
+  size + hash），供 varnode.cc:415 `mapentry != entry` 使用。
+- `Scope::add_symbol_mapped`（database.cc:1530 addSymbol 形态）与
+  `Scope::add_code_label`（cc:1677 `addMapPoint(sym,addr,Address())`）都改经
+  `apply_add_map_rules`（database.cc:1126-1155 addMap 折叠：persist /
+  global-discovery uselimit 清空 / 空 uselimit → symbol ADDRTIED + flagbase
+  property 折叠；label entry 的 extraflags 随 addMapInternal 取
+  `Varnode::mapped`）。findCodeLabel 的 `inUse(addr)` 由 addrtied 腿放行。

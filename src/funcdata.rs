@@ -640,13 +640,15 @@ impl Funcdata {
     ///   vn = vbank.create(s, m, ct);
     ///   assignHigh(vn);
     ///   if (s >= minLanedSize) checkForLanedRegister(s, m);
-    ///   <queryProperties/setSymbolProperties/setFlags leg>
+    ///   entry = localmap->queryProperties(addr, size, Address(), vflags);
+    ///   if (entry != 0) vn->setSymbolProperties(entry);
+    ///   else            vn->setFlags(vflags & ~Varnode::typelock);
     ///   return vn;
-    /// The localmap queryProperties half (:161-166) is a registered gap
-    /// (Rugra's symbol_table is consulted via set_varnode_properties at
-    /// other call sites). The laned-register half records against the
-    /// address's address space, which `getLanedRegister` matches by size
-    /// only (architecture.cc:290-306).
+    /// The symbol tail runs in [`Funcdata::new_varnode_symbol_tail`] with
+    /// the INVALID usepoint of cc:162. The laned-register half records
+    /// against the address's address space, which `getLanedRegister`
+    /// matches by size only (architecture.cc:290-306).
+    /// (FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001)
     pub fn new_varnode(
         &mut self, size: usize, addr: crate::address::Address,
     ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
@@ -656,6 +658,9 @@ impl Funcdata {
         if size >= self.min_laned_size as usize {
             self.check_for_laned_register(size, crate::space::AddressSpace::Ram, addr);
         }
+        // cc:161-166: the queryProperties/setSymbolProperties/setFlags leg
+        // (usepoint = the INVALID Address() of cc:162).
+        self.new_varnode_symbol_tail(&vn, None);
         vn
     }
 
@@ -673,8 +678,122 @@ impl Funcdata {
         if size >= self.min_laned_size as usize {
             self.check_for_laned_register(size, space, addr);
         }
-        crate::heritage::Heritage::apply_new_varnode_flags(self, &vn);
+        // cc:239-246: the explicit-space overload delegates to the full
+        // newVarnode(s,m,ct) — including the queryProperties symbol tail.
+        self.new_varnode_symbol_tail(&vn, None);
         vn
+    }
+
+    // Ghidra: funcdata_varnode.cc:161-166 Funcdata::newVarnode (symbol tail)
+    /// The `localmap->queryProperties` + `setSymbolProperties`/`setFlags`
+    /// tail shared by `Funcdata::newVarnode` (funcdata_varnode.cc:148-169,
+    /// usepoint = INVALID `Address()`) and `Funcdata::newVarnodeOut`
+    /// (funcdata_varnode.cc:104-122, usepoint = `op->getAddr()`):
+    /// ```text
+    /// uint4 vflags=0;
+    /// SymbolEntry *entry = localmap->queryProperties(
+    ///     vn->getAddr(),vn->getSize(),<usepoint>,vflags);
+    /// if (entry != (SymbolEntry *)0)	// Let entry try to force type
+    ///   vn->setSymbolProperties(entry);
+    /// else
+    ///   vn->setFlags(vflags & ~Varnode::typelock);
+    /// ```
+    /// Ghidra's ONE query walks ScopeLocal -> parents -> global scope
+    /// (database.cc:1268 stackContainer). Rugra's walk is composed the same
+    /// way linkSymbol composes it (funcdata.rs link_symbol): the ScopeLocal
+    /// leg is `ScopeLocal::query_properties_ex` over `fd.scope` (the
+    /// database.cc:943/1263 walk with the Database property lookup wired
+    /// in), and — when the local leg does not terminate the walk — the
+    /// parent/global leg is the Database channel
+    /// (`query_properties_parent_scope`/`query_container_entry_parent_scope`,
+    /// database.cc:1263-1281). Where the global leg finds a live
+    /// SymbolEntry, the FULL `setSymbolProperties` port runs
+    /// (varnode.cc:410-424, including the HighVariable symbol link);
+    /// the ScopeLocal leg's entry hit degrades to its flags fold
+    /// (Rugra's ScopeLocal carries no SymbolEntry objects — the
+    /// DB-LOCALSCOPE-MAP-0001 split).
+    /// (FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001)
+    fn new_varnode_symbol_tail(
+        &mut self,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        usepoint: Option<u64>,
+    ) {
+        let (space, offset, size) = {
+            let r = vn.read().unwrap();
+            (r.address_space, r.loc.as_u64(), r.get_size() as i64)
+        };
+        // database.cc:1276/1279 — glb->symboltab->getProperty(addr): the
+        // Database flagbase, reachable only for default-data (RAM) space in
+        // Rugra's split representation.
+        let property = |spc: crate::space::AddressSpace, off: u64| -> u32 {
+            if spc != crate::space::AddressSpace::Ram {
+                return 0;
+            }
+            self.arch
+                .as_ref()
+                .and_then(|a| a.symboltab.clone())
+                .map(|t| t.read().unwrap().get_property(crate::address::Address::new(off)))
+                .unwrap_or(0)
+        };
+        // database.cc:1268 — the ScopeLocal leg (stackContainer starts at
+        // the function's own scope; parent=None because the parent walk IS
+        // the Database channel below).
+        let local = self
+            .scope
+            .as_ref()
+            .map(|s| s.query_properties_ex(space, offset, size, usepoint, None, &property));
+        let local_answered = matches!(
+            &local,
+            Some(outcome) if !matches!(outcome.final_scope, crate::varmap::QueryFinalScope::None)
+        );
+        if local_answered {
+            // The ScopeLocal leg terminated the walk (containing entry or
+            // in-scope discovery). Ghidra hands the live entry to
+            // setSymbolProperties when cc:163 hits; Rugra's ScopeLocal has
+            // no live SymbolEntry, so this is the observable flags fold of
+            // varnode.cc:422 — cc:166 setFlags(vflags & ~typelock).
+            if let Some(outcome) = local {
+                let fl = outcome.flags & !crate::varnode::varnode_flags::TYPELOCK;
+                vn.write().unwrap().set_flags(fl);
+            }
+            return;
+        }
+        // The parent/global leg: only the default-data (RAM) space reaches
+        // the Database channel in Rugra's split representation; other
+        // spaces end the C++ walk at the bare getProperty(addr) fold
+        // (database.cc:1279), which the property closure already applied
+        // (0 for non-RAM).
+        if space != crate::space::AddressSpace::Ram {
+            return;
+        }
+        let addr = crate::address::Address::new(offset);
+        // cc:162: queryProperties(vn->getAddr(), vn->getSize(), usepoint, vflags).
+        // Legacy Address cannot carry a valid space, so the Database leg's
+        // usepoint is always is_invalid() — exactly Ghidra's newVarnode form;
+        // newVarnodeOut's valid op-address usepoint is a declared residual
+        // (ADDRESS-0001: use-limited global entries are not admitted there).
+        let up = crate::address::Address::new(usepoint.unwrap_or(0));
+        if let Some((hit, vflags)) = self.query_properties_parent_scope(addr, size as i32, up) {
+            if hit.is_some() {
+                // cc:163-164: entry != NULL -> vn->setSymbolProperties(entry)
+                // — the live entry from the same stackContainer walk.
+                if let Some((_scope_id, entry_arc)) =
+                    self.query_container_entry_parent_scope(addr, size as i32, up)
+                {
+                    crate::varnode::Varnode::set_symbol_properties_arc(vn, &entry_arc);
+                } else {
+                    // The projection answered but the live-entry walk missed
+                    // (cannot happen: same walk); fall through to the flags
+                    // fold for safety.
+                    let fl = vflags & !crate::varnode::varnode_flags::TYPELOCK;
+                    vn.write().unwrap().set_flags(fl);
+                }
+            } else {
+                // cc:165-166: vn->setFlags(vflags & ~typelock).
+                let fl = vflags & !crate::varnode::varnode_flags::TYPELOCK;
+                vn.write().unwrap().set_flags(fl);
+            }
+        }
     }
 
     // Ghidra: funcdata_varnode.cc:340 Funcdata::setInputVarnode
@@ -2314,8 +2433,14 @@ impl Funcdata {
     ///   op->setOutput(vn);
     ///   assignHigh(vn);
     ///   if (s >= minLanedSize) checkForLanedRegister(s, m);
-    ///   <queryProperties/setSymbolProperties/setFlags leg>
+    ///   entry = localmap->queryProperties(m, s, op->getAddr(), vflags);
+    ///   if (entry != 0) vn->setSymbolProperties(entry);
+    ///   else            vn->setFlags(vflags & ~Varnode::typelock);
     ///   return vn;
+    /// The query runs UNCONDITIONALLY with usepoint = op->getAddr() — not
+    /// the isMapped-guarded `getUsePoint` form of setVarnodeProperties
+    /// (funcdata_varnode.cc:25-42), which is a different function.
+    /// (FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001)
     pub fn new_varnode_out(
         &mut self,
         size: usize,
@@ -2338,7 +2463,10 @@ impl Funcdata {
                 crate::space::AddressSpace::Register,
                 addr);
         }
-        self.set_varnode_properties(&vn);
+        // cc:114-119: queryProperties(m, s, op->getAddr(), vflags) with the
+        // op address as usepoint, then the shared symbol tail.
+        let usepoint = op.0.read().unwrap().get_addr().as_u64();
+        self.new_varnode_symbol_tail(&vn, Some(usepoint));
         vn
     }
 
@@ -4394,7 +4522,7 @@ impl Funcdata {
                         };
                         match entry_arc {
                             Some(entry) => {
-                                vn.write().unwrap().set_symbol_properties(&entry);
+                                crate::varnode::Varnode::set_symbol_properties_arc(vn, &entry);
                             }
                             None => {
                                 // Entry projection exists but the live-entry

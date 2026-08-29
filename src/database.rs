@@ -269,10 +269,52 @@ impl SymbolEntry {
     }
 
     // Ghidra: database.cc:114 SymbolEntry::inUse
-    /// Is this storage valid for the given code address? Faithful to `inUse`.
+    /// Is this storage valid for the given code address? Faithful to
+    /// `inUse` (database.cc:114-120):
+    /// ```text
+    /// if (isAddrTied()) return true;   // Valid throughout scope
+    /// if (usepoint.isInvalid()) return false;
+    /// return uselimit.inRange(usepoint,1);
+    /// ```
+    /// An address-tied Symbol (the addMap fold for empty uselimits,
+    /// database.cc:1149-1150 via `apply_add_map_rules`) is valid at every
+    /// usepoint; a use-limited Symbol is never valid at an invalid
+    /// usepoint; otherwise the uselimit rangelist decides — an EMPTY
+    /// rangelist admits nothing, because Scope::addMap marks those symbols
+    /// addrtied instead (the previous "empty uselimit = valid across all
+    /// code" reading contradicted database.cc:118-119).
+    /// (FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001: queryProperties with the
+    /// invalid usepoint of `Funcdata::newVarnode`
+    /// funcdata_varnode.cc:162 must skip use-limited entries exactly here.)
     pub fn in_use(&self, usepoint: Address) -> bool {
-        // Empty uselimit = valid across all code.
-        self.uselimit.empty() || self.uselimit.in_range(usepoint)
+        // cc:117: isAddrTied() — the Symbol's addrtied bit.
+        if self.is_addr_tied() {
+            return true;
+        }
+        // cc:118: usepoint.isInvalid() — Rugra's legacy Address is invalid
+        // exactly when spaceless (address.rs is_invalid: space.is_none()).
+        if usepoint.is_invalid() {
+            return false;
+        }
+        // cc:119: uselimit.inRange(usepoint,1).
+        self.uselimit.in_range(usepoint)
+    }
+
+    // RUGRA-GLUE: stable identity predicate standing in for the C++
+    // `SymbolEntry*` pointer comparison (varnode.cc:415 `mapentry != entry`
+    // inside Varnode::setSymbolProperties). Rugra's Database hands out
+    /// cloned entries wrapped in fresh Arcs
+    /// (`Database::query_container_entry`), so Arc identity can never match
+    /// across two queries of the same storage; within one scope's entry map
+    /// the (symbol, storage) pair is unique, which makes this field
+    /// comparison observationally equal to the C++ pointer test for entries
+    /// produced by the same stackContainer walk.
+    pub fn same_storage_identity(&self, other: &SymbolEntry) -> bool {
+        std::sync::Arc::ptr_eq(&self.symbol, &other.symbol)
+            && self.addr == other.addr
+            && self.offset == other.offset
+            && self.size == other.size
+            && self.hash == other.hash
     }
 
     // Ghidra: database.cc:50 SymbolEntry::getUseLimit
@@ -1524,9 +1566,17 @@ impl Scope {
         id
     }
 
-    // Ghidra: database.hh:34 Scope::addSymbolMapped
+    // Ghidra: database.cc:1530 Scope::addSymbol
     /// Add a Symbol and map it to a specific address. Faithful to
-    /// `addSymbol(nm, ct, addr, usepoint)` (database.hh:742).
+    /// `Scope::addSymbol(nm, ct, addr, usepoint)` (database.cc:1530-1540):
+    /// new Symbol + addSymbolInternal + addMapPoint — i.e. the `Scope::addMap`
+    /// symbol-flag rules (database.cc:1126-1155, persist for a global scope /
+    /// addrtied + flagbase property fold for an empty uselimit) run through
+    /// [`Scope::apply_add_map_rules`] with `ctx = None` (standalone scope:
+    /// the Database flagbase and global-discovery lookups answer 0/false).
+    /// The usepoint is invalid (no parameter), so the whole-map entry keeps
+    /// an EMPTY uselimit and its Symbol takes the addrtied fold — exactly
+    /// the invariant `SymbolEntry::inUse` (database.cc:114-120) relies on.
     pub fn add_symbol_mapped(
         &mut self,
         nm: &str,
@@ -1536,6 +1586,11 @@ impl Scope {
     ) -> u64 {
         let id = self.add_symbol(nm, type_name);
         let sym = self.symbols.get(&id).cloned().unwrap();
+        let mut uselimit = RangeList::new();
+        // database.cc:1539-1540: addMapPoint(sym, addr, Address()) — the
+        // invalid usepoint leaves the uselimit empty (add_map_point's
+        // usepoint!=0 restriction does not fire), then addMap's folds run.
+        self.apply_add_map_rules(&sym, Some(addr), &mut uselimit, None);
         let mut sym_rg = sym.write().unwrap();
         sym_rg.whole_count += 1;
         drop(sym_rg);
@@ -1545,7 +1600,7 @@ impl Scope {
             addr,
             0,
             size,
-            RangeList::new(),
+            uselimit,
         ));
         // maptable insert (database.cc:1869 addMapInternal).
         self.invalidate_addr_index();
@@ -3001,19 +3056,12 @@ impl Scope {
         sym.symbol_id = id;
         self.symbols.insert(id, Arc::new(RwLock::new(sym)));
         // database.cc:1676 — addSymbolInternal(sym).
-        // database.cc:1677 — addMapPoint(sym, addr, Address()). whole-map entry.
-        let sym_arc = self.symbols.get(&id).cloned().unwrap();
-        sym_arc.write().unwrap().whole_count += 1;
-        self.entries.push(SymbolEntry::new_static(
-            sym_arc,
-            0,
-            addr,
-            0,
-            1,
-            RangeList::new(),
-        ));
-        // maptable insert (database.cc:1869 addMapInternal).
-        self.invalidate_addr_index();
+        // database.cc:1677 — addMapPoint(sym, addr, Address()). whole-map
+        // entry through the addMap fold (empty uselimit -> the symbol's
+        // ADDRTIED bit, database.cc:1150; extraflags = Varnode::mapped,
+        // database.cc:1148) so `findCodeLabel`'s inUse(addr) admits it
+        // (database.cc:114-120 isAddrTied leg).
+        self.add_map_point(id, addr, Address::new(0), 1, None);
         // The LabSymbol view for the caller (database.cc:1678 return).
         (LabSymbol::new(self.unique_id, nm, addr), overlap)
     }
@@ -4788,7 +4836,26 @@ mod tests {
         assert_eq!(entry.get_size(), 4);
         assert!(!entry.is_dynamic());
         assert!(!entry.is_invalid());
-        assert!(entry.in_use(Address::new(0x9999))); // empty uselimit = all
+        // SymbolEntry::inUse (database.cc:114-120) three legs: a raw entry
+        // (Symbol without the addMap addrtied fold, empty uselimit) is NOT
+        // in use — cc:118 rejects the invalid usepoint and cc:119's
+        // inRange admits nothing on an empty rangelist.
+        assert!(!entry.in_use(Address::new(0x9999)));
+        // cc:117: an address-tied Symbol is valid throughout the scope.
+        let sym = Arc::new(RwLock::new(Symbol::new(0, "x", "int")));
+        sym.write().unwrap().flags |= symbol_flags::ADDRTIED;
+        let tied = SymbolEntry::new_static(sym, 0, Address::new(0x1000), 0, 4, RangeList::new());
+        assert!(tied.in_use(Address::new(0x9999)));
+        // cc:119: a use-limited entry is in use exactly inside its range.
+        let sym = Arc::new(RwLock::new(Symbol::new(0, "x", "int")));
+        let mut uselimit = RangeList::new();
+        uselimit.insert_range(Range::new(Address::new(0x100), Address::new(0x1ff)).unwrap());
+        let limited = SymbolEntry::new_static(sym, 0, Address::new(0x1000), 0, 4, uselimit);
+        assert!(!limited.in_use(Address::new(0x99))); // legacy Address is
+        // spaceless == Ghidra-invalid, so cc:118 fires before the range
+        // test; the in-range admission is observable only through the
+        // addrtied leg above.
+        assert!(!limited.in_use(Address::new(0x150)));
     }
 
     #[test]
@@ -5442,9 +5509,16 @@ mod tests {
     fn test_scope_add_dynamic_symbol() {
         // database.cc:1690 — addDynamicSymbol creates a hashed SymbolEntry.
         let mut scope = Scope::new(2, "func", 1); // non-global
-        let id = scope.add_dynamic_symbol(
-            "dyn", "int", 4, Address::new(0x1234), 0xDEADBEEF,
+        // The caddr and the inUse probes are Ghidra-VALID code addresses:
+        // legacy spaceless Address::new would be is_invalid() and the
+        // database.cc:118 leg would reject the entry before the uselimit
+        // test (SymbolEntry::inUse), so mint spaced addresses.
+        use crate::space::{space_flags, AddrSpace, SpaceType};
+        let ram = AddrSpace::new_space(
+            SpaceType::Processor, "ram", false, 8, 1, 3, space_flags::HASPHYSICAL, 0, 0,
         );
+        let caddr = Address::with_space(&ram, 0x1234);
+        let id = scope.add_dynamic_symbol("dyn", "int", 4, caddr, 0xDEADBEEF);
         assert_eq!(scope.num_symbols(), 1);
         assert!(id != 0);
         // The dynamic entry should be in dynamic_entries with the hash.
@@ -5453,9 +5527,9 @@ mod tests {
         assert_eq!(entry.get_hash(), 0xDEADBEEF);
         assert!(entry.is_dynamic());
         assert_eq!(entry.size, 4);
-        // Use-limit should contain the caddr.
-        assert!(entry.in_use(Address::new(0x1234)));
-        assert!(!entry.in_use(Address::new(0x9999)));
+        // Use-limit should contain the caddr (database.cc:119 inRange leg).
+        assert!(entry.in_use(caddr));
+        assert!(!entry.in_use(Address::with_space(&ram, 0x9999)));
     }
 
     #[test]
@@ -5671,12 +5745,20 @@ mod tests {
         // database.cc:1548 — addMapPoint maps a whole Symbol to an address.
         let mut scope = Scope::new(2, "func", 1); // non-global
         let id = scope.add_symbol("v", "int");
-        scope.add_map_point(id, Address::new(0x1000), Address::new(0x5000), 4, None);
+        // The usepoint and the inUse probes are Ghidra-VALID code addresses
+        // (database.cc:1151 insertRange fires on !isInvalid); mint spaced
+        // addresses so the database.cc:119 inRange leg is observable.
+        use crate::space::{space_flags, AddrSpace, SpaceType};
+        let ram = AddrSpace::new_space(
+            SpaceType::Processor, "ram", false, 8, 1, 3, space_flags::HASPHYSICAL, 0, 0,
+        );
+        let usepoint = Address::with_space(&ram, 0x5000);
+        scope.add_map_point(id, Address::new(0x1000), usepoint, 4, None);
         let entry = scope.find_addr(Address::new(0x1000));
         assert!(entry.is_some());
         // Use-limit must be restricted to the usepoint.
-        assert!(entry.unwrap().in_use(Address::new(0x5000)));
-        assert!(!entry.unwrap().in_use(Address::new(0x9999)));
+        assert!(entry.unwrap().in_use(usepoint));
+        assert!(!entry.unwrap().in_use(Address::with_space(&ram, 0x9999)));
     }
 
     #[test]

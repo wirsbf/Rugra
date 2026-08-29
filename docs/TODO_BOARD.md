@@ -2,7 +2,81 @@
 
 本文档的顶部“活跃 wave”是当前任务唯一事实源；后文保留历史阶段记录，不能作为当前优先级。
 
-## 活跃 wave：`W-2026-08-27-DSH-FLEET`（2026-08-27 10:15 起接续 TRIFUNC-GAP；goal 至周五 16:00）
+## 活跃 wave：`W-2026-08-29-FLEET10`（2026-08-29 起接续 DSH-FLEET；goal=函数文本级对齐）
+
+> 基线(root 亲测 @ master `3fb97c11`,即 08-28 wave backlog 落库 + 2 个 char 域陈旧测试修复):
+> cargo check 绿;`cargo test --lib -- --test-threads=1` = 1626 passed / 17 failed / 5 ignored(已知集:
+> 1 normalize_branches CONTINUE 断言 + 16 FFI_TEST_LOCK 级联 FUNCDATA-TESTS-FLAKY-0001,零新增)。
+> **fresh formal E2E @ `3fb97c11`**(2026-08-29,stdout sha=`19bba32a62a900c92037253baf4b01292524707329d467f3384f15d490b56da6`,
+> 2970 行/97807 bytes,归档 `/dev/shm/rugra-3fb97c11-curl.c`):124/124、skeleton=3528、numbering=0、
+> **defects=2**(`EMPTYELSE-REGRESS-0001`:getparameter.constprop.0 非法嵌套 `else{`(函数内~156 行)+
+> glob_word 空 `else{}`(~60 行);08-28 快照 defects=0 之后由 backlog 引入;结构域已路由 w-identify,
+> printc 侧知会 w-anondecl)。输出体量 60KB→97.8KB(golden 96.2KB),内容恢复大幅推进。
+> Top skeleton:getparameter 715 / main 710 / next_url 284 / glob_range 226 / file2string 191 /
+> myprogress 186 / match_url 148 / glob_word 135 / parseconfig 129 / glob_set 124。
+> **httpd 回归(root 亲测 @ `3fb97c11`)**:仅输出 5/30 函数(08-28 基线 29)——首因
+> `ap_parse_vhost_addrs` panic `typefactory.rs:1999 LowlevelError: TypeFactory alignment map not
+> initialized`(get_type_pointer enforce=true 打在 align_map 未接线工厂)→锁中毒→23 worker PoisonError
+> 级联;归 `HTTPD-TFALIGN-PANIC-0001`(路由 r-plt-httpd);curl corpus 无此 panic。
+> 编排:root(主 Agent,唯一 master writer + 集成者)+ **10 个常驻后台子 Agent**(5 writer + 5 reader);
+> worktree 隔离（`/home/wirs/.cache/rugra-w2-*`）+ 独占写集租约 + 专属 CARGO_TARGET_DIR + flock 共享资源；
+> 子 Agent 交付（branch commit + 报告 `/tmp/rugra-reports/<name>-2026-08-29.md`）→ root 串行 cherry-pick →
+> flock 构建 → E2E → 差分门禁（defects 必须 0）→ 更新本板。板面 wave 节 root 维护，子 Agent 不直接改本板。
+> **已集成(2026-08-29 21:45)**:`FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001` 实现半(w-newvarnode2 交付 2a55097b:queryProperties/
+> setSymbolProperties/setFlags 完整接线,含三处 review 修正;cherry-pick 到 master 编译绿/测试=已知17/E2E 2134·0·1 无回归;
+> 双侧 fixture 未交付→状态 PARTIAL,fixture 验收仍开放)。
+> **舰队轮换(2026-08-29 21:50,第二轮预算耗尽后)**:myprog(存活)+新派 w-identify3/w-anondecl3/w-registry3(收尾交付)
+> +w-nonconverge(NONCONVERGE-P0,merge/action 域);全舰队改用【里程碑即时 commit+报告增量追加】纪律防预算耗尽丢工作;
+> 20 分钟周期监控自动化已建立(探活/抢救/验收/补位)。
+> Agent 完成即由 root 从队列补位。**并发上限 2026-08-29 下午起调整为 5(用户指令)**;当前 5 活跃:
+> w-anondecl2/w-newvarnode2/w-identify2/w-registry2(续作 writer)+w-myprog-cluster(myprogress/glob_range 簇)。
+> **机制 C 复核已闭环**:`R-DESCEND-CROSSREVIEW-2026-08-29.md` 对 `55783411` 判 **APPROVE**(五 Rule+簿记链
+> 四类语义全 MATCH,复核者独立重跑 E2E 确认 defects=0/numbering=1/skeleton=2134);其 F1 跟进项已修——
+> `RULE-NEGATEIDENTITY-CALCMASK-BOUNDARY-0001`(f91eb0265 引入的 `size>=64` bits/bytes 混淆,改用忠实
+> calc_mask 8 字节饱和,master `99ae9c35`,Cross-Review: APPROVE 随附)。
+> 首批 5 reader 已终止(r-getparam 交付 jumptable 256→88 截断/cmp $0x57 guard/BOOL_AND pullback 情报;
+> r-f2s/r-plt 留 diag 分支 agent/reader-*;r-main/r-parseconfig 无报告,结论需重查)。
+> **已集成**:`PTRSUB-SWITCH-CAST-RESIDUAL-0001` phase A(w-switchfix2,fixture+runner 三模式绿,
+> master `46dd1f02..c6939910`,registry 已登记,overall=MISMATCH 13 条登记差异)。
+> 补位队列(按 55783411 基线 diff 排序):
+> ①descend 修复的机制 C 独立 Cross-Review(ruleaction.rs,优先);②myprogress(102)+glob_range(93,含 DUPDECL)簇;
+> ③glob_word(83)+my_get_line(82);④helpf(73)+my_get_token;⑤REGA-HUGEHELP(heritage.rs);
+> ⑥剩余 inrefs 直接写点 sweep(清单=/tmp/rugra-reports/INREFS_SWEEP_INVENTORY_2026-08-29.md,已知生产者已清,剩余点需逐个对照 Ghidra 判定)。
+> ②簇 root 预分析(2026-08-29):myprogress 三信号=(a) Rugra 发 `/* WARNING: Type propagation algorithm not settling */`
+> 而 golden 无(ActionInferTypes 传播不收敛本身是分歧);(b) golden 有 DWARF 局部名 `format/line/outline`(typed stack 数组),
+> Rugra 全 raw `auStack_*`(DWARF 局部符号未接线到 varmap);(c) 多余寄存器 temp 声明(`int8 in_RSP`/`Var8`/`extraout_XMM1_Qa`)。
+> glob_range=`int iVar3;` 声明两次(golden 用 iVar4,per-prefix 计数器回退,VARMAP-GLOBRANGE-DUPDECL-0001)。
+> **当前权威基线(master `99ae9c35`,2026-08-29 21 时口径修正)**:curl E2E skeleton **2134**/defects **0**/numbering 1(glob_range
+> DUPDECL)/ABORTED 0/raw 命名 16——【口径警告】getparameter+match_url 因 `NONCONVERGE-GETPARAM-MATCHURL-0001`
+> 超时无输出,其 ~672+83 diff 未计入,可比口径≈2889(与 2d78b5af 的 2881 相当;descend 修复的真实收益=10 函数命名/结构/defects
+> 质量+2 函数转入待修非收敛);httpd 仍 5/30+24 panics(HTTPD-TFALIGN-PANIC-0001 在查)。Top:main 696/next_url 144/file2string 134/
+> parseconfig 131/myprogress 102/glob_range 93/glob_set 88/glob_word 83/my_get_line 82/helpf 73;PLT stub 族 ~24×9-11。
+> 历史参考:2d78b5af=skeleton 2881/defects 1;3fb97c11=skeleton 3528/defects 2(簿记腐蚀期)。
+
+### W-2026-08-29-FLEET10 认领租约（10 并发；write-set 互斥已核）
+
+| Agent | ID | 类型 | 独占 write-set | 交付物 |
+|---|---|---|---|---|
+| w-newvarnode2(续作)+root | `VARNODE-DESCEND-BOOKKEEPING-0001` | **FIXED @ master `55783411`**(root 修复;w-newvarnode 审计立功:簿记基础设施本就完备,真凶=ruleaction.rs 五处直接 inrefs 写) | `src/ruleaction.rs`+`docs/api/ruleaction.md`(已落库) | 修复:Piece2Zext/Sext→`fd.op_remove_input(0)`+`op_set_opcode`;TrivialBool 六分支完整移植(仅 slot1 常量+`V&&0→#0`/`V||1→#1`/`V^^1→NEGATE` 补齐);NegateIdentity→`fd.new_constant`+三步簿记;NotDistribute→`op_set_input`+`op_insert_input`。E2E@55783411:ABORTED 10→**0**、raw 命名 1077→**16**、defects 2→**0**(getparameter/glob_word else 缺陷证实为簿记腐蚀下游,随修复消失)、skeleton 3528→**2134**(优于 2d78b5af 健康基线 2881);cargo test 失败集=已知 17 零新增。Cross-Review: PENDING(机制 C,待派);审计证据=/tmp/w-newvarnode-curl-probe.err(49 条悬空);coreaction.rs:1371(ActionCse)核实未注册非生产者不动 |
+| unassigned | `VARMAP-GLOBRANGE-DUPDECL-0001` | IN_PROGRESS(w-myprog-cluster 认领中) | `src/varmap.rs`+docs(w-myprog-cluster 租约) | glob_range `iVar3 declared twice`(numbering=1);descend 修复后管线完整运行暴露;验收=numbering 回 0+双侧 fixture |
+| unassigned(P0) | `NONCONVERGE-GETPARAM-MATCHURL-0001` | OPEN(root 亲证,descend 修复暴露) | 待认领(嫌疑 `src/merge.rs` allocate_copy_trim/trim_op_input 域+循环源待定位) | getparameter+match_url 在 55783411+ 非收敛(180s 仍未完成→watchdog TIMEOUT,无输出)。主仓构建:worker panic 于 `Merge::allocate_copy_trim→op_set_input→add_descend`"Free varnode has multiple descendants"(varnode.rs:2500=Ghidra varnode.cc:336 自身不变量);诊断构建(同源码!):不 panic 但 ~120s 内 19+ 轮完整管线重启/oppool1×77,ops 稳定 1246,mid-pass 被杀——**同一源码两个构建行为分歧(panic vs 不收敛)=codegen/堆布局敏感的迭代序依赖,红旗单独登记**。golden 两函数均无 "Exceeded maximum restarts"/"Type propagation" 警告=Ghidra 干净收敛;Rugra 的 maxrestarts cap 已在位(action.rs:1103 镜像 cc:565-575,universal=1)。诊断工具:worktree /tmp/rugra-freediag(census 钩子 6150cdc8+freevn 探针),`RUGRA_ACTION_CENSUS=1`;证据=/dev/shm/rugra-census2.err+rugra-bt.stderr.log。验收:两函数在 30s 内收敛或按 Ghidra 语义停机+输出与 golden 对比;panic 消除且不引入绕过。 |
+| unassigned | `CODEGEN-DIVERGENCE-REDFLAG-0001` | OPEN(登记) | 无(调查项) | 同源码两构建(主仓 target vs /tmp/rugra-freediag-target)对 getparameter 确定性地产 panic vs 不收敛——指向 Arc 指针作键的有序容器/迭代序依赖(堆布局=codegen 相关)。凡"测试偶发/不可复现"类问题先对照此项。 |
+| w-anondecl | `PTRSUB-TYPED-DECL-RESIDUAL-0001` | writer | `src/printc.rs`, `docs/api/printc.md`, `tests/oracle/printc_anonymous_pointer_decl_1204.{cc,rs,metadata.json}`, `tools/run_printc_anonymous_pointer_decl_oracle.sh`, branch `agent/anondecl-0001` | 匿名 PTR/ARRAY/CODE 声明 type-token 修复（printc.cc:143-166 buildTypeStack + :264-303 pushTypeStart/genericTypeName）；验收=六函数 typeless decl 清零 + gcc 诊断不劣化 + defects/numbering=0 |
+| w-newvarnode | `FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001` | writer | `src/{funcdata,varnode,database}.rs`, 对应 `docs/api`, fixture 三件套+runner+registry, branch `agent/newvarnode-tail` | newVarnode symbol tail 完整移植（create→assignHigh→lane check→localmap queryProperties→setSymbolProperties/setFlags）；验收=双侧 fixture datatype/mapentry/high symbol/flags/异常 MATCH |
+| w-identify | `BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001` | writer | `src/{block,blockaction}.rs`, `docs/api/{block,blockaction}.md`, `tests/oracle/block_identify_internal_1204.*`+runner+registry, branch `agent/identify-boundary` | identifyInternal 真实 parent/成对边重写/组件顺序/无 f_dead（block.cc:940-963）；验收=双侧 fixture 完整突变 MATCH + goto fixture 110 行 diff→0 |
+| w-registry | `ORACLE-REGISTRY-IMPACT-CONTINUITY-0001` | writer | `tools/{generate_function_ledger,oracle_registry,select_fixtures}.py`, `tests/oracle/fixture_registry.json`, `docs/alignment_audit/{FUNCTION_LEDGER.json,FUNCTION_MAP.md,FUNCTION_PROTOCOL_MAP.json,FUNCTION_DEPENDENCY_DAG.json,FUNCTION_ID_CONTINUITY.json}`, `tools/README.md`, branch `agent/registry-continuity-w3` | 账本/registry 连续性重建：transition/tombstone/introduced 人工审核→一次性重建四生成物→ledger check/lint/selector 全 exit 0 |
+| w-switchfix | `PTRSUB-SWITCH-CAST-RESIDUAL-0001`(phase A) | writer(fixture-only) | `tests/oracle/ptrsub_switch_cast_1204.{cc,rs,metadata.json}`, `tools/run_ptrsub_switch_cast_oracle.sh`, branch `agent/switchcast-fixture` | 诊断 fixture：锁定同一 IR/CFG/type state 下 glob_set switch 表达式树双侧观察，定位最早 cast-churn 分叉；实现 write-set 由 fixture 结论另行认领 |
+| r-main | `TRI4-MAIN-RESID-0001` | reader | 无（只读+报告） | main() 228 vs 476 行：最早 IR/CFG 分叉、双侧完整函数、最小修复 write-set 提案 |
+| r-getparam | `TRI4-GETPARAM-CALLPROTO-0001` | reader | 无 | getparameter callspec/prototype 最早分叉 + oracle fixture 设计 |
+| r-parseconfig | `TRI4-PARSECONFIG-STRUCT-0001` | reader | 无 | parseconfig finalize 41→2 塌缩：首个错误组合/父子关系 + 最小 block write-set |
+| r-f2s-nexturl | `TRI4-FILE2STRING-IR-0001` + `TRI4-NEXTURL-STATE-0001` | reader | 无 | file2string 缺失语句的最早 Action/Rule 归属 + next_url SSA/merge/varmap 最早状态分叉 |
+| r-plt-httpd | `PLTSTUB-WARNLOSS-0001` + `HTTPD-ADDDESCEND-THROW-0001` | reader | 无 | 51→27 PLT 警告丢失首叉（unknown-model+lock 生命周期）+ httpd addDescendant throw 残余 MISMATCH 清算 |
+
+> 冲突矩阵：printc.rs=w-anondecl 独占；funcdata/varnode/database=w-newvarnode；block/blockaction=w-identify；
+> heritage/coreaction 本 wave 无人写（留给补位 REGA/REGB）；examples/* 本 wave 冻结（root 集成时统一处理）。
+> reader 一律在自有 worktree 构建（`CARGO_TARGET_DIR` 专属），E2E 输出只写 `/tmp/<agent>-*`，禁触 `result/`。
+
+## 历史 wave：`W-2026-08-27-DSH-FLEET`（2026-08-27 10:15 起接续 TRIFUNC-GAP；goal 至周五 16:00）
 
 > 基线（root 亲测 @ master `5462eebd`）：124 函数 / defects 0 / numbering 0 / skeleton 3128 / 0 panic / 0 timeout。
 > 三函数严格字节差：hugehelp **12** / progressbarinit **6** / my_fwrite **8**。

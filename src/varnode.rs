@@ -1523,34 +1523,83 @@ impl Varnode {
 
     // Ghidra: varnode.cc:410 Varnode::setSymbolProperties
     /// Set symbol properties on this Varnode from a SymbolEntry.
-    /// Faithful to `setSymbolProperties` (varnode.cc:410-424): the entry's
-    /// `updateType` runs first (a type-locked symbol replaces the varnode's
-    /// type with its sized piece, database.cc:135-144), then the mapentry
-    /// link for type-locked symbols, then the entry flags (minus typelock).
-    pub fn set_symbol_properties(&mut self, entry: &Arc<RwLock<SymbolEntry>>) {
-        // cc:413: res = entry->updateType(this).
-        let (vn_addr, vn_size) = (*self.get_addr(), self.get_size() as i32);
-        let sized = entry.read().unwrap().update_type(
-            &mut crate::type_system::typefactory::TypeFactory::shared_default()
-                .write()
-                .unwrap(),
-            vn_addr,
-            vn_size,
-        );
-        if let Some(dt) = sized {
-            self.update_type_lock(dt, true, true);
+    /// Faithful to `setSymbolProperties` (varnode.cc:410-424):
+    /// ```text
+    /// bool res = entry->updateType(this);
+    /// if (entry->getSymbol()->isTypeLocked()) {
+    ///   if (mapentry != entry) {
+    ///     mapentry = entry;
+    ///     if (high != (HighVariable *)0)
+    ///       high->setSymbol(this);
+    ///     res = true;
+    ///   }
+    /// }
+    /// setFlags(entry->getAllFlags() & ~Varnode::typelock);
+    /// return res;
+    /// ```
+    /// The cc:415 `mapentry != entry` pointer identity maps to
+    /// [`crate::database::SymbolEntry::same_storage_identity`]; the
+    /// cc:417-418 `high->setSymbol(this)` reverse connection
+    /// (variable.cc:245) needs the Varnode's own Arc, so this is an
+    /// associated function mirroring `copy_symbol_arc`.
+    /// (FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001: the missing HighVariable
+    /// symbol link was the head of that TODO.)
+    pub fn set_symbol_properties_arc(
+        self_arc: &std::sync::Arc<RwLock<Varnode>>,
+        entry: &Arc<RwLock<SymbolEntry>>,
+    ) -> bool {
+        // cc:413: res = entry->updateType(this) — the typelock-gated
+        // getSizedType + vn->updateType(dt,true,true) pair
+        // (database.cc:135-144). updateType returns whether the
+        // data-type changed.
+        let mut res = {
+            let mut this = self_arc.write().unwrap();
+            let (vn_addr, vn_size) = (this.loc, this.get_size() as i32);
+            let sized = entry.read().unwrap().update_type(
+                &mut crate::type_system::typefactory::TypeFactory::shared_default()
+                    .write()
+                    .unwrap(),
+                vn_addr,
+                vn_size,
+            );
+            match sized {
+                Some(dt) => this.update_type_lock(dt, true, true),
+                None => false,
+            }
+        };
+        // cc:414-421: type-locked symbol + mapentry identity guard, then
+        // the HighVariable symbol reverse link — the setSymbol call lives
+        // INSIDE the `mapentry != entry` guard in the oracle, so a
+        // not-type-locked symbol or an already-linked entry never touches
+        // the HighVariable here.
+        let (is_type_locked, already_linked) = {
+            let e = entry.read().unwrap();
+            let is_type_locked = e.symbol.read().unwrap().is_type_locked();
+            let already_linked = match self_arc.read().unwrap().mapentry.as_ref() {
+                Some(current) => current.read().unwrap().same_storage_identity(&e),
+                None => false,
+            };
+            (is_type_locked, already_linked)
+        };
+        if is_type_locked && !already_linked {
+            // cc:415-419: mapentry = entry; if (high != 0)
+            // high->setSymbol(this); res = true.
+            let high = {
+                let mut this = self_arc.write().unwrap();
+                this.mapentry = Some(entry.clone());
+                this.high.clone()
+            };
+            // cc:417-418: if (high != 0) high->setSymbol(this).
+            if let Some(high) = high {
+                high.write().unwrap().set_symbol(self_arc);
+            }
+            res = true;
         }
-        let e = entry.read().unwrap();
-        // cc:414-421: if the entry's symbol is type-locked, set mapentry.
-        let is_type_locked = e.symbol.read().unwrap().is_type_locked();
-        if is_type_locked {
-            self.mapentry = Some(entry.clone());
-        }
-        // cc:422: setFlags(entry->getAllFlags() & ~typelock)
-        let all_flags = e.get_all_flags();
-        drop(e);
-        let flags_to_set = all_flags & !varnode_flags::TYPELOCK;
-        self.set_flags(flags_to_set);
+        // cc:422: setFlags(entry->getAllFlags() & ~typelock).
+        let flags_to_set =
+            entry.read().unwrap().get_all_flags() & !varnode_flags::TYPELOCK;
+        self_arc.write().unwrap().set_flags(flags_to_set);
+        res
     }
 
     // Ghidra: varnode.cc:429 Varnode::setSymbolEntry
