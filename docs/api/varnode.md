@@ -1146,3 +1146,22 @@ heritage/pool 的 setDef 路径在大函数上呈二次方。现 `transition_def
 
 - `is_stack_store()`（varnode.hh:265）：`(addlflags & stack_store) != 0`——是否由显式 CPUI_STORE 产生（RuleStoreVarnode 转 STORE→COPY 时设置，ruleaction.cc:4333；ActionDirectWrite 的 COPY 源追踪消费，coreaction.cc:1382）。flag 常量 `STACK_STORE=0x100` 先前已存在且 RuleStoreVarnode 已写入，仅缺访问器。
 - `set_stack_store()`（varnode.hh:338）：`addlflags |= stack_store`。
+
+## 2026-08-29（FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001）：set_symbol_properties_arc（HighVariable 反连 + 守卫内 setSymbol）
+
+`set_symbol_properties(&mut self, entry)` 重构为关联函数
+`set_symbol_property_arc(self_arc, entry) -> bool`（varnode.cc:410-424 全量）：
+
+- cc:413 `res = entry->updateType(this)`：typelock-gated `get_sized_type` +
+  `update_type_lock(dt, true, true)`（database.cc:135-144）。
+- cc:414-421 `mapentry != entry` 指针恒等用
+  `SymbolEntry::same_storage_identity`（symbol Arc ptr_eq + addr/offset/size/hash，
+  代理 C++ 指针比较；Database 查询返回克隆 Arc 无法用 Arc 恒等）。命中时
+  `mapentry = entry`、`high->setSymbol(this)`（variable.cc:245-275）、`res = true`。
+  **setSymbol 调用在守卫内**：非 typelock 或已链接的 entry 不触碰 HighVariable
+  （早期版本把 setSymbol 提到守卫外，会把旧 mapentry 的 symbol/offset 重写并清
+  symboldirty——已修正）。
+- cc:422 `setFlags(entry->getAllFlags() & ~typelock)`。
+
+需要的调用方（funcdata.rs new_varnode_symbol_tail / mapGlobals 路径）全部改为
+`Varnode::set_symbol_properties_arc(vn, &entry_arc)` 形态。
