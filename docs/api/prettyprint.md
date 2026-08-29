@@ -11,6 +11,10 @@ EmitNoMarkup::<方法>` 注解（锁定 oracle 的 `EmitNoMarkup`（hh:547-594�
 - 删除 `reconcile_pointer_arith()`（原 :255-320）：唯一调用点早在
   mark_varnode_used LOAD 检测修复后即被注释（原 :917），仅存自递归引用。
   第七 pass 区域的注释同步改为"已删除"记录。
+- 删除 `recover_struct_fields_anon()`（原 :2105-2262，158 行）：2026-06-23
+  匿名 struct 字段恢复实验的遗留物，实验当时即被判定需要 P-code 级类型传播
+  （typedef 作用域非法、`->` 无 struct 布局不合法），全仓零调用点。
+  其 `EmitNoMarkup::recoverStructFieldsAnon` 伪造注解随函数一并消失。
 
 ## 2026-08-28：RPN variable metadata bridge
 
