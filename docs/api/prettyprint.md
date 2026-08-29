@@ -637,3 +637,10 @@ decl 走查为空导致伪 body 内的 iVar4 被重复注入 `  int iVar4;`（nu
 前缀——紧凑形态的前缀吞掉开括号，配对 `)` 残留产出畸形 `if (true ))`。修复为按实际
 匹配的前缀切片；紧凑形态（剩余无 `(` 前导）补剥尾部 `)`。语料 3 处紧凑 `while( true )`
 均无 body 缩进裸 `break;`，该路径当前未触发；修复为潜伏缺陷封堵。
+
+### 2026-08-30（续）：PRINTC-WHILEIF-FOLD-PREFIX-0001 回归测试 + fixture 重钉
+
+`pretty_print_while_break_fold_compact_prefix`（prettyprint.rs tests）锁定两种头部
+拼写的折叠条件切片：紧凑 `while( true )` 折叠为 `if (true) x = 1;`（无悬垂括号），
+空格 `while (c)` 形态不变。双侧 fixture `printc_pending_brace_emit_1204` 的
+`comparand_sha256.rugra_prettyprint` 随测试加入重钉（runner 重验 overall=MATCH）。

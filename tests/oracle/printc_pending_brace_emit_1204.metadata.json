@@ -51,14 +51,14 @@
    "statement": "MATCH",
    "raw": "MATCH"
   },
-  "evidence": "oracle binary built from the locked tree (libdecomp.a at e40ed130) and Rugra rlib at 56736b9d produce identical statement and raw streams for all three cases (2026-08-30, w-printc2)"
+  "evidence": "oracle binary built from the locked tree (libdecomp.a at e40ed130) and Rugra rlib (src at the printc_pending_brace_emit_1204 fixture commit, incl. the while-break-fold regression test) produce identical statement and raw streams for all three cases (2026-08-30, w-printc2)"
  },
  "known_divergences": [],
  "comparand_sha256": {
   "cpp_fixture_sha256": "6ef6480d73dd01715d022b1e8a9301c4e2ba4c634df2460a91effbb9febc06db",
   "rust_fixture_sha256": "ca5f0df32da95788e012d64bc87b75b8c31486c95490e4da76e2bfff7faea5bc",
   "rugra_printc": "8089431e07e39dc65cc2b2d6ff5da9b66d33f814be5a2f0647a952acca001048",
-  "rugra_prettyprint": "50c4b11b0d50a532b1c44462616ca3cb8738e415ad708c7311b62b265f325866",
+  "rugra_prettyprint": "04317434844c73a8a70fff44f61ddfd419b1f72a45cf51feae462f8d2529cdd6",
   "ghidra_printc_cc": "2c0f5565bb76c8ec4dc291e3166dec924fa063c9d86f4d14f06e1fc1550c12b4",
   "ghidra_printc_hh": "efbc5aaa7c1a8f4a2072401689bf0c6de053705d90bfc85d79aba295554558b8",
   "ghidra_prettyprint_cc": "1a9466456f0a229639625e9f8e70507e83815e49b19bfb1fea6945978074189f",

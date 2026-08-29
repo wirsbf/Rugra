@@ -5174,6 +5174,61 @@ mod tests {
     // Statement shape mirrors production: every statement inside the block
     // opens with its own tag_line (emit_block_ops tag_line per statement).
     #[test]
+    fn pretty_print_while_break_fold_compact_prefix() {
+        use crate::prettyprint::Emit;
+        // PRINTC-WHILEIF-FOLD-PREFIX-0001: the while-break collapse must
+        // slice the condition by the header form that actually matched.
+        // The compact `while( true )` header (printc.cc:3023-3028) has the
+        // open paren INSIDE the matched prefix; slicing with the spaced
+        // prefix length left the paired `)` dangling and the fold emitted
+        // a malformed `if (true ))`.
+        let mut e = super::EmitPrettyPrint::new();
+        e.begin_function();
+        e.tag_line(0);
+        e.tag_op("while");
+        let id1 = e.open_paren("(");
+        e.spaces(1, 0);
+        e.print("true");
+        e.spaces(1, 0);
+        e.close_paren(")", id1);
+        e.begin_block();
+        e.tag_line(0);
+        e.print("x = 1;");
+        e.tag_line(0);
+        e.print("break;");
+        e.end_block();
+        e.end_function();
+        let out = e.get_output();
+        assert!(
+            out.contains("if (true) x = 1;"),
+            "compact while( true ) break-fold must slice the condition without the dangling paren, got:\n{}",
+            out
+        );
+
+        // Control: the spaced `while (c)` form folds unchanged.
+        let mut e = super::EmitPrettyPrint::new();
+        e.begin_function();
+        e.tag_line(0);
+        e.tag_op("while");
+        e.print(" ");
+        let id2 = e.open_paren("(");
+        e.print("c");
+        e.close_paren(")", id2);
+        e.begin_block();
+        e.tag_line(0);
+        e.print("y = 2;");
+        e.tag_line(0);
+        e.print("break;");
+        e.end_block();
+        e.end_function();
+        let out = e.get_output();
+        assert!(
+            out.contains("if (c) y = 2;"),
+            "spaced while (c) break-fold must keep its condition, got:\n{}",
+            out
+        );
+    }
+
     fn pretty_print_overflow_whiledo_header_spaces() {
         use crate::prettyprint::Emit;
         let mut e = super::EmitPrettyPrint::new();
