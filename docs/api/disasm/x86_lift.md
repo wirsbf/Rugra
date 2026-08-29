@@ -77,3 +77,15 @@
   BOOL_OR/INT_SBORROW/BOOL_XOR/INT_SUB)。
 - 此前两族完全未实现(0 op,直接丢指令)。双侧投影:adc(16 op)/
   sbb(15 op)op-for-op MATCH(flagprobe9)。
+
+### 2026-08-30:X86LIFT-FLAG-PCODE-0001 — cmovcc/setcc(w-iced c4)
+- `cmovCC` = ia.sinc `:CMOV^cc Reg,rm`(ia.sinc:3043-3046)`{ local tmp = rm;
+  if (!cc) goto inst_next; Reg = tmp; }`:cc 条件 op 序 → tmp(COPY 源寄存器
+  /LOAD 源内存)→ 32-bit dst 旧值 INT_ZEXT 进父寄存器 → BOOL_NEGATE(cond) →
+  CBRANCH(inst_next,!cc) → COPY dst←tmp。此前完全未实现(0 op;httpd 语料
+  90 处)。
+- `setCC` = ia.sinc `:SET^cc rm8`(ia.sinc:4595)`{ rm8 = cc; }`:cc 条件 op
+  序 → COPY dst:1←cond(reg dst)/STORE(addr,cond)(mem dst)。此前完全未
+  实现(0 op;httpd 语料 90 处)。
+- 复用 emit_cc_cond(与 jcc 同一 cc 表);双侧投影 11 个采样变体 op-for-op
+  MATCH(flagprobe10),其余变体走同一代码路径。

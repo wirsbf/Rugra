@@ -1181,6 +1181,105 @@ impl X86Lifter {
         self.emit_alu_tail(dst, out, false, ops);
     }
 
+    // RUGRA-GLUE: ia.sinc :CMOV^cc constructors (ia.sinc:3043-3046) —
+    // `{ local tmp = rm; if (!cc) goto inst_next; Reg = tmp; }` — lifted
+    /// Lift cmovcc (cond ops, tmp copy, old-dst zext for 32-bit, negate,
+    /// CBRANCH over the move, final COPY).
+    fn lift_cmov(&mut self, inst: &Instruction, cc: &str, ops: &mut Vec<PcodeOpRaw>) {
+        if inst.operands.len() != 2 {
+            return;
+        }
+        // destination must be a register
+        let (dst_vn, parent64) = match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, size } => {
+                let vn = match Self::get_register(name, *size) {
+                    Some(v) => v,
+                    None => return,
+                };
+                let parent64 = if *size == 4 {
+                    Self::parent64_name(name).and_then(|p| Self::get_register(p, 8))
+                } else {
+                    None
+                };
+                (vn, parent64)
+            }
+            _ => return,
+        };
+        // bind source address (memory) before the body
+        let src_bound = match self.bind_operand(&inst.operands[1], dst_vn.size, ops) {
+            Some(b) => b,
+            None => return,
+        };
+        // condition computation (cc table) — flag reads hoisted by SLEIGH
+        // before `local tmp = rm`
+        let Some(cond) = self.emit_cc_cond(cc, ops) else {
+            return;
+        };
+        // local tmp = rm (register source → COPY; memory source → LOAD)
+        let tmp = match &src_bound {
+            BoundOperand::MemAddr { addr, size } => self.emit_load(*size, addr, ops),
+            BoundOperand::Reg(vn) | BoundOperand::Const(vn) => {
+                let t = self.alloc_tmp(vn.size);
+                let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+                op.add_input(vn.clone());
+                op.set_output(t.clone());
+                ops.push(op);
+                t
+            }
+        };
+        // 32-bit destinations zext the OLD value before the branch
+        if let Some(parent) = parent64 {
+            let mut op_zext = PcodeOpRaw::new(OpCode::CPUI_INT_ZEXT as i32);
+            op_zext.add_input(dst_vn.clone());
+            op_zext.set_output(parent);
+            ops.push(op_zext);
+        }
+        // if (!cc) goto inst_next
+        let not_cond = self.emit_bool_not(cond, ops);
+        let next = inst.address.as_u64() + inst.length as u64;
+        let mut op_cbr = PcodeOpRaw::new(OpCode::CPUI_CBRANCH as i32);
+        op_cbr.add_input(VarnodeRaw::new(AddressSpace::Ram, next, 8));
+        op_cbr.add_input(not_cond);
+        ops.push(op_cbr);
+        // Reg = tmp
+        let mut op_copy = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+        op_copy.add_input(tmp);
+        op_copy.set_output(dst_vn);
+        ops.push(op_copy);
+    }
+
+    // RUGRA-GLUE: ia.sinc :SET^cc rm8 (ia.sinc:4595) — `{ rm8 = cc; }` —
+    /// Lift setcc (cond ops, then COPY to the 1-byte register or STORE for
+    /// memory destinations).
+    fn lift_setcc(&mut self, inst: &Instruction, cc: &str, ops: &mut Vec<PcodeOpRaw>) {
+        if inst.operands.len() != 1 {
+            return;
+        }
+        // bind destination (register direct / memory address) first
+        let Some(dst_op) = inst.operands.first() else {
+            return;
+        };
+        let dst_bound = match self.bind_operand(dst_op, 1, ops) {
+            Some(b) => b,
+            None => return,
+        };
+        let Some(cond) = self.emit_cc_cond(cc, ops) else {
+            return;
+        };
+        match &dst_bound {
+            BoundOperand::Reg(vn) => {
+                let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+                op.add_input(cond);
+                op.set_output(vn.clone());
+                ops.push(op);
+            }
+            BoundOperand::MemAddr { addr, .. } => {
+                self.emit_store_v(addr, cond, ops);
+            }
+            BoundOperand::Const(_) => {}
+        }
+    }
+
     // RUGRA-GLUE: ia.sinc :AND/:OR/:XOR constructors — `logicalflags(); Rmr =
     // Rmr OP imm; [check_*32_dest]; resultflags(Rmr)`; CF/OF cleared before
     // any operand LOAD; memory forms re-LOAD per use like add.
@@ -1602,6 +1701,12 @@ impl X86Lifter {
             }
             "sbb" => {
                 self.lift_sbb(inst, &mut ops);
+            }
+            other if other.starts_with("cmov") => {
+                self.lift_cmov(inst, &other[4..], &mut ops);
+            }
+            other if other.starts_with("set") => {
+                self.lift_setcc(inst, &other[3..], &mut ops);
             }
             "cmp" => {
                 self.lift_cmp(inst, &mut ops);
