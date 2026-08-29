@@ -1962,3 +1962,38 @@ emit_structured_whiledo 的 overflow 臂头序列按 printc.cc:3023-3028 逐调�
 遗留后处理层的配套承认见 docs/api/prettyprint.md 同日条目(` )` 修剪豁免 +
 四处 loop-ctx 检测补紧凑形)。回归:curl `while( true )` ×3 逐字节匹配
 golden,3 处 if-break 保持,httpd 逐字节不变。
+
+### 2026-08-30：PRINTC-STRUCTEMIT-MAIN-IVAR4-DUP-0001 — PendingBrace 动态模型移植（else { vs else if 的判定根因）
+
+**Oracle（printc.cc:2872-2948 + prettyprint.hh:102/443-457/1129-1137）**：`emitBlockIf` 在
+`isSet(pending_brace)` 时 `emit->setPendingPrint(&pendingBrace)` 安装一个**可取消的延迟开括号**
+（`PendingBrace::callback` = `openBraceIndent(OPEN_CURLY, option_brace_ifelse)`，
+option_brace_ifelse 默认 same_line，printc.cc:1591）。该延迟括号在**下一次 `tagLine()`** 时触发
+（`emitPending`，prettyprint.cc:920/930；EmitNoMarkup::tagLine hh:557 不触发），即条件块一旦
+发射真实语句就在父级 `else` 后面补出 ` {`；条件块为空时 printc.cc:2900-2902 才
+`cancelPendingPrint() + spaces(1)` 合并成 `else if(...)`。函数尾部 cc:2946-2948 仅当括号已
+触发（`getIndentId() >= 0`）才补 `closeBraceIndent`。
+
+**Rugra 缺陷**：静态模拟——`emit_structured_if` 入口一次读取 `PENDING_BRACE` mod 决定
+`merge_else_if`，条件块发射语句后仍按合并路径打印 `space + if`，同时丢失括号与换行。
+MAIN-RC3 翻门后 main 的 fopen 区域暴露：`p_Stack_210 = fopen(...); if (...) {` 同行 +
+裸 `else`，prettyprint `backfill_missing_locals` 把该行误判为函数签名注入 `int iVar4;`
+（numbering+1 的直接来源）。
+
+**修复（本 commit）**：
+- `prettyprint.rs` Emit trait 新增 4 方法：`set_pending_brace`/`cancel_pending_print`/
+  `has_pending_print`/`pending_brace_fired`（hh:446/451/457 + printc.cc:2877-2879 对应）。
+  状态是 **Emit 基类**语义：EmitNoMarkup 与 EmitPrettyPrint 都保存槽位；仅
+  EmitPrettyPrint::tag_line 在 push 前调用私有 `emit_pending()`（cc:920/930 顺序：
+  emitPending → checkbreak）触发 ` {`；EmitNoMarkup 不触发（hh:557），因此其路径
+  恒走 cancel+spaces(1) 合并——与 oracle 字节一致。
+- `printc.rs emit_structured_if`：入口按 cc:2884-2885 安装；条件发射 + 注释树后按
+  cc:2900-2905 `has_pending_print ? (cancel + spaces(1)) : tag_line`；goto 臂与函数尾
+  按 cc:2946-2948 在 `pending_brace_fired` 时补 `close_brace_indent`（goto 臂先
+  防御性 cancel，oracle 该路径 PendPrint 悬垂无既定行为）。
+
+**验收**：curl 3119/0/**0**（numbering 1→0；main fopen 区域与 golden 同构：
+`else {` + 标号 + 语句 + 换行 `if`）；httpd 2211/5/0（skeleton -1、defects 持平，无回归）。
+curl 全量 skeleton 变化（+9 净）逐处核对均为同一形态修复：8 处裸 `else`+同行 `if`
+恢复为 golden 的 `else {` 块结构（main/parseconfig/GetStr/SetHTTPrequest/glob 系列），
+`else if` 合并点 6→6 不变（合并臂行为保持）。

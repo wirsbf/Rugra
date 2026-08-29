@@ -121,6 +121,36 @@ pub trait Emit {
     /// Tag a statement line
     fn tag_line(&mut self, _indent: i32) {}
 
+    // Ghidra: prettyprint.hh:446 Emit::setPendingPrint (PendPrint slot)
+    /// Install a cancelable deferred open-brace (printc.cc:2872-2876
+    /// PendingBrace). The oracle holds a PendPrint* whose callback runs
+    /// `openBraceIndent(OPEN_CURLY, style)` prior to the NEXT tagLine()
+    /// (emitPending, prettyprint.hh:1129-1137) unless cancelled first.
+    /// Plain-text emitters other than EmitPrettyPrint have no pending slot
+    /// in the oracle (only EmitMarkup/EmitPrettyPrint call emitPending,
+    /// prettyprint.cc:129/136/920/930), so the trait default is a no-op and
+    /// `has_pending_print` reads false — callers then always take the
+    /// plain tagLine arm, exactly like the oracle's EmitNoMarkup paths.
+    fn set_pending_brace(&mut self, style: BraceStyle) {
+        let _ = style;
+    }
+
+    // Ghidra: prettyprint.hh:451 Emit::cancelPendingPrint
+    /// Clear the pending print without running it (printc.cc:2901, the
+    /// `else if` merge consuming an un-fired brace).
+    fn cancel_pending_print(&mut self) {}
+
+    // Ghidra: prettyprint.hh:457 Emit::hasPendingPrint
+    /// Is the pending print still installed (un-fired and un-cancelled)?
+    fn has_pending_print(&self) -> bool { false }
+
+    // Ghidra: printc.cc:2877-2879 PendingBrace::getIndentId
+    /// True iff this emitter's installed pending brace HAS fired (the
+    /// oracle exposes indentId, which is >= 0 exactly after the callback
+    /// ran; printc.cc:2946-2948 closes the brace only then). Reads false
+    /// when no pending brace was installed this round.
+    fn pending_brace_fired(&self) -> bool { false }
+
     // Ghidra: prettyprint.cc:61 Emit::openBraceIndent
     /// Emit an opening brace and start a new indent level. Faithful to
     /// `Emit::openBraceIndent(const string&, brace_style)`
@@ -373,6 +403,16 @@ fn reconcile_int_minus_pointer(line: &str) -> String {
 pub struct EmitNoMarkup {
     output: String,
     indent: i32,
+    /// Ghidra: prettyprint.hh:102 Emit::pendPrint — the PendPrint slot is
+    /// BASE-CLASS state present in every emitter (setPendingPrint /
+    /// cancelPendingPrint / hasPendingPrint, prettyprint.hh:446-457); only
+    /// the FIRE (emitPending) is EmitPrettyPrint/EmitMarkup-specific
+    /// (prettyprint.cc:920/930/129/136 — EmitNoMarkup::tagLine at
+    /// prettyprint.hh:557 never calls it). With this emitter a pending
+    /// brace therefore stays installed through the condition block, and
+    /// printc.cc:2900-2902 always takes the cancel+spaces(1) merge —
+    /// mirroring the oracle byte-for-byte.
+    pending_brace: Option<BraceStyle>,
 }
 
 impl Default for EmitNoMarkup {
@@ -388,6 +428,7 @@ impl EmitNoMarkup {
         Self {
             output: String::new(),
             indent: 0,
+            pending_brace: None,
         }
     }
 
@@ -1915,12 +1956,26 @@ impl EmitNoMarkup {
                         // Extract the condition. The opener looks like `while (COND) {`.
                         // Strip the `while ` prefix and the trailing ` {`, then strip one layer
                         // of matching outer parentheses so we don't produce `if ((COND))`.
-                        let after_while = &t["while ".len()..];
+                        // PRINTC-WHILEIF-FOLD-PREFIX-0001: the opener detection
+                        // above (this pass) accepts both header spellings —
+                        // the spaced `while (cond)` and the oracle-compact
+                        // `while( true )` (printc.cc:3023-3028) — but this
+                        // slice hardcoded the SPACED prefix. The compact
+                        // prefix `while(` consumes the open paren, so the
+                        // paired `)` survived as a stray token and the fold
+                        // emitted a malformed `if (true ))`. Slice the prefix
+                        // that actually matched, and for the compact form
+                        // (no leading `(` remains) trim the dangling `)`.
+                        let after_while = if t.starts_with("while(") {
+                            &t["while(".len()..]
+                        } else {
+                            &t["while ".len()..]
+                        };
                         let inner = after_while.trim_end().trim_end_matches('{').trim();
                         let cond_str = if inner.starts_with('(') && inner.ends_with(')') {
                             &inner[1..inner.len() - 1]
                         } else {
-                            inner
+                            inner.strip_suffix(')').unwrap_or(inner).trim()
                         };
                         // Collect non-blank body lines between the while-opener and the break;
                         let body_lines: Vec<&String> = ((iwb + 1)..bi)
@@ -2702,7 +2757,17 @@ impl EmitNoMarkup {
             // names "undeclared" (the declared-name walk only covers the
             // fragment), and re-injects the declarations INSIDE the block.
             let cond_continuation = trimmed.starts_with('(');
-            let sig_shape = !control_flow_opener
+            // MAIN-IVAR4-DUP hardening: a C function signature line never
+            // contains a `;`. After the MAIN-RC3 gate flip exposed
+            // same-line `stmt; if (...) {` forms (missing tagLine), the
+            // `contains(" *")` arm (e.g. `(_IO_FILE *)`) matched such a
+            // line as a signature, the decl walk found an empty block, and
+            // every auto-named variable in the fake "body" (iVar4) got
+            // re-injected as `  int iVar4;` mid-function — the numbering+1.
+            // Gate any line with a semicolon out of signature detection.
+            let no_semicolon = !trimmed.contains(';');
+            let sig_shape = no_semicolon
+                && !control_flow_opener
                 && !cond_continuation
                 && trimmed.contains('(')
                 && (trimmed.starts_with("int ") || trimmed.starts_with("long ")
@@ -3733,11 +3798,30 @@ impl Emit for EmitNoMarkup {
 
     // Ghidra: prettyprint.hh:547 EmitNoMarkup::tagLine
     fn tag_line(&mut self, _indent: i32) {
+        // prettyprint.hh:557: `*s << endl; <indent spaces>` — NO emitPending:
+        // with this emitter an installed PendPrint stays pending through
+        // tagLine, so printc.cc:2900-2902 always sees hasPendingPrint and
+        // merges the else-if. (The fire lives in EmitPrettyPrint only.)
         // Skip leading newline if we just opened a block (output ends with \n)
         if !self.output.ends_with('\n') {
             self.output.push('\n');
         }
         self.do_indent();
+    }
+
+    // Ghidra: prettyprint.hh:446 Emit::setPendingPrint (base-class slot)
+    fn set_pending_brace(&mut self, style: BraceStyle) {
+        self.pending_brace = Some(style);
+    }
+
+    // Ghidra: prettyprint.hh:451 Emit::cancelPendingPrint
+    fn cancel_pending_print(&mut self) {
+        self.pending_brace = None;
+    }
+
+    // Ghidra: prettyprint.hh:457 Emit::hasPendingPrint
+    fn has_pending_print(&self) -> bool {
+        self.pending_brace.is_some()
     }
 
     // Ghidra: prettyprint.cc:61 Emit::openBraceIndent
@@ -4242,6 +4326,14 @@ impl<T: Clone + Default> CircularQueue<T> {
 /// default low level, prettyprint.cc:545).
 pub struct EmitPrettyPrint {
     lowlevel: EmitNoMarkup,
+    /// Ghidra: prettyprint.hh:102 Emit::pendPrint — one PendPrint slot.
+    /// Rugra stores the deferred brace style directly (printc.cc:2872-2880
+    /// PendingBrace: callback == openBraceIndent(OPEN_CURLY, style)).
+    pending_brace: Option<BraceStyle>,
+    /// Ghidra: printc.cc:2877-2879 PendingBrace::indentId — starts -1 and
+    /// is set by the callback, so >= 0 iff the brace fired. Used by
+    /// printc.cc:2946-2948 to decide the deferred closeBraceIndent.
+    pending_brace_fired: bool,
     indentstack: Vec<i32>,
     spaceremain: i32,
     maxlinesize: i32,
@@ -4267,6 +4359,8 @@ impl EmitPrettyPrint {
     pub fn new() -> Self {
         let mut e = EmitPrettyPrint {
             lowlevel: EmitNoMarkup::new(),
+            pending_brace: None,
+            pending_brace_fired: false,
             indentstack: Vec::new(),
             spaceremain: 100,
             maxlinesize: 100,
@@ -4667,6 +4761,19 @@ impl EmitPrettyPrint {
         self.lowlevel.post_process();
     }
 
+    // Ghidra: prettyprint.hh:1129-1137 Emit::emitPending
+    /// Run the installed pending print, if any (clearing the slot first,
+    /// like the oracle). PendingBrace::callback (printc.cc:2872-2876) is
+    /// `indentId = emit->openBraceIndent(OPEN_CURLY, style)`: the space +
+    /// '{' tokens enter the queue at this point, ahead of the tagLine that
+    /// triggered the fire.
+    fn emit_pending(&mut self) {
+        if let Some(style) = self.pending_brace.take() {
+            self.pending_brace_fired = true;
+            self.open_brace_indent("{", style);
+        }
+    }
+
     // RUGRA-GLUE: take low-level output (EmitNoMarkup::getOutput)
     /// Flush and hand back the final C text, running the low level's
     /// `get_output` post-processing exactly like the plain emitter did.
@@ -4878,6 +4985,11 @@ impl Emit for EmitPrettyPrint {
     /// the current indent level); a positive indent is the absolute
     /// one-line override (line_t, prettyprint.hh:922-923).
     fn tag_line(&mut self, indent: i32) {
+        // prettyprint.cc:920/930: emitPending() runs BEFORE checkbreak —
+        // a deferred brace (PendingBrace, printc.cc:2872-2880) fires right
+        // here, pushing its space + '{' tokens ahead of this line-break
+        // token so the bytes read `... else {`.
+        self.emit_pending();
         self.checkbreak();
         let tok = self.tokqueue.push();
         if indent > 0 {
@@ -4886,6 +4998,29 @@ impl Emit for EmitPrettyPrint {
             tok.tag_line();
         }
         self.scan();
+    }
+
+    // Ghidra: prettyprint.hh:446 Emit::setPendingPrint (via PendingBrace)
+    fn set_pending_brace(&mut self, style: BraceStyle) {
+        self.pending_brace = Some(style);
+        // Fresh PendingBrace stack object: indentId resets to -1
+        // (printc.cc:2872-2875).
+        self.pending_brace_fired = false;
+    }
+
+    // Ghidra: prettyprint.hh:451 Emit::cancelPendingPrint
+    fn cancel_pending_print(&mut self) {
+        self.pending_brace = None;
+    }
+
+    // Ghidra: prettyprint.hh:457 Emit::hasPendingPrint
+    fn has_pending_print(&self) -> bool {
+        self.pending_brace.is_some()
+    }
+
+    // Ghidra: printc.cc:2877-2879 PendingBrace::getIndentId >= 0
+    fn pending_brace_fired(&self) -> bool {
+        self.pending_brace_fired
     }
 
     // Ghidra: prettyprint.cc:937 EmitPrettyPrint::beginReturnType

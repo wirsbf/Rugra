@@ -4202,12 +4202,26 @@ impl PrintC {
             return;
         };
 
-        // printc.cc:2884-2891: pending-brace is consumed by this level, and
-        // no_branch/only_branch from the parent are not propagated into the
-        // if components.  Rugra has no deferred Emit callback, so the parent
-        // marks an else-if with PENDING_BRACE and this child suppresses only
-        // the otherwise mandatory leading tagLine.
-        let merge_else_if = self.is_set(print_mods::PENDING_BRACE);
+        // printc.cc:2884-2885: if (isSet(pending_brace))
+        //   emit->setPendingPrint(&pendingBrace);
+        // The parent's else arm marked this child else-if-shaped by setting
+        // PENDING_BRACE (below, printc.cc:2929-2932). Ghidra's PendingBrace
+        // is a DEFERRED open brace: it fires at the child's next tagLine
+        // (emitPending, prettyprint.cc:920/930) — i.e. as soon as the
+        // condition block emits any real statement — yielding
+        // `else {` + condition statements + `if` on its own new line. It is
+        // cancelled ONLY when the condition emitted nothing after the
+        // parent's `else` (printc.cc:2900-2902), producing the merged
+        // `else if(...)`. MAIN-IVAR4-DUP fix: the previous static emulation
+        // decided the merge from the mod alone, so an else-if child whose
+        // condition block carried statements (main's fopen region) lost
+        // BOTH the brace and the `if` line break. option_brace_ifelse
+        // defaults to same_line (printc.cc:1591).
+        let installed_pending_brace = self.is_set(print_mods::PENDING_BRACE);
+        if installed_pending_brace {
+            self.emit
+                .set_pending_brace(crate::prettyprint::BraceStyle::SameLine);
+        }
         self.push_mod();
         self.unset_mod(
             print_mods::NO_BRANCH
@@ -4223,11 +4237,19 @@ impl PrintC {
         self.pop_mod();
 
         // printc.cc:2899-2905: comments in the condition tree are drained
-        // before the if keyword.  A pending else-if stays on the current line.
+        // before the if keyword, then the pending brace decides the line
+        // form. hasPendingPrint is true only when the condition block
+        // emitted NOTHING since the parent's `else` (no tagLine fired the
+        // brace): cancel it and merge with one space (`else if(...)`);
+        // otherwise — the brace fired mid-condition, or none was installed —
+        // the `if` starts on a new line.
         self.emit_comment_block_tree(&condition);
-        if merge_else_if {
-            self.emit.print(" ");
+        if self.emit.has_pending_print() {
+            // printc.cc:2900-2902: cancelPendingPrint(); spaces(1);
+            self.emit.cancel_pending_print();
+            self.emit.spaces(1, 0);
         } else {
+            // printc.cc:2905: Otherwise start the "if" on a new line.
             self.emit.tag_line(0);
         }
 
@@ -4256,6 +4278,15 @@ impl PrintC {
             };
             self.emit.print(" ");
             self.emit_goto_statement(target_addr, branch_type);
+            // printc.cc:2917 falls through to popMod + the printc.cc:2946-2948
+            // deferred pending-brace close. Cancel any still-pending
+            // (un-fired) brace first: the oracle's PendPrint slot would
+            // dangle past the emitBlockIf stack frame here (printc.cc:2872),
+            // so an unconditional later fire is not an oracle behavior.
+            self.emit.cancel_pending_print();
+            if installed_pending_brace && self.emit.pending_brace_fired() {
+                self.emit.close_brace_indent("}");
+            }
             self.pop_mod();
             return;
         }
@@ -4300,6 +4331,13 @@ impl PrintC {
             }
         }
 
+        // printc.cc:2946-2948: if (pendingBrace.getIndentId() >= 0)
+        //   emit->closeBraceIndent(CLOSE_CURLY, pendingBrace.getIndentId());
+        // Close the brace a FIRED PendingBrace opened right after the
+        // parent's `else` (the else-arm child consumed it above).
+        if installed_pending_brace && self.emit.pending_brace_fired() {
+            self.emit.close_brace_indent("}");
+        }
         self.pop_mod();
     }
     // RUGRA-GLUE: emit_structured_whiledo (no Ghidra counterpart found)

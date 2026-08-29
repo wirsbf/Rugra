@@ -616,3 +616,24 @@ printc 侧已按该字节序列发射(显式空格 token);遗留文本后处理�
 断言最终输出同时含 `while( true ) {` 与 `if (c) break;`(两层都锁)。
 E2E:curl `while( true )` ×3 与 golden 逐字节一致,3 处 if-break 保持,
 3104→3162(翻转提交之后)/0/1 不变;httpd 与基线逐字节相同(2178/4/0)。
+
+### 2026-08-30：PRINTC-STRUCTEMIT-MAIN-IVAR4-DUP-0001 配套 — PendPrint 槽 + backfill 签名 `;` 门 + while-if 折叠前缀
+
+**PendPrint 槽（Emit trait 4 新方法）**：`set_pending_brace`/`cancel_pending_print`/
+`has_pending_print`/`pending_brace_fired`。oracle 的 PendPrint 槽是 **Emit 基类**状态
+（prettyprint.hh:102/446-457），`emitPending` 触发只在 EmitPrettyPrint/EmitMarkup::tagLine
+（prettyprint.cc:920/930/129/136）；EmitNoMarkup::tagLine（hh:557）不触发，故其路径恒为
+"已安装未触发"→ printc.cc:2900-2902 cancel+spaces(1) 合并 else-if。Rugra 两侧均按此实现：
+EmitNoMarkup 只存槽不触发；EmitPrettyPrint 在 tag_line push 前调用私有 `emit_pending()`
+（`open_brace_indent("{", style)`，PendingBrace::callback printc.cc:2872-2876）。
+
+**backfill_missing_locals 签名 `;` 门（MAIN-IVAR4-DUP 第 2 层）**：MAIN-RC3 翻门暴露的
+`stmt; if (...) {` 同行形态（`(_IO_FILE *)` 命中 `contains(" *")` 臂）曾被误判为函数签名，
+decl 走查为空导致伪 body 内的 iVar4 被重复注入 `  int iVar4;`（numbering+1）。C 函数签名
+行不含 `;`，`sig_shape` 增加 `!trimmed.contains(';')` 门。
+
+**while→if 折叠前缀（PRINTC-WHILEIF-FOLD-PREFIX-0001）**：折叠 opener 识别同时接受
+`while (` 与紧凑 `while(`（printc.cc:3023-3028），但条件切片硬编码 `"while ".len()`
+前缀——紧凑形态的前缀吞掉开括号，配对 `)` 残留产出畸形 `if (true ))`。修复为按实际
+匹配的前缀切片；紧凑形态（剩余无 `(` 前导）补剥尾部 `)`。语料 3 处紧凑 `while( true )`
+均无 body 缩进裸 `break;`，该路径当前未触发；修复为潜伏缺陷封堵。
