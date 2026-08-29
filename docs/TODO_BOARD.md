@@ -28,6 +28,10 @@
 > ①descend 修复的机制 C 独立 Cross-Review(ruleaction.rs,优先);②myprogress(102)+glob_range(93,含 DUPDECL)簇;
 > ③glob_word(83)+my_get_line(82);④helpf(73)+my_get_token;⑤REGA-HUGEHELP(heritage.rs);
 > ⑥剩余 inrefs 直接写点 sweep(清单=/tmp/rugra-reports/INREFS_SWEEP_INVENTORY_2026-08-29.md,已知生产者已清,剩余点需逐个对照 Ghidra 判定)。
+> ②簇 root 预分析(2026-08-29):myprogress 三信号=(a) Rugra 发 `/* WARNING: Type propagation algorithm not settling */`
+> 而 golden 无(ActionInferTypes 传播不收敛本身是分歧);(b) golden 有 DWARF 局部名 `format/line/outline`(typed stack 数组),
+> Rugra 全 raw `auStack_*`(DWARF 局部符号未接线到 varmap);(c) 多余寄存器 temp 声明(`int8 in_RSP`/`Var8`/`extraout_XMM1_Qa`)。
+> glob_range=`int iVar3;` 声明两次(golden 用 iVar4,per-prefix 计数器回退,VARMAP-GLOBRANGE-DUPDECL-0001)。
 > **当前权威基线(master `55783411`)**:skeleton **2134**/defects **0**/numbering 1(glob_range DUPDECL)/ABORTED 0/
 > raw 命名 16;httpd 仍 5/30+24 panics(HTTPD-TFALIGN-PANIC-0001 在查)。Top:main 696/next_url 144/file2string 134/
 > parseconfig 131/myprogress 102/glob_range 93/glob_set 88/glob_word 83/my_get_line 82/helpf 73;PLT stub 族 ~24×9-11。
