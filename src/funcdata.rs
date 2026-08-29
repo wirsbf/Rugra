@@ -6601,24 +6601,27 @@ impl Funcdata {
     /// Build basic blocks from a linear sequence of PcodeOps
     ///
     /// Splits the op list at control flow terminators (BRANCH, CBRANCH, RETURN, CALL)
-    /// and creates basic blocks in `self.bblocks`.
+    /// and at every intra-function jump-target address, then creates basic
+    /// blocks in `self.bblocks`.
     fn build_blocks_from_ops(&mut self, op_refs: &[PcodeOpRef]) {
         if op_refs.is_empty() {
             return;
         }
 
-        // Identify block start indices. Ghidra's basic-block partitioning
-        // (BlockGraph::copyBlocks / Funcdata::structureReset) splits at TWO
-        // kinds of points:
+        // Identify block start points. Ghidra's flow-driven basic-block
+        // partitioning (flow.cc FlowInfo / BlockGraph::copyBlocks) splits at
+        // TWO kinds of points:
         //   (1) after each block terminator (BRANCH/CBRANCH/BRANCHIND/RETURN)
         //   (2) at every jump TARGET address — any address that a BRANCH/
         //       CBRANCH points to must begin a new block, so the target edge
         //       resolves to a block start.
-        // Rugra previously did only (1), which meant jump targets landing in
-        // the middle of a block were unresolvable — the CBRANCH edge was
-        // silently dropped (observed: curl main 56 / global 182 CBRANCH
-        // targets unmatched, losing back-edges and collapsing while-loop
-        // recovery from ~6 to 1).
+        // Rugra previously did only (1) for op-bearing addresses, which meant
+        // jump targets landing in the middle of a block were unresolvable —
+        // the CBRANCH edge was silently dropped (observed: curl main 56 /
+        // global 182 CBRANCH targets unmatched, losing back-edges and
+        // collapsing while-loop recovery from ~6 to 1). The synthetic-boundary
+        // handling below closes the remaining hole: targets whose instruction
+        // emits no p-code at all.
 
         // Build addr -> op-index map for target resolution.
         let mut addr_to_idx: std::collections::HashMap<u64, usize> =
@@ -6629,9 +6632,34 @@ impl Funcdata {
         }
 
         // Collect target op-indices from BRANCH/CBRANCH.
+        //
+        // Resolved target (an op exists at the target address): the op at
+        // the target address starts a new block (Ghidra splits there).
+        //
+        // Unresolved target whose address is inside [baseaddr, baseaddr+size):
+        // Ghidra's flow-driven block formation (flow.cc FlowInfo) makes EVERY
+        // intra-function jump target a block start — in Ghidra every
+        // instruction emits at least one p-code op, so the target address
+        // always names an op. Rugra's lifters can emit ZERO ops for an
+        // instruction (x86_lift.rs:602 push/pop arm, missing movzx/movsx
+        // arms), so the target address may have no op; the faithful CFG
+        // shape is still a block boundary at that address. Insert a
+        // SYNTHETIC block start: the block's start address is the target
+        // address and it absorbs the first ops whose instruction address is
+        // beyond the target. Without this the CBRANCH target edge was
+        // silently dropped, birthing "zombie decision blocks" (CBRANCH
+        // lastOp with <2 out-edges) that violate the branchRemoveInternal
+        // invariant (funcdata_block.cc:203-204 destroys the cbranch exactly
+        // when an out-edge of a 2-way decision is removed — Ghidra never
+        // allows the CBRANCH to outlive its second edge). Unresolved target
+        // outside the function range is a tail-jump/extern flow: keep
+        // dropping the edge.
+        let fn_start = self.baseaddr.as_u64();
+        let fn_end = fn_start + self.size.max(0) as u64;
         let mut target_starts: std::collections::HashSet<usize> =
             std::collections::HashSet::new();
-        for (i, op_ref) in op_refs.iter().enumerate() {
+        let mut synthetic_starts: Vec<(usize, u64)> = Vec::new();
+        for op_ref in op_refs.iter() {
             let (opc, target_offset) = {
                 let op = op_ref.0.read().unwrap();
                 let tgt = match op.opcode {
@@ -6644,48 +6672,79 @@ impl Funcdata {
             };
             if matches!(opc, OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCH) {
                 if let Some(taddr) = target_offset {
-                    if let Some(&tidx) = addr_to_idx.get(&taddr) {
-                        // The op at the target address starts a new block.
-                        // Don't split at index 0 (it's already a start) and
-                        // don't split at i+1 if this branch falls through to
-                        // its target (handled by terminator rule below).
-                        if tidx != 0 {
-                            target_starts.insert(tidx);
+                    match addr_to_idx.get(&taddr) {
+                        Some(&tidx) => {
+                            // The op at the target address starts a new block.
+                            // Don't split at index 0 (it's already a start) and
+                            // don't split at i+1 if this branch falls through to
+                            // its target (handled by terminator rule below).
+                            if tidx != 0 {
+                                target_starts.insert(tidx);
+                            }
+                        }
+                        None => {
+                            if taddr >= fn_start && taddr < fn_end {
+                                // First op index whose instruction address is
+                                // beyond the target (ops are in lift order =
+                                // non-decreasing address). All ops at taddr
+                                // itself would have resolved above.
+                                let k = op_refs
+                                    .iter()
+                                    .position(|o| {
+                                        o.0.read().unwrap().get_addr().as_u64() > taddr
+                                    })
+                                    .unwrap_or(op_refs.len());
+                                synthetic_starts.push((k, taddr));
+                            }
+                            // Target outside this function (tail-call /
+                            // external): skip, the edge is dropped as before.
                         }
                     }
-                    // If target not in addr_to_idx, the target is outside
-                    // this function (e.g. tail-call / external) — skip, the
-                    // edge will be dropped as before.
-                    let _ = i; // suppress unused warning
                 }
             }
         }
 
-        // Combine: block starts = {0} ∪ {terminator+1} ∪ {jump targets}.
-        let mut block_starts: std::collections::BTreeSet<usize> =
-            std::collections::BTreeSet::new();
-        block_starts.insert(0);
+        // Combine into ordered block-start entries (op-index, start-address):
+        //   {entry op 0} ∪ {terminator+1} ∪ {resolved jump targets} ∪
+        //   {synthetic boundaries at unresolved intra-function targets}.
+        // Sorting by (index, address) keeps a synthetic boundary (same index,
+        // smaller address) ahead of the real block start at that index; dedup
+        // collapses identical pairs. Blocks then span
+        // [entry[m].index .. entry[m+1].index); consecutive synthetic
+        // entries (or one at the tail) produce empty blocks, which receive
+        // fall-through edges below — the CFG shape Ghidra would build from
+        // the same jump targets.
+        let mut block_starts: Vec<(usize, u64)> = Vec::new();
+        block_starts.push((0, op_refs[0].0.read().unwrap().get_addr().as_u64()));
         for (i, op_ref) in op_refs.iter().enumerate() {
-            let op = op_ref.0.read().unwrap();
-            if op.opcode.is_block_terminator() && i + 1 < op_refs.len() {
-                block_starts.insert(i + 1);
+            let is_term = op_ref.0.read().unwrap().opcode.is_block_terminator();
+            if is_term && i + 1 < op_refs.len() {
+                block_starts.push((
+                    i + 1,
+                    op_refs[i + 1].0.read().unwrap().get_addr().as_u64(),
+                ));
             }
         }
         for tidx in target_starts {
-            block_starts.insert(tidx);
+            block_starts.push((
+                tidx,
+                op_refs[tidx].0.read().unwrap().get_addr().as_u64(),
+            ));
         }
-        let block_starts: Vec<usize> = block_starts.into_iter().collect();
+        block_starts.extend(synthetic_starts);
+        block_starts.sort_unstable();
+        block_starts.dedup();
 
         // Create basic blocks
         let mut blocks: Vec<Arc<RwLock<BlockBasic>>> = Vec::new();
-        for (block_idx, &start) in block_starts.iter().enumerate() {
+        for (block_idx, &(start, start_addr)) in block_starts.iter().enumerate() {
             let end = if block_idx + 1 < block_starts.len() {
-                block_starts[block_idx + 1]
+                block_starts[block_idx + 1].0
             } else {
                 op_refs.len()
             };
 
-            let block_addr = op_refs[start].0.read().unwrap().get_addr();
+            let block_addr = crate::address::Address::new(start_addr);
             let block = Arc::new(RwLock::new(BlockBasic::new(block_idx as i32, block_addr)));
 
             // Add ops to this block
@@ -6710,14 +6769,27 @@ impl Funcdata {
         }
 
         // Add fallthrough edges between consecutive blocks
-        // Also resolve BRANCH and CBRANCH targets to add the branch edges
+        // Also resolve BRANCH and CBRANCH targets to add the branch edges.
+        // A block with no ops (synthetic boundary at an unresolved jump
+        // target, or between two adjacent synthetic boundaries) falls
+        // through to the next block: it stands in for real instructions the
+        // lifter emitted no p-code for, which fall through the same way.
         for i in 0..blocks.len() {
+            let block_empty = {
+                let b = blocks[i].read().unwrap();
+                b.get_ops().is_empty()
+            };
+            if block_empty {
+                // No guard may be held across add_edge: it write-locks both
+                // endpoints, and read→write on the same RwLock self-deadlocks.
+                if i + 1 < blocks.len() {
+                    self.bblocks.add_edge(blocks[i].clone(), blocks[i + 1].clone());
+                }
+                continue;
+            }
             let (last_opcode, branch_target_offset) = {
                 let b = blocks[i].read().unwrap();
                 let ops = b.get_ops();
-                if ops.is_empty() {
-                    continue;
-                }
                 let last_op = ops.last().unwrap().0.read().unwrap();
                 let target = match last_op.opcode {
                     OpCode::CPUI_CBRANCH | OpCode::CPUI_BRANCH => {
@@ -11346,6 +11418,209 @@ mod tests {
         // becomes, with the self-loop target splitting at op1:
         //   [op0] | [op1(CBRANCH, self-loop)] | [op2, op3]
         assert_eq!(fd.bblocks.get_size(), 3);
+    }
+
+    // FUNCDATA-ZOMBIE-DECISION-ORIGIN-0001 fixture (Rugra side).
+    //
+    // Oracle contract: Ghidra's flow-driven block formation makes EVERY
+    // intra-function jump target a block start, and branchRemoveInternal
+    // (funcdata_block.cc:203-204) destroys a CBRANCH exactly when one of its
+    // two out-edges is severed — so a CBRANCH never outlives its second
+    // out-edge. Oracle-side witness: golden ghidra_httpd_1204.c
+    // ap_strcasecmp_match emits LAB_0012e022 for the jump target 0x2e022,
+    // the exact address whose instruction (movslq) lifts to zero p-code in
+    // Rugra and used to make the CBRANCH edge unresolvable (the "zombie
+    // decision block" origin; 260 occurrences across httpd before the fix,
+    // 0 after — see /tmp evidence in the task report).
+    //
+    // Case 1: CBRANCH whose intra-function target address has NO op (the
+    // lifter emitted no p-code for the target instruction) must still get a
+    // synthetic block boundary at the target address and BOTH out-edges —
+    // no zombie.
+    #[test]
+    fn test_build_blocks_synthetic_target_creates_block_no_zombie() {
+        let mut fd = Funcdata::new("zombie_origin", Address::new(0x1000), 0x40);
+
+        // Instruction addresses simulate a real lift (SeqNum carries the
+        // instruction address). The target 0x1020 has NO op — like a `pop`
+        // under x86_lift.rs:602's no-op arm.
+        let mut eq = PcodeOpRaw::new(OpCode::CPUI_INT_EQUAL as i32);
+        eq.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 1));
+        eq.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8));
+        eq.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+        eq.set_seq_num(crate::address::SeqNum::new(Address::new(0x1000), 0));
+
+        let mut cb = PcodeOpRaw::new(OpCode::CPUI_CBRANCH as i32);
+        cb.add_input(VarnodeRaw::new(AddressSpace::Ram, 0x1020, 8));
+        cb.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 1));
+        cb.set_seq_num(crate::address::SeqNum::new(Address::new(0x1005), 0));
+
+        let mut copy = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+        copy.set_output(VarnodeRaw::new(AddressSpace::Register, 0x00, 8));
+        copy.add_input(VarnodeRaw::new(AddressSpace::Const, 1, 8));
+        copy.set_seq_num(crate::address::SeqNum::new(Address::new(0x1007), 0));
+
+        let mut ret = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+        ret.add_input(VarnodeRaw::new(AddressSpace::Register, 0x00, 8));
+        ret.set_seq_num(crate::address::SeqNum::new(Address::new(0x1009), 0));
+
+        // Tail instruction AFTER the synthetic target 0x1020 (its own op
+        // gets absorbed by the synthetic block started at 0x1020).
+        let mut ret2 = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+        ret2.add_input(VarnodeRaw::new(AddressSpace::Register, 0x00, 8));
+        ret2.set_seq_num(crate::address::SeqNum::new(Address::new(0x1025), 0));
+
+        fd.inject_raw_ops(&[eq, cb, copy, ret, ret2]);
+
+        // A block must start exactly at the target address 0x1020.
+        let synth = (0..fd.bblocks.get_size())
+            .filter_map(|i| fd.bblocks.get_block(i))
+            .find(|b| b.read().unwrap().get_start_addr().as_u64() == 0x1020)
+            .expect("synthetic block at unresolved target 0x1020 must exist");
+        // The synthetic block falls through to the next block.
+        assert_eq!(synth.read().unwrap().size_out(), 1);
+        assert!(synth.read().unwrap().size_in() >= 1);
+
+        // The CBRANCH block keeps BOTH out-edges — the zombie-decision
+        // invariant (CBRANCH lastOp => exactly 2 out-edges) holds from birth.
+        let cb_block = (0..fd.bblocks.get_size())
+            .filter_map(|i| fd.bblocks.get_block(i))
+            .find(|b| {
+                b.read()
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<BlockBasic>()
+                    .and_then(|bb| bb.last_op())
+                    .map(|o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                    .unwrap_or(false)
+            })
+            .expect("CBRANCH block must exist");
+        assert_eq!(
+            cb_block.read().unwrap().size_out(),
+            2,
+            "CBRANCH must be born with 2 out-edges (no zombie decision block)"
+        );
+        // Edge 0 must land on the synthetic target block.
+        let edge0 = cb_block.read().unwrap().get_out(0).map(|e| e.point);
+        let edge0 = edge0.expect("CBRANCH edge 0 exists");
+        assert!(Arc::ptr_eq(&edge0, &synth));
+    }
+
+    // Case 2: a target OUTSIDE the function range is external flow
+    // (tail-jump); the edge stays dropped as before — no synthetic block.
+    #[test]
+    fn test_build_blocks_external_target_edge_still_dropped() {
+        let mut fd = Funcdata::new("external_target", Address::new(0x1000), 0x20);
+
+        let mut eq = PcodeOpRaw::new(OpCode::CPUI_INT_EQUAL as i32);
+        eq.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 1));
+        eq.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8));
+        eq.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+        eq.set_seq_num(crate::address::SeqNum::new(Address::new(0x1000), 0));
+
+        let mut cb = PcodeOpRaw::new(OpCode::CPUI_CBRANCH as i32);
+        cb.add_input(VarnodeRaw::new(AddressSpace::Ram, 0x2000, 8)); // outside [0x1000,0x1020)
+        cb.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 1));
+        cb.set_seq_num(crate::address::SeqNum::new(Address::new(0x1005), 0));
+
+        let mut ret = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+        ret.add_input(VarnodeRaw::new(AddressSpace::Register, 0x00, 8));
+        ret.set_seq_num(crate::address::SeqNum::new(Address::new(0x1009), 0));
+
+        fd.inject_raw_ops(&[eq, cb, ret]);
+
+        // No block at the external target.
+        let has_synth = (0..fd.bblocks.get_size())
+            .filter_map(|i| fd.bblocks.get_block(i))
+            .any(|b| b.read().unwrap().get_start_addr().as_u64() == 0x2000);
+        assert!(!has_synth, "external target must not create a block");
+        // Documented residual: the unresolvable external edge is dropped,
+        // leaving the CBRANCH with only its fall-through edge (a Ghidra-
+        // impossible input state; tail-jumps are handled by flow overrides
+        // in Ghidra, see apply_flow_overrides_raw).
+        let cb_block = (0..fd.bblocks.get_size())
+            .filter_map(|i| fd.bblocks.get_block(i))
+            .find(|b| {
+                b.read()
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<BlockBasic>()
+                    .and_then(|bb| bb.last_op())
+                    .map(|o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                    .unwrap_or(false)
+            })
+            .expect("CBRANCH block must exist");
+        assert_eq!(cb_block.read().unwrap().size_out(), 1);
+    }
+
+    // Case 3: branchRemoveInternal invariant lock — severing one edge of a
+    // 2-way decision destroys the CBRANCH (funcdata_block.cc:203-204), so a
+    // decision block can never decay into a zombie state o2->o1->o0.
+    #[test]
+    fn test_branch_remove_internal_destroys_cbranch_at_two_out() {
+        let mut fd = Funcdata::new("branch_remove", Address::new(0x1000), 0x40);
+
+        let mut eq = PcodeOpRaw::new(OpCode::CPUI_INT_EQUAL as i32);
+        eq.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 1));
+        eq.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8));
+        eq.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+        eq.set_seq_num(crate::address::SeqNum::new(Address::new(0x1000), 0));
+
+        let mut cb = PcodeOpRaw::new(OpCode::CPUI_CBRANCH as i32);
+        cb.add_input(VarnodeRaw::new(AddressSpace::Ram, 0x1030, 8));
+        cb.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 1));
+        cb.set_seq_num(crate::address::SeqNum::new(Address::new(0x1005), 0));
+
+        let mut copy = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+        copy.set_output(VarnodeRaw::new(AddressSpace::Register, 0x00, 8));
+        copy.add_input(VarnodeRaw::new(AddressSpace::Const, 1, 8));
+        copy.set_seq_num(crate::address::SeqNum::new(Address::new(0x1007), 0));
+
+        let mut ret = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+        ret.add_input(VarnodeRaw::new(AddressSpace::Register, 0x00, 8));
+        ret.set_seq_num(crate::address::SeqNum::new(Address::new(0x1009), 0));
+
+        let mut ret2 = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+        ret2.add_input(VarnodeRaw::new(AddressSpace::Register, 0x00, 8));
+        ret2.set_seq_num(crate::address::SeqNum::new(Address::new(0x1035), 0));
+
+        fd.inject_raw_ops(&[eq, cb, copy, ret, ret2]);
+
+        let cb_block = (0..fd.bblocks.get_size())
+            .filter_map(|i| fd.bblocks.get_block(i))
+            .find(|b| {
+                b.read()
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<BlockBasic>()
+                    .and_then(|bb| bb.last_op())
+                    .map(|o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                    .unwrap_or(false)
+            })
+            .expect("CBRANCH block must exist");
+        assert_eq!(cb_block.read().unwrap().size_out(), 2);
+
+        // Sever edge 0 (the branch target). At sizeOut==2 the CBRANCH must
+        // be destroyed BEFORE the edge count drops (cc:203-204 order).
+        fd.remove_branch(&cb_block, 0);
+
+        assert_eq!(
+            cb_block.read().unwrap().size_out(),
+            1,
+            "one edge severed leaves the fall-through"
+        );
+        let last_is_cbranch = {
+            let rg = cb_block.read().unwrap();
+            rg.as_any()
+                .downcast_ref::<BlockBasic>()
+                .and_then(|bb| bb.last_op())
+                .map(|o| o.0.read().unwrap().opcode == OpCode::CPUI_CBRANCH)
+                .unwrap_or(false)
+        };
+        assert!(
+            !last_is_cbranch,
+            "branchRemoveInternal must destroy the CBRANCH when sizeOut==2 (funcdata_block.cc:203-204)"
+        );
     }
 
     #[test]

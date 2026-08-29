@@ -540,6 +540,34 @@ disasm / lifting
 
 **已知影响**：httpd 大函数（如 main 12 循环）goto cascade 轮次增加（40 轮），整体变慢但无正确性回归。性能优化是后续工作。
 
+#### 无 op 目标地址的合成边界（2026-08-30 僵尸决策块成因修复）
+
+2026-06-28 的修复只覆盖"目标地址有 op"的分裂。Rugra 提升器对若干指令产出**零个** p-code op
+（x86_lift.rs:602 的 push/pop 臂只处理 call/ret；movzx/movsx 无臂），因此 BRANCH/CBRANCH 的
+目标地址可能不存在任何 op —— 目标既不分裂也不可解析，CBRANCH 目标边被静默丢弃，
+块从出生起就是 "CBRANCH lastOp + 单出边" 的**僵尸决策块**，违反 Ghidra 不变量
+（branchRemoveInternal, funcdata_block.cc:203-204 在 sizeOut==2 时先销毁 cbranch，
+CBRANCH 永不活得比第二条出边久）。实测 httpd 全局 260 例（curl 0 例）；
+下游症状：ap_strcasecmp_match 数据流退化（垃圾常量 0xbaadef）、
+determinedbranch 对畸形块跳过导致 mainloop 反复 structureReset 不收敛。
+
+修复语义（Ghidra 对齐）：Ghidra 的 flow 驱动建块（flow.cc FlowInfo）使**每个函数内跳转目标
+都是块起点**——在 Ghidra 中每个指令至少产出一个 p-code op，目标地址必然命名一个 op；
+Rugra 对 `[baseaddr, baseaddr+size)` 内无 op 的目标地址插入**合成块边界**：块起始地址即目标
+地址，吸收其后第一条地址大于目标的 op；连续合成边界（或尾部）产生空块，空块按指令顺序
+向下一块落空边。函数范围外的目标（tail-jump/extern）维持丢弃行为。
+
+修复后：httpd 僵尸决策块 260→0；ap_strcasecmp_match 0xbaadef 消失、`'*'`(0x2a) 判定与
+do-while 循环骨架恢复（oracle 侧证据：golden ghidra_httpd_1204.c 同函数的 LAB_0012e022
+正是 Ghidra 在同类无 op 目标地址 0x2e022 处的标签）；curl 3068/0/0 字节级不变。
+已知残余：httpd skeleton 2214→2374（+160）、defects 5→5 —— 因 pop/movzx/movsx 指令
+仍无 p-code（disasm/x86_lift.rs 提升缺口，非本文件 write-set），正确 CFG 下这些区域
+以空 if/else 形态出现，等 lifter 补齐后消解。
+
+Rugra 侧回归锁：`test_build_blocks_synthetic_target_creates_block_no_zombie` /
+`test_build_blocks_external_target_edge_still_dropped` /
+`test_branch_remove_internal_destroys_cbranch_at_two_out`（funcdata.rs tests）。
+
 #### 为什么这个方法重要
 如果没有这一步：
 
