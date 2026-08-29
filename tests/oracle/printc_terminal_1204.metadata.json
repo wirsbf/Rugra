@@ -24,7 +24,7 @@
   "ordering": "BlockBasic/PcodeOpRef insertion order",
   "aliasing": "the same target and condition Varnodes are shared by every CBRANCH in each Ghidra case; Rugra constructs equivalent constant inputs per PcodeOp",
   "covered_status": "MATCH",
-  "overall_status": "MISMATCH",
+  "overall_status": "UNTESTED",
   "covered": [
    "no_branch suppresses branch-flagged CBRANCH operations",
    "CPUI_BRANCH is omitted regardless of no_branch",

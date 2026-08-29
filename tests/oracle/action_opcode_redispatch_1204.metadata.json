@@ -163,7 +163,7 @@
   "zero_result_redispatch_status": "MATCH",
   "zero_result_raw_diagnostic_status": "MATCH",
   "target_op_state_status": "MATCH",
-  "overall_status": "MISMATCH",
+  "overall_status": "UNTESTED",
   "matched_projection": [
    "After change, old_tail is abandoned and the INT_ZEXT rule list restarts at new_head/index 0 in both return-value cases.",
    "The zero-result opcode change emits the locked diagnostic byte-for-byte through the Architecture sink.",

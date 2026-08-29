@@ -22,7 +22,8 @@
    "INT_ADD size=7 left=0x00fffffffffffff0 right=0x35"
   ],
   "state": "each output is a written unique varnode with one def; every input slot and descendant cross-reference is attached before the call; each case shares one fixture_unknown TYPE_UNKNOWN object across output and all inputs; COPY SeqNum is unique:0x1000/order=0 and ADD SeqNum is unique:0x1100/order=0; both comparands explicitly receive consumed=uintb::MAX and nzm=constant-offset/uintb::MAX rather than inheriting constructor differences tracked outside this fixture",
-  "fingerprint": "sha256:c8954b6ae0ecf1bcd77936338d9d8591f941aee6fe5722941d7d4e26a1b981c4"
+  "fingerprint": "sha256:c8954b6ae0ecf1bcd77936338d9d8591f941aee6fe5722941d7d4e26a1b981c4",
+  "sha256": "a36e28b3aacf63d51ffa7923ebaf2a4d557a084d26f2bbac0516b58eb2846683"
  },
  "observation": {
   "status": "MATCH",

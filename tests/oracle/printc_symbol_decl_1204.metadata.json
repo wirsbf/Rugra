@@ -1,115 +1,115 @@
 {
-  "schema_version": 1,
-  "fixture_id": "PRINTC-SYMBOL-DECL-0001",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ "schema_version": 1,
+ "fixture_id": "PRINTC-SYMBOL-DECL-0001",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_base_commit": "b6b61d57a2efa19b6a0b57aee8d4dbff4fd7b336",
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec",
+  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+ },
+ "analysis_options": {
+  "api": "Direct ActionNameVars::perform invocation over a synthetic per-case Funcdata body, then direct PrintC::emitLocalVarDecls through a FixturePrintC subclass (Ghidra) / PrintC::snapshot_local_scope + emit_local_var_decls (Rugra); no ActionGroup or other Action runs",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
+  "error_injection": "none",
+  "funcdata": "Locked BfdArchitecture over the pinned Git-blob curl input supplies Ghidra Funcdata, address spaces, TypeFactory, and the ScopeLocal. Each Ghidra case clears prior state via fd.clear(); Rugra builds an isolated synthetic Funcdata per case with an ActionRestructureVarnode-built ScopeLocal.",
+  "ir": "Register leaves are SSA inputs; outputs are written register-space Varnodes defined by COPY(const) ops at explicit code addresses, each with a unique-space reader COPY. HighVariables are assigned by setHighLevel before the Action runs.",
+  "normalization": "No Ghidra/Rugra behavior difference is normalized or removed. Pointer/Arc addresses, ScopeLocal symbol indices, and dynamic-symbol hashes are internal identities and never appear in the records. The $$undef symbol name is pinned by renameSymbol/rename_symbol to $$undef0000000a on both sides so the record never depends on the symbol-id counter. The captured declaration text has its outer whitespace stripped and inner line breaks replaced with '~' identically on both sides (transport normalization only).",
+  "random_seed": "none; ActionNameVars, emitLocalVarDecls, and fixture construction are deterministic"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "source_ref": "b6b61d5:sleigh_specs/x86-64.sla",
+   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
-  "rugra_base_commit": "b6b61d57a2efa19b6a0b57aee8d4dbff4fd7b336",
-  "architecture": "x86:LE:64:default",
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "source_ref": "b6b61d5:sleigh_specs/x86-64.pspec",
+   "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
+  },
   "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec",
-    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "source_ref": "b6b61d5:sleigh_specs/x86-64-gcc.cspec",
+   "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
   },
-  "analysis_options": {
-    "api": "Direct ActionNameVars::perform invocation over a synthetic per-case Funcdata body, then direct PrintC::emitLocalVarDecls through a FixturePrintC subclass (Ghidra) / PrintC::snapshot_local_scope + emit_local_var_decls (Rugra); no ActionGroup or other Action runs",
-    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
-    "error_injection": "none",
-    "funcdata": "Locked BfdArchitecture over the pinned Git-blob curl input supplies Ghidra Funcdata, address spaces, TypeFactory, and the ScopeLocal. Each Ghidra case clears prior state via fd.clear(); Rugra builds an isolated synthetic Funcdata per case with an ActionRestructureVarnode-built ScopeLocal.",
-    "ir": "Register leaves are SSA inputs; outputs are written register-space Varnodes defined by COPY(const) ops at explicit code addresses, each with a unique-space reader COPY. HighVariables are assigned by setHighLevel before the Action runs.",
-    "normalization": "No Ghidra/Rugra behavior difference is normalized or removed. Pointer/Arc addresses, ScopeLocal symbol indices, and dynamic-symbol hashes are internal identities and never appear in the records. The $$undef symbol name is pinned by renameSymbol/rename_symbol to $$undef0000000a on both sides so the record never depends on the symbol-id counter. The captured declaration text has its outer whitespace stripped and inner line breaks replaced with '~' identically on both sides (transport normalization only).",
-    "random_seed": "none; ActionNameVars, emitLocalVarDecls, and fixture construction are deterministic"
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "source_ref": "b6b61d5:sleigh_specs/x86.ldefs",
+   "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
   },
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "source_ref": "b6b61d5:sleigh_specs/x86-64.sla",
-      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "source_ref": "b6b61d5:sleigh_specs/x86-64.pspec",
-      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-      "size": 11721
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "source_ref": "b6b61d5:sleigh_specs/x86-64-gcc.cspec",
-      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-      "size": 12182
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "source_ref": "b6b61d5:sleigh_specs/x86.ldefs",
-      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-      "size": 5390
-    },
-    "binary": {
-      "path": "examples/curl",
-      "source_ref": "b6b61d5:examples/curl",
-      "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
-      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-      "size": 161728
-    },
-    "bfd": {
-      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
-      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
-      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-    }
+  "binary": {
+   "path": "examples/curl",
+   "source_ref": "b6b61d5:examples/curl",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "size": 161728
   },
-  "host_tools": {
-    "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+  "bfd": {
+   "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  }
+ },
+ "host_tools": {
+  "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+ },
+ "input_manifest": {
+  "binary": {
+   "path": "examples/curl",
+   "function": "GetStr@0x36d0"
   },
-  "input_manifest": {
-    "binary": {
-      "path": "examples/curl",
-      "function": "GetStr@0x36d0"
-    },
-    "function": {
-      "name": "GetStr",
-      "address": "0x36d0",
-      "selection": "BfdArchitecture symbol-table queryFunction identity gate (name, address, size 0, archid x86:LE:64:default:gcc)"
-    },
-    "cases": [
-      {
-        "id": "typed_temporaries",
-        "construction": "bool/char/int4/char * register temporaries at 0x48/0x50/0x58/0x60 written by COPY(const) at 0x1000..0x1030 with unique-space readers; ActionNameVars::perform; PrintC emitLocalVarDecls"
-      },
-      {
-        "id": "irregular_input",
-        "construction": "8-byte register input at 0x08 (RCX); ActionNameVars::perform; PrintC emitLocalVarDecls"
-      },
-      {
-        "id": "dynamic_symbol",
-        "construction": "int4 register temporary at 0x58 plus explicit addDynamicSymbol(\"uVar9\", uint4, usepoint 0x36d0, hash 0x1234); PrintC emitLocalVarDecls"
-      },
-      {
-        "id": "undef_and_category",
-        "construction": "int4 temporary at 0x48 + irregular input at 0x08 whose symbol moves to function_parameter category + unnamed addSymbol at register 0x90 renamed to $$undef0000000a; PrintC emitLocalVarDecls"
-      }
-    ],
-    "sha256": "71c542ba8f760ea09867845e9f18c3187d814b1262b271f1876bedc98b26d3d4"
+  "function": {
+   "name": "GetStr",
+   "address": "0x36d0",
+   "selection": "BfdArchitecture symbol-table queryFunction identity gate (name, address, size 0, archid x86:LE:64:default:gcc)"
   },
-  "comparand": {
-    "cpp_fixture_sha256": "1bf58ef315569b9554c4ba9f8f0b11aba9939cd5060f572a80141a71d94b873d",
-    "rust_fixture_sha256": "8411136056b33b9525879019402eedb6283558bab6aa52e2a1a5809f353eadff",
-    "runner_sha256": "0acad1f26e8479d76e135be679a9330974680b5e33005c3dd5a32c14c2a69965",
-    "doc_printc_sha256": "55a5b3ac218f347be126eacf4eb1c96332eeaaaefc1a39564bcd1474654e5258",
-    "rust_crate_tree_sha256": "a1aecafd5b3fe846d2ae52f0b0462f33ba726961d63fa4286f3562dbfe0b5a45",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-printc-symbol-decl-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents"
-  },
-  "overall_status": "MATCH"
+  "cases": [
+   {
+    "id": "typed_temporaries",
+    "construction": "bool/char/int4/char * register temporaries at 0x48/0x50/0x58/0x60 written by COPY(const) at 0x1000..0x1030 with unique-space readers; ActionNameVars::perform; PrintC emitLocalVarDecls"
+   },
+   {
+    "id": "irregular_input",
+    "construction": "8-byte register input at 0x08 (RCX); ActionNameVars::perform; PrintC emitLocalVarDecls"
+   },
+   {
+    "id": "dynamic_symbol",
+    "construction": "int4 register temporary at 0x58 plus explicit addDynamicSymbol(\"uVar9\", uint4, usepoint 0x36d0, hash 0x1234); PrintC emitLocalVarDecls"
+   },
+   {
+    "id": "undef_and_category",
+    "construction": "int4 temporary at 0x48 + irregular input at 0x08 whose symbol moves to function_parameter category + unnamed addSymbol at register 0x90 renamed to $$undef0000000a; PrintC emitLocalVarDecls"
+   }
+  ],
+  "sha256": "71c542ba8f760ea09867845e9f18c3187d814b1262b271f1876bedc98b26d3d4"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "1bf58ef315569b9554c4ba9f8f0b11aba9939cd5060f572a80141a71d94b873d",
+  "rust_fixture_sha256": "8411136056b33b9525879019402eedb6283558bab6aa52e2a1a5809f353eadff",
+  "runner_sha256": "0acad1f26e8479d76e135be679a9330974680b5e33005c3dd5a32c14c2a69965",
+  "doc_printc_sha256": "55a5b3ac218f347be126eacf4eb1c96332eeaaaefc1a39564bcd1474654e5258",
+  "rust_crate_tree_sha256": "a1aecafd5b3fe846d2ae52f0b0462f33ba726961d63fa4286f3562dbfe0b5a45",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-printc-symbol-decl-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents"
+ },
+ "overall_status": "UNTESTED: (B2 downgrade: two-sided pinning incomplete - (B2 canonicalization)..."
 }

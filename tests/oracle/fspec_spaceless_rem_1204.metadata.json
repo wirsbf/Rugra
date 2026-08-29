@@ -15,7 +15,7 @@
   "rugra::fspec::ParamEntry::get_container src/fspec.rs (fspec.cc:295-319 join piece selection)",
   "rugra::fspec::ParamTrial::set_entry src/fspec.rs (fspec.hh:230, Option<index> representation)"
  ],
- "overall_status": "UNTESTED",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
  "status_detail": "The seven-case covered projection byte-matches Ghidra 12.0.4: unjustifiedContainer iterates all entries with the minSize gate before justifiedContain, rejects foreign-space queries inside the walk (address.cc:133 / fspec.cc:269 / per-piece for joins), reaches join entries with the containing PIECE as container, and returns false early on just==0; fillinMapFallback's two trial queries (cc:1656 evaluate and cc:1702 best re-evaluate) are space-aware, so join output entries match register/ram trials per piece (the caller-level getSpace() guard had made them unreachable -> bestentry null -> all trials markNoUse), the best loop overwrites per-entry state, the offmatch contiguity walk, minSize coverage gate, type/cover preference and the firstOnly skip behave per cc:1638-1719. Overall remains UNTESTED because big-endian space rows are unreachable (the transitional enum AddressSpace is little-endian only, ADDRESS-0001) and the fspec.rs-level functions are exercised directly rather than through the full ParamActive recovery pipeline (ActionCopy/FuncCallSpecs closure not part of this fixture).",
  "oracle": {
   "repository": "NationalSecurityAgency/ghidra",
@@ -63,12 +63,12 @@
  "compiler_spec": {
   "id": "fixture",
   "prototype_xml": "no cspec decode; staged ParamEntry resources (uc_plain: reg [0x100,0x107] min2 exclusion force-left + ram [0x100,0x10F] min4 align8 + reg [0x200,0x207] min4 exclusion force-left; uc_join: join ram:0x204+reg:0x100 min4 plus plain reg [0x100,0x107] min4 exclusion force-left; fb_plain: reg [0x100,0x107] min4 exclusion force-left first + ram [0x100,0x10F] min4 align8 first + reg [0x100,0x107] min8 exclusion force-left first; fb_join: join reg:0x104+reg:0x100 min4 first + reg [0x200,0x207] min4 exclusion force-left first; fb_cross: join ram:0x204+reg:0x100 min4 first; fb_first_only x2: reg [0x100,0x107] min4 exclusion force-left first + reg [0x108,0x10F] min4 exclusion force-left NOT-first)",
-  "calling_convention": "hand-built ParamEntry/ParamListStandard(out)/JoinRecord/ParamActive via the staged loader (C++ direct field writes under the class->struct access hack, Rust pub builder setters + set_join_pieces + register_trial_in_space); populateResolver is intentionally NOT called — unjustifiedContainer and fillinMapFallback never touch the resolver"
+  "calling_convention": "hand-built ParamEntry/ParamListStandard(out)/JoinRecord/ParamActive via the staged loader (C++ direct field writes under the class->struct access hack, Rust pub builder setters + set_join_pieces + register_trial_in_space); populateResolver is intentionally NOT called \u2014 unjustifiedContainer and fillinMapFallback never touch the resolver"
  },
  "analysis_options": {
   "api": "Direct production ParamListStandard::unjustifiedContainer and ParamListStandardOut::fillinMapFallback calls on both sides; no Action, Rule, PrintC or Funcdata pipeline",
   "model_state": "uc cases: (space,offset,size) queries against staged entry lists; fb cases: active trials (markActive) registered at distinct slots/addresses, fillin_map_fallback invoked with firstOnly=false except the two first_only cases (true/false pair)",
-  "normalization": "None. uc rows print hit 0/1 verbatim and, for hits only, the res container as space:0xoffset/size; fb rows print the post-call trial order (sortTrials result) with used 0/1, entry as list index (-1 none) and the justified offset — Ghidra's ParamEntry* maps to the index of the identical list element",
+  "normalization": "None. uc rows print hit 0/1 verbatim and, for hits only, the res container as space:0xoffset/size; fb rows print the post-call trial order (sortTrials result) with used 0/1, entry as list index (-1 none) and the justified offset \u2014 Ghidra's ParamEntry* maps to the index of the identical list element",
   "debug_macros": "none on either side",
   "random_seed": "none; construction and queries are deterministic",
   "error_injection": "none; all queries stay on valid inputs"
@@ -132,11 +132,11 @@
  },
  "observation_schema": {
   "format": "31 fixed-order UTF-8 lines with final newline: one envelope, seven case headers, then 7 uc rows, 6 uc rows, 3 fb rows, 2 fb rows, 3 fb rows, 1 fb row and 1 fb row",
-  "branches": "uc rows print unjustifiedContainer's 0/1 and, for hits only, the res container (space:0xoffset/size) — res is never read on miss rows (Ghidra leaves it unwritten); fb rows print the post-call trial state (space, offset, size, used, entry index, justified offset) in the final sorted order",
+  "branches": "uc rows print unjustifiedContainer's 0/1 and, for hits only, the res container (space:0xoffset/size) \u2014 res is never read on miss rows (Ghidra leaves it unwritten); fb rows print the post-call trial state (space, offset, size, used, entry index, justified offset) in the final sorted order",
   "classification": "entry index -1 encodes Ghidra's null ParamEntry*; joff is the raw getOffset() including the setEntry(null,0) clearing value"
  },
  "decisive_semantics": {
-  "references_and_outputs": "unjustifiedContainer writes res (VarnodeData&) ONLY through getContainer on a hit row (miss rows leave the caller's sentinel untouched on both sides); fillinMapFallback mutates every trial in place: setEntry/clearEntry per evaluation, markUsed/markNoUse in the best loop, and the trial VECTOR is reordered by sortTrials — both sides observe the same final order",
+  "references_and_outputs": "unjustifiedContainer writes res (VarnodeData&) ONLY through getContainer on a hit row (miss rows leave the caller's sentinel untouched on both sides); fillinMapFallback mutates every trial in place: setEntry/clearEntry per evaluation, markUsed/markNoUse in the best loop, and the trial VECTOR is reordered by sortTrials \u2014 both sides observe the same final order",
   "loop_bounds_traversal_order": "both functions iterate entry.begin()..entry.end() in list order (uc: cc:1414 minSize gate inside; fb: cc:1646 with the firstOnly skip at cc:1649-1652); the trial loops run 0..getNumTrials(); the offmatch walk (cc:1670-1683) breaks on the first offset mismatch and continues (k++ without offmatch growth) over entry-less trials; the join walk (cc:253) runs pieces least significant first; getContainer's join route (cc:300) also walks pieces least significant first",
   "counters_and_accumulators": "the join walk accumulator res (cc:252) adds vdata.size only for non-containing pieces (cur < 0, including the address.cc:133 foreign-space -1) and returns res+cur on the first containing piece; offmatch accumulates trial sizes only while trial.getOffset() == offmatch (cc:1672); bestcover/bestclass persist across entry iterations (reset only before the loop); k is reset to 0 when offmatch < minSize (cc:1684)",
   "sort_and_comparison_keys": "uc acceptance keys are just < 0 continue / just == 0 early false / otherwise first container wins; fb preference is (k == numTrials) && (type < bestclass || offmatch > bestcover) evaluated per entry in list order; the final sortTrials key is entry null last, then group, then entry identity, then offset for exclusions (alignment==0), else address (reverseStack-aware) then size"
@@ -145,7 +145,7 @@
   "uc_plain_space_guards": "MATCH (7/7 rows: unjustified and aligned containers, just==0 early false on both exclusion and aligned routes, foreign-space rejection at a numerically coincident offset, minSize gate before the walk on two rows)",
   "uc_join_reachability": "MATCH (6/6 rows: PIECE container from both pieces, foreign-piece skip accumulator, numeric-coincidence rejection, low-piece justified early false, minSize gate)",
   "fb_plain_best_cover": "MATCH (3/3 rows: best-cover selection, best-loop overwrite of per-entry state, tie rejection, foreign-space trial no-use, final order by justified offset)",
-  "fb_join_reachable": "MATCH (2/2 rows: join entry selected as best with both trials used — the row where the old caller-level guard forced markNoUse for every trial)",
+  "fb_join_reachable": "MATCH (2/2 rows: join entry selected as best with both trials used \u2014 the row where the old caller-level guard forced markNoUse for every trial)",
   "fb_cross_space_join": "MATCH (3/3 rows: per-piece space matching for both pieces, foreign-space trial rejection, contiguous offmatch accumulation)",
   "fb_first_only": "MATCH (2/2 rows: cc:1649-1652 skip under firstOnly, same layout reaches e1 with firstOnly=false)",
   "be_space_rows": "UNTESTED (proposed residual: the transitional enum AddressSpace cannot stage big-endian pieces/spaces; ADDRESS-0001)"

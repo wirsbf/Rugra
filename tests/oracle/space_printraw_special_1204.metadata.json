@@ -1,139 +1,140 @@
 {
-  "schema_version": 1,
-  "fixture_id": "SPACE-PRINTRAW-SPECIAL-1204",
-  "todo_ids": [
-    "SPACE-PRINTRAW-SPECIAL-0001"
+ "schema_version": 1,
+ "fixture_id": "SPACE-PRINTRAW-SPECIAL-1204",
+ "todo_ids": [
+  "SPACE-PRINTRAW-SPECIAL-0001"
+ ],
+ "related_todo_ids": [
+  "SPACE-IOP-PRINTRAW-0001",
+  "SPACE-PRINTRAW-WORDSIZE-0001",
+  "ADDRESS-0001"
+ ],
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "rugra_base_commit": "102c476abf13a78f4a10062244286de53d46c755",
+ "architecture": "locked synthetic LE 64-bit fixture architecture: const=0, unique=2, ram=3, register=4, ws2=5 (addrsize 4, wordsize 2), join=6, iop=7 (x86-64-shaped ram/register sizes); heap-allocated spaces owned by ~AddrSpaceManager (translate.cc:492-502)",
+ "compiler_spec": "none: JoinSpace::printRaw / AddrSpaceManager::findAddJoin / findJoin are pure space-manager methods; no Funcdata, P-code, or cspec input",
+ "analysis_options": {
+  "api": "Direct JoinSpace::printRaw via rugra::space::AddrSpace::print_raw dispatch and findAddJoin/findJoin via rugra::space::SpaceRegistry (the registry-side manager_join tables, translate.hh:233-235 placement); no ActionGroup or other Action runs",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
+  "error_injection": "none",
+  "normalization": "No Ghidra/Rugra behavior difference is normalized or removed. Both sides print the join offset unpadded lowercase hex and the printRaw result string verbatim (including the brace/comma pieces form, the ':logicalsize' float-extension suffix, the wordsize-2 '+cut' suffix inside the braces, and the 'Unlinked join address' throw text). The dedup line prints offset identity on the Rust side where Ghidra prints JoinRecord pointer identity \u2014 equivalent because unified offsets are unique per record (monotonic allocation plus splitset dedup).",
+  "random_seed": "none; printRaw, findAddJoin and findJoin are deterministic"
+ },
+ "cases": [
+  "join_printraw: the pieces forms of JoinSpace::printRaw (space.cc:590-609) \u2014 2-piece register pair {0x00000018,0x00000010}, findAddJoin dedup (identical pieces -> same record/offset), 3-piece ram+register+register {0x00001000,0x00000020,0x00000022} (ram 8-byte offset shrinks to the 4-byte field via the >>32 rule), 1-piece float extension {0x00000100:4} (the loop szsum discarded in favor of the unified logical size, space.cc:604-606), and the wordsize-2 piece recursion {0x00000080+1,0x00000030} (byteToAddress scaling + '+cut' inside the braces)",
+  "join_allocation: the 16-byte-rounded allocation sequence (translate.cc:706-710) locked through observable offsets 0x0/0x10/0x20/0x30 (case 1) plus a fresh 5th record allocating 0x40",
+  "join_printraw_unlinked: printRaw on a join offset with no JoinRecord throws LowlevelError('Unlinked join address') (translate.cc:761); the Rust side panics with the same text, caught and printed identically, panic-hook stderr suppressed"
+ ],
+ "reachability_note": "no production pipeline path registers a join space in the registry or prints a join-space address through AddrSpace::print_raw today (heritage reads the separate arch.join_db, which is never populated; no join-space Address is constructed in the E2E closure), so the E2E C output cannot regress from this specialization; the fixture locks the behavior ahead of the ADDRESS-0001 consumer migration that will wire it into production",
+ "input_manifest": {
+  "spaces": [
+   {
+    "name": "const",
+    "addrsize": 8,
+    "wordsize": 1,
+    "source": "ConstantSpace ctor space.cc:356, heap-allocated"
+   },
+   {
+    "name": "unique",
+    "addrsize": 4,
+    "wordsize": 1,
+    "source": "UniqueSpace ctor space.cc:427"
+   },
+   {
+    "name": "ram",
+    "addrsize": 8,
+    "wordsize": 1,
+    "source": "AddrSpace ctor, x86-64 shape"
+   },
+   {
+    "name": "register",
+    "addrsize": 8,
+    "wordsize": 1,
+    "source": "AddrSpace ctor, x86-64 shape"
+   },
+   {
+    "name": "ws2",
+    "addrsize": 4,
+    "wordsize": 2,
+    "source": "AddrSpace ctor"
+   },
+   {
+    "name": "join",
+    "addrsize": 4,
+    "wordsize": 1,
+    "source": "JoinSpace ctor space.cc:446, manager-wired at insertSpace"
+   },
+   {
+    "name": "iop",
+    "addrsize": 8,
+    "wordsize": 1,
+    "source": "IopSpace ctor op.cc:33"
+   }
   ],
-  "related_todo_ids": [
-    "SPACE-IOP-PRINTRAW-0001",
-    "SPACE-PRINTRAW-WORDSIZE-0001",
-    "ADDRESS-0001"
+  "join_records": [
+   {
+    "id": "A",
+    "pieces": "register:0x18:4 + register:0x10:4",
+    "logical": 0,
+    "offset": "0x0"
+   },
+   {
+    "id": "A-dedup",
+    "pieces": "identical to A",
+    "logical": 0,
+    "offset": "0x0 (same record)"
+   },
+   {
+    "id": "B",
+    "pieces": "ram:0x1000:4 + register:0x20:2 + register:0x22:2",
+    "logical": 0,
+    "offset": "0x10"
+   },
+   {
+    "id": "C",
+    "pieces": "register:0x100:8",
+    "logical": 4,
+    "offset": "0x20"
+   },
+   {
+    "id": "D",
+    "pieces": "ws2:0x101:2 + register:0x30:2",
+    "logical": 0,
+    "offset": "0x30"
+   },
+   {
+    "id": "E",
+    "pieces": "ram:0x2000:1 + register:0x40:1",
+    "logical": 0,
+    "offset": "0x40"
+   }
   ],
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
-  },
-  "rugra_base_commit": "102c476abf13a78f4a10062244286de53d46c755",
-  "architecture": "locked synthetic LE 64-bit fixture architecture: const=0, unique=2, ram=3, register=4, ws2=5 (addrsize 4, wordsize 2), join=6, iop=7 (x86-64-shaped ram/register sizes); heap-allocated spaces owned by ~AddrSpaceManager (translate.cc:492-502)",
-  "compiler_spec": "none: JoinSpace::printRaw / AddrSpaceManager::findAddJoin / findJoin are pure space-manager methods; no Funcdata, P-code, or cspec input",
-  "analysis_options": {
-    "api": "Direct JoinSpace::printRaw via rugra::space::AddrSpace::print_raw dispatch and findAddJoin/findJoin via rugra::space::SpaceRegistry (the registry-side manager_join tables, translate.hh:233-235 placement); no ActionGroup or other Action runs",
-    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
-    "error_injection": "none",
-    "normalization": "No Ghidra/Rugra behavior difference is normalized or removed. Both sides print the join offset unpadded lowercase hex and the printRaw result string verbatim (including the brace/comma pieces form, the ':logicalsize' float-extension suffix, the wordsize-2 '+cut' suffix inside the braces, and the 'Unlinked join address' throw text). The dedup line prints offset identity on the Rust side where Ghidra prints JoinRecord pointer identity — equivalent because unified offsets are unique per record (monotonic allocation plus splitset dedup).",
-    "random_seed": "none; printRaw, findAddJoin and findJoin are deterministic"
-  },
-  "cases": [
-    "join_printraw: the pieces forms of JoinSpace::printRaw (space.cc:590-609) — 2-piece register pair {0x00000018,0x00000010}, findAddJoin dedup (identical pieces -> same record/offset), 3-piece ram+register+register {0x00001000,0x00000020,0x00000022} (ram 8-byte offset shrinks to the 4-byte field via the >>32 rule), 1-piece float extension {0x00000100:4} (the loop szsum discarded in favor of the unified logical size, space.cc:604-606), and the wordsize-2 piece recursion {0x00000080+1,0x00000030} (byteToAddress scaling + '+cut' inside the braces)",
-    "join_allocation: the 16-byte-rounded allocation sequence (translate.cc:706-710) locked through observable offsets 0x0/0x10/0x20/0x30 (case 1) plus a fresh 5th record allocating 0x40",
-    "join_printraw_unlinked: printRaw on a join offset with no JoinRecord throws LowlevelError('Unlinked join address') (translate.cc:761); the Rust side panics with the same text, caught and printed identically, panic-hook stderr suppressed"
-  ],
-  "reachability_note": "no production pipeline path registers a join space in the registry or prints a join-space address through AddrSpace::print_raw today (heritage reads the separate arch.join_db, which is never populated; no join-space Address is constructed in the E2E closure), so the E2E C output cannot regress from this specialization; the fixture locks the behavior ahead of the ADDRESS-0001 consumer migration that will wire it into production",
-  "input_manifest": {
-    "spaces": [
-      {
-        "name": "const",
-        "addrsize": 8,
-        "wordsize": 1,
-        "source": "ConstantSpace ctor space.cc:356, heap-allocated"
-      },
-      {
-        "name": "unique",
-        "addrsize": 4,
-        "wordsize": 1,
-        "source": "UniqueSpace ctor space.cc:427"
-      },
-      {
-        "name": "ram",
-        "addrsize": 8,
-        "wordsize": 1,
-        "source": "AddrSpace ctor, x86-64 shape"
-      },
-      {
-        "name": "register",
-        "addrsize": 8,
-        "wordsize": 1,
-        "source": "AddrSpace ctor, x86-64 shape"
-      },
-      {
-        "name": "ws2",
-        "addrsize": 4,
-        "wordsize": 2,
-        "source": "AddrSpace ctor"
-      },
-      {
-        "name": "join",
-        "addrsize": 4,
-        "wordsize": 1,
-        "source": "JoinSpace ctor space.cc:446, manager-wired at insertSpace"
-      },
-      {
-        "name": "iop",
-        "addrsize": 8,
-        "wordsize": 1,
-        "source": "IopSpace ctor op.cc:33"
-      }
-    ],
-    "join_records": [
-      {
-        "id": "A",
-        "pieces": "register:0x18:4 + register:0x10:4",
-        "logical": 0,
-        "offset": "0x0"
-      },
-      {
-        "id": "A-dedup",
-        "pieces": "identical to A",
-        "logical": 0,
-        "offset": "0x0 (same record)"
-      },
-      {
-        "id": "B",
-        "pieces": "ram:0x1000:4 + register:0x20:2 + register:0x22:2",
-        "logical": 0,
-        "offset": "0x10"
-      },
-      {
-        "id": "C",
-        "pieces": "register:0x100:8",
-        "logical": 4,
-        "offset": "0x20"
-      },
-      {
-        "id": "D",
-        "pieces": "ws2:0x101:2 + register:0x30:2",
-        "logical": 0,
-        "offset": "0x30"
-      },
-      {
-        "id": "E",
-        "pieces": "ram:0x2000:1 + register:0x40:1",
-        "logical": 0,
-        "offset": "0x40"
-      }
-    ],
-    "print_queries": 11
-  },
-  "comparand_sha256": {
-    "cpp_fixture": "da9445ef95ceb0427097e7bdb30d549acd9cf04fb16f4c23e361d065b950b0f6",
-    "rust_fixture": "7a1033dbbd0ff7657fa3012fa7a5d0e521061abf5cc279df9e73f3aef116928f",
-    "rugra_space_source": "7fcede1465e99a4467ce991067675a9a3325aea9233b9c5874fb3a5798205e8b",
-    "rugra_op_source": "c98e202ae4fb6b119c1604fc21b98c489e4bd050d8771f54bb27d602752a4655",
-    "api_document_space": "d727d55667d7dcde51aa28482fcd911abaca428516748a010864d41125490acc",
-    "api_document_op": "7f294f135b5071b40a777b28b8ad368a8a959a6243b90ed23fd748996518870e",
-    "runner": "21995845926134763a99fb0e27a0e0a657774bc0b0511be6d06303b04a366fb9"
-  },
-  "expected_stdout_sha256": "08cbbe565a0a3f6c8790a6defc4a43831a46d312308f810fec89030142b12aa1",
-  "expected_line_count": 11,
-  "expected_exit_code": 0,
-  "coverage": {
-    "join_printraw": "MATCH",
-    "join_allocation": "MATCH",
-    "join_printraw_unlinked": "MATCH",
-    "join_printraw_pieces_form": "MATCH (SPACE-PRINTRAW-WORDSIZE-0001 previously registered this as UNTESTED 'needs the join-record database; no manager backlink on the registry handle' — now resolved by the registry-side manager_join tables plus the insertSpace-wired AddrSpace::manage join half)",
-    "iop_printraw_op_form": "UNTESTED (residual SPACE-IOP-PRINTRAW-0001: both terminal renders read the space of SeqNum.pc / the branch target block start, which the legacy model carries spacelessly — SeqNum.addr in address.rs and BlockBasic.start_addr in block.rs, flow.rs:1918; blocked by ADDRESS-0001, address.rs leased by CSPEC-RANGEPROPS-0001; op.cc:41 dispatch topology and PcodeOp::is_fallthru_true are in place, both forms fall back to the base AddrSpace::printRaw)",
-    "e2e_closure": "MATCH (no production path prints a join/iop address through AddrSpace::print_raw; E2E curl defects=0/numbering=0 and output bytes unchanged)"
-  },
-  "overall_status": "MATCH"
+  "print_queries": 11
+ },
+ "comparand_sha256": {
+  "cpp_fixture": "da9445ef95ceb0427097e7bdb30d549acd9cf04fb16f4c23e361d065b950b0f6",
+  "rust_fixture": "7a1033dbbd0ff7657fa3012fa7a5d0e521061abf5cc279df9e73f3aef116928f",
+  "rugra_space_source": "7fcede1465e99a4467ce991067675a9a3325aea9233b9c5874fb3a5798205e8b",
+  "rugra_op_source": "c98e202ae4fb6b119c1604fc21b98c489e4bd050d8771f54bb27d602752a4655",
+  "api_document_space": "d727d55667d7dcde51aa28482fcd911abaca428516748a010864d41125490acc",
+  "api_document_op": "7f294f135b5071b40a777b28b8ad368a8a959a6243b90ed23fd748996518870e",
+  "runner": "21995845926134763a99fb0e27a0e0a657774bc0b0511be6d06303b04a366fb9"
+ },
+ "expected_stdout_sha256": "08cbbe565a0a3f6c8790a6defc4a43831a46d312308f810fec89030142b12aa1",
+ "expected_line_count": 11,
+ "expected_exit_code": 0,
+ "coverage": {
+  "join_printraw": "MATCH",
+  "join_allocation": "MATCH",
+  "join_printraw_unlinked": "MATCH",
+  "join_printraw_pieces_form": "MATCH (SPACE-PRINTRAW-WORDSIZE-0001 previously registered this as UNTESTED 'needs the join-record database; no manager backlink on the registry handle' \u2014 now resolved by the registry-side manager_join tables plus the insertSpace-wired AddrSpace::manage join half)",
+  "iop_printraw_op_form": "UNTESTED (residual SPACE-IOP-PRINTRAW-0001: both terminal renders read the space of SeqNum.pc / the branch target block start, which the legacy model carries spacelessly \u2014 SeqNum.addr in address.rs and BlockBasic.start_addr in block.rs, flow.rs:1918; blocked by ADDRESS-0001, address.rs leased by CSPEC-RANGEPROPS-0001; op.cc:41 dispatch topology and PcodeOp::is_fallthru_true are in place, both forms fall back to the base AddrSpace::printRaw)",
+  "e2e_closure": "MATCH (no production path prints a join/iop address through AddrSpace::print_raw; E2E curl defects=0/numbering=0 and output bytes unchanged)"
+ },
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "input_sha256": "435b626d0480c73bb53d072aca5213bac9e2a348dd8245709c5c181008dd8b64"
 }

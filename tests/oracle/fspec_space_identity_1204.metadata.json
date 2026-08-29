@@ -27,7 +27,7 @@
   "ghidra::Address::decode address.cc:205",
   "ghidra::VarnodeData::decodeFromAttributes pcoderaw.cc:107"
  ],
- "overall_status": "UNTESTED:  (B2 migration of partial match state) the five-case fspec-space identity projection (registration/lookup/rejection with the poisoned-cached-slot quirk, same-offset five-space discrimination, four printRaw forms, encode/decode projection with all rejection paths, cross-space exceptions) byte-matches the locked oracle; the packed special-space codec (PackedEncode::writeSpace byte, PackedDecode::readSpace rejection), IopSpace::printRaw, JoinSpace attribute codecs, and the varnode/funcdata consumer migration (D0 still keys callspec identity on Iop-address + typed Weak) remain with their follow-up atoms",
+ "overall_status": "UNTESTED: (B2 migration of partial match state) the five-case fspec-space identity projection (registration/lookup/rejection with the poisoned-cached-slot quirk, same-offset five-space discrimination, four printRaw forms, encode/decode projection with all rejection paths, cross-space exceptions) byte-matches the locked oracle; the packed special-space codec (PackedEncode::writeSpace byte, PackedDecode::readSpace rejection), IopSpace::printRaw, JoinSpace attribute codecs, and the varnode/funcdata consumer migration (D0 still keys callspec identity on Iop-address + typed Weak) remain with their follow-up atoms",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",

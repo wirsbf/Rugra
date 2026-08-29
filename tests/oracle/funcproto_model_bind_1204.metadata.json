@@ -236,5 +236,6 @@
   "stdout_sha256": "7c7be18ed21a903efbbbe1daff0fa69b7d02bafc8df92cd0f968ab4a0dede8a3",
   "note": "locked output projection retained byte-for-byte while source provenance advances to base 92daed3 plus the complete nine-file D0 callspec closure"
  },
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "input_sha256": "5a7eed7a0d2fc7b3aad2d5b21beb0d2a4a41fecd2e25b2628acca9437b0dbaff"
 }

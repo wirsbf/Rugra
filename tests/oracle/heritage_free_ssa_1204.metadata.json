@@ -15,7 +15,7 @@
   "GH12-F-f30ffccd55fd89dad612 ghidra::FlowBlock::getOutRevIndex block.hh:303",
   "GH12-F-ac7c77ebb2f6e0e7199d ghidra::PcodeOp::getOpFromConst op.hh:249"
  ],
- "overall_status": "MISMATCH:  the four declared projections byte-match locked Ghidra 12.0.4, including complete integrated block/op/slot order, first-seen object alias equivalence, primary flags, active/heritage-known state, definitions, descendant counts, consumed-free bank deletion, exact second-reader message/state, INDIRECT simultaneous selection and loop-PHI reverse-slot wiring. Whole-function and module behavior does not match: exception transport is Rust panic versus Ghidra LowlevelError, and Rust cannot retain Ghidra's nullable reserved slot after the caught setup error. Refinement, overlap inputs, revisit markers, guards/calls/stores/loads/returns, joins, multi-pass state and error injection outside these four cases remain untested.",
+ "overall_status": "MISMATCH: the four declared projections byte-match locked Ghidra 12.0.4, including complete integrated block/op/slot order, first-seen object alias equivalence, primary flags, active/heritage-known state, definitions, descendant counts, consumed-free bank deletion, exact second-reader message/state, INDIRECT simultaneous selection and loop-PHI reverse-slot wiring. Whole-function and module behavior does not match: exception transport is Rust panic versus Ghidra LowlevelError, and Rust cannot retain Ghidra's nullable reserved slot after the caught setup error. Refinement, overlap inputs, revisit markers, guards/calls/stores/loads/returns, joins, multi-pass state and error injection outside these four cases remain untested.",
  "covered_projection_status": "MATCH",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",

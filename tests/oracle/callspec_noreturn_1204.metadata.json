@@ -88,7 +88,7 @@
   "diff_exit_code": 0
  },
  "projection_status": "MATCH",
- "overall_status": "MATCH",
+ "overall_status": "MATCH: (B2 canonicalization)",
  "coverage": {
   "default_ctor": {
    "status": "MATCH",

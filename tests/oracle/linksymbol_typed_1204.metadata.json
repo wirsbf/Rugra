@@ -1,139 +1,139 @@
 {
-  "schema_version": 1,
-  "fixture_id": "FUNCDATA-LINKSYMBOL-TYPED-0001",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ "schema_version": 1,
+ "fixture_id": "FUNCDATA-LINKSYMBOL-TYPED-0001",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_base_commit": "9001bbdf13b0c3de7cb5c1938de98f6008213f07",
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec",
+  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+ },
+ "analysis_options": {
+  "api": "Direct ActionNameVars::perform/apply invocation over a synthetic per-case Funcdata body; no ActionGroup or other Action runs",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
+  "error_injection": "none",
+  "funcdata": "Locked BfdArchitecture over the pinned Git-blob curl input supplies Ghidra Funcdata, address spaces, TypeFactory, and the ScopeLocal. Each Ghidra case clears prior state via fd.clear(); Rugra builds an isolated synthetic Funcdata per case with an ActionRestructureVarnode-built ScopeLocal.",
+  "ir": "Register leaves are SSA inputs; outputs are written register-space Varnodes defined by COPY(const) ops at explicit code addresses, each with a unique-space reader COPY. HighVariables are assigned by setHighLevel before the Action runs.",
+  "normalization": "No Ghidra/Rugra behavior difference is normalized or removed. Pointer/Arc addresses and dynamic-symbol hashes are internal identities (map keys) and never appear in the records; the dynamic-path observable is the dyn flag plus the finished name. Metatype numbers use the Ghidra type.hh:79-99 enum values on both sides.",
+  "random_seed": "none; ActionNameVars and fixture construction are deterministic"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "source_ref": "9001bbd:sleigh_specs/x86-64.sla",
+   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
-  "rugra_base_commit": "9001bbdf13b0c3de7cb5c1938de98f6008213f07",
-  "architecture": "x86:LE:64:default",
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "source_ref": "9001bbd:sleigh_specs/x86-64.pspec",
+   "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
+  },
   "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec",
-    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "source_ref": "9001bbd:sleigh_specs/x86-64-gcc.cspec",
+   "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
   },
-  "analysis_options": {
-    "api": "Direct ActionNameVars::perform/apply invocation over a synthetic per-case Funcdata body; no ActionGroup or other Action runs",
-    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
-    "error_injection": "none",
-    "funcdata": "Locked BfdArchitecture over the pinned Git-blob curl input supplies Ghidra Funcdata, address spaces, TypeFactory, and the ScopeLocal. Each Ghidra case clears prior state via fd.clear(); Rugra builds an isolated synthetic Funcdata per case with an ActionRestructureVarnode-built ScopeLocal.",
-    "ir": "Register leaves are SSA inputs; outputs are written register-space Varnodes defined by COPY(const) ops at explicit code addresses, each with a unique-space reader COPY. HighVariables are assigned by setHighLevel before the Action runs.",
-    "normalization": "No Ghidra/Rugra behavior difference is normalized or removed. Pointer/Arc addresses and dynamic-symbol hashes are internal identities (map keys) and never appear in the records; the dynamic-path observable is the dyn flag plus the finished name. Metatype numbers use the Ghidra type.hh:79-99 enum values on both sides.",
-    "random_seed": "none; ActionNameVars and fixture construction are deterministic"
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "source_ref": "9001bbd:sleigh_specs/x86.ldefs",
+   "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
   },
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "source_ref": "9001bbd:sleigh_specs/x86-64.sla",
-      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "source_ref": "9001bbd:sleigh_specs/x86-64.pspec",
-      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-      "size": 11721
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "source_ref": "9001bbd:sleigh_specs/x86-64-gcc.cspec",
-      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-      "size": 12182
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "source_ref": "9001bbd:sleigh_specs/x86.ldefs",
-      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-      "size": 5390
-    },
-    "binary": {
-      "path": "examples/curl",
-      "source_ref": "9001bbd:examples/curl",
-      "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
-      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-      "size": 161728
-    },
-    "bfd": {
-      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
-      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
-      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-    }
+  "binary": {
+   "path": "examples/curl",
+   "source_ref": "9001bbd:examples/curl",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "size": 161728
   },
-  "host_tools": {
-    "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+  "bfd": {
+   "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  }
+ },
+ "host_tools": {
+  "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "9001bbdf13b0c3de7cb5c1938de98f6008213f07",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "size": 161728
   },
-  "input_manifest": {
-    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
-    "binary": {
-      "path": "examples/curl",
-      "source_repository_commit": "9001bbdf13b0c3de7cb5c1938de98f6008213f07",
-      "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
-      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-      "size": 161728
-    },
-    "function": {
-      "name": "GetStr",
-      "entry": 14032,
-      "size": 0,
-      "symbol_source": "ELF/BFD"
-    },
-    "cases": [
-      {
-        "id": "typed_temporaries",
-        "shape": "four written register-space temporaries (bool@0x48, char@0x50, int4@0x58, char*@0x60) each defined by COPY(const) at 0x1000..0x1030 with a unique-space reader COPY at pc+0x10",
-        "expected": "linkSymbol creates ScopeLocal Symbols carrying each HighVariable type; ActionNameVars::apply names them bVar5/cVar6/iVar7/pcVar8 through the shared base counter after the four unique-space reader symbols (Var1-4); varnodes marked mapped"
-      },
-      {
-        "id": "irregular_input",
-        "shape": "one register-space input at offset 0x08 size 8 (RCX) typed int",
-        "expected": "linkSymbol creates the local Symbol with usepoint = function base - 1 (varnode.cc:696-703); buildDefaultName's vn path drives the irregular-input branch, naming it in_RCX via the translate register table"
-      },
-      {
-        "id": "partial_coverage",
-        "shape": "4-byte register temporary at 0x70 defined by COPY(const) at the function base - 1 with a unique-space reader, plus a 1-byte register INPUT at 0x71 typed char",
-        "expected": "the input's linkSymbol finds the 4-byte Symbol via queryProperties (usepoints match at base-1); handleSymbolConflict's isInput leg attaches the partial entry; HighVariable::setSymbol computes symboloffset=1 (variable.cc:258-270 branch 4), so the input high fails coreaction.cc:2965's getSymbolOffset() < 0 namerec gate and shares the whole symbol's name"
-      }
-    ],
-    "sha256": "c989633109ccc20cb99ca6c970df15e99f12b48218f3272d2670731c6642221d"
+  "function": {
+   "name": "GetStr",
+   "entry": 14032,
+   "size": 0,
+   "symbol_source": "ELF/BFD"
   },
-  "observation_schema": {
-    "format": "Six fixed-order UTF-8 records (before/after for three cases) with a final newline",
-    "identity": "Pointer/Arc addresses are map keys only. Fixture varnodes and highs use semantic names. Dynamic-symbol hashes are internal identities and never appear; the dynamic storage observable is the dyn flag.",
-    "fields": "Per high: semantic name, attached Symbol projection (name, Ghidra-enum metatype, size, printNameBase prefix, category, storage space, offset, entry size, dynamic flag, first usepoint or invalid) and symbolOffset; per varnode: mapped/input/persist flags.",
-    "raw_difference_policy": "The runner pins both complete output streams via the comparand block; every record must be byte-identical (no masking classes)."
-  },
-  "comparand": {
-    "cpp_fixture_sha256": "352cad94590b25123be3e2c6a19d3345e33325f1094f6ae46d35786b2d77ebc1",
-    "rust_fixture_sha256": "27ee4ea055814f614bb519ed2ec5b94e94283260f5b9aa2f93b27d6b60a7efdd",
-    "runner_sha256": "72d105d1b0c06d61039fcfff85006c764ab718e119c727ebb0ffba6b4991a094",
-    "doc_funcdata_sha256": "0e7934888edf1113fcdf582b4ee11989182493b079e338f16aee33c923714e6c",
-    "doc_coreaction_sha256": "aadc0441a1b40c392e30c6f14407e45567fc02dafcf2eccbee580979e791d714",
-    "doc_varmap_sha256": "ef5ea55dce779479738ecd48c99dc688728ca0bc9dc34b0c51aa6ebad1ce72ed",
-    "doc_merge_sha256": "a924000563a40390df453c75e6b0d5e28076e0cf958ad455da0c7cf36c8a4693",
-    "rust_crate_tree_sha256": "35ff4190e39e2d7ce928205b8fbc198188d6de7a4ebdf8be7c400dc51a8d3ae2",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-linksymbol-typed-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-    "rust_crate_source_policy": "Every crate file comes from the pinned base commit 9001bbdf13b0c3de7cb5c1938de98f6008213f07 Git blob except the src/{funcdata,coreaction,varmap,merge}.rs overlays, which are taken from the live working tree"
-  },
-  "known_dependencies": {},
-  "record_verdicts": {
-    "typed_temporaries/before": "MATCH",
-    "typed_temporaries/after": "MATCH",
-    "irregular_input/before": "MATCH",
-    "irregular_input/after": "MATCH",
-    "partial_coverage/before": "MATCH",
-    "partial_coverage/after": "MATCH"
-  },
-  "overall_status": "MATCH",
-  "overall_status_rationale": "All four records are byte-identical against the locked 12.0.4 oracle: linkSymbol's typed register-temporary Symbol creation (bVar/cVar/iVar/pcVar family through the shared base counter), the irregular-input naming (in_RCX), mapped-flag propagation, and usepoint computation (def-op address; function base - 1 for inputs). The handleSymbolConflict -> buildDynamicSymbol conflict path is implemented but UNTESTED at oracle level: the locked oracle's DynamicHash::uniqueHash throws RecovError ('Unable to find unique hash for varnode') for every minimal same-address two-High shape attempted, aborting ActionNameVars before an after-record exists. Rugra mirrors the failure (returns None and keeps the pre-existing entry attached) instead of aborting the Action. A dedicated fixture with hash-unique conflicting dataflow is registered as the follow-up."
+  "cases": [
+   {
+    "id": "typed_temporaries",
+    "shape": "four written register-space temporaries (bool@0x48, char@0x50, int4@0x58, char*@0x60) each defined by COPY(const) at 0x1000..0x1030 with a unique-space reader COPY at pc+0x10",
+    "expected": "linkSymbol creates ScopeLocal Symbols carrying each HighVariable type; ActionNameVars::apply names them bVar5/cVar6/iVar7/pcVar8 through the shared base counter after the four unique-space reader symbols (Var1-4); varnodes marked mapped"
+   },
+   {
+    "id": "irregular_input",
+    "shape": "one register-space input at offset 0x08 size 8 (RCX) typed int",
+    "expected": "linkSymbol creates the local Symbol with usepoint = function base - 1 (varnode.cc:696-703); buildDefaultName's vn path drives the irregular-input branch, naming it in_RCX via the translate register table"
+   },
+   {
+    "id": "partial_coverage",
+    "shape": "4-byte register temporary at 0x70 defined by COPY(const) at the function base - 1 with a unique-space reader, plus a 1-byte register INPUT at 0x71 typed char",
+    "expected": "the input's linkSymbol finds the 4-byte Symbol via queryProperties (usepoints match at base-1); handleSymbolConflict's isInput leg attaches the partial entry; HighVariable::setSymbol computes symboloffset=1 (variable.cc:258-270 branch 4), so the input high fails coreaction.cc:2965's getSymbolOffset() < 0 namerec gate and shares the whole symbol's name"
+   }
+  ],
+  "sha256": "c989633109ccc20cb99ca6c970df15e99f12b48218f3272d2670731c6642221d"
+ },
+ "observation_schema": {
+  "format": "Six fixed-order UTF-8 records (before/after for three cases) with a final newline",
+  "identity": "Pointer/Arc addresses are map keys only. Fixture varnodes and highs use semantic names. Dynamic-symbol hashes are internal identities and never appear; the dynamic storage observable is the dyn flag.",
+  "fields": "Per high: semantic name, attached Symbol projection (name, Ghidra-enum metatype, size, printNameBase prefix, category, storage space, offset, entry size, dynamic flag, first usepoint or invalid) and symbolOffset; per varnode: mapped/input/persist flags.",
+  "raw_difference_policy": "The runner pins both complete output streams via the comparand block; every record must be byte-identical (no masking classes)."
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "352cad94590b25123be3e2c6a19d3345e33325f1094f6ae46d35786b2d77ebc1",
+  "rust_fixture_sha256": "27ee4ea055814f614bb519ed2ec5b94e94283260f5b9aa2f93b27d6b60a7efdd",
+  "runner_sha256": "72d105d1b0c06d61039fcfff85006c764ab718e119c727ebb0ffba6b4991a094",
+  "doc_funcdata_sha256": "0e7934888edf1113fcdf582b4ee11989182493b079e338f16aee33c923714e6c",
+  "doc_coreaction_sha256": "aadc0441a1b40c392e30c6f14407e45567fc02dafcf2eccbee580979e791d714",
+  "doc_varmap_sha256": "ef5ea55dce779479738ecd48c99dc688728ca0bc9dc34b0c51aa6ebad1ce72ed",
+  "doc_merge_sha256": "a924000563a40390df453c75e6b0d5e28076e0cf958ad455da0c7cf36c8a4693",
+  "rust_crate_tree_sha256": "35ff4190e39e2d7ce928205b8fbc198188d6de7a4ebdf8be7c400dc51a8d3ae2",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-linksymbol-typed-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "rust_crate_source_policy": "Every crate file comes from the pinned base commit 9001bbdf13b0c3de7cb5c1938de98f6008213f07 Git blob except the src/{funcdata,coreaction,varmap,merge}.rs overlays, which are taken from the live working tree"
+ },
+ "known_dependencies": {},
+ "record_verdicts": {
+  "typed_temporaries/before": "MATCH",
+  "typed_temporaries/after": "MATCH",
+  "irregular_input/before": "MATCH",
+  "irregular_input/after": "MATCH",
+  "partial_coverage/before": "MATCH",
+  "partial_coverage/after": "MATCH"
+ },
+ "overall_status": "UNTESTED: (B2 downgrade: two-sided pinning incomplete - (B2 canonicalization)...",
+ "overall_status_rationale": "All four records are byte-identical against the locked 12.0.4 oracle: linkSymbol's typed register-temporary Symbol creation (bVar/cVar/iVar/pcVar family through the shared base counter), the irregular-input naming (in_RCX), mapped-flag propagation, and usepoint computation (def-op address; function base - 1 for inputs). The handleSymbolConflict -> buildDynamicSymbol conflict path is implemented but UNTESTED at oracle level: the locked oracle's DynamicHash::uniqueHash throws RecovError ('Unable to find unique hash for varnode') for every minimal same-address two-High shape attempted, aborting ActionNameVars before an after-record exists. Rugra mirrors the failure (returns None and keeps the pre-existing entry attached) instead of aborting the Action. A dedicated fixture with hash-unique conflicting dataflow is registered as the follow-up."
 }

@@ -10,7 +10,7 @@
   "ghidra::ActionMergeType::apply coreaction.hh:414",
   "ghidra::ActionMarkExplicit::baseExplicit coreaction.cc:3010"
  ],
- "overall_status": "MATCH:  all 29 observed lines byte-identical after BLKACT-FINALSTRUCT-COUNT-0001 removed the invented ActionFinalStructure count bumps (finalstructure triple now count=0/apply=0/res=0); registered non-observed domains remain in coverage as mismatch/untested",
+ "overall_status": "MISMATCH: all 29 observed lines byte-identical after BLKACT-FINALSTRUCT-COUNT-0001 removed the invented ActionFinalStructure count bumps (finalstructure triple now count=0/apply=0/res=0); registered non-observed domains remain in coverage as mismatch/untested",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",

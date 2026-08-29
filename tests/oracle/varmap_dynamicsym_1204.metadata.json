@@ -1,213 +1,213 @@
 {
-  "schema_version": 2,
-  "fixture_id": "VARMAP-DYNAMICSYM-0001",
-  "status_note": "Explicit-Varnode dynamic symbolization projection locked against the Ghidra 12.0.4 oracle: the ActionNameVars local-entry chain (hasName -> linkSymbol -> queryProperties -> handleSymbolConflict -> buildDynamicSymbol -> DynamicHash::uniqueHash -> addDynamicSymbol -> buildDefaultName/renameSymbol). 12/12 records byte-identical with zero source overlays (the committed base e9baabd already carries the faithful chain). The E2E uVar_<offset> GLUE residual that motivated this fixture is NOT a missing varmap path: it is blocked upstream of linkSymbol by merge-domain mixed implied/explicit highs (see residual merge_mixed_high_e2e).",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ "schema_version": 2,
+ "fixture_id": "VARMAP-DYNAMICSYM-0001",
+ "status_note": "Explicit-Varnode dynamic symbolization projection locked against the Ghidra 12.0.4 oracle: the ActionNameVars local-entry chain (hasName -> linkSymbol -> queryProperties -> handleSymbolConflict -> buildDynamicSymbol -> DynamicHash::uniqueHash -> addDynamicSymbol -> buildDefaultName/renameSymbol). 12/12 records byte-identical with zero source overlays (the committed base e9baabd already carries the faithful chain). The E2E uVar_<offset> GLUE residual that motivated this fixture is NOT a missing varmap path: it is blocked upstream of linkSymbol by merge-domain mixed implied/explicit highs (see residual merge_mixed_high_e2e).",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_source": {
+  "base_commit": "e9baabd9f18d87899cbdad9a4186969afc140f4f",
+  "base_varmap_blob": "a54ab2fae8439814c4b1629d3b81a6f513900d2b",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec",
+  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+ },
+ "analysis_options": {
+  "api": "Direct ActionNameVars::perform/apply invocation over a synthetic per-case Funcdata body; no ActionGroup or other Action runs",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent; the fixture's #define private public access shim only exposes Varnode::setFlags",
+  "error_injection": "none",
+  "funcdata": "Locked BfdArchitecture over the pinned Git-blob curl input supplies the Ghidra Funcdata, address spaces, TypeFactory and the model-windowed ScopeLocal; each Ghidra case clears prior state via fd.clear(). Rugra builds an isolated synthetic Funcdata per case whose ScopeLocal carries the same cspec localrange window.",
+  "ir": "Register-space temporaries written by COPY(const) ops at explicit code addresses, each with a unique-space reader COPY; all ops inserted into live basic blocks so they register in the address-keyed op tree."
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "buildDynamicSymbol (funcdata_varnode.cc:1283-1306) passes high->getType() BY POINTER into Scope::addDynamicSymbol (database.cc:1690) whose returned Symbol* is attached to the varnode via sym->getFirstWholeMap() \u2014 the SymbolEntry is shared state, not a copy; linkSymbol (funcdata_varnode.cc:1156-1189) passes fl by reference into queryProperties but has no consumer; handleSymbolConflict returns entry->getSymbol() for the attach legs and vn->getSymbolEntry()->getSymbol() for the dynamic leg.",
+  "loop_bounds_traversal_order": "linkSymbols (coreaction.cc:2947-2974) walks every non-constant space in space-manager order, then the VarnodeLocSet in (location, definition) order \u2014 the varnode creation order breaks ties at one storage, so the earlier-defined temp receives the static Symbol and the later one the dynamic Symbol; handleSymbolConflict's conflict scan (cc:1005-1020) walks beginLoc(entry size/addr) and breaks at the first (size, addr) mismatch or foreign high; ActionMarkImplied ordering (markimplied BEFORE the merge family, cc:5720) governs which instances carry implied flags into namevars.",
+  "counter_accumulator_lifecycle": "One shared int4 base=1 per function spans the whole naming loop (coreaction.cc:2987-2997) \u2014 the unique-space readers consume Var1/Var2 before the register temporaries consume Var3/Var4 (loc-tree order), the same counter feeds buildDefaultName for static and dynamic symbols alike, and assignDefaultNames reuses it afterwards; buildUndefinedName's $$undefXXXXXXXX counter is per-scope and monotonic.",
+  "sorting_comparison_keys": "ScopeInternal::buildVariableName's local branch (database.cc:2499-2515) compares the candidate printNameBase+Var+index string against the nametree via findFirstByName, bumping the index up to 10 times before makeNameUnique; makeNameUnique (database.cc:2553-2614) scans symbols sharing the name prefix and increments the parsed _NN/_xNNNNN suffix id; the loc-set comparator is (space, offset, size, input/written/free class, definition)."
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "9afac3f7945cc6383619be82ceb8cbe0ab2541efa810e33de61c72e0183859b5",
+  "rust_fixture_sha256": "a98bbf0e9a157961c014002867f133acb69c4a425c7fbaa93a3747a695e8d2ef",
+  "runner_sha256": "02f96fa53d6003653e147b5e642211d8763d0b9e650caa295e7fce5c042784cc",
+  "doc_varmap_sha256": "666964778772b535c20aefbf187be6982de9288cd992e3203b5cdd78a86e7ca3",
+  "rust_crate_tree_sha256": "6d2211591ad0052575d838512af2bd804936edb3475028b598525ea8d07b1984",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-varmap-dynamicsym-base-v1 plus base commit and sorted length-prefixed paths and contents"
+ },
+ "assets": {
+  "binary": {
+   "path": "examples/curl",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "size": 161728,
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
   },
-  "rugra_source": {
-    "base_commit": "e9baabd9f18d87899cbdad9a4186969afc140f4f",
-    "base_varmap_blob": "a54ab2fae8439814c4b1629d3b81a6f513900d2b",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "size": 487659,
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
   },
-  "architecture": "x86:LE:64:default",
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "size": 11721,
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
+  },
   "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec",
-    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "size": 12182,
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
   },
-  "analysis_options": {
-    "api": "Direct ActionNameVars::perform/apply invocation over a synthetic per-case Funcdata body; no ActionGroup or other Action runs",
-    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent; the fixture's #define private public access shim only exposes Varnode::setFlags",
-    "error_injection": "none",
-    "funcdata": "Locked BfdArchitecture over the pinned Git-blob curl input supplies the Ghidra Funcdata, address spaces, TypeFactory and the model-windowed ScopeLocal; each Ghidra case clears prior state via fd.clear(). Rugra builds an isolated synthetic Funcdata per case whose ScopeLocal carries the same cspec localrange window.",
-    "ir": "Register-space temporaries written by COPY(const) ops at explicit code addresses, each with a unique-space reader COPY; all ops inserted into live basic blocks so they register in the address-keyed op tree."
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "size": 5390,
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
   },
-  "decisive_semantics": {
-    "reference_output_parameters": "buildDynamicSymbol (funcdata_varnode.cc:1283-1306) passes high->getType() BY POINTER into Scope::addDynamicSymbol (database.cc:1690) whose returned Symbol* is attached to the varnode via sym->getFirstWholeMap() — the SymbolEntry is shared state, not a copy; linkSymbol (funcdata_varnode.cc:1156-1189) passes fl by reference into queryProperties but has no consumer; handleSymbolConflict returns entry->getSymbol() for the attach legs and vn->getSymbolEntry()->getSymbol() for the dynamic leg.",
-    "loop_bounds_traversal_order": "linkSymbols (coreaction.cc:2947-2974) walks every non-constant space in space-manager order, then the VarnodeLocSet in (location, definition) order — the varnode creation order breaks ties at one storage, so the earlier-defined temp receives the static Symbol and the later one the dynamic Symbol; handleSymbolConflict's conflict scan (cc:1005-1020) walks beginLoc(entry size/addr) and breaks at the first (size, addr) mismatch or foreign high; ActionMarkImplied ordering (markimplied BEFORE the merge family, cc:5720) governs which instances carry implied flags into namevars.",
-    "counter_accumulator_lifecycle": "One shared int4 base=1 per function spans the whole naming loop (coreaction.cc:2987-2997) — the unique-space readers consume Var1/Var2 before the register temporaries consume Var3/Var4 (loc-tree order), the same counter feeds buildDefaultName for static and dynamic symbols alike, and assignDefaultNames reuses it afterwards; buildUndefinedName's $$undefXXXXXXXX counter is per-scope and monotonic.",
-    "sorting_comparison_keys": "ScopeInternal::buildVariableName's local branch (database.cc:2499-2515) compares the candidate printNameBase+Var+index string against the nametree via findFirstByName, bumping the index up to 10 times before makeNameUnique; makeNameUnique (database.cc:2553-2614) scans symbols sharing the name prefix and increments the parsed _NN/_xNNNNN suffix id; the loc-set comparator is (space, offset, size, input/written/free class, definition)."
+  "bfd": {
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  }
+ },
+ "host_tools": {
+  "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+ },
+ "input_manifest": {
+  "binary": {
+   "path": "examples/curl",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "size": 161728,
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
   },
-  "comparand": {
-    "cpp_fixture_sha256": "9afac3f7945cc6383619be82ceb8cbe0ab2541efa810e33de61c72e0183859b5",
-    "rust_fixture_sha256": "a98bbf0e9a157961c014002867f133acb69c4a425c7fbaa93a3747a695e8d2ef",
-    "runner_sha256": "02f96fa53d6003653e147b5e642211d8763d0b9e650caa295e7fce5c042784cc",
-    "doc_varmap_sha256": "666964778772b535c20aefbf187be6982de9288cd992e3203b5cdd78a86e7ca3",
-    "rust_crate_tree_sha256": "6d2211591ad0052575d838512af2bd804936edb3475028b598525ea8d07b1984",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-varmap-dynamicsym-base-v1 plus base commit and sorted length-prefixed paths and contents"
+  "function": {
+   "name": "GetStr",
+   "address": "0x36d0"
   },
-  "assets": {
-    "binary": {
-      "path": "examples/curl",
-      "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
-      "size": 161728,
-      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
-    },
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-      "size": 487659,
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481"
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
-      "size": 11721,
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f"
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
-      "size": 12182,
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
-      "size": 5390,
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b"
-    },
-    "bfd": {
-      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-    }
-  },
-  "host_tools": {
-    "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
-  },
-  "input_manifest": {
-    "binary": {
-      "path": "examples/curl",
-      "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
-      "size": 161728,
-      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41"
-    },
-    "function": {
-      "name": "GetStr",
-      "address": "0x36d0"
-    },
-    "cases": [
-      {
-        "id": "explicit_conflict_dynamic"
-      },
-      {
-        "id": "separate_usepoints_two_statics"
-      },
-      {
-        "id": "implied_conflict_rejected"
-      },
-      {
-        "id": "illegal_input_attach"
-      },
-      {
-        "id": "spacebase_input_rejected"
-      },
-      {
-        "id": "addrtied_attach_conflict"
-      }
-    ],
-    "sha256": "66555155321cef3f1acbfc5183e8f3782c31cd9bda50701a15694be774d16948"
-  },
-  "expected_results": {
-    "ghidra_stdout_sha256": "86d1aa8e1d0fa44aee19ce18e505c4ea58485414dbdc20a275b7a823bd80fec0",
-    "ghidra_stderr_sha256": "2f683a2c41c244556c83ea906a009e461c6444930ab93653608be67a65e12ff9",
-    "rugra_stdout_sha256": "86d1aa8e1d0fa44aee19ce18e505c4ea58485414dbdc20a275b7a823bd80fec0",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "diff_exit_code": 0,
-    "record_count": 12
-  },
-  "coverage": {
-    "explicit_conflict_dynamic": {
-      "status": "MATCH",
-      "covers": "linkSymbol conflict leg -> handleSymbolConflict foreign-high walk -> buildDynamicSymbol (uniqueHash methods 0-3, champion dedup) -> Scope::addDynamicSymbol ($$undef name, dynamic map, single-address uselimit) -> namerec -> buildDefaultName vn path -> ScopeInternal::buildVariableName local branch -> renameSymbol (uVar4); varnode setSymbolEntry mapped flag",
-      "residual_todo_ids": []
-    },
-    "separate_usepoints_two_statics": {
-      "status": "MATCH",
-      "covers": "queryProperties single-point uselimit gate: two static Symbols at one storage with distinct usepoints; Scope::addSymbol at the register address with the def-op usepoint",
-      "residual_todo_ids": []
-    },
-    "implied_conflict_rejected": {
-      "status": "MATCH",
-      "covers": "HighVariable::hasName implied member rejection (variable.cc:729-733) upstream of linkSymbol: the implied high stays symbolless and unmapped over a conflicting storage — implied semantics untouched",
-      "residual_todo_ids": []
-    },
-    "illegal_input_attach": {
-      "status": "MATCH",
-      "covers": "handleSymbolConflict isInput leg (funcdata_varnode.cc:1000-1003): the input attaches to the pre-existing unlimited-use Symbol; no dynamic Symbol; setSymbolEntry sets mapped",
-      "residual_todo_ids": []
-    },
-    "spacebase_input_rejected": {
-      "status": "MATCH",
-      "covers": "hasName unaffected+spacebase rejection (variable.cc:737-745): no link, no symbol, scope empty",
-      "residual_todo_ids": []
-    },
-    "addrtied_attach_conflict": {
-      "status": "MATCH",
-      "covers": "handleSymbolConflict isAddrTied leg: both address-tied highs attach to one ranged stack Symbol; ScopeLocal::buildVariableName Stack branch names it iStack_c0 through the cspec localrange window",
-      "residual_todo_ids": []
-    }
-  },
-  "residual_union": [
-    {
-      "id": "production-consumers",
-      "branches": [
-        {
-          "id": "dynamicsym_production_threading",
-          "status": "UNTESTED",
-          "detail": "ActionDynamicSymbols (coreaction.cc:4869, attemptDynamicMappingLate) is a registered stub in Rugra (action.rs :5724/:5733): mapping pre-existing dynamic symbols onto varnodes across the two deliberate instances is unproven; no production corpus path creates database-loaded dynamic symbols, so the fixture cannot exercise it from ActionNameVars alone."
-        }
-      ]
-    },
-    {
-      "id": "unreachable-branch",
-      "branches": [
-        {
-          "id": "equate_constant_branch",
-          "status": "UNTESTED",
-          "detail": "buildDynamicSymbol's constant leg (addEquateSymbol, funcdata_varnode.cc:1300-1301) is unreachable through the ActionNameVars projection: constant-space varnodes only reach linkSymbol when they already hold a SymbolEntry (coreaction.cc:2938-2944), and constants with different values never overlap one storage address."
-        }
-      ]
-    },
-    {
-      "id": "e2e-residual",
-      "branches": [
-        {
-          "id": "merge_mixed_high_e2e",
-          "status": "MISMATCH",
-          "detail": "The E2E printc uVar_<offset> GLUE residual (6 curl functions, backfill injection group) is NOT a varmap gap: the explicit representative's high carries mixed implied+explicit instances (e.g. my_get_token unique+0x23b00: 15 instances, 3 implied), so hasName rejects it before linkSymbol. Oracle order markimplied(:5720) < mergetype(:5727) is registered correctly in Rugra, but ActionMergeRequired/mergeOp force-merges same-slot instances into one high and Rugra's check_implied_cover approximation (static aggregate cover) then marks a MIX where Ghidra's inflateTest cover model marks whole merged highs explicit — in Ghidra the mixed state is unreachable (hasName would throw LowlevelError 'Implied varnode has been merged'). Fix domain: merge.rs inflate_test / coreaction.rs check_implied_cover (merge/cover lease)."
-        }
-      ]
-    },
-    {
-      "id": "creation-properties",
-      "branches": [
-        {
-          "id": "varnode_creation_properties",
-          "status": "UNTESTED",
-          "detail": "Funcdata::newVarnode's setVarnodeProperties scope-ownership query (funcdata_varnode.cc:26-42) sets the mapped bit at creation for stack-window varnodes; Rugra's set_varnode_properties consults the flat symbol_table instead of ScopeLocal queryProperties. The BEFORE stage of the fixture projection omits the varnode flag section for exactly this reason; the AFTER-stage mapped bits match through setSymbolEntry."
-        }
-      ]
-    }
+  "cases": [
+   {
+    "id": "explicit_conflict_dynamic"
+   },
+   {
+    "id": "separate_usepoints_two_statics"
+   },
+   {
+    "id": "implied_conflict_rejected"
+   },
+   {
+    "id": "illegal_input_attach"
+   },
+   {
+    "id": "spacebase_input_rejected"
+   },
+   {
+    "id": "addrtied_attach_conflict"
+   }
   ],
-  "projection_status": "MATCH",
-  "overall_status": "UNTESTED",
-  "residual_todo_ids": [
-    "MERGE-MIXEDHIGH-0001",
-    "DYNAMICSYM-PROD-0001",
-    "DYNAMICSYM-EQUATE-0001",
-    "VNCREATE-PROPS-0001"
-  ]
+  "sha256": "66555155321cef3f1acbfc5183e8f3782c31cd9bda50701a15694be774d16948"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "86d1aa8e1d0fa44aee19ce18e505c4ea58485414dbdc20a275b7a823bd80fec0",
+  "ghidra_stderr_sha256": "2f683a2c41c244556c83ea906a009e461c6444930ab93653608be67a65e12ff9",
+  "rugra_stdout_sha256": "86d1aa8e1d0fa44aee19ce18e505c4ea58485414dbdc20a275b7a823bd80fec0",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0,
+  "record_count": 12
+ },
+ "coverage": {
+  "explicit_conflict_dynamic": {
+   "status": "MATCH",
+   "covers": "linkSymbol conflict leg -> handleSymbolConflict foreign-high walk -> buildDynamicSymbol (uniqueHash methods 0-3, champion dedup) -> Scope::addDynamicSymbol ($$undef name, dynamic map, single-address uselimit) -> namerec -> buildDefaultName vn path -> ScopeInternal::buildVariableName local branch -> renameSymbol (uVar4); varnode setSymbolEntry mapped flag",
+   "residual_todo_ids": []
+  },
+  "separate_usepoints_two_statics": {
+   "status": "MATCH",
+   "covers": "queryProperties single-point uselimit gate: two static Symbols at one storage with distinct usepoints; Scope::addSymbol at the register address with the def-op usepoint",
+   "residual_todo_ids": []
+  },
+  "implied_conflict_rejected": {
+   "status": "MATCH",
+   "covers": "HighVariable::hasName implied member rejection (variable.cc:729-733) upstream of linkSymbol: the implied high stays symbolless and unmapped over a conflicting storage \u2014 implied semantics untouched",
+   "residual_todo_ids": []
+  },
+  "illegal_input_attach": {
+   "status": "MATCH",
+   "covers": "handleSymbolConflict isInput leg (funcdata_varnode.cc:1000-1003): the input attaches to the pre-existing unlimited-use Symbol; no dynamic Symbol; setSymbolEntry sets mapped",
+   "residual_todo_ids": []
+  },
+  "spacebase_input_rejected": {
+   "status": "MATCH",
+   "covers": "hasName unaffected+spacebase rejection (variable.cc:737-745): no link, no symbol, scope empty",
+   "residual_todo_ids": []
+  },
+  "addrtied_attach_conflict": {
+   "status": "MATCH",
+   "covers": "handleSymbolConflict isAddrTied leg: both address-tied highs attach to one ranged stack Symbol; ScopeLocal::buildVariableName Stack branch names it iStack_c0 through the cspec localrange window",
+   "residual_todo_ids": []
+  }
+ },
+ "residual_union": [
+  {
+   "id": "production-consumers",
+   "branches": [
+    {
+     "id": "dynamicsym_production_threading",
+     "status": "UNTESTED",
+     "detail": "ActionDynamicSymbols (coreaction.cc:4869, attemptDynamicMappingLate) is a registered stub in Rugra (action.rs :5724/:5733): mapping pre-existing dynamic symbols onto varnodes across the two deliberate instances is unproven; no production corpus path creates database-loaded dynamic symbols, so the fixture cannot exercise it from ActionNameVars alone."
+    }
+   ]
+  },
+  {
+   "id": "unreachable-branch",
+   "branches": [
+    {
+     "id": "equate_constant_branch",
+     "status": "UNTESTED",
+     "detail": "buildDynamicSymbol's constant leg (addEquateSymbol, funcdata_varnode.cc:1300-1301) is unreachable through the ActionNameVars projection: constant-space varnodes only reach linkSymbol when they already hold a SymbolEntry (coreaction.cc:2938-2944), and constants with different values never overlap one storage address."
+    }
+   ]
+  },
+  {
+   "id": "e2e-residual",
+   "branches": [
+    {
+     "id": "merge_mixed_high_e2e",
+     "status": "MISMATCH",
+     "detail": "The E2E printc uVar_<offset> GLUE residual (6 curl functions, backfill injection group) is NOT a varmap gap: the explicit representative's high carries mixed implied+explicit instances (e.g. my_get_token unique+0x23b00: 15 instances, 3 implied), so hasName rejects it before linkSymbol. Oracle order markimplied(:5720) < mergetype(:5727) is registered correctly in Rugra, but ActionMergeRequired/mergeOp force-merges same-slot instances into one high and Rugra's check_implied_cover approximation (static aggregate cover) then marks a MIX where Ghidra's inflateTest cover model marks whole merged highs explicit \u2014 in Ghidra the mixed state is unreachable (hasName would throw LowlevelError 'Implied varnode has been merged'). Fix domain: merge.rs inflate_test / coreaction.rs check_implied_cover (merge/cover lease)."
+    }
+   ]
+  },
+  {
+   "id": "creation-properties",
+   "branches": [
+    {
+     "id": "varnode_creation_properties",
+     "status": "UNTESTED",
+     "detail": "Funcdata::newVarnode's setVarnodeProperties scope-ownership query (funcdata_varnode.cc:26-42) sets the mapped bit at creation for stack-window varnodes; Rugra's set_varnode_properties consults the flat symbol_table instead of ScopeLocal queryProperties. The BEFORE stage of the fixture projection omits the varnode flag section for exactly this reason; the AFTER-stage mapped bits match through setSymbolEntry."
+    }
+   ]
+  }
+ ],
+ "projection_status": "MATCH",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "residual_todo_ids": [
+  "MERGE-MIXEDHIGH-0001",
+  "DYNAMICSYM-PROD-0001",
+  "DYNAMICSYM-EQUATE-0001",
+  "VNCREATE-PROPS-0001"
+ ]
 }

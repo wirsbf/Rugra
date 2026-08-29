@@ -49,7 +49,7 @@
    "tailover_sym_user",
    "tailover_offcut_user"
   ],
-  "overall_status": "MATCH",
+  "overall_status": "UNTESTED",
   "covered": [
    "tail jump into another function body: flow follows the branch, the callee body becomes blocks/ops of the caller (visited pollution is faithful Ghidra behavior, observable via op addr deltas and block ranges)",
    "direct call whose entry is a visited instruction start AND a real loader symbol: queryCall resolves the callee, checkContainedCall's fd != 0 guard (flow.cc:1367-1368) skips it - the spec survives with the setFuncdata display name and the op keeps CPUI_CALL, zero warnings",

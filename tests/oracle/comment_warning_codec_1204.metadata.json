@@ -1,67 +1,68 @@
 {
-  "schema": 1,
-  "fixture_id": "COMMENT-WARNING-CODEC-0001",
-  "projection_status": "MATCH",
-  "overall_status": "MISMATCH",
-  "status_note": "The complete observed offset/type/text/order/dedup/filter/error projection byte-matches Ghidra 12.0.4. Overall remains MISMATCH because Rugra Decoder has no AddrSpaceManager/readSpace channel: decode validates and consumes the space name but cannot restore the architecture-owned AddrSpace handle or reject an unknown registered-space name.",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
-  },
-  "rugra_base_commit": "cb43401df869f5771f2c1acadc53de102773b4d9",
-  "architecture": "synthetic little-endian uintb64 Translate with const=0, other=1, unique=2, ram=3; all fixture comments use byte-addressed ram",
-  "compiler_spec": "none; direct CommentDatabaseInternal and XML codec entry points have no prototype/compiler-spec dependency",
-  "analysis_options": {
-    "entrypoint": "direct CommentDatabaseInternal::{addComment,addCommentNoDuplicate,clearType,encode,decode} and Comment::decode calls",
-    "normalization": "Ghidra XmlEncode text and Rugra TreeEncoder DOM are normalized only to a schema-presence boolean; decoded Comment observations are otherwise byte-compared with no ID, order, exception-text, or state normalization",
-    "external_input_assets": "none; every comment and malformed XML element is embedded in both fixture sources"
-  },
-  "input_manifest": {
-    "canonicalization": "UTF-8 JSON array, sorted keys, compact separators, ensure_ascii=false",
-    "cases": [
-      "roundtrip: ram function 0x1000; HEADER@0x1000 Header; WARNING@0x2000 Test warning; WARNING@0x2000 Second warning; duplicate USER2/Test warning probe; inserted USER2/User note probe",
-      "filter: function 0x1000 WARNINGHEADER+HEADER at 0x1000, WARNING at 0x2000, USER2 at 0x3000; function 0x5000 WARNING at 0x6000; clear mask WARNING|WARNINGHEADER only for function 0x1000",
-      "unknown_type: pre-state type=HEADER emitted=true func=0xaaaa addr=0xbbbb uniq=7 text=sentinel; decode <comment type=bogus/>",
-      "missing_offset: same pre-state; decode WARNING comment whose first <addr space=ram/> omits offset before a valid second addr/text",
-      "unknown_property_encode: pre-state type=64 emitted=true func=0xaaaa addr=0xbbbb uniq=7 text=sentinel; encode must fail before opening the comment element"
-    ],
-    "fingerprint": "sha256:ba8c4021a4f08c862ae11cfee5ba4b3ba7f32b5d4e45d5f8c3f86377e1995cb1"
-  },
-  "decisive_semantics": {
-    "references_and_outputs": "MATCH for type, both address offsets, uniq, text, emitted, duplicate return values, filtered container contents, and error text. MISMATCH overall for decoded AddrSpace identity because Rugra Decoder cannot carry the manager reference.",
-    "loop_bounds_and_order": "MATCH: database encode/decode walks begin-to-end in (function,address,uniq) order; duplicate search and clearType function-bound range produce identical ordered observations.",
-    "counters_and_accumulators": "MATCH: uniq starts at zero per (function,address), increments after existing same-address comments, survives codec reallocation through deterministic encoded order, and is unchanged on a failing Comment::decode.",
-    "sort_and_comparison_keys": "MATCH for the fixture domain: function ram offset, comment ram offset, then uniq. Cross-space ordering and restored space-pointer identity are outside the matched projection and remain ADDRESS-0001 residuals."
-  },
-  "coverage": {
-    "warning_0x2000_type_address_text": "MATCH",
-    "space_offset_wire_attribute_separation": "MATCH (schema-presence projection)",
-    "xmlcontent_text_channel": "MATCH",
-    "ordered_roundtrip_and_uniq": "MATCH",
-    "duplicate_text_ignores_type": "MATCH",
-    "clear_type_function_and_mask_filter": "MATCH",
-    "unknown_type_error_partial_state": "MATCH",
-    "missing_offset_error_partial_state": "MATCH",
-    "unknown_property_encode_error_and_empty_stream": "MATCH",
-    "decoded_addrspace_handle_identity": "MISMATCH: Rugra Decoder lacks AddrSpaceManager/readSpace",
-    "unknown_space_name_rejection": "UNTESTED/MISSING on Rugra for the same decoder-manager gap",
-    "packed_codec": "UNTESTED; this fixture exercises Ghidra XmlEncode/XmlDecode and Rugra TreeEncoder/TreeDecoder only"
-  },
-  "residual_todo_ids": [
-    "ADDRESS-0001",
-    "MARSHAL-PACKED-0001"
+ "schema": 1,
+ "fixture_id": "COMMENT-WARNING-CODEC-0001",
+ "projection_status": "MATCH",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
+ "status_note": "The complete observed offset/type/text/order/dedup/filter/error projection byte-matches Ghidra 12.0.4. Overall remains MISMATCH because Rugra Decoder has no AddrSpaceManager/readSpace channel: decode validates and consumes the space name but cannot restore the architecture-owned AddrSpace handle or reject an unknown registered-space name.",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "rugra_base_commit": "cb43401df869f5771f2c1acadc53de102773b4d9",
+ "architecture": "synthetic little-endian uintb64 Translate with const=0, other=1, unique=2, ram=3; all fixture comments use byte-addressed ram",
+ "compiler_spec": "none; direct CommentDatabaseInternal and XML codec entry points have no prototype/compiler-spec dependency",
+ "analysis_options": {
+  "entrypoint": "direct CommentDatabaseInternal::{addComment,addCommentNoDuplicate,clearType,encode,decode} and Comment::decode calls",
+  "normalization": "Ghidra XmlEncode text and Rugra TreeEncoder DOM are normalized only to a schema-presence boolean; decoded Comment observations are otherwise byte-compared with no ID, order, exception-text, or state normalization",
+  "external_input_assets": "none; every comment and malformed XML element is embedded in both fixture sources"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON array, sorted keys, compact separators, ensure_ascii=false",
+  "cases": [
+   "roundtrip: ram function 0x1000; HEADER@0x1000 Header; WARNING@0x2000 Test warning; WARNING@0x2000 Second warning; duplicate USER2/Test warning probe; inserted USER2/User note probe",
+   "filter: function 0x1000 WARNINGHEADER+HEADER at 0x1000, WARNING at 0x2000, USER2 at 0x3000; function 0x5000 WARNING at 0x6000; clear mask WARNING|WARNINGHEADER only for function 0x1000",
+   "unknown_type: pre-state type=HEADER emitted=true func=0xaaaa addr=0xbbbb uniq=7 text=sentinel; decode <comment type=bogus/>",
+   "missing_offset: same pre-state; decode WARNING comment whose first <addr space=ram/> omits offset before a valid second addr/text",
+   "unknown_property_encode: pre-state type=64 emitted=true func=0xaaaa addr=0xbbbb uniq=7 text=sentinel; encode must fail before opening the comment element"
   ],
-  "comparand_sha256": {
-    "cpp_fixture": "98d9c97fd7cf940ef9493859f78b9650fe7c337ec021d160afa633be5b9ebe8b",
-    "rust_fixture": "14d38557e577176bd332661288864361b80c7c3f39a16f7d6e0758b2be4c4b89",
-    "rugra_comment_source": "89ab66833d6139e52d0593ad2e8f3da617059cc782346160cd88748ea86d22ca",
-    "api_document": "d0ece066f182fe4460e3a499c26d685769a5673e76a7fbc8ca02b8bc7f01744f",
-    "runner": "78eba58f04960585c23061f412b5294a9f4a4b1796ef6132530e930393f5029a",
-    "cargo_lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "ghidra_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f"
-  },
-  "expected_stdout_sha256": "c3b52c8cd16593bad1f46206db66e5d244a4c27735188f01fa999e792c260294",
-  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-  "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+  "fingerprint": "sha256:ba8c4021a4f08c862ae11cfee5ba4b3ba7f32b5d4e45d5f8c3f86377e1995cb1"
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "MATCH for type, both address offsets, uniq, text, emitted, duplicate return values, filtered container contents, and error text. MISMATCH overall for decoded AddrSpace identity because Rugra Decoder cannot carry the manager reference.",
+  "loop_bounds_and_order": "MATCH: database encode/decode walks begin-to-end in (function,address,uniq) order; duplicate search and clearType function-bound range produce identical ordered observations.",
+  "counters_and_accumulators": "MATCH: uniq starts at zero per (function,address), increments after existing same-address comments, survives codec reallocation through deterministic encoded order, and is unchanged on a failing Comment::decode.",
+  "sort_and_comparison_keys": "MATCH for the fixture domain: function ram offset, comment ram offset, then uniq. Cross-space ordering and restored space-pointer identity are outside the matched projection and remain ADDRESS-0001 residuals."
+ },
+ "coverage": {
+  "warning_0x2000_type_address_text": "MATCH",
+  "space_offset_wire_attribute_separation": "MATCH (schema-presence projection)",
+  "xmlcontent_text_channel": "MATCH",
+  "ordered_roundtrip_and_uniq": "MATCH",
+  "duplicate_text_ignores_type": "MATCH",
+  "clear_type_function_and_mask_filter": "MATCH",
+  "unknown_type_error_partial_state": "MATCH",
+  "missing_offset_error_partial_state": "MATCH",
+  "unknown_property_encode_error_and_empty_stream": "MATCH",
+  "decoded_addrspace_handle_identity": "MISMATCH: Rugra Decoder lacks AddrSpaceManager/readSpace",
+  "unknown_space_name_rejection": "UNTESTED/MISSING on Rugra for the same decoder-manager gap",
+  "packed_codec": "UNTESTED; this fixture exercises Ghidra XmlEncode/XmlDecode and Rugra TreeEncoder/TreeDecoder only"
+ },
+ "residual_todo_ids": [
+  "ADDRESS-0001",
+  "MARSHAL-PACKED-0001"
+ ],
+ "comparand_sha256": {
+  "cpp_fixture": "98d9c97fd7cf940ef9493859f78b9650fe7c337ec021d160afa633be5b9ebe8b",
+  "rust_fixture": "14d38557e577176bd332661288864361b80c7c3f39a16f7d6e0758b2be4c4b89",
+  "rugra_comment_source": "89ab66833d6139e52d0593ad2e8f3da617059cc782346160cd88748ea86d22ca",
+  "api_document": "d0ece066f182fe4460e3a499c26d685769a5673e76a7fbc8ca02b8bc7f01744f",
+  "runner": "78eba58f04960585c23061f412b5294a9f4a4b1796ef6132530e930393f5029a",
+  "cargo_lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "ghidra_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f"
+ },
+ "expected_stdout_sha256": "c3b52c8cd16593bad1f46206db66e5d244a4c27735188f01fa999e792c260294",
+ "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+ "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+ "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+ "input_sha256": "9770780139893930b1302ccb40ebd3602b639e4fefa3624009ab433cc9b8b082"
 }

@@ -1,286 +1,286 @@
 {
-  "schema_version": 2,
-  "fixture_id": "DATABASE-SCOPE-OWNERSHIP-1204",
-  "todo_ids": [
-    "DATABASE-SCOPE-OWNERSHIP-FIXTURE-0001"
-  ],
-  "status_note": "The locked Ghidra oracle records the real Architecture-owned Database graph, lazy FunctionSymbol-owned Funcdata, Database-owned ScopeLocal alias identities, two distinct attachScope failure ownership contracts, and the destructor cascade. Both sides execute their real findCreateScope/find_create_scope path: the selected id/name/parent/repeat-key/cardinality projection matches, while the full case remains MISMATCH because Ghidra directly returns and owns Scope pointers and has no scope-id allocator counter, whereas Rugra returns u64, stores Scope values and child ids, and advances next_scope_id. Rugra's post-lookup slot equality is reported separately and is not presented as Ghidra return-object identity. Rugra also cannot express the caller-owned Scope identity input used by attachScope failures. No difference is normalized into a full function MATCH, and no covered mapping is promoted to L3.",
-  "overall_status": "MISMATCH",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ "schema_version": 2,
+ "fixture_id": "DATABASE-SCOPE-OWNERSHIP-1204",
+ "todo_ids": [
+  "DATABASE-SCOPE-OWNERSHIP-FIXTURE-0001"
+ ],
+ "status_note": "The locked Ghidra oracle records the real Architecture-owned Database graph, lazy FunctionSymbol-owned Funcdata, Database-owned ScopeLocal alias identities, two distinct attachScope failure ownership contracts, and the destructor cascade. Both sides execute their real findCreateScope/find_create_scope path: the selected id/name/parent/repeat-key/cardinality projection matches, while the full case remains MISMATCH because Ghidra directly returns and owns Scope pointers and has no scope-id allocator counter, whereas Rugra returns u64, stores Scope values and child ids, and advances next_scope_id. Rugra's post-lookup slot equality is reported separately and is not presented as Ghidra return-object identity. Rugra also cannot express the caller-owned Scope identity input used by attachScope failures. No difference is normalized into a full function MATCH, and no covered mapping is promoted to L3.",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_source": {
+  "commit": "2be910a2513a9a049eb8bad0bd0a7c13a566bd6a",
+  "tree": "4810d810e0f1932537cd849a634ce51f19f067d9",
+  "src_tree": "004b20c8ed6da74cf6457a4386570bae4801bc78",
+  "sleigh_shim_tree": "c7729d9d1554dc62c486bcd7d58fdbf44bebb97d",
+  "arch_blob": "cd3fd77747d6377e14f2e672956ddfbc9ff17877",
+  "database_blob": "840e08ae133f285857b0b5ab2a19839976f96c0e",
+  "funcdata_blob": "9800c38b1c1bb37d9c2c28841151e0ad2bf9c148",
+  "varmap_blob": "af7630a51fb0912a494c87fbb34d2a8c513584d5",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "snapshot_policy": "Archive only the explicit crate closure from this commit and compile the live fixture as an overlay; never read live src/*.rs and never require runtime HEAD equality."
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "Architecture::buildDatabase stores the new Database in Architecture::symboltab and returns the exact registered global Scope pointer. Ghidra Database::findCreateScope directly returns a Scope pointer from pointer-owned idmap/children, so resolver/repeat/parent-child aliases are compared to that return pointer. Rugra find_create_scope returns only u64 from a value-owned BTreeMap and child-id vector; its resolver and parent-child slots are compared exactly after lookup but are explicitly marked unavailable as direct return aliases. Raw pointer values are never printed. Database::attachScope stores the incoming caller-owned Scope pointer and sets its parent; FunctionSymbol::getFunction caches one Funcdata pointer; Funcdata stores the exact FunctionSymbol back-reference and exact Database-owned ScopeLocal pointer.",
+  "loop_bounds_traversal_order": "Database::clearReferences recursively visits Scope::children from begin to end, both std::map<uint8,Scope*> order; ScopeInternal::~ScopeInternal walks every EntryMap then every SymbolNameTree element before Scope::~Scope walks remaining children. The sentinel destructor runs in the latter child phase and observes that FunctionSymbol::~FunctionSymbol -> Funcdata::~Funcdata -> Database::deleteScope has already detached the ScopeLocal.",
+  "counter_accumulator_lifecycle": "The buildDatabase override counts invocations and requires exactly one. Both find-create paths insert the explicit id once and the repeat lookup neither creates a second scope nor replaces its name or parent, but only Rugra exposes and advances Database::next_scope_id from 1 to id+1 on creation; Ghidra Database has no corresponding counter field or mutation. ScopeInternal nextUniqueId is incremented only when addSymbolInternal assigns the FunctionSymbol id; FunctionSymbol::getFunction allocates only when fd is null and reuses it thereafter. Duplicate attach does not increment or replace any registered id, and both failure cases preserve the pre-existing Database state described by their records.",
+  "sorting_comparison_keys": "Database::idmap and the Rugra Database scope map are keyed solely by uint8/u64 scope id; the first find-create lookup inserts id 0x12040002 and the second hits that key despite a different requested name. Ghidra Scope::children is an id-sorted map of Scope pointers, while Rugra Scope::children is an insertion-order Vec<u64>; this one-child projection records cardinality but leaves multi-child order UNTESTED. Duplicate detection uses idmap.insert before parent attachment; the unparented duplicate's getFullName is therefore the empty string, yielding the exact message 'Duplicate scope id: '. Symbol deletion uses SymbolNameTree order; the fixture installs one FunctionSymbol so there is no unobserved equal-key tie."
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec"
+ },
+ "analysis_options": {
+  "architecture_constructor": "FixtureArchitecture derives from BfdArchitecture(examples/curl, default) only to override the protected virtual buildDatabase hook; the override calls the locked Architecture::buildDatabase body exactly once and records its returned aliases. All other initialization is BfdArchitecture::init.",
+  "symbol_loading": "readLoaderSymbols is not called. The namespace, FunctionSymbol, and Funcdata use artificial RAM addresses 0x7e120400 and 0x7e120500 after normal x86-64 spec initialization, so loader-symbol contents cannot affect the ownership records.",
+  "api": "Architecture::buildDatabase; Database::{attachScope,findCreateScope,resolveScope,deleteScope}; Rugra Database::find_create_scope; Scope::{addFunction,removeSymbol,resolveScope}; FunctionSymbol::{getFunction,~FunctionSymbol}; Funcdata::{Funcdata,~Funcdata,getScopeLocal}; ScopeLocal::ScopeLocal; ScopeInternal::~ScopeInternal; Scope::~Scope",
+  "error_injection": "A second non-global Scope with id 0x12040001 exercises duplicate-id RecovError after idmap.insert fails. A fresh Database receives a name-bearing root Scope to exercise invalid-global-name LowlevelError before global assignment. ProbeScope destructors distinguish callee-deleted from caller-owned incoming objects.",
+  "destructor_probe": "The exit graph has one namespace FunctionSymbol/Funcdata/ScopeLocal plus an independent sentinel child. Architecture destruction deletes Database before prototype models/types/translator; Database deletes global; namespace ScopeInternal deletes its FunctionSymbol, which deletes Funcdata, which detaches/deletes ScopeLocal; only then Scope::~Scope deletes the sentinel. The sentinel queries its still-live parent by local name and records local_present=0.",
+  "rugra_projection": "The Rust executable calls the real Database::find_create_scope twice and observes its returned ids, exact resolved-slot equality after lookup, exact parent-child-resolved-slot equality, child count, stored name/parent, return/storage classes bound by compile-time helpers to the concrete production return/map/children types, and next_scope_id before/create/repeat state. It explicitly labels direct return-object aliases UNAVAILABLE because the production API returns u64. It separately constructs Architecture::new and Funcdata::new to observe their real empty ownership fields. It does not create ownership lookalikes or normalize the u64/value-owned/counter differences into the Ghidra graph.",
+  "debug_macros": "OPACTION_DEBUG, CPUI_DEBUG, and CPUI_STATISTICS are absent.",
+  "normalization": "No semantic difference is normalized. Raw addresses are fixed inputs; pointer addresses are deliberately replaced only by exact equality/null alias classes because allocation addresses are non-semantic. The find-create return/storage classes and Rugra-only next_scope_id mutation are emitted as explicit mismatches. Exception categories and text, map membership, parent/back-reference identities, child counts, and destructor event order remain observable. BfdArchitecture diagnostics are captured in an in-memory stream and both comparand stderr streams must be empty.",
+  "random_seed": "none; construction, map traversal, failure paths, and output are deterministic"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "9e7a4b0b1136a2f0a9d1ad2720c3853b4abf4aac3a755873cbda4542ecc4f4e6",
+  "rust_fixture_sha256": "c2340957771a944ac9dc6019368f459584d12b0ecaaf131930cb3a3c0710c9f6",
+  "runner_sha256": "64f30f19c6adff7e17ed043f09ef25802c8bbfd26577509003a13aca125885d2"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
-  "rugra_source": {
-    "commit": "2be910a2513a9a049eb8bad0bd0a7c13a566bd6a",
-    "tree": "4810d810e0f1932537cd849a634ce51f19f067d9",
-    "src_tree": "004b20c8ed6da74cf6457a4386570bae4801bc78",
-    "sleigh_shim_tree": "c7729d9d1554dc62c486bcd7d58fdbf44bebb97d",
-    "arch_blob": "cd3fd77747d6377e14f2e672956ddfbc9ff17877",
-    "database_blob": "840e08ae133f285857b0b5ab2a19839976f96c0e",
-    "funcdata_blob": "9800c38b1c1bb37d9c2c28841151e0ad2bf9c148",
-    "varmap_blob": "af7630a51fb0912a494c87fbb34d2a8c513584d5",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "snapshot_policy": "Archive only the explicit crate closure from this commit and compile the live fixture as an overlay; never read live src/*.rs and never require runtime HEAD equality."
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
   },
-  "decisive_semantics": {
-    "reference_output_parameters": "Architecture::buildDatabase stores the new Database in Architecture::symboltab and returns the exact registered global Scope pointer. Ghidra Database::findCreateScope directly returns a Scope pointer from pointer-owned idmap/children, so resolver/repeat/parent-child aliases are compared to that return pointer. Rugra find_create_scope returns only u64 from a value-owned BTreeMap and child-id vector; its resolver and parent-child slots are compared exactly after lookup but are explicitly marked unavailable as direct return aliases. Raw pointer values are never printed. Database::attachScope stores the incoming caller-owned Scope pointer and sets its parent; FunctionSymbol::getFunction caches one Funcdata pointer; Funcdata stores the exact FunctionSymbol back-reference and exact Database-owned ScopeLocal pointer.",
-    "loop_bounds_traversal_order": "Database::clearReferences recursively visits Scope::children from begin to end, both std::map<uint8,Scope*> order; ScopeInternal::~ScopeInternal walks every EntryMap then every SymbolNameTree element before Scope::~Scope walks remaining children. The sentinel destructor runs in the latter child phase and observes that FunctionSymbol::~FunctionSymbol -> Funcdata::~Funcdata -> Database::deleteScope has already detached the ScopeLocal.",
-    "counter_accumulator_lifecycle": "The buildDatabase override counts invocations and requires exactly one. Both find-create paths insert the explicit id once and the repeat lookup neither creates a second scope nor replaces its name or parent, but only Rugra exposes and advances Database::next_scope_id from 1 to id+1 on creation; Ghidra Database has no corresponding counter field or mutation. ScopeInternal nextUniqueId is incremented only when addSymbolInternal assigns the FunctionSymbol id; FunctionSymbol::getFunction allocates only when fd is null and reuses it thereafter. Duplicate attach does not increment or replace any registered id, and both failure cases preserve the pre-existing Database state described by their records.",
-    "sorting_comparison_keys": "Database::idmap and the Rugra Database scope map are keyed solely by uint8/u64 scope id; the first find-create lookup inserts id 0x12040002 and the second hits that key despite a different requested name. Ghidra Scope::children is an id-sorted map of Scope pointers, while Rugra Scope::children is an insertion-order Vec<u64>; this one-child projection records cardinality but leaves multi-child order UNTESTED. Duplicate detection uses idmap.insert before parent attachment; the unparented duplicate's getFullName is therefore the empty string, yielding the exact message 'Duplicate scope id: '. Symbol deletion uses SymbolNameTree order; the fixture installs one FunctionSymbol so there is no unobserved equal-key tie."
-  },
-  "architecture": "x86:LE:64:default",
   "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec"
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
   },
-  "analysis_options": {
-    "architecture_constructor": "FixtureArchitecture derives from BfdArchitecture(examples/curl, default) only to override the protected virtual buildDatabase hook; the override calls the locked Architecture::buildDatabase body exactly once and records its returned aliases. All other initialization is BfdArchitecture::init.",
-    "symbol_loading": "readLoaderSymbols is not called. The namespace, FunctionSymbol, and Funcdata use artificial RAM addresses 0x7e120400 and 0x7e120500 after normal x86-64 spec initialization, so loader-symbol contents cannot affect the ownership records.",
-    "api": "Architecture::buildDatabase; Database::{attachScope,findCreateScope,resolveScope,deleteScope}; Rugra Database::find_create_scope; Scope::{addFunction,removeSymbol,resolveScope}; FunctionSymbol::{getFunction,~FunctionSymbol}; Funcdata::{Funcdata,~Funcdata,getScopeLocal}; ScopeLocal::ScopeLocal; ScopeInternal::~ScopeInternal; Scope::~Scope",
-    "error_injection": "A second non-global Scope with id 0x12040001 exercises duplicate-id RecovError after idmap.insert fails. A fresh Database receives a name-bearing root Scope to exercise invalid-global-name LowlevelError before global assignment. ProbeScope destructors distinguish callee-deleted from caller-owned incoming objects.",
-    "destructor_probe": "The exit graph has one namespace FunctionSymbol/Funcdata/ScopeLocal plus an independent sentinel child. Architecture destruction deletes Database before prototype models/types/translator; Database deletes global; namespace ScopeInternal deletes its FunctionSymbol, which deletes Funcdata, which detaches/deletes ScopeLocal; only then Scope::~Scope deletes the sentinel. The sentinel queries its still-live parent by local name and records local_present=0.",
-    "rugra_projection": "The Rust executable calls the real Database::find_create_scope twice and observes its returned ids, exact resolved-slot equality after lookup, exact parent-child-resolved-slot equality, child count, stored name/parent, return/storage classes bound by compile-time helpers to the concrete production return/map/children types, and next_scope_id before/create/repeat state. It explicitly labels direct return-object aliases UNAVAILABLE because the production API returns u64. It separately constructs Architecture::new and Funcdata::new to observe their real empty ownership fields. It does not create ownership lookalikes or normalize the u64/value-owned/counter differences into the Ghidra graph.",
-    "debug_macros": "OPACTION_DEBUG, CPUI_DEBUG, and CPUI_STATISTICS are absent.",
-    "normalization": "No semantic difference is normalized. Raw addresses are fixed inputs; pointer addresses are deliberately replaced only by exact equality/null alias classes because allocation addresses are non-semantic. The find-create return/storage classes and Rugra-only next_scope_id mutation are emitted as explicit mismatches. Exception categories and text, map membership, parent/back-reference identities, child counts, and destructor event order remain observable. BfdArchitecture diagnostics are captured in an in-memory stream and both comparand stderr streams must be empty.",
-    "random_seed": "none; construction, map traversal, failure paths, and output are deterministic"
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
   },
-  "comparand": {
-    "cpp_fixture_sha256": "9e7a4b0b1136a2f0a9d1ad2720c3853b4abf4aac3a755873cbda4542ecc4f4e6",
-    "rust_fixture_sha256": "c2340957771a944ac9dc6019368f459584d12b0ecaaf131930cb3a3c0710c9f6",
-    "runner_sha256": "64f30f19c6adff7e17ed043f09ef25802c8bbfd26577509003a13aca125885d2"
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544
   },
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-      "size": 11721
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-      "size": 12182
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-      "size": 5390
-    },
-    "binary": {
-      "path": "examples/curl",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544
-    },
-    "bfd": {
-      "include_file_count": 9,
-      "include_tree_hash_scheme": "sha256 of bfd-include-tree-v1 plus sorted length-prefixed basenames and file contents",
-      "include_tree_sha256": "4eb42123f7696cd09656ed0e0950de8c450b1ab0606a08a188411f8d0463159c",
-      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-    }
-  },
-  "host": {
-    "cxx": "g++ (GCC) 16.2.1 20260810",
-    "cxx_target": "x86_64-pc-linux-gnu",
-    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-    "platform": "Linux 7.1.8-arch1-3 x86_64",
-    "cxx_path": "/usr/bin/g++",
-    "cc_path": "/usr/bin/gcc",
-    "ar_path": "/usr/bin/ar",
-    "make_path": "/usr/bin/make",
-    "python_path": "/usr/bin/python3.14",
-    "git_path": "/usr/bin/git",
-    "flock_path": "/usr/bin/flock",
-    "cargo_path": "/usr/bin/cargo",
-    "rustc_path": "/usr/bin/rustc",
-    "rust_toolchain": "system-path"
-  },
-  "input_manifest": {
-    "binary": {
-      "path": "examples/curl",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544
-    },
-    "cases": [
-      {
-        "case": "build_database",
-        "record_count": 1,
-        "input": "BfdArchitecture::init -> virtual buildDatabase -> locked Architecture::buildDatabase"
-      },
-      {
-        "case": "find_create_scope",
-        "record_count": 1,
-        "input": "Database::findCreateScope/find_create_scope(id=0x12040002,name=factory_ns,parent=global), then repeat the same id with name=ignored_name"
-      },
-      {
-        "case": "namespace_attach",
-        "record_count": 1,
-        "input": "ProbeScope(id=0x12040001,name=fixture_ns) attached below global"
-      },
-      {
-        "case": "function_graph",
-        "record_count": 1,
-        "input": "fixture_ns.addFunction(ram:0x7e120400,fixture_function), then two getFunction calls"
-      },
-      {
-        "case": "duplicate_id",
-        "record_count": 1,
-        "input": "ProbeScope(id=0x12040001,name=duplicate_scope) attached below global"
-      },
-      {
-        "case": "invalid_global_name",
-        "record_count": 1,
-        "input": "fresh Database(idByName=true), ProbeScope(id=0,name=invalid_global), null parent"
-      },
-      {
-        "case": "function_destroy",
-        "record_count": 1,
-        "input": "fixture_ns.removeSymbol(the FunctionSymbol owning the cached Funcdata)"
-      },
-      {
-        "case": "namespace_destroy",
-        "record_count": 1,
-        "input": "Database::deleteScope(fixture_ns) after function removal"
-      },
-      {
-        "case": "exit_prestate",
-        "record_count": 1,
-        "input": "exit_ns with FunctionSymbol/Funcdata/ScopeLocal and a separate sentinel child"
-      },
-      {
-        "case": "architecture_destroy",
-        "record_count": 1,
-        "input": "leave FixtureArchitecture scope and inspect externally owned destructor event vector"
-      }
-    ],
-    "sha256": "df41de6480cae109612928f15f6f771eece73d0ba0102f38975814ca0c2fd27f"
-  },
-  "expected_results": {
-    "ghidra_stdout_sha256": "af6d8a371c83b4760fcdedfc6977253e3eb306dfffcd9646355ae77bf60797da",
-    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "ec6999d16de2b03b859d7367f1cb98d4b1eb91f2ce98153406522082e9b9a561",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "8af4b39f23382de4f0ef914f221d761aa1ac5cf7003f3a5730feaaa3258fb80a",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "diff_exit_code": 1,
-    "ghidra_record_count": 10,
-    "rugra_record_count": 4,
-    "ghidra_case_order": [
-      "build_database",
-      "find_create_scope",
-      "namespace_attach",
-      "function_graph",
-      "duplicate_id",
-      "invalid_global_name",
-      "function_destroy",
-      "namespace_destroy",
-      "exit_prestate",
-      "architecture_destroy"
-    ],
-    "rugra_case_order": [
-      "find_create_scope",
-      "rugra_constructor_state",
-      "missing_capability",
-      "overall"
-    ]
-  },
-  "coverage": {
-    "build_database_graph": {
-      "status": "MISMATCH",
-      "ghidra_oracle_observation": "MATCH: one call returns the exact global registered in the new Database; Database and global both point back to the same Architecture; global is id 0, empty-named, parentless, and has no Funcdata back-reference.",
-      "rugra_difference": "Architecture::new leaves symboltab=None and the concrete Architecture has only an external set_symboltab seam; ArchitectureBuilder::build_database is an unimplemented trait hook.",
-      "residual_todo_ids": [
-        "DATABASE-0001",
-        "FUNCDATA-LOCALSCOPE-OWNERSHIP-0001"
-      ]
-    },
-    "find_create_scope_projection": {
-      "status": "MISMATCH",
-      "covered_projection_status": "MATCH",
-      "full": {
-        "status": "MISMATCH",
-        "reason": "Ghidra returns and owns Scope pointers without a scope-id allocator mutation; Rugra returns u64, stores Scope values and child ids, and advances next_scope_id."
-      },
-      "selected": {
-        "status": "MATCH",
-        "fields": [
-          "id_matches",
-          "resolver_key_present",
-          "repeat_key_same",
-          "name_preserved",
-          "parent_id",
-          "parent_child_key_resolves",
-          "parent_child_count"
-        ]
-      },
-      "multi_child_order": {
-        "status": "UNTESTED",
-        "reason": "Only one child is created, so this fixture cannot compare Ghidra's id-sorted Scope* map traversal with Rugra's insertion-order u64 vector. The output is neither sorted nor normalized to imply coverage.",
-        "residual_todo_ids": [
-          "DATABASE-SCOPE-OWNERSHIP-FIXTURE-0001",
-          "DB-LOCALSCOPE-MAP-0001"
-        ]
-      },
-      "ghidra_oracle_observation": "MATCH selected scalar/key projection: findCreateScope creates id 0x12040002 under global, repeat lookup preserves the key/name/parent, and child count is one. Full output: the API returns Scope*, and resolveScope, repeat return, plus the parent child table all alias that exact return pointer; Database idmap and Scope children own Scope* identities; no Database scope-id allocator counter exists.",
-      "rugra_observation": "MATCH selected scalar/key projection: find_create_scope creates the same explicit id under parent 0, repeat lookup preserves the key/name/parent, and child count is one. Full output differs: the API returns u64, so direct return-object aliases are unavailable; post-lookup BTreeMap slot and child-id resolution equality are recorded separately and cannot prove Ghidra return identity. Compile-time helpers instantiated on the production types classify the return, scope-map storage, and child storage as values, versus pointers on Ghidra. Creation advances public next_scope_id from 1 to 302252035.",
-      "full_difference": "Return type, direct return alias availability, stored ownership/reference representation, and the Rugra-only next_scope_id mutation are observable differences, so the complete function case is MISMATCH despite the matching selected projection. Multi-child traversal order is separately UNTESTED.",
-      "residual_todo_ids": [
-        "DATABASE-0001",
-        "DB-LOCALSCOPE-MAP-0001"
-      ]
-    },
-    "function_scope_ownership": {
-      "status": "MISMATCH",
-      "ghidra_oracle_observation": "MATCH: namespace, FunctionSymbol, cached Funcdata, Database-resolved ScopeLocal, parent, Architecture, and FunctionSymbol back-reference alias classes all have the locked values; ScopeLocal::isGlobal=false proves the Funcdata back-reference class.",
-      "rugra_difference": "FunctionSymbol has only Symbol/consume_size/entry; Funcdata::new has arch=None and scope=None; Database/Scope and varmap ScopeLocal remain distinct value-owned models.",
-      "residual_todo_ids": [
-        "DB-LOCALSCOPE-MAP-0001",
-        "FUNCDATA-LOCALSCOPE-OWNERSHIP-0001",
-        "ADDRESS-0001"
-      ]
-    },
-    "attach_failure_ownership": {
-      "status": "MISMATCH",
-      "ghidra_oracle_observation": "MATCH: duplicate id throws RecovError('Duplicate scope id: '), deletes the incoming unparented Scope, and retains the original; invalid global name throws LowlevelError without taking/deleting the incoming Scope and leaves globalscope null.",
-      "rugra_difference": "Database::find_create_scope proves that explicit-id creation and repeat identity lookup are present. The remaining mismatch is narrower: public Database APIs cannot receive a caller-owned Scope object identity or reproduce attachScope's callee-delete versus caller-retain exception ownership contracts.",
-      "residual_todo_ids": [
-        "DATABASE-0001",
-        "DB-LOCALSCOPE-MAP-0001"
-      ]
-    },
-    "destructor_cascade": {
-      "status": "MISMATCH",
-      "ghidra_oracle_observation": "MATCH: removing FunctionSymbol removes its mapping and synchronously deletes/detaches its ScopeLocal; full Architecture destruction enters namespace destruction, deletes FunctionSymbol/Funcdata/ScopeLocal, then deletes the sentinel child, which observes local_present=0.",
-      "rugra_difference": "The split value/Arc models have no FunctionSymbol -> Funcdata -> Database-owned ScopeLocal destruction cascade to run on the same input.",
-      "residual_todo_ids": [
-        "FUNCDATA-LOCALSCOPE-OWNERSHIP-0001",
-        "DATABASE-0001"
-      ]
-    },
-    "remaining_branches": {
-      "status": "UNTESTED",
-      "reason": "Further find-create edges (explicit id below current next_scope_id, u64::MAX counter overflow, empty non-global name, a missing parent, and multiple-child traversal order: Ghidra id-sorted Scope* map versus Rugra insertion-order id vector); multiple-global-scope rejection; attachScope(non-global, empty-name) LowlevelError; duplicate IDs nested below a non-global parent; decode-created function scopes; Funcdata construction without a FunctionSymbol, including its address-derived local-scope id; FunctionSymbol destruction while its fd is still null; constructor attach failure after partial Funcdata initialization; deleteScope missing-parent-reference LowlevelError; multiple FunctionSymbols and symbol-name destructor ordering; and exception injection during nested clearReferences are outside this ten-record Ghidra/four-record Rugra fixture.",
-      "residual_todo_ids": [
-        "DATABASE-SCOPE-OWNERSHIP-FIXTURE-0001",
-        "FUNCDATA-LOCALSCOPE-OWNERSHIP-0001",
-        "DB-LOCALSCOPE-MAP-0001"
-      ]
-    }
+  "bfd": {
+   "include_file_count": 9,
+   "include_tree_hash_scheme": "sha256 of bfd-include-tree-v1 plus sorted length-prefixed basenames and file contents",
+   "include_tree_sha256": "4eb42123f7696cd09656ed0e0950de8c450b1ab0606a08a188411f8d0463159c",
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
   }
+ },
+ "host": {
+  "cxx": "g++ (GCC) 16.2.1 20260810",
+  "cxx_target": "x86_64-pc-linux-gnu",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+  "platform": "Linux 7.1.8-arch1-3 x86_64",
+  "cxx_path": "/usr/bin/g++",
+  "cc_path": "/usr/bin/gcc",
+  "ar_path": "/usr/bin/ar",
+  "make_path": "/usr/bin/make",
+  "python_path": "/usr/bin/python3.14",
+  "git_path": "/usr/bin/git",
+  "flock_path": "/usr/bin/flock",
+  "cargo_path": "/usr/bin/cargo",
+  "rustc_path": "/usr/bin/rustc",
+  "rust_toolchain": "system-path"
+ },
+ "input_manifest": {
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544
+  },
+  "cases": [
+   {
+    "case": "build_database",
+    "record_count": 1,
+    "input": "BfdArchitecture::init -> virtual buildDatabase -> locked Architecture::buildDatabase"
+   },
+   {
+    "case": "find_create_scope",
+    "record_count": 1,
+    "input": "Database::findCreateScope/find_create_scope(id=0x12040002,name=factory_ns,parent=global), then repeat the same id with name=ignored_name"
+   },
+   {
+    "case": "namespace_attach",
+    "record_count": 1,
+    "input": "ProbeScope(id=0x12040001,name=fixture_ns) attached below global"
+   },
+   {
+    "case": "function_graph",
+    "record_count": 1,
+    "input": "fixture_ns.addFunction(ram:0x7e120400,fixture_function), then two getFunction calls"
+   },
+   {
+    "case": "duplicate_id",
+    "record_count": 1,
+    "input": "ProbeScope(id=0x12040001,name=duplicate_scope) attached below global"
+   },
+   {
+    "case": "invalid_global_name",
+    "record_count": 1,
+    "input": "fresh Database(idByName=true), ProbeScope(id=0,name=invalid_global), null parent"
+   },
+   {
+    "case": "function_destroy",
+    "record_count": 1,
+    "input": "fixture_ns.removeSymbol(the FunctionSymbol owning the cached Funcdata)"
+   },
+   {
+    "case": "namespace_destroy",
+    "record_count": 1,
+    "input": "Database::deleteScope(fixture_ns) after function removal"
+   },
+   {
+    "case": "exit_prestate",
+    "record_count": 1,
+    "input": "exit_ns with FunctionSymbol/Funcdata/ScopeLocal and a separate sentinel child"
+   },
+   {
+    "case": "architecture_destroy",
+    "record_count": 1,
+    "input": "leave FixtureArchitecture scope and inspect externally owned destructor event vector"
+   }
+  ],
+  "sha256": "df41de6480cae109612928f15f6f771eece73d0ba0102f38975814ca0c2fd27f"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "af6d8a371c83b4760fcdedfc6977253e3eb306dfffcd9646355ae77bf60797da",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "ec6999d16de2b03b859d7367f1cb98d4b1eb91f2ce98153406522082e9b9a561",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "8af4b39f23382de4f0ef914f221d761aa1ac5cf7003f3a5730feaaa3258fb80a",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 1,
+  "ghidra_record_count": 10,
+  "rugra_record_count": 4,
+  "ghidra_case_order": [
+   "build_database",
+   "find_create_scope",
+   "namespace_attach",
+   "function_graph",
+   "duplicate_id",
+   "invalid_global_name",
+   "function_destroy",
+   "namespace_destroy",
+   "exit_prestate",
+   "architecture_destroy"
+  ],
+  "rugra_case_order": [
+   "find_create_scope",
+   "rugra_constructor_state",
+   "missing_capability",
+   "overall"
+  ]
+ },
+ "coverage": {
+  "build_database_graph": {
+   "status": "MISMATCH",
+   "ghidra_oracle_observation": "MATCH: one call returns the exact global registered in the new Database; Database and global both point back to the same Architecture; global is id 0, empty-named, parentless, and has no Funcdata back-reference.",
+   "rugra_difference": "Architecture::new leaves symboltab=None and the concrete Architecture has only an external set_symboltab seam; ArchitectureBuilder::build_database is an unimplemented trait hook.",
+   "residual_todo_ids": [
+    "DATABASE-0001",
+    "FUNCDATA-LOCALSCOPE-OWNERSHIP-0001"
+   ]
+  },
+  "find_create_scope_projection": {
+   "status": "MISMATCH",
+   "covered_projection_status": "MATCH",
+   "full": {
+    "status": "MISMATCH",
+    "reason": "Ghidra returns and owns Scope pointers without a scope-id allocator mutation; Rugra returns u64, stores Scope values and child ids, and advances next_scope_id."
+   },
+   "selected": {
+    "status": "MATCH",
+    "fields": [
+     "id_matches",
+     "resolver_key_present",
+     "repeat_key_same",
+     "name_preserved",
+     "parent_id",
+     "parent_child_key_resolves",
+     "parent_child_count"
+    ]
+   },
+   "multi_child_order": {
+    "status": "UNTESTED",
+    "reason": "Only one child is created, so this fixture cannot compare Ghidra's id-sorted Scope* map traversal with Rugra's insertion-order u64 vector. The output is neither sorted nor normalized to imply coverage.",
+    "residual_todo_ids": [
+     "DATABASE-SCOPE-OWNERSHIP-FIXTURE-0001",
+     "DB-LOCALSCOPE-MAP-0001"
+    ]
+   },
+   "ghidra_oracle_observation": "MATCH selected scalar/key projection: findCreateScope creates id 0x12040002 under global, repeat lookup preserves the key/name/parent, and child count is one. Full output: the API returns Scope*, and resolveScope, repeat return, plus the parent child table all alias that exact return pointer; Database idmap and Scope children own Scope* identities; no Database scope-id allocator counter exists.",
+   "rugra_observation": "MATCH selected scalar/key projection: find_create_scope creates the same explicit id under parent 0, repeat lookup preserves the key/name/parent, and child count is one. Full output differs: the API returns u64, so direct return-object aliases are unavailable; post-lookup BTreeMap slot and child-id resolution equality are recorded separately and cannot prove Ghidra return identity. Compile-time helpers instantiated on the production types classify the return, scope-map storage, and child storage as values, versus pointers on Ghidra. Creation advances public next_scope_id from 1 to 302252035.",
+   "full_difference": "Return type, direct return alias availability, stored ownership/reference representation, and the Rugra-only next_scope_id mutation are observable differences, so the complete function case is MISMATCH despite the matching selected projection. Multi-child traversal order is separately UNTESTED.",
+   "residual_todo_ids": [
+    "DATABASE-0001",
+    "DB-LOCALSCOPE-MAP-0001"
+   ]
+  },
+  "function_scope_ownership": {
+   "status": "MISMATCH",
+   "ghidra_oracle_observation": "MATCH: namespace, FunctionSymbol, cached Funcdata, Database-resolved ScopeLocal, parent, Architecture, and FunctionSymbol back-reference alias classes all have the locked values; ScopeLocal::isGlobal=false proves the Funcdata back-reference class.",
+   "rugra_difference": "FunctionSymbol has only Symbol/consume_size/entry; Funcdata::new has arch=None and scope=None; Database/Scope and varmap ScopeLocal remain distinct value-owned models.",
+   "residual_todo_ids": [
+    "DB-LOCALSCOPE-MAP-0001",
+    "FUNCDATA-LOCALSCOPE-OWNERSHIP-0001",
+    "ADDRESS-0001"
+   ]
+  },
+  "attach_failure_ownership": {
+   "status": "MISMATCH",
+   "ghidra_oracle_observation": "MATCH: duplicate id throws RecovError('Duplicate scope id: '), deletes the incoming unparented Scope, and retains the original; invalid global name throws LowlevelError without taking/deleting the incoming Scope and leaves globalscope null.",
+   "rugra_difference": "Database::find_create_scope proves that explicit-id creation and repeat identity lookup are present. The remaining mismatch is narrower: public Database APIs cannot receive a caller-owned Scope object identity or reproduce attachScope's callee-delete versus caller-retain exception ownership contracts.",
+   "residual_todo_ids": [
+    "DATABASE-0001",
+    "DB-LOCALSCOPE-MAP-0001"
+   ]
+  },
+  "destructor_cascade": {
+   "status": "MISMATCH",
+   "ghidra_oracle_observation": "MATCH: removing FunctionSymbol removes its mapping and synchronously deletes/detaches its ScopeLocal; full Architecture destruction enters namespace destruction, deletes FunctionSymbol/Funcdata/ScopeLocal, then deletes the sentinel child, which observes local_present=0.",
+   "rugra_difference": "The split value/Arc models have no FunctionSymbol -> Funcdata -> Database-owned ScopeLocal destruction cascade to run on the same input.",
+   "residual_todo_ids": [
+    "FUNCDATA-LOCALSCOPE-OWNERSHIP-0001",
+    "DATABASE-0001"
+   ]
+  },
+  "remaining_branches": {
+   "status": "UNTESTED",
+   "reason": "Further find-create edges (explicit id below current next_scope_id, u64::MAX counter overflow, empty non-global name, a missing parent, and multiple-child traversal order: Ghidra id-sorted Scope* map versus Rugra insertion-order id vector); multiple-global-scope rejection; attachScope(non-global, empty-name) LowlevelError; duplicate IDs nested below a non-global parent; decode-created function scopes; Funcdata construction without a FunctionSymbol, including its address-derived local-scope id; FunctionSymbol destruction while its fd is still null; constructor attach failure after partial Funcdata initialization; deleteScope missing-parent-reference LowlevelError; multiple FunctionSymbols and symbol-name destructor ordering; and exception injection during nested clearReferences are outside this ten-record Ghidra/four-record Rugra fixture.",
+   "residual_todo_ids": [
+    "DATABASE-SCOPE-OWNERSHIP-FIXTURE-0001",
+    "FUNCDATA-LOCALSCOPE-OWNERSHIP-0001",
+    "DB-LOCALSCOPE-MAP-0001"
+   ]
+  }
+ }
 }

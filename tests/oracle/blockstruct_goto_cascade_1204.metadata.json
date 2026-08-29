@@ -88,5 +88,6 @@
   }
  ],
  "unit_tests": "cargo test --lib -- --test-threads=1 failure set identical to the pre-change baseline ba910ed (comment/infer_params/type_propagation, unrelated domains)",
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "input_sha256": "2b23e573129139c3463449514b44b90228438524aad7293ed72b8d3ae129f870"
 }

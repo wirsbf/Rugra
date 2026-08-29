@@ -1,210 +1,210 @@
 {
-  "schema_version": 2,
-  "fixture_id": "JT-PIPELINE-S1-1204",
-  "status_note": "JUMPTABLE-PIPELINE-0001 segment 1 bilateral gate: model selection chain, find_normalized call shape, EmulateFunction loader bridge and typed error channels. Locked Ghidra 12.0.4 oracle vs current Rugra candidate; 8/8 observation lines byte-identical, stderr empty on both sides. Module-level projection stays MISMATCH: the stageJumpTable partial-clone environment and generate_ops wiring are segment 2/3 work (pipeline_env_note line).",
-  "decisive_semantics": {
-    "reference_output_parameters": "JumpTable::recoverModel/recoverAddresses mutate jt in place and report failure by LowlevelError/JumptableThunkError (Rust: JumpTableRecoveryError::Lowlevel/Thunk with the exact explain text); EmulateFunction::emulatePath returns uintb or throws; recovery errors carry mode 1/2 via the typed channel, never a silent zero address.",
-    "loop_bounds_traversal_order": "Model chain order is override → CALLOTHER-def JumpAssisted shape gate → JumpBasic → JumpBasic2(initializeStart of the rejected pathMeld) per jumptable.cc:2257-2284; findDeterminingVarnodes DFS advances slot-first then pops; emulatePath executes meld ops from the start index down to 1 (op 0 is the BRANCHIND); buildAddresses iterates jrange values in range order, extra default value last.",
-    "counter_accumulator_lifecycle": "jrange sizes: guarded x yields [0,4) (4 entries) for sel_basic; JumpValuesRangeDefault yields range+1 for sel_basic2_default (5 entries incl. 0x4141 default); loadcounts record the cumulative LOAD count per value (collect=1 path); maxtablesize comes from Architecture::max_jumptable_size (1024 default).",
-    "sorting_comparison_keys": "findSmallestNormal picks the smallest calcRange size (varnodeIndex, maxsize monotone tightening, tie keeps earlier index); the 1-byte-256 guard special case and matchsize early-exit are per cc:1177-1191; address printing uses plain hex offsets with message-embedded addresses normalized to <A> so the two Address printers cannot diverge."
+ "schema_version": 2,
+ "fixture_id": "JT-PIPELINE-S1-1204",
+ "status_note": "JUMPTABLE-PIPELINE-0001 segment 1 bilateral gate: model selection chain, find_normalized call shape, EmulateFunction loader bridge and typed error channels. Locked Ghidra 12.0.4 oracle vs current Rugra candidate; 8/8 observation lines byte-identical, stderr empty on both sides. Module-level projection stays MISMATCH: the stageJumpTable partial-clone environment and generate_ops wiring are segment 2/3 work (pipeline_env_note line).",
+ "decisive_semantics": {
+  "reference_output_parameters": "JumpTable::recoverModel/recoverAddresses mutate jt in place and report failure by LowlevelError/JumptableThunkError (Rust: JumpTableRecoveryError::Lowlevel/Thunk with the exact explain text); EmulateFunction::emulatePath returns uintb or throws; recovery errors carry mode 1/2 via the typed channel, never a silent zero address.",
+  "loop_bounds_traversal_order": "Model chain order is override \u2192 CALLOTHER-def JumpAssisted shape gate \u2192 JumpBasic \u2192 JumpBasic2(initializeStart of the rejected pathMeld) per jumptable.cc:2257-2284; findDeterminingVarnodes DFS advances slot-first then pops; emulatePath executes meld ops from the start index down to 1 (op 0 is the BRANCHIND); buildAddresses iterates jrange values in range order, extra default value last.",
+  "counter_accumulator_lifecycle": "jrange sizes: guarded x yields [0,4) (4 entries) for sel_basic; JumpValuesRangeDefault yields range+1 for sel_basic2_default (5 entries incl. 0x4141 default); loadcounts record the cumulative LOAD count per value (collect=1 path); maxtablesize comes from Architecture::max_jumptable_size (1024 default).",
+  "sorting_comparison_keys": "findSmallestNormal picks the smallest calcRange size (varnodeIndex, maxsize monotone tightening, tie keeps earlier index); the 1-byte-256 guard special case and matchsize early-exit are per cc:1177-1191; address printing uses plain hex offsets with message-embedded addresses normalized to <A> so the two Address printers cannot diverge."
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc"
+ },
+ "analysis_options": {
+  "collectloads": "per-case via setLoadCollect",
+  "funcptr_align": "architecture default (0)"
+ },
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_source": {
+  "base_commit": "185f0e9d151d37ea6014505a29d1e4ddb8cd04d3",
+  "base_tree": "ea3321031a9cc86987863ba5191baf497d138480",
+  "base_src_tree": "c2c37a8cbbba8bd2b824b041a901089e5a1d5994",
+  "base_jumptable_blob": "a9cb66bb99679d9547d510b01247afe018d73be6",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "c529ce7c1ba7137a8ca0ca4c34a75184d29e35e00880244557d7177f5329de05",
+  "rust_fixture_sha256": "ab2f52b926bb0b29c66537bf1d79fbac9f657bb04a3a0279c05fc6e959a947b7",
+  "jumptable_overlay_sha256": "3ebf680c41a7a0a844fe1547250291234c45b27a71f41ecd1ad512f44dc1d8e9",
+  "runner_sha256": "fa901ba2ef16d94ce89491829d1c934dfb1c1788f066bce97b00a63408827343",
+  "rangeutil_overlay_sha256": "8c18f29c1ed9ac9208cf63355d87aa13ceb859a78192c5df09799fb8aae87955"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
+  },
+  "compiler_spec": {
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
+  },
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
+  },
+  "binary": {
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544
+  },
+  "bfd": {
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  }
+ },
+ "input_manifest": {
   "architecture": "x86:LE:64:default",
   "compiler_spec": {
-    "id": "gcc"
+   "id": "gcc"
   },
   "analysis_options": {
-    "collectloads": "per-case via setLoadCollect",
-    "funcptr_align": "architecture default (0)"
+   "collectloads": "per-case via setLoadCollect",
+   "funcptr_align": "architecture default (0)"
   },
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  "binary": {
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "size": 162544,
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a"
   },
-  "rugra_source": {
-    "base_commit": "185f0e9d151d37ea6014505a29d1e4ddb8cd04d3",
-    "base_tree": "ea3321031a9cc86987863ba5191baf497d138480",
-    "base_src_tree": "c2c37a8cbbba8bd2b824b041a901089e5a1d5994",
-    "base_jumptable_blob": "a9cb66bb99679d9547d510b01247afe018d73be6",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
-  },
-  "comparand": {
-    "cpp_fixture_sha256": "c529ce7c1ba7137a8ca0ca4c34a75184d29e35e00880244557d7177f5329de05",
-    "rust_fixture_sha256": "ab2f52b926bb0b29c66537bf1d79fbac9f657bb04a3a0279c05fc6e959a947b7",
-    "jumptable_overlay_sha256": "3ebf680c41a7a0a844fe1547250291234c45b27a71f41ecd1ad512f44dc1d8e9",
-    "runner_sha256": "fa901ba2ef16d94ce89491829d1c934dfb1c1788f066bce97b00a63408827343",
-    "rangeutil_overlay_sha256": "8c18f29c1ed9ac9208cf63355d87aa13ceb859a78192c5df09799fb8aae87955"
-  },
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-      "size": 11721
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-      "size": 12182
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-      "size": 5390
-    },
-    "binary": {
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544
-    },
-    "bfd": {
-      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-    }
-  },
-  "input_manifest": {
-    "architecture": "x86:LE:64:default",
-    "compiler_spec": {
-      "id": "gcc"
-    },
-    "analysis_options": {
-      "collectloads": "per-case via setLoadCollect",
-      "funcptr_align": "architecture default (0)"
-    },
-    "binary": {
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "size": 162544,
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a"
-    },
-    "functions": [
-      "GetStr"
-    ],
-    "cases": [
-      {
-        "name": "sel_basic",
-        "covers": "JumpBasic selection + findNormalized call shape (guards→smallest→size gate) + buildAddresses on a guarded 4-entry switch"
-      },
-      {
-        "name": "sel_override",
-        "covers": "override-first short-circuit (cc:2257-2261) via setOverride"
-      },
-      {
-        "name": "sel_basic2_default",
-        "covers": "Basic reject → JumpBasic2 initializeStart(rejected pathMeld) → two-path default model, extra value last (cc:2278-2282)"
-      },
-      {
-        "name": "sel_allfail",
-        "covers": "all models reject → LowlevelError 'Too many branches' (cc:2627-2630); no Trivial fallback"
-      },
-      {
-        "name": "emulfn_load_ok",
-        "covers": "EmulateFunction LOAD evaluated through the LoadImage bridge on real curl .rodata bytes (emulateutil.cc:81) with collect=1"
-      },
-      {
-        "name": "emulfn_load_dataunavail",
-        "covers": "LOAD outside mapped sections → DataUnavailError → emulatePath wraps into 'Could not emulate address calculation at <addr>' (jumptable.cc:246-250)"
-      },
-      {
-        "name": "emulfn_channels",
-        "covers": "direct emulatePath channels: BRANCH/RETURN/taken-CBRANCH LowlevelError texts, CBRANCH fallthru value, MULTIEQUAL lastOp-edge failure and success (emulateutil.cc:100-105)"
-      },
-      {
-        "name": "pipeline_env_note",
-        "covers": "module-level environment note (identical both stacks): stageJumpTable partial clone is segment 2, raw-fd recovery fails closed on the parent contract, JumpAssistOp payload has no oracle"
-      }
-    ],
-    "sha256": "7cf02c940f07a1b6edaa0d8f959989877ab1194131a837981dea1579210a13fa"
-  },
-  "expected_results": {
-    "ghidra_stdout_sha256": "4de63f581982abb2903c52f7f462b4d82113c8b2d74aa1bb3c543e1d57ba2da3",
-    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "4de63f581982abb2903c52f7f462b4d82113c8b2d74aa1bb3c543e1d57ba2da3",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "diff_exit_code": 0
-  },
-  "coverage": {
-    "model_selection_chain": {
-      "status": "MATCH",
-      "covers": "sel_basic/sel_override/sel_basic2_default/sel_allfail: override→(Assisted shape gate is exercised inside recover_model; on curl no jumpassist userop exists so Assisted never fires bilaterally)→Basic→Basic2, Trivial absent from the chain",
-      "residual_todo_ids": []
-    },
-    "find_normalized_call_shape": {
-      "status": "MATCH",
-      "covers": "recover_model delegates to find_normalized(rootbl=indop.parent, pathout=-1) exactly as cc:1427; guards restrict the range to [0,4) and the size gate passes",
-      "residual_todo_ids": []
-    },
-    "emulate_loader_bridge": {
-      "status": "MATCH",
-      "covers": "emulfn_load_ok addresses are read from the pinned curl image at 0x6100-0x610f; both stacks resolve the same 1-byte loads",
-      "residual_todo_ids": []
-    },
-    "emulate_dataunavail_channel": {
-      "status": "MATCH",
-      "covers": "typed LowlevelError with the cc:249 wrapper text; mode=fail_normal",
-      "residual_todo_ids": []
-    },
-    "emulate_controlflow_channels": {
-      "status": "MATCH",
-      "covers": "BRANCH/RETURN/CBRANCH/MULTIEQUAL LowlevelError texts and fallthru values identical",
-      "residual_todo_ids": []
-    },
-    "pipeline_env_note": {
-      "status": "MISMATCH",
-      "covers": "segment-1 fixture observations are all byte-identical; this line registers the module-level gap: Funcdata::stageJumpTable partial clone + 'jumptable' strategy group (funcdata_block.cc:491-547) and flow generate_ops wiring are segment 2/3; JumpAssistOp calc/addr pcode payloads are unported (no jumpassist userop exists on curl, so the chain gate is bilaterally identical); JumpBasic::recover_model fail-closes on unparented BRANCHIND (Rust-side contract for an environment Ghidra never runs)",
-      "residual_todo_ids": [
-        "JUMPTABLE-PIPELINE-0001"
-      ]
-    }
-  },
-  "residuals": [
-    {
-      "todo_id": "JUMPTABLE-PIPELINE-0001",
-      "status": "MISMATCH",
-      "detail": "Segment 1 (this commit) covers the jumptable.rs domain: model selection chain, find_normalized delegation, EmulateFunction loader bridge and typed error channels, all bilateral MATCH on the locked 12.0.4 oracle. The stageJumpTable partial-clone environment (funcdata_block.cc:491-547 truncatedFlow + 'jumptable' action group) and generate_ops wiring remain for segments 2/3; until then production recovery on raw (block-less) Funcdata fails closed by contract.",
-      "branches": [
-        {
-          "id": "stagejumptable-partial",
-          "status": "MISMATCH",
-          "detail": "Funcdata::truncatedFlow + partialflow.generateBlocks + 'jumptable' strategy not ported (funcdata/fspec/coreaction lease)"
-        },
-        {
-          "id": "jumpassist-payload",
-          "status": "MISMATCH",
-          "detail": "JumpAssistOp getCalcSize/getIndex2Addr pcode scripts unported; JumpAssisted conservatively fails after the faithful shape checks"
-        },
-        {
-          "id": "no-parent-fail-closed",
-          "status": "MISMATCH",
-          "detail": "Ghidra never runs recovery on an unparented BRANCHIND (stageJumpTable invariant); Rugra fail-closes Ok(false) instead of the C++ null deref — Rust-side contract documented on JumpBasic::recover_model"
-        }
-      ]
-    }
+  "functions": [
+   "GetStr"
   ],
-  "known_diffs": [
-    {
-      "expect_line_prefix": "pipeline_env_note|",
-      "residual_todo_id": "JUMPTABLE-PIPELINE-0001"
-    }
+  "cases": [
+   {
+    "name": "sel_basic",
+    "covers": "JumpBasic selection + findNormalized call shape (guards\u2192smallest\u2192size gate) + buildAddresses on a guarded 4-entry switch"
+   },
+   {
+    "name": "sel_override",
+    "covers": "override-first short-circuit (cc:2257-2261) via setOverride"
+   },
+   {
+    "name": "sel_basic2_default",
+    "covers": "Basic reject \u2192 JumpBasic2 initializeStart(rejected pathMeld) \u2192 two-path default model, extra value last (cc:2278-2282)"
+   },
+   {
+    "name": "sel_allfail",
+    "covers": "all models reject \u2192 LowlevelError 'Too many branches' (cc:2627-2630); no Trivial fallback"
+   },
+   {
+    "name": "emulfn_load_ok",
+    "covers": "EmulateFunction LOAD evaluated through the LoadImage bridge on real curl .rodata bytes (emulateutil.cc:81) with collect=1"
+   },
+   {
+    "name": "emulfn_load_dataunavail",
+    "covers": "LOAD outside mapped sections \u2192 DataUnavailError \u2192 emulatePath wraps into 'Could not emulate address calculation at <addr>' (jumptable.cc:246-250)"
+   },
+   {
+    "name": "emulfn_channels",
+    "covers": "direct emulatePath channels: BRANCH/RETURN/taken-CBRANCH LowlevelError texts, CBRANCH fallthru value, MULTIEQUAL lastOp-edge failure and success (emulateutil.cc:100-105)"
+   },
+   {
+    "name": "pipeline_env_note",
+    "covers": "module-level environment note (identical both stacks): stageJumpTable partial clone is segment 2, raw-fd recovery fails closed on the parent contract, JumpAssistOp payload has no oracle"
+   }
   ],
-  "projection_status": "MISMATCH",
-  "overall_status": "MISMATCH"
+  "sha256": "7cf02c940f07a1b6edaa0d8f959989877ab1194131a837981dea1579210a13fa"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "4de63f581982abb2903c52f7f462b4d82113c8b2d74aa1bb3c543e1d57ba2da3",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "4de63f581982abb2903c52f7f462b4d82113c8b2d74aa1bb3c543e1d57ba2da3",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0
+ },
+ "coverage": {
+  "model_selection_chain": {
+   "status": "MATCH",
+   "covers": "sel_basic/sel_override/sel_basic2_default/sel_allfail: override\u2192(Assisted shape gate is exercised inside recover_model; on curl no jumpassist userop exists so Assisted never fires bilaterally)\u2192Basic\u2192Basic2, Trivial absent from the chain",
+   "residual_todo_ids": []
+  },
+  "find_normalized_call_shape": {
+   "status": "MATCH",
+   "covers": "recover_model delegates to find_normalized(rootbl=indop.parent, pathout=-1) exactly as cc:1427; guards restrict the range to [0,4) and the size gate passes",
+   "residual_todo_ids": []
+  },
+  "emulate_loader_bridge": {
+   "status": "MATCH",
+   "covers": "emulfn_load_ok addresses are read from the pinned curl image at 0x6100-0x610f; both stacks resolve the same 1-byte loads",
+   "residual_todo_ids": []
+  },
+  "emulate_dataunavail_channel": {
+   "status": "MATCH",
+   "covers": "typed LowlevelError with the cc:249 wrapper text; mode=fail_normal",
+   "residual_todo_ids": []
+  },
+  "emulate_controlflow_channels": {
+   "status": "MATCH",
+   "covers": "BRANCH/RETURN/CBRANCH/MULTIEQUAL LowlevelError texts and fallthru values identical",
+   "residual_todo_ids": []
+  },
+  "pipeline_env_note": {
+   "status": "MISMATCH",
+   "covers": "segment-1 fixture observations are all byte-identical; this line registers the module-level gap: Funcdata::stageJumpTable partial clone + 'jumptable' strategy group (funcdata_block.cc:491-547) and flow generate_ops wiring are segment 2/3; JumpAssistOp calc/addr pcode payloads are unported (no jumpassist userop exists on curl, so the chain gate is bilaterally identical); JumpBasic::recover_model fail-closes on unparented BRANCHIND (Rust-side contract for an environment Ghidra never runs)",
+   "residual_todo_ids": [
+    "JUMPTABLE-PIPELINE-0001"
+   ]
+  }
+ },
+ "residuals": [
+  {
+   "todo_id": "JUMPTABLE-PIPELINE-0001",
+   "status": "MISMATCH",
+   "detail": "Segment 1 (this commit) covers the jumptable.rs domain: model selection chain, find_normalized delegation, EmulateFunction loader bridge and typed error channels, all bilateral MATCH on the locked 12.0.4 oracle. The stageJumpTable partial-clone environment (funcdata_block.cc:491-547 truncatedFlow + 'jumptable' action group) and generate_ops wiring remain for segments 2/3; until then production recovery on raw (block-less) Funcdata fails closed by contract.",
+   "branches": [
+    {
+     "id": "stagejumptable-partial",
+     "status": "MISMATCH",
+     "detail": "Funcdata::truncatedFlow + partialflow.generateBlocks + 'jumptable' strategy not ported (funcdata/fspec/coreaction lease)"
+    },
+    {
+     "id": "jumpassist-payload",
+     "status": "MISMATCH",
+     "detail": "JumpAssistOp getCalcSize/getIndex2Addr pcode scripts unported; JumpAssisted conservatively fails after the faithful shape checks"
+    },
+    {
+     "id": "no-parent-fail-closed",
+     "status": "MISMATCH",
+     "detail": "Ghidra never runs recovery on an unparented BRANCHIND (stageJumpTable invariant); Rugra fail-closes Ok(false) instead of the C++ null deref \u2014 Rust-side contract documented on JumpBasic::recover_model"
+    }
+   ]
+  }
+ ],
+ "known_diffs": [
+  {
+   "expect_line_prefix": "pipeline_env_note|",
+   "residual_todo_id": "JUMPTABLE-PIPELINE-0001"
+  }
+ ],
+ "projection_status": "MISMATCH",
+ "overall_status": "MISMATCH: (B2 canonicalization)"
 }

@@ -1,243 +1,243 @@
 {
-  "schema_version": 2,
-  "fixture_id": "CONDEXE-PULLBACK-0005",
-  "status_note": "The five targeted projections (SUBPIECE pullback through the MULTIEQUAL in-branch blocks P1/P1b, pullback cache P3, cross-block immediate-dominator pullback P2, constant-input pullback P5, and the testOpRead admission gate G1-G8) are byte-identical MATCH over 14 records, but the execute/doReplacement/removeFromFlowSplit integration over pullback outputs remains UNTESTED under CFG-0001, so the fixture-level B2 status is UNTESTED.",
-  "decisive_semantics": {
-    "reference_output_parameters": "pullbackOp (condexe.cc:160-190) returns the new output Varnode pointer and caches it in pullback[inbranch] (cc:188); the duplicate op is created via fd->newOp(numInput, op->getAddr()) (cc:180), its output via fd->newVarnodeOut(size, origOut->getAddr(), newOp) (cc:182) preserving the original address AND space, installed with opSetInput(op, invn, 0) plus the cc:185-186 input-copy loop, and inserted with opInsertEnd (cc:187). testOpRead (cc:107-142) returns bool. State is shared through fd (PcodeOpBank uniqid, VarnodeBank trees, block op lists) and the pullback cache; no other out-params.",
-    "loop_bounds_traversal_order": "pullbackOp copies inputs with for(int4 i=1;i<op->numInput();++i) (cc:185); the inbranch leg reads defOp->getIn(inbranch) only when defOp->getParent()==iblock (cc:170-173), otherwise bl=iblock->getImmedDom() (cc:175/178). opInsertEnd (funcdata_op.cc:435-446) positions at endOp() minus one only when the last op is a flow break. testOpRead gates INT_ADD/PTRSUB input-1 constancy (cc:126-128) BEFORE the upop parent/code check (cc:131-133) and the isFree check (cc:135-136); the COPY short-circuit runs first (cc:123).",
-    "counter_accumulator_lifecycle": "PcodeOpBank::uniqid increments once per newOp (SeqNum time; op.cc:941-948), so duplicate SeqNum times are monotone across P1(7), P1b(8), P2(13), P5(17) in fixture op-creation order; VarnodeBank create_index increments per varnode; pullback[inbranch] is written once per inbranch per doReplacement cycle (cleared at cc:323) and the P3 cache hit returns the identical Varnode pointer without consuming uniqid.",
-    "sorting_comparison_keys": "VarnodeBank loc/def trees order by (space, offset, size, input/written/free class, def SeqNum) with the -1 trick putting free varnodes last (varnode.cc:34-53), so two WRITTEN varnodes at the same storage address (P1: the original SUBPIECE output register:300/4 and its duplicate) coexist keyed by their defining ops' SeqNums; block op order is list order, so END insertion is distinguishable from BEGIN insertion by index."
-  },
-  "oracle": {
-    "project": "Ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source_files": [
-      "Ghidra/Features/Decompiler/src/decompile/cpp/condexe.cc",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/condexe.hh",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_op.cc",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_varnode.cc",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/varnode.cc",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/op.cc"
-    ]
-  },
-  "rugra_source": {
-    "base_commit": "0d9f8a12c16a68b6a6cb265861a79356dcf4c6e8",
-    "base_tree": "b3fb98b80cd18018fc4aef35c9257fec8784ce47",
-    "base_src_tree": "ebfca01131df49511d48eabd7549512e13ab1612",
-    "base_condexe_blob": "4ac080386a5f185ec65ff65f30829276775e60e0",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "archive_paths": [
-      "Cargo.toml",
-      "Cargo.lock",
-      "build.rs",
-      "README.md",
-      "benches/decompile_bench.rs",
-      "tests/oracle/decompress_1204.rs",
-      "tests/oracle/funcproto_lock_1204.rs",
-      "src",
-      "sleigh_shim"
-    ],
-    "overlays": [
-      {
-        "path": "src/condexe.rs",
-        "policy": "primary file under test; hash-verify before replacing the pinned base copy"
-      }
-    ],
-    "archive_policy": "Immutable explicit dependency closure plus one hash-verified source overlay; unrelated worktree files are excluded"
-  },
-  "architecture": "fixture-synthetic (FixtureArchitecture, no loader)",
-  "compiler_spec": {
-    "id": "none (FixtureArchitecture built-in prototype model)"
-  },
-  "analysis_options": {
-    "apis": [
-      "Funcdata::newOp",
-      "Funcdata::newVarnodeOut",
-      "Funcdata::newVarnode",
-      "Funcdata::newConstant",
-      "Funcdata::opSetOpcode",
-      "Funcdata::opSetInput",
-      "Funcdata::opInsertEnd",
-      "Funcdata::opInsertBegin",
-      "ConditionalExecution::pullbackOp",
-      "ConditionalExecution::testOpRead",
-      "FlowBlock::setImmedDom (test-only dominator wiring)"
-    ],
-    "funcdata": "One synthetic Funcdata over FixtureArchitecture; no followFlow, no Action pass; synthetic BlockBasic graph plus COPY / MULTIEQUAL / SUBPIECE / INT_ADD / PTRSUB / CBRANCH ops at explicit pc and storage addresses; Heritage::buildInfoList precondition replicated (the real pipeline populates Heritage::infolist during the first heritage() pass, which buildHeritageArray reads)",
-    "case_matrix": "pullback P1/P1b: SUBPIECE over an iblock MULTIEQUAL through inbranch 0 and 1 (target block = iblock->In(inbranch), input 0 = MULTIEQUAL slot, original output in REGISTER space, target block has a leading COPY and trailing CBRANCH so END insertion lands between them); P3: pullback cache hit on the same inbranch; P2: input 0 defined outside the iblock -> immediate dominator target, original output in UNIQUE space; P5: constant (unwritten) input 0 -> immediate dominator target, empty target block; gate G1-G8: testOpRead admission matrix over INT_ADD/PTRSUB constant vs var input 1, non-MULTIEQUAL in-iblock definer, free/constant input 0, MULTIEQUAL input 0, COPY writeOp",
-    "random_seed": "none",
-    "error_injection": "none",
-    "normalization": "Only block creation ordinals (bN) and varnode storage (space:offset/size) replace raw pointers; SeqNum times, block indices, op counts and booleans are byte-compared"
-  },
-  "input_manifest": {
-    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,cases}, sort_keys=True, separators=(',',':'))",
-    "sha256": "8713d77663ac42e4a9960df55414eaeb86a3d58f08578cc60927df9560e4c3ca",
-    "cases": [
-      {
-        "id": "P0",
-        "family": "pullback"
-      },
-      {
-        "id": "P1",
-        "family": "pullback"
-      },
-      {
-        "id": "P1b",
-        "family": "pullback"
-      },
-      {
-        "id": "P3",
-        "family": "pullback"
-      },
-      {
-        "id": "P2",
-        "family": "pullback"
-      },
-      {
-        "id": "P5",
-        "family": "pullback"
-      },
-      {
-        "id": "G1",
-        "family": "gate"
-      },
-      {
-        "id": "G2",
-        "family": "gate"
-      },
-      {
-        "id": "G3",
-        "family": "gate"
-      },
-      {
-        "id": "G4",
-        "family": "gate"
-      },
-      {
-        "id": "G5",
-        "family": "gate"
-      },
-      {
-        "id": "G6",
-        "family": "gate"
-      },
-      {
-        "id": "G7",
-        "family": "gate"
-      },
-      {
-        "id": "G8",
-        "family": "gate"
-      }
-    ]
-  },
-  "observation_schema": {
-    "format": "14 fixed-order pipe-delimited UTF-8 records with final newline",
-    "record_order": [
-      "P0",
-      "P1",
-      "P1b",
-      "P3",
-      "P2",
-      "P5",
-      "G1",
-      "G2",
-      "G3",
-      "G4",
-      "G5",
-      "G6",
-      "G7",
-      "G8"
-    ],
-    "pullback_projection": "For each pullbackOp call: target block creation ordinal, index within the block op list, block op count, duplicate opcode, SeqNum pc:time, output storage space:offset/size, input-0 and input-1 storage; P0 additionally records the pre-pullback iblock op count and the ORIGINAL SUBPIECE output storage; P3 records cache-pointer identity and unchanged op counts",
-    "gate_projection": "testOpRead boolean per admission-matrix cell",
-    "preserved": "No storage address, space, SeqNum time, block index, op count or boolean is normalized; only raw pointers are replaced by creation ordinals"
-  },
-  "build": {
-    "oracle_archive": "Exact locked Ghidra commit archive and locked Makefile libdecomp.a",
-    "supplemental_source_units": [
-      "libdecomp.cc",
-      "sleigh_arch.cc",
-      "inject_sleigh.cc"
-    ],
-    "cxx_flags": [
-      "-std=c++11",
-      "-O2",
-      "-Wall",
-      "-Wno-sign-compare"
-    ],
-    "access_leverage": "#define private public + #define class struct (ConditionalExecution uses the implicit class-private section; pullbackOp/testOpRead and the iblock member are driven directly)",
-    "rust_build": "Cargo --locked --offline in isolated target, then rustc with the librugra_sleigh native link"
-  },
-  "comparand": {
-    "cpp_fixture_sha256": "206a5ef681ac4889b245a7fa634042094f237d72cfb255a149f131c5074ff53e",
-    "rust_fixture_sha256": "d2f29570ce71c946d57d8289dfaf0f0b57fbceff6417e108a4d9d23303aab26b",
-    "condexe_overlay_sha256": "1c5e7c4341e7e911b61f0c0726ab14cc2754ab6d9e0914526542f27ad5987a22",
-    "runner_sha256": "0cc932d27e57c8a2364cba7297f5b10a9a3428aa2b8c716cec4e0d56e47acb73"
-  },
-  "expected_results": {
-    "ghidra_stdout_sha256": "5e48384966d26b5fb2dd41686885c17cd51d516ebaa9a699da23241ed982be2d",
-    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "5e48384966d26b5fb2dd41686885c17cd51d516ebaa9a699da23241ed982be2d",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "diff_exit_code": 0
-  },
-  "coverage": {
-    "pullback_subpiece_multiequal": {
-      "status": "MATCH",
-      "covers": "P0/P1/P1b: pullbackOp (condexe.cc:160-190) through an iblock MULTIEQUAL for inbranch 0 and 1 — target block iblock->In(inbranch) (cc:171), input 0 from the MULTIEQUAL slot (cc:172), duplicate at the original op address (cc:180), output at the original REGISTER-space address (cc:182), opInsertEnd between the leading COPY and trailing CBRANCH (cc:187; funcdata_op.cc:435-446), SeqNum pc:time pinned",
-      "residual_todo_ids": []
-    },
-    "pullback_cache": {
-      "status": "MATCH",
-      "covers": "P3: findPullback cache (condexe.cc:146-152/163-165/188) returns the identical Varnode for a repeated inbranch and inserts no new op",
-      "residual_todo_ids": []
-    },
-    "pullback_crossblock_immeddom": {
-      "status": "MATCH",
-      "covers": "P2: input 0 defined outside the iblock -> bl = iblock->getImmedDom() (cc:175) and the duplicate preserves a UNIQUE-space original output address (cc:182), catching both the anonymous-unique and Register-pinning storage defects",
-      "residual_todo_ids": []
-    },
-    "pullback_const_input": {
-      "status": "MATCH",
-      "covers": "P5: unwritten (constant) input 0 -> bl = immedDom (cc:177-179), constant passed through as duplicate input 0, END insertion into an otherwise-empty block still precedes the trailing CBRANCH",
-      "residual_todo_ids": []
-    },
-    "gate_test_op_read": {
-      "status": "MATCH",
-      "covers": "G1-G8: testOpRead admission matrix (condexe.cc:107-142) — INT_ADD/PTRSUB non-constant input 1 rejected (cc:126-128), non-MULTIEQUAL in-iblock input-0 definer rejected (cc:131-133), free/constant input 0 rejected (cc:135-136), MULTIEQUAL input 0 and COPY writeOps admitted",
-      "residual_todo_ids": []
-    },
-    "execute_and_flow_split": {
-      "status": "UNTESTED",
-      "covers": "ConditionalExecution::execute / doReplacement consuming pullback outputs, and removeFromFlowSplit, are not exercised (CFG-0001 owns the corrected flow-split sequence); doReplacement's RETURN-leg newVarnodeOut storage preservation (condexe.cc:340-349) is likewise not projected here",
-      "residual_todo_ids": [
-        "CFG-0001"
-      ]
-    }
-  },
-  "projection_status": "MATCH",
-  "residual_todo_ids": [
-    "CFG-0001"
+ "schema_version": 2,
+ "fixture_id": "CONDEXE-PULLBACK-0005",
+ "status_note": "The five targeted projections (SUBPIECE pullback through the MULTIEQUAL in-branch blocks P1/P1b, pullback cache P3, cross-block immediate-dominator pullback P2, constant-input pullback P5, and the testOpRead admission gate G1-G8) are byte-identical MATCH over 14 records, but the execute/doReplacement/removeFromFlowSplit integration over pullback outputs remains UNTESTED under CFG-0001, so the fixture-level B2 status is UNTESTED.",
+ "decisive_semantics": {
+  "reference_output_parameters": "pullbackOp (condexe.cc:160-190) returns the new output Varnode pointer and caches it in pullback[inbranch] (cc:188); the duplicate op is created via fd->newOp(numInput, op->getAddr()) (cc:180), its output via fd->newVarnodeOut(size, origOut->getAddr(), newOp) (cc:182) preserving the original address AND space, installed with opSetInput(op, invn, 0) plus the cc:185-186 input-copy loop, and inserted with opInsertEnd (cc:187). testOpRead (cc:107-142) returns bool. State is shared through fd (PcodeOpBank uniqid, VarnodeBank trees, block op lists) and the pullback cache; no other out-params.",
+  "loop_bounds_traversal_order": "pullbackOp copies inputs with for(int4 i=1;i<op->numInput();++i) (cc:185); the inbranch leg reads defOp->getIn(inbranch) only when defOp->getParent()==iblock (cc:170-173), otherwise bl=iblock->getImmedDom() (cc:175/178). opInsertEnd (funcdata_op.cc:435-446) positions at endOp() minus one only when the last op is a flow break. testOpRead gates INT_ADD/PTRSUB input-1 constancy (cc:126-128) BEFORE the upop parent/code check (cc:131-133) and the isFree check (cc:135-136); the COPY short-circuit runs first (cc:123).",
+  "counter_accumulator_lifecycle": "PcodeOpBank::uniqid increments once per newOp (SeqNum time; op.cc:941-948), so duplicate SeqNum times are monotone across P1(7), P1b(8), P2(13), P5(17) in fixture op-creation order; VarnodeBank create_index increments per varnode; pullback[inbranch] is written once per inbranch per doReplacement cycle (cleared at cc:323) and the P3 cache hit returns the identical Varnode pointer without consuming uniqid.",
+  "sorting_comparison_keys": "VarnodeBank loc/def trees order by (space, offset, size, input/written/free class, def SeqNum) with the -1 trick putting free varnodes last (varnode.cc:34-53), so two WRITTEN varnodes at the same storage address (P1: the original SUBPIECE output register:300/4 and its duplicate) coexist keyed by their defining ops' SeqNums; block op order is list order, so END insertion is distinguishable from BEGIN insertion by index."
+ },
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source_files": [
+   "Ghidra/Features/Decompiler/src/decompile/cpp/condexe.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/condexe.hh",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_op.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_varnode.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/varnode.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/op.cc"
+  ]
+ },
+ "rugra_source": {
+  "base_commit": "0d9f8a12c16a68b6a6cb265861a79356dcf4c6e8",
+  "base_tree": "b3fb98b80cd18018fc4aef35c9257fec8784ce47",
+  "base_src_tree": "ebfca01131df49511d48eabd7549512e13ab1612",
+  "base_condexe_blob": "4ac080386a5f185ec65ff65f30829276775e60e0",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "archive_paths": [
+   "Cargo.toml",
+   "Cargo.lock",
+   "build.rs",
+   "README.md",
+   "benches/decompile_bench.rs",
+   "tests/oracle/decompress_1204.rs",
+   "tests/oracle/funcproto_lock_1204.rs",
+   "src",
+   "sleigh_shim"
   ],
-  "residual_union": {
-    "todo_id": "CFG-0001",
-    "status": "UNTESTED",
-    "branches": [
-      {
-        "id": "execute_and_flow_split",
-        "status": "UNTESTED",
-        "detail": "execute/doReplacement/removeFromFlowSplit interaction with pullbackOp outputs needs CFG-0001's corrected removeFromFlowSplit before it can be projected; the doReplacement RETURN-leg newVarnodeOut preservation (condexe.cc:340-349) should be covered by the same follow-up"
-      }
-    ]
+  "overlays": [
+   {
+    "path": "src/condexe.rs",
+    "policy": "primary file under test; hash-verify before replacing the pinned base copy"
+   }
+  ],
+  "archive_policy": "Immutable explicit dependency closure plus one hash-verified source overlay; unrelated worktree files are excluded"
+ },
+ "architecture": "fixture-synthetic (FixtureArchitecture, no loader)",
+ "compiler_spec": {
+  "id": "none (FixtureArchitecture built-in prototype model)"
+ },
+ "analysis_options": {
+  "apis": [
+   "Funcdata::newOp",
+   "Funcdata::newVarnodeOut",
+   "Funcdata::newVarnode",
+   "Funcdata::newConstant",
+   "Funcdata::opSetOpcode",
+   "Funcdata::opSetInput",
+   "Funcdata::opInsertEnd",
+   "Funcdata::opInsertBegin",
+   "ConditionalExecution::pullbackOp",
+   "ConditionalExecution::testOpRead",
+   "FlowBlock::setImmedDom (test-only dominator wiring)"
+  ],
+  "funcdata": "One synthetic Funcdata over FixtureArchitecture; no followFlow, no Action pass; synthetic BlockBasic graph plus COPY / MULTIEQUAL / SUBPIECE / INT_ADD / PTRSUB / CBRANCH ops at explicit pc and storage addresses; Heritage::buildInfoList precondition replicated (the real pipeline populates Heritage::infolist during the first heritage() pass, which buildHeritageArray reads)",
+  "case_matrix": "pullback P1/P1b: SUBPIECE over an iblock MULTIEQUAL through inbranch 0 and 1 (target block = iblock->In(inbranch), input 0 = MULTIEQUAL slot, original output in REGISTER space, target block has a leading COPY and trailing CBRANCH so END insertion lands between them); P3: pullback cache hit on the same inbranch; P2: input 0 defined outside the iblock -> immediate dominator target, original output in UNIQUE space; P5: constant (unwritten) input 0 -> immediate dominator target, empty target block; gate G1-G8: testOpRead admission matrix over INT_ADD/PTRSUB constant vs var input 1, non-MULTIEQUAL in-iblock definer, free/constant input 0, MULTIEQUAL input 0, COPY writeOp",
+  "random_seed": "none",
+  "error_injection": "none",
+  "normalization": "Only block creation ordinals (bN) and varnode storage (space:offset/size) replace raw pointers; SeqNum times, block indices, op counts and booleans are byte-compared"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,cases}, sort_keys=True, separators=(',',':'))",
+  "sha256": "8713d77663ac42e4a9960df55414eaeb86a3d58f08578cc60927df9560e4c3ca",
+  "cases": [
+   {
+    "id": "P0",
+    "family": "pullback"
+   },
+   {
+    "id": "P1",
+    "family": "pullback"
+   },
+   {
+    "id": "P1b",
+    "family": "pullback"
+   },
+   {
+    "id": "P3",
+    "family": "pullback"
+   },
+   {
+    "id": "P2",
+    "family": "pullback"
+   },
+   {
+    "id": "P5",
+    "family": "pullback"
+   },
+   {
+    "id": "G1",
+    "family": "gate"
+   },
+   {
+    "id": "G2",
+    "family": "gate"
+   },
+   {
+    "id": "G3",
+    "family": "gate"
+   },
+   {
+    "id": "G4",
+    "family": "gate"
+   },
+   {
+    "id": "G5",
+    "family": "gate"
+   },
+   {
+    "id": "G6",
+    "family": "gate"
+   },
+   {
+    "id": "G7",
+    "family": "gate"
+   },
+   {
+    "id": "G8",
+    "family": "gate"
+   }
+  ]
+ },
+ "observation_schema": {
+  "format": "14 fixed-order pipe-delimited UTF-8 records with final newline",
+  "record_order": [
+   "P0",
+   "P1",
+   "P1b",
+   "P3",
+   "P2",
+   "P5",
+   "G1",
+   "G2",
+   "G3",
+   "G4",
+   "G5",
+   "G6",
+   "G7",
+   "G8"
+  ],
+  "pullback_projection": "For each pullbackOp call: target block creation ordinal, index within the block op list, block op count, duplicate opcode, SeqNum pc:time, output storage space:offset/size, input-0 and input-1 storage; P0 additionally records the pre-pullback iblock op count and the ORIGINAL SUBPIECE output storage; P3 records cache-pointer identity and unchanged op counts",
+  "gate_projection": "testOpRead boolean per admission-matrix cell",
+  "preserved": "No storage address, space, SeqNum time, block index, op count or boolean is normalized; only raw pointers are replaced by creation ordinals"
+ },
+ "build": {
+  "oracle_archive": "Exact locked Ghidra commit archive and locked Makefile libdecomp.a",
+  "supplemental_source_units": [
+   "libdecomp.cc",
+   "sleigh_arch.cc",
+   "inject_sleigh.cc"
+  ],
+  "cxx_flags": [
+   "-std=c++11",
+   "-O2",
+   "-Wall",
+   "-Wno-sign-compare"
+  ],
+  "access_leverage": "#define private public + #define class struct (ConditionalExecution uses the implicit class-private section; pullbackOp/testOpRead and the iblock member are driven directly)",
+  "rust_build": "Cargo --locked --offline in isolated target, then rustc with the librugra_sleigh native link"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "206a5ef681ac4889b245a7fa634042094f237d72cfb255a149f131c5074ff53e",
+  "rust_fixture_sha256": "d2f29570ce71c946d57d8289dfaf0f0b57fbceff6417e108a4d9d23303aab26b",
+  "condexe_overlay_sha256": "1c5e7c4341e7e911b61f0c0726ab14cc2754ab6d9e0914526542f27ad5987a22",
+  "runner_sha256": "0cc932d27e57c8a2364cba7297f5b10a9a3428aa2b8c716cec4e0d56e47acb73"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "5e48384966d26b5fb2dd41686885c17cd51d516ebaa9a699da23241ed982be2d",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "5e48384966d26b5fb2dd41686885c17cd51d516ebaa9a699da23241ed982be2d",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0
+ },
+ "coverage": {
+  "pullback_subpiece_multiequal": {
+   "status": "MATCH",
+   "covers": "P0/P1/P1b: pullbackOp (condexe.cc:160-190) through an iblock MULTIEQUAL for inbranch 0 and 1 \u2014 target block iblock->In(inbranch) (cc:171), input 0 from the MULTIEQUAL slot (cc:172), duplicate at the original op address (cc:180), output at the original REGISTER-space address (cc:182), opInsertEnd between the leading COPY and trailing CBRANCH (cc:187; funcdata_op.cc:435-446), SeqNum pc:time pinned",
+   "residual_todo_ids": []
   },
-  "overall_status": "UNTESTED"
+  "pullback_cache": {
+   "status": "MATCH",
+   "covers": "P3: findPullback cache (condexe.cc:146-152/163-165/188) returns the identical Varnode for a repeated inbranch and inserts no new op",
+   "residual_todo_ids": []
+  },
+  "pullback_crossblock_immeddom": {
+   "status": "MATCH",
+   "covers": "P2: input 0 defined outside the iblock -> bl = iblock->getImmedDom() (cc:175) and the duplicate preserves a UNIQUE-space original output address (cc:182), catching both the anonymous-unique and Register-pinning storage defects",
+   "residual_todo_ids": []
+  },
+  "pullback_const_input": {
+   "status": "MATCH",
+   "covers": "P5: unwritten (constant) input 0 -> bl = immedDom (cc:177-179), constant passed through as duplicate input 0, END insertion into an otherwise-empty block still precedes the trailing CBRANCH",
+   "residual_todo_ids": []
+  },
+  "gate_test_op_read": {
+   "status": "MATCH",
+   "covers": "G1-G8: testOpRead admission matrix (condexe.cc:107-142) \u2014 INT_ADD/PTRSUB non-constant input 1 rejected (cc:126-128), non-MULTIEQUAL in-iblock input-0 definer rejected (cc:131-133), free/constant input 0 rejected (cc:135-136), MULTIEQUAL input 0 and COPY writeOps admitted",
+   "residual_todo_ids": []
+  },
+  "execute_and_flow_split": {
+   "status": "UNTESTED",
+   "covers": "ConditionalExecution::execute / doReplacement consuming pullback outputs, and removeFromFlowSplit, are not exercised (CFG-0001 owns the corrected flow-split sequence); doReplacement's RETURN-leg newVarnodeOut storage preservation (condexe.cc:340-349) is likewise not projected here",
+   "residual_todo_ids": [
+    "CFG-0001"
+   ]
+  }
+ },
+ "projection_status": "MATCH",
+ "residual_todo_ids": [
+  "CFG-0001"
+ ],
+ "residual_union": {
+  "todo_id": "CFG-0001",
+  "status": "UNTESTED",
+  "branches": [
+   {
+    "id": "execute_and_flow_split",
+    "status": "UNTESTED",
+    "detail": "execute/doReplacement/removeFromFlowSplit interaction with pullbackOp outputs needs CFG-0001's corrected removeFromFlowSplit before it can be projected; the doReplacement RETURN-leg newVarnodeOut preservation (condexe.cc:340-349) should be covered by the same follow-up"
+   }
+  ]
+ },
+ "overall_status": "UNTESTED: (B2 canonicalization)"
 }

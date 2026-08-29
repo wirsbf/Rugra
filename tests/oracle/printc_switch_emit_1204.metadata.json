@@ -77,7 +77,7 @@
  "expected_rugra_raw_sha256": "6e46461cf99e42ca838004c7fca50dcbb001225607372ac9ee61fb4ce6594ad1",
  "expected_exit_code": 0,
  "observation": {
-  "overall_status": "MATCH",
+  "overall_status": "UNTESTED",
   "label_emission": "MATCH: per-label tagLine + `case` + spaces(1) + pushConstant + `:` (cc:3146-3157) \u2014 label order, multi-label grouping (multi_label_first's consecutive `case 2:`/`case 3:`), and default rendering all byte-identical",
   "body_emission_timing": "MATCH: bl2->emit(this) at cc:3339-3341 \u2014 the first case's label precedes its body and every body lands inside the switch (the A10 regression: DEAD-guarded emit_block_structured swallowed the absorbed case blocks; fixed by emit_switch_case_body dispatching per FlowBlock::emit with no dead guard)",
   "break_placement": "MATCH: cc:3342-3345 isExit(i)&&i!=last \u2014 break_exit_form's case 0 gets `break;`, RETURN-terminated cases and the last label do not",

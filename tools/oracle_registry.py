@@ -1877,15 +1877,21 @@ def doctor(root: str) -> dict:
         if runner in fixture_by_runner:
             fixture = fixture_by_runner[runner]
             expected = (fixture.get("cache") or {}).get("metadata")
+            # Metadata files listed as the fixture's own cache inputs are
+            # shared corpus data (e.g. program_flow_metadata_1204), not
+            # pairing targets; only foreign fixture metadata makes the link
+            # ambiguous.
+            input_paths = set((fixture.get("cache") or {}).get("inputs", {}).values())
+            pairing_links = [link for link in links if link not in input_paths]
             if not links:
                 add("RUNNER_METADATA_UNRESOLVED", runner, 0,
                     f"tracked by fixture {fixture.get('id')!r} but embeds no metadata path")
-            elif len(links) > 1:
+            elif len(pairing_links) > 1:
                 add("RUNNER_METADATA_AMBIGUOUS", runner, 0,
-                    f"embeds multiple metadata paths {links}; expected only {expected!r}")
-            elif expected not in links:
+                    f"embeds multiple metadata paths {pairing_links}; expected only {expected!r}")
+            elif pairing_links and expected not in pairing_links:
                 add("RUNNER_METADATA_MISMATCH", runner, 0,
-                    f"embeds {links} but fixture {fixture.get('id')!r} tracks {expected!r}")
+                    f"embeds {pairing_links} but fixture {fixture.get('id')!r} tracks {expected!r}")
 
     # --- metadata provenance / status / fixture-id --------------------------
     metadata_docs = {}

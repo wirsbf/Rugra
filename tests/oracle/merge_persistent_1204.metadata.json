@@ -1,97 +1,97 @@
 {
-  "schema": 2,
-  "fixture_id": "MERGE-PERSISTENT-STATE-0001",
-  "projection_status": "MATCH",
-  "overall_status": "MISMATCH",
-  "status_note": "All 29 projected stage lines across seven cases byte-match the locked oracle, but this is not full Merge persistence or local-type equivalence. Cross-review r1 fixed-name rejection is closed: factory_nochar_distinct now compares TypeFactory get_base/get_base_no_char canonical Arcs and the registered-world fixture deliberately uses custom names. Java-mode ZEXT and record-backed CPOOLREF local types remain known source-proven mismatches; testCache/copyTrims/protoPartial/marker-trim/Funcdata::clear channels are not bilaterally observed. Overall remains MISMATCH until the bound residual TODOs close.",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
-  },
-  "rugra_base_commit": "a4a2fe947e9798beccdf8c1b10641ad5c7a5e1e0",
-  "architecture": "synthetic little-endian 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; byte-addressed spaces",
-  "compiler_spec": "synthetic prototype named fixture, extrapop=0, empty input/output, no effect records, no symbols",
-  "analysis_options": {
-    "entrypoint": "production Action entry points on one Funcdata per case: Ghidra fd.getMerge().{mergeAddrTied,groupPartials,mergeMarker,mergeOpcode(CPUI_COPY),mergeAdjacent} on the persistent Funcdata member; Rust coreaction.rs-style fresh Merge::new() per Action calling merge_addr_tied/group_partials/merge_marker, merge_opcode, merge_adjacent, with the cross-Action channels round-tripping through Funcdata::merge_state",
-    "premise": "covers are allocated at setHighLevel exactly as Funcdata::assignHigh does (funcdata_varnode.cc:52-53) and rebuilt lazily by HighIntersectTest::updateHigh during the Actions; the fixture never pre-installs covers",
-    "normalization": "none; stdout is byte-diffed and both stderr streams must be empty"
-  },
-  "input_manifest": {
-    "canonicalization": "UTF-8 JSON array, compact separators, ensure_ascii=false",
-    "cases": [
-      "case copy_shadow_ladder: blocks b0->b1; b0: op1 reg:0x10 vnP = COPY const 0x11",
-      "b1: op2 reg:0x20 vnQ1 = COPY vnP; op3 reg:0x30 vnQ2 = COPY vnP; op4 reg:0x40 tA = INT_ADD vnP,1; op5 reg:0x50 tB = INT_ADD vnQ2,2; op6 reg:0x60 tC = INT_ADD vnQ1,3",
-      "case disjoint_copy: single block b0; op1 reg:0x10 vnX = COPY const 0x21; op2 reg:0x20 vnY = COPY vnX",
-      "case pipeline_tail: same ladder graph at base 0x7200; the four staged Actions plus ActionMergeType — Ghidra mergeByDatatype(beginLoc,endLoc) (coreaction.hh:414-415), Rust Merge::merge_all (the production coreaction.rs ActionMergeType entry) — closing the nested-attach blind spot",
-      "Action sequence per case: setHighLevel (coreaction.hh:346); mergerequired = mergeAddrTied + groupPartials + mergeMarker (coreaction.hh:369-370, coreaction.cc:5718); mergecopy = mergeOpcode(CPUI_COPY) (:5722); mergeadjacent = mergeAdjacent (:5726)",
-      "Ghidra side drives all stages through the one persistent fd.getMerge() object; Rust side constructs Merge::new() per Action exactly like coreaction.rs applies, so persistence must round-trip through Funcdata::merge_state",
-      "per-stage observation: HighVariable instance counts of the six named varnodes, all fifteen pairwise shared-High identity booleans, and each named Varnode's rebuilt Cover as [block:uindex-uindex,...] with b/e endpoint encoding",
-      "case type_gate: single block; input reg:0x08(8B); op1 reg:0x10 SH=COPY const; op2 reg:0x18 F=COPY const; op3 reg:0x30 TSH=INT_LEFT(big, SH) 4B; op4 reg:0x38 TF=FLOAT_TRUNC(F) 4B — pins shift slot1 nochar equality (size 4) and FLOAT_TRUNC (INT,FLOAT) meta rejection",
-      "case float_trunc_cast: single block at 0x7400; op1 reg:0x10 SHX=COPY const 0x51; op2 reg:0x18 F2=COPY const 0x52; op3 reg:0x30 TF=FLOAT_TRUNC(F2) 4B same-size cast shape; op4 reg:0x38 C=COPY(SHX) control — the (Int,Float) ctor pair (typeop.cc:1913) keeps TF unmerged at mergeadjacent while the COPY control merges at mergecopy",
-      "case char_gate_null (0x7500) / char_gate_char (0x7600): single block; input reg:0x08(8B); op1 reg:0x10(1B) SH1=COPY const; op2 reg:0x20(4B) SH4=COPY const; op3 reg:0x30(1B) T1=INT_LEFT(big,SH1); op4 reg:0x38(4B) T4=INT_LEFT(big,SH4) — the SAME graph run under two core-type registrations",
-      "char_gate_null world: fixture registers only xunknown* (type_nochar null, type.cc:3131), so getBaseNoChar(1,TYPE_INT) IS getBase(1,TYPE_INT) (type.cc:3624) and the 1-byte shift pair T1/SH1 passes the merge.cc:1001 gate and merges like the size-4 control T4/SH4",
-      "char_gate_char world: a second FixtureArchitecture registers custom-named signed_byte_custom(non-ASCII INT1) and ascii_glyph_custom(ASCII INT1), then caches. type_nochar and typecache[1][INT] are different canonical objects independent of spelling, so T1/SH1 is rejected while T4/SH4 merges; Rust clears a TypeFactory, registers the same properties/names, caches, mounts it via fd.set_arch, and compares get_base/get_base_no_char Arcs"
-    ],
-    "sha256": "97a805dfceb7308c43e92aa8c49df4237a9edcd7099eac1594c98d529a7fd9c7"
-  },
-  "decisive_semantics": {
-    "references_and_outputs": "MATCH for the projected HighVariable back-references, pairwise identity, instance counts, mergeGroup and Cover maps. UNTESTED for persistent testCache/copyTrims/protoPartial/clear outputs (MERGE-PERSISTENCE-CHANNELS-0001).",
-    "loop_bounds_and_order": "PARTIAL_MATCH: projected alive/block walks match. MISMATCH in the local-type closure because Ghidra invokes actual TypeFactory getters at merge.cc:999-1001 before vn2 basic/size gates, while Rust computes an upper-layer key/boolean model (TYPEOP-LOCALTYPE-DISPATCH-0001).",
-    "counters_and_accumulators": "MATCH only for projected instance and merge-group counters. testCache/copyTrims/attach-depth are not compared bilaterally; the Rust-only assertions are regression checks, not oracle evidence (MERGE-PERSISTENCE-CHANNELS-0001).",
-    "sort_and_comparison_keys": "PARTIAL_MATCH: projected Cover/uindex keys and the nochar Base/BaseNoChar canonical pointer relation now match through actual TypeFactory Arcs, including custom names. Java selector and CPOOL/UserOp record-backed local types remain TYPEOP-LOCALTYPE-DISPATCH-0001 mismatches."
-  },
-  "coverage": {
-    "copy_shadow_ladder_full_sequence": "MATCH",
-    "disjoint_copy_full_sequence": "MATCH",
-    "pipeline_tail_full_sequence_with_merge_all_entry": "MATCH",
-    "nested_attach_depth_guard": "UNTESTED: attach-depth/cache-size assertions exist only on the Rust comparand; no bilateral observation is emitted (MERGE-PERSISTENCE-CHANNELS-0001)",
-    "mergeadjacent_gate_chain": "MISMATCH overall: the 29-line projection covers mergeTestAdjacent, FLOAT_TRUNC and null/custom-name nochar worlds with actual TypeFactory Arc identity, but Java ZEXT, CPOOLREF record types, CALLOTHER dispatch and INDIRECT code-pointer identity remain TYPEOP-LOCALTYPE-DISPATCH-0001 gaps",
-    "high_cover_union_rebuild": "MATCH",
-    "def_no_read_cover_convention": "MATCH",
-    "testcache_entry_counts": "UNTESTED: not emitted bilaterally despite private-public fixture access; tracked by MERGE-COPYTRIMS-CACHE-0001",
-    "copytrims_channel_population": "UNTESTED: no fixture graph reaches a forced/address-tied trim; tracked by MERGE-COPYTRIMS-CACHE-0001",
-    "protopartial_channel": "MISSING: Rugra group_partials is a no-op; tracked by MERGE-PROTOPARTIAL-GROUP-0001",
-    "merge_marker_multiequal_indirect_path": "MISMATCH: Rust merge_test_with_list is coarser than the testCache-based mergeTest and trim loop; tracked by MERGE-MARKER-TRIM-0001",
-    "funcdata_clear_reset": "UNTESTED: no bilateral clear/reuse stage; tracked by MERGE-CLEAR-LIFECYCLE-0001",
-    "local_type_gate_ported_subset": "MISMATCH: covered custom-name nochar and FLOAT_TRUNC cases match using actual canonical Arcs; Java ZEXT and record-backed CPOOLREF/CALLOTHER/INDIRECT remain tracked by TYPEOP-LOCALTYPE-DISPATCH-0001",
-    "line_counts_note": "copy_shadow_ladder 4 + disjoint_copy 4 + pipeline_tail 5 + type_gate 4 + float_trunc_cast 4 + char_gate_null 4 + char_gate_char 4 = 29/29 total",
-    "type_gate_shift_nochar_pass_and_float_trunc_reject": "MATCH (4/4 lines)",
-    "float_trunc_cast_gate_reject": "MATCH",
-    "char_gate_null_world_size1_pass": "MATCH",
-    "char_gate_registered_world_size1_reject": "MATCH",
-    "char_and_float_gate_note": "float_trunc_cast 4/4 rejects the FLOAT_TRUNC pair while COPY control merges. char_gate_null 4/4 has getBaseNoChar==getBase. char_gate_char 4/4 uses custom-named non-ASCII/ASCII INT1 entries whose actual type_nochar/typecache canonical objects differ, so T1/SH1 is rejected while size4 merges."
-  },
-  "residual_todo_ids": [
-    "TYPEOP-LOCALTYPE-DISPATCH-0001",
-    "MERGE-PROTOPARTIAL-GROUP-0001",
-    "MERGE-COPYTRIMS-CACHE-0001",
-    "MERGE-MARKER-TRIM-0001",
-    "MERGE-CLEAR-LIFECYCLE-0001"
+ "schema": 2,
+ "fixture_id": "MERGE-PERSISTENT-STATE-0001",
+ "projection_status": "MATCH",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
+ "status_note": "All 29 projected stage lines across seven cases byte-match the locked oracle, but this is not full Merge persistence or local-type equivalence. Cross-review r1 fixed-name rejection is closed: factory_nochar_distinct now compares TypeFactory get_base/get_base_no_char canonical Arcs and the registered-world fixture deliberately uses custom names. Java-mode ZEXT and record-backed CPOOLREF local types remain known source-proven mismatches; testCache/copyTrims/protoPartial/marker-trim/Funcdata::clear channels are not bilaterally observed. Overall remains MISMATCH until the bound residual TODOs close.",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_base_commit": "a4a2fe947e9798beccdf8c1b10641ad5c7a5e1e0",
+ "architecture": "synthetic little-endian 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; byte-addressed spaces",
+ "compiler_spec": "synthetic prototype named fixture, extrapop=0, empty input/output, no effect records, no symbols",
+ "analysis_options": {
+  "entrypoint": "production Action entry points on one Funcdata per case: Ghidra fd.getMerge().{mergeAddrTied,groupPartials,mergeMarker,mergeOpcode(CPUI_COPY),mergeAdjacent} on the persistent Funcdata member; Rust coreaction.rs-style fresh Merge::new() per Action calling merge_addr_tied/group_partials/merge_marker, merge_opcode, merge_adjacent, with the cross-Action channels round-tripping through Funcdata::merge_state",
+  "premise": "covers are allocated at setHighLevel exactly as Funcdata::assignHigh does (funcdata_varnode.cc:52-53) and rebuilt lazily by HighIntersectTest::updateHigh during the Actions; the fixture never pre-installs covers",
+  "normalization": "none; stdout is byte-diffed and both stderr streams must be empty"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON array, compact separators, ensure_ascii=false",
+  "cases": [
+   "case copy_shadow_ladder: blocks b0->b1; b0: op1 reg:0x10 vnP = COPY const 0x11",
+   "b1: op2 reg:0x20 vnQ1 = COPY vnP; op3 reg:0x30 vnQ2 = COPY vnP; op4 reg:0x40 tA = INT_ADD vnP,1; op5 reg:0x50 tB = INT_ADD vnQ2,2; op6 reg:0x60 tC = INT_ADD vnQ1,3",
+   "case disjoint_copy: single block b0; op1 reg:0x10 vnX = COPY const 0x21; op2 reg:0x20 vnY = COPY vnX",
+   "case pipeline_tail: same ladder graph at base 0x7200; the four staged Actions plus ActionMergeType \u2014 Ghidra mergeByDatatype(beginLoc,endLoc) (coreaction.hh:414-415), Rust Merge::merge_all (the production coreaction.rs ActionMergeType entry) \u2014 closing the nested-attach blind spot",
+   "Action sequence per case: setHighLevel (coreaction.hh:346); mergerequired = mergeAddrTied + groupPartials + mergeMarker (coreaction.hh:369-370, coreaction.cc:5718); mergecopy = mergeOpcode(CPUI_COPY) (:5722); mergeadjacent = mergeAdjacent (:5726)",
+   "Ghidra side drives all stages through the one persistent fd.getMerge() object; Rust side constructs Merge::new() per Action exactly like coreaction.rs applies, so persistence must round-trip through Funcdata::merge_state",
+   "per-stage observation: HighVariable instance counts of the six named varnodes, all fifteen pairwise shared-High identity booleans, and each named Varnode's rebuilt Cover as [block:uindex-uindex,...] with b/e endpoint encoding",
+   "case type_gate: single block; input reg:0x08(8B); op1 reg:0x10 SH=COPY const; op2 reg:0x18 F=COPY const; op3 reg:0x30 TSH=INT_LEFT(big, SH) 4B; op4 reg:0x38 TF=FLOAT_TRUNC(F) 4B \u2014 pins shift slot1 nochar equality (size 4) and FLOAT_TRUNC (INT,FLOAT) meta rejection",
+   "case float_trunc_cast: single block at 0x7400; op1 reg:0x10 SHX=COPY const 0x51; op2 reg:0x18 F2=COPY const 0x52; op3 reg:0x30 TF=FLOAT_TRUNC(F2) 4B same-size cast shape; op4 reg:0x38 C=COPY(SHX) control \u2014 the (Int,Float) ctor pair (typeop.cc:1913) keeps TF unmerged at mergeadjacent while the COPY control merges at mergecopy",
+   "case char_gate_null (0x7500) / char_gate_char (0x7600): single block; input reg:0x08(8B); op1 reg:0x10(1B) SH1=COPY const; op2 reg:0x20(4B) SH4=COPY const; op3 reg:0x30(1B) T1=INT_LEFT(big,SH1); op4 reg:0x38(4B) T4=INT_LEFT(big,SH4) \u2014 the SAME graph run under two core-type registrations",
+   "char_gate_null world: fixture registers only xunknown* (type_nochar null, type.cc:3131), so getBaseNoChar(1,TYPE_INT) IS getBase(1,TYPE_INT) (type.cc:3624) and the 1-byte shift pair T1/SH1 passes the merge.cc:1001 gate and merges like the size-4 control T4/SH4",
+   "char_gate_char world: a second FixtureArchitecture registers custom-named signed_byte_custom(non-ASCII INT1) and ascii_glyph_custom(ASCII INT1), then caches. type_nochar and typecache[1][INT] are different canonical objects independent of spelling, so T1/SH1 is rejected while T4/SH4 merges; Rust clears a TypeFactory, registers the same properties/names, caches, mounts it via fd.set_arch, and compares get_base/get_base_no_char Arcs"
   ],
-  "comparand": {
-    "cpp_fixture_sha256": "16e1b01694acf16bcc4e7eda81e3c7b2048352cd0c986bdecb07b09a38b7764c",
-    "rust_fixture_sha256": "31c465e06e71186dfd29d73d8631bc0579333526d6f4049a34fa264ef0c3c60b",
-    "merge_rs_sha256": "390275cf9c53fb964e19836ecdc61c3dcc64328eae2203a6cdb21de76838e37e",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "expected_ghidra_stdout_sha256": "05ddadd73dac17d0a1be2c852baa9fa11c33402ccd24208e6b07b8df42777dd0",
-    "expected_rugra_stdout_sha256": "05ddadd73dac17d0a1be2c852baa9fa11c33402ccd24208e6b07b8df42777dd0",
-    "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-    "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
-    "host_cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
-    "host_rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
-    "host_make_path": "/usr/bin/make",
-    "host_git_path": "/usr/bin/git",
-    "host_python_path": "/usr/bin/python3.10",
-    "runner_sha256": "a9d94b8f7855a150d93b32efc189e077cb66d2087e3320fe4d98e5801d4ffbfc"
-  },
-  "build": {
-    "registry_packages": 164,
-    "overlay_note": "src/merge.rs is the sole live source overlay; every other source is archived from a4a2fe9, which contains the Funcdata persistent merge-state mount and the TypeFactory canonical cache/get_base_no_char foundation. No other dirty working-tree source is consumed."
-  }
+  "sha256": "97a805dfceb7308c43e92aa8c49df4237a9edcd7099eac1594c98d529a7fd9c7"
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "MATCH for the projected HighVariable back-references, pairwise identity, instance counts, mergeGroup and Cover maps. UNTESTED for persistent testCache/copyTrims/protoPartial/clear outputs (MERGE-PERSISTENCE-CHANNELS-0001).",
+  "loop_bounds_and_order": "PARTIAL_MATCH: projected alive/block walks match. MISMATCH in the local-type closure because Ghidra invokes actual TypeFactory getters at merge.cc:999-1001 before vn2 basic/size gates, while Rust computes an upper-layer key/boolean model (TYPEOP-LOCALTYPE-DISPATCH-0001).",
+  "counters_and_accumulators": "MATCH only for projected instance and merge-group counters. testCache/copyTrims/attach-depth are not compared bilaterally; the Rust-only assertions are regression checks, not oracle evidence (MERGE-PERSISTENCE-CHANNELS-0001).",
+  "sort_and_comparison_keys": "PARTIAL_MATCH: projected Cover/uindex keys and the nochar Base/BaseNoChar canonical pointer relation now match through actual TypeFactory Arcs, including custom names. Java selector and CPOOL/UserOp record-backed local types remain TYPEOP-LOCALTYPE-DISPATCH-0001 mismatches."
+ },
+ "coverage": {
+  "copy_shadow_ladder_full_sequence": "MATCH",
+  "disjoint_copy_full_sequence": "MATCH",
+  "pipeline_tail_full_sequence_with_merge_all_entry": "MATCH",
+  "nested_attach_depth_guard": "UNTESTED: attach-depth/cache-size assertions exist only on the Rust comparand; no bilateral observation is emitted (MERGE-PERSISTENCE-CHANNELS-0001)",
+  "mergeadjacent_gate_chain": "MISMATCH overall: the 29-line projection covers mergeTestAdjacent, FLOAT_TRUNC and null/custom-name nochar worlds with actual TypeFactory Arc identity, but Java ZEXT, CPOOLREF record types, CALLOTHER dispatch and INDIRECT code-pointer identity remain TYPEOP-LOCALTYPE-DISPATCH-0001 gaps",
+  "high_cover_union_rebuild": "MATCH",
+  "def_no_read_cover_convention": "MATCH",
+  "testcache_entry_counts": "UNTESTED: not emitted bilaterally despite private-public fixture access; tracked by MERGE-COPYTRIMS-CACHE-0001",
+  "copytrims_channel_population": "UNTESTED: no fixture graph reaches a forced/address-tied trim; tracked by MERGE-COPYTRIMS-CACHE-0001",
+  "protopartial_channel": "MISSING: Rugra group_partials is a no-op; tracked by MERGE-PROTOPARTIAL-GROUP-0001",
+  "merge_marker_multiequal_indirect_path": "MISMATCH: Rust merge_test_with_list is coarser than the testCache-based mergeTest and trim loop; tracked by MERGE-MARKER-TRIM-0001",
+  "funcdata_clear_reset": "UNTESTED: no bilateral clear/reuse stage; tracked by MERGE-CLEAR-LIFECYCLE-0001",
+  "local_type_gate_ported_subset": "MISMATCH: covered custom-name nochar and FLOAT_TRUNC cases match using actual canonical Arcs; Java ZEXT and record-backed CPOOLREF/CALLOTHER/INDIRECT remain tracked by TYPEOP-LOCALTYPE-DISPATCH-0001",
+  "line_counts_note": "copy_shadow_ladder 4 + disjoint_copy 4 + pipeline_tail 5 + type_gate 4 + float_trunc_cast 4 + char_gate_null 4 + char_gate_char 4 = 29/29 total",
+  "type_gate_shift_nochar_pass_and_float_trunc_reject": "MATCH (4/4 lines)",
+  "float_trunc_cast_gate_reject": "MATCH",
+  "char_gate_null_world_size1_pass": "MATCH",
+  "char_gate_registered_world_size1_reject": "MATCH",
+  "char_and_float_gate_note": "float_trunc_cast 4/4 rejects the FLOAT_TRUNC pair while COPY control merges. char_gate_null 4/4 has getBaseNoChar==getBase. char_gate_char 4/4 uses custom-named non-ASCII/ASCII INT1 entries whose actual type_nochar/typecache canonical objects differ, so T1/SH1 is rejected while size4 merges."
+ },
+ "residual_todo_ids": [
+  "TYPEOP-LOCALTYPE-DISPATCH-0001",
+  "MERGE-PROTOPARTIAL-GROUP-0001",
+  "MERGE-COPYTRIMS-CACHE-0001",
+  "MERGE-MARKER-TRIM-0001",
+  "MERGE-CLEAR-LIFECYCLE-0001"
+ ],
+ "comparand": {
+  "cpp_fixture_sha256": "16e1b01694acf16bcc4e7eda81e3c7b2048352cd0c986bdecb07b09a38b7764c",
+  "rust_fixture_sha256": "31c465e06e71186dfd29d73d8631bc0579333526d6f4049a34fa264ef0c3c60b",
+  "merge_rs_sha256": "390275cf9c53fb964e19836ecdc61c3dcc64328eae2203a6cdb21de76838e37e",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "expected_ghidra_stdout_sha256": "05ddadd73dac17d0a1be2c852baa9fa11c33402ccd24208e6b07b8df42777dd0",
+  "expected_rugra_stdout_sha256": "05ddadd73dac17d0a1be2c852baa9fa11c33402ccd24208e6b07b8df42777dd0",
+  "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+  "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+  "host_cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+  "host_rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+  "host_make_path": "/usr/bin/make",
+  "host_git_path": "/usr/bin/git",
+  "host_python_path": "/usr/bin/python3.10",
+  "runner_sha256": "a9d94b8f7855a150d93b32efc189e077cb66d2087e3320fe4d98e5801d4ffbfc"
+ },
+ "build": {
+  "registry_packages": 164,
+  "overlay_note": "src/merge.rs is the sole live source overlay; every other source is archived from a4a2fe9, which contains the Funcdata persistent merge-state mount and the TypeFactory canonical cache/get_base_no_char foundation. No other dirty working-tree source is consumed."
+ }
 }

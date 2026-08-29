@@ -1,7 +1,7 @@
 {
  "schema": 2,
  "fixture_id": "HERITAGE-COLLECT-WRAPAROUND-0001",
- "stable_function_id": "GH12-F-b7d2e4c9a1f6038257c",
+ "stable_function_id": "GH12-F-18fa37122dd00da59412",
  "stable_function_closure": [
   "ghidra::Funcdata::opHeritage funcdata.hh:462",
   "ghidra::Heritage::heritage heritage.cc:2663",

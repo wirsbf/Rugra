@@ -1,153 +1,153 @@
 {
-  "schema_version": 2,
-  "fixture_id": "PRINTC-STRUCTURED-IF-CONDITION-0001",
-  "covered_projection_status": "MATCH",
-  "overall_status": "MISMATCH",
-  "status_note": "The covered projection requires byte-identical locked-oracle records for four zero-edge, non-FLAT structured-condition shapes, including two dispatches of the same object graph, ordered CALL/STORE/comment tokens, tree preservation, comment consumption, and modifier restoration. Complete PrintC structured emission remains MISMATCH: independently reviewed known residuals include Graph/MultiGoto dispatch, pending-brace callback behavior when an else-if condition has a prelude, and the FLAT+NOFALLTHRU basic-block tail. Else/if-goto/negation, markup, non-warning comments, error paths, remaining structured subtypes, and production CALL/STORE/CBRANCH presentation are additionally UNTESTED by this routing fixture.",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
-  },
-  "rugra_source": {
-    "base_commit": "7e91aef6aa28cbf0a77b9812858c276cafa7fbd3",
-    "base_tree": "fd155bc4dd996000d3012c2d49f7244c3a6308ec",
-    "base_src_tree": "c6a2eb0fb690ff9ac693d12d6ea45b606bc713ae",
-    "base_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "base_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "overlays": [
-      {
-        "path": "src/printc.rs",
-        "sha256": "5ccc3fd8ad69ad957c15040c0a2a0e125810302ffb19a13a24842bc8807516e1"
-      },
-      {
-        "path": "src/varnode.rs",
-        "sha256": "06c8bffeee37c3ffc290033ba26fc069c3def9562f415ed9c7a2a4e577c8fa56"
-      }
-    ],
-    "isolation": "Archive the pinned base commit and replace exactly src/printc.rs and src/varnode.rs with the hash-pinned live candidates; fixture files are copied separately and no other live source enters the Cargo snapshot."
-  },
-  "architecture": {
-    "id": "synthetic-le64-printc-structured-condition",
-    "endianness": "little",
-    "pointer_size": 8,
-    "spaces": "const=0, other=1, unique=2, ram=3, register=4, stack=5; byte addressed",
-    "emitter": "EmitNoMarkup on both sides",
-    "statement_atoms": "The Ghidra FixturePrintC overrides opCall/opStore/opCbranch only to emit the deterministic atoms produced by the Rust comparand for this synthetic input. Ghidra's production emitBlockBasic/emitBlockLs/emitBlockCondition/emitBlockIf and comment protocol remain the dispatcher under test; production op presentation is explicitly excluded from the covered projection."
-  },
-  "compiler_spec": {
-    "id": "fixture",
-    "prototype_xml": "<prototype name=\"fixture\" extrapop=\"0\"><input/><output/></prototype>",
-    "calling_convention": "empty input/output records; no symbols, injections, or effects"
-  },
-  "analysis_options": {
-    "entry": "Direct public PrintC::emitBlockGraph/emit_block_graph over one root per case; no Action, Rule, decompile, declaration, or post-processing pipeline",
-    "markup": false,
-    "rpn": "Ghidra production RPN structured emitter; Rugra PrintC default rpn_enabled=true",
-    "comments": "warning comments installed through the shared Architecture comment database; setupFunctionList/setup_function_comments runs once before two same-printer root dispatches, then once for a fresh-root probe",
-    "state_probe": "Tree/edge/op snapshots before all emission and after two same-object dispatches plus post/fresh probes; a Basic CALL+terminal-CBRANCH sentinel is rendered by the post-target printer and a fresh printer",
-    "normalization": "Pointer identities are replaced only by deterministic DFS-first-seen node ordinals. Op order is preserved as its position in the Basic op list. No emitted bytes, child order, comment order, alias occurrence, control-flow shape, or state decision is sorted or removed.",
-    "random_seed": "none; construction and all walks are deterministic",
-    "error_injection": "none"
-  },
-  "input_manifest": {
-    "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
-    "cases": [
-      {
-        "id": "basic_condition",
-        "shape": "BlockIf(condition=BlockBasic[CALL 0x1001, terminal CBRANCH true], body=BlockBasic[STORE 0x5010<-0x61, terminal CBRANCH false])",
-        "purpose": "Basic condition dispatch; condition non-branch statement precedes if; no_branch suppresses terminal CBRANCH in condition prelude and body"
-      },
-      {
-        "id": "direct_blockif_condition",
-        "shape": "outer BlockIf(condition=direct inner BlockIf(Basic[CALL,CBRANCH], Basic[CALL,STORE,CBRANCH]), body=Basic[STORE,CBRANCH])",
-        "purpose": "Condition object is itself BlockIf; locks virtual redispatch and proves the nested body CALL/STORE is not flattened away"
-      },
-      {
-        "id": "block_condition",
-        "shape": "BlockIf(condition=BlockCondition(BOOL_AND, Basic[CALL,CBRANCH true], Basic[CALL,CBRANCH false]), body=Basic[STORE,CBRANCH])",
-        "purpose": "Locks no_branch child-0-only selection and only_branch/comma_separate left-operator-right token order with per-child parentheses"
-      },
-      {
-        "id": "getstr_list_shape",
-        "shape": "outer BlockIf condition is BlockList[inner BlockIf(A, body CALL-free+STORE), BlockCondition(AND,B,C)]; outer body CALL-strdup+STORE; every Basic has a terminal CBRANCH",
-        "purpose": "Real getstr structural closure: sequential BlockList redispatch, direct inner If body preservation, compound trailing condition, ordered CALL/STORE/comments, and suppression of every body terminal branch",
-        "comments": [
-          "INNER_FREE at the nested body CALL",
-          "COND_SECOND at BlockCondition child C's CBRANCH",
-          "OUTER_STORE at the outer body STORE"
-        ]
-      }
-    ],
-    "sha256": "adcba96206def028c1b16bc791dd6654527bab11d1f50de7d612b36e5d4fc356"
-  },
-  "observation_schema": {
-    "records": "Five UTF-8 lines with final newline: one locked envelope and four fixed-order case records",
-    "tree": "tree_before_hex/tree_after_hex encode DFS nodes as ordinal:type:index:flags:in/out counts:ordered child ordinals:ordered Basic opcode@address/list-position:ordered outgoing edges; tree_equal and sentinel_equal must be 1",
-    "raw": "pass1_hex, pass2_hex, fresh_root_hex, post_hex, and fresh_post_hex are complete unmodified EmitNoMarkup bytes for each interval; post_fresh_equal must be 1",
-    "events": "events1/events2/events_fresh preserve byte-position order for unique warning comments, CALL targets, STORE assignment tokens, if, boolean operators, and any leaked goto",
-    "comment_lifecycle": "getstr comments must observe INNER_FREE/COND_SECOND/OUTER_STORE counts 1,1,1 on pass 1; 0,0,0 on pass 2 without setup reset; and 1,1,1 on a fresh printer after setup"
-  },
-  "decisive_semantics": {
-    "reference_output_parameters": "Both passes receive the identical root object and identical child aliases, PcodeOps, Varnodes, edges, Funcdata, Architecture, and comment database. Emit writes only to its output and Comment::emitted; tree/op/edge snapshots must remain identical.",
-    "loop_bounds_traversal_order": "BlockIf dispatch order is condition under no_branch, comment-tree drain, condition under only_branch, then body under no_branch. BlockList walks children in stored order and passes the caller's original no_branch state only to its final child. BlockCondition no_branch emits only child 0; only_branch emits child 0, operator, child 1 in that order.",
-    "counter_accumulator_lifecycle": "A new emitted identity set is created once per emitBlockGraph call; the comment sorter is set up once before the two same-printer passes, so each comment transitions logically false->true on pass 1 and stays true on pass 2; modifier push/pop depth must return to its incoming state before the sentinel.",
-    "sorting_comparison_keys": "No structure or event sorting is permitted. DFS identity numbering is first-seen only; Basic operations retain insertion order; CommentSorter retains its locked (block index, op order, uniqueness position) order; events sort solely by actual byte offset with a fixed tie priority."
-  },
-  "coverage": {
-    "basic_condition": "MATCH",
-    "direct_blockif_condition": "MATCH",
-    "block_condition": "MATCH",
-    "getstr_list_shape": "MATCH"
-  },
-  "function_ids": {
-    "ghidra": [
-      "GH12-F-1bcf1c228ba3eb0b1d0e",
-      "GH12-F-bd812d638e2de548abdc",
-      "GH12-F-d397e290308fb9b68af1",
-      "GH12-F-4d8cc97e20565da1fe65"
-    ],
-    "rugra": [
-      "RG-F-d3cbdd1c0f4c699102a4",
-      "RG-F-e32609c6e6aa96eb3250",
-      "RG-F-5c67bfa2b4dafad127e9",
-      "RG-F-299676bea37a2595fd77",
-      "RG-F-07d2d89e04793cfd340c",
-      "RG-F-54a3d214ac312361eab5"
+ "schema_version": 2,
+ "fixture_id": "PRINTC-STRUCTURED-IF-CONDITION-0001",
+ "covered_projection_status": "MATCH",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
+ "status_note": "The covered projection requires byte-identical locked-oracle records for four zero-edge, non-FLAT structured-condition shapes, including two dispatches of the same object graph, ordered CALL/STORE/comment tokens, tree preservation, comment consumption, and modifier restoration. Complete PrintC structured emission remains MISMATCH: independently reviewed known residuals include Graph/MultiGoto dispatch, pending-brace callback behavior when an else-if condition has a prelude, and the FLAT+NOFALLTHRU basic-block tail. Else/if-goto/negation, markup, non-warning comments, error paths, remaining structured subtypes, and production CALL/STORE/CBRANCH presentation are additionally UNTESTED by this routing fixture.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_source": {
+  "base_commit": "7e91aef6aa28cbf0a77b9812858c276cafa7fbd3",
+  "base_tree": "fd155bc4dd996000d3012c2d49f7244c3a6308ec",
+  "base_src_tree": "c6a2eb0fb690ff9ac693d12d6ea45b606bc713ae",
+  "base_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "base_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "overlays": [
+   {
+    "path": "src/printc.rs",
+    "sha256": "5ccc3fd8ad69ad957c15040c0a2a0e125810302ffb19a13a24842bc8807516e1"
+   },
+   {
+    "path": "src/varnode.rs",
+    "sha256": "06c8bffeee37c3ffc290033ba26fc069c3def9562f415ed9c7a2a4e577c8fa56"
+   }
+  ],
+  "isolation": "Archive the pinned base commit and replace exactly src/printc.rs and src/varnode.rs with the hash-pinned live candidates; fixture files are copied separately and no other live source enters the Cargo snapshot."
+ },
+ "architecture": {
+  "id": "synthetic-le64-printc-structured-condition",
+  "endianness": "little",
+  "pointer_size": 8,
+  "spaces": "const=0, other=1, unique=2, ram=3, register=4, stack=5; byte addressed",
+  "emitter": "EmitNoMarkup on both sides",
+  "statement_atoms": "The Ghidra FixturePrintC overrides opCall/opStore/opCbranch only to emit the deterministic atoms produced by the Rust comparand for this synthetic input. Ghidra's production emitBlockBasic/emitBlockLs/emitBlockCondition/emitBlockIf and comment protocol remain the dispatcher under test; production op presentation is explicitly excluded from the covered projection."
+ },
+ "compiler_spec": {
+  "id": "fixture",
+  "prototype_xml": "<prototype name=\"fixture\" extrapop=\"0\"><input/><output/></prototype>",
+  "calling_convention": "empty input/output records; no symbols, injections, or effects"
+ },
+ "analysis_options": {
+  "entry": "Direct public PrintC::emitBlockGraph/emit_block_graph over one root per case; no Action, Rule, decompile, declaration, or post-processing pipeline",
+  "markup": false,
+  "rpn": "Ghidra production RPN structured emitter; Rugra PrintC default rpn_enabled=true",
+  "comments": "warning comments installed through the shared Architecture comment database; setupFunctionList/setup_function_comments runs once before two same-printer root dispatches, then once for a fresh-root probe",
+  "state_probe": "Tree/edge/op snapshots before all emission and after two same-object dispatches plus post/fresh probes; a Basic CALL+terminal-CBRANCH sentinel is rendered by the post-target printer and a fresh printer",
+  "normalization": "Pointer identities are replaced only by deterministic DFS-first-seen node ordinals. Op order is preserved as its position in the Basic op list. No emitted bytes, child order, comment order, alias occurrence, control-flow shape, or state decision is sorted or removed.",
+  "random_seed": "none; construction and all walks are deterministic",
+  "error_injection": "none"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+  "cases": [
+   {
+    "id": "basic_condition",
+    "shape": "BlockIf(condition=BlockBasic[CALL 0x1001, terminal CBRANCH true], body=BlockBasic[STORE 0x5010<-0x61, terminal CBRANCH false])",
+    "purpose": "Basic condition dispatch; condition non-branch statement precedes if; no_branch suppresses terminal CBRANCH in condition prelude and body"
+   },
+   {
+    "id": "direct_blockif_condition",
+    "shape": "outer BlockIf(condition=direct inner BlockIf(Basic[CALL,CBRANCH], Basic[CALL,STORE,CBRANCH]), body=Basic[STORE,CBRANCH])",
+    "purpose": "Condition object is itself BlockIf; locks virtual redispatch and proves the nested body CALL/STORE is not flattened away"
+   },
+   {
+    "id": "block_condition",
+    "shape": "BlockIf(condition=BlockCondition(BOOL_AND, Basic[CALL,CBRANCH true], Basic[CALL,CBRANCH false]), body=Basic[STORE,CBRANCH])",
+    "purpose": "Locks no_branch child-0-only selection and only_branch/comma_separate left-operator-right token order with per-child parentheses"
+   },
+   {
+    "id": "getstr_list_shape",
+    "shape": "outer BlockIf condition is BlockList[inner BlockIf(A, body CALL-free+STORE), BlockCondition(AND,B,C)]; outer body CALL-strdup+STORE; every Basic has a terminal CBRANCH",
+    "purpose": "Real getstr structural closure: sequential BlockList redispatch, direct inner If body preservation, compound trailing condition, ordered CALL/STORE/comments, and suppression of every body terminal branch",
+    "comments": [
+     "INNER_FREE at the nested body CALL",
+     "COND_SECOND at BlockCondition child C's CBRANCH",
+     "OUTER_STORE at the outer body STORE"
     ]
-  },
-  "uncovered": [
-    "emitBlockIf else, else-if pending-brace merge, if-goto, break/continue/goto target, negation, markup, and error paths",
-    "All fixture FlowBlocks have zero outgoing edges: nextInFlow one/two-edge selection, NOFALLTHRU, and FLAT tail emission are not covered; the current FLAT+NOFALLTHRU implementation is a registered MISMATCH",
-    "Graph and BlockMultiGoto dispatch are registered MISMATCH; BlockCopy, BlockGoto, WhileDo/DoWhile/InfLoop, Switch, Plain, and malformed/cyclic/duplicate graphs are UNTESTED here",
-    "Pending-brace callback behavior for an else-if whose condition emits prelude statements is a registered MISMATCH; ordinary else/else-if and if-goto paths are otherwise UNTESTED here",
-    "Production FuncCallSpecs, datatype/symbol resolution, and opCall/opStore/opCbranch text presentation",
-    "Full getstr Funcdata/CFG/SSA/types/comments; only its locked structured BlockList condition shape is represented"
+   }
   ],
-  "residual_todo_ids": [
-    "GETSTR-PRINTC-STRUCTCOND-0001"
+  "sha256": "adcba96206def028c1b16bc791dd6654527bab11d1f50de7d612b36e5d4fc356"
+ },
+ "observation_schema": {
+  "records": "Five UTF-8 lines with final newline: one locked envelope and four fixed-order case records",
+  "tree": "tree_before_hex/tree_after_hex encode DFS nodes as ordinal:type:index:flags:in/out counts:ordered child ordinals:ordered Basic opcode@address/list-position:ordered outgoing edges; tree_equal and sentinel_equal must be 1",
+  "raw": "pass1_hex, pass2_hex, fresh_root_hex, post_hex, and fresh_post_hex are complete unmodified EmitNoMarkup bytes for each interval; post_fresh_equal must be 1",
+  "events": "events1/events2/events_fresh preserve byte-position order for unique warning comments, CALL targets, STORE assignment tokens, if, boolean operators, and any leaked goto",
+  "comment_lifecycle": "getstr comments must observe INNER_FREE/COND_SECOND/OUTER_STORE counts 1,1,1 on pass 1; 0,0,0 on pass 2 without setup reset; and 1,1,1 on a fresh printer after setup"
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "Both passes receive the identical root object and identical child aliases, PcodeOps, Varnodes, edges, Funcdata, Architecture, and comment database. Emit writes only to its output and Comment::emitted; tree/op/edge snapshots must remain identical.",
+  "loop_bounds_traversal_order": "BlockIf dispatch order is condition under no_branch, comment-tree drain, condition under only_branch, then body under no_branch. BlockList walks children in stored order and passes the caller's original no_branch state only to its final child. BlockCondition no_branch emits only child 0; only_branch emits child 0, operator, child 1 in that order.",
+  "counter_accumulator_lifecycle": "A new emitted identity set is created once per emitBlockGraph call; the comment sorter is set up once before the two same-printer passes, so each comment transitions logically false->true on pass 1 and stays true on pass 2; modifier push/pop depth must return to its incoming state before the sentinel.",
+  "sorting_comparison_keys": "No structure or event sorting is permitted. DFS identity numbering is first-seen only; Basic operations retain insertion order; CommentSorter retains its locked (block index, op order, uniqueness position) order; events sort solely by actual byte offset with a fixed tie priority."
+ },
+ "coverage": {
+  "basic_condition": "MATCH",
+  "direct_blockif_condition": "MATCH",
+  "block_condition": "MATCH",
+  "getstr_list_shape": "MATCH"
+ },
+ "function_ids": {
+  "ghidra": [
+   "GH12-F-1bcf1c228ba3eb0b1d0e",
+   "GH12-F-bd812d638e2de548abdc",
+   "GH12-F-d397e290308fb9b68af1",
+   "GH12-F-4d8cc97e20565da1fe65"
   ],
-  "comparand": {
-    "cpp_fixture_sha256": "9499936246765deac001a82fc3fdff06e97b063bce99664cf7239da606b2fcf5",
-    "rust_fixture_sha256": "111ebad8ce28c55d777fa5a2c61117e54e8265c2e49b29964f8cd0e48c8c9707",
-    "runner_sha256": "a900e4e5037b798e7bdac2113d6812f09ef3e05039443891d0773912ea3f778b",
-    "printc_rs_sha256": "5ccc3fd8ad69ad957c15040c0a2a0e125810302ffb19a13a24842bc8807516e1",
-    "varnode_rs_sha256": "06c8bffeee37c3ffc290033ba26fc069c3def9562f415ed9c7a2a4e577c8fa56",
-    "host_cxx": "g++ (GCC) 16.2.1 20260810",
-    "host_rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
-    "host_cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
-  },
-  "capture": {
-    "records": 5,
-    "bytes": 9284,
-    "stdout_sha256": "1440f27ef73ffc13d2dfcf319576f8d4dd17102c6fcc9a25911cf4657f129758"
-  },
-  "build": {
-    "ghidra": "Archive and build only the locked decompiler C++ tree; fixture links libdecomp.cc, sleigh_arch.cc, inject_sleigh.cc, whole-archive libdecomp.a, and zlib; no BFD or processor assets",
-    "rugra": "Offline Cargo library build from the pinned base plus exact src/printc.rs and src/varnode.rs overlays; rustc links the produced rlib and rugra_sleigh native archive",
-    "temporary_root": "$HOME/.cache/rugra-printc-structured-if-condition-1204; /tmp is never used"
-  }
+  "rugra": [
+   "RG-F-d3cbdd1c0f4c699102a4",
+   "RG-F-e32609c6e6aa96eb3250",
+   "RG-F-5c67bfa2b4dafad127e9",
+   "RG-F-299676bea37a2595fd77",
+   "RG-F-07d2d89e04793cfd340c",
+   "RG-F-54a3d214ac312361eab5"
+  ]
+ },
+ "uncovered": [
+  "emitBlockIf else, else-if pending-brace merge, if-goto, break/continue/goto target, negation, markup, and error paths",
+  "All fixture FlowBlocks have zero outgoing edges: nextInFlow one/two-edge selection, NOFALLTHRU, and FLAT tail emission are not covered; the current FLAT+NOFALLTHRU implementation is a registered MISMATCH",
+  "Graph and BlockMultiGoto dispatch are registered MISMATCH; BlockCopy, BlockGoto, WhileDo/DoWhile/InfLoop, Switch, Plain, and malformed/cyclic/duplicate graphs are UNTESTED here",
+  "Pending-brace callback behavior for an else-if whose condition emits prelude statements is a registered MISMATCH; ordinary else/else-if and if-goto paths are otherwise UNTESTED here",
+  "Production FuncCallSpecs, datatype/symbol resolution, and opCall/opStore/opCbranch text presentation",
+  "Full getstr Funcdata/CFG/SSA/types/comments; only its locked structured BlockList condition shape is represented"
+ ],
+ "residual_todo_ids": [
+  "GETSTR-PRINTC-STRUCTCOND-0001"
+ ],
+ "comparand": {
+  "cpp_fixture_sha256": "9499936246765deac001a82fc3fdff06e97b063bce99664cf7239da606b2fcf5",
+  "rust_fixture_sha256": "111ebad8ce28c55d777fa5a2c61117e54e8265c2e49b29964f8cd0e48c8c9707",
+  "runner_sha256": "a900e4e5037b798e7bdac2113d6812f09ef3e05039443891d0773912ea3f778b",
+  "printc_rs_sha256": "5ccc3fd8ad69ad957c15040c0a2a0e125810302ffb19a13a24842bc8807516e1",
+  "varnode_rs_sha256": "06c8bffeee37c3ffc290033ba26fc069c3def9562f415ed9c7a2a4e577c8fa56",
+  "host_cxx": "g++ (GCC) 16.2.1 20260810",
+  "host_rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
+  "host_cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
+ },
+ "capture": {
+  "records": 5,
+  "bytes": 9284,
+  "stdout_sha256": "1440f27ef73ffc13d2dfcf319576f8d4dd17102c6fcc9a25911cf4657f129758"
+ },
+ "build": {
+  "ghidra": "Archive and build only the locked decompiler C++ tree; fixture links libdecomp.cc, sleigh_arch.cc, inject_sleigh.cc, whole-archive libdecomp.a, and zlib; no BFD or processor assets",
+  "rugra": "Offline Cargo library build from the pinned base plus exact src/printc.rs and src/varnode.rs overlays; rustc links the produced rlib and rugra_sleigh native archive",
+  "temporary_root": "$HOME/.cache/rugra-printc-structured-if-condition-1204; /tmp is never used"
+ }
 }

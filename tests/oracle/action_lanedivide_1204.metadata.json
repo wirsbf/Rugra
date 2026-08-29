@@ -1,278 +1,278 @@
 {
-  "schema_version": 2,
-  "fixture_id": "ACTION-LANEDIVIDE-0001",
-  "status_note": "The six targeted projections (collectLaneSizes source acceptance and mask filtering, mode-0 split success, mode-2 default-lane backward rejection, post-apply IR and count, rule_onceperfunc second-pass skip, clearLanedAccessMap timing) are byte-identical MATCH against the locked 12.0.4 oracle. Four branches remain uncovered or unavailable under ACTION-LANEDIVIDE-RESIDUAL-0001, so the fixture-level B2 status is UNTESTED.",
-  "decisive_semantics": {
-    "reference_output_parameters": "Funcdata &data is mutated across calls (setLanedRegGenerated, clearLanedAccessMap, LaneDivide IR rewrites); count lives on the Action itself and apply returns 0; Rugra externalizes count via take_count_delta into ActionState.count",
-    "loop_bounds_traversal_order": "mode 0..3 with allStorageProcessed break; lanedMap walked in VarnodeData::operator< order; per-storage [beginLoc(sz,addr), endLoc(sz,addr)) in VarnodeCompareLocDef order with a bounds-recalculating restart after each successful split",
-    "counter_accumulator_lifecycle": "count zeroed by perform, +1 per successful processVarnode then immediate return true; per-storage allVarnodesProcessed reset on success / cleared on failure; allStorageProcessed aggregated after the storage loop",
-    "sorting_comparison_keys": "checkLanes iterated ascending by lane size (bitmask LanedIterator); collect candidates restricted by allowedLane(sizeBitMask>>size&1); map keys ordered by space index, offset, then bigger-size-first"
-  },
-  "oracle": {
-    "project": "Ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source_files": [
-      "Ghidra/Features/Decompiler/src/decompile/cpp/subflow.hh",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/subflow.cc",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/architecture.hh",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/architecture.cc",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.hh",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.cc",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_varnode.cc",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/transform.hh",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/transform.cc",
-      "Ghidra/Features/Decompiler/src/decompile/cpp/coreaction.cc"
-    ]
-  },
-  "architecture": "x86:LE:64:default",
-  "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec",
-    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
-  },
-  "analysis_options": {
-    "apis": [
-      "ActionLaneDivide::collectLaneSizes",
-      "ActionLaneDivide::processVarnode",
-      "ActionLaneDivide::apply",
-      "Action::perform",
-      "Funcdata::setLanedRegGenerated",
-      "Funcdata::beginLaneAccess",
-      "Funcdata::clearLanedAccessMap",
-      "Funcdata::checkForLanedRegister",
-      "VarnodeBank::beginLoc(int4 s,const Address&)",
-      "LaneDivide::doTrace",
-      "LaneDivide::apply",
-      "TransformManager::apply"
-    ],
-    "funcdata": "One BfdArchitecture shell per case over immutable 34a3febf:examples/curl (main_free for the piece success, main_init for the INT_MULT failure); no followFlow and no Action pass; one synthetic BlockBasic per case; lanerecords replaced in-place with whole sizes 4 (mask 0x4) and 16 (mask 0x100); ActionLaneDivide driven through the real Action::perform state machine twice per success case with a hand-queued register-space storage re-check between the performs",
-    "placeholder_construction": "Success case: CPUI_PIECE 4-byte unique root over 2-byte constants with SUBPIECE readers at offsets 0 and 2; failure case: CPUI_INT_MULT 16-byte unique root over 16-byte constants with one SUBPIECE reader at offset 0",
-    "case_matrix": "collect candidate acceptance from SUBPIECE outputs and PIECE min-input; collect filtering against the whole-size-16 record; processVarnode mode-0 success and mode-2 default-lane backward rejection; apply IR rewrite and count; rule_onceperfunc second-perform skip with a surviving re-queued storage; clearLanedAccessMap timing on both success and failure",
-    "random_seed": "none",
-    "error_injection": "none",
-    "debug_macros": "__TERMINAL__ only; OPACTION_DEBUG, CPUI_DEBUG and TYPEPROP_DEBUG absent",
-    "action_status_mirroring": "protected count/status are read through a ProbeLaneDivide subclass on the C++ side and through the public ActionState companion on the Rust side; perform return values, counts and statuses are projected as plain integers"
-  },
-  "rugra_source": {
-    "base_commit": "98c3a9b12a2f40c4053c09b6c81354a9fffe19c4",
-    "base_tree": "9ddf46fe84538621e132e1131cc756f92263409e",
-    "base_src_tree": "b3301e02b00c034f483d56c25db7e27c91fe91aa",
-    "base_coreaction_blob": "80c4462300c62c5d7bd2cc4746a716af305b9930",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "overlays": [
-      {
-        "path": "src/coreaction.rs",
-        "sha256": "564786b005fb1718f597f6ed1d5eaf8b4759af651dfda082c5549a96688b36a6"
-      }
-    ]
-  },
-  "comparand": {
-    "cpp_fixture_sha256": "3545f3a0e718cd604d345f30a1fe97b67c265982fe40b90db3177a961cc3863d",
-    "rust_fixture_sha256": "54fb416d348ea07a341782527f22a2499e313f0488b80752486e1382c6f2cffd",
-    "coreaction_overlay_sha256": "564786b005fb1718f597f6ed1d5eaf8b4759af651dfda082c5549a96688b36a6",
-    "runner_sha256": "9ca24621b054a93e04c21a11cb874ce78e0661df4081ba45735b11a0a5124436"
-  },
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-      "size": 11721
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-      "size": 12182
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-      "size": 5390
-    },
-    "binary": {
-      "path": "examples/curl",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544
-    },
-    "bfd": {
-      "package_version": "2.38-4ubuntu2.12",
-      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
-      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
-      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-    }
-  },
-  "input_manifest": {
-    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,functions,cases}, sort_keys=True, separators=(',',':'))",
-    "binary": {
-      "path": "examples/curl",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544
-    },
-    "functions": [
-      {
-        "name": "main_free",
-        "entry": 18800,
-        "elf_symbol_extent": 5
-      },
-      {
-        "name": "main_init",
-        "entry": 18784,
-        "elf_symbol_extent": 7
-      }
-    ],
-    "cases": [
-      {
-        "id": "piece_success",
-        "probes": [
-          "collectLaneSizes accepts lane 2 from SUBPIECE outputs and PIECE min-input",
-          "processVarnode mode 0 applies LaneDivide(4,2) over allowDowncast=false",
-          "count increments once; perform returns count; status ends at 16",
-          "lanedMap 1 entry -> cleared; IR projection before/after"
-        ],
-        "expected": "ret1=1 count=1 status=16 map=1>0 requeued survives second perform ret2=0 count2=1 irStable=1"
-      },
-      {
-        "id": "intmult_failure",
-        "probes": [
-          "collectLaneSizes rejects SUBPIECE size 2 against mask 0x100",
-          "modes 0/1 collect nothing; mode 2 default lane 8 from normalized pointer size",
-          "backward trace rejects CPUI_INT_MULT; zero mutation"
-        ],
-        "expected": "ret1=0 count=0 status=16 map=1>0 irSame=1"
-      },
-      {
-        "id": "once_per_func",
-        "probes": [
-          "second perform short-circuits at status_end (rule_onceperfunc)",
-          "hand-queued register-space storage survives the skipped apply"
-        ],
-        "expected": "ret2=0 map2=requeued status2=16 count2=1 irStable=1"
-      }
-    ],
-    "sha256": "46d3627d1285af786c53eceb32478df01be9cf0b857f8d30b059f5d3ecb20e29"
-  },
-  "expected_results": {
-    "ghidra_stdout_sha256": "77a0b241002e4fc6432532c2479e1e2bb9ff7bd7ecc4039404e7a2f2540c1b75",
-    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "77a0b241002e4fc6432532c2479e1e2bb9ff7bd7ecc4039404e7a2f2540c1b75",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "diff_exit_code": 0
-  },
-  "coverage": {
-    "collect_lane_sizes_sources_and_filter": {
-      "status": "MATCH",
-      "covers": "SUBPIECE descendant output sizes and PIECE min-input sizes registered when allowedLane accepts (piece case, lane 2 accepted by the whole-size-4 record) and rejected when the mask lacks the bit (failure case, size 2 vs whole-size-16 mask 0x100)",
-      "residual_todo_ids": []
-    },
-    "process_success_piece_split": {
-      "status": "MATCH",
-      "covers": "mode 0: first successful LaneDivide::doTrace over the ascending lane-size list applies the split and returns true (count=1, four 2-byte COPY ops replace the PIECE/SUBPIECE cluster)",
-      "residual_todo_ids": []
-    },
-    "process_failure_default_mode_reject": {
-      "status": "MATCH",
-      "covers": "modes 0/1 with empty collected lanes and mode 2 default pointer-size lane 8: backward trace rejects CPUI_INT_MULT, zero IR mutation, no count",
-      "residual_todo_ids": []
-    },
-    "apply_ir_and_count": {
-      "status": "MATCH",
-      "covers": "full block-level op/var projection before/after apply including createIndex, sizes, spaces, def/descend edges, alive/dead counts, plus the Action count channel (perform returns the accumulated count)",
-      "residual_todo_ids": []
-    },
-    "rule_onceperfunc_second_pass_skip": {
-      "status": "MATCH",
-      "covers": "after the first perform the executor status ends at 16 (status_end); a hand re-queued register-space storage survives the second perform, whose return is 0 with unchanged count and stable IR",
-      "residual_todo_ids": []
-    },
-    "laned_map_clear_timing": {
-      "status": "MATCH",
-      "covers": "clearLanedAccessMap runs at the end of apply on both the success and failure paths (map 1 entry -> 0 in both cases, after setLanedRegGenerated gated any new registration)",
-      "residual_todo_ids": []
-    },
-    "mode1_downcast_subpiece_terminator": {
-      "status": "UNTESTED",
-      "covers": "mode 1 allowDowncast=true SUBPIECE terminator acceptance was not exercised: both fixtures' SUBPIECE readers consume exactly one lane so the downcast branch never fires",
-      "residual_todo_ids": [
-        "ACTION-LANEDIVIDE-RESIDUAL-0001"
-      ]
-    },
-    "multi_varnode_bounds_restart": {
-      "status": "UNTESTED",
-      "covers": "the recalculate-bounds restart (cc:606-607) only fires with a single varnode per storage in these cases; two SSA versions at one storage address would exercise the restart walk",
-      "residual_todo_ids": [
-        "ACTION-LANEDIVIDE-RESIDUAL-0001"
-      ]
-    },
-    "multi_storage_map_iteration": {
-      "status": "UNTESTED",
-      "covers": "each case registers exactly one laned storage; multiple storages per function (VarnodeData::operator< iteration order driving the mode loop) are not projected here (the lanedMap ordering itself is covered by lanedivide_infra_1204)",
-      "residual_todo_ids": [
-        "ACTION-LANEDIVIDE-RESIDUAL-0001"
-      ]
-    },
-    "mode2_pointer_size4_normalization": {
-      "status": "NO_ORACLE",
-      "covers": "coreaction.cc:566-569 keeps a 4-byte pointer size as lane 4; the locked x86-64 oracle always reports pointer size 8, so the ==4 keep-branch has no oracle observation under this architecture",
-      "residual_todo_ids": [
-        "ACTION-LANEDIVIDE-RESIDUAL-0001"
-      ]
-    }
-  },
-  "projection_status": "MATCH",
-  "overall_status": "UNTESTED",
-  "residual_todo_ids": [
-    "ACTION-LANEDIVIDE-RESIDUAL-0001"
+ "schema_version": 2,
+ "fixture_id": "ACTION-LANEDIVIDE-0001",
+ "status_note": "The six targeted projections (collectLaneSizes source acceptance and mask filtering, mode-0 split success, mode-2 default-lane backward rejection, post-apply IR and count, rule_onceperfunc second-pass skip, clearLanedAccessMap timing) are byte-identical MATCH against the locked 12.0.4 oracle. Four branches remain uncovered or unavailable under ACTION-LANEDIVIDE-RESIDUAL-0001, so the fixture-level B2 status is UNTESTED.",
+ "decisive_semantics": {
+  "reference_output_parameters": "Funcdata &data is mutated across calls (setLanedRegGenerated, clearLanedAccessMap, LaneDivide IR rewrites); count lives on the Action itself and apply returns 0; Rugra externalizes count via take_count_delta into ActionState.count",
+  "loop_bounds_traversal_order": "mode 0..3 with allStorageProcessed break; lanedMap walked in VarnodeData::operator< order; per-storage [beginLoc(sz,addr), endLoc(sz,addr)) in VarnodeCompareLocDef order with a bounds-recalculating restart after each successful split",
+  "counter_accumulator_lifecycle": "count zeroed by perform, +1 per successful processVarnode then immediate return true; per-storage allVarnodesProcessed reset on success / cleared on failure; allStorageProcessed aggregated after the storage loop",
+  "sorting_comparison_keys": "checkLanes iterated ascending by lane size (bitmask LanedIterator); collect candidates restricted by allowedLane(sizeBitMask>>size&1); map keys ordered by space index, offset, then bigger-size-first"
+ },
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source_files": [
+   "Ghidra/Features/Decompiler/src/decompile/cpp/subflow.hh",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/subflow.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/architecture.hh",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/architecture.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.hh",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_varnode.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/transform.hh",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/transform.cc",
+   "Ghidra/Features/Decompiler/src/decompile/cpp/coreaction.cc"
+  ]
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec",
+  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+ },
+ "analysis_options": {
+  "apis": [
+   "ActionLaneDivide::collectLaneSizes",
+   "ActionLaneDivide::processVarnode",
+   "ActionLaneDivide::apply",
+   "Action::perform",
+   "Funcdata::setLanedRegGenerated",
+   "Funcdata::beginLaneAccess",
+   "Funcdata::clearLanedAccessMap",
+   "Funcdata::checkForLanedRegister",
+   "VarnodeBank::beginLoc(int4 s,const Address&)",
+   "LaneDivide::doTrace",
+   "LaneDivide::apply",
+   "TransformManager::apply"
   ],
-  "residual_union": {
-    "todo_id": "ACTION-LANEDIVIDE-RESIDUAL-0001",
-    "status": "UNTESTED",
-    "branches": [
-      {
-        "id": "mode1_downcast_subpiece_terminator",
-        "status": "UNTESTED",
-        "detail": "mode 1 SUBPIECE downcast terminator acceptance (allowDowncast=true with a reader smaller than one lane) never fires in the fixture readers"
-      },
-      {
-        "id": "multi_varnode_bounds_restart",
-        "status": "UNTESTED",
-        "detail": "the beginLoc/endLoc recalculation restart (coreaction.cc:606-607) needs two SSA versions at one storage address"
-      },
-      {
-        "id": "multi_storage_map_iteration",
-        "status": "UNTESTED",
-        "detail": "several laned storages per function with the VarnodeData::operator< mode-loop interaction; the map ordering alone is covered by lanedivide_infra_1204"
-      },
-      {
-        "id": "mode2_pointer_size4_normalization",
-        "status": "NO_ORACLE",
-        "detail": "the keep-pointer-size-4 branch of the mode-2 default lane has no x86-64 oracle observation (pointer size is always 8)"
-      }
-    ]
+  "funcdata": "One BfdArchitecture shell per case over immutable 34a3febf:examples/curl (main_free for the piece success, main_init for the INT_MULT failure); no followFlow and no Action pass; one synthetic BlockBasic per case; lanerecords replaced in-place with whole sizes 4 (mask 0x4) and 16 (mask 0x100); ActionLaneDivide driven through the real Action::perform state machine twice per success case with a hand-queued register-space storage re-check between the performs",
+  "placeholder_construction": "Success case: CPUI_PIECE 4-byte unique root over 2-byte constants with SUBPIECE readers at offsets 0 and 2; failure case: CPUI_INT_MULT 16-byte unique root over 16-byte constants with one SUBPIECE reader at offset 0",
+  "case_matrix": "collect candidate acceptance from SUBPIECE outputs and PIECE min-input; collect filtering against the whole-size-16 record; processVarnode mode-0 success and mode-2 default-lane backward rejection; apply IR rewrite and count; rule_onceperfunc second-perform skip with a surviving re-queued storage; clearLanedAccessMap timing on both success and failure",
+  "random_seed": "none",
+  "error_injection": "none",
+  "debug_macros": "__TERMINAL__ only; OPACTION_DEBUG, CPUI_DEBUG and TYPEPROP_DEBUG absent",
+  "action_status_mirroring": "protected count/status are read through a ProbeLaneDivide subclass on the C++ side and through the public ActionState companion on the Rust side; perform return values, counts and statuses are projected as plain integers"
+ },
+ "rugra_source": {
+  "base_commit": "98c3a9b12a2f40c4053c09b6c81354a9fffe19c4",
+  "base_tree": "9ddf46fe84538621e132e1131cc756f92263409e",
+  "base_src_tree": "b3301e02b00c034f483d56c25db7e27c91fe91aa",
+  "base_coreaction_blob": "80c4462300c62c5d7bd2cc4746a716af305b9930",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "overlays": [
+   {
+    "path": "src/coreaction.rs",
+    "sha256": "564786b005fb1718f597f6ed1d5eaf8b4759af651dfda082c5549a96688b36a6"
+   }
+  ]
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "3545f3a0e718cd604d345f30a1fe97b67c265982fe40b90db3177a961cc3863d",
+  "rust_fixture_sha256": "54fb416d348ea07a341782527f22a2499e313f0488b80752486e1382c6f2cffd",
+  "coreaction_overlay_sha256": "564786b005fb1718f597f6ed1d5eaf8b4759af651dfda082c5549a96688b36a6",
+  "runner_sha256": "9ca24621b054a93e04c21a11cb874ce78e0661df4081ba45735b11a0a5124436"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
+  },
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
+  },
+  "compiler_spec": {
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
+  },
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
+  },
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544
+  },
+  "bfd": {
+   "package_version": "2.38-4ubuntu2.12",
+   "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
   }
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,functions,cases}, sort_keys=True, separators=(',',':'))",
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544
+  },
+  "functions": [
+   {
+    "name": "main_free",
+    "entry": 18800,
+    "elf_symbol_extent": 5
+   },
+   {
+    "name": "main_init",
+    "entry": 18784,
+    "elf_symbol_extent": 7
+   }
+  ],
+  "cases": [
+   {
+    "id": "piece_success",
+    "probes": [
+     "collectLaneSizes accepts lane 2 from SUBPIECE outputs and PIECE min-input",
+     "processVarnode mode 0 applies LaneDivide(4,2) over allowDowncast=false",
+     "count increments once; perform returns count; status ends at 16",
+     "lanedMap 1 entry -> cleared; IR projection before/after"
+    ],
+    "expected": "ret1=1 count=1 status=16 map=1>0 requeued survives second perform ret2=0 count2=1 irStable=1"
+   },
+   {
+    "id": "intmult_failure",
+    "probes": [
+     "collectLaneSizes rejects SUBPIECE size 2 against mask 0x100",
+     "modes 0/1 collect nothing; mode 2 default lane 8 from normalized pointer size",
+     "backward trace rejects CPUI_INT_MULT; zero mutation"
+    ],
+    "expected": "ret1=0 count=0 status=16 map=1>0 irSame=1"
+   },
+   {
+    "id": "once_per_func",
+    "probes": [
+     "second perform short-circuits at status_end (rule_onceperfunc)",
+     "hand-queued register-space storage survives the skipped apply"
+    ],
+    "expected": "ret2=0 map2=requeued status2=16 count2=1 irStable=1"
+   }
+  ],
+  "sha256": "46d3627d1285af786c53eceb32478df01be9cf0b857f8d30b059f5d3ecb20e29"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "77a0b241002e4fc6432532c2479e1e2bb9ff7bd7ecc4039404e7a2f2540c1b75",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "77a0b241002e4fc6432532c2479e1e2bb9ff7bd7ecc4039404e7a2f2540c1b75",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0
+ },
+ "coverage": {
+  "collect_lane_sizes_sources_and_filter": {
+   "status": "MATCH",
+   "covers": "SUBPIECE descendant output sizes and PIECE min-input sizes registered when allowedLane accepts (piece case, lane 2 accepted by the whole-size-4 record) and rejected when the mask lacks the bit (failure case, size 2 vs whole-size-16 mask 0x100)",
+   "residual_todo_ids": []
+  },
+  "process_success_piece_split": {
+   "status": "MATCH",
+   "covers": "mode 0: first successful LaneDivide::doTrace over the ascending lane-size list applies the split and returns true (count=1, four 2-byte COPY ops replace the PIECE/SUBPIECE cluster)",
+   "residual_todo_ids": []
+  },
+  "process_failure_default_mode_reject": {
+   "status": "MATCH",
+   "covers": "modes 0/1 with empty collected lanes and mode 2 default pointer-size lane 8: backward trace rejects CPUI_INT_MULT, zero IR mutation, no count",
+   "residual_todo_ids": []
+  },
+  "apply_ir_and_count": {
+   "status": "MATCH",
+   "covers": "full block-level op/var projection before/after apply including createIndex, sizes, spaces, def/descend edges, alive/dead counts, plus the Action count channel (perform returns the accumulated count)",
+   "residual_todo_ids": []
+  },
+  "rule_onceperfunc_second_pass_skip": {
+   "status": "MATCH",
+   "covers": "after the first perform the executor status ends at 16 (status_end); a hand re-queued register-space storage survives the second perform, whose return is 0 with unchanged count and stable IR",
+   "residual_todo_ids": []
+  },
+  "laned_map_clear_timing": {
+   "status": "MATCH",
+   "covers": "clearLanedAccessMap runs at the end of apply on both the success and failure paths (map 1 entry -> 0 in both cases, after setLanedRegGenerated gated any new registration)",
+   "residual_todo_ids": []
+  },
+  "mode1_downcast_subpiece_terminator": {
+   "status": "UNTESTED",
+   "covers": "mode 1 allowDowncast=true SUBPIECE terminator acceptance was not exercised: both fixtures' SUBPIECE readers consume exactly one lane so the downcast branch never fires",
+   "residual_todo_ids": [
+    "ACTION-LANEDIVIDE-RESIDUAL-0001"
+   ]
+  },
+  "multi_varnode_bounds_restart": {
+   "status": "UNTESTED",
+   "covers": "the recalculate-bounds restart (cc:606-607) only fires with a single varnode per storage in these cases; two SSA versions at one storage address would exercise the restart walk",
+   "residual_todo_ids": [
+    "ACTION-LANEDIVIDE-RESIDUAL-0001"
+   ]
+  },
+  "multi_storage_map_iteration": {
+   "status": "UNTESTED",
+   "covers": "each case registers exactly one laned storage; multiple storages per function (VarnodeData::operator< iteration order driving the mode loop) are not projected here (the lanedMap ordering itself is covered by lanedivide_infra_1204)",
+   "residual_todo_ids": [
+    "ACTION-LANEDIVIDE-RESIDUAL-0001"
+   ]
+  },
+  "mode2_pointer_size4_normalization": {
+   "status": "NO_ORACLE",
+   "covers": "coreaction.cc:566-569 keeps a 4-byte pointer size as lane 4; the locked x86-64 oracle always reports pointer size 8, so the ==4 keep-branch has no oracle observation under this architecture",
+   "residual_todo_ids": [
+    "ACTION-LANEDIVIDE-RESIDUAL-0001"
+   ]
+  }
+ },
+ "projection_status": "MATCH",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "residual_todo_ids": [
+  "ACTION-LANEDIVIDE-RESIDUAL-0001"
+ ],
+ "residual_union": {
+  "todo_id": "ACTION-LANEDIVIDE-RESIDUAL-0001",
+  "status": "UNTESTED",
+  "branches": [
+   {
+    "id": "mode1_downcast_subpiece_terminator",
+    "status": "UNTESTED",
+    "detail": "mode 1 SUBPIECE downcast terminator acceptance (allowDowncast=true with a reader smaller than one lane) never fires in the fixture readers"
+   },
+   {
+    "id": "multi_varnode_bounds_restart",
+    "status": "UNTESTED",
+    "detail": "the beginLoc/endLoc recalculation restart (coreaction.cc:606-607) needs two SSA versions at one storage address"
+   },
+   {
+    "id": "multi_storage_map_iteration",
+    "status": "UNTESTED",
+    "detail": "several laned storages per function with the VarnodeData::operator< mode-loop interaction; the map ordering alone is covered by lanedivide_infra_1204"
+   },
+   {
+    "id": "mode2_pointer_size4_normalization",
+    "status": "NO_ORACLE",
+    "detail": "the keep-pointer-size-4 branch of the mode-2 default lane has no x86-64 oracle observation (pointer size is always 8)"
+   }
+  ]
+ }
 }

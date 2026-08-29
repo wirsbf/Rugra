@@ -12,7 +12,7 @@
   "GH12-F-b1a276a6a091136a35fa ghidra::ParamActive::splitTrial(int4, int4) fspec.cc:2033",
   "ghidra::ParamTrial::operator<(const ParamTrial &) const fspec.cc:1893 (hh inline sortTrials fspec.hh:316)"
  ],
- "overall_status": "UNTESTED",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
  "status_detail": "The six-case covered projection byte-matches Ghidra 12.0.4's ParamListStandard per-space findEntry, the no-filter unjustifiedContainer/assumedExtension, the operator< sort ladder, tagged-space registerTrial, and split address/flags/slot mechanics. Overall remains UNTESTED because cross-space unjustifiedContainer/assumedExtension false positives and comparator-equal ordering are not exercised. Absolute 1-based registration slots are covered as MATCH by the companion fspec_paramlist_output_1204 fixture.",
  "oracle": {
   "repository": "NationalSecurityAgency/ghidra",

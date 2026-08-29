@@ -80,7 +80,7 @@
  "expected_stdout_sha256": "eeb58785d7f5612ce78fb2133a30e440cae9f5053c14766adc65ff93125281a3",
  "expected_exit_code": 0,
  "covered_projection_status": "MATCH",
- "overall_status": "UNTESTED:  (B2 migration of partial match state) none-precondition behavior has no runnable Ghidra oracle (null deref subflow.cc:895->70); shared state projection and all Some-precondition replacements byte-match",
+ "overall_status": "UNTESTED: (B2 migration of partial match state) none-precondition behavior has no runnable Ghidra oracle (null deref subflow.cc:895->70); shared state projection and all Some-precondition replacements byte-match",
  "coverage": {
   "sext_some_copy": "MATCH:traced=1 full doReplacement op layout byte-equal",
   "sext_some_multiequal": "MATCH:traced=1 full doReplacement op layout byte-equal",

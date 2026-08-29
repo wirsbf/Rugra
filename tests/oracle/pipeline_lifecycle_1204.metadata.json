@@ -46,7 +46,7 @@
  "observation": {
   "wrapper_fields_status": "MATCH",
   "full_mutation_status": "MISMATCH",
-  "overall_status": "MISMATCH",
+  "overall_status": "UNTESTED",
   "matched_fields": [
    "ActionStart return value",
    "processing-started and processing-complete transitions",
@@ -76,5 +76,6 @@
   "rugra": "f99bfb049e1d3f231129a63aa01ecbe9fc38edebdfca4c892917c43f382bb08f",
   "diff": "7b8069246ff3ef28c0638efdb3571f9380839c044bd071a8b5086f4597ca05f4"
  },
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "fixture_id": "PIPELINE-LIFECYCLE-1204-1204"
 }

@@ -85,5 +85,6 @@
  },
  "expected_stdout_sha256": "369cdf8eff0804031c84790aa9f79277fa277ecc7cad29261c6b6fdbc6291244",
  "expected_record_count": 7,
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "input_sha256": "eff02c29eb2f17c0307bcfd42f496db08bf8ccda7ae6650dd494c0191cd9487b"
 }

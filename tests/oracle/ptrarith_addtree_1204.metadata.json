@@ -172,5 +172,5 @@
   "command": "curl_decompile full corpus vs tests/golden/ghidra_curl_1204.c",
   "result": "76/124 decompiled (0 timeout, 0 panic), defects=0, numbering=0; skeleton 2864 -> 2883 total with next_url 137 -> 140: the PTRADD/PTRSUB chains now render with real field names (->type/->content) but their intermediate unique-space temps leak as unique0x\u2026 identifiers until the merge/HighVariable naming layer catches up (registered as the merge-layer residual row on the TODO board)"
  },
- "overall_status": "MATCH:  five target-relevant structural projections match the locked 12.0.4 oracle byte-for-byte; whole-state input/output remains mismatch through OPBANK-0001 and ARCH-0001, explicitly listed branches remain untested"
+ "overall_status": "MISMATCH: five target-relevant structural projections match the locked 12.0.4 oracle byte-for-byte; whole-state input/output remains mismatch through OPBANK-0001 and ARCH-0001, explicitly listed branches remain untested"
 }

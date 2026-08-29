@@ -125,5 +125,6 @@
  "expected_stdout_sha256": "c9f23b75f7a3085067d1a27e5575e685a3a0a4aa31608e74fdbb58ab24c546cd",
  "expected_exit_code": 0,
  "projection_status": "MATCH",
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "input_sha256": "bdb16cc715ba3580c1537460215d362064c5e8b035a4c0949e8e01ea7aee774e"
 }

@@ -1,405 +1,405 @@
 {
-  "schema_version": 2,
-  "fixture_id": "TYPEFACTORY-DOWNCHAIN-VIRTUAL-0001",
-  "covered_projection_status": "MATCH",
-  "overall_status": "MATCH",
-  "status_note": "TYPEFACTORY-DOWNCHAIN-VIRTUAL-0001 freezes the virtual downChain dispatch (plain type.cc:1084-1121 / relative type.cc:2656-2672) against locked Ghidra e40ed130 and Rugra production candidate f9307c7 (down_chain_virtual dispatcher plus the rel recover-parent accumulator fix, the rel tail no-fallback fix, and the plain par=this / wrap-zero return-this identity fix). The 25-record projection covers field hits, hole/null descents, off==0 and off==size boundaries, negative-encoded wrap, the enum branch, multi-level array chains with carried accumulators, rel-input re-propagation, and plain/rel routing discrimination. No production caller is wired in the candidate (B1 coreaction/typeop wiring is a follow-up lease), so no user-visible pipeline repair is claimed. getTypePointerStripArray's hasStripped pre-strip and calcTruncate are outside the covered input domain (no stripped field/element types, no alternate pointer size) and remain registered residuals under TYPE-0001/TYPEFACTORY-ARC-IDENTITY-0001 rather than being normalized.",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "stable_functions": [
-      "ghidra::TypePointer::downChain type.cc:1084",
-      "ghidra::TypePointerRel::downChain type.cc:2656",
-      "ghidra::TypeFactory::getTypePointer type.cc:3867",
-      "ghidra::TypeFactory::getTypePointerStripArray type.cc:3849",
-      "ghidra::TypeFactory::getTypePointerRel(TypePointer*,Datatype*,int4) type.cc:4016",
-      "ghidra::TypeArray::getSubType type.cc:1234",
-      "ghidra::TypeStruct::getSubType type.cc:1640",
-      "ghidra::Datatype::getSubType type.cc:174",
-      "ghidra::TypeFactory::setFields(TypeStruct*) type.cc:3479",
-      "ghidra::TypeFactory::getTypeStruct type.cc:3914",
-      "ghidra::TypeFactory::getTypeArray type.cc:3902",
-      "ghidra::TypeFactory::getTypeEnum type.cc:3967",
-      "ghidra::TypeFactory::getBase type.cc:3631"
-    ]
+ "schema_version": 2,
+ "fixture_id": "TYPEFACTORY-DOWNCHAIN-VIRTUAL-0001",
+ "covered_projection_status": "MATCH",
+ "overall_status": "MATCH: (B2 canonicalization)",
+ "status_note": "TYPEFACTORY-DOWNCHAIN-VIRTUAL-0001 freezes the virtual downChain dispatch (plain type.cc:1084-1121 / relative type.cc:2656-2672) against locked Ghidra e40ed130 and Rugra production candidate f9307c7 (down_chain_virtual dispatcher plus the rel recover-parent accumulator fix, the rel tail no-fallback fix, and the plain par=this / wrap-zero return-this identity fix). The 25-record projection covers field hits, hole/null descents, off==0 and off==size boundaries, negative-encoded wrap, the enum branch, multi-level array chains with carried accumulators, rel-input re-propagation, and plain/rel routing discrimination. No production caller is wired in the candidate (B1 coreaction/typeop wiring is a follow-up lease), so no user-visible pipeline repair is claimed. getTypePointerStripArray's hasStripped pre-strip and calcTruncate are outside the covered input domain (no stripped field/element types, no alternate pointer size) and remain registered residuals under TYPE-0001/TYPEFACTORY-ARC-IDENTITY-0001 rather than being normalized.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "stable_functions": [
+   "ghidra::TypePointer::downChain type.cc:1084",
+   "ghidra::TypePointerRel::downChain type.cc:2656",
+   "ghidra::TypeFactory::getTypePointer type.cc:3867",
+   "ghidra::TypeFactory::getTypePointerStripArray type.cc:3849",
+   "ghidra::TypeFactory::getTypePointerRel(TypePointer*,Datatype*,int4) type.cc:4016",
+   "ghidra::TypeArray::getSubType type.cc:1234",
+   "ghidra::TypeStruct::getSubType type.cc:1640",
+   "ghidra::Datatype::getSubType type.cc:174",
+   "ghidra::TypeFactory::setFields(TypeStruct*) type.cc:3479",
+   "ghidra::TypeFactory::getTypeStruct type.cc:3914",
+   "ghidra::TypeFactory::getTypeArray type.cc:3902",
+   "ghidra::TypeFactory::getTypeEnum type.cc:3967",
+   "ghidra::TypeFactory::getBase type.cc:3631"
+  ]
+ },
+ "rugra_base_commit": "3c16f4fc11a24f7f3fb0676b49a657d6f1f492c4",
+ "architecture": {
+  "id": "synthetic:LE:64:typefactory-direct",
+  "endianness": "little",
+  "pointer_size": 8,
+  "word_size": 1,
+  "spaces": "const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; all byte-addressed except the standard synthetic stack relationship",
+  "data_organization_input": "explicit size/alignment entries 0:1,1:1,2:2,3:2,4:4,8:8,16:8,32:8; output alignment and aligned-width values are read from real Datatype objects and are not predeclared as oracle results",
+  "enum_config_input": "<enum size=\"8\" signed=\"false\"/>",
+  "max_basetype_size": 10,
+  "factory_bootstrap": "Identical to the typefactory_exactpiece_1204 baseline: C++ TypeFactory(Architecture*) and Rust TypeFactory::raw(), with neither convenience core set installed; decode the identical data_organization; setupSizes/setup_sizes with stack-spacebase size 8, default data address size 8, default size 8, and no far pointer; parse the identical enum config; register exactly one named core type undefined1 size=1 TYPE_UNKNOWN unsigned=false; call cacheCoreTypes/cache_core_types; leave max_basetype_size at the shared default 10",
+  "factory_type_construction": "Both sides obtain anonymous noncore uint4/uint8 with getBase/get_base_result; named structs Inner8{lo@0,hi@4}/Progress24{head@0,hole,inner@8,total@16}/Holed12{head@0,hole,tail@8}/Holder24{elems@0=Inner[3]} via the production composite setters with explicit size/alignment (8/4, 24/8, 12/4, 24/4); arrays Inner[3] and Inner[3][2]; enum8; plain pointers and four ephemeral PointerRel values (uint8+16@Progress, Inner+8@Progress, uint4+4@Holed, uint4+0@Progress) all through the corresponding production factory APIs. Names, sizes, offsets, alignments, call order, and shared object identities are held fixed by the 25-case manifest. Ghidra TypeField.ident has no Rust representation; the covered downChain closure never reads it (TYPEFIELD-IDENT-REPRESENTATION-0001 residual, identical to the exactpiece boundary)."
+ },
+ "compiler_spec": {
+  "id": "synthetic-direct-typefactory",
+  "language_id": "synthetic little-endian 64-bit byte-addressed Translate",
+  "calling_convention": "none",
+  "prototype_model": "none",
+  "binary": "none",
+  "reason": "This fixture calls TypeFactory directly and does not decode instructions or run an action pool. The complete compiler-spec-equivalent inputs consumed by setupSizes are the stack pointer size 8, default data-space address size 8, default size 8, no far-pointer segment, and the explicit data-organization/enum XML above."
+ },
+ "host_toolchain": {
+  "cargo": {
+   "path": "/usr/bin/cargo",
+   "sha256": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
+   "version": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+   "version_output_sha256": "62d278ffb732aa9b6ac09108cbcea47dd24d6221c5c63f6d942784ca419cb9fc"
   },
-  "rugra_base_commit": "3c16f4fc11a24f7f3fb0676b49a657d6f1f492c4",
-  "architecture": {
-    "id": "synthetic:LE:64:typefactory-direct",
-    "endianness": "little",
-    "pointer_size": 8,
-    "word_size": 1,
-    "spaces": "const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; all byte-addressed except the standard synthetic stack relationship",
-    "data_organization_input": "explicit size/alignment entries 0:1,1:1,2:2,3:2,4:4,8:8,16:8,32:8; output alignment and aligned-width values are read from real Datatype objects and are not predeclared as oracle results",
-    "enum_config_input": "<enum size=\"8\" signed=\"false\"/>",
-    "max_basetype_size": 10,
-    "factory_bootstrap": "Identical to the typefactory_exactpiece_1204 baseline: C++ TypeFactory(Architecture*) and Rust TypeFactory::raw(), with neither convenience core set installed; decode the identical data_organization; setupSizes/setup_sizes with stack-spacebase size 8, default data address size 8, default size 8, and no far pointer; parse the identical enum config; register exactly one named core type undefined1 size=1 TYPE_UNKNOWN unsigned=false; call cacheCoreTypes/cache_core_types; leave max_basetype_size at the shared default 10",
-    "factory_type_construction": "Both sides obtain anonymous noncore uint4/uint8 with getBase/get_base_result; named structs Inner8{lo@0,hi@4}/Progress24{head@0,hole,inner@8,total@16}/Holed12{head@0,hole,tail@8}/Holder24{elems@0=Inner[3]} via the production composite setters with explicit size/alignment (8/4, 24/8, 12/4, 24/4); arrays Inner[3] and Inner[3][2]; enum8; plain pointers and four ephemeral PointerRel values (uint8+16@Progress, Inner+8@Progress, uint4+4@Holed, uint4+0@Progress) all through the corresponding production factory APIs. Names, sizes, offsets, alignments, call order, and shared object identities are held fixed by the 25-case manifest. Ghidra TypeField.ident has no Rust representation; the covered downChain closure never reads it (TYPEFIELD-IDENT-REPRESENTATION-0001 residual, identical to the exactpiece boundary)."
+  "rustc": {
+   "path": "/usr/bin/rustc",
+   "sha256": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618",
+   "version": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+   "version_output_sha256": "3b56b3021e5f91088c797c1d6ba31cc6e4a2170670446d47f883b91407e66768"
   },
-  "compiler_spec": {
-    "id": "synthetic-direct-typefactory",
-    "language_id": "synthetic little-endian 64-bit byte-addressed Translate",
-    "calling_convention": "none",
-    "prototype_model": "none",
-    "binary": "none",
-    "reason": "This fixture calls TypeFactory directly and does not decode instructions or run an action pool. The complete compiler-spec-equivalent inputs consumed by setupSizes are the stack pointer size 8, default data-space address size 8, default size 8, no far-pointer segment, and the explicit data-organization/enum XML above."
+  "cxx": {
+   "path": "/usr/bin/g++",
+   "sha256": "f04191f6a7b2cd7d9a62e1745872b8a6088791e5af6955488c69c9b2c4668bc9",
+   "version": "g++ (GCC) 16.2.1 20260810",
+   "version_output_sha256": "ddba3d014b73deb2a8869cad4ab507e29a48630c8cd280adf2559e0e10891d23"
   },
-  "host_toolchain": {
-    "cargo": {
-      "path": "/usr/bin/cargo",
-      "sha256": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
-      "version": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-      "version_output_sha256": "62d278ffb732aa9b6ac09108cbcea47dd24d6221c5c63f6d942784ca419cb9fc"
-    },
-    "rustc": {
-      "path": "/usr/bin/rustc",
-      "sha256": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618",
-      "version": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-      "version_output_sha256": "3b56b3021e5f91088c797c1d6ba31cc6e4a2170670446d47f883b91407e66768"
-    },
-    "cxx": {
-      "path": "/usr/bin/g++",
-      "sha256": "f04191f6a7b2cd7d9a62e1745872b8a6088791e5af6955488c69c9b2c4668bc9",
-      "version": "g++ (GCC) 16.2.1 20260810",
-      "version_output_sha256": "ddba3d014b73deb2a8869cad4ab507e29a48630c8cd280adf2559e0e10891d23"
-    },
-    "cargo_config_policy": "reject config and config.toml in CARGO_HOME and every candidate working-directory ancestor, including the candidate root",
-    "unfingerprinted_host_closure": "The runner does not separately pin make, ar, the linker, libc/libstdc++, or kernel/filesystem behavior. It therefore makes no fully-hermetic build claim; the locked source/tool frontends and exact stdout hashes are the bounded behavior fingerprint."
-  },
-  "analysis_options": {
-    "entrypoints": "Direct raw-factory bootstrap identical to typefactory_exactpiece_1204; target calls are the 25 virtual input->downChain(off,par,parOff,allowWrap,typegrp) invocations (Rugra: TypeFactory::down_chain_virtual). No instruction decode, Action, Rule, or decompiler pipeline is run.",
-    "type_graph": "One shared raw factory owns anonymous noncore uint4/uint8; named inner8/progress24/holed12/holder24 structs with explicit holes; Inner[3] and Inner[3][2] arrays; enum8; seven plain pointers (progress/holed/array/array2/holder/uint4/enum, all size 8 wordsize 1); and four ephemeral PointerRel values from the unnamed parent-pointer overload. Only undefined1 is core.",
-    "normalization": "No output-line or semantic-value normalization. The one representation encoding is the pointer shape projection: plain pointers render ptr:<size>-><shape(pointee)> and PointerRel render ptrrel:<size>-><kind:size of pointee>+<byte offset>@<kind:size of parent>; identity is emitted as C++ pointer equality / Rust Arc::ptr_eq bits, never as addresses. Accumulators start at par=NULL and parOff=-999 per record except chain_step2, which carries step1's off/par/parOff so the propagateAddIn2Out do-while accumulation is directly observable.",
-    "debug_macros": "CPUI_DEBUG and OPACTION_DEBUG absent",
-    "random_seed": "none",
-    "error_injection": "none",
-    "iteration_order": "Twenty-five records in the fixed input_manifest order; chain_step1/chain_step2 run consecutively sharing accumulator state",
-    "api_domain": "All offsets are int8-representable and within the int4 domain; every wrap flag and offset value is representable on both sides. Offsets outside int8, variable-length arrays, wordsize != 1 pointers, and spacebase pointees are deliberately UNTESTED rather than normalized.",
-    "production_caller_state": "The fixture directly calls the frozen virtual dispatch entry on both sides. No production caller does: coreaction.rs:3970-3991 still propagates pointers untransformed and typeop.rs still lacks propagateAddIn2Out (upstream audit B1 items 1/4/9). This fixture therefore proves no production-consumer or user-visible pipeline repair; the progressbarinit PTRSUB wiring is the follow-up B1 lease."
-  },
-  "input_manifest": {
-    "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=true, separators=(',',':'), ensure_ascii=false)",
-    "cases": [
-      {
-        "id": "pd_field_hit",
-        "input": "ptr:8->struct:24 (progress)",
-        "off_in": 16,
-        "wrap": false,
-        "note": "plain struct field hit: total uint8 field pointer, par=this, off renormalized to 0"
-      },
-      {
-        "id": "pd_field_inner",
-        "input": "ptr:8->struct:24 (progress)",
-        "off_in": 8,
-        "wrap": false,
-        "note": "nested struct field hit: Inner pointer via strip-array no-op"
-      },
-      {
-        "id": "pd_field_mid",
-        "input": "ptr:8->struct:24 (progress)",
-        "off_in": 2,
-        "wrap": false,
-        "note": "mid-field offset: head uint4 returned with remainder off_out=2"
-      },
-      {
-        "id": "pd_hole_null",
-        "input": "ptr:8->struct:24 (progress)",
-        "off_in": 5,
-        "wrap": false,
-        "note": "structure hole [4,8): getSubType NULL while par/parOff are still written"
-      },
-      {
-        "id": "pd_off0",
-        "input": "ptr:8->struct:24 (progress)",
-        "off_in": 0,
-        "wrap": false,
-        "note": "off==0 boundary: first-field pointer"
-      },
-      {
-        "id": "pd_off_size_nowrap",
-        "input": "ptr:8->struct:24 (progress)",
-        "off_in": 24,
-        "wrap": false,
-        "note": "off==alignSize with wrap denied: NULL before any off/par mutation"
-      },
-      {
-        "id": "pd_off_size_wrap",
-        "input": "ptr:8->struct:24 (progress)",
-        "off_in": 24,
-        "wrap": true,
-        "note": "off==alignSize with wrap: sign_extend modulo folds to zero and returns this pointer"
-      },
-      {
-        "id": "pd_negative_nowrap",
-        "input": "ptr:8->struct:24 (progress)",
-        "off_in": -4,
-        "wrap": false,
-        "note": "negative-encoded offset, wrap denied (PTRSUB style): NULL"
-      },
-      {
-        "id": "pd_negative_wrap",
-        "input": "ptr:8->struct:24 (progress)",
-        "off_in": -4,
-        "wrap": true,
-        "note": "negative-encoded wrap: -4 %% 24 + 24 = 20, parOff keeps pre-renormalized 20, off_out=4"
-      },
-      {
-        "id": "array_elem",
-        "input": "ptr:8->array:24x3/elem=struct:8",
-        "off_in": 12,
-        "wrap": false,
-        "note": "array element descent: struct element preserved by getTypePointer, remainder 4"
-      },
-      {
-        "id": "array_strip_contrast",
-        "input": "ptr:8->struct:24 (holder)",
-        "off_in": 0,
-        "wrap": false,
-        "note": "struct field of array type: non-array path strips one array layer off the component"
-      },
-      {
-        "id": "array_preserve_nested",
-        "input": "ptr:8->array:48x2/elem=array:24x3",
-        "off_in": 8,
-        "wrap": false,
-        "note": "array of arrays: array path keeps the Inner[3] element type intact"
-      },
-      {
-        "id": "chain_step1",
-        "input": "ptr:8->array:24x3/elem=struct:8",
-        "off_in": 12,
-        "wrap": false,
-        "note": "first propagateAddIn2Out-style do/while iteration: array level with fresh accumulators"
-      },
-      {
-        "id": "chain_step2",
-        "input": "step1 result ptr:8->struct:8",
-        "off_in": 4,
-        "wrap": false,
-        "note": "second chain step: carried off/par/parOff, struct level overwrites par to itself"
-      },
-      {
-        "id": "holed_hole_null",
-        "input": "ptr:8->struct:12 (holed)",
-        "off_in": 6,
-        "wrap": false,
-        "note": "hole descent returning NULL with the container still recorded in par"
-      },
-      {
-        "id": "uint4_plain_null",
-        "input": "ptr:8->uint:4",
-        "off_in": 0,
-        "wrap": false,
-        "note": "scalar pointee: base getSubType NULL, accumulators untouched"
-      },
-      {
-        "id": "uint4_off_size_wrap",
-        "input": "ptr:8->uint:4",
-        "off_in": 4,
-        "wrap": true,
-        "note": "scalar off==alignSize wrap: folds to zero and returns this pointer identity"
-      },
-      {
-        "id": "enum_into_uint1",
-        "input": "ptr:8->enum:8",
-        "off_in": 3,
-        "wrap": false,
-        "note": "enum branch: getBase(1,TYPE_UINT) pointee, off reset to 0"
-      },
-      {
-        "id": "rel_total_field",
-        "input": "ptrrel:8->uint:8+16@struct:24",
-        "off_in": 0,
-        "wrap": false,
-        "note": "relative dispatch: relOff=16 drills the parent's total field via plain recursion"
-      },
-      {
-        "id": "rel_recover_parent",
-        "input": "ptrrel:8->uint:8+16@struct:24",
-        "off_in": -16,
-        "wrap": false,
-        "note": "relOff==0 && offset!=0: parent pointer returned, accumulators untouched (type.cc:2669-2670)"
-      },
-      {
-        "id": "rel_out_of_parent",
-        "input": "ptrrel:8->uint:8+16@struct:24",
-        "off_in": 8,
-        "wrap": false,
-        "note": "relOff=24 reaches parent size: NULL before interning or mutating off"
-      },
-      {
-        "id": "rel_defer_field",
-        "input": "ptrrel:8->struct:8+8@struct:24",
-        "off_in": 4,
-        "wrap": false,
-        "note": "deferral: plain body invoked on the rel pointer itself, par=this observes the rel identity"
-      },
-      {
-        "id": "rel_tail_null",
-        "input": "ptrrel:8->uint:4+4@struct:12",
-        "off_in": 2,
-        "wrap": false,
-        "note": "relOff=6 lands in the parent hole: recursive plain NULL passes through with no fallback (type.cc:2671)"
-      },
-      {
-        "id": "rel_defer_boundary",
-        "input": "ptrrel:8->struct:8+8@struct:24",
-        "off_in": 8,
-        "wrap": false,
-        "note": "off==ptrto getSize leaves the deferral guard and takes the parent-relative path"
-      },
-      {
-        "id": "route_rel_first",
-        "input": "ptrrel:8->uint:4+0@struct:24",
-        "off_in": 0,
-        "wrap": false,
-        "note": "routing discrimination: scalar ptrto yields NULL on the plain path but the first field through the rel path"
-      }
-    ],
-    "sha256": "1fd170d08af3ffdc152c8385e6010a6ed6f3d12495fb821919135ee0c9c652aa"
-  },
-  "build": {
-    "expected_stdout_lines": 25,
-    "cpp_source": "tests/oracle/typefactory_downchain_virtual_1204.cc",
-    "rust_source": "tests/oracle/typefactory_downchain_virtual_1204.rs"
-  },
-  "observation_schema": {
-    "record_kinds_in_manifest_order": [
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain",
-      "downchain"
-    ],
-    "fields_in_order": [
-      "case",
-      "input",
-      "off_in",
-      "wrap",
-      "result",
-      "off_out",
-      "par",
-      "par_off",
-      "result_same_input",
-      "par_same_input"
-    ],
-    "projections": {
-      "input/result/par": "pointer shape string or null",
-      "off_in/off_out/par_off": "decimal int8",
-      "wrap/result_same_input/par_same_input": "0/1"
-    }
-  },
-  "comparison_policy": {
-    "require_exact_difference_set": true,
-    "allowed_value_differences": [],
-    "observed_difference_count": 0,
-    "observed_differing_cases": []
-  },
-  "coverage": {
-    "plain_struct_descent": {
-      "status": "MATCH",
-      "cases": [
-        "pd_field_hit",
-        "pd_field_inner",
-        "pd_field_mid",
-        "pd_hole_null",
-        "pd_off0",
-        "holed_hole_null"
-      ]
-    },
-    "wrap_boundaries": {
-      "status": "MATCH",
-      "cases": [
-        "pd_off_size_nowrap",
-        "pd_off_size_wrap",
-        "pd_negative_nowrap",
-        "pd_negative_wrap",
-        "uint4_off_size_wrap"
-      ]
-    },
-    "array_descent_and_chain": {
-      "status": "MATCH",
-      "cases": [
-        "array_elem",
-        "array_strip_contrast",
-        "array_preserve_nested",
-        "chain_step1",
-        "chain_step2"
-      ]
-    },
-    "enum_branch": {
-      "status": "MATCH",
-      "cases": [
-        "enum_into_uint1"
-      ]
-    },
-    "relative_dispatch": {
-      "status": "MATCH",
-      "cases": [
-        "rel_total_field",
-        "rel_recover_parent",
-        "rel_out_of_parent",
-        "rel_defer_field",
-        "rel_tail_null",
-        "rel_defer_boundary"
-      ]
-    },
-    "routing_discrimination": {
-      "status": "MATCH",
-      "cases": [
-        "uint4_plain_null",
-        "route_rel_first"
-      ]
-    }
-  },
-  "rugra_candidate": {
-    "snapshot_model": "git archive of the frozen production commit; no live Rust source overlays",
-    "commit": "f9307c77e02458e68cb2786aee6f375bd2c90694",
-    "tree": "50ac5a9d575dc914c14c85df9bf95b234362cd3b",
-    "scope": "down_chain_virtual dispatcher plus rel/plain downChain oracle fixes (TYPEFACTORY-DOWNCHAIN-VIRTUAL-0001)",
-    "critical_git_blobs": {
-      "src/type_system/datatype.rs": "3c84bada0af39e647f242cbeb8d3704ba94e2c3c",
-      "src/type_system/typefactory.rs": "fc60ceb1de127ce56f1a0adf6088b54e388fcba7",
-      "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
-      "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-      "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
-    },
-    "claim_boundary": "The archive-based bilateral run confirms only the 25-record virtual-dispatch projection for the frozen candidate. The propagateAddIn2Out consumer, coreaction/typeop production wiring, wordsize != 1 geometry, spacebase/variable-length inputs, and the hasStripped/calcTruncate strip residuals stay outside this projection under their registered IDs."
-  },
-  "comparand": {
-    "cpp_fixture_sha256": "bef1830c1f80b5ccd79aeed813ca620322691427ca2a2ba2419fb52d1ec8ac3e",
-    "rust_fixture_sha256": "82a6c4eb86df989dcf4474e9327bc1a960df18ef99b5b4c5ffc60b16d75a247c",
-    "runner_sha256": "e6a02b97cc275e984b970662891431f153afb9e46a8758c37cda6eb4809b4bf3",
-    "datatype_rs_sha256": "a9a64334d952782ae58f076244477e4c69084582d822987f962d3a0679d2ddb5",
-    "typefactory_rs_sha256": "27975d9f8fee16a8c91b4753c1cad6afa2d86f9adf774dacc5acc9d9d8734383",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "expected_ghidra_stdout_sha256": "4ec3a9cbf2987d8c3d6a2d49a0c211075407e5f858a9cf1c61242d455521314e",
-    "expected_rugra_stdout_sha256": "4ec3a9cbf2987d8c3d6a2d49a0c211075407e5f858a9cf1c61242d455521314e",
-    "observed_output_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  "cargo_config_policy": "reject config and config.toml in CARGO_HOME and every candidate working-directory ancestor, including the candidate root",
+  "unfingerprinted_host_closure": "The runner does not separately pin make, ar, the linker, libc/libstdc++, or kernel/filesystem behavior. It therefore makes no fully-hermetic build claim; the locked source/tool frontends and exact stdout hashes are the bounded behavior fingerprint."
+ },
+ "analysis_options": {
+  "entrypoints": "Direct raw-factory bootstrap identical to typefactory_exactpiece_1204; target calls are the 25 virtual input->downChain(off,par,parOff,allowWrap,typegrp) invocations (Rugra: TypeFactory::down_chain_virtual). No instruction decode, Action, Rule, or decompiler pipeline is run.",
+  "type_graph": "One shared raw factory owns anonymous noncore uint4/uint8; named inner8/progress24/holed12/holder24 structs with explicit holes; Inner[3] and Inner[3][2] arrays; enum8; seven plain pointers (progress/holed/array/array2/holder/uint4/enum, all size 8 wordsize 1); and four ephemeral PointerRel values from the unnamed parent-pointer overload. Only undefined1 is core.",
+  "normalization": "No output-line or semantic-value normalization. The one representation encoding is the pointer shape projection: plain pointers render ptr:<size>-><shape(pointee)> and PointerRel render ptrrel:<size>-><kind:size of pointee>+<byte offset>@<kind:size of parent>; identity is emitted as C++ pointer equality / Rust Arc::ptr_eq bits, never as addresses. Accumulators start at par=NULL and parOff=-999 per record except chain_step2, which carries step1's off/par/parOff so the propagateAddIn2Out do-while accumulation is directly observable.",
+  "debug_macros": "CPUI_DEBUG and OPACTION_DEBUG absent",
+  "random_seed": "none",
+  "error_injection": "none",
+  "iteration_order": "Twenty-five records in the fixed input_manifest order; chain_step1/chain_step2 run consecutively sharing accumulator state",
+  "api_domain": "All offsets are int8-representable and within the int4 domain; every wrap flag and offset value is representable on both sides. Offsets outside int8, variable-length arrays, wordsize != 1 pointers, and spacebase pointees are deliberately UNTESTED rather than normalized.",
+  "production_caller_state": "The fixture directly calls the frozen virtual dispatch entry on both sides. No production caller does: coreaction.rs:3970-3991 still propagates pointers untransformed and typeop.rs still lacks propagateAddIn2Out (upstream audit B1 items 1/4/9). This fixture therefore proves no production-consumer or user-visible pipeline repair; the progressbarinit PTRSUB wiring is the follow-up B1 lease."
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=true, separators=(',',':'), ensure_ascii=false)",
+  "cases": [
+   {
+    "id": "pd_field_hit",
+    "input": "ptr:8->struct:24 (progress)",
+    "off_in": 16,
+    "wrap": false,
+    "note": "plain struct field hit: total uint8 field pointer, par=this, off renormalized to 0"
+   },
+   {
+    "id": "pd_field_inner",
+    "input": "ptr:8->struct:24 (progress)",
+    "off_in": 8,
+    "wrap": false,
+    "note": "nested struct field hit: Inner pointer via strip-array no-op"
+   },
+   {
+    "id": "pd_field_mid",
+    "input": "ptr:8->struct:24 (progress)",
+    "off_in": 2,
+    "wrap": false,
+    "note": "mid-field offset: head uint4 returned with remainder off_out=2"
+   },
+   {
+    "id": "pd_hole_null",
+    "input": "ptr:8->struct:24 (progress)",
+    "off_in": 5,
+    "wrap": false,
+    "note": "structure hole [4,8): getSubType NULL while par/parOff are still written"
+   },
+   {
+    "id": "pd_off0",
+    "input": "ptr:8->struct:24 (progress)",
+    "off_in": 0,
+    "wrap": false,
+    "note": "off==0 boundary: first-field pointer"
+   },
+   {
+    "id": "pd_off_size_nowrap",
+    "input": "ptr:8->struct:24 (progress)",
+    "off_in": 24,
+    "wrap": false,
+    "note": "off==alignSize with wrap denied: NULL before any off/par mutation"
+   },
+   {
+    "id": "pd_off_size_wrap",
+    "input": "ptr:8->struct:24 (progress)",
+    "off_in": 24,
+    "wrap": true,
+    "note": "off==alignSize with wrap: sign_extend modulo folds to zero and returns this pointer"
+   },
+   {
+    "id": "pd_negative_nowrap",
+    "input": "ptr:8->struct:24 (progress)",
+    "off_in": -4,
+    "wrap": false,
+    "note": "negative-encoded offset, wrap denied (PTRSUB style): NULL"
+   },
+   {
+    "id": "pd_negative_wrap",
+    "input": "ptr:8->struct:24 (progress)",
+    "off_in": -4,
+    "wrap": true,
+    "note": "negative-encoded wrap: -4 %% 24 + 24 = 20, parOff keeps pre-renormalized 20, off_out=4"
+   },
+   {
+    "id": "array_elem",
+    "input": "ptr:8->array:24x3/elem=struct:8",
+    "off_in": 12,
+    "wrap": false,
+    "note": "array element descent: struct element preserved by getTypePointer, remainder 4"
+   },
+   {
+    "id": "array_strip_contrast",
+    "input": "ptr:8->struct:24 (holder)",
+    "off_in": 0,
+    "wrap": false,
+    "note": "struct field of array type: non-array path strips one array layer off the component"
+   },
+   {
+    "id": "array_preserve_nested",
+    "input": "ptr:8->array:48x2/elem=array:24x3",
+    "off_in": 8,
+    "wrap": false,
+    "note": "array of arrays: array path keeps the Inner[3] element type intact"
+   },
+   {
+    "id": "chain_step1",
+    "input": "ptr:8->array:24x3/elem=struct:8",
+    "off_in": 12,
+    "wrap": false,
+    "note": "first propagateAddIn2Out-style do/while iteration: array level with fresh accumulators"
+   },
+   {
+    "id": "chain_step2",
+    "input": "step1 result ptr:8->struct:8",
+    "off_in": 4,
+    "wrap": false,
+    "note": "second chain step: carried off/par/parOff, struct level overwrites par to itself"
+   },
+   {
+    "id": "holed_hole_null",
+    "input": "ptr:8->struct:12 (holed)",
+    "off_in": 6,
+    "wrap": false,
+    "note": "hole descent returning NULL with the container still recorded in par"
+   },
+   {
+    "id": "uint4_plain_null",
+    "input": "ptr:8->uint:4",
+    "off_in": 0,
+    "wrap": false,
+    "note": "scalar pointee: base getSubType NULL, accumulators untouched"
+   },
+   {
+    "id": "uint4_off_size_wrap",
+    "input": "ptr:8->uint:4",
+    "off_in": 4,
+    "wrap": true,
+    "note": "scalar off==alignSize wrap: folds to zero and returns this pointer identity"
+   },
+   {
+    "id": "enum_into_uint1",
+    "input": "ptr:8->enum:8",
+    "off_in": 3,
+    "wrap": false,
+    "note": "enum branch: getBase(1,TYPE_UINT) pointee, off reset to 0"
+   },
+   {
+    "id": "rel_total_field",
+    "input": "ptrrel:8->uint:8+16@struct:24",
+    "off_in": 0,
+    "wrap": false,
+    "note": "relative dispatch: relOff=16 drills the parent's total field via plain recursion"
+   },
+   {
+    "id": "rel_recover_parent",
+    "input": "ptrrel:8->uint:8+16@struct:24",
+    "off_in": -16,
+    "wrap": false,
+    "note": "relOff==0 && offset!=0: parent pointer returned, accumulators untouched (type.cc:2669-2670)"
+   },
+   {
+    "id": "rel_out_of_parent",
+    "input": "ptrrel:8->uint:8+16@struct:24",
+    "off_in": 8,
+    "wrap": false,
+    "note": "relOff=24 reaches parent size: NULL before interning or mutating off"
+   },
+   {
+    "id": "rel_defer_field",
+    "input": "ptrrel:8->struct:8+8@struct:24",
+    "off_in": 4,
+    "wrap": false,
+    "note": "deferral: plain body invoked on the rel pointer itself, par=this observes the rel identity"
+   },
+   {
+    "id": "rel_tail_null",
+    "input": "ptrrel:8->uint:4+4@struct:12",
+    "off_in": 2,
+    "wrap": false,
+    "note": "relOff=6 lands in the parent hole: recursive plain NULL passes through with no fallback (type.cc:2671)"
+   },
+   {
+    "id": "rel_defer_boundary",
+    "input": "ptrrel:8->struct:8+8@struct:24",
+    "off_in": 8,
+    "wrap": false,
+    "note": "off==ptrto getSize leaves the deferral guard and takes the parent-relative path"
+   },
+   {
+    "id": "route_rel_first",
+    "input": "ptrrel:8->uint:4+0@struct:24",
+    "off_in": 0,
+    "wrap": false,
+    "note": "routing discrimination: scalar ptrto yields NULL on the plain path but the first field through the rel path"
+   }
+  ],
+  "sha256": "1fd170d08af3ffdc152c8385e6010a6ed6f3d12495fb821919135ee0c9c652aa"
+ },
+ "build": {
+  "expected_stdout_lines": 25,
+  "cpp_source": "tests/oracle/typefactory_downchain_virtual_1204.cc",
+  "rust_source": "tests/oracle/typefactory_downchain_virtual_1204.rs"
+ },
+ "observation_schema": {
+  "record_kinds_in_manifest_order": [
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain",
+   "downchain"
+  ],
+  "fields_in_order": [
+   "case",
+   "input",
+   "off_in",
+   "wrap",
+   "result",
+   "off_out",
+   "par",
+   "par_off",
+   "result_same_input",
+   "par_same_input"
+  ],
+  "projections": {
+   "input/result/par": "pointer shape string or null",
+   "off_in/off_out/par_off": "decimal int8",
+   "wrap/result_same_input/par_same_input": "0/1"
   }
+ },
+ "comparison_policy": {
+  "require_exact_difference_set": true,
+  "allowed_value_differences": [],
+  "observed_difference_count": 0,
+  "observed_differing_cases": []
+ },
+ "coverage": {
+  "plain_struct_descent": {
+   "status": "MATCH",
+   "cases": [
+    "pd_field_hit",
+    "pd_field_inner",
+    "pd_field_mid",
+    "pd_hole_null",
+    "pd_off0",
+    "holed_hole_null"
+   ]
+  },
+  "wrap_boundaries": {
+   "status": "MATCH",
+   "cases": [
+    "pd_off_size_nowrap",
+    "pd_off_size_wrap",
+    "pd_negative_nowrap",
+    "pd_negative_wrap",
+    "uint4_off_size_wrap"
+   ]
+  },
+  "array_descent_and_chain": {
+   "status": "MATCH",
+   "cases": [
+    "array_elem",
+    "array_strip_contrast",
+    "array_preserve_nested",
+    "chain_step1",
+    "chain_step2"
+   ]
+  },
+  "enum_branch": {
+   "status": "MATCH",
+   "cases": [
+    "enum_into_uint1"
+   ]
+  },
+  "relative_dispatch": {
+   "status": "MATCH",
+   "cases": [
+    "rel_total_field",
+    "rel_recover_parent",
+    "rel_out_of_parent",
+    "rel_defer_field",
+    "rel_tail_null",
+    "rel_defer_boundary"
+   ]
+  },
+  "routing_discrimination": {
+   "status": "MATCH",
+   "cases": [
+    "uint4_plain_null",
+    "route_rel_first"
+   ]
+  }
+ },
+ "rugra_candidate": {
+  "snapshot_model": "git archive of the frozen production commit; no live Rust source overlays",
+  "commit": "f9307c77e02458e68cb2786aee6f375bd2c90694",
+  "tree": "50ac5a9d575dc914c14c85df9bf95b234362cd3b",
+  "scope": "down_chain_virtual dispatcher plus rel/plain downChain oracle fixes (TYPEFACTORY-DOWNCHAIN-VIRTUAL-0001)",
+  "critical_git_blobs": {
+   "src/type_system/datatype.rs": "3c84bada0af39e647f242cbeb8d3704ba94e2c3c",
+   "src/type_system/typefactory.rs": "fc60ceb1de127ce56f1a0adf6088b54e388fcba7",
+   "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
+   "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+   "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+  },
+  "claim_boundary": "The archive-based bilateral run confirms only the 25-record virtual-dispatch projection for the frozen candidate. The propagateAddIn2Out consumer, coreaction/typeop production wiring, wordsize != 1 geometry, spacebase/variable-length inputs, and the hasStripped/calcTruncate strip residuals stay outside this projection under their registered IDs."
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "bef1830c1f80b5ccd79aeed813ca620322691427ca2a2ba2419fb52d1ec8ac3e",
+  "rust_fixture_sha256": "82a6c4eb86df989dcf4474e9327bc1a960df18ef99b5b4c5ffc60b16d75a247c",
+  "runner_sha256": "e6a02b97cc275e984b970662891431f153afb9e46a8758c37cda6eb4809b4bf3",
+  "datatype_rs_sha256": "a9a64334d952782ae58f076244477e4c69084582d822987f962d3a0679d2ddb5",
+  "typefactory_rs_sha256": "27975d9f8fee16a8c91b4753c1cad6afa2d86f9adf774dacc5acc9d9d8734383",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "expected_ghidra_stdout_sha256": "4ec3a9cbf2987d8c3d6a2d49a0c211075407e5f858a9cf1c61242d455521314e",
+  "expected_rugra_stdout_sha256": "4ec3a9cbf2987d8c3d6a2d49a0c211075407e5f858a9cf1c61242d455521314e",
+  "observed_output_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+ }
 }

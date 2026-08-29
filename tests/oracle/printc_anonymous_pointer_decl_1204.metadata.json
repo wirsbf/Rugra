@@ -1,150 +1,150 @@
 {
-  "schema_version": 2,
-  "fixture_id": "PTRSUB-TYPED-DECL-RESIDUAL-0001",
-  "overall_status": "MISMATCH",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
-  },
-  "architecture": "self-contained fixture architecture (FixtureTranslate/FixtureArchitecture, after ptrsub_switch_cast_1204.cc): LE, 8-byte ram(3)/register(4)/stack(5)/join(6) spaces, core types char/uint1/uint2/int4/uint4/int8/uint8/float4/undefined1/2/4/8, max_basetype_size=16, default ProtoModel 'fixture' with stack-slot pentry rules align=8; Funcdata constructed directly at ram:0x36d0 (Funcdata ctor attaches the default ScopeLocal)",
-  "compiler_spec": "none (fixture-internal ProtoModel 'fixture', extrapop=0)",
-  "analysis_options": "ActionNameVars::perform only (no universal action pipeline); Rust side: ActionRestructureVarnode::apply + set_high_level + ActionNameVars::apply (the printc_symbol_decl_1204 parity sequence)",
-  "input_manifest": {
-    "cases": [
-      {
-        "id": "anon_ptr_char",
-        "stage": "start",
-        "construction": "factory anonymous char* (getTypePointer(8,char,1)); pushTypeStart(false)+Atom(x)+pushTypeEnd"
-      },
-      {
-        "id": "anon_ptr_char",
-        "stage": "decls",
-        "construction": "register temp at register:0x60 typed anonymous char*, COPY(const)@0x1030 + unique reader; ActionNameVars; emitLocalVarDecls"
-      },
-      {
-        "id": "anon_ptr_multi",
-        "stage": "start",
-        "construction": "anonymous uint2** double pointer"
-      },
-      {
-        "id": "anon_ptr_multi",
-        "stage": "decls",
-        "construction": "register temp typed anonymous uint2**"
-      },
-      {
-        "id": "anon_ptr_struct",
-        "stage": "start",
-        "construction": "anonymous pointer to named FixtureStruct fixture_list"
-      },
-      {
-        "id": "anon_ptr_struct",
-        "stage": "decls",
-        "construction": "register temp typed anonymous fixture_list*"
-      },
-      {
-        "id": "named_ptr_contrast",
-        "stage": "start",
-        "construction": "NAMED pointer via getTypePointer(8,char,1,\"char *\") - buildTypeStack stops at the named layer"
-      },
-      {
-        "id": "anon_array_int",
-        "stage": "start",
-        "construction": "factory anonymous getTypeArray(16,int4)"
-      },
-      {
-        "id": "anon_array_int",
-        "stage": "decls",
-        "construction": "16-byte register temp typed int4[16]"
-      },
-      {
-        "id": "anon_ptr_array_elem",
-        "stage": "start",
-        "construction": "anonymous pointer to anonymous int4[16] - parenthesized declarator int4 (*x) [16]"
-      },
-      {
-        "id": "anon_array_ptr_elem",
-        "stage": "start",
-        "construction": "anonymous array of 2 anonymous int4* - int4 *x [2]"
-      },
-      {
-        "id": "anon_base_int",
-        "stage": "start",
-        "construction": "direct TypeBase(4,TYPE_INT) - genericTypeName unkint4"
-      },
-      {
-        "id": "anon_base_uint",
-        "stage": "start",
-        "construction": "direct TypeBase(8,TYPE_UINT) - unkuint8"
-      },
-      {
-        "id": "anon_base_unknown",
-        "stage": "start",
-        "construction": "direct TypeBase(1,TYPE_UNKNOWN) - unkbyte1"
-      },
-      {
-        "id": "anon_base_float",
-        "stage": "start",
-        "construction": "direct TypeBase(4,TYPE_FLOAT) - unkfloat4"
-      },
-      {
-        "id": "anon_code_noproto",
-        "stage": "startonly",
-        "construction": "anonymous TypeCode without prototype; start-only because Ghidra 12.0.4 pushTypeEnd loops forever on this shape (printc.cc:337-339)"
-      },
-      {
-        "id": "anon_code_proto",
-        "stage": "start",
-        "construction": "anonymous TypeCode with int4(void) prototype (getTypeCode(pieces))"
-      },
-      {
-        "id": "anon_code_params",
-        "stage": "start",
-        "construction": "anonymous TypeCode with int4(char*,int4) prototype (FixtureTypeCode setPieces); pushPrototypeInputs inside function_call parens"
-      }
-    ],
-    "sha256": "8fcd207ae799af58807264ed97f96d0848651431f006e8c3218bb96c366761ff"
-  },
-  "comparand": {
-    "runner_sha256": "3e454e2fa2b86013057fb4d40aba03a4eaaf047b019a8132ca9a24189cbccf96",
-    "fixture_sha256": {
-      "tests/oracle/printc_anonymous_pointer_decl_1204.cc": "56547187db63090467ad999ad1bc3fb479829d33750faa11bbaa2b7124328208",
-      "tests/oracle/printc_anonymous_pointer_decl_1204.rs": "2a9e52749f5171dddf9e607aad7a6001b85da77011c0503c23c327f109fdc4f9"
-    }
-  },
-  "expected_results": {
-    "record_count": 18,
-    "raw_diff_labels": [
-      "ghidra.stdout",
-      "rugra.stdout"
-    ],
-    "exit_codes": {
-      "ghidra": 0,
-      "rugra": 0
-    },
-    "ghidra_stdout_sha256": "c7e85f9d514a85f64312039cf784fbf9e5ee427c1dd53cc518255b69400591d3",
-    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "c7e85f9d514a85f64312039cf784fbf9e5ee427c1dd53cc518255b69400591d3",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  },
-  "host_tools": {
-    "g++": "g++ (GCC) 16.2.1 20260810",
-    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
-    "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
-  },
-  "known_raw_differences": [
-    {
-      "id": "DECL-SPACING-NAMEFLOW-0001",
-      "category": "render_spacing",
-      "cause": "Rugra composes pointer names in the debugproto importer (char *) bypassing the factory's anonymous TypePointer construction (Ghidra type.hh:412 leaves names empty); after the golden-matching glue fix, the named single-layer case renders `char *x` where the directly-driven oracle emits `char * x`",
-      "oracle_behavior": "named single-layer pointer via type_expr_space: ONE blank before the identifier",
-      "rugra_behavior": "composed-name pointers glue (production golden form); the fixture's directly-constructed named pointer follows the same glue",
-      "residual_ids": [
-        "DECL-SPACING-NAMEFLOW-0001"
-      ]
-    }
+ "schema_version": 2,
+ "fixture_id": "PTRSUB-TYPED-DECL-RESIDUAL-0001",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "self-contained fixture architecture (FixtureTranslate/FixtureArchitecture, after ptrsub_switch_cast_1204.cc): LE, 8-byte ram(3)/register(4)/stack(5)/join(6) spaces, core types char/uint1/uint2/int4/uint4/int8/uint8/float4/undefined1/2/4/8, max_basetype_size=16, default ProtoModel 'fixture' with stack-slot pentry rules align=8; Funcdata constructed directly at ram:0x36d0 (Funcdata ctor attaches the default ScopeLocal)",
+ "compiler_spec": "none (fixture-internal ProtoModel 'fixture', extrapop=0)",
+ "analysis_options": "ActionNameVars::perform only (no universal action pipeline); Rust side: ActionRestructureVarnode::apply + set_high_level + ActionNameVars::apply (the printc_symbol_decl_1204 parity sequence)",
+ "input_manifest": {
+  "cases": [
+   {
+    "id": "anon_ptr_char",
+    "stage": "start",
+    "construction": "factory anonymous char* (getTypePointer(8,char,1)); pushTypeStart(false)+Atom(x)+pushTypeEnd"
+   },
+   {
+    "id": "anon_ptr_char",
+    "stage": "decls",
+    "construction": "register temp at register:0x60 typed anonymous char*, COPY(const)@0x1030 + unique reader; ActionNameVars; emitLocalVarDecls"
+   },
+   {
+    "id": "anon_ptr_multi",
+    "stage": "start",
+    "construction": "anonymous uint2** double pointer"
+   },
+   {
+    "id": "anon_ptr_multi",
+    "stage": "decls",
+    "construction": "register temp typed anonymous uint2**"
+   },
+   {
+    "id": "anon_ptr_struct",
+    "stage": "start",
+    "construction": "anonymous pointer to named FixtureStruct fixture_list"
+   },
+   {
+    "id": "anon_ptr_struct",
+    "stage": "decls",
+    "construction": "register temp typed anonymous fixture_list*"
+   },
+   {
+    "id": "named_ptr_contrast",
+    "stage": "start",
+    "construction": "NAMED pointer via getTypePointer(8,char,1,\"char *\") - buildTypeStack stops at the named layer"
+   },
+   {
+    "id": "anon_array_int",
+    "stage": "start",
+    "construction": "factory anonymous getTypeArray(16,int4)"
+   },
+   {
+    "id": "anon_array_int",
+    "stage": "decls",
+    "construction": "16-byte register temp typed int4[16]"
+   },
+   {
+    "id": "anon_ptr_array_elem",
+    "stage": "start",
+    "construction": "anonymous pointer to anonymous int4[16] - parenthesized declarator int4 (*x) [16]"
+   },
+   {
+    "id": "anon_array_ptr_elem",
+    "stage": "start",
+    "construction": "anonymous array of 2 anonymous int4* - int4 *x [2]"
+   },
+   {
+    "id": "anon_base_int",
+    "stage": "start",
+    "construction": "direct TypeBase(4,TYPE_INT) - genericTypeName unkint4"
+   },
+   {
+    "id": "anon_base_uint",
+    "stage": "start",
+    "construction": "direct TypeBase(8,TYPE_UINT) - unkuint8"
+   },
+   {
+    "id": "anon_base_unknown",
+    "stage": "start",
+    "construction": "direct TypeBase(1,TYPE_UNKNOWN) - unkbyte1"
+   },
+   {
+    "id": "anon_base_float",
+    "stage": "start",
+    "construction": "direct TypeBase(4,TYPE_FLOAT) - unkfloat4"
+   },
+   {
+    "id": "anon_code_noproto",
+    "stage": "startonly",
+    "construction": "anonymous TypeCode without prototype; start-only because Ghidra 12.0.4 pushTypeEnd loops forever on this shape (printc.cc:337-339)"
+   },
+   {
+    "id": "anon_code_proto",
+    "stage": "start",
+    "construction": "anonymous TypeCode with int4(void) prototype (getTypeCode(pieces))"
+   },
+   {
+    "id": "anon_code_params",
+    "stage": "start",
+    "construction": "anonymous TypeCode with int4(char*,int4) prototype (FixtureTypeCode setPieces); pushPrototypeInputs inside function_call parens"
+   }
   ],
-  "status_note": "2026-08-29: named_ptr_contrast record diverges after the golden-matching composed-name glue (root: importer pointer naming, DECL-SPACING-NAMEFLOW-0001)."
+  "sha256": "8fcd207ae799af58807264ed97f96d0848651431f006e8c3218bb96c366761ff"
+ },
+ "comparand": {
+  "runner_sha256": "3e454e2fa2b86013057fb4d40aba03a4eaaf047b019a8132ca9a24189cbccf96",
+  "fixture_sha256": {
+   "tests/oracle/printc_anonymous_pointer_decl_1204.cc": "56547187db63090467ad999ad1bc3fb479829d33750faa11bbaa2b7124328208",
+   "tests/oracle/printc_anonymous_pointer_decl_1204.rs": "2a9e52749f5171dddf9e607aad7a6001b85da77011c0503c23c327f109fdc4f9"
+  }
+ },
+ "expected_results": {
+  "record_count": 18,
+  "raw_diff_labels": [
+   "ghidra.stdout",
+   "rugra.stdout"
+  ],
+  "exit_codes": {
+   "ghidra": 0,
+   "rugra": 0
+  },
+  "ghidra_stdout_sha256": "c7e85f9d514a85f64312039cf784fbf9e5ee427c1dd53cc518255b69400591d3",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "c7e85f9d514a85f64312039cf784fbf9e5ee427c1dd53cc518255b69400591d3",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+ },
+ "host_tools": {
+  "g++": "g++ (GCC) 16.2.1 20260810",
+  "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
+  "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
+ },
+ "known_raw_differences": [
+  {
+   "id": "DECL-SPACING-NAMEFLOW-0001",
+   "category": "render_spacing",
+   "cause": "Rugra composes pointer names in the debugproto importer (char *) bypassing the factory's anonymous TypePointer construction (Ghidra type.hh:412 leaves names empty); after the golden-matching glue fix, the named single-layer case renders `char *x` where the directly-driven oracle emits `char * x`",
+   "oracle_behavior": "named single-layer pointer via type_expr_space: ONE blank before the identifier",
+   "rugra_behavior": "composed-name pointers glue (production golden form); the fixture's directly-constructed named pointer follows the same glue",
+   "residual_ids": [
+    "DECL-SPACING-NAMEFLOW-0001"
+   ]
+  }
+ ],
+ "status_note": "2026-08-29: named_ptr_contrast record diverges after the golden-matching composed-name glue (root: importer pointer naming, DECL-SPACING-NAMEFLOW-0001)."
 }

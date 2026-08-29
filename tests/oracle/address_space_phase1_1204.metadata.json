@@ -17,7 +17,7 @@
   "GH12-F-9418442f62007fa121a5 ghidra::AddrSpace::wrapOffset(uintb off) const space.hh:383",
   "GH12-F-83739b1b47eb9f3a71b2 ghidra::AddrSpace::printRaw(ostream & s,uintb offset) const space.cc:206"
  ],
- "overall_status": "UNTESTED:  (B2 migration of partial match state) the four-case phase-1 projection (None-fallback null-base ordering/equality, cross-space ordering with the null base mixed in, tag identity, tagged wrap/overlap gates) byte-matches the locked oracle through the legacy transitional Address; residuals: None arithmetic/overlap keep the pre-phase-1 offset-only behavior (Ghidra null-base is undefined there), the None Display spelling stays legacy 0x-hex, the m_maximal bridge panics, and consumer migration (phase 2/3) is untouched",
+ "overall_status": "UNTESTED: (B2 migration of partial match state) the four-case phase-1 projection (None-fallback null-base ordering/equality, cross-space ordering with the null base mixed in, tag identity, tagged wrap/overlap gates) byte-matches the locked oracle through the legacy transitional Address; residuals: None arithmetic/overlap keep the pre-phase-1 offset-only behavior (Ghidra null-base is undefined there), the None Display spelling stays legacy 0x-hex, the m_maximal bridge panics, and consumer migration (phase 2/3) is untouched",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",

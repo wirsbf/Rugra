@@ -9,7 +9,7 @@
   "GH12-F-1c7e2d100750ac446e34 ghidra::Cover::addRefRecurse cover.cc:524",
   "GH12-F-7bbe28b1702f29bcfe3d ghidra::Cover::addRefPoint cover.cc:565"
  ],
- "overall_status": "UNTESTED:  (B2 migration of partial match state) the nine-case rebuilt-Cover projection (endpoint pairs, flags, dirty lifecycle, descendant/slot identity, op orders) byte-matches the locked oracle, the production self-lock topology (MULTIEQUAL slot 2 holding the rebuilt root) is covered, and a MULTIEQUAL reader of an implied intermediate confirms addRefPoint matches MULTIEQUAL slots against the rebuild root rather than the worklist-current Varnode (cover.cc:490/606); order-only CoverBlock residuals (addRefPoint old-stop MULTIEQUAL-tip discrimination, INDIRECT getOpFromConst target order), production FlowBlock index assignment, and the full ActionMergeType caller closure remain outside this atomic change",
+ "overall_status": "UNTESTED: (B2 migration of partial match state) the nine-case rebuilt-Cover projection (endpoint pairs, flags, dirty lifecycle, descendant/slot identity, op orders) byte-matches the locked oracle, the production self-lock topology (MULTIEQUAL slot 2 holding the rebuilt root) is covered, and a MULTIEQUAL reader of an implied intermediate confirms addRefPoint matches MULTIEQUAL slots against the rebuild root rather than the worklist-current Varnode (cover.cc:490/606); order-only CoverBlock residuals (addRefPoint old-stop MULTIEQUAL-tip discrimination, INDIRECT getOpFromConst target order), production FlowBlock index assignment, and the full ActionMergeType caller closure remain outside this atomic change",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",

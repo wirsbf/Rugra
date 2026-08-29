@@ -1,176 +1,176 @@
 {
-  "schema_version": 2,
-  "fixture_id": "DATABASE-EQUATE-VALUE-REGISTRY-0001",
-  "status_note": "Scope::addEquateSymbol (database.cc:1712-1724) + EquateSymbol constructor state (database.cc:624-631) + the addSymbolInternal category registration (database.cc:1810-1841, category block cc:1827-1836) locked-oracle fixture: single add observable state (category/catindex/category size/subtype identity/value/id/dynamic-entry delta), same-value duplicate (distinct object, catindex append, category growth), cross-scope isolation (global vs function-local ScopeLocal, category table round trip), and pipeline propagation of a pipeline-created equate through Varnode::copySymbolIfValid (varnode.cc:510-522, close/not-close). Rugra source pinned at the DATABASE-EQUATE-VALUE-REGISTRY-0001 lease commits that set category=equate, register the value on the symbol identity via equate_symbol_registry, and port the addSymbolInternal category-table registration.",
-  "decisive_semantics": {
-    "reference_output_parameters": "addEquateSymbol(nm,format,value,addr,hash) returns the new EquateSymbol* (heap object owned by the scope; SymbolEntry::getSymbol() and getCategorySymbol return the same pointer); the constructor (cc:624-631) writes value/category/dispflags/type on that object; addSymbolInternal (cc:1810) may throw+delete; no out-params. copySymbolIfValid(const Varnode*) mutates only this through copySymbol. isValueClose is a const predicate over this->value.",
-    "loop_bounds_traversal_order": "addEquateSymbol body cc:1717-1723 runs in fixed order ctor -> addSymbolInternal -> rnglist insertRange (guarded by !addr.isInvalid()) -> addDynamicMapInternal(mapped,hash,0,1); addSymbolInternal category block cc:1828 while(category.size() <= sym->category) and cc:1833 while(list.size() <= sym->catindex) both include the == boundary; dynamic-entry counting iterates beginDynamic..endDynamic in list order.",
-    "counter_accumulator_lifecycle": "nextUniqueId increments once per addSymbolInternal with symbolId==0 (cc:1813-1816); catindex is assigned from list.size() only when category > 0 (cc:1831-1832) and is otherwise preserved (category 0); wholeCount += 1 inside addDynamicMapInternal when sz == type->getSize() (cc:1881-1885, 1-byte whole map here); no other counters.",
-    "sorting_comparison_keys": "No sorting anywhere in the covered path; the decisive comparison keys are the subtype test dynamic_cast<EquateSymbol*> (object identity), the category inequalities category >= 0 / category > 0, and isValueClose's calc_mask(size) masked equality against op2Value/~op2Value/-op2Value/op2Value+1/op2Value-1 (database.cc:642-655)."
+ "schema_version": 2,
+ "fixture_id": "DATABASE-EQUATE-VALUE-REGISTRY-0001",
+ "status_note": "Scope::addEquateSymbol (database.cc:1712-1724) + EquateSymbol constructor state (database.cc:624-631) + the addSymbolInternal category registration (database.cc:1810-1841, category block cc:1827-1836) locked-oracle fixture: single add observable state (category/catindex/category size/subtype identity/value/id/dynamic-entry delta), same-value duplicate (distinct object, catindex append, category growth), cross-scope isolation (global vs function-local ScopeLocal, category table round trip), and pipeline propagation of a pipeline-created equate through Varnode::copySymbolIfValid (varnode.cc:510-522, close/not-close). Rugra source pinned at the DATABASE-EQUATE-VALUE-REGISTRY-0001 lease commits that set category=equate, register the value on the symbol identity via equate_symbol_registry, and port the addSymbolInternal category-table registration.",
+ "decisive_semantics": {
+  "reference_output_parameters": "addEquateSymbol(nm,format,value,addr,hash) returns the new EquateSymbol* (heap object owned by the scope; SymbolEntry::getSymbol() and getCategorySymbol return the same pointer); the constructor (cc:624-631) writes value/category/dispflags/type on that object; addSymbolInternal (cc:1810) may throw+delete; no out-params. copySymbolIfValid(const Varnode*) mutates only this through copySymbol. isValueClose is a const predicate over this->value.",
+  "loop_bounds_traversal_order": "addEquateSymbol body cc:1717-1723 runs in fixed order ctor -> addSymbolInternal -> rnglist insertRange (guarded by !addr.isInvalid()) -> addDynamicMapInternal(mapped,hash,0,1); addSymbolInternal category block cc:1828 while(category.size() <= sym->category) and cc:1833 while(list.size() <= sym->catindex) both include the == boundary; dynamic-entry counting iterates beginDynamic..endDynamic in list order.",
+  "counter_accumulator_lifecycle": "nextUniqueId increments once per addSymbolInternal with symbolId==0 (cc:1813-1816); catindex is assigned from list.size() only when category > 0 (cc:1831-1832) and is otherwise preserved (category 0); wholeCount += 1 inside addDynamicMapInternal when sz == type->getSize() (cc:1881-1885, 1-byte whole map here); no other counters.",
+  "sorting_comparison_keys": "No sorting anywhere in the covered path; the decisive comparison keys are the subtype test dynamic_cast<EquateSymbol*> (object identity), the category inequalities category >= 0 / category > 0, and isValueClose's calc_mask(size) masked equality against op2Value/~op2Value/-op2Value/op2Value+1/op2Value-1 (database.cc:642-655)."
+ },
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec"
+ },
+ "analysis_options": "none: direct Database equate-register harness; no decompilation pipeline options",
+ "rugra_source": {
+  "base_commit": "a8735a2ab60f24f7362c6c5d7ffda75539bee7e8",
+  "base_tree": "4eaf6151d84345bb911d672dd973c541335af593",
+  "base_src_tree": "1ac14b1feee047b20e0d1ba24283981240077fc9",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "a102c5baf8acc3ceabecf68ff96c46930a2c2b52a4eb824454edc04516a3698b",
+  "rust_fixture_sha256": "0ca0e4285ecf2ae1c310a2a15b250a2c3a8a070f5b13bf351796ce4db1e5d256",
+  "runner_sha256": "300a0a88a9695db586d75a4f8ffe9f9da3a1b4736f1621ff8e2232dda53b57b8"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
   },
-  "architecture": "x86:LE:64:default",
   "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec"
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
   },
-  "analysis_options": {},
-  "rugra_source": {
-    "base_commit": "a8735a2ab60f24f7362c6c5d7ffda75539bee7e8",
-    "base_tree": "4eaf6151d84345bb911d672dd973c541335af593",
-    "base_src_tree": "1ac14b1feee047b20e0d1ba24283981240077fc9",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
   },
-  "comparand": {
-    "cpp_fixture_sha256": "a102c5baf8acc3ceabecf68ff96c46930a2c2b52a4eb824454edc04516a3698b",
-    "rust_fixture_sha256": "0ca0e4285ecf2ae1c310a2a15b250a2c3a8a070f5b13bf351796ce4db1e5d256",
-    "runner_sha256": "300a0a88a9695db586d75a4f8ffe9f9da3a1b4736f1621ff8e2232dda53b57b8"
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544
   },
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-      "size": 11721
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-      "size": 12182
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-      "size": 5390
-    },
-    "binary": {
-      "path": "examples/curl",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544
-    },
-    "bfd": {
-      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-    }
-  },
-  "input_manifest": {
-    "binary": {
-      "path": "examples/curl",
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544
-    },
-    "functions": [
-      "GetStr"
-    ],
-    "cases": [
-      "er_single",
-      "er_dup",
-      "er_dup_ids",
-      "er_scope_local",
-      "er_scope_local_table",
-      "er_pipe_close",
-      "er_pipe_not_close"
-    ],
-    "sha256": "8c233a080b0de3c6ba0d6957cefaf3e9993b5bb5cd782e0f5e69eaa6a3b632fb"
-  },
-  "expected_results": {
-    "ghidra_stdout_sha256": "8374eeae2e8136d30b163c911a98235b8f5b048abea2003ad85d18ccd389b284",
-    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "8374eeae2e8136d30b163c911a98235b8f5b048abea2003ad85d18ccd389b284",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "diff_exit_code": 0,
-    "case_order": [
-      "er_single",
-      "er_dup",
-      "er_dup_ids",
-      "er_scope_local",
-      "er_scope_local_table",
-      "er_pipe_close",
-      "er_pipe_not_close"
-    ]
-  },
-  "coverage": {
-    "add_equate_symbol_state": {
-      "status": "MATCH",
-      "covers": "Scope::addEquateSymbol database.cc:1712-1724 observable state on the real global scope: constructor cc:627-630 (value stored on the object, category=equate, dispflags|=format), addSymbolInternal cc:1813-1816 nonzero id + cc:1827-1836 category[equate] registration with catindex=0, getCategorySize(equate)=1, dynamic_cast<EquateSymbol*> succeeds with value=66, and exactly one new dynamic SymbolEntry (cc:1722, 1-byte whole map). Rugra add_equate_symbol produces the identical seven-field projection with equate_symbol_registry::query_value standing in for the dynamic_cast.",
-      "residual_todo_ids": []
-    },
-    "same_value_duplicate": {
-      "status": "MATCH",
-      "covers": "A second addEquateSymbol with the same name and value (database.cc:1717 again, insertNameTree dedup cc:2712-2723): a distinct object (ids differ), appended at catindex=1 (cc:1832 catindex = list.size()), getCategorySize(equate)=2, value preserved on the new identity, one more dynamic entry.",
-      "residual_todo_ids": []
-    },
-    "cross_scope_isolation": {
-      "status": "MATCH",
-      "covers": "An equate added to the function's local ScopeLocal while the global scope holds its two: local category table size 1 with catindex 0, global size unchanged at 2 (scopes are independent containers), dynamic_cast+value readable from the local symbol, and getCategorySymbol(equate,0) (database.hh:733) round-trips the same object identity with the same value on both sides (Rugra get_category_symbol returns the same Arc).",
-      "residual_todo_ids": []
-    },
-    "pipeline_propagation": {
-      "status": "MATCH",
-      "covers": "A pipeline-created equate (the cc:1301 buildDynamicSymbol route stores equates in the local scope) attached to a constant Varnode through the public Funcdata::remapDynamicVarnode (funcdata_varnode.cc:1120-1126) then Varnode::copySymbolIfValid (varnode.cc:510-522): the markup propagates to the value-close destination constant (er_pipe_close dst_symbol=1) and is rejected for the not-close one (er_pipe_not_close dst_symbol=0, database.cc:640-659). Rugra reaches the identical state through add_equate_symbol's dynamic whole map + set_symbol_entry, proving the registry wiring connects the database-side main pipeline to copy_symbol_if_valid.",
-      "residual_todo_ids": []
-    },
-    "xml_decode_text_content_form": {
-      "status": "UNTESTED",
-      "covers": "EquateSymbol::decode database.cc:670-683 reads the <value> child through ATTRIB_CONTENT (element text). Rugra's add_map_sym reads the value via the attribute convention of the Rust encoder (val=...); real Ghidra XML stores it as element text, and the Decoder trait does not expose element text content, so oracle-produced XML decoding is unverified end-to-end.",
-      "residual_todo_ids": [
-        "DATABASE-EQUATE-XMLCONTENT-0001"
-      ]
-    },
-    "varmap_build_dynamicsymbol_leg": {
-      "status": "UNTESTED",
-      "covers": "Funcdata::buildDynamicSymbol's constant leg (funcdata_varnode.cc:1301) in Rugra goes through the varmap ScopeLocal model (funcdata.rs build_dynamic_symbol), which never constructs a database::SymbolEntry nor sets a Varnode mapentry; the varmap->database bridge is untested and outside this lease's write-set.",
-      "residual_todo_ids": [
-        "DATABASE-EQUATE-VARMAP-BRIDGE-0001"
-      ]
-    }
-  },
-  "projection_status": "MATCH",
-  "overall_status": "UNTESTED",
-  "residual_todo_ids": [
-    "DATABASE-EQUATE-XMLCONTENT-0001",
-    "DATABASE-EQUATE-VARMAP-BRIDGE-0001"
-  ],
-  "residual_union": {
-    "todo_id": "DATABASE-EQUATE-REGISTRY-RESIDUAL-0001",
-    "status": "UNTESTED",
-    "branches": [
-      {
-        "id": "xml_decode_text_content_form",
-        "status": "UNTESTED",
-        "detail": "database.cc:676-677 reads <value> via ATTRIB_CONTENT (element text). The Rust Decoder trait is attribute-based and Element.content is unreachable from it, so add_map_sym's equatesymbol leg reads only the val-attribute convention of the Rust encoder. Fix path: add an ATTRIB_CONTENT/content accessor to the Decoder trait + XmlDecode (marshal.rs lease), then extend add_map_sym to fall back to element text."
-      },
-      {
-        "id": "varmap_build_dynamicsymbol_leg",
-        "status": "UNTESTED",
-        "detail": "funcdata.rs build_dynamic_symbol's constant leg (funcdata_varnode.cc:1301) uses the varmap ScopeLocal model and attempt_dynamic_mapping sets only the MAPPED flag + a name-table entry; no database::SymbolEntry is ever attached to the Varnode, so copy_symbol_if_valid cannot see varmap-created equates. Fix path: a varmap->database bridge lease (funcdata.rs/varmap.rs write-set) that routes the constant leg through database::Scope::add_equate_symbol or attaches database SymbolEntries."
-      }
-    ]
+  "bfd": {
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
   }
+ },
+ "input_manifest": {
+  "binary": {
+   "path": "examples/curl",
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544
+  },
+  "functions": [
+   "GetStr"
+  ],
+  "cases": [
+   "er_single",
+   "er_dup",
+   "er_dup_ids",
+   "er_scope_local",
+   "er_scope_local_table",
+   "er_pipe_close",
+   "er_pipe_not_close"
+  ],
+  "sha256": "8c233a080b0de3c6ba0d6957cefaf3e9993b5bb5cd782e0f5e69eaa6a3b632fb"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "8374eeae2e8136d30b163c911a98235b8f5b048abea2003ad85d18ccd389b284",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "8374eeae2e8136d30b163c911a98235b8f5b048abea2003ad85d18ccd389b284",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0,
+  "case_order": [
+   "er_single",
+   "er_dup",
+   "er_dup_ids",
+   "er_scope_local",
+   "er_scope_local_table",
+   "er_pipe_close",
+   "er_pipe_not_close"
+  ]
+ },
+ "coverage": {
+  "add_equate_symbol_state": {
+   "status": "MATCH",
+   "covers": "Scope::addEquateSymbol database.cc:1712-1724 observable state on the real global scope: constructor cc:627-630 (value stored on the object, category=equate, dispflags|=format), addSymbolInternal cc:1813-1816 nonzero id + cc:1827-1836 category[equate] registration with catindex=0, getCategorySize(equate)=1, dynamic_cast<EquateSymbol*> succeeds with value=66, and exactly one new dynamic SymbolEntry (cc:1722, 1-byte whole map). Rugra add_equate_symbol produces the identical seven-field projection with equate_symbol_registry::query_value standing in for the dynamic_cast.",
+   "residual_todo_ids": []
+  },
+  "same_value_duplicate": {
+   "status": "MATCH",
+   "covers": "A second addEquateSymbol with the same name and value (database.cc:1717 again, insertNameTree dedup cc:2712-2723): a distinct object (ids differ), appended at catindex=1 (cc:1832 catindex = list.size()), getCategorySize(equate)=2, value preserved on the new identity, one more dynamic entry.",
+   "residual_todo_ids": []
+  },
+  "cross_scope_isolation": {
+   "status": "MATCH",
+   "covers": "An equate added to the function's local ScopeLocal while the global scope holds its two: local category table size 1 with catindex 0, global size unchanged at 2 (scopes are independent containers), dynamic_cast+value readable from the local symbol, and getCategorySymbol(equate,0) (database.hh:733) round-trips the same object identity with the same value on both sides (Rugra get_category_symbol returns the same Arc).",
+   "residual_todo_ids": []
+  },
+  "pipeline_propagation": {
+   "status": "MATCH",
+   "covers": "A pipeline-created equate (the cc:1301 buildDynamicSymbol route stores equates in the local scope) attached to a constant Varnode through the public Funcdata::remapDynamicVarnode (funcdata_varnode.cc:1120-1126) then Varnode::copySymbolIfValid (varnode.cc:510-522): the markup propagates to the value-close destination constant (er_pipe_close dst_symbol=1) and is rejected for the not-close one (er_pipe_not_close dst_symbol=0, database.cc:640-659). Rugra reaches the identical state through add_equate_symbol's dynamic whole map + set_symbol_entry, proving the registry wiring connects the database-side main pipeline to copy_symbol_if_valid.",
+   "residual_todo_ids": []
+  },
+  "xml_decode_text_content_form": {
+   "status": "UNTESTED",
+   "covers": "EquateSymbol::decode database.cc:670-683 reads the <value> child through ATTRIB_CONTENT (element text). Rugra's add_map_sym reads the value via the attribute convention of the Rust encoder (val=...); real Ghidra XML stores it as element text, and the Decoder trait does not expose element text content, so oracle-produced XML decoding is unverified end-to-end.",
+   "residual_todo_ids": [
+    "DATABASE-EQUATE-XMLCONTENT-0001"
+   ]
+  },
+  "varmap_build_dynamicsymbol_leg": {
+   "status": "UNTESTED",
+   "covers": "Funcdata::buildDynamicSymbol's constant leg (funcdata_varnode.cc:1301) in Rugra goes through the varmap ScopeLocal model (funcdata.rs build_dynamic_symbol), which never constructs a database::SymbolEntry nor sets a Varnode mapentry; the varmap->database bridge is untested and outside this lease's write-set.",
+   "residual_todo_ids": [
+    "DATABASE-EQUATE-VARMAP-BRIDGE-0001"
+   ]
+  }
+ },
+ "projection_status": "MATCH",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "residual_todo_ids": [
+  "DATABASE-EQUATE-XMLCONTENT-0001",
+  "DATABASE-EQUATE-VARMAP-BRIDGE-0001"
+ ],
+ "residual_union": {
+  "todo_id": "DATABASE-EQUATE-REGISTRY-RESIDUAL-0001",
+  "status": "UNTESTED",
+  "branches": [
+   {
+    "id": "xml_decode_text_content_form",
+    "status": "UNTESTED",
+    "detail": "database.cc:676-677 reads <value> via ATTRIB_CONTENT (element text). The Rust Decoder trait is attribute-based and Element.content is unreachable from it, so add_map_sym's equatesymbol leg reads only the val-attribute convention of the Rust encoder. Fix path: add an ATTRIB_CONTENT/content accessor to the Decoder trait + XmlDecode (marshal.rs lease), then extend add_map_sym to fall back to element text."
+   },
+   {
+    "id": "varmap_build_dynamicsymbol_leg",
+    "status": "UNTESTED",
+    "detail": "funcdata.rs build_dynamic_symbol's constant leg (funcdata_varnode.cc:1301) uses the varmap ScopeLocal model and attempt_dynamic_mapping sets only the MAPPED flag + a name-table entry; no database::SymbolEntry is ever attached to the Varnode, so copy_symbol_if_valid cannot see varmap-created equates. Fix path: a varmap->database bridge lease (funcdata.rs/varmap.rs write-set) that routes the constant leg through database::Scope::add_equate_symbol or attaches database SymbolEntries."
+   }
+  ]
+ }
 }

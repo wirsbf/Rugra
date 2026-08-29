@@ -1,332 +1,332 @@
 {
-  "schema_version": 2,
-  "fixture_id": "RULE-COLLAPSECONSTANTS-0001",
-  "status_note": "RuleCollapseConstants full-opcode port (lease RULE-PORT-COLLAPSECONSTANTS-0001, RULE_GAPS_2026-08-22.md §2 P1). applyOp driven directly on synthetic ops in a real BfdArchitecture Funcdata; observations cover every collapsible opcode class, the opMarkNoCollapse error paths, the isCollapsible guards, and the markedInput equate propagation. oplist normalized to live opcodes (Ghidra pushes 0..73 incl. dead slots 0/45 which no PcodeOp can carry — opcodes.hh:37/92).",
-  "decisive_semantics": {
-    "reference_output_parameters": "collapse(bool &markedInput) pass-back flag -> ruleaction.cc:3863-3875 markedInput gates collapseConstantSymbol before inputs are unlinked; op/data are reference-mutated (newVarnode, opRemoveInput i=numInput()-1..1, opSetInput(vn,0), opSetOpcode COPY).",
-    "loop_bounds_traversal_order": "for(i=op->numInput()-1;i>0;--i) opRemoveInput(op,i) — inputs removed last-to-first, slot 0 kept; cases execute in the listed order; both applyOp invocations (first/second) per case.",
-    "counter_accumulator_lifecycle": "markedInput initialized false per applyOp (ruleaction.cc:3863), set true only by getIn(0)/getIn(1) SymbolEntry presence inside collapse (op.cc:455-457/463-465), never reset mid-apply.",
-    "sorting_comparison_keys": "no sort keys; dispatch order is isCollapsible -> eval-type switch (unary uses in0 only; binary checks in1 symbol too; ternary/special throw) -> collapseConstantSymbol copyVn selection switch (SUBPIECE offset!=0 reject; commutative family in0-then-in1)."
+ "schema_version": 2,
+ "fixture_id": "RULE-COLLAPSECONSTANTS-0001",
+ "status_note": "RuleCollapseConstants full-opcode port (lease RULE-PORT-COLLAPSECONSTANTS-0001, RULE_GAPS_2026-08-22.md \u00a72 P1). applyOp driven directly on synthetic ops in a real BfdArchitecture Funcdata; observations cover every collapsible opcode class, the opMarkNoCollapse error paths, the isCollapsible guards, and the markedInput equate propagation. oplist normalized to live opcodes (Ghidra pushes 0..73 incl. dead slots 0/45 which no PcodeOp can carry \u2014 opcodes.hh:37/92).",
+ "decisive_semantics": {
+  "reference_output_parameters": "collapse(bool &markedInput) pass-back flag -> ruleaction.cc:3863-3875 markedInput gates collapseConstantSymbol before inputs are unlinked; op/data are reference-mutated (newVarnode, opRemoveInput i=numInput()-1..1, opSetInput(vn,0), opSetOpcode COPY).",
+  "loop_bounds_traversal_order": "for(i=op->numInput()-1;i>0;--i) opRemoveInput(op,i) \u2014 inputs removed last-to-first, slot 0 kept; cases execute in the listed order; both applyOp invocations (first/second) per case.",
+  "counter_accumulator_lifecycle": "markedInput initialized false per applyOp (ruleaction.cc:3863), set true only by getIn(0)/getIn(1) SymbolEntry presence inside collapse (op.cc:455-457/463-465), never reset mid-apply.",
+  "sorting_comparison_keys": "no sort keys; dispatch order is isCollapsible -> eval-type switch (unary uses in0 only; binary checks in1 symbol too; ternary/special throw) -> collapseConstantSymbol copyVn selection switch (SUBPIECE offset!=0 reject; commutative family in0-then-in1)."
+ },
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec"
+ },
+ "analysis_options": "none: direct RuleCollapseConstants/PcodeOp::collapse harness; no decompilation pipeline options",
+ "rugra_source": {
+  "base_commit": "e9a850d0d256072924774f259351d8f85a88a857",
+  "base_tree": "fd8bbcd4aefb281c5e293cd30cad92ac981e5888",
+  "base_src_tree": "ede8ba0eeeabf3d2427dfc4c40113e957ce00303",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "7986662129619a2f15fd12fa035ad686554f4d37c45abe4e7bd86379d768b83f",
+  "rust_fixture_sha256": "9f739a1ca6ca509db3b64a0670682fa99e04cd8a97180e47dd1fdd1ee2ba82ca",
+  "runner_sha256": "1d9eb9898da21e8e3cb02462bb70d7cbcaefcfe238714a3fdc14da81cdc230ff"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
   },
-  "architecture": "x86:LE:64:default",
   "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec"
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
   },
-  "analysis_options": {},
-  "rugra_source": {
-    "base_commit": "e9a850d0d256072924774f259351d8f85a88a857",
-    "base_tree": "fd8bbcd4aefb281c5e293cd30cad92ac981e5888",
-    "base_src_tree": "ede8ba0eeeabf3d2427dfc4c40113e957ce00303",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
   },
-  "comparand": {
-    "cpp_fixture_sha256": "7986662129619a2f15fd12fa035ad686554f4d37c45abe4e7bd86379d768b83f",
-    "rust_fixture_sha256": "9f739a1ca6ca509db3b64a0670682fa99e04cd8a97180e47dd1fdd1ee2ba82ca",
-    "runner_sha256": "1d9eb9898da21e8e3cb02462bb70d7cbcaefcfe238714a3fdc14da81cdc230ff"
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544
   },
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-      "size": 11721
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-      "size": 12182
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-      "size": 5390
-    },
-    "binary": {
-      "path": "examples/curl",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544
-    },
-    "bfd": {
-      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-    }
-  },
-  "input_manifest": {
-    "binary": {
-      "path": "examples/curl",
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544
-    },
-    "functions": [
-      "GetStr"
-    ],
-    "cases": [
-      "oplist_probe",
-      "int_sdiv_neg",
-      "int_srem_neg",
-      "int_div",
-      "int_rem",
-      "err_div_zero",
-      "err_srem_zero",
-      "int_left",
-      "int_left_overlarge",
-      "int_right",
-      "int_sright_neg",
-      "int_sright_overlarge",
-      "int_piece",
-      "int_subpiece_low",
-      "int_subpiece_high",
-      "int_zext",
-      "int_sext",
-      "int_2comp",
-      "int_negate",
-      "int_popcount",
-      "int_lzcount",
-      "bool_negate",
-      "bool_and",
-      "bool_or",
-      "bool_xor",
-      "cmp_equal",
-      "cmp_not_equal",
-      "cmp_less",
-      "cmp_less_equal",
-      "cmp_sless",
-      "cmp_sless_equal",
-      "cmp_carry",
-      "cmp_scarry",
-      "cmp_sborrow",
-      "float_add4",
-      "float_sub4",
-      "float_mult4",
-      "float_div4",
-      "float_less4",
-      "float_less_equal4",
-      "float_equal4",
-      "float_not_equal4",
-      "float_nan4",
-      "float_neg4",
-      "float_abs4",
-      "float_sqrt4",
-      "float_ceil4",
-      "float_floor4",
-      "float_round4",
-      "float_int2float4",
-      "float_trunc4",
-      "float_add8",
-      "float_neg8",
-      "float2float_4to8",
-      "err_insert_ternary",
-      "err_float_noformat",
-      "guard_ptrsub_nocollapse",
-      "guard_out_too_big",
-      "guard_nonconst_input",
-      "sym_add_marked",
-      "sym_subpiece_high_no_propagate"
-    ],
-    "sha256": "c385ebeec4589aae754e97ef8f13f34c5b66a233acaca2d24946613ca1629a1f"
-  },
-  "expected_results": {
-    "ghidra_stdout_sha256": "f82cb3dee3f3088ec062aab160c24d5ec070e3cba43230a9b55f2349dda15f08",
-    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "f82cb3dee3f3088ec062aab160c24d5ec070e3cba43230a9b55f2349dda15f08",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "diff_exit_code": 0,
-    "case_order": [
-      "oplist_probe",
-      "int_sdiv_neg",
-      "int_srem_neg",
-      "int_div",
-      "int_rem",
-      "err_div_zero",
-      "err_srem_zero",
-      "int_left",
-      "int_left_overlarge",
-      "int_right",
-      "int_sright_neg",
-      "int_sright_overlarge",
-      "int_piece",
-      "int_subpiece_low",
-      "int_subpiece_high",
-      "int_zext",
-      "int_sext",
-      "int_2comp",
-      "int_negate",
-      "int_popcount",
-      "int_lzcount",
-      "bool_negate",
-      "bool_and",
-      "bool_or",
-      "bool_xor",
-      "cmp_equal",
-      "cmp_not_equal",
-      "cmp_less",
-      "cmp_less_equal",
-      "cmp_sless",
-      "cmp_sless_equal",
-      "cmp_carry",
-      "cmp_scarry",
-      "cmp_sborrow",
-      "float_add4",
-      "float_sub4",
-      "float_mult4",
-      "float_div4",
-      "float_less4",
-      "float_less_equal4",
-      "float_equal4",
-      "float_not_equal4",
-      "float_nan4",
-      "float_neg4",
-      "float_abs4",
-      "float_sqrt4",
-      "float_ceil4",
-      "float_floor4",
-      "float_round4",
-      "float_int2float4",
-      "float_trunc4",
-      "float_add8",
-      "float_neg8",
-      "float2float_4to8",
-      "err_insert_ternary",
-      "err_float_noformat",
-      "guard_ptrsub_nocollapse",
-      "guard_out_too_big",
-      "guard_nonconst_input",
-      "sym_add_marked",
-      "sym_subpiece_high_no_propagate"
-    ]
-  },
-  "coverage": {
-    "oplist_all_opcodes": {
-      "status": "MATCH",
-      "covers": "action.cc:706-713 base getOpList = every opcode; live projection 72 == Rugra get_opcodes()",
-      "residual_todo_ids": []
-    },
-    "int_div_rem_signed_family": {
-      "status": "MATCH",
-      "covers": "INT_SDIV/SREM trunc-toward-zero + DIV/REM + zero-divisor error paths (opbehavior.cc:499-539)",
-      "residual_todo_ids": []
-    },
-    "shift_family": {
-      "status": "MATCH",
-      "covers": "INT_LEFT/RIGHT/SRIGHT incl. overlarge shift amounts (opbehavior.cc:411-472)",
-      "residual_todo_ids": []
-    },
-    "piece_subpiece_family": {
-      "status": "MATCH",
-      "covers": "PIECE concat + SUBPIECE truncation at byte offsets (opbehavior.cc:752-766)",
-      "residual_todo_ids": []
-    },
-    "unary_int_bitops": {
-      "status": "MATCH",
-      "covers": "ZEXT/SEXT/2COMP/NEGATE/POPCOUNT/LZCOUNT (opbehavior.cc:251-288,362-388,782-792)",
-      "residual_todo_ids": []
-    },
-    "bool_family": {
-      "status": "MATCH",
-      "covers": "BOOL_NEGATE/XOR/AND/OR on 0/1 constants (opbehavior.cc:541-567)",
-      "residual_todo_ids": []
-    },
-    "comparison_carry_family": {
-      "status": "MATCH",
-      "covers": "INT_EQUAL..SBORROW incl. signed compare and carry bit tricks (opbehavior.cc:183-360)",
-      "residual_todo_ids": []
-    },
-    "float_family_4_8": {
-      "status": "MATCH",
-      "covers": "FLOAT_EQUAL..ROUND/INT2FLOAT/FLOAT2FLOAT/TRUNC at 4/8 bytes via TypeOp evaluate bridge (opbehavior.cc:569-750)",
-      "residual_todo_ids": []
-    },
-    "error_paths_nocollapse": {
-      "status": "MATCH",
-      "covers": "div-by-zero, ternary INSERT 'Invalid constant collapse', missing 2-byte float format -> opMarkNoCollapse (ruleaction.cc:3867-3870)",
-      "residual_todo_ids": []
-    },
-    "guards": {
-      "status": "MATCH",
-      "covers": "isCollapsible early-outs: non-constant input, PTRSUB nocollapse opflag, >8-byte output (op.cc:115-125)",
-      "residual_todo_ids": []
-    },
-    "symbol_propagation": {
-      "status": "MATCH",
-      "covers": "markedInput -> collapseConstantSymbol propagate (INT_ADD in0) + SUBPIECE offset!=0 rejection (op.cc:503-540)",
-      "residual_todo_ids": []
-    },
-    "equate_isvalueclose_strictness": {
-      "status": "UNTESTED",
-      "covers": "Ghidra copySymbolIfValid requires dynamic_cast<EquateSymbol*> AND EquateSymbol::isValueClose (varnode.cc:510-522, database.cc:640-659); Rugra copy_symbol_if_valid approximates as 'mapentry + both constants' (varnode.rs). Covered case uses exact-equality equate where both agree; the not-close rejection branch is untested by this fixture.",
-      "residual_todo_ids": [
-        "VARNODE-COPYSYMBOL-EQUATE-0001"
-      ]
-    },
-    "float_int2float_signedness": {
-      "status": "UNTESTED",
-      "covers": "Ghidra FloatFormat::opInt2Float sign-extends the integer from sizein (float.cc:611-617); Rugra float_emulate.rs op_int2float treats the input as unsigned. Covered case uses 7 (positive, agrees); negative inputs are untested.",
-      "residual_todo_ids": [
-        "FLOAT-OPINT2FLOAT-SIGN-0001"
-      ]
-    },
-    "mixed_size_sright_mask": {
-      "status": "UNTESTED",
-      "covers": "Ghidra OpBehaviorIntSright returns an unmasked result when sizein>sizeout (opbehavior.cc:454-472) while Rugra's free-function table masks to size_out; SLEIGH never emits mixed-size shifts, so the divergence is unobservable in covered cases and untested here.",
-      "residual_todo_ids": [
-        "OPBEHAVIOR-SRIGHT-SIZEMASK-0001"
-      ]
-    }
-  },
-  "projection_status": "MATCH",
-  "overall_status": "UNTESTED",
-  "residual_todo_ids": [
-    "VARNODE-COPYSYMBOL-EQUATE-0001",
-    "FLOAT-OPINT2FLOAT-SIGN-0001",
-    "OPBEHAVIOR-SRIGHT-SIZEMASK-0001"
-  ],
-  "residual_union": {
-    "todo_id": "RULE-COLLAPSECONSTANTS-RESIDUAL-0001",
-    "status": "UNTESTED",
-    "branches": [
-      {
-        "id": "equate_isvalueclose_strictness",
-        "status": "UNTESTED",
-        "detail": "Ghidra copySymbolIfValid requires dynamic_cast<EquateSymbol*> AND EquateSymbol::isValueClose (varnode.cc:510-522, database.cc:640-659); Rugra copy_symbol_if_valid approximates as 'mapentry + both constants' (varnode.rs). Covered case uses exact-equality equate where both agree; the not-close rejection branch is untested by this fixture."
-      },
-      {
-        "id": "float_int2float_signedness",
-        "status": "UNTESTED",
-        "detail": "Ghidra FloatFormat::opInt2Float sign-extends the integer from sizein (float.cc:611-617); Rugra float_emulate.rs op_int2float treats the input as unsigned. Covered case uses 7 (positive, agrees); negative inputs are untested."
-      },
-      {
-        "id": "mixed_size_sright_mask",
-        "status": "UNTESTED",
-        "detail": "Ghidra OpBehaviorIntSright returns an unmasked result when sizein>sizeout (opbehavior.cc:454-472) while Rugra's free-function table masks to size_out; SLEIGH never emits mixed-size shifts, so the divergence is unobservable in covered cases and untested here."
-      }
-    ]
+  "bfd": {
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
   }
+ },
+ "input_manifest": {
+  "binary": {
+   "path": "examples/curl",
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544
+  },
+  "functions": [
+   "GetStr"
+  ],
+  "cases": [
+   "oplist_probe",
+   "int_sdiv_neg",
+   "int_srem_neg",
+   "int_div",
+   "int_rem",
+   "err_div_zero",
+   "err_srem_zero",
+   "int_left",
+   "int_left_overlarge",
+   "int_right",
+   "int_sright_neg",
+   "int_sright_overlarge",
+   "int_piece",
+   "int_subpiece_low",
+   "int_subpiece_high",
+   "int_zext",
+   "int_sext",
+   "int_2comp",
+   "int_negate",
+   "int_popcount",
+   "int_lzcount",
+   "bool_negate",
+   "bool_and",
+   "bool_or",
+   "bool_xor",
+   "cmp_equal",
+   "cmp_not_equal",
+   "cmp_less",
+   "cmp_less_equal",
+   "cmp_sless",
+   "cmp_sless_equal",
+   "cmp_carry",
+   "cmp_scarry",
+   "cmp_sborrow",
+   "float_add4",
+   "float_sub4",
+   "float_mult4",
+   "float_div4",
+   "float_less4",
+   "float_less_equal4",
+   "float_equal4",
+   "float_not_equal4",
+   "float_nan4",
+   "float_neg4",
+   "float_abs4",
+   "float_sqrt4",
+   "float_ceil4",
+   "float_floor4",
+   "float_round4",
+   "float_int2float4",
+   "float_trunc4",
+   "float_add8",
+   "float_neg8",
+   "float2float_4to8",
+   "err_insert_ternary",
+   "err_float_noformat",
+   "guard_ptrsub_nocollapse",
+   "guard_out_too_big",
+   "guard_nonconst_input",
+   "sym_add_marked",
+   "sym_subpiece_high_no_propagate"
+  ],
+  "sha256": "c385ebeec4589aae754e97ef8f13f34c5b66a233acaca2d24946613ca1629a1f"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "f82cb3dee3f3088ec062aab160c24d5ec070e3cba43230a9b55f2349dda15f08",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "f82cb3dee3f3088ec062aab160c24d5ec070e3cba43230a9b55f2349dda15f08",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0,
+  "case_order": [
+   "oplist_probe",
+   "int_sdiv_neg",
+   "int_srem_neg",
+   "int_div",
+   "int_rem",
+   "err_div_zero",
+   "err_srem_zero",
+   "int_left",
+   "int_left_overlarge",
+   "int_right",
+   "int_sright_neg",
+   "int_sright_overlarge",
+   "int_piece",
+   "int_subpiece_low",
+   "int_subpiece_high",
+   "int_zext",
+   "int_sext",
+   "int_2comp",
+   "int_negate",
+   "int_popcount",
+   "int_lzcount",
+   "bool_negate",
+   "bool_and",
+   "bool_or",
+   "bool_xor",
+   "cmp_equal",
+   "cmp_not_equal",
+   "cmp_less",
+   "cmp_less_equal",
+   "cmp_sless",
+   "cmp_sless_equal",
+   "cmp_carry",
+   "cmp_scarry",
+   "cmp_sborrow",
+   "float_add4",
+   "float_sub4",
+   "float_mult4",
+   "float_div4",
+   "float_less4",
+   "float_less_equal4",
+   "float_equal4",
+   "float_not_equal4",
+   "float_nan4",
+   "float_neg4",
+   "float_abs4",
+   "float_sqrt4",
+   "float_ceil4",
+   "float_floor4",
+   "float_round4",
+   "float_int2float4",
+   "float_trunc4",
+   "float_add8",
+   "float_neg8",
+   "float2float_4to8",
+   "err_insert_ternary",
+   "err_float_noformat",
+   "guard_ptrsub_nocollapse",
+   "guard_out_too_big",
+   "guard_nonconst_input",
+   "sym_add_marked",
+   "sym_subpiece_high_no_propagate"
+  ]
+ },
+ "coverage": {
+  "oplist_all_opcodes": {
+   "status": "MATCH",
+   "covers": "action.cc:706-713 base getOpList = every opcode; live projection 72 == Rugra get_opcodes()",
+   "residual_todo_ids": []
+  },
+  "int_div_rem_signed_family": {
+   "status": "MATCH",
+   "covers": "INT_SDIV/SREM trunc-toward-zero + DIV/REM + zero-divisor error paths (opbehavior.cc:499-539)",
+   "residual_todo_ids": []
+  },
+  "shift_family": {
+   "status": "MATCH",
+   "covers": "INT_LEFT/RIGHT/SRIGHT incl. overlarge shift amounts (opbehavior.cc:411-472)",
+   "residual_todo_ids": []
+  },
+  "piece_subpiece_family": {
+   "status": "MATCH",
+   "covers": "PIECE concat + SUBPIECE truncation at byte offsets (opbehavior.cc:752-766)",
+   "residual_todo_ids": []
+  },
+  "unary_int_bitops": {
+   "status": "MATCH",
+   "covers": "ZEXT/SEXT/2COMP/NEGATE/POPCOUNT/LZCOUNT (opbehavior.cc:251-288,362-388,782-792)",
+   "residual_todo_ids": []
+  },
+  "bool_family": {
+   "status": "MATCH",
+   "covers": "BOOL_NEGATE/XOR/AND/OR on 0/1 constants (opbehavior.cc:541-567)",
+   "residual_todo_ids": []
+  },
+  "comparison_carry_family": {
+   "status": "MATCH",
+   "covers": "INT_EQUAL..SBORROW incl. signed compare and carry bit tricks (opbehavior.cc:183-360)",
+   "residual_todo_ids": []
+  },
+  "float_family_4_8": {
+   "status": "MATCH",
+   "covers": "FLOAT_EQUAL..ROUND/INT2FLOAT/FLOAT2FLOAT/TRUNC at 4/8 bytes via TypeOp evaluate bridge (opbehavior.cc:569-750)",
+   "residual_todo_ids": []
+  },
+  "error_paths_nocollapse": {
+   "status": "MATCH",
+   "covers": "div-by-zero, ternary INSERT 'Invalid constant collapse', missing 2-byte float format -> opMarkNoCollapse (ruleaction.cc:3867-3870)",
+   "residual_todo_ids": []
+  },
+  "guards": {
+   "status": "MATCH",
+   "covers": "isCollapsible early-outs: non-constant input, PTRSUB nocollapse opflag, >8-byte output (op.cc:115-125)",
+   "residual_todo_ids": []
+  },
+  "symbol_propagation": {
+   "status": "MATCH",
+   "covers": "markedInput -> collapseConstantSymbol propagate (INT_ADD in0) + SUBPIECE offset!=0 rejection (op.cc:503-540)",
+   "residual_todo_ids": []
+  },
+  "equate_isvalueclose_strictness": {
+   "status": "UNTESTED",
+   "covers": "Ghidra copySymbolIfValid requires dynamic_cast<EquateSymbol*> AND EquateSymbol::isValueClose (varnode.cc:510-522, database.cc:640-659); Rugra copy_symbol_if_valid approximates as 'mapentry + both constants' (varnode.rs). Covered case uses exact-equality equate where both agree; the not-close rejection branch is untested by this fixture.",
+   "residual_todo_ids": [
+    "VARNODE-COPYSYMBOL-EQUATE-0001"
+   ]
+  },
+  "float_int2float_signedness": {
+   "status": "UNTESTED",
+   "covers": "Ghidra FloatFormat::opInt2Float sign-extends the integer from sizein (float.cc:611-617); Rugra float_emulate.rs op_int2float treats the input as unsigned. Covered case uses 7 (positive, agrees); negative inputs are untested.",
+   "residual_todo_ids": [
+    "FLOAT-OPINT2FLOAT-SIGN-0001"
+   ]
+  },
+  "mixed_size_sright_mask": {
+   "status": "UNTESTED",
+   "covers": "Ghidra OpBehaviorIntSright returns an unmasked result when sizein>sizeout (opbehavior.cc:454-472) while Rugra's free-function table masks to size_out; SLEIGH never emits mixed-size shifts, so the divergence is unobservable in covered cases and untested here.",
+   "residual_todo_ids": [
+    "OPBEHAVIOR-SRIGHT-SIZEMASK-0001"
+   ]
+  }
+ },
+ "projection_status": "MATCH",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "residual_todo_ids": [
+  "VARNODE-COPYSYMBOL-EQUATE-0001",
+  "FLOAT-OPINT2FLOAT-SIGN-0001",
+  "OPBEHAVIOR-SRIGHT-SIZEMASK-0001"
+ ],
+ "residual_union": {
+  "todo_id": "RULE-COLLAPSECONSTANTS-RESIDUAL-0001",
+  "status": "UNTESTED",
+  "branches": [
+   {
+    "id": "equate_isvalueclose_strictness",
+    "status": "UNTESTED",
+    "detail": "Ghidra copySymbolIfValid requires dynamic_cast<EquateSymbol*> AND EquateSymbol::isValueClose (varnode.cc:510-522, database.cc:640-659); Rugra copy_symbol_if_valid approximates as 'mapentry + both constants' (varnode.rs). Covered case uses exact-equality equate where both agree; the not-close rejection branch is untested by this fixture."
+   },
+   {
+    "id": "float_int2float_signedness",
+    "status": "UNTESTED",
+    "detail": "Ghidra FloatFormat::opInt2Float sign-extends the integer from sizein (float.cc:611-617); Rugra float_emulate.rs op_int2float treats the input as unsigned. Covered case uses 7 (positive, agrees); negative inputs are untested."
+   },
+   {
+    "id": "mixed_size_sright_mask",
+    "status": "UNTESTED",
+    "detail": "Ghidra OpBehaviorIntSright returns an unmasked result when sizein>sizeout (opbehavior.cc:454-472) while Rugra's free-function table masks to size_out; SLEIGH never emits mixed-size shifts, so the divergence is unobservable in covered cases and untested here."
+   }
+  ]
+ }
 }

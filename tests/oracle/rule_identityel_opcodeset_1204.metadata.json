@@ -1,224 +1,224 @@
 {
-  "schema_version": 2,
-  "fixture_id": "RULE-IDENTITYEL-OPCODESET-0001",
-  "projection_status": "MATCH",
-  "overall_status": "MISMATCH",
-    "status_note": "Twenty non-lookup observation records are byte-identical between locked Ghidra 12.0.4 and the candidate Rugra source. They cover RuleIdentityEl's complete getOpList order, every registered opcode, both successful INT_MULT branches, non-constant and non-identity guards, explicit INT_SUB/INT_AND dispatch negatives, opcode/input/output identity mutation, ordered descendants/block order, raw Rule name, fixed-point result, and Action/Rule counters through each side's production ActionPool. The whole observation remains MISMATCH because locked Ghidra's production ActionPool::getSubRule resolves identityel and rejects identity_el, while the pinned Rugra ActionPool has no production get_sub_rule API; the Rust lookup record says lookup=missing and uses only its fixture-only read view to show the corrected name is uniquely registered. The other 111 inventoried Rule raw-name differences are not changed by this narrow batch and remain bound to PIPE-RULE-RAW-NAMES-0001.",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ "schema_version": 2,
+ "fixture_id": "RULE-IDENTITYEL-OPCODESET-0001",
+ "projection_status": "MATCH",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
+ "status_note": "Twenty non-lookup observation records are byte-identical between locked Ghidra 12.0.4 and the candidate Rugra source. They cover RuleIdentityEl's complete getOpList order, every registered opcode, both successful INT_MULT branches, non-constant and non-identity guards, explicit INT_SUB/INT_AND dispatch negatives, opcode/input/output identity mutation, ordered descendants/block order, raw Rule name, fixed-point result, and Action/Rule counters through each side's production ActionPool. The whole observation remains MISMATCH because locked Ghidra's production ActionPool::getSubRule resolves identityel and rejects identity_el, while the pinned Rugra ActionPool has no production get_sub_rule API; the Rust lookup record says lookup=missing and uses only its fixture-only read view to show the corrected name is uniquely registered. The other 111 inventoried Rule raw-name differences are not changed by this narrow batch and remain bound to PIPE-RULE-RAW-NAMES-0001.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_source": {
+  "base_commit": "15f84093c54b6befa066190fe0724133488306e4",
+  "base_tree": "23eea775d84a6a34916c7502e648f32290ac8dfe",
+  "base_src_tree": "004b20c8ed6da74cf6457a4386570bae4801bc78",
+  "base_action_rs_blob": "4ab1068cde61e05570d0941243b5e89ab098934f",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "overlay": "Only the owned candidate src/ruleaction.rs replaces the pinned base file; src/action.rs stays at the recorded base blob so the fixture observes the real current ActionPool without expanding this write-set."
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec",
+  "runtime_archid": "x86:LE:64:default:gcc"
+ },
+ "analysis_options": {
+  "action": "One production ActionPool with RULE_REPEATAPPLY and exactly one production RuleIdentityEl; Action::perform drives it to a fixed point.",
+  "funcdata": "GetStr symbol at 0x36d0 from pinned examples/curl, with a fresh synthetic BlockBasic and eleven alive operations added through Funcdata APIs.",
+  "ir": "Shared four-byte integer input reads nine ops; shared one-byte boolean input reads two ops; every constant is a distinct Varnode. Operations are inserted in the recorded case order at monotonically increasing code addresses 0x6100..0x610a.",
+  "normalization": "None. Opcode numbers, input/output pointer-identity booleans, descendant and block iteration order, counts, status, parent/dead state, and final newlines are compared verbatim.",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent",
+  "random_seed": "none; construction and ActionPool execution are deterministic",
+  "error_injection": "none"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
-  "rugra_source": {
-    "base_commit": "15f84093c54b6befa066190fe0724133488306e4",
-    "base_tree": "23eea775d84a6a34916c7502e648f32290ac8dfe",
-    "base_src_tree": "004b20c8ed6da74cf6457a4386570bae4801bc78",
-    "base_action_rs_blob": "4ab1068cde61e05570d0941243b5e89ab098934f",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "overlay": "Only the owned candidate src/ruleaction.rs replaces the pinned base file; src/action.rs stays at the recorded base blob so the fixture observes the real current ActionPool without expanding this write-set."
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
   },
-  "architecture": "x86:LE:64:default",
   "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec",
-    "runtime_archid": "x86:LE:64:default:gcc"
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
   },
-  "analysis_options": {
-    "action": "One production ActionPool with RULE_REPEATAPPLY and exactly one production RuleIdentityEl; Action::perform drives it to a fixed point.",
-    "funcdata": "GetStr symbol at 0x36d0 from pinned examples/curl, with a fresh synthetic BlockBasic and eleven alive operations added through Funcdata APIs.",
-    "ir": "Shared four-byte integer input reads nine ops; shared one-byte boolean input reads two ops; every constant is a distinct Varnode. Operations are inserted in the recorded case order at monotonically increasing code addresses 0x6100..0x610a.",
-    "normalization": "None. Opcode numbers, input/output pointer-identity booleans, descendant and block iteration order, counts, status, parent/dead state, and final newlines are compared verbatim.",
-    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent",
-    "random_seed": "none; construction and ActionPool execution are deterministic",
-    "error_injection": "none"
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+   "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
   },
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-      "size": 11721
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-      "size": 12182
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
-      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-      "size": 5390
-    },
-    "binary": {
-      "path": "examples/curl",
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544
-    },
-    "bfd": {
-      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
-      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-      "header_size": 256999,
-      "library_path": "/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
-      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e",
-      "library_size": 1543224
-    }
+  "binary": {
+   "path": "examples/curl",
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544
   },
-  "input_manifest": {
-    "binary": {
-      "path": "examples/curl",
-      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
-      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
-      "size": 162544
-    },
-    "functions": [
-      "GetStr@0x36d0:size=0"
-    ],
-    "cases": [
-      "int_add_zero",
-      "int_xor_zero",
-      "int_or_zero",
-      "bool_xor_zero",
-      "bool_or_zero",
-      "mult_zero",
-      "mult_one",
-      "mult_two_guard",
-      "int_sub_zero_dispatch_neg",
-      "int_and_zero_dispatch_neg",
-      "int_add_nonconst_guard"
-    ],
-    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,functions,cases}, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
-    "sha256": "5530e05705baf590a4c6e2cc189e7095d517459931c275c87c09d918f2f3acf5"
-  },
-  "observation_schema": {
-    "format": "Twenty-one fixed-order UTF-8 lines with final newline; the one lookup line is the registered whole-observation mismatch, while the other twenty lines form the zero-difference covered projection.",
-    "dispatch": "Exact ordered getOpList plus RuleIdentityEl registered through production ActionPool on both sides; non-members never reach applyOp.",
-    "mutations": "Final opcode/input count and slot-to-original-input identity, stable output/def identity, rhs descendant count, parent identity, and dead state per op.",
-    "ordering": "Shared-input descendant order and BasicBlock operation order before and after fixed-point execution.",
-    "counters": "ActionPool perform result/status/count_tests/count_apply plus Rule-level attempted/successful application counts; Rust Rule counters are a fixture-only transparent wrapper because Rule fields live in the C++ base class only.",
-    "name_lookup": "Raw Rule name on both sides; locked Ghidra production getSubRule lookup and explicit Rust production-API absence plus a read-only unique-name scan."
-  },
-  "decisive_semantics": {
-    "reference_output_parameters": "RuleIdentityEl mutates the shared PcodeOp and Funcdata in place. Non-multiply zero and multiply-one remove slot 1 while preserving slot-0 identity; multiply-zero removes slot 0 so the original rhs becomes slot 0. Output Varnode identity/def and op parent remain unchanged.",
-    "loop_bounds_traversal_order": "getOpList appends exactly indices 0 through 5 in source order. ActionPool traverses the eleven alive ops in SeqNum/insertion order, restarts a changed op at the COPY bucket, and repeats the bank until no count increase. Descendants are observed in addDescend insertion order before/after removals.",
-    "counter_accumulator_lifecycle": "Action count starts at zero for one perform call, first pool pass accumulates seven changes, second pass adds none, yielding perform=7/status_start/tests=1/apply=1. Rule counters span both passes: nine first-pass registered attempts plus the two unchanged registered guards on the repeat pass, for tests=11/apply=7.",
-    "sorting_comparison_keys": "Dispatch keys are exact numeric OpCode values. Name lookup keys are exact raw strings identityel versus identity_el with uniqueness required. Pointer identity comparisons distinguish original lhs/rhs/output/parent; no allocation ID normalization or unordered sorting occurs."
-  },
-  "coverage": {
-    "getoplist_and_raw_name": {
-      "status": "MATCH",
-      "covers": "Exact six-op ordered list INT_ADD, INT_XOR, INT_OR, BOOL_XOR, BOOL_OR, INT_MULT and exact raw name identityel.",
-      "residual_todo_ids": []
-    },
-    "positive_apply_paths": {
-      "status": "MATCH",
-      "covers": "Zero collapse for every non-multiply registered opcode and both INT_MULT identity cases 0/1 through production fixed-point dispatch.",
-      "residual_todo_ids": []
-    },
-    "negative_paths": {
-      "status": "MATCH",
-      "covers": "INT_MULT value 2 and INT_ADD non-constant guards plus decisive INT_SUB/INT_AND dispatch refusal.",
-      "residual_todo_ids": []
-    },
-    "identity_order_and_counters": {
-      "status": "MATCH",
-      "covers": "Opcode/input/output identities, rhs descendant removal/retention, ordered shared descendants, block order, parent/dead state, Action state/counts, and transparent Rule attempt/apply counts.",
-      "residual_todo_ids": []
-    },
-    "production_get_sub_rule": {
-      "status": "MISSING",
-      "covers": "Locked Ghidra getSubRule(identityel) returns the registered Rule and rejects identity_el; pinned Rugra ActionPool has no production get_sub_rule method.",
-      "residual_todo_ids": [
-        "ACTION-EXECUTOR-BREAKPOOL-0001"
-      ]
-    },
-    "other_rule_raw_names": {
-      "status": "MISMATCH",
-            "covers": "This batch corrects RuleIdentityEl only; the other 111 independently inventoried raw-name differences remain outside its write-set.",
-      "residual_todo_ids": [
-        "PIPE-RULE-RAW-NAMES-0001"
-      ]
-    },
-    "breakpoints_disable_warning_reset": {
-      "status": "UNTESTED",
-      "covers": "Rule breakpoint resume, disable/enable, warning toggles, reset/resetStats and exceptional/malformed IR are not exercised by this narrow fixture.",
-      "residual_todo_ids": [
-        "ACTION-EXECUTOR-BREAKPOOL-0001"
-      ]
-    }
-  },
-  "residual_todo_ids": [
-    "ACTION-EXECUTOR-BREAKPOOL-0001",
-    "PIPE-RULE-RAW-NAMES-0001"
-  ],
-  "comparand": {
-    "cpp_fixture_sha256": "d0138d51c85a89f2b2a9618e7b1149cb1321d167a6ef16ea1558dea44ef583d7",
-    "rust_fixture_sha256": "f200e425711052f0fd4e40da33c4f5e130617ed0b6b61e3dbd60c8fc3bd75f62",
-    "ruleaction_rs_sha256": "22ac1a2543967fc9bc8c0f676736d94e3cb2e909c18548153d37ec01ad8466f0",
-        "runner_sha256": "4b54fdfda4cc56944f6bd5bee942ec6fbba3d211a3bd8134166ffd3cde3ebee8",
-    "host_cxx": "g++ (GCC) 16.2.1 20260810",
-    "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-    "host_cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)"
-  },
-  "expected_results": {
-    "ghidra_stdout_sha256": "abc773c7eaa799ee8f0c547e5ea634be0d5fb99c325cf45c6a2a39601b469102",
-    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "a674bc0366d90de8e396e88fb198289a5e54a2c058143edc72ff50b5b4afa5c2",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "ghidra_covered_sha256": "22b8b7cd8d776e3cf901941a41af1945cb10bbffeb95e5820c3c493132e687b9",
-    "rugra_covered_sha256": "22b8b7cd8d776e3cf901941a41af1945cb10bbffeb95e5820c3c493132e687b9",
-    "covered_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "5a13b1c3ef3a972df66d3797145994d10c325884ec94c1de82311e4f8807b18b",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "covered_diff_exit_code": 0,
-    "raw_diff_exit_code": 1,
-    "record_order": [
-      "oplist=19,26,28,38,40,32",
-      "lookup=production",
-      "rule_name=identityel",
-      "desc=x4",
-      "desc=b1",
-      "block",
-      "pool",
-      "case=int_add_zero",
-      "case=int_xor_zero",
-      "case=int_or_zero",
-      "case=bool_xor_zero",
-      "case=bool_or_zero",
-      "case=mult_zero",
-      "case=mult_one",
-      "case=mult_two_guard",
-      "case=int_sub_zero_dispatch_neg",
-      "case=int_and_zero_dispatch_neg",
-      "case=int_add_nonconst_guard",
-      "desc=x4",
-      "desc=b1",
-      "block"
-    ]
-  },
-  "build": {
-    "ghidra": "Archive locked e40ed130 decompiler C++ tree, rebuild libdecomp.a, and link the fixture with the recorded BFD header/library.",
-    "rugra": "Archive base 15f8409, overlay only candidate src/ruleaction.rs, build offline/locked into /tmp/rugra-target-rule-identityel, then compile the Rust fixture against that library.",
-        "cargo_lock": "Invoke this runner directly. It acquires /tmp/rugra-cargo-build.lock internally for the Cargo build only; locked Ghidra construction, direct fixture compilation, execution, and comparison never hold the shared Cargo lane.",
-    "expected_stdout_lines": 21,
-    "covered_stdout_lines": 20
+  "bfd": {
+   "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "header_size": 256999,
+   "library_path": "/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e",
+   "library_size": 1543224
   }
+ },
+ "input_manifest": {
+  "binary": {
+   "path": "examples/curl",
+   "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+   "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+   "size": 162544
+  },
+  "functions": [
+   "GetStr@0x36d0:size=0"
+  ],
+  "cases": [
+   "int_add_zero",
+   "int_xor_zero",
+   "int_or_zero",
+   "bool_xor_zero",
+   "bool_or_zero",
+   "mult_zero",
+   "mult_one",
+   "mult_two_guard",
+   "int_sub_zero_dispatch_neg",
+   "int_and_zero_dispatch_neg",
+   "int_add_nonconst_guard"
+  ],
+  "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,functions,cases}, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+  "sha256": "5530e05705baf590a4c6e2cc189e7095d517459931c275c87c09d918f2f3acf5"
+ },
+ "observation_schema": {
+  "format": "Twenty-one fixed-order UTF-8 lines with final newline; the one lookup line is the registered whole-observation mismatch, while the other twenty lines form the zero-difference covered projection.",
+  "dispatch": "Exact ordered getOpList plus RuleIdentityEl registered through production ActionPool on both sides; non-members never reach applyOp.",
+  "mutations": "Final opcode/input count and slot-to-original-input identity, stable output/def identity, rhs descendant count, parent identity, and dead state per op.",
+  "ordering": "Shared-input descendant order and BasicBlock operation order before and after fixed-point execution.",
+  "counters": "ActionPool perform result/status/count_tests/count_apply plus Rule-level attempted/successful application counts; Rust Rule counters are a fixture-only transparent wrapper because Rule fields live in the C++ base class only.",
+  "name_lookup": "Raw Rule name on both sides; locked Ghidra production getSubRule lookup and explicit Rust production-API absence plus a read-only unique-name scan."
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "RuleIdentityEl mutates the shared PcodeOp and Funcdata in place. Non-multiply zero and multiply-one remove slot 1 while preserving slot-0 identity; multiply-zero removes slot 0 so the original rhs becomes slot 0. Output Varnode identity/def and op parent remain unchanged.",
+  "loop_bounds_traversal_order": "getOpList appends exactly indices 0 through 5 in source order. ActionPool traverses the eleven alive ops in SeqNum/insertion order, restarts a changed op at the COPY bucket, and repeats the bank until no count increase. Descendants are observed in addDescend insertion order before/after removals.",
+  "counter_accumulator_lifecycle": "Action count starts at zero for one perform call, first pool pass accumulates seven changes, second pass adds none, yielding perform=7/status_start/tests=1/apply=1. Rule counters span both passes: nine first-pass registered attempts plus the two unchanged registered guards on the repeat pass, for tests=11/apply=7.",
+  "sorting_comparison_keys": "Dispatch keys are exact numeric OpCode values. Name lookup keys are exact raw strings identityel versus identity_el with uniqueness required. Pointer identity comparisons distinguish original lhs/rhs/output/parent; no allocation ID normalization or unordered sorting occurs."
+ },
+ "coverage": {
+  "getoplist_and_raw_name": {
+   "status": "MATCH",
+   "covers": "Exact six-op ordered list INT_ADD, INT_XOR, INT_OR, BOOL_XOR, BOOL_OR, INT_MULT and exact raw name identityel.",
+   "residual_todo_ids": []
+  },
+  "positive_apply_paths": {
+   "status": "MATCH",
+   "covers": "Zero collapse for every non-multiply registered opcode and both INT_MULT identity cases 0/1 through production fixed-point dispatch.",
+   "residual_todo_ids": []
+  },
+  "negative_paths": {
+   "status": "MATCH",
+   "covers": "INT_MULT value 2 and INT_ADD non-constant guards plus decisive INT_SUB/INT_AND dispatch refusal.",
+   "residual_todo_ids": []
+  },
+  "identity_order_and_counters": {
+   "status": "MATCH",
+   "covers": "Opcode/input/output identities, rhs descendant removal/retention, ordered shared descendants, block order, parent/dead state, Action state/counts, and transparent Rule attempt/apply counts.",
+   "residual_todo_ids": []
+  },
+  "production_get_sub_rule": {
+   "status": "MISSING",
+   "covers": "Locked Ghidra getSubRule(identityel) returns the registered Rule and rejects identity_el; pinned Rugra ActionPool has no production get_sub_rule method.",
+   "residual_todo_ids": [
+    "ACTION-EXECUTOR-BREAKPOOL-0001"
+   ]
+  },
+  "other_rule_raw_names": {
+   "status": "MISMATCH",
+   "covers": "This batch corrects RuleIdentityEl only; the other 111 independently inventoried raw-name differences remain outside its write-set.",
+   "residual_todo_ids": [
+    "PIPE-RULE-RAW-NAMES-0001"
+   ]
+  },
+  "breakpoints_disable_warning_reset": {
+   "status": "UNTESTED",
+   "covers": "Rule breakpoint resume, disable/enable, warning toggles, reset/resetStats and exceptional/malformed IR are not exercised by this narrow fixture.",
+   "residual_todo_ids": [
+    "ACTION-EXECUTOR-BREAKPOOL-0001"
+   ]
+  }
+ },
+ "residual_todo_ids": [
+  "ACTION-EXECUTOR-BREAKPOOL-0001",
+  "PIPE-RULE-RAW-NAMES-0001"
+ ],
+ "comparand": {
+  "cpp_fixture_sha256": "d0138d51c85a89f2b2a9618e7b1149cb1321d167a6ef16ea1558dea44ef583d7",
+  "rust_fixture_sha256": "f200e425711052f0fd4e40da33c4f5e130617ed0b6b61e3dbd60c8fc3bd75f62",
+  "ruleaction_rs_sha256": "22ac1a2543967fc9bc8c0f676736d94e3cb2e909c18548153d37ec01ad8466f0",
+  "runner_sha256": "4b54fdfda4cc56944f6bd5bee942ec6fbba3d211a3bd8134166ffd3cde3ebee8",
+  "host_cxx": "g++ (GCC) 16.2.1 20260810",
+  "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+  "host_cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "abc773c7eaa799ee8f0c547e5ea634be0d5fb99c325cf45c6a2a39601b469102",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "a674bc0366d90de8e396e88fb198289a5e54a2c058143edc72ff50b5b4afa5c2",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_covered_sha256": "22b8b7cd8d776e3cf901941a41af1945cb10bbffeb95e5820c3c493132e687b9",
+  "rugra_covered_sha256": "22b8b7cd8d776e3cf901941a41af1945cb10bbffeb95e5820c3c493132e687b9",
+  "covered_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "5a13b1c3ef3a972df66d3797145994d10c325884ec94c1de82311e4f8807b18b",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "covered_diff_exit_code": 0,
+  "raw_diff_exit_code": 1,
+  "record_order": [
+   "oplist=19,26,28,38,40,32",
+   "lookup=production",
+   "rule_name=identityel",
+   "desc=x4",
+   "desc=b1",
+   "block",
+   "pool",
+   "case=int_add_zero",
+   "case=int_xor_zero",
+   "case=int_or_zero",
+   "case=bool_xor_zero",
+   "case=bool_or_zero",
+   "case=mult_zero",
+   "case=mult_one",
+   "case=mult_two_guard",
+   "case=int_sub_zero_dispatch_neg",
+   "case=int_and_zero_dispatch_neg",
+   "case=int_add_nonconst_guard",
+   "desc=x4",
+   "desc=b1",
+   "block"
+  ]
+ },
+ "build": {
+  "ghidra": "Archive locked e40ed130 decompiler C++ tree, rebuild libdecomp.a, and link the fixture with the recorded BFD header/library.",
+  "rugra": "Archive base 15f8409, overlay only candidate src/ruleaction.rs, build offline/locked into /tmp/rugra-target-rule-identityel, then compile the Rust fixture against that library.",
+  "cargo_lock": "Invoke this runner directly. It acquires /tmp/rugra-cargo-build.lock internally for the Cargo build only; locked Ghidra construction, direct fixture compilation, execution, and comparison never hold the shared Cargo lane.",
+  "expected_stdout_lines": 21,
+  "covered_stdout_lines": 20
+ }
 }

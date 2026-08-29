@@ -1,151 +1,151 @@
 {
-  "schema_version": 1,
-  "fixture_id": "MARSHAL-ID-0001",
-  "overall_status": "MISMATCH",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source_blobs": {
-      "address.cc": "65b2d81ba7cb74cd2e10db38892a9720d836b7d8b049368cbd8d9d998d6467fb",
-      "architecture.cc": "4ad4f8040a4f9098c08a8f31cc234dd3f949e500b35fab210da156b29f5c6eb3",
-      "bfd_arch.cc": "d8f5cc5fd86181a8a9a79d4ee46a76ecdeba04dc63080291cef0ea4a9f4e7f33",
-      "block.cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",
-      "callgraph.cc": "9a350b859ab2efb963647c46cfead465d79a4819eb3de9a562e90e317de6073b",
-      "comment.cc": "5983ec37f7048cdb30d0ddef9cb4ff74fce35d887d3a75be4c852f70dd4fafcb",
-      "cpool.cc": "15b009d58b952a10987b46b7b51c4b8762dccc6ee911072dddf6ba044e9476ee",
-      "database.cc": "e8cabd49c0ced3798c07d4835f2eb62911314b69caf9ca5ea5e8bc8c9837df75",
-      "fspec.cc": "40b0bb5d4cf59d36ba16d06fc6cccc17d75d04cfce555cf3d28b5e7e07587ce2",
-      "funcdata.cc": "4b19b48fec7f7a6597d0ff483be2e464f23e7ca3c11fc46595bc34e1d305ee3d",
-      "ghidra_arch.cc": "8160e59239ed165c82fcb12e73ff423993f8bf8c683bf72ac9ed226a713e33fa",
-      "ghidra_process.cc": "45b95a26d5bd26cd70c052a7ea450caa279f9f9240680a6ad8eeaa8b151a65c8",
-      "globalcontext.cc": "2c0214696093d5ca864e721c88295506d66e2657c0e520af1909747d38ffd9f3",
-      "jumptable.cc": "e65ec07f1b0db5c73256c7ef3a4bbb2627ac168dc4f2ba74f9a0c1ec53d32b5c",
-      "loadimage_xml.cc": "8b419428d7a26a52fb03f650b87c90d0eb9f048cdc18346e20feca0b7683c69c",
-      "marshal.cc": "6c2da65fdb902edaa058d7a64542f347d6ba510174bfe6b5942a9e30cdf66fa4",
-      "modelrules.cc": "49a0aba2b0677575ac3661357609805bb703b44c9c224ef3f0b17d304b713a71",
-      "op.cc": "38ac521423d01b295b3020d9e4ee73da34197c6ae5c4b369022a64ada7680b4c",
-      "options.cc": "cbad80eb18bbeb8906b83ec1773ba76ab29e6257c2b999bacac12106dd984461",
-      "override.cc": "747daf3b48f5ed8a8878884e87f0f48e8b87f3d5e2184068ee0794719c8c052b",
-      "paramid.cc": "ca9fb5634c5a1b2a8ee31278a7555be4ca202c9f80e4bf0cb827d0542758e682",
-      "pcodeinject.cc": "0e55b99a36623c08a10f53068ff1112d973a173fad9f6395be7c7f228cd89e75",
-      "prefersplit.cc": "bafed8a56e8f61cfee57d8d73dec0362470efc1d370c2b9e6a84866ffd4d1fc0",
-      "prettyprint.cc": "1a9466456f0a229639625e9f8e70507e83815e49b19bfb1fea6945978074189f",
-      "raw_arch.cc": "48c1253fd15d2c9107a24f52b8dca848fde0a8a05df96a8d768f7bb7c763ea22",
-      "signature.cc": "74e2522e019c8d871852dd0d27c80558f24ed3e854c9e8d762ba00d12b80d076",
-      "sleigh_arch.cc": "28f77e662b2cb394745844abff5e1ed8377816a07fc2ea614ab5e0dba092ff8a",
-      "space.cc": "acf2877f207b4958ab01cd98a6c99b43fd143236bf752b0c0efdb4d5670f38f3",
-      "stringmanage.cc": "50c9946dd6e47ded6c021882e78273bf8a60e9dcf1c70923a0a39326a1381bb2",
-      "transform.cc": "f0f08b9f8045854091cc86ce43bf1584d7f8b89997b87c2b2ccbfeb1f51b0b28",
-      "translate.cc": "f5f5a9ebe8f01270e016c90413828ffbfc37b7c4421c006ad28ba7c22b64483e",
-      "type.cc": "e339d89b86b9eb50ca8e7dedb882524b578683d7f995623af513e8ed28ed5405",
-      "userop.cc": "924339757607a449c455a1640635958c74a58e6beb07b571d101c54fb4cce4af",
-      "variable.cc": "b89073d406adc591b25147b2dc9a9dab17ccf4902b4699d4ea0a8d59b8a97fef",
-      "varmap.cc": "985d48613d26c95983e69eca267f627c304a6197eabfec3e419f916a9ddf5479",
-      "varnode.cc": "c2a47cff2473a39e616b434106e0d8df25564512c2ed27d1cc6299d6ac4a2a60",
-      "xml_arch.cc": "9f6ddde2194452d9c6323929584f2d77aa3ec4654d2f0015c929feb0c7820656"
-    }
-  },
-  "architecture": "process-global marshal scope-0",
-  "compiler_spec": "N/A",
-  "analysis_options": {
-    "cpp_standard": "c++11",
-    "cpp_optimization": "-O2",
-    "cpui_debug": false,
-    "rust_edition": "2021",
-    "rust_optimization": "-O",
-    "locale": "C",
-    "comparison": "byte-exact stdout"
-  },
-  "input_manifest": {
-    "canonicalization": "SHA-256 of UTF-8 json.dumps(source-manifest rows in locked filename/source order with keys sorted and separators=(',',':'))",
-    "sha256": "c9cb6a35dbe50279ddebc4ff22bbea020a35ecfa2b1d2966fc6b7e7f62c63f84",
-    "cases": [
-      "all scope-0 AttributeId definitions",
-      "all scope-0 ElementId definitions",
-      "reverse name-by-id projection",
-      "unknown name and nonzero scope fallback",
-      "repeated initialize calls",
-      "size=19 and space=20",
-      "XmlDecode/TreeDecoder ordered attributes and children",
-      "unknown attribute and element do not alias end sentinel",
-      "post-close and exhausted traversal return zero"
-    ]
-  },
-  "coverage": {
-    "projection": "synthetic source-manifest projection: locked Makefile EXTRA= libdecomp contributes the standard runtime 379 IDs; 41 same-name/same-id objects are generated from eight hash-locked alternate-front-end source manifests; this is not a claim that one ordinary executable naturally registers all 420",
-    "source_manifest_attribute_count": 146,
-    "source_manifest_element_count": 274,
-    "source_manifest_union_count": 420,
-    "standard_libdecomp_attribute_count": 136,
-    "standard_libdecomp_element_count": 243,
-    "standard_libdecomp_total_count": 379,
-    "alternate_frontend_only_count": 41,
-    "id_table_observation_status": "MATCH",
-    "tree_end_unknown_order_status": "MATCH",
-    "id_to_name_observation": "source-manifest object scan; no locked Ghidra reverse-lookup API"
-  },
-  "residuals": [
-    {
-      "status": "MISMATCH",
-      "area": "TreeDecoder strict error behavior",
-      "detail": "Rugra Decoder has no Result/exception channel; mismatched open and strict close state/error mutations cannot yet match XmlDecode. This fixture deliberately does not normalize that residual away."
-    },
-    {
-      "status": "MISMATCH",
-      "area": "linkage-dependent scope-0 registration set",
-      "detail": "Locked Ghidra registers only scope-0 AttributeId/ElementId objects present in the executable link closure. The standard EXTRA= libdecomp closure has 379 IDs, so 41 alternate-front-end names resolve to ATTRIB_UNKNOWN/ELEM_UNKNOWN; Rugra always installs the 420-row 114-TU synthetic union and resolves those names to fixed IDs. The synthetic C++ complement proves source-manifest assignments only, not ordinary-runtime registration-set parity."
-    },
-    {
-      "status": "UNTESTED",
-      "area": "nonzero marshal scopes",
-      "detail": "The fixed process table is scope 0. FORMAT_SCOPE definitions and decoders are outside MARSHAL-ID-0001."
-    }
-  ],
-  "comparand": {
-    "rugra_base_commit": "08bc7b0a1d9337da31bb239b2c00688449ae07dd",
-    "rugra_base_tree": "e69de217098cb1c0a3a1a920f8d4740cf10b743b",
-    "snapshot_model": "git archive locked base tree plus exact owned-file overlays",
-    "overlay_paths": [
-      "src/marshal.rs",
-      "docs/api/marshal.md",
-      "tests/oracle/marshal_id_1204.cc",
-      "tests/oracle/marshal_id_1204.rs",
-      "tests/oracle/marshal_id_1204.metadata.json",
-      "tools/run_marshal_id_oracle.sh"
-    ],
-    "cpp_fixture_sha256": "fff5398e5d93c870fb20613b41fad786f8112b2d36155086291195cb0cdc3bbf",
-    "rust_fixture_sha256": "26e7c3482036362728434c1c5fc06d54b5f6df5e020566bcc59098c895985fdc",
-    "marshal_rs_sha256": "2a1010a565245190daf10bf49a1368a0ad176b94d774c413fa33177257eb832e",
-    "marshal_doc_sha256": "4633f0e44f28af6e9d459c44e3c1070b1aac8c5961629a0f3441abf676eb1c69",
-    "runner_sha256": "715ba1d0861fd7400782bad7702fe9ef44d8315b4d2ea699a696de0b953d2c82",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
-  },
-  "build": {
-    "registry_packages": 164,
-    "network": "disabled by isolated environment and offline vendored Cargo closure",
-    "runner_mode": "0755"
-  },
-  "host_tools": {
-    "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "cxx_target": "x86_64-linux-gnu",
-    "cc": "x86_64-linux-gnu-gcc-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "cc_target": "x86_64-linux-gnu",
-    "ar": "GNU ar (GNU Binutils for Ubuntu) 2.38",
-    "make": "GNU Make 4.3",
-    "python": "Python 3.10.12",
-    "git": "git version 2.34.1",
-    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-    "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
-    "platform": "Linux 6.8.0-124-generic x86_64"
-  },
-  "locked_capture": {
-    "records": 424,
-    "bytes": 12645,
-    "stdout_sha256": "61738956a15d99ca69597920f4d3fa8473d27dcededc31227bf1d4fe4dbcb99e"
+ "schema_version": 1,
+ "fixture_id": "MARSHAL-ID-0001",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source_blobs": {
+   "address.cc": "65b2d81ba7cb74cd2e10db38892a9720d836b7d8b049368cbd8d9d998d6467fb",
+   "architecture.cc": "4ad4f8040a4f9098c08a8f31cc234dd3f949e500b35fab210da156b29f5c6eb3",
+   "bfd_arch.cc": "d8f5cc5fd86181a8a9a79d4ee46a76ecdeba04dc63080291cef0ea4a9f4e7f33",
+   "block.cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",
+   "callgraph.cc": "9a350b859ab2efb963647c46cfead465d79a4819eb3de9a562e90e317de6073b",
+   "comment.cc": "5983ec37f7048cdb30d0ddef9cb4ff74fce35d887d3a75be4c852f70dd4fafcb",
+   "cpool.cc": "15b009d58b952a10987b46b7b51c4b8762dccc6ee911072dddf6ba044e9476ee",
+   "database.cc": "e8cabd49c0ced3798c07d4835f2eb62911314b69caf9ca5ea5e8bc8c9837df75",
+   "fspec.cc": "40b0bb5d4cf59d36ba16d06fc6cccc17d75d04cfce555cf3d28b5e7e07587ce2",
+   "funcdata.cc": "4b19b48fec7f7a6597d0ff483be2e464f23e7ca3c11fc46595bc34e1d305ee3d",
+   "ghidra_arch.cc": "8160e59239ed165c82fcb12e73ff423993f8bf8c683bf72ac9ed226a713e33fa",
+   "ghidra_process.cc": "45b95a26d5bd26cd70c052a7ea450caa279f9f9240680a6ad8eeaa8b151a65c8",
+   "globalcontext.cc": "2c0214696093d5ca864e721c88295506d66e2657c0e520af1909747d38ffd9f3",
+   "jumptable.cc": "e65ec07f1b0db5c73256c7ef3a4bbb2627ac168dc4f2ba74f9a0c1ec53d32b5c",
+   "loadimage_xml.cc": "8b419428d7a26a52fb03f650b87c90d0eb9f048cdc18346e20feca0b7683c69c",
+   "marshal.cc": "6c2da65fdb902edaa058d7a64542f347d6ba510174bfe6b5942a9e30cdf66fa4",
+   "modelrules.cc": "49a0aba2b0677575ac3661357609805bb703b44c9c224ef3f0b17d304b713a71",
+   "op.cc": "38ac521423d01b295b3020d9e4ee73da34197c6ae5c4b369022a64ada7680b4c",
+   "options.cc": "cbad80eb18bbeb8906b83ec1773ba76ab29e6257c2b999bacac12106dd984461",
+   "override.cc": "747daf3b48f5ed8a8878884e87f0f48e8b87f3d5e2184068ee0794719c8c052b",
+   "paramid.cc": "ca9fb5634c5a1b2a8ee31278a7555be4ca202c9f80e4bf0cb827d0542758e682",
+   "pcodeinject.cc": "0e55b99a36623c08a10f53068ff1112d973a173fad9f6395be7c7f228cd89e75",
+   "prefersplit.cc": "bafed8a56e8f61cfee57d8d73dec0362470efc1d370c2b9e6a84866ffd4d1fc0",
+   "prettyprint.cc": "1a9466456f0a229639625e9f8e70507e83815e49b19bfb1fea6945978074189f",
+   "raw_arch.cc": "48c1253fd15d2c9107a24f52b8dca848fde0a8a05df96a8d768f7bb7c763ea22",
+   "signature.cc": "74e2522e019c8d871852dd0d27c80558f24ed3e854c9e8d762ba00d12b80d076",
+   "sleigh_arch.cc": "28f77e662b2cb394745844abff5e1ed8377816a07fc2ea614ab5e0dba092ff8a",
+   "space.cc": "acf2877f207b4958ab01cd98a6c99b43fd143236bf752b0c0efdb4d5670f38f3",
+   "stringmanage.cc": "50c9946dd6e47ded6c021882e78273bf8a60e9dcf1c70923a0a39326a1381bb2",
+   "transform.cc": "f0f08b9f8045854091cc86ce43bf1584d7f8b89997b87c2b2ccbfeb1f51b0b28",
+   "translate.cc": "f5f5a9ebe8f01270e016c90413828ffbfc37b7c4421c006ad28ba7c22b64483e",
+   "type.cc": "e339d89b86b9eb50ca8e7dedb882524b578683d7f995623af513e8ed28ed5405",
+   "userop.cc": "924339757607a449c455a1640635958c74a58e6beb07b571d101c54fb4cce4af",
+   "variable.cc": "b89073d406adc591b25147b2dc9a9dab17ccf4902b4699d4ea0a8d59b8a97fef",
+   "varmap.cc": "985d48613d26c95983e69eca267f627c304a6197eabfec3e419f916a9ddf5479",
+   "varnode.cc": "c2a47cff2473a39e616b434106e0d8df25564512c2ed27d1cc6299d6ac4a2a60",
+   "xml_arch.cc": "9f6ddde2194452d9c6323929584f2d77aa3ec4654d2f0015c929feb0c7820656"
   }
+ },
+ "architecture": "process-global marshal scope-0",
+ "compiler_spec": "N/A",
+ "analysis_options": {
+  "cpp_standard": "c++11",
+  "cpp_optimization": "-O2",
+  "cpui_debug": false,
+  "rust_edition": "2021",
+  "rust_optimization": "-O",
+  "locale": "C",
+  "comparison": "byte-exact stdout"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps(source-manifest rows in locked filename/source order with keys sorted and separators=(',',':'))",
+  "sha256": "c9cb6a35dbe50279ddebc4ff22bbea020a35ecfa2b1d2966fc6b7e7f62c63f84",
+  "cases": [
+   "all scope-0 AttributeId definitions",
+   "all scope-0 ElementId definitions",
+   "reverse name-by-id projection",
+   "unknown name and nonzero scope fallback",
+   "repeated initialize calls",
+   "size=19 and space=20",
+   "XmlDecode/TreeDecoder ordered attributes and children",
+   "unknown attribute and element do not alias end sentinel",
+   "post-close and exhausted traversal return zero"
+  ]
+ },
+ "coverage": {
+  "projection": "synthetic source-manifest projection: locked Makefile EXTRA= libdecomp contributes the standard runtime 379 IDs; 41 same-name/same-id objects are generated from eight hash-locked alternate-front-end source manifests; this is not a claim that one ordinary executable naturally registers all 420",
+  "source_manifest_attribute_count": 146,
+  "source_manifest_element_count": 274,
+  "source_manifest_union_count": 420,
+  "standard_libdecomp_attribute_count": 136,
+  "standard_libdecomp_element_count": 243,
+  "standard_libdecomp_total_count": 379,
+  "alternate_frontend_only_count": 41,
+  "id_table_observation_status": "MATCH",
+  "tree_end_unknown_order_status": "MATCH",
+  "id_to_name_observation": "source-manifest object scan; no locked Ghidra reverse-lookup API"
+ },
+ "residuals": [
+  {
+   "status": "MISMATCH",
+   "area": "TreeDecoder strict error behavior",
+   "detail": "Rugra Decoder has no Result/exception channel; mismatched open and strict close state/error mutations cannot yet match XmlDecode. This fixture deliberately does not normalize that residual away."
+  },
+  {
+   "status": "MISMATCH",
+   "area": "linkage-dependent scope-0 registration set",
+   "detail": "Locked Ghidra registers only scope-0 AttributeId/ElementId objects present in the executable link closure. The standard EXTRA= libdecomp closure has 379 IDs, so 41 alternate-front-end names resolve to ATTRIB_UNKNOWN/ELEM_UNKNOWN; Rugra always installs the 420-row 114-TU synthetic union and resolves those names to fixed IDs. The synthetic C++ complement proves source-manifest assignments only, not ordinary-runtime registration-set parity."
+  },
+  {
+   "status": "UNTESTED",
+   "area": "nonzero marshal scopes",
+   "detail": "The fixed process table is scope 0. FORMAT_SCOPE definitions and decoders are outside MARSHAL-ID-0001."
+  }
+ ],
+ "comparand": {
+  "rugra_base_commit": "08bc7b0a1d9337da31bb239b2c00688449ae07dd",
+  "rugra_base_tree": "e69de217098cb1c0a3a1a920f8d4740cf10b743b",
+  "snapshot_model": "git archive locked base tree plus exact owned-file overlays",
+  "overlay_paths": [
+   "src/marshal.rs",
+   "docs/api/marshal.md",
+   "tests/oracle/marshal_id_1204.cc",
+   "tests/oracle/marshal_id_1204.rs",
+   "tests/oracle/marshal_id_1204.metadata.json",
+   "tools/run_marshal_id_oracle.sh"
+  ],
+  "cpp_fixture_sha256": "fff5398e5d93c870fb20613b41fad786f8112b2d36155086291195cb0cdc3bbf",
+  "rust_fixture_sha256": "26e7c3482036362728434c1c5fc06d54b5f6df5e020566bcc59098c895985fdc",
+  "marshal_rs_sha256": "2a1010a565245190daf10bf49a1368a0ad176b94d774c413fa33177257eb832e",
+  "marshal_doc_sha256": "4633f0e44f28af6e9d459c44e3c1070b1aac8c5961629a0f3441abf676eb1c69",
+  "runner_sha256": "715ba1d0861fd7400782bad7702fe9ef44d8315b4d2ea699a696de0b953d2c82",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db"
+ },
+ "build": {
+  "registry_packages": 164,
+  "network": "disabled by isolated environment and offline vendored Cargo closure",
+  "runner_mode": "0755"
+ },
+ "host_tools": {
+  "cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "cxx_target": "x86_64-linux-gnu",
+  "cc": "x86_64-linux-gnu-gcc-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "cc_target": "x86_64-linux-gnu",
+  "ar": "GNU ar (GNU Binutils for Ubuntu) 2.38",
+  "make": "GNU Make 4.3",
+  "python": "Python 3.10.12",
+  "git": "git version 2.34.1",
+  "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+  "rust_toolchain": "nightly-x86_64-unknown-linux-gnu",
+  "platform": "Linux 6.8.0-124-generic x86_64"
+ },
+ "locked_capture": {
+  "records": 424,
+  "bytes": 12645,
+  "stdout_sha256": "61738956a15d99ca69597920f4d3fa8473d27dcededc31227bf1d4fe4dbcb99e"
+ }
 }

@@ -1,157 +1,157 @@
 {
-  "schema_version": 2,
-  "fixture_id": "COMMENT-SORTER-ITERATORS-0001",
-  "projection_status": "MATCH",
-  "overall_status": "MISMATCH",
-  "status_note": "The 38-line covered projection byte-matches Ghidra 12.0.4's CommentSorter shared-iterator machinery: findPosition's eight placement decisions, setupFunctionList's no-type-filter/pos-counter/setEmitted(false) lifecycle, setupBlockList/setupOpList/setupHeader lower_bound/upper_bound windowing, and hasNext/getNext interleaved consumption across successive op landmarks. Overall remains MISMATCH for three representation residuals: Rugra has no BlockBasic cover RangeList (contains is projected from [start_addr, set_initial_range stop]; fixtures install covers explicitly as of BLOCK-STOPADDR-FIXTURE-REGRESSION-0001), the sorter clones placed Comments instead of holding database pointers (setEmitted(false) does not propagate into CommentDatabaseInternal). The printc-glue-snapshot residual is CLOSED: printc.rs consumers now drive the state machine directly (emit_comment_group covers the setupOpList(NULL) arm), integrated as c5e685c.",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
-  },
-  "rugra_base_commit": "8d59b7730472bde2147e9fdf28a494221c2f26c4",
-  "rugra_source": {
-    "base_src_tree": "593f652fa402b30eb3258b2b15b4a7c5a6ab0209",
-    "base_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "base_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "rust_overlay": "Archive Rugra base 8d59b7730472bde2147e9fdf28a494221c2f26c4 and overlay the owned src/comment.rs + src/block.rs candidates before the isolated offline build (block.rs carries the set_initial_range visibility the fixture's legal-cover construction needs, BLOCK-STOPADDR-FIXTURE-REGRESSION-0001)",
-    "base_commit": "8d59b7730472bde2147e9fdf28a494221c2f26c4"
-  },
-  "architecture": {
-    "id": "synthetic-le64-comment-sorter-fixture",
-    "endianness": "little",
-    "pointer_size": 8,
-    "spaces": "const=0, other=1, unique=2, ram=3, register=4, stack=5; byte addressed",
-    "type_factory": "one architecture-owned factory with canonical xunknown1/2/4/8; only needed to satisfy the Funcdata constructor"
-  },
-  "compiler_spec": {
-    "id": "fixture",
-    "prototype_xml": "<prototype name=\"fixture\" extrapop=\"0\"><input/><output/></prototype>",
-    "calling_convention": "empty input/output records; no effects, symbols, or injections"
-  },
-  "analysis_options": {
-    "api": "Direct production CommentSorter::setupFunctionList/setupBlockList/setupOpList/setupHeader and hasNext/getNext calls; no PrintC, Action, or Rule pipeline",
-    "funcdata": "One synthetic Funcdata per sorter run; five BlockBasic blocks (chain bb_a->bb_b->bb_c->bb_d->bb_e) whose reverse-post-order indexes come from the production BlockGraph::findSpanningTree port on both sides; eleven COPY ops created and inserted in one fixed mirrored order (creation order fixes SeqNum::uniq, insertion order fixes the BlockBasic::insert order ladder); two additional Funcdata runs for the dead-op and op-less cases",
-    "ir": "Ops carry addresses only; no Varnodes, inputs, or outputs. Block covers use Funcdata::setBasicBlockRange (C++) / BlockBasic::set_initial_range (Rugra, visibility per BLOCK-STOPADDR-FIXTURE-REGRESSION-0001) with the same endpoints on both sides, end == the last op's address; bb_c degenerates to a single-address range",
-    "normalization": "None. The emitted projection uses exact comment type numbers, emitted flags, texts, per-walk ordinals, and drained counts; no ID, order, or state normalization",
-    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent",
-    "random_seed": "none; construction and walks are deterministic",
-    "error_injection": "one dead op (created but never block-inserted) whose findPosition probing raises the oracle LowlevelError text"
-  },
-  "input_manifest": {
-    "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
-    "cases": [
-      {
-        "id": "header_walks",
-        "setup": "displayUnplaced=true and =false sorters over one db",
-        "comments": "header@fad, warningheader@fad, warning@fad, user1@0x100a, user2@0x1013",
-        "protocol": "setupHeader(header_basic) drain; setupHeader(header_unplaced) drain",
-        "expect": "basic yields hdr-basic then warn-hdr in pos order both sorters; unplaced yields the excised user2 comment only when displayUnplaced=true"
-      },
-      {
-        "id": "block_walk_interleaving",
-        "setup": "bb_e [0x3000,0x3010] ops E@0x3000 F@0x3005 G@0x3010; header@0x3000, warning@0x3002, warning@0x3005, warning@0x3008",
-        "protocol": "setupBlockList(bb_e); setupOpList(E); drain; setupOpList(F); drain; setupOpList(G); drain; setupOpList(NULL); drain",
-        "expect": "hdr-away at E; between-ef+at-f at F; between-fg at G; nothing at NULL (start persists while opstop narrows)"
-      },
-      {
-        "id": "prev_op_tail_placement",
-        "setup": "comment@0x1008 inside bb_a [0x1000,0x100a]; lower bound lands on bb_b's op@0x1009 whose block excludes 0x1008",
-        "protocol": "setupBlockList(bb_a); setupOpList(op@0x1000); drain; setupOpList(op@0x100a); drain; setupOpList(NULL); drain",
-        "expect": "inline-entry (warning@fad, order of op@0x1000) then at-b (user1@0x100a) at op landmarks; tail-a only at the NULL landmark (order 0xffffffff sorts last)"
-      },
-      {
-        "id": "migrated_backup_op",
-        "setup": "ops M1@0x1015 M2@0x1012 parented by bb_d [0x2000,0x2005]; comment user2@0x1015",
-        "protocol": "setupBlockList(bb_d); landmarks M1, C@0x2000, D@0x2005, NULL",
-        "expect": "migrated hangs on M1 (exact-address backupOp whose own block excludes the address); mid-d (warning@0x2003) at D; nothing at C or NULL"
-      },
-      {
-        "id": "empty_block_drain",
-        "setup": "bb_c [0x1012,0x1012] with no ops",
-        "protocol": "setupBlockList(bb_c); setupOpList(NULL); drain",
-        "expect": "start==stop==opstop, drained=0"
-      },
-      {
-        "id": "no_type_filter_at_setup",
-        "setup": "tp mask = header|warning|warningheader; placed comment user1@0x100a outside the mask",
-        "protocol": "setupFunctionList then bb_a walks",
-        "expect": "user1 comment is placed and drained (Ghidra filters by type only at consumption, printc.cc:3238/3280)"
-      },
-      {
-        "id": "excised_without_display_unplaced",
-        "setup": "user2@0x1013 whose address no op block contains; sorter2 displayUnplaced=false",
-        "protocol": "setupHeader(header_unplaced) drain",
-        "expect": "drained=0 (findPosition returns false, comment excised)"
-      },
-      {
-        "id": "dead_op_throw",
-        "setup": "op created at 0x6000 (in the PcodeOpTree) but never inserted into a block; warning comment at the same address",
-        "protocol": "setupFunctionList",
-        "expect": "LowlevelError/anyhow text 'Dead op reaching CommentSorter' (comment.cc:289/303)"
-      },
-      {
-        "id": "opless_placement",
-        "setup": "Funcdata with one empty block and zero ops; warning comment at 0x5500",
-        "protocol": "setupFunctionList; setupBlockList(block); setupOpList(NULL); drain",
-        "expect": "comment placed at block 0 order 0 (comment.cc:316-318) and drained"
-      },
-      {
-        "id": "pos_counter_lifecycle",
-        "setup": "13 ordered db comments; zerotype@0x3000 with type=0",
-        "protocol": "observed via the (order,pos) emission order of every walk",
-        "expect": "type-0 comment never placed nor counted; pos increments only on placement so header order follows db (addr,uniq) order"
-      }
-    ],
-    "sha256": "a4c37ac984d0f0df2fee00c4b78d7559b0f8fe867fed076c273e45498c6eb23d"
-  },
-  "observation_schema": {
-    "format": "38 fixed-order UTF-8 lines with final newline: one banner, then per-walk records (one line per emitted comment with type/emitted/text and per-walk n ordinal, one drained-count terminator per walk), the dead-op error line, and the op-less walk",
-    "placement_decisions": "Every findPosition branch is discriminated by which walk emits the comment and at which landmark: header-at-entry, op lower-bound containment, previous-op 0xffffffff tail, migrated backupOp, op-less (0,0), excised drop",
-    "iterator_state": "hasNext/getNext interleaving is observed as drained counts per landmark: successive setupOpList calls narrow opstop while start persists, so only comments between landmarks appear; setupOpList(NULL) flushes the block remainder through stop",
-    "lifecycle": "emitted=0 on every walked comment (setupFunctionList's setEmitted(false)); type numbers and texts are exact"
-  },
-  "decisive_semantics": {
-    "references_and_outputs": "MATCH: Subsort keys mutate in place with pos preserved across findPosition calls; commmap insert-or-assign under unique pos keys; dead-op LowlevelError text identical; the excised comment is absent from every walk. Residual: db-side setEmitted(false) mutation is not observable through Rugra's cloned Comments.",
-    "loop_bounds_traversal_order": "MATCH: setupFunctionList walks the database range for the function address in (addr, uniq) order over every comment regardless of the tp mask; findPosition probes the PcodeOpTree lower bound and, when applicable, its predecessor; all walks emit in (index, order, pos) order.",
-    "counters_and_accumulators": "MATCH: subsort.pos initialized to 0 once before the loop, incremented only for placed comments, persisting across iterations; per-walk n ordinals restart at 1; drained counts accumulate per setup* window.",
-    "sort_and_comparison_keys": "MATCH: Subsort orders by signed int4 index (-1 header before block indexes), then uint4 order, then uint4 pos; setupBlockList bounds [lower_bound((bl,0,0)), upper_bound((bl,MAX,MAX))]; setupOpList upper_bound((bl,order,MAX)); setupHeader bounds over (-1,headerType,*); lower/upper bounds reproduce std::map rank semantics via sorted-vector partition points."
-  },
-  "coverage": {
-    "header_walks": "MATCH",
-    "block_walk_interleaving": "MATCH",
-    "prev_op_tail_placement": "MATCH",
-    "migrated_backup_op": "MATCH",
-    "empty_block_drain": "MATCH",
-    "no_type_filter_at_setup": "MATCH",
-    "excised_without_display_unplaced": "MATCH",
-    "dead_op_throw": "MATCH",
-    "opless_placement": "MATCH",
-    "pos_counter_lifecycle": "MATCH"
-  },
-  "residual_todo_ids": [
-    "COMMENT-SORTER-ITERATORS-0001"
+ "schema_version": 2,
+ "fixture_id": "COMMENT-SORTER-ITERATORS-0001",
+ "projection_status": "MATCH",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
+ "status_note": "The 38-line covered projection byte-matches Ghidra 12.0.4's CommentSorter shared-iterator machinery: findPosition's eight placement decisions, setupFunctionList's no-type-filter/pos-counter/setEmitted(false) lifecycle, setupBlockList/setupOpList/setupHeader lower_bound/upper_bound windowing, and hasNext/getNext interleaved consumption across successive op landmarks. Overall remains MISMATCH for three representation residuals: Rugra has no BlockBasic cover RangeList (contains is projected from [start_addr, set_initial_range stop]; fixtures install covers explicitly as of BLOCK-STOPADDR-FIXTURE-REGRESSION-0001), the sorter clones placed Comments instead of holding database pointers (setEmitted(false) does not propagate into CommentDatabaseInternal). The printc-glue-snapshot residual is CLOSED: printc.rs consumers now drive the state machine directly (emit_comment_group covers the setupOpList(NULL) arm), integrated as c5e685c.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_base_commit": "8d59b7730472bde2147e9fdf28a494221c2f26c4",
+ "rugra_source": {
+  "base_src_tree": "593f652fa402b30eb3258b2b15b4a7c5a6ab0209",
+  "base_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "base_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "rust_overlay": "Archive Rugra base 8d59b7730472bde2147e9fdf28a494221c2f26c4 and overlay the owned src/comment.rs + src/block.rs candidates before the isolated offline build (block.rs carries the set_initial_range visibility the fixture's legal-cover construction needs, BLOCK-STOPADDR-FIXTURE-REGRESSION-0001)",
+  "base_commit": "8d59b7730472bde2147e9fdf28a494221c2f26c4"
+ },
+ "architecture": {
+  "id": "synthetic-le64-comment-sorter-fixture",
+  "endianness": "little",
+  "pointer_size": 8,
+  "spaces": "const=0, other=1, unique=2, ram=3, register=4, stack=5; byte addressed",
+  "type_factory": "one architecture-owned factory with canonical xunknown1/2/4/8; only needed to satisfy the Funcdata constructor"
+ },
+ "compiler_spec": {
+  "id": "fixture",
+  "prototype_xml": "<prototype name=\"fixture\" extrapop=\"0\"><input/><output/></prototype>",
+  "calling_convention": "empty input/output records; no effects, symbols, or injections"
+ },
+ "analysis_options": {
+  "api": "Direct production CommentSorter::setupFunctionList/setupBlockList/setupOpList/setupHeader and hasNext/getNext calls; no PrintC, Action, or Rule pipeline",
+  "funcdata": "One synthetic Funcdata per sorter run; five BlockBasic blocks (chain bb_a->bb_b->bb_c->bb_d->bb_e) whose reverse-post-order indexes come from the production BlockGraph::findSpanningTree port on both sides; eleven COPY ops created and inserted in one fixed mirrored order (creation order fixes SeqNum::uniq, insertion order fixes the BlockBasic::insert order ladder); two additional Funcdata runs for the dead-op and op-less cases",
+  "ir": "Ops carry addresses only; no Varnodes, inputs, or outputs. Block covers use Funcdata::setBasicBlockRange (C++) / BlockBasic::set_initial_range (Rugra, visibility per BLOCK-STOPADDR-FIXTURE-REGRESSION-0001) with the same endpoints on both sides, end == the last op's address; bb_c degenerates to a single-address range",
+  "normalization": "None. The emitted projection uses exact comment type numbers, emitted flags, texts, per-walk ordinals, and drained counts; no ID, order, or state normalization",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent",
+  "random_seed": "none; construction and walks are deterministic",
+  "error_injection": "one dead op (created but never block-inserted) whose findPosition probing raises the oracle LowlevelError text"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps(cases, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+  "cases": [
+   {
+    "id": "header_walks",
+    "setup": "displayUnplaced=true and =false sorters over one db",
+    "comments": "header@fad, warningheader@fad, warning@fad, user1@0x100a, user2@0x1013",
+    "protocol": "setupHeader(header_basic) drain; setupHeader(header_unplaced) drain",
+    "expect": "basic yields hdr-basic then warn-hdr in pos order both sorters; unplaced yields the excised user2 comment only when displayUnplaced=true"
+   },
+   {
+    "id": "block_walk_interleaving",
+    "setup": "bb_e [0x3000,0x3010] ops E@0x3000 F@0x3005 G@0x3010; header@0x3000, warning@0x3002, warning@0x3005, warning@0x3008",
+    "protocol": "setupBlockList(bb_e); setupOpList(E); drain; setupOpList(F); drain; setupOpList(G); drain; setupOpList(NULL); drain",
+    "expect": "hdr-away at E; between-ef+at-f at F; between-fg at G; nothing at NULL (start persists while opstop narrows)"
+   },
+   {
+    "id": "prev_op_tail_placement",
+    "setup": "comment@0x1008 inside bb_a [0x1000,0x100a]; lower bound lands on bb_b's op@0x1009 whose block excludes 0x1008",
+    "protocol": "setupBlockList(bb_a); setupOpList(op@0x1000); drain; setupOpList(op@0x100a); drain; setupOpList(NULL); drain",
+    "expect": "inline-entry (warning@fad, order of op@0x1000) then at-b (user1@0x100a) at op landmarks; tail-a only at the NULL landmark (order 0xffffffff sorts last)"
+   },
+   {
+    "id": "migrated_backup_op",
+    "setup": "ops M1@0x1015 M2@0x1012 parented by bb_d [0x2000,0x2005]; comment user2@0x1015",
+    "protocol": "setupBlockList(bb_d); landmarks M1, C@0x2000, D@0x2005, NULL",
+    "expect": "migrated hangs on M1 (exact-address backupOp whose own block excludes the address); mid-d (warning@0x2003) at D; nothing at C or NULL"
+   },
+   {
+    "id": "empty_block_drain",
+    "setup": "bb_c [0x1012,0x1012] with no ops",
+    "protocol": "setupBlockList(bb_c); setupOpList(NULL); drain",
+    "expect": "start==stop==opstop, drained=0"
+   },
+   {
+    "id": "no_type_filter_at_setup",
+    "setup": "tp mask = header|warning|warningheader; placed comment user1@0x100a outside the mask",
+    "protocol": "setupFunctionList then bb_a walks",
+    "expect": "user1 comment is placed and drained (Ghidra filters by type only at consumption, printc.cc:3238/3280)"
+   },
+   {
+    "id": "excised_without_display_unplaced",
+    "setup": "user2@0x1013 whose address no op block contains; sorter2 displayUnplaced=false",
+    "protocol": "setupHeader(header_unplaced) drain",
+    "expect": "drained=0 (findPosition returns false, comment excised)"
+   },
+   {
+    "id": "dead_op_throw",
+    "setup": "op created at 0x6000 (in the PcodeOpTree) but never inserted into a block; warning comment at the same address",
+    "protocol": "setupFunctionList",
+    "expect": "LowlevelError/anyhow text 'Dead op reaching CommentSorter' (comment.cc:289/303)"
+   },
+   {
+    "id": "opless_placement",
+    "setup": "Funcdata with one empty block and zero ops; warning comment at 0x5500",
+    "protocol": "setupFunctionList; setupBlockList(block); setupOpList(NULL); drain",
+    "expect": "comment placed at block 0 order 0 (comment.cc:316-318) and drained"
+   },
+   {
+    "id": "pos_counter_lifecycle",
+    "setup": "13 ordered db comments; zerotype@0x3000 with type=0",
+    "protocol": "observed via the (order,pos) emission order of every walk",
+    "expect": "type-0 comment never placed nor counted; pos increments only on placement so header order follows db (addr,uniq) order"
+   }
   ],
-  "comparand": {
-    "cpp_fixture_sha256": "a23be7e654bcea45359460f12e253ec3fba7409b6e80ede8869a74b12adac98e",
-    "rust_fixture_sha256": "094471779acedf18b3200bfd78e069845efe608042f9c7e629c99c87adc8ede5",
-    "comment_rs_sha256": "5e3e15b9fc14fb0a4b5fad04028aa14f4feb9c10b3acbce2950c26cd868affe3",
-    "runner_sha256": "1ca9d1296b2613e3e0e036a4074adc99f953ffebb70b914e1b447f4cea022fc4",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "expected_ghidra_stdout_sha256": "072c03b2bfae30df59c0b71add9357a88681f6a487fb743b716b915b5512a5e1",
-    "expected_rugra_stdout_sha256": "072c03b2bfae30df59c0b71add9357a88681f6a487fb743b716b915b5512a5e1",
-    "host_cxx": "g++ (GCC) 16.2.1 20260810",
-    "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-    "host_cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-    "block_rs_sha256": "b70d0e9b5ee07ae5f982cde8f4246bd7b85dcb3069a971c35ae5bf4b321aff82"
-  },
-  "build": {
-    "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler; fixture links libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + whole-archive libdecomp.a",
-    "expected_stdout_lines": 38
-  }
+  "sha256": "a4c37ac984d0f0df2fee00c4b78d7559b0f8fe867fed076c273e45498c6eb23d"
+ },
+ "observation_schema": {
+  "format": "38 fixed-order UTF-8 lines with final newline: one banner, then per-walk records (one line per emitted comment with type/emitted/text and per-walk n ordinal, one drained-count terminator per walk), the dead-op error line, and the op-less walk",
+  "placement_decisions": "Every findPosition branch is discriminated by which walk emits the comment and at which landmark: header-at-entry, op lower-bound containment, previous-op 0xffffffff tail, migrated backupOp, op-less (0,0), excised drop",
+  "iterator_state": "hasNext/getNext interleaving is observed as drained counts per landmark: successive setupOpList calls narrow opstop while start persists, so only comments between landmarks appear; setupOpList(NULL) flushes the block remainder through stop",
+  "lifecycle": "emitted=0 on every walked comment (setupFunctionList's setEmitted(false)); type numbers and texts are exact"
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "MATCH: Subsort keys mutate in place with pos preserved across findPosition calls; commmap insert-or-assign under unique pos keys; dead-op LowlevelError text identical; the excised comment is absent from every walk. Residual: db-side setEmitted(false) mutation is not observable through Rugra's cloned Comments.",
+  "loop_bounds_traversal_order": "MATCH: setupFunctionList walks the database range for the function address in (addr, uniq) order over every comment regardless of the tp mask; findPosition probes the PcodeOpTree lower bound and, when applicable, its predecessor; all walks emit in (index, order, pos) order.",
+  "counters_and_accumulators": "MATCH: subsort.pos initialized to 0 once before the loop, incremented only for placed comments, persisting across iterations; per-walk n ordinals restart at 1; drained counts accumulate per setup* window.",
+  "sort_and_comparison_keys": "MATCH: Subsort orders by signed int4 index (-1 header before block indexes), then uint4 order, then uint4 pos; setupBlockList bounds [lower_bound((bl,0,0)), upper_bound((bl,MAX,MAX))]; setupOpList upper_bound((bl,order,MAX)); setupHeader bounds over (-1,headerType,*); lower/upper bounds reproduce std::map rank semantics via sorted-vector partition points."
+ },
+ "coverage": {
+  "header_walks": "MATCH",
+  "block_walk_interleaving": "MATCH",
+  "prev_op_tail_placement": "MATCH",
+  "migrated_backup_op": "MATCH",
+  "empty_block_drain": "MATCH",
+  "no_type_filter_at_setup": "MATCH",
+  "excised_without_display_unplaced": "MATCH",
+  "dead_op_throw": "MATCH",
+  "opless_placement": "MATCH",
+  "pos_counter_lifecycle": "MATCH"
+ },
+ "residual_todo_ids": [
+  "COMMENT-SORTER-ITERATORS-0001"
+ ],
+ "comparand": {
+  "cpp_fixture_sha256": "a23be7e654bcea45359460f12e253ec3fba7409b6e80ede8869a74b12adac98e",
+  "rust_fixture_sha256": "094471779acedf18b3200bfd78e069845efe608042f9c7e629c99c87adc8ede5",
+  "comment_rs_sha256": "5e3e15b9fc14fb0a4b5fad04028aa14f4feb9c10b3acbce2950c26cd868affe3",
+  "runner_sha256": "1ca9d1296b2613e3e0e036a4074adc99f953ffebb70b914e1b447f4cea022fc4",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "expected_ghidra_stdout_sha256": "072c03b2bfae30df59c0b71add9357a88681f6a487fb743b716b915b5512a5e1",
+  "expected_rugra_stdout_sha256": "072c03b2bfae30df59c0b71add9357a88681f6a487fb743b716b915b5512a5e1",
+  "host_cxx": "g++ (GCC) 16.2.1 20260810",
+  "host_rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+  "host_cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+  "block_rs_sha256": "b70d0e9b5ee07ae5f982cde8f4246bd7b85dcb3069a971c35ae5bf4b321aff82"
+ },
+ "build": {
+  "ghidra_build": "Archive the locked decompiler C++ tree and rebuild libdecomp.a with the recorded host compiler; fixture links libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + whole-archive libdecomp.a",
+  "expected_stdout_lines": 38
+ }
 }

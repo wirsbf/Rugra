@@ -130,5 +130,5 @@
  },
  "expected_stdout_sha256": "bd259cea5d4792e837aecd47c31b1889b52fd6a71efbb1c7b5ae1b9c70920d40",
  "expected_exit_code": 0,
- "overall_status": "MATCH:  spacebase-registry observations (stack contain link + spacebase record, 8 rule-call cases incl. hit/miss families) are byte-identical under the locked oracle; ARCH-0001 enum-space stand-in remains a known mismatch at the full-state level and CALLSPECS-0001/SCOPELOCAL-0001 tails remain untested"
+ "overall_status": "MISMATCH: spacebase-registry observations (stack contain link + spacebase record, 8 rule-call cases incl. hit/miss families) are byte-identical under the locked oracle; ARCH-0001 enum-space stand-in remains a known mismatch at the full-state level and CALLSPECS-0001/SCOPELOCAL-0001 tails remain untested"
 }

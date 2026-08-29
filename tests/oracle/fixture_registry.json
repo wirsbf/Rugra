@@ -816,7 +816,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/setcasts_output_bank_1204.metadata.json",
     "inputs": {
@@ -857,7 +857,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/block_index_assign_1204.metadata.json",
     "inputs": {
@@ -1011,7 +1011,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/sleigh_flow_relative_1204.metadata.json",
     "inputs": {
@@ -1045,7 +1045,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "MISMATCH",
    "cache": {
     "metadata": "tests/oracle/action_merge_order_1204.metadata.json",
     "inputs": {
@@ -1613,7 +1613,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/merge_gates_1204.metadata.json",
     "inputs": {
@@ -1646,7 +1646,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/linksymbol_typed_1204.metadata.json",
     "inputs": {
@@ -1681,7 +1681,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/printc_symbol_decl_1204.metadata.json",
     "inputs": {
@@ -1817,7 +1817,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/scope_sync_1204.metadata.json",
     "inputs": {
@@ -2235,7 +2235,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/actiondw_copydef_1204.metadata.json",
     "inputs": {
@@ -2494,7 +2494,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/translate_docstore_1204.metadata.json",
     "inputs": {
@@ -2595,7 +2595,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "MISMATCH",
    "cache": {
     "metadata": "tests/oracle/cover_twopiece_1204.metadata.json",
     "inputs": {
@@ -2735,7 +2735,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/space_printraw_wordsize_1204.metadata.json",
     "inputs": {
@@ -2767,7 +2767,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/varnode_copy_symbol_1204.metadata.json",
     "inputs": {
@@ -2834,7 +2834,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "MISMATCH",
    "cache": {
     "metadata": "tests/oracle/cspec_typeorg_state_1204.metadata.json",
     "inputs": {
@@ -2897,7 +2897,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/space_printraw_special_1204.metadata.json",
     "inputs": {
@@ -2928,7 +2928,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "MISMATCH",
    "cache": {
     "metadata": "tests/oracle/arch_context_tracked_1204.metadata.json",
     "inputs": {
@@ -2960,7 +2960,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/funcdata_assign_high_1204.metadata.json",
     "inputs": {
@@ -2992,7 +2992,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/varnode_add_descend_1204.metadata.json",
     "inputs": {
@@ -3024,7 +3024,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "MISMATCH",
    "cache": {
     "metadata": "tests/oracle/printc_subpiece_fieldextract_1204.metadata.json",
     "inputs": {
@@ -3126,7 +3126,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "MISMATCH",
    "cache": {
     "metadata": "tests/oracle/rule_store_varnode_spacebase_1204.metadata.json",
     "inputs": {
@@ -3248,7 +3248,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/typefactory_needsres_1204.metadata.json",
     "inputs": {
@@ -3280,7 +3280,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/block_domroot_1204.metadata.json",
     "inputs": {
@@ -3530,7 +3530,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/rangemap_common_refinement_1204.metadata.json",
     "inputs": {
@@ -3780,7 +3780,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/block_findirreducible_1204.metadata.json",
     "inputs": {
@@ -3818,7 +3818,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/lanedivide_infra_1204.metadata.json",
     "inputs": {
@@ -4053,7 +4053,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/pipeline_tree_1204.metadata.json",
     "inputs": {
@@ -4091,7 +4091,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/stackstall_count_1204.metadata.json",
     "inputs": {
@@ -4624,7 +4624,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/pool_purity_1204.metadata.json",
     "inputs": {
@@ -4734,7 +4734,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "MISMATCH",
    "cache": {
     "metadata": "tests/oracle/block_calcloop_1204.metadata.json",
     "inputs": {
@@ -5048,7 +5048,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "MISMATCH",
    "cache": {
     "metadata": "tests/oracle/funcdata_calcnzm_1204.metadata.json",
     "inputs": {
@@ -5241,7 +5241,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/flow_inject_1204.metadata.json",
     "inputs": {
@@ -5776,7 +5776,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/callother_userop_closure_1204.metadata.json",
     "tools": {
@@ -5868,7 +5868,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/cptr_b_1204.metadata.json",
     "tools": {
@@ -5928,7 +5928,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/exactpiece_callers_1204.metadata.json",
     "tools": {
@@ -5966,7 +5966,8 @@
     },
     "inputs": {
      "fixture_source_1": "tests/oracle/flow_sharedreturn_process_1204.cc",
-     "fixture_source_2": "tests/oracle/flow_sharedreturn_process_1204.rs"
+     "fixture_source_2": "tests/oracle/flow_sharedreturn_process_1204.rs",
+     "shared_corpus_metadata": "tests/oracle/program_flow_metadata_1204.metadata.json"
     }
    },
    "impact": {
@@ -6200,7 +6201,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/funcdata_mapglobals_maxvn_1204.metadata.json",
     "tools": {
@@ -6230,7 +6231,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/gapd_counters_1204.metadata.json",
     "tools": {
@@ -6364,7 +6365,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/infertypes_callinput_local_1204.metadata.json",
     "tools": {
@@ -6546,7 +6547,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/merge_overlaploc_1204.metadata.json",
     "tools": {
@@ -6608,7 +6609,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/options_splitdatatype_1204.metadata.json",
     "tools": {
@@ -6704,7 +6705,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "MISMATCH",
    "cache": {
     "metadata": "tests/oracle/printc_ptrconst_1204.metadata.json",
     "tools": {
@@ -6828,7 +6829,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "MISMATCH",
    "cache": {
     "metadata": "tests/oracle/ptrarith_addtree_1204.metadata.json",
     "tools": {
@@ -6858,7 +6859,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/returnfold_gapa_1204.metadata.json",
     "tools": {
@@ -6888,7 +6889,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/returnfold_gapb_1204.metadata.json",
     "tools": {
@@ -6918,7 +6919,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/returnfold_upstream_1204.metadata.json",
     "tools": {
@@ -6978,7 +6979,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/splitdatatype_exactpiece_1204.metadata.json",
     "tools": {
@@ -7008,7 +7009,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "MISMATCH",
    "cache": {
     "metadata": "tests/oracle/stop_ptrsub_wire_1204.metadata.json",
     "tools": {
@@ -7038,7 +7039,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "MISMATCH",
    "cache": {
     "metadata": "tests/oracle/stringmanager_core_1204.metadata.json",
     "tools": {
@@ -7188,7 +7189,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "UNTESTED",
    "cache": {
     "metadata": "tests/oracle/typeop_localbase_defaults_1204.metadata.json",
     "tools": {
@@ -7260,7 +7261,7 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH",
+   "evidence_status": "MISMATCH",
    "cache": {
     "metadata": "tests/oracle/varnode_localtype_res_1204.metadata.json",
     "tools": {

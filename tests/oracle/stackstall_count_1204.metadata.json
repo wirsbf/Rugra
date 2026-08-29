@@ -1,88 +1,101 @@
 {
-  "schema_version": 2,
-  "fixture_id": "PIPE-STACKSTALL-COUNT-0001",
-  "status_note": "Stackstall fixed-point count feedback projection MATCH: the locked Ghidra 12.0.4 oracle (derived tree via universalAction -> resetDefaults -> getCurrent, stackstall addressed by its ':' tree path) and Rugra's real default pipeline produce byte-identical per-pass observations of the group's external perform mirror (action.cc:303-350) — group lcount/count, every child's status/count/lcount/count_tests/count_apply per pass, the pre/post IR projections of both runs, and the post-reset second fixed point (3 passes then 1 pass, stackptrflow re-analysis tests 3->4). Registered non-observed domains remain in coverage as UNTESTED and are bound to their residual TODO ids.",
-  "decisive_semantics": {
-    "reference_output_parameters": "The observation reads the derived stackstall ActionGroup and its six children through the Action executor members (count/lcount/count_tests/count_apply/status, action.hh:80-87) plus the IR (PcodeOp opcode/SeqNum order/dead flag, Varnode in/wr/spacebase flags); ActionGroup::apply mutates the group's count (action.cc:515-516) and drives each child's perform.",
-    "loop_bounds_traversal_order": "The external mirror walks action.cc:303-350's do-while exactly: per pass one ActionGroup::apply sweeping children in list order (vector begin()->end(), action.cc:513), lcount snapshotted before apply (cc:314), loop continues only while lcount<count AND rule_repeatapply (cc:350); the group-level count_tests/count_apply accumulate across the two runs exactly as the persistent Action members would.",
-    "counter_accumulator_lifecycle": "count resets to 0 at each run's status_start visit (cc:306), accumulates children's perform returns within a pass and across passes of one run; count_tests increments once per run (cc:311), count_apply increments when lcount<count (cc:327-329); ActionGroup::reset (action.cc:408-415) resets child status but NOT the counters, and ActionStackPtrFlow::reset clears analysis_finished (coreaction.hh:99) so run 2 re-analyzes.",
-    "sorting_comparison_keys": "No sorting; child order is the registration order of universalAction (coreaction.cc:5511-5656); IR projection order is op/varnode creation order; the fixed-point exit test is the scalar lcount<count comparison."
+ "schema_version": 2,
+ "fixture_id": "PIPE-STACKSTALL-COUNT-0001",
+ "status_note": "Stackstall fixed-point count feedback projection MATCH: the locked Ghidra 12.0.4 oracle (derived tree via universalAction -> resetDefaults -> getCurrent, stackstall addressed by its ':' tree path) and Rugra's real default pipeline produce byte-identical per-pass observations of the group's external perform mirror (action.cc:303-350) \u2014 group lcount/count, every child's status/count/lcount/count_tests/count_apply per pass, the pre/post IR projections of both runs, and the post-reset second fixed point (3 passes then 1 pass, stackptrflow re-analysis tests 3->4). Registered non-observed domains remain in coverage as UNTESTED and are bound to their residual TODO ids.",
+ "decisive_semantics": {
+  "reference_output_parameters": "The observation reads the derived stackstall ActionGroup and its six children through the Action executor members (count/lcount/count_tests/count_apply/status, action.hh:80-87) plus the IR (PcodeOp opcode/SeqNum order/dead flag, Varnode in/wr/spacebase flags); ActionGroup::apply mutates the group's count (action.cc:515-516) and drives each child's perform.",
+  "loop_bounds_traversal_order": "The external mirror walks action.cc:303-350's do-while exactly: per pass one ActionGroup::apply sweeping children in list order (vector begin()->end(), action.cc:513), lcount snapshotted before apply (cc:314), loop continues only while lcount<count AND rule_repeatapply (cc:350); the group-level count_tests/count_apply accumulate across the two runs exactly as the persistent Action members would.",
+  "counter_accumulator_lifecycle": "count resets to 0 at each run's status_start visit (cc:306), accumulates children's perform returns within a pass and across passes of one run; count_tests increments once per run (cc:311), count_apply increments when lcount<count (cc:327-329); ActionGroup::reset (action.cc:408-415) resets child status but NOT the counters, and ActionStackPtrFlow::reset clears analysis_finished (coreaction.hh:99) so run 2 re-analyzes.",
+  "sorting_comparison_keys": "No sorting; child order is the registration order of universalAction (coreaction.cc:5511-5656); IR projection order is op/varnode creation order; the fixed-point exit test is the scalar lcount<count comparison."
+ },
+ "oracle": {
+  "repository": "ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "fixture:universal-action-database",
+ "compiler_spec": {
+  "id": "none",
+  "model": "fixture",
+  "extrapop": 0
+ },
+ "analysis_options": {
+  "reset_defaults": true,
+  "root": "decompile",
+  "group": "fullloop:mainloop:stackstall",
+  "extra_pool_rules": []
+ },
+ "rugra_source": {
+  "base_commit": "b40a31549d084d1036ceaae07ddb14f6fe4acd70",
+  "base_tree": "6f7f2d6d3594388c9191a6c9d33cf14a7eadc190",
+  "base_src_tree": "acbedba0ba746393cc5efeaaad793ff5aef8e140",
+  "base_action_blob": "e6aa9b91438a4069b53978f4502f851292ac77d3",
+  "base_coreaction_blob": "446940c2ac827796b402f6c17cab33abcc9be71c",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "577bb5aafe32b4086a317768dd6dea147889a30fc8623fec5818062086419d3a",
+  "rust_fixture_sha256": "7714ee78e9b6648aa9c97875e2c472a99a72286e9e76293ceed3d1a585d5f39b",
+  "action_overlay_sha256": "f8d932b75a7cc84747b2e1e7f4c8bdfceaffcbc5ac8a187dcba24b2447c854e9",
+  "coreaction_overlay_sha256": "3cec83f038c9dccb8e06afda0ccd9ebd80f859f4397ff9027e25937e05f0c310",
+  "runner_sha256": "bcb1279ebada21ab484ccdd1d3fc0911494685cad464a351da1c9d3b4c3a59ed"
+ },
+ "input_manifest": {
+  "inputs": {
+   "binary": null,
+   "sleigh_specs": null,
+   "functions": null,
+   "ghidra_fixture_architecture": "FixtureArchitecture/FixtureTranslate (spaces: constant/other/unique/ram/register/stack/join/iop; proto model extrapop=0)",
+   "rugra_entry": "build_default_pipeline -> stackstall subtree",
+   "ir": "3 blocks: b0 m1=ME(x,y)@start,p1=ADD(sp,16)@start,m2=ME(x,y)@start; b1 st=STORE(sp+16,0x10),ld=LOAD(sp+16),cadd=ADD(sp,loaded)->reg0; b2 m3=ME(u,v),m4=ME(u,v); preconditions heritage.buildInfoList + fd.spacebase()"
   },
-  "oracle": {
-    "repository": "ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  "sha256": "30fdd57015f381dfbfa146c46569197d1da7563440cf115414b2a5c3a28c7d39"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "0a9439b3b02b7c9d47a1e6b8cb68fd252dc1ff19185219f23c9df57d83c24f95",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "0a9439b3b02b7c9d47a1e6b8cb68fd252dc1ff19185219f23c9df57d83c24f95",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "diff_exit_code": 0
+ },
+ "observation_schema": {
+  "header": "schema=1|fixture=PIPE-STACKSTALL-COUNT-0001|oracle=<commit>",
+  "ir": "pre|ops=[<name>=<opname>/<seqorder>,dead=<0|1>...]|vns=[<name>:in=..,wr=..,sb=.....]",
+  "pass": "run=<n>|pass=<p>|lcount=<l>|count=<c>|res=<r>",
+  "child": "run=<n>|pass=<p>|child=<name>|status=<s>|count=<c>|lcount=<l>|tests=<t>|apply=<a>",
+  "converged": "run=<n>|converged_passes=<p>|final_count=<c>|tests=<t>|apply=<a>"
+ },
+ "coverage": {
+  "stackstall_fixed_point_projection": {
+   "status": "MATCH",
+   "covers": "Run 1: pass 1 reports multicse count=1 (m4 destroyed via totalReplace, coreaction.cc:873), shadowvar count=1 (m2 rewritten to COPY of m1's output, cc:945), stackptrflow count=1 (LOAD clog repaired to COPY of the stored constant via repair/adjustLoad, cc:492), group count=3; pass 2 oppool1 count=1 on the rewritten IR, group count=4; pass 3 clean, fixed point at 3 passes. Post-run IR identical (m2=COPY, ld=COPY, m4 dead). Reset then run 2: one clean pass, group count 0, stackptrflow count_tests 3->4 proving analysis_finished was cleared by reset (coreaction.hh:99) and re-set on the clean pass (cc:496) after the extrapop-known analyzeExtraPop early-return (cc:267).",
+   "residual_todo_ids": []
   },
-  "architecture": "fixture:universal-action-database",
-  "compiler_spec": {"id": "none", "model": "fixture", "extrapop": 0},
-  "analysis_options": {"reset_defaults": true, "root": "decompile", "group": "fullloop:mainloop:stackstall", "extra_pool_rules": []},
-  "rugra_source": {
-    "base_commit": "b40a31549d084d1036ceaae07ddb14f6fe4acd70",
-    "base_tree": "6f7f2d6d3594388c9191a6c9d33cf14a7eadc190",
-    "base_src_tree": "acbedba0ba746393cc5efeaaad793ff5aef8e140",
-    "base_action_blob": "e6aa9b91438a4069b53978f4502f851292ac77d3",
-    "base_coreaction_blob": "446940c2ac827796b402f6c17cab33abcc9be71c",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+  "deindirect_change_branch": {
+   "status": "UNTESTED",
+   "covers": "ActionDeindirect's change branch (CALLIND with persist/externalref input resolved through queryExternalRefFunction, coreaction.cc:1219-1240) is not exercised by this IR; only its zero-count channel is observed.",
+   "residual_todo_ids": [
+    "PIPE-DEINDIRECT-CHANGE-0001"
+   ]
   },
-  "comparand": {
-    "cpp_fixture_sha256": "577bb5aafe32b4086a317768dd6dea147889a30fc8623fec5818062086419d3a",
-    "rust_fixture_sha256": "7714ee78e9b6648aa9c97875e2c472a99a72286e9e76293ceed3d1a585d5f39b",
-    "action_overlay_sha256": "f8d932b75a7cc84747b2e1e7f4c8bdfceaffcbc5ac8a187dcba24b2447c854e9",
-    "coreaction_overlay_sha256": "3cec83f038c9dccb8e06afda0ccd9ebd80f859f4397ff9027e25937e05f0c310",
-    "runner_sha256": "bcb1279ebada21ab484ccdd1d3fc0911494685cad464a351da1c9d3b4c3a59ed"
-  },
-  "input_manifest": {
-    "inputs": {
-      "binary": null,
-      "sleigh_specs": null,
-      "functions": null,
-      "ghidra_fixture_architecture": "FixtureArchitecture/FixtureTranslate (spaces: constant/other/unique/ram/register/stack/join/iop; proto model extrapop=0)",
-      "rugra_entry": "build_default_pipeline -> stackstall subtree",
-      "ir": "3 blocks: b0 m1=ME(x,y)@start,p1=ADD(sp,16)@start,m2=ME(x,y)@start; b1 st=STORE(sp+16,0x10),ld=LOAD(sp+16),cadd=ADD(sp,loaded)->reg0; b2 m3=ME(u,v),m4=ME(u,v); preconditions heritage.buildInfoList + fd.spacebase()"
-    },
-    "sha256": "30fdd57015f381dfbfa146c46569197d1da7563440cf115414b2a5c3a28c7d39"
-  },
-  "expected_results": {
-    "ghidra_stdout_sha256": "0a9439b3b02b7c9d47a1e6b8cb68fd252dc1ff19185219f23c9df57d83c24f95",
-    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "0a9439b3b02b7c9d47a1e6b8cb68fd252dc1ff19185219f23c9df57d83c24f95",
-    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "ghidra_exit_code": 0,
-    "rugra_exit_code": 0,
-    "diff_exit_code": 0
-  },
-  "observation_schema": {
-    "header": "schema=1|fixture=PIPE-STACKSTALL-COUNT-0001|oracle=<commit>",
-    "ir": "pre|ops=[<name>=<opname>/<seqorder>,dead=<0|1>...]|vns=[<name>:in=..,wr=..,sb=.....]",
-    "pass": "run=<n>|pass=<p>|lcount=<l>|count=<c>|res=<r>",
-    "child": "run=<n>|pass=<p>|child=<name>|status=<s>|count=<c>|lcount=<l>|tests=<t>|apply=<a>",
-    "converged": "run=<n>|converged_passes=<p>|final_count=<c>|tests=<t>|apply=<a>"
-  },
-  "coverage": {
-    "stackstall_fixed_point_projection": {
-      "status": "MATCH",
-      "covers": "Run 1: pass 1 reports multicse count=1 (m4 destroyed via totalReplace, coreaction.cc:873), shadowvar count=1 (m2 rewritten to COPY of m1's output, cc:945), stackptrflow count=1 (LOAD clog repaired to COPY of the stored constant via repair/adjustLoad, cc:492), group count=3; pass 2 oppool1 count=1 on the rewritten IR, group count=4; pass 3 clean, fixed point at 3 passes. Post-run IR identical (m2=COPY, ld=COPY, m4 dead). Reset then run 2: one clean pass, group count 0, stackptrflow count_tests 3->4 proving analysis_finished was cleared by reset (coreaction.hh:99) and re-set on the clean pass (cc:496) after the extrapop-known analyzeExtraPop early-return (cc:267).",
-      "residual_todo_ids": []
-    },
-    "deindirect_change_branch": {
-      "status": "UNTESTED",
-      "covers": "ActionDeindirect's change branch (CALLIND with persist/externalref input resolved through queryExternalRefFunction, coreaction.cc:1219-1240) is not exercised by this IR; only its zero-count channel is observed.",
-      "residual_todo_ids": ["PIPE-DEINDIRECT-CHANGE-0001"]
-    },
-    "analyze_extrapop_solver_writeback": {
-      "status": "UNTESTED",
-      "covers": "The unknown-extrapop StackSolver path (analyzeExtraPop coreaction.cc:269-316, setEffectiveExtraPop + INT_ADD reconstruction) is elided on both sides by the extrapop-known guard; Rugra's analyze_extra_pop counts solutions but its callspec write-back is unwired.",
-      "residual_todo_ids": ["PIPE-STACKSOLVER-WRITEBACK-0001"]
-    }
-  },
-  "residual_todo_ids": [
-    "PIPE-DEINDIRECT-CHANGE-0001",
+  "analyze_extrapop_solver_writeback": {
+   "status": "UNTESTED",
+   "covers": "The unknown-extrapop StackSolver path (analyzeExtraPop coreaction.cc:269-316, setEffectiveExtraPop + INT_ADD reconstruction) is elided on both sides by the extrapop-known guard; Rugra's analyze_extra_pop counts solutions but its callspec write-back is unwired.",
+   "residual_todo_ids": [
     "PIPE-STACKSOLVER-WRITEBACK-0001"
-  ],
-  "overall_status": "MATCH"
+   ]
+  }
+ },
+ "residual_todo_ids": [
+  "PIPE-DEINDIRECT-CHANGE-0001",
+  "PIPE-STACKSOLVER-WRITEBACK-0001"
+ ],
+ "overall_status": "UNTESTED: (B2 canonicalization)"
 }

@@ -8,7 +8,7 @@
   "boundary": "production ActionHeritage::apply (coreaction.hh:284-290) and canonical Funcdata::opHeritage -> Heritage::heritage single pass per call",
   "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases"
  },
- "overall_status": "UNTESTED:  (B2 migration of partial match state) covered-callguard2-projection-match",
+ "overall_status": "UNTESTED: (B2 migration of partial match state) covered-callguard2-projection-match",
  "covered_projection_status": "MATCH",
  "expected_stdout_sha256": "da554d46850dfd73efbf1b6c5c569b5a47b9eedd661ade0a090d1f6f05597ffd",
  "expected_exit_code": 0,

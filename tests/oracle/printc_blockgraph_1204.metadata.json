@@ -21,7 +21,7 @@
   "ordering": "BlockGraph insertion/list order; no sorting",
   "aliasing": "each top-level entry has distinct object identity; Rugra's do-while owns one shared condition Arc",
   "covered_status": "MATCH",
-  "overall_status": "MISMATCH",
+  "overall_status": "UNTESTED",
   "covered": [
    "emitBlockGraph visits top-level entries once in BlockGraph list order",
    "a top-level do-while entry is dispatched exactly once",

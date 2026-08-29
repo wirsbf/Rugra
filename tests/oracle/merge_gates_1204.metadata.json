@@ -1,72 +1,72 @@
 {
-  "schema": 2,
-  "fixture_id": "MERGE-PREEXISTING-GATES-0001",
-  "overall_status": "MATCH",
-  "status_note": "All 14 projected lines across four cases byte-match the locked oracle (both sides sha256 9878946db936411709c421eb47580e3f356f81f6e627c42c8b07fddb2f4c9b17). The four pre-existing gate gaps are pinned end to end; the fifth (merge_highs (Some,Some) piece arm) is Ghidra-side unreachable and recorded as NO_ORACLE with debug_assert + conservative skip in Rust.",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
-  },
-  "rugra_base_commit": "b96e6f957dda722b6c4efa1d53db86efacccbac1",
-  "architecture": "synthetic little-endian 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; byte-addressed spaces",
-  "compiler_spec": "synthetic prototype named fixture, extrapop=0, empty input/output, no effect records, no symbols (case multientry_gate adds one two-entry local Symbol 'multi')",
-  "analysis_options": {
-    "entrypoint": "production Merge-family entries on one Funcdata per case: Ghidra fd.getMerge().{mergeAddrTied,groupPartials,mergeMarker,mergeMultiEntry,mergeOpcode(CPUI_COPY),processCopyTrims,mergeAdjacent}; Rust fresh Merge::new() per Action calling the same entry points, cross-Action channels round-tripping through Funcdata::merge_state; case graphs set type locks via Varnode::updateType(ct,true,true) / v_type+TYPELOCK flag, the INDIRECT output via setAddrForce, and diamond immediate dominators explicitly (production computes them in BlockGraph::buildDomTree)",
-    "premise": "covers allocated at setHighLevel exactly as Funcdata::assignHigh does; the fixture never pre-installs covers; trim/dominant uniques get Highs exactly as Ghidra Funcdata::newUnique's assignHigh (funcdata_varnode.cc:89) — Rust wires them via Merge::wire_unique_high",
-    "normalization": "unique-space Varnode offsets are allocator state and print as 'u' in the ops projection; everything else is byte-diffed and both stderr streams must be empty"
-  },
-  "input_manifest": {
-    "canonicalization": "UTF-8 JSON array, compact separators, ensure_ascii=false",
-    "cases": [
-      "case indirect_addrforce: single block b0; op1 A=reg:0x10 COPY k0x51; opE E=reg:0x30 LOAD(k3,k0x90); indop I=reg:0x20 INDIRECT(A,iop(opE)) inserted BEFORE opE (newIndirectOp, funcdata_op.cc:696) with I flagged addrforce; R=reg:0x40 INT_ADD(A,k1) keeps A live past the INDIRECT so the first merge(in_high,out_high) fails the cover test; stages assignhigh + mergerequired (mergeAddrTied+groupPartials+mergeMarker) drive mergeIndirect: isAddrForce gate (:850), INPUT-surviving merge attempts (:857/:865/:879), snipOutputInterference finds no interference (collectInputs walks previousOp-INDIRECT chain, merge.cc:783-802), so the allocateCopyTrim fallback snips the INDIRECT input (:871-877) and re-merges — projection: trim COPY before indop, indop.in0=unique, I.high instances [trimUnique:grp0, I:grp0], A stays separate",
-      "case dominant_copy: diamond b0->{b1,b2}->b3 with explicit immed_dom b1/b2/b3->b0; V=reg:0x10 COPY k0x61 typelocked int4; O=reg:0x20 MULTIEQUAL(V,V) typelocked uint4 in b3; stages assignhigh, mergerequired, mergecopy, dominantcopy, mergeadjacent — mergerequired phase-1 trims both ME slots (trimOpInput at end of each in-block b1/b2 via allocateCopyTrim), phase-3 merges O/t0/t1 into one high; mergecopy skips the trims (mergeTestRequired typelock conflict); dominantcopy runs processCopyTrims -> findAllIntoCopies -> buildDominantCopy with domCopyIsNew (dominant COPY allocated at end of b0, T0/T1 destroyed, ME reads (u,u)) closing with the direct null-testCache speculative HighVariable::merge at merge.cc:1236 — pinned by the absorbed unique's mergeGroup class 1 (O.high shape [def COPY:1 / def MULTIEQUAL:0])",
-      "case multientry_gate: b0; M1=unique:0x100 LOAD(k3,k0x1000) typelocked int8; M2=unique:0x200 LOAD(k3,k0x2000) typelocked uint8; one Symbol 'multi' with two whole-size entries at the varnode storages (C++ ScopeLocal addSymbol+addMapPoint with each def op address as use point; Rust SymbolEntry::new_static mapentry back-pointers); stage multientry drives mergeMultiEntry — the mergeTestRequired gate at :936 fails on the typelock conflict, symbol setMergeProblems (dispflags merge_problems=32), M2's high setUnmerged, warningHeader emits 'Unable to merge symbol: multi -- Some merges are forbidden' (read back from CommentDatabaseInternal both sides)",
-      "case cross_space_order: b0; V=reg:0x10 COPY k0x71; T=unique:0x5000 COPY(V) — unique offset LARGER than the register offset to prove space-major ordering; stage cmp projects raw compareJustLoc booleans (T<V=1, V<T=0, V<V=0), stages assignhigh+mergecopy merge V/T (same type/size, boundary-only covers) and the merged HighVariable instance order [T,V] (unique index 2 before register index 4) exercises compareJustLoc inside mergeInternal's std::merge (variable.cc:657)",
-      "not drivable at oracle level: merge_highs (Some,Some) piece arm — Ghidra throws on speculative ('Trying speculatively merge variables in separate groups', variable.cc:701), unreachable through Merge::merge callers because mergeTestAdjacent (merge.cc:208-209) rejects both-piece candidates, and buildDominantCopy's direct call passes a freshly allocated unique with no piece; the non-speculative mergeGroups path (variable.cc:702-711) additionally requires VariablePiece groups that this pipeline state never forms (groupPartials no-op)",
-      "Action sequence per case mirrors the universal tree order (coreaction.cc:5717-5727): assignhigh=setHighLevel; mergerequired=mergeAddrTied+groupPartials+mergeMarker; multientry=mergeMultiEntry; mergecopy=mergeOpcode(CPUI_COPY); dominantcopy=processCopyTrims; mergeadjacent=mergeAdjacent; Ghidra drives all stages through the one persistent fd.getMerge() object, Rust through fresh Merge::new() per Action with channels round-tripping via Funcdata::merge_state",
-      "projections per stage: named instances, pairwise same_high booleans, per-Varnode mergeGroup, per-block op dump 'opcode(in,...)->out' with constants 'k<val>', iop annotation 'iop', unique-space varnodes normalized to 'u' (allocator offsets removed), and per-instance HighVariable shape 'def=opcode:mergegroup' in storage order"
-    ],
-    "sha256": "8958310a874a208579d5e27af0e3b4bd04ff7cf5087ebae3018161ce5939c346"
-  },
-  "decisive_semantics": {
-    "references_and_outputs": "MATCH: the IR-shape projection observes every data-flow rewrite the gates perform — the INDIRECT trim COPY insertion+redirect (merge.cc:871-877), the phase-1 MULTIEQUAL slot trims at the in-block ends (:706-711), the dominant-COPY allocation/totalReplace/opDestroy cycle (:1167-1233) and the multientry setMergeProblems/setUnmerged flag writes (:937-944) read back from the live objects",
-    "loop_bounds_and_order": "MATCH: mergeMarker walks the alive op list in order (merge.cc:894); mergeOpcode blocks in index order, ops in insertion order (:335-337); mergeMultiEntry iterates symbols in SymbolNameTree (name,nameDedup) order (:911) and mergeList per SymbolEntry (:920-928); collectInputs walks the previousOp chain breaking at the first non-INDIRECT (:798-801); snipOutputInterference sorts correctable by HighVariable pointer (compareByHigh, expression.hh:54) with ONE snip COPY per distinct high (:829-836)",
-    "counters_and_accumulators": "MATCH: mergeMultiEntry mergeCount/conflictCount (:917-919,948) observed through the exact warningHeader text ('Unable to[ fully] merge symbol: N[-- Some instance varnodes not found.][-- Some merges are forbidden]', :950-961) and the flag projections; buildDominantCopy's count/size accounting (:1197-1220) observed through which COPYs are replaced/destroyed; merge groups (numMergeClasses accumulation, variable.cc:640-646) observed per instance",
-    "sort_and_comparison_keys": "MATCH: compareJustLoc as Address::operator< total order (space index then offset, address.hh:375-393) — raw booleans on cross-space pairs plus the merged instance order; compareCopyByInVarnode (input create index, block index, seq order, merge.cc:1045-1057); findCommonBlock dominator walk (block.cc:736)"
-  },
-  "coverage": {
-    "indirect_addrforce_gate": "MATCH",
-    "dominant_copy_null_cache_merge": "MATCH",
-    "multientry_required_gate": "MATCH",
-    "cross_space_justloc_order": "MATCH",
-    "merge_highs_piece_arm": "NO_ORACLE",
-    "merge_highs_piece_arm_note": "variable.cc:699-711: speculative throws (unreachable via mergeTestAdjacent :208-209), non-speculative mergeGroups path requires VariablePiece groups this pipeline never forms (groupPartials no-op); Rust pins both contracts with debug_assert and keeps the pre-existing conservative skip; upgrade requires porting the piece/group machinery",
-    "wire_unique_high_note": "Rugra Funcdata::new_unique lacks newUnique's assignHigh (funcdata_varnode.cc:89); the trim paths wire the High inside merge.rs (wire_unique_high) — latent funcdata gap recorded for a funcdata.rs-lease owner"
-  },
-  "comparand": {
-    "cpp_fixture_sha256": "d8f2c898d44f7412afab27ab563ca077b34be1f2b7273ee60456b6ddeef121ae",
-    "rust_fixture_sha256": "4d8aab6f65ffd48b1f94823a4ca82ed4821e7150572ffc4b34ec1a3c2777e1ff",
-    "merge_rs_sha256": "29a5f0b5cafe53b472b00c65dff235475bce80c9da052d6d9d42bb574bff798e",
-    "variable_rs_sha256": "7f16cf0fec5414f84aec88a30aba61fc3f483c68825310a60bbe20357904d10a",
-    "runner_sha256": "ce700635fed86fa2fb0e47233b5e63fa464f10cc1aca34ed885e8c0cb55f0165",
-    "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-    "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-    "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
-    "host_cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
-    "host_rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
-    "host_make_path": "/usr/bin/make",
-    "host_git_path": "/usr/bin/git",
-    "host_python_path": "/usr/bin/python3.10",
-    "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
-    "expected_ghidra_stdout_sha256": "9878946db936411709c421eb47580e3f356f81f6e627c42c8b07fddb2f4c9b17",
-    "expected_rugra_stdout_sha256": "9878946db936411709c421eb47580e3f356f81f6e627c42c8b07fddb2f4c9b17"
-  },
-  "build": {
-    "registry_packages": 164
-  }
+ "schema": 2,
+ "fixture_id": "MERGE-PREEXISTING-GATES-0001",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "status_note": "All 14 projected lines across four cases byte-match the locked oracle (both sides sha256 9878946db936411709c421eb47580e3f356f81f6e627c42c8b07fddb2f4c9b17). The four pre-existing gate gaps are pinned end to end; the fifth (merge_highs (Some,Some) piece arm) is Ghidra-side unreachable and recorded as NO_ORACLE with debug_assert + conservative skip in Rust.",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_base_commit": "b96e6f957dda722b6c4efa1d53db86efacccbac1",
+ "architecture": "synthetic little-endian 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7; byte-addressed spaces",
+ "compiler_spec": "synthetic prototype named fixture, extrapop=0, empty input/output, no effect records, no symbols (case multientry_gate adds one two-entry local Symbol 'multi')",
+ "analysis_options": {
+  "entrypoint": "production Merge-family entries on one Funcdata per case: Ghidra fd.getMerge().{mergeAddrTied,groupPartials,mergeMarker,mergeMultiEntry,mergeOpcode(CPUI_COPY),processCopyTrims,mergeAdjacent}; Rust fresh Merge::new() per Action calling the same entry points, cross-Action channels round-tripping through Funcdata::merge_state; case graphs set type locks via Varnode::updateType(ct,true,true) / v_type+TYPELOCK flag, the INDIRECT output via setAddrForce, and diamond immediate dominators explicitly (production computes them in BlockGraph::buildDomTree)",
+  "premise": "covers allocated at setHighLevel exactly as Funcdata::assignHigh does; the fixture never pre-installs covers; trim/dominant uniques get Highs exactly as Ghidra Funcdata::newUnique's assignHigh (funcdata_varnode.cc:89) \u2014 Rust wires them via Merge::wire_unique_high",
+  "normalization": "unique-space Varnode offsets are allocator state and print as 'u' in the ops projection; everything else is byte-diffed and both stderr streams must be empty"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON array, compact separators, ensure_ascii=false",
+  "cases": [
+   "case indirect_addrforce: single block b0; op1 A=reg:0x10 COPY k0x51; opE E=reg:0x30 LOAD(k3,k0x90); indop I=reg:0x20 INDIRECT(A,iop(opE)) inserted BEFORE opE (newIndirectOp, funcdata_op.cc:696) with I flagged addrforce; R=reg:0x40 INT_ADD(A,k1) keeps A live past the INDIRECT so the first merge(in_high,out_high) fails the cover test; stages assignhigh + mergerequired (mergeAddrTied+groupPartials+mergeMarker) drive mergeIndirect: isAddrForce gate (:850), INPUT-surviving merge attempts (:857/:865/:879), snipOutputInterference finds no interference (collectInputs walks previousOp-INDIRECT chain, merge.cc:783-802), so the allocateCopyTrim fallback snips the INDIRECT input (:871-877) and re-merges \u2014 projection: trim COPY before indop, indop.in0=unique, I.high instances [trimUnique:grp0, I:grp0], A stays separate",
+   "case dominant_copy: diamond b0->{b1,b2}->b3 with explicit immed_dom b1/b2/b3->b0; V=reg:0x10 COPY k0x61 typelocked int4; O=reg:0x20 MULTIEQUAL(V,V) typelocked uint4 in b3; stages assignhigh, mergerequired, mergecopy, dominantcopy, mergeadjacent \u2014 mergerequired phase-1 trims both ME slots (trimOpInput at end of each in-block b1/b2 via allocateCopyTrim), phase-3 merges O/t0/t1 into one high; mergecopy skips the trims (mergeTestRequired typelock conflict); dominantcopy runs processCopyTrims -> findAllIntoCopies -> buildDominantCopy with domCopyIsNew (dominant COPY allocated at end of b0, T0/T1 destroyed, ME reads (u,u)) closing with the direct null-testCache speculative HighVariable::merge at merge.cc:1236 \u2014 pinned by the absorbed unique's mergeGroup class 1 (O.high shape [def COPY:1 / def MULTIEQUAL:0])",
+   "case multientry_gate: b0; M1=unique:0x100 LOAD(k3,k0x1000) typelocked int8; M2=unique:0x200 LOAD(k3,k0x2000) typelocked uint8; one Symbol 'multi' with two whole-size entries at the varnode storages (C++ ScopeLocal addSymbol+addMapPoint with each def op address as use point; Rust SymbolEntry::new_static mapentry back-pointers); stage multientry drives mergeMultiEntry \u2014 the mergeTestRequired gate at :936 fails on the typelock conflict, symbol setMergeProblems (dispflags merge_problems=32), M2's high setUnmerged, warningHeader emits 'Unable to merge symbol: multi -- Some merges are forbidden' (read back from CommentDatabaseInternal both sides)",
+   "case cross_space_order: b0; V=reg:0x10 COPY k0x71; T=unique:0x5000 COPY(V) \u2014 unique offset LARGER than the register offset to prove space-major ordering; stage cmp projects raw compareJustLoc booleans (T<V=1, V<T=0, V<V=0), stages assignhigh+mergecopy merge V/T (same type/size, boundary-only covers) and the merged HighVariable instance order [T,V] (unique index 2 before register index 4) exercises compareJustLoc inside mergeInternal's std::merge (variable.cc:657)",
+   "not drivable at oracle level: merge_highs (Some,Some) piece arm \u2014 Ghidra throws on speculative ('Trying speculatively merge variables in separate groups', variable.cc:701), unreachable through Merge::merge callers because mergeTestAdjacent (merge.cc:208-209) rejects both-piece candidates, and buildDominantCopy's direct call passes a freshly allocated unique with no piece; the non-speculative mergeGroups path (variable.cc:702-711) additionally requires VariablePiece groups that this pipeline state never forms (groupPartials no-op)",
+   "Action sequence per case mirrors the universal tree order (coreaction.cc:5717-5727): assignhigh=setHighLevel; mergerequired=mergeAddrTied+groupPartials+mergeMarker; multientry=mergeMultiEntry; mergecopy=mergeOpcode(CPUI_COPY); dominantcopy=processCopyTrims; mergeadjacent=mergeAdjacent; Ghidra drives all stages through the one persistent fd.getMerge() object, Rust through fresh Merge::new() per Action with channels round-tripping via Funcdata::merge_state",
+   "projections per stage: named instances, pairwise same_high booleans, per-Varnode mergeGroup, per-block op dump 'opcode(in,...)->out' with constants 'k<val>', iop annotation 'iop', unique-space varnodes normalized to 'u' (allocator offsets removed), and per-instance HighVariable shape 'def=opcode:mergegroup' in storage order"
+  ],
+  "sha256": "8958310a874a208579d5e27af0e3b4bd04ff7cf5087ebae3018161ce5939c346"
+ },
+ "decisive_semantics": {
+  "references_and_outputs": "MATCH: the IR-shape projection observes every data-flow rewrite the gates perform \u2014 the INDIRECT trim COPY insertion+redirect (merge.cc:871-877), the phase-1 MULTIEQUAL slot trims at the in-block ends (:706-711), the dominant-COPY allocation/totalReplace/opDestroy cycle (:1167-1233) and the multientry setMergeProblems/setUnmerged flag writes (:937-944) read back from the live objects",
+  "loop_bounds_and_order": "MATCH: mergeMarker walks the alive op list in order (merge.cc:894); mergeOpcode blocks in index order, ops in insertion order (:335-337); mergeMultiEntry iterates symbols in SymbolNameTree (name,nameDedup) order (:911) and mergeList per SymbolEntry (:920-928); collectInputs walks the previousOp chain breaking at the first non-INDIRECT (:798-801); snipOutputInterference sorts correctable by HighVariable pointer (compareByHigh, expression.hh:54) with ONE snip COPY per distinct high (:829-836)",
+  "counters_and_accumulators": "MATCH: mergeMultiEntry mergeCount/conflictCount (:917-919,948) observed through the exact warningHeader text ('Unable to[ fully] merge symbol: N[-- Some instance varnodes not found.][-- Some merges are forbidden]', :950-961) and the flag projections; buildDominantCopy's count/size accounting (:1197-1220) observed through which COPYs are replaced/destroyed; merge groups (numMergeClasses accumulation, variable.cc:640-646) observed per instance",
+  "sort_and_comparison_keys": "MATCH: compareJustLoc as Address::operator< total order (space index then offset, address.hh:375-393) \u2014 raw booleans on cross-space pairs plus the merged instance order; compareCopyByInVarnode (input create index, block index, seq order, merge.cc:1045-1057); findCommonBlock dominator walk (block.cc:736)"
+ },
+ "coverage": {
+  "indirect_addrforce_gate": "MATCH",
+  "dominant_copy_null_cache_merge": "MATCH",
+  "multientry_required_gate": "MATCH",
+  "cross_space_justloc_order": "MATCH",
+  "merge_highs_piece_arm": "NO_ORACLE",
+  "merge_highs_piece_arm_note": "variable.cc:699-711: speculative throws (unreachable via mergeTestAdjacent :208-209), non-speculative mergeGroups path requires VariablePiece groups this pipeline never forms (groupPartials no-op); Rust pins both contracts with debug_assert and keeps the pre-existing conservative skip; upgrade requires porting the piece/group machinery",
+  "wire_unique_high_note": "Rugra Funcdata::new_unique lacks newUnique's assignHigh (funcdata_varnode.cc:89); the trim paths wire the High inside merge.rs (wire_unique_high) \u2014 latent funcdata gap recorded for a funcdata.rs-lease owner"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "d8f2c898d44f7412afab27ab563ca077b34be1f2b7273ee60456b6ddeef121ae",
+  "rust_fixture_sha256": "4d8aab6f65ffd48b1f94823a4ca82ed4821e7150572ffc4b34ec1a3c2777e1ff",
+  "merge_rs_sha256": "29a5f0b5cafe53b472b00c65dff235475bce80c9da052d6d9d42bb574bff798e",
+  "variable_rs_sha256": "7f16cf0fec5414f84aec88a30aba61fc3f483c68825310a60bbe20357904d10a",
+  "runner_sha256": "ce700635fed86fa2fb0e47233b5e63fa464f10cc1aca34ed885e8c0cb55f0165",
+  "cargo_toml_sha256": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+  "cargo_lock_sha256": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+  "build_rs_sha256": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+  "host_cxx_path": "/usr/bin/x86_64-linux-gnu-g++-11",
+  "host_cargo_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/cargo",
+  "host_rustc_path": "/home/ls/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/bin/rustc",
+  "host_make_path": "/usr/bin/make",
+  "host_git_path": "/usr/bin/git",
+  "host_python_path": "/usr/bin/python3.10",
+  "host_cxx": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "host_cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)",
+  "expected_ghidra_stdout_sha256": "9878946db936411709c421eb47580e3f356f81f6e627c42c8b07fddb2f4c9b17",
+  "expected_rugra_stdout_sha256": "9878946db936411709c421eb47580e3f356f81f6e627c42c8b07fddb2f4c9b17"
+ },
+ "build": {
+  "registry_packages": 164
+ }
 }

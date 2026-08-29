@@ -1,98 +1,98 @@
 {
-  "schema": 2,
-  "fixture_id": "ACTIONPOOL-CLONE-FILTER-0001",
-  "stable_function_id": "GH12-F-9ad99f22c1702b4337e2",
-  "stable_function_closure": [
-    "GH12-F-2974558ce1a3375bee03 ghidra::Rule::clone action.hh:236",
-    "GH12-F-4aa8b5f62d10461d81c6 ghidra::ActionPool::addRule action.cc:740",
-    "GH12-F-9ad99f22c1702b4337e2 ghidra::ActionPool::clone action.cc:899",
-    "GH12-F-2c5ab0b050a565884161 ghidra::ActionDatabase::deriveAction action.cc:1145"
-  ],
-  "overall_status": "MISMATCH",
-  "oracle": {
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
-  },
-  "architecture": "locked synthetic ActionDatabase and ActionPool containing four deterministic ScriptRule instances; no Architecture, Funcdata, address space, instruction bytes, or P-code graph is consumed",
-  "compiler_spec": "not applicable: selective Action/Rule clone and registration-index state only",
+ "schema": 2,
+ "fixture_id": "ACTIONPOOL-CLONE-FILTER-0001",
+ "stable_function_id": "GH12-F-9ad99f22c1702b4337e2",
+ "stable_function_closure": [
+  "GH12-F-2974558ce1a3375bee03 ghidra::Rule::clone action.hh:236",
+  "GH12-F-4aa8b5f62d10461d81c6 ghidra::ActionPool::addRule action.cc:740",
+  "GH12-F-9ad99f22c1702b4337e2 ghidra::ActionPool::clone action.cc:899",
+  "GH12-F-2c5ab0b050a565884161 ghidra::ActionDatabase::deriveAction action.cc:1145"
+ ],
+ "overall_status": "MISMATCH: (B2 canonicalization)",
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": "locked synthetic ActionDatabase and ActionPool containing four deterministic ScriptRule instances; no Architecture, Funcdata, address space, instruction bytes, or P-code graph is consumed",
+ "compiler_spec": "not applicable: selective Action/Rule clone and registration-index state only",
+ "analysis_options": {
+  "entrypoint": "Production ActionDatabase::setCurrent -> deriveAction -> virtual ActionPool::clone, with rules added through production ActionPool::addRule; Rust invokes the mapped ActionDatabase and ActionPool methods",
+  "prestate": "The registered universal pool has four rules in fixed order and three groups. Pool and Rule flags, status, breakpoints, and statistics are deliberately dirty before derivation; each Rule clone constructs a fresh instance from its constructor configuration.",
+  "observation": "27 fixed-order records covering the source, all-group clone, custom-group clone, and empty/null clone. Every non-null record includes pool state, full rule order and state, each rule opcode order, and per-opcode rule order.",
+  "normalization": "No rule, opcode, state field, or order is normalized. Pointer identity is observed only as a cached-same boolean; raw addresses are not printed.",
+  "exception_policy": "All group names exist and all operations satisfy their defined preconditions. Missing group/base exceptions are outside this projection; empty filtering is defined and covered as a cached null result."
+ },
+ "input": {
+  "architecture": "synthetic ActionDatabase/ActionPool state",
+  "compiler_spec": "not applicable",
   "analysis_options": {
-    "entrypoint": "Production ActionDatabase::setCurrent -> deriveAction -> virtual ActionPool::clone, with rules added through production ActionPool::addRule; Rust invokes the mapped ActionDatabase and ActionPool methods",
-    "prestate": "The registered universal pool has four rules in fixed order and three groups. Pool and Rule flags, status, breakpoints, and statistics are deliberately dirty before derivation; each Rule clone constructs a fresh instance from its constructor configuration.",
-    "observation": "27 fixed-order records covering the source, all-group clone, custom-group clone, and empty/null clone. Every non-null record includes pool state, full rule order and state, each rule opcode order, and per-opcode rule order.",
-    "normalization": "No rule, opcode, state field, or order is normalized. Pointer identity is observed only as a cached-same boolean; raw addresses are not printed.",
-    "exception_policy": "All group names exist and all operations satisfy their defined preconditions. Missing group/base exceptions are outside this projection; empty filtering is defined and covered as a cached null result."
+   "pool": "name universal; flags repeatapply|onceperfunc|warnings_given; dirty status_mid, break_start|break_action, tests=17, apply=11",
+   "rules": "a(alpha,COPY+INT_ADD,ctor debug), b(beta,INT_ADD), c(alpha,COPY,ctor warnings_on), d(gamma,INT_SUB+COPY); every source runtime is disabled+warnings_on+warnings_given with distinct breakpoint/tests/apply",
+   "groups": "all={alpha,beta,gamma}; custom={alpha,gamma}; empty={} in this invocation order",
+   "observation": "map-entry/null/cache identity, complete pool/rule runtime fields, allrules order, getOpList order, and COPY/INT_ADD/INT_SUB perop order"
   },
-  "input": {
-    "architecture": "synthetic ActionDatabase/ActionPool state",
-    "compiler_spec": "not applicable",
-    "analysis_options": {
-      "pool": "name universal; flags repeatapply|onceperfunc|warnings_given; dirty status_mid, break_start|break_action, tests=17, apply=11",
-      "rules": "a(alpha,COPY+INT_ADD,ctor debug), b(beta,INT_ADD), c(alpha,COPY,ctor warnings_on), d(gamma,INT_SUB+COPY); every source runtime is disabled+warnings_on+warnings_given with distinct breakpoint/tests/apply",
-      "groups": "all={alpha,beta,gamma}; custom={alpha,gamma}; empty={} in this invocation order",
-      "observation": "map-entry/null/cache identity, complete pool/rule runtime fields, allrules order, getOpList order, and COPY/INT_ADD/INT_SUB perop order"
-    },
-    "cases": [
-      "source: dirty pool and dirty rules in registration order",
-      "all: every Rule survives and is a fresh constructor instance",
-      "custom: beta is removed without reordering a/c/d or their opcode indices",
-      "empty: no Rule survives, clone is null, and the null actionmap entry is cached"
-    ]
-  },
-  "input_fingerprint": "sha256:4c846f70a8bfd4165fd2c8108bbf551054711517859f1e669e950ffc17592257",
-  "observation_schema": {
-    "format": "27 fixed-order UTF-8 lines with a final newline",
-    "pool": "case/null/name/raw flags/status/breakpoint/count_tests/count_apply/rule count",
-    "rule": "case registration index/name/group/raw flags/breakpoint/count_tests/count_apply/ordered opcode vector",
-    "perop": "COPY, INT_ADD, and INT_SUB vectors in addRule append order",
-    "database": "derived key presence, repeated-derive cache identity, and current root name"
-  },
-  "comparand": {
-    "rugra_base_commit": "1b859f2f554feab23ab2a1ac6c8b06206aa8a0ec",
-    "rugra_base_tree": "e716bfd12949b9ee2142926b2bedfca54ef6f68c",
-    "overlay": [
-      "src/action.rs"
-    ],
-    "cpp_fixture_sha256": "1b0c93287cc456a214d8b223de61ca20e054437b8b32de993d69f37658442acf",
-    "rust_fixture_sha256": "58ff8cac65ffca19cd732dde574f4082a54466d89b4f65dfd53414a41d3a59fc",
-    "action_rs_sha256": "9c65eb708863257f71c6ebfaaee35ba9a0b31fc6e447c9d0e904cd7fcac48ded",
-    "action_doc_sha256": "e683bf9c15dfb5f500e29203b9a9e45099efee5b467990bee11dc44144a2a863",
-    "runner_sha256": "affc232d0c359ab3feadb21a1fe1c2d499d024177f2ee1a6da6fbe78139a56b5",
-    "ghidra_action_cc_blob": "9a4e2e26d04d45805f14900fadcbbac01270a2f0",
-    "ghidra_action_hh_blob": "e929dbb98e8e1fb23d7ac8e8d86e9f4f39fc998c",
-    "host": {
-      "cxx": "g++ (GCC) 16.2.1 20260810",
-      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-      "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-      "rust_toolchain": "system",
-      "platform": "Linux 7.1.8-arch1-3 x86_64"
-    }
-  },
-  "build": {
-    "cpp_oracle": "The complete locked decompiler C++ subtree is exported to a fresh temporary directory and libdecomp.a is rebuilt before linking the fixture.",
-    "private_state_observer": "The fixture pre-includes the standard library, then scopes class/private/protected visibility macros to action.hh so it can observe ActionPool's implicit-private vectors and Action/Rule state without altering production bodies.",
-    "rust_comparand": "A tar snapshot of pinned Rugra base 1b859f2 is materialized, only src/action.rs is overlaid, and the fixture is compiled as a temporary Cargo bin offline/locked under /tmp/rugra-cargo-build.lock with CARGO_TARGET_DIR=/tmp/rugra-target-actionpool-clone-filter.",
-    "drift_check": "All owned source, documentation, fixture, metadata, and runner files are hashed before and after execution."
-  },
-  "expected_stdout_sha256": "600441907a376bf50004db42c3bf2b61485066dac99ef395ba3eff2ce427f7fe",
-  "expected_exit_code": 0,
-  "covered_projection_status": "MATCH",
-  "coverage": {
-    "fresh_rule_clone": "MATCH: dirty source flags/breakpoint/statistics are replaced by each Rule constructor's initial flags and zero runtime state",
-    "lazy_null_pool": "MATCH: the pool is allocated only after the first surviving Rule and empty selection produces a cached null map entry",
-    "allrules_order": "MATCH: all and custom selections retain source registration order without sorting or deduplication",
-    "perop_order": "MATCH: clone registration rebuilds COPY/INT_ADD/INT_SUB vectors by appending each surviving Rule in allrules order; each Rule's getOpList order is retained",
-    "pool_state": "MATCH: pool name and raw Action flags are copied while status, breakpoint, count_tests, and count_apply are constructor-fresh",
-    "derive_registered_base": "MATCH: ActionDatabase clones the actual synthetic object registered as universal and caches both non-null and null results",
-    "group_boundaries": "MATCH: all, proper custom subset, and empty group sets are observed",
-    "module_completion": "NOT CLAIMED: ActionPool::apply still lacks full disabled/warning/breakpoint/op_state/rule_index behavior and retains separate live-op/dead-op differences"
-  },
-  "residuals": [
-    "Concrete production Rule files do not yet override clone_for_groups; action.rs retains equivalent fresh constructors and groups at their locked registration slots to stay within this task's write-set.",
-    "The RuleIdentityEl implementation integrated separately at 5261aaa is in this change's successor caller closure through oppool1's coreaction.cc:5527 analysis-group constructor slot, but this synthetic clone fixture does not rerun RuleIdentityEl's own behavior oracle.",
-    "ActionPool::apply does not yet carry Ghidra per-Rule disabled/warning/breakpoint state or breakpoint-resume op_state/rule_index.",
-    "ActionPool::apply still uses a live-op Vec snapshot and has separately documented dead-op behavior differences.",
-    "Missing group/base exception text and ActionDatabase toggle/cloneGroup mutations are not exercised by this fixture."
+  "cases": [
+   "source: dirty pool and dirty rules in registration order",
+   "all: every Rule survives and is a fresh constructor instance",
+   "custom: beta is removed without reordering a/c/d or their opcode indices",
+   "empty: no Rule survives, clone is null, and the null actionmap entry is cached"
   ]
+ },
+ "input_fingerprint": "sha256:4c846f70a8bfd4165fd2c8108bbf551054711517859f1e669e950ffc17592257",
+ "observation_schema": {
+  "format": "27 fixed-order UTF-8 lines with a final newline",
+  "pool": "case/null/name/raw flags/status/breakpoint/count_tests/count_apply/rule count",
+  "rule": "case registration index/name/group/raw flags/breakpoint/count_tests/count_apply/ordered opcode vector",
+  "perop": "COPY, INT_ADD, and INT_SUB vectors in addRule append order",
+  "database": "derived key presence, repeated-derive cache identity, and current root name"
+ },
+ "comparand": {
+  "rugra_base_commit": "1b859f2f554feab23ab2a1ac6c8b06206aa8a0ec",
+  "rugra_base_tree": "e716bfd12949b9ee2142926b2bedfca54ef6f68c",
+  "overlay": [
+   "src/action.rs"
+  ],
+  "cpp_fixture_sha256": "1b0c93287cc456a214d8b223de61ca20e054437b8b32de993d69f37658442acf",
+  "rust_fixture_sha256": "58ff8cac65ffca19cd732dde574f4082a54466d89b4f65dfd53414a41d3a59fc",
+  "action_rs_sha256": "9c65eb708863257f71c6ebfaaee35ba9a0b31fc6e447c9d0e904cd7fcac48ded",
+  "action_doc_sha256": "e683bf9c15dfb5f500e29203b9a9e45099efee5b467990bee11dc44144a2a863",
+  "runner_sha256": "affc232d0c359ab3feadb21a1fe1c2d499d024177f2ee1a6da6fbe78139a56b5",
+  "ghidra_action_cc_blob": "9a4e2e26d04d45805f14900fadcbbac01270a2f0",
+  "ghidra_action_hh_blob": "e929dbb98e8e1fb23d7ac8e8d86e9f4f39fc998c",
+  "host": {
+   "cxx": "g++ (GCC) 16.2.1 20260810",
+   "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+   "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+   "rust_toolchain": "system",
+   "platform": "Linux 7.1.8-arch1-3 x86_64"
+  }
+ },
+ "build": {
+  "cpp_oracle": "The complete locked decompiler C++ subtree is exported to a fresh temporary directory and libdecomp.a is rebuilt before linking the fixture.",
+  "private_state_observer": "The fixture pre-includes the standard library, then scopes class/private/protected visibility macros to action.hh so it can observe ActionPool's implicit-private vectors and Action/Rule state without altering production bodies.",
+  "rust_comparand": "A tar snapshot of pinned Rugra base 1b859f2 is materialized, only src/action.rs is overlaid, and the fixture is compiled as a temporary Cargo bin offline/locked under /tmp/rugra-cargo-build.lock with CARGO_TARGET_DIR=/tmp/rugra-target-actionpool-clone-filter.",
+  "drift_check": "All owned source, documentation, fixture, metadata, and runner files are hashed before and after execution."
+ },
+ "expected_stdout_sha256": "600441907a376bf50004db42c3bf2b61485066dac99ef395ba3eff2ce427f7fe",
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "coverage": {
+  "fresh_rule_clone": "MATCH: dirty source flags/breakpoint/statistics are replaced by each Rule constructor's initial flags and zero runtime state",
+  "lazy_null_pool": "MATCH: the pool is allocated only after the first surviving Rule and empty selection produces a cached null map entry",
+  "allrules_order": "MATCH: all and custom selections retain source registration order without sorting or deduplication",
+  "perop_order": "MATCH: clone registration rebuilds COPY/INT_ADD/INT_SUB vectors by appending each surviving Rule in allrules order; each Rule's getOpList order is retained",
+  "pool_state": "MATCH: pool name and raw Action flags are copied while status, breakpoint, count_tests, and count_apply are constructor-fresh",
+  "derive_registered_base": "MATCH: ActionDatabase clones the actual synthetic object registered as universal and caches both non-null and null results",
+  "group_boundaries": "MATCH: all, proper custom subset, and empty group sets are observed",
+  "module_completion": "NOT CLAIMED: ActionPool::apply still lacks full disabled/warning/breakpoint/op_state/rule_index behavior and retains separate live-op/dead-op differences"
+ },
+ "residuals": [
+  "Concrete production Rule files do not yet override clone_for_groups; action.rs retains equivalent fresh constructors and groups at their locked registration slots to stay within this task's write-set.",
+  "The RuleIdentityEl implementation integrated separately at 5261aaa is in this change's successor caller closure through oppool1's coreaction.cc:5527 analysis-group constructor slot, but this synthetic clone fixture does not rerun RuleIdentityEl's own behavior oracle.",
+  "ActionPool::apply does not yet carry Ghidra per-Rule disabled/warning/breakpoint state or breakpoint-resume op_state/rule_index.",
+  "ActionPool::apply still uses a live-op Vec snapshot and has separately documented dead-op behavior differences.",
+  "Missing group/base exception text and ActionDatabase toggle/cloneGroup mutations are not exercised by this fixture."
+ ]
 }

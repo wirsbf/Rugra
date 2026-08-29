@@ -1,7 +1,7 @@
 {
  "schema": 2,
  "fixture_id": "TYPEFACTORY-EXACTPIECE-CALLERS-0001",
- "overall_status": "MATCH: covered projection the four production getExactPiece call sites - SymbolEntry::getSizedType, HighVariable::finalizeDatatype, Funcdata::syncVarnodesWithSymbols type projection, RulePieceStructure::applyOp leaf typing - byte-match the locked 12.0.4 oracle over 20 records built from the frozen production commit",
+ "overall_status": "UNTESTED: covered projection the four production getExactPiece call sites - SymbolEntry::getSizedType, HighVariable::finalizeDatatype, Funcdata::syncVarnodesWithSymbols type projection, RulePieceStructure::applyOp leaf typing - byte-match the locked 12.0.4 oracle over 20 records built from the frozen production commit",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",

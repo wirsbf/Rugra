@@ -1,198 +1,212 @@
 {
-  "schema_version": 1,
-  "fixture_id": "RETURNFOLD-GAPA-PROTOTYPES-0001",
-  "overall_status": "MATCH",
-  "overall_scope": "Output-locked direct-attach branch of ActionPrototypeTypes::apply (coreaction.cc:4637-4649) driven through the production apply, three scenarios: locked-int attach (append-at-last-slot, halt/dead skip, typelock update), locked-void gate, unlocked initActiveOutput control; not a whole-ActionPrototypeTypes MATCH (model glue residual, multi-output-entry model, e2e fold chain out of lease)",
-  "covered_projection": {
-    "oracle_capture": { "status": "ORACLE_CAPTURED" },
-    "rugra_execution": { "status": "EXECUTED" },
-    "bilateral_comparison": { "status": "MATCH" }
+ "schema_version": 1,
+ "fixture_id": "RETURNFOLD-GAPA-PROTOTYPES-0001",
+ "overall_status": "UNTESTED: (B2 canonicalization)",
+ "overall_scope": "Output-locked direct-attach branch of ActionPrototypeTypes::apply (coreaction.cc:4637-4649) driven through the production apply, three scenarios: locked-int attach (append-at-last-slot, halt/dead skip, typelock update), locked-void gate, unlocked initActiveOutput control; not a whole-ActionPrototypeTypes MATCH (model glue residual, multi-output-entry model, e2e fold chain out of lease)",
+ "covered_projection": {
+  "oracle_capture": {
+   "status": "ORACLE_CAPTURED"
   },
-  "oracle": {
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "tag": "Ghidra_12.0.4_build",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "source": "ghidra/Ghidra/Features/Decompiler/src/decompile/cpp (locked checkout, clean)"
+  "rugra_execution": {
+   "status": "EXECUTED"
   },
-  "architecture": {
-    "language": "synthetic-fixture-x86-64",
-    "endianness": "little",
-    "spaces": "constant,other,unique,ram(3,wordsize 1),register,stack,join,iop",
-    "type_factory": "FixtureArchitecture: xunknownN core set + setupSizes + int4/void via getBase; fixture ProtoModel with one <output><pentry> register entry at offset 0 (minsize 1 maxsize 8 extension inttype), every <register name> resolving to register:0x0:8"
+  "bilateral_comparison": {
+   "status": "MATCH"
+  }
+ },
+ "oracle": {
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "tag": "Ghidra_12.0.4_build",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source": "ghidra/Ghidra/Features/Decompiler/src/decompile/cpp (locked checkout, clean)"
+ },
+ "architecture": {
+  "language": "synthetic-fixture-x86-64",
+  "endianness": "little",
+  "spaces": "constant,other,unique,ram(3,wordsize 1),register,stack,join,iop",
+  "type_factory": "FixtureArchitecture: xunknownN core set + setupSizes + int4/void via getBase; fixture ProtoModel with one <output><pentry> register entry at offset 0 (minsize 1 maxsize 8 extension inttype), every <register name> resolving to register:0x0:8"
+ },
+ "compiler_spec": {
+  "id": "synthetic-fixture-locked-proto",
+  "ghidra_prototype": "FuncProto::setInternal + setPieces(PrototypePieces{model=fixture, outtype}) \u2014 updateAllTypes runs ProtoModel::assignParameterStorage (fspec.cc:2429, ParamListStandardOut::assignMap fspec.cc:1569-1581) and store->setOutput fills the output ProtoParameter; locks input+output+model (fspec.cc:3843-3852)",
+  "rugra_prototype": "flat FuncProto: return_type=int4|void + set_output_lock(true); storage derived at apply time from ProtoModel::default_x86_64().output_entries[0] (Register 0x0)",
+  "scope": "prototype interaction only: apply reads isOutputLocked, the output type metatype/size and the model output entry; no FuncCallSpecs involved"
+ },
+ "analysis_options": {
+  "action": "production ActionPrototypeTypes (apply) invoked directly once per scenario; onceperfunc",
+  "structure_reset": false,
+  "heritage_info_list": "not built (apply touches no heritage)",
+  "slot0": "constant 0 on every RETURN so the cc:4628-4635 strip loop is a no-op and the locked branch is isolated",
+  "halt_dead_markers": "PcodeOp::halt / PcodeOp::dead flags OR-ed directly (test-only private access, same rewrite as returnfold_gapb_1204.cc)"
+ },
+ "input_manifest": {
+  "graph": {
+   "scenario_A": "gapa at ram:0x60000, 5 BlockBasic blocks: b0 entry fan-out (no ops); b1 [RETURN @0x60010 slot0 const]; b2 [RETURN @0x60018 slot0 const + slot1 V]; b3 [RETURN @0x60020 flags|=halt]; b4 [RETURN @0x60028 flags|=dead]; V = register:0x40:4 input varnode",
+   "scenario_B": "gapb at ram:0x61000, 1 block [RETURN @0x61010 slot0 const], locked void",
+   "scenario_C": "gapc at ram:0x62000, 1 block [RETURN @0x62010 slot0 const], unlocked"
   },
-  "compiler_spec": {
-    "id": "synthetic-fixture-locked-proto",
-    "ghidra_prototype": "FuncProto::setInternal + setPieces(PrototypePieces{model=fixture, outtype}) — updateAllTypes runs ProtoModel::assignParameterStorage (fspec.cc:2429, ParamListStandardOut::assignMap fspec.cc:1569-1581) and store->setOutput fills the output ProtoParameter; locks input+output+model (fspec.cc:3843-3852)",
-    "rugra_prototype": "flat FuncProto: return_type=int4|void + set_output_lock(true); storage derived at apply time from ProtoModel::default_x86_64().output_entries[0] (Register 0x0)",
-    "scope": "prototype interaction only: apply reads isOutputLocked, the output type metatype/size and the model output entry; no FuncCallSpecs involved"
+  "varnodes": "V = register:0x40:4 marked setInput (away from the locked output storage register:0x0); attached outputs land at register:0x0:4 (size from the locked int type, not the 8-byte register)"
+ },
+ "observation_schema": {
+  "records": "schema=1, preA, retA x4 (b1,b2,b3halt,b4dead), orderA, preB, postB, preC, postC, case_model_glue, case_multi_output, case_e2e_fold",
+  "normalization": "varnode descriptors use Ghidra space names (register/const) on both sides; op pcs allocated in creation order 8 bytes apart; def token trichotomy def/input/free with 'free' = no def and not setInput (the newVarnode-created locked-output varnode)"
+ },
+ "locked_capture": {
+  "status": "ORACLE_CAPTURED",
+  "deterministic_runs": 2,
+  "records": 14,
+  "bytes": 1233,
+  "stdout_sha256": "81560905f90021f284c291246b93aabade041db15e0e2f123a7aec529ae93c6b",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+ },
+ "paired_expected": {
+  "ghidra": {
+   "status": "ORACLE_CAPTURED",
+   "deterministic_runs": 2,
+   "records": 14,
+   "bytes": 1233,
+   "stdout_sha256": "81560905f90021f284c291246b93aabade041db15e0e2f123a7aec529ae93c6b",
+   "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
-  "analysis_options": {
-    "action": "production ActionPrototypeTypes (apply) invoked directly once per scenario; onceperfunc",
-    "structure_reset": false,
-    "heritage_info_list": "not built (apply touches no heritage)",
-    "slot0": "constant 0 on every RETURN so the cc:4628-4635 strip loop is a no-op and the locked branch is isolated",
-    "halt_dead_markers": "PcodeOp::halt / PcodeOp::dead flags OR-ed directly (test-only private access, same rewrite as returnfold_gapb_1204.cc)"
+  "rugra": {
+   "status": "EXECUTED",
+   "deterministic_runs": 2,
+   "records": 14,
+   "bytes": 1233,
+   "stdout_sha256": "81560905f90021f284c291246b93aabade041db15e0e2f123a7aec529ae93c6b",
+   "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
-  "input_manifest": {
-    "graph": {
-      "scenario_A": "gapa at ram:0x60000, 5 BlockBasic blocks: b0 entry fan-out (no ops); b1 [RETURN @0x60010 slot0 const]; b2 [RETURN @0x60018 slot0 const + slot1 V]; b3 [RETURN @0x60020 flags|=halt]; b4 [RETURN @0x60028 flags|=dead]; V = register:0x40:4 input varnode",
-      "scenario_B": "gapb at ram:0x61000, 1 block [RETURN @0x61010 slot0 const], locked void",
-      "scenario_C": "gapc at ram:0x62000, 1 block [RETURN @0x62010 slot0 const], unlocked"
-    },
-    "varnodes": "V = register:0x40:4 marked setInput (away from the locked output storage register:0x0); attached outputs land at register:0x0:4 (size from the locked int type, not the 8-byte register)"
-  },
-  "observation_schema": {
-    "records": "schema=1, preA, retA x4 (b1,b2,b3halt,b4dead), orderA, preB, postB, preC, postC, case_model_glue, case_multi_output, case_e2e_fold",
-    "normalization": "varnode descriptors use Ghidra space names (register/const) on both sides; op pcs allocated in creation order 8 bytes apart; def token trichotomy def/input/free with 'free' = no def and not setInput (the newVarnode-created locked-output varnode)"
-  },
-  "locked_capture": {
-    "status": "ORACLE_CAPTURED",
-    "deterministic_runs": 2,
-    "records": 14,
-    "bytes": 1233,
-    "stdout_sha256": "81560905f90021f284c291246b93aabade041db15e0e2f123a7aec529ae93c6b",
-    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  },
-  "paired_expected": {
-    "ghidra": {
-      "status": "ORACLE_CAPTURED",
-      "deterministic_runs": 2,
-      "records": 14,
-      "bytes": 1233,
-      "stdout_sha256": "81560905f90021f284c291246b93aabade041db15e0e2f123a7aec529ae93c6b",
-      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    "rugra": {
-      "status": "EXECUTED",
-      "deterministic_runs": 2,
-      "records": 14,
-      "bytes": 1233,
-      "stdout_sha256": "81560905f90021f284c291246b93aabade041db15e0e2f123a7aec529ae93c6b",
-      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    "bilateral": {
-      "status": "MATCH",
-      "diff_exit_code": 0,
-      "records": 0,
-      "bytes": 0,
-      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    }
-  },
-  "comparand": {
-    "rugra_base_commit": "181aa4c8de2868a898fd53be9cf6225627d744ae",
-    "rugra_base_tree": "a5cf5a0297a6e0c553104b15a8f03068d1459923",
-    "rugra_base_src_tree": "448359cd1cadb1e57006324c8b3c69a10a2a425c",
-    "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
-    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
-    "snapshot_model": "immutable partial GAP-A crate snapshot: git archive of commit 181aa4c8 carrying the ActionPrototypeTypes output-locked attach arm; no source overlays",
-    "archive_paths": [
-      "Cargo.toml", "Cargo.lock", "build.rs", "README.md",
-      "benches/decompile_bench.rs", "tests/oracle/decompress_1204.rs",
-      "tests/oracle/funcproto_lock_1204.rs", "examples/curl",
-      "sleigh_specs", "src", "sleigh_shim"
-    ],
-    "overlays": [],
-    "base_source_sha256": {
-      "Cargo.toml": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
-      "Cargo.lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
-      "build.rs": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-      "src/coreaction.rs": "62a187265eb6681a98a5b2731eaaa5751c4477c5e87c232cea5c37ba8eefc136"
-    },
-    "snapshot_build_link": {
-      "path": "ghidra",
-      "target": "repo ghidra checkout (locked oracle)"
-    },
-    "cpp_fixture_sha256": "82e31a463f9324e5198039e62366c8b826110628741fffdc43cef406a04b775b",
-    "rust_fixture_sha256": "84a7a5ac40cb30cf43077ce94582cf6e6136a3a08e1b8fbe1f2ccf3e307ba1e7",
-    "runner_sha256": "ea684989a6a6db07cf2699e61685f489910e9be139d0a473739f70941c3ad2ae"
-  },
-  "build": {
-    "rugra_build_status": "EXECUTED",
-    "cargo_invoked": true,
-    "cargo_target_dir": "/home/wirs/.cache/returnfold-gapa-target",
-    "cargo_tmp_dir": "/home/wirs/.cache/returnfold-gapa-tmp",
-    "cargo_lock": "/tmp/rugra-cargo-build.lock",
-    "timeout_per_build_seconds": 600
-  },
-  "host_tools": {
-    "cxx": "g++ (GCC) 16.2.1 20260810",
-    "cxx_target": "x86_64-pc-linux-gnu",
-    "cc": "gcc (GCC) 16.2.1 20260810",
-    "cc_target": "x86_64-pc-linux-gnu",
-    "ar": "GNU ar (GNU Binutils) 2.47",
-    "make": "GNU Make 4.4.1",
-    "python": "Python 3.14.7",
-    "git": "git version 2.55.0",
-    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
-    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-    "tool_binary_sha256": {
-      "cargo": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
-      "rustc": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618"
-    }
-  },
-  "coverage": {
-    "locked_attach_geometry": {
-      "status": "MATCH",
-      "detail": "retA b1: nin=2, in_last=register:0x0:4, def=free (no def, not setInput), typelock=1, mt=int — cc:4644-4646: newVarnode at the locked output storage, size from the int type (4, not the 8-byte register), appended then updateType(type,true,true)"
-    },
-    "append_at_last_slot": {
-      "status": "MATCH",
-      "detail": "retA b2: nin=3, in1=register:0x40:4 def=input untouched, in_last=register:0x0:4 — cc:4645 opInsertInput(op,vn,op->numInput()) appends as the LAST slot; a pre-existing value input is never replaced"
-    },
-    "halt_skip": {
-      "status": "MATCH",
-      "detail": "retA b3halt: nin=1, in_last=const:0x0:1 — cc:4643 getHaltType()!=0 continue (Rugra masks halt|badinstruction|unimplemented|noreturn|missing per op.hh:170-172)"
-    },
-    "dead_skip": {
-      "status": "MATCH",
-      "detail": "retA b4dead: nin=1, in_last=const:0x0:1 — cc:4642 isDead continue"
-    },
-    "iteration_order_and_identity": {
-      "status": "MATCH",
-      "detail": "orderA b1_lt_b2=1 (VarnodeBank create-index order = beginOp(CPUI_RETURN) address order), pair_distinct=1 (one fresh varnode per RETURN, never shared)"
-    },
-    "active_output_absent_when_locked": {
-      "status": "MATCH",
-      "detail": "orderA active=0 — the locked path never calls initActiveOutput; ActionReturnRecovery's output_type_locked early-exit stays the sole guard"
-    },
-    "void_gate": {
-      "status": "MATCH",
-      "detail": "preB/postB: locked=1 mt=void, nin=1, active=0 — cc:4639 TYPE_VOID gate skips the loop entirely and the else-arm is not taken"
-    },
-    "unlocked_control": {
-      "status": "MATCH",
-      "detail": "preC/postC: locked=0, nin=1 (no attach), active=1 — cc:4650-4651 unconditional initActiveOutput else-arm"
-    },
-    "apply_return_code": {
-      "status": "MATCH",
-      "detail": "rc=0 on all three scenarios both sides (Ghidra apply returns 0; Rugra returns NO_CHANGE=0)"
-    },
-    "pre_state_parity": {
-      "status": "MATCH",
-      "detail": "preA/preB/preC lock+metatype projections identical; C++ locked state built through the native setInternal+setPieces path, Rust through the flat FuncProto fields"
-    },
-    "model_glue": {
-      "status": "UNTESTED",
-      "detail": "Rugra derives the locked output storage from ProtoModel::default_x86_64().output_entries[0] instead of a FuncProto-owned output ProtoParameter (ANN-F glue, FSPEC-0001/FSPEC-0002); fixture pins only the observable address/space identity (RETURNFOLD-GAPA-PROTOTYPES-0001 residual)"
-    },
-    "multi_output": {
-      "status": "UNTESTED",
-      "detail": "model output list with >1 entry (multi-register return storage, PIECE joins) not projected; the default x86-64 model has exactly one output entry on both sides (RETURNFOLD-GAPA-PROTOTYPES-0001 residual)"
-    },
-    "e2e_fold": {
-      "status": "UNTESTED",
-      "detail": "end-to-end return-value fold (MarkExplicit numinstances / MarkImplied / PrintC implied inlining) needs GAP-D and print-stage fixtures; IR-level attach only here (RETURNFOLD-GAPA-UPSTREAM-0001 residual)"
-    }
-  },
-  "residual_ids": [
-    "FSPEC-0001",
-    "FSPEC-0002",
-    "RETURNFOLD-GAPA-UPSTREAM-0001"
+  "bilateral": {
+   "status": "MATCH",
+   "diff_exit_code": 0,
+   "records": 0,
+   "bytes": 0,
+   "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+ },
+ "comparand": {
+  "rugra_base_commit": "181aa4c8de2868a898fd53be9cf6225627d744ae",
+  "rugra_base_tree": "a5cf5a0297a6e0c553104b15a8f03068d1459923",
+  "rugra_base_src_tree": "448359cd1cadb1e57006324c8b3c69a10a2a425c",
+  "cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "snapshot_model": "immutable partial GAP-A crate snapshot: git archive of commit 181aa4c8 carrying the ActionPrototypeTypes output-locked attach arm; no source overlays",
+  "archive_paths": [
+   "Cargo.toml",
+   "Cargo.lock",
+   "build.rs",
+   "README.md",
+   "benches/decompile_bench.rs",
+   "tests/oracle/decompress_1204.rs",
+   "tests/oracle/funcproto_lock_1204.rs",
+   "examples/curl",
+   "sleigh_specs",
+   "src",
+   "sleigh_shim"
   ],
-  "execution_evidence": [
-    "manual dual-side run 2026-08-25: locked oracle (git archive e40ed130 + make libdecomp.a + g++ fixture) vs worktree rlib (181aa4c8 via cargo build --lib, flock + dedicated target + timeout 600), stdout sha256 81560905f90021f284c291246b93aabade041db15e0e2f123a7aec529ae93c6b on both sides, diff exit 0, both stderr empty, both deterministic across 2 runs",
-    "runner run 2026-08-25 (tools/run_returnfold_gapa_oracle.sh): snapshot git-archive build of 181aa4c8, oracle make libdecomp.a + g++ fixture, cargo --offline --locked --lib + rustc fixture, 2 runs per side, bilateral diff 0"
-  ]
+  "overlays": [],
+  "base_source_sha256": {
+   "Cargo.toml": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
+   "Cargo.lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
+   "build.rs": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
+   "src/coreaction.rs": "62a187265eb6681a98a5b2731eaaa5751c4477c5e87c232cea5c37ba8eefc136"
+  },
+  "snapshot_build_link": {
+   "path": "ghidra",
+   "target": "repo ghidra checkout (locked oracle)"
+  },
+  "cpp_fixture_sha256": "82e31a463f9324e5198039e62366c8b826110628741fffdc43cef406a04b775b",
+  "rust_fixture_sha256": "84a7a5ac40cb30cf43077ce94582cf6e6136a3a08e1b8fbe1f2ccf3e307ba1e7",
+  "runner_sha256": "ea684989a6a6db07cf2699e61685f489910e9be139d0a473739f70941c3ad2ae"
+ },
+ "build": {
+  "rugra_build_status": "EXECUTED",
+  "cargo_invoked": true,
+  "cargo_target_dir": "/home/wirs/.cache/returnfold-gapa-target",
+  "cargo_tmp_dir": "/home/wirs/.cache/returnfold-gapa-tmp",
+  "cargo_lock": "/tmp/rugra-cargo-build.lock",
+  "timeout_per_build_seconds": 600
+ },
+ "host_tools": {
+  "cxx": "g++ (GCC) 16.2.1 20260810",
+  "cxx_target": "x86_64-pc-linux-gnu",
+  "cc": "gcc (GCC) 16.2.1 20260810",
+  "cc_target": "x86_64-pc-linux-gnu",
+  "ar": "GNU ar (GNU Binutils) 2.47",
+  "make": "GNU Make 4.4.1",
+  "python": "Python 3.14.7",
+  "git": "git version 2.55.0",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+  "tool_binary_sha256": {
+   "cargo": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93",
+   "rustc": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618"
+  }
+ },
+ "coverage": {
+  "locked_attach_geometry": {
+   "status": "MATCH",
+   "detail": "retA b1: nin=2, in_last=register:0x0:4, def=free (no def, not setInput), typelock=1, mt=int \u2014 cc:4644-4646: newVarnode at the locked output storage, size from the int type (4, not the 8-byte register), appended then updateType(type,true,true)"
+  },
+  "append_at_last_slot": {
+   "status": "MATCH",
+   "detail": "retA b2: nin=3, in1=register:0x40:4 def=input untouched, in_last=register:0x0:4 \u2014 cc:4645 opInsertInput(op,vn,op->numInput()) appends as the LAST slot; a pre-existing value input is never replaced"
+  },
+  "halt_skip": {
+   "status": "MATCH",
+   "detail": "retA b3halt: nin=1, in_last=const:0x0:1 \u2014 cc:4643 getHaltType()!=0 continue (Rugra masks halt|badinstruction|unimplemented|noreturn|missing per op.hh:170-172)"
+  },
+  "dead_skip": {
+   "status": "MATCH",
+   "detail": "retA b4dead: nin=1, in_last=const:0x0:1 \u2014 cc:4642 isDead continue"
+  },
+  "iteration_order_and_identity": {
+   "status": "MATCH",
+   "detail": "orderA b1_lt_b2=1 (VarnodeBank create-index order = beginOp(CPUI_RETURN) address order), pair_distinct=1 (one fresh varnode per RETURN, never shared)"
+  },
+  "active_output_absent_when_locked": {
+   "status": "MATCH",
+   "detail": "orderA active=0 \u2014 the locked path never calls initActiveOutput; ActionReturnRecovery's output_type_locked early-exit stays the sole guard"
+  },
+  "void_gate": {
+   "status": "MATCH",
+   "detail": "preB/postB: locked=1 mt=void, nin=1, active=0 \u2014 cc:4639 TYPE_VOID gate skips the loop entirely and the else-arm is not taken"
+  },
+  "unlocked_control": {
+   "status": "MATCH",
+   "detail": "preC/postC: locked=0, nin=1 (no attach), active=1 \u2014 cc:4650-4651 unconditional initActiveOutput else-arm"
+  },
+  "apply_return_code": {
+   "status": "MATCH",
+   "detail": "rc=0 on all three scenarios both sides (Ghidra apply returns 0; Rugra returns NO_CHANGE=0)"
+  },
+  "pre_state_parity": {
+   "status": "MATCH",
+   "detail": "preA/preB/preC lock+metatype projections identical; C++ locked state built through the native setInternal+setPieces path, Rust through the flat FuncProto fields"
+  },
+  "model_glue": {
+   "status": "UNTESTED",
+   "detail": "Rugra derives the locked output storage from ProtoModel::default_x86_64().output_entries[0] instead of a FuncProto-owned output ProtoParameter (ANN-F glue, FSPEC-0001/FSPEC-0002); fixture pins only the observable address/space identity (RETURNFOLD-GAPA-PROTOTYPES-0001 residual)"
+  },
+  "multi_output": {
+   "status": "UNTESTED",
+   "detail": "model output list with >1 entry (multi-register return storage, PIECE joins) not projected; the default x86-64 model has exactly one output entry on both sides (RETURNFOLD-GAPA-PROTOTYPES-0001 residual)"
+  },
+  "e2e_fold": {
+   "status": "UNTESTED",
+   "detail": "end-to-end return-value fold (MarkExplicit numinstances / MarkImplied / PrintC implied inlining) needs GAP-D and print-stage fixtures; IR-level attach only here (RETURNFOLD-GAPA-UPSTREAM-0001 residual)"
+  }
+ },
+ "residual_ids": [
+  "FSPEC-0001",
+  "FSPEC-0002",
+  "RETURNFOLD-GAPA-UPSTREAM-0001"
+ ],
+ "execution_evidence": [
+  "manual dual-side run 2026-08-25: locked oracle (git archive e40ed130 + make libdecomp.a + g++ fixture) vs worktree rlib (181aa4c8 via cargo build --lib, flock + dedicated target + timeout 600), stdout sha256 81560905f90021f284c291246b93aabade041db15e0e2f123a7aec529ae93c6b on both sides, diff exit 0, both stderr empty, both deterministic across 2 runs",
+  "runner run 2026-08-25 (tools/run_returnfold_gapa_oracle.sh): snapshot git-archive build of 181aa4c8, oracle make libdecomp.a + g++ fixture, cargo --offline --locked --lib + rustc fixture, 2 runs per side, bilateral diff 0"
+ ],
+ "input_sha256": "d55c6d6e8a0a2f6f6a2a065e8e0faa22fbf31f64eec8f91b85a50f8226ec45be"
 }

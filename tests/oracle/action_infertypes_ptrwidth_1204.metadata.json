@@ -1,198 +1,387 @@
 {
-  "schema_version": 2,
-  "fixture_id": "ACTION-INFERTYPES-PTRWIDTH-0001",
-  "overall_status": "MISMATCH",
-  "covered_projection_status": "MATCH",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "sources": [
-      "coreaction.cc:4980-5416 ActionInferTypes complete implementation",
-      "coreaction.hh:930-991 ActionInferTypes state and reset",
-      "typeop.cc:206-228 TypeOp::propagateFromPointer",
-      "typeop.cc:487-500 TypeOpLoad::propagateType",
-      "typeop.cc:557-570 TypeOpStore::propagateType",
-      "varnode.cc:900-935 Varnode::getLocalType"
-    ],
-    "source_blobs": {
-      "coreaction.cc": "a392076ad23ddad3350e0fe7a2ebe96a8868f74b",
-      "coreaction.hh": "d974875d7d71ac76121379eba139c2e8450ae8a3",
-      "typeop.cc": "5197e3eefd185ed39c58e65af0687d605e34ec5e",
-      "typeop.hh": "90ac4ed35194c5fd9bbb86759481c89a5388cb52",
-      "varnode.cc": "a04614c582a1fd987d615dcec4a8b47d3501f95f",
-      "varnode.hh": "b78368fc8c3fbdda2a419122b759b4dcd44fe8d2"
-    }
-  },
-  "architecture": {
-    "language": "x86:LE:64:default",
-    "endianness": "little",
-    "pointer_storage_bytes": 8,
-    "pointer_wordsize": 1,
-    "max_basetype_size": 10,
-    "spaces": [
-      ["constant", 0],
-      ["other", 1],
-      ["unique", 2],
-      ["ram", 3],
-      ["register", 4],
-      ["stack", 5],
-      ["join", 6],
-      ["iop", 7]
-    ]
-  },
-  "compiler_spec": {
-    "id": "synthetic-x86-64-gcc-fixture",
-    "ghidra_prototype": "fixture; extrapop=0; empty input/output lists",
-    "rugra_prototype": "no bound ProtoModel",
-    "scope": "No CALL, RETURN, prototype, spacebase, or mapped-symbol edge is present; the compiler-model state is not part of the covered width projection. Its full-state mismatch is retained below."
-  },
-  "analysis_options": {
-    "action": "production ActionInferTypes instance",
-    "type_recovery_started": true,
-    "action_reset_before_first_apply": true,
-    "action_apply_count": 2,
-    "random_seed": "none",
-    "error_injection": "none",
-    "raw_output_normalization": "none; each side has an independent pinned stdout SHA-256",
-    "covered_projection": "Only the six explicitly enumerated raw array-versus-unknown tokens are translated before requiring complete record equality; this does not change overall_status=MISMATCH"
-  },
-  "input_manifest": {
-    "canonicalization": "SHA-256 of sorted compact JSON over architecture, compiler_spec, analysis_options, graph, and cases",
-    "sha256": "2d6938eb0724581deaa3ae6b224d1d36a0945641d6de88710dd4778166e72a4d",
-    "graph": {
-      "function": "real Funcdata with type recovery started",
-      "block": "one real BlockBasic containing all six live ops in declared order",
-      "source": "one shared 8-byte register Varnode, INPUT|TYPELOCK, canonical ProgressData(32)*",
-      "progress_datatype": "one 32-byte ProgressData-shaped object per side with field pointee/offset layout total@0:int8, prev@8:int8, point@16:int8, width@24:int4; only size and pointee identity participate in the covered projection, while completion and TypeField ident representation remain MISMATCH",
-      "space_operands": "six distinct 4-byte constant Varnodes encoding ram space id 3",
-      "targets": "six pairwise-distinct production Varnodes; LOAD targets are written outputs, STORE targets are free input2 values",
-      "alias_topology": "source is the identical input1 object of every op; every op, space operand, and target is distinct; slot, def, descendant, parent-block, and alive relationships are asserted after both passes"
-    },
-    "cases": [
-      {"label": "L16", "opcode": "CPUI_LOAD", "target": "output", "access_bytes": 16, "expected_width_projection": "preserve original U16 identity"},
-      {"label": "L4", "opcode": "CPUI_LOAD", "target": "output", "access_bytes": 4, "expected_width_projection": "preserve original U4 identity"},
-      {"label": "L32", "opcode": "CPUI_LOAD", "target": "output", "access_bytes": 32, "expected_width_projection": "same ProgressData pointee identity"},
-      {"label": "S16", "opcode": "CPUI_STORE", "target": "input2", "access_bytes": 16, "expected_width_projection": "preserve original U16 identity"},
-      {"label": "S4", "opcode": "CPUI_STORE", "target": "input2", "access_bytes": 4, "expected_width_projection": "preserve original U4 identity"},
-      {"label": "S32", "opcode": "CPUI_STORE", "target": "input2", "access_bytes": 32, "expected_width_projection": "same ProgressData pointee identity"}
-    ]
-  },
-  "observation_schema": {
-    "pre_exception_state": "The pre record is flushed before Action execution and contains every target type, raw metatype, object identity, block/descendant order, source identity/flags/descendant count, and topology verdict",
-    "return_and_exception": "Both successful apply return values are observed; injected exception identity and phase are explicitly UNTESTED",
-    "type_and_identity": "Normalized class, raw metatype, size, identity against the original target type, and identity against ProgressData",
-    "mutation": "Source type/flags, each target's primary and named propagation flags, op alive state, def links, descendants, slots, parent block, and actual current block/descendant order",
-    "iteration": "Declared op order and two sequential Action applies; pass2 requires exact pass1 datatype identity stability"
-  },
-  "known_raw_differences": [
-    {"record": "pre", "case": "L16", "ghidra": "array", "rugra": "unknown"},
-    {"record": "pre", "case": "L32", "ghidra": "array", "rugra": "unknown"},
-    {"record": "pre", "case": "S16", "ghidra": "array", "rugra": "unknown"},
-    {"record": "pre", "case": "S32", "ghidra": "array", "rugra": "unknown"},
-    {"record": "pass1", "case": "L16", "ghidra": "array", "rugra": "unknown"},
-    {"record": "pass1", "case": "S16", "ghidra": "array", "rugra": "unknown"}
+ "schema_version": 2,
+ "fixture_id": "ACTION-INFERTYPES-PTRWIDTH-0001",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
+ "covered_projection_status": "MATCH",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "sources": [
+   "coreaction.cc:4980-5416 ActionInferTypes complete implementation",
+   "coreaction.hh:930-991 ActionInferTypes state and reset",
+   "typeop.cc:206-228 TypeOp::propagateFromPointer",
+   "typeop.cc:487-500 TypeOpLoad::propagateType",
+   "typeop.cc:557-570 TypeOpStore::propagateType",
+   "varnode.cc:900-935 Varnode::getLocalType"
   ],
-  "comparand": {
-    "rust_base_commit": "172582b21f6359c836d028cdfddf5aa54b8f9675",
-    "rust_base_tree": "ffb005738f1801a2124863e35a022e272ee121be",
-    "rust_base_src_tree": "1288ea058f04812d63e89d4b2e0190e53cf7bde5",
-    "rust_base_blobs": {
-      "src/coreaction.rs": "ae2cf089a3f644385d8a64ce213f7f1b0b88103a",
-      "docs/api/coreaction.md": "80105e484ad0af872be5997069a591085d7b774a",
-      "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
-      "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
-      "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
-    },
-    "runner_sha256": "f0ba98a6c916f2c83d040cb90d45226f32db5e95af91a00fda1341e67246a950",
-    "overlay_sha256": {
-      "src/coreaction.rs": "a2e349aa7f217d01cecc937a267908c4a79e77d83244b4d0cddd3d5ebfde0e12",
-      "docs/api/coreaction.md": "be1ce1a16c6b25bf5e54d55af3e20aa352c03c83ea51fe05fbbb85e274c97ab7",
-      "tests/oracle/action_infertypes_ptrwidth_1204.cc": "179fe528c353c9ef629cdafa767615bf165d7f0434ecc0e85af20027ea87a1e4",
-      "tests/oracle/action_infertypes_ptrwidth_1204.rs": "44ff7e5e994ab61e21b3da4150d44580c29dd6551cce91531e8b21203e8ec948"
-    },
-    "source_policy": "An externally supplied full candidate commit OID anchors the exact six-file diff. The runner materializes every evidence file from candidate Git blobs, archives the pinned Rugra base, overlays only candidate src/coreaction.rs, and executes only run-private snapshots with pre/post Git-object readback."
+  "source_blobs": {
+   "coreaction.cc": "a392076ad23ddad3350e0fe7a2ebe96a8868f74b",
+   "coreaction.hh": "d974875d7d71ac76121379eba139c2e8450ae8a3",
+   "typeop.cc": "5197e3eefd185ed39c58e65af0687d605e34ec5e",
+   "typeop.hh": "90ac4ed35194c5fd9bbb86759481c89a5388cb52",
+   "varnode.cc": "a04614c582a1fd987d615dcec4a8b47d3501f95f",
+   "varnode.hh": "b78368fc8c3fbdda2a419122b759b4dcd44fe8d2"
+  }
+ },
+ "architecture": {
+  "language": "x86:LE:64:default",
+  "endianness": "little",
+  "pointer_storage_bytes": 8,
+  "pointer_wordsize": 1,
+  "max_basetype_size": 10,
+  "spaces": [
+   [
+    "constant",
+    0
+   ],
+   [
+    "other",
+    1
+   ],
+   [
+    "unique",
+    2
+   ],
+   [
+    "ram",
+    3
+   ],
+   [
+    "register",
+    4
+   ],
+   [
+    "stack",
+    5
+   ],
+   [
+    "join",
+    6
+   ],
+   [
+    "iop",
+    7
+   ]
+  ]
+ },
+ "compiler_spec": {
+  "id": "synthetic-x86-64-gcc-fixture",
+  "ghidra_prototype": "fixture; extrapop=0; empty input/output lists",
+  "rugra_prototype": "no bound ProtoModel",
+  "scope": "No CALL, RETURN, prototype, spacebase, or mapped-symbol edge is present; the compiler-model state is not part of the covered width projection. Its full-state mismatch is retained below."
+ },
+ "analysis_options": {
+  "action": "production ActionInferTypes instance",
+  "type_recovery_started": true,
+  "action_reset_before_first_apply": true,
+  "action_apply_count": 2,
+  "random_seed": "none",
+  "error_injection": "none",
+  "raw_output_normalization": "none; each side has an independent pinned stdout SHA-256",
+  "covered_projection": "Only the six explicitly enumerated raw array-versus-unknown tokens are translated before requiring complete record equality; this does not change overall_status=MISMATCH"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of sorted compact JSON over architecture, compiler_spec, analysis_options, graph, and cases",
+  "sha256": "2d6938eb0724581deaa3ae6b224d1d36a0945641d6de88710dd4778166e72a4d",
+  "graph": {
+   "function": "real Funcdata with type recovery started",
+   "block": "one real BlockBasic containing all six live ops in declared order",
+   "source": "one shared 8-byte register Varnode, INPUT|TYPELOCK, canonical ProgressData(32)*",
+   "progress_datatype": "one 32-byte ProgressData-shaped object per side with field pointee/offset layout total@0:int8, prev@8:int8, point@16:int8, width@24:int4; only size and pointee identity participate in the covered projection, while completion and TypeField ident representation remain MISMATCH",
+   "space_operands": "six distinct 4-byte constant Varnodes encoding ram space id 3",
+   "targets": "six pairwise-distinct production Varnodes; LOAD targets are written outputs, STORE targets are free input2 values",
+   "alias_topology": "source is the identical input1 object of every op; every op, space operand, and target is distinct; slot, def, descendant, parent-block, and alive relationships are asserted after both passes"
   },
-  "candidate_evidence": {
-    "external_anchor": "full candidate commit/tree and six blob OIDs recorded by independent review; metadata is not self-authenticating",
-    "owned_paths": [
-      "src/coreaction.rs",
-      "docs/api/coreaction.md",
-      "tests/oracle/action_infertypes_ptrwidth_1204.cc",
-      "tests/oracle/action_infertypes_ptrwidth_1204.rs",
-      "tests/oracle/action_infertypes_ptrwidth_1204.metadata.json",
-      "tools/run_action_infertypes_ptrwidth_oracle.sh"
-    ],
-    "materialization": "git cat-file blobs into a private home-backed snapshot followed by fixed-FD self-exec",
-    "metadata_self_authentication": false
+  "cases": [
+   {
+    "label": "L16",
+    "opcode": "CPUI_LOAD",
+    "target": "output",
+    "access_bytes": 16,
+    "expected_width_projection": "preserve original U16 identity"
+   },
+   {
+    "label": "L4",
+    "opcode": "CPUI_LOAD",
+    "target": "output",
+    "access_bytes": 4,
+    "expected_width_projection": "preserve original U4 identity"
+   },
+   {
+    "label": "L32",
+    "opcode": "CPUI_LOAD",
+    "target": "output",
+    "access_bytes": 32,
+    "expected_width_projection": "same ProgressData pointee identity"
+   },
+   {
+    "label": "S16",
+    "opcode": "CPUI_STORE",
+    "target": "input2",
+    "access_bytes": 16,
+    "expected_width_projection": "preserve original U16 identity"
+   },
+   {
+    "label": "S4",
+    "opcode": "CPUI_STORE",
+    "target": "input2",
+    "access_bytes": 4,
+    "expected_width_projection": "preserve original U4 identity"
+   },
+   {
+    "label": "S32",
+    "opcode": "CPUI_STORE",
+    "target": "input2",
+    "access_bytes": 32,
+    "expected_width_projection": "same ProgressData pointee identity"
+   }
+  ]
+ },
+ "observation_schema": {
+  "pre_exception_state": "The pre record is flushed before Action execution and contains every target type, raw metatype, object identity, block/descendant order, source identity/flags/descendant count, and topology verdict",
+  "return_and_exception": "Both successful apply return values are observed; injected exception identity and phase are explicitly UNTESTED",
+  "type_and_identity": "Normalized class, raw metatype, size, identity against the original target type, and identity against ProgressData",
+  "mutation": "Source type/flags, each target's primary and named propagation flags, op alive state, def links, descendants, slots, parent block, and actual current block/descendant order",
+  "iteration": "Declared op order and two sequential Action applies; pass2 requires exact pass1 datatype identity stability"
+ },
+ "known_raw_differences": [
+  {
+   "record": "pre",
+   "case": "L16",
+   "ghidra": "array",
+   "rugra": "unknown"
   },
-  "expected_stdout_sha256": {
-    "ghidra": "f20f3c8a0c90945dfc641b5ea13324b527211a5edb83ddbc8d871f06cbfbb75f",
-    "rugra": "9b73e923bc3b32b9086780db939b1fdf6245d022cf35a3af482688e0f59fa701"
+  {
+   "record": "pre",
+   "case": "L32",
+   "ghidra": "array",
+   "rugra": "unknown"
   },
-  "expected_stderr_sha256": {
-    "ghidra": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  {
+   "record": "pre",
+   "case": "S16",
+   "ghidra": "array",
+   "rugra": "unknown"
   },
-  "expected_raw_diff_sha256": "9101eb6eb7b29f0a062e47f8e94df8928769105ef63c5edd05f64ca9509916d3",
-  "expected_exit_code": {
-    "ghidra": 0,
-    "rugra": 0,
-    "raw_diff": 1,
-    "runner": 0
+  {
+   "record": "pre",
+   "case": "S32",
+   "ghidra": "array",
+   "rugra": "unknown"
   },
-  "coverage": {
-    "load_pointer_to_value_width_gate_16_4": {"status": "MATCH", "detail": "L16 and L4 preserve their original width-sized UNKNOWN/ARRAY object identity"},
-    "load_pointer_to_value_exact_size_identity": {"status": "MATCH", "detail": "L32 becomes the identical ProgressData pointee object"},
-    "store_pointer_to_value_width_gate_16_4": {"status": "MATCH", "detail": "S16 and S4 preserve their original width-sized UNKNOWN/ARRAY object identity"},
-    "store_pointer_to_value_exact_size_identity": {"status": "MATCH", "detail": "S32 becomes the identical ProgressData pointee object"},
-    "production_funcdata_op_alias_topology": {"status": "MATCH", "detail": "real banks/builders; shared source, distinct constants/targets/ops, exact slots, defs, descendants, parent and alive state"},
-    "actual_block_and_descendant_order": {"status": "MATCH", "detail": "both lists are reread after each Action pass rather than compared through a frozen container snapshot"},
-    "source_and_target_flag_mutation": {"status": "MATCH", "detail": "source type/primary flags and target primary/named propagation flags are stable"},
-    "second_apply_type_identity_stability": {"status": "MATCH", "detail": "all six pass2 datatype identities equal pass1"},
-    "large_default_unknown_representation": {"status": "MISMATCH", "detail": "TYPE-UNKNOWN-0001: Ghidra max_basetype_size=10 represents 16/32-byte default UNKNOWN as arrays; Rugra represents them as flat UNKNOWN"},
-    "production_build_localtypes_dispatch": {"status": "MISMATCH", "detail": "ACTION-INFERTYPES-DISPATCH-0001: Rugra still uses handwritten local-type seeds instead of Varnode::getLocalType plus TypeOp local dispatch"},
-    "production_dfs_marks_order_and_writeback": {"status": "MISMATCH", "detail": "ACTION-INFERTYPES-DISPATCH-0001: path-local mark order, target handling, and complete write-back state are outside this width-only slice"},
-    "action_reset_and_localcount_full_state": {"status": "MISMATCH", "detail": "ACTION-INFERTYPES-DISPATCH-0001: Ghidra reset writes private localcount=0; Rugra currently inherits the no-op Action reset, although a fresh instance starts at zero in this fixture"},
-    "load_store_value_to_pointer_factory_wordsize": {"status": "MISMATCH", "detail": "ACTION-INFERTYPES-DISPATCH-0001: reverse propagation still constructs a fresh pointer with hard-coded wordsize 1 and alt-type width"},
-    "compiler_model_and_architecture_full_state": {"status": "MISMATCH", "detail": "ACTION-INFERTYPES-DISPATCH-0001: the synthetic hosts expose only the state consumed by these LOAD/STORE edges; Ghidra owns an empty ProtoModel while Rugra has none"},
-    "progress_struct_field_identity": {"status": "MISMATCH", "detail": "TYPEFIELD-IDENT-REPRESENTATION-0001: locked Ghidra TypeField carries ident values 0,1,2,3 while Rugra TypeField has no corresponding identity member"},
-    "spacebase_guards_and_propagation": {"status": "UNTESTED", "detail": "ACTION-INFERTYPES-DISPATCH-0001"},
-    "variable_length_pointee": {"status": "UNTESTED", "detail": "ACTION-INFERTYPES-DISPATCH-0001: not part of the fixed ProgressData input"},
-    "plain_enum_partial_piece": {"status": "MISMATCH", "detail": "TYPEFACTORY-EXACTPIECE-0001: canonical getExactPiece owner API is a separate dependency"},
-    "relative_pointer_enum_exact_piece": {"status": "MISMATCH", "detail": "TYPEFACTORY-EXACTPIECE-0001: relative exact-piece propagation is fail-closed until the factory dependency lands"},
-    "ptrsub_downchain_pointerrel_and_stop_flag": {"status": "UNTESTED", "detail": "ACTION-INFERTYPES-DISPATCH-0001; explicitly excluded from this slice"},
-    "exceptions_and_error_injection": {"status": "UNTESTED", "detail": "ACTION-INFERTYPES-DISPATCH-0001: no injected allocation, lock, malformed-op, or LowlevelError path"}
+  {
+   "record": "pass1",
+   "case": "L16",
+   "ghidra": "array",
+   "rugra": "unknown"
   },
-  "residual_ids": [
-    "ACTION-INFERTYPES-DISPATCH-0001",
-    "TYPE-UNKNOWN-0001",
-    "TYPEFACTORY-EXACTPIECE-0001",
-    "TYPEFIELD-IDENT-REPRESENTATION-0001"
+  {
+   "record": "pass1",
+   "case": "S16",
+   "ghidra": "array",
+   "rugra": "unknown"
+  }
+ ],
+ "comparand": {
+  "rust_base_commit": "172582b21f6359c836d028cdfddf5aa54b8f9675",
+  "rust_base_tree": "ffb005738f1801a2124863e35a022e272ee121be",
+  "rust_base_src_tree": "1288ea058f04812d63e89d4b2e0190e53cf7bde5",
+  "rust_base_blobs": {
+   "src/coreaction.rs": "ae2cf089a3f644385d8a64ce213f7f1b0b88103a",
+   "docs/api/coreaction.md": "80105e484ad0af872be5997069a591085d7b774a",
+   "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
+   "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+   "build.rs": "a0c81c8521547efebbb463a640ecec69d83ed4c5"
+  },
+  "runner_sha256": "f0ba98a6c916f2c83d040cb90d45226f32db5e95af91a00fda1341e67246a950",
+  "overlay_sha256": {
+   "src/coreaction.rs": "a2e349aa7f217d01cecc937a267908c4a79e77d83244b4d0cddd3d5ebfde0e12",
+   "docs/api/coreaction.md": "be1ce1a16c6b25bf5e54d55af3e20aa352c03c83ea51fe05fbbb85e274c97ab7",
+   "tests/oracle/action_infertypes_ptrwidth_1204.cc": "179fe528c353c9ef629cdafa767615bf165d7f0434ecc0e85af20027ea87a1e4",
+   "tests/oracle/action_infertypes_ptrwidth_1204.rs": "44ff7e5e994ab61e21b3da4150d44580c29dd6551cce91531e8b21203e8ec948"
+  },
+  "source_policy": "An externally supplied full candidate commit OID anchors the exact six-file diff. The runner materializes every evidence file from candidate Git blobs, archives the pinned Rugra base, overlays only candidate src/coreaction.rs, and executes only run-private snapshots with pre/post Git-object readback."
+ },
+ "candidate_evidence": {
+  "external_anchor": "full candidate commit/tree and six blob OIDs recorded by independent review; metadata is not self-authenticating",
+  "owned_paths": [
+   "src/coreaction.rs",
+   "docs/api/coreaction.md",
+   "tests/oracle/action_infertypes_ptrwidth_1204.cc",
+   "tests/oracle/action_infertypes_ptrwidth_1204.rs",
+   "tests/oracle/action_infertypes_ptrwidth_1204.metadata.json",
+   "tools/run_action_infertypes_ptrwidth_oracle.sh"
   ],
-  "host_toolchain": {
-    "cargo": {"path": "/usr/bin/cargo", "version": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)", "sha256": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93"},
-    "rustc": {"path": "/usr/bin/rustc", "version": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)", "sha256": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618"},
-    "cxx": {"path": "/usr/bin/g++", "version": "g++ (GCC) 16.2.1 20260810", "sha256": "f04191f6a7b2cd7d9a62e1745872b8a6088791e5af6955488c69c9b2c4668bc9"},
-    "cc": {"path": "/usr/bin/gcc", "version": "gcc (GCC) 16.2.1 20260810", "sha256": "8aac907d6fbf40394b424b5fa4a2ad1aa291dac7d3a0315c5b415c1f5ace1287"},
-    "make": {"path": "/usr/bin/make", "version": "GNU Make 4.4.1", "sha256": "9018663161af324a74326c035cfd05408cba13a26c1f6b801cf5f3195f2bee40"},
-    "ar": {"path": "/usr/bin/ar", "version": "GNU ar (GNU Binutils) 2.47", "sha256": "41861189eb10fb9fe73ffcb8c82bdbbe5f6084de78e03f15acddd1d33071c3a4"},
-    "git": {"path": "/usr/bin/git", "version": "git version 2.55.0", "sha256": "93473c28694fd72bd889364107cd2770514de59780885a6a4aafca4d602e30ad"},
-    "flock": {"path": "/usr/bin/flock", "version": "flock from util-linux 2.42.2", "sha256": "0099a150fad09ff4bb8cbd839dfa397043a48d08d8294c6cda13ab805aca50da"},
-    "python": {"path": "/usr/bin/python3.14", "version": "Python 3.14.7", "sha256": "d78f9cf7178ecff09963551399855543c297f37ac207e626228bfe43cb26a70c"},
-    "cxx_target": "x86_64-pc-linux-gnu",
-    "platform": "Linux 7.1.8-arch1-3 x86_64"
+  "materialization": "git cat-file blobs into a private home-backed snapshot followed by fixed-FD self-exec",
+  "metadata_self_authentication": false
+ },
+ "expected_stdout_sha256": {
+  "ghidra": "f20f3c8a0c90945dfc641b5ea13324b527211a5edb83ddbc8d871f06cbfbb75f",
+  "rugra": "9b73e923bc3b32b9086780db939b1fdf6245d022cf35a3af482688e0f59fa701"
+ },
+ "expected_stderr_sha256": {
+  "ghidra": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+ },
+ "expected_raw_diff_sha256": "9101eb6eb7b29f0a062e47f8e94df8928769105ef63c5edd05f64ca9509916d3",
+ "expected_exit_code": {
+  "ghidra": 0,
+  "rugra": 0,
+  "raw_diff": 1,
+  "runner": 0
+ },
+ "coverage": {
+  "load_pointer_to_value_width_gate_16_4": {
+   "status": "MATCH",
+   "detail": "L16 and L4 preserve their original width-sized UNKNOWN/ARRAY object identity"
   },
-  "build_environment": {
-    "PATH": "/usr/bin:/bin",
-    "cargo_incremental": false,
-    "cargo_jobs": 2,
-    "cargo_lock": "/tmp/rugra-cargo-build.lock",
-    "cargo_mode": "--frozen --locked --offline --lib",
-    "rustflags": "-Awarnings",
-    "temp_policy": "private home-backed run root and TMPDIR"
+  "load_pointer_to_value_exact_size_identity": {
+   "status": "MATCH",
+   "detail": "L32 becomes the identical ProgressData pointee object"
   },
-  "execution_evidence": []
+  "store_pointer_to_value_width_gate_16_4": {
+   "status": "MATCH",
+   "detail": "S16 and S4 preserve their original width-sized UNKNOWN/ARRAY object identity"
+  },
+  "store_pointer_to_value_exact_size_identity": {
+   "status": "MATCH",
+   "detail": "S32 becomes the identical ProgressData pointee object"
+  },
+  "production_funcdata_op_alias_topology": {
+   "status": "MATCH",
+   "detail": "real banks/builders; shared source, distinct constants/targets/ops, exact slots, defs, descendants, parent and alive state"
+  },
+  "actual_block_and_descendant_order": {
+   "status": "MATCH",
+   "detail": "both lists are reread after each Action pass rather than compared through a frozen container snapshot"
+  },
+  "source_and_target_flag_mutation": {
+   "status": "MATCH",
+   "detail": "source type/primary flags and target primary/named propagation flags are stable"
+  },
+  "second_apply_type_identity_stability": {
+   "status": "MATCH",
+   "detail": "all six pass2 datatype identities equal pass1"
+  },
+  "large_default_unknown_representation": {
+   "status": "MISMATCH",
+   "detail": "TYPE-UNKNOWN-0001: Ghidra max_basetype_size=10 represents 16/32-byte default UNKNOWN as arrays; Rugra represents them as flat UNKNOWN"
+  },
+  "production_build_localtypes_dispatch": {
+   "status": "MISMATCH",
+   "detail": "ACTION-INFERTYPES-DISPATCH-0001: Rugra still uses handwritten local-type seeds instead of Varnode::getLocalType plus TypeOp local dispatch"
+  },
+  "production_dfs_marks_order_and_writeback": {
+   "status": "MISMATCH",
+   "detail": "ACTION-INFERTYPES-DISPATCH-0001: path-local mark order, target handling, and complete write-back state are outside this width-only slice"
+  },
+  "action_reset_and_localcount_full_state": {
+   "status": "MISMATCH",
+   "detail": "ACTION-INFERTYPES-DISPATCH-0001: Ghidra reset writes private localcount=0; Rugra currently inherits the no-op Action reset, although a fresh instance starts at zero in this fixture"
+  },
+  "load_store_value_to_pointer_factory_wordsize": {
+   "status": "MISMATCH",
+   "detail": "ACTION-INFERTYPES-DISPATCH-0001: reverse propagation still constructs a fresh pointer with hard-coded wordsize 1 and alt-type width"
+  },
+  "compiler_model_and_architecture_full_state": {
+   "status": "MISMATCH",
+   "detail": "ACTION-INFERTYPES-DISPATCH-0001: the synthetic hosts expose only the state consumed by these LOAD/STORE edges; Ghidra owns an empty ProtoModel while Rugra has none"
+  },
+  "progress_struct_field_identity": {
+   "status": "MISMATCH",
+   "detail": "TYPEFIELD-IDENT-REPRESENTATION-0001: locked Ghidra TypeField carries ident values 0,1,2,3 while Rugra TypeField has no corresponding identity member"
+  },
+  "spacebase_guards_and_propagation": {
+   "status": "UNTESTED",
+   "detail": "ACTION-INFERTYPES-DISPATCH-0001"
+  },
+  "variable_length_pointee": {
+   "status": "UNTESTED",
+   "detail": "ACTION-INFERTYPES-DISPATCH-0001: not part of the fixed ProgressData input"
+  },
+  "plain_enum_partial_piece": {
+   "status": "MISMATCH",
+   "detail": "TYPEFACTORY-EXACTPIECE-0001: canonical getExactPiece owner API is a separate dependency"
+  },
+  "relative_pointer_enum_exact_piece": {
+   "status": "MISMATCH",
+   "detail": "TYPEFACTORY-EXACTPIECE-0001: relative exact-piece propagation is fail-closed until the factory dependency lands"
+  },
+  "ptrsub_downchain_pointerrel_and_stop_flag": {
+   "status": "UNTESTED",
+   "detail": "ACTION-INFERTYPES-DISPATCH-0001; explicitly excluded from this slice"
+  },
+  "exceptions_and_error_injection": {
+   "status": "UNTESTED",
+   "detail": "ACTION-INFERTYPES-DISPATCH-0001: no injected allocation, lock, malformed-op, or LowlevelError path"
+  }
+ },
+ "residual_ids": [
+  "ACTION-INFERTYPES-DISPATCH-0001",
+  "TYPE-UNKNOWN-0001",
+  "TYPEFACTORY-EXACTPIECE-0001",
+  "TYPEFIELD-IDENT-REPRESENTATION-0001"
+ ],
+ "host_toolchain": {
+  "cargo": {
+   "path": "/usr/bin/cargo",
+   "version": "cargo 1.97.1 (c980f4866 2026-06-30) (Arch Linux rust 1:1.97.1-1)",
+   "sha256": "131c52b36a4aa4016a1c5e8478ed232a349f2e2d5a9fc4110f3f69f2d61b9e93"
+  },
+  "rustc": {
+   "path": "/usr/bin/rustc",
+   "version": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
+   "sha256": "060916a7ed17951343fb461ad068179a56a33eb675910f1d7d7ab738fed3b618"
+  },
+  "cxx": {
+   "path": "/usr/bin/g++",
+   "version": "g++ (GCC) 16.2.1 20260810",
+   "sha256": "f04191f6a7b2cd7d9a62e1745872b8a6088791e5af6955488c69c9b2c4668bc9"
+  },
+  "cc": {
+   "path": "/usr/bin/gcc",
+   "version": "gcc (GCC) 16.2.1 20260810",
+   "sha256": "8aac907d6fbf40394b424b5fa4a2ad1aa291dac7d3a0315c5b415c1f5ace1287"
+  },
+  "make": {
+   "path": "/usr/bin/make",
+   "version": "GNU Make 4.4.1",
+   "sha256": "9018663161af324a74326c035cfd05408cba13a26c1f6b801cf5f3195f2bee40"
+  },
+  "ar": {
+   "path": "/usr/bin/ar",
+   "version": "GNU ar (GNU Binutils) 2.47",
+   "sha256": "41861189eb10fb9fe73ffcb8c82bdbbe5f6084de78e03f15acddd1d33071c3a4"
+  },
+  "git": {
+   "path": "/usr/bin/git",
+   "version": "git version 2.55.0",
+   "sha256": "93473c28694fd72bd889364107cd2770514de59780885a6a4aafca4d602e30ad"
+  },
+  "flock": {
+   "path": "/usr/bin/flock",
+   "version": "flock from util-linux 2.42.2",
+   "sha256": "0099a150fad09ff4bb8cbd839dfa397043a48d08d8294c6cda13ab805aca50da"
+  },
+  "python": {
+   "path": "/usr/bin/python3.14",
+   "version": "Python 3.14.7",
+   "sha256": "d78f9cf7178ecff09963551399855543c297f37ac207e626228bfe43cb26a70c"
+  },
+  "cxx_target": "x86_64-pc-linux-gnu",
+  "platform": "Linux 7.1.8-arch1-3 x86_64"
+ },
+ "build_environment": {
+  "PATH": "/usr/bin:/bin",
+  "cargo_incremental": false,
+  "cargo_jobs": 2,
+  "cargo_lock": "/tmp/rugra-cargo-build.lock",
+  "cargo_mode": "--frozen --locked --offline --lib",
+  "rustflags": "-Awarnings",
+  "temp_policy": "private home-backed run root and TMPDIR"
+ },
+ "execution_evidence": []
 }

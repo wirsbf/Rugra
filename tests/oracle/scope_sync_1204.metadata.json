@@ -1,144 +1,144 @@
 {
-  "schema_version": 1,
-  "fixture_id": "FUNCDATA-SCOPE-SYNC-0001",
-  "oracle": {
-    "repository": "NationalSecurityAgency/ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ "schema_version": 1,
+ "fixture_id": "FUNCDATA-SCOPE-SYNC-0001",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "rugra_base_commit": "609981d706edb3e384b148a12ed190028baa1984",
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec",
+  "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+ },
+ "analysis_options": {
+  "api": "Direct Funcdata::syncVarnodesWithSymbols invocation with explicit (updateDatatypes, unmappedAliasCheck) values over a synthetic per-case Funcdata body; no ActionGroup or other Action runs",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
+  "error_injection": "none",
+  "funcdata": "Locked BfdArchitecture over the pinned Git-blob curl input supplies the Ghidra Funcdata, address spaces, TypeFactory, and the persistent ScopeLocal; each Ghidra case clears prior state via fd.clear() (clearUnlocked + resetLocalWindow). Rugra builds an isolated synthetic Funcdata plus a hand-installed ScopeLocal per case.",
+  "ir": "Stack-space Varnodes defined by COPY(const) ops at explicit code addresses (plus free twins and, in typelock_mapentry, a linkSymbol-attached SymbolEntry). Fixture offsets 0x300+ sit above the x86-64-gcc default local window ([0,0x1fe] plus the negative stack window starting at 0xfffffffffff0bdc0, established empirically), so creation-time setVarnodeProperties probes leave them clean; pre-states for the mask cases are built through public production paths (temporary Database::addRange/removeRange extensions driving the creation-time in-scope mapped|addrtied pair, Varnode::setAddrForce, updateType(,true,), and linkSymbol through a usepoint-matched entry) and the temporary range is removed before the sync call.",
+  "normalization": "No Ghidra/Rugra behavior difference of syncVarnodesWithSymbols is normalized or removed. One pre-existing divergence OUTSIDE the function's contract is normalized at fixture level: Rugra's canonical TypeFactory names unknown base types 'undefined{size}' while Ghidra names them 'xunknown{size}' (printNameBase first char), so the Rust fixture pre-installs the Ghidra spelling as the initial Varnode type. Pointer/Arc addresses are internal identities and never appear in the records. Metatype numbers use the Ghidra type.hh:79-99 enum values on both sides.",
+  "random_seed": "none; syncVarnodesWithSymbols and fixture construction are deterministic"
+ },
+ "assets": {
+  "sla": {
+   "path": "sleigh_specs/x86-64.sla",
+   "source_ref": "609981d:sleigh_specs/x86-64.sla",
+   "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+   "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+   "size": 487659
   },
-  "rugra_base_commit": "609981d706edb3e384b148a12ed190028baa1984",
-  "architecture": "x86:LE:64:default",
+  "processor_spec": {
+   "path": "sleigh_specs/x86-64.pspec",
+   "source_ref": "609981d:sleigh_specs/x86-64.pspec",
+   "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+   "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+   "size": 11721
+  },
   "compiler_spec": {
-    "id": "gcc",
-    "path": "sleigh_specs/x86-64-gcc.cspec",
-    "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e"
+   "path": "sleigh_specs/x86-64-gcc.cspec",
+   "source_ref": "609981d:sleigh_specs/x86-64-gcc.cspec",
+   "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+   "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+   "size": 12182
   },
-  "analysis_options": {
-    "api": "Direct Funcdata::syncVarnodesWithSymbols invocation with explicit (updateDatatypes, unmappedAliasCheck) values over a synthetic per-case Funcdata body; no ActionGroup or other Action runs",
-    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
-    "error_injection": "none",
-    "funcdata": "Locked BfdArchitecture over the pinned Git-blob curl input supplies the Ghidra Funcdata, address spaces, TypeFactory, and the persistent ScopeLocal; each Ghidra case clears prior state via fd.clear() (clearUnlocked + resetLocalWindow). Rugra builds an isolated synthetic Funcdata plus a hand-installed ScopeLocal per case.",
-    "ir": "Stack-space Varnodes defined by COPY(const) ops at explicit code addresses (plus free twins and, in typelock_mapentry, a linkSymbol-attached SymbolEntry). Fixture offsets 0x300+ sit above the x86-64-gcc default local window ([0,0x1fe] plus the negative stack window starting at 0xfffffffffff0bdc0, established empirically), so creation-time setVarnodeProperties probes leave them clean; pre-states for the mask cases are built through public production paths (temporary Database::addRange/removeRange extensions driving the creation-time in-scope mapped|addrtied pair, Varnode::setAddrForce, updateType(,true,), and linkSymbol through a usepoint-matched entry) and the temporary range is removed before the sync call.",
-    "normalization": "No Ghidra/Rugra behavior difference of syncVarnodesWithSymbols is normalized or removed. One pre-existing divergence OUTSIDE the function's contract is normalized at fixture level: Rugra's canonical TypeFactory names unknown base types 'undefined{size}' while Ghidra names them 'xunknown{size}' (printNameBase first char), so the Rust fixture pre-installs the Ghidra spelling as the initial Varnode type. Pointer/Arc addresses are internal identities and never appear in the records. Metatype numbers use the Ghidra type.hh:79-99 enum values on both sides.",
-    "random_seed": "none; syncVarnodesWithSymbols and fixture construction are deterministic"
+  "language_definitions": {
+   "path": "sleigh_specs/x86.ldefs",
+   "source_ref": "609981d:sleigh_specs/x86.ldefs",
+   "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+   "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+   "size": 5390
   },
-  "assets": {
-    "sla": {
-      "path": "sleigh_specs/x86-64.sla",
-      "source_ref": "609981d:sleigh_specs/x86-64.sla",
-      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
-      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
-      "size": 487659
-    },
-    "processor_spec": {
-      "path": "sleigh_specs/x86-64.pspec",
-      "source_ref": "609981d:sleigh_specs/x86-64.pspec",
-      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
-      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
-      "size": 11721
-    },
-    "compiler_spec": {
-      "path": "sleigh_specs/x86-64-gcc.cspec",
-      "source_ref": "609981d:sleigh_specs/x86-64-gcc.cspec",
-      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
-      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
-      "size": 12182
-    },
-    "language_definitions": {
-      "path": "sleigh_specs/x86.ldefs",
-      "source_ref": "609981d:sleigh_specs/x86.ldefs",
-      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
-      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
-      "size": 5390
-    },
-    "binary": {
-      "path": "examples/curl",
-      "source_ref": "609981d:examples/curl",
-      "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
-      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-      "size": 161728
-    },
-    "bfd": {
-      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
-      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-      "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
-      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
-    }
+  "binary": {
+   "path": "examples/curl",
+   "source_ref": "609981d:examples/curl",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "size": 161728
   },
-  "host_tools": {
-    "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-    "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-    "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+  "bfd": {
+   "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+   "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+   "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+   "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+  }
+ },
+ "host_tools": {
+  "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
+  "binary": {
+   "path": "examples/curl",
+   "source_repository_commit": "609981d706edb3e384b148a12ed190028baa1984",
+   "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
+   "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "size": 161728
   },
-  "input_manifest": {
-    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
-    "binary": {
-      "path": "examples/curl",
-      "source_repository_commit": "609981d706edb3e384b148a12ed190028baa1984",
-      "git_blob_oid": "76d9343ea3add321aa4134856323663b36365807",
-      "sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
-      "size": 161728
-    },
-    "function": {
-      "name": "GetStr",
-      "entry": 14032,
-      "size": 0,
-      "symbol_source": "ELF/BFD"
-    },
-    "cases": [
-      {
-        "id": "type_projection",
-        "shape": "sync(lm,true,true): stack symbols int4@0x300 (usepoint invalid -> symbol addrtied), char*@0x308, int8@0x318; written varnodes ti(4B@0x300), tp(8B@0x308), tsub(4B@0x31c)",
-        "expected": "getSizedType projects int4 (mt=14,pnb=i) onto ti and char* (mt=9,pnb=pc) onto tp; tsub's +4 partial read returns no exact piece (type.cc:4090-4117 falls off the int8 with no partial construction) and keeps the unknown type; all three gain mapped"
-      },
-      {
-        "id": "unmapped_alias",
-        "shape": "sync(lm,true,true): scope range 0x200-0x2ff (vin@0x220 created in-scope as mapped|addrtied); vout@0x400 and vparam@0x502 created under a temporary 0x300-0x5ff extension (mapped|addrtied|addrforce) removed before sync; param window [0x500,0x507] via markNotMapped",
-        "expected": "vin: inScope -> fl=mapped|addrtied, mask=mapped only, state already matches; vout: isUnmappedUnaliased (offset below param window) -> fl=nolocalalias clears mapped+addrforce and sets nolocalalias while addrtied survives (never clearable); vparam: offset inside the param window -> fl=0 clears all three mask bits"
-      },
-      {
-        "id": "mask_asymmetry",
-        "shape": "sync(lm,false,true) (ActionRestructureVarnode second-pass shape): v_adt@0x310/v_nadt@0x320/v_nla@0x330 preset mapped|addrtied|addrforce, clean twins v_adt2@0x310 (second def) + v_free@0x310 (free) + v_small@0x34f; symbols adt@0x310 (addrtied), nadt@0x320 (usepoint -> no addrtied), nla@0x330 (nolocalalias), sml int2@0x34e (typelock+namelock) overlapping big int8@0x350",
-        "expected": "v_adt keeps addrtied|addrforce (fl has addrtied -> mask=mapped only); v_adt2 gains only mapped (same set walk); v_free skipped (isFree); v_nadt loses addrtied|addrforce (fl lacks addrtied -> mask |= addrtied|addrforce, clear-only); v_nla keeps addrtied, gains nolocalalias, loses addrforce; v_small resolves findOverlap to sml (lowest start) and takes the entry-size<vn-size branch (typelock/namelock dropped from fl, unobservable through the mask)"
-      },
-      {
-        "id": "typelock_mapentry",
-        "shape": "sync(lm,true,true): v_tl@0x310 typed uint4 with Varnode::typelock; symbol tl@0x310 (addrtied, typelock+namelock); v_dyn@0x320 with a linkSymbol-attached entry of att@0x320 (usepoint = v_dyn's def pc, nolocalalias symbol flag)",
-        "expected": "v_tl: mask never includes typelock/namelock so the symbol locks do not transfer; vn->updateType(int4) refuses (isTypeLock) keeping uint4; v_dyn: mapentry branch uses mask&~mapped (mapped held fixed), applies nolocalalias through the local mask, and updateType projects int4"
-      }
-    ],
-    "sha256": "2ddfd194a943ea1f5b044979bc55f317b7d4406710a05f950f23f7a504726b79"
+  "function": {
+   "name": "GetStr",
+   "entry": 14032,
+   "size": 0,
+   "symbol_source": "ELF/BFD"
   },
-  "observation_schema": {
-    "format": "Eight fixed-order UTF-8 records (before/after for four cases) with a final newline",
-    "identity": "Fixture varnodes use semantic names; no pointer/Arc address ever appears in a record.",
-    "fields": "Per record: case, stage, res (-1 before, 0/1 after for the sync return value), then per varnode: mapped/addrtied/addrforce/nolocalalias/typelock/namelock/free boolean flags and the data-type projection (Ghidra-enum metatype, size, printNameBase prefix).",
-    "raw_difference_policy": "The runner pins both complete output streams via the comparand block; every record must be byte-identical (no masking classes)."
-  },
-  "comparand": {
-    "cpp_fixture_sha256": "03baae19e70e736f92bb49529e6946010e5defd415991e357aea7f13e2ad3e12",
-    "rust_fixture_sha256": "9fea5b5b3db13669b63788e8ff05da810058054b8099234a1170e8f144a62435",
-    "runner_sha256": "9ad879fa9d0d6fbc151c3b0ba0ffe282847c03ef8993fb2cedf479f8cfc34da4",
-    "doc_funcdata_sha256": "0ec191a1cd272b0995a1f0636f67ffd16143293d317caa18c77d1955131a9aa2",
-    "doc_coreaction_sha256": "b9129211f1ffaba094a038d1fa60bef683ad4c7b06f1dafe0b4ac04fdfaf8f97",
-    "rust_crate_tree_sha256": "acf769d3591b7af803822b9197b6443114cc0497deaa3aeb90d4f5f810e97e9a",
-    "rust_crate_tree_hash_scheme": "sha256 of rugra-scope-sync-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
-    "rust_crate_source_policy": "Every crate file comes from the pinned base commit 609981d706edb3e384b148a12ed190028baa1984 Git blob except the src/{funcdata,coreaction}.rs overlays, which are taken from the live working tree"
-  },
-  "known_dependencies": {},
-  "record_verdicts": {
-    "type_projection/before": "MATCH",
-    "type_projection/after": "MATCH",
-    "unmapped_alias/before": "MATCH",
-    "unmapped_alias/after": "MATCH",
-    "mask_asymmetry/before": "MATCH",
-    "mask_asymmetry/after": "MATCH",
-    "typelock_mapentry/before": "MATCH",
-    "typelock_mapentry/after": "MATCH"
-  },
-  "overall_status": "MATCH",
-  "overall_status_rationale": "All eight records are byte-identical against the locked 12.0.4 oracle: the typed Symbol->Varnode projection through getSizedType/updateType (whole-size int4 and char*, partial-offset null), the unmapped paths (inScope mapped|addrtied, isUnmappedUnaliased set vs param-window clear with addrtied surviving the mask), the flag-mask asymmetry (addrtied clear-only, nolocalalias set-only, addrforce clears, per-set walk over a second def, isFree skip, findOverlap lowest-start selection with the smaller-than-varnode entry branch), and the typelock/mapentry branches (symbol locks never entering the mask, varnode typelock blocking updateType, attached-entry local mask holding mapped fixed). Residuals registered in docs/api/funcdata.md: partial-struct/array/enum/union construction in getExactPiece returns null (no type projection for those pieces), and Rugra's Varnode::set_flags/clear_flags do not propagate high->flagsDirty themselves (compensated at this call site). The pre-existing unknown-type naming divergence (undefined{size} vs xunknown{size}) is normalized at fixture level and belongs to the TypeFactory naming domain, not this function."
+  "cases": [
+   {
+    "id": "type_projection",
+    "shape": "sync(lm,true,true): stack symbols int4@0x300 (usepoint invalid -> symbol addrtied), char*@0x308, int8@0x318; written varnodes ti(4B@0x300), tp(8B@0x308), tsub(4B@0x31c)",
+    "expected": "getSizedType projects int4 (mt=14,pnb=i) onto ti and char* (mt=9,pnb=pc) onto tp; tsub's +4 partial read returns no exact piece (type.cc:4090-4117 falls off the int8 with no partial construction) and keeps the unknown type; all three gain mapped"
+   },
+   {
+    "id": "unmapped_alias",
+    "shape": "sync(lm,true,true): scope range 0x200-0x2ff (vin@0x220 created in-scope as mapped|addrtied); vout@0x400 and vparam@0x502 created under a temporary 0x300-0x5ff extension (mapped|addrtied|addrforce) removed before sync; param window [0x500,0x507] via markNotMapped",
+    "expected": "vin: inScope -> fl=mapped|addrtied, mask=mapped only, state already matches; vout: isUnmappedUnaliased (offset below param window) -> fl=nolocalalias clears mapped+addrforce and sets nolocalalias while addrtied survives (never clearable); vparam: offset inside the param window -> fl=0 clears all three mask bits"
+   },
+   {
+    "id": "mask_asymmetry",
+    "shape": "sync(lm,false,true) (ActionRestructureVarnode second-pass shape): v_adt@0x310/v_nadt@0x320/v_nla@0x330 preset mapped|addrtied|addrforce, clean twins v_adt2@0x310 (second def) + v_free@0x310 (free) + v_small@0x34f; symbols adt@0x310 (addrtied), nadt@0x320 (usepoint -> no addrtied), nla@0x330 (nolocalalias), sml int2@0x34e (typelock+namelock) overlapping big int8@0x350",
+    "expected": "v_adt keeps addrtied|addrforce (fl has addrtied -> mask=mapped only); v_adt2 gains only mapped (same set walk); v_free skipped (isFree); v_nadt loses addrtied|addrforce (fl lacks addrtied -> mask |= addrtied|addrforce, clear-only); v_nla keeps addrtied, gains nolocalalias, loses addrforce; v_small resolves findOverlap to sml (lowest start) and takes the entry-size<vn-size branch (typelock/namelock dropped from fl, unobservable through the mask)"
+   },
+   {
+    "id": "typelock_mapentry",
+    "shape": "sync(lm,true,true): v_tl@0x310 typed uint4 with Varnode::typelock; symbol tl@0x310 (addrtied, typelock+namelock); v_dyn@0x320 with a linkSymbol-attached entry of att@0x320 (usepoint = v_dyn's def pc, nolocalalias symbol flag)",
+    "expected": "v_tl: mask never includes typelock/namelock so the symbol locks do not transfer; vn->updateType(int4) refuses (isTypeLock) keeping uint4; v_dyn: mapentry branch uses mask&~mapped (mapped held fixed), applies nolocalalias through the local mask, and updateType projects int4"
+   }
+  ],
+  "sha256": "2ddfd194a943ea1f5b044979bc55f317b7d4406710a05f950f23f7a504726b79"
+ },
+ "observation_schema": {
+  "format": "Eight fixed-order UTF-8 records (before/after for four cases) with a final newline",
+  "identity": "Fixture varnodes use semantic names; no pointer/Arc address ever appears in a record.",
+  "fields": "Per record: case, stage, res (-1 before, 0/1 after for the sync return value), then per varnode: mapped/addrtied/addrforce/nolocalalias/typelock/namelock/free boolean flags and the data-type projection (Ghidra-enum metatype, size, printNameBase prefix).",
+  "raw_difference_policy": "The runner pins both complete output streams via the comparand block; every record must be byte-identical (no masking classes)."
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "03baae19e70e736f92bb49529e6946010e5defd415991e357aea7f13e2ad3e12",
+  "rust_fixture_sha256": "9fea5b5b3db13669b63788e8ff05da810058054b8099234a1170e8f144a62435",
+  "runner_sha256": "9ad879fa9d0d6fbc151c3b0ba0ffe282847c03ef8993fb2cedf479f8cfc34da4",
+  "doc_funcdata_sha256": "0ec191a1cd272b0995a1f0636f67ffd16143293d317caa18c77d1955131a9aa2",
+  "doc_coreaction_sha256": "b9129211f1ffaba094a038d1fa60bef683ad4c7b06f1dafe0b4ac04fdfaf8f97",
+  "rust_crate_tree_sha256": "acf769d3591b7af803822b9197b6443114cc0497deaa3aeb90d4f5f810e97e9a",
+  "rust_crate_tree_hash_scheme": "sha256 of rugra-scope-sync-base-overlay-v1 plus base commit and sorted length-prefixed paths and contents",
+  "rust_crate_source_policy": "Every crate file comes from the pinned base commit 609981d706edb3e384b148a12ed190028baa1984 Git blob except the src/{funcdata,coreaction}.rs overlays, which are taken from the live working tree"
+ },
+ "known_dependencies": {},
+ "record_verdicts": {
+  "type_projection/before": "MATCH",
+  "type_projection/after": "MATCH",
+  "unmapped_alias/before": "MATCH",
+  "unmapped_alias/after": "MATCH",
+  "mask_asymmetry/before": "MATCH",
+  "mask_asymmetry/after": "MATCH",
+  "typelock_mapentry/before": "MATCH",
+  "typelock_mapentry/after": "MATCH"
+ },
+ "overall_status": "UNTESTED: (B2 downgrade: two-sided pinning incomplete - (B2 canonicalization)...",
+ "overall_status_rationale": "All eight records are byte-identical against the locked 12.0.4 oracle: the typed Symbol->Varnode projection through getSizedType/updateType (whole-size int4 and char*, partial-offset null), the unmapped paths (inScope mapped|addrtied, isUnmappedUnaliased set vs param-window clear with addrtied surviving the mask), the flag-mask asymmetry (addrtied clear-only, nolocalalias set-only, addrforce clears, per-set walk over a second def, isFree skip, findOverlap lowest-start selection with the smaller-than-varnode entry branch), and the typelock/mapentry branches (symbol locks never entering the mask, varnode typelock blocking updateType, attached-entry local mask holding mapped fixed). Residuals registered in docs/api/funcdata.md: partial-struct/array/enum/union construction in getExactPiece returns null (no type projection for those pieces), and Rugra's Varnode::set_flags/clear_flags do not propagate high->flagsDirty themselves (compensated at this call site). The pre-existing unknown-type naming divergence (undefined{size} vs xunknown{size}) is normalized at fixture level and belongs to the TypeFactory naming domain, not this function."
 }

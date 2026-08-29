@@ -45,7 +45,7 @@
   "GH12-F-f4c8e54ac2013b630cc4 ghidra::AddrSpaceManager::getNextSpaceInOrder(AddrSpace * spc) const translate.cc:647",
   "GH12-F-e41fc8417856e28597fb ghidra::AddrSpaceManager::getSpaceByName(const string & nm) const translate.cc:590"
  ],
- "overall_status": "UNTESTED:  (B2 migration of partial match state) the seven-case space-aware Address/Range/RangeList projection (invalid-vs-ram:0, extremal sentinels, cross-space ordering, wrapOffset arithmetic, big-endian justified containment, space-isolated RangeList merge/split/query incl. the getLastAddrOpen final-space quirk, RangeProperties errors) byte-matches the locked oracle; residuals: Address::read/encode/decode (MARSHAL-XML-TEXT-0001), renormalize + join-record/resolver unification, SeqNum space-ification and consumer migration",
+ "overall_status": "UNTESTED: (B2 migration of partial match state) the seven-case space-aware Address/Range/RangeList projection (invalid-vs-ram:0, extremal sentinels, cross-space ordering, wrapOffset arithmetic, big-endian justified containment, space-isolated RangeList merge/split/query incl. the getLastAddrOpen final-space quirk, RangeProperties errors) byte-matches the locked oracle; residuals: Address::read/encode/decode (MARSHAL-XML-TEXT-0001), renormalize + join-record/resolver unification, SeqNum space-ification and consumer migration",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",

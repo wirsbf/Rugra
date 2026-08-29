@@ -9,7 +9,7 @@
   "GH12-F-5f73b9d3b4d5024b5103 ghidra::ActionDatabase::addToGroup action.cc:1090",
   "GH12-F-aebbccf4dd34f651fa20 ghidra::ActionDatabase::removeFromGroup action.cc:1103"
  ],
- "overall_status": "MISMATCH",
+ "overall_status": "MISMATCH: (B2 canonicalization)",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
