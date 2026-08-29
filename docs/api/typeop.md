@@ -3,6 +3,13 @@
 **状态**: 🔧 L2（仅逐函数核对，禁止据此宣称模块 L3）
 **源代码路径**: `src/typeop.rs`
 
+## 2026-08-28：比较输入的 read-facing cast
+
+`INT_EQUAL`/`INT_NOTEQUAL` 的 cast 选择现在读取两个精确 reader slot 的 High 类型，
+按 `typeOrder` 选 requirement，并调用 C comparison-promotion 与 `castStandard`。
+GetStr 的 `char/char` 比较因此不产生 cast。当前策略 int-size 仍固定为该 x86 fixture 的
+4 字节，完整跨架构 TypeOpEqual 和 MULTIEQUAL 传播不得宣称 MATCH。
+
 ## 2026-08-27：PTRSUB output-token 阶段纠偏（TYPEOP-PTRSUB-FIELDCAST-0001）
 
 锁定 oracle `TypeOpPtrsub::getOutputLocal`（typeop.cc:2308-2312）请求
@@ -36,8 +43,10 @@ nonpointer 的 token shape、token/pointee/repeat identity，以及所有 direct
 经 PcodeOp/local 派发取得的 canonical int8 identity/core 均为 MATCH；fixture 还
 强制直接 TypeOp local 与派发结果保持同一 identity。ordinary PTRSUB castOutput 的
 所列 def-use/type graph 字段也为 MATCH；infer canary 的 base/out int8 shape、STOP
-和定义边字段同样匹配。fixture 整体仍为 MISMATCH：line 22 raw apply return 为
-Ghidra 0 / Rust 1，line 24 infer output canonical identity 为 Ghidra 1 / Rust 0。
+和定义边字段同样匹配；双侧 raw apply 都是 `result=0,count=1`，infer output 也都
+保持 Architecture TypeFactory canonical int8 identity=1。fixture 整体仍为
+MISMATCH，因为 Rust `take_count_delta` 是无 Ghidra 对应方法的 `NO_ORACLE` adapter，
+而完整 ActionSetCasts/ActionInferTypes/type closure 仍有 MISMATCH/UNTESTED 分支。
 
 该证据不覆盖 High/local read-facing 分歧、PointerRel、array/enum/
 PartialStruct/Spacebase、alternate-pointer truncate、冷 TypeFactory 插入副作用、

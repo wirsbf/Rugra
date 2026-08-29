@@ -4,8 +4,11 @@
 //! for when explicit casts are required in the output C code and how
 //! types are promoted during arithmetic operations.
 
-use std::sync::Arc;
+use crate::op::PcodeOp;
+use crate::opcodes::OpCode;
 use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+use crate::varnode::Varnode;
+use std::sync::Arc;
 
 // RUGRA-GLUE: base_type_for (no Ghidra counterpart found)
 /// Build a base integer/unsigned type for a given size and metatype.
@@ -50,9 +53,9 @@ pub trait CastStrategy {
     /// Determine if an integer promotion is required for an extension
     fn check_int_promotion_for_extension(&self, op_type: &Datatype) -> bool;
 
-    // RUGRA-GLUE: check_int_promotion_for_compare (no Ghidra counterpart found)
-    /// Determine if an integer promotion is required for a comparison
-    fn check_int_promotion_for_compare(&self, op_type: &Datatype) -> bool;
+    // Ghidra: cast.cc:107 CastStrategyC::checkIntPromotionForCompare
+    /// Determine if integer promotion requires a cast for one comparison slot.
+    fn check_int_promotion_for_compare(&self, op: &PcodeOp, slot: usize) -> bool;
 }
 
 /// Standard C-language casting strategy
@@ -83,6 +86,188 @@ impl CastStrategyC {
     /// Pure Rust visibility glue: no behavior of its own.
     pub fn get_promote_size(&self) -> usize {
         self.promote_size
+    }
+
+    // Ghidra: cast.cc:140 CastStrategyC::localExtensionType
+    /// Determine the signed/unsigned extension implied by local properties of
+    /// `vn` as it is read by `op`.
+    fn local_extension_type(&self, vn: &Varnode, op: &PcodeOp) -> i32 {
+        const UNKNOWN_PROMOTION: i32 = 0;
+        const UNSIGNED_EXTENSION: i32 = 1;
+        const SIGNED_EXTENSION: i32 = 2;
+        const EITHER_EXTENSION: i32 = 3;
+
+        let Some(slot) = vn.self_arc().and_then(|vn_arc| op.slot_of_input(&vn_arc)) else {
+            return UNKNOWN_PROMOTION;
+        };
+        let Some(read_type) = vn.get_high_type_read_facing(op, slot as i32) else {
+            return UNKNOWN_PROMOTION;
+        };
+        let natural = match read_type.get_metatype() {
+            TypeMetatype::Uint
+            | TypeMetatype::Bool
+            | TypeMetatype::Unknown
+            | TypeMetatype::PartialStruct
+            | TypeMetatype::PartialUnion
+            | TypeMetatype::Enum
+            | TypeMetatype::PartialEnum => UNSIGNED_EXTENSION,
+            TypeMetatype::Int => SIGNED_EXTENSION,
+            _ => return UNKNOWN_PROMOTION,
+        };
+        if vn.is_constant() {
+            if !crate::address::signbit_negative(vn.get_offset(), vn.get_size()) {
+                return EITHER_EXTENSION;
+            }
+            return natural;
+        }
+        if vn.is_explicit() {
+            return natural;
+        }
+        if !vn.is_written() {
+            return UNKNOWN_PROMOTION;
+        }
+        let Some(definition) = vn.get_def() else {
+            return UNKNOWN_PROMOTION;
+        };
+        let definition = definition.read().unwrap();
+        if definition.is_bool_output() {
+            return EITHER_EXTENSION;
+        }
+        if definition.opcode == OpCode::CPUI_CAST
+            || definition.opcode == OpCode::CPUI_LOAD
+            || definition.is_call()
+        {
+            return natural;
+        }
+        if definition.opcode == OpCode::CPUI_INT_AND {
+            if let Some(mask) = definition.get_in(1) {
+                let mask = mask.read().unwrap();
+                if mask.is_constant() {
+                    if !crate::address::signbit_negative(mask.get_offset(), mask.get_size()) {
+                        return EITHER_EXTENSION;
+                    }
+                    return natural;
+                }
+            }
+        }
+        UNKNOWN_PROMOTION
+    }
+
+    // Ghidra: cast.cc:178 CastStrategyC::intPromotionType
+    /// Calculate the integer-promotion extension code for `vn`.
+    fn int_promotion_type(&self, vn: &Varnode) -> i32 {
+        const NO_PROMOTION: i32 = -1;
+        const UNKNOWN_PROMOTION: i32 = 0;
+        const UNSIGNED_EXTENSION: i32 = 1;
+        const SIGNED_EXTENSION: i32 = 2;
+
+        if vn.get_size() >= self.promote_size {
+            return NO_PROMOTION;
+        }
+        if vn.is_constant() {
+            let Some(reader) = vn.lone_descend() else {
+                return UNKNOWN_PROMOTION;
+            };
+            return self.local_extension_type(vn, &reader.read().unwrap());
+        }
+        if vn.is_explicit() {
+            return NO_PROMOTION;
+        }
+        if !vn.is_written() {
+            return UNKNOWN_PROMOTION;
+        }
+        let Some(definition) = vn.get_def() else {
+            return UNKNOWN_PROMOTION;
+        };
+        let definition = definition.read().unwrap();
+        let local_input = |slot: usize| {
+            definition
+                .get_in(slot)
+                .map(|input| self.local_extension_type(&input.read().unwrap(), &definition))
+                .unwrap_or(UNKNOWN_PROMOTION)
+        };
+        match definition.opcode {
+            OpCode::CPUI_INT_AND => {
+                if local_input(1) & UNSIGNED_EXTENSION != 0 {
+                    return UNSIGNED_EXTENSION;
+                }
+                if local_input(0) & UNSIGNED_EXTENSION != 0 {
+                    return UNSIGNED_EXTENSION;
+                }
+            }
+            OpCode::CPUI_INT_RIGHT => {
+                let extension = local_input(0);
+                if extension & UNSIGNED_EXTENSION != 0 {
+                    return extension;
+                }
+            }
+            OpCode::CPUI_INT_SRIGHT => {
+                let extension = local_input(0);
+                if extension & SIGNED_EXTENSION != 0 {
+                    return extension;
+                }
+            }
+            OpCode::CPUI_INT_XOR
+            | OpCode::CPUI_INT_OR
+            | OpCode::CPUI_INT_DIV
+            | OpCode::CPUI_INT_REM => {
+                if local_input(0) & UNSIGNED_EXTENSION == 0
+                    || local_input(1) & UNSIGNED_EXTENSION == 0
+                {
+                    return UNKNOWN_PROMOTION;
+                }
+                return UNSIGNED_EXTENSION;
+            }
+            OpCode::CPUI_INT_SDIV | OpCode::CPUI_INT_SREM => {
+                if local_input(0) & SIGNED_EXTENSION == 0 || local_input(1) & SIGNED_EXTENSION == 0
+                {
+                    return UNKNOWN_PROMOTION;
+                }
+                return SIGNED_EXTENSION;
+            }
+            OpCode::CPUI_INT_NEGATE | OpCode::CPUI_INT_2COMP => {
+                if local_input(0) & SIGNED_EXTENSION != 0 {
+                    return SIGNED_EXTENSION;
+                }
+            }
+            OpCode::CPUI_INT_ADD
+            | OpCode::CPUI_INT_SUB
+            | OpCode::CPUI_INT_LEFT
+            | OpCode::CPUI_INT_MULT => {}
+            _ => return NO_PROMOTION,
+        }
+        UNKNOWN_PROMOTION
+    }
+
+    // Ghidra: cast.cc:107 CastStrategyC::checkIntPromotionForCompare
+    /// Check the two operands' promotion extensions exactly as the C casting
+    /// strategy does for a comparison.
+    pub fn check_int_promotion_for_compare_op(&self, op: &PcodeOp, slot: usize) -> bool {
+        const NO_PROMOTION: i32 = -1;
+        const UNKNOWN_PROMOTION: i32 = 0;
+
+        let Some(first) = op.get_in(slot) else {
+            return false;
+        };
+        let extension_first = self.int_promotion_type(&first.read().unwrap());
+        if extension_first == NO_PROMOTION {
+            return false;
+        }
+        if extension_first == UNKNOWN_PROMOTION {
+            return true;
+        }
+        let other_slot = if slot == 0 { 1 } else { 0 };
+        let Some(second) = op.get_in(other_slot) else {
+            return true;
+        };
+        let extension_second = self.int_promotion_type(&second.read().unwrap());
+        if extension_first & extension_second != 0 {
+            return false;
+        }
+        if extension_second == NO_PROMOTION {
+            return false;
+        }
+        true
     }
 
     // RUGRA-GLUE: is_char_type (no Ghidra counterpart found)
@@ -130,23 +315,29 @@ impl CastStrategyC {
         if offset != 0 { return false; }
         // cast.cc:415-418: input metatype whitelist.
         let in_meta = in_type.get_metatype();
-        if !matches!(in_meta, TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Unknown
+        if !matches!(
+            in_meta, TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Unknown
             | TypeMetatype::Pointer | TypeMetatype::PartialStruct | TypeMetatype::PartialUnion
-            | TypeMetatype::Enum | TypeMetatype::PartialEnum)
+            | TypeMetatype::Enum | TypeMetatype::PartialEnum
+        )
         { return false; }
         // cast.cc:419-422: output metatype whitelist.
         let out_meta = out_type.get_metatype();
-        if !matches!(out_meta, TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Unknown
+        if !matches!(
+            out_meta, TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Unknown
             | TypeMetatype::Pointer | TypeMetatype::Float | TypeMetatype::Enum
-            | TypeMetatype::PartialEnum)
+            | TypeMetatype::PartialEnum
+        )
         { return false; }
         // cast.cc:423-430: pointer-input special cases.
         if in_meta == TypeMetatype::Pointer {
             if out_meta == TypeMetatype::Pointer {
                 if out_type.get_size() < in_type.get_size() { return true; }
             }
-            if !matches!(out_meta, TypeMetatype::Int | TypeMetatype::Uint
-                | TypeMetatype::Enum | TypeMetatype::PartialEnum) { return false; }
+            if !matches!(
+                out_meta, TypeMetatype::Int | TypeMetatype::Uint
+                | TypeMetatype::Enum | TypeMetatype::PartialEnum
+            ) { return false; }
         }
         true
     }
@@ -154,7 +345,9 @@ impl CastStrategyC {
     // Ghidra: cast.cc:434 CastStrategyC::isSubpieceCastEndian
     /// Check if a SUBPIECE with endianness should be rendered as a cast.
     /// Faithful to Ghidra CastStrategyC::isSubpieceCastEndian (cast.cc:434).
-    pub fn is_subpiece_cast_endian(&self, out_type: &Datatype, in_type: &Datatype, offset: u32, is_bigend: bool) -> bool {
+    pub fn is_subpiece_cast_endian(
+        &self, out_type: &Datatype, in_type: &Datatype, offset: u32, is_bigend: bool,
+    ) -> bool {
         let tmpoff = if is_bigend { in_type.get_size() as u32 - 1 - offset } else { offset };
         self.is_subpiece_cast(out_type, in_type, tmpoff)
     }
@@ -236,18 +429,14 @@ impl CastStrategy for CastStrategyC {
         }
         let meta = op_type.get_metatype();
         // Small integers, booleans, and enums are promoted in C
-        matches!(meta, TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Bool | TypeMetatype::Enum)
+        matches!(
+            meta, TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Bool | TypeMetatype::Enum
+        )
     }
 
     // Ghidra: cast.cc:107 CastStrategyC::checkIntPromotionForCompare
-    fn check_int_promotion_for_compare(&self, op_type: &Datatype) -> bool {
-        let size = op_type.get_size();
-        if size >= self.promote_size {
-            return false;
-        }
-        let meta = op_type.get_metatype();
-        // Comparison also triggers promotion for small types
-        matches!(meta, TypeMetatype::Int | TypeMetatype::Uint | TypeMetatype::Bool | TypeMetatype::Enum)
+    fn check_int_promotion_for_compare(&self, op: &PcodeOp, slot: usize) -> bool {
+        self.check_int_promotion_for_compare_op(op, slot)
     }
 }
 
@@ -297,8 +486,10 @@ impl CastStrategyC {
             // beyond wordsize==1 default; skip the space-mismatch cast branch
             // (would need AddrSpace wiring). Wordsize equality is implicitly
             // handled by size equality below.
-            reqbase = match reqbase { Datatype::Pointer(p) => &p.ptr_to, _ => break };
-            curbase = match curbase { Datatype::Pointer(p) => &p.ptr_to, _ => break };
+            reqbase = match reqbase { Datatype::Pointer(p) => &p.ptr_to, _ => break ,
+            };
+            curbase = match curbase { Datatype::Pointer(p) => &p.ptr_to, _ => break ,
+            };
             care_uint_int = true;
             isptr = true;
         }
@@ -324,9 +515,11 @@ impl CastStrategyC {
         match reqmeta {
             TypeMetatype::Uint => {
                 if !care_uint_int {
-                    if matches!(curmeta,
+                    if matches!(
+                        curmeta,
                         TypeMetatype::Unknown | TypeMetatype::Int | TypeMetatype::Uint
-                        | TypeMetatype::Bool) {
+                        | TypeMetatype::Bool
+                    ) {
                         return None;
                     }
                 } else {
@@ -343,9 +536,11 @@ impl CastStrategyC {
             }
             TypeMetatype::Int => {
                 if !care_uint_int {
-                    if matches!(curmeta,
+                    if matches!(
+                        curmeta,
                         TypeMetatype::Unknown | TypeMetatype::Int | TypeMetatype::Uint
-                        | TypeMetatype::Bool) {
+                        | TypeMetatype::Bool
+                    ) {
                         return None;
                     }
                 } else {
@@ -367,7 +562,7 @@ impl CastStrategyC {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::type_system::datatype::{TypeBase, TypeMetatype, Datatype};
+    use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
 
     #[test]
     fn test_c_implied_cast() {
@@ -409,7 +604,9 @@ mod tests {
     // Ghidra: cast.cc:413-418 — PartialStruct/PartialUnion input arms.
     #[test]
     fn test_is_subpiece_cast_partial_inputs() {
-        use crate::type_system::datatype::{TypePartialStruct, TypePartialUnion, TypeStruct, TypeUnion};
+        use crate::type_system::datatype::{
+            TypePartialStruct, TypePartialUnion, TypeStruct, TypeUnion,
+        };
         let s = CastStrategyC::new(4);
         let int4 = Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int));
         let int8 = Datatype::Base(TypeBase::new("long".into(), 8, TypeMetatype::Int));

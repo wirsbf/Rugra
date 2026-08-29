@@ -640,3 +640,14 @@ HighVariable 的 `v_type` 缓存迁入 `TypeCell`（`RwLock<Arc<Datatype>>`，Gh
 
 -  已降私有（R16 建议⑤）：残余调用均在同文件测试内，防再次误接为管线入口。
 
+
+## 2026-08-29（DEBUGPROTO-DWARF-CHAR-0001 后续）：nochar 测试改用 raw 工厂构造无 char 注册态
+
+`test_factory_nochar_distinct_registration_state` 的 `fd_int1_only` 世界原先依赖
+`TypeFactory::new(8)` 只注册 `int1` 而无 ASCII char 的旧前提；DataOrg 引导现在经
+`set_core_type_result("char",1,Int,true)` 镜像锁定 headless oracle 的 coretypes
+供给（详见 docs/api/type_system/typefactory.md）。无 char 注册态改由
+`TypeFactory::raw()`（type.cc:3106 空构造投影）+ 单条 `int1` 注册 +
+`cache_core_types()` 显式构造：非 ASCII int 自填 typecache[1][INT] 并被选为
+`type_nochar`（type.cc:3240-3242），`get_base(1,INT)` 与其同对象 → 判 NOT
+distinct 的覆盖保持不变。仅测试构造方式变化，`factory_nochar_distinct` 生产语义零改动。

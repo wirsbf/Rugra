@@ -2,18 +2,18 @@
 //!
 //! Corresponds to Ghidra's `printc.hh` and `printc.cc`
 
+use crate::address::SeqNum;
 use crate::fspec::FuncProto;
 use crate::funcdata::Funcdata;
 use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
 use crate::prettyprint::{Emit, NullEmit};
 use crate::printlanguage::PrintLanguage;
-use crate::type_system::Datatype;
-use crate::type_system::datatype::TypeMetatype;
-use crate::type_system::cast::CastStrategyC;
-use crate::varnode::Varnode;
-use crate::address::SeqNum;
 use crate::space::AddressSpace;
+use crate::type_system::cast::CastStrategyC;
+use crate::type_system::datatype::TypeMetatype;
+use crate::type_system::Datatype;
+use crate::varnode::Varnode;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -72,26 +72,46 @@ pub mod optoken {
     /// flip targets (printc.cc:129-132), matching Ghidra where no virtual
     /// op emitter dispatches to them directly (printc.hh:283-288).
     pub const BINARY_TOKENS: [BinaryTokenSpec; 20] = [
-        BinaryTokenSpec { id: 0, print1: "*", precedence: 54, associative: true, spacing: 1, negate: None },          // multiply (printc.cc:36)
-        BinaryTokenSpec { id: 1, print1: "/", precedence: 54, associative: false, spacing: 1, negate: None },         // divide (printc.cc:37)
-        BinaryTokenSpec { id: 2, print1: "%", precedence: 54, associative: false, spacing: 1, negate: None },         // modulo (printc.cc:38)
-        BinaryTokenSpec { id: 3, print1: "+", precedence: 50, associative: true, spacing: 1, negate: None },          // binary_plus (printc.cc:39)
-        BinaryTokenSpec { id: 4, print1: "-", precedence: 50, associative: false, spacing: 1, negate: None },         // binary_minus (printc.cc:40)
-        BinaryTokenSpec { id: 5, print1: "<<", precedence: 46, associative: false, spacing: 1, negate: None },        // shift_left (printc.cc:41)
-        BinaryTokenSpec { id: 6, print1: ">>", precedence: 46, associative: false, spacing: 1, negate: None },        // shift_right (printc.cc:42)
-        BinaryTokenSpec { id: 7, print1: ">>", precedence: 46, associative: false, spacing: 1, negate: None },        // shift_sright (printc.cc:43)
-        BinaryTokenSpec { id: 8, print1: "<", precedence: 42, associative: false, spacing: 1, negate: Some(11) },     // less_than, negate=greater_equal (printc.cc:44,129)
-        BinaryTokenSpec { id: 9, print1: "<=", precedence: 42, associative: false, spacing: 1, negate: Some(10) },    // less_equal, negate=greater_than (printc.cc:45,130)
-        BinaryTokenSpec { id: 10, print1: ">", precedence: 42, associative: false, spacing: 1, negate: Some(9) },     // greater_than, negate=less_equal (printc.cc:46,131)
-        BinaryTokenSpec { id: 11, print1: ">=", precedence: 42, associative: false, spacing: 1, negate: Some(8) },    // greater_equal, negate=less_than (printc.cc:47,132)
-        BinaryTokenSpec { id: 12, print1: "==", precedence: 38, associative: false, spacing: 1, negate: Some(13) },   // equal, negate=not_equal (printc.cc:48,133)
-        BinaryTokenSpec { id: 13, print1: "!=", precedence: 38, associative: false, spacing: 1, negate: Some(12) },   // not_equal, negate=equal (printc.cc:49,134)
-        BinaryTokenSpec { id: 14, print1: "&", precedence: 34, associative: true, spacing: 1, negate: None },         // bitwise_and (printc.cc:50)
-        BinaryTokenSpec { id: 15, print1: "^", precedence: 30, associative: true, spacing: 1, negate: None },         // bitwise_xor (printc.cc:51)
-        BinaryTokenSpec { id: 16, print1: "|", precedence: 26, associative: true, spacing: 1, negate: None },         // bitwise_or (printc.cc:52)
-        BinaryTokenSpec { id: 17, print1: "&&", precedence: 22, associative: false, spacing: 1, negate: None },       // boolean_and (printc.cc:53)
-        BinaryTokenSpec { id: 18, print1: "^^", precedence: 20, associative: false, spacing: 1, negate: None },       // boolean_xor (printc.cc:54)
-        BinaryTokenSpec { id: 19, print1: "||", precedence: 18, associative: false, spacing: 1, negate: None },       // boolean_or (printc.cc:55)
+        BinaryTokenSpec { id: 0, print1: "*", precedence: 54, associative: true, spacing: 1, negate: None ,
+        },          // multiply (printc.cc:36)
+        BinaryTokenSpec { id: 1, print1: "/", precedence: 54, associative: false, spacing: 1, negate: None ,
+        },         // divide (printc.cc:37)
+        BinaryTokenSpec { id: 2, print1: "%", precedence: 54, associative: false, spacing: 1, negate: None ,
+        },         // modulo (printc.cc:38)
+        BinaryTokenSpec { id: 3, print1: "+", precedence: 50, associative: true, spacing: 1, negate: None ,
+        },          // binary_plus (printc.cc:39)
+        BinaryTokenSpec { id: 4, print1: "-", precedence: 50, associative: false, spacing: 1, negate: None ,
+        },         // binary_minus (printc.cc:40)
+        BinaryTokenSpec { id: 5, print1: "<<", precedence: 46, associative: false, spacing: 1, negate: None ,
+        },        // shift_left (printc.cc:41)
+        BinaryTokenSpec { id: 6, print1: ">>", precedence: 46, associative: false, spacing: 1, negate: None ,
+        },        // shift_right (printc.cc:42)
+        BinaryTokenSpec { id: 7, print1: ">>", precedence: 46, associative: false, spacing: 1, negate: None ,
+        },        // shift_sright (printc.cc:43)
+        BinaryTokenSpec { id: 8, print1: "<", precedence: 42, associative: false, spacing: 1, negate: Some(11) ,
+        },     // less_than, negate=greater_equal (printc.cc:44,129)
+        BinaryTokenSpec { id: 9, print1: "<=", precedence: 42, associative: false, spacing: 1, negate: Some(10) ,
+        },    // less_equal, negate=greater_than (printc.cc:45,130)
+        BinaryTokenSpec { id: 10, print1: ">", precedence: 42, associative: false, spacing: 1, negate: Some(9) ,
+        },     // greater_than, negate=less_equal (printc.cc:46,131)
+        BinaryTokenSpec { id: 11, print1: ">=", precedence: 42, associative: false, spacing: 1, negate: Some(8) ,
+        },    // greater_equal, negate=less_than (printc.cc:47,132)
+        BinaryTokenSpec { id: 12, print1: "==", precedence: 38, associative: false, spacing: 1, negate: Some(13) ,
+        },   // equal, negate=not_equal (printc.cc:48,133)
+        BinaryTokenSpec { id: 13, print1: "!=", precedence: 38, associative: false, spacing: 1, negate: Some(12) ,
+        },   // not_equal, negate=equal (printc.cc:49,134)
+        BinaryTokenSpec { id: 14, print1: "&", precedence: 34, associative: true, spacing: 1, negate: None ,
+        },         // bitwise_and (printc.cc:50)
+        BinaryTokenSpec { id: 15, print1: "^", precedence: 30, associative: true, spacing: 1, negate: None ,
+        },         // bitwise_xor (printc.cc:51)
+        BinaryTokenSpec { id: 16, print1: "|", precedence: 26, associative: true, spacing: 1, negate: None ,
+        },         // bitwise_or (printc.cc:52)
+        BinaryTokenSpec { id: 17, print1: "&&", precedence: 22, associative: false, spacing: 1, negate: None ,
+        },       // boolean_and (printc.cc:53)
+        BinaryTokenSpec { id: 18, print1: "^^", precedence: 20, associative: false, spacing: 1, negate: None ,
+        },       // boolean_xor (printc.cc:54)
+        BinaryTokenSpec { id: 19, print1: "||", precedence: 18, associative: false, spacing: 1, negate: None ,
+        },       // boolean_or (printc.cc:55)
     ];
 
     // Ghidra: printc.hh:283-318 opcode→OpToken dispatch
@@ -184,7 +204,9 @@ pub mod optoken {
     /// `stage` input of printlanguage.cc:283-285, which only exempts
     /// postsurround children (function calls / array subscripts) — a binary
     /// child never takes that branch, so the flag does not change the result.
-    pub fn child_needs_parens(parent_opc: OpCode, child_opc: OpCode, is_right_operand: bool) -> bool {
+    pub fn child_needs_parens(
+        parent_opc: OpCode, child_opc: OpCode, is_right_operand: bool,
+    ) -> bool {
         let _ = is_right_operand; // printlanguage.cc:283-285 postsurround-only
         let parent = match binary_token(parent_opc) {
             Some(t) => t,
@@ -279,7 +301,11 @@ pub mod display_format {
 
 // RUGRA-GLUE: sanitize_c_ident (no Ghidra counterpart found)
 fn sanitize_c_ident(name: &str) -> String {
-    name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect()
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }
+        })
+        .collect()
 }
 
 // Ghidra: printc.cc:1426 PrintC::printUnicode (char-constant escapes)
@@ -301,7 +327,9 @@ fn escape_char_body(val: u64) -> String {
         39 => "\\\'".to_string(),
         92 => "\\\\".to_string(),
         v if v < 0x20 || v == 0x7f => format!("\\x{:x}", v),
-        v => char::from_u32(v).map(|c| c.to_string()).unwrap_or_else(|| format!("\\x{:x}", v)),
+        v => char::from_u32(v)
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| format!("\\x{:x}", v)),
     }
 }
 
@@ -610,7 +638,9 @@ pub struct PrintC {
     /// Rugra's PcodeOp/blocks carry no Funcdata back-pointer, so the printer
     /// snapshots the map instead — same (parent,op-time,slot)-keyed lookups.
     union_resolutions:
-        std::collections::BTreeMap<crate::unionresolve::ResolveEdge, crate::unionresolve::ResolvedUnion>,
+        std::collections::BTreeMap<
+        crate::unionresolve::ResolveEdge, crate::unionresolve::ResolvedUnion,
+    >,
     /// Borrowed shared StringManager (Ghidra `glb->stringManager`,
     /// architecture.hh:203). Cached from `fd.arch.string_manager` at the
     /// start of `doc_function` — the B4 shared-model consumer form: the
@@ -1377,15 +1407,23 @@ impl PrintC {
     /// takes the push_float form (1791-1793), TYPE_VOID the cleared-error
     /// marker (1772-1774, degraded to a comment in Rugra); every other
     /// metatype falls straight to the default cast (1806-1815). Untyped
-    /// constants (no `v_type`) take the TYPE_UNKNOWN arm — the callers that
-    /// lack a propagated type could not have produced any of the special
-    /// forms. The default-cast prefix is spelled by `cast_type_string`
+    /// constants whose HighVariable has no read-facing type take the
+    /// TYPE_UNKNOWN arm.  As in `PrintLanguage::pushVnExplicit`
+    /// (printlanguage.cc:225-227), the consuming op and exact input slot select
+    /// the HighVariable's read-facing type; the constant's raw `v_type` is not
+    /// a substitute for this query. The default-cast prefix is spelled by `cast_type_string`
     /// (the pushType fold above) so unnamed canonical pointers print
     /// `(undefined *)0x0` instead of `()0x0`.
     fn constant_leaf_text(&mut self, vn: &Varnode, op: Option<&PcodeOp>) -> String {
         use crate::type_system::TypeMetatype;
         let val = vn.get_offset();
-        let Some(ct) = vn.v_type.clone() else {
+        let read_facing = op.and_then(|read_op| {
+            let slot = vn
+                .self_arc()
+                .and_then(|vn_arc| read_op.slot_of_input(&vn_arc))?;
+            vn.get_high_type_read_facing(read_op, slot as i32)
+        });
+        let Some(ct) = read_facing else {
             return self.integer_text(val, vn.get_size(), false, display_format::DEFAULT);
         };
         let sz = ct.get_size();
@@ -1408,9 +1446,8 @@ impl PrintC {
                     self.integer_text(val, sz, true, display_format::DEFAULT)
                 }
             }
-            TypeMetatype::Unknown => {
-                self.integer_text(val, sz, false, display_format::DEFAULT)
-            }
+            TypeMetatype::Unknown => self.integer_text(val, sz, false, display_format::DEFAULT)
+            ,
             TypeMetatype::Bool => {
                 // pushBoolConstant: printc.cc:1488-1495.
                 if val != 0 { "true".to_string() } else { "false".to_string() }
@@ -1503,9 +1540,8 @@ impl PrintC {
     fn make_atom_for_vn(
         &mut self,
         vn: &Varnode,
-        _op: &PcodeOp,
-    ) -> crate::printlanguage::Atom {
-        use crate::printlanguage::{Atom, AtomPayload, SyntaxHighlight, TagType};
+        op: &PcodeOp) -> crate::printlanguage::Atom {
+        use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
         // printlanguage.cc:221-228: annotation / constant fast-paths.
         if vn.is_constant() {
             // pushConstant (printc.cc:1744-1815) — the constant's literal
@@ -1514,15 +1550,19 @@ impl PrintC {
             // character constants, the signed/unsigned hex-vs-decimal
             // integer decision), no invented decimal comments.
             let val = vn.get_offset();
-            let name = self.constant_leaf_text(vn, Some(_op));
-            return Atom {
-                name,
-                type_: TagType::Syntax,
-                highlight: SyntaxHighlight::ConstColor,
-                op_index: -1,
-                payload: AtomPayload::IntValue(val),
-                offset: 0,
-            };
+            let name = self.constant_leaf_text(vn, Some(op));
+            // printlanguage.cc:226 passes vartoken + the consuming op + the
+            // constant Varnode into pushConstant. pushCharConstant and
+            // push_integer preserve all three on the Atom. Rugra's Atom uses
+            // immutable numeric identities in place of C++ pointers.
+            return Atom ::with_op_vn_int(
+                &name,
+                TagType::VarToken,
+                SyntaxHighlight::ConstColor,
+                op.get_time() as i64,
+                vn.get_create_index() as i64,
+                val,
+            );
         }
         // printlanguage.cc:243-261: resolve symbol detail. Rugra folds the
         // HighVariable / parameter / symbol-table / unnamed-location cascades
@@ -1537,8 +1577,7 @@ impl PrintC {
             // into the single helper).
             name = Self::unnamed_location_token(
                 vn.get_space(),
-                Self::unnamed_location_offset(vn),
-            );
+                Self::unnamed_location_offset(vn));
         }
         self.mark_varnode_used(name.clone(), vn);
         Atom::with_op_vn(
@@ -1665,7 +1704,10 @@ impl PrintC {
                                 use crate::type_system::datatype::Datatype;
                                 if let Datatype::Pointer(ref tp) = vt.as_ref() {
                                     if let Datatype::Struct(ref ts) = tp.ptr_to.as_ref() {
-                                        ts.fields.iter().find(|f| f.offset == off as usize).map(|f| f.name.clone())
+                                        ts.fields
+                                            .iter()
+                                            .find(|f| f.offset == off as usize)
+                                            .map(|f| f.name.clone())
                                     } else { None }
                                 } else { None }
                             } else { None }
@@ -1795,7 +1837,9 @@ impl PrintC {
                                         // def expression instead of a leaf
                                         // name; explicit bases drain as leaf
                                         // atoms (identical text).
-                                        self.rpn_push_vn(base_arc.clone(), def_arc.clone(), self.mods);
+                                        self.rpn_push_vn(
+                                            base_arc.clone(), def_arc.clone(), self.mods,
+                                        );
                                         self.rpn_recurse();
                                         self.emit.print("->");
                                         self.emit.print(&fname);
@@ -1916,10 +1960,12 @@ impl PrintC {
                 if is_zext {
                     // printc.cc:790: option_hide_exts && isExtensionCastImplied
                     // (cast.cc:249 returns false when readOp is null).
-                    if self.option_hide_exts && read_op.is_some() && read_op.map(|r| {
+                    if self.option_hide_exts && read_op.is_some() && read_op
+                            .map(|r| {
                         let g = r.read().unwrap();
                         self.is_extension_cast_implied(op, &g)
-                    }).unwrap_or(false) {
+                    })
+                            .unwrap_or(false) {
                         self.rpn_op_hidden_func(op_arc, op);
                     } else {
                         self.rpn_op_type_cast(op_arc, op);
@@ -1950,10 +1996,12 @@ impl PrintC {
                     _ => false,
                 };
                 if is_sext {
-                    if self.option_hide_exts && read_op.is_some() && read_op.map(|r| {
+                    if self.option_hide_exts && read_op.is_some() && read_op
+                            .map(|r| {
                         let g = r.read().unwrap();
                         self.is_extension_cast_implied(op, &g)
-                    }).unwrap_or(false) {
+                    })
+                            .unwrap_or(false) {
                         self.rpn_op_hidden_func(op_arc, op);
                     } else {
                         self.rpn_op_type_cast(op_arc, op);
@@ -2071,7 +2119,8 @@ impl PrintC {
                 let (out_dt, in_dt, offset) = {
                     let out = op.get_out().map(|a| a.read().unwrap());
                     let in0 = op.get_in(0).map(|a| a.read().unwrap());
-                    let off = op.get_in(1)
+                    let off = op
+                        .get_in(1)
                         .map(|a| a.read().unwrap().get_offset())
                         .unwrap_or(0);
                     match (out, in0) {
@@ -2084,9 +2133,8 @@ impl PrintC {
                     }
                 };
                 let is_sub = match (&out_dt, &in_dt) {
-                    (Some(o), Some(i)) => {
-                        self.cast_strategy.is_subpiece_cast(o, i, offset)
-                    }
+                    (Some(o), Some(i)) => self.cast_strategy.is_subpiece_cast(o, i, offset)
+                    ,
                     _ => false,
                 };
                 if is_sub {
@@ -2117,8 +2165,7 @@ impl PrintC {
                     // cc:883-886: subscript when printing a load/store value,
                     // plain `+` (binary_plus, registry id 3) otherwise.
                     if self.is_set(
-                        print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE,
-                    ) {
+                        print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE) {
                         self.rpn_push_op(self.rpn_tok_subscript);
                     } else {
                         self.rpn_push_op(Self::RPN_TOK_BINARY_BASE + 3);
@@ -2150,16 +2197,17 @@ impl PrintC {
             OpCode::CPUI_PTRSUB => {
                 use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
                 // printc.cc:940-942: in0 = op->getIn(0); in1const = in1 offset.
-                let in1const: u64 = op.get_in(1)
+                let in1const: u64 = op
+                    .get_in(1)
                     .map(|a| a.read().unwrap().get_offset())
                     .unwrap_or(0);
                 // printc.cc:942: ptype = in0->getHighTypeReadFacing(op).
-                let ptype = op.get_in(0)
+                let ptype = op
+                    .get_in(0)
                     .and_then(|a| a.read().unwrap().get_high_type_read_facing(op, 0));
                 // printc.cc:955-956: valueon = (mods & (load|store value)) != 0.
                 let valueon = self.is_set(
-                    print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE,
-                );
+                    print_mods::PRINT_LOAD_VALUE | print_mods::PRINT_STORE_VALUE);
                 // printc.cc:951-954: ct = ptype->getPtrTo() (no TypePointerRel).
                 let ct = ptype.as_ref().and_then(|pt| match &**pt {
                     Datatype::Pointer(p) => Some(p.ptr_to.clone()),
@@ -2380,7 +2428,8 @@ impl PrintC {
     ) {
         use crate::printlanguage::{Atom, SyntaxHighlight, TagType};
         // printc.cc:451: dt = op->getOut()->getHighTypeDefFacing().
-        let out_dt = op.get_out()
+        let out_dt = op
+            .get_out()
             .and_then(|o| o.read().unwrap().get_high_type_def_facing());
         // printc.cc:452-458: array-decay address-of shortcut.
         // checkAddressOfCast (printc.cc:376-405) is a heuristic Rugra
@@ -2389,11 +2438,16 @@ impl PrintC {
         // matches the legacy op_type_cast behaviour.
         if let Some(ref dt) = out_dt {
             if Self::is_pointer_to_array(dt) {
-                let in0_is_array = op.get_in(0).map(|a| {
-                    a.read().unwrap().get_high_type_read_facing(op, 0)
+                let in0_is_array = op
+                    .get_in(0)
+                    .map(|a| {
+                    a.read()
+                            .unwrap()
+                            .get_high_type_read_facing(op, 0)
                         .map(|t| t.get_metatype() == TypeMetatype::Array)
                         .unwrap_or(false)
-                }).unwrap_or(false);
+                })
+                    .unwrap_or(false);
                 if in0_is_array {
                     // pushOp(&addressof,op); pushVn(in0).
                     self.rpn_push_op(self.rpn_tok_addressof);
@@ -2432,8 +2486,7 @@ impl PrintC {
                     "long",
                     TagType::TypeToken,
                     SyntaxHighlight::TypeColor,
-                    0,
-                );
+                    0);
                 self.rpn_push_atom(&type_atom);
             }
         }
@@ -2505,7 +2558,9 @@ impl PrintC {
         // the oracle's fspec table; the space check IPTR_FSPEC at cc:601
         // has no Rugra counterpart — the driver only feeds resolved
         // callpoints into this arm).
-        let name_atom = Atom::new(target_name, TagType::FunToken, SyntaxHighlight::FuncnameColor);
+        let name_atom = Atom::new(
+            target_name, TagType::FunToken, SyntaxHighlight::FuncnameColor,
+        );
         self.rpn_push_atom(&name_atom);
         // printc.cc:620-634: skip==-1 always; count = numInput()-1.
         let count = op.num_input() as i64 - 1;
@@ -2545,8 +2600,14 @@ impl PrintC {
     /// op->getIn(0)->getSize() << op->getIn(1)->getSize()`), fed to
     /// opFunc (printc.cc:424-441) as `CONCAT<sz0><sz1>(in0,in1)`.
     fn rpn_operator_name_piece(op: &PcodeOp) -> String {
-        let s0 = op.get_in(0).map(|a| a.read().unwrap().get_size()).unwrap_or(0);
-        let s1 = op.get_in(1).map(|a| a.read().unwrap().get_size()).unwrap_or(0);
+        let s0 = op
+            .get_in(0)
+            .map(|a| a.read().unwrap().get_size())
+            .unwrap_or(0);
+        let s1 = op
+            .get_in(1)
+            .map(|a| a.read().unwrap().get_size())
+            .unwrap_or(0);
         format!("CONCAT{}{}", s0, s1)
     }
 
@@ -2554,8 +2615,14 @@ impl PrintC {
     /// `name + dec(insize) + dec(outsize)` for ZEXT/SEXT/SUB functional
     /// syntax (typeop.cc:1122/1148/2127 all build the name this way).
     fn rpn_operator_name_ext(prefix: &str, op: &PcodeOp) -> String {
-        let in_size = op.get_in(0).map(|a| a.read().unwrap().get_size()).unwrap_or(0);
-        let out_size = op.get_out().map(|a| a.read().unwrap().get_size()).unwrap_or(0);
+        let in_size = op
+            .get_in(0)
+            .map(|a| a.read().unwrap().get_size())
+            .unwrap_or(0);
+        let out_size = op
+            .get_out()
+            .map(|a| a.read().unwrap().get_size())
+            .unwrap_or(0);
         format!("{}{}{}", prefix, in_size, out_size)
     }
 
@@ -2592,7 +2659,10 @@ impl PrintC {
     /// the input varnode's space endianness (Rugra x86/x64 spaces are
     /// little-endian, so the common case is `byteOff = lsb`).
     fn compute_byte_offset_for_composite(op: &PcodeOp) -> i64 {
-        let out_size = op.get_out().map(|a| a.read().unwrap().get_size()).unwrap_or(0) as i64;
+        let out_size = op
+            .get_out()
+            .map(|a| a.read().unwrap().get_size())
+            .unwrap_or(0) as i64;
         let lsb = op
             .get_in(1)
             .map(|a| a.read().unwrap().get_offset() as i64)
@@ -2826,7 +2896,9 @@ impl PrintC {
                             let outtype = Arc::new((*outtype).clone());
                             if self
                                 .cast_strategy
-                                .is_subpiece_cast_endian(&outtype, &dt, off as u32, is_big_endian)
+                                .is_subpiece_cast_endian(
+                                &outtype, &dt, off as u32, is_big_endian,
+                            )
                             {
                                 // Treat truncation as SUBPIECE style cast.
                                 finalcast = Some(outtype);
@@ -2876,9 +2948,8 @@ impl PrintC {
         // the plain-text emitter renders the display name either way. The
         // param arm is preserved because SymbolCategory carries it.
         let sym_color = match sym.category {
-            crate::database::SymbolCategory::FunctionParameter => {
-                SyntaxHighlight::ParamColor
-            }
+            crate::database::SymbolCategory::FunctionParameter => SyntaxHighlight::ParamColor
+            ,
             _ => SyntaxHighlight::VarColor,
         };
         let sym_atom = Atom::with_op_vn(
@@ -2944,8 +3015,7 @@ impl PrintC {
     /// trailing `recurse()` (printc.cc:2494).
     pub fn op_subpiece_rpn(
         &mut self,
-        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
-    ) {
+        op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) {
         let op = op_arc.read().unwrap();
         self.dispatch_op_rpn(op_arc, &op, None);
         drop(op);
@@ -3040,8 +3110,7 @@ impl PrintC {
     pub fn emit_block_basic_rpn(
         &mut self,
         ops: &[crate::op::PcodeOpRef],
-        suppress_branch: bool,
-    ) {
+        suppress_branch: bool) {
         // printc.cc:2684: commsorter.setupBlockList(bb); — Ghidra runs
         // emitBlockBasic per BASIC block, opening a fresh comment window per
         // block and draining its tail (cc:2742) before the next block's
@@ -3238,13 +3307,17 @@ impl PrintC {
                 // no identifier/digit — that's a syntactically invalid
                 // condition and would yield `if () goto ;` or `if ( == )`.
                 // (Audit: BATCH1 R50.)
-                let orig_emit = std::mem::replace(&mut self.emit,
-                    Box::new(crate::prettyprint::EmitNoMarkup::new()));
+                let orig_emit = std::mem::replace(
+                    &mut self.emit,
+                    Box::new(crate::prettyprint::EmitNoMarkup::new()),
+                );
                 self.emit_condition(&in1);
                 let text = {
                     let buf = std::mem::replace(&mut self.emit, orig_emit);
-                    buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-                        .map(|b| b.get_output()).unwrap_or_default()
+                    buf.into_any()
+                        .downcast::<crate::prettyprint::EmitNoMarkup>()
+                        .map(|b| b.get_output())
+                        .unwrap_or_default()
                 };
                 let t = text.trim();
                 // Same malformed-condition guard as emit_block_condition: detect
@@ -3281,8 +3354,7 @@ impl PrintC {
     // RUGRA-GLUE: resolves Ghidra emitLabel's getFrontLeaf()->subBlock(0)->getEntryAddr chain through Rust trait objects
     fn flow_entry_address(
         block_arc: &std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
-        >,
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) -> Option<u64> {
         let direct_type = block_arc.read().unwrap().get_type();
         let leaf = match crate::block::front_leaf(block_arc) {
@@ -3314,7 +3386,9 @@ impl PrintC {
     /// Comment protocol mirrors emitBlockBasic (printc.cc:2684/2712/2717/
     /// 2742): setupBlockList window, emitCommentGroup(inst) before each
     /// printed statement, emitCommentGroup(NULL) for the block tail.
-    fn emit_block_ops(&mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, skip_terminal: bool) {
+    fn emit_block_ops(
+        &mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, skip_terminal: bool,
+    ) {
         // GOTO-LABEL-UNPRINTED-0001: Ghidra prints an unstructured-target
         // label at the enclosing construct entry (printc.cc:2762/2965/3014/
         // 3076/3104 → emitAnyLabelStatement → emitLabelStatement,
@@ -3339,8 +3413,10 @@ impl PrintC {
         // snapshot the defenses were specified against.
         if self.discovery_pass
             && (&*self.emit) as *const dyn Emit as *const () as usize == self.discovery_emit_id
-            && matches!(block_arc.read().unwrap().get_type(),
-                crate::block::BlockType::Basic | crate::block::BlockType::Copy)
+            && matches!(
+                block_arc.read().unwrap().get_type(),
+                crate::block::BlockType::Basic | crate::block::BlockType::Copy
+            )
         {
             if let Some(start) = Self::flow_entry_address(block_arc) {
                 self.discovery_block_starts.insert(start);
@@ -3362,8 +3438,10 @@ impl PrintC {
         // the label really prints.
         if !self.discovery_pass
             && (&*self.emit) as *const dyn Emit as *const () as usize == self.main_emit_id
-            && matches!(block_arc.read().unwrap().get_type(),
-                crate::block::BlockType::Basic | crate::block::BlockType::Copy)
+            && matches!(
+                block_arc.read().unwrap().get_type(),
+                crate::block::BlockType::Basic | crate::block::BlockType::Copy
+            )
         {
             if let Some(start) = Self::flow_entry_address(block_arc) {
                 if self.pending_goto_labels.remove(&start) {
@@ -3711,8 +3789,7 @@ impl PrintC {
     fn is_block_body_empty(
         &self,
         block_arc: &std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
-        >,
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) -> bool {
         let ops = block_arc.read().unwrap().get_ops();
         for op_ref in &ops {
@@ -3742,8 +3819,7 @@ impl PrintC {
     fn emit_block_structured(
         &mut self,
         block_arc: &std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
-        >,
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         graph: &crate::block::BlockGraph,
         emitted: &mut std::collections::HashSet<usize>,
     ) {
@@ -3760,8 +3836,7 @@ impl PrintC {
     fn emit_flow_block(
         &mut self,
         block_arc: &std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
-        >,
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         graph: &crate::block::BlockGraph,
         emitted: &mut std::collections::HashSet<usize>,
     ) {
@@ -3782,37 +3857,28 @@ impl PrintC {
                 if let Some(original) = original {
                     let original: std::sync::Arc<
                         std::sync::RwLock<
-                            dyn crate::block::FlowBlock + Send + Sync,
-                        >,
+                            dyn crate::block::FlowBlock + Send + Sync>,
                     > = original;
                     emitted.insert(
-                        std::sync::Arc::as_ptr(&original) as *const () as usize,
-                    );
+                        std::sync::Arc::as_ptr(&original) as *const () as usize);
                     self.emit_flow_block(&original, graph, emitted);
                 }
             }
             BlockType::Goto => self.emit_block_goto(block_arc),
-            BlockType::If => {
-                self.emit_structured_if(block_arc, graph, emitted)
-            }
-            BlockType::WhileDo => {
-                self.emit_structured_whiledo(block_arc, graph, emitted)
-            }
-            BlockType::DoWhile => {
-                self.emit_structured_dowhile(block_arc, graph, emitted)
-            }
-            BlockType::InfLoop => {
-                self.emit_structured_infloop(block_arc, graph, emitted)
-            }
-            BlockType::List => {
-                self.emit_structured_list(block_arc, graph, emitted)
-            }
-            BlockType::Condition => {
-                self.emit_structured_condition(block_arc, graph, emitted)
-            }
-            BlockType::Switch => {
-                self.emit_structured_switch(block_arc, graph, emitted)
-            }
+            BlockType::If => self.emit_structured_if(block_arc, graph, emitted)
+            ,
+            BlockType::WhileDo => self.emit_structured_whiledo(block_arc, graph, emitted)
+            ,
+            BlockType::DoWhile => self.emit_structured_dowhile(block_arc, graph, emitted)
+            ,
+            BlockType::InfLoop => self.emit_structured_infloop(block_arc, graph, emitted)
+            ,
+            BlockType::List => self.emit_structured_list(block_arc, graph, emitted)
+            ,
+            BlockType::Condition => self.emit_structured_condition(block_arc, graph, emitted)
+            ,
+            BlockType::Switch => self.emit_structured_switch(block_arc, graph, emitted)
+            ,
             BlockType::Graph | BlockType::MultiGoto => {
                 self.emit_structured_basic(block_arc, graph, emitted)
             }
@@ -3823,8 +3889,7 @@ impl PrintC {
     fn emit_flow_basic(
         &mut self,
         block_arc: &std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
-        >,
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) {
         self.emit_any_label_statement(block_arc);
         if self.is_set(print_mods::ONLY_BRANCH) {
@@ -3860,8 +3925,7 @@ impl PrintC {
     fn emit_flow_basic_legacy(
         &mut self,
         ops: &[crate::op::PcodeOpRef],
-        suppress_branch: bool,
-    ) {
+        suppress_branch: bool) {
         let comma_separate = self.is_set(print_mods::COMMA_SEPARATE);
         let mut separator = false;
         let mut current_block = None;
@@ -3925,8 +3989,7 @@ impl PrintC {
     // RUGRA-GLUE: Rust trait-object transport for the FlowBlock::lastOp virtual family (block.hh:239 and subtype overrides)
     fn flow_last_op(
         block_arc: &std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
-        >,
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) -> Option<crate::op::PcodeOpRef> {
         use crate::block::BlockType;
 
@@ -3980,13 +4043,10 @@ impl PrintC {
     // Ghidra: block.cc:2514 FlowBlock::nextInFlow
     fn flow_next_in_flow(
         block_arc: &std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
-        >,
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) -> Option<
         std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
-        >,
-    > {
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> {
         let (size_out, out0, out1) = {
             let block = block_arc.read().unwrap();
             (
@@ -4033,13 +4093,12 @@ impl PrintC {
                         if_block.condition.clone(),
                         if_block.if_body.clone(),
                         if_block.else_body.clone(),
-                        if_block.negated,
                         if_block.goto_target.clone(),
                         if_block.goto_type,
                     )
                 })
         };
-        let Some((condition, if_body, else_body, negated, goto_target, goto_type)) = fields
+        let Some((condition, if_body, else_body, goto_target, goto_type)) = fields
         else {
             self.emit_block_ops(block_arc, false);
             return;
@@ -4055,8 +4114,7 @@ impl PrintC {
         self.unset_mod(
             print_mods::NO_BRANCH
                 | print_mods::ONLY_BRANCH
-                | print_mods::PENDING_BRACE,
-        );
+                | print_mods::PENDING_BRACE);
 
         // printc.cc:2894-2898: first visit of the same condition subtree,
         // emitting its ordinary statements but suppressing its final branch.
@@ -4081,12 +4139,6 @@ impl PrintC {
         self.emit.print(" ");
         self.push_mod();
         self.set_mod(print_mods::ONLY_BRANCH);
-        if negated {
-            // BLOCKIF.negated is Rugra representation glue.  The oracle
-            // normally records this polarity in the condition itself; the
-            // modifier preserves the simple-condition observable projection.
-            self.set_mod(print_mods::NEGATETOKEN);
-        }
         emitted.insert(std::sync::Arc::as_ptr(&condition) as *const () as usize);
         self.emit_flow_block(&condition, graph, emitted);
         self.pop_mod();
@@ -4100,9 +4152,8 @@ impl PrintC {
             let target_addr = Self::flow_entry_address(&target).unwrap_or(0);
             let branch_type = match goto_type {
                 crate::block::goto_type::BREAK_GOTO => crate::op::branch_type::BREAK,
-                crate::block::goto_type::CONTINUE_GOTO => {
-                    crate::op::branch_type::CONTINUE
-                }
+                crate::block::goto_type::CONTINUE_GOTO => crate::op::branch_type::CONTINUE
+                ,
                 _ => crate::op::branch_type::GOTO,
             };
             self.emit.print(" ");
@@ -4115,10 +4166,10 @@ impl PrintC {
         // object is emitted even when its direct op list is empty because it
         // may itself own a structured subtree.
         self.set_mod(print_mods::NO_BRANCH);
-        self.emit.open_brace_indent(
+        self.emit
+            .open_brace_indent(
             "{",
-            crate::prettyprint::BraceStyle::SameLine,
-        );
+            crate::prettyprint::BraceStyle::SameLine);
         emitted.insert(std::sync::Arc::as_ptr(&if_body) as *const () as usize);
         let saved_return = self.seen_return;
         self.seen_return = false;
@@ -4132,18 +4183,17 @@ impl PrintC {
             self.emit.tag_line(0);
             self.emit.tag_op("else");
             emitted.insert(
-                std::sync::Arc::as_ptr(&else_block) as *const () as usize,
-            );
+                std::sync::Arc::as_ptr(&else_block) as *const () as usize);
             if else_block.read().unwrap().get_type()
                 == crate::block::BlockType::If
             {
                 self.set_mod(print_mods::PENDING_BRACE);
                 self.emit_flow_block(&else_block, graph, emitted);
             } else {
-                self.emit.open_brace_indent(
+                self.emit
+                    .open_brace_indent(
                     "{",
-                    crate::prettyprint::BraceStyle::SameLine,
-                );
+                    crate::prettyprint::BraceStyle::SameLine);
                 let saved_return = self.seen_return;
                 self.seen_return = false;
                 self.emit_flow_block(&else_block, graph, emitted);
@@ -4161,7 +4211,8 @@ impl PrintC {
         graph: &crate::block::BlockGraph,
         emitted: &mut std::collections::HashSet<usize>,
     ) {
-        use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
+        use crate::block::{
+            BlockCondition, BlockDoWhile, BlockIf, BlockList, BlockSwitch, BlockType, BlockWhileDo, };
                 // Structured while loop (or for loop if for_init/for_iter set)
                 let block = block_arc.read().unwrap();
                 let while_block = block.as_any().downcast_ref::<BlockWhileDo>();
@@ -4241,7 +4292,8 @@ impl PrintC {
         graph: &crate::block::BlockGraph,
         emitted: &mut std::collections::HashSet<usize>,
     ) {
-        use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
+        use crate::block::{
+            BlockCondition, BlockDoWhile, BlockIf, BlockList, BlockSwitch, BlockType, BlockWhileDo, };
                 // Structured do-while loop
                 let block = block_arc.read().unwrap();
                 let dowhile_block = block.as_any().downcast_ref::<BlockDoWhile>();
@@ -4279,13 +4331,17 @@ impl PrintC {
                             // `while (X == X);`. (Audit: R50.)
                             let cond_vn = cond_vn.clone();
                             drop(last_op);
-                            let orig_emit = std::mem::replace(&mut self.emit,
-                                Box::new(crate::prettyprint::EmitNoMarkup::new()));
+                            let orig_emit = std::mem::replace(
+                        &mut self.emit,
+                                Box::new(crate::prettyprint::EmitNoMarkup::new()),
+                    );
                             self.emit_condition(&cond_vn);
                             let text = {
                                 let buf = std::mem::replace(&mut self.emit, orig_emit);
-                                buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-                                    .map(|b| b.get_output()).unwrap_or_default()
+                                buf.into_any()
+                            .downcast::<crate::prettyprint::EmitNoMarkup>()
+                                    .map(|b| b.get_output())
+                            .unwrap_or_default()
                             };
                             let t = text.trim();
                             let cast_count = t.matches("(long)").count() + t.matches("(int)").count()
@@ -4489,7 +4545,8 @@ impl PrintC {
         graph: &crate::block::BlockGraph,
         emitted: &mut std::collections::HashSet<usize>,
     ) {
-        use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
+        use crate::block::{
+            BlockCondition, BlockDoWhile, BlockIf, BlockList, BlockSwitch, BlockType, BlockWhileDo, };
                 let block = block_arc.read().unwrap();
                 let switch_block = block.as_any().downcast_ref::<BlockSwitch>();
                 if let Some(switch_data) = switch_block {
@@ -4518,7 +4575,10 @@ impl PrintC {
                         drop(idx_vn);
                         // If this varnode is in inline_candidates, emit its defining expression
                         // instead of the inlined-away name (which would be empty)
-                        if let Some(def_op_arc) = self.inline_candidates.get(&key).cloned()
+                        if let Some(def_op_arc) = self
+                    .inline_candidates
+                    .get(&key)
+                    .cloned()
                             .or_else(|| self.value_def_map.get(&key).cloned())
                         {
                             // Chase through COPY to the real expression
@@ -4558,13 +4618,15 @@ impl PrintC {
                             if !found_var {
                                 for op_ref in ops.iter().rev() {
                                     let op = op_ref.0.read().unwrap();
-                                    if matches!(op.opcode,
+                                    if matches!(
+                                op.opcode,
                                         OpCode::CPUI_INT_EQUAL
                                         | OpCode::CPUI_INT_NOTEQUAL
                                         | OpCode::CPUI_INT_LESS
                                         | OpCode::CPUI_INT_SLESS
                                         | OpCode::CPUI_INT_LESSEQUAL
-                                        | OpCode::CPUI_INT_SLESSEQUAL)
+                                        | OpCode::CPUI_INT_SLESSEQUAL
+                            )
                                         && op.inrefs.len() >= 2
                                     {
                                         let in0 = op.inrefs[0].read().unwrap();
@@ -4619,9 +4681,11 @@ impl PrintC {
                             (None, 8, false)
                         };
                     let is_char_print = switch_ct.as_ref().map_or(false, |ct| {
-                        matches!(ct.get_metatype(),
+                        matches!(
+                    ct.get_metatype(),
                             crate::type_system::TypeMetatype::Int
-                            | crate::type_system::TypeMetatype::Uint)
+                            | crate::type_system::TypeMetatype::Uint
+                )
                             && ct.get_name() == "char"
                     });
 
@@ -4678,9 +4742,11 @@ impl PrintC {
                         let ends_with_return = {
                             let cb = case_block.read().unwrap();
                             (cb.get_flags() & crate::block::block_flags::RETURN_TERMINAL) != 0
-                                || cb.get_ops().last().map_or(false, |o| {
-                                    o.0.read().unwrap().opcode == OpCode::CPUI_RETURN
-                                })
+                                || cb
+                            .get_ops()
+                            .last()
+                            .map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_RETURN
+                                )
                         };
                         let is_last_label =
                             !has_default && idx + 1 == switch_data.cases.len();
@@ -4762,7 +4828,8 @@ impl PrintC {
         graph: &crate::block::BlockGraph,
         emitted: &mut std::collections::HashSet<usize>,
     ) {
-        use crate::block::{BlockType, BlockIf, BlockWhileDo, BlockDoWhile, BlockList, BlockCondition, BlockSwitch};
+        use crate::block::{
+            BlockCondition, BlockDoWhile, BlockIf, BlockList, BlockSwitch, BlockType, BlockWhileDo, };
                 // BlockBasic or other — flat statement emission
                 // Still check for inline CBRANCH pattern as fallback
                 let has_cond = {
@@ -4781,9 +4848,11 @@ impl PrintC {
                     let true_edge = block_arc.read().unwrap().get_out(0);
                     let false_edge = block_arc.read().unwrap().get_out(1);
                     
-                    let true_empty = true_edge.as_ref()
+                    let true_empty = true_edge
+                .as_ref()
                         .map_or(true, |e| self.is_block_body_empty(&e.point));
-                    let false_empty = false_edge.as_ref()
+                    let false_empty = false_edge
+                .as_ref()
                         .map_or(true, |e| self.is_block_body_empty(&e.point));
                     
                     if true_empty && false_empty {
@@ -4814,13 +4883,17 @@ impl PrintC {
 
                         self.emit.tag_line(0);
                         // Emit condition to temp buffer for text-based negation
-                        let orig_emit = std::mem::replace(&mut self.emit,
-                            Box::new(crate::prettyprint::EmitNoMarkup::new()));
+                        let orig_emit = std::mem::replace(
+                    &mut self.emit,
+                            Box::new(crate::prettyprint::EmitNoMarkup::new()),
+                );
                         self.emit_block_condition(block_arc);
                         let cond_text = {
                             let buf = std::mem::replace(&mut self.emit, orig_emit);
-                            buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-                                .map(|b| b.get_output()).unwrap_or_default()
+                            buf.into_any()
+                        .downcast::<crate::prettyprint::EmitNoMarkup>()
+                                .map(|b| b.get_output())
+                        .unwrap_or_default()
                         };
                         let trimmed = cond_text.trim();
                         let negated_cond2 = Self::negate_condition_text(trimmed)
@@ -4896,9 +4969,13 @@ impl PrintC {
                     // a basic block's out-edge, and without recursion they'd be
                     // stranded in the unreachable loop. Only recurse into structured
                     // blocks (not basic blocks) to avoid canary block issues.
-                    let outs: Vec<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = {
+                    let outs: Vec<
+                std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+            > = {
                         let b = block_arc.read().unwrap();
-                        (0..b.size_out()).filter_map(|s| b.get_out(s).map(|e| e.point.clone())).collect()
+                        (0..b.size_out())
+                    .filter_map(|s| b.get_out(s).map(|e| e.point.clone()))
+                    .collect()
                     };
                     for succ in &outs {
                         let succ_idx = std::sync::Arc::as_ptr(succ) as *const () as usize;
@@ -5076,7 +5153,9 @@ impl PrintC {
     ///   decl, never reset inside the walk (cc:2521/2530/2551).
     /// - Sort/compare key: rangemap (first offset, EntrySubsort usepoint);
     ///   symbol identity for multi-entry dedup = first whole map only.
-    pub fn emit_scope_local_var_decls(&mut self, sym_scope: &crate::varmap::ScopeLocal, cat: i32) -> bool {
+    pub fn emit_scope_local_var_decls(
+        &mut self, sym_scope: &crate::varmap::ScopeLocal, cat: i32,
+    ) -> bool {
         let mut notempty = false;
         // cc:2523-2534: category branch. No local-scope caller passes cat>=0
         // (printc.cc:2265/2272 pass Symbol::no_category); vacuously empty.
@@ -5185,14 +5264,17 @@ impl PrintC {
 
     // RUGRA-GLUE: mark_variable_used (no Ghidra counterpart found)
     /// Mark a variable name as used, recording its space, offset, and type
-    fn mark_variable_used(&mut self, name: String, space: crate::space::AddressSpace, offset: u64, type_name: String) {
+    fn mark_variable_used(
+        &mut self, name: String, space: crate::space::AddressSpace, offset: u64, type_name: String,
+    ) {
         if name.is_empty() { return; }
         // Filter out expressions (like struct->field or arrays) so we don't emit illegal declarations
         if name.contains("->") || name.contains('.') || name.contains('[') || name.contains('*') || name.contains('&') {
             return;
         }
         self.used_varnode_names.insert(name.clone());
-        self.used_varnode_types.insert(name.clone(), (type_name, space, offset));
+        self.used_varnode_types
+            .insert(name.clone(), (type_name, space, offset));
     }
 
     // RUGRA-GLUE: mark_varnode_used (no Ghidra counterpart found)
@@ -5209,16 +5291,21 @@ impl PrintC {
                     4 => "int".to_string(),
                     8 => "long".to_string(),
                     1 => "byte".to_string(),
-                    _ => vn.v_type.as_ref().map(|dt| dt.get_name().to_string())
+                    _ => vn
+                        .v_type
+                        .as_ref()
+                        .map(|dt| dt.get_name().to_string())
                         .unwrap_or_else(|| "int".to_string()),
                 }
             } else {
-                vn.v_type.as_ref()
+                vn.v_type
+                    .as_ref()
                     .map(|dt| dt.get_name().to_string())
                     .unwrap_or_else(|| "int".to_string())
             }
         } else {
-            vn.v_type.as_ref()
+            vn.v_type
+                .as_ref()
                 .map(|dt| dt.get_name().to_string())
                 .unwrap_or_else(|| "int".to_string())
         };
@@ -5355,7 +5442,9 @@ impl PrintC {
     /// `v_<size>_<hex>`), closing the Register-ladder raw-negative-offset
     /// swallowing (`uVarffffffffffffff70`) class with it.
     fn unnamed_location_token(space: crate::space::AddressSpace, offset: u64) -> String {
-        format!("{}{}", space.name(), Self::addr_space_print_raw(space, offset))
+        format!(
+            "{}{}", space.name(), Self::addr_space_print_raw(space, offset)
+        )
     }
 
     // RUGRA-GLUE: get_varnode_display_name_inner (no Ghidra counterpart found)
@@ -5445,10 +5534,11 @@ impl PrintC {
                     Self::unnamed_location_offset(vn),
                 )
             }
-            AddressSpace::Stack => Self::unnamed_location_token(
+            AddressSpace::Stack => {
+                Self::unnamed_location_token(
                 AddressSpace::Stack,
-                Self::unnamed_location_offset(vn),
-            ),
+                Self::unnamed_location_offset(vn))
+            }
             AddressSpace::Unique => {
                 // Inline candidacy stays keyed on the current instance
                 // (space, offset); only the label's address source moves to
@@ -5472,7 +5562,9 @@ impl PrintC {
     /// (non-Unknown, non-undefined) type. ActionTypeInfer assigns types to
     /// individual SSA instances, not to the HighVariable as a whole. This
     /// finds the best type across all instances.
-    fn find_typed_instance(high: &crate::variable::HighVariable) -> Option<std::sync::Arc<crate::type_system::Datatype>> {
+    fn find_typed_instance(
+        high: &crate::variable::HighVariable,
+    ) -> Option<std::sync::Arc<crate::type_system::Datatype>> {
         use crate::type_system::TypeMetatype;
         for inst_arc in &high.instances {
             let inst = inst_arc.read().unwrap();
@@ -5486,7 +5578,9 @@ impl PrintC {
     }
 
     // RUGRA-GLUE: vn_type_if_meaningful (no Ghidra counterpart found)
-    fn vn_type_if_meaningful(vn: &crate::varnode::Varnode) -> Option<std::sync::Arc<crate::type_system::Datatype>> {
+    fn vn_type_if_meaningful(
+        vn: &crate::varnode::Varnode,
+    ) -> Option<std::sync::Arc<crate::type_system::Datatype>> {
         use crate::type_system::TypeMetatype;
         // If this varnode is the output of a LOAD, it holds a loaded VALUE
         // (int/long), not a pointer. Override any pointer type with a
@@ -5498,29 +5592,44 @@ impl PrintC {
                 let sz = vn.get_size();
                 use crate::type_system::datatype::{Datatype, TypeBase};
                 let base_type = match sz {
-                    4 => Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int))),
-                    8 => Arc::new(Datatype::Base(TypeBase::new("long".into(), 8, TypeMetatype::Int))),
-                    1 => Arc::new(Datatype::Base(TypeBase::new("byte".into(), 1, TypeMetatype::Uint))),
-                    _ => Arc::new(Datatype::Base(TypeBase::new("undefined".into(), sz, TypeMetatype::Unknown))),
+                    4 => Arc::new(Datatype::Base(TypeBase::new(
+                        "int".into(), 4, TypeMetatype::Int,
+                    ))),
+                    8 => Arc::new(Datatype::Base(TypeBase::new(
+                        "long".into(), 8, TypeMetatype::Int,
+                    ))),
+                    1 => Arc::new(Datatype::Base(TypeBase::new(
+                        "byte".into(), 1, TypeMetatype::Uint,
+                    ))),
+                    _ => Arc::new(Datatype::Base(TypeBase::new(
+                        "undefined".into(), sz, TypeMetatype::Unknown,
+                    ))),
                 };
                 return Some(base_type);
             }
         }
-        vn.v_type.as_ref()
+        vn.v_type
+            .as_ref()
             .filter(|t| t.get_metatype() != TypeMetatype::Unknown && t.get_name() != "undefined")
             .cloned()
     }
 
     // RUGRA-GLUE: pointer_type_for (no Ghidra counterpart found)
-    fn pointer_type_for(&self, vn: &crate::varnode::Varnode) -> Option<std::sync::Arc<crate::type_system::Datatype>> {
-        if self.pointer_varnodes.contains(&(vn.get_space(), vn.get_offset())) {
+    fn pointer_type_for(
+        &self, vn: &crate::varnode::Varnode,
+    ) -> Option<std::sync::Arc<crate::type_system::Datatype>> {
+        if self
+            .pointer_varnodes
+            .contains(&(vn.get_space(), vn.get_offset())) {
             return self.make_int_ptr();
         }
         if let Some(ref high_arc) = vn.high {
             let high = high_arc.read().unwrap();
             for inst_arc in &high.instances {
                 let inst = inst_arc.read().unwrap();
-                if self.pointer_varnodes.contains(&(inst.get_space(), inst.get_offset())) {
+                if self
+                    .pointer_varnodes
+                    .contains(&(inst.get_space(), inst.get_offset())) {
                     return self.make_int_ptr();
                 }
             }
@@ -5532,8 +5641,9 @@ impl PrintC {
     fn make_int_ptr(&self) -> Option<std::sync::Arc<crate::type_system::Datatype>> {
         use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
         let int_type = std::sync::Arc::new(Datatype::Base(
-            TypeBase::new("int".to_string(), 4, TypeMetatype::Int),
-        ));
+            TypeBase::new(
+            "int".to_string(), 4, TypeMetatype::Int,
+        )));
         Some(std::sync::Arc::new(Datatype::Pointer(TypePointer {
             base: TypeBase::new("int *".to_string(), 8, TypeMetatype::Pointer),
             ptr_to: int_type,
@@ -5549,7 +5659,9 @@ impl PrintC {
     /// Returns e.g. "iVar" for int, "piVar" for int*, "pUVar" for pointer to a
     /// struct named "URLGlob". Falls back to size-based dispatch when no Datatype
     /// is available (Rugra-specific gap: Ghidra always has a Datatype object).
-    fn var_prefix(v_type: &Option<std::sync::Arc<crate::type_system::Datatype>>, size: usize) -> String {
+    fn var_prefix(
+        v_type: &Option<std::sync::Arc<crate::type_system::Datatype>>, size: usize,
+    ) -> String {
         let mut base = String::new();
         match v_type {
             Some(dt) => dt.print_name_base(&mut base),
@@ -5586,7 +5698,9 @@ impl PrintC {
     }
 
     // RUGRA-GLUE: maybe_apply_type_prefix (no Ghidra counterpart found)
-    fn maybe_apply_type_prefix(name: &str, v_type: &Option<std::sync::Arc<crate::type_system::Datatype>>, size: usize) -> String {
+    fn maybe_apply_type_prefix(
+        name: &str, v_type: &Option<std::sync::Arc<crate::type_system::Datatype>>, size: usize,
+    ) -> String {
         use crate::type_system::TypeMetatype;
         let suffix = ["uVar", "lVar", "iVar", "sVar", "bVar"]
             .iter()
@@ -5629,10 +5743,13 @@ impl PrintC {
         let base = match name.rsplit_once('_') {
             Some((head, tail)) if !head.is_empty()
                 && !tail.is_empty()
-                && tail.chars().all(|c| c.is_ascii_digit()) => head,
+                && tail.chars().all(|c| c.is_ascii_digit()) => {
+                head
+            }
             _ => name,
         };
-        matches!(base,
+        matches!(
+            base,
             "RAX" | "EAX" | "AX" | "AL" | "AH"
             | "RCX" | "ECX" | "CX" | "CL"
             | "RDX" | "EDX" | "DX" | "DL"
@@ -5747,9 +5864,12 @@ impl PrintC {
             // `assignDefaultNames` pass (database.cc:2850) at scope-snapshot
             // time — PrintC consumes it verbatim (Ghidra's printer reads
             // Symbol::getDisplayName; it never renumbers scope symbols).
-            let sym_opt = self.scope.as_ref().and_then(|s| s.find_symbol(offset)).map(|sym| {
-                sym.name.clone()
-            });
+            let sym_opt = self
+                .scope
+                .as_ref()
+                .and_then(|s| s.find_symbol(offset))
+                .map(|sym| sym.name.clone()
+            );
             if let Some(assigned_name) = sym_opt {
                 return Some(assigned_name);
             }
@@ -5854,57 +5974,6 @@ impl PrintC {
         }
     }
 
-    // RUGRA-GLUE: textual mirror of BlockCondition::negateCondition
-    /// De Morgan-negate a composite condition `(A) && (B)` / `(A) || (B)`:
-    /// `!((A) || (B))` -> `(!A) && (!B)` (each side via negate_condition_text,
-    /// the negatetoken equivalent of printc.cc:555-560). Mirrors Ghidra
-    /// BlockCondition::negateCondition (block.cc:3023-3032: NOT distributed to
-    /// both sides, op AND<->OR) which runs in the structurer via
-    /// ruleBlockIfNoExit's negateCondition (blockaction.cc:1510-1512); Rugra
-    /// records the negation as BlockIf::negated and applies it at print time.
-    /// Returns None when the text is not a top-level two-clause composite.
-    fn demorgan_negate_text(text: &str) -> Option<String> {
-        // Scan for the top-level (depth 0) operator between the two
-        // parenthesized halves. Nested parens inside a side are skipped.
-        let bytes = text.as_bytes();
-        let mut depth: i32 = 0;
-        let mut i = 0usize;
-        while i < bytes.len() {
-            match bytes[i] {
-                b'(' => depth += 1,
-                b')' => depth -= 1,
-                _ => {
-                    if depth == 0 && i > 0 && bytes[i] == b' ' {
-                        for (op, dual) in [(" && ", " && "), (" || ", " || ")] {
-                            let _ = dual;
-                            if text[i..].starts_with(op) {
-                                let op_name = op;
-                                let dual_name = if op_name == " && " { " || " } else { " && " };
-                                let left = text[..i].trim();
-                                let right = text[i + op_name.len()..].trim();
-                                // RUGRA-GLUE: paren-stripping helper for the
-                                // textual De Morgan composition above (pure
-                                // string manipulation, no Ghidra counterpart).
-                                fn strip(s: &str) -> &str {
-                                    s.strip_prefix('(')
-                                        .and_then(|x| x.strip_suffix(')'))
-                                        .unwrap_or(s)
-                                }
-                                let neg_left = Self::negate_condition_text(strip(left))
-                                    .unwrap_or_else(|| format!("!({})", strip(left)));
-                                let neg_right = Self::negate_condition_text(strip(right))
-                                    .unwrap_or_else(|| format!("!({})", strip(right)));
-                                return Some(format!("({}){}({})", neg_left, dual_name, neg_right));
-                            }
-                        }
-                    }
-                }
-            }
-            i += 1;
-        }
-        None
-    }
-
     // RUGRA-GLUE: try_fold_bool_comparison (no Ghidra counterpart found)
     /// Try to fold a BOOL_OR/BOOL_AND of two comparisons into a single comparison.
     /// E.g., `BOOL_OR(INT_EQUAL(A,B), INT_LESS(A,B))` → emits `A <= B`
@@ -5919,27 +5988,43 @@ impl PrintC {
         let in0_ptr = Arc::as_ptr(&def_op.inrefs[0]) as usize;
         let in1_ptr = Arc::as_ptr(&def_op.inrefs[1]) as usize;
         // Also try the copy-resolved source
-        let in0_resolved = self.copy_map.get(&in0_ptr)
-            .map(|r| Arc::as_ptr(r) as usize).unwrap_or(in0_ptr);
-        let in1_resolved = self.copy_map.get(&in1_ptr)
-            .map(|r| Arc::as_ptr(r) as usize).unwrap_or(in1_ptr);
+        let in0_resolved = self
+            .copy_map
+            .get(&in0_ptr)
+            .map(|r| Arc::as_ptr(r) as usize)
+            .unwrap_or(in0_ptr);
+        let in1_resolved = self
+            .copy_map
+            .get(&in1_ptr)
+            .map(|r| Arc::as_ptr(r) as usize)
+            .unwrap_or(in1_ptr);
 
-        let op0_arc = self.def_map.get(&in0_ptr).cloned()
+        let op0_arc = self
+            .def_map
+            .get(&in0_ptr)
+            .cloned()
             .or_else(|| self.def_map.get(&in0_resolved).cloned())
             .or_else(|| {
                 let vn = def_op.inrefs[0].read().unwrap();
                 let key = (vn.get_space(), vn.get_offset());
-                self.value_def_map.get(&key).cloned()
+                self.value_def_map
+                    .get(&key)
+                    .cloned()
                     .or_else(|| self.inline_candidates.get(&key).cloned())
             })
             // SSA def chain fallback
             .or_else(|| Self::get_defining_op(&def_op.inrefs[0]));
-        let op1_arc = self.def_map.get(&in1_ptr).cloned()
+        let op1_arc = self
+            .def_map
+            .get(&in1_ptr)
+            .cloned()
             .or_else(|| self.def_map.get(&in1_resolved).cloned())
             .or_else(|| {
                 let vn = def_op.inrefs[1].read().unwrap();
                 let key = (vn.get_space(), vn.get_offset());
-                self.value_def_map.get(&key).cloned()
+                self.value_def_map
+                    .get(&key)
+                    .cloned()
                     .or_else(|| self.inline_candidates.get(&key).cloned())
             })
             // SSA def chain fallback
@@ -5970,14 +6055,34 @@ impl PrintC {
         } else {
             // Strategy 2: compare by HighVariable display name (cross-SSA-version matching)
             // Two different SSA versions of the same register share the same HighVariable name
-            let name_a0 = op0.inrefs[0].read().unwrap().high.as_ref()
-                .map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_default();
-            let name_a1 = op1.inrefs[0].read().unwrap().high.as_ref()
-                .map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_default();
-            let name_b0 = op0.inrefs[1].read().unwrap().high.as_ref()
-                .map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_default();
-            let name_b1 = op1.inrefs[1].read().unwrap().high.as_ref()
-                .map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_default();
+            let name_a0 = op0.inrefs[0]
+                .read()
+                .unwrap()
+                .high
+                .as_ref()
+                .map(|h| h.read().unwrap().get_name().to_string())
+                .unwrap_or_default();
+            let name_a1 = op1.inrefs[0]
+                .read()
+                .unwrap()
+                .high
+                .as_ref()
+                .map(|h| h.read().unwrap().get_name().to_string())
+                .unwrap_or_default();
+            let name_b0 = op0.inrefs[1]
+                .read()
+                .unwrap()
+                .high
+                .as_ref()
+                .map(|h| h.read().unwrap().get_name().to_string())
+                .unwrap_or_default();
+            let name_b1 = op1.inrefs[1]
+                .read()
+                .unwrap()
+                .high
+                .as_ref()
+                .map(|h| h.read().unwrap().get_name().to_string())
+                .unwrap_or_default();
             !name_a0.is_empty() && !name_b0.is_empty()
                 && name_a0 == name_a1 && name_b0 == name_b1
         };
@@ -5986,14 +6091,34 @@ impl PrintC {
             if op0_a == op1_b && op0_b == op1_a {
                 true
             } else {
-                let name_a0 = op0.inrefs[0].read().unwrap().high.as_ref()
-                    .map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_default();
-                let name_b1 = op1.inrefs[1].read().unwrap().high.as_ref()
-                    .map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_default();
-                let name_b0 = op0.inrefs[1].read().unwrap().high.as_ref()
-                    .map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_default();
-                let name_a1 = op1.inrefs[0].read().unwrap().high.as_ref()
-                    .map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_default();
+                let name_a0 = op0.inrefs[0]
+                    .read()
+                    .unwrap()
+                    .high
+                    .as_ref()
+                    .map(|h| h.read().unwrap().get_name().to_string())
+                    .unwrap_or_default();
+                let name_b1 = op1.inrefs[1]
+                    .read()
+                    .unwrap()
+                    .high
+                    .as_ref()
+                    .map(|h| h.read().unwrap().get_name().to_string())
+                    .unwrap_or_default();
+                let name_b0 = op0.inrefs[1]
+                    .read()
+                    .unwrap()
+                    .high
+                    .as_ref()
+                    .map(|h| h.read().unwrap().get_name().to_string())
+                    .unwrap_or_default();
+                let name_a1 = op1.inrefs[0]
+                    .read()
+                    .unwrap()
+                    .high
+                    .as_ref()
+                    .map(|h| h.read().unwrap().get_name().to_string())
+                    .unwrap_or_default();
                 !name_a0.is_empty() && !name_b0.is_empty()
                     && name_a0 == name_b1 && name_b0 == name_a1
             }
@@ -6043,7 +6168,8 @@ impl PrintC {
                 return true;
             }
             // Duplicate: X(a,b) || X(a,b) → single X(a,b)
-            (a, b) if a == b && matches!(a,
+            (a, b) if a == b && matches!(
+                        a,
                 OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
                 | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS
                 | OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL
@@ -6111,7 +6237,9 @@ impl PrintC {
     /// Push an op's input varnode, resolving through the copy chain.
     fn push_input(&mut self, op: &PcodeOp, index: usize) {
         if let Some(in_arc) = op.get_in(index) {
-            let resolved = self.resolve_varnode(&in_arc).unwrap_or_else(|| in_arc.clone());
+            let resolved = self
+                .resolve_varnode(&in_arc)
+                .unwrap_or_else(|| in_arc.clone());
             self.push_varnode(&resolved.read().unwrap(), Some(op));
         }
     }
@@ -6126,16 +6254,20 @@ impl PrintC {
     /// (whose input we are pushing). `index`: 0=left, 1=right.
     fn push_input_parenthesized(&mut self, parent_op: &PcodeOp, parent_opc: OpCode, index: usize) {
         if let Some(in_arc) = parent_op.get_in(index) {
-            let resolved = self.resolve_varnode(&in_arc).unwrap_or_else(|| in_arc.clone());
+            let resolved = self
+                .resolve_varnode(&in_arc)
+                .unwrap_or_else(|| in_arc.clone());
             // Determine if the resolved input is itself a binary op that needs
             // parentheses. We must look through the COPY chain to the real def.
             let child_opc = {
                 let vn = resolved.read().unwrap();
                 if vn.is_implied() {
-                    vn.get_def().map(|def_arc| {
+                    vn.get_def()
+                        .map(|def_arc| {
                         let d = def_arc.read().unwrap();
                         if d.is_dead() { None } else { Some(d.opcode) }
-                    }).flatten()
+                    })
+                        .flatten()
                 } else {
                     None
                 }
@@ -6199,7 +6331,9 @@ impl PrintC {
                 }
                 // Stack variable folding: INT_ADD(RSP, const) → &local_XX
                 if let Some(stack_name) = self.get_stack_variable_name(def_op) {
-                    self.mark_variable_used(stack_name.clone(), AddressSpace::Stack, 0, "int".to_string());
+                    self.mark_variable_used(
+                        stack_name.clone(), AddressSpace::Stack, 0, "int".to_string(),
+                    );
                     if !self.discovery_pass {
                         self.emit.print("&");
                         self.emit.tag_variable(&stack_name, 0);
@@ -6231,13 +6365,17 @@ impl PrintC {
             OpCode::CPUI_INT_2COMP => { self.emit.print("-"); self.push_input(def_op, 0); }
             OpCode::CPUI_BOOL_NEGATE => {
                 // Try to negate textually: emit inner to temp buffer
-                let orig_emit = std::mem::replace(&mut self.emit,
-                    Box::new(crate::prettyprint::EmitNoMarkup::new()));
+                let orig_emit = std::mem::replace(
+                    &mut self.emit,
+                    Box::new(crate::prettyprint::EmitNoMarkup::new()),
+                );
                 self.push_input(def_op, 0);
                 let inner_text = {
                     let buf = std::mem::replace(&mut self.emit, orig_emit);
-                    buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-                        .map(|b| b.get_output()).unwrap_or_default()
+                    buf.into_any()
+                        .downcast::<crate::prettyprint::EmitNoMarkup>()
+                        .map(|b| b.get_output())
+                        .unwrap_or_default()
                 };
                 let trimmed = inner_text.trim();
                 let negated = if let Some(pos) = trimmed.find(" == ") {
@@ -6264,15 +6402,31 @@ impl PrintC {
                 }
             }
             OpCode::CPUI_INT_ZEXT => {
-                let cast_name = def_op.output.as_ref()
-                    .and_then(|out| out.read().unwrap().v_type.as_ref().map(|t| t.get_name().to_string()))
+                let cast_name = def_op
+                    .output
+                    .as_ref()
+                    .and_then(|out| {
+                        out.read()
+                            .unwrap()
+                            .v_type
+                            .as_ref()
+                            .map(|t| t.get_name().to_string())
+                    })
                     .unwrap_or_else(|| "uint".to_string());
                 self.emit.print(&format!("({})", cast_name));
                 self.push_input(def_op, 0);
             }
             OpCode::CPUI_INT_SEXT => {
-                let cast_name = def_op.output.as_ref()
-                    .and_then(|out| out.read().unwrap().v_type.as_ref().map(|t| t.get_name().to_string()))
+                let cast_name = def_op
+                    .output
+                    .as_ref()
+                    .and_then(|out| {
+                        out.read()
+                            .unwrap()
+                            .v_type
+                            .as_ref()
+                            .map(|t| t.get_name().to_string())
+                    })
                     .unwrap_or_else(|| "int".to_string());
                 self.emit.print(&format!("({})", cast_name));
                 self.push_input(def_op, 0);
@@ -6285,18 +6439,24 @@ impl PrintC {
                     let addr_key = (addr_vn.get_space(), addr_vn.get_offset());
                     drop(addr_vn);
 
-                    let addr_def_opt = self.value_def_map.get(&addr_key).cloned()
+                    let addr_def_opt = self
+                        .value_def_map
+                        .get(&addr_key)
+                        .cloned()
                         .or_else(|| {
                             let ptr = Arc::as_ptr(addr_arc) as usize;
                             self.def_map.get(&ptr).cloned()
                         })
+                        .or_else(|| self.inline_candidates.get(&addr_key).cloned()
+                        )
                         .or_else(|| {
-                            self.inline_candidates.get(&addr_key).cloned()
-                        })
-                        .or_else(|| {
-                            let resolved = self.resolve_varnode(addr_arc).unwrap_or_else(|| addr_arc.clone());
+                            let resolved = self
+                                .resolve_varnode(addr_arc)
+                                .unwrap_or_else(|| addr_arc.clone());
                             let rkey = { let rv = resolved.read().unwrap(); (rv.get_space(), rv.get_offset()) };
-                            self.value_def_map.get(&rkey).cloned()
+                            self.value_def_map
+                                .get(&rkey)
+                                .cloned()
                                 .or_else(|| self.inline_candidates.get(&rkey).cloned())
                         })
                         .or_else(|| Self::get_defining_op(addr_arc));
@@ -6332,10 +6492,17 @@ impl PrintC {
 
                     if !emitted_as_field {
                         // Standard typed dereference
-                        let addr_type_name = def_op.inrefs[1].read().unwrap().v_type.as_ref()
-                            .and_then(|t| if matches!(t.as_ref(), Datatype::Pointer(_)) { Some(t.get_name().to_string()) } else { None });
+                        let addr_type_name = def_op.inrefs[1]
+                            .read()
+                            .unwrap()
+                            .v_type
+                            .as_ref()
+                            .and_then(|t| {
+                                if matches!(t.as_ref(), Datatype::Pointer(_)) { Some(t.get_name().to_string()) } else { None }
+                            });
                         if let Some(ref ptr_name) = addr_type_name {
-                            self.emit.print(&format!("*(({} *)", ptr_name.trim_end_matches(" *")));
+                            self.emit
+                                .print(&format!("*(({} *)", ptr_name.trim_end_matches(" *")));
                             self.push_input(def_op, 1);
                             self.emit.print(")");
                         } else {
@@ -6387,7 +6554,9 @@ impl PrintC {
                         }
                     } else {
                         let fun_name = format!("FUN_{:08x}", target_addr);
-                        self.mark_variable_used(fun_name.clone(), target_space, target_addr, "long".to_string());
+                        self.mark_variable_used(
+                            fun_name.clone(), target_space, target_addr, "long".to_string(),
+                        );
                         if !self.discovery_pass {
                             self.emit.tag_variable(&fun_name, 0);
                         }
@@ -6410,7 +6579,9 @@ impl PrintC {
             OpCode::CPUI_CAST => {
                 // Emit "(typename)". The output varnode's v_type (set by
                 // castInput to reqtype) is the cast target type.
-                let type_name = def_op.output.as_ref()
+                let type_name = def_op
+                    .output
+                    .as_ref()
                     .and_then(|o| {
                         let guard = o.read().unwrap();
                         guard.v_type.as_ref().map(|t| t.get_name().to_string())
@@ -6561,7 +6732,7 @@ impl PrintC {
             self.emit_block_condition_rpn(block_arc);
             return;
         }
-        use crate::block::{BlockType, BlockCondition, BoolOp};
+        use crate::block::{BlockCondition, BlockType, BoolOp};
 
         // Capture the condition text into a temporary buffer so we can detect
         // when no/invalid condition was produced (e.g. a CBRANCH whose in(1)
@@ -6618,12 +6789,16 @@ impl PrintC {
         block_arc: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) -> String {
         // Swap in a capture buffer
-        let orig_emit = std::mem::replace(&mut self.emit,
-            Box::new(crate::prettyprint::EmitNoMarkup::new()));
+        let orig_emit = std::mem::replace(
+            &mut self.emit,
+            Box::new(crate::prettyprint::EmitNoMarkup::new()),
+        );
         self.emit_block_condition_inner(block_arc);
         let buf = std::mem::replace(&mut self.emit, orig_emit);
-        buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-            .map(|b| b.get_output()).unwrap_or_default()
+        buf.into_any()
+            .downcast::<crate::prettyprint::EmitNoMarkup>()
+            .map(|b| b.get_output())
+            .unwrap_or_default()
     }
 
     /// Render a single varnode to a String by swapping in a capture emit buffer.
@@ -6635,12 +6810,16 @@ impl PrintC {
     // existing capture_block_condition at printc.rs:2512). No direct Ghidra
     // counterpart; exists to support the opStore address-wrapping fix.
     fn capture_varnode_text(&mut self, vn: &Varnode) -> String {
-        let orig_emit = std::mem::replace(&mut self.emit,
-            Box::new(crate::prettyprint::EmitNoMarkup::new()));
+        let orig_emit = std::mem::replace(
+            &mut self.emit,
+            Box::new(crate::prettyprint::EmitNoMarkup::new()),
+        );
         self.push_varnode(vn, None);
         let buf = std::mem::replace(&mut self.emit, orig_emit);
-        buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-            .map(|b| b.get_output()).unwrap_or_default()
+        buf.into_any()
+            .downcast::<crate::prettyprint::EmitNoMarkup>()
+            .map(|b| b.get_output())
+            .unwrap_or_default()
     }
 
     /// Render an op's inline expression (RHS, no `out =`) to a String by
@@ -6654,8 +6833,10 @@ impl PrintC {
         // capture here would leave inlined_ops populated / inline_depth bumped
         // and corrupt subsequent varnode rendering (observed: bVarbVar2 name
         // concatenation in next_url).
-        let orig_emit = std::mem::replace(&mut self.emit,
-            Box::new(crate::prettyprint::EmitNoMarkup::new()));
+        let orig_emit = std::mem::replace(
+            &mut self.emit,
+            Box::new(crate::prettyprint::EmitNoMarkup::new()),
+        );
         let saved_depth = self.inline_depth;
         let saved_inlined_ops = self.inlined_ops.clone();
         let saved_lhs = self.is_lhs;
@@ -6665,8 +6846,10 @@ impl PrintC {
         self.inline_depth = saved_depth;
         self.inlined_ops = saved_inlined_ops;
         self.is_lhs = saved_lhs;
-        buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-            .map(|b| b.get_output()).unwrap_or_default()
+        buf.into_any()
+            .downcast::<crate::prettyprint::EmitNoMarkup>()
+            .map(|b| b.get_output())
+            .unwrap_or_default()
     }
 
     /// Detect a textual self-XOR `X ^ X` (identical operands around ` ^ `).
@@ -6765,7 +6948,7 @@ impl PrintC {
                 let mut j = 0;
                 let tb = tok.as_bytes();
                 while j + 3 <= tb.len() {
-                    if &tb[j..j+3] == b"Var" {
+                    if &tb[j..j + 3] == b"Var" {
                         let mut k = j + 3;
                         let digit_start = k;
                         while k < tb.len() && tb[k].is_ascii_digit() { k += 1; }
@@ -6790,13 +6973,16 @@ impl PrintC {
     // RUGRA-GLUE: Rust-side arg-text extractor (capture-emit-swap pattern).
     fn emit_call_arg_text(&mut self, op: &PcodeOp, i: usize) -> String {
         use crate::opcodes::OpCode;
-        let vn_arc = match op.get_in(i) { Some(a) => a, None => return "0".to_string() };
+        let vn_arc = match op.get_in(i) { Some(a) => a, None => return "0".to_string() ,
+        };
         let (space, offset) = {
             let vn = vn_arc.read().unwrap();
             (vn.get_space(), vn.get_offset())
         };
-        let orig_emit = std::mem::replace(&mut self.emit,
-            Box::new(crate::prettyprint::EmitNoMarkup::new()));
+        let orig_emit = std::mem::replace(
+            &mut self.emit,
+            Box::new(crate::prettyprint::EmitNoMarkup::new()),
+        );
         let saved_lhs = self.is_lhs;
         self.is_lhs = false;
 
@@ -6811,13 +6997,20 @@ impl PrintC {
         // stream register) the chase must not override it — keying on
         // (register, offset) collides with the INPUT parameter at the same
         // storage and printed `fwrite(..., stream)` where the IR read __s.
-        let high_named = vn_arc.read().unwrap().high.as_ref()
+        let high_named = vn_arc
+            .read()
+            .unwrap()
+            .high
+            .as_ref()
             .map(|h| !h.read().unwrap().get_name().is_empty())
             .unwrap_or(false);
         let mut resolved = false;
         if space == crate::space::AddressSpace::Register && !high_named {
             let key = (space, offset);
-            let def_op_opt = self.block_local_reg_defs.get(&key).cloned()
+            let def_op_opt = self
+                .block_local_reg_defs
+                .get(&key)
+                .cloned()
                 .or_else(|| self.value_def_map.get(&key).cloned());
             if let Some(def_op_arc) = def_op_opt {
                 let is_copy = {
@@ -6831,7 +7024,10 @@ impl PrintC {
                         (v.get_space(), v.get_offset())
                     };
                     let src_key = (src_space, src_offset);
-                    let src_def = self.value_def_map.get(&src_key).cloned()
+                    let src_def = self
+                        .value_def_map
+                        .get(&src_key)
+                        .cloned()
                         .or_else(|| self.inline_candidates.get(&src_key).cloned());
                     if let Some(src_def_arc) = src_def {
                         let rip_idx = self.get_rip_relative_operand(&src_def_arc.read().unwrap());
@@ -6886,8 +7082,11 @@ impl PrintC {
 
         let buf = std::mem::replace(&mut self.emit, orig_emit);
         self.is_lhs = saved_lhs;
-        let text = buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-            .map(|b| b.get_output()).unwrap_or_default();
+        let text = buf
+            .into_any()
+            .downcast::<crate::prettyprint::EmitNoMarkup>()
+            .map(|b| b.get_output())
+            .unwrap_or_default();
         if text.trim().is_empty() {
             // Resolution produced nothing (dead def / inline-candidate
             // Unique). Fall back to a concrete, declared local name so the
@@ -6898,7 +7097,9 @@ impl PrintC {
             // emitted. Type defaults to the varnode's size-based int.
             let name = format!("in_{:x}", offset);
             let sz = vn_arc.read().unwrap().get_size();
-            let ty = match sz { 8 => "long", 4 => "int", _ => "int" }.to_string();
+            let ty = match sz { 8 => "long", 4 => "int", _ => "int" ,
+            }
+            .to_string();
             self.mark_variable_used(name.clone(), space, offset, ty);
             name
         } else {
@@ -6911,7 +7112,7 @@ impl PrintC {
         &mut self,
         block_arc: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) {
-        use crate::block::{BlockType, BlockCondition, BoolOp};
+        use crate::block::{BlockCondition, BlockType, BoolOp};
 
         let block_type = block_arc.read().unwrap().get_type();
 
@@ -6930,25 +7131,41 @@ impl PrintC {
                 // For OR patterns, check for tautologies first
                 if is_or {
                     // Emit each side to temp buffers
-                    let orig_emit = std::mem::replace(&mut self.emit,
-                        Box::new(crate::prettyprint::EmitNoMarkup::new()));
+                    let orig_emit = std::mem::replace(
+                        &mut self.emit,
+                        Box::new(crate::prettyprint::EmitNoMarkup::new()),
+                    );
                     self.emit_block_condition_inner(&first);
                     let left_text = {
-                        let buf = std::mem::replace(&mut self.emit,
-                            Box::new(crate::prettyprint::EmitNoMarkup::new()));
-                        buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-                            .map(|b| b.get_output()).unwrap_or_default()
+                        let buf = std::mem::replace(
+                            &mut self.emit,
+                            Box::new(crate::prettyprint::EmitNoMarkup::new()),
+                        );
+                        buf.into_any()
+                            .downcast::<crate::prettyprint::EmitNoMarkup>()
+                            .map(|b| b.get_output())
+                            .unwrap_or_default()
                     };
                     self.emit_block_condition_inner(&second);
                     let right_text = {
                         let buf = std::mem::replace(&mut self.emit, orig_emit);
-                        buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-                            .map(|b| b.get_output()).unwrap_or_default()
+                        buf.into_any()
+                            .downcast::<crate::prettyprint::EmitNoMarkup>()
+                            .map(|b| b.get_output())
+                            .unwrap_or_default()
                     };
 
                     // Strip outer parens for comparison: "(X == 1)" → "X == 1"
-                    let left_bare = left_text.trim().trim_start_matches('(').trim_end_matches(')').trim();
-                    let right_bare = right_text.trim().trim_start_matches('(').trim_end_matches(')').trim();
+                    let left_bare = left_text
+                        .trim()
+                        .trim_start_matches('(')
+                        .trim_end_matches(')')
+                        .trim();
+                    let right_bare = right_text
+                        .trim()
+                        .trim_start_matches('(')
+                        .trim_end_matches(')')
+                        .trim();
 
                     if Self::is_complementary_condition(left_bare, right_bare) {
                         self.emit.print("1");
@@ -7049,7 +7266,9 @@ impl PrintC {
     /// - `a || b` / `a && b` → inlined boolean expr
     fn emit_condition(&mut self, cond_arc: &Arc<RwLock<Varnode>>) {
         // Resolve through copy chain first
-        let resolved = self.resolve_varnode(cond_arc).unwrap_or_else(|| cond_arc.clone());
+        let resolved = self
+            .resolve_varnode(cond_arc)
+            .unwrap_or_else(|| cond_arc.clone());
         let resolved_ptr = Arc::as_ptr(&resolved) as usize;
         let vn_key = {
             let resolved_vn = resolved.read().unwrap();
@@ -7083,7 +7302,7 @@ impl PrintC {
 
         // Fallback strategies using ad-hoc maps (for cases where SSA def is incomplete):
         // 1. Original varnode Arc pointer → def_map (most precise)
-        // 2. Copy-resolved Arc pointer → def_map  
+        // 2. Copy-resolved Arc pointer → def_map
         // 3. Value-based (space, offset) → value_def_map (may have collisions)
         // 4. inline_candidates
         let original_ptr = Arc::as_ptr(cond_arc) as usize;
@@ -7091,7 +7310,10 @@ impl PrintC {
         
         if def_op_arc.is_none() {
             // Try pointer-based lookup first (more precise than value-based)
-            if let Some(arc) = self.def_map.get(&original_ptr).cloned()
+            if let Some(arc) = self
+                .def_map
+                .get(&original_ptr)
+                .cloned()
                 .or_else(|| self.def_map.get(&resolved_ptr).cloned())
             {
                 let op = arc.read().unwrap();
@@ -7114,7 +7336,10 @@ impl PrintC {
         // If pointer-based didn't find a non-COPY def, chase via value_def_map
         if def_op_arc.is_none() {
             for _ in 0..20 {
-                let found = self.value_def_map.get(&lookup_key).cloned()
+                let found = self
+                    .value_def_map
+                    .get(&lookup_key)
+                    .cloned()
                     .or_else(|| self.inline_candidates.get(&lookup_key).cloned());
                 match found {
                     Some(arc) => {
@@ -7141,7 +7366,10 @@ impl PrintC {
                 let orig_vn = cond_arc.read().unwrap();
                 (orig_vn.get_space(), orig_vn.get_offset())
             };
-            if let Some(arc) = self.comparison_def_map.get(&vn_key).cloned()
+            if let Some(arc) = self
+                .comparison_def_map
+                .get(&vn_key)
+                .cloned()
                 .or_else(|| self.comparison_def_map.get(&original_key).cloned())
                 .or_else(|| self.comparison_def_map.get(&lookup_key).cloned())
             {
@@ -7165,14 +7393,19 @@ impl PrintC {
             // Case 1: BOOL_NOT(x) — negate the inner comparison
             if def_op.opcode == OpCode::CPUI_BOOL_NEGATE && def_op.inrefs.len() == 1 {
                 let inner_arc = def_op.inrefs[0].clone();
-                let inner_resolved = self.resolve_varnode(&inner_arc).unwrap_or_else(|| inner_arc.clone());
+                let inner_resolved = self
+                    .resolve_varnode(&inner_arc)
+                    .unwrap_or_else(|| inner_arc.clone());
                 let inner_key = {
                     let inner_vn = inner_resolved.read().unwrap();
                     (inner_vn.get_space(), inner_vn.get_offset())
                 };
                 let inner_ptr = Arc::as_ptr(&inner_resolved) as usize;
 
-                let inner_def = self.value_def_map.get(&inner_key).cloned()
+                let inner_def = self
+                    .value_def_map
+                    .get(&inner_key)
+                    .cloned()
                     .or_else(|| self.def_map.get(&inner_ptr).cloned());
 
                 if let Some(inner_def_arc) = inner_def {
@@ -7207,13 +7440,17 @@ impl PrintC {
                 drop(def_op);
 
                 // Emit inner to temp buffer
-                let orig_emit = std::mem::replace(&mut self.emit,
-                    Box::new(crate::prettyprint::EmitNoMarkup::new()));
+                let orig_emit = std::mem::replace(
+                    &mut self.emit,
+                    Box::new(crate::prettyprint::EmitNoMarkup::new()),
+                );
                 self.emit_condition(&inner_arc);
                 let inner_text = {
                     let buf = std::mem::replace(&mut self.emit, orig_emit);
-                    buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-                        .map(|b| b.get_output()).unwrap_or_default()
+                    buf.into_any()
+                        .downcast::<crate::prettyprint::EmitNoMarkup>()
+                        .map(|b| b.get_output())
+                        .unwrap_or_default()
                 };
 
                 // Try to negate the comparison textually
@@ -7282,20 +7519,28 @@ impl PrintC {
                             let wrap_left = Self::condition_side_needs_parens(bool_opcode, &a_arc);
                             let wrap_right = Self::condition_side_needs_parens(bool_opcode, &b_arc);
                             // Save current emit state and emit to temp buffers
-                            let orig_emit = std::mem::replace(&mut self.emit,
-                                Box::new(crate::prettyprint::EmitNoMarkup::new()));
+                            let orig_emit = std::mem::replace(
+                                &mut self.emit,
+                                Box::new(crate::prettyprint::EmitNoMarkup::new()),
+                            );
                             self.emit_condition(&a_arc);
                             let left_text = {
-                                let buf = std::mem::replace(&mut self.emit,
-                                    Box::new(crate::prettyprint::EmitNoMarkup::new()));
-                                buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-                                    .map(|b| b.get_output()).unwrap_or_default()
+                                let buf = std::mem::replace(
+                                    &mut self.emit,
+                                    Box::new(crate::prettyprint::EmitNoMarkup::new()),
+                                );
+                                buf.into_any()
+                                    .downcast::<crate::prettyprint::EmitNoMarkup>()
+                                    .map(|b| b.get_output())
+                                    .unwrap_or_default()
                             };
                             self.emit_condition(&b_arc);
                             let right_text = {
                                 let buf = std::mem::replace(&mut self.emit, orig_emit);
-                                buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
-                                    .map(|b| b.get_output()).unwrap_or_default()
+                                buf.into_any()
+                                    .downcast::<crate::prettyprint::EmitNoMarkup>()
+                                    .map(|b| b.get_output())
+                                    .unwrap_or_default()
                             };
 
                             // Check complementary patterns:
@@ -7303,7 +7548,8 @@ impl PrintC {
                             // "X < Y"  || "X >= Y" → always true
                             // "X <= Y" || "X > Y"  → always true
                             let is_tautology = Self::is_complementary_condition(
-                                left_text.trim(), right_text.trim());
+                                left_text.trim(), right_text.trim(),
+                            );
 
                             if is_tautology {
                                 self.emit.print("1");
@@ -7425,7 +7671,9 @@ impl PrintLanguage for PrintC {
         self.snapshot_union_resolutions(fd);
 
         // Load symbol and string tables from Funcdata, sanitizing C identifiers
-        self.symbol_table = fd.symbol_table.iter()
+        self.symbol_table = fd
+            .symbol_table
+            .iter()
             .map(|(k, v)| (*k, sanitize_c_ident(v)))
             .collect();
         self.string_table = fd.string_table.clone();
@@ -7449,7 +7697,8 @@ impl PrintLanguage for PrintC {
         // Populate parameter name mapping from function prototype
         self.param_names.clear();
         for param in &fd.funcp.parameters {
-            self.param_names.insert(param.address.as_u64(), param.name.clone());
+            self.param_names
+                .insert(param.address.as_u64(), param.name.clone());
         }
 
         // Collect function call target addresses so we don't declare them as variables
@@ -7474,7 +7723,8 @@ impl PrintLanguage for PrintC {
             match op.opcode {
                 OpCode::CPUI_LOAD | OpCode::CPUI_STORE if op.inrefs.len() > 1 => {
                     let vn = op.inrefs[1].read().unwrap();
-                    self.pointer_varnodes.insert((vn.get_space(), vn.get_offset()));
+                    self.pointer_varnodes
+                        .insert((vn.get_space(), vn.get_offset()));
                 }
                 OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB => {
                     if let Some(ref out) = op.output {
@@ -7494,7 +7744,8 @@ impl PrintLanguage for PrintC {
                         for in_arc in &op.inrefs {
                             let in_vn = in_arc.read().unwrap();
                             if in_vn.get_space() != AddressSpace::Const {
-                                self.pointer_varnodes.insert((in_vn.get_space(), in_vn.get_offset()));
+                                self.pointer_varnodes
+                                    .insert((in_vn.get_space(), in_vn.get_offset()));
                             }
                         }
                     }
@@ -7511,8 +7762,9 @@ impl PrintLanguage for PrintC {
         if !self.pointer_varnodes.is_empty() {
             use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
             let int_type = std::sync::Arc::new(Datatype::Base(
-                TypeBase::new("int".to_string(), 4, TypeMetatype::Int),
-            ));
+                TypeBase::new(
+                "int".to_string(), 4, TypeMetatype::Int,
+            )));
             let int_ptr = std::sync::Arc::new(Datatype::Pointer(TypePointer {
                 base: TypeBase::new("int *".to_string(), 8, TypeMetatype::Pointer),
                 ptr_to: int_type,
@@ -7520,10 +7772,14 @@ impl PrintLanguage for PrintC {
             }));
             for vn_ref in &fd.vbank.loc_tree {
                 let vn = vn_ref.0.read().unwrap();
-                if self.pointer_varnodes.contains(&(vn.get_space(), vn.get_offset())) {
-                    let needs_update = vn.v_type.as_ref().map_or(true, |t| {
-                        t.get_metatype() != TypeMetatype::Pointer
-                    });
+                if self
+                    .pointer_varnodes
+                    .contains(&(vn.get_space(), vn.get_offset())) {
+                    let needs_update = vn
+                        .v_type
+                        .as_ref()
+                        .map_or(true, |t| t.get_metatype() != TypeMetatype::Pointer
+                    );
                     if needs_update {
                         drop(vn);
                         vn_ref.0.write().unwrap().v_type = Some(int_ptr.clone());
@@ -7554,9 +7810,11 @@ impl PrintLanguage for PrintC {
                                 let src_vn = src.read().unwrap();
                                 let src_off = src_vn.get_offset();
                                 if let Some(dt) = fd.global_struct_ptrs.get(&src_off) {
-                                    if matches!(src_vn.get_space(),
+                                    if matches!(
+                                        src_vn.get_space(),
                                         crate::space::AddressSpace::Const
-                                        | crate::space::AddressSpace::Ram)
+                                        | crate::space::AddressSpace::Ram
+                                    )
                                     {
                                         drop(src_vn);
                                         out_arc.write().unwrap().v_type = Some(dt.clone());
@@ -7598,7 +7856,9 @@ impl PrintLanguage for PrintC {
         // Stamp global struct pointer types onto address varnodes.
         if !fd.global_struct_ptrs.is_empty() {
             use crate::type_system::datatype::Datatype;
-            let globals: Vec<(u64, std::sync::Arc<Datatype>)> = fd.global_struct_ptrs.iter()
+            let globals: Vec<(u64, std::sync::Arc<Datatype>)> = fd
+                .global_struct_ptrs
+                .iter()
                 .map(|(a, d)| (*a, d.clone()))
                 .collect();
             // Helper: check if a varnode's COPY def chain leads to Ram@addr
@@ -7664,7 +7924,9 @@ impl PrintLanguage for PrintC {
                 // Debug: check if 0x17520 appears in any space
                 let off = vn.get_offset();
                 if off == 0x17520 {
-                    eprintln!("[FOUND-0x17520] space={:?} off=0x{:x} has_def={}", vn.get_space(), off, vn.def.as_ref().and_then(|w| w.upgrade()).is_some());
+                    eprintln!(
+                        "[FOUND-0x17520] space={:?} off=0x{:x} has_def={}", vn.get_space(), off, vn.def.as_ref().and_then(|w| w.upgrade()).is_some()
+                    );
                 } // Already typed
                 if let Some(dt) = resolve_global_ptr(&vn, &globals) {
                     drop(vn);
@@ -7677,10 +7939,15 @@ impl PrintLanguage for PrintC {
                 let src = src_arc.read().unwrap();
                 let src_off = src.get_offset();
                 if globals.iter().any(|(a, _)| *a == src_off)
-                    && matches!(src.get_space(), crate::space::AddressSpace::Const
-                        | crate::space::AddressSpace::Ram)
+                    && matches!(
+                        src.get_space(), crate::space::AddressSpace::Const
+                        | crate::space::AddressSpace::Ram
+                    )
                 {
-                    if let Some(dt) = globals.iter().find(|(a,_)| *a == src_off).map(|(_,d)| d.clone()) {
+                    if let Some(dt) = globals
+                        .iter()
+                        .find(|(a, _)| *a == src_off)
+                        .map(|(_, d)| d.clone()) {
                                                 // Find the output varnode by pointer and stamp it
                                                 for vn_ref in &fd.vbank.loc_tree {
                             if Arc::as_ptr(&vn_ref.0) as usize == *out_ptr {
@@ -7707,7 +7974,9 @@ impl PrintLanguage for PrintC {
                     if let Some(ref out_arc) = op.output {
                         let out_ptr = Arc::as_ptr(out_arc) as usize;
                         // Don't overwrite alivelist entries
-                        self.def_map.entry(out_ptr).or_insert_with(|| op_ref.0.clone());
+                        self.def_map
+                            .entry(out_ptr)
+                            .or_insert_with(|| op_ref.0.clone());
                     }
 
                 }
@@ -7718,7 +7987,9 @@ impl PrintLanguage for PrintC {
         // we need the copy destination to also be in def_map pointing to its COPY's source's def.
         // Actually, the def_map should map ANY varnode ptr to the op that "meaningfully" defines it.
         // For a COPY dest, the meaningful def is the source's def.
-        let copy_keys: Vec<(usize, usize)> = self.copy_map.iter()
+        let copy_keys: Vec<(usize, usize)> = self
+            .copy_map
+            .iter()
             .map(|(k, v)| (*k, Arc::as_ptr(v) as usize))
             .collect();
         for (copy_dest, copy_src) in &copy_keys {
@@ -7776,7 +8047,8 @@ impl PrintLanguage for PrintC {
                                 let out_vn = out_arc.read().unwrap();
                                 let key = (out_vn.get_space(), out_vn.get_offset());
                                 // First one wins (don't overwrite)
-                                self.comparison_def_map.entry(key)
+                                self.comparison_def_map
+                                    .entry(key)
                                     .or_insert_with(|| op_ref.0.clone());
                             }
                         }
@@ -7931,7 +8203,8 @@ impl PrintLanguage for PrintC {
             let mut struct_counter = 0;
             for &base in &call_arg_offsets {
                 // Find size: distance to next struct base, or remaining frame
-                let next_base = call_arg_offsets.iter()
+                let next_base = call_arg_offsets
+                    .iter()
                     .find(|&&o| o > base)
                     .copied()
                     .unwrap_or(self.stack_frame_size);
@@ -7939,7 +8212,8 @@ impl PrintLanguage for PrintC {
                 
                 // Create a struct for each call-argument base
                 // Skip very small ranges (< 8 bytes) as they're likely scalar variables
-                let fields_in_range: Vec<u64> = all_stack_offsets.iter()
+                let fields_in_range: Vec<u64> = all_stack_offsets
+                    .iter()
                     .filter(|&&o| o >= base && o < next_base)
                     .map(|&o| o - base)
                     .collect();
@@ -8020,7 +8294,7 @@ impl PrintLanguage for PrintC {
                 if key.0 == AddressSpace::Register {
                     // Skip frame registers
                     if key.1 == 0x20 || key.1 == 0x28 { continue; }
-                    // Skip parameter registers  
+                    // Skip parameter registers
                     if self.param_names.contains_key(&key.1) { continue; }
                 }
                 let count = use_count.get(key).copied().unwrap_or(0);
@@ -8044,7 +8318,8 @@ impl PrintLanguage for PrintC {
                 }
                 drop(def_op);
                 self.inline_candidates.insert(*key, def_op_arc.clone());
-                self.inlined_ops.insert(*def_op_arc.read().unwrap().get_seq_num());
+                self.inlined_ops
+                    .insert(*def_op_arc.read().unwrap().get_seq_num());
             }
         }
         // Build global used_outputs for cross-block dead code elimination.
@@ -8056,9 +8331,11 @@ impl PrintLanguage for PrintC {
                 for op_ref in &block.get_ops() {
                     let op = op_ref.0.read().unwrap();
                     for in_arc in &op.inrefs {
-                        self.global_used_outputs.insert(Arc::as_ptr(in_arc) as usize);
+                        self.global_used_outputs
+                            .insert(Arc::as_ptr(in_arc) as usize);
                         if let Some(resolved) = self.copy_map.get(&(Arc::as_ptr(in_arc) as usize)) {
-                            self.global_used_outputs.insert(Arc::as_ptr(resolved) as usize);
+                            self.global_used_outputs
+                                .insert(Arc::as_ptr(resolved) as usize);
                         }
                     }
                 }
@@ -8067,9 +8344,11 @@ impl PrintLanguage for PrintC {
         for op_ref in &fd.obank.alivelist {
             let op = op_ref.0.read().unwrap();
             for in_arc in &op.inrefs {
-                self.global_used_outputs.insert(Arc::as_ptr(in_arc) as usize);
+                self.global_used_outputs
+                    .insert(Arc::as_ptr(in_arc) as usize);
                 if let Some(resolved) = self.copy_map.get(&(Arc::as_ptr(in_arc) as usize)) {
-                    self.global_used_outputs.insert(Arc::as_ptr(resolved) as usize);
+                    self.global_used_outputs
+                        .insert(Arc::as_ptr(resolved) as usize);
                 }
             }
         }
@@ -8169,10 +8448,12 @@ impl PrintLanguage for PrintC {
                 if b.get_type() == crate::block::BlockType::Switch {
                     if let Some(bs) = b.as_any().downcast_ref::<crate::block::BlockSwitch>() {
                         for case in &bs.cases {
-                            self.case_body_indices.insert(case.read().unwrap().get_index());
+                            self.case_body_indices
+                                .insert(case.read().unwrap().get_index());
                         }
                         if let Some(ref dc) = bs.default_case {
-                            self.case_body_indices.insert(dc.read().unwrap().get_index());
+                            self.case_body_indices
+                                .insert(dc.read().unwrap().get_index());
                         }
                     }
                 }
@@ -8264,7 +8545,8 @@ impl PrintLanguage for PrintC {
             self.emit.tag_line(0);
             self.emit.print("typedef unsigned long long undefined8;");
             self.emit.tag_line(0);
-            self.emit.print("typedef struct { char _anon[256]; } _struct;");
+            self.emit
+                .print("typedef struct { char _anon[256]; } _struct;");
             self.emit.tag_line(0);
             self.emit.print("");
             self.emit.end_document();
@@ -8381,11 +8663,15 @@ impl PrintLanguage for PrintC {
         // Post-process: eliminate redundant gotos and orphan labels (P3).
         // The pretty printer commits lazily, so drain its queue first
         // (flush) before the legacy low-level text pass runs.
-        if let Some(epp) = self.emit.as_any_mut()
+        if let Some(epp) = self
+            .emit
+            .as_any_mut()
             .and_then(|a| a.downcast_mut::<crate::prettyprint::EmitPrettyPrint>())
         {
             epp.post_process();
-        } else if let Some(eno) = self.emit.as_any_mut()
+        } else if let Some(eno) = self
+            .emit
+            .as_any_mut()
             .and_then(|a| a.downcast_mut::<crate::prettyprint::EmitNoMarkup>())
         {
             eno.post_process();
@@ -8556,17 +8842,22 @@ impl PrintLanguage for PrintC {
     /// `tagLine` (newline + indent) that Rugra's block walker relies on, since
     /// Rugra does not run Ghidra's per-op `emitCommentGroup` → `tagLine` chain.
     fn doc_statement(&mut self, op: &PcodeOp) {
-        if matches!(op.opcode, crate::opcodes::OpCode::CPUI_INDIRECT
-            | crate::opcodes::OpCode::CPUI_MULTIEQUAL) {
+        if matches!(
+            op.opcode, crate::opcodes::OpCode::CPUI_INDIRECT
+            | crate::opcodes::OpCode::CPUI_MULTIEQUAL
+        ) {
             return;
         }
         // Capture output to skip empty statements
-        let orig_emit = std::mem::replace(&mut self.emit,
-            Box::new(crate::prettyprint::EmitNoMarkup::new()));
+        let orig_emit = std::mem::replace(
+            &mut self.emit,
+            Box::new(crate::prettyprint::EmitNoMarkup::new()),
+        );
         op.push(self);
         let produced = {
             let buf = std::mem::replace(&mut self.emit, orig_emit);
-            buf.into_any().downcast::<crate::prettyprint::EmitNoMarkup>()
+            buf.into_any()
+                .downcast::<crate::prettyprint::EmitNoMarkup>()
                 .map(|b| b.get_output().trim().to_string())
                 .unwrap_or_default()
         };
@@ -8603,11 +8894,13 @@ impl PrintLanguage for PrintC {
             // Typed dereference: if address input has pointer type, emit *(type *)addr
             if op.inrefs.len() >= 2 {
                 let addr_type_name = op.inrefs[1].read().unwrap().v_type.as_ref()
-                    .and_then(|t| if matches!(t.as_ref(), Datatype::Pointer(_)) {
+                    .and_then(|t| {
+                    if matches!(t.as_ref(), Datatype::Pointer(_)) {
                         Some(t.get_name().to_string())
                     } else {
                         None
-                    });
+                    }
+                });
                 if let Some(ref ptr_name) = addr_type_name {
                     self.emit.print(&format!("*({} )", ptr_name));
                     self.push_input(op, 1);
@@ -8627,7 +8920,9 @@ impl PrintLanguage for PrintC {
         // Try to inline address computation: *(base + off) = val
         let mut inlined_addr = false;
         if let Some(addr_arc) = op.get_in(1) {
-            let resolved = self.resolve_varnode(&addr_arc).unwrap_or_else(|| addr_arc.clone());
+            let resolved = self
+                .resolve_varnode(&addr_arc)
+                .unwrap_or_else(|| addr_arc.clone());
             let resolved_ptr = Arc::as_ptr(&resolved) as usize;
             let addr_key = {
                 let resolved_vn = resolved.read().unwrap();
@@ -8635,7 +8930,10 @@ impl PrintLanguage for PrintC {
             };
 
             // Value-based lookup first, then pointer-based
-            let def_op_opt = self.value_def_map.get(&addr_key).cloned()
+            let def_op_opt = self
+                .value_def_map
+                .get(&addr_key)
+                .cloned()
                 .or_else(|| self.def_map.get(&resolved_ptr).cloned());
 
             if let Some(def_op_arc) = def_op_opt {
@@ -8646,19 +8944,26 @@ impl PrintLanguage for PrintC {
 
                     // RIP-relative: *(RIP + sym) → *(long *)sym (cast for legality)
                     if let Some(non_rip_idx) = self.get_rip_relative_operand(&def_op) {
-                        let operand = self.resolve_varnode(&def_op.inrefs[non_rip_idx])
+                        let operand = self
+                            .resolve_varnode(&def_op.inrefs[non_rip_idx])
                             .unwrap_or_else(|| def_op.inrefs[non_rip_idx].clone());
                         self.emit.print("*(long *)");
                         self.push_varnode(&operand.read().unwrap(), None);
                     } else if let Some(stack_name) = self.get_stack_variable_name(&def_op) {
                         // Stack variable: *(RSP + offset) → local_XX
-                        self.mark_variable_used(stack_name.clone(), AddressSpace::Stack, 0, "int".to_string());
+                        self.mark_variable_used(
+                            stack_name.clone(), AddressSpace::Stack, 0, "int".to_string(),
+                        );
                         self.emit.tag_variable(&stack_name, 0);
                     } else {
                         // Check for struct field access: *(base + const_offset)
                         // If one operand is Const, emit as base->field_XX
-                        let in0 = self.resolve_varnode(&def_op.inrefs[0]).unwrap_or_else(|| def_op.inrefs[0].clone());
-                        let in1 = self.resolve_varnode(&def_op.inrefs[1]).unwrap_or_else(|| def_op.inrefs[1].clone());
+                        let in0 = self
+                            .resolve_varnode(&def_op.inrefs[0])
+                            .unwrap_or_else(|| def_op.inrefs[0].clone());
+                        let in1 = self
+                            .resolve_varnode(&def_op.inrefs[1])
+                            .unwrap_or_else(|| def_op.inrefs[1].clone());
                         let in0_vn = in0.read().unwrap();
                         let in1_vn = in1.read().unwrap();
 
@@ -8693,7 +8998,9 @@ impl PrintLanguage for PrintC {
                             // the base expression text: if it is a bare ident,
                             // use `->field`; otherwise wrap as `*(long *)(<expr> + off)`.
                             let base_text = self.capture_varnode_text(&base.read().unwrap());
-                            let is_bare_ident = base_text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !base_text.is_empty();
+                            let is_bare_ident = base_text
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || c == '_') && !base_text.is_empty();
                             // Try struct field access: base->fieldname
                             let mut field_rendered = false;
                             if is_bare_ident {
@@ -8736,8 +9043,12 @@ impl PrintLanguage for PrintC {
                             // regardless of whether a/b are pointers or scalars,
                             // since integer-to-pointer cast is allowed.
                             self.emit.print("*(long *)(");
-                            let a = self.resolve_varnode(&def_op.inrefs[0]).unwrap_or_else(|| def_op.inrefs[0].clone());
-                            let b = self.resolve_varnode(&def_op.inrefs[1]).unwrap_or_else(|| def_op.inrefs[1].clone());
+                            let a = self
+                                .resolve_varnode(&def_op.inrefs[0])
+                                .unwrap_or_else(|| def_op.inrefs[0].clone());
+                            let b = self
+                                .resolve_varnode(&def_op.inrefs[1])
+                                .unwrap_or_else(|| def_op.inrefs[1].clone());
                             self.push_varnode(&a.read().unwrap(), None);
                             self.emit.print(" + ");
                             self.push_varnode(&b.read().unwrap(), None);
@@ -8759,7 +9070,9 @@ impl PrintLanguage for PrintC {
                     // RSP offset = 0x20 on x86-64. This is `mov [rsp], val` (stack top)
                     if addr_offset == 0x20 {
                         let var_name = format!("local_{:x}", self.stack_frame_size);
-                        self.mark_variable_used(var_name.clone(), AddressSpace::Stack, self.stack_frame_size, "int".to_string());
+                        self.mark_variable_used(
+                            var_name.clone(), AddressSpace::Stack, self.stack_frame_size, "int".to_string(),
+                        );
                         drop(addr_vn);
                         self.emit.tag_variable(&var_name, 0);
                         self.emit.tag_op(" = ");
@@ -8770,7 +9083,9 @@ impl PrintLanguage for PrintC {
                 
                 // Fix 7: Resolve global address to symbol name
                 // Check if the address constant matches a known symbol
-                if matches!(addr_space, crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram) {
+                if matches!(
+                    addr_space, crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram
+                ) {
                     if let Some(sym_name) = self.symbol_table.get(&addr_offset) {
                         drop(addr_vn);
                         // *(long *)sym — cast makes dereference legal regardless of sym's type
@@ -8785,7 +9100,9 @@ impl PrintLanguage for PrintC {
                     if addr_offset >= 0x10000 && addr_offset < 0x1000000 {
                         let syn_name = format!("DAT_{:05x}", addr_offset);
                         // Mark as used so an extern declaration is emitted (self-contained output)
-                        self.mark_variable_used(syn_name.clone(), addr_space, addr_offset, "long".to_string());
+                        self.mark_variable_used(
+                            syn_name.clone(), addr_space, addr_offset, "long".to_string(),
+                        );
                         drop(addr_vn);
                         self.emit.print("*(long *)");
                         self.emit.tag_variable(&syn_name, 0);
@@ -8798,11 +9115,13 @@ impl PrintLanguage for PrintC {
 
                 // Typed dereference for STORE address
                 let addr_type_name = addr_arc.read().unwrap().v_type.as_ref()
-                    .and_then(|t| if matches!(t.as_ref(), Datatype::Pointer(_)) {
+                    .and_then(|t| {
+                    if matches!(t.as_ref(), Datatype::Pointer(_)) {
                         Some(t.get_name().to_string())
                     } else {
                         None
-                    });
+                    }
+                });
                 if let Some(ref ptr_name) = addr_type_name {
                     self.emit.print(&format!("*({} )", ptr_name));
                     self.push_input(op, 1);
@@ -8841,7 +9160,9 @@ impl PrintLanguage for PrintC {
                 self.push_varnode(&out.read().unwrap(), Some(op));
                 self.is_lhs = false;
                 self.emit.tag_op(" = ");
-                self.mark_variable_used(stack_name.clone(), AddressSpace::Stack, 0, "int".to_string());
+                self.mark_variable_used(
+                    stack_name.clone(), AddressSpace::Stack, 0, "int".to_string(),
+                );
                 self.emit.print("&");
                 self.emit.tag_variable(&stack_name, 0);
                 return;
@@ -8871,7 +9192,9 @@ impl PrintLanguage for PrintC {
                     let field_match = if let Some(ref vt) = base_vn.v_type {
                         if let crate::type_system::datatype::Datatype::Pointer(ref tp) = vt.as_ref() {
                             if let crate::type_system::datatype::Datatype::Struct(ref ts) = tp.ptr_to.as_ref() {
-                                ts.fields.iter().find(|f| f.offset == off as usize)
+                                ts.fields
+                                    .iter()
+                                    .find(|f| f.offset == off as usize)
                                     .map(|f| f.name.clone())
                             } else { None }
                         } else { None }
@@ -8932,7 +9255,13 @@ impl PrintLanguage for PrintC {
                 OpCode::CPUI_INT_ZEXT => {
                     // Use output type if available for more precise cast
                     let cast_name = op.output.as_ref()
-                        .and_then(|out| out.read().unwrap().v_type.as_ref().map(|t| t.get_name().to_string()));
+                        .and_then(|out| {
+                        out.read()
+                            .unwrap()
+                            .v_type
+                            .as_ref()
+                            .map(|t| t.get_name().to_string())
+                    });
                     if let Some(ref name) = cast_name {
                         self.emit.print(&format!("({})", name));
                         self.push_input(op, 0);
@@ -8942,7 +9271,13 @@ impl PrintLanguage for PrintC {
                 }
                 OpCode::CPUI_INT_SEXT => {
                     let cast_name = op.output.as_ref()
-                        .and_then(|out| out.read().unwrap().v_type.as_ref().map(|t| t.get_name().to_string()));
+                        .and_then(|out| {
+                        out.read()
+                            .unwrap()
+                            .v_type
+                            .as_ref()
+                            .map(|t| t.get_name().to_string())
+                    });
                     if let Some(ref name) = cast_name {
                         self.emit.print(&format!("({})", name));
                         self.push_input(op, 0);
@@ -9229,10 +9564,13 @@ impl PrintLanguage for PrintC {
         // Check if this constant is used in a bitwise operation — if so, skip string resolution.
         // Constants in XOR/AND/OR/shift are bitmasks, not string addresses, even if they
         // happen to fall within .rodata address range.
-        let is_bitwise_context = _op.map_or(false, |op| matches!(op.opcode,
+        let is_bitwise_context = _op.map_or(false, |op| {
+            matches!(
+                op.opcode,
             OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR
             | OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT
-        ));
+        )
+        });
 
         if matches!(space, AddressSpace::Ram | AddressSpace::Const) {
             if let Some(sym_name) = self.symbol_table.get(&addr) {
@@ -9250,7 +9588,8 @@ impl PrintLanguage for PrintC {
                         } else {
                             str_val.clone()
                         };
-                        self.emit.print(&format!("\"{}\"", escape_c_string(&display)));
+                        self.emit
+                            .print(&format!("\"{}\"", escape_c_string(&display)));
                     }
                     return;
                 }
@@ -9267,7 +9606,8 @@ impl PrintLanguage for PrintC {
                                 } else {
                                     substr.to_string()
                                 };
-                                self.emit.print(&format!("\"{}\"", escape_c_string(&display)));
+                                self.emit
+                                    .print(&format!("\"{}\"", escape_c_string(&display)));
                             }
                             return;
                         }
@@ -9340,7 +9680,8 @@ impl PrintLanguage for PrintC {
                 // varnode's own def is missing/dead (so normal named reads are
                 // unaffected).
                 if !self.is_lhs && self.inline_depth < 8 {
-                    let own_def_ok = vn.get_def()
+                    let own_def_ok = vn
+                            .get_def()
                         .map(|op| !op.read().unwrap().is_dead())
                         .unwrap_or(false);
                     if !own_def_ok {
@@ -9386,7 +9727,9 @@ impl PrintLanguage for PrintC {
                                 }
                                 if let Some(str_val) = self.string_table.get(&src_offset) {
                                     if !self.discovery_pass {
-                                        self.emit.print(&format!("\"{}\"", escape_c_string(str_val)));
+                                        self.emit.print(&format!(
+                                                "\"{}\"", escape_c_string(str_val)
+                                            ));
                                     }
                                     return;
                                 }
@@ -9397,7 +9740,9 @@ impl PrintLanguage for PrintC {
                                         if src_offset > sa && src_offset < sa + sv.len() as u64 {
                                             let off = (src_offset - sa) as usize;
                                             if !self.discovery_pass {
-                                                self.emit.print(&format!("\"{}\"", escape_c_string(&sv[off..])));
+                                                self.emit.print(&format!(
+                                                        "\"{}\"", escape_c_string(&sv[off..])
+                                                    ));
                                             }
                                             found_substr = true;
                                             break;
@@ -9416,7 +9761,9 @@ impl PrintLanguage for PrintC {
                                     } else if src_offset == 0xffffffff {
                                         self.emit.print("-1"); // (uint32_t)-1
                                     } else if src_offset >= 256 {
-                                        self.emit.print(&format!("0x{:x} /* {} */", src_offset, src_offset));
+                                        self.emit.print(&format!(
+                                                "0x{:x} /* {} */", src_offset, src_offset
+                                            ));
                                     } else {
                                         self.emit.print(&format!("0x{:x}", src_offset));
                                     }
@@ -9428,7 +9775,9 @@ impl PrintLanguage for PrintC {
                                 let unique_key = (AddressSpace::Unique, src_offset);
                                 drop(def_op);
                                 if let Some(unique_def_arc) = self.value_def_map.get(&unique_key).cloned()
-                                    .or_else(|| self.inline_candidates.get(&unique_key).cloned())
+                                    .or_else(|| {
+                                            self.inline_candidates.get(&unique_key).cloned()
+                                        })
                                 {
                                     let unique_def = unique_def_arc.read().unwrap();
                                     // RIP-relative? Just emit the non-RIP operand
@@ -9507,9 +9856,11 @@ impl PrintLanguage for PrintC {
         // `uVar_<hex>`/`local_<hex>`/`param_stack_<hex>`/`DAT_<hex>`/
         // `v_<size>_<hex>` are merged into the single oracle form; the
         // param-name and inline-candidacy sub-guards below stay.)
-        let propagated_type = vn.v_type.clone().or_else(|| {
-            _op.and_then(|read_op| vn.get_high_type_read_facing(read_op, 0))
-        });
+        let propagated_type = vn
+            .v_type
+            .clone()
+            .or_else(|| _op.and_then(|read_op| vn.get_high_type_read_facing(read_op, 0))
+        );
         let name = match vn.get_space() {
             AddressSpace::Register => {
                 // Priority: parameter name > unnamed location
@@ -9572,13 +9923,15 @@ impl PrintLanguage for PrintC {
                                 if !self.discovery_pass {
                                     self.emit.print(&self.integer_text(
                                         val, ct.get_size(), signed,
-                                        display_format::DEFAULT));
+                                        display_format::DEFAULT,
+                                    ));
                                 }
                                 return;
                             }
                             if ct.get_name() == "char" {
                                 if !self.discovery_pass {
-                                    self.emit.print(&format!(
+                                    self.emit
+                                        .print(&format!(
                                         "'{}'", escape_char_body(val & 0xff)));
                                 }
                                 return;
@@ -9623,10 +9976,11 @@ impl PrintLanguage for PrintC {
                     format!("0x{:x}", val)
                 }
             }
-            AddressSpace::Stack => Self::unnamed_location_token(
+            AddressSpace::Stack => {
+                Self::unnamed_location_token(
                 AddressSpace::Stack,
-                Self::unnamed_location_offset(vn),
-            ),
+                Self::unnamed_location_offset(vn))
+            }
             AddressSpace::Unique => {
                 let key = (AddressSpace::Unique, vn.get_offset());
                 // Faithful to Ghidra pushSymbolDetail/pushUnnamedLocation: an
@@ -9669,8 +10023,7 @@ impl PrintLanguage for PrintC {
                 // pushUnnamedLocation prints "ram" + printRaw.
                 Self::unnamed_location_token(
                     AddressSpace::Ram,
-                    Self::unnamed_location_offset(vn),
-                )
+                    Self::unnamed_location_offset(vn))
             }
             other => Self::unnamed_location_token(other, Self::unnamed_location_offset(vn)),
         };
@@ -10091,14 +10444,23 @@ impl PrintC {
     /// (`out = ...`) wraps the output (set by emitExpression when present).
     pub fn op_callother(&mut self, op: &PcodeOp) {
         // printc.cc:676: userop = glb->userops.getOp(op->getIn(0)->getOffset()).
-        let index = op.get_in(0).map(|a| a.read().unwrap().get_offset() as i32).unwrap_or(-1);
+        let index = op
+            .get_in(0)
+            .map(|a| a.read().unwrap().get_offset() as i32)
+            .unwrap_or(-1);
         // Resolve the userop + its display flags. We clone the needed values out
         // of the borrowed guard before emitting, so no immutable borrow overlaps
         // the &mut self emitter.
-        let (display, name) = self.userops.as_ref().and_then(|uo| {
+        let (display, name) = self
+            .userops
+            .as_ref()
+            .and_then(|uo| {
             let guard = uo.read().unwrap();
-            guard.get_op(index).map(|u| (u.get_display(), u.get_name().to_string()))
-        }).unwrap_or((
+            guard
+                    .get_op(index)
+                    .map(|u| (u.get_display(), u.get_name().to_string()))
+        })
+            .unwrap_or((
             0,
             // Ghidra fallback (typeop.cc:848-852): "CALLOTHER[<index>]".
             format!("CALLOTHER[{}]", index),
@@ -10193,7 +10555,9 @@ impl PrintC {
             if let Some(newop_arc) = newop_arc {
                 let newop = newop_arc.read().unwrap();
                 // outvn = newop->getOut(); dt = outvn->getTypeDefFacing().
-                newop.get_out().and_then(|o| o.read().unwrap().get_type_def_facing())
+                newop
+                    .get_out()
+                    .and_then(|o| o.read().unwrap().get_type_def_facing())
             } else {
                 None
             }
@@ -10207,7 +10571,9 @@ impl PrintC {
             _ => Some(d.clone()),
         });
         // printc.cc:735: nm = dt->getDisplayName().
-        let nm = dt.as_ref().map(|d| d.get_name().to_string())
+        let nm = dt
+            .as_ref()
+            .map(|d| d.get_name().to_string())
             .unwrap_or_else(|| "UNKNOWN_TYPE".to_string());
         // printc.cc:721-726: pushOp(&new_op); pushAtom("new") -> "new".
         if with_new {
@@ -10344,7 +10710,10 @@ impl PrintC {
             // array_length, check_cast, and default.
             _ => {
                 // printc.cc:1216: if (vn0->isConstant()) pushAtom(rec->getToken());
-                let vn0_const = op.get_in(0).map(|a| a.read().unwrap().is_constant()).unwrap_or(false);
+                let vn0_const = op
+                    .get_in(0)
+                    .map(|a| a.read().unwrap().is_constant())
+                    .unwrap_or(false);
                 if vn0_const {
                     self.emit.tag_variable(rec.get_token(), 0);
                 } else {
@@ -10471,12 +10840,17 @@ impl PrintC {
             self.emit.tag_op(" = ");
         }
         // printc.cc:1233-1257: array allocation form (2 inputs, in(0) non-const).
-        let vn0_const = op.get_in(0).map(|a| a.read().unwrap().is_constant()).unwrap_or(true);
+        let vn0_const = op
+            .get_in(0)
+            .map(|a| a.read().unwrap().is_constant())
+            .unwrap_or(true);
         if op.num_input() == 2 && !vn0_const {
             // pushOp(&new_op); pushAtom("new") -> "new".
             self.emit.print("new ");
             // printc.cc:1242-1251: nm = dt->getDisplayName() after peeling PTRs.
-            let nm = op.get_out().and_then(|o| {
+            let nm = op
+                .get_out()
+                .and_then(|o| {
                 let o_vn = o.read().unwrap();
                 o_vn.get_type_def_facing().map(|dt| {
                     let mut cur = dt;
@@ -10485,7 +10859,8 @@ impl PrintC {
                     }
                     cur.get_name().to_string()
                 })
-            }).unwrap_or_else(|| "<unused>".to_string());
+            })
+                .unwrap_or_else(|| "<unused>".to_string());
             // pushOp(&subscript); pushAtom(nm); pushVn(vn1) -> Type[size].
             self.emit.print(&nm);
             self.emit.print("[");
@@ -10560,11 +10935,14 @@ impl PrintC {
         let (in0_type, in1const) = {
             let in0 = op.get_in(0).map(|a| a.read().unwrap());
             let in1 = op.get_in(1).map(|a| a.read().unwrap());
-            let in1const = in1.as_ref()
+            let in1const = in1
+                .as_ref()
                 .filter(|v| v.is_constant())
-                .map(|v| v.get_offset()).unwrap_or(0);
+                .map(|v| v.get_offset())
+                .unwrap_or(0);
             // printc.cc:942: ptype = in0->getHighTypeReadFacing(op).
-            let ptype = in0.as_ref()
+            let ptype = in0
+                .as_ref()
                 .and_then(|v| v.get_high_type_read_facing(op, 0));
             (ptype, in1const)
         };
@@ -10585,7 +10963,9 @@ impl PrintC {
         let need_deref_printed = |ct_meta: TypeMetatype| {
             // For struct/union/array the PTRSUB renders as field/subscript
             // access via the pointer (in0 is already a pointer to ct).
-            matches!(ct_meta, TypeMetatype::Struct | TypeMetatype::Union | TypeMetatype::Array | TypeMetatype::Spacebase)
+            matches!(
+                ct_meta, TypeMetatype::Struct | TypeMetatype::Union | TypeMetatype::Array | TypeMetatype::Spacebase
+            )
         };
         if let Some(ct) = ct {
             let meta = ct.get_metatype();
@@ -10752,7 +11132,8 @@ impl PrintC {
             self.push_varnode(&in0.read().unwrap(), Some(op));
             let off_vn = in1.read().unwrap();
             if off_vn.is_constant() {
-                self.emit.print(&format!("->field_{:x}", off_vn.get_offset()));
+                self.emit
+                    .print(&format!("->field_{:x}", off_vn.get_offset()));
             } else {
                 self.emit.print("[");
                 self.push_varnode(&off_vn, Some(op));
@@ -10826,7 +11207,9 @@ impl PrintC {
     pub fn op_type_cast(&mut self, op: &PcodeOp) {
         use crate::type_system::datatype::Datatype;
         // printc.cc:451: dt = op->getOut()->getHighTypeDefFacing();
-        let out_dt = op.get_out().and_then(|a| a.read().unwrap().get_high_type_def_facing());
+        let out_dt = op
+            .get_out()
+            .and_then(|a| a.read().unwrap().get_high_type_def_facing());
         // printc.cc:452-458: if (dt->isPointerToArray()) { if (checkAddressOfCast(op)) {...} }
         if let Some(ref dt) = out_dt {
             if Self::is_pointer_to_array(dt) {
@@ -10834,11 +11217,16 @@ impl PrintC {
                 // decayed to a pointer (printc.cc:376-405). Rugra does not port
                 // the full heuristic; we take the common decay case where the
                 // cast target pointer-type matches the array's element pointer.
-                let in0_is_array = op.get_in(0).map(|a| {
-                    a.read().unwrap().get_high_type_read_facing(op, 0)
+                let in0_is_array = op
+                    .get_in(0)
+                    .map(|a| {
+                    a.read()
+                            .unwrap()
+                            .get_high_type_read_facing(op, 0)
                         .map(|t| t.get_metatype() == TypeMetatype::Array)
                         .unwrap_or(false)
-                }).unwrap_or(false);
+                })
+                    .unwrap_or(false);
                 if in0_is_array {
                     // pushOp(&addressof,op); pushVn(op->getIn(0),op,mods);
                     self.emit.print("&");
@@ -10856,7 +11244,8 @@ impl PrintC {
                 // (pushTypeStart/pushTypeEnd): displayName or genericTypeName
                 // at the root, `*`/`[n]` layers outside-in — getName alone
                 // is empty for unnamed canonical pointer/array types.
-                self.emit.print(&format!("({})", Self::cast_type_string(dt)));
+                self.emit
+                    .print(&format!("({})", Self::cast_type_string(dt)));
             }
         }
         // printc.cc:463: pushVn(op->getIn(0),op,mods);
@@ -10879,7 +11268,8 @@ impl PrintC {
                     self.emit.print(&self.integer_text(
                         val, ct.get_size(),
                         ct.get_metatype() == crate::type_system::TypeMetatype::Int,
-                        display_format::DEFAULT));
+                        display_format::DEFAULT,
+                    ));
                     return;
                 }
                 _ => {}
@@ -11123,7 +11513,9 @@ impl PrintC {
     /// (The free function `printlanguage::escape_character_data` is the
     /// legacy non-Ghidra char-escaper kept for the legacy emit path; this
     /// method is the faithful 1:1 port the string-literal path uses.)
-    fn escape_character_data(&self, s: &mut String, buf: &[u8], charsize: i32, bigend: bool) -> bool {
+    fn escape_character_data(
+        &self, s: &mut String, buf: &[u8], charsize: i32, bigend: bool,
+    ) -> bool {
         let mut i = 0usize;
         let mut codepoint = 0i32;
         while i < buf.len() {
@@ -11198,7 +11590,9 @@ impl PrintC {
     /// Query the global scope for a function starting at `addr`, returning
     /// its entry address (the Rust `query_function_addr` form of
     /// `queryFunction`, which passes back the Funcdata).
-    fn query_global_function(&self, addr: crate::address::Address) -> Option<crate::address::Address> {
+    fn query_global_function(
+        &self, addr: crate::address::Address,
+    ) -> Option<crate::address::Address> {
         let db_arc = self.symboltab.as_ref()?;
         let db = db_arc.read().unwrap();
         let scope = db.get_global_scope()?;
@@ -11277,7 +11671,9 @@ impl PrintC {
     }
 
     // Ghidra: printc.cc:3218 PrintC::emitAnyLabelStatement
-    pub fn emit_any_label_statement(&mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>) {
+    pub fn emit_any_label_statement(
+        &mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) {
         // printc.cc:3219-3226 emitAnyLabelStatement:
         //   if (bl->isLabelBumpUp()) return;   — Rugra transport:
         //   printed_labels (address-keyed) suppresses re-prints of a shared
@@ -11312,8 +11708,10 @@ impl PrintC {
                     & crate::block::block_flags::UNSTRUCTURED_TARG) != 0;
                 (is_t, l.get_type())
             };
-            if is_target && matches!(bt, crate::block::BlockType::Basic
-                | crate::block::BlockType::Copy) {
+            if is_target && matches!(
+                    bt, crate::block::BlockType::Basic
+                | crate::block::BlockType::Copy
+                ) {
                 let Some(addr) = Self::flow_entry_address(&leaf_arc) else {
                     return;
                 };
@@ -11329,8 +11727,10 @@ impl PrintC {
                     self.emit.tag_line(0);
                     self.emit.print(&format!("{}:", self.code_label(addr)));
                 }
-            } else if matches!(bt, crate::block::BlockType::Basic
-                | crate::block::BlockType::Copy) {
+            } else if matches!(
+                bt, crate::block::BlockType::Basic
+                | crate::block::BlockType::Copy
+            ) {
                 // GOTO-LABEL-UNPRINTED-0001 order-independent pending arm:
                 // the leaf is NOT f_unstructured_targ-marked (Rugra's
                 // structurer left this goto edge unwrapped at the BlockIf/
@@ -11527,8 +11927,10 @@ impl PrintC {
     ///
     /// NOTE: signature changed from `&self` to `&mut self` vs. the previous
     /// empty stub, because `emit_comment_group` mutates `self.comment_sorter`.
-    pub fn emit_comment_block_tree(&mut self, block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>) {
-        use crate::block::{BlockType, BlockGraph};
+    pub fn emit_comment_block_tree(
+        &mut self, block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) {
+        use crate::block::{BlockGraph, BlockType};
         // cc:3250: if (bl == (const FlowBlock *)0) return;
         let btype = { block.read().unwrap().get_type() };
 
@@ -11538,11 +11940,15 @@ impl PrintC {
         if cur_type == BlockType::Copy {
             let inner = {
                 let bl = cur.read().unwrap();
-                bl.as_any().downcast_ref::<crate::block::BlockCopy>().map(|c| c.original.clone())
+                bl.as_any()
+                    .downcast_ref::<crate::block::BlockCopy>()
+                    .map(|c| c.original.clone())
             };
             // BlockCopy::original is already a dyn FlowBlock Arc.
             if let Some(orig) = inner {
-                let broadened: std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>> = orig as std::sync::Arc<_>;
+                let broadened: std::sync::Arc<
+                    std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+                > = orig as std::sync::Arc<_>;
                 cur = broadened;
                 cur_type = cur.read().unwrap().get_type();
             }
@@ -11556,7 +11962,9 @@ impl PrintC {
         // cc:3257-3264: non-basic structured block → recurse over sub-blocks.
         if cur_type != BlockType::Basic {
             // Gather child blocks for the concrete structured block types.
-            let children: Vec<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = {
+            let children: Vec<
+                std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+            > = {
                 let bl = cur.read().unwrap();
                 let any = bl.as_any();
                 if let Some(g) = any.downcast_ref::<BlockGraph>() {
@@ -11714,10 +12122,12 @@ impl PrintC {
             branch_type::BREAK => self.emit.print("break;"),
             branch_type::CONTINUE => {
                 if self.loop_depth > 0 { self.emit.print("continue;"); }
-                else { self.emit.print(&format!("goto {};", self.code_label(target_addr))); }
+                else { self.emit
+                        .print(&format!("goto {};", self.code_label(target_addr))); }
             }
             _ => {
-                self.emit.print(&format!("goto {};", self.code_label(target_addr)));
+                self.emit
+                    .print(&format!("goto {};", self.code_label(target_addr)));
             }
         }
         if prints_labelled_goto {
@@ -11766,17 +12176,23 @@ impl PrintC {
     /// (`subBlock(0)`). There is no virtual `emit`, so
     /// we re-enter `emit_block_structured` on the original. `beginBlock`/
     /// `endBlock` markup ids are not tracked by Rugra's emit layer.
-    pub fn emit_block_copy(&mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, graph: &crate::block::BlockGraph, emitted: &mut std::collections::HashSet<usize>) {
+    pub fn emit_block_copy(
+        &mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, graph: &crate::block::BlockGraph, emitted: &mut std::collections::HashSet<usize>,
+    ) {
         // cc:2762: emitAnyLabelStatement(bl);
         self.emit_any_label_statement(block_arc);
         // cc:2763: bl->subBlock(0)->emit(this);
         let sub = {
             let bl = block_arc.read().unwrap();
-            bl.as_any().downcast_ref::<crate::block::BlockCopy>().map(|c| c.original.clone())
+            bl.as_any()
+                .downcast_ref::<crate::block::BlockCopy>()
+                .map(|c| c.original.clone())
         };
         if let Some(orig) = sub {
             // Preserve the dynamic FlowBlock identity for recursive dispatch.
-            let broadened: std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>> =
+            let broadened: std::sync::Arc<
+                std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+            > =
                 orig as std::sync::Arc<_>;
             self.emit_block_structured(&broadened, graph, emitted);
         }
@@ -11808,7 +12224,9 @@ impl PrintC {
     /// (goto_prints_in + BlockGraph::next_flow_after); the null-parent arm
     /// returns false (block.cc:2889). Rugra's structurer never wires
     /// BlockGoto::parent, so the null arm carries today.
-    pub fn emit_block_goto(&mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>) {
+    pub fn emit_block_goto(
+        &mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) {
         // cc:2769-2770: pushMod(); setMod(no_branch);
         self.push_mod();
         self.set_mod(print_mods::NO_BRANCH);
@@ -11820,7 +12238,11 @@ impl PrintC {
         let (prints, target_addr, gt) = {
             let bl = block_arc.read().unwrap();
             if let Some(g) = bl.as_any().downcast_ref::<crate::block::BlockGoto>() {
-                let addr = g.goto_target.as_ref().map(|t| t.read().unwrap().start_addr.as_u64()).unwrap_or(0);
+                let addr = g
+                    .goto_target
+                    .as_ref()
+                    .map(|t| t.read().unwrap().start_addr.as_u64())
+                    .unwrap_or(0);
                 // block.cc:2884-2888 parent-present comparison vs the
                 // cc:2889 null-parent false.
                 let prints = match crate::block::FlowBlock::get_parent(g) {
@@ -11961,7 +12383,8 @@ impl PrintC {
     pub fn emit_comment_func_header(&mut self, fd: &Funcdata) {
         let mut extralinebreak = false;
         // cc:3276: commsorter.setupHeader(CommentSorter::header_basic);
-        self.comment_sorter.setup_header(crate::comment::header_type::HEADER_BASIC);
+        self.comment_sorter
+            .setup_header(crate::comment::header_type::HEADER_BASIC);
         // cc:3277-3283: drain header_basic.
         while self.comment_sorter.has_next() {
             // cc:3278: Comment *comm = commsorter.getNext();
@@ -11988,7 +12411,8 @@ impl PrintC {
             }
             extralinebreak = false;
             // cc:3288: commsorter.setupHeader(CommentSorter::header_unplaced);
-            self.comment_sorter.setup_header(crate::comment::header_type::HEADER_UNPLACED);
+            self.comment_sorter
+                .setup_header(crate::comment::header_type::HEADER_UNPLACED);
             // cc:3289-3299: drain header_unplaced. NOTE (faithful): the
             // oracle applies NO head_comment_type mask on this pass — every
             // unplaced comment prints regardless of type.
@@ -12162,7 +12586,9 @@ impl PrintC {
     /// Rugra adaptation: `Database` (the symbol table) owns all scopes by id;
     /// `Scope::children` holds child scope ids. We resolve each child through
     /// the `Database` to recurse. `Symbol::no_category` == -1 (database.hh).
-    pub fn emit_global_var_decls_recursive(&mut self, sym_scope: &crate::database::Scope, db: &crate::database::Database) {
+    pub fn emit_global_var_decls_recursive(
+        &mut self, sym_scope: &crate::database::Scope, db: &crate::database::Database,
+    ) {
         // cc:2611: if (!symScope->isGlobal()) return;
         if !sym_scope.is_global() {
             return;
@@ -12280,7 +12706,8 @@ impl PrintC {
         let dt = sym.get_type();
         self.push_type_start_opt(dt.as_deref(), false);
         // pushSymbol(sym,(Varnode*)0,(PcodeOp*)0) — push the symbol's display name.
-        self.emit.tag_variable(sym.get_display_name(), sym.symbol_id);
+        self.emit
+            .tag_variable(sym.get_display_name(), sym.symbol_id);
         self.push_type_end_opt(dt.as_deref());
         // emit->endVarDecl(id);
         self.emit.end_var_decl();
@@ -12564,7 +12991,9 @@ impl PrintC {
         } else {
             // clear(); throw LowlevelError("Unsupported typedef");
             // Rugra: log + skip (no LowlevelError throw in print layer).
-            eprintln!("[DECOMP] emit_type_definition: unsupported typedef {}", ct.get_name());
+            eprintln!(
+                "[DECOMP] emit_type_definition: unsupported typedef {}", ct.get_name()
+            );
         }
     }
 
@@ -13016,9 +13445,11 @@ impl PrintC {
     /// the scoped modifier view (printlanguage.hh:283-289 pushMod/popMod
     /// semantics, e.g. the `force_hex unless force_dec` view the default
     /// cast arm of `pushConstant` installs at printc.cc:1810-1813).
-    fn integer_text_with_mods(&self, val: u64, sz: usize, sign: bool,
-                              display_format: u32, mods: u32) -> String {
-        use crate::printlanguage::{most_natural_base, format_binary};
+    fn integer_text_with_mods(
+        &self, val: u64, sz: usize, sign: bool,
+                              display_format: u32, mods: u32,
+    ) -> String {
+        use crate::printlanguage::{format_binary, most_natural_base};
         let mut v = val;
         let mut print_negsign = false;
         if sign && display_format != display_format::CHAR {
@@ -13130,8 +13561,10 @@ impl PrintC {
     /// exact-match member name when present and otherwise falls back to
     /// `push_integer` — the two cases at printc.cc:1672/1684-1686. The
     /// multi-name `|` rendering is a TODO hook for when getMatches is ported.
-    pub fn push_enum_constant_named(&mut self, val: u64,
-                                    ct: &crate::type_system::datatype::TypeEnum) {
+    pub fn push_enum_constant_named(
+        &mut self, val: u64,
+                                    ct: &crate::type_system::datatype::TypeEnum,
+    ) {
         if let Some(name) = ct.values.get(&val) {
             // printc.cc:1679-1680: pushAtom(Atom(matchname[i], ...)).
             self.emit.print(name);
@@ -13300,9 +13733,11 @@ impl PrintC {
     /// Alignment evidence:
     /// - Sort key: the highlight cascade (printc.cc:1909-1918).
     /// - Output: `sym->getDisplayName()` atom (printc.cc:1935).
-    pub fn push_symbol(&mut self, sym_name: &str,
+    pub fn push_symbol(
+        &mut self, sym_name: &str,
                        _is_volatile: bool, _is_global: bool,
-                       _is_param: bool, _is_equate: bool) {
+                       _is_param: bool, _is_equate: bool,
+    ) {
         // Colour cascade encoded via the tag choice for markup emitters;
         // plain-text emitters ignore it. pushSymbolScope is a no-op for
         // Rugra's flat symbol model.
@@ -13425,7 +13860,9 @@ impl PrintC {
                     // cast.cc:436-455.
                     if self
                         .cast_strategy
-                        .is_subpiece_cast_endian(outtype, &dt, off as u32, out_space_bigend)
+                        .is_subpiece_cast_endian(
+                        outtype, &dt, off as u32, out_space_bigend,
+                    )
                     {
                         // Treat truncation as SUBPIECE style cast (2024-2027).
                         finalcast = Some(outtype.get_name().to_string());
@@ -13505,7 +13942,9 @@ impl PrintC {
     // ---- private helpers backing the P0 ports ----
 
     // Ghidra: printc.cc:1966-1985 (TYPE_STRUCT/UNION findTruncation)
-    fn find_partial_field(dt: &Datatype, off: usize, sz: usize)
+    fn find_partial_field(
+        dt: &Datatype, off: usize, sz: usize,
+    )
         -> Option<(String, usize, Arc<Datatype>)> {
         let fields = match dt {
             Datatype::Struct(s) => &s.fields,
@@ -13534,7 +13973,9 @@ impl PrintC {
     }
 
     // Ghidra: printc.cc:1986-2000 (TYPE_ARRAY getSubEntry)
-    fn array_sub_entry(dt: &Datatype, off: usize, _sz: usize)
+    fn array_sub_entry(
+        dt: &Datatype, off: usize, _sz: usize,
+    )
         -> Option<(Arc<Datatype>, usize, usize)> {
         let arr = match dt { Datatype::Array(a) => a, _ => return None, };
         let el_size = arr.array_of.get_size();
@@ -13687,10 +14128,13 @@ impl PrintC {
             return;
         }
         // Branch 2: check if the input is a flippable comparison.
-        let can_flip = op.get_in(0).map(|in0| {
+        let can_flip = op
+            .get_in(0)
+            .map(|in0| {
             let vn = in0.read().unwrap();
             self.check_print_negation(&vn)
-        }).unwrap_or(false);
+        })
+            .unwrap_or(false);
         if can_flip {
             self.set_mod(print_mods::NEGATETOKEN);
             if let Some(in0) = op.get_in(0) {
@@ -13825,7 +14269,11 @@ impl PrintC {
             let out = op.get_out().map(|a| a.read().unwrap());
             let in0 = op.get_in(0).map(|a| a.read().unwrap());
             let in1 = op.get_in(1).map(|a| a.read().unwrap());
-            let offset = in1.map(|c| if c.is_constant() { c.get_offset() as u32 } else { 0 }).unwrap_or(0);
+            let offset = in1
+                .map(|c| {
+                    if c.is_constant() { c.get_offset() as u32 } else { 0 }
+                })
+                .unwrap_or(0);
             match (out, in0) {
                 (Some(o), Some(i)) => (
                     o.get_high_type_def_facing(),
@@ -13949,12 +14397,18 @@ impl PrintC {
         // printc.cc:2459-2460: out.getHigh() != in(0).getHigh() -> not in-place
         let same_var = match (op.get_out(), op.get_in(0)) {
             (Some(out_arc), Some(in0_arc)) => {
-                let out_high = out_arc.read().unwrap().get_high().map(|h| {
-                    Arc::as_ptr(h) as usize
-                });
-                let in0_high = in0_arc.read().unwrap().get_high().map(|h| {
-                    Arc::as_ptr(h) as usize
-                });
+                let out_high = out_arc
+                    .read()
+                    .unwrap()
+                    .get_high()
+                    .map(|h| Arc::as_ptr(h) as usize
+                );
+                let in0_high = in0_arc
+                    .read()
+                    .unwrap()
+                    .get_high()
+                    .map(|h| Arc::as_ptr(h) as usize
+                );
                 // HighVariable pointer equality is the faithful equivalent of
                 // Ghidra's `getHigh() != getHigh()` pointer comparison.
                 match (out_high, in0_high) {
@@ -14027,7 +14481,8 @@ impl PrintC {
         if !vn.is_implied() { return false; }
         if !vn.is_written() { return false; }
         // printc.cc:2393: op = vn->getDef()
-        let def_arc = match vn.get_def() { Some(a) => a, None => return false };
+        let def_arc = match vn.get_def() { Some(a) => a, None => return false ,
+        };
         let def = def_arc.read().unwrap();
         // printc.cc:2395: opc = get_booleanflip(op->code(), reorder)
         // printc.cc:2396-2397: if (opc == CPUI_MAX) return false;
@@ -14078,14 +14533,17 @@ impl PrintC {
     ///   implied (cast.cc:289-290).
     // Ghidra: cast.cc:249 CastStrategyC::isExtensionCastImplied
     fn is_extension_cast_implied(&self, op: &PcodeOp, read_op: &PcodeOp) -> bool {
-        let out_vn = match op.get_out() { Some(a) => a, None => return false };
+        let out_vn = match op.get_out() { Some(a) => a, None => return false ,
+        };
         let out = out_vn.read().unwrap();
         // cast.cc:253-255: explicit output -> empty branch -> falls to return false
         if out.is_explicit() { return false; }
         // outVn metatype (read-facing, via readOp)
-        let out_meta = out.get_high_type_read_facing(read_op, 0)
+        let out_meta = out
+            .get_high_type_read_facing(read_op, 0)
             .map(|t| t.get_metatype());
-        let out_meta = match out_meta { Some(m) => m, None => return false };
+        let out_meta = match out_meta { Some(m) => m, None => return false ,
+        };
 
         // cast.cc:262-294: switch on readOp->code()
         let read_opc = read_op.opcode;
@@ -14102,11 +14560,12 @@ impl PrintC {
                 // Find which input slot of read_op is our output varnode.
                 let out_ptr = Arc::as_ptr(out_vn) as usize;
                 let slot = (0..read_op.num_input())
-                    .find(|&s| {
-                        read_op.get_in(s).map(|a| Arc::as_ptr(a) as usize) == Some(out_ptr)
-                    });
-                let slot = match slot { Some(s) => s, None => return false };
-                let other = match read_op.get_in(1 - slot) { Some(a) => a, None => return false };
+                    .find(|&s| read_op.get_in(s).map(|a| Arc::as_ptr(a) as usize) == Some(out_ptr)
+                    );
+                let slot = match slot { Some(s) => s, None => return false ,
+                };
+                let other = match read_op.get_in(1 - slot) { Some(a) => a, None => return false ,
+                };
                 let other_vn = other.read().unwrap();
                 // cast.cc:281-285: constant bigger than promotion size -> not implied.
                 // The promotion size is CastStrategyC's `promoteSize`
@@ -14125,7 +14584,8 @@ impl PrintC {
                     return false;
                 }
                 // cast.cc:289-290: other metatype must match output metatype
-                let other_meta = other_vn.get_high_type_read_facing(read_op, 1 - slot as i32)
+                let other_meta = other_vn
+                    .get_high_type_read_facing(read_op, 1 - slot as i32)
                     .map(|t| t.get_metatype());
                 match other_meta {
                     Some(m) if m == out_meta => true,
@@ -14272,8 +14732,9 @@ mod tests {
 
         // Set pointer type on addr_vn
         let int_type = std::sync::Arc::new(crate::type_system::Datatype::Base(
-            TypeBase::new("int".to_string(), 4, TypeMetatype::Int),
-        ));
+            TypeBase::new(
+            "int".to_string(), 4, TypeMetatype::Int,
+        )));
         let int_ptr_type = std::sync::Arc::new(crate::type_system::Datatype::Pointer(TypePointer {
             base: TypeBase::new("int *".to_string(), 8, TypeMetatype::Pointer),
             ptr_to: int_type.clone(),
@@ -14292,9 +14753,15 @@ mod tests {
         printer.op_load(&op);
 
         let output = printer.take_emit();
-        let text = output.into_any().downcast::<EmitNoMarkup>().unwrap().get_output();
+        let text = output
+            .into_any()
+            .downcast::<EmitNoMarkup>()
+            .unwrap()
+            .get_output();
         // Should contain typed dereference
-        assert!(text.contains("int *"), "Expected typed dereference with 'int *', got: {}", text);
+        assert!(
+            text.contains("int *"), "Expected typed dereference with 'int *', got: {}", text
+        );
     }
 
     #[test]
@@ -14311,8 +14778,9 @@ mod tests {
 
         // Set output type to "long"
         let long_type = std::sync::Arc::new(crate::type_system::Datatype::Base(
-            TypeBase::new("long".to_string(), 8, TypeMetatype::Int),
-        ));
+            TypeBase::new(
+            "long".to_string(), 8, TypeMetatype::Int,
+        )));
         out_vn.write().unwrap().v_type = Some(long_type);
 
         let mut op = PcodeOp::new(
@@ -14325,10 +14793,18 @@ mod tests {
         printer.op_unary(&op);
 
         let output = printer.take_emit();
-        let text = output.into_any().downcast::<EmitNoMarkup>().unwrap().get_output();
+        let text = output
+            .into_any()
+            .downcast::<EmitNoMarkup>()
+            .unwrap()
+            .get_output();
         // Should use "long" instead of hardcoded "uint"
-        assert!(text.contains("(long)"), "Expected (long) cast, got: {}", text);
-        assert!(!text.contains("(uint)"), "Should NOT contain hardcoded (uint), got: {}", text);
+        assert!(
+            text.contains("(long)"), "Expected (long) cast, got: {}", text
+        );
+        assert!(
+            !text.contains("(uint)"), "Should NOT contain hardcoded (uint), got: {}", text
+        );
     }
 
     #[test]
@@ -14357,10 +14833,18 @@ mod tests {
         printer.op_binary(&op);
 
         let output = printer.take_emit();
-        let text = output.into_any().downcast::<EmitNoMarkup>().unwrap().get_output();
+        let text = output
+            .into_any()
+            .downcast::<EmitNoMarkup>()
+            .unwrap()
+            .get_output();
         // Should use "param_1" instead of "RDI"
-        assert!(text.contains("param_1"), "Expected 'param_1', got: {}", text);
-        assert!(!text.contains("RDI"), "Should NOT contain 'RDI', got: {}", text);
+        assert!(
+            text.contains("param_1"), "Expected 'param_1', got: {}", text
+        );
+        assert!(
+            !text.contains("RDI"), "Should NOT contain 'RDI', got: {}", text
+        );
     }
 
     /// Verify the Symbol-driven local declaration walk (printc.cc:2260/2518)
@@ -14404,17 +14888,29 @@ mod tests {
         // Map order: unique(regardless of Vec position) < register < stack,
         // then dynamic entries in insertion order.
         let mut scope = ScopeLocal::new();
-        scope.symbols.push(mk("in_RCX", 8, "undefined8", AddressSpace::Register, 0x30, -1, false));
-        scope.symbols.push(mk("bVar5", 1, "undefined1", AddressSpace::Unique, 0x900, -1, false));
+        scope.symbols.push(mk(
+            "in_RCX", 8, "undefined8", AddressSpace::Register, 0x30, -1, false,
+        ));
+        scope.symbols.push(mk(
+            "bVar5", 1, "undefined1", AddressSpace::Unique, 0x900, -1, false,
+        ));
         // Param symbol: category 0 → declared in the signature, not here
         // (cc:2541 sym->getCategory() != no_category).
-        scope.symbols.push(mk("param_1", 8, "long", AddressSpace::Register, 0x38, FUNCTION_PARAMETER, false));
+        scope.symbols.push(mk(
+            "param_1", 8, "long", AddressSpace::Register, 0x38, FUNCTION_PARAMETER, false,
+        ));
         // Empty-name symbol → skipped (cc:2542).
-        scope.symbols.push(mk("", 8, "undefined8", AddressSpace::Stack, 0x20, -1, false));
-        scope.symbols.push(mk("local_b8", 8, "undefined8", AddressSpace::Stack, 0xffffffffffffffb8, -1, false));
+        scope.symbols.push(mk(
+            "", 8, "undefined8", AddressSpace::Stack, 0x20, -1, false,
+        ));
+        scope.symbols.push(mk(
+            "local_b8", 8, "undefined8", AddressSpace::Stack, 0xffffffffffffffb8, -1, false,
+        ));
         // Same-space subsort: usepoint Some sorts after None (addrtied first).
         scope.symbols[0].usepoint = Some(0x2000);
-        scope.symbols.push(mk("dynVar", 4, "undefined4", AddressSpace::Unique, 0, -1, true));
+        scope.symbols.push(mk(
+            "dynVar", 4, "undefined4", AddressSpace::Unique, 0, -1, true,
+        ));
 
         let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
         printer.scope = Some(scope);
@@ -14427,15 +14923,25 @@ mod tests {
             .get_output();
 
         let bvar = text.find("undefined1 bVar5;").expect("typed temp decl");
-        let inrcx = text.find("undefined8 in_RCX;").expect("register input decl");
+        let inrcx = text
+            .find("undefined8 in_RCX;")
+            .expect("register input decl");
         let local = text.find("undefined8 local_b8;").expect("stack local decl");
         let dyn_pos = text.find("undefined4 dynVar;").expect("dynamic decl");
-        assert!(bvar < inrcx, "unique-space temp precedes register entry: {text}");
+        assert!(
+            bvar < inrcx, "unique-space temp precedes register entry: {text}"
+        );
         assert!(inrcx < local, "register entry precedes stack entry: {text}");
-        assert!(local < dyn_pos, "address-map walk precedes dynamic list: {text}");
-        assert!(!text.contains("param_1;"), "category-0 param not declared as local");
-        assert_eq!(text.matches("  ;").count() + text.matches("\t;").count(), 0,
-            "empty-name symbol not declared: {text}");
+        assert!(
+            local < dyn_pos, "address-map walk precedes dynamic list: {text}"
+        );
+        assert!(
+            !text.contains("param_1;"), "category-0 param not declared as local"
+        );
+        assert_eq!(
+            text.matches("  ;").count() + text.matches("\t;").count(), 0,
+            "empty-name symbol not declared: {text}"
+        );
     }
 
     /// PRINTC-SCOPE-RESTRUCT-0001 acceptance watchdog: PrintC is a pure
@@ -14474,20 +14980,26 @@ mod tests {
         // assigned names, nameDedup, locks, cross-space entries, dynamic.
         {
             let scope = fd.scope.as_mut().unwrap();
-            let mut s1 = LocalSymbol::new("pcVar1", 0x30, 8,
+            let mut s1 = LocalSymbol::new(
+                "pcVar1", 0x30, 8,
                 Some(std::sync::Arc::new(Datatype::Base(TypeBase::new(
-                    "char *".to_string(), 8, TypeMetatype::Pointer)))),
-                -1);
+                    "char *".to_string(), 8, TypeMetatype::Pointer,
+                )))),
+                -1,
+            );
             s1.space = AddressSpace::Register;
             s1.usepoint = Some(0x2100);
             s1.name_dedup = 2;
             s1.typelock = true;
             s1.unaliased = true;
             scope.symbols.push(s1);
-            let mut s2 = LocalSymbol::new("iVar2", 0x900, 4,
+            let mut s2 = LocalSymbol::new(
+                "iVar2", 0x900, 4,
                 Some(std::sync::Arc::new(Datatype::Base(TypeBase::new(
-                    "int".to_string(), 4, TypeMetatype::Int)))),
-                -1);
+                    "int".to_string(), 4, TypeMetatype::Int,
+                )))),
+                -1,
+            );
             s2.space = AddressSpace::Unique;
             scope.symbols.push(s2);
             let mut s3 = LocalSymbol::new("dynVar", 0, 4, None, -1);
@@ -14520,16 +15032,22 @@ mod tests {
         // The consumer path actually ran: the scope symbols were declared.
         assert!(text.contains("char *pcVar1;"), "decl from snapshot: {text}");
         assert!(text.contains("int iVar2;"), "decl from snapshot: {text}");
-        assert!(text.contains("dynVar;"), "dynamic decl from snapshot: {text}");
+        assert!(
+            text.contains("dynVar;"), "dynamic decl from snapshot: {text}"
+        );
 
         // PrintC 前后状态 direct diff: bit-for-bit identical scope state.
         let after = format!("{:?}", fd.scope);
-        assert_eq!(before, after,
+        assert_eq!(
+            before, after,
             "doc_function mutated the Action-phase scope at emit time \
-             (PRINTC-SCOPE-RESTRUCT-0001 regression)");
-        assert_eq!(printer_scope_after, after,
+             (PRINTC-SCOPE-RESTRUCT-0001 regression)"
+        );
+        assert_eq!(
+            printer_scope_after, after,
             "print-time renumbering/restructuring of the scope snapshot \
-             (PRINTC-SCOPE-RESTRUCT-0001 regression)");
+             (PRINTC-SCOPE-RESTRUCT-0001 regression)"
+        );
     }
 
     #[test]
@@ -14547,73 +15065,111 @@ mod tests {
 
         // printlanguage.cc:278: (a + b) << c : ADD(50) child of LEFT(46) →
         // parent binds looser → NO parens.
-        assert!(!child_needs_parens(CPUI_INT_LEFT, CPUI_INT_ADD, false),
-            "a + b << c: ADD(50) > LEFT(46), no parens");
+        assert!(
+            !child_needs_parens(CPUI_INT_LEFT, CPUI_INT_ADD, false),
+            "a + b << c: ADD(50) > LEFT(46), no parens"
+        );
 
         // printlanguage.cc:277: a + (b << c) : LEFT(46) child of ADD(50) →
         // parent binds tighter → parens.
-        assert!(child_needs_parens(CPUI_INT_ADD, CPUI_INT_LEFT, true),
-            "a + (b << c): LEFT(46) < ADD(50), parens");
+        assert!(
+            child_needs_parens(CPUI_INT_ADD, CPUI_INT_LEFT, true),
+            "a + (b << c): LEFT(46) < ADD(50), parens"
+        );
 
         // a == b && c : EQUAL(38) child of BOOL_AND(22) → 22 < 38 → no parens.
-        assert!(!child_needs_parens(CPUI_BOOL_AND, CPUI_INT_EQUAL, false),
-            "a == b && c: EQUAL(38) > BOOL_AND(22), no parens");
+        assert!(
+            !child_needs_parens(CPUI_BOOL_AND, CPUI_INT_EQUAL, false),
+            "a == b && c: EQUAL(38) > BOOL_AND(22), no parens"
+        );
 
         // a == (b && c) : BOOL_AND(22) child of EQUAL(38) → parens.
-        assert!(child_needs_parens(CPUI_INT_EQUAL, CPUI_BOOL_AND, true),
-            "a == (b && c): BOOL_AND(22) < EQUAL(38), parens");
+        assert!(
+            child_needs_parens(CPUI_INT_EQUAL, CPUI_BOOL_AND, true),
+            "a == (b && c): BOOL_AND(22) < EQUAL(38), parens"
+        );
 
         // PRINTC-BINARY-RPN-0001 residual class: EQUAL(38) under LESS(42)
         // as the LEFT operand → 42 > 38 → parens: `(x == y) < 0`.
-        assert!(child_needs_parens(CPUI_INT_LESS, CPUI_INT_EQUAL, false),
-            "(x == y) < 0: EQUAL(38) < LESS(42), left operand needs parens");
-        assert!(child_needs_parens(CPUI_INT_SLESS, CPUI_INT_NOTEQUAL, false),
-            "(x != y) < 0: NOTEQUAL(38) < SLESS(42), parens");
+        assert!(
+            child_needs_parens(CPUI_INT_LESS, CPUI_INT_EQUAL, false),
+            "(x == y) < 0: EQUAL(38) < LESS(42), left operand needs parens"
+        );
+        assert!(
+            child_needs_parens(CPUI_INT_SLESS, CPUI_INT_NOTEQUAL, false),
+            "(x != y) < 0: NOTEQUAL(38) < SLESS(42), parens"
+        );
 
         // printlanguage.cc:281 (associative && same OpToken instance):
         // (a * b) * c and a * (b * c) → no parens (both multiply, associative).
-        assert!(!child_needs_parens(CPUI_INT_MULT, CPUI_INT_MULT, false),
-            "(a * b) * c: associative same token, no parens");
-        assert!(!child_needs_parens(CPUI_INT_MULT, CPUI_INT_MULT, true),
-            "a * (b * c): associative same token, no parens");
+        assert!(
+            !child_needs_parens(CPUI_INT_MULT, CPUI_INT_MULT, false),
+            "(a * b) * c: associative same token, no parens"
+        );
+        assert!(
+            !child_needs_parens(CPUI_INT_MULT, CPUI_INT_MULT, true),
+            "a * (b * c): associative same token, no parens"
+        );
         // INT_ADD and FLOAT_ADD share the binary_plus OpToken instance
         // (printc.hh:291/314) → same token id → associative no-parens holds.
-        assert!(!child_needs_parens(CPUI_INT_ADD, CPUI_FLOAT_ADD, true),
-            "a + (b + c) mixed int/float: same binary_plus token, no parens");
+        assert!(
+            !child_needs_parens(CPUI_INT_ADD, CPUI_FLOAT_ADD, true),
+            "a + (b + c) mixed int/float: same binary_plus token, no parens"
+        );
 
         // printlanguage.cc:286 (equal precedence, non-associative parent):
         // BOTH operand slots parenthesize — Ghidra conservatively emits
         // `(a - b) - c` and `a - (b - c)`.
-        assert!(child_needs_parens(CPUI_INT_SUB, CPUI_INT_SUB, false),
-            "(a - b) - c: equal prec, binary_minus non-assoc → parens (printlanguage.cc:286)");
-        assert!(child_needs_parens(CPUI_INT_SUB, CPUI_INT_SUB, true),
-            "a - (b - c): equal prec, binary_minus non-assoc → parens");
+        assert!(
+            child_needs_parens(CPUI_INT_SUB, CPUI_INT_SUB, false),
+            "(a - b) - c: equal prec, binary_minus non-assoc → parens (printlanguage.cc:286)"
+        );
+        assert!(
+            child_needs_parens(CPUI_INT_SUB, CPUI_INT_SUB, true),
+            "a - (b - c): equal prec, binary_minus non-assoc → parens"
+        );
         // The `+ 0 -` residual class: ADD under SUB at the left slot.
-        assert!(child_needs_parens(CPUI_INT_SUB, CPUI_INT_ADD, false),
-            "(a + b) - c: ADD(50) under SUB(50) non-assoc → parens");
+        assert!(
+            child_needs_parens(CPUI_INT_SUB, CPUI_INT_ADD, false),
+            "(a + b) - c: ADD(50) under SUB(50) non-assoc → parens"
+        );
 
         // Bitwise: a & b | c → AND(34) child of OR(26) → no parens;
         // a & (b | c) → OR(26) child of AND(34) → parens.
-        assert!(!child_needs_parens(CPUI_INT_OR, CPUI_INT_AND, false),
-            "a & b | c: AND(34) > OR(26), no parens");
-        assert!(child_needs_parens(CPUI_INT_AND, CPUI_INT_OR, true),
-            "a & (b | c): OR(26) < AND(34), parens");
+        assert!(
+            !child_needs_parens(CPUI_INT_OR, CPUI_INT_AND, false),
+            "a & b | c: AND(34) > OR(26), no parens"
+        );
+        assert!(
+            child_needs_parens(CPUI_INT_AND, CPUI_INT_OR, true),
+            "a & (b | c): OR(26) < AND(34), parens"
+        );
 
         // Boolean combinators: && (22) under && (22) — boolean_and is NOT
         // associative (printc.cc:53) → parens; && (22) under || (18) → no parens.
-        assert!(child_needs_parens(CPUI_BOOL_AND, CPUI_BOOL_AND, true),
-            "a && (b && c): boolean_and non-assoc → parens");
-        assert!(!child_needs_parens(CPUI_BOOL_OR, CPUI_BOOL_AND, false),
-            "a && b || c: AND(22) > OR(18), no parens");
+        assert!(
+            child_needs_parens(CPUI_BOOL_AND, CPUI_BOOL_AND, true),
+            "a && (b && c): boolean_and non-assoc → parens"
+        );
+        assert!(
+            !child_needs_parens(CPUI_BOOL_OR, CPUI_BOOL_AND, false),
+            "a && b || c: AND(22) > OR(18), no parens"
+        );
         // BOOL_XOR is boolean_xor "^^" prec 20 (printc.cc:54): under
         // BOOL_AND(22) → 22 > 20 → parens; under BOOL_OR(18) → no parens.
-        assert!(child_needs_parens(CPUI_BOOL_AND, CPUI_BOOL_XOR, true),
-            "a && (b ^^ c): XOR(20) < AND(22), parens");
-        assert!(!child_needs_parens(CPUI_BOOL_OR, CPUI_BOOL_XOR, false),
-            "a ^^ b || c: XOR(20) > OR(18), no parens");
+        assert!(
+            child_needs_parens(CPUI_BOOL_AND, CPUI_BOOL_XOR, true),
+            "a && (b ^^ c): XOR(20) < AND(22), parens"
+        );
+        assert!(
+            !child_needs_parens(CPUI_BOOL_OR, CPUI_BOOL_XOR, false),
+            "a ^^ b || c: XOR(20) > OR(18), no parens"
+        );
 
         // Non-binary child (e.g. COPY) pushes no operator token → no parens.
-        assert!(!child_needs_parens(CPUI_INT_ADD, CPUI_COPY, true),
-            "COPY child: not a tracked binary op, no parens");
+        assert!(
+            !child_needs_parens(CPUI_INT_ADD, CPUI_COPY, true),
+            "COPY child: not a tracked binary op, no parens"
+        );
     }
 }

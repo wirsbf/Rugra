@@ -65,7 +65,10 @@ pairs. Unit tests cover the 24-entry table, SYSV storage assignment
 `resolve_type` materializes the DWARF type graph into `Datatype` objects:
 
 - base types map `DW_AT_encoding` onto the Rugra metatype (float/unsigned/
-  boolean/int);
+  boolean/int). The locked analyzer's character distinction is also retained:
+  core `char`/`signed char` and the `DW_ATE_signed_char` fallback become a
+  `CHARTYPE`/`SUB_INT_CHAR` datatype, while `DW_ATE_unsigned_char` remains the
+  ordinary unsigned `uchar` type;
 - pointers/references build `Datatype::Pointer` with the pointee's spelling
   (`URLGlob *`, and `URLGlob **` for pointer-to-pointer);
 - `DW_TAG_structure_type`/`DW_TAG_union_type` build fielded
@@ -78,9 +81,10 @@ pairs. Unit tests cover the 24-entry table, SYSV storage assignment
   value table;
 - `DW_TAG_array_type` builds `Datatype::Array` from the first subrange's
   `DW_AT_count`/`DW_AT_upper_bound`+1 (`char *[10]`, `URLPattern[9]`);
-- typedefs over composites/enums are materialized as the renamed underlying
-  type (Rugra has no `TypeTypedef` variant yet — fields and enumerator names
-  are carried on the renamed type);
+- typedefs/qualifiers clone and rename the complete resolved datatype instead
+  of reducing it to a base `(size, metatype)` pair. This preserves character
+  flags/submeta and pointer/array/composite shape. Rugra still has no
+  `TypeTypedef` variant or importer-side TypeFactory registry identity;
 - recursive type graphs (`FILE` → `struct _IO_FILE` → `_chain FILE *`) break
   at the back edge with a shallow named projection (name/size/metatype, no
   fields), mirroring how Ghidra's two-phase type manager exposes an
@@ -102,8 +106,11 @@ Rust-side import tests cover `GetStr` (2 fixed parameters), `myprogress` (5),
 globals of the curl fixture (`config`, `save`, `beenhere`, `glob_buffer`,
 `glob_expand`) including the `URLGlob` 304-byte layout (literal char*[10] @0,
 pattern URLPattern[9] @80, size int @296) and the `&global` pointer map.
-This is useful regression evidence, but it is not a Ghidra DWARF-analyzer
-oracle fixture; the importer remains `NO_ORACLE` under mechanism B2.
+This is useful regression evidence, but it is not a complete Ghidra
+DWARF-analyzer oracle fixture; the importer remains `NO_ORACLE` under mechanism
+B2. A fresh production GetStr differential does prove the resulting visible
+character-token projection (`*value != '\0'`) against the locked 12.0.4 golden;
+it does not prove the importer state or factory-identity closure.
 
 #### 会话状态（2026-08-16）
 本 session 在此文件对应的 `src/debugproto.rs` 上落地了
@@ -227,7 +234,43 @@ structure/union/enumeration/typedef/base_type DIE 建立名字→类型索引，
 `trim_end_matches(" *")` 剥不掉第二颗星，双指针落入 unknown-name 基臂产出
 `Base("char **", TYPE_UNKNOWN)` 而非结构化 Pointer-to-Pointer。
 `parse_c_type` 嵌套层显示名在前层以 `*` 结尾时粘着（`char *` → `char **`），
-匹配类型打印机右到左 C 声明形。
+匹配类型打印机右到左 C 声明形。generic_clib 的核心 `char` 现在用字符构造器，
+而不是仅名称相同的普通 1-byte `TYPE_INT`；因此 `strdup` 等锁定签名的 pointee
+保留 `isCharPrint()`。
+
+## 2026-08-28：DEBUGPROTO-DWARF-CHAR-0001 — GetStr 字符类型边界
+
+锁定输入 `examples/curl`（SHA-256
+`8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41`）中，
+GetStr 的 `value` 参数沿 DWARF DIE `0x28c6 → 0x174 → 0x17f` 指向
+`name=char,size=1,DW_ATE_signed_char`。Ghidra 12.0.4 的决定链为：
+
+- `DWARFDataTypeManager.java:397-449` 先按 name/size/encoding compatibility
+  查核心类型，再做 encoding fallback；`:426` 选择 `baseDataTypeChar`，`:427`
+  明确把 unsigned-char 选择为普通 `baseDataTypeUchar`；
+- `PcodeDataTypeManager.java:1180-1200,1238-1253` 为核心 CharDataType 编码
+  `char=true`；
+- C++ `type.cc:4511-4523` 解码为 factory-owned `TypeChar`，其
+  `chartype`/`SUB_INT_CHAR` 使 `isCharPrint()` 为真。
+
+旧 importer 只构造 `TypeBase::new(name,1,TYPE_INT)`，名称虽为 `char`，flags
+仍为 0；read-facing 打印路径因此正确地输出了数值 `0`。现在
+`dwarf_base_type` 保留 signed-character/core-char 分类，`parse_c_type("char")`
+也使用字符构造器，typedef/qualifier clone 保留完整 flags/submeta 和结构形状。
+
+定向 Rust 回归覆盖实际 GetStr DWARF 参数、libc `strdup` pointee，以及
+typedef/qualifier 的字符语义与 pointer shape。fresh release 生产路径随后得到：
+
+```c
+if ((value != (char *)0x0) && (*value != '\0')) {
+```
+
+`compare_ghidra.py --func GetStr -v` 报告 skeleton identical、defects=0、
+numbering=0。这个结果只把 GetStr 的最终可见字符投影升为 `MATCH`。完整 importer
+仍有明确残差：尚未实现 Java 的全量 name-first base-type 表、Program database
+typedef identity、Architecture TypeFactory `findAdd`/canonical cache，以及
+signed/unsigned/UTF/非标准 data-organization 的双侧矩阵；状态保持
+`NO_ORACLE`/L2。
 
 ## 2026-08-28：模型驱动签名存储边界
 

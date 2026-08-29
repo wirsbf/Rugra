@@ -46,13 +46,21 @@ fn piece_node_find_root(
     loop {
         let (is_pp, is_at, cur_addr, cur_space) = {
             let r = cur.read().unwrap();
-            (r.is_proto_partial(), r.is_addr_tied(), r.get_offset(), r.get_space())
+            (
+                r.is_proto_partial(), r.is_addr_tied(), r.get_offset(), r.get_space(),
+            )
         };
         if !is_pp && !is_at {
             break;
         }
         let mut piece_op: Option<Arc<std::sync::RwLock<crate::op::PcodeOp>>> = None;
-        let readers: Vec<_> = cur.read().unwrap().descend.iter().filter_map(|w| w.upgrade()).collect();
+        let readers: Vec<_> = cur
+            .read()
+            .unwrap()
+            .descend
+            .iter()
+            .filter_map(|w| w.upgrade())
+            .collect();
         for op_arc in readers {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_PIECE {
@@ -61,12 +69,17 @@ fn piece_node_find_root(
             // int4 slot = op->getSlot(vn);
             let slot = (0..2)
                 .find(|&i| op.get_in(i).map(|v| Arc::ptr_eq(v, &cur)).unwrap_or(false));
-            let (Some(slot), Some(out)) = (slot, op.output.clone()) else { continue };
+            let (Some(slot), Some(out)) = (slot, op.output.clone()) else { continue ;
+            };
             let out_r = out.read().unwrap();
             let mut addr = out_r.get_offset();
             let (in0_size, in1_size) = (
-                op.get_in(0).map(|v| v.read().unwrap().get_size()).unwrap_or(0),
-                op.get_in(1).map(|v| v.read().unwrap().get_size()).unwrap_or(0),
+                op.get_in(0)
+                    .map(|v| v.read().unwrap().get_size())
+                    .unwrap_or(0),
+                op.get_in(1)
+                    .map(|v| v.read().unwrap().get_size())
+                    .unwrap_or(0),
             );
             // if (addr.getSpace()->isBigEndian() == (slot == 1))
             //   addr = addr + op->getIn(1-slot)->getSize();
@@ -121,7 +134,8 @@ fn varnode_use_point_offset(
 ) -> Option<u64> {
     let vn_r = vn.read().unwrap();
     if vn_r.is_written() {
-        vn_r.get_def().map(|d| d.read().unwrap().get_addr().as_u64())
+        vn_r.get_def()
+            .map(|d| d.read().unwrap().get_addr().as_u64())
     } else {
         Some(fd.baseaddr.as_u64().wrapping_sub(1))
     }
@@ -475,7 +489,9 @@ pub struct Funcdata {
     /// `ResolveEdge` (parent type id + PcodeOp SeqNum order + slot encoding);
     /// value is the `ResolvedUnion` produced by union resolution. Cleared by
     /// `clear()`.
-    pub union_map: std::collections::BTreeMap<crate::unionresolve::ResolveEdge, crate::unionresolve::ResolvedUnion>,
+    pub union_map: std::collections::BTreeMap<
+        crate::unionresolve::ResolveEdge, crate::unionresolve::ResolvedUnion,
+    >,
 
     /// Minimum Varnode size that can enter the laned-register access map.
     /// `u32::MAX` is Ghidra's unsigned representation of the Architecture
@@ -486,8 +502,7 @@ pub struct Funcdata {
     /// immutable Architecture lane record.
     pub laned_map: std::collections::BTreeMap<
         LanedStorage,
-        std::sync::Arc<crate::transform::LanedRegister>,
-    >,
+        std::sync::Arc<crate::transform::LanedRegister>>,
 
     /// Per-function override container. Faithful to `Funcdata::localoverride`
     /// (funcdata.hh:108). Holds force-goto / deadcode-delay / flow-override /
@@ -532,7 +547,9 @@ impl Funcdata {
             funcp: FuncProto::new(
                 name.to_string(),
                 std::sync::Arc::new(crate::type_system::datatype::Datatype::Void(
-                    crate::type_system::datatype::TypeBase::new("void".to_string(), 0, crate::type_system::datatype::TypeMetatype::Void)
+                    crate::type_system::datatype::TypeBase::new(
+                        "void".to_string(), 0, crate::type_system::datatype::TypeMetatype::Void,
+                    ),
                 )),
             ),
             external_prototypes: HashMap::new(),
@@ -630,7 +647,9 @@ impl Funcdata {
     /// other call sites). The laned-register half records against the
     /// address's address space, which `getLanedRegister` matches by size
     /// only (architecture.cc:290-306).
-    pub fn new_varnode(&mut self, size: usize, addr: crate::address::Address) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+    pub fn new_varnode(
+        &mut self, size: usize, addr: crate::address::Address,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         let vn = self.vbank.create(size, addr);
         // cc:157: assignHigh(vn) (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
         let _ = self.assign_high(&vn);
@@ -847,12 +866,13 @@ impl Funcdata {
             let sub = self.new_op(2, block_start);
             self.op_set_opcode(&sub, OpCode::CPUI_SUBPIECE);
             let lo_size_const = self.new_constant(4, lo_size as u64);
-            let new_hi = self.vbank.create_def_with_space(
+            let new_hi = self
+                .vbank
+                .create_def_with_space(
                 hi_size,
                 hi_space,
                 hi_offset,
-                &sub.0,
-            );
+                &sub.0);
             sub.0.write().unwrap().output = Some(new_hi.clone());
             self.op_insert_begin(&sub, bb);
             self.total_replace(vn_hi, new_hi);
@@ -870,12 +890,13 @@ impl Funcdata {
             let sub = self.new_op(2, block_start);
             self.op_set_opcode(&sub, OpCode::CPUI_SUBPIECE);
             let zero_const = self.new_constant(4, 0);
-            let new_lo = self.vbank.create_def_with_space(
+            let new_lo = self
+                .vbank
+                .create_def_with_space(
                 lo_size,
                 lo_space,
                 lo_offset,
-                &sub.0,
-            );
+                &sub.0);
             sub.0.write().unwrap().output = Some(new_lo.clone());
             self.op_insert_begin(&sub, bb);
             self.total_replace(vn_lo, new_lo);
@@ -887,11 +908,12 @@ impl Funcdata {
         self.delete_varnode(vn_hi)?;
         self.delete_varnode(vn_lo)?;
         let out_size = hi_size + lo_size;
-        let in_vn = self.vbank.create_with_space(
+        let in_vn = self
+            .vbank
+            .create_with_space(
             out_size,
             combined_space,
-            combined_offset,
-        );
+            combined_offset);
         let in_vn = self.set_input_varnode_checked(in_vn)?;
         for p in &piece_list {
             self.op_insert_input(p, in_vn.clone(), 0);
@@ -949,6 +971,14 @@ impl Funcdata {
     /// mirroring the named-ctor chain so a later locked-prototype overlay
     /// (DWARF/PLT) can never observe `model_locked && !has_model`.
     pub fn set_arch(&mut self, arch: Arc<crate::arch::Architecture>) {
+        // Ghidra: funcdata_varnode.cc:69 Funcdata::newConstant
+        // Every newVarnode* caller supplies a Datatype from this Funcdata's
+        // Architecture-owned `glb->types`.  Rugra's bank resolves that
+        // required argument internally, so attach the identical factory
+        // before any subsequent Varnode allocation.
+        if let Some(types) = arch.types.clone() {
+            self.vbank.set_type_factory(types);
+        }
         // Ghidra: fspec.cc:3879 FuncProto::setScope (model-binding tail)
         if !self.funcp.has_model() {
             self.funcp.set_model(arch.get_default_model().cloned());
@@ -1080,7 +1110,9 @@ impl Funcdata {
         // can hold a HighVariable (assignHigh is the sole allocator and is
         // gated on the flag), so the `high.is_none()` filter is
         // behavior-equivalent plus defensive for non-pipeline callers.
-        let vn_arcs: Vec<Arc<RwLock<crate::varnode::Varnode>>> = self.vbank.loc_tree
+        let vn_arcs: Vec<Arc<RwLock<crate::varnode::Varnode>>> = self
+            .vbank
+            .loc_tree
             .iter()
             .filter(|r| r.0.read().unwrap().high.is_none())
             .map(|r| r.0.clone())
@@ -1105,7 +1137,9 @@ impl Funcdata {
     /// Find an input varnode of the given size at the given address.
     /// Faithful to `Funcdata::findVarnodeInput` (funcdata.hh:324).
     /// Used by ActionRestrictLocal and AncestorRealistic.
-    pub fn find_varnode_input(&self, size: usize, addr: crate::address::Address) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+    pub fn find_varnode_input(
+        &self, size: usize, addr: crate::address::Address,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
         self.vbank.find_input(size, addr)
     }
 
@@ -1191,8 +1225,7 @@ impl Funcdata {
     /// Symbol — cc:1174's `if (!vn->isPersist())` gate).
     pub fn link_symbol(
         &mut self,
-        vn: &Arc<RwLock<crate::varnode::Varnode>>,
-    ) -> Option<usize> {
+        vn: &Arc<RwLock<crate::varnode::Varnode>>) -> Option<usize> {
         // cc:1159-1160: if (vn->isProtoPartial()) linkProtoPartial(vn);
         if vn.read().unwrap().is_proto_partial() {
             self.link_proto_partial(vn);
@@ -1323,9 +1356,11 @@ impl Funcdata {
                 }
                 // cc:1177: entry = localmap->addSymbol("", high->getType(), vn->getAddr(), usepoint);
                 let ct = high_arc.read().unwrap().get_type();
-                let idx = self.scope.as_mut()?.add_symbol(
-                    vn_space, "", Some(ct), vn_offset, up,
-                );
+                let idx = self
+                    .scope
+                    .as_mut()?
+                    .add_symbol(
+                    vn_space, "", Some(ct), vn_offset, up);
                 sym = Some(idx);
                 // cc:1178-1179: sym = entry->getSymbol(); vn->setSymbolEntry(entry)
                 // — varnode.cc:429-439 flags + high->setSymbol (variable.cc:
@@ -1394,7 +1429,9 @@ impl Funcdata {
         addr: crate::address::Address,
         size: i32,
         usepoint: crate::address::Address,
-    ) -> Option<(u64, std::sync::Arc<std::sync::RwLock<crate::database::SymbolEntry>>)> {
+    ) -> Option<(
+        u64, std::sync::Arc<std::sync::RwLock<crate::database::SymbolEntry>>,
+    )> {
         let symboltab = self.arch.as_ref()?.symboltab.clone()?;
         let db = symboltab.read().unwrap();
         let qpoint = db.global_scope_id;
@@ -1462,8 +1499,7 @@ impl Funcdata {
     pub fn set_symbol_property_range(
         &self,
         flags: u32,
-        range: crate::address::Range,
-    ) -> bool {
+        range: crate::address::Range) -> bool {
         let Some(symboltab) = self.arch.as_ref().and_then(|a| a.symboltab.clone()) else {
             return false;
         };
@@ -1683,7 +1719,9 @@ impl Funcdata {
     // the dead/alive lifecycle is enforced here (OP-INSERT-0001 MISMATCH).
     /// Allocate a new PcodeOp associated with `pc` and place it on the dead
     /// list. The requested nullable input-slot shape remains an OPBANK gap.
-    pub fn new_op(&mut self, num_inputs: usize, pc: crate::address::Address) -> crate::op::PcodeOpRef {
+    pub fn new_op(
+        &mut self, num_inputs: usize, pc: crate::address::Address,
+    ) -> crate::op::PcodeOpRef {
         // PcodeOpBank::create puts a newly allocated op on Ghidra's dead list
         // (op.cc:941-948).  PcodeOpBank::create is also used by Rugra's raw
         // injection bridge, whose legacy lifecycle is different, so enforce
@@ -1703,7 +1741,9 @@ impl Funcdata {
     ///   assignHigh(vn);
     ///   if (s >= minLanedSize) checkForLanedRegister(s, vn->getAddr());
     ///   return vn;
-    pub fn new_unique_out(&mut self, s: usize, op: &crate::op::PcodeOpRef) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+    pub fn new_unique_out(
+        &mut self, s: usize, op: &crate::op::PcodeOpRef,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         // cc:134-135 creates the written form directly. Mutating a free
         // Varnode after insertion would change both BTreeSet keys in-place.
         let vn = self.vbank.create_def_unique(s, &op.0);
@@ -1713,7 +1753,9 @@ impl Funcdata {
         if s >= self.min_laned_size as usize {
             let (space, addr) = {
                 let vn = vn.read().unwrap();
-                (vn.get_space(), crate::address::Address::new(vn.get_offset()))
+                (
+                    vn.get_space(), crate::address::Address::new(vn.get_offset()),
+                )
             };
             self.check_for_laned_register(s, space, addr);
         }
@@ -1726,7 +1768,9 @@ impl Funcdata {
     ///   Varnode *vn = vbank.create(s, glb->getConstant(constant_val), ct);
     ///   assignHigh(vn);
     ///   return vn;
-    pub fn new_constant(&mut self, s: usize, val: u64) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+    pub fn new_constant(
+        &mut self, s: usize, val: u64,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         let vn = self.vbank.create_constant(s, val);
         // cc:72: assignHigh(vn) — constant Varnodes do get a HighVariable
         // (hasCover() is false for constants, so no calcCover; they are not
@@ -1741,7 +1785,9 @@ impl Funcdata {
     /// (funcdata_varnode.cc:462-484). For s≤8, creates a plain constant.
     /// For s>8 with hi==0, creates INT_ZEXT(const). For s>8 with hi!=0,
     /// creates PIECE(hi_const, lo_const).
-    pub fn new_extended_constant(&mut self, s: usize, lo: u64, hi: u64, before_op: &crate::op::PcodeOpRef) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+    pub fn new_extended_constant(
+        &mut self, s: usize, lo: u64, hi: u64, before_op: &crate::op::PcodeOpRef,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         if s <= 8 {
             return self.new_constant(s, lo);
         }
@@ -1794,14 +1840,18 @@ impl Funcdata {
     ///   assignHigh(vn);
     ///   if (s >= minLanedSize) checkForLanedRegister(s, vn->getAddr());
     ///   return vn;
-    pub fn new_unique(&mut self, s: usize) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+    pub fn new_unique(
+        &mut self, s: usize,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         let vn = self.vbank.create_unique(s);
         // cc:89: assignHigh(vn) (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
         let _ = self.assign_high(&vn);
         if s >= self.min_laned_size as usize {
             let (space, addr) = {
                 let vn = vn.read().unwrap();
-                (vn.get_space(), crate::address::Address::new(vn.get_offset()))
+                (
+                    vn.get_space(), crate::address::Address::new(vn.get_offset()),
+                )
             };
             self.check_for_laned_register(s, space, addr);
         }
@@ -1813,8 +1863,8 @@ impl Funcdata {
     /// `opMarkHalt` (funcdata_op.cc:37-48). Throws if op is not RETURN
     /// or flag is invalid (Rugra logs + returns).
     pub fn op_mark_halt(&self, op: &crate::op::PcodeOpRef, flag: u32) {
-        use crate::opcodes::OpCode;
         use crate::op::pcodeop_flags;
+        use crate::opcodes::OpCode;
         // cc:40: if (op->code() != CPUI_RETURN) throw;
         if op.0.read().unwrap().opcode != OpCode::CPUI_RETURN {
             eprintln!("[FUNCDATA] WARN: opMarkHalt on non-RETURN op");
@@ -1862,7 +1912,9 @@ impl Funcdata {
     /// → 死 varnode 累积污染后续 pass。同时 const 去重缺失导致同一常量 vn 被
     /// 多个 op 引用,违反 Ghidra "constants should have only one descendant"
     /// 不变量 (cc:108)。
-    pub fn op_set_input(&mut self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, slot: usize) {
+    pub fn op_set_input(
+        &mut self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, slot: usize,
+    ) {
         let mut o = op.0.write().unwrap();
         // Ghidra has nullable preallocated slots. For Rugra's Vec model, a
         // sequential slot exactly at len is the representable NULL boundary
@@ -1961,7 +2013,9 @@ impl Funcdata {
     /// `op->insertInput(slot)` then `opSetInput(op,vn,slot)` — the full
     /// opSetInput path (const dedup cc:108-115, addDescend free-check +
     /// coverdirty bookkeeping varnode.cc:330-340), never a raw descend push.
-    pub fn op_insert_input(&mut self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, slot: usize) {
+    pub fn op_insert_input(
+        &mut self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, slot: usize,
+    ) {
         // cc:315 op->insertInput(slot) — PcodeOp::insertInput
         // (op.cc:311-318) pushes a NULL slot at `slot` and shifts existing
         // inputs at/after `slot` up by one. Descend entries store the op
@@ -2029,7 +2083,10 @@ impl Funcdata {
         op: &crate::op::PcodeOpRef,
         vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) {
-        let same_output = op.0.read().unwrap().output.as_ref()
+        let same_output = op.0.read()
+                .unwrap()
+                .output
+                .as_ref()
             .is_some_and(|output| std::sync::Arc::ptr_eq(output, &vn));
         if same_output {
             return;
@@ -2069,7 +2126,10 @@ impl Funcdata {
         op.0.write().unwrap().inrefs.clear();
         // cc:218-221: parentless ops are already dead. Integrated ops move to
         // the dead bank and leave their owning block.
-        let parent = op.0.read().unwrap().parent.as_ref()
+        let parent = op.0.read()
+                .unwrap()
+                .parent
+                .as_ref()
             .and_then(std::sync::Weak::upgrade);
         if let Some(parent) = parent {
             self.obank.mark_dead(op.clone());
@@ -2114,8 +2174,7 @@ impl Funcdata {
                     (
                         vn_rg.is_written(),
                         lone.is_none(),
-                        vn_rg.get_def(),
-                    )
+                        vn_rg.get_def())
                 };
                 if !is_written {
                     continue;
@@ -2191,8 +2250,7 @@ impl Funcdata {
             self.op_set_input(
                 &crate::op::PcodeOpRef(descendant),
                 newvn.clone(),
-                slot,
-            );
+                slot);
         }
     }
 
@@ -2278,8 +2336,7 @@ impl Funcdata {
             self.check_for_laned_register(
                 size,
                 crate::space::AddressSpace::Register,
-                addr,
-            );
+                addr);
         }
         self.set_varnode_properties(&vn);
         vn
@@ -2500,7 +2557,9 @@ impl Funcdata {
             // cc:308: setOutEdgeFlag(j, f_goto_edge). For BlockBasic we use the
             // dedicated GOTO_EDGE_0/1 flags; for structured blocks we set the
             // edge's F_GOTO_EDGE flag directly.
-            if let Some(any) = bl_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+            if let Some(any) = bl_rg
+                .as_any_mut()
+                .downcast_mut::<crate::block::BlockBasic>() {
                 match j {
                     0 => any.flags |= crate::block::block_flags::GOTO_EDGE_0,
                     1 => any.flags |= crate::block::block_flags::GOTO_EDGE_1,
@@ -2663,7 +2722,9 @@ impl Funcdata {
             eprintln!("[BLOCK] Cannot delete block with >1 out edge");
             return;
         }
-        bb.write().unwrap().set_flags(crate::block::block_flags::DEAD);
+        bb.write()
+            .unwrap()
+            .set_flags(crate::block::block_flags::DEAD);
         let ops_to_destroy: Vec<crate::op::PcodeOpRef> = {
             let rg = bb.read().unwrap();
             if let Some(bb2) = rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
@@ -2694,7 +2755,10 @@ impl Funcdata {
         addr: crate::address::Address,
     ) -> Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>> {
         let newblock = self.create_new_block();
-        newblock.write().unwrap().set_flags(crate::block::block_flags::JOINED_BLOCK);
+        newblock
+            .write()
+            .unwrap()
+            .set_flags(crate::block::block_flags::JOINED_BLOCK);
         // setInitialRange(addr, addr) — Rugra's create_new_block uses Address(0);
         // the range is informational only (used for cover/debug), so we skip it.
 
@@ -2781,7 +2845,9 @@ impl Funcdata {
                 .unwrap_or(0);
             {
                 let mut in_rg = in_block.write().unwrap();
-                if let Some(bb) = in_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                if let Some(bb) = in_rg
+                    .as_any_mut()
+                    .downcast_mut::<crate::block::BlockBasic>() {
                     let out_edges = bb.out_edges_mut();
                     if slot < out_edges.len() {
                         out_edges[slot].point = outafter.clone();
@@ -2814,14 +2880,19 @@ impl Funcdata {
             return self.create_new_block();
         };
         let bprime = self.create_new_block();
-        bprime.write().unwrap().set_flags(crate::block::block_flags::DUPLICATE_BLOCK);
+        bprime
+            .write()
+            .unwrap()
+            .set_flags(crate::block::block_flags::DUPLICATE_BLOCK);
         // copyRange(b) — Rugra blocks don't track address range; skip.
         // switchEdge(a, b, bprime)
         self.switch_edge(&a, b, &bprime);
         // Add all of b's out-edges to bprime.
         let outs: Vec<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = {
             let br = b.read().unwrap();
-            (0..br.size_out()).filter_map(|i| br.get_out(i).map(|e| e.point.clone())).collect()
+            (0..br.size_out())
+                .filter_map(|i| br.get_out(i).map(|e| e.point.clone()))
+                .collect()
         };
         for out in &outs {
             self.bblocks.add_edge(bprime.clone(), out.clone());
@@ -2944,8 +3015,7 @@ impl Funcdata {
                                 &mut factory,
                                 sym,
                                 addr,
-                                size as i32,
-                            ) {
+                                size as i32) {
                                 if dt.get_metatype() != TypeMetatype::Unknown {
                                     ct = Some(dt);
                                 }
@@ -3136,7 +3206,9 @@ impl Funcdata {
         // crossing edges that should stay straight (CONDEXE-CFG-0001).
         {
             let mut bl_rg = bl.write().unwrap();
-            if let Some(bb) = bl_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+            if let Some(bb) = bl_rg
+                .as_any_mut()
+                .downcast_mut::<crate::block::BlockBasic>() {
                 if swap {
                     bb.replace_edges_thru(0, 1);
                 } else {
@@ -3278,14 +3350,17 @@ impl Funcdata {
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::spliceBlockBasic
-    pub fn splice_block_basic(&mut self, bb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>) -> bool {
+    pub fn splice_block_basic(
+        &mut self, bb: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    ) -> bool {
         let (out_block, out_has_single_in) = {
             let rg = bb.read().unwrap();
             if rg.size_out() != 1 {
                 return false;
             }
             let ob = rg.get_out(0).map(|e| e.point);
-            let ob = match ob { Some(o) => o, None => return false };
+            let ob = match ob { Some(o) => o, None => return false ,
+            };
             let single_in = ob.read().unwrap().size_in() == 1;
             (ob, single_in)
         };
@@ -3322,9 +3397,13 @@ impl Funcdata {
             let has_phi = {
                 let out_rg = out_block.read().unwrap();
                 if let Some(out_bb) = out_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
-                    out_bb.ops.first().map(|o| {
+                    out_bb
+                        .ops
+                        .first()
+                        .map(|o| {
                         o.0.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_MULTIEQUAL
-                    }).unwrap_or(false)
+                    })
+                        .unwrap_or(false)
                 } else {
                     false
                 }
@@ -3339,9 +3418,13 @@ impl Funcdata {
             // Move ops from out_block to end of bb.
             let moved_ops: Vec<crate::op::PcodeOpRef> = {
                 let mut out_rg = out_block.write().unwrap();
-                if let Some(out_bb) = out_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+                if let Some(out_bb) = out_rg
+                    .as_any_mut()
+                    .downcast_mut::<crate::block::BlockBasic>() {
                     let ops = std::mem::take(&mut out_bb.ops);
-                    ops.into_iter().map(|o| crate::op::PcodeOpRef(o.0)).collect()
+                    ops.into_iter()
+                        .map(|o| crate::op::PcodeOpRef(o.0))
+                        .collect()
                 } else {
                     Vec::new()
                 }
@@ -3351,7 +3434,9 @@ impl Funcdata {
                 &(bb.clone() as Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>),
             );
             let mut bb_rg = bb.write().unwrap();
-            if let Some(bb_bb) = bb_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+            if let Some(bb_bb) = bb_rg
+                .as_any_mut()
+                .downcast_mut::<crate::block::BlockBasic>() {
                 for op_ref in &moved_ops {
                     op_ref.0.write().unwrap().parent = Some(bb_weak.clone());
                     let insert_pos = bb_bb.ops.len();
@@ -3394,7 +3479,9 @@ impl Funcdata {
         // BlockBasic.flags is a public field; assign exactly as Ghidra does.
         {
             let mut bb_rg = bb.write().unwrap();
-            if let Some(bb_bb) = bb_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>() {
+            if let Some(bb_bb) = bb_rg
+                .as_any_mut()
+                .downcast_mut::<crate::block::BlockBasic>() {
                 bb_bb.flags = fl1 | fl2;
             }
         }
@@ -3413,9 +3500,15 @@ impl Funcdata {
     pub fn replace_lessequal(&mut self, op: &crate::op::PcodeOpRef) -> bool {
         let (i, diff, val, size, is_signed) = {
             let o = op.0.read().unwrap();
-            let (vn_idx, diff) = if o.inrefs.get(0).map_or(false, |v| v.read().unwrap().is_constant()) {
+            let (vn_idx, diff) = if o
+                .inrefs
+                .get(0)
+                .map_or(false, |v| v.read().unwrap().is_constant()) {
                 (0, -1i64)
-            } else if o.inrefs.get(1).map_or(false, |v| v.read().unwrap().is_constant()) {
+            } else if o
+                .inrefs
+                .get(1)
+                .map_or(false, |v| v.read().unwrap().is_constant()) {
                 (1, 1i64)
             } else {
                 return false;
@@ -3423,7 +3516,9 @@ impl Funcdata {
             let vn = o.inrefs[vn_idx].clone();
             let val = vn.read().unwrap().get_offset();
             let size = vn.read().unwrap().get_size();
-            (vn_idx, diff, val, size, o.opcode == OpCode::CPUI_INT_SLESSEQUAL)
+            (
+                vn_idx, diff, val, size, o.opcode == OpCode::CPUI_INT_SLESSEQUAL,
+            )
         };
         let mask = if size >= 8 { u64::MAX } else { (1u64 << (size * 8)) - 1 };
         if is_signed {
@@ -3452,7 +3547,8 @@ impl Funcdata {
         let (vn0, vn1, coeff, sz, pc) = {
             let o = op.0.read().unwrap();
             if o.opcode != OpCode::CPUI_INT_MULT { return false; }
-            let in0 = match o.inrefs.get(0) { Some(v) => v.clone(), None => return false };
+            let in0 = match o.inrefs.get(0) { Some(v) => v.clone(), None => return false ,
+            };
             let in1 = match o.inrefs.get(1) {
                 Some(v) if v.read().unwrap().is_constant() => v.clone(),
                 _ => return false,
@@ -3461,15 +3557,21 @@ impl Funcdata {
                 let i0 = in0.read().unwrap();
                 i0.def.as_ref().and_then(|w| w.upgrade())
             };
-            let addop_arc = match addop_arc { Some(a) => a, None => return false };
+            let addop_arc = match addop_arc { Some(a) => a, None => return false ,
+            };
             if addop_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return false; }
             let (vn0, vn1) = {
                 let ao = addop_arc.read().unwrap();
                 (ao.inrefs.get(0).cloned(), ao.inrefs.get(1).cloned())
             };
-            let (vn0, vn1) = match (vn0, vn1) { (Some(a), Some(b)) => (a, b), _ => return false };
+            let (vn0, vn1) = match (vn0, vn1) { (Some(a), Some(b)) => (a, b), _ => return false ,
+            };
             let coeff = in1.read().unwrap().get_offset();
-            let sz = o.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            let sz = o
+                .output
+                .as_ref()
+                .map(|o| o.read().unwrap().get_size())
+                .unwrap_or(0);
             (vn0, vn1, coeff, sz, o.start.get_addr())
         };
         if sz == 0 { return false; }
@@ -3641,7 +3743,9 @@ impl Funcdata {
     /// encodes `Arc::as_ptr()` (the stable address of the inner RwLock).
     /// The assignHigh call is a structural no-op for iop varnodes (they are
     /// annotations), kept for call-site parity with cc:182.
-    pub fn new_varnode_iop(&mut self, op: &crate::op::PcodeOpRef) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+    pub fn new_varnode_iop(
+        &mut self, op: &crate::op::PcodeOpRef,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         // Encode the op's identity as a raw address. We use the Arc's data
         // pointer, which is stable for the Arc's lifetime (matching Ghidra's
         // `(uintb)(uintp)op`).
@@ -3651,7 +3755,9 @@ impl Funcdata {
             crate::space::AddressSpace::Iop,
             ptr_addr,
         );
-        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::ANNOTATION);
+        vn.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::ANNOTATION);
         // cc:182: assignHigh(vn) — iop varnodes are annotations, so this is
         // the documented no-op leg (funcdata_varnode.cc:54-56 guard).
         let _ = self.assign_high(&vn);
@@ -3668,7 +3774,9 @@ impl Funcdata {
     /// shadow as an op pointer. The remaining raw-Arc decoder is the
     /// pre-existing `OPBANK-0001` lifecycle/soundness residual; D0 narrows its
     /// input kind but does not claim the complete Ghidra codec contract.
-    pub fn get_op_from_const(&self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> Option<crate::op::PcodeOpRef> {
+    pub fn get_op_from_const(
+        &self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<crate::op::PcodeOpRef> {
         let ptr_addr = {
             let v = vn.read().unwrap();
             if v.get_space() != crate::space::AddressSpace::Iop || v.call_spec.is_some() {
@@ -3749,14 +3857,18 @@ impl Funcdata {
     // Ghidra: funcdata.cc:34 Funcdata::getStoreGuard
     /// Find the STORE guard for `op`. Faithful to
     /// `Funcdata::getStoreGuard` (funcdata.hh:270). Returns None if no guard.
-    pub fn get_store_guard(&self, op: &crate::op::PcodeOpRef) -> Option<&crate::heritage::LoadGuard> {
+    pub fn get_store_guard(
+        &self, op: &crate::op::PcodeOpRef,
+    ) -> Option<&crate::heritage::LoadGuard> {
         self.heritage.get_store_guard(&op.0)
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::getLoadGuard
     /// Find the LOAD guard for `op`. Faithful to
     /// `Funcdata::getLoadGuard` (funcdata.hh:269).
-    pub fn get_load_guard(&self, op: &crate::op::PcodeOpRef) -> Option<&crate::heritage::LoadGuard> {
+    pub fn get_load_guard(
+        &self, op: &crate::op::PcodeOpRef,
+    ) -> Option<&crate::heritage::LoadGuard> {
         self.heritage.get_load_guard(&op.0)
     }
 
@@ -3823,9 +3935,15 @@ impl Funcdata {
         // cc:720-722: if (!possibleout) newin |= indirect_creation;
         //             newout |= indirect_creation;
         if !possibleout {
-            newin.write().unwrap().set_flags(varnode_flags::INDIRECT_CREATION);
+            newin
+                .write()
+                .unwrap()
+                .set_flags(varnode_flags::INDIRECT_CREATION);
         }
-        newout.write().unwrap().set_flags(varnode_flags::INDIRECT_CREATION);
+        newout
+            .write()
+            .unwrap()
+            .set_flags(varnode_flags::INDIRECT_CREATION);
         // cc:723: opSetOpcode(newop, CPUI_INDIRECT);
         self.op_set_opcode(&newop, crate::opcodes::OpCode::CPUI_INDIRECT);
         // cc:724: opSetInput(newop, newin, 0);
@@ -3841,7 +3959,9 @@ impl Funcdata {
     // Ghidra: funcdata.cc:34 Funcdata::findJumpTable
     /// Find the JumpTable whose indirect op is at the same address as `op`.
     /// Faithful to `Funcdata::findJumpTable` (funcdata_block.cc:446-457).
-    pub fn find_jump_table(&self, op: &crate::op::PcodeOpRef) -> Option<&std::sync::Arc<std::sync::RwLock<crate::jumptable::JumpTable>>> {
+    pub fn find_jump_table(
+        &self, op: &crate::op::PcodeOpRef,
+    ) -> Option<&std::sync::Arc<std::sync::RwLock<crate::jumptable::JumpTable>>> {
         let op_addr = op.0.read().unwrap().get_seq_num().get_addr().as_u64();
         self.jump_tables.iter().find(|jt| {
             let jt_rg = jt.read().unwrap();
@@ -3852,9 +3972,12 @@ impl Funcdata {
     // Ghidra: funcdata.cc:34 Funcdata::removeJumpTable
     /// Remove a JumpTable from this function. Faithful to
     /// `Funcdata::removeJumpTable` (funcdata_block.cc:65).
-    pub fn remove_jump_table(&mut self, jt: &std::sync::Arc<std::sync::RwLock<crate::jumptable::JumpTable>>) {
+    pub fn remove_jump_table(
+        &mut self, jt: &std::sync::Arc<std::sync::RwLock<crate::jumptable::JumpTable>>,
+    ) {
         let jt_ptr = std::sync::Arc::as_ptr(jt);
-        self.jump_tables.retain(|j| std::sync::Arc::as_ptr(j) != jt_ptr);
+        self.jump_tables
+            .retain(|j| std::sync::Arc::as_ptr(j) != jt_ptr);
     }
 
 
@@ -3862,7 +3985,9 @@ impl Funcdata {
     /// Insert `op` after `previous` in its basic block.  A non-MULTIEQUAL is
     /// placed after any leading MULTIEQUAL group, and an alive INDIRECT's iop
     /// target is treated as the effective previous op.
-    pub fn op_insert_after(&mut self, op: &crate::op::PcodeOpRef, previous: &crate::op::PcodeOpRef) {
+    pub fn op_insert_after(
+        &mut self, op: &crate::op::PcodeOpRef, previous: &crate::op::PcodeOpRef,
+    ) {
         if previous
             .0
             .read()
@@ -3901,9 +4026,8 @@ impl Funcdata {
                 }
             };
             indirect_iop
-                .filter(|vn| {
-                    vn.read().unwrap().get_space() == crate::space::AddressSpace::Iop
-                })
+                .filter(|vn| vn.read().unwrap().get_space() == crate::space::AddressSpace::Iop
+                )
                 .and_then(|vn| self.get_op_from_const(&vn))
                 .filter(|target| !target.0.read().unwrap().is_dead())
                 .unwrap_or_else(|| previous.clone())
@@ -3919,9 +4043,8 @@ impl Funcdata {
         let block_ops = parent.read().unwrap().get_ops();
         let previous_index = block_ops
             .iter()
-            .position(|candidate| {
-                std::sync::Arc::ptr_eq(&candidate.0, &effective_previous.0)
-            })
+            .position(|candidate| std::sync::Arc::ptr_eq(&candidate.0, &effective_previous.0)
+            )
             .expect("opInsertAfter previous op is absent from its parent block");
         let mut insert_index = previous_index + 1;
         if op.0.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL {
@@ -3940,8 +4063,7 @@ impl Funcdata {
     /// dead list.  Its Varnode input/output links remain intact.
     pub fn op_uninsert(&mut self, op: &crate::op::PcodeOpRef) {
         let parent = op
-            .0
-            .read()
+            .0.read()
             .unwrap()
             .parent
             .as_ref()
@@ -3962,7 +4084,9 @@ impl Funcdata {
     // Ghidra: funcdata_op.cc:413 Funcdata::opInsertBegin
     /// Insert `op` at the beginning of a basic block, after its leading
     /// MULTIEQUAL group unless the inserted op is itself a MULTIEQUAL.
-    pub fn op_insert_begin(&mut self, op: &crate::op::PcodeOpRef, bb: &std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>>) {
+    pub fn op_insert_begin(
+        &mut self, op: &crate::op::PcodeOpRef, bb: &std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>>,
+    ) {
         let block_ops = bb.read().unwrap().get_ops();
         let mut insert_index = 0;
         if op.0.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL {
@@ -3979,7 +4103,9 @@ impl Funcdata {
     // Ghidra: funcdata_op.cc:435 Funcdata::opInsertEnd
     /// Insert `op` at the end of a basic block, immediately before its final
     /// flow-break op when one is present.
-    pub fn op_insert_end(&mut self, op: &crate::op::PcodeOpRef, bb: &std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>>) {
+    pub fn op_insert_end(
+        &mut self, op: &crate::op::PcodeOpRef, bb: &std::sync::Arc<std::sync::RwLock<dyn FlowBlock + Send + Sync>>,
+    ) {
         let block_ops = bb.read().unwrap().get_ops();
         let insert_index = match block_ops.last() {
             Some(last) if last.0.read().unwrap().is_flow_break() => block_ops.len() - 1,
@@ -4033,7 +4159,9 @@ impl Funcdata {
     // Ghidra: funcdata.hh:477 Funcdata::opSetAllInput
     /// Set all input Varnodes for the given PcodeOp simultaneously.
     /// Faithful to `Funcdata::opSetAllInput` (funcdata_op.cc:267-284).
-    pub fn op_set_all_input(&mut self, op: &crate::op::PcodeOpRef, vvec: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>]) {
+    pub fn op_set_all_input(
+        &mut self, op: &crate::op::PcodeOpRef, vvec: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
+    ) {
         // Unset all existing inputs (funcdata_op.cc:276-278).
         let num = op.0.read().unwrap().num_input();
         for i in 0..num {
@@ -4062,7 +4190,9 @@ impl Funcdata {
         self.obank.mark_alive(op.clone());
         let block_size = bb.read().unwrap().get_ops().len();
         let index = iter_index.unwrap_or(block_size);
-        assert!(index <= block_size, "opInsert iterator is outside the basic block");
+        assert!(
+            index <= block_size, "opInsert iterator is outside the basic block"
+        );
         Self::block_insert_op(op, bb, index);
     }
 
@@ -4084,7 +4214,9 @@ impl Funcdata {
             .as_any_mut()
             .downcast_mut::<crate::block::BlockBasic>()
             .expect("Funcdata op insertion requires BlockBasic");
-        assert!(index <= block.ops.len(), "BlockBasic insert index is out of bounds");
+        assert!(
+            index <= block.ops.len(), "BlockBasic insert index is out of bounds"
+        );
 
         let order_before = if index == 0 {
             2
@@ -4103,8 +4235,7 @@ impl Funcdata {
         if order_after.wrapping_sub(order_before) <= 1 {
             block.set_order();
         } else {
-            op.0
-                .write()
+            op.0.write()
                 .unwrap()
                 .start
                 .set_order(order_after / 2 + order_before / 2);
@@ -4219,7 +4350,9 @@ impl Funcdata {
     /// Non-RAM spaces keep the `symbol_table` name proxy (the channel models
     /// the global scope over RAM only; the ScopeLocal leg remains the
     /// registered funcdata_audit gap).
-    pub fn set_varnode_properties(&mut self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
+    pub fn set_varnode_properties(
+        &mut self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
         // cc:28: if (!vn->isMapped()) — one more chance to find an entry now
         // that we know the usepoint.
         let is_mapped = vn.read().unwrap().is_mapped();
@@ -4253,7 +4386,8 @@ impl Funcdata {
                                         crate::address::Address::new(addr),
                                         size,
                                         usepoint,
-                                    ).map(|(_, e)| e)
+                                    )
+                                    .map(|(_, e)| e)
                                 }
                                 None => None,
                             }
@@ -4286,7 +4420,9 @@ impl Funcdata {
                 if self.symbol_table.get(&addr).is_some() {
                     // cc:32-33 side-effect approximation: set MAPPED so we
                     // don't re-query.
-                    vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
+                    vn.write()
+                        .unwrap()
+                        .set_flags(crate::varnode::varnode_flags::MAPPED);
                 }
                 // cc:34-35 with vflags==0 is a no-op; typelock is set by
                 // updateType.
@@ -4342,8 +4478,9 @@ impl Funcdata {
             ))
         });
         let high = std::sync::Arc::new(std::sync::RwLock::new(
-            crate::variable::HighVariable::new(vn_type),
-        ));
+            crate::variable::HighVariable::new(
+            vn_type,
+        )));
         // variable.cc:231: inst.push_back(vn) — register vn as the sole
         // instance of the fresh HighVariable.
         high.write().unwrap().add_instance(vn.clone());
@@ -4376,7 +4513,9 @@ impl Funcdata {
     /// for a name match, then resolve the varnode at that address via the
     /// VarnodeBank's loc tree. Scope matches carry the symbol's space so
     /// linkSymbol-created register/unique symbols resolve in their own space.
-    pub fn find_high(&self, nm: &str) -> Option<std::sync::Arc<std::sync::RwLock<crate::variable::HighVariable>>> {
+    pub fn find_high(
+        &self, nm: &str,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::variable::HighVariable>>> {
         // cc:319-320: queryByName(nm, symList). Rugra: search symbol_table +
         // scope.symbols for an entry whose name matches `nm`.
         let addr: Option<u64> = self
@@ -4396,7 +4535,9 @@ impl Funcdata {
             });
         let addr = addr?;
         // cc:323: vn = findLinkedVarnode(sym->getFirstWholeMap()).
-        let vn = self.vbank.find_by_loc(0, crate::address::Address::new(addr))?;
+        let vn = self
+            .vbank
+            .find_by_loc(0, crate::address::Address::new(addr))?;
         // cc:324-325: return vn->getHigh(). Clone the inner Arc out of the
         // read guard so the borrow does not extend past `vn`'s lifetime.
         let high = {
@@ -4478,7 +4619,9 @@ impl Funcdata {
         //                vn->isPersist() || vn->isConstant() || entry->isDynamic()).
         let (is_input, is_addr_tied, is_persist, is_const) = {
             let r = vn.read().unwrap();
-            (r.is_input(), r.is_addr_tied(), r.is_persist(), r.is_constant())
+            (
+                r.is_input(), r.is_addr_tied(), r.is_persist(), r.is_constant(),
+            )
         };
         let entry_is_dynamic = self
             .scope
@@ -4648,7 +4791,9 @@ impl Funcdata {
         // Rugra: record the name at vn's address.
         self.symbol_table.insert(vn_addr, sym_name.to_string());
         // cc:1109: vn->setSymbolEntry(entry). Approximate by setting MAPPED.
-        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
+        vn.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::MAPPED);
     }
 
     // Ghidra: funcdata_varnode.cc:1120 Funcdata::remapDynamicVarnode
@@ -4676,7 +4821,9 @@ impl Funcdata {
         let key = hash | 0x8000_0000_0000_0000;
         self.symbol_table.insert(key, sym_name.to_string());
         // cc:1125: vn->setSymbolEntry(entry). Approximate by setting MAPPED.
-        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
+        vn.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::MAPPED);
     }
 
     // Ghidra: funcdata_varnode.cc:1132 Funcdata::linkProtoPartial
@@ -4728,7 +4875,9 @@ impl Funcdata {
         let _ = vn_high;
         // cc:1143-1144: nameRep = rootHigh->getNameRepresentative();
         // cc:1144: sym = linkSymbol(nameRep); if (sym == NULL) return.
-        let name_rep = root_high.as_ref().and_then(|h| h.read().unwrap().get_name_representative());
+        let name_rep = root_high
+            .as_ref()
+            .and_then(|h| h.read().unwrap().get_name_representative());
         let Some(name_rep) = name_rep else { return };
         let sym_idx = self.link_symbol(&name_rep);
         let Some(sym_idx) = sym_idx else { return };
@@ -4770,10 +4919,11 @@ impl Funcdata {
         } else {
             // cc:1229-1250: scan loc tree.
             let usestart = first_use_addr;
-            let candidates = self.vbank.overlap_loc(
+            let candidates = self
+                .vbank
+                .overlap_loc(
                 crate::address::Address::new(entry_addr),
-                entry_size,
-            );
+                entry_size);
             if usestart.as_u64() == 0 {
                 // cc:1233-1240: invalid usepoint → first addr-tied varnode.
                 for vn in candidates {
@@ -4819,10 +4969,11 @@ impl Funcdata {
             }
         } else {
             // cc:1266-1277.
-            let candidates = self.vbank.overlap_loc(
+            let candidates = self
+                .vbank
+                .overlap_loc(
                 crate::address::Address::new(entry_addr),
-                entry_size,
-            );
+                entry_size);
             for vn in candidates {
                 let up = vn.read().unwrap().get_use_point(self);
                 // cc:1272: if (entry->inUse(addr)). Rugra: approximate "in use"
@@ -4867,7 +5018,9 @@ impl Funcdata {
         }
         // cc:1288-1289: if (!isHighOn()) throw.
         if (self.flags & funcdata_flags::HIGHLEVEL_ON) == 0 {
-            eprintln!("[FUNCDATA] buildDynamicSymbol before decompile complete (cc:1288 RecovError)");
+            eprintln!(
+                "[FUNCDATA] buildDynamicSymbol before decompile complete (cc:1288 RecovError)"
+            );
             return None;
         }
         // cc:1290-1292: high = vn->getHigh(); if (high->getSymbol()) return.
@@ -4896,9 +5049,11 @@ impl Funcdata {
             // (database.cc:1712-1725): an EQUATE-category symbol whose map
             // is dynamic with a single-address uselimit; the varmap model
             // carries the constant value on `start`.
-            let idx = self.scope.as_mut()?.add_dynamic_symbol(
-                "", None, hash, Some(addr.as_u64()),
-            );
+            let idx = self
+                .scope
+                .as_mut()?
+                .add_dynamic_symbol(
+                "", None, hash, Some(addr.as_u64()));
             if let Some(sym) = self.scope.as_mut()?.symbols.get_mut(idx) {
                 sym.category = crate::varmap::symbol_category::EQUATE;
                 sym.start = vn_offset;
@@ -4909,9 +5064,10 @@ impl Funcdata {
         } else {
             // localmap->addDynamicSymbol("", high->getType(), dhash.getAddress(), hash)
             let ct = high_arc.read().unwrap().get_type();
-            let idx = self.scope.as_mut()?.add_dynamic_symbol(
-                "", Some(ct), hash, Some(addr.as_u64()),
-            );
+            let idx = self.scope
+                    .as_mut()?
+                    .add_dynamic_symbol(
+                "", Some(ct), hash, Some(addr.as_u64()));
             if let Some(sym) = self.scope.as_mut()?.symbols.get_mut(idx) {
                 sym.space = vn_space;
             }
@@ -4929,7 +5085,10 @@ impl Funcdata {
         let (out_vn, in0_is_const) = {
             let o = indop.0.read().unwrap();
             let out = o.output.clone();
-            let in0_const = o.get_in(0).map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+            let in0_const = o
+                .get_in(0)
+                .map(|v| v.read().unwrap().is_constant())
+                .unwrap_or(false);
             (out, in0_const)
         };
         indop.0.write().unwrap().flags |= crate::op::pcodeop_flags::INDIRECT_CREATION;
@@ -4938,18 +5097,25 @@ impl Funcdata {
         }
         if !possible_output {
             if let Some(in0) = indop.0.read().unwrap().get_in(0) {
-                in0.write().unwrap().set_flags(crate::varnode::varnode_flags::INDIRECT_CREATION);
+                in0.write()
+                    .unwrap()
+                    .set_flags(crate::varnode::varnode_flags::INDIRECT_CREATION);
             }
         }
         if let Some(out_vn) = out_vn {
-            out_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::INDIRECT_CREATION);
+            out_vn
+                .write()
+                .unwrap()
+                .set_flags(crate::varnode::varnode_flags::INDIRECT_CREATION);
         }
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::opGetSlot
     /// Get the input slot of `vn` within `op`. Faithful to `PcodeOp::getSlot`.
     /// Returns the slot index, or -1 if not found.
-    pub fn op_get_slot(&self, op: &crate::op::PcodeOpRef, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> i32 {
+    pub fn op_get_slot(
+        &self, op: &crate::op::PcodeOpRef, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> i32 {
         let o = op.0.read().unwrap();
         for (i, v) in o.inrefs.iter().enumerate() {
             if std::sync::Arc::ptr_eq(v, vn) {
@@ -5016,7 +5182,10 @@ impl Funcdata {
             } else {
                 // Mark all base registers (not just input) with spacebase flag
                 // (funcdata.cc:262).
-                vn_arc.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+                vn_arc
+                    .write()
+                    .unwrap()
+                    .set_flags(crate::varnode::varnode_flags::SPACEBASE);
                 // Note: Ghidra also sets TypeSpacebase pointer type on the
                 // input register (funcdata.cc:263-264). Rugra's type system
                 // does not yet have TypeSpacebase; the SPACEBASE flag alone is
@@ -5043,9 +5212,13 @@ impl Funcdata {
         // Rugra: only the stack space has a known base register; for other
         // spaces we fall back to the configured stack-pointer location.
         let (sp_space, sp_offset, sp_size) = if id.is_stack() {
-            (self.stack_pointer_space, self.stack_pointer_offset, self.stack_pointer_size)
+            (
+                self.stack_pointer_space, self.stack_pointer_offset, self.stack_pointer_size,
+            )
         } else {
-            (self.stack_pointer_space, self.stack_pointer_offset, self.stack_pointer_size)
+            (
+                self.stack_pointer_space, self.stack_pointer_offset, self.stack_pointer_size,
+            )
         };
         // cc:282: vn = newVarnode(point.size, Address(point.space,point.offset)).
         let vn = self.vbank.create_with_space(sp_size, sp_space, sp_offset);
@@ -5065,9 +5238,12 @@ impl Funcdata {
         id: crate::space::AddressSpace,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
         // cc:297: const VarnodeData &point(id->getSpacebase(0)).
-        let (_sp_space, sp_offset, sp_size) = (self.stack_pointer_space, self.stack_pointer_offset, self.stack_pointer_size);
+        let (_sp_space, sp_offset, sp_size) = (
+            self.stack_pointer_space, self.stack_pointer_offset, self.stack_pointer_size,
+        );
         // cc:298: vn = vbank.findInput(point.size, Address(point.space,point.offset)).
-        self.vbank.find_input(sp_size, crate::address::Address::new(sp_offset))
+        self.vbank
+            .find_input(sp_size, crate::address::Address::new(sp_offset))
     }
 
     // Ghidra: funcdata.cc:309 Funcdata::constructSpacebaseInput
@@ -5104,7 +5280,10 @@ impl Funcdata {
         // cc:321: spacePtr = setInputVarnode(spacePtr).
         let space_ptr = self.set_input_varnode(space_ptr);
         // cc:322: spacePtr->setFlags(Varnode::spacebase).
-        space_ptr.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+        space_ptr
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::SPACEBASE);
         // cc:323: spacePtr->updateType(ptr, true, true). Rugra lacks
         // TypeSpacebase; the SPACEBASE flag is sufficient for downstream
         // recognition (see existing `spacebase()` note).
@@ -5133,7 +5312,10 @@ impl Funcdata {
         // cc:338: spacePtr->updateType(ptr, true, true). TypeSpacebase not yet
         // ported; SPACEBASE flag carries the semantic.
         // cc:339: spacePtr->setFlags(Varnode::spacebase).
-        space_ptr.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+        space_ptr
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::SPACEBASE);
         space_ptr
     }
 
@@ -5171,7 +5353,11 @@ impl Funcdata {
         let sz = spaceid.addr_size();
         // cc:365-366: sb_type = getTypeSpacebase(spaceid, Address());
         // ptr = getTypePointer(sz, sb_type, spaceid->getWordSize()).
-        let sb_ptr_type = self.arch.as_ref().and_then(|arch| arch.types.clone()).map(|types| {
+        let sb_ptr_type = self
+            .arch
+            .as_ref()
+            .and_then(|arch| arch.types.clone())
+            .map(|types| {
             let mut tf = types.write().unwrap();
             let sb_type = tf.get_type_spacebase(Some(spaceid), crate::address::Address::new(0));
             tf.get_type_pointer(sz, sb_type, spaceid.word_size())
@@ -5216,9 +5402,15 @@ impl Funcdata {
         // true, true); setFlags(spacebase).
         let spacebase_vn = self.new_constant(sz, 0);
         if let Some(ptr) = sb_ptr_type.clone() {
-            spacebase_vn.write().unwrap().update_type_lock(ptr, true, true);
+            spacebase_vn
+                .write()
+                .unwrap()
+                .update_type_lock(ptr, true, true);
         }
-        spacebase_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+        spacebase_vn
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::SPACEBASE);
 
         // cc:394-402: allocate/repurpose the PTRSUB op.
         if add_op.is_none() {
@@ -5288,7 +5480,9 @@ impl Funcdata {
                 typelock = false;
             }
             if let Some(out) = &outvn {
-                out.write().unwrap().update_type_lock(ptrentrytype, typelock, false);
+                out.write()
+                    .unwrap()
+                    .update_type_lock(ptrentrytype, typelock, false);
             }
         }
 
@@ -5537,10 +5731,10 @@ impl Funcdata {
                 continue; // cc:864
             }
             opstack.push((op_ref, 0));
-            opstack.last().unwrap().0.0.write().unwrap().set_mark(); // cc:865-866
+            opstack.last().unwrap().0 .0.write().unwrap().set_mark(); // cc:865-866
             while !opstack.is_empty() {
                 // cc:871-878: no edge left -> assign output nzm, pop a level.
-                let num_input = opstack.last().unwrap().0.0.read().unwrap().num_input();
+                let num_input = opstack.last().unwrap().0 .0.read().unwrap().num_input();
                 if opstack.last().unwrap().1 >= num_input {
                     let (popped, _) = opstack.pop().unwrap();
                     let outvn = popped.0.read().unwrap().output.clone();
@@ -5555,12 +5749,11 @@ impl Funcdata {
                 opstack.last_mut().unwrap().1 += 1;
                 // cc:882-885: clip looping MULTIEQUAL edges.
                 let (opcode, parent, input_vn) = {
-                    let op = opstack.last().unwrap().0.0.read().unwrap();
+                    let op = opstack.last().unwrap().0 .0.read().unwrap();
                     (
                         op.opcode,
                         op.parent.clone(),
-                        op.get_in(oldslot).cloned(),
-                    )
+                        op.get_in(oldslot).cloned())
                 };
                 if opcode == OpCode::CPUI_MULTIEQUAL {
                     if let Some(parent) = parent.as_ref().and_then(|w| w.upgrade()) {
@@ -5680,7 +5873,9 @@ impl Funcdata {
             // vn->getType()) — VarnodeBank::create (varnode.cc:1250) inserts
             // the free varnode under its FINAL (space, loc) tree keys, so no
             // post-insert key mutation can drift the tree order.
-            let newvn = self.vbank.create_with_space(vn_size, vn_space, vn_addr.as_u64());
+            let newvn = self
+                .vbank
+                .create_with_space(vn_size, vn_space, vn_addr.as_u64());
             // cc:1557: opSetOutput(newop,newvn) — Funcdata::opSetOutput
             // (funcdata_op.cc:70-87) routes through VarnodeBank::setDef for
             // the WRITTEN flag and the def-tree re-key; never an in-place
@@ -5850,7 +6045,9 @@ impl Funcdata {
     ///
     /// Varnode creation order per op is: output, then inputs in slot order —
     /// this fixes `Varnode::create_index` to the emission order Ghidra uses.
-    pub fn inject_raw_ops_single(&mut self, raw_ops: &[PcodeOpRaw], base_addr: crate::address::Address) {
+    pub fn inject_raw_ops_single(
+        &mut self, raw_ops: &[PcodeOpRaw], base_addr: crate::address::Address,
+    ) {
         for raw in raw_ops {
             let opcode = match OpCode::from_i32(raw.get_opcode()) {
                 Some(opc) => opc,
@@ -5909,11 +6106,11 @@ impl Funcdata {
                 let in_vn = if input_raw.space == crate::space::AddressSpace::Const {
                     self.vbank.create_constant(input_raw.size, input_raw.offset)
                 } else {
-                    self.vbank.create_with_space(
+                    self.vbank
+                        .create_with_space(
                         input_raw.size,
                         input_raw.space,
-                        input_raw.offset,
-                    )
+                        input_raw.offset)
                 };
                 in_vn.write().unwrap().add_descend(&op_ref.0);
                 op_ref.0.write().unwrap().inrefs.push(in_vn);
@@ -5924,11 +6121,16 @@ impl Funcdata {
     /// Build basic blocks from ALL alive ops (called after flow tracking completes).
     // RUGRA-GLUE: 从全部 alive ops 构建 CFG（FlowInfo 流追踪后调用）。
     pub fn build_blocks_from_alive(&mut self) {
-        let op_refs: Vec<PcodeOpRef> = self.obank.alivelist.iter()
+        let op_refs: Vec<PcodeOpRef> = self
+            .obank
+            .alivelist
+            .iter()
             .map(|r| PcodeOpRef(r.0.clone()))
             .collect();
         self.build_blocks_from_ops(&op_refs);
-        eprintln!("[INJECT] {} build_blocks_from_alive done bblocks={}", self.name, self.bblocks.get_size());
+        eprintln!(
+            "[INJECT] {} build_blocks_from_alive done bblocks={}", self.name, self.bblocks.get_size()
+        );
     }
 
     // Ghidra: funcdata_op.cc:969 Funcdata::overrideFlow (raw-layer transport)
@@ -5991,9 +6193,12 @@ impl Funcdata {
             // unconditionally.
             let primary_ok = branch_like
                 && match cur {
-                    Some(OpCode::CPUI_BRANCH) | Some(OpCode::CPUI_CBRANCH) => {
-                        raw.inputs().first().map(|vn| vn.space != AddressSpace::Const).unwrap_or(false)
-                    }
+                    Some(OpCode::CPUI_BRANCH) | Some(OpCode::CPUI_CBRANCH) => raw
+                        .inputs()
+                        .first()
+                        .map(|vn| vn.space != AddressSpace::Const)
+                        .unwrap_or(false)
+                    ,
                     _ => true,
                 };
             if fo == FO::None || !primary_ok || !seen.insert(addr) {
@@ -6004,22 +6209,32 @@ impl Funcdata {
             match fo {
                 FO::Branch => match cur {
                     Some(OpCode::CPUI_CALL) => rewritten.set_opcode(OpCode::CPUI_BRANCH as i32),
-                    Some(OpCode::CPUI_CALLIND) => rewritten.set_opcode(OpCode::CPUI_BRANCHIND as i32),
-                    Some(OpCode::CPUI_RETURN) => rewritten.set_opcode(OpCode::CPUI_BRANCHIND as i32),
+                    Some(OpCode::CPUI_CALLIND) => {
+                        rewritten.set_opcode(OpCode::CPUI_BRANCHIND as i32)
+                    }
+                    Some(OpCode::CPUI_RETURN) => {
+                        rewritten.set_opcode(OpCode::CPUI_BRANCHIND as i32)
+                    }
                     _ => {}
                 },
                 FO::Call | FO::CallReturn => {
                     match cur {
                         Some(OpCode::CPUI_BRANCH) => rewritten.set_opcode(OpCode::CPUI_CALL as i32),
-                        Some(OpCode::CPUI_BRANCHIND) => rewritten.set_opcode(OpCode::CPUI_CALLIND as i32),
-                        Some(OpCode::CPUI_RETURN) => rewritten.set_opcode(OpCode::CPUI_CALLIND as i32),
+                        Some(OpCode::CPUI_BRANCHIND) => {
+                            rewritten.set_opcode(OpCode::CPUI_CALLIND as i32)
+                        }
+                        Some(OpCode::CPUI_RETURN) => {
+                            rewritten.set_opcode(OpCode::CPUI_CALLIND as i32)
+                        }
                         Some(OpCode::CPUI_CBRANCH) => {
                             // cc:1000-1001: "Do not currently support
                             // CBRANCH overrides" — Ghidra throws; the raw
                             // transport leaves the op untouched (the
                             // injection path cannot abort mid-walk) and
                             // reports.
-                            eprintln!("[INJECT] WARN: CBRANCH flow override unsupported at {}", addr.as_u64());
+                            eprintln!(
+                                "[INJECT] WARN: CBRANCH flow override unsupported at {}", addr.as_u64()
+                            );
                         }
                         _ => {}
                     }
@@ -6036,8 +6251,7 @@ impl Funcdata {
                         ret.add_input(crate::pcoderaw::VarnodeRaw::new(
                             AddressSpace::Const,
                             0,
-                            8,
-                        ));
+                            8));
                         ret.set_seq_num(crate::address::SeqNum::new(addr, u32::MAX));
                         out.push(rewritten);
                         out.push(ret);
@@ -6045,11 +6259,15 @@ impl Funcdata {
                     }
                 }
                 FO::Return => match cur {
-                    Some(OpCode::CPUI_BRANCHIND) => rewritten.set_opcode(OpCode::CPUI_RETURN as i32),
+                    Some(OpCode::CPUI_BRANCHIND) => {
+                        rewritten.set_opcode(OpCode::CPUI_RETURN as i32)
+                    }
                     Some(OpCode::CPUI_CALLIND) => rewritten.set_opcode(OpCode::CPUI_RETURN as i32),
                     Some(OpCode::CPUI_BRANCH) | Some(OpCode::CPUI_CBRANCH) | Some(OpCode::CPUI_CALL) => {
                         // cc:1015-1017: complex RETURN overrides throw.
-                        eprintln!("[INJECT] WARN: complex RETURN flow override unsupported at {}", addr.as_u64());
+                        eprintln!(
+                            "[INJECT] WARN: complex RETURN flow override unsupported at {}", addr.as_u64()
+                        );
                     }
                     _ => {}
                 },
@@ -6137,11 +6355,11 @@ impl Funcdata {
                 let in_vn = if input_raw.space == AddressSpace::Const {
                     self.vbank.create_constant(input_raw.size, input_raw.offset)
                 } else {
-                    self.vbank.create_with_space(
+                    self.vbank
+                        .create_with_space(
                         input_raw.size,
                         input_raw.space,
-                        input_raw.offset,
-                    )
+                        input_raw.offset)
                 };
                 // Add use-def link
                 in_vn
@@ -6159,7 +6377,9 @@ impl Funcdata {
 
         // Phase 2: Build basic blocks from the linear op sequence
         self.build_blocks_from_ops(&op_refs);
-        eprintln!("[INJECT] {} phase2 done bblocks={}", self.name, self.bblocks.get_size());
+        eprintln!(
+            "[INJECT] {} phase2 done bblocks={}", self.name, self.bblocks.get_size()
+        );
 
         // Phase 3: Mark unwritten Register-space input varnodes as INPUT
         // In Ghidra's model, Heritage marks register reads with no prior definition
@@ -6235,7 +6455,9 @@ impl Funcdata {
                 }
             }
         }
-        eprintln!("[INJECT] {} phase3 done marked_input={}", self.name, marked_input.len());
+        eprintln!(
+            "[INJECT] {} phase3 done marked_input={}", self.name, marked_input.len()
+        );
         // NOTE: Phase 4 global use-def linking is disabled — it correctly
         // resolves stack symbols (verified) but perturbs typeop inference
         // (struct-pointer types leak into switch/arith contexts). varmap's
@@ -6480,7 +6702,9 @@ impl Funcdata {
         self.min_laned_size = self
             .arch
             .as_ref()
-            .map_or(u32::MAX, |arch| arch.get_minimum_laned_register_size() as u32);
+            .map_or(u32::MAX, |arch| {
+            arch.get_minimum_laned_register_size() as u32
+        });
         // cc:95: localmap->clearUnlocked() — clear non-permanent stuff.
         // RUGRA modeling (same convention as start_processing, funcdata.cc
         // 160): the varmap ScopeLocal keeps its index-keyed nametree/category
@@ -6614,8 +6838,7 @@ impl Funcdata {
             let dup_edge = crate::unionresolve::ResolveEdge::new(
                 parent,
                 &op.0.read().unwrap(),
-                dup_slot,
-            );
+                dup_slot);
             let locked = self
                 .union_map
                 .get(&dup_edge)
@@ -6663,8 +6886,7 @@ impl Funcdata {
                 crate::unionresolve::ResolvedUnion::with_field(
                     parent.clone(),
                     field_num,
-                    &tg_guard,
-                )
+                    &tg_guard)
             } else {
                 crate::unionresolve::ResolvedUnion::new(parent.clone())
             }
@@ -6837,11 +7059,23 @@ impl Funcdata {
         }
         // cc:1178-1200: decide which copy to use, possibly building one at a
         // common dominator block.
-        let point_parent = point.0.read().unwrap().parent.clone().and_then(|w| w.upgrade());
+        let point_parent = point
+            .0
+            .read()
+            .unwrap()
+            .parent
+            .clone()
+            .and_then(|w| w.upgrade());
         let mut used_copy: Option<crate::op::PcodeOpRef> = None;
         let mut built_at_common = false;
         if let Some(other) = &other_op {
-            let other_parent = other.0.read().unwrap().parent.clone().and_then(|w| w.upgrade());
+            let other_parent = other
+                .0
+                .read()
+                .unwrap()
+                .parent
+                .clone()
+                .and_then(|w| w.upgrade());
             match (&point_parent, &other_parent) {
                 (Some(pp), Some(op_parent)) if std::sync::Arc::ptr_eq(pp, op_parent) => {
                     // cc:1179-1184: same block — compare seqnum order.
@@ -6959,7 +7193,9 @@ impl Funcdata {
                     None => return 2,
                 };
                 let lone = vn.read().unwrap().lone_descend();
-                let lone_is_op = lone.map(|d| std::sync::Arc::ptr_eq(&d, &op.0)).unwrap_or(false);
+                let lone_is_op = lone
+                    .map(|d| std::sync::Arc::ptr_eq(&d, &op.0))
+                    .unwrap_or(false);
                 if !lone_is_op {
                     return 2;
                 }
@@ -6985,8 +7221,7 @@ impl Funcdata {
             OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_LESS => {
                 // cc:1245-1248: vn = getIn(0); push; if !const return 1 else 0.
                 let is_const = op
-                    .0
-                    .read()
+                    .0.read()
                     .unwrap()
                     .get_in(0)
                     .map(|v| v.read().unwrap().is_constant())
@@ -7001,8 +7236,7 @@ impl Funcdata {
             OpCode::CPUI_INT_SLESSEQUAL | OpCode::CPUI_INT_LESSEQUAL => {
                 // cc:1250-1253: vn = getIn(1); push; if const return 1 else 0.
                 let is_const = op
-                    .0
-                    .read()
+                    .0.read()
                     .unwrap()
                     .get_in(1)
                     .map(|v| v.read().unwrap().is_constant())
@@ -7022,7 +7256,8 @@ impl Funcdata {
                     let i1 = o.get_in(1).cloned();
                     let check_lone = |v: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>| {
                         let lone = v.read().unwrap().lone_descend();
-                        lone.map(|d| std::sync::Arc::ptr_eq(&d, &op.0)).unwrap_or(false)
+                        lone.map(|d| std::sync::Arc::ptr_eq(&d, &op.0))
+                                .unwrap_or(false)
                     };
                     let i0_ok = i0.as_ref().map_or(false, check_lone);
                     let i1_ok = i1.as_ref().map_or(false, check_lone);
@@ -7150,7 +7385,12 @@ impl Funcdata {
             if std::sync::Arc::ptr_eq(&res_arc, &op.0) {
                 continue;
             }
-            let res_parent = res_arc.read().unwrap().parent.clone().and_then(|w| w.upgrade());
+            let res_parent = res_arc
+                .read()
+                .unwrap()
+                .parent
+                .clone()
+                .and_then(|w| w.upgrade());
             // cc:1334: if (res->getParent() != bl) continue.
             let parent_matches = match (&res_parent, bl) {
                 (Some(rp), bp) => std::sync::Arc::ptr_eq(rp, bp),
@@ -7216,8 +7456,7 @@ impl Funcdata {
                     }
                     // cc:1471: op->previousOp() must equal prevOp.
                     let op_prev = op
-                        .0
-                        .read()
+                        .0.read()
                         .unwrap()
                         .previous_op_in_block(&self.obank);
                     let matches = match &op_prev {
@@ -7248,8 +7487,7 @@ impl Funcdata {
         let mut cur_op = op.clone();
         loop {
             let next_op = cur_op
-                .0
-                .read()
+                .0.read()
                 .unwrap()
                 .next_op_in_flow(&self.obank);
             let Some(next_op) = next_op else { break };
@@ -7510,7 +7748,9 @@ impl Funcdata {
         let mut changed = true;
         while changed {
             changed = false;
-            let candidates = self.vbank.overlap_loc(addr, (end_off - addr.as_u64()) as usize);
+            let candidates = self
+                .vbank
+                .overlap_loc(addr, (end_off - addr.as_u64()) as usize);
             for cv in candidates {
                 let cv_rg = cv.read().unwrap();
                 let cv_addr = *cv_rg.get_addr();
@@ -7580,8 +7820,7 @@ impl Funcdata {
             let overlap = self.query_container_entry_parent_scope(
                 vn_addr,
                 vn_size,
-                usepoint,
-            );
+                usepoint);
             if overlap.is_none() {
                 // cc:1619-1624: uncovered internal varnode — build
                 // `<entry>_<diff>` and addSymbol at vn's address.
@@ -7607,8 +7846,7 @@ impl Funcdata {
                         &sym_name,
                         high_type,
                         vn_addr,
-                        sym_size,
-                    )
+                        sym_size)
                     .is_some()
                 } else {
                     false
@@ -7616,7 +7854,8 @@ impl Funcdata {
                 if !added {
                     // Legacy fallback: the symbol_table name proxy.
                     self.symbol_table.insert(vn_addr.as_u64(), sym_name);
-                    vn.write().unwrap()
+                    vn.write()
+                        .unwrap()
                         .set_flags(crate::varnode::varnode_flags::MAPPED);
                 }
             }
@@ -7778,7 +8017,9 @@ impl Funcdata {
                 return;
             }
         }
-        eprintln!("[{}] {}: {} (ad={:#x})", prefix.trim_end_matches(": "), self.name, txt, ad.as_u64());
+        eprintln!(
+            "[{}] {}: {} (ad={:#x})", prefix.trim_end_matches(": "), self.name, txt, ad.as_u64()
+        );
     }
 
     // Ghidra: funcdata.cc:150 Funcdata::startProcessing
@@ -8046,9 +8287,11 @@ impl Funcdata {
         let op_addr = op.0.read().unwrap().get_addr();
         let target = op_addr.as_u64();
         // Find the matching table, then set its indirect op.
-        let pos = self.jump_tables.iter().position(|jt| {
-            jt.read().unwrap().get_op_address().as_u64() == target
-        });
+        let pos = self
+            .jump_tables
+            .iter()
+            .position(|jt| jt.read().unwrap().get_op_address().as_u64() == target
+        );
         if let Some(idx) = pos {
             let jt_arc = self.jump_tables[idx].clone();
             // set_indirect_op takes ownership of Arc<RwLock<PcodeOp>>; we can
@@ -8065,7 +8308,9 @@ impl Funcdata {
     /// an override. Must be called before flow is traced. Faithful to
     /// `Funcdata::installJumpTable` (funcdata_block.cc:464-477). Returns the
     /// new table.
-    pub fn install_jump_table(&mut self, addr: Address) -> Arc<RwLock<crate::jumptable::JumpTable>> {
+    pub fn install_jump_table(
+        &mut self, addr: Address,
+    ) -> Arc<RwLock<crate::jumptable::JumpTable>> {
         if self.is_proc_started() {
             panic!("Cannot install jumptable if flow is already traced");
         }
@@ -8249,7 +8494,10 @@ impl Funcdata {
             .unwrap_or(0);
         let mut count_max: i32 = 8;
         let mut i: isize = start_idx as isize - 1;
-        let vn_size = vn_arc.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+        let vn_size = vn_arc
+            .as_ref()
+            .map(|v| v.read().unwrap().get_size())
+            .unwrap_or(0);
         let mut cur_vn_size = vn_size;
         while i >= 0 {
             // Ghidra: if (vn->getSize() == 1) return success;
@@ -8282,7 +8530,10 @@ impl Funcdata {
                 if is_call {
                     if opcode == OpCode::CPUI_CALLOTHER {
                         // int4 id = (int4)op->getIn(0)->getOffset();
-                        let id = in0_arc.as_ref().map(|v| v.read().unwrap().get_offset()).unwrap_or(0) as usize;
+                        let id = in0_arc
+                            .as_ref()
+                            .map(|v| v.read().unwrap().get_offset())
+                            .unwrap_or(0) as usize;
                         let user_op_type = self.userop_type(id);
                         use crate::userop::UserOpType;
                         if user_op_type == UserOpType::Injected
@@ -8311,7 +8562,10 @@ impl Funcdata {
             } else if eval_type == pf::UNARY {
                 if outhit {
                     let invn = in0_arc;
-                    let invn_size = invn.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+                    let invn_size = invn
+                        .as_ref()
+                        .map(|v| v.read().unwrap().get_size())
+                        .unwrap_or(0);
                     if invn_size != cur_vn_size {
                         return crate::jumptable::RecoveryMode::Success;
                     }
@@ -8334,7 +8588,10 @@ impl Funcdata {
                         return crate::jumptable::RecoveryMode::Success;
                     }
                     let invn = in0_arc;
-                    let invn_size = invn.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+                    let invn_size = invn
+                        .as_ref()
+                        .map(|v| v.read().unwrap().get_size())
+                        .unwrap_or(0);
                     if invn_size != cur_vn_size {
                         return crate::jumptable::RecoveryMode::Success;
                     }
@@ -8592,7 +8849,9 @@ impl Funcdata {
     /// Remove an outgoing branch of the given basic block, patching
     /// MULTIEQUAL p-code ops in the target block. Faithful to
     /// `Funcdata::branchRemoveInternal` (funcdata_block.cc:196-216).
-    pub fn branch_remove_internal(&mut self, bb: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, num: usize) {
+    pub fn branch_remove_internal(
+        &mut self, bb: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, num: usize,
+    ) {
         // If there is no decision left (2 out-edges), remove the branch op.
         let size_out = bb.read().unwrap().size_out();
         if size_out == 2 {
@@ -8731,7 +8990,9 @@ impl Funcdata {
         for op in ops {
             let (is_assignment, is_call, out_vn) = {
                 let op_rg = op.0.read().unwrap();
-                (op_rg.is_assignment(), op_rg.is_call(), op_rg.get_out().cloned())
+                (
+                    op_rg.is_assignment(), op_rg.is_call(), op_rg.get_out().cloned(),
+                )
             };
             if is_assignment {
                 if let Some(deadvn) = out_vn {
@@ -8899,7 +9160,9 @@ impl Funcdata {
                 // second input); follow in(0).
                 let in1_const = {
                     let d = def.read().unwrap();
-                    d.get_in(1).map(|v| v.read().unwrap().is_constant()).unwrap_or(false)
+                    d.get_in(1)
+                        .map(|v| v.read().unwrap().is_constant())
+                        .unwrap_or(false)
                 };
                 if !in1_const {
                     return false;
@@ -8938,7 +9201,9 @@ impl Funcdata {
     ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         let sz = std::mem::size_of::<usize>();
         let offset = spc.space_id() as u64;
-        let vn = self.vbank.create_with_space(sz, crate::space::AddressSpace::Const, offset);
+        let vn = self
+            .vbank
+            .create_with_space(sz, crate::space::AddressSpace::Const, offset);
         let _ = self.assign_high(&vn);
         vn
     }
@@ -8971,11 +9236,11 @@ impl Funcdata {
             .entry_addr
             .map(|entry| entry.as_u64())
             .unwrap_or_else(|| Arc::as_ptr(fc) as usize as u64);
-        let vn = self.vbank.create_with_space(
+        let vn = self.vbank
+                .create_with_space(
             sz,
             crate::space::AddressSpace::Iop,
-            compatibility_offset,
-        );
+            compatibility_offset);
         {
             let mut annotation = vn.write().unwrap();
             annotation.set_flags(crate::varnode::varnode_flags::ANNOTATION);
@@ -9001,7 +9266,9 @@ impl Funcdata {
         m: crate::address::Address,
     ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         let vn = self.vbank.create(1, m);
-        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::ANNOTATION);
+        vn.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::ANNOTATION);
         let _ = self.assign_high(&vn);
         vn
     }
@@ -9223,7 +9490,12 @@ impl Funcdata {
         let mut res = false;
         for op_arc in descends {
             let opc = op_arc.read().unwrap().opcode;
-            let parent = op_arc.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+            let parent = op_arc
+                .read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(|w| w.upgrade());
             // cc:558-559: skip ops whose parent BLOCK is flagged dead (the
             // block-level f_dead bit set by removeUnreachableBlocks phase 1
             // before any op destruction); a missing parent is also skipped.
@@ -9247,11 +9519,17 @@ impl Funcdata {
                 OC::CPUI_MULTIEQUAL => {
                     // cc:563-569: insert COPY in the predecessor block.
                     let inblk_edge = parent.as_ref().and_then(|p| p.read().unwrap().get_in(slot));
-                    let inbl_start = inblk_edge.as_ref().and_then(|e| {
-                        e.point.read().unwrap().as_any()
+                    let inbl_start = inblk_edge
+                        .as_ref()
+                        .and_then(|e| {
+                        e.point
+                                .read()
+                                .unwrap()
+                                .as_any()
                             .downcast_ref::<crate::block::BlockBasic>()
                             .map(|bb| bb.start_addr)
-                    }).unwrap_or(self.baseaddr);
+                    })
+                        .unwrap_or(self.baseaddr);
                     let copyop = self.new_op(1, inbl_start);
                     self.op_set_opcode(&copyop, OC::CPUI_COPY);
                     let inputvn = self.new_unique_out(sz, &copyop);
@@ -9317,7 +9595,9 @@ impl Funcdata {
             if !vn.read().unwrap().has_no_descend() { continue; }
             let (is_input, is_locked_input) = {
                 let r = vn.read().unwrap();
-                (r.is_input(), (r.addlflags & crate::varnode::addl_flags::LOCKED_INPUT) != 0)
+                (
+                    r.is_input(), (r.addlflags & crate::varnode::addl_flags::LOCKED_INPUT) != 0,
+                )
             };
             if is_input && !is_locked_input {
                 // cc:843-845: makeFree + clearCover.
@@ -9383,11 +9663,15 @@ impl Funcdata {
                         def_ref.0.write().unwrap().addlflags |= crate::op::op_addl_flags::WARNING;
                         let (addr_force, no_descend, space, addr) = {
                             let r = vn.read().unwrap();
-                            (r.is_addr_force(), r.has_no_descend(), r.address_space, r.loc)
+                            (
+                                r.is_addr_force(), r.has_no_descend(), r.address_space, r.loc,
+                            )
                         };
                         if !addr_force || !no_descend {
                             self.warning(
-                                &format!("Read-only address ({:?},{:x}) is written", space, addr.as_u64()),
+                                &format!(
+                                    "Read-only address ({:?},{:x}) is written", space, addr.as_u64()
+                                ),
                                 def_ref.0.read().unwrap().get_addr(),
                             );
                         }
@@ -9406,7 +9690,9 @@ impl Funcdata {
                 Some(loader) => match loader.load_fill(sz, vn_addr) {
                     Ok(b) => b,
                     Err(_) => {
-                        vn.write().unwrap().clear_flags(crate::varnode::varnode_flags::READONLY);
+                        vn.write()
+                            .unwrap()
+                            .clear_flags(crate::varnode::varnode_flags::READONLY);
                         return true;
                     }
                 },
@@ -9447,7 +9733,9 @@ impl Funcdata {
                 // the locked datatype. Rugra's update_type takes (Arc<Datatype>);
                 // the (lock, override_lock) flags map to the lock-keeping path
                 // via update_type_lock when typelock is set.
-                cvn.write().unwrap().update_type_lock(lt.clone(), true, true);
+                cvn.write()
+                    .unwrap()
+                    .update_type_lock(lt.clone(), true, true);
             }
             self.op_set_input(&op_ref, cvn, slot);
             changemade = true;
@@ -9499,7 +9787,10 @@ impl Funcdata {
             // cc:721-738: model the write.
             let vw_index = match self.arch.as_ref() {
                 Some(a) => match &a.userops {
-                    Some(uo) => uo.write().unwrap().register_builtin_by_id(crate::userop::BUILTIN_VOLATILE_WRITE) as u64,
+                    Some(uo) => uo
+                        .write()
+                        .unwrap()
+                        .register_builtin_by_id(crate::userop::BUILTIN_VOLATILE_WRITE) as u64,
                     None => return false,
                 },
                 None => return false,
@@ -9508,7 +9799,8 @@ impl Funcdata {
                 eprintln!("[FUNCDATA] replaceVolatile: volatile memory was propagated");
                 return false;
             }
-            let def = match vn.read().unwrap().get_def() { Some(d) => d, None => return false };
+            let def = match vn.read().unwrap().get_def() { Some(d) => d, None => return false ,
+            };
             let def_ref = crate::op::PcodeOpRef(def.clone());
             let def_addr = def.read().unwrap().get_addr();
             let newop = self.new_op(3, def_addr);
@@ -9517,7 +9809,10 @@ impl Funcdata {
             self.op_set_input(&newop, idx_const, 0);
             // cc:730-731: annoteVn = newCodeRef(addr); setFlags(volatil).
             let annote_vn = self.new_code_ref(vn_addr);
-            annote_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::VOLATIL);
+            annote_vn
+                .write()
+                .unwrap()
+                .set_flags(crate::varnode::varnode_flags::VOLATIL);
             self.op_set_input(&newop, annote_vn, 1);
             // cc:733-734: tmp = newUnique(size); opSetOutput(defop, tmp).
             let tmp = self.new_unique(sz);
@@ -9531,16 +9826,22 @@ impl Funcdata {
             // cc:740-759: model the read.
             let vr_index = match self.arch.as_ref() {
                 Some(a) => match &a.userops {
-                    Some(uo) => uo.write().unwrap().register_builtin_by_id(crate::userop::BUILTIN_VOLATILE_READ) as u64,
+                    Some(uo) => uo
+                        .write()
+                        .unwrap()
+                        .register_builtin_by_id(crate::userop::BUILTIN_VOLATILE_READ) as u64,
                     None => return false,
                 },
                 None => return false,
             };
             if vn.read().unwrap().has_no_descend() { return false; }
             let readop = match vn.read().unwrap().lone_descend() { Some(r) => r, None => {
-                eprintln!("[FUNCDATA] replaceVolatile: volatile memory value used more than once");
+                eprintln!(
+                        "[FUNCDATA] replaceVolatile: volatile memory value used more than once"
+                    );
                 return false;
-            }};
+            }
+            };
             let readop_ref = crate::op::PcodeOpRef(readop.clone());
             let read_addr = readop.read().unwrap().get_addr();
             let newop = self.new_op(2, read_addr);
@@ -9549,7 +9850,10 @@ impl Funcdata {
             let idx_const = self.new_constant(4, vr_index);
             self.op_set_input(&newop, idx_const, 0);
             let annote_vn = self.new_code_ref(vn_addr);
-            annote_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::VOLATIL);
+            annote_vn
+                .write()
+                .unwrap()
+                .set_flags(crate::varnode::varnode_flags::VOLATIL);
             self.op_set_input(&newop, annote_vn, 1);
             let slot = self.op_get_slot(&readop_ref, vn) as usize;
             self.op_set_input(&readop_ref, tmp, slot);
@@ -9655,7 +9959,9 @@ impl Funcdata {
             .collect();
         for vn in inputs {
             if self.check_indirect_use(&vn) {
-                vn.write().unwrap().set_flags(crate::varnode::varnode_flags::INDIRECTONLY);
+                vn.write()
+                    .unwrap()
+                    .set_flags(crate::varnode::varnode_flags::INDIRECTONLY);
             }
         }
     }
@@ -9744,7 +10050,9 @@ impl Funcdata {
                 let next = candidates[i].clone();
                 let (n_persist, n_space, n_addr_arc, n_size, n_has_entry) = {
                     let r = next.read().unwrap();
-                    (r.is_persist(), r.get_space(), *r.get_addr(), r.get_size(), r.get_symbol_entry().is_some())
+                    (
+                        r.is_persist(), r.get_space(), *r.get_addr(), r.get_size(), r.get_symbol_entry().is_some(),
+                    )
                 };
                 if !n_persist { break; }
                 // cc:1687 `vn->getAddr() < endaddr` compares space-major
@@ -9819,8 +10127,7 @@ impl Funcdata {
                     // discoverScope + buildVariableName + addSymbol.
                     let Some(discover) = self.discover_scope_parent_scope(
                         addr,
-                        ct_size as i32,
-                    ) else {
+                        ct_size as i32) else {
                         // cc:1704-1705: Ghidra throws LowlevelError and the
                         // function's decompile fails; mirror the fatal error
                         // through the Action's Result channel.
@@ -9988,14 +10295,20 @@ impl Funcdata {
         if vn.read().unwrap().is_mapped() { return false; }
         // cc:1328-1331: equate category → setSymbolEntry.
         if is_equate {
-            vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
-            self.symbol_table.insert(hash | 0x8000_0000_0000_0000, sym_name.to_string());
+            vn.write()
+                .unwrap()
+                .set_flags(crate::varnode::varnode_flags::MAPPED);
+            self.symbol_table
+                .insert(hash | 0x8000_0000_0000_0000, sym_name.to_string());
             return true;
         }
         // cc:1332-1335: matching size → setSymbolProperties.
         if vn.read().unwrap().size == size {
-            vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
-            self.symbol_table.insert(hash | 0x8000_0000_0000_0000, sym_name.to_string());
+            vn.write()
+                .unwrap()
+                .set_flags(crate::varnode::varnode_flags::MAPPED);
+            self.symbol_table
+                .insert(hash | 0x8000_0000_0000_0000, sym_name.to_string());
             return true;
         }
         false
@@ -10045,8 +10358,11 @@ impl Funcdata {
         if vn.read().unwrap().is_mapped() { return false; }
         // cc:1359-1361: equate → setSymbolEntry regardless of size.
         if is_equate {
-            vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
-            self.symbol_table.insert(hash | 0x8000_0000_0000_0000, sym_name.to_string());
+            vn.write()
+                .unwrap()
+                .set_flags(crate::varnode::varnode_flags::MAPPED);
+            self.symbol_table
+                .insert(hash | 0x8000_0000_0000_0000, sym_name.to_string());
             return true;
         }
         // cc:1363-1371: size mismatch → warningHeader + return false.
@@ -10059,8 +10375,11 @@ impl Funcdata {
         }
         // cc:1373-1386: implied varnode → follow across a CAST (omitted; rare).
         // cc:1388: vn->setSymbolEntry(entry).
-        vn.write().unwrap().set_flags(crate::varnode::varnode_flags::MAPPED);
-        self.symbol_table.insert(hash | 0x8000_0000_0000_0000, sym_name.to_string());
+        vn.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::MAPPED);
+        self.symbol_table
+            .insert(hash | 0x8000_0000_0000_0000, sym_name.to_string());
         // cc:1389-1397: retype / warningHeader on type mismatch omitted
         // (RUGRA-GAP: no ScopeLocal.retypeSymbol).
         true
@@ -10148,7 +10467,8 @@ impl Funcdata {
                         // CALLIND: compare the indirect-call varnode (in(0)).
                         let a = op.0.read().unwrap().get_in(0).cloned();
                         let b = opmatch.0.read().unwrap().get_in(0).cloned();
-                        match (a, b) { (Some(x), Some(y)) => std::sync::Arc::ptr_eq(&x, &y), _ => false }
+                        match (a, b) { (Some(x), Some(y)) => std::sync::Arc::ptr_eq(&x, &y), _ => false ,
+                        }
                     }
                 }
                 _ => false,
@@ -10159,8 +10479,18 @@ impl Funcdata {
                 // checking that the candidate's address equals trial_addr.
                 let vn_addr = vn.read().unwrap().loc;
                 if vn_addr == trial_addr {
-                    let op_parent = op.0.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
-                    let match_parent = opmatch.0.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+                    let op_parent = op.0.read()
+                            .unwrap()
+                            .parent
+                            .as_ref()
+                            .and_then(|w| w.upgrade());
+                    let match_parent = opmatch
+                        .0
+                        .read()
+                        .unwrap()
+                        .parent
+                        .as_ref()
+                        .and_then(|w| w.upgrade());
                     let same_parent = match (op_parent, match_parent) {
                         (Some(a), Some(b)) => std::sync::Arc::ptr_eq(&a, &b),
                         _ => false,
@@ -10233,7 +10563,9 @@ impl Funcdata {
         main_flags: u32,
     ) -> bool {
         let has_active_output = self.active_output.is_some();
-        ancestor_op_use(has_active_output, maxlevel, invn, op, trial_slot, offset, main_flags)
+        ancestor_op_use(
+            has_active_output, maxlevel, invn, op, trial_slot, offset, main_flags,
+        )
     }
 
     // Ghidra: funcdata_op.cc:332 Funcdata::newOp(int4, const SeqNum &)
@@ -10241,7 +10573,9 @@ impl Funcdata {
     /// `Funcdata::newOp(int4 inputs, const SeqNum &sq)` (funcdata_op.cc:332).
     /// The immutable creation `time` and mutable block `order` are both
     /// copied, and the bank advances its uniqid past an imported time.
-    pub fn new_op_with_seq(&mut self, num_inputs: usize, sq: &crate::address::SeqNum) -> crate::op::PcodeOpRef {
+    pub fn new_op_with_seq(
+        &mut self, num_inputs: usize, sq: &crate::address::SeqNum,
+    ) -> crate::op::PcodeOpRef {
         self.obank.create_seq(num_inputs, *sq)
     }
 
@@ -10478,7 +10812,10 @@ impl Funcdata {
                 OC::CPUI_BRANCH | OC::CPUI_CBRANCH => {
                     if find_branch {
                         // cc:938: skip internal (constant-target) branches.
-                        let is_const = r.get_in(0).map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+                        let is_const = r
+                            .get_in(0)
+                            .map(|v| v.read().unwrap().is_constant())
+                            .unwrap_or(false);
                         if !is_const { return Some(op_ref.clone()); }
                     }
                 }
@@ -10515,7 +10852,10 @@ impl Funcdata {
         // cc:972-983: traverse every op at addr in SeqNum order, then dispatch
         // on the override. The dead-state check happens after primary-op
         // selection, matching Ghidra's beginOp/endOp + isDead contract.
-        let ops_at_addr: Vec<crate::op::PcodeOpRef> = self.obank.optree.iter()
+        let ops_at_addr: Vec<crate::op::PcodeOpRef> = self
+            .obank
+            .optree
+            .iter()
             .filter(|op| op.0.read().unwrap().get_addr() == addr)
             .cloned()
             .collect();
@@ -10537,14 +10877,13 @@ impl Funcdata {
         // cc:988-1020: rewrite the opcode per the override table.
         let opc = op.0.read().unwrap().opcode;
         match flow_type {
-            FO::Branch => {
-                match opc {
+            FO::Branch => match opc {
                     OC::CPUI_CALL => self.op_set_opcode(&op, OC::CPUI_BRANCH),
                     OC::CPUI_CALLIND => self.op_set_opcode(&op, OC::CPUI_BRANCHIND),
                     OC::CPUI_RETURN => self.op_set_opcode(&op, OC::CPUI_BRANCHIND),
                     _ => {}
                 }
-            }
+            ,
             FO::Call | FO::CallReturn => {
                 match opc {
                     OC::CPUI_BRANCH => self.op_set_opcode(&op, OC::CPUI_CALL),
@@ -10569,8 +10908,7 @@ impl Funcdata {
                     self.obank.insert_after_dead(&new_return, &op);
                 }
             }
-            FO::Return => {
-                match opc {
+            FO::Return => match opc {
                     OC::CPUI_BRANCH | OC::CPUI_CBRANCH | OC::CPUI_CALL => {
                         return Err(crate::error::Error::Lowlevel(
                             "Do not currently support complex overrides".to_string(),
@@ -10580,7 +10918,7 @@ impl Funcdata {
                     OC::CPUI_CALLIND => self.op_set_opcode(&op, OC::CPUI_RETURN),
                     _ => {}
                 }
-            }
+            ,
             FO::None => {}
         }
         Ok(())
@@ -10680,7 +11018,9 @@ impl Funcdata {
     /// clearInput mutation and only guarantees index/bank detachment for its
     /// prevalidated callers. `delete_varnode` instead forwards to the checked
     /// public bank destroy and should be used for an already detached value.
-    pub fn destroy_varnode(&mut self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) {
+    pub fn destroy_varnode(
+        &mut self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
         // cc:277-284: clear each descending op's input slot.
         // Snapshot the (op, slot) pairs first because the slot lookup
         // (`op_get_slot`) and the unset both read the op. `op_get_slot`
@@ -10694,7 +11034,8 @@ impl Funcdata {
         // actual reads (the whole list is destroyed below anyway).
         let descend_pairs: Vec<(crate::op::PcodeOpRef, i32)> = {
             let r = vn.read().unwrap();
-            r.descend.iter()
+            r.descend
+                .iter()
                 .filter_map(|w| w.upgrade())
                 .map(|op_arc| {
                     let op_ref = crate::op::PcodeOpRef(op_arc.clone());
@@ -11474,7 +11815,9 @@ mod tests {
 
         // parse_operand for Memory emits a LOAD internally, then mov emits COPY
         // So we expect: LOAD + COPY = 2 ops
-        assert_eq!(raw_ops.len(), 2, "Expected LOAD + COPY, got {} ops", raw_ops.len());
+        assert_eq!(
+            raw_ops.len(), 2, "Expected LOAD + COPY, got {} ops", raw_ops.len()
+        );
 
         // Op 0: CPUI_LOAD
         let raw_load = &raw_ops[0];
@@ -11556,7 +11899,9 @@ mod tests {
 
         // mov [rbx], rax: source is register (no LOAD), dest is memory (STORE)
         // So we expect just 1 op: STORE
-        assert_eq!(raw_ops.len(), 1, "Expected 1 STORE op, got {} ops", raw_ops.len());
+        assert_eq!(
+            raw_ops.len(), 1, "Expected 1 STORE op, got {} ops", raw_ops.len()
+        );
 
         // Op 0: CPUI_STORE
         let raw_store = &raw_ops[0];
@@ -11623,7 +11968,9 @@ mod tests {
         let raw_ops = lifter.lift(inst);
 
         // Displacement != 0 → INT_ADD for addr calc, then LOAD, then COPY
-        assert_eq!(raw_ops.len(), 3, "Expected INT_ADD + LOAD + COPY, got {} ops", raw_ops.len());
+        assert_eq!(
+            raw_ops.len(), 3, "Expected INT_ADD + LOAD + COPY, got {} ops", raw_ops.len()
+        );
 
         // Op 0: CPUI_INT_ADD for address computation
         let raw_add = &raw_ops[0];
@@ -11689,8 +12036,7 @@ mod tests {
             "load_mov_rax_mem_rbx_disp",
             start,
             &rugra_ops,
-            3,
-        );
+            3);
 
         assert!(matches!(result, VerifyResult::Match));
     }
@@ -11725,7 +12071,9 @@ mod tests {
         // - INT_ADD(tmp, rax) → tmp_result
         // - emit_store(rbx_vn, tmp_result, size_vn) → STORE
         // Total: LOAD + INT_ADD + STORE = 3 ops
-        assert_eq!(raw_ops.len(), 3, "Expected LOAD + INT_ADD + STORE, got {} ops", raw_ops.len());
+        assert_eq!(
+            raw_ops.len(), 3, "Expected LOAD + INT_ADD + STORE, got {} ops", raw_ops.len()
+        );
 
         // Op 0: CPUI_LOAD (read original value from [rbx])
         let raw_load = &raw_ops[0];
@@ -11848,7 +12196,9 @@ mod tests {
         fd.heritage.pass += 1;
 
         // Heritage pass should have incremented
-        assert_eq!(fd.num_heritage_passes(), 1, "Heritage pass should be 1 after first run");
+        assert_eq!(
+            fd.num_heritage_passes(), 1, "Heritage pass should be 1 after first run"
+        );
 
         // Single block → no MULTIEQUAL ops should be inserted
         let multiequal_count = fd
@@ -11913,10 +12263,18 @@ mod tests {
         assert_eq!(all_raw_ops.len(), 4);
 
         // Verify op sequence
-        assert_eq!(OpCode::from_i32(all_raw_ops[0].get_opcode()), Some(OpCode::CPUI_COPY));
-        assert_eq!(OpCode::from_i32(all_raw_ops[1].get_opcode()), Some(OpCode::CPUI_INT_ADD));
-        assert_eq!(OpCode::from_i32(all_raw_ops[2].get_opcode()), Some(OpCode::CPUI_COPY));
-        assert_eq!(OpCode::from_i32(all_raw_ops[3].get_opcode()), Some(OpCode::CPUI_RETURN));
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[0].get_opcode()), Some(OpCode::CPUI_COPY)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[1].get_opcode()), Some(OpCode::CPUI_INT_ADD)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[2].get_opcode()), Some(OpCode::CPUI_COPY)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[3].get_opcode()), Some(OpCode::CPUI_RETURN)
+        );
 
         // Phase 3: Inject into Funcdata
         let mut fd = Funcdata::new("seq_mov_add_ret", start, code.len() as i32);
@@ -11969,12 +12327,24 @@ mod tests {
         // mov→1 + and→2 + shl→2 + ret→1 = 6
         assert_eq!(all_raw_ops.len(), 6);
 
-        assert_eq!(OpCode::from_i32(all_raw_ops[0].get_opcode()), Some(OpCode::CPUI_COPY));
-        assert_eq!(OpCode::from_i32(all_raw_ops[1].get_opcode()), Some(OpCode::CPUI_INT_AND));
-        assert_eq!(OpCode::from_i32(all_raw_ops[2].get_opcode()), Some(OpCode::CPUI_COPY));
-        assert_eq!(OpCode::from_i32(all_raw_ops[3].get_opcode()), Some(OpCode::CPUI_INT_LEFT));
-        assert_eq!(OpCode::from_i32(all_raw_ops[4].get_opcode()), Some(OpCode::CPUI_COPY));
-        assert_eq!(OpCode::from_i32(all_raw_ops[5].get_opcode()), Some(OpCode::CPUI_RETURN));
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[0].get_opcode()), Some(OpCode::CPUI_COPY)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[1].get_opcode()), Some(OpCode::CPUI_INT_AND)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[2].get_opcode()), Some(OpCode::CPUI_COPY)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[3].get_opcode()), Some(OpCode::CPUI_INT_LEFT)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[4].get_opcode()), Some(OpCode::CPUI_COPY)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[5].get_opcode()), Some(OpCode::CPUI_RETURN)
+        );
 
         let mut fd = Funcdata::new("seq_and_shl_ret", start, code.len() as i32);
         fd.inject_raw_ops(&all_raw_ops);
@@ -12055,11 +12425,21 @@ mod tests {
         assert_eq!(all_raw_ops.len(), 9);
 
         // Verify key opcodes
-        assert_eq!(OpCode::from_i32(all_raw_ops[0].get_opcode()), Some(OpCode::CPUI_INT_EQUAL));
-        assert_eq!(OpCode::from_i32(all_raw_ops[3].get_opcode()), Some(OpCode::CPUI_CBRANCH));
-        assert_eq!(OpCode::from_i32(all_raw_ops[4].get_opcode()), Some(OpCode::CPUI_COPY));
-        assert_eq!(OpCode::from_i32(all_raw_ops[5].get_opcode()), Some(OpCode::CPUI_RETURN));
-        assert_eq!(OpCode::from_i32(all_raw_ops[6].get_opcode()), Some(OpCode::CPUI_INT_XOR));
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[0].get_opcode()), Some(OpCode::CPUI_INT_EQUAL)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[3].get_opcode()), Some(OpCode::CPUI_CBRANCH)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[4].get_opcode()), Some(OpCode::CPUI_COPY)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[5].get_opcode()), Some(OpCode::CPUI_RETURN)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[6].get_opcode()), Some(OpCode::CPUI_INT_XOR)
+        );
 
         // Phase 3: Inject and verify block structure
         let mut fd = Funcdata::new("seq_cmp_je_multi", start, code.len() as i32);
@@ -12143,11 +12523,16 @@ mod tests {
         fd.run_heritage_direct();
 
         // Verify that a MULTIEQUAL (Phi) node was created
-        let multiequals: Vec<_> = fd.obank.optree.iter()
+        let multiequals: Vec<_> = fd
+            .obank
+            .optree
+            .iter()
             .filter(|op| op.0.read().unwrap().get_opcode() == OpCode::CPUI_MULTIEQUAL)
             .collect();
             
-        assert_eq!(multiequals.len(), 1, "Expected exactly 1 Phi node, got {}", multiequals.len());
+        assert_eq!(
+            multiequals.len(), 1, "Expected exactly 1 Phi node, got {}", multiequals.len()
+        );
         
         let phi = multiequals[0].0.read().unwrap();
         assert_eq!(phi.inrefs.len(), 2, "Phi node should have 2 inputs");
@@ -12195,7 +12580,9 @@ mod tests {
         let mut fd = Funcdata::new("ssa_rename_linear", start, 10);
         fd.inject_raw_ops(&[op0, op1, op2]);
 
-        assert_eq!(fd.bblocks.get_size(), 1, "Should have exactly 1 basic block");
+        assert_eq!(
+            fd.bblocks.get_size(), 1, "Should have exactly 1 basic block"
+        );
 
         // Build dom tree & run heritage
         fd.bblocks.build_dom_tree();
@@ -12206,10 +12593,13 @@ mod tests {
         let ops = block.read().unwrap().get_ops();
 
         // Filter to only non-MULTIEQUAL ops (there should be none in single block, but be safe)
-        let regular_ops: Vec<_> = ops.iter()
+        let regular_ops: Vec<_> = ops
+            .iter()
             .filter(|op_ref| op_ref.0.read().unwrap().get_opcode() != OpCode::CPUI_MULTIEQUAL)
             .collect();
-        assert!(regular_ops.len() >= 3, "Should have at least 3 regular ops, got {}", regular_ops.len());
+        assert!(
+            regular_ops.len() >= 3, "Should have at least 3 regular ops, got {}", regular_ops.len()
+        );
 
         let pcode_op0 = regular_ops[0].0.read().unwrap();
         let pcode_op1 = regular_ops[1].0.read().unwrap();
@@ -12243,7 +12633,9 @@ mod tests {
         // VERIFY: op0's and op1's outputs have different create_index
         let ci0 = op0_out.read().unwrap().get_create_index();
         let ci1 = op1_out.read().unwrap().get_create_index();
-        assert_ne!(ci0, ci1, "Different definitions of RAX should have different create_index: {} vs {}", ci0, ci1);
+        assert_ne!(
+            ci0, ci1, "Different definitions of RAX should have different create_index: {} vs {}", ci0, ci1
+        );
     }
 
     /// Test: Multi-block SSA renaming with Phi node input filling
@@ -12295,12 +12687,16 @@ mod tests {
         fd.run_heritage_direct();
 
         // Find the MULTIEQUAL (Phi) op for RAX
-        let multiequals: Vec<_> = fd.obank.optree.iter()
+        let multiequals: Vec<_> = fd
+            .obank
+            .optree
+            .iter()
             .filter(|op| op.0.read().unwrap().get_opcode() == OpCode::CPUI_MULTIEQUAL)
             .collect();
 
         // Find Phi node for RAX (Register:0x00)
-        let rax_phis: Vec<_> = multiequals.iter()
+        let rax_phis: Vec<_> = multiequals
+            .iter()
             .filter(|op_ref| {
                 let op = op_ref.0.read().unwrap();
                 if let Some(out_vn) = &op.output {
@@ -12312,9 +12708,13 @@ mod tests {
             })
             .collect();
 
-        assert!(!rax_phis.is_empty(), "Should have at least one Phi node for RAX");
+        assert!(
+            !rax_phis.is_empty(), "Should have at least one Phi node for RAX"
+        );
         let phi = rax_phis[0].0.read().unwrap();
-        assert_eq!(phi.inrefs.len(), 2, "RAX Phi node should have 2 inputs (from 2 predecessor blocks)");
+        assert_eq!(
+            phi.inrefs.len(), 2, "RAX Phi node should have 2 inputs (from 2 predecessor blocks)"
+        );
 
         // VERIFY: Both Phi inputs should be WRITTEN varnodes (defined by mov rax, 1 / mov rax, 2)
         // After renaming, Phi inputs should NOT be placeholder varnodes — they should point to
@@ -12353,7 +12753,10 @@ mod tests {
         drop(phi); // Release the read lock
 
         // Search all ops for INT_ADD in the merge block that uses RAX
-        let add_ops: Vec<_> = fd.obank.optree.iter()
+        let add_ops: Vec<_> = fd
+            .obank
+            .optree
+            .iter()
             .filter(|op_ref| {
                 let op = op_ref.0.read().unwrap();
                 op.get_opcode() == OpCode::CPUI_INT_ADD
@@ -12367,7 +12770,9 @@ mod tests {
         // Among those, find one whose RAX input is the Phi output
         let uses_phi_output = add_ops.iter().any(|op_ref| {
             let op = op_ref.0.read().unwrap();
-            op.inrefs.iter().any(|inref| Arc::ptr_eq(inref, &phi_output))
+            op.inrefs
+                .iter()
+                .any(|inref| Arc::ptr_eq(inref, &phi_output))
         });
         assert!(
             uses_phi_output,
@@ -12415,14 +12820,19 @@ mod tests {
         fd.inject_raw_ops(&all_raw_ops);
 
         let num_blocks = fd.bblocks.get_size();
-        assert!(num_blocks >= 3, "Diamond pattern should have at least 3 blocks, got {}", num_blocks);
+        assert!(
+            num_blocks >= 3, "Diamond pattern should have at least 3 blocks, got {}", num_blocks
+        );
 
         // Build dom tree & run heritage
         fd.bblocks.build_dom_tree();
         fd.run_heritage_direct();
 
         // Find Phi nodes for RAX (Register:0x00)
-        let rax_phis: Vec<_> = fd.obank.optree.iter()
+        let rax_phis: Vec<_> = fd
+            .obank
+            .optree
+            .iter()
             .filter(|op_ref| {
                 let op = op_ref.0.read().unwrap();
                 if op.get_opcode() != OpCode::CPUI_MULTIEQUAL {
@@ -12437,7 +12847,9 @@ mod tests {
             })
             .collect();
 
-        assert!(!rax_phis.is_empty(), "Diamond merge should have Phi for RAX");
+        assert!(
+            !rax_phis.is_empty(), "Diamond merge should have Phi for RAX"
+        );
 
         let phi = rax_phis[0].0.read().unwrap();
         assert_eq!(
@@ -12449,10 +12861,14 @@ mod tests {
         // VERIFY: Both inputs should be register RAX varnodes
         for (i, phi_in) in phi.inrefs.iter().enumerate() {
             let vn = phi_in.read().unwrap();
-            assert_eq!(vn.get_space(), AddressSpace::Register,
-                "Phi input {} should be Register", i);
-            assert_eq!(vn.get_offset(), 0x00,
-                "Phi input {} should be RAX (offset 0x00)", i);
+            assert_eq!(
+                vn.get_space(), AddressSpace::Register,
+                "Phi input {} should be Register", i
+            );
+            assert_eq!(
+                vn.get_offset(), 0x00,
+                "Phi input {} should be RAX (offset 0x00)", i
+            );
         }
 
         // VERIFY: Phi inputs are distinct (different definitions)
@@ -12496,19 +12912,23 @@ mod tests {
         // Get ops
         let block = &fd.bblocks.blocks[0];
         let ops = block.read().unwrap().get_ops();
-        let regular_ops: Vec<_> = ops.iter()
+        let regular_ops: Vec<_> = ops
+            .iter()
             .filter(|op_ref| op_ref.0.read().unwrap().get_opcode() != OpCode::CPUI_MULTIEQUAL)
             .collect();
 
         assert!(!regular_ops.is_empty(), "Should have at least 1 regular op");
 
         // Find the INT_ADD op
-        let add_op_ref = regular_ops.iter()
+        let add_op_ref = regular_ops
+            .iter()
             .find(|op_ref| op_ref.0.read().unwrap().get_opcode() == OpCode::CPUI_INT_ADD);
         assert!(add_op_ref.is_some(), "Should find INT_ADD op");
 
         let add_op = add_op_ref.unwrap().0.read().unwrap();
-        assert!(add_op.inrefs.len() >= 2, "INT_ADD should have at least 2 inputs");
+        assert!(
+            add_op.inrefs.len() >= 2, "INT_ADD should have at least 2 inputs"
+        );
 
         // The RAX input (input 0) should reference a varnode.
         // Since there is no prior definition of RAX in this block,
@@ -12521,7 +12941,9 @@ mod tests {
         let add_in_rax = &add_op.inrefs[0];
 
         // Both refer to RAX
-        assert_eq!(add_in_rax.read().unwrap().get_space(), AddressSpace::Register);
+        assert_eq!(
+            add_in_rax.read().unwrap().get_space(), AddressSpace::Register
+        );
         assert_eq!(add_in_rax.read().unwrap().get_offset(), 0x00);
         assert_eq!(add_out.read().unwrap().get_space(), AddressSpace::Register);
         assert_eq!(add_out.read().unwrap().get_offset(), 0x00);
@@ -12566,11 +12988,16 @@ mod tests {
         fd.run_heritage_direct();
 
         // Locate the CBRANCH op.
-        let cbranch_ref = fd.obank.optree.iter()
+        let cbranch_ref = fd
+            .obank
+            .optree
+            .iter()
             .find(|op| op.0.read().unwrap().get_opcode() == OpCode::CPUI_CBRANCH)
             .expect("CBRANCH op should exist");
         let cbranch_op = cbranch_ref.0.read().unwrap();
-        assert_eq!(cbranch_op.inrefs.len(), 2, "CBRANCH must have target + condition");
+        assert_eq!(
+            cbranch_op.inrefs.len(), 2, "CBRANCH must have target + condition"
+        );
 
         let cond_vn = &cbranch_op.inrefs[1];
         // The condition varnode must carry a def (be written) after rename.
@@ -12633,11 +13060,16 @@ mod tests {
         fd.run_heritage_direct();
 
         // Find the CBRANCH op.
-        let cbranch_ref = fd.obank.optree.iter()
+        let cbranch_ref = fd
+            .obank
+            .optree
+            .iter()
             .find(|op| op.0.read().unwrap().get_opcode() == OpCode::CPUI_CBRANCH)
             .expect("CBRANCH op should exist (from the je)");
         let cbranch_op = cbranch_ref.0.read().unwrap();
-        assert_eq!(cbranch_op.inrefs.len(), 2, "CBRANCH must have target + condition");
+        assert_eq!(
+            cbranch_op.inrefs.len(), 2, "CBRANCH must have target + condition"
+        );
 
         let cond_vn = &cbranch_op.inrefs[1];
         let cond_def = {
@@ -12852,14 +13284,24 @@ mod tests {
              fix is not propagating into phi placement. Header block ops: [{}] \
              CFG:{}",
             header_idx,
-            header_ops.iter().map(|op_ref| {
+            header_ops
+                .iter()
+                .map(|op_ref| {
                 let o = op_ref.0.read().unwrap();
-                let out_desc = o.output.as_ref().map(|out| {
+                let out_desc = o
+                        .output
+                        .as_ref()
+                        .map(|out| {
                     let v = out.read().unwrap();
-                    format!("{:?}:0x{:x}/{}", v.get_space(), v.get_offset(), v.get_size())
-                }).unwrap_or_else(|| "none".to_string());
+                    format!(
+                                "{:?}:0x{:x}/{}", v.get_space(), v.get_offset(), v.get_size()
+                            )
+                })
+                        .unwrap_or_else(|| "none".to_string());
                 format!("{:?}->{}", o.get_opcode(), out_desc)
-            }).collect::<Vec<_>>().join(", "),
+            })
+                .collect::<Vec<_>>()
+                .join(", "),
             dump_cfg()
         );
 
@@ -12979,8 +13421,8 @@ mod tests {
 
     #[test]
     fn test_normalize_branches_op_branch_type_field() {
-        use crate::op::branch_type;
         use crate::address::SeqNum;
+        use crate::op::branch_type;
 
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = crate::op::PcodeOp::new(seq, OpCode::CPUI_CBRANCH);
@@ -12998,26 +13440,33 @@ mod tests {
 
     #[test]
     fn test_bool_condition_folding_and_pattern() {
-        use crate::block::{BlockBasic, BlockGraph, BlockEdge, BlockType, BlockCondition, BoolOp, FlowBlock};
-        use crate::opcodes::OpCode;
-        use crate::op::PcodeOp;
         use crate::address::{Address, SeqNum};
+        use crate::block::{
+            BlockBasic, BlockCondition, BlockEdge, BlockGraph, BlockType, BoolOp, FlowBlock,
+        };
+        use crate::op::PcodeOp;
+        use crate::opcodes::OpCode;
 
-        // OR-pattern CFG (positional polarity, block.hh:299-300: out[1]=true):
-        // A (CBRANCH): out(0)=B, out(1)=C → false edge to C
-        // B (CBRANCH): out(0)=D, out(1)=C → false edge to C (same as A)
-        // Both FALSE edges merge into C → boolean-merge collapse yields
-        // BlockCondition(Or) per block.cc:1785 (false-edge merge = Or;
-        // the legacy And assertion encoded the inverted pre-TRUEOUT polarity).
+        // OR-pattern CFG (block.hh:299-300: out[0]=false, out[1]=true):
+        // A: false→B, true→C; B: false→D, true→C. ruleBlockOr first
+        // builds BlockCondition(Or). The later ruleBlockIfNoExit chooses the
+        // exit-only D arm at slot 0 and invokes virtual negateCondition(true),
+        // so the final nested condition is the De Morgan dual, And.
         let mut basic_a = BlockBasic::new(0, Address::new(0x1000));
-        basic_a.ops.push(crate::op::PcodeOpRef(Arc::new(RwLock::new(
-            PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_CBRANCH),
-        ))));
+        basic_a
+            .ops
+            .push(crate::op::PcodeOpRef(Arc::new(RwLock::new(
+            PcodeOp::new(
+                SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_CBRANCH,
+            )))));
 
         let mut basic_b = BlockBasic::new(1, Address::new(0x1010));
-        basic_b.ops.push(crate::op::PcodeOpRef(Arc::new(RwLock::new(
-            PcodeOp::new(SeqNum::new(Address::new(0x1010), 0), OpCode::CPUI_CBRANCH),
-        ))));
+        basic_b
+            .ops
+            .push(crate::op::PcodeOpRef(Arc::new(RwLock::new(
+            PcodeOp::new(
+                SeqNum::new(Address::new(0x1010), 0), OpCode::CPUI_CBRANCH,
+            )))));
 
         let basic_c = BlockBasic::new(2, Address::new(0x1020));
         let basic_d = BlockBasic::new(3, Address::new(0x1030));
@@ -13030,14 +13479,14 @@ mod tests {
         // Wire edges
         {
             let mut a = block_a.write().unwrap();
-            a.add_out_edge(BlockEdge::new(block_b.clone(), 0)); // out(0)=B (true)
-            a.add_out_edge(BlockEdge::new(block_c.clone(), 0)); // out(1)=C (false)
+            a.add_out_edge(BlockEdge::new(block_b.clone(), 0)); // out(0)=B (false)
+            a.add_out_edge(BlockEdge::new(block_c.clone(), 0)); // out(1)=C (true)
         }
         {
             let mut b = block_b.write().unwrap();
             b.add_in_edge(BlockEdge::new(block_a.clone(), 0));
-            b.add_out_edge(BlockEdge::new(block_d.clone(), 0)); // out(0)=D (true)
-            b.add_out_edge(BlockEdge::new(block_c.clone(), 1)); // out(1)=C (false)
+            b.add_out_edge(BlockEdge::new(block_d.clone(), 0)); // out(0)=D (false)
+            b.add_out_edge(BlockEdge::new(block_c.clone(), 1)); // out(1)=C (true)
         }
         {
             let mut c = block_c.write().unwrap();
@@ -13055,26 +13504,27 @@ mod tests {
         let mut cs = crate::blockaction::CollapseStructure::new(&mut graph, "test");
         cs.collapse_all();
 
-        // Search for BlockCondition(And) — after full Ghidra-style collapseAll
+        // Search for BlockCondition(And) — after full collapseAll
         // (including interleaved cat/if rules), it may be standalone, inside a
         // BlockList, wrapped in a BlockIf (ruleBlockIfNoExit, blockaction.cc:
         // 1840, runs after the fixpoint and wraps an exit-only clause into an
         // if), or its original block slot may have been replaced.
         // Search ALL blocks recursively (two composite levels) for any
-        // BlockCondition with Or. Two levels are required: Ghidra's rule
+        // BlockCondition with And. Two levels are required: Ghidra's rule
         // sequence on this CFG (traced against blockaction.cc) is
         // ruleBlockOr -> ruleBlockIfNoExit wraps the exit clause D
         // (cc:1840 second pass) -> ruleBlockCat merges the If with the
-        // false-edge sink C, giving List[If[Condition(Or), D], C] — the
+        // true-edge sink C, giving List[If[Condition(And), D], C] — the
         // Condition sits INSIDE an If that is a List child.
-        let mut found_or = false;
+        let mut found_and = false;
         for i in 0..graph.get_size() {
             if let Some(block) = graph.get_block(i) {
                 let b = block.read().unwrap();
                 match b.get_type() {
                     BlockType::Condition => {
                         if let Some(cond) = b.as_any().downcast_ref::<BlockCondition>() {
-                            if cond.op_type == BoolOp::Or { found_or = true; }
+                            if cond.op_type == BoolOp::And {
+                                found_and = true; }
                         }
                     }
                     BlockType::List => {
@@ -13083,7 +13533,8 @@ mod tests {
                                 let c = child.read().unwrap();
                                 if c.get_type() == BlockType::Condition {
                                     if let Some(cond) = c.as_any().downcast_ref::<BlockCondition>() {
-                                        if cond.op_type == BoolOp::Or { found_or = true; }
+                                        if cond.op_type == BoolOp::And {
+                                            found_and = true; }
                                     }
                                 }
                                 // Level 2: the child may be the
@@ -13094,7 +13545,8 @@ mod tests {
                                         let cc = bif2.condition.read().unwrap();
                                         if cc.get_type() == BlockType::Condition {
                                             if let Some(cond) = cc.as_any().downcast_ref::<BlockCondition>() {
-                                                if cond.op_type == BoolOp::Or { found_or = true; }
+                                                if cond.op_type == BoolOp::And {
+                                                    found_and = true; }
                                             }
                                         }
                                     }
@@ -13107,7 +13559,8 @@ mod tests {
                             let c = bif.condition.read().unwrap();
                             if c.get_type() == BlockType::Condition {
                                 if let Some(cond) = c.as_any().downcast_ref::<BlockCondition>() {
-                                    if cond.op_type == BoolOp::Or { found_or = true; }
+                                    if cond.op_type == BoolOp::And {
+                                        found_and = true; }
                                 }
                             }
                         }
@@ -13117,13 +13570,13 @@ mod tests {
             }
         }
 
-        assert!(found_or, "Expected BlockCondition(Or) after boolean folding (false-edge merge; may be wrapped in BlockIf per ruleBlockIfNoExit)");
+        assert!(found_and, "Expected BlockCondition(And) after ruleBlockIfNoExit applies the virtual De Morgan flip");
     }
 
     #[test]
     fn test_block_condition_struct_fields() {
-        use crate::block::{BlockBasic, BlockCondition, BlockType, BoolOp, FlowBlock, BlockEdge};
         use crate::address::Address;
+        use crate::block::{BlockBasic, BlockCondition, BlockEdge, BlockType, BoolOp, FlowBlock};
 
         let a: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
             Arc::new(RwLock::new(BlockBasic::new(0, Address::new(0x1000))));
@@ -13168,13 +13621,13 @@ mod tests {
     #[test]
     fn test_switch_case_structuring() {
         use crate::action::Action;
-        use crate::blockaction::ActionBlockStructure;
-        use crate::prettyprint::EmitNoMarkup;
-        use crate::printlanguage::PrintLanguage;
-        use crate::printc::PrintC;
-        use crate::pcoderaw::{PcodeOpRaw, VarnodeRaw};
-        use crate::space::AddressSpace;
         use crate::block::BlockType;
+        use crate::blockaction::ActionBlockStructure;
+        use crate::pcoderaw::{PcodeOpRaw, VarnodeRaw};
+        use crate::prettyprint::EmitNoMarkup;
+        use crate::printc::PrintC;
+        use crate::printlanguage::PrintLanguage;
+        use crate::space::AddressSpace;
 
         let mut fd = Funcdata::new("test_switch", Address::new(0x1000), 0x100);
 
@@ -13244,7 +13697,12 @@ mod tests {
         let mut printer = PrintC::new(Box::new(emit));
         printer.doc_function(&fd);
 
-        let emitted_code = printer.take_emit().into_any().downcast::<EmitNoMarkup>().unwrap().get_output();
+        let emitted_code = printer
+            .take_emit()
+            .into_any()
+            .downcast::<EmitNoMarkup>()
+            .unwrap()
+            .get_output();
         println!("Emitted code:\n{}", emitted_code);
 
         // Assert code structure. NOTE: `switch(` with NO space — the oracle's
@@ -13285,10 +13743,10 @@ mod tests {
     fn test_type_propagation() {
         use crate::action::Action;
         use crate::coreaction::ActionTypeInfer;
+        use crate::opcodes::OpCode;
         use crate::pcoderaw::{PcodeOpRaw, VarnodeRaw};
         use crate::space::AddressSpace;
         use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
-        use crate::opcodes::OpCode;
         use std::sync::Arc;
 
         let mut fd = Funcdata::new("test_type_prop", Address::new(0x1000), 0x100);
@@ -13322,12 +13780,16 @@ mod tests {
         // 1. Deduplicate/Link variables so dataflow can propagate.
         // We link inputs to matching output Varnodes by space/offset/size.
         // First, collect all output varnode info to avoid RwLock deadlocks.
-        let mut output_varnodes: Vec<(crate::space::AddressSpace, u64, usize, Arc<RwLock<crate::varnode::Varnode>>)> = Vec::new();
+        let mut output_varnodes: Vec<(
+            crate::space::AddressSpace, u64, usize, Arc<RwLock<crate::varnode::Varnode>>,
+        )> = Vec::new();
         for op_ref in &fd.obank.alivelist {
             let op = op_ref.0.read().unwrap();
             if let Some(ref out_vn_arc) = op.output {
                 let out_vn = out_vn_arc.read().unwrap();
-                output_varnodes.push((out_vn.space(), out_vn.offset(), out_vn.get_size(), out_vn_arc.clone()));
+                output_varnodes.push((
+                    out_vn.space(), out_vn.offset(), out_vn.get_size(), out_vn_arc.clone(),
+                ));
             }
         }
 
@@ -13342,20 +13804,27 @@ mod tests {
                 };
 
                 if in_space != AddressSpace::Const {
-                    let found_match = output_varnodes.iter()
+                    let found_match = output_varnodes
+                        .iter()
                         .find(|(s, o, sz, _)| *s == in_space && *o == in_offset && *sz == in_size)
                         .map(|(_, _, _, arc)| arc.clone());
 
                     if let Some(matching_vn) = found_match {
                         op.inrefs[i] = matching_vn.clone();
-                        matching_vn.write().unwrap().descend.push(Arc::downgrade(&op_ref.0));
+                        matching_vn
+                            .write()
+                            .unwrap()
+                            .descend
+                            .push(Arc::downgrade(&op_ref.0));
                     }
                 }
             }
         }
 
         // Manually inject a starting type: RDI is an "int *" pointer.
-        let int_type = Arc::new(Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)));
+        let int_type = Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(), 4, TypeMetatype::Int,
+        )));
         let int_ptr_type = Arc::new(Datatype::Pointer(TypePointer {
             base: TypeBase::new("int *".to_string(), 8, TypeMetatype::Pointer),
             ptr_to: int_type.clone(),
@@ -13449,15 +13918,23 @@ mod tests {
 
         // Create INPUT varnodes in SysV ABI parameter registers
         // param1 = RDI (offset 0x38, size 8)
-        let rdi_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x38);
+        let rdi_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x38);
         let rdi_vn = fd.vbank.set_input(rdi_vn).expect("fresh RDI input");
         // param2 = RSI (offset 0x30, size 8)
-        let rsi_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30);
+        let rsi_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x30);
         let rsi_vn = fd.vbank.set_input(rsi_vn).expect("fresh RSI input");
 
         // Create an op that reads both params: ADD rdi, rsi -> result (RAX)
-        let result_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x00);
-        let add_ref = fd.obank.create(OpCode::CPUI_INT_ADD, 2, Address::new(0x1000));
+        let result_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x00);
+        let add_ref = fd
+            .obank
+            .create(OpCode::CPUI_INT_ADD, 2, Address::new(0x1000));
         {
             let mut add_op = add_ref.0.write().unwrap();
             add_op.output = Some(result_vn.clone());
@@ -13467,7 +13944,9 @@ mod tests {
 
         // Create RETURN op with RAX as return value
         let ret_addr_vn = fd.vbank.create_constant(8, 0);
-        let ret_ref = fd.obank.create(OpCode::CPUI_RETURN, 2, Address::new(0x1010));
+        let ret_ref = fd
+            .obank
+            .create(OpCode::CPUI_RETURN, 2, Address::new(0x1010));
         {
             let mut ret_op = ret_ref.0.write().unwrap();
             ret_op.inrefs.push(ret_addr_vn);
@@ -13490,8 +13969,10 @@ mod tests {
         assert_eq!(fd.funcp.parameters[1].name, "param_2");
 
         // Verify return type inferred (RAX is size 8 -> long)
-        assert_eq!(fd.funcp.return_type.get_name(), "long",
-            "Return type should be inferred as 'long' from 8-byte RAX");
+        assert_eq!(
+            fd.funcp.return_type.get_name(), "long",
+            "Return type should be inferred as 'long' from 8-byte RAX"
+        );
     }
 
     /// End-to-end decompilation test simulating a realistic curl-style function.
@@ -13513,16 +13994,17 @@ mod tests {
     #[ignore = "TODO: action clone_registry init order needs fix (set_default_actions must run before clone_all)"]
     fn test_realistic_curl_function() {
         use crate::action::ActionDatabase;
-        use crate::prettyprint::EmitNoMarkup;
-        use crate::printlanguage::PrintLanguage;
-        use crate::printc::PrintC;
         use crate::pcoderaw::{PcodeOpRaw, VarnodeRaw};
+        use crate::prettyprint::EmitNoMarkup;
+        use crate::printc::PrintC;
+        use crate::printlanguage::PrintLanguage;
         use crate::space::AddressSpace;
 
         let mut fd = Funcdata::new("curl_easy_setopt", Address::new(0x4050a0), 0x60);
 
         // Add symbol table entries for known functions
-        fd.symbol_table.insert(0x403210, "curl_set_error".to_string());
+        fd.symbol_table
+            .insert(0x403210, "curl_set_error".to_string());
 
         // Addresses: baseaddr + idx * 0x10
         // Block 0: op0..op4 (5 ops) → CBRANCH at op4
@@ -13598,7 +14080,9 @@ mod tests {
         op13.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
         op13.add_input(VarnodeRaw::new(AddressSpace::Register, 0x00, 8));
 
-        fd.inject_raw_ops(&[op0, op1, op2, op3, op4, op5, op6, op7, op8, op9, op10, op11, op12, op13]);
+        fd.inject_raw_ops(&[
+            op0, op1, op2, op3, op4, op5, op6, op7, op8, op9, op10, op11, op12, op13,
+        ]);
 
         // CFG edges are automatically created by build_blocks_from_ops
 
@@ -13612,19 +14096,36 @@ mod tests {
         let mut printer = PrintC::new(Box::new(emit));
         printer.doc_function(&fd);
 
-        let emitted_code = printer.take_emit().into_any().downcast::<EmitNoMarkup>().unwrap().get_output();
+        let emitted_code = printer
+            .take_emit()
+            .into_any()
+            .downcast::<EmitNoMarkup>()
+            .unwrap()
+            .get_output();
         println!("\n====== Rugra Decompiled Output: curl_easy_setopt ======\n{}\n======================================================", emitted_code);
 
         // Basic structure assertions
-        assert!(emitted_code.contains("curl_easy_setopt"), "Should contain function name");
-        assert!(!emitted_code.contains("void curl_easy_setopt"), "Should NOT have void return (has RETURN with RAX)");
+        assert!(
+            emitted_code.contains("curl_easy_setopt"), "Should contain function name"
+        );
+        assert!(
+            !emitted_code.contains("void curl_easy_setopt"), "Should NOT have void return (has RETURN with RAX)"
+        );
         // Function signature should contain parameters
-        assert!(emitted_code.contains("param_1"), "Should contain param_1 in signature");
-        assert!(emitted_code.contains("param_2"), "Should contain param_2 in signature or body");
-        assert!(emitted_code.contains("param_3"), "Should contain param_3 in signature");
+        assert!(
+            emitted_code.contains("param_1"), "Should contain param_1 in signature"
+        );
+        assert!(
+            emitted_code.contains("param_2"), "Should contain param_2 in signature or body"
+        );
+        assert!(
+            emitted_code.contains("param_3"), "Should contain param_3 in signature"
+        );
         // param_2 should appear in the body expression (not just signature)
-        assert!(emitted_code.contains("(long)param_2") || emitted_code.contains("param_2"),
-            "param_2 should be used in body expression");
+        assert!(
+            emitted_code.contains("(long)param_2") || emitted_code.contains("param_2"),
+            "param_2 should be used in body expression"
+        );
     }
 
     /// Pipeline wiring proof for FUNCDATA-CALCNZM-0001: the oracle's ONLY
@@ -13733,7 +14234,10 @@ mod tests {
         fd.inject_raw_ops(&[read_rsp, read_rax]);
 
         // Before spacebase(): no varnode has SPACEBASE flag.
-        let sb_before = fd.vbank.loc_tree.iter()
+        let sb_before = fd
+            .vbank
+            .loc_tree
+            .iter()
             .filter(|v| v.0.read().unwrap().is_spacebase())
             .count();
         assert_eq!(sb_before, 0, "No spacebase varnodes before spacebase()");
@@ -13742,11 +14246,16 @@ mod tests {
         fd.spacebase();
 
         // After: the RSP input (Register@0x20) should be marked SPACEBASE.
-        let sb_varnodes: Vec<_> = fd.vbank.loc_tree.iter()
+        let sb_varnodes: Vec<_> = fd
+            .vbank
+            .loc_tree
+            .iter()
             .filter(|v| v.0.read().unwrap().is_spacebase())
             .map(|v| v.0.clone())
             .collect();
-        assert!(!sb_varnodes.is_empty(), "RSP input should be marked SPACEBASE");
+        assert!(
+            !sb_varnodes.is_empty(), "RSP input should be marked SPACEBASE"
+        );
 
         // Verify it's at Register@0x20, size 8.
         let sb = sb_varnodes[0].read().unwrap();
@@ -13823,7 +14332,9 @@ mod tests {
                 None => false,
             }
         });
-        assert!(has_new_add, "split_uses should create a duplicated INT_ADD op");
+        assert!(
+            has_new_add, "split_uses should create a duplicated INT_ADD op"
+        );
     }
 
     /// Diagnostic (2026-07-02): does lifting `xor eax,eax; ret` produce the
@@ -13845,7 +14356,9 @@ mod tests {
         let mut raw_ops = Vec::new();
         for inst in &instructions { raw_ops.extend(lifter.lift(inst)); }
         // xor→2(INT_XOR+COPY), ret→1(RETURN)
-        assert_eq!(raw_ops.len(), 3, "expected 3 raw ops, got {}", raw_ops.len());
+        assert_eq!(
+            raw_ops.len(), 3, "expected 3 raw ops, got {}", raw_ops.len()
+        );
         let mut fd = Funcdata::new("xor_eax_eax", start, code.len() as i32);
         fd.inject_raw_ops(&raw_ops);
         for op_ref in &fd.obank.alivelist {
@@ -13854,8 +14367,8 @@ mod tests {
                 let i0 = &op.inrefs[0]; let i1 = &op.inrefs[1];
                 let v0 = i0.read().unwrap(); let v1 = i1.read().unwrap();
                 let ptreq = std::sync::Arc::ptr_eq(i0, i1);
-                let same_storage = v0.get_space()==v1.get_space()
-                    && v0.get_offset()==v1.get_offset() && v0.get_size()==v1.get_size();
+                let same_storage = v0.get_space() == v1.get_space()
+                    && v0.get_offset() == v1.get_offset() && v0.get_size() == v1.get_size();
                 eprintln!("XOR inputs: ptreq={} same_storage={} in0={:?}@0x{:x} sz{} written={} | in1={:?}@0x{:x} sz{} written={}",
                     ptreq, same_storage,
                     v0.get_space(), v0.get_offset(), v0.get_size(), v0.is_written(),
@@ -13871,8 +14384,7 @@ mod tests {
 
         let mut fd = Funcdata::new("combine", Address::new(0x5000), 0x20);
         let block: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
-            BlockBasic::new(0, Address::new(0x5000)),
-        ));
+            BlockBasic::new(0, Address::new(0x5000))));
         fd.bblocks.add_block(block.clone());
 
         let hi = fd
@@ -13943,8 +14455,7 @@ mod tests {
         let new_lo = lo_reader.0.read().unwrap().inrefs[0].clone();
         for (replacement, offset, expected_storage) in [
             (new_hi, 4_u64, 0x24_u64),
-            (new_lo, 0_u64, 0x20_u64),
-        ] {
+            (new_lo, 0_u64, 0x20_u64)] {
             let value = replacement.read().unwrap();
             assert_eq!(value.get_space(), AddressSpace::Register);
             assert_eq!(value.get_offset(), expected_storage);
@@ -14085,7 +14596,10 @@ mod tests {
                 crate::address::SeqNum::new(Address::new(0x1000), 1),
                 OpCode::CPUI_COPY,
             )));
-            vn.write().unwrap().descend.push(std::sync::Arc::downgrade(&temp));
+            vn.write()
+                .unwrap()
+                .descend
+                .push(std::sync::Arc::downgrade(&temp));
         }
         assert_eq!(vn.read().unwrap().descend.len(), 2);
 
@@ -14301,7 +14815,8 @@ impl AncestorRealistic {
             let op_rg = state.op.read().unwrap();
             op_rg.parent.as_ref().and_then(|w| w.upgrade())
         };
-        let bl = match parent_arc { Some(b) => b, None => return false };
+        let bl = match parent_arc { Some(b) => b, None => return false ,
+        };
         let (solid_point, size_in) = {
             let bl_rg = bl.read().unwrap();
             let solid_slot = state.get_solid_slot();
@@ -14343,7 +14858,9 @@ impl AncestorRealistic {
         if !is_written {
             let (is_input, is_unaffected, is_persist, is_direct_write) = {
                 let vn = state_vn.read().unwrap();
-                (vn.is_input(), vn.is_unaffected(), vn.is_persist(), vn.is_direct_write())
+                (
+                    vn.is_input(), vn.is_unaffected(), vn.is_persist(), vn.is_direct_write(),
+                )
             };
             if is_input {
                 if is_unaffected { return ar_command::POP_FAIL; }
@@ -14372,9 +14889,17 @@ impl AncestorRealistic {
             OC::CPUI_INDIRECT => {
                 let (is_ind_create, is_ind_store, out_is_return, in0_indirect_zero) = {
                     let d = op_def.read().unwrap();
-                    let out_is_ret = d.get_out().map(|v| v.read().unwrap().is_return_address()).unwrap_or(false);
-                    let in0_iz = d.get_in(0).map(|v| v.read().unwrap().is_indirect_zero()).unwrap_or(false);
-                    (d.is_indirect_creation(), d.is_indirect_store(), out_is_ret, in0_iz)
+                    let out_is_ret = d
+                        .get_out()
+                        .map(|v| v.read().unwrap().is_return_address())
+                        .unwrap_or(false);
+                    let in0_iz = d
+                        .get_in(0)
+                        .map(|v| v.read().unwrap().is_indirect_zero())
+                        .unwrap_or(false);
+                    (
+                        d.is_indirect_creation(), d.is_indirect_store(), out_is_ret, in0_iz,
+                    )
                 };
                 if is_ind_create {
                     self.pending_ind_create_formed = true;
@@ -14397,12 +14922,17 @@ impl AncestorRealistic {
                 return ar_command::ENTER_NODE;
             }
             OC::CPUI_SUBPIECE => {
-                let (out_space_is_internal, is_incidental, in0_incidental, out_overlap_in0_eq_in1, new_offset) = {
+                let (
+                    out_space_is_internal, is_incidental, in0_incidental, out_overlap_in0_eq_in1, new_offset,
+                ) = {
                     let d = op_def.read().unwrap();
                     let out_vn = d.get_out().and_then(|v| Some(v.clone()));
                     let in0 = d.get_in(0).and_then(|v| Some(v.clone()));
-                    let in1_off = d.get_in(1).and_then(|v| Some(v.clone()))
-                        .map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                    let in1_off = d
+                        .get_in(1)
+                        .and_then(|v| Some(v.clone()))
+                        .map(|v| v.read().unwrap().get_offset())
+                        .unwrap_or(0);
                     let out_space = out_vn.as_ref().map(|v| v.read().unwrap().get_space());
                     let out_overlap = match (&out_vn, &in0) {
                         (Some(o), Some(i)) => o.read().unwrap().overlap(&i.read().unwrap()),
@@ -14411,7 +14941,9 @@ impl AncestorRealistic {
                     (
                         out_space == Some(AddressSpace::Unique),
                         d.is_incidental_copy(),
-                        in0.as_ref().map(|v| v.read().unwrap().is_incidental_copy()).unwrap_or(false),
+                        in0.as_ref()
+                            .map(|v| v.read().unwrap().is_incidental_copy())
+                            .unwrap_or(false),
                         out_overlap == in1_off as i32,
                         state_offset + in1_off as i32,
                     )
@@ -14435,7 +14967,9 @@ impl AncestorRealistic {
                         match vn {
                             Some(v) => {
                                 let vr = v.read().unwrap();
-                                (vr.is_mark(), vr.is_input(), vr.is_unaffected(), vr.is_direct_write(), vr.get_def())
+                                (
+                                    vr.is_mark(), vr.is_input(), vr.is_unaffected(), vr.is_direct_write(), vr.get_def(),
+                                )
                             }
                             None => return ar_command::POP_FAIL,
                         }
@@ -14470,7 +15004,9 @@ impl AncestorRealistic {
                     (
                         out_space == Some(AddressSpace::Unique),
                         d.is_incidental_copy(),
-                        in0.as_ref().map(|v| v.read().unwrap().is_incidental_copy()).unwrap_or(false),
+                        in0.as_ref()
+                            .map(|v| v.read().unwrap().is_incidental_copy())
+                            .unwrap_or(false),
                         out_addr.is_some() && in0_addr.is_some() && out_addr == in0_addr,
                     )
                 };
@@ -14546,8 +15082,14 @@ impl AncestorRealistic {
                     let in0 = d.get_in(0).and_then(|v| Some(v.clone()));
                     let in1 = d.get_in(1).and_then(|v| Some(v.clone()));
                     let state_vn_space = state_vn.read().unwrap().get_space();
-                    let in0_sz = in0.as_ref().map(|v| v.read().unwrap().get_size() as i32).unwrap_or(0);
-                    let in1_sz = in1.as_ref().map(|v| v.read().unwrap().get_size() as i32).unwrap_or(0);
+                    let in0_sz = in0
+                        .as_ref()
+                        .map(|v| v.read().unwrap().get_size() as i32)
+                        .unwrap_or(0);
+                    let in1_sz = in1
+                        .as_ref()
+                        .map(|v| v.read().unwrap().get_size() as i32)
+                        .unwrap_or(0);
                     (in1_sz, in0_sz, state_vn_space == AddressSpace::Stack)
                 };
                 if state_vn_size > self.trial_size {
@@ -14755,14 +15297,21 @@ fn only_op_use(
         let mut vn = invn.write().unwrap();
         vn.set_mark();
     }
-    varlist.push(TNode { vn: invn.clone(), flags: main_flags });
+    varlist.push(TNode { vn: invn.clone(), flags: main_flags ,
+    });
     let mut idx = 0;
     let mut res = true;
     while idx < varlist.len() {
         let base_flags = varlist[idx].flags;
         let vn_arc = varlist[idx].vn.clone();
         let descends: Vec<Arc<RwLock<crate::op::PcodeOp>>> =
-            vn_arc.read().unwrap().descend.iter().filter_map(|w| w.upgrade()).collect();
+            vn_arc
+            .read()
+            .unwrap()
+            .descend
+            .iter()
+            .filter_map(|w| w.upgrade())
+            .collect();
         for op_arc in descends {
             let op_rg = op_arc.read().unwrap();
             if Arc::ptr_eq(&op_arc, &opmatch.0) {
@@ -14785,7 +15334,8 @@ fn only_op_use(
                     cur_flags |= traverse_flags::INDIRECTALT;
                 }
                 OC::CPUI_COPY => {
-                    let out_internal = op_rg.get_out()
+                    let out_internal = op_rg
+                        .get_out()
                         .map(|v| v.read().unwrap().get_space() == AddressSpace::Unique)
                         .unwrap_or(false);
                     let op_incidental = op_rg.is_incidental_copy();
@@ -14815,7 +15365,8 @@ fn only_op_use(
                     let out_clone = out.clone();
                     if !out_clone.read().unwrap().is_mark() {
                         out_clone.write().unwrap().set_mark();
-                        varlist.push(TNode { vn: out_clone, flags: cur_flags });
+                        varlist.push(TNode { vn: out_clone, flags: cur_flags ,
+                        });
                     }
                 }
             }
@@ -14853,15 +15404,18 @@ pub fn ancestor_op_use(
         return only_op_use(has_active_output, invn, op, trial_slot, main_flags);
     }
     let def_arc = { invn.read().unwrap().get_def() };
-    let def_arc = match def_arc { Some(d) => d, None => return false };
+    let def_arc = match def_arc { Some(d) => d, None => return false ,
+    };
     let opcode = def_arc.read().unwrap().opcode;
     match opcode {
         OC::CPUI_INDIRECT => {
             if def_arc.read().unwrap().is_indirect_creation() { return false; }
             let in0 = def_arc.read().unwrap().get_in(0).cloned();
             match in0 {
-                Some(v) => ancestor_op_use(has_active_output, maxlevel - 1, &v, op, trial_slot, offset,
-                    main_flags | traverse_flags::INDIRECT),
+                Some(v) => ancestor_op_use(
+                    has_active_output, maxlevel - 1, &v, op, trial_slot, offset,
+                    main_flags | traverse_flags::INDIRECT,
+                ),
                 None => false,
             }
         }
@@ -14873,7 +15427,9 @@ pub fn ancestor_op_use(
             for i in 0..num_input {
                 let in_vn = def_arc.read().unwrap().get_in(i).cloned();
                 if let Some(v) = in_vn {
-                    if ancestor_op_use(has_active_output, maxlevel - 1, &v, op, trial_slot, offset, main_flags) {
+                    if ancestor_op_use(
+                        has_active_output, maxlevel - 1, &v, op, trial_slot, offset, main_flags,
+                    ) {
                         result = true;
                         break;
                     }
@@ -14883,15 +15439,23 @@ pub fn ancestor_op_use(
             result
         }
         OC::CPUI_COPY => {
-            let out_internal = def_arc.read().unwrap().get_out()
+            let out_internal = def_arc
+                .read()
+                .unwrap()
+                .get_out()
                 .map(|v| v.read().unwrap().get_space() == AddressSpace::Unique)
                 .unwrap_or(false);
             let op_incidental = def_arc.read().unwrap().is_incidental_copy();
             let in0 = def_arc.read().unwrap().get_in(0).cloned();
-            let in0_incidental = in0.as_ref().map(|v| v.read().unwrap().is_incidental_copy()).unwrap_or(false);
+            let in0_incidental = in0
+                .as_ref()
+                .map(|v| v.read().unwrap().is_incidental_copy())
+                .unwrap_or(false);
             if out_internal || op_incidental || in0_incidental {
                 match in0 {
-                    Some(v) => ancestor_op_use(has_active_output, maxlevel - 1, &v, op, trial_slot, offset, main_flags),
+                    Some(v) => ancestor_op_use(
+                        has_active_output, maxlevel - 1, &v, op, trial_slot, offset, main_flags,
+                    ),
                     None => false,
                 }
             } else {
@@ -14901,33 +15465,52 @@ pub fn ancestor_op_use(
         OC::CPUI_PIECE => {
             let in0 = def_arc.read().unwrap().get_in(0).cloned();
             let in1 = def_arc.read().unwrap().get_in(1).cloned();
-            let in1_size = in1.as_ref().map(|v| v.read().unwrap().get_size() as i32).unwrap_or(0);
+            let in1_size = in1
+                .as_ref()
+                .map(|v| v.read().unwrap().get_size() as i32)
+                .unwrap_or(0);
             if let Some(v0) = in0 {
-                if ancestor_op_use(has_active_output, maxlevel - 1, &v0, op, trial_slot, offset + in1_size,
-                    main_flags | traverse_flags::CONCAT_HIGH) {
+                if ancestor_op_use(
+                    has_active_output, maxlevel - 1, &v0, op, trial_slot, offset + in1_size,
+                    main_flags | traverse_flags::CONCAT_HIGH,
+                ) {
                     return true;
                 }
             }
             if let Some(v1) = in1 {
-                if ancestor_op_use(has_active_output, maxlevel - 1, &v1, op, trial_slot, offset, main_flags) {
+                if ancestor_op_use(
+                    has_active_output, maxlevel - 1, &v1, op, trial_slot, offset, main_flags,
+                ) {
                     return true;
                 }
             }
             false
         }
         OC::CPUI_SUBPIECE => {
-            let out_internal = def_arc.read().unwrap().get_out()
+            let out_internal = def_arc
+                .read()
+                .unwrap()
+                .get_out()
                 .map(|v| v.read().unwrap().get_space() == AddressSpace::Unique)
                 .unwrap_or(false);
             let op_incidental = def_arc.read().unwrap().is_incidental_copy();
             let in0 = def_arc.read().unwrap().get_in(0).cloned();
-            let in0_incidental = in0.as_ref().map(|v| v.read().unwrap().is_incidental_copy()).unwrap_or(false);
-            let in1_off = def_arc.read().unwrap().get_in(1)
-                .map(|v| v.read().unwrap().get_offset() as i32).unwrap_or(0);
+            let in0_incidental = in0
+                .as_ref()
+                .map(|v| v.read().unwrap().is_incidental_copy())
+                .unwrap_or(false);
+            let in1_off = def_arc
+                .read()
+                .unwrap()
+                .get_in(1)
+                .map(|v| v.read().unwrap().get_offset() as i32)
+                .unwrap_or(0);
             if (out_internal || op_incidental || in0_incidental) && (offset - in1_off) >= 0 {
                 match in0 {
-                    Some(v) => ancestor_op_use(has_active_output, maxlevel - 1, &v, op, trial_slot, offset - in1_off,
-                        main_flags | traverse_flags::LSB_TRUNCATED),
+                    Some(v) => ancestor_op_use(
+                        has_active_output, maxlevel - 1, &v, op, trial_slot, offset - in1_off,
+                        main_flags | traverse_flags::LSB_TRUNCATED,
+                    ),
                     None => false,
                 }
             } else {
@@ -14960,7 +15543,9 @@ impl CloneBlockOps {
 
     // Ghidra: funcdata_block.cc:962 CloneBlockOps::buildOpClone
     /// Clone a PcodeOp (copy opcode + flags). Skip branches (return None).
-    fn build_op_clone(&mut self, fd: &mut Funcdata, orig: &crate::op::PcodeOpRef) -> Option<crate::op::PcodeOpRef> {
+    fn build_op_clone(
+        &mut self, fd: &mut Funcdata, orig: &crate::op::PcodeOpRef,
+    ) -> Option<crate::op::PcodeOpRef> {
         let (is_branch, is_not_branch, num_input, addr, opcode, flags, addlflags) = {
             let o = orig.0.read().unwrap();
             let ib = o.is_branch();
@@ -14968,7 +15553,9 @@ impl CloneBlockOps {
             let opcode = o.opcode;
             let flags = o.flags;
             let addlflags = o.addlflags;
-            (ib, ib && o.opcode != crate::opcodes::OpCode::CPUI_BRANCH, o.num_input(), addr, opcode, flags, addlflags)
+            (
+                ib, ib && o.opcode != crate::opcodes::OpCode::CPUI_BRANCH, o.num_input(), addr, opcode, flags, addlflags,
+            )
         };
         if is_branch {
             if is_not_branch {
@@ -15002,13 +15589,16 @@ impl CloneBlockOps {
         dup.0.write().unwrap().addlflags |= addlflags & afl_mask;
         // Record mappings.
         self.clone_list.push((dup.clone(), orig.clone()));
-        self.orig_to_clone.insert(Arc::as_ptr(&orig.0) as usize, dup.clone());
+        self.orig_to_clone
+            .insert(Arc::as_ptr(&orig.0) as usize, dup.clone());
         Some(dup)
     }
 
     // Ghidra: funcdata_block.cc:992 CloneBlockOps::buildVarnodeOutput
     /// Clone the output Varnode of an op into the clone op.
-    fn build_varnode_output(&self, fd: &mut Funcdata, orig_op: &crate::op::PcodeOpRef, clone_op: &crate::op::PcodeOpRef) {
+    fn build_varnode_output(
+        &self, fd: &mut Funcdata, orig_op: &crate::op::PcodeOpRef, clone_op: &crate::op::PcodeOpRef,
+    ) {
         let orig_out = orig_op.0.read().unwrap().output.clone();
         let Some(orig_vn) = orig_out else { return };
         let (size, addr) = {
@@ -15071,9 +15661,12 @@ impl CloneBlockOps {
             match opcode {
                 OpCode::CPUI_MULTIEQUAL => {
                     // cloneOp becomes a single-input COPY from orig's inedge slot.
-                    clone_ref.0.write().unwrap().inrefs.resize(1, std::sync::Arc::new(std::sync::RwLock::new(
+                    clone_ref.0.write().unwrap().inrefs.resize(
+                        1, std::sync::Arc::new(std::sync::RwLock::new(
                         crate::varnode::Varnode::new_constant(0, 0)
-                    )));
+                    ,
+                        )),
+                    );
                     fd.op_set_opcode(clone_ref, OpCode::CPUI_COPY);
                     let in_vn = orig_ref.0.read().unwrap().inrefs.get(inedge).cloned();
                     if let Some(vn) = in_vn {
@@ -15121,7 +15714,9 @@ impl CloneBlockOps {
                                     Some(def_arc) => {
                                         let key = Arc::as_ptr(&def_arc) as usize;
                                         match self.orig_to_clone.get(&key) {
-                                            Some(clone_op) => clone_op.0.read().unwrap().output.clone(),
+                                            Some(clone_op) => {
+                                                clone_op.0.read().unwrap().output.clone()
+                                            }
                                             None => Some(orig_vn.clone()),
                                         }
                                     }
@@ -15142,6 +15737,36 @@ impl CloneBlockOps {
 #[cfg(test)]
 mod laned_access_tests {
     use super::*;
+
+    #[test]
+    fn set_arch_injects_architecture_type_factory_before_varnode_allocation() {
+        let factory = Arc::new(std::sync::RwLock::new(
+            crate::type_system::typefactory::TypeFactory::new_flavor(
+                8,
+                crate::type_system::typefactory::CoreTypeFlavor::Standalone,
+            ),
+        ));
+        let expected = factory
+            .read()
+            .unwrap()
+            .get_base(8, crate::type_system::datatype::TypeMetatype::Unknown)
+            .unwrap();
+        let mut architecture = crate::arch::Architecture::new();
+        architecture.set_types(factory.clone());
+
+        let mut fd = Funcdata::new("typed", Address::new(0x1000), 0x20);
+        fd.set_arch(Arc::new(architecture));
+        let vn = fd.new_varnode(8, Address::new(0x20));
+        let actual = vn.read().unwrap().get_type().unwrap();
+
+        assert!(Arc::ptr_eq(
+            &fd.vbank.type_factory_handle().unwrap(),
+            &factory
+        ));
+        assert!(Arc::ptr_eq(&actual, &expected));
+        assert_eq!(actual.get_name(), "xunknown8");
+        assert_eq!(vn.read().unwrap().create_index, 0);
+    }
 
     #[test]
     fn order_identity_and_minimum_lifecycle() {

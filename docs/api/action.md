@@ -2,6 +2,13 @@
 
 **源代码路径**: `src/action.rs`
 
+## 2026-08-28：EarlyRemoval 注册语义说明
+
+`build_oppool1` 仍在 Ghidra `coreaction.cc:5512` 的原始位置注册
+`RuleEarlyRemoval`；注释现在明确其第六守卫由 Heritage 的
+`pass > deadcodedelay`/`deadremoved` 状态驱动。规则的 72 个 typed live-opcode
+投影已有锁定 12.0.4 双侧 fixture，raw bucket 0/45 仍是显式残差。
+
 ## 2026-08-24：ActionPool 选择性 fresh clone 与真实基树派生
 
 锁定 Ghidra `Rule::clone`（`action.hh:230-236`）、`ActionPool::clone`
@@ -788,7 +795,12 @@ Funcdata ready
 - 新增 `ActionPool` struct（对应 Ghidra `ActionPool`，action.hh:262）：持有 `Vec<Box<dyn Rule>>` + `per_op: HashMap<OpCode, Vec<usize>>` 索引。`add_rule` 注册 Rule 并按 opcode 建索引；`apply` 遍历所有 live op，按 opcode 匹配 Rule，循环至固定点（对应 Ghidra rule_repeatapply）。
 - `build_simplify_pool()` 注册 **112 个简化 Rule**（2026-06-29 实测：`grep -cE 'pool\.add_rule'` = 105）。**镜像 Ghidra `oppool1` 精确顺序**（coreaction.cc:5511-5649）：每行标注 Ghidra 源码行号，未移植的 Rule 以 `skip` 注释标注。**2026-06-29 新增**：RuleSubCommute（5577）、RuleFloatSign（5619）、RuleSLess2Zero（5558）。
 - **`build_cleanup_pool()`**（对齐 Ghidra `actcleanup` coreaction.cc:5694-5710）：独立池，含 `RuleMultNegOne`/`Rule2Comp2Sub` + **`RuleStringCopy`/`RuleStringStore`（constseq，coreaction.cc:5709-5710）**。constseq 模块此前代码完整但从未接入主管线（死代码），现已接入。**在 simplify 池之后跑**（阶段分隔）。这解决了一个收敛 bug：RuleMultNegOne（`x*-1→INT_2COMP`）若与 Rule2Comp2Mult（`INT_2COMP→x*-1`，oppool1 内）同池会无限 ping-pong；Ghidra 靠阶段分隔（主池先收敛、cleanup 池再跑一次）避免循环，Rugra 现忠实移植此机制。constseq 的 transform 阶段（替换为 CALLOTHER）仍待 userop 基础设施。
-- RuleEarlyRemoval(5512) **已重新启用**（保守版）：补齐 Ghidra 6 守卫中的 is_call/is_indirect_source/is_auto_live/空间门（ruleaction.cc:30-40）。因 Rugra 的 descend 追踪有缺口（多处直接 push inrefs 绕过 op_set_input），当前空间门只允许 CONSTANT 输出删除（无条件安全）。REGISTER/UNIQUE 删除待 descend 追踪完整 + INDIRECT_SOURCE 设置 + doesDeadcode 移植后放开。
+- RuleEarlyRemoval(5512) 的“只允许 CONSTANT”是历史实现，现已废止。当前锁定
+  fixture 覆盖六守卫、严格 `pass > deadcodedelay`、writemask/autolive 正交、
+  OTHER policy 与 72 个 typed-opcode dispatch（68 删除、四类 call/new 保留），
+  14/14 covered records MATCH。完整 reset/clear、FSPEC/overlay manager、nullable
+  input、op-bank 与错误生命周期仍为 MISMATCH/UNTESTED，不能据此宣称整个 Rule 或
+  ActionPool 闭包 MATCH。
 - 接入 `set_default_actions`：`ActionStart` → `ActionHeritage` → **`ActionSpacebase`** → `ActionStackPtrFlow` → `ActionSimplify` → `build_simplify_pool()` → `build_cleanup_pool()` → ... → `ActionCallParams` → **`ActionRestrictLocal`**（2026-06-29 新增）→ `ActionDeadCode` → ...
 
 **验证（2026-06-28 量化核实）**：`ActionPool::apply` 增加可选 per-Rule 触发计数（环境变量 `RUGRA_RULE_STATS=1` 开启，默认关闭，不影响行为）。实测 `RUGRA_RULE_STATS=1 cargo run --example curl_decompile`：curl 24 函数反编译中 Rule 池触发 **515 次简化**，涉及 **21 个不同 Rule**（propagate_copy 244 / and_mask 43 / sub2_add 40 / less2_zero 39 / or_consume 29 / collapse_constants 23 / add_mult_collapse 20 / mult_neg_one 18 / 2comp2sub 18 / bool_negate 11 / ...）。**此前声称"实际反编译不触发任何 Rule 简化"为过期误判，已作废。** 776/776 测试通过，curl 24/24 + httpd 29/29 gcc 审计，0 goto。

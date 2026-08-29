@@ -187,7 +187,8 @@ impl AddressSpace {
     pub fn get_index(&self) -> i32 {
         match self {
             AddressSpace::Const => 0,
-            AddressSpace::Other(_) => 1,
+            AddressSpace::Other(id) if *id == SPACEID_OTHER => 1,
+            AddressSpace::Other(id) => *id as i32,
             AddressSpace::Unique => 2,
             AddressSpace::Ram => 3,
             AddressSpace::Register => 4,
@@ -211,7 +212,7 @@ impl AddressSpace {
     pub fn from_index(index: usize) -> Option<AddressSpace> {
         match index {
             0 => Some(AddressSpace::Const),
-            1 => Some(AddressSpace::Other(0)),
+            1 => Some(AddressSpace::Other(SPACEID_OTHER)),
             2 => Some(AddressSpace::Unique),
             3 => Some(AddressSpace::Ram),
             4 => Some(AddressSpace::Register),
@@ -249,7 +250,22 @@ impl AddressSpace {
     /// IPTR_FSPEC, IPTR_IOP, IPTR_JOIN are not heritaged; all others are.
     /// Rugra: Const/Iop/Join/Fspec(not modeled) are not heritaged.
     pub fn is_heritaged(&self) -> bool {
-        !matches!(self, AddressSpace::Const | AddressSpace::Iop | AddressSpace::Join)
+        !matches!(
+            self, AddressSpace::Const | AddressSpace::Iop | AddressSpace::Join
+                | AddressSpace::Other(SPACEID_OTHER)
+        )
+    }
+
+    // Ghidra: space.hh:415 AddrSpace::doesDeadcode
+    /// Does this space participate in dead-code analysis?  The compact
+    /// `AddressSpace` projection preserves the locked constructors' flags:
+    /// constant, iop/fspec, and OTHER clear `does_deadcode`; Join clears only
+    /// `heritaged`, so dead-code analysis remains enabled there.
+    pub fn does_deadcode(&self) -> bool {
+        !matches!(
+            self,
+            AddressSpace::Const | AddressSpace::Iop | AddressSpace::Other(SPACEID_OTHER)
+        )
     }
 
     /// Check if this is the internal iop space (references a PcodeOp).
@@ -356,8 +372,7 @@ impl ConstantSpace {
     /// Create a new constant space
     pub fn new() -> Self {
         ConstantSpace {
-            id: SPACEID_CONST,
-        }
+            id: SPACEID_CONST }
     }
 
     // Ghidra: space.cc:356 ConstantSpace::space
@@ -507,7 +522,8 @@ pub struct JoinDatabase {
 
 impl JoinDatabase {
     // RUGRA-GLUE: Rust Default ctor (Ghidra uses AddrSpaceManager's vector)
-    pub fn new() -> Self { Self { records: Vec::new() } }
+    pub fn new() -> Self { Self { records: Vec::new() ,
+        } }
     // Ghidra: translate.hh:232 AddrSpaceManager::findJoin
     pub fn find_join(&self, offset: u64) -> Option<&JoinRecord> {
         self.records.iter().find(|r| r.unified.offset == offset)
@@ -516,7 +532,8 @@ impl JoinDatabase {
     pub fn add_join(&mut self, pieces: Vec<VarnodeData>) -> u64 {
         let offset = self.records.len() as u64;
         let total_size: usize = pieces.iter().map(|p| p.size).sum();
-        let unified = VarnodeData { space: AddressSpace::Join, offset, size: total_size };
+        let unified = VarnodeData { space: AddressSpace::Join, offset, size: total_size ,
+        };
         self.records.push(JoinRecord { pieces, unified });
         offset
     }
@@ -925,7 +942,9 @@ impl JoinSpace {
             .map(|(i, piece)| {
                 (
                     format!("piece{}", i),
-                    format!("{}:{:x}:{}", piece.space.space_id(), piece.offset, piece.size),
+                    format!(
+                        "{}:{:x}:{}", piece.space.space_id(), piece.offset, piece.size
+                    ),
                 )
             })
             .collect()
@@ -1797,8 +1816,7 @@ impl AddrSpace {
     pub fn encode_attributes(
         &self,
         encoder: &mut dyn crate::marshal::Encoder,
-        offset: u64,
-    ) {
+        offset: u64) {
         match self.get_type() {
             // Ghidra: op.hh:49 IopSpace::encodeAttributes override.
             SpaceType::Iop => {
@@ -1922,8 +1940,7 @@ impl AddrSpace {
     fn encode_attributes_join(
         &self,
         encoder: &mut dyn crate::marshal::Encoder,
-        offset: u64,
-    ) {
+        offset: u64) {
         // JoinRecord *rec = getManager()->findJoin(offset);
         let tables = self.get_manager_join_tables();
         let tables = tables.unwrap_or_else(|| panic!("Unlinked join address"));
@@ -1954,8 +1971,7 @@ impl AddrSpace {
             //   rec->getUnified().size);
             encoder.write_unsigned_integer(
                 &attrib_logicalsize(),
-                rec.get_unified().size as u64,
-            );
+                rec.get_unified().size as u64);
         }
     }
 
@@ -2113,19 +2129,19 @@ impl AddrSpace {
                     // istringstream s1(attrVal.substr(offpos+1,szpos));
                     // s1.unsetf(ios::dec|ios::hex|ios::oct); s1 >> vdat.offset;
                     pieces[pos].offset = crate::marshal::cpp_stream_unsigned(
-                        &attr_val[offpos + 1..szpos],
-                    );
+                        &attr_val[offpos + 1..szpos]);
                     // istringstream s2(attrVal.substr(szpos+1)); ...
                     // s2 >> vdat.size;
                     pieces[pos].size = crate::marshal::cpp_stream_unsigned(
-                        &attr_val[szpos + 1..],
-                    ) as u32 as i32;
+                        &attr_val[szpos + 1..]) as u32 as i32;
                 }
             }
             // sizesum += vdat.size;  (accumulator unused beyond the loop)
         }
         // JoinRecord *rec = getManager()->findAddJoin(pieces,logicalsize);
-        let offset = tables.borrow_mut().find_add_join(&pieces, logicalsize, self);
+        let offset = tables
+            .borrow_mut()
+            .find_add_join(&pieces, logicalsize, self);
         let tables_ref = tables.borrow();
         let rec = tables_ref.find_join(offset);
         // size = rec->getUnified().size;
@@ -2264,14 +2280,22 @@ impl AddrSpace {
     // RUGRA-GLUE: get_fspec_table — the read side of the fspec half.
     /// `None` for spaces that were never inserted into a registry.
     fn get_fspec_table(&self) -> Option<Rc<RefCell<FspecEntryTable>>> {
-        self.0.borrow().fspec_table.as_ref().and_then(|w| w.upgrade())
+        self.0
+            .borrow()
+            .fspec_table
+            .as_ref()
+            .and_then(|w| w.upgrade())
     }
 
     // RUGRA-GLUE: get_manager_join_tables — the read side of the
     /// `AddrSpace::manage` join half. `None` for spaces that were never
     /// inserted into a registry.
     fn get_manager_join_tables(&self) -> Option<Rc<RefCell<manager_join::JoinRecordTables>>> {
-        self.0.borrow().manager_join_tables.as_ref().and_then(|w| w.upgrade())
+        self.0
+            .borrow()
+            .manager_join_tables
+            .as_ref()
+            .and_then(|w| w.upgrade())
     }
 
     // Ghidra: space.hh:277 AddrSpace::getName
@@ -2574,7 +2598,8 @@ impl AddrSpace {
         if trunc_size != state.base_loc.size {
             if state.base_loc.space.is_big_endian() {
                 state.base_loc.offset =
-                    (state.base_loc.offset as u64).wrapping_add((state.base_loc.size - trunc_size) as u64);
+                    (state.base_loc.offset as u64)
+                    .wrapping_add((state.base_loc.size - trunc_size) as u64);
             }
             state.base_loc.size = trunc_size;
         }
@@ -3039,7 +3064,8 @@ impl SpaceRegistry {
     /// map (so `get_space_by_shortcut('z')` still returns the older space).
     fn assign_shortcut(&mut self, spc: &AddrSpace) {
         if spc.get_shortcut() != ' ' {
-            self.shortcut_to_space.insert(spc.get_shortcut(), spc.clone());
+            self.shortcut_to_space
+                .insert(spc.get_shortcut(), spc.clone());
             return;
         }
         let mut shortcut: char = match spc.get_type() {
@@ -3606,40 +3632,35 @@ mod tests {
         .unwrap();
         // duplicate id
         let dup_id = AddrSpace::new_space(
-            SpaceType::Processor, "extra", false, 8, 1, 3, 0, 0, 0,
-        );
+            SpaceType::Processor, "extra", false, 8, 1, 3, 0, 0, 0);
         assert_eq!(
             m.insert_space(dup_id),
             Err("Space extra was assigned as id duplicating: ram".to_string())
         );
         // duplicate name (grows baselist to index+1 before rejecting)
         let dup_name = AddrSpace::new_space(
-            SpaceType::Processor, "ram", false, 8, 1, 9, 0, 0, 0,
-        );
+            SpaceType::Processor, "ram", false, 8, 1, 9, 0, 0, 0);
         assert_eq!(
             m.insert_space(dup_name),
             Err("Space ram was initialized more than once".to_string())
         );
         // wrong type name
         let wrong_type = AddrSpace::new_space(
-            SpaceType::Internal, "tmpx", false, 8, 1, 9, 0, 0, 0,
-        );
+            SpaceType::Internal, "tmpx", false, 8, 1, 9, 0, 0, 0);
         assert_eq!(
             m.insert_space(wrong_type),
             Err("Space tmpx was initialized with wrong type".to_string())
         );
         // const wrong index
         let bad_const = AddrSpace::new_space(
-            SpaceType::Constant, "const", false, 8, 1, 5, 0, 0, 0,
-        );
+            SpaceType::Constant, "const", false, 8, 1, 5, 0, 0, 0);
         assert_eq!(
             m.insert_space(bad_const),
             Err("const space must be assigned index 0".to_string())
         );
         // OTHER wrong index
         let bad_other = AddrSpace::new_space(
-            SpaceType::Processor, "OTHER", false, 8, 1, 5, 0, 0, 0,
-        );
+            SpaceType::Processor, "OTHER", false, 8, 1, 5, 0, 0, 0);
         bad_other.set_flags(space_flags::IS_OTHERSPACE);
         assert_eq!(
             m.insert_space(bad_other),
@@ -3653,7 +3674,8 @@ mod tests {
     #[test]
     fn test_registry_hole_fill_and_iteration() {
         let mut m = SpaceRegistry::new();
-        m.insert_space(AddrSpace::new_constant_space(false)).unwrap();
+        m.insert_space(AddrSpace::new_constant_space(false))
+            .unwrap();
         m.insert_space(AddrSpace::new_space(
             SpaceType::Processor, "ram", false, 8, 1, 3, 0, 0, 0,
         ))
@@ -3685,7 +3707,8 @@ mod tests {
     #[test]
     fn test_registry_shortcut_collision() {
         let mut m = SpaceRegistry::new();
-        m.insert_space(AddrSpace::new_constant_space(false)).unwrap();
+        m.insert_space(AddrSpace::new_constant_space(false))
+            .unwrap();
         m.insert_space(AddrSpace::new_spacebase_space(
             "stack",
             1,
@@ -3701,8 +3724,7 @@ mod tests {
         ))
         .unwrap();
         let sram = AddrSpace::new_space(
-            SpaceType::Processor, "sram", false, 8, 1, 3, 0, 0, 0,
-        );
+            SpaceType::Processor, "sram", false, 8, 1, 3, 0, 0, 0);
         m.insert_space(sram.clone()).unwrap();
         assert_eq!(sram.get_shortcut(), 't');
         assert_eq!(m.get_space_by_shortcut('s').unwrap().get_name(), "stack");
@@ -3713,7 +3735,8 @@ mod tests {
     #[test]
     fn test_registry_shortcut_z_reuse_after_26_collisions() {
         let mut m = SpaceRegistry::new();
-        m.insert_space(AddrSpace::new_constant_space(false)).unwrap();
+        m.insert_space(AddrSpace::new_constant_space(false))
+            .unwrap();
         for (i, c) in (b'a'..=b'z').enumerate() {
             let name: String = std::iter::repeat(c as char).take(2).collect();
             m.insert_space(AddrSpace::new_space(
@@ -3722,8 +3745,7 @@ mod tests {
             .unwrap();
         }
         let apple = AddrSpace::new_space(
-            SpaceType::Processor, "apple", false, 8, 1, 27, 0, 0, 0,
-        );
+            SpaceType::Processor, "apple", false, 8, 1, 27, 0, 0, 0);
         m.insert_space(apple.clone()).unwrap();
         assert_eq!(apple.get_shortcut(), 'z');
         // The map still points 'z' at the earlier space (translate.cc:559-566
@@ -3735,27 +3757,23 @@ mod tests {
     fn test_registry_projection_wordsize_endian() {
         let m = SpaceRegistry::new();
         let ws2 = AddrSpace::new_space(
-            SpaceType::Processor, "ws2", false, 4, 2, 3, 0, 0, 0,
-        );
+            SpaceType::Processor, "ws2", false, 4, 2, 3, 0, 0, 0);
         assert_eq!(ws2.get_highest(), 0x1ffffffff);
         assert_eq!(ws2.get_pointer_lower_bound(), 0x1000);
         assert_eq!(ws2.get_pointer_upper_bound(), 0x1ffffefff);
         let small = AddrSpace::new_space(
-            SpaceType::Processor, "small", false, 2, 3, 4, 0, 0, 0,
-        );
+            SpaceType::Processor, "small", false, 2, 3, 4, 0, 0, 0);
         assert_eq!(small.get_highest(), 0x2ffff);
         assert_eq!(small.get_pointer_lower_bound(), 0x100);
         assert_eq!(small.get_pointer_upper_bound(), 0x2feff);
         let be = AddrSpace::new_space(
-            SpaceType::Processor, "be", true, 8, 1, 5, 0, 0, 0,
-        );
+            SpaceType::Processor, "be", true, 8, 1, 5, 0, 0, 0);
         assert!(be.is_big_endian());
         assert_eq!(AddrSpace::address_to_byte(5, 2), 10);
         assert_eq!(AddrSpace::byte_to_address(10, 2), 5);
         // wrapOffset
         let spc = AddrSpace::new_space(
-            SpaceType::Processor, "wr", false, 4, 1, 6, 0, 0, 0,
-        );
+            SpaceType::Processor, "wr", false, 4, 1, 6, 0, 0, 0);
         assert_eq!(spc.wrap_offset(0xffffffff), 0xffffffff);
         assert_eq!(spc.wrap_offset(0x100000000), 0);
         assert_eq!(spc.wrap_offset(0x100000001), 1);
@@ -3772,8 +3790,7 @@ mod tests {
         assert_eq!(spc.get_deadcode_delay(), 7);
         // truncate
         let big = AddrSpace::new_space(
-            SpaceType::Processor, "big", false, 8, 1, 7, 0, 0, 0,
-        );
+            SpaceType::Processor, "big", false, 8, 1, 7, 0, 0, 0);
         big.truncate_space(4);
         assert!(big.is_truncated());
         assert_eq!(big.get_minimum_ptr_size(), 4);
@@ -3783,18 +3800,16 @@ mod tests {
     #[test]
     fn test_registry_spacebase_pointer_bridge() {
         let mut m = SpaceRegistry::new();
-        m.insert_space(AddrSpace::new_constant_space(false)).unwrap();
+        m.insert_space(AddrSpace::new_constant_space(false))
+            .unwrap();
         let reg = AddrSpace::new_space(
-            SpaceType::Processor, "register", false, 8, 1, 4, 0, 0, 0,
-        );
+            SpaceType::Processor, "register", false, 8, 1, 4, 0, 0, 0);
         m.insert_space(reg.clone()).unwrap();
         let ram = AddrSpace::new_space(
-            SpaceType::Processor, "ram", false, 8, 1, 3, 0, 0, 0,
-        );
+            SpaceType::Processor, "ram", false, 8, 1, 3, 0, 0, 0);
         m.insert_space(ram.clone()).unwrap();
         let stack = AddrSpace::new_spacebase_space(
-            "stack", 5, 8, &ram, 1, true, false,
-        );
+            "stack", 5, 8, &ram, 1, true, false);
         m.insert_space(stack.clone()).unwrap();
         let ptr = SpaceVarnodeData {
             space: reg.clone(),
@@ -3827,19 +3842,16 @@ mod tests {
         );
         // Truncation on a big-endian register space shifts the offset up.
         let bereg = AddrSpace::new_space(
-            SpaceType::Processor, "beregi", true, 8, 1, 6, 0, 0, 0,
-        );
+            SpaceType::Processor, "beregi", true, 8, 1, 6, 0, 0, 0);
         let beptr = SpaceVarnodeData {
             space: bereg.clone(),
             offset: 0x100,
             size: 8,
         };
         let bebase = AddrSpace::new_space(
-            SpaceType::Processor, "beram", true, 8, 1, 7, 0, 0, 0,
-        );
+            SpaceType::Processor, "beram", true, 8, 1, 7, 0, 0, 0);
         let bestack = AddrSpace::new_spacebase_space(
-            "bestack", 8, 8, &bebase, 0, false, true,
-        );
+            "bestack", 8, 8, &bebase, 0, false, true);
         m.add_spacebase_pointer(&bestack, &beptr, 4, false).unwrap();
         let base = bestack.get_spacebase(0).unwrap();
         assert_eq!(base.offset, 0x104);
@@ -3897,8 +3909,10 @@ mod tests {
     // fixture space_printraw_special_1204.
     fn special_printraw_registry() -> (SpaceRegistry, AddrSpace, AddrSpace) {
         let mut m = SpaceRegistry::new();
-        m.insert_space(AddrSpace::new_constant_space(false)).unwrap();
-        m.insert_space(AddrSpace::new_unique_space(2, 0, false)).unwrap();
+        m.insert_space(AddrSpace::new_constant_space(false))
+            .unwrap();
+        m.insert_space(AddrSpace::new_unique_space(2, 0, false))
+            .unwrap();
         let ram = AddrSpace::new_space(
             SpaceType::Processor, "ram", false, 8, 1, 3, space_flags::HASPHYSICAL, 0, 0,
         );
@@ -3932,8 +3946,10 @@ mod tests {
         let (mut m, ram, reg) = special_printraw_registry();
         let join = m.get_join_space().unwrap();
         let pieces = [
-            SpaceVarnodeData { space: reg.clone(), offset: 0x18, size: 4 },
-            SpaceVarnodeData { space: reg.clone(), offset: 0x10, size: 4 },
+            SpaceVarnodeData { space: reg.clone(), offset: 0x18, size: 4 ,
+            },
+            SpaceVarnodeData { space: reg.clone(), offset: 0x10, size: 4 ,
+            },
         ];
         let off = m.find_add_join(&pieces, 0);
         assert_eq!(off, 0);
@@ -3947,9 +3963,12 @@ mod tests {
         let (mut m, ram, reg) = special_printraw_registry();
         let join = m.get_join_space().unwrap();
         let pieces = [
-            SpaceVarnodeData { space: ram.clone(), offset: 0x1000, size: 4 },
-            SpaceVarnodeData { space: reg.clone(), offset: 0x20, size: 2 },
-            SpaceVarnodeData { space: reg.clone(), offset: 0x22, size: 2 },
+            SpaceVarnodeData { space: ram.clone(), offset: 0x1000, size: 4 ,
+            },
+            SpaceVarnodeData { space: reg.clone(), offset: 0x20, size: 2 ,
+            },
+            SpaceVarnodeData { space: reg.clone(), offset: 0x22, size: 2 ,
+            },
         ];
         let off = m.find_add_join(&pieces, 0);
         assert_eq!(off, 0); // fresh registry: first allocation, 16-byte aligned
@@ -3960,7 +3979,8 @@ mod tests {
     fn test_join_print_raw_single_piece_float_extension() {
         let (mut m, ram, reg) = special_printraw_registry();
         let join = m.get_join_space().unwrap();
-        let pieces = [SpaceVarnodeData { space: reg.clone(), offset: 0x100, size: 8 }];
+        let pieces = [SpaceVarnodeData { space: reg.clone(), offset: 0x100, size: 8 ,
+        }];
         let off = m.find_add_join(&pieces, 4);
         assert_eq!(off, 0);
         // num==1: the loop's szsum is discarded and replaced by the unified
@@ -3975,8 +3995,10 @@ mod tests {
         m.insert_space(ws2.clone()).unwrap();
         let join = m.get_join_space().unwrap();
         let pieces = [
-            SpaceVarnodeData { space: ws2.clone(), offset: 0x101, size: 2 },
-            SpaceVarnodeData { space: reg.clone(), offset: 0x30, size: 2 },
+            SpaceVarnodeData { space: ws2.clone(), offset: 0x101, size: 2 ,
+            },
+            SpaceVarnodeData { space: reg.clone(), offset: 0x30, size: 2 ,
+            },
         ];
         let off = m.find_add_join(&pieces, 0);
         // The piece recursion goes through the piece space's own printRaw
@@ -3989,9 +4011,8 @@ mod tests {
     fn test_join_print_raw_unlinked_panics() {
         let (m, _ram, _reg) = special_printraw_registry();
         let join = m.get_join_space().unwrap();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            join.print_raw(0xdeadb0)
-        }));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| join.print_raw(0xdeadb0)
+        ));
         assert_eq!(panic_message(result.unwrap_err()), "Unlinked join address");
     }
 
@@ -4001,9 +4022,8 @@ mod tests {
         // join tables; Ghidra cannot express this (its constructor always
         // takes the manager) — mapped to the same deterministic panic.
         let join = AddrSpace::new_join_space(6, false);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            join.print_raw(0)
-        }));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| join.print_raw(0)
+        ));
         assert_eq!(panic_message(result.unwrap_err()), "Unlinked join address");
     }
 
@@ -4031,7 +4051,8 @@ mod tests {
         };
         let rec = |sz: i32, pieces: Vec<SpaceVarnodeData>| manager_join::JoinRecord {
             pieces,
-            unified: SpaceVarnodeData { space: ram.clone(), offset: 0, size: sz },
+            unified: SpaceVarnodeData { space: ram.clone(), offset: 0, size: sz ,
+            },
         };
         // Size dominates.
         assert!(rec(4, vec![piece(&reg, 0, 4)]).less_than(&rec(8, vec![piece(&reg, 0, 4)])));
@@ -4054,7 +4075,9 @@ mod tests {
         let empty: [SpaceVarnodeData; 0] = [];
         assert_eq!(
             panic_message(
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.find_add_join(&empty, 0)))
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || m.find_add_join(&empty, 0)
+                ))
                     .unwrap_err()
             ),
             "Cannot create a join without pieces"
@@ -4062,7 +4085,10 @@ mod tests {
         assert_eq!(
             panic_message(
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    m.find_add_join(&[SpaceVarnodeData { space: reg.clone(), offset: 0, size: 4 }], 0)
+                    m.find_add_join(
+                        &[SpaceVarnodeData { space: reg.clone(), offset: 0, size: 4 ,
+                        }], 0,
+                    )
                 }))
                 .unwrap_err()
             ),
@@ -4073,8 +4099,10 @@ mod tests {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     m.find_add_join(
                         &[
-                            SpaceVarnodeData { space: reg.clone(), offset: 0, size: 4 },
-                            SpaceVarnodeData { space: reg.clone(), offset: 4, size: 4 },
+                            SpaceVarnodeData { space: reg.clone(), offset: 0, size: 4 ,
+                            },
+                            SpaceVarnodeData { space: reg.clone(), offset: 4, size: 4 ,
+                            },
                         ],
                         8,
                     )
@@ -4088,8 +4116,10 @@ mod tests {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     m.find_add_join(
                         &[
-                            SpaceVarnodeData { space: reg.clone(), offset: 0, size: 0 },
-                            SpaceVarnodeData { space: reg.clone(), offset: 0, size: 0 },
+                            SpaceVarnodeData { space: reg.clone(), offset: 0, size: 0 ,
+                            },
+                            SpaceVarnodeData { space: reg.clone(), offset: 0, size: 0 ,
+                            },
                         ],
                         0,
                     )

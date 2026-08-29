@@ -993,8 +993,11 @@ PcodeOpRaw
 ### 2026-06-27（会话2 续）：compare_order（解锁 RuleOrPredicate）
 
 - `compare_order(bop) -> i32` — `PcodeOp::compareOrder`（op.cc:778-790）：比较两个 op 的控制流顺序。同块比较 SeqNum.order；不同块用 find_common_block 找 LCA，LCA 是本块则在前（-1），是 bop 块则在后（1），否则无序（0）。RuleOrPredicate 用此决定 branch0/branch1 谁在后以定位 finalBlock。
-### 2026-06-27（续）：is_indirect_source（解锁 RuleEarlyRemoval）
-- @is_indirect_source() -> bool@ 对齐 @PcodeOp::isIndirectSource@（op.hh:180）：读 INDIRECT_SOURCE 标志（op 的输出喂给 CPUI_INDIRECT 追踪内存副作用）。RuleEarlyRemoval 不得删此类 op。注：SET 路径未移植，当前总 false。
+### 2026-06-27（续；2026-08-28 勘误）：is_indirect_source（RuleEarlyRemoval）
+- `is_indirect_source()` 读取 INDIRECT_SOURCE；旧“SET 路径未移植、当前总 false”
+  已失效。当前 producer 包括 coreaction/ruleaction 的 INDIRECT 创建路径，
+  EarlyRemoval fixture 已覆盖该守卫的 selected 行为；所有 producer、清除时机、
+  op-bank 重连与错误生命周期仍未完整对拍，保持 UNTESTED/MISMATCH。
 
 ### 2026-07-01：PcodeOp flag accessor（解锁 RulePtrFlow/RuleTransformCpool）
 - `is_ptr_flow/set_ptr_flow`（op.hh:205-206）— PTRFLOW flag(1<<30)。RulePtrFlow 用。

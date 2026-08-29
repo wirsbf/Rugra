@@ -112,7 +112,7 @@ fn address_value(space: rugra::space::AddressSpace, offset: u64) -> Value {
     })
 }
 
-fn op_values(ids: &SnapshotIds) -> Vec<Value> {
+fn op_values(ids: &SnapshotIds, include_high_read_types: bool) -> Vec<Value> {
     ids.ops
         .iter()
         .enumerate()
@@ -123,6 +123,27 @@ fn op_values(ids: &SnapshotIds) -> Vec<Value> {
                 .as_ref()
                 .and_then(std::sync::Weak::upgrade)
                 .map(|parent| parent.read().expect("parent block read lock").get_index());
+            let input_high_read_types = op
+                .inrefs
+                .iter()
+                .enumerate()
+                .map(|(slot, varnode)| {
+                    let varnode = varnode.read().expect("Varnode read lock");
+                    if !include_high_read_types || varnode.is_annotation() {
+                        None
+                    } else {
+                        varnode
+                            .get_high_type_read_facing(&op, slot as i32)
+                            .map(|data_type| {
+                                json!({
+                                    "name": data_type.get_name(),
+                                    "size": data_type.get_size(),
+                                    "metatype": metatype2string(data_type.get_metatype()),
+                                })
+                            })
+                    }
+                })
+                .collect::<Vec<_>>();
             json!({
                 "id": index,
                 "address": address_value(rugra::space::AddressSpace::Ram, op.start.addr.as_u64()),
@@ -135,6 +156,7 @@ fn op_values(ids: &SnapshotIds) -> Vec<Value> {
                 "parent_block": parent_block,
                 "output": op.output.as_ref().map(|varnode| ids.varnode_id(varnode)),
                 "inputs": op.inrefs.iter().map(|varnode| ids.varnode_id(varnode)).collect::<Vec<_>>(),
+                "input_high_read_types": input_high_read_types,
                 "properties": {
                     "dead": op.is_dead(),
                     "call": op.is_call(),
@@ -422,7 +444,7 @@ fn snapshot(
             "entry": address_value(rugra::space::AddressSpace::Ram, fd.baseaddr.as_u64()),
             "size": fd.size,
         },
-        "ops": if include_ops { op_values(&ids) } else { Vec::new() },
+        "ops": if include_ops { op_values(&ids, stage == "03_action_ir") } else { Vec::new() },
         "varnodes": if include_varnodes { varnode_values(fd, &ids) } else { Vec::new() },
         "blocks": if include_blocks { block_values(fd, &ids) } else { Vec::new() },
         "structure": if include_structure { structure_graph(&fd.sblocks) } else { Value::Null },
@@ -509,7 +531,9 @@ impl rugra::arch::SpecQuery for WorkerSpecHost {
 
 impl rugra::pcodeparse::SleighSymbolLookup for WorkerSpecHost {
     fn find_symbol(&self, name: &str) -> Option<rugra::pcodeparse::SleighSymbol> {
-        self.registers.get(name).map(|vd| rugra::pcodeparse::SleighSymbol {
+        self.registers
+            .get(name)
+            .map(|vd| rugra::pcodeparse::SleighSymbol {
             name: name.to_string(),
             kind: rugra::pcodeparse::SleightSymbolKind::Varnode(rugra::varnode::VarnodeData {
                 space: vd.space,
@@ -566,6 +590,13 @@ fn worker_architecture() -> Result<Arc<rugra::arch::Architecture>, String> {
             store.register_tag(&root);
             let mut arch = rugra::arch::Architecture::new();
             arch.archid = "x86:LE:64:default".to_string();
+            // The bilateral oracle is BfdArchitecture, which inherits
+            // SleighArchitecture.  Its locked cspec has no <coretypes>, so
+            // buildCoreTypes must run the standalone fallback after compiler
+            // data-organization parsing, not the Java-client DataOrg table.
+            arch.set_types(Arc::new(std::sync::RwLock::new(
+                rugra::type_system::typefactory::TypeFactory::raw(),
+            )));
             arch.set_commentdb(std::sync::Arc::new(std::sync::RwLock::new(
                 rugra::comment::CommentDatabaseInternal::new(),
             )));
@@ -623,10 +654,20 @@ fn worker_architecture() -> Result<Arc<rugra::arch::Architecture>, String> {
                 let mut decoder =
                     rugra::marshal::TreeDecoder::new(child, pspec_registry.clone());
                 arch.decode_context_data(&mut decoder, host.as_ref())
-                    .map_err(|error| format!("processor spec context_data decode failed: {error}"))?;
+                    .map_err(|error| {
+                        format!("processor spec context_data decode failed: {error}")
+                    })?;
             }
             arch.parse_compiler_config(&mut store, host.as_ref(), 8)
                 .map_err(|error| format!("compiler spec parse failed: {error}"))?;
+            arch.types
+                .as_ref()
+                .expect("Bfd TypeFactory installed before compiler-spec parse")
+                .write()
+                .map_err(|_| "type factory lock poisoned".to_string())?
+                .build_core_types_flavor(
+                    rugra::type_system::typefactory::CoreTypeFlavor::Standalone,
+                );
             if arch.defaultfp.is_none() {
                 return Err("No default prototype specified".to_string());
             }
@@ -759,7 +800,15 @@ fn report_production_call_guards(fd: &Funcdata) {
             }
             let causing = fd
                 .get_op_from_const(in1)
-                .map(|target| target.0.read().expect("guard target read lock").start.addr.as_u64())
+                .map(|target| {
+                    target
+                        .0
+                        .read()
+                        .expect("guard target read lock")
+                        .start
+                        .addr
+                        .as_u64()
+                })
                 .unwrap_or(0);
             let form = op.is_indirect_creation();
             let describe = |vn: &Arc<RwLock<Varnode>>| -> String {

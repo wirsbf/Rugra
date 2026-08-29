@@ -174,7 +174,9 @@ void writeOpProperties(ostream &out,const PcodeOp *op)
       << ",\"ptr_flow\":" << (op->isPtrFlow() ? "true" : "false") << '}';
 }
 
-void writeOps(ostream &out,const SnapshotIds &ids)
+void writeType(ostream &out,const Datatype *type);
+
+void writeOps(ostream &out,const SnapshotIds &ids,bool includeHighReadTypes)
 
 {
   out << '[';
@@ -201,6 +203,15 @@ void writeOps(ostream &out,const SnapshotIds &ids)
     for(int4 slot=0;slot<op->numInput();++slot) {
       if (slot != 0) out << ',';
       out << ids.getVarnode(op->getIn(slot));
+    }
+    out << "],\"input_high_read_types\":[";
+    for(int4 slot=0;slot<op->numInput();++slot) {
+      if (slot != 0) out << ',';
+      const Varnode *vn = op->getIn(slot);
+      if (!includeHighReadTypes || vn->isAnnotation())
+        out << "null";
+      else
+        writeType(out,vn->getHighTypeReadFacing(op));
     }
     out << "],\"properties\":";
     writeOpProperties(out,op);
@@ -401,7 +412,7 @@ void writeSnapshot(const string &path,const string &stage,const Funcdata &fd,
   out << ",\"function\":";
   writeFunction(out,fd);
   out << ",\"ops\":";
-  if (includeOps) writeOps(out,ids); else out << "[]";
+  if (includeOps) writeOps(out,ids,stage == "03_action_ir"); else out << "[]";
   out << ",\"varnodes\":";
   if (includeVarnodes) writeVarnodes(out,ids); else out << "[]";
   out << ",\"blocks\":";

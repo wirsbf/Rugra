@@ -3,6 +3,13 @@
 **状态**: 接口描述可用；Ghidra 12.0.4 对齐级别 L2
 **源代码路径**: `src/space.rs`
 
+## 2026-08-28：dead-code/heritage space flags
+
+`does_deadcode` 现在按锁定构造器 flags 仅对 Const、Iop/FSPEC 投影和专用 OTHER
+返回 false；Join 只关闭 heritage，仍参与 dead-code。专用 OTHER 使用固定 id/index，
+自定义 `Other(id)` 不再被误当作 OTHER space。动态 AddrSpace manager/FSPEC 对象身份
+仍是明确残差。
+
 > 固定枚举尚不能保存 Ghidra 架构动态 space index/type/name/
 > address-size/wordsize/endianness/flags；跨空间 Address/Varnode 键因此不完整。
 
@@ -326,9 +333,11 @@ Oracle 证据：`tests/oracle/space_registry_1204.{cc,rs}` + `tools/run_space_re
 `ptrsub_output_token_1204` 的 normal、wrap_zero、wrap_nonzero、max_product、
 zero_wordsize 五条 scale projection 双侧 MATCH。该证据只覆盖 unsigned 静态
 换算；`address_to_byte_int`、per-space decode/resolveConstant/join 与旧/新地址
-模型迁移仍未覆盖，space 模块保持 L2。父级 24-record fixture 因
-ActionSetCasts raw return 0/1 与 ActionInferTypes output identity 1/0 两处已登记
-差异而整体 MISMATCH；这不改变五条 scale 子投影的 MATCH 判定。
+模型迁移仍未覆盖，space 模块保持 L2。父级 24-record fixture 中 raw
+ActionSetCasts `result=0,count=1` 与 selected ActionInferTypes canonical output
+identity=1 现均为 MATCH；fixture overall 仍因 Rust-only count bridge `NO_ORACLE`
+及完整 action/type 闭包的 MISMATCH/UNTESTED 而保持 MISMATCH。这不改变五条 scale
+子投影的 MATCH 判定。
 
 ### 2026-08-15：ADDRESS-0001 配合新增（Ghidra space.cc printRaw/overlapJoin）
 

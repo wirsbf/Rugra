@@ -1,5 +1,17 @@
 # `prettyprint.rs` API Reference
 
+## 2026-08-28：RPN variable metadata bridge
+
+`Emit::tag_variable_with_metadata` 为 Ghidra
+`tagVariable(name,highlight,vn,op)` 增加无损 Rust 边界：字符常量 Atom 的 highlight、
+Varnode create-index 和 PcodeOp time 不再在 RPN→emitter 调用处被写死为 0。旧 emitter
+可回退到文本/id API。`PRINTLANGUAGE-ATOM-METADATA-0001` 的 8 records / 678 bytes
+双侧 stdout 已逐字节 `MATCH`（SHA-256
+`d84d1ae86bad70fc570630ebbc8a65f172f97655d129a6b49b2faded09c9acbd`），覆盖两次
+相同 vn/op identity 的 stage-1 hidden group 和 syntax control。该 fixture 在
+metadata-aware Emit 边界结束；当前 `TokenSplit/EmitPrettyPrint` 仍会丢
+highlight/vn/op，绑定 `PRETTY-0001`，完整 markup encoder 也未获全函数门禁。
+
 ## 2026-08-27：移除 `0x4f` 字符后处理 workaround（TRI2-CALLOUT-RESID-0002）
 
 删除 `post_process_output_legacy` 第七趟中 `0x4f → 'O'` 的赋值替换。

@@ -1,5 +1,14 @@
 ﻿# `type_system/typefactory.rs` API Reference
 
+## 2026-08-28：三种 core-type bootstrap
+
+`CoreTypeFlavor` 现区分 compiler-supplied DataOrg、
+`ArchitectureGhidra::buildCoreTypes` fallback 与
+`SleighArchitecture::buildCoreTypes` fallback。两种 fallback 按锁定源码固定顺序注册
+完整表后统一 `cacheCoreTypes`；ASCII `char` 成为 `(1,TYPE_INT)` 首选对象，普通
+`int1/sbyte` 保留在 no-char cache。GetStr 聚焦 identity 已复核，完整 factory ordered
+tree、Arc identity 和 decoded `<coretypes>` 状态仍为 L2 residual。
+
 ## 文档状态
 
 - **状态**: L2。当前单名称 map 与 immutable `Arc<Datatype>` 不等价于
@@ -229,9 +238,10 @@ component pointee identity、pointer token identity 和重复调用 identity；�
 证明 fixture 中的普通 Struct component 路径。array、PartialStruct、PointerRel、
 enum、Spacebase、stale external Arc、incomplete composite 原位突变与冷 factory
 插入仍为 MISMATCH/UNTESTED，不能关闭 `TYPEFACTORY-ARC-IDENTITY-0001` 或提升
-模块级别。该 24-record fixture 整体另因 ActionSetCasts raw return 0/1 与
-ActionInferTypes output identity 1/0 两处已登记差异而 MISMATCH；两者不属于本
-component-identity 子投影。
+模块级别。该 24-record fixture 中 selected ActionSetCasts raw
+`result=0,count=1` 与 ActionInferTypes output canonical identity=1 现均为 MATCH；
+overall 仍因 Rust-only count bridge `NO_ORACLE` 及完整 action/type 闭包的
+MISMATCH/UNTESTED 而保持 MISMATCH。这些边界不属于本 component-identity 子投影。
 
 2026-08-28 本轮五个 source overlay 合跑的 production curl A/B 暴露了另一条
 下游边界：factory 构造的匿名 `TypePointer` 允许空 `TypeBase::name`，而当前局部

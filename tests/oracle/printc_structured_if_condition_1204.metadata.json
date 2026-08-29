@@ -12,19 +12,23 @@
     "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
   },
   "rugra_source": {
-    "base_commit": "26eee4ad27fc36a132c948876c9e0fbbb79051e2",
-    "base_tree": "47d96fcb3459b5c0adb9ac955c2c0edb46b20508",
-    "base_src_tree": "d7a4db15f342b63d772b75379c9c3b0aba441141",
+    "base_commit": "7e91aef6aa28cbf0a77b9812858c276cafa7fbd3",
+    "base_tree": "fd155bc4dd996000d3012c2d49f7244c3a6308ec",
+    "base_src_tree": "c6a2eb0fb690ff9ac693d12d6ea45b606bc713ae",
     "base_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
     "base_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
     "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
     "overlays": [
       {
         "path": "src/printc.rs",
-        "sha256": "437f3fee045c112465333eb81e7ad1499b2832c3ae1ff3258d675422f242e900"
+        "sha256": "5ccc3fd8ad69ad957c15040c0a2a0e125810302ffb19a13a24842bc8807516e1"
+      },
+      {
+        "path": "src/varnode.rs",
+        "sha256": "06c8bffeee37c3ffc290033ba26fc069c3def9562f415ed9c7a2a4e577c8fa56"
       }
     ],
-    "isolation": "Archive the pinned base commit and replace exactly src/printc.rs with the hash-pinned live candidate; fixture files are copied separately and no other live source enters the Cargo snapshot."
+    "isolation": "Archive the pinned base commit and replace exactly src/printc.rs and src/varnode.rs with the hash-pinned live candidates; fixture files are copied separately and no other live source enters the Cargo snapshot."
   },
   "architecture": {
     "id": "synthetic-le64-printc-structured-condition",
@@ -129,8 +133,9 @@
   "comparand": {
     "cpp_fixture_sha256": "9499936246765deac001a82fc3fdff06e97b063bce99664cf7239da606b2fcf5",
     "rust_fixture_sha256": "111ebad8ce28c55d777fa5a2c61117e54e8265c2e49b29964f8cd0e48c8c9707",
-    "runner_sha256": "d1b9d1f3efbb9ff057e81df3de58212b0dd68cc497d8466b4df955877d9fda17",
-    "printc_rs_sha256": "437f3fee045c112465333eb81e7ad1499b2832c3ae1ff3258d675422f242e900",
+    "runner_sha256": "a900e4e5037b798e7bdac2113d6812f09ef3e05039443891d0773912ea3f778b",
+    "printc_rs_sha256": "5ccc3fd8ad69ad957c15040c0a2a0e125810302ffb19a13a24842bc8807516e1",
+    "varnode_rs_sha256": "06c8bffeee37c3ffc290033ba26fc069c3def9562f415ed9c7a2a4e577c8fa56",
     "host_cxx": "g++ (GCC) 16.2.1 20260810",
     "host_rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
     "host_cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
@@ -142,7 +147,7 @@
   },
   "build": {
     "ghidra": "Archive and build only the locked decompiler C++ tree; fixture links libdecomp.cc, sleigh_arch.cc, inject_sleigh.cc, whole-archive libdecomp.a, and zlib; no BFD or processor assets",
-    "rugra": "Offline Cargo library build from the pinned base plus sole src/printc.rs overlay; rustc links the produced rlib and rugra_sleigh native archive",
+    "rugra": "Offline Cargo library build from the pinned base plus exact src/printc.rs and src/varnode.rs overlays; rustc links the produced rlib and rugra_sleigh native archive",
     "temporary_root": "$HOME/.cache/rugra-printc-structured-if-condition-1204; /tmp is never used"
   }
 }

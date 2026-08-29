@@ -1,5 +1,36 @@
 # `funcdata.rs` API Reference
 
+## 2026-08-28：`set_arch` 接通 Architecture-owned TypeFactory
+
+Ghidra 的 `Funcdata::newVarnode*` 在每次创建前都从同一 `glb->types` 调用
+`getBase(size, TYPE_UNKNOWN)`，再把该共享 `Datatype *` 交给
+`VarnodeBank::create/createDef`。Rugra 的 bank 在内部补这个必需参数，因此
+`Funcdata::set_arch` 现在会先把 `arch.types` 的同一 `Arc<RwLock<TypeFactory>>`
+注入 `VarnodeBank`，再允许后续 Varnode 分配。
+
+这修复了 GetStr worker 已安装 standalone core table、但初始 bank Varnode
+仍落入进程级 DataOrg factory 的分叉：修复前 stage 0 的 272 个 Varnode 中，
+Ghidra 为 174×`xunknown8` + 93×`xunknown1` + 5×`code`，Rugra 为
+174×`undefined8` + 93×`undefined1` + 5×`code`。修复保持 storage、flags、
+create-index 与迭代顺序不变，只让初始未知类型和后续 local/read-facing 类型
+共享 Architecture factory 身份。未附 Architecture 的 legacy/test 路径仍使用
+process-canonical fallback；完整显式 `Datatype` 参数化 API 继续属于长期
+`Funcdata::newVarnode*` 闭包。
+
+Fresh `getstr_pipeline_1204` 复验确认双方 stage 0 的 272 个有序 Varnode 在
+`flags + complete type record` 上零差异；stage 0/2/3 Rugra 快照已按当前源码重钉，
+最终字符条件和 C 文本哈希保持不变。完整六阶段仍因 FSPEC space、SSA/Action/结构
+等已登记残差保持 overall `MISMATCH`。独立 reviewer 只批准“一次、任何 Varnode
+分配前注入同一 factory”及这 272-node 投影；late attach、重复 rebind、
+`arch.types=None`、无 Architecture fallback、显式 Datatype variants 与完整
+assignHigh/laned/symbol/error 闭包仍为 NO_ORACLE/UNTESTED/MISMATCH。
+
+## 2026-08-28：结构条件回归断言纠正
+
+布尔折叠回归测试现在按 Ghidra 的 out-slot 契约记录 `out[0]=false`、
+`out[1]=true`，并断言 `ruleBlockIfNoExit` 经 virtual De Morgan 后得到最终 AND。
+这是测试期望修正；本次没有据此宣称 `Funcdata` 生产函数新增完整 MATCH。
+
 ## 2026-08-28：分支删除与 switch-default 镜像语义
 
 `Funcdata::remove_branch(bb, num)` 现把 `num` 解释为**要删除的 out-edge slot**，
@@ -938,7 +969,7 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
   - `scope_local_is_unmapped_unaliased` — `ScopeLocal::isUnmappedUnaliased`（varmap.cc:494-502）。
   - `local_symbol_sized_type`（2026-08-24 TYPEFACTORY-EXACTPIECE-CALLERS-0001 重写）— `SymbolEntry::getSizedType`（database.cc:151-162）的 LocalSymbol 形式：`off = inaddr - sym.start`（whole-map entry offset 为 0），piece 查找委托 Architecture-owned TypeFactory 的 canonical `TypeFactory::get_exact_piece`（type.cc:4090-4117，经 funcdata_varnode.cc:957 的 entry→scope→arch 链到达同一工厂；Rugra 侧由 `sync_varnodes_with_symbols` 从 `self.get_arch().types` 捕获并传入）。旧的 `exact_piece_arc_sub_type` 本地下钻副本已删除（无 partial 构造、丢 canonical identity）；Architecture 未接线时 fail-closed（类型投影跳过，flag 同步照常）。双侧门禁 `tests/oracle/exactpiece_callers_1204`。
 - 调用闭包：`ActionRestructureVarnode`（coreaction.cc:2281-2282，false/aliasyes，count 累计）与 `ActionMappedLocalSync`（coreaction.cc:2302-2303，true/true，count 累计）。
-- 已知残差：① ~~`getExactPiece` 的 partial 构造缺失~~（2026-08-24 起走 canonical 工厂，partial struct/array/enum/union 与 exact 命中同 oracle）；Architecture 未接线时类型投影 fail-closed（RUGRA-GAP，见 ARCH-0001 接线 TODO）；② Rugra `Varnode::set_flags/clear_flags` 本体不带 flagsDirty 传播（varnode.rs 端预置缺口，本移植在调用点补偿）；③ 未知类型工厂命名 `undefined{size}` vs Ghidra `xunknown{size}`（fixture 层规范化，属 TypeFactory 命名域而非本函数契约）。
+- 已知残差：① ~~`getExactPiece` 的 partial 构造缺失~~（2026-08-24 起走 canonical 工厂，partial struct/array/enum/union 与 exact 命中同 oracle）；Architecture 未接线时类型投影 fail-closed（RUGRA-GAP，见 ARCH-0001 接线 TODO）；② Rugra `Varnode::set_flags/clear_flags` 本体不带 flagsDirty 传播（varnode.rs 端预置缺口，本移植在调用点补偿）；③ Architecture-attached 路径现保持其 factory flavor 的真实命名与 Arc identity；无 Architecture 的 legacy fallback 与不同 Ghidra frontend flavor 仍须分别登记，禁止 fixture 层把 `undefined{size}`/`xunknown{size}` 归一化成 MATCH。
 
 ### 2026-06-29（续 2）：new_extended_constant（funcdata_varnode.cc:462）
 - `new_extended_constant(s, lo, hi, before_op)` — 创建可能 >8 字节的常量 Varnode。s≤8 时直接 newConstant；s>8 且 hi==0 时 INT_ZEXT(const)；s>8 且 hi!=0 时 PIECE(hi,lo)。忠实移植 Ghidra `Funcdata::newExtendedConstant`（funcdata_varnode.cc:462-484）。解锁 RuleDivTermAdd。
@@ -969,7 +1000,7 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 - `funcdata_flags::TYPE_RECOVERY_START`（funcdata.hh:90）+ `has_type_recovery_started()/set_type_recovery_started()`（funcdata.hh:151）。标记类型恢复已开始，Rule 据此决定 type-based 守卫是否生效。
 
 ### 2026-07-01：Architecture 引用 + iop-space varnode + op_undo_ptradd（解锁 cpool/funcptr/iop 依赖 Rule）
-- `arch: Option<Arc<Architecture>>` 字段 + `get_arch()/set_arch()`（funcdata.hh:80/144）。Ghidra 在 ctor 从 scope 取 glb；Rugra 用 set_arch 接线。默认 None 保证现有 832 测试不破坏。
+- `arch: Option<Arc<Architecture>>` 字段 + `get_arch()/set_arch()`（funcdata.hh:80/144）。Ghidra 在 ctor 从 scope 取 glb；Rugra 用 set_arch 接线。`set_arch` 同时把 `arch.types` 的共享身份注入 VarnodeBank，保证后续 Varnode 默认类型来自该 Architecture；默认 None 仅保留给无 Architecture 的 legacy/test 路径。
 - `new_varnode_iop(op)`（funcdata_varnode.cc:176-184）— 在 Iop 空间创建引用 op 的 varnode（Arc::as_ptr 编码）。
 - `get_op_from_const(vn)`（op.hh:249）— iop-space varnode 反查回 PcodeOp。
 - `op_undo_ptradd(op)`（funcdata_op.cc:579）— PTRADD 撤销为 INT_ADD/INT_MULT。
@@ -1134,10 +1165,11 @@ operand 走一字节 code-reference；其他 operand 以 SLEIGH 指定空间创�
 立即建立 descendant 反向引用。
 
 真实 `GetStr` raw fixture 中，Rugra 因而从旧的 197 个 Varnodes 变为与 Ghidra 相同的
-272 个；全部 103 个 op 的地址、数值 opcode、输入数量和输出存在性顺序一致。完整
-Varnode 状态仍为 `MISMATCH`：Ghidra 初始 unknown datatype/COVERDIRTY 等状态没有被
-Rugra 的当前 VarnodeBank 生命周期复现，CALL 的 Fspec 地址空间也依赖 `ADDR-0001`。
-本项不构成 `Funcdata` 模块 L3 证明。
+272 个；全部 103 个 op 的地址、数值 opcode、输入数量和输出存在性顺序一致。
+2026-08-28 复验进一步关闭了这里的旧 unknown datatype/flags 结论：272 个 ordered
+raw Varnode 的 flags + complete type records 现全部 MATCH。首个剩余 raw storage
+差异是 CALL 的 FSPEC address space，High/resolution/symbol 与后续阶段仍由各自 TODO
+跟踪；本项仍不构成 `Funcdata` 模块 L3 证明。
  
  
  

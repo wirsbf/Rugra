@@ -26,7 +26,7 @@
   "input": {
     "architecture": "x86:LE:64:default",
     "binary": "examples/curl",
-    "binary_sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+    "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
     "compiler_spec": "gcc",
     "function": {
       "entry": 14032,
@@ -39,7 +39,7 @@
     },
     "symbol_source": "ELF/BFD symbols only; no DWARF"
   },
-  "input_fingerprint": "sha256:e4fe0d6fe28d4347f12cdf1062f2954b6a64ba499cd3d9fb225c5888dc65b162",
+  "input_fingerprint": "sha256:7a771b95e63f26ef9a7d3e379f9dd7b1e528d2ff717232960c0551027807da5b",
   "observation": {
     "schema": "ordered JSON object graph with stable per-run PcodeOp/Varnode IDs",
     "normalization": "JSON object keys/whitespace plus LOAD/STORE input0 AddrSpace pointer to registered space index; array order, object identity, aliasing, edge slots, flags, state and text are preserved",
@@ -83,29 +83,73 @@
       },
       "diagnosis": "Both sides resolve the first direct CALL to 0x22f0, but locked Ghidra encodes FuncCallSpecs in dynamic fspace index 5 while Rugra's fixed AddressSpace enum has no Fspec variant and uses synthetic Iop index 7 (ADDR-0001/CALLSPEC-0001)."
     },
-    "first_varnode_state_difference": {
-      "index": 0,
-      "ghidra": {
-        "flags": 16777264,
-        "type": {"metatype": "unknown", "name": "xunknown8", "size": 8}
-      },
-      "rugra": {"flags": 48, "type": null},
-      "diagnosis": "Storage identity already agrees, but Rugra does not attach Ghidra's initial unknown Datatype or COVERDIRTY state to emitted Varnodes; this is a VarnodeBank/type/cover lifecycle residual, not a lifting-order difference."
+    "first_varnode_state_difference": null,
+    "closed_varnode_state_difference": {
+      "status": "MATCH",
+      "ordered_nodes": 272,
+      "ghidra_type_histogram": {"xunknown8": 174, "xunknown1": 93, "code": 5},
+      "rugra_type_histogram": {"xunknown8": 174, "xunknown1": 93, "code": 5},
+      "diagnosis": "Funcdata::set_arch now injects the Architecture-owned standalone TypeFactory into VarnodeBank before allocation. All ordered raw Varnode flags and complete type records match; storage, create index and traversal order are unchanged."
     },
     "covered": [
       "PcodeOp order, opcode, address, input order, output identity and selected flags",
       "Varnode identity, location, flags, definition and descendant order",
       "basic-block order, edge slot/reverse index/flags and op membership",
       "recursive structured-block kind/order",
-      "final unmarked C text"
+      "final unmarked C text",
+      "focused 0x36ee NOTEQUAL stored char types, per-input High read-facing char types, exact def-use roles, and producer-local short-circuit character-literal line"
     ],
     "untested": [
-      "Ghidra token/markup metadata",
+      "Full Ghidra token/markup event metadata; the focused final character literal text is covered separately",
       "all private PcodeOp and edge flags not exposed by both implementations",
       "same-boundary Rugra Action-tree pause immediately after Heritage",
       "Java Program DB/DWARF-derived symbols and prototypes",
       "debug-profile Action execution until VARMAP-GATHEROFFSET-0001 and RULE-COLLECTTERMS-0001 receive independent core review",
       "full FlowInfo error/injection/override/jump-table and generateBlocks state covered by SLEIGH-FLOW-0001"
+    ]
+  },
+  "focused_projections": {
+    "char_zero_read_facing": {
+      "status": "MATCH",
+      "stage": "03_action_ir",
+      "locator": {
+        "value_pointer_guard": {"address_offset": 14057, "opcode": 12, "input_count": 2},
+        "character_load": {"address_offset": 14062, "opcode": 2, "input_count": 2},
+        "character_compare": {"address_offset": 14062, "opcode": 12, "input_count": 2},
+        "consumer_branch": {"address_offset": 14066, "opcode": 5, "input_count": 2}
+      },
+      "value_pointer_storage": {"space": 4, "space_name": "register", "offset": 48, "size": 8},
+      "pointer_zero_storage": {"space": 0, "space_name": "const", "offset": 0, "size": 8, "def": null},
+      "character_zero_storage": {"space": 0, "space_name": "const", "offset": 0, "size": 1, "def": null},
+      "stored_character_type": {"name": "char", "size": 1, "metatype": "int"},
+      "input_high_read_types": [
+        {"name": "char", "size": 1, "metatype": "int"},
+        {"name": "char", "size": 1, "metatype": "int"}
+      ],
+      "identity_contract": "The pointer guard slot 0 and LOAD slot 1 are the same Varnode identity; the character compare slot 0 is defined directly by that LOAD, slot 1 is the size-1 zero constant, and the compare output is consumed in branch slot 1. No op id, time, order, or opcode spelling is normalized."
+    },
+    "short_circuit_character_token": {
+      "status": "MATCH",
+      "stage": "05_c",
+      "producer_lines": {
+        "ghidra": "  if ((param_2 != (char *)0x0) && (*param_2 != '\\0')) {",
+        "rugra": "  if ((param_1 != (char *)0x0) && (*param_1 != '\\0')) {"
+      },
+      "role_projection": "if ((value_pointer != (char *)0x0) && (*value_pointer != '\\0')) {",
+      "normalization": "Only the producer-local spelling proven by the 03_action_ir register:48:8 def-use chain is projected to the value_pointer role. Both original lines remain in comparison.json; no global identifier replacement, regex text rewrite, whitespace removal, cast removal, or literal normalization is permitted."
+    },
+    "does_not_override_overall_status": true,
+    "residual_ids": [
+      "PARAM-RECOVERY-0001",
+      "PRINT-SIGNATURE-0001",
+      "ACTION-INFERTYPES-DISPATCH-0001",
+      "VARNODE-LOCALTYPE-RESOLUTION-0001",
+      "SEQNUM-0001",
+      "VARNODE-0001",
+      "ADDR-0001",
+      "CALLSPEC-0001",
+      "GETSTR-PRINTC-STRUCTCOND-0001",
+      "PRINT-RPN-0001"
     ]
   },
   "assets": {
@@ -120,33 +164,34 @@
     "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
   },
   "comparand_sha256": {
-    "cpp_fixture": "721e5452e45cc8f7b548a9b2f965e90128d6b4981b7bb07d16adfdf0d9b54c7e",
-    "rust_example": "bfcadc80f722f40f153229fe2c98bf53b11a25ae7e9adcef2d6e598dfe1b771d",
+    "cpp_fixture": "ae1c6a577f78d898c22648a71516bec54d454cbd1c397a7ada80e5aeadcd23ac",
+    "rust_example": "1a0913898f284680a513a661a35762740ce7abd964cd85dfa56d9a1c0a591902",
+    "runner": "412051ec3e586874db1a04393f12cfe0efd4fd71cd07a4207bbb3c8f1b759e75",
     "stage_diff": "658aab9684166e3250799984bac453a25cf4edcdaec4d3ba62b0aaa5f66acdca",
     "cargo_manifest": "0492e8ead5900eb126be84d5f54fd65df09038aee3d456251d75f9d093202cd0",
     "cargo_lock": "4819697db21a44f2fbba53e6f47bc384323581ad95436424c08150a1b87edb0b",
     "build_script": "e5c03402e79669fac6efa5b06fb20e62f1f07ee4289737ebbde6c12f5023a6db",
-    "rugra_src_tree": "14e5a11c9fc65c62f7fbe6c426d318878764d909c1938464709296c4ed21e55b",
+    "rugra_src_tree": "a98fed3355bd591b53c27c716c6ff2df0be3f99518c0f79b305e87a11a0f7293",
     "sleigh_shim_tree": "d09a9aa127082e64e5a1fdee29eaf9987ce6fb10cb223acce56815139675351b"
   },
   "expected": {
     "ghidra": {
-      "00_raw_pcode": {"sha256": "b590eb862e4f4bac9325849fc008f00c8d18b0d37492de94199436bd27b64a39", "ops": 103, "varnodes": 272},
+      "00_raw_pcode": {"sha256": "f83cde23a583f7175216a9ea5b6c90f2d8883cb15e9f9a98b12b3fe692dfe7a8", "ops": 103, "varnodes": 272},
       "01_cfg": {"sha256": "445ec8886322181c7d229ec36e2147cd76118a0481e8852695a1b75cd443ff2a", "blocks": 6},
-      "02_heritage_ssa": {"sha256": "daae82593322cde94712ab36e07b567a2b8cf6037141cde7959c05714494abe3", "ops": 156, "varnodes": 273, "blocks": 6},
-      "03_action_ir": {"sha256": "103538d96bd8c85b9542734cf5620626acff9261361e06ae33263333609f5f66", "ops": 14, "varnodes": 23, "blocks": 6},
+      "02_heritage_ssa": {"sha256": "938ca78a5ec3783bf2eac7fbdee7299a5bb08c9efb9a6aff8dfd34f6db8594f5", "ops": 156, "varnodes": 273, "blocks": 6},
+      "03_action_ir": {"sha256": "3cefb22a581da9af7a80b43bc350c32371a498fb270f12eb5c2089104bc567a4", "ops": 14, "varnodes": 23, "blocks": 6},
       "04_structure": {"sha256": "89f1348c63a94c276af6ed89570eee5f5204fa488b0d39918769636799d74cc3", "root_children": 1},
       "05_c": {"sha256": "8d289a843a24673e8e0e6a25a44574a418f36e8fd567193d2a5f01ad14242855", "text_bytes": 272}
     },
     "rugra": {
-      "00_raw_pcode": {"sha256": "a6f79573dbc3add5758dfad6ff1aa97437c5d62ceaaf92bb2adb919fec789477", "ops": 103, "varnodes": 272},
-      "01_cfg": {"sha256": "ead96e25b0fd6abb5fde35bdb21e9ce7afdbe81c138fbbdb8a90f903ebb73682", "blocks": 6},
-      "02_heritage_ssa": {"sha256": "70fbaa0f0d7b61fc16b74ef52d03d580ae588878bdbf8a2344e96ab845a7922c", "ops": 105, "varnodes": 287, "blocks": 6},
-      "03_action_ir": {"sha256": "d15bff2db5fe097a10c73363dabe4c60ac22b5e0487b43fe7833483005174541", "ops": 131, "varnodes": 439, "blocks": 6},
-      "04_structure": {"sha256": "aa45737f016eef5b8924b4753bf0366bed5088348a2cc2c980a44564081b782f", "root_children": 3},
-      "05_c": {"sha256": "74ce15e6111adf6e108c775edb7adaf308475a4753a2cbdf490f6ac42e69922f", "text_bytes": 721}
+      "00_raw_pcode": {"sha256": "df3b258102e4850799687f4a3c51b50b8d602c8e1768ea25de82b0a002a9af80", "ops": 103, "varnodes": 272},
+      "01_cfg": {"sha256": "690f6aa7fd73f1c54f9dce4333027242a4d39f91110410f7966328b2912589c6", "blocks": 6},
+      "02_heritage_ssa": {"sha256": "f31a9381b78142b487321888ced223ea0a2330d01bd1f9a0c80e5aef253be096", "ops": 103, "varnodes": 272, "blocks": 6},
+      "03_action_ir": {"sha256": "ac48b27e392abe4f13c49e917d3a61c9cee8d3da1ca76a67419bc13709ed2d4e", "ops": 14, "varnodes": 23, "blocks": 6},
+      "04_structure": {"sha256": "685ed1eb09f34e0d40658222f39f44d25044bb74829010099f8b8ebd28a2b678", "root_children": 1},
+      "05_c": {"sha256": "0b2ef681ab07448cc1b7659762f2aa78715e42b5a77dd79969bbdbfe502435eb", "text_bytes": 523}
     }
   },
-  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-  "host_rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)"
+  "host_compiler": "g++ (GCC) 16.2.1 20260810",
+  "host_rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)"
 }

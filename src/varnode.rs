@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::sync::{Arc, Weak, RwLock};
+use std::sync::{Arc, RwLock, Weak};
 
 // Forward declarations/Stubs
 // These placeholders allow the code to compile while other modules are being aligned.
@@ -17,13 +17,13 @@ pub mod stubs {
     #[derive(Debug)] pub struct ValueSet;
 }
 
-use crate::database::SymbolEntry;
-use crate::variable::HighVariable;
 use crate::cover::Cover;
+use crate::database::SymbolEntry;
 use crate::op::PcodeOp;
 use crate::type_system::Datatype;
 use crate::type_system::TypeBase;
 use crate::type_system::TypeMetatype;
+use crate::variable::HighVariable;
 
 /// First offset in Ghidra's analysis-owned unique-space region.
 /// `Translate::getUniqueStart(Translate::ANALYSIS)` returns this tag directly.
@@ -100,7 +100,7 @@ fn local_base(
 /// (same UNTESTED registration as merge.rs local_meta_pair).
 fn local_meta_pair(opcode: crate::opcodes::OpCode) -> Option<(TypeMetatype, TypeMetatype)> {
     use crate::opcodes::OpCode;
-    use TypeMetatype::{Bool, Float, Int, Unknown, Uint};
+    use TypeMetatype::{Bool, Float, Int, Uint, Unknown};
     Some(match opcode {
         OpCode::CPUI_INT_EQUAL
         | OpCode::CPUI_INT_NOTEQUAL
@@ -246,9 +246,9 @@ pub fn op_output_type_local(
             // u64 offset truncates to the low 32 bits exactly as Ghidra's
             // `UserOpManage::getOp(uint4)` (userop.cc:408) does.
             let index = op.get_in(0)?.read().unwrap().get_offset() as i32;
-            let descriptor_type = userops.and_then(|manager| {
-                manager.read().unwrap().get_output_local(index).cloned()
-            });
+            let descriptor_type = userops
+                .and_then(|manager| manager.read().unwrap().get_output_local(index).cloned()
+            );
             match descriptor_type {
                 // cc:869-871: non-null descriptor metadata wins.
                 Some(res) => Some(res),
@@ -325,10 +325,12 @@ pub fn op_input_type_local(
         // typeop.cc:1510-1516/1535-1541/1600-1606.
         (OpCode::CPUI_INT_LEFT, 1)
         | (OpCode::CPUI_INT_RIGHT, 1)
-        | (OpCode::CPUI_INT_SRIGHT, 1) => type_factory
+        | (OpCode::CPUI_INT_SRIGHT, 1) => {
+            type_factory
             .read()
             .unwrap()
-            .get_base_no_char(input_size, TypeMetatype::Int),
+            .get_base_no_char(input_size, TypeMetatype::Int)
+        }
         // typeop.cc:2535-2541/2550-2556.
         (OpCode::CPUI_INSERT, 0) | (OpCode::CPUI_EXTRACT, 0) => {
             local_base(type_factory, input_size, TypeMetatype::Unknown)
@@ -353,8 +355,9 @@ pub fn op_input_type_local(
         // typeop.cc:2232-2236/2314-2318/2465-2469.
         (
             OpCode::CPUI_PTRADD | OpCode::CPUI_PTRSUB | OpCode::CPUI_CPOOLREF,
-            _,
-        ) => local_base(type_factory, input_size, TypeMetatype::Int),
+            _) => {
+            local_base(type_factory, input_size, TypeMetatype::Int)
+        }
         // typeop.cc:855-863 TypeOpCallother::getInputLocal.
         (OpCode::CPUI_CALLOTHER, _) => {
             // cc:858: descriptor lookup by the CALLOTHER index constant in
@@ -1124,14 +1127,6 @@ impl Varnode {
         (self.flags & varnode_flags::EXPLICIT) != 0
     }
 
-    // Ghidra: varnode.cc:578 Varnode::isAutoLive
-    /// Is this varnode held alive automatically (AUTOLIVE_HOLD)? Faithful to
-    /// `Varnode::isAutoLive` (varnode.hh). Currently always false — Rugra has
-    /// not yet ported the machinery that SETS the auto-live flag (ActionCopyPropagate /
-    /// merge marking). This is a safe conservative port: when no varnode is
-    /// marked, isAutoLive returns false, matching Ghidra. The empty-varnode
-    /// bug in RuleEarlyRemoval is fixed by the `is_indirect_source` guard, not
-    /// this one; re-evaluate when auto-live setting is ported.
     // Ghidra: varnode.hh:252 Varnode::isAutoLive
     /// Is this varnode exempt from dead-code removal? True if addrforce or
     /// autolive_hold flag is set. Faithful to `isAutoLive()` (varnode.hh:252).
@@ -1276,7 +1271,7 @@ impl Varnode {
     //   comparisons. Ghidra compares raw `Varnode*` pointers (op.hh:166);
     //   Rugra varnodes live in `Arc<RwLock<Varnode>>` allocations whose weak
     //   self reference is installed by `VarnodeBank::allocate` (varnode.rs).
-    fn self_arc(&self) -> Option<Arc<RwLock<Varnode>>> {
+    pub(crate) fn self_arc(&self) -> Option<Arc<RwLock<Varnode>>> {
         self.self_ref.upgrade()
     }
 
@@ -1366,7 +1361,11 @@ impl Varnode {
     /// Set the type without locking. Faithful to `Varnode::updateType(Datatype*)`
     /// (varnode.cc:456-464). Returns true if the type was changed.
     pub fn update_type(&mut self, ct: Arc<Datatype>) -> bool {
-        if self.v_type.as_ref().map(|t| Arc::ptr_eq(t, &ct)).unwrap_or(false) || self.is_type_lock() {
+        if self
+            .v_type
+            .as_ref()
+            .map(|t| Arc::ptr_eq(t, &ct))
+            .unwrap_or(false) || self.is_type_lock() {
             return false;
         }
         self.v_type = Some(ct);
@@ -1387,7 +1386,11 @@ impl Varnode {
         if self.is_type_lock() && !override_lock {
             return false;
         }
-        let same = self.v_type.as_ref().map(|t| Arc::ptr_eq(t, &ct)).unwrap_or(false);
+        let same = self
+            .v_type
+            .as_ref()
+            .map(|t| Arc::ptr_eq(t, &ct))
+            .unwrap_or(false);
         if same && self.is_type_lock() == effective_lock {
             return false;
         }
@@ -1555,7 +1558,13 @@ impl Varnode {
     /// Faithful to `setSymbolEntry` (varnode.cc:429-439). Sets mapentry,
     /// marks MAPPED, and NAMELOCK if the symbol is name-locked.
     pub fn set_symbol_entry(&mut self, entry: Arc<RwLock<SymbolEntry>>) {
-        let is_name_locked = entry.read().unwrap().symbol.read().unwrap().is_name_locked();
+        let is_name_locked = entry
+            .read()
+            .unwrap()
+            .symbol
+            .read()
+            .unwrap()
+            .is_name_locked();
         self.mapentry = Some(entry);
         let mut fl = varnode_flags::MAPPED;
         if is_name_locked {
@@ -1634,7 +1643,12 @@ impl Varnode {
     pub fn get_structured_type(&self) -> Option<Arc<Datatype>> {
         let ct = if let Some(me) = &self.mapentry {
             let me_rg = me.read().unwrap();
-            me_rg.get_symbol().read().unwrap().get_type().or_else(|| self.v_type.clone())
+            me_rg
+                .get_symbol()
+                .read()
+                .unwrap()
+                .get_type()
+                .or_else(|| self.v_type.clone())
         } else {
             self.v_type.clone()
         };
@@ -1669,8 +1683,10 @@ impl Varnode {
     /// Encode this Varnode as XML attributes. Faithful to `encode`
     /// (varnode.cc:1182-1201). Rugra returns a String (no Encoder).
     pub fn encode(&self) -> String {
-        let mut s = format!("<addr space=\"{}\" offset=\"{:x}\" size=\"{}\" ref=\"{}\"",
-            self.address_space.name(), self.loc.as_u64(), self.size, self.create_index);
+        let mut s = format!(
+            "<addr space=\"{}\" offset=\"{:x}\" size=\"{}\" ref=\"{}\"",
+            self.address_space.name(), self.loc.as_u64(), self.size, self.create_index
+        );
         if self.is_persist() { s += " persists=\"true\""; }
         if self.is_addr_tied() { s += " addrtied=\"true\""; }
         if self.is_unaffected() { s += " unaff=\"true\""; }
@@ -1751,24 +1767,19 @@ impl Varnode {
         (self.flags & varnode_flags::MAPPED) != 0
     }
 
-    // Ghidra: varnode.hh:292 Varnode::setWriteMask
+    // Ghidra: varnode.hh:325 Varnode::setWriteMask
     pub fn set_write_mask(&mut self) {
-        // WRITEMASK is not a Ghidra flag name; Ghidra uses writemask which
-        // maps to a separate field in TypeOp, not Varnode. In Ghidra's
-        // heritage.cc, vn->setWriteMask() sets the Varnode::writemask flag
-        // which is varnode_flags::WRITEMASK (not currently defined in Rugra).
-        // Using a reserved bit pattern.
-        self.flags |= 0x4000_0000; // Reserved for writemask
+        self.addlflags |= addl_flags::WRITE_MASK;
     }
 
-    // Ghidra: varnode.hh:292 Varnode::clearWriteMask
+    // Ghidra: varnode.hh:326 Varnode::clearWriteMask
     pub fn clear_write_mask(&mut self) {
-        self.flags &= !0x4000_0000;
+        self.addlflags &= !addl_flags::WRITE_MASK;
     }
 
-    // Ghidra: varnode.hh:293 Varnode::isWriteMask
+    // Ghidra: varnode.hh:278 Varnode::isWriteMask
     pub fn is_write_mask(&self) -> bool {
-        (self.flags & 0x4000_0000) != 0
+        (self.addlflags & addl_flags::WRITE_MASK) != 0
     }
 
     // Ghidra: varnode.cc:378 Varnode::clearSymbolLinks
@@ -1785,7 +1796,9 @@ impl Varnode {
     // Ghidra: varnode.cc:88 Varnode::getHigh
     /// Get the associated HighVariable. Faithful to `getHigh`
     /// (varnode.cc:88-89).
-    pub fn get_high(&self) -> Option<&std::sync::Arc<std::sync::RwLock<crate::variable::HighVariable>>> {
+    pub fn get_high(
+        &self,
+    ) -> Option<&std::sync::Arc<std::sync::RwLock<crate::variable::HighVariable>>> {
         self.high.as_ref()
     }
 
@@ -1820,7 +1833,8 @@ impl Varnode {
                     if ml == 0 { return false; }
                     ml -= 1;
                     // Follow in(1).
-                    let in1 = match def_r.get_in(1) { Some(v) => v.clone(), None => return false };
+                    let in1 = match def_r.get_in(1) { Some(v) => v.clone(), None => return false ,
+                    };
                     drop(def_r);
                     let r = in1.read().unwrap();
                     cur_vn_offset = r.loc.as_u64();
@@ -1831,14 +1845,17 @@ impl Varnode {
                 OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_XOR
                 | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_AND => {
                     if mb == 0 { return false; }
-                    let in0 = match def_r.get_in(0) { Some(v) => v.clone(), None => return false };
-                    let in1 = match def_r.get_in(1) { Some(v) => v.clone(), None => return false };
+                    let in0 = match def_r.get_in(0) { Some(v) => v.clone(), None => return false ,
+                    };
+                    let in1 = match def_r.get_in(1) { Some(v) => v.clone(), None => return false ,
+                    };
                     drop(def_r);
                     if !in0.read().unwrap().is_eventual_constant(mb - 1, ml) { return false; }
                     return in1.read().unwrap().is_eventual_constant(mb - 1, ml);
                 }
                 OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT | OpCode::CPUI_COPY => {
-                    let in0 = match def_r.get_in(0) { Some(v) => v.clone(), None => return false };
+                    let in0 = match def_r.get_in(0) { Some(v) => v.clone(), None => return false ,
+                    };
                     drop(def_r);
                     let r = in0.read().unwrap();
                     cur_vn_offset = r.loc.as_u64();
@@ -1849,9 +1866,11 @@ impl Varnode {
                 OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT
                 | OpCode::CPUI_INT_SRIGHT | OpCode::CPUI_INT_MULT => {
                     // Requires in(1) constant, follow in(0).
-                    let in1 = match def_r.get_in(1) { Some(v) => v.clone(), None => return false };
+                    let in1 = match def_r.get_in(1) { Some(v) => v.clone(), None => return false ,
+                    };
                     if !in1.read().unwrap().is_constant() { return false; }
-                    let in0 = match def_r.get_in(0) { Some(v) => v.clone(), None => return false };
+                    let in0 = match def_r.get_in(0) { Some(v) => v.clone(), None => return false ,
+                    };
                     drop(def_r);
                     let r = in0.read().unwrap();
                     cur_vn_offset = r.loc.as_u64();
@@ -2503,8 +2522,10 @@ impl Varnode {
         if let Some(position) = position {
             self.descend.remove(position);
         } else {
-            eprintln!("[VN] WARN: erase_descend op={:p} not in descend list (space={:?} off={:#x})",
-                std::sync::Arc::as_ptr(op), self.address_space, self.loc.as_u64());
+            eprintln!(
+                "[VN] WARN: erase_descend op={:p} not in descend list (space={:?} off={:#x})",
+                std::sync::Arc::as_ptr(op), self.address_space, self.loc.as_u64()
+            );
         }
         // Ghidra cc:325: setFlags(Varnode::coverdirty)
         self.flags |= varnode_flags::COVERDIRTY;
@@ -3420,15 +3441,18 @@ impl VarnodeBank {
 
     // Ghidra: varnode.cc:1942 VarnodeBank::endDef(uint4 fl, const Address&)
     pub fn end_def_addr(&self, _fl: u32, addr: Address) -> impl Iterator<Item = &VarnodeDefRef> {
-        self.def_tree.iter().filter(move |v| {
-            v.0.read().unwrap().loc.as_u64() > addr.as_u64()
-        })
+        self.def_tree
+            .iter()
+            .filter(move |v| v.0.read().unwrap().loc.as_u64() > addr.as_u64()
+        )
     }
 
     // Ghidra: varnode.cc:1791 VarnodeBank::overlapLoc
     /// Find overlapping varnodes in loc_tree for a given iterator.
     /// Faithful to `overlapLoc` (varnode.cc:1791-1830).
-    pub fn overlap_loc(&self, target_addr: Address, target_size: usize) -> Vec<Arc<RwLock<Varnode>>> {
+    pub fn overlap_loc(
+        &self, target_addr: Address, target_size: usize,
+    ) -> Vec<Arc<RwLock<Varnode>>> {
         let mut result = Vec::new();
         let target_end = target_addr.as_u64().wrapping_add(target_size as u64);
         for loc_ref in &self.loc_tree {
@@ -3472,7 +3496,9 @@ impl VarnodeBank {
     /// Find a free varnode at a specific location and size
     pub fn find_free(&self, size: usize, loc: Address) -> Option<Arc<RwLock<Varnode>>> {
         let search_vn = Arc::new(RwLock::new(Varnode::new(size, loc)));
-        self.loc_tree.get(&VarnodeLocRef(search_vn)).map(|v| v.0.clone())
+        self.loc_tree
+            .get(&VarnodeLocRef(search_vn))
+            .map(|v| v.0.clone())
     }
 
     // Ghidra: varnode.cc:1465 VarnodeBank::findInput
@@ -3480,7 +3506,8 @@ impl VarnodeBank {
     /// `VarnodeBank::findInput` (varnode.hh). Used by ActionRestrictLocal
     /// and AncestorRealistic to find specific register inputs.
     pub fn find_input(&self, size: usize, loc: Address) -> Option<Arc<RwLock<Varnode>>> {
-        self.loc_tree.iter()
+        self.loc_tree
+            .iter()
             .find(|v| {
                 let g = v.0.read().unwrap();
                 g.is_input() && g.get_size() == size && g.get_offset() == loc.as_u64()
@@ -3492,7 +3519,9 @@ impl VarnodeBank {
     /// Find a Varnode by size, address, defining op address, and optional uniq.
     /// Faithful to `find` (varnode.cc:1440-1458). Scans loc_tree entries
     /// matching (size, addr) and checks def op address + time.
-    pub fn find_vn(&self, size: usize, loc: Address, pc: Address, uniq: u32) -> Option<Arc<RwLock<Varnode>>> {
+    pub fn find_vn(
+        &self, size: usize, loc: Address, pc: Address, uniq: u32,
+    ) -> Option<Arc<RwLock<Varnode>>> {
         for loc_ref in &self.loc_tree {
             let vn = loc_ref.0.read().unwrap();
             if vn.get_size() != size { continue; }
@@ -3552,17 +3581,19 @@ impl VarnodeBank {
     /// Beginning of Varnodes in given address space, sorted by location.
     /// Faithful to `beginLoc(AddrSpace*)` (varnode.cc:1560-1564).
     pub fn begin_loc_space(&self, space: AddressSpace) -> impl Iterator<Item = &VarnodeLocRef> {
-        self.loc_tree.iter().filter(move |v| {
-            v.0.read().unwrap().address_space == space
-        })
+        self.loc_tree
+            .iter()
+            .filter(move |v| v.0.read().unwrap().address_space == space
+        )
     }
 
     // Ghidra: varnode.cc:1582 VarnodeBank::beginLoc(const Address&)
     /// Beginning of Varnodes at a specific address.
     pub fn begin_loc_addr(&self, addr: Address) -> impl Iterator<Item = &VarnodeLocRef> {
-        self.loc_tree.iter().filter(move |v| {
-            v.0.read().unwrap().loc == addr
-        })
+        self.loc_tree
+            .iter()
+            .filter(move |v| v.0.read().unwrap().loc == addr
+        )
     }
 
     // Ghidra: varnode.cc:1560 VarnodeBank::endLoc(AddrSpace*)
@@ -3570,7 +3601,9 @@ impl VarnodeBank {
     /// combined with begin_loc_space into a single filter iterator.
     /// This method exists for API completeness but returns an empty iterator
     /// (use begin_loc_space().chain(empty) pattern instead).
-    pub fn end_loc_space(&self, _space: AddressSpace) -> std::collections::btree_set::Iter<'_, VarnodeLocRef> {
+    pub fn end_loc_space(
+        &self, _space: AddressSpace,
+    ) -> std::collections::btree_set::Iter<'_, VarnodeLocRef> {
         // In Rust, we use the filter iterator from begin_loc_space directly.
         // This is a no-op stub for API parity.
         self.loc_tree.iter()
@@ -3634,9 +3667,8 @@ impl VarnodeBank {
     ) -> impl Iterator<Item = Arc<RwLock<Varnode>>> + '_ {
         self.loc_tree
             .iter()
-            .filter(move |entry| {
-                entry.0.read().unwrap().address_space == space
-            })
+            .filter(move |entry| entry.0.read().unwrap().address_space == space
+            )
             .map(|entry| entry.0.clone())
     }
 }
@@ -3693,7 +3725,12 @@ fn copy_chain_hits(vn: &Varnode, target: &Varnode) -> bool {
         }
         // Set up for next iteration: cur_vn becomes next_arc's Varnode.
         // Its def is next_arc.def.
-        let next_def = next_arc.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+        let next_def = next_arc
+            .read()
+            .unwrap()
+            .def
+            .as_ref()
+            .and_then(|w| w.upgrade());
         let _ = cur_vn_ptr; // suppress unused
         cur_def = next_def;
     }
@@ -3708,7 +3745,9 @@ fn copy_chain_hits(vn: &Varnode, target: &Varnode) -> bool {
 // RUGRA-GLUE: 透传 COPY 链到终端 def op（非 COPY 定义或 unwritten）。
 // Ghidra 内联 while 循环；Rugra 提取为函数以避免跨层 RwLockReadGuard 冲突。
 /// Returns None if vn is not written.
-fn copy_chain_source_def(vn: &Varnode) -> Option<(std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>, bool)> {
+fn copy_chain_source_def(
+    vn: &Varnode,
+) -> Option<(std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>, bool)> {
     use crate::opcodes::OpCode;
     // Walk COPY chain to the terminal def op.
     let mut cur_def = vn.def.as_ref().and_then(|w| w.upgrade())?;
@@ -3716,7 +3755,11 @@ fn copy_chain_source_def(vn: &Varnode) -> Option<(std::sync::Arc<std::sync::RwLo
         let (is_copy, next_def) = {
             let d = cur_def.read().unwrap();
             if d.opcode == OpCode::CPUI_COPY {
-                (true, d.inrefs.get(0).and_then(|v| v.read().unwrap().def.as_ref().and_then(|w| w.upgrade())))
+                (
+                    true, d.inrefs
+                        .get(0)
+                        .and_then(|v| v.read().unwrap().def.as_ref().and_then(|w| w.upgrade())),
+                )
             } else {
                 (false, None)
             }
@@ -3775,8 +3818,10 @@ fn find_subpiece_shadow(vn: &Varnode, least_byte: i32, whole: &Varnode, recurse:
     let def = def_arc.read().unwrap();
     match def.opcode {
         OpCode::CPUI_SUBPIECE => {
-            let tmpvn_arc = match def.inrefs.get(0) { Some(a) => a.clone(), None => return false };
-            let off = match def.inrefs.get(1) { Some(a) => a.read().unwrap().get_offset() as i32, None => return false };
+            let tmpvn_arc = match def.inrefs.get(0) { Some(a) => a.clone(), None => return false ,
+            };
+            let off = match def.inrefs.get(1) { Some(a) => a.read().unwrap().get_offset() as i32, None => return false ,
+            };
             if off != least_byte {
                 return false;
             }
@@ -3810,7 +3855,12 @@ fn find_subpiece_shadow(vn: &Varnode, least_byte: i32, whole: &Varnode, recurse:
             // bigOp->getParent() != smallOp->getParent() check (varnode.cc:1044).
             let same_parent = {
                 let big_p = big_op_def.parent.as_ref().and_then(|w| w.upgrade());
-                let small_p = small_op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+                let small_p = small_op
+                    .read()
+                    .unwrap()
+                    .parent
+                    .as_ref()
+                    .and_then(|w| w.upgrade());
                 match (big_p, small_p) {
                     (Some(b), Some(s)) => std::sync::Arc::ptr_eq(&b, &s),
                     _ => false,
@@ -3821,13 +3871,18 @@ fn find_subpiece_shadow(vn: &Varnode, least_byte: i32, whole: &Varnode, recurse:
             }
             let n = big_op_def.num_input();
             // Collect input Arcs before recursing (avoid holding guards).
-            let pairs: Vec<(std::sync::Arc<std::sync::RwLock<Varnode>>, std::sync::Arc<std::sync::RwLock<Varnode>>)> = {
+            let pairs: Vec<(
+                std::sync::Arc<std::sync::RwLock<Varnode>>, std::sync::Arc<std::sync::RwLock<Varnode>>,
+            )> = {
                 let small = small_op.read().unwrap();
-                (0..n).filter_map(|i| {
+                (0..n)
+                    .filter_map(|i| {
                     let sin = small.inrefs.get(i).cloned();
                     let bin = big_op_def.inrefs.get(i).cloned();
-                    match (sin, bin) { (Some(a), Some(b)) => Some((a, b)), _ => None }
-                }).collect()
+                    match (sin, bin) { (Some(a), Some(b)) => Some((a, b)), _ => None ,
+                        }
+                })
+                    .collect()
             };
             drop(big_op_def);
             for (s_arc, b_arc) in pairs {
@@ -3884,12 +3939,14 @@ fn find_piece_shadow(vn: &Varnode, mut least_byte: i32, piece: &Varnode) -> bool
         return false;
     }
     // tmpvn = getIn(1) (least significant part).
-    let mut tmpvn_arc = match def.inrefs.get(1) { Some(a) => a.clone(), None => return false };
+    let mut tmpvn_arc = match def.inrefs.get(1) { Some(a) => a.clone(), None => return false ,
+    };
     let tmp_size = tmpvn_arc.read().unwrap().size;
     if (least_byte as usize) >= tmp_size {
         least_byte -= tmp_size as i32;
         // tmpvn = getIn(0).
-        tmpvn_arc = match def.inrefs.get(0) { Some(a) => a.clone(), None => return false };
+        tmpvn_arc = match def.inrefs.get(0) { Some(a) => a.clone(), None => return false ,
+        };
     } else {
         let tmp_size2 = tmpvn_arc.read().unwrap().size;
         if piece.size + (least_byte as usize) > tmp_size2 {
@@ -3913,19 +3970,25 @@ pub fn contiguous_test(vn1: &Varnode, vn2: &Varnode) -> bool {
     use crate::opcodes::OpCode;
     if vn1.is_input() || vn2.is_input() { return false; }
     if !vn1.is_written() || !vn2.is_written() { return false; }
-    let def1 = match vn1.def.as_ref().and_then(|w| w.upgrade()) { Some(d) => d, None => return false };
-    let def2 = match vn2.def.as_ref().and_then(|w| w.upgrade()) { Some(d) => d, None => return false };
+    let def1 = match vn1.def.as_ref().and_then(|w| w.upgrade()) { Some(d) => d, None => return false ,
+    };
+    let def2 = match vn2.def.as_ref().and_then(|w| w.upgrade()) { Some(d) => d, None => return false ,
+    };
     let d1 = def1.read().unwrap();
     let d2 = def2.read().unwrap();
     if d1.opcode != OpCode::CPUI_SUBPIECE || d2.opcode != OpCode::CPUI_SUBPIECE { return false; }
-    let vnwhole1 = match d1.get_in(0) { Some(v) => v.clone(), None => return false };
-    let vnwhole2 = match d2.get_in(0) { Some(v) => v.clone(), None => return false };
+    let vnwhole1 = match d1.get_in(0) { Some(v) => v.clone(), None => return false ,
+    };
+    let vnwhole2 = match d2.get_in(0) { Some(v) => v.clone(), None => return false ,
+    };
     if !Arc::ptr_eq(&vnwhole1, &vnwhole2) { return false; }
     // vn2 must be least significant (offset 0)
-    let off2 = match d2.get_in(1) { Some(v) => v.read().unwrap().get_offset(), None => return false };
+    let off2 = match d2.get_in(1) { Some(v) => v.read().unwrap().get_offset(), None => return false ,
+    };
     if off2 != 0 { return false; }
     // vn1 must be contiguous above vn2
-    let off1 = match d1.get_in(1) { Some(v) => v.read().unwrap().get_offset(), None => return false };
+    let off1 = match d1.get_in(1) { Some(v) => v.read().unwrap().get_offset(), None => return false ,
+    };
     if off1 != vn2.size as u64 { return false; }
     true
 }
@@ -4082,7 +4145,9 @@ mod tests {
         // tests/oracle/varnode_copysymbol_1204 (VARNODE-COPYSYMBOL-EQUATE-0001).
         use crate::database::EquateSymbol;
         // cc:642 exact equality, any size.
-        assert!(EquateSymbol::is_value_close_value(0x11223344, 0x11223344, 4));
+        assert!(EquateSymbol::is_value_close_value(
+            0x11223344, 0x11223344, 4
+        ));
         assert!(EquateSymbol::is_value_close_value(7, 7, 8));
         // cc:645-649 masked-off bits that are pure sign-extension survive...
         assert!(EquateSymbol::is_value_close_value(
@@ -4097,7 +4162,9 @@ mod tests {
             4
         ));
         // cc:650 mask-equal after truncation of op2Value.
-        assert!(EquateSymbol::is_value_close_value(0x55667788, 0x11223344_55667788, 4));
+        assert!(EquateSymbol::is_value_close_value(
+            0x55667788, 0x11223344_55667788, 4
+        ));
         // cc:651 bitwise-not close.
         assert!(EquateSymbol::is_value_close_value(0x0F0F, 0xF0F0, 2));
         // cc:652 negation close (two's complement within mask).
@@ -4238,8 +4305,7 @@ mod tests {
             1,
             0,
             4,
-            RangeList::default(),
-        );
+            RangeList::default());
         src.set_symbol_entry(std::sync::Arc::new(RwLock::new(entry)));
         src.set_flags(varnode_flags::TYPELOCK);
         Varnode::copy_symbol_arc(&dst, &src);
@@ -4265,8 +4331,7 @@ mod tests {
         let dst2 = std::sync::Arc::new(RwLock::new(Varnode::new_constant(0x44444444, 4)));
         let high2 = {
             let mut h = crate::variable::HighVariable::new(
-                dst2.read().unwrap().v_type.clone().unwrap(),
-            );
+                dst2.read().unwrap().v_type.clone().unwrap());
             h.add_instance(dst2.clone());
             h
         };
@@ -4680,14 +4745,12 @@ mod tests {
             8,
             AddressSpace::Register,
             0x88,
-            &operation,
-        );
+            &operation);
         let neighbor = bank.create_def_with_space(
             8,
             AddressSpace::Register,
             0x88,
-            &neighbor_operation,
-        );
+            &neighbor_operation);
         operation.write().unwrap().start.set_order(0xf000_0000);
         target.write().unwrap().def = None;
 
@@ -4815,6 +4878,22 @@ mod tests {
         assert!(v.is_illegal_input());
         v.set_direct_write();
         assert!(!v.is_illegal_input()); // input|directwrite → not illegal
+    }
+
+    #[test]
+    fn test_write_mask_is_orthogonal_to_autolive_hold() {
+        let mut v = Varnode::new(4, Address::new(0));
+        v.set_write_mask();
+        assert!(v.is_write_mask());
+        assert!(!v.is_auto_live());
+        assert_eq!(v.flags & varnode_flags::AUTOLIVE_HOLD, 0);
+
+        v.set_flags(varnode_flags::AUTOLIVE_HOLD);
+        assert!(v.is_auto_live());
+        assert!(v.is_write_mask());
+        v.clear_write_mask();
+        assert!(!v.is_write_mask());
+        assert!(v.is_auto_live());
     }
 
     #[test]

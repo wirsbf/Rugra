@@ -2,6 +2,24 @@
 
 **源代码路径**: `src/varnode.rs`
 
+## 2026-08-28：WRITE_MASK 与 AUTOLIVE_HOLD 正交
+
+`set/clear/is_write_mask` 现使用 Ghidra 的 `addlflags::WRITE_MASK`，不再占用主 flags
+中的 `AUTOLIVE_HOLD=0x40000000`。这直接关闭了 GetStr 中 writemask-only 临时量被
+EarlyRemoval 错误保活的问题；2×2 双侧 fixture 与定向单测均验证 write-mask 和
+autolive 可独立设置/清除。
+
+## 2026-08-28：GetStr reader-facing High 与 Architecture 类型身份
+
+`get_local_type`/High read-facing 查询现在让 GetStr `0x36ee` NOTEQUAL 的 LOAD 输出与
+size-1 zero 两个精确 input slot 都观察 canonical `char`，配套六阶段 runner 保留
+完整 def-use/identity 并验证最终 `*param_1 != '\0'`。这不表示 Varnode 全面对齐：
+`Funcdata::set_arch` 接通 Architecture-owned standalone TypeFactory 后，fresh stage 0
+的 272 个有序 Varnode 已全部同 raw flags 与完整 type record，其中双方均为
+174×`xunknown8` + 93×`xunknown1` + 5×`code`；原 `undefined*` 分叉不再由 GetStr
+fixture 观察到。仍未闭合的是 FSPEC/AddressSpace、resolution、High identity 和完整
+local-type closure，继续为 `MISMATCH/UNTESTED`。
+
 ## 文档状态
 
 - **状态**: 已核对（当前有效）
@@ -710,8 +728,11 @@
 ### 2026-06-27（会话3 G3 诊断）：find_by_loc
 
 - `VarnodeBank::find_by_loc(size, loc) -> Option<Arc<Varnode>>` — 空间查找辅助：扫描 loc_tree 找任意 (size, loc) 匹配的 varnode（忽略 create_index），返回 create_index 最大者。用于 G3 诊断时桥接断链的 use-def（实验性，当前未被主管线调用）。
-### 2026-06-27（续）：is_auto_live（解锁 RuleEarlyRemoval）
-- @is_auto_live() -> bool@ 对齐 @Varnode::isAutoLive@（varnode.hh）：保守返回 false（AUTOLIVE_HOLD 设置机制未移植，无 varnode 被标记）。is_indirect_source 才是空 varnode 的真修复。
+### 2026-06-27（续；2026-08-28 勘误）：is_auto_live（RuleEarlyRemoval）
+- “保守返回 false”是已废止的旧实现。当前 `is_auto_live()` 精确读取
+  `ADDRFORCE | AUTOLIVE_HOLD`；writemask 使用独立 addlflags 位，不再与
+  AUTOLIVE_HOLD 冲突。2×2 双侧投影与 EarlyRemoval covered fixture 均已验证该
+  范围，完整 flag producer/consumer 生命周期仍由各自 TODO 跟踪。
 
 ### 2026-07-01：Ghidra flag accessor + 几何 API（解锁 ~20 Rule TODO）
 - `is_addr_force/set_addr_force/clear_addr_force`（varnode.hh:251/307-308）— ADDRFORCE flag。
@@ -1001,10 +1022,10 @@ TypeOp 消费闭包。它替换此前只 clone
   `TYPEFACTORY-LOCALTYPE-CACHE-0001`。
   字段敏感 token 只由后续 `ActionSetCasts::castOutput` 消费。fixture 新增的
   infer canary 会执行 Ghidra `Varnode::getLocalType` 与双方 production
-  `ActionInferTypes::apply`：selected base/out int8 shape、STOP 和定义边匹配，但
-  Rust build_localtypes 仍不调用映射的 `Varnode::get_local_type`，且 output
-  canonical identity 为 Ghidra 1 / Rust 0。因此它不是任一函数的完整 MATCH
-  证据。`Varnode::getLocalType` core projection 另有 62/62 双侧 MATCH；production
+  `ActionInferTypes::apply`：selected base/out int8 shape、STOP、定义边和 canonical
+  identity 均 MATCH，且 production `build_localtypes` 已调用映射的
+  `Varnode::get_local_type`。这仍不是任一完整函数的 MATCH 证据：
+  `Varnode::getLocalType` core projection 另有 62/62 双侧 MATCH；production
   buildLocaltypes 的 SymbolEntry/exact-piece、特殊 TypeOp 派发、reader/STOP
   消费闭包与异常状态仍绑定 `VARNODE-LOCALTYPE-RESOLUTION-0001` /
   `ACTION-INFERTYPES-DISPATCH-0001`。

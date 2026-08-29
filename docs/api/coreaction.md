@@ -1,5 +1,15 @@
 # `coreaction.rs` API Reference
 
+## 2026-08-28：GetStr read-facing char 子图
+
+`ActionInferTypes` 的 GetStr 聚焦路径现在按 `Varnode::getLocalType` reader 顺序建立
+local type，`ActionSetCasts` 按 op 顺序处理 input/output，并通过 Action count bridge
+保留 raw `apply()==0`。这使 `INT_NOTEQUAL(char,char)` 不插入额外 cast。该证据只覆盖
+GetStr 字符比较子图；`CPUI_MULTIEQUAL` 传播、flow resolution、type recommendations、
+spacebase propagation、union/pointer preflight 等仍是登记中的 `MISMATCH/UNTESTED`。
+bridge 本身没有 Ghidra 对应方法，状态为 `NO_ORACLE`；完整
+`ActionSetCasts::apply`/`Action::perform` 生命周期不能据此宣称 MATCH。
+
 ## 2026-08-28：真实 BlockCopy 的结构变换调用闭包
 
 `ActionStructureTransform::apply` 现对子块树做 child-first/postorder 遍历，
@@ -76,25 +86,25 @@ opSetOutput(oldop,vn) → opInsertAfter(newop,oldop)`。
 CAST(mid)→原 output 的所列 def-use/type 状态。该声明仅覆盖 fixture 列出的图
 字段，不是完整 bank/High/SeqNum/flags 状态。
 
-整体仍为 MISMATCH：Ghidra `ActionSetCasts::apply` 把变化累加到继承的 `count`
-并固定返回 0；当前 Rust 覆盖 leaf count 后返回 `CHANGE=1`。CAST opcode skip 已
-实现，但 `notPrinted` 守卫缺失；完整闭包还包括 Architecture CastStrategy（当前
-硬编码 `CastStrategyC::new(4)`）、Ghidra canonical identity 比较（当前部分使用
-`type_equal`）、block/dominance 与逐 op「所有 inputs 后 output」顺序（当前两遍）、
-非 PTRSUB token 派发、无效 PTRADD/PTRSUB 预重写、resolveUnion、
-checkPointerIssues、needs-resolution、implied/typelock、PTRSUB(0)、
-forceFacingType/inheritResolution、repeat apply 与错误路径。这些已知/未测残差继续
+整体仍为 MISMATCH，但旧的 raw-return 差异已经关闭：双侧两次 raw apply 都返回 0，
+并把 inherited/leaf `count` 从 0 累加到 1。Rugra 的 `take_count_delta` 会读出 1、
+清零后再读出 0；这是执行器胶水，Ghidra 没有对应映射函数，所以该 adapter 只能记
+`NO_ORACLE`，也不能替代完整 `Action::perform` 生命周期证据。完整闭包还包括
+Architecture CastStrategy（当前硬编码 `CastStrategyC::new(4)`）、全部 canonical
+identity 比较、无效 PTRADD/PTRSUB 预重写、resolveUnion、checkPointerIssues、
+needs-resolution、implied/typelock、PTRSUB(0)、forceFacingType/inheritResolution、
+多 block dominance、repeat/perform lifecycle 与错误路径。这些已知/未测残差继续
 绑定 `PIPE-ACTION-COUNT-0001C`，不能把 selected graph 外推为完整 MATCH。
 
 同一 fixture 的 infer_pre/infer_post 运行一遍 production
 `ActionInferTypes::apply`。unlocked SPACEBASE PTRSUB 的 base/out 均从 unknown8
-变为 int8，output STOP 与 PTRSUB 定义边字段匹配；但 canonical output identity
-为 Ghidra 1 / Rust 0。`build_localtypes` 仍是两轮 loc-tree 加一轮 op walk 的 hybrid
-projection，而非 oracle 的 VarnodeLocSet 遍历 + `Varnode::getLocalType`；Ghidra
-执行映射函数，Rust 此路径仍内联投影。PTRSUB 已从自创 spacebase pointer bootstrap
-删除，但 canonical factory identity、INT_ADD/INT_SUB bootstrap、
-SymbolEntry/getExactPiece、reader 顺序和完整状态仍属
-`ACTION-INFERTYPES-DISPATCH-0001`，所以 selected/full 函数状态均为 MISMATCH。
+变为 int8，output STOP、PTRSUB 定义边和 Architecture TypeFactory canonical int8
+identity 均为 MATCH。`build_localtypes` 已改为 Varnode loc-set 顺序并调用映射的
+`Varnode::get_local_type`；旧的两轮 loc-tree + op walk hybrid 已删除。该 selected
+canary 不覆盖完整 SymbolEntry/getExactPiece 变体、descendant competition、非 PTRSUB
+派发、repeat apply、精确 DFS path/state 和错误路径，故 selected 投影为 MATCH，
+完整 `buildLocaltypes`/`ActionInferTypes` 仍由
+`ACTION-INFERTYPES-DISPATCH-0001` 保持 MISMATCH/UNTESTED。
 
 release E2E 以 2026-08-27 pre-PTRSUB fresh baseline stdout
 `4404af6da658cc912b84070acb6354073c4649f3b266751e1be6cb81bd1bdc8e`
@@ -296,10 +306,10 @@ Address-space-bearing parameter storage → resolved model ownership →
 `PIPE-0001`。
 
 **状态**: 🔧 L2；2026-07-27 记录已由上方 2026-08-27 oracle fixture
-纠偏。`ActionSetCasts` 仅 ordinary PTRSUB output-token no-op/CAST 的 selected
-graph 子投影为 MATCH；`ActionInferTypes` canary 仅 shape/STOP 子投影 MATCH，
-canonical output identity MISMATCH；完整 castOutput、apply、buildLocaltypes 三函数
-均为 MISMATCH，未覆盖分支另记 UNTESTED。
+纠偏。`ActionSetCasts` ordinary PTRSUB output-token no-op/CAST graph 以及 raw
+apply/count 子投影为 MATCH；`ActionInferTypes` canary 的 shape/STOP/canonical
+output identity 子投影也为 MATCH。Rugra-only count bridge 为 `NO_ORACLE`，完整
+castOutput/apply/buildLocaltypes 闭包仍为 MISMATCH，未覆盖分支另记 UNTESTED。
 **源代码路径**: `src/coreaction.rs`
 **2026-07-16**: 测试构造的 BlockWhileDo 加 `overflow_syntax: false` 字段（配合 printc P7-overflow_syntax，对齐 Ghidra hasOverflowSyntax block.hh:692）。
 

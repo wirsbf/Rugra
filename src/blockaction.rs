@@ -999,7 +999,12 @@ pub fn clear_marks(body: &[i32], graph: &BlockGraph) {
 /// `BlockWhileDo`, and `BlockList` nodes.
 pub struct CollapseStructure<'a> {
     graph: &'a mut BlockGraph,
-    change_count: i32,
+    /// RUGRA-GLUE: internal fixpoint progress; Ghidra rules return bool instead
+    /// of exposing a separate structural-mutation counter.
+    structure_change_count: i32,
+    /// Ghidra `CollapseStructure::dataflow_changecount`: only real condition
+    /// data-flow flips contribute to ActionBlockStructure's inherited count.
+    dataflow_change_count: i32,
     name: String,
     /// Immediate dominator map: idom[i] = index of i's immediate dominator.
     idom: std::collections::HashMap<i32, i32>,
@@ -1038,7 +1043,8 @@ impl<'a> CollapseStructure<'a> {
     pub fn new(graph: &'a mut BlockGraph, name: &str) -> Self {
         Self {
             graph,
-            change_count: 0,
+            structure_change_count: 0,
+            dataflow_change_count: 0,
             name: name.to_string(),
             switch_case_indices: std::collections::HashSet::new(),
             idom: std::collections::HashMap::new(),
@@ -1081,7 +1087,7 @@ impl<'a> CollapseStructure<'a> {
             }
             // Outer fullchange iteration cap: prevents the IfNoExit/CaseFallthru
             // second pass from repeatedly triggering (each creates a structure,
-            // bumping change_count, re-entering the outer loop) without
+            // bumping structure_change_count, re-entering the outer loop) without
             // converging. The inner fixpoint has its own max_iterations; this
             // bounds the outer fullchange loop.
             if iterations >= max_iterations * 4 {
@@ -1092,7 +1098,7 @@ impl<'a> CollapseStructure<'a> {
                 if std::time::Instant::now() > deadline {
                     break;
                 }
-                let change_before = self.change_count;
+                let change_before = self.structure_change_count;
                 isolated_count = 0;
                 let size = self.graph.get_size();
                 let mut idx: usize = 0;
@@ -1142,7 +1148,7 @@ impl<'a> CollapseStructure<'a> {
                 }
                 self.refresh_switch_cases();
                 iterations += 1;
-                if self.change_count == change_before || iterations >= max_iterations {
+                if self.structure_change_count == change_before || iterations >= max_iterations {
                     break;
                 }
             }
@@ -1380,13 +1386,13 @@ impl<'a> CollapseStructure<'a> {
 
         // First pass: collapse sequences and conditions in the traditional
         // phase-based approach (existing behavior).
-        let phase1_start = self.change_count;
+        let phase1_start = self.structure_change_count;
         loop {
             if std::time::Instant::now() > deadline {
                 eprintln!("[COLLAPSE] {} deadline hit iter={}", self.name, iterations);
                 break;
             }
-            let pre_count = self.change_count;
+            let pre_count = self.structure_change_count;
 
             self.collapse_loops();
             if std::time::Instant::now() > deadline {
@@ -1450,14 +1456,14 @@ impl<'a> CollapseStructure<'a> {
             self.refresh_switch_cases();
 
             iterations += 1;
-            if self.change_count == pre_count || iterations >= max_iterations {
+            if self.structure_change_count == pre_count || iterations >= max_iterations {
                 break;
             }
         }
         eprintln!(
             "[COLLAPSE] {} phase1 done changes={} iter={}",
             self.name,
-            self.change_count - phase1_start,
+            self.structure_change_count - phase1_start,
             iterations
         );
 
@@ -1465,7 +1471,7 @@ impl<'a> CollapseStructure<'a> {
         // Repeatedly try rules on each block until a full pass makes no change.
         // This handles cases where applying cat-merge to one pair unlocks a
         // condition match that was previously blocked by intermediate blocks.
-        let pre_interleaved_count = self.change_count;
+        let pre_interleaved_count = self.structure_change_count;
         let interleaved_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         // Refresh switch case tracking — skip if no switches (saves time + avoids
         // dominator recomputation side-effects on simple test CFGs)
@@ -1510,7 +1516,7 @@ impl<'a> CollapseStructure<'a> {
                 if std::time::Instant::now() > interleaved_deadline {
                     break;
                 }
-                let pre_count = self.change_count;
+                let pre_count = self.structure_change_count;
                 let size = self.graph.get_size();
                 for i in 0..size {
                     if std::time::Instant::now() > interleaved_deadline {
@@ -1562,7 +1568,7 @@ impl<'a> CollapseStructure<'a> {
                 }
                 iterations += 1;
                 self.refresh_switch_cases();
-                if self.change_count == pre_count || iterations >= max_iterations {
+                if self.structure_change_count == pre_count || iterations >= max_iterations {
                     break;
                 }
             }
@@ -2467,7 +2473,7 @@ impl<'a> CollapseStructure<'a> {
                         overflow_syntax: false,
                     }));
                 self.identify_internal(&while_block, &[body_idx], hi);
-                self.change_count += 1;
+                self.structure_change_count += 1;
                 eprintln!(
                     "[COLLAPSE] {} structure_loops_first WhileDo head={} body={}",
                     self.name, cond_idx, body_idx
@@ -2644,7 +2650,7 @@ impl<'a> CollapseStructure<'a> {
                     body.len(),
                     changecount
                 );
-                self.change_count += changecount;
+                self.structure_change_count += changecount;
                 return true;
             }
         }
@@ -3418,14 +3424,15 @@ impl<'a> CollapseStructure<'a> {
                 if bc.outgoing.len() >= 1 {
                     let out0_is_first = Arc::ptr_eq(&bc.outgoing[0].point, out0_ref);
                     if !out0_is_first && bc.outgoing.len() >= 2 {
-                        // Swap so out0 is at index 0 (false edge).
-                        bc.outgoing.swap(0, 1);
+                        // forceFalseEdge delegates to FlowBlock::swapEdges,
+                        // preserving reciprocal slots and f_flip_path.
+                        <BlockCondition as FlowBlock>::swap_edges(bc);
                     }
                 }
             }
         }
         self.update_switch_case_reference(cond_idx, &cond_block);
-        self.change_count += 1;
+        self.structure_change_count += 1;
         eprintln!(
             "[BLOCKSTRUCT] {:?} condition at block {} (b1={}, b2={})",
             bool_op,
@@ -3444,7 +3451,6 @@ impl<'a> CollapseStructure<'a> {
         &mut self,
         cond: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
         tc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-        negated: bool,
         install_idx: usize,
     ) -> Arc<RwLock<dyn FlowBlock + Send + Sync>> {
         let cond_idx = cond.read().unwrap().get_index();
@@ -3453,7 +3459,6 @@ impl<'a> CollapseStructure<'a> {
             condition: cond.clone(),
             if_body: tc.clone(),
             else_body: None,
-            negated,
             incoming: Vec::new(),
             outgoing: Vec::new(),
             parent: None,
@@ -3465,7 +3470,7 @@ impl<'a> CollapseStructure<'a> {
         // cc:1829: identifyInternal(ret, {cond, tc}). cond at install_idx.
         self.identify_internal(&if_block, &[tc_idx], install_idx);
         self.update_switch_case_reference(cond_idx, &if_block);
-        self.change_count += 1;
+        self.structure_change_count += 1;
         if_block
     }
 
@@ -3478,7 +3483,6 @@ impl<'a> CollapseStructure<'a> {
         cond: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
         tc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
         fc: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-        negated: bool,
         install_idx: usize,
     ) -> Arc<RwLock<dyn FlowBlock + Send + Sync>> {
         let cond_idx = cond.read().unwrap().get_index();
@@ -3487,7 +3491,6 @@ impl<'a> CollapseStructure<'a> {
             condition: cond.clone(),
             if_body: tc.clone(),
             else_body: Some(fc.clone()),
-            negated,
             incoming: Vec::new(),
             outgoing: Vec::new(),
             parent: None,
@@ -3500,7 +3503,7 @@ impl<'a> CollapseStructure<'a> {
         // cc:1848: identifyInternal(ret, {cond, tc, fc}). cond at install_idx.
         self.identify_internal(&if_block, &[tc_idx, fc_idx], install_idx);
         self.update_switch_case_reference(cond_idx, &if_block);
-        self.change_count += 1;
+        self.structure_change_count += 1;
         if_block
     }
 
@@ -3531,7 +3534,7 @@ impl<'a> CollapseStructure<'a> {
         // consumed blocks (the self-loop edge is internal).
         self.identify_internal(&inf_block, &[], install_idx);
         self.update_switch_case_reference(body_idx, &inf_block);
-        self.change_count += 1;
+        self.structure_change_count += 1;
         eprintln!(
             "[BLOCKSTRUCT] inf loop at block {} (body={})",
             install_idx,
@@ -3698,7 +3701,7 @@ impl<'a> CollapseStructure<'a> {
             Arc::new(RwLock::new(BlockList::new(block_idx, nodes)));
         self.identify_internal(&list_block, &consumed, i);
         self.update_switch_case_reference(block_idx, &list_block);
-        self.change_count += 1;
+        self.structure_change_count += 1;
         true
     }
 
@@ -3968,13 +3971,13 @@ impl<'a> CollapseStructure<'a> {
 
             // Match found: clause → merge. Create BlockIf via factory
             // (block.cc:1822 newBlockIf). cond at install_idx=i, clause consumed.
-            // Ghidra blockaction.cc:1413-1415: `if (i==0) negateCondition(true)`
-            // — the clause must end up on the TRUE side, and out[0] is the
-            // fall-through/false edge (flow.cc:960-967 pushes fallthru first),
-            // so a dir==0 clause (fall-through side) is emitted negated.
-            // Rugra records this as BlockIf::negated (printc negatetoken).
-            let negated = dir == 0;
-            self.new_block_if(&block, &clause, negated, i);
+            // blockaction.cc:1400-1403 mutates the condition itself. This
+            // virtual call must reach BlockList/BlockCondition as well as a
+            // leaf BlockBasic before BlockIf is constructed.
+            if dir == 0 && block.write().unwrap().negate_condition(true) {
+                self.dataflow_change_count += 1;
+            }
+            self.new_block_if(&block, &clause, i);
             return true;
         }
         false
@@ -4078,12 +4081,13 @@ impl<'a> CollapseStructure<'a> {
             }
             drop(c);
 
-            // Ghidra blockaction.cc:1510-1512 (ruleBlockIfNoExit): `if (i==0)
-            // negateCondition(true)` — out[0] is the fall-through/false edge,
-            // so a dir==0 clause is emitted negated (BlockIf::negated).
-            let negated = dir == 0;
+            // blockaction.cc:1504-1507 records polarity in the condition and
+            // its edge state before constructing BlockIf.
+            if dir == 0 && block.write().unwrap().negate_condition(true) {
+                self.dataflow_change_count += 1;
+            }
             // Create BlockIf via factory (block.cc:1822 newBlockIf).
-            self.new_block_if(&block, &clause, negated, i);
+            self.new_block_if(&block, &clause, i);
             return true;
         }
         false
@@ -4195,7 +4199,7 @@ impl<'a> CollapseStructure<'a> {
         // Create BlockIf (if-then-else) via factory (block.cc:1840
         // newBlockIfElse: nodes = {cond, tc, fc}, forceOutputNum(1), no
         // condition negation).
-        self.new_block_if_else(&block, &tc, &fc, false, i);
+        self.new_block_if_else(&block, &tc, &fc, i);
         true
     }
 
@@ -4205,8 +4209,8 @@ impl<'a> CollapseStructure<'a> {
     /// the goto one, negateCondition so that it becomes the true edge, then
     /// wrap the block in an if-goto (newBlockIfGoto, block.cc:1799-1816:
     /// gotoTarget = getOut(1), forceFalseEdge(getOut(0)), removeEdge(true)).
-    /// The previous port only accepted a goto on edge 1 and hard-coded
-    /// `negated: true`; goto marks landing on edge 0 (which the faithful
+    /// The previous implementation only accepted a goto on edge 1; goto
+    /// marks landing on edge 0 (which the Ghidra
     /// TraceDAG/selectGoto freely produces) never structured, leaving the
     /// CBRANCH orphaned as a bare conditional statement.
     /// The sizeout==1 newBlockGoto case lives in try_rule_goto; the
@@ -4248,7 +4252,7 @@ impl<'a> CollapseStructure<'a> {
         // the fall-through, exactly the layout newBlockIfGoto expects.
         if goto_slot != 1 {
             if block.write().unwrap().negate_condition(true) {
-                self.change_count += 1;
+                self.dataflow_change_count += 1;
             }
             // swap_edges (block.cc:218-233) swaps whole BlockEdge structs, so
             // the f_goto_edge EDGE label follows the moved edge — but Rugra's
@@ -4305,11 +4309,6 @@ impl<'a> CollapseStructure<'a> {
             condition: block.clone(),
             if_body: block.clone(), // placeholder; real body is external out-edge
             else_body: None,
-            // newBlockIfGoto has no textual negation: the flip (when the
-            // goto was on edge 0) is already in the data via
-            // negate_condition above; the if-goto emit path reads the
-            // CBRANCH directly (printc.rs emitBlockIf goto_target branch).
-            negated: false,
             goto_target: Some(goto_target.clone()),
             goto_type: crate::block::goto_type::GOTO_GOTO,
             incoming: Vec::new(),
@@ -4331,7 +4330,7 @@ impl<'a> CollapseStructure<'a> {
         // The former one-sided retain pair left stale reciprocal indices
         // (BLOCK-RECIPROCAL-OOB-0001).
         self.graph.remove_edge_blocks(&if_block, &goto_target);
-        self.change_count += 1;
+        self.structure_change_count += 1;
         true
     }
 
@@ -4434,7 +4433,7 @@ impl<'a> CollapseStructure<'a> {
         // one-sided retain/clear pair left stale reciprocal indices
         // (BLOCK-RECIPROCAL-OOB-0001).
         self.graph.remove_edge_blocks(&goto_block, &goto_target);
-        self.change_count += 1;
+        self.structure_change_count += 1;
         eprintln!(
             "[COLLAPSE] {} ruleBlockGoto: wrapped block {} (size_out={})",
             self.name, idx, size_out
@@ -4536,7 +4535,7 @@ impl<'a> CollapseStructure<'a> {
             drop(b);
             if (slot == 0) != overflow {
                 if block.write().unwrap().negate_condition(true) {
-                    self.change_count += 1;
+                    self.dataflow_change_count += 1;
                 }
             }
             let while_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
@@ -4556,7 +4555,7 @@ impl<'a> CollapseStructure<'a> {
             // Consume the body clause; self_identify captures its boundary edges.
             self.identify_internal(&while_block, &[clause_idx], i);
             self.update_switch_case_reference(cond_idx, &while_block);
-            self.change_count += 1;
+            self.structure_change_count += 1;
             return true;
         }
         false
@@ -4612,7 +4611,7 @@ impl<'a> CollapseStructure<'a> {
             // omitted this, inverting do-while guards.
             if slot == 0 {
                 if block.write().unwrap().negate_condition(true) {
-                    self.change_count += 1;
+                    self.dataflow_change_count += 1;
                 }
             }
 
@@ -4632,7 +4631,7 @@ impl<'a> CollapseStructure<'a> {
             // new BlockDoDoWhile. condcl sits at install_idx=i.
             self.identify_internal(&do_while_block, &[cond_idx], i);
             self.update_switch_case_reference(cond_idx, &do_while_block);
-            self.change_count += 1;
+            self.structure_change_count += 1;
             return true;
         }
         drop(b);
@@ -4765,16 +4764,16 @@ impl<'a> CollapseStructure<'a> {
             //         true-out becomes the orblock edge.
             //   j==0: clauseblock must be the TRUE out of orblock → negate orblock.
             // negateCondition returns true when the underlying CBRANCH flip
-            // toggled (dataflow change) — Ghidra tallies dataflow_changecount;
-            // Rugra folds into change_count (same convergence-tracking role).
+            // toggled (dataflow change) — this is the only state tallied by
+            // Ghidra's dataflow_changecount.
             if ii == 1 {
                 if block.write().unwrap().negate_condition(true) {
-                    self.change_count += 1;
+                    self.dataflow_change_count += 1;
                 }
             }
             if j == 0 {
                 if orblock.write().unwrap().negate_condition(true) {
-                    self.change_count += 1;
+                    self.dataflow_change_count += 1;
                 }
             }
 
@@ -5149,7 +5148,7 @@ impl<'a> CollapseStructure<'a> {
             sw.set_flags(swf & !crate::block::block_flags::SWITCH_OUT);
         }
         let _ = has_exit;
-        self.change_count += 1;
+        self.structure_change_count += 1;
         eprintln!(
             "[BLOCKSTRUCT] switch structured at block {} ({} cases, exit={:?})",
             ctrl_idx, sizeout, exit_idx
@@ -5220,7 +5219,7 @@ impl<'a> CollapseStructure<'a> {
                                 flags: 0,
                             }));
                         replacements.push((i, while_block));
-                        self.change_count += 1;
+                        self.structure_change_count += 1;
                         continue;
                     }
                 }
@@ -5237,7 +5236,7 @@ impl<'a> CollapseStructure<'a> {
                                 flags: 0,
                             }));
                         replacements.push((i, while_block));
-                        self.change_count += 1;
+                        self.structure_change_count += 1;
                         continue;
                     }
                 }
@@ -5271,7 +5270,7 @@ impl<'a> CollapseStructure<'a> {
                                             overflow_syntax: false,
                                         }));
                                     replacements.push((i, while_block));
-                                    self.change_count += 1;
+                                    self.structure_change_count += 1;
                                     continue;
                                 }
                             }
@@ -5378,7 +5377,7 @@ impl<'a> CollapseStructure<'a> {
                     overflow_syntax: false,
                 }));
             replacements.push((header_idx as usize, while_block));
-            self.change_count += 1;
+            self.structure_change_count += 1;
         }
 
         // CBRANCH-latch loop detection: find blocks ending with CBRANCH
@@ -5463,7 +5462,7 @@ impl<'a> CollapseStructure<'a> {
                         flags: 0,
                     }));
                 replacements.push((i, while_block));
-                self.change_count += 1;
+                self.structure_change_count += 1;
                 continue;
             }
 
@@ -5486,7 +5485,7 @@ impl<'a> CollapseStructure<'a> {
                         flags: 0,
                     }));
                 replacements.push((header_idx as usize, while_block));
-                self.change_count += 1;
+                self.structure_change_count += 1;
             } else {
                 // Header has CBRANCH too → while-do pattern:
                 // header decides entry, latch decides repeat.
@@ -5523,7 +5522,7 @@ impl<'a> CollapseStructure<'a> {
                             overflow_syntax: false,
                         }));
                     replacements.push((header_idx as usize, while_block));
-                    self.change_count += 1;
+                    self.structure_change_count += 1;
                 }
             }
         }
@@ -5644,7 +5643,7 @@ impl<'a> CollapseStructure<'a> {
                 self.graph.blocks[i] = while_block.clone();
             }
             self.identify_internal(&while_block, &[body_idx], i);
-            self.change_count += 1;
+            self.structure_change_count += 1;
             eprintln!(
                 "[COLLAPSE] {} ruleBlockWhileDo head={} body={}",
                 self.name, cond_idx, body_idx
@@ -5786,7 +5785,7 @@ impl<'a> CollapseStructure<'a> {
             self.graph
                 .absorbed_into
                 .insert(succ_idx as i32, block_idx_val);
-            self.change_count += 1;
+            self.structure_change_count += 1;
         }
     }
 
@@ -5863,7 +5862,7 @@ impl<'a> CollapseStructure<'a> {
                 }));
 
             replacements.push((i, switch_block));
-            self.change_count += 1;
+            self.structure_change_count += 1;
         }
 
         for (idx, replacement) in replacements {
@@ -6176,7 +6175,7 @@ impl<'a> CollapseStructure<'a> {
             }
 
             replacements.push((i, consumed_indices, switch_block));
-            self.change_count += 1;
+            self.structure_change_count += 1;
         }
 
         // Apply replacements
@@ -6265,7 +6264,7 @@ impl<'a> CollapseStructure<'a> {
                     let lb: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
                         Arc::new(RwLock::new(crate::block::BlockList::new(case_idx, chain)));
                     new_cases.push(Some(lb));
-                    self.change_count += 1;
+                    self.structure_change_count += 1;
                     any_change = true;
                 } else {
                     new_cases.push(None);
@@ -6285,7 +6284,7 @@ impl<'a> CollapseStructure<'a> {
                         if chain.len() > 1 {
                             let lb: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
                                 Arc::new(RwLock::new(crate::block::BlockList::new(di, chain)));
-                            self.change_count += 1;
+                            self.structure_change_count += 1;
                             any_change = true;
                             Some(lb)
                         } else {
@@ -6760,8 +6759,8 @@ impl<'a> CollapseStructure<'a> {
     }
 
     // Ghidra: blockaction.hh:224 CollapseStructure::getChangeCount
-    fn get_change_count(&self) -> i32 {
-        self.change_count
+    pub fn get_change_count(&self) -> i32 {
+        self.dataflow_change_count
     }
 }
 

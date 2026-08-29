@@ -234,8 +234,7 @@ impl OpToken {
         print1: &str,
         precedence: i32,
         spacing: i32,
-        bump: i32,
-    ) -> Self {
+        bump: i32) -> Self {
         Self {
             print1: print1.to_string(),
             print2: String::new(),
@@ -278,8 +277,7 @@ impl OpToken {
         print1: &str,
         print2: &str,
         precedence: i32,
-        bump: i32,
-    ) -> Self {
+        bump: i32) -> Self {
         Self {
             print1: print1.to_string(),
             print2: print2.to_string(),
@@ -601,7 +599,8 @@ impl PrintLanguageCapability {
     // Ghidra: printlanguage.hh:42 PrintLanguageCapability (default-constructed name)
     /// Construct with a name and default flag.
     pub fn new(name: &str, isdefault: bool) -> Self {
-        Self { name: name.to_string(), isdefault }
+        Self { name: name.to_string(), isdefault ,
+        }
     }
 
     // Ghidra: printlanguage.hh:48 getName
@@ -1238,7 +1237,11 @@ pub fn rpn_emit_atom(emit: &mut dyn Emit, atom: &Atom) {
         }
         TagType::VarToken => {
             // printlanguage.cc:382-383
-            emit.tag_variable(&atom.name, 0);
+            let varnode_id = match atom.payload {
+                AtomPayload::Vn(id) => id,
+                _ => -1,
+            };
+            emit.tag_variable_with_metadata(&atom.name, atom.highlight, varnode_id, atom.op_index);
         }
         TagType::FunToken => {
             // printlanguage.cc:385-386
@@ -1827,6 +1830,57 @@ mod tests {
             AtomPayload::IntValue(v) => assert_eq!(v, 99),
             _ => panic!("expected IntValue payload for CaseToken"),
         }
+    }
+
+    #[test]
+    fn test_emit_atom_preserves_variable_metadata() {
+        #[derive(Default)]
+        struct MetadataEmit {
+            observed: Option<(String, SyntaxHighlight, i64, i64)>,
+        }
+
+        impl crate::prettyprint::Emit for MetadataEmit {
+            fn print(&mut self, _text: &str) {}
+            fn begin_block(&mut self) {}
+            fn end_block(&mut self) {}
+            fn begin_function(&mut self) {}
+            fn end_function(&mut self) {}
+            fn tag_type(&mut self, _text: &str, _id: u64) {}
+            fn tag_variable(&mut self, _text: &str, _id: u64) {}
+            fn tag_variable_with_metadata(
+                &mut self,
+                text: &str,
+                highlight: SyntaxHighlight,
+                varnode_id: i64,
+                op_id: i64,
+            ) {
+                self.observed = Some((text.to_string(), highlight, varnode_id, op_id));
+            }
+            fn tag_op(&mut self, _text: &str) {}
+            fn tag_field(&mut self, _text: &str, _id: u64) {}
+            fn tag_func_name(&mut self, _text: &str, _id: u64) {}
+            fn tag_comment(&mut self, _text: &str) {}
+            fn tag_label(&mut self, _text: &str) {}
+            fn tag_case_label(&mut self, _text: &str) {}
+            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+                self
+            }
+        }
+
+        let atom = Atom::with_op_vn_int(
+            "'\\0'",
+            TagType::VarToken,
+            SyntaxHighlight::ConstColor,
+            43,
+            107,
+            0,
+        );
+        let mut emit = MetadataEmit::default();
+        rpn_emit_atom(&mut emit, &atom);
+        assert_eq!(
+            emit.observed,
+            Some(("'\\0'".to_string(), SyntaxHighlight::ConstColor, 107, 43))
+        );
     }
 
     #[test]

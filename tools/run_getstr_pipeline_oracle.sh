@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+mode=both
+if [[ $# -eq 1 && "$1" == --validate-only ]]; then
+  mode=validate
+elif [[ $# -ne 0 ]]; then
+  echo "usage: ${BASH_SOURCE[0]} [--validate-only]" >&2
+  exit 2
+fi
+
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+runner="$repo_root/tools/run_getstr_pipeline_oracle.sh"
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 ghidra_root="$repo_root/ghidra"
@@ -28,26 +37,34 @@ if ! git -C "$ghidra_root" diff --quiet -- \
 fi
 
 bfd_include=${RUGRA_BFD_INCLUDE:-}
-if [[ -z "$bfd_include" && -f /usr/include/bfd.h ]]; then
-  bfd_include=/usr/include
-fi
 if [[ -z "$bfd_include" && -f /tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h ]]; then
   bfd_include=/tmp/rugra-ghidra-bfd-2.38/usr/include
+fi
+if [[ -z "$bfd_include" && -f /usr/include/bfd.h ]]; then
+  bfd_include=/usr/include
 fi
 if [[ -z "$bfd_include" || ! -f "$bfd_include/bfd.h" ]]; then
   echo "binutils 2.38 bfd.h not found; set RUGRA_BFD_INCLUDE to its include directory" >&2
   exit 1
 fi
-bfd_library=${RUGRA_BFD_LIBRARY:-/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so}
+bfd_library=${RUGRA_BFD_LIBRARY:-}
+if [[ -z "$bfd_library" && -f /usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so ]]; then
+  bfd_library=/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so
+fi
+if [[ -z "$bfd_library" && \
+      -f /tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so ]]; then
+  bfd_library=/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so
+fi
 if [[ ! -f "$bfd_library" ]]; then
   echo "binutils 2.38 BFD library not found: $bfd_library" >&2
   exit 1
 fi
+bfd_library_dir=$(dirname "$bfd_library")
 
 cpp_tree=$(git -C "$ghidra_root" rev-parse HEAD:Ghidra/Features/Decompiler/src/decompile/cpp)
 x86_tree=$(git -C "$ghidra_root" rev-parse HEAD:Ghidra/Processors/x86/data/languages)
 python3 -I -S - "$metadata" "$cpp_fixture" "$rust_example" "$binary" \
-  "$stage_diff" "$repo_root/src" "$repo_root/Cargo.toml" "$repo_root/Cargo.lock" \
+  "$runner" "$stage_diff" "$repo_root/src" "$repo_root/Cargo.toml" "$repo_root/Cargo.lock" \
   "$repo_root/build.rs" "$repo_root/sleigh_shim" "$spec_root" \
   "$bfd_include/bfd.h" "$bfd_library" \
   "$oracle_commit" "$oracle_tag" "$cpp_tree" "$x86_tree" <<'PY'
@@ -62,6 +79,7 @@ import sys
     cpp_fixture_name,
     rust_example_name,
     binary_name,
+    runner_name,
     stage_diff_name,
     rust_src_name,
     cargo_manifest_name,
@@ -112,6 +130,7 @@ if metadata.get("input_fingerprint") != actual_input_fingerprint:
 comparands = {
     "cpp_fixture": cpp_fixture_name,
     "rust_example": rust_example_name,
+    "runner": runner_name,
     "stage_diff": stage_diff_name,
     "cargo_manifest": cargo_manifest_name,
     "cargo_lock": cargo_lock_name,
@@ -160,6 +179,11 @@ if metadata.get("host_rustc") != rustc:
     raise SystemExit(f"host rustc mismatch: {rustc}")
 PY
 
+if [[ "$mode" == validate ]]; then
+  echo "getstr_pipeline_1204 metadata/source validation passed"
+  exit 0
+fi
+
 source_tree_hash() {
   python3 -I -S - "$repo_root/src" <<'PY'
 import hashlib
@@ -180,16 +204,25 @@ PY
 }
 
 rugra_source_before=$(source_tree_hash)
-oracle_tmp=$(mktemp -d /tmp/rugra-getstr-pipeline-1204.XXXXXX)
+user_home=$(getent passwd "$(id -u)" | awk -F: 'NR == 1 {print $6}')
+if [[ -z "$user_home" || ! -d "$user_home" ]]; then
+  echo "could not resolve user home" >&2
+  exit 1
+fi
+cache_parent="$user_home/.cache/rugra-getstr-pipeline-1204"
+mkdir -p "$cache_parent"
+oracle_tmp=$(mktemp -d "$cache_parent/run.XXXXXX")
 cleanup() {
   case "$oracle_tmp" in
-    /tmp/rugra-getstr-pipeline-1204.??????) rm -rf -- "$oracle_tmp" ;;
+    "$cache_parent"/run.??????) rm -rf -- "$oracle_tmp" ;;
     *) echo "refusing unsafe cleanup target: $oracle_tmp" >&2 ;;
   esac
 }
 trap cleanup EXIT HUP INT TERM
 
 mkdir -p "$oracle_tmp/ghidra" "$oracle_tmp/rugra" "$oracle_tmp/rugra-repeat"
+mkdir -m 0700 "$oracle_tmp/build-tmp"
+export TMPDIR="$oracle_tmp/build-tmp"
 mkdir -p "$output_root/ghidra" "$output_root/rugra" "$output_root/rugra-repeat"
 jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')
 make --silent -C "$cpp_root" -j "$jobs" EXTRA= libdecomp.a
@@ -201,13 +234,15 @@ g++ -std=c++11 -O2 -I"$bfd_include" -I"$cpp_root" \
   "$cpp_root/inject_sleigh.cc" \
   "$cpp_root/bfd_arch.cc" \
   "$cpp_root/loadimage_bfd.cc" \
-  "$cpp_root/libdecomp.a" "$bfd_library" -lz \
+  "$cpp_root/libdecomp.a" "$bfd_library" \
+  -Wl,-rpath,"$bfd_library_dir" -lz \
   -o "$oracle_tmp/getstr_pipeline_1204"
 
-CARGO_TARGET_DIR="$oracle_tmp/cargo-target" \
+fixture_target="$cache_parent/cargo-target"
+CARGO_TARGET_DIR="$fixture_target" \
   cargo build --release --offline --locked --quiet --manifest-path "$repo_root/Cargo.toml" \
   --example getstr_stage_snapshot
-rugra_fixture="$oracle_tmp/cargo-target/release/examples/getstr_stage_snapshot"
+rugra_fixture="$fixture_target/release/examples/getstr_stage_snapshot"
 if [[ ! -x "$rugra_fixture" ]]; then
   echo "cargo did not produce the GetStr snapshot example" >&2
   exit 1
@@ -258,7 +293,7 @@ for stage in 00_raw_pcode 01_cfg 02_heritage_ssa 03_action_ir 04_structure 05_c;
 done
 
 common_context=(
-  --context "binary_sha256=4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a"
+  --context "binary_sha256=$(sha256sum "$binary" | awk '{print $1}')"
   --context "function=GetStr@0x36d0+74"
   --context "rugra_commit=$(git -C "$repo_root" rev-parse HEAD)"
   --context "rugra_src_tree=$rugra_source_before"
@@ -387,6 +422,115 @@ for stage in stage_names:
         }
     )
 
+focused = metadata["focused_projections"]
+for projection_name in ("char_zero_read_facing", "short_circuit_character_token"):
+    if focused[projection_name]["status"] != "MATCH":
+        raise SystemExit(f"focused projection is not pinned MATCH: {projection_name}")
+if focused.get("does_not_override_overall_status") is not True or not focused.get("residual_ids"):
+    raise SystemExit("focused projection must preserve overall MISMATCH and residual bindings")
+
+def expect_equal(label, actual, expected):
+    if actual != expected:
+        raise SystemExit(f"{label} drift: actual={actual!r} expected={expected!r}")
+
+def unique_op(document, locator, label):
+    matches = [
+        op for op in document["ops"]
+        if op["address"] == {
+            "space": 3,
+            "space_name": "ram",
+            "offset": locator["address_offset"],
+        }
+        and op["opcode"] == locator["opcode"]
+        and len(op["inputs"]) == locator["input_count"]
+    ]
+    if len(matches) != 1:
+        raise SystemExit(f"{label} locator selected {len(matches)} ops")
+    return matches[0]
+
+def varnode_by_id(document, varnode_id, label):
+    matches = [vn for vn in document["varnodes"] if vn["id"] == varnode_id]
+    if len(matches) != 1:
+        raise SystemExit(f"{label} selected {len(matches)} varnodes")
+    return matches[0]
+
+def storage(vn, include_def=False):
+    result = {
+        "space": vn["space"],
+        "space_name": vn["space_name"],
+        "offset": vn["offset"],
+        "size": vn["size"],
+    }
+    if include_def:
+        result["def"] = vn["def"]
+    return result
+
+char_spec = focused["char_zero_read_facing"]
+token_spec = focused["short_circuit_character_token"]
+focused_records = {}
+for producer in ("ghidra", "rugra"):
+    action = documents[producer]["03_action_ir"]
+    guard = unique_op(action, char_spec["locator"]["value_pointer_guard"],
+                      f"{producer} pointer guard")
+    load = unique_op(action, char_spec["locator"]["character_load"],
+                     f"{producer} character load")
+    compare = unique_op(action, char_spec["locator"]["character_compare"],
+                        f"{producer} character compare")
+    branch = unique_op(action, char_spec["locator"]["consumer_branch"],
+                       f"{producer} consumer branch")
+
+    value_pointer_id = guard["inputs"][0]
+    expect_equal(f"{producer} LOAD pointer identity", load["inputs"][1], value_pointer_id)
+    value_pointer = varnode_by_id(action, value_pointer_id, f"{producer} value pointer")
+    expect_equal(f"{producer} value pointer storage", storage(value_pointer),
+                 char_spec["value_pointer_storage"])
+
+    pointer_zero = varnode_by_id(action, guard["inputs"][1], f"{producer} pointer zero")
+    expect_equal(f"{producer} pointer zero", storage(pointer_zero, True),
+                 char_spec["pointer_zero_storage"])
+
+    expect_equal(f"{producer} compare input defined directly by LOAD",
+                 compare["inputs"][0], load["output"])
+    loaded_char = varnode_by_id(action, compare["inputs"][0], f"{producer} loaded char")
+    expect_equal(f"{producer} loaded char defining op", loaded_char["def"], load["id"])
+    expect_equal(f"{producer} loaded char stored type", loaded_char["type"],
+                 char_spec["stored_character_type"])
+
+    char_zero = varnode_by_id(action, compare["inputs"][1], f"{producer} character zero")
+    expect_equal(f"{producer} character zero storage", storage(char_zero, True),
+                 char_spec["character_zero_storage"])
+    expect_equal(f"{producer} character zero stored type", char_zero["type"],
+                 char_spec["stored_character_type"])
+    expect_equal(f"{producer} read-facing input types",
+                 compare["input_high_read_types"], char_spec["input_high_read_types"])
+    expect_equal(f"{producer} compare output branch slot",
+                 branch["inputs"][1], compare["output"])
+
+    expected_line = token_spec["producer_lines"][producer]
+    c_text = documents[producer]["05_c"]["text"]
+    line_count = c_text.splitlines().count(expected_line)
+    expect_equal(f"{producer} exact short-circuit character line count", line_count, 1)
+    focused_records[producer] = {
+        "value_pointer_varnode": value_pointer_id,
+        "pointer_guard_op": guard["id"],
+        "character_load_op": load["id"],
+        "character_compare_op": compare["id"],
+        "consumer_branch_op": branch["id"],
+        "input_high_read_types": compare["input_high_read_types"],
+        "condition_line": expected_line,
+    }
+
+focused_projection_report = {
+    "state": "MATCH",
+    "char_zero_read_facing": "MATCH",
+    "short_circuit_character_token": "MATCH",
+    "producer_records": focused_records,
+    "role_projection": token_spec["role_projection"],
+    "normalization": token_spec["normalization"],
+    "does_not_override_overall_status": True,
+    "residual_ids": focused["residual_ids"],
+}
+
 first = stage_report[0]["first_difference"]
 expected_first = metadata["observation"]["first_difference"]
 if first != {
@@ -471,10 +615,16 @@ for index, (left, right) in enumerate(
         }
         break
 expected_varnode_state = metadata["observation"]["first_varnode_state_difference"]
-for key in ("index", "ghidra", "rugra"):
-    if varnode_state_difference[key] != expected_varnode_state[key]:
+if expected_varnode_state is None:
+    if varnode_state_difference is not None:
         raise SystemExit(f"varnode state difference changed: {varnode_state_difference}")
-varnode_state_difference["diagnosis"] = expected_varnode_state["diagnosis"]
+else:
+    if varnode_state_difference is None:
+        raise SystemExit("expected a Varnode-state difference but raw states now match")
+    for key in ("index", "ghidra", "rugra"):
+        if varnode_state_difference[key] != expected_varnode_state[key]:
+            raise SystemExit(f"varnode state difference changed: {varnode_state_difference}")
+    varnode_state_difference["diagnosis"] = expected_varnode_state["diagnosis"]
 
 repeat_documents = {}
 repeat_report = []
@@ -516,6 +666,7 @@ comparison = {
     },
     "first_op_storage_difference": storage_difference,
     "first_varnode_state_difference": varnode_state_difference,
+    "focused_projections": focused_projection_report,
     "stages": stage_report,
     "rugra_determinism": {
         "state": "STABLE_TWO_RUNS",
@@ -546,8 +697,13 @@ summary = [
     f"- Numeric op signature sequence: `MATCH` ({len(ghidra_ops)} ops)",
     f"- First op-storage difference: index {storage_difference['index']}",
     f"- Storage diagnosis: {storage_difference['diagnosis']}",
-    f"- First Varnode-state difference: index {varnode_state_difference['index']}",
+    (
+        f"- First Varnode-state difference: index {varnode_state_difference['index']}"
+        if varnode_state_difference is not None
+        else "- First Varnode-state difference: none across 272 ordered raw nodes"
+    ),
     f"- Rugra repeatability: {comparison['rugra_determinism']['state']}",
+    "- Focused char read-facing/token projection: `MATCH` (overall remains `MISMATCH`)",
     "",
     "| Stage | Ghidra | Rugra | First structural difference |",
     "|---|---:|---:|---|",
@@ -559,4 +715,4 @@ for item in stage_report:
 (root / "README.md").write_text("\n".join(summary) + "\n", encoding="utf-8")
 PY
 
-printf 'getstr_pipeline_1204: MISMATCH expected; reachable raw signature MATCH 103 ops; first storage diff=CALL fspec; Rugra two-run snapshot stable; artifacts=%s\n' "$output_root"
+printf 'getstr_pipeline_1204: overall=MISMATCH; focused char read-facing/token=MATCH; reachable raw signature MATCH 103 ops; raw Varnode flags/types MATCH 272 nodes; first storage diff=CALL fspec; Rugra two-run snapshot stable; artifacts=%s\n' "$output_root"

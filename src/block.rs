@@ -1169,7 +1169,7 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         true
     }
 
-    // Ghidra: block.hh:294 FlowBlock::negateCondition
+    // Ghidra: block.cc:294 FlowBlock::negateCondition
     /// Flip the true/false out-edge semantics of this block's CBRANCH.
     /// Returns true if the flip changed the dataflow. Faithful to
     /// `negateCondition(bool)` (block.hh:294). Base impl: if toporbottom,
@@ -1182,14 +1182,48 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
         false
     }
 
-    // Ghidra: block.hh:284 FlowBlock::swapEdges
+    // Ghidra: block.cc:218 FlowBlock::swapEdges
     /// Swap the two outgoing edges of this block. Faithful to
     /// `swapEdges()` (block.cc:218-233). Also updates reverse_index on
     /// the target blocks and toggles f_flip_path.
     fn swap_edges(&mut self) {
-        // cc:225-227: swap out[0] and out[1]
-        // Trait default: no-op (structured blocks don't have direct edges).
-        // BlockBasic overrides with the real edge swap.
+        let pending = {
+            let outgoing = self.out_edges_mut();
+            if outgoing.len() != 2 {
+                return;
+            }
+            outgoing.swap(0, 1);
+            outgoing
+                .iter()
+                .enumerate()
+                .map(|(slot, edge)| (slot, edge.point.clone(), edge.reverse_index))
+                .collect::<Vec<_>>()
+        };
+        for (slot, target, reverse_index) in pending {
+            if reverse_index < 0 {
+                continue;
+            }
+            match target.try_write() {
+                Ok(mut peer) => {
+                    if let Some(edge) = peer.in_edges_mut().get_mut(reverse_index as usize) {
+                        edge.reverse_index = slot as i32;
+                    }
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    if let Some(edge) = self.in_edges_mut().get_mut(reverse_index as usize) {
+                        edge.reverse_index = slot as i32;
+                    }
+                }
+                Err(std::sync::TryLockError::Poisoned(error)) => {
+                    panic!("poisoned reciprocal edge lock: {error}");
+                }
+            }
+        }
+        if self.get_flags() & block_flags::FLIP_PATH != 0 {
+            self.clear_flags(block_flags::FLIP_PATH);
+        } else {
+            self.set_flags(block_flags::FLIP_PATH);
+        }
     }
 
     /// Is this block the entry point of the function? (block.hh:325)
@@ -1573,8 +1607,7 @@ pub fn clear_out_edge_flag_mirrored(
 // Ghidra: block.cc:318 FlowBlock::setDefaultSwitch
 pub fn set_default_switch_mirrored(
     block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-    pos: usize,
-) {
+    pos: usize) {
     let previous_defaults = {
         let rg = block.read().unwrap();
         (0..rg.size_out())
@@ -1999,14 +2032,18 @@ impl FlowBlock for BlockBasic {
                                 let d_op = d_arc.read().unwrap();
                                 // cc:2426: d_op->isMarker() ||
                                 //          (d_op->getParent() != this)
-                                // "used outside of block": Ghidra compares
-                                // the descendant's parent BlockBasic with
-                                // `this`; Rugra's sblocks mirror shares the
-                                // op Arcs, so membership in self.ops is the
-                                // same test.
+                                // "used outside of block": Ghidra compares the
+                                // descendant's live parent object identity;
+                                // container membership is not a substitute for
+                                // that relation.
+                                let same_parent = d_op
+                                    .parent
+                                    .as_ref()
+                                    .and_then(Weak::upgrade)
+                                    .zip(self.self_ref.as_ref().and_then(Weak::upgrade))
+                                    .is_some_and(|(parent, this)| Arc::ptr_eq(&parent, &this));
                                 if d_op.is_marker()
-                                    || !self.ops.iter().any(|o| Arc::ptr_eq(&o.0, &d_arc))
-                                {
+                                    || !same_parent {
                                     yesstatement = true;
                                     break;
                                 }
@@ -2039,7 +2076,9 @@ impl FlowBlock for BlockBasic {
 
     // Ghidra: block.cc:2258 BlockBasic::insert
     fn insert_op(&mut self, index: usize, op: PcodeOpRef) {
-        assert!(index <= self.ops.len(), "BlockBasic insert index is out of bounds");
+        assert!(
+            index <= self.ops.len(), "BlockBasic insert index is out of bounds"
+        );
         let order_before = if index == 0 {
             2
         } else {
@@ -4969,9 +5008,6 @@ pub struct BlockIf {
     pub condition: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
     pub if_body: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
     pub else_body: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
-    /// When true, the CBRANCH condition should be negated before emitting.
-    /// Set when the if_body comes from the false edge (Triangle-reverse pattern).
-    pub negated: bool,
     /// For if-goto blocks (Ghidra newBlockIfGoto style): the target of the
     /// unstructured goto edge. When Some, this BlockIf represents
     /// `if (cond) goto target;` — the body is NOT embedded (if_body is a
@@ -5911,8 +5947,7 @@ impl BlockList {
         };
         // cc:2972: FlowBlock::negateCondition(toporbottom);  -- flip order of outgoing
         if toporbottom {
-            let last_idx = self.outgoing.len().saturating_sub(1);
-            self.outgoing.swap(0, last_idx);
+            <Self as FlowBlock>::swap_edges(self);
         }
         res
     }
@@ -5980,6 +6015,10 @@ impl FlowBlock for BlockList {
     // Ghidra: block.cc:2976 BlockList::getSplitPoint
     fn get_split_point(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         BlockList::get_split_point(self)
+    }
+    // Ghidra: block.cc:2967 BlockList::negateCondition
+    fn negate_condition(&mut self, toporbottom: bool) -> bool {
+        BlockList::negate_condition(self, toporbottom)
     }
     // Ghidra: block.hh:165 FlowBlock::getFlags
     fn get_flags(&self) -> u32 {
@@ -6150,6 +6189,10 @@ impl FlowBlock for BlockCondition {
     fn last_op(&self) -> Option<PcodeOpRef> {
         BlockCondition::last_op(self)
     }
+    // Ghidra: block.cc:3023 BlockCondition::negateCondition
+    fn negate_condition(&mut self, toporbottom: bool) -> bool {
+        BlockCondition::negate_condition(self, toporbottom)
+    }
     // Ghidra: block.hh:165 FlowBlock::getFlags
     fn get_flags(&self) -> u32 {
         self.flags
@@ -6287,8 +6330,8 @@ impl BlockCondition {
             BoolOp::Or => BoolOp::And,
         };
         // cc:3030: FlowBlock::negateCondition(toporbottom);  -- flip outgoing edges
-        if toporbottom && self.outgoing.len() >= 2 {
-            self.outgoing.swap(0, 1);
+        if toporbottom {
+            <Self as FlowBlock>::swap_edges(self);
         }
         // cc:3031: return (res1 || res2);
         res1 || res2
@@ -6685,7 +6728,9 @@ mod edge_flag_tests {
         assert_eq!(out0.reverse_index, 0);
         assert_eq!(out1.reverse_index, 0);
         drop(source_read);
-        assert_eq!(first.read().unwrap().get_in(0).unwrap().flags & default_flag, 0);
+        assert_eq!(
+            first.read().unwrap().get_in(0).unwrap().flags & default_flag, 0
+        );
         assert_ne!(
             second.read().unwrap().get_in(0).unwrap().flags & default_flag,
             0

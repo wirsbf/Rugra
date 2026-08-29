@@ -53,7 +53,9 @@ impl LocationMap {
     ///   0 = no overlap with existing
     ///   1 = partial overlap (merged)
     ///   2 = completely contained in a previous (older) entry
-    pub fn add(&mut self, space: AddressSpace, mut addr: Address, mut size: i32, mut pass: i32) -> i32 {
+    pub fn add(
+        &mut self, space: AddressSpace, mut addr: Address, mut size: i32, mut pass: i32,
+    ) -> i32 {
         use crate::address::Address as A;
         // Ghidra cc:37-41: iter = lower_bound(addr); if (iter != begin)
         // --iter; if the resulting entry does not overlap, ++iter. The
@@ -68,8 +70,14 @@ impl LocationMap {
         let mut intersect = 0;
         // lb1/lb2: first two same-space entries with key >= addr.
         let mut fwd = self.themap.range((space, addr)..);
-        let lb1 = fwd.next().filter(|(k, _)| k.0 == space).map(|(k, v)| (k.1, *v));
-        let lb2 = fwd.next().filter(|(k, _)| k.0 == space).map(|(k, v)| (k.1, *v));
+        let lb1 = fwd
+            .next()
+            .filter(|(k, _)| k.0 == space)
+            .map(|(k, v)| (k.1, *v));
+        let lb2 = fwd
+            .next()
+            .filter(|(k, _)| k.0 == space)
+            .map(|(k, v)| (k.1, *v));
         // prev: last same-space entry with key < addr (cc:38-39 --iter).
         let prev = self
             .themap
@@ -162,7 +170,11 @@ impl LocationMap {
         // Ghidra cc:97-98: if overlap != -1 return pass
         match prev_key {
             Some(k) => {
-                let sp = self.themap.get(&(space, k)).copied().unwrap_or(SizePass { size: 0, pass: -1 });
+                let sp = self
+                    .themap
+                    .get(&(space, k))
+                    .copied()
+                    .unwrap_or(SizePass { size: 0, pass: -1 });
                 if addr.overlap(0, k, sp.size) != -1 {
                     sp.pass
                 } else {
@@ -268,7 +280,8 @@ pub struct TaskList {
 impl TaskList {
     // RUGRA-GLUE: Rust Default constructor for TaskList (Ghidra uses default list ctor)
     pub fn new() -> Self {
-        Self { tasklist: Vec::new() }
+        Self { tasklist: Vec::new() ,
+        }
     }
 
     // Ghidra: heritage.cc:109 TaskList::add
@@ -289,7 +302,8 @@ impl TaskList {
                 }
             }
         }
-        self.tasklist.push(MemRange { addr, size, flags: fl, space });
+        self.tasklist.push(MemRange { addr, size, flags: fl, space ,
+        });
     }
 
     // Ghidra: heritage.hh:89 TaskList::begin
@@ -412,6 +426,15 @@ impl HeritageInfo {
             warning_issued: false,
             has_call_placeholders,
         }
+    }
+// Ghidra: heritage.cc:205 HeritageInfo::reset
+    /// Reset per-run state while preserving the space delays, including any
+    /// dead-code-delay override installed before a restart.
+    pub fn reset(&mut self) {
+        self.deadremoved = 0;
+        self.has_call_placeholders = self.space.is_heritaged() && self.space.is_stack();
+        self.warning_issued = false;
+        self.load_guard_search = false;
     }
 }
 
@@ -645,7 +668,7 @@ impl Heritage {
     /// Look up the HeritageInfo for `space`. Faithful to `getInfo`
     /// (heritage.hh:257). Ghidra indexes infolist by spc->getIndex();
     /// Rugra scans by space match (infolist is small, ~6 entries).
-    /// Auto-builds infolist if empty (buildInfoList cc:2664).
+    /// Auto-builds infolist if empty (buildInfoList cc:2650).
     pub fn get_info(&mut self, space: AddressSpace) -> &HeritageInfo {
         if self.infolist.is_empty() {
             self.build_info_list();
@@ -662,22 +685,25 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:2664 Heritage::buildInfoList
-    /// Build the per-space HeritageInfo list. Faithful to `buildInfoList`
-    /// (heritage.cc:2664-2672). Ghidra iterates manage->numSpaces();
-    /// Rugra enumerates its fixed AddressSpace enum.
+    // Ghidra: heritage.cc:2650 Heritage::buildInfoList
+    /// Build the compact per-space HeritageInfo projection in the locked x86
+    /// manager order. Ghidra iterates every `manage->numSpaces()` slot; the
+    /// missing FSPEC identity remains an explicit manager-model residual.
     pub fn build_info_list(&mut self) {
         if !self.infolist.is_empty() {
             return;
         }
+        // Locked x86 space-index order, with the unmodeled FSPEC slot (5)
+        // omitted from the compact enum projection.
         let spaces = [
+            AddressSpace::Const,
+            AddressSpace::Other(crate::space::SPACEID_OTHER),
+            AddressSpace::Unique,
             AddressSpace::Ram,
             AddressSpace::Register,
-            AddressSpace::Unique,
-            AddressSpace::Const,
-            AddressSpace::Stack,
-            AddressSpace::Join,
             AddressSpace::Iop,
+            AddressSpace::Join,
+            AddressSpace::Stack,
         ];
         for sp in spaces {
             self.infolist.push(HeritageInfo::new(sp));
@@ -915,7 +941,8 @@ impl Heritage {
                     // cc:2414-2417: mark + pq.insert if not mark_node
                     if (self.flags[k] & heritage_flags::MARK_NODE) == 0 {
                         self.flags[k] |= heritage_flags::MARK_NODE;
-                        self.pq.insert(v_idx, self.depth.get(k).copied().unwrap_or(0));
+                        self.pq
+                            .insert(v_idx, self.depth.get(k).copied().unwrap_or(0));
                     }
                 }
             } else {
@@ -957,7 +984,13 @@ impl Heritage {
                 .def
                 .as_ref()
                 .and_then(|w| w.upgrade())
-                .and_then(|def| def.read().unwrap().parent.as_ref().and_then(|p| p.upgrade()))
+                .and_then(|def| {
+                def.read()
+                    .unwrap()
+                    .parent
+                    .as_ref()
+                    .and_then(|p| p.upgrade())
+            })
             {
                 Some(parent) => parent.read().unwrap().get_index(),
                 None => continue,
@@ -966,7 +999,8 @@ impl Heritage {
             if j < self.flags.len() && (self.flags[j] & heritage_flags::MARK_NODE) != 0 {
                 continue; // Already in
             }
-            self.pq.insert(blk_idx, self.depth.get(j).copied().unwrap_or(0));
+            self.pq
+                .insert(blk_idx, self.depth.get(j).copied().unwrap_or(0));
             if j < self.flags.len() {
                 self.flags[j] |= heritage_flags::MARK_NODE;
             }
@@ -1110,7 +1144,10 @@ impl Heritage {
         for (store_op, stack_off) in stores_to_guard {
             let sz = {
                 let s = store_op.read().unwrap();
-                s.inrefs.get(2).map(|v| v.read().unwrap().get_size()).unwrap_or(8)
+                s.inrefs
+                    .get(2)
+                    .map(|v| v.read().unwrap().get_size())
+                    .unwrap_or(8)
             };
             let store_ref = crate::op::PcodeOpRef(store_op);
             let indop = fd.new_indirect_op(
@@ -1178,8 +1215,7 @@ impl Heritage {
         // obank (mark_spacebase_ptr) without holding it.
         let mut to_guard: Vec<(
             std::sync::Arc<std::sync::RwLock<PcodeOp>>,
-            AddressSpace,
-        )> = Vec::new();
+            AddressSpace)> = Vec::new();
 
         for op_ref in &fd.obank.optree {
             let op = op_ref.0.read().unwrap();
@@ -1276,8 +1312,7 @@ impl Heritage {
         // Collect LOADs that read an indexed stack-space pointer.
         let mut to_guard: Vec<(
             std::sync::Arc<std::sync::RwLock<PcodeOp>>,
-            AddressSpace,
-        )> = Vec::new();
+            AddressSpace)> = Vec::new();
         for op_ref in &fd.obank.optree {
             let op = op_ref.0.read().unwrap();
             if op.opcode != crate::opcodes::OpCode::CPUI_LOAD {
@@ -1411,7 +1446,8 @@ impl Heritage {
                 if output_character != crate::fspec::containment::NO_CONTAINMENT {
                     // cc:1473-1474: auto-killed-by-call upgrade
                     if effecttype != crate::fspec::EffectType::KilledByCall
-                        && fd.get_call_specs(i)
+                        && fd
+                            .get_call_specs(i)
                             .map(|fc| fc.is_auto_killed_by_call())
                             .unwrap_or(false)
                     {
@@ -1430,7 +1466,9 @@ impl Heritage {
                             .get_call_specs(i)
                             .map(|fc| {
                                 fc.active_output
-                                    .which_trial_in_space(space, Address::new(off), size)
+                                    .which_trial_in_space(
+                                    space, Address::new(off), size,
+                                )
                                     >= 0
                             })
                             .unwrap_or(true);
@@ -1498,11 +1536,11 @@ impl Heritage {
                         .unwrap_or(true);
                     if !already_trial {
                         if let Some(mut fc) = fd.get_call_specs_mut(i) {
-                            fc.active_input.register_trial_in_space(
+                            fc.active_input
+                                .register_trial_in_space(
                                 space,
                                 Address::new(off),
-                                size,
-                            );
+                                size);
                         }
                         // cc:1502-1504: vn = newVarnode(size, addr);
                         // setActiveHeritage; opInsertInput(op, vn, numInput()).
@@ -1746,7 +1784,9 @@ impl Heritage {
         for op in return_ops {
             let (dead, op_addr) = {
                 let r = op.0.read().unwrap();
-                ((r.flags & crate::op::pcodeop_flags::DEAD) != 0, r.get_addr())
+                (
+                    (r.flags & crate::op::pcodeop_flags::DEAD) != 0, r.get_addr(),
+                )
             };
             if dead {
                 continue; // cc:1680
@@ -1754,12 +1794,13 @@ impl Heritage {
             // cc:1681: copyop = fd->newOp(1, op->getAddr())
             let copyop = fd.new_op(1, op_addr);
             // cc:1682: vn = fd->newVarnodeOut(size, addr, copyop)
-            let vn = fd.vbank.create_def_with_space(
+            let vn = fd
+                .vbank
+                .create_def_with_space(
                 size as usize,
                 space,
                 addr.as_u64(),
-                &copyop.0,
-            );
+                &copyop.0);
             copyop.0.write().unwrap().output = Some(vn.clone());
             Heritage::apply_new_varnode_flags(fd, &vn);
             // cc:1683-1684: vn->setAddrForce(); vn->setActiveHeritage()
@@ -1770,8 +1811,7 @@ impl Heritage {
             // cc:1686: fd->markReturnCopy(copyop) — funcdata.hh inline:
             // op->setFlag(PcodeOp::return_copy)
             copyop
-                .0
-                .write()
+                .0.write()
                 .unwrap()
                 .flags |= crate::op::pcodeop_flags::RETURN_COPY;
             // cc:1687-1689: invn = newVarnode(size,addr);
@@ -1806,7 +1846,9 @@ impl Heritage {
         // cc:392: vn1 = newVarnode(size, addr) — the new full-size free read.
         // R9-F2: newVarnode's property tail (funcdata_varnode.cc:148-165)
         // applies the range flags before the caller proceeds.
-        let vn1 = fd.vbank.create_with_space(size as usize, vn.read().unwrap().address_space, addr.as_u64());
+        let vn1 = fd.vbank.create_with_space(
+            size as usize, vn.read().unwrap().address_space, addr.as_u64(),
+        );
         Heritage::apply_new_varnode_flags(fd, &vn1);
         // cc:393: overlap = vn->overlap(addr, size) — endian-aware
         // (Varnode::overlap, varnode.cc:217-228). R9-F1: former inline
@@ -1899,8 +1941,7 @@ impl Heritage {
                     space,
                     piece_addr,
                     mostsigsize as i32,
-                    &def_op,
-                )
+                    &def_op)
             {
                 // cc:435: newIndirectCreation — don't create a new big read
                 // if the write is from a CALL with an effect on the piece.
@@ -1926,7 +1967,9 @@ impl Heritage {
                 );
                 newop.0.write().unwrap().output = Some(most_out.clone());
                 Heritage::apply_new_varnode_flags(fd, &most_out);
-                let big = fd.vbank.create_with_space(size as usize, space, addr.as_u64());
+                let big = fd
+                    .vbank
+                    .create_with_space(size as usize, space, addr.as_u64());
                 Heritage::apply_new_varnode_flags(fd, &big);
                 big.write().unwrap().set_active_heritage();
                 fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
@@ -1969,10 +2012,14 @@ impl Heritage {
                 let newop = fd.new_op(2, op_addr);
                 let least_out =
                     fd.vbank
-                        .create_def_with_space(overlap as usize, space, piece_addr.as_u64(), &newop.0);
+                        .create_def_with_space(
+                    overlap as usize, space, piece_addr.as_u64(), &newop.0,
+                );
                 newop.0.write().unwrap().output = Some(least_out.clone());
                 Heritage::apply_new_varnode_flags(fd, &least_out);
-                let big = fd.vbank.create_with_space(size as usize, space, addr.as_u64());
+                let big = fd
+                    .vbank
+                    .create_with_space(size as usize, space, addr.as_u64());
                 Heritage::apply_new_varnode_flags(fd, &big);
                 big.write().unwrap().set_active_heritage();
                 fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
@@ -1998,13 +2045,17 @@ impl Heritage {
             };
             let mid_out =
                 fd.vbank
-                    .create_def_with_space((overlap + vn_size) as usize, space, mid_addr.as_u64(), &newop.0);
+                    .create_def_with_space(
+                (overlap + vn_size) as usize, space, mid_addr.as_u64(), &newop.0,
+            );
             newop.0.write().unwrap().output = Some(mid_out.clone());
             Heritage::apply_new_varnode_flags(fd, &mid_out);
             fd.op_set_opcode(&newop, OpCode::CPUI_PIECE);
             // cc:477-478: vn is the most significant input.
             fd.op_set_input(&newop, vn.clone(), 0);
-            fd.op_set_input(&newop, leastvn.clone().expect("overlap!=0 implies leastvn"), 1);
+            fd.op_set_input(
+                &newop, leastvn.clone().expect("overlap!=0 implies leastvn"), 1,
+            );
             fd.op_insert_after(&newop, &PcodeOpRef(def_op.clone()));
             mid_out
         } else {
@@ -2021,7 +2072,9 @@ impl Heritage {
             newop.0.write().unwrap().output = Some(big_out.clone());
             Heritage::apply_new_varnode_flags(fd, &big_out);
             fd.op_set_opcode(&newop, OpCode::CPUI_PIECE);
-            fd.op_set_input(&newop, mostvn.clone().expect("mostsigsize!=0 implies mostvn"), 0);
+            fd.op_set_input(
+                &newop, mostvn.clone().expect("mostsigsize!=0 implies mostvn"), 0,
+            );
             fd.op_set_input(&newop, midvn.clone(), 1);
             // cc:489: opInsertAfter(newop, midvn->getDef())
             let mid_def = midvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
@@ -2218,9 +2271,8 @@ impl Heritage {
                 && scope
                     .local_range
                     .iter()
-                    .any(|&(first, range_last)| {
-                        first <= offset && last <= range_last
-                    });
+                    .any(|&(first, range_last)| first <= offset && last <= range_last
+                    );
             if in_scope {
                 let mut f = varnode_flags::MAPPED | varnode_flags::ADDRTIED;
                 if let Some(a) = fd.get_arch() {
@@ -2367,9 +2419,9 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:675 Heritage::propagateCopyAway
+    // Ghidra: heritage.cc:674 Heritage::propagateCopyAway
     /// Eliminate a COPY sink, propagating input to all readers.
-    /// Faithful to `propagateCopyAway` (heritage.cc:675-688).
+    /// Faithful to `propagateCopyAway` (heritage.cc:674-688).
     pub fn propagate_copy_away(&self, fd: &mut Funcdata, op: &PcodeOpRef) {
         // cc:678-685: follow COPY chain to earliest input
         let mut in_vn = match op.0.read().unwrap().get_in(0) {
@@ -2377,12 +2429,18 @@ impl Heritage {
         };
         loop {
             let def_op = in_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
-            let def_op = match def_op { Some(d) => d, None => break };
+            let def_op = match def_op { Some(d) => d, None => break ,
+            };
             if def_op.read().unwrap().opcode != OpCode::CPUI_COPY { break; }
             let next_in = match def_op.read().unwrap().get_in(0) {
                 Some(v) => v.clone(), None => break,
             };
-            if next_in.read().unwrap().loc != in_vn.read().unwrap().loc { break; }
+            let same_address = {
+                let next = next_in.read().unwrap();
+                let current = in_vn.read().unwrap();
+                next.address_space == current.address_space && next.loc == current.loc
+            };
+            if !same_address { break; }
             in_vn = next_in;
         }
         // cc:686: totalReplace(op->getOut(), inVn)
@@ -2390,9 +2448,9 @@ impl Heritage {
             Some(o) => o.clone(), None => return,
         };
         fd.total_replace(&out_vn, in_vn);
-        // cc:687: opDestroy(op)
-        // Mark as dead for cleanup
-        op.0.write().unwrap().flags |= crate::op::pcodeop_flags::DEAD;
+        // cc:687: fd->opDestroy(op).  This unlinks the op's Varnodes, moves
+        // it to the bank's dead list, and removes it from its BlockBasic.
+        fd.op_destroy(op);
     }
 
     // Ghidra: heritage.cc:696 Heritage::handleNewLoadCopies
@@ -2401,8 +2459,11 @@ impl Heritage {
     pub fn handle_new_load_copies(&mut self, fd: &mut Funcdata) {
         if self.load_copy_ops.is_empty() { return; }
         // Upgrade Weak to Arc
-        let sink_arcs: Vec<Arc<RwLock<PcodeOp>>> = self.load_copy_ops.iter()
-            .filter_map(|w| w.upgrade()).collect();
+        let sink_arcs: Vec<Arc<RwLock<PcodeOp>>> = self
+            .load_copy_ops
+            .iter()
+            .filter_map(|w| w.upgrade())
+            .collect();
         if sink_arcs.is_empty() { self.load_copy_ops.clear(); return; }
         let copy_sink_size = sink_arcs.len();
         let mut forces: Vec<Arc<RwLock<PcodeOp>>> = Vec::new();
@@ -2411,11 +2472,16 @@ impl Heritage {
         for force_op in &forces {
             if let Some(out_vn) = force_op.read().unwrap().output.as_ref() {
                 let vn_addr = out_vn.read().unwrap().loc.as_u64();
-                let in_range = self.load_guard.iter().any(|g| {
-                    vn_addr >= g.minimum_offset && vn_addr <= g.maximum_offset
-                });
+                let in_range = self
+                    .load_guard
+                    .iter()
+                    .any(|g| vn_addr >= g.minimum_offset && vn_addr <= g.maximum_offset
+                );
                 if in_range {
-                    out_vn.write().unwrap().set_flags(
+                    out_vn
+                        .write()
+                        .unwrap()
+                        .set_flags(
                         crate::varnode::varnode_flags::ADDRFORCE);
                 }
             }
@@ -2450,7 +2516,8 @@ impl Heritage {
         addr: Address,
         size: i32,
     ) {
-        let space = remove.first()
+        let space = remove
+            .first()
             .map(|v| v.read().unwrap().address_space)
             .unwrap_or(AddressSpace::Register);
         // cc:247-257: if deadremoved > 0, bump delay + one-time warning
@@ -2564,7 +2631,9 @@ impl Heritage {
                     // cc:268-269: ++op->getBasicIter()
                     None => self_pos + 1,
                 };
-                anchor = bl_ops.get(anchor_pos).map(|o| crate::op::PcodeOpRef(o.0.clone()));
+                anchor = bl_ops
+                    .get(anchor_pos)
+                    .map(|o| crate::op::PcodeOpRef(o.0.clone()));
                 // cc:273: vn->clearAddrForce()
                 vn_arc.write().unwrap().clear_addr_force();
             } else if def_code == OpCode::CPUI_MULTIEQUAL {
@@ -2591,7 +2660,9 @@ impl Heritage {
             fd.op_uninsert(&def_ref);
             // cc:288-291: big = newVarnode(size,addr); setActiveHeritage;
             // newInputs = [big, newConstant(4, offset)]
-            let big = fd.vbank.create_with_space(size as usize, vn_space, addr.as_u64());
+            let big = fd
+                .vbank
+                .create_with_space(size as usize, vn_space, addr.as_u64());
             big.write().unwrap().set_active_heritage();
             let off_const = fd.new_constant(4, offset);
             // cc:292-293: opSetOpcode(SUBPIECE) + opSetAllInput
@@ -2707,10 +2778,18 @@ impl Heritage {
     /// is a documented stub that marks guards as analyzed (analysisState=1).
     pub fn analyze_new_load_guards(&mut self) {
         // cc:838-847: check if any unanalyzed guards exist
-        let has_unanalyzed_load = self.load_guard.iter()
-            .rev().take_while(|g| g.analysis_state == 0).count() > 0;
-        let has_unanalyzed_store = self.store_guard.iter()
-            .rev().take_while(|g| g.analysis_state == 0).count() > 0;
+        let has_unanalyzed_load = self
+            .load_guard
+            .iter()
+            .rev()
+            .take_while(|g| g.analysis_state == 0)
+            .count() > 0;
+        let has_unanalyzed_store = self
+            .store_guard
+            .iter()
+            .rev()
+            .take_while(|g| g.analysis_state == 0)
+            .count() > 0;
         if !has_unanalyzed_load && !has_unanalyzed_store { return; }
 
         // cc:871-874: ValueSetSolver establishValueSets + solve(10000, WidenerNone)
@@ -2870,8 +2949,7 @@ impl Heritage {
             vn_collect = Some(fd.new_varnode_out(
                 (size_front + ret_size) as usize,
                 addr,
-                &concat_front,
-            ));
+                &concat_front));
             // cc:1265-1266: opInsertAfter(concatFront, callOp)
             fd.op_insert_after(&concat_front, call_op);
         }
@@ -2901,12 +2979,19 @@ impl Heritage {
                 // Reuse op_insert_after chain: insert after concatFront.
                 // (Resolve it as the op right after the call.)
                 let next = {
-                    let parent = call_op.0.read().unwrap()
-                        .parent.as_ref().and_then(|w| w.upgrade());
+                    let parent = call_op
+                        .0
+                        .read()
+                        .unwrap()
+                        .parent
+                        .as_ref()
+                        .and_then(|w| w.upgrade());
                     match parent {
                         Some(blk) => {
                             let ops = blk.read().unwrap().get_ops();
-                            let pos = ops.iter().position(|o| std::sync::Arc::ptr_eq(&o.0, &call_op.0));
+                            let pos = ops
+                                .iter()
+                                .position(|o| std::sync::Arc::ptr_eq(&o.0, &call_op.0));
                             pos.and_then(|p| ops.get(p + 1)).cloned()
                         }
                         None => None,
@@ -2946,7 +3031,10 @@ impl Heritage {
         // cc:1298: if (!fc->getBiggestContainedOutput(transAddr, size, vData))
         let v_data = match fd
             .get_call_specs(fc_idx)
-            .and_then(|fc| fc.prototype.get_biggest_contained_output(space, trans_offset, size))
+            .and_then(|fc| {
+            fc.prototype
+                .get_biggest_contained_output(space, trans_offset, size)
+        })
         {
             Some(v) => v,
             None => return false,
@@ -2973,8 +3061,7 @@ impl Heritage {
             None => return false,
         };
         self.guard_output_overlap(
-            fd, &call_op, space, addr, size, trunc_addr, v_size, write,
-        );
+            fd, &call_op, space, addr, size, trunc_addr, v_size, write);
         // cc:1307: active->registerTrial(truncAddr, vData.size)
         if let Some(mut fc) = fd.get_call_specs_mut(fc_idx) {
             fc.active_output
@@ -3008,7 +3095,10 @@ impl Heritage {
             _ => None,
         };
         // cc:1547-1548: iter=fd->beginOp(CPUI_STORE) .. endOp
-        let store_arcs: Vec<_> = fd.obank.storelist.iter()
+        let store_arcs: Vec<_> = fd
+            .obank
+            .storelist
+            .iter()
             .filter(|s| !(s.0.read().unwrap().flags & crate::op::pcodeop_flags::DEAD != 0))
             .map(|s| s.0.clone())
             .collect();
@@ -3026,7 +3116,8 @@ impl Heritage {
                     }
                 })
             };
-            let Some(store_space) = store_space else { continue };
+            let Some(store_space) = store_space else { continue ;
+            };
             // cc:1551-1552: match against the range space or its container.
             let uses_sb = store_op.read().unwrap().uses_spacebase_ptr();
             let matches = store_space == space
@@ -3078,16 +3169,14 @@ impl Heritage {
             return;
         }
         // cc:1577-1586: prune guards that are no longer valid LOADs.
-        self.load_guard.retain(|g| {
-            match g.op.upgrade() {
+        self.load_guard.retain(|g| match g.op.upgrade() {
                 Some(op) => {
                     let r = op.read().unwrap();
                     !(r.flags & crate::op::pcodeop_flags::DEAD != 0
                         || r.opcode != OpCode::CPUI_LOAD)
                 }
                 None => false,
-            }
-        });
+            });
         // cc:1587: if (guardRec.spc != addr.getSpace()) continue
         // cc:1588-1589: minimumOffset/maximumOffset window check.
         let addr_start = addr.as_u64();
@@ -3111,8 +3200,7 @@ impl Heritage {
     pub fn split_join_read(
         &mut self,
         fd: &mut Funcdata,
-        vn: &Arc<RwLock<Varnode>>,
-    ) {
+        vn: &Arc<RwLock<Varnode>>) {
         // cc:2122: vn is free, loneDescend must be non-null
         let read_op = match vn.read().unwrap().lone_descend() {
             Some(op) => op, None => return,
@@ -3123,7 +3211,8 @@ impl Heritage {
             Some(a) => a.join_db.find_join(vn_offset).cloned(),
             None => None,
         };
-        let join_rec = match join_rec { Some(r) => r, None => return };
+        let join_rec = match join_rec { Some(r) => r, None => return ,
+        };
 
         // cc:2128-2162: iterative PIECE chain creation
         // Simplified: for 2-piece joins, create a single PIECE.
@@ -3152,8 +3241,7 @@ impl Heritage {
     pub fn split_join_write(
         &mut self,
         fd: &mut Funcdata,
-        vn: &Arc<RwLock<Varnode>>,
-    ) {
+        vn: &Arc<RwLock<Varnode>>) {
         let def_op = match vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
             Some(op) => op, None => return,
         };
@@ -3163,7 +3251,8 @@ impl Heritage {
             Some(a) => a.join_db.find_join(vn_offset).cloned(),
             None => None,
         };
-        let join_rec = match join_rec { Some(r) => r, None => return };
+        let join_rec = match join_rec { Some(r) => r, None => return ,
+        };
 
         // cc:2187-2226: create SUBPIECE ops for each piece
         if join_rec.num_pieces() == 2 {
@@ -3260,8 +3349,7 @@ impl Heritage {
     pub fn float_extension_read(
         &mut self,
         fd: &mut Funcdata,
-        vn: &Arc<RwLock<Varnode>>,
-    ) {
+        vn: &Arc<RwLock<Varnode>>) {
         // cc:2239: op = vn->loneDescend()
         let read_op = match vn.read().unwrap().lone_descend() {
             Some(op) => op, None => return,
@@ -3271,7 +3359,8 @@ impl Heritage {
             Some(a) => a.join_db.find_join(vn_offset).cloned(),
             None => None,
         };
-        let join_rec = match join_rec { Some(r) => r, None => return };
+        let join_rec = match join_rec { Some(r) => r, None => return ,
+        };
         if !join_rec.is_float_extension() { return; }
         // cc:2241: vdata = joinrec->getPiece(0)
         let vdata = join_rec.get_piece(0);
@@ -3279,7 +3368,9 @@ impl Heritage {
         let op_addr = read_op.read().unwrap().get_addr();
         let trunc = fd.new_op(1, op_addr);
         // cc:2242: bigvn = newVarnode(vdata.size, vdata.space, vdata.offset)
-        let bigvn = fd.vbank.create_with_space(vdata.size, vdata.space, vdata.offset);
+        let bigvn = fd
+            .vbank
+            .create_with_space(vdata.size, vdata.space, vdata.offset);
         // cc:2243: opSetOpcode(FLOAT_FLOAT2FLOAT)
         fd.op_set_opcode(&trunc, OpCode::CPUI_FLOAT_FLOAT2FLOAT);
         // cc:2244: opSetOutput(trunc, vn)
@@ -3295,14 +3386,14 @@ impl Heritage {
     pub fn float_extension_write(
         &mut self,
         fd: &mut Funcdata,
-        vn: &Arc<RwLock<Varnode>>,
-    ) {
+        vn: &Arc<RwLock<Varnode>>) {
         let vn_offset = vn.read().unwrap().loc.as_u64();
         let join_rec = match fd.get_arch() {
             Some(a) => a.join_db.find_join(vn_offset).cloned(),
             None => None,
         };
-        let join_rec = match join_rec { Some(r) => r, None => return };
+        let join_rec = match join_rec { Some(r) => r, None => return ,
+        };
         if !join_rec.is_float_extension() { return; }
         // cc:2259: op = vn->getDef()
         let def_op = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
@@ -3356,7 +3447,9 @@ impl Heritage {
         // call had no output.
         let existing_out = call_op.read().unwrap().output.as_ref().cloned();
         let mut vn_collect = existing_out
-            .unwrap_or_else(|| fd.new_varnode_out(ret_size as usize, ret_addr, &PcodeOpRef(call_op.clone())));
+            .unwrap_or_else(|| {
+            fd.new_varnode_out(ret_size as usize, ret_addr, &PcodeOpRef(call_op.clone()))
+        });
         // cc:1327: insertPoint = callOp — both PIECE concats insert after the
         // RUNNING insert point, not always after the call: cc:1349-1350
         // advances it to concatFront, so with both pieces present the back
@@ -3365,7 +3458,8 @@ impl Heritage {
 
         // cc:1332-1352: front piece
         if size_front > 0 {
-            let new_input = fd.vbank.create_with_space(size as usize, AddressSpace::Stack, addr.as_u64());
+            let new_input = fd.vbank
+                    .create_with_space(size as usize, AddressSpace::Stack, addr.as_u64());
             new_input.write().unwrap().set_active_heritage();
             let sub_piece = fd.new_op(2, op_addr);
             fd.op_set_opcode(&sub_piece, OpCode::CPUI_SUBPIECE);
@@ -3401,7 +3495,13 @@ impl Heritage {
                 fd.op_set_output(&sub_piece, vn);
             }
             fd.op_insert_before(&sub_piece, &PcodeOpRef(call_op.clone()));
-            let new_front = ind_front.0.read().unwrap().output.as_ref().cloned()
+            let new_front = ind_front
+                .0
+                .read()
+                .unwrap()
+                .output
+                .as_ref()
+                .cloned()
                 .unwrap_or_else(|| fd.new_unique(size_front as usize));
             // cc:1344-1351: PIECE concat
             let concat = fd.new_op(2, op_addr);
@@ -3419,7 +3519,8 @@ impl Heritage {
         // cc:1353-1373: back piece
         if size_back > 0 {
             let addr_back = Address::new(ret_addr.as_u64().wrapping_add(ret_size as u64));
-            let new_input = fd.vbank.create_with_space(size as usize, AddressSpace::Stack, addr.as_u64());
+            let new_input = fd.vbank
+                    .create_with_space(size as usize, AddressSpace::Stack, addr.as_u64());
             new_input.write().unwrap().set_active_heritage();
             let sub_piece = fd.new_op(2, op_addr);
             fd.op_set_opcode(&sub_piece, OpCode::CPUI_SUBPIECE);
@@ -3453,7 +3554,13 @@ impl Heritage {
                 fd.op_set_output(&sub_piece, vn);
             }
             fd.op_insert_before(&sub_piece, &PcodeOpRef(call_op.clone()));
-            let new_back = ind_back.0.read().unwrap().output.as_ref().cloned()
+            let new_back = ind_back
+                .0
+                .read()
+                .unwrap()
+                .output
+                .as_ref()
+                .cloned()
                 .unwrap_or_else(|| fd.new_unique(size_back as usize));
             let concat = fd.new_op(2, op_addr);
             fd.op_set_opcode(&concat, OpCode::CPUI_PIECE);
@@ -3534,8 +3641,7 @@ impl Heritage {
                 size,
                 trunc_addr,
                 v_size,
-                write,
-            );
+                write);
             return true;
         }
         // cc:1406: Reaching here, output exists and contains the heritage
@@ -3642,7 +3748,9 @@ impl Heritage {
         // (spc->getType() != IPTR_SPACEBASE)) return;
         // Locked x86-64 kinds: Ram/Register are IPTR_PROCESSOR, Stack is
         // IPTR_SPACEBASE.
-        if !matches!(space, AddressSpace::Ram | AddressSpace::Register | AddressSpace::Stack) {
+        if !matches!(
+            space, AddressSpace::Ram | AddressSpace::Register | AddressSpace::Stack
+        ) {
             return;
         }
         // cc:2576-2577: if (spc->getDelay() != spc->getDeadcodeDelay())
@@ -3832,7 +3940,9 @@ impl Heritage {
         // pieces (each later piece landing right after the write).
         enum InsertAnchor {
             /// cc:586 ++insertiter: insert before this element every round.
-            Before(Option<crate::op::PcodeOpRef>, std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>),
+            Before(
+                Option<crate::op::PcodeOpRef>, std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+            ),
             /// cc:579-581: null insertop — anchor on the start block's
             /// first element, or append at the end when it is empty.
             StartBlock,
@@ -3850,7 +3960,8 @@ impl Heritage {
                     Some(bl) => {
                         let write_pos = {
                             let ops = bl.read().unwrap().get_ops();
-                            ops.iter().position(|candidate| Arc::ptr_eq(&candidate.0, &op.0))
+                            ops.iter()
+                                .position(|candidate| Arc::ptr_eq(&candidate.0, &op.0))
                         };
                         match write_pos {
                             Some(pos) => {
@@ -4022,12 +4133,12 @@ impl Heritage {
         // enter — space-major ordering mirrors VarnodeCompareLocDef), and
         // classification reads live flags, matching the oracle iterator.
         let probe = crate::varnode::VarnodeLocRef(std::sync::Arc::new(
-            std::sync::RwLock::new(Varnode::new_with_space(
+            std::sync::RwLock::new(
+            Varnode::new_with_space(
                 0,
                 memrange.space,
-                addr.as_u64(),
-            )),
-        ));
+                addr.as_u64()),
+        )));
         for entry in fd.vbank.loc_tree.range(probe..) {
             let vn_arc = entry.0.clone();
             let vn = vn_arc.read().unwrap();
@@ -4103,7 +4214,9 @@ impl Heritage {
         let mut i = 0;
         let mut cur = addr.as_u64();
         let end = addr.as_u64().wrapping_add(size as u64);
-        let vn_space = input.first().map(|v| v.read().unwrap().address_space)
+        let vn_space = input
+            .first()
+            .map(|v| v.read().unwrap().address_space)
             .unwrap_or(AddressSpace::Register);
         let mut newinput: Vec<Arc<RwLock<Varnode>>> = Vec::new();
         while cur < end {
@@ -4141,7 +4254,9 @@ impl Heritage {
             .first()
             .map(|v| v.read().unwrap().address_space)
             .unwrap_or(vn_space);
-        let newout = fd.vbank.create_with_space(size as usize, space, addr.as_u64());
+        let newout = fd
+            .vbank
+            .create_with_space(size as usize, space, addr.as_u64());
         let unified = self.concat_pieces(fd, &newinput, None, &newout);
         unified.write().unwrap().set_active_heritage();
         // cc:1952-2010 never reassigns the caller's `input` vector; the
@@ -4180,7 +4295,9 @@ impl Heritage {
             None => true,
             // cc:365: return (fc->hasEffectTranslate(addr,size) != unaffected)
             Some(fc) => {
-                fc.read().unwrap().has_effect_translate(space, addr.as_u64(), size)
+                fc.read()
+                    .unwrap()
+                    .has_effect_translate(space, addr.as_u64(), size)
                     != crate::fspec::EffectType::Unaffected
             }
         }
@@ -4232,7 +4349,9 @@ impl Heritage {
         let mut cutsz = refine[diff];
         if cutsz == 0 || sz <= cutsz { return; }
         loop {
-            let piece = fd.vbank.create_with_space(cutsz as usize, vn_space, curaddr.as_u64());
+            let piece = fd
+                .vbank
+                .create_with_space(cutsz as usize, vn_space, curaddr.as_u64());
             split.push(piece);
             sz -= cutsz;
             if sz <= 0 { break; }
@@ -4565,7 +4684,10 @@ impl Heritage {
     // Ghidra: heritage.cc:2282 Heritage::processJoins
     pub fn process_joins(&mut self, fd: &crate::funcdata::Funcdata) {
         // Scan vbank for Join-space varnodes.
-        let join_vns: Vec<_> = fd.vbank.loc_tree.iter()
+        let join_vns: Vec<_> = fd
+            .vbank
+            .loc_tree
+            .iter()
             .filter(|v| v.0.read().unwrap().address_space == AddressSpace::Join)
             .map(|v| v.0.clone())
             .collect();
@@ -4577,8 +4699,10 @@ impl Heritage {
         // Rugra lacks JoinRecord (the mapping from join offset to piece
         // spaces+offsets). Without JoinRecord, we cannot split.
         // TODO: port JoinRecord infrastructure (architecture.cc / space.cc).
-        eprintln!("[HERITAGE] process_joins: {} join-space varnodes found (JoinRecord infra TODO)",
-            join_vns.len());
+        eprintln!(
+            "[HERITAGE] process_joins: {} join-space varnodes found (JoinRecord infra TODO)",
+            join_vns.len()
+        );
     }
 
     // Ghidra: heritage.cc:2663 Heritage::heritage
@@ -4733,7 +4857,8 @@ impl Heritage {
                         warnvn = Some(vn_arc.clone());
                     }
                     // cc:2719
-                    self.disjoint.add(space, m_addr, m_size, memrange_flags::OLD_ADDRESSES);
+                    self.disjoint
+                        .add(space, m_addr, m_size, memrange_flags::OLD_ADDRESSES);
                 } else {
                     // cc:2721-2722: partially contained in old range, but
                     // may contain new stuff
@@ -4942,7 +5067,9 @@ impl Heritage {
                     // cc:2638-2639: newVarnode(size, addr) + opSetInput
                     let vnin = fd
                         .vbank
-                        .create_with_space(size as usize, memrange.space, memrange.addr.as_u64());
+                        .create_with_space(
+                        size as usize, memrange.space, memrange.addr.as_u64(),
+                    );
                     fd.op_set_input(&multiop, vnin, j);
                 }
                 // cc:2641: opInsertBegin(multiop, bl)
@@ -5482,7 +5609,10 @@ impl Heritage {
         for vn_ref in &vbank.def_tree {
             let vn = vn_ref.0.read().unwrap();
             if vn.is_input() {
-                stacks.entry((vn.address_space, vn.loc)).or_default().push(vn_ref.0.clone());
+                stacks
+                    .entry((vn.address_space, vn.loc))
+                    .or_default()
+                    .push(vn_ref.0.clone());
             }
         }
 
@@ -5553,7 +5683,9 @@ impl Heritage {
 
         while let Some(item) = work.pop() {
             if work.len() > max_work {
-                eprintln!("[WARN] Heritage rename work stack exceeded {} items, aborting", max_work);
+                eprintln!(
+                    "[WARN] Heritage rename work stack exceeded {} items, aborting", max_work
+                );
                 break;
             }
             match item {
@@ -5642,7 +5774,9 @@ impl Heritage {
                                                 let iv = iop_vn.read().unwrap();
                                                 if iv.get_space() == AddressSpace::Iop {
                                                     let ptr_addr = iv.get_offset() as usize;
-                                                    let raw = ptr_addr as *const std::sync::RwLock<crate::op::PcodeOp>;
+                                                    let raw = ptr_addr as *const std::sync::RwLock<
+                                                            crate::op::PcodeOp,
+                                                        >;
                                                     if raw as *const () == std::sync::Arc::as_ptr(&op_ref.0) as *const () {
                                                         hit = true;
                                                     }
@@ -5814,9 +5948,9 @@ impl Heritage {
         self.pass - delay
     }
 
-    // Ghidra: heritage.cc:2843 Heritage::deadRemovalAllowed
+    // Ghidra: heritage.cc:2829 Heritage::deadRemovalAllowed
     /// Check if dead code removal is allowed for a space.
-    /// Faithful to `deadRemovalAllowed` (heritage.cc:2843-2855):
+    /// Faithful to `deadRemovalAllowed` (heritage.cc:2829-2841):
     ///   `return pass > info->deadcodedelay;`
     /// Previously Rugra returned const `true`, allowing dead-code removal
     /// on every pass including pass 0 — exactly the "Heritage AFTER dead
@@ -5825,6 +5959,28 @@ impl Heritage {
         let info = self.infolist.iter().find(|i| i.space == space);
         let deadcodedelay = info.map_or(0, |i| i.deadcodedelay);
         self.pass > deadcodedelay
+    }
+
+    // Ghidra: heritage.cc:2843 Heritage::deadRemovalAllowedSeen
+    /// Check the per-space dead-code delay and, when removal is allowed,
+    /// record that dead code has been removed from the space.
+    pub fn dead_removal_allowed_seen(&mut self, space: AddressSpace) -> bool {
+        if self.infolist.is_empty() {
+            self.build_info_list();
+        }
+        let index = self
+            .infolist
+            .iter()
+            .position(|info| info.space == space)
+            .unwrap_or_else(|| {
+                self.infolist.push(HeritageInfo::new(space));
+                self.infolist.len() - 1
+            });
+        let allowed = self.pass > self.infolist[index].deadcodedelay;
+        if allowed {
+            self.infolist[index].deadremoved = 1;
+        }
+        allowed
     }
 
     // Ghidra: heritage.cc:2815 Heritage::setDeadCodeDelay
@@ -5873,39 +6029,41 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:2869 Heritage::clear
+    // Ghidra: heritage.cc:2855 Heritage::clear
     /// Clear all non-permanent state. Faithful to `clear`
-    /// (heritage.cc:2869-2884):
+    /// (heritage.cc:2855-2870):
     ///   disjoint/globaldisjoint/domchild/augment/flags/depth/merge.clear()
     ///   clearInfoList(); loadGuard/storeGuard.clear();
     ///   maxdepth = -1; pass = 0;
     pub fn clear(&mut self) {
-        // Ghidra cc:2872-2878
-        self.globaldisjoint.clear();
+        // Ghidra cc:2859-2864
         self.disjoint.clear();
+        self.globaldisjoint.clear();
         self.domchild.clear();
         self.augment.clear();
         self.flags.clear();
         self.depth.clear();
         self.merge.clear();
-        // Ghidra cc:2879: clearInfoList()
-        self.infolist.clear();
-        // Ghidra cc:2880-2881
+        // Ghidra cc:2865: clearInfoList() resets entries in place so delay
+        // overrides survive a restart.
+        for info in &mut self.infolist {
+            info.reset();
+        }
+        // Ghidra cc:2866-2867
         self.load_guard.clear();
         self.store_guard.clear();
-        // Ghidra cc:2882: maxdepth = -1
+        // Ghidra cc:2868: maxdepth = -1
         self.maxdepth = -1;
-        // Ghidra cc:2883: pass = 0
+        // Ghidra cc:2869: pass = 0
         self.pass = 0;
-        // load_copy_ops is Rugra-specific (Ghidra's loadCopyOps, cleared
-        // in handleNewLoadCopies, not in clear()). Keep cleared for safety.
-        self.load_copy_ops.clear();
     }
 
     // Ghidra: heritage.cc:2776 Heritage::getStoreGuard
     /// Find the STORE guard matching `op`. Faithful to
     /// `Heritage::getStoreGuard` (heritage.hh:338). Linear scan of store_guard.
-    pub fn get_store_guard(&self, op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<&LoadGuard> {
+    pub fn get_store_guard(
+        &self, op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    ) -> Option<&LoadGuard> {
         self.store_guard.iter().find(|g| match g.op.upgrade() {
             Some(g_op) => std::sync::Arc::ptr_eq(&g_op, op),
             None => false,
@@ -5915,7 +6073,9 @@ impl Heritage {
     // Ghidra: heritage.cc:219 Heritage::getLoadGuard
     /// Find the LOAD guard matching `op`. Faithful to
     /// `Heritage::getLoadGuard` (heritage.hh:337).
-    pub fn get_load_guard(&self, op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<&LoadGuard> {
+    pub fn get_load_guard(
+        &self, op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    ) -> Option<&LoadGuard> {
         self.load_guard.iter().find(|g| match g.op.upgrade() {
             Some(g_op) => std::sync::Arc::ptr_eq(&g_op, op),
             None => false,
@@ -5995,8 +6155,7 @@ fn trace_const_stack_offset(ptr: &std::sync::Arc<std::sync::RwLock<Varnode>>) ->
                     // The other operand must be a constant.
                     let (a, b) = (
                         defg.inrefs.first().cloned(),
-                        defg.inrefs.get(1).cloned(),
-                    );
+                        defg.inrefs.get(1).cloned());
                     let (other, _) = match (a, b) {
                         (Some(a), Some(b)) => {
                             if Arc::ptr_eq(&a, &cur) {
@@ -6024,7 +6183,10 @@ fn trace_const_stack_offset(ptr: &std::sync::Arc<std::sync::RwLock<Varnode>>) ->
                     } else {
                         offset = offset.wrapping_sub(delta);
                     }
-                    defg.inrefs.first().filter(|v| !Arc::ptr_eq(v, &cur)).cloned()
+                    defg.inrefs
+                        .first()
+                        .filter(|v| !Arc::ptr_eq(v, &cur))
+                        .cloned()
                 }
                 _ => return offset,
             }
@@ -6059,8 +6221,7 @@ mod tests {
         operation.0.write().unwrap().inrefs.push(old.clone());
         old.write().unwrap().add_descend(&operation.0);
         let block: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
-            BlockBasic::new(0, Address::new(0x1000)),
-        ));
+            BlockBasic::new(0, Address::new(0x1000))));
         block.write().unwrap().insert_op(0, operation.clone());
 
         let mut stacks = BTreeMap::new();
@@ -6096,8 +6257,7 @@ mod tests {
         operation.0.write().unwrap().inrefs.push(value.clone());
         value.write().unwrap().add_descend(&operation.0);
         let block: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
-            BlockBasic::new(0, Address::new(0x1010)),
-        ));
+            BlockBasic::new(0, Address::new(0x1010))));
         block.write().unwrap().insert_op(0, operation.clone());
         let mut stacks = BTreeMap::new();
         stacks.insert(
@@ -6123,14 +6283,11 @@ mod tests {
         let mut op_bank = PcodeOpBank::new();
         let mut graph = BlockGraph::new();
         let pred0: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
-            BlockBasic::new(0, Address::new(0x2000)),
-        ));
+            BlockBasic::new(0, Address::new(0x2000))));
         let pred1: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
-            BlockBasic::new(1, Address::new(0x2010)),
-        ));
+            BlockBasic::new(1, Address::new(0x2010))));
         let join: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
-            BlockBasic::new(2, Address::new(0x2020)),
-        ));
+            BlockBasic::new(2, Address::new(0x2020))));
         graph.add_block(pred0.clone());
         graph.add_block(pred1.clone());
         graph.add_block(join.clone());
@@ -6190,7 +6347,9 @@ mod tests {
         let mut lm = LocationMap::new();
         lm.add(AddressSpace::Register, Address::new(0x100), 4, 1);
         assert_eq!(lm.find_pass(AddressSpace::Register, Address::new(0x100)), 1);
-        assert_eq!(lm.find_pass(AddressSpace::Register, Address::new(0x200)), -1);
+        assert_eq!(
+            lm.find_pass(AddressSpace::Register, Address::new(0x200)), -1
+        );
     }
 
     /// HERITAGE-DRIVER-SWITCH-0001: Ghidra's LocationMap is keyed by a full
@@ -6217,7 +6376,9 @@ mod tests {
             lm.entry_containing(AddressSpace::Stack, Address::new(0x33)),
             Some((Address::new(0x30), 8))
         );
-        assert_eq!(lm.entry_containing(AddressSpace::Unique, Address::new(0x33)), None);
+        assert_eq!(
+            lm.entry_containing(AddressSpace::Unique, Address::new(0x33)), None
+        );
     }
 
     #[test]
@@ -6263,7 +6424,9 @@ mod tests {
         let store = fd.obank.create(OpCode::CPUI_STORE, 3, start);
         // in[0]: const varnode carrying the Stack space id (getSpaceFromConst).
         // The lifter emits this with the CONSTANT flag + Const space.
-        let space_const = fd.vbank.create_constant(8, AddressSpace::Stack.space_id() as u64);
+        let space_const = fd
+            .vbank
+            .create_constant(8, AddressSpace::Stack.space_id() as u64);
         // in[1]: a (stack-pointer) pointer varnode.
         let ptr = fd.vbank.create_with_space(8, AddressSpace::Register, 0x20);
         // in[2]: the value varnode.
@@ -6288,15 +6451,21 @@ mod tests {
 
         // get_store_guard must now return the record for this op.
         let found = h.get_store_guard(&store.0);
-        assert!(found.is_some(), "get_store_guard must find the guarded STORE");
+        assert!(
+            found.is_some(), "get_store_guard must find the guarded STORE"
+        );
 
         // Calling guard_stores again must NOT duplicate the record.
         h.guard_stores(&mut fd);
-        assert_eq!(h.store_guard.len(), 1, "guard_stores must dedup across passes");
+        assert_eq!(
+            h.store_guard.len(), 1, "guard_stores must dedup across passes"
+        );
 
         // A non-stack STORE (Ram target) must not be guarded.
         let ram_store = fd.obank.create(OpCode::CPUI_STORE, 3, start);
-        let ram_const = fd.vbank.create_constant(8, AddressSpace::Ram.space_id() as u64);
+        let ram_const = fd
+            .vbank
+            .create_constant(8, AddressSpace::Ram.space_id() as u64);
         let ptr2 = fd.vbank.create_with_space(8, AddressSpace::Register, 0x28);
         let val2 = fd.vbank.create_with_space(8, AddressSpace::Ram, 0x2000);
         fd.op_set_input(&ram_store, ram_const, 0);
@@ -6305,7 +6474,9 @@ mod tests {
         ram_store.0.write().unwrap().mark_spacebase_ptr();
         let before = h.store_guard.len();
         h.guard_stores(&mut fd);
-        assert_eq!(h.store_guard.len(), before, "non-stack STORE must not be guarded");
+        assert_eq!(
+            h.store_guard.len(), before, "non-stack STORE must not be guarded"
+        );
         // PcodeOpRef must outlive the borrow checker usage above.
         let _ = PcodeOpRef(store.0.clone());
     }
@@ -6323,7 +6494,9 @@ mod tests {
 
         // LOAD(const(stack_space_id), ptr)
         let load = fd.obank.create(OpCode::CPUI_LOAD, 2, start);
-        let space_const = fd.vbank.create_constant(8, AddressSpace::Stack.space_id() as u64);
+        let space_const = fd
+            .vbank
+            .create_constant(8, AddressSpace::Stack.space_id() as u64);
         let ptr = fd.vbank.create_with_space(8, AddressSpace::Register, 0x20);
         fd.op_set_input(&load, space_const, 0);
         fd.op_set_input(&load, ptr, 1);
@@ -6382,8 +6555,7 @@ mod tests {
 
         fn block(&mut self, index: i32) -> Arc<RwLock<dyn FlowBlock + Send + Sync>> {
             let block: Arc<RwLock<dyn FlowBlock + Send + Sync>> = Arc::new(RwLock::new(
-                BlockBasic::new(index, Address::new(0x6000)),
-            ));
+                BlockBasic::new(index, Address::new(0x6000))));
             self.fd.bblocks.add_block(block.clone());
             block
         }
@@ -6430,7 +6602,9 @@ mod tests {
             self.fd.op_set_input(op, vn.clone(), slot);
         }
 
-        fn insert_end(&mut self, op: &PcodeOpRef, block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+        fn insert_end(
+            &mut self, op: &PcodeOpRef, block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        ) {
             self.fd.op_insert_end(op, block);
         }
     }

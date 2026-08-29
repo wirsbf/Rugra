@@ -4834,13 +4834,20 @@ mod tests {
 
         let mut fd_int1_only = Funcdata::new("nochar_int1", Address::new(0x7101), 0x80);
         let mut arch = crate::arch::Architecture::new();
-        arch.set_types(std::sync::Arc::new(std::sync::RwLock::new(
-            crate::type_system::typefactory::TypeFactory::new(8),
-        )));
+        // Raw pre-bootstrap factory (type.cc:3106) + a single non-ASCII
+        // "int1" core registration: since DEBUGPROTO-DWARF-CHAR-0001 the
+        // DataOrg bootstrap itself supplies an ASCII char, so the charless
+        // registration state must be built explicitly. The non-ASCII int
+        // fills typecache[1][INT] itself and is picked as type_nochar
+        // (type.cc:3240-3242), so getBase(1,INT) == type_nochar — NOT
+        // distinct.
+        let mut int1_factory = crate::type_system::typefactory::TypeFactory::raw();
+        int1_factory
+            .set_core_type_result("int1", 1, TypeMetatype::Int, false)
+            .unwrap_or_else(|message| panic!("LowlevelError: {message}"));
+        int1_factory.cache_core_types();
+        arch.set_types(std::sync::Arc::new(std::sync::RwLock::new(int1_factory)));
         fd_int1_only.set_arch(std::sync::Arc::new(arch));
-        // TypeFactory::new registers "int1" but no ASCII char: the
-        // non-ASCII int fills typecache[1][INT] itself (type.cc:3240-3242),
-        // so getBase(1,INT) == type_nochar — NOT distinct.
         assert!(!Merge::factory_nochar_distinct(&fd_int1_only));
 
         let mut fd_char = Funcdata::new("nochar_char", Address::new(0x7102), 0x80);

@@ -3,12 +3,12 @@
 //! Corresponds to Ghidra's `ruleaction.hh`. Rules are small, local
 //! transformations that target specific opcodes to simplify the IR.
 
+use crate::action::action_status;
 use crate::action::Rule;
-use crate::opcodes::OpCode;
+use crate::error::Result;
 use crate::funcdata::Funcdata;
 use crate::op::PcodeOp;
-use crate::error::Result;
-use crate::action::action_status;
+use crate::opcodes::OpCode;
 
 /// Rule for collapsing constants in arithmetic operations
 ///
@@ -24,7 +24,9 @@ impl RuleCollapseConstants {
 
 impl Rule for RuleCollapseConstants {
     // Ghidra: ruleaction.cc:3854 RuleCollapseConstants::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // cc:3860: if (!op->isCollapsible()) return 0; — expression must be
         // collapsible (nocollapse flag, isAssignment, >=1 input, all inputs
         // constant, output size <= sizeof(uintb)=8).
@@ -118,7 +120,9 @@ impl RuleTrivialBool {
 
 impl Rule for RuleTrivialBool {
     // Ghidra: ruleaction.cc:2451 RuleTrivialBool::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata,
+    ) -> Result<i32> {
         let mut op = op_arc.write().unwrap();
         if op.inrefs.len() != 2 {
             return Ok(action_status::NO_CHANGE);
@@ -218,7 +222,9 @@ impl Rule for RulePropagateCopy {
     /// raw `descend.push` (bypassing op_set_input's constant dedup and
     /// leaving a stale descend entry on the COPY's output varnode), and
     /// had none of the Ghidra guards.
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         use std::sync::Arc;
         // cc:3929-3931: locals i/copyop/vn/invn — expressed as a single
         // guarded scan; the op read-guard is dropped before op_set_input
@@ -347,7 +353,9 @@ impl RuleZextEliminate {
 
 impl Rule for RuleZextEliminate {
     // Ghidra: ruleaction.cc:2487 RuleZextEliminate::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleZextEliminate::applyOp (ruleaction.cc:2487-2526).
         // cc:2497-2508: vn1 = zexted input candidate, vn2 = other input.
         // Slot 0 is tried first; a zext on slot 1 swaps the roles.
@@ -486,7 +494,9 @@ impl RuleTrivialArith {
 
 impl Rule for RuleTrivialArith {
     // Ghidra: ruleaction.cc:2382 RuleTrivialArith::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to Ghidra ruleaction.cc:2382-2433.
         use std::sync::Arc;
         let op = op_arc.read().unwrap();
@@ -522,7 +532,10 @@ impl Rule for RuleTrivialArith {
         if !same {
             return Ok(action_status::NO_CHANGE);
         }
-        let out_size = op.get_out().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+        let out_size = op
+            .get_out()
+            .map(|o| o.read().unwrap().get_size())
+            .unwrap_or(0);
         let opcode = op.opcode;
         drop(op); // release read lock before mutating fd
 
@@ -671,7 +684,9 @@ impl RuleShiftBitops {
 
 impl Rule for RuleShiftBitops {
     // Ghidra: ruleaction.cc:490 RuleShiftBitops::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleShiftBitops::applyOp (ruleaction.cc:490-566).
         let (vn_arc, sa, leftshift, outsize) = {
             let op = op_arc.read().unwrap();
@@ -834,7 +849,9 @@ impl RuleNegateIdentity {
 
 impl Rule for RuleNegateIdentity {
     // Ghidra: ruleaction.cc:452 RuleNegateIdentity::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // op is INT_NOT(V) -> outVn (~V). Walk outVn's descendants looking
         // for a logic op whose other input is V.
         let out_vn = {
@@ -940,7 +957,9 @@ impl RuleNotDistribute {
 
 impl Rule for RuleNotDistribute {
     // Ghidra: ruleaction.cc:1147 RuleNotDistribute::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // op is BOOL_NEGATE(in0). in0 must be defined by a BOOL_AND/BOOL_OR.
         let compop_arc = {
             let op = op_arc.read().unwrap();
@@ -1027,7 +1046,9 @@ impl RuleConcatZero {
 
 impl Rule for RuleConcatZero {
     // Ghidra: ruleaction.cc:4985 RuleConcatZero::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // in1 must be a constant == 0.
         let (in0, in1, out_size, pc) = {
             let op = op_arc.read().unwrap();
@@ -1039,7 +1060,11 @@ impl Rule for RuleConcatZero {
                 Some(v) => v.clone(),
                 None => return Ok(action_status::NO_CHANGE),
             };
-            let out_size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            let out_size = op
+                .output
+                .as_ref()
+                .map(|o| o.read().unwrap().get_size())
+                .unwrap_or(0);
             (in0, in1, out_size, op.start.get_addr())
         };
         {
@@ -1099,7 +1124,9 @@ impl RuleXorCollapse {
 
 impl Rule for RuleXorCollapse {
     // Ghidra: ruleaction.cc:4070 RuleXorCollapse::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // in1 must be a constant.
         let (in0, coeff1) = {
             let op = op_arc.read().unwrap();
@@ -1134,7 +1161,13 @@ impl Rule for RuleXorCollapse {
         let descend_count = {
             let xorout = xorop_arc.read().unwrap().output.as_ref().map(|o| o.clone());
             match xorout {
-                Some(o) => o.read().unwrap().descend.iter().filter(|w| w.upgrade().is_some()).count(),
+                Some(o) => o
+                    .read()
+                    .unwrap()
+                    .descend
+                    .iter()
+                    .filter(|w| w.upgrade().is_some())
+                    .count(),
                 None => 0,
             }
         };
@@ -1145,8 +1178,7 @@ impl Rule for RuleXorCollapse {
             let x = xorop_arc.read().unwrap();
             (
                 x.inrefs.get(0).cloned(),
-                x.inrefs.get(1).cloned(),
-            )
+                x.inrefs.get(1).cloned())
         };
         let (xor_in0, xor_in1) = match (xor_in0, xor_in1) {
             (Some(a), Some(b)) => (a, b),
@@ -1206,7 +1238,9 @@ impl RuleAddMultCollapse {
 
 impl Rule for RuleAddMultCollapse {
     // Ghidra: ruleaction.cc:4113 RuleAddMultCollapse::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // c[0] = in1 (must be constant), sub = in0.
         let (sub_arc, c0, opc) = {
             let op = op_arc.read().unwrap();
@@ -1316,7 +1350,9 @@ impl RuleLess2Zero {
 
 impl Rule for RuleLess2Zero {
     // Ghidra: ruleaction.cc:5571 RuleLess2Zero::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (lvn, rvn) = {
             let op = op_arc.read().unwrap();
             let l = match op.inrefs.get(0) {
@@ -1394,7 +1430,9 @@ impl RuleLessEqual2Zero {
 
 impl Rule for RuleLessEqual2Zero {
     // Ghidra: ruleaction.cc:5619 RuleLessEqual2Zero::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (lvn, rvn) = {
             let op = op_arc.read().unwrap();
             let l = match op.inrefs.get(0) {
@@ -1475,7 +1513,9 @@ impl RuleBoolNegate {
 
 impl Rule for RuleBoolNegate {
     // Ghidra: ruleaction.cc:5529 RuleBoolNegate::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // op is BOOL_NOT(in0). in0 must be defined by a flippable comparison.
         let (flipop_arc, descend_vn) = {
             let op = op_arc.read().unwrap();
@@ -1550,10 +1590,16 @@ impl RuleOrMask {
 
 impl Rule for RuleOrMask {
     // Ghidra: ruleaction.cc:284 RuleOrMask::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (const_vn, size) = {
             let op = op_arc.read().unwrap();
-            let out_size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            let out_size = op
+                .output
+                .as_ref()
+                .map(|o| o.read().unwrap().get_size())
+                .unwrap_or(0);
             let const_vn = match op.inrefs.get(1) {
                 Some(v) if v.read().unwrap().is_constant() => v.clone(),
                 _ => return Ok(action_status::NO_CHANGE),
@@ -1605,7 +1651,9 @@ impl RuleAndOrLump {
 
 impl Rule for RuleAndOrLump {
     // Ghidra: ruleaction.cc:413 RuleAndOrLump::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (base_vn, opc) = {
             let op = op_arc.read().unwrap();
             let in1 = match op.inrefs.get(1) {
@@ -1618,7 +1666,9 @@ impl Rule for RuleAndOrLump {
             };
             // in1 const captured above; re-check in0 written by same opc.
             let _ = in1;
-            if !matches!(op.opcode, OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR) {
+            if !matches!(
+                op.opcode, OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR
+            ) {
                 return Ok(action_status::NO_CHANGE);
             }
             (in0, op.opcode)
@@ -1644,7 +1694,10 @@ impl Rule for RuleAndOrLump {
                 Some(v) if v.read().unwrap().is_constant() => v.clone(),
                 _ => return Ok(action_status::NO_CHANGE),
             };
-            let c2 = op_arc.read().unwrap().inrefs[1].read().unwrap().get_offset();
+            let c2 = op_arc.read().unwrap().inrefs[1]
+                .read()
+                .unwrap()
+                .get_offset();
             (basevn, c1, c2)
         };
         if basevn.read().unwrap().is_free() {
@@ -1672,7 +1725,9 @@ impl Rule for RuleAndOrLump {
 
     // Ghidra: ruleaction.cc:405 RuleAndOrLump::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
-        vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR]
+        vec![
+            OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR,
+        ]
     }
 }
 
@@ -1693,7 +1748,9 @@ impl RulePiece2Zext {
 
 impl Rule for RulePiece2Zext {
     // Ghidra: ruleaction.cc:219 RulePiece2Zext::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata,
+    ) -> Result<i32> {
         let is_zero_high = {
             let op = op_arc.read().unwrap();
             let constvn = match op.inrefs.get(0) {
@@ -1741,7 +1798,9 @@ impl RulePiece2Sext {
 
 impl Rule for RulePiece2Sext {
     // Ghidra: ruleaction.cc:240 RulePiece2Sext::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata,
+    ) -> Result<i32> {
         let matches = {
             let op = op_arc.read().unwrap();
             let shiftout = match op.inrefs.get(0) {
@@ -1821,7 +1880,9 @@ impl RuleBxor2NotEqual {
 
 impl Rule for RuleBxor2NotEqual {
     // Ghidra: ruleaction.cc:269 RuleBxor2NotEqual::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata,
+    ) -> Result<i32> {
         op_arc.write().unwrap().opcode = OpCode::CPUI_INT_NOTEQUAL;
         Ok(action_status::CHANGE)
     }
@@ -1853,7 +1914,9 @@ impl RuleTermOrder {
 
 impl Rule for RuleTermOrder {
     // Ghidra: ruleaction.cc:663 RuleTermOrder::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let should_swap = {
             let op = op_arc.read().unwrap();
             let in0 = match op.inrefs.get(0) {
@@ -1916,7 +1979,9 @@ impl RuleShift2Mult {
 
 impl Rule for RuleShift2Mult {
     // Ghidra: ruleaction.cc:3714 RuleShift2Mult::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // constvn (in1) must be a constant shift amount < 32.
         let (vn, val) = {
             let op = op_arc.read().unwrap();
@@ -1937,12 +2002,16 @@ impl Rule for RuleShift2Mult {
         // The shift feeds, or its input is defined by, an arithmetic op.
         let arithop_input = {
             let op = op_arc.read().unwrap();
-            op.inrefs.get(0).and_then(|v| v.read().unwrap().def.as_ref().and_then(|w| w.upgrade()))
+            op.inrefs
+                .get(0)
+                .and_then(|v| v.read().unwrap().def.as_ref().and_then(|w| w.upgrade()))
         };
         let mut found_arith = false;
         if let Some(a) = &arithop_input {
             let opc = a.read().unwrap().opcode;
-            if matches!(opc, OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT) {
+            if matches!(
+                opc, OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT
+            ) {
                 found_arith = true;
             }
         }
@@ -1954,7 +2023,9 @@ impl Rule for RuleShift2Mult {
             };
             for d in descend_refs {
                 let opc = d.read().unwrap().opcode;
-                if matches!(opc, OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT) {
+                if matches!(
+                    opc, OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT
+                ) {
                     found_arith = true;
                     break;
                 }
@@ -2002,7 +2073,9 @@ impl RuleDoubleSub {
 
 impl Rule for RuleDoubleSub {
     // Ghidra: ruleaction.cc:1806 RuleDoubleSub::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // in0 must be defined by a SUBPIECE.
         let (base_vn, offset2) = {
             let op = op_arc.read().unwrap();
@@ -2035,7 +2108,13 @@ impl Rule for RuleDoubleSub {
             let in0 = op_arc.read().unwrap().inrefs[0].clone();
             let op2_arc = in0.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
             match op2_arc {
-                Some(a) => a.read().unwrap().inrefs.get(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0),
+                Some(a) => a
+                    .read()
+                    .unwrap()
+                    .inrefs
+                    .get(1)
+                    .map(|v| v.read().unwrap().get_offset())
+                    .unwrap_or(0),
                 None => 0,
             }
         };
@@ -2073,7 +2152,9 @@ impl RuleTrivialShift {
 
 impl Rule for RuleTrivialShift {
     // Ghidra: ruleaction.cc:3525 RuleTrivialShift::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (val, in0_size, is_sright) = {
             let op = op_arc.read().unwrap();
             let constvn = match op.inrefs.get(1) {
@@ -2113,7 +2194,9 @@ impl Rule for RuleTrivialShift {
 
     // Ghidra: ruleaction.cc:3518 RuleTrivialShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
-        vec![OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT]
+        vec![
+            OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT,
+        ]
     }
 }
 
@@ -2134,7 +2217,9 @@ impl RuleSlessToLess {
 
 impl Rule for RuleSlessToLess {
     // Ghidra: ruleaction.cc:2560 RuleSlessToLess::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (in0_nzm, in1_nzm, in0_size, is_sless) = {
             let op = op_arc.read().unwrap();
             let in0 = match op.inrefs.get(0) {
@@ -2204,7 +2289,9 @@ impl RuleOrCollapse {
 
 impl Rule for RuleOrCollapse {
     // Ghidra: ruleaction.cc:384 RuleOrCollapse::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (in0_nzm, const_val, size) = {
             let op = op_arc.read().unwrap();
             let in0 = match op.inrefs.get(0) {
@@ -2215,7 +2302,11 @@ impl Rule for RuleOrCollapse {
                 Some(v) if v.read().unwrap().is_constant() => v.clone(),
                 _ => return Ok(action_status::NO_CHANGE),
             };
-            let size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            let size = op
+                .output
+                .as_ref()
+                .map(|o| o.read().unwrap().get_size())
+                .unwrap_or(0);
             let nzm = in0.read().unwrap().get_nz_mask();
             let val = cn.read().unwrap().get_offset();
             (nzm, val, size)
@@ -2261,7 +2352,9 @@ impl RuleConcatLeftShift {
 
 impl Rule for RuleConcatLeftShift {
     // Ghidra: ruleaction.cc:5012 RuleConcatLeftShift::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // vn2 (in1) must be defined by INT_LEFT of a zext.
         let (vn1, b, sa_bytes, pc, out_size) = {
             let op = op_arc.read().unwrap();
@@ -2273,7 +2366,11 @@ impl Rule for RuleConcatLeftShift {
                 Some(v) => v.clone(),
                 None => return Ok(action_status::NO_CHANGE),
             };
-            let out_size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            let out_size = op
+                .output
+                .as_ref()
+                .map(|o| o.read().unwrap().get_size())
+                .unwrap_or(0);
             let pc = op.start.get_addr();
             let shiftop_arc = {
                 let v2 = vn2.read().unwrap();
@@ -2379,11 +2476,16 @@ impl RuleDoubleShift {
 
 impl Rule for RuleDoubleShift {
     // Ghidra: ruleaction.cc:1842 RuleDoubleShift::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // in1 must be constant; in0 (secvn) must be defined by a shift/mult.
         let (opc1, sa1, secop_arc, size) = {
             let op = op_arc.read().unwrap();
-            if !op.inrefs.get(1).map_or(false, |v| v.read().unwrap().is_constant()) {
+            if !op
+                .inrefs
+                .get(1)
+                .map_or(false, |v| v.read().unwrap().is_constant()) {
                 return Ok(action_status::NO_CHANGE);
             }
             let opc1 = op.opcode;
@@ -2400,10 +2502,17 @@ impl Rule for RuleDoubleShift {
                 None => return Ok(action_status::NO_CHANGE),
             };
             let opc2 = secop_arc.read().unwrap().opcode;
-            if !matches!(opc2, OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_MULT) {
+            if !matches!(
+                opc2, OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_MULT
+            ) {
                 return Ok(action_status::NO_CHANGE);
             }
-            if !secop_arc.read().unwrap().inrefs.get(1).map_or(false, |v| v.read().unwrap().is_constant()) {
+            if !secop_arc
+                .read()
+                .unwrap()
+                .inrefs
+                .get(1)
+                .map_or(false, |v| v.read().unwrap().is_constant()) {
                 return Ok(action_status::NO_CHANGE);
             }
             let size = secvn.read().unwrap().get_size();
@@ -2488,7 +2597,9 @@ impl Rule for RuleDoubleShift {
 
     // Ghidra: ruleaction.cc:1834 RuleDoubleShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
-        vec![OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_MULT]
+        vec![
+            OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_MULT,
+        ]
     }
 }
 
@@ -2511,7 +2622,9 @@ impl RuleIdentityEl {
 
 impl Rule for RuleIdentityEl {
     // Ghidra: ruleaction.cc:3676 RuleIdentityEl::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (val, opc) = {
             let op = op_arc.read().unwrap();
             let constvn = match op.inrefs.get(1) {
@@ -2579,7 +2692,9 @@ impl RuleSignShift {
 
 impl Rule for RuleSignShift {
     // Ghidra: ruleaction.cc:3555 RuleSignShift::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (in_vn, const_vn, size, pc) = {
             let op = op_arc.read().unwrap();
             let const_vn = match op.inrefs.get(1) {
@@ -2615,7 +2730,10 @@ impl Rule for RuleSignShift {
             let dop = d.read().unwrap();
             match dop.opcode {
                 OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
-                    if dop.inrefs.get(1).map_or(false, |v| v.read().unwrap().is_constant()) {
+                    if dop
+                        .inrefs
+                        .get(1)
+                        .map_or(false, |v| v.read().unwrap().is_constant()) {
                         do_conversion = true;
                     }
                 }
@@ -2677,11 +2795,17 @@ impl RuleSubZext {
 
 impl Rule for RuleSubZext {
     // Ghidra: ruleaction.cc:5057 RuleSubZext::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // in0 must be defined by a SUBPIECE; base size == op output size.
         let (basevn, trunc_offset, sub_size, subop_arc) = {
             let op = op_arc.read().unwrap();
-            let out_size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            let out_size = op
+                .output
+                .as_ref()
+                .map(|o| o.read().unwrap().get_size())
+                .unwrap_or(0);
             let subvn = match op.inrefs.get(0) {
                 Some(v) => v.clone(),
                 None => return Ok(action_status::NO_CHANGE),
@@ -2703,7 +2827,11 @@ impl Rule for RuleSubZext {
                     Some(v) => v.clone(),
                     None => return Ok(action_status::NO_CHANGE),
                 };
-                let trunc_offset = so.inrefs.get(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                let trunc_offset = so
+                    .inrefs
+                    .get(1)
+                    .map(|v| v.read().unwrap().get_offset())
+                    .unwrap_or(0);
                 (basevn, trunc_offset)
             };
             if basevn.read().unwrap().is_free() {
@@ -2715,10 +2843,12 @@ impl Rule for RuleSubZext {
             if basevn.read().unwrap().get_size() > 8 {
                 return Ok(action_status::NO_CHANGE);
             }
-            (basevn, trunc_offset, {
+            (
+                basevn, trunc_offset, {
                 let s = subvn.read().unwrap();
                 s.get_size()
-            }, subop_arc)
+            }, subop_arc,
+            )
         };
 
         let follow = crate::op::PcodeOpRef(op_arc.clone());
@@ -2726,7 +2856,9 @@ impl Rule for RuleSubZext {
             // Middle truncation: subvn must be a lone descendant (exclusive use).
             let subvn_vn = op_arc.read().unwrap().inrefs[0].clone();
             let lone = subvn_vn.read().unwrap().lone_descend();
-            let is_lone = lone.map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false);
+            let is_lone = lone
+                .map(|o| std::sync::Arc::ptr_eq(&o, op_arc))
+                .unwrap_or(false);
             if !is_lone {
                 return Ok(action_status::NO_CHANGE);
             }
@@ -2778,7 +2910,9 @@ impl RuleConcatShift {
 
 impl Rule for RuleConcatShift {
     // Ghidra: ruleaction.cc:1979 RuleConcatShift::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (sa, shiftin, concat_arc, opc, pc) = {
             let op = op_arc.read().unwrap();
             let sa_vn = match op.inrefs.get(1) {
@@ -2805,7 +2939,11 @@ impl Rule for RuleConcatShift {
         };
         let (leastsz, mainin) = {
             let c = concat_arc.read().unwrap();
-            let leastsz = c.inrefs.get(1).map(|v| v.read().unwrap().get_size()).unwrap_or(0) as i32 * 8;
+            let leastsz = c
+                .inrefs
+                .get(1)
+                .map(|v| v.read().unwrap().get_size())
+                .unwrap_or(0) as i32 * 8;
             let mainin = match c.inrefs.get(0) {
                 Some(v) => v.clone(),
                 None => return Ok(action_status::NO_CHANGE),
@@ -2850,7 +2988,9 @@ impl Rule for RuleConcatShift {
 
     // Ghidra: ruleaction.cc:1972 RuleConcatShift::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
-        vec![OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT]
+        vec![
+            OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT,
+        ]
     }
 }
 
@@ -2873,7 +3013,9 @@ impl RuleShiftCompare {
 
 impl Rule for RuleShiftCompare {
     // Ghidra: ruleaction.cc:2077 RuleShiftCompare::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (shiftvn, constval, shiftop_arc) = {
             let op = op_arc.read().unwrap();
             let shiftvn = match op.inrefs.get(0) {
@@ -2909,7 +3051,12 @@ impl Rule for RuleShiftCompare {
             match so.opcode {
                 OpCode::CPUI_INT_LEFT => (true, val as i32, mainvn),
                 OpCode::CPUI_INT_RIGHT => {
-                    if !shiftvn.read().unwrap().lone_descend().map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false) {
+                    if !shiftvn
+                        .read()
+                        .unwrap()
+                        .lone_descend()
+                        .map(|o| std::sync::Arc::ptr_eq(&o, op_arc))
+                        .unwrap_or(false) {
                         return Ok(action_status::NO_CHANGE);
                     }
                     (false, val as i32, mainvn)
@@ -2922,7 +3069,12 @@ impl Rule for RuleShiftCompare {
                     (true, sa, mainvn)
                 }
                 OpCode::CPUI_INT_DIV => {
-                    if !shiftvn.read().unwrap().lone_descend().map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false) {
+                    if !shiftvn
+                        .read()
+                        .unwrap()
+                        .lone_descend()
+                        .map(|o| std::sync::Arc::ptr_eq(&o, op_arc))
+                        .unwrap_or(false) {
                         return Ok(action_status::NO_CHANGE);
                     }
                     let sa = crate::address::leastsigbit_set(val);
@@ -2992,7 +3144,9 @@ impl RuleAndCompare {
 
 impl Rule for RuleAndCompare {
     // Ghidra: ruleaction.cc:1745 RuleAndCompare::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (andvn) = {
             let op = op_arc.read().unwrap();
             let in1 = match op.inrefs.get(1) {
@@ -3052,7 +3206,11 @@ impl Rule for RuleAndCompare {
                     if basevn.read().unwrap().get_size() > 8 {
                         return Ok(action_status::NO_CHANGE);
                     }
-                    let trunc_offset = so.inrefs.get(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                    let trunc_offset = so
+                        .inrefs
+                        .get(1)
+                        .map(|v| v.read().unwrap().get_offset())
+                        .unwrap_or(0);
                     (basevn, andconst << (trunc_offset * 8), andvn_size, andop_pc)
                 }
                 OpCode::CPUI_INT_ZEXT => {
@@ -3061,7 +3219,9 @@ impl Rule for RuleAndCompare {
                         None => return Ok(action_status::NO_CHANGE),
                     };
                     let bs = basevn.read().unwrap().get_size();
-                    (basevn, andconst & crate::address::calc_mask(bs), andvn_size, andop_pc)
+                    (
+                        basevn, andconst & crate::address::calc_mask(bs), andvn_size, andop_pc,
+                    )
                 }
                 _ => return Ok(action_status::NO_CHANGE),
             }
@@ -3114,7 +3274,9 @@ impl RuleTestSign {
 
 impl Rule for RuleTestSign {
     // Ghidra: ruleaction.cc:3632 RuleTestSign::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // op is INT_SRIGHT(in_vn, const_vn). const must be 8*size-1.
         let (in_vn, out_vn) = {
             let op = op_arc.read().unwrap();
@@ -3233,7 +3395,9 @@ impl RuleEquality {
 
 impl Rule for RuleEquality {
     // Ghidra: ruleaction.cc:631 RuleEquality::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (equal, is_notequal) = {
             let op = op_arc.read().unwrap();
             let in0 = match op.inrefs.get(0) {
@@ -3244,7 +3408,9 @@ impl Rule for RuleEquality {
                 Some(v) => v.clone(),
                 None => return Ok(action_status::NO_CHANGE),
             };
-            (crate::address::functional_equality(&in0, &in1), op.opcode == OpCode::CPUI_INT_NOTEQUAL)
+            (
+                crate::address::functional_equality(&in0, &in1), op.opcode == OpCode::CPUI_INT_NOTEQUAL,
+            )
         };
         if !equal {
             return Ok(action_status::NO_CHANGE);
@@ -3285,15 +3451,29 @@ impl RuleLessNotEqual {
 
 impl Rule for RuleLessNotEqual {
     // Ghidra: ruleaction.cc:2320 RuleLessNotEqual::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (vnout1, vnout2) = {
             let op = op_arc.read().unwrap();
-            let v1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let v2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let v1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let v2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (v1, v2)
         };
-        let op1_arc = { vnout1.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
-        let op2_arc = { vnout2.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
+        let op1_arc = { vnout1
+                .read()
+                .unwrap()
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade()) };
+        let op2_arc = { vnout2
+                .read()
+                .unwrap()
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade()) };
         let (op1_arc, op2_arc) = match (op1_arc, op2_arc) {
             (Some(a), Some(b)) => (a, b),
             _ => return Ok(action_status::NO_CHANGE),
@@ -3301,12 +3481,16 @@ impl Rule for RuleLessNotEqual {
         let (op_less_arc, opc, _op_equal_arc) = {
             let o1 = op1_arc.read().unwrap();
             let o2 = op2_arc.read().unwrap();
-            let is_le1 = matches!(o1.opcode, OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL);
+            let is_le1 = matches!(
+                o1.opcode, OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL
+            );
             let is_ne2 = o2.opcode == OpCode::CPUI_INT_NOTEQUAL;
             if is_le1 && is_ne2 {
                 (op1_arc.clone(), o1.opcode, op2_arc.clone())
             } else {
-                let is_le2 = matches!(o2.opcode, OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL);
+                let is_le2 = matches!(
+                    o2.opcode, OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL
+                );
                 let is_ne1 = o1.opcode == OpCode::CPUI_INT_NOTEQUAL;
                 if is_le2 && is_ne1 {
                     (op2_arc.clone(), o2.opcode, op1_arc.clone())
@@ -3318,8 +3502,10 @@ impl Rule for RuleLessNotEqual {
         let (compvn1, compvn2, e0, e1) = {
             let ol = op_less_arc.read().unwrap();
             let oe = _op_equal_arc.read().unwrap();
-            (ol.inrefs.get(0).cloned(), ol.inrefs.get(1).cloned(),
-             oe.inrefs.get(0).cloned(), oe.inrefs.get(1).cloned())
+            (
+                ol.inrefs.get(0).cloned(), ol.inrefs.get(1).cloned(),
+             oe.inrefs.get(0).cloned(), oe.inrefs.get(1).cloned(),
+            )
         };
         let (compvn1, compvn2) = match (compvn1, compvn2, e0, e1) {
             (Some(c1), Some(c2), Some(a), Some(b)) => {
@@ -3362,15 +3548,29 @@ impl RuleLessEqual {
 
 impl Rule for RuleLessEqual {
     // Ghidra: ruleaction.cc:2262 RuleLessEqual::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (vnout1, vnout2) = {
             let op = op_arc.read().unwrap();
-            let v1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let v2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let v1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let v2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (v1, v2)
         };
-        let op1_arc = { vnout1.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
-        let op2_arc = { vnout2.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
+        let op1_arc = { vnout1
+                .read()
+                .unwrap()
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade()) };
+        let op2_arc = { vnout2
+                .read()
+                .unwrap()
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade()) };
         let (op1_arc, op2_arc) = match (op1_arc, op2_arc) {
             (Some(a), Some(b)) => (a, b),
             _ => return Ok(action_status::NO_CHANGE),
@@ -3379,12 +3579,16 @@ impl Rule for RuleLessEqual {
             let o1 = op1_arc.read().unwrap();
             let o2 = op2_arc.read().unwrap();
             let is_less1 = matches!(o1.opcode, OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS);
-            let is_cmp2 = matches!(o2.opcode, OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL);
+            let is_cmp2 = matches!(
+                o2.opcode, OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
+            );
             if is_less1 && is_cmp2 {
                 (op1_arc.clone(), o1.opcode, op2_arc.clone(), o2.opcode)
             } else {
                 let is_less2 = matches!(o2.opcode, OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS);
-                let is_cmp1 = matches!(o1.opcode, OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL);
+                let is_cmp1 = matches!(
+                    o1.opcode, OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
+                );
                 if is_less2 && is_cmp1 {
                     (op2_arc.clone(), o2.opcode, op1_arc.clone(), o1.opcode)
                 } else {
@@ -3395,8 +3599,10 @@ impl Rule for RuleLessEqual {
         let (compvn1, compvn2, e0, e1) = {
             let ol = op_less_arc.read().unwrap();
             let oe = op_equal_arc.read().unwrap();
-            (ol.inrefs.get(0).cloned(), ol.inrefs.get(1).cloned(),
-             oe.inrefs.get(0).cloned(), oe.inrefs.get(1).cloned())
+            (
+                ol.inrefs.get(0).cloned(), ol.inrefs.get(1).cloned(),
+             oe.inrefs.get(0).cloned(), oe.inrefs.get(1).cloned(),
+            )
         };
         let (compvn1, compvn2) = match (compvn1, compvn2, e0, e1) {
             (Some(c1), Some(c2), Some(a), Some(b)) => {
@@ -3411,7 +3617,12 @@ impl Rule for RuleLessEqual {
         if equalopc == OpCode::CPUI_INT_NOTEQUAL {
             fd.op_set_opcode(&follow, OpCode::CPUI_COPY);
             fd.op_remove_input(&follow, 1);
-            let neq_out = op_equal_arc.read().unwrap().output.as_ref().map(|o| o.clone());
+            let neq_out = op_equal_arc
+                .read()
+                .unwrap()
+                .output
+                .as_ref()
+                .map(|o| o.clone());
             if let Some(o) = neq_out {
                 fd.op_set_input(&follow, o, 0);
             }
@@ -3445,7 +3656,9 @@ impl RuleRightShiftAnd {
 
 impl Rule for RuleRightShiftAnd {
     // Ghidra: ruleaction.cc:580 RuleRightShiftAnd::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (const_sa, in_vn) = {
             let op = op_arc.read().unwrap();
             let const_vn = match op.inrefs.get(1) {
@@ -3460,7 +3673,8 @@ impl Rule for RuleRightShiftAnd {
             (sa, in_vn)
         };
         let andop_arc = { in_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
-        let andop_arc = match andop_arc { Some(a) => a, None => return Ok(action_status::NO_CHANGE) };
+        let andop_arc = match andop_arc { Some(a) => a, None => return Ok(action_status::NO_CHANGE) ,
+        };
         let (mask, root_vn) = {
             let ao = andop_arc.read().unwrap();
             if ao.opcode != OpCode::CPUI_INT_AND { return Ok(action_status::NO_CHANGE); }
@@ -3469,7 +3683,8 @@ impl Rule for RuleRightShiftAnd {
                 _ => return Ok(action_status::NO_CHANGE),
             };
             let m = mask_vn.read().unwrap().get_offset();
-            let root_vn = match ao.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let root_vn = match ao.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (m, root_vn)
         };
         let sa = const_sa;
@@ -3503,16 +3718,20 @@ impl RuleHighOrderAnd {
 
 impl Rule for RuleHighOrderAnd {
     // Ghidra: ruleaction.cc:1196 RuleHighOrderAnd::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (cvn1_val, cvn1_size, addop_arc) = {
             let op = op_arc.read().unwrap();
             let cvn1 = match op.inrefs.get(1) {
                 Some(v) if v.read().unwrap().is_constant() => v.clone(),
                 _ => return Ok(action_status::NO_CHANGE),
             };
-            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let addop_arc = { in0.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
-            let addop_arc = match addop_arc { Some(a) => a, None => return Ok(action_status::NO_CHANGE) };
+            let addop_arc = match addop_arc { Some(a) => a, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if addop_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return Ok(action_status::NO_CHANGE); }
             let val = cvn1.read().unwrap().get_offset();
             let size = cvn1.read().unwrap().get_size();
@@ -3530,7 +3749,8 @@ impl Rule for RuleHighOrderAnd {
                 _ => return Ok(action_status::NO_CHANGE), // non-constant branch deferred
             };
             let cv2 = cvn2.read().unwrap().get_offset();
-            let xalign = match ao.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let xalign = match ao.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (xalign, cv2)
         };
         if xalign.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
@@ -3566,7 +3786,9 @@ impl RuleAndZext {
 
 impl Rule for RuleAndZext {
     // Ghidra: ruleaction.cc:1706 RuleAndZext::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (cvn1_val, otherop_arc) = {
             let op = op_arc.read().unwrap();
             let cvn1 = match op.inrefs.get(1) {
@@ -3574,9 +3796,11 @@ impl Rule for RuleAndZext {
                 _ => return Ok(action_status::NO_CHANGE),
             };
             let val = cvn1.read().unwrap().get_offset();
-            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let otherop_arc = { in0.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
-            let otherop_arc = match otherop_arc { Some(a) => a, None => return Ok(action_status::NO_CHANGE) };
+            let otherop_arc = match otherop_arc { Some(a) => a, None => return Ok(action_status::NO_CHANGE) ,
+            };
             (val, otherop_arc)
         };
         // otherop must be INT_SEXT (in0 is root) or PIECE (in1 is root).
@@ -3588,7 +3812,8 @@ impl Rule for RuleAndZext {
                 _ => return Ok(action_status::NO_CHANGE),
             }
         };
-        let rootvn = match rootvn { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+        let rootvn = match rootvn { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+        };
         let root_size = rootvn.read().unwrap().get_size();
         if root_size > 8 { return Ok(action_status::NO_CHANGE); }
         let mask = crate::address::calc_mask(root_size);
@@ -3622,11 +3847,15 @@ impl RuleZextSless {
 
 impl Rule for RuleZextSless {
     // Ghidra: ruleaction.cc:2584 RuleZextSless::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (zextslot, otherslot, zext_arc, val, is_sless) = {
             let op = op_arc.read().unwrap();
-            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let is_sless = op.opcode == OpCode::CPUI_INT_SLESS;
             // Find which input is the ZEXT and which is the constant.
             let vn1_def = vn1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
@@ -3652,13 +3881,15 @@ impl Rule for RuleZextSless {
         };
         let smallsize = {
             let z = zext_arc.read().unwrap();
-            match z.inrefs.get(0) { Some(v) => v.read().unwrap().get_size(), None => return Ok(action_status::NO_CHANGE) }
+            match z.inrefs.get(0) { Some(v) => v.read().unwrap().get_size(), None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         // Sign bit of the small value must be 0 (val's high bits beyond smallsize are 0).
         if val >> (8 * smallsize - 1) != 0 {
             return Ok(action_status::NO_CHANGE);
         }
-        let rootvn = match zext_arc.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let rootvn = match zext_arc.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         let follow = crate::op::PcodeOpRef(op_arc.clone());
         let newconst = fd.new_constant(smallsize, val);
         fd.op_set_input(&follow, rootvn, zextslot);
@@ -3695,13 +3926,18 @@ impl RuleScarry {
 
 impl Rule for RuleScarry {
     // Ghidra: ruleaction.cc:3430 RuleScarry::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // cc:3455-3457: svn/avn/bvn.
         let (svn, avn_orig, bvn_orig) = {
             let op = op_arc.read().unwrap();
-            let svn = match &op.output { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let avn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let bvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let svn = match &op.output { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let avn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let bvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (svn, avn, bvn)
         };
         // cc:3440-3446: trivial case scarry(V,0)/scarry(0,V) => false.
@@ -3748,12 +3984,15 @@ impl Rule for RuleScarry {
         for compop_arc in descendants {
             let (comp_opc, in0, in1) = {
                 let compop = compop_arc.read().unwrap();
-                (compop.opcode, compop.inrefs.get(0).cloned(), compop.inrefs.get(1).cloned())
+                (
+                    compop.opcode, compop.inrefs.get(0).cloned(), compop.inrefs.get(1).cloned(),
+                )
             };
             if comp_opc != OpCode::CPUI_INT_EQUAL && comp_opc != OpCode::CPUI_INT_NOTEQUAL {
                 continue;
             }
-            let (Some(c_in0), Some(c_in1)) = (in0, in1) else { continue };
+            let (Some(c_in0), Some(c_in1)) = (in0, in1) else { continue ;
+            };
             let cvn = if std::sync::Arc::ptr_eq(&c_in0, &svn) { c_in1 } else { c_in0 };
             let (signop_arc, sign_opc) = {
                 let cv = cvn.read().unwrap();
@@ -3773,7 +4012,8 @@ impl Rule for RuleScarry {
                 let signop = signop_arc.read().unwrap();
                 (signop.inrefs.get(0).cloned(), signop.inrefs.get(1).cloned())
             };
-            let (Some(s_in0), Some(s_in1)) = (s_in0, s_in1) else { continue };
+            let (Some(s_in0), Some(s_in1)) = (s_in0, s_in1) else { continue ;
+            };
             let const_match_zero = |v: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>| {
                 let r = v.read().unwrap();
                 r.is_constant() && r.get_offset() == 0
@@ -3851,13 +4091,18 @@ impl RuleSborrow {
 
 impl Rule for RuleSborrow {
     // Ghidra: ruleaction.cc:3361 RuleSborrow::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // cc:3364-3368: svn = op->getOut(); avn = op->getIn(0); bvn = op->getIn(1);
         let (svn, avn, bvn) = {
             let op = op_arc.read().unwrap();
-            let svn = match &op.output { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let avn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let bvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let svn = match &op.output { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let avn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let bvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (svn, avn, bvn)
         };
         // cc:3370-3375: trivial case sborrow(V,0) => false.
@@ -3880,13 +4125,16 @@ impl Rule for RuleSborrow {
         for compop_arc in descendants {
             let (comp_opc, in0, in1) = {
                 let compop = compop_arc.read().unwrap();
-                (compop.opcode, compop.inrefs.get(0).cloned(), compop.inrefs.get(1).cloned())
+                (
+                    compop.opcode, compop.inrefs.get(0).cloned(), compop.inrefs.get(1).cloned(),
+                )
             };
             // cc:3379-3380: if ((compop->code()!=CPUI_INT_EQUAL)&&(compop->code()!=CPUI_INT_NOTEQUAL)) continue;
             if comp_opc != OpCode::CPUI_INT_EQUAL && comp_opc != OpCode::CPUI_INT_NOTEQUAL {
                 continue;
             }
-            let (Some(c_in0), Some(c_in1)) = (in0, in1) else { continue };
+            let (Some(c_in0), Some(c_in1)) = (in0, in1) else { continue ;
+            };
             // cc:3381: cvn = (compop->getIn(0)==svn) ? compop->getIn(1) : compop->getIn(0);
             let cvn = if std::sync::Arc::ptr_eq(&c_in0, &svn) { c_in1 } else { c_in0 };
             // cc:3382-3383: if (!cvn->isWritten()) continue; signop = cvn->getDef();
@@ -3912,7 +4160,8 @@ impl Rule for RuleSborrow {
                 let signop = signop_arc.read().unwrap();
                 (signop.inrefs.get(0).cloned(), signop.inrefs.get(1).cloned())
             };
-            let (Some(s_in0), Some(s_in1)) = (s_in0, s_in1) else { continue };
+            let (Some(s_in0), Some(s_in1)) = (s_in0, s_in1) else { continue ;
+            };
             let const_match_zero = |v: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>| {
                 let r = v.read().unwrap();
                 r.is_constant() && r.get_offset() == 0
@@ -3976,25 +4225,42 @@ impl RuleAndDistribute {
 
 impl Rule for RuleAndDistribute {
     // Ghidra: ruleaction.cc:1260 RuleAndDistribute::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (size, pc, distribute_slot) = {
             let op = op_arc.read().unwrap();
-            let size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            let size = op
+                .output
+                .as_ref()
+                .map(|o| o.read().unwrap().get_size())
+                .unwrap_or(0);
             if size == 0 || size > 8 { return Ok(action_status::NO_CHANGE); }
             let fullmask = crate::address::calc_mask(size);
             let mut found: i32 = -1;
             for i in 0..2 {
-                let othervn = match op.inrefs.get(1 - i) { Some(v) => v.clone(), None => continue };
-                let orvn = match op.inrefs.get(i) { Some(v) => v.clone(), None => continue };
+                let othervn = match op.inrefs.get(1 - i) { Some(v) => v.clone(), None => continue ,
+                };
+                let orvn = match op.inrefs.get(i) { Some(v) => v.clone(), None => continue ,
+                };
                 let orop_arc = { orvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
-                let orop_arc = match orop_arc { Some(a) => a, None => continue };
+                let orop_arc = match orop_arc { Some(a) => a, None => continue ,
+                };
                 if orop_arc.read().unwrap().opcode != OpCode::CPUI_INT_OR { continue; }
                 let othermask = othervn.read().unwrap().get_nz_mask();
                 if othermask == 0 || othermask == fullmask { continue; }
                 let (ormask1, ormask2) = {
                     let oo = orop_arc.read().unwrap();
-                    (oo.inrefs.get(0).map(|v| v.read().unwrap().get_nz_mask()).unwrap_or(0),
-                     oo.inrefs.get(1).map(|v| v.read().unwrap().get_nz_mask()).unwrap_or(0))
+                    (
+                        oo.inrefs
+                            .get(0)
+                            .map(|v| v.read().unwrap().get_nz_mask())
+                            .unwrap_or(0),
+                     oo.inrefs
+                            .get(1)
+                            .map(|v| v.read().unwrap().get_nz_mask())
+                            .unwrap_or(0),
+                    )
                 };
                 if ormask1 & othermask == 0 { found = i as i32; break; }
                 if ormask2 & othermask == 0 { found = i as i32; break; }
@@ -4012,12 +4278,17 @@ impl Rule for RuleAndDistribute {
             let op = op_arc.read().unwrap();
             let orvn = op.inrefs.get(distribute_slot).cloned();
             let othervn = op.inrefs.get(1 - distribute_slot).cloned();
-            let orvn = match orvn { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
-            let othervn = match othervn { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let orvn = match orvn { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let othervn = match othervn { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             let orop_arc = { orvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
-            let orop_arc = match orop_arc { Some(a) => a, None => return Ok(action_status::NO_CHANGE) };
+            let orop_arc = match orop_arc { Some(a) => a, None => return Ok(action_status::NO_CHANGE) ,
+            };
             let oo = orop_arc.read().unwrap();
-            (oo.inrefs.get(0).cloned(), oo.inrefs.get(1).cloned(), othervn)
+            (
+                oo.inrefs.get(0).cloned(), oo.inrefs.get(1).cloned(), othervn,
+            )
         };
         let (or_in0, or_in1) = match (or_in0, or_in1) {
             (Some(a), Some(b)) => (a, b),
@@ -4065,7 +4336,9 @@ impl RuleLessOne {
 
 impl Rule for RuleLessOne {
     // Ghidra: ruleaction.cc:1325 RuleLessOne::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (val, opc, const_size) = {
             let op = op_arc.read().unwrap();
             let constvn = match op.inrefs.get(1) {
@@ -4076,7 +4349,9 @@ impl Rule for RuleLessOne {
             let sz = constvn.read().unwrap().get_size();
             if op.opcode == OpCode::CPUI_INT_LESS && val != 1 { return Ok(action_status::NO_CHANGE); }
             if op.opcode == OpCode::CPUI_INT_LESSEQUAL && val != 0 { return Ok(action_status::NO_CHANGE); }
-            if !matches!(op.opcode, OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL) {
+            if !matches!(
+                op.opcode, OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL
+            ) {
                 return Ok(action_status::NO_CHANGE);
             }
             (val, op.opcode, sz)
@@ -4110,31 +4385,48 @@ impl RuleAndPiece {
 
 impl Rule for RuleAndPiece {
     // Ghidra: ruleaction.cc:1640 RuleAndPiece::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (size, pc) = {
             let op = op_arc.read().unwrap();
-            let size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            let size = op
+                .output
+                .as_ref()
+                .map(|o| o.read().unwrap().get_size())
+                .unwrap_or(0);
             if size == 0 || size > 8 { return Ok(action_status::NO_CHANGE); }
             (size, op.start.get_addr())
         };
         let fullmask = crate::address::calc_mask(size);
         // Find a PIECE input whose other-operand mask zeros one piece.
-        let mut found: Option<(usize, OpCode, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>)> = None;
+        let mut found: Option<(
+            usize, OpCode, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        )> = None;
         for i in 0..2 {
             let piecevn = { let op = op_arc.read().unwrap(); op.inrefs.get(i).cloned() };
-            let piecevn = match piecevn { Some(v) => v, None => continue };
-            let pieceop_arc = { piecevn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
-            let pieceop_arc = match pieceop_arc { Some(a) => a, None => continue };
+            let piecevn = match piecevn { Some(v) => v, None => continue ,
+            };
+            let pieceop_arc = { piecevn
+                    .read()
+                    .unwrap()
+                    .def
+                    .as_ref()
+                    .and_then(|w| w.upgrade()) };
+            let pieceop_arc = match pieceop_arc { Some(a) => a, None => continue ,
+            };
             if pieceop_arc.read().unwrap().opcode != OpCode::CPUI_PIECE { continue; }
             let othervn = { let op = op_arc.read().unwrap(); op.inrefs.get(1 - i).cloned() };
-            let othervn = match othervn { Some(v) => v, None => continue };
+            let othervn = match othervn { Some(v) => v, None => continue ,
+            };
             let othermask = othervn.read().unwrap().get_nz_mask();
             if othermask == fullmask || othermask == 0 { continue; }
             let (highvn, lowvn) = {
                 let po = pieceop_arc.read().unwrap();
                 (po.inrefs.get(0).cloned(), po.inrefs.get(1).cloned())
             };
-            let (highvn, lowvn) = match (highvn, lowvn) { (Some(h), Some(l)) => (h, l), _ => continue };
+            let (highvn, lowvn) = match (highvn, lowvn) { (Some(h), Some(l)) => (h, l), _ => continue ,
+            };
             let maskhigh = highvn.read().unwrap().get_nz_mask();
             let masklow = lowvn.read().unwrap().get_nz_mask();
             let lowsize = lowvn.read().unwrap().get_size();
@@ -4148,7 +4440,8 @@ impl Rule for RuleAndPiece {
                 break;
             }
         }
-        let (i, opc, keepvn) = match found { Some(f) => f, None => return Ok(action_status::NO_CHANGE) };
+        let (i, opc, keepvn) = match found { Some(f) => f, None => return Ok(action_status::NO_CHANGE) ,
+        };
         // Build the replacement op.
         let follow = crate::op::PcodeOpRef(op_arc.clone());
         if opc == OpCode::CPUI_INT_ZEXT {
@@ -4195,21 +4488,36 @@ impl RuleAndCommute {
 
 impl Rule for RuleAndCommute {
     // Ghidra: ruleaction.cc:1532 RuleAndCommute::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (size, pc) = {
             let op = op_arc.read().unwrap();
-            let size = op.output.as_ref().map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+            let size = op
+                .output
+                .as_ref()
+                .map(|o| o.read().unwrap().get_size())
+                .unwrap_or(0);
             if size == 0 || size > 8 { return Ok(action_status::NO_CHANGE); }
             (size, op.start.get_addr())
         };
         let fullmask = crate::address::calc_mask(size);
         // Scan both slots: slot i holds a shift (V op c), slot 1-i is othervn.
-        let mut found: Option<(usize, std::sync::Arc<std::sync::RwLock<PcodeOp>>, OpCode, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>)> = None;
+        let mut found: Option<(
+            usize, std::sync::Arc<std::sync::RwLock<PcodeOp>>, OpCode, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        )> = None;
         for i in 0..2usize {
             let shiftvn = { let op = op_arc.read().unwrap(); op.inrefs.get(i).cloned() };
-            let shiftvn = match shiftvn { Some(v) => v, None => continue };
-            let shiftop_arc = { shiftvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
-            let shiftop_arc = match shiftop_arc { Some(a) => a, None => continue };
+            let shiftvn = match shiftvn { Some(v) => v, None => continue ,
+            };
+            let shiftop_arc = { shiftvn
+                    .read()
+                    .unwrap()
+                    .def
+                    .as_ref()
+                    .and_then(|w| w.upgrade()) };
+            let shiftop_arc = match shiftop_arc { Some(a) => a, None => continue ,
+            };
             let opc = shiftop_arc.read().unwrap().opcode;
             if opc != OpCode::CPUI_INT_LEFT && opc != OpCode::CPUI_INT_RIGHT { continue; }
             let savn = match shiftop_arc.read().unwrap().inrefs.get(1) {
@@ -4217,9 +4525,11 @@ impl Rule for RuleAndCommute {
                 _ => continue,
             };
             let sa = savn.read().unwrap().get_offset() as usize;
-            let orvn = match shiftop_arc.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => continue };
+            let orvn = match shiftop_arc.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => continue ,
+            };
             let othervn = { let op = op_arc.read().unwrap(); op.inrefs.get(1 - i).cloned() };
-            let othervn = match othervn { Some(v) => v, None => continue };
+            let othervn = match othervn { Some(v) => v, None => continue ,
+            };
             let othermask = othervn.read().unwrap().get_nz_mask();
             if othermask == 0 || othermask == fullmask { continue; }
             // Decide if commute is beneficial (othermask bits affected by shift).
@@ -4233,7 +4543,12 @@ impl Rule for RuleAndCommute {
             if adjusted == 0 || adjusted == fullmask { continue; }
             // For LEFT with constant othervn, require loneDescend for stability.
             if opc == OpCode::CPUI_INT_LEFT && othervn.read().unwrap().is_constant() {
-                if shiftvn.read().unwrap().lone_descend().map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false) {
+                if shiftvn
+                    .read()
+                    .unwrap()
+                    .lone_descend()
+                    .map(|o| std::sync::Arc::ptr_eq(&o, op_arc))
+                    .unwrap_or(false) {
                     found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
                     break;
                 }
@@ -4251,7 +4566,8 @@ impl Rule for RuleAndCommute {
             found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
             break;
         }
-        let (i, shiftop_arc, opc, savn, orvn, othervn) = match found { Some(f) => f, None => return Ok(action_status::NO_CHANGE) };
+        let (i, shiftop_arc, opc, savn, orvn, othervn) = match found { Some(f) => f, None => return Ok(action_status::NO_CHANGE) ,
+        };
         // Build new shift (commuted direction) of othervn by savn.
         let newop1 = fd.new_op(2, pc);
         let new_shift_opc = if opc == OpCode::CPUI_INT_LEFT { OpCode::CPUI_INT_RIGHT } else { OpCode::CPUI_INT_LEFT };
@@ -4296,14 +4612,19 @@ impl RuleOrConsume {
 
 impl Rule for RuleOrConsume {
     // Ghidra: ruleaction.cc:353 RuleOrConsume::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (consume, in0_nzm, in1_nzm, size) = {
             let op = op_arc.read().unwrap();
-            let outvn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let outvn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let size = outvn.read().unwrap().get_size();
             if size > 8 { return Ok(action_status::NO_CHANGE); }
-            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let consume = outvn.read().unwrap().get_consume();
             let n0 = in0.read().unwrap().get_nz_mask();
             let n1 = in1.read().unwrap().get_nz_mask();
@@ -4330,7 +4651,8 @@ impl Rule for RuleOrConsume {
 }
 
 /// Get rid of unused PcodeOp objects where we can guarantee the output is
-/// unused. Faithful to Ghidra's `RuleEarlyRemoval` (ruleaction.cc:23-44).
+/// unused. The live-op guard projection follows Ghidra's `RuleEarlyRemoval`
+/// (`ruleaction.cc:23-44`).
 ///
 /// Guard sequence mirrors Ghidra exactly (ruleaction.cc:30-40):
 ///   1. `op->isCall()`                — functions auto-consumed
@@ -4338,78 +4660,53 @@ impl Rule for RuleOrConsume {
 ///   3. `vn = op->getOut(); vn == 0`  — no output to remove
 ///   4. `!vn->hasNoDescend()`         — output still read
 ///   5. `vn->isAutoLive()`            — held alive by copy-prop/merge
-///   6. `spc->doesDeadcode() && !data.deadRemovalAllowedSeen(spc)` — memory
-///      output spaces gated on heritage progress (Rugra: conservatively
-///      memory-space outputs are skipped until deadcode-seen is ported).
+///   6. `spc->doesDeadcode() && !data.deadRemovalAllowedSeen(spc)` — spaces
+///      participating in dead-code analysis are gated on heritage progress.
 pub struct RuleEarlyRemoval;
 
 impl RuleEarlyRemoval {
-    // Ghidra: ruleaction.cc:23 RuleEarlyRemoval
+    // Ghidra: ruleaction.hh:88 RuleEarlyRemoval::RuleEarlyRemoval
     pub fn new() -> Self { Self }
-
-    /// Is `spc` a "memory" address space (where deadcode removal is gated)?
-    /// In Ghidra `doesDeadcode()` returns true for the join/deadspace-style
-    /// spaces and for RAM; the constant/iop spaces return false. Rugra maps this
-    /// to: not the constant space and not the internal iop space. For such a
-    /// memory space, removal is only safe once `deadRemovalAllowedSeen` has fired
-    /// (after heritage). Since Rugra has not ported that mechanism, we
-    /// conservatively block removal of memory-space outputs entirely.
-    // RUGRA-GLUE: helper for RuleEarlyRemoval::applyOp (ruleaction.cc:25)
-    fn is_memory_output_space(space: crate::space::AddressSpace) -> bool {
-        // The constant and iop spaces never run deadcode (Ghidra doesDeadcode==false),
-        // so outputs there are always removable. Everything else (RAM, register,
-        // stack, unique, join, ...) is gated until deadRemovalAllowedSeen is ported.
-        !matches!(space, crate::space::AddressSpace::Const | crate::space::AddressSpace::Iop)
-    }
 }
 
 impl Rule for RuleEarlyRemoval {
     // Ghidra: ruleaction.cc:25 RuleEarlyRemoval::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to Ghidra RuleEarlyRemoval::applyOp (ruleaction.cc:25-44).
         // Guard 1: isCall
         let out_vn = {
             let op = op_arc.read().unwrap();
             if op.is_call() { return Ok(action_status::NO_CHANGE); }              // 30
             if op.is_indirect_source() { return Ok(action_status::NO_CHANGE); }    // 31 — guard 2
-            let out = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) }; // 32-33 guard 3
+            let out = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            }; // 32-33 guard 3
             out
         };
         let out_guard = out_vn.read().unwrap();
         // Guard 4: hasNoDescend
         if !out_guard.has_no_descend() { return Ok(action_status::NO_CHANGE); }    // 35
-        // Guard 5: isAutoLive (Rugra's is_auto_live currently always returns false,
-        // matching Ghidra when no varnode has been marked AUTOLIVE_HOLD).
+        // Guard 5: isAutoLive (ADDRFORCE or the temporary AUTOLIVE_HOLD bit).
         if out_guard.is_auto_live() { return Ok(action_status::NO_CHANGE); }       // 36
-        // Guard 6: memory-output / deadcode gate. Ghidra blocks removal in spaces
-        // where deadcode runs until ActionDeadCode marks them via
-        // deadRemovalAllowedSeen. Rugra's descend tracking is incomplete — several
-        // code paths (coreaction/constseq/jumptable/heritage) push to inrefs
-        // DIRECTLY, bypassing op_set_input's descend maintenance, so
-        // has_no_descend can falsely return true for still-used varnodes. To stay
-        // safe for memory outputs we additionally verify the descend list has no
-        // lingering strong refs, and — as Ghidra does — defer memory-space outputs
-        // until deadRemovalAllowedSeen lands. CONSTANT/Internal outputs are
-        // unconditionally safe (doesDeadcode==false in Ghidra).
+        // Guard 6: exact doesDeadcode/deadRemovalAllowedSeen gate.  The latter
+          // both checks pass > deadcodedelay and records deadremoved=1 on success.
         let space = out_guard.get_space();
-        if Self::is_memory_output_space(space) {
-            // Memory-space output: blocked until deadcode-seen is ported. This is
-            // the one remaining conservative restriction vs Ghidra.
+        drop(out_guard);
+        if space.does_deadcode() && !fd.heritage.dead_removal_allowed_seen(space) {
             return Ok(action_status::NO_CHANGE);
         }
-        drop(out_guard);
         fd.op_destroy(&crate::op::PcodeOpRef(op_arc.clone()));
         Ok(action_status::CHANGE)
     }
 
     // Ghidra: ruleaction.cc:23 RuleEarlyRemoval
     fn get_name(&self) -> &str { "earlyremoval" }
-    // Ghidra: ruleaction.cc:23 RuleEarlyRemoval
+    // Ghidra: action.cc:706 Rule::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
-        // Applies to all ops; we register a representative set.
-        vec![OpCode::CPUI_INT_ADD, OpCode::CPUI_INT_SUB, OpCode::CPUI_INT_MULT,
-             OpCode::CPUI_COPY, OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR,
-             OpCode::CPUI_INT_XOR, OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_RIGHT]
+        // Ghidra's raw registration has buckets 0..73. Rust can represent the
+        // 72 live opcodes only: raw 0 is null and slot 45 is unused.
+        (1..74).filter_map(OpCode::from_i32).collect()
     }
 }
 
@@ -4431,7 +4728,9 @@ impl RuleBooleanNegate {
 
 impl Rule for RuleBooleanNegate {
     // Ghidra: ruleaction.cc:2969 RuleBooleanNegate::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (opc, constval, subbool) = {
             let op = op_arc.read().unwrap();
             let constvn = match op.inrefs.get(1) {
@@ -4440,7 +4739,8 @@ impl Rule for RuleBooleanNegate {
             };
             let val = constvn.read().unwrap().get_offset();
             if val != 0 && val != 1 { return Ok(action_status::NO_CHANGE); }
-            let subbool = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let subbool = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (op.opcode, val, subbool)
         };
         // subbool must be a boolean value.
@@ -4480,14 +4780,20 @@ impl RuleLogic2Bool {
 
 impl Rule for RuleLogic2Bool {
     // Ghidra: ruleaction.cc:3138 RuleLogic2Bool::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (opc, in0, in1) = {
             let op = op_arc.read().unwrap();
-            if !matches!(op.opcode, OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR) {
+            if !matches!(
+                op.opcode, OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR
+            ) {
                 return Ok(action_status::NO_CHANGE);
             }
-            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (op.opcode, in0, in1)
         };
         // in0 must be boolean.
@@ -4516,7 +4822,9 @@ impl Rule for RuleLogic2Bool {
     // Ghidra: ruleaction.cc:3126 RuleLogic2Bool
     fn get_name(&self) -> &str { "logic2bool" }
     // Ghidra: ruleaction.cc:3131 RuleLogic2Bool::getOpList
-    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR] }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![
+            OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR,
+        ] }
 }
 
 /// Transform canceling INT_RIGHT/INT_SRIGHT of INT_LEFT:
@@ -4535,7 +4843,9 @@ impl RuleLeftRight {
 
 impl Rule for RuleLeftRight {
     // Ghidra: ruleaction.cc:2030 RuleLeftRight::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Phase 1: validate and extract raw values.
         let (sa, leftshift_arc, is_sright, shiftin_size, tsz) = {
             let op = op_arc.read().unwrap();
@@ -4559,10 +4869,18 @@ impl Rule for RuleLeftRight {
                 };
             }
             if leftshift_arc.read().unwrap().opcode != OpCode::CPUI_INT_LEFT { return Ok(action_status::NO_CHANGE); }
-            if !leftshift_arc.read().unwrap().inrefs.get(1).map_or(false, |v| v.read().unwrap().is_constant()) {
+            if !leftshift_arc
+                .read()
+                .unwrap()
+                .inrefs
+                .get(1)
+                .map_or(false, |v| v.read().unwrap().is_constant()) {
                 return Ok(action_status::NO_CHANGE);
             }
-            let left_sa = leftshift_arc.read().unwrap().inrefs[1].read().unwrap().get_offset();
+            let left_sa = leftshift_arc.read().unwrap().inrefs[1]
+                .read()
+                .unwrap()
+                .get_offset();
             if left_sa != sa { return Ok(action_status::NO_CHANGE); }
             if sa & 7 != 0 { return Ok(action_status::NO_CHANGE); }
             let isa = (sa >> 3) as usize;
@@ -4570,10 +4888,14 @@ impl Rule for RuleLeftRight {
             if !matches!(tsz, 1 | 2 | 4 | 8) { return Ok(action_status::NO_CHANGE); }
             // shiftin must be lone descendant of this op.
             let lone = shiftin.read().unwrap().lone_descend();
-            if !lone.map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false) {
+            if !lone
+                .map(|o| std::sync::Arc::ptr_eq(&o, op_arc))
+                .unwrap_or(false) {
                 return Ok(action_status::NO_CHANGE);
             }
-            (sa, leftshift_arc, op.opcode == OpCode::CPUI_INT_SRIGHT, shiftin_size, tsz)
+            (
+                sa, leftshift_arc, op.opcode == OpCode::CPUI_INT_SRIGHT, shiftin_size, tsz,
+            )
         };
         // Phase 2: transform.
         let leftshift_ref = crate::op::PcodeOpRef(leftshift_arc.clone());
@@ -4611,7 +4933,9 @@ impl RuleIntLessEqual {
 
 impl Rule for RuleIntLessEqual {
     // Ghidra: ruleaction.cc:611 RuleIntLessEqual::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         if fd.replace_lessequal(&crate::op::PcodeOpRef(op_arc.clone())) {
             Ok(action_status::CHANGE)
         } else {
@@ -4641,7 +4965,11 @@ impl RuleCollectTerms {
     /// Extract the multiplicative coefficient from a term vn.
     /// If vn is INT_MULT(V, c), return (V, c); else (vn, 1).
     // Ghidra: ruleaction.cc:82 RuleCollectTerms::getMultCoeff
-    fn get_mult_coeff(vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> (std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, u64) {
+    fn get_mult_coeff(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> (
+        std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, u64,
+    ) {
         let is_written = vn.read().unwrap().is_written();
         if !is_written {
             return (vn.clone(), 1);
@@ -4649,7 +4977,9 @@ impl RuleCollectTerms {
         let def = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
         if let Some(op) = def {
             let o = op.read().unwrap();
-            if o.opcode == OpCode::CPUI_INT_MULT && o.inrefs.get(1).map_or(false, |v| v.read().unwrap().is_constant()) {
+            if o.opcode == OpCode::CPUI_INT_MULT && o.inrefs
+                    .get(1)
+                    .map_or(false, |v| v.read().unwrap().is_constant()) {
                 let coeff = o.inrefs[1].read().unwrap().get_offset();
                 let base = o.inrefs[0].clone();
                 return (base, coeff);
@@ -4661,7 +4991,9 @@ impl RuleCollectTerms {
 
 impl Rule for RuleCollectTerms {
     // Ghidra: ruleaction.cc:107 RuleCollectTerms::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Must not be feeding another INT_ADD (we want the root).
         let out_vn = op_arc.read().unwrap().output.as_ref().cloned();
         if let Some(out) = out_vn {
@@ -4681,27 +5013,57 @@ impl Rule for RuleCollectTerms {
 
         let mut i = 0;
         // Phase 1: look for combinable like terms.
-        if !termorder.get_term(order[0]).unwrap().get_varnode().read().unwrap().is_constant() {
+        if !termorder
+            .get_term(order[0])
+            .unwrap()
+            .get_varnode()
+            .read()
+            .unwrap()
+            .is_constant() {
             i = 1;
             while i < order.len() {
-                let vn1 = termorder.get_term(order[i-1]).unwrap().get_varnode().clone();
+                let vn1 = termorder
+                    .get_term(order[i - 1])
+                    .unwrap()
+                    .get_varnode()
+                    .clone();
                 let vn2 = termorder.get_term(order[i]).unwrap().get_varnode().clone();
                 if vn2.read().unwrap().is_constant() { break; }
                 let (base1, coef1) = Self::get_mult_coeff(&vn1);
                 let (base2, coef2) = Self::get_mult_coeff(&vn2);
                 if std::sync::Arc::ptr_eq(&base1, &base2) {
                     // Like terms → combine. Handle multiplier sub-case.
-                    let mult1 = termorder.get_term(order[i-1]).unwrap().get_multiplier().is_some();
-                    let mult2 = termorder.get_term(order[i]).unwrap().get_multiplier().is_some();
+                    let mult1 = termorder
+                        .get_term(order[i - 1])
+                        .unwrap()
+                        .get_multiplier()
+                        .is_some();
+                    let mult2 = termorder
+                        .get_term(order[i])
+                        .unwrap()
+                        .get_multiplier()
+                        .is_some();
                     if mult1 {
-                        let mult_op = termorder.get_term(order[i-1]).unwrap().get_multiplier().as_ref().unwrap().clone();
+                        let mult_op = termorder
+                            .get_term(order[i - 1])
+                            .unwrap()
+                            .get_multiplier()
+                            .as_ref()
+                            .unwrap()
+                            .clone();
                         if fd.distribute_int_mult_add(&crate::op::PcodeOpRef(mult_op)) {
                             return Ok(action_status::CHANGE);
                         }
                         return Ok(action_status::NO_CHANGE);
                     }
                     if mult2 {
-                        let mult_op = termorder.get_term(order[i]).unwrap().get_multiplier().as_ref().unwrap().clone();
+                        let mult_op = termorder
+                            .get_term(order[i])
+                            .unwrap()
+                            .get_multiplier()
+                            .as_ref()
+                            .unwrap()
+                            .clone();
                         if fd.distribute_int_mult_add(&crate::op::PcodeOpRef(mult_op)) {
                             return Ok(action_status::CHANGE);
                         }
@@ -4715,11 +5077,15 @@ impl Rule for RuleCollectTerms {
                     let new_coef = coef1.wrapping_add(coef2) & mask;
                     let newcoeff = fd.new_constant(size, new_coef);
                     let zerocoeff = fd.new_constant(size, 0);
-                    let edge1 = termorder.get_term(order[i-1]).unwrap();
+                    let edge1 = termorder.get_term(order[i - 1]).unwrap();
                     let edge2 = termorder.get_term(order[i]).unwrap();
-                    fd.op_set_input(&crate::op::PcodeOpRef(edge1.op.clone()), zerocoeff, edge1.slot);
+                    fd.op_set_input(
+                        &crate::op::PcodeOpRef(edge1.op.clone()), zerocoeff, edge1.slot,
+                    );
                     if new_coef == 0 {
-                        fd.op_set_input(&crate::op::PcodeOpRef(edge2.op.clone()), newcoeff, edge2.slot);
+                        fd.op_set_input(
+                            &crate::op::PcodeOpRef(edge2.op.clone()), newcoeff, edge2.slot,
+                        );
                     } else {
                         let nextop = fd.new_op(2, edge2.op.read().unwrap().start.get_addr());
                         let newout = fd.new_unique_out(size, &nextop);
@@ -4727,7 +5093,9 @@ impl Rule for RuleCollectTerms {
                         fd.op_set_input(&nextop, base1, 0);
                         fd.op_set_input(&nextop, newcoeff, 1);
                         fd.op_insert_before(&nextop, &crate::op::PcodeOpRef(edge2.op.clone()));
-                        fd.op_set_input(&crate::op::PcodeOpRef(edge2.op.clone()), newout, edge2.slot);
+                        fd.op_set_input(
+                            &crate::op::PcodeOpRef(edge2.op.clone()), newout, edge2.slot,
+                        );
                     }
                     return Ok(action_status::CHANGE);
                 }
@@ -4768,7 +5136,9 @@ impl Rule for RuleCollectTerms {
         // Set last constant to the sum.
         let sum_const = fd.new_constant(size, coef_sum);
         let last_edge2 = termorder.get_term(order[lastconst]).unwrap();
-        fd.op_set_input(&crate::op::PcodeOpRef(last_edge2.op.clone()), sum_const, last_edge2.slot);
+        fd.op_set_input(
+            &crate::op::PcodeOpRef(last_edge2.op.clone()), sum_const, last_edge2.slot,
+        );
         Ok(action_status::CHANGE)
     }
 
@@ -4794,11 +5164,15 @@ impl RuleBitUndistribute {
 
 impl Rule for RuleBitUndistribute {
     // Ghidra: ruleaction.cc:2634 RuleBitUndistribute::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (opc_outer, vn1_def, vn2_def) = {
             let op = op_arc.read().unwrap();
-            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !vn1.read().unwrap().is_written() || !vn2.read().unwrap().is_written() {
                 return Ok(action_status::NO_CHANGE);
             }
@@ -4813,12 +5187,15 @@ impl Rule for RuleBitUndistribute {
         if vn2_def.read().unwrap().opcode != inner_opc {
             return Ok(action_status::NO_CHANGE);
         }
-        let (in1, in2): (std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-                         std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) = match inner_opc {
+        let (in1, in2): (
+            std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+                         std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        ) = match inner_opc {
             OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT => {
                 let i1 = vn1_def.read().unwrap().inrefs.get(0).cloned();
                 let i2 = vn2_def.read().unwrap().inrefs.get(0).cloned();
-                let (i1, i2) = match (i1, i2) { (Some(a), Some(b)) => (a, b), _ => return Ok(action_status::NO_CHANGE) };
+                let (i1, i2) = match (i1, i2) { (Some(a), Some(b)) => (a, b), _ => return Ok(action_status::NO_CHANGE) ,
+                };
                 if i1.read().unwrap().is_free() || i2.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
                 if i1.read().unwrap().get_size() != i2.read().unwrap().get_size() { return Ok(action_status::NO_CHANGE); }
                 // Remove the second input (we'll build the inner op from in1+in2).
@@ -4829,7 +5206,8 @@ impl Rule for RuleBitUndistribute {
             OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => {
                 let s1 = vn1_def.read().unwrap().inrefs.get(1).cloned();
                 let s2 = vn2_def.read().unwrap().inrefs.get(1).cloned();
-                let (s1, s2) = match (s1, s2) { (Some(a), Some(b)) => (a, b), _ => return Ok(action_status::NO_CHANGE) };
+                let (s1, s2) = match (s1, s2) { (Some(a), Some(b)) => (a, b), _ => return Ok(action_status::NO_CHANGE) ,
+                };
                 let vnextra = if s1.read().unwrap().is_constant() && s2.read().unwrap().is_constant() {
                     if s1.read().unwrap().get_offset() != s2.read().unwrap().get_offset() { return Ok(action_status::NO_CHANGE); }
                     let size = s1.read().unwrap().get_size();
@@ -4843,7 +5221,8 @@ impl Rule for RuleBitUndistribute {
                 };
                 let i1 = vn1_def.read().unwrap().inrefs.get(0).cloned();
                 let i2 = vn2_def.read().unwrap().inrefs.get(0).cloned();
-                let (i1, i2) = match (i1, i2) { (Some(a), Some(b)) => (a, b), _ => return Ok(action_status::NO_CHANGE) };
+                let (i1, i2) = match (i1, i2) { (Some(a), Some(b)) => (a, b), _ => return Ok(action_status::NO_CHANGE) ,
+                };
                 if i1.read().unwrap().is_free() || i2.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
                 let follow = crate::op::PcodeOpRef(op_arc.clone());
                 fd.op_set_input(&follow, vnextra.unwrap(), 1);
@@ -4870,7 +5249,9 @@ impl Rule for RuleBitUndistribute {
     // Ghidra: ruleaction.cc:2620 RuleBitUndistribute
     fn get_name(&self) -> &str { "bitundistribute" }
     // Ghidra: ruleaction.cc:2627 RuleBitUndistribute::getOpList
-    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR] }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![
+            OpCode::CPUI_INT_AND, OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR,
+        ] }
 }
 
 /// Deduplicate boolean expressions:
@@ -4890,20 +5271,25 @@ impl RuleBooleanDedup {
 
 impl Rule for RuleBooleanDedup {
     // Ghidra: ruleaction.cc:2852 RuleBooleanDedup::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (central_opc, ins, opc0, opc1) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_BOOL_AND && op.opcode != OpCode::CPUI_BOOL_OR {
                 return Ok(action_status::NO_CHANGE);
             }
-            let vn0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !vn0.read().unwrap().is_written() || !vn1.read().unwrap().is_written() {
                 return Ok(action_status::NO_CHANGE);
             }
             let op0 = vn0.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
             let op1 = vn1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
-            let (op0, op1) = match (op0, op1) { (Some(a), Some(b)) => (a, b), _ => return Ok(action_status::NO_CHANGE) };
+            let (op0, op1) = match (op0, op1) { (Some(a), Some(b)) => (a, b), _ => return Ok(action_status::NO_CHANGE) ,
+            };
             let opc0 = op0.read().unwrap().opcode;
             let opc1 = op1.read().unwrap().opcode;
             if !matches!(opc0, OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR) { return Ok(action_status::NO_CHANGE); }
@@ -4924,7 +5310,7 @@ impl Rule for RuleBooleanDedup {
         // Find a matching pair among the 4 inputs (simplified: use functional_equality).
         // Ghidra uses BooleanMatch which also handles complement via BOOL_NEGATE.
         // We handle only the direct match case (not complement/flipped).
-        let pairs = [(0,2),(0,3),(1,2),(1,3)];
+        let pairs = [(0, 2), (0, 3), (1, 2), (1, 3)];
         let mut found: Option<(usize, usize, usize, usize)> = None;
         for (ai, bi) in &pairs {
             if functional_equality_eq(&ins[*ai], &ins[*bi]) {
@@ -4993,7 +5379,9 @@ impl RuleAndMask {
 
 impl Rule for RuleAndMask {
     // Ghidra: ruleaction.cc:310 RuleAndMask::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let (out_size, mask1, mask2, in0, in1, out_consume) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_AND {
@@ -5006,9 +5394,15 @@ impl Rule for RuleAndMask {
             if out_size > 8 {
                 return Ok(action_status::NO_CHANGE); // uintb precision limit
             }
-            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let out_consume = op.output.as_ref().map(|o| o.read().unwrap().get_consume()).unwrap_or(0);
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let out_consume = op
+                .output
+                .as_ref()
+                .map(|o| o.read().unwrap().get_consume())
+                .unwrap_or(0);
             let (m1, m2) = {
                 let r0 = in0.read().unwrap();
                 let r1 = in1.read().unwrap();
@@ -5096,20 +5490,26 @@ impl RuleBooleanUndistribute {
 
 impl Rule for RuleBooleanUndistribute {
     // Ghidra: ruleaction.cc:2731 RuleBooleanUndistribute::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleBooleanUndistribute::applyOp (ruleaction.cc:2731-2810).
         let (central_opc, ins) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_EQUAL && op.opcode != OpCode::CPUI_INT_NOTEQUAL {
                 return Ok(action_status::NO_CHANGE);
             }
-            let vn0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !vn0.read().unwrap().is_written() || !vn1.read().unwrap().is_written() {
                 return Ok(action_status::NO_CHANGE);
             }
-            let op0 = match vn0.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
-            let op1 = match vn1.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let op0 = match vn0.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let op1 = match vn1.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             let opc0 = op0.read().unwrap().opcode;
             if opc0 != OpCode::CPUI_BOOL_AND && opc0 != OpCode::CPUI_BOOL_OR {
                 return Ok(action_status::NO_CHANGE);
@@ -5140,10 +5540,20 @@ impl Rule for RuleBooleanUndistribute {
         // Get opc0/opc1 again for the flip logic.
         let vn0 = op_arc.read().unwrap().inrefs[0].clone();
         let vn1 = op_arc.read().unwrap().inrefs[1].clone();
-        let opc0 = vn0.read().unwrap().get_def().map(|d| d.read().unwrap().opcode);
-        let opc1 = vn1.read().unwrap().get_def().map(|d| d.read().unwrap().opcode);
-        let opc0 = match opc0 { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
-        let opc1 = match opc1 { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+        let opc0 = vn0
+            .read()
+            .unwrap()
+            .get_def()
+            .map(|d| d.read().unwrap().opcode);
+        let opc1 = vn1
+            .read()
+            .unwrap()
+            .get_def()
+            .map(|d| d.read().unwrap().opcode);
+        let opc0 = match opc0 { Some(o) => o, None => return Ok(action_status::NO_CHANGE) ,
+        };
+        let opc1 = match opc1 { Some(o) => o, None => return Ok(action_status::NO_CHANGE) ,
+        };
         if opc0 == OpCode::CPUI_BOOL_OR {
             isflipped[0] = !isflipped[0];
             isflipped[1] = !isflipped[1];
@@ -5238,20 +5648,28 @@ impl RuleBoolZext {
 
 impl Rule for RuleBoolZext {
     // Ghidra: ruleaction.cc:3015 RuleBoolZext::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleBoolZext::applyOp (ruleaction.cc:3015-3124).
         let (bool_vn1, multop1_arc) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_ZEXT {
                 return Ok(action_status::NO_CHANGE);
             }
-            let bool_vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            if !bool_vn1.read().unwrap().is_boolean_value(fd.is_type_recovery_on()) {
+            let bool_vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            if !bool_vn1
+                .read()
+                .unwrap()
+                .is_boolean_value(fd.is_type_recovery_on()) {
                 return Ok(action_status::NO_CHANGE);
             }
-            let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let multop1 = out_vn.read().unwrap().lone_descend();
-            let multop1 = match multop1 { Some(m) => m, None => return Ok(action_status::NO_CHANGE) };
+            let multop1 = match multop1 { Some(m) => m, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if multop1.read().unwrap().opcode != OpCode::CPUI_INT_MULT {
                 return Ok(action_status::NO_CHANGE);
             }
@@ -5260,7 +5678,8 @@ impl Rule for RuleBoolZext {
         // Check multop1's constant input == all-ones mask.
         let (coeff, size) = {
             let m1 = multop1_arc.read().unwrap();
-            let const_vn = match m1.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let const_vn = match m1.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !const_vn.read().unwrap().is_constant() {
                 return Ok(action_status::NO_CHANGE);
             }
@@ -5269,19 +5688,25 @@ impl Rule for RuleBoolZext {
             if coeff != calc_mask(const_size) {
                 return Ok(action_status::NO_CHANGE);
             }
-            let out_size = m1.output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+            let out_size = m1
+                .output
+                .as_ref()
+                .map(|v| v.read().unwrap().get_size())
+                .unwrap_or(0);
             (coeff, out_size)
         };
         // Get the action op (loneDescend of multop1's output).
         let out_arc = {
             let m1 = multop1_arc.read().unwrap();
-            match m1.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) }
+            match m1.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         let actionop_arc = {
             let out_rg = out_arc.read().unwrap();
             out_rg.lone_descend()
         };
-        let actionop_arc = match actionop_arc { Some(a) => a, None => return Ok(action_status::NO_CHANGE) };
+        let actionop_arc = match actionop_arc { Some(a) => a, None => return Ok(action_status::NO_CHANGE) ,
+        };
         let actionopc = actionop_arc.read().unwrap().opcode;
         let follow = crate::op::PcodeOpRef(op_arc.clone());
         let action_ref = crate::op::PcodeOpRef(actionop_arc.clone());
@@ -5290,7 +5715,8 @@ impl Rule for RuleBoolZext {
             OpCode::CPUI_INT_ADD => {
                 let (is_const_1, const_val) = {
                     let a = actionop_arc.read().unwrap();
-                    let in1 = match a.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+                    let in1 = match a.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+                    };
                     let r = in1.read().unwrap();
                     (r.is_constant(), r.get_offset())
                 };
@@ -5311,7 +5737,8 @@ impl Rule for RuleBoolZext {
             OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
                 let val = {
                     let a = actionop_arc.read().unwrap();
-                    let in1 = match a.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+                    let in1 = match a.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+                    };
                     let r = in1.read().unwrap();
                     if !r.is_constant() { return Ok(action_status::NO_CHANGE); }
                     r.get_offset()
@@ -5348,13 +5775,15 @@ impl Rule for RuleBoolZext {
                     });
                     m1_out
                 };
-                let multop2_arc = match multop2_arc { Some(m) => m, None => return Ok(action_status::NO_CHANGE) };
+                let multop2_arc = match multop2_arc { Some(m) => m, None => return Ok(action_status::NO_CHANGE) ,
+                };
                 if multop2_arc.read().unwrap().opcode != OpCode::CPUI_INT_MULT {
                     return Ok(action_status::NO_CHANGE);
                 }
                 let (coeff2, multop2_in0_def) = {
                     let m2 = multop2_arc.read().unwrap();
-                    let in1 = match m2.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+                    let in1 = match m2.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+                    };
                     if !in1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
                     let c2 = in1.read().unwrap().get_offset();
                     if c2 != calc_mask(size) { return Ok(action_status::NO_CHANGE); }
@@ -5362,7 +5791,8 @@ impl Rule for RuleBoolZext {
                     (c2, in0_def)
                 };
                 let _ = coeff2;
-                let zextop2_arc = match multop2_in0_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+                let zextop2_arc = match multop2_in0_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+                };
                 if zextop2_arc.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT {
                     return Ok(action_status::NO_CHANGE);
                 }
@@ -5370,7 +5800,10 @@ impl Rule for RuleBoolZext {
                     Some(v) => v,
                     None => return Ok(action_status::NO_CHANGE),
                 };
-                if !bool_vn2.read().unwrap().is_boolean_value(fd.is_type_recovery_on()) {
+                if !bool_vn2
+                    .read()
+                    .unwrap()
+                    .is_boolean_value(fd.is_type_recovery_on()) {
                     return Ok(action_status::NO_CHANGE);
                 }
                 // Build BOOL op on unextended booleans, then ZEXT the result.
@@ -5477,7 +5910,9 @@ impl RulePushMulti {
                             {
                                 let mut all_match = true;
                                 for j in 0..dr.inrefs.len() {
-                                    if !std::sync::Arc::ptr_eq(&dr.inrefs[j], &op1.read().unwrap().inrefs[j]) {
+                                    if !std::sync::Arc::ptr_eq(
+                                        &dr.inrefs[j], &op1.read().unwrap().inrefs[j],
+                                    ) {
                                         all_match = false;
                                         break;
                                     }
@@ -5498,7 +5933,9 @@ impl RulePushMulti {
 
 impl Rule for RulePushMulti {
     // Ghidra: ruleaction.cc:1074 RulePushMulti::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RulePushMulti::applyOp (ruleaction.cc:1074-1137).
         use crate::expression::functional_equality_level;
 
@@ -5546,7 +5983,10 @@ impl Rule for RulePushMulti {
             if res == 0 {
                 return Ok(action_status::NO_CHANGE);
             }
-            let substitute = match result.pairs.get(0).and_then(|p| Self::find_substitute(&p.0, &p.1)) {
+            let substitute = match result
+                .pairs
+                .get(0)
+                .and_then(|p| Self::find_substitute(&p.0, &p.1)) {
                 Some(s) => s,
                 None => return Ok(action_status::NO_CHANGE),
             };
@@ -5567,11 +6007,15 @@ impl Rule for RulePushMulti {
         };
         // Both inputs must have this op as their lone descendant.
         let in1_lone = in1.read().unwrap().lone_descend();
-        if !in1_lone.map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false) {
+        if !in1_lone
+            .map(|o| std::sync::Arc::ptr_eq(&o, op_arc))
+            .unwrap_or(false) {
             return Ok(action_status::NO_CHANGE);
         }
         let in2_lone = in2.read().unwrap().lone_descend();
-        if !in2_lone.map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false) {
+        if !in2_lone
+            .map(|o| std::sync::Arc::ptr_eq(&o, op_arc))
+            .unwrap_or(false) {
             return Ok(action_status::NO_CHANGE);
         }
 
@@ -5643,7 +6087,9 @@ impl RuleSelectCse {
 
 impl Rule for RuleSelectCse {
     // Ghidra: ruleaction.cc:187 RuleSelectCse::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSelectCse::applyOp (ruleaction.cc:187-209).
         let (opc, vn) = {
             let op = op_arc.read().unwrap();
@@ -5651,7 +6097,8 @@ impl Rule for RuleSelectCse {
             if opc != OpCode::CPUI_SUBPIECE && opc != OpCode::CPUI_INT_SRIGHT {
                 return Ok(action_status::NO_CHANGE);
             }
-            let vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (opc, vn)
         };
         // Collect descendants of vn with the same opcode and non-zero hash.
@@ -5695,7 +6142,9 @@ impl RuleMultNegOne {
 
 impl Rule for RuleMultNegOne {
     // Ghidra: ruleaction.cc:7179 RuleMultNegOne::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleMultNegOne::applyOp (ruleaction.cc:7179-7190).
         // a * -1 -> -a
         let constvn = {
@@ -5736,11 +6185,14 @@ impl RuleSub2Add {
 
 impl Rule for RuleSub2Add {
     // Ghidra: ruleaction.cc:4040 RuleSub2Add::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSub2Add::applyOp (ruleaction.cc:4040-4056).
         let vn = {
             let op = op_arc.read().unwrap();
-            match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+            match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         let vn_size = vn.read().unwrap().get_size();
         let addr = op_arc.read().unwrap().get_addr();
@@ -5780,24 +6232,37 @@ impl RuleSubExtComm {
 
 impl Rule for RuleSubExtComm {
     // Ghidra: ruleaction.cc:4422 RuleSubExtComm::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSubExtComm::applyOp (ruleaction.cc:4422-4461).
         let (base, ext_code, in_vn, subcut, out_size) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_SUBPIECE {
                 return Ok(action_status::NO_CHANGE);
             }
-            let base = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let base = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !base.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let extop = match base.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let extop = match base.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             let ext_code = extop.read().unwrap().opcode;
             if ext_code != OpCode::CPUI_INT_ZEXT && ext_code != OpCode::CPUI_INT_SEXT {
                 return Ok(action_status::NO_CHANGE);
             }
-            let in_vn = match extop.read().unwrap().inrefs.get(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let in_vn = match extop.read().unwrap().inrefs.get(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if in_vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
-            let subcut = op.inrefs.get(1).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(0);
-            let out_size = op.output.as_ref().map(|v| v.read().unwrap().get_size() as i64).unwrap_or(0);
+            let subcut = op
+                .inrefs
+                .get(1)
+                .map(|v| v.read().unwrap().get_offset() as i64)
+                .unwrap_or(0);
+            let out_size = op
+                .output
+                .as_ref()
+                .map(|v| v.read().unwrap().get_size() as i64)
+                .unwrap_or(0);
             (base, ext_code, in_vn, subcut, out_size)
         };
 
@@ -5853,7 +6318,9 @@ impl Rule2Comp2Mult {
 
 impl Rule for Rule2Comp2Mult {
     // Ghidra: ruleaction.cc:3987 Rule2Comp2Mult::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to Rule2Comp2Mult::applyOp (ruleaction.cc:3987-3995).
         // Ghidra INT_2COMP maps to Rugra INT_NEG (two's complement).
         let in0 = {
@@ -5861,7 +6328,8 @@ impl Rule for Rule2Comp2Mult {
             if op.opcode != OpCode::CPUI_INT_2COMP {
                 return Ok(action_status::NO_CHANGE);
             }
-            match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+            match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         let size = in0.read().unwrap().get_size();
         let follow = crate::op::PcodeOpRef(op_arc.clone());
@@ -5888,14 +6356,17 @@ impl Rule2Comp2Sub {
 
 impl Rule for Rule2Comp2Sub {
     // Ghidra: ruleaction.cc:7242 Rule2Comp2Sub::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to Rule2Comp2Sub::applyOp (ruleaction.cc:7242-7256).
         let in0 = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_2COMP {
                 return Ok(action_status::NO_CHANGE);
             }
-            match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+            match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         let size = in0.read().unwrap().get_size();
         let follow = crate::op::PcodeOpRef(op_arc.clone());
@@ -5923,16 +6394,20 @@ impl RuleCarryElim {
 
 impl Rule for RuleCarryElim {
     // Ghidra: ruleaction.cc:4008 RuleCarryElim::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleCarryElim::applyOp (ruleaction.cc:4008-4030).
         let (vn1, off, vn2_size) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_CARRY {
                 return Ok(action_status::NO_CHANGE);
             }
-            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !vn2.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
-            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if vn1.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
             let off = vn2.read().unwrap().get_offset();
             let sz = vn2.read().unwrap().get_size();
@@ -5973,19 +6448,25 @@ impl RuleConcatZext {
 
 impl Rule for RuleConcatZext {
     // Ghidra: ruleaction.cc:4814 RuleConcatZext::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleConcatZext::applyOp (ruleaction.cc:4814-4842).
         let (hi, lo, addr) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_PIECE {
                 return Ok(action_status::NO_CHANGE);
             }
-            let hi_in = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let hi_in = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !hi_in.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let zextop = match hi_in.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let zextop = match hi_in.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if zextop.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT { return Ok(action_status::NO_CHANGE); }
-            let hi = match zextop.read().unwrap().inrefs.get(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
-            let lo = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let hi = match zextop.read().unwrap().inrefs.get(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let lo = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if hi.read().unwrap().is_free() || lo.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
             (hi, lo, op.get_addr())
         };
@@ -6023,20 +6504,26 @@ impl RuleZextCommute {
 
 impl Rule for RuleZextCommute {
     // Ghidra: ruleaction.cc:4852 RuleZextCommute::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleZextCommute::applyOp (ruleaction.cc:4852-4875).
         let (zext_in, sa_vn, addr) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_RIGHT {
                 return Ok(action_status::NO_CHANGE);
             }
-            let zext_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let zext_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !zext_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let zextop = match zext_vn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let zextop = match zext_vn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if zextop.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT { return Ok(action_status::NO_CHANGE); }
-            let zext_in = match zextop.read().unwrap().inrefs.get(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let zext_in = match zextop.read().unwrap().inrefs.get(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if zext_in.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
-            let sa_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let sa_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !sa_vn.read().unwrap().is_constant() && sa_vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
             (zext_in, sa_vn, op.get_addr())
         };
@@ -6074,7 +6561,9 @@ impl RuleZextShiftZext {
 
 impl Rule for RuleZextShiftZext {
     // Ghidra: ruleaction.cc:4885 RuleZextShiftZext::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleZextShiftZext::applyOp (ruleaction.cc:4885-4919).
         let follow = crate::op::PcodeOpRef(op_arc.clone());
         let (in_vn, shiftop_code) = {
@@ -6082,7 +6571,8 @@ impl Rule for RuleZextShiftZext {
             if op.opcode != OpCode::CPUI_INT_ZEXT {
                 return Ok(action_status::NO_CHANGE);
             }
-            let in_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !in_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
             let shiftop_code = {
                 let in_rg = in_vn.read().unwrap();
@@ -6093,14 +6583,18 @@ impl Rule for RuleZextShiftZext {
             };
             (in_vn, shiftop_code)
         };
-        let shiftop = match in_vn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+        let shiftop = match in_vn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+        };
 
         if shiftop_code == OpCode::CPUI_INT_ZEXT {
             // Check for ZEXT(ZEXT(a)).
-            let vn = match shiftop.read().unwrap().inrefs.get(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let vn = match shiftop.read().unwrap().inrefs.get(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
             let lone = in_vn.read().unwrap().lone_descend();
-            if !lone.map(|o| std::sync::Arc::ptr_eq(&o, op_arc)).unwrap_or(false) {
+            if !lone
+                .map(|o| std::sync::Arc::ptr_eq(&o, op_arc))
+                .unwrap_or(false) {
                 return Ok(action_status::NO_CHANGE);
             }
             fd.op_set_input(&follow, vn, 0);
@@ -6110,21 +6604,46 @@ impl Rule for RuleZextShiftZext {
             return Ok(action_status::NO_CHANGE);
         }
         // Check for ZEXT(ZEXT(V) << c).
-        let shift_in1_const = shiftop.read().unwrap().get_in(1).map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+        let shift_in1_const = shiftop
+            .read()
+            .unwrap()
+            .get_in(1)
+            .map(|v| v.read().unwrap().is_constant())
+            .unwrap_or(false);
         if !shift_in1_const { return Ok(action_status::NO_CHANGE); }
-        let shift_in0 = match shiftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+        let shift_in0 = match shiftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+        };
         if !shift_in0.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-        let zext2op = match shift_in0.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+        let zext2op = match shift_in0.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+        };
         if zext2op.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT { return Ok(action_status::NO_CHANGE); }
-        let root_vn = match zext2op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+        let root_vn = match zext2op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+        };
         if root_vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
-        let sa = shiftop.read().unwrap().get_in(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
-        let zext2_out_size = zext2op.read().unwrap().output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+        let sa = shiftop
+            .read()
+            .unwrap()
+            .get_in(1)
+            .map(|v| v.read().unwrap().get_offset())
+            .unwrap_or(0);
+        let zext2_out_size = zext2op
+            .read()
+            .unwrap()
+            .output
+            .as_ref()
+            .map(|v| v.read().unwrap().get_size())
+            .unwrap_or(0);
         let root_size = root_vn.read().unwrap().get_size();
         if sa > 8 * (zext2_out_size - root_size) as u64 {
             return Ok(action_status::NO_CHANGE); // Shift might lose bits.
         }
-        let out_size = op_arc.read().unwrap().output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+        let out_size = op_arc
+            .read()
+            .unwrap()
+            .output
+            .as_ref()
+            .map(|v| v.read().unwrap().get_size())
+            .unwrap_or(0);
         let addr = op_arc.read().unwrap().get_addr();
         let new_op = fd.new_op(1, addr);
         fd.op_set_opcode(&new_op, OpCode::CPUI_INT_ZEXT);
@@ -6155,26 +6674,37 @@ impl RuleShiftSub {
 
 impl Rule for RuleShiftSub {
     // Ghidra: ruleaction.cc:5209 RuleShiftSub::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleShiftSub::applyOp (ruleaction.cc:5209-5230).
         let (shiftop_arc, vn, n, c, out_size, in1_size) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_SUBPIECE {
                 return Ok(action_status::NO_CHANGE);
             }
-            let base = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let base = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !base.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let shiftop = match base.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let shiftop = match base.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if shiftop.read().unwrap().opcode != OpCode::CPUI_INT_LEFT { return Ok(action_status::NO_CHANGE); }
-            let sa_vn = match shiftop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let sa_vn = match shiftop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !sa_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
             let n = sa_vn.read().unwrap().get_offset() as i64;
             if (n & 7) != 0 { return Ok(action_status::NO_CHANGE); }
-            let c_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let c_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let c = c_vn.read().unwrap().get_offset() as i64;
-            let vn = match shiftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let vn = match shiftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
-            let out_size = op.output.as_ref().map(|v| v.read().unwrap().get_size() as i64).unwrap_or(0);
+            let out_size = op
+                .output
+                .as_ref()
+                .map(|v| v.read().unwrap().get_size() as i64)
+                .unwrap_or(0);
             let in1_size = c_vn.read().unwrap().get_size();
             (shiftop, vn, n, c, out_size, in1_size)
         };
@@ -6208,26 +6738,44 @@ impl RuleHumptyDumpty {
 
 impl Rule for RuleHumptyDumpty {
     // Ghidra: ruleaction.cc:5243 RuleHumptyDumpty::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleHumptyDumpty::applyOp (ruleaction.cc:5243-5281).
         let (vn1, vn2, pos1, pos2, size1, size2, root) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_PIECE {
                 return Ok(action_status::NO_CHANGE);
             }
-            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !vn1.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let sub1 = match vn1.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let sub1 = match vn1.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if sub1.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return Ok(action_status::NO_CHANGE); }
-            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !vn2.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let sub2 = match vn2.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let sub2 = match vn2.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if sub2.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return Ok(action_status::NO_CHANGE); }
-            let root = match sub1.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
-            let root2 = match sub2.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let root = match sub1.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let root2 = match sub2.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !std::sync::Arc::ptr_eq(&root, &root2) { return Ok(action_status::NO_CHANGE); }
-            let pos1 = sub1.read().unwrap().get_in(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
-            let pos2 = sub2.read().unwrap().get_in(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+            let pos1 = sub1
+                .read()
+                .unwrap()
+                .get_in(1)
+                .map(|v| v.read().unwrap().get_offset())
+                .unwrap_or(0);
+            let pos2 = sub2
+                .read()
+                .unwrap()
+                .get_in(1)
+                .map(|v| v.read().unwrap().get_offset())
+                .unwrap_or(0);
             let size1 = vn1.read().unwrap().get_size();
             let size2 = vn2.read().unwrap().get_size();
             (vn1, vn2, pos1, pos2, size1, size2, root)
@@ -6270,21 +6818,35 @@ impl RuleDumptyHump {
 
 impl Rule for RuleDumptyHump {
     // Ghidra: ruleaction.cc:5296 RuleDumptyHump::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleDumptyHump::applyOp (ruleaction.cc:5296-5337).
         let (vn1, vn2, offset, out_size) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_SUBPIECE {
                 return Ok(action_status::NO_CHANGE);
             }
-            let base = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let base = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !base.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let pieceop = match base.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let pieceop = match base.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if pieceop.read().unwrap().opcode != OpCode::CPUI_PIECE { return Ok(action_status::NO_CHANGE); }
-            let offset = op.inrefs.get(1).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(0);
-            let out_size = op.output.as_ref().map(|v| v.read().unwrap().get_size() as i64).unwrap_or(0);
-            let vn1 = match pieceop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
-            let vn2 = match pieceop.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let offset = op
+                .inrefs
+                .get(1)
+                .map(|v| v.read().unwrap().get_offset() as i64)
+                .unwrap_or(0);
+            let out_size = op
+                .output
+                .as_ref()
+                .map(|v| v.read().unwrap().get_size() as i64)
+                .unwrap_or(0);
+            let vn1 = match pieceop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let vn2 = match pieceop.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             (vn1, vn2, offset, out_size)
         };
         let vn2_size = vn2.read().unwrap().get_size() as i64;
@@ -6338,7 +6900,9 @@ impl RuleSubCancel {
 
 impl Rule for RuleSubCancel {
     // Ghidra: ruleaction.cc:5137 RuleSubCancel::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Phase 1 — read-only inspection under the op read guard. No fd.op_* mutation may
         // run while this guard (or any other op read guard) is alive: op_set_input /
         // op_set_opcode (funcdata.rs opSetInput/opSetOpcode) take a WRITE lock on this same
@@ -6352,17 +6916,32 @@ impl Rule for RuleSubCancel {
             if op.opcode != OpCode::CPUI_SUBPIECE {
                 return Ok(action_status::NO_CHANGE);
             }
-            let base = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let base = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !base.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let extop = match base.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let extop = match base.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             let ext_code = extop.read().unwrap().opcode;
             if ext_code != OpCode::CPUI_INT_ZEXT && ext_code != OpCode::CPUI_INT_SEXT && ext_code != OpCode::CPUI_INT_AND {
                 return Ok(action_status::NO_CHANGE);
             }
-            let offset = op.inrefs.get(1).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(0);
-            let out_size = op.output.as_ref().map(|v| v.read().unwrap().get_size() as i64).unwrap_or(0);
+            let offset = op
+                .inrefs
+                .get(1)
+                .map(|v| v.read().unwrap().get_offset() as i64)
+                .unwrap_or(0);
+            let out_size = op
+                .output
+                .as_ref()
+                .map(|v| v.read().unwrap().get_size() as i64)
+                .unwrap_or(0);
             let in_size = base.read().unwrap().get_size() as i64;
-            let far_in_size = extop.read().unwrap().get_in(0).map(|v| v.read().unwrap().get_size() as i64).unwrap_or(0);
+            let far_in_size = extop
+                .read()
+                .unwrap()
+                .get_in(0)
+                .map(|v| v.read().unwrap().get_size() as i64)
+                .unwrap_or(0);
             (ext_code, extop, offset, out_size, in_size, far_in_size)
         };
         // INT_AND mask-cancel (Ghidra ruleaction.cc:5136-5146): SUBPIECE cancels an
@@ -6372,7 +6951,8 @@ impl Rule for RuleSubCancel {
         if ext_code == OpCode::CPUI_INT_AND {
             let and_cancel = {
                 let extop_r = extop.read().unwrap();
-                let cvn = match extop_r.get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+                let cvn = match extop_r.get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+                };
                 if offset == 0 && cvn.read().unwrap().is_constant() && cvn.read().unwrap().get_offset() == calc_mask(out_size as usize) {
                     match extop_r.get_in(0).cloned() {
                         Some(thru_vn) if !thru_vn.read().unwrap().is_free() => Some(thru_vn),
@@ -6389,7 +6969,8 @@ impl Rule for RuleSubCancel {
             }
             return Ok(action_status::NO_CHANGE);
         }
-        let thru_vn = match extop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+        let thru_vn = match extop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+        };
         // Determine the new opcode.
         let new_opc = if offset == 0 {
             let thru_free = thru_vn.read().unwrap().is_free();
@@ -6448,25 +7029,35 @@ impl RuleHumptyOr {
 
 impl Rule for RuleHumptyOr {
     // Ghidra: ruleaction.cc:5350 RuleHumptyOr::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleHumptyOr::applyOp (ruleaction.cc:5350-5420).
         let (a, b, c) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_OR {
                 return Ok(action_status::NO_CHANGE);
             }
-            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !vn1.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !vn2.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let and1 = match vn1.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let and1 = match vn1.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if and1.read().unwrap().opcode != OpCode::CPUI_INT_AND { return Ok(action_status::NO_CHANGE); }
-            let and2 = match vn2.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let and2 = match vn2.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if and2.read().unwrap().opcode != OpCode::CPUI_INT_AND { return Ok(action_status::NO_CHANGE); }
-            let a1 = match and1.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
-            let b1 = match and1.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
-            let c1 = match and2.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
-            let d1 = match and2.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let a1 = match and1.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let b1 = match and1.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let c1 = match and2.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let d1 = match and2.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             // Find the common varnode.
             let (a, b, c) = if std::sync::Arc::ptr_eq(&a1, &c1) {
                 (a1, b1, d1)
@@ -6548,9 +7139,13 @@ impl RuleSLess2Zero {
     /// Extract the high-bit varnode from an INT_ADD/INT_OR/INT_XOR op where
     /// one input is just the sign bit. Faithful to `getHiBit` (ruleaction.cc:5659-5682).
     // Ghidra: ruleaction.cc:5659 RuleSLess2Zero::getHiBit
-    fn get_hi_bit(op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+    fn get_hi_bit(
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
         let o = op.read().unwrap();
-        if !matches!(o.opcode, OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR) {
+        if !matches!(
+            o.opcode, OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR
+        ) {
             return None;
         }
         let vn1 = o.inrefs.get(0)?.clone();
@@ -6572,7 +7167,9 @@ impl RuleSLess2Zero {
 
 impl Rule for RuleSLess2Zero {
     // Ghidra: ruleaction.cc:5711 RuleSLess2Zero::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSLess2Zero::applyOp (ruleaction.cc:5711-5840).
         let (lvn, rvn) = {
             let op = op_arc.read().unwrap();
@@ -6602,7 +7199,9 @@ impl Rule for RuleSLess2Zero {
                     fd.new_constant(hibit_size, hibit_offset)
                 } else { hibit };
                 fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), new_in1, 1);
-                fd.op_set_opcode(&crate::op::PcodeOpRef(op_arc.clone()), OpCode::CPUI_INT_EQUAL);
+                fd.op_set_opcode(
+                    &crate::op::PcodeOpRef(op_arc.clone()), OpCode::CPUI_INT_EQUAL,
+                );
                 let _const = fd.new_constant(hibit_size, 0);
                 fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), _const, 0);
                 return Ok(action_status::CHANGE);
@@ -6610,7 +7209,13 @@ impl Rule for RuleSLess2Zero {
             // SUBPIECE: -1 s< SUB(avn, #hi) => -1 s< avn
             if feed_opc == OpCode::CPUI_SUBPIECE {
                 let avn = feed_op.read().unwrap().inrefs.get(0).cloned();
-                let hi_off = feed_op.read().unwrap().inrefs.get(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                let hi_off = feed_op
+                    .read()
+                    .unwrap()
+                    .inrefs
+                    .get(1)
+                    .map(|v| v.read().unwrap().get_offset())
+                    .unwrap_or(0);
                 if let Some(avn) = avn {
                     let avn_size = avn.read().unwrap().get_size();
                     let rvn_size = rvn.read().unwrap().get_size();
@@ -6670,13 +7275,21 @@ impl Rule for RuleSLess2Zero {
                     fd.new_constant(hibit_size, hibit_offset)
                 } else { hibit };
                 fd.op_set_input(&crate::op::PcodeOpRef(op_arc.clone()), new_in0, 0);
-                fd.op_set_opcode(&crate::op::PcodeOpRef(op_arc.clone()), OpCode::CPUI_INT_NOTEQUAL);
+                fd.op_set_opcode(
+                    &crate::op::PcodeOpRef(op_arc.clone()), OpCode::CPUI_INT_NOTEQUAL,
+                );
                 return Ok(action_status::CHANGE);
             }
             // SUBPIECE: SUB(avn, #hi) s< 0 => avn s< 0
             if feed_opc == OpCode::CPUI_SUBPIECE {
                 let avn = feed_op.read().unwrap().inrefs.get(0).cloned();
-                let hi_off = feed_op.read().unwrap().inrefs.get(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
+                let hi_off = feed_op
+                    .read()
+                    .unwrap()
+                    .inrefs
+                    .get(1)
+                    .map(|v| v.read().unwrap().get_offset())
+                    .unwrap_or(0);
                 if let Some(avn) = avn {
                     let avn_size = avn.read().unwrap().get_size();
                     let lvn_size = lvn.read().unwrap().get_size();
@@ -6729,7 +7342,9 @@ impl RulePopcountBoolXor {
     fn get_boolean_result(
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         mut bit_pos: i32,
-    ) -> (Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>, i32) {
+    ) -> (
+        Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>, i32,
+    ) {
         let mut mask: u64 = 1u64 << bit_pos;
         let mut cur_vn = vn.clone();
         loop {
@@ -6805,7 +7420,9 @@ impl RulePopcountBoolXor {
 
 impl Rule for RulePopcountBoolXor {
     // Ghidra: ruleaction.cc:10276 RulePopcountBoolXor::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RulePopcountBoolXor::applyOp (ruleaction.cc:10276-10321).
         // Find INT_AND(&1) descendants of the POPCOUNT output.
         let descendents: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = {
@@ -6817,12 +7434,14 @@ impl Rule for RulePopcountBoolXor {
         };
         let in_vn = {
             let op = op_arc.read().unwrap();
-            match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+            match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         for base_op in descendents {
             let base = base_op.read().unwrap();
             if base.opcode != OpCode::CPUI_INT_AND { continue; }
-            let tmp_vn = match base.inrefs.get(1) { Some(v) => v.clone(), None => continue };
+            let tmp_vn = match base.inrefs.get(1) { Some(v) => v.clone(), None => continue ,
+            };
             let tmp = tmp_vn.read().unwrap();
             if !tmp.is_constant() { continue; }
             if tmp.get_offset() != 1 { continue; } // Masking 1 bit = parity check
@@ -6880,15 +7499,19 @@ impl RuleEqual2Zero {
 
 impl Rule for RuleEqual2Zero {
     // Ghidra: ruleaction.cc:5868 RuleEqual2Zero::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleEqual2Zero::applyOp (ruleaction.cc:5868-5924).
         let (addvn, central_opc) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_EQUAL && op.opcode != OpCode::CPUI_INT_NOTEQUAL {
                 return Ok(action_status::NO_CHANGE);
             }
-            let vn0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             // Find which input is zero.
             let addvn = if vn0.read().unwrap().is_constant() && vn0.read().unwrap().get_offset() == 0 {
                 vn1
@@ -6908,7 +7531,8 @@ impl Rule for RuleEqual2Zero {
         }
         // Get the addop.
         if !addvn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-        let addop = match addvn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+        let addop = match addvn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+        };
         if addop.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return Ok(action_status::NO_CHANGE); }
         let vn = addop.read().unwrap().inrefs.get(0).cloned();
         let vn2 = addop.read().unwrap().inrefs.get(1).cloned();
@@ -6926,7 +7550,9 @@ impl Rule for RuleEqual2Zero {
             // uintb_negate(val-1, size) = (~val+1) & mask = -val & mask
             let _ = neg_val;
             let negated = (0i64.wrapping_sub(val as i64) as u64) & calc_mask(vn2.read().unwrap().get_size());
-            (vn.clone(), fd.new_constant(vn2.read().unwrap().get_size(), negated))
+            (
+                vn.clone(), fd.new_constant(vn2.read().unwrap().get_size(), negated),
+            )
         } else {
             // Check for INT_MULT by -1.
             let (negvn, posvn) = if vn.read().unwrap().is_written() {
@@ -6956,10 +7582,13 @@ impl Rule for RuleEqual2Zero {
             };
             // Verify the multiplier is -1.
             let negvn_def = negvn.read().unwrap().get_def();
-            let negop = match negvn_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
-            let mult_const = match negop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let negop = match negvn_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let mult_const = match negop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !mult_const.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
-            let unnegvn = match negop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let unnegvn = match negop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             let multiplier = mult_const.read().unwrap().get_offset();
             if multiplier != calc_mask(unnegvn.read().unwrap().get_size()) { return Ok(action_status::NO_CHANGE); }
             (posvn, unnegvn)
@@ -6990,7 +7619,9 @@ impl RuleShiftAnd {
 
 impl Rule for RuleShiftAnd {
     // Ghidra: ruleaction.cc:4933 RuleShiftAnd::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleShiftAnd::applyOp (ruleaction.cc:4933-4975).
         use crate::address::leastsigbit_set;
         let (opc, cvn_val, shiftin, mask, invn, in_size) = {
@@ -6999,26 +7630,31 @@ impl Rule for RuleShiftAnd {
             if opc != OpCode::CPUI_INT_RIGHT && opc != OpCode::CPUI_INT_LEFT && opc != OpCode::CPUI_INT_MULT {
                 return Ok(action_status::NO_CHANGE);
             }
-            let cvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let cvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let cvn_val = {
                 let r = cvn.read().unwrap();
                 if !r.is_constant() { return Ok(action_status::NO_CHANGE); }
                 r.get_offset()
             };
-            let shiftin = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let shiftin = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let andop = {
                 let r = shiftin.read().unwrap();
                 if !r.is_written() { return Ok(action_status::NO_CHANGE); }
-                match r.get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) }
+                match r.get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+                }
             };
             if andop.read().unwrap().opcode != OpCode::CPUI_INT_AND { return Ok(action_status::NO_CHANGE); }
-            let maskvn = match andop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let maskvn = match andop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let mask = {
                 let r = maskvn.read().unwrap();
                 if !r.is_constant() { return Ok(action_status::NO_CHANGE); }
                 r.get_offset()
             };
-            let invn = match andop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let invn = match andop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             let in_size = {
                 let r = invn.read().unwrap();
                 if r.is_free() { return Ok(action_status::NO_CHANGE); }
@@ -7055,7 +7691,9 @@ impl Rule for RuleShiftAnd {
     // Ghidra: ruleaction.cc:4921 RuleShiftAnd
     fn get_name(&self) -> &str { "shiftand" }
     // Ghidra: ruleaction.cc:4925 RuleShiftAnd::getOpList
-    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_MULT] }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![
+            OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_LEFT, OpCode::CPUI_INT_MULT,
+        ] }
 }
 
 /// Flip a CBRANCH with a boolean-flip flag. Faithful to Ghidra's
@@ -7072,7 +7710,9 @@ impl RuleCondNegate {
 
 impl Rule for RuleCondNegate {
     // Ghidra: ruleaction.cc:5492 RuleCondNegate::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleCondNegate::applyOp (ruleaction.cc:5492-5510).
         let is_flip = {
             let op = op_arc.read().unwrap();
@@ -7112,22 +7752,31 @@ impl RuleXorSwap {
 
 impl Rule for RuleXorSwap {
     // Ghidra: ruleaction.cc:10625 RuleXorSwap::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleXorSwap::applyOp (ruleaction.cc:10625-10650).
         let (othervn, match_vn) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_XOR {
                 return Ok(action_status::NO_CHANGE);
             }
-            let mut result: Option<(std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>)> = None;
+            let mut result: Option<(
+                std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+            )> = None;
             for i in 0..2 {
-                let vn = match op.inrefs.get(i) { Some(v) => v.clone(), None => continue };
+                let vn = match op.inrefs.get(i) { Some(v) => v.clone(), None => continue ,
+                };
                 if !vn.read().unwrap().is_written() { continue; }
-                let op2 = match vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+                let op2 = match vn.read().unwrap().get_def() { Some(d) => d, None => continue ,
+                };
                 if op2.read().unwrap().opcode != OpCode::CPUI_INT_XOR { continue; }
-                let othervn = match op.inrefs.get(1 - i) { Some(v) => v.clone(), None => continue };
-                let vn0 = match op2.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
-                let vn1 = match op2.read().unwrap().get_in(1).cloned() { Some(v) => v, None => continue };
+                let othervn = match op.inrefs.get(1 - i) { Some(v) => v.clone(), None => continue ,
+                };
+                let vn0 = match op2.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue ,
+                };
+                let vn1 = match op2.read().unwrap().get_in(1).cloned() { Some(v) => v, None => continue ,
+                };
                 if std::sync::Arc::ptr_eq(&othervn, &vn0) && !vn1.read().unwrap().is_free() {
                     result = Some((othervn, vn1));
                     break;
@@ -7136,7 +7785,8 @@ impl Rule for RuleXorSwap {
                     break;
                 }
             }
-            match result { Some((o, m)) => (o, m), None => return Ok(action_status::NO_CHANGE) }
+            match result { Some((o, m)) => (o, m), None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         let follow = crate::op::PcodeOpRef(op_arc.clone());
         fd.op_remove_input(&follow, 1);
@@ -7166,30 +7816,39 @@ impl RuleEqual2Constant {
 
 impl Rule for RuleEqual2Constant {
     // Ghidra: ruleaction.cc:5940 RuleEqual2Constant::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleEqual2Constant::applyOp (ruleaction.cc:5940-5990).
         let (cvn_val, lhs, leftop_code, otherconst_val, otherconst_size, a) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_EQUAL && op.opcode != OpCode::CPUI_INT_NOTEQUAL {
                 return Ok(action_status::NO_CHANGE);
             }
-            let cvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let cvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !cvn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
             let cvn_val = cvn.read().unwrap().get_offset();
-            let lhs = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let lhs = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !lhs.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let leftop = match lhs.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let leftop = match lhs.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             let leftop_code = leftop.read().unwrap().opcode;
             if leftop_code != OpCode::CPUI_INT_ADD && leftop_code != OpCode::CPUI_INT_MULT {
                 return Ok(action_status::NO_CHANGE);
             }
-            let otherconst = match leftop.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let otherconst = match leftop.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !otherconst.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
             let otherconst_val = otherconst.read().unwrap().get_offset();
             let otherconst_size = otherconst.read().unwrap().get_size();
-            let a = match leftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let a = match leftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if a.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
-            (cvn_val, lhs, leftop_code, otherconst_val, otherconst_size, a)
+            (
+                cvn_val, lhs, leftop_code, otherconst_val, otherconst_size, a,
+            )
         };
         let new_const = if leftop_code == OpCode::CPUI_INT_ADD {
             (cvn_val.wrapping_sub(otherconst_val)) & calc_mask(otherconst_size)
@@ -7234,14 +7893,17 @@ impl RuleOrCompare {
 
 impl Rule for RuleOrCompare {
     // Ghidra: ruleaction.cc:10814 RuleOrCompare::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleOrCompare::applyOp (ruleaction.cc:10814-10872).
         let (central_opc, v, w, out_vn) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_OR {
                 return Ok(action_status::NO_CHANGE);
             }
-            let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             // Check all descendants are comparisons against 0.
             let descends: Vec<_> = out_vn.read().unwrap().descend_iter().collect();
             if descends.is_empty() { return Ok(action_status::NO_CHANGE); }
@@ -7251,14 +7913,17 @@ impl Rule for RuleOrCompare {
                 if comp_code != OpCode::CPUI_INT_EQUAL && comp_code != OpCode::CPUI_INT_NOTEQUAL {
                     return Ok(action_status::NO_CHANGE);
                 }
-                let comp_in1 = match comp_op.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                let comp_in1 = match comp_op.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+                };
                 if !comp_in1.read().unwrap().is_constant() || comp_in1.read().unwrap().get_offset() != 0 {
                     return Ok(action_status::NO_CHANGE);
                 }
                 central_opc = Some(comp_code);
             }
-            let v = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let w = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let v = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let w = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if v.read().unwrap().is_free() || w.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
             (central_opc.unwrap(), v, w, out_vn)
         };
@@ -7314,38 +7979,50 @@ impl RuleConcatCommute {
 
 impl Rule for RuleConcatCommute {
     // Ghidra: ruleaction.cc:4687 RuleConcatCommute::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleConcatCommute::applyOp (ruleaction.cc:4687-4748).
         let (opc, hi, lo, val, out_size) = {
             let op = op_arc.read().unwrap();
-            let out_size = match op.output.as_ref() { Some(o) => o.read().unwrap().get_size(), None => return Ok(action_status::NO_CHANGE) };
+            let out_size = match op.output.as_ref() { Some(o) => o.read().unwrap().get_size(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if out_size > 8 { return Ok(action_status::NO_CHANGE); }
             if op.opcode != OpCode::CPUI_PIECE {
                 return Ok(action_status::NO_CHANGE);
             }
-            let mut found: Option<(OpCode, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, u64)> = None;
+            let mut found: Option<(
+                OpCode, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, u64,
+            )> = None;
             for i in 0..2 {
-                let vn = match op.inrefs.get(i) { Some(v) => v.clone(), None => continue };
+                let vn = match op.inrefs.get(i) { Some(v) => v.clone(), None => continue ,
+                };
                 if !vn.read().unwrap().is_written() { continue; }
-                let logicop = match vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+                let logicop = match vn.read().unwrap().get_def() { Some(d) => d, None => continue ,
+                };
                 let opc = logicop.read().unwrap().opcode;
                 if opc != OpCode::CPUI_INT_OR && opc != OpCode::CPUI_INT_XOR && opc != OpCode::CPUI_INT_AND {
                     continue;
                 }
-                let constvn = match logicop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+                let constvn = match logicop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue ,
+                };
                 if !constvn.read().unwrap().is_constant() { continue; }
                 let mut val = constvn.read().unwrap().get_offset();
                 let (hi, lo) = if i == 0 {
-                    let hi = match logicop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
-                    let lo = match op.inrefs.get(1) { Some(v) => v.clone(), None => continue };
+                    let hi = match logicop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue ,
+                    };
+                    let lo = match op.inrefs.get(1) { Some(v) => v.clone(), None => continue ,
+                    };
                     val <<= 8 * lo.read().unwrap().get_size();
                     if opc == OpCode::CPUI_INT_AND {
                         val |= calc_mask(lo.read().unwrap().get_size());
                     }
                     (hi, lo)
                 } else {
-                    let hi = match op.inrefs.get(0) { Some(v) => v.clone(), None => continue };
-                    let lo = match logicop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
+                    let hi = match op.inrefs.get(0) { Some(v) => v.clone(), None => continue ,
+                    };
+                    let lo = match logicop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue ,
+                    };
                     if opc == OpCode::CPUI_INT_AND {
                         val |= calc_mask(hi.read().unwrap().get_size()) << (8 * lo.read().unwrap().get_size());
                     }
@@ -7400,7 +8077,9 @@ impl RuleSubCommute {
 
 impl Rule for RuleSubCommute {
     // Ghidra: ruleaction.cc:4534 RuleSubCommute::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSubCommute::applyOp (ruleaction.cc:4534-4673).
         // This rule triggers on CPUI_SUBPIECE.
         let op_addr = { op_arc.read().unwrap().start.get_addr() };
@@ -7417,7 +8096,8 @@ impl Rule for RuleSubCommute {
             if outvn_size > 8 { return Ok(action_status::NO_CHANGE); }
             // isPrecisLo/Hi check omitted (Rugra has no precis flags; the
             // check would return false anyway).
-            let base = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let base = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !base.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
             let offset = match op.inrefs.get(1) {
                 Some(v) => {
@@ -7437,8 +8117,13 @@ impl Rule for RuleSubCommute {
 
         // Determine if the longform op commutes with SUBPIECE (cc:4545-4638).
         let longform_opc = longform_arc.read().unwrap().opcode;
-        let insize = longform_arc.read().unwrap().output.as_ref()
-            .map(|o| o.read().unwrap().get_size()).unwrap_or(0);
+        let insize = longform_arc
+            .read()
+            .unwrap()
+            .output
+            .as_ref()
+            .map(|o| o.read().unwrap().get_size())
+            .unwrap_or(0);
         let j: i32; // special input slot (-1 = none)
         match longform_opc {
             OpCode::CPUI_INT_LEFT => {
@@ -7446,7 +8131,8 @@ impl Rule for RuleSubCommute {
                 if offset != 0 { return Ok(action_status::NO_CHANGE); }
                 // longform->getIn(0) must be written and be ZEXT or PIECE.
                 let in0 = longform_arc.read().unwrap().inrefs.get(0).cloned();
-                let in0 = match in0 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                let in0 = match in0 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+                };
                 if !in0.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
                 let in0_def = match in0.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
                     Some(a) => a, None => return Ok(action_status::NO_CHANGE),
@@ -7461,7 +8147,8 @@ impl Rule for RuleSubCommute {
                 if offset != 0 { return Ok(action_status::NO_CHANGE); }
                 // longform->getIn(0) must be INT_ZEXT.
                 let in0 = longform_arc.read().unwrap().inrefs.get(0).cloned();
-                let in0 = match in0 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                let in0 = match in0 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+                };
                 if !in0.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
                 let in0_def = match in0.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
                     Some(a) => a, None => return Ok(action_status::NO_CHANGE),
@@ -7470,7 +8157,8 @@ impl Rule for RuleSubCommute {
                     return Ok(action_status::NO_CHANGE);
                 }
                 let zext0_in = in0_def.read().unwrap().inrefs.get(0).cloned();
-                let zext0_in = match zext0_in { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                let zext0_in = match zext0_in { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+                };
                 if zext0_in.read().unwrap().get_size() > outvn_size {
                     // Partial commute (cancelExtensions) — deferred for simplicity.
                     return Ok(action_status::NO_CHANGE);
@@ -7527,7 +8215,8 @@ impl Rule for RuleSubCommute {
         let lone = {
             let out_vn = {
                 let base_g = longform_arc.read().unwrap();
-                match base_g.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) }
+                match base_g.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+                }
             };
             let out_g = out_vn.read().unwrap();
             out_g.lone_descend()
@@ -7542,7 +8231,9 @@ impl Rule for RuleSubCommute {
         // SUBPIECE inside (cc:4651-4669).
         let num_inputs = longform_arc.read().unwrap().inrefs.len();
         let outvn = op_arc.read().unwrap().output.as_ref().unwrap().clone();
-        let mut new_vn_for: Vec<Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>> = Vec::with_capacity(num_inputs);
+        let mut new_vn_for: Vec<
+            Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+        > = Vec::with_capacity(num_inputs);
         new_vn_for.resize(num_inputs, None);
         let inputs_snapshot: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
             longform_arc.read().unwrap().inrefs.clone();
@@ -7551,7 +8242,10 @@ impl Rule for RuleSubCommute {
         for i in 0..num_inputs {
             let vn = inputs_snapshot[i].clone();
             if i as i32 != j {
-                let dup = last_in.as_ref().map(|p| std::sync::Arc::ptr_eq(p, &vn)).unwrap_or(false) && new_vn.is_some();
+                let dup = last_in
+                    .as_ref()
+                    .map(|p| std::sync::Arc::ptr_eq(p, &vn))
+                    .unwrap_or(false) && new_vn.is_some();
                 if !dup {
                     // newsub = newOp(2); opSetOpcode(SUBPIECE); newUniqueOut(outvn_size)
                     let newsub = fd.new_op(2, op_addr.clone());
@@ -7562,7 +8256,9 @@ impl Rule for RuleSubCommute {
                     fd.op_set_input(&newsub, offset_const, 1);
                     fd.op_insert_before(&newsub, &crate::op::PcodeOpRef(longform_arc.clone()));
                     new_vn = Some(newout);
-                    fd.op_set_input(&crate::op::PcodeOpRef(longform_arc.clone()), new_vn.clone().unwrap(), i);
+                    fd.op_set_input(
+                        &crate::op::PcodeOpRef(longform_arc.clone()), new_vn.clone().unwrap(), i,
+                    );
                 } else if let Some(ref nv) = new_vn {
                     fd.op_set_input(&crate::op::PcodeOpRef(longform_arc.clone()), nv.clone(), i);
                 }
@@ -7602,7 +8298,9 @@ impl RuleLzcountShiftBool {
 
 impl Rule for RuleLzcountShiftBool {
     // Ghidra: ruleaction.cc:10666 RuleLzcountShiftBool::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleLzcountShiftBool::applyOp (ruleaction.cc:10666-10712).
         use crate::utils::bits::popcount;
         let (out_vn, max_return, in0) = {
@@ -7610,8 +8308,10 @@ impl Rule for RuleLzcountShiftBool {
             if op.opcode != OpCode::CPUI_LZCOUNT {
                 return Ok(action_status::NO_CHANGE);
             }
-            let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let max_return = 8 * in0.read().unwrap().get_size() as u64;
             (out_vn, max_return, in0)
         };
@@ -7646,7 +8346,13 @@ impl Rule for RuleLzcountShiftBool {
             fd.op_insert_before(&new_op, &base_ref);
             // Rewrite the shift op as COPY or ZEXT of the boolean result.
             fd.op_remove_input(&base_ref, 1);
-            let base_out_size = base_op_arc.read().unwrap().output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(1);
+            let base_out_size = base_op_arc
+                .read()
+                .unwrap()
+                .output
+                .as_ref()
+                .map(|v| v.read().unwrap().get_size())
+                .unwrap_or(1);
             if base_out_size == 1 {
                 fd.op_set_opcode(&base_ref, OpCode::CPUI_COPY);
             } else {
@@ -7761,7 +8467,9 @@ impl RuleThreeWayCompare {
 
 impl Rule for RuleThreeWayCompare {
     // Ghidra: ruleaction.cc:10146 RuleThreeWayCompare::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleThreeWayCompare::applyOp (ruleaction.cc:10146-10263).
         let (const_slot, val, tmp_vn, op_code) = {
             let op = op_arc.read().unwrap();
@@ -7773,10 +8481,12 @@ impl Rule for RuleThreeWayCompare {
             }
             // Find constant input.
             let mut const_slot = 0;
-            let mut tmp_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let mut tmp_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !tmp_vn.read().unwrap().is_constant() {
                 const_slot = 1;
-                tmp_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+                tmp_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+                };
                 if !tmp_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
             }
             let val = tmp_vn.read().unwrap().get_offset();
@@ -7788,11 +8498,13 @@ impl Rule for RuleThreeWayCompare {
             } else {
                 return Ok(action_status::NO_CHANGE);
             };
-            let tmp2 = match op.inrefs.get(1 - const_slot) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let tmp2 = match op.inrefs.get(1 - const_slot) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (const_slot, form, tmp2, opc)
         };
         if !tmp_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-        let addop = match tmp_vn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+        let addop = match tmp_vn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+        };
         if addop.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return Ok(action_status::NO_CHANGE); }
         let (lessop, is_partial) = match Self::detect_three_way(&addop) {
             Some((l, p)) => (l, p),
@@ -7812,7 +8524,8 @@ impl Rule for RuleThreeWayCompare {
         else if op_code == OpCode::CPUI_INT_NOTEQUAL { form += 3; }
         let b_vn = lessop.read().unwrap().get_in(0).cloned();
         let a_vn = lessop.read().unwrap().get_in(1).cloned();
-        let (Some(a_vn), Some(b_vn)) = (a_vn, b_vn) else { return Ok(action_status::NO_CHANGE) };
+        let (Some(a_vn), Some(b_vn)) = (a_vn, b_vn) else { return Ok(action_status::NO_CHANGE) ;
+        };
         if !a_vn.read().unwrap().is_constant() && a_vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
         if !b_vn.read().unwrap().is_constant() && b_vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
 
@@ -7885,7 +8598,9 @@ impl Rule for RuleThreeWayCompare {
     fn get_name(&self) -> &str { "threewaycomp" }
     // Ghidra: ruleaction.cc:10137 RuleThreeWayCompare::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
-        vec![OpCode::CPUI_INT_SLESS, OpCode::CPUI_INT_SLESSEQUAL, OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL]
+        vec![
+            OpCode::CPUI_INT_SLESS, OpCode::CPUI_INT_SLESSEQUAL, OpCode::CPUI_INT_EQUAL, OpCode::CPUI_INT_NOTEQUAL,
+        ]
     }
 }
 
@@ -7904,14 +8619,17 @@ impl RuleMultiCollapse {
 
 impl Rule for RuleMultiCollapse {
     // Ghidra: ruleaction.cc:3234 RuleMultiCollapse::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleMultiCollapse::applyOp (ruleaction.cc:3234-3343).
         use crate::expression::functional_equality_level;
 
         let num_input = op_arc.read().unwrap().inrefs.len();
         // cc:3243-3244: all direct inputs must have completed Heritage.
         for i in 0..num_input {
-            let vn = match op_arc.read().unwrap().inrefs.get(i) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn = match op_arc.read().unwrap().inrefs.get(i) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !vn.read().unwrap().is_heritage_known() { return Ok(action_status::NO_CHANGE); }
         }
 
@@ -7930,7 +8648,8 @@ impl Rule for RuleMultiCollapse {
             let is_written = copyr.read().unwrap().is_written();
             let is_multiequal = if is_written {
                 let def = copyr.read().unwrap().get_def();
-                match def { Some(d) => d.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL, None => false }
+                match def { Some(d) => d.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL, None => false ,
+                }
             } else { false };
             if !is_written || !is_multiequal {
                 defcopyr = Some(copyr);
@@ -7939,7 +8658,8 @@ impl Rule for RuleMultiCollapse {
         }
 
         // Mark the output for loop-construct detection.
-        let out_vn = match op_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let out_vn = match op_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         out_vn.write().unwrap().set_mark();
         skiplist.push(out_vn.clone());
 
@@ -7958,7 +8678,8 @@ impl Rule for RuleMultiCollapse {
                 if is_written {
                     let is_multiequal = {
                         let def = copyr.read().unwrap().get_def();
-                        match def { Some(d) => d.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL, None => false }
+                        match def { Some(d) => d.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL, None => false ,
+                        }
                     };
                     if is_multiequal { nofunc = true; }
                 } else {
@@ -8009,7 +8730,8 @@ impl Rule for RuleMultiCollapse {
                 let is_written = copyr.read().unwrap().is_written();
                 let is_multiequal = if is_written {
                     let def = copyr.read().unwrap().get_def();
-                    match def { Some(d) => d.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL, None => false }
+                    match def { Some(d) => d.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL, None => false ,
+                    }
                 } else { false };
                 if is_multiequal {
                     let newop = copyr.read().unwrap().get_def().unwrap();
@@ -8029,11 +8751,14 @@ impl Rule for RuleMultiCollapse {
         }
 
         if success {
-            let defining_branch = defcopyr.as_ref().ok_or_else(|| {
+            let defining_branch = defcopyr
+                .as_ref()
+                .ok_or_else(|| {
                 crate::error::Error::Lowlevel(
                     "RuleMultiCollapse succeeded without a defining branch".to_string(),
                 )
-            })?.clone();
+            })?
+                .clone();
             for copyr in &skiplist {
                 // cc:3300-3303: process every skip-list entry in discovery
                 // order, including the root output at index zero.
@@ -8049,17 +8774,31 @@ impl Rule for RuleMultiCollapse {
                     // cc:3304-3331: find the earliest same-block use, then
                     // search CSE through only the template's first
                     // non-constant input.
-                    let parent = def_ref.0.read().unwrap().parent.as_ref()
+                    let parent = def_ref
+                        .0
+                        .read()
+                        .unwrap()
+                        .parent
+                        .as_ref()
                         .and_then(std::sync::Weak::upgrade)
-                        .ok_or_else(|| crate::error::Error::Lowlevel(
+                        .ok_or_else(|| {
+                            crate::error::Error::Lowlevel(
                             "RuleMultiCollapse operation has no parent block".to_string(),
-                        ))?;
+                        )
+                        })?;
                     let descendants: Vec<_> = copyr.read().unwrap().descend_iter().collect();
-                    let earliest = descendants.into_iter()
-                        .filter(|candidate| candidate.read().unwrap().parent.as_ref()
+                    let earliest = descendants
+                        .into_iter()
+                        .filter(|candidate| {
+                            candidate
+                                .read()
+                                .unwrap()
+                                .parent
+                                .as_ref()
                             .and_then(std::sync::Weak::upgrade)
                             .map(|block| std::sync::Arc::ptr_eq(&block, &parent))
-                            .unwrap_or(false))
+                            .unwrap_or(false)
+                        })
                         .map(crate::op::PcodeOpRef)
                         .min_by_key(|candidate| candidate.0.read().unwrap().get_seq_num().order);
                     let source_op = defining_branch.read().unwrap().get_def().ok_or_else(|| {
@@ -8072,16 +8811,20 @@ impl Rule for RuleMultiCollapse {
                         let source = source_ref.0.read().unwrap();
                         (source.opcode, source.inrefs.clone())
                     };
-                    let substitute = source_inputs.iter()
+                    let substitute = source_inputs
+                        .iter()
                         .find(|input| !input.read().unwrap().is_constant())
-                        .and_then(|input| fd.cse_find_in_block(
-                            &source_ref, input, &parent, earliest.as_ref(),
-                        ));
+                        .and_then(|input| {
+                            fd.cse_find_in_block(
+                            &source_ref, input, &parent, earliest.as_ref())
+                        });
                     if let Some(substitute) = substitute {
                         let substitute_out = substitute.0.read().unwrap().output.clone()
-                            .ok_or_else(|| crate::error::Error::Lowlevel(
+                            .ok_or_else(|| {
+                                crate::error::Error::Lowlevel(
                                 "RuleMultiCollapse CSE substitute has no output".to_string(),
-                            ))?;
+                            )
+                            })?;
                         // RULE-SUBCANCEL-RWLOCK-0001 audit: total_replace write-locks
                         // every descendant op of copyr; the source_ref guard above is
                         // block-scoped (ends before this) — keep it that way.
@@ -8132,43 +8875,57 @@ impl RuleSignDiv2 {
 
 impl Rule for RuleSignDiv2 {
     // Ghidra: ruleaction.cc:8365 RuleSignDiv2::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSignDiv2::applyOp (ruleaction.cc:8365-8408).
         let a = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_SRIGHT { return Ok(action_status::NO_CHANGE); }
-            let sa_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let sa_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !sa_vn.read().unwrap().is_constant() || sa_vn.read().unwrap().get_offset() != 1 { return Ok(action_status::NO_CHANGE); }
-            let addout = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let addout = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !addout.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let addop = match addout.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let addop = match addout.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if addop.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return Ok(action_status::NO_CHANGE); }
             // Search for the mult+shift pattern in addop's inputs.
             let mut found_a: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
             for i in 0..2 {
-                let multout = match addop.read().unwrap().get_in(i) { Some(v) => v.clone(), None => continue };
+                let multout = match addop.read().unwrap().get_in(i) { Some(v) => v.clone(), None => continue ,
+                };
                 if !multout.read().unwrap().is_written() { continue; }
-                let multop = match multout.read().unwrap().get_def() { Some(d) => d, None => continue };
+                let multop = match multout.read().unwrap().get_def() { Some(d) => d, None => continue ,
+                };
                 if multop.read().unwrap().opcode != OpCode::CPUI_INT_MULT { continue; }
-                let mult_const = match multop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+                let mult_const = match multop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue ,
+                };
                 if !mult_const.read().unwrap().is_constant() { continue; }
                 if mult_const.read().unwrap().get_offset() != calc_mask(mult_const.read().unwrap().get_size()) { continue; }
-                let shiftout = match multop.read().unwrap().get_in(0) { Some(v) => v.clone(), None => continue };
+                let shiftout = match multop.read().unwrap().get_in(0) { Some(v) => v.clone(), None => continue ,
+                };
                 if !shiftout.read().unwrap().is_written() { continue; }
-                let shiftop = match shiftout.read().unwrap().get_def() { Some(d) => d, None => continue };
+                let shiftop = match shiftout.read().unwrap().get_def() { Some(d) => d, None => continue ,
+                };
                 if shiftop.read().unwrap().opcode != OpCode::CPUI_INT_SRIGHT { continue; }
-                let shift_sa = match shiftop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+                let shift_sa = match shiftop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue ,
+                };
                 if !shift_sa.read().unwrap().is_constant() { continue; }
                 let n = shift_sa.read().unwrap().get_offset();
-                let candidate_a = match shiftop.read().unwrap().get_in(0) { Some(v) => v.clone(), None => continue };
-                let other_input = match addop.read().unwrap().get_in(1 - i) { Some(v) => v.clone(), None => continue };
+                let candidate_a = match shiftop.read().unwrap().get_in(0) { Some(v) => v.clone(), None => continue ,
+                };
+                let other_input = match addop.read().unwrap().get_in(1 - i) { Some(v) => v.clone(), None => continue ,
+                };
                 if !std::sync::Arc::ptr_eq(&candidate_a, &other_input) { continue; }
                 if n != 8 * candidate_a.read().unwrap().get_size() as u64 - 1 { continue; }
                 if candidate_a.read().unwrap().is_free() { continue; }
                 found_a = Some(candidate_a);
                 break;
             }
-            match found_a { Some(a) => a, None => return Ok(action_status::NO_CHANGE) }
+            match found_a { Some(a) => a, None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         let a_size = a.read().unwrap().get_size();
         let follow = crate::op::PcodeOpRef(op_arc.clone());
@@ -8196,28 +8953,34 @@ impl RuleDivChain {
 
 impl Rule for RuleDivChain {
     // Ghidra: ruleaction.cc:8419 RuleDivChain::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleDivChain::applyOp (ruleaction.cc:8419-8455).
         let (opc2, vn, const_vn2_val) = {
             let op = op_arc.read().unwrap();
             let opc2 = op.opcode;
             if opc2 != OpCode::CPUI_INT_DIV && opc2 != OpCode::CPUI_INT_SDIV { return Ok(action_status::NO_CHANGE); }
-            let const_vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let const_vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let const_vn2_val = {
                 let r = const_vn2.read().unwrap();
                 if !r.is_constant() { return Ok(action_status::NO_CHANGE); }
                 r.get_offset()
             };
-            let vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (opc2, vn, const_vn2_val)
         };
         if !vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-        let div_op = match vn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+        let div_op = match vn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+        };
         let opc1 = div_op.read().unwrap().opcode;
         if opc1 != opc2 && (opc2 != OpCode::CPUI_INT_DIV || opc1 != OpCode::CPUI_INT_RIGHT) {
             return Ok(action_status::NO_CHANGE);
         }
-        let const_vn1 = match div_op.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let const_vn1 = match div_op.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         if !const_vn1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
         // Intermediate result must only be used here.
         if vn.read().unwrap().lone_descend().is_none() { return Ok(action_status::NO_CHANGE); }
@@ -8260,7 +9023,9 @@ impl RuleSignForm {
 
 impl Rule for RuleSignForm {
     // Ghidra: ruleaction.cc:8453 RuleSignForm::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSignForm::applyOp (ruleaction.cc:8453-8474).
         // Like the oracle, applyOp trusts the dispatcher for the opcode: it
         // treats in(1)'s offset as the SUBPIECE truncation offset without
@@ -8332,40 +9097,59 @@ impl RuleSignForm2 {
 
 impl Rule for RuleSignForm2 {
     // Ghidra: ruleaction.cc:8505 RuleSignForm2::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSignForm2::applyOp (ruleaction.cc:8505-8570).
         let (a, other_vn) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_SRIGHT { return Ok(action_status::NO_CHANGE); }
-            let const_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let const_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !const_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
-            let in_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let sizeout = in_vn.read().unwrap().get_size() as i64;
             if const_vn.read().unwrap().get_offset() as i64 != sizeout * 8 - 1 { return Ok(action_status::NO_CHANGE); }
             if !in_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let sub_op = match in_vn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let sub_op = match in_vn.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if sub_op.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return Ok(action_status::NO_CHANGE); }
-            let c = sub_op.read().unwrap().get_in(1).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(0);
-            let mult_out = match sub_op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let c = sub_op
+                .read()
+                .unwrap()
+                .get_in(1)
+                .map(|v| v.read().unwrap().get_offset() as i64)
+                .unwrap_or(0);
+            let mult_out = match sub_op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             let mult_size = mult_out.read().unwrap().get_size() as i64;
             if c + sizeout != mult_size { return Ok(action_status::NO_CHANGE); }
             if !mult_out.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let mult_op = match mult_out.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let mult_op = match mult_out.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if mult_op.read().unwrap().opcode != OpCode::CPUI_INT_MULT { return Ok(action_status::NO_CHANGE); }
             // Search for INT_SEXT in mult_op's inputs.
-            let mut found_a: Option<(std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>)> = None;
+            let mut found_a: Option<(
+                std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+            )> = None;
             for slot in 0..2 {
-                let vn = match mult_op.read().unwrap().get_in(slot) { Some(v) => v.clone(), None => continue };
+                let vn = match mult_op.read().unwrap().get_in(slot) { Some(v) => v.clone(), None => continue ,
+                };
                 if !vn.read().unwrap().is_written() { continue; }
-                let sext_op = match vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+                let sext_op = match vn.read().unwrap().get_def() { Some(d) => d, None => continue ,
+                };
                 if sext_op.read().unwrap().opcode != OpCode::CPUI_INT_SEXT { continue; }
-                let a = match sext_op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
+                let a = match sext_op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue ,
+                };
                 if a.read().unwrap().is_free() || a.read().unwrap().get_size() as i64 != sizeout { continue; }
-                let other_vn = match mult_op.read().unwrap().get_in(1 - slot).cloned() { Some(v) => v, None => continue };
+                let other_vn = match mult_op.read().unwrap().get_in(1 - slot).cloned() { Some(v) => v, None => continue ,
+                };
                 found_a = Some((a, other_vn));
                 break;
             }
-            match found_a { Some(x) => x, None => return Ok(action_status::NO_CHANGE) }
+            match found_a { Some(x) => x, None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         // other_vn must be a small positive constant (no overflow into sign bit).
         if !other_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
@@ -8403,17 +9187,25 @@ impl RulePositiveDiv {
 
 impl Rule for RulePositiveDiv {
     // Ghidra: ruleaction.cc:7817 RulePositiveDiv::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RulePositiveDiv::applyOp (ruleaction.cc:7817-7830).
         let (op_code, in0_nzm, in1_nzm, out_size) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_SDIV && op.opcode != OpCode::CPUI_INT_SREM {
                 return Ok(action_status::NO_CHANGE);
             }
-            let out_size = op.output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+            let out_size = op
+                .output
+                .as_ref()
+                .map(|v| v.read().unwrap().get_size())
+                .unwrap_or(0);
             if out_size > 8 { return Ok(action_status::NO_CHANGE); }
-            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let nzm0 = in0.read().unwrap().get_nz_mask();
             let nzm1 = in1.read().unwrap().get_nz_mask();
             (op.opcode, nzm0, nzm1, out_size)
@@ -8444,33 +9236,44 @@ impl RuleDoubleArithShift {
 
 impl Rule for RuleDoubleArithShift {
     // Ghidra: ruleaction.cc:1943 RuleDoubleArithShift::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleDoubleArithShift::applyOp (ruleaction.cc:1943-1964).
         let (const_d, const_c, in_vn, out_size) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_SRIGHT { return Ok(action_status::NO_CHANGE); }
-            let const_d_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let const_d_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let const_d_val = {
                 let r = const_d_vn.read().unwrap();
                 if !r.is_constant() { return Ok(action_status::NO_CHANGE); }
                 r.get_offset()
             };
-            let shiftin = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let shiftin = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let shift2op = {
                 let r = shiftin.read().unwrap();
                 if !r.is_written() { return Ok(action_status::NO_CHANGE); }
-                match r.get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) }
+                match r.get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+                }
             };
             if shift2op.read().unwrap().opcode != OpCode::CPUI_INT_SRIGHT { return Ok(action_status::NO_CHANGE); }
-            let const_c_vn = match shift2op.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let const_c_vn = match shift2op.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let const_c_val = {
                 let r = const_c_vn.read().unwrap();
                 if !r.is_constant() { return Ok(action_status::NO_CHANGE); }
                 r.get_offset()
             };
-            let in_vn = match shift2op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let in_vn = match shift2op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if in_vn.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
-            let out_size = op.output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+            let out_size = op
+                .output
+                .as_ref()
+                .map(|v| v.read().unwrap().get_size())
+                .unwrap_or(0);
             (const_d_val, const_c_val, in_vn, out_size)
         };
         let max_shift = out_size * 8 - 1;
@@ -8510,7 +9313,9 @@ impl RuleSignNearMult {
 
 impl Rule for RuleSignNearMult {
     // Ghidra: ruleaction.cc:8541 RuleSignNearMult::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSignNearMult::applyOp (ruleaction.cc:8541-8592).
         let (x, n, x_size) = {
             let op = op_arc.read().unwrap();
@@ -8578,7 +9383,14 @@ impl Rule for RuleSignNearMult {
             }
             // cc:8563-8566: n = size*8 - shiftamount, both strictly positive.
             let shiftvn = addop.read().unwrap().get_in(i).unwrap().clone();
-            let mut n = unshiftop.read().unwrap().get_in(1).unwrap().read().unwrap().get_offset() as i64;
+            let mut n = unshiftop
+                .read()
+                .unwrap()
+                .get_in(1)
+                .unwrap()
+                .read()
+                .unwrap()
+                .get_offset() as i64;
             if n <= 0 {
                 return Ok(action_status::NO_CHANGE);
             }
@@ -8678,7 +9490,9 @@ impl RuleFloatCast {
 
 impl Rule for RuleFloatCast {
     // Ghidra: ruleaction.cc:9560 RuleFloatCast::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleFloatCast::applyOp (ruleaction.cc:9560-9602).
         let (opc1, vn2, insize1, insize2, outsize) = {
             let op = op_arc.read().unwrap();
@@ -8686,18 +9500,25 @@ impl Rule for RuleFloatCast {
             if opc1 != OpCode::CPUI_FLOAT_FLOAT2FLOAT && opc1 != OpCode::CPUI_FLOAT_TRUNC {
                 return Ok(action_status::NO_CHANGE);
             }
-            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !vn1.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let castop = match vn1.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let castop = match vn1.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             let opc2 = castop.read().unwrap().opcode;
             if opc2 != OpCode::CPUI_FLOAT_FLOAT2FLOAT && opc2 != OpCode::CPUI_FLOAT_INT2FLOAT {
                 return Ok(action_status::NO_CHANGE);
             }
-            let vn2 = match castop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let vn2 = match castop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if vn2.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
             let insize1 = vn1.read().unwrap().get_size();
             let insize2 = vn2.read().unwrap().get_size();
-            let outsize = op.output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+            let outsize = op
+                .output
+                .as_ref()
+                .map(|v| v.read().unwrap().get_size())
+                .unwrap_or(0);
             (opc1, vn2, insize1, insize2, outsize)
         };
         let follow = crate::op::PcodeOpRef(op_arc.clone());
@@ -8749,25 +9570,33 @@ impl RuleSubNormal {
 
 impl Rule for RuleSubNormal {
     // Ghidra: ruleaction.cc:7732 RuleSubNormal::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSubNormal::applyOp (ruleaction.cc:7732-7803).
         use crate::utils::bits::popcount;
         let (opc, a, n, c, in_size, out_size) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_SUBPIECE { return Ok(action_status::NO_CHANGE); }
-            let shiftout = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let shiftout = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !shiftout.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let shiftop = match shiftout.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let shiftop = match shiftout.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             let opc = shiftop.read().unwrap().opcode;
             if opc != OpCode::CPUI_INT_RIGHT && opc != OpCode::CPUI_INT_SRIGHT { return Ok(action_status::NO_CHANGE); }
-            let sa_vn = match shiftop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let sa_vn = match shiftop.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !sa_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
-            let a = match shiftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let a = match shiftop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if a.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
-            let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             // Skip precis hi/lo (Rugra lacks these flags; always allow).
             let n = sa_vn.read().unwrap().get_offset() as i64;
-            let c_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let c_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let c = c_vn.read().unwrap().get_offset() as i64;
             let in_size = a.read().unwrap().get_size() as i64;
             let out_size = out_vn.read().unwrap().get_size() as i64;
@@ -8883,18 +9712,24 @@ impl RuleSignMod2nOpt {
 
 impl Rule for RuleSignMod2nOpt {
     // Ghidra: ruleaction.cc:8683 RuleSignMod2nOpt::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSignMod2nOpt::applyOp (ruleaction.cc:8683-8769).
         let (shift_amt, a, correct_vn, n, mask) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_INT_RIGHT { return Ok(action_status::NO_CHANGE); }
-            let sa_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let sa_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !sa_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
             let shift_amt = sa_vn.read().unwrap().get_offset();
-            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let a = match check_sign_extraction(&in0) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let a = match check_sign_extraction(&in0) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if a.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
-            let correct_vn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let correct_vn = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let a_size = a.read().unwrap().get_size() as u64;
             let n = a_size * 8 - shift_amt;
             let mask = (1u64 << n) - 1;
@@ -8904,27 +9739,34 @@ impl Rule for RuleSignMod2nOpt {
         let descends: Vec<_> = correct_vn.read().unwrap().descend_iter().collect();
         for multop_arc in descends {
             if multop_arc.read().unwrap().opcode != OpCode::CPUI_INT_MULT { continue; }
-            let negone = match multop_arc.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+            let negone = match multop_arc.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue ,
+            };
             if !negone.read().unwrap().is_constant() { continue; }
             if negone.read().unwrap().get_offset() != calc_mask(correct_vn.read().unwrap().get_size()) { continue; }
-            let mult_out = match multop_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => continue };
-            let baseop_arc = match mult_out.read().unwrap().lone_descend() { Some(o) => o, None => continue };
+            let mult_out = match multop_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => continue ,
+            };
+            let baseop_arc = match mult_out.read().unwrap().lone_descend() { Some(o) => o, None => continue ,
+            };
             if baseop_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD { continue; }
             let mult_out_clone = mult_out.clone();
             let mult_slot = fd.op_get_slot(&crate::op::PcodeOpRef(baseop_arc.clone()), &mult_out_clone);
             if mult_slot < 0 { continue; }
             let slot = (1 - mult_slot) as usize;
-            let and_out = match baseop_arc.read().unwrap().get_in(slot) { Some(v) => v.clone(), None => continue };
+            let and_out = match baseop_arc.read().unwrap().get_in(slot) { Some(v) => v.clone(), None => continue ,
+            };
             if !and_out.read().unwrap().is_written() { continue; }
-            let andop_arc = match and_out.read().unwrap().get_def() { Some(d) => d, None => continue };
+            let andop_arc = match and_out.read().unwrap().get_def() { Some(d) => d, None => continue ,
+            };
             let mut trunc_size: i64 = -1;
             let mut actual_and = andop_arc.clone();
             let actual_and_code = andop_arc.read().unwrap().opcode;
             let actual_and_out;
             if actual_and_code == OpCode::CPUI_INT_ZEXT {
-                let inner = match andop_arc.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
+                let inner = match andop_arc.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue ,
+                };
                 if !inner.read().unwrap().is_written() { continue; }
-                let inner_def = match inner.read().unwrap().get_def() { Some(d) => d, None => continue };
+                let inner_def = match inner.read().unwrap().get_def() { Some(d) => d, None => continue ,
+                };
                 if inner_def.read().unwrap().opcode != OpCode::CPUI_INT_AND { continue; }
                 trunc_size = inner.read().unwrap().get_size() as i64;
                 actual_and = inner_def;
@@ -8934,60 +9776,79 @@ impl Rule for RuleSignMod2nOpt {
                 actual_and_out = and_out.clone();
             }
             let _ = actual_and_out;
-            let const_vn = match actual_and.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+            let const_vn = match actual_and.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue ,
+            };
             if !const_vn.read().unwrap().is_constant() { continue; }
             if const_vn.read().unwrap().get_offset() != mask { continue; }
-            let add_out_vn = match actual_and.read().unwrap().get_in(0) { Some(v) => v.clone(), None => continue };
+            let add_out_vn = match actual_and.read().unwrap().get_in(0) { Some(v) => v.clone(), None => continue ,
+            };
             if !add_out_vn.read().unwrap().is_written() { continue; }
-            let add_op = match add_out_vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+            let add_op = match add_out_vn.read().unwrap().get_def() { Some(d) => d, None => continue ,
+            };
             if add_op.read().unwrap().opcode != OpCode::CPUI_INT_ADD { continue; }
             // Search for 'a' in add_op's inputs.
             let mut found_slot: i32 = -1;
             for a_slot in 0..2 {
-                let vn = match add_op.read().unwrap().get_in(a_slot) { Some(v) => v.clone(), None => continue };
+                let vn = match add_op.read().unwrap().get_in(a_slot) { Some(v) => v.clone(), None => continue ,
+                };
                 let check_vn = if trunc_size >= 0 {
                     if !vn.read().unwrap().is_written() { continue; }
-                    let sub_op_arc = match vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+                    let sub_op_arc = match vn.read().unwrap().get_def() { Some(d) => d, None => continue ,
+                    };
                     let sub_data = {
                         let r = sub_op_arc.read().unwrap();
                         if r.opcode != OpCode::CPUI_SUBPIECE { continue; }
-                        let sub_c = r.get_in(1).map(|v| v.read().unwrap().get_offset()).unwrap_or(1);
+                        let sub_c = r
+                            .get_in(1)
+                            .map(|v| v.read().unwrap().get_offset())
+                            .unwrap_or(1);
                         let in0 = r.get_in(0).cloned();
                         (sub_c, in0)
                     };
                     if sub_data.0 != 0 { continue; }
-                    match sub_data.1 { Some(v) => v, None => continue }
+                    match sub_data.1 { Some(v) => v, None => continue ,
+                    }
                 } else { vn };
                 if std::sync::Arc::ptr_eq(&check_vn, &a) { found_slot = a_slot as i32; break; }
             }
             if found_slot < 0 { continue; }
             let a_slot = found_slot as usize;
             // Verify the other input is INT_RIGHT by shiftAmt of sign-extraction of a.
-            let ext_vn = match add_op.read().unwrap().get_in(1 - a_slot) { Some(v) => v.clone(), None => continue };
+            let ext_vn = match add_op.read().unwrap().get_in(1 - a_slot) { Some(v) => v.clone(), None => continue ,
+            };
             if !ext_vn.read().unwrap().is_written() { continue; }
-            let shift_op = match ext_vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+            let shift_op = match ext_vn.read().unwrap().get_def() { Some(d) => d, None => continue ,
+            };
             if shift_op.read().unwrap().opcode != OpCode::CPUI_INT_RIGHT { continue; }
-            let shift_const = match shift_op.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+            let shift_const = match shift_op.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue ,
+            };
             if !shift_const.read().unwrap().is_constant() { continue; }
             let mut shift_val = shift_const.read().unwrap().get_offset();
             if trunc_size >= 0 {
                 shift_val += (a.read().unwrap().get_size() as u64 - trunc_size as u64) * 8;
             }
             if shift_val != shift_amt { continue; }
-            let shift_in0 = match shift_op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue };
-            let ext_a = match check_sign_extraction(&shift_in0) { Some(v) => v, None => continue };
+            let shift_in0 = match shift_op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => continue ,
+            };
+            let ext_a = match check_sign_extraction(&shift_in0) { Some(v) => v, None => continue ,
+            };
             let final_a = if trunc_size >= 0 {
                 if !ext_a.read().unwrap().is_written() { continue; }
-                let sub_op2_arc = match ext_a.read().unwrap().get_def() { Some(d) => d, None => continue };
+                let sub_op2_arc = match ext_a.read().unwrap().get_def() { Some(d) => d, None => continue ,
+                };
                 let sub2_data = {
                     let r = sub_op2_arc.read().unwrap();
                     if r.opcode != OpCode::CPUI_SUBPIECE { continue; }
-                    let sub_c2 = r.get_in(1).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(-1);
+                    let sub_c2 = r
+                        .get_in(1)
+                        .map(|v| v.read().unwrap().get_offset() as i64)
+                        .unwrap_or(-1);
                     let in0 = r.get_in(0).cloned();
                     (sub_c2, in0)
                 };
                 if sub2_data.0 != trunc_size { continue; }
-                match sub2_data.1 { Some(v) => v, None => continue }
+                match sub2_data.1 { Some(v) => v, None => continue ,
+                }
             } else { ext_a };
             if !std::sync::Arc::ptr_eq(&final_a, &a) { continue; }
             // Found the full pattern: rewrite baseop as INT_SREM.
@@ -9021,18 +9882,27 @@ impl RuleSignMod2Opt {
 
 impl Rule for RuleSignMod2Opt {
     // Ghidra: ruleaction.cc:8805 RuleSignMod2Opt::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSignMod2Opt::applyOp (ruleaction.cc:8805-8865).
         let (add_out_vn, _) = {
             let op = op_arc.read().unwrap();
-            let const_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let const_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !const_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
             if const_vn.read().unwrap().get_offset() != 1 { return Ok(action_status::NO_CHANGE); }
-            let ao = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let ao = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (ao, ())
         };
         if !add_out_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-        let add_op = match add_out_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+        let add_op = match add_out_vn
+            .read()
+            .unwrap()
+            .def
+            .as_ref()
+            .and_then(|w| w.upgrade()) {
             Some(a) => a, None => return Ok(action_status::NO_CHANGE),
         };
         if add_op.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return Ok(action_status::NO_CHANGE); }
@@ -9042,13 +9912,15 @@ impl Rule for RuleSignMod2Opt {
             let a = add_op.read().unwrap();
             let mut found = None;
             for ms in 0..2 {
-                let vn = match a.inrefs.get(ms) { Some(v) => v.clone(), None => continue };
+                let vn = match a.inrefs.get(ms) { Some(v) => v.clone(), None => continue ,
+                };
                 if !vn.read().unwrap().is_written() { continue; }
                 let mo = match vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
                     Some(op) => op, None => continue,
                 };
                 if mo.read().unwrap().opcode != OpCode::CPUI_INT_MULT { continue; }
-                let cv = match mo.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => continue };
+                let cv = match mo.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => continue ,
+                };
                 if !cv.read().unwrap().is_constant() { continue; }
                 let mask = crate::address::calc_mask(cv.read().unwrap().get_size());
                 if cv.read().unwrap().get_offset() == mask {
@@ -9058,7 +9930,8 @@ impl Rule for RuleSignMod2Opt {
             }
             match found {
                 Some((ms, mo)) => {
-                    let mult_in0 = match mo.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+                    let mult_in0 = match mo.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+                    };
                     let base = match check_sign_extraction(&mult_in0) {
                         Some(v) => v, None => return Ok(action_status::NO_CHANGE),
                     };
@@ -9070,7 +9943,8 @@ impl Rule for RuleSignMod2Opt {
 
         // otherBase = add_op->getIn(1 - mult_slot)
         let mut base = base_vn.clone();
-        let other_base = match add_op.read().unwrap().inrefs.get(1 - mult_slot) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let other_base = match add_op.read().unwrap().inrefs.get(1 - mult_slot) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         let mut trunc = false;
         if !std::sync::Arc::ptr_eq(&base, &other_base) {
             // Check for SUBPIECE truncation pattern
@@ -9089,9 +9963,15 @@ impl Rule for RuleSignMod2Opt {
             };
             let base_size = base.read().unwrap().get_size() as i32;
             if trunc_amt + base_size != sub_in0_size { return Ok(action_status::NO_CHANGE); }
-            let new_base = match sub_op.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let new_base = match sub_op.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             // otherBase must also be SUBPIECE of new_base
-            let sub_op2 = match other_base.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            let sub_op2 = match other_base
+                .read()
+                .unwrap()
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade()) {
                 Some(a) => a, None => return Ok(action_status::NO_CHANGE),
             };
             if sub_op2.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return Ok(action_status::NO_CHANGE); }
@@ -9100,7 +9980,8 @@ impl Rule for RuleSignMod2Opt {
                 None => return Ok(action_status::NO_CHANGE),
             };
             if sub2_const != 0 { return Ok(action_status::NO_CHANGE); }
-            let other_root = match sub_op2.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let other_root = match sub_op2.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !std::sync::Arc::ptr_eq(&other_root, &new_base) { return Ok(action_status::NO_CHANGE); }
             base = new_base;
             trunc = true;
@@ -9109,13 +9990,15 @@ impl Rule for RuleSignMod2Opt {
         if base.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
 
         // andOut = op->getOut(); if trunc, look for ZEXT
-        let mut and_out = match op_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let mut and_out = match op_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         if trunc {
             let ext_op = match and_out.read().unwrap().lone_descend() {
                 Some(o) => o, None => return Ok(action_status::NO_CHANGE),
             };
             if ext_op.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT { return Ok(action_status::NO_CHANGE); }
-            and_out = match ext_op.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            and_out = match ext_op.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
         }
 
         // Look for INT_ADD(and_out, sign) among descendants
@@ -9134,7 +10017,8 @@ impl Rule for RuleSignMod2Opt {
                 if s < 0 { continue; }
                 s
             };
-            let other_in = match root_op_arc.read().unwrap().inrefs.get((1 - slot) as usize) { Some(v) => v.clone(), None => continue };
+            let other_in = match root_op_arc.read().unwrap().inrefs.get((1 - slot) as usize) { Some(v) => v.clone(), None => continue ,
+            };
             let other_base_check = match check_sign_extraction(&other_in) {
                 Some(v) => v, None => continue,
             };
@@ -9170,22 +10054,36 @@ impl RuleShiftPiece {
 
 impl Rule for RuleShiftPiece {
     // Ghidra: ruleaction.cc:3791 RuleShiftPiece::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleShiftPiece::applyOp (ruleaction.cc:3791-3870).
         let (vn1_init, vn2_init) = {
             let op = op_arc.read().unwrap();
-            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !vn1.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
             if !vn2.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
             (vn1, vn2)
         };
 
         // One input must be INT_LEFT; the other is "zextloop"
-        let vn1_def = match vn1_init.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+        let vn1_def = match vn1_init
+            .read()
+            .unwrap()
+            .def
+            .as_ref()
+            .and_then(|w| w.upgrade()) {
             Some(a) => a, None => return Ok(action_status::NO_CHANGE),
         };
-        let vn2_def = match vn2_init.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+        let vn2_def = match vn2_init
+            .read()
+            .unwrap()
+            .def
+            .as_ref()
+            .and_then(|w| w.upgrade()) {
             Some(a) => a, None => return Ok(action_status::NO_CHANGE),
         };
         let (shiftop, zextloop) = if vn1_def.read().unwrap().opcode == OpCode::CPUI_INT_LEFT {
@@ -9208,7 +10106,8 @@ impl Rule for RuleShiftPiece {
         };
 
         // vn1 = shiftop->getIn(0); must be written; zexthiop = its def
-        let vn1 = match shiftop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let vn1 = match shiftop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         if !vn1.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
         let zexthiop = match vn1.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
             Some(a) => a, None => return Ok(action_status::NO_CHANGE),
@@ -9219,7 +10118,8 @@ impl Rule for RuleShiftPiece {
         }
 
         // vn1 = zexthiop->getIn(0) — the value being extended
-        let vn1_inner = match zexthiop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let vn1_inner = match zexthiop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         // Constant check: if constant and size < 8, skip (let it collapse naturally)
         if vn1_inner.read().unwrap().is_constant() {
             if vn1_inner.read().unwrap().get_size() < 8 {
@@ -9244,22 +10144,37 @@ impl Rule for RuleShiftPiece {
             if zextloop_opc != OpCode::CPUI_INT_LEFT { return Ok(action_status::NO_CHANGE); }
             // Look for s<< #c forming the high piece
             if !vn1_inner.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let rshift_op = match vn1_inner.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            let rshift_op = match vn1_inner
+                .read()
+                .unwrap()
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade()) {
                 Some(a) => a, None => return Ok(action_status::NO_CHANGE),
             };
             if rshift_op.read().unwrap().opcode != OpCode::CPUI_INT_SRIGHT { return Ok(action_status::NO_CHANGE); }
-            let rsa_const = match rshift_op.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let rsa_const = match rshift_op.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !rsa_const.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
-            let vn2_cdq = match rshift_op.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn2_cdq = match rshift_op.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !vn2_cdq.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-            let subop = match vn2_cdq.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            let subop = match vn2_cdq
+                .read()
+                .unwrap()
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade()) {
                 Some(a) => a, None => return Ok(action_status::NO_CHANGE),
             };
             if subop.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return Ok(action_status::NO_CHANGE); }
-            let sub_const = match subop.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let sub_const = match subop.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !sub_const.read().unwrap().is_constant() || sub_const.read().unwrap().get_offset() != 0 { return Ok(action_status::NO_CHANGE); }
-            let big_vn = match zextloop.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let sub_in0 = match subop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let big_vn = match zextloop.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let sub_in0 = match subop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !std::sync::Arc::ptr_eq(&sub_in0, &big_vn) { return Ok(action_status::NO_CHANGE); }
             let rsa = rsa_const.read().unwrap().get_offset() as i32;
             let vn2_cdq_size = vn2_cdq.read().unwrap().get_size() as i32;
@@ -9276,7 +10191,8 @@ impl Rule for RuleShiftPiece {
         }
 
         // Main path: zextloop is INT_ZEXT
-        let vn2 = match zextloop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let vn2 = match zextloop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         if vn2.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
         if sa != 8 * vn2.read().unwrap().get_size() as i32 { return Ok(action_status::NO_CHANGE); }
 
@@ -9304,7 +10220,9 @@ impl Rule for RuleShiftPiece {
     // Ghidra: ruleaction.cc:3773 RuleShiftPiece
     fn get_name(&self) -> &str { "shiftpiece" }
     // Ghidra: ruleaction.cc:3783 RuleShiftPiece::getOpList
-    fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR, OpCode::CPUI_INT_ADD] }
+    fn get_opcodes(&self) -> Vec<OpCode> { vec![
+            OpCode::CPUI_INT_OR, OpCode::CPUI_INT_XOR, OpCode::CPUI_INT_ADD,
+        ] }
 }
 
 /// Convert INT_MULT and shift forms into INT_DIV or INT_SDIV. Faithful
@@ -9348,10 +10266,23 @@ impl RuleDivOpt {
         }
         // Optional SUBPIECE.
         if cur_op_arc.read().unwrap().opcode == OpCode::CPUI_SUBPIECE {
-            let c = cur_op_arc.read().unwrap().get_in(1)?.read().unwrap().get_offset();
+            let c = cur_op_arc
+                .read()
+                .unwrap()
+                .get_in(1)?
+                .read()
+                .unwrap()
+                .get_offset();
             let in_vn = cur_op_arc.read().unwrap().get_in(0)?.clone();
             if !in_vn.read().unwrap().is_written() { return None; }
-            let out_size = cur_op_arc.read().unwrap().output.as_ref()?.read().unwrap().get_size() as u64;
+            let out_size = cur_op_arc
+                .read()
+                .unwrap()
+                .output
+                .as_ref()?
+                .read()
+                .unwrap()
+                .get_size() as u64;
             if out_size + c != in_vn.read().unwrap().get_size() as u64 { return None; }
             n += 8 * c;
             cur_op_arc = in_vn.read().unwrap().get_def()?;
@@ -9378,7 +10309,13 @@ impl RuleDivOpt {
         let xsize;
         if ext_opc != OpCode::CPUI_INT_SEXT {
             let nz_mask = if ext_opc == OpCode::CPUI_INT_ZEXT {
-                ext_op.read().unwrap().get_in(0)?.read().unwrap().get_nz_mask()
+                ext_op
+                    .read()
+                    .unwrap()
+                    .get_in(0)?
+                    .read()
+                    .unwrap()
+                    .get_nz_mask()
             } else {
                 in_vn.read().unwrap().get_nz_mask()
             };
@@ -9393,7 +10330,15 @@ impl RuleDivOpt {
         if ext_opc == OpCode::CPUI_INT_ZEXT || ext_opc == OpCode::CPUI_INT_SEXT {
             let ext_vn = ext_op.read().unwrap().get_in(0)?.clone();
             if ext_vn.read().unwrap().is_free() { return None; }
-            if in_vn.read().unwrap().get_size() == op.0.read().unwrap().output.as_ref()?.read().unwrap().get_size() {
+            if in_vn.read().unwrap().get_size() == op
+                    .0
+                    .read()
+                    .unwrap()
+                    .output
+                    .as_ref()?
+                    .read()
+                    .unwrap()
+                    .get_size() {
                 res_vn = in_vn;
             } else {
                 res_vn = ext_vn;
@@ -9407,7 +10352,13 @@ impl RuleDivOpt {
         if (actual_ext_opc == OpCode::CPUI_INT_ZEXT && shift_opc_var == OpCode::CPUI_INT_SRIGHT)
             || (actual_ext_opc == OpCode::CPUI_INT_SEXT && shift_opc_var == OpCode::CPUI_INT_RIGHT)
         {
-            let out_size = op.0.read().unwrap().output.as_ref()?.read().unwrap().get_size() as i32;
+            let out_size = op.0.read()
+                    .unwrap()
+                    .output
+                    .as_ref()?
+                    .read()
+                    .unwrap()
+                    .get_size() as i32;
             if out_size * 8 - n as i32 != xsize {
                 return None;
             }
@@ -9459,12 +10410,14 @@ impl RuleDivOpt {
     // Ghidra: ruleaction.cc:8260 RuleDivOpt::checkFormOverlap
     fn check_form_overlap(op: &crate::op::PcodeOpRef) -> bool {
         if op.0.read().unwrap().opcode != OpCode::CPUI_SUBPIECE { return false; }
-        let vn = match op.0.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return false };
+        let vn = match op.0.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return false ,
+        };
         let descends: Vec<_> = vn.read().unwrap().descend_iter().collect();
         for super_op in descends {
             let opc = super_op.read().unwrap().opcode;
             if opc != OpCode::CPUI_INT_RIGHT && opc != OpCode::CPUI_INT_SRIGHT { continue; }
-            let cvn = match super_op.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue };
+            let cvn = match super_op.read().unwrap().get_in(1) { Some(v) => v.clone(), None => continue ,
+            };
             if !cvn.read().unwrap().is_constant() { return true; }
             let super_ref = crate::op::PcodeOpRef(super_op);
             if Self::find_form(&super_ref).is_some() { return true; }
@@ -9568,7 +10521,9 @@ fn resolve_shift_const(
 
 impl Rule for RuleDivOpt {
     // Ghidra: ruleaction.cc:8295 RuleDivOpt::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleDivOpt::applyOp (ruleaction.cc:8295-8355).
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
         let (mut in_vn, n, y, mut xsize, ext_opc) = match Self::find_form(&op_ref) {
@@ -9579,7 +10534,13 @@ impl Rule for RuleDivOpt {
         if ext_opc == OpCode::CPUI_INT_SEXT { xsize -= 1; }
         let divisor = Self::calc_divisor(n, y, xsize);
         if divisor == 0 { return Ok(action_status::NO_CHANGE); }
-        let out_size = op_arc.read().unwrap().output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+        let out_size = op_arc
+            .read()
+            .unwrap()
+            .output
+            .as_ref()
+            .map(|v| v.read().unwrap().get_size())
+            .unwrap_or(0);
         let addr = op_arc.read().unwrap().get_addr();
 
         if in_vn.read().unwrap().get_size() < out_size {
@@ -9670,7 +10631,9 @@ impl Rule for RuleDivOpt {
     fn get_name(&self) -> &str { "divopt" }
     // Ghidra: ruleaction.cc:8287 RuleDivOpt::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
-        vec![OpCode::CPUI_SUBPIECE, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT]
+        vec![
+            OpCode::CPUI_SUBPIECE, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT,
+        ]
     }
 }
 
@@ -9687,12 +10650,16 @@ impl RuleModOpt {
 
 impl Rule for RuleModOpt {
     // Ghidra: ruleaction.cc:8621 RuleModOpt::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleModOpt::applyOp (ruleaction.cc:8621-8671).
         let (x_vn, div_vn, out_vn) = {
             let op = op_arc.read().unwrap();
-            let x = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let div = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let x = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let div = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             // Guard: skip if either input is a pointer type (prevents
             // false-positive on pointer arithmetic that was lifted as INT_DIV).
             if x.read().unwrap().v_type.as_ref().map_or(false, |t| {
@@ -9701,7 +10668,8 @@ impl Rule for RuleModOpt {
             if div.read().unwrap().v_type.as_ref().map_or(false, |t| {
                 matches!(t.as_ref(), crate::type_system::Datatype::Pointer(_))
             }) { return Ok(action_status::NO_CHANGE); }
-            let out = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let out = match op.output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (x, div, out)
         };
         let op_opc = op_arc.read().unwrap().opcode;
@@ -9722,11 +10690,15 @@ impl Rule for RuleModOpt {
                 let out_ptr = &out_vn;
                 if let Some(ref in0) = mult_in0 {
                     if std::sync::Arc::ptr_eq(in0, out_ptr) { mult_in1.clone() }
-                    else if mult_in1.as_ref().map(|in1| std::sync::Arc::ptr_eq(in1, out_ptr)).unwrap_or(false) { Some(in0.clone()) }
+                    else if mult_in1
+                        .as_ref()
+                        .map(|in1| std::sync::Arc::ptr_eq(in1, out_ptr))
+                        .unwrap_or(false) { Some(in0.clone()) }
                     else { continue; }
                 } else { continue; }
             };
-            let div2_vn = match div2_vn { Some(v) => v, None => continue };
+            let div2_vn = match div2_vn { Some(v) => v, None => continue ,
+            };
 
             // Check that div is 2's complement of div2
             let div_g = div_vn.read().unwrap();
@@ -9742,13 +10714,15 @@ impl Rule for RuleModOpt {
                     Some(a) => a, None => continue,
                 };
                 if div2_def.read().unwrap().opcode != OpCode::CPUI_INT_2COMP { continue; }
-                let div2_in = match div2_def.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => continue };
+                let div2_in = match div2_def.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => continue ,
+                };
                 if !std::sync::Arc::ptr_eq(&div2_in, &div_vn) { continue; }
             }
             drop(div_g); drop(div2_g);
 
             // Found x/d * (-d). Now look for INT_ADD of its output + x.
-            let mult_out = match multop_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => continue };
+            let mult_out = match multop_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => continue ,
+            };
             let addops: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = mult_out.read().unwrap().descend_iter().collect();
             for addop_arc in addops {
                 if addop_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD { continue; }
@@ -9759,11 +10733,18 @@ impl Rule for RuleModOpt {
                 // lvn = the input that is NOT mult_out
                 let lvn = {
                     let mult_out_ref = &mult_out;
-                    if add_in0.as_ref().map(|v| std::sync::Arc::ptr_eq(v, mult_out_ref)).unwrap_or(false) { add_in1 }
-                    else if add_in1.as_ref().map(|v| std::sync::Arc::ptr_eq(v, mult_out_ref)).unwrap_or(false) { add_in0 }
+                    if add_in0
+                        .as_ref()
+                        .map(|v| std::sync::Arc::ptr_eq(v, mult_out_ref))
+                        .unwrap_or(false) { add_in1 }
+                    else if add_in1
+                        .as_ref()
+                        .map(|v| std::sync::Arc::ptr_eq(v, mult_out_ref))
+                        .unwrap_or(false) { add_in0 }
                     else { continue; }
                 };
-                let lvn = match lvn { Some(v) => v, None => continue };
+                let lvn = match lvn { Some(v) => v, None => continue ,
+                };
                 if !std::sync::Arc::ptr_eq(&lvn, &x_vn) { continue; }
 
                 // Transform: addop becomes REM/SREM
@@ -9808,34 +10789,52 @@ impl RuleSignMod2nOpt2 {
     /// Verify a form of `V - (V s>> 0x3f)`. Faithful to `checkSignExtForm`
     /// (ruleaction.cc:8928-8952). Returns the base Varnode V or None.
     // Ghidra: ruleaction.cc:8928 RuleSignMod2nOpt2::checkSignExtForm
-    fn check_sign_ext_form(addop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+    fn check_sign_ext_form(
+        addop: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
         for slot in 0..2 {
             let minus_vn = {
                 let a = addop.read().unwrap();
-                match a.inrefs.get(slot) { Some(v) => v.clone(), None => continue }
+                match a.inrefs.get(slot) { Some(v) => v.clone(), None => continue ,
+                }
             };
             if !minus_vn.read().unwrap().is_written() { continue; }
-            let mult_op = match minus_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            let mult_op = match minus_vn
+                .read()
+                .unwrap()
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade()) {
                 Some(a) => a, None => continue,
             };
             if mult_op.read().unwrap().opcode != OpCode::CPUI_INT_MULT { continue; }
-            let const_vn = match mult_op.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => continue };
+            let const_vn = match mult_op.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => continue ,
+            };
             if !const_vn.read().unwrap().is_constant() { continue; }
             let mask = crate::address::calc_mask(const_vn.read().unwrap().get_size());
             if const_vn.read().unwrap().get_offset() != mask { continue; } // must be *(-1)
             let base = {
                 let a = addop.read().unwrap();
-                match a.inrefs.get(1 - slot) { Some(v) => v.clone(), None => continue }
+                match a.inrefs.get(1 - slot) { Some(v) => v.clone(), None => continue ,
+                }
             };
-            let sign_ext = match mult_op.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => continue };
+            let sign_ext = match mult_op.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => continue ,
+            };
             if !sign_ext.read().unwrap().is_written() { continue; }
-            let shift_op = match sign_ext.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+            let shift_op = match sign_ext
+                .read()
+                .unwrap()
+                .def
+                .as_ref()
+                .and_then(|w| w.upgrade()) {
                 Some(a) => a, None => continue,
             };
             if shift_op.read().unwrap().opcode != OpCode::CPUI_INT_SRIGHT { continue; }
-            let shift_in0 = match shift_op.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => continue };
+            let shift_in0 = match shift_op.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => continue ,
+            };
             if !std::sync::Arc::ptr_eq(&shift_in0, &base) { continue; }
-            let shift_const = match shift_op.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => continue };
+            let shift_const = match shift_op.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => continue ,
+            };
             if !shift_const.read().unwrap().is_constant() { continue; }
             let base_size = base.read().unwrap().get_size();
             if shift_const.read().unwrap().get_offset() as usize != 8 * base_size - 1 { continue; }
@@ -9847,32 +10846,48 @@ impl RuleSignMod2nOpt2 {
 
 impl Rule for RuleSignMod2nOpt2 {
     // Ghidra: ruleaction.cc:8877 RuleSignMod2nOpt2::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSignMod2nOpt2::applyOp (ruleaction.cc:8877-8922).
         let (const_vn, and_out) = {
             let op = op_arc.read().unwrap();
-            let cv = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let cv = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !cv.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
             let mask = crate::address::calc_mask(cv.read().unwrap().get_size());
             if cv.read().unwrap().get_offset() != mask { return Ok(action_status::NO_CHANGE); } // must be *(-1)
-            let ao = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let ao = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (cv, ao)
         };
         if !and_out.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-        let and_op = match and_out.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+        let and_op = match and_out
+            .read()
+            .unwrap()
+            .def
+            .as_ref()
+            .and_then(|w| w.upgrade()) {
             Some(a) => a, None => return Ok(action_status::NO_CHANGE),
         };
         if and_op.read().unwrap().opcode != OpCode::CPUI_INT_AND { return Ok(action_status::NO_CHANGE); }
-        let and_const = match and_op.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let and_const = match and_op.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         if !and_const.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
         let mask = crate::address::calc_mask(and_const.read().unwrap().get_size());
         let npow = (!and_const.read().unwrap().get_offset().wrapping_add(1)) & mask;
         if npow.count_ones() != 1 { return Ok(action_status::NO_CHANGE); } // must be power of 2
         if npow == 1 { return Ok(action_status::NO_CHANGE); }
 
-        let adj_vn = match and_op.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let adj_vn = match and_op.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         if !adj_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-        let adj_op = match adj_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+        let adj_op = match adj_vn
+            .read()
+            .unwrap()
+            .def
+            .as_ref()
+            .and_then(|w| w.upgrade()) {
             Some(a) => a, None => return Ok(action_status::NO_CHANGE),
         };
         let adj_opc = adj_op.read().unwrap().opcode;
@@ -9893,7 +10908,8 @@ impl Rule for RuleSignMod2nOpt2 {
         if base.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
 
         // Look for INT_ADD(multOut, base) among descendants
-        let mult_out = match op_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let mult_out = match op_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         let descendents: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = mult_out.read().unwrap().descend_iter().collect();
         for root_op_arc in descendents {
             if root_op_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD { continue; }
@@ -9944,7 +10960,9 @@ impl RuleDivTermAdd {
     /// (subpiece_op, total_truncation_bits, shift_opcode). Faithful to
     /// `findSubshift` (ruleaction.cc:7928-7953).
     // Ghidra: ruleaction.cc:7928 RuleDivTermAdd::findSubshift
-    fn find_subshift(op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>) -> Option<(std::sync::Arc<std::sync::RwLock<PcodeOp>>, i32, OpCode)> {
+    fn find_subshift(
+        op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
+    ) -> Option<(std::sync::Arc<std::sync::RwLock<PcodeOp>>, i32, OpCode)> {
         let o = op.read().unwrap();
         let shiftopc = o.opcode;
         let (subop_arc, mut n) = if shiftopc != OpCode::CPUI_SUBPIECE {
@@ -9979,7 +10997,9 @@ impl RuleDivTermAdd {
 
 impl Rule for RuleDivTermAdd {
     // Ghidra: ruleaction.cc:7848 RuleDivTermAdd::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleDivTermAdd::applyOp (ruleaction.cc:7848-7915).
         let (subop_arc, n, shiftopc) = match Self::find_subshift(op_arc) {
             Some(r) => r, None => return Ok(action_status::NO_CHANGE),
@@ -9989,10 +11009,16 @@ impl Rule for RuleDivTermAdd {
         // multvn = subop->getIn(0); must be INT_MULT
         let multvn = {
             let s = subop_arc.read().unwrap();
-            match s.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+            match s.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         if !multvn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-        let multop = match multvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+        let multop = match multvn
+            .read()
+            .unwrap()
+            .def
+            .as_ref()
+            .and_then(|w| w.upgrade()) {
             Some(a) => a, None => return Ok(action_status::NO_CHANGE),
         };
         if multop.read().unwrap().opcode != OpCode::CPUI_INT_MULT { return Ok(action_status::NO_CHANGE); }
@@ -10000,7 +11026,8 @@ impl Rule for RuleDivTermAdd {
         // multConst = 128-bit constant from multop->getIn(1)
         let cv_arc = {
             let m = multop.read().unwrap();
-            match m.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+            match m.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         let (mult_lo, mult_hi) = match cv_arc.read().unwrap().is_constant_extended() {
             Some((lo, hi)) => (lo, hi),
@@ -10011,7 +11038,8 @@ impl Rule for RuleDivTermAdd {
         // extvn = multop->getIn(0); must be INT_ZEXT or INT_SEXT
         let extvn = {
             let m = multop.read().unwrap();
-            match m.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+            match m.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         if !extvn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
         let extop = match extvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
@@ -10034,12 +11062,14 @@ impl Rule for RuleDivTermAdd {
         // x = extop->getIn(0)
         let x_vn = {
             let e = extop.read().unwrap();
-            match e.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+            match e.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         let ext_size = extvn.read().unwrap().get_size();
 
         // Look for INT_ADD(op_out, x) among descendants
-        let op_out = match op_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let op_out = match op_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         let descendents: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = op_out.read().unwrap().descend_iter().collect();
         for addop_arc in descendents {
             if addop_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD { continue; }
@@ -10047,8 +11077,14 @@ impl Rule for RuleDivTermAdd {
                 let a = addop_arc.read().unwrap();
                 (a.inrefs.get(0).cloned(), a.inrefs.get(1).cloned())
             };
-            let has_x = a0.as_ref().map(|v| std::sync::Arc::ptr_eq(v, &x_vn)).unwrap_or(false)
-                     || a1.as_ref().map(|v| std::sync::Arc::ptr_eq(v, &x_vn)).unwrap_or(false);
+            let has_x = a0
+                .as_ref()
+                .map(|v| std::sync::Arc::ptr_eq(v, &x_vn))
+                .unwrap_or(false)
+                     || a1
+                    .as_ref()
+                    .map(|v| std::sync::Arc::ptr_eq(v, &x_vn))
+                    .unwrap_or(false);
             if !has_x { continue; }
 
             // Construct new constant (possibly extended)
@@ -10088,7 +11124,9 @@ impl Rule for RuleDivTermAdd {
     fn get_name(&self) -> &str { "divtermadd" }
     // Ghidra: ruleaction.cc:7840 RuleDivTermAdd::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> {
-        vec![OpCode::CPUI_SUBPIECE, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT]
+        vec![
+            OpCode::CPUI_SUBPIECE, OpCode::CPUI_INT_RIGHT, OpCode::CPUI_INT_SRIGHT,
+        ]
     }
 }
 
@@ -10105,7 +11143,9 @@ impl RuleDivTermAdd2 {
 
 impl Rule for RuleDivTermAdd2 {
     // Ghidra: ruleaction.cc:7969 RuleDivTermAdd2::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleDivTermAdd2::applyOp (ruleaction.cc:7969-8046).
         // Guard: skip if input is a pointer type (prevents false-positive
         // on pointer arithmetic lifted as INT_RIGHT).
@@ -10119,17 +11159,24 @@ impl Rule for RuleDivTermAdd2 {
         // Trigger: INT_RIGHT with constant shift == 1.
         let (in0_vn, shift_val) = {
             let op = op_arc.read().unwrap();
-            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !in1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
             if in1.read().unwrap().get_offset() != 1 { return Ok(action_status::NO_CHANGE); }
-            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (in0, 1i32)
         };
         let _ = shift_val;
         if !in0_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
 
         // subop = INT_ADD; find x via MULT(-1) pattern
-        let addop = match in0_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+        let addop = match in0_vn
+            .read()
+            .unwrap()
+            .def
+            .as_ref()
+            .and_then(|w| w.upgrade()) {
             Some(a) => a, None => return Ok(action_status::NO_CHANGE),
         };
         if addop.read().unwrap().opcode != OpCode::CPUI_INT_ADD { return Ok(action_status::NO_CHANGE); }
@@ -10139,13 +11186,20 @@ impl Rule for RuleDivTermAdd2 {
             let a = addop.read().unwrap();
             let mut found = None;
             for i in 0..2 {
-                let compvn = match a.inrefs.get(i) { Some(v) => v.clone(), None => continue };
+                let compvn = match a.inrefs.get(i) { Some(v) => v.clone(), None => continue ,
+                };
                 if !compvn.read().unwrap().is_written() { continue; }
-                let compop = match compvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+                let compop = match compvn
+                    .read()
+                    .unwrap()
+                    .def
+                    .as_ref()
+                    .and_then(|w| w.upgrade()) {
                     Some(op) => op, None => continue,
                 };
                 if compop.read().unwrap().opcode != OpCode::CPUI_INT_MULT { continue; }
-                let invn = match compop.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => continue };
+                let invn = match compop.read().unwrap().inrefs.get(1) { Some(v) => v.clone(), None => continue ,
+                };
                 if !invn.read().unwrap().is_constant() { continue; }
                 let mask = crate::address::calc_mask(invn.read().unwrap().get_size());
                 if invn.read().unwrap().get_offset() == mask {
@@ -10161,10 +11215,16 @@ impl Rule for RuleDivTermAdd2 {
         };
 
         // z = compvn->def->getIn(0); must be SUBPIECE
-        let compvn_def = match compvn_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+        let compvn_def = match compvn_vn
+            .read()
+            .unwrap()
+            .def
+            .as_ref()
+            .and_then(|w| w.upgrade()) {
             Some(a) => a, None => return Ok(action_status::NO_CHANGE),
         };
-        let z_vn = match compvn_def.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let z_vn = match compvn_def.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         if !z_vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
         let subpieceop = match z_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
             Some(a) => a, None => return Ok(action_status::NO_CHANGE),
@@ -10174,21 +11234,35 @@ impl Rule for RuleDivTermAdd2 {
         // n = subpiece truncation * 8
         let n = {
             let sp = subpieceop.read().unwrap();
-            let trunc = sp.inrefs.get(1).and_then(|v| {
+            let trunc = sp
+                .inrefs
+                .get(1)
+                .and_then(|v| {
                 let g = v.read().unwrap();
                 if g.is_constant() { Some(g.get_offset() as i32) } else { None }
-            }).unwrap_or(-1);
+            })
+                .unwrap_or(-1);
             if trunc < 0 { return Ok(action_status::NO_CHANGE); }
-            let in0_size = sp.inrefs.get(0).map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+            let in0_size = sp
+                .inrefs
+                .get(0)
+                .map(|v| v.read().unwrap().get_size())
+                .unwrap_or(0);
             let z_size = z_vn.read().unwrap().get_size();
             if trunc * 8 != 8 * (in0_size as i32 - z_size as i32) { return Ok(action_status::NO_CHANGE); }
             trunc * 8
         };
 
         // multvn = subpieceop->getIn(0); must be INT_MULT
-        let multvn = match subpieceop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let multvn = match subpieceop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         if !multvn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-        let multop = match multvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+        let multop = match multvn
+            .read()
+            .unwrap()
+            .def
+            .as_ref()
+            .and_then(|w| w.upgrade()) {
             Some(a) => a, None => return Ok(action_status::NO_CHANGE),
         };
         if multop.read().unwrap().opcode != OpCode::CPUI_INT_MULT { return Ok(action_status::NO_CHANGE); }
@@ -10196,7 +11270,8 @@ impl Rule for RuleDivTermAdd2 {
         // multConst from multop->getIn(1) (128-bit)
         let cv_arc = {
             let m = multop.read().unwrap();
-            match m.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+            match m.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         let (mult_lo, mult_hi) = match cv_arc.read().unwrap().is_constant_extended() {
             Some(v) => v, None => return Ok(action_status::NO_CHANGE),
@@ -10204,18 +11279,26 @@ impl Rule for RuleDivTermAdd2 {
         let mult_const: u128 = (mult_hi as u128) << 64 | (mult_lo as u128);
 
         // zextvn = multop->getIn(0); must be INT_ZEXT of x
-        let zextvn = match multop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let zextvn = match multop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         if !zextvn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
-        let zextop = match zextvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
+        let zextop = match zextvn
+            .read()
+            .unwrap()
+            .def
+            .as_ref()
+            .and_then(|w| w.upgrade()) {
             Some(a) => a, None => return Ok(action_status::NO_CHANGE),
         };
         if zextop.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT { return Ok(action_status::NO_CHANGE); }
-        let zext_in = match zextop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let zext_in = match zextop.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         if !std::sync::Arc::ptr_eq(&zext_in, &x_vn) { return Ok(action_status::NO_CHANGE); }
         let ext_size = zextvn.read().unwrap().get_size();
 
         // Look for INT_ADD(z, ...) among descendants of op output
-        let op_out = match op_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+        let op_out = match op_arc.read().unwrap().output.as_ref() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
         let descendents: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = op_out.read().unwrap().descend_iter().collect();
         for addop2_arc in descendents {
             if addop2_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD { continue; }
@@ -10223,8 +11306,14 @@ impl Rule for RuleDivTermAdd2 {
                 let a = addop2_arc.read().unwrap();
                 (a.inrefs.get(0).cloned(), a.inrefs.get(1).cloned())
             };
-            let has_z = a0.as_ref().map(|v| std::sync::Arc::ptr_eq(v, &z_vn)).unwrap_or(false)
-                     || a1.as_ref().map(|v| std::sync::Arc::ptr_eq(v, &z_vn)).unwrap_or(false);
+            let has_z = a0
+                .as_ref()
+                .map(|v| std::sync::Arc::ptr_eq(v, &z_vn))
+                .unwrap_or(false)
+                     || a1
+                    .as_ref()
+                    .map(|v| std::sync::Arc::ptr_eq(v, &z_vn))
+                    .unwrap_or(false);
             if !has_z { continue; }
 
             // pow = 2^n; multConst += pow
@@ -10286,7 +11375,9 @@ impl RuleRangeMeld {
 
 impl Rule for RuleRangeMeld {
     // Ghidra: ruleaction.cc:1357 RuleRangeMeld::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         use crate::rangeutil::CircleRange;
 
         // Extract the two boolean comparison sub-ops.
@@ -10295,8 +11386,10 @@ impl Rule for RuleRangeMeld {
             if op.opcode != OpCode::CPUI_BOOL_AND && op.opcode != OpCode::CPUI_BOOL_OR {
                 return Ok(action_status::NO_CHANGE);
             }
-            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !vn1.read().unwrap().is_written() || !vn2.read().unwrap().is_written() {
                 return Ok(action_status::NO_CHANGE);
             }
@@ -10314,19 +11407,22 @@ impl Rule for RuleRangeMeld {
         // Pull back range1 from sub1.
         let mut range1 = CircleRange::new(1, 2, 1, 1); // CircleRange(true)
         let a1 = pull_back_op(&mut range1, &sub1_arc);
-        let a1 = match a1 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+        let a1 = match a1 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+        };
 
         // Pull back range2 from sub2.
         let mut range2 = CircleRange::new(1, 2, 1, 1); // CircleRange(true)
         let a2 = pull_back_op(&mut range2, &sub2_arc);
-        let a2 = match a2 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+        let a2 = match a2 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+        };
 
         // If either sub is a BOOL_NEGATE (CPUI_BOOL_NEGATE in Rugra), do an extra pull back.
         let sub1_code = sub1_arc.read().unwrap().opcode;
         let a1 = if sub1_code == OpCode::CPUI_BOOL_NEGATE {
             if !a1.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
             let a1_def = a1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
-            let a1_def = match a1_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let a1_def = match a1_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             match pull_back_op(&mut range1, &a1_def) {
                 Some(v) => v,
                 None => return Ok(action_status::NO_CHANGE),
@@ -10338,7 +11434,8 @@ impl Rule for RuleRangeMeld {
         let a2 = if sub2_code == OpCode::CPUI_BOOL_NEGATE {
             if !a2.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
             let a2_def = a2.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
-            let a2_def = match a2_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+            let a2_def = match a2_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+            };
             match pull_back_op(&mut range2, &a2_def) {
                 Some(v) => v,
                 None => return Ok(action_status::NO_CHANGE),
@@ -10456,7 +11553,11 @@ fn pull_back_op(
     let op_rg = op.read().unwrap();
     let num_input = op_rg.inrefs.len();
     let opc = op_rg.opcode;
-    let out_size = op_rg.output.as_ref().map(|v| v.read().unwrap().get_size()).unwrap_or(1);
+    let out_size = op_rg
+        .output
+        .as_ref()
+        .map(|v| v.read().unwrap().get_size())
+        .unwrap_or(1);
     if num_input == 1 {
         let res = op_rg.inrefs.get(0)?.clone();
         if res.read().unwrap().is_constant() {
@@ -10509,15 +11610,19 @@ impl RuleFloatRange {
 
 impl Rule for RuleFloatRange {
     // Ghidra: ruleaction.cc:1450 RuleFloatRange::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Extract the two comparison sub-ops.
         let (central_opc, vn1, vn2) = {
             let op = op_arc.read().unwrap();
             if op.opcode != OpCode::CPUI_BOOL_OR && op.opcode != OpCode::CPUI_BOOL_AND {
                 return Ok(action_status::NO_CHANGE);
             }
-            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn1 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let vn2 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !vn1.read().unwrap().is_written() || !vn2.read().unwrap().is_written() {
                 return Ok(action_status::NO_CHANGE);
             }
@@ -10583,7 +11688,8 @@ impl Rule for RuleFloatRange {
         }
         // cvn1 is the "other" slot off of cmp1.
         let cvn1 = cmp1_arc.read().unwrap().inrefs.get(1 - slot1).cloned();
-        let cvn1 = match cvn1 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+        let cvn1 = match cvn1 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+        };
 
         // Find nvn1 in cmp2's inputs.
         let (slot2, matchvn) = {
@@ -10606,7 +11712,8 @@ impl Rule for RuleFloatRange {
                 return Ok(action_status::NO_CHANGE);
             }
         };
-        let matchvn = match matchvn { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+        let matchvn = match matchvn { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+        };
 
         // Verify cvn1 matches matchvn.
         let cvn1_is_const = cvn1.read().unwrap().is_constant();
@@ -10699,7 +11806,9 @@ impl RuleFloatSign {
 
 impl Rule for RuleFloatSign {
     // Ghidra: ruleaction.cc:10733 RuleFloatSign::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleFloatSign::applyOp (ruleaction.cc:10733-10777).
         // Check inputs of this float op: if an input is defined by a sign-bit
         // manipulation, convert it to FLOAT_ABS/FLOAT_NEG.
@@ -10748,7 +11857,8 @@ impl Rule for RuleFloatSign {
             }
         }
         // Check descendants of this op's output
-        let is_bool_output = matches!(opc,
+        let is_bool_output = matches!(
+            opc,
             OpCode::CPUI_FLOAT_EQUAL | OpCode::CPUI_FLOAT_NOTEQUAL
             | OpCode::CPUI_FLOAT_LESS | OpCode::CPUI_FLOAT_LESSEQUAL
             | OpCode::CPUI_FLOAT_NAN
@@ -10816,8 +11926,15 @@ impl RulePullsubMulti {
         for op_arc in descends {
             let op_rg = op_arc.read().unwrap();
             if op_rg.opcode == OpCode::CPUI_SUBPIECE {
-                let min_v = op_rg.get_in(1).map(|v| v.read().unwrap().get_offset() as i32).unwrap_or(0);
-                let out_size = op_rg.output.as_ref().map(|v| v.read().unwrap().get_size() as i32).unwrap_or(0);
+                let min_v = op_rg
+                    .get_in(1)
+                    .map(|v| v.read().unwrap().get_offset() as i32)
+                    .unwrap_or(0);
+                let out_size = op_rg
+                    .output
+                    .as_ref()
+                    .map(|v| v.read().unwrap().get_size() as i32)
+                    .unwrap_or(0);
                 let max_v = min_v + out_size - 1;
                 if min_v < min_byte { min_byte = min_v; }
                 if max_v > max_byte { max_byte = max_v; }
@@ -10860,8 +11977,15 @@ impl RulePullsubMulti {
             }
             let (trunc_amount, out_size) = {
                 let op_rg = op_arc.read().unwrap();
-                let trunc = op_rg.get_in(1).map(|v| v.read().unwrap().get_offset() as i32).unwrap_or(0);
-                let osz = op_rg.output.as_ref().map(|v| v.read().unwrap().get_size() as i32).unwrap_or(0);
+                let trunc = op_rg
+                    .get_in(1)
+                    .map(|v| v.read().unwrap().get_offset() as i32)
+                    .unwrap_or(0);
+                let osz = op_rg
+                    .output
+                    .as_ref()
+                    .map(|v| v.read().unwrap().get_size() as i32)
+                    .unwrap_or(0);
                 (trunc, osz)
             };
             fd.op_set_input(&op_ref, new_vn.clone(), 0);
@@ -10897,9 +12021,19 @@ impl RulePullsubMulti {
             // Check same-block constraint (Ghidra checks getParent equality).
             // Rugra lacks easy block access here; we skip this check
             // conservatively (may find a SUBPIECE from a different block).
-            let in0_match = prev.get_in(0).map(|v| std::sync::Arc::ptr_eq(v, base_vn)).unwrap_or(false);
-            let out_match = prev.output.as_ref().map(|v| v.read().unwrap().get_size() as u32 == out_size).unwrap_or(false);
-            let shift_match = prev.get_in(1).map(|v| v.read().unwrap().get_offset() == shift).unwrap_or(false);
+            let in0_match = prev
+                .get_in(0)
+                .map(|v| std::sync::Arc::ptr_eq(v, base_vn))
+                .unwrap_or(false);
+            let out_match = prev
+                .output
+                .as_ref()
+                .map(|v| v.read().unwrap().get_size() as u32 == out_size)
+                .unwrap_or(false);
+            let shift_match = prev
+                .get_in(1)
+                .map(|v| v.read().unwrap().get_offset() == shift)
+                .unwrap_or(false);
             if in0_match && out_match && shift_match {
                 return prev.output.clone();
             }
@@ -10969,7 +12103,9 @@ impl RulePullsubMulti {
                                 break;
                             }
                             let offset = if piece.space.is_big_endian() {
-                                piece.offset.wrapping_add(piece.size as u64 - (out_size as u64 + skipleft))
+                                piece
+                                    .offset
+                                    .wrapping_add(piece.size as u64 - (out_size as u64 + skipleft))
                             } else {
                                 piece.offset.wrapping_add(skipleft)
                             };
@@ -11052,7 +12188,9 @@ impl RulePullsubMulti {
 
 impl Rule for RulePullsubMulti {
     // Ghidra: ruleaction.cc:880 RulePullsubMulti::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RulePullsubMulti::applyOp (ruleaction.cc:880-952).
         let vn = match op_arc.read().unwrap().get_in(0).cloned() {
             Some(v) => v,
@@ -11099,7 +12237,12 @@ impl Rule for RulePullsubMulti {
                     if let Some(def_op) = in_vn.read().unwrap().get_def() {
                         let def_code = def_op.read().unwrap().opcode;
                         if def_code == OpCode::CPUI_INT_ZEXT || def_code == OpCode::CPUI_INT_SEXT {
-                            let ext_in_size = def_op.read().unwrap().get_in(0).map(|v| v.read().unwrap().get_size() as i32).unwrap_or(0);
+                            let ext_in_size = def_op
+                                .read()
+                                .unwrap()
+                                .get_in(0)
+                                .map(|v| v.read().unwrap().get_size() as i32)
+                                .unwrap_or(0);
                             if new_size == ext_in_size {
                                 continue; // Matching extension, SUBPIECE will cancel.
                             }
@@ -11113,7 +12256,9 @@ impl Rule for RulePullsubMulti {
         // Compute small address for the new MULTIEQUAL output.
         let (base_addr, vn_size, is_big_endian) = {
             let r = vn.read().unwrap();
-            (crate::address::Address::new(r.get_offset()), r.get_size(), r.space().is_big_endian())
+            (
+                crate::address::Address::new(r.get_offset()), r.get_size(), r.space().is_big_endian(),
+            )
         };
         let _small_addr2 = if !is_big_endian {
             base_addr.offset(min_byte as i64)
@@ -11187,12 +12332,15 @@ impl RuleAddUnsigned {
 
 impl Rule for RuleAddUnsigned {
     // Ghidra: ruleaction.cc:7182 RuleAddUnsigned::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Covered base-type paths of RuleAddUnsigned::applyOp
         // (ruleaction.cc:7182-7214).
         let constvn = {
             let op = op_arc.read().unwrap();
-            match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+            match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         if !constvn.read().unwrap().is_constant() {
             return Ok(action_status::NO_CHANGE);
@@ -11267,7 +12415,9 @@ impl RuleSubRight {
 
 impl Rule for RuleSubRight {
     // Ghidra: ruleaction.cc:7269 RuleSubRight::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSubRight::applyOp (ruleaction.cc:7269-7339).
         // Ghidra: if (op->doesSpecialPrinting()) return 0 (7272-7273).
         if op_arc.read().unwrap().does_special_printing() {
@@ -11289,11 +12439,14 @@ impl Rule for RuleSubRight {
         }
         let (c, a, outvn) = {
             let op = op_arc.read().unwrap();
-            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !in1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
             let c = in1.read().unwrap().get_offset() as i32;
-            let a = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let outvn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+            let a = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let outvn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) ,
+            };
             (c, a, outvn)
         };
         if c == 0 { return Ok(action_status::NO_CHANGE); } // SUBPIECE is not least sig
@@ -11388,11 +12541,14 @@ impl RuleNegateNegate {
 
 impl Rule for RuleNegateNegate {
     // Ghidra: ruleaction.cc:9258 RuleNegateNegate::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleNegateNegate::applyOp (ruleaction.cc:9258-9271).
         let vn1 = {
             let op = op_arc.read().unwrap();
-            match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) }
+            match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            }
         };
         if !vn1.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
         let neg2 = match vn1.read().unwrap().get_def() {
@@ -11454,7 +12610,9 @@ impl RuleFloatSignCleanup {
 
 impl Rule for RuleFloatSignCleanup {
     // Ghidra: ruleaction.cc:10789 RuleFloatSignCleanup::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleFloatSignCleanup::applyOp (ruleaction.cc:10789-10802).
         let outvn = match op_arc.read().unwrap().output.clone() {
             Some(o) => o,
@@ -11535,9 +12693,11 @@ impl RulePtrsubCharConstant {
         if slot != 0 { return false; }
         let (vn_in1, vn_in2_offset) = {
             let o = op.0.read().unwrap();
-            let vn = match o.get_in(1) { Some(v) => v.clone(), None => return false };
+            let vn = match o.get_in(1) { Some(v) => v.clone(), None => return false ,
+            };
             if !vn.read().unwrap().is_constant() { return false; }
-            let mult_vn = match o.get_in(2) { Some(v) => v.clone(), None => return false };
+            let mult_vn = match o.get_in(2) { Some(v) => v.clone(), None => return false ,
+            };
             let mult_offset = mult_vn.read().unwrap().get_offset();
             (vn, mult_offset)
         };
@@ -11558,35 +12718,46 @@ impl RulePtrsubCharConstant {
 
 impl Rule for RulePtrsubCharConstant {
     // Ghidra: ruleaction.cc:7372 RulePtrsubCharConstant::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, _fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RulePtrsubCharConstant::applyOp (ruleaction.cc:7372-7421).
         let (sb, vn1, outvn) = {
             let op = op_arc.read().unwrap();
-            let sb = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let outvn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+            let sb = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let outvn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) ,
+            };
             (sb, vn1, outvn)
         };
         if !vn1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
         // sbType = sb->getTypeReadFacing(op); require TYPE_PTR to TYPE_SPACEBASE.
         use crate::type_system::datatype::{Datatype, TypeMetatype};
         let sb_type = sb.read().unwrap().get_type();
-        let sb_is_spacebase_ptr = sb_type.as_ref().map(|dt| {
+        let sb_is_spacebase_ptr = sb_type
+            .as_ref()
+            .map(|dt| {
             if dt.get_metatype() != TypeMetatype::Pointer { return false; }
             if let Datatype::Pointer(tp) = dt.as_ref() {
                 tp.ptr_to.get_metatype() == TypeMetatype::Spacebase
             } else { false }
-        }).unwrap_or(false);
+        })
+            .unwrap_or(false);
         if !sb_is_spacebase_ptr { return Ok(action_status::NO_CHANGE); }
         // outtype = outvn->getTypeDefFacing(); require TYPE_PTR with
         //   basetype isCharPrint() (ruleaction.cc:7366-7369).
         let outtype = outvn.read().unwrap().get_type();
-        let out_is_char_ptr = outtype.as_ref().map(|dt| {
+        let out_is_char_ptr = outtype
+            .as_ref()
+            .map(|dt| {
             if dt.get_metatype() != TypeMetatype::Pointer { return false; }
             if let Datatype::Pointer(tp) = dt.as_ref() {
                 tp.ptr_to.is_char_print()
             } else { false }
-        }).unwrap_or(false);
+        })
+            .unwrap_or(false);
         if !out_is_char_ptr { return Ok(action_status::NO_CHANGE); }
         let outtype = outtype.unwrap();
         let basetype = if let Datatype::Pointer(tp) = outtype.as_ref() {
@@ -11622,7 +12793,10 @@ impl Rule for RulePtrsubCharConstant {
         let opaque = (basetype.get_flags()
             & crate::type_system::datatype::type_flags::OPAQUE_STRUCT)
             != 0; // charType->isOpaqueString() (type.hh)
-        if !sm.read().unwrap().is_string_typed(symaddr, charsize, opaque) {
+        if !sm
+            .read()
+            .unwrap()
+            .is_string_typed(symaddr, charsize, opaque) {
             return Ok(action_status::NO_CHANGE); // confirmed not a string
         }
         // ruleaction.cc:7378-7391: the propagation half. Unless the output is
@@ -11642,7 +12816,9 @@ impl Rule for RulePtrsubCharConstant {
             for subop in descendants {
                 let slot = subop.read().unwrap().slot_of_input(&outvn);
                 if let Some(slot) = slot {
-                    if !Self::push_const_further(_fd, &crate::op::PcodeOpRef(subop), slot, val, outtype.clone()) {
+                    if !Self::push_const_further(
+                        _fd, &crate::op::PcodeOpRef(subop), slot, val, outtype.clone(),
+                    ) {
                         remove = false;
                     }
                 } else {
@@ -11724,7 +12900,10 @@ impl RuleExtensionPush {
             };
             let slot = {
                 let d = first_dec.read().unwrap();
-                d.inrefs.iter().position(|v| std::sync::Arc::ptr_eq(v, &out_vn)).unwrap_or(0)
+                d.inrefs
+                    .iter()
+                    .position(|v| std::sync::Arc::ptr_eq(v, &out_vn))
+                    .unwrap_or(0)
             };
             let dec_ref = crate::op::PcodeOpRef(first_dec.clone());
             // newOp(num, op->getAddr()); opSetOpcode; build output.
@@ -11750,12 +12929,16 @@ impl RuleExtensionPush {
 
 impl Rule for RuleExtensionPush {
     // Ghidra: ruleaction.cc:7435 RuleExtensionPush::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleExtensionPush::applyOp (ruleaction.cc:7435-7476).
         let (in_vn, out_vn) = {
             let op = op_arc.read().unwrap();
-            let in_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let out_vn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+            let in_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let out_vn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) ,
+            };
             (in_vn, out_vn)
         };
         if in_vn.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
@@ -11778,7 +12961,8 @@ impl Rule for RuleExtensionPush {
                 ptrcount += 1;
             } else if opc == OpCode::CPUI_INT_ADD {
                 // subOp = decOp->getOut()->loneDescend(); must be PTRADD.
-                let out = match dec_op.read().unwrap().output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+                let out = match dec_op.read().unwrap().output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) ,
+                };
                 let sub_op = out.read().unwrap().lone_descend();
                 if sub_op.is_none() { return Ok(action_status::NO_CHANGE); }
                 if sub_op.unwrap().read().unwrap().opcode != OpCode::CPUI_PTRADD {
@@ -11832,18 +13016,24 @@ impl RuleExpandLoad {
     /// every descendant of `vn` is `INT_AND vn const` whose sole descendant is a
     /// constant-comparison INT_EQUAL/INT_NOTEQUAL.
     // Ghidra: ruleaction.cc:10878 RuleExpandLoad::checkAndComparison
-    fn check_and_comparison(vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> bool {
+    fn check_and_comparison(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
         let descends: Vec<_> = vn.read().unwrap().descend_iter().collect();
         if descends.is_empty() { return false; }
         for op in descends {
             if op.read().unwrap().opcode != OpCode::CPUI_INT_AND { return false; }
-            let c = match op.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return false };
+            let c = match op.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return false ,
+            };
             if !c.read().unwrap().is_constant() { return false; }
-            let and_out = match op.read().unwrap().output.clone() { Some(o) => o, None => return false };
-            let comp_op = match and_out.read().unwrap().lone_descend() { Some(o) => o, None => return false };
+            let and_out = match op.read().unwrap().output.clone() { Some(o) => o, None => return false ,
+            };
+            let comp_op = match and_out.read().unwrap().lone_descend() { Some(o) => o, None => return false ,
+            };
             let opc = comp_op.read().unwrap().opcode;
             if opc != OpCode::CPUI_INT_EQUAL && opc != OpCode::CPUI_INT_NOTEQUAL { return false; }
-            let cc = match comp_op.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return false };
+            let cc = match comp_op.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return false ,
+            };
             if !cc.read().unwrap().is_constant() { return false; }
         }
         true
@@ -11896,14 +13086,19 @@ impl RuleExpandLoad {
 
 impl Rule for RuleExpandLoad {
     // Ghidra: ruleaction.cc:10937 RuleExpandLoad::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleExpandLoad::applyOp (ruleaction.cc:10937-11013).
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
         let (out_vn, root_ptr, space_id_vn) = {
             let op = op_arc.read().unwrap();
-            let out_vn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
-            let root_ptr = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let space_id_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let out_vn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let root_ptr = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let space_id_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (out_vn, root_ptr, space_id_vn)
         };
         let out_size = out_vn.read().unwrap().get_size();
@@ -11914,38 +13109,49 @@ impl Rule for RuleExpandLoad {
         let el_type: Option<std::sync::Arc<crate::type_system::datatype::Datatype>> = {
             use crate::type_system::datatype::{Datatype, TypeMetatype};
             if root_ptr.read().unwrap().is_written() {
-                let def = match root_ptr.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) };
+                let def = match root_ptr.read().unwrap().get_def() { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
+                };
                 if def.read().unwrap().opcode == OpCode::CPUI_INT_ADD {
-                    let in1 = match def.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                    let in1 = match def.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+                    };
                     if !in1.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
                     let off = in1.read().unwrap().get_offset();
                     if off > 16 { return Ok(action_status::NO_CHANGE); } // INT_ADD offset must be small
                     // INT_ADD must be used only once.
-                    let addout = match def.read().unwrap().output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+                    let addout = match def.read().unwrap().output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) ,
+                    };
                     if addout.read().unwrap().lone_descend().is_none() { return Ok(action_status::NO_CHANGE); }
                     add_op = Some(def.clone());
                     offset = off as usize;
                     // elType = rootPtr (=def->getIn(0))->getTypeReadFacing(def)
-                    let real_root = match def.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
-                    let dt = match real_root.read().unwrap().get_type() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) };
+                    let real_root = match def.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+                    };
+                    let dt = match real_root.read().unwrap().get_type() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
+                    };
                     if dt.get_metatype() != TypeMetatype::Pointer { return Ok(action_status::NO_CHANGE); }
-                    let ptr_to = match dt.as_ref() { Datatype::Pointer(tp) => tp.ptr_to.clone(), _ => return Ok(action_status::NO_CHANGE) };
+                    let ptr_to = match dt.as_ref() { Datatype::Pointer(tp) => tp.ptr_to.clone(), _ => return Ok(action_status::NO_CHANGE) ,
+                    };
                     Some(ptr_to)
                 } else {
                     // elType = rootPtr->getTypeReadFacing(op)
-                    let dt = match root_ptr.read().unwrap().get_type() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) };
+                    let dt = match root_ptr.read().unwrap().get_type() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
+                    };
                     if dt.get_metatype() != TypeMetatype::Pointer { return Ok(action_status::NO_CHANGE); }
-                    let ptr_to = match dt.as_ref() { Datatype::Pointer(tp) => tp.ptr_to.clone(), _ => return Ok(action_status::NO_CHANGE) };
+                    let ptr_to = match dt.as_ref() { Datatype::Pointer(tp) => tp.ptr_to.clone(), _ => return Ok(action_status::NO_CHANGE) ,
+                    };
                     Some(ptr_to)
                 }
             } else {
-                let dt = match root_ptr.read().unwrap().get_type() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) };
+                let dt = match root_ptr.read().unwrap().get_type() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
+                };
                 if dt.get_metatype() != TypeMetatype::Pointer { return Ok(action_status::NO_CHANGE); }
-                let ptr_to = match dt.as_ref() { Datatype::Pointer(tp) => tp.ptr_to.clone(), _ => return Ok(action_status::NO_CHANGE) };
+                let ptr_to = match dt.as_ref() { Datatype::Pointer(tp) => tp.ptr_to.clone(), _ => return Ok(action_status::NO_CHANGE) ,
+                };
                 Some(ptr_to)
             }
         };
-        let el_type = match el_type { Some(t) => t, None => return Ok(action_status::NO_CHANGE) };
+        let el_type = match el_type { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
+        };
         if el_type.get_size() <= out_size { return Ok(action_status::NO_CHANGE); }
         if el_type.get_size() < out_size + offset { return Ok(action_status::NO_CHANGE); }
 
@@ -12010,7 +13216,9 @@ impl Rule for RuleExpandLoad {
             } else {
                 el_type.clone()
             };
-            Self::modify_and_comparison(fd, &out_vn, &new_out, eff_type.get_size(), lsb_cut, eff_type);
+            Self::modify_and_comparison(
+                fd, &out_vn, &new_out, eff_type.get_size(), lsb_cut, eff_type,
+            );
         } else {
             // Truncate the new bigger LOAD output with a SUBPIECE → out_vn.
             let sub_op = fd.new_op(2, op_arc.read().unwrap().get_addr());
@@ -12091,10 +13299,12 @@ impl PieceNode {
         // !vn->isWritten()
         if !vn.is_written() { return true; }
         // def->code() != CPUI_PIECE
-        let def = match vn.get_def() { Some(d) => d, None => return true };
+        let def = match vn.get_def() { Some(d) => d, None => return true ,
+        };
         if def.read().unwrap().opcode != OpCode::CPUI_PIECE { return true; }
         // op = vn->loneDescend(); op == null → leaf
-        let lone = match vn.lone_descend() { Some(o) => o, None => return true };
+        let lone = match vn.lone_descend() { Some(o) => o, None => return true ,
+        };
         // vn->isAddrTied() → leaf unless vn->getAddr() == root->getAddr()+relOffset
         if vn.is_addr_tied() {
             let addr = root_vn.get_offset().wrapping_add(rel_offset as u64);
@@ -12124,8 +13334,10 @@ impl PieceNode {
         // op lock across recursive calls.
         let (in0, in1, sz0, sz1) = {
             let o = op.read().unwrap();
-            let i0 = match o.inrefs.get(0) { Some(v) => v.clone(), None => return };
-            let i1 = match o.inrefs.get(1) { Some(v) => v.clone(), None => return };
+            let i0 = match o.inrefs.get(0) { Some(v) => v.clone(), None => return ,
+            };
+            let i1 = match o.inrefs.get(1) { Some(v) => v.clone(), None => return ,
+            };
             let s0 = i0.read().unwrap().get_size() as i32;
             let s1 = i1.read().unwrap().get_size() as i32;
             (i0, i1, s0, s1)
@@ -12144,7 +13356,8 @@ impl PieceNode {
                 let vn_rg = vn.read().unwrap();
                 Self::is_leaf_node(&root_rg, &vn_rg, offset - root_offset)
             };
-            stack.push(PieceNode { op: op.clone(), slot, type_offset: offset, leaf: res });
+            stack.push(PieceNode { op: op.clone(), slot, type_offset: offset, leaf: res ,
+            });
             if !res {
                 // Recurse into the defining PIECE op of this non-leaf input.
                 let def = vn.read().unwrap().get_def();
@@ -12271,8 +13484,10 @@ impl RulePieceStructure {
     ) -> bool {
         let (outvn, invn, big_endian) = {
             let z = zext.0.read().unwrap();
-            let outvn = match &z.output { Some(o) => o.clone(), None => return false };
-            let invn = match z.inrefs.get(0) { Some(v) => v.clone(), None => return false };
+            let outvn = match &z.output { Some(o) => o.clone(), None => return false ,
+            };
+            let invn = match z.inrefs.get(0) { Some(v) => v.clone(), None => return false ,
+            };
             let big_endian = outvn.read().unwrap().get_space().is_big_endian();
             (outvn, invn, big_endian)
         };
@@ -12329,7 +13544,9 @@ impl RulePieceStructure {
         let mut change = false;
         // Snapshot the (varnode, type_offset) of every leaf up front, since
         // convert_zext_to_piece mutates the tree and we must not iterate it.
-        let mut leaves: Vec<(std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, i32)> = Vec::new();
+        let mut leaves: Vec<(
+            std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, i32,
+        )> = Vec::new();
         for node in stack {
             if !node.is_leaf() { continue; }
             if let Some(vn) = node.get_varnode() {
@@ -12338,11 +13555,14 @@ impl RulePieceStructure {
         }
         for (vn, type_offset) in leaves {
             if !vn.read().unwrap().is_written() { continue; }
-            let def = match vn.read().unwrap().get_def() { Some(d) => d, None => continue };
+            let def = match vn.read().unwrap().get_def() { Some(d) => d, None => continue ,
+            };
             if def.read().unwrap().opcode != OpCode::CPUI_INT_ZEXT { continue; }
             let vn_size = vn.read().unwrap().get_size() as i32;
             if !Self::spanning_range(structured_type, type_offset, vn_size) { continue; }
-            if Self::convert_zext_to_piece(&crate::op::PcodeOpRef(def), structured_type, type_offset, fd) {
+            if Self::convert_zext_to_piece(
+                &crate::op::PcodeOpRef(def), structured_type, type_offset, fd,
+            ) {
                 change = true;
             }
         }
@@ -12372,7 +13592,8 @@ impl RulePieceStructure {
         if root.read().unwrap().is_addr_tied() { return false; }
         if !leaf.read().unwrap().is_written() { return true; }
         if leaf.read().unwrap().is_proto_partial() { return true; }
-        let def = match leaf.read().unwrap().get_def() { Some(d) => d, None => return true };
+        let def = match leaf.read().unwrap().get_def() { Some(d) => d, None => return true ,
+        };
         if def.read().unwrap().is_marker() { return true; }
         if def.read().unwrap().opcode != OpCode::CPUI_PIECE { return false; }
         if let Some(t) = leaf.read().unwrap().get_type() {
@@ -12385,7 +13606,9 @@ impl RulePieceStructure {
 
 impl Rule for RulePieceStructure {
     // Ghidra: ruleaction.cc:7607 RulePieceStructure::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RulePieceStructure::applyOp (ruleaction.cc:7607-7700).
         // if (op->isPartialRoot()) return 0; — CONCAT tree already visited.
         // RULE-PTRARITH-ADDTREE-0001: without this guard the cleanup pool
@@ -12462,7 +13685,11 @@ impl Rule for RulePieceStructure {
         // Walk every node and give it the correct storage address.
         // baseAddr = outvn->getAddr() - baseOffset
         let base_addr = crate::address::Address::new(
-            outvn.read().unwrap().get_offset().wrapping_sub(base_offset as u64),
+            outvn
+                .read()
+                .unwrap()
+                .get_offset()
+                .wrapping_sub(base_offset as u64),
         );
         let mut any_addr_tied = outvn.read().unwrap().is_addr_tied();
         for i in 0..stack.len() {
@@ -12513,7 +13740,9 @@ impl Rule for RulePieceStructure {
                 }
                 fd.op_set_opcode(&copy_op, OpCode::CPUI_COPY);
                 fd.op_set_input(&copy_op, vn, 0);
-                fd.op_set_input(&crate::op::PcodeOpRef(op_clone.clone()), new_vn.clone(), slot);
+                fd.op_set_input(
+                    &crate::op::PcodeOpRef(op_clone.clone()), new_vn.clone(), slot,
+                );
                 fd.op_insert_before(&copy_op, &crate::op::PcodeOpRef(op_clone.clone()));
                 // needsResolution / resolveInFlow: not modelled in Rugra.
                 let mut nv = new_vn.write().unwrap();
@@ -12535,9 +13764,12 @@ impl Rule for RulePieceStructure {
                 let vn_arc = vn.clone();
                 let lslot = {
                     let l = lone_op.0.read().unwrap();
-                    l.inrefs.iter().position(|v| std::sync::Arc::ptr_eq(v, &vn_arc))
+                    l.inrefs
+                        .iter()
+                        .position(|v| std::sync::Arc::ptr_eq(v, &vn_arc))
                 };
-                let lslot = match lslot { Some(s) => s, None => continue };
+                let lslot = match lslot { Some(s) => s, None => continue ,
+                };
                 let vn_type = vn.read().unwrap().get_type();
                 let new_vn = fd.new_varnode(vn_size, addr);
                 if let Some(t) = vn_type {
@@ -12590,12 +13822,16 @@ impl RulePullsubIndirect {
 
 impl Rule for RulePullsubIndirect {
     // Ghidra: ruleaction.cc:962 RulePullsubIndirect::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RulePullsubIndirect::applyOp (ruleaction.cc:962-1014).
         let (vn, op_in1_offset) = {
             let op = op_arc.read().unwrap();
-            let vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let off_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let off_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let off = off_vn.read().unwrap().get_offset();
             (vn, off)
         };
@@ -12747,14 +13983,19 @@ impl RuleIndirectCollapse {
 
 impl Rule for RuleIndirectCollapse {
     // Ghidra: ruleaction.cc:3177 RuleIndirectCollapse::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleIndirectCollapse::applyOp (ruleaction.cc:3177-3252).
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
         let (in1, in0, outvn) = {
             let op = op_arc.read().unwrap();
-            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let outvn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+            let in1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let in0 = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let outvn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) ,
+            };
             (in1, in0, outvn)
         };
         // if (op->getIn(1)->getSpace()->getType()!=IPTR_IOP) return 0;
@@ -12907,7 +14148,9 @@ impl RuleTransformCpool {
 
 impl Rule for RuleTransformCpool {
     // Ghidra: ruleaction.cc:3915 RuleTransformCpool::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleTransformCpool::applyOp (ruleaction.cc:3915-3940).
         if op_arc.read().unwrap().is_cpool_transformed() {
             return Ok(action_status::NO_CHANGE); // Already visited
@@ -12956,7 +14199,8 @@ impl Rule for RuleTransformCpool {
                 //   type-name string; resolve it via the arch's TypeFactory
                 //   (find_by_name, mirroring TypeFactory::resolveByName which
                 //   CPoolRecord::getType uses) and attach with update_type_lock.
-                let resolved_dt = fd.get_arch()
+                let resolved_dt = fd
+                    .get_arch()
                     .and_then(|a| a.types.as_ref())
                     .and_then(|tf| tf.read().unwrap().find_by_name(&rec.type_name));
                 if let Some(dt) = resolved_dt {
@@ -13005,13 +14249,17 @@ impl RuleSwitchSingle {
 
 impl Rule for RuleSwitchSingle {
     // Ghidra: ruleaction.cc:5430 RuleSwitchSingle::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSwitchSingle::applyOp (ruleaction.cc:5430-5477).
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
         // BlockBasic *bb = op->getParent(); if (bb->sizeOut() != 1) return 0;
         let size_out = {
             let op = op_arc.read().unwrap();
-            op.parent.as_ref().and_then(|w| w.upgrade())
+            op.parent
+                .as_ref()
+                .and_then(|w| w.upgrade())
                 .map(|bb| bb.read().unwrap().size_out())
         };
         match size_out {
@@ -13081,8 +14329,12 @@ impl Rule for RuleSwitchSingle {
         // Rugra's Address carries no space; the BRANCH target address space is
         // the default code space (Ram).
         let coderef = {
-            let vn = fd.vbank.create_with_space(1, crate::space::AddressSpace::Ram, addr.as_u64());
-            vn.write().unwrap().set_flags(crate::varnode::varnode_flags::ANNOTATION);
+            let vn = fd
+                .vbank
+                .create_with_space(1, crate::space::AddressSpace::Ram, addr.as_u64());
+            vn.write()
+                .unwrap()
+                .set_flags(crate::varnode::varnode_flags::ANNOTATION);
             vn
         };
         fd.op_set_input(&op_ref, coderef, 0);
@@ -13120,7 +14372,9 @@ impl RuleFuncPtrEncoding {
 
 impl Rule for RuleFuncPtrEncoding {
     // Ghidra: ruleaction.cc:9926 RuleFuncPtrEncoding::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleFuncPtrEncoding::applyOp (ruleaction.cc:9926-9948).
         let align = match fd.get_arch() {
             Some(a) => a.funcptr_align,
@@ -13177,7 +14431,9 @@ impl RuleUnsigned2Float {
 
 impl Rule for RuleUnsigned2Float {
     // Ghidra: ruleaction.cc:9777 RuleUnsigned2Float::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let invn = match op_arc.read().unwrap().get_in(0).cloned() {
             Some(v) => v,
             None => return Ok(action_status::NO_CHANGE),
@@ -13282,8 +14538,7 @@ impl Rule for RuleUnsigned2Float {
                     fd.op_set_opcode(&zextop, OpCode::CPUI_INT_ZEXT);
                     let base_size = basevn.read().unwrap().get_size();
                     let zext_size = crate::typeop::TypeOpFloatInt2Float::preferred_zext_size(
-                        base_size as i32,
-                    ) as usize;
+                        base_size as i32) as usize;
                     let zextout = fd.new_unique_out(zext_size, &zextop);
                     let add_ref = crate::op::PcodeOpRef(addop.clone());
                     fd.op_set_opcode(&add_ref, OpCode::CPUI_FLOAT_INT2FLOAT);
@@ -13328,7 +14583,9 @@ impl RuleInt2FloatCollapse {
 
 impl Rule for RuleInt2FloatCollapse {
     // Ghidra: ruleaction.cc:9845 RuleInt2FloatCollapse::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         let in0 = match op_arc.read().unwrap().get_in(0).cloned() {
             Some(v) => v,
             None => return Ok(action_status::NO_CHANGE),
@@ -13356,8 +14613,14 @@ impl Rule for RuleInt2FloatCollapse {
         if multiop.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL { return Ok(action_status::NO_CHANGE); }
         if multiop.read().unwrap().num_input() != 2 { return Ok(action_status::NO_CHANGE); }
         // slot = multiop->getSlot(op->getOut())
-        let slot = multiop.read().unwrap().inrefs.iter().position(|v| std::sync::Arc::ptr_eq(v, &outvn));
-        let slot = match slot { Some(s) => s, None => return Ok(action_status::NO_CHANGE) };
+        let slot = multiop
+            .read()
+            .unwrap()
+            .inrefs
+            .iter()
+            .position(|v| std::sync::Arc::ptr_eq(v, &outvn));
+        let slot = match slot { Some(s) => s, None => return Ok(action_status::NO_CHANGE) ,
+        };
         let otherout = match multiop.read().unwrap().get_in(1 - slot).cloned() {
             Some(v) => v,
             None => return Ok(action_status::NO_CHANGE),
@@ -13368,7 +14631,12 @@ impl Rule for RuleInt2FloatCollapse {
         let op2_in0 = op2.read().unwrap().get_in(0).cloned().unwrap();
         if !std::sync::Arc::ptr_eq(&op2_in0, &basevn) { return Ok(action_status::NO_CHANGE); }
         // FlowBlock *cond = FlowBlock::findCondition(parent, slot, parent, 1-slot, dir2unsigned);
-        let parent = match multiop.read().unwrap().parent.as_ref().and_then(|w| w.upgrade()) {
+        let parent = match multiop
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(|w| w.upgrade()) {
             Some(p) => p,
             None => return Ok(action_status::NO_CHANGE), // no block graph
         };
@@ -13387,7 +14655,8 @@ impl Rule for RuleInt2FloatCollapse {
                 None
             }
         };
-        let cbranch = match cbranch { Some(c) => c, None => return Ok(action_status::NO_CHANGE) };
+        let cbranch = match cbranch { Some(c) => c, None => return Ok(action_status::NO_CHANGE) ,
+        };
         if cbranch.0.read().unwrap().opcode != OpCode::CPUI_CBRANCH { return Ok(action_status::NO_CHANGE); }
         if cbranch.0.read().unwrap().is_boolean_flip() { return Ok(action_status::NO_CHANGE); }
         // compare = cbranch->getIn(1)->getDef(); must be INT_SLESS.
@@ -13469,18 +14738,23 @@ impl RulePtraddUndo {
 
 impl Rule for RulePtraddUndo {
     // Ghidra: ruleaction.cc:6927 RulePtraddUndo::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RulePtraddUndo::applyOp (ruleaction.cc:6927-6944).
         if !fd.has_type_recovery_started() {
             return Ok(action_status::NO_CHANGE);
         }
         let (size, basevn, indvn) = {
             let op = op_arc.read().unwrap();
-            let in2 = match op.inrefs.get(2) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let in2 = match op.inrefs.get(2) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             if !in2.read().unwrap().is_constant() { return Ok(action_status::NO_CHANGE); }
             let size = in2.read().unwrap().get_offset();
-            let basevn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let indvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let basevn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let indvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (size, basevn, indvn)
         };
         // dt = basevn->getTypeReadFacing(op); if TYPE_PTR and tp->getPtrTo()
@@ -13488,7 +14762,10 @@ impl Rule for RulePtraddUndo {
         // If the varnode has a pointer type whose pointed-to size matches the
         // PTRADD element size AND the index is non-zero, this is still a valid
         // pointer arithmetic — leave it alone.
-        let is_correctly_typed_ptr = basevn.read().unwrap().get_type()
+        let is_correctly_typed_ptr = basevn
+            .read()
+            .unwrap()
+            .get_type()
             .map(|dt| {
                 use crate::type_system::datatype::{Datatype, TypeMetatype};
                 if dt.get_metatype() != TypeMetatype::Pointer { return false; }
@@ -13550,8 +14827,7 @@ impl RulePtrsubUndo {
     // Ghidra: type.cc:990 TypePointer::testForArraySlack
     fn test_for_array_slack(
         dt: &crate::type_system::datatype::Datatype,
-        off: i64,
-    ) -> bool {
+        off: i64) -> bool {
         use crate::type_system::datatype::TypeMetatype;
         // type.cc:995-996 — a bare array always has slack.
         if dt.get_metatype() == TypeMetatype::Array { return true; }
@@ -13668,8 +14944,7 @@ impl RulePtrsubUndo {
     // Ghidra: type.cc:1604 TypeStruct::getLowerBoundField
     fn get_lower_bound_field(
         s: &crate::type_system::datatype::TypeStruct,
-        off: i64,
-    ) -> i64 {
+        off: i64) -> i64 {
         if s.fields.is_empty() { return -1; }
         let mut min: i64 = 0;
         let mut max: i64 = s.fields.len() as i64 - 1;
@@ -13701,7 +14976,8 @@ impl RulePtrsubUndo {
     ) -> bool {
         use crate::type_system::datatype::{Datatype, TypeMetatype};
         if dt.get_metatype() != TypeMetatype::Pointer { return false; }
-        let tp = match dt.as_ref() { Datatype::Pointer(p) => p, _ => return false };
+        let tp = match dt.as_ref() { Datatype::Pointer(p) => p, _ => return false ,
+        };
         let ptrto = &tp.ptr_to;
         let wordsize = tp.wordsize.max(1) as i64;
         // addressToByteInt(x, wordsize) = x * wordsize
@@ -13848,7 +15124,13 @@ impl RulePtrsubUndo {
         while let Some(o) = cur {
             let opc = o.read().unwrap().opcode;
             if opc == OpCode::CPUI_INT_ADD {
-                let slot = o.read().unwrap().inrefs.iter().position(|v| std::sync::Arc::ptr_eq(v, &outvn)).unwrap_or(0);
+                let slot = o
+                    .read()
+                    .unwrap()
+                    .inrefs
+                    .iter()
+                    .position(|v| std::sync::Arc::ptr_eq(v, &outvn))
+                    .unwrap_or(0);
                 let other = o.read().unwrap().get_in(1 - slot).cloned();
                 if let Some(other) = other {
                     extra += Self::get_const_offset_back(&other, &mut submult, Self::DEPTH_LIMIT);
@@ -13860,12 +15142,20 @@ impl RulePtrsubUndo {
                     extra += in1.read().unwrap().get_offset() as i64;
                 }
             } else if opc == OpCode::CPUI_PTRADD {
-                if !o.read().unwrap().get_in(0).map(|v| std::sync::Arc::ptr_eq(v, &outvn)).unwrap_or(false) {
+                if !o
+                    .read()
+                    .unwrap()
+                    .get_in(0)
+                    .map(|v| std::sync::Arc::ptr_eq(v, &outvn))
+                    .unwrap_or(false) {
                     break;
                 }
                 let (ptraddmult, invn) = {
                     let or = o.read().unwrap();
-                    let mult = or.get_in(2).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(0);
+                    let mult = or
+                        .get_in(2)
+                        .map(|v| v.read().unwrap().get_offset() as i64)
+                        .unwrap_or(0);
                     let invn = or.get_in(1).cloned();
                     (mult, invn)
                 };
@@ -13917,7 +15207,12 @@ impl RulePtrsubUndo {
             None => return 0,
         };
         if !vn.read().unwrap().is_written() { return 0; }
-        if vn.read().unwrap().lone_descend().map(|d| !std::sync::Arc::ptr_eq(&d, &op.0)).unwrap_or(true) {
+        if vn
+            .read()
+            .unwrap()
+            .lone_descend()
+            .map(|d| !std::sync::Arc::ptr_eq(&d, &op.0))
+            .unwrap_or(true) {
             return 0; // Varnode must not be used anywhere else
         }
         let max_level = max_level - 1;
@@ -13962,9 +15257,18 @@ impl RulePtrsubUndo {
             let opc = cur.read().unwrap().opcode;
             let cur_ref = crate::op::PcodeOpRef(cur.clone());
             if opc == OpCode::CPUI_INT_ADD {
-                let slot = cur.read().unwrap().inrefs.iter().position(|v| std::sync::Arc::ptr_eq(v, &vn)).unwrap_or(0);
+                let slot = cur
+                    .read()
+                    .unwrap()
+                    .inrefs
+                    .iter()
+                    .position(|v| std::sync::Arc::ptr_eq(v, &vn))
+                    .unwrap_or(0);
                 let in1 = cur.read().unwrap().get_in(1).cloned();
-                if slot == 0 && in1.as_ref().map(|v| v.read().unwrap().is_constant()).unwrap_or(false) {
+                if slot == 0 && in1
+                        .as_ref()
+                        .map(|v| v.read().unwrap().is_constant())
+                        .unwrap_or(false) {
                     let in1v = in1.unwrap();
                     extra += in1v.read().unwrap().get_offset() as i64;
                     fd.op_remove_input(&cur_ref, 1);
@@ -13982,14 +15286,29 @@ impl RulePtrsubUndo {
                 fd.op_remove_input(&cur_ref, 1);
                 fd.op_set_opcode(&cur_ref, OpCode::CPUI_COPY);
             } else if opc == OpCode::CPUI_PTRADD {
-                if !cur.read().unwrap().get_in(0).map(|v| std::sync::Arc::ptr_eq(v, &vn)).unwrap_or(false) {
+                if !cur
+                    .read()
+                    .unwrap()
+                    .get_in(0)
+                    .map(|v| std::sync::Arc::ptr_eq(v, &vn))
+                    .unwrap_or(false) {
                     break;
                 }
                 let (ptraddmult, invn_is_const, invn_off) = {
                     let c = cur.read().unwrap();
-                    let mult = c.get_in(2).map(|v| v.read().unwrap().get_offset() as i64).unwrap_or(0);
+                    let mult = c
+                        .get_in(2)
+                        .map(|v| v.read().unwrap().get_offset() as i64)
+                        .unwrap_or(0);
                     let invn = c.get_in(1).cloned();
-                    let (isc, off) = invn.as_ref().map(|v| (v.read().unwrap().is_constant(), v.read().unwrap().get_offset() as i64)).unwrap_or((false, 0));
+                    let (isc, off) = invn
+                        .as_ref()
+                        .map(|v| {
+                            (
+                                v.read().unwrap().is_constant(), v.read().unwrap().get_offset() as i64,
+                            )
+                        })
+                        .unwrap_or((false, 0));
                     (mult, isc, off)
                 };
                 if invn_is_const {
@@ -14019,15 +15338,19 @@ impl RulePtrsubUndo {
 
 impl Rule for RulePtrsubUndo {
     // Ghidra: ruleaction.cc:7146 RulePtrsubUndo::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RulePtrsubUndo::applyOp (ruleaction.cc:7146-7188).
         if !fd.has_type_recovery_started() {
             return Ok(action_status::NO_CHANGE);
         }
         let (basevn, cvn) = {
             let op = op_arc.read().unwrap();
-            let basevn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let cvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let basevn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let cvn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (basevn, cvn)
         };
         let val = cvn.read().unwrap().get_offset() as i64;
@@ -14037,7 +15360,10 @@ impl Rule for RulePtrsubUndo {
         // We approximate isPtrsubMatching (type.cc:1123-1162) for the core
         // TypePointer cases. wordsize defaults to 1 (addressToByteInt is a no-op).
         // testForArraySlack and TypePointerRel are not yet modelled.
-        let still_matching = basevn.read().unwrap().get_type()
+        let still_matching = basevn
+            .read()
+            .unwrap()
+            .get_type()
             .map(|dt| Self::is_ptrsub_matching(&dt, val, extra, multiplier))
             .unwrap_or(false);
         if still_matching { return Ok(action_status::NO_CHANGE); }
@@ -14091,14 +15417,20 @@ impl RuleSegment {
 
 impl Rule for RuleSegment {
     // Ghidra: ruleaction.cc:9013 RuleSegment::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleSegment::applyOp (ruleaction.cc:9013-9057).
         let (space_id_vn, vn1, vn2, out_size) = {
             let op = op_arc.read().unwrap();
-            let space_id_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let vn2 = match op.inrefs.get(2) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let outvn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+            let space_id_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let vn1 = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let vn2 = match op.inrefs.get(2) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let outvn = match op.output.clone() { Some(o) => o, None => return Ok(action_status::NO_CHANGE) ,
+            };
             let out_size = outvn.read().unwrap().get_size();
             (space_id_vn, vn1, vn2, out_size)
         };
@@ -14108,12 +15440,16 @@ impl Rule for RuleSegment {
         let space_idx = space_id_vn.read().unwrap().get_offset() as i32;
         // SegmentOp *segdef = data.getArch()->userops.getSegmentOp(space_idx);
         // Ghidra throws if null; Rugra conservatively no-ops.
-        let segdef = fd.get_arch()
+        let segdef = fd
+            .get_arch()
             .and_then(|a| a.userops.as_ref())
             .and_then(|u| u.read().unwrap().get_segment_op(space_idx).cloned());
-        let segdef = match segdef { Some(s) => s, None => return Ok(action_status::NO_CHANGE) };
+        let segdef = match segdef { Some(s) => s, None => return Ok(action_status::NO_CHANGE) ,
+        };
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
-        let (vn1_const, vn2_const) = (vn1.read().unwrap().is_constant(), vn2.read().unwrap().is_constant());
+        let (vn1_const, vn2_const) = (
+            vn1.read().unwrap().is_constant(), vn2.read().unwrap().is_constant(),
+        );
         if vn1_const && vn2_const {
             // ruleaction.cc:9024-9033: both inputs constant -> fold.
             //   vector<uintb> bindlist; bindlist.push_back(vn1->getOffset());
@@ -14151,7 +15487,8 @@ impl Rule for RuleSegment {
             // ruleaction.cc:9037: whole = findContiguousWhole(data,vn1,vn2);
             let whole = find_contiguous_whole(&vn1, &vn2);
             // ruleaction.cc:9038-9039: if (whole==0 || whole->isFree()) return 0;
-            let whole = match whole { Some(w) => w, None => return Ok(action_status::NO_CHANGE) };
+            let whole = match whole { Some(w) => w, None => return Ok(action_status::NO_CHANGE) ,
+            };
             if whole.read().unwrap().is_free() { return Ok(action_status::NO_CHANGE); }
             // ruleaction.cc:9041-9045: use the contiguous source as whole ptr.
             //   data.opRemoveInput(op,2); data.opRemoveInput(op,1);
@@ -14192,8 +15529,10 @@ fn contiguous_test(
     if vn1_is_input || vn2_is_input { return false; }
     if !vn1_written || !vn2_written { return false; }
     // varnode.cc:2021-2022: PcodeOp *op1 = vn1->getDef(); PcodeOp *op2 = vn2->getDef();
-    let op1 = match vn1.read().unwrap().get_def() { Some(o) => o, None => return false };
-    let op2 = match vn2.read().unwrap().get_def() { Some(o) => o, None => return false };
+    let op1 = match vn1.read().unwrap().get_def() { Some(o) => o, None => return false ,
+    };
+    let op2 = match vn2.read().unwrap().get_def() { Some(o) => o, None => return false ,
+    };
     let (vn2_size, op1_opc, op2_opc) = {
         let o1 = op1.read().unwrap();
         let o2 = op2.read().unwrap();
@@ -14210,12 +15549,16 @@ fn contiguous_test(
     let (o1_in0, o1_in1_off, o2_in0, o2_in1_off) = {
         let o1 = op1.read().unwrap();
         let o2 = op2.read().unwrap();
-        let o1_in0 = match o1.inrefs.get(0) { Some(v) => v.clone(), None => return false };
-        let o2_in0 = match o2.inrefs.get(0) { Some(v) => v.clone(), None => return false };
+        let o1_in0 = match o1.inrefs.get(0) { Some(v) => v.clone(), None => return false ,
+        };
+        let o2_in0 = match o2.inrefs.get(0) { Some(v) => v.clone(), None => return false ,
+        };
         let o1_in1_off = match o1.inrefs.get(1) {
-            Some(v) => v.read().unwrap().get_offset(), None => return false };
+            Some(v) => v.read().unwrap().get_offset(), None => return false ,
+        };
         let o2_in1_off = match o2.inrefs.get(1) {
-            Some(v) => v.read().unwrap().get_offset(), None => return false };
+            Some(v) => v.read().unwrap().get_offset(), None => return false ,
+        };
         (o1_in0, o1_in1_off, o2_in0, o2_in1_off)
     };
     // Compare whole-source identity by raw varnode address (Arc ptr eq, like
@@ -14417,7 +15760,8 @@ impl RulePiecePathology {
         // — only the low piece is real, the high piece (in(0)) is the
         // pathological truncation.
         let bytes_consumed = op
-            .read().unwrap()
+            .read()
+            .unwrap()
             .get_in(1)
             .map(|v| v.read().unwrap().get_size() as u32)
             .unwrap_or(0);
@@ -14441,7 +15785,8 @@ impl RulePiecePathology {
                 let cur = cur_op.read().unwrap();
                 match cur.get_out() {
                     Some(out_vn) => out_vn
-                        .read().unwrap()
+                        .read()
+                        .unwrap()
                         .descend
                         .iter()
                         .filter_map(|w| w.upgrade())
@@ -14496,7 +15841,9 @@ impl RulePiecePathology {
                     }
                     OpCode::CPUI_RETURN => {
                         if !fd.get_func_proto().is_output_locked() {
-                            if fd.get_func_proto_mut().set_return_bytes_consumed(bytes_consumed) {
+                            if fd
+                                .get_func_proto_mut()
+                                .set_return_bytes_consumed(bytes_consumed) {
                                 count += 1;
                             }
                         }
@@ -14530,13 +15877,17 @@ impl RulePiecePathology {
 
 impl Rule for RulePiecePathology {
     // Ghidra: ruleaction.cc:10578 RulePiecePathology::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RulePiecePathology::applyOp (ruleaction.cc:10578-10616).
         use crate::op::pcodeop_flags;
         let (vn, lsb_vn) = {
             let op = op_arc.read().unwrap();
-            let vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-            let lsb_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
+            let lsb_vn = match op.inrefs.get(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             (vn, lsb_vn)
         };
         if !vn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
@@ -14584,7 +15935,9 @@ impl Rule for RulePiecePathology {
             let (lsb_addr, lsb_size, vn_addr, vn_size) = {
                 let l = lsb_vn.read().unwrap();
                 let v = vn.read().unwrap();
-                (l.get_addr().clone(), l.get_size(), v.get_addr().clone(), v.get_size())
+                (
+                    l.get_addr().clone(), l.get_size(), v.get_addr().clone(), v.get_size(),
+                )
             };
             // Rugra does not track per-space endianness on Address; we use the
             // little-endian branch (the common case) and fall back to
@@ -14686,9 +16039,18 @@ impl RuleConditionalMove {
         if std::sync::Arc::ptr_eq(root, branch) { return true; } // No branch to cross
         let vn_rg = vn.read().unwrap();
         if !vn_rg.is_written() { return true; }
-        let def_op = match vn_rg.get_def() { Some(o) => o, None => return true };
+        let def_op = match vn_rg.get_def() { Some(o) => o, None => return true ,
+        };
         // Can propagate if the value was formed before the branch block.
-        if !std::sync::Arc::ptr_eq(&def_op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade()).unwrap_or_else(|| branch.clone()), branch) {
+        if !std::sync::Arc::ptr_eq(
+            &def_op
+                .read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(|w| w.upgrade())
+                .unwrap_or_else(|| branch.clone()), branch,
+        ) {
             return true;
         }
         // Otherwise the defining op lives inside `branch` and must be duplicated.
@@ -14704,7 +16066,8 @@ impl RuleConditionalMove {
             }
             let num_in = op.read().unwrap().num_input();
             for i in 0..num_in {
-                let in0 = match op.read().unwrap().get_in(i).cloned() { Some(v) => v, None => continue };
+                let in0 = match op.read().unwrap().get_in(i).cloned() { Some(v) => v, None => continue ,
+                };
                 let in0_rg = in0.read().unwrap();
                 if in0_rg.is_free() && !in0_rg.is_constant() { return false; }
                 if in0_rg.is_written() {
@@ -14716,7 +16079,10 @@ impl RuleConditionalMove {
                         .unwrap_or(false);
                     if in_branch {
                         if in0_rg.is_addr_tied() { return false; } // Don't pull indirectly-addressed results
-                        if in0_rg.lone_descend().map(|d| !std::sync::Arc::ptr_eq(&d, &op)).unwrap_or(true) {
+                        if in0_rg
+                            .lone_descend()
+                            .map(|d| !std::sync::Arc::ptr_eq(&d, &op))
+                            .unwrap_or(true) {
                             return false; // More than one use
                         }
                         if ops.len() >= 4 { return false; }
@@ -14752,18 +16118,23 @@ impl RuleConditionalMove {
 
 impl Rule for RuleConditionalMove {
     // Ghidra: ruleaction.cc:9390 RuleConditionalMove::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleConditionalMove::applyOp (ruleaction.cc:9390-9558).
         if op_arc.read().unwrap().num_input() != 2 { return Ok(action_status::NO_CHANGE); }
         let (in0, in1, outvn) = {
             let op = op_arc.read().unwrap();
-            (op.get_in(0).cloned(), op.get_in(1).cloned(), op.output.clone())
+            (
+                op.get_in(0).cloned(), op.get_in(1).cloned(), op.output.clone(),
+            )
         };
         let (in0, in1) = match (in0, in1) {
             (Some(a), Some(b)) => (a, b),
             _ => return Ok(action_status::NO_CHANGE),
         };
-        let outvn = match outvn { Some(o) => o, None => return Ok(action_status::NO_CHANGE) };
+        let outvn = match outvn { Some(o) => o, None => return Ok(action_status::NO_CHANGE) ,
+        };
         let bool0 = Self::check_boolean(&in0);
         let bool1 = Self::check_boolean(&in1);
         if bool0.is_none() || bool1.is_none() { return Ok(action_status::NO_CHANGE); }
@@ -14771,7 +16142,12 @@ impl Rule for RuleConditionalMove {
         let bool1 = bool1.unwrap();
         // bb = op->getParent(); inblock0/1 = bb->getIn(0/1).
         use crate::block::FlowBlock;
-        let bb = match op_arc.read().unwrap().parent.as_ref().and_then(|w| w.upgrade()) {
+        let bb = match op_arc
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(|w| w.upgrade()) {
             Some(b) => b,
             None => return Ok(action_status::NO_CHANGE), // no block graph
         };
@@ -14817,7 +16193,8 @@ impl Rule for RuleConditionalMove {
                 bb2.last_op()
             } else { None }
         };
-        let cbranch = match cbranch { Some(c) => c, None => return Ok(action_status::NO_CHANGE) };
+        let cbranch = match cbranch { Some(c) => c, None => return Ok(action_status::NO_CHANGE) ,
+        };
         if cbranch.0.read().unwrap().opcode != OpCode::CPUI_CBRANCH { return Ok(action_status::NO_CHANGE); }
 
         // gatherExpression for both inputs (ruleaction.cc:9434-9437).
@@ -14837,9 +16214,15 @@ impl Rule for RuleConditionalMove {
             let r_rg = rootblock.read().unwrap();
             let true_out = r_rg.get_true_out(&cbranch_ref);
             if !std::sync::Arc::ptr_eq(&rootblock, &inblock0) {
-                true_out.as_ref().map(|o| std::sync::Arc::ptr_eq(o, &inblock0)).unwrap_or(false)
+                true_out
+                    .as_ref()
+                    .map(|o| std::sync::Arc::ptr_eq(o, &inblock0))
+                    .unwrap_or(false)
             } else {
-                true_out.as_ref().map(|o| !std::sync::Arc::ptr_eq(o, &inblock1)).unwrap_or(false)
+                true_out
+                    .as_ref()
+                    .map(|o| !std::sync::Arc::ptr_eq(o, &inblock1))
+                    .unwrap_or(false)
             }
         };
         let mut path0istrue = path0istrue;
@@ -14866,7 +16249,8 @@ impl Rule for RuleConditionalMove {
                     if !boolvn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
                     let negop = boolvn.read().unwrap().get_def().unwrap();
                     if negop.read().unwrap().opcode != OpCode::CPUI_BOOL_NEGATE { return Ok(action_status::NO_CHANGE); }
-                    let neg_in = match negop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                    let neg_in = match negop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+                    };
                     if !std::sync::Arc::ptr_eq(&neg_in, &in0) { return Ok(action_status::NO_CHANGE); }
                     andorselect = !andorselect;
                 }
@@ -14874,8 +16258,10 @@ impl Rule for RuleConditionalMove {
                 fd.op_uninsert(&op_ref);
                 fd.op_set_opcode(&op_ref, opc);
                 fd.op_insert_begin(&op_ref, &bb);
-                let firstvn = match Self::construct_bool(&bool0, &op_list0, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
-                let secondvn = match Self::construct_bool(&bool1, &op_list1, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                let firstvn = match Self::construct_bool(&bool0, &op_list0, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+                };
+                let secondvn = match Self::construct_bool(&bool1, &op_list1, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+                };
                 fd.op_set_input(&op_ref, firstvn, 0);
                 fd.op_set_input(&op_ref, secondvn, 1);
                 return Ok(action_status::CHANGE);
@@ -14891,7 +16277,8 @@ impl Rule for RuleConditionalMove {
                     if !boolvn.read().unwrap().is_written() { return Ok(action_status::NO_CHANGE); }
                     let negop = boolvn.read().unwrap().get_def().unwrap();
                     if negop.read().unwrap().opcode != OpCode::CPUI_BOOL_NEGATE { return Ok(action_status::NO_CHANGE); }
-                    let neg_in = match negop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                    let neg_in = match negop.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+                    };
                     if !std::sync::Arc::ptr_eq(&neg_in, &in1) { return Ok(action_status::NO_CHANGE); }
                     andorselect = !andorselect;
                 }
@@ -14899,8 +16286,10 @@ impl Rule for RuleConditionalMove {
                 fd.op_uninsert(&op_ref);
                 fd.op_set_opcode(&op_ref, opc);
                 fd.op_insert_begin(&op_ref, &bb);
-                let firstvn = match Self::construct_bool(&bool1, &op_list1, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
-                let secondvn = match Self::construct_bool(&bool0, &op_list0, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+                let firstvn = match Self::construct_bool(&bool1, &op_list1, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+                };
+                let secondvn = match Self::construct_bool(&bool0, &op_list0, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+                };
                 fd.op_set_input(&op_ref, firstvn, 0);
                 fd.op_set_input(&op_ref, secondvn, 1);
                 return Ok(action_status::CHANGE);
@@ -14927,7 +16316,9 @@ impl Rule for RuleConditionalMove {
                 };
                 let needcomplement = (bool0.read().unwrap().get_offset() == 0) == path0istrue;
                 if sz == 1 {
-                    fd.op_set_opcode(&op_ref, if needcomplement { OpCode::CPUI_BOOL_NEGATE } else { OpCode::CPUI_COPY });
+                    fd.op_set_opcode(
+                        &op_ref, if needcomplement { OpCode::CPUI_BOOL_NEGATE } else { OpCode::CPUI_COPY },
+                    );
                     fd.op_insert_begin(&op_ref, &bb);
                     fd.op_set_input(&op_ref, boolvn, 0);
                 } else {
@@ -14950,7 +16341,8 @@ impl Rule for RuleConditionalMove {
                 None => return Ok(action_status::NO_CHANGE),
             };
             let boolvn = if needcomplement { fd.op_bool_negate(boolvn, &op_ref, false) } else { boolvn };
-            let body1 = match Self::construct_bool(&bool1, &op_list1, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let body1 = match Self::construct_bool(&bool1, &op_list1, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             fd.op_set_input(&op_ref, boolvn, 0);
             fd.op_set_input(&op_ref, body1, 1);
         } else {
@@ -14964,7 +16356,8 @@ impl Rule for RuleConditionalMove {
                 None => return Ok(action_status::NO_CHANGE),
             };
             let boolvn = if needcomplement { fd.op_bool_negate(boolvn, &op_ref, false) } else { boolvn };
-            let body0 = match Self::construct_bool(&bool0, &op_list0, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+            let body0 = match Self::construct_bool(&bool0, &op_list0, &op_ref, fd) { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+            };
             fd.op_set_input(&op_ref, boolvn, 0);
             fd.op_set_input(&op_ref, body0, 1);
         }
@@ -15087,8 +16480,7 @@ impl RuleIgnoreNan {
     /// BOOL_NEGATE of a NaN output).
     // Ghidra: ruleaction.cc:9664 RuleIgnoreNan::isAnotherNan
     fn is_another_nan(
-        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-    ) -> bool {
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> bool {
         if !vn.read().unwrap().is_written() { return false; }
         let mut op = match vn.read().unwrap().get_def() {
             Some(o) => o,
@@ -15187,7 +16579,8 @@ impl RuleIgnoreNan {
         if boolean_flip { out_dir = 1 - out_dir; }
         // Resolve the parent block and its out-edge targets.
         let parent = op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
-        let parent = match parent { Some(p) => p, None => return };
+        let parent = match parent { Some(p) => p, None => return ,
+        };
         let out_branch = parent.read().unwrap().get_out(out_dir);
         let (out_branch, other_branch) = match out_branch {
             Some(e) => {
@@ -15199,15 +16592,22 @@ impl RuleIgnoreNan {
         // lastOp of the out-branch block.
         let last_op_ref = {
             let ob = out_branch.read().unwrap();
-            ob.as_any().downcast_ref::<crate::block::BlockBasic>().and_then(|bb| bb.last_op())
+            ob.as_any()
+                .downcast_ref::<crate::block::BlockBasic>()
+                .and_then(|bb| bb.last_op())
         };
-        let last_op = match last_op_ref { Some(r) => r.0, None => return };
+        let last_op = match last_op_ref { Some(r) => r.0, None => return ,
+        };
         if last_op.read().unwrap().opcode != OpCode::CPUI_CBRANCH { return; }
         // The protected block's other out-edge must rejoin the sibling branch.
         let rejoins = if let Some(other) = &other_branch {
             let ob = out_branch.read().unwrap();
-            let o0 = ob.get_out(0).map(|e| std::sync::Arc::ptr_eq(&e.point, other));
-            let o1 = ob.get_out(1).map(|e| std::sync::Arc::ptr_eq(&e.point, other));
+            let o0 = ob
+                .get_out(0)
+                .map(|e| std::sync::Arc::ptr_eq(&e.point, other));
+            let o1 = ob
+                .get_out(1)
+                .map(|e| std::sync::Arc::ptr_eq(&e.point, other));
             o0.unwrap_or(false) || o1.unwrap_or(false)
         } else {
             false
@@ -15245,7 +16645,9 @@ impl RuleIgnoreNan {
 
 impl Rule for RuleIgnoreNan {
     // Ghidra: ruleaction.cc:9740 RuleIgnoreNan::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleIgnoreNan::applyOp (ruleaction.cc:9740-9787).
         if let Some(arch) = fd.get_arch() {
             if arch.nan_ignore_all {
@@ -15272,7 +16674,8 @@ impl Rule for RuleIgnoreNan {
         // Walk the descendants of the NaN output, up to 3 levels deep (faithful
         // to applyOp's three nested beginDescend/endDescend loops).
         let level0: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = out1
-            .read().unwrap()
+            .read()
+            .unwrap()
             .descend
             .iter()
             .filter_map(|w| w.upgrade())
@@ -15290,9 +16693,11 @@ impl Rule for RuleIgnoreNan {
                     &float_var, &bool_read1, slot, match_code, &mut count, fd,
                 );
             }
-            let out2 = match out2 { Some(v) => v, None => continue };
+            let out2 = match out2 { Some(v) => v, None => continue ,
+            };
             let level1: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = out2
-                .read().unwrap()
+                .read()
+                .unwrap()
                 .descend
                 .iter()
                 .filter_map(|w| w.upgrade())
@@ -15302,9 +16707,11 @@ impl Rule for RuleIgnoreNan {
                 let out3 = Self::test_for_comparison(
                     &float_var, &bool_read2, slot, match_code, &mut count, fd,
                 );
-                let out3 = match out3 { Some(v) => v, None => continue };
+                let out3 = match out3 { Some(v) => v, None => continue ,
+                };
                 let level2: Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>> = out3
-                    .read().unwrap()
+                    .read()
+                    .unwrap()
                     .descend
                     .iter()
                     .filter_map(|w| w.upgrade())
@@ -15421,8 +16828,10 @@ impl RuleLoadVarnode {
         if d.opcode != OpCode::CPUI_INT_ADD {
             return None;
         }
-        let vn1 = match d.get_in(0) { Some(v) => v.clone(), None => return None };
-        let vn2 = match d.get_in(1) { Some(v) => v.clone(), None => return None };
+        let vn1 = match d.get_in(0) { Some(v) => v.clone(), None => return None ,
+        };
+        let vn2 = match d.get_in(1) { Some(v) => v.clone(), None => return None ,
+        };
         drop(d);
         // Try vn1 as spacebase, vn2 as the constant offset.
         if let Some(retspace) = Self::correct_spacebase(glb, &vn1, spc) {
@@ -15459,9 +16868,11 @@ impl RuleLoadVarnode {
     ) -> Option<crate::space::AddressSpace> {
         let op_rg = op.read().unwrap();
         // offvn = op->getIn(1); // Address offset
-        let offvn = match op_rg.get_in(1) { Some(v) => v.clone(), None => return None };
+        let offvn = match op_rg.get_in(1) { Some(v) => v.clone(), None => return None ,
+        };
         // loadspace = op->getIn(0)->getSpaceFromConst(); // Space being loaded/stored
-        let space_id_vn = match op_rg.get_in(0) { Some(v) => v.clone(), None => return None };
+        let space_id_vn = match op_rg.get_in(0) { Some(v) => v.clone(), None => return None ,
+        };
         drop(op_rg);
         let loadspace = {
             let s = space_id_vn.read().unwrap();
@@ -15475,7 +16886,10 @@ impl RuleLoadVarnode {
         // Treat segmentop as part of load/store.
         let off_is_written = offvn.read().unwrap().is_written();
         let off_def_code = if off_is_written {
-            offvn.read().unwrap().get_def()
+            offvn
+                .read()
+                .unwrap()
+                .get_def()
                 .map(|d| d.read().unwrap().opcode)
         } else {
             None
@@ -15488,7 +16902,8 @@ impl RuleLoadVarnode {
                 let dr = d.read().unwrap();
                 dr.get_in(2).cloned()
             };
-            let inner = match inner { Some(v) => v, None => return None };
+            let inner = match inner { Some(v) => v, None => return None ,
+            };
             if inner.read().unwrap().is_constant() {
                 return None;
             }
@@ -15505,7 +16920,9 @@ impl RuleLoadVarnode {
 
 impl Rule for RuleLoadVarnode {
     // Ghidra: ruleaction.cc:4277 RuleLoadVarnode::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Partially corresponds to RuleLoadVarnode::applyOp
         // (ruleaction.cc:4277-4305); the callspec tail remains
         // CALLSPEC-0001.
@@ -15520,7 +16937,8 @@ impl Rule for RuleLoadVarnode {
         // size = op->getOut()->getSize();
         let out_size = {
             let op = op_arc.read().unwrap();
-            let out = match op.get_out() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let out = match op.get_out() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let sz = out.read().unwrap().get_size();
             sz
         };
@@ -15595,7 +17013,9 @@ impl RuleStoreVarnode {
 
 impl Rule for RuleStoreVarnode {
     // Ghidra: ruleaction.cc:4319 RuleStoreVarnode::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleStoreVarnode::applyOp (ruleaction.cc:4319-4341).
         // checkSpacebase(data.getArch(),op,offoff)
         let glb = fd.get_arch().map(std::sync::Arc::as_ref);
@@ -15607,7 +17027,8 @@ impl Rule for RuleStoreVarnode {
         // size = op->getIn(2)->getSize();
         let val_size = {
             let op = op_arc.read().unwrap();
-            let inv = match op.get_in(2) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let inv = match op.get_in(2) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let sz = inv.read().unwrap().get_size();
             sz
         };
@@ -15625,7 +17046,9 @@ impl Rule for RuleStoreVarnode {
         // queryProperties step. Rugra's split Address model passes the
         // resolved space explicitly instead of routing through the
         // Register-space-only Funcdata::new_varnode_out adapter.
-        let new_out = fd.vbank.create_def_with_space(val_size, baseoff, offset_bytes, &op_ref.0);
+        let new_out = fd
+            .vbank
+            .create_def_with_space(val_size, baseoff, offset_bytes, &op_ref.0);
         op_ref.0.write().unwrap().output = Some(new_out.clone());
         fd.set_varnode_properties(&new_out);
 
@@ -15706,7 +17129,8 @@ impl RulePushPtr {
     ) {
         loop {
             let def = { vn.read().unwrap().get_def() };
-            let op = match def { Some(o) => o, None => return };
+            let op = match def { Some(o) => o, None => return ,
+            };
             if vn.read().unwrap().is_auto_live() { return; }
             if vn.read().unwrap().lone_descend().is_none() {
                 // Already has multiple descendants.
@@ -15720,7 +17144,9 @@ impl RulePushPtr {
                 true
             } else if opc == OpCode::CPUI_INT_MULT {
                 // Keep if second input is constant.
-                let in1_const = op.read().unwrap()
+                let in1_const = op
+                    .read()
+                    .unwrap()
                     .get_in(1)
                     .map(|v| v.read().unwrap().is_constant())
                     .unwrap_or(false);
@@ -15734,7 +17160,8 @@ impl RulePushPtr {
                 return;
             }
             // vn = op->getIn(0);
-            let next = match op.read().unwrap().get_in(0) { Some(v) => v.clone(), None => return };
+            let next = match op.read().unwrap().get_in(0) { Some(v) => v.clone(), None => return ,
+            };
             vn = next;
         }
     }
@@ -15747,12 +17174,13 @@ impl RulePushPtr {
     // Ghidra: ruleaction.cc:7469 RulePushPtr::duplicateNeed
     fn duplicate_need(
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
-        fd: &mut Funcdata,
-    ) {
+        fd: &mut Funcdata) {
         let (out_vn, in_vn, num, opc, _addr) = {
             let o = op.read().unwrap();
-            let out_vn = match o.get_out() { Some(v) => v.clone(), None => return };
-            let in_vn = match o.get_in(0) { Some(v) => v.clone(), None => return };
+            let out_vn = match o.get_out() { Some(v) => v.clone(), None => return ,
+            };
+            let in_vn = match o.get_in(0) { Some(v) => v.clone(), None => return ,
+            };
             let num = o.num_input();
             let opc = o.opcode;
             let addr = o.get_addr();
@@ -15765,7 +17193,9 @@ impl RulePushPtr {
             let o = out_vn.read().unwrap();
             for dec_op in o.descend_iter() {
                 // slot = decOp->getSlot(outVn);
-                let slot = dec_op.read().unwrap()
+                let slot = dec_op
+                    .read()
+                    .unwrap()
                     .inrefs
                     .iter()
                     .position(|v| std::sync::Arc::ptr_eq(v, &out_vn));
@@ -15810,7 +17240,9 @@ impl RulePushPtr {
 
 impl Rule for RulePushPtr {
     // Ghidra: ruleaction.cc:6863 RulePushPtr::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RulePushPtr::applyOp (ruleaction.cc:6863-6913).
         if !fd.has_type_recovery_started() {
             return Ok(action_status::NO_CHANGE);
@@ -15820,8 +17252,11 @@ impl Rule for RulePushPtr {
         let mut slot: usize = num_input;
         let mut vni: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
         for s in 0..num_input {
-            let in_vn = match op_arc.read().unwrap().get_in(s) { Some(v) => v.clone(), None => continue };
-            let is_ptr = in_vn.read().unwrap()
+            let in_vn = match op_arc.read().unwrap().get_in(s) { Some(v) => v.clone(), None => continue ,
+            };
+            let is_ptr = in_vn
+                .read()
+                .unwrap()
                 .get_type_read_facing()
                 .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
                 .unwrap_or(false);
@@ -15831,7 +17266,8 @@ impl Rule for RulePushPtr {
                 break;
             }
         }
-        let vni = match vni { Some(v) => v, None => return Ok(action_status::NO_CHANGE) };
+        let vni = match vni { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
+        };
         if slot == num_input {
             return Ok(action_status::NO_CHANGE);
         }
@@ -15841,8 +17277,12 @@ impl Rule for RulePushPtr {
             return Ok(action_status::NO_CHANGE);
         }
 
-        let vn = match op_arc.read().unwrap().get_out() { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-        let vnadd2 = match op_arc.read().unwrap().get_in(1usize.wrapping_sub(slot).min(num_input - 1)) {
+        let vn = match op_arc.read().unwrap().get_out() { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
+        let vnadd2 = match op_arc
+            .read()
+            .unwrap()
+            .get_in(1usize.wrapping_sub(slot).min(num_input - 1)) {
             Some(v) => v.clone(),
             None => return Ok(action_status::NO_CHANGE),
         };
@@ -15859,11 +17299,14 @@ impl Rule for RulePushPtr {
             vn.read().unwrap().descend_iter().collect();
         for decop in descendants {
             // j = decop->getSlot(vn);
-            let j = decop.read().unwrap()
+            let j = decop
+                .read()
+                .unwrap()
                 .inrefs
                 .iter()
                 .position(|v| std::sync::Arc::ptr_eq(v, &vn));
-            let j = match j { Some(s) => s, None => continue };
+            let j = match j { Some(s) => s, None => continue ,
+            };
             let one_minus_j = 1usize.wrapping_sub(j);
             // vnadd1 = decop->getIn(1-j);
             let vnadd1 = match decop.read().unwrap().get_in(one_minus_j) {
@@ -15940,23 +17383,29 @@ impl RulePtrArith {
         op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         slot: usize,
     ) -> bool {
-        let vn = match op.read().unwrap().get_in(slot) { Some(v) => v.clone(), None => return true };
+        let vn = match op.read().unwrap().get_in(slot) { Some(v) => v.clone(), None => return true ,
+        };
         let def = vn.read().unwrap().get_def();
-        let pre_op = match def { Some(o) => o, None => return true };
+        let pre_op = match def { Some(o) => o, None => return true ,
+        };
         // if (preOp->code() != CPUI_INT_ADD) return true;
         if pre_op.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
             return true;
         }
         // Find which input of preOp is a pointer.
         let mut preslot: usize = 0;
-        let pre_is_ptr_0 = pre_op.read().unwrap()
+        let pre_is_ptr_0 = pre_op
+            .read()
+            .unwrap()
             .get_in(0)
             .and_then(|v| v.read().unwrap().get_type_read_facing())
             .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
             .unwrap_or(false);
         if !pre_is_ptr_0 {
             preslot = 1;
-            let pre_is_ptr_1 = pre_op.read().unwrap()
+            let pre_is_ptr_1 = pre_op
+                .read()
+                .unwrap()
                 .get_in(1)
                 .and_then(|v| v.read().unwrap().get_type_read_facing())
                 .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
@@ -15984,13 +17433,16 @@ impl RulePtrArith {
     ) -> i32 {
         let mut res: i32 = 1; // Assume we are going to push.
         let mut count: i32 = 0;
-        let ptr_base = match op.read().unwrap().get_in(slot) { Some(v) => v.clone(), None => return 0 };
+        let ptr_base = match op.read().unwrap().get_in(slot) { Some(v) => v.clone(), None => return 0 ,
+        };
         // if (ptrBase->isFree() && !ptrBase->isConstant()) return 0;
         if ptr_base.read().unwrap().is_free() && !ptr_base.read().unwrap().is_constant() {
             return 0;
         }
         let other_slot = if slot == 0 { 1 } else { 0 };
-        let other_is_ptr = op.read().unwrap()
+        let other_is_ptr = op
+            .read()
+            .unwrap()
             .get_in(other_slot)
             .and_then(|v| v.read().unwrap().get_type_read_facing())
             .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
@@ -15998,36 +17450,52 @@ impl RulePtrArith {
         if other_is_ptr {
             res = 2;
         }
-        let out_vn = match op.read().unwrap().get_out() { Some(v) => v.clone(), None => return 0 };
+        let out_vn = match op.read().unwrap().get_out() { Some(v) => v.clone(), None => return 0 ,
+        };
         for dec_op in out_vn.read().unwrap().descend_iter() {
             count += 1;
             let opc = dec_op.read().unwrap().opcode;
             if opc == OpCode::CPUI_INT_ADD {
                 // otherVn = decOp->getIn(1 - decOp->getSlot(outVn));
-                let dec_slot = dec_op.read().unwrap()
+                let dec_slot = dec_op
+                    .read()
+                    .unwrap()
                     .inrefs
                     .iter()
                     .position(|v| std::sync::Arc::ptr_eq(v, &out_vn));
-                let other_idx = match dec_slot { Some(s) => 1usize.wrapping_sub(s), None => 0 };
-                let other_vn = match dec_op.read().unwrap().get_in(other_idx) { Some(v) => v.clone(), None => continue };
+                let other_idx = match dec_slot { Some(s) => 1usize.wrapping_sub(s), None => 0 ,
+                };
+                let other_vn = match dec_op.read().unwrap().get_in(other_idx) { Some(v) => v.clone(), None => continue ,
+                };
                 if other_vn.read().unwrap().is_free() && !other_vn.read().unwrap().is_constant() {
                     return 0;
                 }
-                let ov_is_ptr = other_vn.read().unwrap()
+                let ov_is_ptr = other_vn
+                    .read()
+                    .unwrap()
                     .get_type_read_facing()
-                    .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
+                    .map(|dt| {
+                        dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer
+                    })
                     .unwrap_or(false);
                 if ov_is_ptr {
                     res = 2; // Do not push in the presence of other pointers.
                 }
             } else if (opc == OpCode::CPUI_LOAD || opc == OpCode::CPUI_STORE)
-                && dec_op.read().unwrap().get_in(1).map(|v| std::sync::Arc::ptr_eq(v, &out_vn)).unwrap_or(false)
+                && dec_op
+                    .read()
+                    .unwrap()
+                    .get_in(1)
+                    .map(|v| std::sync::Arc::ptr_eq(v, &out_vn))
+                    .unwrap_or(false)
             {
                 // If use is as pointer for LOAD or STORE.
                 let pb_is_spacebase = ptr_base.read().unwrap().is_spacebase();
                 let pb_is_input = ptr_base.read().unwrap().is_input();
                 let pb_is_const = ptr_base.read().unwrap().is_constant();
-                let other_is_const = op.read().unwrap()
+                let other_is_const = op
+                    .read()
+                    .unwrap()
                     .get_in(other_slot)
                     .map(|v| v.read().unwrap().is_constant())
                     .unwrap_or(false);
@@ -16055,7 +17523,9 @@ impl RulePtrArith {
 
 impl Rule for RulePtrArith {
     // Ghidra: ruleaction.cc:6654 RulePtrArith::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RulePtrArith::applyOp (ruleaction.cc:6654-6676).
         if !fd.has_type_recovery_started() {
             return Ok(action_status::NO_CHANGE);
@@ -16064,7 +17534,9 @@ impl Rule for RulePtrArith {
         let num_input = op_arc.read().unwrap().num_input();
         let mut slot: usize = num_input;
         for s in 0..num_input {
-            let is_ptr = op_arc.read().unwrap()
+            let is_ptr = op_arc
+                .read()
+                .unwrap()
                 .get_in(s)
                 .and_then(|v| v.read().unwrap().get_type_read_facing())
                 .map(|dt| dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer)
@@ -16136,13 +17608,19 @@ struct AddTreeState<'a> {
 impl<'a> AddTreeState<'a> {
     /// Faithful to `AddTreeState::AddTreeState` ctor (ruleaction.cc:6036-6069).
     // Ghidra: ruleaction.cc:6036 AddTreeState::AddTreeState
-    fn new(data: &'a mut Funcdata, op: std::sync::Arc<std::sync::RwLock<PcodeOp>>, slot: usize) -> Self {
+    fn new(
+        data: &'a mut Funcdata, op: std::sync::Arc<std::sync::RwLock<PcodeOp>>, slot: usize,
+    ) -> Self {
         // ptr = op->getIn(slot). The caller guarantees slot is a pointer, so it
         // must exist; if not, fabricate a 1-byte const placeholder so the state
         // is well-formed (apply() will bail via the type checks).
-        let ptr = op.read().unwrap().get_in(slot).cloned().unwrap_or_else(|| {
-            data.vbank.create_constant(1, 0)
-        });
+        let ptr = op
+            .read()
+            .unwrap()
+            .get_in(slot)
+            .cloned()
+            .unwrap_or_else(|| data.vbank.create_constant(1, 0)
+        );
         let (ct, ptrsize, base_type, size, is_degenerate) = {
             let v = ptr.read().unwrap();
             let ct = v.get_type_read_facing();
@@ -16158,7 +17636,9 @@ impl<'a> AddTreeState<'a> {
                             0
                         } else {
                             // byteToAddressInt(baseType->getAlignSize(), wordSize)
-                            byte_to_address_int(bt.get_align_size() as i64, tp.wordsize.max(1) as i64)
+                            byte_to_address_int(
+                                bt.get_align_size() as i64, tp.wordsize.max(1) as i64,
+                            )
                         };
                         // isDegenerate: baseType->getAlignSize() <= unitsize && > 0
                         // where unitsize = addressToByteInt(1, wordSize) == wordSize.
@@ -16249,14 +17729,19 @@ impl<'a> AddTreeState<'a> {
             let sz = vn.read().unwrap().get_size();
             (vc, vt, sz)
         };
-        let vnterm = match vnterm { Some(v) => v, None => return true };
+        let vnterm = match vnterm { Some(v) => v, None => return true ,
+        };
         if vnterm.read().unwrap().is_free() {
             self.valid = false;
             return false;
         }
         if let Some(vnconst) = vnconst {
             if vnconst.read().unwrap().is_constant() {
-                let val = (vnconst.read().unwrap().get_offset().wrapping_mul(tree_coeff)) & self.ptrmask;
+                let val = (vnconst
+                    .read()
+                    .unwrap()
+                    .get_offset()
+                    .wrapping_mul(tree_coeff)) & self.ptrmask;
                 let sval = sign_extend_u64(val, vn_size * 8);
                 let rem = if self.size == 0 { sval } else { signed_rem(sval, self.size) };
                 if rem != 0 {
@@ -16266,7 +17751,8 @@ impl<'a> AddTreeState<'a> {
                     }
                     if !self.prevent_distribution {
                         let vnterm_def = vnterm.read().unwrap().get_def();
-                        let is_add = vnterm_def.as_ref()
+                        let is_add = vnterm_def
+                            .as_ref()
                             .map(|d| d.read().unwrap().opcode == OpCode::CPUI_INT_ADD)
                             .unwrap_or(false);
                         if is_add {
@@ -16408,8 +17894,12 @@ impl<'a> AddTreeState<'a> {
             } else {
                 // baseType STRUCT + array hints path needs biggestNonMultCoeff
                 // (modelled) but the array-hint logic is approximated.
-                let is_struct = self.base_type.as_ref()
-                    .map(|bt| bt.get_metatype() == crate::type_system::datatype::TypeMetatype::Struct)
+                let is_struct = self
+                    .base_type
+                    .as_ref()
+                    .map(|bt| {
+                        bt.get_metatype() == crate::type_system::datatype::TypeMetatype::Struct
+                    })
                     .unwrap_or(false);
                 if is_struct && self.biggest_non_mult_coeff != 0 && self.multsum == 0 {
                     self.offset = tmpoff;
@@ -16476,7 +17966,9 @@ impl<'a> AddTreeState<'a> {
 
     /// Faithful to `AddTreeState::buildMultiples` (ruleaction.cc:6374-6402).
     // Ghidra: ruleaction.cc:6374 AddTreeState::buildMultiples
-    fn build_multiples(&mut self) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+    fn build_multiples(
+        &mut self,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
         let smultsum = sign_extend_u64(self.multsum, self.ptrsize * 8);
         let const_coeff: u64 = if self.size == 0 { 0 } else { (signed_div(smultsum, self.size) as u64) & self.ptrmask };
         let mut res_node: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
@@ -16498,7 +17990,8 @@ impl<'a> AddTreeState<'a> {
                 self.data.new_unique_out(self.ptrsize, &newop);
                 self.data.op_set_input(&newop, vn.clone(), 0);
                 self.data.op_set_input(&newop, const_vn, 1);
-                self.data.op_insert_before(&newop, &crate::op::PcodeOpRef(self.base_op.clone()));
+                self.data
+                    .op_insert_before(&newop, &crate::op::PcodeOpRef(self.base_op.clone()));
                 let out = newop.0.read().unwrap().output.clone().unwrap();
                 out
             } else {
@@ -16514,7 +18007,8 @@ impl<'a> AddTreeState<'a> {
                 self.data.new_unique_out(self.ptrsize, &newop);
                 self.data.op_set_input(&newop, vn, 0);
                 self.data.op_set_input(&newop, prev, 1);
-                self.data.op_insert_before(&newop, &crate::op::PcodeOpRef(self.base_op.clone()));
+                self.data
+                    .op_insert_before(&newop, &crate::op::PcodeOpRef(self.base_op.clone()));
                 res_node = Some(newop.0.read().unwrap().output.clone().unwrap());
             }
         }
@@ -16523,7 +18017,9 @@ impl<'a> AddTreeState<'a> {
 
     /// Faithful to `AddTreeState::buildExtra` (ruleaction.cc:6408-6436).
     // Ghidra: ruleaction.cc:6408 AddTreeState::buildExtra
-    fn build_extra(&mut self) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+    fn build_extra(
+        &mut self,
+    ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
         let mut res_node: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
         // Snapshot the nonmult list to avoid borrow issues while we mutate.
         let nonmult: Vec<_> = self.nonmult.iter().cloned().collect();
@@ -16542,13 +18038,16 @@ impl<'a> AddTreeState<'a> {
                 let _ = self.data.new_unique_out(self.ptrsize, &newop);
                 self.data.op_set_input(&newop, vn, 0);
                 self.data.op_set_input(&newop, prev, 1);
-                self.data.op_insert_before(&newop, &crate::op::PcodeOpRef(self.base_op.clone()));
+                self.data
+                    .op_insert_before(&newop, &crate::op::PcodeOpRef(self.base_op.clone()));
                 res_node = Some(newop.0.read().unwrap().output.clone().unwrap());
             }
         }
         self.correct &= self.ptrmask;
         if self.correct != 0 {
-            let vn = self.data.new_constant(self.ptrsize, uintb_negate(self.correct.wrapping_sub(1), self.ptrsize));
+            let vn = self.data.new_constant(
+                self.ptrsize, uintb_negate(self.correct.wrapping_sub(1), self.ptrsize),
+            );
             if res_node.is_none() {
                 res_node = Some(vn);
             } else {
@@ -16559,7 +18058,8 @@ impl<'a> AddTreeState<'a> {
                 let _ = self.data.new_unique_out(self.ptrsize, &newop);
                 self.data.op_set_input(&newop, vn, 0);
                 self.data.op_set_input(&newop, prev, 1);
-                self.data.op_insert_before(&newop, &crate::op::PcodeOpRef(self.base_op.clone()));
+                self.data
+                    .op_insert_before(&newop, &crate::op::PcodeOpRef(self.base_op.clone()));
                 res_node = Some(newop.0.read().unwrap().output.clone().unwrap());
             }
         }
@@ -16572,7 +18072,8 @@ impl<'a> AddTreeState<'a> {
     // Ghidra: ruleaction.cc:6441 AddTreeState::buildDegenerate
     fn build_degenerate(&mut self) -> bool {
         let (base_align_lt_wordsize, word_size, ct_size, out_is_ptr) = {
-            let bt = match &self.base_type { Some(b) => b.clone(), None => return false };
+            let bt = match &self.base_type { Some(b) => b.clone(), None => return false ,
+            };
             let ws = {
                 let p = self.ptr.read().unwrap();
                 p.get_type_read_facing()
@@ -16584,7 +18085,10 @@ impl<'a> AddTreeState<'a> {
             };
             let align = bt.get_align_size() as i64;
             let is_lt = align < ws as i64;
-            let out_meta = self.base_op.read().unwrap()
+            let out_meta = self
+                .base_op
+                .read()
+                .unwrap()
                 .get_out()
                 .and_then(|o| o.read().unwrap().v_type.clone())
                 .map(|dt| {
@@ -16609,7 +18113,8 @@ impl<'a> AddTreeState<'a> {
         }
         // newparams = { ptr, baseOp->getIn(1-slot), newConstant(ct->getSize(),1) }
         let other_slot = if self.base_slot == 0 { 1 } else { 0 };
-        let other = match self.base_op.read().unwrap().get_in(other_slot) { Some(v) => v.clone(), None => return false };
+        let other = match self.base_op.read().unwrap().get_in(other_slot) { Some(v) => v.clone(), None => return false ,
+        };
         let one = self.data.new_constant(self.ptrsize, 1);
         let base_ref = crate::op::PcodeOpRef(self.base_op.clone());
         // opSetAllInput(baseOp, newparams)
@@ -16700,20 +18205,29 @@ impl<'a> AddTreeState<'a> {
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> bool {
         if !vn.read().unwrap().is_written() { return false; }
-        let op = match vn.read().unwrap().get_def() { Some(o) => o, None => return false };
+        let op = match vn.read().unwrap().get_def() { Some(o) => o, None => return false ,
+        };
         if op.read().unwrap().opcode != OpCode::CPUI_INT_MULT { return false; }
-        let const_vn_first = match op.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return false };
+        let const_vn_first = match op.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return false ,
+        };
         if !const_vn_first.read().unwrap().is_constant() { return false; }
-        let in0 = match op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return false };
+        let in0 = match op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return false ,
+        };
         if !in0.read().unwrap().is_written() { return false; }
-        let other_mult_op = match in0.read().unwrap().get_def() { Some(o) => o, None => return false };
+        let other_mult_op = match in0.read().unwrap().get_def() { Some(o) => o, None => return false ,
+        };
         if other_mult_op.read().unwrap().opcode != OpCode::CPUI_INT_MULT { return false; }
-        let const_vn_second = match other_mult_op.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return false };
+        let const_vn_second = match other_mult_op.read().unwrap().get_in(1).cloned() { Some(v) => v, None => return false ,
+        };
         if !const_vn_second.read().unwrap().is_constant() { return false; }
-        let invn = match other_mult_op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return false };
+        let invn = match other_mult_op.read().unwrap().get_in(0).cloned() { Some(v) => v, None => return false ,
+        };
         if invn.read().unwrap().is_free() { return false; }
         let sz = invn.read().unwrap().get_size() as usize;
-        let val = const_vn_first.read().unwrap().get_offset()
+        let val = const_vn_first
+            .read()
+            .unwrap()
+            .get_offset()
             .wrapping_mul(const_vn_second.read().unwrap().get_offset())
             & crate::address::calc_mask(sz);
         let new_vn = data.new_constant(sz, val);
@@ -16734,8 +18248,10 @@ impl<'a> AddTreeState<'a> {
     /// `downChain` walk, incl. the PTRSUB no-wrap distinction).
     // Ghidra: ruleaction.cc:6342 AddTreeState::assignPropagatedType
     fn assign_propagated_type(&mut self, newop: &crate::op::PcodeOpRef) {
-        let vn = match newop.0.read().unwrap().get_in(0) { Some(v) => v.clone(), None => return };
-        let in_type = match vn.read().unwrap().get_type_read_facing() { Some(t) => t, None => return };
+        let vn = match newop.0.read().unwrap().get_in(0) { Some(v) => v.clone(), None => return ,
+        };
+        let in_type = match vn.read().unwrap().get_type_read_facing() { Some(t) => t, None => return ,
+        };
         use crate::type_system::datatype::TypeMetatype;
         if in_type.get_metatype() != TypeMetatype::Pointer {
             return; // propagateAddIn2Out requires a TYPE_PTR alttype
@@ -16775,7 +18291,8 @@ impl<'a> AddTreeState<'a> {
             self.data.op_set_input(&newp, self.ptr.clone(), 0);
             self.data.op_set_input(&newp, mn, 1);
             self.data.op_set_input(&newp, size_const, 2);
-            self.data.op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
+            self.data
+                .op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
             newop = Some(newp.clone());
             // if (data.isTypeRecoveryExceeded()) assignPropagatedType(newop);
             if self.data.is_type_recovery_exceeded() {
@@ -16796,7 +18313,8 @@ impl<'a> AddTreeState<'a> {
             self.data.new_unique_out(self.ptrsize, &newp);
             self.data.op_set_input(&newp, mult_node.clone(), 0);
             self.data.op_set_input(&newp, off_const, 1);
-            self.data.op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
+            self.data
+                .op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
             newop = Some(newp.clone());
             // if (data.isTypeRecoveryExceeded()) assignPropagatedType(newop);
             if self.data.is_type_recovery_exceeded() {
@@ -16817,7 +18335,8 @@ impl<'a> AddTreeState<'a> {
             let _ = self.data.new_unique_out(self.ptrsize, &newp);
             self.data.op_set_input(&newp, mult_node, 0);
             self.data.op_set_input(&newp, extra, 1);
-            self.data.op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
+            self.data
+                .op_insert_before(&newp, &crate::op::PcodeOpRef(self.base_op.clone()));
             newop = Some(newp.clone());
         }
 
@@ -16828,7 +18347,8 @@ impl<'a> AddTreeState<'a> {
                 self.data.op_set_output(&newp, bo);
             }
             // data.opDestroy(baseOp)
-            self.data.op_destroy(&crate::op::PcodeOpRef(self.base_op.clone()));
+            self.data
+                .op_destroy(&crate::op::PcodeOpRef(self.base_op.clone()));
         } else {
             // This should never happen — Ghidra emits a warning.
         }
@@ -16857,7 +18377,9 @@ impl RuleStructOffset0 {
 
 impl Rule for RuleStructOffset0 {
     // Ghidra: ruleaction.cc:6693 RuleStructOffset0::applyOp
-    fn apply_op(&self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata) -> Result<i32> {
+    fn apply_op(
+        &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32> {
         // Faithful to RuleStructOffset0::applyOp (ruleaction.cc:6693-6774).
         if !fd.has_type_recovery_started() {
             return Ok(action_status::NO_CHANGE);
@@ -16865,12 +18387,14 @@ impl Rule for RuleStructOffset0 {
         let code = op_arc.read().unwrap().opcode;
         let movesize = if code == OpCode::CPUI_LOAD {
             // movesize = op->getOut()->getSize();
-            let out = match op_arc.read().unwrap().get_out() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let out = match op_arc.read().unwrap().get_out() { Some(o) => o.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let ms = out.read().unwrap().get_size() as i64;
             ms
         } else if code == OpCode::CPUI_STORE {
             // movesize = op->getIn(2)->getSize();
-            let inv = match op_arc.read().unwrap().get_in(2) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
+            let inv = match op_arc.read().unwrap().get_in(2) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+            };
             let ms = inv.read().unwrap().get_size() as i64;
             ms
         } else {
@@ -16878,13 +18402,16 @@ impl Rule for RuleStructOffset0 {
         };
 
         // ptrVn = op->getIn(1); ct = ptrVn->getTypeReadFacing(op);
-        let ptr_vn = match op_arc.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) };
-        let ct = match ptr_vn.read().unwrap().get_type_read_facing() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) };
+        let ptr_vn = match op_arc.read().unwrap().get_in(1) { Some(v) => v.clone(), None => return Ok(action_status::NO_CHANGE) ,
+        };
+        let ct = match ptr_vn.read().unwrap().get_type_read_facing() { Some(t) => t, None => return Ok(action_status::NO_CHANGE) ,
+        };
         use crate::type_system::datatype::{Datatype, TypeMetatype};
         if ct.get_metatype() != TypeMetatype::Pointer {
             return Ok(action_status::NO_CHANGE);
         }
-        let tp = match ct.as_ref() { Datatype::Pointer(p) => p, _ => return Ok(action_status::NO_CHANGE) };
+        let tp = match ct.as_ref() { Datatype::Pointer(p) => p, _ => return Ok(action_status::NO_CHANGE) ,
+        };
         let base_type = tp.ptr_to.clone();
 
         // The TypePointerRel `isFormalPointerRel` branch is omitted (no
@@ -16899,7 +18426,8 @@ impl Rule for RuleStructOffset0 {
                 // subType = baseType->getSubType(offset, &offset);
                 let (sub_type, newoff) = base_type.get_sub_type(offset);
                 offset = newoff;
-                let sub = match sub_type { Some(s) => s, None => return Ok(action_status::NO_CHANGE) };
+                let sub = match sub_type { Some(s) => s, None => return Ok(action_status::NO_CHANGE) ,
+                };
                 if (sub.get_size() as i64) < movesize {
                     return Ok(action_status::NO_CHANGE); // Subtype too small.
                 }
@@ -16910,7 +18438,8 @@ impl Rule for RuleStructOffset0 {
                 }
                 if (base_type.get_size() as i64) == movesize {
                     // Moving the entire array.
-                    let arr = match base_type.as_ref() { Datatype::Array(a) => a, _ => return Ok(action_status::NO_CHANGE) };
+                    let arr = match base_type.as_ref() { Datatype::Array(a) => a, _ => return Ok(action_status::NO_CHANGE) ,
+                    };
                     if arr.num_elements != 1 {
                         return Ok(action_status::NO_CHANGE);
                     }
@@ -17012,7 +18541,8 @@ impl RulePtrFlow {
     /// matching Ghidra's behaviour for non-truncated architectures.
     // Ghidra: ruleaction.cc:9056 RulePtrFlow::RulePtrFlow
     pub fn new() -> Self {
-        Self { has_truncations: false }
+        Self { has_truncations: false ,
+        }
     }
 
     /// Set \e ptrflow property on PcodeOp only if it is propagating. Returns
@@ -17145,8 +18675,10 @@ impl Rule for RulePtrFlow {
                 // vn = op->getIn(1); spc = op->getIn(0)->getSpaceFromConst();
                 let (vn, spc_id) = {
                     let op_rg = op_arc.read().unwrap();
-                    let vn = match op_rg.get_in(1) { Some(v) => v.clone(), None => return Ok(0) };
-                    let spc_id_vn = match op_rg.get_in(0) { Some(v) => v.clone(), None => return Ok(0) };
+                    let vn = match op_rg.get_in(1) { Some(v) => v.clone(), None => return Ok(0) ,
+                    };
+                    let spc_id_vn = match op_rg.get_in(0) { Some(v) => v.clone(), None => return Ok(0) ,
+                    };
                     let id = if spc_id_vn.read().unwrap().is_constant() {
                         spc_id_vn.read().unwrap().get_offset() as u8
                     } else {
@@ -17315,7 +18847,9 @@ mod tests {
         } else {
             fd.vbank.create_with_space(in1_size, in1_space, in1_val)
         };
-        let out = fd.vbank.create_with_space(out_size, crate::space::AddressSpace::Register, 0x100);
+        let out = fd
+            .vbank
+            .create_with_space(out_size, crate::space::AddressSpace::Register, 0x100);
 
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, opcode);
@@ -17360,8 +18894,12 @@ mod tests {
     /// Fixture varnode standing in for a heritage-known SSA input: register
     /// storage promoted through Funcdata::setInputVarnode so the `insert`
     /// flag makes is_heritage_known() true (varnode.hh:298).
-    fn make_input_vn(fd: &mut Funcdata, size: usize, off: u64) -> std::sync::Arc<RwLock<crate::varnode::Varnode>> {
-        let vn = fd.vbank.create_with_space(size, crate::space::AddressSpace::Register, off);
+    fn make_input_vn(
+        fd: &mut Funcdata, size: usize, off: u64,
+    ) -> std::sync::Arc<RwLock<crate::varnode::Varnode>> {
+        let vn = fd
+            .vbank
+            .create_with_space(size, crate::space::AddressSpace::Register, off);
         fd.set_input_varnode(vn)
     }
 
@@ -17373,7 +18911,9 @@ mod tests {
         opcode: OpCode,
         inputs: &[std::sync::Arc<RwLock<crate::varnode::Varnode>>],
         out_size: usize,
-    ) -> (crate::op::PcodeOpRef, std::sync::Arc<RwLock<crate::varnode::Varnode>>) {
+    ) -> (
+        crate::op::PcodeOpRef, std::sync::Arc<RwLock<crate::varnode::Varnode>>,
+    ) {
         let op = fd.new_op(inputs.len(), Address::new(0x5000));
         fd.op_set_opcode(&op, opcode);
         for (slot, vn) in inputs.iter().enumerate() {
@@ -17404,14 +18944,22 @@ mod tests {
         // (C truncated division), zero-extended back to sizeout.
         let rule = RuleCollapseConstants::new();
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_SDIV,
-            &[(0xFFFFFF9C, 4), (7, 4)], 4);
-        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::CHANGE);
+        let op = make_collapsible_op(
+            &mut fd, OpCode::CPUI_INT_SDIV,
+            &[(0xFFFFFF9C, 4), (7, 4)], 4,
+        );
+        assert_eq!(
+            rule.apply_op(&op.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         assert_collapsed(&op, 0xFFFFFFF2, 4); // -14
 
-        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_SREM,
-            &[(0xFFFFFF9C, 4), (7, 4)], 4);
-        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::CHANGE);
+        let op = make_collapsible_op(
+            &mut fd, OpCode::CPUI_INT_SREM,
+            &[(0xFFFFFF9C, 4), (7, 4)], 4,
+        );
+        assert_eq!(
+            rule.apply_op(&op.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         assert_collapsed(&op, 0xFFFFFFFE, 4); // -2
     }
 
@@ -17423,7 +18971,9 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         for opc in [OpCode::CPUI_INT_DIV, OpCode::CPUI_INT_SREM] {
             let op = make_collapsible_op(&mut fd, opc, &[(5, 4), (0, 4)], 4);
-            assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+            assert_eq!(
+                rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+            );
             let guard = op.0.read().unwrap();
             assert_eq!(guard.opcode, opc, "op stays unchanged");
             assert_eq!(guard.num_input(), 2);
@@ -17435,26 +18985,34 @@ mod tests {
     fn collapse_constants_shifts_and_overlarge_sright() {
         let rule = RuleCollapseConstants::new();
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_LEFT,
-            &[(0x12345678, 4), (5, 4)], 4);
+        let op = make_collapsible_op(
+            &mut fd, OpCode::CPUI_INT_LEFT,
+            &[(0x12345678, 4), (5, 4)], 4,
+        );
         rule.apply_op(&op.0, &mut fd).unwrap();
         assert_collapsed(&op, 0x468ACF00, 4);
 
-        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_RIGHT,
-            &[(0xF1234567, 4), (4, 4)], 4);
+        let op = make_collapsible_op(
+            &mut fd, OpCode::CPUI_INT_RIGHT,
+            &[(0xF1234567, 4), (4, 4)], 4,
+        );
         rule.apply_op(&op.0, &mut fd).unwrap();
         assert_collapsed(&op, 0x0F123456, 4);
 
         // opbehavior.cc:462-467: negative arithmetic shift fills ones.
-        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_SRIGHT,
-            &[(0xF1234567, 4), (4, 4)], 4);
+        let op = make_collapsible_op(
+            &mut fd, OpCode::CPUI_INT_SRIGHT,
+            &[(0xF1234567, 4), (4, 4)], 4,
+        );
         rule.apply_op(&op.0, &mut fd).unwrap();
         assert_collapsed(&op, 0xFF123456, 4);
 
         // opbehavior.cc:457-459: in2 >= 8*sizeout and negative sign ->
         // calc_mask(sizeout) (all ones).
-        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_SRIGHT,
-            &[(0x80000000, 4), (33, 4)], 4);
+        let op = make_collapsible_op(
+            &mut fd, OpCode::CPUI_INT_SRIGHT,
+            &[(0x80000000, 4), (33, 4)], 4,
+        );
         rule.apply_op(&op.0, &mut fd).unwrap();
         assert_collapsed(&op, 0xFFFFFFFF, 4);
     }
@@ -17470,8 +19028,10 @@ mod tests {
         assert_collapsed(&op, 0x11223344, 4);
 
         // opbehavior.cc:759-766: byte offset in in2
-        let op = make_collapsible_op(&mut fd, OpCode::CPUI_SUBPIECE,
-            &[(0x1122334455667788, 8), (4, 1)], 4);
+        let op = make_collapsible_op(
+            &mut fd, OpCode::CPUI_SUBPIECE,
+            &[(0x1122334455667788, 8), (4, 1)], 4,
+        );
         rule.apply_op(&op.0, &mut fd).unwrap();
         assert_collapsed(&op, 0x11223344, 4);
 
@@ -17522,7 +19082,9 @@ mod tests {
             (OpCode::CPUI_INT_LESSEQUAL, &[(9, 4), (9, 4)], 1),
             // 0xFFFFFF80 is -128 signed: sless(−128, 1) = 1
             (OpCode::CPUI_INT_SLESS, &[(0xFFFFFF80, 4), (1, 4)], 1),
-            (OpCode::CPUI_INT_SLESSEQUAL, &[(0xFFFFFF80, 4), (0xFFFFFF80, 4)], 1),
+            (
+                OpCode::CPUI_INT_SLESSEQUAL, &[(0xFFFFFF80, 4), (0xFFFFFF80, 4)], 1,
+            ),
             // opbehavior.cc:323-328: carry = in1 > wrapped sum
             (OpCode::CPUI_INT_CARRY, &[(0xFFFFFFFF, 4), (1, 4)], 1),
             // opbehavior.cc:330-344: scarry(0x7FFFFFFF, 1) = 1
@@ -17548,14 +19110,30 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         // 1.0f = 0x3F800000, 2.0f = 0x40000000, 3.0f = 0x40400000
         let cases: &[(OpCode, &[(u64, usize)], usize, u64)] = &[
-            (OpCode::CPUI_FLOAT_ADD, &[(0x3F800000, 4), (0x40000000, 4)], 4, 0x40400000),
-            (OpCode::CPUI_FLOAT_SUB, &[(0x40400000, 4), (0x40000000, 4)], 4, 0x3F800000),
-            (OpCode::CPUI_FLOAT_MULT, &[(0x3F800000, 4), (0x40000000, 4)], 4, 0x40000000),
-            (OpCode::CPUI_FLOAT_DIV, &[(0x40400000, 4), (0x40000000, 4)], 4, 0x3FC00000),
-            (OpCode::CPUI_FLOAT_LESS, &[(0x3F800000, 4), (0x40000000, 4)], 1, 1),
-            (OpCode::CPUI_FLOAT_LESSEQUAL, &[(0x40000000, 4), (0x40000000, 4)], 1, 1),
-            (OpCode::CPUI_FLOAT_EQUAL, &[(0x3F800000, 4), (0x3F800000, 4)], 1, 1),
-            (OpCode::CPUI_FLOAT_NOTEQUAL, &[(0x3F800000, 4), (0x40000000, 4)], 1, 1),
+            (
+                OpCode::CPUI_FLOAT_ADD, &[(0x3F800000, 4), (0x40000000, 4)], 4, 0x40400000,
+            ),
+            (
+                OpCode::CPUI_FLOAT_SUB, &[(0x40400000, 4), (0x40000000, 4)], 4, 0x3F800000,
+            ),
+            (
+                OpCode::CPUI_FLOAT_MULT, &[(0x3F800000, 4), (0x40000000, 4)], 4, 0x40000000,
+            ),
+            (
+                OpCode::CPUI_FLOAT_DIV, &[(0x40400000, 4), (0x40000000, 4)], 4, 0x3FC00000,
+            ),
+            (
+                OpCode::CPUI_FLOAT_LESS, &[(0x3F800000, 4), (0x40000000, 4)], 1, 1,
+            ),
+            (
+                OpCode::CPUI_FLOAT_LESSEQUAL, &[(0x40000000, 4), (0x40000000, 4)], 1, 1,
+            ),
+            (
+                OpCode::CPUI_FLOAT_EQUAL, &[(0x3F800000, 4), (0x3F800000, 4)], 1, 1,
+            ),
+            (
+                OpCode::CPUI_FLOAT_NOTEQUAL, &[(0x3F800000, 4), (0x40000000, 4)], 1, 1,
+            ),
             (OpCode::CPUI_FLOAT_NAN, &[(0x7FC00000, 4)], 1, 1),
             (OpCode::CPUI_FLOAT_NEG, &[(0x3F800000, 4)], 4, 0xBF800000),
             (OpCode::CPUI_FLOAT_ABS, &[(0xBF800000, 4)], 4, 0x3F800000),
@@ -17566,11 +19144,15 @@ mod tests {
             // 7 (4-byte int) -> 7.0f
             (OpCode::CPUI_FLOAT_INT2FLOAT, &[(7, 4)], 4, 0x40E00000),
             // 1.5f -> 1.5 double = 0x3FF8000000000000
-            (OpCode::CPUI_FLOAT_FLOAT2FLOAT, &[(0x3FC00000, 4)], 8, 0x3FF8000000000000),
+            (
+                OpCode::CPUI_FLOAT_FLOAT2FLOAT, &[(0x3FC00000, 4)], 8, 0x3FF8000000000000,
+            ),
             // 2.75f trunc to int size 4 -> 2
             (OpCode::CPUI_FLOAT_TRUNC, &[(0x40300000, 4)], 4, 2),
             // double: 1.0 + 2.0 = 3.0 (0x4008000000000000)
-            (OpCode::CPUI_FLOAT_ADD, &[(0x3FF0000000000000, 8), (0x4000000000000000, 8)], 8, 0x4008000000000000),
+            (
+                OpCode::CPUI_FLOAT_ADD, &[(0x3FF0000000000000, 8), (0x4000000000000000, 8)], 8, 0x4008000000000000,
+            ),
         ];
         for (opc, ins, out_size, expected) in cases {
             let op = make_collapsible_op(&mut fd, *opc, ins, *out_size);
@@ -17591,18 +19173,28 @@ mod tests {
         // opMarkNoCollapse.
         let rule = RuleCollapseConstants::new();
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let op = make_collapsible_op(&mut fd, OpCode::CPUI_INSERT,
-            &[(0xAB, 1), (0xCD, 1), (0, 1)], 2);
-        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
-        assert!(!op.0.read().unwrap().is_collapsible(), "ternary -> nocollapse");
+        let op = make_collapsible_op(
+            &mut fd, OpCode::CPUI_INSERT,
+            &[(0xAB, 1), (0xCD, 1), (0, 1)], 2,
+        );
+        assert_eq!(
+            rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
+        assert!(
+            !op.0.read().unwrap().is_collapsible(), "ternary -> nocollapse"
+        );
 
         // FLOAT_TRUNC with a 2-byte input has no FloatFormat (float_format
         // stand-in only exposes 4/8) — the C++ OpBehavior base throws
         // LowlevelError -> opMarkNoCollapse.
         let op = make_collapsible_op(&mut fd, OpCode::CPUI_FLOAT_TRUNC,
             &[(0x3C00, 2)], 4);
-        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
-        assert!(!op.0.read().unwrap().is_collapsible(), "no-format -> nocollapse");
+        assert_eq!(
+            rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
+        assert!(
+            !op.0.read().unwrap().is_collapsible(), "no-format -> nocollapse"
+        );
     }
 
     #[test]
@@ -17612,27 +19204,35 @@ mod tests {
         // Non-constant input (op.cc:121-122).
         let op = fd.new_op(2, Address::new(0x2000));
         fd.op_set_opcode(&op, OpCode::CPUI_INT_ADD);
-        let reg = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let reg = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let reg = fd.set_input_varnode(reg);
         fd.op_set_input(&op, reg, 0);
         let c5 = fd.new_constant(4, 5);
         fd.op_set_input(&op, c5, 1);
         fd.new_unique_out(4, &op);
-        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
         assert_eq!(op.0.read().unwrap().opcode, OpCode::CPUI_INT_ADD);
 
         // Ops carrying the nocollapse opflag (PTRSUB, typeop.cc:2303) never
         // collapse even with all-constant inputs.
         let op = make_collapsible_op(&mut fd, OpCode::CPUI_PTRSUB,
             &[(0x1000, 4), (8, 4)], 4);
-        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
         assert_eq!(op.0.read().unwrap().opcode, OpCode::CPUI_PTRSUB);
         assert_eq!(op.0.read().unwrap().num_input(), 2);
 
         // Output larger than sizeof(uintb)=8 (op.cc:123-124).
         let op = make_collapsible_op(&mut fd, OpCode::CPUI_INT_ADD,
             &[(1, 16), (2, 16)], 16);
-        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
         assert_eq!(op.0.read().unwrap().opcode, OpCode::CPUI_INT_ADD);
     }
 
@@ -17654,7 +19254,9 @@ mod tests {
 
         // Attach a SymbolEntry to input 0 (markedInput path).
         let symbol = std::sync::Arc::new(std::sync::RwLock::new(
-            crate::database::Symbol::new(0, "EQ", "equ")));
+            crate::database::Symbol::new(
+            0, "EQ", "equ",
+        )));
         // Register the equate payload so copy_symbol_if_valid's
         // EquateSymbol gating sees it (VARNODE-COPYSYMBOL-EQUATE-0001).
         // The equate value must be value-close to the COLLAPSED output
@@ -17664,17 +19266,22 @@ mod tests {
         crate::varnode::equate_symbol_registry::register_value(&symbol, 0x33333333);
         let entry = crate::database::SymbolEntry::new_dynamic(
             symbol,
-            0, 1, 0, 4, Default::default(),
-        );
-        c0.write().unwrap().set_symbol_entry(std::sync::Arc::new(std::sync::RwLock::new(entry)));
+            0, 1, 0, 4, Default::default());
+        c0.write()
+            .unwrap()
+            .set_symbol_entry(std::sync::Arc::new(std::sync::RwLock::new(entry)));
 
-        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_eq!(
+            rule.apply_op(&op.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         assert_collapsed(&op, 0x33333333, 4);
         // The new constant inherits the symbol markup (varnode.rs
         // copy_symbol_if_valid — conservative mapentry copy).
         let guard = op.0.read().unwrap();
         let in0 = guard.get_in(0).unwrap().read().unwrap();
-        assert!(in0.get_symbol_entry().is_some(), "symbol propagated to new constant");
+        assert!(
+            in0.get_symbol_entry().is_some(), "symbol propagated to new constant"
+        );
     }
 
     #[test]
@@ -17695,13 +19302,19 @@ mod tests {
             std::sync::Arc::new(std::sync::RwLock::new(symbol)),
             0, 1, 0, 8, Default::default(),
         );
-        c0.write().unwrap().set_symbol_entry(std::sync::Arc::new(std::sync::RwLock::new(entry)));
+        c0.write()
+            .unwrap()
+            .set_symbol_entry(std::sync::Arc::new(std::sync::RwLock::new(entry)));
 
-        assert_eq!(rule.apply_op(&op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_eq!(
+            rule.apply_op(&op.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         assert_collapsed(&op, 0x11223344, 4);
         let guard = op.0.read().unwrap();
         let in0 = guard.get_in(0).unwrap().read().unwrap();
-        assert!(in0.get_symbol_entry().is_none(), "offset!=0 must not propagate");
+        assert!(
+            in0.get_symbol_entry().is_none(), "offset!=0 must not propagate"
+        );
     }
 
     #[test]
@@ -17763,8 +19376,12 @@ mod tests {
         let rule = RuleTrivialArith::new();
         let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
         // Same varnode as both inputs.
-        let in_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
-        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x100);
+        let in_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x100);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_XOR);
         op.inrefs = vec![in_vn.clone(), in_vn];
@@ -17785,8 +19402,12 @@ mod tests {
         // `x == x → 1` (Ghidra ruleaction.cc:2406).
         let rule = RuleTrivialArith::new();
         let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
-        let in_vn = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        let out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x100);
+        let in_vn = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x100);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_EQUAL);
         op.inrefs = vec![in_vn.clone(), in_vn];
@@ -17859,7 +19480,9 @@ mod tests {
         let (and_op, and_out) = { let c = fd.new_constant(4, 0xf000); build_op(&mut fd, OpCode::CPUI_INT_AND, &[v, c], 4) };
         let (shift_op, _) = { let c = fd.new_constant(4, 20); build_op(&mut fd, OpCode::CPUI_INT_LEFT, &[and_out, c], 4) };
         let rule = RuleShiftBitops::new();
-        assert_eq!(rule.apply_op(&shift_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_eq!(
+            rule.apply_op(&shift_op.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         let s = shift_op.0.read().unwrap();
         assert_eq!(s.opcode, OpCode::CPUI_INT_LEFT, "opcode stays INT_LEFT");
         let in0 = s.get_in(0).unwrap().read().unwrap();
@@ -17879,10 +19502,14 @@ mod tests {
         let (add_op, add_out) = { let c = fd.new_constant(4, 0xf000); build_op(&mut fd, OpCode::CPUI_INT_ADD, &[v.clone(), c], 4) };
         let (shift_op, _) = { let c = fd.new_constant(4, 20); build_op(&mut fd, OpCode::CPUI_INT_LEFT, &[add_out, c], 4) };
         let rule = RuleShiftBitops::new();
-        assert_eq!(rule.apply_op(&shift_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_eq!(
+            rule.apply_op(&shift_op.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         let s = shift_op.0.read().unwrap();
         assert_eq!(s.opcode, OpCode::CPUI_INT_LEFT);
-        assert!(std::sync::Arc::ptr_eq(&s.get_in(0).unwrap().clone(), &v), "input 0 becomes V");
+        assert!(
+            std::sync::Arc::ptr_eq(&s.get_in(0).unwrap().clone(), &v), "input 0 becomes V"
+        );
         let _ = add_op;
     }
 
@@ -17897,7 +19524,9 @@ mod tests {
         let (or_op, or_out) = { let c = fd.new_constant(4, 0xff); build_op(&mut fd, OpCode::CPUI_INT_OR, &[v.clone(), c], 4) };
         let (shift_op, _) = { let c = fd.new_constant(4, 24); build_op(&mut fd, OpCode::CPUI_INT_RIGHT, &[or_out, c], 4) };
         let rule = RuleShiftBitops::new();
-        assert_eq!(rule.apply_op(&shift_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_eq!(
+            rule.apply_op(&shift_op.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         let s = shift_op.0.read().unwrap();
         assert_eq!(s.opcode, OpCode::CPUI_INT_RIGHT);
         assert!(std::sync::Arc::ptr_eq(&s.get_in(0).unwrap().clone(), &v));
@@ -17914,7 +19543,9 @@ mod tests {
         let (and_op, and_out) = { let c = fd.new_constant(4, 0xff); build_op(&mut fd, OpCode::CPUI_INT_AND, &[v, c], 4) };
         let (sub_op, _) = { let c = fd.new_constant(4, 1); build_op(&mut fd, OpCode::CPUI_SUBPIECE, &[and_out, c], 3) };
         let rule = RuleShiftBitops::new();
-        assert_eq!(rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_eq!(
+            rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         let s = sub_op.0.read().unwrap();
         assert_eq!(s.opcode, OpCode::CPUI_SUBPIECE);
         let in0 = s.get_in(0).unwrap().read().unwrap();
@@ -17934,7 +19565,9 @@ mod tests {
         let (and_op, and_out) = { let c = fd.new_constant(4, 0xf0000); build_op(&mut fd, OpCode::CPUI_INT_AND, &[v, c], 4) };
         let (mult_op, _) = { let c = fd.new_constant(4, 0x10000); build_op(&mut fd, OpCode::CPUI_INT_MULT, &[and_out, c], 4) };
         let rule = RuleShiftBitops::new();
-        assert_eq!(rule.apply_op(&mult_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_eq!(
+            rule.apply_op(&mult_op.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         let s = mult_op.0.read().unwrap();
         assert_eq!(s.opcode, OpCode::CPUI_INT_MULT);
         assert_eq!(s.get_in(0).unwrap().read().unwrap().get_offset(), 0);
@@ -17950,7 +19583,9 @@ mod tests {
         let (and_op, and_out) = { let c = fd.new_constant(4, 0xf0); build_op(&mut fd, OpCode::CPUI_INT_AND, &[v, c], 4) };
         let (shift_op, _) = { let c = fd.new_constant(4, 4); build_op(&mut fd, OpCode::CPUI_INT_LEFT, &[and_out, c], 4) };
         let rule = RuleShiftBitops::new();
-        assert_eq!(rule.apply_op(&shift_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&shift_op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
         let _ = and_op;
     }
 
@@ -17963,7 +19598,9 @@ mod tests {
         let (add_op, add_out) = { let c = fd.new_constant(4, 0xf000); build_op(&mut fd, OpCode::CPUI_INT_ADD, &[v, c], 4) };
         let (shift_op, _) = { let c = fd.new_constant(4, 4); build_op(&mut fd, OpCode::CPUI_INT_RIGHT, &[add_out, c], 4) };
         let rule = RuleShiftBitops::new();
-        assert_eq!(rule.apply_op(&shift_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&shift_op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
         let _ = add_op;
     }
 
@@ -18009,10 +19646,14 @@ mod tests {
         let (_, zext_out) = build_op(&mut fd, OpCode::CPUI_INT_ZEXT, &[v.clone()], 4);
         let (cmp_op, _) = { let c = fd.new_constant(4, 5); build_op(&mut fd, OpCode::CPUI_INT_EQUAL, &[zext_out, c], 1) };
         let rule = RuleZextEliminate::new();
-        assert_eq!(rule.apply_op(&cmp_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_eq!(
+            rule.apply_op(&cmp_op.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         let c = cmp_op.0.read().unwrap();
         assert_eq!(c.opcode, OpCode::CPUI_INT_EQUAL, "comparison stays");
-        assert!(std::sync::Arc::ptr_eq(&c.get_in(0).unwrap().clone(), &v), "in0 becomes V");
+        assert!(
+            std::sync::Arc::ptr_eq(&c.get_in(0).unwrap().clone(), &v), "in0 becomes V"
+        );
         let in1 = c.get_in(1).unwrap().read().unwrap();
         assert!(in1.is_constant());
         assert_eq!(in1.get_size(), 1, "constant resized to smallsize");
@@ -18028,12 +19669,18 @@ mod tests {
         let (_, zext_out) = build_op(&mut fd, OpCode::CPUI_INT_ZEXT, &[v.clone()], 4);
         let (cmp_op, _) = { let c = fd.new_constant(4, 5); build_op(&mut fd, OpCode::CPUI_INT_NOTEQUAL, &[c, zext_out], 1) };
         let rule = RuleZextEliminate::new();
-        assert_eq!(rule.apply_op(&cmp_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_eq!(
+            rule.apply_op(&cmp_op.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         let c = cmp_op.0.read().unwrap();
         assert_eq!(c.opcode, OpCode::CPUI_INT_NOTEQUAL);
         let in0 = c.get_in(0).unwrap().read().unwrap();
-        assert_eq!((in0.get_size(), in0.get_offset()), (1, 5), "slot 0 gets resized constant");
-        assert!(std::sync::Arc::ptr_eq(&c.get_in(1).unwrap().clone(), &v), "slot 1 becomes V");
+        assert_eq!(
+            (in0.get_size(), in0.get_offset()), (1, 5), "slot 0 gets resized constant"
+        );
+        assert!(
+            std::sync::Arc::ptr_eq(&c.get_in(1).unwrap().clone(), &v), "slot 1 becomes V"
+        );
     }
 
     #[test]
@@ -18045,7 +19692,9 @@ mod tests {
         let (_, zext_out) = build_op(&mut fd, OpCode::CPUI_INT_ZEXT, &[v], 4);
         let (cmp_op, _) = { let c = fd.new_constant(4, 300); build_op(&mut fd, OpCode::CPUI_INT_LESS, &[zext_out, c], 1) };
         let rule = RuleZextEliminate::new();
-        assert_eq!(rule.apply_op(&cmp_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&cmp_op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
         assert_eq!(cmp_op.0.read().unwrap().opcode, OpCode::CPUI_INT_LESS);
     }
 
@@ -18059,7 +19708,9 @@ mod tests {
         let (cmp_op, _) = { let c = fd.new_constant(4, 5); build_op(&mut fd, OpCode::CPUI_INT_EQUAL, &[zext_out.clone(), c], 1) };
         let (_, _) = build_op(&mut fd, OpCode::CPUI_COPY, &[zext_out], 4);
         let rule = RuleZextEliminate::new();
-        assert_eq!(rule.apply_op(&cmp_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&cmp_op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     #[test]
@@ -18071,7 +19722,9 @@ mod tests {
         let (_, zext_out) = build_op(&mut fd, OpCode::CPUI_INT_ZEXT, &[v], 4);
         let (cmp_op, _) = build_op(&mut fd, OpCode::CPUI_INT_EQUAL, &[zext_out, w], 1);
         let rule = RuleZextEliminate::new();
-        assert_eq!(rule.apply_op(&cmp_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&cmp_op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     #[test]
@@ -18087,8 +19740,12 @@ mod tests {
         let v = make_input_vn(&mut fd, 4, 0x10);
         let (zext_op, _) = build_op(&mut fd, OpCode::CPUI_INT_ZEXT, &[v], 4);
         let rule = RuleZextEliminate::new();
-        assert_eq!(rule.apply_op(&zext_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
-        assert_eq!(zext_op.0.read().unwrap().opcode, OpCode::CPUI_INT_ZEXT, "zext op untouched");
+        assert_eq!(
+            rule.apply_op(&zext_op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
+        assert_eq!(
+            zext_op.0.read().unwrap().opcode, OpCode::CPUI_INT_ZEXT, "zext op untouched"
+        );
     }
 
     // --- RuleSignForm (ruleaction.cc:8445-8474) ---
@@ -18109,13 +19766,21 @@ mod tests {
         let (_, sext_out) = build_op(&mut fd, OpCode::CPUI_INT_SEXT, &[v.clone()], 4);
         let (sub_op, _) = { let c = fd.new_constant(4, 2); build_op(&mut fd, OpCode::CPUI_SUBPIECE, &[sext_out, c], 1) };
         let rule = RuleSignForm::new();
-        assert_eq!(rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_eq!(
+            rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         let s = sub_op.0.read().unwrap();
-        assert_eq!(s.opcode, OpCode::CPUI_INT_SRIGHT, "SUBPIECE becomes INT_SRIGHT");
-        assert!(std::sync::Arc::ptr_eq(&s.get_in(0).unwrap().clone(), &v), "in0 becomes V");
+        assert_eq!(
+            s.opcode, OpCode::CPUI_INT_SRIGHT, "SUBPIECE becomes INT_SRIGHT"
+        );
+        assert!(
+            std::sync::Arc::ptr_eq(&s.get_in(0).unwrap().clone(), &v), "in0 becomes V"
+        );
         let in1 = s.get_in(1).unwrap().read().unwrap();
         assert!(in1.is_constant());
-        assert_eq!(in1.get_size(), 4, "shift amount is a 4-byte constant (cc:8471)");
+        assert_eq!(
+            in1.get_size(), 4, "shift amount is a 4-byte constant (cc:8471)"
+        );
         assert_eq!(in1.get_offset(), 7);
     }
 
@@ -18127,7 +19792,9 @@ mod tests {
         let (_, sext_out) = build_op(&mut fd, OpCode::CPUI_INT_SEXT, &[v], 4);
         let (sub_op, _) = { let c = fd.new_constant(4, 0); build_op(&mut fd, OpCode::CPUI_SUBPIECE, &[sext_out, c], 1) };
         let rule = RuleSignForm::new();
-        assert_eq!(rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
         assert_eq!(sub_op.0.read().unwrap().opcode, OpCode::CPUI_SUBPIECE);
     }
 
@@ -18139,7 +19806,9 @@ mod tests {
         let (_, zext_out) = build_op(&mut fd, OpCode::CPUI_INT_ZEXT, &[v], 4);
         let (sub_op, _) = { let c = fd.new_constant(4, 2); build_op(&mut fd, OpCode::CPUI_SUBPIECE, &[zext_out, c], 1) };
         let rule = RuleSignForm::new();
-        assert_eq!(rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&sub_op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     #[test]
@@ -18160,7 +19829,9 @@ mod tests {
         // Engine-equivalent dispatch: only ops whose opcode is in the oplist
         // reach applyOp (action.cc:748-750 perop buckets).
         let dispatched = oplist.contains(&sr_op.0.read().unwrap().opcode);
-        assert!(!dispatched, "INT_SRIGHT must never be dispatched to RuleSignForm");
+        assert!(
+            !dispatched, "INT_SRIGHT must never be dispatched to RuleSignForm"
+        );
     }
 
     // --- RuleSignNearMult (ruleaction.cc:8533-8592) ---
@@ -18170,7 +19841,9 @@ mod tests {
         fd: &mut Funcdata,
         k: u64,
         mask: u64,
-    ) -> (crate::op::PcodeOpRef, std::sync::Arc<RwLock<crate::varnode::Varnode>>) {
+    ) -> (
+        crate::op::PcodeOpRef, std::sync::Arc<RwLock<crate::varnode::Varnode>>,
+    ) {
         let x = make_input_vn(fd, 4, 0x10);
         let (_, ssh_out) = { let c = fd.new_constant(4, 31); build_op(fd, OpCode::CPUI_INT_SRIGHT, &[x.clone(), c], 4) };
         let (_, right_out) = { let c = fd.new_constant(4, k); build_op(fd, OpCode::CPUI_INT_RIGHT, &[ssh_out, c], 4) };
@@ -18194,15 +19867,27 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let (and_op, x) = build_near_mult(&mut fd, 28, 0xFFFFFFF0);
         let rule = RuleSignNearMult::new();
-        assert_eq!(rule.apply_op(&and_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_eq!(
+            rule.apply_op(&and_op.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         let a = and_op.0.read().unwrap();
         assert_eq!(a.opcode, OpCode::CPUI_INT_MULT, "AND becomes INT_MULT");
         let in0 = a.get_in(0).unwrap();
         assert!(in0.read().unwrap().is_written());
         let div = in0.read().unwrap().get_def().unwrap();
         assert_eq!(div.read().unwrap().opcode, OpCode::CPUI_INT_SDIV);
-        assert!(std::sync::Arc::ptr_eq(&div.read().unwrap().get_in(0).unwrap().clone(), &x), "SDIV divides x");
-        assert_eq!(div.read().unwrap().get_in(1).unwrap().read().unwrap().get_offset(), 16);
+        assert!(
+            std::sync::Arc::ptr_eq(&div.read().unwrap().get_in(0).unwrap().clone(), &x), "SDIV divides x"
+        );
+        assert_eq!(
+            div.read()
+                .unwrap()
+                .get_in(1)
+                .unwrap()
+                .read()
+                .unwrap()
+                .get_offset(), 16
+        );
         let in1 = a.get_in(1).unwrap().read().unwrap();
         assert_eq!((in1.get_size(), in1.get_offset()), (4, 16), "MULT by 2^n");
     }
@@ -18218,10 +19903,14 @@ mod tests {
         let (_, add_out) = build_op(&mut fd, OpCode::CPUI_INT_ADD, &[right_out, x.clone()], 4);
         let (and_op, _) = { let c = fd.new_constant(4, 0xFFFFFF00); build_op(&mut fd, OpCode::CPUI_INT_AND, &[add_out, c], 4) };
         let rule = RuleSignNearMult::new();
-        assert_eq!(rule.apply_op(&and_op.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_eq!(
+            rule.apply_op(&and_op.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         let a = and_op.0.read().unwrap();
         assert_eq!(a.opcode, OpCode::CPUI_INT_MULT);
-        assert_eq!(a.get_in(1).unwrap().read().unwrap().get_offset(), 256, "2^8");
+        assert_eq!(
+            a.get_in(1).unwrap().read().unwrap().get_offset(), 256, "2^8"
+        );
     }
 
     #[test]
@@ -18231,7 +19920,9 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let (and_op, _) = build_near_mult(&mut fd, 28, 0xFFFFFF00);
         let rule = RuleSignNearMult::new();
-        assert_eq!(rule.apply_op(&and_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&and_op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
         assert_eq!(and_op.0.read().unwrap().opcode, OpCode::CPUI_INT_AND);
     }
 
@@ -18245,7 +19936,9 @@ mod tests {
         let (_, add_out) = { let c = fd.new_constant(4, 0); build_op(&mut fd, OpCode::CPUI_INT_ADD, &[c, right_out], 4) };
         let (and_op, _) = { let c = fd.new_constant(4, 0xFFFFFFF0); build_op(&mut fd, OpCode::CPUI_INT_AND, &[add_out, c], 4) };
         let rule = RuleSignNearMult::new();
-        assert_eq!(rule.apply_op(&and_op.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&and_op.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     #[test]
@@ -18288,7 +19981,9 @@ mod tests {
         let (_, _) = build_op(&mut fd, OpCode::CPUI_INT_ADD, &[shift_out, w], 4);
         let rule = RuleShift2Mult::new();
         let oplist = rule.get_opcodes();
-        assert!(!oplist.contains(&OpCode::CPUI_INT_RIGHT), "INT_RIGHT must not be dispatched");
+        assert!(
+            !oplist.contains(&OpCode::CPUI_INT_RIGHT), "INT_RIGHT must not be dispatched"
+        );
         // Direct applyOp (as the old registration would have allowed) is
         // opcode-blind in the oracle too; the oplist is the only gate, so
         // assert the gate plus that the op survives a dispatch pass.
@@ -18303,9 +19998,13 @@ mod tests {
     fn test_negate_identity_and_collapses_to_zero() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         // V = a register varnode
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         // tmp = INT_NEGATE(V)
-        let tmp = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let tmp = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let neg_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_NEGATE,
@@ -18316,7 +20015,9 @@ mod tests {
             o.output = Some(tmp.clone());
         }
         // out = INT_AND(tmp, V)
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x30);
         let and_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_AND,
@@ -18343,8 +20044,12 @@ mod tests {
     #[test]
     fn test_negate_identity_or_collapses_to_ones() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        let tmp = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let tmp = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let neg_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_NEGATE,
@@ -18354,7 +20059,9 @@ mod tests {
             o.inrefs = vec![v.clone()];
             o.output = Some(tmp.clone());
         }
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x30);
         // INT_OR(tmp, V) — order reversed to exercise the slot logic.
         let or_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
@@ -18380,9 +20087,15 @@ mod tests {
     fn test_negate_identity_no_match() {
         // INT_NEGATE(V) feeding INT_AND(~V, W) where W != V → no change.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        let w = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x50);
-        let tmp = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let w = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x50);
+        let tmp = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let neg_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_NEGATE,
@@ -18392,7 +20105,9 @@ mod tests {
             o.inrefs = vec![v.clone()];
             o.output = Some(tmp.clone());
         }
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x30);
         let and_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_AND,
@@ -18421,7 +20136,13 @@ mod tests {
         // output is set, varnode is WRITTEN, def links back to op.
         assert!(op.0.read().unwrap().output.is_some());
         assert!(out.read().unwrap().is_written());
-        assert!(out.read().unwrap().def.as_ref().and_then(|w| w.upgrade()).is_some());
+        assert!(out
+            .read()
+            .unwrap()
+            .def
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .is_some());
     }
 
     #[test]
@@ -18454,13 +20175,19 @@ mod tests {
     fn test_not_distribute_bool_and_to_or() {
         // BOOL_NOT(BOOL_AND(V, W)) → BOOL_OR(BOOL_NOT(V), BOOL_NOT(W))
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        let w = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let w = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x11);
         let and_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_BOOL_AND,
         )));
-        let and_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let and_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         {
             let mut a = and_op.write().unwrap();
             a.inrefs = vec![v, w];
@@ -18486,13 +20213,19 @@ mod tests {
     fn test_not_distribute_non_bool_inner_no_change() {
         // BOOL_NOT(INT_ADD(...)) → no change.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        let w = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let w = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x11);
         let add_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_ADD,
         )));
-        let add_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let add_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         {
             let mut a = add_op.write().unwrap();
             a.inrefs = vec![v, w];
@@ -18516,9 +20249,13 @@ mod tests {
     fn test_concat_zero_collapses_to_shift() {
         // PIECE(V_high, 0) → INT_LEFT(INT_ZEXT(V_high), sa)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let high = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x10);
+        let high = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x10);
         let low_zero = fd.vbank.create_constant(2, 0);
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x30);
         let piece_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_PIECE,
@@ -18542,9 +20279,13 @@ mod tests {
     #[test]
     fn test_concat_nonzero_no_change() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let high = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x10);
+        let high = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x10);
         let low_nz = fd.vbank.create_constant(2, 5);
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x30);
         let piece_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_PIECE,
@@ -18565,9 +20306,13 @@ mod tests {
     fn test_xor_collapse_var_xor_const_eq_const() {
         // (V ^ 0x3) == 0x1  →  V == (0x3 ^ 0x1) == 0x2
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let c = fd.vbank.create_constant(4, 3);
-        let xor_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let xor_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let xor_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_XOR,
@@ -18588,7 +20333,11 @@ mod tests {
             e.inrefs = vec![xor_out.clone(), d];
         }
         // xor_out has a lone descend (eq_op).
-        xor_out.write().unwrap().descend.push(Arc::downgrade(&eq_op));
+        xor_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&eq_op));
 
         let rule = RuleXorCollapse::new();
         let result = rule.apply_op(&eq_op, &mut fd).unwrap();
@@ -18602,9 +20351,15 @@ mod tests {
     fn test_xor_collapse_var_xor_var_eq_zero() {
         // (V ^ W) == 0 → V == W  (move W to other side)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        let w = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x12);
-        let xor_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let w = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x12);
+        let xor_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let xor_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_XOR,
@@ -18624,14 +20379,20 @@ mod tests {
             let mut e = eq_op.write().unwrap();
             e.inrefs = vec![xor_out.clone(), zero];
         }
-        xor_out.write().unwrap().descend.push(Arc::downgrade(&eq_op));
+        xor_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&eq_op));
 
         let rule = RuleXorCollapse::new();
         let result = rule.apply_op(&eq_op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
         let e = eq_op.read().unwrap();
         // slot 0 should be V, slot 1 should be W
-        assert!(Arc::ptr_eq(&e.inrefs[0], &v) || Arc::ptr_eq(&e.inrefs[0], &xor_op.read().unwrap().inrefs[0]));
+        assert!(
+            Arc::ptr_eq(&e.inrefs[0], &v) || Arc::ptr_eq(&e.inrefs[0], &xor_op.read().unwrap().inrefs[0])
+        );
     }
 
     // --- RuleAddMultCollapse (ruleaction.cc:4099) ---
@@ -18640,11 +20401,17 @@ mod tests {
     fn test_add_mult_collapse_double_add() {
         // ((V + 3) + 5)  =>  V + 8
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         // Mark V as an input (not free), as Ghidra would for a function input.
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let c1 = fd.vbank.create_constant(4, 3);
-        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let inner_add = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_ADD,
@@ -18656,7 +20423,9 @@ mod tests {
         }
         inner_out.write().unwrap().def = Some(Arc::downgrade(&inner_add));
         let c0 = fd.vbank.create_constant(4, 5);
-        let outer_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let outer_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x30);
         let outer_add = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_ADD,
@@ -18680,10 +20449,16 @@ mod tests {
     fn test_add_mult_collapse_double_mult() {
         // ((V * 2) * 3)  =>  V * 6
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let c1 = fd.vbank.create_constant(4, 2);
-        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let inner_mul = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_MULT,
@@ -18695,7 +20470,9 @@ mod tests {
         }
         inner_out.write().unwrap().def = Some(Arc::downgrade(&inner_mul));
         let c0 = fd.vbank.create_constant(4, 3);
-        let outer_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let outer_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x30);
         let outer_mul = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_MULT,
@@ -18721,7 +20498,9 @@ mod tests {
         // 0 < V  =>  0 != V
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let zero = fd.vbank.create_constant(4, 0);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_LESS,
@@ -18737,7 +20516,9 @@ mod tests {
     fn test_less2_zero_right_zero_false() {
         // V < 0  =>  false (COPY 0)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let zero = fd.vbank.create_constant(4, 0);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -18758,7 +20539,9 @@ mod tests {
         // 0 <= V  =>  true (COPY 1)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let zero = fd.vbank.create_constant(4, 0);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_LESSEQUAL,
@@ -18775,7 +20558,9 @@ mod tests {
     fn test_lessequal2_zero_right_zero_equal() {
         // V <= 0  =>  V == 0
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let zero = fd.vbank.create_constant(4, 0);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -18801,9 +20586,15 @@ mod tests {
         //   BOOL_NOT(BOOL_NOT(EQ)) where EQ's only consumer is BOOL_NOT.
         // flip EQ→NOTEQUAL, then the inner BOOL_NOT becomes COPY.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        let w = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x12);
-        let eq_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let w = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x12);
+        let eq_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         let eq_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_EQUAL,
@@ -18815,7 +20606,9 @@ mod tests {
         }
         eq_out.write().unwrap().def = Some(Arc::downgrade(&eq_op));
         // inner_not = BOOL_NOT(eq_out) → inner_out
-        let inner_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x21);
+        let inner_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x21);
         let inner_not = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_BOOL_NEGATE,
@@ -18833,9 +20626,17 @@ mod tests {
         )));
         outer_not.write().unwrap().inrefs = vec![inner_out.clone()];
         // eq_out must have only BOOL_NOT descendants.
-        eq_out.write().unwrap().descend.push(Arc::downgrade(&inner_not));
+        eq_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&inner_not));
         // inner_out must have only BOOL_NOT descendants (the outer_not).
-        inner_out.write().unwrap().descend.push(Arc::downgrade(&outer_not));
+        inner_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&outer_not));
 
         let rule = RuleBoolNegate::new();
         let result = rule.apply_op(&outer_not, &mut fd).unwrap();
@@ -18855,9 +20656,15 @@ mod tests {
         // BOOL_NOT(INT_LESS(V,W)) where LESS's only consumer is this NOT.
         // flip LESS → LESSEQUAL, reorder=true (swap operands).
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        let w = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x12);
-        let less_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let w = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x12);
+        let less_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         let less_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_LESS,
@@ -18873,7 +20680,11 @@ mod tests {
             OpCode::CPUI_BOOL_NEGATE,
         )));
         not_op.write().unwrap().inrefs = vec![less_out.clone()];
-        less_out.write().unwrap().descend.push(Arc::downgrade(&not_op));
+        less_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&not_op));
 
         let rule = RuleBoolNegate::new();
         let result = rule.apply_op(&not_op, &mut fd).unwrap();
@@ -18891,8 +20702,12 @@ mod tests {
     fn test_bool_negate_non_bool_descendant_no_change() {
         // If the comparison output has a non-BOOL_NOT descendant → no change.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        let eq_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let eq_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         let eq_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_EQUAL,
@@ -18909,13 +20724,21 @@ mod tests {
             OpCode::CPUI_COPY,
         )));
         copy_op.write().unwrap().inrefs = vec![eq_out.clone()];
-        eq_out.write().unwrap().descend.push(Arc::downgrade(&copy_op));
+        eq_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&copy_op));
         let not_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 2),
             OpCode::CPUI_BOOL_NEGATE,
         )));
         not_op.write().unwrap().inrefs = vec![eq_out.clone()];
-        eq_out.write().unwrap().descend.push(Arc::downgrade(&not_op));
+        eq_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&not_op));
 
         let rule = RuleBoolNegate::new();
         let result = rule.apply_op(&not_op, &mut fd).unwrap();
@@ -18928,7 +20751,9 @@ mod tests {
     fn test_or_mask_full_mask() {
         // V | 0xffffffff (size 4) => COPY(0xffffffff)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let full = fd.vbank.create_constant(4, 0xffffffff);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -18937,7 +20762,9 @@ mod tests {
         {
             let mut o = op.write().unwrap();
             o.inrefs = vec![v, full.clone()];
-            o.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20));
+            o.output = Some(fd.vbank.create_with_space(
+                4, crate::space::AddressSpace::Register, 0x20,
+            ));
         }
         let rule = RuleOrMask::new();
         let result = rule.apply_op(&op, &mut fd).unwrap();
@@ -18951,7 +20778,9 @@ mod tests {
     fn test_or_mask_partial_no_change() {
         // V | 0xf0 (not full mask) => no change
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let partial = fd.vbank.create_constant(4, 0xf0);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -18960,7 +20789,9 @@ mod tests {
         {
             let mut o = op.write().unwrap();
             o.inrefs = vec![v, partial];
-            o.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20));
+            o.output = Some(fd.vbank.create_with_space(
+                4, crate::space::AddressSpace::Register, 0x20,
+            ));
         }
         let rule = RuleOrMask::new();
         let result = rule.apply_op(&op, &mut fd).unwrap();
@@ -18973,10 +20804,16 @@ mod tests {
     fn test_and_or_lump_double_and() {
         // ((V & 0xf0) & 0x0f) => V & (0xf0 & 0x0f) = V & 0
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let c1 = fd.vbank.create_constant(4, 0xf0);
-        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let inner = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_AND,
@@ -18995,7 +20832,9 @@ mod tests {
         {
             let mut o = outer.write().unwrap();
             o.inrefs = vec![inner_out, c0];
-            o.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30));
+            o.output = Some(fd.vbank.create_with_space(
+                4, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         let rule = RuleAndOrLump::new();
         let result = rule.apply_op(&outer, &mut fd).unwrap();
@@ -19009,10 +20848,16 @@ mod tests {
     fn test_and_or_lump_double_or() {
         // ((V | 0x01) | 0x02) => V | 0x03
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let c1 = fd.vbank.create_constant(4, 0x01);
-        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let inner = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_OR,
@@ -19031,7 +20876,9 @@ mod tests {
         {
             let mut o = outer.write().unwrap();
             o.inrefs = vec![inner_out, c0];
-            o.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30));
+            o.output = Some(fd.vbank.create_with_space(
+                4, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         let rule = RuleAndOrLump::new();
         let result = rule.apply_op(&outer, &mut fd).unwrap();
@@ -19048,7 +20895,9 @@ mod tests {
         // PIECE(0, V) => ZEXT(V)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let zero = fd.vbank.create_constant(2, 0);
-        let v = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x10);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_PIECE,
@@ -19056,7 +20905,9 @@ mod tests {
         {
             let mut o = op.write().unwrap();
             o.inrefs = vec![zero, v.clone()];
-            o.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20));
+            o.output = Some(fd.vbank.create_with_space(
+                4, crate::space::AddressSpace::Register, 0x20,
+            ));
         }
         let rule = RulePiece2Zext::new();
         let result = rule.apply_op(&op, &mut fd).unwrap();
@@ -19073,9 +20924,13 @@ mod tests {
     fn test_piece2sext_sign_shift() {
         // PIECE(V s>> (8*size-1), V) => SEXT(V). size=1 → shift by 7.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
         let shift_const = fd.vbank.create_constant(4, 7);
-        let shift_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let shift_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         let shift_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_SRIGHT,
@@ -19093,7 +20948,9 @@ mod tests {
         {
             let mut p = piece_op.write().unwrap();
             p.inrefs = vec![shift_out, v.clone()];
-            p.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+            p.output = Some(fd.vbank.create_with_space(
+                2, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         let rule = RulePiece2Sext::new();
         let result = rule.apply_op(&piece_op, &mut fd).unwrap();
@@ -19109,8 +20966,12 @@ mod tests {
     #[test]
     fn test_bxor2notequal() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        let w = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let w = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x11);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_BOOL_XOR,
@@ -19129,7 +20990,9 @@ mod tests {
         // INT_ADD(5, V) => INT_ADD(V, 5)  (swap so constant is last)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let five = fd.vbank.create_constant(4, 5);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_ADD,
@@ -19145,7 +21008,9 @@ mod tests {
     #[test]
     fn test_term_order_const_last_no_change() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let five = fd.vbank.create_constant(4, 5);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -19163,9 +21028,13 @@ mod tests {
     fn test_shift2mult_left_feeding_add() {
         // (V << 3) feeding INT_ADD => rewrite shift as INT_MULT by 8
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let shift_const = fd.vbank.create_constant(4, 3);
-        let shift_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let shift_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let shift_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_LEFT,
@@ -19176,13 +21045,19 @@ mod tests {
             s.output = Some(shift_out.clone());
         }
         // add_op = INT_ADD(shift_out, W) — shift_out feeds an ADD.
-        let w = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let w = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x30);
         let add_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_ADD,
         )));
         add_op.write().unwrap().inrefs = vec![shift_out.clone(), w];
-        shift_out.write().unwrap().descend.push(Arc::downgrade(&add_op));
+        shift_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&add_op));
 
         let rule = RuleShift2Mult::new();
         let result = rule.apply_op(&shift_op, &mut fd).unwrap();
@@ -19196,9 +21071,13 @@ mod tests {
     fn test_shift2mult_no_arith_no_change() {
         // (V << 3) feeding only a STORE (non-arith) => no change
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let shift_const = fd.vbank.create_constant(4, 3);
-        let shift_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let shift_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let shift_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_LEFT,
@@ -19214,7 +21093,11 @@ mod tests {
             OpCode::CPUI_COPY,
         )));
         copy_op.write().unwrap().inrefs = vec![shift_out.clone()];
-        shift_out.write().unwrap().descend.push(Arc::downgrade(&copy_op));
+        shift_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&copy_op));
 
         let rule = RuleShift2Mult::new();
         let result = rule.apply_op(&shift_op, &mut fd).unwrap();
@@ -19227,9 +21110,13 @@ mod tests {
     fn test_double_sub_collapse() {
         // sub(sub(V, 2), 1) => sub(V, 3)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
         let off1 = fd.vbank.create_constant(4, 2);
-        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let inner = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_SUBPIECE,
@@ -19248,7 +21135,9 @@ mod tests {
         {
             let mut o = outer.write().unwrap();
             o.inrefs = vec![inner_out, off2];
-            o.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+            o.output = Some(fd.vbank.create_with_space(
+                2, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         let rule = RuleDoubleSub::new();
         let result = rule.apply_op(&outer, &mut fd).unwrap();
@@ -19264,7 +21153,9 @@ mod tests {
     fn test_trivial_shift_zero() {
         // V << 0 => COPY(V)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let zero = fd.vbank.create_constant(4, 0);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -19282,7 +21173,9 @@ mod tests {
     fn test_trivial_shift_oversize_zero() {
         // V (size 1) << 8 => COPY(0)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
         let eight = fd.vbank.create_constant(4, 8);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -19300,7 +21193,9 @@ mod tests {
     fn test_trivial_shift_sright_oversize_no_change() {
         // V (size 1) s>> 8 => no change (can't predict signbit)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
         let eight = fd.vbank.create_constant(4, 8);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -19375,10 +21270,14 @@ mod tests {
         // (coreaction.cc:5507) does before the rule pools.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let block: Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>> =
-            Arc::new(RwLock::new(crate::block::BlockBasic::new(0, Address::new(0x5000))));
+            Arc::new(RwLock::new(
+            crate::block::BlockBasic::new(0, Address::new(0x5000)),
+        ));
         fd.bblocks.add_block(block.clone());
         let v = {
-            let vn = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+            let vn = fd
+                .vbank
+                .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
             fd.set_input_varnode(vn)
         };
         let c = fd.new_constant(1, 0xff);
@@ -19401,10 +21300,14 @@ mod tests {
         // → no change (ruleaction.cc:397).
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let block: Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>> =
-            Arc::new(RwLock::new(crate::block::BlockBasic::new(0, Address::new(0x5000))));
+            Arc::new(RwLock::new(
+            crate::block::BlockBasic::new(0, Address::new(0x5000)),
+        ));
         fd.bblocks.add_block(block.clone());
         let v = {
-            let vn = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+            let vn = fd
+                .vbank
+                .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
             fd.set_input_varnode(vn)
         };
         let c = fd.new_constant(1, 0x0f);
@@ -19427,12 +21330,22 @@ mod tests {
         // PIECE(V[1byte], zext(W[1byte]) << 8) → restructure.
         // zext(W size1→size2), shift by 8 (=1 byte). sa_bytes=1, b_size=1, tmp_size=2 → 1+1==2 ✓.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        let w = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
-        w.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let w = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        w.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         // zext_op = INT_ZEXT(W) → zext_out (size 2)
-        let zext_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let zext_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
         let zext_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_ZEXT,
@@ -19445,7 +21358,9 @@ mod tests {
         zext_out.write().unwrap().def = Some(Arc::downgrade(&zext_op));
         // shift_op = INT_LEFT(zext_out, 8) → shift_out (size 2)
         let shift_const = fd.vbank.create_constant(4, 8);
-        let shift_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x21);
+        let shift_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x21);
         let shift_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_LEFT,
@@ -19457,7 +21372,9 @@ mod tests {
         }
         shift_out.write().unwrap().def = Some(Arc::downgrade(&shift_op));
         // piece_op = PIECE(v, shift_out) → out (size 2)
-        let out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30);
+        let out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x30);
         let piece_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 2),
             OpCode::CPUI_PIECE,
@@ -19483,10 +21400,16 @@ mod tests {
     fn test_double_shift_same_direction_combine() {
         // (V << 2) << 3 => V << 5
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let c1 = fd.vbank.create_constant(4, 2);
-        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let inner = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_LEFT,
@@ -19505,7 +21428,9 @@ mod tests {
         {
             let mut o = outer.write().unwrap();
             o.inrefs = vec![inner_out, c2];
-            o.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30));
+            o.output = Some(fd.vbank.create_with_space(
+                4, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         let rule = RuleDoubleShift::new();
         let result = rule.apply_op(&outer, &mut fd).unwrap();
@@ -19521,10 +21446,16 @@ mod tests {
         // (V << 4) >> 4 => V & 0xffffffff (size 4, mask cancels to full)
         // Requires inner output to be lone-descend of outer.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let c1 = fd.vbank.create_constant(4, 4);
-        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let inner = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_LEFT,
@@ -19543,10 +21474,16 @@ mod tests {
         {
             let mut o = outer.write().unwrap();
             o.inrefs = vec![inner_out.clone(), c2];
-            o.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30));
+            o.output = Some(fd.vbank.create_with_space(
+                4, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         // inner_out must have lone descend (outer).
-        inner_out.write().unwrap().descend.push(Arc::downgrade(&outer));
+        inner_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&outer));
         let rule = RuleDoubleShift::new();
         let result = rule.apply_op(&outer, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
@@ -19579,7 +21516,9 @@ mod tests {
     #[test]
     fn test_identity_el_add_zero() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let zero = fd.vbank.create_constant(4, 0);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -19596,7 +21535,9 @@ mod tests {
     #[test]
     fn test_identity_el_mult_by_one() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let one = fd.vbank.create_constant(4, 1);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -19613,7 +21554,9 @@ mod tests {
     #[test]
     fn test_identity_el_mult_by_zero() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let zero = fd.vbank.create_constant(4, 0);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -19634,10 +21577,16 @@ mod tests {
     fn test_sign_shift_converts_when_arith() {
         // V (size 1) >> 7, feeding INT_ADD → convert to (V s>> 7) * 0xff
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let shift_const = fd.vbank.create_constant(4, 7);
-        let shift_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let shift_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         let shift_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_RIGHT,
@@ -19648,13 +21597,19 @@ mod tests {
             s.output = Some(shift_out.clone());
         }
         // add_op = INT_ADD(shift_out, W) — sign shift feeds an ADD.
-        let w = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x30);
+        let w = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x30);
         let add_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_ADD,
         )));
         add_op.write().unwrap().inrefs = vec![shift_out.clone(), w];
-        shift_out.write().unwrap().descend.push(Arc::downgrade(&add_op));
+        shift_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&add_op));
 
         let rule = RuleSignShift::new();
         let result = rule.apply_op(&shift_op, &mut fd).unwrap();
@@ -19668,9 +21623,13 @@ mod tests {
     #[test]
     fn test_sign_shift_no_arith_no_change() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
         let shift_const = fd.vbank.create_constant(4, 7);
-        let shift_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let shift_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         let shift_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_RIGHT,
@@ -19686,7 +21645,11 @@ mod tests {
             OpCode::CPUI_COPY,
         )));
         copy_op.write().unwrap().inrefs = vec![shift_out.clone()];
-        shift_out.write().unwrap().descend.push(Arc::downgrade(&copy_op));
+        shift_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&copy_op));
 
         let rule = RuleSignShift::new();
         let result = rule.apply_op(&shift_op, &mut fd).unwrap();
@@ -19699,10 +21662,16 @@ mod tests {
     fn test_sub_zext_offset_zero() {
         // zext(sub(V[8], 0)) [out size 8] => V & 0xffffffff (sub size 4)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let off_const = fd.vbank.create_constant(4, 0);
-        let sub_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let sub_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let sub_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_SUBPIECE,
@@ -19720,7 +21689,9 @@ mod tests {
         {
             let mut z = zext_op.write().unwrap();
             z.inrefs = vec![sub_out];
-            z.output = Some(fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30));
+            z.output = Some(fd.vbank.create_with_space(
+                8, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         let rule = RuleSubZext::new();
         let result = rule.apply_op(&zext_op, &mut fd).unwrap();
@@ -19737,10 +21708,16 @@ mod tests {
         // zext(sub(V[8], 4)) [out size 8] => (V >> 32) & 0xffffffff
         // Requires sub_out to be lone-descend of zext_op.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let off_const = fd.vbank.create_constant(4, 4);
-        let sub_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let sub_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let sub_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_SUBPIECE,
@@ -19758,9 +21735,15 @@ mod tests {
         {
             let mut z = zext_op.write().unwrap();
             z.inrefs = vec![sub_out.clone()];
-            z.output = Some(fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30));
+            z.output = Some(fd.vbank.create_with_space(
+                8, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
-        sub_out.write().unwrap().descend.push(Arc::downgrade(&zext_op));
+        sub_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&zext_op));
         let rule = RuleSubZext::new();
         let result = rule.apply_op(&zext_op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
@@ -19779,10 +21762,18 @@ mod tests {
         // (concat(main[1], least[1]) >> 8) [out size 2] → zext(main)
         // sa=8, leastsz=1*8=8, sa2=0 → exact cancel → ZEXT(main)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let main = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        main.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        let least = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
-        let concat_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let main = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        main.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let least = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        let concat_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
         let concat_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_PIECE,
@@ -19801,7 +21792,9 @@ mod tests {
         {
             let mut s = shift_op.write().unwrap();
             s.inrefs = vec![concat_out, shift_const];
-            s.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+            s.output = Some(fd.vbank.create_with_space(
+                2, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         let rule = RuleConcatShift::new();
         let result = rule.apply_op(&shift_op, &mut fd).unwrap();
@@ -19816,9 +21809,15 @@ mod tests {
     fn test_concat_shift_partial_no_change() {
         // (concat(main[1], least[1]) >> 4) — sa=4 < leastsz=8 → no change
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let main = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        let least = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
-        let concat_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let main = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let least = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        let concat_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
         let concat_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_PIECE,
@@ -19837,7 +21836,9 @@ mod tests {
         {
             let mut s = shift_op.write().unwrap();
             s.inrefs = vec![concat_out, shift_const];
-            s.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+            s.output = Some(fd.vbank.create_with_space(
+                2, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         let rule = RuleConcatShift::new();
         let result = rule.apply_op(&shift_op, &mut fd).unwrap();
@@ -19851,10 +21852,16 @@ mod tests {
         // (V << 4) == 0x20 — mainvn is a register (NZM=0xffffffff), so
         // left-shift loses high bits and the rule correctly does NOT convert.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let sa = fd.vbank.create_constant(4, 4);
-        let shift_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let shift_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let shift_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_LEFT,
@@ -19882,10 +21889,16 @@ mod tests {
         // so right-shift by 4 loses low bits → no conversion until Heritage
         // provides a real NZM. This documents the current (correct) behavior.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let sa = fd.vbank.create_constant(4, 4);
-        let shift_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let shift_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let shift_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_RIGHT,
@@ -19901,7 +21914,11 @@ mod tests {
             OpCode::CPUI_INT_EQUAL,
         )));
         eq_op.write().unwrap().inrefs = vec![shift_out.clone(), d];
-        shift_out.write().unwrap().descend.push(Arc::downgrade(&eq_op));
+        shift_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&eq_op));
         let rule = RuleShiftCompare::new();
         let result = rule.apply_op(&eq_op, &mut fd).unwrap();
         // NZM=0xffffffff loses low bits → no conversion (until Heritage wires NZM).
@@ -19914,9 +21931,15 @@ mod tests {
     fn test_and_compare_zext_push() {
         // (zext(V) & 0xff) == 0 => (V & 0xff) == 0
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        let zext_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let zext_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
         let zext_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_ZEXT,
@@ -19928,7 +21951,9 @@ mod tests {
         }
         zext_out.write().unwrap().def = Some(Arc::downgrade(&zext_op));
         let mask = fd.vbank.create_constant(2, 0xff);
-        let and_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x21);
+        let and_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x21);
         let and_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_AND,
@@ -19959,10 +21984,16 @@ mod tests {
     fn test_test_sign_notequal_zero_to_sless() {
         // (V s>> 7) != 0  =>  V s< 0   (size 1, sign bit at bit 7)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let sa = fd.vbank.create_constant(4, 7);
-        let shift_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let shift_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         let shift_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_SRIGHT,
@@ -19980,9 +22011,15 @@ mod tests {
         {
             let mut n = neq_op.write().unwrap();
             n.inrefs = vec![shift_out.clone(), zero];
-            n.output = Some(fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x30));
+            n.output = Some(fd.vbank.create_with_space(
+                1, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
-        shift_out.write().unwrap().descend.push(Arc::downgrade(&neq_op));
+        shift_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&neq_op));
         let rule = RuleTestSign::new();
         let result = rule.apply_op(&shift_op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
@@ -19997,10 +22034,16 @@ mod tests {
     fn test_test_sign_equal_zero_to_slessequal() {
         // (V s>> 7) == 0  =>  V s<= 0
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let sa = fd.vbank.create_constant(4, 7);
-        let shift_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let shift_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         let shift_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_SRIGHT,
@@ -20016,7 +22059,11 @@ mod tests {
             OpCode::CPUI_INT_EQUAL,
         )));
         eq_op.write().unwrap().inrefs = vec![shift_out.clone(), zero];
-        shift_out.write().unwrap().descend.push(Arc::downgrade(&eq_op));
+        shift_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&eq_op));
         let rule = RuleTestSign::new();
         let result = rule.apply_op(&shift_op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
@@ -20030,7 +22077,9 @@ mod tests {
     fn test_equality_same_varnode_collapse() {
         // V == V (same varnode both inputs) => COPY(1)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_EQUAL,
@@ -20084,10 +22133,16 @@ mod tests {
     fn test_less_notequal_collapse() {
         // BOOL_AND(LE(V,W), NE(V,W)) => LESS(V,W)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        let w = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x11);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let w = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x11);
         // LE op
-        let le_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let le_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         let le_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_LESSEQUAL,
@@ -20099,7 +22154,9 @@ mod tests {
         }
         le_out.write().unwrap().def = Some(Arc::downgrade(&le_op));
         // NE op (same operands)
-        let ne_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x21);
+        let ne_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x21);
         let ne_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_NOTEQUAL,
@@ -20118,7 +22175,9 @@ mod tests {
         {
             let mut a = and_op.write().unwrap();
             a.inrefs = vec![le_out, ne_out];
-            a.output = Some(fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x30));
+            a.output = Some(fd.vbank.create_with_space(
+                1, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         let rule = RuleLessNotEqual::new();
         let result = rule.apply_op(&and_op, &mut fd).unwrap();
@@ -20135,9 +22194,15 @@ mod tests {
     fn test_less_equal_collapse() {
         // BOOL_OR(LESS(V,W), EQUAL(V,W)) => LESSEQUAL(V,W)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        let w = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x11);
-        let less_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let w = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x11);
+        let less_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         let less_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_LESS,
@@ -20148,7 +22213,9 @@ mod tests {
             l.output = Some(less_out.clone());
         }
         less_out.write().unwrap().def = Some(Arc::downgrade(&less_op));
-        let eq_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x21);
+        let eq_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x21);
         let eq_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_EQUAL,
@@ -20166,7 +22233,9 @@ mod tests {
         {
             let mut o = or_op.write().unwrap();
             o.inrefs = vec![less_out, eq_out];
-            o.output = Some(fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x30));
+            o.output = Some(fd.vbank.create_with_space(
+                1, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         let rule = RuleLessEqual::new();
         let result = rule.apply_op(&or_op, &mut fd).unwrap();
@@ -20183,10 +22252,16 @@ mod tests {
     fn test_right_shift_and_bypass() {
         // (V & 0xff) >> 0 (size 1) → V >> 0 (full=0xff>>0=0xff==mask)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let mask = fd.vbank.create_constant(1, 0xff);
-        let and_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let and_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         let and_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_AND,
@@ -20216,10 +22291,16 @@ mod tests {
         // ((V + c) & 0xf0) where 0xf0 is form 11110000 → (V + (c & 0xf0))
         // V size 1, mask 0xf0, c = 0x05 → result INT_ADD(V, 0x05 & 0xf0 = 0x00)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let c = fd.vbank.create_constant(1, 0x05);
-        let add_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let add_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         let add_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_ADD,
@@ -20249,9 +22330,15 @@ mod tests {
     fn test_and_zext_sext_full_mask() {
         // (sext(V[1]) & 0xff) => zext(V)  (mask 0xff == full mask of V size 1)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        let sext_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let sext_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
         let sext_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_SEXT,
@@ -20283,9 +22370,15 @@ mod tests {
     fn test_zext_sless_small_const() {
         // zext(V[1]) s< 0x05 (size 1) → V < 0x05  (0x05 < 0x80, sign bit ok)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        let zext_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let zext_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
         let zext_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_ZEXT,
@@ -20316,9 +22409,15 @@ mod tests {
     fn test_zext_sless_large_const_no_change() {
         // zext(V[1]) s< 0x80 → sign bit of V could be 1 → no change
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        let zext_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let zext_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
         let zext_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_ZEXT,
@@ -20346,12 +22445,16 @@ mod tests {
     fn test_scarry_zero_is_false() {
         // scarry(V, 0) => COPY(0)  (no signed overflow adding zero)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let zero = fd.vbank.create_constant(4, 0);
         // The oracle's applyOp reads op->getOut() unconditionally
         // (ruleaction.cc:3455); a SCARRY without an output never reaches a
         // rule in the real pipeline, so the fixture mirrors that invariant.
-        let out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Unique, 0x100);
+        let out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Unique, 0x100);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_SCARRY,
@@ -20375,11 +22478,15 @@ mod tests {
     fn test_sborrow_zero_is_false() {
         // sborrow(V, 0) => COPY(0)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let zero = fd.vbank.create_constant(4, 0);
         // Same output invariant as the SCARRY fixture above
         // (ruleaction.cc:3366 reads op->getOut() first).
-        let out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Unique, 0x100);
+        let out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Unique, 0x100);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_SBORROW,
@@ -20400,7 +22507,9 @@ mod tests {
     #[test]
     fn test_sborrow_nonzero_no_change() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let c = fd.vbank.create_constant(4, 5);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -20422,7 +22531,9 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let a = fd.vbank.create_constant(1, 0xf0);
         let b = fd.vbank.create_constant(1, 0xff);
-        let or_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let or_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         let or_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_OR,
@@ -20441,7 +22552,9 @@ mod tests {
         {
             let mut a2 = and_op.write().unwrap();
             a2.inrefs = vec![or_out, c];
-            a2.output = Some(fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x30));
+            a2.output = Some(fd.vbank.create_with_space(
+                1, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         let rule = RuleAndDistribute::new();
         let result = rule.apply_op(&and_op, &mut fd).unwrap();
@@ -20458,7 +22571,9 @@ mod tests {
     fn test_less_one_less_than_one() {
         // V < 1 => V == 0
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let one = fd.vbank.create_constant(4, 1);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -20477,7 +22592,9 @@ mod tests {
     fn test_less_one_lessequal_zero() {
         // V <= 0 => V == 0
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let zero = fd.vbank.create_constant(4, 0);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -20494,7 +22611,9 @@ mod tests {
     fn test_less_one_other_const_no_change() {
         // V < 5 => no change
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let five = fd.vbank.create_constant(4, 5);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -20514,11 +22633,21 @@ mod tests {
         // othermask (mask operand NZM) = 0xff. low size=1, othermask>>(1*8)=0.
         // maskhigh(H) & 0 == 0, H not const-zero → opc=ZEXT, keep low.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let h = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        let l = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
-        h.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        l.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        let piece_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let h = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let l = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        h.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        l.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let piece_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
         let piece_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_PIECE,
@@ -20538,7 +22667,9 @@ mod tests {
         {
             let mut a = and_op.write().unwrap();
             a.inrefs = vec![piece_out, mask];
-            a.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+            a.output = Some(fd.vbank.create_with_space(
+                2, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         let rule = RuleAndPiece::new();
         let result = rule.apply_op(&and_op, &mut fd).unwrap();
@@ -20556,10 +22687,16 @@ mod tests {
         // RIGHT path: adjusted = 0x0f0f << 4 = 0xf0f0 (nonzero, != full).
         // othervn not constant → found set.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let sa = fd.vbank.create_constant(4, 4);
-        let shift_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let shift_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
         let shift_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_RIGHT,
@@ -20582,7 +22719,9 @@ mod tests {
         {
             let mut a = and_op.write().unwrap();
             a.inrefs = vec![shift_out, w];
-            a.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+            a.output = Some(fd.vbank.create_with_space(
+                2, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         let rule = RuleAndCommute::new();
         let result = rule.apply_op(&and_op, &mut fd).unwrap();
@@ -20602,12 +22741,16 @@ mod tests {
         // Set consume=0 on the output (no bits consumed) so A is dropped.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let a = fd.vbank.create_constant(1, 0xff);
-        let b = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        let b = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x11);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_OR,
         )));
-        let out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         out.write().unwrap().set_consume(0); // nothing consumed
         {
             let mut o = op.write().unwrap();
@@ -20630,7 +22773,9 @@ mod tests {
         // trusts descend tracking for CONSTANT/IOP-space outputs (Ghidra
         // doesDeadcode==false for those spaces → always removable).
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let a = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let b = fd.vbank.create_constant(4, 5);
         let out = fd.vbank.create_constant(4, 0x20);
         let op = Arc::new(RwLock::new(PcodeOp::new(
@@ -20651,15 +22796,17 @@ mod tests {
 
     #[test]
     fn test_early_removal_unique_output_destroyed() {
-        // A dead op whose output is in the UNIQUE (temporary) space. Ghidra's
-        // doesDeadcode() returns true for unique, but deadRemovalAllowedSeen has
-        // fired by the time the cleanup pool runs. Since Rugra has no deadcode-
-        // seen tracking, UNIQUE outputs are gated as a "memory" output and the
-        // removal is blocked (NO_CHANGE) until that mechanism lands.
+        // UNIQUE participates in dead-code analysis. At pass 0 the strict
+        // `pass > deadcodedelay` test rejects removal; pass 1 permits it and
+        // records deadremoved=1 before opDestroy.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let a = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let b = fd.vbank.create_constant(4, 5);
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Unique, 0x20);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Unique, 0x20);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_ADD,
@@ -20672,18 +22819,31 @@ mod tests {
         assert!(out.read().unwrap().has_no_descend());
         let rule = RuleEarlyRemoval::new();
         let result = rule.apply_op(&op, &mut fd).unwrap();
-        // UNIQUE is gated as memory output → blocked for now.
         assert_eq!(result, action_status::NO_CHANGE);
+        fd.heritage.pass = 1;
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        assert_eq!(
+            fd.heritage
+                .infolist
+                .iter()
+                .find(|info| info.space == crate::space::AddressSpace::Unique)
+                .map(|info| info.deadremoved),
+            Some(1)
+        );
     }
 
     #[test]
-    fn test_early_removal_register_output_blocked() {
-        // A dead op whose output is in the REGISTER space → "memory" output,
-        // gated until deadRemovalAllowedSeen is ported.
+    fn test_early_removal_register_output_respects_strict_delay() {
+        // REGISTER has deadcodedelay 0: pass 0 is blocked and pass 1 removes.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let a = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let b = fd.vbank.create_constant(4, 5);
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_ADD,
@@ -20697,6 +22857,9 @@ mod tests {
         let rule = RuleEarlyRemoval::new();
         let result = rule.apply_op(&op, &mut fd).unwrap();
         assert_eq!(result, action_status::NO_CHANGE);
+        fd.heritage.pass = 1;
+        let result = rule.apply_op(&op, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
     }
 
     #[test]
@@ -20723,7 +22886,9 @@ mod tests {
         // (ruleaction.cc:9350-9358: resvn = vn when ops is empty). This is the
         // path that fires for values formed before the branch — no cloning.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let boolvn = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let boolvn = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
         let op_ref = crate::op::PcodeOpRef(Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_BOOL_OR,
@@ -20740,7 +22905,9 @@ mod tests {
         // expression without CloneBlockOps (not yet ported) → returns None.
         // The caller (applyOp) then bails with NO_CHANGE.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let boolvn = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        let boolvn = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
         let op_ref = crate::op::PcodeOpRef(Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_BOOL_OR,
@@ -20758,9 +22925,15 @@ mod tests {
     fn test_conditional_move_check_boolean() {
         // checkBoolean returns the boolean root for a bool-output op.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        let b = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x11);
-        let boolout = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let a = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let b = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x11);
+        let boolout = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         let cmp_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_LESS,
@@ -20771,7 +22944,10 @@ mod tests {
             o.output = Some(boolout.clone());
             o.flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
         }
-        boolout.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        boolout
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         boolout.write().unwrap().def = Some(Arc::downgrade(&cmp_op));
         let root = RuleConditionalMove::check_boolean(&boolout);
         assert!(root.is_some());
@@ -20785,9 +22961,15 @@ mod tests {
         // boolval == 0 => !boolval (COPY + negate)
         // subbool must be is_boolean_value: defined by INT_LESS (calculated_bool).
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        let b = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x11);
-        let less_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let a = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let b = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x11);
+        let less_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
         let less_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_LESS,
@@ -20799,7 +22981,10 @@ mod tests {
             l.flags |= crate::op::pcodeop_flags::CALCULATED_BOOL;
         }
         less_out.write().unwrap().def = Some(Arc::downgrade(&less_op));
-        less_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        less_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         let zero = fd.vbank.create_constant(1, 0);
         let eq_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
@@ -20820,24 +23005,46 @@ mod tests {
         // (INT_LESS(a,b)) & (INT_LESS(c,d)) → BOOL_AND
         // Both inputs are calculated_bool → is_boolean_value true.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        let b = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x11);
-        let c = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x12);
-        let d = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x13);
-        let l1_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
-        let l1 = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_INT_LESS)));
+        let a = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let b = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x11);
+        let c = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x12);
+        let d = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x13);
+        let l1_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let l1 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_INT_LESS,
+        )));
         l1.write().unwrap().flags |= crate::op::pcodeop_flags::CALCULATED_BOOL;
         l1.write().unwrap().inrefs = vec![a, b];
         l1.write().unwrap().output = Some(l1_out.clone());
         l1_out.write().unwrap().def = Some(Arc::downgrade(&l1));
-        l1_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
-        let l2_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x21);
-        let l2 = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_INT_LESS)));
+        l1_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+        let l2_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x21);
+        let l2 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_INT_LESS,
+        )));
         l2.write().unwrap().flags |= crate::op::pcodeop_flags::CALCULATED_BOOL;
         l2.write().unwrap().inrefs = vec![c, d];
         l2.write().unwrap().output = Some(l2_out.clone());
         l2_out.write().unwrap().def = Some(Arc::downgrade(&l2));
-        l2_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        l2_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         let and_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 2),
             OpCode::CPUI_INT_AND,
@@ -20856,10 +23063,16 @@ mod tests {
         // (V << 8) >> 8 (size 2) → zext(sub(V, 0))
         // isa=1, tsz=2-1=1 (valid).
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let sa = fd.vbank.create_constant(4, 8);
-        let left_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let left_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
         let left_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_LEFT,
@@ -20870,7 +23083,10 @@ mod tests {
             l.output = Some(left_out.clone());
         }
         left_out.write().unwrap().def = Some(Arc::downgrade(&left_op));
-        left_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        left_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         let right_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_RIGHT,
@@ -20878,10 +23094,16 @@ mod tests {
         {
             let mut r = right_op.write().unwrap();
             r.inrefs = vec![left_out.clone(), sa.clone()];
-            r.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+            r.output = Some(fd.vbank.create_with_space(
+                2, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         // left_out must have lone_descend pointing to right_op.
-        left_out.write().unwrap().descend.push(Arc::downgrade(&right_op));
+        left_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&right_op));
         let rule = RuleLeftRight::new();
         let result = rule.apply_op(&right_op, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
@@ -20897,7 +23119,9 @@ mod tests {
     fn test_int_lessequal_to_less() {
         // V <= 5 => V < 6
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let c = fd.vbank.create_constant(4, 5);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -20916,7 +23140,9 @@ mod tests {
     fn test_int_lessequal_overflow_guard() {
         // V <= 0xffffffff (size 4, unsigned max) => no change (c+1 overflows)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let c = fd.vbank.create_constant(4, 0xffffffff);
         let op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
@@ -20935,7 +23161,9 @@ mod tests {
         // ((V + 3) + 5) => V + 8  (collapse constants 3+5)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let block = fd.create_new_block();
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let v = fd.set_input_varnode(v);
         let c5 = fd.new_constant(4, 5);
         let c3 = fd.new_constant(4, 3);
@@ -20956,8 +23184,18 @@ mod tests {
         assert_eq!(result, action_status::CHANGE);
         // Ghidra scans the constant suffix backwards: the first sorted
         // constant receives the sum and every later constant becomes zero.
-        assert_eq!(outer.0.read().unwrap().inrefs[1].read().unwrap().get_offset(), 8);
-        assert_eq!(inner.0.read().unwrap().inrefs[1].read().unwrap().get_offset(), 0);
+        assert_eq!(
+            outer.0.read().unwrap().inrefs[1]
+                .read()
+                .unwrap()
+                .get_offset(), 8
+        );
+        assert_eq!(
+            inner.0.read().unwrap().inrefs[1]
+                .read()
+                .unwrap()
+                .get_offset(), 0
+        );
     }
 
     // --- RuleBitUndistribute (ruleaction.cc:2620) ---
@@ -20966,24 +23204,46 @@ mod tests {
     fn test_bit_undistribute_zext() {
         // zext(V) & zext(W) => zext(V & W)  (size 1 → size 2)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        let w = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
-        w.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let w = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        w.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         // zext(V)
-        let zv_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
-        let zv = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_INT_ZEXT)));
+        let zv_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let zv = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_INT_ZEXT,
+        )));
         zv.write().unwrap().inrefs = vec![v.clone()];
         zv.write().unwrap().output = Some(zv_out.clone());
         zv_out.write().unwrap().def = Some(Arc::downgrade(&zv));
-        zv_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        zv_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         // zext(W)
-        let zw_out = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x21);
-        let zw = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_INT_ZEXT)));
+        let zw_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x21);
+        let zw = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_INT_ZEXT,
+        )));
         zw.write().unwrap().inrefs = vec![w.clone()];
         zw.write().unwrap().output = Some(zw_out.clone());
         zw_out.write().unwrap().def = Some(Arc::downgrade(&zw));
-        zw_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        zw_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         // AND(zv_out, zw_out)
         let and_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 2),
@@ -20992,7 +23252,9 @@ mod tests {
         {
             let mut a = and_op.write().unwrap();
             a.inrefs = vec![zv_out, zw_out];
-            a.output = Some(fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x30));
+            a.output = Some(fd.vbank.create_with_space(
+                2, crate::space::AddressSpace::Register, 0x30,
+            ));
         }
         let rule = RuleBitUndistribute::new();
         let result = rule.apply_op(&and_op, &mut fd).unwrap();
@@ -21009,26 +23271,52 @@ mod tests {
     fn test_boolean_dedup_and_and() {
         // (A && B) && (A && C) => A && (B && C)
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let a = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x10);
-        a.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        let b = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x11);
-        b.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        let c = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x12);
-        c.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let a = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        a.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let b = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x11);
+        b.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let c = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x12);
+        c.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         // A && B
-        let ab_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
-        let ab = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_BOOL_AND)));
+        let ab_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let ab = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_BOOL_AND,
+        )));
         ab.write().unwrap().inrefs = vec![a.clone(), b.clone()];
         ab.write().unwrap().output = Some(ab_out.clone());
         ab_out.write().unwrap().def = Some(Arc::downgrade(&ab));
-        ab_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        ab_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         // A && C
-        let ac_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x21);
-        let ac = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_BOOL_AND)));
+        let ac_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x21);
+        let ac = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_BOOL_AND,
+        )));
         ac.write().unwrap().inrefs = vec![a.clone(), c.clone()];
         ac.write().unwrap().output = Some(ac_out.clone());
         ac_out.write().unwrap().def = Some(Arc::downgrade(&ac));
-        ac_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        ac_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         // (A&&B) && (A&&C)
         let outer = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 2),
@@ -21049,31 +23337,53 @@ mod tests {
         // (V < 5) || (V == 5)  =>  V <= 5
         // Build: BOOL_OR(INT_LESS(V, 5), INT_EQUAL(V, 5))
         let mut fd = Funcdata::new("test", Address::new(0x1000), 16);
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let c5 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(5, 4)));
-        c5.write().unwrap().set_flags(crate::varnode::varnode_flags::CONSTANT);
+        c5.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::CONSTANT);
 
         // INT_LESS(V, 5) — bool output
-        let less_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
-        let less = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_INT_LESS)));
+        let less_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let less = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_INT_LESS,
+        )));
         less.write().unwrap().inrefs = vec![v.clone(), c5.clone()];
         less.write().unwrap().output = Some(less_out.clone());
         less.write().unwrap().flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
         less_out.write().unwrap().def = Some(Arc::downgrade(&less));
-        less_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        less_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
 
         // INT_EQUAL(V, 5) — bool output
-        let eq_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x21);
-        let eq = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_INT_EQUAL)));
+        let eq_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x21);
+        let eq = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_INT_EQUAL,
+        )));
         eq.write().unwrap().inrefs = vec![v.clone(), c5.clone()];
         eq.write().unwrap().output = Some(eq_out.clone());
         eq.write().unwrap().flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
         eq_out.write().unwrap().def = Some(Arc::downgrade(&eq));
-        eq_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        eq_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
 
         // BOOL_OR(less_out, eq_out)
-        let outer = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 2), OpCode::CPUI_BOOL_OR)));
+        let outer = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2), OpCode::CPUI_BOOL_OR,
+        )));
         outer.write().unwrap().inrefs = vec![less_out, eq_out];
 
         let rule = RuleRangeMeld::new();
@@ -21097,13 +23407,19 @@ mod tests {
         // Build: INT_AND(A, #0) where A has NZM = 0 (simulate constant 0).
         let mut fd = Funcdata::new("test", Address::new(0x1000), 16);
         let a = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(0, 4)));
-        a.write().unwrap().set_flags(crate::varnode::varnode_flags::CONSTANT);
+        a.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::CONSTANT);
         a.write().unwrap().set_nzm(0); // NZM = 0
         let c0 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(0, 4)));
-        c0.write().unwrap().set_flags(crate::varnode::varnode_flags::CONSTANT);
+        c0.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::CONSTANT);
         c0.write().unwrap().set_nzm(0);
         let out_vn = Arc::new(RwLock::new(crate::varnode::Varnode::new_register(0x30, 4)));
-        let op = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_INT_AND)));
+        let op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_INT_AND,
+        )));
         op.write().unwrap().inrefs = vec![a.clone(), c0.clone()];
         op.write().unwrap().output = Some(out_vn.clone());
         out_vn.write().unwrap().def = Some(Arc::downgrade(&op));
@@ -21120,29 +23436,53 @@ mod tests {
     fn test_rule_float_range_less_or_equal() {
         // (V f< 5.0) || (V f== 5.0)  =>  V f<= 5.0
         let mut fd = Funcdata::new("test", Address::new(0x1000), 16);
-        let v = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
-        v.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        let c5 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(0x40590000, 8)));
-        c5.write().unwrap().set_flags(crate::varnode::varnode_flags::CONSTANT);
+        let v = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let c5 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(
+            0x40590000, 8,
+        )));
+        c5.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::CONSTANT);
 
         // FLOAT_LESS(V, 5.0)
-        let less_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x20);
-        let less = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_FLOAT_LESS)));
+        let less_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let less = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0), OpCode::CPUI_FLOAT_LESS,
+        )));
         less.write().unwrap().inrefs = vec![v.clone(), c5.clone()];
         less.write().unwrap().output = Some(less_out.clone());
         less_out.write().unwrap().def = Some(Arc::downgrade(&less));
-        less_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        less_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
 
         // FLOAT_EQUAL(V, 5.0)
-        let eq_out = fd.vbank.create_with_space(1, crate::space::AddressSpace::Register, 0x21);
-        let eq = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_FLOAT_EQUAL)));
+        let eq_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x21);
+        let eq = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1), OpCode::CPUI_FLOAT_EQUAL,
+        )));
         eq.write().unwrap().inrefs = vec![v.clone(), c5.clone()];
         eq.write().unwrap().output = Some(eq_out.clone());
         eq_out.write().unwrap().def = Some(Arc::downgrade(&eq));
-        eq_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        eq_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
 
         // BOOL_OR(less_out, eq_out)
-        let outer = Arc::new(RwLock::new(PcodeOp::new(SeqNum::new(Address::new(0x1000), 2), OpCode::CPUI_BOOL_OR)));
+        let outer = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2), OpCode::CPUI_BOOL_OR,
+        )));
         outer.write().unwrap().inrefs = vec![less_out, eq_out];
 
         let rule = RuleFloatRange::new();
@@ -21193,7 +23533,9 @@ mod tests {
         fd.obank.alivelist.push(reader.clone());
 
         let rule = RulePropagateCopy::new();
-        assert_eq!(rule.apply_op(&reader.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_eq!(
+            rule.apply_op(&reader.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         // slot 0 now reads a constant 5 (op_set_input clones the constant per
         // funcdata_op.cc:108-115 — constants have a single descendant)
         let new_in = reader.0.read().unwrap().inrefs[0].clone();
@@ -21205,16 +23547,20 @@ mod tests {
         // the (cloned) constant does
         let still_on_copy_out = {
             let co = copy_out.read().unwrap();
-            co.descend.iter().any(|w| {
-                w.upgrade().is_some_and(|o| Arc::ptr_eq(&o, &reader.0))
-            })
+            co.descend
+                .iter()
+                .any(|w| w.upgrade().is_some_and(|o| Arc::ptr_eq(&o, &reader.0))
+            )
         };
-        assert!(!still_on_copy_out, "reader must be erased from copy_out.descend");
+        assert!(
+            !still_on_copy_out, "reader must be erased from copy_out.descend"
+        );
         let on_new_in = {
             let ni = new_in.read().unwrap();
-            ni.descend.iter().any(|w| {
-                w.upgrade().is_some_and(|o| Arc::ptr_eq(&o, &reader.0))
-            })
+            ni.descend
+                .iter()
+                .any(|w| w.upgrade().is_some_and(|o| Arc::ptr_eq(&o, &reader.0))
+            )
         };
         assert!(on_new_in, "reader must be added to the new input's descend");
     }
@@ -21226,7 +23572,9 @@ mod tests {
     fn test_rule_propagate_copy_heritage_known_guard() {
         let mut fd = Funcdata::new("test_propcopy_guard", Address::new(0x1000), 0x10);
         // free register varnode: no INSERT/CONSTANT/ANNOTATION flags
-        let free_reg = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let free_reg = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x30);
         assert!(!free_reg.read().unwrap().is_heritage_known());
         let copy_op = fd.new_op(1, Address::new(0x1000));
         fd.op_set_opcode(&copy_op, OpCode::CPUI_COPY);
@@ -21240,7 +23588,9 @@ mod tests {
         fd.obank.alivelist.push(reader.clone());
 
         let rule = RulePropagateCopy::new();
-        assert_eq!(rule.apply_op(&reader.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&reader.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     /// cc:3946-3947 marker guard: constants must not be propagated into
@@ -21265,7 +23615,9 @@ mod tests {
         fd.obank.alivelist.push(reader.clone());
 
         let rule = RulePropagateCopy::new();
-        assert_eq!(rule.apply_op(&reader.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&reader.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     /// cc:3933 return-copy guard: ops flagged return_copy are skipped before
@@ -21287,7 +23639,9 @@ mod tests {
         reader.0.write().unwrap().flags |= crate::op::pcodeop_flags::RETURN_COPY;
 
         let rule = RulePropagateCopy::new();
-        assert_eq!(rule.apply_op(&reader.0, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&reader.0, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     /// cc:3953-3954: exactly ONE slot is replaced per invocation (return 1
@@ -21317,7 +23671,9 @@ mod tests {
         fd.obank.alivelist.push(reader.clone());
 
         let rule = RulePropagateCopy::new();
-        assert_eq!(rule.apply_op(&reader.0, &mut fd).unwrap(), action_status::CHANGE);
+        assert_eq!(
+            rule.apply_op(&reader.0, &mut fd).unwrap(), action_status::CHANGE
+        );
         let (slot0_replaced, slot1_intact) = {
             let r = reader.0.read().unwrap();
             (
@@ -21326,7 +23682,9 @@ mod tests {
             )
         };
         assert!(slot0_replaced, "first eligible slot must be replaced");
-        assert!(slot1_intact, "second slot must be untouched in this invocation");
+        assert!(
+            slot1_intact, "second slot must be untouched in this invocation"
+        );
     }
 
     /// Verify RuleSubCommute transforms SUBPIECE(INT_ADD(a,b),0) into
@@ -21336,8 +23694,12 @@ mod tests {
     fn test_rule_sub_commute_add() {
         let mut fd = Funcdata::new("test_subcommute", Address::new(0x1000), 0x10);
         // Two 8-byte registers a, b.
-        let a = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x200);
-        let b = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x208);
+        let a = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x200);
+        let b = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x208);
         // Register a/b as function inputs (VarnodeBank::setInput,
         // varnode.cc:1358). In Ghidra the rule universe runs post-heritage:
         // every read target is written/input, and the rule-created
@@ -21364,15 +23726,23 @@ mod tests {
 
         let rule = RuleSubCommute::new();
         let result = rule.apply_op(&sub_op.0, &mut fd).unwrap();
-        assert_eq!(result, action_status::CHANGE, "RuleSubCommute should transform SUBPIECE(INT_ADD)");
+        assert_eq!(
+            result, action_status::CHANGE, "RuleSubCommute should transform SUBPIECE(INT_ADD)"
+        );
 
         // After: the original SUBPIECE op should be destroyed, and the
         // INT_ADD's output should be the 4-byte sub_out (moved).
         // Verify two new SUBPIECE ops exist (for a and b).
-        let new_subpieces = fd.obank.alivelist.iter().filter(|r| {
-            r.0.read().unwrap().opcode == OpCode::CPUI_SUBPIECE
-        }).count();
-        assert!(new_subpieces >= 2, "should have at least 2 new SUBPIECE ops (for a and b)");
+        let new_subpieces = fd
+            .obank
+            .alivelist
+            .iter()
+            .filter(|r| r.0.read().unwrap().opcode == OpCode::CPUI_SUBPIECE
+        )
+            .count();
+        assert!(
+            new_subpieces >= 2, "should have at least 2 new SUBPIECE ops (for a and b)"
+        );
     }
 
     /// Verify RuleSubCommute does NOT fire when base has multiple descendants
@@ -21380,8 +23750,12 @@ mod tests {
     #[test]
     fn test_rule_sub_commute_no_lone_descend() {
         let mut fd = Funcdata::new("test_subcommute2", Address::new(0x1000), 0x10);
-        let a = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x200);
-        let b = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x208);
+        let a = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x200);
+        let b = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x208);
         // INT_ADD(a, b) -> long_out
         let add_op = fd.new_op(2, Address::new(0x1000));
         fd.op_set_opcode(&add_op, OpCode::CPUI_INT_ADD);
@@ -21406,7 +23780,9 @@ mod tests {
 
         let rule = RuleSubCommute::new();
         let result = rule.apply_op(&sub_op.0, &mut fd).unwrap();
-        assert_eq!(result, action_status::NO_CHANGE, "RuleSubCommute must NOT fire when base has 2 descendants");
+        assert_eq!(
+            result, action_status::NO_CHANGE, "RuleSubCommute must NOT fire when base has 2 descendants"
+        );
     }
 
     // ========================================================================
@@ -21519,7 +23895,9 @@ mod tests {
     fn test_rule_negate_negate() {
         let mut fd = Funcdata::new("test_negatenegate", Address::new(0x1000), 0x10);
         // V: a written register
-        let v = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x200);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x200);
         let v_copy_op = fd.new_op(1, Address::new(0x1000));
         fd.op_set_opcode(&v_copy_op, OpCode::CPUI_COPY);
         let v_def = fd.new_unique_out(4, &v_copy_op);
@@ -21594,7 +23972,9 @@ mod tests {
     #[test]
     fn test_rule_sub_right_basic() {
         let mut fd = Funcdata::new("test_subright", Address::new(0x1000), 0x10);
-        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x300);
+        let a = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x300);
         // Register a as a function input (VarnodeBank::setInput,
         // varnode.cc:1358). RuleSubRight re-reads a from the inserted shift
         // op (ruleaction.cc:7303 opSetInput(shiftop,a,0)); in Ghidra a is
@@ -21613,9 +23993,16 @@ mod tests {
 
         let rule = RuleSubRight::new();
         let result = rule.apply_op(&sub_op.0, &mut fd).unwrap();
-        assert_eq!(result, action_status::CHANGE, "RuleSubRight should fire for SUBPIECE(V,2)");
+        assert_eq!(
+            result, action_status::CHANGE, "RuleSubRight should fire for SUBPIECE(V,2)"
+        );
         // The original SUBPIECE must now have a zero offset (least sig).
-        assert_eq!(sub_op.0.read().unwrap().inrefs[1].read().unwrap().get_offset(), 0);
+        assert_eq!(
+            sub_op.0.read().unwrap().inrefs[1]
+                .read()
+                .unwrap()
+                .get_offset(), 0
+        );
     }
 
     /// RuleSubRight must NOT fire when the SUBPIECE is least-significant (c==0).
@@ -21650,11 +24037,11 @@ mod tests {
     fn assert_rule_unsigned_2_float_zext_size(base_size: usize, expected_size: usize) {
         let addr = Address::new(0x1000);
         let mut fd = Funcdata::new("test_unsigned2float", addr, 0x10);
-        let base = fd.vbank.create_with_space(
+        let base = fd.vbank
+                .create_with_space(
             base_size,
             crate::space::AddressSpace::Register,
-            0x20,
-        );
+            0x20);
         base.write()
             .unwrap()
             .set_flags(crate::varnode::varnode_flags::INPUT);
@@ -21755,7 +24142,9 @@ mod tests {
                 8,
             );
             let r = RulePtrsubCharConstant::new();
-            assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+            assert_eq!(
+                r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE
+            );
         }
         // RuleExpandLoad: LOAD → NO_CHANGE (no pointer type).
         {
@@ -21766,7 +24155,9 @@ mod tests {
                 4,
             );
             let r = RuleExpandLoad::new();
-            assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+            assert_eq!(
+                r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE
+            );
         }
         // RuleTransformCpool: CPOOLREF → NO_CHANGE (no cpool accessor).
         {
@@ -21777,7 +24168,9 @@ mod tests {
                 8,
             );
             let r = RuleTransformCpool::new();
-            assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+            assert_eq!(
+                r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE
+            );
         }
         // RuleSegment: SEGMENTOP → NO_CHANGE (no SegmentOp).
         {
@@ -21788,22 +24181,32 @@ mod tests {
             let seq = SeqNum::new(Address::new(0x1000), 0);
             let mut op = PcodeOp::new(seq, OpCode::CPUI_SEGMENTOP);
             op.inrefs = vec![c0, c1, c2];
-            op.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100));
+            op.output = Some(fd.vbank.create_with_space(
+                4, crate::space::AddressSpace::Register, 0x100,
+            ));
             let op_arc = Arc::new(RwLock::new(op));
             let r = RuleSegment::new();
-            assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+            assert_eq!(
+                r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE
+            );
         }
         // RuleFuncPtrEncoding: CALLIND → NO_CHANGE (no funcptr_align).
         {
             let mut fd = Funcdata::new("fptr", Address::new(0x1000), 0x10);
-            let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x40);
+            let ptr = fd
+                .vbank
+                .create_with_space(8, crate::space::AddressSpace::Register, 0x40);
             let seq = SeqNum::new(Address::new(0x1000), 0);
             let mut op = PcodeOp::new(seq, OpCode::CPUI_CALLIND);
             op.inrefs = vec![ptr];
-            op.output = Some(fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x100));
+            op.output = Some(fd.vbank.create_with_space(
+                8, crate::space::AddressSpace::Register, 0x100,
+            ));
             let op_arc = Arc::new(RwLock::new(op));
             let r = RuleFuncPtrEncoding::new();
-            assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+            assert_eq!(
+                r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE
+            );
         }
     }
 
@@ -21816,7 +24219,9 @@ mod tests {
             Datatype, TypeArray, TypeBase, TypeField, TypeMetatype, TypePointer, TypeStruct,
         };
         // int[4] (element int size 4)
-        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+            "int".into(), 4, TypeMetatype::Int,
+        )));
         let arr = Datatype::Array(TypeArray {
             base: TypeBase::new("int[4]".into(), 16, TypeMetatype::Array),
             array_of: int_t,
@@ -21835,8 +24240,12 @@ mod tests {
         use crate::type_system::datatype::{
             Datatype, TypeArray, TypeBase, TypeField, TypeMetatype, TypeStruct,
         };
-        let char_t = Arc::new(Datatype::Base(TypeBase::new("char".into(), 1, TypeMetatype::Int)));
-        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let char_t = Arc::new(Datatype::Base(TypeBase::new(
+            "char".into(), 1, TypeMetatype::Int,
+        )));
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+            "int".into(), 4, TypeMetatype::Int,
+        )));
         // buf: char[8] at offset 0
         let buf_arr = Arc::new(Datatype::Array(TypeArray {
             base: TypeBase::new("char[8]".into(), 8, TypeMetatype::Array),
@@ -21847,8 +24256,10 @@ mod tests {
         let s = Datatype::Struct(TypeStruct {
             base: TypeBase::new("S".into(), 12, TypeMetatype::Struct),
             fields: vec![
-                TypeField { name: "buf".into(), offset: 0, type_ptr: buf_arr },
-                TypeField { name: "x".into(), offset: 8, type_ptr: int_t },
+                TypeField { name: "buf".into(), offset: 0, type_ptr: buf_arr ,
+                },
+                TypeField { name: "x".into(), offset: 8, type_ptr: int_t ,
+                },
             ],
         });
         // Within the array field → slack true (backward search finds the array).
@@ -21864,14 +24275,20 @@ mod tests {
         use crate::type_system::datatype::{
             Datatype, TypeBase, TypeField, TypeMetatype, TypeStruct,
         };
-        let char_t = Arc::new(Datatype::Base(TypeBase::new("char".into(), 1, TypeMetatype::Int)));
-        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let char_t = Arc::new(Datatype::Base(TypeBase::new(
+            "char".into(), 1, TypeMetatype::Int,
+        )));
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+            "int".into(), 4, TypeMetatype::Int,
+        )));
         // struct { char a @0; int b @4; } size 8 — no array field.
         let s = Datatype::Struct(TypeStruct {
             base: TypeBase::new("S2".into(), 8, TypeMetatype::Struct),
             fields: vec![
-                TypeField { name: "a".into(), offset: 0, type_ptr: char_t },
-                TypeField { name: "b".into(), offset: 4, type_ptr: int_t },
+                TypeField { name: "a".into(), offset: 0, type_ptr: char_t ,
+                },
+                TypeField { name: "b".into(), offset: 4, type_ptr: int_t ,
+                },
             ],
         });
         // No array component reachable → false.
@@ -21887,7 +24304,9 @@ mod tests {
             Datatype, TypeArray, TypeBase, TypeMetatype, TypePointer,
         };
         // int[4], element size 4.
-        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+            "int".into(), 4, TypeMetatype::Int,
+        )));
         let arr = Arc::new(Datatype::Array(TypeArray {
             base: TypeBase::new("int[4]".into(), 16, TypeMetatype::Array),
             array_of: int_t,
@@ -21911,7 +24330,7 @@ mod tests {
     #[test]
     fn test_rule_ptrsub_char_constant_string_manager_rejects() {
         use crate::type_system::datatype::{
-            Datatype, TypeBase, TypeMetatype, TypePointer, TypeSpacebase, type_flags,
+            type_flags, Datatype, TypeBase, TypeMetatype, TypePointer, TypeSpacebase,
         };
         let mut fd = Funcdata::new("charconst", Address::new(0x1000), 0x10);
         // spacebase type for the input pointer's pointed-to type.
@@ -21963,14 +24382,18 @@ mod tests {
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_PTRSUB);
         op.inrefs = vec![sb_vn, vn1];
-        let outvn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x300);
+        let outvn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x300);
         outvn.write().unwrap().update_type(out_ptr);
         op.output = Some(outvn);
         let op_arc = Arc::new(RwLock::new(op));
         let r = RulePtrsubCharConstant::new();
         // StringManager has no entry at 0x2000 → NO_CHANGE (rejected by the
         // precise isString guard added per ruleaction.cc:7393).
-        assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     /// RulePtrsubCharConstant: when the scope's readonly channel confirms
@@ -21983,7 +24406,7 @@ mod tests {
     #[test]
     fn test_rule_ptrsub_char_constant_string_manager_confirms() {
         use crate::type_system::datatype::{
-            Datatype, TypeBase, TypeMetatype, TypePointer, TypeSpacebase, type_flags,
+            type_flags, Datatype, TypeBase, TypeMetatype, TypePointer, TypeSpacebase,
         };
         let mut fd = Funcdata::new("charconst2", Address::new(0x1000), 0x10);
         let sb_dt = Arc::new(Datatype::Spacebase(TypeSpacebase {
@@ -22048,7 +24471,9 @@ mod tests {
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_PTRSUB);
         op.inrefs = vec![sb_vn, vn1];
-        let outvn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x300);
+        let outvn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x300);
         outvn.write().unwrap().update_type(out_ptr);
         op.output = Some(outvn);
         let op_arc = Arc::new(RwLock::new(op));
@@ -22066,7 +24491,7 @@ mod tests {
     #[test]
     fn test_rule_ptrsub_char_constant_addr_force_copy_arm() {
         use crate::type_system::datatype::{
-            Datatype, TypeBase, TypeMetatype, TypePointer, TypeSpacebase, type_flags,
+            type_flags, Datatype, TypeBase, TypeMetatype, TypePointer, TypeSpacebase,
         };
         let mut fd = Funcdata::new("charconst3", Address::new(0x1000), 0x10);
         let sb_dt = Arc::new(Datatype::Spacebase(TypeSpacebase {
@@ -22119,7 +24544,9 @@ mod tests {
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_PTRSUB);
         op.inrefs = vec![sb_vn, vn1];
-        let outvn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x301);
+        let outvn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x301);
         outvn.write().unwrap().update_type(out_ptr);
         // cc:7380 — outvn->isAddrForce() blocks the propagation half, so the
         // else arm converts the PTRSUB to a COPY (cc:7395-7400).
@@ -22162,11 +24589,15 @@ mod tests {
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_SEGMENTOP);
         op.inrefs = vec![c0, c1, c2];
-        op.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100));
+        op.output = Some(fd.vbank.create_with_space(
+            4, crate::space::AddressSpace::Register, 0x100,
+        ));
         let op_arc = Arc::new(RwLock::new(op));
         let r = RuleSegment::new();
         let res = r.apply_op(&op_arc, &mut fd).unwrap();
-        assert_eq!(res, action_status::CHANGE, "RuleSegment should fold constant SEGMENTOP");
+        assert_eq!(
+            res, action_status::CHANGE, "RuleSegment should fold constant SEGMENTOP"
+        );
         // After fold: opcode is COPY, single input = (0x1234<<4)+0x0002 = 0x12342.
         let o = op_arc.read().unwrap();
         assert_eq!(o.opcode, OpCode::CPUI_COPY);
@@ -22188,15 +24619,23 @@ mod tests {
         fd.set_arch(std::sync::Arc::new(arch));
         // Non-constant vn1/vn2 (Register space, not const) -> neither branch fires.
         let c0 = fd.vbank.create_constant(4, 0);
-        let vn1 = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x10);
-        let vn2 = fd.vbank.create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        let vn1 = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x10);
+        let vn2 = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_SEGMENTOP);
         op.inrefs = vec![c0, vn1, vn2];
-        op.output = Some(fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100));
+        op.output = Some(fd.vbank.create_with_space(
+            4, crate::space::AddressSpace::Register, 0x100,
+        ));
         let op_arc = Arc::new(RwLock::new(op));
         let r = RuleSegment::new();
-        assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            r.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     /// RuleDivOpt.move_sign_bit_extraction + resolve_shift_const: smoke test
@@ -22231,7 +24670,9 @@ mod tests {
         let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
         let spaceid = fd.vbank.create_constant(8, space_id_val);
         let ptr = fd.vbank.create_constant(8, ptr_offset);
-        let out = fd.vbank.create_with_space(out_size, crate::space::AddressSpace::Register, 0x100);
+        let out = fd
+            .vbank
+            .create_with_space(out_size, crate::space::AddressSpace::Register, 0x100);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_LOAD);
         op.inrefs = vec![spaceid, ptr];
@@ -22247,8 +24688,7 @@ mod tests {
         let (op_arc, mut fd) = make_load_const_ptr(
             crate::space::SPACEID_STACK as u64,
             0x40,
-            4,
-        );
+            4);
         let rule = RuleLoadVarnode::new();
         let result = rule.apply_op(&op_arc, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
@@ -22263,9 +24703,15 @@ mod tests {
     #[test]
     fn test_rule_load_varnode_no_const_ptr() {
         let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
-        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_STACK as u64);
-        let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100);
+        let spaceid = fd
+            .vbank
+            .create_constant(8, crate::space::SPACEID_STACK as u64);
+        let ptr = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x100);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_LOAD);
         op.inrefs = vec![spaceid, ptr];
@@ -22281,9 +24727,13 @@ mod tests {
     #[test]
     fn test_rule_load_varnode_non_const_spaceid() {
         let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
-        let spaceid = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x0);
+        let spaceid = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x0);
         let ptr = fd.vbank.create_constant(8, 0x40);
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x100);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_LOAD);
         op.inrefs = vec![spaceid, ptr];
@@ -22298,7 +24748,9 @@ mod tests {
     #[test]
     fn test_rule_load_varnode_correct_spacebase_non_spacebase() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
         let r = RuleLoadVarnode::correct_spacebase(None, &vn, crate::space::AddressSpace::Stack);
         assert!(r.is_none());
     }
@@ -22312,15 +24764,18 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         // x86-64 RSP: register space, offset 0x20, size 8 — the default
         // stack-pointer record on Architecture::new().
-        let rsp = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
-        rsp.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+        let rsp = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        rsp.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::SPACEBASE);
         fd.set_input_varnode(rsp.clone());
         let arch = crate::arch::Architecture::new();
 
         // spc = ram: contain(stack)=ram == spc → associated stack space.
         let r = RuleLoadVarnode::correct_spacebase(
-            Some(&arch), &rsp, crate::space::AddressSpace::Ram,
-        );
+            Some(&arch), &rsp, crate::space::AddressSpace::Ram);
         assert_eq!(r, Some(crate::space::AddressSpace::Stack));
 
         // spc = stack: contain(stack)=ram != stack → miss (loading off the
@@ -22332,8 +24787,13 @@ mod tests {
 
         // Registry mismatch: a spacebase input at an unregistered register
         // (0x40) misses the record walk.
-        let other = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x40);
-        other.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+        let other = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x40);
+        other
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::SPACEBASE);
         fd.set_input_varnode(other.clone());
         let r = RuleLoadVarnode::correct_spacebase(
             Some(&arch), &other, crate::space::AddressSpace::Ram,
@@ -22345,8 +24805,13 @@ mod tests {
         assert!(r.is_none());
 
         // A spacebase-flagged WRITTEN varnode (not input) → miss (cc:4179).
-        let written = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
-        written.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+        let written = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        written
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::SPACEBASE);
         let r = RuleLoadVarnode::correct_spacebase(
             Some(&arch), &written, crate::space::AddressSpace::Ram,
         );
@@ -22363,9 +24828,15 @@ mod tests {
         let arch = std::sync::Arc::new(crate::arch::Architecture::new());
         fd.set_arch(arch.clone());
 
-        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_RAM as u64);
-        let rsp = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
-        rsp.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+        let spaceid = fd
+            .vbank
+            .create_constant(8, crate::space::SPACEID_RAM as u64);
+        let rsp = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        rsp.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::SPACEBASE);
         fd.set_input_varnode(rsp.clone());
         let k8 = fd.vbank.create_constant(8, (-8i64) as u64);
         let add = {
@@ -22377,8 +24848,12 @@ mod tests {
         // opSetOutput wires the def link that vnSpacebase reads.
         let addout = fd.new_unique_out(8, &crate::op::PcodeOpRef(add.clone()));
 
-        let val = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x200);
-        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x300);
+        let val = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x200);
+        let out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x300);
         let seq = SeqNum::new(Address::new(0x1000), 1);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_STORE);
         op.inrefs = vec![spaceid, addout, val.clone()];
@@ -22409,8 +24884,12 @@ mod tests {
             Arc::new(RwLock::new(op))
         };
         let add2out = fd.new_unique_out(8, &crate::op::PcodeOpRef(add2.clone()));
-        let spaceid2 = fd.vbank.create_constant(8, crate::space::SPACEID_RAM as u64);
-        let out2 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x308);
+        let spaceid2 = fd
+            .vbank
+            .create_constant(8, crate::space::SPACEID_RAM as u64);
+        let out2 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x308);
         let seq = SeqNum::new(Address::new(0x1000), 3);
         let mut op2 = PcodeOp::new(seq, OpCode::CPUI_STORE);
         op2.inrefs = vec![spaceid2, add2out, val];
@@ -22436,9 +24915,15 @@ mod tests {
         let arch = std::sync::Arc::new(crate::arch::Architecture::new());
         fd.set_arch(arch);
 
-        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_STACK as u64);
-        let rsp = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
-        rsp.write().unwrap().set_flags(crate::varnode::varnode_flags::SPACEBASE);
+        let spaceid = fd
+            .vbank
+            .create_constant(8, crate::space::SPACEID_STACK as u64);
+        let rsp = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        rsp.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::SPACEBASE);
         fd.set_input_varnode(rsp.clone());
         let k8 = fd.vbank.create_constant(8, (-8i64) as u64);
         let add = {
@@ -22448,8 +24933,12 @@ mod tests {
             Arc::new(RwLock::new(op))
         };
         let addout = fd.new_unique_out(8, &crate::op::PcodeOpRef(add.clone()));
-        let val = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x200);
-        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x300);
+        let val = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x200);
+        let out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x300);
         let seq = SeqNum::new(Address::new(0x1000), 1);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_STORE);
         op.inrefs = vec![spaceid, addout, val];
@@ -22466,10 +24955,16 @@ mod tests {
     #[test]
     fn test_rule_store_varnode_const_offset() {
         let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
-        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_STACK as u64);
+        let spaceid = fd
+            .vbank
+            .create_constant(8, crate::space::SPACEID_STACK as u64);
         let ptr = fd.vbank.create_constant(8, 0x80);
-        let val = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x200);
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x300);
+        let val = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x200);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x300);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_STORE);
         op.inrefs = vec![spaceid, ptr, val];
@@ -22482,17 +24977,27 @@ mod tests {
         let op = op_arc.read().unwrap();
         assert_eq!(op.opcode, OpCode::CPUI_COPY);
         assert_eq!(op.inrefs.len(), 1);
-        assert_ne!(op.output.as_ref().unwrap().read().unwrap().addlflags & crate::varnode::addl_flags::STACK_STORE, 0);
+        assert_ne!(
+            op.output.as_ref().unwrap().read().unwrap().addlflags & crate::varnode::addl_flags::STACK_STORE, 0
+        );
     }
 
     /// RuleStoreVarnode: non-constant address operand → NO_CHANGE.
     #[test]
     fn test_rule_store_varnode_no_const_ptr() {
         let mut fd = Funcdata::new("test", Address::new(0x1000), 0x10);
-        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_STACK as u64);
-        let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
-        let val = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x200);
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x300);
+        let spaceid = fd
+            .vbank
+            .create_constant(8, crate::space::SPACEID_STACK as u64);
+        let ptr = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let val = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x200);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x300);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_STORE);
         op.inrefs = vec![spaceid, ptr, val];
@@ -22527,10 +25032,14 @@ mod tests {
     fn test_evaluate_pointer_expression_no_descendants() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let ptr_type = make_int_ptr_type();
-        let ptr_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let ptr_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
         ptr_vn.write().unwrap().update_type(ptr_type);
         let c = fd.vbank.create_constant(8, 4);
-        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ADD);
         op.inrefs = vec![ptr_vn, c];
@@ -22546,12 +25055,19 @@ mod tests {
     fn test_evaluate_pointer_expression_push_needed() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let ptr_type = make_int_ptr_type();
-        let ptr_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let ptr_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
         ptr_vn.write().unwrap().update_type(ptr_type);
         // Mark as a function input so it is not "free" (data-flow fully linked).
-        ptr_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        ptr_vn
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let c = fd.vbank.create_constant(8, 4);
-        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ADD);
         op.inrefs = vec![ptr_vn, c];
@@ -22559,7 +25075,9 @@ mod tests {
         let op_arc = Arc::new(RwLock::new(op));
         // Descendant INT_ADD(out, non_ptr_const) → one ADD descendant.
         let c2 = fd.vbank.create_constant(8, 8);
-        let out2 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30);
+        let out2 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x30);
         let dec_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_ADD,
@@ -22580,20 +25098,34 @@ mod tests {
     fn test_evaluate_pointer_expression_other_is_ptr() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let ptr_type = make_int_ptr_type();
-        let ptr_vn0 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let ptr_vn0 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
         ptr_vn0.write().unwrap().update_type(ptr_type.clone());
-        ptr_vn0.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        let ptr_vn1 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x18);
+        ptr_vn0
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let ptr_vn1 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x18);
         ptr_vn1.write().unwrap().update_type(ptr_type);
-        ptr_vn1.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        ptr_vn1
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ADD);
         op.inrefs = vec![ptr_vn0, ptr_vn1];
         op.output = Some(out.clone());
         let op_arc = Arc::new(RwLock::new(op));
         // One non-ADD descendant (a COPY) forces res=2 in the "any other op" branch.
-        let out2 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30);
+        let out2 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x30);
         let dec_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_COPY,
@@ -22614,10 +25146,14 @@ mod tests {
     fn test_verify_preferred_pointer_no_add_def() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let ptr_type = make_int_ptr_type();
-        let ptr_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let ptr_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
         ptr_vn.write().unwrap().update_type(ptr_type);
         let c = fd.vbank.create_constant(8, 4);
-        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ADD);
         op.inrefs = vec![ptr_vn, c];
@@ -22637,7 +25173,9 @@ mod tests {
         );
         // type recovery NOT started.
         let rule = RulePtrArith::new();
-        assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     /// RulePtrArith::applyOp: with type recovery but no pointer-typed input →
@@ -22652,7 +25190,9 @@ mod tests {
         );
         fd.set_type_recovery_started();
         let rule = RulePtrArith::new();
-        assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     /// RulePtrArith: degenerate form (pointer to a 1-byte type) converts an
@@ -22672,21 +25212,32 @@ mod tests {
             ptr_to: byte_dt,
             wordsize: 1,
         }));
-        let ptr_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let ptr_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
         ptr_vn.write().unwrap().update_type(ptr_dt.clone());
         // Mark as a function input so it is not "free".
-        ptr_vn.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        ptr_vn
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         let idx = fd.vbank.create_constant(8, 3);
-        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
         out.write().unwrap().update_type(ptr_dt);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ADD);
         op.inrefs = vec![ptr_vn, idx];
         op.output = Some(out.clone());
         let op_arc = Arc::new(RwLock::new(op));
-        fd.obank.alivelist.push(crate::op::PcodeOpRef(op_arc.clone()));
+        fd.obank
+            .alivelist
+            .push(crate::op::PcodeOpRef(op_arc.clone()));
         // Add a non-ADD descendant so evaluatePointerExpression → 2.
-        let out2 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30);
+        let out2 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x30);
         let dec_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_COPY,
@@ -22715,16 +25266,22 @@ mod tests {
     fn test_add_tree_collapse_int_mult_mult() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         // x: a written register (Ghidra requires op->getIn(0)->isWritten()).
-        let x = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let x = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let x_def_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 5),
             OpCode::CPUI_COPY,
         )));
-        x.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        x.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         x.write().unwrap().def = Some(Arc::downgrade(&x_def_op));
         // inner: x * #3
         let c3 = fd.vbank.create_constant(4, 3);
-        let inner_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let inner_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let inner_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_MULT,
@@ -22734,11 +25291,16 @@ mod tests {
             o.inrefs = vec![x.clone(), c3.clone()];
             o.output = Some(inner_out.clone());
         }
-        inner_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        inner_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         inner_out.write().unwrap().def = Some(Arc::downgrade(&inner_op));
         // outer: inner * #5  → should collapse to x * #15
         let c5 = fd.vbank.create_constant(4, 5);
-        let outer_out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x30);
+        let outer_out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x30);
         let outer_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_MULT,
@@ -22748,7 +25310,10 @@ mod tests {
             o.inrefs = vec![inner_out.clone(), c5.clone()];
             o.output = Some(outer_out.clone());
         }
-        outer_out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        outer_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         outer_out.write().unwrap().def = Some(Arc::downgrade(&outer_op));
         // Collapse outer ((x * #3) * #5) into (x * #15). Per Ghidra we pass the
         // OUTER product vn (funcdata_op.cc:1132).
@@ -22768,9 +25333,13 @@ mod tests {
     #[test]
     fn test_add_tree_collapse_int_mult_mult_not_mult() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let a = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
         let b = fd.vbank.create_constant(4, 2);
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x20);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x20);
         let add_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_ADD,
@@ -22780,7 +25349,9 @@ mod tests {
             o.inrefs = vec![a, b];
             o.output = Some(out.clone());
         }
-        out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        out.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         out.write().unwrap().def = Some(Arc::downgrade(&add_op));
         let changed = AddTreeState::collapse_int_mult_mult(&mut fd, &out);
         assert!(!changed);
@@ -22795,7 +25366,9 @@ mod tests {
     #[test]
     fn test_rule_push_ptr_collect_duplicate_needs_plain_vn() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
         let mut list: Vec<Arc<RwLock<PcodeOp>>> = Vec::new();
         RulePushPtr::collect_duplicate_needs(&mut list, vn);
         assert!(list.is_empty());
@@ -22811,7 +25384,9 @@ mod tests {
             8,
         );
         let rule = RulePushPtr::new();
-        assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     /// RulePushPtr::applyOp: with type recovery but evaluatePointerExpression
@@ -22821,10 +25396,14 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         fd.set_type_recovery_started();
         let ptr_type = make_int_ptr_type();
-        let ptr_vn = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let ptr_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
         ptr_vn.write().unwrap().update_type(ptr_type);
         let idx = fd.vbank.create_constant(8, 4);
-        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ADD);
         op.inrefs = vec![ptr_vn, idx];
@@ -22832,7 +25411,9 @@ mod tests {
         let op_arc = Arc::new(RwLock::new(op));
         // No descendants → evaluatePointerExpression returns 0, not 1 → NO_CHANGE.
         let rule = RulePushPtr::new();
-        assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     // ========================================================================
@@ -22850,8 +25431,10 @@ mod tests {
         std::sync::Arc::new(Datatype::Struct(TypeStruct {
             base: TypeBase::new("struct2".to_string(), 8, TypeMetatype::Struct),
             fields: vec![
-                TypeField { name: "a".to_string(), offset: 0, type_ptr: int_dt.clone() },
-                TypeField { name: "b".to_string(), offset: 4, type_ptr: int_dt },
+                TypeField { name: "a".to_string(), offset: 0, type_ptr: int_dt.clone() ,
+                },
+                TypeField { name: "b".to_string(), offset: 4, type_ptr: int_dt ,
+                },
             ],
         }))
     }
@@ -22860,16 +25443,24 @@ mod tests {
     #[test]
     fn test_rule_struct_offset0_no_type_recovery() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_RAM as u64);
-        let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100);
+        let spaceid = fd
+            .vbank
+            .create_constant(8, crate::space::SPACEID_RAM as u64);
+        let ptr = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x100);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_LOAD);
         op.inrefs = vec![spaceid, ptr];
         op.output = Some(out);
         let op_arc = Arc::new(RwLock::new(op));
         let rule = RuleStructOffset0::new();
-        assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     /// RuleStructOffset0: pointer to a struct, LOAD of one int (smaller than
@@ -22886,17 +25477,25 @@ mod tests {
             ptr_to: struct_dt,
             wordsize: 1,
         }));
-        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_RAM as u64);
-        let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let spaceid = fd
+            .vbank
+            .create_constant(8, crate::space::SPACEID_RAM as u64);
+        let ptr = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
         ptr.write().unwrap().update_type(ptr_dt);
         // LOAD out is a single int (4 bytes) — smaller than the 8-byte struct.
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x100);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_LOAD);
         op.inrefs = vec![spaceid, ptr];
         op.output = Some(out);
         let op_arc = Arc::new(RwLock::new(op));
-        fd.obank.alivelist.push(crate::op::PcodeOpRef(op_arc.clone()));
+        fd.obank
+            .alivelist
+            .push(crate::op::PcodeOpRef(op_arc.clone()));
         let rule = RuleStructOffset0::new();
         let result = rule.apply_op(&op_arc, &mut fd).unwrap();
         assert_eq!(result, action_status::CHANGE);
@@ -22914,17 +25513,25 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         fd.set_type_recovery_started();
         let ptr_dt = make_int_ptr_type(); // pointer to a base int
-        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_RAM as u64);
-        let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let spaceid = fd
+            .vbank
+            .create_constant(8, crate::space::SPACEID_RAM as u64);
+        let ptr = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
         ptr.write().unwrap().update_type(ptr_dt);
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x100);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_LOAD);
         op.inrefs = vec![spaceid, ptr];
         op.output = Some(out);
         let op_arc = Arc::new(RwLock::new(op));
         let rule = RuleStructOffset0::new();
-        assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     /// RuleStructOffset0: non-pointer typed ptr varnode → NO_CHANGE.
@@ -22932,17 +25539,25 @@ mod tests {
     fn test_rule_struct_offset0_no_ptr_type() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         fd.set_type_recovery_started();
-        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_RAM as u64);
-        let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let spaceid = fd
+            .vbank
+            .create_constant(8, crate::space::SPACEID_RAM as u64);
+        let ptr = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
         // ptr has no type → not a pointer.
-        let out = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x100);
+        let out = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x100);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_LOAD);
         op.inrefs = vec![spaceid, ptr];
         op.output = Some(out);
         let op_arc = Arc::new(RwLock::new(op));
         let rule = RuleStructOffset0::new();
-        assert_eq!(rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE);
+        assert_eq!(
+            rule.apply_op(&op_arc, &mut fd).unwrap(), action_status::NO_CHANGE
+        );
     }
 
     // ==================================================================
@@ -22967,10 +25582,16 @@ mod tests {
     fn test_rule_ptrflow_propagate_to_def_via_int_add() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         // root input varnode (the value feeding the COPY).
-        let root = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
-        root.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
+        let root = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        root.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
         // COPY: root -> mid
-        let mid = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let mid = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
         let copy_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_COPY,
@@ -22981,12 +25602,16 @@ mod tests {
             o.output = Some(mid.clone());
         }
         root.write().unwrap().descend.push(Arc::downgrade(&copy_op));
-        mid.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        mid.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         mid.write().unwrap().def = Some(Arc::downgrade(&copy_op));
 
         // INT_ADD: mid + const -> out, marked ptrflow (so applyOp processes it).
         let c = fd.vbank.create_constant(8, 4);
-        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30);
+        let out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x30);
         let add_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_ADD,
@@ -22999,7 +25624,9 @@ mod tests {
         }
         mid.write().unwrap().descend.push(Arc::downgrade(&add_op));
         c.write().unwrap().descend.push(Arc::downgrade(&add_op));
-        out.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        out.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         out.write().unwrap().def = Some(Arc::downgrade(&add_op));
 
         let rule = RulePtrFlow::new();
@@ -23018,9 +25645,13 @@ mod tests {
     #[test]
     fn test_rule_ptrflow_int_add_not_ptrflow_returns_zero() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let in0 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        let in0 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
         let in1 = fd.vbank.create_constant(8, 1);
-        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
         let op_arc = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_INT_ADD,
@@ -23046,11 +25677,19 @@ mod tests {
     fn test_rule_ptrflow_load_propagates_without_truncation() {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         // Space-id constant (input 0) encoding RAM.
-        let spaceid = fd.vbank.create_constant(8, crate::space::SPACEID_RAM as u64);
+        let spaceid = fd
+            .vbank
+            .create_constant(8, crate::space::SPACEID_RAM as u64);
         // Pointer varnode, defined by a COPY (so propagateFlowToDef marks it).
-        let src = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x10);
-        src.write().unwrap().set_flags(crate::varnode::varnode_flags::INPUT);
-        let ptr = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let src = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        src.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let ptr = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
         let copy_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 0),
             OpCode::CPUI_COPY,
@@ -23061,10 +25700,14 @@ mod tests {
             o.output = Some(ptr.clone());
         }
         src.write().unwrap().descend.push(Arc::downgrade(&copy_op));
-        ptr.write().unwrap().set_flags(crate::varnode::varnode_flags::WRITTEN);
+        ptr.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         ptr.write().unwrap().def = Some(Arc::downgrade(&copy_op));
 
-        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x30);
+        let out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x30);
         let load_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_LOAD,
@@ -23075,7 +25718,11 @@ mod tests {
             o.output = Some(out);
         }
         ptr.write().unwrap().descend.push(Arc::downgrade(&load_op));
-        spaceid.write().unwrap().descend.push(Arc::downgrade(&load_op));
+        spaceid
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&load_op));
 
         let rule = RulePtrFlow::new();
         let res = rule.apply_op(&load_op, &mut fd).unwrap();
@@ -23101,8 +25748,10 @@ mod tests {
         std::sync::Arc::new(Datatype::Struct(TypeStruct {
             base: TypeBase::new("struct2".to_string(), 8, TypeMetatype::Struct),
             fields: vec![
-                TypeField { name: "a".to_string(), offset: 0, type_ptr: int_dt.clone() },
-                TypeField { name: "b".to_string(), offset: 4, type_ptr: int_dt },
+                TypeField { name: "a".to_string(), offset: 0, type_ptr: int_dt.clone() ,
+                },
+                TypeField { name: "b".to_string(), offset: 4, type_ptr: int_dt ,
+                },
             ],
         }))
     }
@@ -23116,18 +25765,26 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let struct_dt = make_piece_struct_type();
         // PIECE output: 8 bytes, struct-typed, at address 0x200.
-        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x200);
+        let out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x200);
         out.write().unwrap().update_type(struct_dt);
         // Two 4-byte leaf inputs (unwritten → leaves), distinct addresses so a
         // COPY is inserted for each.
-        let hi = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x300);
-        let lo = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x304);
+        let hi = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x300);
+        let lo = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x304);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_PIECE);
         op.inrefs = vec![hi.clone(), lo.clone()];
         op.output = Some(out.clone());
         let op_arc = Arc::new(RwLock::new(op));
-        fd.obank.alivelist.push(crate::op::PcodeOpRef(op_arc.clone()));
+        fd.obank
+            .alivelist
+            .push(crate::op::PcodeOpRef(op_arc.clone()));
 
         let rule = RulePieceStructure::new();
         let res = rule.apply_op(&op_arc, &mut fd).unwrap();
@@ -23140,8 +25797,16 @@ mod tests {
         let new_lo = op_arc.read().unwrap().inrefs[1].clone();
         assert_eq!(new_hi.read().unwrap().get_offset(), 0x204);
         assert_eq!(new_lo.read().unwrap().get_offset(), 0x200);
-        let hi_def = new_hi.read().unwrap().get_def().expect("hi must now be COPY-defined");
-        let lo_def = new_lo.read().unwrap().get_def().expect("lo must now be COPY-defined");
+        let hi_def = new_hi
+            .read()
+            .unwrap()
+            .get_def()
+            .expect("hi must now be COPY-defined");
+        let lo_def = new_lo
+            .read()
+            .unwrap()
+            .get_def()
+            .expect("lo must now be COPY-defined");
         assert_eq!(hi_def.read().unwrap().opcode, OpCode::CPUI_COPY);
         assert_eq!(lo_def.read().unwrap().opcode, OpCode::CPUI_COPY);
     }
@@ -23154,9 +25819,13 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         let struct_dt = make_piece_struct_type();
         // INT_ZEXT: 4-byte input → 8-byte struct-typed output.
-        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x200);
+        let out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x200);
         out.write().unwrap().update_type(struct_dt);
-        let invn = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x300);
+        let invn = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x300);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_INT_ZEXT);
         op.inrefs = vec![invn.clone()];
@@ -23185,10 +25854,16 @@ mod tests {
         let int8 = std::sync::Arc::new(Datatype::Base(TypeBase::new(
             "long".to_string(), 8, TypeMetatype::Int,
         )));
-        let out = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x200);
+        let out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x200);
         out.write().unwrap().update_type(int8);
-        let hi = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x300);
-        let lo = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x304);
+        let hi = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x300);
+        let lo = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x304);
         let seq = SeqNum::new(Address::new(0x1000), 0);
         let mut op = PcodeOp::new(seq, OpCode::CPUI_PIECE);
         op.inrefs = vec![hi, lo];
@@ -23207,20 +25882,38 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
         // Root PIECE: out16 = PIECE(hi8, lo8); each input is itself a PIECE of
         // two 4-byte leaves. Leaves are unwritten varnodes.
-        let leaf_a = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        let leaf_b = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x14);
-        let leaf_c = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x18);
-        let leaf_d = fd.vbank.create_with_space(4, crate::space::AddressSpace::Register, 0x1c);
+        let leaf_a = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        let leaf_b = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x14);
+        let leaf_c = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x18);
+        let leaf_d = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x1c);
         // Inner PIECE ops (their outputs are the root's inputs).
         let seq1 = SeqNum::new(Address::new(0x1000), 1);
         let mut hi8_op = PcodeOp::new(seq1, OpCode::CPUI_PIECE);
-        let hi8 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x40);
+        let hi8 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x40);
         hi8_op.inrefs = vec![leaf_a.clone(), leaf_b.clone()];
         hi8_op.output = Some(hi8.clone());
         let hi8_op_arc = Arc::new(RwLock::new(hi8_op));
         // leaf_a, leaf_b descend into hi8_op
-        leaf_a.write().unwrap().descend.push(Arc::downgrade(&hi8_op_arc));
-        leaf_b.write().unwrap().descend.push(Arc::downgrade(&hi8_op_arc));
+        leaf_a
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&hi8_op_arc));
+        leaf_b
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&hi8_op_arc));
         // hi8 is WRITTEN by hi8_op (mirrors opSetOutput).
         {
             let mut h = hi8.write().unwrap();
@@ -23229,12 +25922,22 @@ mod tests {
         }
         let seq2 = SeqNum::new(Address::new(0x1000), 2);
         let mut lo8_op = PcodeOp::new(seq2, OpCode::CPUI_PIECE);
-        let lo8 = fd.vbank.create_with_space(8, crate::space::AddressSpace::Register, 0x48);
+        let lo8 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x48);
         lo8_op.inrefs = vec![leaf_c.clone(), leaf_d.clone()];
         lo8_op.output = Some(lo8.clone());
         let lo8_op_arc = Arc::new(RwLock::new(lo8_op));
-        leaf_c.write().unwrap().descend.push(Arc::downgrade(&lo8_op_arc));
-        leaf_d.write().unwrap().descend.push(Arc::downgrade(&lo8_op_arc));
+        leaf_c
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&lo8_op_arc));
+        leaf_d
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&lo8_op_arc));
         {
             let mut l = lo8.write().unwrap();
             l.set_flags(crate::varnode::varnode_flags::WRITTEN);
@@ -23243,12 +25946,20 @@ mod tests {
         // hi8/lo8 each have a single descendant (the root) so they are non-leaves.
         let seq0 = SeqNum::new(Address::new(0x1000), 0);
         let mut root_op = PcodeOp::new(seq0, OpCode::CPUI_PIECE);
-        let out16 = fd.vbank.create_with_space(16, crate::space::AddressSpace::Register, 0x80);
+        let out16 = fd
+            .vbank
+            .create_with_space(16, crate::space::AddressSpace::Register, 0x80);
         root_op.inrefs = vec![hi8.clone(), lo8.clone()];
         root_op.output = Some(out16.clone());
         let root_op_arc = Arc::new(RwLock::new(root_op));
-        hi8.write().unwrap().descend.push(Arc::downgrade(&root_op_arc));
-        lo8.write().unwrap().descend.push(Arc::downgrade(&root_op_arc));
+        hi8.write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&root_op_arc));
+        lo8.write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&root_op_arc));
 
         let mut stack: Vec<PieceNode> = Vec::new();
         PieceNode::gather_pieces(&mut stack, &out16, &root_op_arc, 0, 0);

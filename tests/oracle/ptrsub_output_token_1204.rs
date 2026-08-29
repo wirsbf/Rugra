@@ -1,8 +1,7 @@
 // PTRSUB-OUTPUT-TOKEN-0001 Rust comparand for the locked Ghidra 12.0.4
-// fixture.  The raw streams intentionally retain two observed mismatches:
-// ActionSetCasts::apply returns 0 in Ghidra versus 1 in Rugra, and the selected
-// ActionInferTypes canary produces canonical int8 identity in Ghidra versus an
-// equal-shaped noncanonical Arc in Rugra.  The enclosing evidence is MISMATCH.
+// fixture.  The selected raw streams are byte-identical.  The enclosing
+// evidence remains MISMATCH because substantial mapped-function branches and
+// architecture state are explicitly outside this fixture's observation set.
 use std::sync::{Arc, RwLock};
 
 use rugra::action::Action;
@@ -559,6 +558,11 @@ fn run_action(
     let mut action = ActionSetCasts::new();
     let result = action.apply(&mut fd).expect("ActionSetCasts::apply");
 
+    let count_before_delta = action.count;
+    let delta_first = action.take_count_delta();
+    let count_after_delta = action.count;
+    let delta_second = action.take_count_delta();
+
     let mismatch_def = mismatch_out
         .read()
         .unwrap()
@@ -609,9 +613,12 @@ fn run_action(
         .is_some_and(|input| Arc::ptr_eq(input, &mid));
 
     println!(
-        "action_post|case=paired|result={}|count={}|ops={}|casts={}|equal_same={}|equal_def={}|mismatch_def={}|mismatch_out_same={}|mid_new={}|mid_def={}|mid_use={}|cast_input_mid={}|mid_implied={}|mid_type={}|final_type={}",
+        "action_post|case=paired|result={}|count_before_delta={}|delta_first={}|count_after_delta={}|delta_second={}|ops={}|casts={}|equal_same={}|equal_def={}|mismatch_def={}|mismatch_out_same={}|mid_new={}|mid_def={}|mid_use={}|cast_input_mid={}|mid_implied={}|mid_type={}|final_type={}",
         result,
-        action.count,
+        count_before_delta,
+        delta_first,
+        count_after_delta,
+        delta_second,
         block_ops(&block),
         cast_count,
         u8::from(equal_same),

@@ -2,6 +2,18 @@
 
 **源代码路径**: `src/block.rs`
 
+## 2026-08-28：结构化条件真实取反
+
+`BlockList` 与 `BlockCondition` 现通过 `FlowBlock` 虚派发实现
+`negateCondition`。基础 `swapEdges` 交换完整的两个 outgoing half-edge，修正目标
+incoming half 的 `reverse_index` 并翻转 `FLIP_PATH`；`BlockCondition` 同时对两个
+child 分发取反并执行 AND/OR 对偶。锁定 structured-negate fixture 覆盖 13 cases、
+14 lines、3628 bytes，双侧 raw stdout 逐字节一致
+（sha=`d47ef9da438012d850b3374dddf6d54cf7bdbaaf82b145b5b7c280ab5151c57d`），
+独立 reviewer 仅作 scoped APPROVE。GetStr 聚焦极性已经恢复，但 BlockBasic/Copy
+全分支、完整 FlowBlock/identifyInternal 与 structurer/PrintC 闭包仍为
+`MISMATCH/UNTESTED`，不得由此升级 L3。
+
 ## 文档状态
 
 - **状态**: 已核对（当前有效；2026-08-28 真实 BlockCopy/buildCopy）
@@ -1067,13 +1079,13 @@ block_flags: +JOINED_BLOCK (1<<9, block.hh:97)。Funcdata: +create_new_block。
 
 ### 2026-07-22：移植 block.cc Block 子类型 inherent impls（B5 对齐）
 
-完整对齐 Ghidra `block.cc` 中 BlockCopy / BlockGoto / BlockIf / BlockWhileDo /
-BlockDoWhile / BlockInfLoop / BlockList / BlockCondition / BlockSwitch 子类型的
-虚方法（printHeader / markUnstructured / scopeBreak / nextFlowAfter /
-markLabelBumpUp / negateCondition / flipInPlaceTest / flipInPlaceExecute /
-getExitLeaf / lastOp / encodeHeader 等）。Rugra 因 struct-with-specific-fields
-布局无法直接复用 Ghidra 的 BlockGraph 子类模型，改为 inherent impl 辅助方法
-（返回 `String` / `Option` / 索引），由调用方在 downcast 后使用。
+历史实现曾声称完整覆盖 Ghidra `block.cc` 的 BlockCopy / BlockGoto / BlockIf /
+BlockWhileDo / BlockDoWhile / BlockInfLoop / BlockList / BlockCondition /
+BlockSwitch 虚方法；该全量声明已撤销。当前仅 structured-negate fixture 覆盖的
+base/List/Condition negate 投影以及 buildCopy fixture 覆盖的 Copy 投影为 MATCH；
+printHeader、markUnstructured、scopeBreak、nextFlowAfter、flipInPlace、marshal/emit
+等完整子类闭包仍有 MISMATCH/UNTESTED。Rust 的 inherent/downcast 适配也不能单凭
+代码形似视为虚派发等价。
 
 **新增模块级常量：**
 - `block_flags::LABEL_BUMPUP = 0x1000`（f_label_bumpup, block.hh:99）。

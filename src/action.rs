@@ -2,10 +2,10 @@
 //!
 //! Corresponds to Ghidra's `action.hh`
 
-use crate::funcdata::Funcdata;
-use crate::error::Result;
-use crate::coreaction::*;
 use crate::blockaction::*;
+use crate::coreaction::*;
+use crate::error::Result;
+use crate::funcdata::Funcdata;
 use std::sync::Arc;
 
 // RUGRA-GLUE: Rust type-erased constructor retained at an Action registration slot so a filtered clone can construct the same concrete leaf without widening every concrete Action's write-set
@@ -474,7 +474,9 @@ pub trait Rule: Send + Sync {
     ///
     /// # Returns
     /// 0 if no change occurred, positive if changes were made
-    fn apply_op(&self, op: &std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>, fd: &mut Funcdata) -> Result<i32>;
+    fn apply_op(
+        &self, op: &std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>, fd: &mut Funcdata,
+    ) -> Result<i32>;
 
     // RUGRA-GLUE: src/action.rs helper (no direct Ghidra counterpart)
     /// Get the name of the rule
@@ -719,7 +721,9 @@ impl ActionGroup {
                 if !grouplist.contains(&self.child_groups[index]) {
                     return None;
                 }
-                self.child_factories[index].as_ref().map(|factory| factory())
+                self.child_factories[index]
+                    .as_ref()
+                    .map(|factory| factory())
             });
             let Some(action) = cloned else {
                 continue;
@@ -768,8 +772,7 @@ impl ActionGroup {
     pub fn perform_child(
         &mut self,
         index: usize,
-        fd: &mut Funcdata,
-    ) -> crate::error::Result<i32> {
+        fd: &mut Funcdata) -> crate::error::Result<i32> {
         self.actions[index].perform(fd, &mut self.child_states[index])
     }
 
@@ -850,8 +853,7 @@ impl ActionGroup {
         actions[index].mutate_action_target(
             &mut child_states[index],
             child_specify,
-            mutation,
-        )
+            mutation)
     }
 
     // Ghidra: action.cc:481 ActionGroup::getSubRule target selection
@@ -1035,8 +1037,7 @@ impl ActionRestartGroup {
     pub fn perform_child(
         &mut self,
         index: usize,
-        fd: &mut Funcdata,
-    ) -> crate::error::Result<i32> {
+        fd: &mut Funcdata) -> crate::error::Result<i32> {
         self.group.perform_child(index, fd)
     }
 
@@ -1334,7 +1335,8 @@ impl ActionPool {
         } else {
             specify
         };
-        let match_count = self.rules
+        let match_count = self
+            .rules
             .iter()
             .filter(|rule| rule.get_name() == rule_name)
             .count();
@@ -1569,7 +1571,7 @@ pub fn build_oppool1() -> ActionPool {
     // registered in Ghidra's exact order so their interactions match.
     // Entries whose Rust port does not yet exist are noted as skipped.
 
-    register_rule!(pool, "deadcode", Box::new(RuleEarlyRemoval::new()));       // 5512 — re-enabled: full 6-guard port (ruleaction.cc:30-40) now blocks INDIRECT-source/memory outputs
+    register_rule!(pool, "deadcode", Box::new(RuleEarlyRemoval::new()));       // 5512 — six guards; doesDeadcode spaces are gated by Heritage pass/delay
     register_rule!(pool, "analysis", Box::new(RuleTermOrder::new()));          // 5513
     register_rule!(pool, "analysis", Box::new(RuleSelectCse::new()));          // 5514
     register_rule!(pool, "analysis", Box::new(RuleCollectTerms::new()));       // 5515
@@ -1628,7 +1630,7 @@ pub fn build_oppool1() -> ActionPool {
     register_rule!(pool, "analysis", Box::new(RuleSlessToLess::new()));        // 5568
     register_rule!(pool, "analysis", Box::new(RuleZextSless::new()));          // 5569
     register_rule!(pool, "analysis", Box::new(RuleBitUndistribute::new()));    // 5570
-    register_rule!(pool, "analysis", Box::new(RuleBooleanUndistribute::new()));// 5571
+    register_rule!(pool, "analysis", Box::new(RuleBooleanUndistribute::new())); // 5571
     register_rule!(pool, "analysis", Box::new(RuleBooleanDedup::new()));       // 5572
     register_rule!(pool, "analysis", Box::new(RuleBoolZext::new()));           // 5573
     register_rule!(pool, "analysis", Box::new(RuleBooleanNegate::new()));      // 5574
@@ -1679,19 +1681,37 @@ pub fn build_oppool1() -> ActionPool {
     register_rule!(pool, "analysis", Box::new(RuleFloatSign::new()));       // 5619 — float sign-bit manipulation (ruleaction.cc:10714)
     register_rule!(pool, "analysis", Box::new(RuleOrCompare::new()));          // 5620
     // subvar family (subflow.cc, coreaction.cc:5621-5628) — SubvariableFlow
-    register_rule!(pool, "subvar", Box::new(crate::subflow::RuleSubvarAnd::new()));       // 5621
-    register_rule!(pool, "subvar", Box::new(crate::subflow::RuleSubvarSubpiece::new()));  // 5622
-    register_rule!(pool, "subvar", Box::new(crate::subflow::RuleSplitFlow::new()));       // 5623
+    register_rule!(
+        pool, "subvar", Box::new(crate::subflow::RuleSubvarAnd::new())
+    );       // 5621
+    register_rule!(
+        pool, "subvar", Box::new(crate::subflow::RuleSubvarSubpiece::new())
+    );  // 5622
+    register_rule!(
+        pool, "subvar", Box::new(crate::subflow::RuleSplitFlow::new())
+    );       // 5623
     register_rule!(pool, "subvar", Box::new(RulePtrFlow::new()));           // 5624
-    register_rule!(pool, "subvar", Box::new(crate::subflow::RuleSubvarCompZero::new()));  // 5625
-    register_rule!(pool, "subvar", Box::new(crate::subflow::RuleSubvarShift::new()));     // 5626
-    register_rule!(pool, "subvar", Box::new(crate::subflow::RuleSubvarZext::new()));      // 5627
-    register_rule!(pool, "subvar", Box::new(crate::subflow::RuleSubvarSext::new()));      // 5628
+    register_rule!(
+        pool, "subvar", Box::new(crate::subflow::RuleSubvarCompZero::new())
+    );  // 5625
+    register_rule!(
+        pool, "subvar", Box::new(crate::subflow::RuleSubvarShift::new())
+    );     // 5626
+    register_rule!(
+        pool, "subvar", Box::new(crate::subflow::RuleSubvarZext::new())
+    );      // 5627
+    register_rule!(
+        pool, "subvar", Box::new(crate::subflow::RuleSubvarSext::new())
+    );      // 5628
     register_rule!(pool, "analysis", Box::new(RuleNegateNegate::new()));       // 5629
     register_rule!(pool, "conditionalexe", Box::new(RuleConditionalMove::new()));    // 5630
-    register_rule!(pool, "conditionalexe", Box::new(crate::condexe::RuleOrPredicate::new())); // 5631
+    register_rule!(
+        pool, "conditionalexe", Box::new(crate::condexe::RuleOrPredicate::new())
+    ); // 5631
     register_rule!(pool, "analysis", Box::new(RuleFuncPtrEncoding::new()));    // 5632
-    register_rule!(pool, "floatprecision", Box::new(crate::subflow::RuleSubfloatConvert::new())); // 5633
+    register_rule!(
+        pool, "floatprecision", Box::new(crate::subflow::RuleSubfloatConvert::new())
+    ); // 5633
     register_rule!(pool, "floatprecision", Box::new(RuleFloatCast::new()));          // 5634 — registered here per Ghidra (coreaction.cc:5634)
     register_rule!(pool, "floatprecision", Box::new(RuleIgnoreNan::new()));          // 5635
     register_rule!(pool, "analysis", Box::new(RuleUnsigned2Float::new()));     // 5636
@@ -1701,10 +1721,18 @@ pub fn build_oppool1() -> ActionPool {
     register_rule!(pool, "segment", Box::new(RuleSegment::new()));            // 5640
     register_rule!(pool, "protorecovery", Box::new(RulePiecePathology::new()));     // 5641
     // skip 5642 (gap in Ghidra numbering — reserved)
-    register_rule!(pool, "doubleload", Box::new(crate::double_precis::RuleDoubleLoad::new()));  // 5643
-    register_rule!(pool, "doubleprecis", Box::new(crate::double_precis::RuleDoubleStore::new())); // 5644
-    register_rule!(pool, "doubleprecis", Box::new(crate::double_precis::RuleDoubleIn::new()));    // 5645
-    register_rule!(pool, "doubleprecis", Box::new(crate::double_precis::RuleDoubleOut::new()));   // 5646
+    register_rule!(
+        pool, "doubleload", Box::new(crate::double_precis::RuleDoubleLoad::new())
+    );  // 5643
+    register_rule!(
+        pool, "doubleprecis", Box::new(crate::double_precis::RuleDoubleStore::new())
+    ); // 5644
+    register_rule!(
+        pool, "doubleprecis", Box::new(crate::double_precis::RuleDoubleIn::new())
+    );    // 5645
+    register_rule!(
+        pool, "doubleprecis", Box::new(crate::double_precis::RuleDoubleOut::new())
+    );   // 5646
 
     // Pool ends at RuleDoubleOut (5646), exactly as Ghidra's oppool1. The
     // remaining oracle loop (coreaction.cc:5647-5649) only absorbs
@@ -1740,21 +1768,33 @@ pub fn build_cleanup_pool() -> ActionPool {
     register_rule!(pool, "cleanup", Box::new(RuleMultNegOne::new()));   // coreaction.cc:5696
     register_rule!(pool, "cleanup", Box::new(RuleAddUnsigned::new()));  // 5697
     register_rule!(pool, "cleanup", Box::new(Rule2Comp2Sub::new()));    // 5698
-    register_rule!(pool, "cleanup", Box::new(crate::subflow::RuleDumptyHumpLate::new())); // 5699
+    register_rule!(
+        pool, "cleanup", Box::new(crate::subflow::RuleDumptyHumpLate::new())
+    ); // 5699
     register_rule!(pool, "cleanup", Box::new(RuleSubRight::new()));     // 5700
     register_rule!(pool, "cleanup", Box::new(RuleFloatSignCleanup::new())); // 5701
     register_rule!(pool, "cleanup", Box::new(RuleExpandLoad::new()));   // 5702
     register_rule!(pool, "cleanup", Box::new(RulePtrsubCharConstant::new())); // 5703
     register_rule!(pool, "cleanup", Box::new(RuleExtensionPush::new())); // 5704
     register_rule!(pool, "cleanup", Box::new(RulePieceStructure::new())); // 5705
-    register_rule!(pool, "splitcopy", Box::new(crate::subflow::RuleSplitCopy::new()));  // 5706
-    register_rule!(pool, "splitpointer", Box::new(crate::subflow::RuleSplitLoad::new()));  // 5707
-    register_rule!(pool, "splitpointer", Box::new(crate::subflow::RuleSplitStore::new())); // 5708
+    register_rule!(
+        pool, "splitcopy", Box::new(crate::subflow::RuleSplitCopy::new())
+    );  // 5706
+    register_rule!(
+        pool, "splitpointer", Box::new(crate::subflow::RuleSplitLoad::new())
+    );  // 5707
+    register_rule!(
+        pool, "splitpointer", Box::new(crate::subflow::RuleSplitStore::new())
+    ); // 5708
     // RuleStringCopy / RuleStringStore are wired (constseq.cc:954-1002).
     // Detection phase only — transform requires CALLOTHER/userop infrastructure
     // (tracked as a follow-up; matches Ghidra registration at 5709-5710).
-    register_rule!(pool, "constsequence", Box::new(crate::constseq::RuleStringCopy::new()));   // coreaction.cc:5709
-    register_rule!(pool, "constsequence", Box::new(crate::constseq::RuleStringStore::new()));  // coreaction.cc:5710
+    register_rule!(
+        pool, "constsequence", Box::new(crate::constseq::RuleStringCopy::new())
+    );   // coreaction.cc:5709
+    register_rule!(
+        pool, "constsequence", Box::new(crate::constseq::RuleStringStore::new())
+    );  // coreaction.cc:5710
     // Pool ends at RuleStringStore (5710), exactly as Ghidra's actcleanup
     // (coreaction.cc:5694-5711). PIPE-POOL-LOCAL-RULES-0001 removed the
     // former Rugra-local re-registration of RuleTrivialArith here — the
@@ -2177,113 +2217,258 @@ pub fn universal_action(grouplist: Option<&ActionGroupList>) -> Option<ActionRes
     let mut universal = ActionRestartGroup::new(
         "universal",
         action_flags::RULE_ONCEPERFUNC,
-        1,
-    );
+        1);
 
     // --- Universal head (coreaction.cc:5477-5485) ---
-    add!(universal, "base", Box::new(crate::coreaction::ActionStart::new())); // :5477
-    add!(universal, "base", Box::new(crate::coreaction::ActionConstbase::new())); // :5478
-    add!(universal, "normalanalysis", Box::new(crate::coreaction::ActionNormalizeSetup::new())); // :5479
-    add!(universal, "base", Box::new(crate::coreaction::ActionDefaultParams::new())); // :5480
-    add!(universal, "base", Box::new(crate::coreaction::ActionExtraPopSetup::new())); // :5482
-    add!(universal, "protorecovery", Box::new(crate::coreaction::ActionPrototypeTypes::new())); // :5483
-    add!(universal, "protorecovery", Box::new(crate::coreaction::ActionFuncLink::new())); // :5484
-    add!(universal, "noproto", Box::new(crate::coreaction::ActionFuncLinkOutOnly::new())); // :5485
+    add!(
+        universal, "base", Box::new(crate::coreaction::ActionStart::new())
+    ); // :5477
+    add!(
+        universal, "base", Box::new(crate::coreaction::ActionConstbase::new())
+    ); // :5478
+    add!(
+        universal, "normalanalysis", Box::new(crate::coreaction::ActionNormalizeSetup::new())
+    ); // :5479
+    add!(
+        universal, "base", Box::new(crate::coreaction::ActionDefaultParams::new())
+    ); // :5480
+    add!(
+        universal, "base", Box::new(crate::coreaction::ActionExtraPopSetup::new())
+    ); // :5482
+    add!(
+        universal, "protorecovery", Box::new(crate::coreaction::ActionPrototypeTypes::new())
+    ); // :5483
+    add!(
+        universal, "protorecovery", Box::new(crate::coreaction::ActionFuncLink::new())
+    ); // :5484
+    add!(
+        universal, "noproto", Box::new(crate::coreaction::ActionFuncLinkOutOnly::new())
+    ); // :5485
 
     // --- fullloop (coreaction.cc:5487, rule_repeatapply) ---
     let mut fullloop = ActionGroup::with_flags("fullloop", action_flags::RULE_REPEATAPPLY);
     {
         // --- mainloop (coreaction.cc:5489, rule_repeatapply) ---
         let mut mainloop = ActionGroup::with_flags("mainloop", action_flags::RULE_REPEATAPPLY);
-        add!(mainloop, "base", Box::new(crate::coreaction::ActionUnreachable::new())); // :5490
-        add!(mainloop, "base", Box::new(crate::coreaction::ActionVarnodeProps::new())); // :5491
+        add!(
+            mainloop, "base", Box::new(crate::coreaction::ActionUnreachable::new())
+        ); // :5490
+        add!(
+            mainloop, "base", Box::new(crate::coreaction::ActionVarnodeProps::new())
+        ); // :5491
         add!(mainloop, "base", Box::new(ActionHeritage::new())); // :5492
-        add!(mainloop, "protorecovery", Box::new(crate::coreaction::ActionParamDouble::new())); // :5493
-        add!(mainloop, "base", Box::new(crate::coreaction::ActionSegmentize::new())); // :5494
-        add!(mainloop, "base", Box::new(crate::coreaction::ActionInternalStorage::new())); // :5495
-        add!(mainloop, "blockrecovery", Box::new(crate::coreaction::ActionForceGoto::new())); // :5496
-        add!(mainloop, "protorecovery_a", Box::new(crate::coreaction::ActionDirectWrite::new(true))); // :5497 (propagateIndirect=true)
-        add!(mainloop, "protorecovery_b", Box::new(crate::coreaction::ActionDirectWrite::new(false))); // :5498 (propagateIndirect=false; filtered from the decompile root)
-        add!(mainloop, "protorecovery", Box::new(crate::coreaction::ActionActiveParam::new())); // :5499
-        add!(mainloop, "protorecovery", Box::new(crate::coreaction::ActionReturnRecovery::new())); // :5500
-        add!(mainloop, "localrecovery", Box::new(crate::coreaction::ActionRestrictLocal::new())); // :5502
+        add!(
+            mainloop, "protorecovery", Box::new(crate::coreaction::ActionParamDouble::new())
+        ); // :5493
+        add!(
+            mainloop, "base", Box::new(crate::coreaction::ActionSegmentize::new())
+        ); // :5494
+        add!(
+            mainloop, "base", Box::new(crate::coreaction::ActionInternalStorage::new())
+        ); // :5495
+        add!(
+            mainloop, "blockrecovery", Box::new(crate::coreaction::ActionForceGoto::new())
+        ); // :5496
+        add!(
+            mainloop, "protorecovery_a", Box::new(crate::coreaction::ActionDirectWrite::new(true))
+        ); // :5497 (propagateIndirect=true)
+        add!(
+            mainloop, "protorecovery_b", Box::new(crate::coreaction::ActionDirectWrite::new(false))
+        ); // :5498 (propagateIndirect=false; filtered from the decompile root)
+        add!(
+            mainloop, "protorecovery", Box::new(crate::coreaction::ActionActiveParam::new())
+        ); // :5499
+        add!(
+            mainloop, "protorecovery", Box::new(crate::coreaction::ActionReturnRecovery::new())
+        ); // :5500
+        add!(
+            mainloop, "localrecovery", Box::new(crate::coreaction::ActionRestrictLocal::new())
+        ); // :5502
         add!(mainloop, "deadcode", Box::new(ActionDeadCode::new())); // :5503
-        add!(mainloop, "dynamic", Box::new(crate::coreaction::ActionDynamicMapping::new())); // :5504
-        add!(mainloop, "localrecovery", Box::new(crate::coreaction::ActionRestructureVarnode::new())); // :5505
-        add!(mainloop, "base", Box::new(crate::coreaction::ActionSpacebase::new())); // :5506
-        add!(mainloop, "analysis", Box::new(crate::coreaction::ActionNonzeroMask::new())); // :5507
-        add!(mainloop, "typerecovery", Box::new(crate::coreaction::ActionInferTypes::new())); // :5508
+        add!(
+            mainloop, "dynamic", Box::new(crate::coreaction::ActionDynamicMapping::new())
+        ); // :5504
+        add!(
+            mainloop, "localrecovery", Box::new(crate::coreaction::ActionRestructureVarnode::new())
+        ); // :5505
+        add!(
+            mainloop, "base", Box::new(crate::coreaction::ActionSpacebase::new())
+        ); // :5506
+        add!(
+            mainloop, "analysis", Box::new(crate::coreaction::ActionNonzeroMask::new())
+        ); // :5507
+        add!(
+            mainloop, "typerecovery", Box::new(crate::coreaction::ActionInferTypes::new())
+        ); // :5508
 
         // --- stackstall (coreaction.cc:5509, rule_repeatapply) ---
         let mut stackstall = ActionGroup::with_flags("stackstall", action_flags::RULE_REPEATAPPLY);
         stackstall.add_action(Box::new(build_oppool1())); // :5511-5650 oppool1
-        add!(stackstall, "base", Box::new(crate::coreaction::ActionLaneDivide::new())); // :5652
-        add!(stackstall, "analysis", Box::new(crate::coreaction::ActionMultiCse::new())); // :5653
-        add!(stackstall, "analysis", Box::new(crate::coreaction::ActionShadowVar::new())); // :5654
-        add!(stackstall, "deindirect", Box::new(crate::coreaction::ActionDeindirect::new())); // :5655
-        add!(stackstall, "stackptrflow", Box::new(ActionStackPtrFlow::new())); // :5656
+        add!(
+            stackstall, "base", Box::new(crate::coreaction::ActionLaneDivide::new())
+        ); // :5652
+        add!(
+            stackstall, "analysis", Box::new(crate::coreaction::ActionMultiCse::new())
+        ); // :5653
+        add!(
+            stackstall, "analysis", Box::new(crate::coreaction::ActionShadowVar::new())
+        ); // :5654
+        add!(
+            stackstall, "deindirect", Box::new(crate::coreaction::ActionDeindirect::new())
+        ); // :5655
+        add!(
+            stackstall, "stackptrflow", Box::new(ActionStackPtrFlow::new())
+        ); // :5656
         if stackstall.num_actions() > 0 {
             mainloop.add_action(Box::new(stackstall)); // :5657
         }
 
-        add!(mainloop, "deadcontrolflow", Box::new(crate::coreaction::ActionRedundBranch::new())); // :5658
-        add!(mainloop, "blockrecovery", Box::new(ActionBlockStructure::new())); // :5659
-        add!(mainloop, "typerecovery", Box::new(crate::coreaction::ActionConstantPtr::new())); // :5660
+        add!(
+            mainloop, "deadcontrolflow", Box::new(crate::coreaction::ActionRedundBranch::new())
+        ); // :5658
+        add!(
+            mainloop, "blockrecovery", Box::new(ActionBlockStructure::new())
+        ); // :5659
+        add!(
+            mainloop, "typerecovery", Box::new(crate::coreaction::ActionConstantPtr::new())
+        ); // :5660
         mainloop.add_action(Box::new(build_oppool2())); // :5662-5671 oppool2
-        add!(mainloop, "unreachable", Box::new(crate::coreaction::ActionDeterminedBranch::new())); // :5672
-        add!(mainloop, "unreachable", Box::new(crate::coreaction::ActionUnreachable::new())); // :5673
-        add!(mainloop, "nodejoin", Box::new(crate::coreaction::ActionNodeJoin::new())); // :5674
-        add!(mainloop, "conditionalexe", Box::new(crate::condexe::ActionConditionalExe::new())); // :5675
-        add!(mainloop, "analysis", Box::new(crate::coreaction::ActionConditionalConst::new())); // :5676
+        add!(
+            mainloop, "unreachable", Box::new(crate::coreaction::ActionDeterminedBranch::new())
+        ); // :5672
+        add!(
+            mainloop, "unreachable", Box::new(crate::coreaction::ActionUnreachable::new())
+        ); // :5673
+        add!(
+            mainloop, "nodejoin", Box::new(crate::coreaction::ActionNodeJoin::new())
+        ); // :5674
+        add!(
+            mainloop, "conditionalexe", Box::new(crate::condexe::ActionConditionalExe::new())
+        ); // :5675
+        add!(
+            mainloop, "analysis", Box::new(crate::coreaction::ActionConditionalConst::new())
+        ); // :5676
         if mainloop.num_actions() > 0 {
             fullloop.add_action(Box::new(mainloop)); // :5678
         }
 
         // --- fullloop tail (coreaction.cc:5679-5688, after mainloop) ---
-        add!(fullloop, "protorecovery", Box::new(crate::coreaction::ActionLikelyTrash::new())); // :5679
-        add!(fullloop, "protorecovery_a", Box::new(crate::coreaction::ActionDirectWrite::new(true))); // :5680
-        add!(fullloop, "protorecovery_b", Box::new(crate::coreaction::ActionDirectWrite::new(false))); // :5681 (filtered from the decompile root)
+        add!(
+            fullloop, "protorecovery", Box::new(crate::coreaction::ActionLikelyTrash::new())
+        ); // :5679
+        add!(
+            fullloop, "protorecovery_a", Box::new(crate::coreaction::ActionDirectWrite::new(true))
+        ); // :5680
+        add!(
+            fullloop, "protorecovery_b", Box::new(crate::coreaction::ActionDirectWrite::new(false))
+        ); // :5681 (filtered from the decompile root)
         add!(fullloop, "deadcode", Box::new(ActionDeadCode::new())); // :5682
-        add!(fullloop, "deadcontrolflow", Box::new(crate::coreaction::ActionDoNothing::new())); // :5683
-        add!(fullloop, "switchnorm", Box::new(crate::coreaction::ActionSwitchNorm::new())); // :5684
-        add!(fullloop, "returnsplit", Box::new(crate::coreaction::ActionReturnSplit::new())); // :5685
-        add!(fullloop, "protorecovery", Box::new(crate::coreaction::ActionUnjustifiedParams::new())); // :5686
-        add!(fullloop, "typerecovery", Box::new(crate::coreaction::ActionStartTypes::new())); // :5687
-        add!(fullloop, "protorecovery", Box::new(crate::coreaction::ActionActiveReturn::new())); // :5688
+        add!(
+            fullloop, "deadcontrolflow", Box::new(crate::coreaction::ActionDoNothing::new())
+        ); // :5683
+        add!(
+            fullloop, "switchnorm", Box::new(crate::coreaction::ActionSwitchNorm::new())
+        ); // :5684
+        add!(
+            fullloop, "returnsplit", Box::new(crate::coreaction::ActionReturnSplit::new())
+        ); // :5685
+        add!(
+            fullloop, "protorecovery", Box::new(crate::coreaction::ActionUnjustifiedParams::new())
+        ); // :5686
+        add!(
+            fullloop, "typerecovery", Box::new(crate::coreaction::ActionStartTypes::new())
+        ); // :5687
+        add!(
+            fullloop, "protorecovery", Box::new(crate::coreaction::ActionActiveReturn::new())
+        ); // :5688
     }
     if fullloop.num_actions() > 0 {
         universal.add_action(Box::new(fullloop)); // :5690
     }
 
     // --- Post-fullloop top-level (coreaction.cc:5691-5738) ---
-    add!(universal, "localrecovery", Box::new(crate::coreaction::ActionMappedLocalSync::new())); // :5691
-    add!(universal, "cleanup", Box::new(crate::coreaction::ActionStartCleanUp::new())); // :5692
+    add!(
+        universal, "localrecovery", Box::new(crate::coreaction::ActionMappedLocalSync::new())
+    ); // :5691
+    add!(
+        universal, "cleanup", Box::new(crate::coreaction::ActionStartCleanUp::new())
+    ); // :5692
     universal.add_action(Box::new(build_cleanup_pool())); // :5694-5712 cleanup pool
-    add!(universal, "blockrecovery", Box::new(crate::coreaction::ActionPreferComplement::new())); // :5714
-    add!(universal, "blockrecovery", Box::new(crate::coreaction::ActionStructureTransform::new())); // :5715
-    add!(universal, "normalizebranches", Box::new(ActionNormalizeBranches::new())); // :5716 (filtered from the decompile root — coreaction.cc:5424-5431)
-    add!(universal, "merge", Box::new(crate::coreaction::ActionAssignHigh::new())); // :5717
-    add!(universal, "merge", Box::new(crate::coreaction::ActionMergeRequired::new())); // :5718
-    add!(universal, "merge", Box::new(crate::coreaction::ActionMarkExplicit::new())); // :5719
-    add!(universal, "merge", Box::new(crate::coreaction::ActionMarkImplied::new())); // :5720
-    add!(universal, "merge", Box::new(crate::coreaction::ActionMergeMultiEntry::new())); // :5721
-    add!(universal, "merge", Box::new(crate::coreaction::ActionMergeCopy::new())); // :5722
-    add!(universal, "merge", Box::new(crate::coreaction::ActionDominantCopy::new())); // :5723
-    add!(universal, "dynamic", Box::new(crate::coreaction::ActionDynamicSymbols::new())); // :5724
-    add!(universal, "merge", Box::new(crate::coreaction::ActionMarkIndirectOnly::new())); // :5725
-    add!(universal, "merge", Box::new(crate::coreaction::ActionMergeAdjacent::new())); // :5726
-    add!(universal, "merge", Box::new(crate::coreaction::ActionMergeType::new())); // :5727
-    add!(universal, "merge", Box::new(crate::coreaction::ActionHideShadow::new())); // :5728
-    add!(universal, "merge", Box::new(crate::coreaction::ActionCopyMarker::new())); // :5729
-    add!(universal, "localrecovery", Box::new(crate::coreaction::ActionOutputPrototype::new())); // :5730
-    add!(universal, "fixateproto", Box::new(crate::coreaction::ActionInputPrototype::new())); // :5731
-    add!(universal, "fixateglobals", Box::new(crate::coreaction::ActionMapGlobals::new())); // :5732
-    add!(universal, "dynamic", Box::new(crate::coreaction::ActionDynamicSymbols::new())); // :5733
-    add!(universal, "merge", Box::new(crate::coreaction::ActionNameVars::new())); // :5734
-    add!(universal, "casts", Box::new(crate::coreaction::ActionSetCasts::new())); // :5735
-    add!(universal, "blockrecovery", Box::new(ActionFinalStructure::new())); // :5736
-    add!(universal, "protorecovery", Box::new(crate::coreaction::ActionPrototypeWarnings::new())); // :5737
-    add!(universal, "base", Box::new(crate::coreaction::ActionStop::new())); // :5738
+    add!(
+        universal, "blockrecovery", Box::new(crate::coreaction::ActionPreferComplement::new())
+    ); // :5714
+    add!(
+        universal, "blockrecovery", Box::new(crate::coreaction::ActionStructureTransform::new())
+    ); // :5715
+    add!(
+        universal, "normalizebranches", Box::new(ActionNormalizeBranches::new())
+    ); // :5716 (filtered from the decompile root — coreaction.cc:5424-5431)
+    add!(
+        universal, "merge", Box::new(crate::coreaction::ActionAssignHigh::new())
+    ); // :5717
+    add!(
+        universal, "merge", Box::new(crate::coreaction::ActionMergeRequired::new())
+    ); // :5718
+    add!(
+        universal, "merge", Box::new(crate::coreaction::ActionMarkExplicit::new())
+    ); // :5719
+    add!(
+        universal, "merge", Box::new(crate::coreaction::ActionMarkImplied::new())
+    ); // :5720
+    add!(
+        universal, "merge", Box::new(crate::coreaction::ActionMergeMultiEntry::new())
+    ); // :5721
+    add!(
+        universal, "merge", Box::new(crate::coreaction::ActionMergeCopy::new())
+    ); // :5722
+    add!(
+        universal, "merge", Box::new(crate::coreaction::ActionDominantCopy::new())
+    ); // :5723
+    add!(
+        universal, "dynamic", Box::new(crate::coreaction::ActionDynamicSymbols::new())
+    ); // :5724
+    add!(
+        universal, "merge", Box::new(crate::coreaction::ActionMarkIndirectOnly::new())
+    ); // :5725
+    add!(
+        universal, "merge", Box::new(crate::coreaction::ActionMergeAdjacent::new())
+    ); // :5726
+    add!(
+        universal, "merge", Box::new(crate::coreaction::ActionMergeType::new())
+    ); // :5727
+    add!(
+        universal, "merge", Box::new(crate::coreaction::ActionHideShadow::new())
+    ); // :5728
+    add!(
+        universal, "merge", Box::new(crate::coreaction::ActionCopyMarker::new())
+    ); // :5729
+    add!(
+        universal, "localrecovery", Box::new(crate::coreaction::ActionOutputPrototype::new())
+    ); // :5730
+    add!(
+        universal, "fixateproto", Box::new(crate::coreaction::ActionInputPrototype::new())
+    ); // :5731
+    add!(
+        universal, "fixateglobals", Box::new(crate::coreaction::ActionMapGlobals::new())
+    ); // :5732
+    add!(
+        universal, "dynamic", Box::new(crate::coreaction::ActionDynamicSymbols::new())
+    ); // :5733
+    add!(
+        universal, "merge", Box::new(crate::coreaction::ActionNameVars::new())
+    ); // :5734
+    add!(
+        universal, "casts", Box::new(crate::coreaction::ActionSetCasts::new())
+    ); // :5735
+    add!(
+        universal, "blockrecovery", Box::new(ActionFinalStructure::new())
+    ); // :5736
+    add!(
+        universal, "protorecovery", Box::new(crate::coreaction::ActionPrototypeWarnings::new())
+    ); // :5737
+    add!(
+        universal, "base", Box::new(crate::coreaction::ActionStop::new())
+    ); // :5738
 
     if let Some(grouplist) = grouplist {
         return universal.clone_restart_group(grouplist);
@@ -2295,7 +2480,9 @@ pub fn universal_action(grouplist: Option<&ActionGroupList>) -> Option<ActionRes
 /// Build the derived default "decompile" pipeline root (the tree that
 /// `ActionDatabase::set_default_actions` registers as the current root).
 pub fn build_default_pipeline() -> ActionRestartGroup {
-    universal_action(Some(&ActionGroupList::from_members(default_groups::DECOMPILE)))
+    universal_action(Some(&ActionGroupList::from_members(
+        default_groups::DECOMPILE,
+    )))
         .expect("decompile grouplist keeps the universal head (base group)")
 }
 
@@ -2402,7 +2589,9 @@ mod tests {
         let root = build_default_pipeline();
         let names = root.child_names();
         // coreaction.cc:5737 — exactly one top-level prototypewarnings.
-        assert_eq!(names.iter().filter(|n| **n == "prototypewarnings").count(), 1);
+        assert_eq!(
+            names.iter().filter(|n| **n == "prototypewarnings").count(), 1
+        );
         // R2 closeout (unblocked by 533412a; see the SINGLE REGISTRATION
         // comment in build_default_pipeline): outputprototype/inputprototype
         // are sole-registered at their oracle positions — exactly one
@@ -2539,8 +2728,7 @@ mod tests {
         let mut action = ScriptAction::new(
             vec![1, 1, 0],
             action_flags::RULE_REPEATAPPLY,
-            calls.clone(),
-        );
+            calls.clone());
         let mut state = ActionState::new(action_flags::RULE_REPEATAPPLY);
         let mut fd = fixture_funcdata();
 
@@ -2576,8 +2764,7 @@ mod tests {
         let mut action = ScriptAction::new(
             vec![0, 0],
             action_flags::RULE_ONCEPERFUNC,
-            calls.clone(),
-        );
+            calls.clone());
         let mut state = ActionState::new(action_flags::RULE_ONCEPERFUNC);
         let mut fd = fixture_funcdata();
 

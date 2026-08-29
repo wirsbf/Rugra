@@ -1,5 +1,13 @@
 # `printc.rs` API Reference
 
+## 2026-08-28：字符常量 read-facing 类型与条件极性
+
+RPN 常量叶现在用 consuming op 的精确 input slot 查询 High read-facing type，并以
+`vartoken + ConstColor + op/vn` 构造 Atom；GetStr 的零常量因此沿通用 char 路径打印为
+`'\0'`。`emitBlockIf` 不再读取 Rust-only `BlockIf.negated` 或设置文本层
+`NEGATETOKEN`；极性已由结构化阶段真实修改条件对象。完整 PrintC 常量族、legacy
+direct emit 和 markup 仍保持 `MISMATCH/UNTESTED`。
+
 ## 2026-08-28：BlockCopy 入口地址解析
 
 PrintC 的 label discovery、pending-label backpatch、graph code start、
@@ -35,13 +43,15 @@ Graph/MultiGoto 分派、带 condition prelude 的 pending-brace else-if，以�
 FLAT+NOFALLTHRU tail 三类确定残差；有出边的 `nextInFlow`、markup、普通
 else/if-goto、异常和其余结构子类型还未由该夹具覆盖。PrintC 继续保持 L2。
 
-真实 GetStr 已恢复独立的 `free(*string)` 语句；剩余
-`if (value != 0) { if (*value != 0) ... }` 是上游尚未形成
-`BlockCondition`。2026-08-28 已修正 `buildCopy` 的真实 Copy、边槽/label 与
-copymap 地基，但最终 GetStr 仍在后续 `identifyInternal/ruleBlockOr/isComplex`
-结构化闭包出现差异。输出层不会用文本合并掩盖这个结构差异；后续继续绑定
-`BLOCK-BUILDCOPY-MIRROR-0001` 的 overall MISMATCH 与
-`GETSTR-PRINTC-STRUCTCOND-0001` 上游残差。
+fresh GetStr 六阶段 runner 已恢复真实 `BlockCondition`：Ghidra 与 Rugra 的
+`04_structure` 都只有一个 root child，Rugra 的目标行逐字为
+`if ((param_1 != (char *)0x0) && (*param_1 != '\0')) {`，锁定 Ghidra 对应行为
+`param_2`。runner 只把 `03_action_ir` 已证明同为 `register:48:8` 的 producer-local
+标识投影成 `value_pointer`；双方原始行、op/Varnode ID 与空白全部保留，没有做
+文本合并、正则替换或字面量归一化。短路结构与字符 token 因而是聚焦 `MATCH`。
+完整 GetStr 仍为 overall `MISMATCH`：五个 stage 非零差异，Heritage 边界为
+`NO_ORACLE`，参数恢复、签名、未知类型 identity、FSPEC/地址空间及完整
+PrintC/markup 闭包继续绑定 metadata 中的 residual IDs。
 
 ## 2026-08-27：CALLIND 函数指针形渲染（PRINTC-CALLIND-PTR-0001）
 
@@ -278,7 +288,13 @@ prototype remain separate residuals; the module remains L2.
 - **2026-07-16 修复（label 格式）**: goto 标签从自创的 `LAB_{:08x}` 改为 Ghidra `emitLabel`（printc.cc:3164）格式 `code_r0xXXXX`。新增 `code_label(addr)` helper，镜像 Ghidra：prefix `code_`（joined_/dup_ 块状态未追踪）+ shortcut `'r'`（RAM space，translate.cc:529-533 space 名首字母小写）+ printRaw（space.cc:206-222，`0x` + 按 addr>>32/>>48 收缩的零填充 hex）。两处标签发射点（块入口 printc.rs:592 + push_goto_target printc.rs:1322）已更新。curl 语料无 unstructured goto 故 numbering 不变，但对有 goto 的二进制正确性已保证。
 - **历史记录（2026-07-02，已被上方 2026-08-11 状态取代）**：printc 依赖 `emitted: HashSet<usize>`（key=Arc 指针身份）做去重，是 CFT 树遍历尚未完成的临时补丁。完整修复需按 `beginBlock/endBlock` 迁移到 Ghidra 的 `emitBlockGraph` 单次树遍历并删除 emitted/fresh-emitted 补丁；方法名存在不代表行为已覆盖。
 - **2026-08-23 修复（GETSTR-ZERODIFF-D 域，类型感知常量 + (bool) 抑制）**: ① `make_atom_for_vn`/push_varnode Const 臂加 `typed_constant_literal`（PrintC::pushConstant printc.cc:1744-1810 移植）：指针类型 0 值 → `({type})0x0`（默认臂 cc:1805-1809，C 无 null token）；char 打印类型 → 字符字面量（cc:1750-1752 pushCharConstant），转义表忠实 printUnicode（printc.cc:1426-1466：\\0 \\a \\b \\t \\n \\v \\f \\r \\" \\' \\\\ + 通用 hex）。② ActionSetCasts castOutput 的 token==high 短路由 Arc::ptr_eq 改为 Datatype::type_equal 结构比较（Ghidra 用 TypeFactory interned 指针比较，cc:2544-2551；Rugra 无 intern，Base 型按 name+size+metatype 等价），base_type_for 补 Bool→"bool" 映射（原落 "long"）——消除 CBRANCH 条件上的伪 `(bool)` cast。
-- **2026-08-23 修复（GETSTR-ZERODIFF-A 域，短路条件复合发射）**: ① `emit_block_condition_rpn` 增加 BlockCondition 复合分发（对齐 `PrintC::emitBlockCondition` printc.cc:2836-2861 的 `(block0) op (block1)` 组合）：旧 RPN 路径只扫第一个 CBRANCH，短路灯塔的第二子句被丢弃（GetStr `if (A && B)` 只打出 A）。② 新增 `demorgan_negate_text`：对顶层 `(A) op (B)` 复合条件做 De Morgan 否定（`!((A) || (B))` → `(!A) && (!B)`，每侧经 negate_condition_text=printc.cc:555-560 negatetoken 的文本等价），接入 BlockIf negated 发射路径。该否定在 oracle 由结构化期 `BlockCondition::negateCondition`（block.cc:3023-2032：NOT 分配双侧 + op AND↔OR）+ opCbranch negatetoken 完成；Rugra 以 BlockIf::negated 记录并在打印期应用（RUGRA-GLUE 表示层等价）。
+- **历史记录（2026-08-23，已由 2026-08-28 结构化极性实现取代）**: 当时曾以
+  `demorgan_negate_text` 和 Rust-only `BlockIf.negated` 在打印期补偿复合条件。
+  这不是当前实现，也不是可接受的 Ghidra 等价机制；两者现已删除。当前极性由
+  `BlockList/BlockCondition/BlockCopy::negateCondition` 虚派发及完整 reciprocal
+  edge-slot 交换在结构化阶段原地完成，`BLOCK-STRUCTURED-NEGATE-0001` 的 13-case
+  scoped stdout 已与锁定 oracle 逐字节一致；完整 CollapseStructure 仍保持
+  `MISMATCH/UNTESTED`。
 - **2026-07-02 修复（R50+R51）**: `op_multiequal`/`op_indirect` 改为 no-op（对齐 Ghidra printc.hh:331,332 `{}`，消除非 C 的 `phi(...)`/`(indirect)` 语句）；`op_cbranch`/`emit_block_condition` 增加条件输出捕获——当 `emit_condition` 产出无效条件（空串、` == `、`!()` 等缺操作数的垃圾）时回退为 `1`（always-true），消除 `if () goto ;`/`if () {`/`if (!())` 语法错误。curl 的 6 处语法错误全部清零。
 - **可信度**: 高
 - **对应源码**: 当前 `rugra/src/printc.rs`

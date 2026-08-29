@@ -1,5 +1,15 @@
 ﻿# `printlanguage.rs` API Reference
 
+## 2026-08-28：Atom 元数据直达 emitter
+
+`rpn_emit_atom` 的 `VarToken` 分支现在把 `Atom` 中的 highlight、Varnode id 与 op id
+完整传给 metadata-aware emitter，而不是把变量 id 固定为 0。
+`PRINTLANGUAGE-ATOM-METADATA-0001` 以真实双侧 RPN 对象图锁定两次
+`'\0'/ConstColor/同一 vn/同一 consuming op`，8 records / 678 bytes raw stdout
+逐字节 `MATCH`。非恒量 vartoken producer 仍可能使用 storage offset 与 `op=-1`，
+其他 Atom/pending/recurse/markup 分支继续绑定 `PRINT-RPN-0001`/`PRETTY-0001`，
+因此完整 `pushAtom/emitAtom` 和模块仍为 `MISMATCH/UNTESTED`。
+
 ## 2026-08-26：RPN emit 改用带 id 的括号/空格原语（PRINTC-LINEWRAP-0001）
 
 - `rpn_push_op` 的 postsurround/presurround 臂升级：

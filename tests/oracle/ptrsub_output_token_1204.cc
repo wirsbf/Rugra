@@ -4,9 +4,9 @@
  * canonical identity.  The action projection observes selected def-use and
  * type fields before and after a no-op and a required output CAST.  The infer
  * canary then runs one production ActionInferTypes pass over an unlocked
- * SPACEBASE PTRSUB with STOP_TYPE_PROPAGATION.  The raw streams deliberately
- * retain two registered mismatches: ActionSetCasts::apply's return and the
- * inferred output's canonical int8 identity.
+ * SPACEBASE PTRSUB with STOP_TYPE_PROPAGATION.  The selected raw streams are
+ * byte-identical; full mapped-function and architecture residuals remain
+ * explicitly outside this fixture's MATCH projection.
  */
 #include <bits/stdc++.h>
 
@@ -361,6 +361,18 @@ public:
   }
 
   int4 countNow(void) const { return count; }
+
+  // Fixture adapter for Rugra's externalized Action base-state bridge.  In
+  // Ghidra, Action::count remains an inherited field and Action::perform
+  // consumes it in place.  Rugra transfers the same delta to ActionState, so
+  // the Rust leaf exposes take_count_delta().  Read-and-clear here compares
+  // that transfer boundary without claiming this helper is a Ghidra method.
+  int4 takeCountDelta(void)
+  {
+    int4 result = count;
+    count = 0;
+    return result;
+  }
 };
 
 static void runAction(FixtureArchitecture &architecture,
@@ -394,6 +406,10 @@ static void runAction(FixtureArchitecture &architecture,
 
   ProbeSetCasts action;
   int4 result = action.apply(fd);
+  int4 countBeforeDelta = action.countNow();
+  int4 deltaFirst = action.takeCountDelta();
+  int4 countAfterDelta = action.countNow();
+  int4 deltaSecond = action.takeCountDelta();
   PcodeOp *mismatchDef = mismatchOut->getDef();
   Varnode *mid = mismatchOp->getOut();
   PcodeOp *midUse = mid->loneDescend();
@@ -402,7 +418,11 @@ static void runAction(FixtureArchitecture &architecture,
        iter != block->endOp(); ++iter)
     if ((*iter)->code() == CPUI_CAST) castCount += 1;
 
-  std::cout << "action_post|case=paired|result=" << result << "|count=" << action.countNow()
+  std::cout << "action_post|case=paired|result=" << result
+            << "|count_before_delta=" << countBeforeDelta
+            << "|delta_first=" << deltaFirst
+            << "|count_after_delta=" << countAfterDelta
+            << "|delta_second=" << deltaSecond
             << "|ops=" << blockOps(block) << "|casts=" << castCount
             << "|equal_same=" << (equalOp->getOut() == equalOut ? 1 : 0)
             << "|equal_def=" << opToken(equalOut->getDef()->code())

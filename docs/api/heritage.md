@@ -2,6 +2,14 @@
 
 **源代码路径**: `src/heritage.rs`
 
+## 2026-08-28：EarlyRemoval 所需 Heritage 状态
+
+锁定 EarlyRemoval fixture 证明的范围是：`dead_removal_allowed_seen` 使用严格
+`pass > delay`，且成功删除后 `deadremoved=1`；相关 pass/delay/deadremoved 与 covered
+op 突变投影为 MATCH。`reset`/`clear`/`propagate_copy_away` 的完整容器、别名、错误及
+生命周期并未由该 fixture 覆盖，仍为 UNTESTED；固定枚举遗漏 FSPEC manager slot、
+nullable op input 与完整 manager 生命周期也继续作为残差。
+
 ## 文档状态
 
 - **状态**: 🔧 **L2（2026-08-11 锁定 12.0.4 审计）**——canonical `Heritage::heritage` 没有生产调用且会重入写锁；主管线改走未建 dominator 的 direct phi/rename 两遍。pass、def-use、IOP、block membership、refinement 与 guard 闭包均不等价，正式行为门禁为 `NO_ORACLE`。详见 `docs/alignment_audit/CONTROL_OUTPUT_PIPELINES_2026-08-11.md`。
@@ -20,6 +28,15 @@
 > 重要提醒：  
 > `heritage.rs` 对应的是 Rugra 当前 SSA / heritage 相关核心层之一。  
 > 结构存在不等于生产接线正确；修复前不得把 direct 算法单测当作 Ghidra 运行时 1:1 对拍。
+
+## 2026-08-28：load-guard COPY 的销毁语义
+
+`Heritage::propagate_copy_away` 在完成 `total_replace` 后通过
+`Funcdata::op_destroy` 删除 COPY，与 Ghidra 12.0.4 `heritage.cc:675-688`
+一致。该调用同时断开 Varnode 连接、把操作移到 dead list，并从所属
+`BlockBasic` 移除；只设置 `PcodeOp::DEAD` 会让 op bank、基本块和 parent
+状态彼此矛盾。完整 Heritage 仍保持 L2，需以锁定 oracle fixture 覆盖该
+生命周期及其 GetStr 调用闭包后，才能提升对应函数状态。
 
 ---
 

@@ -283,8 +283,13 @@ fn collect_known_entry_shared_return_overrides(
             {
                 continue;
             }
-            let section_end = candidate.sh_addr.checked_add(candidate.sh_size).ok_or_else(|| {
-                format!("executable section extent overflows at 0x{:x}", candidate.sh_addr)
+            let section_end = candidate
+                .sh_addr
+                .checked_add(candidate.sh_size)
+                .ok_or_else(|| {
+                format!(
+                        "executable section extent overflows at 0x{:x}", candidate.sh_addr
+                    )
             })?;
             if owner_entry >= candidate.sh_addr && owner_end <= section_end {
                 containing_sections.push(candidate);
@@ -824,7 +829,9 @@ fn link_call_specs(
     libc_signatures: &rugra::debugproto::LibcSignatureTable,
     debug_db: &rugra::debugproto::DebugPrototypeDatabase,
     fn_name: &str,
-    type_names: &std::collections::HashMap<String, std::sync::Arc<rugra::type_system::datatype::Datatype>>,
+    type_names: &std::collections::HashMap<
+        String, std::sync::Arc<rugra::type_system::datatype::Datatype>,
+    >,
 ) -> (usize, usize, usize, usize, usize) {
     // Keep the stable owner with each direct target. Multiple CALLs may share
     // one machine address, so an address lookup is not an identity lookup.
@@ -917,7 +924,9 @@ fn link_call_specs(
     // that exact owner identity through a typed Weak carried by the temporary
     // Iop annotation; TypeOp/PrintC consumption remains a separate residual.
     let relinked = relink_call_spec_targets(fd);
-    (named, signatures, dwarf_signatures, relinked, noreturn_marked)
+    (
+        named, signatures, dwarf_signatures, relinked, noreturn_marked,
+    )
 }
 
 // RUGRA-GLUE: refresh each direct CALL's fspec annotation from its stable
@@ -944,11 +953,12 @@ fn relink_call_spec_targets(fd: &mut rugra::funcdata::Funcdata) -> usize {
         let Some(op_arc) = op_arc else {
             continue;
         };
-        let vn = fd.vbank.create_with_space(
+        let vn = fd
+            .vbank
+            .create_with_space(
             std::mem::size_of::<usize>(),
             AddressSpace::Iop,
-            entry,
-        );
+            entry);
         {
             let mut annotation = vn.write().unwrap();
             annotation.set_flags(varnode_flags::ANNOTATION);
@@ -1013,7 +1023,9 @@ fn collect_external_imports(elf: &goblin::elf::Elf) -> Vec<ExternalImport> {
 // PT_LOAD segments laid out at their virtual addresses, NOBITS (.bss)
 // zero-filled, exactly what Ghidra's loader hands getStringData
 // (stringmanage.cc:427-475 loadFill loop).
-fn worker_memory_load_image(elf: &goblin::elf::Elf, buffer: &[u8]) -> rugra::loadimage::RawLoadImage {
+fn worker_memory_load_image(
+    elf: &goblin::elf::Elf, buffer: &[u8],
+) -> rugra::loadimage::RawLoadImage {
     const PT_LOAD: u32 = 1;
     let mut top = 0usize;
     for ph in elf.program_headers.iter() {
@@ -1089,7 +1101,9 @@ fn external_stub_section(name: &str, import: &ExternalImport) -> String {
     // The versioned external symbol (e.g. free@@GLIBC_2.2.5) rides along as
     // a listing comment at the block entry.
     if let Some(version) = &import.version {
-        out.push_str(&format!("                    /* {}@@{} */\n", name, version));
+        out.push_str(&format!(
+            "                    /* {}@@{} */\n", name, version
+        ));
     }
     // printc.cc:770-772 PrintC::opReturn, badinstruction arm. The trailing
     // blank line reproduces the section separator the golden uses between
@@ -1588,11 +1602,10 @@ fn run_worker_job(job: &WorkerJob) -> Result<WorkerPayload, WorkerFailure> {
                 IsolationProbe::Panic { token } => {
                     panic!("intentional timeout-isolation probe panic: {token}")
                 }
-                IsolationProbe::NonZero { token } => {
-                    Err(WorkerFailure::Job(format!(
+                IsolationProbe::NonZero { token } => Err(WorkerFailure::Job(format!(
                         "intentional timeout-isolation failure: {token}"
                     )))
-                }
+                ,
                 IsolationProbe::OutputDisconnect { .. } => std::process::exit(0),
             }
         }
@@ -1679,7 +1692,9 @@ impl rugra::arch::SpecQuery for WorkerSpecHost {
 
 impl rugra::pcodeparse::SleighSymbolLookup for WorkerSpecHost {
     fn find_symbol(&self, name: &str) -> Option<rugra::pcodeparse::SleighSymbol> {
-        self.registers.get(name).map(|vd| rugra::pcodeparse::SleighSymbol {
+        self.registers
+            .get(name)
+            .map(|vd| rugra::pcodeparse::SleighSymbol {
             name: name.to_string(),
             kind: rugra::pcodeparse::SleightSymbolKind::Varnode(rugra::varnode::VarnodeData {
                 space: vd.space,
@@ -1720,8 +1735,7 @@ fn worker_architecture_with_program_db(
     loader: Option<std::sync::Arc<dyn rugra::loadimage::LoadImage>>,
 ) -> Result<std::sync::Arc<rugra::arch::Architecture>, String> {
     static CACHE: std::sync::OnceLock<
-        Result<std::sync::Arc<rugra::arch::Architecture>, String>,
-    > = std::sync::OnceLock::new();
+        Result<std::sync::Arc<rugra::arch::Architecture>, String>> = std::sync::OnceLock::new();
     if let Some(cached) = CACHE.get() {
         return cached.clone();
     }
@@ -1837,8 +1851,7 @@ fn build_worker_architecture(
                 .cloned()
                 .ok_or_else(|| "compiler spec has no data_organization".to_string())?;
             let registry = Arc::new(std::sync::RwLock::new(
-                rugra::marshal::IdRegistry::new(),
-            ));
+                rugra::marshal::IdRegistry::new()));
             let mut decoder =
                 rugra::marshal::TreeDecoder::new(data_org, registry);
             types.decode_data_organization(&mut decoder);
@@ -2049,7 +2062,9 @@ fn infer_prototype_request(request: &PrototypeRequest) -> Result<usize, String> 
         .min(request.binary_image.len());
     let mut disasm = X86_64Disassembler::new();
     let instructions = disasm
-        .disassemble(&request.binary_image[start..end], Address::new(target.vaddr))
+        .disassemble(
+            &request.binary_image[start..end], Address::new(target.vaddr),
+        )
         .map_err(|error| format!("prototype disassembly failed: {error}"))?;
 
     let mut lifter = X86Lifter::new();
@@ -2151,14 +2166,22 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
             // function namespace; locked witnesses: my_get_token::save at
             // 0x17510, next_url::beenhere at 0x17518). DWARF names win over
             // the ELF importer layer at the same address.
-            let dwarf_display_names: HashMap<u64, (String, std::sync::Arc<rugra::type_system::datatype::Datatype>, i32)> = debug_globals
+            let dwarf_display_names: HashMap<
+                u64, (
+                    String, std::sync::Arc<rugra::type_system::datatype::Datatype>, i32,
+                ),
+            > = debug_globals
                 .iter()
                 .map(|(&address, global)| {
                     let name = match &global.parent_function {
                         Some(parent) => format!("{}::{}", parent, global.name),
                         None => global.name.clone(),
                     };
-                    (address, (name, global.data_type.clone(), global.data_type.get_size() as i32))
+                    (
+                        address, (
+                            name, global.data_type.clone(), global.data_type.get_size() as i32,
+                        ),
+                    )
                 })
                 .collect();
             {
@@ -2169,8 +2192,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                 // later, none exist in this projection).
                 if let Some(rng) = rugra::address::Range::new(
                     Address::new(0),
-                    Address::new(u64::MAX),
-                ) {
+                    Address::new(u64::MAX)) {
                     db.add_range(global, rng);
                 }
                 let mut typed = 0usize;
@@ -2273,7 +2295,9 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                         }
                     }
                     let symbol_id =
-                        db.add_symbol_mapped(global, name, dtype, Address::new(*address), entry_size);
+                        db.add_symbol_mapped(
+                        global, name, dtype, Address::new(*address), entry_size,
+                    );
                     if let Some(symbol_id) = symbol_id {
                         // MAINDIFF-STRCONST-0001 (a): the strings-analyzer
                         // Data carries a LOCKED char-array type (the
@@ -2326,8 +2350,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                                 1,
                                 rugra::type_system::datatype::TypeMetatype::Unknown,
                             ),
-                        ),
-                    );
+                        ));
                     rugra::type_system::typefactory::TypeFactory::shared_default()
                         .write()
                         .unwrap()
@@ -2349,7 +2372,9 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                 // Configurable 304B with member offsets, glob_buffer ->
                 // char[4096], ...).
                 for (&address, (name, dtype, size)) in &dwarf_display_names {
-                    db.add_symbol_mapped(global, name, Some(dtype.clone()), Address::new(address), *size);
+                    db.add_symbol_mapped(
+                        global, name, Some(dtype.clone()), Address::new(address), *size,
+                    );
                 }
                 if let Some((base, size)) = request.rodata_span {
                     if let Some(rng) = rugra::address::Range::new(
@@ -2358,8 +2383,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     ) {
                         db.set_property_range(
                             rugra::database::symbol_flags::READONLY,
-                            rng,
-                        );
+                            rng);
                     }
                 }
                 eprintln!(
@@ -2377,7 +2401,9 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // of the PT_LOAD segments (Ghidra's loader reads vaddr-keyed; .bss is
     // zero-filled NOBITS).
     let program_loader: Option<std::sync::Arc<dyn rugra::loadimage::LoadImage>> =
-        Some(std::sync::Arc::new(worker_memory_load_image(elf, &request.binary_image)));
+        Some(
+        std::sync::Arc::new(worker_memory_load_image(elf, &request.binary_image)),
+    );
     let worker_arch =
         worker_architecture_with_program_db(program_db, program_loader)?;
 
@@ -2493,7 +2519,9 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     if callspec_link_enabled && !dwarf_applied {
         if let Some(import_name) = fd.symbol_table.get(&target.vaddr).cloned() {
             let model_carrier = fd.funcp.clone();
-            match libc_signatures.locked_proto(&import_name, &model_carrier, Some(&dwarf_type_names)) {
+            match libc_signatures.locked_proto(
+                &import_name, &model_carrier, Some(&dwarf_type_names),
+            ) {
                 Ok(Some(proto)) => {
                     eprintln!(
                         "[PREPASS] {} applied locked PLT-import signature: {} params",
@@ -2612,7 +2640,9 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     let mut relinked = 0usize;
     let mut noreturn_marked = 0usize;
     if callspec_link_enabled {
-        (named, signatures, dwarf_signatures, relinked, noreturn_marked) = link_call_specs(
+        (
+            named, signatures, dwarf_signatures, relinked, noreturn_marked,
+        ) = link_call_specs(
             &mut fd,
             &libc_signatures,
             &debug_db,
@@ -2666,33 +2696,88 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                 };
                 let blk_rg = blk.read().unwrap();
                 let ins: Vec<i32> =
-                    (0..blk_rg.size_in()).map(|j| blk_rg.get_in(j).map(|e| e.point.read().unwrap().get_index()).unwrap_or(-1)).collect();
+                    (0..blk_rg.size_in())
+                    .map(|j| {
+                        blk_rg
+                            .get_in(j)
+                            .map(|e| e.point.read().unwrap().get_index())
+                            .unwrap_or(-1)
+                    })
+                    .collect();
                 let outs: Vec<i32> =
-                    (0..blk_rg.size_out()).map(|j| blk_rg.get_out(j).map(|e| e.point.read().unwrap().get_index()).unwrap_or(-1)).collect();
-                eprintln!("[DUMP] bb{} in={:?} out={:?}", blk_rg.get_index(), ins, outs);
+                    (0..blk_rg.size_out())
+                    .map(|j| {
+                        blk_rg
+                            .get_out(j)
+                            .map(|e| e.point.read().unwrap().get_index())
+                            .unwrap_or(-1)
+                    })
+                    .collect();
+                eprintln!(
+                    "[DUMP] bb{} in={:?} out={:?}", blk_rg.get_index(), ins, outs
+                );
                 if let Some(bb) = blk_rg.as_any().downcast_ref::<rugra::block::BlockBasic>() {
-                    let type_str = |v: &std::sync::Arc<std::sync::RwLock<rugra::varnode::Varnode>>| -> String {
+                    let type_str = |v: &std::sync::Arc<
+                        std::sync::RwLock<rugra::varnode::Varnode>,
+                    >| -> String {
                         let vr = v.read().unwrap();
-                        let own = vr.v_type.as_ref().map(|t| format!("{:?}/{}", t.get_metatype(), t.get_name())).unwrap_or_else(|| "-".into());
-                        let hi = vr.high.as_ref().map(|h| {
+                        let own = vr
+                            .v_type
+                            .as_ref()
+                            .map(|t| format!("{:?}/{}", t.get_metatype(), t.get_name()))
+                            .unwrap_or_else(|| "-".into());
+                        let hi = vr
+                            .high
+                            .as_ref()
+                            .map(|h| {
                             let hrg = h.read().unwrap();
-                            format!("{:?}/{}", hrg.v_type.get().get_metatype(), hrg.v_type.get().get_name())
-                        }).unwrap_or_else(|| "-".into());
+                            format!(
+                                    "{:?}/{}", hrg.v_type.get().get_metatype(), hrg.v_type.get().get_name()
+                                )
+                        })
+                            .unwrap_or_else(|| "-".into());
                         format!("t={} h={}", own, hi)
                     };
                     for op in <rugra::block::BlockBasic as rugra::block::FlowBlock>::get_ops(bb) {
                         let op_rg = op.0.read().unwrap();
-                        let out_s = op_rg.get_out().map(|v| {
+                        let out_s = op_rg
+                            .get_out()
+                            .map(|v| {
                             let vr = v.read().unwrap();
-                            format!("vn#{}(h={}:{}:{:x},{})", vr.create_index, vr.high.as_ref().map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_else(|| "?".into()), vr.get_space().name(), vr.get_offset(), type_str(v))
-                        }).unwrap_or_default();
-                        let in_s: Vec<String> = op_rg.inrefs.iter().map(|a| {
+                            format!(
+                                    "vn#{}(h={}:{}:{:x},{})", vr.create_index, vr.high
+                                        .as_ref()
+                                        .map(|h| h.read().unwrap().get_name().to_string())
+                                        .unwrap_or_else(|| "?".into()), vr.get_space().name(), vr.get_offset(), type_str(v)
+                                )
+                        })
+                            .unwrap_or_default();
+                        let in_s: Vec<String> = op_rg
+                            .inrefs
+                            .iter()
+                            .map(|a| {
                             let vr = a.read().unwrap();
                             let extra = if vr.is_input() { ", INPUT" } else { "" };
-                            format!("vn#{}(h={}{}:{}:{:x},{})", vr.create_index, vr.high.as_ref().map(|h| h.read().unwrap().get_name().to_string()).unwrap_or_else(|| "?".into()), extra, vr.get_space().name(), vr.get_offset(), type_str(a))
-                        }).collect();
-                        let flag_s = format!("mk={} np={} nr={} outimpl={}", op_rg.is_marker(), (op_rg.flags & rugra::op::pcodeop_flags::NONPRINTING) != 0, (op_rg.flags & rugra::op::pcodeop_flags::NORETURN) != 0, op_rg.get_out().map(|o| o.read().unwrap().is_implied()).unwrap_or(false));
-                        eprintln!("[DUMP]   op @0x{:x}/{} {:?} {} stopTP={} outStopUp={} {} = ({})", op_rg.start.addr.as_u64(), op_rg.start.order, op_rg.opcode, flag_s, op_rg.stops_type_propagation(), op_rg.get_out().map(|o| o.read().unwrap().stops_up_propagation()).unwrap_or(false), out_s, in_s.join(", "));
+                            format!(
+                                    "vn#{}(h={}{}:{}:{:x},{})", vr.create_index, vr.high
+                                        .as_ref()
+                                        .map(|h| h.read().unwrap().get_name().to_string())
+                                        .unwrap_or_else(|| "?".into()), extra, vr.get_space().name(), vr.get_offset(), type_str(a)
+                                )
+                        })
+                            .collect();
+                        let flag_s = format!(
+                            "mk={} np={} nr={} outimpl={}", op_rg.is_marker(), (op_rg.flags & rugra::op::pcodeop_flags::NONPRINTING) != 0, (op_rg.flags & rugra::op::pcodeop_flags::NORETURN) != 0, op_rg
+                                .get_out()
+                                .map(|o| o.read().unwrap().is_implied())
+                                .unwrap_or(false)
+                        );
+                        eprintln!(
+                            "[DUMP]   op @0x{:x}/{} {:?} {} stopTP={} outStopUp={} {} = ({})", op_rg.start.addr.as_u64(), op_rg.start.order, op_rg.opcode, flag_s, op_rg.stops_type_propagation(), op_rg
+                                .get_out()
+                                .map(|o| o.read().unwrap().stops_up_propagation())
+                                .unwrap_or(false), out_s, in_s.join(", ")
+                        );
                     }
                 }
             }
@@ -3133,9 +3218,11 @@ fn run_isolated_worker(
         Ok(Err(error)) => Err(error.to_string()),
         Err(_) => Err("stderr reader thread panicked".to_string()),
     };
-    let stderr = stderr_result.as_ref().cloned().unwrap_or_else(|error| {
-        format!("[WORKER-STDERR-ERROR] {error}\n").into_bytes()
-    });
+    let stderr = stderr_result
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|error| format!("[WORKER-STDERR-ERROR] {error}\n").into_bytes()
+    );
 
     if let Some(error) = cleanup_error {
         return WorkerRun {
@@ -3450,10 +3537,10 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                             // Size-0 symbols (deregister_tm_clones etc.) are
                             // kept too: the golden corpus merge below prefers
                             // the ELF name and falls back to the ledger size.
-                            elf_function_symbols.insert(
+                            elf_function_symbols
+                                .insert(
                                 sym.st_value,
-                                (name.to_string(), sym.st_size as usize),
-                            );
+                                (name.to_string(), sym.st_size as usize));
                         }
                     }
                 }
@@ -3529,8 +3616,7 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     let disp = i32::from_le_bytes([
-                        insn[7], insn[8], insn[9], insn[10],
-                    ]) as i64;
+                        insn[7], insn[8], insn[9], insn[10]]) as i64;
                     let got_addr = (slot_vaddr + slot as u64 + 11) as i64 + disp;
                     // x86-64 uses RELA dynamic relocations (.rela.dyn);
                     // fall back to the Rel form for completeness.
@@ -3808,7 +3894,9 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                 // suffixes intact), size from the ledger.
                 (elf_name.clone(), ledger_size, FunctionOrigin::LedgerEntry)
             }
-            None => (ledger_name.to_string(), ledger_size, FunctionOrigin::LedgerEntry),
+            None => (
+                ledger_name.to_string(), ledger_size, FunctionOrigin::LedgerEntry,
+            ),
         };
         functions.push(FuncInfo {
             vaddr: ledger_vaddr,
@@ -3900,9 +3988,14 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    eprintln!("[PREPASS] Collected {} function prototypes:", prototype_db.len());
+    eprintln!(
+        "[PREPASS] Collected {} function prototypes:", prototype_db.len()
+    );
     for (&addr, &count) in prototype_db.iter().take(30) {
-        let name = symbol_table.get(&addr).cloned().unwrap_or_else(|| format!("FUN_{:08x}", addr));
+        let name = symbol_table
+            .get(&addr)
+            .cloned()
+            .unwrap_or_else(|| format!("FUN_{:08x}", addr));
         eprintln!("[PREPASS]   {} @ 0x{:x}: {} params", name, addr, count);
     }
 
@@ -4330,7 +4423,9 @@ mod flow_noreturn_data_tests {
     /// (`longjmp_chk`, `ZN10__cxxabiv111__terminateEPFvvE`).
     #[test]
     fn strips_all_leading_underscores() {
-        assert_eq!(strip_leading_underscores("__stack_chk_fail"), "stack_chk_fail");
+        assert_eq!(
+            strip_leading_underscores("__stack_chk_fail"), "stack_chk_fail"
+        );
         assert_eq!(strip_leading_underscores("_exit"), "exit");
         assert_eq!(strip_leading_underscores("___pthread_exit"), "pthread_exit");
         assert_eq!(strip_leading_underscores("exit"), "exit");
@@ -4400,7 +4495,9 @@ mod flow_noreturn_data_tests {
             "_ZN5Menu5_exitEv",   // mangled method: Menu::_exit() — the
                                   // namespace guard's protected class
         ] {
-            assert!(!is_known_no_return(name), "{name} must NOT classify no-return");
+            assert!(
+                !is_known_no_return(name), "{name} must NOT classify no-return"
+            );
         }
     }
 
@@ -4427,7 +4524,9 @@ mod flow_noreturn_data_tests {
             }
         }
         let expected: BTreeSet<String> =
-            ["exit".to_string(), "__stack_chk_fail".to_string()].into_iter().collect();
+            ["exit".to_string(), "__stack_chk_fail".to_string()]
+            .into_iter()
+            .collect();
         assert_eq!(matched, expected);
     }
 
@@ -4438,7 +4537,9 @@ mod flow_noreturn_data_tests {
     fn list_stays_faithful_to_oracle_data_file() {
         assert_eq!(KNOWN_NO_RETURN_ELF_NAMES.len(), 21);
         for name in KNOWN_NO_RETURN_ELF_NAMES {
-            assert!(!name.starts_with('_'), "{name} must not carry a leading '_'");
+            assert!(
+                !name.starts_with('_'), "{name} must not carry a leading '_'"
+            );
             assert!(!name.ends_with('*'), "{name} must not be a wildcard entry");
             assert_eq!(name, name.trim(), "{name} must be pre-trimmed");
         }
@@ -4495,7 +4596,9 @@ mod flow_noreturn_data_tests {
         assert_eq!(table.len(), 3);
         for &address in &[0x2380u64, 0x2400, 0x2440] {
             let proto = &table[&address];
-            assert!(proto.is_no_return(), "entry 0x{address:x} must be no-return");
+            assert!(
+                proto.is_no_return(), "entry 0x{address:x} must be no-return"
+            );
             assert!(!proto.is_inline());
             assert!(!proto.has_model());
             assert_eq!(proto.num_params(), 0);

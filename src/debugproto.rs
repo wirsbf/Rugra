@@ -165,7 +165,11 @@ impl DebugGlobalDatabase {
     pub fn address_pointer_map(&self) -> HashMap<u64, Arc<Datatype>> {
         self.globals
             .values()
-            .map(|global| (global.address, global_address_type(global, self.address_size)))
+            .map(|global| {
+                (
+                    global.address, global_address_type(global, self.address_size),
+                )
+            })
             .collect()
     }
 }
@@ -373,7 +377,9 @@ impl DebugPrototypeDatabase {
         model_carrier: &FuncProto,
     ) -> Result<FuncProto> {
         if !model_carrier.has_model() {
-            bail!("DWARF prototype {} has no bound ProtoModel", debug_proto.name);
+            bail!(
+                "DWARF prototype {} has no bound ProtoModel", debug_proto.name
+            );
         }
         let mut proto = FuncProto::from_model_carrier(
             model_carrier,
@@ -482,10 +488,14 @@ impl Default for LibcSignatureTable {
             ("fopen", "FILE *", "char *__filename,char *__modes"),
             ("fgets", "char *", "char *__s,int __n,FILE *__stream"),
             ("fputc", "int", "int __c,FILE *__stream"),
-            ("fwrite", "size_t", "void *__ptr,size_t __size,size_t __n,FILE *__s"),
+            (
+                "fwrite", "size_t", "void *__ptr,size_t __size,size_t __n,FILE *__s",
+            ),
             ("exit", "void", "int __status"),
             ("time", "time_t", "time_t *__timer"),
-            ("__xstat", "int", "int __ver,char *__filename,stat *__stat_buf"),
+            (
+                "__xstat", "int", "int __ver,char *__filename,stat *__stat_buf",
+            ),
             ("__ctype_b_loc", "ushort **", ""),
         ];
         Self {
@@ -575,7 +585,10 @@ impl LibcSignatureTable {
         let mut proto = FuncProto::from_model_carrier(
             model_carrier,
             name.to_string(),
-            pieces.out_type.clone().expect("libc prototype always has output type"),
+            pieces
+                .out_type
+                .clone()
+                .expect("libc prototype always has output type"),
         );
         proto.name = name.to_string();
         proto.update_all_types_from_pieces(&pieces);
@@ -641,9 +654,12 @@ fn parse_c_type(
             0,
             TypeMetatype::Void,
         ))),
-        "char" => Arc::new(Datatype::Base(TypeBase::new(
+        // The generic_clib Program-database type named `char` is Ghidra's
+        // character datatype, not a same-sized plain integer.  The C++
+        // decompiler receives it as TypeChar (type.hh:348-357), whose
+        // `chartype` flag drives PrintC::pushConstant.
+        "char" => Arc::new(Datatype::Base(TypeBase::new_char(
             "char".to_string(),
-            1,
             TypeMetatype::Int,
         ))),
         "int" => Arc::new(Datatype::Base(TypeBase::new(
@@ -791,7 +807,8 @@ fn read_prototype_children(
             Some(type_offset) => resolve_type(dwarf, unit, type_offset, 0, &mut Vec::new())?,
             None => unknown_type(unit.encoding().address_size as usize),
         };
-        parameters.push(DebugParameter { name, name_locked, data_type });
+        parameters.push(DebugParameter { name, name_locked, data_type ,
+        });
     }
     Ok((parameters, is_varargs))
 }
@@ -878,14 +895,11 @@ fn resolve_type_inner(
     let name = entry_string(dwarf, unit, &entry, gimli::DW_AT_name)?;
     let referenced = entry_reference(unit, &entry, gimli::DW_AT_type)?;
     match entry.tag() {
-        gimli::DW_TAG_base_type => {
-            let metatype = base_metatype(&entry)?;
-            Ok(base_type(
+        gimli::DW_TAG_base_type => dwarf_base_type(
                 name.unwrap_or_else(|| "int".to_string()),
                 size.unwrap_or(4),
-                metatype,
-            ))
-        }
+                &entry,
+        ),
         gimli::DW_TAG_pointer_type
         | gimli::DW_TAG_reference_type
         | gimli::DW_TAG_rvalue_reference_type => {
@@ -985,11 +999,12 @@ fn shallow_type(
         .and_then(|value| value.udata_value())
         .map(|value| value as usize);
     match entry.tag() {
-        gimli::DW_TAG_base_type => Ok(base_type(
-            "int".to_string(),
+        gimli::DW_TAG_base_type => dwarf_base_type(
+            entry_string(dwarf, unit, entry, gimli::DW_AT_name)?
+                .unwrap_or_else(|| "int".to_string()),
             size.unwrap_or(4),
-            base_metatype(entry)?,
-        )),
+            entry,
+        ),
         gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type => Ok(base_type(
             format!("struct_{:x}", offset.0),
             size.unwrap_or(0),
@@ -1087,6 +1102,39 @@ fn base_metatype(entry: &DebuggingInformationEntry<DwarfReader>) -> Result<TypeM
         }
         _ => TypeMetatype::Int,
     })
+}
+
+// RUGRA-GLUE: materializes the Program database base type selected by the
+// locked Ghidra DWARF analyzer before the C++ decompiler receives it.
+fn dwarf_base_type(
+    name: String,
+    size: usize,
+    entry: &DebuggingInformationEntry<DwarfReader>,
+) -> Result<Arc<Datatype>> {
+    let encoding = entry.attr_value(gimli::DW_AT_encoding)?;
+    let metatype = base_metatype(entry)?;
+    let is_signed_character_encoding = matches!(
+        encoding,
+        Some(AttributeValue::Encoding(value))
+            if value == gimli::DW_ATE_signed_char
+    );
+    // DWARFDataTypeManager::getBaseType resolves the core names `char` and
+    // `signed char` to CharDataType before its encoding fallback.  Its
+    // DW_ATE_signed_char fallback is also CharDataType, whereas
+    // DW_ATE_unsigned_char resolves to the ordinary unsigned `uchar` type.
+    let is_direct_character_name = size == 1 && matches!(name.as_str(), "char" | "signed char");
+    if is_direct_character_name || is_signed_character_encoding {
+        let resolved_name = if is_direct_character_name {
+            "char".to_string()
+        } else {
+            name
+        };
+        return Ok(Arc::new(Datatype::Base(TypeBase::new_char(
+            resolved_name,
+            TypeMetatype::Int,
+        ))));
+    }
+    Ok(base_type(name, size, metatype))
 }
 
 // RUGRA-GLUE: reads direct DW_TAG_member children (DIE order = declaration order), resolving each member's DW_AT_type and DW_AT_data_member_location exactly as Ghidra's DWARF analyzer builds composite fields
@@ -1266,29 +1314,23 @@ fn enum_type(name: String, size: usize, values: BTreeMap<u64, String>) -> Arc<Da
 
 // RUGRA-GLUE: materializes a DWARF typedef as the underlying composite/enum renamed to the typedef spelling; Rugra's Datatype enum has no TypeTypedef variant yet (Ghidra type.hh has one), so fields and enumerator names are carried on the renamed type
 fn materialized_alias(name: String, inner: &Datatype) -> Result<Arc<Datatype>> {
-    match inner {
-        Datatype::Struct(composite) => Ok(struct_type(
-            name,
-            composite.base.size,
-            composite.fields.clone(),
-        )),
-        Datatype::Union(composite) => Ok(union_type(
-            name,
-            composite.base.size,
-            composite.fields.clone(),
-        )),
-        Datatype::Enum(enumeration) => Ok(enum_type(
-            name,
-            enumeration.base.size,
-            enumeration.values.clone(),
-        )),
-        _ => Ok(alias_type(name, inner)),
-    }
+    Ok(alias_type(name, inner ))
 }
 
-// RUGRA-GLUE: preserves a DWARF typedef/qualifier spelling while carrying its resolved size and metatype into FuncProto
+// RUGRA-GLUE: preserves a DWARF typedef/qualifier spelling by cloning the
+// resolved concrete datatype and changing only its name/id/core flag, matching
+// the shape/flag-preserving clone portion of TypeFactory::getTypedef
+// (type.cc:3818-3840). This retains TypeChar's chartype/submeta state and the
+// full pointer/array/composite shape. Architecture-owned canonical insertion
+// remains a separately tracked importer boundary.
 fn alias_type(name: String, inner: &Datatype) -> Arc<Datatype> {
-    base_type(name, inner.get_size(), inner.get_metatype())
+    let mut alias = inner.clone();
+    let base = alias.base_record_mut();
+    base.name = name.clone();
+    base.display_name = name.clone();
+    base.id = Datatype::hash_name(&name);
+    base.flags &= !crate::type_system::datatype::type_flags::CORETYPE;
+    Arc::new(alias)
 }
 
 // RUGRA-GLUE: constructs a pointer Datatype from a resolved DWARF pointee at the native debug-import boundary
@@ -1362,7 +1404,9 @@ mod tests {
 
     impl crate::pcodeparse::SleighSymbolLookup for TestSpecHost {
         fn find_symbol(&self, name: &str) -> Option<crate::pcodeparse::SleighSymbol> {
-            self.registers.get(name).map(|data| crate::pcodeparse::SleighSymbol {
+            self.registers
+                .get(name)
+                .map(|data| crate::pcodeparse::SleighSymbol {
                 name: name.to_string(),
                 kind: crate::pcodeparse::SleightSymbolKind::Varnode(
                     crate::varnode::VarnodeData {
@@ -1417,7 +1461,9 @@ mod tests {
             .expect("decode default ProtoModel");
         let mut carrier = FuncProto::new("carrier".to_string(), void_type());
         carrier.set_model(Some(
-            arch.defaultfp.clone().expect("default x86-64 gcc ProtoModel"),
+            arch.defaultfp
+                .clone()
+                .expect("default x86-64 gcc ProtoModel"),
         ));
         carrier
     }
@@ -1465,6 +1511,14 @@ mod tests {
         assert_eq!(strdup.return_type.get_metatype(), TypeMetatype::Pointer);
         assert_eq!(strdup.return_type.get_size(), 8);
         assert_eq!(strdup.get_param(0).unwrap().address.as_u64(), 0x38);
+
+        match strdup.get_param(0).unwrap().data_type.as_ref() {
+            Datatype::Pointer(pointer) => {
+                assert!(pointer.ptr_to.is_char_print());
+                assert_eq!(pointer.ptr_to.get_name(), "char");
+            }
+            other => panic!("strdup parameter is not a pointer: {other:?}"),
+        }
 
         // strtol: long return, (char*, char**, int) at RDI/RSI/RDX.
         let strtol = table
@@ -1533,6 +1587,14 @@ mod tests {
         assert_eq!(getstr.parameters[0].name, "string");
         assert_eq!(getstr.parameters[1].name, "value");
 
+        match getstr.parameters[1].data_type.as_ref() {
+            Datatype::Pointer(pointer) => {
+                assert_eq!(pointer.ptr_to.get_name(), "char");
+                assert!(pointer.ptr_to.is_char_print());
+            }
+            other => panic!("GetStr value parameter is not a pointer: {other:?}"),
+        }
+
         let progress = db.get(0x34d0).expect("myprogress prototype");
         assert_eq!(progress.parameters.len(), 5);
         assert_eq!(progress.parameters[0].name, "clientp");
@@ -1598,7 +1660,9 @@ mod tests {
         let map = db.address_pointer_map();
         assert_eq!(map.len(), 5);
         assert_eq!(
-            map.get(&0x17660).expect("glob_expand address type").get_name(),
+            map.get(&0x17660)
+                .expect("glob_expand address type")
+                .get_name(),
             "URLGlob **"
         );
         assert_eq!(
@@ -1617,6 +1681,28 @@ mod tests {
                 .get_name(),
             "int *"
         );
+    }
+
+    #[test]
+    fn typedef_and_qualifier_aliases_preserve_character_semantics_and_shape() {
+        let character = Datatype::Base(TypeBase::new_char("char".to_string(), TypeMetatype::Int));
+        let qualified = alias_type("const char".to_string(), &character);
+        assert!(qualified.is_char_print());
+        assert_eq!(qualified.get_name(), "const char");
+
+        let pointer = Datatype::Pointer(TypePointer {
+            base: TypeBase::new("char *".to_string(), 8, TypeMetatype::Pointer),
+            ptr_to: Arc::new(character),
+            wordsize: 1,
+        });
+        let alias = alias_type("char_ptr".to_string(), &pointer);
+        match alias.as_ref() {
+            Datatype::Pointer(pointer) => {
+                assert_eq!(pointer.ptr_to.get_name(), "char");
+                assert!(pointer.ptr_to.is_char_print());
+            }
+            other => panic!("pointer typedef lost its concrete shape: {other:?}"),
+        }
     }
 
     // CALLSPEC-ENV-SCOPE-0001: the call-site half of the DWARF boundary —
@@ -1689,7 +1775,9 @@ mod tests {
         let bytes = std::fs::read("examples/curl").expect("curl fixture");
         let db = DebugPrototypeDatabase::parse_elf(&bytes).expect("DWARF prototypes");
         for (name, address) in
-            [("main_init", 0x4960u64), ("main_free", 0x4970), ("hugehelp", 0x4a00)]
+            [
+            ("main_init", 0x4960u64), ("main_free", 0x4970), ("hugehelp", 0x4a00),
+        ]
         {
             let mut fd = Funcdata::new(name, Address::new(address), 8);
             // Simulate the post-set_arch default-model binding the worker

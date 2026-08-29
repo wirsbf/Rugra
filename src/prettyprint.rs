@@ -82,6 +82,22 @@ pub trait Emit {
     // RUGRA-GLUE: tag_variable (no Ghidra counterpart found)
     /// Tag a variable name for markup
     fn tag_variable(&mut self, text: &str, _id: u64);
+    // RUGRA-GLUE: exact metadata bridge for EmitMarkup::tagVariable (prettyprint.hh:240)
+    /// Emit a variable token with the complete metadata carried by Ghidra's
+    /// `tagVariable(name, highlight, vn, op)` call.  Legacy emitters delegate
+    /// to their existing text/id path; metadata-aware fixtures and emitters
+    /// can override this without losing the Varnode creation index, PcodeOp
+    /// time, or highlight before the low-level emission boundary.
+    fn tag_variable_with_metadata(
+        &mut self,
+        text: &str,
+        highlight: crate::printlanguage::SyntaxHighlight,
+        varnode_id: i64,
+        op_id: i64,
+    ) {
+        let _ = (highlight, op_id);
+        self.tag_variable(text, u64::try_from(varnode_id).unwrap_or(0));
+    }
     // RUGRA-GLUE: tag_op (no Ghidra counterpart found)
     /// Tag an operator for markup
     fn tag_op(&mut self, text: &str);
@@ -240,8 +256,13 @@ fn reconcile_pointer_arith(line: &str) -> String {
                 // Verify the operand after the operator is an integer.
                 let after_op = op_pos + needle.len();
                 let rest = &line[after_op..];
-                let int_len = rest.bytes().take_while(|b| b.is_ascii_digit() || *b == b'x'
-                    || (*b >= b'a' && *b <= b'f') || *b == b' ').count();
+                let int_len = rest
+                    .bytes()
+                    .take_while(|b| {
+                        b.is_ascii_digit() || *b == b'x'
+                    || (*b >= b'a' && *b <= b'f') || *b == b' '
+                    })
+                    .count();
                 let int_part = rest[..int_len].trim();
                 let is_int = !int_part.is_empty()
                     && (int_part.chars().all(|c| c.is_ascii_digit())
@@ -253,7 +274,9 @@ fn reconcile_pointer_arith(line: &str) -> String {
                         b' ' | b'=' | b'(' | b',' | b'\t');
                     if sep_ok {
                         // Insert (long) before var_name.
-                        let new_line = format!("{}(long){}{}", &line[..var_start], var_name, &line[var_end..]);
+                        let new_line = format!(
+                            "{}(long){}{}", &line[..var_start], var_name, &line[var_end..]
+                        );
                         return reconcile_pointer_arith(&new_line); // recurse for more
                     }
                 }
@@ -446,7 +469,7 @@ impl EmitNoMarkup {
             let t = line.trim();
             // Count goto references
             if let Some(pos) = t.find("goto LAB_") {
-                let rest = &t[pos+5..]; // "LAB_xxxx;"
+                let rest = &t[pos + 5..]; // "LAB_xxxx;"
                 if let Some(semi) = rest.find(';') {
                     let label = rest[..semi].to_string();
                     *goto_targets.entry(label).or_insert(0) += 1;
@@ -454,13 +477,14 @@ impl EmitNoMarkup {
             }
             // Track label definitions
             if t.starts_with("LAB_") && t.ends_with(':') && !t.contains(' ') {
-                let label = t[..t.len()-1].to_string();
+                let label = t[..t.len() - 1].to_string();
                 defined_labels.insert(label);
             }
         }
         // Find undefined labels (no label definition in output) — these are "exit gotos"
         // Any goto to a non-existent label is effectively a break/return
-        let exit_labels: std::collections::HashSet<String> = goto_targets.iter()
+        let exit_labels: std::collections::HashSet<String> = goto_targets
+            .iter()
             .filter(|(name, _count)| !defined_labels.contains(*name))
             .map(|(name, _)| name.clone())
             .collect();
@@ -470,7 +494,7 @@ impl EmitNoMarkup {
 
             // Pattern 1: `goto LAB_XXXX;` followed by `LAB_XXXX:` (possibly with } between)
             if trimmed.starts_with("goto LAB_") && trimmed.ends_with(';') {
-                let label_name = &trimmed[5..trimmed.len()-1];
+                let label_name = &trimmed[5..trimmed.len() - 1];
                 let expected_label = format!("{}:", label_name);
 
                 // Look ahead for the label (skip empty lines and closing braces)
@@ -513,11 +537,11 @@ impl EmitNoMarkup {
             // Convert to `if (cond) break;` or `if (cond) return;`
             if trimmed.contains(") goto ") && trimmed.ends_with(';') {
                 if let Some(goto_pos) = trimmed.find(") goto ") {
-                    let label_with_semi = &trimmed[goto_pos+7..];
-                    let label_name = &label_with_semi[..label_with_semi.len()-1];
+                    let label_with_semi = &trimmed[goto_pos + 7..];
+                    let label_name = &label_with_semi[..label_with_semi.len() - 1];
                     if exit_labels.contains(label_name) {
                         let indent = lines[i].len() - lines[i].trim_start().len();
-                        let cond_part = &trimmed[..goto_pos+1]; // "if (cond)"
+                        let cond_part = &trimmed[..goto_pos + 1]; // "if (cond)"
                         let indent_str: String = " ".repeat(indent);
                         let has_loop_ctx = Self::has_enclosing_loop_ctx(&result, indent);
                         if indent >= 4 && has_loop_ctx {
@@ -543,11 +567,10 @@ impl EmitNoMarkup {
         for line in &result_lines {
             let trimmed = line.trim();
             if trimmed.starts_with("LAB_") && trimmed.ends_with(':') {
-                let label_name = &trimmed[..trimmed.len()-1];
+                let label_name = &trimmed[..trimmed.len() - 1];
                 let goto_ref = format!("goto {};", label_name);
-                let is_referenced = result_lines.iter().any(|l| {
-                    l.trim().contains(&goto_ref)
-                });
+                let is_referenced = result_lines.iter().any(|l| l.trim().contains(&goto_ref)
+                );
                 if !is_referenced {
                     continue;
                 }
@@ -585,7 +608,7 @@ impl EmitNoMarkup {
             for (idx, line) in looped.iter().enumerate() {
                 let t = line.trim();
                 if t.starts_with("LAB_") && t.ends_with(':') && !t.contains(' ') {
-                    label_lines.insert(t[..t.len()-1].to_string(), idx);
+                    label_lines.insert(t[..t.len() - 1].to_string(), idx);
                 }
             }
 
@@ -603,7 +626,7 @@ impl EmitNoMarkup {
 
                 // Check for backward goto (plain): `goto LAB_X;` where LAB_X is above
                 if trimmed.starts_with("goto LAB_") && trimmed.ends_with(';') {
-                    let label_name = &trimmed[5..trimmed.len()-1];
+                    let label_name = &trimmed[5..trimmed.len() - 1];
                     if let Some(&label_line) = label_lines.get(label_name) {
                         if label_line < li {
                             let goto_indent = looped[li].len() - looped[li].trim_start().len();
@@ -623,9 +646,13 @@ impl EmitNoMarkup {
                                 }
                                 if let Some(lp) = label_pos {
                                     let goto_ref = format!("goto {};", label_name);
-                                    let other_refs = looped.iter().enumerate().filter(|(idx, l)| {
+                                    let other_refs = looped
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(idx, l)| {
                                         *idx != li && l.trim().contains(&goto_ref)
-                                    }).count();
+                                    })
+                                        .count();
                                     
                                     if other_refs == 0 {
                                         new_lines[lp] = format!("{}while (true) {{", indent_str);
@@ -648,14 +675,14 @@ impl EmitNoMarkup {
                 // Check for backward conditional goto: `if (cond) goto LAB_X;`
                 if trimmed.contains(") goto ") && trimmed.ends_with(';') {
                     if let Some(goto_pos) = trimmed.find(") goto ") {
-                        let label_with_semi = &trimmed[goto_pos+7..];
-                        let label_name = &label_with_semi[..label_with_semi.len()-1];
+                        let label_with_semi = &trimmed[goto_pos + 7..];
+                        let label_name = &label_with_semi[..label_with_semi.len() - 1];
                         if let Some(&label_line) = label_lines.get(label_name) {
                             if label_line < li {
                                 let goto_indent = looped[li].len() - looped[li].trim_start().len();
                                 let label_indent = looped[label_line].len() - looped[label_line].trim_start().len();
                                 let indent_str: String = " ".repeat(goto_indent);
-                                let cond_part = &trimmed[..goto_pos+1];
+                                let cond_part = &trimmed[..goto_pos + 1];
                                 
                                 // Safety: only convert if label and goto at same indent
                                 if goto_indent == label_indent {
@@ -669,24 +696,32 @@ impl EmitNoMarkup {
                                     }
                                     if let Some(lp) = label_pos {
                                         let goto_ref = format!("goto {};", label_name);
-                                        let other_refs = looped.iter().enumerate().filter(|(idx, l)| {
+                                        let other_refs = looped
+                                            .iter()
+                                            .enumerate()
+                                            .filter(|(idx, l)| {
                                             *idx != li && l.trim().contains(&goto_ref)
-                                        }).count();
+                                        })
+                                            .count();
                                         
                                         let cond = if cond_part.starts_with("if (") && cond_part.ends_with(')') {
-                                            &cond_part[4..cond_part.len()-1]
+                                            &cond_part[4..cond_part.len() - 1]
                                         } else {
                                             "true"
                                         };
                                         
                                         if other_refs == 0 {
                                             new_lines[lp] = format!("{}do {{", indent_str);
-                                            new_lines.push(format!("{}}} while ({});", indent_str, cond));
+                                            new_lines.push(format!(
+                                                "{}}} while ({});", indent_str, cond
+                                            ));
                                             changed = true;
                                             li += 1;
                                             continue;
                                         } else {
-                                            new_lines.push(format!("{}{} continue;", indent_str, cond_part));
+                                            new_lines.push(format!(
+                                                "{}{} continue;", indent_str, cond_part
+                                            ));
                                             changed = true;
                                             li += 1;
                                             continue;
@@ -711,7 +746,7 @@ impl EmitNoMarkup {
         for line in &looped {
             let trimmed = line.trim();
             if trimmed.starts_with("LAB_") && trimmed.ends_with(':') && !trimmed.contains(' ') {
-                let label_name = &trimmed[..trimmed.len()-1];
+                let label_name = &trimmed[..trimmed.len() - 1];
                 let goto_ref = format!("goto {};", label_name);
                 let is_referenced = looped.iter().any(|l| l.trim().contains(&goto_ref));
                 if !is_referenced {
@@ -736,7 +771,7 @@ impl EmitNoMarkup {
                         let var_name = &t[..eq_pos];
                         // Must be a simple uVarNNN name
                         if var_name.chars().skip(4).all(|c| c.is_ascii_digit()) {
-                            let rhs = t[eq_pos+3..].trim_end_matches(';').to_string();
+                            let rhs = t[eq_pos + 3..].trim_end_matches(';').to_string();
                             // Skip if RHS is a function call (contains "(" but not just "(")
                             // We inline these since they're just value assignments
                             assignments.push((idx, var_name.to_string(), rhs));
@@ -879,9 +914,11 @@ impl EmitNoMarkup {
 
             // 3. Arithmetic simplification: "+ -N" → "- N"
             while let Some(pos) = s.find("+ -") {
-                let after = &s[pos+3..];
+                let after = &s[pos + 3..];
                 // Find the number
-                let num_end = after.find(|c: char| !c.is_ascii_digit()).unwrap_or(after.len());
+                let num_end = after
+                    .find(|c: char| !c.is_ascii_digit())
+                    .unwrap_or(after.len());
                 if num_end > 0 {
                     let num = &after[..num_end];
                     s = format!("{}- {}{}", &s[..pos], num, &after[num_end..]);
@@ -1075,15 +1112,20 @@ impl EmitNoMarkup {
 
             // 5. "goto function_name;" where function_name is a known libc function → tail call
             if t.starts_with("goto ") && t.ends_with(';') && !t.contains("LAB_") {
-                let func_name = &t[5..t.len()-1];
+                let func_name = &t[5..t.len() - 1];
                 // Check it's a plausible function name (lowercase, no spaces).
                 // `code_r0x...` labels (PrintC::emitLabel, printc.rs code_label /
                 // printc.cc:3164-3193) are flat-mode goto TARGETS, not function
                 // names — exclude them or every flat tail goto gets rewritten
                 // into a bogus `return code_r0x...();` call (which gcc rejects
                 // as an implicit-function-declaration of a label).
-                if func_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                    && func_name.chars().next().map_or(false, |c| c.is_ascii_lowercase())
+                if func_name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    && func_name
+                        .chars()
+                        .next()
+                        .map_or(false, |c| c.is_ascii_lowercase())
                     && !func_name.starts_with("code_")
                     && !func_name.starts_with("joined_")
                     && !func_name.starts_with("dup_")
@@ -1125,7 +1167,7 @@ impl EmitNoMarkup {
                 && t.ends_with(':')
                 && !t.contains(' ');
             if is_label_line {
-                let label_name = &t[..t.len()-1];
+                let label_name = &t[..t.len() - 1];
                 let goto_ref = format!("goto {};", label_name);
                 if all_text.contains(&goto_ref) {
                     // Referenced label — end dead zone
@@ -1192,8 +1234,7 @@ impl EmitNoMarkup {
             if Self::signature_opens_function_body(
                 t,
                 &[
-                    "int ", "void ", "long ", "byte ", "bool ", "short ",
-                ],
+                    "int ", "void ", "long ", "byte ", "bool ", "short "],
                 &alive[index + 1..],
             ) {
                 // Flush previous function
@@ -1229,15 +1270,17 @@ impl EmitNoMarkup {
         }
 
         // Thirteenth pass: split "return func();" into "func(); return;" for void functions
-        let void_funcs = ["free", "puts", "fclose", "exit", "fflush", "clearerr",
+        let void_funcs = [
+            "free", "puts", "fclose", "exit", "fflush", "clearerr",
             "rewind", "perror", "abort", "qsort", "curl_easy_cleanup",
-            "curl_slist_free_all", "curl_global_cleanup"];
+            "curl_slist_free_all", "curl_global_cleanup",
+        ];
         let mut pass13: Vec<String> = Vec::with_capacity(final_out.len());
         for line in &final_out {
             let t = line.trim();
             if t.starts_with("return ") && t.ends_with(");") {
                 // Extract function name from "return func(...);"
-                let inner = &t[7..t.len()-1]; // "func(...)"
+                let inner = &t[7..t.len() - 1]; // "func(...)"
                 if let Some(paren) = inner.find('(') {
                     let fname = &inner[..paren];
                     if void_funcs.contains(&fname) {
@@ -1862,7 +1905,7 @@ impl EmitNoMarkup {
                         let after_while = &t["while ".len()..];
                         let inner = after_while.trim_end().trim_end_matches('{').trim();
                         let cond_str = if inner.starts_with('(') && inner.ends_with(')') {
-                            &inner[1..inner.len()-1]
+                            &inner[1..inner.len() - 1]
                         } else {
                             inner
                         };
@@ -1873,7 +1916,9 @@ impl EmitNoMarkup {
                             .collect();
                         if body_lines.len() == 1 {
                             // Single-statement body: emit `if (cond) stmt;` (no braces)
-                            collapsed.push(format!("{}if ({}) {}", indent_str, cond_str, body_lines[0].trim()));
+                            collapsed.push(format!(
+                                "{}if ({}) {}", indent_str, cond_str, body_lines[0].trim()
+                            ));
                         } else {
                             // Multi-line body: `if (cond) {` ... body ... `}`
                             collapsed.push(format!("{}if ({}) {{", indent_str, cond_str));
@@ -2001,10 +2046,12 @@ impl EmitNoMarkup {
         let mut var_offsets: HashMap<String, HashSet<u64>> = HashMap::new();
         let mut search = 0;
         loop {
-            let pos = match text[search..].find("*(long *)(").or_else(|| text[search..].find("*(int *)(")) {
+            let pos = match text[search..]
+                .find("*(long *)(")
+                .or_else(|| text[search..].find("*(int *)(")) {
                 Some(p) => search + p, None => break,
             };
-            let prefix_len = if &text[pos..pos+10] == "*(long *)(" { 10 } else { 9 };
+            let prefix_len = if &text[pos..pos + 10] == "*(long *)(" { 10 } else { 9 };
             let paren_start = pos + prefix_len;
             if paren_start >= text.len() { break; }
             let rest = &text[paren_start..];
@@ -2017,8 +2064,11 @@ impl EmitNoMarkup {
             let inner = rest[..close_off].trim();
             if let Some(pp) = inner.rfind(" + ") {
                 let base = inner[..pp].trim();
-                let offset_str = inner[pp+3..].trim();
-                if !base.is_empty() && base.chars().next().map_or(false, |c| c.is_ascii_alphabetic() || c == '_') {
+                let offset_str = inner[pp + 3..].trim();
+                if !base.is_empty() && base
+                        .chars()
+                        .next()
+                        .map_or(false, |c| c.is_ascii_alphabetic() || c == '_') {
                     let off_val = if let Some(h) = offset_str.strip_prefix("0x") {
                         u64::from_str_radix(h, 16).ok()
                     } else {
@@ -2039,7 +2089,9 @@ impl EmitNoMarkup {
         let mut var_struct_types: HashMap<String, String> = HashMap::new();
 
         for (var, offsets) in &var_offsets {
-            let struct_id = format!("_anon_{}", var.replace(|c: char| !c.is_alphanumeric() && c != '_', "_"));
+            let struct_id = format!(
+                "_anon_{}", var.replace(|c: char| !c.is_alphanumeric() && c != '_', "_")
+            );
             let mut members: Vec<String> = Vec::new();
             let mut prev_end: u64 = 0;
             let mut sorted_offsets: Vec<u64> = offsets.iter().copied().collect();
@@ -2051,7 +2103,9 @@ impl EmitNoMarkup {
                 members.push(format!("  long field_{:x};", off));
                 prev_end = off + 8;
             }
-            struct_decls.push(format!("typedef struct {{\n{}\n}} {};", members.join("\n"), struct_id));
+            struct_decls.push(format!(
+                "typedef struct {{\n{}\n}} {};", members.join("\n"), struct_id
+            ));
             var_struct_types.insert(var.clone(), struct_id);
         }
 
@@ -2099,10 +2153,12 @@ impl EmitNoMarkup {
             }
             // Rewrite *(long *)(var + offset) → var->field_offset
             loop {
-                let pos = match new_line.find("*(long *)(").or_else(|| new_line.find("*(int *)(")) {
+                let pos = match new_line
+                    .find("*(long *)(")
+                    .or_else(|| new_line.find("*(int *)(")) {
                     Some(p) => p, None => break,
                 };
-                let prefix_len = if &new_line[pos..pos+10] == "*(long *)(" { 10 } else { 9 };
+                let prefix_len = if &new_line[pos..pos + 10] == "*(long *)(" { 10 } else { 9 };
                 let paren_start = pos + prefix_len;
                 if paren_start >= new_line.len() { break; }
                 let rest = &new_line[paren_start..];
@@ -2116,7 +2172,7 @@ impl EmitNoMarkup {
                 let mut found = false;
                 if let Some(pp) = inner.rfind(" + ") {
                     let base = inner[..pp].trim();
-                    let offset_str = inner[pp+3..].trim();
+                    let offset_str = inner[pp + 3..].trim();
                     if var_struct_types.contains_key(base) {
                         let oc = offset_str.trim_start_matches("0x");
                         if !oc.is_empty() && oc.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -2238,9 +2294,9 @@ impl EmitNoMarkup {
                 match bytes[i] {
                     b'(' | b'[' => depth += 1,
                     b')' | b']' => depth -= 1,
-                    b'=' if depth == 0 && bytes.get(i+1) == Some(&b' ') && bytes.get(i+2) == Some(&b' ') => {
+                    b'=' if depth == 0 && bytes.get(i + 1) == Some(&b' ') && bytes.get(i + 2) == Some(&b' ') => {
                         // Make sure it's not '==' or '<=' or '>='
-                        if i > 0 && matches!(bytes[i-1], b'=' | b'<' | b'>' | b'!') {
+                        if i > 0 && matches!(bytes[i - 1], b'=' | b'<' | b'>' | b'!') {
                             // it's ==, <=, >=, != — skip
                         } else {
                             eq_pos = Some(i);
@@ -2274,8 +2330,8 @@ impl EmitNoMarkup {
                             b')' | b']' => d -= 1,
                             b' ' if d == 0 && ii + 2 < lbytes.len() => {
                                 // Check for " + ", " - ", " * " at top level
-                                if (lbytes[ii+1] == b'+' || lbytes[ii+1] == b'-' || lbytes[ii+1] == b'*')
-                                    && lbytes[ii+2] == b' '
+                                if (lbytes[ii + 1] == b'+' || lbytes[ii + 1] == b'-' || lbytes[ii + 1] == b'*')
+                                    && lbytes[ii + 2] == b' '
                                     && ii > 0
                                 {
                                     has_top_binop = true;
@@ -2328,13 +2384,17 @@ impl EmitNoMarkup {
             if t.ends_with(';') && t.contains('*') && !t.contains('(') && !t.contains("return") {
                 // Declaration like "int * piVar_0;" or "long * uVar_b0;"
                 // Extract the variable name (last token before ';', after '*')
-                let name: String = t.trim_end_matches(';')
+                let name: String = t
+                    .trim_end_matches(';')
                     .split_whitespace()
                     .last()
                     .unwrap_or("")
                     .trim_start_matches('*')
                     .to_string();
-                if !name.is_empty() && name.chars().next().map_or(false, |c| c.is_ascii_alphabetic()) {
+                if !name.is_empty() && name
+                        .chars()
+                        .next()
+                        .map_or(false, |c| c.is_ascii_alphabetic()) {
                     ptr_names.insert(name);
                 }
             }
@@ -2369,7 +2429,9 @@ impl EmitNoMarkup {
     /// Try to fix one `ptrA <op> ptrB` occurrence in the line. Returns Some(fixed)
     /// if a fix was applied, None otherwise. Scans the entire line (both LHS
     /// cast expressions and RHS).
-    fn try_fix_one_ptr_arith(line: &str, ptr_names: &std::collections::HashSet<String>) -> Option<String> {
+    fn try_fix_one_ptr_arith(
+        line: &str, ptr_names: &std::collections::HashSet<String>,
+    ) -> Option<String> {
         // Scan the entire line (not just RHS) — pointer arithmetic in cast
         // expressions like *(long *)(ptrA + ptrB) appears on the LHS.
         let scan_start = 0;
@@ -2648,7 +2710,8 @@ impl EmitNoMarkup {
                     if !t.contains('=') {
                         let indent = lines[j].len() - lines[j].trim_start().len();
                         decl_indent = indent;
-                        let name: String = t.trim_end_matches(';')
+                        let name: String = t
+                            .trim_end_matches(';')
                             .split_whitespace()
                             .last()
                             .unwrap_or("")
@@ -2741,7 +2804,8 @@ impl EmitNoMarkup {
                     if !matched { p += 1; }
                 }
             }
-            let missing: Vec<&String> = used_locals.iter()
+            let missing: Vec<&String> = used_locals
+                .iter()
                     .filter(|n| !declared.contains(*n))
                     .collect();
             // PRINTC-LEGACY-DECL-DUP-0001: the duplicate-declaration source
@@ -2836,7 +2900,10 @@ impl EmitNoMarkup {
                     while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') { j += 1; }
                     if j > id_start {
                         let name = String::from_utf8_lossy(&bytes[id_start..j]).to_string();
-                        if name.chars().next().map_or(false, |c| c.is_ascii_alphabetic() || c == '_') {
+                        if name
+                            .chars()
+                            .next()
+                            .map_or(false, |c| c.is_ascii_alphabetic() || c == '_') {
                             derefed.insert(name);
                         }
                     }
@@ -2876,7 +2943,10 @@ impl EmitNoMarkup {
                 let prefix = format!("{} ", ty);
                 if let Some(rest) = trimmed.strip_prefix(&prefix) {
                     if rest.starts_with('*') { break; } // already pointer
-                    let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+                    let name: String = rest
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                        .collect();
                     if !name.is_empty() && derefed.contains(&name) {
                         let indent_str = &line[..indent_len];
                         // Declare as `char *`: `*(char *)X` yields a char, which can be
@@ -2944,10 +3014,14 @@ impl EmitNoMarkup {
                 // Forward: parse the offset after "field_" — either hex (no 0x) or "0xN"
                 let after = &text[i + 8..];
                 let (offset_str, consumed): (&str, usize) = if after.starts_with("0x") {
-                    let hex_end = after[2..].find(|c: char| !c.is_ascii_hexdigit()).map_or(after.len(), |p| p + 2);
+                    let hex_end = after[2..]
+                        .find(|c: char| !c.is_ascii_hexdigit())
+                        .map_or(after.len(), |p| p + 2);
                     (&after[..hex_end], 8 + hex_end)
                 } else {
-                    let hex_end = after.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(after.len());
+                    let hex_end = after
+                        .find(|c: char| !c.is_ascii_hexdigit())
+                        .unwrap_or(after.len());
                     (&after[..hex_end], 8 + hex_end)
                 };
                 // Normalize offset to 0xN form
@@ -3028,7 +3102,7 @@ impl EmitNoMarkup {
         let mut bi = 0;
         while bi < blen {
             // Look for `*` followed by a word char
-            if bytes[bi] == b'*' && bi + 1 < blen && (bytes[bi+1].is_ascii_alphabetic() || bytes[bi+1] == b'_') {
+            if bytes[bi] == b'*' && bi + 1 < blen && (bytes[bi + 1].is_ascii_alphabetic() || bytes[bi + 1] == b'_') {
                 // Collect the variable name
                 let var_start = bi + 1;
                 let mut var_end = var_start;
@@ -3044,11 +3118,15 @@ impl EmitNoMarkup {
                     // Parse the offset number (hex or decimal)
                     let (offset_val, offset_len) = if after_plus.starts_with("0x") || after_plus.starts_with("0X") {
                         let hex_start = 2;
-                        let hex_end = after_plus[hex_start..].find(|c: char| !c.is_ascii_hexdigit()).map_or(after_plus.len(), |p| p + hex_start);
+                        let hex_end = after_plus[hex_start..]
+                                .find(|c: char| !c.is_ascii_hexdigit())
+                                .map_or(after_plus.len(), |p| p + hex_start);
                         let hex_str = &after_plus[hex_start..hex_end];
                         (u64::from_str_radix(hex_str, 16).ok(), hex_end)
                     } else {
-                        let num_end = after_plus.find(|c: char| !c.is_ascii_digit()).unwrap_or(after_plus.len());
+                        let num_end = after_plus
+                                .find(|c: char| !c.is_ascii_digit())
+                                .unwrap_or(after_plus.len());
                         let num_str = &after_plus[..num_end];
                         (num_str.parse::<u64>().ok(), num_end)
                     };
@@ -3097,8 +3175,8 @@ impl EmitNoMarkup {
             match b {
                 b'(' => depth += 1,
                 b')' => depth -= 1,
-                b'+' if depth == 0 && i > 0 && bytes.get(i-1) == Some(&b' ')
-                    && bytes.get(i+1) == Some(&b' ') => {
+                b'+' if depth == 0 && i > 0 && bytes.get(i - 1) == Some(&b' ')
+                    && bytes.get(i + 1) == Some(&b' ') => {
                     plus_pos = Some(i);
                     // Don't break — take the LAST one for right-associativity
                 }
@@ -3423,18 +3501,22 @@ impl EmitNoMarkup {
         }
 
         // Check which declared names appear in non-declaration lines
-        let body_text: String = func_lines.iter().enumerate()
+        let body_text: String = func_lines
+            .iter()
+            .enumerate()
             .filter(|(i, _)| !decl_indices.iter().any(|(di, _)| di == i))
             .map(|(_, l)| l.as_str())
             .collect::<Vec<_>>()
             .join("\n");
 
-        let unused: std::collections::HashSet<usize> = decl_indices.iter()
+        let unused: std::collections::HashSet<usize> = decl_indices
+            .iter()
             .filter(|(_, name)| !body_text.contains(name.as_str()))
             .map(|(i, _)| *i)
             .collect();
 
-        let declared_names: std::collections::HashSet<&str> = decl_indices.iter()
+        let declared_names: std::collections::HashSet<&str> = decl_indices
+            .iter()
             .filter(|(i, _)| !unused.contains(i))
             .map(|(_, name)| name.as_str())
             .collect();
@@ -3466,7 +3548,8 @@ impl EmitNoMarkup {
         }
 
         // Find insertion point (after last declaration, or after function signature)
-        let last_decl_idx = decl_indices.iter()
+        let last_decl_idx = decl_indices
+            .iter()
             .filter(|(i, _)| !unused.contains(i))
             .map(|(i, _)| *i)
             .max()
@@ -4038,7 +4121,8 @@ struct CircularQueue<T: Clone + Default> {
 impl<T: Clone + Default> CircularQueue<T> {
     // Ghidra: prettyprint.hh:970 circularqueue::circularqueue
     fn new(sz: usize) -> Self {
-        let mut q = CircularQueue { cache: Vec::new(), left: 1, right: 0, max: sz };
+        let mut q = CircularQueue { cache: Vec::new(), left: 1, right: 0, max: sz ,
+        };
         q.cache.resize_with(sz, T::default);
         q
     }
@@ -4162,7 +4246,8 @@ impl EmitPrettyPrint {
     /// C's `countbase++` yields the pre-increment value; `fetch_add`
     /// returns the same previous value (no +1).
     fn next_count(&self) -> i32 {
-        self.countbase.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        self.countbase
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
     // Ghidra: prettyprint.hh:346 EmitNoMarkup low-level byte write
@@ -4369,7 +4454,9 @@ impl EmitPrettyPrint {
                     self.rightotal = 1;
                 }
                 let size = -self.rightotal;
-                self.tokqueue.ref_at_mut(self.tokqueue.topref()).set_size(size);
+                self.tokqueue
+                    .ref_at_mut(self.tokqueue.topref())
+                    .set_size(size);
                 let topref = self.tokqueue.topref();
                 *self.scanqueue.push() = topref;
             }
@@ -4382,12 +4469,16 @@ impl EmitPrettyPrint {
                     // (Borrow split of the oracle's single `ref.setSize(
                     // ref.getSize() + rightotal)` — cc:762.)
                     let old_size = self.tokqueue.ref_at(popped).get_size();
-                    self.tokqueue.ref_at_mut(popped).set_size(old_size + ref_size);
+                    self.tokqueue
+                        .ref_at_mut(popped)
+                        .set_size(old_size + ref_size);
                     if ref_class == PrintClass::TokenBreak && !self.scanqueue.empty() {
                         let popped2 = self.scanqueue.pop();
                         let ref2_size = self.rightotal;
                         let old2_size = self.tokqueue.ref_at(popped2).get_size();
-                        self.tokqueue.ref_at_mut(popped2).set_size(old2_size + ref2_size);
+                        self.tokqueue
+                            .ref_at_mut(popped2)
+                            .set_size(old2_size + ref2_size);
                     }
                     if self.scanqueue.empty() {
                         self.advanceleft();
@@ -4408,10 +4499,15 @@ impl EmitPrettyPrint {
                     }
                 }
                 let size = -self.rightotal;
-                self.tokqueue.ref_at_mut(self.tokqueue.topref()).set_size(size);
+                self.tokqueue
+                    .ref_at_mut(self.tokqueue.topref())
+                    .set_size(size);
                 let topref = self.tokqueue.topref();
                 *self.scanqueue.push() = topref;
-                let n = self.tokqueue.ref_at(self.tokqueue.topref()).get_num_spaces();
+                let n = self
+                    .tokqueue
+                    .ref_at(self.tokqueue.topref())
+                    .get_num_spaces();
                 self.rightotal += n;
             }
             PrintClass::BeginIndent | PrintClass::EndIndent | PrintClass::Ignore => {
@@ -4915,12 +5011,22 @@ long match_url(char *param_1,long param_2)
         let out = EmitNoMarkup::backfill_missing_locals(input);
         // All four space spellings get long declarations (the default the
         // pre-A69 uVar-family spelling of these slots received).
-        assert!(out.contains("  long register0x00000000;\n"), "missing register0x decl:\n{}", out);
-        assert!(out.contains("  long register0x000000a0;\n"), "missing register0x dest decl:\n{}", out);
-        assert!(out.contains("  long unique0x00023b00;\n"), "missing unique0x decl:\n{}", out);
-        assert!(out.contains("  long unique0x0000aa00;\n"), "missing unique0x hex-tail decl:\n{}", out);
+        assert!(
+            out.contains("  long register0x00000000;\n"), "missing register0x decl:\n{}", out
+        );
+        assert!(
+            out.contains("  long register0x000000a0;\n"), "missing register0x dest decl:\n{}", out
+        );
+        assert!(
+            out.contains("  long unique0x00023b00;\n"), "missing unique0x decl:\n{}", out
+        );
+        assert!(
+            out.contains("  long unique0x0000aa00;\n"), "missing unique0x hex-tail decl:\n{}", out
+        );
         // Declared names are not re-injected.
-        assert_eq!(out.matches("char *piVar1;").count(), 1, "piVar1 re-declared:\n{}", out);
+        assert_eq!(
+            out.matches("char *piVar1;").count(), 1, "piVar1 re-declared:\n{}", out
+        );
         // Injections land inside the function, before the first body line.
         let decl_pos = out.find("  long unique0x00023b00;").unwrap();
         let body_pos = out.find("unique0x00023b00 = *param_1;").unwrap();
@@ -4942,11 +5048,21 @@ void f(void)
 }
 ";
         let out = EmitNoMarkup::backfill_missing_locals(input);
-        assert!(out.contains("  long stack0x0000abef;\n"), "stack0x hex tail mishandled:\n{}", out);
-        assert!(out.contains("  long ram0x00023e00;\n"), "ram0x not injected:\n{}", out);
-        assert!(out.contains("  long ram0x0000ff00;\n"), "second ram0x not injected:\n{}", out);
-        assert!(!out.contains("stack0x0000;\n"), "hex tail truncated:\n{}", out);
-        assert!(!out.contains("ram0x00023;\n"), "ram hex tail truncated:\n{}", out);
+        assert!(
+            out.contains("  long stack0x0000abef;\n"), "stack0x hex tail mishandled:\n{}", out
+        );
+        assert!(
+            out.contains("  long ram0x00023e00;\n"), "ram0x not injected:\n{}", out
+        );
+        assert!(
+            out.contains("  long ram0x0000ff00;\n"), "second ram0x not injected:\n{}", out
+        );
+        assert!(
+            !out.contains("stack0x0000;\n"), "hex tail truncated:\n{}", out
+        );
+        assert!(
+            !out.contains("ram0x00023;\n"), "ram hex tail truncated:\n{}", out
+        );
     }
 
     #[test]
@@ -4960,8 +5076,10 @@ void f(void)
 }
 ";
         let out = EmitNoMarkup::backfill_missing_locals(input);
-        assert_eq!(out.matches("long unique0x00023b00;").count(), 1,
-            "declared fallback token re-injected:\n{}", out);
+        assert_eq!(
+            out.matches("long unique0x00023b00;").count(), 1,
+            "declared fallback token re-injected:\n{}", out
+        );
     }
 
     #[test]
@@ -4977,9 +5095,15 @@ void f(void)
 }
 ";
         let out = EmitNoMarkup::backfill_missing_locals(input);
-        assert!(out.contains("  long uVar42;\n"), "uVarN no longer injected:\n{}", out);
-        assert!(out.contains("  int local_10;\n"), "local_ no longer injected:\n{}", out);
-        assert_eq!(out.matches("int bVar3;").count(), 1, "bVar3 re-declared:\n{}", out);
+        assert!(
+            out.contains("  long uVar42;\n"), "uVarN no longer injected:\n{}", out
+        );
+        assert!(
+            out.contains("  int local_10;\n"), "local_ no longer injected:\n{}", out
+        );
+        assert_eq!(
+            out.matches("int bVar3;").count(), 1, "bVar3 re-declared:\n{}", out
+        );
     }
 }
 

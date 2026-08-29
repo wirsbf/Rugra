@@ -2,9 +2,9 @@
 set -euo pipefail
 umask 077
 
-# Bilateral evidence runner for PTRSUB-OUTPUT-TOKEN-0001.  A successful
-# normal run verifies the exact two registered field mismatches; it does not
-# relabel the overall fixture as MATCH.
+# Bilateral evidence runner for PTRSUB-OUTPUT-TOKEN-0001.  A successful run
+# verifies byte-identical selected observations; it does not relabel the full
+# mapped functions or the overall fixture as MATCH.
 runner_fd=/proc/$$/fd/3
 if [[ ${1:-} != --captured ]]; then
   case ${1:-} in
@@ -46,9 +46,9 @@ cpp_fixture="$repo_root/tests/oracle/ptrsub_output_token_1204.cc"
 rust_fixture="$repo_root/tests/oracle/ptrsub_output_token_1204.rs"
 ghidra_entry="$repo_root/ghidra"
 ghidra_root=$(/usr/bin/readlink -f "$ghidra_entry")
-base_commit=933de80b7c7526ae50f61ec75fe66f51787d8f6b
-base_tree=dc32d8beb4dfbc35ee2306ab0729996adeec5773
-base_src_tree=ab4471026c5603b05c1cccd078f12e22b7ce31b4
+base_commit=7e91aef6aa28cbf0a77b9812858c276cafa7fbd3
+base_tree=fd155bc4dd996000d3012c2d49f7244c3a6308ec
+base_src_tree=c6a2eb0fb690ff9ac693d12d6ea45b606bc713ae
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
@@ -136,7 +136,7 @@ trap cleanup EXIT HUP INT TERM
   "$run_root/evidence/tests/oracle/ptrsub_output_token_1204.cc"
 /usr/bin/cp -- "$rust_fixture" \
   "$run_root/evidence/tests/oracle/ptrsub_output_token_1204.rs"
-for relative in src/coreaction.rs src/space.rs src/type_system/typefactory.rs src/typeop.rs src/varnode.rs; do
+for relative in src/coreaction.rs src/space.rs src/type_system/cast.rs src/type_system/typefactory.rs src/typeop.rs src/varnode.rs; do
   /usr/bin/cp -- "$repo_root/$relative" "$run_root/evidence/$relative"
 done
 metadata="$run_root/evidence/metadata.json"
@@ -166,19 +166,20 @@ def require(label, actual, expected):
 
 require("schema", meta["schema_version"], 2)
 require("fixture", meta["fixture_id"], "PTRSUB-OUTPUT-TOKEN-0001")
-require("covered status", meta["covered_projection_status"], "MISMATCH")
+require("covered status", meta["covered_projection_status"], "MATCH")
 require("overall status", meta["overall_status"], "MISMATCH")
 require("oracle commit", meta["oracle"]["commit"], "e40ed13014025f82488b1f8f7bca566894ac376b")
 require("oracle tag", meta["oracle"]["tag"], "Ghidra_12.0.4_build")
 require("oracle cpp tree", meta["oracle"]["decompiler_cpp_tree"], "b02e230a539c65de14e50f357d0ba834d8184f4f")
 require("oracle Makefile blob", meta["oracle"]["decompiler_makefile_blob"], "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6")
-require("Rugra base commit", meta["comparand"]["rust_base_commit"], "933de80b7c7526ae50f61ec75fe66f51787d8f6b")
-require("Rugra base tree", meta["comparand"]["rust_base_tree"], "dc32d8beb4dfbc35ee2306ab0729996adeec5773")
-require("Rugra base src tree", meta["comparand"]["rust_base_src_tree"], "ab4471026c5603b05c1cccd078f12e22b7ce31b4")
+require("Rugra base commit", meta["comparand"]["rust_base_commit"], "7e91aef6aa28cbf0a77b9812858c276cafa7fbd3")
+require("Rugra base tree", meta["comparand"]["rust_base_tree"], "fd155bc4dd996000d3012c2d49f7244c3a6308ec")
+require("Rugra base src tree", meta["comparand"]["rust_base_src_tree"], "c6a2eb0fb690ff9ac693d12d6ea45b606bc713ae")
 require("runner hash", sha(runner), meta["comparand"]["runner_sha256"])
 expected_overlays = [
     "src/coreaction.rs",
     "src/space.rs",
+    "src/type_system/cast.rs",
     "src/type_system/typefactory.rs",
     "src/typeop.rs",
     "src/varnode.rs",
@@ -207,32 +208,13 @@ expected_order = [
 require("record count", meta["expected_results"]["record_count"], 24)
 require("record order", meta["expected_results"]["record_order"], expected_order)
 require("raw diff labels", meta["expected_results"]["raw_diff_labels"], ["ghidra.stdout", "rugra.stdout"])
-require("stdout bytes", meta["expected_results"]["stdout_bytes_each"], 3678)
-require("raw diff bytes", meta["expected_results"]["raw_diff_bytes"], 1425)
+require("stdout bytes", meta["expected_results"]["stdout_bytes_each"], 3740)
+require("raw diff bytes", meta["expected_results"]["raw_diff_bytes"], 0)
 require("exit codes", meta["expected_results"]["exit_codes"], {
-    "ghidra": 0, "rugra": 0, "raw_diff": 1,
-    "normal_runner": 0, "require_match_runner": 1,
+    "ghidra": 0, "rugra": 0, "raw_diff": 0,
+    "normal_runner": 0, "require_match_runner": 0,
 })
-require("known raw differences", meta["known_raw_differences"], [
-    {
-        "line": 22,
-        "record": "action_post",
-        "case": "paired",
-        "field": "result",
-        "ghidra": "0",
-        "rugra": "1",
-        "residual_id": "PIPE-ACTION-COUNT-0001C",
-    },
-    {
-        "line": 24,
-        "record": "infer_post",
-        "case": "spacebase_ptrsub_local",
-        "field": "out_identity",
-        "ghidra": "1",
-        "rugra": "0",
-        "residual_id": "ACTION-INFERTYPES-DISPATCH-0001",
-    },
-])
+require("known raw differences", meta["known_raw_differences"], [])
 manifest = meta["input_manifest"]
 require("input manifest keys", sorted(manifest["manifest"]), sorted([
     "architecture", "compiler_spec", "analysis_options", "factory_bootstrap", "types",
@@ -288,6 +270,8 @@ for name, entry in meta["host_toolchain"].items():
 PY
 
 for binding in \
+  action.cc:9a4e2e26d04d45805f14900fadcbbac01270a2f0 \
+  action.hh:e929dbb98e8e1fb23d7ac8e8d86e9f4f39fc998c \
   coreaction.cc:a392076ad23ddad3350e0fe7a2ebe96a8868f74b \
   coreaction.hh:d974875d7d71ac76121379eba139c2e8450ae8a3 \
   op.hh:7e516fdf57185c74ea4efac8d9d3b324f259ade8 \
@@ -311,7 +295,7 @@ for binding in \
 done
 
 if [[ "$mode" == validate-only ]]; then
-  echo "PTRSUB evidence pins validated; overall=MISMATCH"
+  echo "PTRSUB evidence pins validated; covered=MATCH overall=MISMATCH"
   exit 0
 fi
 
@@ -385,13 +369,13 @@ if len(lines) != exp["record_count"] or not out.read_bytes().endswith(b"\n"):
 PY
 
 if [[ "$mode" == ghidra-only ]]; then
-  echo "PTRSUB Ghidra oracle verified records=24 overall=MISMATCH"
+  echo "PTRSUB Ghidra oracle verified records=24 covered=MATCH overall=MISMATCH"
   exit 0
 fi
 
 snapshot="$run_root/rugra"
 git_clean -C "$repo_root" archive "$base_commit" | /usr/bin/tar -xf - -C "$snapshot"
-for relative in src/coreaction.rs src/space.rs src/type_system/typefactory.rs src/typeop.rs src/varnode.rs; do
+for relative in src/coreaction.rs src/space.rs src/type_system/cast.rs src/type_system/typefactory.rs src/typeop.rs src/varnode.rs; do
   /usr/bin/cp -- "$run_root/evidence/$relative" "$snapshot/$relative"
 done
 /usr/bin/mkdir -p "$snapshot/tests/oracle" \
@@ -415,7 +399,7 @@ PY
 
 cargo_target="$repo_root/target/ptrsub-output-token-oracle"
 /usr/bin/mkdir -p "$cargo_target"
-exec 9>/tmp/rugra-cargo-build.lock
+exec 9>"$cargo_target/.build.lock"
 "$host_flock" -x 9
 /usr/bin/env -i PATH=/usr/bin:/bin HOME="$user_home" CARGO_HOME="$user_home/.cargo" \
   LC_ALL=C CARGO_INCREMENTAL=0 CARGO_NET_OFFLINE=true \
@@ -449,8 +433,9 @@ set +e
   "$run_root/ghidra.1.stdout" "$run_root/rugra.1.stdout" >"$run_root/raw.diff"
 diff_rc=$?
 set -e
-if [[ $diff_rc -ne 1 ]]; then
-  echo "raw bilateral diff must reproduce the registered mismatch" >&2
+if [[ $diff_rc -ne 0 ]]; then
+  /usr/bin/cat "$run_root/raw.diff" >&2
+  echo "selected PTRSUB bilateral output must be byte-identical" >&2
   exit 1
 fi
 
@@ -484,10 +469,8 @@ if len(gout.read_bytes()) != exp["stdout_bytes_each"] or len(rout.read_bytes()) 
     raise SystemExit("stdout byte count mismatch")
 if len(rawdiff.read_bytes()) != exp["raw_diff_bytes"]:
     raise SystemExit("raw diff byte count mismatch")
-diff_header = (f"--- {exp['raw_diff_labels'][0]}\n"
-               f"+++ {exp['raw_diff_labels'][1]}\n").encode()
-if not rawdiff.read_bytes().startswith(diff_header):
-    raise SystemExit("raw diff label/header mismatch")
+if rawdiff.read_bytes():
+    raise SystemExit("raw diff must be empty for the covered MATCH projection")
 
 ORDER = [
     ("schema", "PTRSUB-OUTPUT-TOKEN-0001"),
@@ -511,7 +494,8 @@ KEYS = {
                "local_identity", "local_core"],
     "action_pre": ["case", "ops", "equal_def", "mismatch_def",
                    "equal_type", "mismatch_type"],
-    "action_post": ["case", "result", "count", "ops", "casts", "equal_same",
+    "action_post": ["case", "result", "count_before_delta", "delta_first",
+                    "count_after_delta", "delta_second", "ops", "casts", "equal_same",
                     "equal_def", "mismatch_def", "mismatch_out_same", "mid_new",
                     "mid_def", "mid_use", "cast_input_mid", "mid_implied",
                     "mid_type", "final_type"],
@@ -573,23 +557,19 @@ for side, records in (("Ghidra", grecords), ("Rugra", rrecords)):
     exact0 = dict(records[6][1])
     if exact0.get("factory_core") != expected_factory_core:
         raise SystemExit(f"{side}: factory bootstrap observation drift")
-actual = []
 for index, ((gkind, gfields), (rkind, rfields)) in enumerate(zip(grecords, rrecords)):
     if gkind != rkind or [key for key, _ in gfields] != [key for key, _ in rfields]:
         raise SystemExit(f"record shape differs on line {index + 1}")
     gd, rd = dict(gfields), dict(rfields)
-    case = gd.get("case", gd.get("fixture"))
     for key in gd:
         if gd[key] != rd[key]:
-            residual_id = {
-                (22, "result"): "PIPE-ACTION-COUNT-0001C",
-                (24, "out_identity"): "ACTION-INFERTYPES-DISPATCH-0001",
-            }.get((index + 1, key))
-            actual.append({"line": index + 1, "record": gkind, "case": case,
-                           "field": key, "ghidra": gd[key], "rugra": rd[key],
-                           "residual_id": residual_id})
-if actual != meta["known_raw_differences"]:
-    raise SystemExit(f"field mismatch set drifted: {actual!r}")
+            raise SystemExit(
+                f"field mismatch on line {index + 1}: {gkind}.{key}: "
+                f"{gd[key]!r} != {rd[key]!r}"
+            )
+actual = []
+if meta["known_raw_differences"]:
+    raise SystemExit("covered MATCH projection must have no registered raw differences")
 actual_mismatch_json = json.dumps(
     actual, sort_keys=True, separators=(",", ":"),
 ).encode()
@@ -611,14 +591,8 @@ for label, (payload, expected) in projection_checks.items():
     if hashlib.sha256(payload).hexdigest() != expected:
         raise SystemExit(f"{label} projection hash drift")
 
-needle_g = "action_post|case=paired|result=0|"
-needle_r = "action_post|case=paired|result=1|"
-masked = gout.read_text().replace(needle_g, needle_r, 1)
-needle_g = "infer_post|case=spacebase_ptrsub_local|result=0|base_spacebase=1|base_type=int8|out_type=int8|out_identity=1|"
-needle_r = "infer_post|case=spacebase_ptrsub_local|result=0|base_spacebase=1|base_type=int8|out_type=int8|out_identity=0|"
-masked = masked.replace(needle_g, needle_r, 1)
-if masked != rout.read_text():
-    raise SystemExit("masked projection is not byte-identical")
+if gout.read_bytes() != rout.read_bytes():
+    raise SystemExit("selected projection is not byte-identical")
 PY
 
 /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C "$host_python" -I -S - \
@@ -633,11 +607,5 @@ for group in ("overlay_sha256", "fixture_sha256"):
             raise SystemExit(f"post-run captured evidence drift: {relative}")
 PY
 
-if [[ "$mode" == require-match ]]; then
-  /usr/bin/cat "$run_root/raw.diff" >&2
-  echo "PTRSUB raw bilateral output remains MISMATCH" >&2
-  exit 1
-fi
-
 echo "PTRSUB evidence contract verified records=24 direct=14 scale=5 infer=1"
-echo "matched_subprojections=MATCH registered_mismatches=2 overall=MISMATCH"
+echo "covered_projection=MATCH registered_raw_mismatches=0 overall=MISMATCH"

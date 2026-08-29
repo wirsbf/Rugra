@@ -1,0 +1,225 @@
+{
+  "schema_version": 2,
+  "fixture_id": "RULE-PORT-EARLYREMOVAL-0001",
+  "covered_projection_status": "MATCH",
+  "overall_status": "MISMATCH",
+  "status_note": "The covered projection compares twelve isolated applyOp cases plus the complete 72-value live typed opcode list and one production ActionPool dispatch pass. It covers all six guards in source order, the writemask/autolive 2x2 matrix, strict pass > deadcodedelay boundaries, deadremoved's allowed-only side effect, doesDeadcode=false bypass, and full visible op/block/bank/output/def-use mutation. Overall remains MISMATCH: Ghidra Rule::getOpList also registers raw buckets 0 and 45, and a destroyed C++ PcodeOp retains nullable input arity while Rugra clears its Vec. Full manager-indexed Heritage state, late-generation warning/restart behavior, and real Architecture space inventory on the Rust side remain UNTESTED/MISMATCH.",
+  "oracle": {
+    "repository": "NationalSecurityAgency/ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "x86_language_tree": "84265e1e6fe7ac9725367b57fb861253e4915984",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+  },
+  "rugra_source": {
+    "base_commit": "7e91aef6aa28cbf0a77b9812858c276cafa7fbd3",
+    "base_tree": "fd155bc4dd996000d3012c2d49f7244c3a6308ec",
+    "base_src_tree": "c6a2eb0fb690ff9ac693d12d6ea45b606bc713ae",
+    "base_cargo_toml_blob": "f15ed7d02b38aef3c21a564641344a156855b632",
+    "base_cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "base_build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "overlays": [
+      { "path": "src/ruleaction.rs", "sha256": "3068cb4475fde5b220f884dd9f946ee391ec9445642a423e9c921c0212af031f" },
+      { "path": "src/heritage.rs", "sha256": "ab3d633d82211d04a53d640ba523b2abbbd59b8eb041b124b0da86abdc694a12" },
+      { "path": "src/space.rs", "sha256": "ce29893c5667fd72c5db18c9a65015e6e4c36a0e145c3425f67b9c15aab40ba2" },
+      { "path": "src/varnode.rs", "sha256": "06c8bffeee37c3ffc290033ba26fc069c3def9562f415ed9c7a2a4e577c8fa56" }
+    ],
+    "overlay_note": "The runner archives the fixed base then overlays exactly the four hash-pinned production files under test; src/varnode.rs is required to observe the separated writemask/addlflags state."
+  },
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": {
+    "id": "gcc",
+    "path": "sleigh_specs/x86-64-gcc.cspec",
+    "runtime_archid": "x86:LE:64:default:gcc"
+  },
+  "analysis_options": {
+    "rule": "Production RuleEarlyRemoval, direct applyOp for isolated guard cases and one production ActionPool with flags=0 for exactly one typed-dispatch pass.",
+    "heritage": "Each isolated Funcdata starts with an instrumented, read-observable Ghidra Heritage infolist, an explicit pass, and a public Funcdata::setDeadCodeDelay call. Rust uses its production HeritageInfo projection. The instrumentation only exposes buildInfoList/pass/deadremoved and does not alter applyOp or deadRemovalAllowedSeen.",
+    "ir": "Fresh Funcdata and one BlockBasic per case. Every target op is inserted through Funcdata APIs. Inputs are distinct constants; outputs are unique unless the doesDeadcode=false OTHER-space case says otherwise. The descendant guard adds one live COPY reader.",
+    "dispatch": "The typed corpus constructs numeric opcodes 1..73 excluding unused raw 45, each with zero inputs and one unused unique output. Production ActionPool dispatch is single-pass; CALL/CALLIND/CALLOTHER/NEW survive guard 1 and the other 68 ops are destroyed.",
+    "normalization": "Only records beginning residual= are excluded from the covered diff. No covered value, order, boolean, status, counter, list membership, or mutation field is normalized.",
+    "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG absent",
+    "random_seed": "none; construction and iteration are deterministic",
+    "error_injection": "none"
+  },
+  "assets": {
+    "sla": {
+      "path": "sleigh_specs/x86-64.sla",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "8bb753bbd10e9b702a40e50e8f4764dcbc56cc62",
+      "sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+      "size": 487659
+    },
+    "processor_spec": {
+      "path": "sleigh_specs/x86-64.pspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "45df40cdb84013f1475fcf5ac1ce67b900961ae3",
+      "sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+      "size": 11721
+    },
+    "compiler_spec": {
+      "path": "sleigh_specs/x86-64-gcc.cspec",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "888f56c24e769f1ec2fa95fdf53c8efa6ddc87a1",
+      "sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+      "size": 12182
+    },
+    "language_definitions": {
+      "path": "sleigh_specs/x86.ldefs",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "e39b57baeb410b529c5b1397c06526b4d32cca94",
+      "sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+      "size": 5390
+    },
+    "binary": {
+      "path": "examples/curl",
+      "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "bfd": {
+      "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
+      "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+      "header_size": 256999,
+      "library_path": "/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+      "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e",
+      "library_size": 1543224
+    }
+  },
+  "input_manifest": {
+    "binary": {
+      "path": "examples/curl",
+      "git_blob_oid": "4e26a362f92ac1961bab63000215a84b4d7212dd",
+      "sha256": "4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a",
+      "size": 162544
+    },
+    "functions": ["GetStr@0x36d0:size=0"],
+    "cases": [
+      "call_guard:pass1/delay0",
+      "indirect_guard:pass1/delay0",
+      "no_output_guard:pass1/delay0",
+      "descendant_guard:pass1/delay0",
+      "autolive_only:write0/auto1",
+      "write_and_autolive:write1/auto1",
+      "write_mask_only:write1/auto0",
+      "neither_allowed:write0/auto0/pass1/delay0",
+      "delay_zero_equal:pass0/delay0",
+      "delay_one_equal:pass1/delay1",
+      "delay_one_after:pass2/delay1",
+      "no_deadcode_other:pass0/delay0",
+      "typed_dispatch:opcodes1..73-except45"
+    ],
+    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,functions,cases}, sort_keys=True, separators=(',',':'), ensure_ascii=False)",
+    "sha256": "67c962cdf24bf10b90b59ea8bbd13d953f2060f24e35be6c532484936ae44169"
+  },
+  "observation_schema": {
+    "format": "Seventeen fixed-order UTF-8 lines with final newline; fourteen covered lines and three residual lines.",
+    "guards": "Each case records result, pass/delay, all preceding guard predicates, deadremoved, alive/dead lists, block membership, output-bank/attachment state, and input descendant transition.",
+    "dispatch": "Exact numeric typed list/order/count and production ActionPool perform/status/Rule tests/applies/alive opcodes/dead count/deadremoved.",
+    "residuals": "Raw Rule::getOpList buckets, destroyed-op nullable input arity, and full Heritage manager closure remain in stdout and force raw overall MISMATCH."
+  },
+  "decisive_semantics": {
+    "reference_output_parameters": "applyOp mutates the passed Funcdata and PcodeOp by identity. On success opDestroy deletes the exact output, unlinks every input descendant, removes the op from its exact BlockBasic/alive list, and puts it on the dead list. deadRemovalAllowedSeen mutates the exact per-space HeritageInfo only when allowed.",
+    "loop_bounds_traversal_order": "The locked source order is call, indirect-source, output, descendants, autolive, then the space/Heritage gate. The dynamic cases isolate every guard and prove each of the first five suppresses the later manager side effect; relative ordering among those otherwise-pure early returns is source-audited rather than dynamically distinguishable. Rule::getOpList iterates raw i=0 while i<CPUI_MAX(74); the covered typed projection preserves numeric order 1..73 and skips only raw 45. ActionPool traverses the 72 SeqNum-ordered live ops once.",
+    "counter_accumulator_lifecycle": "Each isolated manager begins deadremoved=0. pass and deadcodedelay are per case; allowed is strict pass>delay and sets deadremoved=1 exactly before opDestroy. Single-pass dispatch starts Rule counters at zero and accumulates 72 tests/68 applies.",
+    "sorting_comparison_keys": "Dispatch keys are numeric opcode values. Op/block/bank checks use pointer identity; no pointer value is printed or sorted. Case and operation order are construction/SeqNum order with no unordered normalization."
+  },
+  "coverage": {
+    "six_guard_sequence": {
+      "status": "MATCH",
+      "covers": "The outcomes of isCall, isIndirectSource, null output, nonempty descendants, isAutoLive, and doesDeadcode/deadRemovalAllowedSeen, including suppression of the manager side effect by each of the first five guards. Pure-guard relative ordering is not claimed as a separately distinguishable runtime observation.",
+      "residual_todo_ids": []
+    },
+    "writemask_autolive_orthogonality": {
+      "status": "MATCH",
+      "covers": "All four write-mask/autolive combinations. writemask alone does not keep an op alive; either autolive combination does.",
+      "residual_todo_ids": []
+    },
+    "pass_delay_seen_and_space": {
+      "status": "MATCH",
+      "covers": "0>0 false, 1>1 false, 1>0 true, 2>1 true; allowed-only deadremoved mutation; and OTHER doesDeadcode=false bypass without a seen mutation.",
+      "residual_todo_ids": []
+    },
+    "typed_dispatch": {
+      "status": "MATCH",
+      "covers": "All 72 Rust-representable live opcodes in numeric order and one production ActionPool pass with 72 tests, 68 destroys, CALL/CALLIND/CALLOTHER/NEW survivors.",
+      "residual_todo_ids": []
+    },
+    "raw_opcode_buckets": {
+      "status": "MISMATCH",
+      "covers": "Ghidra's inherited Rule::getOpList registers raw bucket 0 and unused bucket 45; Rust OpCode cannot represent either key.",
+      "residual_todo_ids": ["RULE-PORT-EARLYREMOVAL-0001"]
+    },
+    "nullable_input_arity": {
+      "status": "MISMATCH",
+      "covers": "After opDestroy Ghidra preserves numInput=1 with slot0 NULL; Rugra clears the input Vec to arity zero.",
+      "residual_todo_ids": ["OPBANK-0001"]
+    },
+    "full_heritage_and_architecture_manager": {
+      "status": "UNTESTED",
+      "covers": "Manager-index identity, absent/malformed spaces, reset/restart, bumpDeadcodeDelay and late-generation warnings, full BFD space flags on Rust, exceptional delay settings, and concurrent manager state are outside this fixture.",
+      "residual_todo_ids": ["HERITAGE-0001", "ARCH-0001"]
+    }
+  },
+  "residual_todo_ids": [
+    "RULE-PORT-EARLYREMOVAL-0001",
+    "OPBANK-0001",
+    "HERITAGE-0001",
+    "ARCH-0001"
+  ],
+  "comparand": {
+    "cpp_fixture_sha256": "03712f2554f28eea09118268a045cf6b0c5831f502ac620c4d4e2617f367ce6a",
+    "rust_fixture_sha256": "f7eb4af9f4f4f250592712247b035d4ec6a5dee86cc01616ba033fbb04ccd6f3",
+    "ruleaction_rs_sha256": "3068cb4475fde5b220f884dd9f946ee391ec9445642a423e9c921c0212af031f",
+    "heritage_rs_sha256": "ab3d633d82211d04a53d640ba523b2abbbd59b8eb041b124b0da86abdc694a12",
+    "space_rs_sha256": "ce29893c5667fd72c5db18c9a65015e6e4c36a0e145c3425f67b9c15aab40ba2",
+    "varnode_rs_sha256": "06c8bffeee37c3ffc290033ba26fc069c3def9562f415ed9c7a2a4e577c8fa56",
+    "runner_sha256": "05cf1a9117291548c6ae96a81849b7b25210f093bb6afac9d047ce61758c4411",
+    "ghidra_instrumentation_sha256": "ab763b7e010f69186459ed78beb43833bb2dc28a5e44f021157536946f84e753",
+    "host_cxx": "g++ (GCC) 16.2.1 20260810",
+    "host_rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
+    "host_cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
+  },
+  "expected_results": {
+    "ghidra_stdout_sha256": "b7300b9895cdc4fcf6a6e173745423fb458f39ce63c7b85e9c2aea6177f319b9",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "aa192bbf5a9868c7b82e490f4fa66592fb2257b25069639645815c139ccb933b",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ghidra_covered_sha256": "b8d27bf2181542cad1958344231cab884f954cc5e300e9a920b7c4aeb86d6532",
+    "rugra_covered_sha256": "b8d27bf2181542cad1958344231cab884f954cc5e300e9a920b7c4aeb86d6532",
+    "covered_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "cc01c0595b1ec32bc1fffc6bd497b008c05bfb0c5be39401a298795dc33c29ad",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "covered_diff_exit_code": 0,
+    "raw_diff_exit_code": 1,
+    "record_order": [
+      "case=call_guard",
+      "case=indirect_guard",
+      "case=no_output_guard",
+      "case=descendant_guard",
+      "case=autolive_only",
+      "case=write_and_autolive",
+      "case=write_mask_only",
+      "case=neither_allowed",
+      "residual=nullable_input_arity",
+      "case=delay_zero_equal",
+      "case=delay_one_equal",
+      "case=delay_one_after",
+      "case=no_deadcode_other",
+      "typed_oplist=",
+      "residual=raw_dispatch",
+      "dispatch",
+      "residual=heritage_manager_projection"
+    ]
+  },
+  "build": {
+    "ghidra": "Archive locked e40ed130 decompiler C++ tree, add hash-pinned fixture-only Heritage/Funcdata accessors, rebuild libdecomp.a, and link the fixture with pinned BFD 2.38.",
+    "rugra": "Archive fixed base 7e91aef, overlay exactly src/ruleaction.rs, src/heritage.rs, src/space.rs and the load-bearing src/varnode.rs writemask/autolive separation, build offline/locked, then compile the Rust fixture against that library.",
+    "cargo_lock": "Runner serializes only Cargo target mutation with /tmp/rugra-cargo-build.lock and uses the repository default target cache as directed by the main writer.",
+    "expected_stdout_lines": 17,
+    "covered_stdout_lines": 14
+  }
+}

@@ -1,5 +1,21 @@
 # `blockaction.rs` API Reference
 
+## 2026-08-28：条件极性与变更计数分离
+
+`ruleBlockProperIf`/`ruleBlockIfNoExit` 不再把极性塞入 Rust-only
+`BlockIf.negated`；它们在建块前调用条件对象的真实 virtual
+`negateCondition(true)`。`CollapseStructure` 同时分离内部收敛用
+`structure_change_count` 与 Ghidra 可观察的 `dataflow_changecount`，后者只在锁定
+源码中的七个成功条件取反点增加。旧 phase、CaseFallthru 和 identifyInternal
+残差继续保持整体 `MISMATCH`。
+
+`BLOCK-STRUCTURED-NEGATE-0001` 已对 13 个 base/List/Condition、双重取反、
+parallel/self-edge 与 Cat/ProperIf counter case 产生 14 行、3628 bytes 的双侧
+raw stdout `MATCH`（SHA-256 `d47ef9da438012d850b3374dddf6d54cf7bdbaaf82b145b5b7c280ab5151c57d`）。
+公开 `get_change_count()` 只读 dataflow counter；结构收敛次数不泄漏到 Action count。
+Rugra 独有的四条诊断 stderr 和完整 ProperIf/identifyInternal/parent wiring 仍明确使
+full 状态为 `MISMATCH`，独立复核只批准上述投影。
+
 **状态**: 已核对（当前有效，2026-08-28 BLOCK-BUILDCOPY-MIRROR-0001）
 **2026-08-28 追加（真实 BlockCopy/buildCopy）**: `ActionBlockStructure::apply`
 改为调用 `BlockGraph::build_copy`；不再清空结构图、创建 Basic 替身或重放边。
@@ -35,7 +51,7 @@ collapse 后累加 `CollapseStructure::getChangeCount()`；由 Rust 适配层
 E2E（curl 124 fn，fast-release + RUGRA_IRRED_DBG=1）：exit 0 / 0 panic，`selectGoto exhausted` **9→6 hits**（main、glob_word 清零；getparameter/glob_set/glob_range/match_url/next_url×1(原2)/parseconfig 残留），defects=0 / numbering=0，skeleton 3050→2742。`[IRRED]`（finaltrace 残差图 dump）/`[TD]`（TraceDAG OPEN/RETIRE/STALL/BADEDGE 决策日志）为 RUGRA_IRRED_DBG=1 环境变量门控的诊断输出（stderr）。
 **状态（前）**: 已核对（2026-08-26 BLOCKSTRUCT-GUARD-GAPS-0001 三处存量守卫缺口补齐）
 **2026-08-26 追加（BLOCKSTRUCT-GUARD-GAPS-0001）**: 补齐复核登记的三处 oracle 守卫缺口（存量债，非上一轮引入）：
-1. `try_rule_if_else` 补全 ruleBlockIfElse 守卫组（blockaction.cc:1416-1444 逐行）：cc:1422 `bl->isSwitchOut()`、cc:1423-1424 双出边 `isDecisionOut`（经 `out_edge_is_decision`，block.hh:336 = 非 irreducible/back/goto）、cc:1433-1434 共同汇合点非 cond 自身（No loops）、cc:1435 两子句 exit 同点、cc:1437-1438 子句 `isSwitchOut`、cc:1439-1440 子句 `isGotoOut(0)`。**同时修正 tc/fc 位置语义**：oracle `tc = bl->getTrueOut()` = out[1]、`fc = bl->getFalseOut()` = out[0]（block.hh:299-300，位置性；Rugra flow.rs:1045 fallthru-first 同构）——旧端口把 out[0] 读进 tc 槽、out[1] 读进 fc 槽，`new_block_if_else(..., negated=false)` 把 **false 路径子句打印在 `if` 之下**，与 oracle（此处从不 negateCondition，cc:1442）相反的 C 语义。
+1. `try_rule_if_else` 补全 ruleBlockIfElse 守卫组（blockaction.cc:1416-1444 逐行）：cc:1422 `bl->isSwitchOut()`、cc:1423-1424 双出边 `isDecisionOut`（经 `out_edge_is_decision`，block.hh:336 = 非 irreducible/back/goto）、cc:1433-1434 共同汇合点非 cond 自身（No loops）、cc:1435 两子句 exit 同点、cc:1437-1438 子句 `isSwitchOut`、cc:1439-1440 子句 `isGotoOut(0)`。**同时修正 tc/fc 位置语义**：oracle `tc = bl->getTrueOut()` = out[1]、`fc = bl->getFalseOut()` = out[0]（block.hh:299-300，位置性；Rugra flow.rs:1045 fallthru-first 同构）。当时文档中的 `new_block_if_else(..., negated=false)` 是已删除的历史签名；当前 factory 没有 `negated` 参数，必要极性变化在建块前通过 virtual `negateCondition` 完成。
 2. `try_rule_do_while` 补 cc:1562-1563 `bl->isGotoOut(0)/isGotoOut(1)` 拒绝守卫（经 `out_edge_is_goto` label 形态，结构块同样可见）：已标 unstructured 的回边/出边保持 goto，不再被 do/while 吸收。
 3. `identify_internal` 补 selfIdentify cc:925-926 `if (mybl->isSwitchOut()) setFlag(f_switch_out)` 的复合块继承：oracle 在 outofthis 外部边分支内检查——组件自身是 switch dispatch（BRANCHIND，block.cc:2287）**且**有至少一条外部出边时，复合块继承 f_switch_out（全内部 dispatch 不继承）。两处插入点 = install 块外部出边捕获相（install 块在 Ghidra -nodes- 集内，inf_loop 吸收 dispatch 的可观测场景）+ consumed 组件边界扫描相（out_boundary 非空 && 组件 SWITCH_OUT）。
 E2E（curl 124 fn，fast-release）：exit 0 / 0 panic，defects=0 / numbering=0，skeleton 3085→**3050**（−35；wip 归档口径 3051 为文件尾混入杂散 `EXIT=0` 行所致——独立冷构建重跑（flock + 专属 target）的 C 输出与 wip 归档**字节级一致**，确定性成立），`selectGoto exhausted` 8→9 hits——8 个残差函数（main/getparameter/glob_set/glob_range/glob_word/match_url/next_url/parseconfig 族，jumptable 邻域不可约环）未解锁（预期内，守卫只补拒判语义；TRI2-STRUCT-IRREDUCIBLE-TRACE-0001 继续跟踪），next_url 1→2 hits 为同一不可约邻域的两轮 collapse restart（finalize 29→11 / 30→11 双双收敛 blocks=11，不破坏）。cargo test --lib 1613 pass / 17 fail 与 FUNCDATA-TESTS-FLAKY-0001 基线同集，零回归。
@@ -51,7 +67,7 @@ E2E（curl 124 fn，fast-release）：exit 0 / 0 panic，defects=0 / numbering=0
 2. 删除自创批量 goto 标记器：`run_goto_cascade`、`select_and_mark_goto`（~200 行 case-body/cascade-chain 保护特判，无 oracle 对应）、`run_tracedag`、`apply_loop_exit_marks`。
 3. `update_loop_body` 对齐 cc:1193-1253：`loopbodyiter` 从 0 起（旧 -1 使 `(-1) as usize` 溢出跳过整个 loop 遍历）；有 loop 时 TraceDAG root=looptop 单根 + setFinishBlock(loopbottom) + **先** setExitMarks 再 trace，emitLikelyEdges 追加 LoopBody 优先边后 clearExitMarks（旧实现恒走全图 trace、循环边后置、exit marks 后置=无效）。
 4. `set_goto_branch_on_block` 对齐 setGotoBranch（block.cc:305-313）：f_goto_edge 边标签经 `set_out_edge_flag_mirrored` 同时落在 out/in 两个半边（旧只设块级 flag，目标 in 边无标 → TraceDAG 把 goto in-edge 当 DAG 边）；GOTO_EDGE_0/1 镜像 flag 对所有块类型设置。
-5. 三条规则补齐 oracle 守卫/取反：`try_rule_while_do` 实现 cc:1538-1542 `if ((slot==0)!=overflow) negateCondition`（旧 `negated = slot==1` 方向反且 `let _ = negated` 丢弃——while 守卫反相根因）；`try_rule_do_while` 补 cc:1566-1569 `if slot==0 negateCondition`；`try_rule_if_goto` 对齐 ruleBlockGoto cc:1450-1475（goto 落在 edge0 时 negateCondition + 交换 GOTO_EDGE 镜像 flag；删除 CBRANCH op 门槛——oracle 纯拓扑，BlockCondition 等结构块同样可被 if-goto 包裹；negated 改 false，翻转在数据层）。
+5. 三条规则补齐 oracle 守卫/取反：`try_rule_while_do` 实现 cc:1538-1542 `if ((slot==0)!=overflow) negateCondition`（旧 `negated = slot==1` 方向反且 `let _ = negated` 丢弃——while 守卫反相根因）；`try_rule_do_while` 补 cc:1566-1569 `if slot==0 negateCondition`；`try_rule_if_goto` 对齐 ruleBlockGoto cc:1450-1475（goto 落在 edge0 时 negateCondition + 交换 GOTO_EDGE 镜像 flag；删除 CBRANCH op 门槛——oracle 纯拓扑，BlockCondition 等结构块同样可被 if-goto 包裹）。旧 `negated` 字段/参数已删除，当前翻转只发生在数据层。
 6. `try_rule_proper_if` 补 cc:1386-1389/1395-1396 守卫（自环、isGotoOut×2、isDecisionOut、子句 isGotoOut）；`try_rule_while_do` 补 cc:1526-1530；新增类型无关 `out_edge_is_goto`/`out_edge_is_decision`（trait 默认 is_goto_out 只对 BlockBasic 实现）。删除 collapseInternal 第二趟的自创 `has_switch` gate（cc:1840 无条件跑 ruleBlockIfNoExit）。
 7. `collapse_internal`/`try_rule_cat` 删除 Basic/Copy 类型 gate（cc:1781-1833/cc:1284 对所有图成员跑规则——结构块是一等规则主体，钻石 if/else 现可 cat 合并进 list）。
 8. `try_rule_switch` 真正安装 BlockSwitch（对齐 newBlockSwitch block.cc:1904-1919：identifyInternal 消费 dispatch+cases、清 f_switch_out；旧代码建完即丢，`collapse_switches` 是唯一真实安装器）；`cases` 只装 body（control 独立存），与 case_values/printc 对齐；其中“build_copy 扫描 BRANCHIND 重建 f_switch_out”是 2026-08-24 的历史补偿，已于 2026-08-28 删除：oracle 只复制源 flags，并在 out-degree>2 时强制该位。
@@ -230,7 +246,7 @@ Create a new ActionNormalizeBranches instance
 - FlowBlock 新增 `effective_size_out()` 和 `effective_get_out()`（排除 GOTO_EDGE_0/GOTO_EDGE_1 标记的边）。
 - block_flags 新增 GOTO_EDGE_0/GOTO_EDGE_1。
 - try_rule_proper_if 用 effective_size_out/effective_get_out。
-- 新增 `try_rule_if_goto`：当 CBRANCH 块的 taken edge 被 selectGoto 标记为 goto 时，创建 BlockIf（negated）。
+- 历史实现新增 `try_rule_if_goto` 时曾创建带 Rust-only `negated` 字段的 BlockIf；该表示已废止。当前若需翻转，会在建块前调用条件对象的 virtual `negateCondition`，factory 不再接收 `negated` 参数。
 - selectGoto 放宽条件（移除 "skip next block" 限制）。
 - 当前效果不显著（控制流差不变 128），因为单次 goto 标记 + BlockIf 创建不足以打破 121 块的僵局。需要多轮迭代 + goto 标记的级联效应。
 

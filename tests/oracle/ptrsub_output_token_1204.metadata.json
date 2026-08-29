@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "fixture_id": "PTRSUB-OUTPUT-TOKEN-0001",
-  "covered_projection_status": "MISMATCH",
+  "covered_projection_status": "MATCH",
   "overall_status": "MISMATCH",
   "oracle": {
     "repository": "NationalSecurityAgency/ghidra",
@@ -33,7 +33,9 @@
       "coreaction.cc:2722-2774 ActionSetCasts::apply",
       "coreaction.cc:5008-5037 ActionInferTypes::buildLocaltypes",
       "coreaction.cc:5374-5416 ActionInferTypes::apply",
-      "coreaction.hh:975 ActionInferTypes::reset"
+      "coreaction.hh:975 ActionInferTypes::reset",
+      "action.cc:298-362 Action::perform",
+      "action.hh:79-86 inherited Action state"
     ],
     "source_blobs": {
       "coreaction.cc": "a392076ad23ddad3350e0fe7a2ebe96a8868f74b",
@@ -43,6 +45,8 @@
       "typeop.hh": "90ac4ed35194c5fd9bbb86759481c89a5388cb52",
       "varnode.cc": "a04614c582a1fd987d615dcec4a8b47d3501f95f",
       "varnode.hh": "b78368fc8c3fbdda2a419122b759b4dcd44fe8d2",
+      "action.cc": "9a4e2e26d04d45805f14900fadcbbac01270a2f0",
+      "action.hh": "e929dbb98e8e1fb23d7ac8e8d86e9f4f39fc998c",
       "type.cc": "962c525b7f9c6a901d84d6396de245a0bf6e5d60",
       "type.hh": "92d4882b25b602464909fdeea63bbc278761ac6d",
       "space.hh": "bc88fcd6c589d585490a395a69ec4755a37b0610",
@@ -92,11 +96,12 @@
     "infer_action_apply_count": 1,
     "random_seed": "none",
     "error_injection": "none",
-    "output_normalization": "none for raw streams; the registered action result and infer output-identity fields are compared explicitly and retained as MISMATCH"
+    "count_bridge_adapter_canary": "after one raw apply, observe inherited count, then call one fixture-only Ghidra read-and-clear adapter and Rugra take_count_delta twice; Ghidra has no takeCountDelta method and Action::perform is not executed, so the two delta fields are a synthetic canary rather than production oracle evidence",
+    "output_normalization": "none; all 24 selected raw records must be byte-identical"
   },
   "input_manifest": {
     "canonicalization": "SHA-256 of UTF-8 sorted compact JSON for the manifest object, with no trailing LF",
-    "sha256": "c7561add10f4dbe91467028aa7c40d428b45ec24e686dce456979677fd3127ee",
+    "sha256": "f53ab203467345612cac6953368342ef5b708a36598db42431fc544404a5ad40",
     "manifest": {
       "architecture": {
         "endianness": "little",
@@ -117,6 +122,7 @@
         "infer_action_apply_count": 1,
         "initial_count": 0,
         "initial_lcount": {"ghidra": 0, "rugra": "no corresponding field"},
+        "synthetic_count_bridge_reads": 2,
         "random_seed": "none",
         "error_injection": "none"
       },
@@ -195,7 +201,8 @@
         "block_range": ["0x6000", "0x6002"],
         "base": ["register", "0x200", "ProgressData*8w1", "input", "typelock"],
         "ops": [["equal", "PTRSUB", "0x6000", "raw_offset=0x8", "output=ProgressData.field@8 pointer"], ["mismatch", "PTRSUB", "0x6001", "raw_offset=0x8", "output=int4*8w1"]],
-        "alias_topology": "both ops share the identical base input; constants, outputs, and ops are distinct; outputs are unlocked and neither output has descendants before apply"
+        "alias_topology": "both ops share the identical base input; constants, outputs, and ops are distinct; outputs are unlocked and neither output has descendants before apply",
+        "execution": "one raw apply; observe result and inherited count; then compare two Rugra take_count_delta calls with a fixture-only Ghidra read-and-clear adapter; neither side executes Action::perform and no production bridge equivalence is claimed"
       },
       "infer_graph": {
         "function": ["ptrsub_spacebase_local", "ram", "0x7000", "0x10"],
@@ -213,10 +220,10 @@
     "scale": "raw unsigned value, uint4 wordsize, uintb result",
     "direct": "token shape and identity, pointee presence/identity, repeat identity, PcodeOp/local-dispatch shape and canonical identity/core flag, with direct TypeOp local identity agreement enforced; exact0 additionally records the pre-pointer six-core factory inventory/order/sizes/alignment/IDs/flags/cache identities",
     "action_pre": "ordered ops plus equal/mismatch output defs and types",
-    "action_post": "raw return, inherited count, ordered ops, cast count, selected output/mid def-use identities, implied flag, and types",
+    "action_post": "raw return, inherited count before the synthetic adapter canary, first read-and-clear adapter delta, cleared count, second adapter delta, ordered ops, cast count, selected output/mid def-use identities, implied flag, and types",
     "infer_pre": "SPACEBASE flag, base/output types, output upward-stop flag, and defining-op type-propagation stop flag",
     "infer_post": "raw return, SPACEBASE flag, base/output types, output identity against the architecture TypeFactory canonical int8, output upward-stop flag, and defining opcode",
-    "mutation_boundary": "The pre-pointer bootstrap snapshot plus listed direct/action/infer fields are observed. Post-bootstrap factory mutations, full type display/name state beyond the six registrations, Rust-only default-pointer glue, full bank, High, flags, SeqNum, block/dominance, union-resolution, and exception state are outside the covered projection."
+    "mutation_boundary": "The pre-pointer bootstrap snapshot plus listed direct/action/infer fields are observed. The synthetic delta fields do not execute or prove Ghidra Action::perform versus Rugra Action::perform/ActionState. Post-bootstrap factory mutations, full type display/name state beyond the six registrations, Rust-only default-pointer glue, full bank, High, flags, SeqNum, block/dominance, union-resolution, and exception state are outside the covered projection."
   },
   "bootstrap_scope": {
     "status": "INPUT_QUALIFICATION_ONLY",
@@ -281,9 +288,9 @@
       "ghidra_id": "GH12-F-1797871dee0101abf17a",
       "ghidra_signature": "Datatype * ghidra::Varnode::getLocalType(bool & blockup) const",
       "rust_id": "RG-F-e1751080679995008f76",
-      "fixture_projection_status": "UNTESTED",
+      "fixture_projection_status": "MATCH",
       "full_behavior_status": "MISMATCH",
-      "mapping_note": "The Ghidra infer canary invokes Varnode::getLocalType, while Rugra ActionInferTypes::build_localtypes still inlines a hybrid projection and does not invoke this mapped Rust method. The selected downstream shape/STOP fields match, but canonical output identity does not."
+      "mapping_note": "The selected STOP_TYPE_PROPAGATION definition path now invokes the mapped local-type function on both sides and returns the architecture factory's canonical int8; descendant competition and other dispatch families remain outside this fixture."
     },
     {
       "ghidra_id": "GH12-F-7083d8423ccdb50e9f13",
@@ -296,21 +303,22 @@
       "ghidra_id": "GH12-F-92152fa0aeb5ab2b4f06",
       "ghidra_signature": "int4 ghidra::ActionSetCasts::apply(Funcdata & data)",
       "rust_id": "RG-F-bfd1147423c0178185eb",
-      "fixture_projection_status": "MISMATCH",
-      "full_behavior_status": "MISMATCH"
+      "fixture_projection_status": "MATCH",
+      "full_behavior_status": "MISMATCH",
+      "mapping_note": "Selected raw apply evidence is return=0, inherited count 0->1, and the recorded graph mutations. The synthetic read-and-clear fields are explicitly excluded from this mapped-function MATCH claim because Ghidra ActionSetCasts::apply has no takeCountDelta method."
     },
     {
       "ghidra_id": "GH12-F-74ae4baf4dc35b9560f4",
       "ghidra_signature": "void ghidra::ActionInferTypes::buildLocaltypes(Funcdata & data)",
       "rust_id": "RG-F-f64771d7c6cdb9599854",
-      "fixture_projection_status": "MISMATCH",
+      "fixture_projection_status": "MATCH",
       "full_behavior_status": "MISMATCH"
     },
     {
       "ghidra_id": "GH12-F-08c6d2c1b38edb06f10a",
       "ghidra_signature": "int4 ghidra::ActionInferTypes::apply(Funcdata & data)",
       "rust_id": "RG-F-427cc4fc6889e5d13a05",
-      "fixture_projection_status": "MISMATCH",
+      "fixture_projection_status": "MATCH",
       "full_behavior_status": "MISMATCH"
     },
     {
@@ -323,30 +331,11 @@
       "mapping_note": "Both sides execute reset before the infer apply, but the current ledger has no exact Rust mapping and this fixture does not isolate reset mutations."
     }
   ],
-  "known_raw_differences": [
-    {
-      "line": 22,
-      "record": "action_post",
-      "case": "paired",
-      "field": "result",
-      "ghidra": "0",
-      "rugra": "1",
-      "residual_id": "PIPE-ACTION-COUNT-0001C"
-    },
-    {
-      "line": 24,
-      "record": "infer_post",
-      "case": "spacebase_ptrsub_local",
-      "field": "out_identity",
-      "ghidra": "1",
-      "rugra": "0",
-      "residual_id": "ACTION-INFERTYPES-DISPATCH-0001"
-    }
-  ],
+  "known_raw_differences": [],
   "comparand": {
-    "rust_base_commit": "933de80b7c7526ae50f61ec75fe66f51787d8f6b",
-    "rust_base_tree": "dc32d8beb4dfbc35ee2306ab0729996adeec5773",
-    "rust_base_src_tree": "ab4471026c5603b05c1cccd078f12e22b7ce31b4",
+    "rust_base_commit": "7e91aef6aa28cbf0a77b9812858c276cafa7fbd3",
+    "rust_base_tree": "fd155bc4dd996000d3012c2d49f7244c3a6308ec",
+    "rust_base_src_tree": "c6a2eb0fb690ff9ac693d12d6ea45b606bc713ae",
     "rust_base_blobs": {
       "Cargo.toml": "f15ed7d02b38aef3c21a564641344a156855b632",
       "Cargo.lock": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
@@ -354,19 +343,20 @@
       "sleigh_shim_tree": "c7729d9d1554dc62c486bcd7d58fdbf44bebb97d",
       "sleigh_shim/rugra_sleigh.cpp": "a53b7c3223a70720025efc813034a462a595076d"
     },
-    "runner_sha256": "2262d3b622bacb67e19fdcfd17fa9cf4350c1dfa65b9384d2349b6fcf12d6092",
+    "runner_sha256": "25c361aabfb19652648ce3f723248e699cdc7bec155b9c1a3a18b936dc54ac2a",
     "overlay_sha256": {
-      "src/coreaction.rs": "ba27d191c4a36277a3e44f26520b81ee364c7dcb0081258b5fd5274ee0252110",
-      "src/space.rs": "a16edf410dd81c5752459f142012f6bbba73d7d2781473ee84343ba15754b083",
-      "src/type_system/typefactory.rs": "824c95f4204a5f34976b3453140bdbf817988736e914552f6bfcb7989cfd2281",
-      "src/typeop.rs": "e29bd9bc3281e35407ed75dbc75b8d104487f20577c2b023ce673fff4b18ae6d",
-      "src/varnode.rs": "58c99967a180dcfa717d7d78cfa19c768213fe8c14705b268b63308b347f6cd4"
+      "src/coreaction.rs": "277e7f65ae733f337500bd0b743e614d8838bc4b5c9d7bdf25780fdc42f393a4",
+      "src/space.rs": "ce29893c5667fd72c5db18c9a65015e6e4c36a0e145c3425f67b9c15aab40ba2",
+      "src/type_system/cast.rs": "c9df00a5a4a8ce1c9a6d2db022c381d23dff71f6423b5bddf38864cb3a32545b",
+      "src/type_system/typefactory.rs": "572b24da04a2a7dcbff19b371b7e4b05e28599d44b6ccbc79228f3f9b512239d",
+      "src/typeop.rs": "17703baa7c34e34eefcd3e6e07f204b08fcfe517777feb15ba230bb998acfdb8",
+      "src/varnode.rs": "06c8bffeee37c3ffc290033ba26fc069c3def9562f415ed9c7a2a4e577c8fa56"
     },
     "fixture_sha256": {
-      "tests/oracle/ptrsub_output_token_1204.cc": "7b720f176b8209f2f47f9b567d4b5e65df1e84e61aaeca4b2561f8d0056d524a",
-      "tests/oracle/ptrsub_output_token_1204.rs": "6a09e9ae2bae3d2d7dffcd8bb008eec399024aec2dd74be0484fd03e97003638"
+      "tests/oracle/ptrsub_output_token_1204.cc": "a204676cc7d240a6e87082cdc0995bd9a66ecf2324d5a9b412ef1eb7ae2d06e0",
+      "tests/oracle/ptrsub_output_token_1204.rs": "5ed99d0c9a4e46e3c440aaeda1124d69a57ceec2c1ec539f6374f08112feced2"
     },
-    "source_policy": "Archive the fixed Rugra base and fixed Ghidra commit, capture the two fixtures and five overlays into a private run directory, revalidate their SHA-256 values, then compile only those captured inputs."
+    "source_policy": "Archive the fixed Rugra base and fixed Ghidra commit, capture the two fixtures and six required current-source overlays into a private run directory, revalidate their SHA-256 values, then compile only those captured inputs."
   },
   "expected_results": {
     "record_count": 24,
@@ -396,23 +386,23 @@
       "infer_pre",
       "infer_post"
     ],
-    "ghidra_stdout_sha256": "4cba90e1e59c7bbf349cf638a78eb68b1d274228bf6ae4fbe85a527c6150bbe0",
+    "ghidra_stdout_sha256": "129d79346146fd22c91b2bd1ef646f962574c8e9cc3e4ccab094e0df5e8390a1",
     "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "rugra_stdout_sha256": "d1650a461507b82e58a098822ab524c4c0e6b1c7c4224e89b860ac182fae2155",
+    "rugra_stdout_sha256": "129d79346146fd22c91b2bd1ef646f962574c8e9cc3e4ccab094e0df5e8390a1",
     "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "raw_diff_sha256": "29c5b5c60beca0426de9435c13779ed250ccafa19a6de8f5822fa39875743e4a",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "raw_diff_labels": ["ghidra.stdout", "rugra.stdout"],
-    "stdout_bytes_each": 3678,
-    "raw_diff_bytes": 1425,
+    "stdout_bytes_each": 3740,
+    "raw_diff_bytes": 0,
     "header_sha256": "a49570a37fcc1b532851736be9efcacd363697a4cbf2b378b2d75b4bcb18edf8",
     "scale_projection_sha256": "c74e9b8c4108b1b0a339f02103c63e86fc6db7b38d3ca03ca29df77dcc82fb6c",
     "direct_projection_sha256": "468d92e2d5f0e6b21544b9b440df4a318d92f3bc7c7178b9e37af0474c5bf573",
-    "ghidra_action_projection_sha256": "394035ad7c03a85ec73487a47bccb62ae482a8750017b4f7555a182da7609b09",
-    "rugra_action_projection_sha256": "2400a3f47cd62c6e41ccc2252bf65b81ec5beca61380f78afa62f3afeb82ca30",
+    "ghidra_action_projection_sha256": "3f0e7efdd56cb66691131e65f317908b9ca468afab1d6d94989b1872eecf71f1",
+    "rugra_action_projection_sha256": "3f0e7efdd56cb66691131e65f317908b9ca468afab1d6d94989b1872eecf71f1",
     "ghidra_infer_projection_sha256": "d787b25dfbc7c8bd79176319c8f4092c3525ba755afa48abe1e8bc67e4f8fd05",
-    "rugra_infer_projection_sha256": "e3ae06dbac3390bb54b8b542f3b99cd42a63d655445ad28c2afa505212078be6",
-    "field_mismatch_json_sha256": "fd2ec89eb8936518432dda6b3ab79a3722fea9c7c92d45c2eb5afd4caab58c8b",
-    "exit_codes": {"ghidra": 0, "rugra": 0, "raw_diff": 1, "normal_runner": 0, "require_match_runner": 1}
+    "rugra_infer_projection_sha256": "d787b25dfbc7c8bd79176319c8f4092c3525ba755afa48abe1e8bc67e4f8fd05",
+    "field_mismatch_json_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "exit_codes": {"ghidra": 0, "rugra": 0, "raw_diff": 0, "normal_runner": 0, "require_match_runner": 0}
   },
   "coverage": {
     "address_to_byte_five_case_matrix": {"status": "MATCH", "detail": "normal, wrap-to-zero, wrap-to-nonzero, maximum operands, and zero wordsize under fixed uintb/uint4 widths"},
@@ -421,18 +411,18 @@
     "ptrsub_output_local_oversized_closure": {"status": "MISMATCH", "detail": "TYPEFACTORY-LOCALTYPE-CACHE-0001: Ghidra getBase(size>max_basetype_size,TYPE_INT) converts to an unknown-byte array; the 24-record fixture requests only 8-byte locals"},
     "plain_struct_single_downchain_and_residual_projection": {"status": "MATCH", "detail": "exact component, within-component nonzero residual, nested one-level residual, hole, size boundary, negative encoding, and wordsize scaling"},
     "plain_struct_component_arc_identity_projection": {"status": "MATCH", "detail": "exact0/exact8/exact24 preserve canonical component and interned pointer identity"},
-    "ordinary_ptrsub_castoutput_selected_graph": {"status": "MATCH", "detail": "equal token no-op and ordinary mismatch CAST insertion match for every recorded field except the separately retained raw apply return channel"},
-    "action_inherited_count_from_zero": {"status": "MATCH", "detail": "both sides mutate count from 0 to 1"},
-    "action_apply_return": {"status": "MISMATCH", "detail": "PIPE-ACTION-COUNT-0001C: Ghidra returns 0 while current Rugra returns 1"},
+    "ordinary_ptrsub_castoutput_selected_graph": {"status": "MATCH", "detail": "equal token no-op and ordinary mismatch CAST insertion are byte-identical for every recorded graph field"},
+    "action_raw_return_and_inherited_count": {"status": "MATCH", "detail": "both raw apply calls return 0 and both mutate the inherited/leaf count from 0 to 1"},
+    "rust_count_bridge_adapter_canary": {"status": "NO_ORACLE", "selected_synthetic_projection_status": "MATCH", "detail": "Rugra take_count_delta returns 1, clears the leaf count, then returns 0; those bytes match a fixture-only Ghidra adapter, but Ghidra has no corresponding method and neither Action::perform lifecycle is executed"},
     "full_typeop_ptrsub_get_output_token": {"status": "MISMATCH", "detail": "the oversized local/base fallback is a known TYPEFACTORY-LOCALTYPE-CACHE-0001 mismatch; read-facing/needs-resolution, PointerRel, arrays, enum, PartialStruct, Spacebase, alternate-pointer truncation, cold-factory insertion, variable-length types, and errors remain UNTESTED"},
     "full_typepointer_downchain": {"status": "UNTESTED", "detail": "only ordinary Struct/scalar paths used by the 14 direct records are observed"},
     "full_typefactory_arc_identity": {"status": "MISMATCH", "detail": "TYPEFACTORY-ARC-IDENTITY-0001 remains open for incomplete-composite replacement, stale external handles, and other subtype families"},
-    "varnode_getlocaltype_exact_mapping": {"status": "UNTESTED", "detail": "the infer canary executes Ghidra Varnode::getLocalType, but current Rugra ActionInferTypes inlines a hybrid projection instead of calling its mapped Varnode::get_local_type; this fixture therefore cannot classify the exact mapped Rust function even though the production closure is mismatched"},
+    "varnode_getlocaltype_selected_stop_definition": {"status": "MATCH", "detail": "the STOP_TYPE_PROPAGATION PTRSUB definition path executes the mapped local-type function on both sides, returns canonical int8, and sets the output upward-stop flag"},
     "varnode_getlocaltype_full_closure": {"status": "MISMATCH", "detail": "production SymbolEntry/exact-piece and special TypeOp paths plus oversized local-type behavior remain outside this canary; independently registered closure gaps remain open"},
     "action_infertypes_selected_shape_and_stop": {"status": "MATCH", "detail": "one production apply gives result=0, preserves SPACEBASE, changes base/output shape from unknown8 to int8, sets the output upward-stop flag, and preserves the PTRSUB definition on both sides"},
-    "action_infertypes_selected_output_identity": {"status": "MISMATCH", "detail": "ACTION-INFERTYPES-DISPATCH-0001: Ghidra stores the Architecture TypeFactory canonical int8 (identity=1), while Rugra stores an equal-shaped noncanonical int8 Arc (identity=0)"},
-    "action_infertypes_buildlocaltypes_full": {"status": "MISMATCH", "detail": "the selected SPACEBASE PTRSUB branch is executed, but traversal order, VarnodeLocSet coverage, SymbolEntry/exact-piece behavior, non-PTRSUB dispatch, repeat apply, and full state mutation remain mismatched or untested"},
-    "full_action_setcasts_castoutput_apply": {"status": "MISMATCH", "detail": "raw return differs; block/dominance traversal, input casts, invalid PTRADD/PTRSUB preflight, union/resolution, implied/typelock, PTRSUB(0), pointer checks, repeat apply, and error paths remain untested or mismatched"},
+    "action_infertypes_selected_output_identity": {"status": "MATCH", "detail": "both sides store the Architecture TypeFactory canonical int8 (identity=1) in the selected SPACEBASE PTRSUB output"},
+    "action_infertypes_buildlocaltypes_full": {"status": "MISMATCH", "detail": "the selected SPACEBASE PTRSUB STOP branch matches, but complete VarnodeLocSet ordering, SymbolEntry/exact-piece variants, descendant competition, non-PTRSUB dispatch, repeat apply, and full state mutation remain mismatched or untested under ACTION-INFERTYPES-DISPATCH-0001"},
+    "full_action_setcasts_castoutput_apply": {"status": "MISMATCH", "detail": "the selected two-op block, raw return, inherited count, and graph mutations match; the synthetic bridge adapter is not mapped-function evidence. Invalid PTRADD/PTRSUB preflight, resolveUnion, general castInput families, LOAD/STORE pointer warnings, implied/typelock variants, PTRSUB(0), multi-block dominance, repeat/perform lifecycle, and error paths remain untested or mismatched under PIPE-ACTION-COUNT-0001C and TYPEOP-PTRSUB-FIELDCAST-0001"},
     "compiler_model_and_architecture_full_state": {"status": "NO_ORACLE", "detail": "the synthetic hosts intentionally expose only state consumed by the selected projection and do not provide identical full Architecture/ProtoModel state"},
     "exceptions_and_error_injection": {"status": "UNTESTED", "detail": "no injected allocation, lock, malformed-op, cast-strategy, or decoder error path"}
   },
@@ -444,7 +434,7 @@
     "TYPEFACTORY-LOCALTYPE-CACHE-0001",
     "VARNODE-LOCALTYPE-RESOLUTION-0001"
   ],
-  "status_note": "A normal runner exit of zero means both exact registered field mismatches were reproduced and all remaining explicitly selected fields matched. It does not mean the 24-record raw output, ActionSetCasts::apply, ActionInferTypes::buildLocaltypes, any complete mapped function, or any module is MATCH/L3.",
+  "status_note": "A normal or --require-match runner exit of zero means the 24-record selected raw projection is byte-identical. The delta bytes compare Rugra's bridge method only with a synthetic fixture adapter and are NO_ORACLE for the production Action::perform lifecycle. It does not mean complete ActionSetCasts::apply, ActionInferTypes::buildLocaltypes, TypeOpPtrsub, any mapped-function closure, Architecture state, or any module is MATCH/L3; the listed MISMATCH/UNTESTED/NO_ORACLE residuals remain binding.",
   "host_toolchain": {
     "git": {"path": "/usr/bin/git", "version": "git version 2.55.0", "sha256": "93473c28694fd72bd889364107cd2770514de59780885a6a4aafca4d602e30ad"},
     "python": {"path": "/usr/bin/python3.14", "version": "Python 3.14.7", "sha256": "d78f9cf7178ecff09963551399855543c297f37ac207e626228bfe43cb26a70c"},
@@ -462,7 +452,7 @@
     "cpp": "g++ -std=c++11 -O2 -Wall -Wno-sign-compare -m64; fixture + libdecomp.cc + sleigh_arch.cc + inject_sleigh.cc + locked libdecomp.a; -lz",
     "cargo": "--offline --locked --frozen --jobs 2 --lib; CARGO_INCREMENTAL=0",
     "rust_fixture": "rustc --edition=2021 -C opt-level=0 -C overflow-checks=yes",
-    "cargo_lock": "/tmp/rugra-cargo-build.lock held through Rust comparand link",
+    "cargo_lock": "target/ptrsub-output-token-oracle/.build.lock held through Rust comparand link",
     "temp_policy": "private directory below target/oracle-runs; no large /tmp build output"
   },
   "execution_evidence": [
@@ -470,18 +460,24 @@
       "date": "2026-08-28",
       "command": "tools/run_ptrsub_output_token_oracle.sh --validate-only",
       "exit_code": 0,
-      "result": "all locked oracle/base/tool/runner/fixture/overlay/manifest pins validated; overall=MISMATCH"
+      "result": "all locked oracle/base/tool/runner/fixture/overlay/manifest pins validated; covered projection MATCH; overall MISMATCH"
     },
     {
       "date": "2026-08-28",
       "command": "tools/run_ptrsub_output_token_oracle.sh",
       "exit_code": 0,
-      "result": "records=24, direct=14, scale=5, infer=1; PcodeOp/direct local identity agreement and infer shape/STOP agreement enforced; registered mismatches: action apply return and infer output identity; overall=MISMATCH"
+      "result": "records=24, bytes=3740 per side, direct=14, scale=5, infer=1; raw diff empty; selected projection MATCH; overall MISMATCH"
     },
     {
       "date": "2026-08-28",
-      "review": "independent locked-Ghidra rebuild",
-      "result": "two byte-identical runs per side; Ghidra stdout records=24 bytes=3678 sha256=4cba90e1e59c7bbf349cf638a78eb68b1d274228bf6ae4fbe85a527c6150bbe0; Rugra stdout records=24 bytes=3678 sha256=d1650a461507b82e58a098822ab524c4c0e6b1c7c4224e89b860ac182fae2155; both stderr streams empty"
+      "command": "tools/run_ptrsub_output_token_oracle.sh --require-match",
+      "exit_code": 0,
+      "result": "scoped byte-identical raw projection accepted; overall fixture status remains MISMATCH"
+    },
+    {
+      "date": "2026-08-28",
+      "review": "locked-Ghidra and captured-current-Rugra deterministic rebuild",
+      "result": "two byte-identical runs per side; both stdout records=24 bytes=3740 sha256=129d79346146fd22c91b2bd1ef646f962574c8e9cc3e4ccab094e0df5e8390a1; both stderr streams empty; raw diff bytes=0 sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
   ]
 }

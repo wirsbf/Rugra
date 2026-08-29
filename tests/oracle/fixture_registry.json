@@ -34,7 +34,7 @@
   "fixtures": [
     {
       "id": "ptrsub_output_token_1204",
-      "description": "AddrSpace byte scaling, PcodeOp/TypeOpPtrsub output-local plus output-token projections, selected ActionSetCasts PTRSUB output-CAST graph, and a SPACEBASE PTRSUB ActionInferTypes canary versus locked Ghidra 12.0.4; raw apply return and infer output identity remain registered mismatches",
+      "description": "AddrSpace byte scaling, PcodeOp/TypeOpPtrsub output-local plus output-token projections, selected ActionSetCasts PTRSUB output-CAST graph, and a SPACEBASE PTRSUB ActionInferTypes canary versus locked Ghidra 12.0.4; the selected raw apply/count and infer canonical output identity projections are MATCH, while the Rugra-only count bridge has NO_ORACLE and the complete action/type closures remain MISMATCH/UNTESTED",
       "runner": [
         "tools/run_ptrsub_output_token_oracle.sh"
       ],
@@ -58,11 +58,13 @@
         "paths": [
           "src/coreaction.rs",
           "src/space.rs",
+          "src/type_system/cast.rs",
           "src/type_system/typefactory.rs",
           "src/typeop.rs",
           "src/varnode.rs",
           "docs/api/coreaction.md",
           "docs/api/space.md",
+          "docs/api/type_system/cast.md",
           "docs/api/type_system/typefactory.md",
           "docs/api/typeop.md",
           "docs/api/varnode.md",
@@ -344,6 +346,7 @@
       "impact": {
         "paths": [
           "src/printc.rs",
+          "src/varnode.rs",
           "tests/oracle/printc_structured_if_condition_1204.*",
           "tools/run_printc_structured_if_condition_oracle.sh"
         ],
@@ -360,6 +363,92 @@
           "GH12-F-bd812d638e2de548abdc",
           "GH12-F-d397e290308fb9b68af1",
           "GH12-F-4d8cc97e20565da1fe65"
+        ]
+      }
+    },
+    {
+      "id": "block_structured_negate_1204",
+      "description": "Locked Ghidra 12.0.4 projection for FlowBlock/BlockList/BlockCondition virtual negation, ordered reciprocal edge-slot repair, FLIP_PATH and AND/OR transitions, double-negate round trips, and CollapseStructure dataflow-count separation across 13 cases; scoped stdout is MATCH while deterministic Rugra diagnostics and the untested full structuring closure keep overall status MISMATCH",
+      "runner": [
+        "tools/run_block_structured_negate_oracle.sh"
+      ],
+      "timeout_seconds": 1800,
+      "always_tiers": [
+        "commit",
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/block_structured_negate_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/block_structured_negate_1204.cc",
+          "rust_fixture": "tests/oracle/block_structured_negate_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_block_structured_negate_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/block.rs",
+          "src/blockaction.rs",
+          "docs/api/block.md",
+          "docs/api/blockaction.md",
+          "tests/oracle/block_structured_negate_1204.*",
+          "tools/run_block_structured_negate_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": []
+      }
+    },
+    {
+      "id": "printlanguage_atom_metadata_1204",
+      "description": "Locked Ghidra 12.0.4 projection for stage-1 hidden RPN grouping, vartoken Atom dispatch, exact text/highlight/Varnode/PcodeOp metadata forwarding, repeated identity stability, and syntax control; the metadata-aware Emit boundary is MATCH while PRETTY-0001 TokenSplit/EmitPrettyPrint transport and PRINT-RPN-0001/PRETTY-0001 atom/markup branches keep overall status MISMATCH",
+      "runner": [
+        "tools/run_printlanguage_atom_metadata_oracle.sh"
+      ],
+      "timeout_seconds": 1800,
+      "always_tiers": [
+        "commit",
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/printlanguage_atom_metadata_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/printlanguage_atom_metadata_1204.cc",
+          "rust_fixture": "tests/oracle/printlanguage_atom_metadata_1204.rs"
+        },
+        "tools": {
+          "runner": "tools/run_printlanguage_atom_metadata_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/prettyprint.rs",
+          "src/printlanguage.rs",
+          "docs/api/prettyprint.md",
+          "docs/api/printlanguage.md",
+          "tests/oracle/printlanguage_atom_metadata_1204.*",
+          "tools/run_printlanguage_atom_metadata_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-9e001fcf0ccada3d8519",
+          "RG-F-c78ccdade73c8976c19f",
+          "RG-F-3b41af793fa955fac747",
+          "RG-F-f3c81f4d458907b7a050",
+          "RG-F-fd5809b6a70493b99918",
+          "RG-F-c8184c689c0f9e15eb55"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-9ec4e35a6ca4b1d50815",
+          "GH12-F-67f503264ee6e69ba2db",
+          "GH12-F-5f092eb3a3ef82d85cdd",
+          "GH12-F-bc1047e12c6d58a1600c",
+          "GH12-F-983d8539463495ea3c31",
+          "GH12-F-bec07b879b2c37690dcb"
         ]
       }
     },
@@ -469,7 +558,7 @@
     },
     {
       "id": "getstr_pipeline_1204",
-      "description": "GetStr six-layer P-code/CFG/SSA/Action/structure/C snapshot and first-divergence report",
+      "description": "GetStr six-layer P-code/CFG/SSA/Action/structure/C snapshot and first-divergence report; the 103-op numeric signature, all 272 ordered raw Varnode flags/type records, the 0x36ee NOTEQUAL stored/read-facing char types, and the exact short-circuit character-literal line are focused MATCH projections, but no complete stage is MATCH (five MISMATCH and the Heritage boundary NO_ORACLE) and the full pipeline remains MISMATCH",
       "runner": [
         "tools/run_getstr_pipeline_oracle.sh"
       ],
@@ -512,6 +601,11 @@
           "src/printc.rs",
           "src/printlanguage.rs",
           "src/prettyprint.rs",
+          "src/space.rs",
+          "src/type_system/cast.rs",
+          "src/type_system/typefactory.rs",
+          "src/typeop.rs",
+          "src/varnode.rs",
           "tests/oracle/getstr_pipeline_1204.*",
           "tools/run_getstr_pipeline_oracle.sh"
         ],
@@ -4810,6 +4904,66 @@
           "GH12-F-57e16f2008cf6107b609",
           "GH12-F-676ff315779d4671feeb",
           "GH12-F-a1d975fa03e158464c37"
+        ]
+      }
+    },
+    {
+      "id": "rule_earlyremoval_1204",
+      "description": "RuleEarlyRemoval six-guard ordering/outcomes, strict Heritage pass-delay side effects, writemask/autolive separation, OTHER-space dead-code policy, op/block/bank/def-use mutation, and the 72 typed live-opcode ActionPool dispatch projection versus locked Ghidra 12.0.4; raw opcode buckets 0/45, nullable destroyed-input arity, and the complete Heritage/Architecture manager remain explicit overall MISMATCH residuals",
+      "runner": [
+        "tools/run_rule_earlyremoval_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "commit",
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/rule_earlyremoval_1204.metadata.json",
+        "inputs": {
+          "binary": "examples/curl",
+          "cpp_fixture": "tests/oracle/rule_earlyremoval_1204.cc",
+          "rust_fixture": "tests/oracle/rule_earlyremoval_1204.rs",
+          "sleigh_specs": "sleigh_specs"
+        },
+        "tools": {
+          "runner": "tools/run_rule_earlyremoval_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/heritage.rs",
+          "src/ruleaction.rs",
+          "src/space.rs",
+          "src/varnode.rs",
+          "tests/oracle/rule_earlyremoval_1204.*",
+          "tools/run_rule_earlyremoval_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-936f43a71808694146ef",
+          "RG-F-4a1f62a6c8de28005468",
+          "RG-F-8fbb404c34da1cf6a843",
+          "RG-F-592ec4bf7e09e3d30ae5",
+          "RG-F-04719b658523b82375be",
+          "RG-F-0b2099deb94fe5111b60",
+          "RG-F-5a9ebd278c6a6d812d03",
+          "RG-F-bba07eb8bc1bd17b7881",
+          "RG-F-0e6ae52573087f3830e5"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-dc5b04d61d0567a1e49d",
+          "GH12-F-a4891e31044f5cd70ed7",
+          "GH12-F-9202c2e616fcddd993e1",
+          "GH12-F-bc2df206816f65753313",
+          "GH12-F-d7dea4d41f21f8a0fc8c",
+          "GH12-F-ac58edab33c5b1964dbe",
+          "GH12-F-9ae49897c46bd861aa82",
+          "GH12-F-72280b853f4a6cf5c412",
+          "GH12-F-8785a06f43df9285ddeb",
+          "GH12-F-827056001cf132798723",
+          "GH12-F-ca7a77b1213f6edb57e6"
         ]
       }
     }

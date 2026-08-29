@@ -3,7 +3,8 @@ set -euo pipefail
 
 # Locked bilateral gate for PRINTC-STRUCTURED-IF-CONDITION-0001.  Ghidra is
 # archived from 12.0.4 commit e40ed130.  Rugra is archived from one pinned
-# base and overlays exactly the live src/printc.rs under test.  All temporary
+# base and overlays exactly the live src/printc.rs and src/varnode.rs under
+# test.  All temporary
 # files live below the user's task-specific cache because /tmp is not an
 # available trust boundary on the fixture hosts.
 
@@ -37,9 +38,9 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=26eee4ad27fc36a132c948876c9e0fbbb79051e2
-rugra_base_tree=47d96fcb3459b5c0adb9ac955c2c0edb46b20508
-rugra_base_src_tree=d7a4db15f342b63d772b75379c9c3b0aba441141
+rugra_base_commit=7e91aef6aa28cbf0a77b9812858c276cafa7fbd3
+rugra_base_tree=fd155bc4dd996000d3012c2d49f7244c3a6308ec
+rugra_base_src_tree=c6a2eb0fb690ff9ac693d12d6ea45b606bc713ae
 rugra_base_cargo_toml_blob=f15ed7d02b38aef3c21a564641344a156855b632
 rugra_base_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_base_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
@@ -49,6 +50,7 @@ metadata="$repo_root/tests/oracle/printc_structured_if_condition_1204.metadata.j
 cpp_fixture="$repo_root/tests/oracle/printc_structured_if_condition_1204.cc"
 rust_fixture="$repo_root/tests/oracle/printc_structured_if_condition_1204.rs"
 printc_overlay="$repo_root/src/printc.rs"
+varnode_overlay="$repo_root/src/varnode.rs"
 
 host_cxx=/usr/bin/g++
 host_cc=/usr/bin/gcc
@@ -65,7 +67,8 @@ for tool in "$host_cxx" "$host_cc" "$host_ar" "$host_make" "$host_git" \
     exit 1
   fi
 done
-for input in "$metadata" "$cpp_fixture" "$rust_fixture" "$printc_overlay" "$runner"; do
+for input in "$metadata" "$cpp_fixture" "$rust_fixture" "$printc_overlay" \
+  "$varnode_overlay" "$runner"; do
   if [[ ! -f "$input" || -L "$input" ]]; then
     echo "required input is not a regular non-symlink file: $input" >&2
     exit 1
@@ -129,6 +132,7 @@ fi
 runner_sha=$(/usr/bin/sha256sum "$runner_fd" | /usr/bin/awk '{print $1}')
 "$host_python" -I -S - "$repo_root" "$metadata" "$cpp_fixture" \
   "$rust_fixture" "$runner_fd" "$runner_sha" "$printc_overlay" \
+  "$varnode_overlay" \
   "$oracle_tag" "$oracle_commit" "$oracle_cpp_tree" "$oracle_makefile_blob" \
   "$rugra_base_commit" "$rugra_base_tree" "$rugra_base_src_tree" \
   "$rugra_base_cargo_toml_blob" "$rugra_base_cargo_lock_blob" \
@@ -141,7 +145,8 @@ import sys
 
 (
     repo_raw, metadata_raw, cpp_raw, rust_raw, runner_raw, runner_sha,
-    overlay_raw, oracle_tag, oracle_commit, cpp_tree, makefile_blob,
+    printc_overlay_raw, varnode_overlay_raw, oracle_tag, oracle_commit,
+    cpp_tree, makefile_blob,
     base_commit, base_tree, base_src_tree, cargo_toml_blob, cargo_lock_blob,
     build_rs_blob, host_cxx, host_rustc, host_cargo,
 ) = sys.argv[1:]
@@ -176,22 +181,28 @@ require("Cargo.lock blob", base["base_cargo_lock_blob"], cargo_lock_blob)
 require("build.rs blob", base["base_build_rs_blob"], build_rs_blob)
 overlays = base["overlays"]
 if not (
-    isinstance(overlays, list) and len(overlays) == 1
+    isinstance(overlays, list) and len(overlays) == 2
     and overlays[0].get("path") == "src/printc.rs"
+    and overlays[1].get("path") == "src/varnode.rs"
 ):
-    raise SystemExit(f"comparand must overlay exactly src/printc.rs: {overlays!r}")
+    raise SystemExit(
+        "comparand must overlay exactly src/printc.rs and src/varnode.rs: "
+        f"{overlays!r}"
+    )
 
 comparand = metadata["comparand"]
 checks = {
     "cpp_fixture_sha256": cpp_raw,
     "rust_fixture_sha256": rust_raw,
     "runner_sha256": runner_raw,
-    "printc_rs_sha256": overlay_raw,
+    "printc_rs_sha256": printc_overlay_raw,
+    "varnode_rs_sha256": varnode_overlay_raw,
 }
 for key, path in checks.items():
     actual = runner_sha if key == "runner_sha256" else sha(path)
     require(key, actual, comparand[key])
-require("overlay hash", sha(overlay_raw), overlays[0]["sha256"])
+require("printc overlay hash", sha(printc_overlay_raw), overlays[0]["sha256"])
+require("varnode overlay hash", sha(varnode_overlay_raw), overlays[1]["sha256"])
 
 versions = {
     "host_cxx": subprocess.check_output([host_cxx, "--version"], text=True).splitlines()[0],
@@ -273,6 +284,7 @@ base_paths=(
   "$host_git" -C "$repo_root" archive "$rugra_base_commit" \
   "${base_paths[@]}" | /usr/bin/tar -xf - -C "$snapshot"
 /usr/bin/install -m 0644 "$printc_overlay" "$snapshot/src/printc.rs"
+/usr/bin/install -m 0644 "$varnode_overlay" "$snapshot/src/varnode.rs"
 /usr/bin/install -D -m 0644 "$rust_fixture" \
   "$snapshot/tests/oracle/printc_structured_if_condition_1204.rs"
 

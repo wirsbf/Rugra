@@ -1,5 +1,13 @@
 # `ruleaction.rs` API Reference
 
+## 2026-08-28：RuleEarlyRemoval 六守卫与 typed dispatch
+
+`RuleEarlyRemoval::apply_op` 按 `ruleaction.cc:25-44` 顺序执行 call、indirect-source、
+output、descend、autolive、deadcode-delay 六个守卫，成功后调用完整 `op_destroy`。
+`get_opcodes` 覆盖数值 1..73 中全部 72 个 Rust 可表示 live opcode。锁定双侧 fixture
+的 14 个 covered records MATCH；Ghidra raw 0/45 bucket、销毁后 NULL input slot 和
+完整 Heritage manager 保持 overall `MISMATCH`。
+
 ## 2026-08-26：`RulePtrsubCharConstant` 完整守护链接通（MAINDIFF-STRCONST-0001）
 
 此前实现以 `Funcdata::string_table` 命中代理 `Scope::isReadOnly` +
@@ -1017,8 +1025,11 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
   - `apply_op` — `applyOp`（8295）：三种尺寸分支（需扩展/需截断/同尺寸）转换
 
 **注**：此前误记"缺第二变体 ruleaction.cc:8010-8046"——核实后确认该段是**独立的 RuleDivTermAdd2**（另一个 Rule），非 RuleDivOpt 的一部分。RuleDivOpt 本身完整对应 8295-8355。
-### 2026-06-27（续）：RuleEarlyRemoval 补齐 Ghidra 6 守卫
-- RuleEarlyRemoval::apply_op 补 is_indirect_source/is_auto_live/空间门（ruleaction.cc:30-40）。因 descend 追踪有缺口（多处直接 push inrefs 绕过 op_set_input），空间门保守只允许 CONSTANT 输出删除。REGISTER/UNIQUE 待 descend 追踪完整后放开。
+### 2026-06-27（续；2026-08-28 已由新证据取代）：RuleEarlyRemoval 六守卫
+- “空间门只允许 CONSTANT”是历史实现，当前已删除。权威口径是顶部
+  `RULE-PORT-EARLYREMOVAL-0001` 的 14/14 covered MATCH：六守卫、严格 pass/delay、
+  writemask/autolive、OTHER policy 与 typed-opcode dispatch。完整 Rule/Heritage/
+  OpBank 生命周期仍为 MISMATCH/UNTESTED。
 2026-06-27: opcode 改名对齐 Ghidra 规范名 — BOOL_NOT->BOOL_NEGATE / INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE (opcodes.hh:67/68/81)。纯重命名，行为不变。
 
 ### 2026-06-29：RuleSubCommute（ruleaction.cc:4534-4673）
@@ -1190,7 +1201,9 @@ RuleAddUnsigned: get_type_read_facing + TYPE_UINT/!is_char_print 守卫（cc:718
 ### 2026-07-01（续 10）：4 条 stub/partial Rule 补全
 - SubfloatConvert：常量折叠路径（subflow.cc:3394-3403）。非 const 保持 NO_CHANGE（完整 SubfloatFlow 精度追踪 TODO）。
 - ConditionalMove 非 const 路径：gather_expression + construct_bool（ruleaction.cc:9305-9381）。值在分支前形成的非 const 情况能产生 BOOL_OR/AND。
-- RuleEarlyRemoval：6 guard 全对齐（ruleaction.cc:25-44）。IOP 空间输出新增可删。
+- RuleEarlyRemoval：本行“6 guard 全对齐”是旧的代码形似结论；2026-08-28 锁定
+  fixture 只批准 14/14 covered projection。IOP/FSPEC manager、nullable input、
+  reset/clear/propagateCopyAway 与完整 OpBank/错误路径仍未闭合。
 - AddTreeState distribute/collapse：while 循环补全（ruleaction.cc:6475-6491）+ collapse_int_mult_mult。
 
 ### 2026-07-01（续 11）：PtrsubUndo testForArraySlack + PtrsubCharConstant stringManager

@@ -2,11 +2,11 @@
 //!
 //! Corresponds to Ghidra's `coreaction.hh`
 
-use crate::action::{Action, action_status, action_flags};
+use crate::action::{action_flags, action_status, Action};
+use crate::error::Result;
 use crate::funcdata::Funcdata;
 use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
-use crate::error::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -107,7 +107,9 @@ impl ActionDeadCode {
         };
         let push = |slot: usize,
                     val: u64,
-                    worklist: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>| {
+                    worklist: &mut Vec<
+            std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        >| {
             if let Some(input) = inputs.get(slot) {
                 Self::push_consumed(val, input, worklist);
             }
@@ -134,10 +136,13 @@ impl ActionDeadCode {
                 push(1, a, worklist);
             }
             OpCode::CPUI_SUBPIECE => {
-                let byte_offset = inputs.get(1)
-                    .map(|input| input.read().unwrap().get_offset()).unwrap_or(0);
+                let byte_offset = inputs
+                    .get(1)
+                    .map(|input| input.read().unwrap().get_offset())
+                    .unwrap_or(0);
                 let mut a = if byte_offset >= 8 { 0 } else { outc << (byte_offset * 8) };
-                if a == 0 && outc != 0 && inputs.get(0)
+                if a == 0 && outc != 0 && inputs
+                        .get(0)
                     .is_some_and(|input| input.read().unwrap().get_size() > 8)
                 {
                     a = u64::MAX ^ (u64::MAX >> 1);
@@ -146,8 +151,10 @@ impl ActionDeadCode {
                 push(1, if outc == 0 { 0 } else { u64::MAX }, worklist);
             }
             OpCode::CPUI_PIECE => {
-                let low_size = inputs.get(1)
-                    .map(|input| input.read().unwrap().get_size()).unwrap_or(0);
+                let low_size = inputs
+                    .get(1)
+                    .map(|input| input.read().unwrap().get_size())
+                    .unwrap_or(0);
                 let (a, b) = if out_size > 8 {
                     if low_size >= 8 {
                         (u64::MAX, outc)
@@ -214,8 +221,10 @@ impl ActionDeadCode {
             }
             OpCode::CPUI_INT_ZEXT => push(0, outc, worklist),
             OpCode::CPUI_INT_SEXT => {
-                let b = inputs.get(0)
-                    .map(|input| calc_mask(input.read().unwrap().get_size())).unwrap_or(0);
+                let b = inputs
+                    .get(0)
+                    .map(|input| calc_mask(input.read().unwrap().get_size()))
+                    .unwrap_or(0);
                 let mut a = outc & b;
                 if outc > b {
                     a |= b ^ (b >> 1);
@@ -225,7 +234,9 @@ impl ActionDeadCode {
             OpCode::CPUI_INT_LEFT => {
                 let constant_shift = inputs.get(1).and_then(|input| {
                     let input_rg = input.read().unwrap();
-                    input_rg.is_constant().then_some(input_rg.get_offset() as usize)
+                    input_rg
+                        .is_constant()
+                        .then_some(input_rg.get_offset() as usize)
                 });
                 if let Some(shift) = constant_shift {
                     let mut a = if out_size > 8 {
@@ -258,7 +269,9 @@ impl ActionDeadCode {
             OpCode::CPUI_INT_RIGHT => {
                 let constant_shift = inputs.get(1).and_then(|input| {
                     let input_rg = input.read().unwrap();
-                    input_rg.is_constant().then_some(input_rg.get_offset() as usize)
+                    input_rg
+                        .is_constant()
+                        .then_some(input_rg.get_offset() as usize)
                 });
                 if let Some(shift) = constant_shift {
                     push(0, if shift >= 64 { 0 } else { outc << shift }, worklist);
@@ -272,15 +285,27 @@ impl ActionDeadCode {
             OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL |
             OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
                 let a = if outc == 0 { 0 } else {
-                    inputs.get(0).map(|input| input.read().unwrap().get_nz_mask()).unwrap_or(0)
-                        | inputs.get(1).map(|input| input.read().unwrap().get_nz_mask()).unwrap_or(0)
+                    inputs
+                        .get(0)
+                        .map(|input| input.read().unwrap().get_nz_mask())
+                        .unwrap_or(0)
+                        | inputs
+                            .get(1)
+                            .map(|input| input.read().unwrap().get_nz_mask())
+                            .unwrap_or(0)
                 };
                 push(0, a, worklist);
                 push(1, a, worklist);
             }
             OpCode::CPUI_INSERT => {
-                let width = inputs.get(3).map(|input| input.read().unwrap().get_offset()).unwrap_or(0);
-                let position = inputs.get(2).map(|input| input.read().unwrap().get_offset()).unwrap_or(0);
+                let width = inputs
+                    .get(3)
+                    .map(|input| input.read().unwrap().get_offset())
+                    .unwrap_or(0);
+                let position = inputs
+                    .get(2)
+                    .map(|input| input.read().unwrap().get_offset())
+                    .unwrap_or(0);
                 let insert_mask = if width >= 64 { u64::MAX } else if width == 0 { 0 } else { (1u64 << width) - 1 };
                 push(1, insert_mask, worklist);
                 let shifted_mask = if position >= 64 { 0 } else { insert_mask << position };
@@ -290,26 +315,43 @@ impl ActionDeadCode {
                 push(3, b, worklist);
             }
             OpCode::CPUI_EXTRACT => {
-                let width = inputs.get(2).map(|input| input.read().unwrap().get_offset()).unwrap_or(0);
-                let position = inputs.get(1).map(|input| input.read().unwrap().get_offset()).unwrap_or(0);
+                let width = inputs
+                    .get(2)
+                    .map(|input| input.read().unwrap().get_offset())
+                    .unwrap_or(0);
+                let position = inputs
+                    .get(1)
+                    .map(|input| input.read().unwrap().get_offset())
+                    .unwrap_or(0);
                 let extract_mask = if width >= 64 { u64::MAX } else if width == 0 { 0 } else { (1u64 << width) - 1 };
                 let consumed = extract_mask & outc;
-                push(0, if position >= 64 { 0 } else { consumed << position }, worklist);
+                push(
+                    0, if position >= 64 { 0 } else { consumed << position }, worklist,
+                );
                 let b = if outc == 0 { 0 } else { u64::MAX };
                 push(1, b, worklist);
                 push(2, b, worklist);
             }
             OpCode::CPUI_POPCOUNT | OpCode::CPUI_LZCOUNT => {
-                let possible = inputs.get(0)
-                    .map(|input| 16u64.saturating_mul(input.read().unwrap().get_size() as u64).saturating_sub(1))
+                let possible = inputs
+                    .get(0)
+                    .map(|input| {
+                        16u64
+                            .saturating_mul(input.read().unwrap().get_size() as u64)
+                            .saturating_sub(1)
+                    })
                     .unwrap_or(0) & outc;
                 push(0, if possible == 0 { 0 } else { u64::MAX }, worklist);
             }
             OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {}
             OpCode::CPUI_FLOAT_INT2FLOAT => {
                 let a = if outc == 0 { 0 } else {
-                    coveringmask(inputs.get(0)
-                        .map(|input| input.read().unwrap().get_nz_mask()).unwrap_or(0))
+                    coveringmask(
+                        inputs
+                            .get(0)
+                        .map(|input| input.read().unwrap().get_nz_mask())
+                            .unwrap_or(0),
+                    )
                 };
                 push(0, a, worklist);
             }
@@ -332,7 +374,13 @@ impl ActionDeadCode {
             if vn_rg.get_size() > 8 {
                 return false;
             }
-            (vn_rg.get_size(), vn_rg.descend.iter().filter_map(|weak| weak.upgrade()).collect::<Vec<_>>(), vn_rg.get_def())
+            (
+                vn_rg.get_size(), vn_rg
+                    .descend
+                    .iter()
+                    .filter_map(|weak| weak.upgrade())
+                    .collect::<Vec<_>>(), vn_rg.get_def(),
+            )
         };
         for descendant in descendants {
             let op = crate::op::PcodeOpRef(descendant);
@@ -361,7 +409,8 @@ impl ActionDeadCode {
         fc: &crate::fspec::FuncCallSpecs,
         worklist: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
     ) {
-        let Some(call_op) = fc.find_call_op(fd) else { return };
+        let Some(call_op) = fc.find_call_op(fd) else { return ;
+        };
         let inputs = call_op.0.read().unwrap().inrefs.clone();
         if let Some(target) = inputs.first() {
             Self::push_consumed(u64::MAX, target, worklist);
@@ -417,7 +466,9 @@ impl ActionDeadCode {
     ///   - Returns false if heritage_pass > 1 or jumptable recovery is on.
     ///   - For each live LOAD op: if in(1) is eventual constant (maxBinary=3,
     ///     maxLoad=1), push full consumed on the output + set auto_live_hold.
-    fn last_chance_load(fd: &mut Funcdata, worklist: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>) -> bool {
+    fn last_chance_load(
+        fd: &mut Funcdata, worklist: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+    ) -> bool {
         // cc:3905: if (data.getHeritagePass() > 1) return false;
         if fd.heritage.pass > 1 { return false; }
         // cc:3906: if (data.isJumptableRecoveryOn()) return false;
@@ -434,9 +485,11 @@ impl ActionDeadCode {
                 else if let Some(out) = &op.output {
                     if out.read().unwrap().is_consume_vacuous() { None }
                     else {
-                        let in1_is_eventual = op.get_in(1).map(|v| {
-                            v.read().unwrap().is_eventual_constant(3, 1)
-                        }).unwrap_or(false);
+                        let in1_is_eventual = op
+                            .get_in(1)
+                            .map(|v| v.read().unwrap().is_eventual_constant(3, 1)
+                        )
+                            .unwrap_or(false);
                         if in1_is_eventual { Some(out.clone()) }
                         else { None }
                     }
@@ -456,12 +509,22 @@ impl Action for ActionDeadCode {
     // Ghidra: coreaction.cc:3925 ActionDeadCode::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::space::{AddressSpace, SPACEID_OTHER};
-        let all_varnodes = fd.vbank.loc_tree.iter().map(|entry| entry.0.clone()).collect::<Vec<_>>();
-        let mut spaces = all_varnodes.iter().map(|vn| vn.read().unwrap().get_space()).collect::<Vec<_>>();
+        let all_varnodes = fd
+            .vbank
+            .loc_tree
+            .iter()
+            .map(|entry| entry.0.clone())
+            .collect::<Vec<_>>();
+        let mut spaces = all_varnodes
+            .iter()
+            .map(|vn| vn.read().unwrap().get_space())
+            .collect::<Vec<_>>();
         spaces.sort_by_key(|space| (space.space_id(), *space));
         spaces.dedup();
         let does_deadcode = |space: AddressSpace| {
-            !matches!(space, AddressSpace::Const | AddressSpace::Iop | AddressSpace::Other(SPACEID_OTHER))
+            !matches!(
+                space, AddressSpace::Const | AddressSpace::Iop | AddressSpace::Other(SPACEID_OTHER)
+            )
         };
 
         for vn in &all_varnodes {
@@ -523,7 +586,8 @@ impl Action for ActionDeadCode {
                         Self::push_consumed(return_consume, input, &mut worklist);
                     }
                 } else if opcode == OpCode::CPUI_BRANCHIND {
-                    let mask = fd.find_jump_table(op_ref)
+                    let mask = fd
+                        .find_jump_table(op_ref)
                         .map(|table| table.read().unwrap().get_switch_var_consume())
                         .unwrap_or(u64::MAX);
                     if let Some(input) = inputs.first() {
@@ -574,7 +638,9 @@ impl Action for ActionDeadCode {
             for vn in varnodes {
                 let (written, vacuous, consume, def) = {
                     let mut vn_rg = vn.write().unwrap();
-                    let values = (vn_rg.is_written(), vn_rg.is_consume_vacuous(), vn_rg.get_consume(), vn_rg.get_def());
+                    let values = (
+                        vn_rg.is_written(), vn_rg.is_consume_vacuous(), vn_rg.get_consume(), vn_rg.get_def(),
+                    );
                     if values.0 {
                         vn_rg.clear_consume_list();
                         vn_rg.clear_consume_vacuous();
@@ -654,7 +720,8 @@ pub struct ActionConstantPtr {
 impl ActionConstantPtr {
     // Ghidra: coreaction.hh:188 ActionConstantPtr (constructor mirror)
     pub fn new() -> Self {
-        Self { localcount: 0, count: 0 }
+        Self { localcount: 0, count: 0 ,
+        }
     }
 
     // Ghidra: coreaction.cc:957 ActionConstantPtr::searchForSpaceAttribute
@@ -876,7 +943,11 @@ impl ActionConstantPtr {
         // cc:1077-1080: explicitly marked as a pointer type — resolve and
         // skip every heuristic gate (needexacthit=false: partial pointers may
         // land mid-symbol).
-        if vn.read().unwrap().get_type_read_facing().map(|dt| dt.get_metatype())
+        if vn
+            .read()
+            .unwrap()
+            .get_type_read_facing()
+            .map(|dt| dt.get_metatype())
             == Some(TypeMetatype::Pointer)
         {
             *rampoint = Self::resolve_constant(spc, vn_offset, vn_size, op_addr, full_encoding);
@@ -1183,8 +1254,7 @@ impl Action for ActionConstantPtr {
                 slot,
                 &mut rampoint,
                 &mut full_encoding,
-                fd,
-            );
+                fd);
             // cc:1208: set the check flag AFTER searching for the symbol.
             vn.write().unwrap().addlflags |= crate::varnode::addl_flags::PTR_CHECK;
             if let Some(entry) = entry {
@@ -1287,7 +1357,11 @@ impl Action for ActionCse {
 
                 if let (Some(src), Some(dst)) = (existing_out, dup_out) {
                     // Redirect all users of `dst` to `src`
-                    let users: Vec<_> = dst.read().unwrap().descend.iter()
+                    let users: Vec<_> = dst
+                        .read()
+                        .unwrap()
+                        .descend
+                        .iter()
                         .filter_map(|w| w.upgrade())
                         .collect();
                     for user_arc in users {
@@ -1344,7 +1418,8 @@ pub struct ActionRestructureVarnode {
 impl ActionRestructureVarnode {
     // Ghidra: coreaction.hh:854 ActionRestructureVarnode (constructor mirror)
     pub fn new() -> Self {
-        Self { numpass: 0, count: 0 }
+        Self { numpass: 0, count: 0 ,
+        }
     }
 }
 
@@ -1366,17 +1441,17 @@ impl Action for ActionRestructureVarnode {
         // empty, so seed the input-locked FuncProto's parameters here, at
         // scope construction, before restructure_varnode.
         if fd.funcp.is_input_locked() {
-            let params: Vec<(String, std::sync::Arc<crate::type_system::datatype::Datatype>, u64)> =
-                fd.funcp
+            let params: Vec<(
+                String, std::sync::Arc<crate::type_system::datatype::Datatype>, u64,
+            )> =
+                fd
+                .funcp
                     .parameters
                     .iter()
-                    .map(|p| {
-                        (
+                    .map(|p| (
                             p.name.clone(),
                             p.data_type.clone(),
-                            p.address.as_u64(),
-                        )
-                    })
+                            p.address.as_u64()))
                     .collect();
             for (index, (name, dtype, offset)) in params.into_iter().enumerate() {
                 let idx = scope.add_symbol(
@@ -1908,7 +1983,9 @@ fn known_param_types(func_name: Option<&str>) -> Option<Vec<&'static str>> {
         // "glob_url" | "glob_set" | "glob_range" | "glob_word" => Some(vec!["ptr", "ptr"]),
         "next_url" => Some(vec!["ptr"]),  // URLGlob*
         "parseconfig" | "parseconfig_constprop_0" => Some(vec!["ptr", "ptr"]),  // const char*, Configurable*
-        "getparameter" | "getparameter_constprop_0" => Some(vec!["ptr", "ptr", "ptr", "ptr", "ptr"]),
+        "getparameter" | "getparameter_constprop_0" => {
+            Some(vec!["ptr", "ptr", "ptr", "ptr", "ptr"])
+        }
         "file2string" | "file2string_part_0" => Some(vec!["ptr", "ptr"]),  // char**, FILE*
         "progressbarinit" => Some(vec!["ptr"]),  // void*
         // httpd functions — only ones we're confident about
@@ -1942,7 +2019,11 @@ impl Action for ActionCallParams {
         // Collect info about CALL ops: (index in alivelist, max_args, num_inputs)
         // num_inputs distinguishes old-style (1 = target only) from new-style
         // (7 = target + 6 SysV arg registers from the lifter).
-        let call_info: Vec<(usize, usize, usize)> = fd.obank.alivelist.iter().enumerate()
+        let call_info: Vec<(usize, usize, usize)> = fd
+            .obank
+            .alivelist
+            .iter()
+            .enumerate()
             .filter_map(|(idx, op_ref)| {
                 let op = op_ref.0.read().unwrap();
                 if op.opcode == OpCode::CPUI_CALL {
@@ -2036,10 +2117,15 @@ impl Action for ActionCallParams {
             // setup without picking up writes from unrelated paths.
             if call_idx > 0 {
                 // Find how far to search: from start to first CALL (exclusive)
-                let first_call_idx = fd.obank.alivelist.iter().position(|op_ref| {
+                let first_call_idx = fd
+                    .obank
+                    .alivelist
+                    .iter()
+                    .position(|op_ref| {
                     let op = op_ref.0.read().unwrap();
                     op.opcode == OpCode::CPUI_CALL
-                }).unwrap_or(0);
+                })
+                    .unwrap_or(0);
 
                 // Only use this fallback if the current call IS the first call
                 if call_idx == first_call_idx {
@@ -2080,9 +2166,10 @@ impl Action for ActionCallParams {
                     let block = block_arc.read().unwrap();
                     let block_ops = block.get_ops();
                     // Find the CALL op's position within its block.
-                    let call_pos = block_ops.iter().position(|op_ref| {
-                        Arc::ptr_eq(&op_ref.0, &call_op_arc)
-                    });
+                    let call_pos = block_ops
+                        .iter()
+                        .position(|op_ref| Arc::ptr_eq(&op_ref.0, &call_op_arc)
+                    );
                     let search_end = call_pos.unwrap_or(block_ops.len());
                     for (i, &(expected_off, _)) in SYSV_ARG_REGS.iter().take(search_regs).enumerate() {
                         if arg_varnodes[i].is_some() { continue; }
@@ -2136,7 +2223,8 @@ impl Action for ActionCallParams {
                         args_to_add.push(vn.clone());
                     } else {
                         let (reg_off, _) = SYSV_ARG_REGS[i];
-                        let placeholder = fd.vbank.create_with_space(8, AddressSpace::Register, reg_off);
+                        let placeholder = fd.vbank
+                                .create_with_space(8, AddressSpace::Register, reg_off);
                         args_to_add.push(placeholder);
                     }
                 }
@@ -2213,7 +2301,9 @@ impl Action for ActionInferParams {
                     if seen_offsets.insert(offset) {
                         for (i, &(reg_off, _)) in SYSV_ARG_REGS.iter().enumerate() {
                             if offset == reg_off {
-                                param_candidates.push((i, offset, vn.get_size(), vn.v_type.clone()));
+                                param_candidates.push((
+                                    i, offset, vn.get_size(), vn.v_type.clone(),
+                                ));
                                 break;
                             }
                         }
@@ -2243,7 +2333,10 @@ impl Action for ActionInferParams {
                 0xA8,    // R13
                 0xB0,    // R14
                 0xB8,    // R15
-            ].iter().cloned().collect();
+            ]
+            .iter()
+            .cloned()
+            .collect();
 
             if let Some(block_arc) = fd.bblocks.get_block(entry_block_idx) {
                 let block = block_arc.read().unwrap();
@@ -2268,7 +2361,9 @@ impl Action for ActionInferParams {
                                 if seen_offsets.insert(off) {
                                     for (abi_idx, &(reg_off, _)) in SYSV_ARG_REGS.iter().enumerate() {
                                         if off == reg_off {
-                                            param_candidates.push((abi_idx, off, iv.get_size(), iv.v_type.clone()));
+                                            param_candidates.push((
+                                                abi_idx, off, iv.get_size(), iv.v_type.clone(),
+                                            ));
                                             break;
                                         }
                                     }
@@ -2285,7 +2380,9 @@ impl Action for ActionInferParams {
                             if !locally_written.contains(&off) && seen_offsets.insert(off) {
                                 for (abi_idx, &(reg_off, _)) in SYSV_ARG_REGS.iter().enumerate() {
                                     if off == reg_off {
-                                        param_candidates.push((abi_idx, off, vn.get_size(), vn.v_type.clone()));
+                                        param_candidates.push((
+                                            abi_idx, off, vn.get_size(), vn.v_type.clone(),
+                                        ));
                                         break;
                                     }
                                 }
@@ -2351,42 +2448,72 @@ impl Action for ActionInferParams {
                 if param_pos < types.len() {
                     match types[param_pos] {
                         "ptr" => {
-                            let base = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
-                            Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer {
-                                base: crate::type_system::datatype::TypeBase::new("void *".to_string(), 8, TypeMetatype::Pointer),
+                            let base = Arc::new(Datatype::Base(TypeBase::new(
+                                "long".to_string(), 8, TypeMetatype::Int,
+                            )));
+                            Arc::new(Datatype::Pointer(
+                                crate::type_system::datatype::TypePointer {
+                                base: crate::type_system::datatype::TypeBase::new(
+                                        "void *".to_string(), 8, TypeMetatype::Pointer,
+                                    ),
                                 ptr_to: base,
                                 wordsize: 1,
-                            }))
+                            },
+                            ))
                         }
                         "int" => Arc::new(match size {
-                            1 => Datatype::Base(TypeBase::new("byte".to_string(), 1, TypeMetatype::Int)),
-                            2 => Datatype::Base(TypeBase::new("short".to_string(), 2, TypeMetatype::Int)),
-                            4 => Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)),
-                            _ => Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)),
+                            1 => Datatype::Base(TypeBase::new(
+                                "byte".to_string(), 1, TypeMetatype::Int,
+                            )),
+                            2 => Datatype::Base(TypeBase::new(
+                                "short".to_string(), 2, TypeMetatype::Int,
+                            )),
+                            4 => Datatype::Base(TypeBase::new(
+                                "int".to_string(), 4, TypeMetatype::Int,
+                            )),
+                            _ => Datatype::Base(TypeBase::new(
+                                "long".to_string(), 8, TypeMetatype::Int,
+                            )),
                         }),
                         _ => v_type.clone().unwrap_or_else(|| {
-                            Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)))
+                            Arc::new(Datatype::Base(TypeBase::new(
+                                "long".to_string(), 8, TypeMetatype::Int,
+                            )))
                         }),
                     }
                 } else {
                     v_type.clone().unwrap_or_else(|| {
-                        Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)))
+                        Arc::new(Datatype::Base(TypeBase::new(
+                            "long".to_string(), 8, TypeMetatype::Int,
+                        )))
                     })
                 }
             } else if ptr_param_offsets.contains(offset) {
-                let base = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
-                Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer {
-                    base: crate::type_system::datatype::TypeBase::new("long *".to_string(), 8, TypeMetatype::Pointer),
+                let base = Arc::new(Datatype::Base(TypeBase::new(
+                    "long".to_string(), 8, TypeMetatype::Int,
+                )));
+                Arc::new(Datatype::Pointer(
+                    crate::type_system::datatype::TypePointer {
+                    base: crate::type_system::datatype::TypeBase::new(
+                            "long *".to_string(), 8, TypeMetatype::Pointer,
+                        ),
                     ptr_to: base,
                     wordsize: 1,
-                }))
+                },
+                ))
             } else {
                 v_type.clone().unwrap_or_else(|| {
                     Arc::new(match size {
-                        1 => Datatype::Base(TypeBase::new("byte".to_string(), 1, TypeMetatype::Int)),
-                        2 => Datatype::Base(TypeBase::new("short".to_string(), 2, TypeMetatype::Int)),
+                        1 => {
+                            Datatype::Base(TypeBase::new("byte".to_string(), 1, TypeMetatype::Int))
+                        }
+                        2 => {
+                            Datatype::Base(TypeBase::new("short".to_string(), 2, TypeMetatype::Int))
+                        }
                         4 => Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)),
-                        _ => Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)),
+                        _ => {
+                            Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int))
+                        }
                     })
                 })
             };
@@ -2423,19 +2550,31 @@ impl Action for ActionInferParams {
                     if idx < types.len() {
                         match types[idx] {
                             "ptr" => {
-                                let base = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
-                                Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer {
-                                    base: crate::type_system::datatype::TypeBase::new("void *".to_string(), 8, TypeMetatype::Pointer),
+                                let base = Arc::new(Datatype::Base(TypeBase::new(
+                                    "long".to_string(), 8, TypeMetatype::Int,
+                                )));
+                                Arc::new(Datatype::Pointer(
+                                    crate::type_system::datatype::TypePointer {
+                                    base: crate::type_system::datatype::TypeBase::new(
+                                            "void *".to_string(), 8, TypeMetatype::Pointer,
+                                        ),
                                     ptr_to: base, wordsize: 1,
-                                }))
+                                },
+                                ))
                             }
-                            _ => Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int))),
+                            _ => Arc::new(Datatype::Base(TypeBase::new(
+                                "long".to_string(), 8, TypeMetatype::Int,
+                            ))),
                         }
                     } else {
-                        Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)))
+                        Arc::new(Datatype::Base(TypeBase::new(
+                            "long".to_string(), 8, TypeMetatype::Int,
+                        )))
                     }
                 } else {
-                    Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)))
+                    Arc::new(Datatype::Base(TypeBase::new(
+                        "long".to_string(), 8, TypeMetatype::Int,
+                    )))
                 };
                 params.push(crate::fspec::ProtoParameter::new(
                     format!("param_{}", params.len() + 1),
@@ -2468,10 +2607,18 @@ impl Action for ActionInferParams {
                     if ret_vn.get_space() == AddressSpace::Register && ret_vn.get_offset() == 0x00 {
                         let ret_type = ret_vn.v_type.clone().unwrap_or_else(|| {
                             Arc::new(match ret_vn.get_size() {
-                                1 => Datatype::Base(TypeBase::new("byte".to_string(), 1, TypeMetatype::Int)),
-                                2 => Datatype::Base(TypeBase::new("short".to_string(), 2, TypeMetatype::Int)),
-                                4 => Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)),
-                                _ => Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)),
+                                1 => Datatype::Base(TypeBase::new(
+                                    "byte".to_string(), 1, TypeMetatype::Int,
+                                )),
+                                2 => Datatype::Base(TypeBase::new(
+                                    "short".to_string(), 2, TypeMetatype::Int,
+                                )),
+                                4 => Datatype::Base(TypeBase::new(
+                                    "int".to_string(), 4, TypeMetatype::Int,
+                                )),
+                                _ => Datatype::Base(TypeBase::new(
+                                    "long".to_string(), 8, TypeMetatype::Int,
+                                )),
                             })
                         });
                         // Only update if currently void
@@ -2523,11 +2670,21 @@ impl Action for ActionTypeInfer {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
 
-        let int_type = Arc::new(Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)));
-        let long_type = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
-        let short_type = Arc::new(Datatype::Base(TypeBase::new("short".to_string(), 2, TypeMetatype::Int)));
-        let byte_type = Arc::new(Datatype::Base(TypeBase::new("byte".to_string(), 1, TypeMetatype::Uint)));
-        let bool_type = Arc::new(Datatype::Base(TypeBase::new("bool".to_string(), 1, TypeMetatype::Bool)));
+        let int_type = Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(), 4, TypeMetatype::Int,
+        )));
+        let long_type = Arc::new(Datatype::Base(TypeBase::new(
+            "long".to_string(), 8, TypeMetatype::Int,
+        )));
+        let short_type = Arc::new(Datatype::Base(TypeBase::new(
+            "short".to_string(), 2, TypeMetatype::Int,
+        )));
+        let byte_type = Arc::new(Datatype::Base(TypeBase::new(
+            "byte".to_string(), 1, TypeMetatype::Uint,
+        )));
+        let bool_type = Arc::new(Datatype::Base(TypeBase::new(
+            "bool".to_string(), 1, TypeMetatype::Bool,
+        )));
 
         let mut overall_changed = 0;
         let mut iteration = 0;
@@ -2547,22 +2704,20 @@ impl Action for ActionTypeInfer {
                             | OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_SLESS
                             | OpCode::CPUI_INT_LESSEQUAL | OpCode::CPUI_INT_SLESSEQUAL
                             | OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND
-                            | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR => {
-                                Some(bool_type.clone())
-                            }
+                            | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR => Some(bool_type.clone())
+                            ,
                             // Seed LOAD outputs with size-based types so the
                             // address-input pointer inference can bootstrap.
                             // Without this seed, neither the output nor the
                             // address has a type, and pointer inference stalls.
-                            OpCode::CPUI_LOAD => {
-                                match out_vn.get_size() {
+                            OpCode::CPUI_LOAD => match out_vn.get_size() {
                                     8 => Some(long_type.clone()),
                                     4 => Some(int_type.clone()),
                                     2 => Some(short_type.clone()),
                                     1 => Some(byte_type.clone()),
                                     _ => None,
                                 }
-                            }
+                            ,
                             _ => None,
                         };
                         if let Some(dt) = inferred {
@@ -2701,7 +2856,11 @@ impl Action for ActionTypeInfer {
                 if op.opcode == OpCode::CPUI_LOAD && op.inrefs.len() >= 2 {
                     let addr_vn = &op.inrefs[1];
                     let addr_type = addr_vn.read().unwrap().v_type.clone();
-                    let out_type = op.output.as_ref().map(|o| o.read().unwrap().v_type.clone()).flatten();
+                    let out_type = op
+                        .output
+                        .as_ref()
+                        .map(|o| o.read().unwrap().v_type.clone())
+                        .flatten();
 
                     if let Some(ref at) = addr_type {
                         if let Some(pointed) = get_pointed_type(at) {
@@ -2797,7 +2956,9 @@ impl Action for ActionTypeInfer {
 }
 
 // RUGRA-GLUE: helper mirroring TypePointer::getPtrTo (type.hh); used by Rugra type inference
-fn get_pointed_type(ptr_dt: &Arc<crate::type_system::datatype::Datatype>) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+fn get_pointed_type(
+    ptr_dt: &Arc<crate::type_system::datatype::Datatype>,
+) -> Option<Arc<crate::type_system::datatype::Datatype>> {
     use crate::type_system::datatype::Datatype;
     match ptr_dt.as_ref() {
         Datatype::Pointer(p) => Some(p.ptr_to.clone()),
@@ -2806,7 +2967,9 @@ fn get_pointed_type(ptr_dt: &Arc<crate::type_system::datatype::Datatype>) -> Opt
 }
 
 // RUGRA-GLUE: helper mirroring TypeFactory::getTypePointer (type.hh); used by Rugra type inference
-fn make_pointer_type(base: &Arc<crate::type_system::datatype::Datatype>) -> Arc<crate::type_system::datatype::Datatype> {
+fn make_pointer_type(
+    base: &Arc<crate::type_system::datatype::Datatype>,
+) -> Arc<crate::type_system::datatype::Datatype> {
     use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
     Arc::new(Datatype::Pointer(TypePointer {
         base: TypeBase::new(format!("{} *", base.get_name()), 8, TypeMetatype::Pointer),
@@ -2825,7 +2988,8 @@ fn make_pointer_type(base: &Arc<crate::type_system::datatype::Datatype>) -> Arc<
 /// An unreachable block is one that has no immediate dominator (other than
 /// entry-point blocks). This is because the dominator tree only covers
 /// reachable blocks.
-pub struct ActionUnreachable { pub count: i32 }
+pub struct ActionUnreachable { pub count: i32 ,
+}
 impl ActionUnreachable {
     // Ghidra: coreaction.hh:493 ActionUnreachable (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
@@ -2849,7 +3013,8 @@ impl Action for ActionUnreachable {
 ///
 /// A "do nothing" block has exactly 1 out-edge, at least 1 in-edge, no
 /// BRANCHIND, and contains only marker/branch ops (no substantive ops).
-pub struct ActionDoNothing { pub count: i32 }
+pub struct ActionDoNothing { pub count: i32 ,
+}
 impl ActionDoNothing {
     // Ghidra: coreaction.hh:504 ActionDoNothing (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
@@ -2940,7 +3105,8 @@ impl Action for ActionDoNothing {
 /// 2. A block with ≥2 out-edges all going to the same target: the branch is
 ///    redundant (both paths lead to the same place). Remove one branch edge
 ///    via remove_branch.
-pub struct ActionRedundBranch { pub count: i32 }
+pub struct ActionRedundBranch { pub count: i32 ,
+}
 impl ActionRedundBranch {
     // Ghidra: coreaction.hh:515 ActionRedundBranch (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
@@ -2963,7 +3129,8 @@ impl Action for ActionRedundBranch {
                 let first = bl_rg.get_out(0).map(|e| e.point);
                 (n_out, first)
             };
-            let Some(first_target) = first_target else { continue };
+            let Some(first_target) = first_target else { continue ;
+            };
 
             if n_out == 1 {
                 // Case 1: splice block if target has only 1 in-edge and it's
@@ -3021,7 +3188,8 @@ impl Action for ActionRedundBranch {
 /// For each basic block whose last op is a CBRANCH with a constant boolean
 /// input, determine which branch is actually taken (considering boolean flip)
 /// and remove the other branch.
-pub struct ActionDeterminedBranch { pub count: i32 }
+pub struct ActionDeterminedBranch { pub count: i32 ,
+}
 impl ActionDeterminedBranch {
     // Ghidra: coreaction.hh:526 ActionDeterminedBranch (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
@@ -3054,7 +3222,9 @@ impl Action for ActionDeterminedBranch {
                     (false, false, 0u64, false)
                 } else {
                     let bool_vn = cb_rg.get_in(1);
-                    let is_const = bool_vn.map(|v| v.read().unwrap().is_constant()).unwrap_or(false);
+                    let is_const = bool_vn
+                        .map(|v| v.read().unwrap().is_constant())
+                        .unwrap_or(false);
                     let val = bool_vn.map(|v| v.read().unwrap().get_offset()).unwrap_or(0);
                     let is_flip = (cb_rg.flags & crate::op::pcodeop_flags::BOOLEAN_FLIP) != 0;
                     (true, is_const, val, is_flip)
@@ -3135,7 +3305,8 @@ impl Action for ActionHideShadow {
 ///
 /// For each jump table that hasn't been labelled yet, match the model,
 /// recover case labels, and fold in normalization code.
-pub struct ActionSwitchNorm { pub count: i32 }
+pub struct ActionSwitchNorm { pub count: i32 ,
+}
 impl ActionSwitchNorm {
     // Ghidra: coreaction.hh:609 ActionSwitchNorm (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
@@ -3312,7 +3483,8 @@ impl Action for ActionPrototypeWarnings {
         // coreaction.cc:4910-4934: per-call-site parameter/return errors.
         let numcalls = fd.num_calls();
         for i in 0..numcalls {
-            let Some(fc) = fd.get_call_specs(i) else { continue };
+            let Some(fc) = fd.get_call_specs(i) else { continue ;
+            };
             // The oracle prints the callee Funcdata's name, falling back to
             // "<indirect>" when the callspec has no Funcdata link
             // (coreaction.cc:4913-4920). Rugra's front-end boundary binds the
@@ -3356,7 +3528,8 @@ impl Action for ActionPrototypeWarnings {
 /// 2. For Varnodes with multiple descendants, check interaction and possibly
 ///    duplicate them via processMultiplier.
 /// 3. Clear marks.
-pub struct ActionMarkExplicit { pub count: i32 }
+pub struct ActionMarkExplicit { pub count: i32 ,
+}
 
 /// Record of the backward edge traversal state for one Varnode on the
 /// op stack. Faithful to `ActionMarkExplicit::OpStackElement`
@@ -3397,7 +3570,8 @@ impl MarkExplicitOpStackElement {
                 }
             }
         }
-        Self { vn: v.clone(), slot, slotback }
+        Self { vn: v.clone(), slot, slotback ,
+        }
     }
 }
 
@@ -3587,13 +3761,21 @@ impl ActionMarkExplicit {
         loop {
             let (is_pp, is_at, cur_addr, cur_space) = {
                 let r = cur.read().unwrap();
-                (r.is_proto_partial(), r.is_addr_tied(), r.get_offset(), r.get_space())
+                (
+                    r.is_proto_partial(), r.is_addr_tied(), r.get_offset(), r.get_space(),
+                )
             };
             if !is_pp && !is_at {
                 break;
             }
             let mut piece_op: Option<Arc<std::sync::RwLock<crate::op::PcodeOp>>> = None;
-            let readers: Vec<_> = cur.read().unwrap().descend.iter().filter_map(|w| w.upgrade()).collect();
+            let readers: Vec<_> = cur
+                .read()
+                .unwrap()
+                .descend
+                .iter()
+                .filter_map(|w| w.upgrade())
+                .collect();
             for op_arc in readers {
                 let op = op_arc.read().unwrap();
                 if op.opcode != OpCode::CPUI_PIECE {
@@ -3601,12 +3783,17 @@ impl ActionMarkExplicit {
                 }
                 let slot = (0..2)
                     .find(|&i| op.get_in(i).map(|v| Arc::ptr_eq(v, &cur)).unwrap_or(false));
-                let (Some(slot), Some(out)) = (slot, op.output.clone()) else { continue };
+                let (Some(slot), Some(out)) = (slot, op.output.clone()) else { continue ;
+                };
                 let out_r = out.read().unwrap();
                 let mut addr = out_r.get_offset();
                 let (in0_size, in1_size) = (
-                    op.get_in(0).map(|v| v.read().unwrap().get_size()).unwrap_or(0),
-                    op.get_in(1).map(|v| v.read().unwrap().get_size()).unwrap_or(0),
+                    op.get_in(0)
+                        .map(|v| v.read().unwrap().get_size())
+                        .unwrap_or(0),
+                    op.get_in(1)
+                        .map(|v| v.read().unwrap().get_size())
+                        .unwrap_or(0),
                 );
                 // if (addr.getSpace()->isBigEndian() == (slot == 1))
                 //   addr = addr + op->getIn(1-slot)->getSize();
@@ -3660,7 +3847,8 @@ impl ActionMarkExplicit {
         for vn_arc in multlist {
             // All elements in this list should have a defining op.
             let vn = vn_arc.read().unwrap();
-            let Some(def_arc) = vn.get_def() else { continue };
+            let Some(def_arc) = vn.get_def() else { continue ;
+            };
             let op = def_arc.read().unwrap();
             let opc = op.opcode;
             if op.is_bool_output()
@@ -3673,7 +3861,8 @@ impl ActionMarkExplicit {
                     maxparam = op.num_input();
                 }
                 for j in 0..maxparam {
-                    let Some(topvn_arc) = op.get_in(j) else { continue };
+                    let Some(topvn_arc) = op.get_in(j) else { continue ;
+                    };
                     let topvn = topvn_arc.read().unwrap();
                     // We have a "multiple" interaction between topvn and vn.
                     if topvn.is_mark() {
@@ -3907,7 +4096,11 @@ impl Action for ActionMarkExplicit {
         // cc:3262: count += multipleInteraction(multlist)
         change_count += Self::multiple_interaction(&multlist);
         // cc:3263: maxdup = data.getArch()->max_term_duplication
-        let max_dup = fd.arch.as_ref().map(|a| a.max_term_duplication).unwrap_or(2);
+        let max_dup = fd
+            .arch
+            .as_ref()
+            .map(|a| a.max_term_duplication)
+            .unwrap_or(2);
         for vn_arc in &multlist {
             // cc:3266: mark may have been cleared by multipleInteraction
             if vn_arc.read().unwrap().is_mark() {
@@ -3942,7 +4135,8 @@ impl Action for ActionMarkExplicit {
 /// does a depth-first traversal of each Varnode's descendants, checking
 /// if the cover allows the variable to be implied (no LOAD/STORE/call
 /// aliasing issues).
-pub struct ActionMarkImplied { pub count: i32 }
+pub struct ActionMarkImplied { pub count: i32 ,
+}
 impl ActionMarkImplied {
     // Ghidra: coreaction.hh:449 ActionMarkImplied (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
@@ -3966,7 +4160,9 @@ impl ActionMarkImplied {
             let Some(def) = a_rg.get_def() else { continue };
             let def_rg = def.read().unwrap();
             let opc = def_rg.opcode;
-            if !matches!(opc, OpCode::CPUI_INT_ADD | OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD | OpCode::CPUI_INT_XOR) {
+            if !matches!(
+                opc, OpCode::CPUI_INT_ADD | OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD | OpCode::CPUI_INT_XOR
+            ) {
                 continue;
             }
             // Check if the other varnode is input(0) of this op.
@@ -3975,7 +4171,9 @@ impl ActionMarkImplied {
                 if std::sync::Arc::ptr_eq(in0_vn, b) {
                     // Check if input(1) is a constant.
                     let in1 = def_rg.get_in(1);
-                    if in1.map(|v| v.read().unwrap().is_constant()).unwrap_or(false) {
+                    if in1
+                        .map(|v| v.read().unwrap().is_constant())
+                        .unwrap_or(false) {
                         return false; // a = b + const → not a possible alias.
                     }
                 }
@@ -4040,7 +4238,8 @@ impl ActionMarkImplied {
                     if store_op.is_dead() || store_op.opcode != OpCode::CPUI_STORE {
                         continue;
                     }
-                    let Some(store_blk) = store_op.parent.as_ref().and_then(|w| w.upgrade()) else { continue };
+                    let Some(store_blk) = store_op.parent.as_ref().and_then(|w| w.upgrade()) else { continue ;
+                    };
                     let store_bi = store_blk.read().unwrap().get_index();
                     let store_order = store_op.start.get_order();
                     let interior = cover
@@ -4079,7 +4278,9 @@ impl ActionMarkImplied {
         // whose only read is the CALL itself has the call on its TAIL
         // boundary, so it does not count as crossing and stays imposable —
         // that is exactly the `fopen(*(char **)stream, ...)` inline form.
-        if matches!(def_opc, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND | OpCode::CPUI_LOAD) {
+        if matches!(
+            def_opc, OpCode::CPUI_CALL | OpCode::CPUI_CALLIND | OpCode::CPUI_LOAD
+        ) {
             let vn_cover = vn_arc.read().unwrap().cover.as_ref().map(|c| c.clone());
             if let Some(cover) = vn_cover {
                 for call_op_ref in &fd.obank.alivelist {
@@ -4119,7 +4320,8 @@ impl ActionMarkImplied {
         // (3) Input cover inflation test (the authoritative check).
         let high = high_arc.read().unwrap();
         for i in 0..def_op.num_input() {
-            let Some(in_vn) = def_op.get_in(i) else { continue };
+            let Some(in_vn) = def_op.get_in(i) else { continue ;
+            };
             let in_rg = in_vn.read().unwrap();
             if in_rg.is_constant() {
                 continue;
@@ -4210,7 +4412,8 @@ impl Action for ActionMarkImplied {
 /// 3. Casts inputs to match the op's expected type
 /// 4. Checks pointer issues on LOAD/STORE
 /// 5. Casts the output to its declared type
-pub struct ActionSetCasts { pub count: i32 }
+pub struct ActionSetCasts { pub count: i32 ,
+}
 impl ActionSetCasts {
     // Ghidra: coreaction.hh:330 ActionSetCasts (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
@@ -4238,9 +4441,8 @@ impl ActionSetCasts {
             | OpCode::CPUI_INT_SREM
             | OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR
             | OpCode::CPUI_INT_NEGATE | OpCode::CPUI_INT_2COMP
-            | OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => {
-                Some(TypeMetatype::Int)
-            }
+            | OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT => Some(TypeMetatype::Int)
+            ,
             // Boolean ops: metain = TYPE_BOOL
             OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND
             | OpCode::CPUI_BOOL_OR | OpCode::CPUI_BOOL_XOR => Some(TypeMetatype::Bool),
@@ -4272,7 +4474,8 @@ impl ActionSetCasts {
         // cc:444: reqtype = op->getOut()->getHighTypeDefFacing()
         let reqtype = op.get_out().and_then(|o| {
             let vn = o.read().unwrap();
-            vn.high.as_ref()
+            vn.high
+                .as_ref()
                 .map(|h| h.read().unwrap().v_type.get())
                 .or_else(|| vn.v_type.clone())
         })?;
@@ -4281,7 +4484,8 @@ impl ActionSetCasts {
         // cc:446: curtype = invn->getHighTypeReadFacing(op)
         let curtype_full = {
             let vn = invn.read().unwrap();
-            vn.high.as_ref()
+            vn.high
+                .as_ref()
                 .map(|h| h.read().unwrap().v_type.get())
                 .or_else(|| vn.v_type.clone())
         }?;
@@ -4338,13 +4542,15 @@ impl ActionSetCasts {
         let value_vn = op.get_in(2)?;
         let pointer_type = {
             let vn = pointer_vn.read().unwrap();
-            vn.high.as_ref()
+            vn.high
+                .as_ref()
                 .map(|h| h.read().unwrap().v_type.get())
                 .or_else(|| vn.v_type.clone())
         }?;
         let value_type = {
             let vn = value_vn.read().unwrap();
-            vn.high.as_ref()
+            vn.high
+                .as_ref()
                 .map(|h| h.read().unwrap().v_type.get())
                 .or_else(|| vn.v_type.clone())
         }?;
@@ -4413,7 +4619,10 @@ impl ActionSetCasts {
         slot: usize,
         strategy: &crate::type_system::cast::CastStrategyC,
     ) -> bool {
-        use crate::type_system::cast::base_type_for;
+        let type_factory = fd
+            .get_arch()
+            .and_then(|architecture| architecture.types.clone())
+            .unwrap_or_else(crate::type_system::typefactory::TypeFactory::shared_default);
         // (1) Compute reqtype = op->inputTypeLocal(slot) = getBase(size, metain).
         let (in_vn, reqtype, curtype, op_pc, in_size) = {
             let op = op_ref.0.read().unwrap();
@@ -4428,6 +4637,9 @@ impl ActionSetCasts {
             let specialized = match op.opcode {
                 OpCode::CPUI_LOAD => Self::load_input_cast(&op, slot, strategy),
                 OpCode::CPUI_STORE => Self::store_input_cast(&op, slot, strategy),
+                OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
+                    crate::typeop::comparison_input_cast(&op, slot, strategy)
+                }
                 _ => None,
             };
             if let Some(reqtype) = specialized {
@@ -4441,8 +4653,7 @@ impl ActionSetCasts {
                 if in_arc.read().unwrap().is_constant() {
                     // Constants just get their type updated (castInput
                     // const path).
-                    in_arc.write().unwrap().v_type = Some(reqtype);
-                    return true;
+                    return in_arc.write().unwrap().update_type(reqtype);
                 }
                 let new_op = fd.new_op(1, op_pc);
                 let out_vn = fd.new_unique_out(in_size, &new_op);
@@ -4452,23 +4663,29 @@ impl ActionSetCasts {
                 fd.op_set_input(&new_op, in_arc.clone(), 0);
                 fd.op_set_input(op_ref, out_vn, slot);
                 fd.op_insert_before(&new_op, op_ref);
-                return true;
-            }
-            let meta_opt = Self::input_metatype(op.opcode);
+                    return true;
+                }
+                let meta_opt = Self::input_metatype(op.opcode);
             drop(op);
             let Some(meta) = meta_opt else { return false; };
             let (in_size, curtype, is_annot) = {
                 let in_rg = in_arc.read().unwrap();
                 let is_annot = in_rg.is_annotation();
                 let in_size = in_rg.get_size();
-                let curtype = in_rg.high.as_ref()
-                    .map(|h| h.read().unwrap().v_type.get())
+                let curtype = in_rg
+                    .get_high_type_read_facing(&op_ref.0.read().unwrap(), slot as i32)
                     .or_else(|| in_rg.v_type.clone())
-                    .unwrap_or_else(|| base_type_for(in_size, meta));
+                    .or_else(|| type_factory.read().unwrap().get_base(in_size, meta));
+                let Some(curtype) = curtype else { return false; }
+            ;
                 (in_size, curtype, is_annot)
             };
-            if is_annot { return false; }
-            let reqtype = base_type_for(in_size, meta);
+            if is_annot {
+            return false;
+        }
+            let Some(reqtype) = type_factory.read().unwrap().get_base(in_size, meta) else {
+                return false;
+            };
             (in_arc, reqtype, curtype, op_pc, in_size)
         };
         // (2) castStandard(reqtype, curtype, care_uint_int=false, care_ptr_uint=true)
@@ -4479,8 +4696,7 @@ impl ActionSetCasts {
         //     Faithful to coreaction.cc:2702-2712.
         if in_vn.read().unwrap().is_constant() {
             // Constants just get their type updated (castInput const path).
-            in_vn.write().unwrap().v_type = Some(reqtype);
-            return true;
+            return in_vn.write().unwrap().update_type(reqtype);
         }
         let new_op = fd.new_op(1, op_pc);
         let out_vn = fd.new_unique_out(in_size, &new_op);
@@ -4496,7 +4712,9 @@ impl ActionSetCasts {
     // Ghidra: coreaction.cc:2469 ActionSetCasts::isOpIdentical
     /// Check if two types are identical after unwrapping pointer layers and
     /// typedef aliases. Faithful to `isOpIdentical` (cc:2469-2481).
-    fn is_op_identical(ct1: &Arc<crate::type_system::datatype::Datatype>, ct2: &Arc<crate::type_system::datatype::Datatype>) -> bool {
+    fn is_op_identical(
+        ct1: &Arc<crate::type_system::datatype::Datatype>, ct2: &Arc<crate::type_system::datatype::Datatype>,
+    ) -> bool {
         use crate::type_system::datatype::Datatype;
         let mut t1 = ct1.clone();
         let mut t2 = ct2.clone();
@@ -4570,7 +4788,11 @@ impl ActionSetCasts {
                             .or_else(|| vn.v_type.clone())
                     });
                 let out_high = || {
-                    outvn.read().unwrap().high.as_ref()
+                    outvn
+                        .read()
+                        .unwrap()
+                        .high
+                        .as_ref()
                         .map(|h| h.read().unwrap().v_type.get())
                         .or_else(|| outvn.read().unwrap().v_type.clone())
                 };
@@ -4633,7 +4855,11 @@ impl ActionSetCasts {
             }
         };
         // cc:2543: outHighType = outvn->getHigh()->getType()
-        let out_high_type = outvn.read().unwrap().high.as_ref()
+        let out_high_type = outvn
+            .read()
+            .unwrap()
+            .high
+            .as_ref()
             .map(|h| h.read().unwrap().v_type.get())
             .or_else(|| outvn.read().unwrap().v_type.clone())
             .unwrap_or_else(|| tokenct.clone());
@@ -4756,8 +4982,8 @@ impl ActionSetCasts {
     fn ptr_input_reqtype(
         op: &crate::op::PcodeOpRef,
     ) -> Option<std::sync::Arc<crate::type_system::datatype::Datatype>> {
-        use crate::type_system::TypeMetatype;
         use crate::type_system::datatype::Datatype;
+        use crate::type_system::TypeMetatype;
         let (opcode, in0_arc) = {
             let op = op.0.read().unwrap();
             (op.opcode, op.get_in(0).cloned()?)
@@ -4848,8 +5074,8 @@ impl ActionSetCasts {
     /// and forcing a base-int token would wrongly cast `(long *)out` →
     /// `(long)out`.
     fn output_metatype(opc: OpCode) -> Option<crate::type_system::datatype::TypeMetatype> {
-        use crate::type_system::datatype::TypeMetatype;
         use crate::opcodes::OpCode;
+        use crate::type_system::datatype::TypeMetatype;
         match opc {
             OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
             | OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL
@@ -4881,77 +5107,69 @@ impl Action for ActionSetCasts {
 
     // Ghidra: coreaction.cc:2722 ActionSetCasts::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Partial ActionSetCasts::apply implementation.  The ordinary
-        // PTRSUB output-token graph is covered by
-        // TYPEOP-PTRSUB-FIELDCAST-0001.  PIPE-ACTION-COUNT-0001C tracks the
-        // remaining cast-phase, traversal, union/pointer-check, and count
-        // channel mismatches.  For each non-CAST op currently visited:
-        //   (1) For PTRSUB/PTRADD slot 0, run the pointer-fit castInput arm
-        //       (cast_input_ptr) — if the input pointer type does not match
-        //       the op's expected base pointer, insert a CPUI_CAST so printc
-        //       emits `(ptype *)a`.
-        //   (2) For integer binary/unary ops, run castInput (cast_input) —
-        //       insert CPUI_CAST where the op's expected input metatype
-        //       differs from the varnode's high type (the `piVar | param`
-        //       int*-to-long case).
-        //   (3) Run castOutput — insert CPUI_CAST after the op if the output
-        //       token type differs from the output's high type.
-        // resolveUnion / checkPointerIssues remain deferred (need full union
-        // + LOAD/STORE pointer-issue infrastructure).
-        //
-        // Ghidra accumulates changes in inherited Action::count and returns 0
-        // from raw apply.  Rugra still returns CHANGE here and overwrites its
-        // leaf count, an observed PIPE-ACTION-COUNT-0001C mismatch.
-        let ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.clone();
-        let strategy = crate::type_system::cast::CastStrategyC::new(4);
-        let mut count = 0;
-        for op_ref in &ops {
-            let (opc, n_inputs) = {
-                let op = op_ref.0.read().unwrap();
-                if op.is_dead() { continue; }
-                (op.opcode, op.num_input())
-            };
-            if opc == OpCode::CPUI_CAST { continue; }
-            // PTRSUB/PTRADD slot 0 pointer-fit (coreaction.cc:2655-2672
-            // pointer branch: only slot 0 is the pointer operand; slots 1/2
-            // are the constant offset / element-size and never need a cast).
-            if matches!(opc, OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD) {
-                if let Some(reqtype) = Self::ptr_input_reqtype(op_ref) {
-                    if self.cast_input_ptr(fd, op_ref, 0, &strategy, reqtype) {
-                        count += 1;
-                    }
-                }
-                // PTRSUB/PTRADD slots 1 (offset) / 2 (size) are integer
-                // constants; skip the integer castInput path for them.
-                continue;
-            }
-            // Integer binary/unary input cast (castInput may mutate inputs;
-            // iterate a snapshot of slots).
-            for slot in 0..n_inputs {
-                if self.cast_input(fd, op_ref, slot, &strategy) {
-                    count += 1;
-                }
-            }
-        }
-        // castOutput pass over the original op snapshot.  Ghidra performs
-        // inputs then output within each op in block/dominance order; this
-        // two-pass ordering is a PIPE-ACTION-COUNT-0001C mismatch because an
-        // earlier output mutation can affect a later op's input decision.
-        for op_ref in &ops {
-            let opc = {
-                let op = op_ref.0.read().unwrap();
-                if op.is_dead() { continue; }
-                op.opcode
-            };
-            if opc == OpCode::CPUI_CAST { continue; }
-            count += Self::cast_output(fd, op_ref, &strategy);
-        }
-        self.count = count;
-        if count > 0 {
-            Ok(action_status::CHANGE)
+        // coreaction.cc:2729-2733 walks basic blocks in dominance order and
+        // operations in each block's list order. Detached Rust fixtures that
+        // have no basic-block graph retain their explicit alivelist order.
+        let ops: Vec<crate::op::PcodeOpRef> = if fd.bblocks.blocks.is_empty() {
+            fd.obank.alivelist.clone()
         } else {
-            Ok(action_status::NO_CHANGE)
+            fd.bblocks
+                .blocks
+                .iter()
+                .flat_map(|block| block.read().unwrap().get_ops())
+                .collect()
+        };
+        let strategy = crate::type_system::cast::CastStrategyC::new(4);
+        let mut changes = 0;
+        for op_ref in &ops {
+            let (opcode, input_count, skip) = {
+                let op = op_ref.0.read().unwrap();
+                let not_printed = op.flags
+                    & (crate::op::pcodeop_flags::MARKER
+                        | crate::op::pcodeop_flags::NONPRINTING
+                        | crate::op::pcodeop_flags::NORETURN)
+                    != 0;
+                (
+                    op.opcode,
+                    op.num_input(),
+                    op.is_dead() || not_printed || op.opcode == OpCode::CPUI_CAST,
+                )
+            };
+            if skip { continue; }
+                // coreaction.cc:2756-2759: every operation is handled atomically:
+            // all of its input casts precede its output cast. In particular,
+            // a later op observes the output mutation of an earlier op.
+            for slot in 0..input_count {
+                let changed =
+                    if slot == 0 && matches!(opcode, OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD) {
+                        Self::ptr_input_reqtype(op_ref).is_some_and(|required| {
+                            self.cast_input_ptr(fd, op_ref, slot, &strategy, required)
+                        })
+                    } else {
+                        self.cast_input(fd, op_ref, slot, &strategy) };
+                if changed {
+                    changes += 1;
+                }
+            }
+
+            // The PTRADD/PTRSUB fit preflight, resolveUnion, and
+            // checkPointerIssues branches remain separately registered
+            // residuals; the ordering here now matches the oracle for the
+            // implemented castInput/castOutput closure.
+            changes += Self::cast_output(fd, op_ref, &strategy);
         }
+
+        // Ghidra mutates Action::count and returns 0 from raw apply. The Rust
+        // executor drains this field through take_count_delta below.
+        self.count += changes;
+        Ok(action_status::NO_CHANGE)
+    }
+
+    // RUGRA-GLUE: exposes ActionSetCasts inherited count through external ActionState after raw apply returns Ghidra's 0
+    fn take_count_delta(&mut self) -> i32 {
+        let changes = self.count ;
+        self.count = 0 ;
+        changes
     }
     // RUGRA-GLUE: Rust Action trait get_name; "setcasts" mirrors ctor at coreaction.hh:330
     fn get_name(&self) -> &str { "setcasts" }
@@ -5043,315 +5261,107 @@ fn make_ptr(
 
 impl ActionInferTypes {
     // Ghidra: coreaction.cc:5008 ActionInferTypes::buildLocaltypes
-    /// Collect the currently implemented local type seeds.  The oracle walks
-    /// Varnodes and calls `Varnode::getLocalType`; this hybrid loc-tree/op-walk
-    /// projection is still an `ACTION-INFERTYPES-DISPATCH-0001` mismatch.  In particular,
-    /// PTRSUB local typing stays INT and its field token is not consumed here.
+    /// Collect the local data-type for each eligible Varnode in loc-set order.
+    ///
+    /// This follows the oracle's one-pass dispatch: an exact piece from a
+    /// type-locked parent Symbol wins when it resolves to a concrete type;
+    /// otherwise the Varnode's defining op and descendants are queried through
+    /// `Varnode::get_local_type`.  There is no size-based scalar fallback and
+    /// no second op-centric seeding pass.
     fn build_localtypes(
         &self,
         fd: &Funcdata,
         temps: &mut TempTypes,
-        int_types: &IntTypes,
-        ptr_size: usize,
-    ) {
-        use crate::type_system::datatype::TypeMetatype;
-        use crate::typeop::TypeOp as _;
-        // Ghidra buildLocaltypes (coreaction.cc:5008-5034) FIRST seeds every
-        // varnode's temp with its LOCAL type (`ct = vn->getLocalType(...);
-        // vn->setTempType(ct)`): this is how type-locked inputs (locked
-        // parameter symbols) and previously inferred types enter the
-        // propagation. The per-op arms below then refine from op semantics,
-        // matching Ghidra's getLocalType consulting the defining op.
-        for vn_arc in fd.vbank.loc_tree.iter().map(|v| v.0.clone()) {
-            let mut needs_block = false;
-            {
+        _int_types: &IntTypes,
+        _ptr_size: usize,
+    ) -> Result<()> {
+        let type_factory = fd
+            .arch
+            .as_ref()
+            .and_then(|architecture| architecture.types.clone())
+            .unwrap_or_else(crate::type_system::typefactory::TypeFactory::shared_default);
+        let userops = fd
+            .arch
+            .as_ref()
+            .and_then(|architecture| architecture.userops.clone());
+
+        // coreaction.cc:5016: beginLoc()/endLoc() is VarnodeLocSet order.
+        for vn_arc in fd.vbank.loc_tree.iter().map(|entry| entry.0.clone()) {
+            let (mapentry, type_locked, address, size, id) = {
                 let vn = vn_arc.read().unwrap();
-                if vn.is_annotation() {
+                // cc:5018-5019: annotations and free, unread Varnodes have no
+                // temporary type and are skipped in place.
+                if vn.is_annotation() || (!vn.is_written() && vn.has_no_descend()) {
                     continue;
                 }
-                if !vn.is_written() && vn.has_no_descend() {
-                    continue;
-                }
-                // Ghidra's getLocalType (varnode.cc:918-934) never consults
-                // the varnode's current v_type except through the typelock
-                // early-return (cc:906-907); the temp comes from the
-                // def/descend dispatch. VarnodeBank pre-seeds freshly created
-                // varnodes with placeholder unknown-N types, and seeding
-                // those into the temp map would preempt the sized-int local
-                // fallback below (an unsealed INT_SUB/PTRSUB output would
-                // keep unknown instead of the oracle's int local), so only
-                // concrete (non-Unknown) types — typelock-carried or
-                // previously inferred — enter the temp map here.
-                if let Some(ct) = vn.v_type.clone() {
-                    if ct.get_metatype() != TypeMetatype::Unknown {
-                        temps.insert(vn_id(&vn), ct);
+                (
+                    vn.mapentry.clone(),
+                    vn.is_type_lock(),
+                    *vn.get_addr(),
+                    vn.get_size(),
+                    vn_id(&vn),
+                )
+            };
+
+            // cc:5021-5027: a type-locked parent Symbol can provide an exact
+            // piece even when this particular Varnode is not type locked.
+            let exact_piece = if !type_locked {
+                if let Some(entry_arc) = mapentry {
+                    let (symbol, entry_address, entry_offset) = {
+                        let entry = entry_arc.read().unwrap();
+                        (entry.get_symbol(), entry.get_addr(), entry.get_offset())
+                    };
+                    let symbol_type = {
+                        let symbol = symbol.read().unwrap();
+                        symbol.is_type_locked().then(|| symbol.get_type()).flatten()
+                    };
+                    if let Some(symbol_type) = symbol_type {
+                        // The C++ expression is assigned to int4 after unsigned
+                        // address arithmetic. Preserve its wrapping truncation.
+                        let current_offset = address
+                            .as_u64()
+                            .wrapping_sub(entry_address.as_u64())
+                            .wrapping_add(entry_offset as u64)
+                            as i32;
+                        type_factory
+                            .write()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .get_exact_piece(symbol_type, current_offset as i64, size)
+                            .filter(|datatype| {
+                                datatype.get_metatype()
+                                    != crate::type_system::datatype::TypeMetatype::Unknown
+                            })
+                    } else {
+                        None
                     }
+                } else {
+                    None
                 }
-                // coreaction.cc:5020-5031: `bool needsBlock = false;` is
-                // reset per varnode, and its ONLY writer inside
-                // `Varnode::getLocalType` is the defining op's
-                // stop_type_propagation flag (varnode.cc:912), consulted
-                // after the typelock early-return (varnode.cc:906). The
-                // SymbolEntry/getExactPiece branch (coreaction.cc:5022-5027)
-                // that can bypass getLocalType — leaving needsBlock false —
-                // is not wired in Rugra yet (registered gap B2-W3 /
-                // TYPEFACTORY-EXACTPIECE-0001), so every varnode takes the
-                // getLocalType path and the blockup computation reduces to
-                // the def consult below.
-                if !vn.is_type_lock() {
-                    needs_block = vn
-                        .get_def()
-                        .is_some_and(|def| def.read().unwrap().stops_type_propagation());
-                }
-            }
-            // coreaction.cc:5030-5031: `if (needsBlock) vn->setStopUpPropagation();`
-            // — set-only over the varnode's whole lifetime; Ghidra has no
-            // clear call site anywhere (clearStopUpPropagation is declared at
-            // varnode.hh:334 with zero callers).
+            } else {
+                None
+            };
+
+            // cc:5020 resets needsBlock for every Varnode. getLocalType is the
+            // only path that can set it; a successful exact-piece lookup leaves
+            // it false.
+            let mut needs_block = false;
+            let local_type = if let Some(exact_piece) = exact_piece {
+                Some(exact_piece)
+            } else {
+                vn_arc
+                    .read()
+                    .unwrap()
+                    .get_local_type(&mut needs_block, &type_factory, userops.as_ref())
+                    .map_err(|error| crate::error::Error::Lowlevel(error.to_string()))?
+            };
             if needs_block {
                 vn_arc.write().unwrap().set_stop_up_propagation();
             }
-        }
-        // Walk all live ops and seed temp types from op semantics. Mirrors the
-        // per-op local-type inference Ghidra folds into Varnode::getLocalType.
-        for op_ref in &fd.obank.alivelist {
-            let op = op_ref.0.read().unwrap();
-            if op.is_dead() {
-                continue;
-            }
-            match op.opcode {
-                // CBRANCH: its boolean condition input is a bool (input slot 1).
-                OpCode::CPUI_CBRANCH => {
-                    if let Some(cond) = op.get_in(1) {
-                        let cv = cond.read().unwrap();
-                        temps.insert(vn_id(&cv), int_types.bool.clone());
-                    }
-                }
-                // Comparison ops → boolean output (coreaction.cc implicit via
-                // propagateType, but seeding here bootstraps the DFS).
-                OpCode::CPUI_INT_EQUAL
-                | OpCode::CPUI_INT_NOTEQUAL
-                | OpCode::CPUI_INT_LESS
-                | OpCode::CPUI_INT_SLESS
-                | OpCode::CPUI_INT_LESSEQUAL
-                | OpCode::CPUI_INT_SLESSEQUAL
-                | OpCode::CPUI_FLOAT_EQUAL
-                | OpCode::CPUI_FLOAT_NOTEQUAL
-                | OpCode::CPUI_FLOAT_LESS
-                | OpCode::CPUI_FLOAT_LESSEQUAL => {
-                    if let Some(out) = op.get_out() {
-                        let ov = out.read().unwrap();
-                        temps.insert(vn_id(&ov), int_types.bool.clone());
-                    }
-                }
-                // Boolean ops → boolean output.
-                OpCode::CPUI_BOOL_NEGATE
-                | OpCode::CPUI_BOOL_AND
-                | OpCode::CPUI_BOOL_OR
-                | OpCode::CPUI_BOOL_XOR => {
-                    if let Some(out) = op.get_out() {
-                        let ov = out.read().unwrap();
-                        temps.insert(vn_id(&ov), int_types.bool.clone());
-                    }
-                }
-                // TypeOpCall::getOutputLocal (typeop.cc:720-734) /
-                // TypeOpCallind::getOutputLocal (typeop.cc:776-789): a call
-                // whose callspec output is type-locked seeds the call output
-                // varnode with the callee's return type (e.g. locked libc
-                // `char *strdup(...)` → char*). VOID falls back to the
-                // default; nothing is seeded when the spec is absent or the
-                // output is not locked.
-                //
-                // D2 (TYPEOP-LOCALTYPE-DISPATCH-0001): every seed from this
-                // arm — output and inputs — merges through
-                // `merge_min_type_order`, the descendant competition of
-                // `Varnode::getLocalType` (varnode.cc:926-931), replacing
-                // only on strictly-more-specific typeOrder. Input seeding
-                // goes through the TypeOp local dispatch (no inlined
-                // parameter-lock logic here): CALL via
-                // `TypeOpCall::get_input_local` (typeop.cc:687, fspec
-                // annotation on in0), CALLIND via
-                // `TypeOpCallind::get_input_local_in_fd` (typeop.cc:745,
-                // callspec via getCallSpecs(op), slot 0 = code pointer).
-                // Both fall back to the canonical UNKNOWN base of the
-                // Architecture TypeFactory (typeop.cc:271-275) — the INT/UINT
-                // `IntTypes` fallback must never replace it.
-                OpCode::CPUI_CALL | OpCode::CPUI_CALLIND => {
-                    let out = op.get_out().cloned();
-                    let opcode = op.opcode;
-                    let num_input = op.num_input();
-                    // `get_call_specs_of_op` snapshots input(0) through the
-                    // same op lock. Release this traversal guard first:
-                    // recursive std::sync::RwLock reads are not guaranteed
-                    // when another thread is waiting to write.
-                    drop(op);
-                    if let Some(out) = out {
-                        let seed = fd
-                            .get_call_specs_of_op(&crate::op::PcodeOpRef(op_ref.0.clone()))
-                            .and_then(|fc| {
-                                let fc = fc.read().unwrap();
-                                fc.prototype
-                                    .output_type_locked
-                                    .then(|| fc.prototype.return_type.clone())
-                            })
-                            .filter(|ct| {
-                                use crate::type_system::datatype::TypeMetatype;
-                                ct.get_metatype() != TypeMetatype::Void
-                            });
-                        if let Some(ct) = seed {
-                            merge_min_type_order(temps, vn_id(&out.read().unwrap()), ct);
-                        }
-                    }
-                    // Input local dispatch (varnode.cc:921-924 descendant
-                    // visits mapped onto the op-centric walk). The loop
-                    // covers every input slot whose varnode is not an
-                    // annotation: CALL slot 0 is the fspec constant
-                    // (buildLocaltypes skips it via `vn->isAnnotation()`,
-                    // coreaction.cc:5018), while CALLIND slot 0 is the real
-                    // code-pointer varnode whose descendant seed is exactly
-                    // `TypeOpCallind::getInputLocal(op,0)` (typeop.cc:752-756).
-                    let type_factory = fd.arch.as_ref().and_then(|a| a.types.clone());
-                    let Some(type_factory) = type_factory else {
-                        continue;
-                    };
-                    for slot in 0..num_input {
-                        let input_vn = op_ref
-                            .0
-                            .read()
-                            .unwrap()
-                            .get_in(slot)
-                            .cloned();
-                        let Some(input_vn) = input_vn else { continue };
-                        if input_vn.read().unwrap().is_annotation() {
-                            continue;
-                        }
-                        let ct = match opcode {
-                            OpCode::CPUI_CALL => {
-                                // TypeOpCall::getInputLocal (typeop.cc:687):
-                                // the guard is released before any callspec
-                                // path — this method resolves the spec from
-                                // the in0 annotation's typed Weak, never
-                                // re-entering the op lock.
-                                let op = op_ref.0.read().unwrap();
-                                crate::typeop::TypeOpCall::new(type_factory.clone())
-                                    .get_input_local(&op, slot)
-                            }
-                            OpCode::CPUI_CALLIND => {
-                                // TypeOpCallind::getInputLocal (typeop.cc:745):
-                                // called without holding the op guard —
-                                // get_input_local_in_fd resolves
-                                // `getCallSpecs(op)` through
-                                // fd.get_call_specs_of_op, which takes its
-                                // own op read lock.
-                                crate::typeop::TypeOpCallind::new(type_factory.clone())
-                                    .get_input_local_in_fd(op_ref, slot, fd)
-                            }
-                            _ => None,
-                        };
-                        if let Some(ct) = ct {
-                            merge_min_type_order(temps, vn_id(&input_vn.read().unwrap()), ct);
-                        }
-                    }
-                }
-                // LOAD/STORE reader dispatch (varnode.cc:918-932 descendant
-                // visits mapped onto the op-centric walk): Ghidra's
-                // buildLocaltypes (coreaction.cc:5008-5037) seeds nothing
-                // op-centrically, but every Varnode's local type IS the
-                // typeOrder-minimum over its readers'
-                // `op->inputTypeLocal(i)` — and neither TypeOpLoad nor
-                // TypeOpStore overrides getInputLocal (typeop.hh:269/279 both
-                // commented out), so each non-annotation LOAD/STORE input
-                // contributes the base default `TypeOp::getInputLocal`
-                // (typeop.cc:271-275) = `tlst->getBase(ownSize, UNKNOWN)`.
-                // For a >10-byte constant that base is an unknown1 array
-                // (type.cc:3652-3656) — NOT IntTypes::sized's saturating
-                // 8-byte long, which the generic fallback below would stamp
-                // and which Ghidra cannot produce: the pointer->value edge
-                // of TypeOpStore::propagateType -> propagateFromPointer
-                // (typeop.cc:206-228) crosses only exact-size or
-                // partial-enum matches. The full-width unknown local lets
-                // testDatatypeCompatibility's piece walk (subflow.cc:2319-
-                // 2334) cover every outType component so RuleSplitStore
-                // (subflow.cc:2991-3004) splits whole-struct constant
-                // STOREs into per-field STOREs
-                // (TRI2-STORESPLIT-WHOLESTRUCT-0001). merge_min_type_order
-                // keeps the varnode.cc:926-931 minimum: an unknown8 seed can
-                // never displace a more specific reader seed (for example a
-                // CALL locked parameter). PTRSUB field tokens are not local
-                // seeds; ActionSetCasts::castOutput consumes them later.
-                OpCode::CPUI_LOAD | OpCode::CPUI_STORE => {
-                    let type_factory = fd.arch.as_ref().and_then(|a| a.types.clone());
-                    let Some(type_factory) = type_factory else {
-                        continue;
-                    };
-                    for slot in 0..op.num_input() {
-                        let input_vn = op.get_in(slot).cloned();
-                        let Some(input_vn) = input_vn else { continue };
-                        if input_vn.read().unwrap().is_annotation() {
-                            continue;
-                        }
-                        let ct = {
-                            let mut tf = type_factory
-                                .write()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner());
-                            tf.get_base_result(
-                                input_vn.read().unwrap().get_size(),
-                                TypeMetatype::Unknown,
-                            )
-                        }
-                        .ok();
-                        if let Some(ct) = ct {
-                            merge_min_type_order(temps, vn_id(&input_vn.read().unwrap()), ct);
-                        }
-                    }
-                }
-                // INT_ADD/INT_SUB with a spacebase input → pointer output.
-                // This older bootstrap remains tracked by
-                // ACTION-INFERTYPES-DISPATCH-0001.  PTRSUB is deliberately
-                // excluded: Ghidra buildLocaltypes calls
-                // Varnode::getLocalType, whose definition edge uses
-                // TypeOpPtrsub::getOutputLocal (INT).  Field-sensitive
-                // getOutputToken is consumed only later by castOutput.
-                OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB => {
-                    if let (Some(in0), Some(out)) = (op.get_in(0), op.get_out()) {
-                        let i0 = in0.read().unwrap();
-                        if i0.is_spacebase() {
-                            let ov = out.read().unwrap();
-                            let pointed = int_types.sized(ov.get_size());
-                            temps.insert(vn_id(&ov), make_ptr(pointed, ptr_size));
-                        }
-                    }
-                }
-                _ => {}
+            if let Some(local_type) = local_type {
+                        temps.insert(id , local_type);
             }
         }
-
-        // Seed every otherwise-untyped written/output varnode with a
-        // size-based scalar local type (Ghidra's getLocalType fallback).
-        for vn_arc in fd.vbank.loc_tree.iter().map(|v| v.0.clone()) {
-            let vn = vn_arc.read().unwrap();
-            if vn.is_annotation() {
-                continue;
-            }
-            if !vn.is_written() && vn.has_no_descend() {
-                continue;
-            }
-            let id = vn_id(&vn);
-            if !temps.contains_key(&id) {
-                // Same Unknown-placeholder filter as the first seeding loop:
-                // the bank's unknown-N placeholder is not a Ghidra local type
-                // (getLocalType varnode.cc:918-934), so the sized scalar
-                // fallback wins over it.
-                match vn.v_type.clone() {
-                    Some(t) if t.get_metatype() != TypeMetatype::Unknown => {
-                        temps.insert(id, t);
-                    }
-                    _ => {
-                        temps.insert(id, int_types.sized(vn.get_size()));
-                    }
-                }
-            }
-        }
+        Ok(())
     }
 
     /// Faithful to `ActionInferTypes::propagateTypeEdge` (coreaction.cc:5074-5112).
@@ -5362,7 +5372,8 @@ impl ActionInferTypes {
     // Ghidra: coreaction.cc:5074 ActionInferTypes::propagateTypeEdge
     fn propagate_type_edge(
         op: &crate::op::PcodeOp,
-        temps: &TempTypes,
+        temps: &mut TempTypes,
+        active_path: &std::collections::HashSet<u64>,
         inslot: i32,
         outslot: i32,
         int_types: &IntTypes,
@@ -5444,11 +5455,16 @@ impl ActionInferTypes {
             None => true,
             Some(c) => newtype.type_order(c) < 0,
         };
-        if better {
-            Some(out_vn_arc)
-        } else {
-            None
+        if !better {
+            return None;
         }
+
+        // coreaction.cc:5106-5110: setTempType happens even if this Varnode is
+        // already marked. The mark suppresses only recursive descent; it must
+        // not suppress the better temporary type itself.
+        let out_id = vn_id(&out_vn_arc.read().unwrap());
+        temps.insert(out_id, newtype);
+        (!active_path.contains(&out_id)).then_some(out_vn_arc)
     }
 
     /// Per-opcode `propagateType` dispatch. Faithful to
@@ -5659,8 +5675,7 @@ impl ActionInferTypes {
                         .map(|target| target.read().unwrap().get_size())?;
                     return crate::typeop::propagate_from_pointer(
                         alttype,
-                        dereference_size,
-                    );
+                        dereference_size);
                 }
                 if inslot == -1 && outslot == 1 {
                     // output type → address becomes pointer to it.
@@ -5685,8 +5700,7 @@ impl ActionInferTypes {
                         .map(|target| target.read().unwrap().get_size())?;
                     return crate::typeop::propagate_from_pointer(
                         alttype,
-                        dereference_size,
-                    );
+                        dereference_size);
                 }
                 if inslot == 2 && outslot == 1 {
                     // value → address: propagateToPointer truncation, same
@@ -5753,7 +5767,7 @@ impl ActionInferTypes {
 
     /// Faithful to `ActionInferTypes::propagateOneType` (coreaction.cc:5172-5198).
     /// DFS from one varnode, pushing its temp type across every propagating
-    /// edge. Each varnode is visited at most once per root propagation.
+    /// edge. The mark set is the active DFS path, not a global visited set.
     // Ghidra: coreaction.cc:5172 ActionInferTypes::propagateOneType
     fn propagate_one_type(
         &self,
@@ -5764,14 +5778,6 @@ impl ActionInferTypes {
         type_factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
     ) {
         use std::collections::HashSet;
-        // Stack of (op_arc, inslot, outslot) edges to explore, plus the set of
-        // visited varnodes (mirrors Ghidra's Varnode mark bit).
-        // We model PropagationState's iterator (descendents then def) explicitly.
-        let mut visited: HashSet<u64> = HashSet::new();
-        visited.insert(vn_id(&root.read().unwrap()));
-
-        // Initial frontier: for the root, edges go to its descendants (reads)
-        // and to/from its defining op.
         #[derive(Clone)]
         struct Edge {
             op: std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>,
@@ -5779,104 +5785,102 @@ impl ActionInferTypes {
             outslot: i32,
         }
 
-        let mut stack: Vec<Edge> = Vec::new();
-        // Descendant ops: root is an input (inslot = root's slot in that op),
-        // out candidates = the op's output (-1) and other inputs.
-        let descendents: Vec<_> = root.read().unwrap().descend_iter().collect();
-        for dop in descendents {
-            let inslot = {
-                let op = dop.read().unwrap();
-                op.inrefs
-                    .iter()
-                    .position(|r| std::sync::Arc::ptr_eq(r, root))
-                    .map(|p| p as i32)
-            };
-            if let Some(ins) = inslot {
-                let op = dop.read().unwrap();
-                if op.output.is_some() {
-                    stack.push(Edge { op: dop.clone(), inslot: ins, outslot: -1 });
-                }
-                for s in 0..op.num_input() {
-                    if s as i32 != ins {
-                        stack.push(Edge { op: dop.clone(), inslot: ins, outslot: s as i32 });
-                    }
-                }
-            }
-        }
-        // Defining op: root is the output (inslot = -1); out candidates are
-        // the def's inputs.
-        if let Some(def) = root.read().unwrap().get_def() {
-            let n = def.read().unwrap().num_input();
-            for s in 0..n {
-                stack.push(Edge { op: def.clone(), inslot: -1, outslot: s as i32 });
-            }
+        struct Frame {
+            vn_id: u64,
+            edges: Vec<Edge> ,
+            next: usize,
         }
 
-        while let Some(edge) = stack.pop() {
-            let op_arc = edge.op.clone();
-            let op = op_arc.read().unwrap();
-            if let Some(out_vn_arc) = Self::propagate_type_edge(
-                &op, temps, edge.inslot, edge.outslot, int_types, ptr_size, type_factory,
-            ) {
-                // Determine the new type for the output varnode.
-                let in_vn_arc = if edge.inslot == -1 {
-                    op.output.clone()
-                } else {
-                    op.inrefs.get(edge.inslot as usize).cloned()
+        // PropagationState constructor + step (coreaction.cc:5115-5163): for
+        // each descendant in insertion order, visit its output first (when it
+        // has one), then every input slot including the back-edge slot. Only
+        // after all descendants are exhausted do we visit the defining op's
+        // inputs. propagateTypeEdge itself rejects the back-edge.
+        let edges_for = |vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>| {
+            let (descendants, defining) = {
+                let vn_guard = vn.read().unwrap();
+                (
+                    vn_guard.descend_iter().collect::<Vec<_> >(),
+                    vn_guard.get_def(),
+                )
+            };
+            let mut edges = Vec::new();
+            for descendant in descendants {
+                let op_guard = descendant.read().unwrap();
+                let Some(inslot ) = op_guard
+                    .inrefs
+                    .iter()
+                    .position(|input| std::sync::Arc::ptr_eq(input, vn))
+                    .map(|slot| slot as i32)
+            else {
+                    continue;
                 };
-                let alttype = in_vn_arc
-                    .and_then(|a| temps.get(&vn_id(&a.read().unwrap())).cloned());
-                let newtype = alttype.and_then(|t| {
-                    Self::propagate_type(
-                        &op, &t, edge.inslot, edge.outslot, int_types, ptr_size, type_factory,
-                    )
-                });
-                drop(op); // release borrow before mutating temps
-                if let Some(nt) = newtype {
-                    let oid = vn_id(&out_vn_arc.read().unwrap());
-                    let improved = match temps.get(&oid) {
-                        None => true,
-                        Some(c) => nt.type_order(c) < 0,
-                    };
-                    if improved && !visited.contains(&oid) {
-                        temps.insert(oid, nt);
-                        visited.insert(oid);
-                        // Push edges from the newly-typed varnode.
-                        let outs = out_vn_arc.clone();
-                        let descendents: Vec<_> = outs.read().unwrap().descend_iter().collect();
-                        for dop in descendents {
-                            let inslot = {
-                                let o = dop.read().unwrap();
-                                o.inrefs
-                                    .iter()
-                                    .position(|r| std::sync::Arc::ptr_eq(r, &out_vn_arc))
-                                    .map(|p| p as i32)
-                            };
-                            if let Some(ins) = inslot {
-                                let o = dop.read().unwrap();
-                                if o.output.is_some() {
-                                    stack.push(Edge { op: dop.clone(), inslot: ins, outslot: -1 });
-                                }
-                                for s in 0..o.num_input() {
-                                    if s as i32 != ins {
-                                        stack.push(Edge {
-                                            op: dop.clone(),
-                                            inslot: ins,
-                                            outslot: s as i32,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                        let def_opt = outs.read().unwrap().get_def();
-                        if let Some(def) = def_opt {
-                            let n = def.read().unwrap().num_input();
-                            for s in 0..n {
-                                stack.push(Edge { op: def.clone(), inslot: -1, outslot: s as i32 });
-                            }
-                        }
-                    }
+                if op_guard.output.is_some() {
+                    edges.push(Edge { op: descendant.clone(), inslot, outslot: -1 ,
+                    });
                 }
+                for outslot in 0..op_guard.num_input() {
+                    edges.push(Edge {
+                        op: descendant.clone(),
+                        inslot,
+                        outslot: outslot as i32 ,
+                    });
+                }
+            }
+            if let Some(defining) = defining {
+                let input_count = defining.read().unwrap().num_input();
+                for outslot in 0..input_count {
+                    edges.push(Edge { op: defining.clone(), inslot: -1, outslot: outslot as i32 ,
+                    });
+                }
+            }
+            edges
+        };
+
+        let root_id = vn_id(&root.read().unwrap());
+        let mut active_path = HashSet::from([root_id]);
+        let mut stack = vec![Frame {
+            vn_id: root_id,
+            edges: edges_for(root),
+            next: 0,
+        }];
+
+        while !stack.is_empty() {
+            let edge = {
+                let frame = stack.last_mut().unwrap();
+                if frame.next == frame.edges.len() {
+                    active_path.remove(&frame.vn_id);
+                    stack.pop();
+                    continue;
+                }
+                let edge = frame.edges[frame.next].clone();
+                // coreaction.cc:5191: advance the parent frame before the
+                // child state is pushed.
+                frame.next += 1;
+                edge
+            };
+
+            let next_vn = {
+                let op = edge.op.read().unwrap();
+                Self::propagate_type_edge(
+                    &op,
+                    temps,
+                    &active_path,
+                    edge.inslot,
+                    edge.outslot,
+                    int_types,
+                    ptr_size,
+                    type_factory,
+                )
+            };
+            if let Some(next_vn) = next_vn {
+                let next_id = vn_id(&next_vn.read().unwrap());
+                active_path.insert(next_id);
+                stack.push(Frame {
+                    vn_id: next_id,
+                    edges: edges_for(&next_vn),
+                    next: 0,
+                    });
             }
         }
     }
@@ -6090,7 +6094,7 @@ impl Action for ActionInferTypes {
         };
         // 3. buildLocalTypes: seed temp types from op semantics.
         let mut temps: TempTypes = HashMap::new();
-        self.build_localtypes(fd, &mut temps, &int_types, ptr_size);
+        self.build_localtypes(fd, &mut temps, &int_types, ptr_size)?;
 
         // 3b. Seed struct-pointer types from DWARF-known globals. Stamp the
         // address of any known global (e.g. `::config` @ 0x17520 →
@@ -6106,8 +6110,7 @@ impl Action for ActionInferTypes {
         // coreaction.cc:5377) threads down to the add-family pointer arms,
         // which intern downChain-transformed types through it.
         let type_factory: Option<
-            Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
-        > = fd.arch.as_ref().and_then(|a| a.types.clone());
+            Arc<RwLock<crate::type_system::typefactory::TypeFactory>>> = fd.arch.as_ref().and_then(|a| a.types.clone());
         let roots: Vec<_> = fd
             .vbank
             .loc_tree
@@ -6162,8 +6165,7 @@ impl Action for ActionInferTypes {
 fn seed_global_struct_pointers(
     fd: &Funcdata,
     temps: &mut TempTypes,
-    ptr_size: usize,
-) {
+    ptr_size: usize) {
     if fd.global_struct_ptrs.is_empty() {
         return;
     }
@@ -6172,7 +6174,9 @@ fn seed_global_struct_pointers(
         .iter()
         .map(|(addr, dt)| (*addr, dt.clone()))
         .collect();
-    let known: std::collections::HashMap<u64, std::sync::Arc<crate::type_system::datatype::Datatype>> =
+    let known: std::collections::HashMap<
+        u64, std::sync::Arc<crate::type_system::datatype::Datatype>,
+    > =
         globals.into_iter().collect();
 
     // 1. Search loc_tree for direct address constants
@@ -6185,7 +6189,9 @@ fn seed_global_struct_pointers(
         // SLEIGH's ram space (index 0) maps to Rugra's Const, so global
         // addresses like 0x17520 surface as Const@0x17520.
         if known.contains_key(&off)
-            && matches!(vn.get_space(), crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram)
+            && matches!(
+                vn.get_space(), crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram
+            )
         {
             if let Some(dt) = known.get(&off) {
                 temps.insert(vn_id(&vn), dt.clone());
@@ -6206,7 +6212,9 @@ fn seed_global_struct_pointers(
             let src = in0.read().unwrap();
             let off = src.get_offset();
             if known.contains_key(&off)
-                && matches!(src.get_space(), crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram)
+                && matches!(
+                        src.get_space(), crate::space::AddressSpace::Const | crate::space::AddressSpace::Ram
+                    )
             {
                 let out_vn = out_arc.read().unwrap();
                 if let Some(dt) = known.get(&off) {
@@ -6227,8 +6235,10 @@ fn seed_global_struct_pointers(
                         let src = in0.read().unwrap();
                         let off = src.get_offset();
                         if known.contains_key(&off)
-                            && matches!(src.get_space(), crate::space::AddressSpace::Const
-                                | crate::space::AddressSpace::Ram)
+                            && matches!(
+                                src.get_space(), crate::space::AddressSpace::Const
+                                | crate::space::AddressSpace::Ram
+                            )
                         {
                             let out_vn = out_arc.read().unwrap();
                             if let Some(dt) = known.get(&off) {
@@ -6284,7 +6294,8 @@ impl ActionNameVars {
             // cc:2914: only PTRSUB ops.
             if op.opcode != OpCode::CPUI_PTRSUB { continue; }
             // cc:2915: offVn = op->getIn(1) — the constant offset input.
-            let off_vn = match op.get_in(1) { Some(v) => v.clone(), None => continue };
+            let off_vn = match op.get_in(1) { Some(v) => v.clone(), None => continue ,
+            };
             drop(op);
             // cc:2916: sym = data.linkSymbolReference(offVn)
             let sym_name = fd.link_symbol_reference(&off_vn);
@@ -6414,8 +6425,7 @@ impl ActionNameVars {
                 // The local map is never global.
                 if let (Some(h), Some(factory)) = (
                     vn_arc.read().unwrap().high.clone(),
-                    type_factory.as_ref(),
-                ) {
+                    type_factory.as_ref()) {
                     let mut factory = factory
                         .write()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -6465,7 +6475,9 @@ impl Action for ActionNameVars {
         // original (address-based) order, via makeNameUnique.
         let mut rec_map: std::collections::HashMap<
             usize,
-            (String, Option<std::sync::Arc<crate::type_system::datatype::Datatype>>),
+            (
+                String, Option<std::sync::Arc<crate::type_system::datatype::Datatype>>,
+            ),
         > = std::collections::HashMap::new();
         if !fd.callspecs.is_empty() {
             for fc in &fd.callspecs {
@@ -6481,7 +6493,8 @@ impl Action for ActionNameVars {
                 let op_r = call_op.0.read().unwrap();
                 let max_param = num_param.min(op_r.num_input().saturating_sub(1));
                 for j in 0..max_param {
-                    let param = match fc.prototype.get_param(j) { Some(p) => p, None => continue };
+                    let param = match fc.prototype.get_param(j) { Some(p) => p, None => continue ,
+                    };
                     // cc:2818: if (!param->isNameLocked()) return;
                     if param.flags & crate::fspec::protoparam_flags::NAME_LOCKED == 0 {
                         continue;
@@ -6490,7 +6503,8 @@ impl Action for ActionNameVars {
                     // cc:2831: name placeholders never propagate.
                     if param.name.is_empty() || param.name.starts_with("param_") { continue; }
                     // cc:2876: vn = op->getIn(j+1) — the j-th parameter varnode.
-                    let Some(vn) = op_r.get_in(j + 1) else { continue };
+                    let Some(vn) = op_r.get_in(j + 1) else { continue ;
+                    };
                     // cc:2820: if (vn->getSize() != param->getSize()) return;
                     if vn.read().unwrap().get_size() != param.data_type.get_size() {
                         continue;
@@ -6559,11 +6573,17 @@ impl Action for ActionNameVars {
                 if high.read().unwrap().get_num_merge_classes() > 1 { continue; }
                 // cc:2888-2889: sym = high->getSymbol(); if null or named, skip.
                 let high_ptr = Arc::as_ptr(high) as usize;
-                let Some((name, _ct)) = rec_map.get(&high_ptr) else { continue };
+                let Some((name, _ct)) = rec_map.get(&high_ptr) else { continue ;
+                };
                 let is_undef = fd
                     .scope
                     .as_ref()
-                    .map(|s| s.symbols.get(*sym_idx).map(|sy| sy.is_name_undefined()).unwrap_or(false))
+                    .map(|s| {
+                        s.symbols
+                            .get(*sym_idx)
+                            .map(|sy| sy.is_name_undefined())
+                            .unwrap_or(false)
+                    })
                     .unwrap_or(false);
                 if !is_undef { continue; }
                 // cc:2893-2894: sym->getScope()->renameSymbol(sym,
@@ -6595,8 +6615,7 @@ impl Action for ActionNameVars {
                 if !is_undef { continue; }
                 let vn_guard = vn_arc.read().unwrap();
                 let newname = scope.build_default_name(
-                    *sym_idx, &mut base, Some(&vn_guard), Some(fd),
-                );
+                    *sym_idx, &mut base, Some(&vn_guard), Some(fd));
                 drop(vn_guard);
                 if let Some(nm) = newname {
                     scope.rename_symbol(*sym_idx, &nm);
@@ -6606,7 +6625,9 @@ impl Action for ActionNameVars {
             // the nametree from "$$undef" and name every remaining
             // placeholder with the SAME shared base counter.
             if scope.assign_default_names(&mut base).is_none() {
-                eprintln!("[VARMAP] assign_default_names: makeNameUnique failure (coreaction.cc:2998)");
+                eprintln!(
+                    "[VARMAP] assign_default_names: makeNameUnique failure (coreaction.cc:2998)"
+                );
             }
         }
         fd.scope = scope_taken;
@@ -6910,7 +6931,8 @@ impl Action for ActionRestrictLocal {
         // Faithful to coreaction.cc:1967-1981.
         let n_calls = fd.num_calls();
         for i in 0..n_calls {
-            let fc = match fd.get_call_specs(i) { Some(fc) => fc, None => continue };
+            let fc = match fd.get_call_specs(i) { Some(fc) => fc, None => continue ,
+            };
             if !fc.is_input_locked() { continue; }
             if !fc.has_spacebase_offset() { continue; }
             let so = fc.get_spacebase_offset();
@@ -6934,8 +6956,10 @@ impl Action for ActionRestrictLocal {
             for op_ref in &fd.obank.alivelist {
                 let op = op_ref.0.read().unwrap();
                 if op.opcode != OpCode::CPUI_COPY { continue; }
-                let in_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => continue };
-                let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => continue };
+                let in_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => continue ,
+                };
+                let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => continue ,
+                };
                 let in_g = in_vn.read().unwrap();
                 if !in_g.is_input() { continue; }
                 if in_g.get_offset() != effect_offset { continue; }
@@ -6969,7 +6993,8 @@ impl Action for ActionRestrictLocal {
 
 /// Multi-CSE (common subexpression elimination). Faithful to
 /// `ActionMultiCse` (coreaction.cc).
-pub struct ActionMultiCse { pub count: i32 }
+pub struct ActionMultiCse { pub count: i32 ,
+}
 impl ActionMultiCse {
     // Ghidra: coreaction.hh:163 ActionMultiCse (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
@@ -6977,7 +7002,9 @@ impl ActionMultiCse {
     /// Resolve a COPY chain: if `vn` is defined by a COPY, return its input.
     /// Otherwise return `vn` itself. Used to allow copy-propagation differences.
     // RUGRA-GLUE: Rugra helper chasing COPY chains; Ghidra inlines this within ActionMultiCse::processBlock (coreaction.cc:790-810)
-    fn resolve_copy(vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+    fn resolve_copy(
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
         let (is_written, is_copy, in0) = {
             let r = vn.read().unwrap();
             if !r.is_written() {
@@ -6987,7 +7014,9 @@ impl ActionMultiCse {
             match def {
                 Some(d) => {
                     let dr = d.read().unwrap();
-                    (true, dr.opcode == crate::opcodes::OpCode::CPUI_COPY, dr.get_in(0).cloned())
+                    (
+                        true, dr.opcode == crate::opcodes::OpCode::CPUI_COPY, dr.get_in(0).cloned(),
+                    )
                 }
                 None => (false, false, None),
             }
@@ -7025,11 +7054,15 @@ impl ActionMultiCse {
         // Prefer addrtied over register over unique (internal).
         let (o1_addrtied, o1_internal) = {
             let r = out1.read().unwrap();
-            (r.is_addr_tied(), r.space() == crate::space::AddressSpace::Unique)
+            (
+                r.is_addr_tied(), r.space() == crate::space::AddressSpace::Unique,
+            )
         };
         let (o2_addrtied, o2_internal) = {
             let r = out2.read().unwrap();
-            (r.is_addr_tied(), r.space() == crate::space::AddressSpace::Unique)
+            (
+                r.is_addr_tied(), r.space() == crate::space::AddressSpace::Unique,
+            )
         };
         if !o1_addrtied {
             if o2_addrtied {
@@ -7307,8 +7340,12 @@ impl Action for ActionDirectWrite {
                                 }
                             };
                             if invn_arc.read().unwrap().is_written() {
-                                let curop_arc = invn_arc.read().unwrap()
-                                    .def.as_ref().and_then(|w| w.upgrade());
+                                let curop_arc = invn_arc
+                                    .read()
+                                    .unwrap()
+                                    .def
+                                    .as_ref()
+                                    .and_then(|w| w.upgrade());
                                 if let Some(curop) = curop_arc {
                                     if curop.read().unwrap().opcode == OpCode::CPUI_COPY {
                                         let next = {
@@ -7327,7 +7364,9 @@ impl Action for ActionDirectWrite {
                             let marker_sourced = {
                                 let invn_rg = invn_arc.read().unwrap();
                                 if invn_rg.is_written() {
-                                    invn_rg.def.as_ref()
+                                    invn_rg
+                                        .def
+                                        .as_ref()
                                         .and_then(|w| w.upgrade())
                                         .map(|d| d.read().unwrap().is_marker())
                                         .unwrap_or(false)
@@ -7501,7 +7540,9 @@ impl Action for ActionConstbase {
             // loc needs the space-aware vbank create first.)
             let addr = crate::address::Address::new(ctx.loc.offset);
             // Ghidra: coreaction.cc:698 — PcodeOp *op = data.newOp(1,bb->getStart());
-            let op = fd.new_op(1, bb.read().expect("entry block read lock").get_start_addr());
+            let op = fd.new_op(
+                1, bb.read().expect("entry block read lock").get_start_addr(),
+            );
             // Ghidra: coreaction.cc:699 — data.newVarnodeOut(ctx.loc.size,addr,op);
             fd.new_varnode_out(ctx.loc.size as usize, addr, &op);
             // Ghidra: coreaction.cc:700 — Varnode *vnin = data.newConstant(ctx.loc.size,ctx.val);
@@ -7548,7 +7589,10 @@ impl Action for ActionInputPrototype {
             return Ok(action_status::NO_CHANGE);
         }
         // Collect input varnodes that could be parameters
-        let input_vns: Vec<_> = fd.vbank.loc_tree.iter()
+        let input_vns: Vec<_> = fd
+            .vbank
+            .loc_tree
+            .iter()
             .map(|v| v.0.clone())
             .filter(|v| {
                 let g = v.read().unwrap();
@@ -7576,7 +7620,8 @@ impl Action for ActionInputPrototype {
         }
         // deriveInputMap would assign types and finalize params.
         // For now, update the function's parameter count to match active inputs.
-        let active_count = input_vns.iter()
+        let active_count = input_vns
+            .iter()
             .filter(|v| v.read().unwrap().count_descends() > 0)
             .count();
         // Only update if we found params and the prototype is empty
@@ -7592,7 +7637,8 @@ impl Action for ActionInputPrototype {
                             vn.get_size(),
                             crate::type_system::datatype::TypeMetatype::Int,
                         )
-                    )
+                    ,
+                )
                 );
                 fd.funcp.add_parameter(crate::fspec::ProtoParameter::new(
                     format!("param_{}", fd.funcp.parameters.len() + 1),
@@ -7649,23 +7695,28 @@ impl Action for ActionOutputPrototype {
                         crate::type_system::datatype::TypeBase::new(
                             "byte".to_string(), 1,
                             crate::type_system::datatype::TypeMetatype::Int,
-                        ))),
+                        ),
+                )),
                 4 => std::sync::Arc::new(
                     crate::type_system::datatype::Datatype::Base(
                         crate::type_system::datatype::TypeBase::new(
                             "int".to_string(), 4,
                             crate::type_system::datatype::TypeMetatype::Int,
-                        ))),
+                        ),
+                )),
                 _ => std::sync::Arc::new(
                     crate::type_system::datatype::Datatype::Base(
                         crate::type_system::datatype::TypeBase::new(
                             "long".to_string(), size,
                             crate::type_system::datatype::TypeMetatype::Int,
-                        ))),
+                        ),
+                )),
             };
             // Only update if the current return type is void or unknown
-            let is_void = matches!(fd.funcp.return_type.as_ref(),
-                crate::type_system::datatype::Datatype::Void(_));
+            let is_void = matches!(
+                fd.funcp.return_type.as_ref(),
+                crate::type_system::datatype::Datatype::Void(_)
+            );
             if is_void {
                 fd.funcp.return_type = new_return_type;
             }
@@ -7734,7 +7785,10 @@ impl Action for ActionPrototypeTypes {
         // (Ghidra coreaction.cc:4628-4635: "Strip the indirect register from
         // all RETURN ops because we don't want to see this compiler mechanism
         // in the high-level C output")
-        let return_ops: Vec<crate::op::PcodeOpRef> = fd.obank.alivelist.iter()
+        let return_ops: Vec<crate::op::PcodeOpRef> = fd
+            .obank
+            .alivelist
+            .iter()
             .filter(|r| r.0.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_RETURN)
             .cloned()
             .collect();
@@ -7798,11 +7852,12 @@ impl Action for ActionPrototypeTypes {
                     crate::heritage::Heritage::apply_new_varnode_flags(fd, &vn);
                     fd.op_insert_input(ret_op, vn.clone(), num_input);
                     // cc:4646: vn->updateType(outparam->getType(), true, true).
-                    vn.write().unwrap().update_type_lock(
+                    vn.write()
+                        .unwrap()
+                        .update_type_lock(
                         fd.funcp.return_type.clone(),
                         true,
-                        true,
-                    );
+                        true);
                     change += 1;
                 }
             }
@@ -7847,14 +7902,18 @@ impl Action for ActionActiveParam {
         let debug = std::env::var("RUGRA_DEBUG_ACTIVEPARAM").is_ok();
         if debug && n_calls > 0 { eprintln!("[ACTIVEPARAM-DBG] {} n_calls={}", fd.name, n_calls); }
         for i in 0..n_calls {
-            let is_input_active = fd.get_call_specs(i).map(|fc| fc.is_input_active()).unwrap_or(false);
+            let is_input_active = fd
+                .get_call_specs(i)
+                .map(|fc| fc.is_input_active())
+                .unwrap_or(false);
             if !is_input_active { continue; }
             // Ghidra line 1741: trimmable = (numPasses>0) || (op is not CALLIND).
             let op_ref = fd.get_call_specs(i).and_then(|fc| fc.find_call_op(fd));
             let (trimmable, fully_checked_before) = match fd.get_call_specs(i) {
                 Some(fc) => {
                     let active = &fc.active_input;
-                    let op_is_callind = op_ref.as_ref()
+                    let op_is_callind = op_ref
+                        .as_ref()
                         .map(|o| o.0.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_CALLIND)
                         .unwrap_or(false);
                     let trimmable = active.get_num_passes() > 0 || !op_is_callind;
@@ -7930,7 +7989,8 @@ impl Action for ActionActiveParam {
 
 /// Active return analysis. Faithful to `ActionActiveReturn`
 /// (coreaction.cc).
-pub struct ActionActiveReturn { pub count: i32 }
+pub struct ActionActiveReturn { pub count: i32 ,
+}
 impl ActionActiveReturn {
     // Ghidra: coreaction.hh:761 ActionActiveReturn (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
@@ -7951,7 +8011,10 @@ impl Action for ActionActiveReturn {
         let mut local_count = 0;
         let n_calls = fd.num_calls();
         for i in 0..n_calls {
-            let needs_work = fd.get_call_specs(i).map(|fc| fc.is_output_active()).unwrap_or(false);
+            let needs_work = fd
+                .get_call_specs(i)
+                .map(|fc| fc.is_output_active())
+                .unwrap_or(false);
             if !needs_work { continue; }
             let Some(call_op) = fd.get_call_specs(i).and_then(|fc| fc.find_call_op(fd)) else {
                 continue;
@@ -7970,7 +8033,9 @@ impl Action for ActionActiveReturn {
                 .get_call_specs(i)
                 .map(|fc| fc.active_output.get_num_trials())
                 .unwrap_or(0);
-            let mut trial_vn: Vec<Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>> =
+            let mut trial_vn: Vec<
+                Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
+            > =
                 vec![None; num_trials];
             // The trial-address resets mutate the callspec while the op walk
             // below borrows fd.obank read-only, so take the stable Arc owner
@@ -7990,7 +8055,9 @@ impl Action for ActionActiveReturn {
             while let Some(prev) = cursor {
                 let (is_indirect, is_creation) = {
                     let op = prev.0.read().unwrap();
-                    (op.opcode == OpCode::CPUI_INDIRECT, op.is_indirect_creation())
+                    (
+                        op.opcode == OpCode::CPUI_INDIRECT, op.is_indirect_creation(),
+                    )
                 };
                 if !is_indirect {
                     // fspec.cc:5543: if (indop->code() != CPUI_INDIRECT) break;
@@ -8102,7 +8169,9 @@ impl Action for ActionActiveReturn {
                         };
                         let join_off = fd
                             .get_arch()
-                            .map(|arch| arch.construct_join_address(hi_off, hi_size, lo_off, lo_size))
+                            .map(|arch| {
+                                arch.construct_join_address(hi_off, hi_size, lo_off, lo_size)
+                            })
                             .unwrap_or(lo_off);
                         let whole = fd.vbank.create_with_space(
                             (hi_size + lo_size) as usize,
@@ -8306,7 +8375,10 @@ impl Action for ActionUnjustifiedParams {
             return Ok(action_status::NO_CHANGE);
         }
 
-        let input_vns: Vec<_> = fd.vbank.loc_tree.iter()
+        let input_vns: Vec<_> = fd
+            .vbank
+            .loc_tree
+            .iter()
             .map(|v| v.0.clone())
             .filter(|v| {
                 let g = v.read().unwrap();
@@ -8321,9 +8393,12 @@ impl Action for ActionUnjustifiedParams {
             let vn_size = vn.get_size();
 
             // Check if this input matches any declared parameter
-            let is_justified = fd.funcp.parameters.iter().any(|p| {
-                p.address.as_u64() == vn_offset
-            });
+            let is_justified = fd
+                .funcp
+                .parameters
+                .iter()
+                .any(|p| p.address.as_u64() == vn_offset
+            );
 
             if !is_justified && vn.count_descends() > 0 {
                 // This input is used but not declared as a parameter.
@@ -8335,7 +8410,8 @@ impl Action for ActionUnjustifiedParams {
                             vn_size,
                             crate::type_system::datatype::TypeMetatype::Int,
                         )
-                    )
+                    ,
+                )
                 );
                 fd.funcp.add_parameter(crate::fspec::ProtoParameter::new(
                     format!("param_{}", fd.funcp.parameters.len() + 1),
@@ -8359,7 +8435,8 @@ impl Action for ActionUnjustifiedParams {
 /// data-flow to see if the value flows into an INDIRECT or INT_AND op. If
 /// so, truncates the data-flow by replacing the input with zero, preventing
 /// false dependencies from trash registers.
-pub struct ActionLikelyTrash { pub count: i32 }
+pub struct ActionLikelyTrash { pub count: i32 ,
+}
 impl ActionLikelyTrash {
     // Ghidra: coreaction.hh:833 ActionLikelyTrash (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
@@ -8812,7 +8889,8 @@ impl Action for ActionFuncLinkOutOnly {
 /// Deindirect: partially resolve indirect calls, corresponding to
 /// `ActionDeindirect` (coreaction.cc). External-reference and typed-prototype
 /// paths remain `CALLSPEC-0001`.
-pub struct ActionDeindirect { pub count: i32 }
+pub struct ActionDeindirect { pub count: i32 ,
+}
 impl ActionDeindirect {
     // Ghidra: coreaction.hh:206 ActionDeindirect (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
@@ -8837,7 +8915,9 @@ impl Action for ActionDeindirect {
         // Snapshot the CALLIND ops + their callspec indices, since we mutate fd
         // (op_set_opcode) during the loop.
         let n_calls = fd.num_calls();
-        let mut callind_updates: Vec<(usize, Arc<std::sync::RwLock<crate::op::PcodeOp>>, crate::address::Address)> = Vec::new();
+        let mut callind_updates: Vec<(
+            usize, Arc<std::sync::RwLock<crate::op::PcodeOp>>, crate::address::Address,
+        )> = Vec::new();
         for i in 0..n_calls {
             let call_op = match fd.get_call_specs(i).and_then(|fc| fc.find_call_op(fd)) {
                 Some(op) => op,
@@ -8897,7 +8977,9 @@ impl ActionDeindirect {
     /// (coreaction.cc:1231-1232). Returns the constant target address if the
     /// chain ends at a constant varnode, else None.
     // RUGRA-GLUE: Rugra helper factoring out the CALLIND input(0) COPY-chain chase inlined at coreaction.cc:1231-1232
-    fn trace_indirect_target(op_arc: &Arc<std::sync::RwLock<crate::op::PcodeOp>>) -> Option<crate::address::Address> {
+    fn trace_indirect_target(
+        op_arc: &Arc<std::sync::RwLock<crate::op::PcodeOp>>,
+    ) -> Option<crate::address::Address> {
         let vn = {
             let op = op_arc.read().unwrap();
             op.get_in(0).cloned()
@@ -8917,7 +8999,9 @@ impl ActionDeindirect {
     /// Helper: chase a COPY chain from `vn` to a constant, returning its
     /// address. Used by trace_indirect_target.
     // RUGRA-GLUE: Rugra helper factoring out COPY-chain -> constant chase used by ActionDeindirect
-    fn chase_copy_to_const(vn: &Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> Option<crate::address::Address> {
+    fn chase_copy_to_const(
+        vn: &Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> Option<crate::address::Address> {
         let mut cur = vn.clone();
         for _ in 0..20 {
             let v = cur.read().unwrap();
@@ -8929,7 +9013,8 @@ impl ActionDeindirect {
             }
             let def = v.def.as_ref().and_then(|w| w.upgrade());
             drop(v);
-            let def = match def { Some(d) => d, None => return None };
+            let def = match def { Some(d) => d, None => return None ,
+            };
             let d_rg = def.read().unwrap();
             if d_rg.opcode != crate::opcodes::OpCode::CPUI_COPY {
                 return None;
@@ -9032,7 +9117,8 @@ impl StackSolver {
         while let Some(vn) = workstack.pop() {
             let vn_u = vn as usize;
             // lower_bound on eqs by var1 (cc:84). eqs is sorted by var1.
-            let target = StackEqn { var1: vn, var2: 0, rhs: 0 };
+            let target = StackEqn { var1: vn, var2: 0, rhs: 0 ,
+            };
             let start = self.eqs.partition_point(|e| StackEqn::compare(e, &target));
             let mut i = start;
             while i < self.eqs.len() && self.eqs[i].var1 == vn {
@@ -9179,7 +9265,10 @@ impl StackSolver {
                         (o.get_in(0).cloned(), o.get_in(1).cloned())
                     };
                     let (mut other, mut const_) = (in0, in1);
-                    if other.as_ref().map(|v| v.read().unwrap().is_constant()).unwrap_or(false) {
+                    if other
+                        .as_ref()
+                        .map(|v| v.read().unwrap().is_constant())
+                        .unwrap_or(false) {
                         std::mem::swap(&mut other, &mut const_);
                     }
                     let (Some(other), Some(const_)) = (other, const_) else {
@@ -9203,7 +9292,8 @@ impl StackSolver {
                         continue;
                     }
                     let rhs = const_.read().unwrap().get_offset() as i32;
-                    self.eqs.push(StackEqn { var1: i as i32, var2, rhs });
+                    self.eqs.push(StackEqn { var1: i as i32, var2, rhs ,
+                    });
                 }
                 OpCode::CPUI_COPY => {
                     // cc:190-198.
@@ -9221,7 +9311,8 @@ impl StackSolver {
                         self.missed_variables += 1;
                         continue;
                     }
-                    self.eqs.push(StackEqn { var1: i as i32, var2, rhs: 0 });
+                    self.eqs.push(StackEqn { var1: i as i32, var2, rhs: 0 ,
+                    });
                 }
                 OpCode::CPUI_INDIRECT => {
                     // cc:199-221.
@@ -9246,7 +9337,8 @@ impl StackSolver {
                     // effective_extrapop and this StackSolver consumer remains
                     // unwired under CALLSPEC-0001, so retain the old guess.
                     // cc:219-220: guess, rhs = 4.
-                    self.guess.push(StackEqn { var1: i as i32, var2, rhs: 4 });
+                    self.guess.push(StackEqn { var1: i as i32, var2, rhs: 4 ,
+                    });
                 }
                 OpCode::CPUI_MULTIEQUAL => {
                     // cc:222-232: one equation per input.
@@ -9266,7 +9358,8 @@ impl StackSolver {
                             self.missed_variables += 1;
                             continue;
                         }
-                        self.eqs.push(StackEqn { var1: i as i32, var2, rhs: 0 });
+                        self.eqs.push(StackEqn { var1: i as i32, var2, rhs: 0 ,
+                        });
                     }
                 }
                 OpCode::CPUI_INT_AND => {
@@ -9276,7 +9369,10 @@ impl StackSolver {
                         (o.get_in(0).cloned(), o.get_in(1).cloned())
                     };
                     let (mut other, mut const_) = (in0, in1);
-                    if other.as_ref().map(|v| v.read().unwrap().is_constant()).unwrap_or(false) {
+                    if other
+                        .as_ref()
+                        .map(|v| v.read().unwrap().is_constant())
+                        .unwrap_or(false) {
                         std::mem::swap(&mut other, &mut const_);
                     }
                     let (Some(other), Some(const_)) = (other, const_) else {
@@ -9296,7 +9392,8 @@ impl StackSolver {
                         self.missed_variables += 1;
                         continue;
                     }
-                    self.eqs.push(StackEqn { var1: i as i32, var2, rhs: 0 });
+                    self.eqs.push(StackEqn { var1: i as i32, var2, rhs: 0 ,
+                    });
                 }
                 _ => {
                     // cc:249-250.
@@ -9312,7 +9409,9 @@ impl StackSolver {
     /// `lower_bound(vnlist, othervn, Varnode::comparePointers)`). Rugra's
     /// vnlist is in loc_tree order (sorted by address), so binary search by
     /// Arc pointer identity works.
-    fn find_varnode_index(&self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> i32 {
+    fn find_varnode_index(
+        &self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> i32 {
         let target_ptr = std::sync::Arc::as_ptr(vn);
         for (i, v) in self.vnlist.iter().enumerate() {
             if std::sync::Arc::as_ptr(v) == target_ptr {
@@ -9327,7 +9426,9 @@ impl StackSolver {
         self.vnlist.len()
     }
     // Ghidra: coreaction.cc:47 StackSolver::getVariable
-    pub fn get_variable(&self, i: usize) -> Option<&std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
+    pub fn get_variable(
+        &self, i: usize,
+    ) -> Option<&std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
         self.vnlist.get(i)
     }
     // Ghidra: coreaction.cc:48 StackSolver::getCompanion
@@ -9468,7 +9569,9 @@ impl ActionStackPtrFlow {
         let dv = datavn.read().unwrap();
         let newvn = if dv.is_constant() {
             drop(dv);
-            fd.new_constant(datavn.read().unwrap().get_size(), datavn.read().unwrap().get_offset())
+            fd.new_constant(
+                datavn.read().unwrap().get_size(), datavn.read().unwrap().get_offset(),
+            )
         } else if dv.is_free() {
             return false;
         } else {
@@ -9514,7 +9617,11 @@ impl ActionStackPtrFlow {
                     Some(v) => v.clone(),
                     None => continue,
                 };
-                let datavn_size = curop.inrefs.get(2).map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+                let datavn_size = curop
+                    .inrefs
+                    .get(2)
+                    .map(|v| v.read().unwrap().get_size())
+                    .unwrap_or(0);
                 if let Some(constnew) = Self::is_stack_relative(spcbasein, &ptrvn) {
                     if constnew == constz && loadsize == datavn_size {
                         drop(curop);
@@ -9543,18 +9650,15 @@ impl ActionStackPtrFlow {
     /// spacebase register location/size (used by analyzeExtraPop, cc:435-436).
     /// With no spacebase input the count is 0 (cc:444).
     fn check_clog(
-        fd: &mut Funcdata,
-    ) -> (
+        fd: &mut Funcdata) -> (
         i32,
-        Option<(crate::address::Address, usize)>,
-    ) {
+        Option<(crate::address::Address, usize)>) {
         use crate::opcodes::OpCode;
         // Locate the spacebase (stack-pointer) INPUT varnode: an input varnode
         // flagged is_spacebase. Faithful to checkClog's beginLoc lookup
         // (coreaction.cc:440-447).
         let mut spcbasein: Option<
-            std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-        > = None;
+            std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
         for op_ref in &fd.obank.alivelist {
             let o = op_ref.0.read().unwrap();
             for in_vn in o.inrefs.iter() {
@@ -9633,8 +9737,7 @@ impl ActionStackPtrFlow {
                     fd,
                     &spcbasein,
                     &crate::op::PcodeOpRef(loadop_arc),
-                    constz,
-                );
+                    constz);
             }
         }
         (clogcount, spacebase_loc)
@@ -9885,7 +9988,8 @@ impl Action for ActionExtraPopSetup {
 ///    - Create ConstPoint records for the determined paths
 /// 3. Propagate constants through the block graph
 /// 4. Replace conditional-constant Varnodes with their values
-pub struct ActionConditionalConst { pub count: i32 }
+pub struct ActionConditionalConst { pub count: i32 ,
+}
 
 // Ghidra: coreaction.hh:571 ActionConditionalConst::ConstPoint
 /// A point in control-flow where a Varnode can propagate as a constant
@@ -9917,7 +10021,8 @@ impl ConstPoint {
         block_is_dom: bool,
     ) -> Self {
         let value = const_vn.read().unwrap().get_offset();
-        Self { vn, const_vn: Some(const_vn), value, const_block_idx, in_slot, block_is_dom }
+        Self { vn, const_vn: Some(const_vn), value, const_block_idx, in_slot, block_is_dom ,
+        }
     }
     // Ghidra: coreaction.hh:580 ConstPoint::ConstPoint(Varnode*,uintb,FlowBlock*,int4,bool)
     /// Construct from a constant value (coreaction.hh:580).
@@ -9928,7 +10033,8 @@ impl ConstPoint {
         in_slot: i32,
         block_is_dom: bool,
     ) -> Self {
-        Self { vn, const_vn: None, value, const_block_idx, in_slot, block_is_dom }
+        Self { vn, const_vn: None, value, const_block_idx, in_slot, block_is_dom ,
+        }
     }
 }
 
@@ -10088,7 +10194,8 @@ impl ActionConditionalConst {
         if (eval_type & crate::op::pcodeop_flags::SPECIAL) != 0 { return; }
         // cc:4265: skip floating-point ops.
         // (Rugra: check opcode for float ops.)
-        if matches!(op_r.opcode,
+        if matches!(
+            op_r.opcode,
             OpCode::CPUI_FLOAT_ADD | OpCode::CPUI_FLOAT_SUB | OpCode::CPUI_FLOAT_MULT
             | OpCode::CPUI_FLOAT_DIV | OpCode::CPUI_FLOAT_NEG | OpCode::CPUI_FLOAT_ABS
             | OpCode::CPUI_FLOAT_SQRT | OpCode::CPUI_FLOAT_TRUNC | OpCode::CPUI_FLOAT_CEIL
@@ -10098,7 +10205,8 @@ impl ActionConditionalConst {
             | OpCode::CPUI_FLOAT_NOTEQUAL | OpCode::CPUI_FLOAT_LESS
             | OpCode::CPUI_FLOAT_LESSEQUAL
         ) { return; }
-        let out_vn = match op_r.output.as_ref() { Some(o) => o.clone(), None => return };
+        let out_vn = match op_r.output.as_ref() { Some(o) => o.clone(), None => return ,
+        };
         if out_vn.read().unwrap().get_size() > 8 { return; }
         // cc:4268-4269: get the varnode + slot from front ConstPoint.
         if points.is_empty() { return; }
@@ -10108,7 +10216,8 @@ impl ActionConditionalConst {
         let front_slot = points[0].in_slot;
         let front_dom = points[0].block_is_dom;
         let slot = op_r.slot_of_input(&front_vn);
-        let slot = match slot { Some(s) => s, None => return };
+        let slot = match slot { Some(s) => s, None => return ,
+        };
         // cc:4270-4282: build input values.
         let n_in = op_r.num_input();
         let mut inputs: Vec<u64> = Vec::with_capacity(n_in);
@@ -10116,7 +10225,8 @@ impl ActionConditionalConst {
             if i == slot {
                 inputs.push(front_value);
             } else {
-                let in_vn = match op_r.get_in(i) { Some(v) => v.clone(), None => return };
+                let in_vn = match op_r.get_in(i) { Some(v) => v.clone(), None => return ,
+                };
                 if in_vn.read().unwrap().get_size() > 8 { return; }
                 if in_vn.read().unwrap().is_constant() {
                     inputs.push(in_vn.read().unwrap().get_offset());
@@ -10131,7 +10241,9 @@ impl ActionConditionalConst {
             Some(v) => v, None => return,
         };
         // cc:4287: create new ConstPoint for output.
-        points.push(ConstPoint::from_value(out_vn, outval, front_block, front_slot, front_dom));
+        points.push(ConstPoint::from_value(
+            out_vn, outval, front_block, front_slot, front_dom,
+        ));
     }
 
     // Ghidra: coreaction.cc:4478 ActionConditionalConst::findConstCompare
@@ -10164,7 +10276,8 @@ impl ActionConditionalConst {
             // cc:4484-4490: BOOL_NEGATE → flip edge, follow in(0).
             if opc == OpCode::CPUI_BOOL_NEGATE {
                 flip_edge = !flip_edge;
-                let next = match comp_r.get_in(0) { Some(v) => v.clone(), None => return };
+                let next = match comp_r.get_in(0) { Some(v) => v.clone(), None => return ,
+                };
                 drop(comp_r);
                 cur_vn = next;
                 continue;
@@ -10177,8 +10290,10 @@ impl ActionConditionalConst {
                          else { return; };
         // cc:4499-4507: find variable and constant inputs.
         let comp_r = comp_op.read().unwrap();
-        let mut var_vn = match comp_r.get_in(0) { Some(v) => v.clone(), None => return };
-        let mut const_vn = match comp_r.get_in(1) { Some(v) => v.clone(), None => return };
+        let mut var_vn = match comp_r.get_in(0) { Some(v) => v.clone(), None => return ,
+        };
+        let mut const_vn = match comp_r.get_in(1) { Some(v) => v.clone(), None => return ,
+        };
         if !const_vn.read().unwrap().is_constant() {
             if !var_vn.read().unwrap().is_constant() { return; }
             std::mem::swap(&mut var_vn, &mut const_vn);
@@ -10189,7 +10304,8 @@ impl ActionConditionalConst {
         // cc:4509-4510: flip edge if needed.
         let const_edge = if flip_edge { 1 - const_edge } else { const_edge };
         // cc:4511: create ConstPoint.
-        let out_block = match &bl_out[const_edge] { Some(b) => b.clone(), None => return };
+        let out_block = match &bl_out[const_edge] { Some(b) => b.clone(), None => return ,
+        };
         let _ = bl_out_rev_index; // rev index not used in Rugra's block model
         points.push(ConstPoint::from_const_vn(
             var_vn, const_vn,
@@ -10215,7 +10331,8 @@ impl ActionConditionalConst {
         let n_in = op_r.num_input();
         for i in 0..n_in {
             if i as i32 == slot { continue; }
-            let in_vn = match op_r.get_in(i) { Some(v) => v.clone(), None => continue };
+            let in_vn = match op_r.get_in(i) { Some(v) => v.clone(), None => continue ,
+            };
             // cc:4355: direct match.
             if Arc::ptr_eq(&in_vn, vn) { return true; }
             // cc:4356-4367: check if inVn is written by ADD/PTRSUB/PTRADD/MULTIEQUAL.
@@ -10289,7 +10406,10 @@ impl ActionConditionalConst {
         Self::collect_reachable(var_vn, phi_node_edges, &mut alternate_flow);
         let mut results: Vec<i32> = vec![0; phi_node_edges.len()];
         for (i, (op_ptr, _)) in phi_node_edges.iter().enumerate() {
-            let op_ref = fd.obank.alivelist.iter()
+            let op_ref = fd
+                .obank
+                .alivelist
+                .iter()
                 .find(|r| Arc::as_ptr(&r.0) as usize == *op_ptr)
                 .cloned();
             if let Some(op_ref) = op_ref {
@@ -10301,7 +10421,10 @@ impl ActionConditionalConst {
         Self::clear_marks(&alternate_flow);
         for (i, (op_ptr, slot)) in phi_node_edges.iter().enumerate() {
             if results[i] != 1 { continue; }
-            let op_ref = fd.obank.alivelist.iter()
+            let op_ref = fd
+                .obank
+                .alivelist
+                .iter()
                 .find(|r| Arc::as_ptr(&r.0) as usize == *op_ptr)
                 .cloned();
             if let Some(op_ref) = op_ref {
@@ -10309,7 +10432,10 @@ impl ActionConditionalConst {
                     let op_r = op_ref.0.read().unwrap();
                     if let Some(parent_weak) = op_r.parent.as_ref() {
                         if let Some(parent) = parent_weak.upgrade() {
-                            parent.read().unwrap().get_in(*slot)
+                            parent
+                                .read()
+                                .unwrap()
+                                .get_in(*slot)
                                 .map(|e| e.point.read().unwrap().get_index())
                                 .unwrap_or(0)
                         } else { 0 }
@@ -10374,11 +10500,15 @@ impl ActionConditionalConst {
                     if !use_multiequal { continue; }
                     // cc:4404-4405: skip if varVn is addr-tied to the op output.
                     let var_addr_tied = var_vn.read().unwrap().is_addr_tied();
-                    let out_matches_addr = op_r.output.as_ref().map(|o| {
+                    let out_matches_addr = op_r
+                        .output
+                        .as_ref()
+                        .map(|o| {
                         let o_r = o.read().unwrap();
                         let v_r = var_vn.read().unwrap();
                         o_r.is_addr_tied() && o_r.get_addr() == v_r.get_addr()
-                    }).unwrap_or(false);
+                    })
+                        .unwrap_or(false);
                     if var_addr_tied && out_matches_addr { continue; }
                     // Get the MULTIEQUAL's parent block.
                     let bl = match op_r.parent.as_ref().and_then(|w| w.upgrade()) {
@@ -10387,13 +10517,16 @@ impl ActionConditionalConst {
                     let bl_idx = bl.read().unwrap().get_index();
                     if bl_idx == const_block_idx {
                         // cc:4407-4415: immediate edge from the const block.
-                        let input_matches = op_r.get_in(in_slot as usize)
+                        let input_matches = op_r
+                            .get_in(in_slot as usize)
                             .map(|v| Arc::ptr_eq(v, &var_vn))
                             .unwrap_or(false);
                         if input_matches {
                             // cc:4411-4413: heuristics to avoid needless new var.
                             if point.value > 1 { continue; }
-                            let out_addr_tied = op_r.output.as_ref()
+                            let out_addr_tied = op_r
+                                .output
+                                .as_ref()
                                 .map(|o| o.read().unwrap().is_addr_tied())
                                 .unwrap_or(false);
                             if out_addr_tied { continue; }
@@ -10405,7 +10538,8 @@ impl ActionConditionalConst {
                         // cc:4417-4425: any edge whose source block is dominated
                         // by constBlock.
                         for slot in 0..op_r.num_input() {
-                            let matches = op_r.get_in(slot)
+                            let matches = op_r
+                                .get_in(slot)
                                 .map(|v| Arc::ptr_eq(v, &var_vn))
                                 .unwrap_or(false);
                             if !matches { continue; }
@@ -10437,7 +10571,8 @@ impl ActionConditionalConst {
                 }
                 // cc:4428-4434: COPY — only follow into a "more interesting" op.
                 if opc == OpCode::CPUI_COPY {
-                    let out_vn = match op_r.output.as_ref() { Some(o) => o.clone(), None => continue };
+                    let out_vn = match op_r.output.as_ref() { Some(o) => o.clone(), None => continue ,
+                    };
                     let follow = out_vn.read().unwrap().lone_descend();
                     match &follow {
                         Some(f) => {
@@ -10476,7 +10611,10 @@ impl ActionConditionalConst {
                     // the RETURN is never revisited).
                     let slot = op_arc.read().unwrap().slot_of_input(&var_vn);
                     if let Some(slot) = slot {
-                        let already_const = op_arc.read().unwrap().get_in(slot)
+                        let already_const = op_arc
+                            .read()
+                            .unwrap()
+                            .get_in(slot)
                             .map(|v| {
                                 let vr = v.read().unwrap();
                                 vr.is_constant() && vr.get_offset() == point.value
@@ -10599,7 +10737,8 @@ impl ActionConditionalConst {
         let root_block = match crate::block::BlockGraph::find_common_block_n(&blocks) {
             Some(b) => b, None => return,
         };
-        let op_ref = match first_op { Some(o) => o, None => return };
+        let op_ref = match first_op { Some(o) => o, None => return ,
+        };
         // cc:4249: placeCopy.
         let out_vn = Self::place_copy(fd, &op_ref, &root_block, const_vn);
         // cc:4250-4253: replace each flowing-together edge.
@@ -10876,7 +11015,9 @@ impl Action for ActionMappedLocalSync {
         // data.warningHeader("Could not reconcile some variable overlaps");
         if let Some(ref scope) = fd.scope {
             if scope.overlap_problems {
-                eprintln!("[WARN] {} Could not reconcile some variable overlaps", fd.name);
+                eprintln!(
+                    "[WARN] {} Could not reconcile some variable overlaps", fd.name
+                );
             }
         }
         Ok(action_status::NO_CHANGE)
@@ -10915,7 +11056,9 @@ pub struct ActionLaneDivide {
 /// The live iteration is emulated by re-collecting the snapshot after every
 /// successful split, mirroring the `Recalculate bounds` step at
 /// coreaction.cc:606-607.
-fn varnodes_at_storage(fd: &Funcdata, storage: &crate::funcdata::LanedStorage) -> Vec<Arc<RwLock<crate::varnode::Varnode>>> {
+fn varnodes_at_storage(
+    fd: &Funcdata, storage: &crate::funcdata::LanedStorage,
+) -> Vec<Arc<RwLock<crate::varnode::Varnode>>> {
     fd.vbank
         .loc_tree
         .iter()
@@ -11046,7 +11189,9 @@ impl ActionLaneDivide {
         for cur_size in check_lanes.lane_sizes() {
             // cc:574: lane scheme dictated by curSize over the whole register
             let description =
-                crate::transform::LaneDescription::uniform(laned_register.get_whole_size(), cur_size);
+                crate::transform::LaneDescription::uniform(
+                laned_register.get_whole_size(), cur_size,
+            );
             let mut lane_divide =
                 crate::subflow::LaneDivide::new(fd, vn.clone(), description, allow_downcast);
             if lane_divide.do_trace() {
@@ -11077,8 +11222,11 @@ impl Action for ActionLaneDivide {
             // clearLanedAccessMap. The per-mode snapshot taken in
             // BTreeMap (=std::map VarnodeData::operator<) order is
             // observably equivalent to Ghidra's live iterator.
-            let lane_accesses: Vec<(crate::funcdata::LanedStorage, Arc<crate::transform::LanedRegister>)> =
-                fd.lane_accesses()
+            let lane_accesses: Vec<(
+                crate::funcdata::LanedStorage, Arc<crate::transform::LanedRegister>,
+            )> =
+                fd
+                .lane_accesses()
                     .map(|(storage, record)| (*storage, record.clone()))
                     .collect();
             for (storage, laned_reg) in &lane_accesses {
@@ -11153,7 +11301,8 @@ impl Action for ActionLaneDivide {
 /// container is present but empty. This replaces the previous hard-coded
 /// "scan for any write of Register offset 0x0" heuristic with the model-driven
 /// trial list while preserving the same end effect on the common RAX case.
-pub struct ActionReturnRecovery { pub count: i32 }
+pub struct ActionReturnRecovery { pub count: i32 ,
+}
 impl ActionReturnRecovery {
     // RUGRA-GLUE: constructor for the Action struct (count field for change tracking).
     pub fn new() -> Self { Self { count: 0 } }
@@ -11169,8 +11318,8 @@ impl ActionReturnRecovery {
         active: &crate::fspec::ParamActive,
         retop: &crate::op::PcodeOpRef,
     ) {
-        use crate::opcodes::OpCode as OC;
         use crate::address::Address as Addr;
+        use crate::opcodes::OpCode as OC;
         // Ghidra cc:1839: newparam = [ retop->getIn(0) ]  (keep the
         // indirect/return-address input slot 0).
         let mut newparam: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
@@ -11235,7 +11384,8 @@ impl ActionReturnRecovery {
                 let slot = curtrial.get_slot() as usize;
                 if slot >= num_input { break; }
                 let vn = retop.0.read().unwrap().get_in(slot).cloned();
-                let vn = match vn { Some(v) => v, None => break };
+                let vn = match vn { Some(v) => v, None => break ,
+                };
                 if preexist.is_none() {
                     // Ghidra cc:1879-1881.
                     preexist = Some(vn);
@@ -11291,7 +11441,11 @@ impl Action for ActionReturnRecovery {
         // empty. This substitutes for the (stub) function-level guardReturns
         // pass that, in Ghidra, calls `active->registerTrial(addr, size)` for
         // each candidate return storage location.
-        let need_seed = fd.active_output.as_ref().map(|a| a.get_num_trials() == 0).unwrap_or(true);
+        let need_seed = fd
+            .active_output
+            .as_ref()
+            .map(|a| a.get_num_trials() == 0)
+            .unwrap_or(true);
         if need_seed {
             seed_output_trials(fd);
         }
@@ -11299,7 +11453,10 @@ impl Action for ActionReturnRecovery {
         let maxancestor = fd.get_arch().map(|a| a.trim_recurse_max).unwrap_or(5);
 
         // Snapshot RETURN ops (cc:1919-1921 iterates beginOp/endOp(CPUI_RETURN)).
-        let return_ops: Vec<crate::op::PcodeOpRef> = fd.obank.returnlist.iter()
+        let return_ops: Vec<crate::op::PcodeOpRef> = fd
+            .obank
+            .returnlist
+            .iter()
             .filter(|r| !r.0.read().unwrap().is_dead())
             .filter(|r| (r.0.read().unwrap().flags & crate::op::pcodeop_flags::HALT) == 0)
             .cloned()
@@ -11334,7 +11491,11 @@ impl Action for ActionReturnRecovery {
         }
 
         // Ghidra cc:1919-1935: per-RETURN, per-trial liveness analysis.
-        let trial_count = fd.active_output.as_ref().map(|a| a.get_num_trials()).unwrap_or(0);
+        let trial_count = fd
+            .active_output
+            .as_ref()
+            .map(|a| a.get_num_trials())
+            .unwrap_or(0);
         // Ghidra cc:1935: count += 1 for every unchecked trial processed,
         // accumulated across the whole walk and carried into the finalize
         // count below.
@@ -11362,7 +11523,8 @@ impl Action for ActionReturnRecovery {
                             (t.get_address(), t.get_size())
                         };
                         let cand = fd.vbank.create_with_space(
-                            size as usize, crate::space::AddressSpace::Register, addr.as_u64());
+                            size as usize, crate::space::AddressSpace::Register, addr.as_u64(),
+                        );
                         cand.write().unwrap().set_active_heritage();
                         fd.op_insert_input(retop, cand, slot as usize);
                     }
@@ -11381,7 +11543,11 @@ impl Action for ActionReturnRecovery {
                                 true, maxancestor, &vn, retop, slot, 0, 0,
                             );
                             if used {
-                                fd.active_output.as_mut().unwrap().get_trial_mut(i).mark_active();
+                                fd.active_output
+                                    .as_mut()
+                                    .unwrap()
+                                    .get_trial_mut(i)
+                                    .mark_active();
                             }
                         }
                     }
@@ -11404,7 +11570,10 @@ impl Action for ActionReturnRecovery {
             // Ghidra cc:1942: deriveOutputMap resolves USED trials.
             derive_func_output_map(fd);
             // Ghidra cc:1943-1949: buildReturnOutput for every RETURN.
-            let return_ops_again: Vec<crate::op::PcodeOpRef> = fd.obank.returnlist.iter()
+            let return_ops_again: Vec<crate::op::PcodeOpRef> = fd
+                .obank
+                .returnlist
+                .iter()
                 .filter(|r| !r.0.read().unwrap().is_dead())
                 .filter(|r| (r.0.read().unwrap().flags & crate::op::pcodeop_flags::HALT) == 0)
                 .cloned()
@@ -11441,7 +11610,8 @@ fn newparam_push_unique(
     vn: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
 ) {
     if let Some(v) = vn {
-        let already_last = newparam.last()
+        let already_last = newparam
+            .last()
             .map(|last| std::sync::Arc::ptr_eq(last, &v))
             .unwrap_or(false);
         if !already_last { newparam.push(v); }
@@ -11510,7 +11680,8 @@ impl Action for ActionNonzeroMask {
 ///
 /// Applies all force-goto overrides from the function's Override object.
 /// Each override marks a specific branch as an unstructured goto.
-pub struct ActionForceGoto { pub count: i32 }
+pub struct ActionForceGoto { pub count: i32 ,
+}
 impl ActionForceGoto {
     // Ghidra: coreaction.hh:141 ActionForceGoto (constructor mirror)
     pub fn new() -> Self { Self { count: 0 } }
@@ -11797,7 +11968,9 @@ impl ActionMarkIndirectOnly {
     /// qualifying op anywhere in the transitive closure → false. Uses the
     /// MARK flag for cycle avoidance, mirroring Ghidra's setMark/clearMark.
     // RUGRA-GLUE: Rugra helper factoring out INDIRECT-only-use predicate used by Funcdata::markIndirectOnly() (invoked from coreaction.hh:358)
-    fn check_indirect_use(start: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> bool {
+    fn check_indirect_use(
+        start: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) -> bool {
         use crate::opcodes::OpCode;
         let mut stack: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = vec![start.clone()];
         start.write().unwrap().set_mark();
@@ -11860,7 +12033,10 @@ impl Action for ActionMarkIndirectOnly {
                 continue;
             }
             if Self::check_indirect_use(vn_arc) {
-                vn_arc.write().unwrap().set_flags(varnode_flags::INDIRECTONLY);
+                vn_arc
+                    .write()
+                    .unwrap()
+                    .set_flags(varnode_flags::INDIRECTONLY);
             }
         }
         // Ghidra always returns 0; the action signals change via count.
@@ -11975,7 +12151,8 @@ impl ActionPreferComplement {
         let op_r = op.read().unwrap();
         match op_r.opcode {
             OpCode::CPUI_CBRANCH => {
-                let Some(vn) = op_r.inrefs.get(1).cloned() else { return 2 };
+                let Some(vn) = op_r.inrefs.get(1).cloned() else { return 2 ;
+                };
                 drop(op_r);
                 let vn_r = vn.read().unwrap();
                 match vn_r.lone_descend() {
@@ -12023,7 +12200,8 @@ impl ActionPreferComplement {
                     Some(d) if std::sync::Arc::ptr_eq(&d, op) => {}
                     _ => return 2,
                 }
-                let Some(def0) = vn0_r.get_def() else { return 2 };
+                let Some(def0) = vn0_r.get_def() else { return 2 ;
+                };
                 drop(vn0_r);
                 let subtest1 = Self::op_flip_in_place_test(&def0, fliplist);
                 if subtest1 == 2 {
@@ -12036,7 +12214,8 @@ impl ActionPreferComplement {
                     Some(d) if std::sync::Arc::ptr_eq(&d, op) => {}
                     _ => return 2,
                 }
-                let Some(def1) = vn1_r.get_def() else { return 2 };
+                let Some(def1) = vn1_r.get_def() else { return 2 ;
+                };
                 drop(vn1_r);
                 let subtest2 = Self::op_flip_in_place_test(&def1, fliplist);
                 if subtest2 == 2 {
@@ -12056,7 +12235,9 @@ impl ActionPreferComplement {
     /// guards.
     fn replace_lessequal(fd: &mut Funcdata, op: &crate::op::PcodeOpRef) -> bool {
         let op_r = op.0.read().unwrap();
-        let (vn, diff, i): (std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, i64, usize) =
+        let (vn, diff, i): (
+            std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, i64, usize,
+        ) =
             if op_r
                 .inrefs
                 .first()
@@ -12167,7 +12348,7 @@ impl ActionPreferComplement {
     fn get_split_point(
         block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) -> Option<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> {
-        use crate::block::{FlowBlock, BlockBasic, BlockCondition, BlockCopy, BlockList};
+        use crate::block::{BlockBasic, BlockCondition, BlockCopy, BlockList, FlowBlock};
         let bl = block.read().unwrap();
         if let Some(bb) = bl.as_any().downcast_ref::<BlockBasic>() {
             if bb.size_out() == 2 {
@@ -12182,7 +12363,11 @@ impl ActionPreferComplement {
             let ob = orig_basic.read().unwrap();
             if ob.size_out() == 2 {
                 drop(ob);
-                return Some(orig_basic as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>);
+                return Some(
+                    orig_basic as std::sync::Arc<
+                            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+                        >,
+                );
             }
             return None;
         }
@@ -12205,14 +12390,16 @@ impl ActionPreferComplement {
         block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         fliplist: &mut Vec<std::sync::Arc<std::sync::RwLock<PcodeOp>>>,
     ) -> i32 {
-        use crate::block::{FlowBlock, BlockBasic, BlockCondition};
+        use crate::block::{BlockBasic, BlockCondition, FlowBlock};
         let bl = block.read().unwrap();
         if let Some(cond) = bl.as_any().downcast_ref::<BlockCondition>() {
             let first = cond.first.clone();
             let second = cond.second.clone();
             drop(bl);
-            let Some(split1) = Self::get_split_point(&first) else { return 2 };
-            let Some(split2) = Self::get_split_point(&second) else { return 2 };
+            let Some(split1) = Self::get_split_point(&first) else { return 2 ;
+            };
+            let Some(split2) = Self::get_split_point(&second) else { return 2 ;
+            };
             let subtest1 = Self::flip_in_place_test(&split1, fliplist);
             if subtest1 == 2 {
                 return 2;
@@ -12223,7 +12410,8 @@ impl ActionPreferComplement {
             }
             subtest1
         } else if let Some(bb) = bl.as_any().downcast_ref::<BlockBasic>() {
-            let Some(lastop) = bb.ops.last().cloned() else { return 2 };
+            let Some(lastop) = bb.ops.last().cloned() else { return 2 ;
+            };
             drop(bl);
             if lastop.0.read().unwrap().opcode != OpCode::CPUI_CBRANCH {
                 return 2;
@@ -12309,7 +12497,9 @@ impl ActionPreferComplement {
         // swapBlocks(1,2): exchange the then/else arms.
         let mut bl = if_arc.write().unwrap();
         if let Some(bif) = bl.as_any_mut().downcast_mut::<BlockIf>() {
-            std::mem::swap(&mut bif.if_body, bif.else_body.as_mut().expect("checked above"));
+            std::mem::swap(
+                &mut bif.if_body, bif.else_body.as_mut().expect("checked above"),
+            );
         }
         true
     }
@@ -12325,7 +12515,9 @@ impl ActionPreferComplement {
             BlockWhileDo,
         };
         let bl = block.read().unwrap();
-        let mut out: Vec<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = Vec::new();
+        let mut out: Vec<
+            std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        > = Vec::new();
         if let Some(bif) = bl.as_any().downcast_ref::<BlockIf>() {
             out.push(bif.condition.clone());
             out.push(bif.if_body.clone());
@@ -12365,7 +12557,9 @@ impl Action for ActionPreferComplement {
         if fd.sblocks.blocks.is_empty() {
             return Ok(action_status::NO_CHANGE);
         }
-        let mut vec: Vec<std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> =
+        let mut vec: Vec<
+            std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        > =
             fd.sblocks.blocks.clone();
         let mut pos = 0usize;
         while pos < vec.len() {
@@ -12647,8 +12841,7 @@ impl Action for ActionStructureTransform {
             };
             let last_op = if body_last.0.read().unwrap().is_branch() {
                 let Some(previous) = body_last
-                    .0
-                    .read()
+                    .0.read()
                     .unwrap()
                     .previous_op_in_block(&fd.obank)
                 else {
@@ -12669,7 +12862,8 @@ impl Action for ActionStructureTransform {
             let cond_vn = cbranch.0.read().unwrap().get_in(1).cloned();
             let Some(cond_vn) = cond_vn else { continue };
             let comparison = cond_vn.read().unwrap().get_def();
-            let Some(comparison) = comparison else { continue };
+            let Some(comparison) = comparison else { continue ;
+            };
             // Search the comparison's inputs for a head-MULTIEQUAL / tail-iterate
             // chain (block.cc:3186-3202). Ghidra walks up to 4 levels of
             // non-MULTIEQUAL defs; for the common `i < N` form the loop
@@ -12686,7 +12880,12 @@ impl Action for ActionStructureTransform {
                 let Some(multieq) = multieq else { continue };
                 // The MULTIEQUAL must live in the head block. Compare by Arc
                 // pointer identity with head_ops.
-                let me_parent = multieq.read().unwrap().parent.as_ref().and_then(|w| w.upgrade());
+                let me_parent = multieq
+                    .read()
+                    .unwrap()
+                    .parent
+                    .as_ref()
+                    .and_then(|w| w.upgrade());
                 let in_head = me_parent
                     .as_ref()
                     .map(|p| Arc::ptr_eq(p, &head_arc))
@@ -12761,10 +12960,12 @@ impl Action for ActionStructureTransform {
                     let in0 = io.get_in(0).map(|v| v.clone());
                     let in1 = io.get_in(1).map(|v| v.clone());
                     let out = io.output.as_ref().map(|v| v.clone());
-                    let lhs = out.map(|v| {
+                    let lhs = out
+                        .map(|v| {
                         let vr = v.read().unwrap();
                         format!("var_{:x}", vr.get_offset())
-                    }).unwrap_or_default();
+                    })
+                        .unwrap_or_default();
                     let rhs = match (&in0, &in1) {
                         (Some(a), Some(b)) => {
                             let ar = a.read().unwrap();
@@ -12906,7 +13107,9 @@ impl Action for ActionReturnSplit {
         }
         // Snapshot the RETURN parents first (nodeSplit mutates the CFG and
         // the alive op list). Each entry: (parent_arc, in_count).
-        let mut returns: Vec<(Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, usize)> = Vec::new();
+        let mut returns: Vec<(
+            Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, usize,
+        )> = Vec::new();
         for op_ref in &fd.obank.alivelist {
             let parent_arc = {
                 let op_rg = op_ref.0.read().unwrap();
@@ -12915,7 +13118,8 @@ impl Action for ActionReturnSplit {
                 }
                 op_rg.parent.as_ref().and_then(|w| w.upgrade())
             };
-            let Some(parent_arc) = parent_arc else { continue };
+            let Some(parent_arc) = parent_arc else { continue ;
+            };
             let in_count = parent_arc.read().unwrap().size_in();
             // parent->sizeIn() <= 1 → skip (blockaction.cc:2281).
             if in_count <= 1 {
@@ -12942,7 +13146,8 @@ impl Action for ActionReturnSplit {
             {
                 let parent_rg = parent_arc.read().unwrap();
                 for slot in 0..*in_count {
-                    let Some(edge) = parent_rg.get_in(slot) else { continue };
+                    let Some(edge) = parent_rg.get_in(slot) else { continue ;
+                    };
                     let pred_arc = edge.point.clone();
                     let last_op = pred_arc.read().unwrap().get_ops().into_iter().last();
                     let is_goto = match last_op {
@@ -13086,7 +13291,9 @@ impl Action for ActionNodeJoin {
             // Ghidra's else-branch when !(out1 < out2)). inslot is the index
             // of bb in leastout's in-edge list = the chosen out-edge's
             // reverse_index field (FlowBlock::getOutRevIndex, block.hh:308).
-            let (leastout, inslot): (Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, usize) = {
+            let (leastout, inslot): (
+                Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, usize,
+            ) = {
                 let o0 = out0.point.read().unwrap();
                 let o1 = out1.point.read().unwrap();
                 let in0 = o0.size_in();
@@ -13124,7 +13331,9 @@ impl Action for ActionNodeJoin {
             // inspect it; collect them first to avoid holding leastout's
             // borrow while we mutate.
             let inslot = inslot as usize;
-            let mut siblings: Vec<Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = Vec::new();
+            let mut siblings: Vec<
+                Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+            > = Vec::new();
             for j in 0..leastout_in {
                 if j == inslot {
                     continue;
@@ -13192,7 +13401,10 @@ impl Action for ActionNodeJoin {
                 {
                     // Create new basic block (f_joined_block).
                     let join_arc = fd.create_new_block();
-                    join_arc.write().unwrap().set_flags(crate::block::block_flags::JOINED_BLOCK);
+                    join_arc
+                        .write()
+                        .unwrap()
+                        .set_flags(crate::block::block_flags::JOINED_BLOCK);
                     // Remove one edge from block1→exita and one from block2→exitb
                     // (or vice versa). We keep the edges that are "lower priority".
                     // Ghidra's fora_block1ishigh/forb logic: remove from the block
@@ -13277,11 +13489,9 @@ mod tests {
         let mut fd = Funcdata::new(
             "locked_void",
             crate::address::Address::new(0x1000),
-            0x10,
-        );
+            0x10);
         let mut copy = crate::pcoderaw::PcodeOpRaw::new(
-            crate::opcodes::OpCode::CPUI_COPY as i32,
-        );
+            crate::opcodes::OpCode::CPUI_COPY as i32);
         copy.set_output(crate::pcoderaw::VarnodeRaw::new(
             crate::space::AddressSpace::Unique,
             0x100,
@@ -13329,8 +13539,7 @@ mod tests {
         let mut fd = Funcdata::new(
             "plt_thunk",
             crate::address::Address::new(0x1022f0),
-            11,
-        );
+            11);
         fd.set_arch(std::sync::Arc::new(arch));
         // The libc-signature lock combination (debugproto locked_proto /
         // Ghidra's platform-side locked signature): input+output locked, model
@@ -13378,8 +13587,7 @@ mod tests {
         let mut fd = Funcdata::new(
             "unresolved",
             crate::address::Address::new(0x2000),
-            0x10,
-        );
+            0x10);
         fd.set_arch(std::sync::Arc::new(arch));
         assert!(fd.funcp.is_model_unknown());
         assert!(!fd.funcp.is_input_locked());
@@ -13395,7 +13603,9 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(comments.len(), 1);
-        assert_eq!(comments[0].get_text(), "WARNING: Unknown calling convention");
+        assert_eq!(
+            comments[0].get_text(), "WARNING: Unknown calling convention"
+        );
     }
 
     // Ghidra: coreaction.cc:4889-4892 ActionPrototypeWarnings::apply (override arm)
@@ -13414,8 +13624,7 @@ mod tests {
         let mut fd = Funcdata::new(
             "with_override",
             crate::address::Address::new(0x3000),
-            0x10,
-        );
+            0x10);
         fd.set_arch(std::sync::Arc::new(arch));
         // Fixture tweak: bind a non-unknown model name so the isModelUnknown
         // arm stays silent and only the override message is observable.
@@ -13453,8 +13662,7 @@ mod tests {
         let mut arch = crate::arch::Architecture::new();
         let mut model = crate::fspec::ProtoModelFull::new(
             Some(crate::space::AddressSpace::Stack),
-            8,
-        );
+            8);
         model.name = "test_default".to_string();
         model.extrapop = 0;
         let model = std::sync::Arc::new(model);
@@ -13477,8 +13685,7 @@ mod tests {
         locked_proto.set_output_lock(true);
         let locked_fc = crate::fspec::FuncCallSpecs::new(
             crate::address::Address::new(0x2000),
-            locked_proto,
-        );
+            locked_proto);
         // Unlocked modelless callspec: the plain cc:2327-2328 else branch.
         let unlocked_fc = crate::fspec::FuncCallSpecs::new(
             crate::address::Address::new(0x2100),
@@ -13600,9 +13807,15 @@ mod tests {
         use crate::address::Address;
         use crate::block::{BlockBasic, BlockGraph};
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
-        let b0 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(0, Address::new(0x1000))));
-        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(1, Address::new(0x1010))));
-        let b2 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(2, Address::new(0x1020))));
+        let b0 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            0, Address::new(0x1000),
+        )));
+        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            1, Address::new(0x1010),
+        )));
+        let b2 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            2, Address::new(0x1020),
+        )));
         // Mark b0 as entry (set flags field directly; set_flags is a trait method).
         b0.write().unwrap().flags |= crate::block::block_flags::ENTRY_POINT;
         for b in [&b0, &b1, &b2] { fd.bblocks.add_block(b.clone()); }
@@ -13623,9 +13836,15 @@ mod tests {
         use crate::address::Address;
         use crate::block::BlockBasic;
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
-        let b0 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(0, Address::new(0x1000))));
-        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(1, Address::new(0x1010))));
-        let b2 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(2, Address::new(0x1020))));
+        let b0 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            0, Address::new(0x1000),
+        )));
+        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            1, Address::new(0x1010),
+        )));
+        let b2 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+            2, Address::new(0x1020),
+        )));
         for b in [&b0, &b1, &b2] { fd.bblocks.add_block(b.clone()); }
         fd.bblocks.add_edge(b0.clone(), b1.clone());
         fd.bblocks.add_edge(b1.clone(), b2.clone());
@@ -13658,9 +13877,12 @@ mod tests {
         use crate::address::{Address, SeqNum};
         // CALLIND(const 0x500) — direct constant target.
         let const_vn = std::sync::Arc::new(std::sync::RwLock::new(
-            crate::varnode::Varnode::new_constant(0x500, 8)));
-        let mut callind = crate::op::PcodeOp::new(SeqNum::new(Address::new(0x20), 0),
-            crate::opcodes::OpCode::CPUI_CALLIND);
+            crate::varnode::Varnode::new_constant(0x500, 8),
+        ));
+        let mut callind = crate::op::PcodeOp::new(
+            SeqNum::new(Address::new(0x20), 0),
+            crate::opcodes::OpCode::CPUI_CALLIND,
+        );
         callind.inrefs = vec![const_vn];
         let op_arc = std::sync::Arc::new(std::sync::RwLock::new(callind));
         let resolved = ActionDeindirect::trace_indirect_target(&op_arc);
@@ -13682,21 +13904,28 @@ mod tests {
         use crate::address::Address;
         use crate::fspec::{FuncCallSpecs, FuncProto};
         let void_t = std::sync::Arc::new(crate::type_system::Datatype::Void(
-            crate::type_system::datatype::TypeBase::new("void".into(), 0, crate::type_system::TypeMetatype::Void)));
+            crate::type_system::datatype::TypeBase::new(
+                "void".into(), 0, crate::type_system::TypeMetatype::Void,
+            ),
+        ));
         let proto = FuncProto::new("callee".into(), void_t);
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
         // Add a CALL op at 0x2000 and bind the callspec to this exact owner.
         let target_vn = std::sync::Arc::new(std::sync::RwLock::new(
-            crate::varnode::Varnode::new_constant(0x9000, 8)));
+            crate::varnode::Varnode::new_constant(0x9000, 8),
+        ));
         let mut call_op = crate::op::PcodeOp::new(
             crate::address::SeqNum::new(Address::new(0x2000), 0),
-            crate::opcodes::OpCode::CPUI_CALL);
-        let register_arg = fd.vbank.create_with_space(
+            crate::opcodes::OpCode::CPUI_CALL,
+        );
+        let register_arg = fd.vbank
+                .create_with_space(
             8,
             crate::space::AddressSpace::Register,
-            0x18,
-        );
-        let stack_arg = fd.vbank.create_with_space(8, crate::space::AddressSpace::Stack, 0x18);
+            0x18);
+        let stack_arg = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Stack, 0x18);
         call_op.inrefs = vec![target_vn, register_arg, stack_arg];
         let op_arc = std::sync::Arc::new(std::sync::RwLock::new(call_op));
         let op_ref = crate::op::PcodeOpRef(op_arc);
@@ -13709,7 +13938,9 @@ mod tests {
         assert_eq!(fd.num_calls(), 1);
         // Before: no active input.
         assert!(!fd.get_call_specs(0).unwrap().is_input_active());
-        assert_eq!(fd.get_call_specs(0).unwrap().active_input.get_num_trials(), 0);
+        assert_eq!(
+            fd.get_call_specs(0).unwrap().active_input.get_num_trials(), 0
+        );
         let mut a = ActionFuncLink::new();
         a.apply(&mut fd).unwrap();
         // After: unlocked callee → initActiveInput (coreaction.cc:1482-1483),
@@ -13733,11 +13964,17 @@ mod tests {
     #[test]
     fn test_funcspecs_is_input_locked() {
         use crate::address::Address;
-        use crate::fspec::{FuncCallSpecs, FuncProto, ProtoParameter, protoparam_flags};
+        use crate::fspec::{protoparam_flags, FuncCallSpecs, FuncProto, ProtoParameter};
         let void_t = std::sync::Arc::new(crate::type_system::Datatype::Void(
-            crate::type_system::datatype::TypeBase::new("void".into(), 0, crate::type_system::TypeMetatype::Void)));
+            crate::type_system::datatype::TypeBase::new(
+                "void".into(), 0, crate::type_system::TypeMetatype::Void,
+            ),
+        ));
         let int_t = std::sync::Arc::new(crate::type_system::Datatype::Base(
-            crate::type_system::datatype::TypeBase::new("int".into(), 4, crate::type_system::TypeMetatype::Int)));
+            crate::type_system::datatype::TypeBase::new(
+                "int".into(), 4, crate::type_system::TypeMetatype::Int,
+            ),
+        ));
         let mut proto = FuncProto::new("f".into(), void_t);
         let mut p = ProtoParameter::new("a".into(), int_t, Address::new(0));
         p.flags |= protoparam_flags::TYPE_LOCKED;
@@ -13779,8 +14016,8 @@ mod tests {
     }
 
     /// PTRSUB with mismatched input(0) pointer type → CAST op inserted
-    /// feeding slot 0, and apply returns CHANGE. Faithful to
-    /// ActionSetCasts::castInput's PTRSUB arm (coreaction.cc:2655-2720).
+    /// feeding slot 0; raw apply returns 0 while inherited count changes.
+/// ActionSetCasts::castInput's PTRSUB arm (coreaction.cc:2655-2720).
     #[test]
     fn test_action_setcasts_ptrsub_inserts_cast() {
         use crate::address::{Address, SeqNum};
@@ -13798,13 +14035,17 @@ mod tests {
         // high holds a (long *): both are pointers, the one-level bases int
         // and long differ (no shared array layer, no typedefs), so the cast
         // to the varnode's own (int *) is required.
-        let long_t = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
+        let long_t = Arc::new(Datatype::Base(TypeBase::new(
+        "long".to_string(), 8, TypeMetatype::Int,
+    )));
         let long_ptr = Arc::new(Datatype::Pointer(TypePointer {
             base: TypeBase::new("long *".to_string(), 8, TypeMetatype::Pointer),
             ptr_to: long_t.clone(),
             wordsize: 1,
         }));
-        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)));
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+        "int".to_string(), 4, TypeMetatype::Int,
+    )));
         let int_ptr = Arc::new(Datatype::Pointer(TypePointer {
             base: TypeBase::new("int *".to_string(), 8, TypeMetatype::Pointer),
             ptr_to: int_t.clone(),
@@ -13814,7 +14055,9 @@ mod tests {
         in0.write().unwrap().set_flags(varnode_flags::WRITTEN);
         in0.write().unwrap().v_type = Some(int_ptr.clone());
         in0.write().unwrap().high =
-            Some(Arc::new(RwLock::new(crate::variable::HighVariable::new(long_ptr))));
+            Some(Arc::new(RwLock::new(crate::variable::HighVariable::new(
+        long_ptr,
+    ))));
 
         // PTRSUB output: its type plays no role in the input cast decision.
         let out = Arc::new(RwLock::new(Varnode::new(8, Address::new(0x3000))));
@@ -13838,7 +14081,10 @@ mod tests {
         // level down, so a CAST to reqtype = the varnode's own (int *) is
         // inserted (castInput takes the getInputCast return directly,
         // coreaction.cc:2672-2675).
-        assert_eq!(status, action_status::CHANGE, "apply must report CHANGE");
+        assert_eq!(
+        status, action_status::NO_CHANGE,
+        "Ghidra raw apply returns 0"
+    );
         assert!(a.count >= 1, "at least one CAST must be inserted");
 
         // Verify a CPUI_CAST op now feeds slot 0 of the PTRSUB.
@@ -13849,14 +14095,27 @@ mod tests {
         };
         assert!(cast_op_arc.is_some(), "slot 0 must now have a defining op");
         let cast_op = cast_op_arc.unwrap();
-        assert_eq!(cast_op.read().unwrap().opcode, OpCode::CPUI_CAST,
-            "the defining op must be a CAST");
-        assert!(Arc::ptr_eq(&cast_op.read().unwrap().get_in(0).unwrap(), &in0),
-            "the CAST reads the original input varnode");
-        assert!(Arc::ptr_eq(
-            &new_in0.as_ref().unwrap().read().unwrap().v_type.as_ref().unwrap(),
+        assert_eq!(
+        cast_op.read().unwrap().opcode, OpCode::CPUI_CAST,
+            "the defining op must be a CAST"
+    );
+        assert!(
+        Arc::ptr_eq(&cast_op.read().unwrap().get_in(0).unwrap(), &in0),
+            "the CAST reads the original input varnode"
+    );
+        assert!(
+        Arc::ptr_eq(
+            &new_in0
+                .as_ref()
+                .unwrap()
+                .read()
+                .unwrap()
+                .v_type
+                .as_ref()
+                .unwrap(),
             &int_ptr,
-        ), "the CAST output carries the varnode's own type as reqtype");
+        ), "the CAST output carries the varnode's own type as reqtype"
+    );
     }
 
     /// PTRSUB where input(0) already has the matching pointer type → no cast
@@ -13873,7 +14132,9 @@ mod tests {
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x40);
 
         // Both input(0) and output share the same (long *) pointer type.
-        let long_t = Arc::new(Datatype::Base(TypeBase::new("long".to_string(), 8, TypeMetatype::Int)));
+        let long_t = Arc::new(Datatype::Base(TypeBase::new(
+        "long".to_string(), 8, TypeMetatype::Int,
+    )));
         let long_ptr = Arc::new(Datatype::Pointer(TypePointer {
             base: TypeBase::new("long *".to_string(), 8, TypeMetatype::Pointer),
             ptr_to: long_t.clone(),
@@ -13899,7 +14160,9 @@ mod tests {
 
         let mut a = ActionSetCasts::new();
         let status = a.apply(&mut fd).unwrap();
-        assert_eq!(status, action_status::NO_CHANGE, "no cast expected for matching types");
+        assert_eq!(
+        status, action_status::NO_CHANGE, "no cast expected for matching types"
+    );
         assert_eq!(a.count, 0);
     }
 
@@ -13920,13 +14183,17 @@ mod tests {
         // dropped only when the one-level bases have equal align sizes.
         // int (align 4) vs char (align 1) differ, so the varnode's own
         // (int *) becomes the CAST target.
-        let char_t = Arc::new(Datatype::Base(TypeBase::new("char".to_string(), 1, TypeMetatype::Int)));
+        let char_t = Arc::new(Datatype::Base(TypeBase::new(
+        "char".to_string(), 1, TypeMetatype::Int,
+    )));
         let char_ptr = Arc::new(Datatype::Pointer(TypePointer {
             base: TypeBase::new("char *".to_string(), 8, TypeMetatype::Pointer),
             ptr_to: char_t.clone(),
             wordsize: 1,
         }));
-        let int_t = Arc::new(Datatype::Base(TypeBase::new("int".to_string(), 4, TypeMetatype::Int)));
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+        "int".to_string(), 4, TypeMetatype::Int,
+    )));
         let int_ptr = Arc::new(Datatype::Pointer(TypePointer {
             base: TypeBase::new("int *".to_string(), 8, TypeMetatype::Pointer),
             ptr_to: int_t.clone(),
@@ -13936,7 +14203,9 @@ mod tests {
         in0.write().unwrap().set_flags(varnode_flags::WRITTEN);
         in0.write().unwrap().v_type = Some(int_ptr.clone());
         in0.write().unwrap().high =
-            Some(Arc::new(RwLock::new(crate::variable::HighVariable::new(char_ptr))));
+            Some(Arc::new(RwLock::new(crate::variable::HighVariable::new(
+        char_ptr,
+    ))));
 
         let out = Arc::new(RwLock::new(Varnode::new(8, Address::new(0x3000))));
         out.write().unwrap().set_flags(varnode_flags::WRITTEN);
@@ -13955,7 +14224,10 @@ mod tests {
 
         let mut a = ActionSetCasts::new();
         let status = a.apply(&mut fd).unwrap();
-        assert_eq!(status, action_status::CHANGE, "PTRADD must cast mismatched pointer");
+        assert_eq!(
+        status, action_status::NO_CHANGE,
+        "Ghidra raw apply returns 0"
+    );
         assert!(a.count >= 1);
         // Verify CAST op now feeds slot 0 with the varnode's own type.
         let new_in0 = op_ref.0.read().unwrap().get_in(0).map(|a| a.clone());
@@ -13964,11 +14236,22 @@ mod tests {
             in0_rg.def.as_ref().and_then(|w| w.upgrade())
         };
         assert!(cast_op_arc.is_some());
-        assert_eq!(cast_op_arc.unwrap().read().unwrap().opcode, OpCode::CPUI_CAST);
-        assert!(Arc::ptr_eq(
-            &new_in0.as_ref().unwrap().read().unwrap().v_type.as_ref().unwrap(),
+        assert_eq!(
+        cast_op_arc.unwrap().read().unwrap().opcode, OpCode::CPUI_CAST
+    );
+        assert!(
+        Arc::ptr_eq(
+            &new_in0
+                .as_ref()
+                .unwrap()
+                .read()
+                .unwrap()
+                .v_type
+                .as_ref()
+                .unwrap(),
             &int_ptr,
-        ), "the CAST output carries the varnode's own type as reqtype");
+        ), "the CAST output carries the varnode's own type as reqtype"
+    );
     }
 
     // ---- ActionInferTypes + default-pipeline tree tests ----
@@ -14020,7 +14303,12 @@ mod tests {
         let mut a = ActionInferTypes::new();
         a.apply(&mut fd).unwrap();
         // The comparison output should be boolean-typed.
-        let meta = out.read().unwrap().v_type.as_ref().map(|t| t.get_metatype());
+        let meta = out
+        .read()
+        .unwrap()
+        .v_type
+        .as_ref()
+        .map(|t| t.get_metatype());
         assert_eq!(
             meta,
             Some(crate::type_system::datatype::TypeMetatype::Bool),
@@ -14117,9 +14405,13 @@ mod tests {
         ];
         let pos: Vec<usize> = expect
             .iter()
-            .map(|n| names.iter().position(|x| x == n).unwrap_or_else(|| {
-                panic!("{n} must be registered in mainloop, got {names:?}")
-            }))
+            .map(|n| {
+            names
+                .iter()
+                .position(|x| x == n)
+                .unwrap_or_else(|| panic!("{n} must be registered in mainloop, got {names:?}")
+            )
+        })
             .collect();
         assert!(
             pos.windows(2).all(|w| w[0] < w[1]),
@@ -14193,7 +14485,9 @@ mod tests {
         assert_eq!(ActionMarkIndirectOnly::new().get_name(), "markindirectonly");
         assert_eq!(ActionMapGlobals::new().get_name(), "mapglobals");
         assert_eq!(ActionPreferComplement::new().get_name(), "prefercomplement");
-        assert_eq!(ActionStructureTransform::new().get_name(), "structuretransform");
+        assert_eq!(
+        ActionStructureTransform::new().get_name(), "structuretransform"
+    );
         assert_eq!(ActionReturnSplit::new().get_name(), "returnsplit");
         assert_eq!(ActionNodeJoin::new().get_name(), "nodejoin");
     }
@@ -14208,7 +14502,9 @@ mod tests {
         let mut a = ActionStartTypes::new();
         assert_eq!(a.count, 0);
         let _ = a.apply(&mut fd).unwrap();
-        assert!(fd.has_type_recovery_started(), "bit must be set after apply");
+        assert!(
+        fd.has_type_recovery_started(), "bit must be set after apply"
+    );
         assert_eq!(a.count, 1, "count must bump on the first flip");
         // Re-run: already started, count must not bump.
         let _ = a.apply(&mut fd).unwrap();
@@ -14250,8 +14546,7 @@ mod tests {
         let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
         let vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(
             4,
-            Address::new(0x300),
-        )));
+            Address::new(0x300))));
         fd.vbank
             .loc_tree
             .insert(crate::varnode::VarnodeLocRef(vn.clone()));
@@ -14326,7 +14621,9 @@ mod tests {
         let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
         // A persistent RAM (global) varnode, attached (not free) via WRITTEN.
         let g = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_ram(0x4000, 4)));
-        g.write().unwrap().set_flags(varnode_flags::PERSIST | varnode_flags::WRITTEN);
+        g.write()
+        .unwrap()
+        .set_flags(varnode_flags::PERSIST | varnode_flags::WRITTEN);
         // A non-persistent RAM varnode (local) — must be left untouched.
         let local = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_ram(0x100, 4)));
         local.write().unwrap().set_flags(varnode_flags::WRITTEN);
@@ -14334,7 +14631,9 @@ mod tests {
         // Ghidra (the walk has no space gate; only the persist gate does the
         // filtering, cc:1669), but no symbol is forced read-only anywhere.
         let reg = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_register(0x10, 4)));
-        reg.write().unwrap().set_flags(varnode_flags::PERSIST | varnode_flags::WRITTEN);
+        reg.write()
+        .unwrap()
+        .set_flags(varnode_flags::PERSIST | varnode_flags::WRITTEN);
         fd.vbank
             .loc_tree
             .insert(crate::varnode::VarnodeLocRef(g.clone()));
@@ -14387,8 +14686,7 @@ mod tests {
         let ind_out = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_unique(1, 8)));
         let mut ind = crate::op::PcodeOp::new(
             SeqNum::new(Address::new(0x2000), 0),
-            OpCode::CPUI_INDIRECT,
-        );
+            OpCode::CPUI_INDIRECT);
         ind.inrefs = vec![vn_in.clone()];
         ind.output = Some(ind_out.clone());
         let ind_arc = std::sync::Arc::new(std::sync::RwLock::new(ind));
@@ -14401,7 +14699,9 @@ mod tests {
             .insert(crate::varnode::VarnodeLocRef(vn_in.clone()));
 
         let status = ActionMarkIndirectOnly::new().apply(&mut fd).unwrap();
-        assert_eq!(status, action_status::NO_CHANGE, "markindirectonly returns 0");
+        assert_eq!(
+        status, action_status::NO_CHANGE, "markindirectonly returns 0"
+    );
         assert!(
             vn_in.read().unwrap().flags & varnode_flags::INDIRECTONLY != 0,
             "illegal input used only by INDIRECT must be flagged indirectonly"
@@ -14475,13 +14775,13 @@ mod tests {
         use crate::opcodes::OpCode;
         use crate::varnode::Varnode;
         type BlkArc = std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
-        >;
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
         let build_if = |else_some: bool, cond_opcode: OpCode| {
             let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
             let cond_bb = std::sync::Arc::new(std::sync::RwLock::new(
-                BlockBasic::new(0, Address::new(0x1000)),
-            ));
+                BlockBasic::new(
+            0, Address::new(0x1000),
+        )));
             // comparison op defining the CBRANCH condition, with proper
             // def/descend wiring so loneDescend/getDef resolve.
             let mut cmp = PcodeOp::new(SeqNum::new(Address::new(0x1000), 0), cond_opcode);
@@ -14501,23 +14801,26 @@ mod tests {
             cond_bb.write().unwrap().add_op(PcodeOpRef(cmp_arc.clone()));
             cond_bb.write().unwrap().add_op(PcodeOpRef(cb_arc.clone()));
             let if_body = std::sync::Arc::new(std::sync::RwLock::new(
-                BlockBasic::new(1, Address::new(0x1100)),
-            )) as BlkArc;
+                BlockBasic::new(
+            1, Address::new(0x1100),
+        ))) as BlkArc;
             let else_body = std::sync::Arc::new(std::sync::RwLock::new(
-                BlockBasic::new(2, Address::new(0x1200)),
-            )) as BlkArc;
+                BlockBasic::new(
+            2, Address::new(0x1200),
+        ))) as BlkArc;
             // getSplitPoint (block.cc:2361) requires the condition block to
             // have two outgoing edges.
             cond_bb.write().unwrap().outgoing = vec![
-                crate::block::BlockEdge { point: if_body.clone(), flags: 0, reverse_index: 0 },
-                crate::block::BlockEdge { point: else_body.clone(), flags: 0, reverse_index: 0 },
+                crate::block::BlockEdge { point: if_body.clone(), flags: 0, reverse_index: 0 ,
+            },
+                crate::block::BlockEdge { point: else_body.clone(), flags: 0, reverse_index: 0 ,
+            },
             ];
             let bif = BlockIf {
                 index: 3,
                 condition: cond_bb.clone(),
                 if_body: if_body.clone(),
                 else_body: else_some.then(|| else_body.clone()),
-                negated: false,
                 goto_target: None,
                 goto_type: crate::block::goto_type::GOTO_GOTO,
                 incoming: Vec::new(),
@@ -14599,7 +14902,9 @@ mod tests {
         ActionPreferComplement::op_flip_in_place_execute(&mut fd, vec![op_arc.clone()]);
         {
             let o = op_arc.read().unwrap();
-            assert_eq!(o.opcode, OpCode::CPUI_INT_LESSEQUAL, "INT_LESS → INT_LESSEQUAL");
+            assert_eq!(
+            o.opcode, OpCode::CPUI_INT_LESSEQUAL, "INT_LESS → INT_LESSEQUAL"
+        );
             assert!(
                 std::sync::Arc::ptr_eq(&o.inrefs[0], &v2) && std::sync::Arc::ptr_eq(&o.inrefs[1], &v1),
                 "inputs must be swapped"
@@ -14609,10 +14914,10 @@ mod tests {
         // rewired to x. Build through fd APIs so varnodes are bank-owned
         // (opDestroy requires bank ownership).
         let blk = std::sync::Arc::new(std::sync::RwLock::new(
-            crate::block::BlockBasic::new(0, Address::new(0x1000)),
-        )) as std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
-        >;
+            crate::block::BlockBasic::new(
+        0, Address::new(0x1000),
+    ))) as std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
         fd.bblocks.add_block(blk.clone());
         // x must be a WRITTEN varnode (free varnodes may have at most one
         // descendant, varnode.cc:333-336): define it as an INT_EQUAL output.
@@ -14637,8 +14942,7 @@ mod tests {
         fd.op_insert_end(&cb_ref, &blk);
         ActionPreferComplement::op_flip_in_place_execute(
             &mut fd,
-            vec![neg_ref.0.clone()],
-        );
+            vec![neg_ref.0.clone()]);
         assert!(neg_ref.0.read().unwrap().is_dead(), "BOOL_NEGATE destroyed");
         assert!(
             std::sync::Arc::ptr_eq(&cb_ref.0.read().unwrap().inrefs[1], &x),
@@ -14663,14 +14967,20 @@ mod tests {
         arch.analyze_for_loops = true;
         fd.arch = Some(std::sync::Arc::new(arch));
         // head: a MULTIEQUAL(i_init, i_update) → i; INT_LESS(i, N); CBRANCH(cond)
-        let head = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(0, Address::new(0x1000))));
+        let head = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+        0, Address::new(0x1000),
+    )));
         let head_dyn = head.clone() as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
         let i_init = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(4, Address::new(0x100))));
         let i_update = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(4, Address::new(0x300))));
         // MULTIEQUAL producing i, input slot 1 = the iterate value.
-        let mut me = PcodeOp::new(SeqNum::new(Address::new(0x1004), 0), OpCode::CPUI_MULTIEQUAL);
+        let mut me = PcodeOp::new(
+        SeqNum::new(Address::new(0x1004), 0), OpCode::CPUI_MULTIEQUAL,
+    );
         me.parent = Some(std::sync::Arc::downgrade(&head_dyn));
-        me.output = Some(std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(4, Address::new(0x200)))));
+        me.output = Some(std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(
+        4, Address::new(0x200),
+    ))));
         let i_vn = me.output.clone().unwrap();
         me.inrefs = vec![i_init.clone(), i_update.clone()];
         let me_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(me)));
@@ -14683,18 +14993,24 @@ mod tests {
         let mut cmp = PcodeOp::new(SeqNum::new(Address::new(0x1008), 0), OpCode::CPUI_INT_LESS);
         cmp.parent = Some(std::sync::Arc::downgrade(&head_dyn));
         cmp.inrefs = vec![i_vn.clone(), n_vn];
-        cmp.output = Some(std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(1, Address::new(0x400)))));
+        cmp.output = Some(std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(
+        1, Address::new(0x400),
+    ))));
         let cond_vn = cmp.output.clone().unwrap();
         let cmp_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(cmp)));
         cond_vn.write().unwrap().def = Some(std::sync::Arc::downgrade(&cmp_ref.0));
         head.write().unwrap().add_op(cmp_ref.clone());
         let mut cb = PcodeOp::new(SeqNum::new(Address::new(0x100c), 0), OpCode::CPUI_CBRANCH);
         cb.parent = Some(std::sync::Arc::downgrade(&head_dyn));
-        cb.inrefs = vec![std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(0x1000, 8))), cond_vn];
+        cb.inrefs = vec![
+        std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(0x1000, 8))), cond_vn,
+    ];
         let cb_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(cb)));
         head.write().unwrap().add_op(cb_ref.clone());
         // body (tail): INT_ADD(i, 1) → i_update; BRANCH back to head.
-        let body = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(1, Address::new(0x2000))));
+        let body = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+        1, Address::new(0x2000),
+    )));
         let body_dyn = body.clone() as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
         let one_vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(1, 4)));
         let mut add = PcodeOp::new(SeqNum::new(Address::new(0x2004), 0), OpCode::CPUI_INT_ADD);
@@ -14706,7 +15022,9 @@ mod tests {
         body.write().unwrap().add_op(add_ref.clone());
         let mut br = PcodeOp::new(SeqNum::new(Address::new(0x2008), 0), OpCode::CPUI_BRANCH);
         br.parent = Some(std::sync::Arc::downgrade(&body_dyn));
-        br.inrefs = vec![std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(0x1000, 8)))];
+        br.inrefs = vec![std::sync::Arc::new(std::sync::RwLock::new(
+        Varnode::new_constant(0x1000, 8),
+    ))];
         br.flags = crate::op::pcodeop_flags::BRANCH;
         let br_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(br)));
         body.write().unwrap().add_op(br_ref); // trailing branch
@@ -14717,14 +15035,12 @@ mod tests {
             2,
             Address::new(0x0800),
         ))) as std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
-        >;
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
         let exit = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
             3,
             Address::new(0x3000),
         ))) as std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
-        >;
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
         fd.bblocks.add_block(entry.clone());
         fd.bblocks.add_block(head_dyn.clone());
         fd.bblocks.add_block(body_dyn.clone());
@@ -14749,16 +15065,14 @@ mod tests {
             flags: 0, for_init: None, for_iter: None, overflow_syntax: false,
         };
         let wd_arc = std::sync::Arc::new(std::sync::RwLock::new(wd)) as std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
-        >;
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
         // Nest the WhileDo under a BlockList so the test exercises
         // BlockGraph::finalTransform's required child-first recursion.
         let list = std::sync::Arc::new(std::sync::RwLock::new(BlockList::new(
             0,
             vec![wd_arc.clone()],
         ))) as std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
-        >;
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
         fd.sblocks.clear();
         fd.sblocks.add_block(list);
         // iterate op (INT_ADD) must be printable before.
@@ -14806,23 +15120,37 @@ mod tests {
         // Two goto predecessors (b1, b2) each ending in a BRANCH, both flowing
         // into the RETURN block (ret). ret has >1 in-edge and is splittable
         // (only a RETURN op with constant-ish inputs).
-        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(1, Address::new(0x1100))));
-        let b2 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(2, Address::new(0x1200))));
-        let ret = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(3, Address::new(0x1300))));
+        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+        1, Address::new(0x1100),
+    )));
+        let b2 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+        2, Address::new(0x1200),
+    )));
+        let ret = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+        3, Address::new(0x1300),
+    )));
         // RETURN op in ret (splittable: single RETURN, annotation/const inputs).
         let mut ro = PcodeOp::new(SeqNum::new(Address::new(0x1300), 0), OpCode::CPUI_RETURN);
-        ro.inrefs = vec![std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(0, 1)))];
+        ro.inrefs = vec![std::sync::Arc::new(std::sync::RwLock::new(
+        Varnode::new_constant(0, 1),
+    ))];
         let ro_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(ro)));
         ro_ref.0.write().unwrap().parent =
-            Some(std::sync::Arc::downgrade(&(ret.clone() as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>)));
+            Some(std::sync::Arc::downgrade(
+        &(ret.clone() as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>),
+    ));
         ret.write().unwrap().add_op(ro_ref.clone());
         fd.obank.alivelist.push(ro_ref.clone());
         // b1 ends in BRANCH, b2 ends in BRANCH (goto predecessors).
         for (blk, addr) in [(&b1, 0x1100u64), (&b2, 0x1200u64)] {
             let mut br = PcodeOp::new(SeqNum::new(Address::new(addr), 0), OpCode::CPUI_BRANCH);
-            br.inrefs = vec![std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(0x1300, 8)))];
+            br.inrefs = vec![std::sync::Arc::new(std::sync::RwLock::new(
+            Varnode::new_constant(0x1300, 8),
+        ))];
             br.flags = crate::op::pcodeop_flags::BRANCH;
-            blk.write().unwrap().add_op(PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(br))));
+            blk.write()
+            .unwrap()
+            .add_op(PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(br))));
         }
         // Wire edges b1→ret, b2→ret so ret has 2 in-edges.
         fd.bblocks.add_block(b1.clone());
@@ -14831,7 +15159,8 @@ mod tests {
         fd.bblocks.add_edge(b1.clone(), ret.clone());
         fd.bblocks.add_edge(b2.clone(), ret.clone());
         // sblocks must be non-empty (the early-out).
-        fd.sblocks.add_block(ret.clone() as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>);
+        fd.sblocks
+        .add_block(ret.clone() as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>);
         let alives_before = fd.obank.alivelist.len();
         let mut a = ActionReturnSplit::new();
         let _ = a.apply(&mut fd).unwrap();
@@ -14864,19 +15193,31 @@ mod tests {
         let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
         // Two CBRANCH blocks (b1, b2) both branching to the same two exit
         // blocks (exita, exitb) — a diamond.
-        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(1, Address::new(0x1000))));
-        let b2 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(2, Address::new(0x2000))));
-        let exita = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(3, Address::new(0x3000))));
-        let exitb = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(4, Address::new(0x4000))));
+        let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+        1, Address::new(0x1000),
+    )));
+        let b2 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+        2, Address::new(0x2000),
+    )));
+        let exita = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+        3, Address::new(0x3000),
+    )));
+        let exitb = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+        4, Address::new(0x4000),
+    )));
         let cond_vn = std::sync::Arc::new(std::sync::RwLock::new(Varnode::new(1, Address::new(0x50))));
         use crate::block::FlowBlock;
         for blk in [&b1, &b2] {
-            let mut cb = PcodeOp::new(SeqNum::new(blk.read().unwrap().get_start_addr(), 0), OpCode::CPUI_CBRANCH);
+            let mut cb = PcodeOp::new(
+            SeqNum::new(blk.read().unwrap().get_start_addr(), 0), OpCode::CPUI_CBRANCH,
+        );
             cb.inrefs = vec![
                 std::sync::Arc::new(std::sync::RwLock::new(Varnode::new_constant(0x3000, 8))),
                 cond_vn.clone(),
             ];
-            blk.write().unwrap().add_op(PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(cb))));
+            blk.write()
+            .unwrap()
+            .add_op(PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(cb))));
         }
         for b in [&b1, &b2, &exita, &exitb] {
             fd.bblocks.add_block(b.clone());
@@ -14958,19 +15299,23 @@ mod tests {
         let mut arch = crate::arch::Architecture::new();
         {
             let registry = std::sync::Arc::new(std::sync::RwLock::new(
-                crate::marshal::IdRegistry::new(),
-            ));
+                crate::marshal::IdRegistry::new()));
             let mut decoder = crate::marshal::TreeDecoder::new(root, registry);
             arch.decode_context_data(&mut decoder, &TrackedHost)
                 .expect("tracked_set decode");
         }
         // cc:692 precondition: the function address resolves to the DF
         // partition (whole-ram range from the pspec shape).
-        assert_eq!(arch.get_tracked_set(crate::space::AddressSpace::Ram, 0x403000).len(), 1);
+        assert_eq!(
+        arch.get_tracked_set(crate::space::AddressSpace::Ram, 0x403000)
+            .len(), 1
+    );
 
         let mut fd = Funcdata::new("t", Address::new(0x403000), 0x40);
         fd.set_arch(std::sync::Arc::new(arch));
-        let b0 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(0, Address::new(0x403000))));
+        let b0 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
+        0, Address::new(0x403000),
+    )));
         fd.bblocks.add_block(b0.clone());
         // One pre-existing op: the tracked COPY must land at the HEAD
         // (opInsertBegin, coreaction.cc:703).
