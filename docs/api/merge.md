@@ -418,6 +418,30 @@ main/glob_range/next_url 3 panic）、defects 0/numbering 0。
 `add_def_point_full`/`add_ref_point_full` 转 `pub(crate)` 供 merge 调用。
 `RUGRA_MERGE_DIAG` 诊断扩展（MERGE-PAIR：失败对实例 cover + 读者 order）。
 
+## 2026-08-30：同域残留清理——aCover/range 两处切 _full 入口（R-LATTICE-CROSSREVIEW MINOR-4）
+
+`build_dominant_copy` 的 aCover（merge.cc:1202-1207）与 `check_copy_pair` 的
+range（merge.cc:1119-1121）仍用 order 域便捷入口构造，是上文单读 cover 改造
+的同域残留。两处均切为 op-based 全量入口：
+
+1. **aCover**：`add_def_point_full(domVn.def, is_input)` +
+   逐读者 `add_ref_point_full(reader, outVn)`。补齐 endpoint 身份
+   （MULTIEQUAL→order-0 marker、INDIRECT→被守护 op order）与 addRefPoint 的
+   前驱回填——旧入口只标读点所在块，def 块与读点块之间的中间块完全缺失，
+   `bCover.intersect_char(aCover)>1` 的相交计数可能偏低（漏标 → 多替换）。
+2. **range**：`add_def_point_full(domOp.out.def, …)` +
+   `add_ref_point_full(subOp, subOp.in(0))`；contain 查询点从裸
+   `get_seq_num().order` 改为 `CoverBlock::get_u_index(&def)`（oracle
+   `CoverBlock::contain(op)` 内部即走 getUIndex，cover.cc:107-120）——
+   u_index 域一致性：INDIRECT def 的中间写入判定从此落在被守护 op 的
+   order 上。
+3. boundtype-2 的 `getSeqNum().getOrder()` 比较（merge.cc:536-538）保持裸
+   order——oracle 该处即裸 `getOrder()`，非 u_index 域，勿改。
+
+curl/httpd E2E 输出字节不变（见 w-lminors 报告），即语料上两处入口结果
+一致；切换后构造域与查询域与 oracle 统一，消除未观测行为差。
+
+
 ### 2026-07-04（续 3）：完整移植 dominant-copy 替换子系统
 - 移植 `process_high_dominant_copy`（merge.cc:1316）：对收到 ≥2 trim COPY 的 high，按同源 Varnode 分组，对每组调 build_dominant_copy。
 - 移植 `find_all_into_copies`（merge.cc:1295）+ `compare_copy_by_in_varnode`（merge.cc:1045）：收集 high 的所有外来 COPY，按输入 Varnode + block index + order 排序。

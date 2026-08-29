@@ -3321,22 +3321,22 @@ impl Merge {
                 (ov, ds)
             };
             let Some(out_vn_arc) = out_vn_arc else { continue };
-            // aCover: addDefPoint(domVn) + addRefPoint(each reader of outVn).
+            // aCover: addDefPoint(domVn) + addRefPoint(each reader of outVn)
+            // (merge.cc:1202-1207), both via the full op-based entries:
+            // endpoint identity (MULTIEQUAL order-0 marker, INDIRECT ->
+            // guarded-op order, cover.cc:29-49) plus the backward CFG
+            // recursion of addRefPoint (cover.cc:565-612), which fills
+            // every block between each reader and the def point — the
+            // order-domain entries silently dropped both.
             let mut a_cover = Cover::new();
-            // domVn def loc:
-            let (dvn_blk, dvn_ord, dvn_is_input) = varnode_def_loc(&dom_vn.read().unwrap());
-            if dvn_is_input {
-                a_cover.add_def_point(0, 2);
-            } else {
-                a_cover.add_def_point(dvn_blk, dvn_ord);
+            {
+                let dv = dom_vn.read().unwrap();
+                let def = dv.def.as_ref().and_then(|w| w.upgrade());
+                let is_input = def.is_none() && dv.is_input();
+                a_cover.add_def_point_full(def.as_ref(), is_input);
             }
             for d_ref in &descends {
-                let (rb, ro) = {
-                    let op = d_ref.0.read().unwrap();
-                    let blk = op.parent.as_ref().and_then(|w| w.upgrade()).map(|p| p.read().unwrap().get_index()).unwrap_or(0);
-                    (blk, op.get_seq_num().order)
-                };
-                a_cover.add_ref_point(rb, ro);
+                a_cover.add_ref_point_full(&d_ref.0, &out_vn_arc);
             }
             if b_cover.intersect_char(&a_cover) > 1 {
                 count -= 1;
@@ -4130,22 +4130,16 @@ impl Merge {
         };
         let mut range = Cover::new();
         if let Some(dov) = &dom_out {
-            let (blk, ord, is_input) = varnode_def_loc(&dov.read().unwrap());
-            if is_input {
-                range.add_def_point(0, 2);
-            } else {
-                range.add_def_point(blk, ord);
-            }
+            let dv = dov.read().unwrap();
+            let def = dv.def.as_ref().and_then(|w| w.upgrade());
+            let is_input = def.is_none() && dv.is_input();
+            range.add_def_point_full(def.as_ref(), is_input);
         }
         if let Some(siv) = &sub_in0 {
-            // addRefPoint: sub_op reads sub_in0 at sub_op's loc.
-            let (s_blk, s_ord) = {
-                let s = sub_op.0.read().unwrap();
-                let blk = s.parent.as_ref().and_then(|w| w.upgrade())
-                    .map(|p| p.read().unwrap().get_index()).unwrap_or(0);
-                (blk, s.get_seq_num().order)
-            };
-            range.add_ref_point(s_blk, s_ord);
+            // addRefPoint(subOp, subOp->getIn(0)) via the full op-based
+            // entry (merge.cc:1121): endpoint identity + backward CFG
+            // recursion, matching the oracle's intervening-write window.
+            range.add_ref_point_full(&sub_op.0, siv);
         }
         // Look for high instances with intervening writes (merge.cc:1124-1134).
         let h = high.read().unwrap();
@@ -4166,7 +4160,11 @@ impl Merge {
                         }).unwrap_or(false);
                         let blk = def.parent.as_ref().and_then(|w| w.upgrade())
                             .map(|p| p.read().unwrap().get_index()).unwrap_or(0);
-                        (true, cc, eq, blk, def.get_seq_num().order)
+                        // contain(op,1) maps the op through getUIndex
+                        // (cover.cc:107-120): MULTIEQUAL->0, INDIRECT->
+                        // guarded-op order — raw SeqNum order would leave
+                        // the u_index domain.
+                        (true, cc, eq, blk, crate::cover::CoverBlock::get_u_index(&def))
                     }
                     None => (false, false, false, 0, 0),
                 }
