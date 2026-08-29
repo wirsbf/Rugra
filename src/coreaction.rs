@@ -2967,15 +2967,22 @@ fn get_pointed_type(
 }
 
 // RUGRA-GLUE: helper mirroring TypeFactory::getTypePointer (type.hh); used by Rugra type inference
+// Ghidra: type.cc:3867 TypeFactory::getTypePointer(int4,Datatype*,uint4) — the 3-arg
+// overload constructs `TypePointer tmp(s,pt,ws)` with an EMPTY name (only the
+// 4-arg overload at type.cc:3885 attaches a name), so every type-inference
+// pointer the Actions build is ANONYMOUS. The former composed-name spelling
+// ("char *") made Rugra's pointers named, which the print layer then rendered
+// through the single-layer named-pointer path (`char * p`, oracle
+// printc_anonymous_pointer_decl_1204 named_ptr_contrast) instead of Ghidra's
+// drilled multi-layer `char *p` — the pointer NAME is not observable in any
+// Ghidra output for these types, so the empty name is the faithful form.
 fn make_pointer_type(
     base: &Arc<crate::type_system::datatype::Datatype>,
 ) -> Arc<crate::type_system::datatype::Datatype> {
-    use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
-    Arc::new(Datatype::Pointer(TypePointer {
-        base: TypeBase::new(format!("{} *", base.get_name()), 8, TypeMetatype::Pointer),
-        ptr_to: base.clone(),
-        wordsize: 1,
-    }))
+    use crate::type_system::datatype::Datatype;
+    Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer::new(
+        8, base.clone(), 1,
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -5246,17 +5253,18 @@ fn merge_min_type_order(
 /// Build a pointer type to `base` with the architecture pointer size, using a
 /// fresh factory-free TypePointer. Faithful to `TypeFactory::getTypePointer`.
 // RUGRA-GLUE: helper mirroring TypeFactory::getTypePointer (type.hh)
+// Ghidra: type.cc:3867 TypeFactory::getTypePointer(int4,Datatype*,uint4) — the
+// 3-arg overload's `TypePointer tmp(s,pt,ws)` carries an EMPTY name (names
+// attach only via the 4-arg overload, type.cc:3885); see make_pointer_type's
+// note for why the former composed-name spelling diverged from the oracle.
 fn make_ptr(
     base: std::sync::Arc<crate::type_system::datatype::Datatype>,
     ptr_size: usize,
 ) -> std::sync::Arc<crate::type_system::datatype::Datatype> {
-    use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype, TypePointer};
-    let name = format!("{} *", base.get_name());
-    std::sync::Arc::new(Datatype::Pointer(TypePointer {
-        base: TypeBase::new(name, ptr_size, TypeMetatype::Pointer),
-        ptr_to: base,
-        wordsize: 1,
-    }))
+    use crate::type_system::datatype::Datatype;
+    std::sync::Arc::new(Datatype::Pointer(
+        crate::type_system::datatype::TypePointer::new(ptr_size, base, 1),
+    ))
 }
 
 // Ghidra: type.cc:3392 TypeFactory::findAdd (canonical interning every propagateType product flows through)
@@ -5653,17 +5661,19 @@ impl ActionInferTypes {
                             ))
                         });
                     let mut factory = factory.write().unwrap();
+                    let _ = &mut factory;
                     return Some(std::sync::Arc::new(
                         crate::type_system::datatype::Datatype::Pointer(
-                            crate::type_system::datatype::TypePointer {
-                                base: crate::type_system::datatype::TypeBase::new(
-                                    format!("{} *", unknown1.get_name()),
-                                    alttype.get_size(),
-                                    TypeMetatype::Pointer,
-                                ),
-                                ptr_to: unknown1,
-                                wordsize: 1,
-                            },
+                            // typeop.cc:418: tlst->getTypePointer(sz, getBase(1,
+                            // TYPE_UNKNOWN), ws) — the 3-arg overload is
+                            // anonymous (type.cc:3867-3875); the composed-name
+                            // spelling diverged from the oracle (see
+                            // make_pointer_type's note).
+                            crate::type_system::datatype::TypePointer::new(
+                                alttype.get_size(),
+                                unknown1,
+                                1,
+                            ),
                         ),
                     ));
                     // (get_type_pointer interning form; wordsize from the

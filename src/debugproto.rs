@@ -694,19 +694,21 @@ fn parse_c_type(
             }),
     };
     for _ in 0..pointer_depth {
-        // Nested pointer spellings glue onto the previous star with no space
-        // ("char *" -> "char **"), matching the type printer's right-to-left
-        // C declaration form for pointer-to-pointer.
-        let display = if datatype.get_name().ends_with('*') {
-            format!("{}*", datatype.get_name())
-        } else {
-            format!("{} *", datatype.get_name())
-        };
-        datatype = Arc::new(Datatype::Pointer(TypePointer {
-            base: TypeBase::new(display, address_size, TypeMetatype::Pointer),
-            ptr_to: datatype,
-            wordsize: 1,
-        }));
+        // Ghidra builds parsed declarator pointers through
+        // PointerModifier::modType -> glb->types->getTypePointer(addrsize,
+        // base, wordsize) (grammar.cc:2403-2411), whose 3-arg overload
+        // leaves the name EMPTY (type.cc:3867-3875) — the "char *" spelling
+        // is syntax, not type identity, so the signature-parsed pointers
+        // stay anonymous and PrintC renders them through the drilled
+        // multi-layer form (`char *pcVar1`), matching the golden output.
+        // The former composed display names ("char *"/"char **") made these
+        // NAMED single-layer pointers and printed `char * pcVar1` (oracle
+        // printc_anonymous_pointer_decl_1204 named_ptr_contrast).
+        datatype = Arc::new(Datatype::Pointer(TypePointer::new(
+            address_size,
+            datatype,
+            1,
+        )));
     }
     Ok(datatype)
 }
@@ -966,9 +968,13 @@ fn resolve_type_inner(
             };
             let count = read_array_count(unit, offset)?;
             let array_size = element.get_size().saturating_mul(count);
-            let type_name = format!("{}[{}]", element.get_name(), count);
+            // Ghidra's DWARF array import runs through
+            // TypeFactory::getTypeArray (type.cc:3902), whose inline
+            // `TypeArray` ctor leaves the name EMPTY — array identity is
+            // structural (element type + count), the composed spelling was
+            // diagnostic-only.
             Ok(Arc::new(Datatype::Array(TypeArray {
-                base: TypeBase::new(type_name, array_size, TypeMetatype::Array),
+                base: TypeBase::new(String::new(), array_size, TypeMetatype::Array),
                 array_of: element,
                 num_elements: count,
             })))
@@ -1335,16 +1341,11 @@ fn alias_type(name: String, inner: &Datatype) -> Arc<Datatype> {
 
 // RUGRA-GLUE: constructs a pointer Datatype from a resolved DWARF pointee at the native debug-import boundary
 fn pointer_type(pointee: Arc<Datatype>, size: usize) -> Arc<Datatype> {
-    let name = if pointee.get_name().trim_end().ends_with('*') {
-        format!("{}*", pointee.get_name().trim_end())
-    } else {
-        format!("{} *", pointee.get_name())
-    };
-    Arc::new(Datatype::Pointer(TypePointer {
-        base: TypeBase::new(name, size, TypeMetatype::Pointer),
-        ptr_to: pointee,
-        wordsize: 1,
-    }))
+    // Ghidra builds DWARF pointer types anonymously (the TypeFactory 3-arg
+    // getTypePointer path, type.cc:3867-3875 — DW_AT_name on a pointer
+    // typedef attaches via alias_type, not here); see parse_c_type's note
+    // for why the former composed display name diverged from the oracle.
+    Arc::new(Datatype::Pointer(TypePointer::new(size, pointee, 1)))
 }
 
 // RUGRA-GLUE: canonical locked-void type used when DW_AT_type is absent on a subprogram or pointer target
@@ -1365,6 +1366,22 @@ fn unknown_type(size: usize) -> Arc<Datatype> {
 mod tests {
     use super::*;
     use crate::address::Address;
+
+    // Test-only drill: the spelling of the base type a (possibly nested)
+    // anonymous pointer chain points at — the identity the composed name
+    // used to carry before the anonymous-pointer alignment.
+    trait PtrDrillBaseName {
+        fn ptr_drill_base_name(&self) -> String;
+    }
+    impl PtrDrillBaseName for Arc<Datatype> {
+        fn ptr_drill_base_name(&self) -> String {
+            let mut cur = self.as_ref();
+            while let Datatype::Pointer(p) = cur {
+                cur = p.ptr_to.as_ref();
+            }
+            cur.get_name().to_string()
+        }
+    }
 
     struct TestSpecHost {
         registers: BTreeMap<String, crate::fspec::VarnodeData>,
@@ -1526,7 +1543,12 @@ mod tests {
             .expect("strtol signature represents")
             .expect("strtol is in the table");
         assert_eq!(strtol.num_params(), 3);
-        assert_eq!(strtol.get_param(1).unwrap().data_type.get_name(), "char **");
+        // Signature-parsed pointers are ANONYMOUS (Ghidra's
+        // PointerModifier::modType -> getTypePointer 3-arg, grammar.cc:2403
+        // / type.cc:3867-3875); "char **" is the spelling, not the identity.
+        let strtol_p1 = strtol.get_param(1).unwrap();
+        assert_eq!(strtol_p1.data_type.get_name(), "");
+        assert!(matches!(strtol_p1.data_type.as_ref(), Datatype::Pointer(_)));
         assert_eq!(strtol.get_param(2).unwrap().address.as_u64(), 0x10);
 
         // __ctype_b_loc: zero parameters, ushort ** return; the empty
@@ -1536,7 +1558,9 @@ mod tests {
             .expect("__ctype_b_loc signature represents")
             .expect("__ctype_b_loc is in the table");
         assert_eq!(ctype.num_params(), 0);
-        assert_eq!(ctype.return_type.get_name(), "ushort **");
+        // Anonymous pointer (see parse_c_type's Ghidra note).
+        assert_eq!(ctype.return_type.get_name(), "");
+        assert!(matches!(ctype.return_type.as_ref(), Datatype::Pointer(_)));
         assert!(ctype.void_input_locked);
 
         // Unknown imports stay unlocked (Ok(None) — active recovery decides).
@@ -1618,7 +1642,9 @@ mod tests {
 
         let glob_expand = db.get(0x17660).expect("glob_expand global");
         assert_eq!(glob_expand.name, "glob_expand");
-        assert_eq!(glob_expand.data_type.get_name(), "URLGlob *");
+        // Anonymous pointer (see parse_c_type's Ghidra note); the pointee
+        // structure check below carries the identity.
+        assert_eq!(glob_expand.data_type.get_name(), "");
         match glob_expand.data_type.as_ref() {
             Datatype::Pointer(pointer) => match pointer.ptr_to.as_ref() {
                 Datatype::Struct(composite) => {
@@ -1629,7 +1655,19 @@ mod tests {
                         .find(|field| field.name == "literal")
                         .expect("URLGlob.literal field");
                     assert_eq!(literal.offset, 0);
-                    assert_eq!(literal.type_ptr.get_name(), "char *[10]");
+                    // Anonymous array of anonymous char* (getTypeArray /
+                    // getTypePointer both leave names empty).
+                    assert_eq!(literal.type_ptr.get_name(), "");
+                    match literal.type_ptr.as_ref() {
+                        Datatype::Array(arr) => {
+                            assert_eq!(arr.num_elements, 10);
+                            assert!(matches!(
+                                arr.array_of.as_ref(),
+                                Datatype::Pointer(_)
+                            ));
+                        }
+                        _ => panic!("literal field must be an array"),
+                    }
                     let pattern = composite
                         .fields
                         .iter()
@@ -1638,7 +1676,14 @@ mod tests {
                     assert_eq!(pattern.offset, 80);
                     // DW_AT_upper_bound 8 is inclusive: 9 elements of the
                     // 24-byte URLPattern occupy [80, 296) where `size` sits.
-                    assert_eq!(pattern.type_ptr.get_name(), "URLPattern[9]");
+                    assert_eq!(pattern.type_ptr.get_name(), "");
+                    match pattern.type_ptr.as_ref() {
+                        Datatype::Array(arr) => {
+                            assert_eq!(arr.num_elements, 9);
+                            assert_eq!(arr.array_of.get_name(), "URLPattern");
+                        }
+                        _ => panic!("pattern field must be an array"),
+                    }
                     let size = composite
                         .fields
                         .iter()
@@ -1659,27 +1704,54 @@ mod tests {
 
         let map = db.address_pointer_map();
         assert_eq!(map.len(), 5);
+        // Address-pointer map types are anonymous pointers (see
+        // pointer_type's Ghidra note); assert the pointee spelling through
+        // the drill instead of the composed name.
         assert_eq!(
             map.get(&0x17660)
                 .expect("glob_expand address type")
                 .get_name(),
-            "URLGlob **"
+            ""
+        );
+        assert_eq!(
+            map.get(&0x17660)
+                .expect("glob_expand address type")
+                .ptr_drill_base_name(),
+            "URLGlob"
         );
         assert_eq!(
             map.get(&0x17520).expect("config address type").get_name(),
-            "Configurable *"
+            ""
+        );
+        assert_eq!(
+            map.get(&0x17520)
+                .expect("config address type")
+                .ptr_drill_base_name(),
+            "Configurable"
         );
         assert_eq!(
             map.get(&0x17680)
                 .expect("glob_buffer address type")
                 .get_name(),
-            "char *"
+            ""
+        );
+        assert_eq!(
+            map.get(&0x17680)
+                .expect("glob_buffer address type")
+                .ptr_drill_base_name(),
+            "char"
         );
         assert_eq!(
             map.get(&0x17518)
                 .expect("beenhere address type")
                 .get_name(),
-            "int *"
+            ""
+        );
+        assert_eq!(
+            map.get(&0x17518)
+                .expect("beenhere address type")
+                .ptr_drill_base_name(),
+            "int"
         );
     }
 
@@ -1729,10 +1801,13 @@ mod tests {
         assert_eq!(proto.get_param(0).unwrap().name, "glob");
         assert_eq!(proto.get_param(0).unwrap().address.as_u64(), 0x38);
         assert_eq!(proto.get_param(2).unwrap().address.as_u64(), 0x10);
-        assert_eq!(
-            proto.get_param(0).unwrap().data_type.get_name(),
-            "URLGlob **"
-        );
+        // Anonymous pointer chain (see parse_c_type's Ghidra note): the
+        // "URLGlob **" spelling is not the imported type's name.
+        assert_eq!(proto.get_param(0).unwrap().data_type.get_name(), "");
+        assert!(matches!(
+            proto.get_param(0).unwrap().data_type.as_ref(),
+            Datatype::Pointer(_)
+        ));
 
         // A thunk/import address has no DWARF definition: the boundary
         // contributes nothing (Ok(None)) and the import table owns it.

@@ -2,6 +2,23 @@
   "hooks": {
     "enabled": true,
     "events": {
+      "SessionStart": [
+        {
+          "matcher": "startup|resume",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "python3",
+              "enabled": true,
+              "args": [
+                "${ZCODE_PROJECT_DIR}/.zcode/align_gate.py",
+                "--session-start"
+              ],
+              "timeoutMs": 60000
+            }
+          ]
+        }
+      ],
       "PreToolUse": [
         {
           "matcher": "Edit|Write|MultiEdit",
@@ -9,7 +26,10 @@
             {
               "type": "process",
               "command": "python3",
-              "args": ["${ZCODE_PROJECT_DIR}/.zcode/align_gate.py"]
+              "enabled": true,
+              "args": [
+                "${ZCODE_PROJECT_DIR}/.zcode/align_gate.py"
+              ]
             }
           ]
         }
@@ -21,19 +41,10 @@
             {
               "type": "process",
               "command": "python3",
-              "args": ["${ZCODE_PROJECT_DIR}/.zcode/record_receipt.py"]
-            }
-          ]
-        }
-      ],
-      "SessionStart": [
-        {
-          "matcher": "startup|resume",
-          "hooks": [
-            {
-              "type": "process",
-              "command": "python3",
-              "args": ["${ZCODE_PROJECT_DIR}/.zcode/align_gate.py", "--session-start"]
+              "enabled": true,
+              "args": [
+                "${ZCODE_PROJECT_DIR}/.zcode/record_receipt.py"
+              ]
             }
           ]
         }

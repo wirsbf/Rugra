@@ -233,10 +233,22 @@ structure/union/enumeration/typedef/base_type DIE 建立名字→类型索引，
 （`char **`/`char**`/`char * *`）归一到 base+depth；旧
 `trim_end_matches(" *")` 剥不掉第二颗星，双指针落入 unknown-name 基臂产出
 `Base("char **", TYPE_UNKNOWN)` 而非结构化 Pointer-to-Pointer。
-`parse_c_type` 嵌套层显示名在前层以 `*` 结尾时粘着（`char *` → `char **`），
-匹配类型打印机右到左 C 声明形。generic_clib 的核心 `char` 现在用字符构造器，
+generic_clib 的核心 `char` 现在用字符构造器，
 而不是仅名称相同的普通 1-byte `TYPE_INT`；因此 `strdup` 等锁定签名的 pointee
 保留 `isCharPrint()`。
+
+## 2026-08-29：PTRSUB-TYPED-DECL-RESIDUAL-0001 — 解析指针改匿名（Ghidra 对齐）
+
+`parse_c_type` 的嵌套指针层与 DWARF 边界的 `pointer_type`/DW_TAG_array_type
+数组构建此前给类型附带组合显示名（`"char *"`/`"char **"`/`"char *[10]"`）。
+Ghidra 的对应路径（`PointerModifier::modType` → `TypeFactory::getTypePointer`
+3-arg，grammar.cc:2403-2411 / type.cc:3867-3875；`getTypeArray` type.cc:3902）
+一律构造**匿名**类型——`"char *"` 是语法拼写不是类型身份。组合名使这些指针成为
+**命名单层指针**，printc 忠实渲染为 `char * pcVar1`（oracle
+printc_anonymous_pointer_decl_1204 named_ptr_contrast），偏离 golden 的匿名
+多层钻取形 `char *pcVar1`。现在 `parse_c_type`/`pointer_type`/DWARF 数组均
+构造匿名类型（`TypePointer::new`/空名 `TypeArray`），结构断言取代名称断言
+（`libc_locked_proto...`/`curl_dwarf_globals...` 等测试已同步）。
 
 ## 2026-08-28：DEBUGPROTO-DWARF-CHAR-0001 — GetStr 字符类型边界
 

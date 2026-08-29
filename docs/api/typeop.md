@@ -551,3 +551,15 @@ TypeOp trait +get_output_token/get_input_cast/propagate_type/get_output_metatype
 LOAD/STORE 专用 cast 臂需要构造 pointer 包装类型（`tlst->getTypePointer` 等
 价路径），与 Ghidra 中 TypeOpLoad/TypeOpStore 同文件共享 propagateToPointer
 的布局一致。
+
+## 2026-08-29：propagate_to_pointer 产物改匿名指针（PTRSUB-TYPED-DECL-RESIDUAL-0001）
+
+Ghidra 的 `TypeOp::propagateToPointer` 终归 3-arg
+`t->getTypePointer(sz,dt,wordsz)`（typeop.cc:197 / type.cc:3867-3875），指针名
+为空。Rugra 此前给产物附带组合名（`"char *"`），使下游声明/转型把该指针当
+命名单层指针渲染（`char * pcVar5`，oracle named_ptr_contrast 形），偏离
+golden 的匿名钻取形 `char *pcVar5`。现在用 `TypePointer::new`（空名 +
+calc_submeta）构造。coreaction.rs 的 `make_pointer_type`/`make_ptr`/
+COPY-spacebase 指针臂（typeop.cc:418 同源）同批修正，见
+docs/api/coreaction.md。
+
