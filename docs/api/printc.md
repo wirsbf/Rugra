@@ -1896,3 +1896,34 @@ type_expr_space 形态(`char * x`),与 fixture named_ptr_contrast 记录重新�
 
 测试 `printc::tests::test_doc_function_leaves_action_scope_unchanged` 的 pcVar1 构造改为工厂匿名
 `TypePointer::new(8, char, 1)`(生产形态,匹配 e331a5c5 匿名化),断言的 glued 输出不变。
+
+### 2026-08-30：MAIN-RC3-STRUCTURED-EMIT-0001 — WhileDo/For body 门翻转为 oracle 结构化发射
+
+- **翻转**:2026-08-29 固定的两处 `body_is_dead = true`(emit_structured_whiledo
+  的 body 门,含 overflow 臂;emit_for_loop 的 body 门)按 oracle 条件评估——
+  printc.cc:3061-3062 / 2994-2995 规定 `setMod(no_branch); beginBlock(getBlock(1));
+  getBlock(1)->emit(this)`,**无条件结构化虚派发,oracle 没有 flatten 旁臂**。
+  两处改为无条件 `emit_block_structured`(seen_return 域作用域保持)。
+- **触发时机**:RC2(BlockGoto wrapped,MAIN-RC2-BLOCKGOTO-WRAPPED-0001)+
+  guard-lattice 落地后,2026-08-29 记录的暴露面(+404 skeleton、numbering 1→2、
+  main 1100)缩小为 **+58 skeleton、numbering 0→1、main 838→926**。
+- **emit_comment_block_tree 的 BlockGoto 子表修正**:Ghidra `BlockGoto :
+  BlockGraph`(block.hh:547),cc:3257-3263 的非 basic 递归走 `subBlock(i)` =
+  BlockGraph 列表 = identifyInternal(ret,[bl])(block.cc:1706-1708)移入的
+  **wrapped 组件**;旧代码取 `goto_target`(legacy 投影,实践恒 None)——改为
+  `wrapped`。goto TARGET 不参与子块遍历。
+- **E2E 差分(curl 12.0.4 golden)**:defects=0 保持;numbering 0→1(main 的
+  `iVar4 declared twice`,见下残差);skeleton 3104→3162。逐函数:
+  main +88、file2string.part.0 −16、parseconfig.constprop.0 −14、my_get_token −2、
+  next_url +2。main 的 URL-glob 区现在与 golden 1:1 结构形态(含 golden 自身的
+  `goto LAB_0010282a` 反向边、`LAB_00102873:` 标签、if/else 嵌套链、for 循环);
+  next_url +2 = golden 的 `if (glob->size <= (int)uVar8) goto LAB_001050e7;`
+  循环守卫首次发射(Rugra 以 `==0 || <` 规范两行形态)。httpd:baseline 与翻转
+  **逐字节相同**(2178/4/0,4 defects 均为 master 既有)。
+- **残差登记**(不回退,新 TODO):
+  - `PRINTC-STRUCTEMIT-MAIN-IVAR4-DUP-0001`:main 结构化暴露区内 mid-block
+    `int iVar4;` 二次声明(numbering +1),伴随 `fopen(...); if (...)` 同行
+    (缺 tagLine 断行)——声明发射/行断点在结构化路径的缺口。
+  - main 的 for 头部畸形(`for (var_8; iVar11 != 0; ...)`,golden 为
+    `for (lVar13 = 0x26; lVar13 != 0; lVar13 + -1)`)——varmap for-init/iterate
+    数据侧残差,先前被 flatten 汤掩盖。

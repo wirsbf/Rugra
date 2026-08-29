@@ -4325,29 +4325,22 @@ impl PrintC {
                     // A loop body is an independent control-flow path: a RETURN
                     // seen before the loop (or in a sibling branch) must NOT
                     // suppress the loop body. Scope seen_return to the body.
-                    // BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 residual: with
-                    // identifyInternal no longer flagging consumed
-                    // components f_dead (oracle block.cc:940-963 sets no
-                    // flag), this gate cannot key on block_flags::DEAD.
-                    // Every BlockWhileDo body is a consumed component, so
-                    // the old DEAD test was always true at print time and
-                    // the structured branch below was never operative in
-                    // the validated baseline. Keep the legacy flatten
-                    // emission (curl E2E 2134/0/1, byte-identical A/B
-                    // evidence 2026-08-29 w-identify3) until the
-                    // main-region structuring gap is fixed: the
-                    // structured emission printc.cc:2994-2995 prescribes
-                    // exposes leftover raw goto components there
-                    // (+404 skeleton / +1 numbering on main, NONCONVERGE-
-                    // GETPARAM-MATCHURL-0001 family neighborhood).
-                    let body_is_dead = true;
+                    // cc:3060-3062: setMod(no_branch); beginBlock(getBlock(1));
+                    // getBlock(1)->emit(this) — the body is emitted via the
+                    // structured virtual dispatch UNCONDITIONALLY; the oracle
+                    // has no flatten side-arm here. MAIN-RC3-STRUCTURED-EMIT-0001
+                    // flipped the legacy `body_is_dead = true` gate that
+                    // BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 had pinned after the
+                    // f_dead semantics change (identifyInternal no longer
+                    // flags consumed components, oracle block.cc:940-963):
+                    // with RC2 (BlockGoto wrapped) + guard-lattice landed, the
+                    // structured emission no longer exposes raw goto
+                    // components in the main region. Any newly exposed
+                    // unstructured residue must be registered as a TODO, never
+                    // re-gated.
                     let saved = self.seen_return;
                     self.seen_return = false;
-                    if body_is_dead {
-                        self.emit_block_ops(&while_data.body, true);
-                    } else {
-                        self.emit_block_structured(&while_data.body, graph, emitted);
-                    }
+                    self.emit_block_structured(&while_data.body, graph, emitted);
                     self.seen_return = saved;
                     self.loop_depth -= 1;
                     self.emit.end_block();
@@ -11951,24 +11944,17 @@ impl PrintC {
         self.loop_depth += 1;
         // Scope seen_return: a loop body is re-entered each iteration; a prior
         // RETURN must not suppress it (mirrors emit_structured_whiledo).
-        // BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 residual: same gate as the
-        // overflow whiledo emission above — identifyInternal no longer
-        // flags consumed components f_dead (oracle block.cc:940-963 sets
-        // no flag), and every BlockWhileDo body is a consumed component,
-        // so the legacy DEAD test was always true at print time. Keep the
-        // legacy flatten emission (byte-identical to the validated 2134/0/1
-        // baseline, A/B evidence 2026-08-29 w-identify3) until the
-        // main-region structuring gap is fixed; the structured emission
-        // printc.cc:2994-2995 prescribes exposes leftover raw goto
-        // components there (+404 skeleton / +1 numbering on main).
-        let body_is_dead = true;
+        // cc:2995: the body is emitted via the structured virtual dispatch
+        // UNCONDITIONALLY (no flatten side-arm in the oracle).
+        // MAIN-RC3-STRUCTURED-EMIT-0001 flipped the legacy `body_is_dead =
+        // true` gate (same BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 pinning as the
+        // whiledo emitter above): with RC2 BlockGoto-wrapped + guard-lattice
+        // landed, structured emission is the oracle-prescribed form. Newly
+        // exposed unstructured residue must be registered as a TODO, never
+        // re-gated.
         let saved = self.seen_return;
         self.seen_return = false;
-        if body_is_dead {
-            self.emit_block_ops(&bl.body, true);
-        } else {
-            self.emit_block_structured(&bl.body, graph, emitted);
-        }
+        self.emit_block_structured(&bl.body, graph, emitted);
         self.seen_return = saved;
         self.loop_depth -= 1;
         // cc:2996: endBlock(id2);
@@ -12072,8 +12058,16 @@ impl PrintC {
                 } else if let Some(il) = any.downcast_ref::<crate::block::BlockInfLoop>() {
                     vec![il.body.clone()]
                 } else if let Some(g) = any.downcast_ref::<crate::block::BlockGoto>() {
-                    if let Some(t) = g.goto_target.clone() {
-                        vec![t as std::sync::Arc<_>]
+                    // Ghidra `BlockGoto : BlockGraph` (block.hh:547): this
+                    // recursion walks `subBlock(i)` = the BlockGraph list,
+                    // which holds the wrapped block moved in by
+                    // identifyInternal(ret, [bl]) (block.cc:1706-1708) — the
+                    // goto TARGET is not part of the sub-block walk.
+                    // MAIN-RC3-STRUCTURED-EMIT-0001: was `goto_target`
+                    // (a legacy projection that stays None in practice);
+                    // `wrapped` is the getBlock(0) the oracle recurses into.
+                    if let Some(w) = g.wrapped.clone() {
+                        vec![w]
                     } else { Vec::new() }
                 } else {
                     Vec::new()
