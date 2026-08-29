@@ -78,7 +78,9 @@
   "input_param_sentinel": "MATCH",
   "free_vn_sentinel": "MATCH",
   "zero_base_wrap": "MATCH",
-  "downstream_consumers": "OUT_OF_DOMAIN: setVarnodeProperties/Scope::inUse/findLinkedVarnodes are covered by the curl/httpd differential gates"
+  "downstream_consumers": {
+   "scope": "setVarnodeProperties/Scope::inUse/findLinkedVarnodes are covered by the curl/httpd differential gates, outside this fixture's domain"
+  }
  },
  "residual_todo_ids": [],
  "comparand": {
