@@ -7458,6 +7458,38 @@
           "GH12-F-094e73150d05f9176dad"
         ]
       }
+    },
+    {
+      "id": "printc_pending_brace_emit_1204",
+      "description": "PRINTC-STRUCTEMIT-MAIN-IVAR4-DUP-0001 bilateral fixture: PrintC::emitBlockIf PendingBrace dynamic behavior (printc.cc:2878-2948) — fired-brace `else {` + deferred close (EmitPrettyPrint, statement in else-if condition), merged `else if(` (empty condition, cc:2900-2902 cancel+spaces), and the never-fires EmitNoMarkup form (prettyprint.hh:557); statement and raw layers both MATCH",
+      "runner": [
+        "tools/run_printc_pending_brace_emit_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/printc_pending_brace_emit_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_printc_pending_brace_emit_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/printc_pending_brace_emit_1204.cc",
+          "fixture_source_2": "tests/oracle/printc_pending_brace_emit_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "tools/run_printc_pending_brace_emit_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": [
+          "GH12-F-8c31d0f4e2a95b60c1a7"
+        ]
+      }
     }
   ]
 }
