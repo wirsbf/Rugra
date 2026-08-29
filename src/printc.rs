@@ -3334,11 +3334,21 @@ impl PrintC {
                         // fall-through statement). Emitted targets stay
                         // excluded: their label belongs at their own block
                         // (the pending arm / backpatch), not the goto site.
+                        // BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001: the former
+                        // `goto_targets.contains(&target) ||` first disjunct
+                        // anchored EVERY op-level goto target at the goto
+                        // site (the c23d4f52 era's only label source, before
+                        // the pending arm/backpatch existed), poisoning
+                        // printed_labels ahead of the target's own
+                        // emitAnyLabelStatement print and producing
+                        // `goto X; X:` self-pairs with the label — and the
+                        // jump — resolved to the fall-through instead of the
+                        // target block (oracle: emitBlockBasic cc:2685 prints
+                        // a block's own label at ITS head, never a branch
+                        // target's label at the branch site).
                         let needs_anchor = self.pending_goto_labels.contains(&target)
                             && !self.discovery_block_starts.contains(&target);
-                        if (self.goto_targets.contains(&target) || needs_anchor)
-                            && !targets_to_label.contains(&target)
-                        {
+                        if needs_anchor && !targets_to_label.contains(&target) {
                             targets_to_label.push(target);
                         }
                     }
@@ -3818,11 +3828,21 @@ impl PrintC {
                         // fall-through statement). Emitted targets stay
                         // excluded: their label belongs at their own block
                         // (the pending arm / backpatch), not the goto site.
+                        // BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001: the former
+                        // `goto_targets.contains(&target) ||` first disjunct
+                        // anchored EVERY op-level goto target at the goto
+                        // site (the c23d4f52 era's only label source, before
+                        // the pending arm/backpatch existed), poisoning
+                        // printed_labels ahead of the target's own
+                        // emitAnyLabelStatement print and producing
+                        // `goto X; X:` self-pairs with the label — and the
+                        // jump — resolved to the fall-through instead of the
+                        // target block (oracle: emitBlockBasic cc:2685 prints
+                        // a block's own label at ITS head, never a branch
+                        // target's label at the branch site).
                         let needs_anchor = self.pending_goto_labels.contains(&target)
                             && !self.discovery_block_starts.contains(&target);
-                        if (self.goto_targets.contains(&target) || needs_anchor)
-                            && !targets_to_label.contains(&target)
-                        {
+                        if needs_anchor && !targets_to_label.contains(&target) {
                             targets_to_label.push(target);
                         }
                     }
@@ -3987,8 +4007,35 @@ impl PrintC {
     fn emit_flow_basic(
         &mut self,
         block_arc: &std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+    >,
     ) {
+        // GOTO-LABEL-UNPRINTED-0001 discovery ledger (emit_block_ops sibling,
+        // printc.rs:3503-3522): emit_block_ops records only leaves dispatched
+        // through the FLAT paths; a leaf reached in a plain structured context
+        // (e.g. a goto target sitting at the function's top level after a
+        // loop, emitted below via emit_block_basic_rpn/legacy) went
+        // unrecorded, so emit_goto_statement's never-emitted-target anchor
+        // misfired and placed its label at the goto site — the `goto X; X:`
+        // self-pair (BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001 residual,
+        // observed next_url code_r0x000050E7). Same gates as the sibling
+        // recorder: discovery pass + PRIMARY NullEmit + Basic/Copy leaf; the
+        // oracle counterpart is BlockGraph::emit totality — every tree block
+        // emits exactly once through the virtual dispatch (block.hh emit),
+        // so Ghidra's "is this target a live emitted block" question is
+        // answered by the tree itself, and this ledger merely mirrors that
+        // completeness across Rugra's two leaf emission paths.
+        if self.discovery_pass
+            && (&*self.emit) as *const dyn Emit as *const () as usize == self.discovery_emit_id
+            && matches!(
+                block_arc.read().unwrap().get_type(),
+                crate::block::BlockType::Basic | crate::block::BlockType::Copy
+            )
+        {
+            if let Some(start) = Self::flow_entry_address(block_arc) {
+                self.discovery_block_starts.insert(start);
+            }
+        }
         self.emit_any_label_statement(block_arc);
         if self.is_set(print_mods::ONLY_BRANCH) {
             let terminal = block_arc.read().unwrap().get_ops().last().cloned();

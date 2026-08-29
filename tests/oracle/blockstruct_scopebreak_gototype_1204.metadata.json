@@ -1,0 +1,30 @@
+{
+ "fixture_id": "BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001",
+ "overall_status": "MATCH",
+ "status_note": "scopeBreak goto_type conversion + markUnstructured marking gate locked bilaterally on 4 synthetic production-path graphs (buildCopy -> structureLoops -> CollapseStructure::collapseAll -> scopeBreak(-1,-1) -> gotoPrints transport -> markUnstructured). Case nested_two_level_goto is the curl next_url shape and carries the disproof record: a goto exiting TWO loop scopes stays f_goto_goto on the locked oracle (only the innermost loop's exit converts, block.cc:2872/3082) and its target IS marked f_unstructured_targ — golden ghidra_curl_1204.c next_url keeps `goto LAB_001050e7;` with the label 31 lines later. The observed `goto X; X:` text defect in Rugra was therefore NOT a scopeBreak gap but printc label anchoring (GOTO-LABEL-UNPRINTED-0001 discovery ledger recorded only emit_block_ops-path leaves; the never-emitted-target anchor then misplaced the label at the goto site) — fixed in the same wave; see commit Differential block.",
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "(git worktree at ghidra/, verified by runner)",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{block.hh:88-91,block.cc:1233-1237,1270-1288,1681-1698,2856-2874,3067-3084,3324-3330,3434-3439,blockaction.cc:1446-1475,1799-1816,2169-2197,printc.cc:2678-2744,3198-3226}"
+ },
+ "observed": {
+  "loop_exit_goto": "ifgoto body=copy target=copy gototype=2 targ_unstructured=0",
+  "nested_two_level_goto": "ifgoto body=copy target=copy gototype=1 targ_unstructured=1",
+  "dowhile_body_goto": "ifgoto body=copy target=copy gototype=2 targ_unstructured=0",
+  "forward_exit_goto": "gotos=0"
+ },
+ "normalizations": [
+  "observation lines sorted before printing (Rugra installs composites at the consumed slot, the oracle appends; tree ORDER is order-free here)",
+  "identity reduced to node TYPES (collapse creates fresh BlockCopy nodes whose indices differ between tree builders)",
+  "oracle-side Vertex::negateCondition is a no-op override (synthetic leaf has no PcodeOp condition; the flip only affects condition text/edge order, observed order-free)"
+ ],
+ "comparand_sha256": {
+  "cpp_fixture_sha256": "69267b1e4f365aad1247f1d2e4e89c1fdbd60b348189b95dfb6a0bed47166cba",
+  "rust_fixture_sha256": "97f7798ae742882d7833bab2f8e25572f08b4ab5600e79a7c534c4b581276e59",
+  "rugra_block_sha256": "537054fa68d8d3d5baed80d0c40bdef3c2e61e77ebd92fe6d0f684a0c0bae821",
+  "rugra_blockaction_sha256": "d7cc944fe7bd6af355af77e961af092e9b500a7f024ac5cc477485f7dbf0da92",
+  "rugra_printc_sha256": "23bdb2fd0f3b21b761b9aa4f56889a3490c48b180244105eab9d5268a5d55025"
+ }
+}

@@ -1,5 +1,50 @@
 # `printc.rs` API Reference
 
+## 2026-08-30：goto 自指标 `goto X; X:` 清除（BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001 / GOTO-LABEL-UNPRINTED-0001）
+
+任务假设"`goto X; X:` = scopeBreak goto_type 缺失"被双侧证伪：next_url 的
+`#19 If IFGOTO target=#20 goto_type=1`（GOTO_GOTO）是 **oracle 正确答案**——该
+goto 跨两层循环作用域，block.cc:2872/3082 只把目标==最内层循环 exit 的 goto 转
+成 `f_break_goto`，golden 12.0.4 next_url 同样保留 `goto LAB_001050e7;`（标号在
+两循环之后 31 行处）。双侧 fixture
+`tests/oracle/blockstruct_scopebreak_gototype_1204.{cc,rs}`（MATCH）锁定该语义。
+
+真实根因（gdb 断点 `emit_label_statement` 全程仅 2 次命中，均来自
+`emit_goto_statement` 的 never-emitted 锚点）：
+
+- **发现账本缺口**：`discovery_block_starts` 只在 `emit_block_ops` 入口
+  （printc.rs:3512-3522）记录发现遍（NullEmit 主发射器）发射的 Basic/Copy 叶。
+  顶层结构上下文里的叶（如 next_url 位于 DoWhile 之后的 goto 目标块 #20）走
+  `emit_flow_basic` → `emit_block_basic_rpn`（4016），**无记录器** → 锚点
+  （`emit_goto_statement`:12366-12368 `!discovery_block_starts.contains`）误判
+  "目标永不发射"，把标签锚在 goto 现场——既产生 `goto X; X:` 相邻对，又把跳转
+  解析到 fall-through（**语义错位**：next_url 的跳转本应跳出两层循环），还先占
+  `printed_labels` 压制目标自身位置 arm-1（UNSTRUCTURED_TARG）标签。
+- **flat 尾锚过宽**：`emit_block_basic_rpn`/`emit_block_ops` 尾部
+  `targets_to_label` 扫描的 `goto_targets.contains(&target) || needs_anchor`
+  第一析取项是 c23d4f52 时代（当时无 pending/backpatch 机制）的全量锚，同样在
+  goto 现场锚 emitted 目标。oracle 对应行为：`emitBlockBasic`（printc.cc:2685）
+  只在块自身头打印自己的标签（`emitLabelStatement(bb)`，cc:3198-3214），**从不**
+  在转移源打印转移目标的标签。
+
+修复（本文件两处 + 一处收窄）：
+
+1. `emit_flow_basic` 头部加与 `emit_block_ops` 同款 discovery 记录器（同门
+   discovery_pass + 主 NullEmit id + Basic/Copy 叶 + `flow_entry_address`），
+   使账本覆盖两条叶发射路径——oracle 的对应不变量是 `BlockGraph::emit` 全量性
+   （树上每个块经虚 dispatch 恰好发射一次），Ghidra 用树本身回答"目标是活块吗"，
+   账本只是把该完备性镜像到 Rugra 的双路径上。
+2. 两处尾扫描收窄为仅 `needs_anchor`（pending 且不在 `discovery_block_starts`）
+   ——真被发射的目标标签回到其自身发射点（arm-1/arm-2/backpatch），只有从未发射
+   的目标（上游结构器丢弃，见 GOTO-NEVEREMITTED-TARGET-UPSTREAM-0001）才在
+   goto 现场锚定（有效 C 的 fall-through 解析，保留原防御）。
+
+**验收**：curl 3095/0/0 三项零劣化（skeleton 总数逐字节不变），自指标
+`goto X; X:` **22→3**；httpd 2231/3/0 零劣化，自指标 **13→1**；audit_syntax
+通过数与基线逐项相同；cargo test --lib 失败集与基线完全相同（17 个预存
+funcdata 项，`--test-threads=1` 双向比对 IDENTICAL）。剩余 4 处自指标为上游
+结构残差（见 commit Differential 块）。
+
 ## 2026-08-29：INT_NEGATE 一元 token 序（GLOBWORD-C4-INTNOT-TOKEN-0001）
 
 `dispatch_op_rpn` 一元臂（INT_NEGATE/BOOL_NEGATE/INT_2COMP/FLOAT_NEG 等）此前
