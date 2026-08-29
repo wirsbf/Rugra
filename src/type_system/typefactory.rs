@@ -2411,11 +2411,29 @@ impl TypeFactory {
     /// factory instead — preserving the oracle's observable identity domain
     /// (one canonical `undefined{size}` object per size for the whole
     /// process) until per-Architecture wiring lands. Callers that DO have an
-    /// Architecture must prefer its own `types` handle.
+    /// Architecture must prefer its own `types` handle. Construction
+    /// completes the architecture-attach sequence: the decode tail's
+    /// `types->setupSizes()` alignment guard (architecture.cc:1350 →
+    /// type.cc:3164-3165 `if (alignMap.empty()) setDefaultAlignmentMap();`)
+    /// runs at attach, because no Architecture exists to run it later —
+    /// without it the first getBase/getTypePointer tree miss raises the
+    /// raw-constructor LowlevelError "TypeFactory alignment map not
+    /// initialized" (type.cc:3296-3305 getAlignment), which the oracle can
+    /// observe only between raw construction and decode, never from inside a
+    /// decompiled function.
     pub fn shared_default() -> Arc<RwLock<TypeFactory>> {
         static SHARED: std::sync::OnceLock<Arc<RwLock<TypeFactory>>> = std::sync::OnceLock::new();
         SHARED
-            .get_or_init(|| Arc::new(RwLock::new(TypeFactory::new(8))))
+            .get_or_init(|| {
+                let mut factory = TypeFactory::new(8);
+                // architecture.cc:1350 `types->setupSizes();` tail →
+                // type.cc:3164-3165 `if (alignMap.empty())
+                // setDefaultAlignmentMap();`
+                if factory.align_map.is_empty() {
+                    factory.set_default_alignment_map();
+                }
+                Arc::new(RwLock::new(factory))
+            })
             .clone()
     }
 
