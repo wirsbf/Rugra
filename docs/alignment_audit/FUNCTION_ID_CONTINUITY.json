@@ -11,16 +11,16 @@
     "src_tree": "004b20c8ed6da74cf6457a4386570bae4801bc78"
   },
   "checkpoint": {
-    "commit": "00fba40ceb073a0a4a452f8156b6827a0d05facc",
-    "commit_tree": "d48db3c8efb0f495b5b93c823700324d4ecffc0a",
-    "rust_function_records": 10467,
-    "rust_projection_sha256": "ef554f92158fd7cee0444df9598f7c91abb2eb2869e6f2a897042a793ad40199",
-    "src_tree": "bdafc0c4ceac4bbe29158edac665ca41d8294546"
+    "commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+    "commit_tree": "37538e5b20846db971c2ca780619a77e619ee4bc",
+    "rust_function_records": 10496,
+    "rust_projection_sha256": "4c05b372f148281f7f76fa7b83f3dd5436e6f22f36f15d596338bf084b401e46",
+    "src_tree": "4e34c9b82928d6a79c603330ae351534d583f649"
   },
   "history": {
-    "commit_count": 412,
+    "commit_count": 415,
     "first_commit": "7ae30f5bcfba5e1adce2a4e8cdeebc23d96964cb",
-    "last_commit": "00fba40ceb073a0a4a452f8156b6827a0d05facc",
+    "last_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
     "mode": "first_parent"
   },
   "id_scheme": {
@@ -256,6 +256,30 @@
       "parent_blob": "78d21a337d0ea2de3852bf6edb948d2334225573",
       "path": "src/type_system/typefactory.rs",
       "signature": "fn get_exact_piece( &mut self, ct: Arc<Datatype>, offset: i64, size: usize, ) -> Option<Arc<Datatype>>"
+    },
+    {
+      "base_id": "RG-F-03c2e475c288ae37c5ee",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "setup_multiequals",
+      "new_id": "RG-F-03c2e475c288ae37c5ee",
+      "owner": "impl:ConditionalJoin",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn setup_multiequals( &mut self, fd: &mut Funcdata, joinblock: &std::sync::Arc< std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>, >, cbranch1: &crate::op::PcodeOpRef, )"
+    },
+    {
+      "base_id": "RG-F-040dd6a4963caea0f64f",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "mergeneed_get",
+      "new_id": "RG-F-040dd6a4963caea0f64f",
+      "owner": "impl:ConditionalJoin",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn mergeneed_get( &self, side1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, side2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>"
     },
     {
       "base_id": "RG-F-042aad4a869ec81de7fa",
@@ -858,6 +882,18 @@
       "signature": "fn is_arithmetic_input(vn: &Arc<RwLock<Varnode>>) -> bool"
     },
     {
+      "base_id": "RG-F-124cd34d55249816790d",
+      "child_blob": "a92f1d2a8ece4bcdf1625871df84ce7b0ed3bb05",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "block",
+      "name": "compute_goto_prints",
+      "new_id": "RG-F-124cd34d55249816790d",
+      "owner": "impl:BlockGraph",
+      "parent_blob": "bc69f87d61814e00c77b11cb59dd00d43200fbbb",
+      "path": "src/block.rs",
+      "signature": "fn compute_goto_prints(&mut self)"
+    },
+    {
       "base_id": "RG-F-1277c8a2b5a31d093c26",
       "child_blob": "b27aad8584fe8e4b87b19b35c330e31e66a6ab17",
       "introduced_at_commit": "d75f1bba33412d9a4e028002a41c582cb377d331",
@@ -928,6 +964,18 @@
       "parent_blob": "1b243873b6dec9e5d097851afa5145dd47423de6",
       "path": "src/funcdata.rs",
       "signature": "fn query_global_symbol_hit( &self, vn_space: crate::space::AddressSpace, vn_offset: u64, ) -> Option<String>"
+    },
+    {
+      "base_id": "RG-F-1351f06a2748de7f0508",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "const_vn",
+      "new_id": "RG-F-1351f06a2748de7f0508",
+      "owner": "free",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn const_vn(val: u64) -> VnRef"
     },
     {
       "base_id": "RG-F-1383b2dc9fd67a304b91",
@@ -1482,6 +1530,18 @@
       "signature": "fn libstdcxx_heap_sort(table: &mut [LoadTable], first: usize, last: usize)"
     },
     {
+      "base_id": "RG-F-1fcc10e325a7fac374ec",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "check_exit_block",
+      "new_id": "RG-F-1fcc10e325a7fac374ec",
+      "owner": "impl:ConditionalJoin",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn check_exit_block( &mut self, exit: &std::sync::Arc< std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>, >, in1: usize, in2: usize, )"
+    },
+    {
       "base_id": "RG-F-1fdec6ae394eb2ecbfa2",
       "child_blob": "1c05d7e2d2a27dbb3e971c9b428dc9afefae4747",
       "introduced_at_commit": "0e9aadfb57ea395905fd20bb289539b98eba3d98",
@@ -1648,6 +1708,18 @@
       "parent_blob": "d2bcd5b8ba6b2d9ea010b10b637528b98d49103f",
       "path": "src/funcdata.rs",
       "signature": "fn set_or_insert_input( &mut self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, slot: usize, )"
+    },
+    {
+      "base_id": "RG-F-243665bc9f7a02f6d02c",
+      "child_blob": "a92f1d2a8ece4bcdf1625871df84ce7b0ed3bb05",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "block",
+      "name": "component_list_dyn",
+      "new_id": "RG-F-243665bc9f7a02f6d02c",
+      "owner": "impl:BlockGraph",
+      "parent_blob": "bc69f87d61814e00c77b11cb59dd00d43200fbbb",
+      "path": "src/block.rs",
+      "signature": "fn component_list_dyn( bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, ) -> Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>"
     },
     {
       "base_id": "RG-F-245ec46f5966d1227505",
@@ -1950,6 +2022,18 @@
       "signature": "fn advance_op_state(&mut self, fd: &Funcdata)"
     },
     {
+      "base_id": "RG-F-29f85471e683fa65142b",
+      "child_blob": "a92f1d2a8ece4bcdf1625871df84ce7b0ed3bb05",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "block",
+      "name": "goto_prints_visit",
+      "new_id": "RG-F-29f85471e683fa65142b",
+      "owner": "free",
+      "parent_blob": "bc69f87d61814e00c77b11cb59dd00d43200fbbb",
+      "path": "src/block.rs",
+      "signature": "fn goto_prints_visit( bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, succ: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>, )"
+    },
+    {
       "base_id": "RG-F-2a2388a99f562160cf0b",
       "child_blob": "d8941aedb090417d82b478e0d42d899e3c8d926f",
       "introduced_at_commit": "dc6f0bfa57ee8d4b20d4edbab9d486b603253cc6",
@@ -2250,6 +2334,18 @@
       "signature": "fn generic_type_name(ct: &crate::type_system::Datatype) -> String"
     },
     {
+      "base_id": "RG-F-32de656f55dfeabcf796",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "input_vn",
+      "new_id": "RG-F-32de656f55dfeabcf796",
+      "owner": "free",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn input_vn(n: u64) -> VnRef"
+    },
+    {
       "base_id": "RG-F-3364b2b484f2fafba596",
       "child_blob": "5cde46e8aa9a67d5c19e80566aeead7cbbda72db",
       "introduced_at_commit": "e956e963b167ed1d57a7a4daed2a3566f2425999",
@@ -2284,18 +2380,6 @@
       "parent_blob": "9caf3207ac72015b8e46a4e397bf514cac75377a",
       "path": "src/typeop.rs",
       "signature": "fn local_type_factory(&self) -> Option<&Arc<RwLock<TypeFactory>>>"
-    },
-    {
-      "base_id": "RG-F-34c3b946a9961b60b651",
-      "child_blob": "4113567d9b6d26baff83ff10cdaab691b26d2e9b",
-      "introduced_at_commit": "a3cda8b996dad8ff6418cf2c63b539a89866a84c",
-      "module": "block",
-      "name": "mark_front_leaf_dyn",
-      "new_id": "RG-F-fe174638708e62b5cdaf",
-      "owner": "free",
-      "parent_blob": "40f391dd3071450dddba8b5f17e680d57569f69e",
-      "path": "src/block.rs",
-      "signature": "fn mark_front_leaf_dyn( bl: &Arc<RwLock<BlockBasic>>, fl: u32, )"
     },
     {
       "base_id": "RG-F-34d00aa7b73b80b7e06b",
@@ -2356,6 +2440,18 @@
       "parent_blob": "835cc04e8334d8eea5c9418bcdc2cf9085b49714",
       "path": "src/prettyprint.rs",
       "signature": "fn tag_line(&mut self)"
+    },
+    {
+      "base_id": "RG-F-35e9f3f59cad7c897df1",
+      "child_blob": "a92f1d2a8ece4bcdf1625871df84ce7b0ed3bb05",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "block",
+      "name": "get_ops",
+      "new_id": "RG-F-35e9f3f59cad7c897df1",
+      "owner": "impl:BlockGoto as FlowBlock",
+      "parent_blob": "bc69f87d61814e00c77b11cb59dd00d43200fbbb",
+      "path": "src/block.rs",
+      "signature": "fn get_ops(&self) -> Vec<PcodeOpRef>"
     },
     {
       "base_id": "RG-F-366f5f5ff89810017f5a",
@@ -3186,6 +3282,18 @@
       "signature": "fn add_rule_factory_in_group<F>(&mut self, group: &str, factory: F) where F: Fn() -> Box<dyn Rule> + 'static,"
     },
     {
+      "base_id": "RG-F-4888aa18f6c00f918567",
+      "child_blob": "a92f1d2a8ece4bcdf1625871df84ce7b0ed3bb05",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "block",
+      "name": "goto_prints_walk_level",
+      "new_id": "RG-F-4888aa18f6c00f918567",
+      "owner": "free",
+      "parent_blob": "bc69f87d61814e00c77b11cb59dd00d43200fbbb",
+      "path": "src/block.rs",
+      "signature": "fn goto_prints_walk_level( components: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>], tail_next: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>, )"
+    },
+    {
       "base_id": "RG-F-48a56f7995926edcd9b1",
       "child_blob": "73226c089b941c9025aedf39b4d65e6af170403f",
       "introduced_at_commit": "b15bd104b26bf4977a5d8e06307de44596073fdc",
@@ -3318,6 +3426,18 @@
       "signature": "fn test_get_last_signed_range_midway_corner()"
     },
     {
+      "base_id": "RG-F-4bb1e1cc11a7ebbde6b9",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "clear",
+      "new_id": "RG-F-4bb1e1cc11a7ebbde6b9",
+      "owner": "impl:ConditionalJoin",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn clear(&mut self)"
+    },
+    {
       "base_id": "RG-F-4be82fedb54a135be9ca",
       "child_blob": "cae7b73c4da887e634cd5fde6dff16b0343d1933",
       "introduced_at_commit": "26d675e7f6131ed17e8de6a689b5b3d85ec21470",
@@ -3352,6 +3472,18 @@
       "parent_blob": "b1e4beb38f9e33273d8d718048ce74b0a29177d5",
       "path": "src/printc.rs",
       "signature": "fn cbranch_goto_info( block_arc: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>, ) -> Option<(u64, u8)>"
+    },
+    {
+      "base_id": "RG-F-4d07b1536a85260f618f",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "test_nodejoin_finddups_gates",
+      "new_id": "RG-F-4d07b1536a85260f618f",
+      "owner": "free",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn test_nodejoin_finddups_gates()"
     },
     {
       "base_id": "RG-F-4d0d944ef8c3713a9359",
@@ -3400,6 +3532,18 @@
       "parent_blob": "adca5bb67309ddb2bea742395b05ec87c4e97426",
       "path": "src/coreaction.rs",
       "signature": "fn new(v: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> Self"
+    },
+    {
+      "base_id": "RG-F-4d8c1521cc6856f70e53",
+      "child_blob": "a92f1d2a8ece4bcdf1625871df84ce7b0ed3bb05",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "block",
+      "name": "get_exit_leaf_trait",
+      "new_id": "RG-F-4d8c1521cc6856f70e53",
+      "owner": "impl:BlockGoto as FlowBlock",
+      "parent_blob": "bc69f87d61814e00c77b11cb59dd00d43200fbbb",
+      "path": "src/block.rs",
+      "signature": "fn get_exit_leaf_trait(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>"
     },
     {
       "base_id": "RG-F-4e9f597e3cbe737fd971",
@@ -4110,6 +4254,18 @@
       "signature": "fn get_exit_leaf_trait(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>"
     },
     {
+      "base_id": "RG-F-62a55372c4fd4fadf642",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "cut_down_multiequals",
+      "new_id": "RG-F-62a55372c4fd4fadf642",
+      "owner": "impl:ConditionalJoin",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn cut_down_multiequals( &mut self, fd: &mut Funcdata, exit: &std::sync::Arc< std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>, >, in1: usize, in2: usize, )"
+    },
+    {
       "base_id": "RG-F-6349804f2fbc18beca5e",
       "child_blob": "9d0eb152509f2bf05c2366a3afe930354e70af5f",
       "introduced_at_commit": "980f08317308b104fb02cc0094d2845555f98b3d",
@@ -4326,6 +4482,18 @@
       "signature": "fn test_load_table_collapse_orders_full_address_space_then_offset()"
     },
     {
+      "base_id": "RG-F-67e7d0f2aaad08dd5a9d",
+      "child_blob": "986ae1ea6e1197f967b78b24e644651238497182",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "cover",
+      "name": "indirect_target_order",
+      "new_id": "RG-F-67e7d0f2aaad08dd5a9d",
+      "owner": "free",
+      "parent_blob": "cd131f92a31c1c8a98b6af424d2f94bf44052e9b",
+      "path": "src/cover.rs",
+      "signature": "fn indirect_target_order(op: &crate::op::PcodeOp) -> Option<u32>"
+    },
+    {
       "base_id": "RG-F-6801c1cf2e5e395a80ca",
       "child_blob": "07385d1c6a52358981daf89320f840063f07a533",
       "introduced_at_commit": "0d2252dd631677ef221d8266f1267090fecd45da",
@@ -4360,6 +4528,18 @@
       "parent_blob": "835cc04e8334d8eea5c9418bcdc2cf9085b49714",
       "path": "src/prettyprint.rs",
       "signature": "fn get_size(&self) -> i32"
+    },
+    {
+      "base_id": "RG-F-694605d4eecfaa91f85c",
+      "child_blob": "a92f1d2a8ece4bcdf1625871df84ce7b0ed3bb05",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "block",
+      "name": "first_op",
+      "new_id": "RG-F-694605d4eecfaa91f85c",
+      "owner": "impl:BlockGoto as FlowBlock",
+      "parent_blob": "bc69f87d61814e00c77b11cb59dd00d43200fbbb",
+      "path": "src/block.rs",
+      "signature": "fn first_op(&self) -> Option<PcodeOpRef>"
     },
     {
       "base_id": "RG-F-6a06fcc4b93cc09ba795",
@@ -6078,6 +6258,18 @@
       "signature": "fn open_paren(&mut self, paren: &str) -> i32"
     },
     {
+      "base_id": "RG-F-8f79157fd38de8c5c8a3",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "new",
+      "new_id": "RG-F-8f79157fd38de8c5c8a3",
+      "owner": "impl:ConditionalJoin",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn new() -> Self"
+    },
+    {
       "base_id": "RG-F-8f93bbbcb14a6ebc2fc3",
       "child_blob": "30a3bd4a19068b2756709a2d0d0bc2459d7ca1fb",
       "introduced_at_commit": "3fb97c113e3128c78b5856099d0bffe5deeda496",
@@ -6100,6 +6292,18 @@
       "parent_blob": "d57fce1e6051f9980132f919976b4a03ab107192",
       "path": "src/printc.rs",
       "signature": "fn flow_entry_address( block_arc: &std::sync::Arc< std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>, >, ) -> Option<u64>"
+    },
+    {
+      "base_id": "RG-F-8fd7cc62c810fb242a5a",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "nodejoin_find_dups",
+      "new_id": "RG-F-8fd7cc62c810fb242a5a",
+      "owner": "free",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn nodejoin_find_dups( cb1: &crate::op::PcodeOpRef, cb2: &crate::op::PcodeOpRef, ) -> NodeJoinFindDups"
     },
     {
       "base_id": "RG-F-9062453f0961f46006b4",
@@ -6690,6 +6894,18 @@
       "signature": "fn multiple_interaction( multlist: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>], ) -> i32"
     },
     {
+      "base_id": "RG-F-9d218b8a48d25e3143c8",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "const_vn",
+      "new_id": "RG-F-9d218b8a48d25e3143c8",
+      "owner": "free",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn const_vn(val: u64) -> VnRef"
+    },
+    {
       "base_id": "RG-F-9dcc3492039b01a007b8",
       "child_blob": "7677154d56ee1df699b9fd86635e10f8be74d146",
       "introduced_at_commit": "73b5ef26453372a2b562051f113f9b299bcebeef",
@@ -6784,6 +7000,18 @@
       "parent_blob": "a0fc455cd11002cd71cd2de4845830fe604fbe65",
       "path": "src/printlanguage.rs",
       "signature": "fn tag_comment(&mut self, _text: &str)"
+    },
+    {
+      "base_id": "RG-F-a087d0230d65eb1e87ca",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "test_nodejoin_execute_runs_all_four_steps",
+      "new_id": "RG-F-a087d0230d65eb1e87ca",
+      "owner": "free",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn test_nodejoin_execute_runs_all_four_steps()"
     },
     {
       "base_id": "RG-F-a0bc186db4d1b16a5a2c",
@@ -6940,6 +7168,18 @@
       "parent_blob": "a96f4e3d1c96b8684d5b5fd79c721ed169d2eda1",
       "path": "src/coreaction.rs",
       "signature": "fn resolve_constant( spc: crate::space::AddressSpace, val: u64, _sz: usize, _point: crate::address::Address, full_encoding: &mut u64, ) -> crate::address::Address"
+    },
+    {
+      "base_id": "RG-F-a44fdd592fe99cf1e0ae",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "written_vn",
+      "new_id": "RG-F-a44fdd592fe99cf1e0ae",
+      "owner": "free",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn written_vn(opcode: OpCode, inputs: Vec<VnRef>, seq_ord: u32) -> (OpArc, VnRef)"
     },
     {
       "base_id": "RG-F-a47bba9a2f71f1a03ef2",
@@ -7156,6 +7396,18 @@
       "parent_blob": "a96f4e3d1c96b8684d5b5fd79c721ed169d2eda1",
       "path": "src/coreaction.rs",
       "signature": "fn take_count_delta(&mut self) -> i32"
+    },
+    {
+      "base_id": "RG-F-aa2027dd1ad6789cb3ec",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "input_vn",
+      "new_id": "RG-F-aa2027dd1ad6789cb3ec",
+      "owner": "free",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn input_vn(addr: u64, create_index: u32) -> VnRef"
     },
     {
       "base_id": "RG-F-aa76ee351792ed513e3e",
@@ -7854,6 +8106,18 @@
       "signature": "fn get_input_local_in_fd( &self, op: &crate::op::PcodeOpRef, slot: usize, fd: &crate::funcdata::Funcdata, ) -> Option<Arc<Datatype>>"
     },
     {
+      "base_id": "RG-F-be9a2bc49c22dbd2d131",
+      "child_blob": "a92f1d2a8ece4bcdf1625871df84ce7b0ed3bb05",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "block",
+      "name": "sub_block",
+      "new_id": "RG-F-be9a2bc49c22dbd2d131",
+      "owner": "impl:BlockGoto as FlowBlock",
+      "parent_blob": "bc69f87d61814e00c77b11cb59dd00d43200fbbb",
+      "path": "src/block.rs",
+      "signature": "fn sub_block(&self, slot: usize) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>"
+    },
+    {
       "base_id": "RG-F-bf6581a3dbc59f876346",
       "child_blob": "18bafbe0e89f3dfade3a96af790c9e6f6b8f31c0",
       "introduced_at_commit": "b5a554d900936ada0798fd6323e8d1d5ef1b2a84",
@@ -8394,6 +8658,18 @@
       "signature": "fn libstdcxx_adjust_heap( table: &mut [LoadTable], first: usize, mut hole: usize, len: usize, value: LoadTable, )"
     },
     {
+      "base_id": "RG-F-cb80c7052ff9545e4c04",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "written_vn",
+      "new_id": "RG-F-cb80c7052ff9545e4c04",
+      "owner": "free",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn written_vn( opcode: OpCode, inputs: Vec<VnRef>, seq_ord: u32, create_index: u32, ) -> (std::sync::Arc<std::sync::RwLock<PcodeOp>>, VnRef)"
+    },
+    {
       "base_id": "RG-F-cba1ca033fe56fb95dc4",
       "child_blob": "a93b1fbde0c5fbc4e287544752e5761c0affe202",
       "introduced_at_commit": "87f9309b5a98af929c765925dbf55b427121d8f7",
@@ -8802,6 +9078,18 @@
       "signature": "fn test_pointer_decode_returns_existing_canonical_object()"
     },
     {
+      "base_id": "RG-F-d3f9a1967eafbfaf2606",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "test_nodejoin_dynamic_size_rejoins_joinblock",
+      "new_id": "RG-F-d3f9a1967eafbfaf2606",
+      "owner": "free",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn test_nodejoin_dynamic_size_rejoins_joinblock()"
+    },
+    {
       "base_id": "RG-F-d4898c55d03d24ea127b",
       "child_blob": "f6841300be191c28f7bb00239ddac4a1199187e4",
       "introduced_at_commit": "26eee4ad27fc36a132c948876c9e0fbbb79051e2",
@@ -9090,6 +9378,18 @@
       "signature": "fn create_placeholder( &mut self, fd: &mut crate::funcdata::Funcdata, call_op: &crate::op::PcodeOpRef, spacebase: crate::space::AddressSpace, )"
     },
     {
+      "base_id": "RG-F-ddb47b1b80b524b60a2a",
+      "child_blob": "535c9607bdda93264fb878060fca5ef55c85fb35",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "debugproto",
+      "name": "seed_global_locked_marks_dwarf_globals_typelocked_and_findable",
+      "new_id": "RG-F-ddb47b1b80b524b60a2a",
+      "owner": "free",
+      "parent_blob": "f292b44de827c534d21665935e0357ce573430cd",
+      "path": "src/debugproto.rs",
+      "signature": "fn seed_global_locked_marks_dwarf_globals_typelocked_and_findable()"
+    },
+    {
       "base_id": "RG-F-ddbe4fb41d78bfe430dd",
       "child_blob": "bff8be470ca00791e1c2dbddc4ba0ec9f8554cbf",
       "introduced_at_commit": "3fb97c113e3128c78b5856099d0bffe5deeda496",
@@ -9124,6 +9424,18 @@
       "parent_blob": "2c664422614089f21dc74d6444c220ce2e650266",
       "path": "src/printc.rs",
       "signature": "fn escape_character_data(&self, s: &mut String, buf: &[u8], charsize: i32, bigend: bool) -> bool"
+    },
+    {
+      "base_id": "RG-F-de05b7ef5a84b6c2c139",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "mergeneed_set_null",
+      "new_id": "RG-F-de05b7ef5a84b6c2c139",
+      "owner": "impl:ConditionalJoin",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn mergeneed_set_null( &mut self, side1: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, side2: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, )"
     },
     {
       "base_id": "RG-F-de5a4f22e8c1a8add747",
@@ -9498,6 +9810,18 @@
       "signature": "fn clone_restart_group(&self, grouplist: &ActionGroupList) -> Option<Self>"
     },
     {
+      "base_id": "RG-F-e7cb855a090805b40db6",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "move_cbranch",
+      "new_id": "RG-F-e7cb855a090805b40db6",
+      "owner": "impl:ConditionalJoin",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn move_cbranch( &mut self, fd: &mut Funcdata, joinblock: &std::sync::Arc< std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>, >, cbranch1: &crate::op::PcodeOpRef, cbranch2: &crate::op::PcodeOpRef, )"
+    },
+    {
       "base_id": "RG-F-e81a0462e451ef76ad81",
       "child_blob": "bd4a0a1de7286167b07d6a3d9e1fa9ebcbb36d74",
       "introduced_at_commit": "c95b84591d1eca6962e076e7785544aa6305aa10",
@@ -9544,6 +9868,18 @@
       "parent_blob": "5294bda8f0e39fa14facd6b59d066c379a416b35",
       "path": "src/block.rs",
       "signature": "fn set_num_desc(&mut self, count: i32)"
+    },
+    {
+      "base_id": "RG-F-e8e2357f4ba354faacd8",
+      "child_blob": "535c9607bdda93264fb878060fca5ef55c85fb35",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "debugproto",
+      "name": "seed_global_locked",
+      "new_id": "RG-F-e8e2357f4ba354faacd8",
+      "owner": "impl:DebugGlobalDatabase",
+      "parent_blob": "f292b44de827c534d21665935e0357ce573430cd",
+      "path": "src/debugproto.rs",
+      "signature": "fn seed_global_locked( db: &mut crate::database::Database, scope_id: u64, address: u64, name: &str, dtype: Arc<Datatype>, size: i32, ) -> Option<u64>"
     },
     {
       "base_id": "RG-F-e8f4c2cca65795f7aab1",
@@ -10144,6 +10480,18 @@
       "parent_blob": "af7630a51fb0912a494c87fbb34d2a8c513584d5",
       "path": "src/varmap.rs",
       "signature": "fn reconcile_datatypes(&mut self)"
+    },
+    {
+      "base_id": "RG-F-f49957f86cf3228cbd9f",
+      "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
+      "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "module": "coreaction",
+      "name": "diamond",
+      "new_id": "RG-F-f49957f86cf3228cbd9f",
+      "owner": "free",
+      "parent_blob": "d3d12ca09e049fbe7f7dfb175269630a6ebab8d2",
+      "path": "src/coreaction.rs",
+      "signature": "fn diamond(cond1: VnRef, cond2: VnRef, flip1: bool, flip2: bool) -> Diamond"
     },
     {
       "base_id": "RG-F-f4a37fc066f4a7fa7875",
@@ -13734,38 +14082,6 @@
     },
     {
       "aliases": [
-        "RG-F-34c3b946a9961b60b651"
-      ],
-      "base_id": "RG-F-34c3b946a9961b60b651",
-      "events": [
-        {
-          "child_blob": "5f43cf8954f5a62b8573be019c88a3a608d9ccd2",
-          "commit": "2d78b5afc4333180187c1c764b9b23fd71289487",
-          "evidence": [
-            "same_patch_hunk",
-            "identical_nonempty_annotation",
-            "signature_trailing_comma_only"
-          ],
-          "from_id": "RG-F-34c3b946a9961b60b651",
-          "from_module": "block",
-          "from_name": "mark_front_leaf_dyn",
-          "from_owner": "free",
-          "from_path": "src/block.rs",
-          "from_signature": "fn mark_front_leaf_dyn( bl: &Arc<RwLock<BlockBasic>>, fl: u32, )",
-          "parent_blob": "5294bda8f0e39fa14facd6b59d066c379a416b35",
-          "to_id": "RG-F-fe174638708e62b5cdaf",
-          "to_module": "block",
-          "to_name": "mark_front_leaf_dyn",
-          "to_owner": "free",
-          "to_path": "src/block.rs",
-          "to_signature": "fn mark_front_leaf_dyn(bl: &Arc<RwLock<BlockBasic>>, fl: u32)"
-        }
-      ],
-      "new_id": "RG-F-fe174638708e62b5cdaf",
-      "origin_kind": "introduced_live"
-    },
-    {
-      "aliases": [
         "RG-F-350bfd7ce36aafc87bc5"
       ],
       "base_id": "RG-F-350bfd7ce36aafc87bc5",
@@ -17039,6 +17355,37 @@
         }
       ],
       "new_id": "RG-F-292e381983ba98dfd9c0",
+      "origin_kind": "baseline"
+    },
+    {
+      "aliases": [
+        "RG-F-631999f3a57799cd3ce3"
+      ],
+      "base_id": "RG-F-631999f3a57799cd3ce3",
+      "events": [
+        {
+          "child_blob": "a92f1d2a8ece4bcdf1625871df84ce7b0ed3bb05",
+          "commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "mark_unstructured_target: receiver &self -> &mut self with the BlockGoto wrapped-component port (block.cc:2859 BlockGraph::markUnstructured recursion into the wrapped child via mark_unstructured_trait; cc:2860-2863 markCopyBlock path now targets the dyn FlowBlock target_dyn through mark_front_leaf) (a2c5ce26)"
+          ],
+          "from_id": "RG-F-631999f3a57799cd3ce3",
+          "from_module": "block",
+          "from_name": "mark_unstructured_target",
+          "from_owner": "impl:BlockGoto",
+          "from_path": "src/block.rs",
+          "from_signature": "fn mark_unstructured_target(&self)",
+          "parent_blob": "bc69f87d61814e00c77b11cb59dd00d43200fbbb",
+          "to_id": "RG-F-2a1c4c6151d8d8414480",
+          "to_module": "block",
+          "to_name": "mark_unstructured_target",
+          "to_owner": "impl:BlockGoto",
+          "to_path": "src/block.rs",
+          "to_signature": "fn mark_unstructured_target(&mut self)"
+        }
+      ],
+      "new_id": "RG-F-2a1c4c6151d8d8414480",
       "origin_kind": "baseline"
     },
     {
@@ -26385,19 +26732,19 @@
     }
   ],
   "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-  "schema": 1,
-  "semantics": "Raw scheme-2 IDs remain stable_id(module, owner, normalized_signature). This separate post-baseline layer composes historical aliases to the raw checkpoint IDs. Automatic transitions require a unique 1-to-1, same path/module/owner/name pair whose only signature difference is either a leading parameter binding mut or the trailing parameter separator, in the same patch hunk with the same non-empty annotation. Tombstones are diagnostic only; introduced_live rows are new checkpoint definitions, not fabricated historical origins.",
+  "schema": 2,
+  "semantics": "Raw scheme-2 IDs remain stable_id(module, owner, normalized_signature). This separate post-baseline layer composes historical aliases to the raw checkpoint IDs. Automatic transitions require a unique 1-to-1, same path/module/owner/name pair whose only signature difference is either a leading parameter binding mut or the trailing parameter separator, in the same patch hunk with the same non-empty annotation. Tombstones are diagnostic only; introduced_live rows are new checkpoint definitions, not fabricated historical origins. Schema 2 extends tombstones to die under review as classes introduced after the baseline (origin block carries the introduced_live provenance); schema 1 rows are unchanged.",
   "stats": {
     "alias_tokens": 504,
     "ambiguous": 0,
     "baseline_records": 9639,
     "collisions": 0,
-    "current_records": 10467,
+    "current_records": 10496,
     "events": 504,
-    "introduced_live": 883,
+    "introduced_live": 912,
     "lineages": 489,
-    "reviewed_transitions": 237,
-    "tombstones": 55
+    "reviewed_transitions": 238,
+    "tombstones": 56
   },
   "tombstones": [
     {
@@ -26591,6 +26938,57 @@
       "path": "src/ruleaction.rs",
       "reason": "blanket memory-output block retired with the strict deadcode delay port (3fb97c11)",
       "signature": "fn is_memory_output_space(space: crate::space::AddressSpace) -> bool"
+    },
+    {
+      "aliases": [
+        "RG-F-34c3b946a9961b60b651",
+        "RG-F-fe174638708e62b5cdaf"
+      ],
+      "base_id": "RG-F-34c3b946a9961b60b651",
+      "child_blob": "a92f1d2a8ece4bcdf1625871df84ce7b0ed3bb05",
+      "deleted_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
+      "events": [
+        {
+          "child_blob": "5f43cf8954f5a62b8573be019c88a3a608d9ccd2",
+          "commit": "2d78b5afc4333180187c1c764b9b23fd71289487",
+          "evidence": [
+            "same_patch_hunk",
+            "identical_nonempty_annotation",
+            "signature_trailing_comma_only"
+          ],
+          "from_id": "RG-F-34c3b946a9961b60b651",
+          "from_module": "block",
+          "from_name": "mark_front_leaf_dyn",
+          "from_owner": "free",
+          "from_path": "src/block.rs",
+          "from_signature": "fn mark_front_leaf_dyn( bl: &Arc<RwLock<BlockBasic>>, fl: u32, )",
+          "parent_blob": "5294bda8f0e39fa14facd6b59d066c379a416b35",
+          "to_id": "RG-F-fe174638708e62b5cdaf",
+          "to_module": "block",
+          "to_name": "mark_front_leaf_dyn",
+          "to_owner": "free",
+          "to_path": "src/block.rs",
+          "to_signature": "fn mark_front_leaf_dyn(bl: &Arc<RwLock<BlockBasic>>, fl: u32)"
+        }
+      ],
+      "module": "block",
+      "name": "mark_front_leaf_dyn",
+      "origin": {
+        "child_blob": "4113567d9b6d26baff83ff10cdaab691b26d2e9b",
+        "introduced_at_commit": "a3cda8b996dad8ff6418cf2c63b539a89866a84c",
+        "kind": "introduced_live",
+        "module": "block",
+        "name": "mark_front_leaf_dyn",
+        "owner": "free",
+        "parent_blob": "40f391dd3071450dddba8b5f17e680d57569f69e",
+        "path": "src/block.rs",
+        "signature": "fn mark_front_leaf_dyn( bl: &Arc<RwLock<BlockBasic>>, fl: u32, )"
+      },
+      "owner": "free",
+      "parent_blob": "bc69f87d61814e00c77b11cb59dd00d43200fbbb",
+      "path": "src/block.rs",
+      "reason": "mark_front_leaf_dyn: specialized BlockBasic leaf-marker (flags |= fl on the block itself) retired with the BlockGoto wrapped-component port; the markCopyBlock call site (block.cc:2860-2863) now routes through the pre-existing general mark_front_leaf, whose front_leaf descent implements FlowBlock::getFrontLeaf (block.cc:340) on the dyn target (a2c5ce26)",
+      "signature": "fn mark_front_leaf_dyn(bl: &Arc<RwLock<BlockBasic>>, fl: u32)"
     },
     {
       "aliases": [
