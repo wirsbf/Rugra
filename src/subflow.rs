@@ -6367,44 +6367,25 @@ impl Rule for RuleSubfloatConvert {
             return Ok(action_status::NO_CHANGE);
         }
 
-        // Determine the root Varnode faithfully:
-        //   outsize > insize  -> root = outvn, precision = insize  (widening)
-        //   outsize < insize  -> root = invn,  precision = outsize (narrowing)
-        let root = if outsize > insize { outvn.clone() } else { invn.clone() };
-
-        // Resolve the float type of the effective precision (single/double) via
-        // the architecture's TypeFactory (Ghidra: translate->getFloatFormat +
-        // setReplacement's newPiece at precision). If no arch/types are wired up
-        // (e.g. standalone test Funcdata) there is nothing safe to do here.
-        let ft = fd
+        // SUBFLOAT-TRANSFORM-NOT-PORTED-0001: the oracle's
+        // RuleSubfloatConvert::applyOp (subflow.cc:3489-3507) runs a full
+        // SubfloatFlow trace and REWRITES the data-flow at the smaller
+        // precision (root = the wider side of the conversion: `outvn` when
+        // widening, `invn` when narrowing; `setReplacement`'s newPiece +
+        // TransformManager::apply, subflow.cc:3194-3237) — it never retypes
+        // the original wider Varnode. Rugra's transform layer is not ported,
+        // and the previous shortcut (stamping the smaller-precision float
+        // type onto the wider root) mis-sized the Varnode's Datatype and
+        // oscillated forever against ActionInferTypes::writeBack (which
+        // re-derives the size-correct interned type every round), driving
+        // localcount to the "Type propagation algorithm not settling" cap
+        // (coreaction.cc:5390-5392) on float-heavy functions (myprogress).
+        // With the equal-size case already deferred above, defer everything
+        // to the SubfloatFlow port and make no change here.
+        let _ = fd
             .get_arch()
             .and_then(|a| a.get_base_type(eff_prec, crate::type_system::TypeMetatype::Float));
-        let ft = match ft {
-            Some(t) => t,
-            None => return Ok(action_status::NO_CHANGE),
-        };
-
-        // Mirrors SubfloatFlow::setReplacement guards (subflow.cc:3217-3228):
-        //   - AddrForce varnodes whose size != precision are not retyped.
-        //   - TypeLock'd varnodes not at the precision are not retyped.
-        // update_type() itself already honours type-lock and dedup, so we only
-        // need to skip the AddrForce case that update_type cannot detect.
-        {
-            let r = root.read().unwrap();
-            if r.is_addr_force() && r.get_size() != eff_prec {
-                return Ok(action_status::NO_CHANGE);
-            }
-        }
-
-        // Tag the root with the smaller-precision float type. update_type
-        // returns true only if it actually changed the type (and never violates
-        // an existing type-lock), which is exactly the signal we want for
-        // CHANGE vs NO_CHANGE.
-        if root.write().unwrap().update_type(ft) {
-            Ok(action_status::CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        Ok(action_status::NO_CHANGE)
     }
     // Ghidra: subflow.hh:409 RuleSubfloatConvert::getName
     fn get_name(&self) -> &str {
@@ -7476,15 +7457,26 @@ mod tests {
         let out = fd.vbank.create_with_space(8, AddressSpace::Register, 0x30);
         let op = make_op(1, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![inv], Some(out.clone()));
         let res = RuleSubfloatConvert::new().apply_op(&op, &mut fd).unwrap();
-        assert_eq!(res, action_status::CHANGE);
-        // The root (output) is now typed as the 4-byte float.
-        let ty = out.read().unwrap().get_type().expect("output typed");
-        assert_eq!(ty.get_size(), 4);
-        assert_eq!(ty.get_metatype(), TypeMetatype::Float);
+        // SUBFLOAT-TRANSFORM-NOT-PORTED-0001: the oracle rewrites the
+        // data-flow (newPiece at the smaller precision) instead of retyping
+        // the wider root, and a smaller float type on the 8-byte root would
+        // oscillate against ActionInferTypes::writeBack (the myprogress
+        // "not settling" root cause) — defer with no type change.
+        assert_eq!(res, action_status::NO_CHANGE);
+        let stamped_smaller = out
+            .read()
+            .unwrap()
+            .get_type()
+            .map(|t| t.get_size() == 4 && t.get_metatype() == TypeMetatype::Float)
+            .unwrap_or(false);
+        assert!(
+            !stamped_smaller,
+            "wider root must not carry the smaller-precision float until the SubfloatFlow transform port"
+        );
     }
 
-    /// Non-const narrowing (8->4): the root is the *input*, tagged with the
-    /// 4-byte float type (subflow.cc:3501-3504: root=invn, precision=outsize).
+    /// Non-const narrowing (8->4): Ghidra roots at the input and rewrites at
+    /// precision=outsize (subflow.cc:3501-3504); Rugra defers (no retype).
     #[test]
     fn test_rule_subfloat_convert_nonconst_narrowing_tags_input() {
         let mut fd = fd_with_types();
@@ -7496,11 +7488,18 @@ mod tests {
         let out = fd.vbank.create_with_space(4, AddressSpace::Register, 0x30);
         let op = make_op(1, OpCode::CPUI_FLOAT_FLOAT2FLOAT, vec![inv.clone()], Some(out));
         let res = RuleSubfloatConvert::new().apply_op(&op, &mut fd).unwrap();
-        assert_eq!(res, action_status::CHANGE);
-        // The root (input) is now typed as the 4-byte float; output unchanged.
-        let in_ty = inv.read().unwrap().get_type().expect("input typed");
-        assert_eq!(in_ty.get_size(), 4);
-        assert_eq!(in_ty.get_metatype(), TypeMetatype::Float);
+        // SUBFLOAT-TRANSFORM-NOT-PORTED-0001: same defer as the widening leg.
+        assert_eq!(res, action_status::NO_CHANGE);
+        let stamped_smaller = inv
+            .read()
+            .unwrap()
+            .get_type()
+            .map(|t| t.get_size() == 4 && t.get_metatype() == TypeMetatype::Float)
+            .unwrap_or(false);
+        assert!(
+            !stamped_smaller,
+            "wider root must not carry the smaller-precision float until the SubfloatFlow transform port"
+        );
     }
 
     /// Non-const but no Architecture/TypeFactory wired up -> the float type
