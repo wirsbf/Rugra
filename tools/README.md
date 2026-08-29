@@ -229,10 +229,13 @@ wrapper。当前 corpus 的迁移计划应为 `auto=9`、`manual=0`、`tombstone
 
 后续 raw scheme-2 变化写入独立、append-only 的
 `FUNCTION_ID_CONTINUITY.json`，绝不覆盖上述历史 migration。当前 checkpoint 固定为
-`0c5091f5a8eba7f5a2dbbebfcdada08a5e3034fb`（src tree
-`ec6bed6fb1f2f7812ebdb498653e3fd5431bb3d4`，REGISTRY-CHECKPOINT-ADVANCE-0001 推进越过
-master nodejoin-F1/anondecl 窗口 10ea407d..e3a9c421），从 baseline target 连续重放 406 个
-first-parent commit。自动 continuity 仅接受同 path/module/owner/name 的唯一 1→1，且签名
+`00fba40ceb073a0a4a452f8156b6827a0d05facc`（src tree
+`bdafc0c4ceac4bbe29158edac665ca41d8294546`，ORACLE-REGISTRY-IMPACT-CONTINUITY-0001
+收尾推进越过合并的 HTTPD-TFALIGN TypeFactory guard 窗口），从 baseline target 连续重放 412 个
+first-parent commit。checkpoint 推进是幂等重跑流程：advance 五常量(commit/tree/src/parent/
+count)→重生成 ledger→零漂移 probe 枚举窗口移除/新增→逐条 git 证据定性(reviewed transition/
+tombstone/ephemeral/automatic)→以 probe 全量重算 EXPECTED_* allowlist→`--reconcile-continuity`
+→重生成→`--check`。自动 continuity 仅接受同 path/module/owner/name 的唯一 1→1，且签名
 差异严格限于参数 pattern 起始的 binding `mut` 或 rustfmt 尾分隔符，同时必须独立复算同 patch hunk 与相同非空
 annotation；`&mut`、`&'a mut`、`*mut` 和 `&mut pattern` 不规范化，也不改变 raw ID 公式。
 当前文件记录 489 条 lineage、883 个 `introduced_live` 与 55 个 tombstone。loader 先解析 baseline alias，再组合 continuity terminal；任一
