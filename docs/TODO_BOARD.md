@@ -46,6 +46,14 @@
 > 而 golden 无(ActionInferTypes 传播不收敛本身是分歧);(b) golden 有 DWARF 局部名 `format/line/outline`(typed stack 数组),
 > Rugra 全 raw `auStack_*`(DWARF 局部符号未接线到 varmap);(c) 多余寄存器 temp 声明(`int8 in_RSP`/`Var8`/`extraout_XMM1_Qa`)。
 > glob_range=`int iVar3;` 声明两次(golden 用 iVar4,per-prefix 计数器回退,VARMAP-GLOBRANGE-DUPDECL-0001)。
+> **本轮监控循环集成(2026-08-29 23 时,root)**:①anondecl3 匿名声明渲染(7a5b24af/f34b88cf,六函数 typeless 装声明 0)
+> +root 间距根治兜底(7c3df2ce:组合名指针 glue,skeleton 2198→2114,DECL-SPACING-NAMEFLOW-0001 登记根治方向=导入器匿名化,已派 w-globword);
+> ②identify3 完整交付(f19bac86/bc2db403:identifyInternal 无 f_dead+双侧 fixture MATCH+E2E 逐字节零劣化;whiledo 门保守固定+residual 登记;
+> 机制 C 复核=reviewer-identify 在途);③myprog 交付获 R-MYPROG-CROSSREVIEW **APPROVE**(P-FLOW-1 登记欠账见下)。
+> **当前权威基线(master `9f2b5d34`)**:curl E2E skeleton **2114**/defects **0**/numbering **0**;registry 138 条目;
+> getparameter/match_url 仍超时(NONCONVERGE-P0,w-nonconverge2 在修,前任 action.rs 线索已锚定 39010fd1)。
+> **P-FLOW-1 登记欠账(复核发现,root 待落)**:`SUBFLOAT-TRANSFORM` 残差与 `TRI4-MYPROGRESS-SETTLE-0001` 需补板行。
+> 舰队(5):w-nonconverge2/w-globword/w-main2/w-registry4/reviewer-identify。
 > **当前权威基线(master HEAD,2026-08-29 22 时)**:curl E2E skeleton **2118**/defects **0**/numbering **0**(DUPDECL 已修)/
 > ABORTED 0/raw 命名 16;myprog 交付含 myprogress 警告行消除。历史:2134(99ae9c35 口径)——【口径警告】getparameter+match_url 因 `NONCONVERGE-GETPARAM-MATCHURL-0001`
 > 超时无输出,其 ~672+83 diff 未计入,可比口径≈2889(与 2d78b5af 的 2881 相当;descend 修复的真实收益=10 函数命名/结构/defects
