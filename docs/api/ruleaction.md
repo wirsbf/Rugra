@@ -1360,3 +1360,11 @@ else 缺陷随悬空清除消失）；skeleton 3528→2134（优于 2d78b5af 健
 glob_range 新出现 1 个重复声明 `iVar3`（numbering，登记
 VARMAP-GLOBRANGE-DUPDECL-0001 待查）；`cargo test --lib -- --test-threads=1` 失败集
 与已知 17 个逐项相同，零新增。
+
+## 2026-08-29:RuleNegateIdentity 的 calc_mask 边界修正(RULE-NEGATEIDENTITY-CALCMASK-BOUNDARY-0001)
+
+机制 C 独立复核(R-DESCEND-CROSSREVIEW-2026-08-29.md,APPROVE)发现:f91eb0265(06-26)起
+`RuleNegateIdentity::apply_op` 的 OR/XOR 折叠值用手写 `size >= 64` 饱和边界(bits/bytes 混淆),
+Ghidra `calc_mask`(address.hh:499,经 ruleaction.cc:467 调用)阈值是 **8 字节**——size∈[8,63] 时
+release 下 `(1u64 << (size*8)) - 1` 移位溢出为错值(应全 1)。修正为调用本模块已有的忠实
+`calc_mask`(ruleaction.rs:1346 镜像)。curl 语料未命中该 corner,属未覆盖分支修复。

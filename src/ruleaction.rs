@@ -922,11 +922,14 @@ impl Rule for RuleNegateIdentity {
                 let nv = negated_vn.read().unwrap();
                 nv.get_size()
             };
+            // Ghidra ruleaction.cc:467 `value = calc_mask(vn->getSize());`
+            // (address.hh:499: sizes >= 8 bytes saturate to the full mask;
+            // the old hand-written `size >= 64` boundary was a bits/bytes
+            // mixup yielding a shift-overflowed mask for size in 8..=63).
             let value = if opc == OpCode::CPUI_INT_AND {
                 0u64
             } else {
-                let mask = if size >= 64 { u64::MAX } else { (1u64 << (size * 8)) - 1 };
-                mask
+                calc_mask(size)
             };
             // Ghidra ruleaction.cc:468-470: newConstant then the three-step
             // rewrite through the bookkeeping API — data.opSetInput(logicOp,
