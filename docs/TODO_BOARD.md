@@ -22,19 +22,23 @@
 > worktree 隔离（`/home/wirs/.cache/rugra-w2-*`）+ 独占写集租约 + 专属 CARGO_TARGET_DIR + flock 共享资源；
 > 子 Agent 交付（branch commit + 报告 `/tmp/rugra-reports/<name>-2026-08-29.md`）→ root 串行 cherry-pick →
 > flock 构建 → E2E → 差分门禁（defects 必须 0）→ 更新本板。板面 wave 节 root 维护，子 Agent 不直接改本板。
-> Agent 完成即由 root 从队列补位(保持 10 并发)。补位队列(按 2d78b5af 健康基线 diff 排序):
-> ①myprogress(105)+glob_range(104) 根因分析;②glob_word(86)+my_get_line(93) 簇;③helpf(82)+my_get_token(61);
-> ④inrefs 直接写点 sweep(340 处清单=/tmp/rugra-reports/INREFS_SWEEP_INVENTORY_2026-08-29.md,须在 descend 修复 API 落地后);
-> ⑤REGA-HUGEHELP(heritage.rs);⑥REGB-MYFWRITE(等 w-identify 释放 block)。
-> 健康基线(2d78b5af)参考数字:skeleton 2881 / defects 1(getparameter 嵌套 else,真实缺陷非中止伪影)/ numbering 0;
-> main 701 / getparameter 672 / file2string 134 / parseconfig 118 / next_url 111 / myprogress 105 / glob_range 104 /
-> my_get_line 93 / glob_set 92 / glob_word 86 / match_url 83 / helpf 82 / my_get_token 61;PLT stub 族 ~24×9-11(归 PLTSTUB-WARNLOSS)。
+> Agent 完成即由 root 从队列补位(保持 10 并发)。**2026-08-29 下午舰队状态**:首批 5 writer 因执行预算耗尽中断
+> (各留未提交 WIP),已派 5 个续作 Agent(w-anondecl2/w-newvarnode2/w-identify2/w-registry2/w-switchfix2)接管
+> 同名 worktree(先 WIP 提交再 merge master 55783411);5 reader 继续在跑。补位队列(按 55783411 基线 diff 排序):
+> ①descend 修复的机制 C 独立 Cross-Review(ruleaction.rs,优先);②myprogress(102)+glob_range(93,含 DUPDECL)簇;
+> ③glob_word(83)+my_get_line(82);④helpf(73)+my_get_token;⑤REGA-HUGEHELP(heritage.rs);
+> ⑥剩余 inrefs 直接写点 sweep(清单=/tmp/rugra-reports/INREFS_SWEEP_INVENTORY_2026-08-29.md,已知生产者已清,剩余点需逐个对照 Ghidra 判定)。
+> **当前权威基线(master `55783411`)**:skeleton **2134**/defects **0**/numbering 1(glob_range DUPDECL)/ABORTED 0/
+> raw 命名 16;httpd 仍 5/30+24 panics(HTTPD-TFALIGN-PANIC-0001 在查)。Top:main 696/next_url 144/file2string 134/
+> parseconfig 131/myprogress 102/glob_range 93/glob_set 88/glob_word 83/my_get_line 82/helpf 73;PLT stub 族 ~24×9-11。
+> 历史参考:2d78b5af=skeleton 2881/defects 1;3fb97c11=skeleton 3528/defects 2(簿记腐蚀期)。
 
 ### W-2026-08-29-FLEET10 认领租约（10 并发；write-set 互斥已核）
 
 | Agent | ID | 类型 | 独占 write-set | 交付物 |
 |---|---|---|---|---|
-| w-newvarnode(优先)+root(诊断) | `VARNODE-DESCEND-BOOKKEEPING-0001` | P0 根因已定位(root 亲证)→修复中 | `src/{varnode,funcdata}.rs`(w-newvarnode 租约内) | descend 列表簿记缺失:Ghidra `Varnode::eraseDescend`(varnode.cc:316)+`Funcdata::opUnsetInput/opSetInput`(funcdata_op.cc:92-127,含常量单-descendant 副本规则)未移植,Rugra 只有 add 半边→descend 悬空条目→忠实化 build_localtypes 撞上抛 Lowlevel("NULL local type")→10 函数管线 ABORTED(main/getparameter/file2string/glob_word/glob_range/glob_set/next_url/myprogress/match_url/__libc_csu_init)→raw 命名 1077 处+2 defects。证据=/dev/shm/rugra-diag-out.err 探针(Const/0x0/4 flags=0x1080002,ZEXT/AND descendant 的 inrefs 已不含该常量);诊断 worktree=/tmp/rugra-rootdiag。修复后:ABORTED=0,raw 命名回落(2d78b5af 基线 15 处),else defects 复测;ruleaction/coreaction 等直接 inrefs 写点 sweep 另派(root 已要求 w-newvarnode 只报告不改) |
+| w-newvarnode2(续作)+root | `VARNODE-DESCEND-BOOKKEEPING-0001` | **FIXED @ master `55783411`**(root 修复;w-newvarnode 审计立功:簿记基础设施本就完备,真凶=ruleaction.rs 五处直接 inrefs 写) | `src/ruleaction.rs`+`docs/api/ruleaction.md`(已落库) | 修复:Piece2Zext/Sext→`fd.op_remove_input(0)`+`op_set_opcode`;TrivialBool 六分支完整移植(仅 slot1 常量+`V&&0→#0`/`V||1→#1`/`V^^1→NEGATE` 补齐);NegateIdentity→`fd.new_constant`+三步簿记;NotDistribute→`op_set_input`+`op_insert_input`。E2E@55783411:ABORTED 10→**0**、raw 命名 1077→**16**、defects 2→**0**(getparameter/glob_word else 缺陷证实为簿记腐蚀下游,随修复消失)、skeleton 3528→**2134**(优于 2d78b5af 健康基线 2881);cargo test 失败集=已知 17 零新增。Cross-Review: PENDING(机制 C,待派);审计证据=/tmp/w-newvarnode-curl-probe.err(49 条悬空);coreaction.rs:1371(ActionCse)核实未注册非生产者不动 |
+| unassigned | `VARMAP-GLOBRANGE-DUPDECL-0001` | OPEN(55783411 新观察) | 待认领(`src/varmap.rs`+docs) | glob_range `iVar3 declared twice`(numbering=1);descend 修复后管线完整运行暴露;验收=numbering 回 0+双侧 fixture |
 | w-anondecl | `PTRSUB-TYPED-DECL-RESIDUAL-0001` | writer | `src/printc.rs`, `docs/api/printc.md`, `tests/oracle/printc_anonymous_pointer_decl_1204.{cc,rs,metadata.json}`, `tools/run_printc_anonymous_pointer_decl_oracle.sh`, branch `agent/anondecl-0001` | 匿名 PTR/ARRAY/CODE 声明 type-token 修复（printc.cc:143-166 buildTypeStack + :264-303 pushTypeStart/genericTypeName）；验收=六函数 typeless decl 清零 + gcc 诊断不劣化 + defects/numbering=0 |
 | w-newvarnode | `FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001` | writer | `src/{funcdata,varnode,database}.rs`, 对应 `docs/api`, fixture 三件套+runner+registry, branch `agent/newvarnode-tail` | newVarnode symbol tail 完整移植（create→assignHigh→lane check→localmap queryProperties→setSymbolProperties/setFlags）；验收=双侧 fixture datatype/mapentry/high symbol/flags/异常 MATCH |
 | w-identify | `BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001` | writer | `src/{block,blockaction}.rs`, `docs/api/{block,blockaction}.md`, `tests/oracle/block_identify_internal_1204.*`+runner+registry, branch `agent/identify-boundary` | identifyInternal 真实 parent/成对边重写/组件顺序/无 f_dead（block.cc:940-963）；验收=双侧 fixture 完整突变 MATCH + goto fixture 110 行 diff→0 |
