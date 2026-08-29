@@ -1,7 +1,7 @@
 {
  "schema": 2,
  "fixture_id": "VARNODE-INIT-0001",
- "overall_status": "UNTESTED: (B2 migration of PARTIAL_MATCH) targeted valid constructor/bank paths byte-match; listed MISMATCH/UNTESTED branches remain",
+ "overall_status": "UNTESTED:  (B2 migration of partial match state) targeted valid constructor/bank paths byte-match; listed mismatch/untested branches remain",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",

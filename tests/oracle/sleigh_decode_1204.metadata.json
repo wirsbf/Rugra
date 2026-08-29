@@ -332,5 +332,5 @@
   "success_then_error_atomicity": "MATCH",
   "unimplemented": "UNTESTED: locked x86-64 SLA has alignment=1 and 0 null templates across 236 subtables/5707 constructors"
  },
- "overall_status": "UNTESTED: (B2 migration of PARTIAL_MATCH) every reachable locked x86-64 fixture case is a byte-for-byte match; Unimpl remains explicitly UNTESTED"
+ "overall_status": "UNTESTED:  (B2 migration of partial match state) every reachable locked x86-64 fixture case is a byte-for-byte match; Unimpl remains explicitly untested"
 }

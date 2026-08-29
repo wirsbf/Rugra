@@ -15,7 +15,7 @@
   "GH12-F-7524cb1d212bf93af537 ghidra::ScopeLocal::restructure varmap.cc:1294",
   "GH12-F-da1f5c1cb324abd14245 ghidra::ScopeLocal::buildVariableName varmap.cc:548"
  ],
- "overall_status": "UNTESTED: (B2 migration of PARTIAL_MATCH) the five-case local-window projection (default window values, the union range tree, the negative-offset hint gate, the open-array extension and endpoint bounding, and the buildVariableName branch split) byte-matches the locked oracle through the production resetLocalWindow/restructureVarnode path; the LoadGuard/StoreGuard open hints (MapState::addGuard, varmap.cc:1003) and the typelocked-symbol re-feed (MapState::gatherSymbols, varmap.cc:1269) remain outside this atomic change and are bound to VARMAP-GATHEROPEN-GUARD-0001",
+ "overall_status": "UNTESTED:  (B2 migration of partial match state) the five-case local-window projection (default window values, the union range tree, the negative-offset hint gate, the open-array extension and endpoint bounding, and the buildVariableName branch split) byte-matches the locked oracle through the production resetLocalWindow/restructureVarnode path; the LoadGuard/StoreGuard open hints (MapState::addGuard, varmap.cc:1003) and the typelocked-symbol re-feed (MapState::gatherSymbols, varmap.cc:1269) remain outside this atomic change and are bound to VARMAP-GATHEROPEN-GUARD-0001",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",

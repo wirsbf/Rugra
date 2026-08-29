@@ -86,5 +86,6 @@
   "runner": "b83e5b5135ff73b4f41d29ff8d72046d0ee395873e5b8c0a0c771ab2d7e22963"
  },
  "expected_stdout_sha256": "f9153a942231e0ae34da7ffacdc8d57fd099031573d192e7a62a4f9da93e68f8",
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation"
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "analysis_options": "none: FlowInfo tail-call tracing harness; no decompilation pipeline options"
 }

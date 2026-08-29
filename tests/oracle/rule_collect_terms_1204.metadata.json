@@ -237,5 +237,5 @@
   },
   "differential": "The broad pipeline still has two numbering issues, 258 skeleton lines, twelve timeouts, two panics, and seven syntax-failing functions. These are not explained away by the seven RuleCollectTerms projections and prevent any L3 claim."
  },
- "overall_status": "UNTESTED: (B2 migration of PARTIAL_MATCH) seven target-relevant structural projections match; full-state input/output remains MISMATCH through OPBANK-0001 and ARCH-0001, TYPE-UNKNOWN-0001 and explicitly listed branches remain UNTESTED"
+ "overall_status": "UNTESTED:  (B2 migration of partial match state) seven target-relevant structural projections match; full-state input/output remains mismatch through OPBANK-0001 and ARCH-0001, TYPE-UNKNOWN-0001 and explicitly listed branches remain untested"
 }

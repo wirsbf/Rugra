@@ -5497,7 +5497,10 @@
     "tools": {
      "runner_1": "tools/run_ptrsub_switch_cast_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/ptrsub_switch_cast_1204.cc",
+     "fixture_source_2": "tests/oracle/ptrsub_switch_cast_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5527,7 +5530,10 @@
     "tools": {
      "runner_1": "tools/run_infertypes_settle_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/infertypes_settle_1204.cc",
+     "fixture_source_2": "tests/oracle/infertypes_settle_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5554,7 +5560,10 @@
     "tools": {
      "runner_1": "tools/run_varmap_dupdecl_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/varmap_dupdecl_1204.cc",
+     "fixture_source_2": "tests/oracle/varmap_dupdecl_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5581,7 +5590,10 @@
     "tools": {
      "runner_1": "tools/run_block_identify_internal_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/block_identify_internal_1204.cc",
+     "fixture_source_2": "tests/oracle/block_identify_internal_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5612,7 +5624,10 @@
     "tools": {
      "runner": "tools/run_action_break_pool_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/action_break_pool_1204.cc",
+     "fixture_source_2": "tests/oracle/action_break_pool_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5639,7 +5654,10 @@
     "tools": {
      "runner": "tools/run_action_infertypes_ptrwidth_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/action_infertypes_ptrwidth_1204.cc",
+     "fixture_source_2": "tests/oracle/action_infertypes_ptrwidth_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5666,7 +5684,10 @@
     "tools": {
      "runner": "tools/run_action_pool_clone_filter_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/action_pool_clone_filter_1204.cc",
+     "fixture_source_2": "tests/oracle/action_pool_clone_filter_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5697,7 +5718,10 @@
     "tools": {
      "runner": "tools/run_blockstruct_deadregion_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/blockstruct_deadregion_1204.cc",
+     "fixture_source_2": "tests/oracle/blockstruct_deadregion_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5726,7 +5750,10 @@
     "tools": {
      "runner": "tools/run_blockstruct_goto_cascade_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/blockstruct_goto_cascade_1204.cc",
+     "fixture_source_2": "tests/oracle/blockstruct_goto_cascade_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5755,7 +5782,10 @@
     "tools": {
      "runner": "tools/run_callother_userop_closure_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/callother_userop_closure_1204.cc",
+     "fixture_source_2": "tests/oracle/callother_userop_closure_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5782,7 +5812,10 @@
     "tools": {
      "runner": "tools/run_callspec_noreturn_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/callspec_noreturn_1204.cc",
+     "fixture_source_2": "tests/oracle/callspec_noreturn_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5811,7 +5844,10 @@
     "tools": {
      "runner": "tools/run_condexe_success_state_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/condexe_success_state_1204.cc",
+     "fixture_source_2": "tests/oracle/condexe_success_state_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5838,7 +5874,10 @@
     "tools": {
      "runner": "tools/run_cptr_b_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/cptr_b_1204.cc",
+     "fixture_source_2": "tests/oracle/cptr_b_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5880,7 +5919,7 @@
   },
   {
    "id": "exactpiece_callers",
-   "description": "TYPEFACTORY-EXACTPIECE-CALLERS-0001 oracle fixture (registered during fixture-v1 migration; was orphaned metadata)",
+   "description": "TYPEFACTORY-EXACTPIECE-CALLERS-0001 oracle fixture (registered during fixture-v1 migration; was orphaned metadata) [status note: MATCH (covered projection)]",
    "runner": [
     "tools/run_exactpiece_callers_oracle.sh"
    ],
@@ -5889,13 +5928,16 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH (covered projection)",
+   "evidence_status": "MATCH",
    "cache": {
     "metadata": "tests/oracle/exactpiece_callers_1204.metadata.json",
     "tools": {
      "runner": "tools/run_exactpiece_callers_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/exactpiece_callers_1204.cc",
+     "fixture_source_2": "tests/oracle/exactpiece_callers_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5922,7 +5964,10 @@
     "tools": {
      "runner": "tools/run_flow_sharedreturn_process_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/flow_sharedreturn_process_1204.cc",
+     "fixture_source_2": "tests/oracle/flow_sharedreturn_process_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5949,7 +5994,10 @@
     "tools": {
      "runner": "tools/run_flow_tailcall_overtrace_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/flow_tailcall_overtrace_1204.cc",
+     "fixture_source_2": "tests/oracle/flow_tailcall_overtrace_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -5976,7 +6024,10 @@
     "tools": {
      "runner": "tools/run_fspec_endian_resolver_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/fspec_endian_resolver_1204.cc",
+     "fixture_source_2": "tests/oracle/fspec_endian_resolver_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6003,7 +6054,10 @@
     "tools": {
      "runner": "tools/run_fspec_findentry_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/fspec_findentry_1204.cc",
+     "fixture_source_2": "tests/oracle/fspec_findentry_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6030,7 +6084,10 @@
     "tools": {
      "runner": "tools/run_fspec_possibleparam_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/fspec_possibleparam_1204.cc",
+     "fixture_source_2": "tests/oracle/fspec_possibleparam_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6057,7 +6114,10 @@
     "tools": {
      "runner": "tools/run_fspec_space_identity_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/fspec_space_identity_1204.cc",
+     "fixture_source_2": "tests/oracle/fspec_space_identity_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6086,7 +6146,10 @@
     "tools": {
      "runner": "tools/run_fspec_spaceless_rem_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/fspec_spaceless_rem_1204.cc",
+     "fixture_source_2": "tests/oracle/fspec_spaceless_rem_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6113,7 +6176,10 @@
     "tools": {
      "runner": "tools/run_funcdata_flags_tail_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/funcdata_flags_tail_1204.cc",
+     "fixture_source_2": "tests/oracle/funcdata_flags_tail_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6140,7 +6206,10 @@
     "tools": {
      "runner": "tools/run_funcdata_mapglobals_maxvn_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/funcdata_mapglobals_maxvn_1204.cc",
+     "fixture_source_2": "tests/oracle/funcdata_mapglobals_maxvn_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6167,7 +6236,10 @@
     "tools": {
      "runner": "tools/run_gapd_counters_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/gapd_counters_1204.cc",
+     "fixture_source_2": "tests/oracle/gapd_counters_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6194,7 +6266,10 @@
     "tools": {
      "runner": "tools/run_heritage_guard_normalize_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/heritage_guard_normalize_1204.cc",
+     "fixture_source_2": "tests/oracle/heritage_guard_normalize_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6235,7 +6310,10 @@
     "tools": {
      "runner": "tools/run_heritage_subpiece_const_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/heritage_subpiece_const_1204.cc",
+     "fixture_source_2": "tests/oracle/heritage_subpiece_const_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6262,7 +6340,10 @@
     "tools": {
      "runner": "tools/run_heritage_tryoutput_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/heritage_tryoutput_1204.cc",
+     "fixture_source_2": "tests/oracle/heritage_tryoutput_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6289,7 +6370,10 @@
     "tools": {
      "runner": "tools/run_infertypes_callinput_local_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/infertypes_callinput_local_1204.cc",
+     "fixture_source_2": "tests/oracle/infertypes_callinput_local_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6316,7 +6400,10 @@
     "tools": {
      "runner": "tools/run_jt_thunk_classify_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/jt_thunk_classify_1204.cc",
+     "fixture_source_2": "tests/oracle/jt_thunk_classify_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6343,7 +6430,10 @@
     "tools": {
      "runner": "tools/run_justified_contain_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/justified_contain_1204.cc",
+     "fixture_source_2": "tests/oracle/justified_contain_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6370,7 +6460,10 @@
     "tools": {
      "runner": "tools/run_marshal_packed_join_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/marshal_packed_join_1204.cc",
+     "fixture_source_2": "tests/oracle/marshal_packed_join_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6399,7 +6492,10 @@
     "tools": {
      "runner": "tools/run_merge_addrtied_gates_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/merge_addrtied_gates_1204.cc",
+     "fixture_source_2": "tests/oracle/merge_addrtied_gates_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6426,7 +6522,10 @@
     "tools": {
      "runner": "tools/run_merge_forcepanic_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/merge_forcepanic_1204.cc",
+     "fixture_source_2": "tests/oracle/merge_forcepanic_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6453,7 +6552,10 @@
     "tools": {
      "runner": "tools/run_merge_overlaploc_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/merge_overlaploc_1204.cc",
+     "fixture_source_2": "tests/oracle/merge_overlaploc_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6480,7 +6582,10 @@
     "tools": {
      "runner": "tools/run_noreturn_wire_b_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/noreturn_wire_b_1204.cc",
+     "fixture_source_2": "tests/oracle/noreturn_wire_b_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6509,7 +6614,10 @@
     "tools": {
      "runner": "tools/run_options_splitdatatype_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/options_splitdatatype_1204.cc",
+     "fixture_source_2": "tests/oracle/options_splitdatatype_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6536,7 +6644,10 @@
     "tools": {
      "runner": "tools/run_options_wiring_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/options_wiring_1204.cc",
+     "fixture_source_2": "tests/oracle/options_wiring_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6569,7 +6680,10 @@
     "tools": {
      "runner": "tools/run_printc_anonymous_pointer_decl_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/printc_anonymous_pointer_decl_1204.cc",
+     "fixture_source_2": "tests/oracle/printc_anonymous_pointer_decl_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6596,7 +6710,10 @@
     "tools": {
      "runner": "tools/run_printc_ptrconst_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/printc_ptrconst_1204.cc",
+     "fixture_source_2": "tests/oracle/printc_ptrconst_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6623,7 +6740,10 @@
     "tools": {
      "runner": "tools/run_printc_switch_emit_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/printc_switch_emit_1204.cc",
+     "fixture_source_2": "tests/oracle/printc_switch_emit_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6652,7 +6772,10 @@
     "tools": {
      "runner": "tools/run_printc_unnamed_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/printc_unnamed_1204.cc",
+     "fixture_source_2": "tests/oracle/printc_unnamed_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6681,7 +6804,10 @@
     "tools": {
      "runner": "tools/run_printc_warning_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/printc_warning_1204.cc",
+     "fixture_source_2": "tests/oracle/printc_warning_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6738,7 +6864,10 @@
     "tools": {
      "runner": "tools/run_returnfold_gapa_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/returnfold_gapa_1204.cc",
+     "fixture_source_2": "tests/oracle/returnfold_gapa_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6765,7 +6894,10 @@
     "tools": {
      "runner": "tools/run_returnfold_gapb_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/returnfold_gapb_1204.cc",
+     "fixture_source_2": "tests/oracle/returnfold_gapb_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6792,7 +6924,10 @@
     "tools": {
      "runner": "tools/run_returnfold_upstream_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/returnfold_upstream_1204.cc",
+     "fixture_source_2": "tests/oracle/returnfold_upstream_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6819,7 +6954,10 @@
     "tools": {
      "runner": "tools/run_scopelocal_query_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/scopelocal_query_1204.cc",
+     "fixture_source_2": "tests/oracle/scopelocal_query_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6831,7 +6969,7 @@
   },
   {
    "id": "splitdatatype_exactpiece",
-   "description": "SPLITDATATYPE-EXACTPIECE-0001 oracle fixture (registered during fixture-v1 migration; was orphaned metadata)",
+   "description": "SPLITDATATYPE-EXACTPIECE-0001 oracle fixture (registered during fixture-v1 migration; was orphaned metadata) [status note: MATCH (covered projection) after the SUBFLOW-ROOTPOINTER-PORT-0001 port on the locked 12.0.4 oracle]",
    "runner": [
     "tools/run_splitdatatype_exactpiece_oracle.sh"
    ],
@@ -6840,13 +6978,16 @@
     "wave",
     "nightly"
    ],
-   "evidence_status": "MATCH (covered projection) after the SUBFLOW-ROOTPOINTER-PORT-0001 port on the locked 12.0.4 oracle",
+   "evidence_status": "MATCH",
    "cache": {
     "metadata": "tests/oracle/splitdatatype_exactpiece_1204.metadata.json",
     "tools": {
      "runner": "tools/run_splitdatatype_exactpiece_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/splitdatatype_exactpiece_1204.cc",
+     "fixture_source_2": "tests/oracle/splitdatatype_exactpiece_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6873,7 +7014,10 @@
     "tools": {
      "runner": "tools/run_stop_ptrsub_wire_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/stop_ptrsub_wire_1204.cc",
+     "fixture_source_2": "tests/oracle/stop_ptrsub_wire_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6900,7 +7044,10 @@
     "tools": {
      "runner": "tools/run_stringmanager_core_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/stringmanager_core_1204.cc",
+     "fixture_source_2": "tests/oracle/stringmanager_core_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6927,7 +7074,10 @@
     "tools": {
      "runner": "tools/run_type_ptrwidth_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/type_ptrwidth_1204.cc",
+     "fixture_source_2": "tests/oracle/type_ptrwidth_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6954,7 +7104,10 @@
     "tools": {
      "runner": "tools/run_typefactory_downchain_virtual_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/typefactory_downchain_virtual_1204.cc",
+     "fixture_source_2": "tests/oracle/typefactory_downchain_virtual_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -6981,7 +7134,10 @@
     "tools": {
      "runner": "tools/run_typefactory_exactpiece_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/typefactory_exactpiece_1204.cc",
+     "fixture_source_2": "tests/oracle/typefactory_exactpiece_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -7008,7 +7164,10 @@
     "tools": {
      "runner": "tools/run_typeop_local_type_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/typeop_local_type_1204.cc",
+     "fixture_source_2": "tests/oracle/typeop_local_type_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -7035,7 +7194,10 @@
     "tools": {
      "runner": "tools/run_typeop_localbase_defaults_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/typeop_localbase_defaults_1204.cc",
+     "fixture_source_2": "tests/oracle/typeop_localbase_defaults_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -7062,7 +7224,10 @@
     "tools": {
      "runner": "tools/run_varmap_localwindow_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/varmap_localwindow_1204.cc",
+     "fixture_source_2": "tests/oracle/varmap_localwindow_1204.rs"
+    }
    },
    "impact": {
     "paths": [
@@ -7101,11 +7266,46 @@
     "tools": {
      "runner": "tools/run_varnode_localtype_res_oracle.sh"
     },
-    "inputs": {}
+    "inputs": {
+     "fixture_source_1": "tests/oracle/varnode_localtype_res_1204.cc",
+     "fixture_source_2": "tests/oracle/varnode_localtype_res_1204.rs"
+    }
    },
    "impact": {
     "paths": [
      "tools/run_varnode_localtype_res_oracle.sh"
+    ],
+    "rust_function_ids": [],
+    "ghidra_function_ids": []
+   }
+  },
+  {
+   "id": "jtpipeline_s1_1204",
+   "description": "JUMPTABLE-PIPELINE-0001 seg1 model-selection chain fixture (registered during fixture-v1 migration)",
+   "runner": [
+    "tools/run_jtpipeline_s1_1204_oracle.sh"
+   ],
+   "timeout_seconds": 900,
+   "always_tiers": [
+    "wave",
+    "nightly"
+   ],
+   "evidence_status": "MISMATCH",
+   "cache": {
+    "metadata": "tests/oracle/jtpipeline_s1_1204.metadata.json",
+    "inputs": {
+     "cpp_fixture": "tests/oracle/jtpipeline_s1_1204.cc",
+     "rust_fixture": "tests/oracle/jtpipeline_s1_1204.rs"
+    },
+    "tools": {
+     "runner": "tools/run_jtpipeline_s1_1204_oracle.sh"
+    }
+   },
+   "impact": {
+    "paths": [
+     "tests/oracle/jtpipeline_s1_1204.cc",
+     "tests/oracle/jtpipeline_s1_1204.rs",
+     "tools/run_jtpipeline_s1_1204_oracle.sh"
     ],
     "rust_function_ids": [],
     "ghidra_function_ids": []

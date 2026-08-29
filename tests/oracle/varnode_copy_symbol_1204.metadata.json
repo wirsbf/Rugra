@@ -2,7 +2,7 @@
  "schema": 2,
  "fixture_id": "VARNODE-COPYSYMBOL-FIELDS-0001",
  "stable_function_id": "GH12-F-edea5e55c75b6fc66820",
- "overall_status": "MATCH: opSetInput const-dedup copySymbol field semantics (type pointer, mapentry pointer, typelock|namelock bit masking, identity early-return, spacebase exemption) byte-match the locked oracle; copySymbol cc:500-504 high bookkeeping registered NO_ORACLE (see coverage)",
+ "overall_status": "MATCH:  opSetInput const-dedup copySymbol field semantics (type pointer, mapentry pointer, typelock|namelock bit masking, identity early-return, spacebase exemption) byte-match the locked oracle; copySymbol cc:500-504 high bookkeeping registered no_oracle (see coverage)",
  "oracle": {
   "tag": "Ghidra_12.0.4_build",
   "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",

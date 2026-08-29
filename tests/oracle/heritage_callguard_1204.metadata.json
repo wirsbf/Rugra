@@ -8,7 +8,7 @@
   "boundary": "Funcdata::opHeritage -> Heritage::heritage single canonical pass per call",
   "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases"
  },
- "overall_status": "UNTESTED: (B2 migration of PARTIAL_MATCH) covered-callguard-projection-MATCH",
+ "overall_status": "UNTESTED:  (B2 migration of partial match state) covered-callguard-projection-match",
  "covered_projection_status": "MATCH",
  "expected_stdout_sha256": "652cc168e343b6453a05b4dc062767621a716f84215e9f5cffd0f27e6f6f6412",
  "expected_exit_code": 0,

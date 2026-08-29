@@ -132,5 +132,5 @@
   "malformed_unsorted_effect_input": "UNTESTED",
   "null_model_has_effect_precondition_violation": "UNTESTED"
  },
- "overall_status": "UNTESTED: (B2 migration of PARTIAL_MATCH) every declared semantic observation is byte-identical to locked Ghidra; malformed-input and precondition-violation behavior remain UNTESTED"
+ "overall_status": "UNTESTED:  (B2 migration of partial match state) every declared semantic observation is byte-identical to locked Ghidra; malformed-input and precondition-violation behavior remain untested"
 }

@@ -11,7 +11,7 @@
  },
  "status_note": "Closes the VARNODE-COPYSYMBOL-HIGHBRANCH-0001 residual of the VARNODE-COPYSYMBOL-EQUATE-0001 fixture: the missing varnode.cc:500-504 high bookkeeping (typeDirty + setSymbol(this)) is now ported (Varnode::copy_symbol_arc, with copy_symbol_if_valid widened to &Arc self and the op.rs collapse_constant_symbol caller adapted) and driven against the locked 12.0.4 oracle across both branches of the cc:500 outer guard and the cc:502 inner guard, the cc:519 rejection, and the op-level markedInput integration.",
  "covered_projection_status": "MATCH",
- "overall_status": "UNTESTED: all five covered projections are byte-equal MATCH against the locked oracle; two adjacent gaps are registered forward \u2014 ruleaction.rs RuleAddUnsigned call site still lacks the cc:500-504 bookkeeping (MISMATCH, RULEACTION-ADDUNSIGNED-COPYSYMBOL-HIGH-0001) and HighVariable::get_type lacks the variable.hh:174 lazy updateType (VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001)",
+ "overall_status": "UNTESTED:  all five covered projections are byte-equal match against the locked oracle; two adjacent gaps are registered forward \u2014 ruleaction.rs RuleAddUnsigned call site still lacks the cc:500-504 bookkeeping (mismatch, RULEACTION-ADDUNSIGNED-COPYSYMBOL-HIGH-0001) and HighVariable::get_type lacks the variable.hh:174 lazy updateType (VARIABLE-GETTYPE-LAZY-UPDATETYPE-0001)",
  "expected_exit_code": 0,
  "expected_stdout_sha256": "41812f9d2c67571035a143d5aada2205733eb7dae50ef9aeaa971fcb32729727",
  "architecture": "locked synthetic LE 64-bit Architecture: const=0, other=1, unique=2, ram=3, register=4, stack=5, join=6, iop=7",

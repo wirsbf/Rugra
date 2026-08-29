@@ -9,7 +9,7 @@
   "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
   "staging": "none: the return storage is recorded on the call spec's FuncProto (output_storage) and read back through get_output_storage inside try_output_stack_guard (the cc:1407/cc:1410 getOutput() reads); the stackoutputlock flag is set by the real funcLinkOutput producer in case 4, and the spacebase rebase uses stackoffset 0x10 (setSpacebaseRelative shape). The legacy Address carries no space identity, so the storage records (AddressSpace, offset) pairs \u2014 the registered ADDRESS-0001-family staging note; the decode channel (FuncProto::decode returnsym) still discards its spaceless address and funcLinkOutput falls to its no-storage leg there"
  },
- "overall_status": "UNTESTED: (B2 migration of PARTIAL_MATCH) covered-tryoutput-fullchain-projection-MATCH",
+ "overall_status": "UNTESTED:  (B2 migration of partial match state) covered-tryoutput-fullchain-projection-match",
  "covered_projection_status": "MATCH",
  "expected_stdout_sha256": "0163da94d2d0fcc2f18bdcdaeb3b20cdd3a7847f889e14866d67ad29c316f558",
  "expected_exit_code": 0,
