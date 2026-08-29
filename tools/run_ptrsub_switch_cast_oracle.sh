@@ -1,4 +1,4 @@
-#!/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/bash
+#!/usr/bin/env -S -i PATH=/usr/bin:/bin /usr/bin/bash
 set -euo pipefail
 umask 077
 
