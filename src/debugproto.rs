@@ -172,6 +172,36 @@ impl DebugGlobalDatabase {
             })
             .collect()
     }
+
+    // RUGRA-GLUE: the DWARF front-end's committed-data-type semantic.
+    /// Ghidra's DWARF analyzer creates Data whose imported data type is
+    /// committed (locked memory); the decompiler interface exports that as
+    /// ATTRIB_TYPELOCK on the symbol XML, which `Symbol::decodeHeader`
+    /// folds into the Symbol's typelock flag (database.cc:439-442). Both
+    /// typelock-gated consumers — `SymbolEntry::updateType`
+    /// (database.cc:135-141, reached via `Varnode::setSymbolProperties`
+    /// varnode.cc:413) and `ActionInferTypes::buildLocaltypes`' exact-piece
+    /// branch (coreaction.cc:5021-5027) — depend on it to attach a global
+    /// Symbol's DWARF type onto the address varnode RuleLoadVarnode
+    /// materializes (ruleaction.cc:4293 `newVarnode` → `queryProperties` →
+    /// `setSymbolProperties`). Rugra's driver seeds the query-channel
+    /// Database directly, so the typelock fold lives here as the single
+    /// front-end semantic.
+    pub fn seed_global_locked(
+        db: &mut crate::database::Database,
+        scope_id: u64,
+        address: u64,
+        name: &str,
+        dtype: Arc<Datatype>,
+        size: i32,
+    ) -> Option<u64> {
+        let symbol_id =
+            db.add_symbol_mapped(scope_id, name, Some(dtype), crate::address::Address::new(address), size);
+        if let Some(symbol_id) = symbol_id {
+            db.set_symbol_flag(scope_id, symbol_id, crate::database::symbol_flags::TYPELOCK, true);
+        }
+        symbol_id
+    }
 }
 
 // RUGRA-GLUE: index of DWARF named types (struct/union/enum/typedef spellings)
@@ -1753,6 +1783,62 @@ mod tests {
                 .ptr_drill_base_name(),
             "int"
         );
+    }
+
+    // GLOBWORD-C5: the DWARF front-end typelock semantic. In Ghidra, the
+    // DWARF analyzer's committed Data types reach the decompiler symbol
+    // table as ATTRIB_TYPELOCK (Symbol::decodeHeader database.cc:439-442);
+    // without the flag, both typelock-gated consumers
+    // (SymbolEntry::updateType database.cc:135-141 and buildLocaltypes'
+    // exact-piece branch coreaction.cc:5021-5027) skip the global Symbol's
+    // DWARF type, and glob_expand's value degrades to raw offsets in the
+    // output. seed_global_locked is the single driver-side projection of
+    // that semantic onto Rugra's query-channel Database.
+    #[test]
+    fn seed_global_locked_marks_dwarf_globals_typelocked_and_findable() {
+        let bytes = std::fs::read("examples/curl").expect("curl fixture");
+        let db = DebugGlobalDatabase::parse_elf(&bytes).expect("DWARF globals");
+        let glob_expand = db.get(0x17660).expect("glob_expand global");
+
+        let mut channel = crate::database::Database::new(false);
+        let scope = channel.global_scope_id;
+        let symbol_id = DebugGlobalDatabase::seed_global_locked(
+            &mut channel,
+            scope,
+            glob_expand.address,
+            &glob_expand.name,
+            glob_expand.data_type.clone(),
+            glob_expand.data_type.get_size().max(1) as i32,
+        )
+        .expect("seeded symbol id");
+
+        // The typelock gate SymbolEntry::updateType checks.
+        let locked = channel
+            .get_global_scope()
+            .and_then(|s| s.symbols.get(&symbol_id))
+            .map(|sym| sym.read().unwrap().is_type_locked());
+        assert_eq!(locked, Some(true));
+
+        // The channel the pipeline queries (queryProperties/
+        // queryContainer) resolves the seeded entry, and the entry carries
+        // the URLGlob-pointer symbol type updateType hands to the Varnode.
+        let hit = channel
+            .query_container(
+                scope,
+                Address::new(0x17660),
+                1,
+                Address::new(0),
+            )
+            .expect("container hit at glob_expand");
+        assert_eq!(hit.symbol_name, "glob_expand");
+        let entry_type = channel
+            .get_global_scope()
+            .and_then(|s| s.symbols.get(&symbol_id))
+            .map(|sym| sym.read().unwrap().get_type());
+        assert!(matches!(
+            entry_type,
+            Some(Some(ref dt)) if matches!(dt.as_ref(), Datatype::Pointer(_))
+        ));
     }
 
     #[test]

@@ -20,6 +20,20 @@ declared variable type with C array decay (0x17660 `glob_expand` →
 `URLGlob **`, 0x17520 `config` → `Configurable *`, 0x17680 `glob_buffer`
 → `char *`).
 
+`DebugGlobalDatabase::seed_global_locked` (`GLOBWORD-C5-GLOBAL-TYPEFLOW-0001`)
+is the driver-side projection of the DWARF front end's committed-data-type
+semantic: Ghidra's analyzer creates Data with a locked-in type, the decompiler
+interface exports it as ATTRIB_TYPELOCK, and `Symbol::decodeHeader`
+(database.cc:439-442) folds it into the Symbol's typelock flag. It seeds one
+global into the query-channel `Database` (`add_symbol_mapped` + TYPELOCK).
+Both typelock-gated consumers — `SymbolEntry::updateType` (database.cc:135-141,
+reached through `Varnode::setSymbolProperties` varnode.cc:413) and
+`ActionInferTypes::buildLocaltypes`' exact-piece branch (coreaction.cc:5021-
+5027) — depend on the flag to attach the global Symbol's DWARF type onto the
+address varnode `RuleLoadVarnode` materializes (ruleaction.cc:4293). Without
+it the global's value degrades to raw offsets in the C output
+(`*(int *)(glob_expand + 0x128)` instead of `glob_expand->size`).
+
 ## Locked libc ABI signatures (`CALLSPEC-DRIVER-0001`)
 
 `LibcSignatureTable` is Rugra's native front-end adapter for the platform-side
