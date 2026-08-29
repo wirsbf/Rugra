@@ -95,6 +95,11 @@ Rugra 独有的四条诊断 stderr 和完整 ProperIf/identifyInternal/parent wi
 full 状态为 `MISMATCH`，独立复核只批准上述投影。
 
 **状态**: 已核对（当前有效，2026-08-28 BLOCK-BUILDCOPY-MIRROR-0001）
+**2026-08-30 追加（BLOCKACTION-DOWHILE-ABSORB-0001 — newBlockList force 步）**: `try_rule_cat` 补 Ghidra `newBlockList`（block.cc:1758-1774）在 `identifyInternal` 之后的两个 force 步，此前完全缺失：
+1. **捕获**（cc:1762-1764，必须在 identifyInternal 之前）：链尾节点的出边数 `outforce`，二元时再捕获其 out(0) 目标 `out0`。链尾指回链内的回边在合并后成为复合块内部边——外部出边数低于 outforce。
+2. **`force_output_num`**（cc:1768 → block.cc:880-889 `BlockGraph::forceOutputNum`）：复合块出边数 < outforce 时，按 `addInEdge(this, f_loop_edge|f_back_edge)`（block.cc:73-80/888）在 out/in 两个半边上追加**复合块自环边**（label=loop|back，reverse_index=对侧 push 前槽位）。这是链内回边在复合块层的幸存形态。
+3. **`force_false_edge_composite`**（cc:1769-1770 → block.cc:1204-1217 `forceFalseEdge`）：sizeOut==2 时保证 out(0)=out0；`out0->getParent()==this`（out0 是被合并组件，Rugra 以 Arc::ptr_eq 对组件集判定）时改为要求 out(0)==自环边；否则 `swapEdges`。
+这正是 main 的 do-while 吸收链（@321a/@3225/@28ec/@28f7 同地址 latch 对：`ruleBlockGoto→newBlockIfGoto` 删 goto 出边 → `ruleBlockCat` 合并 ifgoto+latch（force 出自环）→ `ruleBlockDoWhile`（cc:1555，sizeOut==2 且 getOut(i)==self）吸收 latch → `cat 66` 并入上游）。此前复合块只有 1 条外部出边 → dowhile 永不触发。门控（RUGRA_ORACLE_FIXTURE_DATA=1）main 规则序列 vs oracle（/tmp/w-rc4-ore 探针树）**126/126 事件全对齐**（oracle "goto" 事件名=ruleBlockGoto 统称，含 if_goto 子路径）；do_while 计数 **0→5=golden 5**；E2E curl：defects=0/numbering=0，skeleton 3119→3088（−31，main 4 `do {` vs oracle golden_dump 6——残差为 oracle 的第二轮 collapseAll（146 块重启，管线编排域）与渲染层差异，非本缝）。Cross-Review: PENDING（机制 C 白名单）。
 **2026-08-28 追加（真实 BlockCopy/buildCopy）**: `ActionBlockStructure::apply`
 改为调用 `BlockGraph::build_copy`；不再清空结构图、创建 Basic 替身或重放边。
 复制后的 incoming/outgoing 顺序、label、reverse slot、idom、index、numdesc、

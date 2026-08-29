@@ -751,6 +751,77 @@ static void caseGlobForm(FixtureArchitecture &arch, FixtureTypes &T)
   delete fd;
 }
 
+// typedef_typelock: implied + typelock output typed as a typedef of the
+// token base.  castOutput's cc:2562-2567 force path must run isOpIdentical,
+// which strips the typedef chain (cc:2476-2479) and reports the alias
+// op-identical to the base: force stays false, the !force gate's
+// castStandard also strips typedefs (cast.cc:325-329) and returns null, so
+// no CAST is inserted and the count is 0.  A divergent implementation that
+// skips the typedef strip forces a spurious CAST here.
+static void caseTypedefTypelock(FixtureArchitecture &arch, FixtureTypes &T,
+                                Datatype *tdInt8)
+{
+  Funcdata *fd = makeFuncdata(arch, "sw_td_lock", 0x5700);
+  BlockBasic *block = makeSingleBlock(fd);
+  CaseTracker tracker;
+  AddrSpace *ram = arch.getSpace(3);
+  Varnode *gA = typedInput(*fd, ram, 0x10000119, 8, T.int8T);
+  tracker.vn(gA, "gA8");
+  PcodeOp *ia = makeOp(*fd, block, CPUI_INT_ADD, 2, 0x5700, 8);
+  fd->opSetInput(ia, gA, 0);
+  fd->opSetInput(ia, fd->newConstant(8, 0), 1);
+  ia->getOut()->updateType(tdInt8, true, false); // typelock + implied
+  ia->getOut()->setImplied();
+  tracker.op(ia, "ia");
+  tracker.vn(ia->getOut(), "ia_o");
+  fd->setHighLevel();
+  runPre(*fd, "typedef_typelock", arch, tracker);
+  ProbeSetCasts action;
+  action.apply(*fd);
+  runPost(*fd, "typedef_typelock", action, tracker);
+  delete fd;
+}
+
+// cast_arm_fork: castInput's double-cast guard is TWO nested levels
+// (cc:2673 outer isWritten&&def==CAST, cc:2674 inner isImplied).  A
+// CAST-produced varnode that is NOT implied — here a pathological
+// constant-space output hand-wired via PcodeOp::setOutput +
+// Varnode::setDef (the bank would reject opSetOutput on a constant) —
+// must skip the ENTIRE else-if chain (constant arm included) and fall
+// through to the CAST insert with vnin = vn.  A merged single-level
+// condition diverts this input into the constant arm (cc:2687) instead.
+static void caseCastArmFork(FixtureArchitecture &arch, FixtureTypes &T)
+{
+  Funcdata *fd = makeFuncdata(arch, "sw_arm_fork", 0x5800);
+  BlockBasic *block = makeSingleBlock(fd);
+  CaseTracker tracker;
+  AddrSpace *reg = arch.getSpace(4);
+  Varnode *src = typedInput(*fd, reg, 0x40, 8, T.int8T);
+  tracker.vn(src, "src");
+  PcodeOp *castOp = makeOp(*fd, block, CPUI_CAST, 1, 0x5800, 0);
+  fd->opSetInput(castOp, src, 0);
+  Varnode *constC = fd->newConstant(8, 0x30);
+  constC->updateType(T.P_int4);
+  // Hand-built wiring: bank-level opSetOutput would reject a constant
+  // output; the oracle arm order is only reachable through the direct
+  // setters (setDef sets the written flag).
+  constC->setDef(castOp);
+  castOp->setOutput(constC);
+  PcodeOp *mult = makeOp(*fd, block, CPUI_INT_MULT, 2, 0x5801, 8);
+  fd->opSetInput(mult, constC, 0);
+  fd->opSetInput(mult, fd->newConstant(8, 4), 1);
+  tracker.op(castOp, "cast0");
+  tracker.op(mult, "mult");
+  tracker.vn(constC, "constC");
+  tracker.vn(mult->getOut(), "mult_o");
+  fd->setHighLevel();
+  runPre(*fd, "cast_arm_fork", arch, tracker);
+  ProbeSetCasts action;
+  action.apply(*fd);
+  runPost(*fd, "cast_arm_fork", action, tracker);
+  delete fd;
+}
+
 int main(void)
 {
   std::cout << std::unitbuf;
@@ -771,6 +842,8 @@ int main(void)
     T.P_int4 = architecture.types->getTypePointer(8, T.int4T, 1);
     T.P_int8 = architecture.types->getTypePointer(8, T.int8T, 1);
     T.P_table = architecture.types->getTypePointer(8, table, 1);
+    Datatype *tdInt8 = architecture.types->getTypedef(
+        T.int8T, "td_int8", Datatype::hashName("td_int8"), 0);
 
     caseAligned(architecture, T);
     casePaOutInt8(architecture, T);
@@ -779,6 +852,8 @@ int main(void)
     caseIaToken(architecture, T);
     caseCastChain(architecture, T);
     caseGlobForm(architecture, T);
+    caseTypedefTypelock(architecture, T, tdInt8);
+    caseCastArmFork(architecture, T);
   }
   catch (const std::exception &error) {
     std::cerr << "fixture error: " << error.what() << '\n';

@@ -1997,3 +1997,49 @@ MAIN-RC3 翻门后 main 的 fopen 区域暴露：`p_Stack_210 = fopen(...); if (
 curl 全量 skeleton 变化（+9 净）逐处核对均为同一形态修复：8 处裸 `else`+同行 `if`
 恢复为 golden 的 `else {` 块结构（main/parseconfig/GetStr/SetHTTPrequest/glob 系列），
 `else if` 合并点 6→6 不变（合并臂行为保持）。
+
+### PRINTC-NESTED-DOWHILE-EMIT——emitBlockDoWhile body / emitBlockGoto wrapped 的结构化递归（2026-08-30）
+
+**Ghidra 语义**：
+- `PrintC::emitBlockDoWhile`（printc.cc:3068-3095）：cc:3078 `print(KEYWORD_DO)` 是**裸关键字**
+  （无尾随空格；` {` 由 same_line `openBraceIndent` 补出，plain-text 发射器上 `do {` 恰一个空格）；
+  cc:3080-3083 `pushMod(); beginBlock(getBlock(0)); setMod(no_branch);
+  getBlock(0)->emit(this)` —— **body 经虚拟派发结构化发射**（body 是 BlockList 时按子块序递归，
+  BlockIf 子块渲染 if/else），latch CBRANCH 被 no_branch 抑制；cc:3088-3093 `while` 尾部来自
+  body lastOp 的 CBRANCH only_branch 重发射。
+- `PrintC::emitBlockGoto`（printc.cc:2766-2778）：cc:2770 `setMod(no_branch)` 后
+  cc:2771 `bl->getBlock(0)->emit(this)` —— **wrapped 块经虚拟派发结构化发射**；Goto 包裹的
+  List/If/DoWhile 复合体按结构渲染（嵌套 DoWhile 打印 `do { ... } while(...);`），绝无平铺
+  op-walk 侧臂；cc:2775-2778 仅当 `gotoPrints()`（block.cc:2881-2890：父在场时
+  `gototarget front leaf != parent nextFlowAfter(this)`，父缺席恒 false）才发射形式 goto 语句。
+
+**Rugra 缺陷**：`emit_structured_dowhile` 的 body 走 `emit_block_ops(dowhile_arc, true)`
+（聚合 op 平铺），`emit_block_goto` 的 wrapped 走 `emit_block_ops(goto_arc, true)`——两处都把
+结构子块塌缩成单次迭代语句。w-dowhile 的规则级修复后 main 已有 5 个 DoWhile 结构
+（=golden），但 else-if 臂的 `Goto(208)→List(208)→If(150){DoWhile@0x28ec,@0x28f7}` 复合体被
+goto 平铺，两个嵌套 DoWhile 丢失 `do {`（main `do {` 计数 3 vs golden 5）；同时所有 do-while
+body 内的 break-guard If（golden 的 `if (lVar13 == 0) break;`）被平铺吞掉。`do ` 带尾随空格在
+EmitNoMarkup 上产生 `do  {`（双空格，oracle 单空格）。
+
+**修复（本 commit，PRINTC-NESTED-DOWHILE-EMIT-0001）**：
+- `emit_structured_dowhile`：`print("do")` 裸关键字；body 改为
+  `push_mod(); set_mod(NO_BRANCH); emit_block_structured(&dowhile_data.condition)` —— 与
+  whiledo 兄弟（MAIN-RC3-STRUCTURED-EMIT-0001）完全同型的结构化递归；Rugra `BlockDoWhile`
+  的 `condition` 字段即 Ghidra `getBlock(0)`（唯一 body 子块，block.hh:727）。`while (cond)`
+  尾部仍读 dowhile arc 聚合 ops 的 last CBRANCH in(1)（带 R50 malformed-guard，不变）。
+- `emit_structured_infloop`：`print("do")` 裸关键字（cc:3106 同型）。
+- `emit_block_goto`：签名加 `graph`/`emitted`；wrapped 为结构块（非 Basic/Copy）时
+  `emit_block_structured(&inner, ...)`（cc:2771 结构化递归）；wrapped 为 Basic/Copy 保持
+  `emit_block_ops(goto_arc, true)`（聚合 op 列表与叶子等价，且该通道承载
+  GOTO-LABEL-UNPRINTED-0001 backpatch + discovery 记账）。gotoPrints 判定不变。
+- 调用点 `emit_flow_block` Goto 臂传 `graph`/`emitted`。
+
+**验收**：curl 3121/0/0（defects/numbering 双零保持；skeleton 3089→3121，+32 行全部为
+新恢复的结构行——golden 有而旧平铺丢失的 break-guard if / do-while 头 / else-if 臂 if-goto，
+逐函数：main 885→886、glob_set 98→96、my_get_token 63→61、next_url/glob_word/getparameter
++9/+10/+15 为 goto 包裹结构体首次结构化渲染）；main `do {` 计数 3→5 = golden（638→639 位移）；
+corpus `do {` 17→23。双侧 fixture `printc_dowhile_goto_emit_1204`（statement+raw 字节 MATCH，
+runner `tools/run_printc_dowhile_goto_emit_oracle.sh`）。cargo test --lib 17 failed =
+基线一致（funcdata 测试间状态污染，与本改动无关）。残差：next_url/glob_word/getparameter
+新暴露的自指标 `goto X; X:`（goto_type 判定属 blockaction scopeBreak 族，非 printc 发射层，
+登记待 blockaction wave 认领）。

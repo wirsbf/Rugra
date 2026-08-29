@@ -1,5 +1,16 @@
 # `subflow.rs` API Reference
 
+## 2026-08-30：`test_split_datatype_constructs` 断言按 canonical-Architecture 不变式翻转
+
+`Funcdata::new` 自 2026-08-30 起在构造尾绑定 canonical 默认 Architecture
+（FUNCDATA-CANONICAL-ARCH-0001,恢复 `glb = scope->getArch()` 不变式,
+funcdata.cc:48;详见 `docs/api/funcdata.md`）。本模块
+`test_split_datatype_constructs` 原断言的 arch-less 前提
+（`split_structures/split_arrays == false`）随之过时:canonical 默认
+config 为 struct|array|pointer(architecture.cc:1430-1432),断言翻转为
+`true/true`,`types` 仍为 `None`(canonical 实例无 TypeFactory,直到调用方
+`set_arch` 接线)。`SplitDatatype::new` 本体(subflow.cc:2701-2709 移植)未变。
+
 ## 2026-08-25：SUBFLOW-ROOTPOINTER-PORT-0001 — RootPointer 家族 + 两段回溯移植
 
 `SplitDatatype::RootPointer` 四方法 1:1 落地：`back_up_pointer`

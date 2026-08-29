@@ -1,5 +1,27 @@
 # `funcdata.rs` API Reference
 
+## 2026-08-30：`Funcdata::new` 构造期绑定 canonical Architecture
+
+Ghidra 的 `Funcdata` 构造函数无条件从 Scope 取得 Architecture(funcdata.cc:48
+`glb = scope->getArch();`,database.hh:775),并立即消费它(:49
+`minLanedSize = glb->getMinimumLanedRegisterSize();`、:54
+`glb->getStackSpace()`);oracle 中不存在 arch-less 的 Funcdata。Rugra 的
+`Funcdata::new` 现在通过新的 `canonical_arch()`(OnceLock 共享的
+`Architecture::new()` 默认实例,architecture.cc:150 + resetDefaultsInternal
+默认值)在构造尾调用 `set_arch`,恢复同一不变式:构造返回的 Funcdata 恒有
+Architecture,且同一进程内所有未显式接线的 Funcdata 共享一个实例(对应
+Ghidra 单 database 单 Architecture 指针)。持有真实 Architecture 的调用方
+(curl/httpd runner)仍用 `set_arch` 覆盖,行为不变(E2E 双语料字节级不变)。
+
+可观察后果(均为向 Ghidra 默认靠拢):未接线路径的 `infer_pointers`
+false→true、`split_datatype_config` 0→struct|array|pointer
+(architecture.cc:1416-1432);`subflow::tests::test_split_datatype_constructs`
+的 arch-less 前提断言按新不变式翻转。双侧构造不变式观察门禁:
+`tests/oracle/funcdata_canonical_arch_1204`(.cc 对锁定 oracle 真实
+BfdArchitecture 构造链观察,.rs 镜像,in-binary 断言 min_laned_size 接线与
+`set_arch` 覆盖路径)。min_laned_size 裸值是 spec-dependent(x86-64 SLEIGH
+= 16,无 spec 默认 = -1),不属于接线观察,不进 diffed 投影。
+
 ## 2026-08-28：`set_arch` 接通 Architecture-owned TypeFactory
 
 Ghidra 的 `Funcdata::newVarnode*` 在每次创建前都从同一 `glb->types` 调用
@@ -1028,7 +1050,7 @@ inject Phase 4 全局 def-linking 确认禁用——它正确解析栈符号但�
 - `funcdata_flags::TYPE_RECOVERY_START`（funcdata.hh:90）+ `has_type_recovery_started()/set_type_recovery_started()`（funcdata.hh:151）。标记类型恢复已开始，Rule 据此决定 type-based 守卫是否生效。
 
 ### 2026-07-01：Architecture 引用 + iop-space varnode + op_undo_ptradd（解锁 cpool/funcptr/iop 依赖 Rule）
-- `arch: Option<Arc<Architecture>>` 字段 + `get_arch()/set_arch()`（funcdata.hh:80/144）。Ghidra 在 ctor 从 scope 取 glb；Rugra 用 set_arch 接线。`set_arch` 同时把 `arch.types` 的共享身份注入 VarnodeBank，保证后续 Varnode 默认类型来自该 Architecture；默认 None 仅保留给无 Architecture 的 legacy/test 路径。
+- `arch: Option<Arc<Architecture>>` 字段 + `get_arch()/set_arch()`（funcdata.hh:80/144）。Ghidra 在 ctor 从 scope 取 glb；Rugra 的 `Funcdata::new` 自 2026-08-30 起在构造尾经 `canonical_arch()` 绑定共享默认实例（funcdata.cc:48 不变式），持有真实 Architecture 的调用方仍以 `set_arch` 覆盖。`set_arch` 同时把 `arch.types` 的共享身份注入 VarnodeBank，保证后续 Varnode 默认类型来自该 Architecture。
 - `new_varnode_iop(op)`（funcdata_varnode.cc:176-184）— 在 Iop 空间创建引用 op 的 varnode（Arc::as_ptr 编码）。
 - `get_op_from_const(vn)`（op.hh:249）— iop-space varnode 反查回 PcodeOp。
 - `op_undo_ptradd(op)`（funcdata_op.cc:579）— PTRADD 撤销为 INT_ADD/INT_MULT。
@@ -2030,3 +2052,14 @@ test_cmp_rax_rbx(9 op:LESS/SBORROW/SUB→tmp/SF/ZF/PF)、test_seq_mov_add_ret
 (11 op)、test_seq_mov_and_shl_ret(13 op)、test_seq_cmp_je_multiblock
 (22 op;块0=10 op)、cbranch 条件接线三测试(ZF 0x201→0x206,sla 布局)。
 全量 17 failed,回到 master flaky 窗口(15~18)内。
+
+## 2026-08-30:block_remove_internal 完整移植(HTTPD-EMPTYELSE-DONOTHING-0001)
+
+`Funcdata::blockRemoveInternal`(funcdata_block.cc:254-320)从不完整版(无
+removeFromFlow、无 MULTIEQUAL 拼接、双 removeBlock、panic)补齐:BRANCHIND 跳表
+清理(cc:264-269)、pushMultiequals(cc:271)、每出块 MULTIEQUAL 输入拼接
+(删除 bb 槽位 + 按 bb 入边追加 deadop 穿插输入或 deadvn 拷贝,cc:273-294)、
+removeFromFlow 边重定向循环(cc:296,block.cc:1545-1560 形状:自末尾出边起,
+switch_edge 双半语义重定向入边)、op 销毁(unreachable 路径 descend2Undef +
+descendants 检查;cc:311-312 LowlevelError 降级为警告+跳过)、removeBlock。
+`remove_do_nothing_block` 返回 bool 并接通 blockRemoveInternal。

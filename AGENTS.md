@@ -281,6 +281,7 @@ python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --su
 - **pin 重钉双形态**:fixture 因 src 变更失效时,重钉三件套 = runner shell 变量(commit/tree/**git blob id**)+ metadata comparand(**文件 sha256**)+ overlays 表。`rev-parse` 校验用 blob id、`sha256sum` 校验用文件哈希,两种形态别混。
 - **result/ 回流约定**:每次 E2E 后 `cp /tmp/<run>.log result/curl_cur.c`(gitignored 存档),防陈旧事故。
 - **worktree 惯例**:runner 需 `ghidra -> 主仓/ghidra` symlink(gitignored);GIT_DIR 劫持已修(tools/check_gate_health.py 清环境变量),worktree 提交无需 --no-verify。
+- **worktree 内禁用 `git stash`**(2026-08-30 三起事故):stash 栈是 repo 级共享(~170 worktree),并发 agent 交错 push/pop 会弹错分支致改动丢失;一律 per-worktree commit(wip checkpoint --no-verify)。
 - **oracle 环境**:`/tmp/rugra-ghidra-bfd-2.38` 机器重启即丢;重建用直连 https 拉 binutils-dev deb 解包(**apt 代理不可用**)。
 
 当前反编译质量数据见 `CURRENT_STATUS.md`(不再放 AGENTS.md,避免数据过期)。

@@ -1,5 +1,54 @@
 # `prettyprint.rs` API Reference
 
+## 2026-08-30：POSTFIX-RETIRE-0001 W0 — 死代码清除（字节级零行为差）
+
+路线图 `/tmp/rugra-reports/w-postfix-2026-08-30.md` W0 第一刀：删除全仓零引用的
+死函数与 no-op scaffold，并改正伪造的 `// Ghidra: prettyprint.hh:547
+EmitNoMarkup::<方法>` 注解（锁定 oracle 的 `EmitNoMarkup`（hh:547-594）只有
+`Emit` 虚方法族，无任何 postProcess/文本 pass 方法）。验收门禁：curl/httpd E2E
+输出与删除前 **sha256 逐字节一致**。
+
+- 删除 `reconcile_pointer_arith()`（原 :255-320）：唯一调用点早在
+  mark_varnode_used LOAD 检测修复后即被注释（原 :917），仅存自递归引用。
+  第七 pass 区域的注释同步改为"已删除"记录。
+- 删除 `recover_struct_fields_anon()`（原 :2105-2262，158 行）：2026-06-23
+  匿名 struct 字段恢复实验的遗留物，实验当时即被判定需要 P-code 级类型传播
+  （typedef 作用域非法、`->` 无 struct 布局不合法），全仓零调用点。
+  其 `EmitNoMarkup::recoverStructFieldsAnon` 伪造注解随函数一并消失。
+- 删除 struct-deref 三函数族（共 213 行）：`rewrite_struct_deref()`（原
+  :3088-3145）与 `canonicalize_struct_deref()`（原 :3147-3258）是互逆变换对，
+  pass 20+21 早已从管线移除（2026-07-04 续 6，净效果为零）；`try_convert_ptr_add()`
+  （原 :3260-3305）仅被 canonicalize 调用。三者的
+  `EmitNoMarkup::rewriteStructDeref/canonicalizeStructDeref/tryConvertPtrAdd`
+  伪造注解随函数一并消失。
+- 删除 pass 19 括号平衡 scaffold（原 :1785-1859，75 行）：自 2026-06-26 起
+  其 `depth<0`/`else` 两臂均为逐行 verbatim 输出（读码证实恒等，naive 计数
+  无法越过 char/string 字面量故从不改写）——事实 no-op。后续空行折叠
+  （B4）改为直接消费 pass 18。
+- **伪造 `// Ghidra:` 注解改正（机制 D 红旗清除，20 处）**：锁定 oracle 的
+  `EmitNoMarkup`（prettyprint.hh:547-594）只有 `Emit` 虚方法族，以下注解
+  引用了 oracle 根本不存在的方法，全部改标 `// RUGRA-GLUE:`（登记
+  POSTFIX-RETIRE-0001 W0）：路线图点名的 16 处中，`rewriteStructDeref`/
+  `canonicalizeStructDeref` 2 处随死函数删除，`postProcess`/
+  `postProcessOutput`/`removeOrphanCaseLabels`/`removeIllegalLvalueAssignments`/
+  `fixPointerArithmetic`/`tryFixOnePtrArith`/`removeOrphanBreaks`/
+  `fixUnaryDerefDeclarations`/`negateSimpleCondition`/`flushFuncRemoveUnused`/
+  `doIndent`/`isWordBoundary`/`countWordOccurrences`/`replaceWord` 14 处改标；
+  另有 8 处同准则伪造注解一并处置（`recoverStructFieldsAnon`/
+  `tryConvertPtrAdd` 随死函数删除；`debugCountWhile`/`debugGetOutputRef`/
+  `getOutput`/`intoAny`/`asAnyMut` 5 处改标；`hasEnclosingLoopCtx` 是悬空
+  残留行——真函数在 :3478 一带本就有 RUGRA-GLUE 注解——直接删除）。
+  保留的 15 处 hh:547 注解（print/beginBlock/tagLine 等虚方法 + default/new
+  →构造器 hh:550）均为 oracle 真实方法，不动。
+- **`post_process_output_legacy` 误导标记清除**：其顶部
+  "**DEAD CODE** — Do NOT call / 已被空操作替代 / `#[allow(dead_code)]`"
+  注释是 2026-07-04 一次被放弃的退役尝试（改空操作→gcc 审计 23/24→5/24→
+  回退）留下的脚手架，与事实矛盾——它是 `post_process_output` 的唯一实现
+  并被其调用，是活链。改为如实状态注释 + RUGRA-GLUE 登记（oracle 发射
+  路径零后处理的证据链：hh:547-594 无缓冲直写 emitter + printc.cc:2665
+  docFunction 以 flush() 结束），`#[allow(dead_code)]` 一并移除（函数可达，
+  属性本就无效）。退役仍按路线图 W1-WT 顺序推进。
+
 ## 2026-08-28：RPN variable metadata bridge
 
 `Emit::tag_variable_with_metadata` 为 Ghidra
@@ -178,9 +227,11 @@ post_process 第七 pass 调用。C 禁止 `int - pointer`。当行匹配 `<整�
 
 **实现**：前向扫描（`find(" - ")`），i 只前进不回退。早期版本有回退 bug 导致死循环，已修复。
 
-### `fn reconcile_pointer_arith(line: &str) -> String` （2026-06-28，**已禁用**）
+### `fn reconcile_pointer_arith(line: &str) -> String` （2026-06-28，**已删除**）
 
-**已禁用**——mark_varnode_used 的 LOAD 结果检测让 LOAD 输出正确声明为 int/long（非指针），消除了 pointer/int 除法错误。此函数保留但不再调用。
+**已删除**（2026-08-30，POSTFIX-RETIRE-0001 W0）——mark_varnode_used 的 LOAD
+结果检测让 LOAD 输出正确声明为 int/long（非指针）后，唯一调用点已被注释，
+函数仅存自递归引用，属全仓零引用死代码。
 
 ### `fn reconcile_int_times_string(line: &str) -> String` （2026-06-28）
 

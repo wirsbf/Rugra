@@ -252,73 +252,6 @@ pub trait Emit {
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> { None }
 }
 
-// RUGRA-GLUE: reconcile_pointer_arith (no Ghidra counterpart found)
-/// Reconcile `int - pointer` arithmetic (illegal in C) by casting the integer
-/// constant to a pointer type. Only acts on the pattern
-///   <sep><int-literal> - <pointer-prefix>Var...
-/// where <sep> is space/=/(/, and <pointer-prefix> is pi/pc/ps/pp/pv. This is
-/// a print-layer stopgap for missing type propagation (ActionTypePropagate).
-/// Reconcile illegal pointer arithmetic: `ptrvar / int` and `ptrvar % int`.
-/// C forbids pointer division/modulo (only +, -, and comparisons are legal
-/// on pointers). This casts the pointer operand to (long). Triggered by
-/// LOAD results wrongly typed as pointers (e.g. `*(int*)addr` typed as ptr).
-fn reconcile_pointer_arith(line: &str) -> String {
-    let ptr_prefixes = ["piVar", "pcVar", "psVar", "ppVar", "pvVar"];
-    // Find "<ptrvar> / <int>" or "<ptrvar> % <int>".
-    for op in ["/ ", "% "] {
-        let mut search_from = 0;
-        loop {
-            // Find " <op>" patterns.
-            let needle = format!(" {}{}", op.trim_end(), " ");
-            if let Some(rel) = line[search_from..].find(&needle) {
-                let op_pos = search_from + rel;
-                // The pointer var precedes the operator. Scan backwards.
-                let bytes = line.as_bytes();
-                let mut var_end = op_pos;
-                while var_end > 0 && bytes[var_end - 1] == b' ' { var_end -= 1; }
-                let mut var_start = var_end;
-                while var_end - var_start < 20 && var_start > 0
-                    && (bytes[var_start - 1].is_ascii_alphanumeric() || bytes[var_start - 1] == b'_') {
-                    var_start -= 1;
-                }
-                let var_name = &line[var_start..var_end];
-                let is_ptr = ptr_prefixes.iter().any(|p| var_name.starts_with(p));
-                // Verify the operand after the operator is an integer.
-                let after_op = op_pos + needle.len();
-                let rest = &line[after_op..];
-                let int_len = rest
-                    .bytes()
-                    .take_while(|b| {
-                        b.is_ascii_digit() || *b == b'x'
-                    || (*b >= b'a' && *b <= b'f') || *b == b' '
-                    })
-                    .count();
-                let int_part = rest[..int_len].trim();
-                let is_int = !int_part.is_empty()
-                    && (int_part.chars().all(|c| c.is_ascii_digit())
-                        || (int_part.starts_with("0x") && int_part.len() > 2
-                            && int_part[2..].chars().all(|c| c.is_ascii_hexdigit())));
-                if is_ptr && is_int {
-                    // Check var_start is preceded by a separator (standalone operand).
-                    let sep_ok = var_start == 0 || matches!(bytes[var_start - 1],
-                        b' ' | b'=' | b'(' | b',' | b'\t');
-                    if sep_ok {
-                        // Insert (long) before var_name.
-                        let new_line = format!(
-                            "{}(long){}{}", &line[..var_start], var_name, &line[var_end..]
-                        );
-                        return reconcile_pointer_arith(&new_line); // recurse for more
-                    }
-                }
-                search_from = op_pos + needle.len();
-            } else {
-                break;
-            }
-        }
-    }
-    line.to_string()
-}
-
 // RUGRA-GLUE: reconcile_int_times_string (no Ghidra counterpart found)
 /// Reconcile `X * "string"` — int * string-literal is illegal C. Cast the
 /// string literal to (long). Only matches quoted strings, never pointer vars.
@@ -432,7 +365,7 @@ impl EmitNoMarkup {
         }
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::debugCountWhile
+    // RUGRA-GLUE: RUGRA_LOOP_DEBUG 诊断 helper(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Debug helper: count "while" and "\ndo " occurrences in the raw output.
     /// Used by RUGRA_LOOP_DEBUG diagnostics to track loop rendering.
     #[allow(dead_code)]
@@ -442,14 +375,14 @@ impl EmitNoMarkup {
         (w, d)
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::debugGetOutputRef
+    // RUGRA-GLUE: RUGRA_LOOP_DEBUG 诊断 helper(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Debug helper: borrow the raw output string for diagnostics.
     #[allow(dead_code)]
     pub fn debug_get_output_ref(&self) -> &str {
         &self.output
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::getOutput
+    // RUGRA-GLUE: 缓冲输出访问器 + 文本后处理挂载点②(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物——oracle EmitNoMarkup 直写 ostream,无 getOutput)
     pub fn get_output(mut self) -> String {
         // Always run post-processing so callers that forget to invoke
         // post_process() still get the normalized output (struct deref rewrite,
@@ -460,7 +393,7 @@ impl EmitNoMarkup {
         self.output
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::postProcess
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Post-process the output to eliminate redundant gotos and labels.
     /// P3: Remove `goto LAB_X;` when `LAB_X:` is on the immediately next non-empty line.
     /// Also removes labels that are never referenced by any goto.
@@ -480,7 +413,7 @@ impl EmitNoMarkup {
         t.starts_with("switch ") || t.starts_with("switch(")
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::postProcessOutput
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     pub fn post_process_output(input: &str) -> String {
         // Ghidra's EmitMarkup (prettyprint.cc) does ZERO post-processing.
         // All structure is produced by Action-phase + structured emit.
@@ -491,12 +424,14 @@ impl EmitNoMarkup {
         Self::post_process_output_legacy(input)
     }
 
-    // RUGRA-GLUE: 旧的 27 趟文本后处理（违反铁律 5.5），保留供参考。
-    // 已被 post_process_output 的空操作替代。不要调用。
-    /// **DEAD CODE** — kept for reference. These were the 27+ text-level
-    /// post-processing passes that violated rule 5.5. Do NOT call.
-    /// To be removed once emit-layer fixes are verified.
-    #[allow(dead_code)]
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物——
+    // oracle 发射路径零后处理:prettyprint.hh:547-594 的 EmitNoMarkup 是无缓冲直写
+    // emitter,printc.cc:2665 docFunction 以 flush() 结束,无任何 post-process)。
+    // 状态如实记录:本函数是 post_process_output 的唯一实现并被其调用,是**活链**,
+    // 不是死代码。上方曾有的 "_legacy + DEAD CODE + Do NOT call + #[allow(dead_code)]"
+    // 标记是 2026-07-04 一次被放弃的退役尝试(先改空操作,gcc 审计 23/24→5/24 后
+    // 回退)留下的误导脚手架,已随 W0 清除。整层退役按 POSTFIX-RETIRE-0001 路线图
+    // W1-WT 顺序推进(先修上游→计数证明零突变→逐 pass 删除,尾部先行)。
     fn post_process_output_legacy(input: &str) -> String {
         let lines: Vec<&str> = input.lines().collect();
         let mut result: Vec<String> = Vec::with_capacity(lines.len());
@@ -911,10 +846,10 @@ impl EmitNoMarkup {
             // reconcile_int_minus_pointer still needed for non-LOAD pointers
             // (e.g. function parameters typed as int* used in subtraction).
             s = reconcile_int_minus_pointer(&s);
-            // reconcile_pointer_arith no longer needed: LOAD results are now
-            // correctly typed as int/long (not pointer) via mark_varnode_used
-            // LOAD detection, so ptr/int division doesn't occur.
-            // s = reconcile_pointer_arith(&s);
+            // reconcile_pointer_arith (ptr/int division-modulo reconcile)
+            // removed in POSTFIX-RETIRE-0001 W0: its only call site was
+            // commented out after mark_varnode_used LOAD detection made LOAD
+            // results correctly typed as int/long (not pointer).
             // reconcile_int_times_string still needed for copy-propagation
             // artifacts (string address inlined into MULT operand).
             if s.contains(" * \"") {
@@ -1782,86 +1717,16 @@ impl EmitNoMarkup {
             }
         }
 
-        // Nineteenth pass: remove unmatched extra closing braces at end of functions.
-        // After each function (detected by top-level `}`), check brace balance.
-        // If a function body has more `{` than `}`, insert missing closes.
-        // If more `}` than `{`, remove trailing extras.
-        let mut pass19: Vec<String> = Vec::with_capacity(pass18.len());
-        {
-            let mut i19 = 0;
-            while i19 < pass18.len() {
-                let line = &pass18[i19];
-                let t = line.trim();
-                let indent = line.len() - line.trim_start().len();
-
-                // Detect function start (same-line `sig {` or skip_line
-                // `sig` + lone `{`, printc.cc:1590/2655)
-                if Self::signature_opens_function_body(
-                    t,
-                    &["int ", "void ", "long ", "byte ", "bool ", "short "],
-                    &pass18[i19 + 1..],
-                ) {
-                    // Collect the entire function body
-                    let func_start = i19;
-                    let func_indent = indent;
-                    let mut depth = 1i32; // we've seen the opening `{`
-                    let mut func_end = i19 + 1;
-                    if !t.ends_with('{') {
-                        // skip_line layout: the lone `{` is on a following
-                        // line and is already accounted for by depth=1.
-                        while func_end < pass18.len() && pass18[func_end].trim().is_empty() {
-                            func_end += 1;
-                        }
-                        if func_end < pass18.len() && pass18[func_end].trim() == "{" {
-                            func_end += 1;
-                        }
-                    }
-                    while func_end < pass18.len() {
-                        let ft = pass18[func_end].trim();
-                        let fi = pass18[func_end].len() - pass18[func_end].trim_start().len();
-                        // Count braces (simplistic — good enough for C output)
-                        for ch in ft.chars() {
-                            match ch {
-                                '{' => depth += 1,
-                                '}' => depth -= 1,
-                                _ => {}
-                            }
-                        }
-                        func_end += 1;
-                        if depth <= 0 && fi == func_indent {
-                            break;
-                        }
-                    }
-
-                    // Check if depth reached 0 cleanly, or has extra/missing braces
-                    if depth < 0 {
-                        // More `}` than `{` — emit as-is. The naive brace count
-                        // over-counts `}` inside char/string literals (e.g.
-                        // case '}'), so removing braces based on it corrupts
-                        // function boundaries. Leave the output unchanged.
-                        for fi in func_start..func_end {
-                            pass19.push(pass18[fi].clone());
-                        }
-                    } else {
-                        // Normal or missing braces — emit as-is (missing brace is rarer)
-                        for fi in func_start..func_end {
-                            pass19.push(pass18[fi].clone());
-                        }
-                    }
-
-                    i19 = func_end;
-                    continue;
-                }
-
-                pass19.push(line.clone());
-                i19 += 1;
-            }
-        }
+        // Nineteenth pass (brace-balance scaffold) removed in
+        // POSTFIX-RETIRE-0001 W0: since 2026-06-26 both arms of its
+        // depth<0 / else split emitted the collected function lines
+        // verbatim — an identity no-op (naive brace counting cannot be
+        // trusted past char/string literals, so it never rewrote).
 
         // Final collapse of consecutive blank lines
-        let mut output_final2: Vec<String> = Vec::with_capacity(pass19.len());
+        let mut output_final2: Vec<String> = Vec::with_capacity(pass18.len());
         let mut prev_blank_final2 = false;
-        for line in pass19 {
+        for line in pass18 {
             if line.trim().is_empty() {
                 if !prev_blank_final2 {
                     output_final2.push(line);
@@ -2102,166 +1967,7 @@ impl EmitNoMarkup {
         after_case
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::recoverStructFieldsAnon
-    /// Per-variable anonymous struct field recovery.
-    /// Groups *(long *)(var + offset) patterns by variable, generates an
-    /// anonymous struct with matching fields, declares var as struct *,
-    /// and rewrites accesses to var->field_OFFSET.
-    fn recover_struct_fields_anon(text: &str) -> String {
-        use std::collections::{HashMap, HashSet};
-
-        // Phase 1: Collect var → set of offsets
-        let mut var_offsets: HashMap<String, HashSet<u64>> = HashMap::new();
-        let mut search = 0;
-        loop {
-            let pos = match text[search..]
-                .find("*(long *)(")
-                .or_else(|| text[search..].find("*(int *)(")) {
-                Some(p) => search + p, None => break,
-            };
-            let prefix_len = if &text[pos..pos + 10] == "*(long *)(" { 10 } else { 9 };
-            let paren_start = pos + prefix_len;
-            if paren_start >= text.len() { break; }
-            let rest = &text[paren_start..];
-            let mut depth = 1i32;
-            let mut close_off = 0usize;
-            for (idx, ch) in rest.char_indices() {
-                match ch { '(' => depth += 1, ')' => { depth -= 1; if depth == 0 { close_off = idx; break; } } _ => {} }
-            }
-            if depth != 0 { break; }
-            let inner = rest[..close_off].trim();
-            if let Some(pp) = inner.rfind(" + ") {
-                let base = inner[..pp].trim();
-                let offset_str = inner[pp + 3..].trim();
-                if !base.is_empty() && base
-                        .chars()
-                        .next()
-                        .map_or(false, |c| c.is_ascii_alphabetic() || c == '_') {
-                    let off_val = if let Some(h) = offset_str.strip_prefix("0x") {
-                        u64::from_str_radix(h, 16).ok()
-                    } else {
-                        offset_str.parse::<u64>().ok()
-                    };
-                    if let Some(off) = off_val {
-                        var_offsets.entry(base.to_string()).or_default().insert(off);
-                    }
-                }
-            }
-            search = pos + prefix_len;
-        }
-
-        if var_offsets.is_empty() { return text.to_string(); }
-
-        // Phase 2: For each variable, build an anonymous struct with fields
-        let mut struct_decls: Vec<String> = Vec::new();
-        let mut var_struct_types: HashMap<String, String> = HashMap::new();
-
-        for (var, offsets) in &var_offsets {
-            let struct_id = format!(
-                "_anon_{}", var.replace(|c: char| !c.is_alphanumeric() && c != '_', "_")
-            );
-            let mut members: Vec<String> = Vec::new();
-            let mut prev_end: u64 = 0;
-            let mut sorted_offsets: Vec<u64> = offsets.iter().copied().collect();
-            sorted_offsets.sort();
-            for &off in &sorted_offsets {
-                if off > prev_end {
-                    members.push(format!("  char _pad_{:x}[{}];", off, off - prev_end));
-                }
-                members.push(format!("  long field_{:x};", off));
-                prev_end = off + 8;
-            }
-            struct_decls.push(format!(
-                "typedef struct {{\n{}\n}} {};", members.join("\n"), struct_id
-            ));
-            var_struct_types.insert(var.clone(), struct_id);
-        }
-
-        // Phase 3: Rewrite the text line by line
-        let mut result = String::with_capacity(text.len());
-        let mut decl_inserted = false;
-        let lines: Vec<&str> = text.split('\n').collect();
-
-        for line in &lines {
-            let trimmed = line.trim();
-            // Insert struct declarations before the first typedef/extern/func
-            // (the printc-emitted typedef block at the top of each function)
-            if !decl_inserted && trimmed.starts_with("typedef unsigned char byte;") {
-                // Insert BEFORE the typedefs so they're at file scope
-                result.push_str(&struct_decls.join("\n"));
-                result.push('\n');
-                result.push('\n');
-                decl_inserted = true;
-            }
-
-
-            let mut new_line = line.to_string();
-            // Rewrite variable declarations
-            for (var, struct_id) in &var_struct_types {
-                // Patterns cover both the legacy `* name;` spelling and the
-                // oracle ptr_expr join `*name;` (printc.cc:73-77); the
-                // replacement uses the oracle join (no space after `*`).
-                let patterns = [
-                    format!("long {};", var),
-                    format!("long * {};", var),
-                    format!("long *{};", var),
-                    format!("void * {};", var),
-                    format!("void *{};", var),
-                    format!("char * {};", var),
-                    format!("char *{};", var),
-                    format!("int * {};", var),
-                    format!("int *{};", var),
-                    format!("_struct * {};", var),
-                    format!("_struct *{};", var),
-                ];
-                let replacement = format!("{} *{};", struct_id, var);
-                for pat in &patterns {
-                    new_line = new_line.replace(pat, &replacement);
-                }
-            }
-            // Rewrite *(long *)(var + offset) → var->field_offset
-            loop {
-                let pos = match new_line
-                    .find("*(long *)(")
-                    .or_else(|| new_line.find("*(int *)(")) {
-                    Some(p) => p, None => break,
-                };
-                let prefix_len = if &new_line[pos..pos + 10] == "*(long *)(" { 10 } else { 9 };
-                let paren_start = pos + prefix_len;
-                if paren_start >= new_line.len() { break; }
-                let rest = &new_line[paren_start..];
-                let mut depth = 1i32;
-                let mut close_off = 0usize;
-                for (idx, ch) in rest.char_indices() {
-                    match ch { '(' => depth += 1, ')' => { depth -= 1; if depth == 0 { close_off = idx; break; } } _ => {} }
-                }
-                if depth != 0 { break; }
-                let inner = rest[..close_off].trim();
-                let mut found = false;
-                if let Some(pp) = inner.rfind(" + ") {
-                    let base = inner[..pp].trim();
-                    let offset_str = inner[pp + 3..].trim();
-                    if var_struct_types.contains_key(base) {
-                        let oc = offset_str.trim_start_matches("0x");
-                        if !oc.is_empty() && oc.chars().all(|c| c.is_ascii_hexdigit()) {
-                            let repl = format!("{}->field_{}", base, oc);
-                            new_line.replace_range(pos..paren_start + close_off + 1, &repl);
-                            found = true;
-                        }
-                    }
-                }
-                if !found { break; }
-            }
-
-            result.push_str(&new_line);
-            result.push('\n');
-        }
-
-        if !text.ends_with('\n') && result.ends_with('\n') { result.pop(); }
-        result
-    }
-
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::removeOrphanCaseLabels
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Remove `case N:` and `default:` lines that appear outside any switch
     /// statement. Uses a precise switch-depth tracker that counts `switch (...) {`
     /// openers and their matching `}` closers.
@@ -2320,7 +2026,7 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::removeIllegalLvalueAssignments
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Remove assignment lines whose left-hand side is not a valid C lvalue.
     /// Detects patterns like 'IDENT + ... = ' or 'IDENT * ... = ' at the start
     /// of a statement (not inside parens/casts).
@@ -2440,7 +2146,7 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::fixPointerArithmetic
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Detect `IDENT + IDENT` and `IDENT * IDENT` patterns where both operands
     /// are declared as pointer types, and cast the right operand to `(long)`.
     fn fix_pointer_arithmetic(text: &str) -> String {
@@ -2493,7 +2199,7 @@ impl EmitNoMarkup {
         out
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::tryFixOnePtrArith
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Try to fix one `ptrA <op> ptrB` occurrence in the line. Returns Some(fixed)
     /// if a fix was applied, None otherwise. Scans the entire line (both LHS
     /// cast expressions and RHS).
@@ -2537,7 +2243,7 @@ impl EmitNoMarkup {
         None
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::removeOrphanBreaks
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Remove `break;`/`continue;` statements not within any loop or switch.
     /// Uses a pre-scan to mark line ranges that fall inside a loop/switch body
     /// (via brace matching), which is more reliable than a line-level context
@@ -2967,7 +2673,7 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::fixUnaryDerefDeclarations
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Rewrite declarations of variables appearing in `*IDENT` unary dereference
     /// patterns to pointer type, so `*param_N` is legal C.
     fn fix_unary_deref_declarations(text: &str) -> String {
@@ -3085,225 +2791,6 @@ impl EmitNoMarkup {
         out.join("\n")
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::rewriteStructDeref
-    /// Rewrite every `IDENT->field_N` / `IDENT->field_0xN` to
-    /// `*(long *)(IDENT + 0xN)`. Also handles `EXPR)->field_N` (grouped base).
-    fn rewrite_struct_deref(text: &str) -> String {
-        let bytes = text.as_bytes();
-        let mut out = String::with_capacity(text.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            // Detect `->field_` (8 bytes)
-            if i + 8 <= bytes.len() && &bytes[i..i + 8] == b"->field_" {
-                // Walk back to find the base identifier (or closing paren for grouped expr).
-                let mut start = i;
-                while start > 0 {
-                    let b = bytes[start - 1];
-                    if b.is_ascii_alphanumeric() || b == b'_' || b == b')' || b == b']' {
-                        start -= 1;
-                    } else {
-                        break;
-                    }
-                }
-                let base = &text[start..i];
-                // Forward: parse the offset after "field_" — either hex (no 0x) or "0xN"
-                let after = &text[i + 8..];
-                let (offset_str, consumed): (&str, usize) = if after.starts_with("0x") {
-                    let hex_end = after[2..]
-                        .find(|c: char| !c.is_ascii_hexdigit())
-                        .map_or(after.len(), |p| p + 2);
-                    (&after[..hex_end], 8 + hex_end)
-                } else {
-                    let hex_end = after
-                        .find(|c: char| !c.is_ascii_hexdigit())
-                        .unwrap_or(after.len());
-                    (&after[..hex_end], 8 + hex_end)
-                };
-                // Normalize offset to 0xN form
-                let off_val = if let Some(h) = offset_str.strip_prefix("0x") {
-                    u64::from_str_radix(h, 16).ok()
-                } else {
-                    u64::from_str_radix(offset_str, 16).ok()
-                };
-                if let Some(off) = off_val {
-                    // The base identifier was already pushed to `out` byte-by-byte
-                    // as we scanned past it. Truncate `out` back to before the base,
-                    // then emit the cast form. (base length in chars == i - start,
-                    // but `out` accumulated bytes; since we push bytes one at a time,
-                    // we truncate by the byte-length of the base slice.)
-                    let base_byte_len = i - start;
-                    out.truncate(out.len() - base_byte_len);
-                    out.push_str(&format!("*(long *)({} + 0x{:x})", base, off));
-                    i += consumed;
-                    continue;
-                }
-            }
-            out.push(bytes[i] as char);
-            i += 1;
-        }
-        out
-    }
-
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::canonicalizeStructDeref
-    /// Convert `*(varname + N)` and `*varname + N` patterns to `varname->field_N` in C output text.
-    fn canonicalize_struct_deref(text: &str) -> String {
-        // First pass: *(expr + N) → expr->field_N
-        let mut result = String::with_capacity(text.len());
-        let chars: Vec<char> = text.chars().collect();
-        let len = chars.len();
-        let mut i = 0;
-
-        while i < len {
-            // Look for `*(` pattern
-            if i + 1 < len && chars[i] == '*' && chars[i + 1] == '(' {
-                let paren_start = i + 2;
-                let mut depth = 1usize;
-                let mut j = paren_start;
-                while j < len && depth > 0 {
-                    match chars[j] {
-                        '(' => depth += 1,
-                        ')' => depth -= 1,
-                        _ => {}
-                    }
-                    j += 1;
-                }
-                let paren_end = j - 1;
-                let inner: String = chars[paren_start..paren_end].iter().collect();
-                let inner_trim = inner.trim();
-
-                let converted = Self::try_convert_ptr_add(inner_trim);
-                if let Some(ref conv) = converted {
-                    result.push_str(conv);
-                    i = j;
-                    continue;
-                }
-                result.push('*');
-                result.push('(');
-                result.push_str(inner_trim);
-                result.push(')');
-                i = j;
-                continue;
-            }
-            result.push(chars[i]);
-            i += 1;
-        }
-
-        // Second pass: `*varname + N` in comparison context → `varname->field_N`
-        // Pattern: `*WORD + HEXNUM` where WORD is a C identifier and HEXNUM is hex offset
-        let re_result = result.clone();
-        let mut result2 = String::with_capacity(re_result.len());
-        let bytes = re_result.as_bytes();
-        let blen = bytes.len();
-        let mut bi = 0;
-        while bi < blen {
-            // Look for `*` followed by a word char
-            if bytes[bi] == b'*' && bi + 1 < blen && (bytes[bi + 1].is_ascii_alphabetic() || bytes[bi + 1] == b'_') {
-                // Collect the variable name
-                let var_start = bi + 1;
-                let mut var_end = var_start;
-                while var_end < blen && (bytes[var_end].is_ascii_alphanumeric() || bytes[var_end] == b'_') {
-                    var_end += 1;
-                }
-                let var_name = &re_result[var_start..var_end];
-                // Check for ` + N` after the variable name (possibly with spaces)
-                let rest = &re_result[var_end..];
-                let rest_trim = rest.trim_start();
-                if rest_trim.starts_with("+ ") {
-                    let after_plus = rest_trim[2..].trim_start();
-                    // Parse the offset number (hex or decimal)
-                    let (offset_val, offset_len) = if after_plus.starts_with("0x") || after_plus.starts_with("0X") {
-                        let hex_start = 2;
-                        let hex_end = after_plus[hex_start..]
-                                .find(|c: char| !c.is_ascii_hexdigit())
-                                .map_or(after_plus.len(), |p| p + hex_start);
-                        let hex_str = &after_plus[hex_start..hex_end];
-                        (u64::from_str_radix(hex_str, 16).ok(), hex_end)
-                    } else {
-                        let num_end = after_plus
-                                .find(|c: char| !c.is_ascii_digit())
-                                .unwrap_or(after_plus.len());
-                        let num_str = &after_plus[..num_end];
-                        (num_str.parse::<u64>().ok(), num_end)
-                    };
-                    if let Some(off) = offset_val {
-                        if off > 0 && off <= 4096 {
-                            // Emit `*(long *)(var + N)` instead of `var->field_N`.
-                            // We don't track concrete struct layouts; the cast form
-                            // is always legal C regardless of var's declared type.
-                            result2.push_str(&format!("*(long *)({} + 0x{:x})", var_name, off));
-                            // Skip past: var_end already consumed var, now skip whitespace + "+" + whitespace + number
-                            // We know rest = re_result[var_end..]
-                            // spaces_before_plus = rest.len() - rest_trim.len()
-                            // rest_trim starts with "+ " then the number
-                            // offset_len = length of the number string in after_plus
-                            let spaces_before_plus = rest.len() - rest_trim.len();
-                            // rest_trim = "+ " + after_plus
-                            let spaces_after_plus = rest_trim.len() - 2 - after_plus.len(); // always 0 usually
-                            let total_skip = spaces_before_plus + 1 /* '+' */ + 1 /* ' ' */ + spaces_after_plus + offset_len;
-                            bi = var_end + total_skip;
-                            continue;
-                        }
-                    }
-                }
-                // No match — emit the `*varname` as-is
-                result2.push('*');
-                result2.push_str(var_name);
-                bi = var_end;
-                continue;
-            }
-            result2.push(bytes[bi] as char);
-            bi += 1;
-        }
-        result2
-    }
-
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::tryConvertPtrAdd
-    /// Try to convert `expr + N` to `expr->field_N`.
-    /// Returns Some if the pattern matches, None otherwise.
-    fn try_convert_ptr_add(inner: &str) -> Option<String> {
-        // Find the last ` + ` that separates base expression from offset
-        // We need to handle nested parens — find the rightmost top-level `+ `
-        let bytes = inner.as_bytes();
-        let mut depth = 0i32;
-        let mut plus_pos = None;
-        for (i, &b) in bytes.iter().enumerate() {
-            match b {
-                b'(' => depth += 1,
-                b')' => depth -= 1,
-                b'+' if depth == 0 && i > 0 && bytes.get(i - 1) == Some(&b' ')
-                    && bytes.get(i + 1) == Some(&b' ') => {
-                    plus_pos = Some(i);
-                    // Don't break — take the LAST one for right-associativity
-                }
-                _ => {}
-            }
-        }
-
-        let plus_pos = plus_pos?;
-        let base = inner[..plus_pos - 1].trim(); // before " + "
-        let offset_str = inner[plus_pos + 2..].trim(); // after "+ "
-
-        // Parse offset as hex (0xNN) or decimal
-        let offset: u64 = if let Some(hex) = offset_str.strip_prefix("0x") {
-            u64::from_str_radix(hex, 16).ok()?
-        } else {
-            offset_str.parse().ok()?
-        };
-
-        // Only convert if:
-        // 1. Offset is a reasonable struct field offset (0–4096)
-        // 2. Base looks like a variable/expression (not a constant)
-        if offset > 4096 || base.is_empty() { return None; }
-        if base.chars().next()?.is_ascii_digit() { return None; } // base is a literal number
-
-        // Emit `*(long *)(base + N)` instead of `base->field_N`.
-        // We don't track concrete struct layouts, so `->field_N` would require a
-        // backing struct type that may not match reality. The cast-and-deref form
-        // is always legal C regardless of base's declared type and is
-        // semantically equivalent to what Ghidra emits for unknown structs.
-        Some(format!("*(long *)({} + 0x{:x})", base, offset))
-    }
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::hasEnclosingLoopCtx
     /// Scans backward through already-emitted lines.
     // RUGRA-GLUE: signature_opens_function_body (format-layer helper for the
     //   oracle's two-line function-header layout: printc.cc:1590 sets
@@ -3509,7 +2996,7 @@ impl EmitNoMarkup {
         false
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::negateSimpleCondition
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Negate a simple C condition expression for goto-to-if folding.
     /// Handles common patterns: ==, !=, <, >, <=, >=, and compound && / ||.
     fn negate_simple_condition(cond: &str) -> String {
@@ -3545,7 +3032,7 @@ impl EmitNoMarkup {
         format!("!({})", cond)
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::flushFuncRemoveUnused
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     /// Remove unused variable declarations from a function's lines
     /// AND add missing declarations for uVarNNN that appear in body but have no declaration
     fn flush_func_remove_unused(func_lines: &[String], out: &mut Vec<String>) {
@@ -3678,20 +3165,20 @@ impl EmitNoMarkup {
         }
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::doIndent
+    // RUGRA-GLUE: 缓冲 emitter 缩进绘制(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物——oracle tagLine 直写 ostream 缩进空格)
     fn do_indent(&mut self) {
         for _ in 0..self.indent {
             self.output.push_str("  ");
         }
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::isWordBoundary
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物;P6 词频内联的支撑 helper)
     /// Check if char is a word boundary (not alphanumeric or underscore)
     fn is_word_boundary(c: char) -> bool {
         !c.is_ascii_alphanumeric() && c != '_'
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::countWordOccurrences
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物;P6 词频内联的支撑 helper)
     /// Count word-boundary-respecting occurrences of `word` in `text`
     fn count_word_occurrences(text: &str, word: &str) -> usize {
         let mut count = 0;
@@ -3711,7 +3198,7 @@ impl EmitNoMarkup {
         count
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::replaceWord
+    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物;P6 词频内联的支撑 helper)
     /// Replace word-boundary-respecting occurrences of `word` with `replacement`
     fn replace_word(text: &str, word: &str, replacement: &str) -> String {
         let bytes = text.as_bytes();
@@ -3872,12 +3359,12 @@ impl Emit for EmitNoMarkup {
         self.indent -= 1;
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::intoAny
+    // RUGRA-GLUE: Rust Box<dyn Any> downcast 胶水(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
     }
 
-    // Ghidra: prettyprint.hh:547 EmitNoMarkup::asAnyMut
+    // RUGRA-GLUE: Rust Box<dyn Any> downcast 胶水(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
     fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
         Some(self)
     }

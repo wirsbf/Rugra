@@ -7626,6 +7626,33 @@
         "rust_function_ids": [],
         "ghidra_function_ids": []
       }
+    },
+    {
+      "id": "blockstruct_dowhile_absorb_1204",
+      "description": "BlockList cat force-steps (forceOutputNum composite self-loop + forceFalseEdge, block.cc:880-889) enabling the do-while absorption chain: goto->cat->dowhile event sequence and composite out-edge state versus locked Ghidra 12.0.4",
+      "runner": [
+        "tools/run_blockstruct_dowhile_absorb_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/blockstruct_dowhile_absorb_1204.metadata.json",
+        "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+        "rust_base_commit": "f4c2d017ff1bcb00c9102132c616288553c09f7e"
+      },
+      "impact": {
+        "todo_ids": [
+          "BLOCKACTION-DOWHILE-ABSORB-0001"
+        ],
+        "src_files": [
+          "src/blockaction.rs"
+        ],
+        "notes": "main do_while 0->5=golden; 126/126 rule events aligned; cross-review PENDING"
+      }
     }
   ]
 }

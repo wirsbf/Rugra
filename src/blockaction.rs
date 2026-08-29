@@ -2265,6 +2265,76 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
+    // Ghidra: block.cc:880 BlockGraph::forceOutputNum
+    /// While the block has fewer than `target` out-edges, append a SELF edge
+    /// labeled f_loop_edge|f_back_edge on both halves
+    /// (`addInEdge(this, f_loop_edge|f_back_edge)`, block.cc:888). This is
+    /// how the newBlock* factories (block.cc:1710/1744/1768/1791/1812/1831/
+    /// 1850/1867/1882) preserve a back-edge that identifyInternal
+    /// internalized — e.g. a cat chain whose tail branches back into the
+    /// chain: the composite's external out-count is then below the tail's
+    /// pre-merge count, and the restored self loop/back edge is what lets
+    /// ruleBlockDoWhile (cc:1555) absorb the latch.
+    fn force_output_num(bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, target: usize) {
+        let mut w = bl.write().unwrap();
+        while w.size_out() < target {
+            // addInEdge (block.cc:73-80): each half's reverse_index is the
+            // peer list's size BEFORE its push — computed here for both
+            // halves up front, exactly as the oracle does with one call.
+            let out_slot = w.size_out() as i32;
+            let in_slot = w.size_in() as i32;
+            let lab = crate::block::edge_flags::F_LOOP_EDGE
+                | crate::block::edge_flags::F_BACK_EDGE;
+            w.add_out_edge(crate::block::BlockEdge {
+                point: bl.clone(),
+                flags: lab,
+                reverse_index: in_slot,
+            });
+            w.add_in_edge(crate::block::BlockEdge {
+                point: bl.clone(),
+                flags: lab,
+                reverse_index: out_slot,
+            });
+        }
+    }
+
+    // Ghidra: block.cc:1204 BlockGraph::forceFalseEdge
+    /// Ensure the composite's out(0) is `out0` — the pre-merge out(0) of the
+    /// last component, captured before identifyInternal. If out0 is one of
+    /// the merged `components` (oracle: `out0->getParent() == this`,
+    /// block.cc:1209), it was internalized and the composite's self edge
+    /// plays its role, so require out(0) == self instead. Swaps the two out
+    /// edges otherwise (FlowBlock::swapEdges, block.cc:1212-1213). The
+    /// caller guards sizeOut==2 (block.cc:1769), mirroring the oracle's
+    /// LowlevelError precondition.
+    fn force_false_edge_composite(
+        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        out0: Option<&Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+        components: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
+    ) {
+        let Some(out0) = out0 else { return };
+        let target_self = components.iter().any(|c| Arc::ptr_eq(c, out0));
+        let need_swap = {
+            let r = bl.read().unwrap();
+            if r.size_out() != 2 {
+                return;
+            }
+            match r.get_out(0) {
+                Some(e) => {
+                    if target_self {
+                        !Arc::ptr_eq(&e.point, bl)
+                    } else {
+                        !Arc::ptr_eq(&e.point, out0)
+                    }
+                }
+                None => return,
+            }
+        };
+        if need_swap {
+            bl.write().unwrap().swap_edges();
+        }
+    }
+
     // Ghidra: blockaction.cc:1148 CollapseStructure::orderLoopBodies
     /// Consume the copied back-edge labels and order the natural-loop bodies.
     /// Mirrors Ghidra's `CollapseStructure::orderLoopBodies`; label discovery
@@ -4020,6 +4090,27 @@ impl<'a> CollapseStructure<'a> {
             return false;
         }
 
+        // Ghidra newBlockList (block.cc:1762-1764): capture the LAST chain
+        // node's out-edge count — and its out(0) when binary — BEFORE
+        // identifyInternal. A tail out-edge that points back into the chain
+        // becomes internal to the composite; forceOutputNum(outforce) below
+        // must still resurrect it as a composite self loop/back edge, and
+        // forceFalseEdge(out0) must preserve which branch was the false
+        // (fall-through) path. Captured here because identify_internal
+        // deletes/rewrites the tail's edge halves.
+        let (outforce, out0) = {
+            let last = nodes.last().unwrap().read().unwrap();
+            let n = last.size_out();
+            (
+                n,
+                if n == 2 {
+                    last.get_out(0).map(|e| e.point.clone())
+                } else {
+                    None
+                },
+            )
+        };
+
         // Consume all nodes except the first (block stays at install_idx=i).
         // Ghidra newBlockList(nodes) passes ALL nodes to identifyInternal; here
         // block sits at install_idx so we consume nodes[1..].
@@ -4029,8 +4120,21 @@ impl<'a> CollapseStructure<'a> {
             .map(|n| n.read().unwrap().get_index())
             .collect();
         let list_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
-            Arc::new(RwLock::new(BlockList::new(block_idx, nodes)));
+            Arc::new(RwLock::new(BlockList::new(block_idx, nodes.clone())));
         self.identify_internal(&list_block, &consumed, i);
+        // Ghidra newBlockList (block.cc:1768-1770): forceOutputNum(outforce)
+        // + forceFalseEdge(out0) when binary. The force step is what keeps a
+        // chain-internal back-edge alive: identifyInternal moved it inside
+        // the composite, leaving the composite with fewer external outs than
+        // the tail had — forceOutputNum appends the composite self
+        // loop/back edge (block.cc:888) so ruleBlockDoWhile (cc:1555) can
+        // absorb the latch (the do-while absorption chain:
+        // goto/if_goto → cat → dowhile on the @321a/@3225/@28ec/@28f7
+        // duplicated-address latch pairs).
+        Self::force_output_num(&list_block, outforce);
+        if list_block.read().unwrap().size_out() == 2 {
+            Self::force_false_edge_composite(&list_block, out0.as_ref(), &nodes);
+        }
         self.update_switch_case_reference(block_idx, &list_block);
         self.structure_change_count += 1;
         true

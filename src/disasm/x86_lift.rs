@@ -106,6 +106,12 @@ impl X86Lifter {
             // the 1-bit flags region (CF..F5), so every rip-relative memory
             // operand built its address off a varnode overlapping the flags.
             "rip" | "eip" => 0x288, // Instruction pointer
+            // Segment selectors live above the GPR/flag region in the locked
+            // sla layout (dumped via examples/x86push_probe.rs: PUSH FS lifts
+            // INT_ZEXT(register:0x108:2), PUSH GS 0x10a:2 — x86-64.sla
+            // register space, 2-byte selector size).
+            "fs" => 0x108,
+            "gs" => 0x10a,
             _ => return None,
         };
         Some(VarnodeRaw::new(AddressSpace::Register, offset, size))
@@ -115,6 +121,13 @@ impl X86Lifter {
     /// Map register name to offset (shared with get_register).
     fn reg_offset(name: &str) -> u64 {
         Self::get_register(name, 8).map(|v| v.offset).unwrap_or(0)
+    }
+
+    // RUGRA-GLUE: 64-bit view of a named GPR (address-table inputs are
+    // full-width in the oracle push88 dump — base/index always 8 bytes).
+    /// Full 64-bit register varnode by name.
+    fn get_register_64(name: &str) -> Option<VarnodeRaw> {
+        Self::get_register(name, 8)
     }
 
     // RUGRA-GLUE: x86 flag pcode for the iced path (X86LIFT-FLAG-PCODE-0001).
@@ -1294,6 +1307,250 @@ impl X86Lifter {
         }
     }
 
+    // RUGRA-GLUE: ia.sinc :PUSH constructor family + push88 macro (x86-64
+    // language of the locked oracle; semantics dumped op-for-op from
+    // sleigh_specs/x86-64.sla via examples/x86push_probe.rs,
+    // /tmp/w-push88-pushprobe.out). Every PUSH form first materializes the
+    // source into a local val, then runs the push88 tail:
+    //   RSP = RSP - sizeof(val);  *:sizeof(val) RSP = val
+    // i.e. INT_SUB out=RSP:8 in=(RSP:8, const sizeof:8) THEN
+    // STORE in=(ram-space-const, RSP:8, val). Per-form value ops (oracle):
+    //   imm8/imm32 (6a/68) : COPY val:8 <- const sext(imm):8
+    //   imm16 (66 68)      : COPY val:2 <- const imm:2   (no extension)
+    //   reg (50+rd/FF /6)  : COPY val:s <- reg:s   (rsp reads PRE-decrement)
+    //   fs/gs (0f a0/a8)   : INT_ZEXT val:8 <- seg:2 (FS=0x108, GS=0x10a)
+    //   rm mem (FF /6)     : address ops + LOAD tl:s + COPY val:s <- tl:s
+    //   rip-rel / absolute : COPY val:s <- ram:abs:s (no LOAD, no addr ops —
+    //                         the sla folds a constant address into a direct
+    //                         ram-space varnode input)
+    /// Lift push (source materialization, RSP decrement, stack STORE).
+    fn lift_push(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        let Some(op0) = inst.operands.first() else {
+            return;
+        };
+        let rsp = match Self::get_register("rsp", 8) {
+            Some(v) => v,
+            None => return,
+        };
+        // val = <source operand>  (constructor local init; size = operand
+        // size — 8 for 64-bit forms, 2 for 66-prefixed 16-bit forms)
+        let Some(val) = self.push_source_val(op0, ops) else {
+            return;
+        };
+
+        // push88 tail — RSP = RSP - sizeof(val)
+        let mut op_sub = PcodeOpRaw::new(OpCode::CPUI_INT_SUB as i32);
+        op_sub.add_input(rsp.clone());
+        op_sub.add_input(Self::const_vn(val.size as u64, 8));
+        op_sub.set_output(rsp.clone());
+        ops.push(op_sub);
+        // *:sizeof(val) RSP = val   (STORE address input IS the RSP varnode,
+        // i.e. the post-decrement value)
+        let mut op_store = PcodeOpRaw::new(OpCode::CPUI_STORE as i32);
+        op_store.add_input(Self::ram_space_const());
+        op_store.add_input(rsp);
+        op_store.add_input(val);
+        ops.push(op_store);
+    }
+
+    // RUGRA-GLUE: ia.sinc :PUSH constructor local-init `val = <source>` —
+    // the per-form value materialization listed in the lift_push evidence
+    // table above (reg COPY / seg INT_ZEXT / imm COPY with per-width
+    // extension / rm addr+LOAD+COPY / constant-address direct-ram COPY).
+    /// Materialize the push source operand into a local val varnode.
+    fn push_source_val(
+        &mut self,
+        op0: &crate::disasm::Operand,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) -> Option<VarnodeRaw> {
+        match op0 {
+            crate::disasm::Operand::Register { name, size } => {
+                // PUSH FS/GS (0f a0/a8): val:8 = zext(seg:2) — 2-byte
+                // selector varnodes (sla dump), all other regs COPY at the
+                // operand's own size.
+                if name == "fs" || name == "gs" {
+                    let seg = Self::get_register(name, 2)?;
+                    let tmp = self.alloc_tmp(8);
+                    let mut op = PcodeOpRaw::new(OpCode::CPUI_INT_ZEXT as i32);
+                    op.add_input(seg);
+                    op.set_output(tmp.clone());
+                    ops.push(op);
+                    Some(tmp)
+                } else {
+                    let reg = Self::get_register(name, *size)?;
+                    let tmp = self.alloc_tmp(*size);
+                    let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+                    op.add_input(reg);
+                    op.set_output(tmp.clone());
+                    ops.push(op);
+                    Some(tmp)
+                }
+            }
+            crate::disasm::Operand::Immediate { value, size } => match *size {
+                // imm8 (6a) / imm32 (68): sign-extended to a 64-bit constant
+                // (oracle: 0x9c -> 0xffffffffffffff9c). The truncating cast
+                // normalizes both raw and pre-extended immediate encodings
+                // to the sign-extended value.
+                1 | 4 => {
+                    let shift = 64 - 8 * *size as u64;
+                    let ext = (*value << shift) >> shift;
+                    let tmp = self.alloc_tmp(8);
+                    let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+                    op.add_input(Self::const_vn(ext as u64, 8));
+                    op.set_output(tmp.clone());
+                    ops.push(op);
+                    Some(tmp)
+                }
+                // imm16 (66 68): raw 16-bit constant, val:2 (no extension)
+                2 => {
+                    let tmp = self.alloc_tmp(2);
+                    let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+                    op.add_input(Self::const_vn(*value as u64, 2));
+                    op.set_output(tmp.clone());
+                    ops.push(op);
+                    Some(tmp)
+                }
+                _ => None,
+            },
+            crate::disasm::Operand::Memory {
+                base,
+                index,
+                scale,
+                displacement,
+                size,
+            } => {
+                // Constant address (rip-relative, or absolute disp-only):
+                // oracle folds to a direct ram-space varnode input of COPY —
+                // no LOAD, no address ops.
+                if base.as_deref() == Some("rip")
+                    || (base.is_none() && index.is_none() && *displacement != 0)
+                {
+                    // Rugra's X86_64Disassembler resolves a rip-relative
+                    // operand's displacement to the ABSOLUTE target already
+                    // (probe: `ff 35 34 12 00 00` @0x1036 reports
+                    // displacement=0x2270=addr+len+0x1234, text
+                    // `[rel 2270h]`; oracle lifts ram:0x2270) — so both the
+                    // rip form and the absolute-disp form take the
+                    // displacement as the ram offset directly.
+                    let abs = *displacement as u64;
+                    let tmp = self.alloc_tmp(*size);
+                    let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+                    op.add_input(VarnodeRaw::new(AddressSpace::Ram, abs, *size));
+                    op.set_output(tmp.clone());
+                    ops.push(op);
+                    Some(tmp)
+                } else {
+                    // Register-indirect: address ops per the oracle's
+                    // modrm/SIB table shapes, then LOAD + COPY.
+                    let addr = self.compute_push_src_addr(base, index, scale, displacement, ops)?;
+                    let tl = self.emit_load(*size, &addr, ops);
+                    let tmp = self.alloc_tmp(*size);
+                    let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+                    op.add_input(tl);
+                    op.set_output(tmp.clone());
+                    ops.push(op);
+                    Some(tmp)
+                }
+            }
+        }
+    }
+
+    // RUGRA-GLUE: ia.sinc RM64/ModRM+SIB address tables as instantiated by
+    // the :PUSH rm constructor (oracle op-for-op from x86-64.sla,
+    // examples/x86push_probe.rs). SIB-ness is recoverable from the operand
+    // shape alone: an index register, or a base that has no modrm-direct
+    // encoding (rsp/r12 mirror as SIB base=100), means the SIB tables. The
+    // two tables differ in op ORDER and operand order:
+    //   modrm-direct [base+d] : INT_ADD(base, d)         — base first
+    //   SIB [base+d]          : INT_ADD(d, base)         — disp first
+    //   SIB [base+idx*s]      : INT_MULT(idx, s) [s=1 still emitted],
+    //                          then INT_ADD(base, product)
+    //   SIB [base+idx*s+d]    : INT_ADD(d, base), INT_MULT(idx, s),
+    //                          INT_ADD(t1, product)
+    //   SIB [idx*s+d] (no base): INT_MULT(idx, s), INT_ADD(d, product)
+    //   d == 0                : folded — address is the bare base/product
+    /// Compute a push memory source address, emitting oracle-ordered ops.
+    fn compute_push_src_addr(
+        &mut self,
+        base: &Option<String>,
+        index: &Option<String>,
+        scale: &i32,
+        displacement: &i64,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) -> Option<VarnodeRaw> {
+        let base_vn = base.as_deref().and_then(Self::get_register_64);
+        let index_vn = index.as_deref().and_then(Self::get_register_64);
+        // rsp/r12 have no modrm-direct encoding (rm=100 = SIB follow);
+        // an index register likewise forces the SIB tables.
+        let sib = index_vn.is_some() || matches!(base.as_deref(), Some("rsp") | Some("r12"));
+        let emit_add = |this: &mut Self, a: VarnodeRaw, b: VarnodeRaw, ops: &mut Vec<PcodeOpRaw>| {
+            let tmp = this.alloc_tmp(8);
+            let mut op = PcodeOpRaw::new(OpCode::CPUI_INT_ADD as i32);
+            op.add_input(a);
+            op.add_input(b);
+            op.set_output(tmp.clone());
+            ops.push(op);
+            tmp
+        };
+        // SIB always multiplies the index by the scale byte, scale=1 included
+        let emit_mult = |this: &mut Self, ops: &mut Vec<PcodeOpRaw>| -> Option<VarnodeRaw> {
+            let idx = index_vn?;
+            let tmp = this.alloc_tmp(8);
+            let mut op = PcodeOpRaw::new(OpCode::CPUI_INT_MULT as i32);
+            op.add_input(idx);
+            op.add_input(Self::const_vn(*scale as u64, 8));
+            op.set_output(tmp.clone());
+            ops.push(op);
+            Some(tmp)
+        };
+        if sib {
+            match (base_vn, index_vn.is_some(), *displacement != 0) {
+                // [rsp+0x10] / [r12+0x160]: INT_ADD(disp, base)
+                (Some(b), false, true) => {
+                    let d = Self::const_vn(*displacement as u64, 8);
+                    Some(emit_add(self, d, b, ops))
+                }
+                // [rax+rbx*4]: INT_MULT first, then INT_ADD(base, product)
+                (Some(b), true, false) => {
+                    let p = emit_mult(self, ops)?;
+                    Some(emit_add(self, b, p, ops))
+                }
+                // [r8+rbx*4-0xC]: INT_ADD(disp, base) FIRST, then
+                // INT_MULT(idx, scale), then INT_ADD(t1, product)
+                (Some(b), true, true) => {
+                    let d = Self::const_vn(*displacement as u64, 8);
+                    let t1 = emit_add(self, d, b, ops);
+                    let p = emit_mult(self, ops)?;
+                    Some(emit_add(self, t1, p, ops))
+                }
+                // [rbx*4+0x12345678]: INT_MULT first, then INT_ADD(disp, product)
+                (None, true, true) => {
+                    let p = emit_mult(self, ops)?;
+                    let d = Self::const_vn(*displacement as u64, 8);
+                    Some(emit_add(self, d, p, ops))
+                }
+                // [rbx*4]: product alone
+                (None, true, false) => emit_mult(self, ops),
+                // [rsp] / [r12]: bare base
+                (Some(b), false, false) => Some(b),
+                // no base, no index, no disp: nothing to address — caller
+                // (rip/abs routing) never reaches here
+                (None, false, _) => None,
+            }
+        } else {
+            match (base_vn, *displacement != 0) {
+                // [rbp-8] / [r15+0x10]: INT_ADD(base, disp)
+                (Some(b), true) => {
+                    let d = Self::const_vn(*displacement as u64, 8);
+                    Some(emit_add(self, b, d, ops))
+                }
+                // [rax] / [rdx]: bare base
+                (Some(b), false) => Some(b),
+                (None, _) => None,
+            }
+        }
+    }
+
     // RUGRA-GLUE: ia.sinc :CWDE/:CDQE (ia.sinc:3004-3006) — `EAX = sext(AX)`
     /// Lift cwde/cdqe (INT_SEXT into the wider accumulator; 32-bit cwde adds
     /// the check_EAX_dest zext).
@@ -1988,7 +2245,10 @@ impl X86Lifter {
                     }
                 }
             }
-            "push" | "call" | "ret" => {
+            "push" => {
+                self.lift_push(inst, &mut ops);
+            }
+            "call" | "ret" => {
                 if mnemonic == "call" {
                     // Emit CPUI_CALL with target address
                     let target_addr = if let Some(ref bt) = inst.metadata.branch_target {

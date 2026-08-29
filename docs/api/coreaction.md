@@ -1,5 +1,41 @@
 # `coreaction.rs` API Reference
 
+## 2026-08-30：castInput 双层 double-cast guard 臂序（CASTINPUT-ARMORDER-0001 / F3）
+
+- `cast_input` 的 double-cast guard 恢复 oracle 的**两层嵌套**（cc:2673-2686）：外层
+  `isWritten && def==CAST`（cc:2673）无论 implied 与否都占用该臂；只有内层（cc:2674）
+  判 `isImplied`。def=CAST 且非 implied 时整条 else-if 链（常量臂 cc:2687 /
+  PTRSUB0 / tryResolutionAdjustment）被跳过，vnin 保持 vn 直接落穿 CAST 插入。
+  此前 Rugra 把两层合并成 `def==CAST && isImplied` 单条件（合并臂序缺陷），使
+  "def=CAST 非 implied + isConstant" 误入常量臂（原地 retype、无插入）。
+- 单测 `test_cast_input_def_cast_non_implied_constant_skips_const_arm`：手工 wiring
+  （绕过双侧 bank 对 const 输出的同构拒绝，镜像 Ghidra `PcodeOp::setOutput +
+  Varnode::setDef`——setDef 设 WRITTEN flag）构造 CAST 产出的非 implied 常量空间
+  varnode，断言常量臂未触发（类型保持 ptr）+ 落穿插入 CAST（其输入经
+  `opSetInput` 的 const dedup（funcdata_op.cc:108-115，双侧同构）为同值复制）。
+- fixture：`ptrsub_switch_cast_1204` 新增 `cast_arm_fork` case，19→21 records
+  与锁定 oracle 字节一致（负控：合并形态下 constC 被常量臂 retype 成 int8 且
+  无 CAST 插入，与 oracle 分叉）。
+
+## 2026-08-30：isOpIdentical typedef 链剥离（COREACTION-ISOPIDENTICAL-TYPEDEF-0001 / F2）
+
+- `is_op_identical`（cc:2469-2481）新增第三参数 `Option<&TypeFactory>`，在双 PTR 同步
+  下探（cc:2472-2474）之后、身份比较（cc:2480）之前，逐侧独立执行
+  `while(getTypedef())` typedef 链剥离（cc:2476-2479）。Ghidra 的 `typedefImm` 是
+  Datatype 实例字段（type.hh:244）；Rugra 经 TypeFactory 的 typedef 表
+  （`get_typedef_target(name)`，typefactory.rs，`get_typedef` 建立的 name→stripped
+  映射）解析同一链，对 factory-interned 类型与对象身份等价（名字碰撞由
+  `get_typedef` 的 find_by_name 检查 panic 拒绝，链无环）。detached Funcdata（无
+  arch factory）保持裸指针比较（RUGRA-GLUE 防御；Ghidra 恒有 factory）。
+- 语义顺序：typedef-of-pointer 在 PTR 下探中丢失别名；typedef pointee 保留下探后
+  剥离。typedef 输入下 `cast_output` 的 typelock force 判定（cc:2566）由误真
+  （多插 CAST）修正为 Ghidra 的不插。
+- 单测 `test_is_op_identical_strips_typedef_chain` 锁定：alias↔base、链式 typedef、
+  指针下探优先序、distinct base 负例、无 factory 退化负例。
+- fixture：`ptrsub_switch_cast_1204` 新增 `typedef_typelock` case（implied+typelock
+  的 typedef 输出走 force 判定），17→19 records 与锁定 oracle 字节一致（负控：
+  修复前该 case 双侧分叉——Rugra 误插 CAST）。
+
 ## 2026-08-30：castOutput 完整臂 + castInput guard/const/explicit（PTRSUB-SWITCH-CAST-RESIDUAL-0001 steps 3+4）
 
 - `cast_output`（cc:2532-2616）：token 分发补 PTRADD 臂（typeop.cc:2244 = in0 high
@@ -2190,3 +2226,21 @@ getparameter.constprop.0 678→669、my_get_token 57→55,其余 121 函数零�
 构造出 sizeOut==2 且双出口同块的输入;Ghidra 拒绝一切 match,缺门则对同一边做两次
 removeEdge/moveOutEdge 手术 → find_out_index panic 或 CFG 损坏。修复=计算出 exita/exitb 后
 立即 `Arc::ptr_eq(&exita,&exitb) → continue`。当前语料不触发(单向加门,零新 join 路径)。
+
+## 2026-08-30:ActionDoNothing 忠实重写(HTTPD-EMPTYELSE-DONOTHING-0001)
+
+httpd 空 else 缺陷族根因:旧实现调 `splice_block_basic`(其自创单入守卫拒绝一切
+join 目标),而 Ghidra `ActionDoNothing::apply`(coreaction.cc:3466-3490)走
+`removeDoNothingBlock` → `blockRemoveInternal`(funcdata_block.cc:254-320,支持多入
+目标:pushMultiequals + 出块 MULTIEQUAL 输入拼接 + removeFromFlow 边重定向)。
+守卫补齐:`BlockBasic::isDoNothing` switch-target 门(block.cc:2604-2613,辅助
+`block_is_do_nothing`)、自环 f_donothing_loop 置位+警告(block.hh:100)、
+`BlockBasic::unblockedMulti`(block.cc:2534-2571,辅助 `block_unblocked_multi`,
+MULTIEQUAL 同一性解析)。移除返回 CHANGE 镜像 count+=1,驱动 rule_repeatapply
+fullloop 重跑 → mainloop → ActionBlockStructure 在 structureReset 清空后的
+sblocks 上对净化 CFG 二次结构化(oracle 探桩实证:
+ap_make_dirstr_prefix 第一轮 IfElse MATCH(空 fc),donothing 删 0x2e8d6/0x2e902
+后第二轮 PROPERIF MATCH 单臂 if)。测试:
+`test_action_donothing_removes_join_targeted_jmp_island`。
+E2E:httpd defects 7→3、skeleton 2317→2257;curl 3076/0/0(基线 3089,−13)。
+机制 C 白名单(主管线 Action):Cross-Review PENDING。

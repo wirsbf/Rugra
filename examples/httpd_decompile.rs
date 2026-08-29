@@ -279,6 +279,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let handle = std::thread::spawn(move || -> Option<String> {
             let mut fd = Funcdata::new(&func_name, Address::new(vaddr), func_size as i32);
+            // HTTPD-STACKSLOT-FOLD-0001: Ghidra's Funcdata constructor always
+            // binds its Architecture (`glb = scope->getArch()`, funcdata.cc:48)
+            // — the headless oracle that produced
+            // tests/golden/ghidra_httpd_1204.c decompiled every function with
+            // its BfdArchitecture attached, and `RuleLoadVarnode::
+            // correctSpacebase` / `RuleStoreVarnode` (ruleaction.cc:4173-4341)
+            // dereference `data.getArch()->getSpaceBySpacebase(...)`
+            // unconditionally. Rugra's arch-less Funcdata made those rules
+            // take the miss branch for the input-RSP case, so spacebase-
+            // relative STORE/LOAD (`push`/`sub rsp` prologues and `mov
+            // [rsp+k], reg` spills) never reindexed into the stack space and
+            // printed as raw `*(..)(in_RSP-8)` pointer expressions (148
+            // in_RSP lines). Attach the canonical x86-64 Architecture —
+            // exactly what curl's runner does with its worker arch at
+            // curl_decompile.rs:2109/2471 — restoring the oracle invariant.
+            // E2E: httpd skeleton 2546→2230, defects 5→5, numbering 0→0,
+            // in_RSP lines 148→0 (2026-08-30).
+            fd.set_arch(std::sync::Arc::new(rugra::arch::Architecture::new()));
             fd.external_prototypes = proto_db;
             for (&addr, n) in &sym_table { fd.add_symbol(addr, n.clone()); }
             for (&addr, s) in &str_table { fd.add_string(addr, s.clone()); }

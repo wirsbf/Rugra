@@ -3962,7 +3962,7 @@ impl PrintC {
                     self.emit_flow_block(&original, graph, emitted);
                 }
             }
-            BlockType::Goto => self.emit_block_goto(block_arc),
+            BlockType::Goto => self.emit_block_goto(block_arc, graph, emitted),
             BlockType::If => self.emit_structured_if(block_arc, graph, emitted)
             ,
             BlockType::WhileDo => self.emit_structured_whiledo(block_arc, graph, emitted)
@@ -4451,20 +4451,39 @@ impl PrintC {
                 // Structured do-while loop
                 let block = block_arc.read().unwrap();
                 let dowhile_block = block.as_any().downcast_ref::<BlockDoWhile>();
-                if let Some(_dowhile_data) = dowhile_block {
+                if let Some(dowhile_data) = dowhile_block {
                     self.emit.tag_line(0);
-                    self.emit.print("do ");
+                    // cc:3078: print(KEYWORD_DO) — bare keyword, no trailing
+                    // space; the brace emitter supplies " {" (same_line
+                    // openBraceIndent), so `do {` gets exactly one space on
+                    // plain-text emitters (EmitNoMarkup does not collapse
+                    // whitespace runs).
+                    self.emit.print("do");
                     self.emit.begin_block();
-                    // In a do-while loop, the 'condition' block IS the body, but wait:
-                    // we merged true_target into cond_idx. Actually, we should just emit the condition block inside the body
-                    // because the ops are currently interleaved!
-                    // Wait, Ghidra's BlockDoWhile usually has a separate condition block. But for now, we just emit its ops.
                     self.loop_depth += 1;
                     // Scope seen_return: a do-while body is re-entered each
                     // iteration; a prior RETURN must not suppress it.
                     let saved = self.seen_return;
                     self.seen_return = false;
-                    self.emit_block_ops(block_arc, true);
+                    // cc:3080-3083: pushMod(); beginBlock(getBlock(0));
+                    // setMod(no_branch); getBlock(0)->emit(this) — the body
+                    // is emitted via the structured virtual dispatch, never
+                    // a flat op walk. PRINTC-NESTED-DOWHILE-EMIT-0001: a
+                    // flat emit_block_ops(dowhile_arc) collapses structured
+                    // body children — the break-guard `if (lVar13 == 0)
+                    // break;` If inside the main strlen loops (golden keeps
+                    // it inside `do { ... } while`) and any nested loop
+                    // compound never dispatch. Rugra's BlockDoWhile
+                    // `condition` field IS Ghidra's getBlock(0) (the single
+                    // body subblock, block.hh:727); dispatch it exactly like
+                    // the whiledo sibling's emit_block_structured(body).
+                    // NO_BRANCH is already set by the caller-visible mod
+                    // stack? No: set it here per cc:3082 — the body visit
+                    // must suppress the latch CBRANCH.
+                    self.push_mod();
+                    self.set_mod(print_mods::NO_BRANCH);
+                    self.emit_block_structured(&dowhile_data.condition.clone(), graph, emitted);
+                    self.pop_mod();
                     self.seen_return = saved;
                     self.loop_depth -= 1;
                     self.emit.end_block();
@@ -4541,7 +4560,9 @@ impl PrintC {
         let inf_block = block.as_any().downcast_ref::<BlockInfLoop>();
         if let Some(inf_data) = inf_block {
             self.emit.tag_line(0);
-            self.emit.print("do ");
+            // cc:3106: print(KEYWORD_DO) — bare keyword (same one-space
+            // brace contract as emit_structured_dowhile cc:3078).
+            self.emit.print("do");
             self.emit.begin_block();
             self.loop_depth += 1;
             // Scope seen_return: an inf-loop body is re-entered each
@@ -12422,12 +12443,43 @@ impl PrintC {
     /// BlockGoto::parent, so the null arm carries today.
     pub fn emit_block_goto(
         &mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<usize>,
     ) {
         // cc:2769-2770: pushMod(); setMod(no_branch);
         self.push_mod();
         self.set_mod(print_mods::NO_BRANCH);
         // cc:2771: bl->getBlock(0)->emit(this);
-        self.emit_block_ops(block_arc, true);
+        // PRINTC-NESTED-DOWHILE-EMIT-0001: Ghidra dispatches the WRAPPED
+        // block through the virtual emit — structural recursion, never a
+        // flat op-list walk. A Goto wrapping a List/If/DoWhile composite
+        // must emit the nested structure (observed: main's else-if arm
+        // Goto(208) wrapping If(150) with DoWhile @0x28ec/@0x28f7 — flat
+        // emission collapsed both loops into single-iteration statements,
+        // main `do {` count 3 vs golden 5). A Basic/Copy wrap keeps the
+        // emit_block_ops channel: the goto arc's aggregated op list equals
+        // the wrapped leaf's ops, and that channel carries the
+        // GOTO-LABEL-UNPRINTED-0001 backpatch + discovery bookkeeping that
+        // the virtual-dispatch leaf path does not run.
+        let wrapped = {
+            let bl = block_arc.read().unwrap();
+            bl.as_any()
+                .downcast_ref::<crate::block::BlockGoto>()
+                .and_then(|g| g.wrapped.clone())
+        };
+        match wrapped {
+            Some(inner)
+                if !matches!(
+                    inner.read().unwrap().get_type(),
+                    crate::block::BlockType::Basic | crate::block::BlockType::Copy
+                ) =>
+            {
+                self.emit_block_structured(&inner, graph, emitted);
+            }
+            _ => {
+                self.emit_block_ops(block_arc, true);
+            }
+        }
         // cc:2772: popMod();
         self.pop_mod();
         // cc:2775-2778: if (bl->gotoPrints()) { emit->tagLine(); emitGotoStatement(...); }

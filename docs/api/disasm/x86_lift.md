@@ -112,3 +112,50 @@
   compute_memaddr 既有形态一致,值等价)。
 - 残余:push(push88:mysave=x;RSP-=8;STORE)仍在零-op 状态 — 影响
   httpd 全部函数序言(1385 处),单独 commit 评估爆炸半径后再落。
+
+### 2026-08-30:X86LIFT-PUSH88-0001 — push 全形态(w-push88)
+- `push` = ia.sinc :PUSH 构造器族 + `push88` 宏(`RSP = RSP - sizeof(v);
+  *:sizeof(v) RSP = v`):所有形态先物化源到局部 val,再 INT_SUB
+  `out=RSP:8 in=(RSP:8, const size:8)`,再 `STORE in=(ramconst, RSP:8, val)`。
+  按形态(oracle dump,examples/x86push_probe.rs):
+  - imm8(6a)/imm32(68):`COPY val:8 ← const sext(imm):8`(0x9c→
+    0xffffffffffffff9c);imm16(66 68):`COPY val:2 ← const imm:2` 无扩展,
+    INT_SUB/STORE 尺寸为 2。
+  - reg(50+rd/41 50+rd/FF /6):`COPY val:s ← reg:s`;push rsp 读的是
+    INT_SUB **之前**的 RSP(COPY 在前,序言语义正确)。
+  - fs/gs(0f a0/a8):`INT_ZEXT val:8 ← seg:2`(FS=register:0x108:2、
+    GS=0x10a:2,get_register 新增两段寄存器)。
+  - rm 内存(FF /6):地址 op + `LOAD tl:s` + `COPY val:s ← tl:s`。地址
+    op 序按 oracle modrm/SIB 两张表**不同序**:modrm-direct [base+d] =
+    `INT_ADD(base,d)`(base 在前);SIB([rsp/r12+..] 或带 index)=
+    `INT_ADD(d,base)`(disp 在前)、`INT_MULT(idx,scale)`(**scale=1 也
+    发射**)、`INT_ADD(t1,t2)`;SIB 无 disp = MULT 先,再 `INT_ADD(base,prod)`;
+    SIB 无 base = MULT 先,再 `INT_ADD(d,prod)`;d=0 全部折叠为裸 base/
+    product。SIB 判定从 Operand 形状可恢复:index 存在,或 base∈{rsp,r12}
+    (rm=100 无 modrm-direct 编码)。新 helper `compute_push_src_addr`
+    (独立于 ALU 路径的 compute_mem_addr,后者已有自己的双侧证据)。
+  - 常量地址(rip-relative / 绝对 disp-only):**无 LOAD、无地址 op** —
+    sla 把常量地址折叠为 ram 空间 varnode 直接作为 COPY 输入
+    (`COPY val:s ← ram:abs:s`)。注意 Rugra 反汇编器对 rip 操作数报告的
+    displacement 已是解析后的**绝对目标**(探针实证 `ff 35 ..`@0x1036 报
+    0x2270=addr+len+delta),直接取用,不可再加 addr+len。
+- 双侧证据:examples/x86push_probe.rs 对 33 个合成形态(push imm/reg/mem、
+  rsp/rbp 特例、REX、64/32/16-bit、SIB 各形、fs/gs)做 sla 直通 dump vs
+  iced 提升的**规范化逐 op 对比**(uniq 临时 id 按首现序规范化),33/33
+  PASS,非零退出码作为 fixture 门禁;httpd 语料 1385 处 push 的形态普查
+  (imm 23/mem 65/reg 1297)与真实字节 oracle 样本同附。
+- E2E 爆炸半径(评估结论):curl(SLEIGH 路径)**字节不变**(3119/0/0,
+  cmp 同零);cargo test 失败集与 master 完全一致(17 个既有失败);
+  httpd(iced 路径)2325/7/0 → 2574/7/0:defects/numbering 不变,skeleton
+  +249 全部来自 push STORE/INT_SUB 首次进入 iced 下游管线暴露的**既有**
+  缺口(此前 push 0-op 被掩盖):
+  1. SP 相对 STORE 未折叠为 stack 槽位(Ghidra 由 spacebase/heritage 将
+     `*RSP-k` 重索引进 stack 空间并经 push/pop 数据流死码消除序言),
+     Rugra iced 路径以 `*(undefined8*)(in_RSP-8)=..` 指针表达式打印
+     (in_RSP 行 52→150);
+  2. "analysis" 组内某子步在有 STORE 压力时把 CALL in(0) coderef 替换为
+     const:0(FUN_0 症状 63→65,examples/x86push_dbg.rs 前缀二分定位:
+     prefix 18→19 即 analysis 组引入);
+  3. CAST 插入后 STORE 地址停在 unique(见 dbg 探针 surviving ops)。
+  以上均为 coreaction/heritage/varmap 侧缺口,不在本 write-set,待主
+  agent 派工;lifter 侧 33/33 op-for-op MATCH 无差异。
