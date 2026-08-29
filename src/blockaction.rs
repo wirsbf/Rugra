@@ -1115,11 +1115,28 @@ pub struct CollapseStructure<'a> {
     /// loopbodyiter: current position in loop_order being processed by
     /// update_loop_body (blockaction.hh:89). -1 = not started.
     loopbodyiter: i32,
+    /// Ghidra-equivalent graph LIST order over Rugra's flat-Vec slots (see
+    /// `virtual_list`). Ghidra's collapse graph physically removes consumed
+    /// nodes (identifyInternal, block.cc:953-960) and every newBlock*
+    /// factory appends the composite at the END (addBlock, block.cc:862-875
+    /// `list.push_back`); every position-order consumer iterates that
+    /// mutating list, including its skip side effects: when a rule consumes
+    /// the visited block plus its list neighbors, the survivors shift left
+    /// under the already-incremented scan index and get skipped until the
+    /// next fixpoint pass (collapseInternal cc:1783-1784 `index += 1`
+    /// happens BEFORE the rules run). Rugra keeps blocks at fixed slots
+    /// (zombies via absorbed_into), so this Vec mirrors the oracle's list
+    /// exactly: initialized to the copy graph's order, identify_internal
+    /// removes consumed entries and pushes the install slot at the end.
+    virtual_list: Vec<i32>,
 }
 
 impl<'a> CollapseStructure<'a> {
     // Ghidra: blockaction.cc:1870 CollapseStructure::CollapseStructure
     pub fn new(graph: &'a mut BlockGraph, name: &str) -> Self {
+        // The initial Ghidra list order = the copy graph's block order
+        // (slots 0..n); identify_internal mutates it thereafter.
+        let n = graph.get_size() as i32;
         Self {
             graph,
             structure_change_count: 0,
@@ -1134,8 +1151,16 @@ impl<'a> CollapseStructure<'a> {
             likelyiter: 0,
             likelylistfull: false,
             loopbodyiter: -1,
+            virtual_list: (0..n).collect(),
         }
     }
+
+    // (The `virtual_list` field IS the Ghidra list-order mirror — see its
+    // doc comment. Entries are always LIVE slots: identify_internal removes
+    // the consumed entries (plus the install slot's old occupant) and pushes
+    // the install slot at the end, so iteration needs no extra consumed
+    // filtering — exactly Ghidra's mutating `list` semantics, including the
+    // shift-past-the-scan-index skips.)
 
     // Ghidra: blockaction.cc:1768 CollapseStructure::collapseInternal
     /// Run the 8-rule fixpoint + IfNoExit/CaseFallthru second pass, optionally
@@ -1179,35 +1204,39 @@ impl<'a> CollapseStructure<'a> {
                 }
                 let change_before = self.structure_change_count;
                 isolated_count = 0;
-                let size = self.graph.get_size();
+                // cc:1776-1811: the scan walks Ghidra's MUTATING list by
+                // position: `index += 1` BEFORE the rules run, consumed
+                // blocks removed (identifyInternal), composites appended
+                // (addBlock), bound re-evaluated (`index <
+                // graph.getSize()`). Walking `virtual_list` (which
+                // identify_internal retains/pushes in exactly that pattern)
+                // reproduces the oracle's semantics 1:1, including the
+                // shift-skips: a rule consuming the visited block plus its
+                // list neighbors shifts survivors left past the incremented
+                // index, deferring them to the next fixpoint pass.
                 let mut idx: usize = 0;
-                while idx < size {
+                while idx < self.virtual_list.len() {
                     if std::time::Instant::now() > deadline {
                         break;
                     }
-                    // cc:1782-1791: targetbl selection.
-                    let i = if let Some(t) = target_idx.take() {
-                        // Single targeted block; force a change and stop
-                        // iterating. Ghidra sets targetbl = NULL here, so the
-                        // next inner round sweeps the WHOLE graph.
-                        idx = size;
-                        t as usize
-                    } else {
-                        let cur = idx;
-                        idx += 1;
-                        cur
-                    };
-                    if i >= size {
-                        break;
+                    // cc:1786-1791: targetbl mode — visit the target ONCE and
+                    // end the sweep (Ghidra `index = graph.getSize()` AFTER
+                    // the rule, so the re-read len ends the pass); the forced
+                    // change re-runs the inner loop over the whole graph.
+                    if let Some(t) = target_idx.take() {
+                        self.apply_rules_to_block(t as usize);
+                        idx = self.virtual_list.len();
+                        continue;
                     }
-                    let block = match self.graph.get_block(i) {
+                    let slot = self.virtual_list[idx] as usize;
+                    idx += 1;
+                    let block = match self.graph.get_block(slot) {
                         Some(b) => b,
                         None => continue,
                     };
-                    // cc:1792-1795: completely collapsed block → isolated_count.
-                    // Ghidra never sees consumed components here (removed from
-                    // the list, block.cc:953-960); Rugra's flat-Vec equivalent
-                    // is the absorbed_into membership test.
+                    // cc:1792-1795: completely collapsed block → isolated.
+                    // (virtual_list never contains consumed components —
+                    // the absorbed_into guard is a defensive no-op.)
                     {
                         let r = block.read().unwrap();
                         if self.is_consumed(r.get_index()) {
@@ -1226,7 +1255,7 @@ impl<'a> CollapseStructure<'a> {
                     // BlockList). The previous Basic/Copy-only gate left
                     // structured remainders split into multiple top-level
                     // components where the oracle produces one.
-                    self.apply_rules_to_block(i);
+                    self.apply_rules_to_block(slot);
                 }
                 self.refresh_switch_cases();
                 iterations += 1;
@@ -1242,9 +1271,11 @@ impl<'a> CollapseStructure<'a> {
             // checks via switch_case_indices/CASE_BODY.
             let mut fullchange = false;
             if std::time::Instant::now() <= deadline {
-                let s2 = self.graph.get_size();
-                for j in 0..s2 {
-                    if self.try_rule_if_no_exit(j) {
+                // cc:1838-1848: position-order scan over Ghidra's list,
+                // first match breaks (the outer fullchange loop re-runs).
+                let vlist = self.virtual_list.clone();
+                for &slot in &vlist {
+                    if self.try_rule_if_no_exit(slot as usize) {
                         fullchange = true;
                         break;
                     }
@@ -1970,7 +2001,30 @@ impl<'a> CollapseStructure<'a> {
             self.loop_order[lb_idx].clear_exit_marks(self.graph);
         } else {
             // cc:1233-1239: no loop — trace the final DAG from all roots.
-            edges = crate::tracedag::generate_likely_gotos(self.graph);
+            // Ghidra collects roots in LIST position order (getBlock(i) over
+            // the mutating list) and feeds them to TraceDAG in that order;
+            // the root order paces pushBranches and BadEdgeScore
+            // tie-breaking. virtual_list entries are live slots only.
+            let mut roots: Vec<i32> = Vec::new();
+            let vlist = self.virtual_list.clone();
+            for &slot in &vlist {
+                if let Some(b) = self.graph.get_block(slot as usize) {
+                    if b.read().unwrap().size_in() == 0 {
+                        roots.push(slot);
+                    }
+                }
+            }
+            if roots.is_empty() {
+                edges = Vec::new();
+            } else {
+                let mut tracer = crate::tracedag::TraceDAG::new(self.graph);
+                for r in roots {
+                    tracer.add_root(r);
+                }
+                tracer.initialize();
+                tracer.push_branches();
+                edges = tracer.likely_goto.clone();
+            }
         }
         // cc:1242
         self.likelylistfull = true;
@@ -2228,6 +2282,74 @@ impl<'a> CollapseStructure<'a> {
         self.compute_dominators();
         let size = self.graph.get_size();
 
+        // w-rc4 probe (RUGRA_BS_TRACE=1): mirror oracle collapseAll_entry
+        // graph dump (block idx/addr/in/out with edge labels) for seam diffing.
+        if std::env::var("RUGRA_BS_TRACE")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+        {
+            eprintln!("[BLOCKSTRUCT] {} collapseAll_entry nblocks={}", self.name, size);
+            let addr_of = |idx: i32| -> u64 {
+                match self.graph.get_block(idx as usize) {
+                    Some(b) => {
+                        let blk = b.read().unwrap();
+                        let base = if blk.get_type() == crate::block::BlockType::Copy {
+                            blk.sub_block(0)
+                        } else {
+                            None
+                        };
+                        match base {
+                            Some(orig) => orig
+                                .read()
+                                .unwrap()
+                                .get_start_addr()
+                                .to_space_address()
+                                .get_offset(),
+                            None => blk
+                                .get_start_addr()
+                                .to_space_address()
+                                .get_offset(),
+                        }
+                    }
+                    None => 0,
+                }
+            };
+            for i in 0..size {
+                let Some(b) = self.graph.get_block(i) else {
+                    continue;
+                };
+                let r = b.read().unwrap();
+                let mut line = format!(
+                    "[BLOCKSTRUCT]   blk#{} @{:x} ty={:?} in=",
+                    r.get_index(),
+                    addr_of(r.get_index()),
+                    r.get_type()
+                );
+                for j in 0..r.size_in() {
+                    if let Some(e) = r.get_in(j) {
+                        line.push_str(&format!(
+                            "{:x}{}{} ",
+                            addr_of(e.point.read().unwrap().get_index()),
+                            if r.is_back_edge_in(j) { "B" } else { "" },
+                            if r.is_goto_in(j) { "G" } else { "" }
+                        ));
+                    }
+                }
+                line.push_str(" out=");
+                for j in 0..r.size_out() {
+                    if let Some(e) = r.get_out(j) {
+                        line.push_str(&format!(
+                            "{:x}{}{} ",
+                            addr_of(e.point.read().unwrap().get_index()),
+                            if r.is_back_edge_out(j) { "B" } else { "" },
+                            if r.is_goto_out(j) { "G" } else { "" }
+                        ));
+                    }
+                }
+                eprintln!("{}", line);
+            }
+        }
+
         // Diagnostic: dominator coverage + back-edge scan (RUGRA_LOOP_DEBUG=1)
         let loop_dbg = std::env::var("RUGRA_LOOP_DEBUG")
             .map(|v| v == "1")
@@ -2266,9 +2388,14 @@ impl<'a> CollapseStructure<'a> {
         // Find all back-edges (via F_BACK_EDGE labels) and create loop bodies.
         // Faithful to labelLoops (blockaction.cc:1126-1142): for each block,
         // scan out-edges; a back edge `(src -> tgt)` makes `tgt` the loop
-        // head and `src` a loop tail.
-        for i in 0..size {
-            let block = match self.graph.get_block(i) {
+        // head and `src` a loop tail. The scan order is Ghidra's LIST
+        // position order (cc:1129 `graph.getBlock(i)`); loopbody records are
+        // created in that order and the later stable depth sort
+        // (orderLoopBodies cc:1175) keeps creation order among equal-depth
+        // loops — walk virtual_list to reproduce it.
+        let vlist = self.virtual_list.clone();
+        for &i in &vlist {
+            let block = match self.graph.get_block(i as usize) {
                 Some(b) => b,
                 None => continue,
             };
@@ -2286,6 +2413,44 @@ impl<'a> CollapseStructure<'a> {
                 (src, tgts)
             };
             for tgt_idx in back_targets {
+                // w-rc4 probe (RUGRA_BS_TRACE=1): mirror oracle labelLoops
+                // print (head/tail start addresses) for two-sided diffing.
+                if std::env::var("RUGRA_BS_TRACE")
+                    .map(|v| v == "1")
+                    .unwrap_or(false)
+                {
+                    let addr_of = |idx: i32| -> u64 {
+                        match self.graph.get_block(idx as usize) {
+                            Some(b) => {
+                                let blk = b.read().unwrap();
+                                let base = if blk.get_type() == crate::block::BlockType::Copy {
+                                    blk.sub_block(0)
+                                } else {
+                                    None
+                                };
+                                match base {
+                                    Some(orig) => orig
+                                        .read()
+                                        .unwrap()
+                                        .get_start_addr()
+                                        .to_space_address()
+                                        .get_offset(),
+                                    None => blk
+                                        .get_start_addr()
+                                        .to_space_address()
+                                        .get_offset(),
+                                }
+                            }
+                            None => 0,
+                        }
+                    };
+                    eprintln!(
+                        "[BLOCKSTRUCT] {} labelLoops head@{:x} tail@{:x}",
+                        self.name,
+                        addr_of(tgt_idx),
+                        addr_of(src_idx)
+                    );
+                }
                 let body = self.collect_loop_body(tgt_idx, src_idx, size);
                 if !body.is_empty() {
                     self.loop_bodies.push((tgt_idx, body));
@@ -2675,8 +2840,14 @@ impl<'a> CollapseStructure<'a> {
     /// already-goto edges, which keeps the collapseAll loop progressing
     /// while try_rule_goto consumes the marked blocks).
     fn clip_extra_roots(&mut self) -> bool {
-        let size = self.graph.get_size();
-        for root_idx in 1..size as i32 {
+        // cc:1111 `for(i=1;i<graph.getSize();++i)` — list position order,
+        // skipping position 0 (the canonical root). First cross-over root
+        // wins and returns, so the ORDER decides which disjoint subset gets
+        // its exits marked. Walk virtual_list (Ghidra's mutating list),
+        // skipping the first entry.
+        let vlist = self.virtual_list.clone();
+        for &slot in vlist.iter().skip(1) {
+            let root_idx = slot;
             let root_blk = match self.graph.get_block(root_idx as usize) {
                 Some(b) => b,
                 None => continue,
@@ -3482,6 +3653,17 @@ impl<'a> CollapseStructure<'a> {
                 }
             }
         }
+
+        // Ghidra addBlock(ret) (block.cc:862-875) appends the composite at
+        // the END of the graph list, after identifyInternal removed the
+        // components (block.cc:953-960, including the install slot's old
+        // occupant — it is a component like any other). Mirror that on the
+        // virtual list: drop the consumed entries and the install slot, then
+        // push the install slot (now the composite) at the end, so every
+        // position-order scan walks the oracle's exact list layout.
+        self.virtual_list
+            .retain(|&s| !consumed_set.contains(&s) && s != install_idx as i32);
+        self.virtual_list.push(install_idx as i32);
     }
 
     // Ghidra: block.cc:1780 BlockGraph::newBlockCondition
@@ -5826,9 +6008,16 @@ impl<'a> CollapseStructure<'a> {
     fn collapse_conditions(&mut self) {
         loop {
             let mut change = false;
-            let size = self.graph.get_size();
-            for i in 0..size {
-                if self.try_rule_or(i) {
+            // cc:1858-1864: position-order scan over Ghidra's mutating list
+            // (the `i < graph.getSize()` bound re-evaluates as Or-condition
+            // composites are appended at the end and their components
+            // removed). Walk virtual_list; the retained/pushed entries track
+            // the oracle's list exactly.
+            let mut i: usize = 0;
+            while i < self.virtual_list.len() {
+                let slot = self.virtual_list[i] as usize;
+                i += 1;
+                if self.try_rule_or(slot) {
                     change = true;
                 }
             }

@@ -1,5 +1,37 @@
 # `blockaction.rs` API Reference
 
+## 2026-08-30：Ghidra 列表序镜像 virtual_list（MAIN-RC4-DOWHILE-TRACE-0001, P1）
+
+**根因（双侧 trace 定缝, oracle 插桩 /tmp/w-rc4-ore + RUGRA_BS_TRACE）**：Ghidra 的 collapse
+图是**可变列表**——`identifyInternal` 从 `list` 移除被消费组件（block.cc:953-960），每个
+`newBlock*` 工厂经 `addBlock` 把组合块**追加到列表尾部**（block.cc:862-875 `list.push_back`）；
+`collapseInternal`（cc:1776-1811）、`collapseConditions`（cc:1858）、IfNoExit 二趟（cc:1838）、
+`clipExtraRoots`（cc:1111）、`labelLoops`（cc:1129）、`updateLoopBody` 根收集（cc:1234）全部按
+**列表位置**迭代。Rugra 平铺 Vec（块固定 slot + absorbed_into 僵尸 + 组合块 in-place 安装）使
+位置≡索引，组合块在 pass 早期被扫描（oracle 在尾部），且无法产生 oracle 的
+**shift-skip 语义**（规则吃掉当前块+相邻块时，幸存者左移滑过已自增的扫描指针, 下一 pass 才补扫）。
+main 实测：首个分歧 pass1 位置 3（Rugra 过早命中 properif blk#29 cond 复合体; oracle 在 pass
+末尾才扫到它）→ 后续吸收序全偏 → argv 循环头（idx=12）cat 后的自环复合体无法在同 pass 尾部
+被再扫到 → try_rule_do_while 0 命中（golden 5 个 do-while）。
+
+**修复**：`CollapseStructure` 新增 `virtual_list: Vec<i32>`（slot 序）——`new()` 初始化为拷贝图
+顺序 0..n；`identify_internal` 尾部 `retain(非 consumed 且非 install) + push(install_idx)` 精确
+镜像 oracle 的 remove+append；上述 6 个位置序消费者全部改为迭代 virtual_list（含
+`while idx < virtual_list.len()` 的动态边界重读 = Ghidra `index < graph.getSize()` 每次求值；
+target 模式 `idx = len()`（事后重读）= cc:1790 `index = graph.getSize()`）。顺带修复
+`generate_likely_gotos`（tracedag.rs）的僵尸幻影根（consumed 过滤）。
+
+**验证**：main 规则序列与 oracle 对齐前缀 14（原始）/22（滤除 oracle-only 的 @339e 事件后;
+@339e=main/_start 重叠区的 hlt 块, Rugra 按符号尺寸截断不含, flow 域缺口另行登记）；
+E2E 124/124、0 panic、76 decompiled、defects=0/numbering=0、skeleton 3104→3096；
+cargo test --lib 10 failed（全部为已知 funcdata 基线, 无 blockaction/tracedag 新失败）。
+main do-while 仍为 0：剩余分歧在 oracle 事件 22+（cat@117/properif@139 次序、properif@137、
+cat@146 339e 关联），继续定缝中。双侧探针证据：/tmp/w-rc4-ore-main{,2,3}.stderr（oracle
+BS_ORACLE/BS_ORACLE_DUMP/BS_ORACLE_VISIT）vs /tmp/w-rc4-{trace2,fix1,fix2}.stderr（Rugra
+RUGRA_BS_TRACE/RUGRA_BS_DUMP=2）。
+
+# `blockaction.rs` API Reference
+
 ## 2026-08-29：identify_internal 消费状态去 f_dead 化 + 组件内边保留（BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001）
 
 对齐 Ghidra `BlockGraph::identifyInternal`（block.cc:940-963）与 `selfIdentify`
