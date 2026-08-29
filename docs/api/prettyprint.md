@@ -15,6 +15,12 @@ EmitNoMarkup::<方法>` 注解（锁定 oracle 的 `EmitNoMarkup`（hh:547-594�
   匿名 struct 字段恢复实验的遗留物，实验当时即被判定需要 P-code 级类型传播
   （typedef 作用域非法、`->` 无 struct 布局不合法），全仓零调用点。
   其 `EmitNoMarkup::recoverStructFieldsAnon` 伪造注解随函数一并消失。
+- 删除 struct-deref 三函数族（共 213 行）：`rewrite_struct_deref()`（原
+  :3088-3145）与 `canonicalize_struct_deref()`（原 :3147-3258）是互逆变换对，
+  pass 20+21 早已从管线移除（2026-07-04 续 6，净效果为零）；`try_convert_ptr_add()`
+  （原 :3260-3305）仅被 canonicalize 调用。三者的
+  `EmitNoMarkup::rewriteStructDeref/canonicalizeStructDeref/tryConvertPtrAdd`
+  伪造注解随函数一并消失。
 
 ## 2026-08-28：RPN variable metadata bridge
 
