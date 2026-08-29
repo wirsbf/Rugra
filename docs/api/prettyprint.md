@@ -21,6 +21,10 @@ EmitNoMarkup::<方法>` 注解（锁定 oracle 的 `EmitNoMarkup`（hh:547-594�
   （原 :3260-3305）仅被 canonicalize 调用。三者的
   `EmitNoMarkup::rewriteStructDeref/canonicalizeStructDeref/tryConvertPtrAdd`
   伪造注解随函数一并消失。
+- 删除 pass 19 括号平衡 scaffold（原 :1785-1859，75 行）：自 2026-06-26 起
+  其 `depth<0`/`else` 两臂均为逐行 verbatim 输出（读码证实恒等，naive 计数
+  无法越过 char/string 字面量故从不改写）——事实 no-op。后续空行折叠
+  （B4）改为直接消费 pass 18。
 
 ## 2026-08-28：RPN variable metadata bridge
 

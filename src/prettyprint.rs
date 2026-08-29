@@ -1715,86 +1715,16 @@ impl EmitNoMarkup {
             }
         }
 
-        // Nineteenth pass: remove unmatched extra closing braces at end of functions.
-        // After each function (detected by top-level `}`), check brace balance.
-        // If a function body has more `{` than `}`, insert missing closes.
-        // If more `}` than `{`, remove trailing extras.
-        let mut pass19: Vec<String> = Vec::with_capacity(pass18.len());
-        {
-            let mut i19 = 0;
-            while i19 < pass18.len() {
-                let line = &pass18[i19];
-                let t = line.trim();
-                let indent = line.len() - line.trim_start().len();
-
-                // Detect function start (same-line `sig {` or skip_line
-                // `sig` + lone `{`, printc.cc:1590/2655)
-                if Self::signature_opens_function_body(
-                    t,
-                    &["int ", "void ", "long ", "byte ", "bool ", "short "],
-                    &pass18[i19 + 1..],
-                ) {
-                    // Collect the entire function body
-                    let func_start = i19;
-                    let func_indent = indent;
-                    let mut depth = 1i32; // we've seen the opening `{`
-                    let mut func_end = i19 + 1;
-                    if !t.ends_with('{') {
-                        // skip_line layout: the lone `{` is on a following
-                        // line and is already accounted for by depth=1.
-                        while func_end < pass18.len() && pass18[func_end].trim().is_empty() {
-                            func_end += 1;
-                        }
-                        if func_end < pass18.len() && pass18[func_end].trim() == "{" {
-                            func_end += 1;
-                        }
-                    }
-                    while func_end < pass18.len() {
-                        let ft = pass18[func_end].trim();
-                        let fi = pass18[func_end].len() - pass18[func_end].trim_start().len();
-                        // Count braces (simplistic — good enough for C output)
-                        for ch in ft.chars() {
-                            match ch {
-                                '{' => depth += 1,
-                                '}' => depth -= 1,
-                                _ => {}
-                            }
-                        }
-                        func_end += 1;
-                        if depth <= 0 && fi == func_indent {
-                            break;
-                        }
-                    }
-
-                    // Check if depth reached 0 cleanly, or has extra/missing braces
-                    if depth < 0 {
-                        // More `}` than `{` — emit as-is. The naive brace count
-                        // over-counts `}` inside char/string literals (e.g.
-                        // case '}'), so removing braces based on it corrupts
-                        // function boundaries. Leave the output unchanged.
-                        for fi in func_start..func_end {
-                            pass19.push(pass18[fi].clone());
-                        }
-                    } else {
-                        // Normal or missing braces — emit as-is (missing brace is rarer)
-                        for fi in func_start..func_end {
-                            pass19.push(pass18[fi].clone());
-                        }
-                    }
-
-                    i19 = func_end;
-                    continue;
-                }
-
-                pass19.push(line.clone());
-                i19 += 1;
-            }
-        }
+        // Nineteenth pass (brace-balance scaffold) removed in
+        // POSTFIX-RETIRE-0001 W0: since 2026-06-26 both arms of its
+        // depth<0 / else split emitted the collected function lines
+        // verbatim — an identity no-op (naive brace counting cannot be
+        // trusted past char/string literals, so it never rewrote).
 
         // Final collapse of consecutive blank lines
-        let mut output_final2: Vec<String> = Vec::with_capacity(pass19.len());
+        let mut output_final2: Vec<String> = Vec::with_capacity(pass18.len());
         let mut prev_blank_final2 = false;
-        for line in pass19 {
+        for line in pass18 {
             if line.trim().is_empty() {
                 if !prev_blank_final2 {
                     output_final2.push(line);
