@@ -1,5 +1,21 @@
 # `prettyprint.rs` API Reference
 
+## 2026-08-30：POSTFIX-RETIRE-0001 W2 — A 队列零突变 pass 退役（尾部先行，一 pass 一 commit）
+
+路线图 W2 节：W1 计数器实证 **A 队列 9 个 pass 双语料双轮零突变**
+（LAB_ 族 P1/P1b/P2/P3/P4/P5/P16 + Pdl + P-wbfold），按管线**尾部先行**逐个删除。
+每刀门禁：curl/httpd E2E 输出 sha256 与删除前**逐字节一致** + RUGRA_POSTFIX_STATS
+计数器重跑（被删 pass 字段消失、其余 pass 计数不变，掩蔽检测）。oracle 依据：
+`EmitNoMarkup`（prettyprint.hh:546-594）直写 emitter、`flush`
+（prettyprint.cc:1193-1210）后零扫描、`docFunction`（printc.cc:2655-2666）以
+flush 结尾——这些文本 pass 在 Ghidra 无对应物，删除即向 oracle 行为收敛。
+
+- **刀 1（Pdl 重复 LAB_ 去重，管线 31/33）**：删除 `remove_duplicate_labels()`
+  与其插桩点；P26（非法左值删除）输入改接 P25 输出。计数器
+  `POSTFIX_PASS_NAMES` 33→32，`PF_PDL` 删除（后续索引前移）。
+  验证：curl `c889d856…`/httpd `a67155de…` 与基线逐字节一致；计数器其余字段
+  逐项不变（掩蔽零）。
+
 ## 2026-08-30：POSTFIX-RETIRE-0001 W1 — 逐 pass 突变计数器（env 门控，零行为差）
 
 路线图 W1 节（`/tmp/rugra-reports/w-postfix-2026-08-30.md` §5）：为 W0 后幸存的

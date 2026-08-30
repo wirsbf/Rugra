@@ -344,11 +344,11 @@ fn reconcile_int_minus_pointer(line: &str) -> String {
 // 语义:计数器只度量、绝不改变管线行为 —— 退役判定以计数=0 为必要证据。
 
 // RUGRA-GLUE: 幸存 pass 名单(管线顺序),见 post_process_output_legacy 内同序插桩
-const POSTFIX_PASS_NAMES: [&str; 33] = [
+const POSTFIX_PASS_NAMES: [&str; 32] = [
     "P1", "P1b", "P2", "P3", "B1", "P4", "P5", "P6", "B2", "P7",
     "P8", "P9", "P10", "P11", "P12", "P13", "P14", "P15", "P16", "P16c",
     "B3", "P17", "P18", "B4", "Pwbfold", "Pecase", "P22", "P23", "P24",
-    "P25", "Pdl", "P26", "P27",
+    "P25", "P26", "P27",
 ];
 
 // RUGRA-GLUE: pass 索引常量(与 POSTFIX_PASS_NAMES 同序)
@@ -382,9 +382,8 @@ const PF_P22: usize = 26;
 const PF_P23: usize = 27;
 const PF_P24: usize = 28;
 const PF_P25: usize = 29;
-const PF_PDL: usize = 30;
-const PF_P26: usize = 31;
-const PF_P27: usize = 32;
+const PF_P26: usize = 30;
+const PF_P27: usize = 31;
 
 // RUGRA-GLUE: 逐 pass 突变计数器(每次 post_process_output 调用一个实例)
 struct PostfixStats {
@@ -2207,13 +2206,14 @@ impl EmitNoMarkup {
         pfx.observe_str(PF_P24, &after_backfill, &after_orphan);
         let after_ptr_arith = Self::fix_pointer_arithmetic(&after_orphan);
         pfx.observe_str(PF_P25, &after_orphan, &after_ptr_arith);
-        // Remove duplicate label definitions (splice residue can cause two
-        // blocks to share the same first-op address → duplicate LAB_ lines).
-        let after_dup_labels = Self::remove_duplicate_labels(&after_ptr_arith);
-        pfx.observe_str(PF_PDL, &after_ptr_arith, &after_dup_labels);
+        // Pdl (duplicate LAB_ dedup) retired in POSTFIX-RETIRE-0001 W2:
+        // W1 counters proved zero mutations on both corpora (curl 190 +
+        // httpd 102 calls, both rounds); splice residue no longer produces
+        // duplicate label definitions. Ghidra has no counterpart (block
+        // addresses are unique; the oracle emit path has no text scan).
         // Twenty-sixth pass: remove lines with illegal lvalue assignments.
-        let after_lvalue = Self::remove_illegal_lvalue_assignments(&after_dup_labels);
-        pfx.observe_str(PF_P26, &after_dup_labels, &after_lvalue);
+        let after_lvalue = Self::remove_illegal_lvalue_assignments(&after_ptr_arith);
+        pfx.observe_str(PF_P26, &after_ptr_arith, &after_lvalue);
         // Twenty-seventh pass: remove case labels outside switch bodies.
         let after_case = Self::remove_orphan_case_labels(&after_lvalue);
         pfx.observe_str(PF_P27, &after_lvalue, &after_case);
@@ -2383,25 +2383,6 @@ impl EmitNoMarkup {
                 }
             }
             out.push(line.to_string());
-        }
-        out.join("\n")
-    }
-
-    // RUGRA-GLUE: 移除重复 LAB_ 标签（splice 残留导致）。Ghidra 无此问题（块
-    // 地址唯一），Rugra 的 splice 可能留下重复首地址块。
-    /// Remove duplicate label definitions (keep first occurrence only).
-    fn remove_duplicate_labels(text: &str) -> String {
-        use std::collections::HashSet;
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut out: Vec<&str> = Vec::new();
-        for line in text.lines() {
-            let t = line.trim();
-            if t.starts_with("LAB_") && t.ends_with(':') && !t.contains(' ') {
-                if !seen.insert(t.to_string()) {
-                    continue; // Skip duplicate label definition
-                }
-            }
-            out.push(line);
         }
         out.join("\n")
     }
