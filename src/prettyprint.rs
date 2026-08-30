@@ -344,8 +344,8 @@ fn reconcile_int_minus_pointer(line: &str) -> String {
 // 语义:计数器只度量、绝不改变管线行为 —— 退役判定以计数=0 为必要证据。
 
 // RUGRA-GLUE: 幸存 pass 名单(管线顺序),见 post_process_output_legacy 内同序插桩
-const POSTFIX_PASS_NAMES: [&str; 26] = [
-    "P1", "P1b", "B1", "P6", "B2", "P7",
+const POSTFIX_PASS_NAMES: [&str; 25] = [
+    "P1", "B1", "P6", "B2", "P7",
     "P8", "P9", "P10", "P11", "P12", "P13", "P14", "P15", "P16c",
     "B3", "P17", "P18", "B4", "Pecase", "P22", "P23", "P24",
     "P25", "P26", "P27",
@@ -353,31 +353,30 @@ const POSTFIX_PASS_NAMES: [&str; 26] = [
 
 // RUGRA-GLUE: pass 索引常量(与 POSTFIX_PASS_NAMES 同序)
 const PF_P1: usize = 0;
-const PF_P1B: usize = 1;
-const PF_B1: usize = 2;
-const PF_P6: usize = 3;
-const PF_B2: usize = 4;
-const PF_P7: usize = 5;
-const PF_P8: usize = 6;
-const PF_P9: usize = 7;
-const PF_P10: usize = 8;
-const PF_P11: usize = 9;
-const PF_P12: usize = 10;
-const PF_P13: usize = 11;
-const PF_P14: usize = 12;
-const PF_P15: usize = 13;
-const PF_P16C: usize = 14;
-const PF_B3: usize = 15;
-const PF_P17: usize = 16;
-const PF_P18: usize = 17;
-const PF_B4: usize = 18;
-const PF_ECASE: usize = 19;
-const PF_P22: usize = 20;
-const PF_P23: usize = 21;
-const PF_P24: usize = 22;
-const PF_P25: usize = 23;
-const PF_P26: usize = 24;
-const PF_P27: usize = 25;
+const PF_B1: usize = 1;
+const PF_P6: usize = 2;
+const PF_B2: usize = 3;
+const PF_P7: usize = 4;
+const PF_P8: usize = 5;
+const PF_P9: usize = 6;
+const PF_P10: usize = 7;
+const PF_P11: usize = 8;
+const PF_P12: usize = 9;
+const PF_P13: usize = 10;
+const PF_P14: usize = 11;
+const PF_P15: usize = 12;
+const PF_P16C: usize = 13;
+const PF_B3: usize = 14;
+const PF_P17: usize = 15;
+const PF_P18: usize = 16;
+const PF_B4: usize = 17;
+const PF_ECASE: usize = 18;
+const PF_P22: usize = 19;
+const PF_P23: usize = 20;
+const PF_P24: usize = 21;
+const PF_P25: usize = 22;
+const PF_P26: usize = 23;
+const PF_P27: usize = 24;
 
 // RUGRA-GLUE: 逐 pass 突变计数器(每次 post_process_output 调用一个实例)
 struct PostfixStats {
@@ -633,33 +632,10 @@ impl EmitNoMarkup {
         let mut result: Vec<String> = Vec::with_capacity(lines.len());
         let mut i = 0;
 
-        // Pre-scan: find goto targets that have no label definition
-        // These are "dominant exit labels" — typically function exit or switch break points
-        let mut goto_targets: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-        let mut defined_labels: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for line in &lines {
-            let t = line.trim();
-            // Count goto references
-            if let Some(pos) = t.find("goto LAB_") {
-                let rest = &t[pos + 5..]; // "LAB_xxxx;"
-                if let Some(semi) = rest.find(';') {
-                    let label = rest[..semi].to_string();
-                    *goto_targets.entry(label).or_insert(0) += 1;
-                }
-            }
-            // Track label definitions
-            if t.starts_with("LAB_") && t.ends_with(':') && !t.contains(' ') {
-                let label = t[..t.len() - 1].to_string();
-                defined_labels.insert(label);
-            }
-        }
-        // Find undefined labels (no label definition in output) — these are "exit gotos"
-        // Any goto to a non-existent label is effectively a break/return
-        let exit_labels: std::collections::HashSet<String> = goto_targets
-            .iter()
-            .filter(|(name, _count)| !defined_labels.contains(*name))
-            .map(|(name, _)| name.clone())
-            .collect();
+        // exit-label pre-scan (goto_targets/defined_labels/exit_labels)
+        // retired with P1b in POSTFIX-RETIRE-0001 W2 cut 8: it existed only
+        // to feed the P1b/P2 goto-to-break/return rewrites, both proven
+        // zero-mutation on both corpora by W1 counters.
 
         while i < lines.len() {
             let trimmed = lines[i].trim();
@@ -687,24 +663,6 @@ impl EmitNoMarkup {
                     continue;
                 }
 
-                // Pattern 1b: goto to an undefined exit label
-                // Convert to break (inside loop/switch) or return (at any level without loop ctx)
-                if exit_labels.contains(label_name) {
-                    let indent = lines[i].len() - lines[i].trim_start().len();
-                    let indent_str: String = " ".repeat(indent);
-                    if trimmed == format!("goto {};", label_name) {
-                        // Check for enclosing loop/switch context in the output so far
-                        let has_loop_ctx = Self::has_enclosing_loop_ctx(&result, indent);
-                        if indent >= 4 && has_loop_ctx {
-                            result.push(format!("{}break;", indent_str));
-                        } else {
-                            result.push(format!("{}return;", indent_str));
-                        }
-                        pfx.bump(PF_P1B);
-                        i += 1;
-                        continue;
-                    }
-                }
             }
 
             // P2 (conditional exit goto -> if-break/return) retired in
@@ -2760,40 +2718,6 @@ impl EmitNoMarkup {
             i = end;
         }
         mask
-    }
-
-    // RUGRA-GLUE: has_enclosing_loop_ctx (post-process goto→break/return
-    //   rewrite helper; Ghidra emits break/continue structurally from
-    //   FlowBlock::markUnstructured flags at emitGotoStatement, it never
-    //   scans emitted text)
-    fn has_enclosing_loop_ctx(emitted: &[String], target_indent: usize) -> bool {
-        // Walk backward, tracking brace depth
-        let mut _depth = 0i32;
-        for line in emitted.iter().rev() {
-            let t = line.trim();
-            let ind = line.len() - line.trim_start().len();
-            for ch in t.chars().rev() {
-                match ch { '}' => _depth += 1, '{' => _depth -= 1, _ => {} }
-            }
-            // When we find an opening keyword at an indent level <= target (one level up)
-            if ind < target_indent {
-                // MAIN-RC3-STRUCTURED-EMIT-0001: accept the compact
-                // `while(` too — the oracle's overflow header (printc.cc:
-                // 3023-3028) is `while( true )`, and `while` is a C keyword
-                // so `while(` can never be an identifier (same word-safety
-                // argument as is_switch_stmt_prefix above).
-                if t.starts_with("while (") || t.starts_with("while(")
-                    || t.starts_with("do {")
-                    || t.starts_with("for (") || Self::is_switch_stmt_prefix(t)
-                    || t.contains("} while (")
-                {
-                    return true;
-                }
-                // If we hit a function-level line, stop
-                if ind == 0 { break; }
-            }
-        }
-        false
     }
 
     // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)

@@ -45,6 +45,13 @@ flush 结尾——这些文本 pass 在 Ghidra 无对应物，删除即向 oracl
   与其 bump 探针。`POSTFIX_PASS_NAMES` 27→26。`exit_labels` 预扫描暂留
   （P1b 仍消费，刀 8 一并退役）。
   验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
+- **刀 8（P1b 出口 goto→break/return，首扫模式 1b）**：删除 P1b 模式块与其
+  bump 探针；**配套退役两件附属物**——① `exit_labels` 预扫描
+  （goto_targets/defined_labels/exit_labels,P1b/P2 是其仅有消费者）；
+  ② `has_enclosing_loop_ctx()` helper（P1b/P2 是其仅有调用点，oracle 中
+  break/continue 由 FlowBlock::markUnstructured 结构化发射，从不扫描已发射
+  文本）。`POSTFIX_PASS_NAMES` 26→25。
+  验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
 
 ## 2026-08-30：POSTFIX-RETIRE-0001 W1 — 逐 pass 突变计数器（env 门控，零行为差）
 
