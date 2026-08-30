@@ -50,6 +50,32 @@ enum BoundOperand {
     MemAddr { addr: VarnodeRaw, size: usize },
 }
 
+// RUGRA-GLUE: shift direction for the ia.sinc SHL/SHR/SAR group-2
+// constructors (locked sla value op: INT_LEFT / INT_RIGHT / INT_SRIGHT).
+#[derive(Clone, Copy)]
+enum ShiftDir {
+    Left,
+    Right,
+    Arith,
+}
+
+// RUGRA-GLUE: count source for the group-2 shift encodings. x86 encodes
+// three DISTINCT count forms with different oracle pcode: C0/C1 imm8
+// (count:4 = imm & mask, gated flag muxes), D0/D1 by-one (dedicated short
+// form with no count temp), D2/D3 CL (count:1 = CL & mask). iced normalizes
+// all three to the same mnemonic/operand shape, so the encoding opcode byte
+// — after legacy prefixes and REX — is the only discriminator (evidence
+// /tmp/w-shifts-dump-sleigh.out: `shl eax,1` C1-encoded lifts the 38-op
+// general form while D1-encoded lifts the 11-op by-one form).
+enum ShiftCount {
+    /// C0/C1 — imm8 count (4-byte count temp in the oracle).
+    Imm,
+    /// D0/D1 — shift by one (dedicated constructor, no count temp).
+    ByOne,
+    /// D2/D3 — count in CL (1-byte count temp in the oracle).
+    Cl,
+}
+
 impl Default for X86Lifter {
     // RUGRA-GLUE: src/disasm/x86_lift.rs helper (no direct Ghidra counterpart)
     fn default() -> Self {
@@ -1897,6 +1923,660 @@ impl X86Lifter {
         self.emit_resultflags(tmp, ops);
     }
 
+    // RUGRA-GLUE: raw pcode emit helper for the shift constructors — keeps
+    // every emit site in the exact op order of the locked sla dump.
+    /// Push one pcode op with the given inputs and optional output.
+    fn push_raw(
+        ops: &mut Vec<PcodeOpRaw>,
+        opcode: OpCode,
+        ins: &[VarnodeRaw],
+        out: Option<&VarnodeRaw>,
+    ) {
+        let mut op = PcodeOpRaw::new(opcode as i32);
+        for v in ins {
+            op.add_input(v.clone());
+        }
+        if let Some(o) = out {
+            op.set_output(o.clone());
+        }
+        ops.push(op);
+    }
+
+    // RUGRA-GLUE: group-2 shift encoding discriminator. The locked sla has
+    // THREE distinct constructors per direction with different pcode:
+    // C0/C1 imm-count (38-op gated form), D0/D1 by-one (short direct-flag
+    // form), D2/D3 CL-count. iced normalizes all three to the same
+    // mnemonic/operand shape AND the disassembler never populates
+    // Instruction.bytes (src/disasm/x86_64.rs:51), so the form is
+    // reconstructed from the operands: a CL register operand is definitive
+    // (D2/D3); an imm8 count != 1 is definitive (C0/C1); an imm8 count == 1
+    // is disambiguated by exact instruction-length arithmetic — the by-one
+    // encoding is always exactly one byte shorter than the imm8 encoding of
+    // the same instruction (same prefixes/modrm/SIB/disp, minus imm8), so
+    // computing the canonical by-one length from the operands separates
+    // D1-encoded `shl eax,1` (len 2) from C1-encoded (len 3). Exact for
+    // canonical (assembler-minimal disp8) encodings, i.e. all
+    // compiler-emitted code and every fixture form; a hypothetical
+    // non-canonical by-one encoding with redundant disp32 falls back to the
+    // imm form (disclosed X86LIFT-SHIFTS-FLAGS-0001 limitation — root fix
+    // is populating Instruction.bytes in x86_64.rs, outside this task's
+    // write-set).
+    /// Classify the count form (C0/C1 imm, D0/D1 by-one, D2/D3 CL).
+    fn shift_count_form(inst: &Instruction) -> Option<ShiftCount> {
+        match inst.operands.get(1)? {
+            crate::disasm::Operand::Register { name, size } => {
+                if name == "cl" && *size == 1 {
+                    Some(ShiftCount::Cl)
+                } else {
+                    None
+                }
+            }
+            crate::disasm::Operand::Immediate { value, .. } => {
+                if *value != 1 {
+                    return Some(ShiftCount::Imm);
+                }
+                match Self::shift_byone_len(inst) {
+                    Some(byone) if inst.length == byone => Some(ShiftCount::ByOne),
+                    _ => Some(ShiftCount::Imm),
+                }
+            }
+            _ => None,
+        }
+    }
+
+    // RUGRA-GLUE: canonical encoding length of the by-one form (D0/D1) for
+    // the same operands — prefixes (0x66 for 16-bit, REX) + opcode + modrm
+    // + SIB + displacement; reg forms are mod=3 (no SIB/disp). Used only to
+    /// Compute the by-one encoding length for form disambiguation.
+    fn shift_byone_len(inst: &Instruction) -> Option<usize> {
+        let size = match &inst.operands[0] {
+            crate::disasm::Operand::Register { size, .. } => *size,
+            crate::disasm::Operand::Memory { size, .. } => *size,
+            _ => return None,
+        };
+        let mut len = 0usize;
+        if size == 2 {
+            len += 1; // 0x66 operand-size prefix
+        }
+        match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, .. } => {
+                let id = Self::gpr_id(name)?;
+                let rex = size == 8
+                    || id >= 8
+                    || (size == 1 && matches!(name.as_str(), "spl" | "bpl" | "sil" | "dil"));
+                if rex {
+                    len += 1;
+                }
+                len += 2; // opcode + modrm (mod=3)
+            }
+            crate::disasm::Operand::Memory { base, index, displacement, .. } => {
+                let base_id = base.as_deref().and_then(Self::gpr_id);
+                let index_id = index.as_deref().and_then(Self::gpr_id);
+                let rex = size == 8
+                    || base_id.is_some_and(|i| i >= 8)
+                    || index_id.is_some_and(|i| i >= 8);
+                if rex {
+                    len += 1;
+                }
+                len += 2; // opcode + modrm
+                // SIB when an index register is present or the base
+                // encodes rm=100 (rsp/r12 families)
+                if index.is_some() || base_id == Some(4) || base_id == Some(12) {
+                    len += 1;
+                }
+                // displacement size (canonical minimal)
+                if let Some(bname) = base {
+                    if bname == "rip" || bname == "eip" {
+                        len += 4;
+                    } else {
+                        let bid = base_id?;
+                        if *displacement == 0 && bid != 5 && bid != 13 {
+                            // mod=00, no disp (rbp/r13 base needs disp8=0)
+                        } else if *displacement >= -128 && *displacement <= 127 {
+                            len += 1;
+                        } else {
+                            len += 4;
+                        }
+                    }
+                } else {
+                    len += 4; // no base: SIB base=101 / direct disp32
+                }
+            }
+            _ => return None,
+        }
+        Some(len)
+    }
+
+    // RUGRA-GLUE: GPR number (0-15) from a register name via the sla offset
+    // table (ah/ch/dh/bh sit one byte above their GPR base).
+    /// Map a GPR name to its 0-15 register number.
+    fn gpr_id(name: &str) -> Option<u8> {
+        let off = Self::get_register(name, 1)?.offset;
+        if off >= 0xC0 {
+            return None; // flags/segment/RIP region — not a GPR
+        }
+        Some(if matches!(off, 0x01 | 0x09 | 0x11 | 0x19) {
+            ((off - 1) / 8) as u8
+        } else {
+            (off / 8) as u8
+        })
+    }
+
+    // RUGRA-GLUE: LOAD into a caller-provided slot varnode — the sla reuses
+    // ONE unique local slot for every re-LOAD of the rm operand in the
+    /// Emit LOAD from `addr` into `slot`.
+    fn emit_load_slot(
+        &mut self,
+        addr: &VarnodeRaw,
+        slot: &VarnodeRaw,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) {
+        let mut op = PcodeOpRaw::new(OpCode::CPUI_LOAD as i32);
+        op.add_input(Self::ram_space_const());
+        op.add_input(addr.clone());
+        op.set_output(slot.clone());
+        ops.push(op);
+    }
+
+    // RUGRA-GLUE: port of the ia.sinc :SHL/:SHR/:SAR group-2 constructors of
+    // the locked x86-64 sla (sleigh_specs/x86-64.sla, sleigh_shim op-for-op
+    // dump /tmp/w-shifts-dump-sleigh.out, 56 forms). Structure per dump:
+    //   imm/cl form — `local count = imm&mask / CL&mask`; `local tmpflags =
+    //   rm << 0` (COPY save); `rm = rm <shift> count`; [+zext for 32-bit GPR
+    //   dst]; shlflags(): CF = count==0 ? CF : bit-shifted-out,
+    //   OF = count==1 ? dir-specific : OF; then shiftresultflags(): SF/ZF/PF
+    //   each gated by count!=0 (preserved when count==0). Memory
+    //   destinations re-LOAD the rm slot at every flag use.
+    //   by-one form (D0/D1) — dedicated short constructors: shl CF from the
+    //   pre-shift top bit, OF = CF ^ result-top after the value op; shr/sar
+    //   CF = (rm&1)!=0 (8-bit writes CF directly), OF = 0, no gating.
+    /// Lift `shl`/`sal`/`shr`/`sar` (all count forms; flags + value + zext).
+    fn lift_shift(&mut self, inst: &Instruction, dir: ShiftDir, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        if inst.operands.len() != 2 {
+            return;
+        }
+        let Some(form) = Self::shift_count_form(inst) else {
+            return;
+        };
+
+        // Destination binding — memory address ops precede the constructor
+        // body (dump `shl dword [rbx+8],3`: ADD, AND(count), LOAD, ...).
+        let (dst, size) = match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, size } => {
+                let Some(vn) = Self::get_register(name, *size) else {
+                    return;
+                };
+                let parent64 = if *size == 4 {
+                    Self::parent64_name(name).and_then(|p| Self::get_register(p, 8))
+                } else {
+                    None
+                };
+                (AluDst::Reg { vn, parent64 }, *size)
+            }
+            crate::disasm::Operand::Memory {
+                base,
+                index,
+                scale,
+                displacement,
+                size,
+            } => {
+                let Some(addr) =
+                    self.compute_mem_addr(base, index, scale, displacement, ops)
+                else {
+                    return;
+                };
+                (AluDst::Mem { addr }, *size)
+            }
+            _ => return,
+        };
+
+        let shift_op = match dir {
+            ShiftDir::Left => C::CPUI_INT_LEFT,
+            ShiftDir::Right => C::CPUI_INT_RIGHT,
+            ShiftDir::Arith => C::CPUI_INT_SRIGHT,
+        };
+        // count==0 / count==1 gating constants use the count width; result
+        // comparisons use the operand width.
+        let mask: u64 = if size == 8 { 0x3f } else { 0x1f };
+
+        // read_result: post-value rm for reg dst (register varnode) or a
+        // re-LOAD into the ONE shared mem slot (the oracle reuses a single
+        // unique local for every rm re-read — dump `shl byte [rbx],3` loads
+        // unique#1 six times).
+        let mem_slot = match &dst {
+            AluDst::Mem { .. } => Some(self.alloc_tmp(size)),
+            AluDst::Reg { .. } => None,
+        };
+        let read_result = |this: &mut Self, ops: &mut Vec<PcodeOpRaw>| -> VarnodeRaw {
+            match (&dst, &mem_slot) {
+                (AluDst::Reg { vn, .. }, _) => vn.clone(),
+                (AluDst::Mem { addr }, Some(slot)) => {
+                    this.emit_load_slot(addr, slot, ops);
+                    slot.clone()
+                }
+                _ => unreachable!("mem dst must have a slot"),
+            }
+        };
+
+        if let ShiftCount::ByOne = form {
+            // ---- D0/D1 dedicated by-one constructors ----
+            let one = Self::const_vn(1, 4);
+            match dir {
+                ShiftDir::Left => {
+                    // CF = rm s< 0 (pre-shift top bit), BEFORE the value op
+                    let r0 = read_result(self, ops);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_SLESS,
+                        &[r0, Self::const_vn(0, size)],
+                        Some(&Self::flag_cf()),
+                    );
+                    // rm = rm << 1
+                    match &dst {
+                        AluDst::Reg { vn, .. } => Self::push_raw(
+                            ops,
+                            shift_op,
+                            &[vn.clone(), one],
+                            Some(vn),
+                        ),
+                        AluDst::Mem { addr } => {
+                            let slot = mem_slot.clone().expect("mem dst must have a slot");
+                            self.emit_load_slot(addr, &slot, ops);
+                            Self::push_raw(ops, shift_op, &[slot.clone(), one], Some(&slot));
+                            self.emit_store_v(addr, slot, ops);
+                        }
+                    }
+                    // OF = CF ^ (rm s< 0)  (direct flag output)
+                    let r1 = read_result(self, ops);
+                    let t_sign = self.alloc_tmp(1);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_SLESS,
+                        &[r1, Self::const_vn(0, size)],
+                        Some(&t_sign),
+                    );
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_XOR,
+                        &[Self::flag_cf(), t_sign],
+                        Some(&Self::flag_of()),
+                    );
+                    // zext for 32-bit GPR dst comes AFTER the OF op
+                    if let AluDst::Reg { vn, parent64 } = &dst {
+                        if let Some(parent) = parent64 {
+                            Self::push_raw(ops, C::CPUI_INT_ZEXT, &[vn.clone()], Some(parent));
+                        }
+                    }
+                }
+                ShiftDir::Right | ShiftDir::Arith => {
+                    // CF = rm & 1 (8-bit writes the AND directly into CF);
+                    // OF = 0; both precede the value op
+                    let r0 = read_result(self, ops);
+                    if size == 1 {
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[r0, Self::const_vn(1, 1)],
+                            Some(&Self::flag_cf()),
+                        );
+                    } else {
+                        let t0 = self.alloc_tmp(size);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[r0, Self::const_vn(1, size)],
+                            Some(&t0),
+                        );
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_NOTEQUAL,
+                            &[t0, Self::const_vn(0, size)],
+                            Some(&Self::flag_cf()),
+                        );
+                    }
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_COPY,
+                        &[Self::const_vn(0, 1)],
+                        Some(&Self::flag_of()),
+                    );
+                    // rm = rm >> 1 (logical or arithmetic)
+                    match &dst {
+                        AluDst::Reg { vn, .. } => Self::push_raw(
+                            ops,
+                            shift_op,
+                            &[vn.clone(), one],
+                            Some(vn),
+                        ),
+                        AluDst::Mem { addr } => {
+                            let slot = mem_slot.clone().expect("mem dst must have a slot");
+                            self.emit_load_slot(addr, &slot, ops);
+                            Self::push_raw(ops, shift_op, &[slot.clone(), one], Some(&slot));
+                            self.emit_store_v(addr, slot, ops);
+                        }
+                    }
+                    // zext for 32-bit GPR dst (after the value op)
+                    if let AluDst::Reg { vn, parent64 } = &dst {
+                        if let Some(parent) = parent64 {
+                            Self::push_raw(ops, C::CPUI_INT_ZEXT, &[vn.clone()], Some(parent));
+                        }
+                    }
+                }
+            }
+            // ungated SF/ZF/PF (direct flag outputs; mem re-LOADs per flag)
+            let r_sf = read_result(self, ops);
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_SLESS,
+                &[r_sf, Self::const_vn(0, size)],
+                Some(&Self::flag_sf()),
+            );
+            let r_zf = read_result(self, ops);
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_EQUAL,
+                &[r_zf, Self::const_vn(0, size)],
+                Some(&Self::flag_zf()),
+            );
+            let r_pf = read_result(self, ops);
+            let t_and = self.alloc_tmp(size);
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_AND,
+                &[r_pf, Self::const_vn(0xff, size)],
+                Some(&t_and),
+            );
+            let t_pop = self.alloc_tmp(1);
+            Self::push_raw(ops, C::CPUI_POPCOUNT, &[t_and], Some(&t_pop));
+            let t_bit = self.alloc_tmp(1);
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_AND,
+                &[t_pop, Self::const_vn(1, 1)],
+                Some(&t_bit),
+            );
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_EQUAL,
+                &[t_bit, Self::const_vn(0, 1)],
+                Some(&Self::flag_pf()),
+            );
+            return;
+        }
+
+        // ---- imm (C0/C1) / cl (D2/D3) general form ----
+        // local count = imm & mask (:4) / CL & mask (:1) — one AND op
+        let (t_count, cs) = match form {
+            ShiftCount::Cl => {
+                let cl = match &inst.operands[1] {
+                    crate::disasm::Operand::Register { name, size } => {
+                        match Self::get_register(name, *size) {
+                            Some(vn) => vn,
+                            None => return,
+                        }
+                    }
+                    _ => return,
+                };
+                let t = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[cl, Self::const_vn(mask, 1)],
+                    Some(&t),
+                );
+                (t, 1)
+            }
+            ShiftCount::Imm => {
+                let value = match &inst.operands[1] {
+                    crate::disasm::Operand::Immediate { value, .. } => *value,
+                    _ => return,
+                };
+                let t = self.alloc_tmp(4);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[Self::const_vn((value & 0xff) as u64, 4), Self::const_vn(mask, 4)],
+                    Some(&t),
+                );
+                (t, 4)
+            }
+            ShiftCount::ByOne => unreachable!("handled above"),
+        };
+
+        // local tmpflags = rm << 0 (COPY save); rm = rm <shift> count;
+        // [+zext]; memory form re-LOADs the rm slot for the value op.
+        let save = match &dst {
+            AluDst::Reg { vn, .. } => {
+                let save = self.alloc_tmp(size);
+                Self::push_raw(ops, C::CPUI_COPY, &[vn.clone()], Some(&save));
+                save
+            }
+            AluDst::Mem { addr } => {
+                let slot = mem_slot.clone().expect("mem dst must have a slot");
+                self.emit_load_slot(addr, &slot, ops);
+                let save = self.alloc_tmp(size);
+                Self::push_raw(ops, C::CPUI_COPY, &[slot.clone()], Some(&save));
+                self.emit_load_slot(addr, &slot, ops);
+                Self::push_raw(ops, shift_op, &[slot.clone(), t_count.clone()], Some(&slot));
+                self.emit_store_v(addr, slot, ops);
+                save
+            }
+        };
+        if let AluDst::Reg { vn, parent64 } = &dst {
+            Self::push_raw(ops, shift_op, &[vn.clone(), t_count.clone()], Some(vn));
+            if let Some(parent) = parent64 {
+                Self::push_raw(ops, C::CPUI_INT_ZEXT, &[vn.clone()], Some(parent));
+            }
+        }
+
+        // ---- shlflags(): CF ----
+        let t_ne = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_NOTEQUAL,
+            &[t_count.clone(), Self::const_vn(0, cs)],
+            Some(&t_ne),
+        );
+        let t_m1 = self.alloc_tmp(cs);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_SUB,
+            &[t_count.clone(), Self::const_vn(1, cs)],
+            Some(&t_m1),
+        );
+        let t_sh = self.alloc_tmp(size);
+        Self::push_raw(ops, shift_op, &[save.clone(), t_m1], Some(&t_sh));
+        let t_bit = match dir {
+            ShiftDir::Left => {
+                let t = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SLESS,
+                    &[t_sh, Self::const_vn(0, size)],
+                    Some(&t),
+                );
+                t
+            }
+            ShiftDir::Right | ShiftDir::Arith => {
+                let t_and = self.alloc_tmp(size);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[t_sh, Self::const_vn(1, size)],
+                    Some(&t_and),
+                );
+                let t = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_NOTEQUAL,
+                    &[t_and, Self::const_vn(0, size)],
+                    Some(&t),
+                );
+                t
+            }
+        };
+        let t_neg = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[t_ne.clone()], Some(&t_neg));
+        let t_a = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_AND,
+            &[t_neg, Self::flag_cf()],
+            Some(&t_a),
+        );
+        let t_b = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[t_ne.clone(), t_bit], Some(&t_b));
+        Self::push_raw(ops, C::CPUI_INT_OR, &[t_a, t_b], Some(&Self::flag_cf()));
+
+        // ---- shlflags(): OF (direction-specific) ----
+        let t_eq1 = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_EQUAL,
+            &[t_count.clone(), Self::const_vn(1, cs)],
+            Some(&t_eq1),
+        );
+        match dir {
+            ShiftDir::Left => {
+                // OF = count==1 ? (CF ^ result-top) : OF — result re-read
+                let r = read_result(self, ops);
+                let t_sign = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SLESS,
+                    &[r, Self::const_vn(0, size)],
+                    Some(&t_sign),
+                );
+                let t_xor = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_XOR,
+                    &[Self::flag_cf(), t_sign],
+                    Some(&t_xor),
+                );
+                let t_neg = self.alloc_tmp(1);
+                Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[t_eq1.clone()], Some(&t_neg));
+                let t_a = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[t_neg, Self::flag_of()],
+                    Some(&t_a),
+                );
+                let t_b = self.alloc_tmp(1);
+                Self::push_raw(ops, C::CPUI_INT_AND, &[t_eq1.clone(), t_xor], Some(&t_b));
+                Self::push_raw(ops, C::CPUI_INT_OR, &[t_a, t_b], Some(&Self::flag_of()));
+            }
+            ShiftDir::Right => {
+                // OF = count==1 ? original-top : OF (from the saved COPY)
+                let t_sign = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SLESS,
+                    &[save.clone(), Self::const_vn(0, size)],
+                    Some(&t_sign),
+                );
+                let t_neg = self.alloc_tmp(1);
+                Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[t_eq1.clone()], Some(&t_neg));
+                let t_a = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[t_neg, Self::flag_of()],
+                    Some(&t_a),
+                );
+                let t_b = self.alloc_tmp(1);
+                Self::push_raw(ops, C::CPUI_INT_AND, &[t_eq1.clone(), t_sign], Some(&t_b));
+                Self::push_raw(ops, C::CPUI_INT_OR, &[t_a, t_b], Some(&Self::flag_of()));
+            }
+            ShiftDir::Arith => {
+                // OF &= (count != 1) — direct flag output, no temp
+                let t_neg = self.alloc_tmp(1);
+                Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[t_eq1.clone()], Some(&t_neg));
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[t_neg, Self::flag_of()],
+                    Some(&Self::flag_of()),
+                );
+            }
+        }
+
+        // ---- shiftresultflags(): gated SF / ZF / PF ----
+        let t_gate = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_NOTEQUAL,
+            &[t_count.clone(), Self::const_vn(0, cs)],
+            Some(&t_gate),
+        );
+        // SF
+        let r_sf = read_result(self, ops);
+        let t_sf = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_SLESS,
+            &[r_sf, Self::const_vn(0, size)],
+            Some(&t_sf),
+        );
+        let t_neg = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[t_gate.clone()], Some(&t_neg));
+        let t_a = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[t_neg, Self::flag_sf()], Some(&t_a));
+        let t_b = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[t_gate.clone(), t_sf], Some(&t_b));
+        Self::push_raw(ops, C::CPUI_INT_OR, &[t_a, t_b], Some(&Self::flag_sf()));
+        // ZF
+        let r_zf = read_result(self, ops);
+        let t_zf = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_EQUAL,
+            &[r_zf, Self::const_vn(0, size)],
+            Some(&t_zf),
+        );
+        let t_neg = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[t_gate.clone()], Some(&t_neg));
+        let t_a = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[t_neg, Self::flag_zf()], Some(&t_a));
+        let t_b = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[t_gate.clone(), t_zf], Some(&t_b));
+        Self::push_raw(ops, C::CPUI_INT_OR, &[t_a, t_b], Some(&Self::flag_zf()));
+        // PF
+        let r_pf = read_result(self, ops);
+        let t_and = self.alloc_tmp(size);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_AND,
+            &[r_pf, Self::const_vn(0xff, size)],
+            Some(&t_and),
+        );
+        let t_pop = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_POPCOUNT, &[t_and], Some(&t_pop));
+        let t_bit = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_AND,
+            &[t_pop, Self::const_vn(1, 1)],
+            Some(&t_bit),
+        );
+        let t_eq = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_EQUAL,
+            &[t_bit, Self::const_vn(0, 1)],
+            Some(&t_eq),
+        );
+        let t_neg = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[t_gate.clone()], Some(&t_neg));
+        let t_a = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[t_neg, Self::flag_pf()], Some(&t_a));
+        let t_b = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[t_gate.clone(), t_eq], Some(&t_b));
+        Self::push_raw(ops, C::CPUI_INT_OR, &[t_a, t_b], Some(&Self::flag_pf()));
+    }
+
     // RUGRA-GLUE: port of the ia.sinc cc condition table (ia.sinc:1523-1539,
     // `cc: "O" is cond=0 { export OF; }` ... `cc: "G" is cond=15 { local tmp
     // = !ZF && (OF == SF); export tmp; }`); executed semantics verified
@@ -2068,7 +2748,10 @@ impl X86Lifter {
             "xor" => {
                 self.lift_logic(inst, OpCode::CPUI_INT_XOR, &mut ops);
             }
-            "shl" | "shr" | "sal" | "sar" => {
+            "shl" | "sal" => {
+                self.lift_shift(inst, ShiftDir::Left, &mut ops);
+            }
+            "shr" | "sar" => {
                 if inst.operands.len() == 2 {
                     if let Some(src) = self.parse_operand(&inst.operands[1], &mut ops) {
                         if let Some((dst, mem_size)) =

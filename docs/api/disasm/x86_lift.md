@@ -159,3 +159,36 @@
   3. CAST 插入后 STORE 地址停在 unique(见 dbg 探针 surviving ops)。
   以上均为 coreaction/heritage/varmap 侧缺口,不在本 write-set,待主
   agent 派工;lifter 侧 33/33 op-for-op MATCH 无差异。
+
+### 2026-08-30:X86LIFT-SHIFTS-FLAGS-0001 c1 — shl/sal 全形态 flag pcode(w-shifts)
+- `shl`/`sal` 离开旧的 "INT_LEFT→temp→COPY 无 flags" 形态,按锁定 oracle
+  `sleigh_specs/x86-64.sla`(12.0.4 语言)逐 op 提升,三种计数编码形态分派
+  (`shift_count_form`):
+  - **imm 形(C0/C1)**(38 op):`t0:4=INT_AND(imm:4, mask:4)`(mask=
+    0x1f,S==8 时 0x3f;imm 原始值,非执行值——eax,33 → 0x21:4 参与运算)
+    → `save=COPY(rm)` → 值 op `rm=INT_LEFT(rm,t0)`(reg 直写,无 temp
+    链)→ 32-bit GPR 的 INT_ZEXT(zext 在 flag 组**之前**)→ shlflags():
+    `CF = count==0 ? CF : SLESS(save<<(count-1),0)` mux、
+    `OF = count==1 ? CF^SLESS(rm,0) : OF` mux(rm 为 post-value 读)→
+    shiftresultflags():SF/ZF/PF 三组各自 `count!=0` gate mux(count==0
+    保留旧 flag),PF=popcount(rm&0xff) 偶校验链。
+  - **cl 形(D2/D3)**(同构):`t0:1=INT_AND(CL:1, mask:1)`,count 相关
+    const 全 1 字节(imm 形为 4 字节)。
+  - **by-one 形(D0/D1)**(短形态,无 count temp):`CF=SLESS(rm,0)` 在值
+    op **之前** → `rm=INT_LEFT(rm, const:0x1:4)` → `OF=XOR(CF,SLESS(rm,0))`
+    直接写 flag → zext(32-bit,在 OF **之后**)→ SF/ZF/PF 直写无 gate。
+  - **mem dst**:地址 op 先于 count-AND 绑定;一个共享 unique slot 被
+    每次 rm 重读复用(`t=LOAD; save=COPY(t); t=LOAD; t=shift(t,count);
+    STORE`;之后每个 flag 组前重 LOAD 同一 slot)。
+  - **形态判别**:CL 操作数 → D2/D3;imm≠1 → C0/C1;imm==1 用 by-one
+    规范编码长度精确算术判别(by-one 编码恒比 imm8 编码短 1 字节:
+    `shl eax,1` D1=2 字节,C1=3 字节)。**已知限制**(已披露):反汇编器
+    从不填充 `Instruction.bytes`(x86_64.rs:51),非规范 disp32 冗余编码
+    的 by-one 形态会回退 imm 形;根修 = 在 x86_64.rs 填充 bytes/iced
+    `code()`(不在本任务 write-set)。
+- 新 helper:`lift_shift`/`shift_count_form`/`shift_byone_len`/`gpr_id`/
+  `emit_load_slot`(slot 复用 LOAD)/`push_raw`、类型 `ShiftDir`/`ShiftCount`。
+- 双侧证据:examples/x86shift_probe 56 形态矩阵,SLEIGH 直通 dump vs iced
+  投影规范化逐 op 对比(uniq 临时 id 按首现序规范化)——29/29 shl 形态
+  MATCH(/tmp/w-shifts-dump-sleigh.out / w-shifts-compare-c1.out);
+  shr/sar 暂留旧臂至 c2/c3。
