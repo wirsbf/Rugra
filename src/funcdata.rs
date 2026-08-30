@@ -7108,8 +7108,24 @@ impl Funcdata {
                     }
                 }
                 OpCode::CPUI_CBRANCH => {
-                    // CBRANCH gets BOTH edges, but ORDER MATTERS for Structure Collapse!
-                    // Edge 0: branch target (true branch)
+                    // CBRANCH gets BOTH edges. Edge ORDER follows Ghidra's
+                    // FlowInfo::generateBlockEdges (flow.cc:960-967): the
+                    // FALL-THRU edge is pushed FIRST (out edge 0), the branch
+                    // target SECOND (out edge 1). All Ghidra consumers index
+                    // out edges as [falseOut=0, trueOut=1] (block.hh:294-301),
+                    // e.g. ActionConditionalConst::findConstCompare
+                    // (coreaction.cc:4496 constEdge=1 for INT_EQUAL) and
+                    // JumpTable analysis true-slot indexing; the previous
+                    // [target, fallthru] order inverted the true/false
+                    // meaning of getOut(0)/getOut(1) and made condconst
+                    // substitute the branch constant into the wrong path.
+                    // Edge 0: fallthrough (false branch) to next sequential block
+                    if i + 1 < blocks.len() {
+                        self.bblocks
+                            .add_edge(blocks[i].clone(), blocks[i + 1].clone());
+                    }
+
+                    // Edge 1: branch target (true branch)
                     if let Some(target_addr) = branch_target_offset {
                         for j in 0..blocks.len() {
                             let target_start = blocks[j].read().unwrap().get_start_addr().as_u64();
@@ -7118,12 +7134,6 @@ impl Funcdata {
                                 break;
                             }
                         }
-                    }
-
-                    // Edge 1: fallthrough (false branch) to next sequential block
-                    if i + 1 < blocks.len() {
-                        self.bblocks
-                            .add_edge(blocks[i].clone(), blocks[i + 1].clone());
                     }
                 }
                 _ => {
@@ -11710,10 +11720,16 @@ mod tests {
             2,
             "CBRANCH must be born with 2 out-edges (no zombie decision block)"
         );
-        // Edge 0 must land on the synthetic target block.
+        // Ghidra edge order (flow.cc:960-967 FlowInfo::generateBlockEdges):
+        // out edge 0 = fall-through (false), out edge 1 = branch target
+        // (true). Edge 1 must land on the synthetic target block; edge 0 on
+        // the sequential fall-through block.
         let edge0 = cb_block.read().unwrap().get_out(0).map(|e| e.point);
         let edge0 = edge0.expect("CBRANCH edge 0 exists");
-        assert!(Arc::ptr_eq(&edge0, &synth));
+        let edge1 = cb_block.read().unwrap().get_out(1).map(|e| e.point);
+        let edge1 = edge1.expect("CBRANCH edge 1 exists");
+        assert!(Arc::ptr_eq(&edge1, &synth));
+        assert_eq!(edge0.read().unwrap().get_start_addr().as_u64(), 0x1007);
     }
 
     // Case 2: a target OUTSIDE the function range is external flow

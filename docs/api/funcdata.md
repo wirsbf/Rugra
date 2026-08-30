@@ -590,6 +590,29 @@ Rugra 侧回归锁：`test_build_blocks_synthetic_target_creates_block_no_zombie
 `test_build_blocks_external_target_edge_still_dropped` /
 `test_branch_remove_internal_destroys_cbranch_at_two_out`（funcdata.rs tests）。
 
+#### CBRANCH 出边顺序（2026-08-30 边序反转修复,HTTPD-EMPTYELSE-LIVEARM-0001）
+
+Ghidra `FlowInfo::generateBlockEdges`(flow.cc:960-967)对 CBRANCH 先 push **fall-thru 边**、
+再 push **branch target 边**;`connectBasic` 按此顺序 `bblocks.addEdge`,因此出边约定为
+**out[0]=fall-through(false),out[1]=branch target(true)**——与 `FlowBlock::getFalseOut()=getOut(0)` /
+`getTrueOut()=getOut(1)`(block.hh:294-301)及 `BlockBasic::negateCondition` 的"swap 边+翻
+boolean_flip/fallthru_true"配对维持极性不变。Rugra 此前按 [target, fallthru] 顺序建边,
+使全部依赖 `getOut(0)/getOut(1)` 真/假语义的消费者读反:
+
+- `ActionConditionalConst::findConstCompare`(coreaction.cc:4496):INT_EQUAL 的 constEdge=1
+  选取"值==常量"的一侧;边序反了以后 constBlock 落到错误一侧,把分支常量代入**错误路径**
+  支配的块。实证(httpd ap_getparents 0x2e6a3 `je 2e768`,cond=INT_EQUAL(uVar4_phi,1)):
+  Rugra 把 uVar4=1 代入 uVar4!=1 支配的菱形(s[uVar4-1]→s[0],s[uVar4-2]→s[-1],
+  Y 臂 param_1+(uVar4-1)→param_1 折叠为 identity)→ Y 臂只剩活 PIECE/COPY(implied,
+  print 无语句)→ 结构化出现空 else;oracle 同区域(12.0.4 探桩 livearm_opsdump)三臂
+  INT_ADD 全部非 implied、条件不特化,golden 为 if/else-if/else 三臂链。
+- jumptable 真槽位索引(`true_slot = flip?0:1`,jumptable.rs)同类读反风险。
+
+修复后:httpd **defects 3→0**(ap_getparents 2 + ap_pregsub 1 空 else 全部消失,复合条件
+链恢复),skeleton 2231→2277;curl **字节级不变**(3095/0/0,124 函数 byte-identical)。
+Rugra 侧回归锁:`test_build_blocks_synthetic_target_creates_block_no_zombie`
+(更新为断言 edge0=fallthru@0x1007, edge1=synthetic target)。
+
 #### 为什么这个方法重要
 如果没有这一步：
 
