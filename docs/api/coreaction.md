@@ -295,6 +295,41 @@ metatype 差异并只对上述 width projection 做字段级比较，metadata �
   显式登记移交 printc/varmap 域，随其修复归零；不得在 coreaction 侧加
   守卫补偿）。
 
+## 2026-08-30：ActionDeadCode 无 spec CALL 的 in(0) consume 保护（COREACTION-CALLIN0-CLOBBER-0001）
+
+- **根因**：`inject_raw_ops` 路径的 CPUI_CALL 出生即带静态 `has_callspec` flag
+  （op.rs TypeOpCall 静态 flags，对齐 typeop.cc:663），但没有任何 FuncCallSpecs 对象
+  （flow-time 锚定缺口 CALLSPEC-DRIVER-0001）。`ActionDeadCode::apply` 的
+  `is_call_without_spec` 判定（flag 位组合）因此永远为 false，跳过 cc:3968-3971 的
+  全量 pushConsumed；`fd.callspecs` 为空又使 `mark_consumed_parameters`（cc:3840）
+  一次都不跑——CALL in(0) 在 consume 重置为 0 后没有任何 push，consume 保持 0。
+  第二个 mainloop 迭代（heritage pass>0）中 `ActionVarnodeProps::apply`
+  （cc:1282-1342）分支 3 `nzmask & consume == 0` 命中，`totalReplaceConstant(vn,0)`
+  把 CALL 的 coderef 目标换成 `const:0` —— httpd 63 处 FUN_0 调用症状
+  （DECOMPILE prefix 18→19 bisect，w-push88 移交）。
+- **Ghidra 语义**：Ghidra 里每个 CALL 在 flow 期由 `FlowInfo::setupCallSpecs`
+  （flow.cc:683-690）无条件挂 FuncCallSpecs 并把 in(0) 换成 fspec 注解 varnode
+  （funcdata_varnode.cc:205；varnode.cc:599 给 IPTR_FSPEC 置 `Varnode::annotation`
+  → cc:1294 `isAnnotation()` continue 第一层保护）；随后
+  `markConsumedParameters` 第一句 `pushConsumed(~0, callOp->getIn(0))`
+  —— coreaction.cc:3846 注释原文 "**In all cases the first operand is fully
+  consumed**" —— 第二层保护。typeop.cc:663/741 的静态 has_callspec flag 使
+  cc:3968 的 `isCallWithoutSpec()` 分支对 CALL/CALLIND 实际不可达。
+- **修复**（src/coreaction.rs）：`ActionDeadCode::apply` 的 call 分支新增
+  `op_has_attached_callspec(fd, op)` registry 查询（Weak 指针对比
+  `fd.callspecs[*].op`）；无实际 spec 的 CALL/CALLIND 对 in(0) 执行
+  `push_consumed(u64::MAX)`——恢复 cc:3846 的首操作数全量消费保证。
+  `pushConsumed` 是单调合并（`val | consume`，cc:3556-3568），对真实带 spec 的
+  调用与 mark_consumed_parameters 幂等，不改变其行为。
+- **验证**：curl E2E 字节级不变（3095/0/0 精确保持）；httpd FUN_0 63→0 清零，
+  指标 2231/3/0 不变（77 行文本变化全部为调用目标恢复 uRam<realaddr>/符号名）；
+  cargo test 失败集与基线逐名相同（funcdata flaky 家族 15-20 波动）。
+  双侧 fixture `tests/oracle/coreaction_callin0_clobber_1204.*`
+  （curl my_fwrite @0x3460：oracle followFlow 自然挂 spec vs Rugra inject 形态）。
+- **上游缺口移交**：真正的 1:1 根因修复是在 inject 路径补 flow-time 锚定
+  （funcdata/flow 域，已登记 CALLSPEC-DRIVER-0001）；本修复在 DeadCode 层恢复
+  同一管线级可观测（call target 存活），不引入 Ghidra 没有的行为。
+
 ## 2026-08-14：ActionDeadCode consume 闭包与自环 MULTIEQUAL
 
 - `push_consumed` 现在逐句实现锁定 Ghidra 12.0.4

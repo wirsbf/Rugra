@@ -403,6 +403,25 @@ impl ActionDeadCode {
         }
     }
 
+    // RUGRA-GLUE: Ghidra's PcodeOp::isCallWithoutSpec() (op.hh:177) tests the
+    // has_callspec flag, which in Ghidra is an exact proxy for "a
+    // FuncCallSpecs object is attached": flow.cc:685 FlowInfo::setupCallSpecs
+    // creates the FuncCallSpecs and rewrites in(0) in the same breath, and no
+    // other site sets the flag (typeop.cc:663/741 set it statically at
+    // opcode-assign time). Rugra's inject_raw_ops path births CPUI_CALL with
+    // the static TypeOp flag but no FuncCallSpecs object, so the flag alone
+    // is not a faithful proxy; query Funcdata::callspecs for an attached
+    // spec instead (Weak identity link, fspec.rs FuncCallSpecs::op).
+    fn op_has_attached_callspec(fd: &Funcdata, op_ref: &crate::op::PcodeOpRef) -> bool {
+        fd.callspecs.iter().any(|spec| {
+            spec.read()
+                .unwrap()
+                .op
+                .upgrade()
+                .is_some_and(|op| std::sync::Arc::ptr_eq(&op, &op_ref.0))
+        })
+    }
+
     // Ghidra: coreaction.cc:3840 ActionDeadCode::markConsumedParameters
     fn mark_consumed_parameters(
         fd: &Funcdata,
@@ -569,6 +588,27 @@ impl Action for ActionDeadCode {
                 if is_call_without_spec {
                     for input in &inputs {
                         Self::push_consumed(u64::MAX, input, &mut worklist);
+                    }
+                } else if !Self::op_has_attached_callspec(fd, op_ref) {
+                    // coreaction.cc:3846 (markConsumedParameters, first
+                    // statement): pushConsumed(~0, callOp->getIn(0)) — "In
+                    // all cases the first operand is fully consumed". In
+                    // Ghidra every CPUI_CALL carries a FuncCallSpecs
+                    // (flow.cc:685 FlowInfo::setupCallSpecs attaches one at
+                    // flow time, and TypeOpCall's static has_callspec flag
+                    // — typeop.cc:663 — makes cc:3968's isCallWithoutSpec
+                    // branch unreachable for CALL), so the cc:3846 guarantee
+                    // always covers in(0). Rugra's inject_raw_ops path births
+                    // calls with the static flag but NO FuncCallSpecs object;
+                    // the mark_consumed_parameters loop below therefore never
+                    // runs for them, in(0) keeps consume==0 after the reset
+                    // above, and ActionVarnodeProps (coreaction.cc:1327-1341)
+                    // totalReplaceConstant's the coderef target to const:0 —
+                    // the FUN_0 clobber (COREACTION-CALLIN0-CLOBBER-0001).
+                    // Restore the unconditional first-operand guarantee for
+                    // spec-less calls here.
+                    if let Some(target) = inputs.first() {
+                        Self::push_consumed(u64::MAX, target, &mut worklist);
                     }
                 }
                 if !is_assignment { continue; }
