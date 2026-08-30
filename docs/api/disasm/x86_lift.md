@@ -204,3 +204,17 @@
 - 双侧证据:14/14 shr 形态 MATCH(累计 43/58;14 个 sar 留旧臂;1 个
   index-address 形态带 w-iced F5 地址 op 序残差——44 个 shift 语义 op
   全 MATCH,仅 3-op 地址前缀异序,compute_mem_addr SIB 序,另行任务)。
+
+### 2026-08-30:X86LIFT-SHIFTS-FLAGS-0001 c3 — sar 全形态 + 旧 shift 臂移除(w-shifts)
+- `sar` 路由到 lift_shift(ShiftDir::Arith),旧的内联 value-only shift
+  臂(临时 temp+COPY 无 flags,mem 操作数二次地址计算)整体删除。
+  - imm/cl 形:CF 位与 shr 同构(`INT_AND(save >>>(count-1),1)` + 
+    NOTEQUAL);**OF = OF & (count != 1)**——直接 `INT_AND` 输出到 OF
+    flag 寄存器(dump `-- sar al,3` [14]),无 mux 无 temp;值 op
+    INT_SRIGHT。
+  - by-one 形:与 shr 同构(CF=AND(rm,1)/NOTEQUAL 直写,OF=COPY(0) 在值
+    op 前,SF/ZF/PF 直写)。
+- 双侧证据:14/14 sar 形态 MATCH;最终 57/58(唯一 MISMATCH =
+  `shr dword [rbx+rcx*4+8],cl` 的 3-op 地址前缀序,w-iced F5 既有残差
+  的 SIB 分支,44 个 shift 语义 op 全同;修复路径已在 w-push88 的
+  compute_push_src_addr 双表序证实,建议另立 compute_mem_addr 任务)。

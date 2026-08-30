@@ -2755,47 +2755,7 @@ impl X86Lifter {
                 self.lift_shift(inst, ShiftDir::Right, &mut ops);
             }
             "sar" => {
-                if inst.operands.len() == 2 {
-                    if let Some(src) = self.parse_operand(&inst.operands[1], &mut ops) {
-                        if let Some((dst, mem_size)) =
-                            self.parse_dest_operand(&inst.operands[0], &mut ops)
-                        {
-                            let dst_read = if mem_size.is_some() {
-                                self.parse_operand(&inst.operands[0], &mut ops).unwrap()
-                            } else {
-                                dst.clone()
-                            };
-
-                            let opcode = match mnemonic {
-                                "add" => OpCode::CPUI_INT_ADD,
-                                "sub" => OpCode::CPUI_INT_SUB,
-                                "shl" | "sal" => OpCode::CPUI_INT_LEFT,
-                                "shr" => OpCode::CPUI_INT_RIGHT,
-                                "sar" => OpCode::CPUI_INT_SRIGHT,
-                                "and" => OpCode::CPUI_INT_AND,
-                                "or" => OpCode::CPUI_INT_OR,
-                                "xor" => OpCode::CPUI_INT_XOR,
-                                _ => unreachable!(),
-                            };
-
-                            let tmp = self.alloc_tmp(dst_read.size);
-                            let mut op = PcodeOpRaw::new(opcode as i32);
-                            op.add_input(dst_read);
-                            op.add_input(src);
-                            op.set_output(tmp.clone());
-                            ops.push(op);
-
-                            if let Some(size) = mem_size {
-                                self.emit_store(dst, tmp, size, &mut ops);
-                            } else {
-                                let mut cp = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
-                                cp.add_input(tmp);
-                                cp.set_output(dst);
-                                ops.push(cp);
-                            }
-                        }
-                    }
-                }
+                self.lift_shift(inst, ShiftDir::Arith, &mut ops);
             }
             "lea" => {
                 if inst.operands.len() == 2 {
