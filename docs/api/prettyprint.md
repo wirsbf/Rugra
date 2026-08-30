@@ -52,6 +52,14 @@ flush 结尾——这些文本 pass 在 Ghidra 无对应物，删除即向 oracl
   break/continue 由 FlowBlock::markUnstructured 结构化发射，从不扫描已发射
   文本）。`POSTFIX_PASS_NAMES` 26→25。
   验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
+- **刀 9（P1 冗余 goto 剥除，首扫模式 1；A 队列收官）**：删除 P1 模式块与其
+  bump 探针后，首扫 while 循环退化为逐字拷贝——连同 `lines`/`result`/`i`
+  声明整体删除，`final_result` 直接 `input.lines().map(to_string).collect()`
+  构造（与原 `join("\n").lines()` 往返恒等）。`POSTFIX_PASS_NAMES` 25→24。
+  至此 A 队列 9 pass 全部退役，幸存 pass 名单：
+  B1 P6 B2 P7 P8 P9 P10 P11 P12 P13 P14 P15 P16c B3 P17 P18 B4 Pecase
+  P22 P23 P24 P25 P26 P27。
+  验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
 
 ## 2026-08-30：POSTFIX-RETIRE-0001 W1 — 逐 pass 突变计数器（env 门控，零行为差）
 

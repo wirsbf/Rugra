@@ -344,39 +344,38 @@ fn reconcile_int_minus_pointer(line: &str) -> String {
 // 语义:计数器只度量、绝不改变管线行为 —— 退役判定以计数=0 为必要证据。
 
 // RUGRA-GLUE: 幸存 pass 名单(管线顺序),见 post_process_output_legacy 内同序插桩
-const POSTFIX_PASS_NAMES: [&str; 25] = [
-    "P1", "B1", "P6", "B2", "P7",
+const POSTFIX_PASS_NAMES: [&str; 24] = [
+    "B1", "P6", "B2", "P7",
     "P8", "P9", "P10", "P11", "P12", "P13", "P14", "P15", "P16c",
     "B3", "P17", "P18", "B4", "Pecase", "P22", "P23", "P24",
     "P25", "P26", "P27",
 ];
 
 // RUGRA-GLUE: pass 索引常量(与 POSTFIX_PASS_NAMES 同序)
-const PF_P1: usize = 0;
-const PF_B1: usize = 1;
-const PF_P6: usize = 2;
-const PF_B2: usize = 3;
-const PF_P7: usize = 4;
-const PF_P8: usize = 5;
-const PF_P9: usize = 6;
-const PF_P10: usize = 7;
-const PF_P11: usize = 8;
-const PF_P12: usize = 9;
-const PF_P13: usize = 10;
-const PF_P14: usize = 11;
-const PF_P15: usize = 12;
-const PF_P16C: usize = 13;
-const PF_B3: usize = 14;
-const PF_P17: usize = 15;
-const PF_P18: usize = 16;
-const PF_B4: usize = 17;
-const PF_ECASE: usize = 18;
-const PF_P22: usize = 19;
-const PF_P23: usize = 20;
-const PF_P24: usize = 21;
-const PF_P25: usize = 22;
-const PF_P26: usize = 23;
-const PF_P27: usize = 24;
+const PF_B1: usize = 0;
+const PF_P6: usize = 1;
+const PF_B2: usize = 2;
+const PF_P7: usize = 3;
+const PF_P8: usize = 4;
+const PF_P9: usize = 5;
+const PF_P10: usize = 6;
+const PF_P11: usize = 7;
+const PF_P12: usize = 8;
+const PF_P13: usize = 9;
+const PF_P14: usize = 10;
+const PF_P15: usize = 11;
+const PF_P16C: usize = 12;
+const PF_B3: usize = 13;
+const PF_P17: usize = 14;
+const PF_P18: usize = 15;
+const PF_B4: usize = 16;
+const PF_ECASE: usize = 17;
+const PF_P22: usize = 18;
+const PF_P23: usize = 19;
+const PF_P24: usize = 20;
+const PF_P25: usize = 21;
+const PF_P26: usize = 22;
+const PF_P27: usize = 23;
 
 // RUGRA-GLUE: 逐 pass 突变计数器(每次 post_process_output 调用一个实例)
 struct PostfixStats {
@@ -628,58 +627,20 @@ impl EmitNoMarkup {
     // W1-WT 顺序推进(先修上游→计数证明零突变→逐 pass 删除,尾部先行)。
     fn post_process_output_legacy(input: &str) -> String {
         let mut pfx = PostfixStats::new();
-        let lines: Vec<&str> = input.lines().collect();
-        let mut result: Vec<String> = Vec::with_capacity(lines.len());
-        let mut i = 0;
-
-        // exit-label pre-scan (goto_targets/defined_labels/exit_labels)
-        // retired with P1b in POSTFIX-RETIRE-0001 W2 cut 8: it existed only
-        // to feed the P1b/P2 goto-to-break/return rewrites, both proven
-        // zero-mutation on both corpora by W1 counters.
-
-        while i < lines.len() {
-            let trimmed = lines[i].trim();
-
-            // Pattern 1: `goto LAB_XXXX;` followed by `LAB_XXXX:` (possibly with } between)
-            if trimmed.starts_with("goto LAB_") && trimmed.ends_with(';') {
-                let label_name = &trimmed[5..trimmed.len() - 1];
-                let expected_label = format!("{}:", label_name);
-
-                // Look ahead for the label (skip empty lines and closing braces)
-                let mut next_real = i + 1;
-                while next_real < lines.len() {
-                    let nt = lines[next_real].trim();
-                    if nt.is_empty() || nt == "}" {
-                        next_real += 1;
-                    } else {
-                        break;
-                    }
-                }
-
-                if next_real < lines.len() && lines[next_real].trim() == expected_label {
-                    // Skip this goto — it's redundant (falls through to its target)
-                    pfx.bump(PF_P1);
-                    i += 1;
-                    continue;
-                }
-
-            }
-
-            // P2 (conditional exit goto -> if-break/return) retired in
-            // POSTFIX-RETIRE-0001 W2 cut 7: W1 counters proved zero
-            // mutations on both corpora (both rpt rounds) - the emit layer
-            // no longer produces `if (cond) goto <undefined-label>;`
-            // shapes on the corpora.
-
-            result.push(lines[i].to_string());
-            i += 1;
-        }
+        // First-scan goto rewrites retired in POSTFIX-RETIRE-0001 W2:
+        //   P1  redundant-goto skip (goto LAB_X; right before LAB_X:) - cut 9
+        //   P1b exit-goto -> break/return rewrite                        - cut 8
+        //   P2  conditional exit goto -> if-break/return                 - cut 7
+        // W1 counters proved zero mutations for all three on both corpora
+        // (curl 190 + httpd 102 calls, both rpt rounds): the structured
+        // emit path places no redundant or undefined-target LAB_ gotos on
+        // the corpora, so the scan had degraded to a verbatim line copy.
 
         // P3 (unreferenced label removal, first sweep) retired in
         // POSTFIX-RETIRE-0001 W2 cut 6: W1 counters proved zero mutations
         // on both corpora (both rpt rounds) - every LAB_ label emitted on
         // the corpora is still goto-referenced at this pipeline stage.
-        let final_result = result;
+        let final_result: Vec<String> = input.lines().map(|s| s.to_string()).collect();
 
         // Third pass: collapse consecutive blank lines
         let snap_b1 = PostfixStats::snap(&final_result);
