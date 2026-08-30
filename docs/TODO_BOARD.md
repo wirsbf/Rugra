@@ -124,7 +124,8 @@
 | w-minis(新派) | `RULEACTION-NEGATION-FORM-0001`+`VARNODE-GETUSEPOINT-FREELEG-0001` | OPEN(C3 残差+O-2 批) | `src/ruleaction.rs`+`src/varnode.rs`(均空闲) | ①`(0 - x)` vs `-x` 负号形(w-printc2 诊断,ruleaction 域);②get_use_point 自由腿 Address(0) vs varnode.cc:701 fd.getAddress()+-1 |
 | unassigned | `PRINTC-WHILEDO-MODS-STACK-0001` | OPEN(O-1,P2,复核发现) | 待认领(`src/printc.rs`) | emit_structured_whiledo 缺 cc:3012-3013/3060 mods 栈操作(db090828 Evidence 对 whiledo 过度声明,仅 for 成立);当前零触发(CPUI_BRANCH 双侧无条件跳过)但属缺失守卫;rc3 bundle 其余 4/4 APPROVE,R-RC3 报告含定性(prettyprint 后处理=GLUE 兜底,终极路径=退役) |
 | w-postw0(新派) | `POSTFIX-RETIRE-0001`(W0 波) | OPEN(路线图=/tmp/rugra-reports/w-postfix-2026-08-30.md;架构论证=oracle 无任何文本后处理) | `src/prettyprint.rs`+`src/printc.rs`(W0 波限死代码+伪造注解改正) | W0=死代码清除(~700 行,5 死函数+16 伪造 Ghidra 注解[EmitNoMarkup 无这些方法,机制 D 红旗]改正/删除;字节级零风险);后续 W1 计数器→W2 零突变退役→…→WT(~2700 行可删);风险=跨 pass 掩蔽须尾部先删/挂载点①②同批拆 |
-| unassigned | `POSTFIX-INSTRUMENT-0001` | OPEN(W1) | 待认领 | 计数器插桩(每 pass 突变计数,退役判定依据) |
+| 已集成(2cae9654) | `POSTFIX-INSTRUMENT-0001`(W1) | **DONE**(33-pass 计数器;21/33 双语料双轮全零;A队列9确认) | prettyprint(已落库) | — |
+| 已集成(0d070aea..9777c407) | `POSTFIX-RETIRE-0001`(W2) | **DONE**(A队列9 pass 全退役,净删~534行;九刀字节一致;掩蔽零揭示) | prettyprint(已落库) | B队列(P13/P14/P24/P25/P26等)待上游;C队列(B3/B4/P12/P15/B1);P16c→W4 | 计数器插桩(每 pass 突变计数,退役判定依据) |
 | unassigned | `PRINTC-VOIDCALL-0001` | OPEN(P13 正解) | 待认领 | 硬编码 13 个 libc 名的 void-call 判定→FuncProto void 返回正解 |
 | unassigned | `DATABASE-RAM-FINALSCOPE0-0001` | OPEN(lminors ②,标准分析不可达) | 待认领(`src/database.rs`/heritage 协同) | oracle database.cc:1263-1281 分支3(地址不在 global 发现范围)仅 getProperty;Rugra 已有 global_scope_id+rangetree 基础设施,补齐形状=分支(3)前查 global 范围;完整 oracle 行号+形状见 /tmp/rugra-reports/w-lminors-2026-08-30.md §② |
 | unassigned | `VARNODE-GETUSEPOINT-FREELEG-0001` | OPEN(O-2) | 待认领(`src/varnode.rs`) | get_use_point 自由腿返回 Address(0) vs oracle varnode.cc:701 fd.getAddress()+-1;未登记潜在分歧 |
