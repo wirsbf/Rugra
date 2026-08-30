@@ -56,10 +56,15 @@ for key, path in pairs.items():
         )
 PY
 
-oracle_tmp=$(mktemp -d /tmp/rugra-blockstruct-dowhile-1204.XXXXXX)
+# Stage under /home/wirs/.cache (persistent NVMe) rather than /tmp: the
+# fixture links the full debug librugra rlib, and the shared /tmp tmpfs
+# user quota can EDQUOT/SIGBUS the linker mid-write.
+stage_root=/home/wirs/.cache
+mkdir -p "$stage_root"
+oracle_tmp=$(mktemp -d "$stage_root/rugra-blockstruct-dowhile-1204.XXXXXX")
 cleanup() {
   case "$oracle_tmp" in
-    /tmp/rugra-blockstruct-dowhile-1204.??????) rm -rf -- "$oracle_tmp" ;;
+    "$stage_root"/rugra-blockstruct-dowhile-1204.??????) rm -rf -- "$oracle_tmp" ;;
     *) echo "refusing unsafe cleanup target: $oracle_tmp" >&2 ;;
   esac
 }

@@ -7629,7 +7629,7 @@
     },
     {
       "id": "blockstruct_dowhile_absorb_1204",
-      "description": "BlockList cat force-steps (forceOutputNum composite self-loop + forceFalseEdge, block.cc:880-889) enabling the do-while absorption chain: goto->cat->dowhile event sequence and composite out-edge state versus locked Ghidra 12.0.4",
+      "description": "BlockList cat force-steps (forceOutputNum composite self-loop + forceFalseEdge, block.cc:880-889) enabling the do-while absorption chain: goto->cat->dowhile event sequence and composite out-edge state versus locked Ghidra 12.0.4 [BLOCKACTION-DOWHILE-ABSORB-0001; main do_while 0->5=golden; 126/126 rule events aligned; cross-review PENDING]",
       "runner": [
         "tools/run_blockstruct_dowhile_absorb_oracle.sh"
       ],
@@ -7641,17 +7641,152 @@
       "evidence_status": "MATCH",
       "cache": {
         "metadata": "tests/oracle/blockstruct_dowhile_absorb_1204.metadata.json",
-        "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-        "rust_base_commit": "f4c2d017ff1bcb00c9102132c616288553c09f7e"
+        "tools": {
+          "runner": "tools/run_blockstruct_dowhile_absorb_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/blockstruct_dowhile_absorb_1204.cc",
+          "fixture_source_2": "tests/oracle/blockstruct_dowhile_absorb_1204.rs"
+        }
       },
       "impact": {
-        "todo_ids": [
-          "BLOCKACTION-DOWHILE-ABSORB-0001"
+        "paths": [
+          "src/blockaction.rs",
+          "tests/oracle/blockstruct_dowhile_absorb_1204.cc",
+          "tests/oracle/blockstruct_dowhile_absorb_1204.rs",
+          "tools/run_blockstruct_dowhile_absorb_oracle.sh"
         ],
-        "src_files": [
-          "src/blockaction.rs"
+        "rust_function_ids": [
+          "RG-F-6f4fa4078b6b3a2f6a2f",
+          "RG-F-0e8ed93409d11e65e670",
+          "RG-F-d18af6e7aacac4ddb137"
         ],
-        "notes": "main do_while 0->5=golden; 126/126 rule events aligned; cross-review PENDING"
+        "ghidra_function_ids": [
+          "GH12-F-d345bfb9c1f5620afdb6",
+          "GH12-F-dc3cd1632f00bcf8f3a5"
+        ]
+      }
+    },
+    {
+      "id": "printc_dowhile_goto_emit_1204",
+      "description": "PrintC emitBlockDoWhile body / emitBlockGoto wrapped structural dispatch (printc.cc:3068-3095, 2766-2778): do { body } while (cond); emission with nested properif rendered through getBlock(0)->emit, the wrapped DoWhile-inside-Goto composite, and the null-parent gotoPrints arm versus locked Ghidra 12.0.4 (d4fd9f87)",
+      "runner": [
+        "tools/run_printc_dowhile_goto_emit_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/printc_dowhile_goto_emit_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_printc_dowhile_goto_emit_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/printc_dowhile_goto_emit_1204.cc",
+          "fixture_source_2": "tests/oracle/printc_dowhile_goto_emit_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/printc.rs",
+          "src/prettyprint.rs",
+          "tests/oracle/printc_dowhile_goto_emit_1204.cc",
+          "tests/oracle/printc_dowhile_goto_emit_1204.rs",
+          "tools/run_printc_dowhile_goto_emit_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-ad8a94eff74be038af29",
+          "RG-F-ebde2e2ae073fd7c65aa",
+          "RG-F-fd44b0e0bd93649279b9"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-634b92f70a856fe528aa",
+          "GH12-F-f862d95aebb5e886b4bc"
+        ]
+      }
+    },
+    {
+      "id": "funcdata_canonical_arch_1204",
+      "description": "Funcdata constructor always binds an Architecture (glb = scope->getArch(), funcdata.cc:48): diffed projections arch_nonnull / stack space_name / arch_identity_shared between the real BfdArchitecture x86-64 oracle chain and Rugra Funcdata::new canonical default binding; Rust-only tails (min_laned_size wiring, SplitDatatype gates, set_arch override) asserted in-binary [FUNDATA-CANONICAL-ARCH-0001; residual: no constructor Scope parameter yet, FUNDATA-LOCALSCOPE-OWNERSHIP-0001]",
+      "runner": [
+        "tools/run_funcdata_canonical_arch_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/funcdata_canonical_arch_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_funcdata_canonical_arch_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/funcdata_canonical_arch_1204.cc",
+          "fixture_source_2": "tests/oracle/funcdata_canonical_arch_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/funcdata.rs",
+          "src/arch.rs",
+          "tests/oracle/funcdata_canonical_arch_1204.cc",
+          "tests/oracle/funcdata_canonical_arch_1204.rs",
+          "tools/run_funcdata_canonical_arch_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-be586e0206a87f8aa61b",
+          "RG-F-4e1430dcb618565edaac",
+          "RG-F-c2477d7016db450482e5"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-5a0500346bdd8387f323"
+        ]
+      }
+    },
+    {
+      "id": "stackslot_fold_1204",
+      "description": "Spacebase-relative STORE/LOAD stack-space reindex (HTTPD-STACKSLOT-FOLD-0001): canonical Architecture attach so RuleLoadVarnode/RuleStoreVarnode correctSpacebase reindexes in_RSP chains into the stack space; fold observable zero-diff (corpus in_RSP 148->0, deterministic driver surviving=1 in_RSP-chained=0); per-function body stays MISMATCH with registered param-inference/deref/loop-rotation residual families [3f1883df]",
+      "runner": [
+        "tools/run_stackslot_fold_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "nightly"
+      ],
+      "evidence_status": "MISMATCH",
+      "cache": {
+        "metadata": "tests/oracle/stackslot_fold_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_stackslot_fold_oracle.sh",
+          "regression_driver": "examples/stackfold_dbg.rs"
+        },
+        "inputs": {
+          "ghidra_excerpt": "tests/oracle/stackslot_fold_1204.ghidra.c",
+          "rugra_excerpt": "tests/oracle/stackslot_fold_1204.rugra.c"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/ruleaction.rs",
+          "src/funcdata.rs",
+          "examples/httpd_decompile.rs",
+          "examples/stackfold_dbg.rs",
+          "tests/oracle/stackslot_fold_1204.ghidra.c",
+          "tests/oracle/stackslot_fold_1204.rugra.c",
+          "tools/run_stackslot_fold_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-7a6925073fe4541326c6",
+          "RG-F-c2477d7016db450482e5"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-472f3b78edfb9031015e"
+        ]
       }
     }
   ]
