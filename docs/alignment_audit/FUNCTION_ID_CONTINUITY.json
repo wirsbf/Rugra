@@ -11,16 +11,16 @@
     "src_tree": "004b20c8ed6da74cf6457a4386570bae4801bc78"
   },
   "checkpoint": {
-    "commit": "ac7a35266cf5612ac6d8bb340f53a4a946418d14",
-    "commit_tree": "0fb01cc37220d231e42ab5369271684c2aea208d",
-    "rust_function_records": 10581,
-    "rust_projection_sha256": "00522843c33d7e4dc0dff80d1ca6dbf2d95b41dfe9608cd7bee77c302973dd0b",
-    "src_tree": "9ecc44287480fb5dcf5c6698756351596eeeb1f5"
+    "commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+    "commit_tree": "2b4aa45b1e85a1dab990205bef9380c970519a02",
+    "rust_function_records": 10603,
+    "rust_projection_sha256": "8234e2040bfa992ba988826fa9fd933c3706049b3580dfbb771985eb12ccbf6d",
+    "src_tree": "f6bb5f01db453532f7be202b5e1e4a9e6bb5822b"
   },
   "history": {
-    "commit_count": 432,
+    "commit_count": 437,
     "first_commit": "7ae30f5bcfba5e1adce2a4e8cdeebc23d96964cb",
-    "last_commit": "ac7a35266cf5612ac6d8bb340f53a4a946418d14",
+    "last_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
     "mode": "first_parent"
   },
   "id_scheme": {
@@ -918,6 +918,18 @@
       "signature": "fn get_space_from_const_vn(vn: &Arc<RwLock<Varnode>>) -> crate::space::AddressSpace"
     },
     {
+      "base_id": "RG-F-110d014b3b0e579592a2",
+      "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "prettyprint",
+      "name": "postfix_fn_name",
+      "new_id": "RG-F-110d014b3b0e579592a2",
+      "owner": "free",
+      "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+      "path": "src/prettyprint.rs",
+      "signature": "fn postfix_fn_name(input: &str) -> &str"
+    },
+    {
       "base_id": "RG-F-1149be944c98f817e88f",
       "child_blob": "4039ff4c94e4728de06b586e9bedc3ade27e1378",
       "introduced_at_commit": "eaa5ed9b6b8b3b7f1f9abf358c65141acd1498c2",
@@ -1098,6 +1110,18 @@
       "signature": "fn query_global_symbol_hit( &self, vn_space: crate::space::AddressSpace, vn_offset: u64, ) -> Option<String>"
     },
     {
+      "base_id": "RG-F-1338e567f56c180e99ee",
+      "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "prettyprint",
+      "name": "observe_str",
+      "new_id": "RG-F-1338e567f56c180e99ee",
+      "owner": "impl:PostfixStats",
+      "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+      "path": "src/prettyprint.rs",
+      "signature": "fn observe_str(&mut self, pass: usize, before: &str, after: &str)"
+    },
+    {
       "base_id": "RG-F-1351f06a2748de7f0508",
       "child_blob": "2785c8c0862a83d456c1a69deb7619949f4214b0",
       "introduced_at_commit": "420174438fdf3ae4f7e09b483af14cc04215316d",
@@ -1254,6 +1278,18 @@
       "signature": "fn new(flags: u32) -> Self"
     },
     {
+      "base_id": "RG-F-168586405b4a5f13f031",
+      "child_blob": "585b3d414b45d57bf1932dd2a13f150dc3fd37fc",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "printc",
+      "name": "callee_returns_void",
+      "new_id": "RG-F-168586405b4a5f13f031",
+      "owner": "impl:PrintC",
+      "parent_blob": "4c05a312650b21e66cfd38a21e213b372cf87583",
+      "path": "src/printc.rs",
+      "signature": "fn callee_returns_void(&self, op: &PcodeOp) -> bool"
+    },
+    {
       "base_id": "RG-F-176965f2d197861d4701",
       "child_blob": "9d0eb152509f2bf05c2366a3afe930354e70af5f",
       "introduced_at_commit": "980f08317308b104fb02cc0094d2845555f98b3d",
@@ -1384,6 +1420,18 @@
       "parent_blob": "86545928d1c129fe81f7b015e96d0423587227b9",
       "path": "src/tracedag.rs",
       "signature": "fn bp_distance(&self, a: usize, b: usize) -> i32"
+    },
+    {
+      "base_id": "RG-F-195a8e77db98cbe5cd59",
+      "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "prettyprint",
+      "name": "stats_enabled",
+      "new_id": "RG-F-195a8e77db98cbe5cd59",
+      "owner": "impl:PostfixStats",
+      "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+      "path": "src/prettyprint.rs",
+      "signature": "fn stats_enabled() -> bool"
     },
     {
       "base_id": "RG-F-19cbcfb43b2ad638307e",
@@ -2766,6 +2814,18 @@
       "signature": "fn rule_names_for_opcode(&self, opcode: crate::opcodes::OpCode) -> Vec<&str>"
     },
     {
+      "base_id": "RG-F-3865499be614e5334fa8",
+      "child_blob": "b0a740551b6f5727fd2ef4ff1bb9380c9ff7d29a",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "disasm::x86_lift",
+      "name": "shift_byone_len",
+      "new_id": "RG-F-3865499be614e5334fa8",
+      "owner": "impl:X86Lifter",
+      "parent_blob": "ae3e144c54a0ed2571aa3624b7c1f5116785f99f",
+      "path": "src/disasm/x86_lift.rs",
+      "signature": "fn shift_byone_len(inst: &Instruction) -> Option<usize>"
+    },
+    {
       "base_id": "RG-F-386f697ff55eadbd2270",
       "child_blob": "9d0eb152509f2bf05c2366a3afe930354e70af5f",
       "introduced_at_commit": "980f08317308b104fb02cc0094d2845555f98b3d",
@@ -2968,6 +3028,18 @@
       "parent_blob": "5294bda8f0e39fa14facd6b59d066c379a416b35",
       "path": "src/block.rs",
       "signature": "fn first_op(&self) -> Option<PcodeOpRef>"
+    },
+    {
+      "base_id": "RG-F-3bd6cdd2997cc3f4dd19",
+      "child_blob": "b0a740551b6f5727fd2ef4ff1bb9380c9ff7d29a",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "disasm::x86_lift",
+      "name": "push_raw",
+      "new_id": "RG-F-3bd6cdd2997cc3f4dd19",
+      "owner": "impl:X86Lifter",
+      "parent_blob": "ae3e144c54a0ed2571aa3624b7c1f5116785f99f",
+      "path": "src/disasm/x86_lift.rs",
+      "signature": "fn push_raw( ops: &mut Vec<PcodeOpRaw>, opcode: OpCode, ins: &[VarnodeRaw], out: Option<&VarnodeRaw>, )"
     },
     {
       "base_id": "RG-F-3be4beb6411d6b4d8a2b",
@@ -3400,6 +3472,18 @@
       "parent_blob": "8154a4a0c0a60ea8488f0b25f19c607210e5f8d0",
       "path": "src/address.rs",
       "signature": "fn decode_with_size( decoder: &mut dyn crate::marshal::Decoder, registry: &SpaceRegistry, size: &mut u32, ) -> Result<SpaceAddress, String>"
+    },
+    {
+      "base_id": "RG-F-43cd730f33f0693305f6",
+      "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "prettyprint",
+      "name": "postfix_hash",
+      "new_id": "RG-F-43cd730f33f0693305f6",
+      "owner": "free",
+      "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+      "path": "src/prettyprint.rs",
+      "signature": "fn postfix_hash(s: &str) -> u64"
     },
     {
       "base_id": "RG-F-440e7f86651bdb352597",
@@ -3868,6 +3952,18 @@
       "parent_blob": "1408d531463d00c2ad963602d2bfafdf887dc6a6",
       "path": "src/marshal.rs",
       "signature": "fn get_indexed_attribute_id(&mut self, attrib_id: &AttributeId) -> u32"
+    },
+    {
+      "base_id": "RG-F-4d5e9af28f7111bc731f",
+      "child_blob": "585b3d414b45d57bf1932dd2a13f150dc3fd37fc",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "printc",
+      "name": "test_nonvoid_locked_callee_keeps_assignment_lhs",
+      "new_id": "RG-F-4d5e9af28f7111bc731f",
+      "owner": "free",
+      "parent_blob": "4c05a312650b21e66cfd38a21e213b372cf87583",
+      "path": "src/printc.rs",
+      "signature": "fn test_nonvoid_locked_callee_keeps_assignment_lhs()"
     },
     {
       "base_id": "RG-F-4d8a7817de76229c59cc",
@@ -5286,6 +5382,18 @@
       "signature": "fn clear_category(&mut self, cat: i32)"
     },
     {
+      "base_id": "RG-F-6e98648b4fff08725466",
+      "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "prettyprint",
+      "name": "new",
+      "new_id": "RG-F-6e98648b4fff08725466",
+      "owner": "impl:PostfixStats",
+      "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+      "path": "src/prettyprint.rs",
+      "signature": "fn new() -> Self"
+    },
+    {
       "base_id": "RG-F-6ed189c4cf051831e5f1",
       "child_blob": "5f43cf8954f5a62b8573be019c88a3a608d9ccd2",
       "introduced_at_commit": "2d78b5afc4333180187c1c764b9b23fd71289487",
@@ -5428,6 +5536,18 @@
       "parent_blob": "d3ea6840982f4361845f672862fab3267626ed9d",
       "path": "src/space.rs",
       "signature": "fn resolve(&self, offset: u64) -> Option<&FspecEntry>"
+    },
+    {
+      "base_id": "RG-F-6fde951fa416a91fd617",
+      "child_blob": "9e70003bac29a9e6fb57aaaaa4e4f36f0715679b",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "block",
+      "name": "dbg_front_leaf_start_addr",
+      "new_id": "RG-F-6fde951fa416a91fd617",
+      "owner": "free",
+      "parent_blob": "a92f1d2a8ece4bcdf1625871df84ce7b0ed3bb05",
+      "path": "src/block.rs",
+      "signature": "fn dbg_front_leaf_start_addr( bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, ) -> u64"
     },
     {
       "base_id": "RG-F-703f0f2722ff56c4a6bb",
@@ -6114,6 +6234,18 @@
       "signature": "fn does_deadcode(&self) -> bool"
     },
     {
+      "base_id": "RG-F-7e82eb7f0c441de1704f",
+      "child_blob": "b0a740551b6f5727fd2ef4ff1bb9380c9ff7d29a",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "disasm::x86_lift",
+      "name": "emit_load_slot",
+      "new_id": "RG-F-7e82eb7f0c441de1704f",
+      "owner": "impl:X86Lifter",
+      "parent_blob": "ae3e144c54a0ed2571aa3624b7c1f5116785f99f",
+      "path": "src/disasm/x86_lift.rs",
+      "signature": "fn emit_load_slot( &mut self, addr: &VarnodeRaw, slot: &VarnodeRaw, ops: &mut Vec<PcodeOpRaw>, )"
+    },
+    {
       "base_id": "RG-F-7ec7d8e3acf6434eb376",
       "child_blob": "8adbeb5bd75b08b57eb8dfc064512888640e0864",
       "introduced_at_commit": "a3cda8b996dad8ff6418cf2c63b539a89866a84c",
@@ -6294,6 +6426,18 @@
       "signature": "fn close_brace_indent(&mut self, brace: &str)"
     },
     {
+      "base_id": "RG-F-81a6e185f6e75fa2bba2",
+      "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "prettyprint",
+      "name": "emit",
+      "new_id": "RG-F-81a6e185f6e75fa2bba2",
+      "owner": "impl:PostfixStats",
+      "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+      "path": "src/prettyprint.rs",
+      "signature": "fn emit(self, input: &str, output: &str)"
+    },
+    {
       "base_id": "RG-F-81afe358ba9923ea7a37",
       "child_blob": "581421ce4c37aea1173dfda9cbe198d88fcb359a",
       "introduced_at_commit": "f44f641545188578706e0b5912317cee3402d794",
@@ -6376,6 +6520,18 @@
       "parent_blob": "ef1769e2b22ad63ccd8d8fe35acfd901e73043f1",
       "path": "src/printc.rs",
       "signature": "fn cast_type_string(ct: &crate::type_system::Datatype) -> String"
+    },
+    {
+      "base_id": "RG-F-83b05c1fe00356048c26",
+      "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "prettyprint",
+      "name": "bump",
+      "new_id": "RG-F-83b05c1fe00356048c26",
+      "owner": "impl:PostfixStats",
+      "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+      "path": "src/prettyprint.rs",
+      "signature": "fn bump(&mut self, pass: usize)"
     },
     {
       "base_id": "RG-F-83e853484f56821c1812",
@@ -6688,6 +6844,18 @@
       "parent_blob": "a9179e6432deabd7f9dfd228ed71a94a5d1ff2ba",
       "path": "src/fspec.rs",
       "signature": "fn set_inline(&mut self, val: bool)"
+    },
+    {
+      "base_id": "RG-F-89391e141ab1dc241643",
+      "child_blob": "de9e6e3462ef4dfecdeeeaa211c0744fe5ead024",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "blockaction",
+      "name": "extend_to_container",
+      "new_id": "RG-F-89391e141ab1dc241643",
+      "owner": "impl:LoopBody",
+      "parent_blob": "e7d9cde9acd98cbb3c6ccb716bdd07b5a1f20169",
+      "path": "src/blockaction.rs",
+      "signature": "fn extend_to_container( &self, container_head: i32, container_tails: &[i32], body: &mut Vec<i32>, graph: &BlockGraph, )"
     },
     {
       "base_id": "RG-F-8a21652789ccd6ead05e",
@@ -7290,6 +7458,18 @@
       "signature": "fn dwarf_base_type( name: String, size: usize, entry: &DebuggingInformationEntry<DwarfReader>, ) -> Result<Arc<Datatype>>"
     },
     {
+      "base_id": "RG-F-940b3e62538fa6ea99b6",
+      "child_blob": "b0a740551b6f5727fd2ef4ff1bb9380c9ff7d29a",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "disasm::x86_lift",
+      "name": "shift_count_form",
+      "new_id": "RG-F-940b3e62538fa6ea99b6",
+      "owner": "impl:X86Lifter",
+      "parent_blob": "ae3e144c54a0ed2571aa3624b7c1f5116785f99f",
+      "path": "src/disasm/x86_lift.rs",
+      "signature": "fn shift_count_form(inst: &Instruction) -> Option<ShiftCount>"
+    },
+    {
       "base_id": "RG-F-949799a34501700c4178",
       "child_blob": "0d8cf0ac26e57fccca9e1c46efa478daffb4a0a1",
       "introduced_at_commit": "2c5bdb309d65dd9b38cac62426832235569388f5",
@@ -7799,7 +7979,7 @@
       "introduced_at_commit": "a5362afcfcccc25d87e4853552440d4fad619d1b",
       "module": "printc",
       "name": "emit_flow_basic",
-      "new_id": "RG-F-0e446c2b7aa88ef6b4a2",
+      "new_id": "RG-F-a176e923c63403710964",
       "owner": "impl:PrintC",
       "parent_blob": "8fd771c35277d4ff21739b78b3a3859cfc65ad2b",
       "path": "src/printc.rs",
@@ -8334,6 +8514,18 @@
       "signature": "fn cancel_pending_print(&mut self)"
     },
     {
+      "base_id": "RG-F-aca2efe1658e0339ca93",
+      "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "prettyprint",
+      "name": "observe",
+      "new_id": "RG-F-aca2efe1658e0339ca93",
+      "owner": "impl:PostfixStats",
+      "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+      "path": "src/prettyprint.rs",
+      "signature": "fn observe(&mut self, pass: usize, before: &Option<Vec<String>>, after: &[String])"
+    },
+    {
       "base_id": "RG-F-ada8b71bab89cd3b8c6d",
       "child_blob": "c37f65cb7c79a63f780c462ed30484dc2370c722",
       "introduced_at_commit": "ee7f8f02db93740962d69fae35606fb14e398d16",
@@ -8356,6 +8548,18 @@
       "parent_blob": "60dce4ad46631a8ba4521e2da55f6f115b153731",
       "path": "src/fspec.rs",
       "signature": "fn test_assumed_extension_space_join_and_minsize_gates()"
+    },
+    {
+      "base_id": "RG-F-ae033fdaa9b8f29b0870",
+      "child_blob": "3506e7aefb1db9c1931cfa71dab68c94413e91c8",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "coreaction",
+      "name": "op_has_attached_callspec",
+      "new_id": "RG-F-ae033fdaa9b8f29b0870",
+      "owner": "impl:ActionDeadCode",
+      "parent_blob": "fb460e50fb9e964cf233f8f3baecdff8491da3d5",
+      "path": "src/coreaction.rs",
+      "signature": "fn op_has_attached_callspec(fd: &Funcdata, op_ref: &crate::op::PcodeOpRef) -> bool"
     },
     {
       "base_id": "RG-F-ae975f5c15f5bea65bd1",
@@ -8440,18 +8644,6 @@
       "parent_blob": "a5c0c6f9557598bc6a1de70606b74d5d71c7f8ab",
       "path": "src/stringmanage.rs",
       "signature": "fn test_native_clamp_vs_java_contract_long_string()"
-    },
-    {
-      "base_id": "RG-F-b17f9f9f43aed18da23f",
-      "child_blob": "0d8cf0ac26e57fccca9e1c46efa478daffb4a0a1",
-      "introduced_at_commit": "2c5bdb309d65dd9b38cac62426832235569388f5",
-      "module": "prettyprint",
-      "name": "pretty_print_while_break_fold_compact_prefix",
-      "new_id": "RG-F-b17f9f9f43aed18da23f",
-      "owner": "free",
-      "parent_blob": "38bdc875983849bcfafe58830144ee965db35ba8",
-      "path": "src/prettyprint.rs",
-      "signature": "fn pretty_print_while_break_fold_compact_prefix()"
     },
     {
       "base_id": "RG-F-b26561ea983223f81dcf",
@@ -8682,6 +8874,18 @@
       "signature": "fn execute_load_base(&mut self) -> Result<(), EmulateFailure>"
     },
     {
+      "base_id": "RG-F-b70b955a6504096ca4c6",
+      "child_blob": "585b3d414b45d57bf1932dd2a13f150dc3fd37fc",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "printc",
+      "name": "test_void_callee_call_prints_statement_and_bare_return",
+      "new_id": "RG-F-b70b955a6504096ca4c6",
+      "owner": "free",
+      "parent_blob": "4c05a312650b21e66cfd38a21e213b372cf87583",
+      "path": "src/printc.rs",
+      "signature": "fn test_void_callee_call_prints_statement_and_bare_return()"
+    },
+    {
       "base_id": "RG-F-b86fded4265b54389d2d",
       "child_blob": "da974cb01433fd7580dd3cfb1b1d03ca721263d7",
       "introduced_at_commit": "26eee4ad27fc36a132c948876c9e0fbbb79051e2",
@@ -8704,6 +8908,18 @@
       "parent_blob": "4f70431cfcc1514d44947048c84dfd20dded852d",
       "path": "src/coreaction.rs",
       "signature": "fn op_inherits_sign(opc: OpCode) -> bool"
+    },
+    {
+      "base_id": "RG-F-b98219945eeab5541eae",
+      "child_blob": "de9e6e3462ef4dfecdeeeaa211c0744fe5ead024",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "blockaction",
+      "name": "check_switch_skips",
+      "new_id": "RG-F-b98219945eeab5541eae",
+      "owner": "impl:CollapseStructure<'a>",
+      "parent_blob": "e7d9cde9acd98cbb3c6ccb716bdd07b5a1f20169",
+      "path": "src/blockaction.rs",
+      "signature": "fn check_switch_skips(&mut self, switch_idx: usize, exitblock: Option<i32>) -> bool"
     },
     {
       "base_id": "RG-F-b992a7f938634f6aee23",
@@ -9112,6 +9328,18 @@
       "parent_blob": "0f0ff16f3a23d9d72b1798dfd76583b64b7c957d",
       "path": "src/varnode.rs",
       "signature": "fn bind_call_spec(&mut self, call_spec: &Arc<RwLock<crate::fspec::FuncCallSpecs>>)"
+    },
+    {
+      "base_id": "RG-F-c1785da50f233e6656fa",
+      "child_blob": "b0a740551b6f5727fd2ef4ff1bb9380c9ff7d29a",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "disasm::x86_lift",
+      "name": "gpr_id",
+      "new_id": "RG-F-c1785da50f233e6656fa",
+      "owner": "impl:X86Lifter",
+      "parent_blob": "ae3e144c54a0ed2571aa3624b7c1f5116785f99f",
+      "path": "src/disasm/x86_lift.rs",
+      "signature": "fn gpr_id(name: &str) -> Option<u8>"
     },
     {
       "base_id": "RG-F-c192fde2d44b7e666b31",
@@ -9618,6 +9846,18 @@
       "signature": "fn end_return_type(&mut self, id: i32)"
     },
     {
+      "base_id": "RG-F-cbd439bcb7baf098ebd5",
+      "child_blob": "9e70003bac29a9e6fb57aaaaa4e4f36f0715679b",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "block",
+      "name": "print_tree_dbg",
+      "new_id": "RG-F-cbd439bcb7baf098ebd5",
+      "owner": "free",
+      "parent_blob": "a92f1d2a8ece4bcdf1625871df84ce7b0ed3bb05",
+      "path": "src/block.rs",
+      "signature": "fn print_tree_dbg( bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, depth: usize, out: &mut String, )"
+    },
+    {
       "base_id": "RG-F-cc32d670f33a582bd625",
       "child_blob": "40e9ece4190b8fa96dc885af06466bf5bb13386d",
       "introduced_at_commit": "8e5944cad072ae10595214016a5f70e64fcae015",
@@ -9676,6 +9916,18 @@
       "parent_blob": "5294bda8f0e39fa14facd6b59d066c379a416b35",
       "path": "src/block.rs",
       "signature": "fn is_goto_in(&self, slot: usize) -> bool"
+    },
+    {
+      "base_id": "RG-F-cdb1f89a461f2bc26b35",
+      "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "prettyprint",
+      "name": "snap",
+      "new_id": "RG-F-cdb1f89a461f2bc26b35",
+      "owner": "impl:PostfixStats",
+      "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+      "path": "src/prettyprint.rs",
+      "signature": "fn snap<S: AsRef<str>>(lines: &[S]) -> Option<Vec<String>>"
     },
     {
       "base_id": "RG-F-ce29c77d4e9789b04c57",
@@ -9856,6 +10108,18 @@
       "parent_blob": "1e8fe1c3bc1908fc26a0a7cda58eb22e5b3844e2",
       "path": "src/blockaction.rs",
       "signature": "fn force_false_edge_composite( bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, out0: Option<&Arc<RwLock<dyn FlowBlock + Send + Sync>>>, components: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>], )"
+    },
+    {
+      "base_id": "RG-F-d1b0a47649b86f32c6e4",
+      "child_blob": "b0a740551b6f5727fd2ef4ff1bb9380c9ff7d29a",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "disasm::x86_lift",
+      "name": "lift_shift",
+      "new_id": "RG-F-d1b0a47649b86f32c6e4",
+      "owner": "impl:X86Lifter",
+      "parent_blob": "ae3e144c54a0ed2571aa3624b7c1f5116785f99f",
+      "path": "src/disasm/x86_lift.rs",
+      "signature": "fn lift_shift(&mut self, inst: &Instruction, dir: ShiftDir, ops: &mut Vec<PcodeOpRaw>)"
     },
     {
       "base_id": "RG-F-d1bd414f498437fcfef1",
@@ -10108,6 +10372,18 @@
       "parent_blob": "60ff6efbb9f766bb1677513cbd111545708b444c",
       "path": "src/fspec.rs",
       "signature": "fn contained_by_range(base: u64, sz2: i32, addr: u64, sz: i32) -> bool"
+    },
+    {
+      "base_id": "RG-F-d679d71be0316c5fe01f",
+      "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "prettyprint",
+      "name": "pretty_print_while_break_compact_header_unfolded",
+      "new_id": "RG-F-d679d71be0316c5fe01f",
+      "owner": "free",
+      "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+      "path": "src/prettyprint.rs",
+      "signature": "fn pretty_print_while_break_compact_header_unfolded()"
     },
     {
       "base_id": "RG-F-d71d3c5ba226b67dbd28",
@@ -10720,6 +10996,18 @@
       "parent_blob": "efef9d895948d8fbf821c09b3df3d3acd3a6e199",
       "path": "src/varmap.rs",
       "signature": "fn annotate_raw_stack_ptr(&mut self, fd: &mut crate::funcdata::Funcdata)"
+    },
+    {
+      "base_id": "RG-F-e5632e4f36ea77045d6b",
+      "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "prettyprint",
+      "name": "postfix_line_mutations",
+      "new_id": "RG-F-e5632e4f36ea77045d6b",
+      "owner": "free",
+      "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+      "path": "src/prettyprint.rs",
+      "signature": "fn postfix_line_mutations<S: AsRef<str>>(before: &[S], after: &[S]) -> u64"
     },
     {
       "base_id": "RG-F-e655cdd47b1cf899bf84",
@@ -12004,6 +12292,18 @@
       "parent_blob": "9caf3207ac72015b8e46a4e397bf514cac75377a",
       "path": "src/typeop.rs",
       "signature": "fn new(type_factory: Arc<RwLock<TypeFactory>>) -> Self"
+    },
+    {
+      "base_id": "RG-F-ff47a45e9db8b2646a01",
+      "child_blob": "9e70003bac29a9e6fb57aaaaa4e4f36f0715679b",
+      "introduced_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "module": "block",
+      "name": "addr_of",
+      "new_id": "RG-F-ff47a45e9db8b2646a01",
+      "owner": "fn:fn print_tree_dbg( bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, depth: usize, out: &mut String, )",
+      "parent_blob": "a92f1d2a8ece4bcdf1625871df84ce7b0ed3bb05",
+      "path": "src/block.rs",
+      "signature": "fn addr_of(bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> String"
     },
     {
       "base_id": "RG-F-ff741eec389f6e2c6e18",
@@ -14347,6 +14647,37 @@
       ],
       "new_id": "RG-F-977e74c702d9c9d318ba",
       "origin_kind": "introduced_live"
+    },
+    {
+      "aliases": [
+        "RG-F-2723244b1664e2c12a1c"
+      ],
+      "base_id": "RG-F-2723244b1664e2c12a1c",
+      "events": [
+        {
+          "child_blob": "de9e6e3462ef4dfecdeeeaa211c0744fe5ead024",
+          "commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "find_exit: LoopBody container arm adds the container: Option<(i32, Vec<i32>)> parameter (07678863, BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001); the reachable container set routes through the new extend_to_container"
+          ],
+          "from_id": "RG-F-2723244b1664e2c12a1c",
+          "from_module": "blockaction",
+          "from_name": "find_exit",
+          "from_owner": "impl:LoopBody",
+          "from_path": "src/blockaction.rs",
+          "from_signature": "fn find_exit(&mut self, body: &[i32], graph: &BlockGraph)",
+          "parent_blob": "e7d9cde9acd98cbb3c6ccb716bdd07b5a1f20169",
+          "to_id": "RG-F-ba30411e7974455ce7c2",
+          "to_module": "blockaction",
+          "to_name": "find_exit",
+          "to_owner": "impl:LoopBody",
+          "to_path": "src/blockaction.rs",
+          "to_signature": "fn find_exit(&mut self, body: &[i32], graph: &BlockGraph, container: Option<(i32, Vec<i32>)>)"
+        }
+      ],
+      "new_id": "RG-F-ba30411e7974455ce7c2",
+      "origin_kind": "baseline"
     },
     {
       "aliases": [
@@ -22874,7 +23205,8 @@
     },
     {
       "aliases": [
-        "RG-F-a176e923c63403710964"
+        "RG-F-a176e923c63403710964",
+        "RG-F-0e446c2b7aa88ef6b4a2"
       ],
       "base_id": "RG-F-a176e923c63403710964",
       "events": [
@@ -22898,9 +23230,30 @@
           "to_owner": "impl:PrintC",
           "to_path": "src/printc.rs",
           "to_signature": "fn emit_flow_basic( &mut self, block_arc: &std::sync::Arc< std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, )"
+        },
+        {
+          "child_blob": "585b3d414b45d57bf1932dd2a13f150dc3fd37fc",
+          "commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+          "evidence": [
+            "reviewed_successor_allowlist",
+            "emit_flow_basic: rustfmt reflow of the RwLock trait-object parameter adds the inner trailing separator (0b067de5, SCOPEBREAK-GOTOTYPE label-ledger fix); the raw ID reverts to the baseline-era token a176e923, closing the a176e923 -> 0e446c2b lineage loop"
+          ],
+          "from_id": "RG-F-0e446c2b7aa88ef6b4a2",
+          "from_module": "printc",
+          "from_name": "emit_flow_basic",
+          "from_owner": "impl:PrintC",
+          "from_path": "src/printc.rs",
+          "from_signature": "fn emit_flow_basic( &mut self, block_arc: &std::sync::Arc< std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>, )",
+          "parent_blob": "4c05a312650b21e66cfd38a21e213b372cf87583",
+          "to_id": "RG-F-a176e923c63403710964",
+          "to_module": "printc",
+          "to_name": "emit_flow_basic",
+          "to_owner": "impl:PrintC",
+          "to_path": "src/printc.rs",
+          "to_signature": "fn emit_flow_basic( &mut self, block_arc: &std::sync::Arc< std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>, >, )"
         }
       ],
-      "new_id": "RG-F-0e446c2b7aa88ef6b4a2",
+      "new_id": "RG-F-a176e923c63403710964",
       "origin_kind": "introduced_live"
     },
     {
@@ -27983,16 +28336,16 @@
   "schema": 2,
   "semantics": "Raw scheme-2 IDs remain stable_id(module, owner, normalized_signature). This separate post-baseline layer composes historical aliases to the raw checkpoint IDs. Automatic transitions require a unique 1-to-1, same path/module/owner/name pair whose only signature difference is either a leading parameter binding mut or the trailing parameter separator, in the same patch hunk with the same non-empty annotation. Tombstones are diagnostic only; introduced_live rows are new checkpoint definitions, not fabricated historical origins. Schema 2 extends tombstones to die under review as classes introduced after the baseline (origin block carries the introduced_live provenance); schema 1 rows are unchanged.",
   "stats": {
-    "alias_tokens": 510,
+    "alias_tokens": 512,
     "ambiguous": 0,
     "baseline_records": 9639,
     "collisions": 0,
-    "current_records": 10581,
-    "events": 510,
-    "introduced_live": 1002,
-    "lineages": 493,
-    "reviewed_transitions": 244,
-    "tombstones": 61
+    "current_records": 10603,
+    "events": 512,
+    "introduced_live": 1027,
+    "lineages": 494,
+    "reviewed_transitions": 246,
+    "tombstones": 65
   },
   "tombstones": [
     {
@@ -28688,6 +29041,33 @@
     },
     {
       "aliases": [
+        "RG-F-b17f9f9f43aed18da23f"
+      ],
+      "base_id": "RG-F-b17f9f9f43aed18da23f",
+      "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+      "deleted_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "events": [],
+      "module": "prettyprint",
+      "name": "pretty_print_while_break_fold_compact_prefix",
+      "origin": {
+        "child_blob": "0d8cf0ac26e57fccca9e1c46efa478daffb4a0a1",
+        "introduced_at_commit": "2c5bdb309d65dd9b38cac62426832235569388f5",
+        "kind": "introduced_live",
+        "module": "prettyprint",
+        "name": "pretty_print_while_break_fold_compact_prefix",
+        "owner": "free",
+        "parent_blob": "38bdc875983849bcfafe58830144ee965db35ba8",
+        "path": "src/prettyprint.rs",
+        "signature": "fn pretty_print_while_break_fold_compact_prefix()"
+      },
+      "owner": "free",
+      "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+      "path": "src/prettyprint.rs",
+      "reason": "W2 cut 2: pretty_print_while_break_fold_compact_prefix deleted with the P-wbfold while-break fold pass retirement (8b4f2c66, POSTFIX-RETIRE-0001); the compact-header diagnostic duty moves to the renamed pretty_print_while_break_compact_header_unfolded (a fresh introduced_live class)",
+      "signature": "fn pretty_print_while_break_fold_compact_prefix()"
+    },
+    {
+      "aliases": [
         "RG-F-b2cb4f664723372b7400"
       ],
       "base_id": "RG-F-b2cb4f664723372b7400",
@@ -28781,6 +29161,22 @@
       "path": "src/jumptable.rs",
       "reason": "EmulateFunction methods retired by the loader/error channel rework; no successor (73b5ef26)",
       "signature": "fn emulate_path( &mut self, val: u64, path_meld: &PathMeld, startop: &Arc<RwLock<PcodeOp>>, startvn: &Arc<RwLock<Varnode>>, ) -> Option<u64>"
+    },
+    {
+      "aliases": [
+        "RG-F-c469c5afb8c5eaa6944e"
+      ],
+      "base_id": "RG-F-c469c5afb8c5eaa6944e",
+      "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+      "deleted_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "events": [],
+      "module": "prettyprint",
+      "name": "remove_duplicate_labels",
+      "owner": "impl:EmitNoMarkup",
+      "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+      "path": "src/prettyprint.rs",
+      "reason": "W2 cut 1: remove_duplicate_labels deleted with the Pdl duplicate-LAB_ dedup pass retirement (dc086b58, POSTFIX-RETIRE-0001); no same-role successor exists",
+      "signature": "fn remove_duplicate_labels(text: &str) -> String"
     },
     {
       "aliases": [
@@ -29005,6 +29401,38 @@
       "path": "src/prettyprint.rs",
       "reason": "W0 dead-code removal: recover_struct_fields_anon deleted as a dead anon-struct recovery helper (68e3ebdc, POSTFIX-RETIRE-0001); no same-role successor exists",
       "signature": "fn recover_struct_fields_anon(text: &str) -> String"
+    },
+    {
+      "aliases": [
+        "RG-F-f9bbf97d97898f798acb"
+      ],
+      "base_id": "RG-F-f9bbf97d97898f798acb",
+      "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+      "deleted_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "events": [],
+      "module": "prettyprint",
+      "name": "has_enclosing_loop_ctx",
+      "owner": "impl:EmitNoMarkup",
+      "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+      "path": "src/prettyprint.rs",
+      "reason": "W2 cut 8: has_enclosing_loop_ctx deleted with the P1b exit-goto rewrite pre-scan helper retirement (f8cae893, POSTFIX-RETIRE-0001); no same-role successor exists",
+      "signature": "fn has_enclosing_loop_ctx(emitted: &[String], target_indent: usize) -> bool"
+    },
+    {
+      "aliases": [
+        "RG-F-fdd3859cc4666533f82b"
+      ],
+      "base_id": "RG-F-fdd3859cc4666533f82b",
+      "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+      "deleted_at_commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+      "events": [],
+      "module": "prettyprint",
+      "name": "negate_simple_condition",
+      "owner": "impl:EmitNoMarkup",
+      "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+      "path": "src/prettyprint.rs",
+      "reason": "W2 cut 3: negate_simple_condition deleted with the P16 forward goto-to-if fold pass retirement (2173be28, POSTFIX-RETIRE-0001); no same-role successor exists",
+      "signature": "fn negate_simple_condition(cond: &str) -> String"
     }
   ]
 }

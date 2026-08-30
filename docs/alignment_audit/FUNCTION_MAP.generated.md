@@ -9,10 +9,10 @@
 - Declaration references: 6317
 - Raw Ctags function records: 15811
 - Ghidra IDs carrying a guard disambiguator: 12
-- Rugra functions: 10581
-  (8775 production + 1806 test)
-- Exact definition-start mappings: 3992
-- Body-line references requiring audit: 353
+- Rugra functions: 10603
+  (8795 production + 1808 test)
+- Exact definition-start mappings: 3995
+- Body-line references requiring audit: 352
 
 The old hand-maintained `~2055` denominator is not a completion metric. The generated
 9494-definition denominator remains entirely `UNTESTED` unless a locked behavior fixture
@@ -34,7 +34,7 @@ records complete same-input/same-output evidence.
 | `bfd_arch.hh` | 1 | 0 | 0 | 1 |
 | `block.cc` | 204 | 124 | 5 | 75 |
 | `block.hh` | 171 | 80 | 0 | 91 |
-| `blockaction.cc` | 83 | 54 | 0 | 29 |
+| `blockaction.cc` | 83 | 56 | 0 | 27 |
 | `blockaction.hh` | 29 | 3 | 0 | 26 |
 | `callgraph.cc` | 26 | 22 | 0 | 4 |
 | `callgraph.hh` | 19 | 0 | 0 | 19 |
@@ -91,7 +91,7 @@ records complete same-input/same-output evidence.
 | `fspec.hh` | 271 | 80 | 0 | 191 |
 | `funcdata.cc` | 43 | 25 | 0 | 18 |
 | `funcdata.hh` | 136 | 29 | 0 | 107 |
-| `funcdata_block.cc` | 34 | 8 | 19 | 7 |
+| `funcdata_block.cc` | 34 | 9 | 18 | 7 |
 | `funcdata_op.cc` | 49 | 33 | 4 | 12 |
 | `funcdata_varnode.cc` | 60 | 57 | 0 | 3 |
 | `ghidra_arch.cc` | 43 | 1 | 0 | 42 |

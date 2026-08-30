@@ -1322,18 +1322,71 @@ REKEY_TOMBSTONE_COUNT = 47
 # (12/12 agree at short-hash width; 9/9 removal origins death-pinned by
 # spine scan: 09b367f5/a986dce4/d4fd9f87 for the re-keys, 92160892/
 # 68e3ebdc/f8fe3cb3 for the tombstones).
-CONTINUITY_CHECKPOINT_COMMIT = "ac7a35266cf5612ac6d8bb340f53a4a946418d14"
-CONTINUITY_CHECKPOINT_COMMIT_TREE = "0fb01cc37220d231e42ab5369271684c2aea208d"
-CONTINUITY_CHECKPOINT_SRC_TREE = "9ecc44287480fb5dcf5c6698756351596eeeb1f5"
-CONTINUITY_CHECKPOINT_PARENT = "c07e23459086e426469ffa333578ba5138e12294"
+# Ninth extension window, 2026-08-30 (REGISTRY-CHECKPOINT-ADVANCE,
+# w-registry10): branch-line anchor merge 7c955a78 (first parent b382a54f)
+# folds master af678926, a multi-window batch: the W2 postfix-retirement nine
+# knife cuts (dc086b58 Pdl duplicate-LAB_ dedup, 8b4f2c66 P-wbfold while-break
+# fold with the compact-prefix -> compact-header-unfolded rename, 2173be28
+# P16 forward goto-to-if fold, 41010263 P5 label second sweep, c6e69fc9 P4
+# backward-goto loop conversion, 8d200937 P3 label first sweep, 86949d98 P2
+# conditional exit-goto rewrite, f8cae893 P1b exit-goto pre-scan, 9777c407 P1
+# redundant-goto skip with the first scan becoming a copy), the W1 env-gated
+# per-pass mutation counters (2cae9654: PostfixStats struct with
+# new/bump/observe/observe_str/snap/emit/stats_enabled plus
+# postfix_fn_name/postfix_hash/postfix_line_mutations), the callin0 fix
+# (780c01fd ActionDeadCode spec-less CALL in(0) consume with
+# op_has_attached_callspec), pushMultiequals (8e76b30a, body-only change to
+# the already-live push_multiequals), the livearm/httpd CBRANCH out-edge
+# order fix (844d7a90, body-only), the shift-flags family (ea5010e9 shl/sal
+# + 3ad1612b shr + 62479a18 sar with the old shift arm retired:
+# lift_shift/shift_count_form/shift_byone_len/emit_load_slot/push_raw/
+# gpr_id all introduced inside the window), the collapse4 pair (07678863
+# LoopBody::findExit container arm extendToContainer +
+# CollapseStructure::checkSwitchSkips with the block.rs debug helpers
+# dbg_front_leaf_start_addr/print_tree_dbg/addr_of for blockstruct_tree_dump)
+# and the print-side pair (d37cef07 FuncProto-void print projection guards
+# with callee_returns_void and two tests; 0b067de5 scopeBreak goto_type
+# label-ledger fix).  As in the seventh/eighth windows the checkpoint is
+# pinned to the anchor itself: the branch tip b382a54f was already contained
+# in master, so the mandated --no-ff merge tree equals master tip and the
+# HEAD:src invariant lands on 7c955a78:src directly.  Window effect
+# collapsed at the single merge replay step (first-parent 432 -> 437,
+# records 10_581 -> 10_603): 26 introduced records, two reviewed
+# transitions, four reviewed tombstones, zero unproved removals.  The nine
+# W2 cuts retire nine passes but only four helper functions die
+# (remove_duplicate_labels dc086b58, pretty_print_while_break_fold_
+# compact_prefix 8b4f2c66, negate_simple_condition 2173be28,
+# has_enclosing_loop_ctx f8cae893); cuts 4-7 and 9 removed inline pass
+# logic with no function-level removal.  The two transitions: find_exit
+# gains the container: Option<(i32, Vec<i32>)> parameter (07678863), and
+# emit_flow_basic's rustfmt reflow (0b067de5) adds the inner trailing
+# separator so the raw ID reverts to the baseline-era token a176e923,
+# closing the a176e923 -> 0e446c2b lineage loop (EXPECTED_TRANSITIONS pair
+# advances to (a176e923, a176e923)).  The renamed
+# pretty_print_while_break_compact_header_unfolded is a fresh introduced
+# class, not a successor (different name, no 4-key match).
+# EXPECTED_INTRODUCED 1002 -> 1027; EXPECTED_TRANSITIONS 493 -> 494;
+# EXPECTED_TOMBSTONES 61 -> 65; reviewed transition rules 244 -> 246,
+# tombstone rules 61 -> 65.
+# Evidence: zero-drift probe (ambiguous=0, collisions=0) with per-token
+# git log -S origin pinning (26/26 introduced origins pinned: x86_lift
+# family ea5010e9, blockaction/block.rs collapse4 family 07678863, printc
+# void family d37cef07, coreaction callin0 780c01fd, prettyprint stats
+# family 2cae9654, header-unfolded rename 8b4f2c66; 6/6 removal origins
+# death-pinned: 07678863/0b067de5 for the re-keys, dc086b58/8b4f2c66/
+# 2173be28/f8cae893 for the tombstones).
+CONTINUITY_CHECKPOINT_COMMIT = "7c955a789a953f7568162e2904c131db2a9a1124"
+CONTINUITY_CHECKPOINT_COMMIT_TREE = "2b4aa45b1e85a1dab990205bef9380c970519a02"
+CONTINUITY_CHECKPOINT_SRC_TREE = "f6bb5f01db453532f7be202b5e1e4a9e6bb5822b"
+CONTINUITY_CHECKPOINT_PARENT = "b382a54f340186665cb3c97d3af01ec3d770d814"
 CONTINUITY_BASELINE_MIGRATION_BLOB = "8ecab1e6160b7d4d28a15aba0cad89c2fe8fc171"
 CONTINUITY_BASELINE_MIGRATION_SHA256 = (
     "16236201f0b4920d2a3e33a848df05d3d601ee60998f7f7c51464d4eeb7739e9"
 )
-CONTINUITY_FIRST_PARENT_COMMIT_COUNT = 432
+CONTINUITY_FIRST_PARENT_COMMIT_COUNT = 437
 CONTINUITY_FIRST_COMMIT = "7ae30f5bcfba5e1adce2a4e8cdeebc23d96964cb"
 CONTINUITY_BASELINE_RUST_RECORDS = 9_639
-CONTINUITY_CHECKPOINT_RUST_RECORDS = 10_581
+CONTINUITY_CHECKPOINT_RUST_RECORDS = 10_603
 CONTINUITY_EXPECTED_TRANSITIONS = {
     ("RG-F-003416535aaee2f83d44", "RG-F-81062ccc03179475b483"),
     ("RG-F-014e421b9237134489e2", "RG-F-a0058e4a4e7ff0e25ce6"),
@@ -1407,6 +1460,7 @@ CONTINUITY_EXPECTED_TRANSITIONS = {
     ("RG-F-24f186531946104c862a", "RG-F-bbda0b7433deea952b24"),
     ("RG-F-2642a89b925f1de36e09", "RG-F-35cae7c4aaff6a354558"),
     ("RG-F-2646dcd008a8290bb207", "RG-F-977e74c702d9c9d318ba"),
+    ("RG-F-2723244b1664e2c12a1c", "RG-F-ba30411e7974455ce7c2"),
     ("RG-F-273e39542f5211caf365", "RG-F-7b9617242d96a3bd3335"),
     ("RG-F-2835c96bb378a92f97e6", "RG-F-534675b041b9cad59baa"),
     ("RG-F-2837daddc938af793d3c", "RG-F-8015705770472a5fdead"),
@@ -1668,7 +1722,7 @@ CONTINUITY_EXPECTED_TRANSITIONS = {
     ("RG-F-a0fa97e4da60b58ff89c", "RG-F-ceca69f0d45ed10fca87"),
     ("RG-F-a10d860ce8bc8dd86327", "RG-F-23956b20a1c593a174b0"),
     ("RG-F-a134cd8378f1b1bea740", "RG-F-3c9dec833bbcaa4f4e66"),
-    ("RG-F-a176e923c63403710964", "RG-F-0e446c2b7aa88ef6b4a2"),
+    ("RG-F-a176e923c63403710964", "RG-F-a176e923c63403710964"),
     ("RG-F-a23ffa80c4cf415d47bc", "RG-F-d82f555f894e694b2bfc"),
     ("RG-F-a27d48811a96d0201aa6", "RG-F-2760e336ab5d6ab10f1f"),
     ("RG-F-a33c0fce3605345a648e", "RG-F-591ad2963b9ceb809480"),
@@ -1828,6 +1882,7 @@ CONTINUITY_EXPECTED_TRANSITIONS = {
     ("RG-F-fec5ede5b348f8c683da", "RG-F-7cadc7ac3096a5dd59da"),
     ("RG-F-fefdb48c92ee9155d8c7", "RG-F-aee8d565c0bd52e44f5c"),
     ("RG-F-ff9e56b34d4facda44b5", "RG-F-ddbc2a4da7caf5c794ea"),
+
 }
 CONTINUITY_EXPECTED_TOMBSTONES = {
     ("RG-F-002a9ec13d8e062540b9", "RG-F-002a9ec13d8e062540b9", "874e81f7b9877b519c8ab55b57cbac24de0918f0"),
@@ -1871,12 +1926,14 @@ CONTINUITY_EXPECTED_TOMBSTONES = {
     ("RG-F-aeb06d1101df113fd3b2", "RG-F-aeb06d1101df113fd3b2", "b8da22a86f28cb2750fe85e1a7c69391c900a1fc"),
     ("RG-F-b04bd21a5d624e1fc06f", "RG-F-b04bd21a5d624e1fc06f", "26d675e7f6131ed17e8de6a689b5b3d85ec21470"),
     ("RG-F-b08ab6d33575c1274bd2", "RG-F-b08ab6d33575c1274bd2", "2d78b5afc4333180187c1c764b9b23fd71289487"),
+    ("RG-F-b17f9f9f43aed18da23f", "RG-F-b17f9f9f43aed18da23f", "7c955a789a953f7568162e2904c131db2a9a1124"),
     ("RG-F-b2cb4f664723372b7400", "RG-F-b2cb4f664723372b7400", "11371d512e9b374ec73d5a7e7181e6ed52eba296"),
     ("RG-F-b8da745f71c85226ca7e", "RG-F-b8da745f71c85226ca7e", "26eee4ad27fc36a132c948876c9e0fbbb79051e2"),
     ("RG-F-bd201b6f89048574b546", "RG-F-bd201b6f89048574b546", "1644180de42b58cd0155f62c9b3ad82efc820a57"),
     ("RG-F-bd9141cd6ae9f5a4ddad", "RG-F-bd9141cd6ae9f5a4ddad", "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db"),
     ("RG-F-be28b0ba758951601dda", "RG-F-be28b0ba758951601dda", "8dae10d3c2b02df7424beaba2abf9fdf72bbdb66"),
     ("RG-F-c261bf862e86c3ae27dd", "RG-F-c261bf862e86c3ae27dd", "73b5ef26453372a2b562051f113f9b299bcebeef"),
+    ("RG-F-c469c5afb8c5eaa6944e", "RG-F-c469c5afb8c5eaa6944e", "7c955a789a953f7568162e2904c131db2a9a1124"),
     ("RG-F-c5250352efdcc2e7c776", "RG-F-c5250352efdcc2e7c776", "ac7a35266cf5612ac6d8bb340f53a4a946418d14"),
     ("RG-F-ca8e5e48082eb933ed01", "RG-F-ca8e5e48082eb933ed01", "4d1bcf29bf527f542141adef5774980d4831b0ce"),
     ("RG-F-cb2c742a239b918218ca", "RG-F-cb2c742a239b918218ca", "cddcefd88006dd68ed69284ed31562a08fda3107"),
@@ -1891,6 +1948,9 @@ CONTINUITY_EXPECTED_TOMBSTONES = {
     ("RG-F-e6a5ca59c7df4b468e28", "RG-F-e6a5ca59c7df4b468e28", "73b5ef26453372a2b562051f113f9b299bcebeef"),
     ("RG-F-ef02d5e77634269ac883", "RG-F-ef02d5e77634269ac883", "4495eb601d22f959bad64a6c085f516431195b42"),
     ("RG-F-f6de4e0f5185cd7b9aef", "RG-F-f6de4e0f5185cd7b9aef", "ac7a35266cf5612ac6d8bb340f53a4a946418d14"),
+    ("RG-F-f9bbf97d97898f798acb", "RG-F-f9bbf97d97898f798acb", "7c955a789a953f7568162e2904c131db2a9a1124"),
+    ("RG-F-fdd3859cc4666533f82b", "RG-F-fdd3859cc4666533f82b", "7c955a789a953f7568162e2904c131db2a9a1124"),
+
 }
 CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-00043d119eb89495e0bc",
@@ -1967,6 +2027,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-104ea5cc2fcc8b0d8a7e",
     "RG-F-10821d77db3ea7d39567",
     "RG-F-10e53934244421ea0176",
+    "RG-F-110d014b3b0e579592a2",
     "RG-F-1149be944c98f817e88f",
     "RG-F-114d6190a80e5e9307af",
     "RG-F-1187eefd1d74587d27e4",
@@ -1982,6 +2043,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-12c4d303663de55dfbce",
     "RG-F-12f506606145bce1a4e0",
     "RG-F-131701c4a9ad3e4a5002",
+    "RG-F-1338e567f56c180e99ee",
     "RG-F-1351f06a2748de7f0508",
     "RG-F-1383b2dc9fd67a304b91",
     "RG-F-13ffa94daa2221be7810",
@@ -1995,6 +2057,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-15fb7edd798a685a3808",
     "RG-F-162be04d1ee0cee22ad3",
     "RG-F-16631043521a9cd28528",
+    "RG-F-168586405b4a5f13f031",
     "RG-F-176965f2d197861d4701",
     "RG-F-17fefe80512bbd3c0d38",
     "RG-F-1816b9129452b10d63d5",
@@ -2006,6 +2069,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-192c52f2c4dbbd140bf0",
     "RG-F-193774d891bb395d9cf0",
     "RG-F-19447bb36d2f795e7478",
+    "RG-F-195a8e77db98cbe5cd59",
     "RG-F-19cbcfb43b2ad638307e",
     "RG-F-19dde5f8d302ddf77cc4",
     "RG-F-19f5afa199e2f612b42f",
@@ -2121,6 +2185,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-37fe618e1633b505056f",
     "RG-F-3814aca9f7db808e8d20",
     "RG-F-385fc5a3f59720c4cea6",
+    "RG-F-3865499be614e5334fa8",
     "RG-F-386f697ff55eadbd2270",
     "RG-F-3871f27f5e5e5a66bf35",
     "RG-F-388ae1a628488af9f3fb",
@@ -2138,6 +2203,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-3af69af0c791124cf2e7",
     "RG-F-3b710a409ce34f951cbd",
     "RG-F-3bb0f0a39065da5c5344",
+    "RG-F-3bd6cdd2997cc3f4dd19",
     "RG-F-3be4beb6411d6b4d8a2b",
     "RG-F-3c0b620503d7ecc03ee5",
     "RG-F-3ce54e6ad0d15b9e87a6",
@@ -2174,6 +2240,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-4285eeed77503f4cb85e",
     "RG-F-428eff40e78b1400b16f",
     "RG-F-439be28c753d959db436",
+    "RG-F-43cd730f33f0693305f6",
     "RG-F-440e7f86651bdb352597",
     "RG-F-445256a1fc831affd166",
     "RG-F-44aaa849ab3789113a8d",
@@ -2213,6 +2280,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-4d0d944ef8c3713a9359",
     "RG-F-4d37ff30d6d890378621",
     "RG-F-4d4627dace046260c244",
+    "RG-F-4d5e9af28f7111bc731f",
     "RG-F-4d8a7817de76229c59cc",
     "RG-F-4d8c1521cc6856f70e53",
     "RG-F-4de51ce227b408d7773d",
@@ -2331,6 +2399,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-6e116b115a2c22372a63",
     "RG-F-6e1871d56adcb2e298de",
     "RG-F-6e2eddf5972b0c1dc5d0",
+    "RG-F-6e98648b4fff08725466",
     "RG-F-6ed189c4cf051831e5f1",
     "RG-F-6f3483fcb562a345f033",
     "RG-F-6f670e8ba30ea9978e5f",
@@ -2343,6 +2412,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-6faca00e16168f0d41ef",
     "RG-F-6fc6d4a71ef6637ac545",
     "RG-F-6fd877ebe33c4959701e",
+    "RG-F-6fde951fa416a91fd617",
     "RG-F-703f0f2722ff56c4a6bb",
     "RG-F-70c79b3f4414d50bc975",
     "RG-F-70ef11178981ecccf2df",
@@ -2400,6 +2470,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-7e31ad5922751fb790cb",
     "RG-F-7e71e31324297f001c9d",
     "RG-F-7e73ad7e651aaf595505",
+    "RG-F-7e82eb7f0c441de1704f",
     "RG-F-7ec7d8e3acf6434eb376",
     "RG-F-7ed78f16069a0f084e9b",
     "RG-F-7f11b51548c81dde1997",
@@ -2415,6 +2486,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-80be11223c7b4a4b7bbc",
     "RG-F-8103478fa5632787566b",
     "RG-F-811f256e0c355602aba9",
+    "RG-F-81a6e185f6e75fa2bba2",
     "RG-F-81afe358ba9923ea7a37",
     "RG-F-822fae0d17f3b9ab5d5b",
     "RG-F-826b449b376d040fa113",
@@ -2422,6 +2494,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-82f08ff8f803b2ee3aa0",
     "RG-F-836f64d548ebdf5f7622",
     "RG-F-83817fe0866b1803be05",
+    "RG-F-83b05c1fe00356048c26",
     "RG-F-83e853484f56821c1812",
     "RG-F-8438bf2f8da15594e9c7",
     "RG-F-84749c9d1107aad23889",
@@ -2448,6 +2521,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-88afc95ae2cd730cbcbc",
     "RG-F-88bb8c20631231472f93",
     "RG-F-88e0290b444504b3758a",
+    "RG-F-89391e141ab1dc241643",
     "RG-F-8a21652789ccd6ead05e",
     "RG-F-8a7993e2ea925d23366f",
     "RG-F-8aa5dc00a1f81698124d",
@@ -2498,6 +2572,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-9382f4598eb174593d93",
     "RG-F-9396874c90d04b9b724a",
     "RG-F-93d4ce0a4a37056809a1",
+    "RG-F-940b3e62538fa6ea99b6",
     "RG-F-949799a34501700c4178",
     "RG-F-94b6b3fb5c6254fee1bf",
     "RG-F-94f2502fa3cf379178d7",
@@ -2585,8 +2660,10 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-ac69b64441781fc5ee72",
     "RG-F-ac7f4ffeac8f8ef49e9d",
     "RG-F-ac9fd9012e6ee802132b",
+    "RG-F-aca2efe1658e0339ca93",
     "RG-F-ada8b71bab89cd3b8c6d",
     "RG-F-adba82208d7b6be78431",
+    "RG-F-ae033fdaa9b8f29b0870",
     "RG-F-ae975f5c15f5bea65bd1",
     "RG-F-af1e44fa513e12f2bb5a",
     "RG-F-af1fad6c42c639175c6f",
@@ -2594,7 +2671,6 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-af844086a72c72c05543",
     "RG-F-b0ea87f1b544cf77eed5",
     "RG-F-b0f297ffd0622fb16d72",
-    "RG-F-b17f9f9f43aed18da23f",
     "RG-F-b26561ea983223f81dcf",
     "RG-F-b34be787885cf85b976b",
     "RG-F-b3947087ae26a6f102b2",
@@ -2614,8 +2690,10 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-b6ae11ee0ecf46345b5d",
     "RG-F-b6eb614d70bae44503e6",
     "RG-F-b6f2e000999425bf7813",
+    "RG-F-b70b955a6504096ca4c6",
     "RG-F-b86fded4265b54389d2d",
     "RG-F-b8d6bfcf5c3fb56338d8",
+    "RG-F-b98219945eeab5541eae",
     "RG-F-b992a7f938634f6aee23",
     "RG-F-b9ec9cad42de3b32a4ac",
     "RG-F-ba374c84c3bc3a1660b9",
@@ -2650,6 +2728,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-c0d24bb320a86779a09e",
     "RG-F-c12b39479cf49fcf9110",
     "RG-F-c155aba255b133d73969",
+    "RG-F-c1785da50f233e6656fa",
     "RG-F-c192fde2d44b7e666b31",
     "RG-F-c1c5fb6d272cef0aa292",
     "RG-F-c24d81aefca155bcc5ed",
@@ -2692,11 +2771,13 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-cb8b4f27a437ada8d295",
     "RG-F-cba1ca033fe56fb95dc4",
     "RG-F-cbcddb4f51051843f896",
+    "RG-F-cbd439bcb7baf098ebd5",
     "RG-F-cc32d670f33a582bd625",
     "RG-F-cc3467c0325479704011",
     "RG-F-cc58a2a17a33c2df4d83",
     "RG-F-ccaaf582cb3d30dfd6eb",
     "RG-F-cd2741ab696196b985a4",
+    "RG-F-cdb1f89a461f2bc26b35",
     "RG-F-ce29c77d4e9789b04c57",
     "RG-F-cea9601ee8e40245ed69",
     "RG-F-cf2eab2bc7330bee7b3c",
@@ -2712,6 +2793,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-d1271f08594059b16449",
     "RG-F-d174fbfcace857dd19b9",
     "RG-F-d18af6e7aacac4ddb137",
+    "RG-F-d1b0a47649b86f32c6e4",
     "RG-F-d1bd414f498437fcfef1",
     "RG-F-d20c5571513ec921bedb",
     "RG-F-d26508b5acc22dd2c8ba",
@@ -2733,6 +2815,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-d5b5db9e2dd32fe953c1",
     "RG-F-d5b62cebb39f2db34ea5",
     "RG-F-d673c13e10ca3f173943",
+    "RG-F-d679d71be0316c5fe01f",
     "RG-F-d71d3c5ba226b67dbd28",
     "RG-F-d71eced7a31c275ba4a5",
     "RG-F-d746d5fe277c46b2549e",
@@ -2784,6 +2867,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-e4e606b96ec0762b2786",
     "RG-F-e4f898ef03faf91f8f23",
     "RG-F-e54aa0f584468456aacd",
+    "RG-F-e5632e4f36ea77045d6b",
     "RG-F-e655cdd47b1cf899bf84",
     "RG-F-e6aac6160036788b58db",
     "RG-F-e6d44fe6157734ea6fa8",
@@ -2891,10 +2975,12 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-fefdb48c92ee9155d8c7",
     "RG-F-ff1584966c896f73c5b8",
     "RG-F-ff1924f87ac5baa0fb04",
+    "RG-F-ff47a45e9db8b2646a01",
     "RG-F-ff741eec389f6e2c6e18",
     "RG-F-ff8c7477404415d54a4f",
     "RG-F-ff9e56b34d4facda44b5",
     "RG-F-ffd3261e9186d27ad615",
+
 }
 
 # Non-mut-binding successors must be added here with exact commit, ID, path,
@@ -5610,6 +5696,34 @@ CONTINUITY_REVIEWED_TRANSITIONS: tuple[dict[str, str], ...] = (
         "child_blob": "2148724af96f1d9842b61ef6796199d071e814e6",
         "review": "remove_do_nothing_block: ActionDoNothing faithful removal chain reworked the signature inside 09b367f5",
     },
+    # --- ninth extension window (w-registry10, collapsed at merge 7c955a78) ---
+    {
+        "base_id": "RG-F-2723244b1664e2c12a1c",
+        "from_id": "RG-F-2723244b1664e2c12a1c",
+        "to_id": "RG-F-ba30411e7974455ce7c2",
+        "commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+        "from_path": "src/blockaction.rs",
+        "to_path": "src/blockaction.rs",
+        "parent_blob": "e7d9cde9acd98cbb3c6ccb716bdd07b5a1f20169",
+        "child_blob": "de9e6e3462ef4dfecdeeeaa211c0744fe5ead024",
+        "review": "find_exit: LoopBody container arm adds the container: Option<(i32, Vec<i32>)> "
+                  "parameter (07678863, BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001); the reachable "
+                  "container set routes through the new extend_to_container",
+    },
+    {
+        "base_id": "RG-F-a176e923c63403710964",
+        "from_id": "RG-F-0e446c2b7aa88ef6b4a2",
+        "to_id": "RG-F-a176e923c63403710964",
+        "commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+        "from_path": "src/printc.rs",
+        "to_path": "src/printc.rs",
+        "parent_blob": "4c05a312650b21e66cfd38a21e213b372cf87583",
+        "child_blob": "585b3d414b45d57bf1932dd2a13f150dc3fd37fc",
+        "review": "emit_flow_basic: rustfmt reflow of the RwLock trait-object parameter adds "
+                  "the inner trailing separator (0b067de5, SCOPEBREAK-GOTOTYPE label-ledger "
+                  "fix); the raw ID reverts to the baseline-era token a176e923, closing the "
+                  "a176e923 -> 0e446c2b lineage loop",
+    },
 )
 CONTINUITY_REVIEWED_TOMBSTONES: tuple[dict[str, str], ...] = (
     # --- merge window 65422a62..10ea407d (master DECL-SPACING-NAMEFLOW wave) ---
@@ -6103,6 +6217,39 @@ CONTINUITY_REVIEWED_TOMBSTONES: tuple[dict[str, str], ...] = (
         "parent_blob": "0d8cf0ac26e57fccca9e1c46efa478daffb4a0a1",
         "child_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
         "reason": "W0 dead-code removal: recover_struct_fields_anon deleted as a dead anon-struct recovery helper (68e3ebdc, POSTFIX-RETIRE-0001); no same-role successor exists",
+    },
+    # --- ninth extension window (w-registry10, collapsed at merge 7c955a78) ---
+    {
+        "base_id": "RG-F-b17f9f9f43aed18da23f",
+        "from_id": "RG-F-b17f9f9f43aed18da23f",
+        "commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+        "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+        "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+        "reason": "W2 cut 2: pretty_print_while_break_fold_compact_prefix deleted with the P-wbfold while-break fold pass retirement (8b4f2c66, POSTFIX-RETIRE-0001); the compact-header diagnostic duty moves to the renamed pretty_print_while_break_compact_header_unfolded (a fresh introduced_live class)",
+    },
+    {
+        "base_id": "RG-F-c469c5afb8c5eaa6944e",
+        "from_id": "RG-F-c469c5afb8c5eaa6944e",
+        "commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+        "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+        "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+        "reason": "W2 cut 1: remove_duplicate_labels deleted with the Pdl duplicate-LAB_ dedup pass retirement (dc086b58, POSTFIX-RETIRE-0001); no same-role successor exists",
+    },
+    {
+        "base_id": "RG-F-f9bbf97d97898f798acb",
+        "from_id": "RG-F-f9bbf97d97898f798acb",
+        "commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+        "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+        "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+        "reason": "W2 cut 8: has_enclosing_loop_ctx deleted with the P1b exit-goto rewrite pre-scan helper retirement (f8cae893, POSTFIX-RETIRE-0001); no same-role successor exists",
+    },
+    {
+        "base_id": "RG-F-fdd3859cc4666533f82b",
+        "from_id": "RG-F-fdd3859cc4666533f82b",
+        "commit": "7c955a789a953f7568162e2904c131db2a9a1124",
+        "parent_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+        "child_blob": "9ac5257579bae4ed005331579735af0cf5e86153",
+        "reason": "W2 cut 3: negate_simple_condition deleted with the P16 forward goto-to-if fold pass retirement (2173be28, POSTFIX-RETIRE-0001); no same-role successor exists",
     },
 )
 CONTINUITY_REVIEWED_EPHEMERAL: tuple[dict[str, str], ...] = (
