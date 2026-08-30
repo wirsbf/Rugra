@@ -344,8 +344,8 @@ fn reconcile_int_minus_pointer(line: &str) -> String {
 // 语义:计数器只度量、绝不改变管线行为 —— 退役判定以计数=0 为必要证据。
 
 // RUGRA-GLUE: 幸存 pass 名单(管线顺序),见 post_process_output_legacy 内同序插桩
-const POSTFIX_PASS_NAMES: [&str; 27] = [
-    "P1", "P1b", "P2", "B1", "P6", "B2", "P7",
+const POSTFIX_PASS_NAMES: [&str; 26] = [
+    "P1", "P1b", "B1", "P6", "B2", "P7",
     "P8", "P9", "P10", "P11", "P12", "P13", "P14", "P15", "P16c",
     "B3", "P17", "P18", "B4", "Pecase", "P22", "P23", "P24",
     "P25", "P26", "P27",
@@ -354,31 +354,30 @@ const POSTFIX_PASS_NAMES: [&str; 27] = [
 // RUGRA-GLUE: pass 索引常量(与 POSTFIX_PASS_NAMES 同序)
 const PF_P1: usize = 0;
 const PF_P1B: usize = 1;
-const PF_P2: usize = 2;
-const PF_B1: usize = 3;
-const PF_P6: usize = 4;
-const PF_B2: usize = 5;
-const PF_P7: usize = 6;
-const PF_P8: usize = 7;
-const PF_P9: usize = 8;
-const PF_P10: usize = 9;
-const PF_P11: usize = 10;
-const PF_P12: usize = 11;
-const PF_P13: usize = 12;
-const PF_P14: usize = 13;
-const PF_P15: usize = 14;
-const PF_P16C: usize = 15;
-const PF_B3: usize = 16;
-const PF_P17: usize = 17;
-const PF_P18: usize = 18;
-const PF_B4: usize = 19;
-const PF_ECASE: usize = 20;
-const PF_P22: usize = 21;
-const PF_P23: usize = 22;
-const PF_P24: usize = 23;
-const PF_P25: usize = 24;
-const PF_P26: usize = 25;
-const PF_P27: usize = 26;
+const PF_B1: usize = 2;
+const PF_P6: usize = 3;
+const PF_B2: usize = 4;
+const PF_P7: usize = 5;
+const PF_P8: usize = 6;
+const PF_P9: usize = 7;
+const PF_P10: usize = 8;
+const PF_P11: usize = 9;
+const PF_P12: usize = 10;
+const PF_P13: usize = 11;
+const PF_P14: usize = 12;
+const PF_P15: usize = 13;
+const PF_P16C: usize = 14;
+const PF_B3: usize = 15;
+const PF_P17: usize = 16;
+const PF_P18: usize = 17;
+const PF_B4: usize = 18;
+const PF_ECASE: usize = 19;
+const PF_P22: usize = 20;
+const PF_P23: usize = 21;
+const PF_P24: usize = 22;
+const PF_P25: usize = 23;
+const PF_P26: usize = 24;
+const PF_P27: usize = 25;
 
 // RUGRA-GLUE: 逐 pass 突变计数器(每次 post_process_output 调用一个实例)
 struct PostfixStats {
@@ -708,28 +707,11 @@ impl EmitNoMarkup {
                 }
             }
 
-            // Pattern 2: `if (cond) goto LAB_XXXX;` where LAB_XXXX is an exit label
-            // Convert to `if (cond) break;` or `if (cond) return;`
-            if trimmed.contains(") goto ") && trimmed.ends_with(';') {
-                if let Some(goto_pos) = trimmed.find(") goto ") {
-                    let label_with_semi = &trimmed[goto_pos + 7..];
-                    let label_name = &label_with_semi[..label_with_semi.len() - 1];
-                    if exit_labels.contains(label_name) {
-                        let indent = lines[i].len() - lines[i].trim_start().len();
-                        let cond_part = &trimmed[..goto_pos + 1]; // "if (cond)"
-                        let indent_str: String = " ".repeat(indent);
-                        let has_loop_ctx = Self::has_enclosing_loop_ctx(&result, indent);
-                        if indent >= 4 && has_loop_ctx {
-                            result.push(format!("{}{} break;", indent_str, cond_part));
-                        } else {
-                            result.push(format!("{}{} return;", indent_str, cond_part));
-                        }
-                        pfx.bump(PF_P2);
-                        i += 1;
-                        continue;
-                    }
-                }
-            }
+            // P2 (conditional exit goto -> if-break/return) retired in
+            // POSTFIX-RETIRE-0001 W2 cut 7: W1 counters proved zero
+            // mutations on both corpora (both rpt rounds) - the emit layer
+            // no longer produces `if (cond) goto <undefined-label>;`
+            // shapes on the corpora.
 
             result.push(lines[i].to_string());
             i += 1;

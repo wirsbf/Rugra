@@ -41,6 +41,10 @@ flush 结尾——这些文本 pass 在 Ghidra 无对应物，删除即向 oracl
   （连同中间 `output_text`/`result_lines` 重 split），`final_result` 直接
   move 自首扫输出 `result`。`POSTFIX_PASS_NAMES` 28→27。
   验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
+- **刀 7（P2 条件出口 goto→if-break/return，首扫模式 2）**：删除 P2 模式块
+  与其 bump 探针。`POSTFIX_PASS_NAMES` 27→26。`exit_labels` 预扫描暂留
+  （P1b 仍消费，刀 8 一并退役）。
+  验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
 
 ## 2026-08-30：POSTFIX-RETIRE-0001 W1 — 逐 pass 突变计数器（env 门控，零行为差）
 
