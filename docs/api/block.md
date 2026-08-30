@@ -1553,3 +1553,12 @@ body_is_dead 门禁 + RC-4 循环形态 + RC-5 条件错接均未修），内容
   master 上即 MISMATCH，本次重钉 comparand sha 后复核数字不变）。oracle 侧
   观测同时实证了 target 为复合块（whiledo/list/goto）—— dyn target 设计的
   直接依据。
+
+### 2026-08-30（BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001）：诊断设施
+
+- `print_tree_dbg`（RUGRA-GLUE，BlockGraph::printTree 的诊断复刻，block.cc:616
+  printTree 语义）：递归 dump 结构树（索引/类型/front-leaf 地址/BlockGoto 目标
+  + goto_type + prints 预计算/if-goto 目标/Switch cases），供 curl/httpd runners
+  的 RUGRA_DUMP_FUNC hook 与 examples/blockstruct_tree_dump.rs 使用。
+- `dbg_front_leaf_start_addr`：穿透 BlockCopy 包装读 front leaf 起始地址（组合
+  节点自身无地址；BlockCopy 未覆写 get_start_addr）。

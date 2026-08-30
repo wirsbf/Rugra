@@ -468,7 +468,10 @@ pub struct LoopBody {
     pub exit_edges: Vec<FloatingEdge>,
     /// Nesting depth (incremented by each containing loop).
     pub depth: i32,
-    /// Immediate containing LoopBody index in the loop order (-1 = top-level).
+    /// Immediately containing loop's HEAD block index (-1 = top-level). The
+    /// oracle's `immed_container` is a LoopBody pointer (blockaction.hh:64);
+    /// heads are unique after merge_identical_heads, so the head block index
+    /// is the pointer's identity key and survives the depth sort.
     pub immed_container: i32,
     /// Number of head/tail nodes in the body (set by find_base).
     pub unique_count: usize,
@@ -606,11 +609,125 @@ impl LoopBody {
         }
     }
 
+    // Ghidra: blockaction.cc:46 LoopBody::extendToContainer
+    /// Backward-walk from this loop's head through the container's body,
+    /// marking every block reachable via non-goto in-edges. Faithful to
+    /// `LoopBody::extendToContainer` (blockaction.cc:46-74):
+    ///   - cc:49-53: the container head, if unmarked, is marked, pushed,
+    ///     and skipped as a backward-walk start (`i = 1`).
+    ///   - cc:54-60: each unmarked container tail is marked and pushed
+    ///     (backward walk DOES traverse from them).
+    ///   - cc:61-71: if this loop's head differs from the container head,
+    ///     its unmarked non-goto predecessors are marked and pushed.
+    ///   - cc:73-83: BFS over the pushed body's non-goto in-edges, marking
+    ///     every unmarked predecessor.
+    /// Used by `find_exit`'s container arm (findExit cc:227-237) to force
+    /// a subloop's exit block to lie inside its immediately containing loop.
+    pub fn extend_to_container(
+        &self,
+        container_head: i32,
+        container_tails: &[i32],
+        body: &mut Vec<i32>,
+        graph: &BlockGraph,
+    ) {
+        let mut i: usize = 0;
+        // cc:49-53: container head — add if unmarked; never walk back from it.
+        let head_marked = graph
+            .get_block(container_head as usize)
+            .map(|b| b.read().unwrap().is_mark())
+            .unwrap_or(false);
+        if !head_marked {
+            if let Some(hblk) = graph.get_block(container_head as usize) {
+                hblk.write().unwrap().set_mark();
+            }
+            body.push(container_head);
+            i = 1;
+        }
+        // cc:54-60: container tails — add if unmarked; walk back from them.
+        for &tail in container_tails {
+            let marked = graph
+                .get_block(tail as usize)
+                .map(|b| b.read().unwrap().is_mark())
+                .unwrap_or(false);
+            if !marked {
+                if let Some(tblk) = graph.get_block(tail as usize) {
+                    tblk.write().unwrap().set_mark();
+                }
+                body.push(tail);
+            }
+        }
+        // cc:61-71: this loop's head (already marked by find_base) — walk
+        // back from it unless it IS the container head.
+        if self.head != container_head {
+            let ins: Vec<i32> = match graph.get_block(self.head as usize) {
+                Some(hblk) => {
+                    let b = hblk.read().unwrap();
+                    let n = b.size_in();
+                    (0..n)
+                        .filter(|&k| !b.is_goto_in(k))
+                        .filter_map(|k| b.get_in(k).map(|e| e.point.read().unwrap().get_index()))
+                        .collect()
+                }
+                None => Vec::new(),
+            };
+            for bl in ins {
+                let marked = graph
+                    .get_block(bl as usize)
+                    .map(|b| b.read().unwrap().is_mark())
+                    .unwrap_or(false);
+                if marked {
+                    continue;
+                }
+                if let Some(blk) = graph.get_block(bl as usize) {
+                    blk.write().unwrap().set_mark();
+                }
+                body.push(bl);
+            }
+        }
+        // cc:73-83: BFS — walk non-goto in-edges of every queued block.
+        while i < body.len() {
+            let curblock = body[i];
+            i += 1;
+            let ins: Vec<i32> = match graph.get_block(curblock as usize) {
+                Some(blk) => {
+                    let b = blk.read().unwrap();
+                    let n = b.size_in();
+                    (0..n)
+                        .filter(|&k| !b.is_goto_in(k))
+                        .filter_map(|k| b.get_in(k).map(|e| e.point.read().unwrap().get_index()))
+                        .collect()
+                }
+                None => Vec::new(),
+            };
+            for bl in ins {
+                let marked = graph
+                    .get_block(bl as usize)
+                    .map(|b| b.read().unwrap().is_mark())
+                    .unwrap_or(false);
+                if marked {
+                    continue;
+                }
+                if let Some(blk) = graph.get_block(bl as usize) {
+                    blk.write().unwrap().set_mark();
+                }
+                body.push(bl);
+            }
+        }
+    }
+
     // Ghidra: blockaction.cc:182 LoopBody::findExit
     /// Pick a single exit block. Faithful to `LoopBody::findExit`
-    /// (blockaction.cc:182-239). Prefers exits from tails, then head, then
-    /// middle body nodes. If there's a container, the exit must be in it.
-    pub fn find_exit(&mut self, body: &[i32], graph: &BlockGraph) {
+    /// (blockaction.cc:182-239). Scans tail exits (cc:185-197), then body
+    /// nodes' exits (cc:199-221). With no containing loop the first
+    /// unmarked exit wins immediately (cc:191-195/208-212); with a
+    /// container, candidates accumulate into trialexit and the winner is
+    /// the first candidate inside the container's re-marked body
+    /// (cc:227-237 via extendToContainer + clearMarks). `container` is the
+    /// immediately containing loop's (head, tails) — the oracle's
+    /// `immed_container` pointer resolved through the depth sort (heads are
+    /// unique after mergeIdenticalHeads, so the head is the pointer's
+    /// identity key).
+    pub fn find_exit(&mut self, body: &[i32], graph: &BlockGraph, container: Option<(i32, Vec<i32>)>) {
         let mut trial_exit: Vec<i32> = Vec::new();
         // Exits from tails.
         for &tail in &self.tails {
@@ -632,7 +749,7 @@ impl LoopBody {
                     .map(|b| b.read().unwrap().is_mark())
                     .unwrap_or(false);
                 if !marked {
-                    if self.immed_container == -1 {
+                    if container.is_none() {
                         self.exit_block = cur;
                         return;
                     }
@@ -663,7 +780,7 @@ impl LoopBody {
                     .map(|b| b.read().unwrap().is_mark())
                     .unwrap_or(false);
                 if !marked {
-                    if self.immed_container == -1 {
+                    if container.is_none() {
                         self.exit_block = cur;
                         return;
                     }
@@ -675,11 +792,29 @@ impl LoopBody {
         if trial_exit.is_empty() {
             return;
         }
-        // If there's a container, the exit must be marked in the container's body.
-        // We approximate: pick the first trial exit (the container-constrained
-        // selection requires the container's body marks, which are transient;
-        // for now use the first trial exit).
-        self.exit_block = trial_exit[0];
+        // cc:227-237: if there is a containing loop, force exitblock to be
+        // inside the containing loop. The container's body is re-marked via
+        // extendToContainer (a backward walk from this loop's head through
+        // the container's head/tails), and the first trial exit that falls
+        // inside those marks wins; only the extension marks are cleared.
+        // (The previous port approximated this with `trial_exit[0]`, which
+        // could pick an exit OUTSIDE the container and desynchronized the
+        // likely-goto ordering — BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001.)
+        if let Some((chead, ctails)) = container {
+            let mut extension: Vec<i32> = Vec::new();
+            self.extend_to_container(chead, &ctails, &mut extension, graph);
+            for &te in &trial_exit {
+                let marked = graph
+                    .get_block(te as usize)
+                    .map(|b| b.read().unwrap().is_mark())
+                    .unwrap_or(false);
+                if marked {
+                    self.exit_block = te;
+                    break;
+                }
+            }
+            clear_marks(&extension, graph);
+        }
     }
 
     // Ghidra: blockaction.cc:245 LoopBody::orderTails
@@ -2127,6 +2262,7 @@ impl<'a> CollapseStructure<'a> {
     /// nothing; Rugra logs and lets the caller stop, see the cc:1275 site in
     /// collapse_all_5step). Faithful to `selectGoto` (blockaction.cc:1260-1277).
     fn select_goto(&mut self) -> Option<i32> {
+        let trace = std::env::var("RUGRA_TRACE_SELECTGOTO").is_ok();
         while self.update_loop_body() {
             while self.likelyiter < self.likelygoto.len() {
                 let fe = self.likelygoto[self.likelyiter].clone();
@@ -2134,6 +2270,23 @@ impl<'a> CollapseStructure<'a> {
                 // cc:1266: getCurrentEdge re-resolves against live graph.
                 if let Some((startbl_idx, outedge)) = fe.get_current_edge(self.graph) {
                     // cc:1269: setGotoBranch(outedge).
+                    if trace {
+                        let tgt = self
+                            .graph
+                            .get_block(startbl_idx as usize)
+                            .and_then(|b| b.read().unwrap().get_out(outedge).map(|e| e.point))
+                            .map(|t| t.read().unwrap().get_index())
+                            .unwrap_or(-1);
+                        let src_addr = self
+                            .graph
+                            .get_block(startbl_idx as usize)
+                            .map(|b| crate::block::front_leaf(&b).map(|l| l.read().unwrap().get_start_addr().as_u64()).unwrap_or(0))
+                            .unwrap_or(0);
+                        eprintln!(
+                            "[SELECTGOTO] {} mark goto: block #{} @ {:#x} outedge={} -> #{}",
+                            self.name, startbl_idx, src_addr, outedge, tgt
+                        );
+                    }
                     if let Some(blk) = self.graph.get_block(startbl_idx as usize) {
                         self.set_goto_branch_on_block(&blk, outedge);
                     }
@@ -2634,12 +2787,26 @@ impl<'a> CollapseStructure<'a> {
                 loop_order[sub_idx].depth += 1;
             }
             // Set immed_container to the deepest container seen so far.
+            // The oracle stores the container's LoopBody POINTER (survives
+            // the step-4 depth sort); Rugra stores the container's HEAD
+            // block index — unique after merge_identical_heads — so the
+            // reference stays valid across the sort (BLOCKSTRUCT-COLLAPSE-
+            // RESIDUAL-0001: the previous positional index went stale).
             let my_depth = loop_order[i].depth;
+            let my_head = loop_order[i].head;
             for &sub_idx in &contain {
-                if loop_order[sub_idx].immed_container == -1
-                    || loop_order[loop_order[sub_idx].immed_container as usize].depth < my_depth
-                {
-                    loop_order[sub_idx].immed_container = i as i32;
+                let cur_container_head = loop_order[sub_idx].immed_container;
+                let replace = if cur_container_head == -1 {
+                    true
+                } else {
+                    // cc: labelContainments: (lb->immed_container->depth < depth)
+                    match loop_order.iter().find(|lb| lb.head == cur_container_head) {
+                        Some(c) => c.depth < my_depth,
+                        None => true,
+                    }
+                };
+                if replace {
+                    loop_order[sub_idx].immed_container = my_head;
                 }
             }
             clear_marks(&body, self.graph);
@@ -2648,10 +2815,21 @@ impl<'a> CollapseStructure<'a> {
         // sort on depth.
         loop_order.sort_by(|a, b| b.depth.cmp(&a.depth));
         // Step 5: for each loop, find_base / find_exit / order_tails / extend /
-        // label_exit_edges.
+        // label_exit_edges. find_exit needs its container's (head, tails);
+        // resolve via the head-keyed snapshot (the oracle reads the
+        // immed_container pointer here).
+        let containers_by_head: std::collections::HashMap<i32, Vec<i32>> = loop_order
+            .iter()
+            .map(|lb| (lb.head, lb.tails.clone()))
+            .collect();
         for lb in loop_order.iter_mut() {
             let mut body = lb.find_base(self.graph);
-            lb.find_exit(&body, self.graph);
+            let container = if lb.immed_container != -1 {
+                containers_by_head.get(&lb.immed_container).cloned()
+            } else {
+                None
+            };
+            lb.find_exit(&body, self.graph, container.map(|t| (lb.immed_container, t)));
             lb.order_tails(self.graph);
             lb.extend(&mut body, self.graph);
             lb.label_exit_edges(&body, self.graph);
@@ -5271,8 +5449,98 @@ impl<'a> CollapseStructure<'a> {
     ///       fallback: first out with output)
     ///   (3) Validate all cases: no goto in/out, sizeIn==1, sizeOut<=1,
     ///       out must go to exitblock, no nested switch
-    ///   (4) checkSwitchSkips (TODO: default-skip optimization)
+    ///   (4) checkSwitchSkips — mark skip-to-exit case edges as gotos
     ///   (5) newBlockSwitch(cases, hasExit)
+    // Ghidra: blockaction.cc:1607 CollapseStructure::checkSwitchSkips
+    /// Faithful port of `CollapseStructure::checkSwitchSkips`
+    /// (blockaction.cc:1607-1647):
+    ///   - cc:1608: no exitblock -> nothing to check (build the switch).
+    ///   - cc:1610-1628: scan the switch's out-edges — `anyskiptoexit` = a
+    ///     NON-default edge straight to the exitblock; `defaultnottoexit` =
+    ///     a default edge that does NOT go to the exitblock.
+    ///   - cc:1630-1635: a t_multigoto switch block's recorded default goto
+    ///     (BlockMultiGoto::hasDefaultGoto) also sets defaultnottoexit —
+    ///     unreachable in Rugra today (no BlockMultiGoto type exists;
+    ///     ruleBlockGoto's isSwitchOut arm wraps via BlockGoto), so the
+    ///     arm can never observe a multigoto switchbl here.
+    ///   - cc:1628-1636: without both flags there is nothing to mark.
+    ///   - cc:1637-1643: mark every NON-default edge that goes straight to
+    ///     the exitblock as a goto branch; return false so ruleBlockSwitch
+    ///     reports "matched but adds gotos" and collapseInternal re-runs
+    ///     (wrapping the newly marked edges) before the switch is built.
+    /// `isDefaultBranch` reads the mirrored F_DEFAULTSWITCH_EDGE label
+    /// (block.hh:320), installed by Funcdata::switchOver (funcdata_block.cc:
+    /// 697 setDefaultSwitch(jt->getDefaultBlock())) — Rugra's equivalent
+    /// wiring is funcdata.rs set_default_switch_mirrored.
+    fn check_switch_skips(&mut self, switch_idx: usize, exitblock: Option<i32>) -> bool {
+        // cc:1608: if (exitblock == 0) return true;
+        let Some(exit_idx) = exitblock else {
+            return true;
+        };
+        let block = match self.graph.get_block(switch_idx) {
+            Some(b) => b,
+            None => return true,
+        };
+        let sizeout = block.read().unwrap().size_out();
+        // cc:1612-1623: scan for the two flags.
+        let mut defaultnottoexit = false;
+        let mut anyskiptoexit = false;
+        for edgenum in 0..sizeout {
+            let (tgt_idx, is_default) = {
+                let r = block.read().unwrap();
+                match r.get_out(edgenum) {
+                    Some(e) => (
+                        e.point.read().unwrap().get_index(),
+                        r.is_default_branch(edgenum),
+                    ),
+                    None => continue,
+                }
+            };
+            if tgt_idx == exit_idx {
+                if !is_default {
+                    anyskiptoexit = true;
+                }
+            } else if is_default {
+                defaultnottoexit = true;
+            }
+        }
+        // cc:1628: no skip edges to the exit -> build the switch.
+        if !anyskiptoexit {
+            return true;
+        }
+        // cc:1630-1635: t_multigoto/hasDefaultGoto promotion (see doc note:
+        // no BlockMultiGoto exists in Rugra, so this arm is unreachable).
+        // cc:1636: no default elsewhere -> build the switch.
+        if !defaultnottoexit {
+            return true;
+        }
+        // cc:1637-1643: mark non-default skip-to-exit edges as goto branches.
+        let mut marked = false;
+        for edgenum in 0..sizeout {
+            let (tgt_idx, is_default) = {
+                let r = block.read().unwrap();
+                match r.get_out(edgenum) {
+                    Some(e) => (
+                        e.point.read().unwrap().get_index(),
+                        r.is_default_branch(edgenum),
+                    ),
+                    None => continue,
+                }
+            };
+            if tgt_idx == exit_idx && !is_default {
+                self.set_goto_branch_on_block(&block, edgenum);
+                marked = true;
+            }
+        }
+        let _ = marked;
+        // cc:1644: return false — "We match, but have special condition that
+        // adds gotos" (blockaction.cc:1712).
+        false
+    }
+
+    // Ghidra: blockaction.cc:1649 CollapseStructure::ruleBlockSwitch
+    /// Try to find a switch structure: find the exitblock, validate all
+    /// cases converge, run checkSwitchSkips, then build the BlockSwitch.
     pub fn try_rule_switch(&mut self, i: usize) -> bool {
         let irred_sw = std::env::var("RUGRA_IRRED_DBG")
             .map(|v| v == "1")
@@ -5290,8 +5558,15 @@ impl<'a> CollapseStructure<'a> {
             let r = block.read().unwrap();
             let outs: Vec<String> = (0..r.size_out())
                 .filter_map(|j| {
-                    r.get_out(j)
-                        .map(|e| format!("{}(L{:x})", e.point.read().unwrap().get_index(), e.flags))
+                    r.get_out(j).map(|e| {
+                        let tgt = e.point.read().unwrap();
+                        format!(
+                            "{}@{:#x}(L{:x})",
+                            tgt.get_index(),
+                            crate::block::dbg_front_leaf_start_addr(&e.point),
+                            e.flags
+                        )
+                    })
                 })
                 .collect();
             eprintln!(
@@ -5506,8 +5781,13 @@ impl<'a> CollapseStructure<'a> {
             }
         }
 
-        // Ghidra cc:1711: checkSwitchSkips (TODO: default-skip optimization).
-        // For now, proceed without default-skip handling.
+        // Ghidra cc:1711-1712: checkSwitchSkips — mark skip-to-exit case
+        // edges as unstructured gotos when the switch has a formal default
+        // elsewhere, and let collapseInternal wrap them before building the
+        // BlockSwitch (returning true = "a change was made", cc:1712).
+        if !self.check_switch_skips(i, exitblock) {
+            return true;
+        }
 
         // Ghidra cc:1714-1721: build cases list and create BlockSwitch. The
         // oracle's -cs- vector includes the dispatch block (cs[0]) because
@@ -7542,7 +7822,7 @@ mod loopbody_tests {
         let g = build_loop_cfg();
         let mut lb = LoopBody::new(1, 2);
         let body = lb.find_base(&g);
-        lb.find_exit(&body, &g);
+        lb.find_exit(&body, &g, None);
         // Exit should be block 3 (the only out-of-body target from tail 2).
         assert_eq!(lb.exit_block, 3);
         clear_marks(&body, &g);
@@ -7553,7 +7833,7 @@ mod loopbody_tests {
         let g = build_loop_cfg();
         let mut lb = LoopBody::new(1, 2);
         let body = lb.find_base(&g);
-        lb.find_exit(&body, &g);
+        lb.find_exit(&body, &g, None);
         lb.order_tails(&g);
         lb.label_exit_edges(&body, &g);
         // The 2→3 edge should be recorded (as an edge to exit_block).
@@ -7596,7 +7876,7 @@ mod loopbody_tests {
         let g = build_loop_cfg();
         let mut lb = LoopBody::new(1, 2);
         let body = lb.find_base(&g);
-        lb.find_exit(&body, &g);
+        lb.find_exit(&body, &g, None);
         lb.order_tails(&g);
         lb.label_exit_edges(&body, &g);
         let mut likely: Vec<FloatingEdge> = Vec::new();
