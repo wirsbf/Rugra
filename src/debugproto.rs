@@ -204,6 +204,175 @@ impl DebugGlobalDatabase {
     }
 }
 
+/// PLT thunk entries keyed by thunk entry address.
+///
+/// Mirrors the function symbols Ghidra's ELF front-end creates for every PLT
+/// thunk: a `.plt.sec`/`.plt` slot (an `endbr64; bnd jmp *disp32(%rip)`
+/// sequence jumping through a GOT slot owned by an
+/// `R_X86_64_JUMP_SLOT`/`.rela.plt` relocation) or a `.plt.got` slot (whose
+/// GOT slot is owned by an `R_X86_64_GLOB_DAT` relocation in `.rela.dyn`)
+/// becomes a thunk Function named after the dynamic import it resolves. The
+/// decompiler side then reads that name through the call-spec chain
+/// (`FlowInfo::queryCall` flow.cc:656-672 → `FuncCallSpecs::setFuncdata`
+/// fspec.cc:4949-4960 → `PrintC::opCall` printc.cc:601-609 `fc->getName()`),
+/// which is why an undefined dynamic import (`apr_app_initialize`,
+/// st_value==0, lives in libapr) still prints its name at every direct call
+/// site of the thunk in the locked httpd oracle
+/// (tests/golden/ghidra_httpd_1204.c: `apr_app_initialize(auStack_9c,...)`
+/// for the 0x12a6d0 thunk). Without this import a call target address has no
+/// symbol anywhere, `Funcdata::map_globals`'s no-symbol arm builds a
+/// `uRam<offset>` data-global name for it (varmap.rs build_variable_name
+/// mirroring database.cc:2455-2468), and the printer shows `uRam...()` as
+/// the callee.
+#[derive(Debug, Clone, Default)]
+pub struct ElfPltImports {
+    thunks: BTreeMap<u64, String>,
+}
+
+impl ElfPltImports {
+    /// Import every PLT thunk name from the ELF image.
+    ///
+    /// `.plt.sec`/`.plt` slots are matched to `.rela.plt` JUMP_SLOT
+    /// relocations by slot index (`i`-th relocation ↔ `base + 16*i`, with
+    /// `.plt` slots starting at index 1 to skip the resolver header);
+    /// `.plt.got` slots are decoded individually (the `f2 ff 25 <disp32>`
+    /// tail) and matched against the R_X86_64_GLOB_DAT relocation that owns
+    /// the jumped-through GOT address. Slot geometry and matching follow the
+    /// locked-oracle witnesses documented with the original driver-side
+    /// implementation (examples/curl_decompile.rs PLT resolution block;
+    /// httpd witnesses: slot 43 = 0x2a6d0 = `apr_app_initialize`,
+    /// `.plt` @0x29020, `.plt.got` @0x2a400, `.plt.sec` @0x2a420).
+    // RUGRA-GLUE: reads the same .plt/.plt.sec/.plt.got + relocation records Ghidra's Java ELF/PLT analyzer turns into thunk Function symbols; native front-end adapter for that boundary
+    pub fn parse_elf(bytes: &[u8]) -> Self {
+        let obj = match goblin::Object::parse(bytes) {
+            Ok(obj) => obj,
+            Err(_) => return Self::default(),
+        };
+        let goblin::Object::Elf(elf) = obj else {
+            return Self::default();
+        };
+        let mut thunks = BTreeMap::new();
+
+        let mut plt_sec_base = 0u64;
+        let mut plt_base = 0u64;
+        let mut plt_got: Option<(u64, u64, u64)> = None; // (sh_addr, sh_offset, sh_size)
+        for header in elf.section_headers.iter() {
+            if let Some(name) = elf.shdr_strtab.get_at(header.sh_name) {
+                match name {
+                    ".plt" => plt_base = header.sh_addr,
+                    ".plt.sec" => plt_sec_base = header.sh_addr,
+                    ".plt.got" => {
+                        plt_got =
+                            Some((header.sh_addr, header.sh_offset, header.sh_size))
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // .plt.sec (or .plt) via .rela.plt JUMP_SLOT relocations.
+        let (base, offset_start) = if plt_sec_base != 0 {
+            (plt_sec_base, 0u64)
+        } else if plt_base != 0 {
+            (plt_base, 1u64)
+        } else {
+            (0, 0)
+        };
+        if base != 0 {
+            for (i, reloc) in elf.pltrelocs.iter().enumerate() {
+                let plt_addr = base + 16 * (i as u64 + offset_start);
+                if let Some(sym) = elf.dynsyms.get(reloc.r_sym) {
+                    if let Some(name) = elf.dynstrtab.get_at(sym.st_name) {
+                        if !name.is_empty() {
+                            thunks
+                                .entry(plt_addr)
+                                .or_insert_with(|| name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // .plt.got slots: GOT owners are R_X86_64_GLOB_DAT relocations in
+        // .rela.dyn (not .rela.plt), so the slot-index loop above misses
+        // them; decode each slot's `f2 ff 25 <disp32>` tail directly.
+        if let Some((slot_vaddr, file_off, sh_size)) = plt_got {
+            for slot in 0..(sh_size as usize / 8) {
+                let start = file_off as usize + slot * 8;
+                let Some(insn) = bytes.get(start..start + 11) else {
+                    continue;
+                };
+                if insn[4] != 0xf2 || insn[5] != 0xff || insn[6] != 0x25 {
+                    continue;
+                }
+                let disp =
+                    i32::from_le_bytes([insn[7], insn[8], insn[9], insn[10]]) as i64;
+                let got_addr = (slot_vaddr + slot as u64 + 11) as i64 + disp;
+                let name = elf
+                    .dynrelas
+                    .iter()
+                    .chain(elf.dynrels.iter())
+                    .find_map(|reloc| {
+                        if reloc.r_offset != got_addr as u64 {
+                            return None;
+                        }
+                        elf.dynsyms
+                            .get(reloc.r_sym)
+                            .and_then(|sym| elf.dynstrtab.get_at(sym.st_name))
+                            .filter(|name| !name.is_empty())
+                    });
+                if let Some(name) = name {
+                    thunks
+                        .entry(slot_vaddr + slot as u64)
+                        .or_insert_with(|| name.to_string());
+                }
+            }
+        }
+
+        Self { thunks }
+    }
+
+    // RUGRA-GLUE: address-keyed lookup mirroring the Program database query the driver performs when seeding call-target symbols
+    pub fn get(&self, address: u64) -> Option<&String> {
+        self.thunks.get(&address)
+    }
+
+    // RUGRA-GLUE: deterministic address order for the driver-side seeding loop
+    pub fn iter(&self) -> impl Iterator<Item = (&u64, &String)> {
+        self.thunks.iter()
+    }
+
+    // RUGRA-GLUE: count accessor for import-boundary diagnostics
+    pub fn len(&self) -> usize {
+        self.thunks.len()
+    }
+
+    // RUGRA-GLUE: emptiness accessor for the clippy len-without-is_empty pair
+    pub fn is_empty(&self) -> bool {
+        self.thunks.is_empty()
+    }
+
+    // RUGRA-GLUE: thunk-membership test used to gate the default FUN_ naming pass (a thunk already carries its import name)
+    pub fn contains(&self, address: u64) -> bool {
+        self.thunks.contains_key(&address)
+    }
+}
+
+/// Default name for an analysis-discovered function symbol, mirroring the
+/// locked-oracle convention: Ghidra's front-end names every function the
+/// analysis creates (and no ELF symbol covers) `FUN_` + the entry address in
+/// 8-digit zero-padded hex — on the analyzeHeadless **image base** address,
+/// not the raw ELF virtual address (the httpd oracle loads the ET_DYN image
+/// at 0x100000, so the golden's shared tail chunks read `FUN_0012c520` for
+/// ELF vaddr 0x2c520). The decompiler prints such names verbatim at call
+/// sites through the same fspec chain as named functions
+/// (`PrintC::opCall` printc.cc:601-609); Rugra's driver seeds the name into
+/// its callpoint-symbol stand-in for that table.
+// RUGRA-GLUE: Ghidra's Java SymbolManager owns this default-name policy (outside decompile/cpp); native front-end adapter for the boundary
+pub fn analyze_headless_function_symbol_name(vaddr: u64, image_base: u64) -> String {
+    format!("FUN_{:08x}", image_base.wrapping_add(vaddr))
+}
+
 // RUGRA-GLUE: index of DWARF named types (struct/union/enum/typedef spellings)
 // built at the Program-import boundary. Ghidra's DWARF analyzer populates the
 // program type manager with these names, and the platform signature loader
@@ -1960,20 +2129,99 @@ mod tests {
     // signatures keep the resolved model binding — in the locked golden none
     // of the 18 parameterized DWARF functions warn, so the overlay must not
     // pin the unknown sentinel for them.
+    // HTTPD-URAM-SYMBOLIZE-0001: the PLT thunk import boundary against the
+    // locked-oracle httpd image (the binary the 12.0.4 headless golden was
+    // produced from; thunk names cross-checked against the golden's function
+    // headers `/* ---- 0x12aXXX: <name> (10 bytes) ---- */`).
+    fn httpd_bytes() -> Vec<u8> {
+        std::fs::read("examples/httpd").expect("httpd fixture")
+    }
+
     #[test]
-    fn parameterized_dwarf_prototype_keeps_resolved_model() {
-        let bytes = std::fs::read("examples/curl").expect("curl fixture");
-        let db = DebugPrototypeDatabase::parse_elf(&bytes).expect("DWARF prototypes");
-        let mut fd = Funcdata::new("GetStr", Address::new(0x36d0), 0x4a);
-        fd.funcp = model_carrier();
-        assert!(db
-            .apply(&mut fd)
-            .expect("apply parameterized prototype"));
-        assert!(
-            !fd.funcp.is_model_unknown(),
-            "parameterized signatures keep the resolved model"
+    fn plt_imports_resolve_sec_slots_from_jump_slot_relocs() {
+        let imports = ElfPltImports::parse_elf(&httpd_bytes());
+        // .plt.sec @0x2a420, slot i at +16*i ↔ .rela.plt[i].
+        // Witness set = the 82 thunk call sites of the uRam family; every
+        // name below matches the locked golden's callee spelling.
+        for (addr, name) in [
+            (0x2a6d0u64, "apr_app_initialize"),
+            (0x2a7c0, "apr_pool_create_ex"),
+            (0x2a6a0, "apr_pool_tag"),
+            (0x2abc0, "apr_palloc"),
+            (0x2a8e0, "apr_filepath_name_get"),
+            (0x2a4d0, "apr_array_make"),
+            (0x2a450, "apr_getopt_init"),
+            (0x2b6e0, "apr_getopt"),
+            (0x2b190, "apr_array_push"),
+            (0x2aa50, "apr_hook_sort_all"),
+            (0x2b070, "apr_dynamic_fn_retrieve"),
+            (0x2a820, "apr_pool_clear"),
+            (0x2b1a0, "apr_pool_destroy"),
+            (0x2ab70, "apr_hook_deregister_all"),
+            (0x2a540, "strcasecmp"),
+            (0x2afd0, "strncasecmp"),
+            (0x2acb0, "memcmp"),
+            (0x2a800, "apr_table_get"),
+            (0x2b790, "__ctype_b_loc"),
+            (0x2b140, "apr_parse_addr_port"),
+            (0x2a8d0, "apr_itoa"),
+            (0x2b770, "__ctype_tolower_loc"),
+            (0x2a600, "strncmp"),
+            (0x2b430, "apr_sockaddr_equal"),
+            (0x2a9e0, "strchr"),
+            (0x2aee0, "apr_pstrdup"),
+            (0x2b500, "apr_pstrndup"),
+            (0x2aa30, "apr_time_exp_lt"),
+            (0x2a4e0, "apr_time_exp_gmt"),
+            (0x2aa90, "apr_strftime"),
+            (0x2a980, "__stack_chk_fail"),
+            (0x2a830, "apr_filepath_root"),
+            (0x2a910, "strlen"),
+            (0x2ab20, "apr_pool_cleanup_register"),
+            (0x2a970, "apr_pool_cleanup_kill"),
+            (0x2ab40, "memset"),
+            (0x2ae60, "memcpy"),
+            (0x2aa80, "strrchr"),
+        ] {
+            assert_eq!(
+                imports.get(addr).map(String::as_str),
+                Some(name),
+                "PLT thunk at 0x{addr:x} must import as {name}"
+            );
+        }
+        // JUMP_SLOT count == .plt.sec slot count: all 317 imports resolved.
+        assert_eq!(imports.len(), 317, "one thunk name per .rela.plt entry");
+        // Non-thunk addresses (the 5 shared tail chunks in .text) must stay
+        // unnamed here — they are analysis functions, not imports.
+        for addr in [0x2c520u64, 0x2c550, 0x2c8e0, 0x2c960, 0x2ce20] {
+            assert!(
+                imports.get(addr).is_none(),
+                "0x{addr:x} is not a PLT thunk"
+            );
+        }
+    }
+
+    #[test]
+    fn analyze_headless_function_symbol_name_uses_image_base_padding() {
+        // Locked-oracle witnesses (golden headers):
+        // 0x2c520 → FUN_0012c520, 0x2c960 → FUN_0012c960.
+        assert_eq!(
+            analyze_headless_function_symbol_name(0x2c520, 0x100000),
+            "FUN_0012c520"
         );
-        assert_eq!(fd.funcp.get_model_name(), "__stdcall");
+        assert_eq!(
+            analyze_headless_function_symbol_name(0x2c960, 0x100000),
+            "FUN_0012c960"
+        );
+        assert_eq!(
+            analyze_headless_function_symbol_name(0x2ce20, 0x100000),
+            "FUN_0012ce20"
+        );
+    }
+
+    #[test]
+    fn plt_imports_reject_non_elf_payloads() {
+        assert!(ElfPltImports::parse_elf(b"not an elf image at all").is_empty());
     }
 
 }

@@ -309,3 +309,29 @@ FuncLink bilateral fixture 会消费这些 producer 形成的 scalar register/st
 storage，但并没有运行真实 Ghidra Program database/analyzer importer。因此本
 front-end adapter 本身仍为 `NO_ORACLE`/L2；aggregate ModelRules、非 x86、完整
 ProtoStore codec 与错误状态均未获批准。
+
+## 2026-08-30：HTTPD-URAM-SYMBOLIZE-0001 — PLT thunk 名与默认 FUN_ 符号导入
+
+`ElfPltImports::parse_elf` 是 ELF PLT thunk 名导入边界（Ghidra Java
+ELF/PLT analyzer 的 native 对应物）：`.plt.sec`/`.plt` 槽位按索引对应
+`.rela.plt` JUMP_SLOT 重定位（第 i 项 ↔ `base + 16*i`，`.plt` 跳过解析器头
+从 1 起），`.plt.got` 槽位逐个解码 `f2 ff 25 <disp32>` 尾巴并匹配拥有该
+GOT 地址的 R_X86_64_GLOB_DAT 重定位。几何与匹配沿用 curl 驱动已锁定的实现
+（原 examples/curl_decompile.rs 内联块，提炼为共享边界）；httpd witness：
+slot 43 = 0x2a6d0 = `apr_app_initialize`，`.plt`@0x29020、`.plt.got`@0x2a400、
+`.plt.sec`@0x2a420，317 个 JUMP_SLOT 全部解析。
+
+`analyze_headless_function_symbol_name(vaddr, image_base)` 镜像 Java
+SymbolManager 的默认函数符号策略：`FUN_` + analyzeHeadless image-base 地址
+的 8 位零填充 hex（ET_DYN image 装载于 0x100000，golden 的共享尾块
+0x2c520 → `FUN_0012c520`）。
+
+消费链（对齐 flow.cc:656-672 `queryCall` → fspec.cc:4949-4960 `setFuncdata`
+→ printc.cc:601-609 `opCall` 的 `fc->getName()`）：驱动把 thunk 名与未命名
+call-target 的默认名种入 callpoint-symbol 替身表，`map_globals` 对已命名地址
+经 has_symbol 门跳过 `uRam<offset>` 合成，`PrintC` 的 CPUI_CALL 臂按地址取名。
+E2E（httpd 29 函数口径）：uRam 调用 87→0（82 thunk + 5 发现函数全部按 golden
+拼写命名），skeleton 2278→2274，defects=0、numbering=0；curl 输出字节不变
+（3090/0/0）。单元测试 3 项（slot 重定位映射、image-base 命名、非 ELF 拒绝）
+锁 httpd 语料。前端 adapter 本身仍 `NO_ORACLE`/L2（无真实 Java analyzer
+对拍；oracle 证据=12.0.4 headless golden 的 thunk/默认名拼写与计数）。

@@ -48,6 +48,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let obj = Object::parse(&buffer)?;
 
+    // HTTPD-URAM-SYMBOLIZE-0001 (parse point): the PLT thunk import is
+    // parsed once up front (it re-parses the image independently of the
+    // goblin object below) so both the symbol_table seeding inside the ELF
+    // block and the call-target default-name pass below share it.
+    let plt_imports = rugra::debugproto::ElfPltImports::parse_elf(&buffer);
+
     let mut functions: Vec<(u64, usize, u64, String)> = Vec::new();
     let mut symbol_table: HashMap<u64, String> = HashMap::new();
     let mut string_table: HashMap<u64, String> = HashMap::new();
@@ -94,6 +100,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+
+        // HTTPD-URAM-SYMBOLIZE-0001: PLT thunk names. httpd's imports
+        // (apr_*/str*/mem*, dynamically linked against libapr/libc) are UND
+        // (st_value==0) in .dynsym, so the symtab/dynsym loops above never
+        // name them — the actual direct-call targets are .plt.sec thunks
+        // (0x2a420..0x2b7f0). Ghidra's Java ELF/PLT analyzer creates a thunk
+        // Function named after the resolved import for every one of those
+        // slots, and the decompiler prints that name at each call site via
+        // FlowInfo::queryCall (flow.cc:656-672) → FuncCallSpecs::setFuncdata
+        // (fspec.cc:4949-4960) → PrintC::opCall's fc->getName()
+        // (printc.cc:601-609). Without this seeding the target address has
+        // no symbol anywhere, Funcdata::map_globals' no-symbol arm builds a
+        // uRam<offset> data-global name for the callpoint varnode, and the
+        // printer shows `uRam000000000002a6d0()` where the locked oracle
+        // (tests/golden/ghidra_httpd_1204.c) prints `apr_app_initialize(...)`
+        // (87 call sites: 82 thunk imports + 5 discovered functions).
+        for (&thunk_addr, thunk_name) in plt_imports.iter() {
+            symbol_table
+                .entry(thunk_addr)
+                .or_insert_with(|| thunk_name.clone());
+        }
+        eprintln!(
+            "[PREPASS] ELF PLT thunk imports: {} entries",
+            plt_imports.len()
+        );
 
         // Collect strings only from read-only allocated sections (.rodata).
         // Exclude .text (SHF_EXECINSTR), .data (SHF_WRITE), and non-allocated
@@ -213,6 +244,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         prototype_db.insert(target, fd.funcp.num_params());
     }
     eprintln!("[PREPASS] Collected {} prototypes ({} from call targets)", prototype_db.len(), call_targets.len());
+
+    // HTTPD-URAM-SYMBOLIZE-0001: default names for analysis-discovered
+    // functions. Ghidra's front-end creates a Function for every call target
+    // its analysis follows that no ELF symbol covers (httpd's shared tail
+    // chunks: 0x2c520/0x2c550/0x2c8e0/0x2c960/0x2ce20 — all present as
+    // `FUN_0012cXXX` headers in the locked oracle), default-named
+    // `FUN_` + 8-digit zero-padded hex of the analyzeHeadless image-base
+    // address (the ET_DYN image loads at 0x100000, matching the curl
+    // driver's ANALYZE_HEADLESS_IMAGE_BASE convention). The same
+    // queryCall → setFuncdata → opCall chain as named thunks then prints
+    // `FUN_0012c960(...)` at call sites. Thunk entries already carry their
+    // import names, so they are excluded here.
+    const ANALYZE_HEADLESS_IMAGE_BASE: u64 = 0x100000;
+    for &target in &call_targets {
+        if symbol_table.contains_key(&target) || plt_imports.contains(target) {
+            continue;
+        }
+        symbol_table
+            .entry(target)
+            .or_insert_with(|| {
+                rugra::debugproto::analyze_headless_function_symbol_name(
+                    target,
+                    ANALYZE_HEADLESS_IMAGE_BASE,
+                )
+            });
+    }
 
     let mut total_success = 0;
     let mut total_fail = 0;
