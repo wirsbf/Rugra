@@ -1,0 +1,90 @@
+{
+ "schema_version": 1,
+ "fixture_id": "FUNCDATA-SCOPELOCAL-WRAP-1204",
+ "todo_ids": [
+  "FUNCDATA-SCOPELOCALOVERFLOW-0001",
+  "FUNCDATA-SCOPELOCAL-WRAP-0001"
+ ],
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "rugra_base_commit": "877ea9d0",
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": {
+  "id": "gcc",
+  "path": "sleigh_specs/x86-64-gcc.cspec"
+ },
+ "analysis_options": {
+  "api": "Direct ScopeLocal::findOverlap / rugra::funcdata::scope_local_find_overlap invocation with explicit (space, offset, size) queries over a hand-installed address-tied symbol table; no ActionGroup or other Action runs",
+  "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
+  "error_injection": "none",
+  "ghidra_funcdata": "Locked BfdArchitecture over the pinned examples/curl input supplies the Ghidra Funcdata, address spaces, TypeFactory, and the persistent ScopeLocal (function GetStr at 0x36d0); the two records are installed through the public production path Scope::addSymbol with an invalid usepoint -> empty uselimit -> Symbol flag addrtied, subsort (0,0) (database.cc:1149-1150)",
+  "rugra_scope": "Rugra builds an isolated ScopeLocal with hand-constructed address-tied LocalSymbols (usepoint=None models the empty uselimit / addrtied symbol flag); the debug-profile overflow reproduction and its fix are exercised because the fixture links the crate under test and calls the production helper directly",
+  "ir": "No P-code ops are constructed; the observable is exclusively the findOverlap return identity (symbol name, entry first/last/offset/size or null) per query",
+  "normalization": "No Ghidra/Rugra behavior difference of findOverlap is normalized or removed. The C++ dump keeps std::hex sticky across offset and size; the Rust fixture formats offset/first/last as hex explicitly and echoes the int4 size in decimal to match. Pointer/Arc addresses never appear in the records.",
+  "random_seed": "none; findOverlap and fixture construction are deterministic"
+ },
+ "cases": [
+  "wrap_top_full: findOverlap(stack, 0xfffffffffffffff8, 8) — modular last wraps (f8+8 wraps to 0, -1 restores 0xffffffffffffffff): the top-of-space record answers top8; the pre-fix Rust trapped 'attempt to add with overflow' in the debug profile here",
+  "wrap_top_last_byte: findOverlap(stack, 0xffffffffffffffff, 1) — point+size wraps to 0, -1 restores the modular last: top8 answers; the pre-fix 'p < first+size' containment missed records whose first+size wraps to 0",
+  "wrap_top_from_below: findOverlap(stack, 0xfffffffffffffff6, 4) — [..f6,..f9] overlaps [..f8,..ff]: top8 answers via the leftmost intersecting partition unit",
+  "neg_size_below: findOverlap(stack, 0x1000, -8) — the int4 size sign-extends into the uint8 domain, modular last 0xff7 < point: null, no panic",
+  "zero_size_top: findOverlap(stack, 0xfffffffffffffff8, 0) — last = point-1 < point: null",
+  "low_hit: findOverlap(stack, 0x104, 4) — the normal in-range path keeps answering low8",
+  "nonoverlap_above: findOverlap(stack, 0x10, 8) — neither record intersects: null"
+ ],
+ "input_manifest": {
+  "binary": "examples/curl @ 877ea9d0 (Ghidra side; the Rust side needs no binary)",
+  "function": "GetStr @ 0x36d0 (scope carrier only; identity asserted on the Ghidra side)",
+  "queries": [
+   {
+    "case": "wrap_top_full",
+    "offset": 18446744073709551608,
+    "size": 8
+   },
+   {
+    "case": "wrap_top_last_byte",
+    "offset": 18446744073709551615,
+    "size": 1
+   },
+   {
+    "case": "wrap_top_from_below",
+    "offset": 18446744073709551606,
+    "size": 4
+   },
+   {
+    "case": "neg_size_below",
+    "offset": 4096,
+    "size": -8
+   },
+   {
+    "case": "zero_size_top",
+    "offset": 18446744073709551608,
+    "size": 0
+   },
+   {
+    "case": "low_hit",
+    "offset": 260,
+    "size": 4
+   },
+   {
+    "case": "nonoverlap_above",
+    "offset": 16,
+    "size": 8
+   }
+  ]
+ },
+ "comparand_sha256": {
+  "cpp_fixture": "c85daadc3fff0f58d2a4ceab73e086b24216fadf2af594b4e0415eecfd4713a5",
+  "rust_fixture": "1c483a69d898355654633d17c7f177d381ec8b70f81a3e63c4807416b75b8b46",
+  "rugra_funcdata_source": "f8d4639a54ac2cc49ec5d7aedadeb1344662e98d7ec0cac852159923bb8f989b",
+  "api_document": "3ffc7525b0cbccb33d6451516b25b3ca3deca5ec86cb17e44803a26bfe90fd76",
+  "runner": "6b3c1576fc98e97bb3d5d8e5698a898f2ad53a1948dc013a3116c08b0bb0e01e"
+ },
+ "expected_stdout_sha256": "72fdc591f4ea3a61e9ffb8d702951c290a5d07cc80af4a9b684723aa6be4c6ec",
+ "expected_record_count": 7,
+ "overall_status": "MATCH: FUNCDATA-SCOPELOCALOVERFLOW-0001 wrap-domain queries; 7/7 records byte-identical on 2026-08-30",
+ "input_sha256": "f8d4639a54ac2cc49ec5d7aedadeb1344662e98d7ec0cac852159923bb8f989b"
+}
