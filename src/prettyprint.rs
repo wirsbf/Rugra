@@ -332,6 +332,211 @@ fn reconcile_int_minus_pointer(line: &str) -> String {
     result
 }
 
+// ============================================================================
+// POSTFIX-RETIRE-0001 W1 / POSTFIX-INSTRUMENT-0001: per-pass mutation counters
+// ============================================================================
+// RUGRA-GLUE: 纯诊断插桩,Ghidra 无对应物(oracle 的 EmitNoMarkup 是无缓冲直写
+// emitter,prettyprint.hh:542-594,唯一字段 ostream *s;发射路径以 flush 结束,
+// prettyprint.cc:1194-1213,之后零扫描)。W2 零突变退役的判定基础:设置
+// RUGRA_POSTFIX_STATS 环境变量时,post_process_output_legacy 每次调用向 stderr
+// 输出一行 [POSTFIX] 统计(逐 pass 行级突变计数);未设置时所有插桩点均为
+// no-option 短路(不 clone、不比较、不打印),输出字节与未插桩版本完全一致。
+// 语义:计数器只度量、绝不改变管线行为 —— 退役判定以计数=0 为必要证据。
+
+// RUGRA-GLUE: 幸存 pass 名单(管线顺序),见 post_process_output_legacy 内同序插桩
+const POSTFIX_PASS_NAMES: [&str; 23] = [
+    "B1", "P6", "B2", "P7",
+    "P8", "P9", "P10", "P11", "P12", "P14", "P15", "P16c",
+    "B3", "P17", "P18", "B4", "Pecase", "P22", "P23", "P24",
+    "P25", "P26", "P27",
+];
+
+// RUGRA-GLUE: pass 索引常量(与 POSTFIX_PASS_NAMES 同序)
+const PF_B1: usize = 0;
+const PF_P6: usize = 1;
+const PF_B2: usize = 2;
+const PF_P7: usize = 3;
+const PF_P8: usize = 4;
+const PF_P9: usize = 5;
+const PF_P10: usize = 6;
+const PF_P11: usize = 7;
+const PF_P12: usize = 8;
+const PF_P14: usize = 9;
+const PF_P15: usize = 10;
+const PF_P16C: usize = 11;
+const PF_B3: usize = 12;
+const PF_P17: usize = 13;
+const PF_P18: usize = 14;
+const PF_B4: usize = 15;
+const PF_ECASE: usize = 16;
+const PF_P22: usize = 17;
+const PF_P23: usize = 18;
+const PF_P24: usize = 19;
+const PF_P25: usize = 20;
+const PF_P26: usize = 21;
+const PF_P27: usize = 22;
+
+// RUGRA-GLUE: 逐 pass 突变计数器(每次 post_process_output 调用一个实例)
+struct PostfixStats {
+    enabled: bool,
+    counts: [u64; POSTFIX_PASS_NAMES.len()],
+}
+
+impl PostfixStats {
+    // RUGRA-GLUE: env 门控,每进程求值一次(RUGRA_POSTFIX_STATS 是否设置)
+    fn stats_enabled() -> bool {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var_os("RUGRA_POSTFIX_STATS").is_some())
+    }
+
+    // RUGRA-GLUE: Rust 结构体构造器(Ghidra 无对应物)
+    fn new() -> Self {
+        Self {
+            enabled: Self::stats_enabled(),
+            counts: [0; POSTFIX_PASS_NAMES.len()],
+        }
+    }
+
+    // RUGRA-GLUE: 站点级计数 —— 首扫循环里 P1/P1b/P2 三 pass 与行复制熔合,
+    // 无法取边界快照,在各自改写点直接累加(每次 bump = 删 1 行或改写 1 行)
+    #[inline]
+    fn bump(&mut self, pass: usize) {
+        if self.enabled {
+            self.counts[pass] += 1;
+        }
+    }
+
+    // RUGRA-GLUE: 惰性快照 —— 统计未启用时返回 None(零 clone 成本)
+    fn snap<S: AsRef<str>>(lines: &[S]) -> Option<Vec<String>> {
+        if Self::stats_enabled() {
+            Some(lines.iter().map(|s| s.as_ref().to_string()).collect())
+        } else {
+            None
+        }
+    }
+
+    // RUGRA-GLUE: 边界级计数 —— pass 输入快照 vs 输出的行级突变数
+    fn observe(&mut self, pass: usize, before: &Option<Vec<String>>, after: &[String]) {
+        if let Some(b) = before {
+            self.counts[pass] += postfix_line_mutations(b, after);
+        }
+    }
+
+    // RUGRA-GLUE: 字符串级计数 —— 尾部外置 helper pass(P22-P27)的 str→str 边界;
+    // 两侧统一用 split('\n')(与 remove_orphan_case_labels 等实现一致),往返
+    // 差异相互抵消,只计真实突变
+    fn observe_str(&mut self, pass: usize, before: &str, after: &str) {
+        if !self.enabled {
+            return;
+        }
+        let b: Vec<&str> = before.split('\n').collect();
+        let a: Vec<&str> = after.split('\n').collect();
+        self.counts[pass] += postfix_line_mutations(&b, &a);
+    }
+
+    // RUGRA-GLUE: 每次 post_process_output 调用向 stderr 输出一行 [POSTFIX]
+    // 统计;inv=进程内调用序号,rpt=1 表示本次输入与上次调用的输出相同
+    // (双重执行标记;当前生产路径单次执行,rpt 恒 0)。W3 诊断扩展:设置
+    // RUGRA_POSTFIX_RAW_DIR 时,把本次输入(=emit 原始输出)与最终输出按
+    // <pid>-<inv>.{in,out} 落盘,供 emit 缺陷定位使用(零行为差,env 门控)。
+    fn emit(self, input: &str, output: &str) {
+        if !self.enabled {
+            return;
+        }
+        static INVOCATIONS: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        let inv0 = INVOCATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if let Some(dir) = std::env::var_os("RUGRA_POSTFIX_RAW_DIR") {
+            let name = format!("{}-{}.in", std::process::id(), inv0);
+            let path = std::path::Path::new(&dir).join(name);
+            if let Ok(text) = std::fs::write(path, input) {
+                let _ = text;
+            }
+            let name = format!("{}-{}.out", std::process::id(), inv0);
+            let path = std::path::Path::new(&dir).join(name);
+            let _ = std::fs::write(path, output);
+        }
+        let inv = inv0;
+        static LAST_OUT_HASH: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        use std::sync::atomic::Ordering;
+        let in_hash = postfix_hash(input);
+        let prev_out = LAST_OUT_HASH.swap(postfix_hash(output), Ordering::Relaxed);
+        let rpt = prev_out == in_hash;
+        let fn_name = postfix_fn_name(input);
+        let mut line = format!(
+            "[POSTFIX] pid={} inv={} rpt={} fn={} lines={}",
+            std::process::id(),
+            inv,
+            if rpt { 1 } else { 0 },
+            fn_name,
+            input.lines().count()
+        );
+        for (name, count) in POSTFIX_PASS_NAMES.iter().zip(self.counts.iter()) {
+            line.push_str(&format!(" {}={}", name, count));
+        }
+        eprintln!("{}", line);
+    }
+}
+
+// RUGRA-GLUE: 行级突变计数(Ghidra 无对应物)—— 等长输入逐位比较(精确,
+// 适用于不改行数的改写型 pass);不等长输入先裁公共前后缀,再计中间差异块
+// 行数(删除/插入型)。零突变检测在两种度量下均精确。
+fn postfix_line_mutations<S: AsRef<str>>(before: &[S], after: &[S]) -> u64 {
+    if before.len() == after.len() {
+        return before
+            .iter()
+            .zip(after.iter())
+            .filter(|(b, a)| b.as_ref() != a.as_ref())
+            .count() as u64;
+    }
+    let mut p = 0usize;
+    while p < before.len() && p < after.len() && before[p].as_ref() == after[p].as_ref() {
+        p += 1;
+    }
+    let mut s = 0usize;
+    while s < before.len() - p
+        && s < after.len() - p
+        && before[before.len() - 1 - s].as_ref() == after[after.len() - 1 - s].as_ref()
+    {
+        s += 1;
+    }
+    before.len().max(after.len()) as u64 - p as u64 - s as u64
+}
+
+// RUGRA-GLUE: 输入文本指纹(DefaultHasher,仅用于 rpt 标记的相等性判断)
+fn postfix_hash(s: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+// RUGRA-GLUE: 从函数文本提取函数名(第一个含 '(' 的行的 '(' 前最后一个词 ——
+// curl 语料每个函数文本带 typedef 前导块,首行是 `typedef unsigned char
+// byte;`,直接取首行会全部误报为 byte;;取首个含括号行可跳过前导块命中签名
+// 行或 `/* ---- addr: name (size) ---- */` 头注释。纯诊断元数据,提取失败
+// 不参与任何判定)
+fn postfix_fn_name(input: &str) -> &str {
+    let candidate = input
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && l.contains('('))
+        .or_else(|| {
+            input
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+        })
+        .unwrap_or("");
+    let head = candidate.split('(').next().unwrap_or(candidate).trim();
+    head.rsplit(' ')
+        .next()
+        .filter(|w| !w.is_empty())
+        .unwrap_or("?")
+}
+
 /// Simple emitter that produces plain text with no markup
 pub struct EmitNoMarkup {
     output: String,
@@ -433,128 +638,24 @@ impl EmitNoMarkup {
     // 回退)留下的误导脚手架,已随 W0 清除。整层退役按 POSTFIX-RETIRE-0001 路线图
     // W1-WT 顺序推进(先修上游→计数证明零突变→逐 pass 删除,尾部先行)。
     fn post_process_output_legacy(input: &str) -> String {
-        let lines: Vec<&str> = input.lines().collect();
-        let mut result: Vec<String> = Vec::with_capacity(lines.len());
-        let mut i = 0;
+        let mut pfx = PostfixStats::new();
+        // First-scan goto rewrites retired in POSTFIX-RETIRE-0001 W2:
+        //   P1  redundant-goto skip (goto LAB_X; right before LAB_X:) - cut 9
+        //   P1b exit-goto -> break/return rewrite                        - cut 8
+        //   P2  conditional exit goto -> if-break/return                 - cut 7
+        // W1 counters proved zero mutations for all three on both corpora
+        // (curl 190 + httpd 102 calls, both rpt rounds): the structured
+        // emit path places no redundant or undefined-target LAB_ gotos on
+        // the corpora, so the scan had degraded to a verbatim line copy.
 
-        // Pre-scan: find goto targets that have no label definition
-        // These are "dominant exit labels" — typically function exit or switch break points
-        let mut goto_targets: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-        let mut defined_labels: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for line in &lines {
-            let t = line.trim();
-            // Count goto references
-            if let Some(pos) = t.find("goto LAB_") {
-                let rest = &t[pos + 5..]; // "LAB_xxxx;"
-                if let Some(semi) = rest.find(';') {
-                    let label = rest[..semi].to_string();
-                    *goto_targets.entry(label).or_insert(0) += 1;
-                }
-            }
-            // Track label definitions
-            if t.starts_with("LAB_") && t.ends_with(':') && !t.contains(' ') {
-                let label = t[..t.len() - 1].to_string();
-                defined_labels.insert(label);
-            }
-        }
-        // Find undefined labels (no label definition in output) — these are "exit gotos"
-        // Any goto to a non-existent label is effectively a break/return
-        let exit_labels: std::collections::HashSet<String> = goto_targets
-            .iter()
-            .filter(|(name, _count)| !defined_labels.contains(*name))
-            .map(|(name, _)| name.clone())
-            .collect();
-
-        while i < lines.len() {
-            let trimmed = lines[i].trim();
-
-            // Pattern 1: `goto LAB_XXXX;` followed by `LAB_XXXX:` (possibly with } between)
-            if trimmed.starts_with("goto LAB_") && trimmed.ends_with(';') {
-                let label_name = &trimmed[5..trimmed.len() - 1];
-                let expected_label = format!("{}:", label_name);
-
-                // Look ahead for the label (skip empty lines and closing braces)
-                let mut next_real = i + 1;
-                while next_real < lines.len() {
-                    let nt = lines[next_real].trim();
-                    if nt.is_empty() || nt == "}" {
-                        next_real += 1;
-                    } else {
-                        break;
-                    }
-                }
-
-                if next_real < lines.len() && lines[next_real].trim() == expected_label {
-                    // Skip this goto — it's redundant (falls through to its target)
-                    i += 1;
-                    continue;
-                }
-
-                // Pattern 1b: goto to an undefined exit label
-                // Convert to break (inside loop/switch) or return (at any level without loop ctx)
-                if exit_labels.contains(label_name) {
-                    let indent = lines[i].len() - lines[i].trim_start().len();
-                    let indent_str: String = " ".repeat(indent);
-                    if trimmed == format!("goto {};", label_name) {
-                        // Check for enclosing loop/switch context in the output so far
-                        let has_loop_ctx = Self::has_enclosing_loop_ctx(&result, indent);
-                        if indent >= 4 && has_loop_ctx {
-                            result.push(format!("{}break;", indent_str));
-                        } else {
-                            result.push(format!("{}return;", indent_str));
-                        }
-                        i += 1;
-                        continue;
-                    }
-                }
-            }
-
-            // Pattern 2: `if (cond) goto LAB_XXXX;` where LAB_XXXX is an exit label
-            // Convert to `if (cond) break;` or `if (cond) return;`
-            if trimmed.contains(") goto ") && trimmed.ends_with(';') {
-                if let Some(goto_pos) = trimmed.find(") goto ") {
-                    let label_with_semi = &trimmed[goto_pos + 7..];
-                    let label_name = &label_with_semi[..label_with_semi.len() - 1];
-                    if exit_labels.contains(label_name) {
-                        let indent = lines[i].len() - lines[i].trim_start().len();
-                        let cond_part = &trimmed[..goto_pos + 1]; // "if (cond)"
-                        let indent_str: String = " ".repeat(indent);
-                        let has_loop_ctx = Self::has_enclosing_loop_ctx(&result, indent);
-                        if indent >= 4 && has_loop_ctx {
-                            result.push(format!("{}{} break;", indent_str, cond_part));
-                        } else {
-                            result.push(format!("{}{} return;", indent_str, cond_part));
-                        }
-                        i += 1;
-                        continue;
-                    }
-                }
-            }
-
-            result.push(lines[i].to_string());
-            i += 1;
-        }
-
-        // Second pass: remove labels that are never referenced by any goto
-        let output_text = result.join("\n");
-        let result_lines: Vec<&str> = output_text.lines().collect();
-        let mut final_result: Vec<String> = Vec::with_capacity(result_lines.len());
-
-        for line in &result_lines {
-            let trimmed = line.trim();
-            if trimmed.starts_with("LAB_") && trimmed.ends_with(':') {
-                let label_name = &trimmed[..trimmed.len() - 1];
-                let goto_ref = format!("goto {};", label_name);
-                let is_referenced = result_lines.iter().any(|l| l.trim().contains(&goto_ref)
-                );
-                if !is_referenced {
-                    continue;
-                }
-            }
-            final_result.push(line.to_string());
-        }
+        // P3 (unreferenced label removal, first sweep) retired in
+        // POSTFIX-RETIRE-0001 W2 cut 6: W1 counters proved zero mutations
+        // on both corpora (both rpt rounds) - every LAB_ label emitted on
+        // the corpora is still goto-referenced at this pipeline stage.
+        let final_result: Vec<String> = input.lines().map(|s| s.to_string()).collect();
 
         // Third pass: collapse consecutive blank lines
+        let snap_b1 = PostfixStats::snap(&final_result);
         let mut collapsed: Vec<String> = Vec::with_capacity(final_result.len());
         let mut prev_blank = false;
         for line in final_result {
@@ -568,173 +669,25 @@ impl EmitNoMarkup {
                 collapsed.push(line);
             }
         }
+        pfx.observe(PF_B1, &snap_b1, &collapsed);
 
-        // Fourth pass: detect backward goto patterns and convert to loops
-        // Pattern: LAB_X: ... goto LAB_X; → do { ... } while(true);
-        // Pattern: LAB_X: ... if (cond) goto LAB_X; → do { ... } while(cond);
-        let mut looped = collapsed;
-        let max_loop_passes = 5;
-        for _pass in 0..max_loop_passes {
-            let mut changed = false;
-            let mut new_lines: Vec<String> = Vec::with_capacity(looped.len());
-            let mut skip_until = None;
+        // P4 (backward goto -> do/while loop conversion) retired in
+        // POSTFIX-RETIRE-0001 W2 cut 5: W1 counters proved zero mutations
+        // on both corpora (both rpt rounds) - the structured emit path
+        // renders loops directly; no backward LAB_ goto reaches the text
+        // layer on the corpora.
+        let looped = collapsed;
 
-            // Build label→line index
-            let mut label_lines: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-            for (idx, line) in looped.iter().enumerate() {
-                let t = line.trim();
-                if t.starts_with("LAB_") && t.ends_with(':') && !t.contains(' ') {
-                    label_lines.insert(t[..t.len() - 1].to_string(), idx);
-                }
-            }
-
-            let mut li = 0;
-            while li < looped.len() {
-                if let Some(skip_to) = skip_until {
-                    if li < skip_to {
-                        li += 1;
-                        continue;
-                    }
-                    skip_until = None;
-                }
-
-                let trimmed = looped[li].trim();
-
-                // Check for backward goto (plain): `goto LAB_X;` where LAB_X is above
-                if trimmed.starts_with("goto LAB_") && trimmed.ends_with(';') {
-                    let label_name = &trimmed[5..trimmed.len() - 1];
-                    if let Some(&label_line) = label_lines.get(label_name) {
-                        if label_line < li {
-                            let goto_indent = looped[li].len() - looped[li].trim_start().len();
-                            let label_indent = looped[label_line].len() - looped[label_line].trim_start().len();
-                            let indent_str: String = " ".repeat(goto_indent);
-                            
-                            // Safety: only convert if label and goto are at the same indent level
-                            // (prevents cross-structural-boundary conversions)
-                            if goto_indent == label_indent {
-                                let label_text = format!("{}:", label_name);
-                                let mut label_pos = None;
-                                for (j, nl) in new_lines.iter().enumerate() {
-                                    if nl.trim() == label_text {
-                                        label_pos = Some(j);
-                                        break;
-                                    }
-                                }
-                                if let Some(lp) = label_pos {
-                                    let goto_ref = format!("goto {};", label_name);
-                                    let other_refs = looped
-                                        .iter()
-                                        .enumerate()
-                                        .filter(|(idx, l)| {
-                                        *idx != li && l.trim().contains(&goto_ref)
-                                    })
-                                        .count();
-                                    
-                                    if other_refs == 0 {
-                                        new_lines[lp] = format!("{}while (true) {{", indent_str);
-                                        new_lines.push(format!("{}}}", indent_str));
-                                        changed = true;
-                                        li += 1;
-                                        continue;
-                                    } else {
-                                        new_lines.push(format!("{}continue;", indent_str));
-                                        changed = true;
-                                        li += 1;
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Check for backward conditional goto: `if (cond) goto LAB_X;`
-                if trimmed.contains(") goto ") && trimmed.ends_with(';') {
-                    if let Some(goto_pos) = trimmed.find(") goto ") {
-                        let label_with_semi = &trimmed[goto_pos + 7..];
-                        let label_name = &label_with_semi[..label_with_semi.len() - 1];
-                        if let Some(&label_line) = label_lines.get(label_name) {
-                            if label_line < li {
-                                let goto_indent = looped[li].len() - looped[li].trim_start().len();
-                                let label_indent = looped[label_line].len() - looped[label_line].trim_start().len();
-                                let indent_str: String = " ".repeat(goto_indent);
-                                let cond_part = &trimmed[..goto_pos + 1];
-                                
-                                // Safety: only convert if label and goto at same indent
-                                if goto_indent == label_indent {
-                                    let label_text = format!("{}:", label_name);
-                                    let mut label_pos = None;
-                                    for (j, nl) in new_lines.iter().enumerate() {
-                                        if nl.trim() == label_text {
-                                            label_pos = Some(j);
-                                            break;
-                                        }
-                                    }
-                                    if let Some(lp) = label_pos {
-                                        let goto_ref = format!("goto {};", label_name);
-                                        let other_refs = looped
-                                            .iter()
-                                            .enumerate()
-                                            .filter(|(idx, l)| {
-                                            *idx != li && l.trim().contains(&goto_ref)
-                                        })
-                                            .count();
-                                        
-                                        let cond = if cond_part.starts_with("if (") && cond_part.ends_with(')') {
-                                            &cond_part[4..cond_part.len() - 1]
-                                        } else {
-                                            "true"
-                                        };
-                                        
-                                        if other_refs == 0 {
-                                            new_lines[lp] = format!("{}do {{", indent_str);
-                                            new_lines.push(format!(
-                                                "{}}} while ({});", indent_str, cond
-                                            ));
-                                            changed = true;
-                                            li += 1;
-                                            continue;
-                                        } else {
-                                            new_lines.push(format!(
-                                                "{}{} continue;", indent_str, cond_part
-                                            ));
-                                            changed = true;
-                                            li += 1;
-                                            continue;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                new_lines.push(looped[li].clone());
-                li += 1;
-            }
-
-            looped = new_lines;
-            if !changed { break; }
-        }
-
-        // Fifth pass: remove unreferenced labels (again, after loop conversion)
-        let mut final_pass: Vec<String> = Vec::with_capacity(looped.len());
-        for line in &looped {
-            let trimmed = line.trim();
-            if trimmed.starts_with("LAB_") && trimmed.ends_with(':') && !trimmed.contains(' ') {
-                let label_name = &trimmed[..trimmed.len() - 1];
-                let goto_ref = format!("goto {};", label_name);
-                let is_referenced = looped.iter().any(|l| l.trim().contains(&goto_ref));
-                if !is_referenced {
-                    continue;
-                }
-            }
-            final_pass.push(line.clone());
-        }
+        // P5 (unreferenced label removal, post loop conversion) retired in
+        // POSTFIX-RETIRE-0001 W2 cut 4: W1 counters proved zero mutations
+        // on both corpora (both rpt rounds) - after P4 every remaining
+        // LAB_ label on the corpora is still goto-referenced.
+        let final_pass = looped;
 
         // Sixth pass: text-level single-use variable inlining
         // For `uVarX = EXPR;` where uVarX appears exactly twice (1 def + 1 use),
         // substitute EXPR at the use site and remove the assignment + declaration
+        let snap_p6 = PostfixStats::snap(&final_pass);
         let mut inlined = final_pass;
         {
             // Collect all uVar assignments: (line_index, var_name, rhs_expr)
@@ -808,8 +761,10 @@ impl EmitNoMarkup {
                 }
             }
         }
+        pfx.observe(PF_P6, &snap_p6, &inlined);
 
         // Final: collapse blank lines again
+        let snap_b2 = PostfixStats::snap(&inlined);
         let mut result_final: Vec<String> = Vec::with_capacity(inlined.len());
         let mut prev_blank2 = false;
         for line in inlined {
@@ -823,8 +778,10 @@ impl EmitNoMarkup {
                 result_final.push(line);
             }
         }
+        pfx.observe(PF_B2, &snap_b2, &result_final);
 
         // Seventh pass: textual cleanup transformations
+        let snap_p7 = PostfixStats::snap(&result_final);
         let mut cleaned: Vec<String> = Vec::with_capacity(result_final.len());
         for line in &result_final {
             let mut s = line.clone();
@@ -934,9 +891,11 @@ impl EmitNoMarkup {
 
             cleaned.push(s);
         }
+        pfx.observe(PF_P7, &snap_p7, &cleaned);
 
         // Eighth pass: remove blank lines within declaration blocks
         // (between type declarations at function start)
+        let snap_p8 = PostfixStats::snap(&cleaned);
         let mut final_cleaned: Vec<String> = Vec::with_capacity(cleaned.len());
         let mut in_decl_block = false;
         let mut decl_count = 0usize;
@@ -988,7 +947,9 @@ impl EmitNoMarkup {
                 final_cleaned.push(line.clone());
             }
         }
+        pfx.observe(PF_P8, &snap_p8, &final_cleaned);
         // Ninth pass: structural cleanup
+        let snap_p9 = PostfixStats::snap(&final_cleaned);
         let mut structural: Vec<String> = Vec::with_capacity(final_cleaned.len());
         let mut i9 = 0;
         while i9 < final_cleaned.len() {
@@ -1123,10 +1084,12 @@ impl EmitNoMarkup {
             structural.push(line);
             i9 += 1;
         }
+        pfx.observe(PF_P9, &snap_p9, &structural);
 
         // Tenth pass: remove dead code after return/break/continue
         // If we see `return;` at indent level N, subsequent lines at the same indent
         // are dead unless they are labels (goto targets), closing braces, or case labels.
+        let snap_p10 = PostfixStats::snap(&structural);
         let mut alive: Vec<String> = Vec::with_capacity(structural.len());
         let mut dead_after_return = false;
         let mut dead_indent = 0usize;
@@ -1202,9 +1165,11 @@ impl EmitNoMarkup {
                 dead_indent = indent;
             }
         }
+        pfx.observe(PF_P10, &snap_p10, &alive);
 
         // Eleventh pass: remove unused variable declarations
         // For each function, collect declared uVar names and remove those never referenced in body
+        let snap_p11 = PostfixStats::snap(&alive);
         let mut cleaned: Vec<String> = Vec::with_capacity(alive.len());
         let mut func_start: Option<usize> = None;
         let mut func_lines: Vec<String> = Vec::new();
@@ -1237,8 +1202,10 @@ impl EmitNoMarkup {
         if func_start.is_some() {
             Self::flush_func_remove_unused(&func_lines, &mut cleaned);
         }
+        pfx.observe(PF_P11, &snap_p11, &cleaned);
 
         // Twelfth pass: remove blank line after "} else {"
+        let snap_p12 = PostfixStats::snap(&cleaned);
         let mut final_out: Vec<String> = Vec::with_capacity(cleaned.len());
         let mut skip_next_blank = false;
         for line in &cleaned {
@@ -1250,36 +1217,13 @@ impl EmitNoMarkup {
             skip_next_blank = t == "} else {";
             final_out.push(line.clone());
         }
-
-        // Thirteenth pass: split "return func();" into "func(); return;" for void functions
-        let void_funcs = [
-            "free", "puts", "fclose", "exit", "fflush", "clearerr",
-            "rewind", "perror", "abort", "qsort", "curl_easy_cleanup",
-            "curl_slist_free_all", "curl_global_cleanup",
-        ];
-        let mut pass13: Vec<String> = Vec::with_capacity(final_out.len());
-        for line in &final_out {
-            let t = line.trim();
-            if t.starts_with("return ") && t.ends_with(");") {
-                // Extract function name from "return func(...);"
-                let inner = &t[7..t.len() - 1]; // "func(...)"
-                if let Some(paren) = inner.find('(') {
-                    let fname = &inner[..paren];
-                    if void_funcs.contains(&fname) {
-                        let indent = &line[..line.len() - line.trim_start().len()];
-                        pass13.push(format!("{}{});", indent, inner));
-                        pass13.push(format!("{}return;", indent));
-                        continue;
-                    }
-                }
-            }
-            pass13.push(line.clone());
-        }
+        pfx.observe(PF_P12, &snap_p12, &final_out);
 
         // Fourteenth pass: remove dead code after goto (consecutive goto, or code after goto on same indent)
-        let mut pass14: Vec<String> = Vec::with_capacity(pass13.len());
+        let snap_p14 = PostfixStats::snap(&final_out);
+        let mut pass14: Vec<String> = Vec::with_capacity(final_out.len());
         let mut prev_was_goto = false;
-        for line in &pass13 {
+        for line in &final_out {
             let t = line.trim();
             if prev_was_goto {
                 // Skip lines that are dead code (another goto or non-label code at same level)
@@ -1293,146 +1237,29 @@ impl EmitNoMarkup {
             }
             pass14.push(line.clone());
         }
+        pfx.observe(PF_P14, &snap_p14, &pass14);
 
         // Fifteenth pass: fix double-close-paren "func());" → "func();"
+        let snap_p15 = PostfixStats::snap(&pass14);
         let mut pass15: Vec<String> = Vec::with_capacity(pass14.len());
         for line in &pass14 {
             let fixed = line.replace("());", "();");
             pass15.push(fixed);
         }
+        pfx.observe(PF_P15, &snap_p15, &pass15);
 
-        // Sixteenth pass: forward goto-to-if folding
-        // Pattern: `if (cond) goto LAB_X;` followed by code, then `LAB_X:` appears below.
-        // Fold into: `if (!cond) { ... code ... }` and remove the goto + label.
-        // Also handles plain `goto LAB_X;` → wraps remaining code in else-like block.
-        let mut pass16 = pass15;
-        let max_fold_passes = 3; // iterate a few times for nested patterns
-        for _fold_iter in 0..max_fold_passes {
-            let mut changed = false;
-            let mut new_lines: Vec<String> = Vec::with_capacity(pass16.len());
-            let mut i16 = 0;
-
-            while i16 < pass16.len() {
-                let trimmed = pass16[i16].trim().to_string();
-                let line_indent = pass16[i16].len() - pass16[i16].trim_start().len();
-
-                // Match: `if (cond) goto LAB_XXXX;`
-                if trimmed.contains(") goto LAB_") && trimmed.ends_with(';')
-                    && trimmed.starts_with("if (")
-                {
-                    // Extract condition and label
-                    if let Some(goto_pos) = trimmed.find(") goto LAB_") {
-                        let cond = &trimmed[4..goto_pos]; // inside "if (" ... ")"
-                        let label_with_semi = &trimmed[goto_pos + 7..]; // "LAB_XXXX;"
-                        let label_name = &label_with_semi[..label_with_semi.len() - 1]; // "LAB_XXXX"
-                        let label_def = format!("{}:", label_name);
-
-                        // Search forward for the label definition within the same function
-                        let mut label_line = None;
-                        let mut has_other_goto_to_label = false;
-                        for j in (i16 + 1)..pass16.len() {
-                            let jt = pass16[j].trim();
-                            // Stop at function boundary
-                            if jt.starts_with("/* ----") && jt.ends_with("---- */") {
-                                break;
-                            }
-                            if jt == label_def {
-                                label_line = Some(j);
-                                break;
-                            }
-                            // Check if another goto references this same label (would make folding unsafe)
-                            if jt.contains(&format!("goto {};", label_name)) {
-                                has_other_goto_to_label = true;
-                            }
-                        }
-
-                        // Only fold if:
-                        // 1. Label is found forward
-                        // 2. No other goto references the same label (single-use forward jump)
-                        // 3. The gap isn't too large (limit to ~80 lines to avoid huge indentation)
-                        if let Some(lbl_line) = label_line {
-                            if !has_other_goto_to_label && (lbl_line - i16) <= 80 {
-                                // Check that the code between goto and label is at >= the same indent
-                                let indent_str: String = " ".repeat(line_indent);
-
-                                // Negate the condition
-                                let negated = Self::negate_simple_condition(cond);
-
-                                // Emit: if (negated_cond) {
-                                new_lines.push(format!("{}if ({}) {{", indent_str, negated));
-
-                                // Emit the body (lines between goto and label), indented +2
-                                let body_indent: String = " ".repeat(line_indent + 2);
-                                for k in (i16 + 1)..lbl_line {
-                                    let body_line = &pass16[k];
-                                    let bt = body_line.trim();
-                                    if bt.is_empty() {
-                                        new_lines.push(String::new());
-                                    } else {
-                                        new_lines.push(format!("{}{}", body_indent, bt));
-                                    }
-                                }
-
-                                // Close the block
-                                new_lines.push(format!("{}}}", indent_str));
-
-                                // Skip past the label line
-                                i16 = lbl_line + 1;
-                                changed = true;
-                                continue;
-                            }
-                        }
-                    }
-                }
-
-                // Match: plain `goto LAB_XXXX;` (forward, single-use)
-                // Convert surrounding code to avoid the goto when label is close
-                if trimmed.starts_with("goto LAB_") && trimmed.ends_with(';')
-                    && !trimmed.contains("if ")
-                {
-                    let label_name = &trimmed[5..trimmed.len() - 1]; // "LAB_XXXX"
-                    let label_def = format!("{}:", label_name);
-
-                    let mut label_line = None;
-                    let mut has_other_goto_to_label = false;
-                    for j in (i16 + 1)..pass16.len() {
-                        let jt = pass16[j].trim();
-                        if jt.starts_with("/* ----") && jt.ends_with("---- */") {
-                            break;
-                        }
-                        if jt == label_def {
-                            label_line = Some(j);
-                            break;
-                        }
-                        if jt.contains(&format!("goto {};", label_name)) {
-                            has_other_goto_to_label = true;
-                        }
-                    }
-
-                    // For plain forward gotos with no other references and short gap,
-                    // just skip the intermediate dead code (it's unreachable)
-                    if let Some(lbl_line) = label_line {
-                        if !has_other_goto_to_label && (lbl_line - i16) <= 40 {
-                            // Skip lines between goto and label (dead code)
-                            // The goto itself is redundant — code falls through to label
-                            i16 = lbl_line + 1;
-                            changed = true;
-                            continue;
-                        }
-                    }
-                }
-
-                new_lines.push(pass16[i16].clone());
-                i16 += 1;
-            }
-
-            pass16 = new_lines;
-            if !changed { break; }
-        }
+        // P16 (forward goto-to-if folding) retired in POSTFIX-RETIRE-0001
+        // W2 cut 3: W1 counters proved zero mutations on both corpora
+        // (curl 190 + httpd 102 calls, both rpt rounds) - the structured
+        // emit path no longer emits single-use forward LAB_ gotos on the
+        // corpora. P16c below (fold cleanup: unreferenced labels + empty
+        // if blocks) stays ACTIVE (curl main = 264 mutated lines) and now
+        // consumes the P15 output directly.
 
         // Sixteenth pass cleanup: remove now-unreferenced labels and empty if blocks
-        let pass16_text = pass16.join("\n");
+        let pass16_text = pass15.join("\n");
         let pass16_lines: Vec<&str> = pass16_text.lines().collect();
+        let snap_p16c = PostfixStats::snap(&pass16_lines);
         let mut pass16_final: Vec<String> = Vec::with_capacity(pass16_lines.len());
         let mut i16c = 0;
         while i16c < pass16_lines.len() {
@@ -1459,8 +1286,10 @@ impl EmitNoMarkup {
             pass16_final.push(pass16_lines[i16c].to_string());
             i16c += 1;
         }
+        pfx.observe(PF_P16C, &snap_p16c, &pass16_final);
 
         // Final collapse of consecutive blank lines
+        let snap_b3 = PostfixStats::snap(&pass16_final);
         let mut output_final: Vec<String> = Vec::with_capacity(pass16_final.len());
         let mut prev_blank_final = false;
         for line in pass16_final {
@@ -1474,12 +1303,14 @@ impl EmitNoMarkup {
                 output_final.push(line);
             }
         }
+        pfx.observe(PF_B3, &snap_b3, &output_final);
 
         // Seventeenth pass: remove orphan `break;` / `continue;` at function body start.
         // Pattern: function opening `{`, then declarations, then immediately `break;` or `continue;`
         // with no loop/switch context — these are block-structure artifacts.
         // Also: remove `return;` immediately followed by orphan `}` at body indent level
         //       (artifact from do-while blocks emitting an extra close)
+        let snap_p17 = PostfixStats::snap(&output_final);
         let mut pass17: Vec<String> = Vec::with_capacity(output_final.len());
         {
             let lines = &output_final;
@@ -1632,10 +1463,12 @@ impl EmitNoMarkup {
                 i17 += 1;
             }
         }
+        pfx.observe(PF_P17, &snap_p17, &pass17);
 
         // Eighteenth pass: remove unreachable `return;` at very start of function body.
         // Pattern: after the last declaration line, if the first statement is `return;`
         // but is followed by more non-empty lines — it's dead code from a misrouted block.
+        let snap_p18 = PostfixStats::snap(&pass17);
         let mut pass18: Vec<String> = Vec::with_capacity(pass17.len());
         {
             let lines = &pass17;
@@ -1716,6 +1549,7 @@ impl EmitNoMarkup {
                 i18 += 1;
             }
         }
+        pfx.observe(PF_P18, &snap_p18, &pass18);
 
         // Nineteenth pass (brace-balance scaffold) removed in
         // POSTFIX-RETIRE-0001 W0: since 2026-06-26 both arms of its
@@ -1724,6 +1558,7 @@ impl EmitNoMarkup {
         // trusted past char/string literals, so it never rewrote).
 
         // Final collapse of consecutive blank lines
+        let snap_b4 = PostfixStats::snap(&pass18);
         let mut output_final2: Vec<String> = Vec::with_capacity(pass18.len());
         let mut prev_blank_final2 = false;
         for line in pass18 {
@@ -1737,138 +1572,15 @@ impl EmitNoMarkup {
                 output_final2.push(line);
             }
         }
+        pfx.observe(PF_B4, &snap_b4, &output_final2);
 
-        // While-break collapse pass: fold `while (cond) { ... break; }` into `if (cond) { ... }`.
-        //
-        // Rugra's CFG structuring occasionally emits a loop construct whose body is
-        // entered once and immediately exits via unconditional `break;`. This is
-        // semantically a conditional single-shot execution, i.e. an `if`, not a loop.
-        // Ghidra's blockaction structuring does not produce this pattern; we collapse
-        // it textually as a post-print normalization so the output matches Ghidra's
-        // control-flow style.
-        //
-        // Pattern (general):
-        //   while (COND) {
-        //     <body lines at indent+2>
-        //     break;          <- last body line, unconditional
-        //   }
-        // Becomes:
-        //   if (COND) {
-        //     <body lines at indent+2>
-        //   }
-        //
-        // We only fold when the matching `}` directly follows the `break;`, ensuring
-        // the break truly terminates the loop body.
-        let mut collapsed: Vec<String> = Vec::with_capacity(output_final2.len());
-        let mut iwb = 0usize;
-        while iwb < output_final2.len() {
-            let line = &output_final2[iwb];
-            let t = line.trim();
-            // Detect a `while (...) {` opener (not `do {` or `} while (...)`).
-            // Both header spellings count: the spaced `while (cond)` and the
-            // oracle's COMPACT overflow form `while( true )` (printc.cc:
-            // 3023-3028 — tagOp + openParen with no spaces(1) between).
-            if (t.starts_with("while (") || t.starts_with("while(")) && t.ends_with('{') {
-                let indent = line.len() - line.trim_start().len();
-                let body_indent = indent + 2;
-                // Scan forward for the matching close brace at the same indent as the while.
-                // We need to find: body lines, then `break;` at body_indent, then `}` at indent.
-                // Use brace-depth tracking to handle nested braces inside the body.
-                let mut j = iwb + 1;
-                let mut depth: i32 = 1; // we are inside the while block
-                let mut break_line_idx: Option<usize> = None;
-                let mut close_idx: Option<usize> = None;
-                while j < output_final2.len() {
-                    let bj = &output_final2[j];
-                    let tj = bj.trim();
-                    let ij = bj.len() - bj.trim_start().len();
-                    // Track nested braces
-                    if tj.ends_with('{') && !tj.starts_with("while") {
-                        // opening of a nested block (e.g. if/for/switch body)
-                        // Only count as depth+1 if it's a structural opener
-                        if tj == "{" || tj.ends_with(" {") || tj.ends_with("){") {
-                            depth += 1;
-                        }
-                    }
-                    if tj == "}" {
-                        depth -= 1;
-                        if depth == 0 {
-                            // This is the while's closing brace
-                            close_idx = Some(j);
-                            break;
-                        }
-                    }
-                    // Record a candidate `break;` at the while's direct body indent
-                    if depth == 1 && tj == "break;" && ij == body_indent {
-                        break_line_idx = Some(j);
-                    }
-                    j += 1;
-                }
-
-                if let (Some(bi), Some(ci)) = (break_line_idx, close_idx) {
-                    // Only fold if `break;` is the LAST body line before the close brace.
-                    // (i.e. no lines between break_line_idx+1 and close_idx-1 except blanks)
-                    let mut only_blanks_after_break = true;
-                    for k in (bi + 1)..ci {
-                        if !output_final2[k].trim().is_empty() {
-                            only_blanks_after_break = false;
-                            break;
-                        }
-                    }
-                    if only_blanks_after_break && bi > iwb {
-                        // Fold: replace `while` with `if`, drop the `break;`, drop trailing blanks.
-                        let indent_str = " ".repeat(indent);
-                        // Extract the condition. The opener looks like `while (COND) {`.
-                        // Strip the `while ` prefix and the trailing ` {`, then strip one layer
-                        // of matching outer parentheses so we don't produce `if ((COND))`.
-                        // PRINTC-WHILEIF-FOLD-PREFIX-0001: the opener detection
-                        // above (this pass) accepts both header spellings —
-                        // the spaced `while (cond)` and the oracle-compact
-                        // `while( true )` (printc.cc:3023-3028) — but this
-                        // slice hardcoded the SPACED prefix. The compact
-                        // prefix `while(` consumes the open paren, so the
-                        // paired `)` survived as a stray token and the fold
-                        // emitted a malformed `if (true ))`. Slice the prefix
-                        // that actually matched, and for the compact form
-                        // (no leading `(` remains) trim the dangling `)`.
-                        let after_while = if t.starts_with("while(") {
-                            &t["while(".len()..]
-                        } else {
-                            &t["while ".len()..]
-                        };
-                        let inner = after_while.trim_end().trim_end_matches('{').trim();
-                        let cond_str = if inner.starts_with('(') && inner.ends_with(')') {
-                            &inner[1..inner.len() - 1]
-                        } else {
-                            inner.strip_suffix(')').unwrap_or(inner).trim()
-                        };
-                        // Collect non-blank body lines between the while-opener and the break;
-                        let body_lines: Vec<&String> = ((iwb + 1)..bi)
-                            .map(|k| &output_final2[k])
-                            .filter(|l| !l.trim().is_empty())
-                            .collect();
-                        if body_lines.len() == 1 {
-                            // Single-statement body: emit `if (cond) stmt;` (no braces)
-                            collapsed.push(format!(
-                                "{}if ({}) {}", indent_str, cond_str, body_lines[0].trim()
-                            ));
-                        } else {
-                            // Multi-line body: `if (cond) {` ... body ... `}`
-                            collapsed.push(format!("{}if ({}) {{", indent_str, cond_str));
-                            for k in (iwb + 1)..bi {
-                                collapsed.push(output_final2[k].clone());
-                            }
-                            collapsed.push(format!("{}}}", indent_str));
-                        }
-                        iwb = ci + 1;
-                        continue;
-                    }
-                }
-            }
-            collapsed.push(line.clone());
-            iwb += 1;
-        }
-        let output_final2 = collapsed;
+        // P-wbfold (while-break -> if fold) retired in POSTFIX-RETIRE-0001
+        // W2 cut 2: W1 counters proved zero mutations on both corpora
+        // (curl 190 + httpd 102 calls, both rpt rounds) - Rugra's emit
+        // layer no longer produces single-shot while+break loops on the
+        // corpora. The PRINTC-WHILEIF-FOLD-PREFIX-0001 slice logic and the
+        // MAIN-RC3 compact-header exemptions in P9/P17 remain (other passes
+        // still consume `while(` headers).
 
         // Empty switch-case removal pass.
         // Pattern (3 consecutive lines, same case indent):
@@ -1878,6 +1590,7 @@ impl EmitNoMarkup {
         // These contribute nothing (the switch falls through). Remove the whole
         // 3-line group. Also handle the `default:` variant with only a blank line
         // before `break;`. Ghidra does not emit cases whose body is solely `break;`.
+        let snap_ecase = PostfixStats::snap(&output_final2);
         let mut no_empty_cases: Vec<String> = Vec::with_capacity(output_final2.len());
         let mut ie = 0usize;
         while ie < output_final2.len() {
@@ -1908,6 +1621,7 @@ impl EmitNoMarkup {
             ie += 1;
         }
         let output_final2 = no_empty_cases;
+        pfx.observe(PF_ECASE, &snap_ecase, &output_final2);
 
         // Passes 20+21 (canonicalize_struct_deref + rewrite_struct_deref) REMOVED.
         // These were mutual inverses: pass 20 converted *(ptr+N) → ptr->field_N,
@@ -1926,6 +1640,7 @@ impl EmitNoMarkup {
         // (Ghidra print layer never rewrites symbol declarations; the oracle
         // prints sym->getType() verbatim at printc.cc:2503-2506).
         let after_unary = Self::fix_unary_deref_declarations(&struct_pass);
+        pfx.observe_str(PF_P22, &struct_pass, &after_unary);
 
         // Twenty-third pass: backfill missing local-variable declarations.
         // Scan each function body for `local_XX` identifiers used but not declared,
@@ -1937,6 +1652,7 @@ impl EmitNoMarkup {
         // block (unlinked-symbol body references, PRINTC-UNLINKED-REF-0001),
         // which keeps those functions compilable.
         let after_backfill = Self::backfill_missing_locals(&after_unary);
+        pfx.observe_str(PF_P23, &after_unary, &after_backfill);
 
         // Twenty-fourth pass: remove orphan break/continue statements that are
         // not within any loop or switch. These arise from incomplete control-flow
@@ -1950,20 +1666,27 @@ impl EmitNoMarkup {
         // type contradiction where a variable is used both as a struct base (for
         // ->field access) and as an array index.
         let after_orphan = Self::remove_orphan_breaks(&after_backfill);
+        pfx.observe_str(PF_P24, &after_backfill, &after_orphan);
         let after_ptr_arith = Self::fix_pointer_arithmetic(&after_orphan);
-        // Remove duplicate label definitions (splice residue can cause two
-        // blocks to share the same first-op address → duplicate LAB_ lines).
-        let after_dup_labels = Self::remove_duplicate_labels(&after_ptr_arith);
+        pfx.observe_str(PF_P25, &after_orphan, &after_ptr_arith);
+        // Pdl (duplicate LAB_ dedup) retired in POSTFIX-RETIRE-0001 W2:
+        // W1 counters proved zero mutations on both corpora (curl 190 +
+        // httpd 102 calls, both rounds); splice residue no longer produces
+        // duplicate label definitions. Ghidra has no counterpart (block
+        // addresses are unique; the oracle emit path has no text scan).
         // Twenty-sixth pass: remove lines with illegal lvalue assignments.
-        let after_lvalue = Self::remove_illegal_lvalue_assignments(&after_dup_labels);
+        let after_lvalue = Self::remove_illegal_lvalue_assignments(&after_ptr_arith);
+        pfx.observe_str(PF_P26, &after_ptr_arith, &after_lvalue);
         // Twenty-seventh pass: remove case labels outside switch bodies.
         let after_case = Self::remove_orphan_case_labels(&after_lvalue);
+        pfx.observe_str(PF_P27, &after_lvalue, &after_case);
         // Struct field recovery (-> operator) requires struct type definitions
         // at file scope. post_process runs per-function, so struct typedefs
         // end up inside function bodies (illegal C). Keep *(long *)(ptr + offset)
         // which is valid C for all pointer types. Struct field recovery needs
         // type propagation engine (ActionTypePropagate) at P-code level, not
         // text post-processing.
+        pfx.emit(input, &after_case);
         after_case
     }
 
@@ -2123,25 +1846,6 @@ impl EmitNoMarkup {
                 }
             }
             out.push(line.to_string());
-        }
-        out.join("\n")
-    }
-
-    // RUGRA-GLUE: 移除重复 LAB_ 标签（splice 残留导致）。Ghidra 无此问题（块
-    // 地址唯一），Rugra 的 splice 可能留下重复首地址块。
-    /// Remove duplicate label definitions (keep first occurrence only).
-    fn remove_duplicate_labels(text: &str) -> String {
-        use std::collections::HashSet;
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut out: Vec<&str> = Vec::new();
-        for line in text.lines() {
-            let t = line.trim();
-            if t.starts_with("LAB_") && t.ends_with(':') && !t.contains(' ') {
-                if !seen.insert(t.to_string()) {
-                    continue; // Skip duplicate label definition
-                }
-            }
-            out.push(line);
         }
         out.join("\n")
     }
@@ -2763,20 +2467,37 @@ impl EmitNoMarkup {
             if rewritten.is_none() {
                 // Check if this is a signature line containing `(long param_N, ...)`
                 // We rewrite param types inline if they're in derefed set.
+                // POSTFIX-VOIDCALL-W3 / W3 damage fix: the pattern
+                // `"{ty} {name}"` must match on IDENTIFIER BOUNDARIES. A bare
+                // substring match rewrote the RETURN TYPE region of any
+                // function whose name starts with a derefed variable's name:
+                // `int glob_url(URLGlob **glob,…)` contains `int glob` (the
+                // body legitimately derefs `*glob`), so the pass emitted
+                // `char *glob_url(…)` — a return-type change Ghidra never
+                // performs (the golden keeps `int glob_url`), and the
+                // `return 0;` body then returns int from a char* function.
+                // Word-boundary (no [A-Za-z0-9_] adjacent on either side) is
+                // the same boundary contract count_word_occurrences uses.
+                let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
                 let mut new_line = line.to_string();
                 for name in &derefed {
                     for ty in &scalar_types {
                         let pat = format!("{} {}", ty, name);
                         let repl = format!("char *{}", name);
                         // Only replace if not already pointer (avoid `long * param` -> `_struct * * param`)
-                        let pat_idx = new_line.find(&pat);
-                        if let Some(idx) = pat_idx {
-                            // Check char before is not '*'
+                        if let Some(idx) = new_line.find(&pat) {
+                            let end = idx + pat.len();
+                            // Check char before is not '*' or an identifier char
                             let before_ok = idx == 0 || {
                                 let b = new_line.as_bytes()[idx - 1];
-                                b != b'*'
+                                b != b'*' && !is_ident(b)
                             };
-                            if before_ok {
+                            // Check char after is not an identifier char
+                            // (`int glob` must not match `int glob_url`).
+                            let after_ok = end >= new_line.len() || {
+                                !is_ident(new_line.as_bytes()[end])
+                            };
+                            if before_ok && after_ok {
                                 new_line = new_line.replacen(&pat, &repl, 1);
                             }
                         }
@@ -2960,76 +2681,6 @@ impl EmitNoMarkup {
             i = end;
         }
         mask
-    }
-
-    // RUGRA-GLUE: has_enclosing_loop_ctx (post-process goto→break/return
-    //   rewrite helper; Ghidra emits break/continue structurally from
-    //   FlowBlock::markUnstructured flags at emitGotoStatement, it never
-    //   scans emitted text)
-    fn has_enclosing_loop_ctx(emitted: &[String], target_indent: usize) -> bool {
-        // Walk backward, tracking brace depth
-        let mut _depth = 0i32;
-        for line in emitted.iter().rev() {
-            let t = line.trim();
-            let ind = line.len() - line.trim_start().len();
-            for ch in t.chars().rev() {
-                match ch { '}' => _depth += 1, '{' => _depth -= 1, _ => {} }
-            }
-            // When we find an opening keyword at an indent level <= target (one level up)
-            if ind < target_indent {
-                // MAIN-RC3-STRUCTURED-EMIT-0001: accept the compact
-                // `while(` too — the oracle's overflow header (printc.cc:
-                // 3023-3028) is `while( true )`, and `while` is a C keyword
-                // so `while(` can never be an identifier (same word-safety
-                // argument as is_switch_stmt_prefix above).
-                if t.starts_with("while (") || t.starts_with("while(")
-                    || t.starts_with("do {")
-                    || t.starts_with("for (") || Self::is_switch_stmt_prefix(t)
-                    || t.contains("} while (")
-                {
-                    return true;
-                }
-                // If we hit a function-level line, stop
-                if ind == 0 { break; }
-            }
-        }
-        false
-    }
-
-    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
-    /// Negate a simple C condition expression for goto-to-if folding.
-    /// Handles common patterns: ==, !=, <, >, <=, >=, and compound && / ||.
-    fn negate_simple_condition(cond: &str) -> String {
-        let cond = cond.trim();
-
-        // Handle compound conditions with && or ||
-        // "A && B" → "!A || !B" (De Morgan) — but simpler: just wrap with !()
-        if cond.contains(" && ") || cond.contains(" || ") {
-            return format!("!({})", cond);
-        }
-
-        // Simple relational operators
-        if let Some(pos) = cond.find(" == ") {
-            return format!("{} != {}", &cond[..pos], &cond[pos + 4..]);
-        }
-        if let Some(pos) = cond.find(" != ") {
-            return format!("{} == {}", &cond[..pos], &cond[pos + 4..]);
-        }
-        if let Some(pos) = cond.find(" <= ") {
-            return format!("{} > {}", &cond[..pos], &cond[pos + 4..]);
-        }
-        if let Some(pos) = cond.find(" >= ") {
-            return format!("{} < {}", &cond[..pos], &cond[pos + 4..]);
-        }
-        if let Some(pos) = cond.find(" < ") {
-            return format!("{} >= {}", &cond[..pos], &cond[pos + 3..]);
-        }
-        if let Some(pos) = cond.find(" > ") {
-            return format!("{} <= {}", &cond[..pos], &cond[pos + 3..]);
-        }
-
-        // Fallback: wrap with !()
-        format!("!({})", cond)
     }
 
     // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
@@ -4656,19 +4307,20 @@ mod tests {
     // space TOKENS produces those exact bytes in the raw low-level stream,
     // and (b) the legacy post-processing no longer destroys them — the
     // whitespace-normalization pass is gated off `while(` header lines and
-    // the loop-context detectors accept the compact form, so the
-    // `if (cond) break;` statement inside the loop body survives.
+    // the loop-context detectors accept the compact form, so the loop and
+    // its `break;` survive untouched.
     // Statement shape mirrors production: every statement inside the block
     // opens with its own tag_line (emit_block_ops tag_line per statement).
+    // POSTFIX-RETIRE-0001 W2 cut 2: the while-break->if fold pass is retired
+    // (zero mutations on both corpora); this test now locks the UNfolded
+    // bytes instead of the fold result. The PRINTC-WHILEIF-FOLD-PREFIX-0001
+    // slice logic left with the pass; the compact-header emit bytes remain
+    // the invariant under protection.
     #[test]
-    fn pretty_print_while_break_fold_compact_prefix() {
+    fn pretty_print_while_break_compact_header_unfolded() {
         use crate::prettyprint::Emit;
-        // PRINTC-WHILEIF-FOLD-PREFIX-0001: the while-break collapse must
-        // slice the condition by the header form that actually matched.
-        // The compact `while( true )` header (printc.cc:3023-3028) has the
-        // open paren INSIDE the matched prefix; slicing with the spaced
-        // prefix length left the paired `)` dangling and the fold emitted
-        // a malformed `if (true ))`.
+        // The compact `while( true )` header (printc.cc:3023-3028) must
+        // survive post-processing byte-exact (no re-spacing, no fold).
         let mut e = super::EmitPrettyPrint::new();
         e.begin_function();
         e.tag_line(0);
@@ -4687,12 +4339,22 @@ mod tests {
         e.end_function();
         let out = e.get_output();
         assert!(
-            out.contains("if (true) x = 1;"),
-            "compact while( true ) break-fold must slice the condition without the dangling paren, got:\n{}",
+            out.contains("while( true ) {"),
+            "compact while( true ) header must survive byte-exact, got:\n{}",
+            out
+        );
+        assert!(
+            out.contains("x = 1;") && out.contains("break;"),
+            "loop body and break must survive (fold retired, loop ctx keeps break), got:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("if (true)"),
+            "while-break fold is retired (W2 cut 2); loop must not be folded, got:\n{}",
             out
         );
 
-        // Control: the spaced `while (c)` form folds unchanged.
+        // Control: the spaced `while (c)` form also survives unfolded.
         let mut e = super::EmitPrettyPrint::new();
         e.begin_function();
         e.tag_line(0);
@@ -4710,8 +4372,13 @@ mod tests {
         e.end_function();
         let out = e.get_output();
         assert!(
-            out.contains("if (c) y = 2;"),
-            "spaced while (c) break-fold must keep its condition, got:\n{}",
+            out.contains("while (c) {"),
+            "spaced while (c) header must survive, got:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("if (c) y = 2;"),
+            "while-break fold is retired (W2 cut 2); spaced form must not fold, got:\n{}",
             out
         );
     }

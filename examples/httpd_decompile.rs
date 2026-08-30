@@ -350,6 +350,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let fd_read = fd_arc.read().unwrap();
+            // BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001 diagnostic: dump the final
+            // structured tree (sblocks) for the RUGRA_DUMP_FUNC target.
+            if let Ok(dump_fn) = std::env::var("RUGRA_DUMP_FUNC") {
+                if dump_fn == func_name {
+                    eprintln!("[DUMP] === structure tree for {} ===", func_name);
+                    let mut tree_out = String::new();
+                    for blk in &fd_read.sblocks.blocks {
+                        rugra::block::print_tree_dbg(blk, 0, &mut tree_out);
+                    }
+                    eprintln!("{}", tree_out);
+                }
+            }
             let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
             printer.doc_function(&fd_read);
             let output = printer.take_emit();

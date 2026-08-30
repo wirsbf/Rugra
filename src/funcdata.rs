@@ -7108,8 +7108,24 @@ impl Funcdata {
                     }
                 }
                 OpCode::CPUI_CBRANCH => {
-                    // CBRANCH gets BOTH edges, but ORDER MATTERS for Structure Collapse!
-                    // Edge 0: branch target (true branch)
+                    // CBRANCH gets BOTH edges. Edge ORDER follows Ghidra's
+                    // FlowInfo::generateBlockEdges (flow.cc:960-967): the
+                    // FALL-THRU edge is pushed FIRST (out edge 0), the branch
+                    // target SECOND (out edge 1). All Ghidra consumers index
+                    // out edges as [falseOut=0, trueOut=1] (block.hh:294-301),
+                    // e.g. ActionConditionalConst::findConstCompare
+                    // (coreaction.cc:4496 constEdge=1 for INT_EQUAL) and
+                    // JumpTable analysis true-slot indexing; the previous
+                    // [target, fallthru] order inverted the true/false
+                    // meaning of getOut(0)/getOut(1) and made condconst
+                    // substitute the branch constant into the wrong path.
+                    // Edge 0: fallthrough (false branch) to next sequential block
+                    if i + 1 < blocks.len() {
+                        self.bblocks
+                            .add_edge(blocks[i].clone(), blocks[i + 1].clone());
+                    }
+
+                    // Edge 1: branch target (true branch)
                     if let Some(target_addr) = branch_target_offset {
                         for j in 0..blocks.len() {
                             let target_start = blocks[j].read().unwrap().get_start_addr().as_u64();
@@ -7118,12 +7134,6 @@ impl Funcdata {
                                 break;
                             }
                         }
-                    }
-
-                    // Edge 1: fallthrough (false branch) to next sequential block
-                    if i + 1 < blocks.len() {
-                        self.bblocks
-                            .add_edge(blocks[i].clone(), blocks[i + 1].clone());
                     }
                 }
                 _ => {
@@ -9230,19 +9240,20 @@ impl Funcdata {
         self.jump_tables = remain;
     }
 
-    // Ghidra: funcdata_block.cc:85 Funcdata::pushMultiequals
+    // Ghidra: funcdata_block.cc:84 Funcdata::pushMultiequals
     /// Assuming `bb` is being removed, force any Varnode defined by a
     /// MULTIEQUAL in `bb` to be defined in the output block instead, patching
     /// up data-flow. Faithful to `Funcdata::pushMultiequals`
-    /// (funcdata_block.cc:85-172).
-    ///
-    /// RUGRA-GAP: the full algorithm constructs artificial MULTIEQUAL ops and
-    /// rewrites descend lists. Rugra's op/varnode mutation API is incomplete
-    /// (no `opSetAllInput`, no descend iteration that yields owned ops), so
-    /// this implementation handles the common single-output, no-replacement
-    /// case and warns otherwise. The structure and intent match Ghidra.
+    /// (funcdata_block.cc:84-171): per-MULTIEQUAL-in-bb descendant scan
+    /// (dead-edge detection + addrtied same-address `neednewunique`), then the
+    /// artificial MULTIEQUAL construction in the first out block (origvn on
+    /// the bb-edge slots, `replacevn` on every other slot), then the
+    /// descend rewrite that retargets all non-dead-edge reads of `origvn` to
+    /// `replacevn`.
     pub fn push_multiequals(&mut self, bb: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
-        let (size_out, out_block, outblock_ind) = {
+        // cc:93-95: no out edges -> nothing to push into; >1 out edges is
+        // unexpected for a do-nothing block but only warns, execution goes on.
+        let (outblock, outblock_ind) = {
             let bb_rg = bb.read().unwrap();
             if bb_rg.size_out() == 0 {
                 return;
@@ -9250,24 +9261,21 @@ impl Funcdata {
             if bb_rg.size_out() > 1 {
                 self.warning_header("push_multiequal on block with multiple outputs");
             }
+            // cc:96-98: take first output block (for a donothing block it is
+            // the only one) and the slot of bb in its in-list (dead-edge slot).
             let out = bb_rg.get_out(0).map(|e| e.point);
-            // get_out_rev_index is on BlockBasic only; downcast to reach it.
             let rev = if let Some(bb_basic) = bb_rg.as_any().downcast_ref::<BlockBasic>() {
                 bb_basic.get_out_rev_index(0)
             } else {
                 -1
             };
-            (bb_rg.size_out(), out, rev)
-        };
-        let _ = size_out;
-        let outblock = match out_block {
-            Some(o) => o,
-            None => return,
+            match out {
+                Some(o) => (o, rev),
+                None => return,
+            }
         };
 
-        // Gather the MULTIEQUAL ops in bb that still have descendants.
-        // We snapshot the relevant ops first to avoid holding a borrow across
-        // the mutation below.
+        // cc:99: iterate bb's ops in block order.
         let bb_ops = {
             let bb_rg = bb.read().unwrap();
             if let Some(bb_basic) = bb_rg.as_any().downcast_ref::<BlockBasic>() {
@@ -9278,9 +9286,8 @@ impl Funcdata {
         };
 
         for origop in bb_ops {
-            let is_multiequal = origop.0.read().unwrap().opcode == OpCode::CPUI_MULTIEQUAL;
-            if !is_multiequal {
-                continue;
+            if origop.0.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL {
+                continue; // cc:101
             }
             let origvn = origop.0.read().unwrap().get_out().cloned();
             let origvn = match origvn {
@@ -9288,25 +9295,148 @@ impl Funcdata {
                 None => continue,
             };
             if origvn.read().unwrap().has_no_descend() {
-                continue;
+                continue; // cc:103
             }
-            // Check whether any descendant is a MULTIEQUAL in outblock reading
-            // origvn via the dead edge (outblock_ind). If so, no replacement is
-            // needed for that read.
-            // RUGRA-GAP: full descend iteration + artificial MULTIEQUAL
-            // construction requires opSetAllInput/opSetOutput on new ops,
-            // which Rugra exposes but the descend-rewrite is involved. We
-            // implement the detection step and emit the warning Ghidra emits
-            // when a replacement would be required, leaving the rewrite for a
-            // follow-up once descend iteration is owned.
-            let _ = outblock_ind;
-            let _ = &outblock;
-            // The conservative warning matches Ghidra's
-            //   warningHeader("push_multiequal on block with multiple outputs")
-            // only for the multi-output case (already handled above). For the
-            // single-output case with active descendants we currently cannot
-            // rebuild the artificial MULTIEQUAL, so we warn.
-            self.warning_header("push_multiequal: descendant rewrite not yet implemented");
+            // cc:104-128: scan origvn's descendants (in descend order) for
+            // the first read that does NOT go through the dead edge.
+            let mut needreplace = false;
+            let mut neednewunique = false;
+            let descend_snapshot: Vec<_> = {
+                let orig_rg = origvn.read().unwrap();
+                orig_rg.descend_iter().collect()
+            };
+            for op in descend_snapshot {
+                let is_multi_in_outblock = {
+                    let o = op.read().unwrap();
+                    o.opcode == OpCode::CPUI_MULTIEQUAL
+                        && o.parent
+                            .as_ref()
+                            .and_then(std::sync::Weak::upgrade)
+                            .is_some_and(|p| Arc::ptr_eq(&p, &outblock))
+                };
+                if is_multi_in_outblock {
+                    // cc:109-116: deadEdge = every reference to origvn in this
+                    // MULTIEQUAL goes through the dead edge (slot outblock_ind).
+                    let mut dead_edge = true;
+                    let num_input = op.read().unwrap().num_input();
+                    for i in 0..num_input {
+                        if i as i32 == outblock_ind {
+                            continue; // cc:111: not going thru dead edge
+                        }
+                        let reads_orig = {
+                            let o = op.read().unwrap();
+                            o.inrefs
+                                .get(i)
+                                .is_some_and(|v| Arc::ptr_eq(v, &origvn))
+                        };
+                        if reads_orig {
+                            dead_edge = false; // cc:113
+                            break;
+                        }
+                    }
+                    if dead_edge {
+                        // cc:118-122: if origvn is addrtied and feeds a
+                        // MULTIEQUAL at the same address in outblock, any use
+                        // beyond outblock propagated through another register,
+                        // so the new MULTIEQUAL must write a unique.
+                        let same_addr_addrtied = {
+                            let (orig_addr, orig_addrtied) = {
+                                let orig_rg = origvn.read().unwrap();
+                                (*orig_rg.get_addr(), orig_rg.is_addr_tied())
+                            };
+                            let out_addr = {
+                                let o = op.read().unwrap();
+                                o.get_out().and_then(|v| {
+                                    let v_rg = v.read().unwrap();
+                                    Some(*v_rg.get_addr())
+                                })
+                            };
+                            out_addr.is_some_and(|a| a == orig_addr) && orig_addrtied
+                        };
+                        if same_addr_addrtied {
+                            neednewunique = true;
+                        }
+                        continue; // cc:123
+                    }
+                }
+                needreplace = true; // cc:126
+                break; // cc:127
+            }
+            if !needreplace {
+                continue; // cc:129
+            }
+            // cc:131-135: the replacement varnode.
+            let (orig_size, orig_addr) = {
+                let orig_rg = origvn.read().unwrap();
+                (orig_rg.get_size(), *orig_rg.get_addr())
+            };
+            let replacevn = if neednewunique {
+                self.new_unique(orig_size)
+            } else {
+                self.new_varnode(orig_size, orig_addr)
+            };
+            // cc:136-148: one branch per in-edge of outblock: origvn on the
+            // bb edge(s), replacevn on the (dominated) alternate edges.
+            let out_in_count = outblock.read().unwrap().size_in();
+            let mut branches: Vec<Arc<RwLock<crate::varnode::Varnode>>> =
+                Vec::with_capacity(out_in_count);
+            for i in 0..out_in_count {
+                let from_bb = {
+                    let out_rg = outblock.read().unwrap();
+                    out_rg
+                        .get_in(i)
+                        .is_some_and(|e| Arc::ptr_eq(&e.point, bb))
+                };
+                if from_bb {
+                    branches.push(origvn.clone());
+                } else {
+                    branches.push(replacevn.clone());
+                }
+            }
+            // cc:149-153: construct the artificial MULTIEQUAL at outblock's
+            // start and insert it at the head of its MULTIEQUAL group.
+            let out_start = outblock.read().unwrap().get_start_addr();
+            let replaceop = self.new_op(branches.len(), out_start);
+            self.op_set_opcode(&replaceop, OpCode::CPUI_MULTIEQUAL);
+            self.op_set_output(&replaceop, replacevn.clone());
+            self.op_set_all_input(&replaceop, &branches);
+            self.op_insert_begin(&replaceop, &outblock);
+
+            // cc:156-169: replace obsolete origvn reads with replacevn. The
+            // snapshot is taken AFTER the construction, matching Ghidra's
+            // `titer = origvn->descend.begin()` at cc:157 — the artificial
+            // MULTIEQUAL itself now trails the list and is skipped by the
+            // cc:163-165 dead-edge guard like any other dead-edge read.
+            let rewrite_snapshot: Vec<_> = {
+                let orig_rg = origvn.read().unwrap();
+                orig_rg.descend_iter().collect()
+            };
+            for op in rewrite_snapshot {
+                let num_input = op.read().unwrap().num_input();
+                for i in 0..num_input {
+                    let reads_orig = {
+                        let o = op.read().unwrap();
+                        o.inrefs.get(i).is_some_and(|v| Arc::ptr_eq(v, &origvn))
+                    };
+                    if !reads_orig {
+                        continue; // cc:161-162
+                    }
+                    let dead_edge_read = {
+                        let o = op.read().unwrap();
+                        (i as i32) == outblock_ind
+                            && o.parent
+                                .as_ref()
+                                .and_then(std::sync::Weak::upgrade)
+                                .is_some_and(|p| Arc::ptr_eq(&p, &outblock))
+                            && o.opcode == OpCode::CPUI_MULTIEQUAL
+                    };
+                    if dead_edge_read {
+                        continue; // cc:163-165
+                    }
+                    self.op_set_input(&crate::op::PcodeOpRef(op.clone()), replacevn.clone(), i);
+                    break; // cc:167
+                }
+            }
         }
     }
 
@@ -11710,10 +11840,16 @@ mod tests {
             2,
             "CBRANCH must be born with 2 out-edges (no zombie decision block)"
         );
-        // Edge 0 must land on the synthetic target block.
+        // Ghidra edge order (flow.cc:960-967 FlowInfo::generateBlockEdges):
+        // out edge 0 = fall-through (false), out edge 1 = branch target
+        // (true). Edge 1 must land on the synthetic target block; edge 0 on
+        // the sequential fall-through block.
         let edge0 = cb_block.read().unwrap().get_out(0).map(|e| e.point);
         let edge0 = edge0.expect("CBRANCH edge 0 exists");
-        assert!(Arc::ptr_eq(&edge0, &synth));
+        let edge1 = cb_block.read().unwrap().get_out(1).map(|e| e.point);
+        let edge1 = edge1.expect("CBRANCH edge 1 exists");
+        assert!(Arc::ptr_eq(&edge1, &synth));
+        assert_eq!(edge0.read().unwrap().get_start_addr().as_u64(), 0x1007);
     }
 
     // Case 2: a target OUTSIDE the function range is external flow

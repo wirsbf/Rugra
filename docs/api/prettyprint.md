@@ -1,5 +1,145 @@
 # `prettyprint.rs` API Reference
 
+## 2026-08-30：POSTFIX-RETIRE-0001 W3 — P22 签名改写的词边界修复（glob_url 回归 golden）
+
+W3 对 P22（`fix_unary_deref_declarations`）活跃突变的排查结论（curl 2/2、
+httpd 2/2）：
+
+- **glob_url（curl）= P22 自身缺陷**：体内合法解引用 `*glob` 使 `glob` 入
+  derefed 集；签名内联改写的 `format!("{} {}", ty, name)` 模式（`int glob`）
+  **子串命中了函数名区** `int glob_url(`，把返回类型改写成
+  `char *glob_url(...)`——golden 保持 `int glob_url`，且 `return 0;` 随之
+  变成从 char* 函数返回 int 的病态形态。修复：模式匹配加**词边界**（匹配
+  前后字符均不得为 `[A-Za-z0-9_]`，前侧继续排除 `*`）——与
+  `count_word_occurrences` 同一边界契约。修后 curl 输出恰一行变化
+  （`char *glob_url(` → `int glob_url(`，与 golden 签名逐字节一致），
+  curl 差分 3091→**3089**/0/0，httpd 字节不变；P22 计数 curl 2/2→**1/1**。
+- **glob_set（curl）/ ap_stripprefix、ap_count_dirs（httpd）= 非 emit 层根因**
+  （保留突变）：`int pos`→`char *pos`、`long param_1`→`char *param_1` 的根因
+  是 FuncProto 参数类型为标量而 IR 有 `*param` 解引用（golden 中
+  `ap_count_dirs(char *param_1)` 为指针类型）——归 varmap/类型传播域
+  （W5，PTRARITH/TYPEOPFIX 族），printc emit 无对应判定点，本层不动。
+
+## 2026-08-30：POSTFIX-RETIRE-0001 W3 — P13 void 拆分退役（PRINTC-VOIDCALL-0001 正解落地）
+
+路线图 W3 节（FuncProto void + opReturn/opCall 形态 → P13）。P13（`return f();` →
+`f(); return;` 文本拆分，**硬编码 13 个 libc 名**——机制 D 红旗）按 W1 计数器在
+双语料双轮零突变，但其退役前必须把 void 判定迁回 oracle 真语义，否则表外任何
+void 函数会静默产出非法 C（`return pthread_mutex_lock();` 类 gcc error）。
+
+- **正解（本 commit，printc.rs 侧）**：oracle 中 void 调用语句形态来自 IR——
+  `ActionFuncLink::funcLinkOutput`（coreaction.cc:1521-1541）对 **output-locked
+  void** 被调方保持 CALL 无输出，`PrintC::emitExpression`（printc.cc:2471-2476）
+  的 `outvn != 0` 测试随之不打印赋值 LHS（语句形态 `f(args);`），`opReturn`
+  （printc.cc:758-761）对无值 RETURN 打印裸 `return;`。Rugra 在 print 层加
+  FuncProto-void 投影守卫（详见 `docs/api/printc.md` 同日节）：callspec
+  `prototype.output_type_locked && return_type==Void` 时投影无输出字节。
+- **本文件改动**：删除 P13 拆分块（`void_funcs` 硬编码表 + 行改写循环），P14
+  输入直接改接 P12 输出 `final_out`；计数器 `POSTFIX_PASS_NAMES` 24→23，
+  `PF_P13` 删除（后续索引前移 P14..P27）。幸存名单：
+  B1 P6 B2 P7 P8 P9 P10 P11 P12 P14 P15 P16c B3 P17 P18 B4 Pecase
+  P22 P23 P24 P25 P26 P27。
+- **验证**：curl `801614e0…`/httpd `e18b4503…` 与删除前**逐字节一致**（守卫在
+  现语料上 dormant——`free`/`exit` 调用的输出已被 action 层的
+  `func_link_output` 移除，黄金语料本就按语句形态渲染）；差分
+  curl 3091/0/0 + httpd 2278/0/0 维持；计数器无漂移（P13 字段消失、其余相等）。
+- **dormant 分支回归测试**：`printc.rs` 单测
+  `test_void_callee_call_prints_statement_and_bare_return`（构造"CALL 输出幸存
+  + callspec output-locked void"形态，断言语句形态 + 裸 return + 无
+  `return f();`）与负向对照 `test_nonvoid_locked_callee_keeps_assignment_lhs`
+  （locked 非 void 保留赋值 LHS）。oracle 侧真值锚点：锁定 golden 语料的
+  `free(pcVar11);` 语句形态（`tests/golden/ghidra_curl_1204.c`）。
+
+## 2026-08-30：POSTFIX-RETIRE-0001 W2 — A 队列零突变 pass 退役（尾部先行，一 pass 一 commit）
+
+路线图 W2 节：W1 计数器实证 **A 队列 9 个 pass 双语料双轮零突变**
+（LAB_ 族 P1/P1b/P2/P3/P4/P5/P16 + Pdl + P-wbfold），按管线**尾部先行**逐个删除。
+每刀门禁：curl/httpd E2E 输出 sha256 与删除前**逐字节一致** + RUGRA_POSTFIX_STATS
+计数器重跑（被删 pass 字段消失、其余 pass 计数不变，掩蔽检测）。oracle 依据：
+`EmitNoMarkup`（prettyprint.hh:546-594）直写 emitter、`flush`
+（prettyprint.cc:1193-1210）后零扫描、`docFunction`（printc.cc:2655-2666）以
+flush 结尾——这些文本 pass 在 Ghidra 无对应物，删除即向 oracle 行为收敛。
+
+- **刀 1（Pdl 重复 LAB_ 去重，管线 31/33）**：删除 `remove_duplicate_labels()`
+  与其插桩点；P26（非法左值删除）输入改接 P25 输出。计数器
+  `POSTFIX_PASS_NAMES` 33→32，`PF_PDL` 删除（后续索引前移）。
+  验证：curl `c889d856…`/httpd `a67155de…` 与基线逐字节一致；计数器其余字段
+  逐项不变（掩蔽零）。
+- **刀 2（P-wbfold while→if 折叠，管线 25/33）**：删除 while-break 折叠 pass
+  及其插桩点（B4 输出直供 P-ecase）；`POSTFIX_PASS_NAMES` 32→31。锁行为测试
+  `pretty_print_while_break_fold_compact_prefix` 同 commit 改造为
+  `pretty_print_while_break_compact_header_unfolded`——不再断言折叠结果
+  `if (true) x = 1;`，改为锁定未折叠字节（紧凑头 `while( true ) {` 原样存活 +
+  `!contains("if (true)")` 守卫退役事实）。PRINTC-WHILEIF-FOLD-PREFIX-0001 的
+  切片逻辑随 pass 消失；MAIN-RC3 的 `while(` 豁免（P9/P17）保留。
+  验证：双语料 sha256 与刀 1 后一致；计数器无漂移。
+- **刀 3（P16 前向 goto→if 折叠，管线 19/33）**：删除 P16 折叠块与其插桩点，
+  `negate_simple_condition()` helper 随之失去唯一调用点同 commit 删除；
+  P16c（折叠后清理，**唯一活跃 LAB_ 族幸存者**，curl `main`=264 行）保留，
+  输入直接改接 P15 输出（`pass15.join("\n")`）。`POSTFIX_PASS_NAMES` 31→30。
+  验证：双语料 sha256 不变；P16c 计数仍 curl 277/3、httpd 0（掩蔽零——
+  P16 零突变被删除后其下游 P16c 输入逐字节不变）。
+- **刀 4（P5 未引用标签删除(2)，管线 7/33）**：删除 P5 块与其插桩点，
+  `final_pass` 直接 move 自 P4 输出 `looped`。`POSTFIX_PASS_NAMES` 30→29。
+  验证：双语料 sha256 不变；计数器无漂移（含索引完整性校验：数组序 ==
+  PF_ 常量值）。
+- **刀 5（P4 回边 goto→do/while 循环转换，管线 6/33）**：删除 P4 转换块
+  （含 5 轮迭代收敛循环）与其插桩点，`looped` 直接 move 自 B1 输出
+  `collapsed`。`POSTFIX_PASS_NAMES` 29→28。
+  验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
+- **刀 6（P3 未引用标签删除(1)，管线 4/33）**：删除 P3 块与其插桩点
+  （连同中间 `output_text`/`result_lines` 重 split），`final_result` 直接
+  move 自首扫输出 `result`。`POSTFIX_PASS_NAMES` 28→27。
+  验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
+- **刀 7（P2 条件出口 goto→if-break/return，首扫模式 2）**：删除 P2 模式块
+  与其 bump 探针。`POSTFIX_PASS_NAMES` 27→26。`exit_labels` 预扫描暂留
+  （P1b 仍消费，刀 8 一并退役）。
+  验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
+- **刀 8（P1b 出口 goto→break/return，首扫模式 1b）**：删除 P1b 模式块与其
+  bump 探针；**配套退役两件附属物**——① `exit_labels` 预扫描
+  （goto_targets/defined_labels/exit_labels,P1b/P2 是其仅有消费者）；
+  ② `has_enclosing_loop_ctx()` helper（P1b/P2 是其仅有调用点，oracle 中
+  break/continue 由 FlowBlock::markUnstructured 结构化发射，从不扫描已发射
+  文本）。`POSTFIX_PASS_NAMES` 26→25。
+  验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
+- **刀 9（P1 冗余 goto 剥除，首扫模式 1；A 队列收官）**：删除 P1 模式块与其
+  bump 探针后，首扫 while 循环退化为逐字拷贝——连同 `lines`/`result`/`i`
+  声明整体删除，`final_result` 直接 `input.lines().map(to_string).collect()`
+  构造（与原 `join("\n").lines()` 往返恒等）。`POSTFIX_PASS_NAMES` 25→24。
+  至此 A 队列 9 pass 全部退役，幸存 pass 名单：
+  B1 P6 B2 P7 P8 P9 P10 P11 P12 P13 P14 P15 P16c B3 P17 P18 B4 Pecase
+  P22 P23 P24 P25 P26 P27。
+  验证：双语料 sha256 不变；计数器无漂移；索引完整性 OK。
+
+## 2026-08-30：POSTFIX-RETIRE-0001 W1 — 逐 pass 突变计数器（env 门控，零行为差）
+
+路线图 W1 节（`/tmp/rugra-reports/w-postfix-2026-08-30.md` §5）：为 W0 后幸存的
+全部 **33 个**后处理 pass 加突变计数器，作为 W2 零突变退役的判定依据。验收门禁：
+curl/httpd E2E 输出与 master **sha256 逐字节一致**（`f6e35fcd…` / `5200602a…`），
+`cargo test --lib` 17 失败全部为 funcdata 预存项。
+
+- **新增 `PostfixStats` 诊断族**（全部 `// RUGRA-GLUE:`，Ghidra 无对应物——oracle
+  `EmitNoMarkup`（prettyprint.hh:542-594）是无缓冲直写 emitter，发射路径以
+  `flush`（prettyprint.cc:1194-1213）结束，无任何文本后处理）：
+  - `RUGRA_POSTFIX_STATS` 环境变量设置时，`post_process_output_legacy` 每次调用
+    向 stderr 输出一行 `[POSTFIX] pid=<pid> inv=<n> rpt=<0|1> fn=<name> lines=<n>
+    P1=<d> … P27=<d>`（33 个 pass 的行级突变计数）；未设置时全部插桩点短路
+    （不 clone、不比较、不打印），输出字节与未插桩版本完全一致。
+  - 计数语义：等长输入逐行比较（改写型 pass 精确）；不等长输入先裁公共前后缀
+    再计中间差异块（删除/插入型）。**零突变检测在两种度量下均精确**。
+  - 熔合在首扫循环里的 P1/P1b/P2 无法取边界快照，在其三个改写点直接 `bump`
+    （每次 = 删 1 行或改写 1 行）；其余 27 个 pass 在边界快照
+    （`PostfixStats::snap`）→ 输出对比（`observe`/`observe_str`）。
+  - `rpt=1` 标记双重执行（本次输入 == 上次调用的输出，DefaultHasher 指纹）；
+    生产路径存在两类调用轮（curl 190 次调用中 84 次 rpt=1，httpd 102 中 33），
+    W2 判定以 rpt=0（首轮）为准，rpt=1 计数作为幂等性信号。
+- **双语料实证结果**（rpt=0 首轮）：**21/33 pass 双语料双轮全部零突变**
+  （P1 P1b P2 P3 B1 P4 P5 P12 P13 P14 P15 P16 B3 P18 B4 Pwbfold Pecase P24
+  P25 Pdl P26）——含整条 LAB_ goto 族（P16c 除外，curl 单函数 264 行突变）。
+  P13（void 拆分,硬编码 libc 表）在双语料零突变,但按路线图仍须等
+  PRINTC-VOIDCALL-0001 落地后退役。非零 pass 明细见 W1 报告
+  （`/tmp/rugra-reports/w-w1-2026-08-30.md`）。
+
 ## 2026-08-30：POSTFIX-RETIRE-0001 W0 — 死代码清除（字节级零行为差）
 
 路线图 `/tmp/rugra-reports/w-postfix-2026-08-30.md` W0 第一刀：删除全仓零引用的

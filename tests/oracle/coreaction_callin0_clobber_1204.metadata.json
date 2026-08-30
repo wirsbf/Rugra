@@ -1,0 +1,30 @@
+{
+ "fixture_id": "COREACTION-CALLIN0-CLOBBER-0001",
+ "overall_status": "MATCH",
+ "status_note": "CALL in(0) coderef survival locked bilaterally on curl my_fwrite @0x3460 after the natural flow (startProcessing) + ActionDefaultParams + ActionDeadCode::apply + ActionVarnodeProps::apply. Oracle side: followFlow attaches FuncCallSpecs per call (flow.cc:683-690) so markConsumedParameters (coreaction.cc:3840-3857, first statement pushConsumed(~0, in(0)) — 'In all cases the first operand is fully consumed') protects the target and ActionVarnodeProps cc:1327-1341 cannot totalReplaceConstant it. Rugra side: inject path births CALL with the static has_callspec flag but no FuncCallSpecs (CALLSPEC-DRIVER-0001 gap); ActionDeadCode's spec-less call branch restores the cc:3846 first-operand guarantee, heritage pass 1 opens the pass>0 gate of the E2E prefix-18->19 clobber state (w-push88 bisect). Without the guard the projection degrades to target=0x0 in0_constant=1 (the FUN_0 clobber, httpd 63 sites).",
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "(git worktree at ghidra/, verified by runner)",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{coreaction.cc:1282-1342,3550-4040,5491; flow.cc:683-690; funcdata.cc:478-497; funcdata_varnode.cc:205-216; varnode.cc:586}"
+ },
+ "observed": {
+  "branch:0x3489": "target=0x3489 in0_constant=0 in0_consume_full=1",
+  "call:0x24b0": "target=0x24b0 in0_constant=0 in0_consume_full=1",
+  "call:0x2500": "target=0x2500 in0_constant=0 in0_consume_full=1",
+  "cbranch:0x347e": "target=0x347e in0_constant=0 in0_consume_full=1",
+  "cbranch:0x3498": "target=0x3498 in0_constant=0 in0_consume_full=1"
+ },
+ "normalizations": [
+  "CALL target projected through Funcdata::getCallSpecs(op)->getEntryAddress() on the oracle side (in(0) there is the fspec annotation whose offset is a process-local FuncCallSpecs pointer) and through the in(0) ram-space coderef offset on the Rugra side (inject path attaches no spec) — both render the callee entry address",
+  "in(0) annotation-space representation NOT projected: IPTR_FSPEC annotation (oracle, flow-time anchoring) vs ram-space varnode (Rugra inject path, TYPEOP-FSPEC-SPACE-0001/CALLSPEC-DRIVER-0001) is a pipeline-state difference upstream of the two mapped functions, not of the preserved-target invariant under test",
+  "oracle runs the actions at heritage pass 0 (its VarnodeProps cc:1282-1342 has no pass gate); Rugra sets heritage pass 1 to open its pass>0 gate — the exact E2E second-mainloop state where the clobber fired (DECOMPILE prefix 18->19 bisect)",
+  "projection lines sorted by (kind, target): bank insertion order differs between the flow-driven oracle builder and the inject-driven Rugra builder"
+ ],
+ "comparand_sha256": {
+  "cpp_fixture_sha256": "99ce66975783553a62498c5ac60dd9cc6391f4552a7fba8a1798228a9c9b3500",
+  "rust_fixture_sha256": "e08373d8813a1a27add23499c1f3f691c0407085fbaa86a9ab0edfe3aa8ee044",
+  "rugra_coreaction_sha256": "2ffd798ff12c4c1c8bd8a679d86feea58817d6b22a5f4622ea44b7252332bedc"
+ }
+}

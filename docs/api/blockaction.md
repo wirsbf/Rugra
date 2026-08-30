@@ -1182,3 +1182,28 @@ MULTIGOTO-0001，维持 skip）；sizeout==2→（非 isGotoOut(1) 先 negateCon
 机制 C：blockaction.rs 属核心算法白名单，本改动 Cross-Review: PENDING
 （待独立复核 agent 逐行读 block.cc:1702-1713/2856-2903 与 printc.cc:2766-2779
 后出 APPROVE）。
+
+### 2026-08-30（BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001）：find_exit 容器臂 + check_switch_skips
+
+**LoopBody::find_exit**（blockaction.cc:182 findExit）：尾部近似 `trial_exit[0]` 替换为
+忠实容器臂（cc:227-237）——`extend_to_container`（cc:46-74，容器 head/tails +
+本循环 head 的非 goto 反向 BFS 标记）之后取第一个落在容器体内的 trialexit，再
+`clear_marks(extension)`。签名新增 `container: Option<(i32, Vec<i32>)>`（容器
+(head, tails)）。`immed_container` 语义从"loop_order 位置索引"改为**容器 head 块
+索引**（oracle 是 LoopBody 指针；merge_identical_heads 后 head 唯一，可跨深度
+排序存活；原位置索引在 step-4 sort 后失效）。step-5 经 `containers_by_head` 快照
+解析容器。证据：修复后 getparameter.constprop.0 的 selectGoto 级联前 18 个标记与
+oracle 逐点一致（22/0,9/0,7/0,6/0,107/0,82/0,86/0,70/0,65/1,110/0,29/1,99/0,
+89/0,60/0,102/0,25/0,127/0,111/0），此前首个标记即发散(20/1 vs 22/0)。
+
+**CollapseStructure::check_switch_skips**（blockaction.cc:1607 checkSwitchSkips）：
+新增完整移植——非默认 skip-to-exit case 边在存在默认边指向他处时标记为 goto
+（cc:1637-1643），返回 false 使 ruleBlockSwitch 报告"匹配但加 goto"并让
+collapseInternal 下一轮包裹后再建 switch。t_multigoto/hasDefaultGoto 提升臂在
+Rugra 不可达（无 BlockMultiGoto 类型），注释记录。is_default_branch 读镜像
+F_DEFAULTSWITCH_EDGE 标签（funcdata.rs set_default_switch_mirrored 安装）。
+
+**验证**：curl 全语料 3096/0/0（defects=0 保持）；cargo check 通过。
+诊断设施：block.rs `print_tree_dbg`/`dbg_front_leaf_start_addr`（结构树 dump，
+RUGRA_DUMP_FUNC hook 于 curl/httpd runners）、blockaction.rs SELECTGOTO 级联
+trace（RUGRA_TRACE_SELECTGOTO）、IRRED-SW try 行含地址。

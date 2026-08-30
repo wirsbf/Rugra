@@ -451,6 +451,20 @@ pub struct PrintC {
     discovery_pass: bool,
     /// Addresses of CALL targets (should not be declared as local variables)
     call_targets: HashSet<u64>,
+    /// CALL instruction addresses whose callee FuncProto is output-locked
+    /// VOID (PRINTC-VOIDCALL-0001). Ghidra's
+    /// `ActionFuncLink::funcLinkOutput` (coreaction.cc:1521-1541) removes any
+    /// CALL output and re-creates one only for a locked NON-void callee, so
+    /// the oracle's print layer never sees an output varnode on a locked-void
+    /// call: `PrintC::emitExpression` (printc.cc:2471-2476) prints no
+    /// assignment LHS (`free(p);` statement form) and `PrintC::opReturn`
+    /// (printc.cc:754-763) prints a bare `return;`. Rugra's action layer
+    /// removes the output on the same conditions, but any call site whose
+    /// output survived (action ordering noise) must still render with the
+    /// oracle's no-output bytes: the print layer projects the
+    /// `funcLinkOutput` no-output state keyed on the callee's FuncProto,
+    /// replacing the retired P13 hardcoded 13-libc-name text split.
+    void_callee_call_addrs: HashSet<u64>,
     /// Varnode Arc pointers that are used as pointers (LOAD/STORE address
     /// or INT_ADD input feeding LOAD/STORE). Precomputed in doc_function
     /// for usage-based type inference in Hungarian naming.
@@ -752,6 +766,7 @@ impl PrintC {
             used_varnode_types: HashMap::new(),
             discovery_pass: false,
             call_targets: HashSet::new(),
+            void_callee_call_addrs: HashSet::new(),
         pointer_varnodes: HashSet::new(),
             inline_candidates: HashMap::new(),
             inline_depth: 0,
@@ -1620,6 +1635,19 @@ impl PrintC {
 
     // ---- Step 3: emit_expression_rpn (printc.cc:2468 emitExpression) ----
 
+    // Ghidra: coreaction.cc:1539-1541 ActionFuncLink::funcLinkOutput (print-side projection, PRINTC-VOIDCALL-0001)
+    /// Whether this CALL's callee FuncProto is output-locked VOID, i.e. the
+    /// oracle IR state in which the CALL has NO output varnode
+    /// (`ActionFuncLink::funcLinkOutput` unsets the output and re-creates one
+    /// only for locked non-void callees, coreaction.cc:1521-1541). The print
+    /// layer projects that state: no assignment LHS
+    /// (printc.cc:2471-2476 `outvn != 0` test), statement form for the call,
+    /// and a bare `return;` when a RETURN consumes the surviving output.
+    fn callee_returns_void(&self, op: &PcodeOp) -> bool {
+        op.opcode == OpCode::CPUI_CALL
+            && self.void_callee_call_addrs.contains(&op.get_addr().as_u64())
+    }
+
     // Ghidra: printc.cc:2468 PrintC::emitExpression
     /// Emit a single PcodeOp as an expression via the RPN stack. Faithful to
     /// PrintC::emitExpression (printc.cc:2468-2495): if the op has an output,
@@ -1634,16 +1662,22 @@ impl PrintC {
         op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
         op: &PcodeOp,
     ) {
-        // printc.cc:2471-2476: assignment LHS.
+        // printc.cc:2471-2476: assignment LHS — guarded by `outvn != 0`. A
+        // locked-void callee CALL has NO output in the oracle IR
+        // (funcLinkOutput, coreaction.cc:1539-1541); Rugra projects the same
+        // no-output bytes when the action layer left the output in place
+        // (PRINTC-VOIDCALL-0001): the statement renders as `f(args);`.
         if let Some(out) = op.get_out() {
-            // pushOp(&assignment, op)
-            self.rpn_push_op(self.rpn_tok_assignment);
-            // pushSymbolDetail(outvn, op, false) -> atom on the stack.
-            // Borrow the output Varnode read-only; make_atom_for_vn takes &Varnode.
-            let out_vn = out.read().unwrap();
-            let atom = self.make_atom_for_vn(&out_vn, op);
-            drop(out_vn);
-            self.rpn_push_atom(&atom);
+            if !self.callee_returns_void(op) {
+                // pushOp(&assignment, op)
+                self.rpn_push_op(self.rpn_tok_assignment);
+                // pushSymbolDetail(outvn, op, false) -> atom on the stack.
+                // Borrow the output Varnode read-only; make_atom_for_vn takes &Varnode.
+                let out_vn = out.read().unwrap();
+                let atom = self.make_atom_for_vn(&out_vn, op);
+                drop(out_vn);
+                self.rpn_push_atom(&atom);
+            }
         }
         // printc.cc:2493: op->getOpcode()->push(this, op, 0) — readOp is null
         // from emitExpression.
@@ -1972,7 +2006,21 @@ impl PrintC {
                 self.emit.tag_op("return");
                 // printc.cc:754 opReturn plain arm: pushVn(in1) — record +
                 // drain so an implied return-value expression inlines.
-                if op.get_in(1).is_some() {
+                // PRINTC-VOIDCALL-0001: a RETURN whose value is a locked-void
+                // callee CALL's output would carry numInput()==1 in the
+                // oracle IR (funcLinkOutput kept the CALL output-free,
+                // coreaction.cc:1539-1541), printing a bare `return;`. Project
+                // that state here so a surviving output cannot render the
+                // illegal-C `return free(p);` form.
+                let return_value_is_void_call = op
+                    .get_in(1)
+                    .and_then(|in1| in1.read().unwrap().get_def())
+                    .map(|def| {
+                        let d = def.read().unwrap();
+                        self.callee_returns_void(&d)
+                    })
+                    .unwrap_or(false);
+                if op.get_in(1).is_some() && !return_value_is_void_call {
                     self.emit.print(" ");
                     self.rpn_push_in(op_arc, op, 1, self.mods);
                     self.rpn_recurse();
@@ -3269,9 +3317,26 @@ impl PrintC {
                 }
             }
             // printc.cc:2703-2705: skip ops whose output is implied.
+            // PRINTC-VOIDCALL-0001: a locked-void callee CALL is never
+            // implied in the oracle IR (it has no output at all,
+            // funcLinkOutput coreaction.cc:1539-1541) and must print as a
+            // statement (`f(args);`). Un-skip only when every consumer of the
+            // surviving output is a RETURN — the `return f();` tail-call form
+            // P13 used to split. A non-RETURN consumer keeps the legacy
+            // inline (skip) behavior so the call never prints twice.
             if let Some(out) = op_guard.get_out() {
                 if out.read().unwrap().is_implied() {
-                    continue;
+                    let only_returns = {
+                        let out_vn = out.read().unwrap();
+                        out_vn.descend.iter().all(|weak| {
+                            weak.upgrade()
+                                .map(|d| d.read().unwrap().opcode == OpCode::CPUI_RETURN)
+                                .unwrap_or(true)
+                        })
+                    };
+                    if !(self.callee_returns_void(&op_guard) && only_returns) {
+                        continue;
+                    }
                 }
             }
             if separator {
@@ -3334,11 +3399,21 @@ impl PrintC {
                         // fall-through statement). Emitted targets stay
                         // excluded: their label belongs at their own block
                         // (the pending arm / backpatch), not the goto site.
+                        // BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001: the former
+                        // `goto_targets.contains(&target) ||` first disjunct
+                        // anchored EVERY op-level goto target at the goto
+                        // site (the c23d4f52 era's only label source, before
+                        // the pending arm/backpatch existed), poisoning
+                        // printed_labels ahead of the target's own
+                        // emitAnyLabelStatement print and producing
+                        // `goto X; X:` self-pairs with the label — and the
+                        // jump — resolved to the fall-through instead of the
+                        // target block (oracle: emitBlockBasic cc:2685 prints
+                        // a block's own label at ITS head, never a branch
+                        // target's label at the branch site).
                         let needs_anchor = self.pending_goto_labels.contains(&target)
                             && !self.discovery_block_starts.contains(&target);
-                        if (self.goto_targets.contains(&target) || needs_anchor)
-                            && !targets_to_label.contains(&target)
-                        {
+                        if needs_anchor && !targets_to_label.contains(&target) {
                             targets_to_label.push(target);
                         }
                     }
@@ -3707,9 +3782,23 @@ impl PrintC {
             // An implied varnode's def expression is inlined at its read site
             // (push_varnode emits it), so the op is NOT emitted as a standalone
             // `lhs = expr` statement.
+            // PRINTC-VOIDCALL-0001 exception: a locked-void callee CALL whose
+            // output is consumed only by RETURN(s) keeps the statement form
+            // (the oracle IR has no output on such a call, funcLinkOutput
+            // coreaction.cc:1539-1541) — same guard as emit_block_basic_rpn.
             if let Some(ref out_arc) = op.output {
                 if out_arc.read().unwrap().is_implied() {
-                    continue;
+                    let only_returns = {
+                        let out_vn = out_arc.read().unwrap();
+                        out_vn.descend.iter().all(|weak| {
+                            weak.upgrade()
+                                .map(|d| d.read().unwrap().opcode == OpCode::CPUI_RETURN)
+                                .unwrap_or(true)
+                        })
+                    };
+                    if !(self.callee_returns_void(&op) && only_returns) {
+                        continue;
+                    }
                 }
             }
 
@@ -3818,11 +3907,21 @@ impl PrintC {
                         // fall-through statement). Emitted targets stay
                         // excluded: their label belongs at their own block
                         // (the pending arm / backpatch), not the goto site.
+                        // BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001: the former
+                        // `goto_targets.contains(&target) ||` first disjunct
+                        // anchored EVERY op-level goto target at the goto
+                        // site (the c23d4f52 era's only label source, before
+                        // the pending arm/backpatch existed), poisoning
+                        // printed_labels ahead of the target's own
+                        // emitAnyLabelStatement print and producing
+                        // `goto X; X:` self-pairs with the label — and the
+                        // jump — resolved to the fall-through instead of the
+                        // target block (oracle: emitBlockBasic cc:2685 prints
+                        // a block's own label at ITS head, never a branch
+                        // target's label at the branch site).
                         let needs_anchor = self.pending_goto_labels.contains(&target)
                             && !self.discovery_block_starts.contains(&target);
-                        if (self.goto_targets.contains(&target) || needs_anchor)
-                            && !targets_to_label.contains(&target)
-                        {
+                        if needs_anchor && !targets_to_label.contains(&target) {
                             targets_to_label.push(target);
                         }
                     }
@@ -3987,8 +4086,35 @@ impl PrintC {
     fn emit_flow_basic(
         &mut self,
         block_arc: &std::sync::Arc<
-            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+    >,
     ) {
+        // GOTO-LABEL-UNPRINTED-0001 discovery ledger (emit_block_ops sibling,
+        // printc.rs:3503-3522): emit_block_ops records only leaves dispatched
+        // through the FLAT paths; a leaf reached in a plain structured context
+        // (e.g. a goto target sitting at the function's top level after a
+        // loop, emitted below via emit_block_basic_rpn/legacy) went
+        // unrecorded, so emit_goto_statement's never-emitted-target anchor
+        // misfired and placed its label at the goto site — the `goto X; X:`
+        // self-pair (BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001 residual,
+        // observed next_url code_r0x000050E7). Same gates as the sibling
+        // recorder: discovery pass + PRIMARY NullEmit + Basic/Copy leaf; the
+        // oracle counterpart is BlockGraph::emit totality — every tree block
+        // emits exactly once through the virtual dispatch (block.hh emit),
+        // so Ghidra's "is this target a live emitted block" question is
+        // answered by the tree itself, and this ledger merely mirrors that
+        // completeness across Rugra's two leaf emission paths.
+        if self.discovery_pass
+            && (&*self.emit) as *const dyn Emit as *const () as usize == self.discovery_emit_id
+            && matches!(
+                block_arc.read().unwrap().get_type(),
+                crate::block::BlockType::Basic | crate::block::BlockType::Copy
+            )
+        {
+            if let Some(start) = Self::flow_entry_address(block_arc) {
+                self.discovery_block_starts.insert(start);
+            }
+        }
         self.emit_any_label_statement(block_arc);
         if self.is_set(print_mods::ONLY_BRANCH) {
             let terminal = block_arc.read().unwrap().get_ops().last().cloned();
@@ -7909,6 +8035,26 @@ impl PrintLanguage for PrintC {
         }
         self.call_targets = call_targets;
 
+        // PRINTC-VOIDCALL-0001: snapshot the output-locked-void callee CALL
+        // sites. The judgment mirrors ActionFuncLink::funcLinkOutput
+        // (coreaction.cc:1539-1541): only a LOCKED void output keeps the CALL
+        // output-free; an unlocked void-default proto leaves the output to
+        // trial recovery and must NOT project the no-output form. The key is
+        // the callspec's `op_addr` — the CALL instruction address
+        // (FuncCallSpecs::new_for_op stores op->get_addr()) — matched against
+        // PcodeOp::get_addr() by the print-time predicate below.
+        self.void_callee_call_addrs = fd
+            .callspecs
+            .iter()
+            .filter(|spec| {
+                let spec = spec.read().unwrap();
+                spec.prototype.output_type_locked
+                    && spec.prototype.return_type.get_metatype()
+                        == crate::type_system::datatype::TypeMetatype::Void
+            })
+            .map(|spec| spec.read().unwrap().op_addr.as_u64())
+            .collect();
+
         // Precompute pointer varnodes for usage-based type inference.
         self.pointer_varnodes.clear();
         use crate::space::AddressSpace;
@@ -9505,11 +9651,18 @@ impl PrintLanguage for PrintC {
 
     // Ghidra: printc.cc:593 PrintC::opCall
     fn op_call(&mut self, op: &PcodeOp) {
+        // PRINTC-VOIDCALL-0001: emitExpression's `outvn != 0` LHS test
+        // (printc.cc:2471-2476) — a locked-void callee CALL carries NO output
+        // in the oracle IR (funcLinkOutput, coreaction.cc:1539-1541), so the
+        // statement renders `f(args);` with no assignment LHS. Project the
+        // same bytes when the action layer left the output in place.
         if let Some(out) = op.get_out() {
-            self.is_lhs = true;
-            self.push_varnode(&out.read().unwrap(), Some(op));
-            self.is_lhs = false;
-            self.emit.tag_op(" = ");
+            if !self.callee_returns_void(op) {
+                self.is_lhs = true;
+                self.push_varnode(&out.read().unwrap(), Some(op));
+                self.is_lhs = false;
+                self.emit.tag_op(" = ");
+            }
         }
         if let Some(in0) = op.get_in(0) {
             let target_vn = in0.read().unwrap();
@@ -9560,9 +9713,23 @@ impl PrintLanguage for PrintC {
     fn op_return(&mut self, op: &PcodeOp) {
         self.emit.print("return");
         if op.num_input() > 1 {
-            self.emit.print(" ");
-            if let Some(in1) = op.get_in(1) {
-                self.push_varnode(&in1.read().unwrap(), Some(op));
+            // PRINTC-VOIDCALL-0001: a locked-void callee CALL output feeding
+            // RETURN implies numInput()==1 in the oracle IR (the CALL is
+            // output-free, coreaction.cc:1539-1541) — print the bare
+            // `return;` instead of the illegal-C `return free(p);` value.
+            let return_value_is_void_call = op
+                .get_in(1)
+                .and_then(|in1| in1.read().unwrap().get_def())
+                .map(|def| {
+                    let d = def.read().unwrap();
+                    self.callee_returns_void(&d)
+                })
+                .unwrap_or(false);
+            if !return_value_is_void_call {
+                self.emit.print(" ");
+                if let Some(in1) = op.get_in(1) {
+                    self.push_varnode(&in1.read().unwrap(), Some(op));
+                }
             }
         } else {
             // No explicit return value on the RETURN op. Check if RAX/EAX (offset 0x0)
@@ -15169,6 +15336,138 @@ mod tests {
         let fd = Funcdata::new("test_func", Address::new(0x1000), 0x100);
 
         printer.doc_function(&fd);
+    }
+
+    #[test]
+    fn test_void_callee_call_prints_statement_and_bare_return() {
+        // PRINTC-VOIDCALL-0001 Rust-side regression (dormant-branch
+        // projection). Oracle-side truth is pinned by the locked-oracle
+        // golden corpus: every locked-void libc call renders as a bare
+        // statement (`free(pcVar11);` — tests/golden/ghidra_curl_1204.c) and
+        // a value-less RETURN renders `return;` — because
+        // ActionFuncLink::funcLinkOutput (coreaction.cc:1539-1541) keeps a
+        // locked-void callee's CALL output-free, so PrintC::emitExpression
+        // (printc.cc:2471-2476) sees `outvn == 0` and prints no assignment
+        // LHS, and PrintC::opReturn (printc.cc:758-761) sees numInput()==1.
+        // This test drives the print-layer projection for the IR state the
+        // guards must also survive: the CALL output SURVIVED (wired into the
+        // RETURN input) while the callspec is output-locked void — the exact
+        // shape the retired P13 text pass used to patch as `return f();`.
+        let emit = Box::new(EmitNoMarkup::new());
+        let mut printer = PrintC::new(emit);
+
+        let mut fd = Funcdata::new("void_tail", Address::new(0x3000), 0);
+        let void_type = std::sync::Arc::new(crate::type_system::datatype::Datatype::Void(
+            crate::type_system::datatype::TypeBase::new(
+                "void".to_string(),
+                0,
+                crate::type_system::datatype::TypeMetatype::Void,
+            ),
+        ));
+        let mut proto = crate::fspec::FuncProto::new("free".to_string(), void_type);
+        proto.set_output_lock(true);
+        let call_addr = Address::new(0x3100);
+        let spec =
+            crate::fspec::FuncCallSpecs::new(call_addr, proto);
+        fd.callspecs
+            .push(std::sync::Arc::new(std::sync::RwLock::new(spec)));
+
+        // CALL target(0x104c50) with argument 0x42, output wired into RETURN.
+        let call = fd.new_op(2, call_addr);
+        fd.op_set_opcode(&call, OpCode::CPUI_CALL);
+        let call_target = fd.new_constant(8, 0x104c50);
+        let call_arg = fd.new_constant(8, 0x42);
+        fd.op_set_input(&call, call_target, 0);
+        fd.op_set_input(&call, call_arg, 1);
+        let call_out = fd.new_unique_out(8, &call);
+        fd.obank.mark_alive(call.clone());
+
+        let ret = fd.new_op(2, Address::new(0x3105));
+        fd.op_set_opcode(&ret, OpCode::CPUI_RETURN);
+        let ret_indirect = fd.new_constant(8, 0);
+        fd.op_set_input(&ret, ret_indirect, 0);
+        fd.op_set_input(&ret, call_out, 1);
+        fd.obank.mark_alive(ret.clone());
+
+        // Simulate the doc_function snapshot (same-module test may seed the
+        // private field directly).
+        printer.void_callee_call_addrs.insert(call_addr.as_u64());
+
+        printer.emit_block_basic_rpn(&[call, ret], false);
+        let text = printer
+            .take_emit()
+            .into_any()
+            .downcast::<EmitNoMarkup>()
+            .expect("EmitNoMarkup")
+            .debug_get_output_ref()
+            .to_string();
+        // Statement form, no assignment LHS; bare `return;` — the oracle's
+        // no-output-CALL bytes.
+        assert!(
+            text.contains("FUN_104c50(0x42);"),
+            "void callee CALL must print as a statement, got: {text}"
+        );
+        assert!(
+            !text.contains("= FUN_104c50("),
+            "void callee CALL must not print an assignment LHS, got: {text}"
+        );
+        assert!(
+            text.contains("return;"),
+            "RETURN consuming a void-callee CALL output must print bare, got: {text}"
+        );
+        assert!(
+            !text.contains("return FUN_104c50"),
+            "void callee tail call must not render `return f();`, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_nonvoid_locked_callee_keeps_assignment_lhs() {
+        // PRINTC-VOIDCALL-0001 negative control: a locked NON-void callee
+        // keeps the oracle's assignment LHS (funcLinkOutput re-creates the
+        // output, coreaction.cc:1540-1551, so emitExpression prints
+        // `out = f(...)`), and the void projection must stay dormant.
+        let emit = Box::new(EmitNoMarkup::new());
+        let mut printer = PrintC::new(emit);
+
+        let mut fd = Funcdata::new("nonvoid_call", Address::new(0x4000), 0);
+        let int_type = std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+            crate::type_system::datatype::TypeBase::new(
+                "int".to_string(),
+                4,
+                crate::type_system::datatype::TypeMetatype::Int,
+            ),
+        ));
+        let mut proto = crate::fspec::FuncProto::new("getint".to_string(), int_type);
+        proto.set_output_lock(true);
+        let call_addr = Address::new(0x4100);
+        fd.callspecs.push(std::sync::Arc::new(
+            std::sync::RwLock::new(crate::fspec::FuncCallSpecs::new(call_addr, proto)),
+        ));
+        // NOTE: this address is deliberately NOT seeded into
+        // void_callee_call_addrs — the callee is non-void.
+
+        let call = fd.new_op(2, call_addr);
+        fd.op_set_opcode(&call, OpCode::CPUI_CALL);
+        let call_target = fd.new_constant(8, 0x5a5a);
+        let call_arg = fd.new_constant(8, 0x7);
+        fd.op_set_input(&call, call_target, 0);
+        fd.op_set_input(&call, call_arg, 1);
+        let _out = fd.new_unique_out(4, &call);
+        fd.obank.mark_alive(call.clone());
+
+        printer.emit_block_basic_rpn(&[call], false);
+        let text = printer
+            .take_emit()
+            .into_any()
+            .downcast::<EmitNoMarkup>()
+            .expect("EmitNoMarkup")
+            .debug_get_output_ref()
+            .to_string();
+        assert!(
+            text.contains("= FUN_5a5a("),
+            "locked non-void callee keeps the assignment LHS, got: {text}"
+        );
     }
 
     #[test]

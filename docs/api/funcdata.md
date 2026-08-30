@@ -590,6 +590,29 @@ Rugra 侧回归锁：`test_build_blocks_synthetic_target_creates_block_no_zombie
 `test_build_blocks_external_target_edge_still_dropped` /
 `test_branch_remove_internal_destroys_cbranch_at_two_out`（funcdata.rs tests）。
 
+#### CBRANCH 出边顺序（2026-08-30 边序反转修复,HTTPD-EMPTYELSE-LIVEARM-0001）
+
+Ghidra `FlowInfo::generateBlockEdges`(flow.cc:960-967)对 CBRANCH 先 push **fall-thru 边**、
+再 push **branch target 边**;`connectBasic` 按此顺序 `bblocks.addEdge`,因此出边约定为
+**out[0]=fall-through(false),out[1]=branch target(true)**——与 `FlowBlock::getFalseOut()=getOut(0)` /
+`getTrueOut()=getOut(1)`(block.hh:294-301)及 `BlockBasic::negateCondition` 的"swap 边+翻
+boolean_flip/fallthru_true"配对维持极性不变。Rugra 此前按 [target, fallthru] 顺序建边,
+使全部依赖 `getOut(0)/getOut(1)` 真/假语义的消费者读反:
+
+- `ActionConditionalConst::findConstCompare`(coreaction.cc:4496):INT_EQUAL 的 constEdge=1
+  选取"值==常量"的一侧;边序反了以后 constBlock 落到错误一侧,把分支常量代入**错误路径**
+  支配的块。实证(httpd ap_getparents 0x2e6a3 `je 2e768`,cond=INT_EQUAL(uVar4_phi,1)):
+  Rugra 把 uVar4=1 代入 uVar4!=1 支配的菱形(s[uVar4-1]→s[0],s[uVar4-2]→s[-1],
+  Y 臂 param_1+(uVar4-1)→param_1 折叠为 identity)→ Y 臂只剩活 PIECE/COPY(implied,
+  print 无语句)→ 结构化出现空 else;oracle 同区域(12.0.4 探桩 livearm_opsdump)三臂
+  INT_ADD 全部非 implied、条件不特化,golden 为 if/else-if/else 三臂链。
+- jumptable 真槽位索引(`true_slot = flip?0:1`,jumptable.rs)同类读反风险。
+
+修复后:httpd **defects 3→0**(ap_getparents 2 + ap_pregsub 1 空 else 全部消失,复合条件
+链恢复),skeleton 2231→2277;curl **字节级不变**(3095/0/0,124 函数 byte-identical)。
+Rugra 侧回归锁:`test_build_blocks_synthetic_target_creates_block_no_zombie`
+(更新为断言 edge0=fallthru@0x1007, edge1=synthetic target)。
+
 #### 为什么这个方法重要
 如果没有这一步：
 
@@ -2063,3 +2086,34 @@ removeFromFlow 边重定向循环(cc:296,block.cc:1545-1560 形状:自末尾出�
 switch_edge 双半语义重定向入边)、op 销毁(unreachable 路径 descend2Undef +
 descendants 检查;cc:311-312 LowlevelError 降级为警告+跳过)、removeBlock。
 `remove_do_nothing_block` 返回 bool 并接通 blockRemoveInternal。
+
+## 2026-08-30:push_multiequals 完整移植(FUNCDATA-PUSHMULTIEQUALS-0001)
+
+`Funcdata::pushMultiequals`(funcdata_block.cc:84-171)从检测-only stub(每个
+活跃 phi 发 `push_multiequal: descendant rewrite not yet implemented` 警告、
+不做任何重建)补齐为完整移植:
+
+- 出块/死边锚定(cc:93-98):sizeOut==0 直接返回;>1 仅告警继续;outblock =
+  getOut(0)、outblock_ind = getOutRevIndex(0)。
+- 每 bb 内 MULTIEQUAL(cc:99-103):跳过无后代 phi;其后代扫描按 descend
+  顺序快照迭代。deadEdge 判定(cc:106-116):后代若是 outblock 内
+  MULTIEQUAL 且对 origvn 的所有读均经死边槽(outblock_ind),该读留给
+  blockRemoveInternal 的 opRemoveInput 路径;否则 needreplace=true 即跳出。
+- neednewunique(cc:118-122):origvn addrtied 且与该 phi 输出同地址 →
+  替换 varnode 用 newUnique,否则 newVarnode(size, origvn addr)。
+  isAddrTied = addrtied|insert 双标志(varnode.hh:250),Rugra 一致。
+- 人工 MULTIEQUAL 构造(cc:131-153):branches 按 outblock 入边序,bb 边槽
+  放 origvn、其余槽放 replacevn;newOp(branches.size(), outblock.start) →
+  opSetOpcode(MULTIEQUAL) → opSetOutput → opSetAllInput → opInsertBegin。
+- 后代重写(cc:156-169):构造完成后快照 descend(与 Ghidra cc:157 的
+  titer=begin() 在 opInsertBegin 之后取相同顺序),逐 op 逐槽找 origvn 读;
+  死边槽(outblock_ind + outblock 内 MULTIEQUAL)跳过,其余首个命中槽
+  opSetInput(op, replacevn, i) 后 break。
+
+验证:httpd 警告×3 消失(ap_fini_vhost_config×2/ap_pregsub×1,WARNING 行
+81→78),cc:311-312 滞留 op 信号消失;ap_fini_vhost_config 声明区清除 2 个
+搁浅局部(25→24 decl 行),skeleton 2277→2278(+1 为删变量后序号重排再分布,
+defects/numbering 均 0);curl 骨架 3095→3091(main/myprogress/
+my_get_token/parseconfig.constprop.0 仅删除 stub 警告注释,函数体逐字节
+不变,defects/numbering 均 0);cargo test 全量 17 failed 与 master 基线
+逐名一致。
