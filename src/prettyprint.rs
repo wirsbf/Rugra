@@ -2467,20 +2467,37 @@ impl EmitNoMarkup {
             if rewritten.is_none() {
                 // Check if this is a signature line containing `(long param_N, ...)`
                 // We rewrite param types inline if they're in derefed set.
+                // POSTFIX-VOIDCALL-W3 / W3 damage fix: the pattern
+                // `"{ty} {name}"` must match on IDENTIFIER BOUNDARIES. A bare
+                // substring match rewrote the RETURN TYPE region of any
+                // function whose name starts with a derefed variable's name:
+                // `int glob_url(URLGlob **glob,…)` contains `int glob` (the
+                // body legitimately derefs `*glob`), so the pass emitted
+                // `char *glob_url(…)` — a return-type change Ghidra never
+                // performs (the golden keeps `int glob_url`), and the
+                // `return 0;` body then returns int from a char* function.
+                // Word-boundary (no [A-Za-z0-9_] adjacent on either side) is
+                // the same boundary contract count_word_occurrences uses.
+                let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
                 let mut new_line = line.to_string();
                 for name in &derefed {
                     for ty in &scalar_types {
                         let pat = format!("{} {}", ty, name);
                         let repl = format!("char *{}", name);
                         // Only replace if not already pointer (avoid `long * param` -> `_struct * * param`)
-                        let pat_idx = new_line.find(&pat);
-                        if let Some(idx) = pat_idx {
-                            // Check char before is not '*'
+                        if let Some(idx) = new_line.find(&pat) {
+                            let end = idx + pat.len();
+                            // Check char before is not '*' or an identifier char
                             let before_ok = idx == 0 || {
                                 let b = new_line.as_bytes()[idx - 1];
-                                b != b'*'
+                                b != b'*' && !is_ident(b)
                             };
-                            if before_ok {
+                            // Check char after is not an identifier char
+                            // (`int glob` must not match `int glob_url`).
+                            let after_ok = end >= new_line.len() || {
+                                !is_ident(new_line.as_bytes()[end])
+                            };
+                            if before_ok && after_ok {
                                 new_line = new_line.replacen(&pat, &repl, 1);
                             }
                         }
