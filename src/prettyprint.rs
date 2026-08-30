@@ -344,10 +344,10 @@ fn reconcile_int_minus_pointer(line: &str) -> String {
 // 语义:计数器只度量、绝不改变管线行为 —— 退役判定以计数=0 为必要证据。
 
 // RUGRA-GLUE: 幸存 pass 名单(管线顺序),见 post_process_output_legacy 内同序插桩
-const POSTFIX_PASS_NAMES: [&str; 32] = [
+const POSTFIX_PASS_NAMES: [&str; 31] = [
     "P1", "P1b", "P2", "P3", "B1", "P4", "P5", "P6", "B2", "P7",
     "P8", "P9", "P10", "P11", "P12", "P13", "P14", "P15", "P16", "P16c",
-    "B3", "P17", "P18", "B4", "Pwbfold", "Pecase", "P22", "P23", "P24",
+    "B3", "P17", "P18", "B4", "Pecase", "P22", "P23", "P24",
     "P25", "P26", "P27",
 ];
 
@@ -376,14 +376,13 @@ const PF_B3: usize = 20;
 const PF_P17: usize = 21;
 const PF_P18: usize = 22;
 const PF_B4: usize = 23;
-const PF_WBFOLD: usize = 24;
-const PF_ECASE: usize = 25;
-const PF_P22: usize = 26;
-const PF_P23: usize = 27;
-const PF_P24: usize = 28;
-const PF_P25: usize = 29;
-const PF_P26: usize = 30;
-const PF_P27: usize = 31;
+const PF_ECASE: usize = 24;
+const PF_P22: usize = 25;
+const PF_P23: usize = 26;
+const PF_P24: usize = 27;
+const PF_P25: usize = 28;
+const PF_P26: usize = 29;
+const PF_P27: usize = 30;
 
 // RUGRA-GLUE: 逐 pass 突变计数器(每次 post_process_output 调用一个实例)
 struct PostfixStats {
@@ -1985,139 +1984,13 @@ impl EmitNoMarkup {
         }
         pfx.observe(PF_B4, &snap_b4, &output_final2);
 
-        // While-break collapse pass: fold `while (cond) { ... break; }` into `if (cond) { ... }`.
-        //
-        // Rugra's CFG structuring occasionally emits a loop construct whose body is
-        // entered once and immediately exits via unconditional `break;`. This is
-        // semantically a conditional single-shot execution, i.e. an `if`, not a loop.
-        // Ghidra's blockaction structuring does not produce this pattern; we collapse
-        // it textually as a post-print normalization so the output matches Ghidra's
-        // control-flow style.
-        //
-        // Pattern (general):
-        //   while (COND) {
-        //     <body lines at indent+2>
-        //     break;          <- last body line, unconditional
-        //   }
-        // Becomes:
-        //   if (COND) {
-        //     <body lines at indent+2>
-        //   }
-        //
-        // We only fold when the matching `}` directly follows the `break;`, ensuring
-        // the break truly terminates the loop body.
-        let snap_wbfold = PostfixStats::snap(&output_final2);
-        let mut collapsed: Vec<String> = Vec::with_capacity(output_final2.len());
-        let mut iwb = 0usize;
-        while iwb < output_final2.len() {
-            let line = &output_final2[iwb];
-            let t = line.trim();
-            // Detect a `while (...) {` opener (not `do {` or `} while (...)`).
-            // Both header spellings count: the spaced `while (cond)` and the
-            // oracle's COMPACT overflow form `while( true )` (printc.cc:
-            // 3023-3028 — tagOp + openParen with no spaces(1) between).
-            if (t.starts_with("while (") || t.starts_with("while(")) && t.ends_with('{') {
-                let indent = line.len() - line.trim_start().len();
-                let body_indent = indent + 2;
-                // Scan forward for the matching close brace at the same indent as the while.
-                // We need to find: body lines, then `break;` at body_indent, then `}` at indent.
-                // Use brace-depth tracking to handle nested braces inside the body.
-                let mut j = iwb + 1;
-                let mut depth: i32 = 1; // we are inside the while block
-                let mut break_line_idx: Option<usize> = None;
-                let mut close_idx: Option<usize> = None;
-                while j < output_final2.len() {
-                    let bj = &output_final2[j];
-                    let tj = bj.trim();
-                    let ij = bj.len() - bj.trim_start().len();
-                    // Track nested braces
-                    if tj.ends_with('{') && !tj.starts_with("while") {
-                        // opening of a nested block (e.g. if/for/switch body)
-                        // Only count as depth+1 if it's a structural opener
-                        if tj == "{" || tj.ends_with(" {") || tj.ends_with("){") {
-                            depth += 1;
-                        }
-                    }
-                    if tj == "}" {
-                        depth -= 1;
-                        if depth == 0 {
-                            // This is the while's closing brace
-                            close_idx = Some(j);
-                            break;
-                        }
-                    }
-                    // Record a candidate `break;` at the while's direct body indent
-                    if depth == 1 && tj == "break;" && ij == body_indent {
-                        break_line_idx = Some(j);
-                    }
-                    j += 1;
-                }
-
-                if let (Some(bi), Some(ci)) = (break_line_idx, close_idx) {
-                    // Only fold if `break;` is the LAST body line before the close brace.
-                    // (i.e. no lines between break_line_idx+1 and close_idx-1 except blanks)
-                    let mut only_blanks_after_break = true;
-                    for k in (bi + 1)..ci {
-                        if !output_final2[k].trim().is_empty() {
-                            only_blanks_after_break = false;
-                            break;
-                        }
-                    }
-                    if only_blanks_after_break && bi > iwb {
-                        // Fold: replace `while` with `if`, drop the `break;`, drop trailing blanks.
-                        let indent_str = " ".repeat(indent);
-                        // Extract the condition. The opener looks like `while (COND) {`.
-                        // Strip the `while ` prefix and the trailing ` {`, then strip one layer
-                        // of matching outer parentheses so we don't produce `if ((COND))`.
-                        // PRINTC-WHILEIF-FOLD-PREFIX-0001: the opener detection
-                        // above (this pass) accepts both header spellings —
-                        // the spaced `while (cond)` and the oracle-compact
-                        // `while( true )` (printc.cc:3023-3028) — but this
-                        // slice hardcoded the SPACED prefix. The compact
-                        // prefix `while(` consumes the open paren, so the
-                        // paired `)` survived as a stray token and the fold
-                        // emitted a malformed `if (true ))`. Slice the prefix
-                        // that actually matched, and for the compact form
-                        // (no leading `(` remains) trim the dangling `)`.
-                        let after_while = if t.starts_with("while(") {
-                            &t["while(".len()..]
-                        } else {
-                            &t["while ".len()..]
-                        };
-                        let inner = after_while.trim_end().trim_end_matches('{').trim();
-                        let cond_str = if inner.starts_with('(') && inner.ends_with(')') {
-                            &inner[1..inner.len() - 1]
-                        } else {
-                            inner.strip_suffix(')').unwrap_or(inner).trim()
-                        };
-                        // Collect non-blank body lines between the while-opener and the break;
-                        let body_lines: Vec<&String> = ((iwb + 1)..bi)
-                            .map(|k| &output_final2[k])
-                            .filter(|l| !l.trim().is_empty())
-                            .collect();
-                        if body_lines.len() == 1 {
-                            // Single-statement body: emit `if (cond) stmt;` (no braces)
-                            collapsed.push(format!(
-                                "{}if ({}) {}", indent_str, cond_str, body_lines[0].trim()
-                            ));
-                        } else {
-                            // Multi-line body: `if (cond) {` ... body ... `}`
-                            collapsed.push(format!("{}if ({}) {{", indent_str, cond_str));
-                            for k in (iwb + 1)..bi {
-                                collapsed.push(output_final2[k].clone());
-                            }
-                            collapsed.push(format!("{}}}", indent_str));
-                        }
-                        iwb = ci + 1;
-                        continue;
-                    }
-                }
-            }
-            collapsed.push(line.clone());
-            iwb += 1;
-        }
-        let output_final2 = collapsed;
-        pfx.observe(PF_WBFOLD, &snap_wbfold, &output_final2);
+        // P-wbfold (while-break -> if fold) retired in POSTFIX-RETIRE-0001
+        // W2 cut 2: W1 counters proved zero mutations on both corpora
+        // (curl 190 + httpd 102 calls, both rpt rounds) - Rugra's emit
+        // layer no longer produces single-shot while+break loops on the
+        // corpora. The PRINTC-WHILEIF-FOLD-PREFIX-0001 slice logic and the
+        // MAIN-RC3 compact-header exemptions in P9/P17 remain (other passes
+        // still consume `while(` headers).
 
         // Empty switch-case removal pass.
         // Pattern (3 consecutive lines, same case indent):
@@ -4897,19 +4770,20 @@ mod tests {
     // space TOKENS produces those exact bytes in the raw low-level stream,
     // and (b) the legacy post-processing no longer destroys them — the
     // whitespace-normalization pass is gated off `while(` header lines and
-    // the loop-context detectors accept the compact form, so the
-    // `if (cond) break;` statement inside the loop body survives.
+    // the loop-context detectors accept the compact form, so the loop and
+    // its `break;` survive untouched.
     // Statement shape mirrors production: every statement inside the block
     // opens with its own tag_line (emit_block_ops tag_line per statement).
+    // POSTFIX-RETIRE-0001 W2 cut 2: the while-break->if fold pass is retired
+    // (zero mutations on both corpora); this test now locks the UNfolded
+    // bytes instead of the fold result. The PRINTC-WHILEIF-FOLD-PREFIX-0001
+    // slice logic left with the pass; the compact-header emit bytes remain
+    // the invariant under protection.
     #[test]
-    fn pretty_print_while_break_fold_compact_prefix() {
+    fn pretty_print_while_break_compact_header_unfolded() {
         use crate::prettyprint::Emit;
-        // PRINTC-WHILEIF-FOLD-PREFIX-0001: the while-break collapse must
-        // slice the condition by the header form that actually matched.
-        // The compact `while( true )` header (printc.cc:3023-3028) has the
-        // open paren INSIDE the matched prefix; slicing with the spaced
-        // prefix length left the paired `)` dangling and the fold emitted
-        // a malformed `if (true ))`.
+        // The compact `while( true )` header (printc.cc:3023-3028) must
+        // survive post-processing byte-exact (no re-spacing, no fold).
         let mut e = super::EmitPrettyPrint::new();
         e.begin_function();
         e.tag_line(0);
@@ -4928,12 +4802,22 @@ mod tests {
         e.end_function();
         let out = e.get_output();
         assert!(
-            out.contains("if (true) x = 1;"),
-            "compact while( true ) break-fold must slice the condition without the dangling paren, got:\n{}",
+            out.contains("while( true ) {"),
+            "compact while( true ) header must survive byte-exact, got:\n{}",
+            out
+        );
+        assert!(
+            out.contains("x = 1;") && out.contains("break;"),
+            "loop body and break must survive (fold retired, loop ctx keeps break), got:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("if (true)"),
+            "while-break fold is retired (W2 cut 2); loop must not be folded, got:\n{}",
             out
         );
 
-        // Control: the spaced `while (c)` form folds unchanged.
+        // Control: the spaced `while (c)` form also survives unfolded.
         let mut e = super::EmitPrettyPrint::new();
         e.begin_function();
         e.tag_line(0);
@@ -4951,8 +4835,13 @@ mod tests {
         e.end_function();
         let out = e.get_output();
         assert!(
-            out.contains("if (c) y = 2;"),
-            "spaced while (c) break-fold must keep its condition, got:\n{}",
+            out.contains("while (c) {"),
+            "spaced while (c) header must survive, got:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("if (c) y = 2;"),
+            "while-break fold is retired (W2 cut 2); spaced form must not fold, got:\n{}",
             out
         );
     }

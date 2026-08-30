@@ -15,6 +15,14 @@ flush 结尾——这些文本 pass 在 Ghidra 无对应物，删除即向 oracl
   `POSTFIX_PASS_NAMES` 33→32，`PF_PDL` 删除（后续索引前移）。
   验证：curl `c889d856…`/httpd `a67155de…` 与基线逐字节一致；计数器其余字段
   逐项不变（掩蔽零）。
+- **刀 2（P-wbfold while→if 折叠，管线 25/33）**：删除 while-break 折叠 pass
+  及其插桩点（B4 输出直供 P-ecase）；`POSTFIX_PASS_NAMES` 32→31。锁行为测试
+  `pretty_print_while_break_fold_compact_prefix` 同 commit 改造为
+  `pretty_print_while_break_compact_header_unfolded`——不再断言折叠结果
+  `if (true) x = 1;`，改为锁定未折叠字节（紧凑头 `while( true ) {` 原样存活 +
+  `!contains("if (true)")` 守卫退役事实）。PRINTC-WHILEIF-FOLD-PREFIX-0001 的
+  切片逻辑随 pass 消失；MAIN-RC3 的 `while(` 豁免（P9/P17）保留。
+  验证：双语料 sha256 与刀 1 后一致；计数器无漂移。
 
 ## 2026-08-30：POSTFIX-RETIRE-0001 W1 — 逐 pass 突变计数器（env 门控，零行为差）
 
