@@ -762,3 +762,15 @@ MULTIEQUAL@0x37b4），归 heritage place_multiequals/rename 代际差异，
 oracle 侧等价探针（插桩 decomp_opt 的 `[ORE-UNIFY]`/`[ORE-MARK]`/
 `[AF-CLEAR]`/`[DEADCODE-ENTER|KILL]`/`[GLOBALTRACE]`）见
 /tmp/w-nonconverge2-ore/cpp-dbg（非版本化，重建方式见对拍手册）。
+
+### 2026-08-30：aggregate_high_cover_from 接入惰性 cover 重建（RULE-PROPCOPY-ADDRTIED-0001）
+`aggregate_high_cover_from`（Ghidra variable.cc:324 HighVariable::updateInternalCover 的聚合腿）
+此前直接读 `inst.cover` 字段 —— 但 Rugra 的 Varnode cover 是惰性的：`calc_cover()` 只置空
+Cover+COVERDIRTY，真正的重建在 `Varnode::update_cover_locked`（varnode.cc:233
+Varnode::updateCover → cover->rebuild）。跳过它导致聚合 cover 恒为空，所有 cover 门禁
+（`merge_test_with_list`/mergeOp 的 trimOpInput lane 裁剪、speculative merge 等）静默放行。
+修复：聚合前对每个实例调用 `Varnode::update_cover_locked`（= Ghidra `inst[i]->getCover()`
+语义），并忠实 variable.cc:329 的 `inst[0]->hasCover()` 门。效果：ActionMergeRequired 的
+`Merge::mergeOp → trimOpInput`（merge.cc:692）恢复对 phi(X,f(X)) 的 lane 裁剪 —— 在 phi
+每个入边块尾插 COPY（CMOVcc 惯用法的分支内实例化，curl main/my_get_line/file2string 共
+6 处空 if 全部恢复 if 体）。双侧 oracle fixture：tests/oracle/merge_trim_lane_1204.*。

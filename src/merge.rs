@@ -4448,13 +4448,33 @@ fn aggregate_high_cover(high: &Arc<RwLock<HighVariable>>) -> Cover {
     aggregate_high_cover_from(&h)
 }
 
-// Ghidra: merge.hh:83 Merge::aggregateHighCoverFrom
+// Ghidra: variable.cc:324 HighVariable::updateInternalCover (merge.hh:83 aggregateHighCoverFrom)
 /// Aggregate (union) the covers of every instance in a borrowed HighVariable.
 /// Used by the speculative-merge primitive and copy/adjacent/type passes to
 /// test whether two HighVariables are simultaneously live.
+///
+/// Faithful to Ghidra's accessor chain `inst[i]->getCover()`
+/// (varnode.hh:202), which lazily REBUILDS a dirty Varnode Cover before it
+/// is read (varnode.cc:233 Varnode::updateCover → cover->rebuild). Reading
+/// the raw `cover` field without the rebuild merges stale (post-calcCover,
+/// pre-rebuild) empty Covers, which silently disables every cover-based
+/// merge gate downstream (RULE-PROPCOPY-ADDRTIED-0001 root cause: the
+/// MULTIEQUAL lane trim in Merge::mergeOp never fired).
 fn aggregate_high_cover_from(high: &HighVariable) -> Cover {
     let mut agg = Cover::new();
+    // Ghidra: variable.cc:329 gates the whole merge on inst[0]->hasCover().
+    let first_has_cover = high
+        .instances
+        .first()
+        .map(|first| first.read().unwrap().has_cover())
+        .unwrap_or(false);
+    if !first_has_cover {
+        return agg;
+    }
     for inst_arc in &high.instances {
+        // Ghidra: inst[i]->getCover() — lazy rebuild via update_cover_locked
+        // (varnode.cc:233-241), then merge the rebuilt instance cover.
+        Varnode::update_cover_locked(inst_arc);
         if let Some(inst) = inst_arc.read().unwrap().cover.as_ref() {
             agg.merge(inst);
         }
