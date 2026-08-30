@@ -6813,6 +6813,43 @@ impl Funcdata {
 
         eprintln!("[INJECT] {} phase1 done ops={}", self.name, op_refs.len());
 
+        // flow.cc:336-338 (xrefControlFlow CALL arm) -> flow.cc:683-686
+        // (FlowInfo::setupCallSpecs): every CPUI_CALL op carries a
+        // FuncCallSpecs at flow time — `new FuncCallSpecs(op)` captures the
+        // call target from in(0) (fspec.cc:4931-4938), then in(0) is
+        // replaced with the fspec-space annotation Varnode
+        // (`data.opSetInput(op, data.newVarnodeCallSpecs(res), 0)`,
+        // varnode.cc:599-601: FSPEC-space storage is born annotation|
+        // coverdirty, nzm=~0) and the spec joins qlst. On the followFlow
+        // path FlowInfo::setup_call_specs (flow.rs) anchors inside
+        // xref_control_flow; this linear-scan driver path has no xref walk,
+        // so inject_raw_ops — the phase-1.5 boundary between the raw dump
+        // and block formation (the same position the override application
+        // documents above) — carries the guarantee that ActionDeadCode's
+        // cc:3846 first-operand consume, printc's fc->getName() and the
+        // has_callspec flag proxy (typeop.cc:663) all rely on
+        // (CALLSPEC-DRIVER-0001). CALLIND (flow.cc:340-342 ->
+        // setupCallindSpecs flow.cc:707-709) creates a spec WITHOUT the
+        // in(0) swap; no CALLIND is born on this path (the linear-scan
+        // lifter emits only CALL), and the FlowInfo path anchors CALLIND
+        // via setup_callind_specs. The FlowInfo-level steps of
+        // setupCallSpecs (applyPrototype/queryCall/cycle check, flow.cc:
+        // 688-693) have no linear-scan counterpart here: this path seeds no
+        // overrides, and callee resolution is the driver's pre-flow
+        // prototype table.
+        for op_ref in &op_refs {
+            if op_ref.0.read().unwrap().opcode == OpCode::CPUI_CALL {
+                let fc = crate::fspec::FuncCallSpecs::new_for_op(
+                    op_ref,
+                    crate::flow::default_call_spec_proto(),
+                );
+                let owner = Arc::new(RwLock::new(fc));
+                let call_spec_vn = self.new_varnode_call_specs(&owner);
+                self.op_set_input(op_ref, call_spec_vn, 0);
+                self.add_call_specs_owner(owner);
+            }
+        }
+
         // Phase 2: Build basic blocks from the linear op sequence
         self.build_blocks_from_ops(&op_refs);
         eprintln!(
