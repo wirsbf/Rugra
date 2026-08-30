@@ -29,6 +29,10 @@ flush 结尾——这些文本 pass 在 Ghidra 无对应物，删除即向 oracl
   输入直接改接 P15 输出（`pass15.join("\n")`）。`POSTFIX_PASS_NAMES` 31→30。
   验证：双语料 sha256 不变；P16c 计数仍 curl 277/3、httpd 0（掩蔽零——
   P16 零突变被删除后其下游 P16c 输入逐字节不变）。
+- **刀 4（P5 未引用标签删除(2)，管线 7/33）**：删除 P5 块与其插桩点，
+  `final_pass` 直接 move 自 P4 输出 `looped`。`POSTFIX_PASS_NAMES` 30→29。
+  验证：双语料 sha256 不变；计数器无漂移（含索引完整性校验：数组序 ==
+  PF_ 常量值）。
 
 ## 2026-08-30：POSTFIX-RETIRE-0001 W1 — 逐 pass 突变计数器（env 门控，零行为差）
 
