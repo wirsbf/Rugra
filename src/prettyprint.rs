@@ -344,8 +344,8 @@ fn reconcile_int_minus_pointer(line: &str) -> String {
 // 语义:计数器只度量、绝不改变管线行为 —— 退役判定以计数=0 为必要证据。
 
 // RUGRA-GLUE: 幸存 pass 名单(管线顺序),见 post_process_output_legacy 内同序插桩
-const POSTFIX_PASS_NAMES: [&str; 29] = [
-    "P1", "P1b", "P2", "P3", "B1", "P4", "P6", "B2", "P7",
+const POSTFIX_PASS_NAMES: [&str; 28] = [
+    "P1", "P1b", "P2", "P3", "B1", "P6", "B2", "P7",
     "P8", "P9", "P10", "P11", "P12", "P13", "P14", "P15", "P16c",
     "B3", "P17", "P18", "B4", "Pecase", "P22", "P23", "P24",
     "P25", "P26", "P27",
@@ -357,30 +357,29 @@ const PF_P1B: usize = 1;
 const PF_P2: usize = 2;
 const PF_P3: usize = 3;
 const PF_B1: usize = 4;
-const PF_P4: usize = 5;
-const PF_P6: usize = 6;
-const PF_B2: usize = 7;
-const PF_P7: usize = 8;
-const PF_P8: usize = 9;
-const PF_P9: usize = 10;
-const PF_P10: usize = 11;
-const PF_P11: usize = 12;
-const PF_P12: usize = 13;
-const PF_P13: usize = 14;
-const PF_P14: usize = 15;
-const PF_P15: usize = 16;
-const PF_P16C: usize = 17;
-const PF_B3: usize = 18;
-const PF_P17: usize = 19;
-const PF_P18: usize = 20;
-const PF_B4: usize = 21;
-const PF_ECASE: usize = 22;
-const PF_P22: usize = 23;
-const PF_P23: usize = 24;
-const PF_P24: usize = 25;
-const PF_P25: usize = 26;
-const PF_P26: usize = 27;
-const PF_P27: usize = 28;
+const PF_P6: usize = 5;
+const PF_B2: usize = 6;
+const PF_P7: usize = 7;
+const PF_P8: usize = 8;
+const PF_P9: usize = 9;
+const PF_P10: usize = 10;
+const PF_P11: usize = 11;
+const PF_P12: usize = 12;
+const PF_P13: usize = 13;
+const PF_P14: usize = 14;
+const PF_P15: usize = 15;
+const PF_P16C: usize = 16;
+const PF_B3: usize = 17;
+const PF_P17: usize = 18;
+const PF_P18: usize = 19;
+const PF_B4: usize = 20;
+const PF_ECASE: usize = 21;
+const PF_P22: usize = 22;
+const PF_P23: usize = 23;
+const PF_P24: usize = 24;
+const PF_P25: usize = 25;
+const PF_P26: usize = 26;
+const PF_P27: usize = 27;
 
 // RUGRA-GLUE: 逐 pass 突变计数器(每次 post_process_output 调用一个实例)
 struct PostfixStats {
@@ -775,155 +774,12 @@ impl EmitNoMarkup {
         }
         pfx.observe(PF_B1, &snap_b1, &collapsed);
 
-        // Fourth pass: detect backward goto patterns and convert to loops
-        // Pattern: LAB_X: ... goto LAB_X; → do { ... } while(true);
-        // Pattern: LAB_X: ... if (cond) goto LAB_X; → do { ... } while(cond);
-        let snap_p4 = PostfixStats::snap(&collapsed);
-        let mut looped = collapsed;
-        let max_loop_passes = 5;
-        for _pass in 0..max_loop_passes {
-            let mut changed = false;
-            let mut new_lines: Vec<String> = Vec::with_capacity(looped.len());
-            let mut skip_until = None;
-
-            // Build label→line index
-            let mut label_lines: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-            for (idx, line) in looped.iter().enumerate() {
-                let t = line.trim();
-                if t.starts_with("LAB_") && t.ends_with(':') && !t.contains(' ') {
-                    label_lines.insert(t[..t.len() - 1].to_string(), idx);
-                }
-            }
-
-            let mut li = 0;
-            while li < looped.len() {
-                if let Some(skip_to) = skip_until {
-                    if li < skip_to {
-                        li += 1;
-                        continue;
-                    }
-                    skip_until = None;
-                }
-
-                let trimmed = looped[li].trim();
-
-                // Check for backward goto (plain): `goto LAB_X;` where LAB_X is above
-                if trimmed.starts_with("goto LAB_") && trimmed.ends_with(';') {
-                    let label_name = &trimmed[5..trimmed.len() - 1];
-                    if let Some(&label_line) = label_lines.get(label_name) {
-                        if label_line < li {
-                            let goto_indent = looped[li].len() - looped[li].trim_start().len();
-                            let label_indent = looped[label_line].len() - looped[label_line].trim_start().len();
-                            let indent_str: String = " ".repeat(goto_indent);
-                            
-                            // Safety: only convert if label and goto are at the same indent level
-                            // (prevents cross-structural-boundary conversions)
-                            if goto_indent == label_indent {
-                                let label_text = format!("{}:", label_name);
-                                let mut label_pos = None;
-                                for (j, nl) in new_lines.iter().enumerate() {
-                                    if nl.trim() == label_text {
-                                        label_pos = Some(j);
-                                        break;
-                                    }
-                                }
-                                if let Some(lp) = label_pos {
-                                    let goto_ref = format!("goto {};", label_name);
-                                    let other_refs = looped
-                                        .iter()
-                                        .enumerate()
-                                        .filter(|(idx, l)| {
-                                        *idx != li && l.trim().contains(&goto_ref)
-                                    })
-                                        .count();
-                                    
-                                    if other_refs == 0 {
-                                        new_lines[lp] = format!("{}while (true) {{", indent_str);
-                                        new_lines.push(format!("{}}}", indent_str));
-                                        changed = true;
-                                        li += 1;
-                                        continue;
-                                    } else {
-                                        new_lines.push(format!("{}continue;", indent_str));
-                                        changed = true;
-                                        li += 1;
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Check for backward conditional goto: `if (cond) goto LAB_X;`
-                if trimmed.contains(") goto ") && trimmed.ends_with(';') {
-                    if let Some(goto_pos) = trimmed.find(") goto ") {
-                        let label_with_semi = &trimmed[goto_pos + 7..];
-                        let label_name = &label_with_semi[..label_with_semi.len() - 1];
-                        if let Some(&label_line) = label_lines.get(label_name) {
-                            if label_line < li {
-                                let goto_indent = looped[li].len() - looped[li].trim_start().len();
-                                let label_indent = looped[label_line].len() - looped[label_line].trim_start().len();
-                                let indent_str: String = " ".repeat(goto_indent);
-                                let cond_part = &trimmed[..goto_pos + 1];
-                                
-                                // Safety: only convert if label and goto at same indent
-                                if goto_indent == label_indent {
-                                    let label_text = format!("{}:", label_name);
-                                    let mut label_pos = None;
-                                    for (j, nl) in new_lines.iter().enumerate() {
-                                        if nl.trim() == label_text {
-                                            label_pos = Some(j);
-                                            break;
-                                        }
-                                    }
-                                    if let Some(lp) = label_pos {
-                                        let goto_ref = format!("goto {};", label_name);
-                                        let other_refs = looped
-                                            .iter()
-                                            .enumerate()
-                                            .filter(|(idx, l)| {
-                                            *idx != li && l.trim().contains(&goto_ref)
-                                        })
-                                            .count();
-                                        
-                                        let cond = if cond_part.starts_with("if (") && cond_part.ends_with(')') {
-                                            &cond_part[4..cond_part.len() - 1]
-                                        } else {
-                                            "true"
-                                        };
-                                        
-                                        if other_refs == 0 {
-                                            new_lines[lp] = format!("{}do {{", indent_str);
-                                            new_lines.push(format!(
-                                                "{}}} while ({});", indent_str, cond
-                                            ));
-                                            changed = true;
-                                            li += 1;
-                                            continue;
-                                        } else {
-                                            new_lines.push(format!(
-                                                "{}{} continue;", indent_str, cond_part
-                                            ));
-                                            changed = true;
-                                            li += 1;
-                                            continue;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                new_lines.push(looped[li].clone());
-                li += 1;
-            }
-
-            looped = new_lines;
-            if !changed { break; }
-        }
-        pfx.observe(PF_P4, &snap_p4, &looped);
+        // P4 (backward goto -> do/while loop conversion) retired in
+        // POSTFIX-RETIRE-0001 W2 cut 5: W1 counters proved zero mutations
+        // on both corpora (both rpt rounds) - the structured emit path
+        // renders loops directly; no backward LAB_ goto reaches the text
+        // layer on the corpora.
+        let looped = collapsed;
 
         // P5 (unreferenced label removal, post loop conversion) retired in
         // POSTFIX-RETIRE-0001 W2 cut 4: W1 counters proved zero mutations
