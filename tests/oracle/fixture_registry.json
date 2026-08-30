@@ -5712,7 +5712,7 @@
     },
     {
       "id": "rule_propcopy_1204",
-      "description": "RulePropagateCopy reader-dispatch, isHeritageKnown/marker/self-defined guards, opSetInput bookkeeping (constant dedup + multi-reader descend erase)",
+      "description": "RulePropagateCopy reader-dispatch, isHeritageKnown/marker/self-defined guards (incl. W4 cmov marker_addrtied_merge_guard natural-flag shape + marker_addrforce_guard cc:3948), opSetInput bookkeeping (constant dedup + multi-reader descend erase)",
       "runner": [
         "tools/run_rule_propcopy_oracle.sh"
       ],

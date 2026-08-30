@@ -18,6 +18,12 @@
  *   free_input_guard          - cc:3943 !isHeritageKnown free input rejected
  *   return_copy_guard         - cc:3933 isReturnCopy short-circuit
  *   marker_constant_guard     - cc:3946-3947 marker + constant input skipped
+ *   marker_addrtied_merge_guard - cc:3949-3951 marker + register-space phi
+ *                               merging a COPY of a different register in the
+ *                               natural (unmapped) flag state; the W4 cmov
+ *                               shape (RULE-PROPCOPY-ADDRTIED-0001)
+ *   marker_addrforce_guard     - cc:3948 marker + addr-force COPY output
+ *                               refused through the public setAddrForce API
  *   multi_reader_bookkeeping  - opSetInput erase-old/add-new descend records
  *                               across two sequential reader applications
  *   constant_dedup_bookkeeping- opSetInput cc:108-115 constant-dedup creates a
@@ -234,6 +240,28 @@ public:
     fd.opSetInput(op,vn,slot);
   }
 
+  // Op without the default unique output, for scenarios whose outputs must
+  // live at a real register address (RULE-PROPCOPY-ADDRTIED-0001).
+  PcodeOp *makeBareOp(const string &name,OpCode opcode,int4 inputs)
+  {
+    AddrSpace *codeSpace = fd.getArch()->getDefaultCodeSpace();
+    PcodeOp *op = fd.newOp(inputs,Address(codeSpace,0x1000));
+    fd.opSetOpcode(op,opcode);
+    rememberOp(op,name);
+    return op;
+  }
+
+  // Funcdata::newVarnodeOut (funcdata_varnode.cc:104-121) attaches a written
+  // varnode at the given register-space address and xrefs it into the bank.
+  Varnode *setRegisterOutput(PcodeOp *op,const string &name,int4 size,
+                             uintb offset)
+  {
+    AddrSpace *registerSpace = fd.getArch()->getSpaceByName("register");
+    Varnode *vn = fd.newVarnodeOut(size,Address(registerSpace,offset),op);
+    rememberVarnode(vn,name);
+    return vn;
+  }
+
   void insertEnd(PcodeOp *op)
   {
     fd.opInsertEnd(op,block);
@@ -415,6 +443,74 @@ void runMarkerConstantGuard(Funcdata &fd)
   fixture.dump("marker_constant_guard","after",std::to_string(result));
 }
 
+// marker_addrtied_merge_guard: the W4 cmov shape. A MULTIEQUAL (marker) whose
+// output lives at register 0x200 merges slot0 = COPY(register 0x200 output)
+// of register input 0x100 against slot1 = register input 0x180. cc:3949-3951
+// skips the propagation only when BOTH the COPY input and the phi output are
+// addr-tied at different addresses; this case records the natural (unmapped)
+// flag state both sides produce before symbol mapping, plus the rule result.
+void runMarkerAddrtiedMergeGuard(Funcdata &fd)
+{
+  fd.clear();
+  Fixture fixture(fd);
+  Varnode *src = fixture.makeInput("src",8,0x100);
+  Varnode *old = fixture.makeInput("old",8,0x180);
+  PcodeOp *copyop = fixture.makeBareOp("copy",CPUI_COPY,1);
+  Varnode *copyout = fixture.setRegisterOutput(copyop,"copy_out",8,0x200);
+  PcodeOp *phi = fixture.makeBareOp("phi",CPUI_MULTIEQUAL,2);
+  Varnode *phiout = fixture.setRegisterOutput(phi,"phi_out",8,0x200);
+
+  fixture.setInput(copyop,src,0);
+  fixture.setInput(phi,copyout,0);
+  fixture.setInput(phi,old,1);
+  fixture.insertEnd(copyop);
+  fixture.insertEnd(phi);
+
+  ostringstream flags;
+  flags << "src_at=" << (src->isAddrTied() ? 1 : 0)
+        << ",copyout_at=" << (copyout->isAddrTied() ? 1 : 0)
+        << ",phiout_at=" << (phiout->isAddrTied() ? 1 : 0);
+  fixture.dump("marker_addrtied_merge_guard","before",flags.str());
+  RulePropagateCopy rule("analysis");
+  int4 result = rule.applyOp(phi,fd);
+  fixture.dump("marker_addrtied_merge_guard","after",
+               "r=" + std::to_string(result) + "," + flags.str());
+}
+
+// marker_addrforce_guard: identical cmov shape, but the COPY output (the phi
+// slot-0 input) is marked addr-force through the public setAddrForce API, so
+// cc:3948 ("Don't propagate if we are keeping the COPY anyway") must refuse
+// the propagation. Result must be 0 and the COPY stays intact.
+void runMarkerAddrforceGuard(Funcdata &fd)
+{
+  fd.clear();
+  Fixture fixture(fd);
+  Varnode *src = fixture.makeInput("src",8,0x100);
+  Varnode *old = fixture.makeInput("old",8,0x180);
+  PcodeOp *copyop = fixture.makeBareOp("copy",CPUI_COPY,1);
+  Varnode *copyout = fixture.setRegisterOutput(copyop,"copy_out",8,0x200);
+  PcodeOp *phi = fixture.makeBareOp("phi",CPUI_MULTIEQUAL,2);
+  Varnode *phiout = fixture.setRegisterOutput(phi,"phi_out",8,0x200);
+
+  fixture.setInput(copyop,src,0);
+  fixture.setInput(phi,copyout,0);
+  fixture.setInput(phi,old,1);
+  fixture.insertEnd(copyop);
+  fixture.insertEnd(phi);
+
+  copyout->setAddrForce();
+
+  ostringstream flags;
+  flags << "src_at=" << (src->isAddrTied() ? 1 : 0)
+        << ",copyout_at=" << (copyout->isAddrTied() ? 1 : 0)
+        << ",phiout_at=" << (phiout->isAddrTied() ? 1 : 0);
+  fixture.dump("marker_addrforce_guard","before",flags.str());
+  RulePropagateCopy rule("analysis");
+  int4 result = rule.applyOp(phi,fd);
+  fixture.dump("marker_addrforce_guard","after",
+               "r=" + std::to_string(result) + "," + flags.str());
+}
+
 // multi_reader_bookkeeping: one COPY output feeding two readers. Each applyOp
 // redirects exactly one reader through opSetInput, whose bookkeeping erases
 // the reader from the COPY output's descend list and appends it to the
@@ -527,6 +623,8 @@ void run(const string &specDirectory,const string &binary)
     runFreeInputGuard(*fd);
     runReturnCopyGuard(*fd);
     runMarkerConstantGuard(*fd);
+    runMarkerAddrtiedMergeGuard(*fd);
+    runMarkerAddrforceGuard(*fd);
     runMultiReaderBookkeeping(*fd);
     runConstantDedupBookkeeping(*fd);
     runSelfDefinedThrow(*fd);

@@ -16,7 +16,10 @@ rust_fixture="$repo_root/tests/oracle/rule_propcopy_1204.rs"
 runner="$repo_root/tools/run_rule_propcopy_oracle.sh"
 bfd_include=/tmp/rugra-ghidra-bfd-2.38/usr/include
 bfd_header="$bfd_include/bfd.h"
-bfd_library=/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so
+bfd_library=/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so
+# The fixture binary resolves libbfd-2.38-system.so through the runtime
+# linker, so the deb-unpack lib directory must be on LD_LIBRARY_PATH.
+export LD_LIBRARY_PATH="/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 oracle_tmp=$(mktemp -d /tmp/rugra-rule-propcopy-1204.XXXXXX)
 cleanup() {
@@ -325,7 +328,7 @@ require("expected exit code", metadata["expected_exit_code"], 0)
 require(
     "overall status",
     metadata["overall_status"],
-    "PARTIAL_MATCH: nine target-relevant structural projections match; full-state input/output remains MISMATCH through OPBANK-0001 and ARCH-0001, TYPE-UNKNOWN-0001 and explicitly listed branches remain UNTESTED",
+    "PARTIAL_MATCH: eleven target-relevant structural projections match; full-state input/output remains MISMATCH through OPBANK-0001 and ARCH-0001, TYPE-UNKNOWN-0001 and explicitly listed branches remain UNTESTED",
 )
 for key in (
     "reader_propagate_slot0",
@@ -334,6 +337,8 @@ for key in (
     "free_input_guard",
     "return_copy_guard",
     "marker_constant_guard",
+    "marker_addrtied_merge_guard",
+    "marker_addrforce_guard",
     "multi_reader_bookkeeping",
     "constant_dedup_bookkeeping",
     "self_defined_throw",
@@ -398,4 +403,4 @@ if actual != metadata["expected_stdout_sha256"]:
 PY
 
 cat "$oracle_tmp/ghidra.stdout"
-printf 'rule_propcopy_1204: PARTIAL_MATCH target_structural_cases=9 records=19 dependencies=OPBANK-0001,ARCH-0001 untested=TYPE-UNKNOWN-0001\n'
+printf 'rule_propcopy_1204: PARTIAL_MATCH target_structural_cases=11 records=23 dependencies=OPBANK-0001,ARCH-0001 untested=TYPE-UNKNOWN-0001\n'

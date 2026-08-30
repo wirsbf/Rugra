@@ -18,7 +18,7 @@
  "analysis_options": {
   "api": "Direct RulePropagateCopy::applyOp invocation on the dispatched READER op; no ActionGroup or other Rule runs",
   "funcdata": "Locked BfdArchitecture over the pinned Git-blob curl input supplies the Ghidra Funcdata and address spaces; each synthetic case clears prior analysis state and creates one real BlockBasic. Rugra creates an equivalent isolated Funcdata and BlockBasic per case.",
-  "ir": "All initial ops are alive members of the synthetic block and are wired only through Funcdata op editing APIs. Register inputs are SSA input varnodes (setInputVarnode, insert flag set via VarnodeBank::xref). COPY outputs are unique-space written varnodes (newUniqueOut, insert flag set). Constants are newConstant varnodes. The guarded free input is a bare newUnique varnode with no insert/constant/annotation flag, so isHeritageKnown is false. The observation is target-relevant structural state, not every unrelated PcodeOp/Varnode annotation.",
+  "ir": "All initial ops are alive members of the synthetic block and are wired only through Funcdata op editing APIs. Register inputs are SSA input varnodes (setInputVarnode, insert flag set via VarnodeBank::xref). COPY outputs are unique-space written varnodes (newUniqueOut, insert flag set). Constants are newConstant varnodes. The guarded free input is a bare newUnique varnode with no insert/constant/annotation flag, so isHeritageKnown is false. The observation is target-relevant structural state, not every unrelated PcodeOp/Varnode annotation. The marker_addrtied cases attach COPY/phi outputs at register-space addresses via newVarnodeOut (written+insert, address 0x200); the addrforce variant marks the COPY output through the public setAddrForce API before the single rule application, and both records embed the isAddrTied booleans in the result field.",
   "normalization": "Only allocation-only unique-space offsets are replaced by deterministic fixture identities. Block order, alive/dead order, operand slots, parent/order fields, Varnode storage/value/SSA class, alias identity, definitions, descendant order, rule return values, LowlevelError messages, and all target-relevant structural mutations represented by observation_schema are preserved.",
   "debug_macros": "OPACTION_DEBUG and CPUI_DEBUG are absent",
   "random_seed": "none; RulePropagateCopy and fixture construction are deterministic",
@@ -70,18 +70,18 @@
   "bfd": {
    "header_path": "/tmp/rugra-ghidra-bfd-2.38/usr/include/bfd.h",
    "header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
-   "library_path": "/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
+   "library_path": "/tmp/rugra-ghidra-bfd-2.38/usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so",
    "library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
   }
  },
  "host_tools": {
-  "g++": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
-  "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
-  "cargo": "cargo 1.96.0-nightly (cbb9bb8bd 2026-03-13)"
+  "g++": "g++ (GCC) 16.2.1 20260810",
+  "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18) (Arch Linux rust 1:1.98.0-1)",
+  "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05) (Arch Linux rust 1:1.98.0-1)"
  },
  "input_manifest": {
   "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,binary,function,cases}, sort_keys=True, separators=(',',':'))",
-  "sha256": "1e2c188b447476886cbe9931d33b5a742023da519976cf0c4ecae208a08535b4",
+  "sha256": "8a9bc2b361ea84e970a198325ba27226f8ddce42dddd11b888aec26351fb010d",
   "binary": {
    "path": "examples/curl",
    "source_repository_commit": "34a3febff160031c265cfbd841a94022c68c2c19",
@@ -140,11 +140,21 @@
     "id": "self_defined_throw",
     "shape": "COPY reads its own output",
     "expect": "LowlevelError throw:Self-defined varnode (cc:3944-3945)"
+   },
+   {
+    "id": "marker_addrtied_merge_guard",
+    "shape": "MULTIEQUAL marker with register-0x200 output; slot0=COPY(reg-0x200 out) of input reg 0x100, slot1=input reg 0x180 (natural flag state)",
+    "expect": "records natural isAddrTied booleans and the cc:3946-3952 guard outcome before symbol mapping (W4 cmov shape, RULE-PROPCOPY-ADDRTIED-0001)"
+   },
+   {
+    "id": "marker_addrforce_guard",
+    "shape": "same cmov shape with the COPY output (phi slot0 input) marked addr-force via public setAddrForce",
+    "expect": "cc:3948 addr-force guard fires, ret=0, COPY survives"
    }
   ]
  },
  "observation_schema": {
-  "format": "Nineteen fixed-order UTF-8 records (before/after per case; multi_reader_bookkeeping has before/after_r1/after_r2) with a final newline",
+  "format": "Twenty-three fixed-order UTF-8 records (before/after per case; multi_reader_bookkeeping has before/after_r1/after_r2) with a final newline",
   "op_state": "Target-relevant structural state: exact block/alive/dead order plus opcode, dead flag, parent block index, sequence order, ordered input identities, and output identity",
   "varnode_state": "Every fixture-tracked and transformation-created reachable Varnode in deterministic discovery order: space, size, semantic offset, constant/input/written/free classification, defining op, and ordered descendant op.slot list; whole-bank membership, create_index, and unrelated type/symbol/high annotations are outside this narrow observation schema",
   "mutation_scope": "The constant-dedup fresh constant created by opSetInput during propagation is discovered and projected as g0. Detached original operands remain in the tracked Varnode list so descend-list xref removal is observable. Detached nullable-slot sentinel Varnodes from the known OPBANK-0001 gap are not projected."
@@ -164,13 +174,13 @@
   }
  },
  "comparand": {
-  "cpp_fixture_sha256": "453811b2114034a978339d969ecbece33b4622b9c21622f625d926651c0dbab4",
-  "rust_fixture_sha256": "9f95b66b2273485448a646db7f62d5575bce210eab5d3409e56e726a553c6f48",
-  "runner_sha256": "584cbf04071eea843468091aa82676b236f40d64a5ca12e33c7c82e9cb3ab4e6",
+  "cpp_fixture_sha256": "62d2b0ae81da7fea498c85b16601309a73738a03111b8bc1f0e757b24aad8623",
+  "rust_fixture_sha256": "a8ffd289b2f0d5456edc968af551c37479cd97a75373549ca5ebd470d030a4f3",
+  "runner_sha256": "5a22e735efad960e76c76f5d33aae71541d02a5d1a3556be83ac077130d7cc8d",
   "rust_crate_tree_hash_scheme": "sha256 of rugra-rule-propcopy-lib-snapshot-v1 plus sorted length-prefixed relative paths and contents",
-  "rust_crate_tree_sha256": "ca9de384f1ceeb4ed4f055dd223e63d40b4fa446a02b1d04c1ba501061716c64"
+  "rust_crate_tree_sha256": "c595d3132a49400dc898b42ae6717bd75803167addbb9c9fc97976a4d5d5cc9e"
  },
- "expected_stdout_sha256": "91e10260ad9d9dba288cbe51de54dc5222b183a7e09941874f937a065977f751",
+ "expected_stdout_sha256": "60cc346e8152c36a8dcb505041094e1160c631b029dd678a6ab421aa1aa989c5",
  "expected_exit_code": 0,
  "coverage": {
   "reader_propagate_slot0": "TARGET_STRUCTURAL_MATCH",
@@ -182,8 +192,8 @@
   "multi_reader_bookkeeping": "TARGET_STRUCTURAL_MATCH",
   "constant_dedup_bookkeeping": "TARGET_STRUCTURAL_MATCH",
   "self_defined_throw": "TARGET_STRUCTURAL_MATCH",
-  "marker_addrforce_guard": "UNTESTED",
-  "marker_addrtied_merge_guard": "UNTESTED",
+  "marker_addrforce_guard": "TARGET_STRUCTURAL_MATCH",
+  "marker_addrtied_merge_guard": "TARGET_STRUCTURAL_MATCH",
   "nonmarker_addrtied_paths": "UNTESTED",
   "reader_without_any_copy_input": "UNTESTED",
   "getoplist_all_opcode_registration": "UNTESTED",
@@ -215,5 +225,5 @@
   },
   "differential": "defects=0 and numbering=0 hold against the locked 12.0.4 golden; the standing 2728 skeleton lines are the registered pipeline-wide printing/naming residuals and are outside RulePropagateCopy's write-set."
  },
- "overall_status": "UNTESTED: (B2 migration of partial match state) nine target-relevant structural projections match; full-state input/output remains mismatch through OPBANK-0001 and ARCH-0001, TYPE-UNKNOWN-0001 and explicitly listed branches remain untested"
+ "overall_status": "PARTIAL_MATCH: eleven target-relevant structural projections match; full-state input/output remains MISMATCH through OPBANK-0001 and ARCH-0001, TYPE-UNKNOWN-0001 and explicitly listed branches remain UNTESTED"
 }

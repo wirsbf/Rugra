@@ -163,6 +163,30 @@ impl Fixture {
         self.fd.op_set_input(op, vn, slot);
     }
 
+    /// Op without the default unique output, for scenarios whose outputs must
+    /// live at a real register address (RULE-PROPCOPY-ADDRTIED-0001).
+    fn make_bare_op(&mut self, name: &str, opcode: OpCode, inputs: usize) -> PcodeOpRef {
+        let op = self.fd.new_op(inputs, Address::new(0x1000));
+        self.fd.op_set_opcode(&op, opcode);
+        self.remember_op(op.clone(), name.to_string());
+        op
+    }
+
+    /// Funcdata::newVarnodeOut (funcdata_varnode.cc:104-121) attaches a
+    /// written varnode at the given register-space address and xrefs it into
+    /// the bank.
+    fn set_register_output(
+        &mut self,
+        op: &PcodeOpRef,
+        name: &str,
+        size: usize,
+        offset: u64,
+    ) -> VarnodeRef {
+        let vn = self.fd.new_varnode_out(size, Address::new(offset), op);
+        self.remember_varnode(vn.clone(), name.to_string());
+        vn
+    }
+
     fn insert_end(&mut self, op: &PcodeOpRef) {
         self.fd.op_insert_end(op, &self.block.clone());
     }
@@ -404,6 +428,82 @@ fn run_marker_constant_guard() {
     fixture.dump("marker_constant_guard", "after", &result.to_string());
 }
 
+/// marker_addrtied_merge_guard: the W4 cmov shape. A MULTIEQUAL (marker)
+/// whose output lives at register 0x200 merges slot0 = COPY(register 0x200
+/// output) of register input 0x100 against slot1 = register input 0x180.
+/// cc:3949-3951 skips the propagation only when BOTH the COPY input and the
+/// phi output are addr-tied at different addresses; this case records the
+/// natural (unmapped) flag state both sides produce before symbol mapping,
+/// plus the rule result.
+fn run_marker_addrtied_merge_guard() {
+    let mut fixture = Fixture::new();
+    let src = fixture.make_input("src", 8, 0x100);
+    let old = fixture.make_input("old", 8, 0x180);
+    let copyop = fixture.make_bare_op("copy", OpCode::CPUI_COPY, 1);
+    let copyout = fixture.set_register_output(&copyop, "copy_out", 8, 0x200);
+    let phi = fixture.make_bare_op("phi", OpCode::CPUI_MULTIEQUAL, 2);
+    let phiout = fixture.set_register_output(&phi, "phi_out", 8, 0x200);
+
+    fixture.set_input(&copyop, src.clone(), 0);
+    fixture.set_input(&phi, copyout.clone(), 0);
+    fixture.set_input(&phi, old, 1);
+    fixture.insert_end(&copyop);
+    fixture.insert_end(&phi);
+
+    let flags = addrtied_flags_string(&src, &copyout, &phiout);
+    fixture.dump("marker_addrtied_merge_guard", "before", &flags);
+    let result = RulePropagateCopy::new()
+        .apply_op(&phi.0, &mut fixture.fd)
+        .expect("RulePropagateCopy marker_addrtied_merge_guard");
+    fixture.dump(
+        "marker_addrtied_merge_guard",
+        "after",
+        &format!("r={result},{flags}"),
+    );
+}
+
+/// marker_addrforce_guard: identical cmov shape, but the COPY output (the
+/// phi slot-0 input) is marked addr-force through the public setAddrForce
+/// API, so cc:3948 ("Don't propagate if we are keeping the COPY anyway")
+/// must refuse the propagation. Result must be 0; the COPY stays intact.
+fn run_marker_addrforce_guard() {
+    let mut fixture = Fixture::new();
+    let src = fixture.make_input("src", 8, 0x100);
+    let old = fixture.make_input("old", 8, 0x180);
+    let copyop = fixture.make_bare_op("copy", OpCode::CPUI_COPY, 1);
+    let copyout = fixture.set_register_output(&copyop, "copy_out", 8, 0x200);
+    let phi = fixture.make_bare_op("phi", OpCode::CPUI_MULTIEQUAL, 2);
+    let phiout = fixture.set_register_output(&phi, "phi_out", 8, 0x200);
+
+    fixture.set_input(&copyop, src.clone(), 0);
+    fixture.set_input(&phi, copyout.clone(), 0);
+    fixture.set_input(&phi, old, 1);
+    fixture.insert_end(&copyop);
+    fixture.insert_end(&phi);
+
+    copyout.write().unwrap().set_addr_force();
+
+    let flags = addrtied_flags_string(&src, &copyout, &phiout);
+    fixture.dump("marker_addrforce_guard", "before", &flags);
+    let result = RulePropagateCopy::new()
+        .apply_op(&phi.0, &mut fixture.fd)
+        .expect("RulePropagateCopy marker_addrforce_guard");
+    fixture.dump(
+        "marker_addrforce_guard",
+        "after",
+        &format!("r={result},{flags}"),
+    );
+}
+
+fn addrtied_flags_string(src: &VarnodeRef, copyout: &VarnodeRef, phiout: &VarnodeRef) -> String {
+    format!(
+        "src_at={},copyout_at={},phiout_at={}",
+        u8::from(src.read().unwrap().is_addr_tied()),
+        u8::from(copyout.read().unwrap().is_addr_tied()),
+        u8::from(phiout.read().unwrap().is_addr_tied()),
+    )
+}
+
 fn run_multi_reader_bookkeeping() {
     let mut fixture = Fixture::new();
     let x = fixture.make_input("x", 8, 0x40);
@@ -483,6 +583,8 @@ fn main() {
     run_free_input_guard();
     run_return_copy_guard();
     run_marker_constant_guard();
+    run_marker_addrtied_merge_guard();
+    run_marker_addrforce_guard();
     run_multi_reader_bookkeeping();
     run_constant_dedup_bookkeeping();
     run_self_defined_throw();
