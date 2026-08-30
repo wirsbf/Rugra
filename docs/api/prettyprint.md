@@ -1,5 +1,35 @@
 # `prettyprint.rs` API Reference
 
+## 2026-08-30：POSTFIX-RETIRE-0001 W3 — P13 void 拆分退役（PRINTC-VOIDCALL-0001 正解落地）
+
+路线图 W3 节（FuncProto void + opReturn/opCall 形态 → P13）。P13（`return f();` →
+`f(); return;` 文本拆分，**硬编码 13 个 libc 名**——机制 D 红旗）按 W1 计数器在
+双语料双轮零突变，但其退役前必须把 void 判定迁回 oracle 真语义，否则表外任何
+void 函数会静默产出非法 C（`return pthread_mutex_lock();` 类 gcc error）。
+
+- **正解（本 commit，printc.rs 侧）**：oracle 中 void 调用语句形态来自 IR——
+  `ActionFuncLink::funcLinkOutput`（coreaction.cc:1521-1541）对 **output-locked
+  void** 被调方保持 CALL 无输出，`PrintC::emitExpression`（printc.cc:2471-2476）
+  的 `outvn != 0` 测试随之不打印赋值 LHS（语句形态 `f(args);`），`opReturn`
+  （printc.cc:758-761）对无值 RETURN 打印裸 `return;`。Rugra 在 print 层加
+  FuncProto-void 投影守卫（详见 `docs/api/printc.md` 同日节）：callspec
+  `prototype.output_type_locked && return_type==Void` 时投影无输出字节。
+- **本文件改动**：删除 P13 拆分块（`void_funcs` 硬编码表 + 行改写循环），P14
+  输入直接改接 P12 输出 `final_out`；计数器 `POSTFIX_PASS_NAMES` 24→23，
+  `PF_P13` 删除（后续索引前移 P14..P27）。幸存名单：
+  B1 P6 B2 P7 P8 P9 P10 P11 P12 P14 P15 P16c B3 P17 P18 B4 Pecase
+  P22 P23 P24 P25 P26 P27。
+- **验证**：curl `801614e0…`/httpd `e18b4503…` 与删除前**逐字节一致**（守卫在
+  现语料上 dormant——`free`/`exit` 调用的输出已被 action 层的
+  `func_link_output` 移除，黄金语料本就按语句形态渲染）；差分
+  curl 3091/0/0 + httpd 2278/0/0 维持；计数器无漂移（P13 字段消失、其余相等）。
+- **dormant 分支回归测试**：`printc.rs` 单测
+  `test_void_callee_call_prints_statement_and_bare_return`（构造"CALL 输出幸存
+  + callspec output-locked void"形态，断言语句形态 + 裸 return + 无
+  `return f();`）与负向对照 `test_nonvoid_locked_callee_keeps_assignment_lhs`
+  （locked 非 void 保留赋值 LHS）。oracle 侧真值锚点：锁定 golden 语料的
+  `free(pcVar11);` 语句形态（`tests/golden/ghidra_curl_1204.c`）。
+
 ## 2026-08-30：POSTFIX-RETIRE-0001 W2 — A 队列零突变 pass 退役（尾部先行，一 pass 一 commit）
 
 路线图 W2 节：W1 计数器实证 **A 队列 9 个 pass 双语料双轮零突变**

@@ -344,9 +344,9 @@ fn reconcile_int_minus_pointer(line: &str) -> String {
 // 语义:计数器只度量、绝不改变管线行为 —— 退役判定以计数=0 为必要证据。
 
 // RUGRA-GLUE: 幸存 pass 名单(管线顺序),见 post_process_output_legacy 内同序插桩
-const POSTFIX_PASS_NAMES: [&str; 24] = [
+const POSTFIX_PASS_NAMES: [&str; 23] = [
     "B1", "P6", "B2", "P7",
-    "P8", "P9", "P10", "P11", "P12", "P13", "P14", "P15", "P16c",
+    "P8", "P9", "P10", "P11", "P12", "P14", "P15", "P16c",
     "B3", "P17", "P18", "B4", "Pecase", "P22", "P23", "P24",
     "P25", "P26", "P27",
 ];
@@ -361,21 +361,20 @@ const PF_P9: usize = 5;
 const PF_P10: usize = 6;
 const PF_P11: usize = 7;
 const PF_P12: usize = 8;
-const PF_P13: usize = 9;
-const PF_P14: usize = 10;
-const PF_P15: usize = 11;
-const PF_P16C: usize = 12;
-const PF_B3: usize = 13;
-const PF_P17: usize = 14;
-const PF_P18: usize = 15;
-const PF_B4: usize = 16;
-const PF_ECASE: usize = 17;
-const PF_P22: usize = 18;
-const PF_P23: usize = 19;
-const PF_P24: usize = 20;
-const PF_P25: usize = 21;
-const PF_P26: usize = 22;
-const PF_P27: usize = 23;
+const PF_P14: usize = 9;
+const PF_P15: usize = 10;
+const PF_P16C: usize = 11;
+const PF_B3: usize = 12;
+const PF_P17: usize = 13;
+const PF_P18: usize = 14;
+const PF_B4: usize = 15;
+const PF_ECASE: usize = 16;
+const PF_P22: usize = 17;
+const PF_P23: usize = 18;
+const PF_P24: usize = 19;
+const PF_P25: usize = 20;
+const PF_P26: usize = 21;
+const PF_P27: usize = 22;
 
 // RUGRA-GLUE: 逐 pass 突变计数器(每次 post_process_output 调用一个实例)
 struct PostfixStats {
@@ -437,17 +436,30 @@ impl PostfixStats {
 
     // RUGRA-GLUE: 每次 post_process_output 调用向 stderr 输出一行 [POSTFIX]
     // 统计;inv=进程内调用序号,rpt=1 表示本次输入与上次调用的输出相同
-    // (双重执行标记;当前生产路径单次执行,rpt 恒 0)
+    // (双重执行标记;当前生产路径单次执行,rpt 恒 0)。W3 诊断扩展:设置
+    // RUGRA_POSTFIX_RAW_DIR 时,把本次输入(=emit 原始输出)与最终输出按
+    // <pid>-<inv>.{in,out} 落盘,供 emit 缺陷定位使用(零行为差,env 门控)。
     fn emit(self, input: &str, output: &str) {
         if !self.enabled {
             return;
         }
         static INVOCATIONS: std::sync::atomic::AtomicU64 =
             std::sync::atomic::AtomicU64::new(0);
+        let inv0 = INVOCATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if let Some(dir) = std::env::var_os("RUGRA_POSTFIX_RAW_DIR") {
+            let name = format!("{}-{}.in", std::process::id(), inv0);
+            let path = std::path::Path::new(&dir).join(name);
+            if let Ok(text) = std::fs::write(path, input) {
+                let _ = text;
+            }
+            let name = format!("{}-{}.out", std::process::id(), inv0);
+            let path = std::path::Path::new(&dir).join(name);
+            let _ = std::fs::write(path, output);
+        }
+        let inv = inv0;
         static LAST_OUT_HASH: std::sync::atomic::AtomicU64 =
             std::sync::atomic::AtomicU64::new(0);
         use std::sync::atomic::Ordering;
-        let inv = INVOCATIONS.fetch_add(1, Ordering::Relaxed) + 1;
         let in_hash = postfix_hash(input);
         let prev_out = LAST_OUT_HASH.swap(postfix_hash(output), Ordering::Relaxed);
         let rpt = prev_out == in_hash;
@@ -1207,38 +1219,11 @@ impl EmitNoMarkup {
         }
         pfx.observe(PF_P12, &snap_p12, &final_out);
 
-        // Thirteenth pass: split "return func();" into "func(); return;" for void functions
-        let void_funcs = [
-            "free", "puts", "fclose", "exit", "fflush", "clearerr",
-            "rewind", "perror", "abort", "qsort", "curl_easy_cleanup",
-            "curl_slist_free_all", "curl_global_cleanup",
-        ];
-        let snap_p13 = PostfixStats::snap(&final_out);
-        let mut pass13: Vec<String> = Vec::with_capacity(final_out.len());
-        for line in &final_out {
-            let t = line.trim();
-            if t.starts_with("return ") && t.ends_with(");") {
-                // Extract function name from "return func(...);"
-                let inner = &t[7..t.len() - 1]; // "func(...)"
-                if let Some(paren) = inner.find('(') {
-                    let fname = &inner[..paren];
-                    if void_funcs.contains(&fname) {
-                        let indent = &line[..line.len() - line.trim_start().len()];
-                        pass13.push(format!("{}{});", indent, inner));
-                        pass13.push(format!("{}return;", indent));
-                        continue;
-                    }
-                }
-            }
-            pass13.push(line.clone());
-        }
-        pfx.observe(PF_P13, &snap_p13, &pass13);
-
         // Fourteenth pass: remove dead code after goto (consecutive goto, or code after goto on same indent)
-        let snap_p14 = PostfixStats::snap(&pass13);
-        let mut pass14: Vec<String> = Vec::with_capacity(pass13.len());
+        let snap_p14 = PostfixStats::snap(&final_out);
+        let mut pass14: Vec<String> = Vec::with_capacity(final_out.len());
         let mut prev_was_goto = false;
-        for line in &pass13 {
+        for line in &final_out {
             let t = line.trim();
             if prev_was_goto {
                 // Skip lines that are dead code (another goto or non-label code at same level)
