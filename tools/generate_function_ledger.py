@@ -1278,18 +1278,62 @@ REKEY_TOMBSTONE_COUNT = 47
 # consumed exactly) with per-token spine scan and git log -S origin pinning
 # (69/69 agree at short-hash width; the three re-keyed finals pin their
 # name text to 0c80ad5c and their final signatures to 0c2fd80c).
-CONTINUITY_CHECKPOINT_COMMIT = "2c5bdb309d65dd9b38cac62426832235569388f5"
-CONTINUITY_CHECKPOINT_COMMIT_TREE = "7490bf489a55ec688ce63cd4a9ed1b33d2b6cbbe"
-CONTINUITY_CHECKPOINT_SRC_TREE = "36f6390dcd9b990f59f47583599c9abfc8bda99e"
-CONTINUITY_CHECKPOINT_PARENT = "6a45a34956312d98e62429729bb94ada37246f19"
+# Eighth extension window, 2026-08-30 (REGISTRY-CHECKPOINT-ADVANCE,
+# w-registry9): branch-line anchor merge ac7a3526 (first parent c07e2345)
+# folds master 38c3338a, a multi-window batch: the dowhile absorb chain
+# (6a7a4609 newBlockList forceOutputNum/forceFalseEdge in try_rule_cat,
+# f4c2d017/4d0dcabb fixtures), push88 (6b9d62d3 ia.sinc :PUSH constructors
+# + push88 macro in the iced path: lift_push/push_source_val/
+# compute_push_src_addr/get_register_64), the stackslot fold root cause
+# (3f1883df canonical Architecture attach so spacebase STORE/LOAD reindex),
+# the hdefects pair (09b367f5 ActionDoNothing faithful removal chain with
+# block_remove_internal/remove_do_nothing_block re-keys and
+# block_is_do_nothing/block_unblocked_multi; d4fd9f87 printc emitBlockDoWhile
+# body + emitBlockGoto wrapped structural dispatch re-key), canonical arch
+# (14be736d Funcdata::new bind + canonical_arch accessor), f23 fixes
+# (a986dce4 isOpIdentical typedef-chain strip re-key, 7b99f234 castInput
+# two-level double-cast guard) and the W0 postfix-retirement dead-code
+# purge (92160892 reconcile_pointer_arith, 68e3ebdc recover_struct_fields_
+# anon, f8fe3cb3 struct-deref trio try_convert_ptr_add/rewrite_struct_deref/
+# canonicalize_struct_deref, 16e4d8ff brace scaffold, d630ba7b forged
+# annotation fixes).  As in the seventh window the checkpoint is pinned to
+# the anchor itself: the branch tip c07e2345 was already contained in
+# master, so the mandated --no-ff merge tree equals master tip and the
+# HEAD:src invariant lands on ac7a3526:src directly.  Window effect
+# collapsed at the single merge replay step (first-parent 428 -> 432,
+# records 10_574 -> 10_581): 12 introduced records (x86_lift push family
+# 6b9d62d3, blockaction force pair 6a7a4609, coreaction donothing pair +
+# three tests 09b367f5/a986dce4/7b99f234, funcdata canonical_arch
+# 14be736d), four reviewed transitions (coreaction is_op_identical
+# typedef-chain re-key 0b58bd56 -> 67f66f09, printc emit_block_goto
+# wrapped-dispatch re-key 35f0c0ff -> fd44b0e0, funcdata
+# block_remove_internal 680b7aec -> 27e5c680 and remove_do_nothing_block
+# dcefd033 -> 259bd077, both re-keyed inside 09b367f5), five reviewed
+# tombstones (the W0 prettyprint dead-code purge above), zero unproved
+# removals.  Two lineage pairs retire because is_op_identical and
+# emit_block_goto already carried trailing-comma aliases from 3fb97c11:
+# EXPECTED_TRANSITIONS stores (base, current) so their pairs advance
+# (33c86fd1 -> 0b58bd56) => (33c86fd1 -> 67f66f09) and (8fcaf961 ->
+# 35f0c0ff) => (8fcaf961 -> fd44b0e0).
+# EXPECTED_INTRODUCED 990 -> 1002; EXPECTED_TRANSITIONS 491 -> 493;
+# EXPECTED_TOMBSTONES 56 -> 61.
+# Evidence: zero-drift probe (ambiguous=0, collisions=0, all reviewed rules
+# consumed exactly) with per-token spine scan and git log -S origin pinning
+# (12/12 agree at short-hash width; 9/9 removal origins death-pinned by
+# spine scan: 09b367f5/a986dce4/d4fd9f87 for the re-keys, 92160892/
+# 68e3ebdc/f8fe3cb3 for the tombstones).
+CONTINUITY_CHECKPOINT_COMMIT = "ac7a35266cf5612ac6d8bb340f53a4a946418d14"
+CONTINUITY_CHECKPOINT_COMMIT_TREE = "0fb01cc37220d231e42ab5369271684c2aea208d"
+CONTINUITY_CHECKPOINT_SRC_TREE = "9ecc44287480fb5dcf5c6698756351596eeeb1f5"
+CONTINUITY_CHECKPOINT_PARENT = "c07e23459086e426469ffa333578ba5138e12294"
 CONTINUITY_BASELINE_MIGRATION_BLOB = "8ecab1e6160b7d4d28a15aba0cad89c2fe8fc171"
 CONTINUITY_BASELINE_MIGRATION_SHA256 = (
     "16236201f0b4920d2a3e33a848df05d3d601ee60998f7f7c51464d4eeb7739e9"
 )
-CONTINUITY_FIRST_PARENT_COMMIT_COUNT = 428
+CONTINUITY_FIRST_PARENT_COMMIT_COUNT = 432
 CONTINUITY_FIRST_COMMIT = "7ae30f5bcfba5e1adce2a4e8cdeebc23d96964cb"
 CONTINUITY_BASELINE_RUST_RECORDS = 9_639
-CONTINUITY_CHECKPOINT_RUST_RECORDS = 10_574
+CONTINUITY_CHECKPOINT_RUST_RECORDS = 10_581
 CONTINUITY_EXPECTED_TRANSITIONS = {
     ("RG-F-003416535aaee2f83d44", "RG-F-81062ccc03179475b483"),
     ("RG-F-014e421b9237134489e2", "RG-F-a0058e4a4e7ff0e25ce6"),
@@ -1386,7 +1430,7 @@ CONTINUITY_EXPECTED_TRANSITIONS = {
     ("RG-F-324512e30e8186d490fa", "RG-F-965186488164bcc5ab4f"),
     ("RG-F-32b69c55e48850549780", "RG-F-914ebd32697eb67d4df6"),
     ("RG-F-332dc229f8ca31752d6f", "RG-F-88e669e7fc3b4d59eec8"),
-    ("RG-F-33c86fd1b415d82ce820", "RG-F-0b58bd56440200c0d42d"),
+    ("RG-F-33c86fd1b415d82ce820", "RG-F-67f66f09decf8c2d0193"),
     ("RG-F-348bcf1129d00810889e", "RG-F-878f03cc15c53f8e9887"),
     ("RG-F-350bfd7ce36aafc87bc5", "RG-F-df24ec62e96f58098106"),
     ("RG-F-353d179342f1b8c88e5b", "RG-F-4fc23f9164942392a358"),
@@ -1500,6 +1544,7 @@ CONTINUITY_EXPECTED_TRANSITIONS = {
     ("RG-F-665e889efe29adc78c07", "RG-F-08f7654728d229dc7238"),
     ("RG-F-677d167932e38cfd8059", "RG-F-6b77b0a1166c681a2da7"),
     ("RG-F-67827efc2b3b4d4016b9", "RG-F-3cd23de12de85f61b589"),
+    ("RG-F-680b7aec490d30d27e54", "RG-F-27e5c680f9d99fdeadee"),
     ("RG-F-681b63f29b27de3a4123", "RG-F-b0bd0fd9650c8dc041d9"),
     ("RG-F-6875a1df88043187e59d", "RG-F-aeed1ce92fc04c5aaf17"),
     ("RG-F-69077eff0f6c6d312b89", "RG-F-63703e43769647a36512"),
@@ -1593,7 +1638,7 @@ CONTINUITY_EXPECTED_TRANSITIONS = {
     ("RG-F-8e78d5ae4a28fef032c3", "RG-F-2127ca21d3815659a53a"),
     ("RG-F-8f4e504512ee200863f5", "RG-F-4c2d5f93a06006739d44"),
     ("RG-F-8fbf2f389d0c6c824c78", "RG-F-2303c505805d68842c9a"),
-    ("RG-F-8fcaf9612ef6a752403d", "RG-F-35f0c0ffc91782f5f023"),
+    ("RG-F-8fcaf9612ef6a752403d", "RG-F-fd44b0e0bd93649279b9"),
     ("RG-F-903e4bede9d3b38af7ac", "RG-F-3d84fca029aa0db125c4"),
     ("RG-F-912fef162cc89fe0bf88", "RG-F-13e779331bc0e4e025d1"),
     ("RG-F-917836855667b06a8be5", "RG-F-037e3def62b3322c0cc8"),
@@ -1724,6 +1769,7 @@ CONTINUITY_EXPECTED_TRANSITIONS = {
     ("RG-F-db63a0620cae7f35a1e5", "RG-F-58043a6f46ae1c9b28c7"),
     ("RG-F-dbcf028e82133b9565c3", "RG-F-070808d769156b8f203d"),
     ("RG-F-dce23f8a1501c96a1a84", "RG-F-e8403781f3b10897f1ff"),
+    ("RG-F-dcefd033d937f2b339bd", "RG-F-259bd0774148eb5c8ab2"),
     ("RG-F-dd1379a84ce1f896ce22", "RG-F-0b56e116e3afefd18da3"),
     ("RG-F-ddcca3e697279ebe7c54", "RG-F-ce80229a438c9635fbe9"),
     ("RG-F-de86f142eac0c451b496", "RG-F-4b68743471f19aa81df9"),
@@ -1787,6 +1833,7 @@ CONTINUITY_EXPECTED_TOMBSTONES = {
     ("RG-F-002a9ec13d8e062540b9", "RG-F-002a9ec13d8e062540b9", "874e81f7b9877b519c8ab55b57cbac24de0918f0"),
     ("RG-F-069b0702a18335d9be0c", "RG-F-069b0702a18335d9be0c", "73b5ef26453372a2b562051f113f9b299bcebeef"),
     ("RG-F-080a097af2330629ba3f", "RG-F-080a097af2330629ba3f", "73b5ef26453372a2b562051f113f9b299bcebeef"),
+    ("RG-F-122e53031d85d983b3c5", "RG-F-122e53031d85d983b3c5", "ac7a35266cf5612ac6d8bb340f53a4a946418d14"),
     ("RG-F-15a6b977326f7c0a9e15", "RG-F-15a6b977326f7c0a9e15", "73b5ef26453372a2b562051f113f9b299bcebeef"),
     ("RG-F-16c31deda08795ad3093", "RG-F-16c31deda08795ad3093", "26eee4ad27fc36a132c948876c9e0fbbb79051e2"),
     ("RG-F-19f611a02beef2ac0b9b", "RG-F-19f611a02beef2ac0b9b", "3fb97c113e3128c78b5856099d0bffe5deeda496"),
@@ -1830,6 +1877,7 @@ CONTINUITY_EXPECTED_TOMBSTONES = {
     ("RG-F-bd9141cd6ae9f5a4ddad", "RG-F-bd9141cd6ae9f5a4ddad", "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db"),
     ("RG-F-be28b0ba758951601dda", "RG-F-be28b0ba758951601dda", "8dae10d3c2b02df7424beaba2abf9fdf72bbdb66"),
     ("RG-F-c261bf862e86c3ae27dd", "RG-F-c261bf862e86c3ae27dd", "73b5ef26453372a2b562051f113f9b299bcebeef"),
+    ("RG-F-c5250352efdcc2e7c776", "RG-F-c5250352efdcc2e7c776", "ac7a35266cf5612ac6d8bb340f53a4a946418d14"),
     ("RG-F-ca8e5e48082eb933ed01", "RG-F-ca8e5e48082eb933ed01", "4d1bcf29bf527f542141adef5774980d4831b0ce"),
     ("RG-F-cb2c742a239b918218ca", "RG-F-cb2c742a239b918218ca", "cddcefd88006dd68ed69284ed31562a08fda3107"),
     ("RG-F-cf22821ce96008ff0c7e", "RG-F-cf22821ce96008ff0c7e", "10ea407df05d4f92cbd71ffe4df20aac70b5afb8"),
@@ -1837,9 +1885,12 @@ CONTINUITY_EXPECTED_TOMBSTONES = {
     ("RG-F-dda630121a5380c159b1", "RG-F-dda630121a5380c159b1", "73b5ef26453372a2b562051f113f9b299bcebeef"),
     ("RG-F-ded5b6e2aef38fd29e5a", "RG-F-ded5b6e2aef38fd29e5a", "f87e4d802652244e1b5792097d53a746d164dc07"),
     ("RG-F-deed2231a6bf3a9a609f", "RG-F-deed2231a6bf3a9a609f", "b8da22a86f28cb2750fe85e1a7c69391c900a1fc"),
+    ("RG-F-df1ebb5b6896001240d2", "RG-F-df1ebb5b6896001240d2", "ac7a35266cf5612ac6d8bb340f53a4a946418d14"),
     ("RG-F-e43c2d78ba8a0472a781", "RG-F-e43c2d78ba8a0472a781", "cad41c27104b0b5314fb3bcc78d54f6f5b55a1db"),
+    ("RG-F-e4e0c8f016826161ad18", "RG-F-e4e0c8f016826161ad18", "ac7a35266cf5612ac6d8bb340f53a4a946418d14"),
     ("RG-F-e6a5ca59c7df4b468e28", "RG-F-e6a5ca59c7df4b468e28", "73b5ef26453372a2b562051f113f9b299bcebeef"),
     ("RG-F-ef02d5e77634269ac883", "RG-F-ef02d5e77634269ac883", "4495eb601d22f959bad64a6c085f516431195b42"),
+    ("RG-F-f6de4e0f5185cd7b9aef", "RG-F-f6de4e0f5185cd7b9aef", "ac7a35266cf5612ac6d8bb340f53a4a946418d14"),
 }
 CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-00043d119eb89495e0bc",
@@ -1866,6 +1917,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-03c2e475c288ae37c5ee",
     "RG-F-040dd6a4963caea0f64f",
     "RG-F-042aad4a869ec81de7fa",
+    "RG-F-04c911902b5296c41929",
     "RG-F-0584c8aaef39e842a75d",
     "RG-F-05acefb94c19229397b1",
     "RG-F-05b7edb1beaf4beabe97",
@@ -1883,6 +1935,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-09989c7d05b509be1f6b",
     "RG-F-09e9f71b1c6b4394d17d",
     "RG-F-09f455ed64251d83c705",
+    "RG-F-0a00fc7dc24e2fd1aeca",
     "RG-F-0a04aff901a1f8a0c981",
     "RG-F-0a95ba0e6234251b69a3",
     "RG-F-0acaaa228de47803d624",
@@ -1900,11 +1953,13 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-0dc1ec134f52889b4c7f",
     "RG-F-0e15bb6d7c13b1b596c9",
     "RG-F-0e33ad7119bc35c6d94b",
+    "RG-F-0e8ed93409d11e65e670",
     "RG-F-0ea64a6087c7f3bdb86f",
     "RG-F-0f2ffa34cfa8d8fa03d4",
     "RG-F-0f4e466fad6c33ba3618",
     "RG-F-0f5415b3d4f3168a6781",
     "RG-F-0f83f70cb3576f250ad3",
+    "RG-F-0fbe5cf21ba1816b1abd",
     "RG-F-0fc26a780e6ae233a84c",
     "RG-F-100a612aa7212bc23cbf",
     "RG-F-1032be3fd4ff172cc745",
@@ -2161,6 +2216,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-4d8a7817de76229c59cc",
     "RG-F-4d8c1521cc6856f70e53",
     "RG-F-4de51ce227b408d7773d",
+    "RG-F-4e1430dcb618565edaac",
     "RG-F-4e6712f8e73ebad664ba",
     "RG-F-4e9f597e3cbe737fd971",
     "RG-F-4eb231db0ce3dbc0e317",
@@ -2205,6 +2261,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-59bb7728de73efb30458",
     "RG-F-59c782a851bb95fa70ef",
     "RG-F-59eb223f5cd10b89be89",
+    "RG-F-5a26c0a40802f968d297",
     "RG-F-5a36f8f997d3d89c4b49",
     "RG-F-5a54e368bfdddb229af5",
     "RG-F-5aa3a0cd3b68eeab4eab",
@@ -2354,6 +2411,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-7f72074e5a3b2f30b2f3",
     "RG-F-7fa59b5bcf8603857252",
     "RG-F-7fc25f0ba8f3590f8ce5",
+    "RG-F-80b9954cc6245e2a1ae7",
     "RG-F-80be11223c7b4a4b7bbc",
     "RG-F-8103478fa5632787566b",
     "RG-F-811f256e0c355602aba9",
@@ -2490,12 +2548,14 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-a2a0c63c3c7dc2a0cdcf",
     "RG-F-a37a1bb21ebde3d2f37c",
     "RG-F-a3ecf63fc9578af84b83",
+    "RG-F-a439db5fc11bea7f9d30",
     "RG-F-a43b43b4851399cb487b",
     "RG-F-a44a128249f3eb815765",
     "RG-F-a44fdd592fe99cf1e0ae",
     "RG-F-a47bba9a2f71f1a03ef2",
     "RG-F-a4d0240c14057607786f",
     "RG-F-a4dfb8c5132426e884db",
+    "RG-F-a4e74e09f6b0ac7e095c",
     "RG-F-a51da3d51090399e334a",
     "RG-F-a5b69ac71c7042021efd",
     "RG-F-a6b5349e89166706e042",
@@ -2607,6 +2667,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-c67125dc3be16b3a668e",
     "RG-F-c6b4cbe3ef21e2a35bc5",
     "RG-F-c6f2b68f1aff04a6c307",
+    "RG-F-c718b93e0ba7ebbcecdd",
     "RG-F-c76fed0dc5d271545372",
     "RG-F-c7d3359e93081883b23e",
     "RG-F-c8b4eb9f35f49bca9617",
@@ -2650,6 +2711,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-d11f2561685ecd08d12d",
     "RG-F-d1271f08594059b16449",
     "RG-F-d174fbfcace857dd19b9",
+    "RG-F-d18af6e7aacac4ddb137",
     "RG-F-d1bd414f498437fcfef1",
     "RG-F-d20c5571513ec921bedb",
     "RG-F-d26508b5acc22dd2c8ba",
@@ -2688,6 +2750,7 @@ CONTINUITY_EXPECTED_INTRODUCED = {
     "RG-F-dafcb780cdc32cfd54f0",
     "RG-F-db1d89e77bb4f2275a78",
     "RG-F-db6a99a982c10626a563",
+    "RG-F-db76e284561fdd79e78d",
     "RG-F-dca6302aaa3634df916c",
     "RG-F-dd608a681de67dbc3f1c",
     "RG-F-dd6d19a5377dc3679c04",
@@ -5503,6 +5566,50 @@ CONTINUITY_REVIEWED_TRANSITIONS: tuple[dict[str, str], ...] = (
         "child_blob": "78deb1997fa7a88739948a8f9535971ccab9cad2",
         "review": "eliminate_intersect: returns usize marked= count for UNIFY diag (afdfcdd)",
     },
+    {
+        "base_id": "RG-F-33c86fd1b415d82ce820",
+        "from_id": "RG-F-0b58bd56440200c0d42d",
+        "to_id": "RG-F-67f66f09decf8c2d0193",
+        "commit": "ac7a35266cf5612ac6d8bb340f53a4a946418d14",
+        "from_path": "src/coreaction.rs",
+        "to_path": "src/coreaction.rs",
+        "parent_blob": "f651fd35e39023421745b7e8d8b79e8e4e09b0b6",
+        "child_blob": "fb460e50fb9e964cf233f8f3baecdff8491da3d5",
+        "review": "is_op_identical: typedef-chain strip reworked the signature (a986dce4); the lineage alias chain 33c86fd1 -> 0b58bd56 (trailing comma, 3fb97c11) advances to 67f66f09",
+    },
+    {
+        "base_id": "RG-F-8fcaf9612ef6a752403d",
+        "from_id": "RG-F-35f0c0ffc91782f5f023",
+        "to_id": "RG-F-fd44b0e0bd93649279b9",
+        "commit": "ac7a35266cf5612ac6d8bb340f53a4a946418d14",
+        "from_path": "src/printc.rs",
+        "to_path": "src/printc.rs",
+        "parent_blob": "56b7c9ac518685e3fb9e032d3e3b8a7432189cbd",
+        "child_blob": "4c05a312650b21e66cfd38a21e213b372cf87583",
+        "review": "emit_block_goto: wrapped structural dispatch reworked the signature (d4fd9f87); the lineage alias chain 8fcaf961 -> 35f0c0ff (trailing comma, 3fb97c11) advances to fd44b0e0",
+    },
+    {
+        "base_id": "RG-F-680b7aec490d30d27e54",
+        "from_id": "RG-F-680b7aec490d30d27e54",
+        "to_id": "RG-F-27e5c680f9d99fdeadee",
+        "commit": "ac7a35266cf5612ac6d8bb340f53a4a946418d14",
+        "from_path": "src/funcdata.rs",
+        "to_path": "src/funcdata.rs",
+        "parent_blob": "b6fe679bd92b09031450c715118bc9f408fadc0b",
+        "child_blob": "2148724af96f1d9842b61ef6796199d071e814e6",
+        "review": "block_remove_internal: ActionDoNothing faithful removal chain reworked the signature inside 09b367f5",
+    },
+    {
+        "base_id": "RG-F-dcefd033d937f2b339bd",
+        "from_id": "RG-F-dcefd033d937f2b339bd",
+        "to_id": "RG-F-259bd0774148eb5c8ab2",
+        "commit": "ac7a35266cf5612ac6d8bb340f53a4a946418d14",
+        "from_path": "src/funcdata.rs",
+        "to_path": "src/funcdata.rs",
+        "parent_blob": "b6fe679bd92b09031450c715118bc9f408fadc0b",
+        "child_blob": "2148724af96f1d9842b61ef6796199d071e814e6",
+        "review": "remove_do_nothing_block: ActionDoNothing faithful removal chain reworked the signature inside 09b367f5",
+    },
 )
 CONTINUITY_REVIEWED_TOMBSTONES: tuple[dict[str, str], ...] = (
     # --- merge window 65422a62..10ea407d (master DECL-SPACING-NAMEFLOW wave) ---
@@ -5956,6 +6063,46 @@ CONTINUITY_REVIEWED_TOMBSTONES: tuple[dict[str, str], ...] = (
         "parent_blob": "bc69f87d61814e00c77b11cb59dd00d43200fbbb",
         "child_blob": "a92f1d2a8ece4bcdf1625871df84ce7b0ed3bb05",
         "reason": "mark_front_leaf_dyn: specialized BlockBasic leaf-marker (flags |= fl on the block itself) retired with the BlockGoto wrapped-component port; the markCopyBlock call site (block.cc:2860-2863) now routes through the pre-existing general mark_front_leaf, whose front_leaf descent implements FlowBlock::getFrontLeaf (block.cc:340) on the dyn target (a2c5ce26)",
+    },
+    {
+        "base_id": "RG-F-122e53031d85d983b3c5",
+        "from_id": "RG-F-122e53031d85d983b3c5",
+        "commit": "ac7a35266cf5612ac6d8bb340f53a4a946418d14",
+        "parent_blob": "0d8cf0ac26e57fccca9e1c46efa478daffb4a0a1",
+        "child_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+        "reason": "W0 dead-code removal: try_convert_ptr_add deleted with the dead struct-deref trio (f8fe3cb3, POSTFIX-RETIRE-0001); no same-role successor exists",
+    },
+    {
+        "base_id": "RG-F-c5250352efdcc2e7c776",
+        "from_id": "RG-F-c5250352efdcc2e7c776",
+        "commit": "ac7a35266cf5612ac6d8bb340f53a4a946418d14",
+        "parent_blob": "0d8cf0ac26e57fccca9e1c46efa478daffb4a0a1",
+        "child_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+        "reason": "W0 dead-code removal: reconcile_pointer_arith deleted as a dead reconciliation helper (92160892, POSTFIX-RETIRE-0001); no same-role successor exists",
+    },
+    {
+        "base_id": "RG-F-df1ebb5b6896001240d2",
+        "from_id": "RG-F-df1ebb5b6896001240d2",
+        "commit": "ac7a35266cf5612ac6d8bb340f53a4a946418d14",
+        "parent_blob": "0d8cf0ac26e57fccca9e1c46efa478daffb4a0a1",
+        "child_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+        "reason": "W0 dead-code removal: rewrite_struct_deref deleted with the dead struct-deref trio (f8fe3cb3, POSTFIX-RETIRE-0001); no same-role successor exists",
+    },
+    {
+        "base_id": "RG-F-e4e0c8f016826161ad18",
+        "from_id": "RG-F-e4e0c8f016826161ad18",
+        "commit": "ac7a35266cf5612ac6d8bb340f53a4a946418d14",
+        "parent_blob": "0d8cf0ac26e57fccca9e1c46efa478daffb4a0a1",
+        "child_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+        "reason": "W0 dead-code removal: canonicalize_struct_deref deleted with the dead struct-deref trio (f8fe3cb3, POSTFIX-RETIRE-0001); no same-role successor exists",
+    },
+    {
+        "base_id": "RG-F-f6de4e0f5185cd7b9aef",
+        "from_id": "RG-F-f6de4e0f5185cd7b9aef",
+        "commit": "ac7a35266cf5612ac6d8bb340f53a4a946418d14",
+        "parent_blob": "0d8cf0ac26e57fccca9e1c46efa478daffb4a0a1",
+        "child_blob": "2f0eea44cde0fa6d0cdb67170c93f5b250a4da62",
+        "reason": "W0 dead-code removal: recover_struct_fields_anon deleted as a dead anon-struct recovery helper (68e3ebdc, POSTFIX-RETIRE-0001); no same-role successor exists",
     },
 )
 CONTINUITY_REVIEWED_EPHEMERAL: tuple[dict[str, str], ...] = (

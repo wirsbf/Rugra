@@ -39,7 +39,7 @@
  "rust_fixture_sha256": "4d4fc0ee7ec05e11a701e7d5839bcabf499c75f06b3d0715e79c19d882f3cf01",
  "comparand_sha256": {
   "rugra_printc": "29225b8abddc69e8dada03bbda7b70d6b5d3826085f0e670ce858919b79fad96",
-  "rugra_prettyprint": "04317434844c73a8a70fff44f61ddfd419b1f72a45cf51feae462f8d2529cdd6",
+  "rugra_prettyprint": "7631a7ee583db8c7c5b4db65cd8c762b24f38c63e39e0bc1cbe586574a3bfe0a",
   "ghidra_printc_cc": "2c0f5565bb76c8ec4dc291e3166dec924fa063c9d86f4d14f06e1fc1550c12b4",
   "ghidra_printc_hh": "efbc5aaa7c1a8f4a2072401689bf0c6de053705d90bfc85d79aba295554558b8",
   "ghidra_block_cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",
@@ -50,5 +50,11 @@
  "expected_statement_stdout_sha256": "78de4107d0de546f47db594ad4d61f18f5dfeae895a28efec50ea4019da2bfb0",
  "expected_ghidra_raw_sha256": "a366eecdf74dbbe6609c6e2b2d78973d4ae4431bbabc50c4b140b29c5bd8a513",
  "expected_rugra_raw_sha256": "a366eecdf74dbbe6609c6e2b2d78973d4ae4431bbabc50c4b140b29c5bd8a513",
- "overall_status": "MATCH: bilateral statement + raw bytes identical at locked oracle e40ed130"
+ "overall_status": "MATCH: bilateral statement + raw bytes identical at locked oracle e40ed130",
+ "comparand": {
+  "cpp_fixture_sha256": "3e7b10b13f91eea5f8407c3fca430e2a4c0c41bdf6eda3e33ab9fccaf86e3c95",
+  "rust_fixture_sha256": "4d4fc0ee7ec05e11a701e7d5839bcabf499c75f06b3d0715e79c19d882f3cf01",
+  "runner_sha256": "e00f67b1bef9a59bdf081e69f8b160ae807ebeb54e947675cb7c958213e5b4f7"
+ },
+ "status_note": "Re-pinned 2026-08-30 (w-registry9): rugra_prettyprint source snapshot advanced 04317434 -> 7631a7ee by the W0 POSTFIX-RETIRE-0001 dead-code purge (92160892/68e3ebdc/f8fe3cb3; -589 dead lines, zero live-path change); statement and raw streams re-verified byte-identical at the same locked oracle."
 }

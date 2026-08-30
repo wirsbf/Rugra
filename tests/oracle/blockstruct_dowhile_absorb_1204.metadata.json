@@ -1,7 +1,7 @@
 {
  "schema": 1,
  "fixture_id": "BLOCKACTION-DOWHILE-ABSORB-0001",
- "stable_function_id": "GH12-F-9a3c1e5b7f20d84ab0c6",
+ "stable_function_id": "GH12-F-d345bfb9c1f5620afdb6",
  "stable_function_closure": [
   "ghidra::CollapseStructure::collapseAll blockaction.cc:1877",
   "ghidra::CollapseStructure::ruleBlockGoto blockaction.cc:1450",
@@ -67,5 +67,12 @@
  "residual_diffs": [],
  "unit_tests": "cargo test --lib 1637 passed / 17 failed (all pre-existing funcdata baseline failures; zero new blockaction/tracedag failures)",
  "overall_status": "MATCH",
- "input_sha256": "8af37218ad4f804c15514b2a7ded15b40fcbbfea54c8fa8c6067ea1807a816d0"
+ "input_sha256": "8af37218ad4f804c15514b2a7ded15b40fcbbfea54c8fa8c6067ea1807a816d0",
+ "comparand": {
+  "cpp_fixture_sha256": "ce7b2a854faacce203f726c584be7f582f5dad8a97b963e337ba7267daf2dba9",
+  "rust_fixture_sha256": "8cc96b8c78131f0704ce99e89b24b464d40550607a997e4e0eaab08d8b5f7054",
+  "runner_sha256": "75b358f23f0a99076f69d04031762a57454fc189367a19ec765c23fcc651e648"
+ },
+ "expected_ghidra_stdout_sha256": "8d4d9596d412a8727efc12528b8bbe7dbfe371c059c90bf69ee0758fe8c28621",
+ "expected_rugra_stdout_sha256": "8d4d9596d412a8727efc12528b8bbe7dbfe371c059c90bf69ee0758fe8c28621"
 }

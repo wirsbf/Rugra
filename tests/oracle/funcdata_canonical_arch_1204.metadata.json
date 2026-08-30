@@ -1,47 +1,59 @@
 {
-  "schema_version": 1,
-  "fixture_id": "FUNCDATA-CANONICAL-ARCH-0001",
-  "title": "Funcdata constructor always binds an Architecture (glb = scope->getArch(), funcdata.cc:48)",
-  "status_note": "Constructor-invariant observation. The C++ side boots the production x86-64 SLEIGH/BFD architecture (startDecompilerLibrary + BfdArchitecture(binary=default) + init + readLoaderSymbols, the same path as the callspec_identity fixture), constructs two Funcdata through the real constructor (funcdata.cc:34-82) and prints the wiring observables; the Rust mirror constructs two Funcdata via Funcdata::new, which binds the canonical default Architecture (OnceLock-shared Architecture::new(), the stand-in for scope->getArch() until the constructor grows a Scope parameter, FUNCDATA-LOCALSCOPE-OWNERSHIP-0001). Diffed projection (byte-identical stdout, empty stderr, rc=0 both sides): case=construct arch_nonnull=1; case=stack space_name=stack (ctor consumer funcdata.cc:54 glb->getStackSpace()); case=share arch_identity_shared=1 (single-database Architecture pointer sharing). C++-in-fixture assertion (not printable on the Rust side): fd.getArch() == scope->getArch() == &architecture and named-constructor ScopeLocal attached. Rust in-binary assertions (no C++ getter exists, private state): fd.min_laned_size == glb->getMinimumLanedRegisterSize() (funcdata.cc:49 wiring; raw value is spec-dependent: 16 on the booted x86-64 SLEIGH arch, -1 on the spec-less canonical default, so the raw value is deliberately excluded from the diffed projection), SplitDatatype gates on by default config (subflow.cc:2704-2707, architecture.cc:1430-1432 struct|array|pointer), set_arch override replaces the canonical binding and a caller-supplied config=0 turns both gates off (runner path).",
-  "decisive_semantics": {
-    "reference_output_parameters": "Funcdata::Funcdata(nm,disp,scope,addr,sym,sz) initializer list runs vbank(scope->getArch()) and the body assigns glb = scope->getArch() (funcdata.cc:37/48) then minLanedSize = glb->getMinimumLanedRegisterSize() (cc:49); there is no output parameter, the Architecture reference is stored on the object and every later getArch() consumer (Rule split gates, spacebase resolution, type factory) reads the same pointer.",
-    "loop_bounds_traversal_order": "No loops in the constructor; the named branch (cc:57-70) attaches one ScopeLocal per construction via glb->symboltab->attachScope(newMap,scope) before funcp.setScope(localmap,baseaddr+-1) and localmap->resetLocalWindow().",
-    "counter_accumulator_lifecycle": "No counters; minLanedSize is a per-Funcdata field initialized once from the constructor-time glb and reset in clear() from the same glb (funcdata.cc:93).",
-    "sorting_comparison_keys": "No ordering decisions; pointer identity (==) is the only comparison, and single-database sharing makes fd2.getArch() == fd.getArch() observable."
-  },
-  "oracle": {
-    "project": "Ghidra",
-    "tag": "Ghidra_12.0.4_build",
-    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-    "entry": "Funcdata::Funcdata via BfdArchitecture on x86-64.sla/x86-64-gcc.cspec (sleigh_specs/, x86-64.sla sha256 d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481)",
-    "architecture": "x86:LE:64:default",
-    "compiler_spec": "gcc",
-    "analysis_options": "default resetDefaultsInternal (architecture.cc:1416-1432); no OptionDatabase overrides"
-  },
-  "comparand": {
-    "rugra_head_at_capture": "45fe5377 + FUNCDATA-CANONICAL-ARCH-0001 working tree (commit recorded in the TODO board evidence)",
-    "snapshot_model": "worktree build (cargo build --release --lib rlib) — no overlay archive",
-    "cpp_fixture_sha256": "c1b22adf4c7f148d25b551ea3ac23094bba7ad2adebab6b931e06a57526f1aa6",
-    "rust_fixture_sha256": "c3d4df76f5c1c738bfbbabf59218dacb644bbb9d23874ff7054d135bd06e0a59",
-    "cpp_stdout_sha256": "6c350903d0ad4a925a8daa7eb9b09b41ac3a569c0477ca3436fa46f222f14e65",
-    "rust_stdout_sha256": "6c350903d0ad4a925a8daa7eb9b09b41ac3a569c0477ca3436fa46f222f14e65",
-    "cpp_stderr_bytes": 0,
-    "rust_stderr_bytes": 0,
-    "cpp_exit_code": 0,
-    "rust_exit_code": 0
-  },
-  "coverage": {
-    "construction_binding": {
-      "status": "MATCH",
-      "covers": "glb non-null at construction; ctor-time stack-space consumption; single-architecture pointer sharing; min_laned_size wiring (Rust in-binary vs C++ source-read); SplitDatatype default gates (Rust in-binary vs C++ source-read subflow.cc:2704-2707); set_arch override path (Rust in-binary; runner E2E byte-identical)",
-      "residual_todo_ids": []
-    }
-  },
-  "residuals": [
-    "Rugra Funcdata::new has no Scope parameter (FUNCDATA-LOCALSCOPE-OWNERSHIP-0001): the canonical default Architecture stands in for scope->getArch(); the scope/owner identity assertion therefore lives C++-side only",
-    "min_laned_size raw value is spec-dependent (16 booted SLEIGH vs -1 spec-less canonical); lane-record spec loading remains an Architecture-loading gap outside this TODO"
-  ],
-  "last_updated": "2026-08-30"
+ "schema_version": 1,
+ "fixture_id": "FUNCDATA-CANONICAL-ARCH-0001",
+ "title": "Funcdata constructor always binds an Architecture (glb = scope->getArch(), funcdata.cc:48)",
+ "status_note": "Constructor-invariant observation. The C++ side boots the production x86-64 SLEIGH/BFD architecture (startDecompilerLibrary + BfdArchitecture(binary=default) + init + readLoaderSymbols, the same path as the callspec_identity fixture), constructs two Funcdata through the real constructor (funcdata.cc:34-82) and prints the wiring observables; the Rust mirror constructs two Funcdata via Funcdata::new, which binds the canonical default Architecture (OnceLock-shared Architecture::new(), the stand-in for scope->getArch() until the constructor grows a Scope parameter, FUNCDATA-LOCALSCOPE-OWNERSHIP-0001). Diffed projection (byte-identical stdout, empty stderr, rc=0 both sides): case=construct arch_nonnull=1; case=stack space_name=stack (ctor consumer funcdata.cc:54 glb->getStackSpace()); case=share arch_identity_shared=1 (single-database Architecture pointer sharing). C++-in-fixture assertion (not printable on the Rust side): fd.getArch() == scope->getArch() == &architecture and named-constructor ScopeLocal attached. Rust in-binary assertions (no C++ getter exists, private state): fd.min_laned_size == glb->getMinimumLanedRegisterSize() (funcdata.cc:49 wiring; raw value is spec-dependent: 16 on the booted x86-64 SLEIGH arch, -1 on the spec-less canonical default, so the raw value is deliberately excluded from the diffed projection), SplitDatatype gates on by default config (subflow.cc:2704-2707, architecture.cc:1430-1432 struct|array|pointer), set_arch override replaces the canonical binding and a caller-supplied config=0 turns both gates off (runner path).",
+ "decisive_semantics": {
+  "reference_output_parameters": "Funcdata::Funcdata(nm,disp,scope,addr,sym,sz) initializer list runs vbank(scope->getArch()) and the body assigns glb = scope->getArch() (funcdata.cc:37/48) then minLanedSize = glb->getMinimumLanedRegisterSize() (cc:49); there is no output parameter, the Architecture reference is stored on the object and every later getArch() consumer (Rule split gates, spacebase resolution, type factory) reads the same pointer.",
+  "loop_bounds_traversal_order": "No loops in the constructor; the named branch (cc:57-70) attaches one ScopeLocal per construction via glb->symboltab->attachScope(newMap,scope) before funcp.setScope(localmap,baseaddr+-1) and localmap->resetLocalWindow().",
+  "counter_accumulator_lifecycle": "No counters; minLanedSize is a per-Funcdata field initialized once from the constructor-time glb and reset in clear() from the same glb (funcdata.cc:93).",
+  "sorting_comparison_keys": "No ordering decisions; pointer identity (==) is the only comparison, and single-database sharing makes fd2.getArch() == fd.getArch() observable."
+ },
+ "oracle": {
+  "project": "Ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "entry": "Funcdata::Funcdata via BfdArchitecture on x86-64.sla/x86-64-gcc.cspec (sleigh_specs/, x86-64.sla sha256 d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481)",
+  "architecture": "x86:LE:64:default",
+  "compiler_spec": "gcc",
+  "analysis_options": "default resetDefaultsInternal (architecture.cc:1416-1432); no OptionDatabase overrides"
+ },
+ "comparand": {
+  "rugra_head_at_capture": "45fe5377 + FUNCDATA-CANONICAL-ARCH-0001 working tree (commit recorded in the TODO board evidence)",
+  "snapshot_model": "worktree build (cargo build --release --lib rlib) — no overlay archive",
+  "cpp_fixture_sha256": "c1b22adf4c7f148d25b551ea3ac23094bba7ad2adebab6b931e06a57526f1aa6",
+  "rust_fixture_sha256": "c3d4df76f5c1c738bfbbabf59218dacb644bbb9d23874ff7054d135bd06e0a59",
+  "cpp_stdout_sha256": "6c350903d0ad4a925a8daa7eb9b09b41ac3a569c0477ca3436fa46f222f14e65",
+  "rust_stdout_sha256": "6c350903d0ad4a925a8daa7eb9b09b41ac3a569c0477ca3436fa46f222f14e65",
+  "cpp_stderr_bytes": 0,
+  "rust_stderr_bytes": 0,
+  "cpp_exit_code": 0,
+  "rust_exit_code": 0,
+  "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+  "runner_sha256": "12ae7f3e12ac917cbd99d837e2f15ec8c47adde6465b425681f2da2644befd4b"
+ },
+ "coverage": {
+  "construction_binding": {
+   "status": "MATCH",
+   "covers": "glb non-null at construction; ctor-time stack-space consumption; single-architecture pointer sharing; min_laned_size wiring (Rust in-binary vs C++ source-read); SplitDatatype default gates (Rust in-binary vs C++ source-read subflow.cc:2704-2707); set_arch override path (Rust in-binary; runner E2E byte-identical)",
+   "residual_todo_ids": []
+  }
+ },
+ "residuals": [
+  "Rugra Funcdata::new has no Scope parameter (FUNCDATA-LOCALSCOPE-OWNERSHIP-0001): the canonical default Architecture stands in for scope->getArch(); the scope/owner identity assertion therefore lives C++-side only",
+  "min_laned_size raw value is spec-dependent (16 booted SLEIGH vs -1 spec-less canonical); lane-record spec loading remains an Architecture-loading gap outside this TODO"
+ ],
+ "last_updated": "2026-08-30",
+ "input": "FUNCDATA-CANONICAL-ARCH-0001 cases=construct,stack,share; arch=x86:LE:64:default (sleigh_specs x86-64.sla + x86-64-gcc.cspec, BfdArchitecture default loader over the fixture's own ELF); funcdata=(f,0x1000,0x10),(g,0x2000,0x10); observation=arch_nonnull,stack space_name,arch_identity_shared; rust_in_binary_tails=min_laned_size wiring,SplitDatatype gates,set_arch override",
+ "input_fingerprint": "sha256:47e34cb4a7c6061f8c7d437e0bef68d8522f0a67e3336821d7642f943f2c2092",
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": "gcc",
+ "analysis_options": {
+  "boot": "BfdArchitecture on sleigh_specs x86-64.sla + x86-64-gcc.cspec (startDecompilerLibrary spec-root scan -> init -> readLoaderSymbols ::)",
+  "reset": "default resetDefaultsInternal (architecture.cc:1416-1432); no OptionDatabase overrides",
+  "observation_scope": "three diffed stdout projections only; Rust-only tails (min_laned_size raw value, SplitDatatype gates, set_arch override) are in-binary assertions, C++-only identity checks (getArch()==scope->getArch(), ScopeLocal attach) stay in-fixture assertions"
+ },
+ "overall_status": "MISMATCH"
 }

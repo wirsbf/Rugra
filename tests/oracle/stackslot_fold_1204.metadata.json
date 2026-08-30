@@ -41,7 +41,24 @@
  "residuals": [
   "HTTPD param inference: ap_parse_vhost_addrs 2 params vs golden 3 (baseline over-inferred 6); param domain, separate TODO family",
   "PRINTC-DEREF form *param_1 + 0x60 vs golden *(param_3 + 0x60): print family, outside write-set",
-  "in_RSP idiom now absent from Rugra httpd output exactly as in golden; remaining per-function skeleton diffs are loop-rotation/param/cast families already registered on the board"
+  "in_RSP idiom now absent from Rugra httpd output exactly as in golden; remaining per-function skeleton diffs are loop-rotation/param/cast families already registered on the board",
+  "Debug-build overflow at scope_local_find_overlap (funcdata.rs:173, introduced 38881244; i32 size sign-extended into the u64 last-offset arithmetic) traps examples/stackfold_dbg on this corpus; the deterministic driver therefore runs release like every E2E gate; src-side fix belongs outside this fixture's write-set"
  ],
- "last_updated": "2026-08-30"
+ "last_updated": "2026-08-30",
+ "input": "HTTPD-STACKSLOT-FOLD-0001 corpus=examples/httpd ap_parse_vhost_addrs@0x12cf30 (ghidra 189B) vs @0x2cf30 (rugra 203B); golden=tests/golden/ghidra_httpd_1204.c (pinned headless run, provenance ghidra_httpd_1204.provenance.json); driver=examples/stackfold_dbg.rs (surviving=1 in_RSP-chained=0); observation=spacebase-relative STORE/LOAD reindex census + ap_parse_vhost_addrs body",
+ "input_fingerprint": "sha256:798648071e1df19345a7b318f31cf71349ea2d620d1225489a6d13d59adba2d0",
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": "gcc",
+ "analysis_options": {
+  "pipeline": "standard rugra pipeline via examples/httpd_decompile.rs with the canonical x86-64 Architecture attached (fd.set_arch before inject_raw_ops); golden produced by the pinned headless Ghidra run (full default analysis)",
+  "observation_scope": "corpus in_RSP census + ap_parse_vhost_addrs surviving LOAD/STORE pointer chains; per-function body comparison against the golden excerpt stays MISMATCH with the registered param-inference/deref/loop-rotation residual families"
+ },
+ "overall_status": "MISMATCH",
+ "comparand": {
+  "ghidra_excerpt_sha256": "feb7ecf883732fef235c2fa78c7d18efa2110fd8287383b3e2867141ab18932b",
+  "rugra_excerpt_sha256": "9750704b9a2fd3a0be0788e695fde1d5c93406d625e5688f8b934afcad6d0067",
+  "golden_sha256": "6b4c4f315c545a96ac323509fccc61fc3eb3767c39a48d8c596e77976a237d08",
+  "golden_provenance_sha256": "4c0cd266a6c58d79115acd5d3833251357a41216ae1a2d8d17a962fcc1d55e8d",
+  "runner_sha256": "6f3141a2298fba8d1af3158612ff9d228ee4e49ab3b3fa198527101ef85240a5"
+ }
 }
