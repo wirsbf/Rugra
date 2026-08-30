@@ -344,9 +344,9 @@ fn reconcile_int_minus_pointer(line: &str) -> String {
 // 语义:计数器只度量、绝不改变管线行为 —— 退役判定以计数=0 为必要证据。
 
 // RUGRA-GLUE: 幸存 pass 名单(管线顺序),见 post_process_output_legacy 内同序插桩
-const POSTFIX_PASS_NAMES: [&str; 31] = [
+const POSTFIX_PASS_NAMES: [&str; 30] = [
     "P1", "P1b", "P2", "P3", "B1", "P4", "P5", "P6", "B2", "P7",
-    "P8", "P9", "P10", "P11", "P12", "P13", "P14", "P15", "P16", "P16c",
+    "P8", "P9", "P10", "P11", "P12", "P13", "P14", "P15", "P16c",
     "B3", "P17", "P18", "B4", "Pecase", "P22", "P23", "P24",
     "P25", "P26", "P27",
 ];
@@ -370,19 +370,18 @@ const PF_P12: usize = 14;
 const PF_P13: usize = 15;
 const PF_P14: usize = 16;
 const PF_P15: usize = 17;
-const PF_P16: usize = 18;
-const PF_P16C: usize = 19;
-const PF_B3: usize = 20;
-const PF_P17: usize = 21;
-const PF_P18: usize = 22;
-const PF_B4: usize = 23;
-const PF_ECASE: usize = 24;
-const PF_P22: usize = 25;
-const PF_P23: usize = 26;
-const PF_P24: usize = 27;
-const PF_P25: usize = 28;
-const PF_P26: usize = 29;
-const PF_P27: usize = 30;
+const PF_P16C: usize = 18;
+const PF_B3: usize = 19;
+const PF_P17: usize = 20;
+const PF_P18: usize = 21;
+const PF_B4: usize = 22;
+const PF_ECASE: usize = 23;
+const PF_P22: usize = 24;
+const PF_P23: usize = 25;
+const PF_P24: usize = 26;
+const PF_P25: usize = 27;
+const PF_P26: usize = 28;
+const PF_P27: usize = 29;
 
 // RUGRA-GLUE: 逐 pass 突变计数器(每次 post_process_output 调用一个实例)
 struct PostfixStats {
@@ -1535,139 +1534,16 @@ impl EmitNoMarkup {
         }
         pfx.observe(PF_P15, &snap_p15, &pass15);
 
-        // Sixteenth pass: forward goto-to-if folding
-        // Pattern: `if (cond) goto LAB_X;` followed by code, then `LAB_X:` appears below.
-        // Fold into: `if (!cond) { ... code ... }` and remove the goto + label.
-        // Also handles plain `goto LAB_X;` → wraps remaining code in else-like block.
-        let snap_p16 = PostfixStats::snap(&pass15);
-        let mut pass16 = pass15;
-        let max_fold_passes = 3; // iterate a few times for nested patterns
-        for _fold_iter in 0..max_fold_passes {
-            let mut changed = false;
-            let mut new_lines: Vec<String> = Vec::with_capacity(pass16.len());
-            let mut i16 = 0;
-
-            while i16 < pass16.len() {
-                let trimmed = pass16[i16].trim().to_string();
-                let line_indent = pass16[i16].len() - pass16[i16].trim_start().len();
-
-                // Match: `if (cond) goto LAB_XXXX;`
-                if trimmed.contains(") goto LAB_") && trimmed.ends_with(';')
-                    && trimmed.starts_with("if (")
-                {
-                    // Extract condition and label
-                    if let Some(goto_pos) = trimmed.find(") goto LAB_") {
-                        let cond = &trimmed[4..goto_pos]; // inside "if (" ... ")"
-                        let label_with_semi = &trimmed[goto_pos + 7..]; // "LAB_XXXX;"
-                        let label_name = &label_with_semi[..label_with_semi.len() - 1]; // "LAB_XXXX"
-                        let label_def = format!("{}:", label_name);
-
-                        // Search forward for the label definition within the same function
-                        let mut label_line = None;
-                        let mut has_other_goto_to_label = false;
-                        for j in (i16 + 1)..pass16.len() {
-                            let jt = pass16[j].trim();
-                            // Stop at function boundary
-                            if jt.starts_with("/* ----") && jt.ends_with("---- */") {
-                                break;
-                            }
-                            if jt == label_def {
-                                label_line = Some(j);
-                                break;
-                            }
-                            // Check if another goto references this same label (would make folding unsafe)
-                            if jt.contains(&format!("goto {};", label_name)) {
-                                has_other_goto_to_label = true;
-                            }
-                        }
-
-                        // Only fold if:
-                        // 1. Label is found forward
-                        // 2. No other goto references the same label (single-use forward jump)
-                        // 3. The gap isn't too large (limit to ~80 lines to avoid huge indentation)
-                        if let Some(lbl_line) = label_line {
-                            if !has_other_goto_to_label && (lbl_line - i16) <= 80 {
-                                // Check that the code between goto and label is at >= the same indent
-                                let indent_str: String = " ".repeat(line_indent);
-
-                                // Negate the condition
-                                let negated = Self::negate_simple_condition(cond);
-
-                                // Emit: if (negated_cond) {
-                                new_lines.push(format!("{}if ({}) {{", indent_str, negated));
-
-                                // Emit the body (lines between goto and label), indented +2
-                                let body_indent: String = " ".repeat(line_indent + 2);
-                                for k in (i16 + 1)..lbl_line {
-                                    let body_line = &pass16[k];
-                                    let bt = body_line.trim();
-                                    if bt.is_empty() {
-                                        new_lines.push(String::new());
-                                    } else {
-                                        new_lines.push(format!("{}{}", body_indent, bt));
-                                    }
-                                }
-
-                                // Close the block
-                                new_lines.push(format!("{}}}", indent_str));
-
-                                // Skip past the label line
-                                i16 = lbl_line + 1;
-                                changed = true;
-                                continue;
-                            }
-                        }
-                    }
-                }
-
-                // Match: plain `goto LAB_XXXX;` (forward, single-use)
-                // Convert surrounding code to avoid the goto when label is close
-                if trimmed.starts_with("goto LAB_") && trimmed.ends_with(';')
-                    && !trimmed.contains("if ")
-                {
-                    let label_name = &trimmed[5..trimmed.len() - 1]; // "LAB_XXXX"
-                    let label_def = format!("{}:", label_name);
-
-                    let mut label_line = None;
-                    let mut has_other_goto_to_label = false;
-                    for j in (i16 + 1)..pass16.len() {
-                        let jt = pass16[j].trim();
-                        if jt.starts_with("/* ----") && jt.ends_with("---- */") {
-                            break;
-                        }
-                        if jt == label_def {
-                            label_line = Some(j);
-                            break;
-                        }
-                        if jt.contains(&format!("goto {};", label_name)) {
-                            has_other_goto_to_label = true;
-                        }
-                    }
-
-                    // For plain forward gotos with no other references and short gap,
-                    // just skip the intermediate dead code (it's unreachable)
-                    if let Some(lbl_line) = label_line {
-                        if !has_other_goto_to_label && (lbl_line - i16) <= 40 {
-                            // Skip lines between goto and label (dead code)
-                            // The goto itself is redundant — code falls through to label
-                            i16 = lbl_line + 1;
-                            changed = true;
-                            continue;
-                        }
-                    }
-                }
-
-                new_lines.push(pass16[i16].clone());
-                i16 += 1;
-            }
-
-            pass16 = new_lines;
-            if !changed { break; }
-        }
-        pfx.observe(PF_P16, &snap_p16, &pass16);
+        // P16 (forward goto-to-if folding) retired in POSTFIX-RETIRE-0001
+        // W2 cut 3: W1 counters proved zero mutations on both corpora
+        // (curl 190 + httpd 102 calls, both rpt rounds) - the structured
+        // emit path no longer emits single-use forward LAB_ gotos on the
+        // corpora. P16c below (fold cleanup: unreferenced labels + empty
+        // if blocks) stays ACTIVE (curl main = 264 mutated lines) and now
+        // consumes the P15 output directly.
 
         // Sixteenth pass cleanup: remove now-unreferenced labels and empty if blocks
-        let pass16_text = pass16.join("\n");
+        let pass16_text = pass15.join("\n");
         let pass16_lines: Vec<&str> = pass16_text.lines().collect();
         let snap_p16c = PostfixStats::snap(&pass16_lines);
         let mut pass16_final: Vec<String> = Vec::with_capacity(pass16_lines.len());
@@ -3108,42 +2984,6 @@ impl EmitNoMarkup {
             }
         }
         false
-    }
-
-    // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)
-    /// Negate a simple C condition expression for goto-to-if folding.
-    /// Handles common patterns: ==, !=, <, >, <=, >=, and compound && / ||.
-    fn negate_simple_condition(cond: &str) -> String {
-        let cond = cond.trim();
-
-        // Handle compound conditions with && or ||
-        // "A && B" → "!A || !B" (De Morgan) — but simpler: just wrap with !()
-        if cond.contains(" && ") || cond.contains(" || ") {
-            return format!("!({})", cond);
-        }
-
-        // Simple relational operators
-        if let Some(pos) = cond.find(" == ") {
-            return format!("{} != {}", &cond[..pos], &cond[pos + 4..]);
-        }
-        if let Some(pos) = cond.find(" != ") {
-            return format!("{} == {}", &cond[..pos], &cond[pos + 4..]);
-        }
-        if let Some(pos) = cond.find(" <= ") {
-            return format!("{} > {}", &cond[..pos], &cond[pos + 4..]);
-        }
-        if let Some(pos) = cond.find(" >= ") {
-            return format!("{} < {}", &cond[..pos], &cond[pos + 4..]);
-        }
-        if let Some(pos) = cond.find(" < ") {
-            return format!("{} >= {}", &cond[..pos], &cond[pos + 3..]);
-        }
-        if let Some(pos) = cond.find(" > ") {
-            return format!("{} <= {}", &cond[..pos], &cond[pos + 3..]);
-        }
-
-        // Fallback: wrap with !()
-        format!("!({})", cond)
     }
 
     // RUGRA-GLUE: 文本后处理补偿层(POSTFIX-RETIRE-0001 W0 登记,Ghidra 无对应物)

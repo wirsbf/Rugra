@@ -23,6 +23,12 @@ flush 结尾——这些文本 pass 在 Ghidra 无对应物，删除即向 oracl
   `!contains("if (true)")` 守卫退役事实）。PRINTC-WHILEIF-FOLD-PREFIX-0001 的
   切片逻辑随 pass 消失；MAIN-RC3 的 `while(` 豁免（P9/P17）保留。
   验证：双语料 sha256 与刀 1 后一致；计数器无漂移。
+- **刀 3（P16 前向 goto→if 折叠，管线 19/33）**：删除 P16 折叠块与其插桩点，
+  `negate_simple_condition()` helper 随之失去唯一调用点同 commit 删除；
+  P16c（折叠后清理，**唯一活跃 LAB_ 族幸存者**，curl `main`=264 行）保留，
+  输入直接改接 P15 输出（`pass15.join("\n")`）。`POSTFIX_PASS_NAMES` 31→30。
+  验证：双语料 sha256 不变；P16c 计数仍 curl 277/3、httpd 0（掩蔽零——
+  P16 零突变被删除后其下游 P16c 输入逐字节不变）。
 
 ## 2026-08-30：POSTFIX-RETIRE-0001 W1 — 逐 pass 突变计数器（env 门控，零行为差）
 
