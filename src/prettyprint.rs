@@ -344,8 +344,8 @@ fn reconcile_int_minus_pointer(line: &str) -> String {
 // 语义:计数器只度量、绝不改变管线行为 —— 退役判定以计数=0 为必要证据。
 
 // RUGRA-GLUE: 幸存 pass 名单(管线顺序),见 post_process_output_legacy 内同序插桩
-const POSTFIX_PASS_NAMES: [&str; 28] = [
-    "P1", "P1b", "P2", "P3", "B1", "P6", "B2", "P7",
+const POSTFIX_PASS_NAMES: [&str; 27] = [
+    "P1", "P1b", "P2", "B1", "P6", "B2", "P7",
     "P8", "P9", "P10", "P11", "P12", "P13", "P14", "P15", "P16c",
     "B3", "P17", "P18", "B4", "Pecase", "P22", "P23", "P24",
     "P25", "P26", "P27",
@@ -355,31 +355,30 @@ const POSTFIX_PASS_NAMES: [&str; 28] = [
 const PF_P1: usize = 0;
 const PF_P1B: usize = 1;
 const PF_P2: usize = 2;
-const PF_P3: usize = 3;
-const PF_B1: usize = 4;
-const PF_P6: usize = 5;
-const PF_B2: usize = 6;
-const PF_P7: usize = 7;
-const PF_P8: usize = 8;
-const PF_P9: usize = 9;
-const PF_P10: usize = 10;
-const PF_P11: usize = 11;
-const PF_P12: usize = 12;
-const PF_P13: usize = 13;
-const PF_P14: usize = 14;
-const PF_P15: usize = 15;
-const PF_P16C: usize = 16;
-const PF_B3: usize = 17;
-const PF_P17: usize = 18;
-const PF_P18: usize = 19;
-const PF_B4: usize = 20;
-const PF_ECASE: usize = 21;
-const PF_P22: usize = 22;
-const PF_P23: usize = 23;
-const PF_P24: usize = 24;
-const PF_P25: usize = 25;
-const PF_P26: usize = 26;
-const PF_P27: usize = 27;
+const PF_B1: usize = 3;
+const PF_P6: usize = 4;
+const PF_B2: usize = 5;
+const PF_P7: usize = 6;
+const PF_P8: usize = 7;
+const PF_P9: usize = 8;
+const PF_P10: usize = 9;
+const PF_P11: usize = 10;
+const PF_P12: usize = 11;
+const PF_P13: usize = 12;
+const PF_P14: usize = 13;
+const PF_P15: usize = 14;
+const PF_P16C: usize = 15;
+const PF_B3: usize = 16;
+const PF_P17: usize = 17;
+const PF_P18: usize = 18;
+const PF_B4: usize = 19;
+const PF_ECASE: usize = 20;
+const PF_P22: usize = 21;
+const PF_P23: usize = 22;
+const PF_P24: usize = 23;
+const PF_P25: usize = 24;
+const PF_P26: usize = 25;
+const PF_P27: usize = 26;
 
 // RUGRA-GLUE: 逐 pass 突变计数器(每次 post_process_output 调用一个实例)
 struct PostfixStats {
@@ -736,26 +735,11 @@ impl EmitNoMarkup {
             i += 1;
         }
 
-        // Second pass: remove labels that are never referenced by any goto
-        let output_text = result.join("\n");
-        let result_lines: Vec<&str> = output_text.lines().collect();
-        let snap_p3 = PostfixStats::snap(&result_lines);
-        let mut final_result: Vec<String> = Vec::with_capacity(result_lines.len());
-
-        for line in &result_lines {
-            let trimmed = line.trim();
-            if trimmed.starts_with("LAB_") && trimmed.ends_with(':') {
-                let label_name = &trimmed[..trimmed.len() - 1];
-                let goto_ref = format!("goto {};", label_name);
-                let is_referenced = result_lines.iter().any(|l| l.trim().contains(&goto_ref)
-                );
-                if !is_referenced {
-                    continue;
-                }
-            }
-            final_result.push(line.to_string());
-        }
-        pfx.observe(PF_P3, &snap_p3, &final_result);
+        // P3 (unreferenced label removal, first sweep) retired in
+        // POSTFIX-RETIRE-0001 W2 cut 6: W1 counters proved zero mutations
+        // on both corpora (both rpt rounds) - every LAB_ label emitted on
+        // the corpora is still goto-referenced at this pipeline stage.
+        let final_result = result;
 
         // Third pass: collapse consecutive blank lines
         let snap_b1 = PostfixStats::snap(&final_result);
