@@ -2086,3 +2086,34 @@ removeFromFlow 边重定向循环(cc:296,block.cc:1545-1560 形状:自末尾出�
 switch_edge 双半语义重定向入边)、op 销毁(unreachable 路径 descend2Undef +
 descendants 检查;cc:311-312 LowlevelError 降级为警告+跳过)、removeBlock。
 `remove_do_nothing_block` 返回 bool 并接通 blockRemoveInternal。
+
+## 2026-08-30:push_multiequals 完整移植(FUNCDATA-PUSHMULTIEQUALS-0001)
+
+`Funcdata::pushMultiequals`(funcdata_block.cc:84-171)从检测-only stub(每个
+活跃 phi 发 `push_multiequal: descendant rewrite not yet implemented` 警告、
+不做任何重建)补齐为完整移植:
+
+- 出块/死边锚定(cc:93-98):sizeOut==0 直接返回;>1 仅告警继续;outblock =
+  getOut(0)、outblock_ind = getOutRevIndex(0)。
+- 每 bb 内 MULTIEQUAL(cc:99-103):跳过无后代 phi;其后代扫描按 descend
+  顺序快照迭代。deadEdge 判定(cc:106-116):后代若是 outblock 内
+  MULTIEQUAL 且对 origvn 的所有读均经死边槽(outblock_ind),该读留给
+  blockRemoveInternal 的 opRemoveInput 路径;否则 needreplace=true 即跳出。
+- neednewunique(cc:118-122):origvn addrtied 且与该 phi 输出同地址 →
+  替换 varnode 用 newUnique,否则 newVarnode(size, origvn addr)。
+  isAddrTied = addrtied|insert 双标志(varnode.hh:250),Rugra 一致。
+- 人工 MULTIEQUAL 构造(cc:131-153):branches 按 outblock 入边序,bb 边槽
+  放 origvn、其余槽放 replacevn;newOp(branches.size(), outblock.start) →
+  opSetOpcode(MULTIEQUAL) → opSetOutput → opSetAllInput → opInsertBegin。
+- 后代重写(cc:156-169):构造完成后快照 descend(与 Ghidra cc:157 的
+  titer=begin() 在 opInsertBegin 之后取相同顺序),逐 op 逐槽找 origvn 读;
+  死边槽(outblock_ind + outblock 内 MULTIEQUAL)跳过,其余首个命中槽
+  opSetInput(op, replacevn, i) 后 break。
+
+验证:httpd 警告×3 消失(ap_fini_vhost_config×2/ap_pregsub×1,WARNING 行
+81→78),cc:311-312 滞留 op 信号消失;ap_fini_vhost_config 声明区清除 2 个
+搁浅局部(25→24 decl 行),skeleton 2277→2278(+1 为删变量后序号重排再分布,
+defects/numbering 均 0);curl 骨架 3095→3091(main/myprogress/
+my_get_token/parseconfig.constprop.0 仅删除 stub 警告注释,函数体逐字节
+不变,defects/numbering 均 0);cargo test 全量 17 failed 与 master 基线
+逐名一致。
