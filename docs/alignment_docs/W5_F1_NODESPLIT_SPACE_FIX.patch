@@ -1,0 +1,33 @@
+diff --git a/src/funcdata.rs b/src/funcdata.rs
+index 14f309d7..f11c3bd1 100644
+--- a/src/funcdata.rs
++++ b/src/funcdata.rs
+@@ -16516,11 +16516,21 @@ impl CloneBlockOps {
+     ) {
+         let orig_out = orig_op.0.read().unwrap().output.clone();
+         let Some(orig_vn) = orig_out else { return };
+-        let (size, addr) = {
++        // EXPERIMENT-W5 (TEMP, will revert): preserve the original output's
++        // ADDRESS SPACE. Ghidra newVarnodeOut(size, origvn->getAddr(), op)
++        // creates at the FULL address (funcdata_block.cc:996); Rugra's
++        // new_varnode_out adapter pins Register space.
++        let (size, addr, space) = {
+             let v = orig_vn.read().unwrap();
+-            (v.size, v.loc)
++            (v.size, v.loc, v.address_space)
+         };
+-        let new_vn = fd.new_varnode_out(size, addr, clone_op);
++        let new_vn = fd.vbank.create_def_with_space(size, space, addr.as_u64(), &clone_op.0);
++        clone_op.0.write().unwrap().output = Some(new_vn.clone());
++        let _ = fd.assign_high(&new_vn);
++        if size >= fd.min_laned_size as usize {
++            fd.check_for_laned_register(size, space, addr);
++        }
++        fd.set_varnode_properties(&new_vn);
+         // Copy varnode flag subset (funcdata_block.cc:1001-1004).
+         let orig_flags = orig_vn.read().unwrap().flags;
+         let vflag_mask = crate::varnode::varnode_flags::EXTERNREF
+#
+# W5 validated patch (NOT applied by w-w5 — funcdata.rs is leased to scopefix2).
+# Validation: curl P23 8->5, defects=0, numbering=0, skeleton 3090->3085;
+# httpd unchanged (2274/0/0, P23=7). Baseline restored after experiment.
