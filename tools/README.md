@@ -229,23 +229,23 @@ wrapper。当前 corpus 的迁移计划应为 `auto=9`、`manual=0`、`tombstone
 
 后续 raw scheme-2 变化写入独立、append-only 的
 `FUNCTION_ID_CONTINUITY.json`，绝不覆盖上述历史 migration。当前 checkpoint 固定为
-`ac7a35266cf5612ac6d8bb340f53a4a946418d14`（src tree
-`9ecc44287480fb5dcf5c6698756351596eeeb1f5`，REGISTRY-CHECKPOINT-ADVANCE 第八窗：
-分支线锚 ac7a3526（^1=c07e2345，master 侧 38c3338a）折叠多窗批
-（dowhile 吸收链 forceOutputNum/forceFalseEdge、push88 :PUSH 构造器、
-stackslot fold canonical-arch attach、hdefects ActionDoNothing 链 + printc
-emitBlockDoWhile/Goto、canonical arch Funcdata::new、isOpIdentical typedef-strip、
-castInput 双层守卫、W0 POSTFIX-RETIRE 死代码五笔）。
-与第六/七窗相同拓扑：分支 tip 已被 master 包含，--no-ff
-合并树 == master tip，HEAD:src 不变量直接钉在锚的 src 树上），从 baseline target
-连续重放 432 个
+`7c955a789a953f7568162e2904c131db2a9a1124`（src tree
+`f6bb5f01db453532f7be202b5e1e4a9e6bb5822b`，REGISTRY-CHECKPOINT-ADVANCE 第九窗
+（w-registry10）：分支线锚 7c955a78（^1=b382a54f，master 侧 af678926，比任务书
+c743bf26 多一个 docs-only salvage commit）折叠多窗批（W2 postfix 九刀、W1 逐 pass
+突变计数器 PostfixStats、callin0 spec-less CALL in(0) 守卫、pushMultiequals、
+livearm httpd CBRANCH 出边序、shift-flags 三连 + 旧 shift arm 退役、collapse4
+findExit container arm + checkSwitchSkips、FuncProto-void print 投影守卫、
+scopeBreak goto_type 反证 fixture）。与第六/七/八窗相同拓扑：分支 tip 已被 master
+包含，--no-ff 合并树 == master tip，HEAD:src 不变量直接钉在锚的 src 树上），从
+baseline target 连续重放 437 个
 first-parent commit。checkpoint 推进是幂等重跑流程：advance 五常量(commit/tree/src/parent/
 count)→重生成 ledger→零漂移 probe 枚举窗口移除/新增→逐条 git 证据定性(reviewed transition/
 tombstone/ephemeral/automatic)→以 probe 全量重算 EXPECTED_* allowlist→`--reconcile-continuity`
 →重生成→`--check`。自动 continuity 仅接受同 path/module/owner/name 的唯一 1→1，且签名
 差异严格限于参数 pattern 起始的 binding `mut` 或 rustfmt 尾分隔符，同时必须独立复算同 patch hunk 与相同非空
 annotation；`&mut`、`&'a mut`、`*mut` 和 `&mut pattern` 不规范化，也不改变 raw ID 公式。
-当前文件记录 493 条 lineage、1002 个 `introduced_live` 与 61 个 tombstone。loader 先解析 baseline alias，再组合 continuity terminal；任一
+当前文件记录 494 条 lineage、1027 个 `introduced_live` 与 65 个 tombstone。loader 先解析 baseline alias，再组合 continuity terminal；任一
 chain 断裂、1→2/2→1、跨层 token 复用、terminal collision/缺失、event commit/blob、
 first-parent、projection hash/count、dirty/src tree 漂移均 rc=2。continuity tombstone 只作
 诊断，永不进入自动 replacement。schema 2 允许 reviewed tombstone 覆盖 post-baseline
