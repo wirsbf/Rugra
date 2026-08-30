@@ -22,9 +22,29 @@
   "oracle runs the actions at heritage pass 0 (its VarnodeProps cc:1282-1342 has no pass gate); Rugra sets heritage pass 1 to open its pass>0 gate — the exact E2E second-mainloop state where the clobber fired (DECOMPILE prefix 18->19 bisect)",
   "projection lines sorted by (kind, target): bank insertion order differs between the flow-driven oracle builder and the inject-driven Rugra builder"
  ],
+ "architecture": "x86:LE:64:default (examples/curl real code, my_fwrite @0x3460; oracle BfdArchitecture chain vs Rugra inject-path Funcdata)",
+ "compiler_spec": "sleigh_specs/x86-64-gcc.cspec (default prototype models; the fixture observes CALL in(0) consumption, not prototype application)",
+ "analysis_options": {
+  "entrypoint": "my_fwrite @0x3460: natural flow (startProcessing) + ActionDefaultParams + ActionDeadCode::apply + ActionVarnodeProps::apply on both sides",
+  "prestate": "oracle: followFlow attaches FuncCallSpecs per call (flow.cc:683-690), heritage pass 0; Rugra: inject-path CALL with static has_callspec flag but no FuncCallSpecs (CALLSPEC-DRIVER-0001 gap), heritage pass 1 (the E2E second-mainloop state where the clobber fired)",
+  "observation": "per (kind,target) projection of in(0): target entry address, in0_constant, in0_consume_full over call/branch/cbranch sites in my_fwrite",
+  "random_seed": "none",
+  "error_injection": "none"
+ },
+ "input": "COREACTION-CALLIN0-CLOBBER-0001 corpus=examples/curl my_fwrite@0x3460; inputs are the two fixture sources (cpp oracle harness + rust comparand harness), fingerprint = sha256 over cpp||rust fixture bytes in that order",
+ "input_fingerprint": "sha256:d600aac0e2eaee61e071c771a306edb4a236185b71086ef14e8a82a9d5798e7f",
  "comparand_sha256": {
   "cpp_fixture_sha256": "99ce66975783553a62498c5ac60dd9cc6391f4552a7fba8a1798228a9c9b3500",
   "rust_fixture_sha256": "e08373d8813a1a27add23499c1f3f691c0407085fbaa86a9ab0edfe3aa8ee044",
   "rugra_coreaction_sha256": "2ffd798ff12c4c1c8bd8a679d86feea58817d6b22a5f4622ea44b7252332bedc"
- }
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "99ce66975783553a62498c5ac60dd9cc6391f4552a7fba8a1798228a9c9b3500",
+  "rust_fixture_sha256": "e08373d8813a1a27add23499c1f3f691c0407085fbaa86a9ab0edfe3aa8ee044",
+  "rugra_coreaction_sha256": "2ffd798ff12c4c1c8bd8a679d86feea58817d6b22a5f4622ea44b7252332bedc",
+  "runner_sha256": "85b6bcabc7bf7c3ac39a3ab2928dc28e36cc10d508fd4c1d56d42cf6366d99f7"
+ },
+ "expected_ghidra_stdout_sha256": "7c12f19092ff1de5e89c75d761e5d7bca7b0a294c8ca5d64fb58bc81f872fc15",
+ "expected_rugra_stdout_sha256": "7c12f19092ff1de5e89c75d761e5d7bca7b0a294c8ca5d64fb58bc81f872fc15",
+ "pin_provenance": "bilateral MATCH re-verified on the 7c955a78 window tree (runner staging TMPDIR=/home/wirs/.cache/rugra-w10-stage); pin = sha256 of the five (kind,target) projection lines both sides produced byte-identically"
 }

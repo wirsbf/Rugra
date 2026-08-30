@@ -7629,7 +7629,7 @@
     },
     {
       "id": "blockstruct_dowhile_absorb_1204",
-      "description": "BlockList cat force-steps (forceOutputNum composite self-loop + forceFalseEdge, block.cc:880-889) enabling the do-while absorption chain: goto->cat->dowhile event sequence and composite out-edge state versus locked Ghidra 12.0.4",
+      "description": "BlockList cat force-steps (forceOutputNum composite self-loop + forceFalseEdge, block.cc:880-889) enabling the do-while absorption chain: goto->cat->dowhile event sequence and composite out-edge state versus locked Ghidra 12.0.4 [BLOCKACTION-DOWHILE-ABSORB-0001; main do_while 0->5=golden; 126/126 rule events aligned; cross-review PENDING; bilateral registration anchored at rust_base_commit f4c2d017, oracle e40ed130 (registry global)]",
       "runner": [
         "tools/run_blockstruct_dowhile_absorb_oracle.sh"
       ],
@@ -7641,17 +7641,30 @@
       "evidence_status": "MATCH",
       "cache": {
         "metadata": "tests/oracle/blockstruct_dowhile_absorb_1204.metadata.json",
-        "oracle_commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-        "rust_base_commit": "f4c2d017ff1bcb00c9102132c616288553c09f7e"
+        "tools": {
+          "runner": "tools/run_blockstruct_dowhile_absorb_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/blockstruct_dowhile_absorb_1204.cc",
+          "fixture_source_2": "tests/oracle/blockstruct_dowhile_absorb_1204.rs"
+        }
       },
       "impact": {
-        "todo_ids": [
-          "BLOCKACTION-DOWHILE-ABSORB-0001"
+        "paths": [
+          "src/blockaction.rs",
+          "tests/oracle/blockstruct_dowhile_absorb_1204.cc",
+          "tests/oracle/blockstruct_dowhile_absorb_1204.rs",
+          "tools/run_blockstruct_dowhile_absorb_oracle.sh"
         ],
-        "src_files": [
-          "src/blockaction.rs"
+        "rust_function_ids": [
+          "RG-F-6f4fa4078b6b3a2f6a2f",
+          "RG-F-0e8ed93409d11e65e670",
+          "RG-F-d18af6e7aacac4ddb137"
         ],
-        "notes": "main do_while 0->5=golden; 126/126 rule events aligned; cross-review PENDING"
+        "ghidra_function_ids": [
+          "GH12-F-d345bfb9c1f5620afdb6",
+          "GH12-F-dc3cd1632f00bcf8f3a5"
+        ]
       }
     },
     {
@@ -7680,7 +7693,28 @@
         "paths": [
           "src/block.rs",
           "src/blockaction.rs",
-          "src/printc.rs"
+          "src/printc.rs",
+          "tests/oracle/blockstruct_scopebreak_gototype_1204.cc",
+          "tests/oracle/blockstruct_scopebreak_gototype_1204.rs",
+          "tools/run_blockstruct_scopebreak_gototype_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-03588febabb645db36d5",
+          "RG-F-637558160a3139f54a5a",
+          "RG-F-e12d018bda934959fe97",
+          "RG-F-2a1c4c6151d8d8414480",
+          "RG-F-86b88ce6876999f896cf",
+          "RG-F-64b1f18d7f2a90b378a9",
+          "RG-F-a176e923c63403710964"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-fb73df3250386b005728",
+          "GH12-F-11fdb737b48f75ebac4d",
+          "GH12-F-01274f347f157249de7f",
+          "GH12-F-790f33122290d19d41c1",
+          "GH12-F-593244805f515488a7ce",
+          "GH12-F-884a4c52ee1afd342544",
+          "GH12-F-1bcf1c228ba3eb0b1d0e"
         ]
       }
     },
@@ -7803,6 +7837,84 @@
         ],
         "ghidra_function_ids": [
           "GH12-F-472f3b78edfb9031015e"
+        ]
+      }
+    },
+    {
+      "id": "coreaction_callin0_clobber_1204",
+      "description": "COREACTION-CALLIN0-CLOBBER-0001 bilateral CALL in(0) coderef-survival fixture on curl my_fwrite @0x3460 after the natural flow + ActionDefaultParams + ActionDeadCode::apply + ActionVarnodeProps::apply: oracle markConsumedParameters first-operand full-consume (coreaction.cc:3840-3857, 'In all cases the first operand is fully consumed') vs the Rugra spec-less CALL in(0) consume guard (780c01fd) — without the guard the projection degrades to target=0x0 in0_constant=1 (the FUN_0 clobber, httpd 63 sites); inject-path CALLs carry the static has_callspec flag without FuncCallSpecs (CALLSPEC-DRIVER-0001 gap) [bilateral MATCH re-verified at the 7c955a78 window tree]",
+      "runner": [
+        "tools/run_coreaction_callin0_clobber_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/coreaction_callin0_clobber_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_coreaction_callin0_clobber_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/coreaction_callin0_clobber_1204.cc",
+          "fixture_source_2": "tests/oracle/coreaction_callin0_clobber_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/coreaction.rs",
+          "tests/oracle/coreaction_callin0_clobber_1204.cc",
+          "tests/oracle/coreaction_callin0_clobber_1204.rs",
+          "tools/run_coreaction_callin0_clobber_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-ae033fdaa9b8f29b0870",
+          "RG-F-24c0cd230152c6686738",
+          "RG-F-8c9f8d468ae41564a3ce"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-5742815465a4410aa3e2",
+          "GH12-F-ca197d5080f770eae5e9",
+          "GH12-F-10c3e58560622373958d"
+        ]
+      }
+    },
+    {
+      "id": "funcdata_pushmultiequals_1204",
+      "description": "FUNCDATA-PUSHMULTIEQUALS-0001 bilateral pushMultiequals fixture (funcdata_block.cc:84-171): reader_beyond needreplace construction+rewrite, dead_edge_only no-construction path, addrtied_unique neednewunique flag crossing — artificial MULTIEQUAL construction, branch order, dead-edge scan and unique-renaming chain on the locked 12.0.4 oracle vs the Rugra port (8e76b30a; body-only continuation of the already-live push_multiequals class) [bilateral 3/3 projections MATCH re-verified at the 7c955a78 window tree]",
+      "runner": [
+        "tools/run_funcdata_pushmultiequals_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/funcdata_pushmultiequals_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_funcdata_pushmultiequals_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/funcdata_pushmultiequals_1204.cc",
+          "fixture_source_2": "tests/oracle/funcdata_pushmultiequals_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/funcdata.rs",
+          "tests/oracle/funcdata_pushmultiequals_1204.cc",
+          "tests/oracle/funcdata_pushmultiequals_1204.rs",
+          "tools/run_funcdata_pushmultiequals_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "RG-F-37e389dfd7d2edc0fb77"
+        ],
+        "ghidra_function_ids": [
+          "GH12-F-fd1ad7070159522b95b9"
         ]
       }
     }

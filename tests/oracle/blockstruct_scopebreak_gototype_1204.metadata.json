@@ -20,11 +20,32 @@
   "identity reduced to node TYPES (collapse creates fresh BlockCopy nodes whose indices differ between tree builders)",
   "oracle-side Vertex::negateCondition is a no-op override (synthetic leaf has no PcodeOp condition; the flip only affects condition text/edge order, observed order-free)"
  ],
+ "architecture": "locked synthetic plain FlowBlock graphs built through production BlockGraph APIs (per-case UNIQUE block indices/addresses; structure_loops entry state per blockaction.cc:2177-2180); no AddrSpace, no Funcdata, no PcodeOps",
+ "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
+ "analysis_options": {
+  "entrypoint": "BlockGraph::scopeBreak(-1,-1) fan-out after structureLoops labeling and CollapseStructure::collapseAll (Rugra: scope_break/mark_unstructured on the same production path)",
+  "prestate": "per-case fresh BlockGraph, edges added in a fixed creation order; loop labels established before collapse; gotoPrints transport observed before markUnstructured",
+  "observation": "per-goto (gototype, targ_unstructured) projection plus the forward_exit_goto gotos=0 control; case stream fixed in the fixture sources",
+  "random_seed": "none",
+  "error_injection": "none"
+ },
+ "input": "BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001 cases=loop_exit_goto,nested_two_level_goto,dowhile_body_goto,forward_exit_goto; inputs are the two fixture sources (cpp oracle harness + rust comparand harness), fingerprint = sha256 over cpp||rust fixture bytes in that order",
+ "input_fingerprint": "sha256:42ec461021a0cf9ef2a6e7e278b5e4968ba63726b85728983d609f3180e3b6aa",
  "comparand_sha256": {
   "cpp_fixture_sha256": "69267b1e4f365aad1247f1d2e4e89c1fdbd60b348189b95dfb6a0bed47166cba",
   "rust_fixture_sha256": "97f7798ae742882d7833bab2f8e25572f08b4ab5600e79a7c534c4b581276e59",
-  "rugra_block_sha256": "537054fa68d8d3d5baed80d0c40bdef3c2e61e77ebd92fe6d0f684a0c0bae821",
-  "rugra_blockaction_sha256": "d7cc944fe7bd6af355af77e961af092e9b500a7f024ac5cc477485f7dbf0da92",
-  "rugra_printc_sha256": "23bdb2fd0f3b21b761b9aa4f56889a3490c48b180244105eab9d5268a5d55025"
- }
+  "rugra_block_sha256": "d520b7024d805bf1e860e97e2d2da79416f66387fed30afdc1b21d0e7349c208",
+  "rugra_blockaction_sha256": "80a08d1736cb7574695615e1f7d7c2debfca8c45821ed159f900a03e1d5d50e9",
+  "rugra_printc_sha256": "81d0c1d755cdf5afa7834cfbdedfd4373ed55db2e421854e96a2909e7690ec76",
+  "runner_sha256": "7c25982d3321dc348bdf708135b5442a915a923174f90cab40c8746dce785814",
+  "repin_note": "rugra block/blockaction/printc source pins re-anchored to the 7c955a78 window tree (window src deltas: block.rs debug helper trio 07678863, blockaction.rs find_exit container arm + extend_to_container/check_switch_skips 07678863, printc.rs emit_flow_basic rustfmt reflow 0b067de5 + void-guard family d37cef07); observation re-verified bilateral on the re-pinned tree"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "69267b1e4f365aad1247f1d2e4e89c1fdbd60b348189b95dfb6a0bed47166cba",
+  "rust_fixture_sha256": "97f7798ae742882d7833bab2f8e25572f08b4ab5600e79a7c534c4b581276e59",
+  "runner_sha256": "7c25982d3321dc348bdf708135b5442a915a923174f90cab40c8746dce785814"
+ },
+ "expected_ghidra_stdout_sha256": "e5cd863aeb866d749006544788429ae35964e3a7f9fa62e3afab50d523df2a50",
+ "expected_rugra_stdout_sha256": "e5cd863aeb866d749006544788429ae35964e3a7f9fa62e3afab50d523df2a50",
+ "pin_provenance": "bilateral MATCH re-verified on the re-pinned 7c955a78 window tree (runner staging TMPDIR=/home/wirs/.cache/rugra-w10-stage); pin = sha256 of the four case blocks (loop_exit_goto / nested_two_level_goto / dowhile_body_goto / forward_exit_goto) both sides produced byte-identically — nested_two_level_goto keeps gototype=1 targ_unstructured=1, the disproof record"
 }
