@@ -2751,7 +2751,10 @@ impl X86Lifter {
             "shl" | "sal" => {
                 self.lift_shift(inst, ShiftDir::Left, &mut ops);
             }
-            "shr" | "sar" => {
+            "shr" => {
+                self.lift_shift(inst, ShiftDir::Right, &mut ops);
+            }
+            "sar" => {
                 if inst.operands.len() == 2 {
                     if let Some(src) = self.parse_operand(&inst.operands[1], &mut ops) {
                         if let Some((dst, mem_size)) =

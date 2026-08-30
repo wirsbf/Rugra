@@ -192,3 +192,15 @@
   投影规范化逐 op 对比(uniq 临时 id 按首现序规范化)——29/29 shl 形态
   MATCH(/tmp/w-shifts-dump-sleigh.out / w-shifts-compare-c1.out);
   shr/sar 暂留旧臂至 c2/c3。
+
+### 2026-08-30:X86LIFT-SHIFTS-FLAGS-0001 c2 — shr 全形态(w-shifts)
+- `shr` 路由到 lift_shift(ShiftDir::Right),同 shl 三计数形态分派:
+  - imm/cl 形:CF 位 = `INT_NOTEQUAL(INT_AND(save >> (count-1), 1), 0)`
+    (shl 是 INT_SLESS);**OF = count==1 ? SLESS(save,0) : OF 读保存的原始
+    值**(shl 读 post-value 新值);值 op INT_RIGHT。
+  - by-one 形:`t0=INT_AND(rm,1:S); CF=INT_NOTEQUAL(t0,0:S)` 直写;**8-bit
+    时 CF 由 INT_AND 直接输出**(dump `-- shr al,1` [0]、`-- shr byte
+    [rbx],1` [1]);`OF=COPY(0)` 在值 op **之前**;SF/ZF/PF 直写无 gate。
+- 双侧证据:14/14 shr 形态 MATCH(累计 43/58;14 个 sar 留旧臂;1 个
+  index-address 形态带 w-iced F5 地址 op 序残差——44 个 shift 语义 op
+  全 MATCH,仅 3-op 地址前缀异序,compute_mem_addr SIB 序,另行任务)。
