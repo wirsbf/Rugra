@@ -196,6 +196,188 @@ pub fn front_leaf_basic(
     front_leaf(&coerced)
 }
 
+// RUGRA-GLUE: diagnostic front-leaf address for BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001
+/// Debug helper: the front leaf's start address after descending BlockCopy
+/// wrappers into the wrapped original (composites carry no start of their
+/// own; BlockCopy inherits the null default). Used by the collapse trace
+/// prints (blockaction.rs IRRED-SW) and print_tree_dbg.
+pub fn dbg_front_leaf_start_addr(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+) -> u64 {
+    let descend = |mut cur: Arc<RwLock<dyn FlowBlock + Send + Sync>>| {
+        for _ in 0..8 {
+            let next = {
+                let r = cur.read().unwrap();
+                if let Some(c) = r.as_any().downcast_ref::<BlockCopy>() {
+                    Some(c.original.clone())
+                } else {
+                    None
+                }
+            };
+            match next {
+                Some(n) => cur = n,
+                None => break,
+            }
+        }
+        cur
+    };
+    let mut cur = descend(bl.clone());
+    if let Some(leaf) = front_leaf(&cur) {
+        cur = descend(leaf);
+        cur.read().unwrap().get_start_addr().as_u64()
+    } else {
+        cur.read().unwrap().get_start_addr().as_u64()
+    }
+}
+
+// RUGRA-GLUE: diagnostic tree dumper for BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001
+/// Debug-only replica of the `FlowBlock::printTree` recursion (block.cc:616)
+/// covering every composite Rugra defines (Ghidra's virtual printTree does
+/// this via the virtual dispatch): node index, type, front-leaf address, and
+/// for unstructured nodes (BlockGoto / if-goto) target + goto_type +
+/// precomputed prints flag. No oracle counterpart line-for-line; used by the
+/// curl/httpd drivers' RUGRA_DUMP_FUNC hook and the tree-dump example.
+pub fn print_tree_dbg(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    depth: usize,
+    out: &mut String,
+) {
+    // RUGRA-GLUE: debug address stringifier for the tree dumper above
+    fn addr_of(bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) -> String {
+        let a = dbg_front_leaf_start_addr(bl);
+        if a == 0 {
+            "?".to_string()
+        } else {
+            format!("{:#x}", a)
+        }
+    }
+    let rg = bl.read().unwrap();
+    let indent = "  ".repeat(depth);
+    let idx = rg.get_index();
+    match rg.get_type() {
+        BlockType::Graph => {
+            if let Some(g) = rg.as_any().downcast_ref::<BlockGraph>() {
+                out.push_str(&format!("{}#{} Graph [{}..]\n", indent, idx, addr_of(bl)));
+                for c in &g.blocks {
+                    print_tree_dbg(c, depth + 1, out);
+                }
+            }
+        }
+        BlockType::List => {
+            if let Some(l) = rg.as_any().downcast_ref::<BlockList>() {
+                out.push_str(&format!("{}#{} List [{}..]\n", indent, idx, addr_of(bl)));
+                for c in &l.children {
+                    print_tree_dbg(c, depth + 1, out);
+                }
+            }
+        }
+        BlockType::If => {
+            if let Some(bif) = rg.as_any().downcast_ref::<BlockIf>() {
+                if let Some(gt) = &bif.goto_target {
+                    out.push_str(&format!(
+                        "{}#{} IFGOTO cond=#{} target={}(#{}) goto_type={}\n",
+                        indent,
+                        idx,
+                        bif.condition.read().unwrap().get_index(),
+                        addr_of(gt),
+                        gt.read().unwrap().get_index(),
+                        bif.goto_type
+                    ));
+                    print_tree_dbg(&bif.condition, depth + 1, out);
+                } else {
+                    out.push_str(&format!(
+                        "{}#{} If cond=#{}\n",
+                        indent,
+                        idx,
+                        bif.condition.read().unwrap().get_index()
+                    ));
+                    print_tree_dbg(&bif.condition, depth + 1, out);
+                    out.push_str(&format!("{}  then:\n", indent));
+                    print_tree_dbg(&bif.if_body, depth + 1, out);
+                    if let Some(eb) = &bif.else_body {
+                        out.push_str(&format!("{}  else:\n", indent));
+                        print_tree_dbg(eb, depth + 1, out);
+                    }
+                }
+            }
+        }
+        BlockType::Goto => {
+            if let Some(g) = rg.as_any().downcast_ref::<BlockGoto>() {
+                let tgt = g
+                    .target_dyn
+                    .as_ref()
+                    .map(|t| {
+                        format!(
+                            "{}(#{})",
+                            addr_of(t),
+                            t.read().unwrap().get_index()
+                        )
+                    })
+                    .unwrap_or_else(|| "none".into());
+                out.push_str(&format!(
+                    "{}#{} Goto target={} goto_type={} prints={}\n",
+                    indent,
+                    idx,
+                    tgt,
+                    g.goto_type,
+                    g.prints_precomputed
+                ));
+                if let Some(w) = &g.wrapped {
+                    print_tree_dbg(w, depth + 1, out);
+                }
+            }
+        }
+        BlockType::DoWhile => {
+            if let Some(dw) = rg.as_any().downcast_ref::<BlockDoWhile>() {
+                out.push_str(&format!(
+                    "{}#{} DoWhile cond=#{}\n",
+                    indent,
+                    idx,
+                    dw.condition.read().unwrap().get_index()
+                ));
+                print_tree_dbg(&dw.condition, depth + 1, out);
+            }
+        }
+        BlockType::WhileDo => {
+            if let Some(wd) = rg.as_any().downcast_ref::<BlockWhileDo>() {
+                out.push_str(&format!(
+                    "{}#{} WhileDo cond=#{} body=#{}\n",
+                    indent,
+                    idx,
+                    wd.condition.read().unwrap().get_index(),
+                    wd.body.read().unwrap().get_index()
+                ));
+                print_tree_dbg(&wd.condition, depth + 1, out);
+                print_tree_dbg(&wd.body, depth + 1, out);
+            }
+        }
+        BlockType::Switch => {
+            if let Some(sw) = rg.as_any().downcast_ref::<BlockSwitch>() {
+                out.push_str(&format!(
+                    "{}#{} Switch control=#{} numcases={}\n",
+                    indent,
+                    idx,
+                    sw.control.read().unwrap().get_index(),
+                    sw.cases.len()
+                ));
+                print_tree_dbg(&sw.control, depth + 1, out);
+                for c in &sw.cases {
+                    print_tree_dbg(c, depth + 1, out);
+                }
+            }
+        }
+        other => {
+            out.push_str(&format!(
+                "{}#{} {:?} @{}\n",
+                indent,
+                idx,
+                other,
+                addr_of(bl)
+            ));
+        }
+    }
+}
+
 // RUGRA-GLUE: one nesting level of the `getParent()->nextFlowAfter(this)`
 // recursion (block.cc:1335-1353) used by the tree-wide gotoPrints evaluation.
 /// For each component, its in-flow successor is the next sibling's front leaf

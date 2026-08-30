@@ -1,5 +1,55 @@
 # `prettyprint.rs` API Reference
 
+## 2026-08-30：POSTFIX-RETIRE-0001 W3 — P22 签名改写的词边界修复（glob_url 回归 golden）
+
+W3 对 P22（`fix_unary_deref_declarations`）活跃突变的排查结论（curl 2/2、
+httpd 2/2）：
+
+- **glob_url（curl）= P22 自身缺陷**：体内合法解引用 `*glob` 使 `glob` 入
+  derefed 集；签名内联改写的 `format!("{} {}", ty, name)` 模式（`int glob`）
+  **子串命中了函数名区** `int glob_url(`，把返回类型改写成
+  `char *glob_url(...)`——golden 保持 `int glob_url`，且 `return 0;` 随之
+  变成从 char* 函数返回 int 的病态形态。修复：模式匹配加**词边界**（匹配
+  前后字符均不得为 `[A-Za-z0-9_]`，前侧继续排除 `*`）——与
+  `count_word_occurrences` 同一边界契约。修后 curl 输出恰一行变化
+  （`char *glob_url(` → `int glob_url(`，与 golden 签名逐字节一致），
+  curl 差分 3091→**3089**/0/0，httpd 字节不变；P22 计数 curl 2/2→**1/1**。
+- **glob_set（curl）/ ap_stripprefix、ap_count_dirs（httpd）= 非 emit 层根因**
+  （保留突变）：`int pos`→`char *pos`、`long param_1`→`char *param_1` 的根因
+  是 FuncProto 参数类型为标量而 IR 有 `*param` 解引用（golden 中
+  `ap_count_dirs(char *param_1)` 为指针类型）——归 varmap/类型传播域
+  （W5，PTRARITH/TYPEOPFIX 族），printc emit 无对应判定点，本层不动。
+
+## 2026-08-30：POSTFIX-RETIRE-0001 W3 — P13 void 拆分退役（PRINTC-VOIDCALL-0001 正解落地）
+
+路线图 W3 节（FuncProto void + opReturn/opCall 形态 → P13）。P13（`return f();` →
+`f(); return;` 文本拆分，**硬编码 13 个 libc 名**——机制 D 红旗）按 W1 计数器在
+双语料双轮零突变，但其退役前必须把 void 判定迁回 oracle 真语义，否则表外任何
+void 函数会静默产出非法 C（`return pthread_mutex_lock();` 类 gcc error）。
+
+- **正解（本 commit，printc.rs 侧）**：oracle 中 void 调用语句形态来自 IR——
+  `ActionFuncLink::funcLinkOutput`（coreaction.cc:1521-1541）对 **output-locked
+  void** 被调方保持 CALL 无输出，`PrintC::emitExpression`（printc.cc:2471-2476）
+  的 `outvn != 0` 测试随之不打印赋值 LHS（语句形态 `f(args);`），`opReturn`
+  （printc.cc:758-761）对无值 RETURN 打印裸 `return;`。Rugra 在 print 层加
+  FuncProto-void 投影守卫（详见 `docs/api/printc.md` 同日节）：callspec
+  `prototype.output_type_locked && return_type==Void` 时投影无输出字节。
+- **本文件改动**：删除 P13 拆分块（`void_funcs` 硬编码表 + 行改写循环），P14
+  输入直接改接 P12 输出 `final_out`；计数器 `POSTFIX_PASS_NAMES` 24→23，
+  `PF_P13` 删除（后续索引前移 P14..P27）。幸存名单：
+  B1 P6 B2 P7 P8 P9 P10 P11 P12 P14 P15 P16c B3 P17 P18 B4 Pecase
+  P22 P23 P24 P25 P26 P27。
+- **验证**：curl `801614e0…`/httpd `e18b4503…` 与删除前**逐字节一致**（守卫在
+  现语料上 dormant——`free`/`exit` 调用的输出已被 action 层的
+  `func_link_output` 移除，黄金语料本就按语句形态渲染）；差分
+  curl 3091/0/0 + httpd 2278/0/0 维持；计数器无漂移（P13 字段消失、其余相等）。
+- **dormant 分支回归测试**：`printc.rs` 单测
+  `test_void_callee_call_prints_statement_and_bare_return`（构造"CALL 输出幸存
+  + callspec output-locked void"形态，断言语句形态 + 裸 return + 无
+  `return f();`）与负向对照 `test_nonvoid_locked_callee_keeps_assignment_lhs`
+  （locked 非 void 保留赋值 LHS）。oracle 侧真值锚点：锁定 golden 语料的
+  `free(pcVar11);` 语句形态（`tests/golden/ghidra_curl_1204.c`）。
+
 ## 2026-08-30：POSTFIX-RETIRE-0001 W2 — A 队列零突变 pass 退役（尾部先行，一 pass 一 commit）
 
 路线图 W2 节：W1 计数器实证 **A 队列 9 个 pass 双语料双轮零突变**

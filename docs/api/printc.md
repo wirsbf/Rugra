@@ -1,5 +1,42 @@
 # `printc.rs` API Reference
 
+## 2026-08-30：FuncProto-void 打印投影守卫（PRINTC-VOIDCALL-0001，POSTFIX-RETIRE-0001 W3）
+
+oracle 的 void 调用语句形态由 IR 决定，不由 print 层拆分：
+`ActionFuncLink::funcLinkOutput`（coreaction.cc:1521-1541）先 `opUnsetOutput`
+拆除 CALL 输出，仅在 callspec **output-locked 且非 void** 时重建
+（`newVarnodeOut`，cc:1540-1551）；`PrintC::emitExpression`（printc.cc:2471-2476）
+以 `outvn != 0` 决定赋值 LHS（无输出 ⇒ 语句形态 `f(args);`），`opReturn`
+（printc.cc:758-761）仅在 `numInput()>1` 时打印返回值（无值 ⇒ 裸 `return;`）。
+Rugra 的 action 层已移植同判定（coreaction.rs `ActionFuncLink::func_link_output`
+的 void 臂），但 print 层此前无投影：CALL 输出若幸存（action 顺序噪音）即渲染
+非法 C `return free(p);`，靠 prettyprint 的 P13 硬编码 13-libc 表文本拆分兜底。
+
+本 commit 在 print 层按 callspec 的 FuncProto 投影 oracle 无输出字节：
+
+- **`void_callee_call_addrs: HashSet<u64>`**（新字段）：`doc_function` 快照阶段
+  从 `fd.callspecs` 收集 `prototype.output_type_locked &&
+  return_type.get_metatype()==Void` 的 CALL 指令地址（键 =
+  `FuncCallSpecs::new_for_op` 存的 `op.get_addr()`）。解锁的 void-default
+  proto **不**入集（oracle funcLinkOutput 只对 locked void 保持无输出，解锁
+  输出归 trial 恢复裁决）。
+- **`callee_returns_void(&self, op)`**：print 时判定（CALL + 地址在集）。
+- **`emit_expression_rpn`**：LHS 守卫——void 调用不推 assignment token/atom
+  （对齐 printc.cc:2471-2476 `outvn != 0`）；legacy 孪生 `op_call` 同守卫。
+- **`dispatch_op_rpn` RETURN 臂 + legacy `op_return`**：in(1) 的 def 是
+  void-callee CALL 时打印裸 `return`（对齐 cc:758-761 numInput()==1 形态）。
+- **两个语句循环的 implied 跳过守卫**（`emit_block_basic_rpn` /
+  `emit_block_ops`）：void-callee CALL 且其输出消费者全为 RETURN 时不按
+  implied 跳过（oracle IR 中该 CALL 无输出、必然作为语句打印）；非 RETURN
+  消费者保持 legacy 内联行为，避免调用打印两次。
+
+**验证**：curl/httpd E2E 输出 sha256 与改动前逐字节一致（守卫 dormant——
+现语料 void 调用输出已被 action 层移除）；差分 3091/0/0 + 2278/0/0 维持；
+单测 `test_void_callee_call_prints_statement_and_bare_return`（构造
+"输出幸存 + locked void callspec"形态）+ 负向对照
+`test_nonvoid_locked_callee_keeps_assignment_lhs`。同 commit 删除
+prettyprint P13（`POSTFIX_PASS_NAMES` 24→23）。
+
 ## 2026-08-30：goto 自指标 `goto X; X:` 清除（BLOCKACTION-SCOPEBREAK-GOTOTYPE-0001 / GOTO-LABEL-UNPRINTED-0001）
 
 任务假设"`goto X; X:` = scopeBreak goto_type 缺失"被双侧证伪：next_url 的

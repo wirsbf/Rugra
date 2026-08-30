@@ -2836,6 +2836,14 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                     }
                 }
             }
+            // BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001 diagnostic: dump the final
+            // structured tree (sblocks) alongside the basic-block dump.
+            eprintln!("[DUMP] === structure tree for {} ===", target.name);
+            let mut tree_out = String::new();
+            for blk in &fd_read.sblocks.blocks {
+                rugra::block::print_tree_dbg(blk, 0, &mut tree_out);
+            }
+            eprintln!("{}", tree_out);
         }
     }
     // Ghidra: printlanguage.cc:69 PrintLanguage::PrintLanguage —
