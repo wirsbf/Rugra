@@ -68,6 +68,17 @@ enum RotDir {
     Right,
 }
 
+// RUGRA-GLUE: bit-test modify kind for the ia.sinc :BT/:BTS/:BTR/:BTC
+// constructors (locked sla: CF = tested bit; modify op = OR / AND~ / XOR of
+// the 1<<count mask; evidence /tmp/w-ext-bt.out + bts/btr/btc dumps).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BtKind {
+    Test,
+    Set,
+    Reset,
+    Complement,
+}
+
 // RUGRA-GLUE: count source for the group-2 shift encodings. x86 encodes
 // three DISTINCT count forms with different oracle pcode: C0/C1 imm8
 // (count:4 = imm & mask, gated flag muxes), D0/D1 by-one (dedicated short
@@ -3464,6 +3475,344 @@ impl X86Lifter {
         ops.push(of);
     }
 
+    // RUGRA-GLUE: port of the ia.sinc :BT/:BTS/:BTR/:BTC constructors of the
+    // locked x86-64 sla (sleigh_shim op-for-op dumps /tmp/w-ext-bt.out +
+    // /tmp/w-ext-bts.out + /tmp/w-ext-btr.out + /tmp/w-ext-btc.out, 19
+    // forms, examples/x86ext_probe.rs). CF = tested bit; the modify kind
+    // selects the value op (bts: OR / btr: AND ~ / btc: XOR of the 1<<count
+    // mask); plain bt never modifies. Per-constructor op ORDER (dump is
+    // truth — CF placement differs by width and index kind):
+    //   reg dst, reg/imm idx — count c = idx & (bits-1) at operand width
+    //   (imm forms hold BOTH consts at :4, mask bits-1); sh = rm >> c;
+    //   b = sh & 1; W==8: modify THEN CF = b!=0; W<8: CF THEN modify;
+    //   modify = t = INT_LEFT(1:W, c); rm = rm OR/AND~NOT(t)/XOR t; 32-bit
+    //   GPR modify forms end with the parent zext (plain bt: CF only).
+    //   mem dst, imm idx — c:4 = imm & (bits-1); ONE shared slot LOADed at
+    //   W; b from slot; W<8: CF THEN modify (t = 1:W << c, slot re-LOAD,
+    //   slot = slot OP t, STORE); W==8: modify THEN CF.
+    //   mem dst, reg idx — byte-granular bit string addressing: s:8 =
+    //   sext(idx); sar = s >> 3 (const :4); addr = base + sar; c = idx & 7
+    //   (idx width); byte = LOAD:1; b = (byte >> c) & 1; modify re-LOADs a
+    //   fresh byte temp, OR/AND~/XOR with (1:1 << c) and STOREs; CF comes
+    //   AFTER the STORE.
+    /// Lift `bt`/`bts`/`btr`/`btc` (CF = tested bit; modify per kind).
+    fn lift_bt(&mut self, inst: &Instruction, kind: BtKind, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        if inst.operands.len() != 2 {
+            return;
+        }
+        let emit_cf = |this: &mut Self, b: &VarnodeRaw, ops: &mut Vec<PcodeOpRaw>| {
+            let mut op = PcodeOpRaw::new(C::CPUI_INT_NOTEQUAL as i32);
+            op.add_input(b.clone());
+            op.add_input(Self::const_vn(0, b.size));
+            op.set_output(Self::flag_cf());
+            ops.push(op);
+            let _ = this;
+        };
+        // modify op over (dst, mask) — btr negates the mask first
+        let emit_modify = |this: &mut Self,
+                           kind: BtKind,
+                           dst_in: VarnodeRaw,
+                           out: VarnodeRaw,
+                           t: VarnodeRaw,
+                           ops: &mut Vec<PcodeOpRaw>| {
+            match kind {
+                BtKind::Test => {}
+                BtKind::Set => {
+                    let mut op = PcodeOpRaw::new(C::CPUI_INT_OR as i32);
+                    op.add_input(dst_in);
+                    op.add_input(t);
+                    op.set_output(out);
+                    ops.push(op);
+                }
+                BtKind::Reset => {
+                    let nt = this.alloc_tmp(t.size);
+                    let mut neg = PcodeOpRaw::new(C::CPUI_INT_NEGATE as i32);
+                    neg.add_input(t);
+                    neg.set_output(nt.clone());
+                    ops.push(neg);
+                    let mut op = PcodeOpRaw::new(C::CPUI_INT_AND as i32);
+                    op.add_input(dst_in);
+                    op.add_input(nt);
+                    op.set_output(out);
+                    ops.push(op);
+                }
+                BtKind::Complement => {
+                    let mut op = PcodeOpRaw::new(C::CPUI_INT_XOR as i32);
+                    op.add_input(dst_in);
+                    op.add_input(t);
+                    op.set_output(out);
+                    ops.push(op);
+                }
+            }
+        };
+        match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, size } => {
+                // ---- reg dst, reg/imm idx ----
+                let Some(rm) = Self::get_register(name, *size) else {
+                    return;
+                };
+                let parent64 = if *size == 4 {
+                    Self::parent64_name(name).and_then(|p| Self::get_register(p, 8))
+                } else {
+                    None
+                };
+                let w = *size;
+                let mask: u64 = (w as u64 * 8) - 1;
+                let c = match &inst.operands[1] {
+                    crate::disasm::Operand::Register { name, size } => {
+                        let Some(idx) = Self::get_register(name, *size) else {
+                            return;
+                        };
+                        let t = self.alloc_tmp(w);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[idx, Self::const_vn(mask, w)],
+                            Some(&t),
+                        );
+                        t
+                    }
+                    crate::disasm::Operand::Immediate { value, .. } => {
+                        let t = self.alloc_tmp(4);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[
+                                Self::const_vn((*value as u64) & 0xff, 4),
+                                Self::const_vn(mask, 4),
+                            ],
+                            Some(&t),
+                        );
+                        t
+                    }
+                    _ => return,
+                };
+                let sh = self.alloc_tmp(w);
+                Self::push_raw(ops, C::CPUI_INT_RIGHT, &[rm.clone(), c.clone()], Some(&sh));
+                let b = self.alloc_tmp(w);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[sh, Self::const_vn(1, w)],
+                    Some(&b),
+                );
+                if kind == BtKind::Test {
+                    emit_cf(self, &b, ops);
+                    return;
+                }
+                if w < 8 {
+                    emit_cf(self, &b, ops);
+                }
+                let t = self.alloc_tmp(w);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_LEFT,
+                    &[Self::const_vn(1, w), c],
+                    Some(&t),
+                );
+                emit_modify(self, kind, rm.clone(), rm.clone(), t, ops);
+                if w == 8 {
+                    emit_cf(self, &b, ops);
+                } else if let Some(parent) = parent64 {
+                    Self::push_raw(ops, C::CPUI_INT_ZEXT, &[rm], Some(&parent));
+                }
+            }
+            crate::disasm::Operand::Memory {
+                base,
+                index,
+                scale,
+                displacement,
+                size,
+            } => {
+                let w = *size;
+                let mask: u64 = (w as u64 * 8) - 1;
+                match &inst.operands[1] {
+                    crate::disasm::Operand::Immediate { value, .. } => {
+                        // ---- mem dst, imm idx ----
+                        let Some(addr) =
+                            self.compute_mem_addr(base, index, scale, displacement, ops)
+                        else {
+                            return;
+                        };
+                        let c = self.alloc_tmp(4);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[
+                                Self::const_vn((*value as u64) & 0xff, 4),
+                                Self::const_vn(mask, 4),
+                            ],
+                            Some(&c),
+                        );
+                        let slot = self.alloc_tmp(w);
+                        self.emit_load_slot(&addr, &slot, ops);
+                        let sh = self.alloc_tmp(w);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_RIGHT,
+                            &[slot.clone(), c.clone()],
+                            Some(&sh),
+                        );
+                        let b = self.alloc_tmp(w);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[sh, Self::const_vn(1, w)],
+                            Some(&b),
+                        );
+                        if kind == BtKind::Test {
+                            emit_cf(self, &b, ops);
+                            return;
+                        }
+                        if w < 8 {
+                            emit_cf(self, &b, ops);
+                        }
+                        // mask first (btr negates), THEN the re-LOAD, then
+                        // the combine (dump `btr dword [rbx],5` [5][6][7])
+                        let t = self.alloc_tmp(w);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_LEFT,
+                            &[Self::const_vn(1, w), c],
+                            Some(&t),
+                        );
+                        let mask_vn = if kind == BtKind::Reset {
+                            let nt = self.alloc_tmp(w);
+                            Self::push_raw(ops, C::CPUI_INT_NEGATE, &[t.clone()], Some(&nt));
+                            nt
+                        } else {
+                            t
+                        };
+                        self.emit_load_slot(&addr, &slot, ops);
+                        match kind {
+                            BtKind::Set => Self::push_raw(
+                                ops,
+                                C::CPUI_INT_OR,
+                                &[slot.clone(), mask_vn],
+                                Some(&slot),
+                            ),
+                            BtKind::Reset => Self::push_raw(
+                                ops,
+                                C::CPUI_INT_AND,
+                                &[slot.clone(), mask_vn],
+                                Some(&slot),
+                            ),
+                            BtKind::Complement => Self::push_raw(
+                                ops,
+                                C::CPUI_INT_XOR,
+                                &[slot.clone(), mask_vn],
+                                Some(&slot),
+                            ),
+                            BtKind::Test => unreachable!("handled above"),
+                        }
+                        self.emit_store_v(&addr, slot, ops);
+                        if w == 8 {
+                            emit_cf(self, &b, ops);
+                        }
+                    }
+                    crate::disasm::Operand::Register { name, size } => {
+                        // ---- mem dst, reg idx (byte-granular bit string) ----
+                        let Some(idx) = Self::get_register(name, *size) else {
+                            return;
+                        };
+                        let Some(base_addr) =
+                            self.compute_mem_addr(base, index, scale, displacement, ops)
+                        else {
+                            return;
+                        };
+                        // s:8 = sext(idx); sar = s >> 3; addr = base + sar
+                        let s = self.alloc_tmp(8);
+                        Self::push_raw(ops, C::CPUI_INT_SEXT, &[idx.clone()], Some(&s));
+                        let sar = self.alloc_tmp(8);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_SRIGHT,
+                            &[s, Self::const_vn(3, 4)],
+                            Some(&sar),
+                        );
+                        let addr = self.alloc_tmp(8);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_ADD,
+                            &[base_addr, sar],
+                            Some(&addr),
+                        );
+                        // c = idx & 7 (idx width); plain BT LOADs the byte
+                        // BEFORE this AND, the modify kinds AND first (dump
+                        // `bt [rax],edx` [3][4] vs `bts [rax],edx` [3][4])
+                        let c = self.alloc_tmp(idx.size);
+                        if kind == BtKind::Test {
+                            let byte = self.emit_load(1, &addr, ops);
+                            Self::push_raw(
+                                ops,
+                                C::CPUI_INT_AND,
+                                &[idx, Self::const_vn(7, idx.size)],
+                                Some(&c),
+                            );
+                            let sh = self.alloc_tmp(1);
+                            Self::push_raw(
+                                ops,
+                                C::CPUI_INT_RIGHT,
+                                &[byte, c],
+                                Some(&sh),
+                            );
+                            let b = self.alloc_tmp(1);
+                            Self::push_raw(
+                                ops,
+                                C::CPUI_INT_AND,
+                                &[sh, Self::const_vn(1, 1)],
+                                Some(&b),
+                            );
+                            emit_cf(self, &b, ops);
+                            return;
+                        }
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[idx, Self::const_vn(7, idx.size)],
+                            Some(&c),
+                        );
+                        let byte = self.emit_load(1, &addr, ops);
+                        let sh = self.alloc_tmp(1);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_RIGHT,
+                            &[byte, c.clone()],
+                            Some(&sh),
+                        );
+                        let b = self.alloc_tmp(1);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[sh, Self::const_vn(1, 1)],
+                            Some(&b),
+                        );
+                        if kind == BtKind::Test {
+                            emit_cf(self, &b, ops);
+                            return;
+                        }
+                        // modify: fresh byte LOAD, OR/AND~/XOR (1 << c), STORE
+                        let load2 = self.emit_load(1, &addr, ops);
+                        let t = self.alloc_tmp(1);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_LEFT,
+                            &[Self::const_vn(1, 1), c],
+                            Some(&t),
+                        );
+                        let res = self.alloc_tmp(1);
+                        emit_modify(self, kind, load2, res.clone(), t, ops);
+                        self.emit_store_v(&addr, res, ops);
+                        emit_cf(self, &b, ops);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
     // RUGRA-GLUE: port of the ia.sinc cc condition table (ia.sinc:1523-1539,
     // `cc: "O" is cond=0 { export OF; }` ... `cc: "G" is cond=15 { local tmp
     // = !ZF && (OF == SF); export tmp; }`); executed semantics verified
@@ -3652,6 +4001,18 @@ impl X86Lifter {
             }
             "imul" => {
                 self.lift_imul(inst, &mut ops);
+            }
+            "bt" => {
+                self.lift_bt(inst, BtKind::Test, &mut ops);
+            }
+            "bts" => {
+                self.lift_bt(inst, BtKind::Set, &mut ops);
+            }
+            "btr" => {
+                self.lift_bt(inst, BtKind::Reset, &mut ops);
+            }
+            "btc" => {
+                self.lift_bt(inst, BtKind::Complement, &mut ops);
             }
             "lea" => {
                 if inst.operands.len() == 2 {

@@ -281,3 +281,24 @@
   8/16/32/64 × reg/mem × imm8/imm32/imm16,REX.R r8)。
 - E2E:httpd 2274/0/0 与 master 基线字节级一致(imul 站点在对比窗口
   外,零回归);curl sha256 ff6bef47 不变。
+
+### 2026-09-01:X86LIFT-FLAG-PCODE-0001 ext-c3 — bt/bts/btr/btc 位测试 CF(w-x86flags)
+- `bt` 家族此前零 op(httpd 20 处:15 reg,reg bt + 2 btc imm64 + 3 其他);
+  按锁定 oracle dump(/tmp/w-ext-{bt,bts,btr,btc}.out,26 形态)逐 op 补齐
+  (`lift_bt`/`BtKind`):
+  - **reg dst, reg/imm idx**:`c = idx & (bits-1)`(reg 形态在操作数宽度,
+    imm 形态双 const 恒 :4,mask=bits-1)→ `sh=rm>>c; b=sh&1` →
+    **CF 位置按宽度**:W==8 modify(OR/AND~XOR 1<<c)之后,W<8 之前;
+    32-bit GPR modify 形态末尾 parent zext;plain bt 仅 CF 无写回。
+  - **mem dst, imm idx**:`c:4 = imm & (bits-1)`;共享 slot 全宽 LOAD;
+    W<8 CF 在 modify 前(t=1:W<<c;btr 先 NEGATE 再重 LOAD 再 AND),
+    W==8 在 modify 后。
+  - **mem dst, reg idx**(位串字节寻址):`s:8=sext(idx)` →
+    `sar=s>>3(const:4)` → `addr=base+sar` → `c=idx&7` → 字节 LOAD →
+    `(byte>>c)&1`;modify 重 LOAD 新字节 temp 与 `1:1<<c` 组合后 STORE,
+    CF 在 STORE 后。**plain bt 的 LOAD/AND(idx,7) 次序与 modify 形态相反**
+    (bt [rax],edx [3]=LOAD[4]=AND vs bts [3]=AND[4]=LOAD)。
+- 双侧证据:examples/x86ext_probe 8 bt + 7 bts + 5 btr + 6 btc 形态全
+  MATCH(reg/mem × imm/reg × 32/64,mask 边界 3Fh,btr 的 NEGATE-重LOAD 序)。
+- E2E:httpd 2274/0/0 输出与 master 基线 a31db12c 字节级一致(bt 站点在
+  对比窗口外,零回归);curl sha256 ff6bef47 不变。
