@@ -8788,35 +8788,37 @@ impl Action for ActionPrototypeTypes {
         // 3. If output locked: insert return varnodes for each RETURN
         // 4. Else: init active output gathering
 
-        // Step 1 (coreaction.cc:4615-4619, FUNCPROTO-MODEL-BIND-0001):
+        // Step 1 (coreaction.cc:4615-4619, PLTSTUB-WARNLOSS-0001 adjudication):
         //   ProtoModel *evalfp = data.getArch()->evalfp_current;
         //   if (evalfp == 0) evalfp = data.getArch()->defaultfp;
-        //   if ((!data.getFuncProto().isModelLocked()) && !hasMatchingModel(evalfp))
+        //   if ((!data.getFuncProto().isModelLocked()) && !data.getFuncProto().hasMatchingModel(evalfp))
         //     data.getFuncProto().setModel(evalfp);
-        // The locked guard is load-bearing: a model-locked prototype (DWARF/
-        // PLT locked storage) is never overridden by the evaluation model.
+        // The gate is the single conjunction: a model-locked prototype is
+        // NEVER given the evaluation model — not even to repair a modelless
+        // state. Ghidra maintains "locked => model != NULL" at the
+        // signature-decode boundary instead (FuncProto::decode ATTRIB_MODEL,
+        // fspec.cc:4690-4698: an unrecognized convention name maps to
+        // createUnknownModel — an UnknownProtoModel cloning the default
+        // model's behavior while reporting isUnknown(), architecture.cc
+        // :1159-1166), so the locked unknown-model identity survives here
+        // and stays observable to ActionPrototypeWarnings
+        // (coreaction.cc:4901-4908). The earlier "install the default model
+        // when modelless, even if locked" arm inverted this oracle stance
+        // and destroyed that identity (PLT/DWARF overlays lost their
+        // "Unknown calling convention" warning headers). setInputLock(true)
+        // already couples to model_locked exactly as fspec.cc:3924-3925
+        // ("Locking input locks the model"), so a locked overlay keeps its
+        // identity through this action; a modelless+locked FuncProto (a
+        // Rugra-only transitional form Ghidra cannot reach) likewise keeps
+        // its identity rather than being silently repaired here.
         if let Some(arch) = fd.get_arch() {
             let evalfp = arch
                 .evalfp_current
                 .clone()
                 .or_else(|| arch.defaultfp.clone());
             if let Some(evalfp) = evalfp {
-                if !fd.funcp.has_model() {
-                    // Ghidra's FuncProto always carries a resolved model
-                    // (FuncProto::decode resolves the name; unknown names map
-                    // to createUnknownModel, fspec.cc:4697). Rugra's
-                    // DWARF/PLT locked-signature path can leave model=None
-                    // while model_locked=true, which breaks every model
-                    // consult downstream. Restore the invariant by
-                    // installing the default model; the lock only guards
-                    // against replacement, which this is not.
-                    fd.funcp.set_model(Some(evalfp.clone()));
-                }
-                if !fd.funcp.is_model_locked() {
-                    let matches = fd.funcp.has_matching_model(&evalfp);
-                    if !matches {
-                        fd.funcp.set_model(Some(evalfp));
-                    }
+                if !fd.funcp.is_model_locked() && !fd.funcp.has_matching_model(&evalfp) {
+                    fd.funcp.set_model(Some(evalfp));
                 }
             }
         }

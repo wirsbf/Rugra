@@ -2279,3 +2279,34 @@ ap_make_dirstr_prefix 第一轮 IfElse MATCH(空 fc),donothing 删 0x2e8d6/0x2e9
 `test_action_donothing_removes_join_targeted_jmp_island`。
 E2E:httpd defects 7→3、skeleton 2317→2257;curl 3076/0/0(基线 3089,−13)。
 机制 C 白名单(主管线 Action):Cross-Review PENDING。
+
+## 2026-09-01:ActionPrototypeTypes eval-model 门裁决(PLTSTUB-WARNLOSS-0001)
+
+裁决(salvage regb `3d042eb` vs master c95b845 立场):**分支方向正确**。oracle
+coreaction.cc:4614-4619 是单一合取——`(!isModelLocked()) &&
+!hasMatchingModel(evalfp)` 才 `setModel(evalfp)`,model-locked 原型**永不**被绑
+evaluation model,"locked ⇒ model 非空"的不变量由签名 decode 边界维护
+(fspec.cc:4690-4698:未识别约定名 → createUnknownModel,即 UnknownProtoModel
+克隆 default 行为且 isUnknown()=true;architecture.cc:1159-1166,保留名
+"unknown" setPrintInDecl(false)),locked unknown 身份因此存活到
+ActionPrototypeWarnings(cc:4901-4908)发射
+`Unknown calling convention -- yet parameter storage is locked`。master 旧
+`!has_model()` 臂(注释主张 "lock only guards replacement")是该合取的反面,
+静默修复 modelless+locked 状态并摧毁 unknown 身份——已删除,回归单一合取门
+(含 modelless 分解:unlocked+modelless ⇒ has_matching_model=false ⇒ 绑定,
+与 Ghidra 行为一致;modelless+locked(仅 Rugra 可构造)保持身份不修)。
+`set_input_lock(true)`⇒modellock 耦合已在 fspec.rs 与 fspec.cc:3924-3925
+("Locking input locks the model")逐字一致,是 locked 覆盖层保持身份的承载机制。
+
+差分:行为 delta 仅 modelless+locked 分支(不再绑默认模型);master E2E 该状态
+经 set_arch named-ctor 绑定(funcdata.rs:1143-1146)+ from_model_carrier 播种
+不再出现,curl E2E 3090/0/0 零漂移。**warning 51 vs 24 的剩余差集不在本 action**:
+26eee4a 起 LibcSignatureTable::locked_proto 与 DebugDb::locked_proto 均以
+from_model_carrier/set_pieces 把 defaultfp 模型名装进 locked 原型(PLT 24 桩 +
+void-DWARF main_init/main_free/hugehelp 三函数),unknown 身份在播种层即丢,
+登记 PLTSTUB-WARNLOSS-0001 残留(debugproto.rs 两处 builder 需按
+fspec.cc:4690-4698 语义钉 "unknown" 约定名,行为 Arc 保留为克隆)。
+fspec create_placeholder 双守卫(pltstub 9f14522)证伪:Ghidra fspec.cc:4849-4857
+本体无守卫,cc:1482-1512 caller 侧门控(setplaceholder=varargs、首个 locked
+stack param 置 spacebase=NULL、cc:1511 仅非空才 create)已在 master
+func_link_input(coreaction.rs:9703-9774)忠实落地,再入库内守卫=非 oracle 层。
