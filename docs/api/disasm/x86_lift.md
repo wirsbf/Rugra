@@ -302,3 +302,24 @@
   MATCH(reg/mem × imm/reg × 32/64,mask 边界 3Fh,btr 的 NEGATE-重LOAD 序)。
 - E2E:httpd 2274/0/0 输出与 master 基线 a31db12c 字节级一致(bt 站点在
   对比窗口外,零回归);curl sha256 ff6bef47 不变。
+
+### 2026-09-01:X86LIFT-FLAG-PCODE-0001 ext-c4 — comiss/ucomiss/comisd/ucomisd(w-x86flags)
+- FP 比较家族此前零 op(httpd 37 处,含 25 处 rip-relative);按锁定
+  oracle dump(/tmp/w-ext-comis.out,8 形态)逐 op 补齐(`lift_comis` +
+  `flag_af` + get_register 的 xmm0-15 表):
+  - COMISS 与 UCOMIS 的 pcode **完全相同**(两侧都做 FLOAT_NAN):
+    `PF=BOOL_OR(NAN(lhs),NAN(rhs))`(0x202)、
+    `ZF=INT_OR(PF,FLOAT_EQUAL(lhs,rhs))`(0x206,INT_OR 非 BOOL_OR)、
+    `CF=INT_OR(PF,FLOAT_LESS(lhs,rhs))`(0x200)、
+    `OF/AF/SF=COPY(0)`(0x20b/0x204/0x207)。
+  - 操作数宽度来自助记符后缀(*ss=4,*sd=8)——iced 报 16 字节向量宽,
+    oracle 按操作宽度读 XMM 寄存器(register:0x1200+0x40*N,
+    xmm8=0x1400 已 dump 验证)。
+  - mem rhs:位移形态地址 op 先绑定,共享 slot 每个 float op 前重
+    LOAD;**常量地址(rip-relative/纯 displacement)折叠为直接
+    ram 空间 varnode 输入,无 LOAD 无地址 op**(dump `comiss
+    xmm0,[rip+0]`:FLOAT_NAN in=(ram:0x1c:4))。
+- 双侧证据:examples/x86ext_probe comis 8/8 MATCH(reg/mem/xmm8/
+  rip-fold/disp-mem/d 形态)。
+- E2E:httpd 2274/0/0 输出与 master 基线 a31db12c 字节级一致(comis
+  站点在对比窗口外,零回归);curl sha256 ff6bef47 不变。

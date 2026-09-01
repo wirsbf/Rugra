@@ -119,6 +119,9 @@ fn form_matrix() -> Vec<(&'static str, &'static str, Vec<u8>)> {
     add("comis", "comisd xmm0,xmm1", &[0x66, 0x0f, 0x2f, 0xc1]);
     add("comis", "ucomisd xmm0,xmm1", &[0x66, 0x0f, 0x2e, 0xc1]);
     add("comis", "comiss xmm0,[rbx]", &[0x0f, 0x2f, 0x03]);
+    add("comis", "comiss xmm8,xmm1", &[0x44, 0x0f, 0x2f, 0xc1]);
+    add("comis", "comiss xmm0,[rip+0]", &[0x0f, 0x2f, 0x05, 0x00, 0x00, 0x00, 0x00]);
+    add("comis", "ucomiss xmm0,[rbx+0Ch]", &[0x0f, 0x2e, 0x4b, 0x0c]);
 
     // ---- bswap ----
     add("bswap", "bswap eax", &[0x0f, 0xc8]);

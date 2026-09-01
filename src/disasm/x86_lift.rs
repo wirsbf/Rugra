@@ -158,6 +158,27 @@ impl X86Lifter {
             // register space, 2-byte selector size).
             "fs" => 0x108,
             "gs" => 0x10a,
+            // XMM vector registers: 0x1200 + 0x40*N in the locked sla
+            // register space (dump /tmp/w-ext-comis.out: comiss xmm0 reads
+            // register:0x1200:4, xmm1 0x1240:4, xmm8 0x1400:4; the varnode
+            // size is the OPERATION size — 4 for *ss, 8 for *sd — not
+            // iced's 16-byte vector width).
+            "xmm0" => 0x1200,
+            "xmm1" => 0x1240,
+            "xmm2" => 0x1280,
+            "xmm3" => 0x12c0,
+            "xmm4" => 0x1300,
+            "xmm5" => 0x1340,
+            "xmm6" => 0x1380,
+            "xmm7" => 0x13c0,
+            "xmm8" => 0x1400,
+            "xmm9" => 0x1440,
+            "xmm10" => 0x1480,
+            "xmm11" => 0x14c0,
+            "xmm12" => 0x1500,
+            "xmm13" => 0x1540,
+            "xmm14" => 0x1580,
+            "xmm15" => 0x15c0,
             _ => return None,
         };
         Some(VarnodeRaw::new(AddressSpace::Register, offset, size))
@@ -188,6 +209,12 @@ impl X86Lifter {
     /// CF flag varnode (register:0x200:1)
     fn flag_cf() -> VarnodeRaw {
         VarnodeRaw::new(AddressSpace::Register, 0x200, 1)
+    }
+
+    // RUGRA-GLUE: see flag_cf (X86LIFT-FLAG-PCODE-0001 sla layout)
+    /// AF flag varnode (register:0x204:1; comiss writes it to 0)
+    fn flag_af() -> VarnodeRaw {
+        VarnodeRaw::new(AddressSpace::Register, 0x204, 1)
     }
 
     // RUGRA-GLUE: see flag_cf (X86LIFT-FLAG-PCODE-0001 sla layout)
@@ -3813,6 +3840,134 @@ impl X86Lifter {
         }
     }
 
+    // RUGRA-GLUE: port of the ia.sinc :COMIS/:UCOMIS constructors of the
+    // locked x86-64 sla (sleigh_shim op-for-op dump /tmp/w-ext-comis.out, 8
+    // forms, examples/x86ext_probe.rs). COMISS and UCOMIS lift IDENTICAL
+    // pcode (both flag NaN via FLOAT_NAN on both operands): PF = BOOL_OR(
+    // NAN(lhs), NAN(rhs)); ZF = INT_OR(PF, FLOAT_EQUAL(lhs,rhs)); CF =
+    // INT_OR(PF, FLOAT_LESS(lhs,rhs)); OF/AF/SF = COPY(0). Operand size
+    // from the mnemonic suffix (*ss=4, *sd=8) — iced reports the 16-byte
+    // vector width, the oracle reads the XMM register at the operation
+    // size (register:0x1200+0x40*N). Memory rhs: address ops bind first
+    // (displaced forms), then ONE shared slot re-LOADed before each float
+    // op; constant addresses (rip-relative / absolute displacement) fold
+    // to a direct ram-space varnode input with NO LOAD and NO address ops
+    // (dump `comiss xmm0,[rip+0]`: FLOAT_NAN in=(ram:0x1c:4)).
+    /// Lift `comiss`/`ucomiss`/`comisd`/`ucomisd` (PF/ZF/CF from float
+    /// compare; OF/AF/SF cleared).
+    fn lift_comis(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        if inst.operands.len() != 2 {
+            return;
+        }
+        let size = if inst.mnemonic.ends_with("sd") { 8 } else { 4 };
+        let lhs = match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, .. } => Self::get_register(name, size),
+            _ => None,
+        };
+        let Some(lhs) = lhs else {
+            return;
+        };
+        // rhs access: register direct / displaced-mem shared slot /
+        // constant-address direct ram varnode
+        enum Rhs {
+            Direct(VarnodeRaw),
+            Slot { addr: VarnodeRaw, slot: VarnodeRaw, size: usize },
+            ConstAddr(VarnodeRaw),
+        }
+        let rhs = match &inst.operands[1] {
+            crate::disasm::Operand::Register { name, .. } => {
+                match Self::get_register(name, size) {
+                    Some(vn) => Rhs::Direct(vn),
+                    None => return,
+                }
+            }
+            crate::disasm::Operand::Memory {
+                base,
+                index,
+                scale,
+                displacement,
+                size: msize,
+            } => {
+                // rip-relative / absolute-displacement: constant address —
+                // the oracle folds it into a direct ram varnode (the Rugra
+                // disassembler resolves rip displacement to the absolute
+                // target already)
+                if base.as_deref() == Some("rip") && index.is_none() {
+                    Rhs::ConstAddr(VarnodeRaw::new(
+                        AddressSpace::Ram,
+                        *displacement as u64,
+                        *msize,
+                    ))
+                } else if base.is_none() && index.is_none() {
+                    Rhs::ConstAddr(VarnodeRaw::new(
+                        AddressSpace::Ram,
+                        *displacement as u64,
+                        *msize,
+                    ))
+                } else {
+                    let Some(addr) =
+                        self.compute_mem_addr(base, index, scale, displacement, ops)
+                    else {
+                        return;
+                    };
+                    let slot = self.alloc_tmp(*msize);
+                    Rhs::Slot {
+                        addr,
+                        slot,
+                        size: *msize,
+                    }
+                }
+            }
+            _ => return,
+        };
+        let use_rhs = |this: &mut Self, rhs: &Rhs, ops: &mut Vec<PcodeOpRaw>| -> VarnodeRaw {
+            match rhs {
+                Rhs::Direct(vn) | Rhs::ConstAddr(vn) => vn.clone(),
+                Rhs::Slot { addr, slot, .. } => {
+                    this.emit_load_slot(addr, slot, ops);
+                    slot.clone()
+                }
+            }
+        };
+        // PF = BOOL_OR(NAN(lhs), NAN(rhs))
+        let n0 = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_FLOAT_NAN, &[lhs.clone()], Some(&n0));
+        let r1 = use_rhs(self, &rhs, ops);
+        let n1 = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_FLOAT_NAN, &[r1], Some(&n1));
+        Self::push_raw(
+            ops,
+            C::CPUI_BOOL_OR,
+            &[n0, n1],
+            Some(&Self::flag_pf()),
+        );
+        // ZF = INT_OR(PF, FLOAT_EQUAL(lhs, rhs))
+        let r2 = use_rhs(self, &rhs, ops);
+        let eq = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_FLOAT_EQUAL, &[lhs.clone(), r2], Some(&eq));
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_OR,
+            &[Self::flag_pf(), eq],
+            Some(&Self::flag_zf()),
+        );
+        // CF = INT_OR(PF, FLOAT_LESS(lhs, rhs))
+        let r3 = use_rhs(self, &rhs, ops);
+        let lt = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_FLOAT_LESS, &[lhs, r3], Some(&lt));
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_OR,
+            &[Self::flag_pf(), lt],
+            Some(&Self::flag_cf()),
+        );
+        // OF = AF = SF = 0
+        for flag in [Self::flag_of(), Self::flag_af(), Self::flag_sf()] {
+            Self::push_raw(ops, C::CPUI_COPY, &[Self::const_vn(0, 1)], Some(&flag));
+        }
+    }
+
     // RUGRA-GLUE: port of the ia.sinc cc condition table (ia.sinc:1523-1539,
     // `cc: "O" is cond=0 { export OF; }` ... `cc: "G" is cond=15 { local tmp
     // = !ZF && (OF == SF); export tmp; }`); executed semantics verified
@@ -4013,6 +4168,9 @@ impl X86Lifter {
             }
             "btc" => {
                 self.lift_bt(inst, BtKind::Complement, &mut ops);
+            }
+            "comiss" | "ucomiss" | "comisd" | "ucomisd" => {
+                self.lift_comis(inst, &mut ops);
             }
             "lea" => {
                 if inst.operands.len() == 2 {
