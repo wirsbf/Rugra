@@ -3069,6 +3069,401 @@ impl X86Lifter {
         zext_parent(ops);
     }
 
+    // RUGRA-GLUE: port of the ia.sinc :IMUL constructors of the locked x86-64
+    // sla (sleigh_shim op-for-op dump /tmp/w-ext-imul.out, 19 forms,
+    // examples/x86ext_probe.rs). All forms compute the double-width flag
+    // product `p:D = sext(op1)*sext(op2)` (D = 2*W), then set CF =
+    // sext(result) != p and OF = COPY(CF); SF/ZF/PF are left untouched.
+    // Per-form structure (dump is truth):
+    //   2-op (0F AF) — s0=sext(dst); rm read (mem: LOAD); s1=sext(rm); p;
+    //     value: W==8 → INT_MULT(dst, rm re-read) into dst, W<8 →
+    //     SUBPIECE(p,0) into dst; dead SUBPIECE(p,W):W; chk=sext(dst);
+    //     CF/OF; W==4 → parent zext last.
+    //   3-op (69/6B) — iced collapses dst==src to 2 operands (dst, imm);
+    //     src read FIRST (mem: LOAD); s0=sext(src); s1=sext(imm const) —
+    //     6B encodings (iced imm size 1) hold the sign-extended imm at
+    //     operand width W, 69 encodings at the encoded imm width (:4/:2);
+    //     value: W==8 → INT_MULT(src, ext) into dst where ext = 6B ? const:8
+    //     : sext(const:4):8 (mem src re-LOADs first), W<8 → SUBPIECE(p,0);
+    //     dead SUBPIECE(p,W); chk=sext(dst); CF/OF; W==4 → parent zext.
+    //   1-op (F6/F7 /5) — AX-family accumulator: p=sext(acc)*sext(rm);
+    //     W==1 → INT_MULT(s0,s1) writes AX:2 directly, CF = sext(AL) != AX;
+    //     W==8 → acc = INT_MULT(acc, rm), RDX = SUBPIECE(p,8);
+    //     W==4 → EDX=SUBPIECE(p,4), RDX=zext(EDX), EAX=SUBPIECE(p,0),
+    //     RAX=zext(EAX) (high half first); W==2 → DX=SUBPIECE(p,2),
+    //     AX=SUBPIECE(p,0); chk=sext(acc); CF/OF.
+    /// Lift `imul` (1/2/3-operand forms; CF/OF via double-width product).
+    fn lift_imul(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        match inst.operands.len() {
+            1 => self.lift_imul_one_op(inst, ops),
+            2 if matches!(inst.operands[1], crate::disasm::Operand::Immediate { .. }) => {
+                // iced collapses the 3-operand dst==src form to (dst, imm)
+                self.lift_imul_three_op(inst, 0, ops)
+            }
+            2 => self.lift_imul_two_op(inst, ops),
+            3 => self.lift_imul_three_op(inst, 1, ops),
+            _ => {}
+        }
+    }
+
+    // RUGRA-GLUE: :IMUL rm operand binding — the constructors re-LOAD the rm
+    // operand into ONE shared unique slot at every use (oracle `imul
+    // rbx,[rax]`: LOAD unique#1 for the flag sext AND again for the value
+    // INT_MULT — /tmp/w-ext-imul.out).
+    /// Bind an imul rm operand; memory operands get one shared load slot.
+    fn imul_bind_rm(
+        &mut self,
+        op: &crate::disasm::Operand,
+        w: usize,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) -> Option<(BoundOperand, Option<VarnodeRaw>)> {
+        let b = self.bind_operand(op, w, ops)?;
+        let slot = match &b {
+            BoundOperand::MemAddr { size, .. } => Some(self.alloc_tmp(*size)),
+            _ => None,
+        };
+        Some((b, slot))
+    }
+
+    // RUGRA-GLUE: :IMUL rm re-read — reg/const direct, memory re-LOADs into
+    /// One use of the bound imul rm operand (shared mem slot).
+    fn imul_read_rm(
+        &mut self,
+        bound: &BoundOperand,
+        slot: &Option<VarnodeRaw>,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) -> VarnodeRaw {
+        match (bound, slot) {
+            (BoundOperand::Reg(vn), _) => vn.clone(),
+            (BoundOperand::Const(vn), _) => vn.clone(),
+            (BoundOperand::MemAddr { addr, .. }, Some(s)) => {
+                self.emit_load_slot(addr, s, ops);
+                s.clone()
+            }
+            (BoundOperand::MemAddr { .. }, None) => {
+                unreachable!("imul mem operand must have a slot")
+            }
+        }
+    }
+
+    // RUGRA-GLUE: :IMUL two-operand constructor (0F AF) — see lift_imul
+    // evidence block; /tmp/w-ext-imul.out forms `imul eax,ecx` /
+    /// Lift 2-operand `imul dst, rm`.
+    fn lift_imul_two_op(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        let (dst_vn, parent64) = match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, size } => {
+                let Some(vn) = Self::get_register(name, *size) else {
+                    return;
+                };
+                let parent64 = if *size == 4 {
+                    Self::parent64_name(name).and_then(|p| Self::get_register(p, 8))
+                } else {
+                    None
+                };
+                (vn, parent64)
+            }
+            _ => return,
+        };
+        let w = dst_vn.size;
+        let d = w * 2;
+        // s0 = sext(dst)
+        let s0 = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[dst_vn.clone()], Some(&s0));
+        // rm read (mem: address ops + LOAD into the shared slot)
+        let Some((rm_bound, rm_slot)) = self.imul_bind_rm(&inst.operands[1], w, ops) else {
+            return;
+        };
+        let rm = self.imul_read_rm(&rm_bound, &rm_slot, ops);
+        // s1 = sext(rm); p = s0 * s1
+        let s1 = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[rm], Some(&s1));
+        let p = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_MULT, &[s0, s1], Some(&p));
+        // value op
+        if w == 8 {
+            let rm2 = self.imul_read_rm(&rm_bound, &rm_slot, ops);
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_MULT,
+                &[dst_vn.clone(), rm2],
+                Some(&dst_vn),
+            );
+        } else {
+            Self::push_raw(
+                ops,
+                C::CPUI_SUBPIECE,
+                &[p.clone(), Self::const_vn(0, 4)],
+                Some(&dst_vn),
+            );
+        }
+        // dead high-half SUBPIECE (present in every dump)
+        let hi = self.alloc_tmp(w);
+        Self::push_raw(
+            ops,
+            C::CPUI_SUBPIECE,
+            &[p.clone(), Self::const_vn(w as u64, 4)],
+            Some(&hi),
+        );
+        // chk = sext(result); CF = chk != p; OF = CF
+        let chk = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[dst_vn.clone()], Some(&chk));
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_NOTEQUAL,
+            &[chk, p],
+            Some(&Self::flag_cf()),
+        );
+        let mut of = PcodeOpRaw::new(C::CPUI_COPY as i32);
+        of.add_input(Self::flag_cf());
+        of.set_output(Self::flag_of());
+        ops.push(of);
+        if let Some(parent) = parent64 {
+            Self::push_raw(ops, C::CPUI_INT_ZEXT, &[dst_vn], Some(&parent));
+        }
+    }
+
+    // RUGRA-GLUE: :IMUL three-operand constructors (69/6B) — see lift_imul
+    // evidence block; /tmp/w-ext-imul.out forms `imul rbx,rbx,3E8h` /
+    /// Lift 3-operand `imul dst, src, imm` (`src_idx` 0 = collapsed dst==src
+    /// 2-operand display, 1 = real 3-operand form).
+    fn lift_imul_three_op(
+        &mut self,
+        inst: &Instruction,
+        src_idx: usize,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) {
+        use OpCode as C;
+        let (dst_vn, parent64) = match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, size } => {
+                let Some(vn) = Self::get_register(name, *size) else {
+                    return;
+                };
+                let parent64 = if *size == 4 {
+                    Self::parent64_name(name).and_then(|p| Self::get_register(p, 8))
+                } else {
+                    None
+                };
+                (vn, parent64)
+            }
+            _ => return,
+        };
+        let w = dst_vn.size;
+        let d = w * 2;
+        let (imm_val, imm_enc_size) = match inst.operands.last() {
+            Some(crate::disasm::Operand::Immediate { value, size }) => {
+                (*value as u64, *size)
+            }
+            _ => return,
+        };
+        // 6B encodings (iced imm size 1) carry the sign-extended imm at
+        // operand width; 69 encodings at the encoded imm width.
+        let imm_w = if imm_enc_size == 1 { w } else { imm_enc_size };
+        // src read FIRST (mem: address ops + LOAD into the shared slot)
+        let Some((src_bound, src_slot)) = self.imul_bind_rm(&inst.operands[src_idx], w, ops)
+        else {
+            return;
+        };
+        let src1 = self.imul_read_rm(&src_bound, &src_slot, ops);
+        // p = sext(src) * sext(imm)
+        let s0 = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[src1], Some(&s0));
+        let s1 = self.alloc_tmp(d);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_SEXT,
+            &[Self::const_vn(imm_val, imm_w)],
+            Some(&s1),
+        );
+        let p = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_MULT, &[s0, s1], Some(&p));
+        // value op
+        if w == 8 {
+            let ext = if imm_enc_size == 1 {
+                // 6B: the imm is already sign-extended to operand width
+                Self::const_vn(imm_val, 8)
+            } else {
+                let t = self.alloc_tmp(8);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SEXT,
+                    &[Self::const_vn(imm_val, imm_w)],
+                    Some(&t),
+                );
+                t
+            };
+            let src2 = self.imul_read_rm(&src_bound, &src_slot, ops);
+            Self::push_raw(ops, C::CPUI_INT_MULT, &[src2, ext], Some(&dst_vn));
+        } else {
+            Self::push_raw(
+                ops,
+                C::CPUI_SUBPIECE,
+                &[p.clone(), Self::const_vn(0, 4)],
+                Some(&dst_vn),
+            );
+        }
+        // dead high-half SUBPIECE
+        let hi = self.alloc_tmp(w);
+        Self::push_raw(
+            ops,
+            C::CPUI_SUBPIECE,
+            &[p.clone(), Self::const_vn(w as u64, 4)],
+            Some(&hi),
+        );
+        // chk = sext(result); CF = chk != p; OF = CF
+        let chk = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[dst_vn.clone()], Some(&chk));
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_NOTEQUAL,
+            &[chk, p],
+            Some(&Self::flag_cf()),
+        );
+        let mut of = PcodeOpRaw::new(C::CPUI_COPY as i32);
+        of.add_input(Self::flag_cf());
+        of.set_output(Self::flag_of());
+        ops.push(of);
+        if let Some(parent) = parent64 {
+            Self::push_raw(ops, C::CPUI_INT_ZEXT, &[dst_vn], Some(&parent));
+        }
+    }
+
+    // RUGRA-GLUE: :IMUL one-operand constructor (F6/F7 /5, AX-family
+    // accumulator) — see lift_imul evidence block; /tmp/w-ext-imul.out forms
+    /// Lift 1-operand `imul rm` (AX = AX * rm).
+    fn lift_imul_one_op(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        let Some(op0) = inst.operands.first() else {
+            return;
+        };
+        let w = match op0 {
+            crate::disasm::Operand::Register { size, .. } => *size,
+            crate::disasm::Operand::Memory { size, .. } => *size,
+            _ => return,
+        };
+        let acc_name = match w {
+            1 => "al",
+            2 => "ax",
+            4 => "eax",
+            8 => "rax",
+            _ => return,
+        };
+        let Some(acc_vn) = Self::get_register(acc_name, w) else {
+            return;
+        };
+        let d = w * 2;
+        // s0 = sext(acc); rm read (shared slot); s1 = sext(rm)
+        let s0 = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[acc_vn.clone()], Some(&s0));
+        let Some((rm_bound, rm_slot)) = self.imul_bind_rm(op0, w, ops) else {
+            return;
+        };
+        let rm1 = self.imul_read_rm(&rm_bound, &rm_slot, ops);
+        let s1 = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[rm1], Some(&s1));
+        if w == 1 {
+            // 8-bit: the product writes AX:2 directly; CF = sext(AL) != AX
+            let Some(ax) = Self::get_register("ax", 2) else {
+                return;
+            };
+            Self::push_raw(ops, C::CPUI_INT_MULT, &[s0, s1], Some(&ax));
+            let chk = self.alloc_tmp(2);
+            Self::push_raw(ops, C::CPUI_INT_SEXT, &[acc_vn], Some(&chk));
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_NOTEQUAL,
+                &[chk, ax],
+                Some(&Self::flag_cf()),
+            );
+            let mut of = PcodeOpRaw::new(C::CPUI_COPY as i32);
+            of.add_input(Self::flag_cf());
+            of.set_output(Self::flag_of());
+            ops.push(of);
+            return;
+        }
+        // p = s0 * s1
+        let p = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_MULT, &[s0, s1], Some(&p));
+        // result writeback — high half FIRST for W<8
+        match w {
+            8 => {
+                let rm2 = self.imul_read_rm(&rm_bound, &rm_slot, ops);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_MULT,
+                    &[acc_vn.clone(), rm2],
+                    Some(&acc_vn),
+                );
+                let Some(rdx) = Self::get_register("rdx", 8) else {
+                    return;
+                };
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(8, 4)],
+                    Some(&rdx),
+                );
+            }
+            4 => {
+                let (Some(edx), Some(rdx), Some(eax), Some(rax)) = (
+                    Self::get_register("edx", 4),
+                    Self::get_register("rdx", 8),
+                    Self::get_register("eax", 4),
+                    Self::get_register("rax", 8),
+                ) else {
+                    return;
+                };
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(4, 4)],
+                    Some(&edx),
+                );
+                Self::push_raw(ops, C::CPUI_INT_ZEXT, &[edx], Some(&rdx));
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(0, 4)],
+                    Some(&eax),
+                );
+                Self::push_raw(ops, C::CPUI_INT_ZEXT, &[eax], Some(&rax));
+            }
+            2 => {
+                let (Some(dx), Some(ax)) =
+                    (Self::get_register("dx", 2), Self::get_register("ax", 2))
+                else {
+                    return;
+                };
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(2, 4)],
+                    Some(&dx),
+                );
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(0, 4)],
+                    Some(&ax),
+                );
+            }
+            _ => return,
+        }
+        // chk = sext(acc); CF = chk != p; OF = CF
+        let chk = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_SEXT, &[acc_vn], Some(&chk));
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_NOTEQUAL,
+            &[chk, p],
+            Some(&Self::flag_cf()),
+        );
+        let mut of = PcodeOpRaw::new(C::CPUI_COPY as i32);
+        of.add_input(Self::flag_cf());
+        of.set_output(Self::flag_of());
+        ops.push(of);
+    }
+
     // RUGRA-GLUE: port of the ia.sinc cc condition table (ia.sinc:1523-1539,
     // `cc: "O" is cond=0 { export OF; }` ... `cc: "G" is cond=15 { local tmp
     // = !ZF && (OF == SF); export tmp; }`); executed semantics verified
@@ -3254,6 +3649,9 @@ impl X86Lifter {
             }
             "ror" => {
                 self.lift_rotate(inst, RotDir::Right, &mut ops);
+            }
+            "imul" => {
+                self.lift_imul(inst, &mut ops);
             }
             "lea" => {
                 if inst.operands.len() == 2 {

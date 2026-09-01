@@ -253,3 +253,31 @@
 - E2E:httpd 骨架 2274/0/0 与 master 基线(a31db12c)**字节级一致**
   (77 处 rol 所在函数不在当前 29 函数对比窗口,零回归);curl sha256
   ff6bef47 字节不变。
+
+### 2026-09-01:X86LIFT-FLAG-PCODE-0001 ext-c2 — imul 全形态 CF/OF(w-x86flags)
+- `imul` 此前零 op(httpd 69 处:3-op imm 形为主,含 dst≠src;1-op;2-op);
+  按锁定 oracle dump(/tmp/w-ext-imul.out,20 形态)逐 op 补齐
+  (`lift_imul`/`lift_imul_two_op`/`lift_imul_three_op`/
+  `lift_imul_one_op`/`imul_bind_rm`/`imul_read_rm`):
+  - 统一 flag 链:双宽乘积 `p:D=INT_MULT(sext(op1):D, sext(op2):D)`
+    (D=2W)→ `CF=INT_NOTEQUAL(sext(result):D, p)` → `OF=COPY(CF)`;
+    SF/ZF/PF 不动。
+  - **2-op(0F AF)**:s0=sext(dst) 先,rm 后读;W==8 值 op =
+    `INT_MULT(dst, rm 重读)` 直写,W<8 值 op = `SUBPIECE(p,0)`;每形态
+    带一个 dead `SUBPIECE(p,W):W`;W==4 末尾 parent zext。
+  - **3-op(69/6B)**:iced 把 dst==src 折叠成 2 操作数 → 以 (dst,imm)
+    识别;src 先读;**6B 编码(iced imm size 1)的 imm 常量在操作数宽度
+    W(64-bit 即 const:8),69 编码在编码宽度(:4/:2)**;W==8 值 op =
+    `INT_MULT(src 重读, ext)`,ext = 6B ? const:8 : sext(const):8;
+    W<8 = SUBPIECE(p,0)。
+  - **1-op(F6/F7 /5)**:AX 族累加器;W==1 特例 `INT_MULT(s0,s1)` 直写
+    AX:2 且 `CF=sext(AL):2 != AX`(无 SUBPIECE);W==8 =
+    `acc=INT_MULT(acc,rm)` + `RDX=SUBPIECE(p,8)`;W==4 高半先
+    (`EDX=SUBPIECE(p,4);RDX=zext;EAX=SUBPIECE(p,0);RAX=zext`);
+    W==2 = `DX=SUBPIECE(p,2);AX=SUBPIECE(p,0)`。
+  - mem rm:一个共享 unique slot,每次读重 LOAD(dump `imul rbx,[rax]`
+    [1][4] 全落 unique#1)。
+- 双侧证据:examples/x86ext_probe imul 20/20 MATCH(1/2/3-op ×
+  8/16/32/64 × reg/mem × imm8/imm32/imm16,REX.R r8)。
+- E2E:httpd 2274/0/0 与 master 基线字节级一致(imul 站点在对比窗口
+  外,零回归);curl sha256 ff6bef47 不变。
