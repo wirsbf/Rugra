@@ -3968,6 +3968,328 @@ impl X86Lifter {
         }
     }
 
+    // RUGRA-GLUE: port of the ia.sinc :MUL constructor (F6/F7 /4) of the
+    // locked x86-64 sla (sleigh_shim op-for-op dump /tmp/w-ext-mul.out, 9
+    // forms). Unsigned double-width product with CF=OF=high-half!=0; the
+    // writeback ORDER differs per width (dump is truth):
+    //   W==1 — a=zext(AL):2, rm read, b=zext(rm):2, AX:2 = INT_MULT direct,
+    //     CF = AH != 0 (NOTEQUAL on the 1-byte AH), OF = COPY(CF).
+    //   W==2 — zext(AX):4 * zext(rm):4; DX=SUBPIECE(p,2); AX=SUBPIECE(p,0);
+    //     CF = DX != 0; OF.   (high, low, CF, OF)
+    //   W==4 — EDX=SUBPIECE(p,4); RDX=zext(EDX); CF = EDX != 0; OF;
+    //     EAX=SUBPIECE(p,0); RAX=zext(EAX).   (high, zext, CF, OF, low, zext)
+    //   W==8 — RDX=SUBPIECE(p,8); RAX=SUBPIECE(p,0); CF = RDX != 0; OF.
+    // mem rm: acc extension FIRST, then the LOAD (dump `mul dword [rbx]`
+    /// Lift `mul rm` (unsigned product into the DX:AX accumulator pair).
+    fn lift_mul(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        let Some(op0) = inst.operands.first() else {
+            return;
+        };
+        let w = match op0 {
+            crate::disasm::Operand::Register { size, .. } => *size,
+            crate::disasm::Operand::Memory { size, .. } => *size,
+            _ => return,
+        };
+        let (lo_name, hi_name) = match w {
+            1 => ("al", "ah"),
+            2 => ("ax", "dx"),
+            4 => ("eax", "edx"),
+            8 => ("rax", "rdx"),
+            _ => return,
+        };
+        let Some(lo) = Self::get_register(lo_name, w) else {
+            return;
+        };
+        // a = zext(accumulator):D — emitted BEFORE the rm read
+        let d = w * 2;
+        let a = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_ZEXT, &[lo.clone()], Some(&a));
+        // rm read (single)
+        let rm = match self.bind_operand(op0, w, ops) {
+            Some(b) => self.read_bound(&b, ops),
+            None => return,
+        };
+        let b = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_ZEXT, &[rm], Some(&b));
+        let emit_of = |ops: &mut Vec<PcodeOpRaw>| {
+            let mut of = PcodeOpRaw::new(C::CPUI_COPY as i32);
+            of.add_input(Self::flag_cf());
+            of.set_output(Self::flag_of());
+            ops.push(of);
+        };
+        if w == 1 {
+            // AX:2 = a * b direct; CF = AH != 0
+            let Some(ax) = Self::get_register("ax", 2) else {
+                return;
+            };
+            Self::push_raw(ops, C::CPUI_INT_MULT, &[a, b], Some(&ax));
+            let Some(ah) = Self::get_register("ah", 1) else {
+                return;
+            };
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_NOTEQUAL,
+                &[ah, Self::const_vn(0, 1)],
+                Some(&Self::flag_cf()),
+            );
+            emit_of(ops);
+            return;
+        }
+        let p = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_MULT, &[a, b], Some(&p));
+        let Some(hi) = Self::get_register(hi_name, w) else {
+            return;
+        };
+        match w {
+            2 | 8 => {
+                // high, low, CF = high != 0, OF
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(w as u64, 4)],
+                    Some(&hi),
+                );
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(0, 4)],
+                    Some(&lo.clone()),
+                );
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_NOTEQUAL,
+                    &[hi, Self::const_vn(0, w)],
+                    Some(&Self::flag_cf()),
+                );
+                emit_of(ops);
+            }
+            4 => {
+                // high, zext, CF, OF, low, zext
+                let (Some(rdx), Some(rax)) =
+                    (Self::get_register("rdx", 8), Self::get_register("rax", 8))
+                else {
+                    return;
+                };
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p.clone(), Self::const_vn(4, 4)],
+                    Some(&hi),
+                );
+                Self::push_raw(ops, C::CPUI_INT_ZEXT, &[hi.clone()], Some(&rdx));
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_NOTEQUAL,
+                    &[hi, Self::const_vn(0, 4)],
+                    Some(&Self::flag_cf()),
+                );
+                emit_of(ops);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_SUBPIECE,
+                    &[p, Self::const_vn(0, 4)],
+                    Some(&lo),
+                );
+                Self::push_raw(ops, C::CPUI_INT_ZEXT, &[lo], Some(&rax));
+            }
+            _ => {}
+        }
+    }
+
+    // RUGRA-GLUE: port of the ia.sinc :DIV/:IDIV constructors (F6/F7 /6 and
+    // /7, W>=2 forms) of the locked x86-64 sla (sleigh_shim op-for-op dumps
+    // /tmp/w-ext-div.out + /tmp/w-ext-idiv.out, 8 forms). No flags.
+    // Structure: divisor = ZEXT(rm) for div / SEXT(rm) for idiv (mem forms
+    // LOAD FIRST, before the dividend build); dividend:D = (zext(HI) <<
+    // 8W) | zext(LO) — the high half is ZEXT even for idiv (dump `idiv
+    // ecx` [1]); q = INT_DIV/INT_SDIV(dividend, divisor); LO =
+    // SUBPIECE(q,0) [W==4: parent zext right after]; r =
+    // INT_REM/INT_SREM(dividend, divisor); HI = SUBPIECE(r,0) [W==4:
+    /// Lift `div`/`idiv rm` (LO = quotient, HI = remainder; no flags).
+    fn lift_div(&mut self, inst: &Instruction, signed: bool, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        let Some(op0) = inst.operands.first() else {
+            return;
+        };
+        let w = match op0 {
+            crate::disasm::Operand::Register { size, .. } => *size,
+            crate::disasm::Operand::Memory { size, .. } => *size,
+            _ => return,
+        };
+        let (lo_name, hi_name) = match w {
+            2 => ("ax", "dx"),
+            4 => ("eax", "edx"),
+            8 => ("rax", "rdx"),
+            _ => return,
+        };
+        // divisor extension FIRST (mem: address ops + LOAD before it)
+        let rm = match self.bind_operand(op0, w, ops) {
+            Some(b) => self.read_bound(&b, ops),
+            None => return,
+        };
+        let d = w * 2;
+        let divisor = self.alloc_tmp(d);
+        let ext_op = if signed {
+            C::CPUI_INT_SEXT
+        } else {
+            C::CPUI_INT_ZEXT
+        };
+        Self::push_raw(ops, ext_op, &[rm], Some(&divisor));
+        // dividend = (zext(HI) << 8W) | zext(LO)
+        let Some(hi) = Self::get_register(hi_name, w) else {
+            return;
+        };
+        let Some(lo) = Self::get_register(lo_name, w) else {
+            return;
+        };
+        let hi_z = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_ZEXT, &[hi], Some(&hi_z));
+        let sh = self.alloc_tmp(d);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_LEFT,
+            &[hi_z, Self::const_vn((w * 8) as u64, 4)],
+            Some(&sh),
+        );
+        let lo_z = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_ZEXT, &[lo.clone()], Some(&lo_z));
+        let dividend = self.alloc_tmp(d);
+        Self::push_raw(ops, C::CPUI_INT_OR, &[sh, lo_z], Some(&dividend));
+        // q = dividend / divisor; LO = SUBPIECE(q, 0) [+ parent zext for W4]
+        let div_op = if signed {
+            C::CPUI_INT_SDIV
+        } else {
+            C::CPUI_INT_DIV
+        };
+        let q = self.alloc_tmp(d);
+        Self::push_raw(
+            ops,
+            div_op,
+            &[dividend.clone(), divisor.clone()],
+            Some(&q),
+        );
+        Self::push_raw(
+            ops,
+            C::CPUI_SUBPIECE,
+            &[q, Self::const_vn(0, 4)],
+            Some(&lo),
+        );
+        if w == 4 {
+            if let Some(parent) = Self::parent64_name(lo_name)
+                .and_then(|p| Self::get_register(p, 8))
+            {
+                Self::push_raw(ops, C::CPUI_INT_ZEXT, &[lo.clone()], Some(&parent));
+            }
+        }
+        // r = dividend % divisor; HI = SUBPIECE(r, 0) [+ parent zext for W4]
+        let rem_op = if signed {
+            C::CPUI_INT_SREM
+        } else {
+            C::CPUI_INT_REM
+        };
+        let r = self.alloc_tmp(d);
+        Self::push_raw(ops, rem_op, &[dividend, divisor], Some(&r));
+        Self::push_raw(
+            ops,
+            C::CPUI_SUBPIECE,
+            &[r, Self::const_vn(0, 4)],
+            Some(&hi),
+        );
+        if w == 4 {
+            if let Some(parent) = Self::parent64_name(hi_name)
+                .and_then(|p| Self::get_register(p, 8))
+            {
+                Self::push_raw(ops, C::CPUI_INT_ZEXT, &[hi], Some(&parent));
+            }
+        }
+    }
+
+    // RUGRA-GLUE: port of the ia.sinc :BSWAP constructor (0F C8, W=4/8) of
+    // the locked x86-64 sla (sleigh_shim op-for-op dump
+    // /tmp/w-ext-bswap.out, 5 forms). No flags; the byte-reverse is a
+    // shift/mask OR-chain: bytes from the TOP down, each t = reg &
+    // (0xff<<8i) shifted RIGHT (top half) or LEFT (bottom half) by
+    // 8*|j-i| (consts :4); the FIRST shift result IS the accumulator, every
+    // subsequent byte ORs into it, the LAST OR writes the register; W==4
+    /// Lift `bswap reg` (byte-reverse via the mask/shift OR-chain).
+    fn lift_bswap(&mut self, inst: &Instruction, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        let Some(op0) = inst.operands.first() else {
+            return;
+        };
+        let (name, w) = match op0 {
+            crate::disasm::Operand::Register { name, size } => (name, *size),
+            _ => return,
+        };
+        if w != 4 && w != 8 {
+            return;
+        }
+        let Some(vn) = Self::get_register(name, w) else {
+            return;
+        };
+        let parent64 = if w == 4 {
+            Self::parent64_name(name)
+                .and_then(|p| Self::get_register(p, 8))
+        } else {
+            None
+        };
+        let mut acc: Option<VarnodeRaw> = None;
+        for i in (0..w).rev() {
+            let mask: u64 = 0xffu64 << (8 * i);
+            let t = self.alloc_tmp(w);
+            Self::push_raw(
+                ops,
+                C::CPUI_INT_AND,
+                &[vn.clone(), Self::const_vn(mask, w)],
+                Some(&t),
+            );
+            let j = w - 1 - i;
+            let amt = (8 * i.abs_diff(j)) as u64;
+            let s = if i > j {
+                // byte sits above the middle — shift it down (RIGHT)
+                let tmp = self.alloc_tmp(w);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_RIGHT,
+                    &[t, Self::const_vn(amt, 4)],
+                    Some(&tmp),
+                );
+                tmp
+            } else if i < j {
+                // byte sits below the middle — shift it up (LEFT)
+                let tmp = self.alloc_tmp(w);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_LEFT,
+                    &[t, Self::const_vn(amt, 4)],
+                    Some(&tmp),
+                );
+                tmp
+            } else {
+                t
+            };
+            let last = i == 0;
+            match acc {
+                None => acc = Some(s),
+                Some(a) => {
+                    let out = if last {
+                        vn.clone()
+                    } else {
+                        a.clone()
+                    };
+                    Self::push_raw(ops, C::CPUI_INT_OR, &[a, s], Some(&out));
+                    if !last {
+                        acc = Some(out);
+                    }
+                }
+            }
+        }
+        if let Some(parent) = parent64 {
+            Self::push_raw(ops, C::CPUI_INT_ZEXT, &[vn], Some(&parent));
+        }
+    }
+
     // RUGRA-GLUE: port of the ia.sinc cc condition table (ia.sinc:1523-1539,
     // `cc: "O" is cond=0 { export OF; }` ... `cc: "G" is cond=15 { local tmp
     // = !ZF && (OF == SF); export tmp; }`); executed semantics verified
@@ -4171,6 +4493,18 @@ impl X86Lifter {
             }
             "comiss" | "ucomiss" | "comisd" | "ucomisd" => {
                 self.lift_comis(inst, &mut ops);
+            }
+            "mul" => {
+                self.lift_mul(inst, &mut ops);
+            }
+            "div" => {
+                self.lift_div(inst, false, &mut ops);
+            }
+            "idiv" => {
+                self.lift_div(inst, true, &mut ops);
+            }
+            "bswap" => {
+                self.lift_bswap(inst, &mut ops);
             }
             "lea" => {
                 if inst.operands.len() == 2 {

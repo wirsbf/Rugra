@@ -323,3 +323,26 @@
   rip-fold/disp-mem/d 形态)。
 - E2E:httpd 2274/0/0 输出与 master 基线 a31db12c 字节级一致(comis
   站点在对比窗口外,零回归);curl sha256 ff6bef47 不变。
+
+### 2026-09-01:X86LIFT-FLAG-PCODE-0001 ext-c5 — mul/div/idiv + bswap(w-x86flags)
+- 按锁定 oracle dump(/tmp/w-ext-{mul,div,idiv,bswap}.out,20 形态)逐 op
+  补齐四个家族(`lift_mul`/`lift_div`/`lift_bswap`):
+  - **mul(F6/F7 /4)**:无符号双宽乘积;CF=OF=高半!=0,**写回顺序按宽度
+    不同**:W1 = `AX:2=INT_MULT(zext(AL),zext(rm))` 直写 + `CF=AH!=0`;
+    W2/W8 = 高 SUBPIECE、低 SUBPIECE、CF、OF;W4 = 高、RDX zext、CF、
+    OF、低、RAX zext(与 W2/W8 顺序不同!);mem rm 先 zext 累加器再 LOAD。
+  - **div/idiv(F7 /6,/7, W>=2)**:无 flags;divisor = div ZEXT / idiv
+    SEXT(mem 形态 LOAD 最先);dividend = `(zext(HI)<<(8W:4)) | zext(LO)`
+    (**idiv 的高半也是 ZEXT**,dump `idiv ecx` [1]);q=INT_DIV/SDIV →
+    LO=SUBPIECE(q,0),W4 紧跟 parent zext;r=INT_REM/SREM → HI=
+    SUBPIECE(r,0)[+zext]。
+  - **bswap(0F C8, W=4/8)**:无 flags 的 mask/shift OR 链——字节从顶向
+    下,`t=reg&(0xff<<8i)`,上半 RIGHT/下半 LEFT by 8|i-j|(const :4);
+    首个移位结果即累加器,后续 OR 进累加器,**最后一个 OR 直写寄存器**;
+    W4 末尾 parent zext。
+- 双侧证据:examples/x86ext_probe mul 7/7 + div 4/4 + idiv 4/4 + bswap
+  5/5 MATCH;全 probe 111/116 MATCH(5 个 MISMATCH 均为登记未实现的
+  rep-string/SSE doc 形态)。
+- E2E:httpd 2274/0/0 输出与 master 基线 a31db12c 字节级一致;curl
+  sha256 ff6bef47 不变;cargo test --lib 基线 1644/17 失败 → 本分支
+  1645/16(多过 1 个,零回归;16 个 funcdata 失败为既有 master 状态)。

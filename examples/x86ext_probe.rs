@@ -135,6 +135,17 @@ fn form_matrix() -> Vec<(&'static str, &'static str, Vec<u8>)> {
     add("idiv", "idiv rcx", &[0x48, 0xf7, 0xf9]);
     add("idiv", "idiv ecx", &[0xf7, 0xf9]);
     add("div", "div rcx", &[0x48, 0xf7, 0xf1]);
+    add("mul", "mul cx", &[0x66, 0xf7, 0xe1]);
+    add("mul", "mul al", &[0xf6, 0xe0]);
+    add("div", "div cx", &[0x66, 0xf7, 0xf1]);
+    add("div", "div ecx", &[0xf7, 0xf1]);
+    add("idiv", "idiv cx", &[0x66, 0xf7, 0xf9]);
+    add("mul", "mul dword [rbx]", &[0xf7, 0x23]);
+    add("mul", "mul byte [rbx]", &[0xf6, 0x23]);
+    add("bswap", "bswap edx", &[0x0f, 0xca]);
+    add("bswap", "bswap r8", &[0x41, 0x0f, 0xc8]);
+    add("div", "div dword [rbx]", &[0xf7, 0x33]);
+    add("idiv", "idiv dword [rbx]", &[0xf7, 0x3b]);
 
     // ---- documentation-only families (not yet in lift scope) ----
     add("doc", "repe cmpsb", &[0xf3, 0xa6]);
