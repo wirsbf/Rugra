@@ -1358,6 +1358,38 @@
       }
     },
     {
+      "id": "merge_trim_lane_1204",
+      "description": "RULE-PROPCOPY-ADDRTIED-0001 phi(X,f(X)) lane-trim chain vs locked 12.0.4: lazy Varnode cover rebuild via setHighLevel, X x f(X) interval intersection in the cond block, trimOpInput COPY at each MULTIEQUAL lane's incoming-block end (CMOVcc branch-local instantiation), trimOpOutput, phi lane rewiring, markInternalCopies np flags (T1/T2 MATCH)",
+      "runner": [
+        "tools/run_merge_trim_lane_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/merge_trim_lane_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/merge_trim_lane_1204.cc",
+          "rust_fixture": "tests/oracle/merge_trim_lane_1204.rs"
+        },
+        "tools": {
+          "runner_1": "tools/run_merge_trim_lane_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "tests/oracle/merge_trim_lane_1204.cc",
+          "tests/oracle/merge_trim_lane_1204.rs",
+          "tools/run_merge_trim_lane_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": []
+      }
+    },
+    {
       "id": "condexe_success_state",
       "description": "CONDEXE-SUCCESS-STATE-0001 oracle fixture (registered during fixture-v1 migration; was orphaned metadata)",
       "runner": [
