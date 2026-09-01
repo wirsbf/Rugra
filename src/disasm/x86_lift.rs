@@ -59,6 +59,15 @@ enum ShiftDir {
     Arith,
 }
 
+// RUGRA-GLUE: rotate direction for the ia.sinc ROL/ROR group-2 rotate
+// constructors (locked sla: value = OR of two opposite shifts of the same
+// rm; evidence /tmp/w-ext-rol.out + /tmp/w-ext-ror.out).
+#[derive(Clone, Copy)]
+enum RotDir {
+    Left,
+    Right,
+}
+
 // RUGRA-GLUE: count source for the group-2 shift encodings. x86 encodes
 // three DISTINCT count forms with different oracle pcode: C0/C1 imm8
 // (count:4 = imm & mask, gated flag muxes), D0/D1 by-one (dedicated short
@@ -2577,6 +2586,489 @@ impl X86Lifter {
         Self::push_raw(ops, C::CPUI_INT_OR, &[t_a, t_b], Some(&Self::flag_pf()));
     }
 
+    // RUGRA-GLUE: port of the ia.sinc :ROL/:ROR group-2 rotate constructors of
+    // the locked x86-64 sla (sleigh_shim op-for-op dumps /tmp/w-ext-rol.out +
+    // /tmp/w-ext-ror.out, 26 forms, examples/x86ext_probe.rs). Structure per
+    // dump:
+    //   imm/cl form — `local count = imm&(bits-1):4 / CL&(bits-1):1` (8/16-bit
+    //   cl forms additionally compute `CL&0x1f:1` UP FRONT as the flag count);
+    //   value rm = (rm <dir> count) | (rm <other> (bits-count)); 8/16-bit imm
+    //   forms compute `imm&0x1f:1` AFTER the value section as the flag count;
+    //   flags: CF = count!=0 ? (rol: result bit0 / ror: result msb) : CF,
+    //   OF = count==1 ? (rol: CF^result-msb / ror: (rm s<0)^((rm<<1) s<0))
+    //   : OF — the standard AND/OR flag mux. Memory destinations share ONE
+    //   unique slot re-LOADed at every rm read (same as the shift group).
+    //   by-one form (D0/D1) — dedicated short constructors: rol sets CF to the
+    //   pre-shift result-msb then rm = (rm<<1) | CF (8-bit: CF direct, wider:
+    //   zext(CF)); ror sets CF = rm&1 (8-bit: AND writes CF directly, wider:
+    //   AND:W + INT_NOTEQUAL) then rm = (rm>>1) | zext(CF)<<(bits-1); OF =
+    //   (result & second-top-bit) != 0) ^ (result s< 0). Shift-amount consts
+    //   are always :4; bit-test masks at operand width.
+    /// Lift `rol`/`ror` (all count forms; flags + value + zext).
+    fn lift_rotate(&mut self, inst: &Instruction, dir: RotDir, ops: &mut Vec<PcodeOpRaw>) {
+        use OpCode as C;
+        if inst.operands.len() != 2 {
+            return;
+        }
+        let Some(form) = Self::shift_count_form(inst) else {
+            return;
+        };
+
+        // Destination binding — memory address ops precede the constructor
+        // body (same operand-binding order as the shift group).
+        let (dst, size) = match &inst.operands[0] {
+            crate::disasm::Operand::Register { name, size } => {
+                let Some(vn) = Self::get_register(name, *size) else {
+                    return;
+                };
+                let parent64 = if *size == 4 {
+                    Self::parent64_name(name).and_then(|p| Self::get_register(p, 8))
+                } else {
+                    None
+                };
+                (AluDst::Reg { vn, parent64 }, *size)
+            }
+            crate::disasm::Operand::Memory {
+                base,
+                index,
+                scale,
+                displacement,
+                size,
+            } => {
+                let Some(addr) =
+                    self.compute_mem_addr(base, index, scale, displacement, ops)
+                else {
+                    return;
+                };
+                (AluDst::Mem { addr }, *size)
+            }
+            _ => return,
+        };
+
+        let bits = (size * 8) as u64;
+        let vmask: u64 = bits - 1;
+        let dir_op = match dir {
+            RotDir::Left => C::CPUI_INT_LEFT,
+            RotDir::Right => C::CPUI_INT_RIGHT,
+        };
+        let oth_op = match dir {
+            RotDir::Left => C::CPUI_INT_RIGHT,
+            RotDir::Right => C::CPUI_INT_LEFT,
+        };
+
+        // read_rm: the rm operand for reg dst (register varnode) or a re-LOAD
+        // into the ONE shared mem slot (the oracle reuses a single unique
+        // local for every rm re-read — same as the shift group).
+        let mem_slot = match &dst {
+            AluDst::Mem { .. } => Some(self.alloc_tmp(size)),
+            AluDst::Reg { .. } => None,
+        };
+        let read_rm = |this: &mut Self, ops: &mut Vec<PcodeOpRaw>| -> VarnodeRaw {
+            match (&dst, &mem_slot) {
+                (AluDst::Reg { vn, .. }, _) => vn.clone(),
+                (AluDst::Mem { addr }, Some(slot)) => {
+                    this.emit_load_slot(addr, slot, ops);
+                    slot.clone()
+                }
+                _ => unreachable!("mem dst must have a slot"),
+            }
+        };
+        let zext_parent = |ops: &mut Vec<PcodeOpRaw>| {
+            if let AluDst::Reg { vn, parent64 } = &dst {
+                if let Some(parent) = parent64 {
+                    Self::push_raw(ops, C::CPUI_INT_ZEXT, &[vn.clone()], Some(parent));
+                }
+            }
+        };
+
+        if let ShiftCount::ByOne = form {
+            // ---- D0/D1 dedicated by-one constructors ----
+            match dir {
+                RotDir::Left => {
+                    // CF = rm s< 0 (pre-shift top bit), BEFORE the value op
+                    let r0 = read_rm(self, ops);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_SLESS,
+                        &[r0, Self::const_vn(0, size)],
+                        Some(&Self::flag_cf()),
+                    );
+                    // rm = (rm << 1) | CF   (8-bit: CF direct; wider: zext(CF))
+                    let r1 = read_rm(self, ops);
+                    let t0 = self.alloc_tmp(size);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_LEFT,
+                        &[r1, Self::const_vn(1, 4)],
+                        Some(&t0),
+                    );
+                    let rhs = if size == 1 {
+                        Self::flag_cf()
+                    } else {
+                        let z = self.alloc_tmp(size);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_ZEXT,
+                            &[Self::flag_cf()],
+                            Some(&z),
+                        );
+                        z
+                    };
+                    match &dst {
+                        AluDst::Reg { vn, .. } => {
+                            Self::push_raw(ops, C::CPUI_INT_OR, &[t0, rhs], Some(vn))
+                        }
+                        AluDst::Mem { addr } => {
+                            let slot =
+                                mem_slot.clone().expect("mem dst must have a slot");
+                            Self::push_raw(ops, C::CPUI_INT_OR, &[t0, rhs], Some(&slot));
+                            self.emit_store_v(addr, slot, ops);
+                        }
+                    }
+                    // OF = CF ^ (rm s< 0)  (result top bit)
+                    let r2 = read_rm(self, ops);
+                    let m = self.alloc_tmp(1);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_SLESS,
+                        &[r2, Self::const_vn(0, size)],
+                        Some(&m),
+                    );
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_XOR,
+                        &[Self::flag_cf(), m],
+                        Some(&Self::flag_of()),
+                    );
+                    zext_parent(ops);
+                }
+                RotDir::Right => {
+                    // CF = rm & 1  (8-bit writes the AND directly into CF;
+                    // wider: AND:W temp + INT_NOTEQUAL)
+                    let r0 = read_rm(self, ops);
+                    if size == 1 {
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[r0, Self::const_vn(1, 1)],
+                            Some(&Self::flag_cf()),
+                        );
+                    } else {
+                        let t0 = self.alloc_tmp(size);
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_AND,
+                            &[r0, Self::const_vn(1, size)],
+                            Some(&t0),
+                        );
+                        Self::push_raw(
+                            ops,
+                            C::CPUI_INT_NOTEQUAL,
+                            &[t0, Self::const_vn(0, size)],
+                            Some(&Self::flag_cf()),
+                        );
+                    }
+                    // rm = (rm >> 1) | (CF << (bits-1))   (8-bit: CF direct;
+                    // wider: zext(CF) first)
+                    let r1 = read_rm(self, ops);
+                    let t1 = self.alloc_tmp(size);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_RIGHT,
+                        &[r1, Self::const_vn(1, 4)],
+                        Some(&t1),
+                    );
+                    let rhs = if size == 1 {
+                        Self::flag_cf()
+                    } else {
+                        let z = self.alloc_tmp(size);
+                        Self::push_raw(ops, C::CPUI_INT_ZEXT, &[Self::flag_cf()], Some(&z));
+                        z
+                    };
+                    let t2 = self.alloc_tmp(size);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_LEFT,
+                        &[rhs, Self::const_vn(vmask, 4)],
+                        Some(&t2),
+                    );
+                    match &dst {
+                        AluDst::Reg { vn, .. } => {
+                            Self::push_raw(ops, C::CPUI_INT_OR, &[t1, t2], Some(vn))
+                        }
+                        AluDst::Mem { addr } => {
+                            let slot =
+                                mem_slot.clone().expect("mem dst must have a slot");
+                            Self::push_raw(ops, C::CPUI_INT_OR, &[t1, t2], Some(&slot));
+                            self.emit_store_v(addr, slot, ops);
+                        }
+                    }
+                    // OF = ((rm & second-top) != 0) ^ (rm s< 0)
+                    let second_top: u64 = 1u64 << (bits - 2);
+                    let r2 = read_rm(self, ops);
+                    let a_w = self.alloc_tmp(size);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_AND,
+                        &[r2, Self::const_vn(second_top, size)],
+                        Some(&a_w),
+                    );
+                    let b = self.alloc_tmp(1);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_NOTEQUAL,
+                        &[a_w, Self::const_vn(0, size)],
+                        Some(&b),
+                    );
+                    let r3 = read_rm(self, ops);
+                    let m = self.alloc_tmp(1);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_SLESS,
+                        &[r3, Self::const_vn(0, size)],
+                        Some(&m),
+                    );
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_XOR,
+                        &[b, m],
+                        Some(&Self::flag_of()),
+                    );
+                    zext_parent(ops);
+                }
+            }
+            return;
+        }
+
+        // ---- imm (C0/C1) / cl (D2/D3) general form ----
+        // local count = imm & (bits-1) :4 / CL & (bits-1) :1; 8/16-bit cl
+        // forms ALSO compute the flag count CL & 0x1f :1 up front.
+        let imm_val: u64 = match form {
+            ShiftCount::Imm => match &inst.operands[1] {
+                crate::disasm::Operand::Immediate { value, .. } => (*value as u64) & 0xff,
+                _ => return,
+            },
+            _ => 0,
+        };
+        let (t_count, cs, cf1_early) = match form {
+            ShiftCount::Cl => {
+                let cl = match &inst.operands[1] {
+                    crate::disasm::Operand::Register { name, size } => {
+                        match Self::get_register(name, *size) {
+                            Some(vn) => vn,
+                            None => return,
+                        }
+                    }
+                    _ => return,
+                };
+                let t = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[cl.clone(), Self::const_vn(vmask, 1)],
+                    Some(&t),
+                );
+                let early = if size <= 2 {
+                    let c = self.alloc_tmp(1);
+                    Self::push_raw(
+                        ops,
+                        C::CPUI_INT_AND,
+                        &[cl, Self::const_vn(0x1f, 1)],
+                        Some(&c),
+                    );
+                    Some(c)
+                } else {
+                    None
+                };
+                (t, 1, early)
+            }
+            ShiftCount::Imm => {
+                let t = self.alloc_tmp(4);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[Self::const_vn(imm_val, 4), Self::const_vn(vmask, 4)],
+                    Some(&t),
+                );
+                (t, 4, None)
+            }
+            ShiftCount::ByOne => unreachable!("handled above"),
+        };
+
+        // value rm = (rm <dir> count) | (rm <other> (bits - count));
+        // mem form re-LOADs the rm slot for each shift input.
+        match &dst {
+            AluDst::Reg { vn, .. } => {
+                let ta = self.alloc_tmp(size);
+                Self::push_raw(ops, dir_op, &[vn.clone(), t_count.clone()], Some(&ta));
+                let tsub = self.alloc_tmp(cs);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SUB,
+                    &[Self::const_vn(bits, cs), t_count.clone()],
+                    Some(&tsub),
+                );
+                let tb = self.alloc_tmp(size);
+                Self::push_raw(ops, oth_op, &[vn.clone(), tsub], Some(&tb));
+                Self::push_raw(ops, C::CPUI_INT_OR, &[ta, tb], Some(vn));
+            }
+            AluDst::Mem { addr } => {
+                let slot = mem_slot.clone().expect("mem dst must have a slot");
+                self.emit_load_slot(addr, &slot, ops);
+                let ta = self.alloc_tmp(size);
+                Self::push_raw(ops, dir_op, &[slot.clone(), t_count.clone()], Some(&ta));
+                let tsub = self.alloc_tmp(cs);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SUB,
+                    &[Self::const_vn(bits, cs), t_count.clone()],
+                    Some(&tsub),
+                );
+                self.emit_load_slot(addr, &slot, ops);
+                let tb = self.alloc_tmp(size);
+                Self::push_raw(ops, oth_op, &[slot.clone(), tsub], Some(&tb));
+                Self::push_raw(ops, C::CPUI_INT_OR, &[ta, tb], Some(&slot));
+                self.emit_store_v(addr, slot, ops);
+            }
+        }
+
+        // flag count: 8/16-bit imm forms re-AND the raw imm at :1 AFTER the
+        // value section; other forms use the count temp / early flag count.
+        let cf1 = match form {
+            ShiftCount::Imm if size <= 2 => {
+                let c = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[Self::const_vn(imm_val, 1), Self::const_vn(0x1f, 1)],
+                    Some(&c),
+                );
+                c
+            }
+            _ => cf1_early.unwrap_or_else(|| t_count.clone()),
+        };
+
+        // CF = count!=0 ? (rol: result bit0 / ror: result msb) : CF
+        let g = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_NOTEQUAL,
+            &[cf1.clone(), Self::const_vn(0, cf1.size)],
+            Some(&g),
+        );
+        let b = match dir {
+            RotDir::Left => {
+                let r = read_rm(self, ops);
+                let bit = self.alloc_tmp(size);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_AND,
+                    &[r, Self::const_vn(1, size)],
+                    Some(&bit),
+                );
+                let nb = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_NOTEQUAL,
+                    &[bit, Self::const_vn(0, size)],
+                    Some(&nb),
+                );
+                nb
+            }
+            RotDir::Right => {
+                let r = read_rm(self, ops);
+                let nb = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SLESS,
+                    &[r, Self::const_vn(0, size)],
+                    Some(&nb),
+                );
+                nb
+            }
+        };
+        let neg = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[g.clone()], Some(&neg));
+        let t_a = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[neg, Self::flag_cf()], Some(&t_a));
+        let t_b = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[g, b], Some(&t_b));
+        Self::push_raw(ops, C::CPUI_INT_OR, &[t_a, t_b], Some(&Self::flag_cf()));
+
+        // OF = count==1 ? (rol: CF^result-msb / ror: (rm s<0)^((rm<<1) s<0))
+        // : OF
+        let eq1 = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_EQUAL,
+            &[cf1.clone(), Self::const_vn(1, cf1.size)],
+            Some(&eq1),
+        );
+        let x = match dir {
+            RotDir::Left => {
+                let r = read_rm(self, ops);
+                let m = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SLESS,
+                    &[r, Self::const_vn(0, size)],
+                    Some(&m),
+                );
+                let xx = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_XOR,
+                    &[Self::flag_cf(), m],
+                    Some(&xx),
+                );
+                xx
+            }
+            RotDir::Right => {
+                let r0 = read_rm(self, ops);
+                let m0 = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SLESS,
+                    &[r0, Self::const_vn(0, size)],
+                    Some(&m0),
+                );
+                let r1 = read_rm(self, ops);
+                let sh = self.alloc_tmp(size);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_LEFT,
+                    &[r1, Self::const_vn(1, 4)],
+                    Some(&sh),
+                );
+                let m1 = self.alloc_tmp(1);
+                Self::push_raw(
+                    ops,
+                    C::CPUI_INT_SLESS,
+                    &[sh, Self::const_vn(0, size)],
+                    Some(&m1),
+                );
+                let xx = self.alloc_tmp(1);
+                Self::push_raw(ops, C::CPUI_INT_XOR, &[m0, m1], Some(&xx));
+                xx
+            }
+        };
+        let neg2 = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_BOOL_NEGATE, &[eq1.clone()], Some(&neg2));
+        let t_a2 = self.alloc_tmp(1);
+        Self::push_raw(
+            ops,
+            C::CPUI_INT_AND,
+            &[neg2, Self::flag_of()],
+            Some(&t_a2),
+        );
+        let t_b2 = self.alloc_tmp(1);
+        Self::push_raw(ops, C::CPUI_INT_AND, &[eq1, x], Some(&t_b2));
+        Self::push_raw(ops, C::CPUI_INT_OR, &[t_a2, t_b2], Some(&Self::flag_of()));
+
+        // 32-bit GPR destination zext comes LAST (after all flag ops)
+        zext_parent(ops);
+    }
+
     // RUGRA-GLUE: port of the ia.sinc cc condition table (ia.sinc:1523-1539,
     // `cc: "O" is cond=0 { export OF; }` ... `cc: "G" is cond=15 { local tmp
     // = !ZF && (OF == SF); export tmp; }`); executed semantics verified
@@ -2756,6 +3248,12 @@ impl X86Lifter {
             }
             "sar" => {
                 self.lift_shift(inst, ShiftDir::Arith, &mut ops);
+            }
+            "rol" => {
+                self.lift_rotate(inst, RotDir::Left, &mut ops);
+            }
+            "ror" => {
+                self.lift_rotate(inst, RotDir::Right, &mut ops);
             }
             "lea" => {
                 if inst.operands.len() == 2 {

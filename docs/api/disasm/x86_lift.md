@@ -218,3 +218,38 @@
   `shr dword [rbx+rcx*4+8],cl` 的 3-op 地址前缀序,w-iced F5 既有残差
   的 SIB 分支,44 个 shift 语义 op 全同;修复路径已在 w-push88 的
   compute_push_src_addr 双表序证实,建议另立 compute_mem_addr 任务)。
+
+### 2026-09-01:X86LIFT-FLAG-PCODE-0001 ext-c1 — rol/ror 全形态 rotate flag pcode(w-x86flags)
+- `rol`/`ror` 此前走 `_ => {}` 零 op 臂(httpd 语料 77 处,全部丢弃);按锁定
+  oracle `sleigh_specs/x86-64.sla`(12.0.4 语言,sleigh_shim 直通 dump
+  /tmp/w-ext-rol.out + /tmp/w-ext-ror.out,26 形态)逐 op 补齐
+  (`lift_rotate`/`RotDir`):
+  - **imm 形(C0/C1)**:`t0:4=INT_AND(imm:4,(bits-1):4)`(mask=
+    7/15/0x1f/0x3f 按位宽;操作数序 (imm,mask))→ 值 `rm=INT_OR(rm<<c,
+  rm>>(bits-c))`(rol)或 `INT_OR(rm>>c, rm<<(bits-c))`(ror),`tsub=
+    INT_SUB(const bits:4, t0)` → **8/16-bit 形态在值段之后**再算
+    `cf1:1=INT_AND(imm:1,0x1f:1)` 作 flag count;32/64-bit 直接复用 t0:4。
+  - **cl 形(D2/D3)**:`t0:1=INT_AND(CL:1,(bits-1):1)`;8/16-bit **先**算
+    `cf1:1=INT_AND(CL:1,0x1f:1)`(在值段之前,与 imm 形态的时序相反);
+    32/64-bit 单 AND 复用。tsub 为 1 字节宽。
+  - **flag 组**:CF mux `count!=0 ? (rol: rm&1 / ror: rm s<0) : CF`;
+    OF mux `count==1 ? (rol: CF^SLESS(rm,0) / ror: SLESS(rm,0)^
+    SLESS(rm<<1,0)) : OF`(rm<<1 的 shift const 恒 1:4);AND/OR mux 结构
+    与 shift 组相同。
+  - **by-one 形(D0/D1)**:rol = `CF=SLESS(rm,0)`(值 op 前)→
+    `rm=(rm<<1)|CF`(8-bit CF 直连,更宽 zext(CF):W)→ `OF=XOR(CF,
+    SLESS(rm,0))`;ror = `CF=rm&1`(8-bit AND 直写 CF,更宽 AND:W+
+    NOTEQUAL)→ `rm=(rm>>1)|(CF<<(bits-1):4)`(8-bit CF 直连)→
+    `OF=XOR((rm&second-top)!=0, SLESS(rm,0))`(second-top mask =
+    0x40/0x4000/0x40000000/0x4000000000000000,按操作数宽度)。
+  - **mem dst**:一个共享 unique slot,每次 rm 读前重 LOAD(与 shift 组
+    同构);值 op OR 进 slot 后 STORE。
+  - 32-bit GPR dst 的 zext 在**所有 flag op 之后**(与 shift imm 形态
+    zext-before-flags 相反)。
+- 双侧证据:examples/x86ext_probe(EXTPROBE_FAMILY=rol|ror,
+  EXTPROBE_MODE=compare)22/22 rol + 15/15 ror 形态 MATCH
+  (reg/mem × 8/16/32/64 × imm/cl/by-one,ax/ah 高位形,ax,17 mask 边界,
+  rol eax,0 count==0 边界,REX.R r9w,SIB mem+cl)。
+- E2E:httpd 骨架 2274/0/0 与 master 基线(a31db12c)**字节级一致**
+  (77 处 rol 所在函数不在当前 29 函数对比窗口,零回归);curl sha256
+  ff6bef47 字节不变。
