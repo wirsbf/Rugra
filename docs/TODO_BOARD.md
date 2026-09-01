@@ -2,7 +2,50 @@
 
 本文档的顶部“活跃 wave”是当前任务唯一事实源；后文保留历史阶段记录，不能作为当前优先级。
 
-## 活跃 wave：`W-2026-08-29-FLEET10`（2026-08-29 起接续 DSH-FLEET；goal=函数文本级对齐）
+## 活跃 wave：`W-2026-09-01-FLEET5`（2026-09-01 起；goal=所有函数文本级对齐；并发上限 5=用户指令）
+
+> **基线（root 亲测 @ master `85300a1`，2026-09-01 fresh formal release E2E）**：
+> curl 124/124、skeleton **3090**/defects **0**/numbering **0**，stdout sha256
+> `ff6bef47cf0154be1bd3e460882556e4f80f465b580e773b202895d890768a48`（已回流 result/curl_cur.c）；
+> httpd 29/29、**2274/0/0**，sha `a31db12c866efce56765cc93f0fa938b1ca36f8c944354175dc5bd557afa5ffe`。
+> 归档 /tmp/rugra-base-{curl,httpd}.{c,err}。门禁健康：oracle=e40ed130 ✓ hooks=.githooks ✓
+> libdecomp.a ✓ BFD ✓（/tmp/rugra-ghidra-bfd-2.38 存活）。
+> **函数级 top 差异（raw ±diff 行，按地址标记配对）**：curl main 876 / getparameter.constprop.0（~672 未入清单，
+> 名字带后缀）/ parseconfig.constprop.0 / next_url 168 / match_url 113 / glob_set 110 / myprogress 103 /
+> glob_range 103 / my_get_line 93 / glob_word 74 / helpf 73 / my_get_token 66；
+> httpd main 656 / ap_fini_vhost_config 278 / ap_pregsub 246 / ap_getparents 241 / ap_update_vhost_from_headers 218 /
+> ap_ht_time 98 / ap_strcasecmp_match 89。
+>
+> **会话中断回收（root，2026-09-01）**：上轮 FLEET10 中断后远程遗留 15 个 agent/* 分支。已甄别：
+> - `agent/cmov-pending`(+2) = **W4 `RULE-PROPCOPY-ADDRTIED-0001` 完整修复**（b1c7308 merge.rs 惰性 cover 重建
+>   根因 + cc8772f merge_trim_lane_1204 双侧 fixture MATCH）。分支自测：curl 3718/0/0（P16c 277→0，6 处 CMOVcc
+>   空 if 恢复体，47 函数改善；+628 已逐类解释=暴露上游既有分歧）；**Cross-Review PENDING → 已派 reviewer-cmov**。
+>   暴露的上游分歧已立案：main 自拷贝噪音 `x=x;`（~204 行，varmap/markInternalCopies 域）、helpf varargs
+>   寄存器保存链位置（condexe/block 域）、命名/类型（varmap/typeop 域）——W4 集成后按新 top 派 wave2。
+> - `agent/w5-diagnosis`(+1) = P23 UNLINKED-REF 逐语句根因台账 + **已验证 F1 补丁**（nodeSplit clone 输出丢
+>   地址空间，funcdata_block.cc:992-1004；curl P23 8→5，skeleton −5）→ 已派 w-nodesplit 落地。
+> - 其余 12 个老分支 → w-salvage 甄别中（报告 /tmp/rugra-reports/SALVAGE-TRIAGE-2026-09-01.md）。
+>
+> **编排**：root（主 Agent，唯一 master writer/集成者）+ 5 常驻后台子 Agent；worktree 隔离 + 独占写集租约 +
+> 专属 CARGO_TARGET_DIR（/dev/shm/rugra-tgt-*）+ ghidra symlink；子 Agent 交付（branch commit + 报告
+> /tmp/rugra-reports/<name>-2026-09-01.md）→ root 串行 cherry-pick → 构建 → E2E → 差分门禁（defects 必须 0）
+> → 更新本板。板面 wave 节 root 维护，子 Agent 不直接改本板。
+
+### W-2026-09-01-FLEET5 认领租约（5 并发；write-set 互斥已核）
+
+| Agent | ID | 类型 | 独占 write-set | 状态/交付物 |
+|---|---|---|---|---|
+| reviewer-cmov | `RULE-PROPCOPY-ADDRTIED-0001`(机制C复核) | 只读 | 无（报告 /tmp/rugra-reports/R-CMOV-CROSSREVIEW-2026-09-01.md） | 在途：独立复核 agent/cmov-pending 两提交（merge.rs 白名单门） |
+| w-x86flags | `X86LIFT-FLAG-PCODE-0001`(iced路径) | writer | `src/disasm/x86_lift.rs`+`docs/api/disasm/x86_lift.md`+probe/fixture+registry，branch `wt2/x86flags` | 在途：cmovcc/setcc→add/sub/adc/sbb→logic 按优先级；sleigh dump op-for-op 方法论（沿用 ea5010e 三笔）；验收=httpd 向 golden 收敛、defects/numbering 0、curl 字节不变 |
+| w-subfloat | `SUBFLOAT-TRANSFORM-RESIDUAL-0001` | writer | `src/subflow.rs`+`docs/api/subflow.md`+fixture+registry，branch `wt2/subfloat` | 在途：TransformManager(transform.cc/hh) 完整移植替换三处 SUBFLOAT-TRANSFORM-NOT-PORTED defer(subflow.rs:6370/7463/7494) |
+| w-nodesplit | `W5-F1-NODESPLIT-SPACE-0001`(自 `PTRSUB`/P23 族改判) | writer | `src/funcdata.rs`+`docs/api/funcdata.md`+W5 docs+fixture+registry，branch `wt2/nodesplit` | 在途：应用并语义核对 W5_F1_NODESPLIT_SPACE_FIX.patch（funcdata_block.cc:992-1004）；验收=curl P23 8→5、defects/numbering 0 |
+| w-salvage | 12 个老 agent/* 分支甄别 | 只读 | 无（报告 /tmp/rugra-reports/SALVAGE-TRIAGE-2026-09-01.md） | 在途：INTEGRATED_BY_CONTENT/SUPERSEDED/SALVAGEABLE/DEAD_WIP 四分类+cherry-pick 队列 |
+
+> 冲突矩阵：x86_lift.rs=w-x86flags；subflow.rs=w-subfloat；funcdata.rs(+docs/api)=w-nodesplit；merge.rs=待 W4
+> 集成（root）；heritage/coreaction/varmap/condexe/block 本 wave 留给 wave2 补位。examples/* 仅 x86flags 可动
+> （其 probe）；E2E 输出一律 /tmp/<agent>-*，禁触 result/（root 专属）。
+
+## 历史 wave：`W-2026-08-29-FLEET10`（2026-08-29~31；goal=函数文本级对齐；会话中断，成果已大宗回收入 master）
 
 > 基线(root 亲测 @ master `3fb97c11`,即 08-28 wave backlog 落库 + 2 个 char 域陈旧测试修复):
 > cargo check 绿;`cargo test --lib -- --test-threads=1` = 1626 passed / 17 failed / 5 ignored(已知集:
