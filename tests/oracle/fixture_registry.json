@@ -7900,6 +7900,44 @@
         "rust_function_ids": [],
         "ghidra_function_ids": []
       }
+    },
+    {
+      "id": "funcdata_scopelocal_wrap_1204",
+      "description": "FUNCDATA-SCOPELOCALOVERFLOW-0001 / FUNCDATA-SCOPELOCAL-WRAP-0001 wrap-domain oracle: database.cc:2397 addr.getOffset()+size-1 evaluated in the uint8 modular domain (int4 size sign-extended, wrapping add/sub); 7 queries (top-of-stack record wrap full/last-byte/from-below -> top8, negative size -> null, zero size -> null, low_hit -> low8, nonoverlap -> null) byte-identical vs locked 12.0.4",
+      "runner": [
+        "tools/run_funcdata_scopelocal_wrap_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/funcdata_scopelocal_wrap_1204.metadata.json",
+        "inputs": {
+          "cpp_fixture": "tests/oracle/funcdata_scopelocal_wrap_1204.cc",
+          "rust_fixture": "tests/oracle/funcdata_scopelocal_wrap_1204.rs"
+        },
+        "tools": {
+          "runner_1": "tools/run_funcdata_scopelocal_wrap_oracle.sh"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/funcdata.rs",
+          "tests/oracle/funcdata_scopelocal_wrap_1204.*",
+          "tools/run_funcdata_scopelocal_wrap_oracle.sh"
+        ],
+        "rust_function_ids": [
+          "scope_local_find_overlap",
+          "scope_local_in_scope"
+        ],
+        "ghidra_function_ids": [
+          "ScopeInternal::findOverlap",
+          "Scope::inScope"
+        ]
+      }
     }
   ]
 }
