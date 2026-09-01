@@ -141,7 +141,16 @@ COPY-follow（cc:2761-2769）、oracle buildPointers 的 PTRSUB/PTRADD op
 - 自由函数 `is_arithmetic_opcode` / `is_arithmetic_input` / `is_arithmetic_output` / `load_store_space` — arithmetic sanity / LOAD·STORE 空间常量解码 (subflow.cc:2673-2696, typeop.hh:140, varnode.hh:426)
 
 ### `RuleSubfloatConvert` (subflow.cc:3489, 5633)
-浮点子精度转换——Rule struct 存在，TransformManager.apply 待补（依赖 transform.rs 基础设施）。
+浮点子精度转换——完整 `SubfloatFlow`（subflow.cc:3070-3481）已移植：`maxPrecision`
+（迭代 DFS + `maxPrecisionMap` 缓存 + op mark 环截断）、`exceedsPrecision`、
+`setReplacement`（mark/constant 重编码/free/addrforce/typelock/input 守卫 +
+newPiece/newPreexistingVarnode/worklist）、`traceForward`（算术 exceedsPrecision 门、
+pass-through 替换、FLOAT2FLOAT/比较/TRUNC/NAN preexisting terminator、
+`preexistingGuard` + `getRepeatSlot` 重复输入修正）、`traceBackward`（pass-through
+def 复用、INT2FLOAT/FLOAT2FLOAT 源替换、常量 precision 重编码）、`doTrace`
+（terminatorCount≥1 门）与 `apply`（委托 transform.rs `TransformManager::apply`）。
+`preserveAddress` override（subflow.cc:3451 `vn->isInput()`）经
+`set_preserve_address_override` 虚分发钩子接入。
 
 ## 基础设施缺口（已标注 TODO，未绕过）
 - `Varnode::isPtrFlow()` — 缺失，RuleSubvarSubpiece/Zext 保守 default false
@@ -316,3 +325,40 @@ Datatype 尺寸错配，另一方面与 `ActionInferTypes::writeBack`（每轮�
 两个旧断言盖章行为的单测改为断言 defer 且不出现小尺寸 float 盖章。
 遗留：完整 `SubfloatFlow` trace/transform 移植登记于
 SUBFLOAT-TRANSFORM-NOT-PORTED-0001。
+
+## 2026-09-01：SUBFLOAT-TRANSFORM-RESIDUAL-0001 — SubfloatFlow 完整移植
+
+`TransformManager`（transform.rs）已具备全部簿记原语（SplitFlow/LaneDivide 已用），
+缺口是 `SubfloatFlow` 本体未接线。本次按 subflow.cc:3070-3481 逐函数移植：
+
+- `max_precision`（cc:3079-3175）：`State{op,slot,maxPrecision}` 显式栈 DFS；
+  MULTIEQUAL/COPY/一元 float def 穿透，ADD/SUB/MULT/DIV 贡献 0，
+  FLOAT2FLOAT/INT2FLOAT 贡献 `min(in(0) size, vn size)`，default 贡献 vn size；
+  op mark 截环、完成后入 `max_precision_map`（key=`Arc::as_ptr` 身份），
+  命中缓存直接吸收。
+- `exceeds_precision`（cc:3186-3193）：两输入 maxPrecision 的 min > precision。
+- `set_replacement`（cc:3200-3240）：mark 复查→`getPiece(vn, precision*8, 0)`；
+  常量 `convertEncoding` 重编码（格式缺失→abort）；free/addrforce(尺寸≠precision)/
+  typelock(非 PARTIALSTRUCT 且尺寸≠precision)/input(尺寸≠precision) 守卫；
+  `newPreexistingVarnode`（size==precision）或 `newPiece`+worklist。
+- `trace_forward`（cc:3249-3330）：descend 快照遍历；outvn 已 mark 跳过；
+  二元算术先 `exceedsPrecision`；pass-through 族 `newOpReplace(numInput)` +
+  输出 `setReplacement`；FLOAT2FLOAT 下游按 outsize==precision 折 COPY 作
+  preexisting terminator；比较族重复输入走 `getRepeatSlot`（count=descend
+  中当前 op 之前的出现次数+1，对齐 op.cc:93-111 迭代器语义）+ `preexistingGuard`；
+  TRUNC/NAN 一元 terminator；default abort。
+- `trace_backward`（cc:3339-3419）：def 为 input→true；pass-through 复用
+  `rvn->getDef()` placeholder 或 new；INT2FLOAT 源替换（free 非常量拒绝）；
+  FLOAT2FLOAT 源常量按 size==precision 直取 offset / 否则 setReplacement
+  重编码，非常量 `getPreexistingVarnode`，COPY/FLOAT2FLOAT 二选一。
+- `do_trace`（cc:3462-3481）：format 缺失 false；drain worklist；清 mark；
+  `terminatorCount==0` 拒绝。
+- `apply_op`（cc:3489-3507）改回 oracle 结构：widening root=outvn/prec=insize，
+  narrowing root=invn/prec=outsize，`doTrace` 过→`apply`，**无常量特判**。
+
+行为修复（对齐 oracle，非回归）：常量 widening 现在要求下游 terminator 才折叠
+（`doTrace` 的 terminatorCount 门，cc:3479）；常量 narrowing root 是常量、不进
+worklist，永不折叠（此前无条件折叠为 COPY，偏离 oracle）。widening/narrowing
+非常量路径从 defer 变为真实数据流重写：原 op 销毁（op_replacement）、新建
+Varnode/ops、terminator 原地 retarget（op_preexisting），**不 retype 原 Varnode**
+（myprogress「Type propagation not settling」的根因家族 F2 就此关闭）。
