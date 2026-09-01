@@ -89,6 +89,10 @@ path = "tests/oracle/infertypes_settle_1204.rs"
 name = "varmap_dupdecl_1204_oracle"
 path = "tests/oracle/varmap_dupdecl_1204.rs"
 
+[[example]]
+name = "funcdata_nodesplit_space_1204_oracle"
+path = "tests/oracle/funcdata_nodesplit_space_1204.rs"
+
 [profile.release]
 opt-level = 3
 lto = "fat"

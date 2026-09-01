@@ -7837,6 +7837,39 @@
           "GH12-F-472f3b78edfb9031015e"
         ]
       }
+    },
+    {
+      "id": "funcdata_nodesplit_space_1204",
+      "description": "nodeSplit clone output keeps the original output's FULL address including space (Funcdata::newVarnodeOut at opvn->getAddr(), funcdata_block.cc:988) plus the addlflag fold (cc:995-997): clone storage space/offset/size, flag/addlflag projections with out-of-mask sentinels, SeqNum, MULTIEQUAL->COPY inedge pick, clone-input remap/share, original-block post-split shape, in-edge counts over N1/N2/N3 — byte-identical MATCH [FUNCDATA-NODESPLIT-SPACE-0001; P23/UNLINKED-REF family F1; residual: CloneBlockOps::cloneExpression unported, registered in ruleaction.rs]",
+      "runner": [
+        "tools/run_funcdata_nodesplit_space_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/funcdata_nodesplit_space_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_funcdata_nodesplit_space_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/funcdata_nodesplit_space_1204.cc",
+          "fixture_source_2": "tests/oracle/funcdata_nodesplit_space_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/funcdata.rs",
+          "tests/oracle/funcdata_nodesplit_space_1204.cc",
+          "tests/oracle/funcdata_nodesplit_space_1204.rs",
+          "tools/run_funcdata_nodesplit_space_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": []
+      }
     }
   ]
 }
