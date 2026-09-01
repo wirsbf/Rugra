@@ -170,7 +170,12 @@ pub fn scope_local_find_overlap(
     offset: u64,
     size: i32,
 ) -> Option<&crate::varmap::LocalSymbol> {
-    let last = offset + size as u64 - 1;
+    // database.cc:2397: addr.getOffset()+size-1 — evaluated in the oracle's
+    // uint8 (uint64) modular domain: the int4 size converts by sign
+    // extension and both operators wrap (C++ unsigned arithmetic, UB-free).
+    // Stack-space offsets near 2^64 (negative stack slots) legitimately
+    // wrap here (FUNCDATA-SCOPELOCALOVERFLOW-0001), so Rust must wrap too.
+    let last = offset.wrapping_add(size as u64).wrapping_sub(1);
     // Records in this space's EntryMap: (first, last) inclusive.
     let candidates: Vec<&crate::varmap::LocalSymbol> = scope
         .symbols
@@ -197,10 +202,18 @@ pub fn scope_local_find_overlap(
     // rangemap.hh:420-421: if ((*iter).first <= end) return iter; — among
     // the records covering the unit (== records covering hit_address), the
     // multiset order picks the smallest subsort; equal subsorts keep Vec
-    // order (std::multiset insertion order of equivalent keys).
+    // order (std::multiset insertion order of equivalent keys). The
+    // containment test is the oracle's `first <= p <= last` form where
+    // `last` is the modular first+size-1 (records straddle no space
+    // boundary, so first <= last holds): a `p < first+size` rewrite would
+    // deviate for records at the top of the stack space where first+size
+    // wraps to 0, and would trap in debug on the same wrap.
     candidates
         .iter()
-        .filter(|sym| sym.start <= hit_address && hit_address < sym.start + sym.size as u64)
+        .filter(|sym| {
+            let sym_end = sym.start.wrapping_add(sym.size as u64).wrapping_sub(1);
+            sym.start <= hit_address && hit_address <= sym_end
+        })
         .min_by_key(|sym| entry_subsort_key(sym))
         .copied()
 }
@@ -237,7 +250,10 @@ fn scope_local_in_scope(
     size: i32,
     _usepoint: Option<u64>,
 ) -> bool {
-    let last = offset + size as u64 - 1;
+    // address.cc:484: addr.getOffset()+size-1 — same uint8 modular domain
+    // as findOverlap (database.cc:2397); stack-space queries near 2^64 wrap
+    // (FUNCDATA-SCOPELOCALOVERFLOW-0001).
+    let last = offset.wrapping_add(size as u64).wrapping_sub(1);
     scope
         .local_range
         .iter()
@@ -16776,4 +16792,107 @@ mod laned_access_tests {
         fd.clear_laned_access_map();
         assert!(fd.laned_map.is_empty());
     }
+}
+
+mod scope_query_tests {
+    use super::*;
+
+// FUNCDATA-SCOPELOCALOVERFLOW-0001: database.cc:2397 computes
+// addr.getOffset()+size-1 in the uint8 (uint64) modular domain, and
+// stack-space offsets near 2^64 (negative stack slots, e.g. a canary
+// at stack -8) legitimately wrap. The pre-fix `offset + size as u64`
+// trapped with `attempt to add with overflow` under the debug profile
+// (examples/stackfold_dbg, httpd corpus) while release wrapped
+// silently — masking the defect from the release E2E gates.
+#[test]
+fn test_scope_local_find_overlap_wraps_at_space_top() {
+    use crate::varmap::{LocalSymbol, ScopeLocal};
+    let mut scope = ScopeLocal::new();
+    scope
+        .symbols
+        .push(LocalSymbol::new("canary", 0xffff_ffff_ffff_fff8, 8, None, -1));
+
+    // Query the whole [stack -8, stack -1] record: last = -8 + 8 - 1
+    // wraps around 2^64 in both C++ and the fixed Rust.
+    let hit = scope_local_find_overlap(
+        &scope,
+        AddressSpace::Stack,
+        0xffff_ffff_ffff_fff8,
+        8,
+    )
+    .expect("oracle findOverlap answers the top-of-space record");
+    assert_eq!(hit.name, "canary");
+
+    // Query exactly the final byte: offset + size wraps to 0 before
+    // the -1 restores 0xffffffffffffffff (modular last).
+    let hit_last_byte = scope_local_find_overlap(
+        &scope,
+        AddressSpace::Stack,
+        0xffff_ffff_ffff_ffff,
+        1,
+    )
+    .expect("oracle findOverlap answers the last byte via modular last");
+    assert_eq!(hit_last_byte.name, "canary");
+
+    // One past the record end: no overlap in the oracle.
+    assert!(scope_local_find_overlap(
+        &scope,
+        AddressSpace::Stack,
+        0x0000_0000_0000_0010,
+        8
+    )
+    .is_none());
+}
+
+// database.cc:2397 sign-extends a negative int4 size into the uint8
+// domain before the modular add/sub: last = offset + size - 1 (mod
+// 2^64). With end < point every rangemap unit fails `first <= end`
+// (rangemap.hh:421), so the oracle answers null — no panic allowed.
+#[test]
+fn test_scope_local_find_overlap_negative_size_modular() {
+    use crate::varmap::{LocalSymbol, ScopeLocal};
+    let mut scope = ScopeLocal::new();
+    scope
+        .symbols
+        .push(LocalSymbol::new("pre", 0x0f_00, 8, None, -1));
+    scope
+        .symbols
+        .push(LocalSymbol::new("at", 0x10_00, 8, None, -1));
+
+    // last = 0x1000 + (-8) - 1 = 0x0ff7 (modular): end < point → null.
+    assert!(scope_local_find_overlap(&scope, AddressSpace::Stack, 0x10_00, -8).is_none());
+    // Same modular arithmetic from an offset that does not underflow:
+    // last = 0x1000 - 1 = 0x0fff still < point 0x1000 → null.
+    assert!(scope_local_find_overlap(&scope, AddressSpace::Stack, 0x10_00, 0).is_none());
+}
+
+// address.cc:484 (RangeList::inRange via database.hh:597 Scope::inScope)
+// evaluates the same addr.getOffset()+size-1 modular expression.
+#[test]
+fn test_scope_local_in_scope_wraps_at_space_top() {
+    use crate::varmap::ScopeLocal;
+    let mut scope = ScopeLocal::new();
+    scope
+        .local_range
+        .push((0xffff_ffff_ffff_ff_00, 0xffff_ffff_ffff_ffff));
+    // last = 0xfffffffffffffff8 + 8 - 1 wraps to 0xffffffffffffffff.
+    assert!(scope_local_in_scope(
+        &scope,
+        AddressSpace::Stack,
+        0xffff_ffff_ffff_fff8,
+        8,
+        None
+    ));
+    // A query whose modular last wraps low still satisfies the C++
+    // comparison `range.last >= addr.getOffset()+size-1`: last wraps to 6
+    // and 0xffffffffffffffff >= 6 is true in the oracle's uint8 domain
+    // (address.cc:484) — pin the oracle's own answer, true.
+    assert!(scope_local_in_scope(
+        &scope,
+        AddressSpace::Stack,
+        0xffff_ffff_ffff_ffff,
+        8,
+        None
+    ));
+}
 }
