@@ -737,7 +737,7 @@ ra 语义对齐”
 - `GAP_ANALYSIS.md`
 - `docs/VERIFICATION_GUIDE.md`
 - `docs/PROJECT_STRUCTURE.md`
-- `docs/AgentLog/`
+- `docs/archive/agentlog/`
 
 避免再次出现：
 - 框架存在就写成“已完成”
