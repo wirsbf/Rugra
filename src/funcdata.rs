@@ -2498,21 +2498,39 @@ impl Funcdata {
         addr: crate::address::Address,
         op: &crate::op::PcodeOpRef,
     ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
-        let vn = self.vbank.create_def_with_space(
-            size,
-            crate::space::AddressSpace::Register,
-            addr.as_u64(),
-            &op.0,
-        );
+        // Rugra split-Address adapter: callers without a known true space keep
+        // the historical Register pin; the full newVarnodeOut sequence runs in
+        // new_varnode_out_full below.
+        self.new_varnode_out_full(size, crate::space::AddressSpace::Register, addr, op)
+    }
+
+    // Ghidra: funcdata_varnode.cc:104 Funcdata::newVarnodeOut
+    /// Space-preserving `Funcdata::newVarnodeOut`: the oracle's `m` is a full
+    /// `Address` (space + offset). Rugra's scalar `Address` cannot carry the
+    /// space, so callers that must reproduce the oracle's full storage address
+    /// — e.g. `CloneBlockOps::buildVarnodeOutput`
+    /// (funcdata_block.cc:988 `data.newVarnodeOut(opvn->getSize(),opvn->getAddr(),cloneOp)`)
+    /// — pass the true space explicitly. Sequence is 1:1 with
+    /// funcdata_varnode.cc:107-121, and the symbol tail is the UNCONDITIONAL
+    /// `localmap->queryProperties(m,s,op->getAddr(),vflags)` form
+    /// (`new_varnode_symbol_tail`, usepoint = op->getAddr()), NOT the
+    /// isMapped-guarded `getUsePoint` form of `setVarnodeProperties`
+    /// (funcdata_varnode.cc:25-42), which is a different function.
+    /// (FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001, FUNCDATA-NODESPLIT-SPACE-0001)
+    pub fn new_varnode_out_full(
+        &mut self,
+        size: usize,
+        space: crate::space::AddressSpace,
+        addr: crate::address::Address,
+        op: &crate::op::PcodeOpRef,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let vn = self.vbank.create_def_with_space(size, space, addr.as_u64(), &op.0);
         op.0.write().unwrap().output = Some(vn.clone());
         // cc:110: assignHigh(vn) — comes BEFORE the queryProperties leg.
         // (FUNCDATA-NEWUNIQUE-ASSIGNHIGH-0001)
         let _ = self.assign_high(&vn);
         if size >= self.min_laned_size as usize {
-            self.check_for_laned_register(
-                size,
-                crate::space::AddressSpace::Register,
-                addr);
+            self.check_for_laned_register(size, space, addr);
         }
         // cc:114-119: queryProperties(m, s, op->getAddr(), vflags) with the
         // op address as usepoint, then the shared symbol tail.
@@ -16437,9 +16455,10 @@ pub fn ancestor_op_use(
     }
 }
 
-// Ghidra: funcdata_block.cc:962 CloneBlockOps
+// Ghidra: funcdata.hh:630 CloneBlockOps
 /// Clone p-code ops from one basic block into another (for nodeSplit).
-/// Faithful to Ghidra's `CloneBlockOps` class (funcdata_block.cc:962-1104).
+/// Faithful to Ghidra's `CloneBlockOps` class (funcdata.hh:630; methods in
+/// funcdata_block.cc:951-1104).
 struct CloneBlockOps {
     /// (clone_op, orig_op) pairs, in clone order.
     clone_list: Vec<(crate::op::PcodeOpRef, crate::op::PcodeOpRef)>,
@@ -16456,7 +16475,7 @@ impl CloneBlockOps {
         }
     }
 
-    // Ghidra: funcdata_block.cc:962 CloneBlockOps::buildOpClone
+    // Ghidra: funcdata_block.cc:951 CloneBlockOps::buildOpClone
     /// Clone a PcodeOp (copy opcode + flags). Skip branches (return None).
     fn build_op_clone(
         &mut self, fd: &mut Funcdata, orig: &crate::op::PcodeOpRef,
@@ -16509,20 +16528,23 @@ impl CloneBlockOps {
         Some(dup)
     }
 
-    // Ghidra: funcdata_block.cc:992 CloneBlockOps::buildVarnodeOutput
-    /// Clone the output Varnode of an op into the clone op.
+    // Ghidra: funcdata_block.cc:981 CloneBlockOps::buildVarnodeOutput
+    /// Clone the output Varnode of an op into the clone op. The clone is
+    /// created at the original output's FULL storage address (space+offset),
+    /// per cc:988 `data.newVarnodeOut(opvn->getSize(),opvn->getAddr(),cloneOp)`
+    /// — Ghidra's `Address` carries the space, so a ram-space persist output
+    /// clones into ram, not Register. (FUNCDATA-NODESPLIT-SPACE-0001)
     fn build_varnode_output(
         &self, fd: &mut Funcdata, orig_op: &crate::op::PcodeOpRef, clone_op: &crate::op::PcodeOpRef,
     ) {
         let orig_out = orig_op.0.read().unwrap().output.clone();
         let Some(orig_vn) = orig_out else { return };
-        let (size, addr) = {
+        let (size, space, addr, orig_flags, orig_addlflags) = {
             let v = orig_vn.read().unwrap();
-            (v.size, v.loc)
+            (v.size, v.address_space, v.loc, v.flags, v.addlflags)
         };
-        let new_vn = fd.new_varnode_out(size, addr, clone_op);
-        // Copy varnode flag subset (funcdata_block.cc:1001-1004).
-        let orig_flags = orig_vn.read().unwrap().flags;
+        let new_vn = fd.new_varnode_out_full(size, space, addr, clone_op);
+        // Copy varnode flag subset (funcdata_block.cc:989-994).
         let vflag_mask = crate::varnode::varnode_flags::EXTERNREF
             | crate::varnode::varnode_flags::VOLATIL
             | crate::varnode::varnode_flags::INCIDENTAL_COPY
@@ -16537,9 +16559,15 @@ impl CloneBlockOps {
             | crate::varnode::varnode_flags::PRECISLO
             | crate::varnode::varnode_flags::PRECISHI;
         new_vn.write().unwrap().set_flags(orig_flags & vflag_mask);
+        // Copy addlflag subset (funcdata_block.cc:995-997):
+        //   aflags &= (writemask | ptrflow | stack_store); addlflags |= aflags.
+        let addl_mask = crate::varnode::addl_flags::WRITE_MASK
+            | crate::varnode::addl_flags::PTR_FLOW
+            | crate::varnode::addl_flags::STACK_STORE;
+        new_vn.write().unwrap().addlflags |= orig_addlflags & addl_mask;
     }
 
-    // Ghidra: funcdata_block.cc:1015 CloneBlockOps::cloneBlock
+    // Ghidra: funcdata_block.cc:1004 CloneBlockOps::cloneBlock
     /// Clone all ops from `b` into `bprime`, patching inputs.
     fn clone_block(
         &mut self,
@@ -16566,7 +16594,7 @@ impl CloneBlockOps {
         self.patch_inputs(fd, inedge);
     }
 
-    // Ghidra: funcdata_block.cc:1058 CloneBlockOps::patchInputs
+    // Ghidra: funcdata_block.cc:1047 CloneBlockOps::patchInputs
     /// Patch cloned op inputs: MULTIEQUAL → COPY; constants shared; written
     /// inputs mapped to clone outputs; others shared.
     fn patch_inputs(&self, fd: &mut Funcdata, inedge: usize) {

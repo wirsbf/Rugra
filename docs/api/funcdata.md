@@ -2117,3 +2117,36 @@ defects/numbering 均 0);curl 骨架 3095→3091(main/myprogress/
 my_get_token/parseconfig.constprop.0 仅删除 stub 警告注释,函数体逐字节
 不变,defects/numbering 均 0);cargo test 全量 17 failed 与 master 基线
 逐名一致。
+
+## 2026-09-01:nodeSplit 克隆输出保地址空间(FUNCDATA-NODESPLIT-SPACE-0001)
+
+`CloneBlockOps::build_varnode_output`(funcdata_block.cc:981-998)修复:oracle 在
+cc:988 以 `data.newVarnodeOut(opvn->getSize(), opvn->getAddr(), cloneOp)` 用
+**完整地址(space+offset)** 建克隆输出 — ram 空间的 persist 全局写回克隆后仍是
+ram。旧 Rugra 走 `new_varnode_out` 适配器(Address 不带 space、钉死 Register),
+ram:0x17510 的 persist 写回被克隆成 register:0x17510,后续
+linkSymbol(`if (!isPersist())` 臂被跳过 + `query_global_symbol_hit` 只认 Ram)
+无符号命中 → 打印 `register0x…` token → P23 UNLINKED-REF 回填(curl _init/
+my_get_token/next_url 3 行)。
+
+- `new_varnode_out_full(size, space, addr, op)` — `Funcdata::newVarnodeOut`
+  (funcdata_varnode.cc:104-122)的保空间完整序列:createDef(真 space)→
+  setOutput → assignHigh → laned check(真 space)→ **无条件**
+  queryProperties 尾(usepoint=op->getAddr(),`new_varnode_symbol_tail`),
+  不是 isMapped-guarded 的 `setVarnodeProperties`(funcdata_varnode.cc:25-42,
+  另一函数 — 对 fresh 克隆二者 usepoint 相同但此处按 oracle 原形)。
+  `new_varnode_out` 变为委托(legacy 调用者保持 Register pin,行为不变)。
+- `build_varnode_output` — 读 orig 输出 (size, address_space, loc) 三元组后
+  走 `new_varnode_out_full`;vflag 拷贝掩码不变(cc:990-993);**补齐缺失的
+  addlflag fold**(cc:995-997:`writemask|ptrflow|stack_store`,`addlflags |=`,
+  旧移植完全缺失)。
+- CloneBlockOps 注解纠正(cited-line-drift):struct→funcdata.hh:630;
+  buildOpClone→cc:951;buildVarnodeOutput→cc:981;cloneBlock→cc:1004;
+  patchInputs→cc:1047(均指向函数定义起始行)。
+
+双侧 fixture `tests/oracle/funcdata_nodesplit_space_1204.{cc,rs}`(27 记录,
+N1/N2/N3:inedge 0/1 + 最小矩阵):克隆输出 space/offset/size、flag/addlflag
+投影(含 mapped|directwrite|unaffected|ptrcheck 越掩码哨兵)、SeqNum、
+MULTIEQUAL→COPY inedge 拾取、clone 输入重映射/共享/常量、原块分裂后形态、
+入边计数 — 双侧 stdout 字节一致 MATCH
+(tools/run_funcdata_nodesplit_space_oracle.sh)。
