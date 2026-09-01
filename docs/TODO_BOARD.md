@@ -26,24 +26,50 @@
 >   地址空间，funcdata_block.cc:992-1004；curl P23 8→5，skeleton −5）→ 已派 w-nodesplit 落地。
 > - 其余 12 个老分支 → w-salvage 甄别中（报告 /tmp/rugra-reports/SALVAGE-TRIAGE-2026-09-01.md）。
 >
-> **编排**：root（主 Agent，唯一 master writer/集成者）+ 5 常驻后台子 Agent；worktree 隔离 + 独占写集租约 +
-> 专属 CARGO_TARGET_DIR（/dev/shm/rugra-tgt-*）+ ghidra symlink；子 Agent 交付（branch commit + 报告
-> /tmp/rugra-reports/<name>-2026-09-01.md）→ root 串行 cherry-pick → 构建 → E2E → 差分门禁（defects 必须 0）
-> → 更新本板。板面 wave 节 root 维护，子 Agent 不直接改本板。
+> **W4 已集成(2026-09-01 root,`68311fa`+`70f4449`,R-CMOV-CROSSREVIEW **APPROVE** 闭环)**:
+> merge.rs aggregate_high_cover_from 惰性 cover 重建修复 + merge_trim_lane_1204 双侧 fixture。
+> master 亲测:curl **3718/0/0**(sha `a08dd3b0…`,与分支字节一致)、httpd **2344/0/0**(sha `429433e7…`)。
+> 6 处 CMOVcc 空 if 恢复 golden 形态、P16c 277→0、47 函数改善;+628 skeleton=暴露上游既有分歧(已立案见下)。
+> **复核 F1-F4 非阻塞发现(登记待办)**:F1 merge.rs:4445/4485/4497 注释引用 12.0.4 不存在的
+> merge.hh:83 aggregateHighCoverFrom 等(cited-line-drift 红旗,改锚 variable.cc);F2 inflate_test(:889)/
+> shadowed_varnode(:4085)/gather_block_varnodes(:68)/test_block_intersection(:88) 仍读原始 cover 字段
+> (oracle 经 getCover()/updateHigh 重建——与 W4 同根因其余入口,已交 w-selfcopy 评估);F3 allocate_copy_trim
+> 缺 merge.cc:416-428 类型解析段、merge_op phase1 j 循环快照 vs 实时 getIn(j);F4 mergeTest 门
+> any-instance OR-flags 近似。
+>
+> **salvage 甄别交付(w-salvage,报告 /tmp/rugra-reports/SALVAGE-TRIAGE-2026-09-01.md)**:
+> - **scopefix2-pending 可回收(TOP)**:`de4309f`=CALLSPEC-DRIVER-0001 实现(master inject 路径确认缺失)、
+>   `657ff89d`+`5805489`=FUNCDATA-SCOPELOCALOVERFLOW-0001 wrap+双侧 fixture(master funcdata.rs:174 仍裸加法);
+>   两个 repin commit 勿 pick(钉的是分支自身树),须对 master 重钉;冲突面=funcdata.rs 两小 hunk,**等 w-nodesplit 释放租约**。
+> - **mainspinfix 可回收**:`00b157a`+`c1f61d4`+`47bece2`=PIPE-RESTART-0001 真实重启环唯一实现(master action.rs:1105
+>   仍保守降级);wip 无 Evidence,需补四类语义+机制 C 复核;examples 冻结归 root。
+> - regb `3d042eb`(model_locked 门,与 master coreaction.rs:8804 相反立场)+pltstub `9f14522`(create_placeholder
+>   双守卫)→ **已派 w-pltwarn 裁决修复**(PLTSTUB-WARNLOSS-0001)。
+> - calloutfix/markimplied2/mergeproto/orphanfix/switchemit 主体=INTEGRATED_BY_CONTENT 或 SUPERSEDED;
+>   registry-cont-w4=第九窗已并 SUPERSEDED;registryw2/tri4-triage=DEAD;irreducible 残留=5 docs+SwitchTableMetadata seam。
+>
+> **编排**:root(主 Agent,唯一 master writer/集成者)+ 5 常驻后台子 Agent;worktree 隔离 + 独占写集租约 +
+> 专属 CARGO_TARGET_DIR(/dev/shm/rugra-tgt-*)+ ghidra symlink;子 Agent 交付(branch commit + 报告
+> /tmp/rugra-reports/<name>-2026-09-01.md)→ root 串行 cherry-pick → 构建 → E2E → 差分门禁(defects 必须 0)
+> → 更新本板。板面 wave 节 root 维护,子 Agent 不直接改本板。20 分钟周期监控自动化在运行。
 
-### W-2026-09-01-FLEET5 认领租约（5 并发；write-set 互斥已核）
+### W-2026-09-01-FLEET5 认领租约(5 并发;write-set 互斥已核)
 
 | Agent | ID | 类型 | 独占 write-set | 状态/交付物 |
 |---|---|---|---|---|
-| reviewer-cmov | `RULE-PROPCOPY-ADDRTIED-0001`(机制C复核) | 只读 | 无（报告 /tmp/rugra-reports/R-CMOV-CROSSREVIEW-2026-09-01.md） | 在途：独立复核 agent/cmov-pending 两提交（merge.rs 白名单门） |
-| w-x86flags | `X86LIFT-FLAG-PCODE-0001`(iced路径) | writer | `src/disasm/x86_lift.rs`+`docs/api/disasm/x86_lift.md`+probe/fixture+registry，branch `wt2/x86flags` | 在途：cmovcc/setcc→add/sub/adc/sbb→logic 按优先级；sleigh dump op-for-op 方法论（沿用 ea5010e 三笔）；验收=httpd 向 golden 收敛、defects/numbering 0、curl 字节不变 |
-| w-subfloat | `SUBFLOAT-TRANSFORM-RESIDUAL-0001` | writer | `src/subflow.rs`+`docs/api/subflow.md`+fixture+registry，branch `wt2/subfloat` | 在途：TransformManager(transform.cc/hh) 完整移植替换三处 SUBFLOAT-TRANSFORM-NOT-PORTED defer(subflow.rs:6370/7463/7494) |
-| w-nodesplit | `W5-F1-NODESPLIT-SPACE-0001`(自 `PTRSUB`/P23 族改判) | writer | `src/funcdata.rs`+`docs/api/funcdata.md`+W5 docs+fixture+registry，branch `wt2/nodesplit` | 在途：应用并语义核对 W5_F1_NODESPLIT_SPACE_FIX.patch（funcdata_block.cc:992-1004）；验收=curl P23 8→5、defects/numbering 0 |
-| w-salvage | 12 个老 agent/* 分支甄别 | 只读 | 无（报告 /tmp/rugra-reports/SALVAGE-TRIAGE-2026-09-01.md） | 在途：INTEGRATED_BY_CONTENT/SUPERSEDED/SALVAGEABLE/DEAD_WIP 四分类+cherry-pick 队列 |
+| ~~reviewer-cmov~~ | `RULE-PROPCOPY-ADDRTIED-0001`(机制C复核) | 只读 | 无 | **DONE**:R-CMOV-CROSSREVIEW-2026-09-01.md = **APPROVE**(四类语义 MATCH+fixture 实质钉住+独立实跑 exit 0);F1-F4 非阻塞发现已登记上文 |
+| w-x86flags | `X86LIFT-FLAG-PCODE-0001`(iced路径) | writer | `src/disasm/x86_lift.rs`+`docs/api/disasm/x86_lift.md`+probe/fixture+registry，branch `wt2/x86flags` | 在途:cmovcc/setcc→add/sub/adc/sbb→logic 按优先级;sleigh dump op-for-op 方法论(沿用 ea5010e 三笔);验收=httpd 向 golden 收敛、defects/numbering 0、curl 字节不变(基线已变为 W4 后:3718/0/0) |
+| w-subfloat | `SUBFLOAT-TRANSFORM-RESIDUAL-0001` | writer | `src/subflow.rs`+`docs/api/subflow.md`+fixture+registry，branch `wt2/subfloat` | 在途:TransformManager(transform.cc/hh) 完整移植替换三处 SUBFLOAT-TRANSFORM-NOT-PORTED defer(subflow.rs:6370/7463/7494) |
+| w-nodesplit | `W5-F1-NODESPLIT-SPACE-0001` | writer | `src/funcdata.rs`+`docs/api/funcdata.md`+W5 docs+fixture+registry，branch `wt2/nodesplit` | 在途:应用并语义核对 W5_F1_NODESPLIT_SPACE_FIX.patch(funcdata_block.cc:992-1004);验收=curl P23 8→5、defects/numbering 0。**释放租约后 root 重放 scopefix2 两实现**(CALLSPEC-DRIVER `de4309f`+SCOPELOCALOVERFLOW `657ff89d`+`5805489`,repin 对 master 重钉) |
+| w-pltwarn | `PLTSTUB-WARNLOSS-0001`(regb 裁决) | writer | `src/coreaction.rs`+`src/fspec.rs`+`docs/api/{coreaction,fspec}.md`+fixture，branch `wt2/pltwarn` | 在途(2026-09-01 新派):裁决 coreaction.cc:4609 ActionPrototypeTypes model_locked 门(master :8804 vs regb `3d042eb` 相反立场)→按 oracle 定夺移植;配对 pltstub `9f14522` fspec create_placeholder 双守卫;验收=PLT warning 51/51 + defects/numbering 0 |
+| w-selfcopy | `MAIN-SELF-COPY-ABSORB-0001`(新登记) | writer | `src/merge.rs`+`src/varmap.rs`+`docs/api/{merge,varmap}.md`+fixture+registry，branch `wt2/selfcopy` | 在途(2026-09-01 新派,W4 后最大单项):main 简单赋值 900 vs golden 90,temp↔stack COPY 未被 high 吸收;含复核 F2(其余 raw-cover 入口)/F3 线索;机制 C 域(merge/varmap) |
+| ~~w-salvage~~ | 12 个老 agent/* 分支甄别 | 只读 | 无 | **DONE**:SALVAGE-TRIAGE-2026-09-01.md;结论已并入上文 salvage 节 |
 
-> 冲突矩阵：x86_lift.rs=w-x86flags；subflow.rs=w-subfloat；funcdata.rs(+docs/api)=w-nodesplit；merge.rs=待 W4
-> 集成（root）；heritage/coreaction/varmap/condexe/block 本 wave 留给 wave2 补位。examples/* 仅 x86flags 可动
-> （其 probe）；E2E 输出一律 /tmp/<agent>-*，禁触 result/（root 专属）。
+> 冲突矩阵:x86_lift.rs=w-x86flags;subflow.rs=w-subfloat;funcdata.rs(+docs/api)=w-nodesplit;coreaction.rs+fspec.rs=w-pltwarn;
+> merge.rs+varmap.rs=w-selfcopy;condexe/block/heritage/database 留给补位。examples/* 仅 x86flags 可动(probe);
+> E2E 输出一律 /tmp/<agent>-*,禁触 result/(root 专属)。W4 后 top:main 1248/getparameter.constprop.0 869/
+> parseconfig 199/next_url 147/file2string.part.0 144/match_url 100/myprogress 96/helpf 91/glob_set 91;
+> 另注意 ~24 个 PLT stub 函数体各 4-11 行 diff(✗ free/puts/strcpy… vs ✓ 同名第二形态,w-pltwarn 域相邻,待其裁决后归因)。
 
 ## 历史 wave：`W-2026-08-29-FLEET10`（2026-08-29~31；goal=函数文本级对齐；会话中断，成果已大宗回收入 master）
 
