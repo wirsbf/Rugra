@@ -7,14 +7,14 @@ oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_language_tree=84265e1e6fe7ac9725367b57fb861253e4915984
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_source_commit=40a32358dc39a41f4868d342c34ecbd904e91daa
-rugra_source_tree=5f4233fd633d7122df8c4a8444e314c10ecd0c60
-rugra_source_src_tree=daa55b2d22b974e032686b79bd0a0878af2780a8
-rugra_source_funcdata_blob=73c0240c2e4be2f86f60c4b6391083e6047d38d2
-rugra_source_cargo_toml_blob=bb22dd03e7519b9465d046f8bb0cdd86a7a54a6f
+rugra_source_commit=94789db4c9eaeba68f5d35b4aa065a0f70a1cd76
+rugra_source_tree=ed86a74218e2b95a9c8b4f469648f9090fe9c6ec
+rugra_source_src_tree=97fc31640f6a13bc40e679db949476bad92b1acd
+rugra_source_funcdata_blob=eeb12b20bf9f982a6d08b618591047292e11c155
+rugra_source_cargo_toml_blob=8c84b5559637f05e0274047e63532e97df56a6e4
 rugra_source_cargo_lock_blob=9736a3c5619f7fd188abd9609d0dccd20ef06607
 rugra_source_build_rs_blob=a0c81c8521547efebbb463a640ecec69d83ed4c5
-rugra_input_commit=40a32358dc39a41f4868d342c34ecbd904e91daa
+rugra_input_commit=94789db4c9eaeba68f5d35b4aa065a0f70a1cd76
 rugra_input_blob=76d9343ea3add321aa4134856323663b36365807
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/funcdata_pushmultiequals_1204.metadata.json"
@@ -25,7 +25,23 @@ runner="$repo_root/tools/run_funcdata_pushmultiequals_oracle.sh"
 bfd_root=/tmp/rugra-ghidra-bfd-2.38/usr
 bfd_include="$bfd_root/include"
 bfd_header="$bfd_include/bfd.h"
-bfd_library="$bfd_root/lib/x86_64-linux-gnu/libbfd-2.38-system.so"
+# 2026-09-01: the pre-reboot canonical system slot is preferred; the /tmp
+# oracle env extraction is accepted only as a hash-verified REGULAR file
+# (a session-local symlink pointing back at the system path is rejected —
+# the runner's required-input check is fail-closed on symlinks).
+bfd_library=""
+for bfd_candidate in   /usr/lib/x86_64-linux-gnu/libbfd-2.38-system.so   "$bfd_root/lib/x86_64-linux-gnu/libbfd-2.38-system.so"; do
+  if [[ -f "$bfd_candidate" && ! -L "$bfd_candidate" ]] && \
+     [[ "$(sha256sum -- "$bfd_candidate" | cut -d' ' -f1)" == \
+        f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e ]]; then
+    bfd_library="$bfd_candidate"
+    break
+  fi
+done
+if [[ -z "$bfd_library" ]]; then
+  echo "no libbfd-2.38-system.so matching f9ca64d0... in the known slots" >&2
+  exit 1
+fi
 
 oracle_tmp=$(mktemp -d /tmp/rugra-funcdata-pushmultiequals-1204.XXXXXX)
 cleanup() {
@@ -328,7 +344,9 @@ g++ -std=c++11 -O2 -Wall -Wno-sign-compare \
 # failures). Dependency artifacts are content-keyed so reuse does not affect
 # the pinned-source identity checks above. The fast-release profile matches
 # the profile the expected hashes were captured under.
-snapshot_cargo_target=/home/wirs/.cache/rugra-funcdata-pushmultiequals-cargo-target
+# 2026-09-01: /home/wirs does not exist on this machine (the branch-era
+# author home); the persistent target lives under the current user.
+snapshot_cargo_target=/home/ls/.cache/rugra-funcdata-pushmultiequals-cargo-target
 mkdir -p "$snapshot_cargo_target"
 CARGO_TARGET_DIR="$snapshot_cargo_target" \
   cargo build --offline --locked --quiet --manifest-path "$snapshot_root/Cargo.toml" \
@@ -339,7 +357,7 @@ rustc --edition=2021 "$snapshot_root/tests/oracle/funcdata_pushmultiequals_1204.
   -o "$oracle_tmp/funcdata_pushmultiequals_1204_rust"
 
 set +e
-LD_LIBRARY_PATH="$bfd_root/lib/x86_64-linux-gnu" \
+LD_LIBRARY_PATH="$(dirname -- "$bfd_library")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   "$oracle_tmp/funcdata_pushmultiequals_1204_cpp" \
   "$snapshot_root/sleigh_specs" "$snapshot_root/examples/curl" \
   >"$oracle_tmp/ghidra.stdout" 2>"$oracle_tmp/ghidra.stderr"
