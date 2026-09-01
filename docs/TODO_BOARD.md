@@ -70,11 +70,14 @@
 | w-scopefix | `CALLSPEC-DRIVER-0001`+`FUNCDATA-SCOPELOCALOVERFLOW-0001`(scopefix2 重放) | writer | `src/funcdata.rs`+`docs/api/funcdata.md`+scopelocal_wrap fixture+registry(如需 pushmultiequals/scope_find_overlap 重钉)，branch `wt2/scopefix` | 在途(2026-09-01 新派,nodesplit 释放租约后):重放 `de4309f`(inject_raw_ops 出生 CALL 无 spec→移植 flow.cc:683-690 核心)+`657ff89d`/`877ea9d`(wrap 域);fixture 对 master 重钉(双形态);repin commit 勿 pick;先读 oracle 全貌再落地,发现旧分支偏差按 oracle 修正 |
 | ~~w-salvage~~ | 12 个老 agent/* 分支甄别 | 只读 | 无 | **DONE**:SALVAGE-TRIAGE-2026-09-01.md;结论已并入上文 salvage 节 |
 
-> 冲突矩阵:x86_lift.rs=w-x86flags;subflow.rs=w-subfloat;funcdata.rs(+docs/api)=w-nodesplit;coreaction.rs+fspec.rs=w-pltwarn;
-> merge.rs+varmap.rs=w-selfcopy;condexe/block/heritage/database 留给补位。examples/* 仅 x86flags 可动(probe);
+> 冲突矩阵:x86_lift.rs=w-sse;subflow.rs 已并;funcdata.rs=w-scopefix;coreaction.rs+fspec.rs=已并(PENDING 复核);
+> merge.rs+varmap.rs=w-selfcopy;condexe.rs+fspec 域=w-varargs(printc 如需则报告声明);debugproto.rs=w-debugwarn。
 > E2E 输出一律 /tmp/<agent>-*,禁触 result/(root 专属)。W4 后 top:main 1248/getparameter.constprop.0 869/
-> parseconfig 199/next_url 147/file2string.part.0 144/match_url 100/myprogress 96/helpf 91/glob_set 91;
-> 另注意 ~24 个 PLT stub 函数体各 4-11 行 diff(✗ free/puts/strcpy… vs ✓ 同名第二形态,w-pltwarn 域相邻,待其裁决后归因)。
+> parseconfig 199/next_url 147/file2string.part.0 144/match_url 100/myprogress 96/helpf 91/glob_set 91。
+> **`CODEGEN-DIVERGENCE-REDFLAG-0001` 新实证(root,2026-09-01)**:getparameter 的 `uVar27=uVar30;`/`uVar33=uVar27;`
+> COPY 对顺序在三次语义无关集成间振荡(cur→cur2→cur4:x86_lift 改动不可能语义影响 curl SLEIGH 路径,却使输出
+> 翻回旧序)——迭代序/堆布局敏感,已知会 w-selfcopy 定位(其域内)。master 当前验证:curl 3713/0/0、httpd 2344/0/0
+> (字节=cur4/cur2 除该一对外稳定)。
 
 ## 历史 wave：`W-2026-08-29-FLEET10`（2026-08-29~31；goal=函数文本级对齐；会话中断，成果已大宗回收入 master）
 
