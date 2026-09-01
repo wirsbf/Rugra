@@ -325,6 +325,9 @@ Datatype 尺寸错配，另一方面与 `ActionInferTypes::writeBack`（每轮�
 两个旧断言盖章行为的单测改为断言 defer 且不出现小尺寸 float 盖章。
 遗留：完整 `SubfloatFlow` trace/transform 移植登记于
 SUBFLOAT-TRANSFORM-NOT-PORTED-0001。
+（2026-09-01 更新：该遗留已由 SUBFLOAT-TRANSFORM-RESIDUAL-0001 关闭，见下方
+2026-09-01 节——三处 defer 全部替换为真实 trace+apply，双侧 oracle fixture
+`subflow_transform_subfloat_1204` MATCH。）
 
 ## 2026-09-01：SUBFLOAT-TRANSFORM-RESIDUAL-0001 — SubfloatFlow 完整移植
 
