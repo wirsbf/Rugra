@@ -532,6 +532,27 @@ ADT/guard/refinement 阶段，只服务 example 侧 prototype 估计 helper（�
 这是当前 `Funcdata` 最关键的桥接方法之一。  
 它负责把反汇编 / 提升阶段得到的 `PcodeOpRaw` 序列，转为当前函数容器中的正式图结构。
 
+2026-08-30 CALLSPEC-DRIVER-0001：phase 1（raw dump）与 phase 2（build_blocks）之间——与
+flow override 应用同一个 phase-1.5 边界（flow.cc:415-418/474-475 在
+`FlowInfo::processInstruction` 内的位置）——补 flow-time callspec 锚定：每个
+`CPUI_CALL` op 按 Ghidra `FlowInfo::setupCallSpecs`（flow.cc:683-686）三步走——
+`new FuncCallSpecs(op)`（fspec.cc:4931-4938 从 in(0) 捕获目标地址）、
+`opSetInput(op, newVarnodeCallSpecs(res), 0)`（in(0) 换成 fspec 注解 Varnode，
+varnode.cc:599-601：FSPEC 空间生而 annotation|coverdirty、nzm=~0；Rugra 用 Iop 空间
++ entry 地址做兼容 offset，TYPEOP-FSPEC-SPACE-0001 既有建模）、`qlst.push_back(res)`
+（`add_call_specs_owner`）。followFlow 路径的锚定在 `FlowInfo::setup_call_specs`
+（flow.rs，xref_control_flow 内），本方法只服务无 FlowInfo 的 linear-scan driver 路径
+（httpd 主路径、curl/httpd 原型推断 worker）——两条路径不重叠，不会双重锚定
+（FlowInfo 走 `inject_raw_ops_single`）。CALLIND 不换 in(0)（flow.cc:707-709 无
+opSetInput），本路径的 lifter 不产 CALLIND，FlowInfo 路径由 `setup_callind_specs`
+负责。setupCallSpecs 的 FlowInfo 级尾部（applyPrototype/queryCall/循环检查，
+flow.cc:688-693）在 linear-scan 路径无对应物：该路径不种 override，callee 解析是
+driver 侧 pre-flow 原型表。落地后 ActionDeadCode 的 cc:3846 首操作数 consume 由
+spec 循环承担（coreaction.rs mark_consumed_parameters 的 in(0) push 与防御分支
+push 等价），callin0 防御分支（COREACTION-CALLIN0-CLOBBER-0001）的退役条件成立
+（生产中全部 CALL 出生路径——本锚定 + coreaction deindirect + fspec setFuncdata——
+均带 spec 对象），退役动作留给 coreaction 域。
+
 #### 它在主链路中的位置
 
 ```text

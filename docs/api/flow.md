@@ -689,3 +689,7 @@ E2E 零变化。hasModel（truncate case 的 setInternal 分歧）与 spec name
   `ActionDefaultParams` coreaction.cc:2311）。
 - 既有登记的 "CALLIND spec 名继承 caller funcp 名" 构造 quirk 随本修复消解
   （默认构造 name 为空，setFuncdata/queryCall 边界另案 CALLSPEC-0001）。
+- 2026-08-30 CALLSPEC-DRIVER-0001：`default_call_spec_proto()` 提升为 `pub(crate)`——
+  `Funcdata::inject_raw_ops` 的 linear-scan driver 路径 flow-time callspec 锚定
+  （见 docs/api/funcdata.md 的 inject_raw_ops 条目）复用同一默认构造态，避免出现
+  第二份 FuncProto::new 副本漂移。

@@ -3284,7 +3284,7 @@ impl<'a> FlowInfo<'a> {
 /// (coreaction.cc:1571-1572) start active return recovery for unknown
 /// callees.
 // RUGRA-GLUE: Rust needs an owned FuncProto value where C++ default-constructs the base class inline.
-fn default_call_spec_proto() -> crate::fspec::FuncProto {
+pub(crate) fn default_call_spec_proto() -> crate::fspec::FuncProto {
     crate::fspec::FuncProto::new(
         String::new(),
         std::sync::Arc::new(crate::type_system::datatype::Datatype::Void(
