@@ -6545,8 +6545,11 @@ impl SubfloatFlow {
         };
         // Snapshot the descendant ops (Ghidra iterates beginDescend..endDescend).
         let descend_ops: Vec<Arc<RwLock<PcodeOp>>> = origvn.read().unwrap().descend_iter().collect();
-        for op_index in 0..descend_ops.len() {
+        let mut op_index = 0;
+        while op_index < descend_ops.len() {
             let op = descend_ops[op_index].clone();
+            let cur_index = op_index;
+            op_index += 1;
             let outvn = op.read().unwrap().get_out().cloned();
             if let Some(ref out) = outvn {
                 if out.read().unwrap().is_mark() {
@@ -6646,14 +6649,15 @@ impl SubfloatFlow {
                     if rvn == rvn2 {
                         // Ghidra: `ourIter = iter; --ourIter;` — the current
                         // descendant position — then `getRepeatSlot(vn, slot,
-                        // ourIter)` counts this op's occurrences in
-                        // descend[0..current) (op.cc:93-111) and returns the
-                        // inrefs slot of that occurrence.
-                        let count = 1 + descend_ops[..op_index]
-                            .iter()
-                            .filter(|d| Arc::ptr_eq(d, &op))
-                            .count();
-                        slot = op.read().unwrap().get_repeat_slot(&origvn, slot as usize, count);
+                        // ourIter)` (op.cc:93-111): count = 1 + occurrences
+                        // of this op in descend[0..current), count==1 returns
+                        // firstSlot, otherwise the count-th inrefs slot.
+                        slot = subfloat_get_repeat_slot(
+                            &op,
+                            &origvn,
+                            slot as usize,
+                            &descend_ops[..cur_index],
+                        );
                     }
                     // Ghidra passes `slot` (possibly -1 from getRepeatSlot,
                     // though that is unreachable: count never exceeds the
@@ -6869,6 +6873,42 @@ impl SubfloatFlow {
     pub fn apply(&mut self, fd: &mut Funcdata) {
         self.mgr.apply(fd);
     }
+}
+
+// Ghidra: op.cc:93 PcodeOp::getRepeatSlot
+/// Given a Varnode that appears in multiple input slots of an op, find the
+/// specific slot corresponding to the descendant occurrence currently being
+/// visited. Faithful to the iterator overload
+/// `getRepeatSlot(const Varnode *vn,int4 firstSlot,list<PcodeOp *>::const_iterator iter)`
+/// (op.cc:93-111): `count` is 1 plus the occurrences of this op in the
+/// Varnode's descendant list strictly before the current position; count==1
+/// returns `firstSlot` (op.cc:101), otherwise the inrefs slot of the
+/// count-th occurrence is returned, -1 if absent. Inlined here (instead of
+/// `PcodeOp::get_repeat_slot`) because the op.rs count-parametered variant
+/// lacks the count==1 early return — registered as
+/// OPS-GETREPEATSLOT-COUNT1-0001 for the op.rs owner; this helper carries
+/// the full oracle semantics for the only in-tree call site.
+fn subfloat_get_repeat_slot(
+    op: &Arc<RwLock<PcodeOp>>,
+    vn: &Arc<RwLock<Varnode>>,
+    first_slot: usize,
+    descend_prefix: &[Arc<RwLock<PcodeOp>>],
+) -> i32 {
+    let count = 1 + descend_prefix.iter().filter(|d| Arc::ptr_eq(d, op)).count();
+    if count == 1 {
+        return first_slot as i32;
+    }
+    let inrefs = op.read().unwrap().inrefs.clone();
+    let mut recount = 1;
+    for i in (first_slot + 1)..inrefs.len() {
+        if Arc::ptr_eq(&inrefs[i], vn) {
+            recount += 1;
+            if recount == count {
+                return i as i32;
+            }
+        }
+    }
+    -1
 }
 
 // =====================================================================

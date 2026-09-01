@@ -7870,6 +7870,36 @@
         "rust_function_ids": [],
         "ghidra_function_ids": []
       }
+    },
+    {
+      "id": "subflow_transform_subfloat_1204",
+      "description": "SubfloatFlow full transform (SUBFLOAT-TRANSFORM-RESIDUAL-0001): RuleSubfloatConvert::applyOp drives the real SubfloatFlow trace + TransformManager::apply over 9 IR scenarios (non-const widen/narrow rewrites, constant narrow / constant widen without terminator rejections, constant widen fold, exceedsPrecision block via COPY-chain maxPrecision 8, arithmetic pass-through at precision 4, comparison preexistingGuard slot-0/slot-1, repeated-input getRepeatSlot count 1/2); full-IR GraphProjection before/after byte-identical on locked oracle 12.0.4",
+      "runner": [
+        "tools/run_subflow_transform_subfloat_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/subflow_transform_subfloat_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_subflow_transform_subfloat_oracle.sh"
+        },
+        "inputs": {}
+      },
+      "impact": {
+        "paths": [
+          "src/subflow.rs",
+          "tests/oracle/subflow_transform_subfloat_1204.cc",
+          "tests/oracle/subflow_transform_subfloat_1204.rs",
+          "tests/oracle/subflow_transform_subfloat_1204.metadata.json",
+          "tools/run_subflow_transform_subfloat_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": []
+      }
     }
   ]
 }

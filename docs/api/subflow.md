@@ -362,3 +362,21 @@ worklist，永不折叠（此前无条件折叠为 COPY，偏离 oracle）。wid
 非常量路径从 defer 变为真实数据流重写：原 op 销毁（op_replacement）、新建
 Varnode/ops、terminator 原地 retarget（op_preexisting），**不 retype 原 Varnode**
 （myprogress「Type propagation not settling」的根因家族 F2 就此关闭）。
+
+### 2026-09-01（续）：getRepeatSlot 迭代器语义内联 + 双侧 oracle fixture
+
+双侧 fixture `tests/oracle/subflow_transform_subfloat_1204.{cc,rs}`（runner
+`tools/run_subflow_transform_subfloat_oracle.sh`，registry 条目
+`subflow_transform_subfloat_1204`）以 9 个 IR 场景对拍锁定 oracle：非 const
+widen/narrow 重写、常量 narrow / 无 terminator 常量 widen 拒绝、常量 widen
+折叠、exceedsPrecision 阻断（COPY 链 maxPrecision=8）、精度 4 算术穿透、
+比较 preexistingGuard slot-0/slot-1、重复输入 getRepeatSlot count 1/2。
+观察为全 IR GraphProjection（op 顺序/opcode/addr/seqnum/dead/parent/in-out
+边 + varnode create-index/size/space/free/input/written/def/descends + bank
+计数）before/after，双侧 stdout 逐字节一致 = MATCH（sha256 钉在 metadata）。
+
+fixture 引出 `src/op.rs PcodeOp::get_repeat_slot` 缺 op.cc:101 的
+`count==1 → firstSlot` 早退（登记 `OPS-GETREPEATSLOT-COUNT1-0001`，op.rs 属
+他人 write-set 未越界修复）。subflow 调用点改为内联完整迭代器重载语义的
+`subfloat_get_repeat_slot`（op.cc:93-111），同时修正 count 前缀为
+[0..current)（不含当前 descend 条目，对齐 `--ourIter` 后的 Ghidra 区间）。
