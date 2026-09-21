@@ -118,3 +118,45 @@ load_mode 记录差异)。
   属性集错、@END 不匹配栈顶、SNAP 前置、EOF 未闭合、杂散 op 行、SNAP 截断、
   @RESTART 位置)/ @CONVERGED 兼容与位置错 / op 行数不等 / d= 位 / 身份键前置
   与 advisory warning)。
+
+---
+
+## 增补 v1.2:指针值 vn 描述符(s:/f:/o:)与 op 名字母表
+
+> 动因(Gate 决议 2026-09-22):Ghidra 在三处把堆对象指针直接编码进 varnode 值
+> ——spaceid 常量(sleigh.cc:236/269 `(uintb)(uintp)spc`)、fspec 空间
+> (FuncCallSpecs*,newVarnodeCallSpecs,恒为宿主 CALL 类 op 的 input 0)、iop 空间
+> (PcodeOp*,newVarnodeIop,恒为 INDIRECT 的 input 1)。指针值随 ASLR 逐进程漂移
+> (oracle 自身两跑即不同;next_url 实测 28,276 处),属铁律 2.1 允许规范化的
+> "已证明无语义的临时 ID"——Ghidra 下游自己也只按值解码回对象
+> (constseq.cc:911 / coreaction.cc:976 getSpaceFromConst、op.cc:412 getOpFromConst)。
+> 语义可观测的是"指向哪个对象",规范化必须且仅保留该身份;其余类别规则不变
+> (unique 仍原始 offset 直出,见 v1.1 BLOCKER-1)。
+
+vn 描述符新增三类:
+
+- `s:<spacename>` — 空间引用常量槽。oracle 侧识别 = 常量空间、宽度
+  sizeof(AddrSpace*) 且值命中本进程注册空间对象表(与 getSpaceFromConst 解码集合
+  逐一致);Rugra 侧识别 = 其 spaceid 编码槽(结构对应)。渲染被引用空间名。
+  名字唯一性由 AddrSpaceManager::insertSpace 强制(translate.cc:415-433,重名即
+  LowlevelError),s: 无碰撞。
+- `f:<addr>:<time>` — fspec 空间 varnode。渲染**宿主 op 自身 SeqNum**(与 op-line
+  行首同一拼写)。伪影语义 = 调用点身份(call site):一个调用点恰一个宿主 op,
+  SeqNum 全局唯一 ⇒ 不同调用点不同伪影、同调用点跨 @SNAP 稳定;就地改绑 spec
+  不改变伪影(调用点身份即语义可观测物)。
+- `o:<addr>:<time>` / `o:-` — iop 空间 varnode。渲染被引用 op 的 SeqNum;查表
+  范围 = 本 @SNAP 的活 op 表(beginOpAll 全量,含 dead 未 destroy;每 @SNAP 重建)。
+  被引用 op 已 destroy 时渲染 `o:-`(预期不出现;单侧出现本身即可见分歧)。
+
+键稳定性依据:bank 迭代序即 map<SeqNum,PcodeOp*> 键序 ⇒ 任一 @SNAP 内 SeqNum
+天然唯一;显式 SeqNum 构造把计数器推过该 time(op.cc:961-962),计数器不复用;
+clone 携带原 SeqNum = 原地替换习语,逻辑身份连续。指针伪影只出现在 op 的输入侧
+(oracle 输出侧无指针编码);未来发现新的指针值类别必须走本增补程序(三跑
+字节级一致 + root + oracle gate),禁止以 c:/n: 明文入投影。
+
+op-line 的 <OPC_NAME> = PcodeOp::getOpName() 原文(typeop.cc 72 名表,混合大小写
+与符号拼写,如 copy / - / == / (cast) / ZEXT);两侧取各自等价名表,消费端文法
+按非空白 token 校验。
+
+版本:v1.1 → v1.2 文法扩展。消费端 vn/op 文法与 selftest、Rust emitter 三描述符
+必须同规则落地后方可用于双侧对拍;此前单侧投影仅可作自跑确定性验证。
