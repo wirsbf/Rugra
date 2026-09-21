@@ -96,7 +96,9 @@ load_mode 记录差异)。
   文件序(完成序)追加进 `stages` 列表。比较器逐下标比较完成序序列——规范 (iii)
   的嵌套交错流(子级先完成)因此合法,两侧同构即可比。附加守卫:栈顶 `@END`
   已发而 `@SNAP` 未发时,只接受该 `@SNAP`(`@SNAP 必须紧跟 @END`);
-  `@RESTART`/`@CONVERGED` 仅栈空时合法;EOF 栈非空 = FormatError。
+  `@CONVERGED` 仅栈空时合法;`@RESTART` 只要无挂起 @SNAP 即合法(F-1,Gate 2-E attempt 2:
+  生产端可将根 RestartGroup 帧跨轮保持打开,标记落帧内亦有效,标记后新推入的 stage 归新轮);
+  EOF 栈非空 = FormatError。
 - **B-2 身份键前置校验**:身份键 = `{oracle_commit, arch, cspec, analysis_options,
   build_flags, binary_sha256, func_entry, load_mode, maxrestarts}`。任一不等 →
   独立 kind `V1_META_MISMATCH` + exit 1,且**先于**任何 stage 比较(防止不同

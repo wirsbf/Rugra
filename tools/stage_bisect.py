@@ -347,8 +347,13 @@ def load_v1_projection(file_path):
                 f"must precede {head}"
             )
         if head == "@RESTART":
-            if stack or len(tokens) != 2:
-                raise FormatError(f"line {line_no}: invalid @RESTART placement or arity")
+            # F-1 (Gate 2-E attempt 2): producers may keep the root
+            # RestartGroup frame open across restart rounds, so @RESTART is
+            # legal inside open frames; the @SNAP-pending guard above already
+            # rejects it after a pending @END. Stages pushed after the marker
+            # carry the new round; a still-open frame keeps its opening round.
+            if len(tokens) != 2:
+                raise FormatError(f"line {line_no}: invalid @RESTART arity")
             restart = _v1_int(tokens[1], "curstart", line_no, minimum=0)
             continue
         if head == "@CONVERGED":
@@ -1968,11 +1973,46 @@ def scenario_v1_format_errors():
         ],
         "@SNAP truncated",
     )
-    # @RESTART inside an open stage.
+    # @RESTART arity error (F-1 relaxed placement: open frames are legal).
     expect_error(
-        V1_META + ["@BEGIN 1 universal", "@RESTART 1"], "@RESTART inside open stage"
+        V1_META + ["@BEGIN 1 universal", "@RESTART 1 extra"], "invalid @RESTART arity"
     )
     return True
+
+
+def scenario_v1_restart_open_root():
+    """F-1 (Gate 2-E attempt 2): @RESTART inside an open root frame.
+
+    Producers may keep the root RestartGroup frame open across restart
+    rounds, so @RESTART is legal whenever no @SNAP is pending. Stages
+    pushed after the marker carry the new round; the still-open root
+    frame keeps the round it was opened in.
+    """
+    lines = V1_META + [
+        "@BEGIN 1 universal",
+        "@RESTART 1",
+        "@BEGIN 2 universal:start",
+        "@END 2 universal:start result=0 count=0 tests=1 apply=0",
+        "@SNAP 2 ops 1",
+        "401000:1 COPY d=0 out=u:1000:8 in=c:1:8",
+        "@END 1 universal result=1 count=1 tests=2 apply=1",
+        "@SNAP 1 ops 1",
+        "401000:1 COPY d=0 out=u:1000:8 in=c:1:8",
+    ]
+    left = make_v1_projection(lines, "restart-open-root")
+    check(len(left.stages) == 2, "both stages must be recorded in completion order")
+    check(left.stages[0].round == 1, "stage opened after @RESTART must carry round 1")
+    check(left.stages[1].round == 0, "root frame keeps the round it was opened in")
+    right = make_v1_projection(
+        [line.replace("side=oracle", "side=rugra") for line in lines],
+        "restart-open-root",
+    )
+    report = compare_v1_projections(left, right)
+    check(
+        report["kind"] == V1_KIND_MATCH,
+        "identical open-root restart streams must match",
+    )
+    return report
 
 
 def scenario_v1_converged_compat():
@@ -2130,6 +2170,7 @@ def run_selftest():
         ("v1_unique_and_empty_slots", scenario_v1_unique_and_empty_slots),
         ("v1_result_count", scenario_v1_result_count),
         ("v1_restart_interleaving", scenario_v1_restart_interleaving),
+        ("v1_restart_open_root", scenario_v1_restart_open_root),
         ("v1_nested_interleaving", scenario_v1_nested_interleaving),
         ("v1_per_slot_null_inputs", scenario_v1_per_slot_null_inputs),
         ("v1_format_errors", scenario_v1_format_errors),
