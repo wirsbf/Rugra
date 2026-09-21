@@ -2638,11 +2638,11 @@ impl JumpBasic {
         true
     }
 
-    // Ghidra: jumptable.cc:1392 JumpBasic::foldInOneGuard
+    // Ghidra: jumptable.cc:1373 JumpBasic::foldInOneGuard
     /// Eliminate the given guard to this switch. We disarm the guard
     /// instructions by making the guard condition always false (or pushing the
     /// branch into the switch). Faithful to `foldInOneGuard`
-    /// (jumptable.cc:1392).
+    /// (jumptable.cc:1373-1409).
     ///
     /// Returns true if a change was made to data-flow.
     pub fn fold_in_one_guard(
@@ -2662,14 +2662,16 @@ impl JumpBasic {
         let Some(cbranchblock) = cbranchblock else {
             return false;
         };
-        // The guard branch must have exactly 2 out-edges.
+        // cc:1379: its possible the guard branch has been converted between
+        // the switch recovery and now — without exactly 2 out-edges we can't
+        // fold it in.
         if cbranchblock.read().unwrap().size_out() != 2 {
             return false;
         }
+        // cc:1380-1382: stored path to indirect block, adjusted when the out
+        // branches have been flipped (getFlipPath, block.hh:297).
         let mut indpath = guard.get_path();
-        // Adjust for FlipPath — we approximate by checking the GOTO_EDGE flags.
-        let cbranch_flags = cbranchblock.read().unwrap().get_flags();
-        if (cbranch_flags & crate::block::block_flags::GOTO_EDGE_1) != 0 {
+        if cbranchblock.read().unwrap().get_flip_path() {
             indpath = 1 - indpath;
         }
         // Get the switch block (parent of the BRANCHIND).
@@ -2683,7 +2685,7 @@ impl JumpBasic {
         let Some(switchbl) = switchbl else {
             return false;
         };
-        // Guard must go directly into switch block along the indpath edge.
+        // cc:1384-1385: guard must go directly into switch block.
         let out_target = cbranchblock.read().unwrap().get_out(indpath as usize).map(|e| e.point);
         let Some(out_target) = out_target else {
             return false;
@@ -2691,7 +2693,7 @@ impl JumpBasic {
         if !Arc::ptr_eq(&out_target, &switchbl) {
             return false;
         }
-        // Find the guard target (the other out-edge).
+        // cc:1386: the other out-edge is the guard target.
         let guardtarget = cbranchblock
             .read()
             .unwrap()
@@ -2701,53 +2703,68 @@ impl JumpBasic {
             return false;
         };
 
-        // Find which out-edge of the switch block hits the guard target.
-        let n_out = switchbl.read().unwrap().size_out();
-        let mut pos = None;
+        // cc:1389-1390: find which out-edge of the switch block hits the
+        // guard target. Unfound ⇒ pos == sizeOut (Ghidra's loop exit value),
+        // expressed here as an i32 that may equal n_out.
+        let n_out = switchbl.read().unwrap().size_out() as i32;
+        let mut pos = n_out;
         for p in 0..n_out {
-            let out = switchbl.read().unwrap().get_out(p).map(|e| e.point);
+            let out = switchbl.read().unwrap().get_out(p as usize).map(|e| e.point);
             if let Some(out) = out {
                 if Arc::ptr_eq(&out, &guardtarget) {
-                    pos = Some(p);
+                    pos = p;
                     break;
                 }
             }
         }
-
-        match pos {
-            Some(p) => {
-                // The guard target is already a switch destination; set the
-                // CBRANCH condition to a constant so it always takes the path
-                // to the switch. Faithful to opSetInput(cbranch, constant, 1).
-                let val = if (indpath == 0) {
-                    // (indpath==0 != isBooleanFlip) ? 0 : 1 — approximate.
-                    0u64
-                } else {
-                    1u64
-                };
-                let size = cbranch
-                    .read()
-                    .unwrap()
-                    .get_in(0)
-                    .map(|v| v.read().unwrap().get_size())
-                    .unwrap_or(1);
-                let constvn = fd.new_constant(size, val);
-                let cbranch_pref = crate::op::PcodeOpRef(cbranch.clone());
-                fd.op_set_input(&cbranch_pref, constvn, 1);
-                jump.set_default_block(p as i32);
-            }
-            None => {
-                // Add the guard target as a new switch destination.
-                let gt_start = {
-                    let gt_rg = guardtarget.read().unwrap();
-                    gt_rg.get_start_addr()
-                };
-                jump.add_block_to_switch(gt_start, NO_LABEL);
-                jump.set_last_as_default();
-                // Push the branch into the switch.
-                let _ = fd.push_branch(&cbranchblock, (1 - indpath) as usize, &switchbl);
-            }
+        // cc:1391-1392: there can be only one folded target.
+        if jump.has_folded_default() && jump.get_default_block() != pos {
+            return false;
         }
+        // cc:1394-1395: values flowing out of the switch block forbid folding.
+        let no_intervening = {
+            let bl_rg = switchbl.read().unwrap();
+            match bl_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                Some(bb) => bb.no_intervening_statement(),
+                // RUGRA-GLUE: in Ghidra the BRANCHIND parent is always a
+                // BlockBasic (PcodeOps only live in basic blocks); a non-basic
+                // parent here is a structural invariant break, refuse to fold.
+                None => false,
+            }
+        };
+        if !no_intervening {
+            return false;
+        }
+        if pos == n_out {
+            // cc:1397-1399: add new destination to table without a label,
+            // treating it as either the default case or an exit; turn the
+            // branch target into a target of the switch instead.
+            let gt_start = {
+                let gt_rg = guardtarget.read().unwrap();
+                gt_rg.get_start_addr()
+            };
+            jump.add_block_to_switch(gt_start, NO_LABEL);
+            jump.set_last_as_default();
+            let _ = fd.push_branch(&cbranchblock, (1 - indpath) as usize, &switchbl);
+        } else {
+            // cc:1402-1404: neutralize the guard condition so control always
+            // reaches the switch; a guard branch generally targets the
+            // default case.
+            let bool_flip = cbranch.read().unwrap().is_boolean_flip();
+            let val: u64 = if (indpath == 0) != bool_flip { 0 } else { 1 };
+            let size = cbranch
+                .read()
+                .unwrap()
+                .get_in(0)
+                .map(|v| v.read().unwrap().get_size())
+                .unwrap_or(1);
+            let constvn = fd.new_constant(size, val);
+            let cbranch_pref = crate::op::PcodeOpRef(cbranch.clone());
+            fd.op_set_input(&cbranch_pref, constvn, 1);
+            jump.set_default_block(pos);
+        }
+        // cc:1406-1408: mark that the default branch has been folded (and
+        // cannot take a label).
         jump.set_folded_default();
         guard.clear();
         true
@@ -3049,46 +3066,44 @@ impl JumpModel for JumpBasic {
         }
     }
 
-    // Ghidra: jumptable.cc:1568 JumpBasic::foldInNormalization
+    // Ghidra: jumptable.cc:1546 JumpBasic::foldInNormalization
     fn fold_in_normalization(
         &mut self,
-        _fd: &mut crate::funcdata::Funcdata,
+        fd: &mut crate::funcdata::Funcdata,
         indop: &Arc<RwLock<PcodeOp>>,
     ) -> Option<Arc<RwLock<Varnode>>> {
-        // Faithful to JumpBasic::foldInNormalization (jumptable.cc:1568):
-        // set the BRANCHIND input to be the unnormalized switch variable.
-        if let Some(sv) = &self.switchvn {
-            let mut op_rg = indop.write().unwrap();
-            // Replace slot 0 input with the switch variable.
-            if op_rg.inrefs.is_empty() {
-                op_rg.inrefs.push(sv.clone());
-            } else {
-                op_rg.inrefs[0] = sv.clone();
-            }
-            return Some(sv.clone());
-        }
-        None
+        // Faithful to JumpBasic::foldInNormalization (jumptable.cc:1546-1553):
+        // set the BRANCHIND input to be the unnormalized switch variable, so
+        // all the intervening code to calculate the final address is
+        // eliminated as dead. The op_set_input call (Ghidra fd->opSetInput)
+        // maintains Varnode descend bookkeeping on both the severed
+        // normalization varnode and the switchvn.
+        let sv = self.switchvn.clone()?;
+        fd.op_set_input(&crate::op::PcodeOpRef(indop.clone()), sv.clone(), 0);
+        Some(sv)
     }
 
-    // Ghidra: jumptable.cc:1577 JumpBasic::foldInGuards
+    // Ghidra: jumptable.cc:1555 JumpBasic::foldInGuards
     fn fold_in_guards(
         &mut self,
         fd: &mut crate::funcdata::Funcdata,
         jump: &mut JumpTable,
     ) -> bool {
-        // Faithful to JumpBasic::foldInGuards (jumptable.cc:1577).
+        // Faithful to JumpBasic::foldInGuards (jumptable.cc:1555-1570):
+        // a null cbranch is already normalized (skip without touching the
+        // record); a dead cbranch is cleared and skipped; anything else is
+        // folded via foldInOneGuard.
         let mut change = false;
         for i in 0..self.selectguards.len() {
-            let cbranch_alive = {
-                let g = &self.selectguards[i];
-                match g.get_branch() {
-                    Some(cb) => !cb.read().unwrap().is_dead(),
-                    None => false,
+            match self.selectguards[i].get_branch() {
+                // cc:1560-1561: cbranch == null → already normalized.
+                None => continue,
+                // cc:1562-1565: dead cbranch → clear the record and skip.
+                Some(cb) if cb.read().unwrap().is_dead() => {
+                    self.selectguards[i].clear();
+                    continue;
                 }
-            };
-            if !cbranch_alive {
-                self.selectguards[i].clear();
-                continue;
+                Some(_) => {}
             }
             // Extract the guard, fold it, then write back.
             let mut guard = self.selectguards[i].clone();
@@ -3428,6 +3443,30 @@ impl JumpBasic2 {
         self.orig_path_meld.set_from(p_meld);
     }
 
+    // Ghidra: jumptable.cc:1634 JumpBasic2::foldInOneGuard
+    /// The are two main cases here:
+    ///   - If we recovered a switch in a loop, the guard is also the loop
+    ///     condition, so we don't want to remove it.
+    ///   - If the guard is just deciding whether or not to use a default
+    ///     switch value, the guard will disappear anyway because the
+    ///     normalization foldin will make all its blocks donothings.
+    ///
+    /// So we don't make any special mods, in case there are extra statements
+    /// in these blocks. Faithful to `JumpBasic2::foldInOneGuard`
+    /// (jumptable.cc:1634-1649).
+    pub fn fold_in_one_guard(
+        &self,
+        _fd: &mut crate::funcdata::Funcdata,
+        guard: &mut GuardRecord,
+        jump: &mut JumpTable,
+    ) -> bool {
+        // The final block in the table is the single value produced by the
+        // model2 guard; it should be the default block.
+        jump.set_last_as_default();
+        guard.clear(); // Mark that we are folded
+        true
+    }
+
     // Ghidra: jumptable.hh:444 JumpBasic2::checkNormalDominance
     fn check_normal_dominance(&self) -> bool {
         let normalvn = match &self.base.normalvn {
@@ -3632,15 +3671,35 @@ impl JumpModel for JumpBasic2 {
         self.base.fold_in_normalization(fd, indop)
     }
 
-    // Ghidra: jumptable.cc:1656 JumpBasic2::foldInOneGuard
+    // Ghidra: jumptable.hh:441 JumpBasic2 (inherits JumpBasic::foldInGuards, virtual foldInOneGuard dispatches to JumpBasic2)
     fn fold_in_guards(
         &mut self,
-        _fd: &mut crate::funcdata::Funcdata,
+        fd: &mut crate::funcdata::Funcdata,
         jump: &mut JumpTable,
     ) -> bool {
-        jump.set_last_as_default();
-        self.base.selectguards.clear();
-        true
+        // JumpBasic2 inherits JumpBasic::foldInGuards (jumptable.cc:1555-1570)
+        // verbatim; the only difference is that foldInOneGuard dispatches
+        // virtually to JumpBasic2::foldInOneGuard (jumptable.cc:1634).
+        let mut change = false;
+        for i in 0..self.base.selectguards.len() {
+            match self.base.selectguards[i].get_branch() {
+                // cc:1560-1561: cbranch == null → already normalized.
+                None => continue,
+                // cc:1562-1565: dead cbranch → clear the record and skip.
+                Some(cb) if cb.read().unwrap().is_dead() => {
+                    self.base.selectguards[i].clear();
+                    continue;
+                }
+                Some(_) => {}
+            }
+            // Extract the guard, fold it (JumpBasic2 override), then write back.
+            let mut guard = self.base.selectguards[i].clone();
+            if JumpBasic2::fold_in_one_guard(self, fd, &mut guard, jump) {
+                change = true;
+            }
+            self.base.selectguards[i] = guard;
+        }
+        change
     }
 
     // Ghidra: jumptable.hh:441 JumpBasic2 (inherits JumpBasic::sanityCheck)
@@ -3829,17 +3888,17 @@ impl JumpModel for JumpBasicOverride {
         }
     }
 
-    // Ghidra: jumptable.hh:486 JumpBasicOverride (inherits JumpBasic::foldInNormalization)
+    // Ghidra: jumptable.hh:485 JumpBasicOverride (inherits JumpBasic::foldInNormalization)
     fn fold_in_normalization(
         &mut self,
         fd: &mut crate::funcdata::Funcdata,
         indop: &Arc<RwLock<PcodeOp>>,
     ) -> Option<Arc<RwLock<Varnode>>> {
-        if self.is_trivial {
-            indop.read().unwrap().get_in(0).cloned()
-        } else {
-            self.base.fold_in_normalization(fd, indop)
-        }
+        // Ghidra declares foldInNormalization inherited from JumpBasic
+        // (jumptable.hh:485) with no override — including for the trivial
+        // setup (setupTrivial assigns the model's switchvn), so no is_trivial
+        // special case exists.
+        self.base.fold_in_normalization(fd, indop)
     }
 
     // Ghidra: jumptable.hh:487 (override)
@@ -4040,22 +4099,43 @@ impl JumpModel for JumpAssisted {
         }
     }
 
-    // Ghidra: jumptable.hh:510 JumpAssisted (foldInNormalization — returns switchvn directly)
+    // Ghidra: jumptable.cc:2193 JumpAssisted::foldInNormalization
     fn fold_in_normalization(
         &mut self,
-        _fd: &mut crate::funcdata::Funcdata,
-        indop: &Arc<RwLock<PcodeOp>>,
+        fd: &mut crate::funcdata::Funcdata,
+        _indop: &Arc<RwLock<PcodeOp>>,
     ) -> Option<Arc<RwLock<Varnode>>> {
-        indop.read().unwrap().get_in(0).cloned()
+        // Faithful to JumpAssisted::foldInNormalization (jumptable.cc:2193-2206):
+        // replace all outputs of the jumpassist op with switchvn (including
+        // BRANCHIND), then get rid of the assist op (it has served its
+        // purpose). Descendants are snapshotted first: op_set_input severs
+        // each descendant from outvn's descend list as it runs (Ghidra
+        // increments its iterator before the mutation for the same reason).
+        let switchvn = self.switchvn.clone()?;
+        let assist = self.assist_op.clone()?;
+        let outvn = assist.read().unwrap().get_out().cloned();
+        if let Some(outvn) = outvn {
+            let descendants: Vec<_> = outvn.read().unwrap().descend_iter().collect();
+            for desc in descendants {
+                fd.op_set_input(&crate::op::PcodeOpRef(desc), switchvn.clone(), 0);
+            }
+        }
+        fd.op_destroy(&crate::op::PcodeOpRef(assist));
+        Some(switchvn)
     }
 
-    // Ghidra: jumptable.cc:2230 JumpAssisted::foldInGuards
+    // Ghidra: jumptable.cc:2208 JumpAssisted::foldInGuards
     fn fold_in_guards(
         &mut self,
         _fd: &mut crate::funcdata::Funcdata,
-        _jump: &mut JumpTable,
+        jump: &mut JumpTable,
     ) -> bool {
-        true
+        // Faithful to JumpAssisted::foldInGuards (jumptable.cc:2208-2214):
+        // the default case is always the last block; report a change only
+        // when that assignment actually moved the default out-edge.
+        let orig_val = jump.get_default_block();
+        jump.set_last_as_default();
+        orig_val != jump.get_default_block()
     }
 
     // Ghidra: jumptable.hh:510 JumpAssisted (sanityCheck — always true, addresses from p-code model)
@@ -4340,12 +4420,27 @@ impl JumpTable {
     }
 
     // Ghidra: jumptable.cc:2535 JumpTable::addBlockToSwitch
-    /// Set the default block to the last address in the table (alias).
+    /// Add a guard-branch target block as an explicit switch destination.
+    /// The new target is appended directly to the end of the table.
     pub fn add_block_to_switch(&mut self, bl_start: Address, lab: u64) {
         self.addresstable.push(bl_start);
-        // The block will be added to the end of the out-edges; we approximate
-        // last_block using the current table size.
-        self.last_block = (self.addresstable.len() as i32) - 1;
+        // Ghidra cc:2537: `lastBlock = indirect->getParent()->sizeOut()` —
+        // the block WILL be added to the end of the out-edges by the
+        // pushBranch immediately following in foldInOneGuard, so the new
+        // default refers to that future out-edge index, NOT the table length
+        // (which only coincides when the table was never truncated).
+        self.last_block = self
+            .indirect
+            .as_ref()
+            .and_then(|o| {
+                o.read()
+                    .unwrap()
+                    .parent
+                    .as_ref()
+                    .and_then(|p| p.upgrade())
+            })
+            .map(|bl| bl.read().unwrap().size_out() as i32)
+            .unwrap_or(-1);
         let last = self.last_block;
         let addr_idx = (self.addresstable.len() as i32) - 1;
         self.block2addr.push(IndexPair::new(last, addr_idx));
