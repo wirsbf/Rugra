@@ -6132,7 +6132,10 @@ impl Funcdata {
         }
         // cc:481-493: SegmentOp chain. Rugra: skipped (no userops handle);
         // x86-64 has no segment ops so this branch is dead code for the
-        // current target.
+        // current target. Width note (FUNCDATA-SPACEID-WIDTH-0001): the
+        // cc:488 SEGMENTOP spaceid input is also newVarnodeSpace(containerid)
+        // = width sizeof(AddrSpace*) = 8; when this branch is implemented it
+        // must call new_varnode_space(containerid), never a 1-byte constant.
         addout
     }
 
@@ -6146,8 +6149,6 @@ impl Funcdata {
     ///   opInsertAfter(storeop, addout->getDef());
     ///   return storeop;
     /// The Varnode value being stored must still be set on the returned op.
-    /// Rugra: `newVarnodeSpace` is approximated by a constant encoding the
-    /// space id (the actual `newVarnodeSpace` is in the missing-API list).
     pub fn op_stack_store(
         &mut self,
         spc: crate::space::AddressSpace,
@@ -6168,11 +6169,15 @@ impl Funcdata {
         // x86-64 — NOT spc itself. Rugra resolves it via
         // Architecture::get_contain (arch.rs:968); a missing container is
         // unreachable here (Ghidra would pass NULL to newVarnodeSpace = UB).
+        // cc:523 + funcdata_varnode.cc:190-198: the spaceid input is
+        // newVarnodeSpace(container), whose width is sizeof(AddrSpace*) = 8
+        // (FUNCDATA-SPACEID-WIDTH-0001; the 1-byte form leaked through the
+        // mirror emitter's s: gate, which requires size==8).
         let contain_spc = self
             .get_arch()
             .and_then(|a| a.get_contain(spc))
             .expect("opStackStore: spc has no container space (Ghidra: getContain() == null is UB)");
-        let space_vn = self.new_constant(1, contain_spc.space_id() as u64);
+        let space_vn = self.new_varnode_space(contain_spc);
         self.op_set_input(&storeop, space_vn, 0);
         // cc:524: opSetInput(storeop, addout, 1).
         self.op_set_input(&storeop, addout, 1);
@@ -6219,11 +6224,15 @@ impl Funcdata {
         // Using spc's own id broke RuleLoadVarnode::correctSpacebase
         // (`assoc->getContain() != loadspace` always true → rule never fired;
         // FUNCDATA-OPSTACKLOAD-CONTAIN-0001).
+        // cc:547 + funcdata_varnode.cc:190-198: the spaceid input is
+        // newVarnodeSpace(container), whose width is sizeof(AddrSpace*) = 8
+        // (FUNCDATA-SPACEID-WIDTH-0001; the 1-byte form leaked through the
+        // mirror emitter's s: gate, which requires size==8).
         let contain_spc = self
             .get_arch()
             .and_then(|a| a.get_contain(spc))
             .expect("opStackLoad: spc has no container space (Ghidra: getContain() == null is UB)");
-        let space_vn = self.new_constant(1, contain_spc.space_id() as u64);
+        let space_vn = self.new_varnode_space(contain_spc);
         self.op_set_input(&loadop, space_vn, 0);
         // cc:548: opSetInput(loadop, addout, 1).
         self.op_set_input(&loadop, addout, 1);
