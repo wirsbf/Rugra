@@ -5,8 +5,8 @@
 use crate::action::{action_status, Action};
 use crate::address::Address;
 use crate::block::{
-    BlockBasic, BlockCondition, BlockGraph, BlockIf, BlockList, BlockSwitch, BlockWhileDo, BoolOp,
-    FlowBlock,
+    BlockBasic, BlockCondition, BlockGraph, BlockIf, BlockList, BlockMultiGoto, BlockSwitch,
+    BlockWhileDo, BoolOp, FlowBlock,
 };
 use crate::error::Result;
 use crate::funcdata::Funcdata;
@@ -3764,6 +3764,15 @@ impl<'a> CollapseStructure<'a> {
             } else if let Some(binf) = nref.downcast_mut::<crate::block::BlockInfLoop>() {
                 binf.incoming = new_in;
                 binf.outgoing = new_out;
+            } else if let Some(bmg) = nref.downcast_mut::<crate::block::BlockMultiGoto>() {
+                // Ghidra newBlockMultiGoto (block.cc:1738): identifyInternal(
+                // ret,[bl]) runs the same selfIdentify edge transfer as every
+                // other composite — the multigoto inherits the wrapped
+                // switch block's external in/out boundary edges (and its
+                // f_switch_out via the cc:925-926 propagation above), which
+                // ruleBlockSwitch (cc:1652) and checkSwitchSkips then read.
+                bmg.incoming = new_in;
+                bmg.outgoing = new_out;
             } else if let Some(bsw) = nref.downcast_mut::<crate::block::BlockSwitch>() {
                 // Ghidra newBlockSwitch (block.cc:1913): identifyInternal(ret,cs)
                 // runs the same selfIdentify edge transfer as every other
@@ -4362,6 +4371,8 @@ impl<'a> CollapseStructure<'a> {
                     sw.control.clone(),
                     sw.cases.clone(),
                     sw.default_case.clone(),
+                    sw.case_gototypes.clone(),
+                    sw.default_gototype,
                     sw.case_values.clone(),
                     sw.index_varnode.clone(),
                 )
@@ -4388,8 +4399,10 @@ impl<'a> CollapseStructure<'a> {
                     control: sw_fields.1,
                     cases: new_cases,
                     default_case: new_default,
-                    case_values: sw_fields.4,
-                    index_varnode: sw_fields.5,
+                    case_gototypes: sw_fields.4,
+                    default_gototype: sw_fields.5,
+                    case_values: sw_fields.6,
+                    index_varnode: sw_fields.7,
                     incoming: Vec::new(),
                     outgoing: Vec::new(),
                     parent: None,
@@ -4829,9 +4842,8 @@ impl<'a> CollapseStructure<'a> {
     /// TraceDAG/selectGoto freely produces) never structured, leaving the
     /// CBRANCH orphaned as a bare conditional statement.
     /// The sizeout==1 newBlockGoto case lives in try_rule_goto; the
-    /// isSwitchOut → newBlockMultiGoto case (cc:1456-1458) has no Rugra
-    /// BlockMultiGoto counterpart yet (see TODO BLOCKSTRUCT-MULTIGOTO-0001
-    /// in the final report).
+    /// isSwitchOut → newBlockMultiGoto case (cc:1456-1458) is routed here and
+    /// in try_rule_goto ahead of the sizeout dispatch (see new_block_multigoto).
     fn try_rule_if_goto(&mut self, i: usize) -> bool {
         let block = match self.graph.get_block(i) {
             Some(b) => b,
@@ -4850,6 +4862,27 @@ impl<'a> CollapseStructure<'a> {
         } else {
             return false;
         };
+
+        // cc:1456-1458: the isSwitchOut arm precedes the sizeout==2 arm in
+        // the oracle's single ruleBlockGoto loop — a two-out switch block
+        // with a goto edge goes to newBlockMultiGoto, never newBlockIfGoto
+        // (which would swallow the switch dispatch as an if). The multigoto
+        // edge index is the oracle loop's FIRST goto edge (lowest slot,
+        // cc:1454), not the negate-preferring slot computed above.
+        if b.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 {
+            let first_goto = if Self::out_edge_is_goto(&*b, 0) {
+                0
+            } else {
+                goto_slot
+            };
+            drop(b);
+            self.new_block_multigoto(i, first_goto);
+            eprintln!(
+                "[COLLAPSE] {} ruleBlockGoto: multigoto peeled 2-out switch edge {}",
+                self.name, first_goto
+            );
+            return true;
+        }
 
         // Ghidra's ruleBlockGoto (cc:1450-1475) is purely topological: no
         // CBRANCH requirement — newBlockIfGoto legitimately wraps structured
@@ -4949,6 +4982,129 @@ impl<'a> CollapseStructure<'a> {
         true
     }
 
+    // Ghidra: block.cc:1720 BlockGraph::newBlockMultiGoto
+    /// Faithful port of `BlockGraph::newBlockMultiGoto(bl, outedge)`
+    /// (block.cc:1720-1753), invoked by ruleBlockGoto's isSwitchOut arm
+    /// (blockaction.cc:1456-1458): peel the goto-marked out edge of a switch
+    /// block out of the structured graph view.
+    ///
+    /// Oracle order (all four decisive semantics, see
+    /// docs/alignment_docs/BLOCKMULTIGOTO_M1_SEMANTICS.md §A):
+    ///   - `targetbl`/`isdefaultedge` captured BEFORE any mutation (cc:1724-
+    ///     1725) — removeEdge below erases the edge and its label;
+    ///   - already-t_multigoto: addEdge → removeEdge → (default) setDefaultGoto
+    ///     (cc:1726-1732);
+    ///   - fresh wrap: new BlockMultiGoto → origSizeOut captured BEFORE
+    ///     identifyInternal (cc:1735) → identifyInternal(ret,[bl]) → addBlock
+    ///     → addEdge(targetbl) → `if (targetbl != bl)` { `if (ret->sizeOut() !=
+    ///     origSizeOut)` forceOutputNum(ret->sizeOut()+1) — restore a self
+    ///     edge collapsed by identifyInternal; removeEdge(ret,targetbl) } →
+    ///     (default) setDefaultGoto (cc:1733-1751);
+    ///   - a self goto edge (targetbl == bl) is absorbed by identifyInternal
+    ///     and NOT explicitly removed (cc:1748 comment).
+    /// BlockMultiGoto::addEdge only records the target in `gotoedges` — no
+    /// graph edge is created (block.hh:580), so removeEdge takes out the
+    /// identifyInternal-inherited structured edge (bilateral, block.cc:1469).
+    fn new_block_multigoto(&mut self, i: usize, outedge: usize) {
+        let block = match self.graph.get_block(i) {
+            Some(b) => b,
+            None => return,
+        };
+        // cc:1724-1725: FlowBlock *targetbl = bl->getOut(outedge);
+        //          bool isdefaultedge = bl->isDefaultBranch(outedge);
+        let (target, isdefaultedge, already_multigoto, orig_size_out, idx) = {
+            let b = block.read().unwrap();
+            let target = b.get_out(outedge).map(|e| e.point.clone());
+            let isdefaultedge = b.is_default_branch(outedge);
+            let already = b.get_type() == crate::block::BlockType::MultiGoto;
+            // cc:1735: origSizeOut must reflect the block BEFORE the wrap —
+            // for the already-multigoto path the size comparison never runs,
+            // so reading it here for both paths is harmless.
+            let so = b.size_out();
+            (target, isdefaultedge, already, so, b.get_index())
+        };
+        let Some(targetbl) = target else {
+            return;
+        };
+        if already_multigoto {
+            // cc:1726-1732: "Already one goto edge from this same block, we
+            // add to existing structure" — ret = (BlockMultiGoto*)bl.
+            {
+                let mut mg = block.write().unwrap();
+                if let Some(m) = mg.as_any_mut().downcast_mut::<BlockMultiGoto>() {
+                    // cc:1728: ret->addEdge(targetbl);
+                    m.add_goto_edge(targetbl.clone());
+                }
+            }
+            // cc:1729: removeEdge(ret,targetbl);
+            self.graph.remove_edge_blocks(&block, &targetbl);
+            if isdefaultedge {
+                // cc:1730-1731: ret->setDefaultGoto();
+                let mut mg = block.write().unwrap();
+                if let Some(m) = mg.as_any_mut().downcast_mut::<BlockMultiGoto>() {
+                    m.set_default_goto();
+                }
+            }
+            return;
+        }
+        // cc:1734: ret = new BlockMultiGoto(bl); — the constructor discards
+        // bl (components arrive via identifyInternal), so the wrapped block
+        // is held explicitly (getBlock(0) = wrapped), like BlockGoto::wrapped.
+        let mg_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
+            Arc::new(RwLock::new(BlockMultiGoto {
+                index: idx,
+                flags: 0,
+                parent: None,
+                gotoedges: Vec::new(),
+                defaultswitch: false,
+                wrapped: Some(block.clone()),
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+            }));
+        // cc:1736-1739: nodes=[bl]; identifyInternal(ret,nodes); addBlock(ret).
+        // identify_internal inherits the boundary edges AND propagates
+        // f_switch_out (selfIdentify cc:925-926), keeping the multigoto a
+        // switch block for ruleBlockSwitch (cc:1652).
+        self.identify_internal(&mg_block, &[idx], i);
+        // RUGRA-GLUE: keep any enclosing BlockSwitch's case references live
+        // across the slot replacement (same glue as try_rule_goto /
+        // try_rule_if_goto; Ghidra needs none — its caseblocks hold
+        // FlowBlock pointers that survive identifyInternal).
+        self.update_switch_case_reference(idx, &mg_block);
+        // cc:1740: ret->addEdge(targetbl);
+        {
+            let mut mg = mg_block.write().unwrap();
+            if let Some(m) = mg.as_any_mut().downcast_mut::<BlockMultiGoto>() {
+                m.add_goto_edge(targetbl.clone());
+            }
+        }
+        // cc:1741-1747: `if (targetbl != bl)` — pointer identity against the
+        // ORIGINAL block (captured before the wrap), not the composite.
+        if !Arc::ptr_eq(&targetbl, &block) {
+            // cc:1742-1745: fewer out edges after identifyInternal ⟺ a self
+            // edge was collapsed (switch out edges are already deduped);
+            // forceOutputNum(sizeOut()+1) restores that self edge — it is
+            // NOT the goto edge.
+            let cur_size_out = mg_block.read().unwrap().size_out();
+            if cur_size_out != orig_size_out {
+                Self::force_output_num(&mg_block, cur_size_out + 1);
+            }
+            // cc:1746: removeEdge(ret,targetbl); — remove the structured edge
+            // to the goto target (bilateral, block.cc:1469-1481).
+            self.graph.remove_edge_blocks(&mg_block, &targetbl);
+        }
+        // else — the goto edge is a self edge and was removed by
+        // identifyInternal (cc:1748).
+        if isdefaultedge {
+            // cc:1749-1750: ret->setDefaultGoto();
+            let mut mg = mg_block.write().unwrap();
+            if let Some(m) = mg.as_any_mut().downcast_mut::<BlockMultiGoto>() {
+                m.set_default_goto();
+            }
+        }
+        self.structure_change_count += 1;
+    }
+
     // Ghidra: blockaction.hh:46 LoopBody::tryRuleGoto
     /// Ghidra ruleBlockGoto (blockaction.cc:1450), pure-goto branch (size_out==1).
     /// A block whose single out-edge is marked as goto (GOTO_EDGE_0) becomes a
@@ -4970,32 +5126,51 @@ impl<'a> CollapseStructure<'a> {
             Some(b) => b,
             None => return false,
         };
-        let (idx, size_out, goto_target) = {
+        // cc:1453-1455: `sizeout` captured before the scan; the loop finds the
+        // FIRST goto-marked out edge (lowest slot wins). isGotoOut works on
+        // every block type (edge label or the block-level GOTO_EDGE_0/1
+        // mirrors) and on every slot >= 0 — a peeled switch can still have
+        // dozens of live out edges with a goto mark on any of them.
+        let (idx, size_out, goto_edge) = {
             let b = block.read().unwrap();
-            // cc:1454-1455: isGotoOut — works on every block type (edge
-            // label or the block-level GOTO_EDGE_0/1 mirrors).
-            let has_goto = (b.size_out() >= 1 && Self::out_edge_is_goto(&*b, 0))
-                || (b.size_out() >= 2 && Self::out_edge_is_goto(&*b, 1));
-            if !has_goto {
+            let size_out = b.size_out();
+            let mut goto_edge: Option<usize> = None;
+            for j in 0..size_out {
+                if Self::out_edge_is_goto(&*b, j) {
+                    goto_edge = Some(j);
+                    break;
+                }
+            }
+            if goto_edge.is_none() {
                 return false;
             }
-            // Pure-goto case: size_out==1 with GOTO_EDGE_0. (size_out==2 with
-            // GOTO_EDGE_1 is handled by try_rule_if_goto as newBlockIfGoto.)
-            if b.size_out() != 1 {
-                return false;
-            }
-            if !Self::out_edge_is_goto(&*b, 0) {
-                return false;
-            }
-            // Ghidra's isSwitchOut arm (cc:1456-1458) goes to newBlockMultiGoto,
-            // which has no Rugra counterpart yet (BLOCKSTRUCT-MULTIGOTO-0001);
-            // skip switch blocks rather than mis-wrapping them.
-            if b.get_flags() & crate::block::block_flags::SWITCH_OUT != 0 {
-                return false;
-            }
-            let target = b.get_out(0).map(|e| e.point.clone());
-            (b.get_index(), b.size_out(), target)
+            (b.get_index(), size_out, goto_edge)
         };
+        // cc:1456-1458: `if (bl->isSwitchOut()) { graph.newBlockMultiGoto(bl,i);
+        // return true; }` — the isSwitchOut arm runs FIRST, ahead of the
+        // sizeout==2/1 dispatch, so a switch block's goto edge is peeled into
+        // a BlockMultiGoto no matter how many out edges remain
+        // (BLOCKSTRUCT-MULTIGOTO-0001).
+        if block.read().unwrap().get_flags() & crate::block::block_flags::SWITCH_OUT != 0 {
+            self.new_block_multigoto(i, goto_edge.unwrap());
+            eprintln!(
+                "[COLLAPSE] {} ruleBlockGoto: multigoto peeled switch edge {}",
+                self.name,
+                goto_edge.unwrap()
+            );
+            return true;
+        }
+        // Pure-goto case: size_out==1 with GOTO_EDGE_0. (size_out==2 with
+        // GOTO_EDGE_1 is handled by try_rule_if_goto as newBlockIfGoto;
+        // size_out>2 non-switch matches no arm — the oracle loop falls
+        // through every remaining isGotoOut edge and returns false.)
+        if size_out != 1 {
+            return false;
+        }
+        if !Self::out_edge_is_goto(&*block.read().unwrap(), 0) {
+            return false;
+        }
+        let goto_target = block.read().unwrap().get_out(0).map(|e| e.point.clone());
         let goto_target = match goto_target {
             Some(t) => t,
             None => return false,
@@ -5460,9 +5635,8 @@ impl<'a> CollapseStructure<'a> {
     ///     a default edge that does NOT go to the exitblock.
     ///   - cc:1630-1635: a t_multigoto switch block's recorded default goto
     ///     (BlockMultiGoto::hasDefaultGoto) also sets defaultnottoexit —
-    ///     unreachable in Rugra today (no BlockMultiGoto type exists;
-    ///     ruleBlockGoto's isSwitchOut arm wraps via BlockGoto), so the
-    ///     arm can never observe a multigoto switchbl here.
+    ///     the peeled default edge is invisible to the cc:1617-1626 edge
+    ///     scan, so the multigoto's flag is the only remaining witness.
     ///   - cc:1628-1636: without both flags there is nothing to mark.
     ///   - cc:1637-1643: mark every NON-default edge that goes straight to
     ///     the exitblock as a goto branch; return false so ruleBlockSwitch
@@ -5508,8 +5682,26 @@ impl<'a> CollapseStructure<'a> {
         if !anyskiptoexit {
             return true;
         }
-        // cc:1630-1635: t_multigoto/hasDefaultGoto promotion (see doc note:
-        // no BlockMultiGoto exists in Rugra, so this arm is unreachable).
+        // cc:1630-1635: `if ((!defaultnottoexit)&&(switchbl->getType() ==
+        // FlowBlock::t_multigoto)) { BlockMultiGoto *multibl =
+        // (BlockMultiGoto *)switchbl; if (multibl->hasDefaultGoto())
+        //   defaultnottoexit = true; }` — a default edge peeled off the
+        // switch as an unstructured goto is invisible to the edge scan
+        // above (removeEdge took it out), but its default-ness still means
+        // "default does not go to the exit", enabling the skip marking.
+        if !defaultnottoexit {
+            let is_multigoto_default = {
+                let r = block.read().unwrap();
+                r.get_type() == crate::block::BlockType::MultiGoto
+                    && r
+                        .as_any()
+                        .downcast_ref::<BlockMultiGoto>()
+                        .map_or(false, |m| m.has_default_goto())
+            };
+            if is_multigoto_default {
+                defaultnottoexit = true;
+            }
+        }
         // cc:1636: no default elsewhere -> build the switch.
         if !defaultnottoexit {
             return true;
@@ -5838,6 +6030,8 @@ impl<'a> CollapseStructure<'a> {
                 control: block.clone(),
                 cases,
                 default_case: None,
+                case_gototypes: Vec::new(),
+                default_gototype: 0,
                 case_values,
                 index_varnode,
                 incoming: Vec::new(),
@@ -5859,6 +6053,70 @@ impl<'a> CollapseStructure<'a> {
         };
         self.identify_internal(&switch_block, &case_consumed, i);
         self.update_switch_case_reference(ctrl_idx, &switch_block);
+        // Ghidra newBlockSwitch cc:1912: grabCaseBasic runs "before the
+        // identifyInternal" but only RECORDS FlowBlock pointers — the oracle's
+        // caseblocks hold components and gotoedge targets alike, and
+        // consuming the components does not invalidate pointers. Rust cannot
+        // append into the pre-install literal before identify_internal
+        // consumes `cases` (the multigoto's gotoedge targets must NOT be
+        // consumed — they stay in the surrounding graph exactly as in the
+        // oracle, where cs excludes them), so the recording is appended to
+        // the installed switch here: same pointers, same order (regular
+        // cases from the out-edge scan above, then the multigoto arm's
+        // f_goto_goto cases, block.cc:3548-3553).
+        {
+            let control_is_multigoto =
+                block.read().unwrap().get_type() == crate::block::BlockType::MultiGoto;
+            if control_is_multigoto {
+                // cc:3548-3553: `if (cs[0]->getType() == t_multigoto) { ... for
+                // (i=0;i<numgoto;++i) addCase(switchbl, gotoedgeblock->getGoto(i),
+                // f_goto_goto); }` — each peeled goto edge target is re-added
+                // as a case with gototype f_goto_goto (its body is NOT part
+                // of the switch; the emitter prints the case label + a goto
+                // statement, printc.cc:3334-3337).
+                let switch_basic = crate::block::front_leaf(&block).and_then(|leaf| {
+                    let r = leaf.read().unwrap();
+                    r.as_any()
+                        .downcast_ref::<crate::block::BlockCopy>()
+                        .map(|c| c.original.clone())
+                });
+                let gotoedges: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = {
+                    let r = block.read().unwrap();
+                    r.as_any()
+                        .downcast_ref::<BlockMultiGoto>()
+                        .map(|m| m.gotoedges.clone())
+                        .unwrap_or_default()
+                };
+                let numgoto = gotoedges.len();
+                let mut sw = switch_block.write().unwrap();
+                let sw_ref = sw.as_any_mut().downcast_mut::<BlockSwitch>().unwrap();
+                sw_ref.case_gototypes = vec![0; sw_ref.cases.len()];
+                for target in gotoedges {
+                    let (isdefault, outindex) =
+                        Self::switch_case_basic_coords(&switch_basic, &target);
+                    if isdefault {
+                        // The oracle's addCase tags this case isdefault (it
+                        // prints `default:`); Rugra's BlockSwitch holds the
+                        // default in its own slot.
+                        sw_ref.default_case = Some(target);
+                        sw_ref.default_gototype = crate::block::goto_type::GOTO_GOTO;
+                    } else {
+                        sw_ref.cases.push(target);
+                        sw_ref
+                            .case_gototypes
+                            .push(crate::block::goto_type::GOTO_GOTO);
+                        // Placeholder label coordinate = the basic-level
+                        // out-edge slot (the oracle's real labels come from
+                        // the jumptable index map in finalizePrinting,
+                        // block.cc:3556-3591 — JUMPTABLE-TABLEAPI-0001).
+                        sw_ref
+                            .case_values
+                            .push(outindex.map(|j| vec![j as u64]).unwrap_or_default());
+                    }
+                }
+                let _ = numgoto;
+            }
+        }
         // cc:1916-1917: forceOutputNum(1) when there is an exit (identify's
         // boundary capture already yields exactly the exit edge); clear
         // f_switch_out on the component.
@@ -5874,6 +6132,68 @@ impl<'a> CollapseStructure<'a> {
             ctrl_idx, sizeout, exit_idx
         );
         true
+    }
+
+    // Ghidra: block.cc:3495 BlockSwitch::addCase
+    /// The basic-level case coordinates `addCase` computes (block.cc:3506-
+    /// 3515) for the multigoto goto-case arm: `inindex =
+    /// basicbl->getInIndex(switchbl)` on the UNDERLYING basic-block graph —
+    /// `switchbl` is newBlockSwitch cc:1912's `leafbl->subBlock(0)`, i.e. the
+    /// switch's basic block whose edges the structured-graph removeEdge
+    /// never touched — then `outindex = basicbl->getInRevIndex(inindex)` and
+    /// `isdefault = switchbl->isDefaultBranch(outindex)` reading the basic
+    /// edge label (installSwitchDefaults, funcdata_block.cc:687, lands on the
+    /// basic graph; buildCopy duplicates labels into the copy graph, so both
+    /// sides agree). Returns `(isdefault, basic out-edge slot)`.
+    fn switch_case_basic_coords(
+        switch_basic: &Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+        case_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) -> (bool, Option<usize>) {
+        let Some(switch_basic) = switch_basic else {
+            return (false, None);
+        };
+        // cc:3500: const FlowBlock *basicbl = bl->getFrontLeaf()->subBlock(0);
+        let case_basic = crate::block::front_leaf(case_block).and_then(|leaf| {
+            let r = leaf.read().unwrap();
+            r.as_any()
+                .downcast_ref::<crate::block::BlockCopy>()
+                .map(|c| c.original.clone())
+        });
+        let Some(case_basic) = case_basic else {
+            return (false, None);
+        };
+        // cc:3506: int4 inindex = basicbl->getInIndex(switchbl);
+        let rev = {
+            let cb = case_basic.read().unwrap();
+            let mut found = None;
+            for slot in 0..cb.size_in() {
+                if let Some(e) = cb.get_in(slot) {
+                    if Arc::ptr_eq(&e.point, switch_basic) {
+                        // cc:3509: curcase.outindex = basicbl->getInRevIndex(inindex);
+                        found = Some(e.reverse_index);
+                        break;
+                    }
+                }
+            }
+            found
+        };
+        // Ghidra throws LowlevelError("Case block has become detached from
+        // switch") at inindex==-1 (cc:3507-3508); the multigoto path cannot
+        // detach (basic edges persist), so None degrades to "no coords".
+        let Some(rev) = rev else {
+            return (false, None);
+        };
+        let outindex = if rev >= 0 {
+            Some(rev as usize)
+        } else {
+            None
+        };
+        // cc:3515: curcase.isdefault = switchbl->isDefaultBranch(curcase.outindex);
+        let isdefault = match outindex {
+            Some(j) => switch_basic.read().unwrap().is_default_branch(j),
+            None => false,
+        };
+        (isdefault, outindex)
     }
 
     // Ghidra: blockaction.hh:46 LoopBody::collapseLoops
@@ -6577,6 +6897,8 @@ impl<'a> CollapseStructure<'a> {
                     control: block.clone(),
                     cases,
                     default_case: None,
+                    case_gototypes: Vec::new(),
+                    default_gototype: 0,
                     case_values,
                     index_varnode,
                     incoming: Vec::new(),
@@ -6865,6 +7187,8 @@ impl<'a> CollapseStructure<'a> {
                     control: chain[0].1.clone(),
                     cases: case_bodies.clone(),
                     default_case,
+                    case_gototypes: Vec::new(),
+                    default_gototype: 0,
                     case_values: case_vals,
                     index_varnode,
                     incoming: Vec::new(),
@@ -7039,6 +7363,8 @@ impl<'a> CollapseStructure<'a> {
                 let new_def = new_default.or_else(|| sw.default_case.clone());
                 let ctrl_idx = sw.index;
                 let ctrl = sw.control.clone();
+                let cgt = sw.case_gototypes.clone();
+                let dgt = sw.default_gototype;
                 let cv = sw.case_values.clone();
                 let iv = sw.index_varnode.clone();
                 drop(b);
@@ -7049,6 +7375,8 @@ impl<'a> CollapseStructure<'a> {
                         control: ctrl,
                         cases: new_case_list,
                         default_case: new_def,
+                        case_gototypes: cgt,
+                        default_gototype: dgt,
                         case_values: cv,
                         index_varnode: iv,
                         incoming: Vec::new(),
