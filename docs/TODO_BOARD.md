@@ -113,6 +113,13 @@
 > blockaction.rs:3489(CASE_BODY)/heritage.rs:2363(TYPELOCK)。label 管道缺失
 > (finalizePrinting/get_label_by_index 零调用)并入 JUMPTABLE-TABLEAPI-0001。验收=
 > getparameter switch≥1 且 case≥48。报告=sb-switch/CASE_EMISSION.md。
+> **DETERM 双 ID CLOSED(2026-09-22,root 依 Cross-Review 条件补登)**:
+> `DETERM-COPYTRIM-0001` ✅CLOSED(e2c627c,merge.cc:1415-1436 首见序镜像,12/12 单值
+> ≥AX 验收线,输出与修复前 d464 variant 逐字节同=纯序钉死,Cross-Review attempt1 APPROVE);
+> `DETERM-DOMINANTCOPY-0001` ✅CLOSED(同源统一根因=processCopyTrims 序,coreaction 侧
+> 仅注释更正);**OPEN 残项**: dominantcopy 槽位带非空 trims 的 mirror 态双侧对照
+> (root 集成阶段执行)。**流程改进令(root)**: 连续三例"commit message 有、板上无"
+> ——在途 lane 完成时 root 必须当场核对板上登记后才算回收完成。
 > **Lane BB 修复落地(2026-09-22,wt/sb-returnsplit)**: BRANCH/CBRANCH 代理已替换为
 > gatherReturnGotos 原语义(copy-map 结构树 t_goto/gotoPrints/t_if-ifgoto 检测,blockaction.cc:2205;
 > gotoPrints 走逐父类型 nextFlowAfter 虚分发表 mid-pipeline live 评估)。降级 drill 验证
