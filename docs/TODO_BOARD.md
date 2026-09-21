@@ -15,6 +15,16 @@
 > D=仅 /dev/shm。临时测试代码一律 /dev/shm/rugra-tests/<branch>/。
 > **验收**：next_url 双侧投影 + `tools/stage_bisect.py` 首分歧输出 + top 函数归因表。
 > 状态与规范：`.slim/deepwork/stage-bisect-e2e.md`。
+> **进展（2026-09-21 root）**：Gate 1 通过,规范 v1.1 锁定(M1/M2/枚举算法已钉死)。
+> Lane D 完成:top-15 清单+入口地址=/dev/shm/rugra-tests/sb-inventory/top_diff_inventory.md
+> (main 1248/getparameter.constprop.0 869 领跑;Rugra 单函数选择可行)。
+> Lane H 完成:fresh 基线 curl **3711/0/0**(sha 023d6ab5…,已回流 result/curl_cur.c)、
+> httpd **3576/0/0**——**较 W4 +1232 = 主仓回归**(main 653→1180/ap_fini_vhost_config 258→625/
+> ap_pregsub 222→345/ap_update_vhost_from_headers 221→319),报告
+> /dev/shm/rugra-tests/sb-baseline/BASELINE_REPORT.md。
+> **派生 Lane I**(wt/sb-httpd):70f4449..0acde30 commit 二分定位回归,产物
+> /dev/shm/rugra-tests/sb-httpd/HTTPD_REGRESSION_REPORT.md;**Lane M**:httpd 29/2010
+> 语域调查,产物 /dev/shm/rugra-tests/sb-corpus/HTTPD_CORPUS.md。
 
 > **基线（root 亲测 @ master `85300a1`，2026-09-01 fresh formal release E2E）**：
 > curl 124/124、skeleton **3090**/defects **0**/numbering **0**，stdout sha256
