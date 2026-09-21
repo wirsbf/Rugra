@@ -1359,15 +1359,15 @@ fn main() {
         return;
     }
 
-    let mode = match std::env::var("RUGRA_STAGE_PROJ") {
-        Ok(_) => match std::env::var("RUGRA_STAGE_FUNC") {
+    let mode = match std::env::var("RUGRA_STAGE_PROJ").is_ok() || std::env::var("RUGRA_STAGE_DRILL").is_ok() {
+        true => match std::env::var("RUGRA_STAGE_FUNC") {
             Ok(function) if !function.is_empty() => DriverMode::SelectedFunctions(vec![function]),
             _ => {
-                eprintln!("RUGRA_STAGE_FUNC is required when RUGRA_STAGE_PROJ is set");
+                eprintln!("RUGRA_STAGE_FUNC is required when RUGRA_STAGE_PROJ/RUGRA_STAGE_DRILL is set");
                 std::process::exit(2);
             }
         },
-        Err(_) => match args.as_slice() {
+        false => match args.as_slice() {
         [_] => DriverMode::All,
         [_, option, functions @ ..]
             if option == COMPARE_FUNCTION_ARG
@@ -2658,6 +2658,180 @@ fn emit_stage_projection(
     Ok(())
 }
 
+// RUGRA-GLUE (v2 drill emitter, Lane AA): per-application modified-op drill
+// using the same BREAK_START frontier stepping as the v1.1 projection
+// above, but emitting the oracle-drill grammar of
+// tests/oracle/stage_drill_1204.cc (Lane Q):
+//   @BEGIN <boundary-seq> <full-path>
+//   <native-form DEBUG block: "DEBUG <n>: <leaf>", before line,
+//    "   " + after line; dead ops keep "<seqnum>: **">
+//   @END <boundary-seq> <full-path>
+// Records come from the drillobserve hooks (funcdata.rs mutation entries,
+// action.rs perform/process_op boundaries); <n> is the recorder's native
+// opactdbg_count equivalent (advances only when an application modified a
+// traced op); boundary-seq is 1-based per emitted block, and applications
+// that modified nothing still emit an `empty=1` block (v1.1 semantics).
+fn emit_stage_drill(
+    fd: &mut Funcdata,
+    db: &mut ActionDatabase,
+    request: &DecompileRequest,
+) -> Result<(), String> {
+    let output_path = std::env::var("RUGRA_STAGE_DRILL_OUT")
+        .map_err(|_| "RUGRA_STAGE_DRILL_OUT is required when RUGRA_STAGE_DRILL is set")?;
+    let binary_sha256 = stage_sha256(&request.binary_image)?;
+    let mut output = std::io::BufWriter::new(
+        fs::File::create(&output_path)
+            .map_err(|error| format!("unable to create stage drill {output_path}: {error}"))?,
+    );
+    writeln!(
+        output,
+        "META side=rugra oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b build_flags=env-RUGRA_STAGE_DRILL func={} entry=0x{:x} arch=x86:LE:64:default cspec=gcc format=raw-native-printdebug record_seq=native_opactdbg_count boundary_seq=1based_perform_bracket ladder=break_start_frontier binary_sha256={} producer={}",
+        request.target.name,
+        request.target.vaddr,
+        binary_sha256,
+        stage_producer()
+    )
+    .map_err(|error| format!("unable to write stage drill metadata: {error}"))?;
+
+    let root = db
+        .get_action_mut("decompile")
+        .ok_or_else(|| "decompile action was not registered".to_string())?;
+    let mut nodes: Vec<StageNode> = Vec::new();
+    let root_name = root.get_name().to_string();
+    stage_walk(&*root, None, 0, &root_name, &mut nodes);
+    if nodes.len() < 2 {
+        return Err("decompile action has no stage children".to_string());
+    }
+    root.reset(fd);
+    let mut root_state = ActionState::new(root.get_flags());
+    root.clear_break_points(&mut root_state);
+    let fd_arch = fd
+        .arch
+        .clone()
+        .ok_or_else(|| "drill requires a bound Architecture".to_string())?;
+    rugra::drillobserve::start(fd_arch);
+
+    let mut blocks: u64 = 0;
+    let mut records: u64 = 0;
+    let mut perform_calls: u64 = 0;
+    // Emitted blocks for one application bracket: pools attribute each
+    // flushed rule block to <pool-path>:<rule-leaf>; leaf actions repeat
+    // their own path; groups must never produce records (kept visible via
+    // a ?group-emitted marker if the invariant is ever violated).
+    fn emit_blocks(
+        root: &dyn Action,
+        nodes: &[StageNode],
+        output: &mut std::io::BufWriter<std::fs::File>,
+        current: usize,
+        drained: Vec<String>,
+        blocks: &mut u64,
+    ) -> Result<u64, String> {
+        let action = stage_action_of(root, nodes, current);
+        let is_group = action.as_action_group().is_some();
+        let is_pool = !is_group && action.as_action_pool().is_some();
+        let mut record_count: u64 = 0;
+        let leaf_name_of = |path: &str| -> &str { path.rsplit(':').next().unwrap_or("") };
+        for block in &drained {
+            record_count += 1;
+            *blocks += 1;
+            let header_leaf = block
+                .split_once("DEBUG ")
+                .and_then(|(_, rest)| rest.split_once(':'))
+                .map(|(_, rest)| {
+                    rest.trim_start()
+                        .split(['\n', ' '])
+                        .next()
+                        .unwrap_or("")
+                        .to_string()
+                })
+                .unwrap_or_default();
+            let path = if is_group {
+                format!("{}?group-emitted", nodes[current].path)
+            } else if is_pool {
+                format!("{}:{header_leaf}", nodes[current].path)
+            } else if header_leaf == leaf_name_of(&nodes[current].path) {
+                nodes[current].path.clone()
+            } else {
+                format!("{}:{header_leaf}?foreign", nodes[current].path)
+            };
+            writeln!(output, "@BEGIN {} {path}\n{block}@END {} {path}", *blocks, *blocks)
+                .map_err(|error| format!("unable to write drill block: {error}"))?;
+        }
+        if drained.is_empty() && !is_group {
+            *blocks += 1;
+            writeln!(
+                output,
+                "@BEGIN {} {} empty=1\n@END {} {}",
+                *blocks,
+                nodes[current].path,
+                *blocks,
+                nodes[current].path
+            )
+            .map_err(|error| format!("unable to write drill block: {error}"))?;
+        }
+        Ok(record_count)
+    }
+
+    // Initial pause at the root's STATUS_START, then step application by
+    // application exactly like the v1.1 projection loop.
+    stage_set_start_break(root, &mut root_state, &nodes, 0);
+    let ret = root
+        .perform(fd, &mut root_state)
+        .map_err(|error| format!("initial drill breakpoint failed: {error}"))?;
+    perform_calls += 1;
+    if ret >= 0 {
+        return Err("root completed before the first drill breakpoint".to_string());
+    }
+    let mut current = 0usize;
+    loop {
+        let candidates = stage_frontier(&*root, &root_state, &nodes, current);
+        root.clear_break_points(&mut root_state);
+        for candidate in &candidates {
+            stage_set_start_break(root, &mut root_state, &nodes, *candidate);
+        }
+        let ret = root
+            .perform(fd, &mut root_state)
+            .map_err(|error| format!("drill perform failed at {}: {error}", nodes[current].path))?;
+        perform_calls += 1;
+        let drained = rugra::drillobserve::drain();
+        let recs = emit_blocks(&*root, &nodes, &mut output, current, drained, &mut blocks)?;
+        records += recs;
+        if ret >= 0 {
+            break;
+        }
+        let paused = candidates
+            .iter()
+            .copied()
+            .find(|candidate| {
+                stage_state_of(&*root, &root_state, &nodes, *candidate).status
+                    == rugra::action::status_flags::STATUS_BREAKSTARTHIT
+            })
+            .ok_or_else(|| {
+                format!(
+                    "drill pause without a hit candidate after {} (candidates: {})",
+                    nodes[current].path,
+                    candidates
+                        .iter()
+                        .map(|candidate| nodes[*candidate].path.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
+        current = paused;
+    }
+    writeln!(
+        output,
+        "@DONE applications={blocks} records={records} opactdbg_final={} perform_calls={perform_calls} nodes={}",
+        rugra::drillobserve::count(),
+        nodes.len()
+    )
+    .map_err(|error| format!("unable to write drill done line: {error}"))?;
+    output
+        .flush()
+        .map_err(|error| format!("unable to flush stage drill: {error}"))?;
+    Ok(())
+}
+
 // RUGRA-GLUE: reconstructs the former thread closure from a complete immutable request snapshot.
 fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, String> {
     let obj = Object::parse(&request.binary_image)
@@ -3284,6 +3458,20 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
                 })
         {
             emit_stage_projection(&mut fd_write, &mut db, request)?;
+        }
+        if std::env::var("RUGRA_STAGE_DRILL").is_ok()
+            && std::env::var("RUGRA_STAGE_FUNC")
+                .ok()
+                .is_some_and(|selector| {
+                    selector == target.name
+                        || selector.eq_ignore_ascii_case(&format!("0x{:x}", target.vaddr))
+                        || selector
+                            .strip_prefix("0x")
+                            .and_then(|value| u64::from_str_radix(value, 16).ok())
+                            == Some(target.vaddr)
+                })
+        {
+            emit_stage_drill(&mut fd_write, &mut db, request)?;
         } else if let Err(err) = db.perform_action("decompile", &mut fd_write) {
             // Ghidra's Action::perform aborts the whole pipeline on a negative
             // return; swallowing the error here made mid-pipeline aborts (e.g.
@@ -4665,9 +4853,11 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(names) = selected_functions {
             // RUGRA-GLUE: stage-projection selectors may name a function or
             // give its address (RUGRA_STAGE_FUNC=<name|0xaddr>); the extra
-            // address arm only exists behind RUGRA_STAGE_PROJ so env-unset
-            // runs keep the name-only matching byte-for-byte.
-            let addr_selected = std::env::var("RUGRA_STAGE_PROJ").is_ok()
+            // address arm only exists behind RUGRA_STAGE_PROJ or
+            // RUGRA_STAGE_DRILL so env-unset runs keep the name-only
+            // matching byte-for-byte.
+            let addr_selected = (std::env::var("RUGRA_STAGE_PROJ").is_ok()
+                || std::env::var("RUGRA_STAGE_DRILL").is_ok())
                 && names.iter().any(|selector| {
                     selector
                         .strip_prefix("0x")
@@ -4915,9 +5105,10 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(names) = selected_functions {
         // RUGRA-GLUE: stage-projection addr selectors resolve to function
         // names during the loop, so the missing check must accept the same
-        // address form (behind RUGRA_STAGE_PROJ only).
+        // address form (behind RUGRA_STAGE_PROJ/RUGRA_STAGE_DRILL only).
         let stage_addr_seen = |name: &str| -> bool {
-            std::env::var("RUGRA_STAGE_PROJ").is_ok()
+            (std::env::var("RUGRA_STAGE_PROJ").is_ok()
+                || std::env::var("RUGRA_STAGE_DRILL").is_ok())
                 && functions.iter().any(|func| {
                     name.strip_prefix("0x")
                         .and_then(|value| u64::from_str_radix(value, 16).ok())
