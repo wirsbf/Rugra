@@ -2730,7 +2730,9 @@ fn emit_stage_drill(
         let is_group = action.as_action_group().is_some();
         let is_pool = !is_group && action.as_action_pool().is_some();
         let mut record_count: u64 = 0;
-        let leaf_name_of = |path: &str| -> &str { path.rsplit(':').next().unwrap_or("") };
+        fn leaf_name_of(path: &str) -> &str {
+            path.rsplit(':').next().unwrap_or("")
+        }
         for block in &drained {
             record_count += 1;
             *blocks += 1;
