@@ -87,6 +87,12 @@
 > 模式),验收=连跑≥10 次 sha256 单值+oracle 序一致;merge.rs=机制 C 白名单,修后独立
 > 复核。卫生项: coreaction.rs:12936 过期"faithful no-op"注释更正/examples 4081 payload
 > 序排序。报告=sb-integration/DETERMINISM.md(含已排除清单防重复排查)。
+> **第二不确定性源 `DETERM-DOMINANTCOPY-0001`(P0,2026-09-22,Lane AZ)**: 三函数 Rust
+> drill 全部非确定(2-3 跑 cmp 不等),同点 universal:dominantcopy 工作集漂移(gp 穿透
+> 终态 C 语句序)——coreaction.rs:12950 域容器随机序,与 DETERM-COPYTRIM-0001 一并修
+> (同 lane BD)。**top-3 配对基线**(wt/sb-rust@c5a8992=集成前快照): main 遍型
+> oracle [3,3,1] vs Rust [8,6,2];gp switchnorm oracle 改 2 op vs Rust 3×空(集成后
+> 重测);三首分歧捕获于 sb-drill/TOP3_PAIRING.md。
 > **镜像后差集图谱(2026-09-22,Lane AU,DELTA_V2.md)**: +144 事件精确分解=mainloop 遍
 > 8→12(+92)/stackstall 内迭 12→18(+30)/fullloop 轮 3→4(+9,轮型 [4,3,1] vs [4,4,3,1]);
 > 银行膨胀终快照 COPY **171 vs 12**(+159 主导,与 Lane V 拷贝族分诊互证);规则级 top:
