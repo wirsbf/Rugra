@@ -40,7 +40,19 @@
 > docs/alignment_docs/STAGE_BISECT_SPEC_1204.md。
 > **Lane S 完成**: sb-batch/{targets.json(153 目标),batch_driver.py(断点续跑/超时/pending),
 > README}+CLI 契约(run_stage_projection_oracle.sh <corpus> <addr> <name> / RUGRA_STAGE_FUNC=<addr>)。
-> **Lane T 派发**(targets 交叉审计+Phase 2 runbook)、**Lane U 派发**(93 条 UND 地址加固→targets_patch.json)。
+> **Lane X 完成(2026-09-22)**: gp switch 丢失根因闭合(报告 sb-switch/GP_SWITCH_ROOTCAUSE.md)
+> ——jumptable 恢复无罪(88 entries 精确匹配);真凶=**①ActionSwitchNorm 空壳**
+> (coreaction.rs:3611-3636 matchModel/recoverLabels/foldIn* 调用全注释,fold_in_normalization/
+> fold_in_guards 已移植于 jumptable.rs:2648/3095 但零调用方)+**②newBlockMultiGoto 未移植**
+> (block.cc:1716-1755,try_rule_goto 显式跳过 switch 块);叠加致 ruleBlockSwitch 守卫 111 次
+> 全拒于 blockaction.cc:1705。**新登记**:
+> - `JUMPTABLE-TABLEAPI-0001`(并入 P0-A): 激活 SwitchNorm 真身(match_model/recover_labels
+>   +接线既有死代码),owner=switchnorm-agent(wt/sb-switchnorm),write-set=src/{coreaction,jumptable}.rs
+>   +docs/api/*+双侧 fixture;机制 C 白名单(jumptable.rs)→合并前独立复核。
+> - `BLOCKSTRUCT-MULTIGOTO-0001`(新开 P0-B): 补 newBlockMultiGoto+ruleBlockGoto isSwitchOut
+>   arm+printc 发射(blockaction.rs/printc.rs);待派;机制 C 白名单。
+> 验收(gp_switch): --func getparameter.constprop.0 switch 结构恢复+glob_set 改善+curl/httpd
+> E2E defects=numbering=0 无回归+B2 fixture。
 
 > **基线（root 亲测 @ master `85300a1`，2026-09-01 fresh formal release E2E）**：
 > curl 124/124、skeleton **3090**/defects **0**/numbering **0**，stdout sha256
