@@ -67,6 +67,13 @@
 > 镜像态抑制目标 DWARF 装载,wt/sb-rust 空闲后落);对 +144 贡献小但钉死消费端首分歧
 > (观测阻断项)。附带: CALLIND 二输入常量折叠差(c:17680 vs u:10000174)疑 BANK-COPY-159
 > 同族,已记 RAX_RETURN.md §3.2。
+> **ACTION-TRAVERSAL-144-0001 定案(2026-09-22,Lane AY)**: 裁决=(b) 真实未收敛,根因=
+> `ActionReturnSplit::gatherReturnGotos` 的 goto 前驱检测替代实现(coreaction.rs:14153,
+> "入边源块以 BRANCH/CBRANCH 结尾"代理 Ghidra gotoPrints/copy-map)R2 尾误开火→余震
+> (COPY 链清理+blockstructure×5+condnegate→notdistribute→boolnegate 阻尼振荡)→R3 真报
+> changes→repeatapply 正确多跑 R4。**修复=忠实移植 gatherReturnGotos goto 检测**
+> (wt/sb-returnsplit,owner=returnsplit-agent)。R3 top: boolnegate 7apps/earlyremoval 11/
+> propagatecopy 9(同 op 二次改写实证 0x5077:876 四连改)。
 > **镜像后差集图谱(2026-09-22,Lane AU,DELTA_V2.md)**: +144 事件精确分解=mainloop 遍
 > 8→12(+92)/stackstall 内迭 12→18(+30)/fullloop 轮 3→4(+9,轮型 [4,3,1] vs [4,4,3,1]);
 > 银行膨胀终快照 COPY **171 vs 12**(+159 主导,与 Lane V 拷贝族分诊互证);规则级 top:
