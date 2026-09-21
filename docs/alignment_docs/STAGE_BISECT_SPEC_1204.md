@@ -168,3 +168,37 @@ FLOAT_NEG/INT_2COMP、</<=/==/!=/*// /%/>> 等 INT/FLOAT 合并类(11 个有损�
 
 版本:v1.1 → v1.2 文法扩展。消费端 vn/op 文法与 selftest、Rust emitter 三描述符
 必须同规则落地后方可用于双侧对拍;此前单侧投影仅可作自跑确定性验证。
+
+---
+
+## 增补 v1.2.2:事件枚举粒度澄清(D9)与加载契约锚定(D10)
+
+### D9 — 事件枚举粒度(澄清 (i))
+
+一个事件对(@BEGIN/@END/@SNAP)= 该树节点的**一次 perform() 调用**。据此:
+- repeatapply 叶(oppool1/oppool2/cleanup,全树仅此三个,coreaction.cc:
+  5511/5662/5694)的整个收敛过程是**单事件**:@END count = 收敛后累计值,
+  result = perform 返回值,tests/apply = ΔgetNumTests/getNumApply(含内部
+  多趟自增,两侧同口径即可比)。
+- BREAK_ACTION 不用于 v1 事件枚举(规范步进协议仅授权 break_start);
+  changed-apply 级粒度属 v2 per-application 下钻域。
+- repeatapply 组(fullloop/mainloop/stackstall)的普通子叶:每 pass 一事件。
+- onceperfunc 叶 apply 一次后 status_end(action.cc:352-356),后续 pass
+  perform 即返 0(action.cc:343-344),无事件;restart reset 恢复 status 但
+  count 族累计保留(action.cc:100-105),round+1 重发事件。oneactperfunc 仅
+  changed 后 status_end。
+- 同名兄弟叶(双 unreachable:ActionDeterminedBranch+ActionUnreachable,
+  coreaction.cc:5672-5673;双 DirectWrite 同理):全路径相同,名称寻址必然
+  二义,两侧必须按注册序做指针/树序级断点,事件仅靠 seq 区分。
+
+### D10 — 加载契约锚定
+
+- 正典 = golden 生成路径:`queryFunction` + `readLoaderSymbols` +
+  `followFlow(code:0, code:highest)`(regen_ghidra_golden.py:388 ≡ oracle
+  harness:315)。oracle 生产端不得收窄;任何加载段改动须先证明与 regen
+  路径逐调用等价。
+- Rugra 侧在实现同语义流跟随(含尾调用/跳转落入 code space 内地址的 op
+  生成,Funcdata::followFlow/FlowInfo 无界-range 语义)之前,META
+  load_mode 发 `single_function_flow`;镜像落地后切换 `single_function_bfd`。
+  load_mode 为身份键:字面不同即 V1_META_MISMATCH(输入构造不同=不可比,
+  属正确硬挡)。
