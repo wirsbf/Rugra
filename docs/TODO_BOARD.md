@@ -52,6 +52,13 @@
 > 值通道无行为影响;条件2(main +24 函数级归因)绑定 R1c/R2a 既有族,root 集成阶段补齐。
 > **AR 集成**: stack delay 1 修复合并,curl **3677/0/0**(−8 全改善),httpd 2343 恒等,
 > activeparam [9,9,0] 探针复刻逐点一致。
+> **⚠ oracle 捕获确定性广播(2026-09-22,Lane AT)**: oracle per-application DEBUG 流依赖早期
+> 堆分配序列——argv 路径形态(相对↔绝对)决定性选择 records=1019 vs 1014 两变体(历史
+> "发散窗口"=此,非随机);ASLR 使大函数几乎逐跑翻转。**正典捕获配方**=相对 argv+`env -i`
+> +`setarch -R`(repo-root cwd)。**所有 oracle 捕获 lane(golden regen/fixture)必须采用同
+> 配方**,否则可能钉住不同确定性变体。drill runner 已参数化(<corpus> <addr> <name>)+
+> 三目标钉定: curl/main 4763 记录 4.96MB/gp 3375 记录/httpd main 6583 记录,全部五跑
+> 字节一致。
 > **镜像后差集图谱(2026-09-22,Lane AU,DELTA_V2.md)**: +144 事件精确分解=mainloop 遍
 > 8→12(+92)/stackstall 内迭 12→18(+30)/fullloop 轮 3→4(+9,轮型 [4,3,1] vs [4,4,3,1]);
 > 银行膨胀终快照 COPY **171 vs 12**(+159 主导,与 Lane V 拷贝族分诊互证);规则级 top:
