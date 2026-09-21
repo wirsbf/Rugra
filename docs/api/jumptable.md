@@ -331,6 +331,9 @@ A jump-table execution model (jumptable.hh:243).
 - `fold_in_guards(fd, jump) -> bool`,
 - `sanity_check(fd, indop, addresstable, loadpoints, loadcounts) -> bool`,
 - `clone_model() -> Box<dyn JumpModel>`, `clear()`.
+- `as_any() -> &dyn Any` (RUGRA-GLUE，Ghidra 侧对应物是调用方对
+  `JumpModel*` 做 `dynamic_cast<JumpBasic*>` 读 `selectguards`；Rust trait
+  object 需要 `Any` 出口，五个模型实现均返回 `self`)。
 
 ## `JumpValuesRange` / `JumpValuesRangeDefault`
 Implementations of `JumpValues` for a single-entry range / a range plus an
