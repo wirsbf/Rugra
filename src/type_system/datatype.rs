@@ -834,8 +834,12 @@ impl Datatype {
     /// the offset within that component. Otherwise `None` is returned and
     /// `newoff` is set to `off` unchanged (type.cc:174 base behaviour).
     ///
-    /// Returns `(Some(component), newoff)` or `(None, off)`.
-    pub fn get_sub_type(&self, off: i64) -> (Option<&Datatype>, i64) {
+    /// Returns `(Some(component), newoff)` or `(None, off)`. The component is
+    /// returned as the canonical factory/scope-owned `Arc<Datatype>`, which is
+    /// Rust's ownership mirror of Ghidra's `Datatype*` virtual return: the
+    /// TypeSpacebase override (type.cc:2947) resolves through the indexed
+    /// symbol table, so its result lives in the Scope, not in this object.
+    pub fn get_sub_type(&self, off: i64) -> (Option<Arc<Datatype>>, i64) {
         match self {
             Datatype::Struct(s) => struct_get_sub_type(s, off),
             // TypeUnion deliberately has no getSubType override
@@ -852,15 +856,21 @@ impl Datatype {
                 // Ghidra. Do not invoke Rugra's legacy-constructor fallback.
                 let elem_align = a.array_of.base_record().align_size as i64;
                 let newoff = off % elem_align;
-                (Some(a.array_of.as_ref()), newoff)
+                (Some(a.array_of.clone()), newoff)
             }
             // Pointer: Ghidra has a `truncate` field we do not model, so it
             // falls through to the base behaviour (type.cc:920).
             // PartialEnum/PartialUnion fall through to base (no sub-type walk);
             // PartialStruct has its own override on the variant struct.
             Datatype::Pointer(_) | Datatype::Void(_) | Datatype::Base(_)
-            | Datatype::Enum(_) | Datatype::Code(_) | Datatype::Spacebase(_)
+            | Datatype::Enum(_) | Datatype::Code(_)
             | Datatype::PartialEnum(_) | Datatype::PartialUnion(_) => (None, off),
+            // TypeSpacebase override (type.cc:2947): query the indexed symbol
+            // table (getMap → queryContainer) instead of the base behaviour.
+            // This mirrors the C++ virtual dispatch that `RulePtrsubUndo`
+            // (ruleaction.cc:7138) and `ActionSetCasts` (coreaction.cc:2748)
+            // observe through `TypePointer::isPtrsubMatching` (type.cc:1129).
+            Datatype::Spacebase(spacebase) => spacebase.get_sub_type(off),
             // TypePartialStruct override (type.cc:2363): walk down the container
             // until the component no longer overruns the partial's size.
             Datatype::PartialStruct(ps) => partial_struct_get_sub_type(ps, off),
@@ -869,64 +879,18 @@ impl Datatype {
 
     // RUGRA-GLUE: Arc-preserving Rust ownership twin of the virtual
     // Datatype::getSubType dispatch rooted at type.cc:174.
-    /// Arc-preserving virtual `getSubType` dispatch. For the covered Struct,
-    /// Array, and PartialStruct arms, this has the same return/new-offset
-    /// behaviour as [`Self::get_sub_type`] while retaining the canonical
-    /// factory-owned component `Arc`. The Spacebase arm instead uses Rugra's
-    /// scope-owned Arc lookup, which the borrowed API cannot expose; it remains
-    /// a documented whole-dispatch mismatch. `TypeFactory::getExactPiece`
-    /// relies on the covered identity while walking nested containers and
-    /// interning partial results.
+    /// Arc-preserving virtual `getSubType` dispatch. Since
+    /// [`Self::get_sub_type`] itself returns the canonical factory/scope-owned
+    /// component `Arc` (the ownership mirror of Ghidra's virtual `Datatype*`
+    /// return, including the TypeSpacebase override at type.cc:2947), this is
+    /// a thin delegating wrapper kept for existing call sites
+    /// (`TypeFactory::getExactPiece` and the nested-container walks) that
+    /// already hold an `Arc<Datatype>`.
     pub fn get_sub_type_arc(
         datatype: &Arc<Datatype>,
         off: i64,
     ) -> (Option<Arc<Datatype>>, i64) {
-        match datatype.as_ref() {
-            Datatype::Struct(structure) => match struct_get_field_iter(structure, off) {
-                Some(index) => {
-                    let field = &structure.fields[index];
-                    (Some(field.type_ptr.clone()), off - field.offset as i64)
-                }
-                None => (None, off),
-            },
-            Datatype::Array(array) => {
-                if off >= array.base.size as i64 {
-                    return (None, off);
-                }
-                let stride = array.array_of.base_record().align_size as i64;
-                (Some(array.array_of.clone()), off % stride)
-            }
-            Datatype::PartialStruct(partial) => {
-                let size_left = partial.base.size as i128 - off as i128;
-                let mut cur_off = off + partial.offset;
-                let mut current = partial.container.clone();
-                loop {
-                    let (subtype, newoff) = Self::get_sub_type_arc(&current, cur_off);
-                    let Some(subtype) = subtype else {
-                        return (None, newoff);
-                    };
-                    current = subtype;
-                    cur_off = newoff;
-                    if current.get_size() as i128 - cur_off as i128 <= size_left {
-                        return (Some(current), cur_off);
-                    }
-                }
-            }
-            // TypeSpacebase is the one base-looking class with a modeled
-            // virtual override; its symbol-table result is already an Arc.
-            Datatype::Spacebase(spacebase) => spacebase.get_sub_type(off),
-            // TypeUnion has no override. TypePointer's optional `truncate`
-            // component and TypeCode's factory attachment are not represented
-            // in Rugra yet; every other class uses Datatype's null base arm.
-            Datatype::Void(_)
-            | Datatype::Base(_)
-            | Datatype::Pointer(_)
-            | Datatype::Enum(_)
-            | Datatype::Union(_)
-            | Datatype::Code(_)
-            | Datatype::PartialEnum(_)
-            | Datatype::PartialUnion(_) => (None, off),
-        }
+        Self::get_sub_type(datatype.as_ref(), off)
     }
 
     // Ghidra: type.cc:160 Datatype::findTruncation
@@ -2178,11 +2142,12 @@ pub fn pointer_rel_is_ptrsub_matching(
 /// has a stripped form (type.cc:2677-2678). Faithful to the metatype
 /// dispatch of `TypePointer::isPtrsubMatching` (type.cc:1123-1175).
 ///
-/// Rugra gaps: the `TYPE_SPACEBASE` branch needs a `Scope` to resolve
-/// sub-types, and the `TYPE_STRUCT` branch recurses into
-/// `testForArraySlack`; both are reproduced as faithfully as the available
-/// data allows. When `ptrto` has no arrayed component at the offset, the
-/// routine returns `false` (matching Ghidra's null-subType fallback).
+/// The `TYPE_SPACEBASE` branch's `ptrto->getSubType(newoff,&newoff)`
+/// (type.cc:1129) is a virtual dispatch that reaches
+/// `TypeSpacebase::getSubType` (type.cc:2947): the generic
+/// [`Datatype::get_sub_type`] routes there, querying the indexed scope.
+/// The `TYPE_STRUCT` branch recurses into `testForArraySlack` when the
+/// sub-type lookup misses or `extra` is out of bounds (type.cc:1152-1165).
 pub fn pointer_is_ptrsub_matching(
     ptrto: &Datatype,
     wordsize: usize,
@@ -2205,7 +2170,7 @@ pub fn pointer_is_ptrsub_matching(
         if extra_b < 0 || (extra_b as usize) >= sub_type.get_size() {
             // testForArraySlack fallback: an arrayed component at the offset
             // still matches (type.cc:1134).
-            if !test_for_array_slack(sub_type, extra_b) {
+            if !test_for_array_slack(sub_type.as_ref(), extra_b) {
                 return false;
             }
         }
@@ -2237,7 +2202,7 @@ pub fn pointer_is_ptrsub_matching(
             }
         };
         if extra_b < 0 || (extra_b as usize) >= sub_type.get_size() {
-            if !test_for_array_slack(sub_type, extra_b) {
+            if !test_for_array_slack(sub_type.as_ref(), extra_b) {
                 return false;
             }
         }
@@ -2371,12 +2336,13 @@ fn struct_get_lower_bound_field(s: &TypeStruct, off: i64) -> Option<usize> {
 
 // Ghidra: type.cc:1640 TypeStruct::getSubType
 /// Struct subtype lookup. Corresponds to `TypeStruct::getSubType`
-/// (type.cc:1640).
-fn struct_get_sub_type(s: &TypeStruct, off: i64) -> (Option<&Datatype>, i64) {
+/// (type.cc:1640). Returns the canonical field `Arc` (Ghidra returns the
+/// factory-owned `curfield.type` pointer).
+fn struct_get_sub_type(s: &TypeStruct, off: i64) -> (Option<Arc<Datatype>>, i64) {
     match struct_get_field_iter(s, off) {
         Some(i) => {
             let f = &s.fields[i];
-            (Some(f.type_ptr.as_ref()), off - f.offset as i64)
+            (Some(f.type_ptr.clone()), off - f.offset as i64)
         }
         None => (None, off),
     }
@@ -2408,23 +2374,23 @@ fn struct_get_hole_size(s: &TypeStruct, off: i64) -> i64 {
 /// Walk the container's sub-types, advancing the offset by `offset`, until the
 /// returned component no longer overruns this partial's size. Faithful to
 /// `TypePartialStruct::getSubType` (type.cc:2363-2377).
-fn partial_struct_get_sub_type(ps: &TypePartialStruct, off: i64) -> (Option<&Datatype>, i64) {
+fn partial_struct_get_sub_type(ps: &TypePartialStruct, off: i64) -> (Option<Arc<Datatype>>, i64) {
     let size_left = ps.base.size as i128 - off as i128;
     let mut cur_off = off + ps.offset;
-    let mut ct: &Datatype = ps.container.as_ref();
+    let mut current = ps.container.clone();
     loop {
-        let (sub, no) = ct.get_sub_type(cur_off);
+        let (sub, no) = Datatype::get_sub_type(current.as_ref(), cur_off);
         match sub {
             // The C++ loop assigns `ct = ct->getSubType(...)`; a failed
             // lookup therefore returns null even after an earlier descent.
             None => return (None, no),
             Some(s) => {
-                ct = s;
+                current = s;
                 cur_off = no;
                 // Component can extend beyond range of this partial, in which
                 // case we go down another level (type.cc:2375).
-                if ct.get_size() as i128 - cur_off as i128 <= size_left {
-                    return (Some(ct), cur_off);
+                if current.get_size() as i128 - cur_off as i128 <= size_left {
+                    return (Some(current), cur_off);
                 }
             }
         }
@@ -4596,7 +4562,7 @@ impl TypePartialUnion {
         _op: Option<&crate::op::PcodeOp>,
         _slot: i32,
     ) -> Option<Arc<Datatype>> {
-        let mut cur_type: &Datatype = self.container.as_ref();
+        let mut cur_type: Arc<Datatype> = self.container.clone();
         let mut cur_off = self.offset;
         let target_size = self.base.size;
         while cur_type.get_size() > target_size {
@@ -4616,7 +4582,7 @@ impl TypePartialUnion {
             }
         }
         if cur_type.get_size() == target_size {
-            Some(Arc::new(cur_type.clone()))
+            Some(Arc::new(cur_type.as_ref().clone()))
         } else {
             self.stripped.clone()
         }
@@ -4630,7 +4596,7 @@ impl TypePartialUnion {
     /// Funcdata union cache, so the union branch stops walking and we fall
     /// back to `stripped`.
     pub fn find_resolve(&self, _op: Option<&crate::op::PcodeOp>, _slot: i32) -> Option<Arc<Datatype>> {
-        let mut cur_type: &Datatype = self.container.as_ref();
+        let mut cur_type: Arc<Datatype> = self.container.clone();
         let mut cur_off = self.offset;
         let target_size = self.base.size;
         while cur_type.get_size() > target_size {
@@ -4648,7 +4614,7 @@ impl TypePartialUnion {
             }
         }
         if cur_type.get_size() == target_size {
-            Some(Arc::new(cur_type.clone()))
+            Some(Arc::new(cur_type.as_ref().clone()))
         } else {
             self.stripped.clone()
         }
@@ -4853,9 +4819,9 @@ mod tests {
         }));
         let (borrowed, borrowed_off) = raw_array.get_sub_type(3);
         assert_eq!(borrowed_off, 0);
-        assert!(std::ptr::eq(
-            borrowed.expect("raw array element"),
-            raw3.as_ref(),
+        assert!(Arc::ptr_eq(
+            &borrowed.expect("raw array element"),
+            &raw3,
         ));
         let (owned, owned_off) = Datatype::get_sub_type_arc(&raw_array, 3);
         assert_eq!(owned_off, 0);
@@ -5237,6 +5203,69 @@ mod tests {
         let (sub, newoff) = sb.get_sub_type(42);
         assert!(sub.is_none());
         assert_eq!(newoff, 42);
+    }
+
+    #[test]
+    fn test_spacebase_generic_dispatch_routes_to_override() {
+        // type.cc:174/2947 — Datatype::getSubType is virtual; a
+        // TypeSpacebase reached through the GENERIC dispatch must query the
+        // indexed scope, exactly as the SPACEBASE arm of
+        // TypePointer::isPtrsubMatching (type.cc:1129) observes in Ghidra.
+        use crate::address::RangeList;
+        use crate::database::{Scope, Symbol, SymbolEntry};
+        use std::sync::RwLock;
+
+        let config_t = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("Configurable".into(), 16, TypeMetatype::Struct),
+            fields: vec![],
+        }));
+        let mut sym = Symbol::new(1, "config", "Configurable");
+        sym.dtype = Some(config_t.clone());
+        // Address-tied (symbol_flags::ADDRTIED): in-use at the null usepoint
+        // (database.cc:117), matching how driver-seeded globals are queried.
+        sym.flags |= crate::database::symbol_flags::ADDRTIED;
+        let sym = Arc::new(RwLock::new(sym));
+        let mut scope = Scope::new(1, "global", 0);
+        scope.entries.push(SymbolEntry::new_static(
+            sym,
+            0,
+            Address::new(0x1000),
+            0,
+            16,
+            RangeList::new(),
+        ));
+        let sb = Datatype::Spacebase(TypeSpacebase {
+            base: TypeBase::new(String::new(), 0, TypeMetatype::Spacebase),
+            address: Address::new(0),
+            fd: None,
+            spaceid: None,
+            localframe: Address::new(0),
+            scope: Some(Arc::new(scope)),
+        });
+        // Symbol hit at the container start → the symbol's canonical type,
+        // renormalized offset 0 (type.cc:2967).
+        let (sub, newoff) = sb.get_sub_type(0x1000);
+        assert!(Arc::ptr_eq(&sub.expect("symbol sub-type"), &config_t));
+        assert_eq!(newoff, 0);
+        // Mid-symbol hit → same container type with the interior offset.
+        let (sub, newoff) = sb.get_sub_type(0x1008);
+        assert!(Arc::ptr_eq(&sub.expect("symbol sub-type"), &config_t));
+        assert_eq!(newoff, 8);
+        // No container at the offset → the override's miss fallback.
+        let (sub, newoff) = sb.get_sub_type(0x5000);
+        assert!(sub.is_none());
+        assert_eq!(newoff, 0);
+
+        // The PTRSUB gate consumes the same virtual dispatch
+        // (type.cc:1127-1137): the base offset must hit the symbol start
+        // (renormalized newoff == 0) and `extra` must land within the
+        // symbol's type; a mid-symbol base offset or an unmapped offset
+        // does not match.
+        let ptr = TypePointer::new(8, Arc::new(sb), 1);
+        assert!(pointer_is_ptrsub_matching(&ptr.ptr_to, 1, 0x1000, 0, 0));
+        assert!(!pointer_is_ptrsub_matching(&ptr.ptr_to, 1, 0x1008, 8, 0));
+        assert!(!pointer_is_ptrsub_matching(&ptr.ptr_to, 1, 0x5000, 0, 0));
+        assert!(!pointer_is_ptrsub_matching(&ptr.ptr_to, 1, 0x1000, 16, 0));
     }
 
     #[test]

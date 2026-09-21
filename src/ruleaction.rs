@@ -13482,7 +13482,7 @@ impl RulePieceStructure {
                 let (st_opt, so) = sub_type.get_sub_type(sub_offset);
                 match st_opt {
                     Some(st) => {
-                        sub_type = std::sync::Arc::new(st.clone());
+                        sub_type = st;
                         sub_offset = so;
                     }
                     None => break,
@@ -13519,7 +13519,7 @@ impl RulePieceStructure {
                     if !s.is_piece_structured() {
                         return false;
                     }
-                    cur = std::sync::Arc::new(s.clone());
+                    cur = s;
                     new_off = off as i32;
                 }
             }
@@ -13571,7 +13571,7 @@ impl RulePieceStructure {
             let (sub, off) = cur.get_sub_type(new_off as i64);
             match sub {
                 Some(s) => {
-                    cur = std::sync::Arc::new(s.clone());
+                    cur = s;
                     new_off = off as i32;
                 }
                 None => break None,
@@ -15092,7 +15092,7 @@ impl RulePtrsubUndo {
                         if extra < 0 || extra >= s.get_size() as i64 {
                             // type.cc:1157 — testForArraySlack allows PTRSUB into
                             // an arrayed component even when extra is OOB.
-                            if !Self::test_for_array_slack(s, extra) {
+                            if !Self::test_for_array_slack(s.as_ref(), extra) {
                                 return false;
                             }
                         }

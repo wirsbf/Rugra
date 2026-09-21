@@ -2215,7 +2215,7 @@ impl TypeFactory {
                 let (sub, new_off) = cur.get_sub_type(cur_off);
                 match sub {
                     Some(s) => {
-                        cur = Arc::new(s.clone());
+                        cur = s;
                         cur_off = new_off;
                         if cur_off == 0 {
                             break;

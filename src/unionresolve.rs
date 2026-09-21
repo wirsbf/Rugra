@@ -456,7 +456,7 @@ impl<'t> ScoreUnionFields<'t> {
         for (i, uf) in union_fields.iter().enumerate() {
             let field_offset = uf.offset as i64;
             let ct_opt = score_truncation_inplace(
-                &mut scores, uf.type_ptr.as_ref(), vn_size,
+                &mut scores, &uf.type_ptr, vn_size,
                 offset - field_offset, (i + 1) as i32);
             fields[i + 1] = uf.type_ptr.clone();
             if let Some(ct) = ct_opt {
@@ -691,19 +691,26 @@ impl<'t> ScoreUnionFields<'t> {
     // Ghidra: unionresolve.cc:227 ScoreUnionFields::derefPointer
     /// Score a trial data-type as a pointer being dereferenced by LOAD/STORE.
     /// Faithful to `derefPointer` (unionresolve.cc:227-246).
-    fn deref_pointer<'a>(ct: &'a Datatype, vn_size: usize) -> (Option<&'a Datatype>, i32) {
+    fn deref_pointer(ct: &Datatype, vn_size: usize) -> (Option<Arc<Datatype>>, i32) {
         let mut score = 0i32;
-        let mut res_type: Option<&Datatype> = None;
+        let mut res_type: Option<Arc<Datatype>> = None;
         if ct.get_metatype() == TypeMetatype::Pointer {
-            let mut ptr_to: Option<&Datatype> = Some(pointee_of(ct));
-            while let Some(p) = ptr_to {
+            // Seed with the canonical pointee Arc (Ghidra:
+            // ((TypePointer*)ct)->getPtrTo()); each descent step takes the
+            // canonical component Arc from the virtual getSubType dispatch.
+            let ptr_seed = match ct {
+                Datatype::Pointer(p) => p.ptr_to.clone(),
+                _ => return (res_type, score),
+            };
+            let mut ptr_to: Option<Arc<Datatype>> = Some(ptr_seed);
+            while let Some(p) = &ptr_to {
                 if p.get_size() > vn_size {
                     let (sub, _newoff) = p.get_sub_type(0);
                     ptr_to = sub;
                 } else { break; }
             }
-            if let Some(p) = ptr_to {
-                if p.get_size() == vn_size { score = 10; res_type = Some(p); }
+            if let Some(p) = &ptr_to {
+                if p.get_size() == vn_size { score = 10; res_type = ptr_to.clone(); }
             }
         } else { score = -10; }
         (res_type, score)
@@ -807,7 +814,7 @@ impl<'t> ScoreUnionFields<'t> {
                 if let Some(out_sz) = out_size {
                     let (rt, s) = Self::deref_pointer(trial.fit_type.as_ref(), out_sz);
                     score = s;
-                    if let Some(rt) = rt { res_type = Some(Arc::new(rt.clone())); }
+                    res_type = rt;
                 }
             }
             OpCode::CPUI_STORE => {
@@ -817,7 +824,7 @@ impl<'t> ScoreUnionFields<'t> {
                     score = s;
                     if let Some(pt) = ptr_to {
                         if !last_level {
-                            self.new_trials(&op, 2, Arc::new(pt.clone()), trial.score_index, trial.is_array);
+                            self.new_trials(&op, 2, pt, trial.score_index, trial.is_array);
                         }
                     }
                 } else if trial.in_slot == 2 {
@@ -1062,8 +1069,8 @@ impl<'t> ScoreUnionFields<'t> {
                 let offset = in1_offset_const.unwrap_or(0) as i64;
                 let vn_size = out_size.unwrap_or(0);
                 if let Some(rt) = self.score_truncation(
-                    trial.fit_type.as_ref(), vn_size, offset, trial.score_index) {
-                    res_type = Some(Arc::new(rt.clone()));
+                    &trial.fit_type, vn_size, offset, trial.score_index) {
+                    res_type = Some(rt);
                 }
             }
             OpCode::CPUI_PTRADD => {
@@ -1284,14 +1291,14 @@ impl<'t> ScoreUnionFields<'t> {
     // Ghidra: unionresolve.cc:843 ScoreUnionFields::scoreTruncation
     /// Score a truncation in the data-flow. Faithful to `scoreTruncation`
     /// (unionresolve.cc:843-879).
-    fn score_truncation<'a>(
-        &mut self, ct_in: &'a Datatype, vn_size: usize, offset: i64, score_index: i32,
-    ) -> Option<&'a Datatype> {
+    fn score_truncation(
+        &mut self, ct_in: &Arc<Datatype>, vn_size: usize, offset: i64, score_index: i32,
+    ) -> Option<Arc<Datatype>> {
         let idx = score_index as usize;
         if ct_in.get_metatype() == TypeMetatype::Union {
-            let union_dt = as_union(ct_in);
+            let union_dt = as_union(ct_in.as_ref());
             let mut score = -10i32;
-            let mut recurse: Option<&Datatype> = None;
+            let mut recurse: Option<Arc<Datatype>> = None;
             if let Some(u) = union_dt {
                 for field in &u.fields {
                     if field.offset as i64 == offset && field.type_ptr.get_size() == vn_size {
@@ -1309,8 +1316,8 @@ impl<'t> ScoreUnionFields<'t> {
         }
         let mut score = 10i32;
         let mut cur_off = offset;
-        let mut ct: Option<&Datatype> = Some(ct_in);
-        while let Some(c) = ct {
+        let mut ct: Option<Arc<Datatype>> = Some(ct_in.clone());
+        while let Some(c) = &ct {
             if cur_off == 0 && c.get_size() == vn_size { break; }
             if c.get_metatype() == TypeMetatype::Int || c.get_metatype() == TypeMetatype::Uint {
                 if c.get_size() >= vn_size + cur_off as usize { score = 1; ct = None; break; }
@@ -1406,11 +1413,11 @@ fn test_simple_cases(op: &PcodeOp, in_slot: i32, parent: &Datatype) -> bool {
 /// Score an implied truncation, returning the recurse-type if any.
 /// Faithful to `ScoreUnionFields::scoreTruncation` (unionresolve.cc:843-879).
 fn score_truncation_inplace(
-    scores: &mut [i32], ct_in: &Datatype, vn_size: usize, offset: i64, score_index: i32,
+    scores: &mut [i32], ct_in: &Arc<Datatype>, vn_size: usize, offset: i64, score_index: i32,
 ) -> Option<Arc<Datatype>> {
     let idx = score_index as usize;
     if ct_in.get_metatype() == TypeMetatype::Union {
-        let union_dt = as_union(ct_in);
+        let union_dt = as_union(ct_in.as_ref());
         let mut score = -10i32;
         if let Some(u) = union_dt {
             for field in &u.fields {
@@ -1425,8 +1432,8 @@ fn score_truncation_inplace(
     }
     let mut score = 10i32;
     let mut cur_off = offset;
-    let mut ct: Option<&Datatype> = Some(ct_in);
-    while let Some(c) = ct {
+    let mut ct: Option<Arc<Datatype>> = Some(ct_in.clone());
+    while let Some(c) = &ct {
         if cur_off == 0 && c.get_size() == vn_size { break; }
         if c.get_metatype() == TypeMetatype::Int || c.get_metatype() == TypeMetatype::Uint {
             if c.get_size() >= vn_size + cur_off as usize { score = 1; ct = None; break; }
@@ -1437,7 +1444,7 @@ fn score_truncation_inplace(
     }
     if ct.is_none() { score = -10; }
     scores[idx] += score;
-    ct.map(|c| Arc::new(c.clone()))
+    ct
 }
 
 // RUGRA-GLUE: Datatype::numDepend / getDepend aggregator. Mirrors Ghidra's
