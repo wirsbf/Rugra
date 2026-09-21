@@ -354,12 +354,12 @@ static int run(const string &specRoot,const string &binary,uintb entry,
       // node pointer without changing the Action state machine.
       if (!root->setBreakPoint(Action::break_start,iter->path))
         iter->action->breakpoint |= Action::break_start;
-      // A repeat leaf needs an action breakpoint so every changed apply in
-      // the repeat group becomes its own event.  A no-change completion then
-      // falls through to the next start breakpoint.
-      if ((iter->action->flags & Action::rule_repeatapply) != 0 &&
-          !root->setBreakPoint(Action::break_action,iter->path))
-        iter->action->breakpoint |= Action::break_action;
+      // Spec v1.2.2 D9: event granularity is perform-level.  A
+      // rule_repeatapply leaf (ActionPool: oppool1/oppool2/cleanup) runs
+      // its whole convergence loop inside ONE Action::perform call
+      // (action.cc do-while), which is a single event; BREAK_ACTION is not
+      // part of the v1 stepping protocol.  The event closes at the next
+      // stop, when the pool's status has returned to status_start.
     }
 
     vector<Event> active;
@@ -394,16 +394,6 @@ static int run(const string &specRoot,const string &binary,uintb entry,
             beginEvent(std::cout,active,*iter,nextSeq);
         beginEvent(std::cout,active,hit,nextSeq);
 
-        if (hit.action->status == Action::status_actionbreak) {
-          // This stop is after one changed repeatapply.  Complete its event,
-          // then begin the next apply immediately before resuming perform().
-          for (size_t i=active.size();i>0;--i)
-            if (active[i-1].node.path == hit.path) {
-              endEvent(std::cout,active,i-1,*fd,0,false);
-              break;
-            }
-          beginEvent(std::cout,active,hit,nextSeq);
-        }
         performResult = root->perform(*fd);
         continue;
       }
