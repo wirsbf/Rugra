@@ -350,6 +350,21 @@ impl DrillFmt {
                 inputs.first().map(String::as_str).unwrap_or(""),
                 inputs.get(1).map(String::as_str).unwrap_or("")
             ),
+            OpCode::CPUI_SUBPIECE => {
+                // typeop.cc:2127-2135: getOperatorName is dynamic —
+                // "SUB" + <in0 size><out size> (e.g. SUB84); func form
+                // (typeop.cc:377-388).
+                let in0_size = op
+                    .get_in(0)
+                    .map(|v| v.read().unwrap().size)
+                    .unwrap_or(0);
+                let out_size = op.get_out().map(|v| v.read().unwrap().size).unwrap_or(0);
+                format!(
+                    "{} = SUB{in0_size}{out_size}({})",
+                    out.unwrap_or_default(),
+                    inputs.join(",")
+                )
+            }
             opc if is_binary(opc) => format!(
                 "{} = {} {} {}",
                 out.unwrap_or_default(),
