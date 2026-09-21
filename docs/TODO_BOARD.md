@@ -46,6 +46,12 @@
 > `RUGRA-FLOW-MIRROR-0001`(P0,C-alignment 系列承接,write-set=examples 驱动层+FlowInfo
 > 无界-range 语义;完成前 load_mode 发 `single_function_flow`,完成后切
 > `single_function_bfd`)。Phase 2 next_url 对拍在 D9 修复+D10 镜像完成后开启。
+> **Punch list 落地确认(2026-09-22)**: eea214a→6ad21c4(wt/sb-rust,复活的 AJ 实例落地,
+> AN 独立验证全过): P1-P8 全落地,74 名表机械校验,消费端剩余卡点=D10 层(PLT 对@stage2
+> op0)=预期正确状态。P3 措辞偏差 root 接受(callspec_link 进 producer 注记,身份键双态
+> 不变)。**新登记 `FUNCDATA-SPACEID-WIDTH-0001`(P1)**: op_stack_load 发 size=1 spaceid
+> 常量 vs Ghidra newVarnodeSpace size=8(765 个 LOAD 槽渲染 c:5:1 被发射器尺寸门挡),
+> src 层修复,与 FUNCDATA-OPSTACKLOAD-CONTAIN-0001 相邻域。
 > **双链集成(2026-09-22 root)**: SwitchNorm P0-A(b400e90+e27e985,Cross-Review attempt2
 > APPROVE)+spacebase 分派修复(2b324b8..97d6857,B2 fixture 7/10)合并 master,亲测
 > httpd **2343/0/0**、curl **3685/0/0**(3711−6−20 对账一致),已回流 result(curl sha
