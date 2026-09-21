@@ -172,6 +172,13 @@ class Record:
 # streams: a group-level @BEGIN stays open while descendants complete, so the
 # v1 loader tracks open stages as a stack and records completed stages in
 # file (completion) order (see docs/alignment_docs/STAGE_BISECT_SPEC_1204.md).
+#
+# v1.2 (F-2 gate decision 2026-09-22) adds three pointer-value vn descriptor
+# classes and relaxes the opcode alphabet: <OPC_NAME> is the raw
+# PcodeOp::getOpName() spelling, and the locked typeop.cc table mixes symbol
+# and identifier spellings with mixed case (copy / - / == / (cast) / ZEXT),
+# so the grammar accepts any non-whitespace token and keeps the 12.0.4 name
+# table as an ADVISORY closed set (warning, never a parse error).
 V1_REQUIRED_META = (
     "side", "oracle_commit", "arch", "cspec", "analysis_options",
     "build_flags", "binary_sha256", "func_entry", "func_name", "load_mode",
@@ -180,10 +187,33 @@ V1_REQUIRED_META = (
 V1_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 V1_HEX_RE = re.compile(r"^(?:0x)?[0-9a-fA-F]+$")
 V1_LOCATION_RE = re.compile(r"^(?:0x)?[0-9a-fA-F]+:(?:0x)?[0-9a-fA-F]+$")
-V1_OPCODE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+# F-2: getOpName() tokens include pure symbols ('-', '==', '(cast)', '[]',
+# '->'), so any non-whitespace token is grammatical.
+V1_OPCODE_RE = re.compile(r"^\S+$")
+# Advisory closed set: the display-name spellings of the 72 opcodes
+# registered in the locked oracle's typeop.cc (Ghidra 12.0.4; constructor
+# initializer table + setSymbol renames = 56 distinct strings).  Non-members
+# raise a warning only -- the two sides render their own equivalent name
+# tables per spec v1.2.
+V1_TYPEOP_NAMES = frozenset((
+    "!", "!=", "%", "&", "&&", "*", "+", "-", "->", "/", "<", "<<", "<=",
+    "==", ">>", ">>>", "?", "[]", "^", "^^", "|", "||", "~", "(cast)",
+    "ABS", "CARRY", "CEIL", "CONCAT", "EXTRACT", "FLOAT2FLOAT", "FLOOR",
+    "INSERT", "INT2FLOAT", "LZCOUNT", "NAN", "POPCOUNT", "ROUND", "SBORROW",
+    "SCARRY", "SEXT", "SQRT", "SUB", "TRUNC", "ZEXT",
+    "call", "callind", "copy", "cpoolref", "goto", "load", "new",
+    "return", "segmentop", "store", "switch", "syscall",
+))
+# v1.2 pointer-value descriptors: s:<spacename> (spaceid constant slot),
+# f:<addr>:<time> (fspec space, rendered as the host op's own SeqNum, same
+# spelling as the op-line head), o:<addr>:<time> / o:- (iop space, rendered
+# as the referenced op's SeqNum; '-' when the referenced op is destroyed).
 V1_VN_RE = re.compile(
     r"^(?:c:(?:0x)?[0-9a-fA-F]+:[0-9]+|"
     r"n:[^:,\s]+:(?:0x)?[0-9a-fA-F]+:[0-9]+|"
+    r"s:[^:,\s]+|"
+    r"f:(?:0x)?[0-9a-fA-F]+:(?:0x)?[0-9a-fA-F]+|"
+    r"o:(?:(?:0x)?[0-9a-fA-F]+:(?:0x)?[0-9a-fA-F]+|-)|"
     r"u:(?:0x)?[0-9a-fA-F]+:[0-9]+)$"
 )
 
@@ -222,6 +252,7 @@ class V1Projection:
         self.meta = None
         self.stages = []
         self.converged = []
+        self.warnings = []  # advisory parse-time findings (e.g. off-table opcodes)
 
     @property
     def records(self):
@@ -232,8 +263,14 @@ class V1Projection:
         return len(self.stages) * 3 + len(self.converged)
 
 
-def parse_v1_op(line, line_no):
-    """Parse one v1.1 snapshot operation line."""
+def parse_v1_op(line, line_no, warnings=None):
+    """Parse one v1.x snapshot operation line.
+
+    Opcode tokens are any non-whitespace string (v1.2 F-2); tokens outside
+    the locked typeop.cc display-name table append an ADVISORY warning to
+    `warnings` when provided -- never a parse error, since each side renders
+    its own equivalent name table.
+    """
     parts = line.strip().split()
     if len(parts) != 5:
         raise FormatError(
@@ -244,6 +281,11 @@ def parse_v1_op(line, line_no):
         raise FormatError(f"line {line_no}: invalid op location {location!r}")
     if not V1_OPCODE_RE.fullmatch(opcode):
         raise FormatError(f"line {line_no}: invalid opcode {opcode!r}")
+    if warnings is not None and opcode not in V1_TYPEOP_NAMES:
+        warnings.append(
+            f"line {line_no}: opcode {opcode!r} is not in the locked "
+            "typeop.cc display-name table (advisory)"
+        )
     if not dead.startswith("d=") or dead[2:] not in ("0", "1"):
         raise FormatError(f"line {line_no}: d= must be 0 or 1")
     if not output.startswith("out=") or not inputs.startswith("in="):
@@ -426,7 +468,9 @@ def load_v1_projection(file_path):
                 index += 1
                 if not op_text or op_text.startswith("#") or op_text.startswith("@"):
                     raise FormatError(f"line {op_line_no}: snapshot op-line expected")
-                current.ops.append(parse_v1_op(op_text, op_line_no))
+                current.ops.append(
+                    parse_v1_op(op_text, op_line_no, warnings=projection.warnings)
+                )
             projection.stages.append(current)
             stack.pop()
             continue
@@ -534,7 +578,7 @@ def _v1_report(left, right, kind, stage_index=None, op_index=None,
     report = {
         "schema": SCHEMA,
         "tool": TOOL,
-        "version": "v1.1",
+        "version": "v1.2",
         "kind": kind,
         "relax_unique": relax_unique,
         "left": {"file": left.name, "stages": len(left.stages), "records": left.records},
@@ -549,7 +593,7 @@ def _v1_report(left, right, kind, stage_index=None, op_index=None,
             )
             report["meta_diff"] = meta_diff or {}
         else:
-            report["attribution"] = "v1.1 projections are stage and snapshot identical"
+            report["attribution"] = "v1.2 projections are stage and snapshot identical"
         return report
     ls = left.stages[stage_index] if stage_index < len(left.stages) else None
     rs = right.stages[stage_index] if stage_index < len(right.stages) else None
@@ -594,6 +638,9 @@ def compare_v1_projections(left, right, relax_unique=False):
     warnings = _v1_meta_warnings(left, right)
     if left.meta.kv.get("unique_base") != right.meta.kv.get("unique_base"):
         warnings.append("META unique_base differs; strict op offsets remain observable")
+    # v1.2 advisory parse findings (off-table opcode spellings etc.).
+    warnings.extend(left.warnings)
+    warnings.extend(right.warnings)
     identity = _v1_identity_diffs(left, right)
     if identity:
         return _v1_report(left, right, V1_KIND_META, warnings=warnings,
@@ -628,7 +675,7 @@ def compare_v1_projections(left, right, relax_unique=False):
 
 
 def human_v1_report(report, context=3):
-    lines = ["== stage_bisect v1.1: first divergence =="]
+    lines = ["== stage_bisect v1.2: first divergence =="]
     lines.append(f"left:  {report['left']['file']} (stages={report['left']['stages']}, ops={report['left']['records']})")
     lines.append(f"right: {report['right']['file']} (stages={report['right']['stages']}, ops={report['right']['records']})")
     for warning in report.get("warnings", []):
@@ -2087,6 +2134,109 @@ def scenario_v1_dead_bit_divergence():
     return report
 
 
+def scenario_v1_typeop_names_and_pointer_descriptors():
+    """v1.2 F-2: real typeop.cc spellings + s:/f:/o: descriptors.
+
+    Covers: symbol/mixed-case opcode tokens (copy / - / == / (cast) / ZEXT),
+    the three pointer-value descriptor classes, o:- single-side visibility,
+    the advisory off-table opcode warning, and negative shapes.
+    """
+    ops = [
+        "4ff4:0 copy d=0 out=n:register:8:8 in=n:register:8:4",
+        "4ffa:3 - d=0 out=n:register:20:8 in=n:register:20:8,c:8:8",
+        "4ffc:4 == d=0 out=u:4f900:1 in=n:register:a0:8,n:register:a8:8",
+        "4ffe:5 (cast) d=0 out=u:4f908:8 in=u:4f900:8",
+        "5002:6 ZEXT d=0 out=u:4f910:8 in=u:4f908:4",
+        "5005:7 callind d=0 out=- in=s:ram,n:register:20:8",
+        "500b:8 goto d=0 out=- in=n:register:0:1,o:2534:54",
+        "500e:9 [] d=0 out=n:register:8:8 in=n:register:8:8,o:2534:54",
+        "5011:a load d=0 out=u:4f918:8 in=s:ram,u:4f910:8",
+        "5014:b store d=0 out=- in=s:ram,u:4f918:8,u:4f910:8",
+    ]
+
+    def lines(side, op_list=None):
+        chosen = ops if op_list is None else op_list
+        header = [
+            line.replace("side=oracle", f"side={side}") for line in V1_META
+        ]
+        return header + [
+            "@BEGIN 1 universal:fullloop",
+            "@END 1 universal:fullloop result=0 count=1 tests=10 apply=1",
+            f"@SNAP 1 ops {len(chosen)}",
+            *chosen,
+        ]
+
+    left = make_v1_projection(lines("oracle"), "oracle-v12")
+    right = make_v1_projection(lines("rugra"), "rugra-v12")
+    parsed = left.stages[0].ops
+    check([op.opcode for op in parsed[:5]] == ["copy", "-", "==", "(cast)", "ZEXT"],
+          f"real typeop spellings must parse: {[op.opcode for op in parsed[:5]]}")
+    check(parsed[5].inputs[0] == "s:ram", "s: descriptor must parse as first input")
+    check(parsed[6].inputs[1] == "o:2534:54", "o: descriptor must parse with SeqNum")
+    check(parsed[9].output == "-", "store output slot must stay '-'")
+    report = compare_v1_projections(left, right)
+    check(report["kind"] == V1_KIND_MATCH,
+          f"identical v1.2 streams must match: {report['kind']}")
+    check(not report["warnings"], f"real spellings must not warn: {report['warnings']}")
+
+    # o:- is grammatical; appearing on one side only is a visible divergence.
+    destroyed = list(ops)
+    destroyed[7] = "500e:9 [] d=0 out=n:register:8:8 in=n:register:8:8,o:-"
+    diverged = compare_v1_projections(left, make_v1_projection(lines("rugra", destroyed)))
+    check(diverged["kind"] == V1_KIND_OP and diverged["op_index"] == 7,
+          f"single-side o:- must be a visible divergence: {diverged['kind']}")
+
+    # s: cannot swallow a real constant: c:-prefixed slots stay constants
+    # even when hex digits would fit the s: name class (e.g. c:ff:4).
+    const_ops = ["4ff4:0 copy d=0 out=- in=c:ff:4,s:ram,c:bad:4"]
+    const_left = make_v1_projection(
+        lines("oracle", const_ops) + [])
+    slot = const_left.stages[0].ops[0]
+    check(slot.inputs == ("c:ff:4", "s:ram", "c:bad:4"),
+          f"constants must not be swallowed by s:: {slot.inputs}")
+
+    # f: descriptor (fspec, host op's own SeqNum) parses and stays comparable.
+    fspec_ops = ["4ff4:0 call d=0 out=u:4f900:8 in=n:register:0:8,f:4ff4:0"]
+    fspec_left = make_v1_projection(lines("oracle", fspec_ops))
+    fspec_right = make_v1_projection(lines("rugra", fspec_ops))
+    check(
+        compare_v1_projections(fspec_left, fspec_right)["kind"] == V1_KIND_MATCH,
+        "f: descriptor streams must compare equal",
+    )
+    fspec_other = ["4ff4:0 call d=0 out=u:4f900:8 in=n:register:0:8,f:505d:131"]
+    check(
+        compare_v1_projections(
+            fspec_left, make_v1_projection(lines("rugra", fspec_other))
+        )["kind"] == V1_KIND_OP,
+        "different f: call-site SeqNums must diverge",
+    )
+
+    # Advisory closed set: an off-table spelling parses but warns.
+    weird = ["4ff4:0 INT_ADD d=0 out=- in=u:1000:8,u:1008:8"]
+    weird_left = make_v1_projection(lines("oracle", weird))
+    weird_right = make_v1_projection(lines("rugra", weird))
+    warned = compare_v1_projections(weird_left, weird_right)
+    check(warned["kind"] == V1_KIND_MATCH, "off-table opcode must NOT be an error")
+    check(any("INT_ADD" in w and "advisory" in w for w in warned["warnings"]),
+          f"off-table opcode must warn: {warned['warnings']}")
+
+    # Negative shapes still reject.
+    for bad, why in [
+        ("4ff4:0 copy d=0 out=- in=f:xyz", "f: requires addr:time"),
+        ("4ff4:0 copy d=0 out=- in=o:", "o: empty body"),
+        ("4ff4:0 copy d=0 out=- in=s:", "s: empty name"),
+        ("4ff4:0 copy d=0 out=- in=s:ram:8", "s: takes no size"),
+        ("4ff4:0 copy d=0 out=- in=o:1:2:3", "o: takes exactly addr:time"),
+    ]:
+        try:
+            make_v1_projection(lines("oracle", [bad]))
+            ok = False
+        except FormatError:
+            ok = True
+        check(ok, f"descriptor must be rejected ({why}): {bad!r}")
+    return report
+
+
 def scenario_v1_identity_mismatch():
     """B-2: identity-key differences preempt stage comparison; advisory keys warn."""
     stages = v1_base_stages()
@@ -2178,6 +2328,8 @@ def run_selftest():
         ("v1_op_count_divergence", scenario_v1_op_count_divergence),
         ("v1_dead_bit_divergence", scenario_v1_dead_bit_divergence),
         ("v1_identity_mismatch", scenario_v1_identity_mismatch),
+        ("v1_typeop_names_and_pointer_descriptors",
+         scenario_v1_typeop_names_and_pointer_descriptors),
     ]
     passed = 0
     failures = []
@@ -2245,7 +2397,7 @@ def main(argv=None):
     )
     parser.add_argument(
         "--v1", action="store_true",
-        help="parse and compare the v1.1 @SNAP projection extension",
+        help="parse and compare the v1.x @SNAP projection extension (v1.2 grammar)",
     )
     parser.add_argument(
         "--context",
