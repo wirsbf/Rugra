@@ -4076,8 +4076,47 @@ impl PrintC {
             ,
             BlockType::Switch => self.emit_structured_switch(block_arc, graph, emitted)
             ,
-            BlockType::Graph | BlockType::MultiGoto => {
-                self.emit_structured_basic(block_arc, graph, emitted)
+            BlockType::Graph => self.emit_structured_basic(block_arc, graph, emitted),
+            // Ghidra block.hh:588: BlockMultiGoto::emit is pure delegation —
+            // `getBlock(0)->emit(lng)` — and printc.cc has NO MultiGoto
+            // branch at all. The unstructured edges live in `gotoedges` and
+            // are consumed by an enclosing BlockSwitch (grabCaseBasic,
+            // block.cc:3548-3553), never emitted here.
+            BlockType::MultiGoto => self.emit_block_multigoto(block_arc, graph, emitted),
+        }
+    }
+
+    // Ghidra: block.hh:588 BlockMultiGoto::emit
+    /// `virtual void emit(PrintLanguage *lng) const { getBlock(0)->emit(lng); }`
+    /// — delegate to the wrapped component. Same wrapped-dispatch shape as
+    /// emit_block_goto's cc:2771 arm, minus the goto statement (the multigoto
+    /// emits no jump of its own; its peeled edges belong to the enclosing
+    /// switch's goto-typed cases).
+    fn emit_block_multigoto(
+        &mut self,
+        block_arc: &std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<usize>,
+    ) {
+        let wrapped = {
+            let bl = block_arc.read().unwrap();
+            bl.as_any()
+                .downcast_ref::<crate::block::BlockMultiGoto>()
+                .and_then(|m| m.wrapped.clone())
+        };
+        match wrapped {
+            Some(inner)
+                if !matches!(
+                    inner.read().unwrap().get_type(),
+                    crate::block::BlockType::Basic | crate::block::BlockType::Copy
+                ) =>
+            {
+                self.emit_block_structured(&inner, graph, emitted);
+            }
+            _ => {
+                self.emit_block_ops(block_arc, true);
             }
         }
     }
@@ -5019,6 +5058,36 @@ impl PrintC {
 
                         // cc:3333: int4 id = emit->startIndent();
                         self.emit.bump_indent();
+                        // cc:3334-3337: `if (bl->getGotoType(i)!=0) {
+                        //   emit->tagLine(); emitGotoStatement(bl->getBlock(0),
+                        //   bl->getCaseBlock(i), bl->getGotoType(i)); }` — a
+                        // goto-typed case (a dispatch edge peeled into the
+                        // BlockMultiGoto and re-added by grabCaseBasic,
+                        // block.cc:3548-3553) has NO body and NO break: the
+                        // goto/break statement IS the case. The statement
+                        // prints regardless of the body-emitted gate — it is
+                        // a jump, not a body, and the target block is emitted
+                        // separately at its own place in the tree.
+                        let case_gt = switch_data
+                            .case_gototypes
+                            .get(idx)
+                            .copied()
+                            .unwrap_or(0);
+                        if case_gt != 0 {
+                            self.emit.tag_line(0);
+                            let target_addr =
+                                crate::block::front_leaf_start_addr(case_block);
+                            let bt = match case_gt {
+                                crate::block::goto_type::BREAK_GOTO => {
+                                    crate::op::branch_type::BREAK
+                                }
+                                crate::block::goto_type::CONTINUE_GOTO => {
+                                    crate::op::branch_type::CONTINUE
+                                }
+                                _ => crate::op::branch_type::GOTO,
+                            };
+                            self.emit_goto_statement(target_addr, bt);
+                        } else {
                         if !body_already_emitted {
                             // cc:3339-3341: bl2->emit(this) — direct type
                             // dispatch with no dead/consumed guard (see
@@ -5055,6 +5124,7 @@ impl PrintC {
                             self.emit.tag_line(0);
                             self.emit.print("break;");
                         }
+                        }
                         // cc:3348: emit->stopIndent(id);
                         self.emit.drop_indent();
                     }
@@ -5065,7 +5135,31 @@ impl PrintC {
                     // never takes a break (cc:3342 i != numCaseBlocks-1).
                     if let Some(ref def_block) = switch_data.default_case {
                         let def_idx = std::sync::Arc::as_ptr(&def_block) as *const () as usize;
-                        if !emitted.contains(&def_idx) {
+                        // cc:3334-3337 via addCase's isdefault tag: a default
+                        // edge peeled into the BlockMultiGoto prints `default:`
+                        // followed by the goto statement only — no body (the
+                        // target block is emitted separately at its own place
+                        // in the tree).
+                        if switch_data.default_gototype != 0 {
+                            let def_gt = switch_data.default_gototype;
+                            self.emit.tag_line(0);
+                            self.emit.print("default:");
+                            self.emit.bump_indent();
+                            self.emit.tag_line(0);
+                            let target_addr =
+                                crate::block::front_leaf_start_addr(def_block);
+                            let bt = match def_gt {
+                                crate::block::goto_type::BREAK_GOTO => {
+                                    crate::op::branch_type::BREAK
+                                }
+                                crate::block::goto_type::CONTINUE_GOTO => {
+                                    crate::op::branch_type::CONTINUE
+                                }
+                                _ => crate::op::branch_type::GOTO,
+                            };
+                            self.emit_goto_statement(target_addr, bt);
+                            self.emit.drop_indent();
+                        } else if !emitted.contains(&def_idx) {
                             self.emit.tag_line(0);
                             self.emit.print("default:");
                             self.emit.bump_indent();
@@ -5117,6 +5211,11 @@ impl PrintC {
             BlockType::List => self.emit_structured_list(case_block, graph, emitted),
             BlockType::Condition => self.emit_structured_condition(case_block, graph, emitted),
             BlockType::Switch => self.emit_structured_switch(case_block, graph, emitted),
+            // Ghidra block.hh:588: delegation to getBlock(0) (the multigoto
+            // is never itself a switch case body — nested switches resolve
+            // first, blockaction.cc:1707 — but the dispatch is cheap to keep
+            // faithful if topology ever produces one).
+            BlockType::MultiGoto => self.emit_block_multigoto(case_block, graph, emitted),
             _ => self.emit_structured_basic(case_block, graph, emitted),
         }
     }

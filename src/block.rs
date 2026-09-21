@@ -202,6 +202,31 @@ pub fn front_leaf_basic(
     front_leaf(&coerced)
 }
 
+// Ghidra: printc.cc:2303 PrintC::emitGotoStatement (exp_bl → emitLabel)
+/// The label address of a (possibly structured) block for goto-statement
+/// emission: the start address of the underlying basic block. The oracle's
+/// emitGotoStatement prints `emitLabel(exp_bl)` — the label manager entry of
+/// the destination FlowBlock; Rugra's printc derives `code_label(addr)` from
+/// the same basic block's start address, reached by descending the front
+/// leaf and taking the BlockCopy's original (BlockCopy itself does not
+/// override getStart — block.hh:505-538 has no getStart, matching Rugra's
+/// trait default — so the original's start is the faithful projection).
+pub fn front_leaf_start_addr(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+) -> u64 {
+    let leaf = front_leaf(bl).unwrap_or_else(|| bl.clone());
+    let orig = {
+        let r = leaf.read().unwrap();
+        r.as_any()
+            .downcast_ref::<BlockCopy>()
+            .map(|c| c.original.clone())
+    };
+    match orig {
+        Some(o) => o.read().unwrap().get_start_addr().as_u64(),
+        None => leaf.read().unwrap().get_start_addr().as_u64(),
+    }
+}
+
 // RUGRA-GLUE: diagnostic front-leaf address for BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001
 /// Debug helper: the front leaf's start address after descending BlockCopy
 /// wrappers into the wrapped original (composites carry no start of their
