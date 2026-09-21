@@ -46,6 +46,12 @@
 > `RUGRA-FLOW-MIRROR-0001`(P0,C-alignment 系列承接,write-set=examples 驱动层+FlowInfo
 > 无界-range 语义;完成前 load_mode 发 `single_function_flow`,完成后切
 > `single_function_bfd`)。Phase 2 next_url 对拍在 D9 修复+D10 镜像完成后开启。
+> **D14 定性(2026-09-22,Lane AI)**: activeparam 9v2 主因=**签名库环境不对称**(Rugra
+> 全语料 libc 签名台账锁 7/9 callee vs oracle 裸 BFD)——D10/D11 族环境假阳性;登记
+> `ACTIVEPARAM-COUNT-9V2-0001`(P1),裁决路径=Rugra 投影产线加"单函数无签名"双态开关
+> 重跑(预期 9,9,0)+maxdelay 实值探针(RCA-2: 有效 maxpass oracle=1 vs rugra=2,fspec 域,
+> 候选真差)。**Phase 2 前置新增**: 对拍框架须先钉平签名库环境(并入 RUGRA-FLOW-MIRROR
+> lane 的双态开关)。
 > **Lane X 完成(2026-09-22)**: gp switch 丢失根因闭合(报告 sb-switch/GP_SWITCH_ROOTCAUSE.md)
 > ——符号/导入层无罪(config 已安装,DAT 引用 100%=config 字段);真凶=①**类型分派缺
 > Spacebase 覆写**(datatype.rs:838 把 Spacebase 硬编码 (None,off),oracle 经虚分派
