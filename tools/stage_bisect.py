@@ -64,13 +64,15 @@ counters are derived by counting @BEGIN occurrences per path since the last
 @RESTART, so every divergence report carries stage path + restart round +
 repeatapply pass state as the stable boundary address.
 
-Exit codes: 0 projections identical, 1 first divergence reported, 2 usage or
-format error. Selftest: 0 pass, 1 fail.
+Exit codes: 0 projections identical, 1 first divergence reported (v1 mode:
+also V1_META_MISMATCH input-identity failures, checked before any stage
+comparison), 2 usage or format error. Selftest: 0 pass, 1 fail.
 """
 
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import re
 import sys
@@ -161,6 +163,498 @@ class Record:
         self.after = after
         self.line_no = line_no
         self.raw = raw
+
+
+# v1.1 is deliberately an extension of the original boundary grammar.  It
+# uses the same META/@BEGIN/@END/@CONVERGED/@RESTART skeleton, but puts the
+# observable operation list in an @SNAP block instead of the old
+# OPACTION_DEBUG record stream.  Spec clause (iii) allows nested interleaved
+# streams: a group-level @BEGIN stays open while descendants complete, so the
+# v1 loader tracks open stages as a stack and records completed stages in
+# file (completion) order (see docs/alignment_docs/STAGE_BISECT_SPEC_1204.md).
+V1_REQUIRED_META = (
+    "side", "oracle_commit", "arch", "cspec", "analysis_options",
+    "build_flags", "binary_sha256", "func_entry", "func_name", "load_mode",
+    "producer", "maxrestarts", "unique_base",
+)
+V1_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+V1_HEX_RE = re.compile(r"^(?:0x)?[0-9a-fA-F]+$")
+V1_LOCATION_RE = re.compile(r"^(?:0x)?[0-9a-fA-F]+:(?:0x)?[0-9a-fA-F]+$")
+V1_OPCODE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+V1_VN_RE = re.compile(
+    r"^(?:c:(?:0x)?[0-9a-fA-F]+:[0-9]+|"
+    r"n:[^:,\s]+:(?:0x)?[0-9a-fA-F]+:[0-9]+|"
+    r"u:(?:0x)?[0-9a-fA-F]+:[0-9]+)$"
+)
+
+
+class V1Op:
+    __slots__ = ("location", "opcode", "dead", "output", "inputs", "line_no", "raw")
+
+    def __init__(self, location, opcode, dead, output, inputs, line_no, raw):
+        self.location = location
+        self.opcode = opcode
+        self.dead = dead
+        self.output = output
+        self.inputs = inputs
+        self.line_no = line_no
+        self.raw = raw
+
+
+class V1Stage:
+    __slots__ = ("round", "seq", "path", "begin_line", "end_line", "snap_line", "attrs", "ops")
+
+    def __init__(self, round_no, seq, path, begin_line):
+        self.round = round_no
+        self.seq = seq
+        self.path = path
+        self.begin_line = begin_line
+        self.end_line = None
+        self.snap_line = None
+        self.attrs = None
+        self.ops = []
+
+
+class V1Projection:
+    def __init__(self, name, path):
+        self.name = name
+        self.path = path
+        self.meta = None
+        self.stages = []
+        self.converged = []
+
+    @property
+    def records(self):
+        return sum(len(stage.ops) for stage in self.stages)
+
+    @property
+    def boundaries(self):
+        return len(self.stages) * 3 + len(self.converged)
+
+
+def parse_v1_op(line, line_no):
+    """Parse one v1.1 snapshot operation line."""
+    parts = line.strip().split()
+    if len(parts) != 5:
+        raise FormatError(
+            f"line {line_no}: v1 op-line expects location OPC d= out= in=, got: {line!r}"
+        )
+    location, opcode, dead, output, inputs = parts
+    if not V1_LOCATION_RE.fullmatch(location):
+        raise FormatError(f"line {line_no}: invalid op location {location!r}")
+    if not V1_OPCODE_RE.fullmatch(opcode):
+        raise FormatError(f"line {line_no}: invalid opcode {opcode!r}")
+    if not dead.startswith("d=") or dead[2:] not in ("0", "1"):
+        raise FormatError(f"line {line_no}: d= must be 0 or 1")
+    if not output.startswith("out=") or not inputs.startswith("in="):
+        raise FormatError(f"line {line_no}: op-line requires out= and in= fields")
+    output = output[4:]
+    input_text = inputs[3:]
+    if output != "-" and not V1_VN_RE.fullmatch(output):
+        raise FormatError(f"line {line_no}: invalid output varnode {output!r}")
+    if input_text == "-":
+        # M1 whole-list spelling: the op has no inputs at all.
+        input_values = ()
+    else:
+        # R-1: each comma-separated slot may be '-' (a preserved null slot,
+        # e.g. "in=u:1008:8,-,c:1:4") or a varnode descriptor; slot order is
+        # part of the observable op signature and nulls stay positional.
+        input_values = tuple(input_text.split(","))
+        for value in input_values:
+            if value != "-" and not V1_VN_RE.fullmatch(value):
+                raise FormatError(f"line {line_no}: invalid input varnode list {input_text!r}")
+    return V1Op(location, opcode, int(dead[2:]), output, input_values, line_no, line.strip())
+
+
+def _v1_int(value, field, line_no, minimum=None, allow_negative=False):
+    pattern = r"-?[0-9]+" if allow_negative else r"[0-9]+"
+    if not re.fullmatch(pattern, value):
+        raise FormatError(f"line {line_no}: {field} must be an integer, got {value!r}")
+    result = int(value)
+    if minimum is not None and result < minimum:
+        raise FormatError(f"line {line_no}: {field} must be >= {minimum}")
+    return result
+
+
+def _validate_v1_meta(meta, line_no):
+    missing = [key for key in V1_REQUIRED_META if key not in meta]
+    if missing:
+        raise FormatError(f"line {line_no}: META missing fields: {', '.join(missing)}")
+    if meta["side"] not in ("oracle", "rugra"):
+        raise FormatError(f"line {line_no}: META side must be oracle or rugra")
+    if not V1_SHA256_RE.fullmatch(meta["binary_sha256"]):
+        raise FormatError(f"line {line_no}: META binary_sha256 is not a SHA-256")
+    if not V1_HEX_RE.fullmatch(meta["func_entry"]):
+        raise FormatError(f"line {line_no}: META func_entry is not hexadecimal")
+    if not V1_HEX_RE.fullmatch(meta["unique_base"]):
+        raise FormatError(f"line {line_no}: META unique_base is not hexadecimal")
+    _v1_int(meta["maxrestarts"], "maxrestarts", line_no, minimum=0)
+
+
+def load_v1_projection(file_path):
+    """Load the v1.1 projection extension without accepting old op records.
+
+    B-1 (spec clause (iii), nested interleaved streams): open stages form a
+    stack. @BEGIN pushes a frame; a group-level @BEGIN may stay open while
+    descendant applications emit their own @BEGIN/@END/@SNAP triples; the
+    group's @END/@SNAP arrive only after the group resumes to completion.
+    @END/@SNAP must match the innermost open frame's path and seq, and each
+    completed stage is appended to `stages` in file (completion) order, so
+    the comparator's linear completion order stays valid for nested streams.
+    """
+    path = Path(file_path)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise FormatError(f"cannot read {path}: {exc}") from exc
+    projection = V1Projection(str(path), path)
+    stack = []  # open V1Stage frames; stack[-1] is the innermost application
+    restart = 0
+    last_seq = 0
+    stream_started = False
+    meta_line = 0
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        line_no = index + 1
+        line = lines[index]
+        index += 1
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("META"):
+            if stream_started:
+                raise FormatError(f"line {line_no}: META line after stream start")
+            tokens = stripped.split()[1:]
+            values = parse_key_values(tokens, line_no, stripped, "META")
+            if projection.meta is None:
+                projection.meta = Meta({}, line_no, stripped)
+            for key, value in values.items():
+                if key in projection.meta.kv:
+                    raise FormatError(f"line {line_no}: duplicate META key {key!r}")
+                projection.meta.kv[key] = value
+            projection.meta.raw += " " + " ".join(tokens)
+            meta_line = line_no
+            continue
+        stream_started = True
+        tokens = stripped.split()
+        head = tokens[0]
+        # "@SNAP must immediately follow matching @END": once the innermost
+        # open stage has its @END, only that stage's @SNAP may come next.
+        if head != "@SNAP" and stack and stack[-1].attrs is not None:
+            raise FormatError(
+                f"line {line_no}: @SNAP for open stage seq {stack[-1].seq} "
+                f"must precede {head}"
+            )
+        if head == "@RESTART":
+            # F-1 (Gate 2-E attempt 2): producers may keep the root
+            # RestartGroup frame open across restart rounds, so @RESTART is
+            # legal inside open frames; the @SNAP-pending guard above already
+            # rejects it after a pending @END. Stages pushed after the marker
+            # carry the new round; a still-open frame keeps its opening round.
+            if len(tokens) != 2:
+                raise FormatError(f"line {line_no}: invalid @RESTART arity")
+            restart = _v1_int(tokens[1], "curstart", line_no, minimum=0)
+            continue
+        if head == "@CONVERGED":
+            # Kept solely for old producers; v1 production never emits it.
+            if stack or len(tokens) < 2:
+                raise FormatError(f"line {line_no}: invalid @CONVERGED")
+            path_name = tokens[1]
+            if not PATH_RE.fullmatch(path_name):
+                raise FormatError(f"line {line_no}: invalid converged path")
+            attrs = parse_key_values(tokens[2:], line_no, stripped, "@CONVERGED")
+            if "changes" in attrs and attrs["changes"] != "0":
+                raise FormatError(f"line {line_no}: @CONVERGED changes must be 0")
+            projection.converged.append((restart, path_name, line_no, stripped))
+            continue
+        if head == "@BEGIN":
+            if len(tokens) != 3:
+                raise FormatError(f"line {line_no}: @BEGIN expects '<seq> <tree-path>'")
+            seq = _v1_int(tokens[1], "stage seq", line_no, minimum=1)
+            path_name = tokens[2]
+            if not PATH_RE.fullmatch(path_name):
+                raise FormatError(f"line {line_no}: invalid stage path {path_name!r}")
+            # R-2: application ordinals are globally consecutive from 1; a
+            # gap or reuse pinpoints a producer enumeration bug.
+            if seq != last_seq + 1:
+                raise FormatError(
+                    f"line {line_no}: stage seq must be consecutive "
+                    f"(expected {last_seq + 1}, got {seq})"
+                )
+            stack.append(V1Stage(restart, seq, path_name, line_no))
+            last_seq = seq
+            continue
+        if head == "@END":
+            if not stack or len(tokens) != 7:
+                raise FormatError(
+                    f"line {line_no}: @END expects '<seq> <tree-path> result= count= tests= apply='"
+                )
+            seq = _v1_int(tokens[1], "stage seq", line_no, minimum=1)
+            path_name = tokens[2]
+            if not PATH_RE.fullmatch(path_name):
+                raise FormatError(f"line {line_no}: invalid stage path {path_name!r}")
+            attrs = parse_key_values(tokens[3:], line_no, stripped, "@END")
+            current = stack[-1]
+            if seq != current.seq or path_name != current.path:
+                raise FormatError(
+                    f"line {line_no}: @END does not match innermost @BEGIN "
+                    f"(open: seq {current.seq} {current.path})"
+                )
+            if set(attrs) != {"result", "count", "tests", "apply"}:
+                raise FormatError(f"line {line_no}: @END requires result/count/tests/apply")
+            _v1_int(attrs["result"], "result", line_no, allow_negative=True)
+            for field in ("count", "tests", "apply"):
+                _v1_int(attrs[field], field, line_no, minimum=0)
+            current.end_line = line_no
+            current.attrs = attrs
+            continue
+        if head == "@SNAP":
+            if not stack or stack[-1].attrs is None or len(tokens) != 4 or tokens[2] != "ops":
+                raise FormatError(f"line {line_no}: @SNAP must immediately follow matching @END")
+            current = stack[-1]
+            seq = _v1_int(tokens[1], "snapshot seq", line_no, minimum=1)
+            count = _v1_int(tokens[3], "snapshot op count", line_no, minimum=0)
+            if seq != current.seq:
+                raise FormatError(f"line {line_no}: @SNAP seq does not match @END")
+            current.snap_line = line_no
+            for _ in range(count):
+                if index >= len(lines):
+                    raise FormatError(f"line {line_no}: @SNAP ends before {count} op-lines")
+                op_line_no = index + 1
+                op_text = lines[index].strip()
+                index += 1
+                if not op_text or op_text.startswith("#") or op_text.startswith("@"):
+                    raise FormatError(f"line {op_line_no}: snapshot op-line expected")
+                current.ops.append(parse_v1_op(op_text, op_line_no))
+            projection.stages.append(current)
+            stack.pop()
+            continue
+        # Any other stream line: op-lines are consumed inline by @SNAP above,
+        # so reaching here means the line is outside any legal position.
+        if not stack:
+            raise FormatError(f"line {line_no}: unexpected v1 stream line {head!r}")
+        expected = "@SNAP" if stack[-1].attrs is not None else "@END"
+        raise FormatError(
+            f"line {line_no}: open stage seq {stack[-1].seq} expects "
+            f"{expected}, got {head!r}"
+        )
+    if projection.meta is None:
+        raise FormatError("v1 projection has no META")
+    _validate_v1_meta(projection.meta.kv, meta_line)
+    if stack:
+        unclosed = ", ".join(str(stage.seq) for stage in stack)
+        raise FormatError(
+            f"v1 projection ends before @END/@SNAP for open stage(s): {unclosed}"
+        )
+    return projection
+
+
+V1_KIND_MATCH = "MATCH"
+V1_KIND_STAGE = "V1_STAGE_SEQUENCE_DIVERGENCE"
+V1_KIND_RESULT = "V1_RESULT_COUNT_DIVERGENCE"
+V1_KIND_OP = "V1_OP_LINE_DIVERGENCE"
+V1_KIND_META = "V1_META_MISMATCH"
+
+# B-2 input identity keys: any difference means the two projections describe
+# different run inputs (different binary, entry, or configuration), so stage
+# comparison is suppressed with an independent kind and exit 1, checked
+# BEFORE any stage comparison (a cross-function compare would otherwise be a
+# silent false MATCH).  func_name/producer stay advisory warnings (the two
+# sides are inherently heterogeneous there), and unique_base keeps its
+# compare-the-base-first canary warning.
+V1_IDENTITY_META = (
+    "oracle_commit", "arch", "cspec", "analysis_options", "build_flags",
+    "binary_sha256", "func_entry", "load_mode", "maxrestarts",
+)
+
+
+def _mask_v1_unique(value):
+    return re.sub(r"u:(?:0x)?[0-9a-fA-F]+:(\d+)", r"u:*:\1", value)
+
+
+def _v1_stage_key(stage):
+    return (stage.round, stage.seq, stage.path)
+
+
+def _v1_op_key(op, relax_unique=False):
+    output = _mask_v1_unique(op.output) if relax_unique else op.output
+    inputs = tuple(_mask_v1_unique(value) for value in op.inputs) if relax_unique else op.inputs
+    return (op.location, op.opcode, op.dead, output, inputs)
+
+
+def _v1_identity_diffs(left, right):
+    """Identity keys that must be equal for the comparison to be meaningful."""
+    left_meta = left.meta.kv
+    right_meta = right.meta.kv
+    return {
+        key: {"left": left_meta.get(key), "right": right_meta.get(key)}
+        for key in V1_IDENTITY_META
+        if left_meta.get(key) != right_meta.get(key)
+    }
+
+
+def _v1_meta_warnings(left, right):
+    warnings = []
+    left_meta = left.meta.kv
+    right_meta = right.meta.kv
+    for key in sorted(set(left_meta) | set(right_meta)):
+        if key == "side" or key in V1_IDENTITY_META:
+            # side is expected to differ; identity keys hard-fail instead of
+            # warning (see _v1_identity_diffs).
+            continue
+        if left_meta.get(key) != right_meta.get(key):
+            warnings.append(
+                f"META {key} differs (left={left_meta.get(key)!r}, "
+                f"right={right_meta.get(key)!r})"
+            )
+    return warnings
+
+
+def _v1_context_diff(left_ops, right_ops, index, context=3):
+    """Return a unified-diff excerpt centered on the first differing op."""
+    start = max(0, index - context)
+    stop = min(max(len(left_ops), len(right_ops)), index + context + 1)
+    left_lines = [op.raw for op in left_ops[start:stop]]
+    right_lines = [op.raw for op in right_ops[start:stop]]
+    return list(difflib.unified_diff(
+        left_lines,
+        right_lines,
+        fromfile="oracle op-lines",
+        tofile="rugra op-lines",
+        n=context,
+        lineterm="",
+    ))
+
+
+def _v1_report(left, right, kind, stage_index=None, op_index=None,
+               differing=None, warnings=None, relax_unique=False,
+               meta_diff=None):
+    warnings = list(warnings or [])
+    report = {
+        "schema": SCHEMA,
+        "tool": TOOL,
+        "version": "v1.1",
+        "kind": kind,
+        "relax_unique": relax_unique,
+        "left": {"file": left.name, "stages": len(left.stages), "records": left.records},
+        "right": {"file": right.name, "stages": len(right.stages), "records": right.records},
+        "warnings": warnings,
+    }
+    if stage_index is None:
+        if kind == V1_KIND_META:
+            report["attribution"] = (
+                "input identity differs (META identity keys); stage comparison "
+                "suppressed: the projections do not describe the same run inputs"
+            )
+            report["meta_diff"] = meta_diff or {}
+        else:
+            report["attribution"] = "v1.1 projections are stage and snapshot identical"
+        return report
+    ls = left.stages[stage_index] if stage_index < len(left.stages) else None
+    rs = right.stages[stage_index] if stage_index < len(right.stages) else None
+    ref = ls or rs
+    report["stage"] = {
+        "index": stage_index,
+        "round": {"left": ls.round if ls else None, "right": rs.round if rs else None},
+        "ordinal": {"left": ls.seq if ls else None, "right": rs.seq if rs else None},
+        "tree_path": {"left": ls.path if ls else None, "right": rs.path if rs else None},
+    }
+    if kind == V1_KIND_STAGE:
+        report["attribution"] = "stage sequence differs: round, ordinal, or tree topology diverged"
+        report["left_stage"] = _v1_stage_key(ls) if ls else None
+        report["right_stage"] = _v1_stage_key(rs) if rs else None
+    elif kind == V1_KIND_RESULT:
+        report["attribution"] = "stage completion result/count/tests/apply differs"
+        report["end"] = {
+            "left": dict(ls.attrs) if ls else None,
+            "right": dict(rs.attrs) if rs else None,
+            "differing": differing or {},
+        }
+    else:
+        report["attribution"] = "snapshot operation line differs"
+        report["op_index"] = op_index
+        report["op_line"] = {
+            "left": ls.ops[op_index].raw if ls and op_index < len(ls.ops) else None,
+            "right": rs.ops[op_index].raw if rs and op_index < len(rs.ops) else None,
+        }
+        report["unified_diff"] = _v1_context_diff(
+            ls.ops if ls else [], rs.ops if rs else [], op_index
+        )
+    return report
+
+
+def compare_v1_projections(left, right, relax_unique=False):
+    """Compare v1.1 projections: identity precheck, then stages, @END attrs, ops.
+
+    The identity precheck (B-2) runs before any stage comparison: differing
+    identity keys yield V1_META_MISMATCH instead of a meaningless (and
+    possibly coincidentally matching) stage verdict.
+    """
+    warnings = _v1_meta_warnings(left, right)
+    if left.meta.kv.get("unique_base") != right.meta.kv.get("unique_base"):
+        warnings.append("META unique_base differs; strict op offsets remain observable")
+    identity = _v1_identity_diffs(left, right)
+    if identity:
+        return _v1_report(left, right, V1_KIND_META, warnings=warnings,
+                          relax_unique=relax_unique, meta_diff=identity)
+    shared = min(len(left.stages), len(right.stages))
+    for index in range(shared):
+        ls, rs = left.stages[index], right.stages[index]
+        if _v1_stage_key(ls) != _v1_stage_key(rs):
+            return _v1_report(left, right, V1_KIND_STAGE, index, warnings=warnings,
+                              relax_unique=relax_unique)
+        differing = {
+            key: {"left": ls.attrs.get(key), "right": rs.attrs.get(key)}
+            for key in ("result", "count", "tests", "apply")
+            if ls.attrs.get(key) != rs.attrs.get(key)
+        }
+        if differing:
+            return _v1_report(left, right, V1_KIND_RESULT, index, differing=differing,
+                              warnings=warnings, relax_unique=relax_unique)
+        op_count = min(len(ls.ops), len(rs.ops))
+        for op_index in range(op_count):
+            if _v1_op_key(ls.ops[op_index], relax_unique) != _v1_op_key(rs.ops[op_index], relax_unique):
+                return _v1_report(left, right, V1_KIND_OP, index, op_index=op_index,
+                                  warnings=warnings, relax_unique=relax_unique)
+        if len(ls.ops) != len(rs.ops):
+            return _v1_report(left, right, V1_KIND_OP, index, op_index=op_count,
+                              warnings=warnings, relax_unique=relax_unique)
+    if len(left.stages) != len(right.stages):
+        return _v1_report(left, right, V1_KIND_STAGE, shared, warnings=warnings,
+                          relax_unique=relax_unique)
+    return _v1_report(left, right, V1_KIND_MATCH, warnings=warnings,
+                      relax_unique=relax_unique)
+
+
+def human_v1_report(report, context=3):
+    lines = ["== stage_bisect v1.1: first divergence =="]
+    lines.append(f"left:  {report['left']['file']} (stages={report['left']['stages']}, ops={report['left']['records']})")
+    lines.append(f"right: {report['right']['file']} (stages={report['right']['stages']}, ops={report['right']['records']})")
+    for warning in report.get("warnings", []):
+        lines.append(f"warning: {warning}")
+    lines.append(f"kind: {report['kind']}")
+    if report["kind"] == V1_KIND_MATCH:
+        lines.append(report["attribution"])
+        return "\n".join(lines)
+    if report["kind"] == V1_KIND_META:
+        for key, diff in sorted(report.get("meta_diff", {}).items()):
+            lines.append(
+                f"meta {key}: oracle={diff['left']!r} rugra={diff['right']!r}"
+            )
+        lines.append(f"attribution: {report['attribution']}")
+        return "\n".join(lines)
+    stage = report["stage"]
+    lines.append(f"round: oracle={stage['round']['left']} rugra={stage['round']['right']}")
+    lines.append(f"stage ordinal: oracle={stage['ordinal']['left']} rugra={stage['ordinal']['right']}")
+    lines.append(f"tree-path: oracle={stage['tree_path']['left']} rugra={stage['tree_path']['right']}")
+    if report["kind"] == V1_KIND_RESULT:
+        lines.append(f"result/count: {report['end']['differing']}")
+    elif report["kind"] == V1_KIND_OP:
+        lines.append(f"op-line index: {report['op_index']}")
+        lines.extend(report.get("unified_diff", []))
+    lines.append(f"attribution: {report['attribution']}")
+    return "\n".join(lines)
 
 
 def split_escaped(text):
@@ -1142,6 +1636,518 @@ def scenario_format_errors():
     return True
 
 
+V1_META = [
+    "META side=oracle oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b",
+    "META arch=x86:LE:64:default cspec=default analysis_options=stable",
+    "META build_flags=v1-no-OPACTION_DEBUG binary_sha256=" + "a" * 64,
+    "META func_entry=0x401000 func_name=FUN_00401000 load_mode=single_function_bfd",
+    "META producer=synthetic maxrestarts=1 unique_base=0x1000",
+]
+
+
+def v1_ops(constant="0x1", opcode="COPY", swapped=False):
+    values = [
+        "401000:1 COPY d=0 out=u:1000:8 in=c:1:8",
+        "401004:2 LOAD d=0 out=n:ram:2000:8 in=u:1008:8",
+        f"401008:3 {opcode} d=0 out=u:{'1010' if not swapped else '1020'}:8 in=u:{'1020' if not swapped else '1010'}:8",
+        f"40100c:4 INT_ADD d=1 out=- in=c:{constant}:8,c:2:8",
+        "401010:5 STORE d=0 out=- in=n:ram:2000:8,u:1010:8",
+    ]
+    return values
+
+
+def make_v1_lines(stages, side="oracle", meta=None):
+    header = list(meta or V1_META)
+    header = [line.replace("side=oracle", f"side={side}") for line in header]
+    result = header[:]
+    for stage in stages:
+        result.extend([
+            f"@BEGIN {stage['seq']} {stage['path']}",
+            f"@END {stage['seq']} {stage['path']} result={stage.get('result', 0)} "
+            f"count={stage.get('count', 1)} tests={stage.get('tests', len(stage['ops']))} "
+            f"apply={stage.get('apply', 1)}",
+            f"@SNAP {stage['seq']} ops {len(stage['ops'])}",
+            *stage["ops"],
+        ])
+        if stage.get("restart") is not None:
+            result.append(f"@RESTART {stage['restart']}")
+    return result
+
+
+def make_v1_projection(lines, name="synthetic-v1"):
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / f"{name}.proj"
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return load_v1_projection(path)
+
+
+def v1_base_stages():
+    return [{"seq": 1, "path": "universal:fullloop", "ops": v1_ops()}]
+
+
+def scenario_v1_match():
+    stages = v1_base_stages()
+    left = make_v1_projection(make_v1_lines(stages, "oracle"), "oracle-v1")
+    right = make_v1_projection(make_v1_lines(stages, "rugra"), "rugra-v1")
+    report = compare_v1_projections(left, right)
+    check(report["kind"] == V1_KIND_MATCH, "v1 identical snapshots must match")
+    return report
+
+
+def scenario_v1_stage_count():
+    left_stages = v1_base_stages()
+    right_stages = left_stages + [{"seq": 2, "path": "universal:fullloop:child", "ops": []}]
+    report = compare_v1_projections(
+        make_v1_projection(make_v1_lines(left_stages), "oracle-v1"),
+        make_v1_projection(make_v1_lines(right_stages, "rugra"), "rugra-v1"),
+    )
+    check(report["kind"] == V1_KIND_STAGE, "stage count must be a sequence divergence")
+    check(report["stage"]["ordinal"]["right"] == 2, "missing stage ordinal must be reported")
+    return report
+
+
+def scenario_v1_op_content():
+    left = v1_base_stages()
+    right = v1_base_stages()
+    right[0] = dict(right[0], ops=v1_ops(constant="0x9"))
+    report = compare_v1_projections(
+        make_v1_projection(make_v1_lines(left), "oracle-v1"),
+        make_v1_projection(make_v1_lines(right, "rugra"), "rugra-v1"),
+    )
+    check(report["kind"] == V1_KIND_OP and report["op_index"] == 3, "constant op diff missing")
+    check(any(line.startswith("@@") for line in report["unified_diff"]), "unified context missing")
+    return report
+
+
+def scenario_v1_opcode_name():
+    left = v1_base_stages()
+    right = v1_base_stages()
+    right[0] = dict(right[0], ops=v1_ops(opcode="COPY_ALT"))
+    report = compare_v1_projections(
+        make_v1_projection(make_v1_lines(left), "oracle-v1"),
+        make_v1_projection(make_v1_lines(right, "rugra"), "rugra-v1"),
+    )
+    check(report["kind"] == V1_KIND_OP and report["op_index"] == 2, "opcode diff missing")
+    return report
+
+
+def scenario_v1_unique_and_empty_slots():
+    left_ops = v1_ops(swapped=False)
+    right_ops = v1_ops(swapped=True)
+    # Keep the no-output/no-input spelling observable while swapping only the
+    # original unique offsets in one op.
+    left = make_v1_projection(make_v1_lines([{"seq": 1, "path": "universal", "ops": left_ops}]))
+    right = make_v1_projection(make_v1_lines([{"seq": 1, "path": "universal", "ops": right_ops}], "rugra"))
+    check(left.stages[0].ops[3].output == "-" and left.stages[0].ops[3].inputs[0].startswith("c:"),
+          "empty output slot must parse")
+    report = compare_v1_projections(left, right)
+    check(report["kind"] == V1_KIND_OP and report["op_index"] == 2,
+          "unique original offset position swap must remain visible")
+    relaxed = compare_v1_projections(left, right, relax_unique=True)
+    check(relaxed["kind"] == V1_KIND_MATCH, "relax-unique should be triage-only")
+    return report
+
+
+def scenario_v1_result_count():
+    left = v1_base_stages()
+    right = [dict(left[0], count=2)]
+    report = compare_v1_projections(
+        make_v1_projection(make_v1_lines(left), "oracle-v1"),
+        make_v1_projection(make_v1_lines(right, "rugra"), "rugra-v1"),
+    )
+    check(report["kind"] == V1_KIND_RESULT, "count mismatch must be result/count divergence")
+    return report
+
+
+def scenario_v1_restart_interleaving():
+    stages = [
+        {"seq": 1, "path": "universal", "ops": v1_ops()[:1]},
+        {"seq": 2, "path": "universal:fullloop", "ops": v1_ops()[1:2], "restart": 1},
+        {"seq": 3, "path": "universal:fullloop:child", "ops": v1_ops()[2:3]},
+    ]
+    left = make_v1_projection(make_v1_lines(stages), "oracle-v1")
+    right = make_v1_projection(make_v1_lines(stages, "rugra"), "rugra-v1")
+    report = compare_v1_projections(left, right)
+    check(report["kind"] == V1_KIND_MATCH, "interleaved group/restart sequence must match")
+    check(left.stages[2].round == 1, "curstart must be attached as zero-based round")
+    return report
+
+
+def scenario_v1_nested_interleaving():
+    """Spec clause (iii): group @BEGIN stays open across a child application.
+
+    Stream: @BEGIN group -> @BEGIN/@END/@SNAP child -> @END/@SNAP group.  The
+    parser must accept this nested stream (B-1 stack), record stages in
+    completion order (child first), and compare it isomorphically.
+    """
+
+    def nested_lines(result_group="0", result_child="0"):
+        return [
+            "@BEGIN 1 universal:fullloop",
+            "@BEGIN 2 universal:fullloop:mainloop",
+            f"@END 2 universal:fullloop:mainloop result={result_child} "
+            "count=1 tests=5 apply=1",
+            "@SNAP 2 ops 5",
+            *v1_ops(),
+            f"@END 1 universal:fullloop result={result_group} "
+            "count=2 tests=10 apply=2",
+            "@SNAP 1 ops 1",
+            "401000:1 COPY d=0 out=u:1000:8 in=c:1:8",
+        ]
+
+    left = make_v1_projection(V1_META + nested_lines(), "oracle-nested")
+    right = make_v1_projection(
+        [line.replace("side=oracle", "side=rugra") for line in V1_META + nested_lines()],
+        "rugra-nested",
+    )
+    check(
+        [stage.seq for stage in left.stages] == [2, 1],
+        f"stages must be recorded in completion order, got "
+        f"{[stage.seq for stage in left.stages]}",
+    )
+    check(
+        left.stages[0].path == "universal:fullloop:mainloop"
+        and left.stages[1].path == "universal:fullloop",
+        "child must close before the group in a nested stream",
+    )
+    report = compare_v1_projections(left, right)
+    check(
+        report["kind"] == V1_KIND_MATCH,
+        f"isomorphic nested streams must match: {report['kind']}",
+    )
+    # A divergence inside the child is reported at the child stage (the first
+    # completed stage), proving the comparator works on completion order.
+    bad = make_v1_projection(
+        [line.replace("side=oracle", "side=rugra")
+         for line in V1_META + nested_lines(result_child="1")],
+        "rugra-nested-bad",
+    )
+    diverged = compare_v1_projections(left, bad)
+    check(
+        diverged["kind"] == V1_KIND_RESULT
+        and diverged["stage"]["ordinal"]["right"] == 2,
+        f"nested child result divergence must point at the child: "
+        f"{diverged['kind']}",
+    )
+    return report
+
+
+def scenario_v1_per_slot_null_inputs():
+    """R-1: '-' is a legal per-slot null inside comma-separated input lists."""
+    ops = [
+        "401000:1 CALL d=0 out=u:1000:8 in=u:1008:8,-,c:1:4",
+        "401004:2 MULTIEQUAL d=0 out=u:1010:8 in=-,u:1020:8",
+    ]
+    left = make_v1_projection(make_v1_lines([{"seq": 1, "path": "universal", "ops": ops}]))
+    right = make_v1_projection(
+        make_v1_lines([{"seq": 1, "path": "universal", "ops": ops}], "rugra")
+    )
+    check(
+        left.stages[0].ops[0].inputs == ("u:1008:8", "-", "c:1:4"),
+        f"null slots must be preserved positionally: {left.stages[0].ops[0].inputs}",
+    )
+    check(left.stages[0].ops[1].inputs[0] == "-", "leading null slot must parse")
+    report = compare_v1_projections(left, right)
+    check(report["kind"] == V1_KIND_MATCH, "identical per-slot null streams must match")
+    # Substituting a real varnode into a null slot is an observable divergence.
+    changed = list(ops)
+    changed[0] = "401000:1 CALL d=0 out=u:1000:8 in=u:1008:8,u:1030:8,c:1:4"
+    diverged = compare_v1_projections(
+        left,
+        make_v1_projection(
+            make_v1_lines([{"seq": 1, "path": "universal", "ops": changed}], "rugra")
+        ),
+    )
+    check(
+        diverged["kind"] == V1_KIND_OP and diverged["op_index"] == 0,
+        f"null-slot substitution must diverge: {diverged['kind']}",
+    )
+    return report
+
+
+def scenario_v1_format_errors():
+    """V1 grammar error paths must all raise FormatError (exit 2 at CLI)."""
+
+    def expect_error(lines, why):
+        try:
+            make_v1_projection(lines, "bad-v1")
+        except FormatError:
+            return
+        raise SelftestFailure(f"v1 lines must be rejected ({why})")
+
+    # Invalid input varnode descriptor.
+    expect_error(
+        make_v1_lines([{"seq": 1, "path": "universal",
+                        "ops": ["401000:1 COPY d=0 out=u:1000:8 in=q:1:8"]}]),
+        "invalid input vn",
+    )
+    # Invalid per-slot value (neither '-' nor a varnode descriptor).
+    expect_error(
+        make_v1_lines([{"seq": 1, "path": "universal",
+                        "ops": ["401000:1 COPY d=0 out=- in=u:1:8,bad"]}]),
+        "invalid per-slot vn",
+    )
+    # META missing a required key (drop the load_mode line).
+    expect_error(
+        [line for line in V1_META if "load_mode" not in line],
+        "META missing key",
+    )
+    # R-2: stage seq gap (1 -> 3).
+    expect_error(
+        V1_META
+        + [
+            "@BEGIN 1 universal",
+            "@END 1 universal result=0 count=1 tests=1 apply=1",
+            "@SNAP 1 ops 1",
+            "401000:1 COPY d=0 out=u:1000:8 in=c:1:8",
+            "@BEGIN 3 universal",
+            "@END 3 universal result=0 count=1 tests=1 apply=1",
+            "@SNAP 3 ops 0",
+        ],
+        "stage seq gap",
+    )
+    # R-2: stage seq reuse.
+    expect_error(
+        V1_META
+        + [
+            "@BEGIN 1 universal",
+            "@END 1 universal result=0 count=1 tests=1 apply=1",
+            "@SNAP 1 ops 0",
+            "@BEGIN 1 universal",
+        ],
+        "stage seq reuse",
+    )
+    # @END attribute set wrong: right arity, wrong key names.
+    expect_error(
+        V1_META
+        + [
+            "@BEGIN 1 universal",
+            "@END 1 universal result=0 count=1 tests=1 extra=1",
+            "@SNAP 1 ops 0",
+        ],
+        "@END attribute set wrong",
+    )
+    # @END arity wrong (missing apply).
+    expect_error(
+        V1_META
+        + [
+            "@BEGIN 1 universal",
+            "@END 1 universal result=0 count=1 tests=1",
+        ],
+        "@END missing apply",
+    )
+    # @END must match the innermost open @BEGIN, not an outer one.
+    expect_error(
+        V1_META
+        + [
+            "@BEGIN 1 universal:fullloop",
+            "@BEGIN 2 universal:fullloop:mainloop",
+            "@END 1 universal:fullloop result=0 count=1 tests=1 apply=1",
+        ],
+        "@END must match innermost @BEGIN",
+    )
+    # @SNAP must precede any new @BEGIN.
+    expect_error(
+        V1_META
+        + [
+            "@BEGIN 1 universal",
+            "@END 1 universal result=0 count=1 tests=1 apply=1",
+            "@BEGIN 2 universal",
+        ],
+        "@SNAP must precede next @BEGIN",
+    )
+    # Unclosed stage at EOF.
+    expect_error(V1_META + ["@BEGIN 1 universal"], "unclosed stage at EOF")
+    # Stray op line outside any @SNAP block.
+    expect_error(V1_META + ["401000:1 COPY d=0 out=- in=-"], "stray op line")
+    # @SNAP claims more op-lines than the file holds.
+    expect_error(
+        V1_META
+        + [
+            "@BEGIN 1 universal",
+            "@END 1 universal result=0 count=1 tests=1 apply=1",
+            "@SNAP 1 ops 2",
+            "401000:1 COPY d=0 out=- in=-",
+        ],
+        "@SNAP truncated",
+    )
+    # @RESTART arity error (F-1 relaxed placement: open frames are legal).
+    expect_error(
+        V1_META + ["@BEGIN 1 universal", "@RESTART 1 extra"], "invalid @RESTART arity"
+    )
+    return True
+
+
+def scenario_v1_restart_open_root():
+    """F-1 (Gate 2-E attempt 2): @RESTART inside an open root frame.
+
+    Producers may keep the root RestartGroup frame open across restart
+    rounds, so @RESTART is legal whenever no @SNAP is pending. Stages
+    pushed after the marker carry the new round; the still-open root
+    frame keeps the round it was opened in.
+    """
+    lines = V1_META + [
+        "@BEGIN 1 universal",
+        "@RESTART 1",
+        "@BEGIN 2 universal:start",
+        "@END 2 universal:start result=0 count=0 tests=1 apply=0",
+        "@SNAP 2 ops 1",
+        "401000:1 COPY d=0 out=u:1000:8 in=c:1:8",
+        "@END 1 universal result=1 count=1 tests=2 apply=1",
+        "@SNAP 1 ops 1",
+        "401000:1 COPY d=0 out=u:1000:8 in=c:1:8",
+    ]
+    left = make_v1_projection(lines, "restart-open-root")
+    check(len(left.stages) == 2, "both stages must be recorded in completion order")
+    check(left.stages[0].round == 1, "stage opened after @RESTART must carry round 1")
+    check(left.stages[1].round == 0, "root frame keeps the round it was opened in")
+    right = make_v1_projection(
+        [line.replace("side=oracle", "side=rugra") for line in lines],
+        "restart-open-root",
+    )
+    report = compare_v1_projections(left, right)
+    check(
+        report["kind"] == V1_KIND_MATCH,
+        "identical open-root restart streams must match",
+    )
+    return report
+
+
+def scenario_v1_converged_compat():
+    """M2: v1 producers never emit @CONVERGED; parser keeps top-level compat.
+
+    A top-level @CONVERGED is accepted for backward compatibility (recorded,
+    not compared); inside an open stage it is a placement error.
+    """
+    lines = V1_META + [
+        "@BEGIN 1 universal",
+        "@END 1 universal result=0 count=1 tests=1 apply=1",
+        "@SNAP 1 ops 1",
+        "401000:1 COPY d=0 out=u:1000:8 in=c:1:8",
+        "@CONVERGED universal:fullloop changes=0",
+    ]
+    left = make_v1_projection(lines, "conv-v1")
+    check(len(left.converged) == 1, "top-level @CONVERGED must be retained for compat")
+    right = make_v1_projection(
+        [line.replace("side=oracle", "side=rugra") for line in lines], "conv-v1"
+    )
+    report = compare_v1_projections(left, right)
+    check(report["kind"] == V1_KIND_MATCH, "compat @CONVERGED must not affect compare")
+    try:
+        make_v1_projection(
+            V1_META + ["@BEGIN 1 universal", "@CONVERGED universal changes=0"],
+            "conv-bad",
+        )
+        ok = False
+    except FormatError:
+        ok = True
+    check(ok, "@CONVERGED inside an open stage must be rejected")
+    return report
+
+
+def scenario_v1_op_count_divergence():
+    """Equal-prefix op lists of different lengths diverge at the shared end."""
+    left = v1_base_stages()
+    right = v1_base_stages()
+    # Pin tests= explicitly: make_v1_lines would derive it from len(ops) and
+    # trip the earlier @END-attribute check instead of the op-count check.
+    right[0] = dict(right[0], ops=v1_ops()[:4], tests=5)
+    report = compare_v1_projections(
+        make_v1_projection(make_v1_lines(left), "oracle-v1"),
+        make_v1_projection(make_v1_lines(right, "rugra"), "rugra-v1"),
+    )
+    check(
+        report["kind"] == V1_KIND_OP,
+        f"op-line count inequality must diverge: {report['kind']}",
+    )
+    check(
+        report["op_index"] == 4,
+        f"divergence index must be the shared length: {report['op_index']}",
+    )
+    check(report["op_line"]["right"] is None, "missing side must render as None")
+    return report
+
+
+def scenario_v1_dead_bit_divergence():
+    """A d= (dead/unattached) flip alone must be an observable divergence."""
+    ops = v1_ops()
+    flipped = list(ops)
+    flipped[0] = flipped[0].replace("d=0", "d=1")
+    left = make_v1_projection(make_v1_lines([{"seq": 1, "path": "universal", "ops": ops}]))
+    right = make_v1_projection(
+        make_v1_lines([{"seq": 1, "path": "universal", "ops": flipped}], "rugra")
+    )
+    report = compare_v1_projections(left, right)
+    check(
+        report["kind"] == V1_KIND_OP and report["op_index"] == 0,
+        f"dead-bit flip must diverge: {report['kind']}",
+    )
+    return report
+
+
+def scenario_v1_identity_mismatch():
+    """B-2: identity-key differences preempt stage comparison; advisory keys warn."""
+    stages = v1_base_stages()
+    left = make_v1_projection(make_v1_lines(stages), "oracle-v1")
+    # Advisory-only differences (func_name/producer/unique_base) stay warnings.
+    advisory = [
+        line.replace("func_name=FUN_00401000", "func_name=FUN_99999999")
+        for line in V1_META
+    ]
+    advisory = [line.replace("unique_base=0x1000", "unique_base=0x2000") for line in advisory]
+    advisory_right = make_v1_projection(
+        make_v1_lines(stages, "rugra", meta=advisory), "rugra-v1"
+    )
+    report = compare_v1_projections(left, advisory_right)
+    check(
+        report["kind"] == V1_KIND_MATCH,
+        f"advisory keys must not block comparison: {report['kind']}",
+    )
+    check(any("func_name" in w for w in report["warnings"]), "func_name diff must warn")
+    check(
+        any("unique_base differs" in w for w in report["warnings"]),
+        "unique_base canary must warn",
+    )
+    # An identity difference (binary_sha256) yields the independent kind.
+    wrong_binary = [line.replace("a" * 64, "b" * 64) for line in V1_META]
+    mismatch = compare_v1_projections(
+        left,
+        make_v1_projection(make_v1_lines(stages, "rugra", meta=wrong_binary), "rugra-v1"),
+    )
+    check(
+        mismatch["kind"] == V1_KIND_META,
+        f"binary_sha256 diff must be V1_META_MISMATCH: {mismatch['kind']}",
+    )
+    check("binary_sha256" in mismatch["meta_diff"], "meta_diff must name the key")
+    text = human_v1_report(mismatch)
+    check(
+        "V1_META_MISMATCH" in text and "binary_sha256" in text,
+        "human report must render the meta mismatch",
+    )
+    # The precheck fires even when stage content also diverges.
+    other_entry = [
+        line.replace("func_entry=0x401000", "func_entry=0x402000")
+        for line in V1_META
+    ]
+    preempted = compare_v1_projections(
+        left,
+        make_v1_projection(
+            make_v1_lines(
+                [{"seq": 1, "path": "universal:other", "ops": []}], "rugra",
+                meta=other_entry,
+            ),
+            "rugra-v1",
+        ),
+    )
+    check(
+        preempted["kind"] == V1_KIND_META,
+        "identity precheck must precede stage comparison",
+    )
+    return mismatch
+
+
 def run_selftest():
     scenarios = [
         ("after_divergence", scenario_after_divergence),
@@ -1157,6 +2163,21 @@ def run_selftest():
         ("relax_unique", scenario_relax_unique),
         ("json_output", scenario_json_output),
         ("format_errors", scenario_format_errors),
+        ("v1_match", scenario_v1_match),
+        ("v1_stage_count", scenario_v1_stage_count),
+        ("v1_op_content", scenario_v1_op_content),
+        ("v1_opcode_name", scenario_v1_opcode_name),
+        ("v1_unique_and_empty_slots", scenario_v1_unique_and_empty_slots),
+        ("v1_result_count", scenario_v1_result_count),
+        ("v1_restart_interleaving", scenario_v1_restart_interleaving),
+        ("v1_restart_open_root", scenario_v1_restart_open_root),
+        ("v1_nested_interleaving", scenario_v1_nested_interleaving),
+        ("v1_per_slot_null_inputs", scenario_v1_per_slot_null_inputs),
+        ("v1_format_errors", scenario_v1_format_errors),
+        ("v1_converged_compat", scenario_v1_converged_compat),
+        ("v1_op_count_divergence", scenario_v1_op_count_divergence),
+        ("v1_dead_bit_divergence", scenario_v1_dead_bit_divergence),
+        ("v1_identity_mismatch", scenario_v1_identity_mismatch),
     ]
     passed = 0
     failures = []
@@ -1223,6 +2244,10 @@ def main(argv=None):
         "--json", action="store_true", help="emit a machine-readable JSON report"
     )
     parser.add_argument(
+        "--v1", action="store_true",
+        help="parse and compare the v1.1 @SNAP projection extension",
+    )
+    parser.add_argument(
         "--context",
         type=int,
         default=6,
@@ -1273,20 +2298,30 @@ def main(argv=None):
         parser.error("two projection files are required (left right)")
 
     try:
-        left = load_projection(args.left)
-        right = load_projection(args.right)
+        if args.v1:
+            left = load_v1_projection(args.left)
+            right = load_v1_projection(args.right)
+        else:
+            left = load_projection(args.left)
+            right = load_projection(args.right)
     except FormatError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    report = compare_projections(left, right, relax_unique=args.relax_unique)
-    report["_left_projection"] = left
-    report["_right_projection"] = right
+    if args.v1:
+        report = compare_v1_projections(left, right, relax_unique=args.relax_unique)
+    else:
+        report = compare_projections(left, right, relax_unique=args.relax_unique)
+        report["_left_projection"] = left
+        report["_right_projection"] = right
 
     if args.json:
         print(json_report(report))
     else:
-        print(human_report(report, context=max(0, args.context)))
+        if args.v1:
+            print(human_v1_report(report, context=3))
+        else:
+            print(human_report(report, context=max(0, args.context)))
 
     if report["kind"] == KIND_MATCH:
         return 0
