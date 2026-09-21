@@ -2310,3 +2310,15 @@ fspec create_placeholder 双守卫(pltstub 9f14522)证伪:Ghidra fspec.cc:4849-4
 本体无守卫,cc:1482-1512 caller 侧门控(setplaceholder=varargs、首个 locked
 stack param 置 spacebase=NULL、cc:1511 仅非空才 create)已在 master
 func_link_input(coreaction.rs:9703-9774)忠实落地,再入库内守卫=非 oracle 层。
+
+## 2026-09-22：JUMPTABLE-TABLEAPI-0001 P0-A — ActionSwitchNorm 真身接线
+
+`ActionSwitchNorm::apply`（coreaction.cc:4548-4565）从空壳升级为忠实移植：
+- 每个未 isLabelled 的 JumpTable：`match_model` → `recover_labels` →
+  `fold_in_normalization`，count+=1；match/recover 的 LowlevelError 消息原样
+  经 `Error::Lowlevel` 穿透 apply（Ghidra 异常传播语义）。
+- 所有表（含已标注）跑 `fold_in_guards`，成功则 `get_structure().clear()`
+  （重做结构）并 count+=1。
+- 仍返回 0（NO_CHANGE）——Ghidra 本 action 不向框架报告状态变化。
+- 跳表快照迭代（Arc clone）等价 Ghidra 按下标遍历（fold 只追加地址条目，
+  不增表）。表级 API 与 foldIn* 语义修正明细见 docs/api/jumptable.md。

@@ -9,7 +9,7 @@
 //!
 //! Ghidra reference: ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/jumptable.{hh,cc}.
 
-use crate::address::{calc_mask, leastsigbit_set, mostsigbit_set, Address};
+use crate::address::{calc_mask, leastsigbit_set, minimalmask, mostsigbit_set, Address};
 use crate::block::{BlockBasic, FlowBlock};
 use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
@@ -1577,6 +1577,27 @@ impl Default for NormMax {
 
 /// A jump-table execution model.
 ///
+/// Parent-table facts consumed by jump-model recovery.
+///
+/// RUGRA-GLUE: Ghidra models read `jt->isPartial()` (jumptable.cc:1052, the
+/// analyzeGuards NZMASK channel) and `jt->getIndirectOp()` (jumptable.cc:1083,
+/// the sibling-BRANCHIND identity channel) through their parent `JumpTable*`
+/// member while `JumpTable::recoverModel` runs on the table. In Rust the whole
+/// recovery runs under the table's `RwLock` write guard (stageJumpTable and
+/// ActionSwitchNorm both call through `Arc::write()`), so locking the real
+/// parent Arc from inside a model would self-deadlock, and storing a strong
+/// Arc back-reference would form a cycle (the model lives inside
+/// `JumpTable::jmodel`). `JumpTable::recover_model` therefore snapshots these
+/// two facts directly from `&mut self` (no lock, no Arc) and passes them down
+/// as plain values — the faithful carrier of the two parent reads.
+#[derive(Clone, Default)]
+pub struct JumpParentFacts {
+    /// `jt->isPartial()` at model-recovery time (partialTable field).
+    pub partial_table: bool,
+    /// `jt->getIndirectOp()` at model-recovery time (identity channel).
+    pub indirect: Option<Arc<RwLock<PcodeOp>>>,
+}
+
 /// Holds details of the model and recovers these details in various stages.
 /// Faithful to `JumpModel` (jumptable.hh:243).
 pub trait JumpModel: Send + Sync {
@@ -1602,6 +1623,7 @@ pub trait JumpModel: Send + Sync {
         indop: &Arc<RwLock<PcodeOp>>,
         matchsize: u32,
         maxtablesize: u32,
+        parent: &JumpParentFacts,
     ) -> Result<bool, JumpTableRecoveryError>;
 
     // Ghidra: jumptable.hh:271 JumpModel::buildAddresses (pure virtual)
@@ -1669,8 +1691,9 @@ pub trait JumpModel: Send + Sync {
     ) -> bool;
 
     // Ghidra: jumptable.hh:328 JumpModel::clone (pure virtual)
-    /// Clone this model.
-    fn clone_model(&self, jt: Arc<RwLock<JumpTable>>) -> Box<dyn JumpModel>;
+    /// Clone this model. (Ghidra passes the new parent `jt`; Rugra models
+    /// are parentless — see `JumpParentFacts` — so the parameter is gone.)
+    fn clone_model(&self) -> Box<dyn JumpModel>;
 
     // Ghidra: jumptable.hh:331 JumpModel::clear
     /// Clear any non-permanent aspects of the model.
@@ -1682,18 +1705,14 @@ pub trait JumpModel: Send + Sync {
 pub struct JumpModelTrivial {
     /// Number of addresses in the table as reported by the JumpTable.
     pub size: u32,
-    /// Parent jump-table.
-    pub jumptable: Arc<RwLock<JumpTable>>,
 }
 
 impl JumpModelTrivial {
     // Ghidra: jumptable.hh:353 JumpModelTrivial::JumpModelTrivial
-    /// Construct given a parent jump-table.
-    pub fn new(jt: Arc<RwLock<JumpTable>>) -> Self {
-        Self {
-            size: 0,
-            jumptable: jt,
-        }
+    /// Construct (Ghidra passes the parent jump-table; Rugra models are
+    /// parentless — parent reads flow via `JumpParentFacts`, see its docs).
+    pub fn new() -> Self {
+        Self { size: 0 }
     }
 }
 
@@ -1715,6 +1734,7 @@ impl JumpModel for JumpModelTrivial {
         indop: &Arc<RwLock<PcodeOp>>,
         matchsize: u32,
         _maxtablesize: u32,
+        _parent: &JumpParentFacts,
     ) -> Result<bool, JumpTableRecoveryError> {
         // Faithful to JumpModelTrivial::recoverModel (jumptable.cc:391).
         // The number of out-edges of the BRANCHIND's parent block is the size.
@@ -1809,8 +1829,8 @@ impl JumpModel for JumpModelTrivial {
     }
 
     // Ghidra: jumptable.cc:416 JumpModelTrivial::clone
-    fn clone_model(&self, jt: Arc<RwLock<JumpTable>>) -> Box<dyn JumpModel> {
-        let mut res = JumpModelTrivial::new(jt);
+    fn clone_model(&self) -> Box<dyn JumpModel> {
+        let mut res = JumpModelTrivial::new();
         res.size = self.size;
         Box::new(res)
     }
@@ -1826,8 +1846,6 @@ impl JumpModel for JumpModelTrivial {
 ///
 /// Faithful to `JumpBasic` (jumptable.hh:374).
 pub struct JumpBasic {
-    /// Parent jump-table.
-    pub jumptable: Arc<RwLock<JumpTable>>,
     /// Range of values for the (normalized) switch variable.
     /// Ghidra 用 `JumpValues *jrange`(指针,可指向 JumpValuesRange 或
     /// JumpValuesRangeDefault)。Rugra 用 `Box<dyn JumpValues>` 实现同样的
@@ -1848,10 +1866,11 @@ pub struct JumpBasic {
 
 impl JumpBasic {
     // Ghidra: jumptable.hh:410 JumpBasic::JumpBasic
-    /// Construct given a parent jump-table.
-    pub fn new(jt: Arc<RwLock<JumpTable>>) -> Self {
+    /// Construct (Ghidra passes the parent jump-table `jt`; Rugra models are
+    /// parentless — the two parent reads during recovery flow in as
+    /// `JumpParentFacts`, see its docs).
+    pub fn new() -> Self {
         Self {
-            jumptable: jt,
             jrange: None,
             path_meld: PathMeld::default(),
             selectguards: Vec::new(),
@@ -2521,9 +2540,10 @@ impl JumpBasic {
         pathout: i32,
         matchsize: u32,
         maxtablesize: u32,
+        parent: &JumpParentFacts,
     ) -> Result<(), JumpTableRecoveryError> {
         // Ghidra cc:1209: analyzeGuards(rootbl, pathout)
-        self.analyze_guards(rootbl, pathout);
+        self.analyze_guards(rootbl, pathout, parent);
         // Ghidra cc:1210: findSmallestNormal(matchsize)
         self.find_smallest_normal(matchsize);
         // Ghidra cc:1211-1232: readonly variable rescue for single-branch
@@ -2638,11 +2658,11 @@ impl JumpBasic {
         true
     }
 
-    // Ghidra: jumptable.cc:1392 JumpBasic::foldInOneGuard
+    // Ghidra: jumptable.cc:1373 JumpBasic::foldInOneGuard
     /// Eliminate the given guard to this switch. We disarm the guard
     /// instructions by making the guard condition always false (or pushing the
     /// branch into the switch). Faithful to `foldInOneGuard`
-    /// (jumptable.cc:1392).
+    /// (jumptable.cc:1373-1409).
     ///
     /// Returns true if a change was made to data-flow.
     pub fn fold_in_one_guard(
@@ -2662,14 +2682,16 @@ impl JumpBasic {
         let Some(cbranchblock) = cbranchblock else {
             return false;
         };
-        // The guard branch must have exactly 2 out-edges.
+        // cc:1379: its possible the guard branch has been converted between
+        // the switch recovery and now — without exactly 2 out-edges we can't
+        // fold it in.
         if cbranchblock.read().unwrap().size_out() != 2 {
             return false;
         }
+        // cc:1380-1382: stored path to indirect block, adjusted when the out
+        // branches have been flipped (getFlipPath, block.hh:297).
         let mut indpath = guard.get_path();
-        // Adjust for FlipPath — we approximate by checking the GOTO_EDGE flags.
-        let cbranch_flags = cbranchblock.read().unwrap().get_flags();
-        if (cbranch_flags & crate::block::block_flags::GOTO_EDGE_1) != 0 {
+        if cbranchblock.read().unwrap().get_flip_path() {
             indpath = 1 - indpath;
         }
         // Get the switch block (parent of the BRANCHIND).
@@ -2683,7 +2705,7 @@ impl JumpBasic {
         let Some(switchbl) = switchbl else {
             return false;
         };
-        // Guard must go directly into switch block along the indpath edge.
+        // cc:1384-1385: guard must go directly into switch block.
         let out_target = cbranchblock.read().unwrap().get_out(indpath as usize).map(|e| e.point);
         let Some(out_target) = out_target else {
             return false;
@@ -2691,7 +2713,7 @@ impl JumpBasic {
         if !Arc::ptr_eq(&out_target, &switchbl) {
             return false;
         }
-        // Find the guard target (the other out-edge).
+        // cc:1386: the other out-edge is the guard target.
         let guardtarget = cbranchblock
             .read()
             .unwrap()
@@ -2701,53 +2723,68 @@ impl JumpBasic {
             return false;
         };
 
-        // Find which out-edge of the switch block hits the guard target.
-        let n_out = switchbl.read().unwrap().size_out();
-        let mut pos = None;
+        // cc:1389-1390: find which out-edge of the switch block hits the
+        // guard target. Unfound ⇒ pos == sizeOut (Ghidra's loop exit value),
+        // expressed here as an i32 that may equal n_out.
+        let n_out = switchbl.read().unwrap().size_out() as i32;
+        let mut pos = n_out;
         for p in 0..n_out {
-            let out = switchbl.read().unwrap().get_out(p).map(|e| e.point);
+            let out = switchbl.read().unwrap().get_out(p as usize).map(|e| e.point);
             if let Some(out) = out {
                 if Arc::ptr_eq(&out, &guardtarget) {
-                    pos = Some(p);
+                    pos = p;
                     break;
                 }
             }
         }
-
-        match pos {
-            Some(p) => {
-                // The guard target is already a switch destination; set the
-                // CBRANCH condition to a constant so it always takes the path
-                // to the switch. Faithful to opSetInput(cbranch, constant, 1).
-                let val = if (indpath == 0) {
-                    // (indpath==0 != isBooleanFlip) ? 0 : 1 — approximate.
-                    0u64
-                } else {
-                    1u64
-                };
-                let size = cbranch
-                    .read()
-                    .unwrap()
-                    .get_in(0)
-                    .map(|v| v.read().unwrap().get_size())
-                    .unwrap_or(1);
-                let constvn = fd.new_constant(size, val);
-                let cbranch_pref = crate::op::PcodeOpRef(cbranch.clone());
-                fd.op_set_input(&cbranch_pref, constvn, 1);
-                jump.set_default_block(p as i32);
-            }
-            None => {
-                // Add the guard target as a new switch destination.
-                let gt_start = {
-                    let gt_rg = guardtarget.read().unwrap();
-                    gt_rg.get_start_addr()
-                };
-                jump.add_block_to_switch(gt_start, NO_LABEL);
-                jump.set_last_as_default();
-                // Push the branch into the switch.
-                let _ = fd.push_branch(&cbranchblock, (1 - indpath) as usize, &switchbl);
-            }
+        // cc:1391-1392: there can be only one folded target.
+        if jump.has_folded_default() && jump.get_default_block() != pos {
+            return false;
         }
+        // cc:1394-1395: values flowing out of the switch block forbid folding.
+        let no_intervening = {
+            let bl_rg = switchbl.read().unwrap();
+            match bl_rg.as_any().downcast_ref::<crate::block::BlockBasic>() {
+                Some(bb) => bb.no_intervening_statement(),
+                // RUGRA-GLUE: in Ghidra the BRANCHIND parent is always a
+                // BlockBasic (PcodeOps only live in basic blocks); a non-basic
+                // parent here is a structural invariant break, refuse to fold.
+                None => false,
+            }
+        };
+        if !no_intervening {
+            return false;
+        }
+        if pos == n_out {
+            // cc:1397-1399: add new destination to table without a label,
+            // treating it as either the default case or an exit; turn the
+            // branch target into a target of the switch instead.
+            let gt_start = {
+                let gt_rg = guardtarget.read().unwrap();
+                gt_rg.get_start_addr()
+            };
+            jump.add_block_to_switch(gt_start, NO_LABEL);
+            jump.set_last_as_default();
+            let _ = fd.push_branch(&cbranchblock, (1 - indpath) as usize, &switchbl);
+        } else {
+            // cc:1402-1404: neutralize the guard condition so control always
+            // reaches the switch; a guard branch generally targets the
+            // default case.
+            let bool_flip = cbranch.read().unwrap().is_boolean_flip();
+            let val: u64 = if (indpath == 0) != bool_flip { 0 } else { 1 };
+            let size = cbranch
+                .read()
+                .unwrap()
+                .get_in(0)
+                .map(|v| v.read().unwrap().get_size())
+                .unwrap_or(1);
+            let constvn = fd.new_constant(size, val);
+            let cbranch_pref = crate::op::PcodeOpRef(cbranch.clone());
+            fd.op_set_input(&cbranch_pref, constvn, 1);
+            jump.set_default_block(pos);
+        }
+        // cc:1406-1408: mark that the default branch has been folded (and
+        // cannot take a label).
         jump.set_folded_default();
         guard.clear();
         true
@@ -2788,6 +2825,7 @@ impl JumpModel for JumpBasic {
         indop: &Arc<RwLock<PcodeOp>>,
         matchsize: u32,
         maxtablesize: u32,
+        parent: &JumpParentFacts,
     ) -> Result<bool, JumpTableRecoveryError> {
         // Ghidra cc:1425: jrange = new JumpValuesRange()
         self.jrange = Some(Box::new(JumpValuesRange::default()));
@@ -2803,7 +2841,7 @@ impl JumpModel for JumpBasic {
         let Some(bl) = parent_bl else {
             return Ok(false);
         };
-        self.find_normalized(fd, &bl, -1, matchsize, maxtablesize)?;
+        self.find_normalized(fd, &bl, -1, matchsize, maxtablesize, parent)?;
         // Ghidra cc:1428-1429: if (jrange->getSize() > maxtablesize) return false
         if self
             .jrange
@@ -3049,46 +3087,44 @@ impl JumpModel for JumpBasic {
         }
     }
 
-    // Ghidra: jumptable.cc:1568 JumpBasic::foldInNormalization
+    // Ghidra: jumptable.cc:1546 JumpBasic::foldInNormalization
     fn fold_in_normalization(
         &mut self,
-        _fd: &mut crate::funcdata::Funcdata,
+        fd: &mut crate::funcdata::Funcdata,
         indop: &Arc<RwLock<PcodeOp>>,
     ) -> Option<Arc<RwLock<Varnode>>> {
-        // Faithful to JumpBasic::foldInNormalization (jumptable.cc:1568):
-        // set the BRANCHIND input to be the unnormalized switch variable.
-        if let Some(sv) = &self.switchvn {
-            let mut op_rg = indop.write().unwrap();
-            // Replace slot 0 input with the switch variable.
-            if op_rg.inrefs.is_empty() {
-                op_rg.inrefs.push(sv.clone());
-            } else {
-                op_rg.inrefs[0] = sv.clone();
-            }
-            return Some(sv.clone());
-        }
-        None
+        // Faithful to JumpBasic::foldInNormalization (jumptable.cc:1546-1553):
+        // set the BRANCHIND input to be the unnormalized switch variable, so
+        // all the intervening code to calculate the final address is
+        // eliminated as dead. The op_set_input call (Ghidra fd->opSetInput)
+        // maintains Varnode descend bookkeeping on both the severed
+        // normalization varnode and the switchvn.
+        let sv = self.switchvn.clone()?;
+        fd.op_set_input(&crate::op::PcodeOpRef(indop.clone()), sv.clone(), 0);
+        Some(sv)
     }
 
-    // Ghidra: jumptable.cc:1577 JumpBasic::foldInGuards
+    // Ghidra: jumptable.cc:1555 JumpBasic::foldInGuards
     fn fold_in_guards(
         &mut self,
         fd: &mut crate::funcdata::Funcdata,
         jump: &mut JumpTable,
     ) -> bool {
-        // Faithful to JumpBasic::foldInGuards (jumptable.cc:1577).
+        // Faithful to JumpBasic::foldInGuards (jumptable.cc:1555-1570):
+        // a null cbranch is already normalized (skip without touching the
+        // record); a dead cbranch is cleared and skipped; anything else is
+        // folded via foldInOneGuard.
         let mut change = false;
         for i in 0..self.selectguards.len() {
-            let cbranch_alive = {
-                let g = &self.selectguards[i];
-                match g.get_branch() {
-                    Some(cb) => !cb.read().unwrap().is_dead(),
-                    None => false,
+            match self.selectguards[i].get_branch() {
+                // cc:1560-1561: cbranch == null → already normalized.
+                None => continue,
+                // cc:1562-1565: dead cbranch → clear the record and skip.
+                Some(cb) if cb.read().unwrap().is_dead() => {
+                    self.selectguards[i].clear();
+                    continue;
                 }
-            };
-            if !cbranch_alive {
-                self.selectguards[i].clear();
-                continue;
+                Some(_) => {}
             }
             // Extract the guard, fold it, then write back.
             let mut guard = self.selectguards[i].clone();
@@ -3166,8 +3202,8 @@ impl JumpModel for JumpBasic {
     }
 
     // Ghidra: jumptable.cc:1635 JumpBasic::clone
-    fn clone_model(&self, jt: Arc<RwLock<JumpTable>>) -> Box<dyn JumpModel> {
-        let mut res = JumpBasic::new(jt);
+    fn clone_model(&self) -> Box<dyn JumpModel> {
+        let mut res = JumpBasic::new();
         // Ghidra: `jrange->clone()`. Box<dyn JumpValues> 用 clone_boxed。
         res.jrange = self.jrange.as_ref().map(|j| j.clone_boxed());
         res.path_meld = self.path_meld.clone();
@@ -3198,11 +3234,20 @@ impl JumpBasic {
     /// analyzed. A GuardRecord is created for each of these restrictions.
     /// `pathout` is an optional path (>= 0) from the basic-block to the
     /// switch or -1.
-    pub fn analyze_guards(&mut self, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, pathout: i32) {
+    pub fn analyze_guards(
+        &mut self,
+        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        pathout: i32,
+        parent: &JumpParentFacts,
+    ) {
         // cc:1049-1052: maxbranch=2, maxpullback=2, usenzmask = !isPartial.
+        // Ghidra reads `!jt->isPartial()` through the model's parent pointer;
+        // Rugra carries the snapshot taken by JumpTable::recover_model
+        // (see JumpParentFacts) — a partial (multistage) table must see
+        // usenzmask=false here, exactly like cc:1052.
         let max_branch = 2i32;
         let max_pullback = 2i32;
-        let usenzmask = !self.jumptable.read().unwrap().is_partial();
+        let usenzmask = !parent.partial_table;
 
         // cc:1054: selectguards.clear()
         self.selectguards.clear();
@@ -3307,7 +3352,14 @@ impl JumpBasic {
                     };
                     if let Some(otherop) = otherop {
                         if otherop.read().unwrap().opcode == OpCode::CPUI_BRANCHIND {
-                            let indirect = self.jumptable.read().unwrap().get_indirect_op();
+                            // Ghidra cc:1083-1090 compares against
+                            // `jt->getIndirectOp()` through the parent
+                            // pointer; the snapshot passed down from
+                            // JumpTable::recover_model carries the real
+                            // indirect op, so a guard on a sibling edge of
+                            // THIS switch keeps being collected (only a
+                            // DIFFERENT switch's BRANCHIND stops the walk).
+                            let indirect = parent.indirect.clone();
                             let is_model_indirect = indirect
                                 .as_ref()
                                 .map(|ind| Arc::ptr_eq(ind, &otherop))
@@ -3408,9 +3460,9 @@ pub struct JumpBasic2 {
 
 impl JumpBasic2 {
     // Ghidra: jumptable.hh:447 JumpBasic2::JumpBasic2
-    pub fn new(jt: Arc<RwLock<JumpTable>>) -> Self {
+    pub fn new() -> Self {
         Self {
-            base: JumpBasic::new(jt),
+            base: JumpBasic::new(),
             extra_vn: None,
             orig_path_meld: PathMeld::default(),
         }
@@ -3426,6 +3478,30 @@ impl JumpBasic2 {
         // Ghidra cc:1681: extravn = pMeld.getVarnode(pMeld.numCommonVarnode()-1)
         self.extra_vn = Some(p_meld.get_varnode(num_common.saturating_sub(1)));
         self.orig_path_meld.set_from(p_meld);
+    }
+
+    // Ghidra: jumptable.cc:1634 JumpBasic2::foldInOneGuard
+    /// The are two main cases here:
+    ///   - If we recovered a switch in a loop, the guard is also the loop
+    ///     condition, so we don't want to remove it.
+    ///   - If the guard is just deciding whether or not to use a default
+    ///     switch value, the guard will disappear anyway because the
+    ///     normalization foldin will make all its blocks donothings.
+    ///
+    /// So we don't make any special mods, in case there are extra statements
+    /// in these blocks. Faithful to `JumpBasic2::foldInOneGuard`
+    /// (jumptable.cc:1634-1649).
+    pub fn fold_in_one_guard(
+        &self,
+        _fd: &mut crate::funcdata::Funcdata,
+        guard: &mut GuardRecord,
+        jump: &mut JumpTable,
+    ) -> bool {
+        // The final block in the table is the single value produced by the
+        // model2 guard; it should be the default block.
+        jump.set_last_as_default();
+        guard.clear(); // Mark that we are folded
+        true
     }
 
     // Ghidra: jumptable.hh:444 JumpBasic2::checkNormalDominance
@@ -3522,6 +3598,7 @@ impl JumpModel for JumpBasic2 {
         indop: &Arc<RwLock<PcodeOp>>,
         matchsize: u32,
         maxtablesize: u32,
+        parent: &JumpParentFacts,
     ) -> Result<bool, JumpTableRecoveryError> {
         let joinvn = match &self.extra_vn {
             Some(v) => v.clone(),
@@ -3585,7 +3662,8 @@ impl JumpModel for JumpBasic2 {
         self.base.jrange = Some(Box::new(jdef));
         self.extra_vn = Some(joinvn.clone());
         self.base.find_determining_varnodes(multiop.clone(), one_minus_path as i32);
-        self.base.find_normalized(fd, &rootbl, pathout, matchsize, maxtablesize)?;
+        self.base
+            .find_normalized(fd, &rootbl, pathout, matchsize, maxtablesize, parent)?;
         let jrange_size = self.base.jrange.as_ref().map(|r| r.get_size()).unwrap_or(0);
         if jrange_size > maxtablesize as u64 {
             return Ok(false);
@@ -3632,15 +3710,35 @@ impl JumpModel for JumpBasic2 {
         self.base.fold_in_normalization(fd, indop)
     }
 
-    // Ghidra: jumptable.cc:1656 JumpBasic2::foldInOneGuard
+    // Ghidra: jumptable.hh:441 JumpBasic2 (inherits JumpBasic::foldInGuards, virtual foldInOneGuard dispatches to JumpBasic2)
     fn fold_in_guards(
         &mut self,
-        _fd: &mut crate::funcdata::Funcdata,
+        fd: &mut crate::funcdata::Funcdata,
         jump: &mut JumpTable,
     ) -> bool {
-        jump.set_last_as_default();
-        self.base.selectguards.clear();
-        true
+        // JumpBasic2 inherits JumpBasic::foldInGuards (jumptable.cc:1555-1570)
+        // verbatim; the only difference is that foldInOneGuard dispatches
+        // virtually to JumpBasic2::foldInOneGuard (jumptable.cc:1634).
+        let mut change = false;
+        for i in 0..self.base.selectguards.len() {
+            match self.base.selectguards[i].get_branch() {
+                // cc:1560-1561: cbranch == null → already normalized.
+                None => continue,
+                // cc:1562-1565: dead cbranch → clear the record and skip.
+                Some(cb) if cb.read().unwrap().is_dead() => {
+                    self.base.selectguards[i].clear();
+                    continue;
+                }
+                Some(_) => {}
+            }
+            // Extract the guard, fold it (JumpBasic2 override), then write back.
+            let mut guard = self.base.selectguards[i].clone();
+            if JumpBasic2::fold_in_one_guard(self, fd, &mut guard, jump) {
+                change = true;
+            }
+            self.base.selectguards[i] = guard;
+        }
+        change
     }
 
     // Ghidra: jumptable.hh:441 JumpBasic2 (inherits JumpBasic::sanityCheck)
@@ -3656,8 +3754,8 @@ impl JumpModel for JumpBasic2 {
     }
 
     // Ghidra: jumptable.cc:1775 JumpBasic2::clone
-    fn clone_model(&self, jt: Arc<RwLock<JumpTable>>) -> Box<dyn JumpModel> {
-        let mut res = JumpBasic2::new(jt);
+    fn clone_model(&self) -> Box<dyn JumpModel> {
+        let mut res = JumpBasic2::new();
         // Ghidra cc:1779: res->jrange = jrange->clone(). Box<dyn> 用 clone_boxed。
         res.base.jrange = self.base.jrange.as_ref().map(|r| r.clone_boxed());
         Box::new(res)
@@ -3690,9 +3788,9 @@ pub struct JumpBasicOverride {
 
 impl JumpBasicOverride {
     // Ghidra: jumptable.hh:475 JumpBasicOverride::JumpBasicOverride
-    pub fn new(jt: Arc<RwLock<JumpTable>>) -> Self {
+    pub fn new() -> Self {
         Self {
-            base: JumpBasic::new(jt),
+            base: JumpBasic::new(),
             adset: std::collections::BTreeSet::new(),
             values: Vec::new(),
             addrtable: Vec::new(),
@@ -3765,6 +3863,7 @@ impl JumpModel for JumpBasicOverride {
         indop: &Arc<RwLock<PcodeOp>>,
         _matchsize: u32,
         _maxtablesize: u32,
+        _parent: &JumpParentFacts,
     ) -> Result<bool, JumpTableRecoveryError> {
         if self.hash != 0 {
             let indop_in = indop.read().unwrap().get_in(0).cloned();
@@ -3829,17 +3928,17 @@ impl JumpModel for JumpBasicOverride {
         }
     }
 
-    // Ghidra: jumptable.hh:486 JumpBasicOverride (inherits JumpBasic::foldInNormalization)
+    // Ghidra: jumptable.hh:485 JumpBasicOverride (inherits JumpBasic::foldInNormalization)
     fn fold_in_normalization(
         &mut self,
         fd: &mut crate::funcdata::Funcdata,
         indop: &Arc<RwLock<PcodeOp>>,
     ) -> Option<Arc<RwLock<Varnode>>> {
-        if self.is_trivial {
-            indop.read().unwrap().get_in(0).cloned()
-        } else {
-            self.base.fold_in_normalization(fd, indop)
-        }
+        // Ghidra declares foldInNormalization inherited from JumpBasic
+        // (jumptable.hh:485) with no override — including for the trivial
+        // setup (setupTrivial assigns the model's switchvn), so no is_trivial
+        // special case exists.
+        self.base.fold_in_normalization(fd, indop)
     }
 
     // Ghidra: jumptable.hh:487 (override)
@@ -3864,9 +3963,9 @@ impl JumpModel for JumpBasicOverride {
     }
 
     // Ghidra: jumptable.cc:2042 JumpBasicOverride::clone
-    fn clone_model(&self, jt: Arc<RwLock<JumpTable>>) -> Box<dyn JumpModel> {
+    fn clone_model(&self) -> Box<dyn JumpModel> {
         Box::new(JumpBasicOverride {
-            base: JumpBasic::new(jt),
+            base: JumpBasic::new(),
             adset: self.adset.clone(),
             values: self.values.clone(),
             addrtable: self.addrtable.clone(),
@@ -3895,7 +3994,6 @@ impl JumpModel for JumpBasicOverride {
 /// L1, so `recover_model` returns false until userop is ported. This matches
 /// Ghidra's behavior on binaries without jumpassist directives.
 pub struct JumpAssisted {
-    pub jumptable: Arc<RwLock<JumpTable>>,
     pub assist_op: Option<Arc<RwLock<PcodeOp>>>,
     pub size_indices: i32,
     pub switchvn: Option<Arc<RwLock<Varnode>>>,
@@ -3905,9 +4003,8 @@ pub struct JumpAssisted {
 
 impl JumpAssisted {
     // Ghidra: jumptable.hh:518 JumpAssisted::JumpAssisted
-    pub fn new(jt: Arc<RwLock<JumpTable>>) -> Self {
+    pub fn new() -> Self {
         Self {
-            jumptable: jt,
             assist_op: None,
             size_indices: 0,
             switchvn: None,
@@ -3939,6 +4036,7 @@ impl JumpModel for JumpAssisted {
         indop: &Arc<RwLock<PcodeOp>>,
         _matchsize: u32,
         _maxtablesize: u32,
+        _parent: &JumpParentFacts,
     ) -> Result<bool, JumpTableRecoveryError> {
         self.indop = Some(indop.clone());
         // Ghidra cc:2095-2100: addrVn must be written, its def a CALLOTHER.
@@ -4040,22 +4138,43 @@ impl JumpModel for JumpAssisted {
         }
     }
 
-    // Ghidra: jumptable.hh:510 JumpAssisted (foldInNormalization — returns switchvn directly)
+    // Ghidra: jumptable.cc:2193 JumpAssisted::foldInNormalization
     fn fold_in_normalization(
         &mut self,
-        _fd: &mut crate::funcdata::Funcdata,
-        indop: &Arc<RwLock<PcodeOp>>,
+        fd: &mut crate::funcdata::Funcdata,
+        _indop: &Arc<RwLock<PcodeOp>>,
     ) -> Option<Arc<RwLock<Varnode>>> {
-        indop.read().unwrap().get_in(0).cloned()
+        // Faithful to JumpAssisted::foldInNormalization (jumptable.cc:2193-2206):
+        // replace all outputs of the jumpassist op with switchvn (including
+        // BRANCHIND), then get rid of the assist op (it has served its
+        // purpose). Descendants are snapshotted first: op_set_input severs
+        // each descendant from outvn's descend list as it runs (Ghidra
+        // increments its iterator before the mutation for the same reason).
+        let switchvn = self.switchvn.clone()?;
+        let assist = self.assist_op.clone()?;
+        let outvn = assist.read().unwrap().get_out().cloned();
+        if let Some(outvn) = outvn {
+            let descendants: Vec<_> = outvn.read().unwrap().descend_iter().collect();
+            for desc in descendants {
+                fd.op_set_input(&crate::op::PcodeOpRef(desc), switchvn.clone(), 0);
+            }
+        }
+        fd.op_destroy(&crate::op::PcodeOpRef(assist));
+        Some(switchvn)
     }
 
-    // Ghidra: jumptable.cc:2230 JumpAssisted::foldInGuards
+    // Ghidra: jumptable.cc:2208 JumpAssisted::foldInGuards
     fn fold_in_guards(
         &mut self,
         _fd: &mut crate::funcdata::Funcdata,
-        _jump: &mut JumpTable,
+        jump: &mut JumpTable,
     ) -> bool {
-        true
+        // Faithful to JumpAssisted::foldInGuards (jumptable.cc:2208-2214):
+        // the default case is always the last block; report a change only
+        // when that assignment actually moved the default out-edge.
+        let orig_val = jump.get_default_block();
+        jump.set_last_as_default();
+        orig_val != jump.get_default_block()
     }
 
     // Ghidra: jumptable.hh:510 JumpAssisted (sanityCheck — always true, addresses from p-code model)
@@ -4071,9 +4190,8 @@ impl JumpModel for JumpAssisted {
     }
 
     // Ghidra: jumptable.hh:510 JumpAssisted::clone
-    fn clone_model(&self, jt: Arc<RwLock<JumpTable>>) -> Box<dyn JumpModel> {
+    fn clone_model(&self) -> Box<dyn JumpModel> {
         Box::new(JumpAssisted {
-            jumptable: jt,
             assist_op: self.assist_op.clone(),
             size_indices: self.size_indices,
             switchvn: self.switchvn.clone(),
@@ -4288,9 +4406,7 @@ impl JumpTable {
     pub fn set_override(&mut self, addrtable: &[Address], naddr: Address, h: u64, sv: u64) {
         // Ghidra cc:2469-2470: if (jmodel != 0) delete jmodel;
         self.jmodel = None;
-        let mut over = JumpBasicOverride::new(Arc::new(RwLock::new(JumpTable::new(
-            self.opaddress,
-        ))));
+        let mut over = JumpBasicOverride::new();
         over.set_addresses(addrtable);
         over.set_norm(naddr, h);
         over.set_starting_value(sv);
@@ -4340,12 +4456,27 @@ impl JumpTable {
     }
 
     // Ghidra: jumptable.cc:2535 JumpTable::addBlockToSwitch
-    /// Set the default block to the last address in the table (alias).
+    /// Add a guard-branch target block as an explicit switch destination.
+    /// The new target is appended directly to the end of the table.
     pub fn add_block_to_switch(&mut self, bl_start: Address, lab: u64) {
         self.addresstable.push(bl_start);
-        // The block will be added to the end of the out-edges; we approximate
-        // last_block using the current table size.
-        self.last_block = (self.addresstable.len() as i32) - 1;
+        // Ghidra cc:2537: `lastBlock = indirect->getParent()->sizeOut()` —
+        // the block WILL be added to the end of the out-edges by the
+        // pushBranch immediately following in foldInOneGuard, so the new
+        // default refers to that future out-edge index, NOT the table length
+        // (which only coincides when the table was never truncated).
+        self.last_block = self
+            .indirect
+            .as_ref()
+            .and_then(|o| {
+                o.read()
+                    .unwrap()
+                    .parent
+                    .as_ref()
+                    .and_then(|p| p.upgrade())
+            })
+            .map(|bl| bl.read().unwrap().size_out() as i32)
+            .unwrap_or(-1);
         let last = self.last_block;
         let addr_idx = (self.addresstable.len() as i32) - 1;
         self.block2addr.push(IndexPair::new(last, addr_idx));
@@ -4419,24 +4550,27 @@ impl JumpTable {
         fd: &crate::funcdata::Funcdata,
         maxtablesize: u32,
     ) -> Result<bool, JumpTableRecoveryError> {
+        // Ghidra models read `jt->isPartial()` (cc:1052) and
+        // `jt->getIndirectOp()` (cc:1083) through their parent `JumpTable*`
+        // during recovery. Recovery runs under this table's write lock, so we
+        // snapshot both facts from `&mut self` (no lock, no Arc) and pass
+        // them down as `JumpParentFacts` — see the struct docs.
+        let parent = JumpParentFacts {
+            partial_table: self.partial_table,
+            indirect: self.indirect.clone(),
+        };
         // Ghidra cc:2257-2263: 已有 override 模型 → 重跑(matchsize=0)。
         if let Some(m) = self.jmodel.as_mut() {
             if m.is_override() {
                 let Some(indop) = self.indirect.clone() else {
                     return Ok(false);
                 };
-                return m.recover_model(fd, &indop, 0, maxtablesize);
+                return m.recover_model(fd, &indop, 0, maxtablesize, &parent);
             }
         }
         // Ghidra cc:2262: 否则丢弃旧模型(delete jmodel)。
         self.jmodel = None;
 
-        // The models hold an `Arc<RwLock<JumpTable>>` back-reference to their
-        // parent (mirroring Ghidra's `new JumpBasic(this)`). We cannot obtain
-        // such an Arc from `&mut self`, so we pass a throw-away Arc; the models
-        // only dereference this parent Arc during fold-in stages (foldInGuards)
-        // which we do not run here, so a stand-in Arc is safe during recovery.
-        let dummy_arc = std::sync::Arc::new(std::sync::RwLock::new(JumpTable::new(self.opaddress)));
         let Some(indop) = self.indirect.clone() else {
             return Ok(false);
         };
@@ -4458,9 +4592,9 @@ impl JumpTable {
                 .unwrap_or(false)
         };
         if in0_written_callother {
-            let mut jassisted = JumpAssisted::new(dummy_arc.clone());
+            let mut jassisted = JumpAssisted::new();
             if jassisted
-                .recover_model(fd, &indop, matchsize, maxtablesize)?
+                .recover_model(fd, &indop, matchsize, maxtablesize, &parent)?
             {
                 self.jmodel = Some(Box::new(jassisted));
                 return Ok(true);
@@ -4468,16 +4602,16 @@ impl JumpTable {
         }
 
         // Ghidra cc:2274-2277: JumpBasic。
-        let mut jbasic = JumpBasic::new(dummy_arc.clone());
-        if jbasic.recover_model(fd, &indop, matchsize, maxtablesize)? {
+        let mut jbasic = JumpBasic::new();
+        if jbasic.recover_model(fd, &indop, matchsize, maxtablesize, &parent)? {
             self.jmodel = Some(Box::new(jbasic));
             return Ok(true);
         }
         // Ghidra cc:2278-2282: JumpBasic2,initializeStart 接住 Basic 的
         // pathMeld 后再试;失败则 jmodel = None。
-        let mut jbasic2 = JumpBasic2::new(dummy_arc);
+        let mut jbasic2 = JumpBasic2::new();
         jbasic2.initialize_start(jbasic.get_path_meld());
-        if jbasic2.recover_model(fd, &indop, matchsize, maxtablesize)? {
+        if jbasic2.recover_model(fd, &indop, matchsize, maxtablesize, &parent)? {
             self.jmodel = Some(Box::new(jbasic2));
             return Ok(true);
         }
@@ -4727,6 +4861,244 @@ impl JumpTable {
         }
         self.partial_table = false;
         self.clear_saved_model(); // Keep the new model if it was created successfully
+    }
+
+    // Ghidra: jumptable.cc:2574 JumpTable::foldInNormalization
+    /// Eliminate any code involved in actually computing the destination
+    /// address so it looks like the CPUI_BRANCHIND operation does it all
+    /// internally. Faithful to `foldInNormalization` (jumptable.cc:2574-2591).
+    pub fn fold_in_normalization(&mut self, fd: &mut crate::funcdata::Funcdata) {
+        // cc:2577: switchvn = jmodel->foldInNormalization(fd,indirect)
+        let Some(indirect) = self.indirect.clone() else {
+            return;
+        };
+        let switchvn = match self.jmodel.as_mut() {
+            Some(m) => m.fold_in_normalization(fd, &indirect),
+            None => return,
+        };
+        if let Some(switchvn) = switchvn {
+            // cc:2578-2589: if possible, mark up the switch variable as not
+            // fully consumed so that subvariable flow can truncate it.
+            let (nzmask, size, is_written) = {
+                let vn = switchvn.read().unwrap();
+                (vn.get_nz_mask(), vn.get_size(), vn.is_written())
+            };
+            self.switch_var_consume = minimalmask(nzmask);
+            if self.switch_var_consume >= calc_mask(size) {
+                // If mask covers everything
+                if is_written {
+                    // cc:2583-2588: check for a signed extension and assume
+                    // the extension is not consumed.
+                    let sext_def = switchvn
+                        .read()
+                        .unwrap()
+                        .def
+                        .as_ref()
+                        .and_then(|w| w.upgrade());
+                    if let Some(def_op) = sext_def {
+                        let (is_sext, in0_size) = {
+                            let d = def_op.read().unwrap();
+                            (
+                                d.opcode == OpCode::CPUI_INT_SEXT,
+                                d.get_in(0).map(|v| v.read().unwrap().get_size()),
+                            )
+                        };
+                        if is_sext {
+                            if let Some(sz0) = in0_size {
+                                self.switch_var_consume = calc_mask(sz0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Ghidra: jumptable.cc:2594 JumpTable::trivialSwitchOver
+    /// Make exactly one case for each output edge of the switch block.
+    /// Faithful to `trivialSwitchOver` (jumptable.cc:2594-2609).
+    pub fn trivial_switch_over(&mut self) -> Result<(), JumpTableRecoveryError> {
+        self.block2addr.clear();
+        self.block2addr.reserve(self.addresstable.len());
+        let size_mismatch = JumpTableRecoveryError::Lowlevel {
+            message: "Trivial addresstable and switch block size do not match".to_string(),
+        };
+        let Some(indirect) = self.indirect.clone() else {
+            // RUGRA-GLUE: Ghidra dereferences indirect->getParent() directly;
+            // an unlinked indirect cannot be validated, report the same
+            // LowlevelError as the size mismatch path.
+            return Err(size_mismatch);
+        };
+        let parent = indirect
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(|p| p.upgrade());
+        let Some(parent) = parent else {
+            return Err(size_mismatch);
+        };
+        let n_out = parent.read().unwrap().size_out();
+        if n_out != self.addresstable.len() {
+            return Err(size_mismatch);
+        }
+        // Addresses corresponds exactly to out-edges of switch block.
+        for i in 0..n_out {
+            self.block2addr.push(IndexPair::new(i as i32, i as i32));
+        }
+        self.last_block = n_out as i32 - 1;
+        self.default_block = -1; // Trivial case does not have default case
+        Ok(())
+    }
+
+    // Ghidra: jumptable.cc:2683 JumpTable::matchModel
+    /// Try to match the JumpTable model to the existing function.
+    ///
+    /// This assumes the address table has already been recovered, via
+    /// recoverAddresses() in another Funcdata instance. We rerun
+    /// recoverModel() to match with the current Funcdata. If the recovered
+    /// model does not match the original address table size, we may be
+    /// missing control-flow: a multistage restart is issued, or a warning.
+    /// Faithful to `matchModel` (jumptable.cc:2683-2708).
+    pub fn match_model(
+        &mut self,
+        fd: &mut crate::funcdata::Funcdata,
+    ) -> Result<(), JumpTableRecoveryError> {
+        if !self.is_recovered() {
+            return Err(JumpTableRecoveryError::Lowlevel {
+                message: "Trying to recover jumptable labels without addresses".to_string(),
+            });
+        }
+        // cc:2690-2697: unless the model is an override, move model (created
+        // on a flow copy) so we can create a current instance.
+        if self.jmodel.is_some() {
+            let is_override = self.jmodel.as_ref().map_or(false, |m| m.is_override());
+            if !is_override {
+                self.save_model();
+            } else {
+                self.clear_saved_model();
+                fd.warning("Switch is manually overridden", self.opaddress);
+            }
+        }
+        // cc:2698: recoverModel(fd) — maxtablesize from glb->max_jumptable_size
+        // (same source as recoverAddresses, jumptable.cc:2626).
+        let maxtablesize = fd
+            .get_arch()
+            .map_or(MAX_JUMPTABLE_SIZE, |a| a.max_jumptable_size);
+        self.recover_model(fd, maxtablesize)?;
+        // cc:2699-2707
+        let table_size = self.jmodel.as_ref().map_or(0, |m| m.get_table_size());
+        if self.jmodel.is_some() && table_size != self.addresstable.len() {
+            if self.addresstable.len() == 1 && table_size > 1 {
+                // cc:2700-2704: the jumptable was not fully recovered during
+                // flow analysis, try to issue a restart.
+                fd.localoverride.insert_multistage_jump(self.opaddress);
+                fd.set_restart_pending(true);
+                return Ok(());
+            }
+            fd.warning(
+                "Could not find normalized switch variable to match jumptable",
+                self.opaddress,
+            );
+        }
+        Ok(())
+    }
+
+    // Ghidra: jumptable.cc:2714 JumpTable::recoverLabels
+    /// Recover the case labels for \b this jump-table.
+    ///
+    /// The unnormalized switch variable is recovered, and for each possible
+    /// address table entry, the variable value that produces it is calculated
+    /// and stored as the formal \e case label for the associated code block.
+    /// Faithful to `recoverLabels` (jumptable.cc:2714-2735).
+    pub fn recover_labels(
+        &mut self,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Result<(), JumpTableRecoveryError> {
+        let (maxaddsub, maxleftright, maxext) =
+            (self.norm_max.addsub, self.norm_max.leftright, self.norm_max.ext);
+        if self.jmodel.is_some() {
+            // cc:2718-2725: findUnnormalized then buildLabels, with the
+            // original model as label source when it holds a table.
+            self.jmodel
+                .as_mut()
+                .unwrap()
+                .find_unnormalized(maxaddsub, maxleftright, maxext);
+            let orig_is_empty = self
+                .origmodel
+                .as_ref()
+                .map_or(true, |m| m.get_table_size() == 0);
+            if orig_is_empty {
+                let jmodel = self.jmodel.as_ref().unwrap();
+                jmodel.build_labels(
+                    fd,
+                    &self.addresstable,
+                    &mut self.label,
+                    jmodel.as_ref(),
+                );
+            } else {
+                let jmodel = self.jmodel.as_ref().unwrap();
+                let origmodel = self.origmodel.as_ref().unwrap();
+                jmodel.build_labels(
+                    fd,
+                    &self.addresstable,
+                    &mut self.label,
+                    origmodel.as_ref(),
+                );
+            }
+        } else {
+            // cc:2727-2733: no model — fall back to a trivial model built
+            // from the current out-edges. RUGRA-GLUE: JumpModelTrivial is
+            // parentless (all methods use their parameters), mirroring
+            // `new JumpModelTrivial(this)` without the pointer.
+            if let Some(indirect) = self.indirect.clone() {
+                let mut trivial = JumpModelTrivial::new();
+                let maxtablesize = fd
+                    .get_arch()
+                    .map_or(MAX_JUMPTABLE_SIZE, |a| a.max_jumptable_size);
+                // Parent facts snapshot (cc:2683 context): trivial recovery
+                // reads only the out-edge count, but the parameter is
+                // provided uniformly from the same &mut self state.
+                let parent = JumpParentFacts {
+                    partial_table: self.partial_table,
+                    indirect: Some(indirect.clone()),
+                };
+                let _ = trivial.recover_model(
+                    fd,
+                    &indirect,
+                    self.addresstable.len() as u32,
+                    maxtablesize,
+                    &parent,
+                );
+                trivial.build_addresses(fd, &indirect, &mut self.addresstable, None, None)?;
+                self.trivial_switch_over()?;
+                trivial.build_labels(fd, &self.addresstable, &mut self.label, &trivial);
+            }
+            // RUGRA-GLUE: a missing indirect (never linked by stageJumpTable)
+            // is unrepresentable in Ghidra — dereferencing null would abort.
+            // Skip label building; clearSavedModel below still runs (cc:2734).
+        }
+        self.clear_saved_model();
+        Ok(())
+    }
+
+    // Ghidra: jumptable.hh:615 JumpTable::foldInGuards
+    /// Hide any guard code for \b this switch.
+    /// Faithful to the inline `{ return jmodel->foldInGuards(fd,this); }`.
+    pub fn fold_in_guards(&mut self, fd: &mut crate::funcdata::Funcdata) -> bool {
+        // RUGRA-GLUE: Ghidra's inline jmodel->foldInGuards(fd,this) aliases
+        // the model and the table; Rust cannot hold &mut self.jmodel and
+        // &mut self at once, so the model is temporarily taken out and put
+        // back. No foldInGuards implementation reads jump.jmodel.
+        let Some(mut model) = self.jmodel.take() else {
+            // Ghidra would dereference null here; matchModel/recoverLabels
+            // guarantee a model before SwitchNorm reaches this call. Mirror
+            // the impossible state as "no change".
+            return false;
+        };
+        let changed = model.fold_in_guards(fd, self);
+        self.jmodel = Some(model);
+        changed
     }
 
     // Ghidra: jumptable.cc:2847 JumpTable::checkForMultistage
@@ -5635,11 +6007,29 @@ mod tests {
 
     #[test]
     fn test_jump_table_add_block() {
+        // Ghidra cc:2535-2543: lastBlock = indirect->getParent()->sizeOut().
+        // Build a BRANCHIND whose parent block has two out-edges so the
+        // faithful semantics (not the old addresstable.len() approximation)
+        // is what the assertion exercises.
         let mut jt = JumpTable::new(Address::new(0x401000));
+        let indop = Arc::new(RwLock::new(PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x401000), 0),
+            OpCode::CPUI_BRANCHIND,
+        )));
+        let bl = Arc::new(RwLock::new(crate::block::BlockBasic::new(0, Address::new(0x401000))));
+        {
+            let mut bl_w = bl.write().unwrap();
+            bl_w.outgoing.push(crate::block::BlockEdge::new(bl.clone(), 0));
+            bl_w.outgoing.push(crate::block::BlockEdge::new(bl.clone(), 1));
+        }
+        indop.write().unwrap().parent =
+            Some(std::sync::Arc::downgrade(&(bl.clone() as Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>)));
+        jt.set_indirect_op(indop);
         jt.add_block_to_switch(Address::new(0x401200), 5);
         assert_eq!(jt.num_entries(), 1);
         assert_eq!(jt.get_label_by_index(0), 5);
-        assert_eq!(jt.last_block, 0);
+        // sizeOut of the switch block (2), not the table length (1).
+        assert_eq!(jt.last_block, 2);
     }
 
     #[test]
@@ -5996,9 +6386,11 @@ mod tests {
         let raw_read = Arc::new(RwLock::new(Varnode::new_register(0, 8)));
         indop.write().unwrap().inrefs.push(raw_read);
 
-        let dummy = Arc::new(RwLock::new(JumpTable::new(Address::new(0x1000))));
-        let mut jbasic = JumpBasic::new(dummy);
-        assert_eq!(jbasic.recover_model(&fd, &indop, 0, 1024), Ok(false));
+        let mut jbasic = JumpBasic::new();
+        assert_eq!(
+            jbasic.recover_model(&fd, &indop, 0, 1024, &JumpParentFacts::default()),
+            Ok(false)
+        );
     }
 
     #[test]

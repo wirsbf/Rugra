@@ -74,6 +74,17 @@
 > - `JUMPTABLE-TABLEAPI-0001`(并入 P0-A): 激活 SwitchNorm 真身(match_model/recover_labels
 >   +接线既有死代码),owner=switchnorm-agent(wt/sb-switchnorm),write-set=src/{coreaction,jumptable}.rs
 >   +docs/api/*+双侧 fixture;机制 C 白名单(jumptable.rs)→合并前独立复核。
+>   **P0-A 进展(2026-09-22,wt/sb-switchnorm wip 68ba315..HEAD)**: match_model/recover_labels/
+>   trivial_switch_over/foldInNormalization/foldInGuards(表级)已移植+ActionSwitchNorm 接线;
+>   foldIn* 模型层语义修正(foldInOneGuard 补 hasFoldedDefault/noInterveningStatement/
+>   getFlipPath/isBooleanFlip;Basic2 结构改虚派发忠实形态;Assisted 真实实现;Override 删
+>   INVENTED is_trivial 分支;addBlockToSwitch lastBlock=sizeOut;foldInNormalization 改走
+>   op_set_input);BlockBasic::no_intervening_statement 新移植(block.cc:2712)。
+>   E2E: curl 124 defects=0/numbering=0 skeleton 3711→3705(基线 /dev/shm/rugra-tests/
+>   sb-baseline/curl_new.c@0acde30 同门禁重跑);gp --func 869→864 且根因症状
+>   `(0x57 < config_00 - 0x23);` 悬空残骸消除(foldInGuards 中和守卫 CBRANCH@0x3fc5);
+>   glob_set 91→90 switch 表达式 cast 链缩短;gp switch 结构仍需 P0-B(bb125 sizeOut=2
+>   抢占 obvious-exit,根因报告 §B3 双缺一不可);B2 双侧 fixture 待 root 集成阶段固化。
 > - `BLOCKSTRUCT-MULTIGOTO-0001`(新开 P0-B): 补 newBlockMultiGoto+ruleBlockGoto isSwitchOut
 >   arm+printc 发射(blockaction.rs/printc.rs);待派;机制 C 白名单。
 > 验收(gp_switch): --func getparameter.constprop.0 switch 结构恢复+glob_set 改善+curl/httpd
