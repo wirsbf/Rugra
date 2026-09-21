@@ -287,17 +287,174 @@ pub(crate) fn rewrite_in_edges_to_idx(
 /// composite (e.g. both the outer condition's false-exit and the inner
 /// clause's exit retarget onto the shared merge block, which must end with
 /// exactly one in-edge from the composite so ruleBlockCat can chain it).
+///
+/// RUGRA-GLUE guard discipline: the oracle's eliminateInDups/eliminateOutDups
+/// (block.cc:447-501) perform each duplicate's PAIRED half-deletes
+/// synchronously — `halfDeleteInEdge(i)` here plus `bl->halfDeleteOutEdge(rev)`
+/// on the peer — over raw pointers with no locking. The former port ran the
+/// whole dedup under ONE `bl.write()` guard, so the peer-side half-delete (and
+/// the sliding repairs that target `bl` from a peer's slide) hit a held lock
+/// and either mis-routed the repair to the wrong block's list (the switch
+/// goto-case unlock OOB crash) or deadlocked convergence. This orchestrator
+/// keeps the oracle's exact per-duplicate semantics but takes ONE guard at a
+/// time: `bl`'s guard covers only `bl`-side mutations, is dropped before the
+/// peer-side half-delete runs, so every reciprocal repair (both directions,
+/// including repairs back onto `bl`) executes synchronously exactly as in
+/// Ghidra. The per-Funcdata graph rewrite is single-threaded, so no mutation
+/// can interleave in the guard-drop windows.
 pub(crate) fn dedup_edges_all_types(bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
-    // Ghidra selfIdentify ends with FlowBlock::dedup (block.cc:930->525),
-    // whose eliminateInDups/eliminateOutDups remove duplicates with PAIRED
-    // half-deletes (block.cc:461-462 / 490-491), keeping every surviving
-    // edge's reciprocal reverse_index consistent on BOTH sides. The former
-    // one-sided `edges.remove(i)` dedup slid the local list without the
-    // peer corrections, leaving stale reverse_index entries that later
-    // indexed out of bounds (BLOCK-RECIPROCAL-OOB-0001). The trait-level
-    // `dedup(self_arc)` runs the faithful protocol for every block type
-    // (Ghidra's edge arrays live on the FlowBlock base).
-    bl.write().unwrap().dedup(bl);
+    // Ghidra dedup (block.cc:530-535): findDups(intothis) → eliminateInDups
+    // for each dup peer; clear; findDups(outofthis) → eliminateOutDups.
+    let in_dups = find_dup_peers(bl, true);
+    for peer in in_dups {
+        eliminate_dup_pairs(bl, &peer, true);
+    }
+    let out_dups = find_dup_peers(bl, false);
+    for peer in out_dups {
+        eliminate_dup_pairs(bl, &peer, false);
+    }
+}
+
+// Ghidra: block.cc:507 FlowBlock::findDups
+/// Discover peer blocks that are the endpoint of 2+ edges in `bl`'s in- or
+/// out-list (whichever `incoming` selects), using Ghidra's mark/mark2
+/// protocol. `bl` is read under a short guard; peers take transient write
+/// guards for the marks (no nesting: `bl` holds only a read guard).
+fn find_dup_peers(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    incoming: bool,
+) -> Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+    let edges: Vec<crate::block::BlockEdge> = {
+        let g = bl.read().unwrap();
+        if incoming {
+            (0..g.size_in()).filter_map(|s| g.get_in(s)).collect()
+        } else {
+            (0..g.size_out()).filter_map(|s| g.get_out(s)).collect()
+        }
+    };
+    // cc:507-523: mark peers on first sight (f_mark); a second sight with
+    // f_mark already set is a duplicate (report once, f_mark2).
+    let mut duplist: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+    for e in &edges {
+        let mut p = match e.point.try_write() {
+            Ok(g) => g,
+            Err(_) => {
+                // The only contended peer under the single-guard discipline
+                // is `bl` itself (a self loop whose guard we hold as a READ
+                // here — try_write fails). Ghidra's findDups sees it like any
+                // other peer; treat the address-equal peer through the same
+                // mark protocol by skipping the lock (marks live on `bl`'s
+                // state which we can re-take after the read guard drops —
+                // simplified below by re-scanning self edges separately).
+                continue;
+            }
+        };
+        if p.get_flags() & crate::block::block_flags::MARK2 != 0 {
+            continue;
+        }
+        if p.get_flags() & crate::block::block_flags::MARK != 0 {
+            if !duplist.iter().any(|a| Arc::ptr_eq(a, &e.point)) {
+                duplist.push(e.point.clone());
+            }
+            p.set_flags(crate::block::block_flags::MARK2);
+        } else {
+            p.set_flags(crate::block::block_flags::MARK);
+        }
+    }
+    // Erase marks (cc:520-522) — same lock discipline.
+    for e in &edges {
+        if let Ok(mut p) = e.point.try_write() {
+            p.clear_flags(
+                crate::block::block_flags::MARK | crate::block::block_flags::MARK2,
+            );
+        }
+    }
+    // Self loops could not be marked through the lock; a parallel self-edge
+    // pair (2+ edges pointing at `bl` itself) is reported directly
+    // (optimistically — the eliminate scan below is a safe no-op when false).
+    let self_count = edges.iter().filter(|e| Arc::ptr_eq(&e.point, bl)).count();
+    if self_count > 1 && !duplist.iter().any(|a| Arc::ptr_eq(a, bl)) {
+        duplist.push(bl.clone());
+    }
+    duplist
+}
+
+// Ghidra: block.cc:447 FlowBlock::eliminateInDups / block.cc:475 FlowBlock::eliminateOutDups
+/// Eliminate duplicate edges between `bl` and `peer` (`incoming` selects
+/// duplicates in `bl`'s in-list — eliminateInDups — vs its out-list —
+/// eliminateOutDups), keeping the first instance and OR-merging labels, with
+/// the oracle's PAIRED half-deletes (cc:461-462 / cc:490-491). One guard at a
+/// time: `bl`'s guard covers the label merge + this-side slide (the slide's
+/// reciprocal repairs hit only free peers or `bl` itself — the self-loop arm);
+/// the guard drops before the peer-side half-delete, so its repairs back onto
+/// `bl` also run synchronously.
+fn eliminate_dup_pairs(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    peer: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    incoming: bool,
+) {
+    let self_loop = Arc::ptr_eq(bl, peer);
+    loop {
+        // Find the next (keep, dup) pair under bl's guard; perform bl-side
+        // mutations; return the peer-side reciprocal slot for phase 2.
+        let peer_phase: Option<i32> = {
+            let mut g = bl.write().unwrap();
+            let list: &mut Vec<crate::block::BlockEdge> = if incoming {
+                g.in_edges_mut()
+            } else {
+                g.out_edges_mut()
+            };
+            let mut keep: Option<usize> = None;
+            let mut dup: Option<(usize, u32, i32)> = None;
+            for (i, e) in list.iter().enumerate() {
+                if Arc::ptr_eq(&e.point, peer) {
+                    match keep {
+                        None => keep = Some(i),
+                        Some(_) => {
+                            dup = Some((i, e.flags, e.reverse_index));
+                            break;
+                        }
+                    }
+                }
+            }
+            let Some((dup_slot, label, rev)) = dup else {
+                return; // No more duplicates of this peer.
+            };
+            let keep_slot = keep.expect("duplicate without a kept instance");
+            list[keep_slot].flags |= label;
+            if incoming {
+                g.half_delete_in_edge(dup_slot);
+            } else {
+                g.half_delete_out_edge(dup_slot);
+            }
+            if self_loop {
+                // The peer is this block; the paired half-delete is also
+                // this-side — done under the same guard (block.cc:461-462's
+                // bl->halfDeleteOutEdge(rev) with bl == this).
+                if incoming {
+                    g.half_delete_out_edge(rev.max(0) as usize);
+                } else {
+                    g.half_delete_in_edge(rev.max(0) as usize);
+                }
+                None
+            } else {
+                Some(rev)
+            }
+        }; // bl's guard dropped here.
+        match peer_phase {
+            None => continue, // self-loop pair fully handled; scan for more.
+            Some(rev) => {
+                // Peer-side paired half-delete (block.cc:461-462 / 490-491)
+                // with `bl` unlocked: repairs targeting `bl` are synchronous.
+                let mut p = peer.write().unwrap();
+                if incoming {
+                    p.half_delete_out_edge(rev.max(0) as usize);
+                } else {
+                    p.half_delete_in_edge(rev.max(0) as usize);
+                }
+            }
+        }
+    }
 }
 
 // RUGRA-GLUE: 不变量修复 helper（Ghidra 无此独立函数——selfIdentify 经
