@@ -84,3 +84,62 @@ ACTIVEPARAM-COUNT-9V2-0001 RCA-1 药方:worker :3435
   master 消费端记录新首分歧层(预期 0x2534 CALLIND/RETURN 对消失,
   D9 事件数 335vs479 与 op 集 96457vs129745 显著收窄,如实报告)。
 - mirror E2E 全量(curl/httpd)信息性跑,如实记录 skeleton 变化(非门禁)。
+
+---
+
+## 6. M4 验证结果(2026-09-22,wt/sb-rust @ e54fcda)
+
+命令:`RUGRA_STAGE_PROJ=1 RUGRA_STAGE_FUNC=next_url RUGRA_STAGE_PROJ_OUT=…
+RUGRA_FLOW_MIRROR=1 RUGRA_BARE_LOAD=1(±RUGRA_ORACLE_FIXTURE_DATA=1)`。
+
+### 投影身份与首分歧(master 消费端 tools/stage_bisect.py --v1)
+
+- META load_mode=`single_function_bfd`(镜像落地,D10 条件满足),身份键全过,
+  消费端进入真实逐层比较(此前 V1_META_MISMATCH 硬挡)。
+- **PLT 对消失**:oracle 投影首 op `2534:54 CALLIND in=n:ram:16fa0:8` 与人工
+  `2534:2cc RETURN` 在 rugra 侧逐字节出现(镜像前 rugra 银行从 `4ff4:0` 开始,
+  PLT 对整体缺失,首分歧=完成序 ordinal 1 / op-idx 0)。
+- **+RUGRA_ORACLE_FIXTURE_DATA=1**(裸环境第三门,关 FLOW-NORETURN-DATA-0001
+  两段):完成序前缀 **0 → 4 个 stage 全字节匹配**;新首分歧 = ordinal 5
+  (seq 6 `universal:prototypetypes`,两侧 727 ops)op-idx 1:人工 RETURN
+  `2534:2cc` rugra 侧多出第二输入 `n:register:0:8`(RAX 挂上 halt RETURN;
+  oracle 侧该值经 INDIRECT `[create]` 群表达,drill L1500-1501)。
+  flow 完成 op 数 717 = oracle 717。
+- 不加 ORACLE_FIXTURE_DATA(任务最小集):首分歧回到 ordinal 2
+  (`universal:start`)——(a) rugra-only `50b8:ab RETURN`(known-no-return
+  仿真 halt,raw BFD 无此 analyzer);(b) 5040/506d 块发现顺序旋转
+  (SeqNum time 顺序差,noreturn 截流改变 addrlist 演化所致)。
+
+### 数字(如实)
+
+| 指标 | oracle | rugra 镜像前(L2) | rugra MIRROR+BARE | +FIXTURE_DATA |
+|---|---|---|---|---|
+| 事件数(@BEGIN) | 335 | 479 | 479 | 479 |
+| 全 SNAP op 行合计 | 96457 | 129745 | 146770 | 152809 |
+| flow 完成 raw ops | 717* | 717* | 718 | **717 = oracle** |
+| 完成序全匹配前缀 | — | 0 stage | 0 stage(PLT 对已现,序旋转) | **4 stages** |
+| 首分歧 | — | ord 1 / op-idx 0(PLT 缺失) | ord 2(50b8 halt+序旋转) | ord 5 seq 6 prototypetypes(RAX 挂 RETURN) |
+
+*镜像前 flow op 数含出界改写 CALL 对,与 oracle 的 717 同数但集合不同。
+
+op 合计未收窄(96457→152809)的解释:该口径=Σ(每 SNAP 全银行),rugra 后段
+银行仍被既有下游分歧(R0 opStackLoad/heritage 族)放大;镜像改变的输入构造层
+已收敛(前 4 stage 全等,PLT 对逐字节等)。事件数 335vs479 属 Action 树应用计数
+层,不在本 lane 范围。
+
+### E2E(env off / mirror)
+
+- env 全 off:改前/改后全语料 E2E 输出字节一致(cmp 通过,两次,最终二进制复验)。
+- RUGRA_FLOW_MIRROR=1 全语料 E2E(信息性,见 /dev/shm/rugra-tests/sb-rust/
+  mirror_e2e.c):数字见 commit message;默认门禁不受影响(root 依据 E2E 影响
+  数据再裁默认翻转)。
+- httpd_decompile 走 inject_raw_ops 线性扫描路径,不读该 env,mirror 不适用。
+
+### E2E 实测数字(信息性,vs tests/golden/ghidra_curl_1204.c)
+
+- env off(默认):skeleton **3711** / defects 0 / numbering 0;改前基线字节一致。
+- RUGRA_FLOW_MIRROR=1:skeleton **3824**(+113)/ defects 0 / numbering 0;124/124。
+- +113 的主形态:共享返回 override 关闭后,尾跳 PLT 站点按 CALLIND 渲染为
+  `(*(code *)PTR_…)(x)`(失去按名解析,如 free/puts;golden 生成环境含
+  PLT-thunk analyzer,raw BFD 语义本就无名字层)+ frame_dummy 返回恢复
+  (void→long)与少量文本平移。镜像模式下这些站点的名字层属后续消费侧课题。
