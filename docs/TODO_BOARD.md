@@ -4,6 +4,92 @@
 
 ## 活跃 wave：`W-2026-09-01-FLEET5`（2026-09-01 起；goal=所有函数文本级对齐；并发上限 5=用户指令）
 
+> ### 派发：STAGE-BISECT-E2E（2026-09-21 root，deepwork 最高并发指令）
+> **目标**：双侧 stage 投影生产端 + curl top 函数差异归因（3718 skeleton → 根因清单）。
+> **车道**：Lane A `wt/sb-oracle`（oracle 投影 harness，owner=sb-oracle-agent）；
+> Lane C `wt/sb-rust`（Rust emitter，owner=sb-rust-agent）；
+> Lane D inventory（主仓只读，owner=sb-inventory-agent）；
+> Gate 1-4 = oracle 规范/保真/首分歧/根因表评审。
+> **write-set**：A=`tools/stage_projection_1204*.cc|sh, tests/oracle/*(新增)`，
+> C=`examples/*(新增), src/ 仅限 RUGRA-GLUE 只读访问器, docs/api/*`，
+> D=仅 /dev/shm。临时测试代码一律 /dev/shm/rugra-tests/<branch>/。
+> **验收**：next_url 双侧投影 + `tools/stage_bisect.py` 首分歧输出 + top 函数归因表。
+> 状态与规范：`.slim/deepwork/stage-bisect-e2e.md`。
+> **进展（2026-09-21 root）**：Gate 1 通过,规范 v1.1 锁定(M1/M2/枚举算法已钉死)。
+> Lane D 完成:top-15 清单+入口地址=/dev/shm/rugra-tests/sb-inventory/top_diff_inventory.md
+> (main 1248/getparameter.constprop.0 869 领跑;Rugra 单函数选择可行)。
+> Lane H 完成:fresh 基线 curl **3711/0/0**(sha 023d6ab5…,已回流 result/curl_cur.c)、
+> httpd **3576/0/0**——**较 W4 +1232 = 主仓回归**(main 653→1180/ap_fini_vhost_config 258→625/
+> ap_pregsub 222→345/ap_update_vhost_from_headers 221→319),报告
+> /dev/shm/rugra-tests/sb-baseline/BASELINE_REPORT.md。
+> **派生 Lane I**(wt/sb-httpd):70f4449..0acde30 commit 二分定位回归,产物
+> /dev/shm/rugra-tests/sb-httpd/HTTPD_REGRESSION_REPORT.md;**Lane M**:httpd 29/2010
+> 语域调查,产物 /dev/shm/rugra-tests/sb-corpus/HTTPD_CORPUS.md。
+> **Lane I 已收案(root 2026-09-21)**:bisect 判定 **first bad=79bb0f6**("align: CALLSPEC-DRIVER-0001
+> flow-time callspec anchoring on the inject path",src/{flow,funcdata}.rs 等 4 文件)——httpd
+> 2344→3576,父提交 0f8fc1b=2344 good,判定无歧义;curl 同期未受损。回归 profile:main +527/
+> ap_fini_vhost_config +367/ap_pregsub +123 等 20+ 函数。**Lane N 已派发**(wt/sb-httpd 续用):
+> M1 根因(对照 Ghidra flow.cc setupCallSpecs/fspec.cc FuncCallSpecs 四类语义)→M2 最小修复
+> (门禁:httpd≤2350、curl≤3715、defects=numbering=0)→M3 定稿;禁整段回退 79bb0f6。
+> **Lane M 结论**:29 函数=ELF 地址序前 30 跳过 _start(MAX_FUNCS=30),非硬编码;建议 httpd 作
+> 小规模 follow-on pilot,暂缓全量 2010 扩容。
+> **消费端链已闭环(root 2026-09-22,master `5b52c92`)**: Lane E(2c9c8b4)→Gate 2-E
+> REJECT(B-1 嵌套/B-2 假 MATCH 通道/R-1/R-2/R-3)→Lane R 返修(006db61)+规范转正
+> (74ef199)→Gate 2-E attempt2 **APPROVE**(三未决问题裁维持现状)→F-1(@RESTART 帧内
+> 合法化)root 亲修(bb9920b)→集成。selftest 28/28。规范 repo 契约=
+> docs/alignment_docs/STAGE_BISECT_SPEC_1204.md。
+> **Lane S 完成**: sb-batch/{targets.json(153 目标),batch_driver.py(断点续跑/超时/pending),
+> README}+CLI 契约(run_stage_projection_oracle.sh <corpus> <addr> <name> / RUGRA_STAGE_FUNC=<addr>)。
+> **D9/D10 裁决落地(v1.2.2 已入库 master)**: D9=perform 级事件正典,oracle harness 收敛
+> (删 break_action ≈15 行,oppool1 事件 28→18),Rugra/消费端零改动;D10=golden 路径正典
+> (followFlow 无界-range),oracle 不动,**Rugra 需实现流跟随镜像**——登记
+> `RUGRA-FLOW-MIRROR-0001`(P0,C-alignment 系列承接,write-set=examples 驱动层+FlowInfo
+> 无界-range 语义;完成前 load_mode 发 `single_function_flow`,完成后切
+> `single_function_bfd`)。Phase 2 next_url 对拍在 D9 修复+D10 镜像完成后开启。
+> **D14 定性(2026-09-22,Lane AI)**: activeparam 9v2 主因=**签名库环境不对称**(Rugra
+> 全语料 libc 签名台账锁 7/9 callee vs oracle 裸 BFD)——D10/D11 族环境假阳性;登记
+> `ACTIVEPARAM-COUNT-9V2-0001`(P1),裁决路径=Rugra 投影产线加"单函数无签名"双态开关
+> 重跑(预期 9,9,0)+maxdelay 实值探针(RCA-2: 有效 maxpass oracle=1 vs rugra=2,fspec 域,
+> 候选真差)。**Phase 2 前置新增**: 对拍框架须先钉平签名库环境(并入 RUGRA-FLOW-MIRROR
+> lane 的双态开关)。
+> **Lane X 完成(2026-09-22)**: gp switch 丢失根因闭合(报告 sb-switch/GP_SWITCH_ROOTCAUSE.md)
+> ——符号/导入层无罪(config 已安装,DAT 引用 100%=config 字段);真凶=①**类型分派缺
+> Spacebase 覆写**(datatype.rs:838 把 Spacebase 硬编码 (None,off),oracle 经虚分派
+> TypeSpacebase::getSubType type.cc:2947 保住 PTRSUB)→gp 16 行 __spacebase 族;
+> ②**打印层优先级反了**(printc.rs:5752 Priority-0 地址代理先于符号解析,oracle
+> pushSymbolDetail 无代理走 pushPartialSymbol)+driver span 不感知播种→main/gp 165 行
+> DAT 族。**新登记**: `TYPE-SPACEBASE-SUBTYPE-DISPATCH-0001`(P0,owner=spacebase-agent,
+> wt/sb-spacebase,write-set=src/datatype.rs+docs/api)与
+> `PRINTC-GLOBALSYM-LEAF-PRIORITY-0001`(P0,待 MultiGoto lane 退出 printc.rs 后派,
+> 注意勿伤合法 .rodata &DAT 形态)。
+> **消费端 quirk 登记(v1.2.1 落地时发现)**: 锁定 oracle opcode_name[] 表 60/61/65/66
+> 槽=BUILD/DELAY_SLOT/LABEL/CROSSBUILD(枚举标签为 MULTIEQUAL/INDIRECT/PTRADD/PTRSUB),
+> get_opname 按表下标返回→**Rugra emitter 对这四 op 必须发表字符串**,parity 检查显式
+> 覆盖(绑定 C 侧 v1.2 对齐 lane)。
+> ——jumptable 恢复无罪(88 entries 精确匹配);真凶=**①ActionSwitchNorm 空壳**
+> (coreaction.rs:3611-3636 matchModel/recoverLabels/foldIn* 调用全注释,fold_in_normalization/
+> fold_in_guards 已移植于 jumptable.rs:2648/3095 但零调用方)+**②newBlockMultiGoto 未移植**
+> (block.cc:1716-1755,try_rule_goto 显式跳过 switch 块);叠加致 ruleBlockSwitch 守卫 111 次
+> 全拒于 blockaction.cc:1705。**新登记**:
+> - `JUMPTABLE-TABLEAPI-0001`(并入 P0-A): 激活 SwitchNorm 真身(match_model/recover_labels
+>   +接线既有死代码),owner=switchnorm-agent(wt/sb-switchnorm),write-set=src/{coreaction,jumptable}.rs
+>   +docs/api/*+双侧 fixture;机制 C 白名单(jumptable.rs)→合并前独立复核。
+>   **P0-A 进展(2026-09-22,wt/sb-switchnorm wip 68ba315..HEAD)**: match_model/recover_labels/
+>   trivial_switch_over/foldInNormalization/foldInGuards(表级)已移植+ActionSwitchNorm 接线;
+>   foldIn* 模型层语义修正(foldInOneGuard 补 hasFoldedDefault/noInterveningStatement/
+>   getFlipPath/isBooleanFlip;Basic2 结构改虚派发忠实形态;Assisted 真实实现;Override 删
+>   INVENTED is_trivial 分支;addBlockToSwitch lastBlock=sizeOut;foldInNormalization 改走
+>   op_set_input);BlockBasic::no_intervening_statement 新移植(block.cc:2712)。
+>   E2E: curl 124 defects=0/numbering=0 skeleton 3711→3705(基线 /dev/shm/rugra-tests/
+>   sb-baseline/curl_new.c@0acde30 同门禁重跑);gp --func 869→864 且根因症状
+>   `(0x57 < config_00 - 0x23);` 悬空残骸消除(foldInGuards 中和守卫 CBRANCH@0x3fc5);
+>   glob_set 91→90 switch 表达式 cast 链缩短;gp switch 结构仍需 P0-B(bb125 sizeOut=2
+>   抢占 obvious-exit,根因报告 §B3 双缺一不可);B2 双侧 fixture 待 root 集成阶段固化。
+> - `BLOCKSTRUCT-MULTIGOTO-0001`(新开 P0-B): 补 newBlockMultiGoto+ruleBlockGoto isSwitchOut
+>   arm+printc 发射(blockaction.rs/printc.rs);待派;机制 C 白名单。
+> 验收(gp_switch): --func getparameter.constprop.0 switch 结构恢复+glob_set 改善+curl/httpd
+> E2E defects=numbering=0 无回归+B2 fixture。
+
 > **基线（root 亲测 @ master `85300a1`，2026-09-01 fresh formal release E2E）**：
 > curl 124/124、skeleton **3090**/defects **0**/numbering **0**，stdout sha256
 > `ff6bef47cf0154be1bd3e460882556e4f80f465b580e773b202895d890768a48`（已回流 result/curl_cur.c）；
@@ -195,6 +281,7 @@
 | 已集成(e673d88a,复核=reviewer-callin0 在途) | `COREACTION-CALLIN0-CLOBBER-0001` | **FIXED**(FUN_0 63→0;ActionDeadCode 恢复 cc:3846 首操作数全量 consume 保证;防御性=inject 路径无 spec 的成因绑 CALLSPEC-DRIVER-0001;fixture 5/5 MATCH) | `src/coreaction.rs`(已落库) | httpd 2278→2279(+1 调用目标恢复) |
 | unassigned(w-scopefix 新派) | `FUNCDATA-SCOPELOCALOVERFLOW-0001` | OPEN(registry9 移交:debug 构建 panic) | 待认领(`src/funcdata.rs`) | scope_local_find_overlap(funcdata.rs:173)debug 构建 i32 符号扩展溢出 panic(release 门禁掩盖);按 Ghidra findOverlap 语义修复 |
 | unassigned | `CALLSPEC-DRIVER-0001` | OPEN(1:1 根因,inject 路径补 flow-time callspec 锚定) | 待认领(`src/funcdata.rs`/`src/flow.rs`;pushme 完成后接) | Ghidra flow.cc:683-690 setupCallSpecs 无条件挂 spec+换 in(0) 为 fspec 注解;Rugra inject 出生带 flag 无对象 |
+| sb-httpd-agent@wt/sb-httpd(2026-09-22) | `CALLSPEC-DRIVER-0002` | **PARTIAL-FIXED**(门条件已落;解除门条件待尾部移植) | `src/funcdata.rs`+`docs/api/funcdata.md`(已落库);解除需 `src/heritage.rs`/`src/coreaction.rs`(ActionCopyPropagation 缺失) | 79bb0f6 把锚定三步(flow.cc:683-686)移植到 inject 边界但跳过原子尾部(flow.cc:688-694 queryCall/checkForFlowModification);无模型载体的 driver(httpd 裸 Architecture::new)注册半初始化 spec 进 qlst→heritage.cc:362-364 极性翻转激活逐 call 守卫而 FuncLink/ActiveParam 无模型挂实参→httpd skeleton 2344→3576(+379 条 x=x 死拷贝链;curl 不受影响=最终路径走 setup_call_specs+driver link_call_specs 完成尾部)。修复=qlst 注册门 `fd.funcp.has_model()`(annotation swap 无条件保留,CALLSPEC-DRIVER-0001 意图不回退);实测 httpd 2343/0/0,curl 3711/0/0。根因报告=/dev/shm/rugra-tests/sb-httpd/ROOT_CAUSE.md(易失,要点已录入本行与 docs/api/funcdata.md)。解除门条件=(a)queryCall/checkForFlowModification 尾部移植到 driver 边界(driver callee 表+defaultfp 模型,同 curl link_call_specs 架构)+(b)补 ActionCopyPropagation(coreaction.cc:5510-5511,Rugra universal 树缺失——守卫重载拷贝以语句存活的直接原因) |
 | 已集成(6c533eba) | `HTTPD-URAM-SYMBOLIZE-0001` | **FIXED**(uRam 调用 87→0;根因=前端导入:.dynsym UND→真实目标为无名 .plt.sec thunk;补 ElfPltImports 解析+.plt.got;82 thunk+5 FUN_ 名与 golden 拼写逐一相同) | `src/debugproto.rs`(已落库) | httpd 2278→2274;残差=main 的 FUN_fff…90 间接调用族+5 处数据侧 uRam(DAT_ 标签族,另案) | 待认领(printc/varmap 域) | httpd 调用打印 uRam<addr>() 而非函数名 | 待认领(`src/coreaction.rs`;f23 完成后接) | "analysis"组 STORE 压力下把 CALL coderef 换 const:0(FUN_0 症状);前缀二分 DECOMPILE prefix 18→19;复现工具 examples/x86push_dbg.rs | | OPEN(爆炸半径大,独立任务) | 待认领(`src/disasm/x86_lift.rs`) | push 仍零-op(push88 语义,1385 处,影响全部函数序言) |
 | unassigned | `X86LIFT-SHIFTS-FLAGS-0001` | OPEN(后续 family) | 待认领(同上) | shl/shr/sar 的 flag 语义(~38 op/条)未实现 |
 | w-iced(接) | `X86LIFT-ZEROOP-ARMS-0001` | OPEN(P1,已路由 iced) | `src/disasm/x86_lift.rs`(w-iced 租约) | movzx/movsx/pop 等零-op 指令臂补齐(对照 ia.sinc);消解 httpd +160 空投影;golden 在这些地址设 LAB 标签为证 | 僵尸决策块成因=上游断边路径跳过 op-destroy(rounds 27-30 逐轮退化 o2→o1→o0);oracle 由 branchRemoveInternal(funcdata_block.cc:203-204)在 sizeOut==2 时先销毁 cbranch;ap_strcasecmp_match 输出数据流仍退化(垃圾常量 0xbaadef)属其下游 | | OPEN(被掩盖的既有缺陷) | 待认领(blockaction/collapse 域;现租约=maingo) | ap_strcasecmp_match(第29函数)collapse restart 不收敛:orderLoopBodies→finalize 3→1 零进展无限重复(15s 112,865 次);证据=/tmp/w-httpd-fix1.err |

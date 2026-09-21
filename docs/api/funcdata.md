@@ -553,6 +553,25 @@ push 等价），callin0 防御分支（COREACTION-CALLIN0-CLOBBER-0001）的退
 （生产中全部 CALL 出生路径——本锚定 + coreaction deindirect + fspec setFuncdata——
 均带 spec 对象），退役动作留给 coreaction 域。
 
+2026-09-22 CALLSPEC-DRIVER-0002（注册门条件）：`qlst.push_back`（`add_call_specs_
+owner`）增加门条件 `fd.funcp.has_model()`。Ghidra 的 `setupCallSpecs` 是原子的——
+flow.cc:686 注册永不脱离 flow.cc:688-694 尾部（applyPrototype/queryCall/
+checkForFlowModification），而尾部解析依赖架构模型空间（queryFunction ->
+otherfunc->getFuncProto() -> cspec 绑定的 defaultfp，flow.cc:660-664）。无模型载体的
+driver（httpd 的裸 `Architecture::new()`，`funcp.has_model()==false`）跑不了尾部，
+却把半初始化 spec 注册进 qlst，会激活 Heritage 逐 call 效果守卫
+（`Heritage::callOpIndirectEffect`，heritage.cc:362-364：有 spec 即从保守极性翻到
+模型查询）而 ActionFuncLink/ActionActiveParam 无模型可挂实参——每个 call 点长出
+无消费方可吸收的 indirect-effect barrier 重载拷贝（实测 httpd 29/29 函数 skeleton
+2344→3576，+379 条 `x = x` 死拷贝链；main 137→669 行）。门条件落地后：annotation
+swap（CALLSPEC-DRIVER-0001 所列 has_callspec/printc/deadcode 表面）无条件保留，
+仅 qlst 注册等待模型载体；curl 原型 worker 绑定 cspec 模型
+（FUNCPROTO-MODEL-BIND-0001），锚定行为不变。实测：httpd 2343/defects=0/
+numbering=0，curl 3711/defects=0/numbering=0。解除本门条件的修复路径：把
+queryCall/checkForFlowModification 尾部移植到 driver 边界（driver 侧 callee 表 +
+defaultfp 模型）并补 `ActionCopyPropagation`（coreaction.cc:5510-5511，Rugra
+universal 树缺失——守卫重载拷贝今天能以语句形式存活的直接原因）。
+
 #### 它在主链路中的位置
 
 ```text
@@ -2171,3 +2190,10 @@ N1/N2/N3:inedge 0/1 + 最小矩阵):克隆输出 space/offset/size、flag/addlfl
 MULTIEQUAL→COPY inedge 拾取、clone 输入重映射/共享/常量、原块分裂后形态、
 入边计数 — 双侧 stdout 字节一致 MATCH
 (tools/run_funcdata_nodesplit_space_oracle.sh)。
+
+## 2026-09-22（返修）：流程克隆的模型 clone 调用点
+
+`Funcdata` 流程克隆(clone for partial recovery, ~funcdata.rs:11355)中
+`model.clone_model(cloned_table.clone())` 改为 `model.clone_model()`
+——jump 模型已无父表回指字段,父表状态经 `JumpParentFacts` 值参数下传
+(见 docs/api/jumptable.md 返修节),clone 不再需要新父 Arc。

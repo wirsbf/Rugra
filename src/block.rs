@@ -2031,6 +2031,84 @@ impl BlockBasic {
         true
     }
 
+    // Ghidra: block.cc:2712 BlockBasic::noInterveningStatement
+    /// Check for values created in \b this block that flow outside the block.
+    ///
+    /// The block can calculate a value for a BRANCHIND or CBRANCH and can copy
+    /// values and this method will still return \b true. But calculating any
+    /// value used outside the block, writing to an addressable location, or
+    /// performing a CALL or STORE causes the method to return \b false.
+    /// Faithful to `noInterveningStatement` (block.cc:2712-2747).
+    pub fn no_intervening_statement(&self) -> bool {
+        // RUGRA-GLUE: Ghidra compares `op->getParent() != this` by C++ pointer
+        // identity. Rugra blocks live behind Arc<RwLock<dyn FlowBlock>>;
+        // ops' parents and this block's self_ref are weak refs to the same Arc
+        // (set together by BlockGraph::add_block, block.rs:2792-2800), so
+        // Arc::ptr_eq is the identity test. A block never inserted into a
+        // graph has no self_ref; Ghidra cannot express that state (PcodeOp
+        // parents are assigned on insert), so we conservatively treat an
+        // unidentifiable self as "intervening" (return false).
+        let self_arc = self.self_ref.as_ref().and_then(|w| w.upgrade());
+        for bop_ref in &self.ops {
+            // cc:2721-2722: markers and branches never count.
+            let (is_marker, is_branch, eval_special, opcode, is_call, outvn) = {
+                let bop = bop_ref.0.read().unwrap();
+                let outvn = bop.get_out().cloned();
+                (
+                    bop.is_marker(),
+                    bop.is_branch(),
+                    bop.get_eval_type() == crate::op::pcodeop_flags::SPECIAL,
+                    bop.opcode,
+                    bop.is_call(),
+                    outvn,
+                )
+            };
+            if is_marker {
+                continue;
+            }
+            if is_branch {
+                continue;
+            }
+            // cc:2723-2734: special ops reject CALL/STORE/NEW; other ops skip
+            // COPY/SUBPIECE.
+            if eval_special {
+                if is_call {
+                    return false;
+                }
+                if opcode == OpCode::CPUI_STORE || opcode == OpCode::CPUI_NEW {
+                    return false;
+                }
+            } else if opcode == OpCode::CPUI_COPY || opcode == OpCode::CPUI_SUBPIECE {
+                continue;
+            }
+            // cc:2735-2737: address-tied outputs leave the block by aliasing.
+            let Some(outvn) = outvn else {
+                continue;
+            };
+            if outvn.read().unwrap().is_addr_tied() {
+                return false;
+            }
+            // cc:2738-2744: any descendant outside this block disqualifies.
+            let descendants: Vec<_> = outvn.read().unwrap().descend_iter().collect();
+            for desc in descendants {
+                let desc_parent = desc
+                    .read()
+                    .unwrap()
+                    .parent
+                    .as_ref()
+                    .and_then(|w| w.upgrade());
+                let same_block = match (&self_arc, &desc_parent) {
+                    (Some(s), Some(p)) => Arc::ptr_eq(s, p),
+                    _ => false,
+                };
+                if !same_block {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// Add an operation to the end of the block
     // Ghidra: block.hh:466 BlockBasic::insert
     pub fn add_op(&mut self, op: PcodeOpRef) {

@@ -3609,29 +3609,44 @@ impl ActionSwitchNorm {
 impl Action for ActionSwitchNorm {
     // Ghidra: coreaction.cc:4548 ActionSwitchNorm::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
+        // Faithful to ActionSwitchNorm::apply (coreaction.cc:4548-4565).
         // In Ghidra, every JumpTable on `data` was already recovered during
-        // flow tracing (`FlowInfo::recoverJumpTables` → `Funcdata::
-        // recoverJumpTable`, funcdata_block.cc:640) — this action only
+        // flow tracing (`FlowInfo::recoverJumpTables` → Funcdata::
+        // recoverJumpTable, funcdata_block.cc:640) — this action only
         // normalizes the recovered tables. Rugra formerly ran an in-place
         // recovery pre-pass here because flow-time recovery was unwired;
         // JUMPTABLE-PIPELINE-0001 removed it now that the staged flow-time
         // path exists.
         //
-        // coreaction.cc:4549-4558: for each unlabelled table, matchModel /
-        // recoverLabels / foldInNormalization, then foldInGuards (clearing
-        // the structure on change). The fold stages remain L3 gaps.
-        let mut count = 0;
-        for jt_arc in &fd.jump_tables {
-            let is_labelled = jt_arc.read().unwrap().is_labelled();
-            if !is_labelled {
-                // jt->matchModel(&data); jt->recoverLabels(&data);
-                // jt->foldInNormalization(&data);
-                count += 1;
+        // cc:4551-4563: for each unlabelled table, matchModel /
+        // recoverLabels / foldInNormalization, then foldInGuards on every
+        // table (clearing the structure on change). Ghidra iterates by index
+        // over data.numJumpTables(); the table list cannot grow during the
+        // loop (fold-ins only append address entries), so an Arc snapshot is
+        // equivalent.
+        let jump_tables: Vec<_> = fd.jump_tables.clone();
+        for jt_arc in jump_tables {
+            {
+                let mut jt = jt_arc.write().unwrap();
+                if !jt.is_labelled() {
+                    // Ghidra: matchModel/recoverLabels LowlevelError messages
+                    // propagate out of apply verbatim; keep the exact string.
+                    jt.match_model(fd)
+                        .map_err(|e| crate::error::Error::Lowlevel(e.message().to_string()))?;
+                    jt.recover_labels(fd)
+                        .map_err(|e| crate::error::Error::Lowlevel(e.message().to_string()))?; // Recover case statement labels
+                    jt.fold_in_normalization(fd);
+                    self.count += 1;
+                }
             }
-            // if (jt->foldInGuards(&data)) { data.getStructure().clear(); }
+            // cc:4559-4562: fold guards for every table, labelled or not.
+            let folded = jt_arc.write().unwrap().fold_in_guards(fd);
+            if folded {
+                fd.get_structure().clear(); // Make sure we redo structure
+                self.count += 1;
+            }
         }
-        let _ = count;
-        // cc:4559: `return 0;` — Ghidra reports no status change from this
+        // cc:4564: `return 0;` — Ghidra reports no status change from this
         // action regardless of the local counter.
         Ok(action_status::NO_CHANGE)
     }

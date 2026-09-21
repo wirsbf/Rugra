@@ -6855,6 +6855,59 @@ impl Funcdata {
         // 688-693) have no linear-scan counterpart here: this path seeds no
         // overrides, and callee resolution is the driver's pre-flow
         // prototype table.
+        // flow.cc:336-338 (xrefControlFlow CALL arm) -> flow.cc:683-686
+        // (FlowInfo::setupCallSpecs): every CPUI_CALL op carries a
+        // FuncCallSpecs at flow time — `new FuncCallSpecs(op)` captures the
+        // call target from in(0) (fspec.cc:4931-4938), then in(0) is
+        // replaced with the fspec-space annotation Varnode
+        // (`data.opSetInput(op, data.newVarnodeCallSpecs(res), 0)`,
+        // varnode.cc:599-601: FSPEC-space storage is born annotation|
+        // coverdirty, nzm=~0) and the spec joins qlst. On the followFlow
+        // path FlowInfo::setup_call_specs (flow.rs) anchors inside
+        // xref_control_flow; this linear-scan driver path has no xref walk,
+        // so inject_raw_ops — the phase-1.5 boundary between the raw dump
+        // and block formation (the same position the override application
+        // documents above) — carries the guarantee that ActionDeadCode's
+        // cc:3846 first-operand consume, printc's fc->getName() and the
+        // has_callspec flag proxy (typeop.cc:663) all rely on
+        // (CALLSPEC-DRIVER-0001). CALLIND (flow.cc:340-342 ->
+        // setupCallindSpecs flow.cc:707-709) creates a spec WITHOUT the
+        // in(0) swap; no CALLIND is born on this path (the linear-scan
+        // lifter emits only CALL), and the FlowInfo path anchors CALLIND
+        // via setup_callind_specs.
+        //
+        // CALLSPEC-DRIVER-0002 (registration gate): Ghidra's setupCallSpecs
+        // is ATOMIC — flow.cc:686 `qlst.push_back(res)` never happens
+        // without the flow-time tail (flow.cc:688-694: applyPrototype /
+        // queryCall / checkForFlowModification), and that tail's callee
+        // resolution rides on the architecture's model space
+        // (queryFunction -> otherfunc->getFuncProto() -> the cspec-bound
+        // defaultfp; flow.cc:660-664). Rugra's linear-scan drivers split
+        // that atomicity: a driver whose Funcdata carries no bound model
+        // (fd.funcp.has_model() == false — e.g. the httpd driver's bare
+        // `Architecture::new()`) cannot run the tail's resolution half at
+        // all, so registering the half-initialized spec into qlst there
+        // activates Heritage's per-call effect guarding
+        // (Heritage::callOpIndirectEffect, heritage.cc:362-364: a spec flips
+        // the conservative no-spec polarity to a model lookup) while
+        // ActionFuncLink/ActionActiveParam have no model to attach
+        // call-site inputs against — every call site gains indirect-effect
+        // barriers whose reload copies no param/return consumption can
+        // absorb (measured: httpd 29/29 functions, skeleton 2344 -> 3576,
+        // +379 `x = x` dead-copy chains; main alone 137 -> 669 lines).
+        // Gate the qlst registration on the model carrier the tail needs;
+        // the annotation swap (the has_callspec/printc/deadcode surface
+        // CALLSPEC-DRIVER-0001 named) stays unconditional. Curl's prototype
+        // workers bind a cspec model (FUNCPROTO-MODEL-BIND-0001:
+        // FuncProto::setScope -> setModel(defaultfp)) and keep the full
+        // anchoring; its final path anchors via FlowInfo::setup_call_specs
+        // either way. Repair path (removes this gate): port the
+        // queryCall/checkForFlowModification tail onto the driver boundary
+        // with a driver-fed callee table + defaultfp model, and port
+        // ActionCopyPropagation (coreaction.cc:5510-5511, absent from
+        // Rugra's universal tree — the reason the guarded reload copies
+        // survive as statements today).
+        let register_specs = self.funcp.has_model();
         for op_ref in &op_refs {
             if op_ref.0.read().unwrap().opcode == OpCode::CPUI_CALL {
                 let fc = crate::fspec::FuncCallSpecs::new_for_op(
@@ -6864,7 +6917,9 @@ impl Funcdata {
                 let owner = Arc::new(RwLock::new(fc));
                 let call_spec_vn = self.new_varnode_call_specs(&owner);
                 self.op_set_input(op_ref, call_spec_vn, 0);
-                self.add_call_specs_owner(owner);
+                if register_specs {
+                    self.add_call_specs_owner(owner);
+                }
             }
         }
 
@@ -11352,7 +11407,7 @@ impl Funcdata {
             let cloned_model = table
                 .jmodel
                 .as_ref()
-                .map(|model| model.clone_model(cloned_table.clone()));
+                .map(|model| model.clone_model());
             drop(table);
             {
                 let mut cloned = cloned_table.write().unwrap();

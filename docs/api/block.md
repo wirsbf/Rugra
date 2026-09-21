@@ -1562,3 +1562,11 @@ body_is_dead 门禁 + RC-4 循环形态 + RC-5 条件错接均未修），内容
   的 RUGRA_DUMP_FUNC hook 与 examples/blockstruct_tree_dump.rs 使用。
 - `dbg_front_leaf_start_addr`：穿透 BlockCopy 包装读 front leaf 起始地址（组合
   节点自身无地址；BlockCopy 未覆写 get_start_addr）。
+
+## 2026-09-22：JUMPTABLE-TABLEAPI-0001 P0-A — BlockBasic::noInterveningStatement
+
+`BlockBasic::no_intervening_statement()`（block.cc:2712-2747）：block 内不产生
+外流值的检查——marker/branch 跳过；special 拒 CALL/STORE/NEW；非 special 跳
+COPY/SUBPIECE；输出 addr-tied 拒绝；任一后代 op 的 parent 不在本块拒绝。
+自块身份用 self_ref Arc 与 op.parent Arc 的 ptr_eq（add_block 同时建立两者）。
+供 JumpBasic::foldInOneGuard（jumptable.cc:1394）守卫使用。
