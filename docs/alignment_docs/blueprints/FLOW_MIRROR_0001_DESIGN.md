@@ -143,3 +143,61 @@ op 合计未收窄(96457→152809)的解释:该口径=Σ(每 SNAP 全银行),rug
   `(*(code *)PTR_…)(x)`(失去按名解析,如 free/puts;golden 生成环境含
   PLT-thunk analyzer,raw BFD 语义本就无名字层)+ frame_dummy 返回恢复
   (void→long)与少量文本平移。镜像模式下这些站点的名字层属后续消费侧课题。
+
+---
+
+## 7. M5 — MIRROR-ENVS-CANONICAL-0001:RUGRA_MIRROR 一键 bundle + 目标 DWARF 锁抑制(2026-09-22,wt/sb-rust @ c5a8992+)
+
+### 7.1 动机
+
+镜像态此前需要三个 env 精确组合(`RUGRA_FLOW_MIRROR=1 RUGRA_BARE_LOAD=1
+RUGRA_ORACLE_FIXTURE_DATA=1`,DELTA_V2 §0/§6),且仍残留一处观测阻断:
+驱动在反编译前把**目标函数自身**的 DWARF 锁定原型装入
+(`debug_db.apply(&mut fd)`,set_pieces 三锁 input+output+model)→
+`ActionPrototypeTypes` 走锁定臂(coreaction.cc:4637-4649)在 prototypetypes
+阶段给每个人工 RETURN 提前挂自由 RAX 读;oracle 裸 BFD harness 无任何
+签名源,走 `initActiveOutput`(coreaction.cc:4651),RAX/RDX 迟至 heritage
+guardReturns 才挂、returnrecovery 裁 RDX。终态双侧逐字节等价,但过程表达
+差把消费端首分歧钉死在 prototypetypes(RETURN-ARTIFICIAL-RAX-0001,
+RAX_RETURN.md §3.1 实证链:mirror_drill.stderr:118)。
+
+### 7.2 RUGRA_MIRROR 语义(单一真源 = examples/curl_decompile.rs 四访问器)
+
+| 访问器 | 展开 | 生效点 |
+|---|---|---|
+| `mirror_bundle_enabled()` | `RUGRA_MIRROR`(presence) | 目标 DWARF 原型抑制(§7.3) |
+| `mirror_flow_enabled()` | bundle ∨ `RUGRA_FLOW_MIRROR` | 全段 SLEIGH 镜像、follow_flow_range(0,u64::MAX)、controller shared-return 跳过、load_mode=single_function_bfd |
+| `mirror_bare_load_enabled()` | bundle ∨ `RUGRA_BARE_LOAD` | libc 签名台账清空(PLT-import 覆盖与 link_call_specs 解析变 no-op) |
+| `mirror_fixture_data_enabled()` | bundle ∨ `RUGRA_ORACLE_FIXTURE_DATA` | known-no-return 两段(函数属性位 + flow callee 表)关闭 |
+
+- `RUGRA_MIRROR=1` = 三组件全集 + 目标 DWARF 抑制,一键即镜像态。
+- 旧三 env 保留组件级 A/B 兼容:单独设置时语义与 c5a8992 **逐字节不变**
+  (三 env 齐设重产投影与旧 mirror 投影 sha 全等 `f7acbff2…`,stderr 仍打
+  `applied locked DWARF prototype: 1 params`)。
+- worker 子进程经 `Command::new` 继承环境,无需传递。
+
+### 7.3 目标 DWARF 锁抑制(仅 bundle 键)
+
+mirror bundle 下跳过 `debug_db.apply(&mut fd)`(目标函数自身原型);
+stderr 打 `[PREPASS] <fn> mirror: target DWARF prototype lock suppressed`。
+callee 侧无需处理:BARE_LOAD 已清 libc 表,next_url 的 9 个 callee 全是
+import(`locked_callsite_proto` 贡献恒 0)。非 mirror 路径(默认 E2E 与
+任一 legacy env 单独)行为零变化。
+
+### 7.4 验证(全部产物 /dev/shm/rugra-tests/sb-rust/m5/)
+
+| 门 | 结果 |
+|---|---|
+| env 全 off 字节一致 | pre/post 全语料 E2E sha `023d6ab5…` 全等(=历史 envoff 基线) |
+| RUGRA_MIRROR=1 投影身份 | META load_mode=single_function_bfd,master `stage_bisect.py --v1` 身份键全过(仅 producer/unique_base 非阻断 warning) |
+| **新首分歧** | **stage ordinal 7 / seq 7 `universal:funclink` op-idx 4**:`2534:2e8 LOAD` oracle `in=s:ram,u:10000048:8` vs rugra `in=c:5:1,u:10000048:8` —— FUNCDATA-SPACEID-WIDTH-0001 族(DELTA_V2 punch list #8),从 ordinal 6/seq 6 prototypetypes 后移 |
+| RAX 挂载路径(AV 预期) | prototypetypes 零提前挂载(仅 `return(RIP(free))→return(#0x0)` indicator 剥离,drill @BEGIN 5);**heritage(seq 12)挂 RAX+RDX 双输入**;**returnrecovery(seq 128)裁 RDX**;终态 `c:1:4,n:register:0:8` 不变 |
+| returnrecovery 域点亮 | @BEGIN returnrecovery=12 / activereturn=4 / starttypes=4 次调用,@END seq 19/128 `result=1 count=1 apply=1` |
+| ΣSNAP | 152809 → 148723(−4086);@BEGIN 479 不变(树遍历结构未变) |
+
+### 7.5 遗留(不在本 lane)
+
+- 首分歧现落于 FUNCDATA-SPACEID-WIDTH-0001(LOAD spaceid `c:5:1` vs
+  `s:ram`),修复归 funcdata+root 归因(punch list #8)。
+- 事件数 479 vs 335 未变:mainloop 12 pass / COPY churn(H1/H2)不属
+  本项;activeparam 重燃相位(D14 RCA-2)待 fspec 探针。

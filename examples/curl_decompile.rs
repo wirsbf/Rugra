@@ -24,6 +24,45 @@ use rugra::prettyprint::EmitPrettyPrint;
 use rugra::printc::PrintC;
 use rugra::printlanguage::PrintLanguage;
 
+// MIRROR-ENVS-CANONICAL-0001: the canonical mirror-state environment
+// bundle. The oracle single-function harness is a raw BFD load
+// (BfdArchitecture + readLoaderSymbols, no analyzers, no DWARF import, no
+// generic_clib signature data), and reproducing that data environment used
+// to require setting three separate env gates in exactly the right
+// combination (RUGRA_FLOW_MIRROR + RUGRA_BARE_LOAD +
+// RUGRA_ORACLE_FIXTURE_DATA). RUGRA_MIRROR is the one-key switch: it
+// expands to the full union semantics of all three legacy gates plus the
+// target-function DWARF prototype lock suppression (RETURN-ARTIFICIAL-RAX
+// -0001 root cause, RAX_RETURN.md §3.1). The three legacy envs remain
+// settable component-wise for A/B isolation and keep their standalone
+// semantics; every driver-side mirror-state query goes through these four
+// accessors, the single source of truth for the bundle.
+fn mirror_bundle_enabled() -> bool {
+    std::env::var("RUGRA_MIRROR").is_ok()
+}
+
+// RUGRA-GLUE: flow-mirror component (RUGRA-FLOW-MIRROR-0001 M1/M2) — the
+// oracle followFlow load contract: full-range flow, full-segment SLEIGH
+// image, no shared-return overrides, load_mode=single_function_bfd.
+fn mirror_flow_enabled() -> bool {
+    mirror_bundle_enabled() || std::env::var("RUGRA_FLOW_MIRROR").is_ok()
+}
+
+// RUGRA-GLUE: bare-load component (RUGRA-FLOW-MIRROR-0001 M3) — the empty
+// libc signature ledger: a raw BfdArchitecture carries no generic_clib
+// signature data for PLT imports or call-spec resolution.
+fn mirror_bare_load_enabled() -> bool {
+    mirror_bundle_enabled() || std::env::var("RUGRA_BARE_LOAD").is_ok()
+}
+
+// RUGRA-GLUE: oracle-fixture-data component (FLOW-339E-OVERLAP-HLT-0001 /
+// FLOW-NORETURN-DATA-0001) — no "Non-Returning Functions - Known" analyzer
+// emulation in either half (pre-flow function attribute + flow callee
+// table).
+fn mirror_fixture_data_enabled() -> bool {
+    mirror_bundle_enabled() || std::env::var("RUGRA_ORACLE_FIXTURE_DATA").is_ok()
+}
+
 /// The locked 12.0.4 golden corpus for the curl fixture: every function the
 /// canonical Ghidra analyzeHeadless run decompiled
 /// (`tests/golden/ghidra_curl_1204.provenance.json` ledger, 124 entries,
@@ -2686,7 +2725,8 @@ fn emit_stage_projection(
     // values (oracle projection META, STAGE_BISECT_SPEC_1204.md identity
     // keys). The callspec-link injection difference moves out of the
     // analysis_options identity key into the producer annotation (D3).
-    // load_mode is the D10 honest literal: under RUGRA_FLOW_MIRROR=1 the
+    // load_mode is the D10 honest literal: under the flow-mirror gate
+    // (RUGRA_MIRROR=1 or RUGRA_FLOW_MIRROR=1) the
     // mirror load contract (RUGRA-FLOW-MIRROR-0001) is in effect and the
     // literal is single_function_bfd; the default bounded driver range still
     // constructs a different input, says single_function_flow, and the
@@ -2703,12 +2743,14 @@ fn emit_stage_projection(
         "META analysis_options=default build_flags=v1-no-OPACTION_DEBUG"
     )
     .map_err(|error| format!("unable to write stage metadata: {error}"))?;
-    // load_mode (D10): RUGRA_FLOW_MIRROR=1 lands the oracle followFlow load
+    // load_mode (D10): the flow-mirror gate (MIRROR-ENVS-CANONICAL-0001:
+    // RUGRA_MIRROR=1 or legacy RUGRA_FLOW_MIRROR=1) lands the oracle
+    // followFlow load
     // contract (follow_flow_range(0, u64::MAX) + no shared-return overrides),
     // so the honest literal flips to single_function_bfd; the default
     // bounded driver range keeps single_function_flow and the consumer's
     // identity-key hard block stays the correct behavior for it.
-    let load_mode = if std::env::var("RUGRA_FLOW_MIRROR").is_ok() {
+    let load_mode = if mirror_flow_enabled() {
         "single_function_bfd"
     } else {
         "single_function_flow"
@@ -3379,7 +3421,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     let debug_db = DebugPrototypeDatabase::parse_elf(&request.binary_image)
         .map_err(|error| format!("unable to import DWARF prototypes: {error}"))?;
     let mut sleigh = SleighLifter::new();
-    if std::env::var("RUGRA_FLOW_MIRROR").is_ok() {
+    if mirror_flow_enabled() {
         // RUGRA-FLOW-MIRROR-0001: the oracle load contract decodes through
         // the full-segment LoadImage (BfdArchitecture maps every PT_LOAD),
         // so the unbounded flow range can lift PLT/init-region instructions
@@ -3460,8 +3502,9 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     for (address, value) in &request.string_entries {
         fd.add_string(*address, value.clone());
     }
-    let libc_signatures = if std::env::var("RUGRA_BARE_LOAD").is_ok() {
-        // RUGRA-FLOW-MIRROR-0001 M3: the bare-BFD load environment of the
+    let libc_signatures = if mirror_bare_load_enabled() {
+        // RUGRA-FLOW-MIRROR-0001 M3 / MIRROR-ENVS-CANONICAL-0001: the
+        // bare-BFD load environment of the
         // oracle single-function harness — BfdArchitecture + readLoaderSymbols
         // carry no generic_clib signature data, so the PLT-import overlay
         // below and link_call_specs' locked-proto resolution both miss and
@@ -3484,25 +3527,49 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         .unwrap_or_default();
     let callspec_link_enabled = std::env::var("RUGRA_DISABLE_CALLSPEC_LINK").is_err();
     let mut dwarf_applied = false;
-    match debug_db.apply(&mut fd) {
-        Ok(true) => {
-            dwarf_applied = true;
-            eprintln!(
-                "[PREPASS] {} applied locked DWARF prototype: {} params{}",
-                target.name,
-                fd.funcp.num_params(),
-                if fd.funcp.is_varargs() {
-                    " + varargs"
-                } else {
-                    ""
-                }
-            )
+    // MIRROR-ENVS-CANONICAL-0001 target-DWARF suppression
+    // (RETURN-ARTIFICIAL-RAX-0001 root cause, RAX_RETURN.md §3.1): the raw
+    // BFD oracle harness imports no DWARF at all, so the target function's
+    // own signature reaches ActionPrototypeTypes with an unlocked output
+    // and the initActiveOutput arm runs (coreaction.cc:4651) — RAX/RDX then
+    // attach to the artificial RETURNs at heritage guardReturns
+    // (heritage.cc:1652-1692) and ActionReturnRecovery trims the unused RDX.
+    // The driver's DWARF lock below (input+output+model via set_pieces)
+    // instead forces the locked arm (coreaction.cc:4637-4649), attaching a
+    // free RAX read at the prototypetypes stage and pinning the
+    // consumer-side first divergence there. Under the canonical mirror
+    // bundle the target's own DWARF prototype application is skipped — the
+    // only DWARF source the bundle does not already neutralize (callee libc
+    // signatures vanish via the bare-load component; next_url's callees are
+    // all imports, so locked_callsite_proto contributed zero even before).
+    // Every non-mirror path (default E2E and each legacy env alone) keeps
+    // applying it unchanged.
+    if mirror_bundle_enabled() {
+        eprintln!(
+            "[PREPASS] {} mirror: target DWARF prototype lock suppressed",
+            target.name
+        );
+    } else {
+        match debug_db.apply(&mut fd) {
+            Ok(true) => {
+                dwarf_applied = true;
+                eprintln!(
+                    "[PREPASS] {} applied locked DWARF prototype: {} params{}",
+                    target.name,
+                    fd.funcp.num_params(),
+                    if fd.funcp.is_varargs() {
+                        " + varargs"
+                    } else {
+                        ""
+                    }
+                )
+            }
+            Ok(false) => {}
+            Err(error) => eprintln!(
+                "[PREPASS] {} DWARF prototype rejected: {}",
+                target.name, error
+            ),
         }
-        Ok(false) => {}
-        Err(error) => eprintln!(
-            "[PREPASS] {} DWARF prototype rejected: {}",
-            target.name, error
-        ),
     }
     // CALLSPEC-DRIVER-0001, PLT-stub target half: Ghidra's ELF importer marks
     // each PLT entry as a thunk of the EXTERNAL symbol, and the signature
@@ -3546,7 +3613,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // halves of FLOW-NORETURN-DATA-0001 (segments (b) and (c)) to reproduce
     // that data environment for fixture/visit-trace comparisons; the E2E
     // golden (full Ghidra analysis) keeps the analyzer emulation by default.
-    let oracle_fixture_data = std::env::var("RUGRA_ORACLE_FIXTURE_DATA").is_ok();
+    let oracle_fixture_data = mirror_fixture_data_enabled();
     // FLOW-NORETURN-DATA-0001, pre-flow function-attribute half (merge
     // adjudication, root c1598da follow-up): Ghidra's "Non-Returning
     // Functions - Known" analyzer marks the matched function's own DB
@@ -3630,7 +3697,7 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // the jumptable fail_thunk path (jumptable.cc:2304-2320 → flow.cc:727/735
     // → CALLIND + artificial halt). Default keeps the historical driver
     // range [entry, ∞) so E2E output stays byte-identical.
-    if std::env::var("RUGRA_FLOW_MIRROR").is_ok() {
+    if mirror_flow_enabled() {
         eprintln!(
             "[PREPASS] {} flow mirror: follow_flow_range(0, u64::MAX)",
             target.name
@@ -4908,7 +4975,7 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     let flow_override_entries = if std::env::var("RUGRA_DISABLE_SHARED_RETURN").is_ok() {
         eprintln!("[PREPASS] Shared Return Calls disabled for A/B");
         Vec::new()
-    } else if std::env::var("RUGRA_FLOW_MIRROR").is_ok() {
+    } else if mirror_flow_enabled() {
         // RUGRA-FLOW-MIRROR-0001: the oracle single-function harness is a raw
         // BFD load — no Java analyzer ever wrote Instruction flow overrides,
         // so the mirror load contract must not install the Shared Return
