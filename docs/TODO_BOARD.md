@@ -59,6 +59,14 @@
 > 配方**,否则可能钉住不同确定性变体。drill runner 已参数化(<corpus> <addr> <name>)+
 > 三目标钉定: curl/main 4763 记录 4.96MB/gp 3375 记录/httpd main 6583 记录,全部五跑
 > 字节一致。
+> **RETURN-ARTIFICIAL-RAX-0001 改域(2026-09-22,Lane AV 裁决)**: 定性=(c) 终态语义等价
+> (双侧 `2534:2cc RETURN in=c:1:4,n:register:0:8` 逐字节同)——根子=驱动把目标函数自身
+> DWARF 锁定原型装入(examples/curl_decompile.rs:2531 debug_db.apply)→ActionPrototypeTypes
+> 走 cc:4637-4649 锁定臂提前挂 RAX;oracle 走 initActiveOutput+heritage 挂 RAX+RDX+
+> returnrecovery 裁。owner 改 fspec/驱动环境域,挂 MIRROR-ENVS-CANONICAL-0001(修复=
+> 镜像态抑制目标 DWARF 装载,wt/sb-rust 空闲后落);对 +144 贡献小但钉死消费端首分歧
+> (观测阻断项)。附带: CALLIND 二输入常量折叠差(c:17680 vs u:10000174)疑 BANK-COPY-159
+> 同族,已记 RAX_RETURN.md §3.2。
 > **镜像后差集图谱(2026-09-22,Lane AU,DELTA_V2.md)**: +144 事件精确分解=mainloop 遍
 > 8→12(+92)/stackstall 内迭 12→18(+30)/fullloop 轮 3→4(+9,轮型 [4,3,1] vs [4,4,3,1]);
 > 银行膨胀终快照 COPY **171 vs 12**(+159 主导,与 Lane V 拷贝族分诊互证);规则级 top:
