@@ -5961,11 +5961,29 @@ mod tests {
 
     #[test]
     fn test_jump_table_add_block() {
+        // Ghidra cc:2535-2543: lastBlock = indirect->getParent()->sizeOut().
+        // Build a BRANCHIND whose parent block has two out-edges so the
+        // faithful semantics (not the old addresstable.len() approximation)
+        // is what the assertion exercises.
         let mut jt = JumpTable::new(Address::new(0x401000));
+        let indop = Arc::new(RwLock::new(PcodeOp::new(
+            crate::address::SeqNum::new(Address::new(0x401000), 0),
+            OpCode::CPUI_BRANCHIND,
+        )));
+        let bl = Arc::new(RwLock::new(crate::block::BlockBasic::new(0, Address::new(0x401000))));
+        {
+            let mut bl_w = bl.write().unwrap();
+            bl_w.outgoing.push(crate::block::BlockEdge::new(bl.clone(), 0));
+            bl_w.outgoing.push(crate::block::BlockEdge::new(bl.clone(), 1));
+        }
+        indop.write().unwrap().parent =
+            Some(std::sync::Arc::downgrade(&(bl.clone() as Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>)));
+        jt.set_indirect_op(indop);
         jt.add_block_to_switch(Address::new(0x401200), 5);
         assert_eq!(jt.num_entries(), 1);
         assert_eq!(jt.get_label_by_index(0), 5);
-        assert_eq!(jt.last_block, 0);
+        // sizeOut of the switch block (2), not the table length (1).
+        assert_eq!(jt.last_block, 2);
     }
 
     #[test]
