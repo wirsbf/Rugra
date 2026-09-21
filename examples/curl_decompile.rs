@@ -2171,6 +2171,11 @@ fn stage_producer() -> String {
 
 // RUGRA-GLUE: one descriptor formatter is the sole owner of the v1.1
 // varnode normalization contract. Unique offsets intentionally remain raw.
+// Iop offsets are pointer identities on BOTH sides (Ghidra encodes
+// `(uintb)(uintp)op`, funcdata.rs new_varnode_iop mirrors it with the Arc
+// pointer), so they are not reproducible even between two runs of the same
+// producer; the emitter zeroes them to keep same-input-same-output and the
+// cross-producer decision is tracked as SB-RUST-IOP-OFFSET.
 fn stage_vn(vn: &std::sync::Arc<std::sync::RwLock<rugra::varnode::Varnode>>) -> String {
     let vn = vn.read().unwrap();
     let size = vn.get_size();
@@ -2180,6 +2185,9 @@ fn stage_vn(vn: &std::sync::Arc<std::sync::RwLock<rugra::varnode::Varnode>>) -> 
     }
     if vn.get_space() == rugra::space::AddressSpace::Unique {
         return format!("u:{offset:x}:{size}");
+    }
+    if vn.get_space() == rugra::space::AddressSpace::Iop {
+        return format!("n:iop:0:{size}");
     }
     format!("n:{}:{offset:x}:{size}", vn.get_space().name())
 }
@@ -2216,33 +2224,229 @@ fn stage_snapshot(
     Ok(())
 }
 
-// RUGRA-GLUE: read-only access to the direct children of the registered root;
-// each child is a stable top-level Action boundary and nested repeatapply
-// execution remains inside the ordinary perform() call.
-fn stage_root_paths(root: &dyn Action) -> Vec<String> {
-    let root_name = root.get_name().to_string();
-    root.as_action_group()
-        .map(|group| {
-            group
-                .child_names()
-                .into_iter()
-                .map(|name| format!("{root_name}:{name}"))
-                .collect()
-        })
-        .unwrap_or_default()
+// RUGRA-GLUE: static stage-tree description for the projection emitter. The
+// tree is walked once from the live root; paths follow Ghidra's colon
+// convention rooted at the registered root Action name (the derived
+// "decompile" root keeps the cloned name "universal", matching the oracle's
+// setBreakPoint addressing "universal:fullloop:mainloop").
+struct StageNode {
+    path: String,
+    parent: Option<usize>,
+    index_in_parent: usize,
+    children: Vec<usize>,
 }
 
-// RUGRA-GLUE: reads the externalized ActionState fields without consuming
-// count or any pending container delta.
-fn stage_child_stats(root: &dyn Action, index: usize) -> Option<(i32, u32, u32)> {
-    root.as_action_group()
-        .and_then(|group| group.child_state(index))
-        .map(|state| (state.count, state.count_tests, state.count_apply))
+// RUGRA-GLUE: one open v1.1 application frame; @BEGIN pushed it, and the
+// matching @END/@SNAP pair must reuse its seq (consumer stacks frames LIFO).
+struct StageFrame {
+    node: usize,
+    seq: u64,
+    tests_before: u32,
+    apply_before: u32,
+}
+
+// RUGRA-GLUE: pre-order walk of the Action tree; ActionPool leaves are event
+// boundaries but their Rules are not (v1.1 has no rule-level events).
+fn stage_walk(
+    action: &dyn Action,
+    parent: Option<usize>,
+    index_in_parent: usize,
+    path: &str,
+    nodes: &mut Vec<StageNode>,
+) -> usize {
+    let index = nodes.len();
+    nodes.push(StageNode {
+        path: path.to_string(),
+        parent,
+        index_in_parent,
+        children: Vec::new(),
+    });
+    if let Some(group) = action.as_action_group() {
+        let actions = group.child_actions();
+        for (child_index, child) in actions.iter().enumerate() {
+            let child_path = format!("{path}:{}", child.get_name());
+            let child_id = stage_walk(child.as_ref(), Some(index), child_index, &child_path, nodes);
+            nodes[index].children.push(child_id);
+        }
+    }
+    index
+}
+
+// RUGRA-GLUE: descends the live tree to a node's Action (read-only view).
+fn stage_action_of<'a>(root: &'a dyn Action, nodes: &[StageNode], node: usize) -> &'a dyn Action {
+    let mut chain = Vec::new();
+    let mut current = node;
+    while let Some(parent) = nodes[current].parent {
+        chain.push(nodes[current].index_in_parent);
+        current = parent;
+    }
+    chain.reverse();
+    let mut action = root;
+    for step in chain {
+        action = action
+            .as_action_group()
+            .and_then(|group| group.child_actions().get(step))
+            .map(|child| child.as_ref() as &dyn Action)
+            .unwrap_or_else(|| panic!("stage tree walk diverged at {}", nodes[node].path));
+    }
+    action
+}
+
+// RUGRA-GLUE: read-only access to a node's externalized ActionState; never
+// touches take_count_delta (v1.1 reads ActionState.count directly). A node's
+// executor state lives in its parent's child_states slot; the root uses the
+// externally held state.
+fn stage_state_of<'a>(
+    root: &'a dyn Action,
+    root_state: &'a ActionState,
+    nodes: &[StageNode],
+    node: usize,
+) -> &'a ActionState {
+    match nodes[node].parent {
+        None => root_state,
+        Some(parent) => stage_action_of(root, nodes, parent)
+            .as_action_group()
+            .and_then(|group| group.child_state(nodes[node].index_in_parent))
+            .unwrap_or_else(|| panic!("stage child state missing at {}", nodes[node].path)),
+    }
+}
+
+// RUGRA-GLUE: sets BREAK_START on one node identified by tree index. This
+// bypasses set_break_point's name resolution because the oracle tree has
+// duplicate leaf names (e.g. two "unreachable" siblings inside mainloop,
+// coreaction.cc:5490/5673) whose colon-path lookup is ambiguous; indexing the
+// same child_states slot reaches the identical ActionState.breakpoint bit the
+// name-based path would set, with no ambiguity.
+fn stage_set_start_break(
+    root: &mut dyn Action,
+    root_state: &mut ActionState,
+    nodes: &[StageNode],
+    node: usize,
+) {
+    let Some(parent) = nodes[node].parent else {
+        root_state.set_break(break_flags::BREAK_START);
+        return;
+    };
+    let mut chain = Vec::new();
+    let mut current = node;
+    while let Some(ancestor) = nodes[current].parent {
+        chain.push(nodes[current].index_in_parent);
+        current = ancestor;
+    }
+    chain.reverse();
+    let mut group = root
+        .as_action_group_mut()
+        .expect("stage root is a restart group");
+    while chain.len() > 1 {
+        let step = chain.remove(0);
+        group = group.child_actions_mut()[step]
+            .as_action_group_mut()
+            .expect("intermediate stage node is a group");
+    }
+    let leaf = chain.remove(0);
+    group
+        .child_state_mut(leaf)
+        .unwrap_or_else(|| panic!("stage child state missing at {}", nodes[node].path))
+        .set_break(break_flags::BREAK_START);
+}
+
+// RUGRA-GLUE: first child of `group_node` at or after `from` whose status is
+// not STATUS_END — v1.1 enumeration rule (ii): completed onceperfunc nodes
+// are skipped without events or breakpoints.
+fn stage_next_runnable(
+    root: &dyn Action,
+    nodes: &[StageNode],
+    group_node: usize,
+    from: usize,
+) -> Option<usize> {
+    let group = stage_action_of(root, nodes, group_node)
+        .as_action_group()
+        .expect("stage candidate parent is a group");
+    for child in nodes[group_node].children.iter().skip(from) {
+        let state = group
+            .child_state(nodes[*child].index_in_parent)
+            .expect("stage child state present");
+        if state.status != rugra::action::status_flags::STATUS_END {
+            return Some(*child);
+        }
+    }
+    None
+}
+
+// RUGRA-GLUE: proper-ancestor test used to decide which open frames are still
+// mid-apply at the next pause (v1.1 rule (iii): group @END is emitted only
+// after the group resumes to completion, so a frame whose subtree contains
+// the next paused node stays open).
+fn stage_is_proper_ancestor(nodes: &[StageNode], ancestor: usize, node: usize) -> bool {
+    let mut current = nodes[node].parent;
+    while let Some(parent) = current {
+        if parent == ancestor {
+            return true;
+        }
+        current = nodes[parent].parent;
+    }
+    false
+}
+
+// RUGRA-GLUE: ordered candidate set for the next STATUS_START entry after the
+// paused node applies — v1.1 enumeration rules (i)/(ii)/(iii). Exactly one
+// node applies between two pauses; the first candidate whose start-break
+// fires is the true next application. Candidates cover: the paused group's
+// first runnable child, the next runnable sibling up the chain, repeatapply
+// re-traversal firsts (whose count-based decision cannot be predicted before
+// the current application returns), and the root restart re-entry.
+fn stage_frontier(
+    root: &dyn Action,
+    root_state: &ActionState,
+    nodes: &[StageNode],
+    node: usize,
+) -> Vec<usize> {
+    let mut candidates: Vec<usize> = Vec::new();
+    let mut push = |value: usize, list: &mut Vec<usize>| {
+        if !list.contains(&value) {
+            list.push(value);
+        }
+    };
+    if nodes[node].parent.is_none()
+        || stage_action_of(root, nodes, node).as_action_group().is_some()
+    {
+        if let Some(child) = stage_next_runnable(root, nodes, node, 0) {
+            push(child, &mut candidates);
+        }
+    }
+    let mut current = node;
+    while let Some(parent) = nodes[current].parent {
+        let index_in_parent = nodes[current].index_in_parent;
+        if let Some(sibling) = stage_next_runnable(root, nodes, parent, index_in_parent + 1) {
+            push(sibling, &mut candidates);
+            break;
+        }
+        let parent_state = stage_state_of(root, root_state, nodes, parent);
+        if parent_state.flags & rugra::action::action_flags::RULE_REPEATAPPLY != 0 {
+            if let Some(child) = stage_next_runnable(root, nodes, parent, 0) {
+                push(child, &mut candidates);
+            }
+        }
+        if parent == 0 {
+            // Root restart re-entry: ActionRestartGroup re-drives its children
+            // from the top after curstart increments (Rugra: PIPE-RESTART-0001
+            // keeps this unreachable today; the candidate is defensive).
+            if let Some(child) = stage_next_runnable(root, nodes, parent, 0) {
+                push(child, &mut candidates);
+            }
+        }
+        current = parent;
+    }
+    candidates
 }
 
 // RUGRA-GLUE: wraps the existing Action::perform state machine with only
-// breakpoints and read-only optree observation; no Action/Rule implementation
-// is changed and no snapshot is fed back into the pipeline.
+// BREAK_START bits and read-only optree observation; no Action/Rule
+// implementation changes and no snapshot is fed back into the pipeline.
+// Stepping protocol (v1.1): breakpoint before each node apply; resume past
+// the pause; the node that applied between two pauses gets one
+// @BEGIN/@END/@SNAP triple, seq is globally consecutive from 1, and open
+// group frames close LIFO when the next pause falls outside their subtree.
 fn emit_stage_projection(
     fd: &mut Funcdata,
     db: &mut ActionDatabase,
@@ -2272,6 +2476,8 @@ fn emit_stage_projection(
         binary_sha256, request.target.vaddr, request.target.name
     )
     .map_err(|error| format!("unable to write stage metadata: {error}"))?;
+    // unique_base = ANALYSIS_UNIQUE_START (src/varnode.rs:30, Ghidra
+    // varnode.cc unique space allocation base), printed as hex.
     writeln!(
         output,
         "META producer={} maxrestarts=1 unique_base=10000000",
@@ -2282,61 +2488,134 @@ fn emit_stage_projection(
     let root = db
         .get_action_mut("decompile")
         .ok_or_else(|| "decompile action was not registered".to_string())?;
-    let paths = stage_root_paths(root);
-    if paths.is_empty() {
+    let mut nodes: Vec<StageNode> = Vec::new();
+    let root_name = root.get_name().to_string();
+    stage_walk(&*root, None, 0, &root_name, &mut nodes);
+    if nodes.len() < 2 {
         return Err("decompile action has no stage children".to_string());
     }
     root.reset(fd);
-    let mut state = ActionState::new(root.get_flags());
-    root.clear_break_points(&mut state);
-    if !root.set_break_point(&mut state, break_flags::BREAK_START, &paths[0]) {
-        return Err(format!("stage path does not resolve: {}", paths[0]));
-    }
-    let initial = root
-        .perform(fd, &mut state)
+    let mut root_state = ActionState::new(root.get_flags());
+    root.clear_break_points(&mut root_state);
+
+    let mut seq: u64 = 0;
+    let mut open: Vec<StageFrame> = Vec::new();
+    let mut curstart_seen = root.fixture_curstart();
+
+    // Initial pause: break on the root's own STATUS_START entry.
+    stage_set_start_break(root, &mut root_state, &nodes, 0);
+    let ret = root
+        .perform(fd, &mut root_state)
         .map_err(|error| format!("initial stage breakpoint failed: {error}"))?;
-    if initial >= 0 {
+    if ret >= 0 {
         return Err("root completed before the first stage breakpoint".to_string());
     }
+    seq = 1;
+    writeln!(output, "@BEGIN {seq} {}", nodes[0].path)
+        .map_err(|error| format!("unable to write stage begin: {error}"))?;
+    open.push(StageFrame {
+        node: 0,
+        seq,
+        tests_before: root_state.count_tests,
+        apply_before: root_state.count_apply,
+    });
 
-    let mut round = 0u32;
-    let mut index = 0usize;
-    let mut sequence = 0u64;
     loop {
-        let next = (index + 1) % paths.len();
-        let before = stage_child_stats(root, index).unwrap_or((0, 0, 0));
-        sequence += 1;
-        writeln!(output, "@BEGIN {sequence} {}", paths[index])
-            .map_err(|error| format!("unable to write stage begin: {error}"))?;
+        let current = open
+            .last()
+            .map(|frame| frame.node)
+            .ok_or_else(|| "stage frame stack emptied mid-run".to_string())?;
+        let candidates = stage_frontier(&*root, &root_state, &nodes, current);
 
-        root.clear_break_points(&mut state);
-        if !root.set_break_point(&mut state, break_flags::BREAK_START, &paths[next]) {
-            return Err(format!("stage path does not resolve: {}", paths[next]));
+        root.clear_break_points(&mut root_state);
+        for candidate in &candidates {
+            stage_set_start_break(root, &mut root_state, &nodes, *candidate);
         }
-        let perform_result = root
-            .perform(fd, &mut state)
-            .map_err(|error| format!("stage perform failed at {}: {error}", paths[index]))?;
-        let after = stage_child_stats(root, index).unwrap_or(before);
-        let result = after.0;
-        let tests = after.1.saturating_sub(before.1);
-        let apply = after.2.saturating_sub(before.2);
-        writeln!(
-            output,
-            "@END {sequence} {} result={} count={} tests={} apply={}",
-            paths[index], result, result, tests, apply
-        )
-        .map_err(|error| format!("unable to write stage end: {error}"))?;
-        stage_snapshot(&mut output, fd, sequence)?;
+        let ret = root
+            .perform(fd, &mut root_state)
+            .map_err(|error| format!("stage perform failed at {}: {error}", nodes[current].path))?;
 
-        if perform_result >= 0 {
+        if ret >= 0 {
+            // Whole tree converged: every open frame completes, LIFO.
+            while let Some(frame) = open.pop() {
+                let state = stage_state_of(&*root, &root_state, &nodes, frame.node);
+                writeln!(
+                    output,
+                    "@END {} {} result={} count={} tests={} apply={}",
+                    frame.seq,
+                    nodes[frame.node].path,
+                    state.count,
+                    state.count,
+                    state.count_tests.wrapping_sub(frame.tests_before),
+                    state.count_apply.wrapping_sub(frame.apply_before),
+                )
+                .map_err(|error| format!("unable to write stage end: {error}"))?;
+                stage_snapshot(&mut output, fd, frame.seq)?;
+            }
             break;
         }
-        index = next;
-        if index == 0 {
-            round += 1;
-            writeln!(output, "@RESTART {round}")
+
+        // The pause fired at exactly one candidate's STATUS_START.
+        let paused = candidates
+            .iter()
+            .copied()
+            .find(|candidate| {
+                stage_state_of(&*root, &root_state, &nodes, *candidate).status
+                    == rugra::action::status_flags::STATUS_BREAKSTARTHIT
+            })
+            .ok_or_else(|| {
+                format!(
+                    "stage pause without a hit candidate after {} (candidates: {})",
+                    nodes[current].path,
+                    candidates
+                        .iter()
+                        .map(|candidate| nodes[*candidate].path.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
+
+        // Close every open frame that is not a proper ancestor of the paused
+        // node — v1.1 rule (iii): group @END fires when the group has resumed
+        // to completion, which is exactly when the next application leaves
+        // its subtree.
+        while let Some(frame) = open.last() {
+            if stage_is_proper_ancestor(&nodes, frame.node, paused) {
+                break;
+            }
+            let frame = open.pop().expect("frame presence checked by last()");
+            let state = stage_state_of(&*root, &root_state, &nodes, frame.node);
+            writeln!(
+                output,
+                "@END {} {} result={} count={} tests={} apply={}",
+                frame.seq,
+                nodes[frame.node].path,
+                state.count,
+                state.count,
+                state.count_tests.wrapping_sub(frame.tests_before),
+                state.count_apply.wrapping_sub(frame.apply_before),
+            )
+            .map_err(|error| format!("unable to write stage end: {error}"))?;
+            stage_snapshot(&mut output, fd, frame.seq)?;
+        }
+
+        let curstart_now = root.fixture_curstart();
+        if curstart_now != curstart_seen {
+            curstart_seen = curstart_now;
+            writeln!(output, "@RESTART {curstart_now}")
                 .map_err(|error| format!("unable to write restart marker: {error}"))?;
         }
+
+        seq += 1;
+        writeln!(output, "@BEGIN {seq} {}", nodes[paused].path)
+            .map_err(|error| format!("unable to write stage begin: {error}"))?;
+        let paused_state = stage_state_of(&*root, &root_state, &nodes, paused);
+        open.push(StageFrame {
+            node: paused,
+            seq,
+            tests_before: paused_state.count_tests,
+            apply_before: paused_state.count_apply,
+        });
     }
     output
         .flush()
@@ -4349,7 +4628,19 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
 
     for func in &functions {
         if let Some(names) = selected_functions {
-            if !names.iter().any(|name| name == &func.name) {
+            // RUGRA-GLUE: stage-projection selectors may name a function or
+            // give its address (RUGRA_STAGE_FUNC=<name|0xaddr>); the extra
+            // address arm only exists behind RUGRA_STAGE_PROJ so env-unset
+            // runs keep the name-only matching byte-for-byte.
+            let addr_selected = std::env::var("RUGRA_STAGE_PROJ").is_ok()
+                && names.iter().any(|selector| {
+                    selector
+                        .strip_prefix("0x")
+                        .and_then(|value| u64::from_str_radix(value, 16).ok())
+                        .or_else(|| u64::from_str_radix(selector, 16).ok())
+                        == Some(func.vaddr)
+                });
+            if !names.iter().any(|name| name == &func.name) && !addr_selected {
                 continue;
             }
             selected_functions_seen.push(func.name.clone());
@@ -4587,9 +4878,22 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(names) = selected_functions {
+        // RUGRA-GLUE: stage-projection addr selectors resolve to function
+        // names during the loop, so the missing check must accept the same
+        // address form (behind RUGRA_STAGE_PROJ only).
+        let stage_addr_seen = |name: &str| -> bool {
+            std::env::var("RUGRA_STAGE_PROJ").is_ok()
+                && functions.iter().any(|func| {
+                    name.strip_prefix("0x")
+                        .and_then(|value| u64::from_str_radix(value, 16).ok())
+                        .or_else(|| u64::from_str_radix(name, 16).ok())
+                        == Some(func.vaddr)
+                        && selected_functions_seen.contains(&func.name)
+                })
+        };
         if let Some(missing) = names
             .iter()
-            .find(|name| !selected_functions_seen.contains(name))
+            .find(|name| !selected_functions_seen.contains(name) && !stage_addr_seen(name))
         {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,

@@ -158,6 +158,12 @@ pub trait Action: Send + Sync {
     /// Prepare one `apply()` attempt for the current executor status.
     fn prepare_apply(&mut self, _status: u32) {}
 
+    // RUGRA-GLUE: read-only restart-round view for tooling/emitters; mirrors the
+    // protected ActionRestartGroup::curstart fixture read the locked C++ oracle
+    // harness performs (action_break_pool_1204.cc:561 pattern). Default 0 for
+    // every non-restart Action.
+    fn fixture_curstart(&self) -> i32 { 0 }
+
     // RUGRA-GLUE: fixture-only nested tree view; Ghidra exposes the same nesting via Action::print (action.cc:417-440)
     /// Read-only downcast for tree-walking fixtures: returns the container
     /// view if this Action is an ActionGroup/ActionRestartGroup.
@@ -1166,6 +1172,8 @@ impl Action for ActionRestartGroup {
     fn as_action_group(&self) -> Option<&ActionGroup> { Some(&self.group) }
     // RUGRA-GLUE: fixture-only mutable nested tree view for subtree-driving fixtures (Ghidra ActionRestartGroup inherits ActionGroup::list)
     fn as_action_group_mut(&mut self) -> Option<&mut ActionGroup> { Some(&mut self.group) }
+    // RUGRA-GLUE: trait-level read-only passthrough of the protected curstart for the stage-projection emitter (see Action::fixture_curstart)
+    fn fixture_curstart(&self) -> i32 { self.curstart }
     // RUGRA-GLUE: externalizes Ghidra ActionRestartGroup's inherited `count` member
     fn take_count_delta(&mut self) -> i32 {
         std::mem::take(&mut self.pending_count)
