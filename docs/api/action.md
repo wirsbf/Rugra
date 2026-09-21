@@ -1330,3 +1330,12 @@ nodejoin fixture 补 CFG 形状断言(F1 整改):canonical(swapa==swapb)终态=j
 nodejoin fixture 测试构造修正(njf2 移交项):原 fixture 用不同常量条件(修复前 over-join 行为的编码);
 F4 门序落地后常量条件 !isWritten 不 join(双侧 fixture D_unwritten 锁定 count=0)。改为共享 written 条件
 varnode(INT_EQUAL 输出)供两 CBRANCH 读取——F3 语义 vn1==vn2 完整 match 走全套 join,断言不变。
+
+## 2026-09-22: v2 drill 边界钩子(Lane AA; action.cc:316-322/839-845 同位)
+
+`Action::perform` 的 apply 两侧加 `drillobserve::activate()/flush(name)`,
+`ActionPool::process_op` 的 `apply_op` 两侧加 per-rule 同对(镜像
+action.cc:316-322 与 :839-845;pool 自身的 flush 因 active 位被 rule 对
+复位而自然 no-op,与 oracle 相同)。env 门控 `RUGRA_STAGE_DRILL`;
+env-off 字节一致性验证:05c8314 基线 vs 本分支,examples/
+rugra_decompile_func 对 examples/curl 的 next_url 输出逐字节相同。

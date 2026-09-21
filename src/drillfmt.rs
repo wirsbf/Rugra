@@ -62,6 +62,7 @@ fn space_shortcut(space: AddressSpace) -> char {
 /// Address-space print width in BYTES (space.cc:208-215: sz>4 shrinks to
 /// 4/6 when the high bits are zero; x86-64 ram/stack are 8-byte spaces,
 /// unique is 4).
+// Ghidra: space.cc:208 AddrSpace::printRaw (address-size shrink logic)
 fn raw_width(addr_size: usize, offset: u64) -> usize {
     let mut sz = addr_size;
     if sz > 4 {
@@ -74,12 +75,14 @@ fn raw_width(addr_size: usize, offset: u64) -> usize {
     sz
 }
 
+// Ghidra: space.cc:206 AddrSpace::printRaw
 fn print_raw_offset(addr_size: usize, offset: u64) -> String {
     let width = 2 * raw_width(addr_size, offset);
     format!("0x{:0width$x}", offset, width = width)
 }
 
 /// space address sizes: ram/stack 8, register 8, unique 4, const 0.
+// RUGRA-GLUE: per-space getAddrSize() table; Rugra AddressSpace carries no address-size field.
 fn space_addr_size(space: AddressSpace) -> usize {
     match space {
         AddressSpace::Ram | AddressSpace::Stack | AddressSpace::Register => 8,
@@ -90,6 +93,7 @@ fn space_addr_size(space: AddressSpace) -> usize {
 
 /// SeqNum raw text: `<pc.printRaw>:<uniq-hex>` (address.cc:32-38 + the hex
 /// state left by AddrSpace::printRaw, space.cc:206-221).
+// Ghidra: address.cc:32 operator<<(ostream&, const SeqNum&)
 pub fn seqnum_raw(pc: u64, uniq: u32) -> String {
     let mut s = print_raw_offset(8, pc);
     s.push(':');
@@ -154,6 +158,7 @@ impl DrillFmt {
     /// Varnode raw text (varnode.cc:741-756). `def_seq` is a callback the
     /// caller supplies to render a defining op's SeqNum without the
     /// formatter borrowing the op graph.
+    // Ghidra: varnode.cc:741 Varnode::printRaw
     pub fn varnode_raw<F: Fn(&Varnode) -> Option<String>>(&self, vn: &Varnode, def_seq: F) -> String {
         // printRawNoMarkup (varnode.cc:711-734)
         let (base, expect) = if let Some((name, point_off, point_size)) =
@@ -209,6 +214,7 @@ impl DrillFmt {
 
     /// PcodeOp::printDebug (op.cc:376-385): `<seqnum>: ` + `**` for
     /// dead/unattached ops, else printRaw.
+    // Ghidra: op.cc:376 PcodeOp::printDebug
     pub fn op_print_debug(&self, op: &PcodeOp) -> String {
         let mut s = seqnum_raw(op.get_addr().as_u64(), op.get_time());
         s.push_str(": ");
@@ -220,6 +226,7 @@ impl DrillFmt {
         s
     }
 
+    // RUGRA-GLUE: Arc<RwLock<Varnode>> adapter over Varnode::printRaw (varnode.cc:741); Ghidra passes raw pointers.
     fn vn_of(&self, vn: &std::sync::Arc<RwLock<Varnode>>) -> String {
         let guard = vn.read().unwrap();
         let def = guard.get_def();
@@ -233,6 +240,7 @@ impl DrillFmt {
     }
 
     /// The structural `printRaw` forms (typeop.cc; see module docs).
+    // Ghidra: op.cc:385 PcodeOp::printRaw (TypeOp dispatch)
     pub fn op_raw(&self, op: &PcodeOp) -> String {
         let out = op.get_out().map(|v| self.vn_of(v));
         let inputs: Vec<String> = op.inrefs.iter().map(|v| self.vn_of(v)).collect();
@@ -447,6 +455,7 @@ fn branch_dest_raw(op: &PcodeOp, inputs: &[String]) -> String {
     inputs.first().cloned().unwrap_or_default()
 }
 
+// RUGRA-GLUE: opcode-class table for the TypeOpBinary::printRaw structure (typeop.cc:335); Rugra has no flags query on the table.
 fn is_binary(opc: OpCode) -> bool {
     matches!(
         opc,
@@ -486,6 +495,7 @@ fn is_binary(opc: OpCode) -> bool {
     )
 }
 
+// RUGRA-GLUE: opcode-class table for the TypeOpUnary::printRaw structure (typeop.cc:357).
 fn is_unary(opc: OpCode) -> bool {
     matches!(
         opc,
@@ -512,6 +522,7 @@ fn is_unary(opc: OpCode) -> bool {
 /// printRaw operator names: Ghidra constructor names plus the
 /// `getOperatorName` overrides (typeop.cc; identical strings are
 /// registered in Rugra's src/typeop.rs binary_op!/unary_op! tables).
+// RUGRA-GLUE: static getOperatorName table (typeop.cc constructors + overrides; same strings as src/typeop.rs registrations).
 fn operator_name(opc: OpCode) -> &'static str {
     match opc {
         OpCode::CPUI_INT_ADD => "+",

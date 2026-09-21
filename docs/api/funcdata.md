@@ -2171,3 +2171,15 @@ N1/N2/N3:inedge 0/1 + 最小矩阵):克隆输出 space/offset/size、flag/addlfl
 MULTIEQUAL→COPY inedge 拾取、clone 输入重映射/共享/常量、原块分裂后形态、
 入边计数 — 双侧 stdout 字节一致 MATCH
 (tools/run_funcdata_nodesplit_space_oracle.sh)。
+
+## 2026-09-22: v2 drill 钩子(Lane AA; funcdata_op.cc 同位 #ifdef 钩子)
+
+`op_set_opcode`/`op_set_input`/`op_set_output`/`op_unset_output`/
+`op_unset_input`/`op_insert_input`/`op_remove_input`/`op_swap_input`/
+`op_destroy`/`op_uninsert`/`new_varnode_iop` 入口加入
+`drillobserve::mod_check`/`register_iop` 调用(镜像 funcdata_op.cc:25-33、
+:52-66、:70-87、:104-141、:150-186、:203-221、:291-317 与
+funcdata_varnode.cc:269-292 的 OPACTION_DEBUG 钩子位;守卫先行、变更前
+触发,防幻影记录;锁纪律见 drillobserve.md)。env 门控
+`RUGRA_STAGE_DRILL`,未设置时为 no-op,行为与既往逐字节一致
+(验证见 docs/api/action.md 同日条目)。
