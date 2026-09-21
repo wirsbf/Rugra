@@ -27,6 +27,8 @@ Ghidra `varmap.cc` (1620行) 的 Rust 移植。负责局部变量的栈帧重构
 
 - `is_const_absorbable(&self, b)` — `RangeHint::isConstAbsorbable` (varmap.cc:30)
 - `reconcile(&self, b)` — `RangeHint::reconcile` (varmap.cc:62)，含 `get_sub_type` 对齐遍历
+  （2026-09-22 起 chain 持 canonical component Arc，与 Ghidra factory-owned
+  `Datatype*` 镜像一致；见 `docs/api/type_system/datatype.md`）
 - `contain(&self, b)` — `RangeHint::contain` (varmap.cc:109)
 - `preferred(&self, b, reconcile)` — `RangeHint::preferred` (varmap.cc:126)
 - `absorb(&mut self, b)` — `RangeHint::absorb` (varmap.cc:217)
