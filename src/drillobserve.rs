@@ -52,6 +52,43 @@ impl Default for Recorder {
 
 thread_local! {
     static RECORDER: RefCell<Recorder> = RefCell::new(Recorder::default());
+    // Iop-space varnodes encode the referenced PcodeOp as its Arc data
+    // pointer (funcdata.rs new_varnode_iop, mirroring Ghidra's
+    // `(uintb)(uintp)op`). The drill formatter needs the op back to print
+    // the oracle's deterministic IopSpace::printRaw form ('i' + the
+    // referenced op's SeqNum, op.cc:41-47), so registrations are kept per
+    // thread, gated on the drill env (zero cost when unset).
+    static IOP_REGISTRY: RefCell<std::collections::HashMap<usize, std::sync::Weak<std::sync::RwLock<crate::op::PcodeOp>>>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+/// Record the pointer identity of an iop-referenced op (called from
+/// Funcdata::new_varnode_iop).
+pub fn register_iop(ptr: usize, op: &std::sync::Arc<std::sync::RwLock<crate::op::PcodeOp>>) {
+    if !is_enabled() {
+        return;
+    }
+    IOP_REGISTRY.with(|reg| {
+        reg.borrow_mut().insert(ptr, std::sync::Arc::downgrade(op));
+    });
+}
+
+/// Resolve an iop varnode offset back to the referenced op's SeqNum raw
+/// text (op.cc:41-47 non-branch form). Returns None when the entry is
+/// gone (the referenced op was destroyed).
+pub fn resolve_iop_seq(ptr: u64) -> Option<String> {
+    if !is_enabled() {
+        return None;
+    }
+    IOP_REGISTRY.with(|reg| {
+        reg.borrow()
+            .get(&(ptr as usize))
+            .and_then(|weak| weak.upgrade())
+            .map(|op| {
+                let o = op.read().unwrap();
+                crate::drillfmt::seqnum_raw(o.get_addr().as_u64(), o.get_time())
+            })
+    })
 }
 
 static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

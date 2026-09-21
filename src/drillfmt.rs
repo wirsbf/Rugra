@@ -76,7 +76,7 @@ fn raw_width(addr_size: usize, offset: u64) -> usize {
 
 fn print_raw_offset(addr_size: usize, offset: u64) -> String {
     let width = 2 * raw_width(addr_size, offset);
-    format!("{:#0width$x}", offset, width = width)
+    format!("0x{:0width$x}", offset, width = width)
 }
 
 /// space address sizes: ram/stack 8, register 8, unique 4, const 0.
@@ -171,6 +171,15 @@ impl DrillFmt {
             match vn.address_space {
                 // ConstantSpace::printRaw (space.cc:372-376): unpadded hex
                 AddressSpace::Const => s.push_str(&format!("{:#x}", vn.loc.as_u64())),
+                // IopSpace::printRaw (op.cc:41-47): the referenced op's
+                // SeqNum (non-branch form); unresolved/dead references fall
+                // back to the raw offset.
+                AddressSpace::Iop => {
+                    match crate::drillobserve::resolve_iop_seq(vn.loc.as_u64()) {
+                        Some(seq) => s.push_str(&seq),
+                        None => s.push_str(&format!("{:#x}", vn.loc.as_u64())),
+                    }
+                }
                 _ => s.push_str(&print_raw_offset(
                     space_addr_size(vn.address_space),
                     vn.loc.as_u64(),
@@ -310,12 +319,24 @@ impl DrillFmt {
                 }
                 s
             }
-            OpCode::CPUI_INDIRECT => format!(
-                "{} = {} [] {}",
-                out.unwrap_or_default(),
-                inputs.first().map(String::as_str).unwrap_or(""),
-                inputs.get(1).map(String::as_str).unwrap_or("")
-            ),
+            OpCode::CPUI_INDIRECT => {
+                // typeop.cc:1985-2005: `[create]` replaces the input-0 leg
+                // when the op is an indirect creation.
+                if op.is_indirect_creation() {
+                    format!(
+                        "{} = [create] {}",
+                        out.unwrap_or_default(),
+                        inputs.get(1).map(String::as_str).unwrap_or("")
+                    )
+                } else {
+                    format!(
+                        "{} = {} [] {}",
+                        out.unwrap_or_default(),
+                        inputs.first().map(String::as_str).unwrap_or(""),
+                        inputs.get(1).map(String::as_str).unwrap_or("")
+                    )
+                }
+            }
             OpCode::CPUI_PTRADD => format!(
                 "{} = {} + {}(*{})",
                 out.unwrap_or_default(),

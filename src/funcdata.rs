@@ -4218,6 +4218,10 @@ impl Funcdata {
             crate::space::AddressSpace::Iop,
             ptr_addr,
         );
+        // OPACTION_DEBUG-equivalent drill registration: IopSpace::printRaw
+        // (op.cc:41-47) resolves the iop offset back to the referenced op,
+        // so the recorder needs the pointer->op mapping.
+        crate::drillobserve::register_iop(ptr_addr as usize, &op.0);
         vn.write()
             .unwrap()
             .set_flags(crate::varnode::varnode_flags::ANNOTATION);
