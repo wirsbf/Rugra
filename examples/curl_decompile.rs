@@ -2365,6 +2365,10 @@ fn stage_snapshot(
         let op = op_ref.0.read().unwrap();
         let addr = op.get_addr().as_u64();
         let time = op.get_time();
+        // d= follows op.cc:380-381 / harness writeOp: dead OR unattached
+        // (no parent FlowBlock). The parent arm reads the Option without
+        // upgrading the Weak (op.rs parent: Option<Weak<...>>).
+        let dead = op.is_dead() || op.parent.is_none();
         // Only LOAD/STORE input 0 carries a spaceid constant on the Rugra
         // side (see stage_spaceid_name); every other slot stays value-only.
         let spaceid_slot = matches!(
@@ -2391,7 +2395,7 @@ fn stage_snapshot(
             output,
             "{addr:x}:{time:x} {} d={} out={} in={}",
             stage_opname(op.get_opcode()),
-            u8::from(op.is_dead()),
+            u8::from(dead),
             out,
             inputs,
         )
