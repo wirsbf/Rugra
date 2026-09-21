@@ -2169,55 +2169,142 @@ fn stage_producer() -> String {
         .unwrap_or_else(|| "rugra-tree-unknown".to_string())
 }
 
-// RUGRA-GLUE: one descriptor formatter is the sole owner of the v1.1
-// varnode normalization contract. Unique offsets intentionally remain raw.
-// Iop offsets are pointer identities on BOTH sides (Ghidra encodes
-// `(uintb)(uintp)op`, funcdata.rs new_varnode_iop mirrors it with the Arc
-// pointer), so they are not reproducible even between two runs of the same
-// producer; the emitter zeroes them to keep same-input-same-output and the
-// cross-producer decision is tracked as SB-RUST-IOP-OFFSET.
-fn stage_vn(vn: &std::sync::Arc<std::sync::RwLock<rugra::varnode::Varnode>>) -> String {
+// RUGRA-GLUE (stage projection v1.2, punch list P5): renders a spaceid
+// constant slot as `s:<spacename>`. The oracle harness identifies these by
+// exact-match against its registered AddrSpace object addresses
+// (stage_projection_1204.cc:309-313 building g_spaceIdNames; the pointer
+// encoding is `(uintb)(uintp)spc`, sleigh.cc:236/269). Rugra encodes the
+// SpaceId enum value instead, and small integers are genuine constants on
+// both sides (`c:0:8`/`c:1:8`/`c:8:8` occur as real constants in both
+// projections), so the value alone cannot carry the discrimination: the
+// structural mirror is the slot. Rugra's only spaceid-encoding slots are
+// LOAD/STORE input 0 (funcdata.rs inject_raw_ops lift path,
+// double_precis.rs make_space_varnode, funcdata.rs op_stack_store/load),
+// which is exactly the set Varnode::getSpaceFromConst decodes
+// (constseq.cc:911, coreaction.cc:976). size==sizeof(AddrSpace*)==8 mirrors
+// the harness width gate; ids outside the registered-space set fall back
+// to the plain `c:` rendering like the harness's table miss.
+fn stage_spaceid_name(offset: u64) -> Option<&'static str> {
+    if offset > rugra::space::SPACEID_IOP as u64 {
+        return None;
+    }
+    match rugra::space::AddressSpace::from_id(offset as rugra::space::SpaceId) {
+        // Registered-space mirror of the harness table: ids beyond the
+        // architecture's space list never join g_spaceIdNames. from_id
+        // cannot yield Other(id>SPACEID_IOP) under the bound above, but the
+        // guard keeps the invariant explicit.
+        rugra::space::AddressSpace::Other(id) if id != rugra::space::SPACEID_OTHER => None,
+        space => Some(space.name()),
+    }
+}
+
+// RUGRA-GLUE: one descriptor formatter is the sole owner of the v1.2
+// varnode normalization contract (STAGE_BISECT_SPEC_1204.md §v1.2). Unique
+// offsets intentionally remain raw. Pointer-valued varnodes render through
+// stable identities, never raw pointers: spaceid constant slots as
+// `s:<name>` (stage_spaceid_name), fspec annotations as `f:<host op
+// SeqNum>` — the call-site identity, one host CALL-class op per
+// FuncCallSpecs and SeqNums are globally unique — and iop annotations as
+// `o:<referenced op SeqNum>` resolved against this @SNAP's live-op table;
+// a reference whose target op left the tree renders `o:-` (both sides
+// rebuild the table per snapshot, harness writeSnapshot L193-200).
+fn stage_vn(
+    vn: &std::sync::Arc<std::sync::RwLock<rugra::varnode::Varnode>>,
+    host_addr: u64,
+    host_time: u32,
+    spaceid_slot: bool,
+    live_ops: &std::collections::HashMap<usize, (u64, u32)>,
+) -> String {
     let vn = vn.read().unwrap();
     let size = vn.get_size();
     let offset = vn.get_offset();
     if vn.is_constant() {
+        if spaceid_slot && size == 8 {
+            if let Some(name) = stage_spaceid_name(offset) {
+                return format!("s:{name}");
+            }
+        }
         return format!("c:{offset:x}:{size}");
     }
     if vn.get_space() == rugra::space::AddressSpace::Unique {
         return format!("u:{offset:x}:{size}");
     }
     if vn.get_space() == rugra::space::AddressSpace::Iop {
-        return format!("n:iop:0:{size}");
+        // Rugra shares the Iop enum space for both annotation kinds
+        // (TYPEOP-FSPEC-SPACE-0001); Funcdata::get_op_from_const
+        // discriminates fspec vs iop by the typed callspec binding, expired
+        // or not (funcdata.rs "v.call_spec.is_some()"), and so does the
+        // emitter. The fspec arm renders the host op's own SeqNum (the
+        // harness writes slotOp's SeqNum); the iop arm decodes the offset
+        // through the live-op table (new_varnode_iop encodes Arc::as_ptr,
+        // the same key pass 1 builds).
+        if vn.call_spec.is_some() {
+            return format!("f:{host_addr:x}:{host_time:x}");
+        }
+        return match live_ops.get(&(offset as usize)) {
+            Some((addr, time)) => format!("o:{addr:x}:{time:x}"),
+            None => "o:-".to_string(),
+        };
     }
     format!("n:{}:{offset:x}:{size}", vn.get_space().name())
 }
 
 // RUGRA-GLUE: emits the complete optree in PcodeOpBank::optree order, which
-// is the v1.1 beginAll/optree order shared with the oracle fixture.
+// is the v1.1 beginAll/optree order shared with the oracle fixture. Two
+// passes per snapshot mirror the harness writeSnapshot
+// (stage_projection_1204.cc:193-210): pass 1 builds the live-op identity
+// table over every op still in the tree (dead-but-not-destroyed included,
+// the beginOpAll set) keyed by the Arc::as_ptr encoding new_varnode_iop
+// writes into iop varnodes; pass 2 emits the op lines.
 fn stage_snapshot(
     output: &mut impl Write,
     fd: &Funcdata,
     seq: u64,
 ) -> Result<(), String> {
+    let mut live_ops: HashMap<usize, (u64, u32)> =
+        HashMap::with_capacity(fd.obank.optree.len());
+    for op_ref in &fd.obank.optree {
+        let op = op_ref.0.read().unwrap();
+        live_ops.insert(
+            std::sync::Arc::as_ptr(&op_ref.0) as usize,
+            (op.get_addr().as_u64(), op.get_time()),
+        );
+    }
     writeln!(output, "@SNAP {seq} ops {}", fd.obank.optree.len())
         .map_err(|error| format!("unable to write stage snapshot header: {error}"))?;
     for op_ref in &fd.obank.optree {
         let op = op_ref.0.read().unwrap();
-        let out = op.get_out().map(stage_vn).unwrap_or_else(|| "-".to_string());
+        let addr = op.get_addr().as_u64();
+        let time = op.get_time();
+        // Only LOAD/STORE input 0 carries a spaceid constant on the Rugra
+        // side (see stage_spaceid_name); every other slot stays value-only.
+        let spaceid_slot = matches!(
+            op.get_opcode(),
+            rugra::opcodes::OpCode::CPUI_LOAD | rugra::opcodes::OpCode::CPUI_STORE
+        );
+        let out = op
+            .get_out()
+            .map(|vn| stage_vn(vn, addr, time, false, &live_ops))
+            .unwrap_or_else(|| "-".to_string());
         let inputs = if op.inrefs.is_empty() {
             "-".to_string()
         } else {
-            op.inrefs.iter().map(stage_vn).collect::<Vec<_>>().join(",")
+            op.inrefs
+                .iter()
+                .enumerate()
+                .map(|(slot, vn)| {
+                    stage_vn(vn, addr, time, spaceid_slot && slot == 0, &live_ops)
+                })
+                .collect::<Vec<_>>()
+                .join(",")
         };
         writeln!(
             output,
-            "{:x}:{:x} {} d={} out={} in={}",
-            op.get_addr().as_u64(),
-            op.get_time(),
+            "{addr:x}:{time:x} {} d={} out={} in={}",
             op.get_opcode().name(),
             u8::from(op.is_dead()),
             out,
-            inputs
+            inputs,
         )
         .map_err(|error| format!("unable to write stage snapshot op: {error}"))?;
     }
