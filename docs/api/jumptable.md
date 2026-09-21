@@ -524,3 +524,51 @@ dbcc9cb 集成：守卫交集就地写回、isBoolOutput 分支、常量无 earl
   完整移植：被提升表间接 op 推回 `tablelist`（JUMPTABLE-MULTISTAGE 缺口关闭）。
 - `Funcdata::stage_jump_table` isPartial 分支改走 recover_multistage（此前
   RUGRA-GAP 注释声称未移植）。
+
+## 2026-09-22：JUMPTABLE-TABLEAPI-0001 P0-A — SwitchNorm 表级 API + foldIn* 语义修正
+
+**JumpTable 新增表级方法**（cc 行号=锁定 12.0.4 e40ed130）：
+- `match_model(fd)`（jumptable.cc:2683-2708）：isRecovered 前置 → 非 override
+  存 saveModel / override 清 savedModel+警告 → recoverModel(maxtablesize=
+  arch.max_jumptable_size) → 表尺寸不匹配时（单条目且模型>1）insertMultistageJump+
+  setRestartPending 早退，否则警告。
+- `recover_labels(fd)`（jumptable.cc:2714-2735）：jmodel 在场 → findUnnormalized+
+  buildLabels（origmodel 为空/零表时 orig=jmodel 自身）；jmodel 缺席 →
+  JumpModelTrivial 兜底（recoverModel/buildAddresses/trivialSwitchOver/
+  buildLabels）；全路径收尾 clearSavedModel。trivialSwitchOver 的尺寸不匹配
+  LowlevelError 经 `JumpTableRecoveryError::Lowlevel` 穿透。
+- `trivial_switch_over()`（jumptable.cc:2594-2609）：block2addr=(i,i) 全对、
+  lastBlock=sizeOut-1、defaultBlock=-1。
+- `fold_in_normalization(fd)`（jumptable.cc:2574-2591）：jmodel->
+  foldInNormalization 后按 minimalmask(NZMask) 设 switch_var_consume，全覆盖时
+  对 INT_SEXT def 退化为 calc_mask(输入尺寸)。
+- `fold_in_guards(fd)`（jumptable.hh:615 inline）：委托 jmodel->foldInGuards
+  （Rust 以 take/put-back 表达 C++ 的 this 别名，无实现读 jt.jmodel）。
+
+**foldIn* 家族语义修正（对齐 12.0.4，修复旧近似）**：
+- `JumpBasic::fold_in_one_guard`（cc:1373-1409）：补 cc:1391 `hasFoldedDefault&&
+  getDefaultBlock!=pos` 单折叠目标守卫（pos 含 not-found==sizeOut 语义）、补
+  cc:1394 `noInterveningStatement` 守卫、GOTO_EDGE_1 近似换 `getFlipPath()`
+  （block.hh:297）、常量值补 `isBooleanFlip` 异或（cc:1402）。
+- `JumpBasic::fold_in_guards`（cc:1555-1570）：null cbranch=continue（不 clear），
+  dead cbranch=clear+continue（旧版两者合并）。
+- `JumpBasic::fold_in_normalization`（cc:1546-1553）：改走 `fd.op_set_input`
+  （维持 Varnode descend 记账；旧版裸写 inrefs 丢 bookkeeping）。
+- `JumpBasic2`：结构改为忠实形态——`fold_in_one_guard`（cc:1634-1649，
+  setLastAsDefault+clear+true）为 override，`fold_in_guards` 继承 JumpBasic 循环
+  并虚派发到该 override（旧版整体 clear+恒 true，空守卫集时返回值错误）。
+- `JumpAssisted::fold_in_normalization`（cc:2193-2206）：真实实现——assist op
+  出边全部后代 opSetInput(slot0=switchvn)（先快照后代再改，因 op_set_input 会
+  切断 outvn descend）+ opDestroy(assistOp)；旧版仅返回 indop 输入。
+- `JumpAssisted::fold_in_guards`（cc:2208-2214）：origVal 记录→setLastAsDefault→
+  比较返回（旧版恒 true）。
+- `JumpBasicOverride::fold_in_normalization`（hh:485）：删除 INVENTED 的
+  is_trivial 分支，纯继承 JumpBasic。
+- `JumpTable::add_block_to_switch`（cc:2535-2543）：lastBlock 改
+  `indirect->parent->size_out()`（旧版用 addresstable.len() 近似，截断表上错位）；
+  test_jump_table_add_block 相应改为真实 indirect+双出边夹具。
+
+Annotation 修正（机制 D cited-line-drift）：foldInOneGuard 1392→1373、
+foldInNormalization 1568→1546、foldInGuards 1577→1555、JumpAssisted foldIn*
+补 cc:2193/2208。ActionSwitchNorm 消费接线见 docs/api/coreaction.md；
+noInterveningStatement 见 docs/api/block.md。
