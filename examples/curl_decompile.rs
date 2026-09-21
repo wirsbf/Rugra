@@ -2249,6 +2249,95 @@ fn stage_vn(
     format!("n:{}:{offset:x}:{size}", vn.get_space().name())
 }
 
+// RUGRA-GLUE (stage projection v1.2.1, punch list P4): the op-line opcode
+// domain is get_opname() verbatim — Ghidra's generated opcode_name[] table
+// (opcodes.cc:29-48, 74 entries, upper-case, no CPUI_ prefix). The table is
+// the emitted domain even where it drifted from the enum identifiers:
+// slots 60/61/65/66 read BUILD/DELAY_SLOT/LABEL/CROSSBUILD for
+// MULTIEQUAL/INDIRECT/PTRADD/PTRSUB (oracle-verbatim quirk; get_opname
+// indexes this table directly, so it must NOT be "corrected" to the enum
+// names). Transcription checked 74/74 against the consumer's
+// V1_OPCODE_ENUM_NAMES (tools/stage_bisect.py, extracted from the locked
+// oracle e40ed130 opcodes.cc by lane R3).
+const STAGE_OPCODE_NAME: [&str; 74] = [
+    "BLANK", "COPY", "LOAD", "STORE",
+    "BRANCH", "CBRANCH", "BRANCHIND", "CALL",
+    "CALLIND", "CALLOTHER", "RETURN", "INT_EQUAL",
+    "INT_NOTEQUAL", "INT_SLESS", "INT_SLESSEQUAL", "INT_LESS",
+    "INT_LESSEQUAL", "INT_ZEXT", "INT_SEXT", "INT_ADD",
+    "INT_SUB", "INT_CARRY", "INT_SCARRY", "INT_SBORROW",
+    "INT_2COMP", "INT_NEGATE", "INT_XOR", "INT_AND",
+    "INT_OR", "INT_LEFT", "INT_RIGHT", "INT_SRIGHT",
+    "INT_MULT", "INT_DIV", "INT_SDIV", "INT_REM",
+    "INT_SREM", "BOOL_NEGATE", "BOOL_XOR", "BOOL_AND",
+    "BOOL_OR", "FLOAT_EQUAL", "FLOAT_NOTEQUAL", "FLOAT_LESS",
+    "FLOAT_LESSEQUAL", "UNUSED1", "FLOAT_NAN", "FLOAT_ADD",
+    "FLOAT_DIV", "FLOAT_MULT", "FLOAT_SUB", "FLOAT_NEG",
+    "FLOAT_ABS", "FLOAT_SQRT", "INT2FLOAT", "FLOAT2FLOAT",
+    "TRUNC", "CEIL", "FLOOR", "ROUND",
+    "BUILD", "DELAY_SLOT", "PIECE", "SUBPIECE", "CAST",
+    "LABEL", "CROSSBUILD", "SEGMENTOP", "CPOOLREF", "NEW",
+    "INSERT", "EXTRACT", "POPCOUNT", "LZCOUNT",
+];
+
+// Rugra OpCode::name() spellings that deliberately differ from the locked
+// table above — the exact set the full-table parity check pins:
+// - 60/61/65/66: the generated-table quirk slots (MULTIEQUAL/INDIRECT/
+//   PTRADD/PTRSUB render BUILD/DELAY_SLOT/LABEL/CROSSBUILD);
+// - 54-59: Rugra's enum variants carry the FLOAT_ prefix that the table
+//   entries INT2FLOAT/FLOAT2FLOAT/TRUNC/CEIL/FLOOR/ROUND omit.
+const STAGE_OPCODE_TABLE_DIVERGENCE: [(&str, &str); 10] = [
+    ("FLOAT_INT2FLOAT", "INT2FLOAT"),
+    ("FLOAT_FLOAT2FLOAT", "FLOAT2FLOAT"),
+    ("FLOAT_TRUNC", "TRUNC"),
+    ("FLOAT_CEIL", "CEIL"),
+    ("FLOAT_FLOOR", "FLOOR"),
+    ("FLOAT_ROUND", "ROUND"),
+    ("MULTIEQUAL", "BUILD"),
+    ("INDIRECT", "DELAY_SLOT"),
+    ("PTRADD", "LABEL"),
+    ("PTRSUB", "CROSSBUILD"),
+];
+
+// RUGRA-GLUE: stage-projection op-name lookup — table spelling by numeric
+// slot, mirroring get_opname(opcodes.cc:60-64). Real ops are always inside
+// the table; an out-of-table value is an emitter bug worth a panic, not a
+// silent wrong name.
+fn stage_opname(code: rugra::opcodes::OpCode) -> &'static str {
+    let index = code as i32 as usize;
+    STAGE_OPCODE_NAME
+        .get(index)
+        .copied()
+        .unwrap_or_else(|| panic!("opcode slot {index} outside the locked 74-name table"))
+}
+
+// v1.2.1 requires the parity check over the FULL 74-name table, not just
+// the opcode subset seen in one corpus: every Rugra variant must match its
+// locked-table slot, and every difference must be one of the pinned
+// STAGE_OPCODE_TABLE_DIVERGENCE entries. Run once per projection.
+fn stage_opcode_parity() -> Result<(), String> {
+    use rugra::opcodes::OpCode;
+    let mut divergences: Vec<(&str, &str)> = Vec::new();
+    for index in 1..STAGE_OPCODE_NAME.len() {
+        // Slot 0 (BLANK) has no Rust variant; CPUI_UNUSED1 (45) is
+        // Ghidra-only — their table entries stay pinned by transcription.
+        if let Some(code) = OpCode::from_i32(index as i32) {
+            if code.name() != STAGE_OPCODE_NAME[index] {
+                divergences.push((code.name(), STAGE_OPCODE_NAME[index]));
+            }
+        }
+    }
+    let mut expected = STAGE_OPCODE_TABLE_DIVERGENCE.to_vec();
+    expected.sort_unstable();
+    divergences.sort_unstable();
+    if divergences != expected {
+        return Err(format!(
+            "opcode table parity break: found {divergences:?}, expected exactly {expected:?}"
+        ));
+    }
+    Ok(())
+}
+
 // RUGRA-GLUE: emits the complete optree in PcodeOpBank::optree order, which
 // is the v1.1 beginAll/optree order shared with the oracle fixture. Two
 // passes per snapshot mirror the harness writeSnapshot
@@ -2301,7 +2390,7 @@ fn stage_snapshot(
         writeln!(
             output,
             "{addr:x}:{time:x} {} d={} out={} in={}",
-            op.get_opcode().name(),
+            stage_opname(op.get_opcode()),
             u8::from(op.is_dead()),
             out,
             inputs,
@@ -2576,6 +2665,9 @@ fn emit_stage_projection(
 ) -> Result<(), String> {
     let output_path = std::env::var("RUGRA_STAGE_PROJ_OUT")
         .map_err(|_| "RUGRA_STAGE_PROJ_OUT is required when RUGRA_STAGE_PROJ is set")?;
+    // v1.2.1 full-table opcode parity gate: refuse to emit a projection
+    // whose enum/table correspondence has drifted from the locked 74 names.
+    stage_opcode_parity()?;
     let binary_sha256 = stage_sha256(&request.binary_image)?;
     let mut output = std::io::BufWriter::new(
         fs::File::create(&output_path)
