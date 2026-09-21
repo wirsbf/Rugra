@@ -79,6 +79,14 @@
 > +38 行真内容+**形态变化 0**;~85% 归 R0 栈参/符号恢复族(修复预期下游,非新缺陷),
 > 次要归 R2a(P2 观察项: 栈对象裂解后结构类型未回附),R1c 驳回。**无需新登记 P0**。
 > 详见 sb-opstackload/MAIN24_ATTRIBUTION.md。
+> **P0 新登记 `DETERM-COPYTRIM-0001`(2026-09-22,Lane AX 实证)**: run-to-run 输出不确定
+> (16 跑 9:7 双版本,getparameter_constprop_0 单 locus 相邻 COPY 对互换)——根因头号候选
+> =merge.rs:3584 process_copy_trims 的 ptr-keyed HashMap into_iter()(Ghidra merge.cc:
+> 1415-1436 为 copyTrims 列表首见序,已逐行对照)——**既是不确定性 bug 也是 Ghidra 遍历
+> 序偏离,动摇差分门禁可信度根基**。修复=镜像列表首见序(参照 merge.rs:2197-2209 排序
+> 模式),验收=连跑≥10 次 sha256 单值+oracle 序一致;merge.rs=机制 C 白名单,修后独立
+> 复核。卫生项: coreaction.rs:12936 过期"faithful no-op"注释更正/examples 4081 payload
+> 序排序。报告=sb-integration/DETERMINISM.md(含已排除清单防重复排查)。
 > **镜像后差集图谱(2026-09-22,Lane AU,DELTA_V2.md)**: +144 事件精确分解=mainloop 遍
 > 8→12(+92)/stackstall 内迭 12→18(+30)/fullloop 轮 3→4(+9,轮型 [4,3,1] vs [4,4,3,1]);
 > 银行膨胀终快照 COPY **171 vs 12**(+159 主导,与 Lane V 拷贝族分诊互证);规则级 top:
