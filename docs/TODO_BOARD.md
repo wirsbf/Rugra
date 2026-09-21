@@ -46,7 +46,24 @@
 > `RUGRA-FLOW-MIRROR-0001`(P0,C-alignment 系列承接,write-set=examples 驱动层+FlowInfo
 > 无界-range 语义;完成前 load_mode 发 `single_function_flow`,完成后切
 > `single_function_bfd`)。Phase 2 next_url 对拍在 D9 修复+D10 镜像完成后开启。
-> **D14 定性(2026-09-22,Lane AI)**: activeparam 9v2 主因=**签名库环境不对称**(Rugra
+> **双链集成(2026-09-22 root)**: SwitchNorm P0-A(b400e90+e27e985,Cross-Review attempt2
+> APPROVE)+spacebase 分派修复(2b324b8..97d6857,B2 fixture 7/10)合并 master,亲测
+> httpd **2343/0/0**、curl **3685/0/0**(3711−6−20 对账一致),已回流 result(curl sha
+> ad0e4170…)。**新登记**:
+> - `JUMPTABLE-PARENTFACTS-FIXTURE-0001`(P1,Cross-Review 绑定条件,owner=fixture lane):
+>   multistage 表通道①+兄弟 BRANCHIND 通道② 双侧 fixture;固化前两通道 B2=UNTESTED。
+> - `TYPE-SPACEBASE-MISSFALLBACK-0001`(P2,Lane AE): Ghidra miss 回退 getBase(1,
+>   TYPE_UNKNOWN) vs Rugra (None,0);涉 typefactory 注入链,超出 AE write-set。
+> - `FUNCDATA-OPSTACKLOAD-CONTAIN-0001`(**P0 热修,1 行**,Lane AL 实证): funcdata.rs:6157
+>   注释引 getContain() 却写 space_id(),stack≠ram→oracle-only loadvarnode 断链;修后单变量
+>   重跑 drill 验证 loadvarnode 0→正。
+> - `FLOW-RANGE-MARSHALING-0001`(P0,并入 RUGRA-FLOW-MIRROR lane 队列): driver
+>   [entry,u64::MAX) 出界→尾跳 BRANCH 改写 CALL+人工 return(非 Ghidra 语义);oracle
+>   全空间经 jumptable fail_thunk 转 CALLIND@0x2534。
+> - `RULE-PTRARITH-ADDTREE-0001`(P1 新侧面,Lane AL): rugra 类型态下 AddTreeState 把
+>   PTRSUB 溶解回 INT_ADD(oracle 侧 0),与 E2E piVar10+0x38 族(≈120 行)同向;倍数受
+>   DWARF 环境不对称污染。`HERITAGE-SUBPIECE-CONST-WIDTH-0001`(P2): 0 偏移常量 8 vs 4
+>   字节(heritage newConstant(4) 约定),312 处,语义影响低。
 > 全语料 libc 签名台账锁 7/9 callee vs oracle 裸 BFD)——D10/D11 族环境假阳性;登记
 > `ACTIVEPARAM-COUNT-9V2-0001`(P1),裁决路径=Rugra 投影产线加"单函数无签名"双态开关
 > 重跑(预期 9,9,0)+maxdelay 实值探针(RCA-2: 有效 maxpass oracle=1 vs rugra=2,fspec 域,
