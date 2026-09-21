@@ -1,5 +1,25 @@
 # `merge.rs` API Reference
 
+## 2026-09-22：`gather_partial_pieces` 补 `PieceNode::isLeaf` 递归界(MERGE-GATHERPIECES-ISLEAF-0001)
+
+Ghidra `PieceNode::gatherPieces`(op.cc:865-876)对每个 PIECE 输入先算
+`isLeaf(rootVn,vn,offset-rootOffset)`(op.cc:801-817),只有非叶节点才递归。
+isLeaf 的五项判定:(a) `vn->isMapped() && rootVn->getSymbolEntry() !=
+vn->getSymbolEntry()`;(b) `!vn->isWritten()`;(c) `def->code() != CPUI_PIECE`;
+(d) `vn->loneDescend() == null`;(e) addr-tied 时地址与 root+relOffset 对齐。
+Rugra 移植只保留了 (c),非树形 PIECE 图(输入由读取它的同一 PIECE 定义)会
+无限递归 —— FUNCDATA-OPSTACKLOAD-CONTAIN-0001 解锁 RuleLoadVarnode 后
+curl `main` 在 ActionMergeRequired(groupPartials)确定性复现 256MB worker
+栈溢出(worker-failure,main 从输出消失)。
+
+修复:`piece_is_leaf`(op.cc:801 忠实移植,五项判定全补,符号项用
+`Arc::ptr_eq` 对应指针相等;地址项同时比较空间与偏移)作为递归门;
+`gather_partial_pieces` 增加 `root_offset` 参数并在非叶时才递归;
+`group_partials` 按 `groupPartialRoot`(merge.cc:1381-1387)从 root 的
+symbol entry 取 `base_offset`(无符号为 0),groupWith 偏移改为
+`offset - base_offset`(cc:1404)。验证:main 恢复反编译(76/124,0
+worker-failure),curl 全语料 defects=0/numbering=0。
+
 **状态**: 已核对（当前有效）  
 **源代码路径**: `src/merge.rs`
 

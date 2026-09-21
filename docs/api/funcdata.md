@@ -1,5 +1,28 @@
 # `funcdata.rs` API Reference
 
+## 2026-09-22：`op_stack_load`/`op_stack_store` 的 LOAD/STORE 空间输入改用 contain 空间(FUNCDATA-OPSTACKLOAD-CONTAIN-0001)
+
+Ghidra `Funcdata::opStackLoad`(funcdata_op.cc:541-552,关键行 :547)与
+`opStackStore`(:508-527,关键行 :523)把 LOAD/STORE 的 in(0) 空间注记建为
+`newVarnodeSpace(spc->getContain())` —— 栈空间(x86-64 cspec basespace)的
+contain 是 **ram**,不是 `spc` 自己。Rugra 此前写成
+`new_constant(1, spc.space_id())`(stack 自身 id),导致
+`RuleLoadVarnode::correctSpacebase` 的
+`assoc->getContain() == loadspace` 守卫(ruleaction.cc:4181)恒假 →
+loadvarnode 规则永不触发(oracle-only 路径 oppool2:loadvarnode 在 Rugra 断链,
+0 应用)、`resolveSpacebaseRelative`(fspec.cc:4870)不执行、栈参占位 LOAD
+不折叠成栈 varnode(drill 观测 `*(stack,` 38 处 vs oracle `*(ram,`)。
+
+修复:两处均改为经 `Architecture::get_contain`(arch.rs,`space.hh:505` /
+`SpacebaseSpace` override `translate.hh:187` 的等价物)解析 contain 空间,
+再编码其 `space_id()` 常量;contain 缺失视为 Ghidra 不可达状态(NULL 传给
+`newVarnodeSpace` = UB),显式 panic。解锁验证(curl 全语料):oppool2 规则
+改动 725 → 1048(+323),`resolve_spacebase_relative` 首次执行(0→1 调用链),
+defects=0 / numbering=0,skeleton 3685 → 3694(main +24 / getparameter −7,
+gp 函数级 862 → 855)。解锁同时暴露 `Merge::gather_partial_pieces` 缺
+`PieceNode::isLeaf` 递归界导致的 main worker 栈溢出(见 merge.md 同日条目
+MERGE-GATHERPIECES-ISLEAF-0001,同批修复)。
+
 ## 2026-08-30：`Funcdata::new` 构造期绑定 canonical Architecture
 
 Ghidra 的 `Funcdata` 构造函数无条件从 Scope 取得 Architecture(funcdata.cc:48
