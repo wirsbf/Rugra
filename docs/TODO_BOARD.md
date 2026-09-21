@@ -33,6 +33,14 @@
 > (门禁:httpd≤2350、curl≤3715、defects=numbering=0)→M3 定稿;禁整段回退 79bb0f6。
 > **Lane M 结论**:29 函数=ELF 地址序前 30 跳过 _start(MAX_FUNCS=30),非硬编码;建议 httpd 作
 > 小规模 follow-on pilot,暂缓全量 2010 扩容。
+> **消费端链已闭环(root 2026-09-22,master `5b52c92`)**: Lane E(2c9c8b4)→Gate 2-E
+> REJECT(B-1 嵌套/B-2 假 MATCH 通道/R-1/R-2/R-3)→Lane R 返修(006db61)+规范转正
+> (74ef199)→Gate 2-E attempt2 **APPROVE**(三未决问题裁维持现状)→F-1(@RESTART 帧内
+> 合法化)root 亲修(bb9920b)→集成。selftest 28/28。规范 repo 契约=
+> docs/alignment_docs/STAGE_BISECT_SPEC_1204.md。
+> **Lane S 完成**: sb-batch/{targets.json(153 目标),batch_driver.py(断点续跑/超时/pending),
+> README}+CLI 契约(run_stage_projection_oracle.sh <corpus> <addr> <name> / RUGRA_STAGE_FUNC=<addr>)。
+> **Lane T 派发**(targets 交叉审计+Phase 2 runbook)、**Lane U 派发**(93 条 UND 地址加固→targets_patch.json)。
 
 > **基线（root 亲测 @ master `85300a1`，2026-09-01 fresh formal release E2E）**：
 > curl 124/124、skeleton **3090**/defects **0**/numbering **0**，stdout sha256
