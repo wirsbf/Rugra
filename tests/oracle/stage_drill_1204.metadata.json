@@ -26,7 +26,7 @@
  },
  "input_fingerprint": "sha256:a40dbc3dde670d1aefb6c2cfc457fca1c3a07a9c59b1e9d56aab8a2ecda560eb",
  "comparand_sha256": {
-  "cpp_fixture": "18b48a3929c6b9f2b60f86d43c6cea9889eaa2fea651aadf38735d815b59553a",
+  "cpp_fixture": "a83bbd77dd4a99e438e0627f661cb2838dffdbd96529c2e4773a20bc2a8dc73d",
   "build_script": "9cdcc3db7117b3d3cfa975a832eabca8f9891174468ae75ded8ae6bcd5517028"
  },
  "assets": {
@@ -52,10 +52,11 @@
    "final_return": 1269,
    "nodes": 232
   },
-  "stability": "pinned stdout is the native variant (records=1019, final_return=1269; STAGE_DRILL_NO_LADDER=1 single-perform runs reproduce the same record stream, proving the break ladder is IR-neutral); one ~15-minute window during development produced a divergent execution (records=1014, final_return=1285, ptrarith applications absent) which has not reproduced across 100+ subsequent runs - any recurrence fails this runner's sha256 pin and must be investigated before the drill output is used as evidence"
+  "stability": "pinned stdout is the native variant (records=1019, final_return=1269; STAGE_DRILL_NO_LADDER=1 single-perform runs reproduce the same record stream, proving the break ladder is IR-neutral); one ~15-minute window during development produced a divergent execution (records=1014, final_return=1285, ptrarith applications absent) which has not reproduced across 100+ subsequent runs - any recurrence fails this runner's sha256 pin and must be investigated before the drill output is used as evidence; recurrence observed 2026-09-22 during runner parameterization: one run of the rebuilt fixture produced sha256=94047fd6584f524f2311d22f6131a4765138d3dc7fd6cc630c12f2953858223a (artifact not preserved by the then-current cleanup); the immediately preceding env-default manual run and two subsequent runner runs reproduced the pinned hash b227ae9439c1bd07499129e78401d02b20527cb588fb2a90d4bc8a793eb15cf6 byte-identically, and the parameterized fixture provably emits the same META line, so the edit is not the cause; the runner now preserves drift artifacts under /dev/shm/rugra-tests/sb-drill/drift/"
  },
  "expected_stdout_sha256": {
   "ghidra": "b227ae9439c1bd07499129e78401d02b20527cb588fb2a90d4bc8a793eb15cf6"
  },
- "fixture_id": "STAGE-DRILL-1204"
+ "fixture_id": "STAGE-DRILL-1204",
+ "functions": {}
 }

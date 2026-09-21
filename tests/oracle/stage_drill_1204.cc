@@ -1,6 +1,12 @@
 /*
  * Locked Ghidra 12.0.4 (e40ed130) OPACTION_DEBUG per-application drill
- * harness for Funcdata "next_url" of examples/curl.
+ * harness for one Funcdata of examples/{curl,httpd}.
+ *
+ * Target selection: STAGE_DRILL_FUNC (symbol name, default "next_url") and
+ * STAGE_DRILL_ADDR (hex entry, default 0x4ff0); with both unset the run is
+ * byte-identical to the original next_url capture.  The entry is verified
+ * against the symbol the BFD loader resolved, so a name collision in the
+ * "::" namespace cannot silently capture the wrong function body.
  *
  * Investigation fixture for stage-bisect v2 (per-application modified-op
  * down-drill).  Design: /dev/shm/rugra-tests/sb-drill/DRILL_DESIGN.md;
@@ -253,8 +259,33 @@ bool parseDebugHeader(const string &frame,long *seq,string *leaf)
 // ---------------------------------------------------------------------------
 // Fixture body
 // ---------------------------------------------------------------------------
+// Resolve the hex text of STAGE_DRILL_ADDR / the next_url default into an
+// address value; accept an optional 0x/0X prefix and reject anything else
+// so a malformed batch-driver argument cannot quietly trace offset 0.
+uintb parseEntryAddress(const string &text)
+{
+  string digits = text;
+  if (digits.size() >= 2 && (digits.compare(0,2,"0x") == 0 || digits.compare(0,2,"0X") == 0))
+    digits = digits.substr(2);
+  if (digits.empty() || digits.find_first_not_of("0123456789abcdefABCDEF") != string::npos)
+    throw runtime_error("entry address is not hexadecimal: " + text);
+  try {
+    return static_cast<uintb>(std::stoull(digits,nullptr,16));
+  }
+  catch (const std::exception &) {
+    throw runtime_error("entry address out of range: " + text);
+  }
+}
+
 void runFixture(const string &specDirectory,const string &binary)
 {
+  const char *funcEnv = std::getenv("STAGE_DRILL_FUNC");
+  const string funcName = (funcEnv != nullptr && *funcEnv != '\0')
+    ? string(funcEnv) : string("next_url");
+  const char *addrEnv = std::getenv("STAGE_DRILL_ADDR");
+  const string addrText = (addrEnv != nullptr && *addrEnv != '\0')
+    ? string(addrEnv) : string("0x4ff0");
+  const uintb entryAddr = parseEntryAddress(addrText);
   vector<string> specPaths;
   specPaths.push_back(specDirectory);
   startDecompilerLibrary(specPaths);
@@ -263,14 +294,17 @@ void runFixture(const string &specDirectory,const string &binary)
     DocumentStorage store;
     architecture.init(store);
     architecture.readLoaderSymbols("::");
-    Funcdata *fd = architecture.symboltab->getGlobalScope()->queryFunction("next_url");
+    Funcdata *fd = architecture.symboltab->getGlobalScope()->queryFunction(funcName);
     if (fd == (Funcdata *)0)
-      throw runtime_error("next_url was not found in the BFD symbol table");
+      throw runtime_error(funcName + " was not found in the BFD symbol table");
     if (fd->hasNoCode())
-      throw runtime_error("next_url has no code");
-    if (fd->getAddress().getOffset() != 0x4ff0)
-      throw runtime_error("next_url entry identity drifted: offset=" +
-                          std::to_string(fd->getAddress().getOffset()));
+      throw runtime_error(funcName + " has no code");
+    if (fd->getAddress().getOffset() != entryAddr) {
+      std::ostringstream detail;
+      detail << funcName << " entry identity drifted: offset=0x" << std::hex
+             << fd->getAddress().getOffset() << " expected=0x" << entryAddr;
+      throw runtime_error(detail.str());
+    }
 
     // Drive protocol of tools/regen_ghidra_golden.py decompileFunction().
     AddrSpace *codeSpace = architecture.getDefaultCodeSpace();
@@ -325,7 +359,8 @@ void runFixture(const string &specDirectory,const string &binary)
     architecture.setDebugStream(&drillStream);
 
     std::cout << "META side=oracle oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b"
-              << " build_flags=OPACTION_DEBUG func=next_url entry=0x4ff0"
+              << " build_flags=OPACTION_DEBUG func=" << funcName
+              << " entry=0x" << std::hex << entryAddr << std::dec
               << " arch=x86:LE:64:default cspec=gcc"
               << " format=raw-native-printdebug record_seq=native_opactdbg_count"
               << " boundary_seq=1based_perform_bracket ladder="
@@ -412,7 +447,9 @@ int main(int argc,char **argv)
 
 {
   if (argc != 3) {
-    std::cerr << "usage: stage_drill_1204 SPEC_ROOT CURL_BINARY\n";
+    std::cerr << "usage: stage_drill_1204 SPEC_ROOT BINARY\n"
+              << "  target via STAGE_DRILL_FUNC / STAGE_DRILL_ADDR"
+              << " (defaults: next_url / 0x4ff0)\n";
     return 2;
   }
   try {
