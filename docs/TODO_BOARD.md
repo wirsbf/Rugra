@@ -142,9 +142,22 @@
 > 归因+punch list v2)。
 > AN 独立验证全过): P1-P8 全落地,74 名表机械校验,消费端剩余卡点=D10 层(PLT 对@stage2
 > op0)=预期正确状态。P3 措辞偏差 root 接受(callspec_link 进 producer 注记,身份键双态
-> 不变)。**新登记 `FUNCDATA-SPACEID-WIDTH-0001`(P1)**: op_stack_load 发 size=1 spaceid
-> 常量 vs Ghidra newVarnodeSpace size=8(765 个 LOAD 槽渲染 c:5:1 被发射器尺寸门挡),
-> src 层修复,与 FUNCDATA-OPSTACKLOAD-CONTAIN-0001 相邻域。
+> 不变)。**`FUNCDATA-SPACEID-WIDTH-0001`(P1,**FIXED 2026-09-22**,Lane BK
+> `wt/sb-spaceid`,owner=fixer,commit a62dbfa)**: funcdata.rs op_stack_load/
+> op_stack_store 双处 `new_constant(1, contain.space_id())` → `new_varnode_space(contain)`
+> (funcdata_varnode.cc:190-198 sizeof(spc)=8;同族 SEGMENTOP 位点 cc:488 同宽 8,
+> x86-64 不可达,Rugra 未实现该分支——已在 create_stack_ref 注释标注宽度语义)。
+> 验证(同机同树 fast-release): P2 复跑首分歧 funclink ordinal7 op-idx4
+> (2534:2e8 LOAD in=s:ram 对齐,投影 c:3:1 残留 0)→后移至 **ordinal 12
+> universal:fullloop:mainloop:heritage op-line 22**(SUBPIECE 截断常量宽 4vs8,
+> 见新登记 SUBFLOW-SUBPIECE-WIDTH-0001);curl E2E defects=0/numbering=0,
+> skeleton 3356 不变,C 文本与 master 基线字节级一致;httpd 29 函数
+> defects=0/numbering=0,与 04:23 基线字节级一致(audit_syntax 82/25 同基线)。
+> **新登记 `SUBFLOW-SUBPIECE-WIDTH-0001`(P1,funclink 后新首分歧)**: subflow.rs:6040
+> `subpiece_value` 发 `new_constant(8, offset)` vs Ghidra subflow.cc:2513
+> `newConstant(4, off)`(RootPointer::subpieceValue,subflow.hh:271);P2 首分歧
+> ordinal12 heritage 首暴露(4ff4:5ad/5b0 SUBPIECE 尾常量 c:0:4/c:4:4 oracle vs
+> c:0:8/c:4:8 rugra)。
 > **双链集成(2026-09-22 root)**: SwitchNorm P0-A(b400e90+e27e985,Cross-Review attempt2
 > APPROVE)+spacebase 分派修复(2b324b8..97d6857,B2 fixture 7/10)合并 master,亲测
 > httpd **2343/0/0**、curl **3685/0/0**(3711−6−20 对账一致),已回流 result(curl sha
