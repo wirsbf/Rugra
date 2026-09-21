@@ -2125,3 +2125,8 @@ runner `tools/run_printc_dowhile_goto_emit_oracle.sh`）。cargo test --lib 17 f
 基线一致（funcdata 测试间状态污染，与本改动无关）。残差：next_url/glob_word/getparameter
 新暴露的自指标 `goto X; X:`（goto_type 判定属 blockaction scopeBreak 族，非 printc 发射层，
 登记待 blockaction wave 认领）。
+
+## 2026-09-22 追加（BLOCKSTRUCT-MULTIGOTO-0001 — MultiGoto 发射委托 + goto case 语句）
+
+- 分派器（emit_block_structured）与 emit_switch_case_body 补 `BlockType::MultiGoto` arm→`emit_block_multigoto`:纯委托 wrapped（block.hh:588 `getBlock(0)->emit(lng)`,printc.cc 无 MultiGoto 分支）——结构化子块走 emit_block_structured,Basic/Copy 叶走 emit_block_ops;multigoto 自身不发 goto 语句（其剥除边属于外围 switch 的 goto case）。
+- `emit_structured_switch` per-case gototype arm（printc.cc:3334-3337）:`case_gototypes[i]!=0` → 标签组 + `emit_goto_statement(front_leaf_start_addr(case), bt)`（GOTO→goto/BREAK→break）,无 body 无追加 break——语句即 case;default 槽同理（`default_gototype!=0` → `default:` + goto 语句）。目标块留在图中由顶层发射承载 LAB 标签（GOTO-LABEL-UNPRINTED-0001 的 pending label 机制接线）。

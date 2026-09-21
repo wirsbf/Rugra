@@ -5162,7 +5162,9 @@ impl<'a> CollapseStructure<'a> {
     /// BlockMultiGoto::addEdge only records the target in `gotoedges` — no
     /// graph edge is created (block.hh:580), so removeEdge takes out the
     /// identifyInternal-inherited structured edge (bilateral, block.cc:1469).
-    fn new_block_multigoto(&mut self, i: usize, outedge: usize) {
+    /// Public for the bilateral BLOCKSTRUCT-MULTIGOTO-0001 fixture (direct
+    /// call, mirroring the oracle fixture's graph.newBlockMultiGoto).
+    pub fn new_block_multigoto(&mut self, i: usize, outedge: usize) {
         let block = match self.graph.get_block(i) {
             Some(b) => b,
             None => return,
