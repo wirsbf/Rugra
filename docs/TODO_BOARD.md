@@ -52,6 +52,14 @@
 > 值通道无行为影响;条件2(main +24 函数级归因)绑定 R1c/R2a 既有族,root 集成阶段补齐。
 > **AR 集成**: stack delay 1 修复合并,curl **3677/0/0**(−8 全改善),httpd 2343 恒等,
 > activeparam [9,9,0] 探针复刻逐点一致。
+> **镜像后差集图谱(2026-09-22,Lane AU,DELTA_V2.md)**: +144 事件精确分解=mainloop 遍
+> 8→12(+92)/stackstall 内迭 12→18(+30)/fullloop 轮 3→4(+9,轮型 [4,3,1] vs [4,4,3,1]);
+> 银行膨胀终快照 COPY **171 vs 12**(+159 主导,与 Lane V 拷贝族分诊互证);规则级 top:
+> ptrarith +19/boolnegate +16/termorder +12;首分歧推进 prototypetypes(21 行前缀);
+> 3240/3843 drill 行差=ffunc_ 拼写格式化间隙(SB-DRILL-FSPEC-NAME)。**新登记**:
+> `ACTION-TRAVERSAL-144-0001`(P0,mainloop 第 4 轮驱动者)与
+> `BANK-COPY-159-0001`(P0,终快照 COPY 银行 159 差,归 w-selfcopy 域);
+> punch list v2=11 项(依赖 DAG 见 DELTA_V2.md §6)。
 > RUGRA_BARE_LOAD=1 落地(env 门控,默认 off 字节一致),load_mode 切 single_function_bfd,
 > **next_url PLT 对逐字节收敛(raw ops 717=717),消费端首分歧推进到 ordinal 5 seq 6
 > universal:prototypetypes**(人工 RETURN 挂 RAX 第二输入 vs oracle INDIRECT [create] 群)。
