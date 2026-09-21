@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Locked-oracle stage projection producer for the next_url pilot of the
-# stage-bisect harness (spec v1.1).  Verifies the locked Ghidra tree,
+# stage-bisect harness (spec v1.2).  Verifies the locked Ghidra tree,
 # rebuilds the fixture against an instrumented temporary copy of the
-# oracle source, runs the stepping walk, validates the full v1.1 stream,
+# oracle source, runs the stepping walk, validates the full v1.2 stream,
 # and installs the projection at the RAM-disk product path.
 set -euo pipefail
 
@@ -160,6 +160,40 @@ if actual != expected:
     raise SystemExit(f"instrumented action.hh mismatch: expected={expected} actual={actual}")
 PY
 
+# Observation-only accessors for SleighArchitecture::languageindex /
+# ::description (implicitly private: declared with no access label, so the
+# macro include wrapper cannot expose them).  The accessors only READ the
+# resolved LanguageDescription so the fixture can derive the canonical META
+# identity keys (language id + compiler tag id) from the live conf object.
+python3 -I -S - "$oracle_cpp/sleigh_arch.hh" "$metadata" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+metadata = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+header = pathlib.Path(sys.argv[1])
+text = header.read_text(encoding="utf-8")
+anchor = (
+    "  static void loadLanguageDescription(const string &specfile,ostream &errs);\n"
+    "  bool isTranslateReused(void);\t\t\t\t///< Test if last Translate object can be reused\n"
+    "protected:\n"
+)
+insertion = (
+    "public:\n"
+    "  int4 fixtureGetLanguageIndex(void) const { return languageindex; }\n"
+    "  static const LanguageDescription &fixtureGetLanguage(int4 i) { return description[i]; }\n"
+)
+if text.count(anchor) != 1:
+    raise SystemExit("sleigh_arch.hh instrumentation anchor drifted")
+text = text.replace(anchor, anchor.replace("protected:\n", "") + insertion + "protected:\n")
+header.write_text(text, encoding="utf-8")
+actual = hashlib.sha256(header.read_bytes()).hexdigest()
+expected = metadata["comparand_sha256"]["ghidra_instrumented_sleigh_arch_hh_sha256"]
+if actual != expected:
+    raise SystemExit(f"instrumented sleigh_arch.hh mismatch: expected={expected} actual={actual}")
+PY
+
 jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')
 make --silent -C "$oracle_cpp" -j "$jobs" EXTRA= libdecomp.a
 g++ -std=c++11 -O2 -I"$bfd_include" -I"$oracle_cpp" \
@@ -225,7 +259,39 @@ begins, ends, snaps, restarts = {}, {}, [], 0
 stack = []
 op_lines = 0
 pending = None
+# v1.2 op-line grammar.  <OPC_NAME> is PcodeOp::getOpName() verbatim
+# (typeop.cc name domain); per spec v1.2 the consumer side validates the
+# token as non-blank.  The opcode spelling may move to the CPUI enum
+# alphabet (ruling pending); the check is therefore driven by the
+# OPCODE_DOMAIN name-table constant — one line flips it:
+#   "any"    non-blank token only (current spec v1.2 default)
+#   "typeop" the 34 TypeOp name spellings observed in this projection
+#   "cpui"   the complete 73-name CPUI enum alphabet (opcodes.hh)
+OPCODE_DOMAIN = "any"
+OPCODE_NAMES = {
+    "any": None,
+    "typeop": frozenset((
+        "! != & && * + - / < << <= == >> ? [] ^ | || "
+        "call callind CARRY (cast) CONCAT copy goto load POPCOUNT return "
+        "SBORROW SCARRY SEXT store SUB ZEXT"
+    ).split(" ")),
+    "cpui": frozenset((
+        "BOOL_AND BOOL_NEGATE BOOL_OR BOOL_XOR BRANCH BRANCHIND CALL CALLIND "
+        "CALLOTHER CAST CBRANCH COPY CPOOLREF EXTRACT FLOAT_ABS FLOAT_ADD "
+        "FLOAT_CEIL FLOAT_DIV FLOAT_EQUAL FLOAT_FLOAT2FLOAT FLOAT_FLOOR "
+        "FLOAT_INT2FLOAT FLOAT_LESS FLOAT_LESSEQUAL FLOAT_MULT FLOAT_NAN "
+        "FLOAT_NEG FLOAT_NOTEQUAL FLOAT_ROUND FLOAT_SQRT FLOAT_SUB "
+        "FLOAT_TRUNC INDIRECT INSERT INT_2COMP INT_ADD INT_AND INT_CARRY "
+        "INT_DIV INT_EQUAL INT_LEFT INT_LESS INT_LESSEQUAL INT_MULT "
+        "INT_NEGATE INT_NOTEQUAL INT_OR INT_REM INT_RIGHT INT_SBORROW "
+        "INT_SCARRY INT_SDIV INT_SEXT INT_SLESS INT_SLESSEQUAL INT_SREM "
+        "INT_SRIGHT INT_SUB INT_XOR INT_ZEXT LOAD LZCOUNT MAX MULTIEQUAL "
+        "NEW PIECE POPCOUNT PTRADD PTRSUB RETURN SEGMENTOP STORE SUBPIECE"
+    ).split(" ")),
+}
 op_re = re.compile(r"^[0-9a-f]+:[0-9a-f]+ \S+ d=[01] out=\S+ in=\S+$")
+# v1.2 vn descriptors: c:/n:/u: (v1.1) plus the pointer pseudonyms
+# s:<spacename>, f:<addr>:<time> (fspec), o:<addr>:<time> / o:- (iop).
 vn_re = re.compile(
     r"^(c:[0-9a-f]+:\d+|n:[A-Za-z0-9_]+:[0-9a-f]+:\d+|u:[0-9a-f]+:\d+"
     r"|s:[A-Za-z0-9_]+|f:[0-9a-f]+:[0-9a-f]+|o:[0-9a-f]+:[0-9a-f]+|o:-|-)$"
@@ -257,7 +323,14 @@ for ln, line in enumerate(lines, 1):
     elif pending is not None:
         if not op_re.match(line):
             raise SystemExit(f"line {ln}: op-line grammar: {line[:80]}")
-        for token in re.split(r"out=|in=|,", line.split(" ", 3)[3]):
+        parts = line.split(" ", 3)
+        opcode_allowed = OPCODE_NAMES[OPCODE_DOMAIN]
+        if opcode_allowed is not None and parts[1] not in opcode_allowed:
+            raise SystemExit(
+                f"line {ln}: opcode token {parts[1]!r} outside "
+                f"OPCODE_DOMAIN={OPCODE_DOMAIN!r}"
+            )
+        for token in re.split(r"out=|in=|,", parts[3]):
             token = token.strip()
             if token and not vn_re.match(token):
                 raise SystemExit(f"line {ln}: varnode descriptor {token!r}")

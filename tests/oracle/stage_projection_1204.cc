@@ -275,6 +275,27 @@ static int run(const string &specRoot,const string &binary,uintb entry,
 
     AddrSpace *code = architecture.getDefaultCodeSpace();
 
+    // META identity keys are DERIVED from the live conf object, not
+    // hardcoded: the language id (x86.ldefs language id="x86:LE:64:default")
+    // and the resolved compiler-spec id (the ldefs <compiler> tag id — "gcc"
+    // for this language; "x86-64-gcc" is the spec FILE name, not the id).
+    // Resolution mirrors SleighArchitecture::buildSpecFile (sleigh_arch.cc:
+    // 354-367): the compiler segment is the text after the last ':' of
+    // archid, and LanguageDescription::getCompiler performs the tag lookup.
+    SleighArchitecture *sleigh = dynamic_cast<SleighArchitecture *>(&architecture);
+    int4 languageIndex = sleigh ? sleigh->fixtureGetLanguageIndex() : -1;
+    if (!sleigh || languageIndex < 0)
+      throw std::runtime_error("projection requires a resolved SLEIGH language");
+    const LanguageDescription &language =
+        SleighArchitecture::fixtureGetLanguage(languageIndex);
+    const string archIdentity = language.getId();
+    const string compilerSegment =
+        sleigh->archid.substr(sleigh->archid.rfind(':') + 1);
+    const CompilerTag &compilerTag = language.getCompiler(compilerSegment);
+    const string cspecIdentity = compilerTag.getId();
+    std::cerr << "[stage_projection] archid=" << sleigh->archid
+              << " arch=" << archIdentity << " cspec=" << cspecIdentity << '\n';
+
     // Spaceid normalization table: every registered space's live object
     // address -> stable name.  Only values matching these addresses are
     // rewritten (they are exactly the values getSpaceFromConst decodes).
@@ -306,7 +327,7 @@ static int run(const string &specRoot,const string &binary,uintb entry,
     }
     std::cout << std::unitbuf;
     std::cout << "META side=oracle oracle_commit=" << ORACLE_COMMIT
-              << " arch=x86:LE:64:default cspec=gcc\n";
+              << " arch=" << archIdentity << " cspec=" << cspecIdentity << '\n';
     std::cout << "META analysis_options=" << options
               << " build_flags=v1-no-OPACTION_DEBUG\n";
     std::cout << "META binary_sha256=" << binarySha
