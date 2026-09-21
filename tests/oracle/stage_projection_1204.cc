@@ -89,7 +89,33 @@ static ActionNode findHit(const vector<ActionNode> &leaves)
 // The complete descriptor grammar is intentionally centralized here.  This
 // is the only function that decides how constant, named-space, unique, and
 // null Varnodes are rendered in the projection.
-static void writeVarnodeDescriptor(ostream &out,const Varnode *vn)
+//
+// Spaceid constants: SLEIGH encodes the "space" input of a dynamic LOAD or
+// STORE as the raw AddrSpace object pointer (sleigh.cc:236/269:
+// `(uintb)(uintp)spc`), which Ghidra itself decodes back with
+// Varnode::getSpaceFromConst (constseq.cc:911, coreaction.cc:976).  The
+// pointer value changes between processes (ASLR), so an exact-match table
+// of live AddrSpace object addresses is used to render the stable space
+// name instead (`s:<name>`); the pointer encoding itself is not
+// reproducible by any second run or by the Rust side and carries no
+// cross-run semantics.
+static std::map<uintb, string> g_spaceIdNames;
+
+static void writeSeqNum(ostream &out,const PcodeOp *op)
+{
+  out << std::hex << op->getAddr().getOffset() << ':' << op->getTime()
+      << std::dec;
+}
+
+// slotOp is the PcodeOp whose output/input slot is being rendered; it owns
+// any fspec-space varnode (the FuncCallSpecs of that call site), so its
+// SeqNum is the stable pseudonym.  iopNames maps live PcodeOp object
+// addresses to SeqNum strings for iop-space references (pointer encodings
+// from Funcdata::newVarnodeCallSpecs / newVarnodeIop change between
+// processes exactly like the spaceid constant above).
+static void writeVarnodeDescriptor(ostream &out,const Varnode *vn,
+                                   const PcodeOp *slotOp,
+                                   const std::map<const PcodeOp *,string> *iopNames)
 {
   if (vn == (const Varnode *)0) {
     out << '-';
@@ -97,28 +123,58 @@ static void writeVarnodeDescriptor(ostream &out,const Varnode *vn)
   }
   AddrSpace *space = vn->getSpace();
   out << std::hex;
-  if (space->getType() == IPTR_CONSTANT)
+  if (space->getType() == IPTR_CONSTANT) {
+    if (vn->getSize() == sizeof(AddrSpace *)) {
+      std::map<uintb,string>::const_iterator found =
+          g_spaceIdNames.find(vn->getOffset());
+      if (found != g_spaceIdNames.end()) {
+        out << "s:" << found->second;
+        out << std::dec;
+        return;
+      }
+    }
     out << "c:" << vn->getOffset() << ':' << std::dec << vn->getSize();
+  }
   else if (space->getName() == "unique")
     out << "u:" << vn->getOffset() << ':' << std::dec << vn->getSize();
+  else if (space->getName() == "fspec")
+  {
+    // One call site owns exactly one FuncCallSpecs; render the call op's
+    // own SeqNum so distinct call sites keep distinct identities.
+    out << "f:";
+    writeSeqNum(out,slotOp);
+  }
+  else if (space->getName() == "iop")
+  {
+    // Reference to another PcodeOp; render the referenced op's SeqNum
+    // from the live-op table of this snapshot.
+    out << "o:";
+    std::map<const PcodeOp *,string>::const_iterator found =
+        iopNames->find((const PcodeOp *)vn->getOffset());
+    if (found != iopNames->end())
+      out << found->second;
+    else
+      out << '-';
+  }
   else
     out << "n:" << space->getName() << ':' << vn->getOffset() << ':'
         << std::dec << vn->getSize();
   out << std::dec;
 }
 
-static void writeOp(ostream &out,const PcodeOp *op)
+static void writeOp(ostream &out,const PcodeOp *op,
+                    const std::map<const PcodeOp *,string> &iopNames)
 {
   // d= follows op.cc:380-381 semantics: dead OR unattached (no parent).
   out << std::hex << op->getAddr().getOffset() << ':' << op->getTime()
       << std::dec << ' ' << op->getOpName()
       << " d=" << ((op->isDead() || op->getParent() == (BlockBasic *)0) ? 1 : 0)
       << " out=";
-  writeVarnodeDescriptor(out,op->getOut());
+  writeVarnodeDescriptor(out,op->getOut(),op,&iopNames);
   out << " in=";
   for (int4 slot=0;slot<op->numInput();++slot) {
     if (slot != 0) out << ',';
-    writeVarnodeDescriptor(out,op->getIn(slot));
+    writeVarnodeDescriptor(out,op->getIn(slot),op,&iopNames);
   }
   if (op->numInput() == 0) out << '-';
   out << '\n';
@@ -127,13 +183,18 @@ static void writeOp(ostream &out,const PcodeOp *op)
 static void writeSnapshot(ostream &out,uint64_t seq,Funcdata &fd)
 {
   uint64_t count = 0;
+  std::map<const PcodeOp *,string> iopNames;
   for (PcodeOpTree::const_iterator iter=fd.beginOpAll();
-       iter!=fd.endOpAll();++iter)
+       iter!=fd.endOpAll();++iter) {
+    std::ostringstream rendered;
+    writeSeqNum(rendered,(*iter).second);
+    iopNames[(*iter).second] = rendered.str();
     ++count;
+  }
   out << "@SNAP " << seq << " ops " << count << '\n';
   for (PcodeOpTree::const_iterator iter=fd.beginOpAll();
        iter!=fd.endOpAll();++iter)
-    writeOp(out,(*iter).second);
+    writeOp(out,(*iter).second,iopNames);
 }
 
 static void beginEvent(ostream &out,vector<Event> &active,
@@ -213,6 +274,16 @@ static int run(const string &specRoot,const string &binary,uintb entry,
       throw std::runtime_error("selected function has no code");
 
     AddrSpace *code = architecture.getDefaultCodeSpace();
+
+    // Spaceid normalization table: every registered space's live object
+    // address -> stable name.  Only values matching these addresses are
+    // rewritten (they are exactly the values getSpaceFromConst decodes).
+    for (int4 i = 0;i < architecture.numSpaces();++i) {
+      AddrSpace *spc = architecture.getSpace(i);
+      if (spc != (AddrSpace *)0)
+        g_spaceIdNames[(uintb)(uintp)spc] = spc->getName();
+    }
+
     fd->followFlow(Address(code,0),Address(code,code->getHighest()));
     Action *root = architecture.allacts.getCurrent();
     ActionRestartGroup *restart = dynamic_cast<ActionRestartGroup *>(root);
