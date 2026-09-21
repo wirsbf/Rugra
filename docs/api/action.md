@@ -1325,3 +1325,10 @@ action.cc:316-322 与 :839-845;pool 自身的 flush 因 active 位被 rule 对
 复位而自然 no-op,与 oracle 相同)。env 门控 `RUGRA_STAGE_DRILL`;
 env-off 字节一致性验证:05c8314 基线 vs 本分支,examples/
 rugra_decompile_func 对 examples/curl 的 next_url 输出逐字节相同。
+
+## 2026-09-22: `Action::fixture_curstart`(重启轮只读视图)
+
+trait 默认 0,`ActionRestartGroup` 覆写返回受保护 `curstart`(action.hh:175,
+action.cc:553-582 驱动)。仅供 stage projection 发射器检测 `@RESTART` 轮
+(Rugra 重启未接线 PIPE-RESTART-0001,当前恒 0);与 wt/sb-rust f07229c 的
+访问器同构,供 httpd 驱动发射器复用。
