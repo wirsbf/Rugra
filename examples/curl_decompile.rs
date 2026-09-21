@@ -2682,10 +2682,12 @@ fn emit_stage_projection(
     // values (oracle projection META, STAGE_BISECT_SPEC_1204.md identity
     // keys). The callspec-link injection difference moves out of the
     // analysis_options identity key into the producer annotation (D3).
-    // load_mode is the D10 honest literal: until Rugra mirrors the oracle's
-    // followFlow load contract (RUGRA-FLOW-MIRROR-0001), the input
-    // construction is different and the projection says so; the consumer's
-    // identity-key hard block on this field is the correct behavior.
+    // load_mode is the D10 honest literal: under RUGRA_FLOW_MIRROR=1 the
+    // mirror load contract (RUGRA-FLOW-MIRROR-0001) is in effect and the
+    // literal is single_function_bfd; the default bounded driver range still
+    // constructs a different input, says single_function_flow, and the
+    // consumer's identity-key hard block on this field is the correct
+    // behavior for it.
     let callspec_link = std::env::var("RUGRA_DISABLE_CALLSPEC_LINK").is_err();
     writeln!(
         output,
@@ -2697,10 +2699,20 @@ fn emit_stage_projection(
         "META analysis_options=default build_flags=v1-no-OPACTION_DEBUG"
     )
     .map_err(|error| format!("unable to write stage metadata: {error}"))?;
+    // load_mode (D10): RUGRA_FLOW_MIRROR=1 lands the oracle followFlow load
+    // contract (follow_flow_range(0, u64::MAX) + no shared-return overrides),
+    // so the honest literal flips to single_function_bfd; the default
+    // bounded driver range keeps single_function_flow and the consumer's
+    // identity-key hard block stays the correct behavior for it.
+    let load_mode = if std::env::var("RUGRA_FLOW_MIRROR").is_ok() {
+        "single_function_bfd"
+    } else {
+        "single_function_flow"
+    };
     writeln!(
         output,
-        "META binary_sha256={} func_entry=0x{:x} func_name={} load_mode=single_function_flow",
-        binary_sha256, request.target.vaddr, request.target.name
+        "META binary_sha256={} func_entry=0x{:x} func_name={} load_mode={}",
+        binary_sha256, request.target.vaddr, request.target.name, load_mode
     )
     .map_err(|error| format!("unable to write stage metadata: {error}"))?;
     // unique_base = ANALYSIS_UNIQUE_START (src/varnode.rs:30, Ghidra
@@ -3579,13 +3591,29 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
             callee_protos.len()
         );
     }
-    rugra::flow::follow_flow_with_callee_protos(
-        &mut fd,
-        &mut sleigh,
-        Address::new(target.vaddr),
-        u64::MAX,
-        &callee_protos,
-    )
+    // RUGRA-FLOW-MIRROR-0001 M2: RUGRA_FLOW_MIRROR=1 drives the oracle load
+    // contract — followFlow(Address(codeSpace,0), Address(codeSpace,
+    // getHighest())) (funcdata_op.cc:756; regen_ghidra_golden.py:388 ≡ oracle
+    // harness:315) — so tail jumps into lower code-space regions (the PLT)
+    // are followed in-function and the resulting BRANCHIND truncates through
+    // the jumptable fail_thunk path (jumptable.cc:2304-2320 → flow.cc:727/735
+    // → CALLIND + artificial halt). Default keeps the historical driver
+    // range [entry, ∞) so E2E output stays byte-identical.
+    if std::env::var("RUGRA_FLOW_MIRROR").is_ok() {
+        eprintln!(
+            "[PREPASS] {} flow mirror: follow_flow_range(0, u64::MAX)",
+            target.name
+        );
+        rugra::flow::follow_flow_range(&mut fd, &mut sleigh, 0, u64::MAX, &callee_protos)
+    } else {
+        rugra::flow::follow_flow_with_callee_protos(
+            &mut fd,
+            &mut sleigh,
+            Address::new(target.vaddr),
+            u64::MAX,
+            &callee_protos,
+        )
+    }
     .map_err(|error| format!("flow generation failed for {}: {error}", target.name))?;
     eprintln!(
         "[STEP] {} flow done {:?} raw_ops={} bblocks={}",
@@ -4848,6 +4876,13 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
     // part of this slice.
     let flow_override_entries = if std::env::var("RUGRA_DISABLE_SHARED_RETURN").is_ok() {
         eprintln!("[PREPASS] Shared Return Calls disabled for A/B");
+        Vec::new()
+    } else if std::env::var("RUGRA_FLOW_MIRROR").is_ok() {
+        // RUGRA-FLOW-MIRROR-0001: the oracle single-function harness is a raw
+        // BFD load — no Java analyzer ever wrote Instruction flow overrides,
+        // so the mirror load contract must not install the Shared Return
+        // Calls emulation either.
+        eprintln!("[PREPASS] Shared Return Calls disabled for flow mirror");
         Vec::new()
     } else {
         let records =

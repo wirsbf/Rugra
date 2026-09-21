@@ -693,3 +693,22 @@ E2E 零变化。hasModel（truncate case 的 setInternal 分歧）与 spec name
   `Funcdata::inject_raw_ops` 的 linear-scan driver 路径 flow-time callspec 锚定
   （见 docs/api/funcdata.md 的 inject_raw_ops 条目）复用同一默认构造态，避免出现
   第二份 FuncProto::new 副本漂移。
+
+## 2026-09-22（RUGRA-FLOW-MIRROR-0001）：`follow_flow_range` 完整形参入口
+
+- 新增 `pub fn follow_flow_range(fd, lifter, baddr, eaddr, callee_protos)`：
+  镜像 `Funcdata::followFlow` 的完整 `(baddr, eaddr)` 形参形态
+  （funcdata_op.cc:756-783）——调用方给出约束范围，walk 本身永远从函数自身
+  entry 播种（flow.cc:791 `addrlist.push_back(data.getAddress()`），
+  baddr 只约束 `new_address` 目标（flow.cc:222）。oracle 单函数 harness 与
+  regen_ghidra_golden.py:388 传 `(code:0, code:highest)`——x86-64 默认 ram
+  space 即 `(0, u64::MAX)`——尾跳进低地址 code space 区（PLT）被跟入函数,
+  随后 BRANCHIND 经 fail_thunk 路径（jumptable.cc:2304-2320 → flow.cc:727/735）
+  截断为 CALLIND + artificial halt。
+- `follow_flow_with_callee_protos` 保留原签名并委托
+  `follow_flow_range(baddr=entry)`：历史驱动有界形态,既有调用点
+  （curl_decompile 默认路径、getstr_stage_snapshot）行为逐字节不变。
+- 消费方:curl driver 在 `RUGRA_FLOW_MIRROR=1` 时走
+  `follow_flow_range(0, u64::MAX)`（examples 级 env 门控,默认 off）;
+  stage projection 的 META `load_mode` 在同一门下发 `single_function_bfd`
+  （STAGE_BISECT_SPEC_1204.md D10）。
