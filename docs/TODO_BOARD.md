@@ -4,6 +4,18 @@
 
 ## 活跃 wave：`W-2026-09-01-FLEET5`（2026-09-01 起；goal=所有函数文本级对齐；并发上限 5=用户指令）
 
+> ### 派发：STAGE-BISECT-E2E（2026-09-21 root，deepwork 最高并发指令）
+> **目标**：双侧 stage 投影生产端 + curl top 函数差异归因（3718 skeleton → 根因清单）。
+> **车道**：Lane A `wt/sb-oracle`（oracle 投影 harness，owner=sb-oracle-agent）；
+> Lane C `wt/sb-rust`（Rust emitter，owner=sb-rust-agent）；
+> Lane D inventory（主仓只读，owner=sb-inventory-agent）；
+> Gate 1-4 = oracle 规范/保真/首分歧/根因表评审。
+> **write-set**：A=`tools/stage_projection_1204*.cc|sh, tests/oracle/*(新增)`，
+> C=`examples/*(新增), src/ 仅限 RUGRA-GLUE 只读访问器, docs/api/*`，
+> D=仅 /dev/shm。临时测试代码一律 /dev/shm/rugra-tests/<branch>/。
+> **验收**：next_url 双侧投影 + `tools/stage_bisect.py` 首分歧输出 + top 函数归因表。
+> 状态与规范：`.slim/deepwork/stage-bisect-e2e.md`。
+
 > **基线（root 亲测 @ master `85300a1`，2026-09-01 fresh formal release E2E）**：
 > curl 124/124、skeleton **3090**/defects **0**/numbering **0**，stdout sha256
 > `ff6bef47cf0154be1bd3e460882556e4f80f465b580e773b202895d890768a48`（已回流 result/curl_cur.c）；
