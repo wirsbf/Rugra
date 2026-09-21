@@ -26,7 +26,7 @@
  },
  "input_fingerprint": "sha256:a40dbc3dde670d1aefb6c2cfc457fca1c3a07a9c59b1e9d56aab8a2ecda560eb",
  "comparand_sha256": {
-  "cpp_fixture": "a83bbd77dd4a99e438e0627f661cb2838dffdbd96529c2e4773a20bc2a8dc73d",
+  "cpp_fixture": "55d3dd36a7eda64956bcc0ab69a4dfee0c0f6e55ff10630750103028c54bf2f7",
   "build_script": "9cdcc3db7117b3d3cfa975a832eabca8f9891174468ae75ded8ae6bcd5517028"
  },
  "assets": {
@@ -52,11 +52,61 @@
    "final_return": 1269,
    "nodes": 232
   },
-  "stability": "pinned stdout is the native variant (records=1019, final_return=1269; STAGE_DRILL_NO_LADDER=1 single-perform runs reproduce the same record stream, proving the break ladder is IR-neutral); one ~15-minute window during development produced a divergent execution (records=1014, final_return=1285, ptrarith applications absent) which has not reproduced across 100+ subsequent runs - any recurrence fails this runner's sha256 pin and must be investigated before the drill output is used as evidence; recurrence observed 2026-09-22 during runner parameterization: one run of the rebuilt fixture produced sha256=94047fd6584f524f2311d22f6131a4765138d3dc7fd6cc630c12f2953858223a (artifact not preserved by the then-current cleanup); the immediately preceding env-default manual run and two subsequent runner runs reproduced the pinned hash b227ae9439c1bd07499129e78401d02b20527cb588fb2a90d4bc8a793eb15cf6 byte-identically, and the parameterized fixture provably emits the same META line, so the edit is not the cause; the runner now preserves drift artifacts under /dev/shm/rugra-tests/sb-drill/drift/"
+  "stability": "root-caused 2026-09-22: the recorded per-application DEBUG stream depends on the oracle process's early heap allocation sequence, and pointer-keyed iteration order inside the oracle flips with it. Two levers demonstrated on next_url: (a) argv path form - relative spec/binary argv reproduces the pinned variant (records=1019, sha256=b227ae94...) while absolute argv yields a second, equally deterministic variant (records=1014, sha256=94047fd6...); (b) ASLR - with randomization on, larger functions (curl main) produce a different stream almost every run (4744/4745/4762/4763 records across four same-input runs). Environment size is irrelevant (env -i plus a 24-byte padding var reproduces the same hash). The historical '~15-minute divergent window' (records=1014, final_return=1285) was this argv/ASLR sensitivity, not a random native execution. Canonical capture recipe pinned for every function (runner determinism note): cwd=repo_root, relative argv sleigh_specs examples/<corpus>, env -i + STAGE_DRILL_FUNC/STAGE_DRILL_ADDR only, setarch -R. Under it next_url reproduces b227ae94... byte-identically (preserving the historical pin) and each functions-map target is byte-stable across repeated runs. Any future drift fails the runner's per-function sha256 pin; drift artifacts are preserved under /dev/shm/rugra-tests/sb-drill/drift/"
  },
  "expected_stdout_sha256": {
   "ghidra": "b227ae9439c1bd07499129e78401d02b20527cb588fb2a90d4bc8a793eb15cf6"
  },
  "fixture_id": "STAGE-DRILL-1204",
- "functions": {}
+ "functions": {
+  "curl/main": {
+   "corpus": "curl",
+   "function": "main",
+   "entry": "0x25a0",
+   "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "expected_done": {
+    "applications": 4997,
+    "records": 4763,
+    "opactdbg_final": 4763,
+    "perform_calls": 277,
+    "final_return": 14105,
+    "nodes": 232
+   },
+   "expected_stdout_sha256": "e6e7be84ff2a6a19c41feb28fbf29b4039ace8d0b55f1f119006772fd1d64760",
+   "capture_recipe": "cwd=repo_root; setarch -R env -i STAGE_DRILL_FUNC/STAGE_DRILL_ADDR; argv=sleigh_specs examples/<corpus> (relative paths); the recorded application stream depends on the oracle process's early heap allocation sequence: relative-vs-absolute argv and ASLR both demonstrably flip it, so both are pinned (see runner determinism note)"
+  },
+  "curl/getparameter.constprop.0": {
+   "corpus": "curl",
+   "function": "getparameter.constprop.0",
+   "entry": "0x3f00",
+   "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "expected_done": {
+    "applications": 3673,
+    "records": 3375,
+    "opactdbg_final": 3375,
+    "perform_calls": 345,
+    "final_return": 5971,
+    "nodes": 232
+   },
+   "expected_stdout_sha256": "92c66176a129b628046697dcc773ec7f8d7a41a727c9de5a62b10f442f05c073",
+   "capture_recipe": "cwd=repo_root; setarch -R env -i STAGE_DRILL_FUNC/STAGE_DRILL_ADDR; argv=sleigh_specs examples/<corpus> (relative paths); the recorded application stream depends on the oracle process's early heap allocation sequence: relative-vs-absolute argv and ASLR both demonstrably flip it, so both are pinned (see runner determinism note)"
+  },
+  "httpd/main": {
+   "corpus": "httpd",
+   "function": "main",
+   "entry": "0x2b820",
+   "binary_sha256": "805f89cdbdce827f8f6ccd877aa7c344ff1105713b7bf7b0e6f313affa93b1c1",
+   "expected_done": {
+    "applications": 6817,
+    "records": 6583,
+    "opactdbg_final": 6583,
+    "perform_calls": 272,
+    "final_return": 9591,
+    "nodes": 232
+   },
+   "expected_stdout_sha256": "4e0aac505419f280bb48e82c45492d1260ba028b0eabc2db729bc0d6ebba32f1",
+   "capture_recipe": "cwd=repo_root; setarch -R env -i STAGE_DRILL_FUNC/STAGE_DRILL_ADDR; argv=sleigh_specs examples/<corpus> (relative paths); the recorded application stream depends on the oracle process's early heap allocation sequence: relative-vs-absolute argv and ASLR both demonstrably flip it, so both are pinned (see runner determinism note)",
+   "loader_deviation": "httpd is stripped: LoadImageBfd reads only the static BFD symbol table (bfd_canonicalize_symtab), so the harness registers dynamic-table function symbols as in tools/regen_ghidra_golden.py registerBfdFunctionSymbols; the entry pin guards identity"
+  }
+ }
 }

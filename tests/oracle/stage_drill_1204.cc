@@ -58,6 +58,7 @@
 #include "coreaction.hh"
 #include "libdecomp.hh"
 
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -277,6 +278,55 @@ uintb parseEntryAddress(const string &text)
   }
 }
 
+// Stripped corpus binaries (httpd) expose their functions only in the BFD
+// dynamic symbol table, which LoadImageBfd::openSymbols never reads
+// (bfd_canonicalize_symtab = static .symtab only, loadimage_bfd.cc:194-225),
+// so Architecture::readLoaderSymbols registers nothing for them.  When the
+// static name lookup misses, this fallback ingests dynamic function symbols
+// as an exact mirror of the canonical golden generator's loader ingestion
+// (tools/regen_ghidra_golden.py registerBfdFunctionSymbols): BSF_FUNCTION
+// filter, undefined imports skipped, findCreateScopeFromSymbolName +
+// Scope::addFunction.  The entry-identity check in runFixture still pins
+// which function gets traced.  Static-table targets (curl) never reach it.
+void registerDynamicFunctionSymbols(Architecture &architecture,const string &binary)
+{
+  bfd *abfd = bfd_openr(binary.c_str(),"default");
+  if (abfd == (bfd *)0)
+    throw runtime_error("bfd_openr failed: " + binary);
+  if (!bfd_check_format(abfd,bfd_object)) {
+    bfd_close(abfd);
+    return;
+  }
+  long upper = bfd_get_dynamic_symtab_upper_bound(abfd);
+  if (upper <= 0) {
+    bfd_close(abfd);
+    return;
+  }
+  asymbol **symbols = (asymbol **)malloc(static_cast<size_t>(upper));
+  if (symbols == (asymbol **)0) {
+    bfd_close(abfd);
+    throw runtime_error("dynamic symbol table malloc failed");
+  }
+  long count = bfd_canonicalize_dynamic_symtab(abfd,symbols);
+  AddrSpace *code = architecture.getDefaultCodeSpace();
+  for (long index = 0;index < count;++index) {
+    asymbol *symbol = symbols[index];
+    if (symbol == (asymbol *)0 || symbol->name == (const char *)0) continue;
+    if ((symbol->flags & BSF_FUNCTION) == 0) continue;
+    if (symbol->section == (asection *)0 || bfd_is_und_section(symbol->section))
+      continue;
+    Address address(code,bfd_asymbol_value(symbol));
+    if (architecture.symboltab->getGlobalScope()->queryFunction(address) != (Funcdata *)0)
+      continue; // already registered from another symbol source
+    string basename;
+    Scope *scope = architecture.symboltab->findCreateScopeFromSymbolName(
+        symbol->name,"::",basename,(Scope *)0);
+    scope->addFunction(address,basename);
+  }
+  free(symbols);
+  bfd_close(abfd);
+}
+
 void runFixture(const string &specDirectory,const string &binary)
 {
   const char *funcEnv = std::getenv("STAGE_DRILL_FUNC");
@@ -295,6 +345,10 @@ void runFixture(const string &specDirectory,const string &binary)
     architecture.init(store);
     architecture.readLoaderSymbols("::");
     Funcdata *fd = architecture.symboltab->getGlobalScope()->queryFunction(funcName);
+    if (fd == (Funcdata *)0) {
+      registerDynamicFunctionSymbols(architecture,binary);
+      fd = architecture.symboltab->getGlobalScope()->queryFunction(funcName);
+    }
     if (fd == (Funcdata *)0)
       throw runtime_error(funcName + " was not found in the BFD symbol table");
     if (fd->hasNoCode())

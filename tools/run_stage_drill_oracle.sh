@@ -208,6 +208,28 @@ if [[ ! -x "$drill_bin" ]]; then
   exit 1
 fi
 
+# Determinism control (root-caused 2026-09-22): the recorded per-application
+# DEBUG stream depends on the oracle process's early heap allocation
+# sequence, which two levers demonstrably flip:
+#   - argv path form: relative vs absolute spec/binary paths shift the
+#     harness's std::string allocations and flip the pointer-keyed iteration
+#     order inside the oracle (next_url: records=1019 with relative argv,
+#     records=1014 with absolute argv, both individually deterministic);
+#   - ASLR: with randomization on, large functions (curl main) produce a
+#     different stream almost every run (4744/4745/4762/4763 records in four
+#     same-input runs).
+# Canonical capture recipe, fixed for every pin this runner makes:
+#   cwd=repo_root, argv=sleigh_specs examples/<corpus> (relative),
+#   env=`env -i` + STAGE_DRILL_FUNC/STAGE_DRILL_ADDR only, ASLR off via
+#   `setarch -R`.  This reproduces the historical next_url pin b227ae94...
+#   byte-identically, and keeps every capture independent of the caller's
+#   environment.  (Environment size itself is irrelevant: an env -i run
+#   with a 24-byte padding var reproduces the same hash.)
+if ! command -v setarch >/dev/null 2>&1; then
+  echo "setarch not found: drill captures require ASLR-disabled execution" >&2
+  exit 1
+fi
+
 oracle_tmp=$(mktemp -d /tmp/rugra-stage-drill-1204.XXXXXX)
 cleanup() {
   case "$oracle_tmp" in
@@ -217,8 +239,13 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-if ! STAGE_DRILL_FUNC="$func" STAGE_DRILL_ADDR="$entry_norm" \
-  "$drill_bin" "$spec_root" "$binary" \
+# Canonical recipe: repo-root cwd + relative argv + scrubbed env + ASLR
+# off (see the determinism note above).  The mktemp scratch path stays
+# absolute and never enters the drill's argv.
+cd "$repo_root"
+if ! setarch "$(uname -m)" -R env -i \
+  STAGE_DRILL_FUNC="$func" STAGE_DRILL_ADDR="$entry_norm" \
+  "$drill_bin" sleigh_specs "examples/$corpus" \
   >"$oracle_tmp/stage_drill.stdout" 2>"$oracle_tmp/stage_drill.stderr"; then
   cat "$oracle_tmp/stage_drill.stderr" >&2
   exit 1
