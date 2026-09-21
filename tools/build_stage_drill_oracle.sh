@@ -25,15 +25,21 @@ if [[ ! -f "$bfd_include/bfd.h" || ! -f "$bfd_library" ]]; then
   exit 1
 fi
 
-# Fresh git-archive of the locked oracle commit; skip if already present.
+# Fresh git-archive of the locked oracle commit; a stamp file guards reuse
+# (a workroot archived from a different commit is wiped and re-extracted).
 cpp_root="$workroot/locked-cpp"
-if [[ ! -f "$cpp_root/Ghidra/Features/Decompiler/src/decompile/cpp/libdecomp.hh" ]]; then
+stamp="$workroot/locked-cpp.commit"
+if [[ -f "$stamp" && "$(cat "$stamp")" == "$oracle_commit" && -d "$cpp_root" ]]; then
+  : # reusable
+else
+  rm -rf -- "$cpp_root" "$stamp"
   archive="$workroot/locked-cpp.tar"
   git -C "$ghidra_root" archive --format=tar --output="$archive" "$oracle_commit" \
     Ghidra/Features/Decompiler/src/decompile/cpp
   mkdir -p "$cpp_root"
   tar -xf "$archive" -C "$cpp_root"
   rm -f "$archive"
+  printf '%s\n' "$oracle_commit" > "$stamp"
 fi
 cpp_root="$cpp_root/Ghidra/Features/Decompiler/src/decompile/cpp"
 [[ -f "$cpp_root/libdecomp.hh" ]] || { echo "archive layout unexpected" >&2; exit 1; }

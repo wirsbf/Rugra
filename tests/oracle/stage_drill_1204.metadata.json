@@ -1,0 +1,61 @@
+{
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": "gcc",
+ "build_flags": "-DOPACTION_DEBUG",
+ "build_isolation": "git archive of the oracle commit into a stamp-guarded scratch tree; the shared ghidra checkout is never built with the debug define",
+ "analysis_options": {
+  "architecture_constructor": "BfdArchitecture(examples/curl, default)",
+  "loader_symbol_namespace": "::",
+  "drive_protocol": "followFlow over the full default code space; allacts.getCurrent()->reset; perform loop resuming past every breakpoint (tools/regen_ghidra_golden.py decompileFunction protocol)",
+  "debug_stream_capture": "Architecture::setDebugStream(framing sink); one frame per Funcdata::debugModPrint flush",
+  "break_ladder": "sticky break_start on every tree action node; printState chain identifies the stopped node; duplicate-named nodes (6 paths) cannot be breakpoint-addressed",
+  "known_deviation": "Action::count_tests is not incremented on start-breakpoint resumes (statistics-only; apply order, IR results, and the DEBUG stream content are unaffected)"
+ },
+ "input": {
+  "binary": "examples/curl",
+  "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+  "function": "next_url",
+  "entry": "ram:0000000000004ff0",
+  "flow_range": "full default code space (followFlow)",
+  "debug_trace": "debugSetRange(Address(), Address()) whole-function + debugEnable",
+  "build_flags": "OPACTION_DEBUG"
+ },
+ "input_fingerprint": "sha256:a40dbc3dde670d1aefb6c2cfc457fca1c3a07a9c59b1e9d56aab8a2ecda560eb",
+ "comparand_sha256": {
+  "cpp_fixture": "18b48a3929c6b9f2b60f86d43c6cea9889eaa2fea651aadf38735d815b59553a",
+  "build_script": "9cdcc3db7117b3d3cfa975a832eabca8f9891174468ae75ded8ae6bcd5517028"
+ },
+ "assets": {
+  "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+  "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+  "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+  "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+  "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+  "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+ },
+ "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+ "observation": {
+  "kind": "oracle_raw_capture",
+  "overall_status": "UNTESTED",
+  "reason": "one-sided raw DEBUG-stream capture; no Rugra-side emitter for this format exists yet, so no bilateral comparison is possible",
+  "format": "raw-native-printdebug (native DEBUG text verbatim; record seq is the native opactdbg_count)",
+  "expected_done": {
+   "applications": 1293,
+   "records": 1019,
+   "opactdbg_final": 1019,
+   "perform_calls": 311,
+   "final_return": 1269,
+   "nodes": 232
+  },
+  "stability": "pinned stdout is the native variant (records=1019, final_return=1269; STAGE_DRILL_NO_LADDER=1 single-perform runs reproduce the same record stream, proving the break ladder is IR-neutral); one ~15-minute window during development produced a divergent execution (records=1014, final_return=1285, ptrarith applications absent) which has not reproduced across 100+ subsequent runs - any recurrence fails this runner's sha256 pin and must be investigated before the drill output is used as evidence"
+ },
+ "expected_stdout_sha256": {
+  "ghidra": "b227ae9439c1bd07499129e78401d02b20527cb588fb2a90d4bc8a793eb15cf6"
+ },
+ "fixture_id": "STAGE-DRILL-1204"
+}

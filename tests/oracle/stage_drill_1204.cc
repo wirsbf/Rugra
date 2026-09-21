@@ -301,9 +301,12 @@ void runFixture(const string &specDirectory,const string &binary)
     // (action.cc:469-477 matchcount>1), so those nodes cannot be
     // breakpoint-addressed; they run unbracketed inside a neighbour's
     // bracket and their frames are re-attributed by native leaf name.
+    // STAGE_DRILL_NO_LADDER=1 disables the ladder (single native perform
+    // loop; blocks lose path attribution) for A/B stability probing.
+    const bool noLadder = std::getenv("STAGE_DRILL_NO_LADDER") != nullptr;
     vector<string> unbreakable;
     for (const TreeNode &node : nodes) {
-      if (node.isRule || node.depth == 0)
+      if (noLadder || node.isRule || node.depth == 0)
         continue;
       if (!root->setBreakPoint(Action::break_start,node.path))
         unbreakable.push_back(node.path);
@@ -325,7 +328,8 @@ void runFixture(const string &specDirectory,const string &binary)
               << " build_flags=OPACTION_DEBUG func=next_url entry=0x4ff0"
               << " arch=x86:LE:64:default cspec=gcc"
               << " format=raw-native-printdebug record_seq=native_opactdbg_count"
-              << " boundary_seq=1based_perform_bracket ladder=break_start_all_nodes"
+              << " boundary_seq=1based_perform_bracket ladder="
+              << (noLadder ? "off" : "break_start_all_nodes")
               << " unbreakable_paths=" << unbreakable.size() << '\n';
 
     size_t cursor = 0;                 // node resumed by the next perform()
