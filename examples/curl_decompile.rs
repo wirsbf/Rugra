@@ -5152,19 +5152,26 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let mut selected_functions_seen = Vec::new();
-    // Preserve the exact iteration order used by the former HashMap clones.
-    let symbol_entries: Vec<(u64, String)> = symbol_table
+    // Driver→worker request payload entries, collected deterministically:
+    // the underlying tables are std HashMaps (per-process RandomState order),
+    // so collect then sort by address. Workers consume by key, but a sorted
+    // payload removes the latent random-order channel (AX DETERMINISM.md
+    // candidate 2).
+    let mut symbol_entries: Vec<(u64, String)> = symbol_table
         .iter()
         .map(|(&address, name)| (address, name.clone()))
         .collect();
-    let string_entries: Vec<(u64, String)> = string_table
+    symbol_entries.sort_by_key(|(address, _)| *address);
+    let mut string_entries: Vec<(u64, String)> = string_table
         .iter()
         .map(|(&address, value)| (address, value.clone()))
         .collect();
-    let prototype_entries: Vec<(u64, usize)> = prototype_db
+    string_entries.sort_by_key(|(address, _)| *address);
+    let mut prototype_entries: Vec<(u64, usize)> = prototype_db
         .iter()
         .map(|(&address, &parameter_count)| (address, parameter_count))
         .collect();
+    prototype_entries.sort_by_key(|(address, _)| *address);
 
     // EXTERNAL-block import slots (EXTERNAL-STUB-SUPPORT-0001): one 8-byte
     // slot per UND .dynsym symbol in symbol order, starting at the

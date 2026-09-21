@@ -12934,10 +12934,17 @@ impl Action for ActionAssignHigh {
 /// Choose the dominant COPY in the merge phase (rule_onceperfunc).
 ///
 /// Faithful to `ActionDominantCopy` (coreaction.hh:1001). Ghidra's `apply`
-/// calls `data.getMerge().processCopyTrims()`, which walks the copyTrims
-/// list accumulated by the snip/trim machinery in ActionMergeRequired.
-/// Rugra's `Merge::process_copy_trims` is a faithful no-op: copyTrims is
-/// never populated (Rugra lacks the snip/trim data-flow rewrite subsystem).
+/// (coreaction.hh:1008) is exactly `data.getMerge().processCopyTrims();
+/// return 0;` — it walks the copyTrims list accumulated by the snip
+/// machinery of the forced-merge path (ActionMergeRequired) and replaces
+/// groups of ≥2 COPYs into the same HighVariable with a single dominant
+/// COPY. Rugra mirrors this with a transient `Merge` that attaches the
+/// persistent `fd.merge_state.copy_trims` channel. In the standard pipeline
+/// the merge phase (`Merge::merge_all` step 6) consumes the trims first, so
+/// this standalone application normally sees an empty list; the traversal
+/// order inside `process_copy_trims` is the deterministic copyTrims
+/// first-seen order (merge.cc:1418-1435; DETERM-COPYTRIM-0001 /
+/// DETERM-DOMINANTCOPY-0001 fixed there).
 pub struct ActionDominantCopy;
 
 impl ActionDominantCopy {
@@ -12950,8 +12957,9 @@ impl ActionDominantCopy {
 impl Action for ActionDominantCopy {
     // Ghidra: coreaction.hh:1008 ActionDominantCopy::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to coreaction.hh:1008: data.getMerge().processCopyTrims();
-        // copyTrims is empty in Rugra (no snip machinery) → faithful no-op.
+        // Faithful to coreaction.hh:1008: data.getMerge().processCopyTrims().
+        // The transient Merge attaches fd.merge_state.copy_trims; typically
+        // already consumed by merge_all step 6 (same oracle call site).
         let mut merge = crate::merge::Merge::new();
         merge.process_copy_trims(fd);
         Ok(action_status::NO_CHANGE)

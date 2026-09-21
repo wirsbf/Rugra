@@ -800,10 +800,11 @@ impl Merge {
         // Required test + merge; cover intersection silently skips (no snip).
         self.merge_opcode(fd, crate::opcodes::OpCode::CPUI_COPY);
 
-        // Step 6: DominantCopy — processCopyTrims (coreaction.cc:5723).
-        // Faithful no-op: copyTrims is never populated (Rugra lacks the
-        // snip/trim data-flow rewrite machinery that ActionMergeRequired's
-        // forced-merge path uses to fill it). See process_copy_trims.
+        // Step 6: DominantCopy — processCopyTrims (coreaction.cc:5723,
+        // coreaction.hh:1008). Consumes the copy_trims filled by step 1's
+        // forced-merge snip path (merge_addr_tied → allocate_copy_trim) and
+        // replaces ≥2-COPY groups with a single dominant COPY, in copyTrims
+        // first-seen order. See process_copy_trims.
         self.process_copy_trims(fd);
 
         // Step 7: MergeAdjacent.
@@ -3530,43 +3531,37 @@ impl Merge {
     }
 
     // Ghidra: merge.cc:1415 Merge::processCopyTrims
-    /// Step 6: ActionDominantCopy (coreaction.cc:5723 / coreaction.hh:1008).
-    /// Faithful to `Merge::processCopyTrims` (merge.cc:1415-1436).
+    /// Step 6 of the merge phase: ActionDominantCopy (coreaction.cc:5723;
+    /// apply at coreaction.hh:1008 is exactly `data.getMerge().processCopyTrims()`).
     ///
-    /// Walks the `copyTrims` list — COPY ops inserted by the earlier snip
-    /// trims (`allocateCopyTrim`/`snipReads`, merge.cc:411,443) — to find
+    /// Walks the `copyTrims` list — COPY ops inserted by the snip machinery
+    /// of the forced-merge path (`allocateCopyTrim`/`snipReads`, merge.cc:411,443;
+    /// wired into `merge_addr_tied` since 2026-07-04) — to find
     /// HighVariables that received ≥ 2 such COPYs and calls
-    /// `processHighDominantCopy(high)` to replace them with a single
-    /// dominant COPY.
+    /// `process_high_dominant_copy(high)` on each to replace them with a
+    /// single dominant COPY.
     ///
-    /// **INFRASTRUCTURE GAP**: Rugra has no snip/trim data-flow rewrite
-    /// machinery. `copyTrims` is never populated (the forced-merge path in
-    /// ActionMergeRequired — mergeAddrTied/mergeMarker → unifyAddress →
-    /// eliminateIntersect → snipReads → allocateCopyTrim — is not ported).
-    /// Therefore this method is a faithful no-op: the list is empty, so
-    /// nothing happens. To make it functional, port the snip/trim subsystem
-    /// (snipReads/eliminateIntersect/allocateCopyTrim + the forced-merge
-    /// callers in merge_addr_tied/merge_marker). Now ported (2026-07-04):
-    /// unify_address/eliminate_intersect/snip_reads/allocate_copy_trim are
-    /// wired into merge_addr_tied, so copy_trims is populated.
-    ///
-    /// This implementation walks copy_trims and counts COPYs per output High
-    /// (faithful to merge.cc:1420-1434). The dominant-copy replacement
-    /// (processHighDominantCopy, merge.cc:1316) is NOT yet ported — it
-    /// requires findAllIntoCopies/buildDominantCopy. copy_trims is cleared
-    /// after counting (faithful to merge.cc:1429).
+    /// Traversal order mirrors merge.cc:1418-1435 exactly: first-seen order
+    /// of the HighVariables within the copyTrims list (Ghidra pushes each
+    /// high onto `multiCopy` at its first sighting, using the copy_in1 /
+    /// copy_in2 HighVariable flags as the per-high ≥2 counter). The HashMap
+    /// below is keyed-lookup only; iteration order is carried by the
+    /// `first_seen` Vec. HashMap iteration here would randomize the dominant
+    /// COPY op-insertion order per process (DETERM-COPYTRIM-0001,
+    /// DETERM-DOMINANTCOPY-0001 — both AX/AZ nondeterminism sources).
     pub fn process_copy_trims(&mut self, fd: &mut Funcdata) {
         self.attach(fd);
         if self.copy_trims.is_empty() {
             self.detach(fd);
             return;
         }
-        // Ghidra merge.cc:1420-1428: count COPYs into each output HighVariable.
-        // Ghidra uses copy_in1/copy_in2 flags; we use a map keyed by HighVariable Arc ptr.
-        let mut counts: std::collections::HashMap<
-            usize,
-            (Arc<RwLock<HighVariable>>, u32),
-        > = std::collections::HashMap::new();
+        // Ghidra merge.cc:1420-1428: walk copyTrims in list order. First
+        // sighting of a HighVariable pushes it onto multiCopy in first-seen
+        // order and sets copy_in1; later sightings only set copy_in2 (the
+        // "at least 2" mark).
+        let mut first_seen: Vec<Arc<RwLock<HighVariable>>> = Vec::new();
+        let mut counts: std::collections::HashMap<usize, u32> =
+            std::collections::HashMap::new();
         for trim in &self.copy_trims {
             let out_high = {
                 let t = trim.0.read().unwrap();
@@ -3576,20 +3571,26 @@ impl Merge {
                 })
             };
             if let Some((key, h)) = out_high {
-                counts.entry(key).or_insert_with(|| (h, 0)).1 += 1;
+                match counts.get_mut(&key) {
+                    Some(count) => *count += 1, // later sighting: setCopyIn2 (merge.cc:1427)
+                    None => {
+                        counts.insert(key, 1); // first sighting: setCopyIn1 (merge.cc:1424)
+                        first_seen.push(h); // multiCopy.push_back (merge.cc:1423)
+                    }
+                }
             }
         }
-        // Ghidra merge.cc:1430-1434: for each high with ≥2 COPYs, call processHighDominantCopy.
-        let multi: Vec<Arc<RwLock<HighVariable>>> = counts
-            .into_iter()
-            .filter_map(|(_, (h, c))| if c >= 2 { Some(h) } else { None })
-            .collect();
-        for high in &multi {
-            // Ghidra: high->hasCopyIn2() → processHighDominantCopy(high) (merge.cc:1432)
-            self.process_high_dominant_copy(fd, high);
-        }
-        // Ghidra merge.cc:1429: copyTrims.clear()
+        // Ghidra merge.cc:1429: copyTrims.clear() — between the two loops.
         self.copy_trims.clear();
+        // Ghidra merge.cc:1430-1435: for each high in multiCopy (first-seen)
+        // order, process it if it received ≥ 2 COPYs (hasCopyIn2).
+        for high in &first_seen {
+            let key = std::sync::Arc::as_ptr(high) as *const () as usize;
+            // Ghidra: if (high->hasCopyIn2()) processHighDominantCopy(high) (merge.cc:1432)
+            if counts[&key] >= 2 {
+                self.process_high_dominant_copy(fd, high);
+            }
+        }
         self.detach(fd);
     }
 

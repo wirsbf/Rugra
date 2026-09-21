@@ -1,5 +1,24 @@
 # `coreaction.rs` API Reference
 
+## 2026-09-22：ActionDominantCopy 过期注释更正 + 域确定性归因（DETERM-DOMINANTCOPY-0001）
+
+- 结构体/apply 的注释原声称 `process_copy_trims` 是 "faithful no-op、
+  copyTrims 永不填充（缺 snip 子系统）"——已过期：snip 链路
+  （unify_address/eliminate_intersect/snip_reads/allocate_copy_trim）
+  2026-07-04 已接入 `merge_addr_tied`，`copy_trims` 有真实填充。
+  更正为实际语义：Ghidra `ActionDominantCopy::apply`（coreaction.hh:1008）
+  即 `data.getMerge().processCopyTrims(); return 0;`；Rugra 侧临时
+  `Merge` attach `fd.merge_state.copy_trims` 持久通道，标准管线中
+  merge 阶段（`merge_all` step 6，同一 oracle 调用点）先消费，故独立
+  apply 通常见空表。
+- AZ drill 的 "universal:dominantcopy 工作集逐进程漂移" 与 AX 的输出
+  bimodal 同根因：`process_copy_trims` 内 HashMap 迭代序随机（修复在
+  merge.rs，见 merge.md 同日条目 DETERM-COPYTRIM-0001）。本文件无容器
+  行为变更，只更正误导性注释。
+
+**状态**: 已核对（当前有效）  
+**源代码路径**: `src/coreaction.rs`
+
 ## 2026-08-30：castInput 双层 double-cast guard 臂序（CASTINPUT-ARMORDER-0001 / F3）
 
 - `cast_input` 的 double-cast guard 恢复 oracle 的**两层嵌套**（cc:2673-2686）：外层
