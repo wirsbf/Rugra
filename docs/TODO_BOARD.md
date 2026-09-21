@@ -104,6 +104,25 @@
 > 覆盖缺口,owner=root 分诊,验收=双侧同形构造补齐;`B2-MG-RESID-2`(P2): loop_exit_
 > conflict 形同上;`B2-MG-RESID-3`(P2): glob_set +5 骨架残差(91→96,defects=0,机制性
 > 邻域重排),owner=root 分诊,验收=函数级 token 归因。
+> **基线快照(2026-09-22 root 集成后)**: master=BB returnsplit+AD multigoto+wt/sb-rust
+> 发射器链(env-off 字节一致)合并后,curl **3356/0/0**、httpd **2326/0/0**,已回流。
+> **P0 新登记 `BLOCKSTRUCT-SWITCHOUT-NOCLEAR-0001`(2026-09-22,Lane BH 根因)**:
+> blockaction.rs:6285 `set_flags(swf & !SWITCH_OUT)`=no-op(应为 clear_flags,对齐
+> block.cc:1917 clearFlag)→48-case BlockSwitch 形成后带 f_switch_out 被 ruleBlockSwitch
+> 自噬 415 次吞死→无 Switch 节点存活→printc 零 case。同型 no-op 顺修:
+> blockaction.rs:3489(CASE_BODY)/heritage.rs:2363(TYPELOCK)。label 管道缺失
+> (finalizePrinting/get_label_by_index 零调用)并入 JUMPTABLE-TABLEAPI-0001。验收=
+> getparameter switch≥1 且 case≥48。报告=sb-switch/CASE_EMISSION.md。
+> **Lane BB 修复落地(2026-09-22,wt/sb-returnsplit)**: BRANCH/CBRANCH 代理已替换为
+> gatherReturnGotos 原语义(copy-map 结构树 t_goto/gotoPrints/t_if-ifgoto 检测,blockaction.cc:2205;
+> gotoPrints 走逐父类型 nextFlowAfter 虚分发表 mid-pipeline live 评估)。降级 drill 验证
+> (RUGRA_RULE_STATS 单函数): next_url oppool1 751→720(**21→17 passes,余震轮消失**),
+> main 1794→1786。curl 全量 E2E: defects=0/numbering=0,skeleton 3693→3678
+> (next_url 142→130 恢复 golden 循环形态,my_get_token 79→77,_init 11→10,77/80 函数
+> 字节不变,零回归);httpd 40 函数抽查: defects=0/numbering=0,skeleton 2780→2761。
+> 遗留(未决): 单函数驱动口径 main skeleton 526→769(语料口径 main 不变;疑驱动播种
+> 差异+master 代理偶偿,需 root 集成时 oracle drill 裁决);关联项 BANK-COPY-159-0001 /
+> RULE-PTRARITH-ADDTREE-0001 / RETURN-ARTIFICIAL-RAX-0001 待重测。
 > **镜像后差集图谱(2026-09-22,Lane AU,DELTA_V2.md)**: +144 事件精确分解=mainloop 遍
 > 8→12(+92)/stackstall 内迭 12→18(+30)/fullloop 轮 3→4(+9,轮型 [4,3,1] vs [4,4,3,1]);
 > 银行膨胀终快照 COPY **171 vs 12**(+159 主导,与 Lane V 拷贝族分诊互证);规则级 top:

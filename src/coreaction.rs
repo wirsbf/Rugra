@@ -14133,6 +14133,317 @@ impl ActionReturnSplit {
         }
         true
     }
+
+    /// Faithful port of `ActionReturnSplit::gatherReturnGotos`
+    /// (blockaction.cc:2205-2234): for each in-edge source of the RETURN
+    /// block `parent`, follow `getCopyMap()` into the structured tree and
+    /// walk the ancestor chain; the edge is a \e goto predecessor iff the
+    /// chain contains a `t_goto` block whose `gotoPrints()` holds and whose
+    /// goto target resolves to `parent`, or a `t_if` block whose (if-goto)
+    /// `getGotoTarget()` resolves to `parent` (cc:2215-2229, target descent
+    /// `while(ret->getType()!=t_basic) ret=ret->subBlock(0)` at cc:2223-2224
+    /// — `BlockCopy::subBlock` returns the mirrored ORIGINAL basic,
+    /// block.hh:524, so the comparison is original-block pointer identity).
+    ///
+    /// Rugra's structured tree keeps components via typed fields without
+    /// bottom-up parent wiring, so the ancestor-chain walk is realized as
+    /// the equivalent top-down subtree scan: an in-edge source is selected
+    /// iff its structured copy is a leaf under a qualifying node. The
+    /// oracle's per-block marks (`setMark`/`clearMark`, scoped to a single
+    /// RETURN's gather→select→clear cycle within cc:2283-2306) are carried
+    /// as the `active_ancestors` path counter of the walk — observably
+    /// identical because no state escapes between set and clear.
+    ///
+    /// `gotoPrints()` is evaluated live exactly as the oracle's mid-pipeline
+    /// virtual call does (block.cc:2881-2890), via the per-parent-type
+    /// `nextFlowAfter` dispatch (block.cc:1335/2899/3053/3127/3341/3448/
+    /// 3476/3639) — not the `prints_precomputed` transport, which
+    /// ActionFinalStructure only fills later in the pipeline.
+    // Ghidra: blockaction.cc:2205 ActionReturnSplit::gatherReturnGotos
+    fn gather_return_gotos(
+        fd: &Funcdata,
+        parent: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        in_count: usize,
+    ) -> Vec<bool> {
+        let mut walk = GatherReturnGotosWalk {
+            parent_ptr: Arc::as_ptr(parent) as *const u8 as usize,
+            selected_leaves: std::collections::HashSet::new(),
+            active_ancestors: 0,
+            gotoblocks: 0,
+        };
+        // Root level = BlockGraph::nextFlowAfter sibling rule (block.cc:1335-
+        // 1353): each root's successor is the next root's front leaf; the
+        // last root defers to the (null) parent — the oracle's null at root.
+        let roots = fd.sblocks.blocks.clone();
+        for i in 0..roots.len() {
+            let succ = match roots.get(i + 1) {
+                Some(next) => crate::block::front_leaf(next),
+                None => None,
+            };
+            walk.visit(&roots[i], succ);
+        }
+        // Selection walk (cc:2291-2303): in-edge i is split iff the copy-map
+        // chain of its source holds a marked node ⟺ the copy is a leaf under
+        // a qualifying subtree.
+        let mut marked = vec![false; in_count];
+        let parent_rg = parent.read().unwrap();
+        for i in 0..in_count {
+            let Some(edge) = parent_rg.get_in(i) else { continue };
+            let copy = edge
+                .point
+                .read()
+                .unwrap()
+                .get_copy_map()
+                .and_then(|weak| weak.upgrade());
+            if let Some(copy) = copy {
+                if walk
+                    .selected_leaves
+                    .contains(&(Arc::as_ptr(&copy) as *const u8 as usize))
+                {
+                    marked[i] = true;
+                }
+            }
+        }
+        marked
+    }
+}
+
+/// Per-parent traversal state of the gather walk (`gatherReturnGotos`'s
+/// mark vec + ancestor-chain bookkeeping). `gotoblocks` mirrors the oracle's
+/// `vec` size for the cc:2285 `gotoblocks.empty()` decision (recorded while
+/// scanning; the selected-edge vector already encodes the same predicate).
+// RUGRA-GLUE: mark-set transport for blockaction.cc:2205 gatherReturnGotos
+/// (Ghidra marks live on FlowBlock flags; Rugra composites default the
+/// setMark/clearMark trait to a no-op, so the marks ride the walk instead —
+/// same set/gather/select/clear scope, cc:2213-2306).
+struct GatherReturnGotosWalk {
+    parent_ptr: usize,
+    selected_leaves: std::collections::HashSet<usize>,
+    active_ancestors: usize,
+    gotoblocks: usize,
+}
+
+impl GatherReturnGotosWalk {
+    /// One node of the cc:2210-2232 chain walk, realized top-down: qualify
+    /// the node (cc:2213-2229), record copy leaves under qualifying
+    /// ancestors, then recurse into the component list with the
+    /// parent-type-aware successors.
+    // Ghidra: blockaction.cc:2210 ActionReturnSplit::gatherReturnGotos (chain walk)
+    fn visit(
+        &mut self,
+        node: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        succ: Option<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>>,
+    ) {
+        use crate::block::{BlockGoto, BlockIf, BlockType};
+        let bt = node.read().unwrap().get_type();
+        // cc:2213-2229: qualification — t_goto needs gotoPrints + target,
+        // t_if only a (non-null) if-goto target; both then descend the
+        // target to its original basic and compare against `parent`.
+        let qualified = match bt {
+            BlockType::Goto => {
+                // cc:2215-2217: if (((BlockGoto*)bl)->gotoPrints())
+                //   ret = ((BlockGoto*)bl)->getGotoTarget();
+                let target = node
+                    .read()
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<BlockGoto>()
+                    .and_then(|g| g.target_dyn.clone());
+                match target {
+                    Some(t) => {
+                        self.goto_prints(&t, &succ) && Self::front_basic_hits(&t, self.parent_ptr)
+                    }
+                    None => false,
+                }
+            }
+            BlockType::If => {
+                // cc:2219-2221: ret = ((BlockIf*)bl)->getGotoTarget(); —
+                // null for a proper if, set only by newBlockIfGoto
+                // (block.cc:1808).
+                let target = node
+                    .read()
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<BlockIf>()
+                    .and_then(|b| b.goto_target.clone());
+                match target {
+                    Some(t) => Self::front_basic_hits(&t, self.parent_ptr),
+                    None => false,
+                }
+            }
+            _ => false,
+        };
+        if qualified {
+            self.active_ancestors += 1;
+            self.gotoblocks += 1;
+        }
+        // cc:2212 + 2292-2302: a copy leaf whose ancestor chain contains a
+        // marked node is a selected goto-predecessor source.
+        if bt == BlockType::Copy && self.active_ancestors > 0 {
+            self.selected_leaves.insert(Arc::as_ptr(node) as *const u8 as usize);
+        }
+        let components = crate::block::BlockGraph::component_list_dyn(node);
+        if !components.is_empty() {
+            let succs = next_flow_after_successors(node, &components, succ);
+            for (child, child_succ) in components.into_iter().zip(succs) {
+                self.visit(&child, child_succ);
+            }
+        }
+        if qualified {
+            self.active_ancestors -= 1;
+        }
+    }
+
+    /// `BlockGoto::gotoPrints` (block.cc:2881-2890), live parent-present
+    /// arm: `gotobl = getGotoTarget()->getFrontLeaf(); nextbl =
+    /// <parent's nextFlowAfter(this)>; return gotobl != nextbl`. Both leaves
+    /// sit at the BlockCopy level (getFrontLeaf stops at t_copy, block.cc:344);
+    /// None-vs-None compares equal (C++ null == null).
+    // Ghidra: block.cc:2881 BlockGoto::gotoPrints
+    fn goto_prints(
+        &self,
+        target: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        succ: &Option<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>>,
+    ) -> bool {
+        let gotobl = crate::block::front_leaf(target);
+        match (gotobl, succ.clone()) {
+            (Some(a), Some(b)) => !Arc::ptr_eq(&a, &b),
+            (None, None) => false,
+            _ => true,
+        }
+    }
+
+    /// Target descent of cc:2222-2225: `if (ret != 0) { while
+    /// (ret->getType() != t_basic) ret = ret->subBlock(0); if (ret == parent)
+    /// ... }` — walk `subBlock(0)` (BlockCopy::subBlock = the mirrored
+    /// original, block.hh:524) down to the original basic block and compare
+    /// pointer identity with the RETURN's parent. A broken (componentless)
+    /// chain yields false; the oracle cannot express that case (it would
+    /// deref null), so this is the same predicate on every non-broken chain.
+    // Ghidra: blockaction.cc:2223 ActionReturnSplit::gatherReturnGotos (target descent)
+    fn front_basic_hits(
+        target: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        parent_ptr: usize,
+    ) -> bool {
+        use crate::block::BlockType;
+        let mut cur = target.clone();
+        loop {
+            let (is_basic, next) = {
+                let rg = cur.read().unwrap();
+                (
+                    rg.get_type() == BlockType::Basic,
+                    rg.sub_block(0),
+                )
+            };
+            if is_basic {
+                return Arc::as_ptr(&cur) as *const u8 as usize == parent_ptr;
+            }
+            match next {
+                Some(n) => cur = n,
+                None => return false,
+            }
+        }
+    }
+}
+
+/// The per-parent-type `nextFlowAfter` successor each component of `node`
+/// receives — the virtual dispatch `BlockGoto::gotoPrints` reaches through
+/// `getParent()->nextFlowAfter(this)` (block.cc:2885):
+/// - `BlockGraph` (root/list) block.cc:1335-1353: next sibling's front leaf;
+///   last component defers to the composite's own successor (null at root).
+/// - `BlockIf` block.cc:3127-3135: the getBlock(0) condition slot gets null
+///   ("do not know where flow goes"); body/else defer to the parent.
+/// - `BlockWhileDo` block.cc:3341-3351: condition slot null; body flows back
+///   to front leaf of the condition (getBlock(0)).
+/// - `BlockDoWhile` block.cc:3448-3452 / `BlockCondition` block.cc:3053-3057:
+///   always null.
+/// - `BlockInfLoop` block.cc:3476-3483: front leaf of getBlock(0) (the body
+///   head — flow re-enters the loop).
+/// - `BlockGoto` block.cc:2899-2903: front leaf of the goto target.
+/// - `BlockSwitch` block.cc:3639-3661: case 0 null; a t_goto case gets the
+///   next case's front leaf (last case defers to the parent); non-goto
+///   cases null ("break statement in the flow").
+// Ghidra: block.cc:1335 BlockGraph::nextFlowAfter (per-type dispatch)
+fn next_flow_after_successors(
+    node: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+    components: &[Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>],
+    succ: Option<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>>,
+) -> Vec<Option<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>>> {
+    use crate::block::{BlockGoto, BlockType, front_leaf};
+    let n = components.len();
+    let sibling_rule = |tail: &Option<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>>| {
+        (0..n)
+            .map(|i| match components.get(i + 1) {
+                Some(next) => front_leaf(next),
+                None => tail.clone(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let bt = node.read().unwrap().get_type();
+    match bt {
+        BlockType::If => {
+            // cc:3130-3134: getBlock(0)==bl → null; else parent recursion.
+            (0..n)
+                .map(|i| if i == 0 { None } else { succ.clone() })
+                .collect()
+        }
+        BlockType::WhileDo => {
+            // cc:3344-3350: cond null; body → front leaf of getBlock(0).
+            let mut v: Vec<Option<_>> = (0..n).map(|_| None).collect();
+            if let Some(head) = components.first() {
+                let head_leaf = front_leaf(head);
+                for slot in v.iter_mut().skip(1) {
+                    *slot = head_leaf.clone();
+                }
+            }
+            v
+        }
+        BlockType::DoWhile | BlockType::Condition => {
+            // cc:3451 / cc:3056: always null ("don't know what's next").
+            (0..n).map(|_| None).collect()
+        }
+        BlockType::InfLoop => {
+            // cc:3479-3482: front leaf of getBlock(0) for every component.
+            let head_leaf = components.first().and_then(front_leaf);
+            (0..n).map(|_| head_leaf.clone()).collect()
+        }
+        BlockType::Goto => {
+            // cc:2902: getGotoTarget()->getFrontLeaf().
+            let target = node
+                .read()
+                .unwrap()
+                .as_any()
+                .downcast_ref::<BlockGoto>()
+                .and_then(|g| g.target_dyn.clone());
+            let target_leaf = target.as_ref().and_then(front_leaf);
+            (0..n).map(|_| target_leaf.clone()).collect()
+        }
+        BlockType::Switch => {
+            // cc:3642-3660: case 0 null; t_goto case → next case's front
+            // leaf (last → parent); non-goto case null.
+            let mut v: Vec<Option<_>> = Vec::with_capacity(n);
+            for i in 0..n {
+                if i == 0 {
+                    v.push(None);
+                    continue;
+                }
+                let is_goto =
+                    components[i].read().unwrap().get_type() == BlockType::Goto;
+                if !is_goto {
+                    v.push(None);
+                } else {
+                    v.push(match components.get(i + 1) {
+                        Some(next) => front_leaf(next),
+                        None => succ.clone(),
+                    });
+                }
+            }
+            v
+        }
+        // Root graph / BlockList / any other plain BlockGraph: the sibling
+        // rule of block.cc:1340-1352.
+        _ => sibling_rule(&succ),
+    }
 }
 
 impl Action for ActionReturnSplit {
@@ -14150,15 +14461,14 @@ impl Action for ActionReturnSplit {
         // substitute could never reproduce (its clones shared the original
         // RETURN's pre-value placeholder).
         //
-        // gatherReturnGotos (blockaction.cc:2212-2240) walks the STRUCTURED
-        // copy-map chain for t_goto (gotoPrints) / t_if (gotoTarget) blocks.
-        // Rugra's structurer keeps BlockGoto/BlockIf goto targets implicit
-        // (goto_target: None) and never sets the originals' copy maps, so
-        // the structured form is unavailable; the basic-block proxy (in-edge
-        // source ending in an explicit BRANCH/CBRANCH = the edge is an
-        // unstructured branch, i.e. what the structurer renders as goto)
-        // is used instead — the same detection the previous substitute used,
-        // only the transform is now the real nodeSplit.
+        // gatherReturnGotos (blockaction.cc:2205-2234, ported in
+        // `gather_return_gotos` above): the goto-predecessor detection walks
+        // the STRUCTURED copy-map tree for t_goto (gotoPrints) / t_if
+        // (if-goto gotoTarget) blocks whose target resolves to the RETURN
+        // block — only edges the structurer actually left unstructured are
+        // split. The former substitute (any in-edge source ending in an
+        // explicit BRANCH/CBRANCH) fired on structured if/else edges too and
+        // was removed (ACTION-TRAVERSAL-144-0001 / TRAVERSAL144 §4).
         if fd.sblocks.blocks.is_empty() {
             return Ok(action_status::NO_CHANGE);
         }
@@ -14196,30 +14506,11 @@ impl Action for ActionReturnSplit {
             if !Self::is_splittable(&ops) {
                 continue;
             }
-            // gatherReturnGotos: mark each in-edge source that ends in an
-            // explicit branch (the goto-predecessor proxy).
-            let mut marked: Vec<bool> = vec![false; *in_count];
-            let mut any_marked = false;
-            {
-                let parent_rg = parent_arc.read().unwrap();
-                for slot in 0..*in_count {
-                    let Some(edge) = parent_rg.get_in(slot) else { continue ;
-                    };
-                    let pred_arc = edge.point.clone();
-                    let last_op = pred_arc.read().unwrap().get_ops().into_iter().last();
-                    let is_goto = match last_op {
-                        Some(o) => {
-                            let opc = o.0.read().unwrap().opcode;
-                            opc == OpCode::CPUI_BRANCH || opc == OpCode::CPUI_CBRANCH
-                        }
-                        None => false,
-                    };
-                    if is_goto {
-                        marked[slot] = true;
-                        any_marked = true;
-                    }
-                }
-            }
+            // gatherReturnGotos (blockaction.cc:2284): per in-edge, does the
+            // structured copy-map chain of the source contain a goto-printing
+            // BlockGoto / if-goto BlockIf targeting this RETURN block.
+            let marked = Self::gather_return_gotos(fd, parent_arc, *in_count);
+            let any_marked = marked.iter().any(|&m| m);
             if !any_marked {
                 continue; // gotoblocks.empty() (blockaction.cc:2287)
             }
@@ -16879,16 +17170,26 @@ mod tests {
     }
 
     /// ActionReturnSplit must synthesize a new RETURN op at each goto
-    /// predecessor of a multi-in-edge splittable RETURN block.
+    /// predecessor of a multi-in-edge splittable RETURN block — where
+    /// "goto predecessor" is the structured-tree detection of
+    /// gatherReturnGotos (blockaction.cc:2205-2234), NOT the removed
+    /// BRANCH/CBRANCH proxy. Phase A: BRANCH-ending in-edge sources with no
+    /// goto structure → no split (regression for the proxy). Phase B: the
+    /// same CFG with the sources' structured copies wrapped in BlockGotos
+    /// targeting the RETURN block → both edges qualify, "can't split ALL"
+    /// pops one, exactly one nodeSplit runs.
     #[test]
     fn test_returnsplit_creates_return_at_goto_pred() {
         use crate::address::{Address, SeqNum};
-        use crate::block::BlockBasic;
+        use crate::block::{BlockBasic, BlockCopy, BlockGoto, FlowBlock};
         use crate::op::{PcodeOp, PcodeOpRef};
         use crate::opcodes::OpCode;
         use crate::varnode::Varnode;
+        type DynBlk = std::sync::Arc<
+            std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>,
+        >;
         let mut fd = Funcdata::new("f", Address::new(0x1000), 0x40);
-        // Two goto predecessors (b1, b2) each ending in a BRANCH, both flowing
+        // Two predecessors (b1, b2) each ending in a BRANCH, both flowing
         // into the RETURN block (ret). ret has >1 in-edge and is splittable
         // (only a RETURN op with constant-ish inputs).
         let b1 = std::sync::Arc::new(std::sync::RwLock::new(BlockBasic::new(
@@ -16906,13 +17207,17 @@ mod tests {
         Varnode::new_constant(0, 1),
     ))];
         let ro_ref = PcodeOpRef(std::sync::Arc::new(std::sync::RwLock::new(ro)));
-        ro_ref.0.write().unwrap().parent =
-            Some(std::sync::Arc::downgrade(
-        &(ret.clone() as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>),
-    ));
+        let ret_dyn: DynBlk = ret.clone();
+        ro_ref
+            .0
+            .write()
+            .unwrap()
+            .parent
+            .replace(std::sync::Arc::downgrade(&ret_dyn));
         ret.write().unwrap().add_op(ro_ref.clone());
         fd.obank.alivelist.push(ro_ref.clone());
-        // b1 ends in BRANCH, b2 ends in BRANCH (goto predecessors).
+        // b1 ends in BRANCH, b2 ends in BRANCH — under the faithful
+        // gatherReturnGotos this alone must NOT mark them as goto preds.
         for (blk, addr) in [(&b1, 0x1100u64), (&b2, 0x1200u64)] {
             let mut br = PcodeOp::new(SeqNum::new(Address::new(addr), 0), OpCode::CPUI_BRANCH);
             br.inrefs = vec![std::sync::Arc::new(std::sync::RwLock::new(
@@ -16929,14 +17234,80 @@ mod tests {
         fd.bblocks.add_block(ret.clone());
         fd.bblocks.add_edge(b1.clone(), ret.clone());
         fd.bblocks.add_edge(b2.clone(), ret.clone());
-        // sblocks must be non-empty (the early-out).
-        fd.sblocks
-        .add_block(ret.clone() as std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>);
+
+        // Structured mirrors (buildCopy, block.cc:1925-1938): a BlockCopy per
+        // original, each original's copy_map pointing at its copy.
+        let mk_copy = |source: &DynBlk, idx: i32| -> DynBlk {
+            std::sync::Arc::new(std::sync::RwLock::new(BlockCopy {
+                index: idx,
+                flags: 0,
+                parent: None,
+                self_ref: None,
+                original: source.clone(),
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+                immed_dom: None,
+                copy_map: None,
+                visit_count: 0,
+                num_desc: -1,
+                dom_depth: -1,
+                dom_children: Vec::new(),
+                dom_frontier: std::collections::HashSet::new(),
+            }))
+        };
+        let b1_dyn: DynBlk = b1.clone();
+        let b2_dyn: DynBlk = b2.clone();
+        let copy_b1 = mk_copy(&b1_dyn, 1);
+        let copy_b2 = mk_copy(&b2_dyn, 2);
+        let copy_ret = mk_copy(&ret_dyn, 3);
+        b1.write().unwrap().set_copy_map(Some(std::sync::Arc::downgrade(&copy_b1)));
+        b2.write().unwrap().set_copy_map(Some(std::sync::Arc::downgrade(&copy_b2)));
+        ret.write().unwrap().set_copy_map(Some(std::sync::Arc::downgrade(&copy_ret)));
+
+        // Phase A: structure WITHOUT goto wrappers — plain copies only.
+        // The BRANCH-ending in-edges must not be selected (proxy removed).
+        fd.sblocks.clear();
+        fd.sblocks.add_block(copy_ret.clone());
+        fd.sblocks.add_block(copy_b1.clone());
+        fd.sblocks.add_block(copy_b2.clone());
         let alives_before = fd.obank.alivelist.len();
         let mut a = ActionReturnSplit::new();
+        let res_a = a.apply(&mut fd).unwrap();
+        assert_eq!(a.count, 0, "no structured goto → no split");
+        assert_eq!(res_a, 0, "apply reports no change without goto structure");
+        assert_eq!(
+            fd.obank.alivelist.len(),
+            alives_before,
+            "phase A must not create ops"
+        );
+
+        // Phase B: same CFG, sources wrapped in BlockGotos targeting the
+        // RETURN's copy ([copy_ret, goto1, goto2] root order: goto1 prints
+        // because its successor leaf copy_b2 != target copy_ret; goto2 is
+        // last → null successor → prints — block.cc:2881-2890).
+        let mk_goto = |wrapped: &DynBlk, target: &DynBlk, idx: i32| -> DynBlk {
+            std::sync::Arc::new(std::sync::RwLock::new(BlockGoto {
+                index: idx,
+                flags: 0,
+                parent: None,
+                goto_target: None,
+                target_dyn: Some(target.clone()),
+                wrapped: Some(wrapped.clone()),
+                goto_type: crate::block::goto_type::GOTO_GOTO,
+                prints_precomputed: false,
+                incoming: Vec::new(),
+                outgoing: Vec::new(),
+            }))
+        };
+        let goto1 = mk_goto(&copy_b1, &copy_ret, 1);
+        let goto2 = mk_goto(&copy_b2, &copy_ret, 2);
+        fd.sblocks.clear();
+        fd.sblocks.add_block(copy_ret.clone());
+        fd.sblocks.add_block(goto1.clone());
+        fd.sblocks.add_block(goto2.clone());
         let _ = a.apply(&mut fd).unwrap();
-        // One goto predecessor gets its own RETURN (the other is kept as the
-        // original — Ghidra can't split ALL in edges). count == 1.
+        // Both goto predecessors qualify, but Ghidra can't split ALL in
+        // edges (blockaction.cc:2309-2312), so exactly one nodeSplit runs.
         assert_eq!(a.count, 1, "one RETURN synthesized");
         assert!(
             fd.obank.alivelist.len() > alives_before,

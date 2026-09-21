@@ -2322,3 +2322,39 @@ func_link_input(coreaction.rs:9703-9774)忠实落地,再入库内守卫=非 orac
 - 仍返回 0（NO_CHANGE）——Ghidra 本 action 不向框架报告状态变化。
 - 跳表快照迭代（Arc clone）等价 Ghidra 按下标遍历（fold 只追加地址条目，
   不增表）。表级 API 与 foldIn* 语义修正明细见 docs/api/jumptable.md。
+
+## 2026-09-22：ACTION-TRAVERSAL-144-0001 — gatherReturnGotos 忠实 goto 前驱检测
+
+`ActionReturnSplit`（blockaction.cc:2264）的 goto 前驱检测从替代实现换成 Ghidra
+原语义（blockaction.cc:2205-2234）：
+
+- **删除的替代**："入边源块以 BRANCH/CBRANCH 结尾即算 goto 前驱"——把结构化
+  if/else 边也当 goto 边，next_url R2 尾误开火 8 记录，余震 = R3 p8 COPY 链清理 +
+  blockstructure×5 + p9 condnegate/notdistribute/boolnegate 有阻尼振荡，fullloop
+  多跑第 4 轮（TRAVERSAL144 §3-§5）。
+- **移植的原语义**：对 RETURN 块每条入边，源块经 `getCopyMap()` 进入结构树并走
+  祖先链；祖先为 `t_goto` 且 `gotoPrints()` 成立、或为 `t_if` 且 if-goto
+  `getGotoTarget()` 非空，且目标经 `while(ret->getType()!=t_basic)
+  ret=ret->subBlock(0)` 下探到**原始 basic 块**后与 RETURN 块指针同一（cc:2215-
+  2229；`BlockCopy::subBlock` 返回镜像原件，block.hh:524）→ 该入边入选。
+- **top-down 实现**（`gather_return_gotos` + `GatherReturnGotosWalk` +
+  `next_flow_after_successors`）：Rugra 结构树组件走 typed 字段、无自底向上
+  parent 链，祖先链扫描实现为等价子树扫描（入边源 copy 落在 qualifying 节点
+  子树内 ⟺ 其祖先链含 marked 节点）；oracle 的 setMark/clearMark（作用域严格
+  局限于单 RETURN 的 gather→select→clear，cc:2213-2306）以 walk 内
+  `active_ancestors` 计数承载。
+- **gotoPrints 的 mid-pipeline live 评估**：returnsplit 运行时
+  `prints_precomputed` 尚未由 ActionFinalStructure 填充，`goto_prints`/
+  `goto_prints_in` 亦只覆盖根图形态；故按 oracle 的虚分发表（block.cc:1335
+  BlockGraph / 2899 BlockGoto / 3053 BlockCondition / 3127 BlockIf / 3341
+  BlockWhileDo / 3448 BlockDoWhile / 3476 BlockInfLoop / 3639 BlockSwitch）逐父
+  类型计算 `nextFlowAfter` 后继，比较 `front_leaf(target) != succ`（copy 层指针
+  同一，block.cc:2884-2888）。关键语义：If/WhileDo 的 getBlock(0) 条件槽后继为
+  null；WhileDo body 尾回流条件 front leaf；DoWhile/Condition 恒 null；
+  InfLoop 回流 body 首 leaf；Goto 组件后继 = 目标 front leaf；Switch case0
+  null、非 goto case null、goto case 取下一 case。
+- **apply 骨架不变**：RETURN 快照 → isSplittable → gather → 倒序 splitedge/
+  retnode 累积 → "不能全拆"pop → `fd.node_split`（count 经 apply 返回值承载）。
+- 单测 `test_returnsplit_creates_return_at_goto_pred` 重写为两阶段：阶段 A
+  （BRANCH 前驱 + 无 goto 结构）零分裂（替代实现的回归负控）；阶段 B
+  （BlockGoto 包装 + copy map 接线）双前驱入选、pop 一条、恰好一次 nodeSplit。
