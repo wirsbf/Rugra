@@ -322,7 +322,13 @@ pub trait Action: Send + Sync {
 
             if apply_now {
                 self.prepare_apply(state.status);
+                // OPACTION_DEBUG-equivalent drill pair (action.cc:316-322):
+                // activate before apply, flush under the action's leaf name
+                // after; the pool's per-rule pair (process_op) overrides
+                // inside pool applies, exactly like the oracle.
+                crate::drillobserve::activate();
                 let res = self.apply_with_state(fd, state)?;
+                crate::drillobserve::flush(self.get_name());
                 let accumulated = self.take_count_delta();
                 state.count += accumulated;
                 if res < 0 {
@@ -1443,8 +1449,15 @@ impl ActionPool {
                 continue;
             }
 
+            // OPACTION_DEBUG-equivalent drill pair (action.cc:839-845):
+            // activate before each rule application, flush under the rule's
+            // leaf name after; the enclosing pool perform's own pair becomes
+            // a no-op via the active-flag reset, as in the oracle.
+            crate::drillobserve::activate();
             self.rule_states[rule_index].count_tests += 1;
             let result = self.rules[rule_index].apply_op(&op_ref.0, fd)?;
+            let rule_flush_name = self.rules[rule_index].get_name().to_string();
+            crate::drillobserve::flush(&rule_flush_name);
             if result > 0 {
                 self.rule_states[rule_index].count_apply += 1;
                 self.pending_count += result;
