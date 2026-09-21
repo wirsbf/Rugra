@@ -2494,29 +2494,42 @@ fn emit_stage_projection(
         fs::File::create(&output_path)
             .map_err(|error| format!("unable to create stage projection {output_path}: {error}"))?,
     );
+    // META identity keys (v1.2.x punch list P1-P3): arch/cspec/
+    // analysis_options are pinned to the oracle harness's final configured
+    // values (oracle projection META, STAGE_BISECT_SPEC_1204.md identity
+    // keys). The callspec-link injection difference moves out of the
+    // analysis_options identity key into the producer annotation (D3).
+    // load_mode is the D10 honest literal: until Rugra mirrors the oracle's
+    // followFlow load contract (RUGRA-FLOW-MIRROR-0001), the input
+    // construction is different and the projection says so; the consumer's
+    // identity-key hard block on this field is the correct behavior.
+    let callspec_link = std::env::var("RUGRA_DISABLE_CALLSPEC_LINK").is_err();
     writeln!(
         output,
-        "META side=rugra oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b arch=x86_64 cspec=x86-64-gcc"
+        "META side=rugra oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b arch=x86:LE:64:default cspec=gcc"
     )
     .map_err(|error| format!("unable to write stage metadata: {error}"))?;
     writeln!(
         output,
-        "META analysis_options=default_actions,callspec_link={} build_flags=v1-no-OPACTION_DEBUG",
-        std::env::var("RUGRA_DISABLE_CALLSPEC_LINK").is_err()
+        "META analysis_options=default build_flags=v1-no-OPACTION_DEBUG"
     )
     .map_err(|error| format!("unable to write stage metadata: {error}"))?;
     writeln!(
         output,
-        "META binary_sha256={} func_entry=0x{:x} func_name={} load_mode=single_function_bfd",
+        "META binary_sha256={} func_entry=0x{:x} func_name={} load_mode=single_function_flow",
         binary_sha256, request.target.vaddr, request.target.name
     )
     .map_err(|error| format!("unable to write stage metadata: {error}"))?;
     // unique_base = ANALYSIS_UNIQUE_START (src/varnode.rs:30, Ghidra
-    // varnode.cc unique space allocation base), printed as hex.
+    // varnode.cc unique space allocation base), printed as hex. The
+    // callspec_link annotation is producer-level (D3), never an identity
+    // key: it documents which driver-side injection state produced this
+    // file, while analysis_options stays the oracle-final literal.
     writeln!(
         output,
-        "META producer={} maxrestarts=1 unique_base=10000000",
-        stage_producer()
+        "META producer={},callspec_link={} maxrestarts=1 unique_base=10000000",
+        stage_producer(),
+        if callspec_link { "on" } else { "off" }
     )
     .map_err(|error| format!("unable to write stage metadata: {error}"))?;
 
