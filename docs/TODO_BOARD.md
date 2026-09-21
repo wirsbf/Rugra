@@ -46,7 +46,12 @@
 > `RUGRA-FLOW-MIRROR-0001`(P0,C-alignment 系列承接,write-set=examples 驱动层+FlowInfo
 > 无界-range 语义;完成前 load_mode 发 `single_function_flow`,完成后切
 > `single_function_bfd`)。Phase 2 next_url 对拍在 D9 修复+D10 镜像完成后开启。
-> **D10 流镜像收官(2026-09-22,Lane AQ,wt/sb-rust c5a8992)**: RUGRA_FLOW_MIRROR=1+
+> **opStackLoad+merge 链集成(2026-09-22,Cross-Review attempt1 APPROVE)**: 条件1
+> (FUNCDATA-SPACEID-WIDTH-0001 登记)已在本看板满足,按 reviewer 细节补全: 宽度统一 8
+> 修复路径(funcdata_op.cc:488 SEGMENTOP 同族位点 x86-64 不可达/523/547),现有读者全为
+> 值通道无行为影响;条件2(main +24 函数级归因)绑定 R1c/R2a 既有族,root 集成阶段补齐。
+> **AR 集成**: stack delay 1 修复合并,curl **3677/0/0**(−8 全改善),httpd 2343 恒等,
+> activeparam [9,9,0] 探针复刻逐点一致。
 > RUGRA_BARE_LOAD=1 落地(env 门控,默认 off 字节一致),load_mode 切 single_function_bfd,
 > **next_url PLT 对逐字节收敛(raw ops 717=717),消费端首分歧推进到 ordinal 5 seq 6
 > universal:prototypetypes**(人工 RETURN 挂 RAX 第二输入 vs oracle INDIRECT [create] 群)。
