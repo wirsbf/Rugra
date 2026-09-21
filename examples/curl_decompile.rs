@@ -4821,6 +4821,31 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
         // :2537's DAT_001149b0 width and base).
         // Create synthetic names at every byte offset (sections are kept
         // manageable by the 0x10000 size cap below).
+        //
+        // PRINTC-GLOBALSYM-LEAF-PRIORITY-0001 ②: span-aware seeding. The
+        // oracle's Program DB Data objects never overlap a named Symbol:
+        // `config` (ELF OBJECT, st_size 304 at 0x17520) owns
+        // [0x17520,0x17640) and no interior byte carries a DAT_ label —
+        // mid-symbol reads resolve through the one Symbol and print
+        // `::config.<field>` (pushPartialSymbol). The former
+        // start-address-only check stamped DAT_00117521..DAT_0011763f
+        // inside the span, and the print-layer address proxy then
+        // resolved every mid-symbol leaf to a DAT name. Same skip
+        // semantics as the Database-side STRCONST-SPANNONOVERLAP fix:
+        // interior bytes of a known OBJECT span are simply not seeded
+        // (the named entry owns them).
+        let mut object_spans: Vec<(u64, u64)> = elf
+            .syms
+            .iter()
+            .chain(elf.dynsyms.iter())
+            .filter(|sym| {
+                (sym.st_info & 0xf == 1 /* STT_OBJECT */)
+                    && sym.st_value != 0
+                    && sym.st_size > 0
+            })
+            .map(|sym| (sym.st_value, sym.st_value + sym.st_size))
+            .collect();
+        object_spans.sort_unstable();
         for header in elf.section_headers.iter() {
             if let Some(name) = elf.shdr_strtab.get_at(header.sh_name) {
                 if name == ".data" || name == ".bss" {
@@ -4831,6 +4856,18 @@ fn run_main(mode: DriverMode) -> Result<(), Box<dyn std::error::Error>> {
                         // Only for reasonably sized sections
                         for off in 0..size {
                             let addr = base + off;
+                            // Skip bytes inside a named OBJECT's span
+                            // (query-container would answer the named
+                            // symbol; a DAT label here has no oracle
+                            // counterpart).
+                            let inside_object_span = {
+                                let pos = object_spans
+                                    .partition_point(|&(lo, _)| lo <= addr);
+                                pos > 0 && object_spans[pos - 1].1 > addr
+                            };
+                            if inside_object_span {
+                                continue;
+                            }
                             if !symbol_table.contains_key(&addr) {
                                 symbol_table.insert(addr, synthetic_dat_name(addr));
                             }
