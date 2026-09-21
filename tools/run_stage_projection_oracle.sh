@@ -1,11 +1,78 @@
 #!/usr/bin/env bash
-# Locked-oracle stage projection producer for the next_url pilot of the
-# stage-bisect harness (spec v1.2 + v1.2.1 opcode-domain erratum).  Verifies
-# the locked Ghidra tree, rebuilds the fixture against an instrumented
-# temporary copy of the oracle source, runs the stepping walk, validates the
-# full v1.2.1 stream, and installs the projection at the RAM-disk product
-# path.
+# Locked-oracle stage projection producer for the stage-bisect harness
+# (spec v1.2 + v1.2.1 opcode-domain erratum).  Verifies the locked Ghidra
+# tree, rebuilds the fixture against an instrumented temporary copy of the
+# oracle source, runs the stepping walk, validates the full v1.2.1 stream,
+# and installs the projection at the RAM-disk product path.
+#
+# CLI (batch-driver contract: bash tools/run_<runner>.sh <corpus> <entry> <fn>)
+#   run_stage_projection_oracle.sh                          # pinned default:
+#   run_stage_projection_oracle.sh curl 4ff0 next_url       #   curl next_url @0x4ff0
+#   run_stage_projection_oracle.sh curl 0x25a0 main         # parameterized target
+#   run_stage_projection_oracle.sh httpd 0x2b820 main
+#
+# corpus is curl|httpd -> examples/<corpus>; entry_addr is hex (0x optional).
+# The zero-argument / next_url form keeps the legacy fully-pinned mode
+# (metadata input pins + expected projection sha256/counts) and the legacy
+# output name next_url.oracle.projection.  Parameterized targets resolve
+# pins from the metadata "functions" map (key "<corpus>/<func>",
+# per-function comparand: entry, binary_sha256, projection_expectations);
+# a target absent from the map runs in capture mode: full structural
+# validation only (META keys / seq contiguity / LIFO nesting / @SNAP counts /
+# v1.2.1 grammar), sha256 + counts reported for later pinning.
+#
+# Canonical capture recipe (baked in; mirrors tools/run_stage_drill_oracle.sh,
+# Lane AT broadcast): cwd=repo_root, argv=sleigh_specs examples/<corpus>
+# (relative), env=`env -i` + STAGE_PROJ_FUNC/STAGE_PROJ_ADDR only, ASLR off
+# via `setarch -R`.  The oracle's application order depends on the process's
+# early heap allocation sequence; argv path form selects the variant
+# (relative vs absolute demonstrably flip the drill stream) and ASLR makes
+# large functions (curl/httpd main) unstable run-to-run, so both are pinned.
+# The zero-argument form runs the same recipe without the target variables,
+# keeping the fixture on its historical argv-entry lookup path.
 set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage: tools/run_stage_projection_oracle.sh [corpus entry_addr func_name]
+  corpus:      curl | httpd (examples/<corpus> binary)
+  entry_addr:  hex entry of the function (0x prefix optional)
+  func_name:   BFD symbol name (STAGE_PROJ_FUNC target of the harness)
+  no arguments: pinned default capture of curl next_url @0x4ff0
+EOF
+}
+
+mode=parameterized
+corpus=curl
+func=next_url
+entry=0x4ff0
+if [[ $# -eq 0 ]]; then
+  mode=default
+elif [[ $# -eq 3 ]]; then
+  corpus=$1
+  entry=$2
+  func=$3
+else
+  usage
+  exit 2
+fi
+case "$corpus" in
+  curl|httpd) ;;
+  *) echo "unknown corpus: $corpus (expected curl|httpd)" >&2; exit 2 ;;
+esac
+case "$entry" in
+  0x?*|0X?*) entry_digits=${entry:2} ;;
+  *) entry_digits=$entry ;;
+esac
+if [[ "$entry_digits" =~ ^[0-9a-fA-F]+$ ]]; then
+  entry_norm=$(printf '0x%x' "$((16#$entry_digits))")
+else
+  echo "entry_addr is not hexadecimal: $entry" >&2
+  exit 2
+fi
+# The fixture's argv-entry parser is the historical bare-hex form; the
+# canonical STAGE_PROJ_ADDR carries the 0x-prefixed pin text.
+entry_arg=${entry_norm#0x}
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
@@ -13,12 +80,14 @@ oracle_tag=Ghidra_12.0.4_build
 ghidra_root="$repo_root/ghidra"
 metadata="$repo_root/tests/oracle/stage_projection_1204.metadata.json"
 cpp_fixture="$repo_root/tests/oracle/stage_projection_1204.cc"
-binary="$repo_root/examples/curl"
+binary="$repo_root/examples/$corpus"
 spec_root="$repo_root/sleigh_specs"
-func_entry=4ff0
-func_name=next_url
 analysis_options=default
-projection_out=${RUGRA_STAGE_PROJECTION_OUT:-/dev/shm/rugra-tests/sb-oracle/next_url.oracle.projection}
+if [[ "$mode" == "default" ]]; then
+  projection_out=${RUGRA_STAGE_PROJECTION_OUT:-/dev/shm/rugra-tests/sb-oracle/next_url.oracle.projection}
+else
+  projection_out=${RUGRA_STAGE_PROJECTION_OUT:-/dev/shm/rugra-tests/sb-oracle/${corpus}.${func}.oracle.projection}
+fi
 
 actual_commit=$(git -C "$ghidra_root" rev-parse HEAD)
 tag_commit=$(git -C "$ghidra_root" rev-parse "refs/tags/$oracle_tag^{commit}")
@@ -55,7 +124,8 @@ if [[ ! -f "$bfd_library" ]]; then
 fi
 
 python3 -I -S - "$metadata" "$cpp_fixture" "$binary" "$spec_root" \
-  "$bfd_include/bfd.h" "$bfd_library" "$oracle_commit" "$oracle_tag" <<'PY'
+  "$bfd_include/bfd.h" "$bfd_library" "$oracle_commit" "$oracle_tag" \
+  "$mode" "$corpus" "$func" "$entry_norm" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -71,6 +141,10 @@ import sys
     bfd_library_name,
     oracle_commit,
     oracle_tag,
+    mode,
+    corpus,
+    func,
+    entry_norm,
 ) = sys.argv[1:]
 metadata = json.loads(pathlib.Path(metadata_name).read_text(encoding="utf-8"))
 if metadata.get("oracle") != {"tag": oracle_tag, "commit": oracle_commit}:
@@ -83,12 +157,6 @@ if metadata.get("compiler_spec") != "gcc":
 def digest(name):
     return hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest()
 
-actual_input = json.dumps(
-    metadata["input"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
-).encode()
-fingerprint = "sha256:" + hashlib.sha256(actual_input).hexdigest()
-if metadata.get("input_fingerprint") != fingerprint:
-    raise SystemExit("input fingerprint mismatch")
 comparands = {"cpp_fixture": cpp_name}
 for key, name in comparands.items():
     actual = digest(name)
@@ -99,8 +167,13 @@ producer = subprocess.check_output(
 ).strip()
 if metadata["projection_expectations"].get("producer_blob") != producer:
     raise SystemExit(f"producer blob drifted: {producer}")
-assets = {
-    "binary_sha256": binary_name,
+
+# Per-function pin lookup (metadata["functions"], key "<corpus>/<func>",
+# same map contract as stage_drill_1204.metadata.json).
+functions = metadata.get("functions", {})
+func_entry = functions.get(f"{corpus}/{func}") if mode == "parameterized" else None
+
+shared_assets = {
     "sla_sha256": pathlib.Path(spec_root_name) / "x86-64.sla",
     "pspec_sha256": pathlib.Path(spec_root_name) / "x86-64.pspec",
     "cspec_sha256": pathlib.Path(spec_root_name) / "x86-64-gcc.cspec",
@@ -108,7 +181,37 @@ assets = {
     "bfd_header_sha256": bfd_header_name,
     "bfd_library_sha256": bfd_library_name,
 }
-for key, name in assets.items():
+binary_pins = {}  # expected sha256 -> file to check against
+if mode == "default":
+    actual_input = json.dumps(
+        metadata["input"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    fingerprint = "sha256:" + hashlib.sha256(actual_input).hexdigest()
+    if metadata.get("input_fingerprint") != fingerprint:
+        raise SystemExit("input fingerprint mismatch")
+    shared_assets["binary_sha256"] = binary_name
+elif func_entry is not None:
+    normalize = lambda s: s.lower().removeprefix("0x").lstrip("0") or "0"
+    pinned_entry = func_entry.get("entry", "")
+    if normalize(pinned_entry) != normalize(entry_norm):
+        raise SystemExit(
+            f"functions[{corpus}/{func}] entry pin mismatch: {pinned_entry} vs {entry_norm}"
+        )
+    if "binary_sha256" in func_entry:
+        binary_pins[func_entry["binary_sha256"]] = binary_name
+    elif corpus == "curl":
+        # examples/curl is already pinned by the top-level assets block.
+        shared_assets["binary_sha256"] = binary_name
+    # corpus binary without any pin (fresh httpd target): capture mode for
+    # the binary asset, reported by the post-run block.
+else:
+    if corpus == "curl":
+        shared_assets["binary_sha256"] = binary_name
+for expected, name in binary_pins.items():
+    actual = digest(name)
+    if actual != expected:
+        raise SystemExit(f"{corpus}/{func} binary_sha256 mismatch: {actual}")
+for key, name in shared_assets.items():
     actual = digest(name)
     if metadata["assets"].get(key) != actual:
         raise SystemExit(f"{key} mismatch: {actual}")
@@ -209,11 +312,31 @@ g++ -std=c++11 -O2 -I"$bfd_include" -I"$oracle_cpp" \
 
 binary_sha=$(sha256sum "$binary" | cut -d' ' -f1)
 producer=$(git hash-object "$cpp_fixture")
-"$oracle_tmp/stage_projection_1204" "$spec_root" "$binary" "$func_entry" \
-  "$oracle_tmp/projection.txt" "$binary_sha" "$producer" "$analysis_options" \
-  2>"$oracle_tmp/run.stderr"
 
-python3 -I -S - "$oracle_tmp/projection.txt" "$metadata" <<'PY'
+# Canonical capture recipe (see the header comment): repo-root cwd, relative
+# argv, scrubbed environment, ASLR off.  The mktemp scratch paths stay
+# absolute and never enter the walked code path (only the projection output
+# argument, which the fixture opens, and the absolute binary path argument
+# are absolute — the binary/spec argv are the relative canonical form).
+if ! command -v setarch >/dev/null 2>&1; then
+  echo "setarch not found: projection captures require ASLR-disabled execution" >&2
+  exit 1
+fi
+cd "$repo_root"
+target_env=()
+if [[ "$mode" == "parameterized" ]]; then
+  target_env+=(STAGE_PROJ_FUNC="$func" STAGE_PROJ_ADDR="$entry_norm")
+fi
+if ! setarch "$(uname -m)" -R env -i "${target_env[@]}" \
+  "$oracle_tmp/stage_projection_1204" sleigh_specs "examples/$corpus" \
+  "$entry_arg" "$oracle_tmp/projection.txt" "$binary_sha" "$producer" \
+  "$analysis_options" 2>"$oracle_tmp/run.stderr"; then
+  cat "$oracle_tmp/run.stderr" >&2
+  exit 1
+fi
+
+if ! python3 -I -S - "$oracle_tmp/projection.txt" "$metadata" \
+  "$mode" "$corpus" "$func" "$entry_norm" "$binary_sha" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -222,14 +345,10 @@ import sys
 
 projection = pathlib.Path(sys.argv[1])
 metadata = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
-expect = metadata["projection_expectations"]
+mode, corpus, func, entry_norm, binary_sha = sys.argv[3:]
 
 raw = projection.read_bytes()
-if hashlib.sha256(raw).hexdigest() != expect["sha256"]:
-    raise SystemExit(f"projection sha256 drifted: {hashlib.sha256(raw).hexdigest()}")
-if len(raw) != expect["bytes"]:
-    raise SystemExit(f"projection size drifted: {len(raw)}")
-
+actual_sha = hashlib.sha256(raw).hexdigest()
 lines = raw.decode("utf-8").splitlines()
 meta = {}
 for line in lines[:4]:
@@ -238,6 +357,17 @@ for line in lines[:4]:
     for item in line[5:].split(" "):
         key, _, value = item.partition("=")
         meta[key] = value
+
+func_entry = metadata.get("functions", {}).get(f"{corpus}/{func}") \
+    if mode == "parameterized" else None
+pin = metadata["projection_expectations"] if mode == "default" \
+    else (func_entry or {}).get("projection_expectations")
+
+normalize = lambda s: s.lower().removeprefix("0x").lstrip("0") or "0"
+if normalize(meta.get("func_entry", "")) != normalize(entry_norm):
+    raise SystemExit(
+        f"META func_entry drifted: {meta.get('func_entry')!r} != {entry_norm}"
+    )
 fields = {
     "side": "oracle",
     "oracle_commit": metadata["oracle"]["commit"],
@@ -245,12 +375,12 @@ fields = {
     "cspec": metadata["compiler_spec"],
     "analysis_options": "default",
     "build_flags": "v1-no-OPACTION_DEBUG",
-    "binary_sha256": metadata["input"]["binary_sha256"],
+    "binary_sha256": binary_sha,
     "load_mode": metadata["analysis_options"]["load_mode"],
-    "producer": expect["producer_blob"],
+    "producer": metadata["projection_expectations"]["producer_blob"],
     "maxrestarts": str(metadata["input"]["maxrestarts"]),
     "unique_base": metadata["input"]["unique_base"],
-    "func_name": metadata["input"]["function"],
+    "func_name": metadata["input"]["function"] if mode == "default" else func,
 }
 for key, value in fields.items():
     if meta.get(key) != value:
@@ -357,36 +487,61 @@ for ln, line in enumerate(lines, 1):
     else:
         raise SystemExit(f"line {ln}: stray record outside @SNAP: {line[:60]!r}")
 
-if len(begins) != expect["begins"] or len(ends) != expect["ends"]:
+if len(begins) != len(ends):
     raise SystemExit(f"event count drifted: {len(begins)}/{len(ends)}")
-if len(snaps) != expect["snaps"]:
-    raise SystemExit(f"snapshot count drifted: {len(snaps)}")
-if restarts != expect["restarts"]:
-    raise SystemExit(f"restart count drifted: {restarts}")
 if sorted(begins) != list(range(1, len(begins) + 1)):
     raise SystemExit("seq numbers are not contiguous 1-based")
 if set(begins) != set(ends):
     raise SystemExit("@BEGIN/@END seq sets differ")
 if stack:
     raise SystemExit(f"unclosed events at EOF: {stack}")
-if op_lines != expect["total_op_lines"]:
-    raise SystemExit(f"op-line total drifted: {op_lines}")
-if max(snaps) != expect["max_snap_ops"] or min(snaps) != expect["min_snap_ops"]:
-    raise SystemExit("snapshot size extremes drifted")
-PY
 
-install -D -m 0644 "$oracle_tmp/projection.txt" "$projection_out"
-python3 -I -S - "$metadata" <<'PY'
-import json
-import pathlib
-import sys
-
-expect = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))[
-    "projection_expectations"
-]
+stats = {
+    "begins": len(begins),
+    "ends": len(ends),
+    "snaps": len(snaps),
+    "restarts": restarts,
+    "total_op_lines": op_lines,
+    "max_snap_ops": max(snaps) if snaps else 0,
+    "min_snap_ops": min(snaps) if snaps else 0,
+    "bytes": len(raw),
+}
+if pin is not None:
+    for key, value in stats.items():
+        if pin.get(key) != value:
+            raise SystemExit(f"{key} drifted: {value} (pinned {pin.get(key)})")
+    if actual_sha != pin["sha256"]:
+        raise SystemExit(f"projection sha256 drifted: {actual_sha}")
+else:
+    if mode == "default":
+        raise SystemExit("default mode requires projection_expectations")
+pin_state = "pinned" if pin is not None else "capture(unpinned)"
+print(
+    f"stage_projection_1204: target={corpus}/{func} entry={entry_norm} "
+    f"mode={pin_state}"
+)
 print(
     "stage_projection_1204: events={begins} snaps={snaps} "
-    "ops={total_op_lines} restarts={restarts}".format(**expect)
+    "ops={total_op_lines} restarts={restarts} bytes={bytes}".format(**stats)
 )
+if pin is None:
+    print(
+        "stage_projection_1204: max_snap_ops={max_snap_ops} "
+        "min_snap_ops={min_snap_ops}".format(**stats)
+    )
+    print(f"stage_projection_1204: sha256={actual_sha} binary_sha256={binary_sha}")
 PY
+then
+  # A drift must be investigable: preserve the offending projection (and
+  # the stderr it produced) before the EXIT trap wipes the scratch dir.
+  drift_dir=/dev/shm/rugra-tests/sb-oracle/drift
+  mkdir -p "$drift_dir"
+  drift_tag=$(date +%Y%m%d_%H%M%S)
+  cp "$oracle_tmp/projection.txt" "$drift_dir/${corpus}.${func}.${drift_tag}.projection"
+  cp "$oracle_tmp/run.stderr" "$drift_dir/${corpus}.${func}.${drift_tag}.stderr"
+  echo "drift artifacts preserved in $drift_dir/${corpus}.${func}.${drift_tag}.*" >&2
+  exit 1
+fi
+
+install -D -m 0644 "$oracle_tmp/projection.txt" "$projection_out"
 printf 'projection installed at %s\n' "$projection_out"

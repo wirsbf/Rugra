@@ -5,6 +5,16 @@
  * reads observation points (including protected Action counters exposed by
  * the test-only access macros).  It does not alter Action, Rule, or Funcdata
  * semantics.
+ *
+ * Target selection (batch-driver contract, mirrors stage_drill_1204.cc):
+ *   STAGE_PROJ_FUNC (BFD symbol name) and STAGE_PROJ_ADDR (hex entry,
+ *   overrides the argv entry).  With STAGE_PROJ_FUNC unset the fixture keeps
+ *   the historical argv-entry address lookup, so the pinned next_url capture
+ *   is reproduced byte-identically.  A name target not present in the static
+ *   BFD symbol table (stripped corpus binaries: httpd) falls back to
+ *   registering dynamic-table function symbols before the lookup; the entry
+ *   identity is cross-checked against the resolved symbol so a name
+ *   collision in the "::" namespace cannot capture the wrong function body.
  */
 
 #include <bits/stdc++.h>
@@ -73,6 +83,74 @@ static bool isPrefix(const string &prefix,const string &path)
       (path.size() > prefix.size() &&
        path.compare(0,prefix.size(),prefix) == 0 &&
        path[prefix.size()] == ':');
+}
+
+// Resolve the hex text of STAGE_PROJ_ADDR into an address value; accept an
+// optional 0x/0X prefix and reject anything else so a malformed
+// batch-driver argument cannot quietly trace offset 0.
+static uintb parseEntryAddress(const string &text)
+{
+  string digits = text;
+  if (digits.size() >= 2 && (digits.compare(0,2,"0x") == 0 || digits.compare(0,2,"0X") == 0))
+    digits = digits.substr(2);
+  if (digits.empty() || digits.find_first_not_of("0123456789abcdefABCDEF") != string::npos)
+    throw std::runtime_error("entry address is not hexadecimal: " + text);
+  try {
+    return static_cast<uintb>(std::stoull(digits,nullptr,16));
+  }
+  catch (const std::exception &) {
+    throw std::runtime_error("entry address out of range: " + text);
+  }
+}
+
+// Stripped corpus binaries (httpd) expose their functions only in the BFD
+// dynamic symbol table, which LoadImageBfd::openSymbols never reads
+// (bfd_canonicalize_symtab = static .symtab only, loadimage_bfd.cc:194-225),
+// so Architecture::readLoaderSymbols registers nothing for them.  When a
+// STAGE_PROJ_FUNC name lookup misses, this fallback ingests dynamic function
+// symbols as an exact mirror of the canonical golden generator's loader
+// ingestion (tools/regen_ghidra_golden.py registerBfdFunctionSymbols, same
+// mirror as stage_drill_1204.cc registerDynamicFunctionSymbols): BSF_FUNCTION
+// filter, undefined imports skipped, findCreateScopeFromSymbolName +
+// Scope::addFunction.  The entry-identity check in run() still pins which
+// function gets traced.  Static-table targets (curl) never reach it.
+static void registerDynamicFunctionSymbols(Architecture &architecture,const string &binary)
+{
+  bfd *abfd = bfd_openr(binary.c_str(),"default");
+  if (abfd == (bfd *)0)
+    throw std::runtime_error("bfd_openr failed: " + binary);
+  if (!bfd_check_format(abfd,bfd_object)) {
+    bfd_close(abfd);
+    return;
+  }
+  long upper = bfd_get_dynamic_symtab_upper_bound(abfd);
+  if (upper <= 0) {
+    bfd_close(abfd);
+    return;
+  }
+  asymbol **symbols = (asymbol **)malloc(static_cast<size_t>(upper));
+  if (symbols == (asymbol **)0) {
+    bfd_close(abfd);
+    throw std::runtime_error("dynamic symbol table malloc failed");
+  }
+  long count = bfd_canonicalize_dynamic_symtab(abfd,symbols);
+  AddrSpace *code = architecture.getDefaultCodeSpace();
+  for (long index = 0;index < count;++index) {
+    asymbol *symbol = symbols[index];
+    if (symbol == (asymbol *)0 || symbol->name == (const char *)0) continue;
+    if ((symbol->flags & BSF_FUNCTION) == 0) continue;
+    if (symbol->section == (asection *)0 || bfd_is_und_section(symbol->section))
+      continue;
+    Address address(code,bfd_asymbol_value(symbol));
+    if (architecture.symboltab->getGlobalScope()->queryFunction(address) != (Funcdata *)0)
+      continue; // already registered from another symbol source
+    string basename;
+    Scope *scope = architecture.symboltab->findCreateScopeFromSymbolName(
+        symbol->name,"::",basename,(Scope *)0);
+    scope->addFunction(address,basename);
+  }
+  free(symbols);
+  bfd_close(abfd);
 }
 
 static ActionNode findHit(const vector<ActionNode> &leaves)
@@ -266,6 +344,18 @@ static int run(const string &specRoot,const string &binary,uintb entry,
                const string &output,const string &binarySha,
                const string &producer,const string &options)
 {
+  // Target selection: STAGE_PROJ_FUNC (BFD symbol name) selects by name and
+  // STAGE_PROJ_ADDR (hex) overrides the argv entry.  With both unset the
+  // lookup below is the historical argv-entry address query, allocation-for-
+  // allocation identical to the pinned next_url capture path (getenv miss +
+  // SSO-empty string allocate nothing).
+  const char *funcEnv = std::getenv("STAGE_PROJ_FUNC");
+  const string funcName = (funcEnv != (const char *)0 && *funcEnv != '\0')
+      ? string(funcEnv) : string();
+  const char *addrEnv = std::getenv("STAGE_PROJ_ADDR");
+  uintb entryAddr = entry;
+  if (addrEnv != (const char *)0 && *addrEnv != '\0')
+    entryAddr = parseEntryAddress(addrEnv);
   vector<string> specPaths(1,specRoot);
   startDecompilerLibrary(specPaths);
   try {
@@ -273,10 +363,24 @@ static int run(const string &specRoot,const string &binary,uintb entry,
     DocumentStorage store;
     architecture.init(store);
     architecture.readLoaderSymbols("::");
-    Funcdata *fd = architecture.symboltab->getGlobalScope()->queryFunction(
-        Address(architecture.getDefaultCodeSpace(),entry));
+    Funcdata *fd = funcName.empty()
+        ? architecture.symboltab->getGlobalScope()->queryFunction(
+              Address(architecture.getDefaultCodeSpace(),entryAddr))
+        : architecture.symboltab->getGlobalScope()->queryFunction(funcName);
+    if (!fd && !funcName.empty()) {
+      registerDynamicFunctionSymbols(architecture,binary);
+      fd = architecture.symboltab->getGlobalScope()->queryFunction(funcName);
+    }
     if (!fd)
-      throw std::runtime_error("function entry was not found in BFD symbols");
+      throw std::runtime_error(funcName.empty()
+          ? string("function entry was not found in BFD symbols")
+          : funcName + " was not found in the BFD symbol table");
+    if (!funcName.empty() && fd->getAddress().getOffset() != entryAddr) {
+      std::ostringstream detail;
+      detail << funcName << " entry identity drifted: offset=0x" << std::hex
+             << fd->getAddress().getOffset() << " expected=0x" << entryAddr;
+      throw std::runtime_error(detail.str());
+    }
     if (fd->hasNoCode())
       throw std::runtime_error("selected function has no code");
 
@@ -423,7 +527,9 @@ int main(int argc,char **argv)
 {
   if (argc != 8) {
     std::cerr << "usage: stage_projection_1204 SPEC_ROOT BINARY ENTRY OUTPUT "
-                 "BINARY_SHA PRODUCER OPTIONS\n";
+                 "BINARY_SHA PRODUCER OPTIONS\n"
+                 "  target via STAGE_PROJ_FUNC / STAGE_PROJ_ADDR"
+                 " (unset: argv ENTRY address lookup)\n";
     return 2;
   }
   uintb entry = 0;
