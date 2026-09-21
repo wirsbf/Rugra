@@ -26,7 +26,7 @@
  },
  "input_fingerprint": "sha256:0345105fb08b02e6747738929049506a0316a02d7b91016c2ccb145bd8b9725d",
  "comparand_sha256": {
-  "cpp_fixture": "3b2f87dd79d17ba452e6ff3c3e22ea04d9e7cb444ab71b4ad9da643ab88e719f",
+  "cpp_fixture": "fba53a36f82117906d1cf50c83222d3855a9ce14fcbcf1b625f7736db6cd7207",
   "ghidra_instrumented_action_hh_sha256": "33a0404322e3641111f91187eb0bd0f49192fc93ef59f8c355d15a97dcfa47f3",
   "ghidra_instrumented_sleigh_arch_hh_sha256": "43eadf844d38e110c88b3b14c18b87e285059a2bb449ce791355654f6cdb2fc0"
  },
@@ -41,9 +41,9 @@
  },
  "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
  "projection_expectations": {
-  "producer_blob": "0ae3142f85e7d7020532dbf87bbc786091216414",
-  "sha256": "2227b1aac887757d47e66d383ab75a9103ef5946db848298debf41fface181ef",
-  "bytes": 5967921,
+  "producer_blob": "8776a327f8d88f9757fa4150580ee7fea6548caa",
+  "sha256": "63c5015e693702ca783f385c94d125802d93b6b538d97d74b6ff4c281292be59",
+  "bytes": 6410681,
   "begins": 355,
   "ends": 355,
   "snaps": 355,
@@ -53,6 +53,6 @@
   "min_snap_ops": 219,
   "determinism": "byte-identical across repeated runs on the producing host with ASLR enabled"
  },
- "descriptor_grammar": "spec v1.2 grammar (v1.1 base + ratified s:/f:/o: pointer pseudonyms + opcode = getOpName() verbatim, non-blank token validation); runner validator keeps a data-driven OPCODE_DOMAIN name table for the pending CPUI spelling ruling",
+ "descriptor_grammar": "spec v1.2.1 grammar: v1.1 base + ratified s:/f:/o: pointer pseudonyms (v1.2 addendum, master a31a3cb) + opcode domain = get_opname(op->code()) verbatim (opcodes.hh:133 canonical 74-name uppercase table, master 85d78a7 erratum: the typeop.cc name domain is lossy, e.g. INT_LESS/INT_SLESS both render '<'); runner validator enforces the closed cpui name table with token shape ^[A-Z][A-Z0-9_]*$ via the data-driven OPCODE_DOMAIN constant",
  "fixture_id": "STAGE-PROJECTION-1204-ORACLE"
 }

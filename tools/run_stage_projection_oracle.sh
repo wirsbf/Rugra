@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Locked-oracle stage projection producer for the next_url pilot of the
-# stage-bisect harness (spec v1.2).  Verifies the locked Ghidra tree,
-# rebuilds the fixture against an instrumented temporary copy of the
-# oracle source, runs the stepping walk, validates the full v1.2 stream,
-# and installs the projection at the RAM-disk product path.
+# stage-bisect harness (spec v1.2 + v1.2.1 opcode-domain erratum).  Verifies
+# the locked Ghidra tree, rebuilds the fixture against an instrumented
+# temporary copy of the oracle source, runs the stepping walk, validates the
+# full v1.2.1 stream, and installs the projection at the RAM-disk product
+# path.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -259,39 +260,56 @@ begins, ends, snaps, restarts = {}, {}, [], 0
 stack = []
 op_lines = 0
 pending = None
-# v1.2 op-line grammar.  <OPC_NAME> is PcodeOp::getOpName() verbatim
-# (typeop.cc name domain); per spec v1.2 the consumer side validates the
-# token as non-blank.  The opcode spelling may move to the CPUI enum
-# alphabet (ruling pending); the check is therefore driven by the
-# OPCODE_DOMAIN name-table constant — one line flips it:
-#   "any"    non-blank token only (current spec v1.2 default)
-#   "typeop" the 34 TypeOp name spellings observed in this projection
-#   "cpui"   the complete 73-name CPUI enum alphabet (opcodes.hh)
-OPCODE_DOMAIN = "any"
+# v1.2.1 op-line grammar.  <OPC_NAME> is the CPUI enum domain: the fixture
+# emits get_opname(op->code()) verbatim (opcodes.cc opcode_name table), per
+# the v1.2.1 opcode-domain ruling.  The check is driven by the OPCODE_DOMAIN
+# name-table constant so a re-ruling lands as a one-line change:
+#   "cpui"   complete 74-name enum alphabet from opcodes.cc opcode_name
+#            (table order; token shape ^[A-Z][A-Z0-9_]*$) — v1.2.1 canonical
+#   "typeop" the 34 typeop.cc name spellings this stream carried before the
+#            ruling (lossy: goto = BRANCH+CBRANCH, "+" = INT_ADD et al.)
+#   "any"    non-blank token only (ruling-free fallback)
+OPCODE_DOMAIN = "cpui"
 OPCODE_NAMES = {
-    "any": None,
+    "cpui": frozenset((
+        "BLANK COPY LOAD STORE "
+        "BRANCH CBRANCH BRANCHIND CALL "
+        "CALLIND CALLOTHER RETURN INT_EQUAL "
+        "INT_NOTEQUAL INT_SLESS INT_SLESSEQUAL INT_LESS "
+        "INT_LESSEQUAL INT_ZEXT INT_SEXT INT_ADD "
+        "INT_SUB INT_CARRY INT_SCARRY INT_SBORROW "
+        "INT_2COMP INT_NEGATE INT_XOR INT_AND "
+        "INT_OR INT_LEFT INT_RIGHT INT_SRIGHT "
+        "INT_MULT INT_DIV INT_SDIV INT_REM "
+        "INT_SREM BOOL_NEGATE BOOL_XOR BOOL_AND "
+        "BOOL_OR FLOAT_EQUAL FLOAT_NOTEQUAL FLOAT_LESS "
+        "FLOAT_LESSEQUAL UNUSED1 FLOAT_NAN FLOAT_ADD "
+        "FLOAT_DIV FLOAT_MULT FLOAT_SUB FLOAT_NEG "
+        "FLOAT_ABS FLOAT_SQRT INT2FLOAT FLOAT2FLOAT "
+        "TRUNC CEIL FLOOR ROUND "
+        "BUILD DELAY_SLOT PIECE SUBPIECE CAST "
+        "LABEL CROSSBUILD SEGMENTOP CPOOLREF NEW "
+        "INSERT EXTRACT POPCOUNT LZCOUNT"
+    ).split(" ")),
     "typeop": frozenset((
         "! != & && * + - / < << <= == >> ? [] ^ | || "
         "call callind CARRY (cast) CONCAT copy goto load POPCOUNT return "
         "SBORROW SCARRY SEXT store SUB ZEXT"
     ).split(" ")),
-    "cpui": frozenset((
-        "BOOL_AND BOOL_NEGATE BOOL_OR BOOL_XOR BRANCH BRANCHIND CALL CALLIND "
-        "CALLOTHER CAST CBRANCH COPY CPOOLREF EXTRACT FLOAT_ABS FLOAT_ADD "
-        "FLOAT_CEIL FLOAT_DIV FLOAT_EQUAL FLOAT_FLOAT2FLOAT FLOAT_FLOOR "
-        "FLOAT_INT2FLOAT FLOAT_LESS FLOAT_LESSEQUAL FLOAT_MULT FLOAT_NAN "
-        "FLOAT_NEG FLOAT_NOTEQUAL FLOAT_ROUND FLOAT_SQRT FLOAT_SUB "
-        "FLOAT_TRUNC INDIRECT INSERT INT_2COMP INT_ADD INT_AND INT_CARRY "
-        "INT_DIV INT_EQUAL INT_LEFT INT_LESS INT_LESSEQUAL INT_MULT "
-        "INT_NEGATE INT_NOTEQUAL INT_OR INT_REM INT_RIGHT INT_SBORROW "
-        "INT_SCARRY INT_SDIV INT_SEXT INT_SLESS INT_SLESSEQUAL INT_SREM "
-        "INT_SRIGHT INT_SUB INT_XOR INT_ZEXT LOAD LZCOUNT MAX MULTIEQUAL "
-        "NEW PIECE POPCOUNT PTRADD PTRSUB RETURN SEGMENTOP STORE SUBPIECE"
-    ).split(" ")),
+    "any": None,
 }
-op_re = re.compile(r"^[0-9a-f]+:[0-9a-f]+ \S+ d=[01] out=\S+ in=\S+$")
+OPCODE_TOKEN_SHAPES = {
+    "cpui": r"[A-Z][A-Z0-9_]*",
+    "typeop": r"\S+",
+    "any": r"\S+",
+}
+op_re = re.compile(
+    r"^[0-9a-f]+:[0-9a-f]+ " + OPCODE_TOKEN_SHAPES[OPCODE_DOMAIN]
+    + r" d=[01] out=\S+ in=\S+$"
+)
 # v1.2 vn descriptors: c:/n:/u: (v1.1) plus the pointer pseudonyms
-# s:<spacename>, f:<addr>:<time> (fspec), o:<addr>:<time> / o:- (iop).
+# s:<spacename>, f:<addr>:<time> (fspec), o:<addr>:<time> / o:- (iop),
+# ratified by the v1.2 addendum.
 vn_re = re.compile(
     r"^(c:[0-9a-f]+:\d+|n:[A-Za-z0-9_]+:[0-9a-f]+:\d+|u:[0-9a-f]+:\d+"
     r"|s:[A-Za-z0-9_]+|f:[0-9a-f]+:[0-9a-f]+|o:[0-9a-f]+:[0-9a-f]+|o:-|-)$"

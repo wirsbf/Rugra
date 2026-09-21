@@ -16,6 +16,7 @@
 #include "funcdata.hh"
 #include "libdecomp.hh"
 #include "op.hh"
+#include "opcodes.hh"
 #include "space.hh"
 #include "varnode.hh"
 #undef protected
@@ -166,8 +167,14 @@ static void writeOp(ostream &out,const PcodeOp *op,
                     const std::map<const PcodeOp *,string> &iopNames)
 {
   // d= follows op.cc:380-381 semantics: dead OR unattached (no parent).
+  // Opcode spelling is the CPUI enum domain: get_opname(op->code())
+  // (opcodes.hh:133, opcode_name table).  Spec v1.2.1 opcode-domain ruling:
+  // getOpName()'s typeop.cc name field is lossy (goto = BRANCH+CBRANCH,
+  // "+" = INT_ADD/FLOAT_ADD/PTRADD, SUB = SUBPIECE not INT_SUB) and its
+  // symbol spellings break the consumer tokenizer.  code() dereferences
+  // the same TypeOp pointer as getOpName(), so null-safety is unchanged.
   out << std::hex << op->getAddr().getOffset() << ':' << op->getTime()
-      << std::dec << ' ' << op->getOpName()
+      << std::dec << ' ' << get_opname(op->code())
       << " d=" << ((op->isDead() || op->getParent() == (BlockBasic *)0) ? 1 : 0)
       << " out=";
   writeVarnodeDescriptor(out,op->getOut(),op,&iopNames);
