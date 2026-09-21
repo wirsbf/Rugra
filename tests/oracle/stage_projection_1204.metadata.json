@@ -53,6 +53,6 @@
   "min_snap_ops": 219,
   "determinism": "byte-identical across repeated runs on the producing host with ASLR enabled"
  },
- "descriptor_grammar": "spec v1.2 grammar: s:/f:/o: pointer pseudonyms ratified (v1.2 addendum); opcode domain = CPUI enum alphabet via get_opname(op->code()) (v1.2.1 erratum)",
+ "descriptor_grammar": "spec v1.2.1 grammar: v1.1 base + ratified s:/f:/o: pointer pseudonyms (v1.2 addendum, master a31a3cb) + opcode domain = get_opname(op->code()) verbatim (opcodes.hh:133 canonical 74-name uppercase table, master 85d78a7 erratum: the typeop.cc name domain is lossy, e.g. INT_LESS/INT_SLESS both render '<'); runner validator enforces the closed cpui name table with token shape ^[A-Z][A-Z0-9_]*$ via the data-driven OPCODE_DOMAIN constant",
  "fixture_id": "STAGE-PROJECTION-1204-ORACLE"
 }
