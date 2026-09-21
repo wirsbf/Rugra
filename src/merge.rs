@@ -1910,14 +1910,24 @@ impl Merge {
             let Some(root_high) = root.read().unwrap().get_high().cloned() else { continue };
             if root_high.read().unwrap().instances.len() != 1 { continue; }
             let mut pieces = Vec::new();
-            Self::gather_partial_pieces(&root, &crate::op::PcodeOpRef(def), 0, &mut pieces);
+            // Ghidra merge.cc:1381-1387: baseOffset comes from the root's
+            // symbol entry (0 without one); gatherPieces starts at
+            // (baseOffset, baseOffset), and groupWith receives
+            // getTypeOffset()-baseOffset (cc:1404).
+            let base_offset = root
+                .read()
+                .unwrap()
+                .get_symbol_entry()
+                .map(|entry| entry.read().unwrap().get_offset())
+                .unwrap_or(0);
+            Self::gather_partial_pieces(&root, &crate::op::PcodeOpRef(def), base_offset, base_offset, &mut pieces);
             if pieces.iter().all(|(piece, _)| {
                 let p = piece.read().unwrap();
                 p.is_proto_partial() && p.get_high().map_or(false, |h| h.read().unwrap().instances.len() == 1)
             }) {
                 for (piece, offset) in pieces {
                     if let Some(high) = piece.read().unwrap().get_high().cloned() {
-                        let _ = Self::group_with_arcs(&high, offset, &root_high);
+                        let _ = Self::group_with_arcs(&high, offset - base_offset, &root_high);
                     }
                 }
             } else {
@@ -1958,9 +1968,79 @@ impl Merge {
         }
     }
 
+    // Ghidra: op.cc:801 PieceNode::isLeaf
+    /// Determine if a Varnode is a leaf within the CONCAT tree rooted at
+    /// `root`. Faithful to `PieceNode::isLeaf` (op.cc:801-817): a mapped
+    /// varnode under a different symbol entry than the root (a), an
+    /// unwritten varnode (b), a def that is not PIECE (c), a varnode
+    /// without exactly one descendant (d), or an addr-tied varnode whose
+    /// address does not line up with the root at `rel_offset` (e) all
+    /// make the node a leaf. Checks (b)-(d) bound `gather_partial_pieces`'s
+    /// recursion: without them a non-tree PIECE graph (e.g. an input
+    /// defined by the very op reading it) recurses forever and overflows
+    /// the worker stack (observed on curl `main` after
+    /// FUNCDATA-OPSTACKLOAD-CONTAIN-0001 unlocked RuleLoadVarnode;
+    /// MERGE-GATHERPIECES-ISLEAF-0001).
+    fn piece_is_leaf(
+        root: &Arc<RwLock<crate::varnode::Varnode>>,
+        vn: &Arc<RwLock<crate::varnode::Varnode>>,
+        rel_offset: i32,
+    ) -> bool {
+        // (a) vn->isMapped() && rootVn->getSymbolEntry() != vn->getSymbolEntry()
+        let (vn_mapped, vn_entry) = {
+            let v = vn.read().unwrap();
+            (v.is_mapped(), v.get_symbol_entry())
+        };
+        if vn_mapped {
+            let root_entry = root.read().unwrap().get_symbol_entry();
+            let entries_differ = match (&root_entry, &vn_entry) {
+                (Some(r), Some(v)) => !Arc::ptr_eq(r, v),
+                (None, None) => false,
+                _ => true,
+            };
+            if entries_differ {
+                return true;
+            }
+        }
+        // (b) !vn->isWritten()
+        let def = { vn.read().unwrap().get_def() };
+        let Some(def) = def else { return true };
+        // (c) def->code() != CPUI_PIECE
+        if def.read().unwrap().opcode != crate::opcodes::OpCode::CPUI_PIECE {
+            return true;
+        }
+        // (d) vn->loneDescend() == null
+        if vn.read().unwrap().lone_descend().is_none() {
+            return true;
+        }
+        // (e) vn->isAddrTied(): Address addr = rootVn->getAddr() + relOffset;
+        //     if (vn->getAddr() != addr) return true;
+        if vn.read().unwrap().is_addr_tied() {
+            let (v_space, v_off, r_space, r_off) = {
+                let v = vn.read().unwrap();
+                let r = root.read().unwrap();
+                (v.get_space(), v.get_offset(), r.get_space(), r.get_offset())
+            };
+            if v_space != r_space || v_off != r_off.wrapping_add_signed(rel_offset as i64) {
+                return true;
+            }
+        }
+        false
+    }
+
     // Ghidra: op.cc:865 PieceNode::gatherPieces
-    fn gather_partial_pieces(root: &Arc<RwLock<crate::varnode::Varnode>>, op: &crate::op::PcodeOpRef,
-                             base: i32, out: &mut Vec<(Arc<RwLock<crate::varnode::Varnode>>, i32)>) {
+    /// Build the CONCAT tree rooted at the given Varnode. Faithful to
+    /// `PieceNode::gatherPieces` (op.cc:865-876): walk backwards through
+    /// CPUI_PIECE operations recording each input with its offset within
+    /// the root's data-type, recursing only when `PieceNode::isLeaf`
+    /// (op.cc:871) reports the input is an interior tree node.
+    fn gather_partial_pieces(
+        root: &Arc<RwLock<crate::varnode::Varnode>>,
+        op: &crate::op::PcodeOpRef,
+        base_offset: i32,
+        root_offset: i32,
+        out: &mut Vec<(Arc<RwLock<crate::varnode::Varnode>>, i32)>,
+    ) {
         let (big, inputs) = {
             let r = root.read().unwrap();
             let o = op.0.read().unwrap();
@@ -1969,11 +2049,18 @@ impl Merge {
         if inputs.len() < 2 { return; }
         let sizes = [inputs[0].read().unwrap().get_size() as i32, inputs[1].read().unwrap().get_size() as i32];
         for slot in 0..2 {
-            let offset = if big == (slot == 1) { base + sizes[1 - slot] } else { base };
+            let offset = if big == (slot == 1) { base_offset + sizes[1 - slot] } else { base_offset };
             let piece = inputs[slot].clone();
-            let nested = piece.read().unwrap().get_def().filter(|d| d.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_PIECE);
-            out.push((piece, offset));
-            if let Some(nested) = nested { Self::gather_partial_pieces(root, &crate::op::PcodeOpRef(nested), offset, out); }
+            // Ghidra op.cc:871-874: bool res = isLeaf(rootVn,vn,offset-rootOffset);
+            // stack.emplace_back(op,i,offset,res); if (!res) gatherPieces(...).
+            let is_leaf = Self::piece_is_leaf(root, &piece, offset - root_offset);
+            out.push((piece.clone(), offset));
+            if !is_leaf {
+                // isLeaf=false guarantees a written PIECE def (checks b and c).
+                let nested = piece.read().unwrap().get_def()
+                    .expect("gather_partial_pieces: isLeaf=false guarantees a PIECE def");
+                Self::gather_partial_pieces(root, &crate::op::PcodeOpRef(nested), offset, root_offset, out);
+            }
         }
     }
 

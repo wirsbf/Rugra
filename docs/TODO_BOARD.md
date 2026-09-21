@@ -57,6 +57,13 @@
 > - `FUNCDATA-OPSTACKLOAD-CONTAIN-0001`(**P0 热修,1 行**,Lane AL 实证): funcdata.rs:6157
 >   注释引 getContain() 却写 space_id(),stack≠ram→oracle-only loadvarnode 断链;修后单变量
 >   重跑 drill 验证 loadvarnode 0→正。
+> - `MERGE-GATHERPIECES-ISLEAF-0001`(P0,**FIXED 2026-09-22**,Lane AO `wt/sb-opstackload`,
+>   owner=fixer): merge.rs `gather_partial_pieces` 缺 `PieceNode::isLeaf`(op.cc:801-817)
+>   递归界 → 非树形 PIECE 图(输入由读取它的同一 PIECE 定义)无限递归;在
+>   FUNCDATA-OPSTACKLOAD-CONTAIN-0001 解锁 RuleLoadVarnode 后 main 于
+>   ActionMergeRequired 确定性 256MB 栈溢出(worker-failure)。已补五项 isLeaf 判定
+>   + root_offset/base_offset 语义(merge.cc:1381-1387/1404)。merge.rs 属核心算法
+>   白名单(机制 C),**Cross-Review: PENDING**。
 > - `FLOW-RANGE-MARSHALING-0001`(P0,并入 RUGRA-FLOW-MIRROR lane 队列): driver
 >   [entry,u64::MAX) 出界→尾跳 BRANCH 改写 CALL+人工 return(非 Ghidra 语义);oracle
 >   全空间经 jumptable fail_thunk 转 CALLIND@0x2534。
