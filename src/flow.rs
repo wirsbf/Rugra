@@ -3328,7 +3328,35 @@ pub fn follow_flow_with_callee_protos(
     eaddr: u64,
     callee_protos: &std::collections::BTreeMap<u64, crate::fspec::FuncProto>,
 ) -> crate::error::Result<()> {
-    let baddr = entry.as_u64();
+    // Historical driver-bounded form (RUGRA-FLOW-MIRROR-0001): the
+    // constraining range starts at the function entry. The full oracle
+    // parameter form — followFlow(code:0, code:highest), regen_ghidra_golden
+    // .py:388 ≡ oracle harness:315 — is [`follow_flow_range`].
+    follow_flow_range(fd, lifter, entry.as_u64(), eaddr, callee_protos)
+}
+
+/// Flow entry mirroring the full `(baddr, eaddr)` parameter form of
+/// `Funcdata::followFlow` (funcdata_op.cc:756-783): the caller supplies the
+/// constraining range; the walk itself always seeds from the function's own
+/// entry (`data.getAddress()`, flow.cc:791
+/// `addrlist.push_back(data.getAddress())`). The golden-generation path and
+/// the oracle single-function harness pass
+/// `(Address(codeSpace, 0), Address(codeSpace, getHighest()))` — for the
+/// x86-64 default ram space that is `(0, u64::MAX)` — so tail jumps into
+/// lower code-space regions (PLT) are followed in-function and later
+/// truncated through the jumptable fail_thunk path (jumptable.cc:2304-2320
+/// → flow.cc:727/735 CALLIND + artificial halt).
+// Ghidra: funcdata_op.cc:756 Funcdata::followFlow
+pub fn follow_flow_range(
+    fd: &mut Funcdata,
+    lifter: &mut SleighLifter,
+    baddr: u64,
+    eaddr: u64,
+    callee_protos: &std::collections::BTreeMap<u64, crate::fspec::FuncProto>,
+) -> crate::error::Result<()> {
+    // flow.cc:791: the walk starts at the function's own address, never at
+    // baddr (baddr only constrains new-address targets, flow.cc:222).
+    let entry = *fd.get_address();
     let mut flow = FlowInfo::new(fd, lifter, baddr, eaddr);
     flow.callee_func_protos = callee_protos.clone();
     flow.generate_ops(entry)?;

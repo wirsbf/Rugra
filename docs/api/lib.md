@@ -604,3 +604,8 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
 
 - `pub mod modelrules;` — 对应 `modelrules.hh` / `modelrules.cc`。原型模型规则引擎，22 个类 1:1 移植：PrimitiveExtractor（提取算法全 1:1）+ DatatypeFilter/SizeRestrictedFilter/MetaTypeFilter/HomogeneousAggregate + QualifierFilter/AndFilter/VarargsFilter/PositionMatchFilter/DatatypeMatchFilter + AssignAction/GotoStack/ConvertToPointer/MultiSlotAssign/MultiMemberAssign/MultiSlotDualAssign/ConsumeAs/HiddenReturnAssign/ConsumeExtra/ExtraStack/ConsumeRemaining + ModelRule。Phase 1：数据结构 + 过滤/提取/justifyPieces 算法全 1:1，29 单元测试。assignAddress 方法体待 ParamListStandard/TypeFactory 上游。
  
+## 2026-09-22: 新增模块 drillobserve / drillfmt
+
+- `drillobserve`: v2 drill 只读 per-application 记录器(OPACTION_DEBUG 镜像钩子,funcdata 变更入口同位挂钩)。
+- `drillfmt`: oracle printDebug 原文格式化器(SeqNum raw/Varnode printDebug 语义/TypeOp 结构形式)。
+(源自 wt/sb-rust 发射器链集成)

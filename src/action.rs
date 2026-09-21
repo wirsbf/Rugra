@@ -158,6 +158,12 @@ pub trait Action: Send + Sync {
     /// Prepare one `apply()` attempt for the current executor status.
     fn prepare_apply(&mut self, _status: u32) {}
 
+    // RUGRA-GLUE: read-only restart-round view for tooling/emitters; mirrors
+    // the protected ActionRestartGroup::curstart field read that the locked
+    // C++ oracle fixtures perform (same protected-field access pattern).
+    // Default 0 for every non-restart Action.
+    fn fixture_curstart(&self) -> i32 { 0 }
+
     // RUGRA-GLUE: fixture-only nested tree view; Ghidra exposes the same nesting via Action::print (action.cc:417-440)
     /// Read-only downcast for tree-walking fixtures: returns the container
     /// view if this Action is an ActionGroup/ActionRestartGroup.
@@ -322,7 +328,13 @@ pub trait Action: Send + Sync {
 
             if apply_now {
                 self.prepare_apply(state.status);
+                // OPACTION_DEBUG-equivalent drill pair (action.cc:316-322):
+                // activate before apply, flush under the action's leaf name
+                // after; the pool's per-rule pair (process_op) overrides
+                // inside pool applies, exactly like the oracle.
+                crate::drillobserve::activate();
                 let res = self.apply_with_state(fd, state)?;
+                crate::drillobserve::flush(self.get_name());
                 let accumulated = self.take_count_delta();
                 state.count += accumulated;
                 if res < 0 {
@@ -1166,6 +1178,8 @@ impl Action for ActionRestartGroup {
     fn as_action_group(&self) -> Option<&ActionGroup> { Some(&self.group) }
     // RUGRA-GLUE: fixture-only mutable nested tree view for subtree-driving fixtures (Ghidra ActionRestartGroup inherits ActionGroup::list)
     fn as_action_group_mut(&mut self) -> Option<&mut ActionGroup> { Some(&mut self.group) }
+    // RUGRA-GLUE: trait-level read-only passthrough of the protected curstart for the stage-projection emitter (see Action::fixture_curstart)
+    fn fixture_curstart(&self) -> i32 { self.curstart }
     // RUGRA-GLUE: externalizes Ghidra ActionRestartGroup's inherited `count` member
     fn take_count_delta(&mut self) -> i32 {
         std::mem::take(&mut self.pending_count)
@@ -1443,8 +1457,15 @@ impl ActionPool {
                 continue;
             }
 
+            // OPACTION_DEBUG-equivalent drill pair (action.cc:839-845):
+            // activate before each rule application, flush under the rule's
+            // leaf name after; the enclosing pool perform's own pair becomes
+            // a no-op via the active-flag reset, as in the oracle.
+            crate::drillobserve::activate();
             self.rule_states[rule_index].count_tests += 1;
             let result = self.rules[rule_index].apply_op(&op_ref.0, fd)?;
+            let rule_flush_name = self.rules[rule_index].get_name().to_string();
+            crate::drillobserve::flush(&rule_flush_name);
             if result > 0 {
                 self.rule_states[rule_index].count_apply += 1;
                 self.pending_count += result;

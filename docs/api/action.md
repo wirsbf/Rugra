@@ -1242,6 +1242,20 @@ convention` **51** / gcc 审计 16 FAIL 持平；glob_url 单声明块（无重�
   ActionGroup::apply 对 protected list 的驱动顺序。
 - `ActionRestartGroup` 透传 `as_action_group_mut`（Ghidra 继承同一 list）。
 
+## Stage 投影 emitter 访问器（2026-09-22，STAGE-BISECT-E2E Lane C）
+
+- **新增只读 trait 默认方法**：`Action::fixture_curstart() -> i32`（默认 0）
+  与 `ActionRestartGroup` 重载（返回 protected `curstart`）——供
+  examples/curl_decompile.rs 的 v1.1 stage 投影 emitter（env 门控
+  RUGRA_STAGE_PROJ=1）检测 @RESTART 轮次；与既有具体方法
+  `ActionRestartGroup::fixture_curstart`（fixture-only，action_break_pool
+  protected-field 读取模式）同源同义。零管线语义变更（Rugra 侧重启未接线，
+  PIPE-RESTART-0001，恒返回 0）。emitter 本体与树遍历/断点步进
+  （BREAK_START 前沿候选集、索引寻址绕开同名叶子歧义、开帧 LIFO 收口）
+  全部位于 examples 层，复用既有 fixture 视图
+  （`as_action_group`/`child_state`/`child_state_mut`/`set_break`），
+  不新增其它 src/ 接口。
+
 ## oppool1/cleanup 注册纯净度（2026-08-23，PIPE-POOL-LOCAL-RULES-0001）
 
 - **新增 fixture-only API**：`ActionPool::rules() -> &[Box<dyn Rule>]`——注册序
@@ -1316,3 +1330,12 @@ nodejoin fixture 补 CFG 形状断言(F1 整改):canonical(swapa==swapb)终态=j
 nodejoin fixture 测试构造修正(njf2 移交项):原 fixture 用不同常量条件(修复前 over-join 行为的编码);
 F4 门序落地后常量条件 !isWritten 不 join(双侧 fixture D_unwritten 锁定 count=0)。改为共享 written 条件
 varnode(INT_EQUAL 输出)供两 CBRANCH 读取——F3 语义 vn1==vn2 完整 match 走全套 join,断言不变。
+
+## 2026-09-22: v2 drill 边界钩子(Lane AA; action.cc:316-322/839-845 同位)
+
+`Action::perform` 的 apply 两侧加 `drillobserve::activate()/flush(name)`,
+`ActionPool::process_op` 的 `apply_op` 两侧加 per-rule 同对(镜像
+action.cc:316-322 与 :839-845;pool 自身的 flush 因 active 位被 rule 对
+复位而自然 no-op,与 oracle 相同)。env 门控 `RUGRA_STAGE_DRILL`;
+env-off 字节一致性验证:05c8314 基线 vs 本分支,examples/
+rugra_decompile_func 对 examples/curl 的 next_url 输出逐字节相同。

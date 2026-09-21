@@ -2074,6 +2074,9 @@ impl Funcdata {
     /// Set the op-code for a specific PcodeOp. Faithful to
     /// `Funcdata::opSetOpcode` (funcdata.hh:463).
     pub fn op_set_opcode(&mut self, op: &crate::op::PcodeOpRef, opc: crate::opcodes::OpCode) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:25-33); env
+        // gate makes this a no-op in normal builds.
+        crate::drillobserve::mod_check(self.arch.as_ref(), op);
         // cc:29 delegates to PcodeOpBank::changeOpcode. Besides resetting
         // opcode-derived flags, this removes the op from its old LOAD/STORE/
         // RETURN/CALLOTHER list and inserts it into the new one.
@@ -2101,6 +2104,19 @@ impl Funcdata {
     pub fn op_set_input(
         &mut self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, slot: usize,
     ) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:104-125):
+        // Ghidra's cc:107 same-input early-out precedes the hook at
+        // cc:116-119, so test it first under a read guard (this function
+        // holds a write guard below, and the recorder takes its own).
+        if crate::drillobserve::is_enabled() {
+            let same_input = {
+                let o = op.0.read().unwrap();
+                slot < o.inrefs.len() && std::sync::Arc::ptr_eq(&vn, &o.inrefs[slot])
+            };
+            if !same_input {
+                crate::drillobserve::mod_check(self.arch.as_ref(), op);
+            }
+        }
         let mut o = op.0.write().unwrap();
         // Ghidra has nullable preallocated slots. For Rugra's Vec model, a
         // sequential slot exactly at len is the representable NULL boundary
@@ -2202,6 +2218,10 @@ impl Funcdata {
     pub fn op_insert_input(
         &mut self, op: &crate::op::PcodeOpRef, vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>, slot: usize,
     ) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:308-317 hook
+        // at :313, before insertInput; the delegated op_set_input's hook
+        // no-ops via the MODIFIED addl-flag, like Ghidra's first-touch).
+        crate::drillobserve::mod_check(self.arch.as_ref(), op);
         // cc:315 op->insertInput(slot) — PcodeOp::insertInput
         // (op.cc:311-318) pushes a NULL slot at `slot` and shifts existing
         // inputs at/after `slot` up by one. Descend entries store the op
@@ -2243,6 +2263,9 @@ impl Funcdata {
         if slot >= op.0.read().unwrap().inrefs.len() {
             return;
         }
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:291-299 hook
+        // at :296, after the bounds guard, before the unlink).
+        crate::drillobserve::mod_check(self.arch.as_ref(), op);
         self.op_unset_input(op, slot);
         let mut o = op.0.write().unwrap();
         if slot < o.inrefs.len() {
@@ -2255,6 +2278,15 @@ impl Funcdata {
     /// (funcdata.hh). Used by RuleBoolNegate to reorder operands when flipping
     /// a comparison (e.g. `!(V < W) => W <= V`).
     pub fn op_swap_input(&self, op: &crate::op::PcodeOpRef, slot1: usize, slot2: usize) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:150-160 hook
+        // at :155, before the swap; guarded by the bounds precondition).
+        {
+            let o = op.0.read().unwrap();
+            if slot1 < o.inrefs.len() && slot2 < o.inrefs.len() {
+                drop(o);
+                crate::drillobserve::mod_check(self.arch.as_ref(), op);
+            }
+        }
         let mut o = op.0.write().unwrap();
         if slot1 < o.inrefs.len() && slot2 < o.inrefs.len() {
             o.inrefs.swap(slot1, slot2);
@@ -2277,6 +2309,9 @@ impl Funcdata {
         if same_output {
             return;
         }
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:70-87 hook
+        // at :76, after the same-output early-out, before the mutation).
+        crate::drillobserve::mod_check(self.arch.as_ref(), op);
         if op.0.read().unwrap().output.is_some() {
             self.op_unset_output(op);
         }
@@ -2297,6 +2332,9 @@ impl Funcdata {
     /// (funcdata_op.cc:203-222). Destroys the output Varnode, unsets all
     /// inputs, and removes an integrated op from its exact basic block.
     pub fn op_destroy(&mut self, op: &crate::op::PcodeOpRef) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:203-222 hook
+        // at :208, before any destruction).
+        crate::drillobserve::mod_check(self.arch.as_ref(), op);
         // cc:211-212: snapshot before destroyVarnode, so the op read guard
         // cannot overlap destroyVarnode's write to the same output slot.
         let output = { op.0.read().unwrap().output.clone() };
@@ -2461,6 +2499,11 @@ impl Funcdata {
     /// makes repeated unsets on the same slot idempotent instead of
     /// re-erasing a descend entry that is no longer there.
     pub fn op_unset_input(&self, op: &crate::op::PcodeOpRef, slot: usize) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:130-140 hook
+        // at :136, after the null-input guard, before the unlink).
+        if op.0.read().unwrap().inrefs.get(slot).is_some() {
+            crate::drillobserve::mod_check(self.arch.as_ref(), op);
+        }
         let in_vn = {
             let o = op.0.read().unwrap();
             o.inrefs.get(slot).cloned()
@@ -2486,6 +2529,11 @@ impl Funcdata {
     /// Remove an op's output, return the old Varnode to the bank's free class,
     /// and discard its Cover.
     pub fn op_unset_output(&mut self, op: &crate::op::PcodeOpRef) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:52-66 hook
+        // at :61, after the null-output guard, before the mutation).
+        if op.0.read().unwrap().output.is_some() {
+            crate::drillobserve::mod_check(self.arch.as_ref(), op);
+        }
         let old = op.0.write().unwrap().output.take();
         let Some(old) = old else { return };
         self.vbank.make_free_prevalidated(&old);
@@ -4170,6 +4218,10 @@ impl Funcdata {
             crate::space::AddressSpace::Iop,
             ptr_addr,
         );
+        // OPACTION_DEBUG-equivalent drill registration: IopSpace::printRaw
+        // (op.cc:41-47) resolves the iop offset back to the referenced op,
+        // so the recorder needs the pointer->op mapping.
+        crate::drillobserve::register_iop(ptr_addr as usize, &op.0);
         vn.write()
             .unwrap()
             .set_flags(crate::varnode::varnode_flags::ANNOTATION);
@@ -4518,6 +4570,9 @@ impl Funcdata {
     /// Remove `op` from its basic block and move it from the alive list to the
     /// dead list.  Its Varnode input/output links remain intact.
     pub fn op_uninsert(&mut self, op: &crate::op::PcodeOpRef) {
+        // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:323-331
+        // opUninsert's #ifdef block; placed after the parentless guard so
+        // legacy no-op uninserts leave no phantom record).
         let parent = op
             .0.read()
             .unwrap()
@@ -4533,6 +4588,7 @@ impl Funcdata {
                 .retain(|candidate| !std::sync::Arc::ptr_eq(&candidate.0, &op.0));
             return;
         };
+        crate::drillobserve::mod_check(self.arch.as_ref(), op);
         self.obank.mark_dead(op.clone());
         Self::block_remove_op(op, &parent);
     }
