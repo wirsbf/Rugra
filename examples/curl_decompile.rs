@@ -13,7 +13,7 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-use rugra::action::ActionDatabase;
+use rugra::action::{break_flags, Action, ActionDatabase, ActionState};
 use rugra::address::Address;
 use rugra::debugproto::{DebugGlobalDatabase, DebugPrototypeDatabase};
 use rugra::disasm::sleigh_lift::SleighLifter;
@@ -1359,7 +1359,15 @@ fn main() {
         return;
     }
 
-    let mode = match args.as_slice() {
+    let mode = match std::env::var("RUGRA_STAGE_PROJ") {
+        Ok(_) => match std::env::var("RUGRA_STAGE_FUNC") {
+            Ok(function) if !function.is_empty() => DriverMode::SelectedFunctions(vec![function]),
+            _ => {
+                eprintln!("RUGRA_STAGE_FUNC is required when RUGRA_STAGE_PROJ is set");
+                std::process::exit(2);
+            }
+        },
+        Err(_) => match args.as_slice() {
         [_] => DriverMode::All,
         [_, option, functions @ ..]
             if option == COMPARE_FUNCTION_ARG
@@ -1384,6 +1392,7 @@ fn main() {
             );
             std::process::exit(2);
         }
+        },
     };
 
     // Run in a thread with a large stack to avoid stack overflow from
@@ -2115,6 +2124,226 @@ fn infer_prototype_request(request: &PrototypeRequest) -> Result<usize, String> 
     Ok(fd.funcp.num_params())
 }
 
+// RUGRA-GLUE: stage projection metadata uses the same input bytes that the
+// worker receives, rather than a second file read that could drift.
+fn stage_sha256(bytes: &[u8]) -> Result<String, String> {
+    let mut child = Command::new("sha256sum")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("unable to start sha256sum: {error}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "sha256sum stdin was unavailable".to_string())?
+        .write_all(bytes)
+        .map_err(|error| format!("unable to hash binary image: {error}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("unable to read binary hash: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "sha256sum failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("sha256sum output was not UTF-8: {error}"))?
+        .split_whitespace()
+        .next()
+        .map(str::to_string)
+        .ok_or_else(|| "sha256sum returned no digest".to_string())
+}
+
+// RUGRA-GLUE: the producer identity records the source tree observed by the
+// driver; the action pipeline never reads this value.
+fn stage_producer() -> String {
+    Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|commit| format!("rugra-tree-{}", commit.trim()))
+        .unwrap_or_else(|| "rugra-tree-unknown".to_string())
+}
+
+// RUGRA-GLUE: one descriptor formatter is the sole owner of the v1.1
+// varnode normalization contract. Unique offsets intentionally remain raw.
+fn stage_vn(vn: &std::sync::Arc<std::sync::RwLock<rugra::varnode::Varnode>>) -> String {
+    let vn = vn.read().unwrap();
+    let size = vn.get_size();
+    let offset = vn.get_offset();
+    if vn.is_constant() {
+        return format!("c:{offset:x}:{size}");
+    }
+    if vn.get_space() == rugra::space::AddressSpace::Unique {
+        return format!("u:{offset:x}:{size}");
+    }
+    format!("n:{}:{offset:x}:{size}", vn.get_space().name())
+}
+
+// RUGRA-GLUE: emits the complete optree in PcodeOpBank::optree order, which
+// is the v1.1 beginAll/optree order shared with the oracle fixture.
+fn stage_snapshot(
+    output: &mut impl Write,
+    fd: &Funcdata,
+    seq: u64,
+) -> Result<(), String> {
+    writeln!(output, "@SNAP {seq} ops {}", fd.obank.optree.len())
+        .map_err(|error| format!("unable to write stage snapshot header: {error}"))?;
+    for op_ref in &fd.obank.optree {
+        let op = op_ref.0.read().unwrap();
+        let out = op.get_out().map(stage_vn).unwrap_or_else(|| "-".to_string());
+        let inputs = if op.inrefs.is_empty() {
+            "-".to_string()
+        } else {
+            op.inrefs.iter().map(stage_vn).collect::<Vec<_>>().join(",")
+        };
+        writeln!(
+            output,
+            "{:x}:{:x} {} d={} out={} in={}",
+            op.get_addr().as_u64(),
+            op.get_time(),
+            op.get_opcode().name(),
+            u8::from(op.is_dead()),
+            out,
+            inputs
+        )
+        .map_err(|error| format!("unable to write stage snapshot op: {error}"))?;
+    }
+    Ok(())
+}
+
+// RUGRA-GLUE: read-only access to the direct children of the registered root;
+// each child is a stable top-level Action boundary and nested repeatapply
+// execution remains inside the ordinary perform() call.
+fn stage_root_paths(root: &dyn Action) -> Vec<String> {
+    let root_name = root.get_name().to_string();
+    root.as_action_group()
+        .map(|group| {
+            group
+                .child_names()
+                .into_iter()
+                .map(|name| format!("{root_name}:{name}"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+// RUGRA-GLUE: reads the externalized ActionState fields without consuming
+// count or any pending container delta.
+fn stage_child_stats(root: &dyn Action, index: usize) -> Option<(i32, u32, u32)> {
+    root.as_action_group()
+        .and_then(|group| group.child_state(index))
+        .map(|state| (state.count, state.count_tests, state.count_apply))
+}
+
+// RUGRA-GLUE: wraps the existing Action::perform state machine with only
+// breakpoints and read-only optree observation; no Action/Rule implementation
+// is changed and no snapshot is fed back into the pipeline.
+fn emit_stage_projection(
+    fd: &mut Funcdata,
+    db: &mut ActionDatabase,
+    request: &DecompileRequest,
+) -> Result<(), String> {
+    let output_path = std::env::var("RUGRA_STAGE_PROJ_OUT")
+        .map_err(|_| "RUGRA_STAGE_PROJ_OUT is required when RUGRA_STAGE_PROJ is set")?;
+    let binary_sha256 = stage_sha256(&request.binary_image)?;
+    let mut output = std::io::BufWriter::new(
+        fs::File::create(&output_path)
+            .map_err(|error| format!("unable to create stage projection {output_path}: {error}"))?,
+    );
+    writeln!(
+        output,
+        "META side=rugra oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b arch=x86_64 cspec=x86-64-gcc"
+    )
+    .map_err(|error| format!("unable to write stage metadata: {error}"))?;
+    writeln!(
+        output,
+        "META analysis_options=default_actions,callspec_link={} build_flags=v1-no-OPACTION_DEBUG",
+        std::env::var("RUGRA_DISABLE_CALLSPEC_LINK").is_err()
+    )
+    .map_err(|error| format!("unable to write stage metadata: {error}"))?;
+    writeln!(
+        output,
+        "META binary_sha256={} func_entry=0x{:x} func_name={} load_mode=single_function_bfd",
+        binary_sha256, request.target.vaddr, request.target.name
+    )
+    .map_err(|error| format!("unable to write stage metadata: {error}"))?;
+    writeln!(
+        output,
+        "META producer={} maxrestarts=1 unique_base=10000000",
+        stage_producer()
+    )
+    .map_err(|error| format!("unable to write stage metadata: {error}"))?;
+
+    let root = db
+        .get_action_mut("decompile")
+        .ok_or_else(|| "decompile action was not registered".to_string())?;
+    let paths = stage_root_paths(root);
+    if paths.is_empty() {
+        return Err("decompile action has no stage children".to_string());
+    }
+    root.reset(fd);
+    let mut state = ActionState::new(root.get_flags());
+    root.clear_break_points(&mut state);
+    if !root.set_break_point(&mut state, break_flags::BREAK_START, &paths[0]) {
+        return Err(format!("stage path does not resolve: {}", paths[0]));
+    }
+    let initial = root
+        .perform(fd, &mut state)
+        .map_err(|error| format!("initial stage breakpoint failed: {error}"))?;
+    if initial >= 0 {
+        return Err("root completed before the first stage breakpoint".to_string());
+    }
+
+    let mut round = 0u32;
+    let mut index = 0usize;
+    let mut sequence = 0u64;
+    loop {
+        let next = (index + 1) % paths.len();
+        let before = stage_child_stats(root, index).unwrap_or((0, 0, 0));
+        sequence += 1;
+        writeln!(output, "@BEGIN {sequence} {}", paths[index])
+            .map_err(|error| format!("unable to write stage begin: {error}"))?;
+
+        root.clear_break_points(&mut state);
+        if !root.set_break_point(&mut state, break_flags::BREAK_START, &paths[next]) {
+            return Err(format!("stage path does not resolve: {}", paths[next]));
+        }
+        let perform_result = root
+            .perform(fd, &mut state)
+            .map_err(|error| format!("stage perform failed at {}: {error}", paths[index]))?;
+        let after = stage_child_stats(root, index).unwrap_or(before);
+        let result = after.0;
+        let tests = after.1.saturating_sub(before.1);
+        let apply = after.2.saturating_sub(before.2);
+        writeln!(
+            output,
+            "@END {sequence} {} result={} count={} tests={} apply={}",
+            paths[index], result, result, tests, apply
+        )
+        .map_err(|error| format!("unable to write stage end: {error}"))?;
+        stage_snapshot(&mut output, fd, sequence)?;
+
+        if perform_result >= 0 {
+            break;
+        }
+        index = next;
+        if index == 0 {
+            round += 1;
+            writeln!(output, "@RESTART {round}")
+                .map_err(|error| format!("unable to write restart marker: {error}"))?;
+        }
+    }
+    output
+        .flush()
+        .map_err(|error| format!("unable to flush stage projection: {error}"))?;
+    Ok(())
+}
+
 // RUGRA-GLUE: reconstructs the former thread closure from a complete immutable request snapshot.
 fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, String> {
     let obj = Object::parse(&request.binary_image)
@@ -2728,12 +2957,25 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
         let mut fd_write = fd_arc
             .write()
             .map_err(|_| "Funcdata write lock poisoned during analysis".to_string())?;
-        // Ghidra's Action::perform aborts the whole pipeline on a negative
-        // return; swallowing the error here made mid-pipeline aborts (e.g.
-        // the RuleMultiCollapse def-loss) completely invisible in the
-        // driver output (TYPED-DECL-GAP-0001 finding). Keep the
-        // decompile-going-on semantics but surface the abort loudly.
-        if let Err(err) = db.perform_action("decompile", &mut fd_write) {
+        if std::env::var("RUGRA_STAGE_PROJ").is_ok()
+            && std::env::var("RUGRA_STAGE_FUNC")
+                .ok()
+                .is_some_and(|selector| {
+                    selector == target.name
+                        || selector.eq_ignore_ascii_case(&format!("0x{:x}", target.vaddr))
+                        || selector
+                            .strip_prefix("0x")
+                            .and_then(|value| u64::from_str_radix(value, 16).ok())
+                            == Some(target.vaddr)
+                })
+        {
+            emit_stage_projection(&mut fd_write, &mut db, request)?;
+        } else if let Err(err) = db.perform_action("decompile", &mut fd_write) {
+            // Ghidra's Action::perform aborts the whole pipeline on a negative
+            // return; swallowing the error here made mid-pipeline aborts (e.g.
+            // the RuleMultiCollapse def-loss) completely invisible in the
+            // driver output (TYPED-DECL-GAP-0001 finding). Keep the
+            // decompile-going-on semantics but surface the abort loudly.
             eprintln!("[DRIVER] {} pipeline ABORTED: {:?}", target.name, err);
         }
 
