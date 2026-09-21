@@ -2328,6 +2328,7 @@ impl JumpBasic {
     pub fn find_determining_varnodes(&mut self, op: Arc<RwLock<PcodeOp>>, slot: i32) {
         let mut path: Vec<PcodeOpNode> = Vec::new();
         let mut first_point = false;
+        let root_op = op.clone();
         path.push(PcodeOpNode { op, slot });
 
         loop {
@@ -2393,7 +2394,11 @@ impl JumpBasic {
         }
         if self.path_meld.empty() {
             // Never found a likely point — set the single op/input pair.
-            let op_arc = path.first().unwrap().op.clone();
+            // cc:589: Ghidra reads the ORIGINAL op/slot parameters here; the
+            // DFS stack may have popped back to (or past) empty, so
+            // path.first() is not guaranteed (JUMPTABLE-PARENTFACTS-FIXTURE
+            // P cases hit an all-constant leaf tree and empty the stack).
+            let op_arc = root_op.clone();
             let in_vn = op_arc
                 .read()
                 .unwrap()
@@ -3169,9 +3174,14 @@ impl JumpModel for JumpBasic {
         let mut i = 0usize;
         let first = addresstable[0].as_u64();
         if first != 0 {
+            // cc:1581: Ghidra 的 for-init 是 `i=1`(entry 0 已由 first != 0
+            // 验证);循环体内 break 时 i 自然等于当前 j(保留 0..j-1)。
+            // 单条目表(size==1)循环体不执行,i=1 ≠ size → 通过。旧实现
+            // i=0 起步 + 循环体内才赋值,把单条目表误判为 false
+            // (JUMPTABLE-PARENTFACTS-FIXTURE M1 实证)。
+            i = 1;
             for j in 1..addresstable.len() {
                 if addresstable[j].as_u64() == 0 {
-                    i = j;
                     break;
                 }
                 let diff = if first < addresstable[j].as_u64() {
@@ -3190,7 +3200,6 @@ impl JumpModel for JumpBasic {
                         None => false,
                     };
                     if !dataavail {
-                        i = j;
                         break;
                     }
                 }

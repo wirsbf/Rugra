@@ -9,6 +9,24 @@ consumption（`JUMPTABLE-PIPELINE-0001`）调用闭包均未闭合；模块仍�
 （`BILATERAL_24_CASE_BYTE_IDENTICAL`，covered projection=MATCH，
 R2 独立复核 APPROVE）。
 
+## 2026-09-22：JUMPTABLE-PARENTFACTS-0001 — jt_parentfacts 双侧 fixture 衍生的两处移植缺陷修复
+
+`tests/oracle/jt_parentfacts_1204.{cc,rs}`（JumpParentFacts 两通道 B2 fixture，
+M1 multistage/usenezmask + P1/P0 兄弟 BRANCHIND 身份）实证两处缺陷：
+
+1. `JumpBasic::find_determining_varnodes` 空点回退（jumptable.cc:586-590）：
+   Ghidra 用原始 `op`/`slot` 参数构造单点 meld；Rust 旧实现读
+   `path.first().unwrap()`，DFS 栈弹空（全常量叶子树，P1/P0 形态）时 panic。
+   修复为克隆原始 `op`（`root_op`）。
+2. `JumpBasic::sanity_check` 计数器起点（jumptable.cc:1581）：Ghidra for-init
+   `i=1`（entry 0 已由 first!=0 验证）；Rust 旧实现 i=0 起步、循环体内才赋值，
+   单条目表（size==1）误判 `return false`（M1 stage1 形态实证）。修复为
+   进入循环前置 `i=1`，break 不改 i（此时 i==j 即 Ghidra break 语义）。
+
+验证：双侧 fixture 46/46 记录 byte-identical；`cargo test --lib jumptable`
+36/36。检测力：把 JumpParentFacts 快照临时改为 pre-fix dummy（partial=false/
+indirect=None）后，M1.stage2 guards 3≠2、P1 guards 3≠6，两通道均被捕获。
+
 ## 2026-08-24：JUMPTABLE-PIPELINE-0001 段1 — 模型选择链 / find_normalized 委托 / EMULFN
 
 - **模型选择链（`JUMPTABLE-SELECTION-0001` 关闭）**：`JumpTable::recover_model`
