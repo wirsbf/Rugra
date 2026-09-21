@@ -158,10 +158,10 @@ pub trait Action: Send + Sync {
     /// Prepare one `apply()` attempt for the current executor status.
     fn prepare_apply(&mut self, _status: u32) {}
 
-    // RUGRA-GLUE: read-only restart-round view for tooling/emitters; mirrors the
-    // protected ActionRestartGroup::curstart fixture read the locked C++ oracle
-    // harness performs (action_break_pool_1204.cc:561 pattern). Default 0 for
-    // every non-restart Action.
+    // RUGRA-GLUE: read-only restart-round view for tooling/emitters; mirrors
+    // the protected ActionRestartGroup::curstart field read that the locked
+    // C++ oracle fixtures perform (same protected-field access pattern).
+    // Default 0 for every non-restart Action.
     fn fixture_curstart(&self) -> i32 { 0 }
 
     // RUGRA-GLUE: fixture-only nested tree view; Ghidra exposes the same nesting via Action::print (action.cc:417-440)
