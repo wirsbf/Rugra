@@ -93,6 +93,12 @@
 > (同 lane BD)。**top-3 配对基线**(wt/sb-rust@c5a8992=集成前快照): main 遍型
 > oracle [3,3,1] vs Rust [8,6,2];gp switchnorm oracle 改 2 op vs Rust 3×空(集成后
 > 重测);三首分歧捕获于 sb-drill/TOP3_PAIRING.md。
+> **golden 配方审计闭环(2026-09-22,Lane BA)**: golden(C 文本)敏感面严格小于 DEBUG 流
+> (printC 只消费终 fixpoint,容器值序确定;curl main 8/8 字节一致同期 DEBUG 翻转;
+> 正典配方重生成与入库 golden 逐字节 MATCH)——**无需重钉**。登记 P3
+> `GOLDEN-RECIPE-HARDEN-0001`(regen 加 setarch -R+provenance 调用形态指纹+httpd
+> determinism_rerun)。**AT 广播纠偏**: argv 1019/1014 二变体今日不可复现(全形态=1019),
+> 今日活跃翻转维度=ASLR(curl main 4762↔4763)。报告=sb-drill/GOLDEN_RECIPE_AUDIT.md。
 > **镜像后差集图谱(2026-09-22,Lane AU,DELTA_V2.md)**: +144 事件精确分解=mainloop 遍
 > 8→12(+92)/stackstall 内迭 12→18(+30)/fullloop 轮 3→4(+9,轮型 [4,3,1] vs [4,4,3,1]);
 > 银行膨胀终快照 COPY **171 vs 12**(+159 主导,与 Lane V 拷贝族分诊互证);规则级 top:
