@@ -1,5 +1,74 @@
 # `printc.rs` API Reference
 
+## 2026-09-22：符号优先的叶子打印优先级 + partial-symbol 叶子形态 + `::` 遮蔽前缀（PRINTC-GLOBALSYM-LEAF-PRIORITY-0001）
+
+oracle 的叶子名解析（`PrintLanguage::pushVnExplicit`，printlanguage.cc:218-230）只有
+annotation → constant → `pushSymbolDetail`（printlanguage.cc:238-262）三级，**不存在任何
+按地址查名字的代理**。Rugra 此前在两条生产叶子路径（RPN `make_atom_for_vn` →
+`get_varnode_display_name_inner` 与 legacy `push_varnode`）都把 Ram/Const 的
+`symbol_table` 地址代理放在 Priority 0——先于 `vn.high` 的符号解析直接 return，叠加
+driver 对 `.data/.bss` 逐字节 span-盲播 DAT_ 名，main/gp/parseconfig 的
+`DAT_00117[56]xx` 族（167 处 config 内部字节引用）全部落 DAT 代理名。本 commit 按
+oracle 语义修复三件：
+
+- **①打印优先级（符号优先）**：新 `push_symbol_detail_leaf(&self, vn, allow_cast)
+  -> Option<String>`（`// Ghidra: printlanguage.cc:238`）实现 sym!=null 臂的完整文本
+  形态，插在两条叶子路径的**最前**：`symboloff==-1` 且类型不需 resolution →
+  pushSymbol 形态（scope 前缀 + displayName，printc.cc:1905-1936）；
+  `symboloff + vn.size <= sym.type.size` → `pushPartialSymbol`（printc.cc:1947-2065，
+  `partial_symbol_text` 渲染 `name.field[idx]...`）；否则 `pushMismatchSymbol`
+  （printc.cc:2067-2083：off==0 → `_name`，else `pushUnnamedLocation(vn 自身地址)`）。
+  地址代理（`symbol_table`/`string_table`）降级为符号未命中时的回退（oracle 的
+  sym==null 唯一臂是 pushUnnamedLocation；代理是 Rugra 对 oracle 全局 Data 符号的
+  替身）。`allow_cast` = oracle 调用点的 `isRead`（读叶子 true，赋值 LHS false，
+  printlanguage.cc:256-257），门控 walk 的 SUBPIECE-cast 臂。
+  **两个 Rugra 桥接防御**（httpd 回归实证）：(a) Priority 0.4——Register 空间
+  **is_input** varnode 的 `param_names` 查找先于符号分支：oracle 的 ScopeLocal
+  param Symbol 与 FuncProto 同名（ActionParameterSymbols 同步），Rugra 桥接
+  （`Funcdata::symbol_entry_for`）没有该同步（auto `in_register_...` 名），符号分支
+  会把 `*param_2 + 0xa11b8` 打成 `*in_register_00000288 + ...`；(b) partial/
+  mismatch 两臂**仅对全局符号**生效——Rugra 桥接的 entry 尺寸是近似值（1 字节
+  entry 盖 8 字节读触发假 `_pcVar12`），oracle 的 restructure 逐 varnode 精确；
+  局部符号一律取 pushSymbol 纯名形态（= 修复前可观测文本）。
+- **②`::` 遮蔽前缀（MINIMAL_NAMESPACES）**：新 `symbol_scope_prefix(&self, sym,
+  entry)`（`// Ghidra: printc.cc:202`）+ `local_scope_names: HashSet<String>` 字段。
+  oracle 中 `Symbol::getResolutionDepth(curscope)`（database.cc:323-359）对局部
+  nametree 内被同名的参数/局部/ActionNameVars 命名 high 占据（`ScopeInternal::
+  isNameUsed`，database.cc:2417-2432）的全局符号返回深度 1，`pushSymbolScope` 打印
+  全局 scope 的**空** display name + `::` 二元 scope 运算符（printc.cc:24，attachScope
+  保证全局 scope 名为空，database.cc:2951）——`::config.outfile`。`local_scope_names`
+  在 `doc_function` 一次性收集三通道：funcp 参数名、ScopeLocal 符号名、非全局符号
+  backing 的 high 名（oracle 中每个 print-命名 high 都是局部 Symbol）。全局性判定用
+  **DB 属主查询**而非 scope_id：ScopeLocal 桥接 Symbol（`Funcdata::symbol_entry_for`）
+  硬编码 scope_id 0 与 worker Database 默认 global_scope_id 0 冲突，动态 uVarN 符号会
+  自遮蔽误打 `::uVarN`；改用 `db.query_container(global_scope_id, entry.addr, 1, 空usepoint)`
+  的命中名等于符号名判定（动态 entry 直接判局部；栈地址查询必 miss）。
+- **③push_partial_symbol walk 抽取**：`partial_symbol_walk(&self, off, sz, ct,
+  outtype, bigend, allow_cast) -> (Option<String>, Vec<String>)`（`// Ghidra:
+  printc.cc:1954`）——原 `push_partial_symbol` 内联的 PartialSymbolEntry 类型树下钻
+  （STRUCT/UNION findTruncation 字段 `.f`、ARRAY getSubEntry `[N]`、allowCast 的
+  SUBPIECE-cast 臂、synthetic `._off_sz_`）抽为纯函数，emit 入口与新
+  `partial_symbol_text`（单 atom 文本形态，`(<finalcast>)name.entries`）共用，
+  行为逐行不变。
+
+driver 侧（examples/curl_decompile.rs）配套：`.data/.bss` 逐字节 DAT 播种改为
+**span 感知**——ELF symtab/dynsym 的 STT_OBJECT（st_value..st_value+st_size）区间内
+字节不再播种 DAT_ 名（与 Database 侧 STRCONST-SPANNONOVERLAP 同款 skip 语义；
+oracle 的 Program DB Data 严格不与具名 Symbol 重叠）。config(0x17520,304B) 内部
+0x17521..0x1763f 的 `DAT_001175xx/6xx` 代理名全部消失。
+
+**验证**（oracle=12.0.4 e40ed130，`tests/golden/ghidra_curl_1204.c`）：
+`DAT_00117[56]xx` 167→0（仅余合法 `PTR_DAT_00117020`，golden:1678 同形）；
+`::config.<field>` 0→192/234（残差为 gp/parseconfig 结构族既有差异，字段覆盖 37/39，
+缺 `.configread/.nobuffer` 两个整字段族——该两族与 DAT 无关，是常量折叠/分支结构差
+异的既有 gap）；`.rodata` 合法形态勿伤验证：`&DAT_00107180/001099a8/0010c1d8` 与
+`DAT_00107178` 前后保留；`::` 无泄漏（仅 `::config`，无 `::uVar/::param`）；
+curl 全量差分 defects=0/numbering=0/skeleton 3711→3637；gcc 审计 81 OK/26 FAIL
+与基线持平；**httpd 前后逐字节 0 diff**（base b06d725 同一 worktree 家族构建对照，
+`param_2`/`pcVar12` 形态不变）；printc 单测 12/12、varmap 45/45。
+已知残差（非本域）：oracle 的 `my_get_token::save`/`next_url::beenhere` 函数命名空间
+前缀族与 `::config.configread/.nobuffer` 两字段，均先于本 commit 存在。
+
 ## 2026-08-30：FuncProto-void 打印投影守卫（PRINTC-VOIDCALL-0001，POSTFIX-RETIRE-0001 W3）
 
 oracle 的 void 调用语句形态由 IR 决定，不由 print 层拆分：

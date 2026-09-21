@@ -483,6 +483,19 @@ pub struct PrintC {
     /// Parameter register offset → parameter name mapping
     /// Populated from fd.funcp.parameters in doc_function
     param_names: HashMap<u64, String>,
+    /// Local-scope name occupancy for the MINIMAL_NAMESPACES shadowing
+    /// check (Symbol::getResolutionDepth, database.cc:323-359 ->
+    /// ScopeInternal::isNameUsed, database.cc:2417-2432). In the oracle
+    /// the function's local nametree holds every named local Symbol —
+    /// parameters, restructured stack symbols, and ActionNameVars-named
+    /// highs — and a global reference whose base name is occupied prints
+    /// with one `::` scope element (PrintC::pushSymbolScope, printc.cc:
+    /// 202-228, printing the global scope's empty display name under the
+    /// binary `::` scope operator; witness: `::config.outfile` in
+    /// main/getparameter where a local `config` shadows the global, vs
+    /// bare `config.<field>` in unshadowed functions). Built once per
+    /// doc_function (PRINTC-GLOBALSYM-LEAF-PRIORITY-0001 ③).
+    local_scope_names: HashSet<String>,
     /// True when currently emitting an output (LHS) varnode — skip def chain resolution
     is_lhs: bool,
     /// Global set of varnode Arc pointers used as input across ALL blocks
@@ -772,6 +785,7 @@ impl PrintC {
             inline_depth: 0,
             cast_strategy: CastStrategyC::new(4), // promote_size = 4 (x86/x64 int)
             param_names: HashMap::new(),
+            local_scope_names: HashSet::new(),
             is_lhs: false,
             global_used_outputs: HashSet::new(),
             comparison_def_map: HashMap::new(),
@@ -5748,9 +5762,255 @@ impl PrintC {
         )
     }
 
+    // Ghidra: database.hh:742 Scope::isGlobal (ownership stand-in)
+    /// Whether `sym` is a global-scope symbol the Database actually owns
+    /// (`Symbol::getScope()->isGlobal()`). Two Rugra-specific shapes make
+    /// a bare scope_id test wrong: ScopeLocal bridges
+    /// (`Funcdata::symbol_entry_for`) hardcode scope_id 0, which collides
+    /// with the worker Database's default global_scope_id (0) —
+    /// function-local dynamic uVarN symbols would otherwise look global
+    /// and self-shadow into `::uVarN` — and, conversely, a symbol-bearing
+    /// high's UNIQUE-space COPY outputs must qualify as global references
+    /// exactly like their RAM-space inputs (the oracle prints both through
+    /// the same pushSymbolDetail). The ownership query resolves both:
+    /// oracle global symbols are address-mapped statics seeded into the
+    /// global scope (db_symbol_entries / DWARF layer / mapGlobals),
+    /// dynamic entries are function-local hashes, and stack locals query
+    /// their (non-global) stack address to a miss.
+    fn symbol_is_global(
+        &self,
+        sym: &crate::database::Symbol,
+        entry: Option<&std::sync::Arc<std::sync::RwLock<crate::database::SymbolEntry>>>,
+    ) -> bool {
+        let Some(entry_arc) = entry else {
+            return false;
+        };
+        let entry_guard = entry_arc.read().unwrap();
+        if entry_guard.is_dynamic() {
+            return false;
+        }
+        let entry_addr = entry_guard.get_addr();
+        drop(entry_guard);
+        self.symboltab
+            .as_ref()
+            .and_then(|t| {
+                let db = t.read().unwrap();
+                db.query_container(
+                    db.global_scope_id,
+                    entry_addr,
+                    1,
+                    // The empty usepoint convention of the other
+                    // print-side queries (printc.rs spacebase arm;
+                    // mapGlobals cc:1697).
+                    crate::address::Address::new(0),
+                )
+            })
+            .map(|hit| hit.symbol_name == sym.name)
+            .unwrap_or(false)
+    }
+
+    // Ghidra: printc.cc:202 PrintC::pushSymbolScope (MINIMAL_NAMESPACES)
+    /// The scope-element prefix `pushSymbol` prints before a symbol's
+    /// display name (printc.cc:1919 `pushSymbolScope(sym)`): under the
+    /// default MINIMAL_NAMESPACES strategy (printlanguage.cc:581)
+    /// `Symbol::getResolutionDepth(curscope)` (database.cc:323-359)
+    /// returns 1 for a global-scope symbol whose base name is occupied
+    /// in the function's local nametree
+    /// (`ScopeInternal::isNameUsed`, database.cc:2417-2432 — parameters,
+    /// restructured stack symbols, and ActionNameVars-named highs), and
+    /// `pushSymbolScope` then prints that one scope element: the global
+    /// scope's EMPTY display name (database.cc:2951 "Global scope does
+    /// not have empty name") under the binary `::` operator
+    /// (`PrintC::scope`, printc.cc:24) — `::config.outfile` in
+    /// main/getparameter where a local `config` shadows the global.
+    /// Unshadowed globals (golden witnesses `stderr`, bare `config.<f>`
+    /// in unshadowed functions) get depth 0 and no prefix.
+    ///
+    /// Non-global symbols print no prefix (their scope is curscope:
+    /// database.cc:326 `if (scope == useScope) return 0`). Rugra's
+    /// precomposed function-namespace names (`my_get_token::save`,
+    /// driver DWARF merge) already carry their scope elements, so they
+    /// take no additional prefix either.
+    fn symbol_scope_prefix(
+        &self,
+        sym: &crate::database::Symbol,
+        entry: Option<&std::sync::Arc<std::sync::RwLock<crate::database::SymbolEntry>>>,
+    ) -> String {
+        if !self.symbol_is_global(sym, entry) {
+            return String::new();
+        }
+        if sym.name.contains("::") {
+            return String::new();
+        }
+        if self.local_scope_names.contains(&sym.name) {
+            return "::".to_string();
+        }
+        String::new()
+    }
+
+    // Ghidra: printlanguage.cc:238 PrintLanguage::pushSymbolDetail
+    /// The `sym != (Symbol *)0` arm of `pushSymbolDetail`
+    /// (printlanguage.cc:246-261) as a leaf TEXT resolver
+    /// (PRINTC-GLOBALSYM-LEAF-PRIORITY-0001 ①/③): given a varnode whose
+    /// HighVariable carries a Symbol, produce the exact atom string the
+    /// oracle prints:
+    /// - `symboloff == -1` and the symbol type does not need resolution
+    ///   -> `pushSymbol` form: scope prefix + display name
+    ///   (printc.cc:1905-1936);
+    /// - `symboloff + vn->getSize() <= sym->getType()->getSize()` ->
+    ///   `pushPartialSymbol` (printc.cc:1947-2065): scope prefix +
+    ///   display name + the type-tree entry chain `.field[idx]...` via
+    ///   [`Self::partial_symbol_walk`] (witness `::config.outfile`);
+    /// - else -> `pushMismatchSymbol` (printc.cc:2067-2083): `_name`
+    ///   when off==0, else `pushUnnamedLocation` of the VN's own address
+    ///   (printc.cc:2082).
+    /// Returns `None` when the varnode has no symbol-bearing high — the
+    /// caller then runs its legacy fallback ladder (the oracle's sole
+    /// sym==null arm is `pushUnnamedLocation`; Rugra's address proxy is
+    /// the demoted stand-in for symbol-less globals).
+    ///
+    /// `allow_cast` is the oracle call-site's `isRead`
+    /// (printlanguage.cc:256-257): true for read leaves
+    /// (`pushVnExplicit` -> `pushSymbolDetail(vn,op,true)`), false for
+    /// assignment LHS atoms (`emitExpression` -> `...,false`),
+    /// gating the walk's SUBPIECE-cast arm (printc.cc:2018-2029).
+    /// The cast arm's `outtype` is `vn->getHigh()->getType()`
+    /// (printc.cc:2019); `out_space_bigend` degrades to false (x86-64
+    /// little-endian is the only production target; the oracle reads
+    /// `sym->getFirstWholeMap()->getAddr().getSpace()->isBigEndian()`).
+    fn push_symbol_detail_leaf(
+        &self,
+        vn: &Varnode,
+        allow_cast: bool,
+    ) -> Option<String> {
+        let high_arc = vn.high.as_ref()?;
+        let high = high_arc.read().unwrap();
+        let sym_arc = high.get_symbol()?;
+        let sym = sym_arc.read().unwrap();
+        // The symbol's mapping entry (HighVariable::getSymbolEntry,
+        // variable.cc:537-546: the member instance's ptr-equal entry) —
+        // the scope-prefix ownership test reads its mapped address.
+        let sym_entry = high.get_symbol_entry();
+        if !self.symbol_is_global(&sym, sym_entry.as_ref()) {
+            // Rugra-side ScopeLocal bridge symbol: partial/mismatch walks
+            // are global-only. The oracle resolves local reads through
+            // this same pushSymbolDetail, but its ScopeLocal Symbols are
+            // name-synced (ActionParameterSymbols) and EXACTLY sized by
+            // restructure; Rugra's bridges carry buildVariableName auto
+            // names and approximate entry sizing, so the bound check and
+            // the `._off_sz_` / `_name` arms fabricate forms with no
+            // oracle counterpart (httpd witness `_pcVar12` from a 1-byte
+            // bridge entry over an 8-byte read). Local symbols take the
+            // plain pushSymbol form; the param-name ladder above covers
+            // the proto-named register inputs.
+            return Some(sym.get_display_name().to_string());
+        }
+        // printlanguage.cc:247-254: symboloff resolution. -1 = perfect
+        // symbol match (HighVariable::setSymbol, variable.cc:258-270);
+        // a resolution-needing type forces off 0 so the partial walk can
+        // resolve the union field.
+        let mut symboloff = high.get_symbol_offset();
+        let sym_type = sym.get_type();
+        if symboloff == -1 {
+            let needs_resolution = sym_type
+                .as_ref()
+                .map(|t| t.needs_resolution())
+                .unwrap_or(false);
+            if !needs_resolution {
+                // pushSymbol (printc.cc:1905-1936): pushSymbolScope +
+                // displayName, verbatim.
+                return Some(format!(
+                    "{}{}",
+                    self.symbol_scope_prefix(&sym, sym_entry.as_ref()),
+                    sym.get_display_name()
+                ));
+            }
+            symboloff = 0;
+        }
+        let Some(symt) = sym_type else {
+            // RUGRA-GLUE degradation: oracle Symbols always carry a type;
+            // an untyped Rugra symbol cannot evaluate the 255 bound nor
+            // walk fields, so degrade to the pushSymbol form (the
+            // pre-fix observable for symbol-backed highs was the plain
+            // display name too).
+            return Some(format!(
+                "{}{}",
+                self.symbol_scope_prefix(&sym, sym_entry.as_ref()),
+                sym.get_display_name()
+            ));
+        };
+        // printlanguage.cc:255-260.
+        if symboloff + vn.get_size() as i32 <= symt.get_size() as i32 {
+            let outtype = vn
+                .high
+                .as_ref()
+                .map(|h| h.read().unwrap().get_type());
+            let outtype_ref = outtype.as_deref();
+            let name = format!(
+                "{}{}",
+                self.symbol_scope_prefix(&sym, sym_entry.as_ref()),
+                sym.get_display_name()
+            );
+            Some(self.partial_symbol_text(
+                &name,
+                symboloff as i64,
+                vn.get_size() as i64,
+                Some(symt.as_ref()),
+                outtype_ref,
+                false,
+                allow_cast,
+            ))
+        } else {
+            // pushMismatchSymbol (printc.cc:2067-2083): off==0 -> '_' +
+            // displayName; else pushUnnamedLocation(vn->getAddr()) —
+            // the VN's OWN address, not the name representative
+            // (printc.cc:2082).
+            if symboloff == 0 {
+                Some(format!("_{}", sym.get_display_name()))
+            } else {
+                Some(Self::unnamed_location_token(
+                    vn.get_space(),
+                    vn.get_offset(),
+                ))
+            }
+        }
+    }
+
     // RUGRA-GLUE: get_varnode_display_name_inner (no Ghidra counterpart found)
     fn get_varnode_display_name_inner(&self, vn: &Varnode) -> String {
         use crate::space::AddressSpace;
+
+        // Priority 0.4: Parameter names for Register-space INPUT varnodes,
+        // AHEAD of the symbol branch. In the oracle a param read resolves
+        // through pushSymbolDetail to the ScopeLocal param Symbol whose
+        // displayName IS the proto name (param_N) — ActionParameterSymbols
+        // keeps scope symbols and the FuncProto name-synced, so param_names
+        // and the symbol form are the same text. Rugra's ScopeLocal bridge
+        // (Funcdata::symbol_entry_for) does not carry that sync: param
+        // symbols keep buildVariableName auto names
+        // (`in_register_00000288`), so the symbol branch must not preempt
+        // the proto name for actual register INPUTS. Gate identical to the
+        // P0.5 ladder below (is_input; a shared-storage phi keeps its own
+        // high's name).
+        if vn.get_space() == AddressSpace::Register && vn.is_input() {
+            if let Some(pname) = self.param_names.get(&vn.get_offset()) {
+                return pname.clone();
+            }
+        }
+
+        // PRINTC-GLOBALSYM-LEAF-PRIORITY-0001 ①: symbol detail PRECEDES
+        // every address-proxy form. The oracle leaf path
+        // (pushVnExplicit, printlanguage.cc:218-230) goes annotation ->
+        // constant -> pushSymbolDetail — there is NO address-keyed name
+        // proxy anywhere in it, so a varnode whose high carries a Symbol
+        // prints the symbol's scope-qualified whole/partial/mismatch
+        // form (`::config.outfile`) regardless of what the proxy tables
+        // hold at that address. The Ram|Const proxy below is demoted to
+        // the symbol-miss fallback (Rugra's stand-in for the oracle's
+        // global-scope Data symbols reaching symbol-less varnodes).
+        if let Some(text) = self.push_symbol_detail_leaf(vn, true) {
+            return text;
+        }
 
         let addr = vn.get_offset();
         let space = vn.get_space();
@@ -8022,6 +8282,67 @@ impl PrintLanguage for PrintC {
                 .insert(param.address.as_u64(), param.name.clone());
         }
 
+        // PRINTC-GLOBALSYM-LEAF-PRIORITY-0001 ③: local-scope name
+        // occupancy for the MINIMAL_NAMESPACES `::` shadowing check.
+        // Oracle model (printc.cc:2597 pushScope(fd->getScopeLocal) in
+        // emitFunctionDeclaration; curscope for the whole body):
+        // `Symbol::getResolutionDepth(curscope)` (database.cc:323-359)
+        // returns 1 for a global-scope Symbol when
+        // `useScope->isNameUsed(name, global)` (database.cc:2417-2432)
+        // finds the base name in the function scope's nametree, and
+        // `PrintC::pushSymbolScope` (printc.cc:202-228) then prints the
+        // global scope's EMPTY display name under the `::` operator
+        // (`PrintC::scope`, printc.cc:24) — `::config.outfile`. The
+        // nametree holds every named local Symbol: parameters, the
+        // Action-built ScopeLocal symbols, and ActionNameVars-named
+        // highs (each print-named high is a local Symbol in the oracle).
+        // Rugra's stand-in set collects exactly those three channels;
+        // highs carrying a GLOBAL symbol are global-scope business and
+        // must not self-shadow their own name.
+        {
+            let mut local_scope_names: HashSet<String> = HashSet::new();
+            for param in &fd.funcp.parameters {
+                if !param.name.is_empty() {
+                    local_scope_names.insert(param.name.clone());
+                }
+            }
+            if let Some(scope) = self.scope.as_ref() {
+                for sym in &scope.symbols {
+                    if !sym.name.is_empty() {
+                        local_scope_names.insert(sym.name.clone());
+                    }
+                }
+            }
+            let global_scope_id = self
+                .symboltab
+                .as_ref()
+                .map(|t| t.read().unwrap().global_scope_id);
+            let mut seen_highs: HashSet<usize> = HashSet::new();
+            for vn_arc in fd.vbank.loc_tree.iter().map(|v| v.0.clone()) {
+                let Some(high_arc) = vn_arc.read().unwrap().high.clone() else {
+                    continue;
+                };
+                let ptr = std::sync::Arc::as_ptr(&high_arc) as usize;
+                if !seen_highs.insert(ptr) {
+                    continue;
+                }
+                let high = high_arc.read().unwrap();
+                let is_global = high
+                    .symbol
+                    .as_ref()
+                    .map(|s| Some(s.read().unwrap().scope_id) == global_scope_id)
+                    .unwrap_or(false);
+                if is_global {
+                    continue;
+                }
+                let name = high.get_name();
+                if !name.is_empty() {
+                    local_scope_names.insert(name.to_string());
+                }
+            }
+            self.local_scope_names = local_scope_names;
+        }
+
         // Collect function call target addresses so we don't declare them as variables
         let mut call_targets: HashSet<u64> = HashSet::new();
         for op_ref in &fd.obank.alivelist {
@@ -9917,6 +10238,41 @@ impl PrintLanguage for PrintC {
                     return;
                 }
             }
+        }
+
+        // Priority 0.4: Parameter names for Register-space INPUT varnodes,
+        // ahead of the symbol branch — the oracle's ScopeLocal param Symbol
+        // carries the proto name (ActionParameterSymbols sync), Rugra's
+        // bridge does not (auto `in_register_...` names), so the proto name
+        // must win for actual register INPUTS (same gate as the P0.5 ladder
+        // below). PRINTC-GLOBALSYM-LEAF-PRIORITY-0001 ① httpd regression
+        // guard (`*param_2 + 0xa11b8` must not become
+        // `*in_register_00000288 + 0xa11b8`).
+        if vn.get_space() == AddressSpace::Register && vn.is_input() {
+            if let Some(pname) = self.param_names.get(&vn.get_offset()) {
+                self.used_varnode_names.insert(pname.clone());
+                if !self.discovery_pass {
+                    self.emit.tag_variable(pname, 0);
+                }
+                return;
+            }
+        }
+
+        // PRINTC-GLOBALSYM-LEAF-PRIORITY-0001 ① (legacy emit path):
+        // symbol detail precedes the address proxy, mirroring the oracle
+        // leaf order (pushVnExplicit -> pushSymbolDetail,
+        // printlanguage.cc:218-262 — no address-keyed proxy exists
+        // there). Emits the scope-qualified whole/partial/mismatch form
+        // (`::config.outfile`) directly; the proxy below remains only
+        // for symbol-less varnodes. allow_cast is the oracle call-site's
+        // isRead: true for reads (pushVnExplicit), false on assignment
+        // LHS (emitExpression's pushSymbolDetail(outvn,op,false)).
+        if let Some(text) = self.push_symbol_detail_leaf(vn, !self.is_lhs) {
+            self.used_varnode_names.insert(text.clone());
+            if !self.discovery_pass {
+                self.emit.tag_variable(&text, 0);
+            }
+            return;
         }
 
         // Priority 0: Resolve known symbols/strings by address (overrides any auto-generated name)
@@ -14501,13 +14857,57 @@ impl PrintC {
     pub fn push_partial_symbol(
         &mut self,
         sym_name: &str,
+        off: i64,
+        sz: i64,
+        ct: Option<&Datatype>,
+        outtype: Option<&Datatype>,
+        out_space_bigend: bool,
+        allow_cast: bool,
+    ) {
+        // printc.cc:1954-2042: the PartialSymbolEntry collection walk,
+        // shared with the leaf-atom text form
+        // ([`Self::partial_symbol_text`], PRINTC-GLOBALSYM-LEAF-PRIORITY-0001).
+        let (finalcast, entries) =
+            self.partial_symbol_walk(off, sz, ct, outtype, out_space_bigend, allow_cast);
+        // printc.cc:2044-2047: final cast prefix
+        //   `if ((finalcast != 0)&&(!option_nocasts)) { pushOp(&typecast);
+        //    pushType(finalcast); }`.
+        if let Some(ft) = &finalcast {
+            if !self.option_nocasts {
+                self.emit.print(&format!("({})", ft));
+            }
+        }
+        // printc.cc:2049-2051: pushSymbol(sym) then entries front-to-back.
+        self.emit.tag_variable(sym_name, 0);
+        for e in &entries {
+            self.emit.print(e);
+        }
+    }
+
+    // Ghidra: printc.cc:1954 PrintC::pushPartialSymbol (type-tree walk)
+    /// The pure type-tree walk of `PrintC::pushPartialSymbol`
+    /// (printc.cc:1954-2042), shared by the emitting entry point above
+    /// and the leaf-atom text builder [`Self::partial_symbol_text`]:
+    /// descends `ct = sym->getType()` collecting PartialSymbolEntry
+    /// tokens — TYPE_STRUCT/UNION -> findTruncation field `.field`
+    /// (printc.cc:1966-1985/2001-2016), TYPE_ARRAY -> getSubEntry
+    /// element `[N]` (1986-2000), other metatype + allowCast -> the
+    /// SUBPIECE-style cast arm (2018-2029) capturing the final-cast type
+    /// name, no good subtype -> the synthetic `unnamedField(off,sz)`
+    /// entry `._<off>_<sz>_` (2030-2041, printlanguage.cc:719-727).
+    /// Off==0 with sz covering the whole type stops the walk (1960-1964;
+    /// needsResolution rejection waived for TYPE_PTR). Returns
+    /// `(finalcast, entries)`; the caller renders
+    /// `(<finalcast>)sym<entries...>` (2044-2064).
+    fn partial_symbol_walk(
+        &self,
         mut off: i64,
         mut sz: i64,
         ct: Option<&Datatype>,
         outtype: Option<&Datatype>,
         out_space_bigend: bool,
         allow_cast: bool,
-    ) {
+    ) -> (Option<String>, Vec<String>) {
         let mut entries: Vec<String> = Vec::new();
         // printc.cc:1955: Datatype *finalcast = (Datatype *)0;
         let mut finalcast: Option<String> = None;
@@ -14558,7 +14958,7 @@ impl PrintC {
                 if let Some(outtype) = outtype {
                     // castStrategy->isSubpieceCastEndian(outtype,ct,off,
                     //   spc->isBigEndian()) — cast.rs:141 is the 1:1 port of
-                    // cast.cc:436-455.
+                    //   cast.cc:436-455.
                     if self
                         .cast_strategy
                         .is_subpiece_cast_endian(
@@ -14583,19 +14983,39 @@ impl PrintC {
                 break;
             }
         }
-        // printc.cc:2044-2047: final cast prefix
-        //   `if ((finalcast != 0)&&(!option_nocasts)) { pushOp(&typecast);
-        //    pushType(finalcast); }`.
+        (finalcast, entries)
+    }
+
+    // Ghidra: printc.cc:1947 PrintC::pushPartialSymbol (text form)
+    /// Leaf-atom text form of `pushPartialSymbol`: the `(<finalcast>)`
+    /// prefix (printc.cc:2044-2047, honoring option_nocasts) followed by
+    /// the base symbol name and the entry chain (2049-2064). The RPN
+    /// leaf path cannot push separate op/atom pairs for the chain, so
+    /// the same walk renders into one atom string
+    /// (PRINTC-GLOBALSYM-LEAF-PRIORITY-0001).
+    fn partial_symbol_text(
+        &self,
+        sym_name: &str,
+        off: i64,
+        sz: i64,
+        ct: Option<&Datatype>,
+        outtype: Option<&Datatype>,
+        out_space_bigend: bool,
+        allow_cast: bool,
+    ) -> String {
+        let (finalcast, entries) =
+            self.partial_symbol_walk(off, sz, ct, outtype, out_space_bigend, allow_cast);
+        let mut text = String::new();
         if let Some(ft) = &finalcast {
             if !self.option_nocasts {
-                self.emit.print(&format!("({})", ft));
+                text.push_str(&format!("({})", ft));
             }
         }
-        // printc.cc:2049-2051: pushSymbol(sym) then entries front-to-back.
-        self.emit.tag_variable(sym_name, 0);
+        text.push_str(sym_name);
         for e in &entries {
-            self.emit.print(e);
+            text.push_str(e);
         }
+        text
     }
 
     // Ghidra: printc.cc:1861 PrintC::pushAnnotation
