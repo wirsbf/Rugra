@@ -154,9 +154,17 @@ clone 携带原 SeqNum = 原地替换习语,逻辑身份连续。指针伪影只
 (oracle 输出侧无指针编码);未来发现新的指针值类别必须走本增补程序(三跑
 字节级一致 + root + oracle gate),禁止以 c:/n: 明文入投影。
 
-op-line 的 <OPC_NAME> = PcodeOp::getOpName() 原文(typeop.cc 72 名表,混合大小写
-与符号拼写,如 copy / - / == / (cast) / ZEXT);两侧取各自等价名表,消费端文法
-按非空白 token 校验。
+op-line 的 <OPC_NAME>(v1.2.1 勘误,2026-09-22)= get_opname(op->code()) 原文
+(opcodes.hh:133;正典表 = opcodes.cc opcode_name[],74 名,大写无前缀,如
+COPY / BRANCH / CBRANCH / INT_ADD / INT_SUB / SUBPIECE / INT_ZEXT)。两侧拼写
+逐字钉死该表;Rugra 侧用其 CPUI 等价枚举名,须对全表 74 名(不只已出现子集)
+做 parity 检查。消费端文法收紧为 ^[A-Z][A-Z0-9_]*$(可选闭集校验)。
+勘误动因:getOpName() 的 TypeOp name 域(typeop.cc ctor 表)是有损映射——
+goto=BRANCH+CBRANCH、+=INT_ADD/FLOAT_ADD/PTRADD、-=INT_SUB/FLOAT_SUB/
+FLOAT_NEG/INT_2COMP、</<=/==/!=/*// /%/>> 等 INT/FLOAT 合并类(11 个有损名
+并 28 个 CPUI 值),以该域比较会把操作码身份差异判 MATCH——特别地 INT_LESS
+与 INT_SLESS 同名 "<",恰是符号敏感缺陷类。操作码身份是铁律 2.1 "同输出"的
+决定性字段,比较域必须单射。
 
 版本:v1.1 → v1.2 文法扩展。消费端 vn/op 文法与 selftest、Rust emitter 三描述符
 必须同规则落地后方可用于双侧对拍;此前单侧投影仅可作自跑确定性验证。
