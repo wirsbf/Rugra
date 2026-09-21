@@ -80,6 +80,8 @@ pub mod merge; // ← merge.hh
 pub mod memstate; // ← memstate.hh
 pub mod modelrules; // ← modelrules.hh
 pub mod op; // ← op.hh
+pub mod drillfmt; // ← drill emitter raw formatters (RUGRA-GLUE)
+pub mod drillobserve; // ← drill emitter recorder (RUGRA-GLUE)
 pub mod opcodes; // ← opcodes.hh
 pub mod opbehavior; // ← opbehavior.hh
 pub mod options; // ← options.hh
