@@ -1,5 +1,33 @@
 # `merge.rs` API Reference
 
+## 2026-09-22：process_copy_trims 遍历序确定性（DETERM-COPYTRIM-0001 / DETERM-DOMINANTCOPY-0001）
+
+AX 16 跑 9:7 双版本实证 + AZ 三函数 drill 同点（universal:dominantcopy
+工作集逐进程漂移）：`process_copy_trims` 原实现用 ptr-keyed
+`HashMap<usize,(Arc<HighVariable>,u32)>::into_iter()` 驱动 dominant COPY
+的 `process_high_dominant_copy` 处理序——HashMap 迭代序为每 worker 进程
+随机（RandomState 重播种），两个不同 HighVariable 的 dominant COPY 落同一
+dom 块时插入序（SeqNum 相对顺序）逐进程随机，穿透到最终 C 输出语句序
+（getparameter_constprop_0 的 `uVar32 = uVar27;` / `uVar27 = uVar25;`
+A/B 互换，双 sha256 bimodal）。
+
+修复（只改遍历确定性，不改语义）：镜像 `Merge::processCopyTrims`
+（merge.cc:1418-1435）的首见序——遍历 `copy_trims` **列表序**，HighVariable
+首次出现即 push 进 `first_seen` Vec（对应 cc:1423 `multiCopy.push_back` +
+cc:1424 `setCopyIn1`），后续出现仅累加计数（cc:1427 `setCopyIn2`）；
+`copy_trims.clear()` 移到两个循环之间（cc:1429 原位）；`first_seen` 序中
+计数 ≥2 的 high 依次处理（cc:1430-1435 `hasCopyIn2()`）。HashMap 仅作
+keyed 计数查找，不参与迭代（纪律同 merge.rs:2197-2209 SymbolNameTree 排序
+模式）。Ghidra 侧 `ActionDominantCopy::apply`（coreaction.hh:1008）即
+`data.getMerge().processCopyTrims()`，故 dominantcopy 域漂移与 AX locus
+同源，一并消除。
+
+验证：fast-release `curl_decompile` 12 连跑 stdout sha256 单值
+（此前 9:7 双值）；差分门禁 defects=numbering=0 保持。
+
+**状态**: 已核对（当前有效）  
+**源代码路径**: `src/merge.rs`
+
 ## 2026-09-22：`gather_partial_pieces` 补 `PieceNode::isLeaf` 递归界(MERGE-GATHERPIECES-ISLEAF-0001)
 
 Ghidra `PieceNode::gatherPieces`(op.cc:865-876)对每个 PIECE 输入先算
