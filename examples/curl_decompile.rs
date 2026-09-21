@@ -3444,7 +3444,22 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     for (address, value) in &request.string_entries {
         fd.add_string(*address, value.clone());
     }
-    let libc_signatures = rugra::debugproto::LibcSignatureTable::default();
+    let libc_signatures = if std::env::var("RUGRA_BARE_LOAD").is_ok() {
+        // RUGRA-FLOW-MIRROR-0001 M3: the bare-BFD load environment of the
+        // oracle single-function harness — BfdArchitecture + readLoaderSymbols
+        // carry no generic_clib signature data, so the PLT-import overlay
+        // below and link_call_specs' locked-proto resolution both miss and
+        // call sites keep their unlocked prototypes
+        // (ACTIVEPARAM-COUNT-9V2-0001 RCA-1 prescription). Default keeps the
+        // full locked ledger.
+        eprintln!(
+            "[PREPASS] {} bare-load: libc signature ledger disabled",
+            target.name
+        );
+        rugra::debugproto::LibcSignatureTable::empty()
+    } else {
+        rugra::debugproto::LibcSignatureTable::default()
+    };
     // DWARF named-type index (Ghidra's program type-manager name resolution):
     // signature base spellings like `FILE` resolve to the binary's real type
     // graph so a locked libc `FILE *` return keeps SUB_PTR_STRUCT specificity

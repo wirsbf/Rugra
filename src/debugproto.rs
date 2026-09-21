@@ -715,6 +715,18 @@ impl Default for LibcSignatureTable {
 }
 
 impl LibcSignatureTable {
+    // RUGRA-GLUE: bare-load constructor (RUGRA-FLOW-MIRROR-0001 M3). The
+    // oracle single-function harness loads via BfdArchitecture +
+    // readLoaderSymbols only — no Java analyzer, no generic_clib signature
+    // data reaches the decompiler — so every lookup misses and call sites
+    // keep their unlocked prototypes. Default construction stays the full
+    // locked ledger.
+    pub fn empty() -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+        }
+    }
+
     // RUGRA-GLUE: address of the Program-database signature lookup the decompiler performs via queryFunction
     pub fn lookup(&self, name: &str) -> Option<&LibcSignature> {
         self.entries.get(name)

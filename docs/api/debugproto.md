@@ -48,6 +48,13 @@ included) that back the external-stub rendering
 
 - `LibcSignatureTable::lookup(name)` — the signature record for an imported
   symbol, `None` for anything else (unknown imports stay unlocked).
+- `LibcSignatureTable::empty()` — bare-load constructor
+  (RUGRA-FLOW-MIRROR-0001 M3): an empty table whose every lookup misses,
+  reproducing the raw-BFD load environment of the oracle single-function
+  harness (BfdArchitecture + readLoaderSymbols carry no generic_clib
+  signature data; ACTIVEPARAM-COUNT-9V2-0001 RCA-1). The curl driver
+  selects it under `RUGRA_BARE_LOAD=1`; default construction keeps the full
+  locked ledger.
 - `LibcSignatureTable::locked_proto(name, model_carrier, type_names)` — builds
   a clean callee `FuncProto` that shares the carrier's resolved model, then
   routes the declared types through `FuncProto::setPieces` and that model's
