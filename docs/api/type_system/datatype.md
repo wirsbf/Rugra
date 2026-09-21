@@ -103,9 +103,11 @@ stored metatype 是 `TYPE_UINT`，submeta 是 `SUB_UINT_PARTIALENUM`，并保留
 同输入观察仍在最终 series D fixture 前保持 `NO_ORACLE`。模块整体因已登记
 残差保持 **L2 / MISMATCH**，不能把本片的 Rust 回归测试解释为行为对齐证据。
 
-### `pub fn get_sub_type(&self, off: i64) -> (Option<&Datatype>, i64)`
+### `pub fn get_sub_type(&self, off: i64) -> (Option<Arc<Datatype>>, i64)`
 对应 `Datatype::getSubType` (type.hh:247, type.cc:174)。
-返回包含 `off` 的一级组件类型及组件内偏移。
+返回包含 `off` 的一级组件类型及组件内偏移。组件以 canonical factory/scope-owned
+`Arc<Datatype>` 返回——这是 Ghidra 虚函数 `Datatype*` 返回值的 Rust 所有权镜像
+（TypeSpacebase 覆写的结果由 Scope 拥有，不在本对象内部，借用签名无法表达）。
 - Struct: `TypeStruct::getSubType` (type.cc:1640) 经 `getFieldIter` 的原始
   binary-search midpoint 顺序；重叠/同 offset 字段不会退化为线性“最后命中”。
   `getFieldIter` 的参数是 `int4`，所以 `getSubType(int8)` / `findTruncation(int8)`
@@ -119,15 +121,24 @@ stored metatype 是 `TYPE_UINT`，submeta 是 `SUB_UINT_PARTIALENUM`，并保留
   `alignSize`，`newoff = off % elem.alignSize`；不会调用 legacy constructor
   的 layout fallback
 - PartialStruct: 保持 `do/while` 覆盖语义；较深一层失败会把先前成功结果覆盖为 null
-- 其他: 返回 `(None, off)`。Pointer truncate、带 factory 的 TypeCode，以及
-  Spacebase 的 unknown1 回退仍是已登记 residual。
+- **Spacebase: `TypeSpacebase::getSubType` (type.cc:2947) 虚分派**——通用 match
+  臂路由到覆写：`get_map()` 取 global/local scope，byte→address 换算后
+  `queryContainer` 查最小包含 SymbolEntry，命中返回符号类型 +
+  `(addr - entry.addr) + entry.offset` 的 renormalized newoff。这正是
+  `TypePointer::isPtrsubMatching` SPACEBASE 臂 (type.cc:1129) 在 C++ 中经虚调用
+  观察到的路径，`RulePtrsubUndo` (ruleaction.cc:7138) 与 `ActionSetCasts`
+  (coreaction.cc:2748) 两个消费门禁因此读到同一结果。
+  miss（无 container）时 Ghidra 返回 `getBase(1,TYPE_UNKNOWN)` + newoff 0，
+  Rugra 类型层没有 TypeFactory 句柄，返回 `(None, 0)` —— 已由
+  `tests/oracle/type_spacebase_subtype_1204` 真实 oracle 固定为
+  `TYPE-SPACEBASE-MISSFALLBACK-0001`（7/10 记录 MATCH，3 条 miss 记录 MISMATCH）。
+- 其他: 返回 `(None, off)`。Pointer truncate、带 factory 的 TypeCode 仍是已登记 residual。
 
-`Datatype::get_sub_type_arc` 是 Rust 所有权胶水：它在 Struct、Array 与
-PartialStruct 的 covered projection 中保留 canonical `Arc`，供
-`TypeFactory::get_exact_piece` 使用。Spacebase 的 borrowed API 无法借出 scope-owned
-symbol type，而 Arc helper 会走 Rugra 当前的 symbol lookup，因此两路并非完整同输出。
-Pointer truncate、TypeCode factory attachment，以及 Spacebase 的 byte/address-unit
-换算、`resolveConstant`、scope query 与 miss→unknown1 均未完整表示，整体继续绑定
+`Datatype::get_sub_type_arc` 是 Rust 所有权胶水的薄委托：现在直接调用
+`Datatype::get_sub_type`（签名已携带 canonical Arc），`TypeFactory::get_exact_piece`
+等持有 `Arc<Datatype>` 的调用点行为不变。Pointer truncate 与 TypeCode factory
+attachment 未表示，Spacebase 的 miss→unknown1 回退绑定
+`TYPE-SPACEBASE-MISSFALLBACK-0001`；整体 residual 集保持
 `TYPE-0001`、`DATATYPE-SPACEBASE-SPACEID-0001`、`ARCH-0001`、`ADDRESS-0001`、
 `DATABASE-0001`，状态为 MISMATCH/UNTESTED。
 
@@ -301,11 +312,15 @@ union 切片，解析延迟到流分析阶段（`needs_resolution` 恒真）。
 ### `TypeSpacebase` 完整方法（type.hh:721-746, type.cc:2935-3098）
 将一个 `AddrSpace` 视作按指针偏移索引的"结构体"，用于栈帧/全局变量类型传播。
 - 结构体新增字段 `spaceid: Option<AddressSpace>`、`localframe: Address`、`scope: Option<Arc<Scope>>`。
-- `get_map(off)`（type.cc:2996）— 委托 `Scope::map_addr(localframe, off, ...)`；
-  无 scope 时返回空（对应 Ghidra "no map ⇒ TYPE_UNKNOWN" 回退）。
-- `get_sub_type(off)`（type.cc:3040）— 经 `get_map` 取组件。
-- `get_address(off, sz)`（type.cc:3060）— 构造目标 `Address`。
-- `compare` / `compare_dependency`（type.cc:3085/3092）— 比 spaceid/localframe。
+- `get_map()`（type.cc:2935）— 返回索引的 scope；Rugra 存快照引用，无 scope 时 None。
+- `get_sub_type(off)`（type.cc:2947）— 经 `get_map` 的 `find_container`
+  （queryContainer）取最小包含 SymbolEntry 的符号类型与 renormalized offset；
+  2026-09-22 起 `Datatype::get_sub_type` 通用 match 臂**虚分派路由到此覆写**
+  （`TYPE-SPACEBASE-SUBTYPE-DISPATCH-0001` 修复），miss 回退差异登记
+  `TYPE-SPACEBASE-MISSFALLBACK-0001`（双侧 fixture
+  `tests/oracle/type_spacebase_subtype_1204`）。
+- `get_address(off, sz)`（type.cc:3063）— 构造目标 `Address`。
+- `compare` / `compare_dependency`（type.cc:3039/3045）— 比 spaceid/localframe。
 - `new_global(address)` 便捷构造全局 spacebase；`is_invalid()` 判定 localframe 是否 INVALID。
 
 ### 依赖范围与工厂（见 `typefactory.md` / `typefactory.rs`）

@@ -1,0 +1,222 @@
+{
+ "schema_version": 2,
+ "fixture_id": "TYPE-SPACEBASE-SUBTYPE-DISPATCH-0001",
+ "status_note": "Virtual-dispatch routing fixture: Datatype::get_sub_type routes the Spacebase arm to TypeSpacebase::get_sub_type (type.cc:2947 scope query) exactly as the C++ virtual call from TypePointer::isPtrsubMatching (type.cc:1129) does; 7 of 10 records MATCH. The 3 remaining records pin the pre-existing no-container fallback divergence TYPE-SPACEBASE-MISSFALLBACK-0001: Ghidra returns glb->types->getBase(1,TYPE_UNKNOWN) with newoff=0, Rugra returns None because its type layer has no TypeFactory handle on TypeSpacebase.",
+ "decisive_semantics": {
+  "reference_and_output_parameters": "getSubType(int8 off, int8* newoff) returns the component Datatype* and writes the renormalized offset through the out-pointer; isPtrsubMatching(int8,int8,int8) is const, value-only. Rugra mirrors with (Option<Arc<Datatype>>, i64) tuples; the Arc is the canonical factory/scope-owned object, mirroring the C++ pointer identity.",
+  "loop_boundaries_and_iteration_order": "ScopeInternal::findContainer walks the address rangemap from the last entry starting at-or-before addr downward (database.cc:2255-2274), keeping the strictly smallest containing entry; getMap returns the global scope, or the function-local scope when localframe is valid (type.cc:2938-2943). Rugra find_container mirrors the same last-start descending scan with smallest-size preference; get_map returns the stored scope reference.",
+  "counters_accumulators_and_scope": "No counters; the renormalized offset is computed once per call as (addr.getOffset() - smallest->getAddr().getOffset()) + smallest->getOffset() (type.cc:2967).",
+  "sorting_and_comparison_keys": "findContainer prefers strictly smaller entry.getSize() with the -1 sentinel for first-accept (database.cc:2267-2271); isPtrsubMatching bounds are extra < 0 || extra >= subType->getSize() with testForArraySlack fallback; renormalized newoff must equal 0 at the gate (type.cc:1130)."
+ },
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6"
+ },
+ "architecture": {
+  "language": "x86:LE:64:default",
+  "endianness": "little",
+  "pointer_storage_bytes": 8,
+  "pointer_wordsize": 1,
+  "max_basetype_size": 10,
+  "spaces": [
+   [
+    "constant",
+    0
+   ],
+   [
+    "other",
+    1
+   ],
+   [
+    "unique",
+    2
+   ],
+   [
+    "ram",
+    3
+   ],
+   [
+    "register",
+    4
+   ],
+   [
+    "stack",
+    5
+   ],
+   [
+    "join",
+    6
+   ],
+   [
+    "iop",
+    7
+   ]
+  ]
+ },
+ "compiler_spec": {
+  "id": "synthetic-spacebase-fixture",
+  "ghidra_state": "FixtureTranslate/FixtureArchitecture with real TypeFactory and Database; no ProtoModel, no loader, no SLEIGH",
+  "rugra_state": "direct Scope/Symbol/SymbolEntry seeding plus TypeSpacebase record; no ProtoModel",
+  "scope": "Only the indexed global scope, its one address-tied Conf symbol entry, and the ram spacebase participate in the observed projection"
+ },
+ "analysis_options": {
+  "action": "none; direct TypeSpacebase::getSubType and TypePointer::isPtrsubMatching calls",
+  "random_seed": "none",
+  "error_injection": "none",
+  "raw_output_normalization": "none; each side has an independent pinned stdout SHA-256"
+ },
+ "input_manifest": {
+  "canonicalization": "SHA-256 of sorted compact JSON over architecture, compiler_spec, analysis_options, and cases",
+  "sha256": "1b17c6a4ee5e6571ad9c772a2b655d16e57938c3caf43bddcac0a68aab898797",
+  "graph": "no P-code graph; a single global ProbeScope with one address-tied config SymbolEntry at ram 0x1000 size 16 over a completed 16-byte struct Conf{lo@0 uint8, hi@8 uint8}; a global ram TypeSpacebase (invalid localframe)",
+  "cases": [
+   {
+    "label": "subtype.hit_start",
+    "call": "getSubType(0x1000)",
+    "expectation": "symbol container type with renormalized offset 0"
+   },
+   {
+    "label": "subtype.hit_mid",
+    "call": "getSubType(0x1008)",
+    "expectation": "symbol container type with renormalized offset 8"
+   },
+   {
+    "label": "subtype.miss_gap",
+    "call": "getSubType(0x2000)",
+    "expectation": "no container: Ghidra TYPE_UNKNOWN(1) newoff 0 / Rugra None"
+   },
+   {
+    "label": "subtype.hit_endboundary",
+    "call": "getSubType(0x1010)",
+    "expectation": "exclusive end: no container, same miss divergence"
+   },
+   {
+    "label": "gate.hit_extra0",
+    "call": "isPtrsubMatching(0x1000,0,0)",
+    "expectation": "true both sides"
+   },
+   {
+    "label": "gate.hit_extra8",
+    "call": "isPtrsubMatching(0x1000,8,0)",
+    "expectation": "true both sides"
+   },
+   {
+    "label": "gate.hit_extra16",
+    "call": "isPtrsubMatching(0x1000,16,0)",
+    "expectation": "false both sides (extra==subType size)"
+   },
+   {
+    "label": "gate.midsym",
+    "call": "isPtrsubMatching(0x1008,0,0)",
+    "expectation": "false both sides (renormalized newoff!=0)"
+   },
+   {
+    "label": "gate.miss_extra0",
+    "call": "isPtrsubMatching(0x2000,0,0)",
+    "expectation": "Ghidra true (UNKNOWN size 1) / Rugra false"
+   },
+   {
+    "label": "gate.miss_extra8",
+    "call": "isPtrsubMatching(0x2000,8,0)",
+    "expectation": "false both sides"
+   }
+  ]
+ },
+ "observation_schema": {
+  "record_count": 10,
+  "format": "key=value lines; sub-type records serialize as <metaname>:<size>:<renormalized offset>, gate records as 0/1"
+ },
+ "coverage": {
+  "getsubtype_symbol_hit_and_mid_offset": {
+   "status": "MATCH",
+   "covers": "subtype.hit_start, subtype.hit_mid — virtual dispatch reaches the scope query and returns the symbol container type with renormalized offsets 0 and 8",
+   "residual_todo_ids": []
+  },
+  "getsubtype_miss_unknown_fallback": {
+   "status": "MISMATCH",
+   "covers": "subtype.miss_gap, subtype.hit_endboundary — Ghidra returns getBase(1,TYPE_UNKNOWN) with newoff=0; Rugra returns None from the same no-container branch",
+   "residual_todo_ids": [
+    "TYPE-SPACEBASE-MISSFALLBACK-0001"
+   ]
+  },
+  "isptrsub_matching_spacebase_gate_in_symbol": {
+   "status": "MATCH",
+   "covers": "gate.hit_extra0, gate.hit_extra8, gate.hit_extra16, gate.midsym — extra bounds against the container size and the renormalized-newoff-0 requirement",
+   "residual_todo_ids": []
+  },
+  "isptrsub_matching_unmapped_extra_zero": {
+   "status": "MISMATCH",
+   "covers": "gate.miss_extra0 — Ghidra's UNKNOWN fallback type (size 1) admits extra==0, Rugra's None does not",
+   "residual_todo_ids": [
+    "TYPE-SPACEBASE-MISSFALLBACK-0001"
+   ]
+  },
+  "isptrsub_matching_unmapped_extra_out_of_bounds": {
+   "status": "MATCH",
+   "covers": "gate.miss_extra8 — extra beyond the fallback type size is rejected on both sides",
+   "residual_todo_ids": []
+  }
+ },
+ "expected_mismatches": {
+  "subtype.miss_gap": {
+   "ghidra": "unknown:1:0",
+   "rugra": "none:0:0",
+   "todo": "TYPE-SPACEBASE-MISSFALLBACK-0001"
+  },
+  "subtype.hit_endboundary": {
+   "ghidra": "unknown:1:0",
+   "rugra": "none:0:0",
+   "todo": "TYPE-SPACEBASE-MISSFALLBACK-0001"
+  },
+  "gate.miss_extra0": {
+   "ghidra": "1",
+   "rugra": "0",
+   "todo": "TYPE-SPACEBASE-MISSFALLBACK-0001"
+  }
+ },
+ "residual_todo_ids": [
+  "TYPE-SPACEBASE-MISSFALLBACK-0001"
+ ],
+ "comparand": {
+  "rust_base_commit": "781722ec04cc407ce22f83a45da1d9cd05485e77",
+  "rust_base_tree": "917ba7abab51566a1eb07b9e87d605d019afd94e",
+  "base_blobs": {
+   "src/type_system/datatype.rs": "412a0ffbf16ae9dfeeb6607c6fcf89d7773eb148",
+   "src/ruleaction.rs": "d5afb251a48977be64b3b2767a7048678a5db5f4",
+   "src/type_system/typefactory.rs": "e85e7d8aefe38d2fd6e15e2435ce662b77bcdb6b",
+   "src/unionresolve.rs": "14b3650eee3f6c0d9cb78c70cbde8ec80e9a276a",
+   "src/varmap.rs": "3659b164797c3d6cb819214cca650be0eae79efa"
+  },
+  "overlay_sha256": {
+   "src/type_system/datatype.rs": "716a5f976a9bcbea9976e615319d0f5b2dc57f52c5a966f8f2eff4283939a495",
+   "src/ruleaction.rs": "7e16295ea8b957757883f92d1877c492862eea71a8018ada87ccbac44a1234d7",
+   "src/type_system/typefactory.rs": "9093338b4d6fc7ee007ead74adf9e76f03a60c518ad535de45b5c3c2aeabf6ee",
+   "src/unionresolve.rs": "eb11e74013dbc8734fa45d91710a401cf413f0c78f91beb00f6027bf8debd764",
+   "src/varmap.rs": "e1ba94143ae38c19789a360bb31c4dede4daed8ea2353700fa8d6d115e2b72af"
+  },
+  "cpp_fixture_sha256": "e3f12ae6fa5181fab7f752bdbe05d617a50076266da9ec97fc2e543111736d2b",
+  "rust_fixture_sha256": "1e288e54e206644b29124ef72122539a1112c9bbcbfeedb45fcaff9d330b5bd9",
+  "source_policy": "Snapshot the pinned Rugra base commit 781722e (pre-fix master), overlay the five candidate src files from the live tree, build the lib, and compile the rust fixture driver against it; the ghidra side compiles the cc fixture against the locked oracle libdecomp.a"
+ },
+ "expected_ghidra_stdout_sha256": "db3869d631b760d3b98d8bbcf75b5f46a2d7c5d1ce9287b281475ef9302ca451",
+ "expected_rugra_stdout_sha256": "11e0ec7ded2b5a6df733a3e72176c75a17115ae3c88637f90fe1876fc3e657b3",
+ "oracle_sources": [
+  "type.cc:174-179 Datatype::getSubType base virtual",
+  "type.cc:920-931 TypePointer::getSubType",
+  "type.cc:990-1005 TypePointer::testForArraySlack",
+  "type.cc:1123-1175 TypePointer::isPtrsubMatching",
+  "type.cc:2363-2377 TypePartialStruct::getSubType",
+  "type.cc:2498-2534 TypePartialUnion::resolveInFlow/findResolve",
+  "type.cc:2693-2706 TypePointerRel::getPtrToFromParent",
+  "type.cc:2935-2945 TypeSpacebase::getMap",
+  "type.cc:2947-2969 TypeSpacebase::getSubType",
+  "ruleaction.cc:7128-7148 RulePtrsubUndo::applyOp",
+  "ruleaction.cc:6064-6110 AddTreeState::hasMatchingSubType",
+  "coreaction.cc:2748 ActionSetCasts PTRSUB demote gate",
+  "database.cc:2251-2276 ScopeInternal::findContainer",
+  "database.cc:117-121 SymbolEntry::inUse"
+ ]
+}

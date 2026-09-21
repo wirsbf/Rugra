@@ -1153,6 +1153,14 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
     （type.cc:2947-2969 的 override——借用的 `Datatype::get_sub_type` 无法
     暴露 scope 持有的 Arc，此前 Spacebase 臂恒走 base 行为返回 (None, off)
     导致 isPtrsubMatching 恒 false、PTRSUB 被误翻回 INT_ADD/常量）。
+  - 2026-09-22（TYPE-SPACEBASE-SUBTYPE-DISPATCH-0001）：`Datatype::get_sub_type`
+    签名改为 `(Option<Arc<Datatype>>, i64)`（虚返回 `Datatype*` 的所有权镜像），
+    Spacebase 臂在**通用分派**内路由到覆写；本规则的 Struct 臂 `get_sub_type`
+    walk、`RulePieceStructure::determine_datatype/spanning_range/convert_zext_to_piece`
+    与 `AddTreeState::calc_subtype` 的 walk 改持 canonical component Arc
+    （不再深拷贝，`Arc::new(st.clone())` → `st`），语义与 Ghidra
+    factory-owned `Datatype*` 一致。消费链 `ActionSetCasts`（coreaction.rs 经
+    `pointer_is_ptrsub_matching`）与 `TypePointerRel` 委托同享该路由。
 - **RuleConditionalMove**(9390): get_true_out/get_false_out (bool-const-const path)
 
 仍保留为 guard+no-op（需更深基础设施）：RulePtrsubCharConstant(需 stringManager)、RulePieceStructure(需 PieceNode/gatherPieces)、RuleIgnoreNan 深度路径、RuleConditionalMove 非 const 路径、RuleIndirectCollapse 创建/空间库分支。每处 TODO 精确标注缺失项。

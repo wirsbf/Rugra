@@ -65,12 +65,17 @@ Constructors (all run the scoring loop internally):
 - `score_locked_type(ct, lock_type)` (cc:144).
 - `score_parameter(ct, fd, call_op, param_slot)` (cc:184).
 - `score_return_type(ct, fd, call_op)` (cc:204).
-- `deref_pointer(ct, vn_size)` (cc:227).
+- `deref_pointer(ct, vn_size)` (cc:227). 2026-09-22 起 chain 返回
+  `(Option<Arc<Datatype>>, i32)`：种子取 pointer 的 canonical `ptr_to` Arc，
+  下钻经 `Datatype::get_sub_type` 虚分派拿 canonical component Arc（不再
+  `Arc::new(rt.clone())` 深拷贝，与 Ghidra 返回 factory-owned `Datatype*` 一致）。
 - `new_trials_down(vn, ct, score_index, is_array)` (cc:253).
 - `new_trials(op, slot, ct, score_index, is_array)` (cc:276).
 - `score_trial_down(trial, last_level)` — ~50 opcodes (cc:305-640).
 - `score_trial_up(trial, last_level)` — ~40 opcodes (cc:642-833).
-- `score_truncation(ct_in, vn_size, offset, score_index)` (cc:843).
+- `score_truncation(ct_in, vn_size, offset, score_index)` (cc:843). 参数为
+  `&Arc<Datatype>`、返回 `Option<Arc<Datatype>>`（canonical component，
+  2026-09-22 随 `get_sub_type` 签名变更）。
 - `score_constant_fit(trial)` (cc:884).
 - `run_one_level(last_pass)` (cc:931).
 - `run_passes()` — multi-pass loop (cc:963).

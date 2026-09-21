@@ -232,6 +232,9 @@ included (`type.cc:2671`).
 component 深拷贝成结构相等但 identity 不同的新 Arc。fixture 的普通 Struct 字段
 恰好存储 canonical core Arc，因此后续 `get_type_pointer` 在该窄路径使用与 oracle
 相同的 dependency identity；这不证明任意 component 都由 factory 拥有。
+（2026-09-22 起该性质推广：`Datatype::get_sub_type` 本身返回 canonical Arc
+——`TYPE-SPACEBASE-SUBTYPE-DISPATCH-0001` 签名变更——`get_ptr_to_from_parent`
+等所有 walk 位点不再出现 `Arc::new(s.clone())` 深拷贝。）
 
 `ptrsub_output_token_1204` direct projection 的 exact0/exact8/exact24 验证了
 component pointee identity、pointer token identity 和重复调用 identity；这里只

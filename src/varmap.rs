@@ -170,7 +170,7 @@ impl RangeHint {
             let (next, newoff) = sub.get_sub_type(cur_mod);
             match next {
                 Some(n) => {
-                    sub = Arc::new(n.clone());
+                    sub = n;
                     cur_mod = newoff;
                 }
                 None => break,
