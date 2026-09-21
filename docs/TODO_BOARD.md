@@ -40,7 +40,13 @@
 > docs/alignment_docs/STAGE_BISECT_SPEC_1204.md。
 > **Lane S 完成**: sb-batch/{targets.json(153 目标),batch_driver.py(断点续跑/超时/pending),
 > README}+CLI 契约(run_stage_projection_oracle.sh <corpus> <addr> <name> / RUGRA_STAGE_FUNC=<addr>)。
-> **Lane Y 完成(2026-09-22)**: 全局符号映射根因闭合(报告 sb-globalsym/GLOBALSYM_ROOTCAUSE.md)
+> **D9/D10 裁决落地(v1.2.2 已入库 master)**: D9=perform 级事件正典,oracle harness 收敛
+> (删 break_action ≈15 行,oppool1 事件 28→18),Rugra/消费端零改动;D10=golden 路径正典
+> (followFlow 无界-range),oracle 不动,**Rugra 需实现流跟随镜像**——登记
+> `RUGRA-FLOW-MIRROR-0001`(P0,C-alignment 系列承接,write-set=examples 驱动层+FlowInfo
+> 无界-range 语义;完成前 load_mode 发 `single_function_flow`,完成后切
+> `single_function_bfd`)。Phase 2 next_url 对拍在 D9 修复+D10 镜像完成后开启。
+> **Lane X 完成(2026-09-22)**: gp switch 丢失根因闭合(报告 sb-switch/GP_SWITCH_ROOTCAUSE.md)
 > ——符号/导入层无罪(config 已安装,DAT 引用 100%=config 字段);真凶=①**类型分派缺
 > Spacebase 覆写**(datatype.rs:838 把 Spacebase 硬编码 (None,off),oracle 经虚分派
 > TypeSpacebase::getSubType type.cc:2947 保住 PTRSUB)→gp 16 行 __spacebase 族;
