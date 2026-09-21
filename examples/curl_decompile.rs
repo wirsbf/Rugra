@@ -1023,9 +1023,7 @@ fn collect_external_imports(elf: &goblin::elf::Elf) -> Vec<ExternalImport> {
 // PT_LOAD segments laid out at their virtual addresses, NOBITS (.bss)
 // zero-filled, exactly what Ghidra's loader hands getStringData
 // (stringmanage.cc:427-475 loadFill loop).
-fn worker_memory_load_image(
-    elf: &goblin::elf::Elf, buffer: &[u8],
-) -> rugra::loadimage::RawLoadImage {
+fn worker_memory_image_bytes(elf: &goblin::elf::Elf, buffer: &[u8]) -> Vec<u8> {
     const PT_LOAD: u32 = 1;
     let mut top = 0usize;
     for ph in elf.program_headers.iter() {
@@ -1048,7 +1046,13 @@ fn worker_memory_load_image(
             }
         }
     }
-    rugra::loadimage::RawLoadImage::from_bytes("curl", 0, image)
+    image
+}
+
+fn worker_memory_load_image(
+    elf: &goblin::elf::Elf, buffer: &[u8],
+) -> rugra::loadimage::RawLoadImage {
+    rugra::loadimage::RawLoadImage::from_bytes("curl", 0, worker_memory_image_bytes(elf, buffer))
 }
 
 fn external_block_base(elf: &goblin::elf::Elf) -> u64 {
@@ -3375,9 +3379,21 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     let debug_db = DebugPrototypeDatabase::parse_elf(&request.binary_image)
         .map_err(|error| format!("unable to import DWARF prototypes: {error}"))?;
     let mut sleigh = SleighLifter::new();
-    sleigh
-        .configure_x86_64(section_image, section.sh_addr)
-        .map_err(|error| format!("failed to configure SLEIGH: {error}"))?;
+    if std::env::var("RUGRA_FLOW_MIRROR").is_ok() {
+        // RUGRA-FLOW-MIRROR-0001: the oracle load contract decodes through
+        // the full-segment LoadImage (BfdArchitecture maps every PT_LOAD),
+        // so the unbounded flow range can lift PLT/init-region instructions
+        // below the target's own section. The default path keeps the
+        // target-section slice (byte-identical E2E).
+        let full_image = worker_memory_image_bytes(elf, &request.binary_image);
+        sleigh
+            .configure_x86_64(&full_image, 0)
+            .map_err(|error| format!("failed to configure SLEIGH: {error}"))?;
+    } else {
+        sleigh
+            .configure_x86_64(section_image, section.sh_addr)
+            .map_err(|error| format!("failed to configure SLEIGH: {error}"))?;
+    }
 
     let proto_db: HashMap<u64, usize> = request.prototype_entries.iter().copied().collect();
     if proto_db.len() != request.prototype_entries.len() {
