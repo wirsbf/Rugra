@@ -9,7 +9,7 @@
 //!
 //! Ghidra reference: ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/jumptable.{hh,cc}.
 
-use crate::address::{calc_mask, leastsigbit_set, mostsigbit_set, Address};
+use crate::address::{calc_mask, leastsigbit_set, minimalmask, mostsigbit_set, Address};
 use crate::block::{BlockBasic, FlowBlock};
 use crate::op::PcodeOp;
 use crate::opcodes::OpCode;
@@ -4822,6 +4822,237 @@ impl JumpTable {
         }
         self.partial_table = false;
         self.clear_saved_model(); // Keep the new model if it was created successfully
+    }
+
+    // Ghidra: jumptable.cc:2574 JumpTable::foldInNormalization
+    /// Eliminate any code involved in actually computing the destination
+    /// address so it looks like the CPUI_BRANCHIND operation does it all
+    /// internally. Faithful to `foldInNormalization` (jumptable.cc:2574-2591).
+    pub fn fold_in_normalization(&mut self, fd: &mut crate::funcdata::Funcdata) {
+        // cc:2577: switchvn = jmodel->foldInNormalization(fd,indirect)
+        let Some(indirect) = self.indirect.clone() else {
+            return;
+        };
+        let switchvn = match self.jmodel.as_mut() {
+            Some(m) => m.fold_in_normalization(fd, &indirect),
+            None => return,
+        };
+        if let Some(switchvn) = switchvn {
+            // cc:2578-2589: if possible, mark up the switch variable as not
+            // fully consumed so that subvariable flow can truncate it.
+            let (nzmask, size, is_written) = {
+                let vn = switchvn.read().unwrap();
+                (vn.get_nz_mask(), vn.get_size(), vn.is_written())
+            };
+            self.switch_var_consume = minimalmask(nzmask);
+            if self.switch_var_consume >= calc_mask(size) {
+                // If mask covers everything
+                if is_written {
+                    // cc:2583-2588: check for a signed extension and assume
+                    // the extension is not consumed.
+                    let sext_def = switchvn
+                        .read()
+                        .unwrap()
+                        .def
+                        .as_ref()
+                        .and_then(|w| w.upgrade());
+                    if let Some(def_op) = sext_def {
+                        let (is_sext, in0_size) = {
+                            let d = def_op.read().unwrap();
+                            (
+                                d.opcode == OpCode::CPUI_INT_SEXT,
+                                d.get_in(0).map(|v| v.read().unwrap().get_size()),
+                            )
+                        };
+                        if is_sext {
+                            if let Some(sz0) = in0_size {
+                                self.switch_var_consume = calc_mask(sz0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Ghidra: jumptable.cc:2594 JumpTable::trivialSwitchOver
+    /// Make exactly one case for each output edge of the switch block.
+    /// Faithful to `trivialSwitchOver` (jumptable.cc:2594-2609).
+    pub fn trivial_switch_over(&mut self) -> Result<(), JumpTableRecoveryError> {
+        self.block2addr.clear();
+        self.block2addr.reserve(self.addresstable.len());
+        let size_mismatch = JumpTableRecoveryError::Lowlevel {
+            message: "Trivial addresstable and switch block size do not match".to_string(),
+        };
+        let Some(indirect) = self.indirect.clone() else {
+            // RUGRA-GLUE: Ghidra dereferences indirect->getParent() directly;
+            // an unlinked indirect cannot be validated, report the same
+            // LowlevelError as the size mismatch path.
+            return Err(size_mismatch);
+        };
+        let parent = indirect
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(|p| p.upgrade());
+        let Some(parent) = parent else {
+            return Err(size_mismatch);
+        };
+        let n_out = parent.read().unwrap().size_out();
+        if n_out != self.addresstable.len() {
+            return Err(size_mismatch);
+        }
+        // Addresses corresponds exactly to out-edges of switch block.
+        for i in 0..n_out {
+            self.block2addr.push(IndexPair::new(i as i32, i as i32));
+        }
+        self.last_block = n_out as i32 - 1;
+        self.default_block = -1; // Trivial case does not have default case
+        Ok(())
+    }
+
+    // Ghidra: jumptable.cc:2683 JumpTable::matchModel
+    /// Try to match the JumpTable model to the existing function.
+    ///
+    /// This assumes the address table has already been recovered, via
+    /// recoverAddresses() in another Funcdata instance. We rerun
+    /// recoverModel() to match with the current Funcdata. If the recovered
+    /// model does not match the original address table size, we may be
+    /// missing control-flow: a multistage restart is issued, or a warning.
+    /// Faithful to `matchModel` (jumptable.cc:2683-2708).
+    pub fn match_model(
+        &mut self,
+        fd: &mut crate::funcdata::Funcdata,
+    ) -> Result<(), JumpTableRecoveryError> {
+        if !self.is_recovered() {
+            return Err(JumpTableRecoveryError::Lowlevel {
+                message: "Trying to recover jumptable labels without addresses".to_string(),
+            });
+        }
+        // cc:2690-2697: unless the model is an override, move model (created
+        // on a flow copy) so we can create a current instance.
+        if self.jmodel.is_some() {
+            let is_override = self.jmodel.as_ref().map_or(false, |m| m.is_override());
+            if !is_override {
+                self.save_model();
+            } else {
+                self.clear_saved_model();
+                fd.warning("Switch is manually overridden", self.opaddress);
+            }
+        }
+        // cc:2698: recoverModel(fd) — maxtablesize from glb->max_jumptable_size
+        // (same source as recoverAddresses, jumptable.cc:2626).
+        let maxtablesize = fd
+            .get_arch()
+            .map_or(MAX_JUMPTABLE_SIZE, |a| a.max_jumptable_size);
+        self.recover_model(fd, maxtablesize)?;
+        // cc:2699-2707
+        let table_size = self.jmodel.as_ref().map_or(0, |m| m.get_table_size());
+        if self.jmodel.is_some() && table_size != self.addresstable.len() {
+            if self.addresstable.len() == 1 && table_size > 1 {
+                // cc:2700-2704: the jumptable was not fully recovered during
+                // flow analysis, try to issue a restart.
+                fd.localoverride.insert_multistage_jump(self.opaddress);
+                fd.set_restart_pending(true);
+                return Ok(());
+            }
+            fd.warning(
+                "Could not find normalized switch variable to match jumptable",
+                self.opaddress,
+            );
+        }
+        Ok(())
+    }
+
+    // Ghidra: jumptable.cc:2714 JumpTable::recoverLabels
+    /// Recover the case labels for \b this jump-table.
+    ///
+    /// The unnormalized switch variable is recovered, and for each possible
+    /// address table entry, the variable value that produces it is calculated
+    /// and stored as the formal \e case label for the associated code block.
+    /// Faithful to `recoverLabels` (jumptable.cc:2714-2735).
+    pub fn recover_labels(
+        &mut self,
+        fd: &crate::funcdata::Funcdata,
+    ) -> Result<(), JumpTableRecoveryError> {
+        let (maxaddsub, maxleftright, maxext) =
+            (self.norm_max.addsub, self.norm_max.leftright, self.norm_max.ext);
+        if self.jmodel.is_some() {
+            // cc:2718-2725: findUnnormalized then buildLabels, with the
+            // original model as label source when it holds a table.
+            self.jmodel
+                .as_mut()
+                .unwrap()
+                .find_unnormalized(maxaddsub, maxleftright, maxext);
+            let orig_is_empty = self
+                .origmodel
+                .as_ref()
+                .map_or(true, |m| m.get_table_size() == 0);
+            if orig_is_empty {
+                let jmodel = self.jmodel.as_ref().unwrap();
+                jmodel.build_labels(
+                    fd,
+                    &self.addresstable,
+                    &mut self.label,
+                    jmodel.as_ref(),
+                );
+            } else {
+                let jmodel = self.jmodel.as_ref().unwrap();
+                let origmodel = self.origmodel.as_ref().unwrap();
+                jmodel.build_labels(
+                    fd,
+                    &self.addresstable,
+                    &mut self.label,
+                    origmodel.as_ref(),
+                );
+            }
+        } else {
+            // cc:2727-2733: no model — fall back to a trivial model built
+            // from the current out-edges. RUGRA-GLUE: JumpModelTrivial never
+            // dereferences its parent back-reference (all methods use their
+            // parameters), so a stand-in Arc mirrors `new JumpModelTrivial(this)`.
+            if let Some(indirect) = self.indirect.clone() {
+                let dummy_arc = Arc::new(RwLock::new(JumpTable::new(self.opaddress)));
+                let mut trivial = JumpModelTrivial::new(dummy_arc);
+                let maxtablesize = fd
+                    .get_arch()
+                    .map_or(MAX_JUMPTABLE_SIZE, |a| a.max_jumptable_size);
+                let _ = trivial.recover_model(
+                    fd,
+                    &indirect,
+                    self.addresstable.len() as u32,
+                    maxtablesize,
+                );
+                trivial.build_addresses(fd, &indirect, &mut self.addresstable, None, None)?;
+                self.trivial_switch_over()?;
+                trivial.build_labels(fd, &self.addresstable, &mut self.label, &trivial);
+            }
+            // RUGRA-GLUE: a missing indirect (never linked by stageJumpTable)
+            // is unrepresentable in Ghidra — dereferencing null would abort.
+            // Skip label building; clearSavedModel below still runs (cc:2734).
+        }
+        self.clear_saved_model();
+        Ok(())
+    }
+
+    // Ghidra: jumptable.hh:615 JumpTable::foldInGuards
+    /// Hide any guard code for \b this switch.
+    /// Faithful to the inline `{ return jmodel->foldInGuards(fd,this); }`.
+    pub fn fold_in_guards(&mut self, fd: &mut crate::funcdata::Funcdata) -> bool {
+        // RUGRA-GLUE: Ghidra's inline jmodel->foldInGuards(fd,this) aliases
+        // the model and the table; Rust cannot hold &mut self.jmodel and
+        // &mut self at once, so the model is temporarily taken out and put
+        // back. No foldInGuards implementation reads jump.jmodel.
+        let Some(mut model) = self.jmodel.take() else {
+            // Ghidra would dereference null here; matchModel/recoverLabels
+            // guarantee a model before SwitchNorm reaches this call. Mirror
+            // the impossible state as "no change".
+            return false;
+        };
+        let changed = model.fold_in_guards(fd, self);
+        self.jmodel = Some(model);
+        changed
     }
 
     // Ghidra: jumptable.cc:2847 JumpTable::checkForMultistage
