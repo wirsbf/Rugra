@@ -6107,10 +6107,16 @@ impl Funcdata {
         let storeop = self.new_op(3, op.0.read().unwrap().get_addr());
         self.op_set_opcode(&storeop, crate::opcodes::OpCode::CPUI_STORE);
         // cc:523: opSetInput(storeop, newVarnodeSpace(spc->getContain()), 0).
-        // Rugra: encode the stack container space as a constant varnode. The
-        // container of the stack space is the ram-like space; we use `spc`
-        // itself as a best-effort (matching existing STORE lowering).
-        let space_vn = self.new_constant(1, spc.space_id() as u64);
+        // spc->getContain() (space.hh:505, SpacebaseSpace override
+        // translate.hh:187) is the container of the (stack) space — ram on
+        // x86-64 — NOT spc itself. Rugra resolves it via
+        // Architecture::get_contain (arch.rs:968); a missing container is
+        // unreachable here (Ghidra would pass NULL to newVarnodeSpace = UB).
+        let contain_spc = self
+            .get_arch()
+            .and_then(|a| a.get_contain(spc))
+            .expect("opStackStore: spc has no container space (Ghidra: getContain() == null is UB)");
+        let space_vn = self.new_constant(1, contain_spc.space_id() as u64);
         self.op_set_input(&storeop, space_vn, 0);
         // cc:524: opSetInput(storeop, addout, 1).
         self.op_set_input(&storeop, addout, 1);
@@ -6149,7 +6155,19 @@ impl Funcdata {
         let loadop = self.new_op(2, op.0.read().unwrap().get_addr());
         self.op_set_opcode(&loadop, crate::opcodes::OpCode::CPUI_LOAD);
         // cc:547: opSetInput(loadop, newVarnodeSpace(spc->getContain()), 0).
-        let space_vn = self.new_constant(1, spc.space_id() as u64);
+        // spc->getContain() (space.hh:505, SpacebaseSpace override
+        // translate.hh:187) is the container of the (stack) space — ram on
+        // x86-64 — NOT spc itself. Rugra resolves it via
+        // Architecture::get_contain (arch.rs:968); a missing container is
+        // unreachable here (Ghidra would pass NULL to newVarnodeSpace = UB).
+        // Using spc's own id broke RuleLoadVarnode::correctSpacebase
+        // (`assoc->getContain() != loadspace` always true → rule never fired;
+        // FUNCDATA-OPSTACKLOAD-CONTAIN-0001).
+        let contain_spc = self
+            .get_arch()
+            .and_then(|a| a.get_contain(spc))
+            .expect("opStackLoad: spc has no container space (Ghidra: getContain() == null is UB)");
+        let space_vn = self.new_constant(1, contain_spc.space_id() as u64);
         self.op_set_input(&loadop, space_vn, 0);
         // cc:548: opSetInput(loadop, addout, 1).
         self.op_set_input(&loadop, addout, 1);

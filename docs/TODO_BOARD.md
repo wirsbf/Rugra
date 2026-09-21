@@ -54,11 +54,15 @@
 >   multistage 表通道①+兄弟 BRANCHIND 通道② 双侧 fixture;固化前两通道 B2=UNTESTED。
 > - `TYPE-SPACEBASE-MISSFALLBACK-0001`(P2,Lane AE): Ghidra miss 回退 getBase(1,
 >   TYPE_UNKNOWN) vs Rugra (None,0);涉 typefactory 注入链,超出 AE write-set。
-> - `FUNCDATA-OPSTACKLOAD-CONTAIN-0001`(**P0 热修,1 行**,Lane AL 实证): funcdata.rs:6157
->   注释引 getContain() 却写 space_id(),stack≠ram→oracle-only loadvarnode 断链;修后单变量
->   重跑 drill 验证 loadvarnode 0→正。
+> - `FUNCDATA-OPSTACKLOAD-CONTAIN-0001`(P0 热修,**FIXED 2026-09-22**,Lane AO
+>   `wt/sb-opstackload`,owner=fixer): funcdata.rs:6157/6113 双处(load+store)
+>   `spc.space_id()` → `Architecture::get_contain(spc)` 解析 contain(ram)。
+>   验证(单变量 A/B,同机同树): oppool2 规则改动 725→1048(+323)、
+>   `resolve_spacebase_relative` 0→1 首次执行、curl defects=0/numbering=0、
+>   skeleton 3685→3694(main +24/getparameter −7,gp 862→855)、httpd 2343 不变。
+>   解锁暴露并同批修复 MERGE-GATHERPIECES-ISLEAF-0001(9ab15c4)。
 > - `MERGE-GATHERPIECES-ISLEAF-0001`(P0,**FIXED 2026-09-22**,Lane AO `wt/sb-opstackload`,
->   owner=fixer): merge.rs `gather_partial_pieces` 缺 `PieceNode::isLeaf`(op.cc:801-817)
+>   owner=fixer,commit 9ab15c4): merge.rs `gather_partial_pieces` 缺 `PieceNode::isLeaf`(op.cc:801-817)
 >   递归界 → 非树形 PIECE 图(输入由读取它的同一 PIECE 定义)无限递归;在
 >   FUNCDATA-OPSTACKLOAD-CONTAIN-0001 解锁 RuleLoadVarnode 后 main 于
 >   ActionMergeRequired 确定性 256MB 栈溢出(worker-failure)。已补五项 isLeaf 判定
