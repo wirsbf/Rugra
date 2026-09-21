@@ -3451,7 +3451,10 @@ impl<'a> CollapseStructure<'a> {
         }
     }
 
-    // Ghidra: blockaction.hh:46 LoopBody::dominatesIdx
+    // RUGRA-GLUE: dominator lookup over the structuring graph's block
+    // indices; Ghidra has no LoopBody::dominatesIdx (blockaction.hh:46 is
+    // the LoopBody class decl with no such member) — Rugra computes
+    // idoms locally to back refresh_switch_cases case-body detection.
     /// Check if block index `a` dominates block index `b`.
     fn dominates_idx(&self, a: i32, b: i32) -> bool {
         if a == b {
@@ -3472,7 +3475,12 @@ impl<'a> CollapseStructure<'a> {
         false
     }
 
-    // Ghidra: blockaction.hh:46 LoopBody::refreshSwitchCases
+    // RUGRA-GLUE: interleaved-rule case-body bookkeeping; Ghidra has no
+    // LoopBody::refreshSwitchCases and no f_case_body flag (block.hh:88-106
+    // enum tops out at f_duplicate_block=0x40000) — this tracks Rugra's
+    // switch_case_indices so interleaved rules avoid pulling case labels
+    // out of switch bodies. Clear/set must use clear_flags/set_flags
+    // (FlowBlock::clearFlag/setFlag semantics: `&= ~fl` / `|= fl`).
     /// Collect indices of all switch case body blocks. Scans both BlockSwitch
     /// nodes and CBRANCH cascade chains (which produce switch-like structures
     /// using BlockIf nodes). Interleaved rules use this to avoid pulling case
@@ -3485,8 +3493,7 @@ impl<'a> CollapseStructure<'a> {
         for i in 0..size {
             if let Some(blk) = self.graph.get_block(i) {
                 let mut b = blk.write().unwrap();
-                let cur_flags = b.get_flags();
-                b.set_flags(cur_flags & !crate::block::block_flags::CASE_BODY);
+                b.clear_flags(crate::block::block_flags::CASE_BODY);
             }
         }
         for i in 0..size {
@@ -6278,11 +6285,13 @@ impl<'a> CollapseStructure<'a> {
         }
         // cc:1916-1917: forceOutputNum(1) when there is an exit (identify's
         // boundary capture already yields exactly the exit edge); clear
-        // f_switch_out on the component.
+        // f_switch_out on the component — clearFlag is `flags &= ~fl`
+        // (block.hh:156), NOT setFlag (`flags |= fl`, block.hh:155). This
+        // clear is what lets ruleBlockSwitch's cc:1652 isSwitchOut gate
+        // reject re-entry on the installed Switch component.
         {
             let mut sw = switch_block.write().unwrap();
-            let swf = sw.get_flags();
-            sw.set_flags(swf & !crate::block::block_flags::SWITCH_OUT);
+            sw.clear_flags(crate::block::block_flags::SWITCH_OUT);
         }
         let _ = has_exit;
         self.structure_change_count += 1;
