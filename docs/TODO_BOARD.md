@@ -25,6 +25,14 @@
 > **派生 Lane I**(wt/sb-httpd):70f4449..0acde30 commit 二分定位回归,产物
 > /dev/shm/rugra-tests/sb-httpd/HTTPD_REGRESSION_REPORT.md;**Lane M**:httpd 29/2010
 > 语域调查,产物 /dev/shm/rugra-tests/sb-corpus/HTTPD_CORPUS.md。
+> **Lane I 已收案(root 2026-09-21)**:bisect 判定 **first bad=79bb0f6**("align: CALLSPEC-DRIVER-0001
+> flow-time callspec anchoring on the inject path",src/{flow,funcdata}.rs 等 4 文件)——httpd
+> 2344→3576,父提交 0f8fc1b=2344 good,判定无歧义;curl 同期未受损。回归 profile:main +527/
+> ap_fini_vhost_config +367/ap_pregsub +123 等 20+ 函数。**Lane N 已派发**(wt/sb-httpd 续用):
+> M1 根因(对照 Ghidra flow.cc setupCallSpecs/fspec.cc FuncCallSpecs 四类语义)→M2 最小修复
+> (门禁:httpd≤2350、curl≤3715、defects=numbering=0)→M3 定稿;禁整段回退 79bb0f6。
+> **Lane M 结论**:29 函数=ELF 地址序前 30 跳过 _start(MAX_FUNCS=30),非硬编码;建议 httpd 作
+> 小规模 follow-on pilot,暂缓全量 2010 扩容。
 
 > **基线（root 亲测 @ master `85300a1`，2026-09-01 fresh formal release E2E）**：
 > curl 124/124、skeleton **3090**/defects **0**/numbering **0**，stdout sha256
