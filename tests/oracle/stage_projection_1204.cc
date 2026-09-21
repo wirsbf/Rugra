@@ -109,9 +109,11 @@ static void writeVarnodeDescriptor(ostream &out,const Varnode *vn)
 
 static void writeOp(ostream &out,const PcodeOp *op)
 {
+  // d= follows op.cc:380-381 semantics: dead OR unattached (no parent).
   out << std::hex << op->getAddr().getOffset() << ':' << op->getTime()
       << std::dec << ' ' << op->getOpName()
-      << " d=" << (op->isDead() ? 1 : 0) << " out=";
+      << " d=" << ((op->isDead() || op->getParent() == (BlockBasic *)0) ? 1 : 0)
+      << " out=";
   writeVarnodeDescriptor(out,op->getOut());
   out << " in=";
   for (int4 slot=0;slot<op->numInput();++slot) {
@@ -168,10 +170,15 @@ static void closeInactive(ostream &out,vector<Event> &active,Funcdata &fd,
   for (size_t i=active.size();i>0;--i) {
     size_t index = i-1;
     Action *action = active[index].node.action;
-    bool keep = isPrefix(active[index].node.path,currentPath) &&
-                (action->status == Action::status_mid ||
-                 action->status == Action::status_breakstarthit ||
-                 action->status == Action::status_actionbreak);
+    // Spec (iii): the restart root stays open across restart rounds; its
+    // own status flips to status_start at a restart boundary while its
+    // apply() is still on the stack, so it is exempt from the status test.
+    bool root = active[index].node.path == "universal";
+    bool keep = root ||
+        (isPrefix(active[index].node.path,currentPath) &&
+         (action->status == Action::status_mid ||
+          action->status == Action::status_breakstarthit ||
+          action->status == Action::status_actionbreak));
     if (!keep)
       endEvent(out,active,index,fd,0,false);
   }
@@ -264,7 +271,14 @@ static int run(const string &specRoot,const string &binary,uintb entry,
       ActionNode hit = findHit(leaves);
       int4 currentStart = restart->fixtureGetCurstart();
       if (currentStart != oldStart && currentStart >= 0) {
-        closeAll(std::cout,active,*fd,0,false);
+        // Spec (iii): the restart group is mid-apply at a restart boundary.
+        // Only round-N tail events close here; the root event stays open
+        // across @RESTART and ends at final completion with its fully
+        // accumulated count. Action::reset preserves count/count_tests/
+        // count_apply (action.cc:100-105), so tail @END fields still read
+        // the completion values after the restart reset.
+        while (active.size() > 1)
+          endEvent(std::cout,active,active.size()-1,*fd,0,false);
         std::cout << "@RESTART " << currentStart << '\n';
         oldStart = currentStart;
       }
