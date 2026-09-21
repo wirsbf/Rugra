@@ -99,6 +99,11 @@
 > `GOLDEN-RECIPE-HARDEN-0001`(regen 加 setarch -R+provenance 调用形态指纹+httpd
 > determinism_rerun)。**AT 广播纠偏**: argv 1019/1014 二变体今日不可复现(全形态=1019),
 > 今日活跃翻转维度=ASLR(curl main 4762↔4763)。报告=sb-drill/GOLDEN_RECIPE_AUDIT.md。
+> **B2-MG-RESID 登记(2026-09-22,MultiGoto Cross-Review 绑定条件)**:
+> `B2-MG-RESID-1`(P2): blockmultigoto fixture family C 合成形双侧分歧撤下——fixture
+> 覆盖缺口,owner=root 分诊,验收=双侧同形构造补齐;`B2-MG-RESID-2`(P2): loop_exit_
+> conflict 形同上;`B2-MG-RESID-3`(P2): glob_set +5 骨架残差(91→96,defects=0,机制性
+> 邻域重排),owner=root 分诊,验收=函数级 token 归因。
 > **镜像后差集图谱(2026-09-22,Lane AU,DELTA_V2.md)**: +144 事件精确分解=mainloop 遍
 > 8→12(+92)/stackstall 内迭 12→18(+30)/fullloop 轮 3→4(+9,轮型 [4,3,1] vs [4,4,3,1]);
 > 银行膨胀终快照 COPY **171 vs 12**(+159 主导,与 Lane V 拷贝族分诊互证);规则级 top:
