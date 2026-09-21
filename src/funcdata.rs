@@ -11352,7 +11352,7 @@ impl Funcdata {
             let cloned_model = table
                 .jmodel
                 .as_ref()
-                .map(|model| model.clone_model(cloned_table.clone()));
+                .map(|model| model.clone_model());
             drop(table);
             {
                 let mut cloned = cloned_table.write().unwrap();

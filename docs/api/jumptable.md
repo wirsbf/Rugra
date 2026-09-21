@@ -323,14 +323,14 @@ Iterator over values a switch variable can take (jumptable.hh:166).
 ### `JumpModel`
 A jump-table execution model (jumptable.hh:243).
 - `is_override()`, `get_table_size()`,
-- `recover_model(fd, indop, matchsize, maxtablesize) -> bool`,
+- `recover_model(fd, indop, matchsize, maxtablesize, parent) -> bool`,
 - `build_addresses(fd, indop, addresstable, loadpoints, loadcounts)`,
 - `find_unnormalized(maxaddsub, maxleftright, maxext)`,
 - `build_labels(fd, addresstable, label, orig)`,
 - `fold_in_normalization(fd, indop) -> Option<Varnode>`,
 - `fold_in_guards(fd, jump) -> bool`,
 - `sanity_check(fd, indop, addresstable, loadpoints, loadcounts) -> bool`,
-- `clone_model(jt) -> Box<dyn JumpModel>`, `clear()`.
+- `clone_model() -> Box<dyn JumpModel>`, `clear()`.
 
 ## `JumpValuesRange` / `JumpValuesRangeDefault`
 Implementations of `JumpValues` for a single-entry range / a range plus an
@@ -572,3 +572,27 @@ Annotation 修正（机制 D cited-line-drift）：foldInOneGuard 1392→1373、
 foldInNormalization 1568→1546、foldInGuards 1577→1555、JumpAssisted foldIn*
 补 cc:2193/2208。ActionSwitchNorm 消费接线见 docs/api/coreaction.md；
 noInterveningStatement 见 docs/api/block.md。
+
+## 2026-09-22（返修）：机制 C 复核 REJECT 修复 — 模型父表状态真值下传
+
+复核实证的两处行为分歧（dummy parent Arc）已修：
+- 通道① `analyze_guards` 的 `usenzmask`（cc:1052 `!jt->isPartial()`）：改读
+  `JumpParentFacts::partial_table` 快照——multistage 表(partialTable=true)
+  不再被空 dummy 恒 false 误判。
+- 通道② 守卫回走 i>0 的兄弟 BRANCHIND 身份检查（cc:1083-1090
+  `jt->getIndirectOp()`）：改用 `JumpParentFacts::indirect` 真实 indirect op
+  ——同 switch 的兄弟边守卫继续收集，只有别的 switch 才 break。
+
+设计（`JumpParentFacts`，RUGRA-GLUE）：恢复全程在表自身 RwLock 写锁下
+（stageJumpTable/ActionSwitchNorm 均经 `Arc::write()` 进入），模型内锁真父
+Arc=同线程重入死锁;模型存强 Arc=与 `JumpTable::jmodel` 成环泄漏;故
+`JumpTable::recover_model` 在 `&mut self` 上直接快照 `partial_table` 与
+`indirect` 两个纯值,经 `JumpModel::recover_model` trait 参数下传至
+`find_normalized`→`analyze_guards` 两处使用。模型结构体不再持有
+`jumptable` 父字段（Trivial/Basic/Assisted 删除,构造器与 `clone_model`
+去 jt 参数,funcdata.rs 流程克隆调用点同步）。
+
+验证：curl 全量输出与返修前逐字节相同（sha256 3a1dadf2…，3705/0/0）；
+gp 864/0/0、glob_set 90/0/0 保持；httpd 与基线逐字节相同；单线程
+cargo test 17 failed 与 FUNCDATA-TESTS-FLAKY-0001 已知集相同（复核抽测
+单测隔离全过）,新增=0。

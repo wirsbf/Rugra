@@ -2171,3 +2171,10 @@ N1/N2/N3:inedge 0/1 + 最小矩阵):克隆输出 space/offset/size、flag/addlfl
 MULTIEQUAL→COPY inedge 拾取、clone 输入重映射/共享/常量、原块分裂后形态、
 入边计数 — 双侧 stdout 字节一致 MATCH
 (tools/run_funcdata_nodesplit_space_oracle.sh)。
+
+## 2026-09-22（返修）：流程克隆的模型 clone 调用点
+
+`Funcdata` 流程克隆(clone for partial recovery, ~funcdata.rs:11355)中
+`model.clone_model(cloned_table.clone())` 改为 `model.clone_model()`
+——jump 模型已无父表回指字段,父表状态经 `JumpParentFacts` 值参数下传
+(见 docs/api/jumptable.md 返修节),clone 不再需要新父 Arc。
