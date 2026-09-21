@@ -46,7 +46,16 @@
 > `RUGRA-FLOW-MIRROR-0001`(P0,C-alignment 系列承接,write-set=examples 驱动层+FlowInfo
 > 无界-range 语义;完成前 load_mode 发 `single_function_flow`,完成后切
 > `single_function_bfd`)。Phase 2 next_url 对拍在 D9 修复+D10 镜像完成后开启。
-> **Punch list 落地确认(2026-09-22)**: eea214a→6ad21c4(wt/sb-rust,复活的 AJ 实例落地,
+> **D10 流镜像收官(2026-09-22,Lane AQ,wt/sb-rust c5a8992)**: RUGRA_FLOW_MIRROR=1+
+> RUGRA_BARE_LOAD=1 落地(env 门控,默认 off 字节一致),load_mode 切 single_function_bfd,
+> **next_url PLT 对逐字节收敛(raw ops 717=717),消费端首分歧推进到 ordinal 5 seq 6
+> universal:prototypetypes**(人工 RETURN 挂 RAX 第二输入 vs oracle INDIRECT [create] 群)。
+> 剩余: 事件 335vs479(Action 计数层)+ΣSNAP ops 未收窄(下游银行膨胀);镜像 E2E +113
+> (PLT 名字层缺失,raw-BFD vs golden 含 thunk analyzer——root 翻转默认前需裁决)。
+> **新登记**: `RETURN-ARTIFICIAL-RAX-0001`(P1,prototypetypes 首分歧,ActionActiveReturn/
+> returnrecovery 域);`MIRROR-ENVS-CANONICAL-0001`(P2,RUGRA_ORACLE_FIXTURE_DATA 门正典化
+> 为 mirror 组成部分+名字层裁决项)。**Lane AU 已派发**: 镜像后差集重测绘(DELTA_V2+事件差
+> 归因+punch list v2)。
 > AN 独立验证全过): P1-P8 全落地,74 名表机械校验,消费端剩余卡点=D10 层(PLT 对@stage2
 > op0)=预期正确状态。P3 措辞偏差 root 接受(callspec_link 进 producer 注记,身份键双态
 > 不变)。**新登记 `FUNCDATA-SPACEID-WIDTH-0001`(P1)**: op_stack_load 发 size=1 spaceid
