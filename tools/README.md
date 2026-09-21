@@ -382,6 +382,53 @@ apply 内；`BEFORE_DIVERGENCE` → 缺陷更早，回退到报告的 last good 
 序号、事件对齐与提前终止。退出码沿用 `stage_diff.py`：0 一致 / 1 有分歧 / 2 格式
 或用法错误。
 
+## v2 drill 双侧文件四层对拍（2026-09-22，`PIPE-STAGE-BISECT-0001` 下钻）
+
+`drill_diff.py` 消费**v2 drill 文件**（stage-bisect 的下钻层：每个 `@BEGIN <seq>
+<path>` 应用括号包裹一次 Action/Rule 应用的原生 before/after printDebug 记录流，
+`DEBUG <n>: <name>` 头 + `<seqnum>: <before>` / 三空格前缀 `<seqnum>: <after>` 严格
+成对，`**` 为 dead op 标记，文件尾 `@DONE` 统计行）。RUGRA-GLUE：oracle 无对应物，
+纯消费端只读工具，不改任何管线语义；原生观测机制同 `stage_bisect.py` 头注
+（funcdata.cc:1010-1052 / op.cc:374-384 / address.cc:32-37）。
+
+四层输出（自动化 Lane AL 的人工归因流程）：
+
+1. **路径层**：按 action path 聚合应用块，报告 shared / oracle-only / rugra-only
+   路径清单与每路径应用计数差（按 |delta| 排序）。
+2. **首记录分歧**：全局记录行流（剥 DEBUG 头，文件序）的公共前缀长度 + 首个不同
+   记录的两侧原文、行号与所属应用块；一侧为另一侧前缀时报 LENGTH 分歧。
+3. **记录分类**：共享路径按出现序配对（k 对 k）、等 op 数块内逐 op 比较，差异按
+   首匹配分类：`dead_marker`（单侧 dead）→ `seqnum_drift`（mask `<pc>:<uniq>` 的
+   uniq 计数后相等，计数为十六进制）→ `const_width`（mask `#v[:size]` 宽度后缀后
+   相等）→ `opcode_name`（标识符 token 多重集不同）→ `other`；并附全文件
+   `#v[:w]` 常量宽度形态普查（informational，宽度信号多落在 op 数不等的未配对块，
+   逐块配对层看不到）。未配对块出现数与未配对 op 记录数单独计数。
+4. **@DONE 统计**：逐 key 对照（值差 / 单侧缺失）。
+
+META 行仅作 provenance 提示（oracle_commit/arch/cspec 等），不参与退出码判定。
+
+```bash
+# 人工可读报告（--top N 控制计数差/普查显示条数）
+python3 tools/drill_diff.py next_url.oracle.drill next_url.rugra.drill
+
+# 机读报告
+python3 tools/drill_diff.py next_url.oracle.drill next_url.rugra.drill --json
+
+# 驱动脚本（退出码同 stage_bisect 惯例：0 一致 / 1 有差异 / 2 用法或格式错误）
+bash tools/run_drill_bisect.sh <oracle.drill> <rugra.drill>
+
+# 自测（8 个合成场景：一致/路径层/首分歧/前缀长度/五类分类/@DONE/格式错误/退出码）
+python3 tools/drill_diff.py --selftest
+```
+
+真实语料验证（next_url，oracle 1293 块/1019 记录 vs rugra 1550/1122）：路径层
+shared=103 / oracle-only=2（`oppool2:loadvarnode`、`oppool1:subvar_subpiece`）/
+rugra-only=13（top `mainloop:unreachable` x24），计数差 top = earlyremoval
+368→399、ptrarith 4→28、propagatecopy 278→299、termorder 5→21、boolnegate
+17→30；首分歧 = 公共前缀 2 行后 `universal:extrapopsetup`（应用 4）oracle
+`0x505d:2ce` vs rugra `0x50ce:2ce` —— 与 Lane AL 的 ATTRIBUTION_V2.md / M2 采样
+报告逐项一致。
+
 ## result/ 产物刷新约定（2026-08-23）
 
 `result/curl_cur.c` 是 `cargo run --release --example curl_decompile` 的 stdout 存档（工具链的正式结构化对比输入）。
