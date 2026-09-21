@@ -40,7 +40,20 @@
 > docs/alignment_docs/STAGE_BISECT_SPEC_1204.md。
 > **Lane S 完成**: sb-batch/{targets.json(153 目标),batch_driver.py(断点续跑/超时/pending),
 > README}+CLI 契约(run_stage_projection_oracle.sh <corpus> <addr> <name> / RUGRA_STAGE_FUNC=<addr>)。
-> **Lane X 完成(2026-09-22)**: gp switch 丢失根因闭合(报告 sb-switch/GP_SWITCH_ROOTCAUSE.md)
+> **Lane Y 完成(2026-09-22)**: 全局符号映射根因闭合(报告 sb-globalsym/GLOBALSYM_ROOTCAUSE.md)
+> ——符号/导入层无罪(config 已安装,DAT 引用 100%=config 字段);真凶=①**类型分派缺
+> Spacebase 覆写**(datatype.rs:838 把 Spacebase 硬编码 (None,off),oracle 经虚分派
+> TypeSpacebase::getSubType type.cc:2947 保住 PTRSUB)→gp 16 行 __spacebase 族;
+> ②**打印层优先级反了**(printc.rs:5752 Priority-0 地址代理先于符号解析,oracle
+> pushSymbolDetail 无代理走 pushPartialSymbol)+driver span 不感知播种→main/gp 165 行
+> DAT 族。**新登记**: `TYPE-SPACEBASE-SUBTYPE-DISPATCH-0001`(P0,owner=spacebase-agent,
+> wt/sb-spacebase,write-set=src/datatype.rs+docs/api)与
+> `PRINTC-GLOBALSYM-LEAF-PRIORITY-0001`(P0,待 MultiGoto lane 退出 printc.rs 后派,
+> 注意勿伤合法 .rodata &DAT 形态)。
+> **消费端 quirk 登记(v1.2.1 落地时发现)**: 锁定 oracle opcode_name[] 表 60/61/65/66
+> 槽=BUILD/DELAY_SLOT/LABEL/CROSSBUILD(枚举标签为 MULTIEQUAL/INDIRECT/PTRADD/PTRSUB),
+> get_opname 按表下标返回→**Rugra emitter 对这四 op 必须发表字符串**,parity 检查显式
+> 覆盖(绑定 C 侧 v1.2 对齐 lane)。
 > ——jumptable 恢复无罪(88 entries 精确匹配);真凶=**①ActionSwitchNorm 空壳**
 > (coreaction.rs:3611-3636 matchModel/recoverLabels/foldIn* 调用全注释,fold_in_normalization/
 > fold_in_guards 已移植于 jumptable.rs:2648/3095 但零调用方)+**②newBlockMultiGoto 未移植**
