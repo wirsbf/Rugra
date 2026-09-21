@@ -174,11 +174,20 @@ class Record:
 # file (completion) order (see docs/alignment_docs/STAGE_BISECT_SPEC_1204.md).
 #
 # v1.2 (F-2 gate decision 2026-09-22) adds three pointer-value vn descriptor
-# classes and relaxes the opcode alphabet: <OPC_NAME> is the raw
-# PcodeOp::getOpName() spelling, and the locked typeop.cc table mixes symbol
-# and identifier spellings with mixed case (copy / - / == / (cast) / ZEXT),
-# so the grammar accepts any non-whitespace token and keeps the 12.0.4 name
-# table as an ADVISORY closed set (warning, never a parse error).
+# classes (s:/f:/o:, see V1_VN_RE below) and pins the opcode domain.
+# v1.2.1 erratum (opcode-domain gate ruling, same day): <OPC_NAME> is
+# get_opname(op->code()) (opcodes.hh:133), i.e. the CPUI enum spellings of
+# the canonical opcodes.cc opcode_name[] table (74 names, uppercase, no
+# CPUI_ prefix: COPY / BRANCH / CBRANCH / INT_ADD / INT_SUB / SUBPIECE /
+# INT_ZEXT ...).  The consumer grammar is TIGHTENED to ^[A-Z][A-Z0-9_]*$.
+# Rationale: PcodeOp::getOpName() (op.hh:244 -> TypeOp name, typeop.cc
+# constructor table) is a LOSSY mapping -- goto = BRANCH+CBRANCH,
+# '+' = INT_ADD/FLOAT_ADD/PTRADD, '-' = INT_SUB/FLOAT_SUB/FLOAT_NEG/
+# INT_2COMP, '<'/'<='/'=='/'!='/'*'/'/'/'%'/'>>' merge their INT/FLOAT
+# classes (11 lossy names fold 28 CPUI values; INT_LESS and INT_SLESS share
+# '<', exactly the sign-sensitivity defect class).  Opcode identity is a
+# decisive "same output" field, so the comparison domain must be injective;
+# the getOpName display domain is therefore dead for projections.
 V1_REQUIRED_META = (
     "side", "oracle_commit", "arch", "cspec", "analysis_options",
     "build_flags", "binary_sha256", "func_entry", "func_name", "load_mode",
@@ -187,23 +196,52 @@ V1_REQUIRED_META = (
 V1_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 V1_HEX_RE = re.compile(r"^(?:0x)?[0-9a-fA-F]+$")
 V1_LOCATION_RE = re.compile(r"^(?:0x)?[0-9a-fA-F]+:(?:0x)?[0-9a-fA-F]+$")
-# F-2: getOpName() tokens include pure symbols ('-', '==', '(cast)', '[]',
-# '->'), so any non-whitespace token is grammatical.
-V1_OPCODE_RE = re.compile(r"^\S+$")
-# Advisory closed set: the display-name spellings of the 72 opcodes
-# registered in the locked oracle's typeop.cc (Ghidra 12.0.4; constructor
-# initializer table + setSymbol renames = 56 distinct strings).  Non-members
-# raise a warning only -- the two sides render their own equivalent name
-# tables per spec v1.2.
-V1_TYPEOP_NAMES = frozenset((
-    "!", "!=", "%", "&", "&&", "*", "+", "-", "->", "/", "<", "<<", "<=",
-    "==", ">>", ">>>", "?", "[]", "^", "^^", "|", "||", "~", "(cast)",
-    "ABS", "CARRY", "CEIL", "CONCAT", "EXTRACT", "FLOAT2FLOAT", "FLOOR",
-    "INSERT", "INT2FLOAT", "LZCOUNT", "NAN", "POPCOUNT", "ROUND", "SBORROW",
-    "SCARRY", "SEXT", "SQRT", "SUB", "TRUNC", "ZEXT",
-    "call", "callind", "copy", "cpoolref", "goto", "load", "new",
-    "return", "segmentop", "store", "switch", "syscall",
-))
+# F-2 / v1.2.1: opcode tokens are the enum-domain spellings get_opname()
+# emits (opcodes.cc:29-61) -- uppercase identifiers with digits/underscores
+# (INT_2COMP, INT2FLOAT, DELAY_SLOT).  Symbols and mixed case are display
+# spellings and are now FORMAT ERRORS.
+V1_OPCODE_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+# Data-driven canonical table: opcodes.cc opcode_name[] verbatim, 74 names
+# in CPUI enum order (Ghidra 12.0.4).  Shipped behavior keeps the table
+# ADVISORY (alphabet-match but off-table tokens warn, never fail -- catches
+# producer typos without hard-coding against future table growth).  One-line
+# switch to strict closed-set validation (spec v1.2.1 "optional closed-set
+# validation"):
+#   V1_OPCODE_RE = re.compile("|".join(V1_OPCODE_ENUM_NAMES))
+V1_OPCODE_ENUM_NAMES = (
+    "BLANK", "COPY", "LOAD", "STORE",
+    "BRANCH", "CBRANCH", "BRANCHIND", "CALL",
+    "CALLIND", "CALLOTHER", "RETURN", "INT_EQUAL",
+    "INT_NOTEQUAL", "INT_SLESS", "INT_SLESSEQUAL", "INT_LESS",
+    "INT_LESSEQUAL", "INT_ZEXT", "INT_SEXT", "INT_ADD",
+    "INT_SUB", "INT_CARRY", "INT_SCARRY", "INT_SBORROW",
+    "INT_2COMP", "INT_NEGATE", "INT_XOR", "INT_AND",
+    "INT_OR", "INT_LEFT", "INT_RIGHT", "INT_SRIGHT",
+    "INT_MULT", "INT_DIV", "INT_SDIV", "INT_REM",
+    "INT_SREM", "BOOL_NEGATE", "BOOL_XOR", "BOOL_AND",
+    "BOOL_OR", "FLOAT_EQUAL", "FLOAT_NOTEQUAL", "FLOAT_LESS",
+    "FLOAT_LESSEQUAL", "UNUSED1", "FLOAT_NAN", "FLOAT_ADD",
+    "FLOAT_DIV", "FLOAT_MULT", "FLOAT_SUB", "FLOAT_NEG",
+    "FLOAT_ABS", "FLOAT_SQRT", "INT2FLOAT", "FLOAT2FLOAT",
+    "TRUNC", "CEIL", "FLOOR", "ROUND",
+    "BUILD", "DELAY_SLOT", "PIECE", "SUBPIECE", "CAST",
+    "LABEL", "CROSSBUILD", "SEGMENTOP", "CPOOLREF", "NEW",
+    "INSERT", "EXTRACT", "POPCOUNT", "LZCOUNT",
+)
+# Provenance / equality assertion: the tuple above was extracted verbatim
+# from the locked oracle (ghidra @ e40ed13014025f82488b1f8f7bca566894ac376b,
+# pristine `git show HEAD:...opcodes.cc`, working tree clean) with
+#   /dev/shm/rugra-tests/sb-bisect/extract_opcode_names.py
+#     <ghidra>/Ghidra/Features/Decompiler/src/decompile/cpp/opcodes.cc
+#     > /dev/shm/rugra-tests/sb-bisect/opcode_names.txt   # -> count=74
+# and verified equal (order-sensitive, 74/74) against the embedded tuple:
+#   [l.strip() for l in open("opcode_names.txt") if l.strip()]
+#     == list(V1_OPCODE_ENUM_NAMES)  -> EQUAL (2026-09-22, lane R3)
+# Table-vs-enum label drift at indices 60/61/65/66 (MULTIEQUAL/INDIRECT/
+# PTRADD/PTRSUB -> BUILD/DELAY_SLOT/LABEL/CROSSBUILD) is oracle-verbatim:
+# get_opname() indexes this table directly, so the TABLE is the emitted
+# domain and must not be "corrected" to the enum identifiers.
+V1_OPCODE_ENUM_SET = frozenset(V1_OPCODE_ENUM_NAMES)
 # v1.2 pointer-value descriptors: s:<spacename> (spaceid constant slot),
 # f:<addr>:<time> (fspec space, rendered as the host op's own SeqNum, same
 # spelling as the op-line head), o:<addr>:<time> / o:- (iop space, rendered
@@ -266,10 +304,12 @@ class V1Projection:
 def parse_v1_op(line, line_no, warnings=None):
     """Parse one v1.x snapshot operation line.
 
-    Opcode tokens are any non-whitespace string (v1.2 F-2); tokens outside
-    the locked typeop.cc display-name table append an ADVISORY warning to
-    `warnings` when provided -- never a parse error, since each side renders
-    its own equivalent name table.
+    Opcode tokens are the enum-domain spellings get_opname(op->code())
+    emits (v1.2.1: uppercase identifiers only).  Alphabet-match tokens
+    outside the canonical opcodes.cc opcode_name[] table append an ADVISORY
+    warning to `warnings` when provided -- never a parse error, so a future
+    table growth does not brick older consumers; switch V1_OPCODE_RE to the
+    closed-set alternation for strict validation.
     """
     parts = line.strip().split()
     if len(parts) != 5:
@@ -281,10 +321,10 @@ def parse_v1_op(line, line_no, warnings=None):
         raise FormatError(f"line {line_no}: invalid op location {location!r}")
     if not V1_OPCODE_RE.fullmatch(opcode):
         raise FormatError(f"line {line_no}: invalid opcode {opcode!r}")
-    if warnings is not None and opcode not in V1_TYPEOP_NAMES:
+    if warnings is not None and opcode not in V1_OPCODE_ENUM_SET:
         warnings.append(
-            f"line {line_no}: opcode {opcode!r} is not in the locked "
-            "typeop.cc display-name table (advisory)"
+            f"line {line_no}: opcode {opcode!r} is not in the canonical "
+            "opcodes.cc opcode_name[] table (advisory)"
         )
     if not dead.startswith("d=") or dead[2:] not in ("0", "1"):
         raise FormatError(f"line {line_no}: d= must be 0 or 1")
@@ -2134,24 +2174,34 @@ def scenario_v1_dead_bit_divergence():
     return report
 
 
-def scenario_v1_typeop_names_and_pointer_descriptors():
-    """v1.2 F-2: real typeop.cc spellings + s:/f:/o: descriptors.
+def scenario_v1_enum_opcodes_and_pointer_descriptors():
+    """v1.2.1 F-2: enum-domain opcode spellings + s:/f:/o: descriptors.
 
-    Covers: symbol/mixed-case opcode tokens (copy / - / == / (cast) / ZEXT),
+    Covers: get_opname(op->code()) spellings (COPY / INT_SUB / SUBPIECE /
+    CBRANCH / INT_SLESS ...), the injectivity discriminators the dead
+    getOpName display domain folded (INT_LESS vs INT_SLESS both render '<'),
     the three pointer-value descriptor classes, o:- single-side visibility,
-    the advisory off-table opcode warning, and negative shapes.
+    the advisory off-table opcode warning, hard rejection of display
+    spellings (copy / - / == / (cast) / []), and negative shapes.
     """
     ops = [
-        "4ff4:0 copy d=0 out=n:register:8:8 in=n:register:8:4",
-        "4ffa:3 - d=0 out=n:register:20:8 in=n:register:20:8,c:8:8",
-        "4ffc:4 == d=0 out=u:4f900:1 in=n:register:a0:8,n:register:a8:8",
-        "4ffe:5 (cast) d=0 out=u:4f908:8 in=u:4f900:8",
-        "5002:6 ZEXT d=0 out=u:4f910:8 in=u:4f908:4",
-        "5005:7 callind d=0 out=- in=s:ram,n:register:20:8",
-        "500b:8 goto d=0 out=- in=n:register:0:1,o:2534:54",
-        "500e:9 [] d=0 out=n:register:8:8 in=n:register:8:8,o:2534:54",
-        "5011:a load d=0 out=u:4f918:8 in=s:ram,u:4f910:8",
-        "5014:b store d=0 out=- in=s:ram,u:4f918:8,u:4f910:8",
+        "4ff4:0 COPY d=0 out=n:register:8:8 in=n:register:8:4",
+        "4ffa:3 INT_SUB d=0 out=n:register:20:8 in=n:register:20:8,c:8:8",
+        "4ffc:4 INT_EQUAL d=0 out=u:4f900:1 in=n:register:a0:8,n:register:a8:8",
+        "4ffe:5 CAST d=0 out=u:4f908:8 in=u:4f900:8",
+        "5002:6 INT_ZEXT d=0 out=u:4f910:8 in=u:4f908:4",
+        "5004:7 SUBPIECE d=0 out=u:4f914:8 in=u:4f910:8,c:4:8",
+        "5006:8 CBRANCH d=0 out=- in=n:ram:2534:1,n:register:0:1",
+        "5008:9 INT_SLESS d=0 out=u:4f918:1 in=n:register:a0:8,c:0:8",
+        "500a:a CALLIND d=0 out=- in=s:ram,n:register:20:8",
+        # Table quirk: this oracle's opcode_name[] labels drift from the
+        # enum identifiers at indices 60/61/65/66 (MULTIEQUAL/INDIRECT/
+        # PTRADD/PTRSUB render BUILD/DELAY_SLOT/LABEL/CROSSBUILD).  The
+        # producer domain is the TABLE (get_opname = direct index), so an
+        # iop-space host op (CPUI_INDIRECT) is spelled DELAY_SLOT here.
+        "500c:b DELAY_SLOT d=0 out=n:register:8:8 in=n:register:8:8,o:2534:54",
+        "500e:c LOAD d=0 out=u:4f918:8 in=s:ram,u:4f910:8",
+        "5010:d STORE d=0 out=- in=s:ram,u:4f918:8,u:4f910:8",
     ]
 
     def lines(side, op_list=None):
@@ -2161,7 +2211,7 @@ def scenario_v1_typeop_names_and_pointer_descriptors():
         ]
         return header + [
             "@BEGIN 1 universal:fullloop",
-            "@END 1 universal:fullloop result=0 count=1 tests=10 apply=1",
+            "@END 1 universal:fullloop result=0 count=1 tests=12 apply=1",
             f"@SNAP 1 ops {len(chosen)}",
             *chosen,
         ]
@@ -2169,26 +2219,38 @@ def scenario_v1_typeop_names_and_pointer_descriptors():
     left = make_v1_projection(lines("oracle"), "oracle-v12")
     right = make_v1_projection(lines("rugra"), "rugra-v12")
     parsed = left.stages[0].ops
-    check([op.opcode for op in parsed[:5]] == ["copy", "-", "==", "(cast)", "ZEXT"],
-          f"real typeop spellings must parse: {[op.opcode for op in parsed[:5]]}")
-    check(parsed[5].inputs[0] == "s:ram", "s: descriptor must parse as first input")
-    check(parsed[6].inputs[1] == "o:2534:54", "o: descriptor must parse with SeqNum")
-    check(parsed[9].output == "-", "store output slot must stay '-'")
+    check([op.opcode for op in parsed[:6]]
+          == ["COPY", "INT_SUB", "INT_EQUAL", "CAST", "INT_ZEXT", "SUBPIECE"],
+          f"enum spellings must parse: {[op.opcode for op in parsed[:6]]}")
+    check(parsed[6].opcode == "CBRANCH" and parsed[7].opcode == "INT_SLESS",
+          "CBRANCH/INT_SLESS tokens must parse distinctly")
+    check(parsed[8].inputs[0] == "s:ram", "s: descriptor must parse as first input")
+    check(parsed[9].inputs[1] == "o:2534:54", "o: descriptor must parse with SeqNum")
+    check(parsed[11].output == "-", "store output slot must stay '-'")
     report = compare_v1_projections(left, right)
     check(report["kind"] == V1_KIND_MATCH,
           f"identical v1.2 streams must match: {report['kind']}")
     check(not report["warnings"], f"real spellings must not warn: {report['warnings']}")
 
+    # Injectivity rationale (v1.2.1): typeop.cc:1016/1068 both display '<'
+    # for INT_SLESS/INT_LESS -- the enum domain must keep them distinct so a
+    # sign-sensitivity defect stays an observable divergence.
+    unsigned = list(ops)
+    unsigned[7] = "5008:9 INT_LESS d=0 out=u:4f918:1 in=n:register:a0:8,c:0:8"
+    folded = compare_v1_projections(left, make_v1_projection(lines("rugra", unsigned)))
+    check(folded["kind"] == V1_KIND_OP and folded["op_index"] == 7,
+          f"INT_SLESS vs INT_LESS must diverge: {folded['kind']}")
+
     # o:- is grammatical; appearing on one side only is a visible divergence.
     destroyed = list(ops)
-    destroyed[7] = "500e:9 [] d=0 out=n:register:8:8 in=n:register:8:8,o:-"
+    destroyed[9] = "500c:b DELAY_SLOT d=0 out=n:register:8:8 in=n:register:8:8,o:-"
     diverged = compare_v1_projections(left, make_v1_projection(lines("rugra", destroyed)))
-    check(diverged["kind"] == V1_KIND_OP and diverged["op_index"] == 7,
+    check(diverged["kind"] == V1_KIND_OP and diverged["op_index"] == 9,
           f"single-side o:- must be a visible divergence: {diverged['kind']}")
 
     # s: cannot swallow a real constant: c:-prefixed slots stay constants
     # even when hex digits would fit the s: name class (e.g. c:ff:4).
-    const_ops = ["4ff4:0 copy d=0 out=- in=c:ff:4,s:ram,c:bad:4"]
+    const_ops = ["4ff4:0 COPY d=0 out=- in=c:ff:4,s:ram,c:bad:4"]
     const_left = make_v1_projection(
         lines("oracle", const_ops) + [])
     slot = const_left.stages[0].ops[0]
@@ -2196,14 +2258,14 @@ def scenario_v1_typeop_names_and_pointer_descriptors():
           f"constants must not be swallowed by s:: {slot.inputs}")
 
     # f: descriptor (fspec, host op's own SeqNum) parses and stays comparable.
-    fspec_ops = ["4ff4:0 call d=0 out=u:4f900:8 in=n:register:0:8,f:4ff4:0"]
+    fspec_ops = ["4ff4:0 CALL d=0 out=u:4f900:8 in=n:register:0:8,f:4ff4:0"]
     fspec_left = make_v1_projection(lines("oracle", fspec_ops))
     fspec_right = make_v1_projection(lines("rugra", fspec_ops))
     check(
         compare_v1_projections(fspec_left, fspec_right)["kind"] == V1_KIND_MATCH,
         "f: descriptor streams must compare equal",
     )
-    fspec_other = ["4ff4:0 call d=0 out=u:4f900:8 in=n:register:0:8,f:505d:131"]
+    fspec_other = ["4ff4:0 CALL d=0 out=u:4f900:8 in=n:register:0:8,f:505d:131"]
     check(
         compare_v1_projections(
             fspec_left, make_v1_projection(lines("rugra", fspec_other))
@@ -2211,22 +2273,42 @@ def scenario_v1_typeop_names_and_pointer_descriptors():
         "different f: call-site SeqNums must diverge",
     )
 
-    # Advisory closed set: an off-table spelling parses but warns.
-    weird = ["4ff4:0 INT_ADD d=0 out=- in=u:1000:8,u:1008:8"]
+    # Advisory closed set: an alphabet-match but off-table spelling warns.
+    weird = ["4ff4:0 INT_PLUS d=0 out=- in=u:1000:8,u:1008:8"]
     weird_left = make_v1_projection(lines("oracle", weird))
     weird_right = make_v1_projection(lines("rugra", weird))
     warned = compare_v1_projections(weird_left, weird_right)
     check(warned["kind"] == V1_KIND_MATCH, "off-table opcode must NOT be an error")
-    check(any("INT_ADD" in w and "advisory" in w for w in warned["warnings"]),
+    check(any("INT_PLUS" in w and "advisory" in w for w in warned["warnings"]),
           f"off-table opcode must warn: {warned['warnings']}")
 
-    # Negative shapes still reject.
+    # v1.2.1 tightening: the dead getOpName display spellings are format
+    # errors now (symbols, mixed case, digit-leading identifiers).
+    for bad_opcode, why in [
+        ("copy", "lowercase display spelling"),
+        ("-", "symbol display spelling (INT_SUB/INT_2COMP/...)"),
+        ("==", "symbol display spelling (INT_EQUAL/FLOAT_EQUAL)"),
+        ("(cast)", "parenthesized display spelling"),
+        ("[]", "bracket display spelling (INDIRECT)"),
+        ("goto", "lossy display spelling (BRANCH/CBRANCH)"),
+        ("0ADD", "digit-leading token"),
+    ]:
+        try:
+            make_v1_projection(
+                lines("oracle", [f"4ff4:0 {bad_opcode} d=0 out=- in=c:1:8"]))
+            ok = False
+        except FormatError:
+            ok = True
+        check(ok, f"display opcode must be rejected ({why}): {bad_opcode!r}")
+
+    # Negative descriptor shapes still reject.
     for bad, why in [
-        ("4ff4:0 copy d=0 out=- in=f:xyz", "f: requires addr:time"),
-        ("4ff4:0 copy d=0 out=- in=o:", "o: empty body"),
-        ("4ff4:0 copy d=0 out=- in=s:", "s: empty name"),
-        ("4ff4:0 copy d=0 out=- in=s:ram:8", "s: takes no size"),
-        ("4ff4:0 copy d=0 out=- in=o:1:2:3", "o: takes exactly addr:time"),
+        ("4ff4:0 COPY d=0 out=- in=f:xyz", "f: requires addr:time"),
+        ("4ff4:0 COPY d=0 out=- in=f:-", "f: has no destroyed-op spelling"),
+        ("4ff4:0 COPY d=0 out=- in=o:", "o: empty body"),
+        ("4ff4:0 COPY d=0 out=- in=s:", "s: empty name"),
+        ("4ff4:0 COPY d=0 out=- in=s:ram:8", "s: takes no size"),
+        ("4ff4:0 COPY d=0 out=- in=o:1:2:3", "o: takes exactly addr:time"),
     ]:
         try:
             make_v1_projection(lines("oracle", [bad]))
@@ -2328,8 +2410,8 @@ def run_selftest():
         ("v1_op_count_divergence", scenario_v1_op_count_divergence),
         ("v1_dead_bit_divergence", scenario_v1_dead_bit_divergence),
         ("v1_identity_mismatch", scenario_v1_identity_mismatch),
-        ("v1_typeop_names_and_pointer_descriptors",
-         scenario_v1_typeop_names_and_pointer_descriptors),
+        ("v1_enum_opcodes_and_pointer_descriptors",
+         scenario_v1_enum_opcodes_and_pointer_descriptors),
     ]
     passed = 0
     failures = []
