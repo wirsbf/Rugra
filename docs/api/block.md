@@ -1570,3 +1570,10 @@ body_is_dead 门禁 + RC-4 循环形态 + RC-5 条件错接均未修），内容
 COPY/SUBPIECE；输出 addr-tied 拒绝；任一后代 op 的 parent 不在本块拒绝。
 自块身份用 self_ref Arc 与 op.parent Arc 的 ptr_eq（add_block 同时建立两者）。
 供 JumpBasic::foldInOneGuard（jumptable.cc:1394）守卫使用。
+
+## 2026-09-22 追加（BLOCKSTRUCT-MULTIGOTO-0001 — BlockMultiGoto 类型 + BlockSwitch per-case gototype）
+
+- 新增 `BlockMultiGoto`（Ghidra block.hh:573-593）:gotoedges（addEdge 纯 vector push,不建图边,block.hh:580）、defaultswitch（setDefaultGoto/hasDefaultGoto）、wrapped（getBlock(0) 组件,同 BlockGoto::wrapped 模式）。FlowBlock impl:getType=t_multigoto；scope_break_trait→wrapped.scope_break(-1,cur_loop_exit)（cc:2918-2922,curexit 丢弃换 -1）；mark_unstructured_trait 纯递归（无覆写=BlockGraph 递归语义）；nextFlowAfter 恒 None（cc:2931-2936）；get_ops/sub_block/first_op/get_exit_leaf 委托 wrapped；print_header "Multi goto block"。
+- `front_leaf` 补 MultiGoto arm（经 wrapped 下降,block.hh:587-589 委托链）——此前落入 catch-all 返回自身。
+- `BlockSwitch` 新增 `case_gototypes: Vec<u32>`（CaseOrder::gototype per case,block.hh:778）与 `default_gototype: u32`:`mark_unstructured_targets` 与 `scope_break_break_cases` 从"conservative no-op"落为真实实现（cc:3607-3610 gototype==f_goto_goto→markCopyBlock(UNSTRUCTURED_TARG);cc:3620-3623 goto case 目标==curexit→提升 f_break_goto）。
+- 新增 `front_leaf_start_addr`（printc.cc:2303 emitGotoStatement 的 exp_bl→emitLabel 投影）:front leaf 的 BlockCopy original 起始地址（BlockCopy 不覆写 getStart,与 oracle 一致,block.hh:505-538）。

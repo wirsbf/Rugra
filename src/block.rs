@@ -155,13 +155,19 @@ pub fn front_leaf(
                     .map(|sw| sw.control.clone()),
                 // BlockGoto : BlockGraph — getFrontLeaf descends subBlock(0)
                 // = the wrapped component (block.hh:559/561-562 delegate every
-                // leaf/first/last query to getBlock(0)). Graph/Plain/MultiGoto
-                // are not structured-tree nodes (no subBlock(0) chain exists;
-                // MultiGoto has no Rugra counterpart, BLOCKSTRUCT-MULTIGOTO-0001).
+                // leaf/first/last query to getBlock(0)). Graph/Plain are not
+                // structured-tree nodes (no subBlock(0) chain exists).
+                // BlockMultiGoto likewise delegates to getBlock(0) — its
+                // subBlock(0) is the wrapped multi-exit block (block.hh:587-
+                // 589 delegate printRaw/emit/getExitLeaf the same way).
                 BlockType::Goto => b
                     .as_any()
                     .downcast_ref::<BlockGoto>()
                     .and_then(|g| g.wrapped.clone()),
+                BlockType::MultiGoto => b
+                    .as_any()
+                    .downcast_ref::<BlockMultiGoto>()
+                    .and_then(|m| m.wrapped.clone()),
                 _ => return Some(cur.clone()),
             }
         };
@@ -194,6 +200,31 @@ pub fn front_leaf_basic(
 ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
     let coerced: Arc<RwLock<dyn FlowBlock + Send + Sync>> = bl.clone();
     front_leaf(&coerced)
+}
+
+// Ghidra: printc.cc:2303 PrintC::emitGotoStatement (exp_bl → emitLabel)
+/// The label address of a (possibly structured) block for goto-statement
+/// emission: the start address of the underlying basic block. The oracle's
+/// emitGotoStatement prints `emitLabel(exp_bl)` — the label manager entry of
+/// the destination FlowBlock; Rugra's printc derives `code_label(addr)` from
+/// the same basic block's start address, reached by descending the front
+/// leaf and taking the BlockCopy's original (BlockCopy itself does not
+/// override getStart — block.hh:505-538 has no getStart, matching Rugra's
+/// trait default — so the original's start is the faithful projection).
+pub fn front_leaf_start_addr(
+    bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+) -> u64 {
+    let leaf = front_leaf(bl).unwrap_or_else(|| bl.clone());
+    let orig = {
+        let r = leaf.read().unwrap();
+        r.as_any()
+            .downcast_ref::<BlockCopy>()
+            .map(|c| c.original.clone())
+    };
+    match orig {
+        Some(o) => o.read().unwrap().get_start_addr().as_u64(),
+        None => leaf.read().unwrap().get_start_addr().as_u64(),
+    }
 }
 
 // RUGRA-GLUE: diagnostic front-leaf address for BLOCKSTRUCT-COLLAPSE-RESIDUAL-0001
@@ -5509,6 +5540,222 @@ impl BlockGoto {
     }
 }
 
+/// A block with multiple edges out, at least one of which is an unstructured
+/// (goto) branch (Ghidra `BlockMultiGoto`, block.hh:573-593).
+///
+/// Mirrors a basic block with multiple out edges at the point where one of
+/// the edges can't be structured (the switch dispatch block whose goto-marked
+/// edge `ruleBlockGoto`'s isSwitchOut arm peels off, block.cc:1720-1753).
+/// `gotoedges` records the peeled targets; the structured view presents the
+/// graph as if those edges didn't exist (they are `removeEdge`d bilaterally
+/// by `new_block_multigoto`). If more edges later fail to structure, this one
+/// instance accumulates them (block.hh:569-572).
+#[derive(Debug)]
+pub struct BlockMultiGoto {
+    pub index: i32,
+    pub flags: u32,
+    pub parent: Option<Weak<RwLock<BlockGraph>>>,
+    /// Ghidra `BlockMultiGoto::gotoedges` (block.hh:574): the targets of the
+    /// unstructured out-edges, appended by `addEdge` (block.hh:580 — pure
+    /// vector push, NO graph edge is created). Consumed by
+    /// `BlockSwitch::grabCaseBasic` (block.cc:3548-3553), which re-adds each
+    /// target as a case with `gototype = f_goto_goto`, and by
+    /// `check_switch_skips` via `hasDefaultGoto` (blockaction.cc:1630-1635).
+    pub gotoedges: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    /// Ghidra `BlockMultiGoto::defaultswitch` (block.hh:575): true when one
+    /// of the unstructured edges is the formal switch default edge
+    /// (`setDefaultGoto`, set iff `isDefaultBranch(outedge)` held at
+    /// newBlockMultiGoto time, block.cc:1725/1749-1750).
+    pub defaultswitch: bool,
+    /// Ghidra `BlockMultiGoto : BlockGraph` list component (block.hh:573):
+    /// the wrapped multi-exit block (`getBlock(0)`), moved in by
+    /// `identifyInternal(ret, [bl])` (block.cc:1738). Every delegated virtual
+    /// (`emit` via block.hh:588, `getExitLeaf`, `lastOp`, `printRaw`,
+    /// scopeBreak recursion) reads this component — same pattern as
+    /// `BlockGoto::wrapped`.
+    pub wrapped: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    pub incoming: Vec<BlockEdge>,
+    pub outgoing: Vec<BlockEdge>,
+}
+
+impl FlowBlock for BlockMultiGoto {
+    // RUGRA-GLUE: Rust trait-object downcast glue
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    // RUGRA-GLUE: Rust trait-object downcast glue
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+    // Ghidra: block.hh:160 FlowBlock::getIndex
+    fn get_index(&self) -> i32 {
+        self.index
+    }
+    // RUGRA-GLUE: Rust mutator (Ghidra FlowBlock::index is private)
+    fn set_index(&mut self, i: i32) {
+        self.index = i;
+    }
+    // Ghidra: block.hh:584 BlockMultiGoto::getType
+    fn get_type(&self) -> BlockType {
+        BlockType::MultiGoto
+    }
+    // Ghidra: block.hh:165 FlowBlock::getFlags
+    fn get_flags(&self) -> u32 {
+        self.flags
+    }
+    // Ghidra: block.hh:155 FlowBlock::setFlag
+    fn set_flags(&mut self, f: u32) {
+        self.flags |= f;
+    }
+    // Ghidra: block.hh:156 FlowBlock::clearFlag
+    fn clear_flags(&mut self, f: u32) {
+        self.flags &= !f;
+    }
+    // Ghidra: block.hh:313 FlowBlock::sizeIn
+    fn size_in(&self) -> usize {
+        self.incoming.len()
+    }
+    // Ghidra: block.hh:312 FlowBlock::sizeOut
+    fn size_out(&self) -> usize {
+        self.outgoing.len()
+    }
+    // Ghidra: block.hh:304 FlowBlock::getIn
+    fn get_in(&self, slot: usize) -> Option<BlockEdge> {
+        self.incoming.get(slot).cloned()
+    }
+    // Ghidra: block.hh:301 FlowBlock::getOut
+    fn get_out(&self, slot: usize) -> Option<BlockEdge> {
+        self.outgoing.get(slot).cloned()
+    }
+
+    // RUGRA-GLUE: shared edge-vector accessors (Ghidra FlowBlock base class
+    // owns outofthis/intothis for every subtype, block.hh:124-127)
+    fn out_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.outgoing
+    }
+    // RUGRA-GLUE: in-edge half of the shared edge-vector accessor pair above.
+    fn in_edges_mut(&mut self) -> &mut Vec<BlockEdge> {
+        &mut self.incoming
+    }
+
+    // Ghidra: block.cc:73 FlowBlock::addInEdge
+    fn add_in_edge(&mut self, edge: BlockEdge) {
+        self.incoming.push(edge);
+    }
+    // RUGRA-GLUE: Rust edge-construction helper
+    fn add_out_edge(&mut self, edge: BlockEdge) {
+        self.outgoing.push(edge);
+    }
+    // Ghidra: block.hh:161 FlowBlock::getParent
+    fn get_parent(&self) -> Option<Arc<RwLock<BlockGraph>>> {
+        self.parent.as_ref().and_then(|p| p.upgrade())
+    }
+    // Ghidra: block.hh:590 BlockMultiGoto::lastOp — getBlock(0)->lastOp().
+    // Rugra projects the BlockGraph delegation (block.cc:1330-1333) as the
+    // wrapped component's full op list, same as BlockGoto::get_ops.
+    fn get_ops(&self) -> Vec<PcodeOpRef> {
+        match &self.wrapped {
+            Some(w) => w.read().unwrap().get_ops(),
+            None => Vec::new(),
+        }
+    }
+    // Ghidra: block.hh:190 FlowBlock::subBlock — BlockMultiGoto's component
+    // list holds exactly the wrapped block (identifyInternal(ret,[bl]),
+    // block.cc:1738), so subBlock(0) is the wrapped Arc.
+    fn sub_block(&self, slot: usize) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        if slot == 0 {
+            self.wrapped.clone()
+        } else {
+            None
+        }
+    }
+    // Ghidra: block.cc:1330 BlockGraph::firstOp — getBlock(0)->firstOp()
+    fn first_op(&self) -> Option<PcodeOpRef> {
+        self.wrapped.as_ref().map(|w| w.read().unwrap().first_op())?
+    }
+    // Ghidra: block.hh:589 BlockMultiGoto::getExitLeaf — getBlock(0)->getExitLeaf()
+    fn get_exit_leaf_trait(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        match &self.wrapped {
+            Some(w) => w.read().unwrap().get_exit_leaf_trait(),
+            None => None,
+        }
+    }
+    // Ghidra: block.cc:2918 BlockMultiGoto::scopeBreak — delegate to the
+    // inherent helper holding the faithful port (cc:2921
+    // `getBlock(0)->scopeBreak(-1,curloopexit)` — curexit is DISCARDED and
+    // replaced by -1; the gotoedges list is not consulted).
+    fn scope_break_trait(&mut self, cur_exit: i32, cur_loop_exit: i32) {
+        self.scope_break_multigoto(cur_exit, cur_loop_exit);
+    }
+    // Ghidra: block.cc BlockMultiGoto::markUnstructured — no override, so
+    // BlockGraph::markUnstructured (block.cc:1249-1256) applies: pure
+    // recursion into the component list ([wrapped]). Unlike BlockGoto there
+    // is no target marking here — the goto targets are marked by
+    // BlockSwitch::markUnstructured's per-case loop (block.cc:3607-3610).
+    fn mark_unstructured_trait(&mut self) {
+        if let Some(w) = &self.wrapped {
+            w.write().unwrap().mark_unstructured_trait();
+        }
+    }
+}
+
+// RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as
+// BlockMultiGoto virtual overrides / inline class methods)
+impl BlockMultiGoto {
+    /// Ghidra `BlockMultiGoto::setDefaultGoto` (block.hh:578, inline): mark
+    /// that this block holds an unstructured switch default edge.
+    // Ghidra: block.hh:578 BlockMultiGoto::setDefaultGoto
+    pub fn set_default_goto(&mut self) {
+        self.defaultswitch = true;
+    }
+
+    /// Ghidra `BlockMultiGoto::hasDefaultGoto` (block.hh:579, inline).
+    // Ghidra: block.hh:579 BlockMultiGoto::hasDefaultGoto
+    pub fn has_default_goto(&self) -> bool {
+        self.defaultswitch
+    }
+
+    /// Ghidra `BlockMultiGoto::addEdge` (block.hh:580, inline): mark the edge
+    /// from this block to `bl` as unstructured — pure `gotoedges` push, no
+    /// graph edge is created (the real graph edge was already removed
+    /// bilaterally by `newBlockMultiGoto`'s `removeEdge`, block.cc:1729/1746).
+    // Ghidra: block.hh:580 BlockMultiGoto::addEdge
+    pub fn add_goto_edge(&mut self, bl: Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+        self.gotoedges.push(bl);
+    }
+
+    /// Ghidra `BlockMultiGoto::numGotos` (block.hh:581, inline).
+    // Ghidra: block.hh:581 BlockMultiGoto::numGotos
+    pub fn num_gotos(&self) -> usize {
+        self.gotoedges.len()
+    }
+
+    /// Ghidra `BlockMultiGoto::getGoto` (block.hh:582, inline).
+    // Ghidra: block.hh:582 BlockMultiGoto::getGoto
+    pub fn get_goto(&self, i: usize) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
+        self.gotoedges.get(i).cloned()
+    }
+
+    /// Ghidra `BlockMultiGoto::scopeBreak` (block.cc:2918-2922):
+    /// `getBlock(0)->scopeBreak(-1,curloopexit)` — recurse into the single
+    /// component passing -1 as the curexit (this block "has multiple exits",
+    /// so no interior exit is current) and the caller's curloopexit through.
+    // Ghidra: block.cc:2918 BlockMultiGoto::scopeBreak
+    pub fn scope_break_multigoto(&mut self, _cur_exit: i32, cur_loop_exit: i32) {
+        if let Some(w) = &self.wrapped {
+            w.write().unwrap().scope_break_trait(-1, cur_loop_exit);
+        }
+    }
+
+    /// Ghidra `BlockMultiGoto::printHeader` (block.cc:2924-2929): emit
+    /// `"Multi goto block <index>"`.
+    // Ghidra: block.cc:2924 BlockMultiGoto::printHeader
+    pub fn print_header(&self) -> String {
+        // cc:2927-2928: s << "Multi goto block "; FlowBlock::printHeader(s);
+        format!("Multi goto block {}", self.index)
+    }
+}
+
 // ===== Structured Block Types =====
 // These are produced by CollapseStructure and walked by PrintC.
 
@@ -6957,6 +7204,18 @@ pub struct BlockSwitch {
     pub control: Arc<RwLock<dyn FlowBlock + Send + Sync>>,
     pub cases: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
     pub default_case: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    /// Ghidra `CaseOrder::gototype` (block.hh:778) per regular case:
+    /// 0 = structured case body; `goto_type::GOTO_GOTO` = a case whose
+    /// dispatch edge was peeled as an unstructured goto (added by
+    /// `BlockSwitch::grabCaseBasic`'s t_multigoto arm, block.cc:3548-3553);
+    /// promoted to `goto_type::BREAK_GOTO` by scopeBreak when the target is
+    /// the switch exit (block.cc:3620-3623). Parallel to `cases`.
+    pub case_gototypes: Vec<u32>,
+    /// Ghidra `CaseOrder::gototype` for the default case (`default_case`):
+    /// 0 = structured default body; `goto_type::GOTO_GOTO` = a default edge
+    /// peeled as an unstructured goto (newBlockMultiGoto's setDefaultGoto
+    /// path). Same promotion rules as `case_gototypes`.
+    pub default_gototype: u32,
     pub case_values: Vec<Vec<u64>>,
     pub index_varnode: Option<Arc<RwLock<crate::varnode::Varnode>>>,
     pub incoming: Vec<BlockEdge>,
@@ -7133,21 +7392,32 @@ impl BlockSwitch {
     /// case whose goto edge is a plain `goto` with `f_unstructured_targ`. The
     /// C++ first recurses via `BlockGraph::markUnstructured`; Rugra's
     /// `BlockSwitch` exposes its cases directly, so only the per-case marking
-    /// is ported (Rugra does not yet model per-case gototype, so this is a
-    /// conservative no-op until case gototypes are tracked).
+    /// is ported here. scopeBreak runs before markUnstructured (the oracle's
+    /// own evaluation order), so cases already promoted to `f_break_goto`
+    /// are NOT marked — exactly the `== f_goto_goto` test (cc:3608).
     // Ghidra: block.cc:3603 BlockSwitch::markUnstructured
     pub fn mark_unstructured_targets(&self) {
         // cc:3607-3610: for each case, if (caseblocks[i].gototype == f_goto_goto) markCopyBlock(caseblocks[i].block, f_unstructured_targ);
-        // Rugra does not yet track per-case gototype; nothing to mark.
+        for (case, gt) in self.cases.iter().zip(self.case_gototypes.iter()) {
+            if *gt == goto_type::GOTO_GOTO {
+                mark_front_leaf(case, block_flags::UNSTRUCTURED_TARG);
+            }
+        }
+        // The default case is a caseblock in the oracle (isdefault tag);
+        // Rugra stores it separately — same marking rule.
+        if self.default_gototype == goto_type::GOTO_GOTO {
+            if let Some(def) = &self.default_case {
+                mark_front_leaf(def, block_flags::UNSTRUCTURED_TARG);
+            }
+        }
     }
 
     /// Ghidra `BlockSwitch::scopeBreak` (block.cc:3613-3630): a new scope — the
     /// current loop exit becomes the new `cur_exit`. The switch control has
     /// multiple exits so gets `cur_exit = -1`; each case either has a goto
-    /// (reclassified as `break` if it lands on cur_exit) or shares the
-    /// switch's exit (scopeBreak with curexit=curexit). Rugra recurses into
-    /// the control and each case; the per-case goto reclassification is
-    /// deferred until Rugra tracks per-case gototypes.
+    /// (reclassified as `break` if it lands on cur_exit — "A goto that goes
+    /// straight to exit, print is (empty) break", cc:3620-3623) or shares the
+    /// switch's exit (scopeBreak with curexit=curexit, cc:3625-3628).
     // Ghidra: block.cc:3613 BlockSwitch::scopeBreak
     pub fn scope_break_break_cases(&mut self, cur_exit: i32, cur_loop_exit: i32) {
         // cc:3617: getBlock(0)->scopeBreak(-1, curexit);   // Top block has multiple exits
@@ -7155,9 +7425,32 @@ impl BlockSwitch {
             .write()
             .unwrap()
             .scope_break_trait(-1, cur_exit);
-        // cc:3618-3629: for each case, scopeBreak(curexit, curexit) for exit cases.
-        for case in &self.cases {
-            case.write().unwrap().scope_break_trait(cur_exit, cur_exit);
+        // cc:3618-3629: for each case, either reclassify its goto or
+        // scopeBreak(curexit, curexit) for exit cases.
+        for (i, case) in self.cases.iter().enumerate() {
+            let gt = self.case_gototypes.get(i).copied().unwrap_or(0);
+            if gt != 0 {
+                // cc:3620-3623: if (bl->getIndex() == curexit) gototype = f_break_goto;
+                if case.read().unwrap().get_index() == cur_exit {
+                    if let Some(g) = self.case_gototypes.get_mut(i) {
+                        *g = goto_type::BREAK_GOTO;
+                    }
+                }
+            } else {
+                // cc:3625-3628: bl->scopeBreak(curexit, curexit);
+                case.write().unwrap().scope_break_trait(cur_exit, cur_exit);
+            }
+        }
+        // The default case is a caseblock in the oracle's single list; the
+        // same gototype arm applies to Rugra's separate slot.
+        if self.default_gototype != 0 {
+            if let Some(def) = &self.default_case {
+                if def.read().unwrap().get_index() == cur_exit {
+                    self.default_gototype = goto_type::BREAK_GOTO;
+                }
+            }
+        } else if let Some(def) = &self.default_case {
+            def.write().unwrap().scope_break_trait(cur_exit, cur_exit);
         }
         let _ = cur_loop_exit;
     }
@@ -7299,3 +7592,4 @@ mod edge_flag_tests {
         );
     }
 }
+
