@@ -2440,6 +2440,41 @@ fn stage_frontier(
     candidates
 }
 
+// RUGRA-GLUE (v2 drill emitter plan, Lane AA): the OPACTION_DEBUG-equivalent
+// per-application modified-op drill for stage-bisect v2, mirroring the
+// locked-oracle harness tests/oracle/stage_drill_1204.cc (Lane Q; oracle
+// baseline /dev/shm/rugra-tests/sb-drill/next_url.oracle.drill, 1293 blocks,
+// 1019 records, sha b227ae94...). Design: DRILL_DESIGN.md §3/§4.
+//
+// Reused from the v1.1 emitter above (f07229c/05c8314):
+//   - stage_walk/stage_action_of/stage_state_of/stage_set_start_break/
+//     stage_frontier BREAK_START frontier stepping over the live Action tree
+//     (one application between two pauses, index-addressed to dodge duplicate
+//     leaf names);
+//   - the RUGRA_STAGE_FUNC single-function selection plumbing.
+//
+// Added for v2 (all behind RUGRA_STAGE_DRILL=1; env-unset behavior stays
+// byte-identical, verified in M3 against the pre-change build):
+//   1. SeqNum raw formatter: "<pc-raw>:<uniq-hex>" matching Ghidra
+//      address.cc SeqNum operator<< (pc printRaw leaves the stream in hex,
+//      so uniq prints hex too; oracle lines like `0x00004ff4:2cd`).
+//   2. Per-op mutation hooks (read-only observation, zero pipeline change
+//      when the env is unset): first-touch before-caching with the
+//      MODIFIED addl-flag for dedup, mirroring Funcdata::debugModCheck
+//      (funcdata.cc:1010-1022) at the funcdata.rs mutation entries, plus a
+//      per-rule activate/flush pair around ActionPool rule applications
+//      mirroring action.cc:839-845.
+//   3. Drill record format (identical grammar to the oracle drill):
+//      `@BEGIN <boundary-seq> <full-path>` / native DEBUG text verbatim
+//      (`DEBUG <n>: <leaf>`, before line, `   ` + after line; dead ops keep
+//      `<seqnum>: **`) / `@END`. <n> counts only applications that modified
+//      a traced op (opactdbg_count equivalent), boundary-seq is 1-based per
+//      emitted block.
+// Milestones: M0 plan (this comment) -> M1 hooks+emitter -> M2 next_url
+// full output + diff-vs-oracle sampling (differences are signal, recorded
+// per-item, never forced to match) -> M3 minimal src accessors + env-off
+// byte-identity check.
+
 // RUGRA-GLUE: wraps the existing Action::perform state machine with only
 // BREAK_START bits and read-only optree observation; no Action/Rule
 // implementation changes and no snapshot is fed back into the pipeline.
