@@ -3116,6 +3116,44 @@ impl ScopeLocal {
         if !aliases.is_empty() && aliases[0] == 0 {
             self.annotate_raw_stack_ptr(fd);
         }
+        // [DBG] probe: dump final local symbol map for main
+        if fd.get_name() == "main" {
+            {
+                let tf = types.read().unwrap();
+                for tn in ["URLGlob", "URLPatternType", "URLPattern"] {
+                    if let Some(dt) = tf.find_by_name(tn) {
+                        let d = &*dt;
+                        eprintln!("[DBG] TYPE {} size={} metatype={:?}", tn, d.get_size(), d.get_metatype());
+                        if let crate::type_system::datatype::Datatype::Struct(ts) = d {
+                            for f in ts.fields.iter().take(8) {
+                                eprintln!("[DBG]   field {} off={}", f.name, f.offset);
+                            }
+                        }
+                    } else {
+                        eprintln!("[DBG] TYPE {} NOT FOUND", tn);
+                    }
+                }
+            }
+            let mut rows: Vec<(u64, i32, String, String)> = self
+                .symbols
+                .iter()
+                .map(|s| {
+                    (
+                        s.start,
+                        s.size,
+                        s.dtype
+                            .as_ref()
+                            .map(|t| t.get_name().to_string())
+                            .unwrap_or_else(|| "?".to_string()),
+                        s.name.clone(),
+                    )
+                })
+                .collect();
+            rows.sort();
+            for (start, size, tn, name) in rows {
+                eprintln!("[DBG] SYM off={:x} sz={} type={} name={}", start, size, tn, name);
+            }
+        }
     }
 
     // Ghidra: database.cc:2071 ScopeInternal::clearUnlockedCategory (cat >= 0)
