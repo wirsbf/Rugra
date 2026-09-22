@@ -21,9 +21,12 @@ v1 撤回的两个前提均已被后续车道关闭：
    （Phase 2 MATCH 保持）。
 
 **已知 cosmetic 残差**：8 个函数（main/getparameter 等）此前已声明 `int8 in_RSP`
-（栈符号映射缺口的既有表现）；挂载后声明变为 `__spacebase_1_<hash> *in_RSP`
-（Rugra get_type_spacebase 的 dedup 名；oracle 同状态下 printc 渲染为
-BADSPACEBASE，且 oracle 因栈符号映射完整而不打印该声明）。该泄漏属
+（栈符号映射缺口的既有表现）；挂载后声明曾为 `__spacebase_1_<hash> *in_RSP`
+（Rugra get_type_spacebase 旧 dedup 名泄漏）。2026-09-23
+SPACEBASE-SYMNAME-0001 起，spacebase 类型名已按 oracle 清空
+（type.hh:735-736 空 name + printc.cc:3387-3389），该声明渲染为
+`BADSPACEBASE *in_RSP`——oracle 在同符号状态下的机械渲染形态；oracle 真实
+golden 中因栈符号映射完整而不打印该声明。声明行本身的存在属
 varmap/符号层既有缺口的表现面，随 VARGROUP-ABSORB-0001 §4-4 符号层一并收敛。
 
 - `Funcdata::spacebase`（funcdata.cc:240-266 else 分支）：标记 SPACEBASE 标志后，若该

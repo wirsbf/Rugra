@@ -1857,7 +1857,12 @@ impl TypeFactory {
         spaceid: Option<AddressSpace>,
         frame: Address,
     ) -> Arc<Datatype> {
-        // Rugra dedupes by a synthetic name encoding the space+frame identity.
+        // RUGRA-GLUE dedup: Ghidra canonicalizes spacebases through the
+        // compare-sorted tree in findAdd (type.cc:3996 via
+        // TypeSpacebase::compareDependency type.cc:3045-3055 — base, then
+        // spaceid, then localframe); Rugra's factory is a name-keyed
+        // BTreeMap, so the synthetic key below encodes the space+frame
+        // identity for the map slot. It is NOT the type's display name.
         let key = format!(
             "__spacebase_{}_{}",
             spaceid.map(|s| s.word_size()).unwrap_or(0),
@@ -1866,7 +1871,19 @@ impl TypeFactory {
         if let Some(existing) = self.find_by_name(&key) {
             return existing;
         }
-        let mut base = TypeBase::new(key.clone(), 0, TypeMetatype::Spacebase);
+        // Ghidra `TypeSpacebase(AddrSpace*, const Address&, Architecture*)`
+        // (type.hh:735-736) bases on `Datatype(0,1,TYPE_SPACEBASE)` whose
+        // ctor (type.hh:214) leaves `name` EMPTY — the spacebase is an
+        // ANONYMOUS type. At print time `PrintC::buildTypeStack`
+        // (printc.cc:143-163) stops at an anonymous non-PTR/ARRAY/CODE
+        // type, so `PrintC::pushTypeStart`'s anonymous branch
+        // (printc.cc:280-285) spells `PrintC::genericTypeName` →
+        // "BADSPACEBASE" (printc.cc:3387-3389, returned before the size
+        // suffix), declaring e.g. `BADSPACEBASE *in_RSP`. Rugra previously
+        // carried the synthetic dedup key as the type NAME, leaking
+        // `__spacebase_1_<frame> *in_RSP` into declarations
+        // (SPACEBASE-SYMNAME-0001); the name is now empty like the oracle.
+        let mut base = TypeBase::new(String::new(), 0, TypeMetatype::Spacebase);
         // Ghidra spacebase is a core type (cached on the architecture).
         base.flags |= type_flags::CORETYPE;
         let sb = TypeSpacebase {

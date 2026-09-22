@@ -983,6 +983,23 @@ same port (TYPEFACTORY-CODEFLAGS-DECODE-0001 residual).
   isPtrsubMatching 守卫）由此获得 subtype 答案。去重键不变
   （`__spacebase_{ws}_{frame}`），首次构造定格快照。
 
+## 2026-09-23：spacebase 类型名清空（SPACEBASE-SYMNAME-0001）
+
+`get_type_spacebase` 此前把合成去重键 `__spacebase_{ws}_{frame}` 同时当作
+TypeSpacebase 的**类型名**，8 个挂载函数的 SP 输入声明泄漏为
+`__spacebase_1_<frame> *in_RSP`。核实 oracle：`TypeSpacebase(AddrSpace*,
+const Address&, Architecture*)`（type.hh:735-736）基类构造
+`Datatype(0,1,TYPE_SPACEBASE)`（type.hh:214）**name 为空**——匿名类型；
+`PrintC::buildTypeStack`（printc.cc:143-163）在匿名非 PTR/ARRAY/CODE 类型处
+终止，`pushTypeStart` 匿名分支（printc.cc:280-285）经 `genericTypeName`
+（printc.cc:3373）拼出 **`BADSPACEBASE`**（cc:3387-3389，无 size 后缀）。
+现 Rugra 侧 `TypeBase::new(String::new(), ...)` 与 oracle 同为空名，
+printc 的 `push_type_start_opt` 匿名分支 → `generic_type_name` →
+`BADSPACEBASE *in_RSP`。合成键仅存续为 name-keyed BTreeMap 的去重槽位
+（Ghidra 经 findAdd 的 compare 树去重，type.cc:3996/3045-3055）。curl E2E
+前后差分 = 仅 8 行声明行改名，defects=0/numbering=0、skeleton 2993==基线；
+httpd 2339==基线；glob_set/glob_range/glob_url 与 next_url 输出零行变化。
+
 ## 2026-08-28：PrototypePieces 借用适配
 
 本文件的两处测试构造改为传入 `Option<&Arc<Datatype>>`，与 fspec 的
