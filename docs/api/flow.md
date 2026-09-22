@@ -712,3 +712,13 @@ E2E 零变化。hasModel（truncate case 的 setInternal 分歧）与 spec name
   `follow_flow_range(0, u64::MAX)`（examples 级 env 门控,默认 off）;
   stage projection 的 META `load_mode` 在同一门下发 `single_function_bfd`
   （STAGE_BISECT_SPEC_1204.md D10）。
+
+## 2026-09-22：follow_flow_range 尾部接线 switchOverJumpTables
+
+- `follow_flow_range` 在 `flow.generate_blocks()` 成功后调用
+  `Funcdata::switch_over_jump_tables(&*flow.fd, &flow)`（funcdata_op.cc:777-778：
+  `flags |= blocks_generated; switchOverJumpTables(flow);` 同位同序）。恢复出的
+  跳表地址→出边槽映射（block2addr）在 FlowInfo 借用结束前完成；此后
+  ActionSwitchNorm 的 default_block 派生、BlockStruct 阶段的
+  `switch_case_basic_coords` isdefault 判定与 label 管道
+  （BlockSwitch::finalizePrinting）均消费该数据。

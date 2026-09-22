@@ -9379,21 +9379,28 @@ impl Funcdata {
         Ok(Some(trial_jt))
     }
 
-    // Ghidra: funcdata_block.cc:679 Funcdata::switchOverJumpTables
+    // Ghidra: funcdata_block.cc:678 Funcdata::switchOverJumpTables
     /// For each jump-table, for each address, compute the corresponding basic
-    /// block index and the default branch. Faithful to
-    /// `Funcdata::switchOverJumpTables` (funcdata_block.cc:679-686).
+    /// block out-edge position (populating `JumpTable::block2addr`) and derive
+    /// the default branch. Faithful to
+    /// `Funcdata::switchOverJumpTables` (funcdata_block.cc:678-685), called at
+    /// the end of `followFlow` (funcdata_op.cc:777-778).
     ///
-    /// RUGRA-GAP: Ghidra delegates to `JumpTable::switchOver(flow)` which
-    /// consults `FlowInfo`'s address→op map. Rugra's `JumpTable` has no
-    /// `switch_over` yet; this stub iterates the tables so the call site is
-    /// preserved, and the per-table switchover is a no-op until FlowInfo
-    /// lands.
-    pub fn switch_over_jump_tables(&mut self) {
-        for jt in &self.jump_tables {
-            // RUGRA-GAP: jt->switchOver(flow);
-            let _ = jt;
+    /// RUGRA-GLUE: associated-function form taking the `Funcdata` by shared
+    /// reference — the only `&mut Funcdata` during flow following is owned by
+    /// the `FlowInfo`, so the oracle's member form cannot borrow both. Each
+    /// table is still mutated through its `Arc<RwLock<JumpTable>>`, exactly
+    /// like Ghidra mutates through its `jumpvec` pointers.
+    pub fn switch_over_jump_tables(
+        fd: &Funcdata, flow: &crate::flow::FlowInfo,
+    ) -> crate::error::Result<()> {
+        for jt in &fd.jump_tables {
+            jt.write()
+                .unwrap()
+                .switch_over(flow)
+                .map_err(|e| crate::error::Error::Lowlevel(e.message().to_string()))?;
         }
+        Ok(())
     }
 
     // =========================================================================

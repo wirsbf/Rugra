@@ -4489,6 +4489,94 @@ impl JumpTable {
         self.default_is_folded
     }
 
+    // Ghidra: jumptable.cc:2337 JumpTable::block2Position
+    /// Given a specific basic-block, figure out which edge out of the switch
+    /// block hits it. The position is the switch basic block's out-edge slot,
+    /// which is deduped and may include guard destinations (unlike the address
+    /// table index). Ghidra throws `LowlevelError("Requested block, not in
+    /// jumptable")` at cc:2346-2347 when no edge hits the block; Rugra returns
+    /// `None` and the callers ([`num_indices_by_block`],
+    /// [`get_index_by_block`]) degrade to "no indices", because every
+    /// reachable caller passes a `CaseOrder::basicblock` that acquired its
+    /// in-edge from the switch block at construction time.
+    fn block2_position(
+        &self, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) -> Option<i32> {
+        // cc:2343: parent = indirect->getParent()
+        let parent = self
+            .indirect
+            .as_ref()
+            .and_then(|o| {
+                o.read()
+                    .unwrap()
+                    .parent
+                    .as_ref()
+                    .and_then(|p| p.upgrade())
+            });
+        let parent = parent?;
+        let b = bl.read().unwrap();
+        // cc:2344-2345: for(position=0;position<bl->sizeIn();++position)
+        //   if (bl->getIn(position) == parent) break;
+        for position in 0..b.size_in() {
+            if let Some(e) = b.get_in(position) {
+                if Arc::ptr_eq(&e.point, &parent) {
+                    // cc:2348: return bl->getInRevIndex(position);
+                    return Some(e.reverse_index);
+                }
+            }
+        }
+        None
+    }
+
+    // Ghidra: jumptable.cc:2438 JumpTable::numIndicesByBlock
+    /// Return the number of address table entries that target the given
+    /// basic-block (cc:2441-2444: the width of the `equal_range` over
+    /// `block2addr` compared by `IndexPair::compareByPosition`).
+    pub fn num_indices_by_block(
+        &self, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    ) -> usize {
+        let Some(pos) = self.block2_position(bl) else {
+            return 0;
+        };
+        // equal_range(lower, upper) with compareByPosition (block_position only).
+        let lower = self
+            .block2addr
+            .partition_point(|p| p.block_position < pos);
+        let upper = self
+            .block2addr
+            .partition_point(|p| p.block_position <= pos);
+        upper - lower
+    }
+
+    // Ghidra: jumptable.cc:2485 JumpTable::getIndexByBlock
+    /// Get the address table index of the i-th entry corresponding to the
+    /// given basic-block. Ghidra throws
+    /// `LowlevelError("Could not get jumptable index for block")` (cc:2499)
+    /// when the block has no i-th entry; Rugra returns `None`.
+    pub fn get_index_by_block(
+        &self, bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>, i: usize,
+    ) -> Option<usize> {
+        let Some(pos) = self.block2_position(bl) else {
+            return None;
+        };
+        let mut count = 0usize;
+        // cc:2490: lower_bound(block2addr.begin(), block2addr.end(), val, compareByPosition)
+        let mut it = self
+            .block2addr
+            .partition_point(|p| p.block_position < pos);
+        while it < self.block2addr.len() {
+            if self.block2addr[it].block_position == pos {
+                // cc:2493-2494: if (count == i) return (*iter).addressIndex;
+                if count == i {
+                    return Some(self.block2addr[it].address_index as usize);
+                }
+                count += 1;
+            }
+            it += 1;
+        }
+        None
+    }
+
     // Ghidra: jumptable.hh:614 JumpTable::getLabelByIndex
     /// Given a case index, get its label.
     pub fn get_label_by_index(&self, index: usize) -> u64 {
@@ -4952,6 +5040,105 @@ impl JumpTable {
                 }
             }
         }
+    }
+
+    // Ghidra: jumptable.cc:2528 JumpTable::switchOver
+    /// Convert the absolute addresses of the address table into out-edge
+    /// positions (`block2addr`) of the switch basic block, then derive the
+    /// last block and the default block. Faithful to `switchOver`
+    /// (jumptable.cc:2528-2569); called once per table at the end of flow
+    /// following (`Funcdata::followFlow`, funcdata_op.cc:778).
+    pub fn switch_over(
+        &mut self, flow: &crate::flow::FlowInfo,
+    ) -> std::result::Result<(), JumpTableRecoveryError> {
+        let unlinked =
+            || JumpTableRecoveryError::Lowlevel { message: "Jumptable destination not linked".to_string() };
+        self.block2addr.clear();
+        self.block2addr.reserve(self.addresstable.len());
+        // cc:2537: parent = indirect->getParent();
+        let parent = self
+            .indirect
+            .as_ref()
+            .and_then(|o| {
+                o.read()
+                    .unwrap()
+                    .parent
+                    .as_ref()
+                    .and_then(|p| p.upgrade())
+            });
+        let Some(parent) = parent else {
+            // Ghidra dereferences indirect unconditionally; an unlinked
+            // indirect op cannot occur past stageJumpTable.
+            return Err(unlinked());
+        };
+        for i in 0..self.addresstable.len() {
+            let addr = self.addresstable[i].clone();
+            // cc:2541: op = flow.target(addr);
+            let Some(op) = flow.target(addr) else {
+                return Err(unlinked());
+            };
+            // cc:2542: tmpbl = op->getParent();
+            let tmpbl = op
+                .0
+                .read()
+                .unwrap()
+                .parent
+                .as_ref()
+                .and_then(|p| p.upgrade());
+            let Some(tmpbl) = tmpbl else {
+                return Err(unlinked());
+            };
+            // cc:2543-2544: find the out-edge slot of the switch block
+            // reaching tmpbl.
+            let mut pos: Option<usize> = None;
+            {
+                let p = parent.read().unwrap();
+                for slot in 0..p.size_out() {
+                    if let Some(e) = p.get_out(slot) {
+                        if Arc::ptr_eq(&e.point, &tmpbl) {
+                            pos = Some(slot);
+                            break;
+                        }
+                    }
+                }
+            }
+            let Some(pos) = pos else {
+                // cc:2545-2546: throw LowlevelError("Jumptable destination not linked");
+                return Err(unlinked());
+            };
+            // cc:2547: block2addr.push_back(IndexPair(pos,i));
+            self.block2addr.push(IndexPair::new(pos as i32, i as i32));
+        }
+        // cc:2549: lastBlock = block2addr.back().blockPosition;
+        if let Some(back) = self.block2addr.last() {
+            self.last_block = back.block_position;
+        }
+        // cc:2550: sort(block2addr.begin(),block2addr.end()) —
+        // IndexPair::operator< (jumptable.hh:628): position, then addressIndex.
+        self.block2addr.sort_by(|a, b| {
+            (a.block_position, a.address_index).cmp(&(b.block_position, b.address_index))
+        });
+        // cc:2552-2568: defaultBlock scan — the out-edge position with the
+        // most address table entries (only when more than one).
+        self.default_block = -1;
+        let mut maxcount = 1;
+        let mut iter = 0usize;
+        while iter < self.block2addr.len() {
+            let cur_pos = self.block2addr[iter].block_position;
+            let mut next = iter;
+            let mut count = 0;
+            while next < self.block2addr.len() && self.block2addr[next].block_position == cur_pos
+            {
+                count += 1;
+                next += 1;
+            }
+            iter = next;
+            if count > maxcount {
+                maxcount = count;
+                self.default_block = cur_pos;
+            }
+        }
+        Ok(())
     }
 
     // Ghidra: jumptable.cc:2594 JumpTable::trivialSwitchOver

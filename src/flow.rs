@@ -3362,7 +3362,17 @@ pub fn follow_flow_range(
     flow.generate_ops(entry)?;
     // funcdata_op.cc:776: generateBlocks is responsible for the official
     // entry identity/flag, ordered edge replay, and synthetic entry creation.
-    flow.generate_blocks()
+    flow.generate_blocks()?;
+    // funcdata_op.cc:777-778: `flags |= blocks_generated;
+    // switchOverJumpTables(flow);` — map every recovered jump-table address
+    // to its switch out-edge slot (JumpTable::switchOver, jumptable.cc:2528)
+    // before the FlowInfo borrow ends. RUGRA-GLUE: associated-function form
+    // (Funcdata is exclusively borrowed by this FlowInfo).
+    {
+        let fd_shared: &crate::funcdata::Funcdata = &*flow.fd;
+        crate::funcdata::Funcdata::switch_over_jump_tables(fd_shared, &flow)?;
+    }
+    Ok(())
 }
 
 // ===================== Injection helpers (RUGRA-GLUE) =====================

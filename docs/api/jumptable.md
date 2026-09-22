@@ -617,3 +617,25 @@ Arc=同线程重入死锁;模型存强 Arc=与 `JumpTable::jmodel` 成环泄漏;
 gp 864/0/0、glob_set 90/0/0 保持；httpd 与基线逐字节相同；单线程
 cargo test 17 failed 与 FUNCDATA-TESTS-FLAKY-0001 已知集相同（复核抽测
 单测隔离全过）,新增=0。
+
+## 2026-09-22：switchOver + block→index 查询四件（JUMPTABLE-TABLEAPI-0001 数据层）
+
+label 管道数据层落地（wt/sb-jtlabel）：
+- `switch_over(&mut self, flow: &FlowInfo)`（jumptable.cc:2528-2569）：addresstable
+  逐地址经 `FlowInfo::target` 解析目标 op→基本块，在 switch 基本块出边里找槽位，
+  填 `block2addr: Vec<IndexPair>`；`last_block`=末条目槽位；按
+  `IndexPair::operator<`（hh:628, position→addressIndex）排序；defaultBlock 扫描
+  取重复条目数>1 的槽位。目标未链接 → `JumpTableRecoveryError::Lowlevel`
+  （"Jumptable destination not linked"，cc:2545-2546 同语义传播）。
+- `block2_position(&self, bl)`（jumptable.cc:2337-2349，private）：bl 的入边里找
+  indirect op 父块，返回 reverse_index（switch 出边槽）。Ghidra throw 处 Rust 返回
+  None，两个查询调用方据此降级为 0 indices（构造期入边恒在）。
+- `num_indices_by_block(&self, bl)`（jumptable.cc:2438-2445）：equal_range
+  （compareByPosition）宽度，`partition_point` 双侧实现。
+- `get_index_by_block(&self, bl, i)`（jumptable.cc:2485-2500）：lower_bound 起顺序
+  扫描计数，返回 addressIndex；Ghidra throw（cc:2499）处返回 None。
+
+调用接线：`Funcdata::switch_over_jump_tables`（funcdata_block.cc:678）由
+`follow_flow_range` 在 `generate_blocks()` 后调用（funcdata_op.cc:777-778 同位），
+见 docs/api/funcdata.md 与 docs/api/flow.md。后续 finalizePrinting 消费链见
+docs/api/block.md / blockaction.md。

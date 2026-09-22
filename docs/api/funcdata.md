@@ -2249,3 +2249,12 @@ funcdata_varnode.cc:269-292 的 OPACTION_DEBUG 钩子位;守卫先行、变更�
 触发,防幻影记录;锁纪律见 drillobserve.md)。env 门控
 `RUGRA_STAGE_DRILL`,未设置时为 no-op,行为与既往逐字节一致
 (验证见 docs/api/action.md 同日条目)。
+
+## 2026-09-22：switchOverJumpTables 真身（funcdata_block.cc:678）
+
+- `switch_over_jump_tables(fd: &Funcdata, flow: &FlowInfo)`（关联函数形态）：
+  遍历 `fd.jump_tables` 逐表 `jt.write().switch_over(flow)`。原 `&mut self` stub
+  （RUGRA-GAP 注释、零调用者）删除。RUGRA-GLUE：flow 跟随期唯一 `&mut Funcdata`
+  由 `FlowInfo` 持有，oracle 的成员函数形态无法同时借用两侧，故取共享引用 +
+  `Arc<RwLock<JumpTable>>` 写锁内变更（与 Ghidra 经 jumpvec 指针改写一致）。
+  错误经 `Error::Lowlevel` 传播（followFlow 同语义）。
