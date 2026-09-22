@@ -149,6 +149,13 @@ Test the stored model pointer/`Arc`, independently of its printable name.
 Look up a full address-space/range call effect through the local override or
 the shared model fallback.
 
+### `pub fn try_has_effect(&self, space: AddressSpace, offset: u64, size: i32) -> Option<EffectType>`
+
+Non-panicking form of `has_effect` for input registration
+(`Funcdata::setInputVarnode` tail, funcdata_varnode.cc:365). `None` (no
+model and no local override) has no Ghidra counterpart and skips the
+effect-flag writes. Added 2026-09-23 (SB-MATCHURL-ORD70-0001).
+
 ### `pub fn effect_iter(&self) -> &[EffectRecord]`
 
 Iterate the effective local-override or shared-model effect list.

@@ -106,6 +106,18 @@ isInput）与去重臂（cc:356-357 返回既有 input）不跑，仅银行真�
 varnode 跑（`Arc::ptr_eq` 判定）；`set_varnode_properties` 的 `isMapped` 守卫使
 创建点已挂符号尾时为 no-op——与 oracle 的双重查询逐点一致。
 
+## 2026-09-23：`set_input_varnode` 补 cc:365-370 效果尾（SB-MATCHURL-ORD70-0001）
+
+紧接属性遍，oracle 还查询 `funcp.hasEffect(vn->getAddr(), vn->getSize())` 并按
+记录写标志（funcdata_varnode.cc:365-370）：`unaffected` → `set_unaffected()`；
+`return_address` → `set_unaffected() + set_return_address()`（return_address
+寄存器在函数过程中也应不受影响）。Rugra 侧查询走新增的
+`FuncProto::try_has_effect`（`has_effect` 的非 panic 形态——无模型且无效果列表
+的裸测试 FuncProto 在 Ghidra 无对应物，None 跳过标志写）。该标志尾是
+`ActionRestrictLocal` 循环 2（coreaction.cc:1988 `vn->isUnaffected()`）与
+HighVariable 合并偏好（variable.cc:462）的数据源。
+
+
 ## 2026-09-22:`op_stack_load`/`op_stack_store` 空间注记宽度 1→8(FUNCDATA-SPACEID-WIDTH-0001)
 
 `newVarnodeSpace`(funcdata_varnode.cc:190-198)用 `sizeof(spc)`(AddrSpace\*
@@ -1036,7 +1048,8 @@ PcodeOpRaw
 - `set_input_varnode(vn)` — `Funcdata::setInputVarnode` (funcdata_varnode.cc:340)：将
   varnode 提升为函数输入（overlap 去重 + `vbank.set_input`）。**2026-07-05 新增**，
   用于 heritage rename 的 empty-stack promotion（heritage.cc:2502/2512）。委托给
-  `VarnodeBank::set_input_varnode`；保守子集（省略 ProtoModel 效果属性设置）。
+  `VarnodeBank::set_input_varnode`；含 cc:363-364 属性遍与 cc:365-370 效果尾
+  （unaffected/return_address 标志，经 `FuncProto::try_has_effect`）。
 - `delete_varnode(vn) -> Result<()>` — inline `Funcdata::deleteVarnode`
   （funcdata.hh:294）：委托给 checked `VarnodeBank::destroy_varnode` 并传播
   `Deleting integrated varnode`/ownership 错误。用于 heritage rename 替换后的死

@@ -410,6 +410,31 @@ impl FuncProto {
             .has_effect(addr_space, addr_offset, size)
     }
 
+    // RUGRA-GLUE: non-panicking form of FuncProto::hasEffect for input
+    /// registration (Funcdata::setInputVarnode tail, funcdata_varnode.cc:365).
+    /// A FuncProto with neither a prototype-local effect list nor a bound
+    /// model has no Ghidra counterpart — Ghidra's model pointer is always
+    /// live once a proto is configured, so `None` (skip the effect flag
+    /// writes) is only reachable from bare test FuncProtos.
+    pub fn try_has_effect(
+        &self,
+        addr_space: AddressSpace,
+        addr_offset: u64,
+        size: i32,
+    ) -> Option<EffectType> {
+        if !self.effects.is_empty() {
+            return Some(ProtoModelFull::lookup_effect(
+                &self.effects,
+                addr_space,
+                addr_offset,
+                size,
+            ));
+        }
+        self.model
+            .as_ref()
+            .map(|model| model.has_effect(addr_space, addr_offset, size))
+    }
+
     // Ghidra: fspec.hh:1564 FuncProto::getMaxInputDelay
     /// Return the maximum heritage delay of an input parameter resource.
     pub fn get_max_input_delay(&self) -> i32 {

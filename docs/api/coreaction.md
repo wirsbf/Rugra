@@ -553,12 +553,19 @@ Corresponds to Ghidra's `ActionCse`
 Restructure the local-variable scope from stack varnodes. Faithful to
 `ActionRestructureVarnode` (coreaction.cc:2274).
 
-- `apply(&mut fd)`: 构建 `crate::varmap::ScopeLocal`（调用
-  `restructure_varnode`）并存入 `fd.scope`，供 printc 的
-  `get_stack_variable_name` 查询。Ghidra 的 `syncVarnodesWithSymbols`
-  已折进 ScopeLocal 构建（待 HighVariable↔Symbol 链接后可拆出独立 pass）。
-- Ghidra 的 `aliasyes`（首遍跳过别名计算）当前在 Rugra 全量执行
-  `mark_unaliased`；多遍驱动可后续门控。
+- `apply(&mut fd)`: **2026-09-23 SB-MATCHURL-ORD70-0001 起 scope 跨趟持久**：
+  首趟构造 `crate::varmap::ScopeLocal`（播种 input-locked 参数符号、
+  `set_arch_lookup`、funcdata.cc:70 生命周期点的 `reset_local_window`）存入
+  `fd.scope`，此后每趟复用（Ghidra 的 ScopeLocal 是 per-Funcdata 对象，
+  funcdata.cc:63-71 构造一次跨所有 pass 存活——持久化保住了
+  `markNotMapped` 的窗口窄化（buildInputFromTrialls fspec.cc:5737 的
+  outgoing-param 槽 + ActionRestrictLocal 的 saved-reg 槽），下一趟
+  `add_range` 的 `range.inRange` 门（varmap.cc:902）才能丢弃这些槽的
+  hint）。每趟调用 `restructure_varnode(fd, aliasyes)` 后跑
+  `fd.sync_varnodes_with_symbols(false, aliasyes)`。
+- `aliasyes = (numpass != 0)`（coreaction.cc:2279）已穿透：第 0 趟跳过
+  `mark_unaliased`/`check_unaliased_return`（varmap.cc:1280-1282）；
+  `annotate_raw_stack_ptr` 不受门（cc:1284-1285）。
 
 测试：`coreaction::tests`（2 个）验证 scope 被构建、get_name 正确。
 
@@ -1189,6 +1196,24 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 - Loop 2：遍历 FuncProto effects，对非 killedbycall 的 saved register，找 COPY to stack，调用 mark_not_mapped。
 - 使用 collect-then-apply 模式避免借用冲突。
 - 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
+
+### 2026-09-23：ActionRestrictLocal 重写为逐行忠实版（SB-MATCHURL-ORD70-0001）
+
+旧实现的两个循环均偏离 oracle：
+- Loop 1 用 `p.address.as_u64() > 0x7FFF_FFFF` 启发式判"栈参数"（Ghidra 是
+  `addr.getSpace()->getType() != IPTR_SPACEBASE` 空间类型判定，coreaction.cc:1977），
+  且偏移未做 wrapOffset 语义。现按 `p.address_space == AddressSpace::Stack` 判定 +
+  i128 rem_euclid(2^64) 包裹（fspec.cc:1978 wrapOffset）。
+- Loop 2 遍历全 bank 的 COPY、按 offset/size 匹配输入、并把 REGISTER 空间的输出
+  当作标记目标。Ghidra 是 `data.findVarnodeInput(size, address)` 精确输入查找 +
+  `vn->isUnaffected()` 门（cc:1987-1988）+ 走输入的 descend 找 COPY（cc:1991-1993）
+  + `isUnaffectedStorage(outvn)`（varmap.hh:244：输出在 scope 的栈空间）才
+  markNotMapped 栈槽（cc:1995-1997）。is_unaffected 数据源 = setInputVarnode 的
+  hasEffect 尾（本 commit 补齐，funcdata_varnode.cc:365-370）。
+验证：match_url Phase 2 投影 ordinal 70 差异清除（RuleIndirectCollapse 8=8），
+oracle 侧 ActionRestrictLocal 产生的 6 条 savedreg markNotMapped（-0x58/-0x50/
+-0x20/-0x18/-0x10/-0x8）在 Rugra 侧同位复现。
+
 
 ### 2026-06-29（续 4）：ActionDirectWrite L1→L2（coreaction.cc:1350-1432）
 - Phase 1：遍历所有 varnodes，清除 direct_write 标志。收集初始 worklist：

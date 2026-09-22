@@ -859,8 +859,9 @@ impl Funcdata {
     /// `Funcdata::setInputVarnode` (funcdata_varnode.cc:340-373).
     ///
     /// Thin wrapper over `VarnodeBank::set_input_varnode` which ports
-    /// steps (1)+(2)+(3) of Ghidra (early-out / overlap dedup / setInput).
-    /// Step (4) ProtoModel effect properties omitted (conservative subset).
+    /// steps (1)+(2)+(3) of Ghidra (early-out / overlap dedup / setInput)
+    /// plus step (4), the ProtoModel effect tail (unaffected /
+    /// return_address flag writes, funcdata_varnode.cc:365-370).
     pub fn set_input_varnode(
         &mut self,
         vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
@@ -876,6 +877,29 @@ impl Funcdata {
         // no-op when the creating site's newVarnode tail already attached.
         if !already_input && std::sync::Arc::ptr_eq(&promoted, &vn) {
             self.set_varnode_properties(&promoted);
+            // cc:365-370: the ProtoModel effect query tail. Ghidra reads
+            // `funcp.hasEffect(vn->getAddr(),vn->getSize())` and sets
+            // Varnode::unaffected (and return_address) from the record.
+            // try_has_effect is the Rust-glue non-panicking form: a FuncProto
+            // with neither an effect list nor a bound model has no Ghidra
+            // counterpart (Ghidra's model pointer is always live by the
+            // time inputs register), so None skips the flag writes.
+            let (space, offset, size) = {
+                let guard = promoted.read().unwrap();
+                (guard.get_space(), guard.get_offset(), guard.get_size())
+            };
+            if let Some(effecttype) = self.funcp.try_has_effect(space, offset, size as i32) {
+                let mut guard = promoted.write().unwrap();
+                if effecttype == crate::fspec::EffectType::Unaffected {
+                    guard.set_unaffected();
+                }
+                if effecttype == crate::fspec::EffectType::ReturnAddress {
+                    // Should be unaffected over the course of the function
+                    // (funcdata_varnode.cc:369).
+                    guard.set_unaffected();
+                    guard.set_return_address();
+                }
+            }
         }
         promoted
     }
