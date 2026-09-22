@@ -1547,9 +1547,13 @@ impl Heritage {
                         // R9-F2: newVarnode's property tail
                         // (funcdata_varnode.cc:148-165) applies the range
                         // flags before the caller's setActiveHeritage.
+                        // heritage.cc:1502 routes through Funcdata::newVarnode,
+                        // whose symbol tail attaches the typelocked global's
+                        // DWARF type (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
                         let vn = fd
                             .vbank
                             .create_with_space(size as usize, space, addr.as_u64());
+                        fd.set_varnode_properties(&vn);
                         Heritage::apply_new_varnode_flags(fd, &vn);
                         vn.write().unwrap().set_active_heritage();
                         let num_in = call_op.0.read().unwrap().num_input();
@@ -1698,6 +1702,11 @@ impl Heritage {
                 &sub_op.0,
             );
             sub_op.0.write().unwrap().output = Some(ret_val.clone());
+            // heritage.cc:1634 routes through Funcdata::newVarnodeOut, whose
+            // symbol tail (usepoint = op->getAddr(), mirrored by
+            // get_use_point on the def set above) attaches a matching symbol
+            // entry (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+            fd.set_varnode_properties(&ret_val);
             Heritage::apply_new_varnode_flags(fd, &ret_val);
             // cc:1635: invn->setActiveHeritage()
             invn.write().unwrap().set_active_heritage();
@@ -1818,6 +1827,11 @@ impl Heritage {
                 addr.as_u64(),
                 &copyop.0);
             copyop.0.write().unwrap().output = Some(vn.clone());
+            // heritage.cc:1682 routes through Funcdata::newVarnodeOut, whose
+            // symbol tail runs after the setOutput wiring with usepoint =
+            // op->getAddr() (get_use_point over the def set above)
+            // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+            fd.set_varnode_properties(&vn);
             Heritage::apply_new_varnode_flags(fd, &vn);
             // cc:1683-1684: vn->setAddrForce(); vn->setActiveHeritage()
             vn.write().unwrap().set_addr_force();
@@ -1869,6 +1883,10 @@ impl Heritage {
         let vn1 = fd.vbank.create_with_space(
             size as usize, vn.read().unwrap().address_space, addr.as_u64(),
         );
+        // heritage.cc:391 routes through Funcdata::newVarnode, whose symbol
+        // tail attaches the typelocked global's DWARF type before the flags
+        // fold (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+        fd.set_varnode_properties(&vn1);
         Heritage::apply_new_varnode_flags(fd, &vn1);
         // cc:393: overlap = vn->overlap(addr, size) — endian-aware
         // (Varnode::overlap, varnode.cc:217-228). R9-F1: former inline
@@ -1992,10 +2010,18 @@ impl Heritage {
                     &newop.0,
                 );
                 newop.0.write().unwrap().output = Some(most_out.clone());
+                // heritage.cc:440 routes through Funcdata::newVarnodeOut,
+                // whose symbol tail (usepoint = op->getAddr()) runs after the
+                // setOutput wiring (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+                fd.set_varnode_properties(&most_out);
                 Heritage::apply_new_varnode_flags(fd, &most_out);
                 let big = fd
                     .vbank
                     .create_with_space(size as usize, space, addr.as_u64());
+                // heritage.cc:441 routes through Funcdata::newVarnode, whose
+                // symbol tail attaches the typelocked global's DWARF type
+                // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+                fd.set_varnode_properties(&big);
                 Heritage::apply_new_varnode_flags(fd, &big);
                 big.write().unwrap().set_active_heritage();
                 fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
@@ -2042,10 +2068,18 @@ impl Heritage {
                     overlap as usize, space, piece_addr.as_u64(), &newop.0,
                 );
                 newop.0.write().unwrap().output = Some(least_out.clone());
+                // heritage.cc:461 routes through Funcdata::newVarnodeOut,
+                // whose symbol tail runs after the setOutput wiring
+                // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+                fd.set_varnode_properties(&least_out);
                 Heritage::apply_new_varnode_flags(fd, &least_out);
                 let big = fd
                     .vbank
                     .create_with_space(size as usize, space, addr.as_u64());
+                // heritage.cc:462 routes through Funcdata::newVarnode, whose
+                // symbol tail attaches the typelocked global's DWARF type
+                // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+                fd.set_varnode_properties(&big);
                 Heritage::apply_new_varnode_flags(fd, &big);
                 big.write().unwrap().set_active_heritage();
                 fd.op_set_opcode(&newop, OpCode::CPUI_SUBPIECE);
@@ -2075,6 +2109,10 @@ impl Heritage {
                 (overlap + vn_size) as usize, space, mid_addr.as_u64(), &newop.0,
             );
             newop.0.write().unwrap().output = Some(mid_out.clone());
+            // heritage.cc:473/475 route through Funcdata::newVarnodeOut,
+            // whose symbol tail runs after the setOutput wiring
+            // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+            fd.set_varnode_properties(&mid_out);
             Heritage::apply_new_varnode_flags(fd, &mid_out);
             fd.op_set_opcode(&newop, OpCode::CPUI_PIECE);
             // cc:477-478: vn is the most significant input.
@@ -2096,6 +2134,10 @@ impl Heritage {
                 fd.vbank
                     .create_def_with_space(size as usize, space, addr.as_u64(), &newop.0);
             newop.0.write().unwrap().output = Some(big_out.clone());
+            // heritage.cc:485 routes through Funcdata::newVarnodeOut, whose
+            // symbol tail runs after the setOutput wiring
+            // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+            fd.set_varnode_properties(&big_out);
             Heritage::apply_new_varnode_flags(fd, &big_out);
             fd.op_set_opcode(&newop, OpCode::CPUI_PIECE);
             fd.op_set_input(
@@ -2725,6 +2767,10 @@ impl Heritage {
             let big = fd
                 .vbank
                 .create_with_space(size as usize, vn_space, addr.as_u64());
+            // heritage.cc:288 routes through Funcdata::newVarnode, whose
+            // symbol tail attaches the typelocked global's DWARF type
+            // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+            fd.set_varnode_properties(&big);
             big.write().unwrap().set_active_heritage();
             let off_const = fd.new_constant(4, offset);
             // cc:292-293: opSetOpcode(SUBPIECE) + opSetAllInput
@@ -2943,6 +2989,10 @@ impl Heritage {
         let whole_vn = fd
             .vbank
             .create_with_space(size as usize, space, addr.as_u64());
+        // heritage.cc:1225 routes through Funcdata::newVarnode, whose symbol
+        // tail attaches the typelocked global's DWARF type
+        // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+        fd.set_varnode_properties(&whole_vn);
         whole_vn.write().unwrap().set_active_heritage();
         fd.op_set_input(&subpiece_op, whole_vn, 0);
         // cc:1228: opSetInput(subpieceOp, newConstant(4, truncateAmount), 1)
@@ -3283,6 +3333,12 @@ impl Heritage {
             let p1 = &join_rec.pieces[1];
             let mosthalf = fd.vbank.create_with_space(p0.size, p0.space, p0.offset);
             let leasthalf = fd.vbank.create_with_space(p1.size, p1.space, p1.offset);
+            // heritage.cc:2095/2100 route through Funcdata::newVarnode's
+            // explicit-space overload, whose symbol tail (usepoint =
+            // invalid Address of cc:162) runs on each piece before the
+            // PIECE wiring (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+            fd.set_varnode_properties(&mosthalf);
+            fd.set_varnode_properties(&leasthalf);
             let op_addr = read_op.read().unwrap().get_addr();
             let concat = fd.new_op(2, op_addr);
             fd.op_set_opcode(&concat, OpCode::CPUI_PIECE);
@@ -3324,8 +3380,12 @@ impl Heritage {
             // SUBPIECE for most significant piece (offset = p1.size)
             let split0 = fd.new_op(2, op_addr);
             fd.op_set_opcode(&split0, OpCode::CPUI_SUBPIECE);
-            split0.0.write().unwrap().output = Some(
-                fd.vbank.create_with_space(p0.size, p0.space, p0.offset));
+            let split0_out = fd.vbank.create_with_space(p0.size, p0.space, p0.offset);
+            // heritage.cc:2095 (via splitJoinLevel, reused as SUBPIECE output
+            // by splitJoinWrite cc:2197): newVarnode's symbol tail runs on
+            // the piece (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+            fd.set_varnode_properties(&split0_out);
+            split0.0.write().unwrap().output = Some(split0_out);
             fd.op_set_input(&split0, vn.clone(), 0);
             let off_const0 = fd.new_constant(4, p1.size as u64);
             fd.op_set_input(&split0, off_const0, 1);
@@ -3334,8 +3394,12 @@ impl Heritage {
             // SUBPIECE for least significant piece (offset = 0)
             let split1 = fd.new_op(2, op_addr);
             fd.op_set_opcode(&split1, OpCode::CPUI_SUBPIECE);
-            split1.0.write().unwrap().output = Some(
-                fd.vbank.create_with_space(p1.size, p1.space, p1.offset));
+            let split1_out = fd.vbank.create_with_space(p1.size, p1.space, p1.offset);
+            // heritage.cc:2100 (via splitJoinLevel, reused as SUBPIECE output
+            // by splitJoinWrite cc:2208): newVarnode's symbol tail runs on
+            // the piece (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+            fd.set_varnode_properties(&split1_out);
+            split1.0.write().unwrap().output = Some(split1_out);
             fd.op_set_input(&split1, vn.clone(), 0);
             let off_const1 = fd.new_constant(4, 0u64);
             fd.op_set_input(&split1, off_const1, 1);
@@ -3387,14 +3451,22 @@ impl Heritage {
                 // cc:2095-2104: create mosthalf and leasthalf
                 let mosthalf = if numinhalf == 1 {
                     let p = joinrec.get_piece(recnum);
-                    fd.vbank.create_with_space(p.size, p.space, p.offset)
+                    let vn = fd.vbank.create_with_space(p.size, p.space, p.offset);
+                    // heritage.cc:2095: newVarnode's symbol tail on the
+                    // piece (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+                    fd.set_varnode_properties(&vn);
+                    vn
                 } else {
                     fd.new_unique(mh_size)
                 };
                 let lh_size = curvn_size - mh_size;
                 let leasthalf = if j - recnum == 2 {
                     let p = joinrec.get_piece(recnum + 1);
-                    fd.vbank.create_with_space(p.size, p.space, p.offset)
+                    let vn = fd.vbank.create_with_space(p.size, p.space, p.offset);
+                    // heritage.cc:2100: newVarnode's symbol tail on the
+                    // piece (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+                    fd.set_varnode_properties(&vn);
+                    vn
                 } else {
                     fd.new_unique(lh_size)
                 };
@@ -3433,6 +3505,10 @@ impl Heritage {
         let bigvn = fd
             .vbank
             .create_with_space(vdata.size, vdata.space, vdata.offset);
+        // heritage.cc:2241 routes through Funcdata::newVarnode's
+        // explicit-space overload, whose symbol tail runs on the piece
+        // before the FLOAT2FLOAT wiring (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+        fd.set_varnode_properties(&bigvn);
         // cc:2243: opSetOpcode(FLOAT_FLOAT2FLOAT)
         fd.op_set_opcode(&trunc, OpCode::CPUI_FLOAT_FLOAT2FLOAT);
         // cc:2244: opSetOutput(trunc, vn)
@@ -3522,6 +3598,10 @@ impl Heritage {
         if size_front > 0 {
             let new_input = fd.vbank
                     .create_with_space(size as usize, AddressSpace::Stack, addr.as_u64());
+            // heritage.cc:1332 routes through Funcdata::newVarnode, whose
+            // symbol tail runs before setActiveHeritage
+            // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+            fd.set_varnode_properties(&new_input);
             new_input.write().unwrap().set_active_heritage();
             let sub_piece = fd.new_op(2, op_addr);
             fd.op_set_opcode(&sub_piece, OpCode::CPUI_SUBPIECE);
@@ -3583,6 +3663,10 @@ impl Heritage {
             let addr_back = Address::new(ret_addr.as_u64().wrapping_add(ret_size as u64));
             let new_input = fd.vbank
                     .create_with_space(size as usize, AddressSpace::Stack, addr.as_u64());
+            // heritage.cc:1353 routes through Funcdata::newVarnode, whose
+            // symbol tail runs before setActiveHeritage
+            // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+            fd.set_varnode_properties(&new_input);
             new_input.write().unwrap().set_active_heritage();
             let sub_piece = fd.new_op(2, op_addr);
             fd.op_set_opcode(&sub_piece, OpCode::CPUI_SUBPIECE);
@@ -4327,6 +4411,10 @@ impl Heritage {
         let newout = fd
             .vbank
             .create_with_space(size as usize, space, addr.as_u64());
+        // heritage.cc:2008 routes through Funcdata::newVarnode, whose symbol
+        // tail attaches the typelocked global's DWARF type onto the unified
+        // range read before concatPieces (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+        fd.set_varnode_properties(&newout);
         let unified = self.concat_pieces(fd, &newinput, None, &newout);
         unified.write().unwrap().set_active_heritage();
         // cc:1952-2010 never reassigns the caller's `input` vector; the
@@ -4422,6 +4510,10 @@ impl Heritage {
             let piece = fd
                 .vbank
                 .create_with_space(cutsz as usize, vn_space, curaddr.as_u64());
+            // heritage.cc:1742/1750 route through Funcdata::newVarnode, whose
+            // symbol tail attaches a matching symbol entry on each refinement
+            // piece (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+            fd.set_varnode_properties(&piece);
             split.push(piece);
             sz -= cutsz;
             if sz <= 0 { break; }

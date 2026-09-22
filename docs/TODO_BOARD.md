@@ -257,6 +257,24 @@
 > cc:1742/1750/restrain cc:2008/joinrec 族 cc:2095/2100/2241/rebuild cc:288)——同类
 > 潜在缺口(部分覆盖/join 的全局读保持无类型→RulePtrArith 症状族);owner=CF lane
 > (待派),验收=符号尾携带+config 域零回退重放。
+> **HERITAGE-PROMOTE-SYMBOLTAIL-0001 子项交付(2026-09-22,Lane CF `wt/sb-promosite`,
+> owner=fixer,commit 见分支头)**: 逐位点裁决完毕(裁决表全量见
+> `docs/api/heritage.md` 2026-09-22 条目)。**补 17 个位点**(normalize 族 7:
+> cc:391/440/441/461/462/473(475)/485;guardCalls 新发现 cc:1502;callsplit 3:
+> cc:1225/1332/1353;guardReturnsOverlapping 新发现 cc:1634;guardReturns
+> return-copy 新发现 cc:1682;splitByRefinement cc:1742/1750;guardInput 拼接目标
+> cc:2008;rebuild cc:288;join 族 5 个建点: cc:2095/2100(level+read/write 2-piece
+> 内联)/cc:2241)。**不补 2 类**: cc:1595(Rust `guard_loads_range` COPY 插入体为
+> 既有登记 stub,位点不存在,需先落 ValueSetSolver 精化);funcdata.rs
+> `new_indirect_creation_in_space`/`new_indirect_op`(cc:689/692/719,注释声称带
+> 尾、实现仅 apply_new_varnode_flags 折叠——超出本 lane write-set)。
+> **新登记 `FUNCDATA-INDIRECT-SYMBOLTAIL-0001`(P2)**: 上述 funcdata.rs 两 helper
+> 的符号尾缺口,owner=待派(funcdata 域),验收同 BZ 模式。验证(A/B 同机同树
+> base=978a0a80): curl **字节级一致**(3601/0/0)、httpd 29 函数**字节级一致**
+> (2459/0/0)、config 域逐函数(main/getparameter/parseconfig/glob_set/glob_range/
+> glob_url)与全语料 witness(::config.=181/DAT_00117[56]xx=0/.rodata/glob_expand
+> 字段化 5 处)全部相等——零回退零改善(位点在语料未激活,Rugra 侧行为中性,
+> 如实报告)。heritage.rs=白名单,root 集成前需独立 Cross-Review。
 
 
 > (三重自创+计数器错接全清:maxPass 硬编码 3→model getMaxOutputDelay/apply 返 0+
