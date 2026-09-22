@@ -1311,3 +1311,18 @@ defects=numbering=0。
   （无 Ghidra 对应物，纯调试工具）。
 - gp 结构层验证：finalize 后 48 臂 label 集合与 golden 逐项相等、逐臂顺序
   相等（case 0 起,含 0xf/0x10/0x15…）；default 的 40 值组正确路由不进 cases。
+
+## 2026-09-22（续 4）：grab_case_order 转 pub（双侧 fixture 入口）
+
+`grab_case_order` 由 private 转 pub：blockstruct_switch_label_1204 双侧
+fixture（B2，JUMPTABLE-TABLEAPI-0001 label 管道核心投影，/dev/shm 迭代中，
+root 集成入库）需要以生产路径驱动 CaseOrder 记录——oracle 侧直接调
+grabCaseBasic（block.cc:3524），Rust 侧这是唯一生产入口。已登记分歧：Rust
+default 走独立槽（oracle 在 caseblocks 带 isdefault），fixture 观察协议以
+"regular case 行 + default 概要行"投影双侧共同语义。
+
+B2 证据（/dev/shm/rugra-tests/sb-jtlabel/fixture/）：ghidra.statement 与
+rugra.statement 16 行逐字节 MATCH，覆盖 slot_desc（label 排序≠槽位）、
+multi_shared（多条目组 addressIndex 序 [0x5,0x2]）、fallthru_chain
+（chain/depth/label 下传：排序键 0x3 vs 打印组 [0x8]）、default_edge
+（default 路由 + label=0）。

@@ -6449,8 +6449,11 @@ impl<'a> CollapseStructure<'a> {
     /// against Funcdata's tables by op address). The multigoto goto-arm
     /// (cc:3548-3553) is appended by the caller. RUGRA-GLUE: method on
     /// CollapseStructure because the jumptables live on Funcdata, which the
-    /// oracle reaches through its FlowBlock back-pointer.
-    fn grab_case_order(
+    /// oracle reaches through its FlowBlock back-pointer. pub for the
+    /// bilateral blockstruct_switch_label_1204 fixture (the only Rust-visible
+    /// production entry for the CaseOrder recording, mirroring the oracle
+    /// fixture's grabCaseBasic call).
+    pub fn grab_case_order(
         &self,
         switch_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
         cases: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
