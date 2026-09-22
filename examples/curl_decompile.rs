@@ -2007,7 +2007,18 @@ fn build_worker_architecture(
         // absorbs them). CWD-relative read, same pattern as the
         // sleigh_specs loads above; on read failure the channel stays
         // empty and behavior falls back to the symbol_table proxy.
-        {
+        //
+        // ORD185-CONSTANTPTR-BAREDB: this seeding belongs to the
+        // full-analysis Program-DB environment. Under the bare-load mirror
+        // the oracle harness registers loader symbols as FUNCTIONS only
+        // (architecture.cc:346-359), so the channel stays empty — the
+        // oracle's linkSymbol parent-walk legitimately finds nothing there
+        // and its ActionConstantPtr queryContainer (coreaction.cc:1151)
+        // never hits (locked witness: glob_buffer at 0x17680, ELF OBJECT +
+        // DWARF char[4096], fired 2 of the 4 ordinal-185 rewrites when this
+        // seeding stayed live).
+        if !mirror_bare_load_enabled() {
+            {
             if arch.symboltab.is_none() {
                 arch.symboltab = Some(Arc::new(std::sync::RwLock::new(
                     rugra::database::Database::new(false),
@@ -2092,6 +2103,7 @@ fn build_worker_architecture(
                 }
             }
             }
+        }
         }
         let types = arch.ensure_types();
         // The raw shared_default factory starts with an empty alignment
@@ -2258,6 +2270,14 @@ fn stage_vn(
     spaceid_slot: bool,
     live_ops: &std::collections::HashMap<usize, (u64, u32)>,
 ) -> String {
+    // Ghidra NULL input slot: the harness's writeVarnodeDescriptor prints '-'
+    // for a null Varnode pointer (tests/oracle/stage_projection_1204.cc:244
+    // writeOp renders one descriptor per numInput() slot). The shared
+    // null_slot_sentinel (crate::op) stands in for that NULL on the Rugra
+    // side, so it must render identically (SB-ORD159-NULLSLOT-0001).
+    if std::sync::Arc::ptr_eq(vn, &rugra::op::null_slot_sentinel()) {
+        return "-".to_string();
+    }
     let vn = vn.read().unwrap();
     let size = vn.get_size();
     let offset = vn.get_offset();
@@ -3147,7 +3167,61 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     let debug_globals = DebugGlobalDatabase::parse_elf(&request.binary_image)
         .map_err(|error| format!("unable to import DWARF globals: {error}"))?;
     let program_db: Option<std::sync::Arc<std::sync::RwLock<rugra::database::Database>>> =
-        if request.rodata_dat_entries.is_empty() && request.db_symbol_entries.is_empty() {
+        if mirror_bare_load_enabled() {
+            // ORD185-CONSTANTPTR-BAREDB (RUGRA-FLOW-MIRROR-0001 / bare-load
+            // data environment): the oracle single-function harness is a raw
+            // BfdArchitecture + readLoaderSymbols, where every loader symbol
+            // — including ELF OBJECT data symbols like curl's glob_buffer —
+            // is registered as a FUNCTION (architecture.cc:346-359:
+            // LoadImageFunc records carry no data/function distinction and
+            // the only call is scope->addFunction), so the global scope's
+            // address map holds ZERO data SymbolEntries and
+            // ActionConstantPtr's queryContainer (coreaction.cc:1151) can
+            // never hit; no analyzers run, so no DAT labels or
+            // strings-analyzer char arrays exist, and no DWARF is imported.
+            // The .rodata DAT layer (B3-COREACTION-CONSTANTPTR-0001 b) and
+            // the MAINDIFF-GLOBAL-0001/DWARF globals belong to the
+            // full-analysis Program-DB environment only and are suppressed
+            // here. What the bare environment DOES carry: the cspec <global>
+            // scope range and the loader readonly ranges
+            // (Architecture::fillinReadOnlyFromLoader, architecture.cc:
+            // 1371-1383 -> LoadImageBfd::getReadonly, loadimage_bfd.cc:
+            // 286-302 — every SEC_READONLY section), mirrored by the
+            // request's rodata_span property range below. Locked witness
+            // (wt/sb-ord185, stage-bisect ordinal 185): with the data layer
+            // present, rugra fired 4 constantptr rewrites (0x14910 CALL
+            // slot2, 0x149b0 COPY slot0, 0x17680 COPY/CALLIND — DAT char
+            // arrays + glob_buffer char[4096]) where the oracle fired 0.
+            eprintln!(
+                "[PREPASS] {} bare-load: program-DB data-symbol layers disabled (loader-readonly range only)",
+                target.name
+            );
+            let db_arc = std::sync::Arc::new(std::sync::RwLock::new(
+                rugra::database::Database::new(false),
+            ));
+            {
+                let mut db = db_arc.write().unwrap();
+                let global = db.global_scope_id;
+                // cspec <global>: the global scope owns the whole ram space.
+                if let Some(rng) = rugra::address::Range::new(
+                    Address::new(0),
+                    Address::new(u64::MAX)) {
+                    db.add_range(global, rng);
+                }
+                // fillinReadOnlyFromLoader mirror (SEC_READONLY sections).
+                if let Some((base, size)) = request.rodata_span {
+                    if let Some(rng) = rugra::address::Range::new(
+                        Address::new(base),
+                        Address::new(base + size - 1),
+                    ) {
+                        db.set_property_range(
+                            rugra::database::symbol_flags::READONLY,
+                            rng);
+                    }
+                }
+            }
+            Some(db_arc)
+        } else if request.rodata_dat_entries.is_empty() && request.db_symbol_entries.is_empty() {
             None
         } else {
             let db_arc = std::sync::Arc::new(std::sync::RwLock::new(

@@ -2353,13 +2353,17 @@ impl Funcdata {
         if let Some(output) = output {
             self.destroy_varnode(&output);
         }
-        // cc:213-217: clear every non-null input in slot order. Rugra cannot
-        // retain Ghidra's NULL slots, so the detached dead op has an empty Vec.
+        // cc:213-217: clear every non-null input in slot order. Each
+        // opUnsetInput erases the descend link and NULLs the slot in place
+        // (op.cc:98 clearInput), so the destroyed op KEEPS its numInput()
+        // slots as NULLs — represented by the shared null_slot_sentinel.
+        // The op stays in the dead list with its input-slot count intact,
+        // matching the oracle's post-opDestroy observable state
+        // (SB-ORD159-NULLSLOT-0001).
         let input_count = op.0.read().unwrap().inrefs.len();
         for slot in 0..input_count {
             self.op_unset_input(op, slot);
         }
-        op.0.write().unwrap().inrefs.clear();
         // cc:218-221: parentless ops are already dead. Integrated ops move to
         // the dead bank and leave their owning block.
         let parent = op.0.read()
@@ -2503,13 +2507,16 @@ impl Funcdata {
     /// Ghidra's `clearInput` (op.hh:136) NULLs the slot in place, so every
     /// later reader sees `getIn(slot) == NULL` and skips it — most
     /// importantly `opDestroy` (funcdata_op.cc:213-215), which guards each
-    /// slot with `if (vn != NULL) opUnsetInput(op,i)`. Rugra's inrefs Vec
-    /// cannot hold null, so the stale Arc survives; descend membership is
-    /// the durable record of whether the (op,slot)→vn link is still live.
-    /// If `op` is not in `vn`'s descend list the link was already severed,
-    /// and skipping the erase reproduces Ghidra's NULL-slot no-op. This
-    /// makes repeated unsets on the same slot idempotent instead of
-    /// re-erasing a descend entry that is no longer there.
+    /// slot with `if (vn != NULL) opUnsetInput(op,i)`. The slot is then
+    /// cleared in place (cc:98 `op->clearInput(slot)`): Rugra writes the
+    /// shared `null_slot_sentinel` (Ghidra's `(Varnode *)0`), preserving the
+    /// slot count — a dead op keeps `numInput()` NULL slots, exactly like
+    /// Ghidra's inrefs array (SB-ORD159-NULLSLOT-0001). Descend membership
+    /// is checked before the erase: if `op` is not in `vn`'s descend list
+    /// the link was already severed, and skipping the erase reproduces
+    /// Ghidra's NULL-slot no-op. This makes repeated unsets on the same slot
+    /// idempotent instead of re-erasing a descend entry that is no longer
+    /// there.
     pub fn op_unset_input(&self, op: &crate::op::PcodeOpRef, slot: usize) {
         // OPACTION_DEBUG-equivalent drill hook (funcdata_op.cc:130-140 hook
         // at :136, after the null-input guard, before the unlink).
@@ -2532,9 +2539,13 @@ impl Funcdata {
                 vn.write().unwrap().erase_descend(&op.0);
             }
         }
-        // Ghidra cc:98: op->clearInput(slot) — implicit in Rugra (Vec slot
-        // overwritten on next set; callers must set or remove before relying
-        // on inrefs[slot]).
+        // Ghidra cc:98: op->clearInput(slot) — the slot is nulled in place,
+        // keeping the array size. The shared sentinel stands in for the NULL
+        // pointer; writing it over itself (already-sentinel slot) is the
+        // idempotent NULL no-op.
+        if let Some(slot_vn) = op.0.write().unwrap().inrefs.get_mut(slot) {
+            *slot_vn = crate::op::null_slot_sentinel();
+        }
     }
 
     // Ghidra: funcdata_op.cc:52 Funcdata::opUnsetOutput
@@ -4736,14 +4747,15 @@ impl Funcdata {
     pub fn op_set_all_input(
         &mut self, op: &crate::op::PcodeOpRef, vvec: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
     ) {
-        // Unset all existing inputs (funcdata_op.cc:276-278).
+        // Unset all existing inputs (funcdata_op.cc:276-278). Each
+        // opUnsetInput NULLs its slot in place (op.cc:98 clearInput).
         let num = op.0.read().unwrap().num_input();
         for i in 0..num {
             self.op_unset_input(op, i);
         }
-        // cc:280 replaces every slot with NULL. Clear the Vec so identical
-        // old/new pointers cannot trigger op_set_input's early return before
-        // rebuilding the descendant edge.
+        // cc:280 replaces every slot with NULL: setNumInputs(vvec.size()).
+        // Clear the Vec so identical old/new pointers cannot trigger
+        // op_set_input's early return before rebuilding the descendant edge.
         op.0.write().unwrap().inrefs.clear();
         // cc:282-283: restore exact input order via the normal const-dedup path.
         for (i, vn) in vvec.iter().cloned().enumerate() {
@@ -11999,9 +12011,10 @@ impl Funcdata {
                 .collect()
         };
         for (op_ref, slot) in descend_pairs {
-            // cc:283: op->clearInput(op->getSlot(vn)).
-            // Rust has no clearInput; op_unset_input erases the descend link
-            // and leaves the slot stale (to be overwritten or removed).
+            // cc:283: op->clearInput(op->getSlot(vn)). op_unset_input
+            // erases the descend link and NULLs the slot in place (the
+            // shared null_slot_sentinel stands in for Ghidra's NULL), so
+            // the slot keeps its count until overwritten or removed.
             if slot >= 0 {
                 self.op_unset_input(&op_ref, slot as usize);
             }
