@@ -241,6 +241,19 @@
 >   `(0x57 < config_00 - 0x23);` 悬空残骸消除(foldInGuards 中和守卫 CBRANCH@0x3fc5);
 >   glob_set 91→90 switch 表达式 cast 链缩短;gp switch 结构仍需 P0-B(bb125 sizeOut=2
 >   抢占 obvious-exit,根因报告 §B3 双缺一不可);B2 双侧 fixture 待 root 集成阶段固化。
+> - `JUMPTABLE-PARENTFACTS-FIXTURE-0001`(P0-A/e27e985 交叉复核绑定条件,已完成
+>   2026-09-22,owner=sb-oracle-agent@wt/sb-oracle): 两通道双侧 B2 fixture 合成环境
+>   全部可达——M1 multistage/usenezmask(override 标记→checkForMultistage cc:2847 置
+>   partialTable→recoverMultistage 内 analyzeGuards usenzmask=false cc:1052,SUBPIECE
+>   nzmask 救援守卫记录 stage1 3 条 vs stage2 2 条)+P1/P0 兄弟 BRANCHIND 身份
+>   (JumpBasic2 i>0 守卫回走 cc:1083-1091:同 switch 继续=6 守卫/异 switch break=3 守卫)。
+>   46/46 记录双侧 byte-identical(oracle e40ed130 直跑);检测力实证:父快照临时置
+>   pre-fix dummy(partial=false/indirect=None)时 M1 3!=2、P1 3!=6 两通道均捕获。
+>   衍生两处移植缺陷已修(findDeterminingVarnodes 空栈回退 panic=cc:586-590 原始
+>   op/slot 语义;sanityCheck 单条目 i=1 for-init=cc:1581),commit ef2f25f。
+>   残差 `JT-PARENTFACTS-CORPUS-0001`(P1,wave 收尾):sanityCheck 修复改变真实语料
+>   单条目表接受面,curl/httpd 差分基线须重跑;jumptable.rs 属机制 C 白名单→并入
+>   main 前独立 Cross-Review(本 fixture 即证据载体)。
 > - `BLOCKSTRUCT-MULTIGOTO-0001`(新开 P0-B): 补 newBlockMultiGoto+ruleBlockGoto isSwitchOut
 >   arm+printc 发射(blockaction.rs/printc.rs);待派;机制 C 白名单。
 > 验收(gp_switch): --func getparameter.constprop.0 switch 结构恢复+glob_set 改善+curl/httpd

@@ -1,0 +1,203 @@
+{
+  "schema_version": 2,
+  "fixture_id": "JUMPTABLE-PARENTFACTS-0001",
+  "status_note": "Both JumpParentFacts channels of JumpTable::recoverModel (e27e985) are reachable in the synthetic-funcdata environment and MATCH byte-for-byte over all 46 records. Channel 1 (M1): the multistage override mark drives checkForMultistage (cc:2847) -> partialTable=true, and recoverMultistage's recovery runs analyzeGuards with usenzmask=false (cc:1052), dropping the SUBPIECE nzmask-rescue guard record (stage1 3 records vs stage2 2); matchModel after the lifecycle reset shows 3 again. Channel 2 (P1/P0): JumpBasic2's i>0 sibling-edge walk compares the sibling block's last BRANCHIND against the parent table's indirect op by identity (cc:1083-1091); P1's identity match continues the walk (6 records) while P0's foreign BRANCHIND breaks it (3 records). The fixture also pinned two port defects the channel shapes exposed (findDeterminingVarnodes empty-stack fallback, sanityCheck single-entry i semantics), fixed in the pinned base commit. Detection power was demonstrated by temporarily restoring the pre-fix dummy parent snapshot (partial_table=false/indirect=None): M1.stage2 guards 3!=2 and P1 guards 3!=6, both channels diverge.",
+  "decisive_semantics": {
+    "reference_output_parameters": "JumpTable methods mutate the table through this (partialTable field write at cc:2855 persists across checkForMultistage's return; recoverMultistage clears it at cc:2674 regardless of outcome); JumpBasic::selectguards is read in-place by the projection after each stage; foldInGuards mutates the Funcdata CFG via pushBranch and returns bool.",
+    "loop_bounds_traversal_order": "analyzeGuards (cc:1058) iterates i<maxbranch=2; the i=0 iteration hops bl via bl->getOut(pathout) for the JumpBasic2 entry (rootbl from cc:1696-1697 = multiop parent in(1-path)), later iterations walk single-predecessor chains up (cc:1067-1077) and stop at the first multi-out predecessor; the guard pullback loop runs j<maxpullback=2 over the bool def chain (cc:1102-1110); findDeterminingVarnodes DFS pops the path stack to empty on all-constant leaf trees, and its empty-meld fallback (cc:586-590) uses the original op/slot parameters.",
+    "counter_accumulator_lifecycle": "The sanity check's verified-entry counter starts at i=1 inside the first!=0 branch (cc:1581 for-init) and equals the current index on any break; selectguards accumulates one GuardRecord per successful pullback plus the initial bool record per CBRANCH; jrange sizes drive addrN (M1: 1 entry; P1/P0: range 1 + extra default = 2).",
+    "sorting_comparison_keys": "The i!=0 sibling check (cc:1083-1091) compares otherop (sibling block's lastOp, must be CPUI_BRANCHIND) against jumptable->getIndirectOp() by POINTER IDENTITY — equal continues the walk, unequal breaks; GuardRecord::valueMatch/quasiCopy govern which guards restrict calcRange and are pinned indirectly via rngSz and the markFoldableGuards clear flags."
+  },
+  "oracle": {
+    "project": "Ghidra",
+    "tag": "Ghidra_12.0.4_build",
+    "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+    "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+    "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+    "source_files": [
+      "Ghidra/Features/Decompiler/src/decompile/cpp/jumptable.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/jumptable.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/rangeutil.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/rangeutil.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/funcdata_varnode.cc",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/override.hh",
+      "Ghidra/Features/Decompiler/src/decompile/cpp/coreaction.cc"
+    ]
+  },
+  "rugra_source": {
+    "base_commit": "ef2f25f776b3c0ff877296772482d953f5e4127d",
+    "base_tree": "79cee1dbd3b4f98e90e5a100de0f7e391106940f",
+    "base_src_tree": "ae4196c362ec31ef4691430dc03d99cd74a5ed27",
+    "base_jumptable_blob": "2fce5447c396417b691e9a052a465251921ca8d1",
+    "cargo_toml_blob": "775553773f9e5ad0cbac50264bd6e7497dbf0ac4",
+    "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+    "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+    "archive_paths": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "build.rs",
+      "README.md",
+      "benches/decompile_bench.rs",
+      "tests/oracle/decompress_1204.rs",
+      "tests/oracle/funcproto_lock_1204.rs",
+      "src",
+      "sleigh_shim"
+    ],
+    "overlays": [
+      {
+        "path": "src/jumptable.rs",
+        "policy": "primary file under test; hash-verify before replacing the pinned base copy"
+      }
+    ],
+    "archive_policy": "Immutable explicit dependency closure plus one hash-verified source overlay; unrelated worktree files are excluded"
+  },
+  "architecture": "fixture-synthetic (FixtureArchitecture, no loader)",
+  "compiler_spec": {
+    "id": "none (FixtureArchitecture built-in prototype model)"
+  },
+  "analysis_options": {
+    "apis": [
+      "Funcdata::calcNZMask",
+      "Funcdata::newOp",
+      "Funcdata::newVarnodeOut",
+      "Funcdata::newVarnode",
+      "Funcdata::newConstant",
+      "Funcdata::opSetOpcode",
+      "Funcdata::opSetInput",
+      "Funcdata::opInsertEnd",
+      "Funcdata::opInsertBegin",
+      "Funcdata::getOverride (insertMultistageJump)",
+      "JumpTable::setIndirectOp",
+      "JumpTable::recoverAddresses",
+      "JumpTable::checkForMultistage",
+      "JumpTable::recoverMultistage",
+      "JumpTable::matchModel",
+      "JumpTable::recoverLabels",
+      "JumpTable::foldInGuards",
+      "JumpBasic::selectguards (read)"
+    ],
+    "funcdata": "One synthetic Funcdata per case; calcNZMask (ActionNonzeroMask, coreaction.hh:295) driven before recovery exactly as the flow pipeline does; no followFlow; recovery stages driven directly",
+    "case_matrix": "M1: single-path switch, guard chain INT_EQUAL(y,5)/SUBPIECE(x,0)/INT_AND(w2,0xff), override multistage mark, full stage1->checkForMultistage->recoverMultistage->matchModel->recoverLabels->foldInGuards sequence; P1: JumpBasic2 two-path switch whose outer guard block's sibling edge lands on THIS switch block (BRANCHIND identity match, guard walk continues); P0: same shape but the sibling edge lands on a block ending with a DIFFERENT BRANCHIND (identity mismatch, guard walk breaks)",
+    "random_seed": "none",
+    "error_injection": "none (all three cases recover cleanly; the exception record grammar exists but never fires on the locked input)",
+    "normalization": "Block creation ordinals (bN) and fixture varnode names (w/w2/x/y/g/z/a/t, q/g2b/cd, z/z2/g1b/me) replace raw pointers; guard records print clear flag, CBRANCH block ordinal, read-op opcode, restricted varnode name, decimal CircleRange size; labels print lowercase hex"
+  },
+  "input_manifest": {
+    "canonicalization": "SHA-256 of UTF-8 json.dumps({architecture,compiler_spec,analysis_options,cases}, sort_keys=True, separators=(',',':'))",
+    "sha256": "679b81e3624b40af21f6bdf91c35cad846262acf8e1c4d493c77867af50c8439",
+    "cases": [
+      {
+        "id": "M1",
+        "family": "multistage_partial_usenzmask"
+      },
+      {
+        "id": "P1",
+        "family": "two_path_same_switch_sibling"
+      },
+      {
+        "id": "P0",
+        "family": "two_path_other_switch_sibling"
+      }
+    ]
+  },
+  "observation_schema": {
+    "format": "fixed-order pipe-delimited UTF-8 records with final newline",
+    "record_order": [
+      "case banner",
+      "nzmask sanity (M1 only)",
+      "stage lines (model/isPartial/guards/addrN)",
+      "guard records per stage",
+      "multistage check (M1 only)",
+      "topo line (P1/P0 only)",
+      "labels",
+      "fold result"
+    ],
+    "guard_projection": "clear flag + CBRANCH block ordinal + read-op opcode + restricted varnode name + decimal range size pin the full analyzeGuards observable including pullback chain shape",
+    "channel_1_discriminator": "M1 stage1 vs stage2 guard count (3 vs 2) — the SUBPIECE record exists only when usenzmask=true (rangeutil.cc:1053-1065)",
+    "channel_2_discriminator": "P1 vs P0 guard count (6 vs 3) — the g2 chain (records 3-5) exists only when the sibling BRANCHIND identity check continues (cc:1088-1090)",
+    "preserved": "No block ordinal, op order, opcode name, boolean, or label value is normalized; only raw pointers are replaced by creation ordinals and fixture names"
+  },
+  "build": {
+    "oracle_archive": "Exact locked Ghidra commit archive and locked Makefile libdecomp.a",
+    "supplemental_source_units": [
+      "libdecomp.cc",
+      "sleigh_arch.cc",
+      "inject_sleigh.cc"
+    ],
+    "cxx_flags": [
+      "-std=c++11",
+      "-O2"
+    ],
+    "access_leverage": "public API plus #define private public / #define protected public / #define class struct header-include block (JumpBasic::selectguards and JumpTable::jmodel are protected/private; the twin Rust side reads the same data through pub fields and the JumpModel::as_any downcast hook)",
+    "rust_build": "Cargo --locked --offline in isolated target, then rustc with the built librugra rlib"
+  },
+  "comparand": {
+    "cpp_fixture_sha256": "c0dc1efbb22f5274c77277e2290eacdcdd10d66aaafd3f2479718c27c1246b76",
+    "rust_fixture_sha256": "27f54b166585c323dcd469cd2c46be8a1eabc1b0e584e6834a8e09319e93ee95",
+    "jumptable_overlay_sha256": "12430ba7ee91312943077c82a7ebfe5bf4b65d66a5105c0fcb56db7ecceca091",
+    "runner_sha256": "a0d1f62107da98ae895b7609fd5906bba3b10a461febc9ed8a3cbb1f87fe89d4"
+  },
+  "expected_results": {
+    "ghidra_stdout_sha256": "6f972431e3fd04906ab9594cb2d2f6d3cf6024a15c3e44e5655e29eecbdb6554",
+    "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "rugra_stdout_sha256": "6f972431e3fd04906ab9594cb2d2f6d3cf6024a15c3e44e5655e29eecbdb6554",
+    "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "ghidra_exit_code": 0,
+    "rugra_exit_code": 0,
+    "diff_exit_code": 0
+  },
+  "coverage": {
+    "multistage_partial_usenzmask": {
+      "status": "MATCH",
+      "covers": "M1: override mark -> recoverAddresses(1 entry) -> checkForMultistage true/partialTable=1 -> recoverMultistage with usenzmask=false (guard count 3->2, SUBPIECE record absent) -> matchModel post-reset (3 again) -> labels -> foldInGuards; pins jumptable.cc:1052 reading the live parent partial flag",
+      "residual_todo_ids": []
+    },
+    "sibling_indirect_identity": {
+      "status": "MATCH",
+      "covers": "P1/P0: JumpBasic2 fires on the no-point meld fallback shape; analyzeGuards i=1 compares the sibling edge block's lastOp BRANCHIND against the parent indirect op by identity — P1 continues (6 records incl. the g2 chain: bool + INT_LESS + COPY pullbacks), P0 breaks (3 records); pins jumptable.cc:1083-1091",
+      "residual_todo_ids": []
+    },
+    "port_defects_exposed": {
+      "status": "MATCH",
+      "covers": "The channel shapes exposed and the base commit fixed: findDeterminingVarnodes empty-DFS-stack fallback (cc:586-590 uses original op/slot; Rust used to panic) and sanityCheck's i=1 for-init semantics for single-entry tables (cc:1581); both now byte-match on M1/P1/P0",
+      "residual_todo_ids": []
+    },
+    "post_fold_cfg_topology": {
+      "status": "UNTESTED",
+      "covers": "foldInGuards returns bool and the table-level numEntries/defaultBlock are projected, but the post-fold block-graph edge rewiring (foldInOneGuard -> pushBranch/addBlockToSwitch) is not dumped block-by-block here",
+      "residual_todo_ids": [
+        "JT-PARENTFACTS-CORPUS-0001"
+      ]
+    },
+    "corpus_rebaseline": {
+      "status": "UNTESTED",
+      "covers": "The sanityCheck single-entry acceptance fix changes which real-corpus single-entry tables survive recovery (previously dropped as 'did not pass sanity check'); curl/httpd corpus baselines were not re-run in this lane",
+      "residual_todo_ids": [
+        "JT-PARENTFACTS-CORPUS-0001"
+      ]
+    }
+  },
+  "projection_status": "MATCH",
+  "residual_todo_ids": [
+    "JT-PARENTFACTS-CORPUS-0001"
+  ],
+  "residual_union": {
+    "todo_id": "JT-PARENTFACTS-CORPUS-0001",
+    "status": "UNTESTED",
+    "branches": [
+      {
+        "id": "post_fold_cfg_topology",
+        "status": "UNTESTED",
+        "detail": "The fixture projects foldInGuards' bool return and table-level numEntries/defaultBlock, not the full post-fold CFG edge topology (pushBranch redirection). The curl/httpd corpus gates own that surface."
+      },
+      {
+        "id": "corpus_rebaseline",
+        "status": "UNTESTED",
+        "detail": "The sanityCheck i=1 fix alters real-corpus behavior for single-entry jumptables (previously 'did not pass sanity check' LowlevelError, now accepted as Ghidra accepts them). curl/httpd differential baselines must be re-run by the wave gate before merging this line into the main pipeline."
+      }
+    ]
+  },
+  "overall_status": "MATCH"
+}

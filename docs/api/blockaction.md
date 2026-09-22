@@ -1216,3 +1216,37 @@ trace（RUGRA_TRACE_SELECTGOTO）、IRRED-SW try 行含地址。
 - `try_rule_switch` 构建时补 grabCaseBasic multigoto arm（block.cc:3548-3553）:identify 之后从 control(multigoto) 的 gotoedges 追加 goto case（gototype=f_goto_goto，目标块不消费——留在图中承载 goto 标签），isdefault 经 `switch_case_basic_coords`（cc:3495-3515 addCase 语义：basic 级 in-edge→outindex→isDefaultBranch，basic 边未被 removeEdge 触碰）判定，default goto case 落 `default_case`+`default_gototype` 槽。case label 仍为边序占位（真实 label=finalizePrinting+recoverLabels，JUMPTABLE-TABLEAPI-0001/P0-A 域）。
 - `dedup_edges_all_types` 重写为单锁纪律编排（find_dup_peers + eliminate_dup_pairs）:oracle eliminateInDups/OutDups（cc:447-501）的成对半删除全同步；Rust 侧 bl 的写锁只覆盖 bl 侧变更、peer 侧半删除前释放，使双向互惠修复（含指回 bl 的）全部同步执行——替代旧"整个 dedup 持一把锁"（peer 修复撞持锁→错块自索引 OOB 崩溃，switch goto-case 解锁路径实测）与中间版"挂起队列"（跨规则窗口内 reverse_index 陈旧→收敛环挂死 2 例）。
 - E2E（fast-release,124 golden 全量）:**0 panic / 0 timeout / 76 decompiled（=baseline）**,defects=0/numbering=0,skeleton 3711→3386（getparameter.constprop.0 函数级 869→539:multigoto 剥除坏边解除 111×cc:1705 拒绝循环,switch 邻域恢复 do-while 结构;glob_set 91→96 +5:同机制旁邻重排,见 Differential 登记）。httpd 全量与 baseline 逐字节一致（diff=0）。B2 双侧 fixture `blockmultigoto_1204`（oracle e40ed130 直跑）:rule 驱动 case + 直驱 case（自环恢复/default 捕获/add-to-existing/scopeBreak）逐字节 MATCH。
+
+## 2026-09-22 追加（BLOCKSTRUCT-SWITCHOUT-NOCLEAR-0001 — no-op flag 清除修复）
+
+**根因**：Rugra `set_flags` 是 OR 语义（`flags |= f`，block.rs:2241，对齐 Ghidra
+`FlowBlock::setFlag` block.hh:155）；`clear_flags` 才是 `flags &= !f`（block.rs:2245，
+对齐 `clearFlag` block.hh:156）。两处"想清位却用 set_flags(x & !BIT)"的写法是恒等
+no-op（`flags |= (flags & !BIT) == flags`）。
+
+- **try_rule_switch 尾部**（blockaction.rs:6285，对齐 block.cc:1917
+  `ret->clearFlag(f_switch_out)`）：安装的 Switch 组件经 identify_internal 继承
+  SWITCH_OUT（cc:925-926 OR 语义正确），尾部清除写成
+  `set_flags(swf & !SWITCH_OUT)` → 位从未清掉 → `ruleBlockSwitch` cc:1652 的
+  isSwitchOut 门对已安装 Switch 组件放行 → 自噬式再触发 415 次（每次把上一层
+  Switch 当 control 再包一层空 case Switch），48-case Switch 链被连环吞死。
+  修复：`sw.clear_flags(SWITCH_OUT)`。修复后 gp 单函数
+  "switch structured" 事件 416→3（48/47/48 case 三次合法形成），组件
+  flags 0xc10→0xc00（SWITCH_OUT 确已清除），try_rule_cat cc:1296 对正确去旗的
+  Switch 放行与 oracle 一致。
+- **refresh_switch_cases**（blockaction.rs:3489）：Rugra 侧 CASE_BODY 簿记
+  （oracle 无 f_case_body/refreshSwitchCases——block.hh:88-106 枚举止于
+  f_duplicate_block=0x40000；注释由伪 `// Ghidra: blockaction.hh:46
+  LoopBody::refreshSwitchCases/dominatesIdx` 校准为 RUGRA-GLUE，blockaction.hh:46
+  实为 LoopBody 类声明行）。"Clear CASE_BODY flag on all blocks first" 的清除同样
+  写成 OR no-op → 陈旧 CASE_BODY 永不退旗，try_rule_if_no_exit 的
+  `CASE_BODY == 0` 守卫过度拒绝合法 while 形成。修复：`b.clear_flags(CASE_BODY)`
+  （设置侧本就 `| CASE_BODY` 无误）。
+
+**验证**：gp(getparameter.constprop.0) fast-release 单函数：3 次合法 Switch 形成
+存活到 finalize（不再自噬）；但发射端仍无 switch——残余根因已定位到
+printc.rs:4738 `emit_structured_infloop` 用 `emit_block_ops(body)` 扁平发射 InfLoop
+体，oracle printc.cc:3109 是 `bl->getBlock(0)->emit(this)` 虚分派递归（Switch 合法
+cat 进自环 List→InfLoop 体后，扁平化吞掉全部结构）——登记 PRINTC 侧
+（PRINTC-SWITCH-EMIT-0001 域），不阻塞本修。case 值仍为出边槽占位
+（JUMPTABLE-TABLEAPI-0001）。

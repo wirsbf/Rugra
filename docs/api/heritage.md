@@ -1275,3 +1275,14 @@ __stack_chk_fail} noreturn 数据）的等价 [ORE-GRET]/[ORE-RETLIST] 输出。
 w-typeflow 根因④落地:heritage.rs vnin(heritage.cc:2638 经 data.newVarnode 带符号尾)裸建
 create_with_space;实证幸存 phi 输入 varnode 无 mapentry → 只读全局类型流断。补
 `fd.set_varnode_properties(&vnin)`。
+
+## 2026-09-22 追加（BLOCKSTRUCT-SWITCHOUT-NOCLEAR-0001 同型排查 — 无代码改动）
+
+对 `apply_new_varnode_flags`（heritage.rs:2363 `set_flags(fl & !TYPELOCK)`）做同型
+no-op 排查后**裁定不改**：Ghidra 原文 funcdata_varnode.cc:119/166 就是
+`vn->setFlags(vflags & ~Varnode::typelock)`，而 `Varnode::setFlags`
+（varnode.cc:352-361）同样 `flags |= fl` OR 语义——掩码的作用是**阻止** queryProperties
+属性集中的 typelock 被 OR 进新建 varnode（"Typelock set by updateType"），不是清
+已有位。该行只作用于 bank 新建 varnode（22 个调用点全部传入新建对象），Rust 与
+oracle 逐字一致，改成 `clear_flags` 反而偏离原文（若 `fl` 含 TYPELOCK 会错误置位）。
+与 blockaction.rs 两处真 no-op（自旗派生掩码 `set_flags(own & !BIT)`）本质不同。

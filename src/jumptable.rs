@@ -1695,6 +1695,12 @@ pub trait JumpModel: Send + Sync {
     /// are parentless — see `JumpParentFacts` — so the parameter is gone.)
     fn clone_model(&self) -> Box<dyn JumpModel>;
 
+    // RUGRA-GLUE: trait-object downcast helper — Ghidra callers hold the
+    /// concrete `JumpModel*` subtype via `dynamic_cast` (e.g. console and
+    /// test code reading `JumpBasic::selectguards`); Rust needs an `Any`
+    /// escape hatch on the trait object to do the same.
+    fn as_any(&self) -> &dyn std::any::Any;
+
     // Ghidra: jumptable.hh:331 JumpModel::clear
     /// Clear any non-permanent aspects of the model.
     fn clear(&mut self) {}
@@ -1717,6 +1723,11 @@ impl JumpModelTrivial {
 }
 
 impl JumpModel for JumpModelTrivial {
+    // RUGRA-GLUE: JumpModel::as_any downcast hook (see trait docs).
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     // Ghidra: jumptable.hh:354 JumpModelTrivial::isOverride
     fn is_override(&self) -> bool {
         false
@@ -2317,6 +2328,7 @@ impl JumpBasic {
     pub fn find_determining_varnodes(&mut self, op: Arc<RwLock<PcodeOp>>, slot: i32) {
         let mut path: Vec<PcodeOpNode> = Vec::new();
         let mut first_point = false;
+        let root_op = op.clone();
         path.push(PcodeOpNode { op, slot });
 
         loop {
@@ -2382,7 +2394,11 @@ impl JumpBasic {
         }
         if self.path_meld.empty() {
             // Never found a likely point — set the single op/input pair.
-            let op_arc = path.first().unwrap().op.clone();
+            // cc:589: Ghidra reads the ORIGINAL op/slot parameters here; the
+            // DFS stack may have popped back to (or past) empty, so
+            // path.first() is not guaranteed (JUMPTABLE-PARENTFACTS-FIXTURE
+            // P cases hit an all-constant leaf tree and empty the stack).
+            let op_arc = root_op.clone();
             let in_vn = op_arc
                 .read()
                 .unwrap()
@@ -2792,6 +2808,11 @@ impl JumpBasic {
 }
 
 impl JumpModel for JumpBasic {
+    // RUGRA-GLUE: JumpModel::as_any downcast hook (see trait docs).
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     // Ghidra: jumptable.hh:414 JumpBasic::isOverride
     fn is_override(&self) -> bool {
         false
@@ -3153,9 +3174,14 @@ impl JumpModel for JumpBasic {
         let mut i = 0usize;
         let first = addresstable[0].as_u64();
         if first != 0 {
+            // cc:1581: Ghidra 的 for-init 是 `i=1`(entry 0 已由 first != 0
+            // 验证);循环体内 break 时 i 自然等于当前 j(保留 0..j-1)。
+            // 单条目表(size==1)循环体不执行,i=1 ≠ size → 通过。旧实现
+            // i=0 起步 + 循环体内才赋值,把单条目表误判为 false
+            // (JUMPTABLE-PARENTFACTS-FIXTURE M1 实证)。
+            i = 1;
             for j in 1..addresstable.len() {
                 if addresstable[j].as_u64() == 0 {
-                    i = j;
                     break;
                 }
                 let diff = if first < addresstable[j].as_u64() {
@@ -3174,7 +3200,6 @@ impl JumpModel for JumpBasic {
                         None => false,
                     };
                     if !dataavail {
-                        i = j;
                         break;
                     }
                 }
@@ -3586,6 +3611,11 @@ impl JumpBasic2 {
 }
 
 impl JumpModel for JumpBasic2 {
+    // RUGRA-GLUE: JumpModel::as_any downcast hook (see trait docs).
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     // Ghidra: jumptable.hh:441 JumpBasic2 (inherits JumpBasic::isOverride)
     fn is_override(&self) -> bool { self.base.is_override() }
     // Ghidra: jumptable.hh:441 JumpBasic2 (inherits JumpBasic::getTableSize)
@@ -3851,6 +3881,11 @@ impl JumpBasicOverride {
 }
 
 impl JumpModel for JumpBasicOverride {
+    // RUGRA-GLUE: JumpModel::as_any downcast hook (see trait docs).
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     // Ghidra: jumptable.hh:479 (override)
     fn is_override(&self) -> bool { true }
     // Ghidra: jumptable.hh:480 (override)
@@ -4015,6 +4050,11 @@ impl JumpAssisted {
 }
 
 impl JumpModel for JumpAssisted {
+    // RUGRA-GLUE: JumpModel::as_any downcast hook (see trait docs).
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     // Ghidra: jumptable.hh:510 JumpAssisted (JumpModel::isOverride default false)
     fn is_override(&self) -> bool { false }
     // Ghidra: jumptable.hh:513 JumpAssisted::getTableSize
