@@ -3,6 +3,19 @@
 **状态**: 接口描述可用；Ghidra 12.0.4 对齐级别 L2
 **源代码路径**: `src/space.rs`
 
+## 2026-09-22：SUBFLOW-SUBPIECE-WIDTH-0001 — Register addr_size 8→4
+
+`AddressSpace::addr_size()` 的 Register 臂由 8 改为 4。依据：oracle
+`Heritage::normalizeReadSize/normalizeWriteSize`（heritage.cc:393/445/466）以
+`newConstant(addr.getAddrSize(), ...)` 构造 SUBPIECE 偏移常量，寄存器空间范围
+（`in(0)=n:register:8:8`）的 oracle 投影输出为 `c:0:4`/`c:4:4` —— next_url 全语料
+2668/2668 SUBPIECE 尾常量均为宽 4，证明 x86-64 oracle 的 register space
+addressSize=4。原注释"ram/register/stack 按 x86-64 production 8/8/8 建模"对
+register 是错误假设。`addr_size()` 全部 17 个消费方（heritage/funcdata/
+coreaction/fspec/ruleaction/translate/constseq/pcodeparse/printc）随之取 4，
+与 oracle `getAddrSize()` 语义一致；ADDRESS-0001（enum→registry per-spec
+size）仍为后续正式载体。
+
 ## 2026-08-28：dead-code/heritage space flags
 
 `does_deadcode` 现在按锁定构造器 flags 仅对 Const、Iop/FSPEC 投影和专用 OTHER

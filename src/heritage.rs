@@ -1863,8 +1863,14 @@ impl Heritage {
         // (Varnode::overlap, varnode.cc:217-228). R9-F1: former inline
         // `saturating_sub` was an LE-only projection.
         let overlap = vn.read().unwrap().overlap_addr(addr, size as usize) as i64;
-        // cc:394: vn2 = newConstant(addrSize, overlap)
-        let vn2 = fd.new_constant(8, overlap as u64);
+        // cc:394: vn2 = newConstant(addrSize, overlap) — the width is
+        // addr.getAddrSize() of the range's space (4 for register on the
+        // x86-64 oracle; SUBFLOW-SUBPIECE-WIDTH-0001). The heritage loop is
+        // per-space, so vn's space is the range's space.
+        let vn2 = fd.new_constant(
+            vn.read().unwrap().address_space.addr_size(),
+            overlap as u64,
+        );
         // cc:395-396: opSetInput(newop, vn1, 0); opSetInput(newop, vn2, 1)
         fd.op_set_input(&newop, vn1.clone(), 0);
         fd.op_set_input(&newop, vn2, 1);

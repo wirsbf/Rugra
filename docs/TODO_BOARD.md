@@ -169,11 +169,26 @@
 > 见新登记 SUBFLOW-SUBPIECE-WIDTH-0001);curl E2E defects=0/numbering=0,
 > skeleton 3356 不变,C 文本与 master 基线字节级一致;httpd 29 函数
 > defects=0/numbering=0,与 04:23 基线字节级一致(audit_syntax 82/25 同基线)。
-> **新登记 `SUBFLOW-SUBPIECE-WIDTH-0001`(P1,funclink 后新首分歧)**: subflow.rs:6040
-> `subpiece_value` 发 `new_constant(8, offset)` vs Ghidra subflow.cc:2513
-> `newConstant(4, off)`(RootPointer::subpieceValue,subflow.hh:271);P2 首分歧
-> ordinal12 heritage 首暴露(4ff4:5ad/5b0 SUBPIECE 尾常量 c:0:4/c:4:4 oracle vs
-> c:0:8/c:4:8 rugra)。
+> **`SUBFLOW-SUBPIECE-WIDTH-0001`(P1,**FIXED 2026-09-22**,Lane BM
+> `wt/sb-subpiece`,owner=fixer,wip 6dfadab/8b4d982,终稿见分支头)**:
+> 登记归因(subflow.rs:6040)经实测证伪——修后投影 producer=`rugra-tree-6dfadab…`
+> 而 c:0:8 仍在。真产地=heritage `normalize_read_size`(heritage.rs:1867 硬编码
+> `new_constant(8,overlap)` vs cc:393 `addr.getAddrSize()`)+`normalize_write_size`
+> (heritage.rs:1919/1987/2037 传 `space.addr_size()`,而 space.rs `addr_size()`
+> Register=8 错误)。oracle 证据: next_url 全语料 2668/2668 SUBPIECE 尾常量宽 4
+> (`in(0)=n:register:8:8` 由 `newVarnode(size,addr)` 建,addr∈register 空间)→
+> x86-64 oracle register space addrSize=4。修=space.rs Register 8→4(17 个
+> addr_size 消费方同收敛,与 oracle getAddrSize 语义一致;ADDRESS-0001 仍为
+> per-spec 正式载体)+heritage.rs:1867 改 `vn.space.addr_size()`(heritage 按
+> 空间划分,vn/range 同空间)+subflow.rs:6040/5395 宽度 4(subflow.cc:2513
+> `newConstant(4,off)` 独立有效,splitCopy cc:2735/splitStore cc:2871 共用;
+> 顺修 subflow.rs:6026 幽灵引用 `RootPointer::subpieceValue`→cc:2497
+> buildInSubpieces)。验证: P2 复跑首分歧 ordinal12 heritage→**ordinal 19
+> returnrecovery(V1_RESULT_COUNT,result 4 vs 1)**;普查 2931→0 宽 8 全收敛,
+> c:4:4/c:1:4/c:2:4 与 oracle 精确一致(486/18/9),c:0:4 余量 612=SUBPIECE
+> 数量差(另域)。**连带关闭 `HERITAGE-SUBPIECE-CONST-WIDTH-0001`(312 处族,
+> 同根因 register addrSize)**。E2E 三门禁见 docs/api/{space,heritage,subflow}.md
+> 同日条目。
 > **双链集成(2026-09-22 root)**: SwitchNorm P0-A(b400e90+e27e985,Cross-Review attempt2
 > APPROVE)+spacebase 分派修复(2b324b8..97d6857,B2 fixture 7/10)合并 master,亲测
 > httpd **2343/0/0**、curl **3685/0/0**(3711−6−20 对账一致),已回流 result(curl sha
@@ -201,8 +216,10 @@
 >   全空间经 jumptable fail_thunk 转 CALLIND@0x2534。
 > - `RULE-PTRARITH-ADDTREE-0001`(P1 新侧面,Lane AL): rugra 类型态下 AddTreeState 把
 >   PTRSUB 溶解回 INT_ADD(oracle 侧 0),与 E2E piVar10+0x38 族(≈120 行)同向;倍数受
->   DWARF 环境不对称污染。`HERITAGE-SUBPIECE-CONST-WIDTH-0001`(P2): 0 偏移常量 8 vs 4
->   字节(heritage newConstant(4) 约定),312 处,语义影响低。
+>   DWARF 环境不对称污染。`HERITAGE-SUBPIECE-CONST-WIDTH-0001`(P2,**FIXED 2026-09-22
+>   连带关闭**,Lane BM wt/sb-subpiece): 0 偏移常量 8 vs 4 字节——真根因=space.rs
+>   Register addr_size 8 vs oracle 4(见 SUBFLOW-SUBPIECE-WIDTH-0001 条),312 处族
+>   随 addrSize 修正全收敛(next_url 普查宽 8 2931→0)。
 > 全语料 libc 签名台账锁 7/9 callee vs oracle 裸 BFD)——D10/D11 族环境假阳性;登记
 > `ACTIVEPARAM-COUNT-9V2-0001`(P1),裁决路径=Rugra 投影产线加"单函数无签名"双态开关
 > 重跑(预期 9,9,0)+maxdelay 实值探针(RCA-2: 有效 maxpass oracle=1 vs rugra=2,fspec 域,

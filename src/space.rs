@@ -322,15 +322,20 @@ impl AddressSpace {
     /// const = sizeof(uintb) = 8 (space.cc:357), OTHER = sizeof(uintb) = 8
     /// (space.cc:397), iop = sizeof(void *) = 8 (op.cc:36), unique =
     /// UniqueSpace::SIZE = 4 (space.cc:418/428), join = sizeof(uintm) = 4
-    /// (types.h:27, space.cc:447). ram/register/stack/overlay carry the
+    /// (types.h:27, space.cc:447). ram/stack/overlay carry the
     /// architecture spec values, modeled with the x86-64 production sizes
-    /// (8/8/8; an overlay copies its base space, space.cc:670) until the
+    /// (8/8; an overlay copies its base space, space.cc:670) until the
     /// enum migrates onto the registry handle (ADDRESS-0001), which carries
     /// the real per-spec size (see [`AddrSpace::get_addr_size`]).
+    /// register = 4 on the x86-64 oracle: heritage.cc:393/445/466 build
+    /// SUBPIECE offset constants via `newConstant(addr.getAddrSize(), ...)`
+    /// on register-space ranges, and the locked oracle projection emits
+    /// them as `c:X:4` — 2668/2668 SUBPIECE trailing constants are width 4
+    /// (SUBFLOW-SUBPIECE-WIDTH-0001 census).
     pub fn addr_size(&self) -> usize {
         match self {
             AddressSpace::Ram => 8,
-            AddressSpace::Register => 8,
+            AddressSpace::Register => 4,
             AddressSpace::Unique => 4, // UniqueSpace::SIZE (space.cc:418)
             AddressSpace::Const => 8, // sizeof(uintb) (space.cc:357)
             AddressSpace::Stack => 8,
