@@ -1026,6 +1026,11 @@ fn stage_vn(
     spaceid_slot: bool,
     live_ops: &std::collections::HashMap<usize, (u64, u32)>,
 ) -> String {
+    // Ghidra NULL input slot renders as '-' (writeVarnodeDescriptor null
+    // arm; see curl_decompile.rs stage_vn). (SB-ORD159-NULLSLOT-0001)
+    if std::sync::Arc::ptr_eq(vn, &rugra::op::null_slot_sentinel()) {
+        return "-".to_string();
+    }
     let vn = vn.read().unwrap();
     let size = vn.get_size();
     let offset = vn.get_offset();

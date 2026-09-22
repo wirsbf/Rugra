@@ -1017,6 +1017,15 @@ PcodeOpRaw
 ### 2026-07-05: op.cc 缺失方法批量补齐
 - `is_assignment`/`is_flow_break`/`is_instruction_start`(op.hh inline)。
 - `is_collapsible`(cc:115)、`set_num_inputs`/`remove_input`/`insert_input_slot`(cc:290/301/311)、`get_repeat_slot`(cc:93)、`print_debug`(cc:376)。
+- （2026-09-22，SB-ORD159-NULLSLOT-0001）`set_num_inputs` 忠实化：cc:290-296 的
+  "All slots, regardless of the total being increased or decreased, are set to
+  null"——先 clear 再以共享 null 哨兵 resize 到 `num`（旧实现增长时 panic，
+  且缩减时保留旧槽）。新增 `pub fn null_slot_sentinel()`（RUGRA-GLUE）：
+  Ghidra NULL input-slot 指针 `(Varnode*)0` 的进程级共享替身（脱离 bank、
+  size-0、无 descendant、无 create-index）；单一实例保证两个 NULL 槽之间
+  `Arc::ptr_eq` 为 true，对应 Ghidra `inrefs[i] == vn` 指针相等语义
+  （op.hh:166 getSlot）。`Funcdata::op_unset_input` 的 clearInput 写入与
+  观察投影的 NULL 渲染（`-`）都消费它。
  
  
  

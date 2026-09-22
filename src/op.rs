@@ -288,6 +288,27 @@ impl IopSpace {
     }
 }
 
+// RUGRA-GLUE: process-wide stand-in for Ghidra's NULL input-slot pointer.
+// Ghidra's `PcodeOp` (op.cc:70-84, `inrefs(s)` vector-of-pointers ctor) and
+// `PcodeOp::setNumInputs` (op.cc:290-296, resize + null every slot) represent
+// an unlinked-but-still-counted slot as `(Varnode *)0`; `Funcdata::opUnsetInput`
+// (funcdata_op.cc:91-98) leaves exactly that state behind, so a dead op keeps
+// its `numInput()` slots as NULLs (observable in the oracle's debug/projection
+// stream as one '-' per slot, op.cc:376 printDebug harness rendering). Rugra's
+// `inrefs: Vec<Arc<RwLock<Varnode>>>` cannot hold NULL, so this detached,
+// never-bank-resident size-0 Varnode stands in for the NULL pointer. ONE
+// shared instance per process keeps `Arc::ptr_eq` between two NULL slots
+// `true`, matching Ghidra's pointer-equality `inrefs[i] == vn` semantics
+// (op.hh:166 getSlot). It carries no descendants, no create-index, and no
+// bank side effects, so the `opSetInput` early-return on a fresh NULL slot
+// (funcdata_op.cc:107) stays a no-op on it. (SB-ORD159-NULLSLOT-0001)
+pub fn null_slot_sentinel() -> Arc<RwLock<Varnode>> {
+    static SENTINEL: std::sync::OnceLock<Arc<RwLock<Varnode>>> = std::sync::OnceLock::new();
+    SENTINEL
+        .get_or_init(|| Arc::new(RwLock::new(Varnode::new(0, Address::new(0)))))
+        .clone()
+}
+
 /// Represents a single P-code operation in the data flow graph
 ///
 /// Corresponds to Ghidra's `PcodeOp` class in `op.hh`
@@ -1052,17 +1073,14 @@ impl PcodeOp {
     }
 
     // Ghidra: op.cc:290 PcodeOp::setNumInputs
-    /// Set the number of input slots. All slots are cleared (set to a sentinel).
-    /// Faithful to `setNumInputs` (op.cc:290-296). Note: Rugra's inrefs Vec
-    /// cannot hold null; we use a synthetic placeholder varnode via the caller
-    /// (Funcdata layer fills slots immediately after). At the PcodeOp level,
-    /// we resize and leave existing entries; callers must overwrite.
+    /// Set the number of input slots. All slots, regardless of the total
+    /// being increased or decreased, are set to \e null.
+    /// Faithful to `setNumInputs` (op.cc:290-296): `inrefs.resize(num)` then
+    /// every slot null. The null slot is the shared `null_slot_sentinel`
+    /// (Ghidra's `(Varnode *)0`), preserving slot count for unlinked ops.
     pub fn set_num_inputs(&mut self, num: usize) {
-        self.inrefs.resize(num, self.inrefs.get(0).cloned().unwrap_or_else(|| {
-            // Cannot create a null varnode; panic is consistent with Ghidra's
-            // contract that setNumInputs is followed by setInput on every slot.
-            panic!("PcodeOp::set_num_inputs to {} requires caller to fill all slots", num);
-        }));
+        self.inrefs.clear();
+        self.inrefs.resize(num, null_slot_sentinel());
     }
 
     // Ghidra: op.cc:301 PcodeOp::removeInput

@@ -2258,6 +2258,14 @@ fn stage_vn(
     spaceid_slot: bool,
     live_ops: &std::collections::HashMap<usize, (u64, u32)>,
 ) -> String {
+    // Ghidra NULL input slot: the harness's writeVarnodeDescriptor prints '-'
+    // for a null Varnode pointer (tests/oracle/stage_projection_1204.cc:244
+    // writeOp renders one descriptor per numInput() slot). The shared
+    // null_slot_sentinel (crate::op) stands in for that NULL on the Rugra
+    // side, so it must render identically (SB-ORD159-NULLSLOT-0001).
+    if std::sync::Arc::ptr_eq(vn, &rugra::op::null_slot_sentinel()) {
+        return "-".to_string();
+    }
     let vn = vn.read().unwrap();
     let size = vn.get_size();
     let offset = vn.get_offset();
