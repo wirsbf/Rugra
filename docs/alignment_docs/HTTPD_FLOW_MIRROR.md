@@ -101,16 +101,50 @@ the curl worker). flow.rs itself registers call specs during the walk
 (`setup_call_specs`, flow.cc:680), so no driver-side qlst registration is
 needed on this path.
 
-## 4. Verification plan (M3)
+## 4. Verification results (M3, 2026-09-22)
 
-1. `RUGRA_MIRROR=1 RUGRA_STAGE_PROJ=1 RUGRA_STAGE_FUNC=main
-   RUGRA_STAGE_PROJ_OUT=<f>` → META line 3 must read
-   `load_mode=single_function_bfd` with `func_entry=0x2b820 func_name=main`.
-2. Cross-side first divergence (new territory):
-   `python3 tools/stage_bisect.py --v1 /dev/shm/rugra-tests/sb-oracle/
-   httpd.main.oracle.projection <rugra.proj>` — record the first divergent
-   stage + op line verbatim.
-3. env-off byte identity: full default E2E before/after change, `cmp`.
+1. **load_mode flip** — `RUGRA_MIRROR=1 RUGRA_STAGE_PROJ=1
+   RUGRA_STAGE_FUNC=main RUGRA_STAGE_PROJ_OUT=…` produces
+   `META binary_sha256=805f89cd… func_entry=0x2b820 func_name=main
+   load_mode=single_function_bfd` — the consumer's identity precheck
+   passes against the locked oracle projection (only advisory warnings:
+   producer blob, unique_base 0x364200 vs 10000000). Projection:
+   `/dev/shm/rugra-tests/sb-httpdff/httpd_main_mirror2.proj`
+   (sha256 bc203c43…, 263 @SNAPs).
+2. **Cross-side first divergence (new territory)** — first run exposed a
+   driver-side loading defect, then the converged contract's first real
+   divergence:
+   - Run 1 (bare Architecture, no loader): first divergence at stage
+     ordinal 2 (`universal:start`), op-line 476 — oracle keeps
+     `2ba94:1dc BRANCHIND` (a relative-offset switch: table @0x88530 via
+     `lea 0x5caa6(%rip); movslq (%rcx,%rax,4); add %rcx,%rax;
+     notrack jmp *%rax`, guarded at 2ba7f) and walks the case bodies at
+     0x2ba97+; Rugra fail-thunked it into `CALLIND` + artificial
+     `RETURN` (1404 ops / 55 blocks vs oracle walking on). Root cause:
+     jumptable recovery reads table bytes through `fd.arch.loader`
+     (jumptable.rs:2568/3152/5229 — the jumptable.cc:1225-1226/1588-1598
+     MemoryImage channel); fixed by attaching a RawLoadImage over the
+     PT_LOAD bytes to the mirror-path Architecture (commit fef1ba2).
+   - Run 2 (loader attached): stages 1-2 snapshots are **op-line
+     identical on both sides** — the loading contract converges (main
+     loads 2040 ops / 92 blocks). First divergence moves to stage
+     ordinal 3, tree-path `universal:constbase`, round 0, op-line 3
+     (`/dev/shm/rugra-tests/sb-httpdff/cross_side_report2.txt`):
+     - oracle-only: `2b824:7f8 COPY d=0 out=n:register:20a:1 in=c:0:1`
+       (uniq 0x7f8 = 2040 — freshly allocated after the initial tree,
+       i.e. created during start/constbase on the oracle side);
+     - rugra-only: `2b826:6 INT_ZEXT d=0 out=n:register:10:8
+       in=n:register:10:4` (uniq 6 — in Rugra's initial tree: the
+       implicit 32→64 zero-extension of the `xor edx,edx` write at
+       0x2b826).
+     Attribution is pipeline-level (a start/constbase-phase transform
+     difference around partial-register writes vs zero-extension), NOT a
+     loading difference — beyond this lane's write-set; recorded for
+     dispatch.
+3. **env-off byte identity** — full default E2E with the final binary vs
+   a master-build binary: `cmp` clean, both
+   sha256 e91880ddb84bc3c430a5573a527a240b04ab6e0e5a0f9b6ca85501189149a897
+   (29 function headers, `/dev/shm/rugra-tests/sb-httpdff/envoff_*.c`).
 
 ## 5. Known advisory deltas (recorded, not blocking)
 
