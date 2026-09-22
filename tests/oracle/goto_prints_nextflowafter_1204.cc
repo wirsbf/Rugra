@@ -22,8 +22,18 @@
  *       defaults so the finalizePrinting stable_sort (block.cc:3591,
  *       equal keys) preserves grabCaseBasic order — matching the Rust
  *       component-order model; the real label sort lands with
- *       JUMPTABLE-TABLEAPI-0001 on both sides. The multigoto gotoedge
- *       variant of caseblocks (cc:3548-3553) is not materialized here.
+ *       JUMPTABLE-TABLEAPI-0001 on both sides.
+ *   case switch_multigoto_gotoedge — BlockSwitch whose dispatch root
+ *       cs[0] is a BlockMultiGoto (ruleBlockGoto's isSwitchOut peel,
+ *       block.cc:1707-1751): grabCaseBasic's t_multigoto arm (block.cc
+ *       3548-3553) APPENDS the peeled gotoedge target as a case with
+ *       gototype f_goto_goto after the regular cases. The last regular
+ *       case is a t_goto whose nextFlowAfter falls through into the
+ *       APPENDED case (arm cc:3653-3657 — caseblocks extend past the
+ *       absorbed component list); BlockMultiGoto::nextFlowAfter
+ *       (block.cc:2931-2936) gives null for its wrapped head; and
+ *       scopeBreak promotes the appended case to f_break_goto because
+ *       its target IS the switch exit (cc:3620-3623, "empty break").
  *   case goto_wrapping_goto     — BlockGoto (block.cc:2899-2903): the
  *       inner goto under the outer goto's wrapped List gets the OUTER
  *       goto target's front leaf; prints=0 when the inner target IS the
@@ -46,6 +56,14 @@
  *  - top-level list order is arranged explicitly after construction
  *    (production orderBlocks sorts by index; the factories append, so the
  *    fixture re-orders to the canonical [loop, exit] order);
+ *  - for a BlockSwitch parent the dispatch walk enumerates slot 0 =
+ *    getBlock(0) (the cs[0] dispatch root, arm-① null) and then one slot
+ *    per CaseOrder entry (slot i+1) instead of the absorbed component
+ *    list: grabCaseBasic APPENDS the multigoto gotoedge targets to
+ *    caseblocks beyond the components (block.cc:3548-3553) and Rugra's
+ *    BlockSwitch keeps the appended cases in its `cases` list, so both
+ *    sides emit one line per PRINTED case. For pure-component switches
+ *    caseblocks == components[1..] and the walk is identical;
  *  - observation lines are sorted before printing (per-block facts are
  *    order-free).
  *
@@ -151,6 +169,23 @@ struct Observation {
   {
     BlockGraph *g = dynamic_cast<BlockGraph *>(parent);
     if (g == (BlockGraph *)0) return;
+    BlockSwitch *sw = dynamic_cast<BlockSwitch *>(parent);
+    if (sw != (BlockSwitch *)0) {
+      // Normalization (see file header): slot 0 is the cs[0] dispatch
+      // root (arm-① null); slots 1.. are the CaseOrder entries — the
+      // printed cases, which for the multigoto gotoedge variant extend
+      // past the absorbed component list (block.cc:3548-3553).
+      for (int4 slot = 0; slot < 1 + sw->getNumCaseBlocks(); ++slot) {
+        FlowBlock *comp = (slot == 0) ? g->getBlock(0) : sw->getCaseBlock(slot - 1);
+        FlowBlock *next = parent->nextFlowAfter(comp);
+        std::ostringstream s;
+        s << "dispatch parent=" << typeName(parent->getType())
+          << "[" << slot << "] comp=" << desc(comp)
+          << " next=" << desc(next);
+        lines.push_back(s.str());
+      }
+      return;
+    }
     for (int4 i = 0; i < g->getSize(); ++i) {
       FlowBlock *comp = g->getBlock(i);
       FlowBlock *next = parent->nextFlowAfter(comp);
@@ -367,6 +402,49 @@ int main()
     f.structure.list = order;
     f.structure.scopeBreak(-1, -1);
     obs.emit("dowhile_tail_goto", f.structure.getList());
+  }
+  {
+    // switch_multigoto_gotoedge: the switch's dispatch root cs[0] is a
+    // BlockMultiGoto — ruleBlockGoto's isSwitchOut peel (newBlockMultiGoto
+    // over the head copy, gotoedge = head's slot-2 target c[3]). The
+    // regular cases are cA (plain copy) and g0 (t_goto wrapping cB, its
+    // own out-edge to `out` outside the switch); grabCaseBasic's
+    // t_multigoto arm (block.cc:3548-3553) appends the gotoedge target
+    // c[3] as a case with gototype f_goto_goto AFTER g0, so g0's
+    // nextFlowAfter falls through into the APPENDED case (front leaf c3,
+    // arm cc:3653-3657) — NOT to g0's own goto target `out`. The
+    // multigoto arm itself is null for the wrapped head (block.cc
+    // 2931-2936). scopeBreak promotes the appended case to f_break_goto
+    // (cc:3620-3623: its target c3 IS the block after the switch root,
+    // i.e. the switch exit) while g0 stays f_goto_goto (target `out` is
+    // not any enclosing loop exit).
+    FixtureGraph f;
+    for (int4 i = 0; i < 5; ++i) f.original(i);
+    f.edge(f.originals[0], f.originals[1]); // dispatch edge head→cA
+    f.edge(f.originals[0], f.originals[2]); // dispatch edge head→cB
+    f.edge(f.originals[0], f.originals[3]); // dispatch edge head→c3 (peeled)
+    f.edge(f.originals[2], f.originals[4]); // cB's own out-edge → out
+    std::vector<FlowBlock *> c = f.copyOf(5);
+    Observation obs;
+    obs.name(c[0], "head"); obs.name(c[1], "cA"); obs.name(c[2], "cB");
+    obs.name(c[3], "c3"); obs.name(c[4], "out");
+    BlockMultiGoto *mg = f.structure.newBlockMultiGoto(c[0], 2);
+    obs.name(mg, "mg");
+    BlockGoto *gt = f.structure.newBlockGoto(c[2]);
+    obs.name(gt, "g0");
+    std::vector<FlowBlock *> cs;
+    cs.push_back(mg); cs.push_back(c[1]); cs.push_back(gt);
+    static BlockBasic hollow(nullptr);
+    BlockSwitch *bs = new BlockSwitch(&hollow);
+    bs->grabCaseBasic(f.originals[0], cs);
+    f.structure.identifyInternal(bs, cs);
+    f.structure.addBlock(bs);
+    obs.name(bs, "sw");
+    std::vector<FlowBlock *> order;
+    order.push_back(bs); order.push_back(c[3]); order.push_back(c[4]);
+    f.structure.list = order;
+    f.structure.scopeBreak(-1, -1); // ActionFinalStructure tail (cc:2193)
+    obs.emit("switch_multigoto_gotoedge", f.structure.getList());
   }
   return 0;
 }

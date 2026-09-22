@@ -10,6 +10,11 @@
 // (the exact code ActionFinalStructure's walk runs) — never a
 // fixture-local reimplementation of the dispatch.
 //
+// The switch_multigoto_gotoedge case additionally drives the production
+// `CollapseStructure::new_block_multigoto` peel and mirrors
+// grabCaseBasic's t_multigoto append arm (block.cc:3548-3553) as the
+// BlockSwitch literal's recorded case order/gototypes.
+//
 // Observation per (composite, component) pair: the successor the dispatch
 // gives that component (identity+type). Switch slots are printed with the
 // ORACLE indexing — the dispatch root (BlockSwitch::control, which Rust
@@ -21,7 +26,7 @@
 use rugra::address::Address;
 use rugra::block::{
     BlockBasic, BlockDoWhile, BlockGoto, BlockGraph, BlockIf, BlockInfLoop, BlockList,
-    BlockSwitch, BlockType, BlockWhileDo, FlowBlock, graph_sibling_successors,
+    BlockMultiGoto, BlockSwitch, BlockType, BlockWhileDo, FlowBlock, graph_sibling_successors,
     next_flow_after_successors,
 };
 use std::collections::BTreeMap;
@@ -117,6 +122,18 @@ impl Fixture {
                     v
                 })
                 .unwrap_or_default(),
+            // Oracle cs[0] descent for the multigoto gotoedge variant
+            // (block.cc:3548-3553): the oracle's component walk descends
+            // into the BlockMultiGoto dispatch root (a BlockGraph with the
+            // single wrapped component), so the fixture mirrors [wrapped]
+            // here. Production component_list_dyn keeps MultiGoto empty
+            // (the wrapped head is a basic leaf holding no BlockGoto), so
+            // this arm exists only for the observation walk.
+            BlockType::MultiGoto => any
+                .downcast_ref::<BlockMultiGoto>()
+                .and_then(|m| m.wrapped.clone())
+                .into_iter()
+                .collect(),
             BlockType::Goto => any
                 .downcast_ref::<BlockGoto>()
                 .and_then(|g| g.wrapped.clone())
@@ -211,6 +228,27 @@ impl Fixture {
 
     fn visit(&mut self, node: &BlockArc, succ: &Option<BlockArc>) {
         self.observe_dispatch(node, succ);
+        let control_mg = {
+            let rg = node.read().unwrap();
+            if rg.get_type() == BlockType::Switch {
+                rg.as_any()
+                    .downcast_ref::<BlockSwitch>()
+                    .map(|s| s.control.clone())
+                    .filter(|c| c.read().unwrap().get_type() == BlockType::MultiGoto)
+            } else {
+                None
+            }
+        };
+        // Oracle cs[0] descent for the multigoto gotoedge variant: the
+        // oracle's collectAll walks into the BlockSwitch's absorbed
+        // component list, whose cs[0] entry IS the BlockMultiGoto (Rugra
+        // keeps it as `control`, outside the walked cases). Its successor
+        // is the arm-① null of block.cc:3642-3643, so it is visited with
+        // succ=None; the multigoto arm (block.cc:2931-2936) is null for
+        // the wrapped head either way.
+        if let Some(mg) = control_mg {
+            self.visit(&mg, &None);
+        }
         let components = Self::components(node);
         if components.is_empty() {
             return;
@@ -423,5 +461,87 @@ fn main() {
         }));
         f.name(&dw, "dw");
         run_case(&mut f, "dowhile_tail_goto", vec![dw.clone(), b2.clone()]);
+    }
+    // switch_multigoto_gotoedge: the switch's dispatch root is a
+    // BlockMultiGoto (the isSwitchOut peel over the head copy; gotoedge =
+    // head's slot-2 target c3). grabCaseBasic's t_multigoto arm (block.cc
+    // 3548-3553) appends c3 as a case with gototype f_goto_goto AFTER the
+    // regular cases, so g0's nextFlowAfter falls through into the appended
+    // case (front leaf c3), NOT to g0's own target `out`; the multigoto
+    // arm is null for the wrapped head (block.cc:2931-2936); scopeBreak
+    // promotes the appended case to f_break_goto (cc:3620-3623 — its
+    // target c3 is the switch exit) while g0 stays f_goto_goto.
+    {
+        let mut orig_graph = BlockGraph::new();
+        let mk = |i: i32| -> BlockArc {
+            Arc::new(RwLock::new(BlockBasic::new(
+                i,
+                Address::new(0x1000 + (i as u64) * 0x10),
+            )))
+        };
+        let head_o = mk(0);
+        let ca_o = mk(1);
+        let cb_o = mk(2);
+        let c3_o = mk(3);
+        let out_o = mk(4);
+        for o in [&head_o, &ca_o, &cb_o, &c3_o, &out_o] {
+            orig_graph.add_block(o.clone());
+        }
+        // Mirror of the oracle fixture's original-graph edges: dispatch
+        // edges head→cA/cB/c3 plus cB's own out-edge to `out`.
+        orig_graph.add_edge(head_o.clone(), ca_o.clone());
+        orig_graph.add_edge(head_o.clone(), cb_o.clone());
+        orig_graph.add_edge(head_o.clone(), c3_o.clone());
+        orig_graph.add_edge(cb_o.clone(), out_o.clone());
+        // Production buildCopy: BlockCopy leaves with remapped edges, in
+        // creation order (head at slot 0).
+        let mut graph = BlockGraph::new();
+        graph.build_copy(&orig_graph);
+        let head = graph.get_block(0).unwrap().clone();
+        let c_a = graph.get_block(1).unwrap().clone();
+        let c_b = graph.get_block(2).unwrap().clone();
+        let c3 = graph.get_block(3).unwrap().clone();
+        let out = graph.get_block(4).unwrap().clone();
+        let mut f = Fixture { names: BTreeMap::new(), lines: Vec::new() };
+        f.name(&head, "head");
+        f.name(&c_a, "cA");
+        f.name(&c_b, "cB");
+        f.name(&c3, "c3");
+        f.name(&out, "out");
+        // Production peel (newBlockMultiGoto over the head copy, slot 2):
+        // mg wraps head, gotoedges=[c3], the head→c3 out edge is removed
+        // bilaterally.
+        {
+            let mut collapse = rugra::blockaction::CollapseStructure::new(
+                &mut graph,
+                "switch_multigoto_gotoedge",
+            );
+            collapse.new_block_multigoto(0, 2);
+        }
+        let mg = graph.get_block(0).unwrap().clone();
+        f.name(&mg, "mg");
+        // g0 mirrors the oracle's newBlockGoto(cB): wraps cB, targets
+        // `out` (cB's own out-edge), gototype f_goto_goto.
+        let g0 = goto_block(10, c_b.clone(), out.clone());
+        f.name(&g0, "g0");
+        // Mirrors newBlockSwitch's recording over cs=[mg, cA, g0]:
+        // regular cases first, then the t_multigoto arm's appended
+        // gotoedge case (block.cc:3548-3553) with gototype f_goto_goto.
+        let sw: BlockArc = Arc::new(RwLock::new(BlockSwitch {
+            index: 11,
+            control: mg.clone(),
+            cases: vec![c_a.clone(), g0.clone(), c3.clone()],
+            default_case: None,
+            case_gototypes: vec![0, 0, rugra::block::goto_type::GOTO_GOTO],
+            default_gototype: 0,
+            case_values: vec![vec![0], vec![1], vec![2]],
+            index_varnode: None,
+            incoming: Vec::new(),
+            outgoing: Vec::new(),
+            parent: None,
+            flags: 0,
+        }));
+        f.name(&sw, "sw");
+        run_case(&mut f, "switch_multigoto_gotoedge", vec![sw.clone(), c3.clone(), out.clone()]);
     }
 }

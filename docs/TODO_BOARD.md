@@ -104,6 +104,33 @@
 > 覆盖缺口,owner=root 分诊,验收=双侧同形构造补齐;`B2-MG-RESID-2`(P2): loop_exit_
 > conflict 形同上;`B2-MG-RESID-3`(P2): glob_set +5 骨架残差(91→96,defects=0,机制性
 > 邻域重排),owner=root 分诊,验收=函数级 token 归因。
+> **B2-MG-RESID-1/2 ✅CLOSED + ③归因闭环(2026-09-22,Lane BT wt/sb-mgresid)**:
+> fixture 三件套+pin runner 正式入库 `tests/oracle/blockmultigoto_1204.{cc,rs,metadata.json}`
+> + `tools/run_blockmultigoto_oracle.sh`(oracle commit 门禁+dirty 文件门禁+comparand
+> sha256 门禁),四 family 全 **MATCH**(runner 实跑):RESID-1 补 family C
+> `copy_switch_consumption` 同形构造(buildCopy 图+production newBlockMultiGoto 剥离+
+> newBlockSwitch 同套录制调用 grabCaseBasic→identifyInternal→addBlock,观察 append 臂
+> cc:3548-3553 的 gt1 追加 case+mg 作 cs[0] 被吸收零残留);RESID-2 补 family A2
+> `loop_exit_conflict` 同形构造(WhileDo[cond, body=List[mg,对比 goto]] 双侧
+> production 构造,scopeBreak 提升对比照——BlockGoto→f_break_goto(cc:2872-2873)而
+> multigoto gotoedge 永不重分类(cc:2918-2922));撤下记录里的双侧分歧属 legacy
+> cascade/合成图 rule 交互域,非 newBlockMultiGoto 缺陷,同形构造已覆盖等价语义。
+> **B2-MG-RESID-3 归因(真差,不属 multigoto write-set,登记不修)**: master 3648 基线
+> (124/124,76 decompiled,0 panic/timeout)重测 glob_set 函数级=**106**(.91 pre→96 lane→
+> 106 现值,后续 merge 同域继续增长),gp=866(539 lane→866),双侧 defects=numbering=0;
+> token 级归因全部落在两个已登记上游域:①`JUMPTABLE-TABLEAPI-0001`(P0-A)——case 标签
+> 为边序占位(`case '\0'/'\x01'…`+`switch(*(( *)unique0x…))` 畸形 cast+`code_r0x…:`/
+> `goto code_r0x…` goto-case 发射=printc.cc:3334-3337 臂在设计上待 label 管线解锁);
+> ②typed-global/globalsym 覆盖缺口——glob_expand 原始偏移算术(`*(undefined4*)(iVar1+
+> 0x50)`/int2/ZEXT-SEXT churn)vs oracle `URLGlob*`/`->pattern[].content.Set` 字段化
+> (2026-09-22 globalsym 修复只覆盖 main/gp DAT,glob_set 不在射程)。multigoto 激活
+> 增量(91→96 的 +5)即 goto-case 发射形态本身,非 BN 类零翻转良性重排;残差闭环
+> 条件=JUMPTABLE-TABLEAPI-0001 + globalsym 扩展覆盖,不在 multigoto 域修。
+> **BN 开项②物化(同 lane)**: `goto_prints_nextflowafter_1204` 第七形态
+> `switch_multigoto_gotoedge` 落地(cc:3548-3553 append 臂:mg 作 cs[0]、gotoedge 目标
+> 作 gt1 追加 case、末常规 t_goto case 的 nextFlowAfter 落入追加 case、multigoto 分派
+> 臂 null),双侧 runner 重钉后 **MATCH**,既有六形态输出逐字节不变(caseblocks 走查
+> 归一化对纯组件 switch 恒等);metadata cases/manifest sha256/comparand 重钉。
 > **基线快照(2026-09-22 root 集成后)**: master=BB returnsplit+AD multigoto+wt/sb-rust
 > 发射器链(env-off 字节一致)合并后,curl **3356/0/0**、httpd **2326/0/0**,已回流。
 > **P0 新登记 `BLOCKSTRUCT-SWITCHOUT-NOCLEAR-0001`(2026-09-22,Lane BH 根因)**:
@@ -358,7 +385,8 @@
 | w-debugwarn | `PLTSTUB-WARNLOSS-0001` 残留(debugproto 播种) | writer | `src/debugproto.rs`+`docs/api/debugproto.md`+fixture+registry，branch `wt2/debugwarn` | 在途(2026-09-01 新派):对象级分流——LibcSignatureTable 全部条目+DebugDb 仅 void 签名条目钉 unknown 哨兵(行为 Arc 不变,红线=ACTION-FUNCLINK-INPUT-1204 复跑 MATCH);验收=warning 51/51+defects/numbering 0 |
 | w-selfcopy | `MAIN-SELF-COPY-ABSORB-0001`(新登记) | writer | `src/merge.rs`+`src/varmap.rs`+`docs/api/{merge,varmap}.md`+fixture+registry，branch `wt2/selfcopy` | 在途:main 简单赋值 900 vs golden 90,temp↔stack COPY 未被 high 吸收;含复核 F2(其余 raw-cover 入口)/F3 线索;机制 C 域(merge/varmap) |
 | w-scopefix | `CALLSPEC-DRIVER-0001`+`FUNCDATA-SCOPELOCALOVERFLOW-0001`(scopefix2 重放) | writer | `src/funcdata.rs`+`docs/api/funcdata.md`+scopelocal_wrap fixture+registry(如需 pushmultiequals/scope_find_overlap 重钉)，branch `wt2/scopefix` | 在途(2026-09-01 新派,nodesplit 释放租约后):重放 `de4309f`(inject_raw_ops 出生 CALL 无 spec→移植 flow.cc:683-690 核心)+`657ff89d`/`877ea9d`(wrap 域);fixture 对 master 重钉(双形态);repin commit 勿 pick;先读 oracle 全貌再落地,发现旧分支偏差按 oracle 修正 |
-| BN(w-gotoprints) | `GOTO-PRINTS-NEXTFLOWAFTER-ARMS-0001` | writer | `src/block.rs`+`src/coreaction.rs`+`docs/api/{block,blockaction,coreaction}.md`+`tests/oracle/goto_prints_nextflowafter_1204.*`+`tools/run_goto_prints_nextflowafter_oracle.sh`，branch `wt/sb-gotoprints` | **DONE(2026-09-22,见 wave 日志当日条)**:nextFlowAfter 12 分臂单一事实源落 block.rs(`next_flow_after_successors`/`graph_sibling_successors`,pub)+修 BB 表 Switch 槽0/序两偏差+删 7 死代码 typed 方法;双侧 fixture 六形态 **MATCH**;curl/httpd 全量 defects=numbering=0 且输出与父提交**字节一致**(当前语料零翻转,纯潜伏雷排除);**机制 C: blockaction.rs 未触及**(改动域=block.rs/coreaction.rs,主管线行为变化建议 root 安排独立复核) |
+| BN(w-gotoprints) | `GOTO-PRINTS-NEXTFLOWAFTER-ARMS-0001` | writer | `src/block.rs`+`src/coreaction.rs`+`docs/api/{block,blockaction,coreaction}.md`+`tests/oracle/goto_prints_nextflowafter_1204.*`+`tools/run_goto_prints_nextflowafter_oracle.sh`，branch `wt/sb-gotoprints` | **DONE(2026-09-22,见 wave 日志当日条)**:nextFlowAfter 12 分臂单一事实源落 block.rs(`next_flow_after_successors`/`graph_sibling_successors`,pub)+修 BB 表 Switch 槽0/序两偏差+删 7 死代码 typed 方法;双侧 fixture 六形态 **MATCH**;curl/httpd 全量 defects=numbering=0 且输出与父提交**字节一致**(当前语料零翻转,纯潜伏雷排除);**机制 C: blockaction.rs 未触及**(改动域=block.rs/coreaction.rs,主管线行为变化建议 root 安排独立复核);**开项②(append 臂 multigoto gotoedge 形态)已由 BT 车道物化(第七形态 MATCH,见 BT 行)** |
+| BT(w-mgresid) | `B2-MG-RESID-1/2/3`(MultiGoto Cross-Review 绑定条件收口)+BN 开项② | writer | `tests/oracle/blockmultigoto_1204.{cc,rs,metadata.json}`+`tools/run_blockmultigoto_oracle.sh`+`tests/oracle/goto_prints_nextflowafter_1204.{cc,rs,metadata.json}`+`docs/TODO_BOARD.md`，branch `wt/sb-mgresid` | **DONE(2026-09-22,fixture-only,零 src 改动)**:①fixture 三件套+pin runner 入库,四 family(规则驱动 switch_double_back/loop_exit_conflict 同形构造/direct 剥离契约/copy_switch_consumption 同形构造)双侧 runner **MATCH**;②`goto_prints_nextflowafter_1204` 第七形态 `switch_multigoto_gotoedge`(cc:3548-3553 append 臂)落地,MATCH,既有六形态字节不变;③glob_set/gp 归因=真差但全量落在 JUMPTABLE-TABLEAPI-0001(label 占位+goto-case 发射)+globalsym 覆盖缺口(原始偏移 vs 字段化),multigoto 域无可修项,详见 wave 日志 B2-MG-RESID 节;master E2E 基线 3648/0/0 复测无损 |
 | ~~w-salvage~~ | 12 个老 agent/* 分支甄别 | 只读 | 无 | **DONE**:SALVAGE-TRIAGE-2026-09-01.md;结论已并入上文 salvage 节 |
 | sb-condreplay(wt 分支) | `PRINTC-COND-REPLAY-0001`(BL 审计遗留两处条件通道裁决+转换) | writer | `src/printc.rs`+`docs/api/printc.md`+本行 | **DONE(2026-09-22)**:裁决=两处均真偏离(oracle cc:3053-3056=comma_separate 块分派全量 walk、cc:3088-3093=only_branch 块分派重放,括号由 opCbranch 供给;golden 1592/1601/2523 comma-init 形态实证)。改动=whiledo 入口 mod 协议(cc:3012-13/3065)+普通臂/overflow 重放分派化+dowhile 入口协议+尾部 only_branch 分派化,删 dowhile 文本缓冲+块级 R50 折叠。三门禁:curl 3649/0/0(基线 3648)、httpd 2459/0/0(基线 2462)、gcc 失败集逐函数恒等(81/26、7/22);printc 单测 12/12。golden 形态落地:comma-init 族/getparameter `']'` 修复(golden 2253)/glob->size 解析/unique+`( *)` 泄漏清除。新登记 `PRINTC-CONDBLOCK-JUNKOPS-0001`。详见 docs/api/printc.md 2026-09-22 追加节 |
 | (排队) | `PRINTC-CONDBLOCK-JUNKOPS-0001` | writer | `src/blockaction.rs`(whiledo cond 块构建)+相关 SSA/merge 域,owner 待派 | 排队(2026-09-22 sb-condreplay 发现):whiledo 条件块残留 junk COPY(`glob = filename`/`uVar6 = uVar6`/`__ptr = __ptr` 自拷贝)随 comma_separate 全量 walk 打印(match_url 97→99、parseconfig 197→199 波动源)——打印通道正确,多余 op 为结构层差异(golden 条件块已消除);修域=structurer/SSA copy 消除,非 printc |
