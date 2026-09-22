@@ -1,0 +1,115 @@
+{
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b"
+ },
+ "architecture": "x86:LE:64:default",
+ "compiler_spec": "gcc",
+ "analysis_options": {
+  "architecture_constructor": "BfdArchitecture(examples/curl, default)",
+  "loader_symbol_namespace": "::",
+  "load_mode": "single_function_bfd",
+  "build_flags": "v1-no-OPACTION_DEBUG",
+  "stepping_protocol": "breakpoint on every leaf Action (break_start only; spec v1.2.2 D9: BREAK_ACTION is not part of the v1 enumeration); perform/resume loop; one @BEGIN/@END pair per perform() call of the node, so a rule_repeatapply leaf (ActionPool oppool1/oppool2/cleanup, and non-pool repeatapply leaves such as donothing) emits ONE event covering its whole internal convergence loop (@END count = converged per-perform accumulator, apply = internal changed-apply increments); @SNAP follows every @END; group events nest per spec v1.1 (iii): group @BEGIN before child events, group @END only after the group resumes and completes",
+  "restart_policy": "single ActionRestartGroup universal (maxrestarts=1); @RESTART emitted on curstart change (native 0-based), first round suppressed; root event stays open across restarts and ends at final completion with accumulated count",
+  "observation_hack": "Action protected fields read via explicit access macro include wrapper; ActionRestartGroup::curstart read through instrumented accessor fixtureGetCurstart (precedent action_break_pool_1204.cc:561); SleighArchitecture languageindex/description (implicitly private, no access label) read through instrumented public accessors fixtureGetLanguageIndex/fixtureGetLanguage so META arch/cspec are DERIVED from the live conf object (LanguageDescription id + resolved CompilerTag id; x86.ldefs language id=x86:LE:64:default, compiler tag id=gcc — x86-64-gcc is the spec file name, not the id)",
+  "normalization": "pointer-valued varnodes only: s:<spacename> for spaceid constants (live AddrSpace object address table, sleigh.cc:236/269), f:<call op seqnum> for fspec-space varnodes (Funcdata::newVarnodeCallSpecs), o:<referenced op seqnum> for iop-space varnodes (Funcdata::newVarnodeIop); unique offsets NOT normalized; ratified as spec v1.2 addendum (docs/alignment_docs/STAGE_BISECT_SPEC_1204.md, master a31a3cb)"
+ },
+ "input": {
+  "binary": "examples/curl",
+  "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+  "function": "next_url",
+  "entry": "ram:0000000000004ff0",
+  "maxrestarts": 1,
+  "unique_base": "0x364200",
+  "initial_state": "fresh Funcdata via followFlow over full default code space; production universal action tree reset"
+ },
+ "input_fingerprint": "sha256:0345105fb08b02e6747738929049506a0316a02d7b91016c2ccb145bd8b9725d",
+ "comparand_sha256": {
+  "cpp_fixture": "9457bf886fede60aaafb81b03ea693b985c5dce1bb0029afdb41fe032bbb3003",
+  "ghidra_instrumented_action_hh_sha256": "33a0404322e3641111f91187eb0bd0f49192fc93ef59f8c355d15a97dcfa47f3",
+  "ghidra_instrumented_sleigh_arch_hh_sha256": "43eadf844d38e110c88b3b14c18b87e285059a2bb449ce791355654f6cdb2fc0"
+ },
+ "assets": {
+  "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+  "sla_sha256": "d5adc314e2278228b380d8f653b2b579fa4a65986bb1d39b095e461fd5432481",
+  "pspec_sha256": "3c3dab75a2ac0b98b0552856f690e613d661e0df7cf94d6252e5604d9821629f",
+  "cspec_sha256": "5eaa848f3eba7ebd4023541f9f37645dae077e8426fb562592f398d599530a9e",
+  "ldefs_sha256": "b2aa14d94a6162844b18bf47f2aed8579bf90cef3459f6e322b9c1f58146098b",
+  "bfd_header_sha256": "c8c9c20823ebd8d427d9f91dd642b82b263fca2245a8ef4eb34f0de0cde25702",
+  "bfd_library_sha256": "f9ca64d035c483bbfac32ca550074c20398ae2f0bb84dd989059dadb9cea8a1e"
+ },
+ "host_compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+ "projection_expectations": {
+  "producer_blob": "f6cb61d14fd3df7be2e65a74381c303326c3e0dc",
+  "sha256": "a76cc9f8cc6a587e808f46a8cb69a5053013b21f82c39214de88627800c9732a",
+  "bytes": 6081486,
+  "begins": 335,
+  "ends": 335,
+  "snaps": 335,
+  "restarts": 0,
+  "total_op_lines": 96457,
+  "max_snap_ops": 1836,
+  "min_snap_ops": 219,
+  "determinism": "canonical capture recipe (baked into the runner, mirrors run_stage_drill_oracle.sh): cwd=repo_root, argv=sleigh_specs examples/curl (relative), env=`env -i` (no target variables in the zero-argument form), ASLR off via `setarch -R`; byte-identical across repeated runs. The producer_blob-only lineage of sha256 8144a7bf482c8cd53171efae88c6607cb9ad95c9c2ffdfbec46aee0d23b14ab7 (pre-parameterization fixture): body byte-identical, only the META producer blob field changed when the fixture gained STAGE_PROJ_FUNC/STAGE_PROJ_ADDR selection + the httpd dynamic-symbol fallback"
+ },
+ "descriptor_grammar": "spec v1.2.1 grammar: v1.1 base + ratified s:/f:/o: pointer pseudonyms (v1.2 addendum, master a31a3cb) + opcode domain = get_opname(op->code()) verbatim (opcodes.hh:133 canonical 74-name uppercase table, master 85d78a7 erratum: the typeop.cc name domain is lossy, e.g. INT_LESS/INT_SLESS both render '<'); runner validator enforces the closed cpui name table with token shape ^[A-Z][A-Z0-9_]*$ via the data-driven OPCODE_DOMAIN constant",
+ "fixture_id": "STAGE-PROJECTION-1204-ORACLE",
+ "functions": {
+  "curl/main": {
+   "corpus": "curl",
+   "function": "main",
+   "entry": "0x25a0",
+   "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "projection_expectations": {
+    "sha256": "bd9f682098077411ee48c3a6729805d6c1a85750d965f558fcc926aca44d704d",
+    "bytes": 194406394,
+    "begins": 299,
+    "ends": 299,
+    "snaps": 299,
+    "restarts": 0,
+    "total_op_lines": 2414145,
+    "max_snap_ops": 10748,
+    "min_snap_ops": 1353
+   },
+   "capture_recipe": "cwd=repo_root; setarch -R env -i STAGE_PROJ_FUNC/STAGE_PROJ_ADDR; argv=sleigh_specs examples/curl (relative paths); the oracle's application order depends on the process's early heap allocation sequence: relative-vs-absolute argv and ASLR both demonstrably flip it (see runner canonical-recipe note), so both are pinned (same recipe contract as stage_drill_1204.metadata.json)"
+  },
+  "curl/getparameter.constprop.0": {
+   "corpus": "curl",
+   "function": "getparameter.constprop.0",
+   "entry": "0x3f00",
+   "binary_sha256": "8af50bca2f812580933fbbf125b66ce8ba4acfe88ef4435c89ac72356f122d41",
+   "projection_expectations": {
+    "sha256": "4464f2fff9088f3ed52fd08c4a5839237da6bcc1540f112df7f13ccfad205fa2",
+    "bytes": 74304236,
+    "begins": 371,
+    "ends": 371,
+    "snaps": 371,
+    "restarts": 0,
+    "total_op_lines": 913373,
+    "max_snap_ops": 4023,
+    "min_snap_ops": 922
+   },
+   "capture_recipe": "cwd=repo_root; setarch -R env -i STAGE_PROJ_FUNC/STAGE_PROJ_ADDR; argv=sleigh_specs examples/curl (relative paths); the oracle's application order depends on the process's early heap allocation sequence: relative-vs-absolute argv and ASLR both demonstrably flip it (see runner canonical-recipe note), so both are pinned (same recipe contract as stage_drill_1204.metadata.json)"
+  },
+  "httpd/main": {
+   "corpus": "httpd",
+   "function": "main",
+   "entry": "0x2b820",
+   "binary_sha256": "805f89cdbdce827f8f6ccd877aa7c344ff1105713b7bf7b0e6f313affa93b1c1",
+   "projection_expectations": {
+    "sha256": "3815f999ef5676a5b17a85f0be60938fad3dfa1e7dabc9be5cefca007d95d8a3",
+    "bytes": 67659546,
+    "begins": 294,
+    "ends": 294,
+    "snaps": 294,
+    "restarts": 0,
+    "total_op_lines": 878973,
+    "max_snap_ops": 8140,
+    "min_snap_ops": 1344
+   },
+   "capture_recipe": "cwd=repo_root; setarch -R env -i STAGE_PROJ_FUNC/STAGE_PROJ_ADDR; argv=sleigh_specs examples/httpd (relative paths); the oracle's application order depends on the process's early heap allocation sequence: relative-vs-absolute argv and ASLR both demonstrably flip it (see runner canonical-recipe note), so both are pinned (same recipe contract as stage_drill_1204.metadata.json)",
+   "loader_deviation": "httpd is stripped: LoadImageBfd reads only the static BFD symbol table (bfd_canonicalize_symtab), so the harness registers dynamic-table function symbols as in tools/regen_ghidra_golden.py registerBfdFunctionSymbols (mirror of stage_drill_1204.cc registerDynamicFunctionSymbols); the entry pin guards identity"
+  }
+ }
+}
