@@ -527,7 +527,7 @@ curl/httpd E2E 输出字节不变（见 w-lminors 报告），即语料上两处
 - `merge_op`（merge.cc:719）：三阶段 forced merge — 非cover限制 trim → cover 限制迭代 trim（trimOpInput/trimOpOutput）→ 真正 merge。
 - `collect_inputs`（merge.cc:783）+ `snip_output_interference`（merge.cc:811）：INDIRECT 输出干扰检测 + snip。
 - `merge_indirect`（merge.cc:846）：snipOutputInterference + mergeOp。
-- `merge_test_with_list`（merge.cc:1657）：HighIntersectTest 替代（用 aggregate_high_cover + intersect_char）。
+- `merge_test_with_list`（merge.cc:1657）：经 `type_test_cache.intersection`（HighIntersectTest port：intersectList(…,2) 候选块 + gather_block_varnodes/test_block_intersection 时间戳级判定 + 缓存/moveIntersectTests 生命周期）判定,与 Ghidra `testCache.intersection(a,high)` 同路径。曾用 aggregate_high_cover + intersect_char 粗近似（把同块字符重叠一律判相交,导致 mergeOp Phase 2 对时间戳不相交的 marker op 误入 trim 循环——sb-impliedfold lane 实测 main +8804 trim COPY vs oracle +45）,2026-09-22 sb-impliedfold 移除。
 - `merge_marker` 从 merge_force 改为委托 merge_op/merge_indirect（对齐 merge.cc:889-902）。
 
 ### 2026-07-04（续 6）：移植 redundant-copy 标记子系统
@@ -858,3 +858,43 @@ rugra-tests/sb-copynoise/）测得 CopyMarker 时 1957 个 diff-high 幸存 COPY
 中 1531 个的一侧为 implied（mergeTestBasic 正确拒绝），仅 ~312 ok/ok 对
 未被合并 —— 主杠杆移至 MarkImplied×打印折叠（printc lane）与 ok/ok 对
 的 req/inter/重分裂排查，已在 TODO_BOARD 重新登记。
+
+### 2026-09-22：MERGE-COPYNOISE-IMPLIEDFOLD — merge_test_with_list 接入精确 HighIntersectTest（真根因修复）
+
+**CA 判决修正**：copynoise lane 的"折叠责任在打印侧"推断被双侧实证推翻。
+锁定 oracle 直连探针（/dev/shm/rugra-tests/sb-impliedfold/oracle_copyprobe，
+git archive e40ed130 + BfdArchitecture）对 main 逐阶段 census：
+oracle 进入 merge 组时仅 **190 个存活 COPY**（管线入口 726 ≈ 原始 mov 数
+668），MarkImplied 只 imply 22 个 COPY 相关 varnode，mergerequired 全程
+仅 +45 op；而 Rugra 在 pre-assignhigh 时与 oracle 几乎一致（8907 vs
+8904 ops），**ActionMergeRequired 处爆增 +8809 op**（main +8804）。打印侧
+一刀切折叠 in-implied COPY 是错的——oracle 自己打印 20 个合法 in-implied
+COPY（RHS 内联 CAST 表达式）。
+
+**根因**：`merge_test_with_list`（Merge::mergeTest port,merge.cc:1657）
+绕过了 testCache,用 `aggregate_high_cover`+`intersect_char>0` 粗近似
+（任何同块字符重叠 ⇒ 相交）。oracle 的 `testCache.intersection(a,high)`
+（variable.cc:1166）= `intersectList(…,2)` 候选块 + `blockIntersection`
+（gatherBlockVarnodes + testBlockIntersection,variable.cc:998）做
+**实例 def/read 时间戳级**判定——字符重叠但时间戳不交错的 high 对
+判"不相交"。粗近似使 mergeOp Phase 2（merge.cc:743-761）对大量时间戳
+不相交的 MULTIEQUAL/INDIRECT 误判失败 → trim 循环把每个输入都
+trimOpInput → 每 phi 产 2-3 个 COPY trim,main +8804。这些 trim COPY
+随后被 MarkImplied 标 implied（单实例 high 的 inflateTest 平凡通过）,
+mergeTestBasic 拒绝合并,最终以 `uVarX = uVarX` 自赋值与 spill/restore
+乒乓形态泄漏到打印。
+
+**修复**：merge_test_with_list 改走 `self.type_test_cache.intersection`
+（Rugra 已有的 HighIntersectTest 忠实 port,mergeType/mergeAddrTied 已在
+用）,与 oracle merge.cc:1664 `testCache.intersection(a,high)` 字面一致。
+
+**门禁**：merge_marker trim 全语料 +13870 → **+368**（main +8804→远低
+于 oracle +45 量级）；main 存活 COPY 9050→**327**（oracle 234）；curl
+全文件自赋值 **907→2**（golden 0；余 2 个在 match_url,绑定既有
+PRINTC-CONDBLOCK-JUNKOPS-0001 族）；curl E2E skeleton **3654→3018**,
+defects=0/numbering=0；httpd skeleton 2459→2406,defects=0/numbering=0；
+--func main 1199→819；glob_set 97→105（重排非缺陷,defects=0,如实报告）；
+merge:: 8/8 + coreaction:: 57/57 测试绿；全量 --lib 18 失败为主仓同基
+预存在（/home/ls/Rugra d3fbe924 复跑同集合）。改动函数 B2=NO_ORACLE
+（无逐函数双侧 oracle fixture;证据=oracle 逐阶段 census 探针 + 双语料
+E2E 差分门禁）。
