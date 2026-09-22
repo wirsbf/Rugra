@@ -72,19 +72,23 @@ makeRec 拒绝——真实 DWARF 锁名);②缺 `._4_4_` padding store(手工布
 
 ## 4. 精确分歧点(待修)
 
-`SPLITCOPY_BIG` probe:280B 栈读 `in_input=false in_written=true`。
-Ghidra 中该域整体落在 **in_stack 输入影子**(读先于写在栈域),件为
-SUBPIECE/字段载入的栈地址输出;rugra 中 280/304B 读被当作"已写"
-(heritage 把 8B 循环 store 连进了大读,或 guard_input 的 concat_pieces
-统一写出),splitCopy 的 input-guard(subflow.cc:2390 ↔ rugra subflow.rs:6208
-**两侧守卫一致**)不触发,拆分走寄存器域重组。
+`SPLITCOPY_BIG` probe(最终形态):280B 栈读 `in_input=false in_written=true
+def=CPUI_MULTIEQUAL@0x2806`。即 rugra 的 heritage 把循环 8B store 的影写
+**在 280B 粒度上合并成了 MULTIEQUAL 写**(循环体内 0x2806),大读因此
+"已写";oracle 侧同位置保持 in_stack 输入影子域,splitCopy 件的
+SUBPIECE/字段载入输出落在**栈地址**,最终被 RulePieceStructure 字段化。
+rugra 侧件落在 join/寄存器域(n:register:10000a06:280 + ram:10000a06 梯),
+304 根虽 `structured=Some("URLGlob")` 但叶子已在"匹配"地址上跳过重定位。
+另证:**oracle 复现输出里 SUB248/SUB2416 函数形态 = Ghidra 也执行了
+splitCopy**——分歧不是"拆不拆",而是**件的落点域与根的基址**。
 
 候选修复面(按依赖序):
-1. heritage rename_recurse/大读输入晋升:286/304B 自由读在 Ghidra 侧成为
-   input(见 heritage.cc:2498-2503 varstack 空→setInputVarnode);rugra 侧
-   被判 written。用 stage-drill 双侧阶段 bisect 定位首个分歧阶段。
-2. 拆分后件的落点:oracle 的件是栈地址 varnode(buildInSubpieces/
-   buildPointers),打印为 in_stack 部分读;rugra 件在 join/寄存器。
+1. heritage 大读影写合并粒度:定位 rugra 侧 280B MULTIEQUAL 的创建点
+   (guard_input concat_pieces 统一写/影写 piece 合并),对齐 Ghidra 的
+   "读先于写输入影子"行为;stage-drill 双侧 bisect 定位首个分歧阶段。
+2. RulePieceStructure 基址:oracle 的树根基址落在栈 fc78(件重定位到
+   字段地址);rugra 根在 join 域,`baseAddr=outvn-addr-baseOffset` 落
+   join,叶子无迁移。
 3. 命名链:callsite param NAME_LOCKED → makeRec(需 high 非 addr-tied)。
 
 ## 5. 工具资产
