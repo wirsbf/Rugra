@@ -92,6 +92,8 @@ fn worker_memory_image_bytes(elf: &goblin::elf::Elf, buffer: &[u8]) -> Vec<u8> {
         }
     }
     image
+}
+
 // SB-CONSTBASE-0001: language host for the httpd-side pspec ingest — same
 // shape as the curl worker's WorkerSpecHost (curl_decompile.rs): registers
 // enumerated from the real locked .sla through SleighCtx, spaces from the
