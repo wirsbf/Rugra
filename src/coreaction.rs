@@ -1469,7 +1469,27 @@ impl Action for ActionRestructureVarnode {
         // Ghidra cc:2279: aliasyes = (numpass != 0).
         // Alias calculations are not reliable on the first pass.
         let aliasyes = self.numpass != 0;
-        let mut scope = crate::varmap::ScopeLocal::new();
+        // Ghidra's localmap is ONE persistent ScopeLocal on the Funcdata
+        // (funcdata.cc:69-70 setScopeLocal; resetLocalWindow runs only at
+        // lifecycle points funcdata.cc:70/96/836, NEVER per restructure
+        // pass). ActionRestrictLocal's markNotMapped edits survive across
+        // mainloop iterations because the scope object persists. Rugra
+        // previously built a fresh ScopeLocal every pass, wiping the
+        // not-mapped ranges (and resurrecting the outgoing-param shadow
+        // region in the local window), which kept the 30d6 SUBPIECE field
+        // pieces addr-tied (VARGROUP-ABSORB-0001 §4-4). Reuse fd.scope once
+        // installed; only the FIRST pass creates (and seeds + window-installs)
+        // the scope.
+        let mut scope = match fd.scope.take() {
+            Some(existing) => existing,
+            None => {
+                let mut fresh = crate::varmap::ScopeLocal::new();
+                // funcdata.cc:70: localmap->resetLocalWindow() — the one
+                // lifecycle-time window install (VarMap-CROSSPASS fix).
+                fresh.reset_local_window(fd);
+                fresh
+            }
+        };
         // Ghidra platform-side parameter symbols: the function's local scope
         // arrives from the Program database with the DWARF function's named
         // parameter symbols already installed (decompile.cc <localdb>
@@ -1478,55 +1498,58 @@ impl Action for ActionRestructureVarnode {
         // function_parameter symbol, so printing uses the parameter name
         // (`string`/`value`) rather than the in_RXX irregular-input fallback
         // (varmap.cc:1508 buildDefaultName). Rugra's fresh ScopeLocal is
-        // empty, so seed the input-locked FuncProto's parameters here, at
-        // scope construction, before restructure_varnode.
-        if fd.funcp.is_input_locked() {
-            let params: Vec<(
-                String, std::sync::Arc<crate::type_system::datatype::Datatype>, u64,
-            )> =
-                fd
-                .funcp
-                    .parameters
-                    .iter()
-                    .map(|p| (
-                            p.name.clone(),
-                            p.data_type.clone(),
-                            p.address.as_u64()))
-                    .collect();
-            for (index, (name, dtype, offset)) in params.into_iter().enumerate() {
-                let idx = scope.add_symbol(
-                    crate::space::AddressSpace::Register,
-                    &name,
-                    Some(dtype.clone()),
-                    offset,
-                    None,
-                );
-                scope.set_category(
-                    idx,
-                    crate::varmap::symbol_category::FUNCTION_PARAMETER,
-                    index as i32,
-                );
-                // Platform parameter symbols are name+type locked (they
-                // come from the debug info); the locks also protect the
-                // symbols from ScopeInternal::clearUnlockedCategory(
-                // Symbol::function_parameter) (varmap.cc:1275), which runs
-                // at the top of every restructureVarnode pass.
-                scope.symbols[idx].namelock = true;
-                scope.symbols[idx].typelock = true;
-                // The locked parameter symbol also type-locks its storage
-                // varnode: Ghidra's Varnode::setSymbolEntry (varnode.cc:418)
-                // sets Varnode::typelock from the Symbol flags and
-                // syncVarnodesWithSymbol (funcdata_varnode.cc:983-1002)
-                // flows the symbol's Datatype onto the varnode. Rugra's
-                // sync only walks the stack space, so apply the type to the
-                // register input directly here.
-                let input_vn =
-                    fd.find_varnode_input(dtype.get_size(), crate::address::Address::new(offset));
-                if let Some(vn_arc) = input_vn {
-                    let mut vn = vn_arc.write().unwrap();
-                    if !vn.is_type_lock() {
-                        vn.v_type = Some(dtype.clone());
-                        vn.set_flags(crate::varnode::varnode_flags::TYPELOCK);
+        // empty, so seed the input-locked FuncProto's parameters at scope
+        // construction only — the persistent scope keeps them across passes
+        // (category function_parameter survives clearUnlockedCategory).
+        if scope.is_first_pass_construct {
+            if fd.funcp.is_input_locked() {
+                let params: Vec<(
+                    String, std::sync::Arc<crate::type_system::datatype::Datatype>, u64,
+                )> =
+                    fd
+                    .funcp
+                        .parameters
+                        .iter()
+                        .map(|p| (
+                                p.name.clone(),
+                                p.data_type.clone(),
+                                p.address.as_u64()))
+                        .collect();
+                for (index, (name, dtype, offset)) in params.into_iter().enumerate() {
+                    let idx = scope.add_symbol(
+                        crate::space::AddressSpace::Register,
+                        &name,
+                        Some(dtype.clone()),
+                        offset,
+                        None,
+                    );
+                    scope.set_category(
+                        idx,
+                        crate::varmap::symbol_category::FUNCTION_PARAMETER,
+                        index as i32,
+                    );
+                    // Platform parameter symbols are name+type locked (they
+                    // come from the debug info); the locks also protect the
+                    // symbols from ScopeInternal::clearUnlockedCategory(
+                    // Symbol::function_parameter) (varmap.cc:1275), which runs
+                    // at the top of every restructureVarnode pass.
+                    scope.symbols[idx].namelock = true;
+                    scope.symbols[idx].typelock = true;
+                    // The locked parameter symbol also type-locks its storage
+                    // varnode: Ghidra's Varnode::setSymbolEntry (varnode.cc:418)
+                    // sets Varnode::typelock from the Symbol flags and
+                    // syncVarnodesWithSymbol (funcdata_varnode.cc:983-1002)
+                    // flows the symbol's Datatype onto the varnode. Rugra's
+                    // sync only walks the stack space, so apply the type to the
+                    // register input directly here.
+                    let input_vn =
+                        fd.find_varnode_input(dtype.get_size(), crate::address::Address::new(offset));
+                    if let Some(vn_arc) = input_vn {
+                        let mut vn = vn_arc.write().unwrap();
+                        if !vn.is_type_lock() {
+                            vn.v_type = Some(dtype.clone());
+                            vn.set_flags(crate::varnode::varnode_flags::TYPELOCK);
+                        }
                     }
                 }
             }
@@ -1568,6 +1591,10 @@ impl Action for ActionRestructureVarnode {
         // markUnaliased aliasyes gate is inside restructure, which is
         // always-on in Rugra). TODO: thread aliasyes through.
         scope.restructure_varnode(fd);
+        // One-time construction is complete after the first restructure
+        // pass (platform symbols seeded, window installed); subsequent
+        // passes reuse this persistent scope (funcdata.cc:69-70 lifetime).
+        scope.is_first_pass_construct = false;
         fd.scope = Some(scope);
         // Ghidra cc:2281-2282: if (data.syncVarnodesWithSymbols(l1,false,aliasyes)) count += 1;
         if fd.sync_varnodes_with_symbols(false, aliasyes) {
@@ -8767,10 +8794,21 @@ impl Action for ActionRestrictLocal {
             if !fc.has_spacebase_offset() { continue; }
             let so = fc.get_spacebase_offset();
             for p in &fc.prototype.parameters {
-                if p.address.as_u64() > 0x7FFF_FFFF {
-                    let off = (so as u64).wrapping_add(p.address.as_u64());
-                    unmap_ranges.push((off, p.data_type.get_size() as i32, true));
+                // coreaction.cc:1974-1975: if (addr.getSpace()->getType() !=
+                // IPTR_SPACEBASE) continue; — only spacebase (stack-space)
+                // parameter storage triggers markNotMapped. Rugra models the
+                // param's space in `address_space`; the stack space IS the
+                // spacebase space here. The previous `offset > 0x7FFF_FFFF`
+                // heuristic never matched the callee-relative offsets (e.g.
+                // match_url's URLGlob param at stack+8) and left the whole
+                // outgoing-parameter shadow region inside the local map —
+                // the direct cause of the 30d6 SUBPIECE pieces being
+                // addr-tied (VARGROUP-ABSORB-0001 §4-4).
+                if p.address_space != crate::space::AddressSpace::Stack {
+                    continue;
                 }
+                let off = (so as u64).wrapping_add(p.address.as_u64());
+                unmap_ranges.push((off, p.data_type.get_size() as i32, true));
             }
         }
 

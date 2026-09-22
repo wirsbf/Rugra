@@ -2394,6 +2394,11 @@ pub struct ScopeLocal {
     /// no-symbol branch, database.cc:1274-1275). Production ScopeLocal
     /// instances keep this false.
     pub is_global_scope: bool,
+    /// RUGRA-GLUE: true until the first ActionRestructureVarnode pass
+    /// finishes construction (platform-symbol seeding + the one-time
+    /// resetLocalWindow install). Ghidra needs no flag — its ScopeLocal is
+    /// constructed once at Funcdata::setScopeLocal (funcdata.cc:69-70).
+    pub is_first_pass_construct: bool,
 }
 
 impl ScopeLocal {
@@ -2422,6 +2427,11 @@ impl ScopeLocal {
             pending_lowlevel_error: None,
             mapentry_log: Vec::new(),
             is_global_scope: false,
+            // RUGRA-GLUE: ActionRestructureVarnode persists this scope across
+            // passes (Ghidra's localmap is one Funcdata-lifetime object);
+            // the flag gates the one-time platform-symbol seeding + window
+            // install at first construction (funcdata.cc:69-70).
+            is_first_pass_construct: true,
         }
     }
 
@@ -3047,13 +3057,16 @@ impl ScopeLocal {
             .unwrap_or_else(crate::type_system::typefactory::TypeFactory::shared_default);
 
         // resetLocalWindow (varmap.cc:432-460) — the Funcdata lifecycle calls
-        // it right after scope construction (funcdata.cc:70); Rugra's
-        // restructure_varnode owns a fresh ScopeLocal per pass (coreaction.rs),
-        // which matches that lifecycle point on the FIRST pass / after a
-        // clear — from the 2nd RULE_REPEATAPPLY pass on, Ghidra keeps the
-        // narrowed window and accumulated min/max while Rugra reinstalls the
-        // full window (VARMAP-CROSSPASS-PERSISTENCE-0001).
-        self.reset_local_window(fd);
+        // it exactly once at scope construction (funcdata.cc:70; the other
+        // call sites are funcdata.cc:96 clear() and :836). The previous
+        // per-pass reinstall wiped every ActionRestrictLocal markNotMapped
+        // narrowing, resurrecting the outgoing-parameter shadow region in
+        // the local window each mainloop iteration
+        // (VARMAP-CROSSPASS-PERSISTENCE-0001 /
+        // VARGROUP-ABSORB-0001 §4-4): the window install now lives at the
+        // ActionRestructureVarnode first-pass construction only.
+        // (rangeLocked, varmap.cc:439, has no Rugra counterpart yet — no
+        // producer sets it in this pipeline.)
 
         // Build the MapState with a default unknown base type (1 byte),
         // matching Ghidra's MapState construction (varmap.cc:1260-1261),

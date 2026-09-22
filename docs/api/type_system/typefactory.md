@@ -71,6 +71,15 @@ Core names are never inferred. The byte-faithful port — including the
 "TypeFactory alignment map not initialized" LowlevelError of the raw
 constructor state — is `get_base_result`.
 
+**2026-09-23（VARGROUP-ABSORB-0001 §4-4）**: 本 twin 补齐 type.cc:3652-3657 的
+超尺寸转换——`size > max_base_type_size` 的请求一律变成 `size` 字节 1-byte
+unknown 数组（与请求的 metatype 无关，`xunknown1 [280]` 即此来源）。数组经
+`oversize_unknown_array`（&self 镜像 of get_array_result）在 `base_type_tree`
+里以 `find_add` 同款结构键取/放，与 &mut 路径共享同一 `Arc` 身份。此前 twin 对
+任意尺寸构造标量 TypeBase，280B 输入影子被定型为标量 INT（`unkint280`），
+`is_piece_structured`（TYPE_ARRAY 家族）不命中 → RuleSubRight 的特殊打印标记
+（ruleaction.cc:7256）不触发 → 字段件退化成 INT_RIGHT 移位梯。
+
 TYPEFACTORY-LEGACY-CALLER-MIGRATION-0001 (2026-08-23): every in-lease caller
 (cpool.rs, merge.rs, grammar.rs, typefactory internals incl. the partial-type
 constructors, `down_chain_pointer`, `get_ptr_to_from_parent`, and the decode

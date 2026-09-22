@@ -6242,20 +6242,19 @@ impl PrintC {
         // variable.cc:537-546: the member instance's ptr-equal entry) —
         // the scope-prefix ownership test reads its mapped address.
         let sym_entry = high.get_symbol_entry();
-        if !self.symbol_is_global(&sym, sym_entry.as_ref()) {
-            // Rugra-side ScopeLocal bridge symbol: partial/mismatch walks
-            // are global-only. The oracle resolves local reads through
-            // this same pushSymbolDetail, but its ScopeLocal Symbols are
-            // name-synced (ActionParameterSymbols) and EXACTLY sized by
-            // restructure; Rugra's bridges carry buildVariableName auto
-            // names and approximate entry sizing, so the bound check and
-            // the `._off_sz_` / `_name` arms fabricate forms with no
-            // oracle counterpart (httpd witness `_pcVar12` from a 1-byte
-            // bridge entry over an 8-byte read). Local symbols take the
-            // plain pushSymbol form; the param-name ladder above covers
-            // the proto-named register inputs.
-            return Some(sym.get_display_name().to_string());
-        }
+        // printlanguage.cc:243-261: the local/global distinction does NOT
+        // gate the partial walk — oracle ScopeLocal Symbols walk the same
+        // symboloff/partial/mismatch ladder as globals (the
+        // `UVar3.pattern[0].type` / `auVar21._0_4_` / `in_stack_..._80_24_`
+        // forms all come from LOCAL symbols). The previous local-symbol
+        // bare-name degrade (documented against approximate ScopeLocal
+        // bridge sizing) is superseded by the persistent-ScopeLocal symbol
+        // layer (ActionRestructureVarnode reuse + ActionRestrictLocal
+        // markNotMapped, VARGROUP-ABSORB-0001 §4-4): entries now come from
+        // the real restructure with exact sizes, so the bound check and
+        // the `._off_sz_` arms produce the oracle forms. The mismatch arm
+        // (`_name` / unnamed-location) still guards the oversize-read
+        // case exactly as printc.cc:2067-2083 does.
         // printlanguage.cc:247-254: symboloff resolution. -1 = perfect
         // symbol match (HighVariable::setSymbol, variable.cc:258-270);
         // a resolution-needing type forces off 0 so the partial walk can

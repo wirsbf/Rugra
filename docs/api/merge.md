@@ -192,6 +192,15 @@ Faithful to Merge::inflateTest (merge.cc:1616). Tests if inflating varnode
 of a's own HighVariable (excluding `a` itself / its copy-shadow). Returns
 true if there IS an intersection (varnode CANNOT be implied). The
 authoritative check in ActionMarkImplied::checkImpliedCover.
+**2026-09-23（VARGROUP-ABSORB-0001 §4-4）**: 全量对齐 merge.cc:1616-1646 三段——
+①实例循环以 `Varnode::copyShadow`（COPY 链追踪，varnode.cc）放行同值影子、以
+`intersect_char(...) == 2`（仅整区间相交；边界相触 == 1 放行）拒绝——原先的
+`intersects()`（任意重叠含边界）把每个 SUBPIECE 字段件的 def 点（=输入影子的读点）
+判成相交，是 30d6 域件无法 implied、以显式语句打印的直接原因；②补 `VariablePiece`
+交集遍历（piece->updateIntersections + 逐相交件 `partialCopyShadow(a, off)` 放行
+SUBPIECE/PIECE 派生影子）；③借用重构：实例快照先drop `ahigh` 读锁再进
+update_intersections（其取 owning high 写锁——同线程读后写即死锁，曾致 markimplied
+管线挂起）。
 
 ### `pub fn merge_addr_tied(&mut self, fd: &mut Funcdata)`
 
@@ -536,6 +545,12 @@ curl/httpd E2E 输出字节不变（见 w-lminors 报告），即语料上两处
 - `merge_indirect`（merge.cc:846）：snipOutputInterference + mergeOp。
 - `merge_test_with_list`（merge.cc:1657）：经 `type_test_cache.intersection`（HighIntersectTest port：intersectList(…,2) 候选块 + gather_block_varnodes/test_block_intersection 时间戳级判定 + 缓存/moveIntersectTests 生命周期）判定,与 Ghidra `testCache.intersection(a,high)` 同路径。曾用 aggregate_high_cover + intersect_char 粗近似（把同块字符重叠一律判相交,导致 mergeOp Phase 2 对时间戳不相交的 marker op 误入 trim 循环——sb-impliedfold lane 实测 main +8804 trim COPY vs oracle +45）,2026-09-22 sb-impliedfold 移除。
 - `merge_marker` 从 merge_force 改为委托 merge_op/merge_indirect（对齐 merge.cc:889-902）。
+
+### 2026-09-23（VARGROUP-ABSORB-0001 §4-4）：markInternalCopies 补 PIECE/SUBPIECE 两臂
+移植 merge.cc:1478-1528（此前 "Omitted — no VariablePiece infrastructure"）：
+- **PIECE 臂**（cc:1478-1506）：out/in0/in1 三个 high 都带 VariablePiece 且同组、偏移与拼接几何一致（LE：p3.off==p1.off 且 p2.off==p1.off+v3.size）→ `opMarkNonPrinting` + 双输入 `clearImplied+setExplicit`（内部重组 PIECE 隐藏，件以自身语句打印）。
+- **SUBPIECE 臂**（cc:1508-1528）：out/in0 同组且 `p2.off + suboff == p1.off`（LE）→ 同样 nonprinting + in0 explicit。
+main 的 0x30d6 梯：嵌套 4+4+16 重组 `CONCAT164/CONCAT204` 语句（43 处中间态的残余）经此隐藏，调用实参直接读 join。
 
 ### 2026-07-04（续 6）：移植 redundant-copy 标记子系统
 移植 Ghidra markInternalCopies 的冗余 COPY 标记路径（merge.cc:1112-1367）：
