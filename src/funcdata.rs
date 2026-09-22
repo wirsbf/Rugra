@@ -10318,12 +10318,22 @@ impl Funcdata {
     ///   maxdelay = funcp.getMaxOutputDelay();
     ///   if (maxdelay > 0) maxdelay = 3;
     ///   activeoutput->setMaxPass(maxdelay);
-    /// RUGRA-GAP: FuncProto::getMaxOutputDelay is not ported; we use the
-    /// Ghidra-default of 3 passes (matches the `maxdelay>0 ? 3` arm).
+    /// getMaxOutputDelay is ProtoModel::getMaxOutputDelay
+    /// (fspec.hh:1572) -> the output ParamListStandard's calcDelay maximum
+    /// (fspec.cc:1154-1162) over entry spaces' AddrSpace::getDelay(). Every
+    /// output entry of every model in the locked x86-64-gcc.cspec lives in
+    /// the register space, whose delay in the locked x86-64.sla is 0 —
+    /// proven by the pinned next_url oracle projection, where returnrecovery
+    /// finalizes on mainloop round 1 (RDX trimmed at stage ordinal 19),
+    /// which requires numpasses(1) > maxpass, i.e. maxpass == 0.
     pub fn init_active_output(&mut self) {
+        let mut maxdelay = self.funcp.get_max_output_delay();
+        if maxdelay > 0 {
+            // cc:590-592: clamp any positive delay to 3.
+            maxdelay = 3;
+        }
         let mut active = crate::fspec::ParamActive::new(false);
-        // cc:590-592: clamp any positive delay to 3.
-        active.set_max_pass(3);
+        active.set_max_pass(maxdelay);
         self.active_output = Some(active);
     }
 
@@ -11194,7 +11204,8 @@ impl Funcdata {
         op: &crate::op::PcodeOpRef,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         _fl: u32,
-        trial_addr: crate::address::Address,
+        trial: &crate::fspec::ParamTrial,
+        match_fc: Option<&crate::fspec::FuncCallSpecs>,
     ) -> bool {
         use crate::opcodes::OpCode as OC;
         // cc:1759: j = op->getSlot(vn); if (j<=0) return false.
@@ -11203,18 +11214,32 @@ impl Funcdata {
             return false;
         }
         // cc:1761-1762: resolve both specifications by exact PcodeOp identity.
-        let fc = self.get_call_specs_of_op(op);
-        let matchfc = self.get_call_specs_of_op(opmatch);
+        // matchfc comes in by reference: Ghidra dereferences plain pointers,
+        // but Rust callers may hold the exclusive guard on opmatch's spec
+        // (ActionActiveParam/checkInputTrialUse walk), so re-locking it here
+        // would deadlock. onlyOpUse also reaches this with op == opmatch
+        // (when the varnode sits at a different slot of the same call), in
+        // which case Ghidra's fc and matchfc are the same object — reuse
+        // the caller-supplied reference for both instead of re-locking.
+        let same_op = std::sync::Arc::ptr_eq(&op.0, &opmatch.0);
+        let fc_arc = if same_op { None } else { self.get_call_specs_of_op(op) };
+        let fc_guard = fc_arc.as_ref().map(|arc| arc.read().unwrap());
+        let fc: Option<&crate::fspec::FuncCallSpecs> = if same_op {
+            match_fc
+        } else {
+            fc_guard.as_deref()
+        };
+        let matchfc = match_fc;
         // cc:1763-1781: same-call double-use test.
         let op_code = op.0.read().unwrap().opcode;
         let match_code = opmatch.0.read().unwrap().opcode;
         if op_code == match_code {
             let is_direct = match_code == OC::CPUI_CALL;
-            let same_target = match (&fc, &matchfc) {
+            let same_target = match (fc, matchfc) {
                 (Some(fc), Some(mfc)) => {
                     if is_direct {
-                        let entry = fc.read().unwrap().entry_addr;
-                        let match_entry = mfc.read().unwrap().entry_addr;
+                        let entry = fc.entry_addr;
+                        let match_entry = mfc.entry_addr;
                         entry.is_some() && entry == match_entry
                     } else {
                         // CALLIND: compare the indirect-call varnode (in(0)).
@@ -11229,9 +11254,9 @@ impl Funcdata {
             if same_target {
                 // cc:1770-1778: same trial address + ordering test.
                 // Rugra: we approximate the per-slot trial-address lookup by
-                // checking that the candidate's address equals trial_addr.
+                // checking that the candidate's address equals the trial's.
                 let vn_addr = vn.read().unwrap().loc;
-                if vn_addr == trial_addr {
+                if vn_addr == trial.get_address() {
                     let op_parent = op.0.read()
                             .unwrap()
                             .parent
@@ -11262,8 +11287,8 @@ impl Funcdata {
             }
         }
         // cc:1783-1793: input-active path.
-        if let Some(fc) = fc {
-            let fc = fc.read().unwrap();
+        if let Some(fc_ref) = fc {
+            let fc = fc_ref;
             if fc.is_input_active() {
                 // cc:1784: curtrial = fc->getActiveInput()->getTrialForInputVarnode(j).
                 let trial = fc
@@ -11286,39 +11311,34 @@ impl Funcdata {
     // Ghidra: funcdata_varnode.cc:1805 Funcdata::onlyOpUse
     /// Test if the given Varnode seems to only be used by a CALL/RETURN op.
     /// Faithful to `Funcdata::onlyOpUse` (funcdata_varnode.cc:1805-1904).
-    /// This is the `impl Funcdata` method form of the existing free function
-    /// `only_op_use`; it supplies `has_active_output` from `self.active_output`
-    /// and delegates to the free function so existing call-sites stay intact.
+    /// This is the `impl Funcdata` method form of the free function
+    /// `only_op_use`; it supplies the Funcdata receiver that the free
+    /// function needs for checkCallDoubleUse and getActiveOutput.
     pub fn only_op_use(
         &self,
         invn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         opmatch: &crate::op::PcodeOpRef,
-        trial_slot: i32,
+        trial: &crate::fspec::ParamTrial,
         main_flags: u32,
     ) -> bool {
-        let has_active_output = self.active_output.is_some();
-        only_op_use(has_active_output, invn, opmatch, trial_slot, main_flags)
+        only_op_use(self, invn, opmatch, trial, main_flags, None)
     }
 
     // Ghidra: funcdata_varnode.cc:1917 Funcdata::ancestorOpUse
     /// Test if the given trial Varnode is likely only used for parameter
     /// passing, following flow from ancestors it was copied from. Faithful to
     /// `Funcdata::ancestorOpUse` (funcdata_varnode.cc:1917-1994). This is the
-    /// `impl Funcdata` method form of the free function `ancestor_op_use`;
-    /// it supplies `has_active_output` from `self.active_output`.
+    /// `impl Funcdata` method form of the free function `ancestor_op_use`.
     pub fn ancestor_op_use(
         &self,
         maxlevel: i32,
         invn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         op: &crate::op::PcodeOpRef,
-        trial_slot: i32,
+        trial: &mut crate::fspec::ParamTrial,
         offset: i32,
         main_flags: u32,
     ) -> bool {
-        let has_active_output = self.active_output.is_some();
-        ancestor_op_use(
-            has_active_output, maxlevel, invn, op, trial_slot, offset, main_flags,
-        )
+        ancestor_op_use(self, maxlevel, invn, op, trial, offset, main_flags, None)
     }
 
     // Ghidra: funcdata_op.cc:332 Funcdata::newOp(int4, const SeqNum &)
@@ -16397,21 +16417,83 @@ mod traverse_flags {
     pub const CONCAT_HIGH: u32 = 0x10;
 }
 
+// Ghidra: expression.cc:28 TraverseNode::isAlternatePathValid
+/// Decide whether the alternate path (through a different RETURN/CALL) sees
+/// materially different data-flow than the main path. Faithful 1:1 port of
+/// `TraverseNode::isAlternatePathValid` (expression.cc:28-50):
+///   - main path traversed INDIRECT but alternate did not  -> true
+///   - alternate traversed INDIRECT but main did not       -> false
+///   - alternate traversed a solid action/non-incidental COPY -> true
+///   - no lone descendant                                   -> false
+///   - then skip incidental COPY chains (lone-descendant
+///     checked per hop) and return `!def->isMarker()`
+///     (MULTIEQUAL/INDIRECT indicate multiple values).
+fn is_alternate_path_valid(
+    vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    flags: u32,
+) -> bool {
+    use crate::opcodes::OpCode as OC;
+    if (flags & (traverse_flags::INDIRECT | traverse_flags::INDIRECTALT))
+        == traverse_flags::INDIRECT
+    {
+        // If main path traversed an INDIRECT but the alternate did not
+        return true;
+    }
+    if (flags & (traverse_flags::INDIRECT | traverse_flags::INDIRECTALT))
+        == traverse_flags::INDIRECTALT
+    {
+        return false; // Alternate path traversed INDIRECT, main did not
+    }
+    if (flags & traverse_flags::ACTIONALT) != 0 {
+        return true; // Alternate path traversed a dedicated COPY
+    }
+    if vn.read().unwrap().lone_descend().is_none() {
+        return false;
+    }
+    let mut cur = vn.clone();
+    loop {
+        let def = cur.read().unwrap().get_def();
+        let op_arc = match def {
+            Some(o) => o,
+            None => return true, // cc:34: op == 0
+        };
+        let (incidental, code) = {
+            let o = op_arc.read().unwrap();
+            (o.is_incidental_copy(), o.opcode)
+        };
+        // cc:36-42: skip any incidental COPY chain.
+        if !(incidental && code == OC::CPUI_COPY) {
+            return !op_arc.read().unwrap().is_marker();
+        }
+        let next = op_arc.read().unwrap().get_in(0).cloned();
+        let Some(next) = next else { return true };
+        if next.read().unwrap().lone_descend().is_none() {
+            return false;
+        }
+        cur = next;
+    }
+}
+
 // Ghidra: funcdata_varnode.cc:1805 Funcdata::onlyOpUse
-/// Test if the given Varnode seems to only be used by a CALL/RETURN. Faithful
-/// to `Funcdata::onlyOpUse` (funcdata_varnode.cc:1805-1904). Walks forward
-/// through descendants; if any descendent is a non-call use (BRANCH, LOAD,
-/// STORE, etc.) returns false. CALL/CALLIND descendants trigger
-/// checkCallDoubleUse (conservatively returns false — safe direction).
+/// Test if the given Varnode seems to only be used by a CALL or RETURN.
+/// Faithful 1:1 port of `Funcdata::onlyOpUse`
+/// (funcdata_varnode.cc:1805-1904): BFS over descendants with
+/// TraverseNode flags; BRANCH/LOAD/STORE are uses, CALL/CALLIND go through
+/// checkCallDoubleUse, a different RETURN is a use unless it holds the same
+/// slot varnode (or, outside return analysis, unless the alternate path is
+/// invalid), PIECE/SUBPIECE set concat/truncation flags, every other opcode
+/// sets actionalt, and every op's non-persist output joins the traversal.
 fn only_op_use(
-    has_active_output: bool,
+    fd: &Funcdata,
     invn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     opmatch: &crate::op::PcodeOpRef,
-    trial_slot: i32,
+    trial: &crate::fspec::ParamTrial,
     main_flags: u32,
+    match_fc: Option<&crate::fspec::FuncCallSpecs>,
 ) -> bool {
     use crate::opcodes::OpCode as OC;
     use std::sync::{Arc, RwLock};
+    let trial_slot = trial.get_slot();
     struct TNode {
         vn: Arc<RwLock<crate::varnode::Varnode>>,
         flags: u32,
@@ -16421,15 +16503,13 @@ fn only_op_use(
         let mut vn = invn.write().unwrap();
         vn.set_mark();
     }
-    varlist.push(TNode { vn: invn.clone(), flags: main_flags ,
-    });
+    varlist.push(TNode { vn: invn.clone(), flags: main_flags });
     let mut idx = 0;
     let mut res = true;
     while idx < varlist.len() {
         let base_flags = varlist[idx].flags;
         let vn_arc = varlist[idx].vn.clone();
-        let descends: Vec<Arc<RwLock<crate::op::PcodeOp>>> =
-            vn_arc
+        let descends: Vec<Arc<RwLock<crate::op::PcodeOp>>> = vn_arc
             .read()
             .unwrap()
             .descend
@@ -16438,25 +16518,46 @@ fn only_op_use(
             .collect();
         for op_arc in descends {
             let op_rg = op_arc.read().unwrap();
+            // cc:1824-1826: op == opmatch is not a use when this vn is the
+            // trial slot's varnode (otherwise fall through to the switch).
             if Arc::ptr_eq(&op_arc, &opmatch.0) {
                 let trial_in = op_rg.get_in(trial_slot as usize);
                 if let Some(tiv) = trial_in {
-                    if Arc::ptr_eq(tiv, &vn_arc) { continue; }
+                    if Arc::ptr_eq(tiv, &vn_arc) {
+                        continue;
+                    }
                 }
             }
             let mut cur_flags = base_flags;
+            let opmatch_is_return = opmatch.0.read().unwrap().opcode == OC::CPUI_RETURN;
             match op_rg.opcode {
-                OC::CPUI_BRANCH | OC::CPUI_CBRANCH | OC::CPUI_BRANCHIND
-                | OC::CPUI_LOAD | OC::CPUI_STORE => {
+                // cc:1829-1835: These ops define a USE of a variable.
+                OC::CPUI_BRANCH
+                | OC::CPUI_CBRANCH
+                | OC::CPUI_BRANCHIND
+                | OC::CPUI_LOAD
+                | OC::CPUI_STORE => {
                     res = false;
                 }
+                // cc:1836-1840: possibly legitimate double use at a call.
                 OC::CPUI_CALL | OC::CPUI_CALLIND => {
-                    let _ = &mut cur_flags;
+                    if fd.check_call_double_use(
+                        opmatch,
+                        &crate::op::PcodeOpRef(op_arc.clone()),
+                        &vn_arc,
+                        cur_flags,
+                        trial,
+                        match_fc,
+                    ) {
+                        continue;
+                    }
                     res = false;
                 }
+                // cc:1841-1843.
                 OC::CPUI_INDIRECT => {
                     cur_flags |= traverse_flags::INDIRECTALT;
                 }
+                // cc:1844-1848.
                 OC::CPUI_COPY => {
                     let out_internal = op_rg
                         .get_out()
@@ -16468,34 +16569,86 @@ fn only_op_use(
                         cur_flags |= traverse_flags::ACTIONALT;
                     }
                 }
+                // cc:1849-1861.
                 OC::CPUI_RETURN => {
-                    let opmatch_code = opmatch.0.read().unwrap().opcode;
-                    if opmatch_code == OC::CPUI_RETURN {
+                    if opmatch_is_return {
+                        // Are we in a different return: not a use only when
+                        // it holds the same slot varnode (cc:1850-1853).
                         let r_in = op_rg.get_in(trial_slot as usize);
                         if let Some(riv) = r_in {
-                            if Arc::ptr_eq(riv, &vn_arc) { continue; }
+                            if Arc::ptr_eq(riv, &vn_arc) {
+                                continue;
+                            }
                         }
-                    } else if has_active_output {
-                        res = false;
-                    } else {
-                        res = false;
+                    } else if fd.active_output.is_some() {
+                        // cc:1854-1858: analyzing returns; unless the vn
+                        // holds the actual return value (slot 0), an
+                        // invalid alternate path is not a "use".
+                        let in0_is_vn = op_rg
+                            .get_in(0)
+                            .map(|v0| Arc::ptr_eq(v0, &vn_arc))
+                            .unwrap_or(false);
+                        if !in0_is_vn && !is_alternate_path_valid(&vn_arc, cur_flags) {
+                            continue;
+                        }
+                    }
+                    res = false;
+                }
+                // cc:1862-1866: transparent for this traversal.
+                OC::CPUI_MULTIEQUAL
+                | OC::CPUI_INT_SEXT
+                | OC::CPUI_INT_ZEXT
+                | OC::CPUI_CAST => {}
+                // cc:1867-1875.
+                OC::CPUI_PIECE => {
+                    let in0_is_vn = op_rg
+                        .get_in(0)
+                        .map(|v0| Arc::ptr_eq(v0, &vn_arc))
+                        .unwrap_or(false);
+                    if in0_is_vn {
+                        // Concatenated as most significant piece.
+                        if (cur_flags & traverse_flags::LSB_TRUNCATED) != 0 {
+                            // Original lsb has been truncated and replaced.
+                            continue; // No longer assume this is a possible use
+                        }
+                        cur_flags |= traverse_flags::CONCAT_HIGH;
                     }
                 }
-                _ => {}
-            }
-            if !res { break; }
-            if op_rg.opcode == OC::CPUI_INDIRECT || op_rg.opcode == OC::CPUI_COPY {
-                if let Some(out) = op_rg.get_out() {
-                    let out_clone = out.clone();
-                    if !out_clone.read().unwrap().is_mark() {
-                        out_clone.write().unwrap().set_mark();
-                        varlist.push(TNode { vn: out_clone, flags: cur_flags ,
-                        });
+                // cc:1876-1881.
+                OC::CPUI_SUBPIECE => {
+                    let in1_off = op_rg.get_in(1).map(|v| v.read().unwrap().get_offset());
+                    if in1_off != Some(0) {
+                        // Throwing away least significant byte(s).
+                        if (cur_flags & traverse_flags::CONCAT_HIGH) == 0 {
+                            cur_flags |= traverse_flags::LSB_TRUNCATED;
+                        }
                     }
+                }
+                // cc:1882-1884.
+                _ => {
+                    cur_flags |= traverse_flags::ACTIONALT;
+                }
+            }
+            if !res {
+                break;
+            }
+            // cc:1887-1896: every op's output joins the BFS unless it is a
+            // persist varnode (which is a use).
+            if let Some(out) = op_rg.get_out() {
+                let out_clone = out.clone();
+                if out_clone.read().unwrap().is_persist() {
+                    res = false;
+                    break;
+                }
+                if !out_clone.read().unwrap().is_mark() {
+                    out_clone.write().unwrap().set_mark();
+                    varlist.push(TNode { vn: out_clone, flags: cur_flags });
                 }
             }
         }
-        if !res { break; }
+        if !res {
+            break;
+        }
         idx += 1;
     }
     for t in &varlist {
@@ -16505,16 +16658,29 @@ fn only_op_use(
 }
 
 // Ghidra: funcdata_varnode.cc:1917 Funcdata::ancestorOpUse
-/// Test if the given trial Varnode is likely only used for parameter passing.
-/// Faithful to `Funcdata::ancestorOpUse` (funcdata_varnode.cc:1917-1994).
+/// Test if the given trial Varnode is likely only used for parameter passing,
+/// following ancestors it was copied from. Faithful 1:1 port of
+/// `Funcdata::ancestorOpUse` (funcdata_varnode.cc:1917-1994):
+///   - maxlevel 0 -> false; unwritten input needs typelock (onlyOpUse),
+///   - INDIRECT: indirect-creation stops (onlyOpUse); otherwise recurse
+///     in(0) with the indirect traverse flag,
+///   - MULTIEQUAL: try each input (mark-trimmed),
+///   - COPY: internal/incidental/same-address recurse in(0),
+///   - PIECE: recurse only into the piece matching the accumulated offset
+///     (least-sig at offset 0, most-sig at offset == in(1) size),
+///   - SUBPIECE: REM/SREM side-effect sets trial rem-formed; internal/
+///     incidental/overlapping recurse in(0) at offset+newOff,
+///   - CALL/CALLIND: false,
+///   - otherwise the varnode is the top ancestor -> onlyOpUse.
 pub fn ancestor_op_use(
-    has_active_output: bool,
+    fd: &Funcdata,
     maxlevel: i32,
     invn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     op: &crate::op::PcodeOpRef,
-    trial_slot: i32,
+    trial: &mut crate::fspec::ParamTrial,
     offset: i32,
     main_flags: u32,
+    match_fc: Option<&crate::fspec::FuncCallSpecs>,
 ) -> bool {
     use crate::opcodes::OpCode as OC;
     if maxlevel == 0 { return false; }
@@ -16523,27 +16689,32 @@ pub fn ancestor_op_use(
         (vn.is_written(), vn.is_input(), vn.is_type_lock())
     };
     if !is_written {
+        // cc:1923-1928: if not written, an input varnode is as good as
+        // written when typelocked; anything else cannot carry a use.
         if !is_input { return false; }
         if !is_type_lock { return false; }
-        return only_op_use(has_active_output, invn, op, trial_slot, main_flags);
+        return only_op_use(fd, invn, op, trial, main_flags, match_fc);
     }
     let def_arc = { invn.read().unwrap().get_def() };
-    let def_arc = match def_arc { Some(d) => d, None => return false ,
-    };
+    let def_arc = match def_arc { Some(d) => d, None => return false };
     let opcode = def_arc.read().unwrap().opcode;
     match opcode {
         OC::CPUI_INDIRECT => {
+            // cc:1933-1938: an indirectCreation is an indication of an
+            // output trial, this should not count as an "only use".
             if def_arc.read().unwrap().is_indirect_creation() { return false; }
             let in0 = def_arc.read().unwrap().get_in(0).cloned();
             match in0 {
                 Some(v) => ancestor_op_use(
-                    has_active_output, maxlevel - 1, &v, op, trial_slot, offset,
-                    main_flags | traverse_flags::INDIRECT,
+                    fd, maxlevel - 1, &v, op, trial, offset,
+                    main_flags | traverse_flags::INDIRECT, match_fc,
                 ),
                 None => false,
             }
         }
         OC::CPUI_MULTIEQUAL => {
+            // cc:1939-1952: check if there is any ancestor whose only use
+            // is in this op (mark-trimmed recursion over all inputs).
             if def_arc.read().unwrap().is_mark() { return false; }
             def_arc.write().unwrap().set_mark();
             let num_input = def_arc.read().unwrap().num_input();
@@ -16551,9 +16722,7 @@ pub fn ancestor_op_use(
             for i in 0..num_input {
                 let in_vn = def_arc.read().unwrap().get_in(i).cloned();
                 if let Some(v) = in_vn {
-                    if ancestor_op_use(
-                        has_active_output, maxlevel - 1, &v, op, trial_slot, offset, main_flags,
-                    ) {
+                    if ancestor_op_use(fd, maxlevel - 1, &v, op, trial, offset, main_flags, match_fc) {
                         result = true;
                         break;
                     }
@@ -16563,6 +16732,7 @@ pub fn ancestor_op_use(
             result
         }
         OC::CPUI_COPY => {
+            // cc:1953-1957.
             let out_internal = def_arc
                 .read()
                 .unwrap()
@@ -16577,40 +16747,66 @@ pub fn ancestor_op_use(
                 .unwrap_or(false);
             if out_internal || op_incidental || in0_incidental {
                 match in0 {
-                    Some(v) => ancestor_op_use(
-                        has_active_output, maxlevel - 1, &v, op, trial_slot, offset, main_flags,
-                    ),
+                    Some(v) => ancestor_op_use(fd, maxlevel - 1, &v, op, trial, offset, main_flags, match_fc),
                     None => false,
                 }
             } else {
-                only_op_use(has_active_output, invn, op, trial_slot, main_flags)
+                only_op_use(fd, invn, op, trial, main_flags, match_fc)
             }
         }
         OC::CPUI_PIECE => {
-            let in0 = def_arc.read().unwrap().get_in(0).cloned();
-            let in1 = def_arc.read().unwrap().get_in(1).cloned();
-            let in1_size = in1
-                .as_ref()
+            // cc:1958-1964: concatenation tends to be artificial, so recurse
+            // only through the piece corresponding to a later SUBPIECE of
+            // the accumulated offset — never both.
+            let in1_size = def_arc
+                .read()
+                .unwrap()
+                .get_in(1)
                 .map(|v| v.read().unwrap().get_size() as i32)
                 .unwrap_or(0);
-            if let Some(v0) = in0 {
-                if ancestor_op_use(
-                    has_active_output, maxlevel - 1, &v0, op, trial_slot, offset + in1_size,
-                    main_flags | traverse_flags::CONCAT_HIGH,
-                ) {
-                    return true;
+            if offset == 0 {
+                // Follow into least sig piece.
+                let in1 = def_arc.read().unwrap().get_in(1).cloned();
+                match in1 {
+                    Some(v) => ancestor_op_use(fd, maxlevel - 1, &v, op, trial, 0, main_flags, match_fc),
+                    None => false,
                 }
-            }
-            if let Some(v1) = in1 {
-                if ancestor_op_use(
-                    has_active_output, maxlevel - 1, &v1, op, trial_slot, offset, main_flags,
-                ) {
-                    return true;
+            } else if offset == in1_size {
+                // Follow into most sig piece.
+                let in0 = def_arc.read().unwrap().get_in(0).cloned();
+                match in0 {
+                    Some(v) => ancestor_op_use(fd, maxlevel - 1, &v, op, trial, 0, main_flags, match_fc),
+                    None => false,
                 }
+            } else {
+                false
             }
-            false
         }
         OC::CPUI_SUBPIECE => {
+            // cc:1965-1985.
+            let in1_off = def_arc
+                .read()
+                .unwrap()
+                .get_in(1)
+                .map(|v| v.read().unwrap().get_offset() as i32)
+                .unwrap_or(0);
+            if in1_off == 0 {
+                // Kludge around a DIV (or similar) causing the register that
+                // looks like the high precision piece of the return to be
+                // set with the remainder as a side effect.
+                let in0 = def_arc.read().unwrap().get_in(0).cloned();
+                if let Some(v) = in0 {
+                    if v.read().unwrap().is_written() {
+                        let remop = v.read().unwrap().get_def();
+                        if let Some(remop) = remop {
+                            let rem_code = remop.read().unwrap().opcode;
+                            if rem_code == OC::CPUI_INT_REM || rem_code == OC::CPUI_INT_SREM {
+                                trial.set_rem_formed();
+                            }
+                        }
+                    }
+                }
+            }
             let out_internal = def_arc
                 .read()
                 .unwrap()
@@ -16623,26 +16819,23 @@ pub fn ancestor_op_use(
                 .as_ref()
                 .map(|v| v.read().unwrap().is_incidental_copy())
                 .unwrap_or(false);
-            let in1_off = def_arc
-                .read()
-                .unwrap()
-                .get_in(1)
-                .map(|v| v.read().unwrap().get_offset() as i32)
-                .unwrap_or(0);
-            if (out_internal || op_incidental || in0_incidental) && (offset - in1_off) >= 0 {
+            let in0_overlap = match &in0 {
+                Some(i) => invn.read().unwrap().overlap(&i.read().unwrap()) == in1_off,
+                None => false,
+            };
+            if out_internal || op_incidental || in0_incidental || in0_overlap {
                 match in0 {
                     Some(v) => ancestor_op_use(
-                        has_active_output, maxlevel - 1, &v, op, trial_slot, offset - in1_off,
-                        main_flags | traverse_flags::LSB_TRUNCATED,
+                        fd, maxlevel - 1, &v, op, trial, offset + in1_off, main_flags, match_fc,
                     ),
                     None => false,
                 }
             } else {
-                only_op_use(has_active_output, invn, op, trial_slot, main_flags)
+                only_op_use(fd, invn, op, trial, main_flags, match_fc)
             }
         }
         OC::CPUI_CALL | OC::CPUI_CALLIND => false,
-        _ => only_op_use(has_active_output, invn, op, trial_slot, main_flags),
+        _ => only_op_use(fd, invn, op, trial, main_flags, match_fc),
     }
 }
 

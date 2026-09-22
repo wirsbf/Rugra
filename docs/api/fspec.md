@@ -281,15 +281,26 @@ FuncCallSpecs: +input_consume Vec + get/set_input_bytes_consumed（fspec.cc:5870
 - `final_input_check(op_ref)` — 对 hasCondExeEffect 的活跃试验重新运行 AncestorRealistic，失败→markNoUse
 
 **checkInputTrialUse 重写**（fspec.rs，移植自 fspec.cc:5585-5653）：
-- 签名改为 `check_input_trial_use(op_ref, has_active_output, aliascheck, maxancestor) -> Vec<(slot, vn_size)>`
+- 签名改为 `check_input_trial_use(fd, op_ref, aliascheck, maxancestor) -> Vec<(slot, vn_size)>`
+  （Ghidra 原签名持 `Funcdata &data`；`&self` 作为 checkCallDoubleUse 的 match spec
+  以引用传入，trial 走克隆回写以避免借用冲突）
 - Stack 空间试验：aliascheck.hasLocalAlias → markNoUse；否则 AncestorRealistic + ancestorOpUse
 - Register 空间试验：AncestorRealistic(allowFail=true) + ancestorOpUse + condexe 标记
 - 返回 definitelyNotUsed 试验的 (slot, size) 供调用者执行 opSetInput(newConstant)
 
 **ancestorOpUse + onlyOpUse**（funcdata.rs，移植自 funcdata_varnode.cc:1805-1994）：
-- `ancestor_op_use(has_active_output, maxlevel, vn, op, trial_slot, offset, flags) -> bool`
+- `ancestor_op_use(fd, maxlevel, vn, op, trial, offset, flags, match_fc) -> bool`
 - 递归跟随 def 链（INDIRECT/MULTIEQUAL/COPY/PIECE/SUBPIECE），调用 only_op_use
 - `only_op_use` — 前向遍历 descend，检测 BRANCH/LOAD/STORE/CALL/RETURN 等"非参数使用"
+
+**FuncProto/ProtoModel getMaxOutputDelay**（fspec.hh:998/1572 + fspec.cc:1153 calcDelay）：
+- `FuncProto::get_max_output_delay()` → `ProtoModelFull::get_max_output_delay()` →
+  `ParamListOutput::get_max_delay()`（ParamListStandard::calcDelay 的 maxdelay）。
+  供 `Funcdata::init_active_output` 使用。
+
+**ActionActiveParam 借用重组**（coreaction.cc:1725-1771 Rust 侧）：
+- checkInputTrialUse 调用改为「取值出锁 → 走 walk → 写回」：spec 值被 park 出 RwLock，
+  占位符的 op Weak 悬空使身份扫描永不匹配（单线程管线语义等价 Ghidra 裸指针）。
 - TraverseNode flags（ACTIONALT/INDIRECT/INDIRECTALT/LSB_TRUNCATED/CONCAT_HIGH）
 
 **ActionActiveParam::apply 1:1 重写**（coreaction.rs，移植自 coreaction.cc:1725-1771）：

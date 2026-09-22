@@ -419,6 +419,24 @@ impl FuncProto {
             .unwrap_or(0)
     }
 
+    // Ghidra: fspec.hh:1566 FuncProto::getMaxOutputDelay
+    /// Return the maximum heritage delay of a return-value (output)
+    /// parameter resource. Feeds `Funcdata::initActiveOutput`'s maxPass.
+    pub fn get_max_output_delay(&self) -> i32 {
+        self.model
+            .as_ref()
+            .map(|model| model.get_max_output_delay())
+            .unwrap_or(0)
+    }
+
+    // RUGRA-GLUE: read accessor for the resolved model Arc (Ghidra's public
+    // `getModel()` returns the ProtoModel pointer; deriveOutputMap callers
+    // need the shared object).
+    /// Resolved prototype model, if one was set via `setModel`.
+    pub fn get_model_arc(&self) -> Option<std::sync::Arc<ProtoModelFull>> {
+        self.model.clone()
+    }
+
     // Ghidra: fspec.hh:1461 FuncProto::hasInputErrors
     /// Return whether input parameter storage could not be assigned.
     pub fn has_input_errors(&self) -> bool {
@@ -2675,18 +2693,21 @@ impl FuncCallSpecs {
     /// constant (Ghidra's `data.opSetInput(op, newConstant(...), slot)`).
     pub fn check_input_trial_use(
         &mut self,
+        fd: &crate::funcdata::Funcdata,
         op_ref: &crate::op::PcodeOpRef,
-        has_active_output: bool,
         aliascheck: &crate::varmap::AliasChecker,
         maxancestor: i32,
     ) -> Vec<(i32, i32)> {
         let mut replace_slots: Vec<(i32, i32)> = Vec::new();
         let mut ancestor_real = crate::funcdata::AncestorRealistic::new();
-        let active = &mut self.active_input;
         let mut needs_final_check = false;
-        for i in 0..active.get_num_trials() {
-            if active.get_trial(i).is_checked() { continue; }
-            let slot = active.get_trial(i).get_slot();
+        // `active_input` is accessed per-statement (not through one long
+        // &mut binding) so `&self` can be supplied to ancestorOpUse as
+        // checkCallDoubleUse's match spec at the call sites below.
+        let num_trials = self.active_input.get_num_trials();
+        for i in 0..num_trials {
+            if self.active_input.get_trial(i).is_checked() { continue; }
+            let slot = self.active_input.get_trial(i).get_slot();
             // Resolve the trial varnode: vn = op.getIn(slot).
             let vn_arc = {
                 let op_rg = op_ref.0.read().unwrap();
@@ -2697,46 +2718,60 @@ impl FuncCallSpecs {
             if vn_space == crate::space::AddressSpace::Stack {
                 // Ghidra fspec.cc:5615-5634 — stack spacebase varnode path.
                 if aliascheck.has_local_alias(&vn.read().unwrap()) {
-                    active.get_trial_mut(i).mark_no_use();
-                } else if ancestor_real.execute(op_ref, slot, active.get_trial_mut(i), false) {
+                    self.active_input.get_trial_mut(i).mark_no_use();
+                } else if {
+                    let t = self.active_input.get_trial_mut(i);
+                    ancestor_real.execute(op_ref, slot, t, false)
+                } {
+                    // The trial is cloned out for the walk so `&self` can
+                    // ride along as checkCallDoubleUse's match spec (Ghidra
+                    // passes both pointers freely); the walk's flag
+                    // mutations (setRemFormed) persist via the write-back.
+                    let mut trial_clone = self.active_input.get_trial(i).clone();
                     let ao_result = crate::funcdata::ancestor_op_use(
-                        has_active_output, maxancestor, &vn, op_ref, slot, 0, 0,
+                        fd, maxancestor, &vn, op_ref, &mut trial_clone, 0, 0, Some(self),
                     );
+                    *self.active_input.get_trial_mut(i) = trial_clone;
                     if ao_result {
-                        active.get_trial_mut(i).mark_active();
+                        self.active_input.get_trial_mut(i).mark_active();
                     } else {
-                        active.get_trial_mut(i).mark_inactive();
+                        self.active_input.get_trial_mut(i).mark_inactive();
                     }
                 } else {
-                    active.get_trial_mut(i).mark_no_use();
+                    self.active_input.get_trial_mut(i).mark_no_use();
                 }
             } else {
                 // Ghidra fspec.cc:5635-5648 — register / other space path.
-                if ancestor_real.execute(op_ref, slot, active.get_trial_mut(i), true) {
+                if {
+                    let t = self.active_input.get_trial_mut(i);
+                    ancestor_real.execute(op_ref, slot, t, true)
+                } {
+                    let mut trial_clone = self.active_input.get_trial(i).clone();
                     let ao_result = crate::funcdata::ancestor_op_use(
-                        has_active_output, maxancestor, &vn, op_ref, slot, 0, 0,
+                        fd, maxancestor, &vn, op_ref, &mut trial_clone, 0, 0, Some(self),
                     );
+                    *self.active_input.get_trial_mut(i) = trial_clone;
                     if ao_result {
-                        active.get_trial_mut(i).mark_active();
-                        if active.get_trial(i).has_condexe_effect() {
+                        self.active_input.get_trial_mut(i).mark_active();
+                        if self.active_input.get_trial(i).has_condexe_effect() {
                             needs_final_check = true;
                         }
                     } else {
-                        active.get_trial_mut(i).mark_inactive();
+                        self.active_input.get_trial_mut(i).mark_inactive();
                     }
                 } else if vn.read().unwrap().is_input() {
-                    active.get_trial_mut(i).mark_inactive();
+                    self.active_input.get_trial_mut(i).mark_inactive();
                 } else {
-                    active.get_trial_mut(i).mark_no_use();
+                    self.active_input.get_trial_mut(i).mark_no_use();
                 }
             }
-            if active.get_trial(i).is_definitely_not_used() {
+            if self.active_input.get_trial(i).is_definitely_not_used() {
                 let vn_size = vn.read().unwrap().get_size() as i32;
                 replace_slots.push((slot, vn_size));
             }
         }
         if needs_final_check {
-            active.mark_needs_final_check();
+            self.active_input.mark_needs_final_check();
         }
         replace_slots
     }
@@ -7127,6 +7162,12 @@ impl ParamListOutput {
     pub fn get_entry(&self) -> &[ParamEntry] {
         self.standard_out().get_entry()
     }
+
+    // RUGRA-GLUE: Rust enum dispatch for inherited
+    // ParamListStandard::getMaxDelay (fspec.hh:642).
+    pub fn get_max_delay(&self) -> i32 {
+        self.standard_out().base.get_max_delay()
+    }
 }
 
 /// Internal enum mirroring Ghidra's `AssignAction` hidden-return codes
@@ -7494,6 +7535,13 @@ impl ProtoModelFull {
     /// Iterate output resource entries in compiler-spec declaration order.
     pub fn output_entries(&self) -> &[ParamEntry] {
         self.output.get_entry()
+    }
+
+    // Ghidra: fspec.hh:1572 ProtoModel::getMaxOutputDelay
+    /// Maximum heritage delay across all potential return-value resources
+    /// (`ParamListStandard::calcDelay`, fspec.cc:1153-1163).
+    pub fn get_max_output_delay(&self) -> i32 {
+        self.output.get_max_delay()
     }
 
     // Ghidra: fspec.cc:2472 ProtoModel::lookupEffect (static)
