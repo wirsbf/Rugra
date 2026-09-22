@@ -1192,6 +1192,23 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
             .unwrap_or(false)
     }
 
+    /// Is there a looping edge coming into this block (is this the top of a
+    /// loop)? Faithful to Ghidra's `FlowBlock::hasLoopIn`
+    /// (block.hh:314, block.cc:428-433): any in-edge labeled f_loop_edge.
+    /// Read by `RulePullsubMulti::applyOp` (ruleaction.cc:883, "We only
+    /// pull up, do not pull down to bottom of loop").
+    // Ghidra: block.cc:428 FlowBlock::hasLoopIn
+    fn has_loop_in(&self) -> bool {
+        for i in 0..self.size_in() {
+            if let Some(e) = self.get_in(i) {
+                if (e.flags & edge_flags::F_LOOP_EDGE) != 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Is the i-th incoming edge an irreducible edge? Faithful to Ghidra's
     /// `FlowBlock::isIrreducibleIn` (block.hh:333). The reachunder walk of
     /// `BlockGraph::findIrreducible` (block.cc:1170) pretends already-marked

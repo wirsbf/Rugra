@@ -1451,3 +1451,21 @@ w-printc2 C3 残差落地:此前 Rugra 的 Rule2Comp2Sub 把**每个** INT_2COMP
 tests/oracle/rule_2comp2sub_1204.{cc,rs} + tools/run_rule_2comp2sub_oracle.sh
 (五形态:两种改写方向 + 非 ADD/无后代/双后代三拒绝,MATCH)。curl 门禁 3119→3115,
 defects/numbering 保持 0,`(0 - ` 残留 30→0。
+
+## 2026-09-23：addmultcollapse spacebase 臂 + pullsub_multi loop-in 守卫（Phase 2 ordinal 28）
+
+1. **RuleAddMultCollapse spacebase 臂移植**（ruleaction.cc:4122-4169）：
+   `((stackbase + c1) + othervn) + c0 => (stackbase + (c0+c1)) + othervn`。
+   旧码在 c[1] 非常量时直接返回（自认"deferred"）；match_url ordinal 28 的
+   −3 addmultcollapse（52f1:10f/52f5:113 `u0x8f00 = u0x9500 + #const`，
+   u0x9500=`RSP(i)+RAX` 形）即此臂缺失。守卫链逐条同 oracle：othervn
+   非常量非 free、sub2 written 且 def=INT_ADD、baseop slot1 常量、
+   basevn `is_spacebase() && is_input()`（"because this adds a new add
+   operation"）；创建序=newConstant(+copySymbolIfValid c0/c1)→newOp(2,
+   op->getAddr())→INT_ADD→newUniqueOut→双输入→opInsertBefore(op)→
+   op 改写 (newout, othervn)。
+2. **RulePullsubMulti cc:883 守卫接入**：`mult->getParent()->hasLoopIn()`
+   拒绝循环头 phi（见 docs/api/block.md 同日条目）；parent 缺失（悬空
+   MULTIEQUAL，oracle 不可达形态）保守放行 false。
+验收：match_url Phase 2 ordinal 28（oppool1 861=861）→29（lanedivide 2=2，
+见 docs/api/arch.md）连续两级对齐；curl/httpd E2E defects=numbering=0。

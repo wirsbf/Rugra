@@ -1377,3 +1377,20 @@ no-op 排查后**裁定不改**：Ghidra 原文 funcdata_varnode.cc:119/166 就�
 已有位。该行只作用于 bank 新建 varnode（22 个调用点全部传入新建对象），Rust 与
 oracle 逐字一致，改成 `clear_flags` 反而偏离原文（若 `fl` 含 TYPELOCK 会错误置位）。
 与 blockaction.rs 两处真 no-op（自旗派生掩码 `set_flags(own & !BIT)`）本质不同。
+
+## 2026-09-23：MATCHURL-CONCAT-SEQNUM-0001 — guardOutputOverlap concat op 地址忠实化（Phase 2 ordinal 12 清零）
+
+match_url Phase 2 mirror 首分歧（ordinal 12 heritage，op-idx 0）：双侧 1503-op
+快照仅差 14 个 PIECE 的 **SeqNum pc**——oracle `526c:5a0`（call 地址），Rugra
+`1200:5a0`（返回存储地址）。根因：Rugra `guard_output_overlap` 的两个 concat
+（heritage.rs:3054/3075）以 `ret_addr` 为 op 地址；oracle cc:1259/1272 用
+`indOp->getAddr()`——第一个 `newIndirectCreation`（cc:1253）的地址，即
+致效 call 的地址（`newIndirectCreation` 以 `newOp(2, indeffect->getAddr())`
+建 op，funcdata_op.cc:716）。修复 = 建一次 `ind_op_addr` 双臂共用。uniq 序号
+两侧本就相同（5a0..5d4），仅 pc 字段翻转；投影 op 序为 seqnum 排序，pc 翻转
+使这 14 个 PIECE 从快照头部归位，ordinal 12 快照双侧逐字节一致。oracle 侧
+行为证据：guardCalls→tryOutputOverlapGuard（`outputCharacter==contained_by`，
+16 字节 XMM0 范围含 8 字节 XMM0_Qa 输出）→guardOutputOverlap back-piece 臂
+（sizeFront=0，sizeBack=8，`CONCAT88(Qb[create], Qa[create])`，drill 双侧
+窗口逐行同构）。四类核对：引用参数=indOp 句柄（非拷贝）；遍历序=front 臘后
+back 臂（同 oracle）；计数器=无；排序键=SeqNum(pc=call,uniq=创建序)。

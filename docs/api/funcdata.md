@@ -2388,3 +2388,16 @@ funcdata_varnode.cc:269-292 的 OPACTION_DEBUG 钩子位;守卫先行、变更�
   由 `FlowInfo` 持有，oracle 的成员函数形态无法同时借用两侧，故取共享引用 +
   `Arc<RwLock<JumpTable>>` 写锁内变更（与 Ghidra 经 jumpvec 指针改写一致）。
   错误经 `Error::Lowlevel` 传播（followFlow 同语义）。
+
+## 2026-09-23：inject_raw_ops_single 补 laned-register 探针（ARCH-REGISTERDATA-LANE-0001）
+
+原始 p-code 物化器此前的输出/输入直走 `vbank.create_def_with_space`/
+`create_with_space`，绕过 newVarnodeOut/newVarnode 的
+`if (s >= minLanedSize) checkForLanedRegister(s,m)` 探针
+（funcdata_varnode.cc:113/160）。修复 = 两处物化点后补同门检查
+（输出臂对应 cc:113，输入臂对应 cc:160 的非常量路径；Const 空间无 varnode
+语义，oracle newConstant 无此探针，保持跳过）。效果：movdqu 16 字节 LOAD
+的 unique 输出（match_url 52c5:df `u:d700:16`）入 laned map，oracle 的
+ordinal 29 lanedivide 双分裂（unique 槽 + XMM0 phi 群）在 Rugra 侧同样
+2=2。min_laned_size 在 lane 记录空时为 u32::MAX（旧中性行为），装载后为
+最小整尺寸 16，见 docs/api/arch.md 同日条目。

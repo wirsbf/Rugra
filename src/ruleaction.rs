@@ -1245,11 +1245,10 @@ impl Rule for RuleXorCollapse {
 ///   `((V + c) + d)  =>  V + (c+d)`
 ///   `((V * c) * d)  =>  V * (c*d)`
 ///
-/// Faithful to Ghidra's `RuleAddMultCollapse` (ruleaction.cc:4099-4183). This
-/// ports the primary form: when an INT_ADD/INT_MULT has a constant in slot 1
-/// and its slot-0 input is defined by the same op-code with another constant,
-/// fold the two constants together. The spacebase sub-case (4131-4169) is
-/// deferred (requires isSpacebase/isInput tracking).
+/// Faithful to Ghidra's `RuleAddMultCollapse` (ruleaction.cc:4099-4183).
+/// Ports both forms: the primary constant-fold, and the spacebase sub-case
+/// (ruleaction.cc:4122-4169) `((stackbase + c1) + othervn) + c0 =>
+/// (stackbase + (c0+c1)) + othervn` with basevn spacebase+input guards.
 pub struct RuleAddMultCollapse;
 
 impl RuleAddMultCollapse {
@@ -1295,22 +1294,109 @@ impl Rule for RuleAddMultCollapse {
         if subop_arc.read().unwrap().opcode != opc {
             return Ok(action_status::NO_CHANGE);
         }
-        // c[1] = subop->getIn(1) (must be constant).
-        let (sub2, c1) = {
+        // c[1] = subop->getIn(1); when it is NOT a constant, the oracle
+        // tries the spacebase sub-case (ruleaction.cc:4122-4169):
+        //   a = ((stackbase + c[1]) + othervn) + c[0]
+        //     => (stackbase + (c[0]+c[1])) + othervn
+        // This folds two constant offsets even when another term is added
+        // in and the intermediate sum has multiple uses. Guards and creation
+        // order mirror the oracle loop exactly (per-input scan order, all
+        // continues, basevn spacebase+input requirement).
+        let c1 = {
             let so = subop_arc.read().unwrap();
-            let sub2 = match so.inrefs.get(0) {
+            match so.inrefs.get(1) {
                 Some(v) => v.clone(),
                 None => return Ok(action_status::NO_CHANGE),
-            };
-            let c1 = match so.inrefs.get(1) {
-                Some(v) => v.clone(),
-                None => return Ok(action_status::NO_CHANGE),
-            };
-            if !c1.read().unwrap().is_constant() {
-                // The spacebase sub-case is deferred; no change here.
+            }
+        };
+        if !c1.read().unwrap().is_constant() {
+            // cc:4124: only the additive form has the spacebase arm.
+            if opc != OpCode::CPUI_INT_ADD {
                 return Ok(action_status::NO_CHANGE);
             }
-            (sub2, c1)
+            for i in 0..2usize {
+                // cc:4127-4130: pick the non-constant non-free other term.
+                let othervn = match subop_arc.read().unwrap().inrefs.get(i) {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                if othervn.read().unwrap().is_constant() {
+                    continue;
+                }
+                if othervn.read().unwrap().is_free() {
+                    continue;
+                }
+                // cc:4131-4133: the other slot must be written.
+                let sub2 = match subop_arc.read().unwrap().inrefs.get(1 - i) {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                if !sub2.read().unwrap().is_written() {
+                    continue;
+                }
+                let baseop_arc = match sub2.read().unwrap().def.as_ref().and_then(|w| w.upgrade())
+                {
+                    Some(a) => a,
+                    None => continue,
+                };
+                if baseop_arc.read().unwrap().opcode != OpCode::CPUI_INT_ADD {
+                    continue;
+                }
+                // cc:4136-4137: baseop's slot-1 constant becomes c[1].
+                let base_c1 = match baseop_arc.read().unwrap().inrefs.get(1) {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                if !base_c1.read().unwrap().is_constant() {
+                    continue;
+                }
+                // cc:4138-4141: slot-0 must be a function-input spacebase.
+                let basevn = match baseop_arc.read().unwrap().inrefs.get(0) {
+                    Some(v) => v.clone(),
+                    None => continue,
+                };
+                if !basevn.read().unwrap().is_spacebase() {
+                    continue;
+                }
+                if !basevn.read().unwrap().is_input() {
+                    continue;
+                }
+                // cc:4143-4150: fold c[0]+c[1], carrying symbol markup.
+                let size = c0.read().unwrap().get_size();
+                let v0 = c0.read().unwrap().get_offset();
+                let v1 = base_c1.read().unwrap().get_offset();
+                let val = v0.wrapping_add(v1);
+                let newvn = fd.new_constant(size, val);
+                if c0.read().unwrap().get_symbol_entry().is_some() {
+                    crate::varnode::Varnode::copy_symbol_if_valid(&newvn, &c0.read().unwrap());
+                } else if base_c1.read().unwrap().get_symbol_entry().is_some() {
+                    crate::varnode::Varnode::copy_symbol_if_valid(
+                        &newvn,
+                        &base_c1.read().unwrap(),
+                    );
+                }
+                // cc:4151-4162: build (basevn + folded-const) before op,
+                // then rewire op to (newout + othervn).
+                let op_addr = op_arc.read().unwrap().get_addr();
+                let newop = fd.new_op(2, op_addr);
+                fd.op_set_opcode(&newop, OpCode::CPUI_INT_ADD);
+                let newout = fd.new_unique_out(size, &newop);
+                fd.op_set_input(&newop, basevn, 0);
+                fd.op_set_input(&newop, newvn, 1);
+                let follow = crate::op::PcodeOpRef(op_arc.clone());
+                fd.op_insert_before(&newop, &follow);
+                fd.op_set_input(&follow, newout, 0);
+                fd.op_set_input(&follow, othervn, 1);
+                return Ok(action_status::CHANGE);
+            }
+            return Ok(action_status::NO_CHANGE);
+        }
+        let sub2 = {
+            let so = subop_arc.read().unwrap();
+            match so.inrefs.get(0) {
+                Some(v) => v.clone(),
+                None => return Ok(action_status::NO_CHANGE),
+            }
         };
         if sub2.read().unwrap().is_free() {
             return Ok(action_status::NO_CHANGE);
@@ -12269,9 +12355,24 @@ impl Rule for RulePullsubMulti {
             return Ok(action_status::NO_CHANGE);
         }
         // cc:883: "We only pull up, do not pull down to bottom of loop" —
-        // mult->getParent()->hasLoopIn() needs FlowBlock loop-in marking
-        // (block.cc loop coats), which Rugra's FlowBlock does not yet carry;
-        // registered as RULE-PULLSUBMULTI-LOOPIN-0001 (conservatively allow).
+        // reject when the MULTIEQUAL's block is the head of a loop (any
+        // in-edge labeled f_loop_edge; labels maintained by
+        // BlockGraph::find_spanning_tree / structure_loops, block.cc:1101).
+        // RULE-PULLSUBMULTI-LOOPIN-0001 closed: was conservatively allowed
+        // while the loop-edge query was missing (match_url Phase 2 ordinal
+        // 28 oppool1 fired pullsub on the __libc_csu_init loop phi where
+        // the oracle rejects here).
+        let mult_has_loop_in = mult_arc
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .map(|bb| bb.read().unwrap().has_loop_in())
+            .unwrap_or(false);
+        if mult_has_loop_in {
+            return Ok(action_status::NO_CHANGE);
+        }
         let (max_byte, min_byte) = Self::min_max_use(&vn);
         let new_size = max_byte - min_byte + 1;
         if max_byte < min_byte || new_size >= vn.read().unwrap().get_size() as i32 {

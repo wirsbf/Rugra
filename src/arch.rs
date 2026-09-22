@@ -1310,6 +1310,108 @@ impl Architecture {
         Ok(())
     }
 
+    // Ghidra: architecture.cc:929 Architecture::decodeProcessorData (register_data arm)
+    /// Decode a pspec `<register_data>` element into the architecture's
+    /// laned-register records. Faithful to the `ELEM_REGISTER_DATA` arm of
+    /// `Architecture::decodeProcessorData` (architecture.cc:929-977):
+    /// - one `<register>` child at a time in document order; the child must
+    ///   carry `vector_lane_sizes` and/or `volatile` attributes to act;
+    /// - `vector_lane_sizes` (comma-separated) parses through
+    ///   `LanedRegister::parseSizes` and ORs its size bitmask into
+    ///   `maskList[wholeSize]` (cc:952-958);
+    /// - after all children, `lanerecords` is rebuilt as one record per
+    ///   non-zero mask entry, ordered by whole size (cc:970-976) —
+    ///   `set_lane_records` performs the same sort+merge.
+    /// The `volatile` arm (cc:960-963: `symboltab->setPropertyRange`) is a
+    /// registered residual: the locked x86-64.pspec declares no volatile
+    /// registers (grep-clean), so the arm is unreachable for this corpus
+    /// (ARCH-REGISTERDATA-VOLATILE-0001).
+    pub fn decode_register_data(
+        &mut self,
+        decoder: &mut dyn crate::marshal::Decoder,
+        host: &dyn SpecQuery,
+    ) -> Result<(), String> {
+        use crate::marshal::Decoder;
+        let mut mask_list: Vec<u32> = Vec::new();
+        let elem_id = decoder.open_element();
+        let root_name = decoder.element_name(elem_id).unwrap_or_default();
+        if root_name != "register_data" {
+            return Err(format!(
+                "Expecting <register_data> but got <{}>",
+                root_name
+            ));
+        }
+        loop {
+            let sub_id = decoder.open_element();
+            if sub_id == 0 {
+                break;
+            }
+            let child_name = decoder.element_name(sub_id).unwrap_or_default();
+            if child_name != "register" {
+                return Err(format!(
+                    "Expecting <register> but got <{}>",
+                    child_name
+                ));
+            }
+            // cc:936-944: first attribute pass collects the two knobs.
+            let mut is_volatile = false;
+            let mut lane_sizes = String::new();
+            loop {
+                let attrib_id = decoder.next_attribute_id();
+                if attrib_id == 0 {
+                    break;
+                }
+                match decoder.attribute_name(attrib_id).as_deref() {
+                    Some("vector_lane_sizes") => lane_sizes = decoder.read_string(),
+                    Some("volatile") => is_volatile = decoder.read_bool(),
+                    _ => {
+                        let _ = decoder.read_string();
+                    }
+                }
+            }
+            if !lane_sizes.is_empty() || is_volatile {
+                // cc:945-947: rewindAttributes + storage.decodeFromAttributes
+                // (pcoderaw.cc:33-52: `name` resolves through the translate's
+                // register table and wins over `space`). The rewind is
+                // REQUIRED: the knob loop above already consumed the
+                // attribute stream.
+                decoder.rewind_attributes();
+                let storage = Self::varnode_data_from_attributes(decoder, host)?;
+                if !lane_sizes.is_empty() {
+                    let mut laned_register = crate::transform::LanedRegister::with_sizes(0, 0);
+                    laned_register.parse_sizes(storage.size as i32, &lane_sizes);
+                    let size_index = laned_register.get_whole_size();
+                    while mask_list.len() as i32 <= size_index {
+                        mask_list.push(0);
+                    }
+                    mask_list[size_index as usize] |= laned_register.get_size_bit_mask();
+                }
+                if is_volatile {
+                    // ARCH-REGISTERDATA-VOLATILE-0001: symboltab
+                    // setPropertyRange wiring not reachable for the locked
+                    // pspec (zero volatile declarations); surface the hit
+                    // loudly if a future spec exercises the arm.
+                    eprintln!(
+                        "[ARCH] register_data volatile arm skipped (ARCH-REGISTERDATA-VOLATILE-0001)"
+                    );
+                }
+            }
+            decoder.close_element(sub_id);
+        }
+        decoder.close_element(elem_id);
+        // cc:970-976: lanerecords.clear(); one LanedRegister per set mask
+        // bit-entry, in ascending whole-size order.
+        let mut records = Vec::new();
+        for (i, mask) in mask_list.iter().enumerate() {
+            if *mask == 0 {
+                continue;
+            }
+            records.push(crate::transform::LanedRegister::with_sizes(i as i32, *mask));
+        }
+        self.set_lane_records(records);
+        Ok(())
+    }
+
     // Ghidra: address.cc:316 Range::decodeFromAttributes
     /// Reconstruct a `Range` from the attributes of a `<context_set>`/
     /// `<tracked_set>` child.  Faithful to
