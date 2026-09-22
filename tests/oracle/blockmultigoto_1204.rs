@@ -524,6 +524,13 @@ impl Graph {
             default_case: None,
             case_gototypes: vec![0, 0, rugra::block::goto_type::GOTO_GOTO],
             default_gototype: 0,
+            // Pre-label bystander defaults (same as printc_switch_emit_1204
+            // and the goto_prints fixture): the oracle fixture's hollow
+            // jumptable keeps jump null, and the observation is the case
+            // order + gototypes — never the label pipeline state
+            // (JUMPTABLE-TABLEAPI-0001 domain).
+            jump: None,
+            case_order: Vec::new(),
             case_values: vec![vec![0], vec![1], vec![2]],
             index_varnode: None,
             incoming: Vec::new(),

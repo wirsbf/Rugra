@@ -384,6 +384,12 @@ fn main() {
             default_case: None,
             case_gototypes: vec![0, 0, 0],
             default_gototype: 0,
+            // Pre-label bystander defaults (same as printc_switch_emit_1204):
+            // the oracle fixture's hollow jumptable keeps jump null and this
+            // fixture never reaches finalizePrinting's case_order sort —
+            // labels stay 0 by construction (JUMPTABLE-TABLEAPI-0001 domain).
+            jump: None,
+            case_order: Vec::new(),
             case_values: vec![vec![0], vec![1], vec![2]],
             index_varnode: None,
             incoming: Vec::new(),
@@ -534,6 +540,12 @@ fn main() {
             default_case: None,
             case_gototypes: vec![0, 0, rugra::block::goto_type::GOTO_GOTO],
             default_gototype: 0,
+            // Pre-label bystander defaults (see switch_fallthru_goto above):
+            // the multigoto append arm's observation is the case ORDER +
+            // gototypes in `cases`/`case_gototypes`; the label pipeline
+            // fields stay at their pre-finalizePrinting defaults.
+            jump: None,
+            case_order: Vec::new(),
             case_values: vec![vec![0], vec![1], vec![2]],
             index_varnode: None,
             incoming: Vec::new(),

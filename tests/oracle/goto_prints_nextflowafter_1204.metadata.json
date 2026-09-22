@@ -47,8 +47,8 @@
  "known_divergences": [],
  "comparand_sha256": {
   "cpp_fixture_sha256": "e1e2a881590841da6fb4d9a25f14aa878709ebed13c918dfd751d0e0a1a528c7",
-  "rust_fixture_sha256": "e10fbf242bb8c175b0df71e4e89f725ab3d88eef51a6149f7ffec4d701ac7412",
-  "rugra_block_sha256": "cd53ff71960e6863b64b673678dd7838fd205dc21602e6bb9f02f8fe1fb6c11c",
+  "rust_fixture_sha256": "6e6c12907a0d7e61ba15699ab7ef770d1b0c9e9845a590145ee12320e2f3cddd",
+  "rugra_block_sha256": "6d2c8792a68a34e33f3218d2a1ebd7f7d5cfde2df8ed748113b673582003e163",
   "rugra_coreaction_sha256": "24605f887d05fbe5aed6770784456d576c18e89e495dfe0f5dc1eaaa5c9a022a"
  },
  "overall_status": "MATCH: all seven cases (while-tail break-goto / infloop backedge / switch fallthru / goto-wrapping-goto / if-else tail / dowhile tail / switch multigoto-gotoedge append-arm) byte-identical between the locked 12.0.4 oracle virtual dispatch and Rugra's promoted next_flow_after_successors walk (per-(composite,component) successor identity + per-goto gototype/prints)"

@@ -37,8 +37,8 @@
  ],
  "comparand_sha256": {
   "cpp_fixture_sha256": "d0104bbcb64f05cec4e8934a6bb25782c579a38e3fdcadf534c88ecfecb24bcd",
-  "rust_fixture_sha256": "ebac57d452bb54923e0d7ebb804ab8b51657dc750e3713fe6be8bf68e21ab5a9",
-  "rugra_block_sha256": "cd53ff71960e6863b64b673678dd7838fd205dc21602e6bb9f02f8fe1fb6c11c",
-  "rugra_blockaction_sha256": "480250de37f11b1db709b5b7a5d97f825cd64551eb1c68ad81dbb113bf3a6bff"
+  "rust_fixture_sha256": "500da3152a4c1ad2b4a74c990519d715e3f8ca6dd239e12ef2c7effcdf93b9ac",
+  "rugra_block_sha256": "6d2c8792a68a34e33f3218d2a1ebd7f7d5cfde2df8ed748113b673582003e163",
+  "rugra_blockaction_sha256": "c46188990a65976fd7fe5ddd53703d6850d25832501e20eadd20a5f050157e33"
  }
 }
