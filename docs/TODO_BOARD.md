@@ -120,6 +120,15 @@
 > 仅注释更正);**OPEN 残项**: dominantcopy 槽位带非空 trims 的 mirror 态双侧对照
 > (root 集成阶段执行)。**流程改进令(root)**: 连续三例"commit message 有、板上无"
 > ——在途 lane 完成时 root 必须当场核对板上登记后才算回收完成。
+> **集成+热修双收(2026-09-22)**: ①globalsym 合并(root 亲测 curl **3304/0/0**,main DAT
+> 105→0/gp 60→0 与 oracle 逐字节同形);②BK spaceid 合并(C 输出字节恒等,funclink 分歧
+> **清除**,Phase 2 首分歧推进至 ordinal 12 heritage=SUBPIECE 宽度 4vs8=subflow.rs:6040,
+> 已登记 SUBFLOW-SUBPIECE-WIDTH-0001,BM 车道待派);③BI SWITCH_OUT 热修完成(自噬
+> 416→3,commit 61bc251,**待机制 C 复核**);④BJ 审计: goto_prints 六分臂缺失
+> (潜伏雷:while 尾 break 被吞成死循环),登记 `GOTO-PRINTS-NEXTFLOWAFTER-ARMS-0001`
+> (P1,BN 车道待派);⑤BL printc infloop 递归发射(gp switch 发射唯一残阻塞)待派。
+> **⚠ 配额事件(2026-09-22 ~04:3x)**: zai-coding-plan 5 小时用量墙,BL/BM/BN/
+> SWITCH_OUT-Cross-Review 四派发全部未启动,05:32:32 重置后需重发。
 > **Lane BB 修复落地(2026-09-22,wt/sb-returnsplit)**: BRANCH/CBRANCH 代理已替换为
 > gatherReturnGotos 原语义(copy-map 结构树 t_goto/gotoPrints/t_if-ifgoto 检测,blockaction.cc:2205;
 > gotoPrints 走逐父类型 nextFlowAfter 虚分发表 mid-pipeline live 评估)。降级 drill 验证
