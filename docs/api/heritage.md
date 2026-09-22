@@ -2,6 +2,52 @@
 
 **源代码路径**: `src/heritage.rs`
 
+## 2026-09-22：HERITAGE-PROMOTE-SYMBOLTAIL-0001 剩余位点裁决与补齐（CR-BZ 收尾）
+
+BZ 8 处之后的同类位点族逐点裁决（每点先读 oracle 函数完整体再判定,非盲补）。
+oracle 侧事实基础: `Funcdata::newVarnode`（funcdata_varnode.cc:148-169,符号尾
+usepoint=INVALID `Address()`）与 `Funcdata::newVarnodeOut`（cc:104-122,符号尾
+usepoint=`op->getAddr()`,**同样有 queryProperties→setSymbolProperties 尾**）;
+`Funcdata::opSetOutput`（funcdata_op.cc:85）自身也调 `setVarnodeProperties`;
+`newIndirectOp`（cc:683-698）in/out 两腿均走上述带尾路径。
+
+**裁决表（补 = 照 BZ 模式在 create 与 flags 折叠之间/def 输出接线后插
+`fd.set_varnode_properties(&vn)`）**:
+
+| oracle 位点 | oracle 路径 | 裁决 | 理由 |
+|---|---|---|---|
+| cc:288 removeRevisitedMarkers `big` | newVarnode | **补** | Rust 2725 裸建(连折叠都无) |
+| cc:391 normalizeReadSize `vn1` | newVarnode | **补** | Rust 1869 仅折叠 |
+| cc:440 nWS `mostvn` | newVarnodeOut | **补** | Rust 1988 def-裸建+折叠;def 已设故 usepoint=op addr 与 cc:115 一致 |
+| cc:441/462 nWS `big` ×2 | newVarnode | **补** | Rust 1996/2046 仅折叠 |
+| cc:461 nWS `leastvn` | newVarnodeOut | **补** | Rust 2040 |
+| cc:473/475 nWS `midvn` | newVarnodeOut | **补** | Rust 2072 |
+| cc:485 nWS `bigout` | newVarnodeOut | **补** | Rust 2095 |
+| cc:1225 guardCallOverlappingInput `wholeVn` | newVarnode | **补** | Rust 2943 裸建 |
+| cc:1332/1353 guardOutputOverlapStack `newInput` ×2 | newVarnode | **补** | Rust 3523/3584 裸建(stack 域,当前 no-op,结构补齐) |
+| cc:1595 guardLoads `invn` | newVarnode | **不补** | Rust `guard_loads_range` 的 COPY 插入体是既有登记 stub(需 ValueSetSolver 精化区间),位点尚不存在,补尾无从谈起 |
+| cc:1742/1750 splitByRefinement 循环片 | newVarnode | **补** | Rust 4422 循环单建点覆盖两行 |
+| cc:2008 guardInput `newout` | newVarnode | **补** | Rust 4327 裸建(concat 目标) |
+| cc:2095/2100 splitJoinLevel 半片 | newVarnode(Address 形) | **补** | Rust 3390/3397 + 2-piece 内联点 3284/3285(read)/3327/3337(write);register 空间在 Rugra 当前查询通道为 no-op,结构补齐 |
+| cc:2241 floatExtensionRead `bigvn` | newVarnode(Address 形) | **补** | Rust 3433;同上 no-op 结构补齐 |
+| (新发现,同族) cc:1502 guardCalls trial 输入 | newVarnode | **补** | Rust 1550 仅折叠 |
+| (新发现,同族) cc:1634 guardReturnsOverlapping `retVal` | newVarnodeOut | **补** | Rust 1694 def-裸建+折叠 |
+| (新发现,同族) cc:1682 guardReturns return-copy 输出 | newVarnodeOut | **补** | Rust 1815 def-裸建+折叠 |
+| cc:435/456/1253/1257/1270/1522 newIndirectCreation 系 | newVarnodeOut(经 cc:719) | **不补(登记)** | 缺口在 `funcdata.rs::new_indirect_creation_in_space`/`new_indirect_op`(注释声称带尾,实现仅 `apply_new_varnode_flags` 折叠)——超出本 lane write-set,登记为子项待 funcdata owner |
+
+已确认无缺口: cc:1229/1330/1348/1370/1414/1423/2267/2634(Rust 已走
+`new_varnode_out`/既有 `set_varnode_properties`,FUNCDATA-NEWVARNODE-SYMBOLTAIL-0001);
+cc:537/1778/1812/2097/2103 `newUnique` 系(unique 空间不入 scope,oracle 亦无尾)。
+
+**验证（A/B 同机同树,base=978a0a80 vs after,均 defects=numbering=0）**:
+curl 全语料**字节级一致**(skeleton 3601=3601,defects 0/124, numbering 0);
+httpd 29 函数**字节级一致**(2459/0/0);config 域重放 main/getparameter/
+parseconfig/glob_set/glob_range/glob_url 逐函数**字节级一致**,全语料
+`::config.`=181、DAT_00117[56]xx=0、.rodata witnesses、glob_expand 字段化
+形态(5 处)全部与 base 相等——零回退、零改善(语料内这些位点未激活或无可附着
+符号,Rugra 侧行为中性)。join 族/register 空间位点按结构补齐(oracle 有尾,
+Rugra 通道 no-op)。
+
 ## 2026-09-22：heritage 提升/守卫路径补符号尾（HERITAGE-PROMOTE-SYMBOLTAIL-0001）
 
 `HERITAGE-MULTIEQ-VNIN-SYMBOLTAIL-0001` 同族根因的剩余面落地。oracle 中
