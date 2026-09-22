@@ -70,26 +70,55 @@ makeRec 拒绝——真实 DWARF 锁名);②缺 `._4_4_` padding store(手工布
 - **最终 IR**:调用实参 = `u:10000a06:304`(join/寄存器域 PIECE 梯),
   而 oracle 是栈域(件读+字段 store+整读)。→ C 输出 CONCAT 梯。
 
-## 4. 精确分歧点(待修)
+## 4. 精确分歧点(CW 车道修正,2026-09-22 双侧 drill/raw 实证)
 
-`SPLITCOPY_BIG` probe(最终形态):280B 栈读 `in_input=false in_written=true
-def=CPUI_MULTIEQUAL@0x2806`。即 rugra 的 heritage 把循环 8B store 的影写
-**在 280B 粒度上合并成了 MULTIEQUAL 写**(循环体内 0x2806),大读因此
-"已写";oracle 侧同位置保持 in_stack 输入影子域,splitCopy 件的
-SUBPIECE/字段载入输出落在**栈地址**,最终被 RulePieceStructure 字段化。
-rugra 侧件落在 join/寄存器域(n:register:10000a06:280 + ram:10000a06 梯),
-304 根虽 `structured=Some("URLGlob")` 但叶子已在"匹配"地址上跳过重定位。
-另证:**oracle 复现输出里 SUB248/SUB2416 函数形态 = Ghidra 也执行了
-splitCopy**——分歧不是"拆不拆",而是**件的落点域与根的基址**。
+> **勘误**:本节原推断"rugra 的 heritage 把影写在 280B 粒度合并成 MULTIEQUAL、oracle 保持
+> 输入影子域"——**双侧实证推翻**:oracle 的最终 raw(oracle 控制台 `print raw`,
+> work/raw_main.out)同样有 280B 影写链:每个 spacebase store 一个全范围 INDIRECT
+> (heritage.cc:1538-1559 guardStores 无条件按 range 建 INDIRECT),MULTIEQUAL@0x2806 合并
+> (`s0xfc78:118(0x30d0:357c) = ...@0x2806:3587 ? ...@0x30d0:356e`),调用实参链的值最终
+> 打印为输入影子 `in_stack_fc78[280]` 是**打印层**行为(high 符号 + partial 记法),
+> 不是"读保持输入"。heritage 影写合并两侧一致。
 
-候选修复面(按依赖序):
-1. heritage 大读影写合并粒度:定位 rugra 侧 280B MULTIEQUAL 的创建点
-   (guard_input concat_pieces 统一写/影写 piece 合并),对齐 Ghidra 的
-   "读先于写输入影子"行为;stage-drill 双侧 bisect 定位首个分歧阶段。
-2. RulePieceStructure 基址:oracle 的树根基址落在栈 fc78(件重定位到
-   字段地址);rugra 根在 join 域,`baseAddr=outvn-addr-baseOffset` 落
-   join,叶子无迁移。
-3. 命名链:callsite param NAME_LOCKED → makeRec(需 high 非 addr-tied)。
+真正的分歧链(drill @BEGIN 4961-4963 + oracle raw 逐 op 对照):
+
+1. **RulePieceStructure 丢空间**(ruleaction.cc:7644):`baseAddr = outvn->getAddr() - baseOffset`
+   的减法在 Ghidra 保持根的(唯一)空间;Rugra 用无空间 `Address::new(offset)` +
+   `new_varnode_out` 的 Register 钉死 → concat 梯叶子/中间件落 Register 空间唯一式偏移
+   (r0x10000b2e 等;oracle 等价物 u0x10000b4f = 根偏移+字段偏移,偏移一致仅空间错)。
+   → **已修(PIECESTRUCT-SPACE-0001,commit a77d6c02)**:root_space 贯穿 + 双元组地址比较
+   + new_varnode_out_full/new_varnode_in_space。
+2. **栈 varnode 缺 addrtied → RuleSubRight 化 SUBPIECE 为 INT_RIGHT**(ruleaction.cc:7265-7268
+   `outvn->isAddrTied() && a->isAddrTied() && overlap==c → return 0`):oracle 的
+   `Funcdata::newVarnodeOut/setVarnodeProperties` 经 localmap->queryProperties 给在域栈
+   varnode 折叠 mapped|addrtied(funcdata_varnode.cc:30-35 → database.cc:1268-1277,无符号
+   条目也如此);Rugra 的 set_varnode_properties 只走 Ram/全局通道,栈 varnode 从不
+   addrtied → splitCopy 建出的 45 个栈地址 SUBPIECE(42a0-42b2,件本身与 oracle 完全
+   同形!)被 subright 拆成 280B 移位梯 → 42 处 CONCAT 中间态的直接诱因。
+   → **已修(SUBRIGHT-ADDRTIE-0001,commit a77d6c02)**:set_varnode_properties 补
+   ScopeLocal query_properties_ex 腿。守卫用双侧 tied 即跳(保守版,等价覆盖 overlap==c)。
+3. **typing 链断裂(未修,下一环)**:oracle 的 `ActionInferTypes::propagateSpacebaseRef`
+   (coreaction.cc:5258-5306,apply 尾 5407-5410)依赖 SP 输入寄存器带 TypeSpacebase 指针类型
+   (funcdata.cc:263-264)且存在"锁定调用点参数 → LOAD 输出临时类型 URLGlob → LOAD 反向
+   传播(TypeOpLoad cc:493-496)→ ADD(RSP,8) 得 URLGlob* → INT_ADD/INT_SUB 链回传到 SP
+   直接后代"——Ghidra 侧**调用点的 opStackLoad LOAD 活到最后**(最终 raw 仍有
+   `0x30d6:c5b INT_ADD RSP+8` + `c5c LOAD 304`)。Rugra 侧该 LOAD 在 mainloop 早段已被
+   directify 成 COPY(stack:fc78:304) 再接 concat 梯,infertypes 时 URLGlob 落在
+   PIECE 根上而非指针上 → SPACEREF 已移植(a77d6c02,INFERTYPES-SPACEREF-0001)但派发的
+   40 个 ADD 输出临时类型是 Int → ME/输入影子无 TypePartialStruct → subright 的
+   pieceStructured 分支(cc:7256)与 printc opSubpiece/cc:843 特殊打印不触发。
+   **下一环 = 调用点 LOAD 的存活语义(RuleLoadInput/directify 侧差异)**。
+4. **打印/符号层(未修)**:golden 的 `glob.pattern[0].type = auVar21._0_4_`(
+   `auVar21 = in_stack_fc78._80_24_`)形态需要:store LHS 用组符号字段路径
+   (separateSymbol/establishGroupSymbolOffset/linkProtoPartial 链)+ 件 varnode 的临时名/
+   partial 记法选择。Rugra 现状 `Stack_388 = Stack_388._104_4_`(RHS partial 记法已对,
+   LHS 裸名)+ 每模式 2 处 CONCAT164/CONCAT204 中间态(嵌套 4+4+16 件重建未吸收)。
+   group_partials census:with_piece=544(基线 452),45 件×size280 组仍在,新增
+   77 件×size304 组。
+
+CW 修复后 main 的 0x30d6 实参 IR(最终 projection):
+`SUBPIECE out=n:stack:fc78..fd8c(8B×10+24B×8+4B+4B)` + 唯一空间梯腿 + setcasts CAST 链
+——与 oracle raw 0x30d6:441e-4430 同形;INT_RIGHT 移位梯已消失。
 
 ## 5. 工具资产
 
