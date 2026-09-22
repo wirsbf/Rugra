@@ -37,6 +37,63 @@ use rugra::prettyprint::EmitNoMarkup;
 use rugra::printlanguage::PrintLanguage;
 use rugra::address::Address;
 
+// RUGRA-GLUE (RUGRA-FLOW-MIRROR-0001, httpd lane BP / MIRROR-ENVS-CANONICAL
+// -0001): the flow-mirror gate — the oracle single-function input contract.
+// The locked oracle harness (tests/oracle/stage_projection_1204.cc run())
+// loads httpd through BfdArchitecture (every PT_LOAD mapped, SLEIGH decode)
+// and drives fd->followFlow(code:0, code:highest), so the driver's default
+// linear disassemble+inject_raw_ops load is a DIFFERENT input contract
+// (single_function_inject_linear) and the projection consumer correctly
+// hard-blocks cross-side comparison on the load_mode identity key. Under
+// the gate the driver reproduces the oracle contract instead: full-segment
+// SLEIGH image + follow_flow_range(0, u64::MAX) + no analyzer transport
+// (no tail-call CALL_RETURN overrides, no PLT thunk names, no inferred
+// callee prototypes, dynsym-defined functions as the only symbol source —
+// the registerDynamicFunctionSymbols mirror), and the projection flips its
+// honest load_mode literal to single_function_bfd. On this driver the
+// canonical bundle key RUGRA_MIRROR reduces to the flow component alone:
+// httpd has no libc-signature ledger, no known-noreturn marking, and no
+// DWARF prototype application to neutralize (the curl components with no
+// counterpart here). Env unset = the exact historical inject path,
+// byte-identical.
+fn mirror_flow_enabled() -> bool {
+    std::env::var("RUGRA_MIRROR").is_ok() || std::env::var("RUGRA_FLOW_MIRROR").is_ok()
+}
+
+// RUGRA-GLUE (RUGRA-FLOW-MIRROR-0001, httpd lane BP): the vaddr-keyed
+// memory image the mirror path hands SLEIGH — the PT_LOAD segments laid
+// out at their virtual addresses, NOBITS (.bss) zero-fill via the memsz
+// top. httpd's four segments: 0x0 R (headers/.rela), 0x29000 RX (.plt/
+// .plt.sec/.text), 0x7a000 R (.rodata), 0x999f0 RW (filesz 0x6df0 <
+// memsz 0xa3d0, .bss tail), image top 0xa3cc0. Same construction the curl
+// driver's worker loader uses (curl_decompile.rs worker_memory_image_bytes,
+// B3-COREACTION-CONSTANTPTR-0001 b lineage).
+fn worker_memory_image_bytes(elf: &goblin::elf::Elf, buffer: &[u8]) -> Vec<u8> {
+    const PT_LOAD: u32 = 1;
+    let mut top = 0usize;
+    for ph in elf.program_headers.iter() {
+        if ph.p_type == PT_LOAD {
+            top = top
+                .max((ph.p_vaddr as usize).saturating_add(ph.p_memsz as usize));
+        }
+    }
+    let mut image = vec![0u8; top];
+    for ph in elf.program_headers.iter() {
+        if ph.p_type == PT_LOAD {
+            let vaddr = ph.p_vaddr as usize;
+            let file_size = ph.p_filesz as usize;
+            let src = buffer
+                .get(ph.p_offset as usize..(ph.p_offset as usize).saturating_add(file_size))
+                .unwrap_or(&[]);
+            let dst_end = vaddr.saturating_add(src.len()).min(top);
+            if vaddr < dst_end {
+                image[vaddr..dst_end].copy_from_slice(&src[..dst_end - vaddr]);
+            }
+        }
+    }
+    image
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Rugra Decompilation: httpd ===\n");
 
@@ -171,6 +228,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // (RUGRA_STAGE_PROJ / RUGRA_STAGE_DRILL + RUGRA_STAGE_FUNC selector +
     // RUGRA_STAGE_PROJ_OUT / RUGRA_STAGE_DRILL_OUT sinks; see
     // emit_stage_projection / emit_stage_drill at the bottom of this file).
+    // Under the flow-mirror gate (RUGRA-FLOW-MIRROR-0001, lane BP) the
+    // selected function loads through SLEIGH follow_flow_range instead of
+    // inject_raw_ops.
     // Every env unset = the exact historical loop below, byte-identical.
     let stage_proj = std::env::var("RUGRA_STAGE_PROJ").is_ok();
     let stage_drill = std::env::var("RUGRA_STAGE_DRILL").is_ok();
@@ -318,6 +378,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .chain(call_targets.iter().copied())
         .collect();
 
+    // RUGRA-FLOW-MIRROR-0001 (httpd lane BP M2): mirror-gate state, built
+    // once — the full PT_LOAD SLEIGH image and the dynsym-defined function
+    // symbol set (symtab ∪ dynsym-defined = `functions`; httpd is stripped,
+    // so this is exactly the registerDynamicFunctionSymbols mirror of the
+    // oracle harness). Both stay None/empty when the gate is unset; the
+    // per-function clones below only exist behind the gate, same shape as
+    // the stage_binary capture.
+    let mirror = mirror_flow_enabled();
+    let mirror_image: Option<Vec<u8>> = if mirror {
+        match &obj {
+            Object::Elf(elf) => Some(worker_memory_image_bytes(elf, &buffer)),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let mirror_fn_syms: Vec<(u64, String)> = if mirror {
+        functions
+            .iter()
+            .map(|&(vaddr, _, _, ref name)| (vaddr, name.clone()))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if mirror {
+        eprintln!(
+            "[PREPASS] flow mirror: image {} bytes, {} dynsym function symbols",
+            mirror_image.as_ref().map(|image| image.len()).unwrap_or(0),
+            mirror_fn_syms.len()
+        );
+    }
+
     // PLT sections for tail-call detection: PLT stubs
     // (apr_pool_cleanup_kill@plt 0x2a970, ...) carry no .symtab entries
     // but are thunk functions on the Ghidra side; a stub START is
@@ -349,20 +441,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if file_offset as usize >= buffer.len() { continue; }
         let code_bytes = &buffer[file_offset as usize..end_off];
 
-        let mut disasm = X86_64Disassembler::new();
-        let instructions = match disasm.disassemble(code_bytes, Address::new(vaddr)) {
-            Ok(insts) => insts,
-            Err(_) => { total_fail += 1; continue; }
-        };
+        // RUGRA-FLOW-MIRROR-0001: per-function mirror captures (only live
+        // behind the gate). Under the gate the iced prelude is skipped —
+        // SLEIGH + follow_flow_range inside the thread replace it.
+        let mirror_fn = mirror;
+        let mirror_img = mirror_image.clone();
+        let mirror_syms = mirror_fn_syms.clone();
 
-        let mut lifter = X86Lifter::new();
         let mut raw_ops = Vec::new();
-        for inst in &instructions {
-            let mut ops = lifter.lift(inst);
-            for op in &mut ops {
-                op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
+        if !mirror_fn {
+            let mut disasm = X86_64Disassembler::new();
+            let instructions = match disasm.disassemble(code_bytes, Address::new(vaddr)) {
+                Ok(insts) => insts,
+                Err(_) => { total_fail += 1; continue; }
+            };
+
+            let mut lifter = X86Lifter::new();
+            for inst in &instructions {
+                let mut ops = lifter.lift(inst);
+                for op in &mut ops {
+                    op.set_seq_num(rugra::address::SeqNum::new(inst.address, 0));
+                }
+                raw_ops.extend(ops);
             }
-            raw_ops.extend(ops);
         }
 
         let sym_table = symbol_table.clone();
@@ -398,10 +499,94 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // curl_decompile.rs:2109/2471 — restoring the oracle invariant.
             // E2E: httpd skeleton 2546→2230, defects 5→5, numbering 0→0,
             // in_RSP lines 148→0 (2026-08-30).
-            fd.set_arch(std::sync::Arc::new(rugra::arch::Architecture::new()));
-            fd.external_prototypes = proto_db;
-            for (&addr, n) in &sym_table { fd.add_symbol(addr, n.clone()); }
+            // RUGRA-FLOW-MIRROR-0001: under the gate the Architecture also
+            // carries the PT_LOAD loader (the oracle BfdArchitecture maps
+            // every PT_LOAD — the loader is part of the input contract).
+            // Jumptable recovery reads the table bytes through
+            // fd.arch.loader (jumptable.rs sanity_check / find_normalized
+            // readonly rescue / emulate get_load_image_value — the
+            // MemoryImage channel of jumptable.cc:1225-1226/1588-1598); a
+            // bare loader-less Architecture makes recovery DataUnavail and
+            // main's relative-offset switch at 0x2ba94 (table @0x88530)
+            // fail-thunks into CALLIND + artificial RETURN (the first
+            // recorded httpd cross-side divergence, see
+            // /dev/shm/rugra-tests/sb-httpdff/cross_side_report.txt).
+            fd.set_arch({
+                let mut arch = rugra::arch::Architecture::new();
+                if mirror_fn {
+                    let image = mirror_img
+                        .as_deref()
+                        .expect("mirror image captured behind the gate");
+                    arch.loader = Some(std::sync::Arc::new(
+                        rugra::loadimage::RawLoadImage::from_bytes("httpd", 0, image.to_vec()),
+                    ));
+                }
+                std::sync::Arc::new(arch)
+            });
+            if !mirror_fn {
+                fd.external_prototypes = proto_db;
+            }
+            // RUGRA-FLOW-MIRROR-0001: under the gate the symbol set is the
+            // dynsym-defined functions only (registerDynamicFunctionSymbols
+            // mirror — the oracle's bare BFD harness registers no PLT thunk
+            // names and no analysis-discovered FUN_ defaults); the default
+            // path keeps the full HTTPD-URAM-SYMBOLIZE-0001 table.
+            if mirror_fn {
+                for &(sym_addr, ref sym_name) in &mirror_syms {
+                    fd.add_symbol(sym_addr, sym_name.clone());
+                }
+            } else {
+                for (&addr, n) in &sym_table { fd.add_symbol(addr, n.clone()); }
+            }
             for (&addr, s) in &str_table { fd.add_string(addr, s.clone()); }
+
+            // RUGRA-FLOW-MIRROR-0001: the mirror load — the oracle contract
+            // fd->followFlow(Address(code,0), Address(code,highest))
+            // (funcdata_op.cc:756; stage_projection_1204.cc:419). SLEIGH
+            // decodes through the full PT_LOAD image at base 0, so the
+            // unbounded range can lift .plt/.plt.sec thunks below .text;
+            // tail jumps into thunks truncate through the jumptable
+            // fail-thunk path (jumptable.cc:2304-2320 -> flow.cc:727/735
+            // CALLIND + artificial halt), the same contract the curl mirror
+            // established. The analyzer transport is NOT applied here: no
+            // tail-call CALL_RETURN overrides (below), no inferred callee
+            // prototypes (external_prototypes stays empty — bare-BFD
+            // parity, the RUGRA_BARE_LOAD principle), and an empty flow
+            // callee table. .rodata strings stay seeded: the oracle
+            // StringManager reads the same bytes through the loader.
+            // Known recorded delta: the Funcdata size keeps the ELF
+            // st_size (3062 for main) where the oracle harness's 2-arg
+            // Scope::addFunction leaves it unset; size is outside the
+            // projection grammar, and any behavioral effect surfaces as a
+            // consumer-side divergence record.
+            if mirror_fn {
+                let image = match mirror_img.as_deref() {
+                    Some(image) => image,
+                    None => {
+                        eprintln!("[THREAD] {} flow mirror failed: no PT_LOAD image", func_name);
+                        return None;
+                    }
+                };
+                let mut sleigh = rugra::disasm::sleigh_lift::SleighLifter::new();
+                if let Err(error) = sleigh.configure_x86_64(image, 0) {
+                    eprintln!("[THREAD] {} flow mirror SLEIGH setup failed: {:?}", func_name, error);
+                    return None;
+                }
+                eprintln!("[THREAD] {} flow mirror: follow_flow_range(0, u64::MAX)", func_name);
+                let callee_protos = std::collections::BTreeMap::new();
+                if let Err(error) = rugra::flow::follow_flow_range(
+                    &mut fd,
+                    &mut sleigh,
+                    0,
+                    u64::MAX,
+                    &callee_protos,
+                ) {
+                    eprintln!("[THREAD] {} flow mirror failed: {}", func_name, error);
+                    return None;
+                }
+                eprintln!("[THREAD] {} flow mirror done ops={} blocks={}",
+                    func_name, fd.obank.optree.len(), fd.bblocks.get_size());
+            } else {
 
             // Tail-call flow overrides — transport of Ghidra's Java-side
             // TailCallAnalyzer writing FlowOverride CALL_RETURN entries into
@@ -438,6 +623,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             fd.inject_raw_ops(&raw_ops);
             eprintln!("[THREAD] {} inject done ops={} blocks={}", func_name, fd.obank.alivelist.len(), fd.bblocks.get_size());
+            }
 
             let fd_arc = std::sync::Arc::new(std::sync::RwLock::new(fd));
             fd_arc.write().unwrap().set_self_ref(std::sync::Arc::downgrade(&fd_arc));
@@ -568,19 +754,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // tools/drill_diff.py). Ported from the curl driver's emitter block
 // (wt/sb-rust curl_decompile.rs, commits 17f1c34..eea214a) with the
 // httpd-specific META honesty changes:
-//   - load_mode = single_function_inject_linear: this driver loads the
-//     target by linear disassembly of the symbol's bytes through
-//     inject_raw_ops (+ tail-call CALL_RETURN localoverrides), NOT
-//     followFlow. The locked oracle harness drives BOTH corpora with
-//     fd->followFlow(code:0, code:highest) (stage_drill_1204.cc:365), so
-//     the inject load is a different input contract from the curl driver's
-//     bounded follow-flow range (single_function_flow) and from the
-//     oracle/mirror contract (single_function_bfd). No FLOW_MIRROR
-//     equivalent exists here; reaching it would require the SLEIGH-image
-//     follow_flow_range(0, u64::MAX) load path this driver does not have.
-//     The consumer treats load_mode as an identity key, so cross-side
-//     comparison against an oracle projection correctly hard-blocks while
-//     same-driver self-comparison stays meaningful.
+//   - load_mode: env-dependent honest literal. Default
+//     (single_function_inject_linear): this driver loads the target by
+//     linear disassembly of the symbol's bytes through inject_raw_ops
+//     (+ tail-call CALL_RETURN localoverrides), NOT followFlow — a
+//     different input contract from the curl driver's bounded follow-flow
+//     range (single_function_flow) and from the oracle/mirror contract,
+//     and the consumer's load_mode identity key correctly hard-blocks
+//     cross-side comparison for it while same-driver self-comparison
+//     stays meaningful. Under the flow-mirror gate (RUGRA_MIRROR=1 /
+//     RUGRA_FLOW_MIRROR=1, RUGRA-FLOW-MIRROR-0001 httpd lane BP) the
+//     driver reproduces the oracle contract — full PT_LOAD SLEIGH image
+//     + follow_flow_range(0, u64::MAX), no analyzer transport, dynsym
+//     function symbols only (the registerDynamicFunctionSymbols mirror)
+//     — and the literal flips to single_function_bfd, unblocking
+//     cross-side comparison against the locked oracle projection.
 //   - callspec_link producer annotation = inject-path: the httpd driver
 //     has no RUGRA_DISABLE_CALLSPEC_LINK switch; its callspec state rides
 //     external_prototypes + the inject-path qlst registration
@@ -1161,19 +1349,24 @@ fn emit_stage_projection(
         "META analysis_options=default build_flags=v1-no-OPACTION_DEBUG"
     )
     .map_err(|error| format!("unable to write stage metadata: {error}"))?;
-    // load_mode (D10 honest literal): the httpd driver loads its target by
+    // load_mode (D10 honest literal): under the flow-mirror gate
+    // (MIRROR-ENVS-CANONICAL-0001: RUGRA_MIRROR=1 or legacy
+    // RUGRA_FLOW_MIRROR=1) the driver reproduces the oracle load contract
+    // — the full-segment SLEIGH image + follow_flow_range(0, u64::MAX)
+    // with no analyzer transport (RUGRA-FLOW-MIRROR-0001, httpd lane BP)
+    // — so the honest literal is single_function_bfd, matching the locked
+    // oracle projection META. The default path still loads the target by
     // LINEAR disassembly of the symbol's bytes through inject_raw_ops
-    // (plus tail-call CALL_RETURN localoverrides), NOT by followFlow. The
-    // locked oracle harness drives BOTH corpora with
-    // fd->followFlow(code:0, code:highest) (tests/oracle/stage_drill_1204.cc
-    // :365), so the inject path is a different input contract from both the
-    // curl driver's bounded follow-flow range (single_function_flow) and
-    // the oracle/mirror contract (single_function_bfd). No FLOW_MIRROR
-    // equivalent is wired here: reaching it would require the SLEIGH-image
-    // follow_flow_range(0, u64::MAX) load path this driver does not have
-    // (see the lane report). The consumer treats load_mode as an identity
-    // key, so cross-side comparison against the oracle correctly hard-blocks.
-    let load_mode = "single_function_inject_linear";
+    // (plus tail-call CALL_RETURN localoverrides), NOT by followFlow — a
+    // different input contract from both the curl driver's bounded
+    // follow-flow range (single_function_flow) and the oracle/mirror
+    // contract — and the consumer's load_mode identity-key hard block is
+    // the correct behavior for it.
+    let load_mode = if mirror_flow_enabled() {
+        "single_function_bfd"
+    } else {
+        "single_function_inject_linear"
+    };
     writeln!(
         output,
         "META binary_sha256={} func_entry=0x{:x} func_name={} load_mode={}",
