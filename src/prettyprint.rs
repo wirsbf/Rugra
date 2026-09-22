@@ -1426,11 +1426,65 @@ impl EmitNoMarkup {
 
                         // Skip orphan `} while (...)` without a preceding `do {`
                         if bi == func_indent + 2 && bt.starts_with("} while (") {
+                            // Depth-aware pairing: walk backward accumulating
+                            // brace deltas; the balanced do-body interior nets
+                            // 0, so the running sum first reaches +1 exactly at
+                            // the line that opened this block. The former
+                            // 30-line window dropped legitimate trailers of
+                            // long do-bodies (PRINTC-SWITCH-EMIT-0001: the
+                            // infloop-wrapped switch body is ~480 lines; the
+                            // trailer was deleted and the function left with
+                            // an unbalanced brace, gcc audit 107→47 functions).
+                            // The counter is literal-aware (same contract as
+                            // tools/audit_syntax.py::_brace_delta): char
+                            // literals like '}' / '{' in glob_set/glob_word
+                            // comparisons and //- /* */ comments must not
+                            // perturb the count — a raw count never reaches +1
+                            // there and drops the trailer (residual brace +1).
+                            let brace_delta = |s: &str| -> i64 {
+                                let b = s.as_bytes();
+                                let mut i = 0usize;
+                                let mut delta: i64 = 0;
+                                while i < b.len() {
+                                    match b[i] {
+                                        b'/' if i + 1 < b.len() && b[i + 1] == b'/' => break,
+                                        b'/' if i + 1 < b.len() && b[i + 1] == b'*' => {
+                                            i += 2;
+                                            while i + 1 < b.len()
+                                                && !(b[i] == b'*' && b[i + 1] == b'/')
+                                            {
+                                                i += 1;
+                                            }
+                                            i += 2;
+                                            continue;
+                                        }
+                                        b'\'' | b'"' => {
+                                            let quote = b[i];
+                                            i += 1;
+                                            while i < b.len() && b[i] != quote {
+                                                if b[i] == b'\\' {
+                                                    i += 1;
+                                                }
+                                                i += 1;
+                                            }
+                                        }
+                                        b'{' => delta += 1,
+                                        b'}' => delta -= 1,
+                                        _ => {}
+                                    }
+                                    i += 1;
+                                }
+                                delta
+                            };
                             let mut has_do = false;
-                            for prev in pass17.iter().rev().take(30) {
+                            let mut acc: i64 = 0;
+                            for prev in pass17.iter().rev() {
                                 let pt = prev.trim();
-                                if pt == "do {" || pt.starts_with("do {") {
-                                    has_do = true;
+                                acc += brace_delta(pt);
+                                if acc >= 1 {
+                                    if pt == "do {" || pt.starts_with("do {") {
+                                        has_do = true;
+                                    }
                                     break;
                                 }
                             }

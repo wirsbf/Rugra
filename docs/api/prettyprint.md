@@ -835,3 +835,21 @@ decl 走查为空导致伪 body 内的 iVar4 被重复注入 `  int iVar4;`（nu
 拼写的折叠条件切片：紧凑 `while( true )` 折叠为 `if (true) x = 1;`（无悬垂括号），
 空格 `while (c)` 形态不变。双侧 fixture `printc_pending_brace_emit_1204` 的
 `comparand_sha256.rugra_prettyprint` 随测试加入重钉（runner 重验 overall=MATCH）。
+
+## 2026-09-22 追加（PRINTC-SWITCH-EMIT-0001 — P17 孤立 `} while` 判定的深度配对）
+
+`emit_structured_infloop` body 改结构化递归发射（printc.rs，cc:3109 虚分派）后，
+do-while 体恢复为完整结构（数百行的 switch 嵌套）。P17 的孤立 `} while (...)`
+清除判定原是 30 行回看窗口找 `do {`——长体 do 的开括号在窗口外，trailer 被误删,
+函数残留未闭合 `{`（curl gcc 审计提取 107→47 崩塌；getparameter/glob_word +
+httpd main/ap_fini_vhost_config 受害）。
+
+修复:窗口改为**深度感知反向配对**——从 trailer 行反向累计花括号增量（体内部
+净 0）,首次达到 +1 的行即本块开行,判其是否 `do {`。计数器为**字面量感知**
+（与 tools/audit_syntax.py::_brace_delta 同契约）:glob_set/glob_word 比较里的
+`'{'`/`'}'` 字符字面量与 `//`、`/* */` 注释不扰动计数——裸计数在含 `'{'` 字面量
+的函数里反向扫描永远到不了 +1,trailer 仍被删（第二层根因）。
+
+验收:curl 124 函数花括号全部平衡,gcc 审计 81 OK/26 FAIL = master 基线逐位一致;
+httpd 29 函数全部平衡（master 基线因 main 未闭合 brace 整文件提取失败 0 OK/1 FAIL,
+本修复顺带解除）;差分 defects=numbering=0 双语料保持。
