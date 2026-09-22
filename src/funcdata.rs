@@ -6449,28 +6449,116 @@ impl Funcdata {
 
     // Ghidra: funcdata.cc:34 Funcdata::cseElimination
     /// Eliminate a common subexpression between two ops. Faithful to
-    /// `Funcdata::cseElimination` (funcdata_op.cc:1358-1398). Keeps the
-    /// earlier-ordered op (by sequence number), total_replaces the other's
-    /// output, and destroys the duplicate.
+    /// `Funcdata::cseElimination` (funcdata_op.cc:1356-1398). Same block:
+    /// the earlier intra-block `SeqNum::order` wins. Different blocks: the
+    /// op whose parent IS the closest common dominator survives; if neither
+    /// dominates, a fresh op is built at the common block's stop address and
+    /// both originals are destroyed.
     pub fn cse_elimination(
         &mut self,
         op1: &crate::op::PcodeOpRef,
         op2: &crate::op::PcodeOpRef,
     ) -> crate::op::PcodeOpRef {
-        // Determine which op to keep (earlier sequence order).
-        let order1 = op1.0.read().unwrap().start.get_order();
-        let order2 = op2.0.read().unwrap().start.get_order();
-        let (replace, dup) = if order1 <= order2 {
-            (op1.clone(), op2.clone())
-        } else {
-            (op2.clone(), op1.clone())
+        // cc:1359-1364: same parent (or both unattached) — order compare.
+        let parent1 = op1.0.read().unwrap().parent.as_ref().and_then(std::sync::Weak::upgrade);
+        let parent2 = op2.0.read().unwrap().parent.as_ref().and_then(std::sync::Weak::upgrade);
+        let same_parent = match (&parent1, &parent2) {
+            (None, None) => true, // Ghidra: null == null takes the order branch
+            (Some(p1), Some(p2)) => std::sync::Arc::ptr_eq(p1, p2),
+            _ => false,
         };
-        let replace_out = replace.0.read().unwrap().output.clone();
-        let dup_out = dup.0.read().unwrap().output.clone();
-        if let (Some(rep_out), Some(dup_o)) = (replace_out, dup_out) {
-            self.total_replace(&dup_o, rep_out);
+        let replace = if same_parent {
+            // cc:1360-1363: compare the intra-block order field.
+            let order1 = op1.0.read().unwrap().get_seq_num().get_order();
+            let order2 = op2.0.read().unwrap().get_seq_num().get_order();
+            if order1 < order2 {
+                op1.clone()
+            } else {
+                op2.clone()
+            }
+        } else {
+            // cc:1365-1387: different blocks — findCommonBlock picks the
+            // survivor; neither parent dominating spawns a fresh op at the
+            // common block's stop address.
+            let (p1, p2) = match (parent1, parent2) {
+                (Some(a), Some(b)) => (a, b),
+                // Mixed attached/unattached cannot reach cseElimination from
+                // cseEliminateList (dead ops are filtered), and Ghidra would
+                // dereference null here; fail loudly rather than diverge.
+                _ => panic!("cseElimination requires both ops to be inserted"),
+            };
+            let common =
+                crate::block::BlockGraph::find_common_block(&p1, &p2);
+            let common = match common {
+                Some(c) => c,
+                // Ghidra's mark-walk always finds a common dominator when
+                // dominator info exists (both chains reach the entry block);
+                // a null return there is a crash, not a silent fallback.
+                None => panic!("cseElimination: findCommonBlock found no common dominator"),
+            };
+            if std::sync::Arc::ptr_eq(&common, &p1) {
+                op1.clone()
+            } else if std::sync::Arc::ptr_eq(&common, &p2) {
+                op2.clone()
+            } else {
+                // cc:1372-1386: build the replacement at the common block.
+                let (num_inputs, opcode, out_size, out_space, out_addr, inrefs) = {
+                    let o1 = op1.0.read().unwrap();
+                    let out = o1.get_out().expect("cseElimination: op1 has output");
+                    let out_rg = out.read().unwrap();
+                    (
+                        o1.inrefs.len(),
+                        o1.opcode,
+                        out_rg.get_size(),
+                        out_rg.get_space(),
+                        *out_rg.get_addr(),
+                        o1.inrefs.clone(),
+                    )
+                };
+                let stop_addr = {
+                    let c_rg = common.read().unwrap();
+                    c_rg
+                        .as_any()
+                        .downcast_ref::<crate::block::BlockBasic>()
+                        .map(|bb| bb.get_stop_addr())
+                        .unwrap_or_else(|| c_rg.get_start_addr())
+                };
+                let replace = self.new_op(num_inputs, stop_addr);
+                self.op_set_opcode(&replace, opcode);
+                self.new_varnode_out_full(out_size, out_space, out_addr, &replace);
+                for (i, vn) in inrefs.iter().enumerate() {
+                    let (is_const, size, offset) = {
+                        let rg = vn.read().unwrap();
+                        (rg.is_constant(), rg.get_size(), rg.get_offset())
+                    };
+                    if is_const {
+                        let cv = self.new_constant(size, offset);
+                        self.op_set_input(&replace, cv, i);
+                    } else {
+                        self.op_set_input(&replace, vn.clone(), i);
+                    }
+                }
+                self.op_insert_end(&replace, &common);
+                replace
+            }
+        };
+        // cc:1388-1395: totalReplace the loser's output and destroy it.
+        if !std::sync::Arc::ptr_eq(&replace.0, &op1.0) {
+            let out1 = op1.0.read().unwrap().get_out().cloned();
+            let rep_out = replace.0.read().unwrap().get_out().cloned();
+            if let (Some(old), Some(new)) = (out1, rep_out) {
+                self.total_replace(&old, new);
+            }
+            self.op_destroy(&op1.clone());
         }
-        self.op_destroy(&dup);
+        if !std::sync::Arc::ptr_eq(&replace.0, &op2.0) {
+            let out2 = op2.0.read().unwrap().get_out().cloned();
+            let rep_out = replace.0.read().unwrap().get_out().cloned();
+            if let (Some(old), Some(new)) = (out2, rep_out) {
+                self.total_replace(&old, new);
+            }
+            self.op_destroy(&op2.clone());
+        }
         replace
     }
 
@@ -6504,13 +6592,37 @@ impl Funcdata {
                 if !is_dead1 && !is_dead2 {
                     let is_match = op1.0.read().unwrap().is_cse_match(&op2.0.read().unwrap());
                     if is_match {
-                        let res_op = self.cse_elimination(&op1, &op2);
-                        let out_opt = {
-                            let r = res_op.0.read().unwrap();
-                            r.output.clone()
+                        // cc:1434-1437: both outputs must exist and be
+                        // heritaged (Heritage::heritagePass >= 0 on the
+                        // output's address) before eliminating.
+                        let (out1, out2) = {
+                            let r1 = op1.0.read().unwrap();
+                            let r2 = op2.0.read().unwrap();
+                            (r1.get_out().cloned(), r2.get_out().cloned())
                         };
-                        if let Some(out) = out_opt {
-                            outlist.push(out);
+                        let heritaged = |vn: &Option<
+                            std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+                        >| {
+                            // cc:1436: `(outvn == 0) || isHeritaged(outvn)` — a
+                            // null output passes; a present output must have
+                            // been covered by a heritage pass.
+                            vn.as_ref().is_none_or(|v| {
+                                let rg = v.read().unwrap();
+                                self.heritage.globaldisjoint.find_pass(
+                                    rg.get_space(),
+                                    *rg.get_addr(),
+                                ) >= 0
+                            })
+                        };
+                        if heritaged(&out1) && heritaged(&out2) {
+                            let res_op = self.cse_elimination(&op1, &op2);
+                            let out_opt = {
+                                let r = res_op.0.read().unwrap();
+                                r.output.clone()
+                            };
+                            if let Some(out) = out_opt {
+                                outlist.push(out);
+                            }
                         }
                     }
                 }

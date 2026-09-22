@@ -2139,3 +2139,33 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
 > 差分 curl 3661/0/0(base 3654,+7=恢复行本体,golden 侧枚举名形态属已登记 varmap 族)、
 > httpd 2459/0/0 与基线恒等、gcc 81/26 与 7/22 不变、逐函数抽查恒等。
 > 详见 docs/api/prettyprint.md 2026-09-22 追加节;证据=本 lane commit。
+
+> **OPPOOL28-EQUAL2ZERO-LADDER-0001 修复(2026-09-22,Lane CD `wt/sb-oppool28`,owner=fixer)**:
+> Phase 2 新首分歧 ordinal 28 `universal:fullloop:mainloop:stackstall:oppool1`
+> result/count 863(oracle) vs 826(rugra),差 37 = oppool1 首次 perform 内规则应用数
+> (pool `count += res` 累计,action.cc:849)。drill 窗口分解(863/826 精确对齐):
+> earlyremoval −22、equal2zero −6、lessequal −3、propagatecopy −3、subextcomm −2、
+> lessnotequal −1。三处根因(均已修):
+> ① `RuleEqual2Zero::applyOp` MULT 分支 else-if 阶梯倒置(ruleaction.cc:5884-5893):
+>   旧 Rust 在 vn written 但非 INT_MULT 时提前 bail,永不检查 vn2;补 isHeritageKnown
+>   双守卫(cc:5900-5901)与 copySymbolIfValid(cc:5880)。修复即回收 31/37。
+> ② `Funcdata::cseElimination`(funcdata_op.cc:1356-1398)幸存者选择:旧 Rust 无视
+>   parent 恒取 SeqNum order 小者;移植 findCommonBlock 支配树分支+公共块新 op 路径
+>   (cc:1372-1386);cseEliminateList 补 isHeritaged 守卫(cc:1436-1437)。
+> ③ `RulePullsubMulti::applyOp` 新 MULTIEQUAL 输出落在 unique(旧注释承认
+>   "Rugra lacks newVarnodeOut at a computed address"——基础设施已在);改
+>   smalladdr2+renormalize+newVarnodeOut 保持原空间(cc:921-940),插入改
+>   opInsertBegin(cc:943),补 isPrecisLo/Hi 守卫(cc:889)。
+> 验证:Phase 2 首分歧 28→39(`mainloop:redundbranch` 1 vs 0,ActionRedundBranch 域,
+> 下一车道);窗口 863=863 事件序列全等;curl E2E defects=0/numbering=0
+> (skeleton 3447 vs 基线 0804d8c8 的 3610,−163;next_url diff=120 不变——ordinal-28 窗口在管线中段,
+> 39+ 后续阶段仍分叉,最终文本尚未收窄;match_url 94→91);httpd defects=0/numbering=0;
+> next_url/main/getparameter.constprop.0 --func defects=0/numbering=0。
+> ruleaction.rs+funcdata.rs 属主管线 Rule 改动 → 机制 C 待独立 Cross-Review。
+
+| ID | 优先级 | 状态 | owner | write-set | 说明 |
+|---|---|---|---|---|---|
+| `OPPOOL28-EQUAL2ZERO-LADDER-0001` | P1 | FIXED_PENDING_REVIEW(候选 wt/sb-oppool28;机制 C 待独立复核) | oppool28-agent@wt-sb-oppool28 + root | `src/ruleaction.rs`(RuleEqual2Zero/RulePullsubMulti)+`src/funcdata.rs`(cse_elimination/cse_eliminate_list)+`docs/api/{ruleaction,funcdata}.md`+本行 | ordinal-28 三根因修复,详见上方块;oracle e40ed13014025f82488b1f8f7bca566894ac376b;2026-09-22 |
+| `SB-REDUNDBRANCH-ORD39-0001` | P1 | OPEN(Phase 2 新首分歧) | 未认领 | TBD | ordinal 39 `universal:fullloop:mainloop:redundbranch` result/count/apply 1 vs 0:oracle ActionRedundBranch(coreaction.cc)做了一次变更而 rugra 未做——oppool1 清零后的下一车道;2026-09-22 |
+| `RULE-PULLSUBMULTI-JOINRENORM-0001` | P3 | OPEN | 未认领 | `src/ruleaction.rs`+`src/arch.rs`(暴露 AddrSpaceManager) | RulePullsubMulti join 基底 renormalize(translate.cc:870-916)需活体 AddrSpaceManager,Architecture 现仅简化 join_db;寄存器/unique 空间已精确,debug_assert 拦截 join 命中;2026-09-22 |
+| `RULE-PULLSUBMULTI-LOOPIN-0001` | P3 | OPEN | 未认领 | `src/block.rs`+`src/ruleaction.rs` | FlowBlock::hasLoopIn(block.cc loop-in 标记)缺失,RulePullsubMulti cc:883 守卫保守放行;2026-09-22 |
