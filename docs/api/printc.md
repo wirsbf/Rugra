@@ -2199,3 +2199,41 @@ runner `tools/run_printc_dowhile_goto_emit_oracle.sh`）。cargo test --lib 17 f
 
 - 分派器（emit_block_structured）与 emit_switch_case_body 补 `BlockType::MultiGoto` arm→`emit_block_multigoto`:纯委托 wrapped（block.hh:588 `getBlock(0)->emit(lng)`,printc.cc 无 MultiGoto 分支）——结构化子块走 emit_block_structured,Basic/Copy 叶走 emit_block_ops;multigoto 自身不发 goto 语句（其剥除边属于外围 switch 的 goto case）。
 - `emit_structured_switch` per-case gototype arm（printc.cc:3334-3337）:`case_gototypes[i]!=0` → 标签组 + `emit_goto_statement(front_leaf_start_addr(case), bt)`（GOTO→goto/BREAK→break）,无 body 无追加 break——语句即 case;default 槽同理（`default_gototype!=0` → `default:` + goto 语句）。目标块留在图中由顶层发射承载 LAB 标签（GOTO-LABEL-UNPRINTED-0001 的 pending label 机制接线）。
+
+## 2026-09-22 追加（PRINTC-SWITCH-EMIT-0001 核心 — InfLoop 及同族 body 递归发射）
+
+2026-08-29 的 PRINTC-NESTED-DOWHILE-EMIT-0001 修了 dowhile/whiledo/goto 的结构化递归，
+但 `emit_structured_infloop` 的 body 仍是 `emit_block_ops(body, true)` 平铺——InfLoop 包裹的
+一切结构（switch-in-do-while 拓扑的 Switch、嵌套循环、break-guard If）全部被拍平成裸语句。
+oracle `emitBlockInfLoop` printc.cc:3109 是 `bl->getBlock(0)->emit(this)` 虚分派递归。
+本轮同型排查（逐个对照 oracle 是否递归）后改动三处：
+
+- `emit_structured_infloop`（printc.cc:3097-3122）：补齐 cc:3102-3103/3121 的完整 mod 协议
+  （`push_mod` + `unset(NO_BRANCH|ONLY_BRANCH)` 入口、`pop_mod` 出口——即使外层是 cc:2919
+  setMod(no_branch) 的 if-body 也不渗入循环体）；body 由 `emit_block_ops(body, true)` 改为
+  `emit_block_structured(&body, ...)`（cc:3108-3110 beginBlock/emit/endBlock 递归虚分派），
+  与 whiledo/dowhile/for 兄弟（cc:3062/3083/2995）同通道。
+- `emit_structured_switch` 的 control 发射（printc.cc:3320-3323）：由
+  `emit_block_ops(&control, true)` 改为 `push_mod + set_mod(NO_BRANCH) + insert-first +
+  emit_flow_block(&control)` + `pop_mod`——cc:3322 `getSwitchBlock()->emit(this)` 递归虚分派
+  （今日 control 是 BRANCHIND 基本块，叶子 walk 字节等价；分派通道对未来结构化 control 保持正确）。
+  insert-first 镜像 emit_structured_if 的双访模式：本访持有发射权，不被 once-guard 跳过。
+- `emit_structured_whiledo` 的 overflow 臂条件发射（printc.cc:3030-3033）：由
+  `emit_block_ops(&condition, true)` 改为 `push_mod + set_mod(NO_BRANCH) + insert-first +
+  emit_flow_block(&condition)` + `pop_mod`——cc:3032 `condBlock->emit(this)` 递归虚分派；
+  其后 `if (cond) break;` 的条件重放仍走表达式通道（emit_block_condition，不查 once-guard）。
+
+排查结论（未改动，如实记录）：
+- `emit_structured_if`（cc:2897/2912/2922/2933/2939）、`emit_structured_list`（cc:2789-2832）、
+  `emit_structured_condition`（cc:2842/2848/2865）、`emit_for_loop` body（cc:2995）、
+  `emit_structured_dowhile` body（cc:3083）、`emit_structured_whiledo` body（cc:3062）、
+  `emit_block_goto` 结构化 wrapped（cc:2771）、`emit_switch_case_body`（cc:3339-3341）
+  ——均已递归，无需改动。
+- whiledo 普通臂条件（cc:3053-3056 comma_separate 重放）与 dowhile 尾部条件（cc:3088-3092
+  only_branch 重放）仍走 `emit_block_condition`/文本缓冲表达式通道——非 body 平铺（机制不同、
+  影响面全语料），留待专门 lane 评估。
+- `emit_block_goto`/`emit_block_multigoto` 的 Basic/Copy 叶保留 `emit_block_ops` 通道
+  （承载 GOTO-LABEL-UNPRINTED-0001 backpatch + discovery 记账）——已登记的偏离，本轮不动。
+- InfLoop body 走 emit_block_structured 后，Basic 叶经 emit_flow_basic（有 discovery 记账、
+  无 pending_goto_labels backpatch）——与 whiledo/dowhile/for 兄弟的既有取舍一致；若差分
+  出现 label 缺失型缺陷，需把 backpatch 迁到 emit_flow_basic（同机制迁移，另行登记）。

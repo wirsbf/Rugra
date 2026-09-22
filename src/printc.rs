@@ -4582,8 +4582,21 @@ impl PrintC {
                     // (cc:3030-3043: condBlock emit with no_branch, then
                     // only_branch condition, then break).
                     if overflow {
-                        // Emit condition block's non-branch ops (no_branch).
-                        self.emit_block_ops(&while_data.condition, true);
+                        // cc:3030-3033: pushMod(); setMod(no_branch);
+                        // condBlock->emit(this); popMod() — the condition
+                        // subtree dispatches through the structured virtual
+                        // emit, never a flat op walk. Insert-first mirrors the
+                        // emit_structured_if double-visit pattern: this visit
+                        // owns the emission; the `if (cond) break;` replay
+                        // below runs through the expression channel, which
+                        // does not consult the once-guard.
+                        self.push_mod();
+                        self.set_mod(print_mods::NO_BRANCH);
+                        emitted.insert(
+                            std::sync::Arc::as_ptr(&while_data.condition)
+                                as *const () as usize);
+                        self.emit_flow_block(&while_data.condition, graph, emitted);
+                        self.pop_mod();
                         // cc:3035-3043: if (<condition>) break;
                         self.emit.tag_line(0);
                         self.emit.print("if (");
@@ -4726,18 +4739,27 @@ impl PrintC {
 
     // Ghidra: printc.cc:3097 PrintC::emitBlockInfLoop
     /// Emit a BlockInfLoop as `do { <body> } while(true);`. Faithful to
-    /// emitBlockInfLoop (printc.cc:3097-3122): emitAnyLabelStatement, `do`,
-    /// open brace, emit body, close brace, ` while ( true );`.
+    /// emitBlockInfLoop (printc.cc:3097-3122): pushMod + unset
+    /// (no_branch|only_branch), emitAnyLabelStatement, `do`, open brace,
+    /// recursive body emission, close brace, ` while ( true );`, popMod.
     fn emit_structured_infloop(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
-        _graph: &crate::block::BlockGraph,
-        _emitted: &mut std::collections::HashSet<usize>,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<usize>,
     ) {
         use crate::block::BlockInfLoop;
         let block = block_arc.read().unwrap();
         let inf_block = block.as_any().downcast_ref::<BlockInfLoop>();
         if let Some(inf_data) = inf_block {
+            // cc:3102-3103: pushMod(); unsetMod(no_branch|only_branch) — the
+            // whole construct (header, body, trailer) emits with both branch
+            // mods cleared, regardless of the caller's state (e.g. an if-body
+            // context that set no_branch at cc:2919 must not bleed into the
+            // loop body's emission).
+            self.push_mod();
+            self.unset_mod(
+                print_mods::NO_BRANCH | print_mods::ONLY_BRANCH);
             self.emit.tag_line(0);
             // cc:3106: print(KEYWORD_DO) — bare keyword (same one-space
             // brace contract as emit_structured_dowhile cc:3078).
@@ -4748,8 +4770,15 @@ impl PrintC {
             // iteration; a prior RETURN must not suppress it.
             let saved = self.seen_return;
             self.seen_return = false;
-            // Emit the body block's ops.
-            self.emit_block_ops(&inf_data.body, true);
+            // cc:3108-3110: beginBlock(getBlock(0)); getBlock(0)->emit(this);
+            // endBlock(id1) — the body dispatches through the structured
+            // virtual emit, never a flat op walk. PRINTC-SWITCH-EMIT-0001
+            // core: a flat emit_block_ops(body) collapses every structured
+            // child — an InfLoop-wrapped switch (the gp switch-in-do-while
+            // topology) plus all nested loops/ifs were flattened to bare
+            // statements, hiding the Switch entirely. Same recursive channel
+            // as the whiledo/dowhile/for siblings (cc:3062/3083/2995).
+            self.emit_block_structured(&inf_data.body, graph, emitted);
             self.seen_return = saved;
             self.loop_depth -= 1;
             self.emit.end_block();
@@ -4757,6 +4786,8 @@ impl PrintC {
             self.emit.print(" while (");
             self.emit.print(" true");
             self.emit.print(");");
+            // cc:3121: popMod()
+            self.pop_mod();
         } else {
             self.emit_block_ops(block_arc, false);
         }
@@ -4904,8 +4935,22 @@ impl PrintC {
                 let block = block_arc.read().unwrap();
                 let switch_block = block.as_any().downcast_ref::<BlockSwitch>();
                 if let Some(switch_data) = switch_block {
-                    // Emit the control block's non-branch ops (e.g. index computation)
-                    self.emit_block_ops(&switch_data.control, true);
+                    // cc:3320-3323: pushMod(); setMod(no_branch);
+                    // bl->getSwitchBlock()->emit(this); popMod() — the
+                    // switch control block emits through the structured
+                    // virtual dispatch, never a flat op walk. Today the
+                    // control is the BRANCHIND basic block (leaf walk is
+                    // byte-identical); the dispatch keeps the channel correct
+                    // for any structured control. Insert-first mirrors the
+                    // emit_structured_if double-visit pattern: this visit
+                    // owns the emission and is not skipped by the once-guard.
+                    self.push_mod();
+                    self.set_mod(print_mods::NO_BRANCH);
+                    emitted.insert(
+                        std::sync::Arc::as_ptr(&switch_data.control)
+                            as *const () as usize);
+                    self.emit_flow_block(&switch_data.control, graph, emitted);
+                    self.pop_mod();
 
                     // Print switch header.
                     // Ghidra emitBlockSwitch (printc.cc:3313) emits `switch (<expr>)`
