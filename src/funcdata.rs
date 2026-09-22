@@ -5772,18 +5772,37 @@ impl Funcdata {
                     .write()
                     .unwrap()
                     .set_flags(crate::varnode::varnode_flags::SPACEBASE);
-                // Ghidra funcdata.cc:263-264 types the input spacebase register
-                // with the TypeSpacebase pointer. Rugra keeps this OFF for now:
-                // ActionInferTypes::propagateSpacebaseRef (coreaction.cc:5283)
-                // needs it, but the upstream URLGlob* pointer chain (locked
-                // callsite param -> LOAD backward propagation) is not wired
-                // yet, so the receiver no-ops — while the spacebase pointer
-                // DOES flow through Rugra's partially ported spacebase
-                // downChain/ptrarith arms and reassociates RSP-relative
-                // expressions away from the golden in glob_set/glob_range/
-                // getparameter (config-domain A/B, 2026-09-22). Re-enable
-                // together with the LOAD-survival typing chain.
-                // (INFERTYPES-SPACEREF-0001 receiver side is already ported.)
+                // Ghidra funcdata.cc:262-264: only the input spacebase
+                // register gets the TypeSpacebase pointer type
+                // (`vn->updateType(ptr,true,true)`). Re-enabled with the
+                // LOAD-claim chain (HERITAGE-LOADCLAIM-0001): the Rugra
+                // pipeline now matches the oracle's claim sequence (LOAD
+                // directified by RuleLoadVarnode in mainloop iter1 oppool2 ->
+                // restart -> heritage refinement/refineRead claims the free
+                // 304B stack read into the 280+8+8+8 PIECE ladder feeding the
+                // CALL), so the v1-era retraction premise (LOAD stuck
+                // directified, no claim ladder) no longer holds. The mount
+                // activates ActionInferTypes::propagateSpacebaseRef
+                // (coreaction.cc:5265, INFERTYPES-SPACEREF-0001 receiver
+                // already ported) to type the stack shadows through the
+                // SP-relative ADD tree. The v1-era regressions
+                // (glob_set/glob_range drift, __spacebase_1_* name leaks) are
+                // re-gated by the config-domain A/B in this commit's evidence.
+                if vn_arc.read().unwrap().is_input() {
+                    if let Some(types) = self.arch.as_ref().and_then(|a| a.types.clone()) {
+                        // cc:245-246: ct = getTypeSpacebase(spc, getAddress());
+                        // ptr = getTypePointer(point.size, ct, spc->getWordSize()).
+                        // The space indexed by this base register is the stack
+                        // space (word size 1), scoped to this function's entry.
+                        let frame = self.get_address().clone();
+                        let mut factory = types.write().unwrap();
+                        let ct = factory
+                            .get_type_spacebase(Some(crate::space::AddressSpace::Stack), frame);
+                        let ptr = factory.get_type_pointer(sb_size, ct, 1);
+                        drop(factory);
+                        vn_arc.write().unwrap().update_type_lock(ptr, true, true);
+                    }
+                }
             }
         }
     }

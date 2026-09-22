@@ -1,23 +1,42 @@
 # `funcdata.rs` API Reference
 
-## 2026-09-22：spacebase 类型挂载与 setVarnodeProperties localmap 腿(撤回,改由 heritage 侧承接)
+## 2026-09-23：spacebase 类型挂载重启用（HERITAGE-LOADCLAIM-0001 / VARGROUP-ABSORB-0001 v3）
 
-VARGROUP-ABSORB-0001 第一版(commit a77d6c02)曾在此两处落子:`spacebase()` 给 SP 输入寄存器挂
-TypeSpacebase 指针 + `set_varnode_properties` 补 localmap queryProperties 腿。A/B 实证(base=70e76ce6)
-显示两处全局改动引发 config 域漂移(glob_set/glob_range 的 pos 合并被拆、getparameter 的
-`__spacebase_1_*` 合成名泄漏)——SP 指针类型流经 Rugra 半移植的 spacebase downChain/ptrarith 臂,
-且 setVarnodeProperties 的 addrtied 折叠与 merge 层的历史补偿偏差相互作用。**第二版撤回两处**,
-等效修复改在 heritage 侧落地(见 docs/api/heritage.md 同日条目:place_multiequals 的 MULTIEQUAL
-输出改走 new_varnode_out_full 完整尾,即 Ghidra cc:2634 的原调用形态),config 域
-glob_set/glob_range/glob_url 逐函数 IDENTICAL,getparameter 向 golden 靠拢(golden 有
-local_5a8/local_5b8 栈名,base 为寄存器名形态)。SP 类型挂载将在"调用点 LOAD 存活语义"
-链条接通时与 propagateSpacebaseRef 一并启用(接收端已移植于 coreaction)。
+`Funcdata::spacebase` 的 SP 输入寄存器 TypeSpacebase 指针挂载
+（funcdata.cc:263-264 `vn->updateType(ptr,true,true)`，`ptr = getTypePointer(sb_size,
+getTypeSpacebase(stack, getAddress()), 1)`）随 HERITAGE-LOADCLAIM-0001 重新启用。
+v1 撤回的两个前提均已被后续车道关闭：
+
+1. **认领链已在主管线工作**（本次经 curl main 阶段投影实证）：调用点 opStackLoad
+   LOAD（funclink 建立）在 mainloop 迭代 1 的 oppool2 被 RuleLoadVarnode directify
+   成 `COPY(n:stack:fc78:304)`，mainloop restart 后 heritage pass 2 的
+   placeMultiequals→collect→refinement→refineRead 把该 304B 自由栈读替换为
+   280+8+8+8 的 PIECE 梯（seq 3450-3452，oracle 3501-3503 同形）喂给 CALL——
+   与锁定 oracle 的 gdb 逐步轨迹（directify→restart→refineRead→RulePropagateCopy
+   折叠 COPY）逐步对应。"LOAD 存活到 directify 且无认领"的旧前提不再成立。
+2. **v1 的 config 域回退未复现**：本次 A/B（base=5c610849）glob_set 92/92、
+   glob_range 80/80 **零行变化**，glob_url 2/2；curl 全量 2994→2996（+2 为
+   in_RSP 声明类型改变引起的换行级 cosmetic），defects=0/numbering=0；
+   httpd 2337→2337 全等；next_url/match_url 输出中 next_url 零行变化
+   （Phase 2 MATCH 保持）。
+
+**已知 cosmetic 残差**：8 个函数（main/getparameter 等）此前已声明 `int8 in_RSP`
+（栈符号映射缺口的既有表现）；挂载后声明变为 `__spacebase_1_<hash> *in_RSP`
+（Rugra get_type_spacebase 的 dedup 名；oracle 同状态下 printc 渲染为
+BADSPACEBASE，且 oracle 因栈符号映射完整而不打印该声明）。该泄漏属
+varmap/符号层既有缺口的表现面，随 VARGROUP-ABSORB-0001 §4-4 符号层一并收敛。
 
 - `Funcdata::spacebase`（funcdata.cc:240-266 else 分支）：标记 SPACEBASE 标志后，若该
   varnode 是输入寄存器，按 cc:263-264 `getTypeSpacebase(stack, getAddress())` +
   `getTypePointer(sb_size, ct, 1)` 构造指针类型并以 `updateType(ptr,true,true)` 挂锁。
   此前注释称"类型系统尚无 TypeSpacebase"而跳过——该类型现已存在，且
   ActionInferTypes::propagateSpacebaseRef 依赖它识别 SP 输入。
+
+## 2026-09-22：setVarnodeProperties localmap 腿（v2 保留项；spacebase 挂载见 2026-09-23 条）
+
+v1 曾同时落子 spacebase 挂载与本腿，A/B（base=70e76ce6）显示 config 域漂移后
+v2 撤回两处；本腿后由 heritage 侧等效修复承接（见 docs/api/heritage.md 同日条目），
+spacebase 挂载则于 2026-09-23 按上文条件重启用。
 - `Funcdata::setVarnode_properties`（funcdata_varnode.cc:25-42）：补上 Ghidra
   `localmap->queryProperties` 的函数自身作用域腿（database.cc:1268-1277）——栈空间
   varnode 先查 ScopeLocal：容器条目/在域内均折叠 flags（含 mapped|addrtied），
