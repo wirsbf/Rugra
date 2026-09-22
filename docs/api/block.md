@@ -1577,3 +1577,59 @@ COPY/SUBPIECE；输出 addr-tied 拒绝；任一后代 op 的 parent 不在本�
 - `front_leaf` 补 MultiGoto arm（经 wrapped 下降,block.hh:587-589 委托链）——此前落入 catch-all 返回自身。
 - `BlockSwitch` 新增 `case_gototypes: Vec<u32>`（CaseOrder::gototype per case,block.hh:778）与 `default_gototype: u32`:`mark_unstructured_targets` 与 `scope_break_break_cases` 从"conservative no-op"落为真实实现（cc:3607-3610 gototype==f_goto_goto→markCopyBlock(UNSTRUCTURED_TARG);cc:3620-3623 goto case 目标==curexit→提升 f_break_goto）。
 - 新增 `front_leaf_start_addr`（printc.cc:2303 emitGotoStatement 的 exp_bl→emitLabel 投影）:front leaf 的 BlockCopy original 起始地址（BlockCopy 不覆写 getStart,与 oracle 一致,block.hh:505-538）。
+
+## 2026-09-22 追加（GOTO-PRINTS-NEXTFLOWAFTER-ARMS-0001 — nextFlowAfter 分臂单一事实源 + 死代码清理）
+
+- **`next_flow_after_successors`（pub，模块级）提升进 block.rs**：oracle
+  `getParent()->nextFlowAfter(this)`（block.cc:2885 经 BlockGoto::gotoPrints 触达）
+  的逐父类型虚分发表，对一 composite 的全部组件一次算清 —— 原
+  `goto_prints_walk_level` 只建了 12 个 override 中的 BlockGraph 兄弟臂
+  （block.cc:1335-1353），If/WhileDo/DoWhile/InfLoop/Goto/Switch 六类父类型的
+  分臂全部缺失（Lane BJ 审计：while body 尾 break-goto 会被旧纯兄弟规则吞成
+  死循环）。分臂逐条对照 oracle：
+  - `FlowBlock` 基类（block.hh:884-887）恒 null —— 叶子不经 walk 触达；
+  - `BlockGraph`/`BlockList`（block.cc:1335-1353；block.hh:600 无 override）
+    兄弟规则（提取为 `graph_sibling_successors`（pub），末组件 = 外层 succ，根
+    null）；
+  - `BlockGoto`（block.cc:2899-2903）任意组件 → 目标 front leaf；
+  - `BlockMultiGoto`（block.cc:2931-2934）恒 null —— Rust component_list_dyn
+    对 MultiGoto 为空（wrapped 是调度 basic 叶，无内部 goto），结构上不可达；
+  - `BlockCondition`（block.cc:3053-3056）恒 null；
+  - `BlockIf`（block.cc:3127-3134）槽0（条件，含 if-goto 单组件形态）→ null，
+    其余槽（tc/fc）→ 父臂 succ，**无兄弟扫描**（两个 body 的后继是整个 if 的
+    后继，不是对方）；
+  - `BlockWhileDo`（block.cc:3341-3351）槽0 → null，body → front_leaf(cond) =
+    **循环头**（body 尾 goto 对比的是头而非循环后 —— break-goto 不再被吞）；
+  - `BlockDoWhile`（block.cc:3448-3451）恒 null（可能在迭代）；
+  - `BlockInfLoop`（block.cc:3476-3483）任意组件 → front_leaf(getBlock(0)) =
+    循环头（显式回边 goto → prints=false，不再多打 goto+标签）；
+  - `BlockSwitch`（block.cc:3639-3661）：oracle 臂① `getBlock(0)==bl → null`
+    指**调度根 cs[0]**（Rust 存于 `BlockSwitch::control`，不在组件表内 —— 旧
+    coreaction 分表把 components[0]（第一个 case）误当调度根给 null，本次修
+    正：无槽0 特判）；臂② 非 t_goto case → null（"break statement in the
+    flow"）；臂③-⑤ t_goto case → 打印序下一 caseblock 的 front leaf，末位 →
+    父臂。序基准：oracle caseblocks 经 finalizePrinting label/depth stable_sort
+    （block.cc:3591，ActionFinalStructure 在 scopeBreak/markUnstructured 前先调
+    finalizePrinting，blockaction.cc:2192）；Rust 以组件序（cases+default 追
+    尾）= 自身发射序建模（printc emit_block_switch 同序）——真实 label 排序
+    落地于 JUMPTABLE-TABLEAPI-0001，届时两侧须同步排序。
+- **`goto_prints_visit` 改用分表递归**（`goto_prints_walk_level` 删除）：
+  `compute_goto_prints` 根层走 `graph_sibling_successors(components, None)`，
+  每层经 `next_flow_after_successors` 派发 —— 与 coreaction.rs
+  ActionReturnSplit 的 gather walk 共用同一实现（**单一事实源**；
+  ReturnSplit 保持 mid-pipeline 现算、不读 prints_precomputed —— 与 oracle
+  两态惰性求值语义一致）。
+- **删除 7 个无调用点的死代码 typed 方法**（各有简化且未接入任何链路，避免
+  双源漂移）：`BlockGoto::next_flow_after_index`、
+  `BlockIf::next_flow_after_parent`、`BlockWhileDo::next_flow_after`、
+  `BlockDoWhile::next_flow_after`、`BlockInfLoop::next_flow_after`、
+  `BlockCondition::next_flow_after`、`BlockSwitch::next_flow_after`。
+  `BlockGraph::next_flow_after`（block.cc:1335 根图形态）保留 —— 仍被
+  `goto_prints_in`（parent 接线形态）消费。
+- **双侧 fixture**：`tests/oracle/goto_prints_nextflowafter_1204.{cc,rs}` +
+  `tools/run_goto_prints_nextflowafter_oracle.sh` —— 六形态（while 尾
+  break-goto / infloop 回边 / switch fallthru / goto 套 goto / if-else 尾 /
+  dowhile 尾）锁定全部 12 分臂，**MATCH**（per-(composite,component) 后继身份
+  + per-goto gototype/prints 双侧逐字节一致）；Switch 槽位以 oracle 索引打印
+  （调度根=槽0），label 全 0 使 stable_sort 保序（真实 label 排序绑定
+  JUMPTABLE-TABLEAPI-0001）。

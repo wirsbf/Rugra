@@ -2357,7 +2357,9 @@ func_link_input(coreaction.rs:9703-9774)忠实落地,再入库内守卫=非 orac
   ret=ret->subBlock(0)` 下探到**原始 basic 块**后与 RETURN 块指针同一（cc:2215-
   2229；`BlockCopy::subBlock` 返回镜像原件，block.hh:524）→ 该入边入选。
 - **top-down 实现**（`gather_return_gotos` + `GatherReturnGotosWalk` +
-  `next_flow_after_successors`）：Rugra 结构树组件走 typed 字段、无自底向上
+  `crate::block::next_flow_after_successors`，2026-09-22 起与 goto_prints 树遍
+  历共用 block.rs 的单一事实源分表，本文件原私有副本已删）：Rugra 结构树组件
+  走 typed 字段、无自底向上
   parent 链，祖先链扫描实现为等价子树扫描（入边源 copy 落在 qualifying 节点
   子树内 ⟺ 其祖先链含 marked 节点）；oracle 的 setMark/clearMark（作用域严格
   局限于单 RETURN 的 gather→select→clear，cc:2213-2306）以 walk 内
@@ -2370,8 +2372,12 @@ func_link_input(coreaction.rs:9703-9774)忠实落地,再入库内守卫=非 orac
   类型计算 `nextFlowAfter` 后继，比较 `front_leaf(target) != succ`（copy 层指针
   同一，block.cc:2884-2888）。关键语义：If/WhileDo 的 getBlock(0) 条件槽后继为
   null；WhileDo body 尾回流条件 front leaf；DoWhile/Condition 恒 null；
-  InfLoop 回流 body 首 leaf；Goto 组件后继 = 目标 front leaf；Switch case0
-  null、非 goto case null、goto case 取下一 case。
+  InfLoop 回流 body 首 leaf；Goto 组件后继 = 目标 front leaf；Switch 无槽0
+  特判（oracle 的 getBlock(0)==bl 指调度根 cs[0]，Rust 组件表不含它 —— 旧表
+  把第一个 case 误当调度根，2026-09-22 修正）、非 t_goto case null、t_goto
+  case 取打印序下一 case（组件序 = 发射序；真实 label 排序绑定
+  JUMPTABLE-TABLEAPI-0001）。根层兄弟规则走
+  `crate::block::graph_sibling_successors`（同一单一事实源）。
 - **apply 骨架不变**：RETURN 快照 → isSplittable → gather → 倒序 splitedge/
   retnode 累积 → "不能全拆"pop → `fd.node_split`（count 经 apply 返回值承载）。
 - 单测 `test_returnsplit_creates_return_at_goto_pred` 重写为两阶段：阶段 A

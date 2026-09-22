@@ -1177,7 +1177,13 @@ MULTIGOTO-0001，维持 skip）；sizeout==2→（非 isGotoOut(1) 先 negateCon
   `fd.sblocks.compute_goto_prints()` —— gotoPrints（block.cc:2881-2890）的
   parent-present 臂需要 getParent()->nextFlowAfter(this)，Rugra 复合块不接线
   parent，故在最终树上一次性求值并存 prints_precomputed，供 markUnstructured
-  cc:2861 门与 printc emitBlockGoto cc:2775 消费。
+  cc:2861 门与 printc emitBlockGoto cc:2775 消费。2026-09-22
+  （GOTO-PRINTS-NEXTFLOWAFTER-ARMS-0001）：compute_goto_prints 树遍历从纯兄弟
+  规则升级为 block.rs 的 nextFlowAfter 全分臂单一事实源
+  （`next_flow_after_successors`/`graph_sibling_successors`，12 个 override 逐臂
+  对照见 docs/api/block.md 同日追加节；双侧 fixture
+  goto_prints_nextflowafter_1204 六形态 MATCH）；blockaction.rs 本身未改
+  （调用点与求值时机不变）。
 
 机制 C：blockaction.rs 属核心算法白名单，本改动 Cross-Review: PENDING
 （待独立复核 agent 逐行读 block.cc:1702-1713/2856-2903 与 printc.cc:2766-2779

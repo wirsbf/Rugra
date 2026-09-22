@@ -415,7 +415,10 @@ pub fn print_tree_dbg(
 /// successor is the next sibling's front leaf (cc:1349-1352); for the last
 /// component it is `tail_next` — the successor the enclosing composite
 /// itself received (cc:1344-1348's parent recursion, null at the root).
-pub(crate) fn graph_sibling_successors(
+// pub for the bilateral goto_prints_nextflowafter_1204 fixture — the
+// oracle side walks the virtual dispatch directly, and this is the only
+// Rust-visible projection of the sibling arm.
+pub fn graph_sibling_successors(
     components: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
     tail_next: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
 ) -> Vec<Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>> {
@@ -473,7 +476,10 @@ pub(crate) fn graph_sibling_successors(
 ///   so the component order IS the print/fallthru order here — and the
 ///   next caseblock's front leaf; the LAST caseblock defers to the parent
 ///   arm `succ` ("flow is to exit of switch").
-pub(crate) fn next_flow_after_successors(
+// pub for the bilateral goto_prints_nextflowafter_1204 fixture — the
+// oracle side queries the per-parent virtual dispatch directly, and this
+// is the Rust-visible projection of that dispatch for every parent kind.
+pub fn next_flow_after_successors(
     node: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
     components: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
     succ: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,

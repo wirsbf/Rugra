@@ -127,6 +127,17 @@
 > 416→3,commit 61bc251,**待机制 C 复核**);④BJ 审计: goto_prints 六分臂缺失
 > (潜伏雷:while 尾 break 被吞成死循环),登记 `GOTO-PRINTS-NEXTFLOWAFTER-ARMS-0001`
 > (P1,BN 车道待派);⑤BL printc infloop 递归发射(gp switch 发射唯一残阻塞)待派。
+> **Lane BN 修复落地(2026-09-22,wt/sb-gotoprints,`GOTO-PRINTS-NEXTFLOWAFTER-ARMS-0001` ✅CLOSED)**:
+> goto_prints 树遍历从纯兄弟规则升级为 nextFlowAfter **12 override 全分臂**单一事实源
+> (block.rs `next_flow_after_successors`/`graph_sibling_successors`,coreaction ReturnSplit
+> gather 同源消费);修 BB 表 Switch 两偏差(槽0 误当调度根 → 删特判;case 序改组件序=发射序,
+> 真实 label 排序绑定 JUMPTABLE-TABLEAPI-0001);删 7 个无调用点 typed next_flow_after* 死代码。
+> 双侧 fixture `goto_prints_nextflowafter_1204` 六形态(while 尾 break-goto/infloop 回边/switch
+> fallthru/goto 套 goto/if-else 尾/dowhile 尾)**MATCH**(runner 实跑);5 函数树 dump prints
+> 重测 0 mismatch;curl 全量 3304/0/0 与父提交**字节一致**、httpd 2326/0/0 与 sb-httpd 车道
+> 基线**字节一致**(潜伏雷排除,当前语料零翻转);cargo test 失败集=父提交既有 flaky(heritage/
+> funcdata SSA,与本改动无关,两轮对照确认)。**blockaction.rs 未触及**(机制 C 白名单字面未命中,
+> 但主管线行为变化,root 集成时建议独立复核)。
 > **⚠ 配额事件(2026-09-22 ~04:3x)**: zai-coding-plan 5 小时用量墙,BL/BM/BN/
 > SWITCH_OUT-Cross-Review 四派发全部未启动,05:32:32 重置后需重发。
 > **Lane BB 修复落地(2026-09-22,wt/sb-returnsplit)**: BRANCH/CBRANCH 代理已替换为
@@ -340,6 +351,7 @@
 | w-debugwarn | `PLTSTUB-WARNLOSS-0001` 残留(debugproto 播种) | writer | `src/debugproto.rs`+`docs/api/debugproto.md`+fixture+registry，branch `wt2/debugwarn` | 在途(2026-09-01 新派):对象级分流——LibcSignatureTable 全部条目+DebugDb 仅 void 签名条目钉 unknown 哨兵(行为 Arc 不变,红线=ACTION-FUNCLINK-INPUT-1204 复跑 MATCH);验收=warning 51/51+defects/numbering 0 |
 | w-selfcopy | `MAIN-SELF-COPY-ABSORB-0001`(新登记) | writer | `src/merge.rs`+`src/varmap.rs`+`docs/api/{merge,varmap}.md`+fixture+registry，branch `wt2/selfcopy` | 在途:main 简单赋值 900 vs golden 90,temp↔stack COPY 未被 high 吸收;含复核 F2(其余 raw-cover 入口)/F3 线索;机制 C 域(merge/varmap) |
 | w-scopefix | `CALLSPEC-DRIVER-0001`+`FUNCDATA-SCOPELOCALOVERFLOW-0001`(scopefix2 重放) | writer | `src/funcdata.rs`+`docs/api/funcdata.md`+scopelocal_wrap fixture+registry(如需 pushmultiequals/scope_find_overlap 重钉)，branch `wt2/scopefix` | 在途(2026-09-01 新派,nodesplit 释放租约后):重放 `de4309f`(inject_raw_ops 出生 CALL 无 spec→移植 flow.cc:683-690 核心)+`657ff89d`/`877ea9d`(wrap 域);fixture 对 master 重钉(双形态);repin commit 勿 pick;先读 oracle 全貌再落地,发现旧分支偏差按 oracle 修正 |
+| BN(w-gotoprints) | `GOTO-PRINTS-NEXTFLOWAFTER-ARMS-0001` | writer | `src/block.rs`+`src/coreaction.rs`+`docs/api/{block,blockaction,coreaction}.md`+`tests/oracle/goto_prints_nextflowafter_1204.*`+`tools/run_goto_prints_nextflowafter_oracle.sh`，branch `wt/sb-gotoprints` | **DONE(2026-09-22,见 wave 日志当日条)**:nextFlowAfter 12 分臂单一事实源落 block.rs(`next_flow_after_successors`/`graph_sibling_successors`,pub)+修 BB 表 Switch 槽0/序两偏差+删 7 死代码 typed 方法;双侧 fixture 六形态 **MATCH**;curl/httpd 全量 defects=numbering=0 且输出与父提交**字节一致**(当前语料零翻转,纯潜伏雷排除);**机制 C: blockaction.rs 未触及**(改动域=block.rs/coreaction.rs,主管线行为变化建议 root 安排独立复核) |
 | ~~w-salvage~~ | 12 个老 agent/* 分支甄别 | 只读 | 无 | **DONE**:SALVAGE-TRIAGE-2026-09-01.md;结论已并入上文 salvage 节 |
 
 > 冲突矩阵:x86_lift.rs=w-sse;subflow.rs 已并;funcdata.rs=w-scopefix;coreaction.rs+fspec.rs=已并(PENDING 复核);
