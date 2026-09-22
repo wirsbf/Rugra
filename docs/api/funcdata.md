@@ -1,5 +1,22 @@
 # `funcdata.rs` API Reference
 
+## 2026-09-22:`op_stack_load`/`op_stack_store` 空间注记宽度 1→8(FUNCDATA-SPACEID-WIDTH-0001)
+
+`newVarnodeSpace`(funcdata_varnode.cc:190-198)用 `sizeof(spc)`(AddrSpace\*
+指针宽,x86-64 = **8**)建 LOAD/STORE 的空间注记常量,值经
+`createConstFromSpace`(translate.hh:542)编码。FUNCDATA-OPSTACKLOAD-CONTAIN-0001
+修复时 Rugra 两处写成 `new_constant(1, contain.space_id())` —— 值通道正确但宽度
+1;镜像投影 emitter 的 `s:<name>` 描述符门是 `size==8`(curl_decompile.rs
+`stage_vn`),1 字节常量漏成 `c:3:1`,成为 Phase 2 跨侧对拍 universal:funclink
+ordinal 7 op-idx 4 首分歧(oracle `in=s:ram` vs rugra `in=c:3:1`,2534:2e8 LOAD)。
+
+修复:两处改调既有 `new_varnode_space(contain)`(`size_of::<usize>()` = 8,
+与 `new_constant` 同走 `vbank.create_with_space(_, Const, id)`,行为只动宽度)。
+同族位点 `createStackRef` 的 SEGMENTOP 分支(cc:488,同样
+`newVarnodeSpace(containerid)` 宽度 8)x86-64 不可达且 Rugra 未实现该分支,
+已在 `create_stack_ref` 注释标注宽度语义(实现时必须走 `new_varnode_space`,
+禁止 1 字节常量)。
+
 ## 2026-09-22：`op_stack_load`/`op_stack_store` 的 LOAD/STORE 空间输入改用 contain 空间(FUNCDATA-OPSTACKLOAD-CONTAIN-0001)
 
 Ghidra `Funcdata::opStackLoad`(funcdata_op.cc:541-552,关键行 :547)与
