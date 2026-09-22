@@ -3369,7 +3369,18 @@ impl Funcdata {
             .write()
             .unwrap()
             .set_flags(crate::block::block_flags::DUPLICATE_BLOCK);
-        // copyRange(b) — Rugra blocks don't track address range; skip.
+        // cc:832: bprime->copyRange(b) — the duplicate inherits the original
+        // block's whole address cover.
+        {
+            let b_rg = b.read().unwrap();
+            let mut bprime_rg = bprime.write().unwrap();
+            if let (Some(src), Some(dst)) = (
+                b_rg.as_any().downcast_ref::<crate::block::BlockBasic>(),
+                bprime_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>(),
+            ) {
+                dst.copy_range(src);
+            }
+        }
         // switchEdge(a, b, bprime)
         self.switch_edge(&a, b, &bprime);
         // Add all of b's out-edges to bprime.
@@ -3931,6 +3942,20 @@ impl Funcdata {
                 bb_bb.set_order();
             }
         }
+        // cc:942: bl->mergeRange(outbl) — update the address cover BEFORE the
+        // graph splice (Ghidra order).  The union cover's FIRST range (by
+        // offset) becomes this block's getStart(); for a backward
+        // jump-splice that is the absorbed block's address.
+        if !std::sync::Arc::ptr_eq(bb, &out_block) {
+            let out_rg = out_block.read().unwrap();
+            let mut bb_rg = bb.write().unwrap();
+            if let (Some(out_bb), Some(bb_bb)) = (
+                out_rg.as_any().downcast_ref::<crate::block::BlockBasic>(),
+                bb_rg.as_any_mut().downcast_mut::<crate::block::BlockBasic>(),
+            ) {
+                bb_bb.merge_range(out_bb);
+            }
+        }
         // Splice the CFG edges, faithful to BlockGraph::spliceBlock
         // (block.cc:1597-1620):
         //   fl1 = bl->flags & (f_unstructured_targ | f_entry_point)   // keep from bl
@@ -3970,10 +3995,8 @@ impl Funcdata {
                 bb_bb.flags = fl1 | fl2;
             }
         }
-        // bl->mergeRange(outbl) (funcdata_block.cc:953) — update address cover.
-        // TODO: Rugra has no Cover system yet; address-cover merge is a known
-        // infrastructure gap (recorded in ALIGNMENT_ROADMAP). Does not affect
-        // correctness of CFG splice for current pipeline.
+        // bl->mergeRange(outbl) (funcdata_block.cc:942) — done above, before
+        // the CFG splice, in Ghidra's statement order.
         self.structure_reset();
         true
     }

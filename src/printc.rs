@@ -3561,7 +3561,17 @@ impl PrintC {
         if entry_read.get_type() != crate::block::BlockType::Basic {
             return None;
         }
-        Some(entry_read.get_start_addr().as_u64())
+        // printc.cc:3170 emitLabel uses bb->getEntryAddr() (block.cc:2291),
+        // NOT getStart(): with a multi-range (spliced) block the label keeps
+        // the entry chunk's address even though getStart reports the lowest
+        // cover range.
+        Some(
+            entry_read
+                .as_any()
+                .downcast_ref::<crate::block::BlockBasic>()
+                .map(|bb| bb.get_entry_addr().as_u64())
+                .unwrap_or_else(|| entry_read.get_start_addr().as_u64()),
+        )
     }
 
     // RUGRA-GLUE: transports Ghidra's PrintLanguage::no_branch modifier as an explicit boolean through Rugra's structured-block dispatcher

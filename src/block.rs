@@ -221,9 +221,19 @@ pub fn front_leaf_start_addr(
             .downcast_ref::<BlockCopy>()
             .map(|c| c.original.clone())
     };
-    match orig {
-        Some(o) => o.read().unwrap().get_start_addr().as_u64(),
-        None => leaf.read().unwrap().get_start_addr().as_u64(),
+    let target = match orig {
+        Some(o) => o,
+        None => leaf,
+    };
+    let r = target.read().unwrap();
+    // printc goto/label addressing is getEntryAddr-based (printc.cc:3170
+    // emitLabel -> block.cc:2291): with a multi-range (spliced) block the
+    // label keeps the entry chunk's address even though getStart() reports
+    // the lowest cover range.
+    if let Some(bb) = r.as_any().downcast_ref::<BlockBasic>() {
+        bb.get_entry_addr().as_u64()
+    } else {
+        r.get_start_addr().as_u64()
     }
 }
 
@@ -2061,11 +2071,16 @@ pub struct BlockBasic {
     pub flags: u32,
     /// Start address of the block
     pub start_addr: Address,
-    /// Initial instruction-address range owned by this block.  The two
-    /// endpoints retain their complete address-space identity; the end is
-    /// normalized to the beginning space by `set_initial_range`, matching
-    /// `RangeList::insertRange(beg.getSpace(), beg.getOffset(), end.getOffset())`.
-    initial_range: Option<(Address, Address)>,
+    /// Original instruction-address ranges (the block \e cover).  Ghidra
+    /// `RangeList cover` (block.hh:465): starts as the single closed range
+    /// of the block's instructions (`setInitialRange`), then grows via
+    /// `mergeRange` when blocks are spliced (funcdata_block.cc:942) and is
+    /// cloned via `copyRange` on node-split (funcdata_block.cc:832).
+    /// `getStart`/`getStop` read the FIRST/LAST range in (space, offset)
+    /// sort order, so a spliced block whose absorbed chunk sits at a LOWER
+    /// address reports that lower address as its start (block.cc:2319-2335).
+    // Ghidra: block.hh:465 BlockBasic::cover
+    cover: crate::address::RangeList,
 
     /// Immediate dominator of this block
     pub immed_dom: Option<Weak<RwLock<dyn FlowBlock + Send + Sync>>>,
@@ -2101,7 +2116,7 @@ impl BlockBasic {
             self_ref: None,
             flags: 0,
             start_addr,
-            initial_range: None,
+            cover: crate::address::RangeList::new(),
             immed_dom: None,
             dom_depth: -1,
             dom_children: Vec::new(),
@@ -2318,15 +2333,68 @@ impl BlockBasic {
             None => Address::new(end.as_u64()),
         };
         self.start_addr = beg;
-        self.initial_range = Some((beg, covered_end));
+        // cc:2628-2630: cover.clear(); insertRange(beg.space, beg.off, end.off)
+        self.cover = crate::address::RangeList::new();
+        if let Some(range) = crate::address::Range::new(beg, covered_end) {
+            self.cover.insert_range(range);
+        }
     }
 
-    /// Return the final address in the original instruction cover.
+    /// Copy address ranges from another basic block.  A node-split duplicate
+    /// inherits the ORIGINAL block's whole cover (funcdata_block.cc:832), so
+    /// both copies report the same getStart()/getStop() until re-ranged.
+    // Ghidra: block.hh:468 BlockBasic::copyRange
+    pub fn copy_range(&mut self, other: &BlockBasic) {
+        self.cover = other.cover.clone();
+    }
+
+    /// Merge address ranges from another basic block: the union of both
+    /// blocks' original instruction ranges.  Called by splice_block_basic
+    /// (funcdata_block.cc:942) after absorbing the out-block's ops.
+    // Ghidra: block.hh:469 BlockBasic::mergeRange
+    pub fn merge_range(&mut self, other: &BlockBasic) {
+        self.cover.merge(&other.cover);
+    }
+
+    /// Get the address of the (original) first operation to execute.  With a
+    /// single cover range this matches `get_start_addr`; with MULTIPLE ranges
+    /// (a spliced block) it returns the start of the range CONTAINING the
+    /// first op — "relies slightly on normal fall-thru semantics" (the
+    /// executed entry is the lowest-address chunk of the executed path).
+    /// printc emitLabel (printc.cc:3170) uses this, NOT getStart.
+    // Ghidra: block.cc:2291 BlockBasic::getEntryAddr
+    pub fn get_entry_addr(&self) -> Address {
+        if self.cover.num_ranges() == 1 {
+            // cc:2297-2298: single range — return the start of the range.
+            return self.cover.ranges()[0].get_first_addr();
+        }
+        // cc:2299-2308: multi-range — locate the cover range holding the
+        // first op's address; absent a containing range, the op address
+        // itself is the answer.
+        let Some(first) = self.ops.first() else {
+            // cc:2300-2301: no ops — Ghidra returns an invalid Address();
+            // Rugra falls back to the construction addr (see get_stop_addr).
+            return self.start_addr;
+        };
+        let addr = first.0.read().unwrap().get_addr();
+        match self.cover.ranges().iter().find(|r| r.contains(addr)) {
+            Some(range) => range.get_first_addr(),
+            None => addr,
+        }
+    }
+
+    /// Return the final address in the original instruction cover: the LAST
+    /// range's last address in (space, offset) order.
     // Ghidra: block.cc:2328 BlockBasic::getStop
     pub fn get_stop_addr(&self) -> crate::address::Address {
-        self.initial_range
-            .map(|(_, stop)| stop)
-            .unwrap_or(self.start_addr)
+        match self.cover.ranges().last() {
+            Some(range) => range.get_last_addr(),
+            // Ghidra returns an invalid Address() for an empty cover; Rugra
+            // has no invalid Address, so fall back to the construction addr
+            // (no flow-created block reaches this arm: flow.cc always sets a
+            // range before the block joins the graph).
+            None => self.start_addr,
+        }
     }
 
     /// Get the first operation in the block
@@ -2611,9 +2679,15 @@ impl FlowBlock for BlockBasic {
 
     // Ghidra: block.cc:2319 BlockBasic::getStart
     fn get_start_addr(&self) -> Address {
-        self.initial_range
-            .map(|(start, _)| start)
-            .unwrap_or(self.start_addr)
+        // First range's first address in (space, offset) sort order — NOT
+        // the first op's address.  For a spliced block whose absorbed chunk
+        // lives at a lower address, this reports that lower address.
+        match self.cover.ranges().first() {
+            Some(range) => range.get_first_addr(),
+            // Ghidra returns an invalid Address() for an empty cover; fall
+            // back to the construction addr (see get_stop_addr note).
+            None => self.start_addr,
+        }
     }
 
     // Ghidra: block.hh:161 FlowBlock::getParent

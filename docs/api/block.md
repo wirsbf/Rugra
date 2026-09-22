@@ -367,6 +367,28 @@ cover 才是合法状态）。
 多不相连范围下的 `contains`/`getEntryAddr`与 RangeList marshal 仍归
 `BLOCKBASIC-COVER-0001`，不由该字段的存在推断已完成。
 
+### 2026-09-22（SB-HERITAGE50-BLOCKCOVER-0001）：多范围 cover + copyRange/mergeRange + getEntryAddr
+
+- `initial_range: Option<(Address, Address)>` 升级为 `cover: RangeList`
+  （block.hh:465 `RangeList cover` 的 1:1 对应，复用 `crate::address::RangeList`）。
+  `set_initial_range` 语义不变（cover.clear + 单闭区间插入）。
+- 新增 `copy_range(&BlockBasic)`（block.hh:468 `copyRange`）：node-split
+  重复块继承原块完整 cover（funcdata_block.cc:832 已接线）。
+- 新增 `merge_range(&BlockBasic)`（block.hh:469 `mergeRange`）：拼接块
+  cover 取并集；`splice_block_basic` 在 CFG 拼接前调用（funcdata_block.cc:942）。
+- `get_start_addr`/`get_stop_addr`（block.cc:2319/2328）改为读 cover 的
+  **按 (space,offset) 排序的首/末范围**首/末地址——拼接块吸收了更低地址
+  的块后，`getStart()` 返回那个更低的地址（正是 heritage MULTIEQUAL
+  创建 `fd->newOp(sizein, bl->getStart())` 所取的地址；Ghidra oracle
+  next_url block28 实测 cover={[0x2534..],[0x50e7..]}→getStart=0x2534）。
+- 新增 `get_entry_addr()`（block.cc:2291 `getEntryAddr`）：单范围=范围首
+  地址；多范围=**包含首条 op 的那个范围**的首地址。printc emitLabel
+  （printc.cc:3170）用它而不是 getStart——label 与 getStart 在拼接块上
+  可以不同（首 op 是 heritage 插在块头的 MULTIEQUAL，其地址=getStart）。
+- 残余（仍归 `BLOCKBASIC-COVER-0001`）：`contains`（cover.inRange）的
+  comment 域消费、RangeList marshal、Ghidra 空 cover invalid-Address()
+  语义的精确化。
+
 ---
 
 ### `pub fn add_op(&mut self, op: PcodeOpRef)`
