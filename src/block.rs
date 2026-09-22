@@ -7656,6 +7656,21 @@ pub struct BlockSwitch {
     /// (block.cc:3524-3554) and consumed/sorted by `finalizePrinting`
     /// (block.cc:3556-3592). Parallel to `cases` positionally.
     pub case_order: Vec<CaseOrder>,
+    /// Ghidra `CaseOrder::label` of the formal default entry (block.hh:760).
+    /// In the oracle the default is an ordinary caseblocks member — sorted
+    /// with every other case by its label (block.cc:3591), the label coming
+    /// from the default basic block's first table index (block.cc:3573-3576
+    /// `getIndexByBlock(basicblock,0)`/`getLabelByIndex`) — so `default:`
+    /// prints at its label rank, not last (printc.cc:3331-3332 + cc:3140).
+    /// Rugra keeps the default in its own slot; this field carries the same
+    /// label so printc can place it at the identical rank. None until
+    /// `finalize_case_labels` computes it (or when the default basic block
+    /// has no table indices — the cc:3588 `label = 0; Should never happen`
+    /// corner keeps legacy last-position emission). Known corner vs the
+    /// oracle: a default that is a fall-thru chain non-root takes its chain
+    /// root's label in Ghidra (cc:3577-3584); Rugra's default slot carries
+    /// no chain link, so such a default places by its own first index.
+    pub default_label: Option<u64>,
     pub case_values: Vec<Vec<u64>>,
     pub index_varnode: Option<Arc<RwLock<crate::varnode::Varnode>>>,
     pub incoming: Vec<BlockEdge>,
@@ -7947,6 +7962,29 @@ impl BlockSwitch {
                 }
             }
             self.case_values[i] = group;
+        }
+        // Default entry's label (block.cc:3573-3576 recipe applied to the
+        // default's own basic block): the oracle's caseblocks holds the
+        // default too, and finalizePrinting gives it the label of its first
+        // table index so the cc:3591 stable sort places it by rank —
+        // printc.cc:3140 then prints `default:` at that sorted position.
+        // Computed here (post-sort) because the rank consumer is printc's
+        // separate default slot.
+        if let Some(def) = &self.default_case {
+            // cc:3500: basicbl = bl->getFrontLeaf()->subBlock(0)
+            let def_basic = crate::block::front_leaf(def).and_then(|leaf| {
+                let r = leaf.read().unwrap();
+                r.as_any()
+                    .downcast_ref::<crate::block::BlockCopy>()
+                    .map(|c| c.original.clone())
+            });
+            if let Some(basic) = def_basic {
+                if jt.num_indices_by_block(&basic) > 0 {
+                    if let Some(ind) = jt.get_index_by_block(&basic, 0) {
+                        self.default_label = Some(jt.get_label_by_index(ind));
+                    }
+                }
+            }
         }
         // RUGRA-GLUE: env-gated (RUGRA_BS_DUMP=1) structural witness for the
         // label pipeline (no Ghidra counterpart; debug-only) — prints the
