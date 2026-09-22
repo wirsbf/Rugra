@@ -789,9 +789,20 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
     `Err("Undefined pullsub")` 镜像 cc:788 `throw LowlevelError`。两调用点
     （RulePullsubMulti::applyOp / RulePullsubIndirect::applyOp）`?` 传播等价 Ghidra 异常上抛。
   - `apply_op` — 主算法：检查 SUBPIECE(MULTIEQUAL)，计算使用范围，检查各分支 consume，为每个分支创建/查找 SUBPIECE，构建新的窄 MULTIEQUAL，替换后代
-  - 已知限制：hasLoopIn/isPrecisLo/isPrecisHi/isJoin/JoinRecord 用保守默认（允许变换）；
-    非 join 基底 oracle 用 `newVarnodeOut(smalladdr1)`（同空间 base+shift，cc:826-832），
-    Rugra 恒用 `new_unique_out`（unique 空间）——残留差异，登记 TODO `RULE-PULLSUB-NEWVNODEOUT-0001`
+  - **2026-09-22 修正（ordinal-28 快照 BUILD/MULTIEQUAL 输出空间差）**：新 MULTIEQUAL 输出
+    从 `new_unique_out` 改为 cc:921-940 的地址保持路径——`smalladdr2 = vn.addr+minByte`（小端）
+    / `vn.addr+(size-maxByte-1)`（大端）后 `renormalize(newSize)`（join 空间经
+    AddrSpaceManager::renormalizeJoinAddress，translate.cc:870-916；登记
+    `RULE-PULLSUBMULTI-JOINRENORM-0001`，Architecture 尚无活体 AddrSpaceManager，寄存器/
+    文件/unique 空间为无操作精确）再 `newVarnodeOut`，保持原空间（寄存器文件中的合并窗口
+    保持寄存器 varnode，如 `EAX(5020:736) = EAX ? EAX`，而不再落到 `u:10000081`）。
+    插入从 `op_insert_before(mult)` 改回 cc:943 `opInsertBegin(new_multi, mult->getParent())`
+    （MULTIEQUAL 排块首，保持 SeqNum order 语义）。补 cc:889 `isPrecisLo||isPrecisHi`
+    双精度守卫（此前注释声称缺基础设施，实际 varnode.rs:1286 已有）。
+  - 已知限制：hasLoopIn 需 FlowBlock loop-in 标记（block.cc loop coats），登记
+    `RULE-PULLSUBMULTI-LOOPIN-0001`（保守允许）；join 基底 renormalize 登记
+    `RULE-PULLSUBMULTI-JOINRENORM-0001`（寄存器/unique 空间无影响，debug_assert 拦截
+    join 命中）
 
 ## 2026-06-27（续 4）：RuleAndMask 完整移植
 
@@ -895,10 +906,18 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
 
 ## 2026-06-27（续 14）：比较简化规则
 
-- **RuleEqual2Zero**：完整移植 ruleaction.cc:5857-5924。简化与 0 的比较：
+- **RuleEqual2Zero**：完整移植 ruleaction.cc:5850-5906。简化与 0 的比较：
   - `0 == V + W * -1 => V == W`（乘以 -1 的形式）
   - `0 == V + c => V == -c`（常量偏移形式）
   - 验证 addvn 的所有后代都是布尔比较（isBoolOutput）
+  - **2026-09-22 修正（ordinal-28 oppool1 count 863→826 差 37 的主根因）**：MULT 分支的
+    else-if 阶梯被倒置——旧版在 `vn` written 但非 INT_MULT 时提前 return，永远不会检查
+    `vn2`（cc:5884-5893 的 else-if 语义是第一个输入仅在 *written 且 MULT* 时占用 negvn 槽，
+    否则落到第二输入）；恢复阶梯语义后 next_url 首oppool1 窗口 equal2zero 13→7 的 −6
+    连锁（earlyremoval −22 等）全部回收。同时补齐 cc:5900-5901 的
+    `isHeritageKnown` 双守卫（insert|constant|annotation flags）与 cc:5880
+    `copySymbolIfValid`（equate markup 传播，varnode.cc:510-522）。常量分支的
+    `uintb_negate(c-1,size)` = `~(c-1)&mask` = `(-c)&mask`（address.cc:654）按位精确移植。
 
 ## 2026-06-27（续 15）：移位消除 + 条件翻转规则
 

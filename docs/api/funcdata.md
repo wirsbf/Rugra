@@ -1072,8 +1072,18 @@ input-slot 状态仍是 **MISMATCH**，不能由插入或 collapse fixture 推�
 
 ### 2026-06-27（续 5）：CSE 基础设施
 
-- `cse_elimination(op1, op2) -> PcodeOpRef` — `Funcdata::cseElimination`（funcdata_op.cc:1358）：消除两个公共子表达式 op 之一（保留序列号较小的），total_replace 输出后销毁重复 op。
-- `cse_eliminate_list(list) -> Vec<Varnode>` — `Funcdata::cseEliminateList`（funcdata_op.cc:1420）：对 (hash, op) 列表排序，查找匹配对，消除冗余。解锁 RuleSelectCse + ActionCse。
+- `cse_elimination(op1, op2) -> PcodeOpRef` — `Funcdata::cseElimination`（funcdata_op.cc:1356-1398）。
+  **2026-09-22 修正（ordinal-28 selectcse 幸存者方向反转）**：旧版无视 parent 恒按
+  SeqNum order 取小者；现按 oracle 全语义移植——同 parent（含双 null）比较
+  `getSeqNum().getOrder()`（块内执行序，block.cc:2638 setOrder 维护）；异 parent 走
+  `FlowBlock::findCommonBlock`（block.cc:736-790 mark-walk 支配树 LCA）：公共块即某 op
+  的 parent 则该 op 幸存；两者皆非则 cc:1372-1386 在公共块 `getStop()` 地址新建替换 op
+  （`newOp`+同 opcode+`newVarnodeOut(out.size,out.addr)`+常量经 newConstant+`opInsertEnd`），
+  双方 total_replace 后销毁。
+- `cse_eliminate_list(list) -> Vec<Varnode>` — `Funcdata::cseEliminateList`（funcdata_op.cc:1418-1447）：
+  对 (hash, op) 列表稳定排序（sort_by_key），滑窗比较相邻同 hash 对；补 cc:1436-1437
+  `isHeritaged(outvn)`（`Heritage::heritagePass = globaldisjoint.findPass(addr) >= 0`，
+  heritage.hh:325；null 输出放行）守卫后消除冗余。解锁 RuleSelectCse + ActionCse。
 
 ### 2026-06-27（续 6）：op_flip_condition
 
