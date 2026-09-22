@@ -154,7 +154,9 @@ COPY-follow（cc:2761-2769）、oracle buildPointers 的 PTRSUB/PTRADD op
 - `SplitDatatype::get_component` / `categorize_datatype` / `test_datatype_compatibility` — 组件/hole/类别门 (subflow.cc:2208-2234/2237-2274/2285-2367)
 - `SplitDatatype::build_in_constants` / `build_pointers` — 常量直建 / 根指针 PTRADD·PTRSUB 链重建 (subflow.cc:2474-2488/2616-2672)
 - `SplitDatatype::split_copy` / `split_load(op, in_type)` / `split_store(op, out_type)` — 拆分重写 (subflow.cc:2717/2756/2808)。`split_copy` 按 cc:2730-2744 分派到四个 builder:
-  `generate_constants`(cc:2409-2465, ZEXT/PIECE 扩展精度常量折叠为分片常量并销毁 def op)、
+  `generate_constants`(cc:2409-2465, ZEXT/PIECE 扩展精度常量折叠为分片常量并销毁 def op;
+  `build_in_constants` cc:2483 的 `baseVal >> (8*off)` 在 oracle 侧因纯常量 ≤8 字节而
+  8*off<64 恒成立, Rugra 对 >8 字节纯常量按缺失高字节读 0(饱和移位), 避免 C++ UB 边界 panic)、
   `build_in_subpieces`(cc:2497-2519, 非常量输入按 piece offset 建 SUBPIECE, 输出落 root 空间
   `baseAddr+off` 地址并 `updateType(inType)`)、`build_out_varnodes`(cc:2527-2539, 输出分片落
   root 空间地址并 `updateType(outType)`)、`build_out_concats`(cc:2548-2603, root 无读者早退;

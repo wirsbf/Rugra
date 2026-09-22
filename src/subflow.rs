@@ -5704,7 +5704,19 @@ impl<'a> SplitDatatype<'a> {
             if big_endian {
                 off = root_size as i32 - off - dt.get_size() as i32;
             }
-            let val = (base_val >> ((8 * off) as u64)) & calc_mask(dt.get_size());
+            // cc:2483 `baseVal >> (8*off)`: plain constants are at most
+            // sizeof(uintb) wide on the oracle side, so 8*off < 64 there by
+            // construction (wider values arrive as ZEXT/PIECE and fold via
+            // generateConstants). Rugra can hold >8-byte plain constants
+            // whose get_offset() carries only the low 8 bytes, so pieces at
+            // off >= 8 read the (absent) high bytes as zero instead of
+            // panicking on the C++ UB boundary.
+            let shift = (8 * off).max(0) as u64;
+            let val = if shift >= 64 {
+                0
+            } else {
+                (base_val >> shift) & calc_mask(dt.get_size())
+            };
             let out_vn = self.data.new_constant(dt.get_size(), val);
             out_vn.write().unwrap().update_type(dt);
             in_varnodes.push(out_vn);
