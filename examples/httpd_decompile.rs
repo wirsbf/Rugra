@@ -37,6 +37,151 @@ use rugra::prettyprint::EmitNoMarkup;
 use rugra::printlanguage::PrintLanguage;
 use rugra::address::Address;
 
+// SB-CONSTBASE-0001: language host for the httpd-side pspec ingest — same
+// shape as the curl worker's WorkerSpecHost (curl_decompile.rs): registers
+// enumerated from the real locked .sla through SleighCtx, spaces from the
+// locked table.  Only the SpecQuery legs Architecture::decode_context_data
+// reaches are implemented (get_register for `<set name="DF">`, space_by_name
+// for the `<tracked_set space="ram">` range, space_highest for the range's
+// open last address).
+struct TrackedSpecHost {
+    registers: HashMap<String, rugra::fspec::VarnodeData>,
+}
+
+const TRACKED_SPEC_SPACES: [(&str, u64); 9] = [
+    ("const", u64::MAX),
+    ("OTHER", u64::MAX),
+    ("unique", 0xffff_ffff),
+    ("ram", u64::MAX),
+    ("register", 0xffff_ffff),
+    ("fspec", u64::MAX),
+    ("iop", u64::MAX),
+    ("join", 0xffff_ffff),
+    ("stack", u64::MAX),
+];
+
+fn tracked_spec_space_by_name(name: &str) -> Option<rugra::space::AddressSpace> {
+    use rugra::space::AddressSpace;
+    match name {
+        "ram" => Some(AddressSpace::Ram),
+        "stack" => Some(AddressSpace::Stack),
+        "register" => Some(AddressSpace::Register),
+        "OTHER" | "other" => Some(AddressSpace::Other(1)),
+        "unique" => Some(AddressSpace::Unique),
+        "const" => Some(AddressSpace::Const),
+        _ => None,
+    }
+}
+
+impl rugra::arch::SpecQuery for TrackedSpecHost {
+    fn get_register(&self, name: &str) -> Option<rugra::fspec::VarnodeData> {
+        self.registers.get(name).copied()
+    }
+    fn space_by_name(&self, name: &str) -> Option<rugra::space::AddressSpace> {
+        tracked_spec_space_by_name(name)
+    }
+    fn space_highest(&self, spc: rugra::space::AddressSpace) -> u64 {
+        let name = match spc {
+            rugra::space::AddressSpace::Const => "const",
+            rugra::space::AddressSpace::Other(_) => "OTHER",
+            rugra::space::AddressSpace::Unique => "unique",
+            rugra::space::AddressSpace::Ram => "ram",
+            rugra::space::AddressSpace::Register => "register",
+            rugra::space::AddressSpace::Stack => "stack",
+            rugra::space::AddressSpace::Iop => "iop",
+            rugra::space::AddressSpace::Join => "join",
+            rugra::space::AddressSpace::Overlay => "OTHER",
+        };
+        TRACKED_SPEC_SPACES
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, highest)| *highest)
+            .unwrap_or(u64::MAX)
+    }
+}
+
+// SB-CONSTBASE-0001: build the per-run Architecture template carrying the
+// pspec tracked-context partitions.  Oracle chain this mirrors: every
+// BfdArchitecture serving a function ran Architecture::init ->
+// restoreFromSpec -> parseProcessorConfig (architecture.cc:1173), whose
+// ELEM_CONTEXT_DATA arm (:1190) feeds ContextInternal::decodeFromSpec
+// (globalcontext.cc:531-549): the locked x86-64.pspec's
+// `<tracked_set space="ram"><set name="DF" val="0"/></tracked_set>`
+// registers DF=0 (register:20a:1) over the whole ram space.
+// ActionConstbase (coreaction.cc:678-705) later reads that tracked set at
+// the function address and inserts `COPY DF <- 0` at the entry-block head —
+// the op whose absence was the httpd mirror run's first cross-side
+// divergence (universal:constbase, oracle op 2040->2041; see
+// docs/alignment_docs/HTTPD_CONSTBASE_TRACKED_DF_ROOTCAUSE_2026-09-22.md).
+// The curl worker wires the identical ingest (ARCH-CONTEXT-TRACKED-0001,
+// curl_decompile.rs); the httpd driver must too, or its faithfully ported
+// ActionConstbase observes an empty tracked set and inserts nothing.
+fn tracked_context_architecture() -> Result<rugra::arch::Architecture, String> {
+    let mut arch = rugra::arch::Architecture::new();
+    // SLEIGH register catalog (no image needed for the spec query legs).
+    let sleigh = rugra::sleigh_ffi::SleighCtx::new()
+        .ok_or_else(|| "unable to initialize SLEIGH register catalog".to_string())?;
+    let mut registers = HashMap::new();
+    for index in 0..sleigh.num_registers() {
+        let Some((name, space, offset, size)) = sleigh.register_info(index) else {
+            continue;
+        };
+        let Ok(space_id) = u8::try_from(space) else {
+            continue;
+        };
+        registers.insert(
+            name.to_string(),
+            rugra::fspec::VarnodeData {
+                space: rugra::space::AddressSpace::from_id(space_id),
+                offset,
+                size,
+            },
+        );
+    }
+    let host = TrackedSpecHost { registers };
+    // Parse the locked pspec and hand every <context_data> child to the
+    // mapped decode (same DOM extraction model as the curl worker).
+    let pspec_bytes = fs::read("sleigh_specs/x86-64.pspec")
+        .map_err(|error| format!("unable to read processor spec: {error}"))?;
+    let mut store = rugra::marshal::DocumentStorage::new();
+    let pspec_doc = store
+        .parse_document(&pspec_bytes)
+        .map_err(|error| format!("processor spec parse failed: {error}"))?;
+    let pspec_root = pspec_doc
+        .root
+        .clone()
+        .ok_or_else(|| "processor spec has no root element".to_string())?;
+    if pspec_root
+        .read()
+        .map_err(|_| "processor spec element lock poisoned".to_string())?
+        .name
+        != "processor_spec"
+    {
+        return Err("processor spec root is not processor_spec".to_string());
+    }
+    let pspec_children: Vec<_> = pspec_root
+        .read()
+        .map_err(|_| "processor spec element lock poisoned".to_string())?
+        .children
+        .clone();
+    let pspec_registry = std::sync::Arc::new(std::sync::RwLock::new(rugra::marshal::IdRegistry::new()));
+    for child in pspec_children {
+        let child_name = child
+            .read()
+            .map_err(|_| "processor spec element lock poisoned".to_string())?
+            .name
+            .clone();
+        if child_name != "context_data" {
+            continue;
+        }
+        let mut decoder =
+            rugra::marshal::TreeDecoder::new(child, pspec_registry.clone());
+        arch.decode_context_data(&mut decoder, &host)
+            .map_err(|error| format!("processor spec context_data decode failed: {error}"))?;
+    }
+    Ok(arch)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Rugra Decompilation: httpd ===\n");
 
@@ -307,6 +452,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
+    // SB-CONSTBASE-0001: one tracked-context Architecture template per run
+    // (built before the function loop; SLEIGH ctx stays on this thread).
+    // Each function thread clones it for fd.set_arch below — Architecture is
+    // Clone and the clone keeps the existing per-thread mutation isolation
+    // while carrying the DF=0 tracked partition ActionConstbase reads.
+    let tracked_arch = tracked_context_architecture()?;
+
     let mut total_success = 0;
     let mut total_fail = 0;
 
@@ -378,6 +530,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let stage_binary = if stage_proj || stage_drill { Some(buffer.clone()) } else { None };
         let stage_proj_fn = stage_proj;
         let stage_drill_fn = stage_drill;
+        // SB-CONSTBASE-0001: per-thread clone of the tracked-context
+        // Architecture template (see tracked_context_architecture).
+        let thread_arch = tracked_arch.clone();
 
         let handle = std::thread::spawn(move || -> Option<String> {
             let mut fd = Funcdata::new(&func_name, Address::new(vaddr), func_size as i32);
@@ -398,7 +553,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // curl_decompile.rs:2109/2471 — restoring the oracle invariant.
             // E2E: httpd skeleton 2546→2230, defects 5→5, numbering 0→0,
             // in_RSP lines 148→0 (2026-08-30).
-            fd.set_arch(std::sync::Arc::new(rugra::arch::Architecture::new()));
+            // SB-CONSTBASE-0001: the attached Architecture now carries the
+            // pspec tracked-context partitions (DF=0 over whole ram, the
+            // oracle BfdArchitecture init chain architecture.cc:1190 ->
+            // globalcontext.cc:531-549), so ActionConstbase observes the
+            // same tracked set the oracle does and inserts the entry-head
+            // `COPY DF <- 0` (coreaction.cc:692-704). First cross-side
+            // mirror divergence was exactly this op missing
+            // (HTTPD_CONSTBASE_TRACKED_DF_ROOTCAUSE_2026-09-22.md).
+            fd.set_arch(std::sync::Arc::new(thread_arch));
             fd.external_prototypes = proto_db;
             for (&addr, n) in &sym_table { fd.add_symbol(addr, n.clone()); }
             for (&addr, s) in &str_table { fd.add_string(addr, s.clone()); }
