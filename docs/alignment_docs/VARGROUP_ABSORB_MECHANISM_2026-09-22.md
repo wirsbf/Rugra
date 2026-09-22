@@ -147,3 +147,35 @@ CW 修复后 main 的 0x30d6 实参 IR(最终 projection):
   decomp_opt`(CPLUS_INCLUDE_PATH/LIBRARY_PATH 指向 bfd-2.38,SLEIGHHOME=…/specs)。
 - 单函数驱动:`RUGRA_STAGE_PROJ=1 RUGRA_STAGE_FUNC=main RUGRA_STAGE_PROJ_OUT=…`
   (阶段投影)或 `--rugra-selected-function main`(C 输出)。
+
+## 6. §4-4 收官记录（2026-09-23，DD lane，commit 0c90f7ef）
+
+oracle 侧补充实证（decomp_opt console + gdb）：
+
+- `print map`：**UVar3 : u0x10000a27:304 URLGlob : ram: 30d6-30d6**（动态组符号，
+  linkProtoPartial 产物）+ `in_stack_...fc78 : 280B xunknown1[280]` 静态符号；
+  头部 localrange 列表在 **fc78..fda7 有间隙** —— ActionRestrictLocal 对 locked
+  调用点栈参数 markNotMapped（coreaction.cc:1974-1981）所致。
+- `print tree varnode`：oracle 字段件（s:fc80 等）**无 tied/mapped 标志、implied**；
+  baseExplicit 的 addr-tied 分支因此不命中。
+- gdb `pushPartialSymbol` 双臂实证：RHS `in_stack_fc78._8_8_` = opSubpiece
+  特殊打印 arm(a)（sym=影子符号）；LHS `UVar3.literal[1]` = COPY 腿语句的
+  pushSymbolDetail（arm(a) 同函数），SUBPIECE 本体 implied 非语句。
+
+激活条件缺口清单（6 处，均已修）：
+
+1. ActionRestrictLocal 参数谓词写歪（offset 启发式 vs IPTR_SPACEBASE 空间测试）→ fc78..fd90 从未出窗。
+2. ActionRestructureVarnode 每趟 fresh ScopeLocal + 全量重装窗口（VARMAP-CROSSPASS-PERSISTENCE-0001）→ markNotMapped 被抹。
+3. inflate_test 用 any-overlap 而非 intersect==2 + 缺 copyShadow/partialCopyShadow 放行 → 件全 explicit（附带：读锁跨写锁死锁使 markimplied 挂起）。
+4. markInternalCopies PIECE/SUBPIECE 两臂未实现 → CONCAT164/204 重组语句外泄。
+5. get_base twin 缺超尺寸→unknown1[] 数组转换 → 280B 影子定型标量 INT → is_piece_structured 不命中 → RuleSubRight 特殊打印不标记。
+6. push_symbol_detail_leaf 对局部符号裸名降级 → LHS 无字段路径。
+
+结果：main ~43 CONCAT 中间态 → `glob.pattern[i].type = auVarXX._0_4_` 等
+28 条字段路径语句（golden 形态）；curl 全量 defects=0 numbering=0
+（skeleton 2993→2729，main 893→639）；httpd defects=0 numbering=0
+（2339 不变）；next_url/glob_set/glob_range/glob_url/match_url 逐函数零回退。
+
+残余（下一环候选）：RHS finalcast（`(anon_union_...)auVarXX._8_16_` 的
+pushPartialSymbol allowCast 臂，printc.cc:2018-2029）；union resolution
+命名（content._8_8_ vs content.Set._8_8_）。
