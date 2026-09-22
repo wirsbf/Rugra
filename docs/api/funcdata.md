@@ -1,5 +1,33 @@
 # `funcdata.rs` API Reference
 
+## 2026-09-22：spacebase 类型挂载与 setVarnodeProperties localmap 腿(撤回,改由 heritage 侧承接)
+
+VARGROUP-ABSORB-0001 第一版(commit a77d6c02)曾在此两处落子:`spacebase()` 给 SP 输入寄存器挂
+TypeSpacebase 指针 + `set_varnode_properties` 补 localmap queryProperties 腿。A/B 实证(base=70e76ce6)
+显示两处全局改动引发 config 域漂移(glob_set/glob_range 的 pos 合并被拆、getparameter 的
+`__spacebase_1_*` 合成名泄漏)——SP 指针类型流经 Rugra 半移植的 spacebase downChain/ptrarith 臂,
+且 setVarnodeProperties 的 addrtied 折叠与 merge 层的历史补偿偏差相互作用。**第二版撤回两处**,
+等效修复改在 heritage 侧落地(见 docs/api/heritage.md 同日条目:place_multiequals 的 MULTIEQUAL
+输出改走 new_varnode_out_full 完整尾,即 Ghidra cc:2634 的原调用形态),config 域
+glob_set/glob_range/glob_url 逐函数 IDENTICAL,getparameter 向 golden 靠拢(golden 有
+local_5a8/local_5b8 栈名,base 为寄存器名形态)。SP 类型挂载将在"调用点 LOAD 存活语义"
+链条接通时与 propagateSpacebaseRef 一并启用(接收端已移植于 coreaction)。
+
+- `Funcdata::spacebase`（funcdata.cc:240-266 else 分支）：标记 SPACEBASE 标志后，若该
+  varnode 是输入寄存器，按 cc:263-264 `getTypeSpacebase(stack, getAddress())` +
+  `getTypePointer(sb_size, ct, 1)` 构造指针类型并以 `updateType(ptr,true,true)` 挂锁。
+  此前注释称"类型系统尚无 TypeSpacebase"而跳过——该类型现已存在，且
+  ActionInferTypes::propagateSpacebaseRef 依赖它识别 SP 输入。
+- `Funcdata::setVarnode_properties`（funcdata_varnode.cc:25-42）：补上 Ghidra
+  `localmap->queryProperties` 的函数自身作用域腿（database.cc:1268-1277）——栈空间
+  varnode 先查 ScopeLocal：容器条目/在域内均折叠 flags（含 mapped|addrtied），
+  未应答再走原 Ram/全局通道。此前栈 varnode 从未获得 addrtied，导致
+  RuleSubRight 的 overlap 守卫（ruleaction.cc:7265-7268 两侧 addr-tied）不触发，
+  splitCopy 建出的 45 个栈地址 SUBPIECE 被 INT_RIGHT 化（42 处 CONCAT 中间态的直接
+  诱因）。修复后 heritage MULTIEQUAL 影写链与 SUBPIECE 件均为 addr-tied，守卫按
+  Ghidra 语义跳过（Rugra 保守版：双侧 tied 即跳过，等价覆盖 overlap==c 情形）。
+
+
 ## 2026-09-22：INDIRECT 构造器符号尾补齐（FUNCDATA-INDIRECT-SYMBOLTAIL-0001）
 
 CF 裁决表（wt/sb-promosite, `HERITAGE-PROMOTE-SYMBOLTAIL-0001` 收尾行 36）登记的

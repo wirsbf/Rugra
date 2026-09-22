@@ -5212,16 +5212,23 @@ impl Heritage {
                     (b.size_in(), b.get_start_addr())
                 };
                 let multiop = fd.new_op(blk_size_in, start_addr);
-                // cc:2634-2635: newVarnodeOut(size, addr, multiop) +
-                // setActiveHeritage (space-carrying Address adapter).
-                let vnout = fd.vbank.create_def_with_space(
+                // cc:2634-2635: vnout = fd->newVarnodeOut(size, memrange.addr,
+                // multiop); vnout->setActiveHeritage(). The oracle call runs
+                // the full newVarnodeOut sequence — assignHigh + laned check
+                // + localmap queryProperties tail (funcdata_varnode.cc:104-122)
+                // — whose local leg folds mapped|addrtied for in-scope stack
+                // storage. Rugra previously used the raw vbank constructor +
+                // set_varnode_properties, which lacks the local-scope leg, so
+                // heritage MULTIEQUAL outputs never became addr-tied and
+                // RuleSubRight's overlap guard (ruleaction.cc:7265-7268)
+                // missed SUBPIECE(ME,off) pairs
+                // (SUBRIGHT-ADDRTIE-0001, VARGROUP-ABSORB-0001).
+                let vnout = fd.new_varnode_out_full(
                     size as usize,
                     memrange.space,
-                    memrange.addr.as_u64(),
-                    &multiop.0,
+                    crate::address::Address::new(memrange.addr.as_u64()),
+                    &multiop,
                 );
-                multiop.0.write().unwrap().output = Some(vnout.clone());
-                fd.set_varnode_properties(&vnout);
                 vnout.write().unwrap().set_active_heritage();
                 // cc:2636: opSetOpcode(multiop, CPUI_MULTIEQUAL)
                 fd.op_set_opcode(&multiop, OpCode::CPUI_MULTIEQUAL);

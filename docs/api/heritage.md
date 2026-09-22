@@ -1,5 +1,19 @@
 # `heritage.rs` API Reference
 
+## 2026-09-22：place_multiequals MULTIEQUAL 输出改走 newVarnodeOut 完整尾（VARGROUP-ABSORB-0001 / SUBRIGHT-ADDRTIE-0001 二段）
+
+heritage.cc:2634 的原调用是 `vnout = fd->newVarnodeOut(size, memrange.addr, multiop)`——带
+assignHigh + laned 检查 + localmap queryProperties 尾(funcdata_varnode.cc:104-122),其 local 腿
+对域内栈存储折叠 mapped|addrtied(database.cc:1268-1277,无符号条目也如此)。Rugra 此前用
+vbank 裸构造 + set_varnode_properties(无 local 腿)→ 影写合并的 MULTIEQUAL 输出从不 addr-tied
+→ RuleSubRight 的 overlap 守卫(ruleaction.cc:7265-7268,双侧 tied)不触发 → splitCopy 建出的
+45 个栈地址 SUBPIECE 被化成 INT_RIGHT 移位梯(42 处 CONCAT 中间态直接诱因)。改走
+new_varnode_out_full 后守卫按 Ghidra 语义跳过,件存活;A/B(base=70e76ce6):curl skeleton
+3105→3074,defects=0/numbering=0,glob_set/glob_range/glob_url 逐函数 IDENTICAL,
+getparameter 向 golden 靠拢,httpd 2392==基线字节稳定。**heritage.rs=机制 C 白名单:
+本改动合并主管线前需独立 Cross-Review。**
+
+
 **源代码路径**: `src/heritage.rs`
 
 ## 2026-09-22：HERITAGE-PROMOTE-SYMBOLTAIL-0001 剩余位点裁决与补齐（CR-BZ 收尾）

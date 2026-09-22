@@ -1,5 +1,21 @@
 # `coreaction.rs` API Reference
 
+## 2026-09-22：ActionInferTypes 补齐 propagateSpacebaseRef/propagateRef（VARGROUP-ABSORB-0001 / INFERTYPES-SPACEREF-0001）
+
+补上 `ActionInferTypes::apply` 缺失的收尾两步（coreaction.cc:5407-5410）：
+`findSpacebaseInput(stack)` 后 `propagateSpacebaseRef`（cc:5258-5306）——遍历 SP 输入寄存器的
+直接后代 COPY/INT_ADD/PTRSUB/PTRADD（常量偏移），把输出临时类型为指针（指向已知类型）的
+地址经 `TypeSpacebase::getAddress` 折算后交给 `propagateRef`（cc:5208-5256）——后者对
+[addr, addr+sizeof(pointee)) 内同空间 varnode 逐个 `getExactPiece` 建临时类型（跳过
+annotation/无后代/typelock/已挂符号），`typeOrder` 改善时 setTempType +
+`propagateOneType`。这是 Ghidra 给栈区 varnode（含 heritage MULTIEQUAL 影写链）打
+TypePartialStruct 类型的来源，进而门控 RuleSubRight 的 special-print 分支
+（ruleaction.cc:7256）与 printc opSubpiece 字段打印。Rugra 实现按 TempTypes 侧表，
+getExactPiece 在 TypeFactory 写锁短临界区内完成。实测（curl main）：SPACEREF 每次
+infertypes 派发 40 个 INT_ADD，但当前各 ADD 输出临时类型为 Int 非指针——上游
+"锁定调用点参数 → LOAD 反向传播指针类型"链仍未接通，本函数为忠实移植的接收端。
+
+
 ## 2026-09-22：ActionDominantCopy 过期注释更正 + 域确定性归因（DETERM-DOMINANTCOPY-0001）
 
 - 结构体/apply 的注释原声称 `process_copy_trims` 是 "faithful no-op、

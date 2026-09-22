@@ -5772,10 +5772,18 @@ impl Funcdata {
                     .write()
                     .unwrap()
                     .set_flags(crate::varnode::varnode_flags::SPACEBASE);
-                // Note: Ghidra also sets TypeSpacebase pointer type on the
-                // input register (funcdata.cc:263-264). Rugra's type system
-                // does not yet have TypeSpacebase; the SPACEBASE flag alone is
-                // sufficient for varmap/ActionStackPtrFlow recognition.
+                // Ghidra funcdata.cc:263-264 types the input spacebase register
+                // with the TypeSpacebase pointer. Rugra keeps this OFF for now:
+                // ActionInferTypes::propagateSpacebaseRef (coreaction.cc:5283)
+                // needs it, but the upstream URLGlob* pointer chain (locked
+                // callsite param -> LOAD backward propagation) is not wired
+                // yet, so the receiver no-ops — while the spacebase pointer
+                // DOES flow through Rugra's partially ported spacebase
+                // downChain/ptrarith arms and reassociates RSP-relative
+                // expressions away from the golden in glob_set/glob_range/
+                // getparameter (config-domain A/B, 2026-09-22). Re-enable
+                // together with the LOAD-survival typing chain.
+                // (INFERTYPES-SPACEREF-0001 receiver side is already ported.)
             }
         }
     }
