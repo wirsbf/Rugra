@@ -95,8 +95,12 @@ makeRec 拒绝——真实 DWARF 锁名);②缺 `._4_4_` padding store(手工布
    条目也如此);Rugra 的 set_varnode_properties 只走 Ram/全局通道,栈 varnode 从不
    addrtied → splitCopy 建出的 45 个栈地址 SUBPIECE(42a0-42b2,件本身与 oracle 完全
    同形!)被 subright 拆成 280B 移位梯 → 42 处 CONCAT 中间态的直接诱因。
-   → **已修(SUBRIGHT-ADDRTIE-0001,commit a77d6c02)**:set_varnode_properties 补
-   ScopeLocal query_properties_ex 腿。守卫用双侧 tied 即跳(保守版,等价覆盖 overlap==c)。
+   → **已修(v2,commit bc45a768)**:place_multiequals 的 MULTIEQUAL 输出改走
+   new_varnode_out_full 完整尾(=Ghidra cc:2634 原调用形态,local 腿折叠 addrtied)。
+   v1(a77d6c02)的 set_varnode_properties 全局 fold+spacebase 挂载按 config 域 A/B 证据
+   撤回(glob_set/glob_range 合并回退+__spacebase_1_* 合成名泄漏);v2 后 glob_set/
+   glob_range/glob_url 逐函数 IDENTICAL,getparameter 向 golden 靠拢(golden 有
+   local_5a8/local_5b8 栈名)。守卫用双侧 tied 即跳(保守版,等价覆盖 overlap==c)。
 3. **typing 链断裂(未修,下一环)**:oracle 的 `ActionInferTypes::propagateSpacebaseRef`
    (coreaction.cc:5258-5306,apply 尾 5407-5410)依赖 SP 输入寄存器带 TypeSpacebase 指针类型
    (funcdata.cc:263-264)且存在"锁定调用点参数 → LOAD 输出临时类型 URLGlob → LOAD 反向
@@ -104,7 +108,7 @@ makeRec 拒绝——真实 DWARF 锁名);②缺 `._4_4_` padding store(手工布
    直接后代"——Ghidra 侧**调用点的 opStackLoad LOAD 活到最后**(最终 raw 仍有
    `0x30d6:c5b INT_ADD RSP+8` + `c5c LOAD 304`)。Rugra 侧该 LOAD 在 mainloop 早段已被
    directify 成 COPY(stack:fc78:304) 再接 concat 梯,infertypes 时 URLGlob 落在
-   PIECE 根上而非指针上 → SPACEREF 已移植(a77d6c02,INFERTYPES-SPACEREF-0001)但派发的
+   PIECE 根上而非指针上 → SPACEREF 接收端已移植(a77d6c02,INFERTYPES-SPACEREF-0001;SP 类型挂载撤回待 LOAD 链接通后一并启用)但派发的
    40 个 ADD 输出临时类型是 Int → ME/输入影子无 TypePartialStruct → subright 的
    pieceStructured 分支(cc:7256)与 printc opSubpiece/cc:843 特殊打印不触发。
    **下一环 = 调用点 LOAD 的存活语义(RuleLoadInput/directify 侧差异)**。
