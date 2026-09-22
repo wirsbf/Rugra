@@ -2074,7 +2074,8 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
 >   opInsertBegin(cc:943),补 isPrecisLo/Hi 守卫(cc:889)。
 > 验证:Phase 2 首分歧 28→39(`mainloop:redundbranch` 1 vs 0,ActionRedundBranch 域,
 > 下一车道);窗口 863=863 事件序列全等;curl E2E defects=0/numbering=0
-> (skeleton 3447,见 commit Differential 块);httpd defects=0/numbering=0;
+> (skeleton 3447 vs 基线 0804d8c8 的 3610,−163;next_url diff=120 不变——ordinal-28 窗口在管线中段,
+> 39+ 后续阶段仍分叉,最终文本尚未收窄;match_url 94→91);httpd defects=0/numbering=0;
 > next_url/main/getparameter.constprop.0 --func defects=0/numbering=0。
 > ruleaction.rs+funcdata.rs 属主管线 Rule 改动 → 机制 C 待独立 Cross-Review。
 
