@@ -1390,3 +1390,25 @@ multi_shared（多条目组 addressIndex 序 [0x5,0x2]）、fallthru_chain
 重建 4583/7281/7574/7766 一族）补 `default_label: None` 字段初始化——纯字段接线，无
 算法改动；label 值由 block.rs `finalize_case_labels` 统一物化。形态与门禁见
 docs/api/printc.md 同日条目（gp default 末位→第二位，curl 3607→3595/0/0）。
+
+## 2026-09-23 追加（GETPARAM-BSTRUCT-CHANGECOUNT-0001 — 两个 mutation-only 规则臂补 change 计数）
+
+Ghidra `CollapseStructure::collapseInternal`（blockaction.cc:1776-1834）的内层循环以局部
+`change` 布尔（来源=各 `ruleXxx` 的**返回值**）决定是否重扫；Rugra 侧
+`collapse_internal`（src/blockaction.rs）以 `structure_change_count` 的趟内增量等价建模该
+布尔。两个"仅变异、不换结构"的规则臂在 Ghidra 返回 true 但在 Rugra 不 bump 计数，导致
+假 fixpoint：
+
+1. `try_rule_switch` 的 checkSwitchSkips 臂（blockaction.cc:1711-1712：把 switch 的
+   skip-to-exit 边标记为 goto 后 `return true`）——补 `structure_change_count += 1`。
+2. `new_block_multigoto` 的 already-multigoto 臂（blockaction.cc:1726-1732：对既有
+   BlockMultiGoto `addEdge`+`removeEdge`）——同补 bump（fresh-wrap 臂尾部本就有）。
+
+两处均不动 `dataflow_change_count`（Ghidra 对应臂同样不增 dataflow 计数）。实证：
+getparameter（curl@0x3f00）Phase 2 投影 stage 40 计数 27 vs 26；双侧规则点火轨迹 +
+likelygoto 生成列表（RUGRA_BS_TRACE/RUGRA_TRACE_SELECTGOTO/RUGRA_IRRED_DBG vs oracle
+探桩 /dev/shm/rugra-tests/sb-getparam/oracle-probe，drill sha 92c66176…=pin）逐条对齐至
+pick 111 后分叉：oracle 以 Cat 15+DoWhile 15（+1 dfc）收掉 loop(15,131)，Rugra 假收敛
+后 selectGoto 挑走 (131,133)/(131,15) 两条外来边。修复后点火轨迹经 Switch 29(#2)+Cat 15
+对齐，首 op 分歧 ord 7（funclink）→ ord 55（activeparam），stage 40-54 snapshot 与
+count kv 全同。blockaction 属机制 C 白名单：Cross-Review PENDING。

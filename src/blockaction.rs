@@ -5236,6 +5236,18 @@ impl<'a> CollapseStructure<'a> {
                     m.set_default_goto();
                 }
             }
+            // The caller (ruleBlockGoto cc:1450-1458 arm) returns true after
+            // this mutation-only path, so Ghidra's collapseInternal re-enters
+            // the scan (change=true) and ruleBlockSwitch fires on the very
+            // next pass. Rugra's inner loop infers that change bool from a
+            // structure_change_count delta, so this arm must bump it like
+            // the fresh-wrap arm below does: without the bump the loop
+            // declares a false fixpoint right after peeling the edge, the
+            // freshly marked switch skip-edges starve, and selectGoto picks
+            // foreign edges (getparameter blockstructure count 27 vs 26,
+            // second multigoto on block 29 starving ruleBlockSwitch,
+            // 2026-09-23).
+            self.structure_change_count += 1;
             return;
         }
         // cc:1734: ret = new BlockMultiGoto(bl); — the constructor discards
@@ -6169,6 +6181,20 @@ impl<'a> CollapseStructure<'a> {
         // elsewhere, and let collapseInternal wrap them before building the
         // BlockSwitch (returning true = "a change was made", cc:1712).
         if !self.check_switch_skips(i, exitblock) {
+            // cc:1711-1712 returns true having only set goto edge marks
+            // (no structure mutation). Ghidra's collapseInternal sets its
+            // local change=true from the rule's RETURN VALUE and rescans
+            // immediately, so ruleBlockGoto consumes the fresh marks in
+            // the next pass. Rugra's inner loop models that change bool as
+            // a structure_change_count delta, so this mark-only arm must
+            // bump it: without the bump the loop declares a false fixpoint
+            // right after marking, the skip-edge gotos starve, and
+            // selectGoto picks foreign edges instead (getparameter
+            // blockstructure count 27 vs 26, first selectGoto divergence
+            // at the (131,133)/(131,15) entries, 2026-09-23). This bumps
+            // structure_change_count only — dataflow_change_count stays
+            // untouched, exactly like the oracle's arm.
+            self.structure_change_count += 1;
             return true;
         }
 
