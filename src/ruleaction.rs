@@ -7603,39 +7603,37 @@ impl Rule for RuleEqual2Zero {
 
         // Determine posvn and unnegvn.
         let (posvn, unnegvn) = if vn2.read().unwrap().is_constant() {
-            // 0 == V + c => V == -c
+            // 0 == V + c => V == -c (cc:5877-5882)
+            let size = vn2.read().unwrap().get_size();
             let val = vn2.read().unwrap().get_offset();
-            let neg_val = val.wrapping_neg().wrapping_sub(1).wrapping_add(1) & calc_mask(vn2.read().unwrap().get_size());
-            // uintb_negate(val-1, size) = (~val+1) & mask = -val & mask
-            let _ = neg_val;
-            let negated = (0i64.wrapping_sub(val as i64) as u64) & calc_mask(vn2.read().unwrap().get_size());
-            (
-                vn.clone(), fd.new_constant(vn2.read().unwrap().get_size(), negated),
-            )
+            // cc:5878 uintb_negate(c-1, size) = ~(c-1) & mask = (-c) & mask
+            // (address.cc:654 uintb_negate = (~in) & calc_mask(size)).
+            let negated = (!val.wrapping_sub(1)) & calc_mask(size);
+            let negvn = fd.new_constant(size, negated);
+            // cc:5880 unnegvn->copySymbolIfValid(vn2) — propagate any
+            // equate markup onto the new constant.
+            crate::varnode::Varnode::copy_symbol_if_valid(&negvn, &vn2.read().unwrap());
+            (vn.clone(), negvn)
         } else {
-            // Check for INT_MULT by -1.
-            let (negvn, posvn) = if vn.read().unwrap().is_written() {
-                let vn_def = vn.read().unwrap().get_def();
-                if let Some(d) = vn_def {
-                    if d.read().unwrap().opcode == OpCode::CPUI_INT_MULT {
-                        (vn.clone(), vn2.clone())
-                    } else {
-                        return Ok(action_status::NO_CHANGE);
-                    }
-                } else {
-                    return Ok(action_status::NO_CHANGE);
-                }
-            } else if vn2.read().unwrap().is_written() {
-                let vn2_def = vn2.read().unwrap().get_def();
-                if let Some(d) = vn2_def {
-                    if d.read().unwrap().opcode == OpCode::CPUI_INT_MULT {
-                        (vn2.clone(), vn.clone())
-                    } else {
-                        return Ok(action_status::NO_CHANGE);
-                    }
-                } else {
-                    return Ok(action_status::NO_CHANGE);
-                }
+            // Check for INT_MULT by -1 (cc:5884-5893). The else-if ladder
+            // is order-sensitive: the first ADD input only claims the
+            // negvn slot when it is BOTH written and defined by INT_MULT;
+            // a written-but-not-MULT first input falls through to the
+            // second input instead of rejecting the op.
+            let vn_is_negmult = {
+                let g = vn.read().unwrap();
+                g.is_written()
+                    && g.get_def().is_some_and(|d| d.read().unwrap().opcode == OpCode::CPUI_INT_MULT)
+            };
+            let vn2_is_negmult = {
+                let g = vn2.read().unwrap();
+                g.is_written()
+                    && g.get_def().is_some_and(|d| d.read().unwrap().opcode == OpCode::CPUI_INT_MULT)
+            };
+            let (negvn, posvn) = if vn_is_negmult {
+                (vn.clone(), vn2.clone())
+            } else if vn2_is_negmult {
+                (vn2.clone(), vn.clone())
             } else {
                 return Ok(action_status::NO_CHANGE);
             };
@@ -7652,6 +7650,10 @@ impl Rule for RuleEqual2Zero {
             if multiplier != calc_mask(unnegvn.read().unwrap().get_size()) { return Ok(action_status::NO_CHANGE); }
             (posvn, unnegvn)
         };
+        // cc:5900-5901: both surviving inputs must already be known to
+        // heritage (flags insert|constant|annotation) before rewriting.
+        if !posvn.read().unwrap().is_heritage_known() { return Ok(action_status::NO_CHANGE); }
+        if !unnegvn.read().unwrap().is_heritage_known() { return Ok(action_status::NO_CHANGE); }
         let _ = central_opc;
         fd.op_set_input(&follow, posvn, 0);
         fd.op_set_input(&follow, unnegvn, 1);
@@ -12266,8 +12268,10 @@ impl Rule for RulePullsubMulti {
         if mult_arc.read().unwrap().opcode != OpCode::CPUI_MULTIEQUAL {
             return Ok(action_status::NO_CHANGE);
         }
-        // We only pull up, do not pull "down" to bottom of loop.
-        // Rugra lacks hasLoopIn; conservatively allow.
+        // cc:883: "We only pull up, do not pull down to bottom of loop" —
+        // mult->getParent()->hasLoopIn() needs FlowBlock loop-in marking
+        // (block.cc loop coats), which Rugra's FlowBlock does not yet carry;
+        // registered as RULE-PULLSUBMULTI-LOOPIN-0001 (conservatively allow).
         let (max_byte, min_byte) = Self::min_max_use(&vn);
         let new_size = max_byte - min_byte + 1;
         if max_byte < min_byte || new_size >= vn.read().unwrap().get_size() as i32 {
@@ -12276,9 +12280,17 @@ impl Rule for RulePullsubMulti {
         if !Self::acceptable_size(new_size) {
             return Ok(action_status::NO_CHANGE);
         }
-        // Don't pull apart double precision objects (Rugra lacks isPrecisLo/Hi;
-        // conservatively allow).
-        // Check consume on each branch input.
+        // cc:889: don't pull apart a double precision object.
+        let out_is_precis = {
+            let out_vn = op_arc.read().unwrap().get_out().cloned();
+            out_vn.is_some_and(|v| {
+                let r = v.read().unwrap();
+                r.is_precis_lo() || r.is_precis_hi()
+            })
+        };
+        if out_is_precis {
+            return Ok(action_status::NO_CHANGE);
+        }
         let consume = if min_byte < 8 {
             !(calc_mask(new_size as usize) << (8 * min_byte as u64))
         } else {
@@ -12313,13 +12325,18 @@ impl Rule for RulePullsubMulti {
         }
 
         // Compute small address for the new MULTIEQUAL output.
-        let (base_addr, vn_size, is_big_endian) = {
+        // cc:921-925: little-endian offsets count up from the low byte;
+        // big-endian from the top of the kept window.
+        let (base_addr, vn_space, vn_size, is_big_endian) = {
             let r = vn.read().unwrap();
             (
-                crate::address::Address::new(r.get_offset()), r.get_size(), r.space().is_big_endian(),
+                crate::address::Address::new(r.get_offset()),
+                r.get_space(),
+                r.get_size(),
+                r.space().is_big_endian(),
             )
         };
-        let _small_addr2 = if !is_big_endian {
+        let mut small_addr2 = if !is_big_endian {
             base_addr.offset(min_byte as i64)
         } else {
             base_addr.offset(vn_size as i64 - (max_byte as i64 + 1))
@@ -12342,15 +12359,40 @@ impl Rule for RulePullsubMulti {
         // Build the new MULTIEQUAL.
         let mult_addr = mult_arc.read().unwrap().get_addr();
         let new_multi = fd.new_op(params.len(), mult_addr);
-        // Rugra lacks newVarnodeOut at a computed address; use new_unique_out.
-        let new_vn = fd.new_unique_out(new_size as usize, &new_multi);
+        // cc:939: smalladdr2.renormalize(newSize) — join-space addresses
+        // re-resolve through the JoinRecord for the new size; every other
+        // space is a no-op (address.cc:191-194). The join-space branch needs
+        // AddrSpaceManager::renormalizeJoinAddress (translate.cc:870-916),
+        // which Rugra's Architecture does not yet expose (it carries only
+        // the simplified join_db); registered as
+        // RULE-PULLSUBMULTI-JOINRENORM-0001. Register/file/unique spaces —
+        // everything this rule's merges produce today — are exact.
+        debug_assert_ne!(
+            vn_space,
+            crate::space::AddressSpace::Join,
+            "RULE-PULLSUBMULTI-JOINRENORM-0001: join-space pullsub renormalize unimplemented"
+        );
+        // cc:940: newVarnodeOut at the (renormalized) address keeps the
+        // merged window in the ORIGINAL varnode's space (e.g. the register
+        // file), not a unique temporary.
+        let new_vn = fd.new_varnode_out_full(new_size as usize, vn_space, small_addr2, &new_multi);
         fd.op_set_opcode(&new_multi, OpCode::CPUI_MULTIEQUAL);
         for (slot, p) in params.iter().enumerate() {
             fd.op_set_input(&new_multi, p.clone(), slot);
         }
-        // Insert near the original MULTIEQUAL. Rugra lacks opInsertBegin;
-        // use op_insert_before.
-        fd.op_insert_before(&new_multi, &mult_ref);
+        // cc:943: insert at the head of the original MULTIEQUAL's block
+        // (MULTIEQUALs sort to the block front; opInsertBegin keeps that
+        // ordering instead of parking before the original).
+        let mult_parent = mult_arc
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        match mult_parent {
+            Some(bb) => fd.op_insert_begin(&new_multi, &bb),
+            None => fd.op_insert_before(&new_multi, &mult_ref),
+        }
 
         // Replace descendants of vn with new_vn.
         Self::replace_descendants(fd, &vn, new_vn, max_byte, min_byte);
