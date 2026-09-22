@@ -1768,12 +1768,17 @@ impl Merge {
     /// (merge.cc:1657-1669). Returns true and pushes high to testlist if no
     /// intersection; false otherwise.
     ///
-    /// Ghidra uses HighIntersectTest::intersection (cached, with shadow/block
-    /// refinement). Rugra uses aggregate_high_cover + intersect_char directly
-    /// (no cache, conservative — may report intersection where Ghidra's
-    /// blockIntersection would rule it out via shadow analysis).
+    /// Ghidra consults `testCache.intersection(a, high)` — the cached
+    /// HighIntersectTest pair test. Rugra routes through the same
+    /// `type_test_cache` (MergeTypeIntersectCache::intersection,
+    /// merge.rs — HighIntersectTest port with gather_block_varnodes +
+    /// test_block_intersection). The former aggregate-cover approximation
+    /// is retired: it reported "intersect" for every same-block character
+    /// overlap even when the instance def/read timestamps never interleave,
+    /// so mergeOp Phase 2 trims converged marker ops (the +8804-op
+    /// mergerequired divergence measured by the sb-impliedfold lane).
     fn merge_test_with_list(
-        &self,
+        &mut self,
         high: &Arc<RwLock<HighVariable>>,
         testlist: &mut Vec<Arc<RwLock<HighVariable>>>,
     ) -> bool {
@@ -1783,10 +1788,22 @@ impl Merge {
         if !has_cov {
             return false;
         }
-        let high_cover = aggregate_high_cover(high);
+        // Ghidra merge.cc:1662-1666: `if (testCache.intersection(a,high))
+        // return false;` — the CACHED HighIntersectTest pair test, i.e.
+        // `intersectList(...,2)` block candidates resolved by
+        // blockIntersection (gatherBlockVarnodes + testBlockIntersection,
+        // variable.cc:998) with the testCache/moveIntersectTests lifecycle.
+        // The previous coarse aggregate-cover `intersect_char > 0`
+        // approximation returned "intersect" for every same-block
+        // character overlap, so Merge::mergeOp Phase 2 failed on marker
+        // ops whose instance def/read timestamps never actually interleave,
+        // sending every such MULTIEQUAL/INDIRECT through the trim loop
+        // (merge.cc:748-760) — the sb-impliedfold lane measured +8804 trim
+        // COPYs in main vs the oracle's +45 (COPYPROBE mergerequired
+        // census), which then surfaced as the print-side
+        // `uVarX = uVarX` / spill-restore copy noise.
         for other in testlist.iter() {
-            let other_cover = aggregate_high_cover(other);
-            if high_cover.intersect_char(&other_cover) > 0 {
+            if self.type_test_cache.intersection(other, high) {
                 return false;
             }
         }
