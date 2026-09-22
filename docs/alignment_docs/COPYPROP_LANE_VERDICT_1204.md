@@ -4,6 +4,32 @@
 > oracle:Ghidra 12.0.4,commit `e40ed13014025f82488b1f8f7bca566894ac376b`(worktree ghidra symlink HEAD 已核对相等)。
 > 所有行号均指向该 commit。日期:2026-09-22。
 
+## 0. 勘误(2026-09-22 CE 实证修正,不删原文)
+
+> 来源:wt/sb-impliedfold lane 报告 `/dev/shm/rugra-tests/sb-impliedfold/LANE_REPORT.md`(commit `1250e5d0`,oracle 直连探针双侧实证;机制 C cross-review PENDING)。以下修正本文两处结论的**泛化读法**,下文各节原文保留不动。
+
+### 0.1 "oracle 12.0.4 无 copyprop 规则"系错名搜索
+
+本文 §1 的 grep/pickaxe 搜索名是 `ActionCopyPropagation` / `RuleCopyPropagate`——这两个名字在 12.0.4 确实零匹配(§1 字面结论与标题仍成立)。但 oracle **实有** COPY 传播规则,正确名字是 **`RulePropagateCopy`**:
+
+- ruleaction.hh:723 `class RulePropagateCopy : public Rule`(构造器规则名 `"propagatecopy"`,hh:725);
+- ruleaction.cc:3924-3926 `/// \class RulePropagateCopy` 文档注释 + `int4 RulePropagateCopy::applyOp(PcodeOp *op,Funcdata &data)` 定义;
+- 注册位 coreaction.cc:5566 `actprop->addRule( new RulePropagateCopy("analysis") );`(oppool1 池,与 §1 引用的 cc:5509-5511 同一块的后续行)。
+
+Rugra 侧**已有实现且已注册**:`src/ruleaction.rs:205-218` `RulePropagateCopy`(注 `// Ghidra: ruleaction.cc:3926`;前序 TODO `RULE-PROPAGATECOPY-DRIFT-0001` 2026-08-17 已 faithful 重写+5 回归测试),注册于 `src/action.rs:1649`(`// 5566`)。因此:
+
+- §1 结论 2(删除自创死代码 `ActionCopyPropagate`)仍然成立——那是未注册的自创 Action,无守卫 blanket 传播,与 `RulePropagateCopy` 语义不同,两回事;
+- 但任何"oracle 无 COPY 传播机制/Rugra 无对应物"的推论不再成立;`RulePropagateCopy` 的 B2 逐函数 oracle fixture 仍缺(RULE-PROPAGATECOPY-DRIFT-0001 残留明载),登记 TODO `RULE-PROPAGATECOPY-0001`(P2,已有实现待差分);
+- TODO_BOARD `CALLSPEC-DRIVER-0002` 行的"前提纠错"注同源错误,已加指针(该行门条件(b)关于 ActionCopyPropagation 的结论不受影响)。
+
+### 0.2 "折叠责任在打印侧"推断被推翻(§4 R1 指认 merge 域被证实并已修复)
+
+sb-copynoise lane 据本文 §3 数据推得的"噪声主杠杆在 MarkImplied×打印折叠,归 printc/implied lane"(载体=TODO_BOARD `MERGE-COPYNOISE-DIFFHIGH-0001` 行)被双侧实证推翻:
+
+- oracle main 自己打印 **20 个合法 in-implied COPY**(RHS 内联 CAST 表达式);printc.cc:2703-2705 只跳过 **out**-implied(`vn->isImplied() continue` 作用于语句输出),Rugra printc.rs:3341 已有同语义跳过——打印侧不存在"in-implied COPY 折叠"责任,一刀切折叠反而错杀 oracle 合法输出;
+- 真根因=Rugra `merge_test_with_list`(merge.cc:1657 `Merge::mergeTest` 对应物)绕过 testCache 用 `aggregate_high_cover`+`intersect_char>0` 粗近似(同块字符重叠⇒相交),oracle 走 `testCache.intersection`(merge.cc:1664,intersectList(…,2)+blockIntersection 实例级判定)。粗近似使 ActionMergeRequired 阶段 main **多打 +8804 个 trim COPY**(oracle +45),这些 trim COPY 被 MarkImplied 标 implied 后 mergeTestBasic 正确拒绝合并——sb-copynoise 探针测到的"1957 个 diff-high 幸存中 1531 一侧 implied"即此**本侧 bug 制造的噪声**,非合法幸存;
+- 修复=CE `1250e5d0`:`merge_test_with_list` 改走 `self.type_test_cache.intersection`(与 merge.cc:1664 字面一致);curl skeleton 3654→3018、全文件自赋值 907→2、defects/numbering 全零;机制 C(merge 白名单)cross-review PENDING,集成前必须独立复核。
+
 ## 1. 前提纠错(决定性)
 
 **`ActionCopyPropagation` 在锁定 oracle 中零匹配**:
