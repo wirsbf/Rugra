@@ -1,7 +1,77 @@
 {
- "schema": 1,
+ "analysis_options": {
+  "entrypoint": "CollapseStructure::collapseAll on structureLoops-labeled synthetic graphs (Rugra: CollapseStructure::collapse_all, the faithful 5-step path); TraceDAG/selectGoto/markExitsAsGotos/clipExtraRoots all live inside the driver",
+  "observation": "per case: final top-level component list (order + type + interior-goto + out-edge labels/targets), the full structure tree (component types in identifyInternal child order, gototarget names, gotoout/flip flags), and every original block's surviving out-edge labels + flip + listed flags",
+  "prestate": "per-case fresh BlockGraph, edges added in a fixed creation order; the spanning tree + irreducible + loop labels are established by structureLoops exactly as the oracle run() does"
+ },
+ "architecture": "locked synthetic plain FlowBlock graphs built through production BlockGraph APIs (newBlock/addEdge, structureLoops entry state); no AddrSpace, no Funcdata, no PcodeOps — CollapseStructure is driven directly on the graph copy, mirroring ActionBlockStructure cc:2177-2180",
+ "comparand_sha256": {
+  "cpp_fixture_sha256": "bd188dd9cf15d5c03c483ddb9f394ba0cd7fcf8ee1ee0deb1acf1f820a905149",
+  "ghidra_blockaction_cc": "501e8d9a3caec9172b1fdfa421f6cbc96cf8eb481fa3b40acbd186db4bab9dd6",
+  "ghidra_blockaction_hh": "3993011793101ed3e4cadb6cc31ef1a88daea34d86d454984dc885c6fe62460d",
+  "rugra_blockaction_sha256": "b97c59a72c5bbdd59f93844e9854b25707f9186ca999420d9ab25f66f377542e",
+  "rugra_tracedag_sha256": "9030b5f5e412028db2f827b34aafb78418a40d525ce31e7e403075f44727f615",
+  "runner_sha256": "dc753041338cec986e33e0389b9babcbd8a80b7b217f6448b4bae65f58e482f4",
+  "rust_fixture_sha256": "767dd5752aedf66dc49ec6fdbdbb1232090fa7176b90883971f9172c7802dcdd"
+ },
+ "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
+ "coverage": {
+  "condition_body_recovery": "MATCH: loop_break_marked_goto forms whiledo > condition{b0,b1} (the OR fold) exactly as the oracle — no orphaned CBRANCH, no bare conditional statements; diamond_if_recovery forms properif{cond,tc,fc}",
+  "consumed_vertex_edge_retention": "MISMATCH → BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001: Ghidra keeps consumed vertices' own out edges (with labels, e.g. b2 keeps its lb back edge) while Rugra clears them; in-degree already normalized out",
+  "dead_block_determination": "MATCH: consumed blocks leave the top-level list and their edges drop out of rule matching on both sides (Rugra's DEAD sweep == Ghidra's incremental identifyInternal list compaction)",
+  "goto_cascade_convergence": "MATCH: the cascade terminates on every case (the previous port spun forever on diamond_if_recovery); selectGoto marks one edge at a time with a full collapseInternal between marks exactly as cc:1889-1892; irreducible_goto_cascade picks the same goto targets (b2, b3) and the same gotoout bits as the oracle",
+  "guard_direction": "MATCH: while_guard_direction head flip=1 (cc:1540 negation, previously the negation was computed inverted and then discarded) and dowhile_guard_direction flip=1 (cc:1566-1569, previously omitted) on both sides",
+  "top_level_merge_shape": "MISMATCH → BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001: cases 1/3 wrap whiledo in an extra infloop (the WhileDo component's false-exit boundary edge is mis-captured by Rugra's install-in-place identify_internal), case 2 stays split as properif+list where the oracle cat-merges into one list (stale in-edges on the merge block from unconsumed DEAD predecessors), case 6 splits into three properifs where the oracle nests list/dowhile. All are boundary-edge rehoming/dedup gaps in identify_internal (Ghidra block.cc:893-960 selfIdentify+dedup), NOT goto-selection differences",
+  "tracedag_select_bad_edge": "MATCH-by-construction on the covered graphs: siblingedge comparison direction (cc:621), common-ancestor distance (cc:524-536), the (exitproto, bp, pathout) group order (cc:635-651), terminal-traces-stay-active (cc:670/844-851), and removeTrace's pathout shift (cc:673-686) are all exercised with zero spurious marks on cases 1-5"
+ },
+ "covered_projection_status": "MISMATCH",
+ "expected_exit_code": 0,
  "fixture_id": "BLOCKSTRUCT-GOTOCASCADE-CONDSTMT-0001",
- "stable_function_id": "GH12-F-4d611d7dfc4a6a64a5ef",
+ "host": {
+  "bfd_root": "/tmp/rugra-ghidra-bfd-2.38",
+  "cxx": "g++ (GCC) 16.2.1 20260810",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "loop_break_marked_goto: while+break CFG (b0 2-out {body,exit}, b1 2-out {body,exit}, b2 back-edge, b3 ret) — the oracle folds the break into a while-condition (list > whiledo > condition{b0,b1} + b2) with ZERO goto marks",
+   "diamond_if_recovery: if/else diamond + continuation — properif{cond,tc,fc} cat-merged into a single list, ZERO goto marks",
+   "while_guard_direction: loop body on the fall-through (false) edge — ruleBlockWhileDo cc:1540 negates: head flip=1 (BOTH sides match)",
+   "dowhile_guard_direction: self back-edge on slot 0 — ruleBlockDoWhile cc:1566-1569 negates: flip=1 (BOTH sides match, full tree matches)",
+   "consumed_edge_cleared: straight chain collapses into one list component (tree matches both sides)",
+   "irreducible_goto_cascade: classic two-entry pair — cascade converges; goto targets b2 and b3 plus gotoout bits MATCH on both sides"
+  ]
+ },
+ "input_sha256": "2b23e573129139c3463449514b44b90228438524aad7293ed72b8d3ae129f870",
+ "observation_schema": {
+  "format": "per case: 'case <name>', 'list=...', one 'cN type=... gotoout=... out=[slot:flags->target]' line plus an indented 'tree cN:' block per top-level component, one 'bN out=[slot:flags] flip=. listed=.' line per original block, then 'end'",
+  "normalization": "block identity prints as creation-order names (bN) / top-level list positions (cN), never pointers; edge labels print as semantic flag letters (g l d i t f c b x, '-'); consumed-vertex IN-DEGREE is normalized OUT on both sides (Ghidra selfIdentify re-points/dedups external in-edges while keeping sibling-internal ones, Rugra's install-in-place model clears consumed in-edges — BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001, not goto-cascade semantics); BlockGoto children are not dumped on either side (Rugra's newBlockGoto wraps in place, documented in both fixtures)"
+ },
+ "oracle": {
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{blockaction.cc:499-1014,1193-1277,1450-1475,1518-1573,1877-1893,blockaction.hh}",
+  "tag": "Ghidra_12.0.4_build"
+ },
+ "oracle_stdout_sha256": "b28c49ebc6347db40eeef2f65dd6ad2a9bc36f5c2738449e328ebe90ce96c963",
+ "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
+ "residual_diffs": [
+  {
+   "evidence": "runner diff (110 lines): cases 1/3 'infloop{whiledo...}' vs 'list{whiledo...}'; case 2 'c0(properif),c1(list)' vs 'c0(list)'; case 6 three top-level properifs vs nested list/dowhile; per-vertex out-edge label lines",
+   "summary": "identify_internal (Rugra) vs identifyInternal+selfIdentify+dedup (Ghidra block.cc:893-960): boundary-edge capture keeps install-block-internal edges out (fixed here) but still mis-homes the install block's false-exit edge into a self-loop (cases 1/3 infloop wrap), leaves stale in-edges on merge blocks (case 2 split), clears consumed vertices' own edges (all cases), and therefore blocks the oracle's cat/dowhile merges over structured components (case 6 split)",
+   "todo_id": "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
+  },
+  {
+   "evidence": "cargo test --lib funcdata::tests::test_switch_case_structuring (structural asserts pass; 'case 0:' missing from emitted text)",
+   "summary": "exposed by the new installed-BlockSwitch representation (try_rule_switch now installs per newBlockSwitch block.cc:1904-1919): printc emit_structured_switch drops the first case's label into a swapped-out capture buffer and emits empty case bodies (funcdata test_switch_case_structuring label asserts bound to this TODO)",
+   "todo_id": "PRINTC-SWITCH-EMIT-0001"
+  }
+ ],
+ "rugra_base_commit": "ba910ed28f5d407224fce72ff18a6bffe9ca381c",
+ "rugra_base_tree": "b96ce91713e53458efdfb34033b02c3da95b6b5c",
+ "schema": 1,
  "stable_function_closure": [
   "ghidra::CollapseStructure::collapseAll blockaction.cc:1877",
   "ghidra::CollapseStructure::selectGoto blockaction.cc:1260",
@@ -18,76 +88,6 @@
   "ghidra::CollapseStructure::ruleBlockCat blockaction.cc:1284",
   "ghidra::LoopBody::emitLikelyEdges blockaction.cc:364"
  ],
- "oracle": {
-  "tag": "Ghidra_12.0.4_build",
-  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
-  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
-  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{blockaction.cc:499-1014,1193-1277,1450-1475,1518-1573,1877-1893,blockaction.hh}"
- },
- "rugra_base_commit": "ba910ed28f5d407224fce72ff18a6bffe9ca381c",
- "rugra_base_tree": "b96ce91713e53458efdfb34033b02c3da95b6b5c",
- "architecture": "locked synthetic plain FlowBlock graphs built through production BlockGraph APIs (newBlock/addEdge, structureLoops entry state); no AddrSpace, no Funcdata, no PcodeOps — CollapseStructure is driven directly on the graph copy, mirroring ActionBlockStructure cc:2177-2180",
- "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
- "analysis_options": {
-  "entrypoint": "CollapseStructure::collapseAll on structureLoops-labeled synthetic graphs (Rugra: CollapseStructure::collapse_all, the faithful 5-step path); TraceDAG/selectGoto/markExitsAsGotos/clipExtraRoots all live inside the driver",
-  "prestate": "per-case fresh BlockGraph, edges added in a fixed creation order; the spanning tree + irreducible + loop labels are established by structureLoops exactly as the oracle run() does",
-  "observation": "per case: final top-level component list (order + type + interior-goto + out-edge labels/targets), the full structure tree (component types in identifyInternal child order, gototarget names, gotoout/flip flags), and every original block's surviving out-edge labels + flip + listed flags"
- },
- "input_manifest": {
-  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
-  "cases": [
-   "loop_break_marked_goto: while+break CFG (b0 2-out {body,exit}, b1 2-out {body,exit}, b2 back-edge, b3 ret) — the oracle folds the break into a while-condition (list > whiledo > condition{b0,b1} + b2) with ZERO goto marks",
-   "diamond_if_recovery: if/else diamond + continuation — properif{cond,tc,fc} cat-merged into a single list, ZERO goto marks",
-   "while_guard_direction: loop body on the fall-through (false) edge — ruleBlockWhileDo cc:1540 negates: head flip=1 (BOTH sides match)",
-   "dowhile_guard_direction: self back-edge on slot 0 — ruleBlockDoWhile cc:1566-1569 negates: flip=1 (BOTH sides match, full tree matches)",
-   "consumed_edge_cleared: straight chain collapses into one list component (tree matches both sides)",
-   "irreducible_goto_cascade: classic two-entry pair — cascade converges; goto targets b2 and b3 plus gotoout bits MATCH on both sides"
-  ]
- },
- "observation_schema": {
-  "format": "per case: 'case <name>', 'list=...', one 'cN type=... gotoout=... out=[slot:flags->target]' line plus an indented 'tree cN:' block per top-level component, one 'bN out=[slot:flags] flip=. listed=.' line per original block, then 'end'",
-  "normalization": "block identity prints as creation-order names (bN) / top-level list positions (cN), never pointers; edge labels print as semantic flag letters (g l d i t f c b x, '-'); consumed-vertex IN-DEGREE is normalized OUT on both sides (Ghidra selfIdentify re-points/dedups external in-edges while keeping sibling-internal ones, Rugra's install-in-place model clears consumed in-edges — BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001, not goto-cascade semantics); BlockGoto children are not dumped on either side (Rugra's newBlockGoto wraps in place, documented in both fixtures)"
- },
- "comparand_sha256": {
-  "cpp_fixture_sha256": "bd188dd9cf15d5c03c483ddb9f394ba0cd7fcf8ee1ee0deb1acf1f820a905149",
-  "rust_fixture_sha256": "767dd5752aedf66dc49ec6fdbdbb1232090fa7176b90883971f9172c7802dcdd",
-  "rugra_blockaction_sha256": "408d39d2dbd55e58aacf5367e306e5783a43acbbfb2bd67088b3f6b6a2231101",
-  "rugra_tracedag_sha256": "9030b5f5e412028db2f827b34aafb78418a40d525ce31e7e403075f44727f615",
-  "runner_sha256": "dc753041338cec986e33e0389b9babcbd8a80b7b217f6448b4bae65f58e482f4",
-  "ghidra_blockaction_cc": "501e8d9a3caec9172b1fdfa421f6cbc96cf8eb481fa3b40acbd186db4bab9dd6",
-  "ghidra_blockaction_hh": "3993011793101ed3e4cadb6cc31ef1a88daea34d86d454984dc885c6fe62460d"
- },
- "host": {
-  "cxx": "g++ (GCC) 16.2.1 20260810",
-  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-  "bfd_root": "/tmp/rugra-ghidra-bfd-2.38"
- },
- "oracle_stdout_sha256": "b28c49ebc6347db40eeef2f65dd6ad2a9bc36f5c2738449e328ebe90ce96c963",
- "expected_exit_code": 0,
- "covered_projection_status": "MISMATCH",
- "coverage": {
-  "goto_cascade_convergence": "MATCH: the cascade terminates on every case (the previous port spun forever on diamond_if_recovery); selectGoto marks one edge at a time with a full collapseInternal between marks exactly as cc:1889-1892; irreducible_goto_cascade picks the same goto targets (b2, b3) and the same gotoout bits as the oracle",
-  "condition_body_recovery": "MATCH: loop_break_marked_goto forms whiledo > condition{b0,b1} (the OR fold) exactly as the oracle — no orphaned CBRANCH, no bare conditional statements; diamond_if_recovery forms properif{cond,tc,fc}",
-  "guard_direction": "MATCH: while_guard_direction head flip=1 (cc:1540 negation, previously the negation was computed inverted and then discarded) and dowhile_guard_direction flip=1 (cc:1566-1569, previously omitted) on both sides",
-  "tracedag_select_bad_edge": "MATCH-by-construction on the covered graphs: siblingedge comparison direction (cc:621), common-ancestor distance (cc:524-536), the (exitproto, bp, pathout) group order (cc:635-651), terminal-traces-stay-active (cc:670/844-851), and removeTrace's pathout shift (cc:673-686) are all exercised with zero spurious marks on cases 1-5",
-  "dead_block_determination": "MATCH: consumed blocks leave the top-level list and their edges drop out of rule matching on both sides (Rugra's DEAD sweep == Ghidra's incremental identifyInternal list compaction)",
-  "top_level_merge_shape": "MISMATCH → BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001: cases 1/3 wrap whiledo in an extra infloop (the WhileDo component's false-exit boundary edge is mis-captured by Rugra's install-in-place identify_internal), case 2 stays split as properif+list where the oracle cat-merges into one list (stale in-edges on the merge block from unconsumed DEAD predecessors), case 6 splits into three properifs where the oracle nests list/dowhile. All are boundary-edge rehoming/dedup gaps in identify_internal (Ghidra block.cc:893-960 selfIdentify+dedup), NOT goto-selection differences",
-  "consumed_vertex_edge_retention": "MISMATCH → BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001: Ghidra keeps consumed vertices' own out edges (with labels, e.g. b2 keeps its lb back edge) while Rugra clears them; in-degree already normalized out"
- },
- "residual_diffs": [
-  {
-   "todo_id": "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001",
-   "summary": "identify_internal (Rugra) vs identifyInternal+selfIdentify+dedup (Ghidra block.cc:893-960): boundary-edge capture keeps install-block-internal edges out (fixed here) but still mis-homes the install block's false-exit edge into a self-loop (cases 1/3 infloop wrap), leaves stale in-edges on merge blocks (case 2 split), clears consumed vertices' own edges (all cases), and therefore blocks the oracle's cat/dowhile merges over structured components (case 6 split)",
-   "evidence": "runner diff (110 lines): cases 1/3 'infloop{whiledo...}' vs 'list{whiledo...}'; case 2 'c0(properif),c1(list)' vs 'c0(list)'; case 6 three top-level properifs vs nested list/dowhile; per-vertex out-edge label lines"
-  },
-  {
-   "todo_id": "PRINTC-SWITCH-EMIT-0001",
-   "summary": "exposed by the new installed-BlockSwitch representation (try_rule_switch now installs per newBlockSwitch block.cc:1904-1919): printc emit_structured_switch drops the first case's label into a swapped-out capture buffer and emits empty case bodies (funcdata test_switch_case_structuring label asserts bound to this TODO)",
-   "evidence": "cargo test --lib funcdata::tests::test_switch_case_structuring (structural asserts pass; 'case 0:' missing from emitted text)"
-  }
- ],
- "unit_tests": "cargo test --lib -- --test-threads=1 failure set identical to the pre-change baseline ba910ed (comment/infer_params/type_propagation, unrelated domains)",
- "overall_status": "UNTESTED: (B2 migration) no declared complete bilateral observation",
- "input_sha256": "2b23e573129139c3463449514b44b90228438524aad7293ed72b8d3ae129f870"
+ "stable_function_id": "GH12-F-4d611d7dfc4a6a64a5ef",
+ "unit_tests": "cargo test --lib -- --test-threads=1 failure set identical to the pre-change baseline ba910ed (comment/infer_params/type_propagation, unrelated domains)"
 }

@@ -8230,14 +8230,11 @@ impl Action for ActionFinalStructure {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::op::branch_type;
 
-        // Ghidra blockaction.cc:2186-2197: this action runs four wired graph
-        // calls (orderBlocks/finalizePrinting/scopeBreak/markUnstructured)
-        // and unconditionally returns 0. The fifth oracle call
-        // markLabelBumpUp (cc:2195) is NOT wired here — per-type impls exist
-        // in block.rs but are dead code, registered as
-        // BLOCKSTRUCT-MARKLABELBUMPUP-0001. It never touches the
-        // protected `count` member, so the fixture-observed count/apply/res
-        // triple must stay 0 even when graph/IR mutations occur below.
+        // Ghidra blockaction.cc:2186-2197: this action runs five wired graph
+        // calls (orderBlocks/finalizePrinting/scopeBreak/markUnstructured/
+        // markLabelBumpUp) and unconditionally returns 0. It never touches
+        // the protected `count` member, so the fixture-observed count/apply/
+        // res triple must stay 0 even when graph/IR mutations occur below.
 
         // Ghidra blockaction.cc:2191: graph.orderBlocks(); — sort the
         // top-level structure list with FlowBlock::compareFinalOrder
@@ -8292,6 +8289,20 @@ impl Action for ActionFinalStructure {
         // BRANCH/CBRANCH target (printc.rs goto_targets) and emitted dozens of
         // spurious unreferenced labels.
         fd.sblocks.mark_unstructured();
+
+        // Ghidra blockaction.cc:2195: graph.markLabelBumpUp(false); // Fix up
+        // labeling — recurse the structure tree setting f_label_bumpup on
+        // every loop's front (condition/body) chain (BlockWhileDo/
+        // BlockDoWhile/BlockInfLoop force `true` down their list[0] chain,
+        // block.cc:3316/3426/3454; the incoming bump stays false everywhere
+        // else, so non-loop composites never set the flag).
+        // PrintC::emitAnyLabelStatement (printc.cc:3222) consumes it: a
+        // flagged block's label statement is skipped because the enclosing
+        // loop construct prints it at the construct entry — this is what
+        // keeps a goto-into-loop-header label OUT of the `while (...)`
+        // condition parens / inside the `do {` body and lands it before the
+        // loop keyword line.
+        fd.sblocks.mark_label_bump_up(false);
 
         // Tag untagged BRANCH/CBRANCH as GOTO (break/continue already tagged
         // by ActionNormalizeBranches). No `count +=` here: Ghidra's goto

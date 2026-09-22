@@ -1,7 +1,65 @@
 {
- "schema": 1,
+ "analysis_options": {
+  "entrypoint": "CollapseStructure::collapseAll on structureLoops-labeled synthetic graphs (Rugra: CollapseStructure::collapse_all, the faithful 5-step path)",
+  "observation": "per case: final top-level component list (order + type + interior-goto + out-edge labels/targets), the full structure tree (component types in factory child order, gototarget names, gotoout/flip flags), and every original block's surviving out-edge labels + flip + listed flags",
+  "prestate": "per-case fresh BlockGraph, edges added in a fixed creation order; spanning tree + irreducible + loop labels established by structure_loops exactly as the oracle run() does"
+ },
+ "architecture": "locked synthetic plain FlowBlock graphs built through production BlockGraph APIs (add_block/add_edge with UNIQUE per-block indices/addresses — Rugra keys block identity on get_index(), Ghidra uses parent pointers; structure_loops entry state per cc:2177-2180); no AddrSpace, no Funcdata, no PcodeOps — CollapseStructure is driven directly",
+ "comparand": {
+  "cpp_fixture_sha256": "ce7b2a854faacce203f726c584be7f582f5dad8a97b963e337ba7267daf2dba9",
+  "runner_sha256": "75b358f23f0a99076f69d04031762a57454fc189367a19ec765c23fcc651e648",
+  "rust_fixture_sha256": "8cc96b8c78131f0704ce99e89b24b464d40550607a997e4e0eaab08d8b5f7054"
+ },
+ "comparand_sha256": {
+  "cpp_fixture_sha256": "ce7b2a854faacce203f726c584be7f582f5dad8a97b963e337ba7267daf2dba9",
+  "ghidra_blockaction_cc": "501e8d9a3caec9172b1fdfa421f6cbc96cf8eb481fa3b40acbd186db4bab9dd6",
+  "ghidra_blockaction_hh": "3993011793101ed3e4cadb6cc31ef1a88daea34d86d454984dc885c6fe62460d",
+  "rugra_blockaction_sha256": "b97c59a72c5bbdd59f93844e9854b25707f9186ca999420d9ab25f66f377542e",
+  "rugra_tracedag_sha256": "366fe3f2c166c1c38306441b01cb428eadc1d5623883b3b3ac243e1de181af49",
+  "runner_sha256": "3ea662c41fbf652af40b3e9fc028201f804a39e8b69b9d891a0e72ec54884d6a",
+  "rust_fixture_sha256": "8cc96b8c78131f0704ce99e89b24b464d40550607a997e4e0eaab08d8b5f7054"
+ },
+ "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
+ "coverage": {
+  "dowhile_absorption_chain": "MATCH: the full main @321a chain (ruleBlockGoto->newBlockIfGoto detach goto edge; ruleBlockCat merge ifgoto+latch with force; ruleBlockDoWhile absorb the self latch) — final tree list>dowhile>list>properif(gototarget)+latch identical on both sides",
+  "edge_label_survival": "MATCH: per-vertex surviving out-edge labels (tree/back/loop letters) identical, including the composite self edge's lb label on the collapsed representation",
+  "goto_edge_detach": "MATCH: after newBlockIfGoto the goto target block loses the in-edge (b3 in-degree) and the composite keeps the single structured out-edge (b1->b2 tree edge preserved as out[0])",
+  "newblocklist_force_false_edge": "MATCH: external out0 keeps slot 0 (cases 1/2); internalized out0 (tail_out0_internal_flip) triggers the parent==this arm — self edge swapped to slot 0 and ruleBlockDoWhile negates (flip=1 both sides)",
+  "newblocklist_force_output_num": "MATCH: cat chains whose tail out-edges went internal (chain_tail_backedge_dowhile, latch_pair_goto_dowhile) end with a composite SELF lb edge (forceOutputNum, block.cc:880-889 via blockaction-side try_rule_cat force_output_num) exactly as the oracle — pre-fix Rugra produced a 1-out composite and dowhile never fired"
+ },
+ "covered_projection_status": "MATCH",
+ "expected_exit_code": 0,
+ "expected_ghidra_stdout_sha256": "8d4d9596d412a8727efc12528b8bbe7dbfe371c059c90bf69ee0758fe8c28621",
+ "expected_rugra_stdout_sha256": "8d4d9596d412a8727efc12528b8bbe7dbfe371c059c90bf69ee0758fe8c28621",
  "fixture_id": "BLOCKACTION-DOWHILE-ABSORB-0001",
- "stable_function_id": "GH12-F-d345bfb9c1f5620afdb6",
+ "host": {
+  "bfd_root": "/tmp/rugra-ghidra-bfd-2.38",
+  "cxx": "g++ (GCC) 16.2.1 20260810",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "latch_pair_goto_dowhile: the main @321a topology (b0->b1; b1->{b2,b3}; b2->{b3,b1}) — selectGoto marks b1->b3, ruleBlockGoto wraps newBlockIfGoto, cat merges ifgoto+latch, forceOutputNum(2) resurrects the internalized latch back-edge as the composite SELF lb edge, ruleBlockDoWhile absorbs; final tree list>dowhile>list>properif(gototarget=b3)+b2",
+   "chain_tail_backedge_dowhile: no goto — straight chain b0->b1->b2 with tail b2->{b3,b1}: cat + forceOutputNum + forceFalseEdge + dowhile; isolates the pure newBlockList force semantic",
+   "tail_out0_internal_flip: tail out(0) points back INTO the chain (out0 internalized) — forceFalseEdge's out0->getParent()==this arm swaps the self edge to slot 0 and ruleBlockDoWhile negates (cc:1566-1569): observable flip=1 on the folded condition leaf"
+  ]
+ },
+ "input_sha256": "8af37218ad4f804c15514b2a7ded15b40fcbbfea54c8fa8c6067ea1807a816d0",
+ "observation_schema": {
+  "format": "per case: 'case <name>', 'list=...', one 'cN type=... gotoout=... out=[slot:flags->target]' line plus an indented 'tree cN:' block per top-level component, one 'bN out=[slot:flags] flip=. listed=.' line per original block, then 'end'",
+  "normalization": "block identity prints as creation-order names (bN) / top-level list positions (cN), never pointers or indices; edge labels print as semantic flag letters (g l d i t f c b x, '-'); BlockGoto children are not dumped on either side (Rugra wraps in place, documented); IfGoto composites dump only the condition child (newBlockIfGoto nodes={cond}, block.cc:1809 — Rugra's non-Option if_body placeholder is not a child)"
+ },
+ "oracle": {
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{blockaction.cc:1284-1314,1450-1475,1555-1573,1877-1893,block.cc:73-80,880-889,895-963,1204-1217,1758-1774,1799-1816,1874-1884}",
+  "tag": "Ghidra_12.0.4_build"
+ },
+ "oracle_stdout_sha256": "8d4d9596d412a8727efc12528b8bbe7dbfe371c059c90bf69ee0758fe8c28621",
+ "overall_status": "MATCH",
+ "residual_diffs": [],
+ "rugra_base_commit": "b3dd0c3c4802c5f52c28b9ea43aa939eaa1516ce",
+ "schema": 1,
  "stable_function_closure": [
   "ghidra::CollapseStructure::collapseAll blockaction.cc:1877",
   "ghidra::CollapseStructure::ruleBlockGoto blockaction.cc:1450",
@@ -15,64 +73,6 @@
   "ghidra::BlockGraph::identifyInternal block.cc:940",
   "ghidra::BlockGraph::selfIdentify block.cc:895"
  ],
- "oracle": {
-  "tag": "Ghidra_12.0.4_build",
-  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{blockaction.cc:1284-1314,1450-1475,1555-1573,1877-1893,block.cc:73-80,880-889,895-963,1204-1217,1758-1774,1799-1816,1874-1884}"
- },
- "rugra_base_commit": "b3dd0c3c4802c5f52c28b9ea43aa939eaa1516ce",
- "architecture": "locked synthetic plain FlowBlock graphs built through production BlockGraph APIs (add_block/add_edge with UNIQUE per-block indices/addresses — Rugra keys block identity on get_index(), Ghidra uses parent pointers; structure_loops entry state per cc:2177-2180); no AddrSpace, no Funcdata, no PcodeOps — CollapseStructure is driven directly",
- "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
- "analysis_options": {
-  "entrypoint": "CollapseStructure::collapseAll on structureLoops-labeled synthetic graphs (Rugra: CollapseStructure::collapse_all, the faithful 5-step path)",
-  "prestate": "per-case fresh BlockGraph, edges added in a fixed creation order; spanning tree + irreducible + loop labels established by structure_loops exactly as the oracle run() does",
-  "observation": "per case: final top-level component list (order + type + interior-goto + out-edge labels/targets), the full structure tree (component types in factory child order, gototarget names, gotoout/flip flags), and every original block's surviving out-edge labels + flip + listed flags"
- },
- "input_manifest": {
-  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
-  "cases": [
-   "latch_pair_goto_dowhile: the main @321a topology (b0->b1; b1->{b2,b3}; b2->{b3,b1}) — selectGoto marks b1->b3, ruleBlockGoto wraps newBlockIfGoto, cat merges ifgoto+latch, forceOutputNum(2) resurrects the internalized latch back-edge as the composite SELF lb edge, ruleBlockDoWhile absorbs; final tree list>dowhile>list>properif(gototarget=b3)+b2",
-   "chain_tail_backedge_dowhile: no goto — straight chain b0->b1->b2 with tail b2->{b3,b1}: cat + forceOutputNum + forceFalseEdge + dowhile; isolates the pure newBlockList force semantic",
-   "tail_out0_internal_flip: tail out(0) points back INTO the chain (out0 internalized) — forceFalseEdge's out0->getParent()==this arm swaps the self edge to slot 0 and ruleBlockDoWhile negates (cc:1566-1569): observable flip=1 on the folded condition leaf"
-  ]
- },
- "observation_schema": {
-  "format": "per case: 'case <name>', 'list=...', one 'cN type=... gotoout=... out=[slot:flags->target]' line plus an indented 'tree cN:' block per top-level component, one 'bN out=[slot:flags] flip=. listed=.' line per original block, then 'end'",
-  "normalization": "block identity prints as creation-order names (bN) / top-level list positions (cN), never pointers or indices; edge labels print as semantic flag letters (g l d i t f c b x, '-'); BlockGoto children are not dumped on either side (Rugra wraps in place, documented); IfGoto composites dump only the condition child (newBlockIfGoto nodes={cond}, block.cc:1809 — Rugra's non-Option if_body placeholder is not a child)"
- },
- "comparand_sha256": {
-  "cpp_fixture_sha256": "ce7b2a854faacce203f726c584be7f582f5dad8a97b963e337ba7267daf2dba9",
-  "rust_fixture_sha256": "8cc96b8c78131f0704ce99e89b24b464d40550607a997e4e0eaab08d8b5f7054",
-  "rugra_blockaction_sha256": "d7cc944fe7bd6af355af77e961af092e9b500a7f024ac5cc477485f7dbf0da92",
-  "rugra_tracedag_sha256": "366fe3f2c166c1c38306441b01cb428eadc1d5623883b3b3ac243e1de181af49",
-  "runner_sha256": "3ea662c41fbf652af40b3e9fc028201f804a39e8b69b9d891a0e72ec54884d6a",
-  "ghidra_blockaction_cc": "501e8d9a3caec9172b1fdfa421f6cbc96cf8eb481fa3b40acbd186db4bab9dd6",
-  "ghidra_blockaction_hh": "3993011793101ed3e4cadb6cc31ef1a88daea34d86d454984dc885c6fe62460d"
- },
- "host": {
-  "cxx": "g++ (GCC) 16.2.1 20260810",
-  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Arch Linux rust 1:1.97.1-1)",
-  "bfd_root": "/tmp/rugra-ghidra-bfd-2.38"
- },
- "oracle_stdout_sha256": "8d4d9596d412a8727efc12528b8bbe7dbfe371c059c90bf69ee0758fe8c28621",
- "expected_exit_code": 0,
- "covered_projection_status": "MATCH",
- "coverage": {
-  "newblocklist_force_output_num": "MATCH: cat chains whose tail out-edges went internal (chain_tail_backedge_dowhile, latch_pair_goto_dowhile) end with a composite SELF lb edge (forceOutputNum, block.cc:880-889 via blockaction-side try_rule_cat force_output_num) exactly as the oracle — pre-fix Rugra produced a 1-out composite and dowhile never fired",
-  "newblocklist_force_false_edge": "MATCH: external out0 keeps slot 0 (cases 1/2); internalized out0 (tail_out0_internal_flip) triggers the parent==this arm — self edge swapped to slot 0 and ruleBlockDoWhile negates (flip=1 both sides)",
-  "dowhile_absorption_chain": "MATCH: the full main @321a chain (ruleBlockGoto->newBlockIfGoto detach goto edge; ruleBlockCat merge ifgoto+latch with force; ruleBlockDoWhile absorb the self latch) — final tree list>dowhile>list>properif(gototarget)+latch identical on both sides",
-  "goto_edge_detach": "MATCH: after newBlockIfGoto the goto target block loses the in-edge (b3 in-degree) and the composite keeps the single structured out-edge (b1->b2 tree edge preserved as out[0])",
-  "edge_label_survival": "MATCH: per-vertex surviving out-edge labels (tree/back/loop letters) identical, including the composite self edge's lb label on the collapsed representation"
- },
- "residual_diffs": [],
- "unit_tests": "cargo test --lib 1637 passed / 17 failed (all pre-existing funcdata baseline failures; zero new blockaction/tracedag failures)",
- "overall_status": "MATCH",
- "input_sha256": "8af37218ad4f804c15514b2a7ded15b40fcbbfea54c8fa8c6067ea1807a816d0",
- "comparand": {
-  "cpp_fixture_sha256": "ce7b2a854faacce203f726c584be7f582f5dad8a97b963e337ba7267daf2dba9",
-  "rust_fixture_sha256": "8cc96b8c78131f0704ce99e89b24b464d40550607a997e4e0eaab08d8b5f7054",
-  "runner_sha256": "75b358f23f0a99076f69d04031762a57454fc189367a19ec765c23fcc651e648"
- },
- "expected_ghidra_stdout_sha256": "8d4d9596d412a8727efc12528b8bbe7dbfe371c059c90bf69ee0758fe8c28621",
- "expected_rugra_stdout_sha256": "8d4d9596d412a8727efc12528b8bbe7dbfe371c059c90bf69ee0758fe8c28621"
+ "stable_function_id": "GH12-F-d345bfb9c1f5620afdb6",
+ "unit_tests": "cargo test --lib 1637 passed / 17 failed (all pre-existing funcdata baseline failures; zero new blockaction/tracedag failures)"
 }

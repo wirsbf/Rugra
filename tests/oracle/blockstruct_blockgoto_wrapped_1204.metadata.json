@@ -1,7 +1,42 @@
 {
- "schema": 1,
+ "analysis_options": {
+  "entrypoint": "CollapseStructure::collapseAll on structureLoops-labeled synthetic graphs (Rugra: CollapseStructure::collapse_all), then the ActionFinalStructure tail scopeBreak(-1,-1) (Rugra additionally evaluates compute_goto_prints, the transport for the oracle's lazy gotoPrints)",
+  "observation": "per case: sorted per-BlockGoto lines (index, sizeIn/sizeOut, wrapped component identity+type via getBlock(0)/wrapped, gototarget identity+type via getGotoTarget()/target_dyn, gototype after scopeBreak, gotoPrints) + count. Sorted output is the registered order normalization: the oracle appends composites to the parent list (block.cc:874) while Rugra installs at the consumed slot, so top-level order is not a locked observable here; per-goto facts are order-free. gotoPrints on t_basic leaves is null-degenerate on both sides (getFrontLeaf block.cc:344-348 needs t_copy) — locks the comparison plumbing, not a prints=1 discriminative case.",
+  "prestate": "per-case fresh BlockGraph, edges added in a fixed creation order; every synthetic vertex carries index 0 (FlowBlock ctor block.cc:61-67), mirroring the goto_cascade fixture scheme"
+ },
+ "architecture": "locked synthetic plain FlowBlock graphs built through production BlockGraph APIs (addBlock/addEdge, structureLoops entry state); no AddrSpace, no Funcdata, no PcodeOps",
+ "comparand_sha256": {
+  "cpp_fixture_sha256": "bad7bf4af2d5c40e77dd5ce778b522df0a6bc67829a9b2f69616047cd93920c5",
+  "rugra_block_sha256": "6feb58f2ba3dcfd4f7ae339dd8bc7a1016836573a888cef29610d9ba21508364",
+  "rugra_blockaction_sha256": "b97c59a72c5bbdd59f93844e9854b25707f9186ca999420d9ab25f66f377542e",
+  "rust_fixture_sha256": "2a3903c5afa1fa2df79f8b56008422d9ae1b10eac6bd7f27f49a24b131dd7265"
+ },
+ "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
  "fixture_id": "MAIN-RC2-BLOCKGOTO-WRAPPED-0001",
- "stable_function_id": "GH12-F-4d611d7dfc4a6a64a5ef",
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "double_back_goto: b0->b1->b2->{b0,b3}, b3->b1 — oracle probe: one pure BlockGoto (wrapped=b3 basic, gototarget=b0)",
+   "loop_exit_conflict_gotos: b0->b1, b1->{b2,b3}, b2->{b1,b4}, b3->b4, b4->b1 — oracle probe: TWO BlockGotos, one wrapping a properif composite, one wrapping a list composite"
+  ],
+  "sha256": "c069a3cf8d8b77b171fe7c0514a6a4ba422de2f453585757c11022717ed0211b"
+ },
+ "known_divergences": [
+  {
+   "status": "MISMATCH",
+   "summary": "On both probe shapes the oracle's collapseAll leaves pure BlockGoto wraps (double_back_goto: 1 goto, wrapped=b3 basic, target=whiledo composite; loop_exit_conflict_gotos: 2 gotos, wrapped=list and properif composites, one target another goto node) while Rugra's collapse path structures the same graphs without producing t_goto nodes (gotos=0). Same root family as the goto_cascade bilateral 185-line MISMATCH (selectGoto/TraceDAG/identify-boundary divergence, stale since tracedag 4a4bd5c6). The BlockGoto semantics themselves (wrapped retention, dyn target capture, gototype, prints plumbing) are locked on the oracle side and exercised by the production E2E (83 wraps in curl).",
+   "todo_id": "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001"
+  }
+ ],
+ "oracle": {
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "decompiler_cpp_tree": "0a8d19443da0c365346306d49a88441036f7ba49",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{block.hh:540-565,block.cc:860-963,1270-1353,1699-1713,2856-2916,blockaction.cc:1446-1475,2186-2197}",
+  "tag": "Ghidra_12.0.4_build"
+ },
+ "overall_status": "MISMATCH: BlockGoto wrapped-component semantics (wrapped retention, dyn target capture, gototype, prints plumbing) locked on the oracle side, but on both probe shapes Rugra's collapse path structures the graphs without producing t_goto nodes (gotos=0) — registered divergence BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 (same family as the goto_cascade bilateral MISMATCH)",
+ "rugra_base_commit": "6539e6d1e7d1007d83d14eca32a7cf9f496081a6",
+ "schema": 1,
  "stable_function_closure": [
   "ghidra::BlockGraph::newBlockGoto block.cc:1702",
   "ghidra::BlockGraph::identifyInternal block.cc:940",
@@ -14,40 +49,5 @@
   "ghidra::BlockGraph::nextFlowAfter block.cc:1335",
   "ghidra::FlowBlock::getFrontLeaf block.cc:340"
  ],
- "oracle": {
-  "tag": "Ghidra_12.0.4_build",
-  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
-  "decompiler_cpp_tree": "0a8d19443da0c365346306d49a88441036f7ba49",
-  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{block.hh:540-565,block.cc:860-963,1270-1353,1699-1713,2856-2916,blockaction.cc:1446-1475,2186-2197}"
- },
- "rugra_base_commit": "6539e6d1e7d1007d83d14eca32a7cf9f496081a6",
- "architecture": "locked synthetic plain FlowBlock graphs built through production BlockGraph APIs (addBlock/addEdge, structureLoops entry state); no AddrSpace, no Funcdata, no PcodeOps",
- "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
- "analysis_options": {
-  "entrypoint": "CollapseStructure::collapseAll on structureLoops-labeled synthetic graphs (Rugra: CollapseStructure::collapse_all), then the ActionFinalStructure tail scopeBreak(-1,-1) (Rugra additionally evaluates compute_goto_prints, the transport for the oracle's lazy gotoPrints)",
-  "prestate": "per-case fresh BlockGraph, edges added in a fixed creation order; every synthetic vertex carries index 0 (FlowBlock ctor block.cc:61-67), mirroring the goto_cascade fixture scheme",
-  "observation": "per case: sorted per-BlockGoto lines (index, sizeIn/sizeOut, wrapped component identity+type via getBlock(0)/wrapped, gototarget identity+type via getGotoTarget()/target_dyn, gototype after scopeBreak, gotoPrints) + count. Sorted output is the registered order normalization: the oracle appends composites to the parent list (block.cc:874) while Rugra installs at the consumed slot, so top-level order is not a locked observable here; per-goto facts are order-free. gotoPrints on t_basic leaves is null-degenerate on both sides (getFrontLeaf block.cc:344-348 needs t_copy) — locks the comparison plumbing, not a prints=1 discriminative case."
- },
- "input_manifest": {
-  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
-  "cases": [
-   "double_back_goto: b0->b1->b2->{b0,b3}, b3->b1 — oracle probe: one pure BlockGoto (wrapped=b3 basic, gototarget=b0)",
-   "loop_exit_conflict_gotos: b0->b1, b1->{b2,b3}, b2->{b1,b4}, b3->b4, b4->b1 — oracle probe: TWO BlockGotos, one wrapping a properif composite, one wrapping a list composite"
-  ],
-  "sha256": "c069a3cf8d8b77b171fe7c0514a6a4ba422de2f453585757c11022717ed0211b"
- },
- "known_divergences": [
-  {
-   "todo_id": "BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001",
-   "status": "MISMATCH",
-   "summary": "On both probe shapes the oracle's collapseAll leaves pure BlockGoto wraps (double_back_goto: 1 goto, wrapped=b3 basic, target=whiledo composite; loop_exit_conflict_gotos: 2 gotos, wrapped=list and properif composites, one target another goto node) while Rugra's collapse path structures the same graphs without producing t_goto nodes (gotos=0). Same root family as the goto_cascade bilateral 185-line MISMATCH (selectGoto/TraceDAG/identify-boundary divergence, stale since tracedag 4a4bd5c6). The BlockGoto semantics themselves (wrapped retention, dyn target capture, gototype, prints plumbing) are locked on the oracle side and exercised by the production E2E (83 wraps in curl)."
-  }
- ],
- "comparand_sha256": {
-  "cpp_fixture_sha256": "bad7bf4af2d5c40e77dd5ce778b522df0a6bc67829a9b2f69616047cd93920c5",
-  "rust_fixture_sha256": "2a3903c5afa1fa2df79f8b56008422d9ae1b10eac6bd7f27f49a24b131dd7265",
-  "rugra_blockaction_sha256": "408d39d2dbd55e58aacf5367e306e5783a43acbbfb2bd67088b3f6b6a2231101",
-  "rugra_block_sha256": "537054fa68d8d3d5baed80d0c40bdef3c2e61e77ebd92fe6d0f684a0c0bae821"
- },
- "overall_status": "MISMATCH: BlockGoto wrapped-component semantics (wrapped retention, dyn target capture, gototype, prints plumbing) locked on the oracle side, but on both probe shapes Rugra's collapse path structures the graphs without producing t_goto nodes (gotos=0) — registered divergence BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001 (same family as the goto_cascade bilateral MISMATCH)"
+ "stable_function_id": "GH12-F-4d611d7dfc4a6a64a5ef"
 }

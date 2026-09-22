@@ -270,6 +270,27 @@
 > 调用点——per-type 实现存在于 block.rs 但为死代码,影响=循环内 goto 的 label
 > 定位(f_label_bumpup 永不置位);apply 注释与 docs/api 已纠偏为"四调用已接线+
 > 第五缺口登记";fixture 的 RETURN-尾入口判别形态留扩展项。
+> **`BLOCKSTRUCT-MARKLABELBUMPUP-0001` 已修复(2026-09-22,Lane CC
+> `wt/sb-labelbump`,owner=fixer,wip 03210101,终稿见分支头)**: 第五图调用接线
+> (blockaction.rs apply 在 mark_unstructured 后补 mark_label_bump_up(false),
+> cc:2195 位);block.rs 死代码三 override 重写为忠实形态(旧版对
+> condition+body 双双平铺置位,违背 cc:3319 的"仅 list[0] 强制 true"——已按
+> BlockGraph 语义:自置位→condition(true)/body(false)→!bump 时清自身);
+> 新增 trait 默认实现(cc:259 基类)+BlockGraph(cc:1258)+Goto/MultiGoto/List/
+> Condition/If/Switch 继承 override;printc 消费侧补 cc:3222 isLabelBumpUp
+> 早退(emit_any_label_statement 顶部)。E2E: curl **3653/0/0**(基线 3654,
+> −1=消除 glob_set do 体内无引用伪 label `code_r0x00004C20`,oracle golden 0 引用
+> 同款)、httpd **2456/0/0**(基线 2459,−3=消除 3 个 do 体内无引用伪 label,
+> golden 均 0 引用)、双 corpus goto-label 零 dangling、gcc audit FAIL 集与基线
+> 相同。B2: **blockstruct_marklabelbumpup_1204 双侧 MATCH**(5 case 含
+> nested_loops_front 内层 whiledo 保旗判别形态;orderblocks RETURN-尾入口判别
+> 已由其 case1/2 覆盖,扩项以此闭环);连带重钉 8 个 pin block/blockaction 的
+> fixture 元数据,blockmultigoto/orderblocks/scopebreak 复跑 MATCH,
+> blockgoto_wrapped 维持已登记 MISMATCH(IDENTIFY-BOUNDARY-0001)。
+> **新发现(未认领)**: deadregion/goto_cascade 的 tracedag pin、
+> goto_prints 的 coreaction pin 在本 lane 之前已陈旧(非本 write-set);
+> dowhile_absorb runner 硬编码 `/home/wirs` mkdir 报错——三项待 fixture 维护
+> lane 重钉/修复。
 
 > **gp 978 triage(2026-09-22,Lane BW,净改善判定)**: 48/48 case 值+序 100% 等于
 > oracle;449 上涨=真实内容从无到有+三部曲新工件。**新登记**:
