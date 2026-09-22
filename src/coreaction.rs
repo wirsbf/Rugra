@@ -1639,7 +1639,7 @@ impl Action for ActionMergeRequired {
         let mut merge = crate::merge::Merge::new();
         // Ghidra coreaction.hh:370: three calls in sequence.
         merge.merge_addr_tied(fd);
-        merge.group_partials(fd);  // currently no-op (CONCAT infra TODO)
+        merge.group_partials(fd);
         merge.merge_marker(fd);
         Ok(action_status::NO_CHANGE)
     }

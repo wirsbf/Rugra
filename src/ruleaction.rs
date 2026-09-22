@@ -13775,6 +13775,40 @@ impl Rule for RulePieceStructure {
         }
         // op->setPartialRoot() (ruleaction.cc:7642): mark before the storage
         // walk so the tree is never re-visited.
+        let wave_probe = std::env::var("RUGRA_SPLITWAVE").is_ok_and(|v| v == "1");
+        if wave_probe {
+            let og = outvn.read().unwrap();
+            eprintln!(
+                "[PIECEWAVE] fired op={:p} code={:?} out={}:{}:{} ct={} base_off={} addr_tied={} lone_desc={}",
+                std::sync::Arc::as_ptr(op_arc),
+                op_arc.read().unwrap().opcode,
+                og.get_space().name(),
+                og.get_offset(),
+                og.get_size(),
+                ct.get_name(),
+                base_offset,
+                og.is_addr_tied(),
+                og.lone_descend().is_some()
+            );
+            for (i, n) in stack.iter().enumerate() {
+                let vn = n.op.read().unwrap().inrefs.get(n.slot).cloned();
+                if let Some(v) = vn {
+                    let g = v.read().unwrap();
+                    eprintln!(
+                        "[PIECEWAVE] node{} op={:p} slot={} toff={} leaf={} vn={}:{}:{} proto_partial={}",
+                        i,
+                        std::sync::Arc::as_ptr(&n.op),
+                        n.slot,
+                        n.type_offset,
+                        n.leaf,
+                        g.get_space().name(),
+                        g.get_offset(),
+                        g.get_size(),
+                        g.is_proto_partial()
+                    );
+                }
+            }
+        }
         op_arc.write().unwrap().set_partial_root();
 
         // ruleaction.cc:7665 reads the same Architecture-owned TypeFactory
@@ -13887,8 +13921,12 @@ impl Rule for RulePieceStructure {
                 }
             }
         }
-        // registerProtoPartialRoot(outvn) when !anyAddrTied: not modelled.
-        let _ = any_addr_tied;
+        // cc:7697-7698: if (!anyAddrTied) data.getMerge().
+        // registerProtoPartialRoot(outvn) — the unmapped CONCAT stack is
+        // registered so Merge::groupPartials can group it into one variable.
+        if !any_addr_tied {
+            fd.merge_state.register_proto_partial_root(&outvn);
+        }
         Ok(action_status::CHANGE)
     }
 
