@@ -1950,21 +1950,14 @@ impl Merge {
             })
             .collect();
         let mut roots = HashSet::new();
-        // [DBG] probe: stage-by-stage filter counts
-        let mut dbg_total = 0usize;
-        let mut dbg_dedup = 0usize;
-        let mut dbg_not_piece = 0usize;
-        let mut dbg_multi_inst = 0usize;
-        let mut dbg_throwout = 0usize;
         for candidate in candidates {
-            dbg_total += 1;
             let root = Self::partial_root(&candidate).unwrap_or(candidate);
             let key = std::sync::Arc::as_ptr(&root) as usize;
-            if !roots.insert(key) { dbg_dedup += 1; continue; }
-            let Some(def) = root.read().unwrap().get_def() else { dbg_not_piece += 1; continue };
-            if def.read().unwrap().opcode != crate::opcodes::OpCode::CPUI_PIECE { dbg_not_piece += 1; continue; }
-            let Some(root_high) = root.read().unwrap().get_high().cloned() else { dbg_not_piece += 1; continue };
-            if root_high.read().unwrap().instances.len() != 1 { dbg_multi_inst += 1; continue; }
+            if !roots.insert(key) { continue; }
+            let Some(def) = root.read().unwrap().get_def() else { continue };
+            if def.read().unwrap().opcode != crate::opcodes::OpCode::CPUI_PIECE { continue; }
+            let Some(root_high) = root.read().unwrap().get_high().cloned() else { continue };
+            if root_high.read().unwrap().instances.len() != 1 { continue; }
             let mut pieces = Vec::new();
             // Ghidra merge.cc:1381-1387: baseOffset comes from the root's
             // symbol entry (0 without one); gatherPieces starts at
@@ -1986,35 +1979,9 @@ impl Merge {
                         let _ = Self::group_with_arcs(&high, offset - base_offset, &root_high);
                     }
                 }
-                dbg_throwout += 1; // [DBG] counted as grouped branch
             } else {
                 for (piece, _) in pieces { piece.write().unwrap().clear_proto_partial(); }
             }
-        }
-        eprintln!(
-            "[DBG] GROUP_STAGES fn={} registry={} total={} dedup={} not_piece={} multi_inst={} throw_clear={}",
-            fd.get_name(), fd.merge_state.proto_partial.len(), dbg_total, dbg_dedup, dbg_not_piece, dbg_multi_inst, dbg_throwout
-        );
-        // [DBG] probe: count highs with a piece + group sizes for main
-        {
-            let mut with_piece = 0usize;
-            let mut group_sizes: Vec<(usize, i32, i32)> = Vec::new();
-            for vn_ref in &fd.vbank.loc_tree {
-                let vn = vn_ref.0.clone();
-                let v = vn.read().unwrap();
-                if let Some(h) = v.get_high() {
-                    let h = h.read().unwrap();
-                    if let Some(p) = &h.piece {
-                        with_piece += 1;
-                        let p = p.read().unwrap();
-                        if let Some(g) = &p.group {
-                            let g = g.read().unwrap();
-                            group_sizes.push((g.pieces.len(), g.size, g.symbol_offset));
-                        }
-                    }
-                }
-            }
-            eprintln!("[DBG] GROUP_PARTIALS main={} with_piece={} groups={:?}", fd.get_name(), with_piece, group_sizes);
         }
     }
 

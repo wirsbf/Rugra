@@ -562,30 +562,6 @@ impl DebugPrototypeDatabase {
         let Some(debug_proto) = self.get(entry) else {
             return Ok(None);
         };
-        // [DBG] probe: match_url DWARF proto pieces
-        if debug_proto.name == "match_url" {
-            eprintln!(
-                "[DBG] MATCH_URL_PROTO ret={} params={}",
-                debug_proto.return_type.get_name(),
-                debug_proto.parameters.len()
-            );
-            for (i, p) in debug_proto.parameters.iter().enumerate() {
-                let dt = &p.data_type;
-                let mut layout = String::new();
-                if let crate::type_system::datatype::Datatype::Struct(ts) = &**dt {
-                    layout = ts
-                        .fields
-                        .iter()
-                        .map(|f| format!("{}@{}", f.name, f.offset))
-                        .collect::<Vec<_>>()
-                        .join(",");
-                }
-                eprintln!(
-                    "[DBG]   param{} name={} type={} size={} struct[{}]",
-                    i, p.name, dt.get_name(), dt.get_size(), layout
-                );
-            }
-        }
         self.locked_proto(debug_proto, model_carrier).map(Some)
     }
 

@@ -1,5 +1,12 @@
 # `merge.rs` API Reference
 
+## 2026-09-22：VARGROUP-ABSORB-0001 车道探针剥离（无 API 变更）
+
+剥离车道私有 `[DBG]` 诊断探针（wip 1cd9f682/d3755452 声明的临时探针清单含本文件），
+源码恢复至车道 f7348207 状态（与 merge-base 36f26db3 同树）。探针结论已记录于
+`docs/alignment_docs/VARGROUP_ABSORB_MECHANISM_2026-09-22.md`，无接口/语义变化。
+
+
 ## 2026-09-22：process_copy_trims 遍历序确定性（DETERM-COPYTRIM-0001 / DETERM-DOMINANTCOPY-0001）
 
 AX 16 跑 9:7 双版本实证 + AZ 三函数 drill 同点（universal:dominantcopy

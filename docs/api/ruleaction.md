@@ -1,5 +1,12 @@
 # `ruleaction.rs` API Reference
 
+## 2026-09-22：VARGROUP-ABSORB-0001 车道探针剥离（无 API 变更）
+
+剥离车道私有 `[DBG]` 诊断探针（wip 1cd9f682/d3755452 声明的临时探针清单含本文件），
+源码恢复至车道 f7348207 状态（与 merge-base 36f26db3 同树）。探针结论已记录于
+`docs/alignment_docs/VARGROUP_ABSORB_MECHANISM_2026-09-22.md`，无接口/语义变化。
+
+
 ## 2026-08-28：RuleEarlyRemoval 六守卫与 typed dispatch
 
 `RuleEarlyRemoval::apply_op` 按 `ruleaction.cc:25-44` 顺序执行 call、indirect-source、

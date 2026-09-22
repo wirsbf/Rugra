@@ -5379,23 +5379,6 @@ impl<'a> SplitDatatype<'a> {
         // testCopyConstraints (cc:2370-2384): don't split function inputs,
         // same-address addr-tied pairs, or a LOAD output feeding only this
         // COPY (handled by splitLoad).
-        if in_vn.read().unwrap().get_size() >= 256 {
-            let r = in_vn.read().unwrap();
-            let def_desc = r.get_def().map(|d| {
-                let dr = d.read().unwrap();
-                format!("{:?}@{:x}", dr.opcode, dr.get_addr().as_u64())
-            });
-            eprintln!(
-                "[DBG] SPLITCOPY_BIG in_sz={} in_input={} in_written={} in_addrtied={} in_addr={:?} def={:?} guard={}",
-                r.get_size(),
-                r.is_input(),
-                r.is_written(),
-                r.is_addr_tied(),
-                r.get_addr(),
-                def_desc,
-                self.test_copy_constraints(copy_op, &in_vn, &out_vn)
-            );
-        }
         if !self.test_copy_constraints(copy_op, &in_vn, &out_vn) {
             return Ok(false);
         }

@@ -13722,17 +13722,6 @@ impl Rule for RulePieceStructure {
             Some(o) => o,
             None => return Ok(action_status::NO_CHANGE),
         };
-        // [DBG] probe: why the 30d6 ladder root is not converted
-        if outvn.read().unwrap().get_size() >= 256 {
-            let r = outvn.read().unwrap();
-            eprintln!(
-                "[DBG] PIECESTRUCT_BIG out_sz={} structured={:?} dt={:?} sym_entry={}",
-                r.get_size(),
-                Self::determine_datatype(&outvn).map(|(ct, _)| ct.get_name().to_string()),
-                r.get_type().map(|t| t.get_name().to_string()),
-                r.get_symbol_entry().is_some()
-            );
-        }
         // determineDatatype(outvn).
         let (ct, base_offset) = match Self::determine_datatype(&outvn) {
             Some(x) => x,
