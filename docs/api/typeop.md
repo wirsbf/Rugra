@@ -463,7 +463,13 @@ VOID 拒绝（无 CALL 的 size 检查，:764 vs :707）、this-pointer 同 CALL
 
 ### `pub struct TypeOpMulti`
 
-*暂无代码注释*
+`TypeOpMulti(TypeFactory *t)`（typeop.cc:1947）；`propagate_type` 忠实于
+typeop.cc:1951-1965 `TypeOpMulti::propagateType`：phi 透明（input↔output 单向
+边），spacebase 源重包为 `getTypePointer(alttype->getSize(), unknown1,
+defaultDataSpace->getWordSize())` —— 指针尺寸取 **alttype 尺寸**
+（SB-ORD186-PTRARITH-0001：旧实现经 `propagate_to_pointer(unknown1)` 把指针尺寸
+错取为 unknown1 的 1，且 output→input 方向检查的是目的 input 而非源 output）。
+`printRaw` 对应 typeop.cc:1967。
 
 ### `pub struct TypeOpIndirect`
 
