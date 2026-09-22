@@ -67,9 +67,13 @@
 //!     extension_patch case that calls it is emulated with per-slot
 //!     `op_set_input` + `op_remove_input`.
 //!   - Per-op `FuncCallSpecs` identity lookup now exists through
-//!     `Funcdata::get_call_specs_of_op`, but this identity-only D0 does not wire
-//!     the `try_call_pull` / `try_call_return_push` guard-and-patch consumers.
-//!     They retain the pre-D0 conservative skip under `CALLSPEC-0001`.
+//!     `Funcdata::get_call_specs_of_op`, and the `try_call_pull`
+//!     guard-and-patch consumer is wired 1:1 with subflow.cc:208-228
+//!     (consume guard, getCallSpecs, isInputActive, isInputLocked &&
+//!     !isDotdotdot, parameter_patch + pullcount). The
+//!     `try_call_return_push` consumer still retains the conservative skip
+//!     under `CALLSPEC-0001` (indirect-creation trims are not exercised by
+//!     the current corpora).
 //!   - `PcodeOp::get_halt_type` (`try_return_pull`) is not available; the
 //!     artificial-halt guard is conservatively skipped and logged.
 //!   - `copy_symbol_if_valid` and `Address::is_big_endian` are not threaded
@@ -685,16 +689,18 @@ impl SubvariableFlow {
 
     // Ghidra: subflow.cc:208 SubvariableFlow::tryCallPull
     /// Determine if the given subgraph variable can act as a parameter to the
-    /// given CALL op. Corresponds to `SubvariableFlow::tryCallPull`
-    /// (subflow.cc:208-228), but the callspec consumer is incomplete under
-    /// `CALLSPEC-0001`.
-    ///
-    /// `Funcdata::get_call_specs_of_op` now supplies the exact per-op owner,
-    /// but the input-active/input-locked/varargs consumer and its patch
-    /// projection have not yet received a paired oracle fixture. Under
-    /// `CALLSPEC-0001`, this identity-only D0 retains the conservative false
-    /// result and does not claim the Ghidra transform.
-    fn try_call_pull(&mut self, op: &Arc<RwLock<PcodeOp>>, rvn: usize, slot: i32) -> bool {
+    /// given CALL op. Faithful to `SubvariableFlow::tryCallPull`
+    /// (subflow.cc:208-228): the consume-mask guard, then the exact per-op
+    /// `Funcdata::getCallSpecs` lookup (funcdata.cc:484-497) with the
+    /// input-active / input-locked-non-varargs guards, then the
+    /// `parameter_patch` PatchRecord and pullcount bump.
+    fn try_call_pull(
+        &mut self,
+        fd: &Funcdata,
+        op: &Arc<RwLock<PcodeOp>>,
+        rvn: usize,
+        slot: i32,
+    ) -> bool {
         if slot == 0 {
             return false;
         }
@@ -708,15 +714,37 @@ impl SubvariableFlow {
                 return false;
             }
         }
-        // CALLSPEC-0001: exact per-op lookup is available, but the
-        // input-active/input-locked/varargs guard and ParameterPatch consumer
-        // remain outside this identity-only D0.
-        let _ = op;
-        // Preserve the legacy diagnostic bytes until this UNTESTED branch has
-        // a bilateral fixture. The wording is not the current premise: exact
-        // lookup exists, while the CALLSPEC-0001 consumer remains unwired.
-        eprintln!("[subflow] tryCallPull: per-op FuncCallSpecs lookup unavailable; skipping trim");
-        false
+        // Ghidra: subflow.cc:216-219
+        //   FuncCallSpecs *fc = fd->getCallSpecs(op);
+        //   if (fc == (FuncCallSpecs *)0) return false;
+        //   if (fc->isInputActive()) return false;
+        //   if (fc->isInputLocked() && (!fc->isDotdotdot())) return false;
+        let fc_arc = match fd.get_call_specs_of_op(&PcodeOpRef(op.clone())) {
+            Some(fc) => fc,
+            None => return false,
+        };
+        {
+            let fc = fc_arc.read().unwrap();
+            if fc.is_input_active() {
+                return false; // Don't trim while in the middle of figuring out params
+            }
+            if fc.prototype.is_input_locked() && !fc.prototype.is_varargs() {
+                return false;
+            }
+        }
+        // Ghidra: subflow.cc:221-227
+        //   patchlist.emplace_back(); type=parameter_patch;
+        //   patchOp=op; in1=rvn; slot=slot; pullcount += 1;
+        self.patchlist.push(PatchRecord {
+            patch_type: PatchType::ParameterPatch,
+            patch_op: op.clone(),
+            in1: rvn,
+            in2: None,
+            slot,
+            pull_modification: true,
+        });
+        self.pullcount += 1; // A true terminal modification
+        true
     }
 
     // Ghidra: subflow.cc:238 SubvariableFlow::tryReturnPull
@@ -1437,7 +1465,7 @@ impl SubvariableFlow {
                             i += 1;
                         }
                     }
-                    if !self.try_call_pull(&op_arc, rvn, slot as i32) {
+                    if !self.try_call_pull(fd, &op_arc, rvn, slot as i32) {
                         return false;
                     }
                     hcount += 1;
@@ -1961,7 +1989,7 @@ impl SubvariableFlow {
                             i += 1;
                         }
                     }
-                    if !self.try_call_pull(&op_arc, rvn, slot as i32) {
+                    if !self.try_call_pull(fd, &op_arc, rvn, slot as i32) {
                         return false;
                     }
                     hcount += 1;
