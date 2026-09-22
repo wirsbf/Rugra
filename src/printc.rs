@@ -12643,12 +12643,25 @@ impl PrintC {
     pub fn emit_any_label_statement(
         &mut self, block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
     ) {
+        // printc.cc:3222: if (bl->isLabelBumpUp()) return; // Label printed
+        // by someone else — the f_label_bumpup walk (markLabelBumpUp,
+        // blockaction.cc:2195 call site → block.cc:3316/3426/3454 loop
+        // overrides) flags every loop's front chain, so the label for a goto
+        // into a loop header prints at the enclosing loop construct's entry
+        // call, never at the flagged leaf's own emission point.
+        if block_arc.read().unwrap().get_flags()
+            & crate::block::block_flags::LABEL_BUMPUP
+            != 0
+        {
+            return;
+        }
         // printc.cc:3219-3226 emitAnyLabelStatement:
-        //   if (bl->isLabelBumpUp()) return;   — Rugra transport:
-        //   printed_labels (address-keyed) suppresses re-prints of a shared
-        //   leaf (Rugra duplicates Basics, not BlockCopies).
         //   bl = bl->getFrontLeaf(); if (bl == 0) return;
         //   emitLabelStatement(bl);
+        //   (printed_labels: Rugra's address-keyed transport suppressing
+        //   re-prints of a shared leaf — Rugra duplicates Basics, not
+        //   BlockCopies — layered on top of the oracle's structural
+        //   once-only guarantee.)
         // printc.cc:3198-3214 emitLabelStatement (structured arm):
         //   if (isSet(only_branch)) return;
         //   if (!bl->isUnstructuredTarget()) return;

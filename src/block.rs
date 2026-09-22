@@ -1655,6 +1655,26 @@ pub trait FlowBlock: std::fmt::Debug + Send + Sync {
     // Ghidra: block.hh FlowBlock::markUnstructured
     fn mark_unstructured_trait(&mut self) {}
 
+    /// Ghidra `FlowBlock::markLabelBumpUp` (block.hh:195, virtual; base body
+    /// block.cc:259-264): mark that labels for this block are printed by
+    /// somebody higher in the hierarchy. The base implementation only sets
+    /// `f_label_bumpup` when `bump` is true — no recursion, no clearing.
+    /// Consumers: `PrintC::emitAnyLabelStatement` (printc.cc:3222) returns
+    /// early for flagged blocks. Overriding subtypes (via the inherited
+    /// `BlockGraph::markLabelBumpUp` semantics, block.cc:1258-1268): every
+    /// composite recurses — first subblock receives `bump` unchanged, all
+    /// others receive `false`; WhileDo/DoWhile/InfLoop (block.cc:3316/3426/
+    /// 3454) force `true` down the front chain, then clear their own flag
+    /// when the incoming `bump` was false. Rugra's composite structs override
+    /// this trait method; leaves (BlockBasic/BlockCopy) keep this default.
+    // Ghidra: block.hh:195 FlowBlock::markLabelBumpUp
+    fn mark_label_bump_up_trait(&mut self, bump: bool) {
+        // cc:262-263: if (bump) flags |= f_label_bumpup;
+        if bump {
+            self.set_flags(block_flags::LABEL_BUMPUP);
+        }
+    }
+
     /// Ghidra `FlowBlock::getExitLeaf` (block.hh, virtual): the leaf block
     /// that flow exits through, if there is a single one. Default: null.
     /// BlockList/BlockIf override (block.cc:2953, 3111).
@@ -3797,6 +3817,33 @@ impl BlockGraph {
         }
     }
 
+    /// Ghidra `BlockGraph::markLabelBumpUp` (block.cc:1258-1268): mark self
+    /// via the base `FlowBlock::markLabelBumpUp(bump)` (flag set only when
+    /// `bump`), then recurse — the FIRST subblock receives `bump` unchanged,
+    /// every other subblock receives `false` (virtual dispatch: loops force
+    /// `true` down their own front chain regardless). Entry point invoked by
+    /// `ActionFinalStructure::apply` (blockaction.cc:2195:
+    /// `graph.markLabelBumpUp(false)`).
+    // Ghidra: block.cc:1258 BlockGraph::markLabelBumpUp
+    pub fn mark_label_bump_up(&mut self, bump: bool) {
+        // cc:1261: FlowBlock::markLabelBumpUp(bump); // Mark ourselves if true
+        if bump {
+            self.flags |= block_flags::LABEL_BUMPUP;
+        }
+        // cc:1262: if (list.empty()) return;
+        if self.blocks.is_empty() {
+            return;
+        }
+        // cc:1263-1264: (*iter)->markLabelBumpUp(bump); // Only pass true
+        // down to first subblock
+        self.blocks[0].write().unwrap().mark_label_bump_up_trait(bump);
+        // cc:1265-1267: ++iter; for(;iter!=list.end();++iter)
+        //   (*iter)->markLabelBumpUp(false);
+        for blk in self.blocks.iter().skip(1) {
+            blk.write().unwrap().mark_label_bump_up_trait(false);
+        }
+    }
+
     /// Ghidra `BlockGraph::finalizePrinting` (block.cc:1364-1371): recurse
     /// `finalizePrinting(data)` into every child of the list. This is the
     /// entry point invoked by `ActionFinalStructure::apply`
@@ -5705,6 +5752,22 @@ impl FlowBlock for BlockGoto {
     fn mark_unstructured_trait(&mut self) {
         self.mark_unstructured_target();
     }
+    // Ghidra: block.cc:1258 BlockGraph::markLabelBumpUp — inherited by
+    // BlockGoto (block.hh:547, no override): mark self via the base method
+    // (flag only if `bump`), then recurse — the single list[0] component
+    // (`wrapped`) receives `bump`; there are no further subblocks. The
+    // `gototarget` is not a list member and is never recursed into
+    // (block.hh:548 stores it outside the graph list).
+    fn mark_label_bump_up_trait(&mut self, bump: bool) {
+        // cc:1261: FlowBlock::markLabelBumpUp(bump); // Mark ourselves if true
+        if bump {
+            self.flags |= block_flags::LABEL_BUMPUP;
+        }
+        // cc:1262-1264: first (and only) subblock receives bump.
+        if let Some(w) = &self.wrapped {
+            w.write().unwrap().mark_label_bump_up_trait(bump);
+        }
+    }
 }
 
 // RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockGoto virtual overrides)
@@ -6003,6 +6066,21 @@ impl FlowBlock for BlockMultiGoto {
             w.write().unwrap().mark_unstructured_trait();
         }
     }
+    // Ghidra: block.cc:1258 BlockGraph::markLabelBumpUp — inherited by
+    // BlockMultiGoto (block.hh:573, no override): mark self via the base
+    // method (flag only if `bump`), then the single list[0] component
+    // (`wrapped`) receives `bump`. The `gotoedges` targets are not list
+    // members (block.hh:580 addEdge pushes to a separate vector).
+    fn mark_label_bump_up_trait(&mut self, bump: bool) {
+        // cc:1261: FlowBlock::markLabelBumpUp(bump); // Mark ourselves if true
+        if bump {
+            self.flags |= block_flags::LABEL_BUMPUP;
+        }
+        // cc:1262-1264: first (and only) subblock receives bump.
+        if let Some(w) = &self.wrapped {
+            w.write().unwrap().mark_label_bump_up_trait(bump);
+        }
+    }
 }
 
 // RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as
@@ -6221,6 +6299,30 @@ impl FlowBlock for BlockIf {
         }
         // cc:3026-3027: mark the if-goto target.
         self.mark_unstructured_target();
+    }
+    // Ghidra: block.cc:1258 BlockGraph::markLabelBumpUp — inherited by
+    // BlockIf (block.hh:658, no override). The subblock list order is
+    // [condition, if-body, (else-body)] (newBlockIf/newBlockIfElse,
+    // block.cc:1822-1852), so the condition receives `bump` unchanged and
+    // the bodies receive `false`; self is flagged only when `bump` is true.
+    fn mark_label_bump_up_trait(&mut self, bump: bool) {
+        // cc:1261: FlowBlock::markLabelBumpUp(bump); // Mark ourselves if true
+        if bump {
+            self.flags |= block_flags::LABEL_BUMPUP;
+        }
+        // cc:1263-1264: list[0] (condition) receives bump.
+        self.condition
+            .write()
+            .unwrap()
+            .mark_label_bump_up_trait(bump);
+        // cc:1266-1267: remaining subblocks (if-body, else-body) get false.
+        self.if_body
+            .write()
+            .unwrap()
+            .mark_label_bump_up_trait(false);
+        if let Some(else_b) = &self.else_body {
+            else_b.write().unwrap().mark_label_bump_up_trait(false);
+        }
     }
 }
 
@@ -6503,6 +6605,12 @@ impl FlowBlock for BlockWhileDo {
         self.condition.write().unwrap().mark_unstructured_trait();
         self.body.write().unwrap().mark_unstructured_trait();
     }
+    // Ghidra: block.cc:3316 BlockWhileDo::markLabelBumpUp — delegate to the
+    // inherent helper holding the faithful port (forces true down the front
+    // chain, then clears own flag when the incoming bump was false).
+    fn mark_label_bump_up_trait(&mut self, bump: bool) {
+        self.mark_label_bump_up(bump);
+    }
 }
 
 // RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockWhileDo virtual overrides)
@@ -6543,26 +6651,27 @@ impl BlockWhileDo {
     }
 
     /// Ghidra `BlockWhileDo::markLabelBumpUp` (block.cc:3316-3322): while-do
-    /// loops "steal" their lower blocks' labels — the loop header label is
-    /// bumped up so it prints at the loop entry, not inside. The C++ first
-    /// recurses via `BlockGraph::markLabelBumpUp(true)`, then clears the flag
-    /// on itself if `bump` is false. Rugra recurses into condition/body and
-    /// manages the `f_label_bumpup` flag on this block.
+    /// loops "steal" their lower blocks' labels — the recursion forces `true`
+    /// down the front (condition) chain so the loop header prints the label,
+    /// not the condition leaf itself. The C++ first recurses via
+    /// `BlockGraph::markLabelBumpUp(true)` (self flagged, list[0]=condition
+    /// receives `true`, list[1]=body receives `false`), then clears the flag
+    /// on itself if the incoming `bump` is false.
     // Ghidra: block.cc:3316 BlockWhileDo::markLabelBumpUp
     pub fn mark_label_bump_up(&mut self, bump: bool) {
-        // cc:3319: BlockGraph::markLabelBumpUp(true);  -- recurse into children
+        // cc:3319: BlockGraph::markLabelBumpUp(true); — mark self, then
+        // condition (list[0]) with true, body (list[1]) with false.
+        self.flags |= block_flags::LABEL_BUMPUP;
         self.condition
             .write()
             .unwrap()
-            .set_flags(block_flags::LABEL_BUMPUP);
+            .mark_label_bump_up_trait(true);
         self.body
             .write()
             .unwrap()
-            .set_flags(block_flags::LABEL_BUMPUP);
+            .mark_label_bump_up_trait(false);
         // cc:3320-3321: if (!bump) clearFlag(f_label_bumpup);
-        if bump {
-            self.flags |= block_flags::LABEL_BUMPUP;
-        } else {
+        if !bump {
             self.flags &= !block_flags::LABEL_BUMPUP;
         }
     }
@@ -6708,27 +6817,33 @@ impl FlowBlock for BlockDoWhile {
     fn mark_unstructured_trait(&mut self) {
         self.condition.write().unwrap().mark_unstructured_trait();
     }
+    // Ghidra: block.cc:3426 BlockDoWhile::markLabelBumpUp — delegate to the
+    // inherent helper holding the faithful port (forces true down the front
+    // chain, then clears own flag when the incoming bump was false).
+    fn mark_label_bump_up_trait(&mut self, bump: bool) {
+        self.mark_label_bump_up(bump);
+    }
 }
 
 // RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockDoWhile virtual overrides)
 impl BlockDoWhile {
     /// Ghidra `BlockDoWhile::markLabelBumpUp` (block.cc:3426-3432): do-while
-    /// loops "steal" their lower blocks' labels — the loop exit label is
-    /// bumped up so it prints at the loop header, not the trailing goto. The
-    /// C++ first recurses via `BlockGraph::markLabelBumpUp(true)`, then clears
-    /// the flag on itself if `bump` is false. Rugra recurses into the condition
-    /// (which holds the fused body) and manages the `f_label_bumpup` flag.
+    /// loops "steal" their lower blocks' labels — the label for the body
+    /// entry prints at the `do {` construct position, not inside the body.
+    /// The C++ first recurses via `BlockGraph::markLabelBumpUp(true)` (self
+    /// flagged, list[0]=fused body+condition receives `true`), then clears
+    /// the flag on itself if `bump` is false.
     // Ghidra: block.cc:3426 BlockDoWhile::markLabelBumpUp
     pub fn mark_label_bump_up(&mut self, bump: bool) {
-        // cc:3429: BlockGraph::markLabelBumpUp(true);  -- recurse into children
+        // cc:3429: BlockGraph::markLabelBumpUp(true); — mark self, then the
+        // single list[0] child (the fused body+condition) with true.
+        self.flags |= block_flags::LABEL_BUMPUP;
         self.condition
             .write()
             .unwrap()
-            .set_flags(block_flags::LABEL_BUMPUP);
+            .mark_label_bump_up_trait(true);
         // cc:3430-3431: if (!bump) clearFlag(f_label_bumpup);
-        if bump {
-            self.flags |= block_flags::LABEL_BUMPUP;
-        } else {
+        if !bump {
             self.flags &= !block_flags::LABEL_BUMPUP;
         }
     }
@@ -6864,27 +6979,33 @@ impl FlowBlock for BlockInfLoop {
     fn mark_unstructured_trait(&mut self) {
         self.body.write().unwrap().mark_unstructured_trait();
     }
+    // Ghidra: block.cc:3454 BlockInfLoop::markLabelBumpUp — delegate to the
+    // inherent helper holding the faithful port (forces true down the front
+    // chain, then clears own flag when the incoming bump was false).
+    fn mark_label_bump_up_trait(&mut self, bump: bool) {
+        self.mark_label_bump_up(bump);
+    }
 }
 
 // RUGRA-GLUE: Rust inherent-impl block (Ghidra inlines these as BlockInfLoop virtual overrides)
 impl BlockInfLoop {
     /// Ghidra `BlockInfLoop::markLabelBumpUp` (block.cc:3454-3460): infinite
-    /// loops "steal" their lower blocks' labels — the loop entry label is
-    /// bumped up so it prints at the loop header. The C++ first recurses via
-    /// `BlockGraph::markLabelBumpUp(true)`, then clears the flag on itself if
-    /// `bump` is false. Rugra recurses into the body and manages the
-    /// `f_label_bumpup` flag.
+    /// loops "steal" their lower blocks' labels — the label for the body
+    /// entry prints at the `do { ... } while(true)` construct position, not
+    /// inside the body. The C++ first recurses via
+    /// `BlockGraph::markLabelBumpUp(true)` (self flagged, list[0]=body
+    /// receives `true`), then clears the flag on itself if `bump` is false.
     // Ghidra: block.cc:3454 BlockInfLoop::markLabelBumpUp
     pub fn mark_label_bump_up(&mut self, bump: bool) {
-        // cc:3457: BlockGraph::markLabelBumpUp(true);  -- recurse into children
+        // cc:3457: BlockGraph::markLabelBumpUp(true); — mark self, then the
+        // single list[0] child (the body) with true.
+        self.flags |= block_flags::LABEL_BUMPUP;
         self.body
             .write()
             .unwrap()
-            .set_flags(block_flags::LABEL_BUMPUP);
+            .mark_label_bump_up_trait(true);
         // cc:3458-3459: if (!bump) clearFlag(f_label_bumpup);
-        if bump {
-            self.flags |= block_flags::LABEL_BUMPUP;
-        } else {
+        if !bump {
             self.flags &= !block_flags::LABEL_BUMPUP;
         }
     }
@@ -7145,6 +7266,28 @@ impl FlowBlock for BlockList {
             child.write().unwrap().mark_unstructured_trait();
         }
     }
+    // Ghidra: block.cc:1258 BlockGraph::markLabelBumpUp — inherited by
+    // BlockList (block.hh:600, no override): mark self via the base method
+    // (flag only if `bump`), then children[0] receives `bump` unchanged and
+    // every later child receives `false`.
+    fn mark_label_bump_up_trait(&mut self, bump: bool) {
+        // cc:1261: FlowBlock::markLabelBumpUp(bump); // Mark ourselves if true
+        if bump {
+            self.flags |= block_flags::LABEL_BUMPUP;
+        }
+        // cc:1262: if (list.empty()) return;
+        let mut iter = self.children.iter();
+        // cc:1264: (*iter)->markLabelBumpUp(bump); // Only pass true down to
+        // first subblock
+        if let Some(first) = iter.next() {
+            first.write().unwrap().mark_label_bump_up_trait(bump);
+        }
+        // cc:1266-1267: for(;iter!=list.end();++iter)
+        //   (*iter)->markLabelBumpUp(false);
+        for child in iter {
+            child.write().unwrap().mark_label_bump_up_trait(false);
+        }
+    }
 }
 
 /// Boolean operator type for `BlockCondition`.
@@ -7302,6 +7445,26 @@ impl FlowBlock for BlockCondition {
     fn mark_unstructured_trait(&mut self) {
         self.first.write().unwrap().mark_unstructured_trait();
         self.second.write().unwrap().mark_unstructured_trait();
+    }
+    // Ghidra: block.cc:1258 BlockGraph::markLabelBumpUp — inherited by
+    // BlockCondition (block.hh:621, no override): mark self via the base
+    // method (flag only if `bump`), then list[0] (`first`) receives `bump`
+    // unchanged and list[1] (`second`) receives `false`.
+    fn mark_label_bump_up_trait(&mut self, bump: bool) {
+        // cc:1261: FlowBlock::markLabelBumpUp(bump); // Mark ourselves if true
+        if bump {
+            self.flags |= block_flags::LABEL_BUMPUP;
+        }
+        // cc:1263-1264: first subblock receives bump.
+        self.first
+            .write()
+            .unwrap()
+            .mark_label_bump_up_trait(bump);
+        // cc:1266-1267: remaining subblock(s) receive false.
+        self.second
+            .write()
+            .unwrap()
+            .mark_label_bump_up_trait(false);
     }
 }
 
@@ -7598,6 +7761,29 @@ impl FlowBlock for BlockSwitch {
             case.write().unwrap().mark_unstructured_trait();
         }
         self.mark_unstructured_targets();
+    }
+    // Ghidra: block.cc:1258 BlockGraph::markLabelBumpUp — inherited by
+    // BlockSwitch (block.hh:752, no override): mark self via the base method
+    // (flag only if `bump`), then recurse — list[0] is the switch component
+    // itself (getSwitchBlock, block.hh:767), all case components
+    // (cs[1..], grabCaseBasic block.cc:3524-3534) receive `false`.
+    fn mark_label_bump_up_trait(&mut self, bump: bool) {
+        // cc:1261: FlowBlock::markLabelBumpUp(bump); // Mark ourselves if true
+        if bump {
+            self.flags |= block_flags::LABEL_BUMPUP;
+        }
+        // cc:1263-1264: list[0] (switch component) receives bump.
+        self.control
+            .write()
+            .unwrap()
+            .mark_label_bump_up_trait(bump);
+        // cc:1266-1267: remaining subblocks (all case components) get false.
+        for case in &self.cases {
+            case.write().unwrap().mark_label_bump_up_trait(false);
+        }
+        if let Some(default) = &self.default_case {
+            default.write().unwrap().mark_label_bump_up_trait(false);
+        }
     }
 }
 
