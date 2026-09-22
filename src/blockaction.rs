@@ -6216,6 +6216,7 @@ impl<'a> CollapseStructure<'a> {
         // resolution, both running "before the identifyInternal" like the
         // oracle.
         let (jump, case_order) = self.grab_case_order(&block, &cases, branchind_addr);
+        let num_regular_cases = cases.len();
         // Ghidra newBlockSwitch (block.cc:1904-1919): identifyInternal(ret, cs)
         // consumes the dispatch block AND the case blocks into the component
         // (cs[0] is the switch block itself), forceOutputNum(1) when there is
@@ -6229,7 +6230,10 @@ impl<'a> CollapseStructure<'a> {
                 control: block.clone(),
                 cases,
                 default_case: None,
-                case_gototypes: Vec::new(),
+                // cc:3510-3511 addCase: every regular case carries gototype 0
+                // (only the multigoto arm appends f_goto_goto, cc:3552) — the
+                // parallel array must be cases-length from construction.
+                case_gototypes: vec![0; num_regular_cases],
                 default_gototype: 0,
                 jump,
                 case_order,
@@ -7230,6 +7234,7 @@ impl<'a> CollapseStructure<'a> {
             // block.cc:3524 grabCaseBasic CaseOrder recording + block.cc:3488
             // ctor jumptable resolution for this installer path too.
             let (jump, case_order) = self.grab_case_order(&block, &cases, branchind_addr);
+            let num_cases_here = cases.len();
 
             let switch_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
                 Arc::new(RwLock::new(BlockSwitch {
@@ -7237,7 +7242,8 @@ impl<'a> CollapseStructure<'a> {
                     control: block.clone(),
                     cases,
                     default_case: None,
-                    case_gototypes: Vec::new(),
+                    // cc:3510-3511 addCase: regular cases carry gototype 0.
+                    case_gototypes: vec![0; num_cases_here],
                     default_gototype: 0,
                     jump,
                     case_order,

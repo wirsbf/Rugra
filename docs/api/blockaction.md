@@ -1287,3 +1287,13 @@ refresh_switch_cases 重建点）补 `jump: None, case_order: Vec::new()` 占位
 - `ActionFinalStructure::apply` 在 scopeBreak 之前补
   `fd.sblocks.finalize_printing()`（blockaction.cc:2192 调用点；cc:2191
   orderBlocks 未移植，已登记缺口——顶层 list 顺序仍为 collapse 安装序）。
+
+## 2026-09-22（续 2）：case_gototypes 平行数组修复（glob_set panic）
+
+E2E 发现 glob_set worker panic：finalize_case_labels 按 case_order 索引
+`case_gototypes[i]`，但非 multigoto 安装路径（try_rule_switch 常规、
+collapse_switches）历史上把 case_gototypes 留成空 Vec（printc 用
+`.get().unwrap_or(0)` 容忍）。Ghidra addCase 对常规 case 恒置 gototype=0
+（cc:3510-3511，仅 multigoto 臂附 f_goto_goto，cc:3552），两构造点改为
+`vec![0; cases.len()]` 初始化。修复后 curl E2E 124/124、PANICKED=0、
+defects=numbering=0。
