@@ -1,0 +1,135 @@
+{
+ "schema_version": 2,
+ "fixture_id": "MINIMALMASK-LADDER-CONSUMERS-0001",
+ "oracle": {
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "tag": "Ghidra_12.0.4_build",
+  "decompiler_cpp_tree": "b02e230a539c65de14e50f357d0ba834d8184f4f",
+  "decompiler_makefile_blob": "ca0719fa5f17aabd14c52f40ed8b030f54d2aac6",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{address.hh:519-535,coreaction.cc:3556-3568,3840-3892,3925-3964,jumptable.cc:1546-1553,2574-2591,fspec.cc:3891-3964,varnode.cc:572-607}"
+ },
+ "rugra_source": {
+  "base_commit": "a33761225c5bfd90b0206d3363ca52867c99faea",
+  "base_tree": "113127fcea2bdbdb10dd23417697edfb9ebca806",
+  "base_src_tree": "e4cc3db3f5bc221fc86bd01200d22191e981c92b",
+  "base_sleigh_shim_tree": "c7729d9d1554dc62c486bcd7d58fdbf44bebb97d",
+  "cargo_toml_blob": "775553773f9e5ad0cbac50264bd6e7497dbf0ac4",
+  "cargo_lock_blob": "9736a3c5619f7fd188abd9609d0dccd20ef06607",
+  "build_rs_blob": "a0c81c8521547efebbb463a640ecec69d83ed4c5",
+  "archive_paths": [
+   "Cargo.toml",
+   "Cargo.lock",
+   "build.rs",
+   "README.md",
+   "benches/decompile_bench.rs",
+   "tests/oracle/decompress_1204.rs",
+   "tests/oracle/funcproto_lock_1204.rs",
+   "src",
+   "sleigh_shim"
+  ],
+  "overlays": {
+   "src/address.rs": "1cb031806268cdb6610872c2923b77757902a31798fdb36f7947c0965a2b7af4",
+   "src/coreaction.rs": "be306f8d8f4f5695a157bf9829da46746b8e471fee4527fe35fe7a18497a93a6",
+   "src/jumptable.rs": "3adb90079457cee025b36dcc3bfdc68615192f13198e88768c99a6e97a1724ca",
+   "src/varnode.rs": "427b4f978ecbd9992b22f7d80d19488f30834f3b8aa7f4b58017bb847d0b17bb",
+   "src/funcdata.rs": "6e3aea71c47e4f9888496b1ca050c1afc60cf3164b2395ec0d5066064a79eca5",
+   "src/fspec.rs": "bed9dcc15df461634a1575c906b493eda8e0ef35ebb46ea2592babe882a8baad"
+  }
+ },
+ "architecture": "synthetic FixtureArchitecture/FixtureTranslate (action_break_pool_1204 skeleton): constant/other/unique/ram/register/stack/join/iop spaces, TypeOp::registerInstructions, ScopeInternal global scope, fixture ProtoModel; Funcdata 'minimalmask' @ram:0x1000",
+ "compiler_spec": "not applicable: no loader, no language, no locked prototype model (fixture <prototype name=fixture extrapop=0>); FuncCallSpecs get ActionDefaultParams' setInternal(defaultfp,void) seam (coreaction.cc:2332) so numParams is backed, exactly the production base-group step before deadcode",
+ "analysis_options": "direct production-function calls, no ActionPipeline: minimalmask (address.hh inline), ActionDeadCode::markConsumedParameters/gatherConsumedReturn (private statics reached via #define private public on the oracle side / pub-visibility snapshot transform on the Rugra side), JumpTable::foldInNormalization with hand-built JumpBasic switchvn; per-case consume reset mirroring ActionDeadCode::apply cc:3939-3946 (Varnodes are born consume=~0); RETURN/BRANCHIND ops inserted into a BlockBasic (bank-born ops are dead until inserted); NZMask seeding is prestate: constants carry their value natively (varnode.cc:597), the two written switch variables get nzm assigned directly (consumers only read getNZMask); ladder inputs 0/0xff/0x100/0x7ff/0xffff/0x10000/0xffffffff/0x100000000",
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "ladder: minimalmask over 12 boundary values 0/1/0xff/0x100/0x7ff/0xffff/0x10000/0x7fffffff/0xffffffff/0x100000000/0x7fffffffffffffff/~0 — the strict-> whole-byte ladder (0xff->0xff, 0xffff->0xffff, 0xffffffff->0xffffffff: equal values stay at their own rung; 0x100000000->~0)",
+   "callparams_nominal: CALL [target,p1..p7] with per-ladder constants + one written COPY output; markConsumedParameters pushes consume = minimalmask(nzm) & calc_mask(size) per param, ~0 on in(0); only the written p7 enters the worklist (pushConsumed lists written varnodes only); p2 (nzm=0xff, size2) documents the strict boundary: consume 0xff, NOT 0xffff",
+   "callparams_bytesgate: setInputBytesConsumed AND-gates the ladder result (q1 bytes=1 -> 0xff; q2 bytes=2 -> 0xffff; q3 no hint -> ladder 0xff; q4 bytes=8 caps at the ladder 0xffffffff, never widening)",
+   "callparams_autolive: setAutoLiveHold param bypasses the ladder entirely (full calc_mask)",
+   "callparams_inputlock: locked prototype returns full-consume for every param regardless of ladder values",
+   "returns_basic: gatherConsumedReturn OR-accumulates minimalmask over live RETURN in(1)s (0xffff | 0xffffffff = 0xffffffff); numInput()==1 RETURN and an opDestroy'd dead RETURN contribute nothing",
+   "returns_bytes: setReturnBytesConsumed AND-gate, smallest-hint-wins (2 -> 0xffff, then 1 -> 0xff)",
+   "returns_outputlock: setOutputLock(true) early-returns ~0 without scanning",
+   "foldin_gate_forms: five JumpTable::foldInNormalization shapes — unwritten 1-byte switchvar (minimalmask >= calc_mask(1) is ALWAYS true: gate=1, consume 0xff, no written def so no truncation); 4-byte SEXT-seeded nzm=0xffffffff (gate=1, truncated to calc_mask(SEXT in)=0xff); 4-byte COPY-seeded same nzm (gate=1 but def is not SEXT: stays 0xffffffff); 8-byte SEXT-seeded nzm=0xffffffff (ladder cannot cover 8 bytes: gate=0, no truncation); 2-byte SEXT-seeded nzm=0x100 (exact-equal boundary 0xffff==calc_mask(2): gate=1, truncated to 0xff). All five also assert JumpBasic's BRANCHIND in(0) rewrite to the switchvn"
+  ],
+  "sha256": "1c2f3c07208cf2715990426656d8ffa006c7d72143aca3790c577866f5f968b3"
+ },
+ "comparand": {
+  "cpp_fixture_sha256": "3b432456e69d25e299dc05db4a474f051e6d5bcd2092bc953003f2df0cc45194",
+  "rust_fixture_sha256": "0b054dc58e5485a5d8c513df1662a45e55da138471524ee0f4d850accaa92810",
+  "address_overlay_sha256": "1cb031806268cdb6610872c2923b77757902a31798fdb36f7947c0965a2b7af4",
+  "coreaction_overlay_sha256": "be306f8d8f4f5695a157bf9829da46746b8e471fee4527fe35fe7a18497a93a6",
+  "jumptable_overlay_sha256": "3adb90079457cee025b36dcc3bfdc68615192f13198e88768c99a6e97a1724ca",
+  "varnode_overlay_sha256": "427b4f978ecbd9992b22f7d80d19488f30834f3b8aa7f4b58017bb847d0b17bb",
+  "funcdata_overlay_sha256": "6e3aea71c47e4f9888496b1ca050c1afc60cf3164b2395ec0d5066064a79eca5",
+  "fspec_overlay_sha256": "bed9dcc15df461634a1575c906b493eda8e0ef35ebb46ea2592babe882a8baad",
+  "runner_sha256": "1cc54ed6e46c73f39fa1adc9a14c91568bc49c405ed98149177c1926c55dd06e",
+  "rust_visibility_transform_sha256": "0589ee71b3030f8fda2560e651b23ab07b0655ec7d3c35bddc42fe8749b9e90c"
+ },
+ "expected_results": {
+  "ghidra_stdout_sha256": "b11e16783fce2a9e7e55c790a046bd276f1117fb187157f9086f59ea90fa2c88",
+  "ghidra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "rugra_stdout_sha256": "b11e16783fce2a9e7e55c790a046bd276f1117fb187157f9086f59ea90fa2c88",
+  "rugra_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ghidra_exit_code": 0,
+  "rugra_exit_code": 0,
+  "stdout_cmp_exit_code": 0,
+  "stderr_cmp_exit_code": 0
+ },
+ "decisive_semantics": {
+  "reference_output_parameters": "markConsumedParameters(fc,worklist) mutates the varnodes' consume fields through pushConsumed OR-accumulation clipped by calc_mask(size); gatherConsumedReturn returns the OR-accumulated mask; foldInNormalization writes jt->switchVarConsume and rewrites indirect in(0)",
+  "loop_bounds_traversal_order": "call param slots 1..numInput-1 (cc:3850); RETURN iteration over the obank returnlist in creation order with dead/numInput guards (cc:3879-3886); consume reset walks fd.beginLoc() (cc:3939-3946)",
+  "counter_accumulator_lifecycle": "consumeVal per param (reset each slot, AND-masked by inputConsume); consumeVal |= per RETURN (accumulated across ops, AND-masked once at the end by returnBytesConsumed); worklist membership only for written varnodes",
+  "sorting_comparison_keys": "minimalmask ladder thresholds are strict > comparisons at 0xff/0xffff/0xffffffff (equal values stay at their own rung); the SEXT gate is >= calc_mask(size); setReturn/setInputBytesConsumed keep the smallest hint"
+ },
+ "coverage": {
+  "ladder": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "callparams_nominal": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "callparams_bytesgate": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "callparams_autolive": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "callparams_inputlock": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "returns_basic": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "returns_bytes": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "returns_outputlock": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  },
+  "foldin_gate_forms": {
+   "status": "MATCH",
+   "residual_todo_ids": []
+  }
+ },
+ "residual_todo_ids": [],
+ "overall_status": "MATCH",
+ "stable_function_id": "GH12-F-minimalmask-ladder-consumers-0001",
+ "stable_function_closure": [
+  "ghidra::minimalmask address.hh:525",
+  "ghidra::ActionDeadCode::markConsumedParameters coreaction.cc:3840",
+  "ghidra::ActionDeadCode::gatherConsumedReturn coreaction.cc:3871",
+  "ghidra::ActionDeadCode::pushConsumed coreaction.cc:3556",
+  "ghidra::JumpTable::foldInNormalization jumptable.cc:2574",
+  "ghidra::JumpBasic::foldInNormalization jumptable.cc:1546"
+ ],
+ "known_divergences": []
+}
