@@ -1964,3 +1964,23 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
 | `FSPEC-PHASE0-RESIDUAL-0001` | P1 | ①trial 绝对 slot 基数（Ghidra 1 基 cc:4062 vs Rust 0 基，修复需同步 funcdata/coreaction 消费方）②无空间查询的理论假命中③稳定排序 vs introsort 等值序④justified_contain_range 端序（审计漏报） | `src/{fspec,funcdata,coreaction}.rs` | 分域 |
 | `CONDEXE-CONSTBASE-FLIP-0001` | P2 | trueout 跨域发现：coreaction.rs:8409 隐含布尔常量 flip_edge=true 时按 flip 换目标块，oracle 固定 out[0] 得 (flip?1:0)（coreaction.cc:4539-4540），块选择相反 | `src/coreaction.rs` | actionlane 租约释放 |
 | `CONDEXE-TRUEOUT-RESIDUAL-0001` | P1 | execute/doReplacement/removeFromFlowSplit（依赖 CFG-0001）、heritage 门控（0004）、pullback（0005）、错误通道（0006）、RuleOrPredicate 端到端（0007） | `src/condexe.rs` 等 | 分项 |
+
+> **SWITCH-BRIDGE-DUP-0001 修复(2026-09-22,Lane BX `wt/sb-bridge`,owner=fixer)**:
+> 根因定位(发射层,backtrace+树 dump 实证):终树仅一个 Switch(gp 拓扑
+> `InfLoop body → If → condition List 末位=Switch`,dispatcher 在 new_block_switch 清
+> f_switch_out 后被 cat/proper_if 卷入条件位)。`emit_structured_if` 按 oracle
+> emitBlockIf(printc.cc:2894-2913)对条件双访问:NO_BRANCH 一访=完整 switch(文本
+> switch#1);ONLY_BRANCH 二访应只打分支表达式,但 `emit_structured_switch` 无视
+> 修饰符整只重放→48 空 case 桥+孤立 `if`+`} {` 孤儿块(~121 行非法 C)。
+> 修复:printc.rs `emit_structured_switch` 入口 ONLY_BRANCH 早退,走 opBranchind
+> 表达式通道(printc.cc:582-591,头文本逐字节一致);头表达式解析提取为
+> `emit_switch_head_expr`(共享渲染)。**验证**:gp 730→645 行、case 96→48、
+> 桥+孤儿块消除;curl 全量(本仓基线 3751)→ **3653/defects=0/numbering=0**
+> (−98);gp --func 978→**880/0/0**;printc 单测 12/12;gcc 审计 81/26 前后持平
+> (gp 均不在 FAIL 列)。**httpd 门禁 SKIP**:master HEAD 起
+> examples/httpd_decompile.rs 在 dff36e78 提交中截断(`worker_memory_image_bytes`
+> 缺闭括号,rustc unclosed delimiter@71)——既有损坏,该文件属 BP/constbase lane
+> write-set,本 lane 不碰;**新登记 `HTTPD-EXAMPLE-SYNTAX-0001`(P0,BP lane)**。
+> **残留(拓扑域)**:条件槽 `if switch(iVar31) {`(1 行非法 C)、双 default-check
+> (If body 侧)、case 0x4e goto 改道——待 guard-folding/BO lane 消条件位 If;
+> SWITCH-CASE-TAIL-0001(0x23/0x35)未动,证据见 GP978_TRIAGE.md §3(a)。

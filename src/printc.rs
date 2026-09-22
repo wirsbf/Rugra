@@ -4923,6 +4923,94 @@ impl PrintC {
         self.pop_mod();
         self.emit.close_paren(")", outer);
     }
+    // RUGRA-GLUE: emit_switch_head_expr — verbatim extraction of the switch
+    // index-expression resolution that emit_structured_switch's header
+    // previously carried inline (index_varnode → inline_candidates/value_def_map
+    // COPY chase → BRANCHIND in0 → CBRANCH-compare fallback). Pure refactor of
+    // the printc.cc:588 `pushVn(op->getIn(0),op,mods); recurse();` head
+    // channel so the ONLY_BRANCH expression path (opBranchind,
+    // printc.cc:582-591) and the full emitBlockSwitch header
+    // (printc.cc:3325-3327) render the identical expression text.
+    fn emit_switch_head_expr(&mut self, switch_data: &crate::block::BlockSwitch) {
+        if let Some(ref idx_vn_arc) = switch_data.index_varnode {
+            let idx_vn = idx_vn_arc.read().unwrap();
+            let key = (idx_vn.get_space(), idx_vn.get_offset());
+            drop(idx_vn);
+            // If this varnode is in inline_candidates, emit its defining expression
+            // instead of the inlined-away name (which would be empty)
+            if let Some(def_op_arc) = self
+                .inline_candidates
+                .get(&key)
+                .cloned()
+                .or_else(|| self.value_def_map.get(&key).cloned())
+            {
+                // Chase through COPY to the real expression
+                let def_op = def_op_arc.read().unwrap();
+                if def_op.opcode == OpCode::CPUI_COPY && !def_op.inrefs.is_empty() {
+                    // COPY from something — push the source
+                    let src = def_op.inrefs[0].clone();
+                    drop(def_op);
+                    self.push_varnode(&src.read().unwrap(), None);
+                } else {
+                    // Non-trivial expression — inline it
+                    let seq = *def_op.get_seq_num();
+                    drop(def_op);
+                    self.inlined_ops.insert(seq);
+                    let def_op2 = def_op_arc.read().unwrap();
+                    self.emit_inline_expr(&def_op2);
+                }
+            } else {
+                // Not in inline_candidates — emit normally
+                let idx_vn = idx_vn_arc.read().unwrap();
+                self.push_varnode(&idx_vn, None);
+            }
+        } else {
+            // Fallback 1: search for BRANCHIND's input
+            let mut found_var = false;
+            {
+                let ctrl = switch_data.control.read().unwrap();
+                let ops = ctrl.get_ops();
+                if let Some(last_op_ref) = ops.last() {
+                    let last_op = last_op_ref.0.read().unwrap();
+                    if last_op.opcode == OpCode::CPUI_BRANCHIND && !last_op.inrefs.is_empty() {
+                        self.push_varnode(&last_op.inrefs[0].read().unwrap(), Some(&last_op));
+                        found_var = true;
+                    }
+                }
+                // Fallback 2: for CBRANCH cascade, find the compared non-const operand
+                if !found_var {
+                    for op_ref in ops.iter().rev() {
+                        let op = op_ref.0.read().unwrap();
+                        if matches!(
+                            op.opcode,
+                            OpCode::CPUI_INT_EQUAL
+                                | OpCode::CPUI_INT_NOTEQUAL
+                                | OpCode::CPUI_INT_LESS
+                                | OpCode::CPUI_INT_SLESS
+                                | OpCode::CPUI_INT_LESSEQUAL
+                                | OpCode::CPUI_INT_SLESSEQUAL
+                        )
+                        && op.inrefs.len() >= 2
+                        {
+                            let in0 = op.inrefs[0].read().unwrap();
+                            let in1 = op.inrefs[1].read().unwrap();
+                            if in1.get_space() == crate::space::AddressSpace::Const && in0.get_space() != crate::space::AddressSpace::Const {
+                                drop(in0); drop(in1);
+                                self.push_varnode(&op.inrefs[0].read().unwrap(), Some(&op));
+                                break;
+                            } else if in0.get_space() == crate::space::AddressSpace::Const && in1.get_space() != crate::space::AddressSpace::Const {
+                                drop(in0); drop(in1);
+                                self.push_varnode(&op.inrefs[1].read().unwrap(), Some(&op));
+                                break;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Ghidra: printc.cc:3313 PrintC::emitBlockSwitch
     fn emit_structured_switch(
         &mut self,
@@ -4935,6 +5023,36 @@ impl PrintC {
                 let block = block_arc.read().unwrap();
                 let switch_block = block.as_any().downcast_ref::<BlockSwitch>();
                 if let Some(switch_data) = switch_block {
+                    // printc.cc:2911-2913 (emitBlockIf) re-emits the condition
+                    // block under only_branch to render the branch expression,
+                    // and emitBlockLs's only_branch arm (printc.cc:2790-2794)
+                    // forwards to the list's LAST child. Ghidra's structurer
+                    // keeps that terminal a CBRANCH basic block, so this
+                    // channel only ever meets opBranchind (printc.cc:582-591),
+                    // which renders a switch dispatch as its HEAD expression —
+                    // `switch(<expr>)` — with no brace and no case replay.
+                    // Rugra's structurer can park the formed BlockSwitch as an
+                    // if-condition list's last child (the dispatcher becomes
+                    // absorbable once new_block_switch clears f_switch_out,
+                    // block.cc:1917), and the full replay here reprinted every
+                    // case label with already-emitted bodies: the
+                    // SWITCH-BRIDGE-DUP-0001 artifact (48 empty `case N:
+                    // break;` labels plus an orphan `} {` block — illegal C).
+                    // Route the mod through the oracle's expression channel:
+                    // head only. The preceding no_branch visit of the same
+                    // condition already printed the control statements and the
+                    // full case bodies; the head text mirrors opBranchind
+                    // byte-for-byte (keyword, open paren, index expression,
+                    // close paren — no tagLine: expression slots such as the
+                    // `if ` / `while (` prefix join with spaces, printc.cc:2909
+                    // / 3033).
+                    if self.is_set(print_mods::ONLY_BRANCH) {
+                        self.emit.print("switch");
+                        self.emit.print("(");
+                        self.emit_switch_head_expr(switch_data);
+                        self.emit.print(")");
+                        return;
+                    }
                     // cc:3320-3323: pushMod(); setMod(no_branch);
                     // bl->getSwitchBlock()->emit(this); popMod() — the
                     // switch control block emits through the structured
@@ -4968,84 +5086,7 @@ impl PrintC {
                     //   pushVn(in0); recurse(); closeParen
                     self.emit.print("switch");
                     self.emit.print("(");
-                    if let Some(ref idx_vn_arc) = switch_data.index_varnode {
-                        let idx_vn = idx_vn_arc.read().unwrap();
-                        let key = (idx_vn.get_space(), idx_vn.get_offset());
-                        drop(idx_vn);
-                        // If this varnode is in inline_candidates, emit its defining expression
-                        // instead of the inlined-away name (which would be empty)
-                        if let Some(def_op_arc) = self
-                    .inline_candidates
-                    .get(&key)
-                    .cloned()
-                            .or_else(|| self.value_def_map.get(&key).cloned())
-                        {
-                            // Chase through COPY to the real expression
-                            let def_op = def_op_arc.read().unwrap();
-                            if def_op.opcode == OpCode::CPUI_COPY && !def_op.inrefs.is_empty() {
-                                // COPY from something — push the source
-                                let src = def_op.inrefs[0].clone();
-                                drop(def_op);
-                                self.push_varnode(&src.read().unwrap(), None);
-                            } else {
-                                // Non-trivial expression — inline it
-                                let seq = *def_op.get_seq_num();
-                                drop(def_op);
-                                self.inlined_ops.insert(seq);
-                                let def_op2 = def_op_arc.read().unwrap();
-                                self.emit_inline_expr(&def_op2);
-                            }
-                        } else {
-                            // Not in inline_candidates — emit normally
-                            let idx_vn = idx_vn_arc.read().unwrap();
-                            self.push_varnode(&idx_vn, None);
-                        }
-                    } else {
-                        // Fallback 1: search for BRANCHIND's input
-                        let mut found_var = false;
-                        {
-                            let ctrl = switch_data.control.read().unwrap();
-                            let ops = ctrl.get_ops();
-                            if let Some(last_op_ref) = ops.last() {
-                                let last_op = last_op_ref.0.read().unwrap();
-                                if last_op.opcode == OpCode::CPUI_BRANCHIND && !last_op.inrefs.is_empty() {
-                                    self.push_varnode(&last_op.inrefs[0].read().unwrap(), Some(&last_op));
-                                    found_var = true;
-                                }
-                            }
-                            // Fallback 2: for CBRANCH cascade, find the compared non-const operand
-                            if !found_var {
-                                for op_ref in ops.iter().rev() {
-                                    let op = op_ref.0.read().unwrap();
-                                    if matches!(
-                                op.opcode,
-                                        OpCode::CPUI_INT_EQUAL
-                                        | OpCode::CPUI_INT_NOTEQUAL
-                                        | OpCode::CPUI_INT_LESS
-                                        | OpCode::CPUI_INT_SLESS
-                                        | OpCode::CPUI_INT_LESSEQUAL
-                                        | OpCode::CPUI_INT_SLESSEQUAL
-                            )
-                                        && op.inrefs.len() >= 2
-                                    {
-                                        let in0 = op.inrefs[0].read().unwrap();
-                                        let in1 = op.inrefs[1].read().unwrap();
-                                        if in1.get_space() == crate::space::AddressSpace::Const && in0.get_space() != crate::space::AddressSpace::Const {
-                                            drop(in0); drop(in1);
-                                            self.push_varnode(&op.inrefs[0].read().unwrap(), Some(&op));
-                                            break;
-                                        } else if in0.get_space() == crate::space::AddressSpace::Const && in1.get_space() != crate::space::AddressSpace::Const {
-                                            drop(in0); drop(in1);
-                                            self.push_varnode(&op.inrefs[1].read().unwrap(), Some(&op));
-                                            break;
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // cc:3327: closeParen of opBranchind (printc.cc:590).
+                    self.emit_switch_head_expr(switch_data);
                     self.emit.print(")");
 
                     // cc:3329: emit->openBrace(OPEN_CURLY,option_brace_switch);
