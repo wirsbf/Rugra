@@ -5392,7 +5392,7 @@ impl<'a> SplitDatatype<'a> {
         for i in 0..num {
             let in_off = pieces[i].0;
             let in_size = pieces[i].1;
-            let off_const = self.data.new_constant(8, in_off as u64);
+            let off_const = self.data.new_constant(4, in_off as u64);
             // SUBPIECE to extract the input piece.
             let sub_op = self.data.new_op(2, op_addr);
             self.data.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
@@ -6023,9 +6023,10 @@ fn load_store_space(op: &Arc<RwLock<PcodeOp>>, slot: usize) -> AddressSpace {
     }
 }
 
-// Ghidra: subflow.hh:271 RootPointer::subpieceValue
+// Ghidra: subflow.cc:2497 SplitDatatype::buildInSubpieces
 /// Extract a byte-range piece of `value_vn` via a SUBPIECE op inserted before
-/// `before`, returning the piece Varnode.
+/// `before`, returning the piece Varnode. The trailing offset constant is
+/// `newConstant(4, off)` per subflow.cc:2513 (SUBFLOW-SUBPIECE-WIDTH-0001).
 fn subpiece_value(
     fd: &mut Funcdata,
     value_vn: &Arc<RwLock<Varnode>>,
@@ -6037,7 +6038,7 @@ fn subpiece_value(
     let sub_op = fd.new_op(2, addr);
     fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
     let sub_out = fd.new_unique_out(size as usize, &sub_op);
-    let off_const = fd.new_constant(8, offset as u64);
+    let off_const = fd.new_constant(4, offset as u64);
     fd.op_set_input(&sub_op, value_vn.clone(), 0);
     fd.op_set_input(&sub_op, off_const, 1);
     fd.op_insert_before(&sub_op, before);

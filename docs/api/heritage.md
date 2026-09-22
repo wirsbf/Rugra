@@ -2,6 +2,17 @@
 
 **源代码路径**: `src/heritage.rs`
 
+## 2026-09-22：SUBFLOW-SUBPIECE-WIDTH-0001 — normalizeReadSize 常量宽度
+
+`normalize_read_size`（heritage.cc:383-401）的 SUBPIECE 偏移常量由硬编码
+`new_constant(8, overlap)` 改为 `vn.space.addr_size()`（heritage 循环按空间划分，
+vn 与 range addr 同空间），对齐 cc:393 `newConstant(addr.getAddrSize(),
+(uintb)overlap)`；register 空间宽度随 space.rs `addr_size()` 修正为 4。
+`normalize_write_size` 的两处（cc:445/466，Rust 1987/2037）原本已传
+`space.addr_size()`，宽度随 Register=4 一并收敛。Phase 2 next_url 对拍：
+heritage op-line 22 `4ff4:5ad/5b0 SUBPIECE` 尾常量 `c:0:8`/`c:4:8` →
+`c:0:4`/`c:4:4`，首分歧后移（证据见 docs/TODO_BOARD.md 该 TODO 条目）。
+
 ## 2026-08-28：EarlyRemoval 所需 Heritage 状态
 
 锁定 EarlyRemoval fixture 证明的范围是：`dead_removal_allowed_seen` 使用严格

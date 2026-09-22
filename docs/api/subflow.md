@@ -1,5 +1,23 @@
 # `subflow.rs` API Reference
 
+## 2026-09-22：SUBFLOW-SUBPIECE-WIDTH-0001 — buildInSubpieces 偏移常量宽度 4
+
+`subpiece_value`（splitStore 非常量输入 stand-in 路径）与 `split_copy` 内联
+SUBPIECE 循环的尾随偏移常量由 `new_constant(8, off)` 改为 `new_constant(4, off)`，
+按 oracle `SplitDatatype::buildInSubpieces`（subflow.cc:2497-2519，关键行 2513
+`data.opSetInput(subpiece,data.newConstant(4, off), 1)`；splitCopy cc:2735 与
+splitStore cc:2871 共用该 helper）。同时修正 `subpiece_value` 的 Ghidra 注释：
+原引用 `subflow.hh:271 RootPointer::subpieceValue` 为不存在的符号（subflow.hh:271
+是 RootPointer 类声明行），改为真实对应 `subflow.cc:2497
+SplitDatatype::buildInSubpieces`。**同 TODO 普查结论**：next_url Phase 2 首分歧
+（heritage op-line 22 `4ff4:5ad/5b0 SUBPIECE` 尾常量 8 vs 4）的真实源头不是本
+文件——该对 op 由 heritage `normalize_read_size`/`normalize_write_size` 创建
+（输出为寄存器空间 root+off 地址，stand-in 路径输出 u: 临时），实修在
+`src/space.rs`（Register addr_size 8→4）与 `src/heritage.rs`（normalizeReadSize
+常量宽度），见 `docs/api/space.md`/`docs/api/heritage.md` 同日条目。本文件的
+宽度 4 修正独立有效（buildInSubpieces 语义），stand-in 其余已登记偏差（地址放置
+输出、generateConstants 折叠、big-endian off 换算 cc:2508-2509）不变。
+
 ## 2026-08-30：`test_split_datatype_constructs` 断言按 canonical-Architecture 不变式翻转
 
 `Funcdata::new` 自 2026-08-30 起在构造尾绑定 canonical 默认 Architecture
