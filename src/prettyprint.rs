@@ -2230,7 +2230,26 @@ impl EmitNoMarkup {
             // re-injected as `  int iVar4;` mid-function — the numbering+1.
             // Gate any line with a semicolon out of signature detection.
             let no_semicolon = !trimmed.contains(';');
+            // WARN-EMIT2 R4 (glob_range typed-global lane): a multi-line
+            // if-condition continuation can also start with a bare
+            // identifier — `iVar5 < *(int *)((int *)&((URLPattern *)
+            // (uVar4 + 0x50) + iVar8)->content + 4))) {` passes
+            // no_semicolon + contains('(') + contains(" *") and ends with
+            // '{', so the pass treated the if-body as a nested function
+            // and re-injected `int iVar5; ... long uVar4;` inside the
+            // block (glob_range numbering 0->6). A C function signature
+            // never contains a comparison/logical operator (`<`, `>`,
+            // `==`, `!=`, `&&`, `||`; `>` also covers the `->` of field
+            // chains, which only occur in expressions), so gate them all
+            // out of signature detection.
+            let no_comparison = !(trimmed.contains('<')
+                || trimmed.contains('>')
+                || trimmed.contains("==")
+                || trimmed.contains("!=")
+                || trimmed.contains("&&")
+                || trimmed.contains("||"));
             let sig_shape = no_semicolon
+                && no_comparison
                 && !control_flow_opener
                 && !cond_continuation
                 && trimmed.contains('(')

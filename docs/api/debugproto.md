@@ -1,5 +1,22 @@
 # `debugproto.rs` API Reference
 
+## 2026-09-22：DWARF 类型工厂驻留（HERITAGE-PROMOTE-SYMBOLTAIL-0001 配套）
+
+`base_type`/`struct_type`/`union_type`/`enum_type`/`alias_type` 的产物与
+`pointer_type` 此前每次 `Arc::new` 裸建，不进共享 `TypeFactory`。Ghidra 的
+DWARF analyzer 把每个 DIE 类型解析进 Architecture 的**唯一** TypeFactory
+（type.cc findByName/setName 驻留），所以两个 DWARF 通道（globals 的
+`DebugGlobalDatabase` 与原型的 `DebugPrototypeDatabase`）看到的同名结构是**同一**
+interned 对象——指针恒等比较（`CastStrategyC::castStandard` 的
+`curtype == reqtype`，cast.cc:299；ActionSetCasts 的 store-value cast，
+coreaction.cc:553-554）判定相等、免 cast。Rugra 双通道各自裸建时，
+`*glob = glob_expand;`（`URLGlob**` 形参 vs typelocked `URLGlob*` 全局读）多出
+伪 `(URLGlob *)` cast（glob_url 4→6）。修复：`intern_named` 软驻留——共享工厂
+按名命中且**枚举变体/size/metatype 全同**时复用既有 Arc（形状守卫使环回
+shallow 投影不得遮蔽同名字段的完整定义），未命中时经新
+`TypeFactory::intern_imported`（find_add 包装，type.cc:3390 导入边界）注册；
+`pointer_type` 走 `get_type_pointer`（pointee 已驻留后结构去重生效）。
+
 `src/debugproto.rs` implements Rugra's native equivalent of Ghidra's
 pre-decompiler debug-import boundary. Ghidra's DWARF analyzer writes declared
 function prototypes into the Program database; the C++ decompiler subsequently

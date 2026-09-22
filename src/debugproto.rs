@@ -1502,31 +1502,75 @@ fn read_array_count(unit: &Unit<DwarfReader>, offset: UnitOffset<usize>) -> Resu
 
 // RUGRA-GLUE: constructs a leaf Datatype from front-end debug metadata before it enters Ghidra-aligned type analysis
 fn base_type(name: String, size: usize, metatype: TypeMetatype) -> Arc<Datatype> {
-    Arc::new(Datatype::Base(TypeBase::new(name, size, metatype)))
+    intern_named(Arc::new(Datatype::Base(TypeBase::new(name, size, metatype))))
 }
 
 // RUGRA-GLUE: constructs a fielded struct Datatype from DWARF DW_TAG_member children; Ghidra builds the equivalent Structure dataType in its DWARF/type-manager front end
 fn struct_type(name: String, size: usize, fields: Vec<TypeField>) -> Arc<Datatype> {
-    Arc::new(Datatype::Struct(TypeStruct {
+    intern_named(Arc::new(Datatype::Struct(TypeStruct {
         base: TypeBase::new(name, size, TypeMetatype::Struct),
         fields,
-    }))
+    })))
 }
 
 // RUGRA-GLUE: constructs a fielded union Datatype from DWARF union members (all at offset 0)
 fn union_type(name: String, size: usize, fields: Vec<TypeField>) -> Arc<Datatype> {
-    Arc::new(Datatype::Union(TypeUnion {
+    intern_named(Arc::new(Datatype::Union(TypeUnion {
         base: TypeBase::new(name, size, TypeMetatype::Union),
         fields,
-    }))
+    })))
 }
 
 // RUGRA-GLUE: constructs an enum Datatype with its DWARF enumerator value table for constant-name rendering
 fn enum_type(name: String, size: usize, values: BTreeMap<u64, String>) -> Arc<Datatype> {
-    Arc::new(Datatype::Enum(TypeEnum {
+    intern_named(Arc::new(Datatype::Enum(TypeEnum {
         base: TypeBase::new(name, size, TypeMetatype::Enum),
         values,
-    }))
+    })))
+}
+
+// RUGRA-GLUE: DWARF-import type-manager canonicalization. Ghidra's DWARF
+// analyzer resolves every DIE type through the Architecture's ONE
+// TypeFactory (type.cc findByName/setName interning), so the same-named
+// structure reached from two variables — or from both the globals pass
+// (DebugGlobalDatabase) and the prototype pass (DebugPrototypeDatabase) —
+// is ONE interned Datatype object, and pointer-identity comparisons
+// (CastStrategyC::castStandard's `curtype == reqtype`, cast.cc:299;
+// ActionSetCasts' store-value cast, coreaction.cc:553-554) see equal types
+// and emit no cast. Rugra's two independent DWARF passes each built fresh
+// Arcs, so `*glob = glob_expand;` (URLGlob** param vs typelocked URLGlob*
+// global read) gained a spurious `(URLGlob *)` cast. This soft intern
+// reuses the shared factory's existing name entry when the shape (enum
+// variant), size, and metatype match — the shape guard keeps a cycle-break
+// shallow projection (base_type with a composite metatype) from shadowing
+// the full fielded definition of the same DWARF name — and registers the
+// new type otherwise. This is the cross-parse identity half of the importer
+// boundary noted as untracked on alias_type.
+fn intern_named(candidate: Arc<Datatype>) -> Arc<Datatype> {
+    let name = candidate.get_name().to_string();
+    if name.is_empty() {
+        return candidate;
+    }
+    let factory = crate::type_system::typefactory::TypeFactory::shared_default();
+    let mut guard = factory.write().unwrap();
+    if let Some(existing) = guard.find_by_name(&name) {
+        let same_shape = std::mem::discriminant(existing.as_ref())
+            == std::mem::discriminant(candidate.as_ref());
+        if same_shape
+            && existing.get_size() == candidate.get_size()
+            && existing.get_metatype() == candidate.get_metatype()
+        {
+            return existing;
+        }
+        // Same name, different shape/size (shallow cycle-break projection
+        // vs the full definition, or a genuine DWARF redefinition): keep the
+        // fresh candidate without touching the registered slot.
+        return candidate;
+    }
+    match guard.intern_imported((*candidate).clone()) {
+        Ok(interned) => interned,
+        Err(_) => candidate,
+    }
 }
 
 // RUGRA-GLUE: materializes a DWARF typedef as the underlying composite/enum renamed to the typedef spelling; Rugra's Datatype enum has no TypeTypedef variant yet (Ghidra type.hh has one), so fields and enumerator names are carried on the renamed type
@@ -1547,7 +1591,7 @@ fn alias_type(name: String, inner: &Datatype) -> Arc<Datatype> {
     base.display_name = name.clone();
     base.id = Datatype::hash_name(&name);
     base.flags &= !crate::type_system::datatype::type_flags::CORETYPE;
-    Arc::new(alias)
+    intern_named(Arc::new(alias))
 }
 
 // RUGRA-GLUE: constructs a pointer Datatype from a resolved DWARF pointee at the native debug-import boundary
@@ -1556,7 +1600,12 @@ fn pointer_type(pointee: Arc<Datatype>, size: usize) -> Arc<Datatype> {
     // getTypePointer path, type.cc:3867-3875 — DW_AT_name on a pointer
     // typedef attaches via alias_type, not here); see parse_c_type's note
     // for why the former composed display name diverged from the oracle.
-    Arc::new(Datatype::Pointer(TypePointer::new(size, pointee, 1)))
+    // The factory pass below canonicalizes pointer identity the way the
+    // oracle's single TypeFactory does for every DWARF type.
+    crate::type_system::typefactory::TypeFactory::shared_default()
+        .write()
+        .unwrap()
+        .get_type_pointer(size, pointee, 1)
 }
 
 // RUGRA-GLUE: canonical locked-void type used when DW_AT_type is absent on a subprogram or pointer target

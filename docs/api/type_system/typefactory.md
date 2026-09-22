@@ -1,5 +1,14 @@
 ﻿# `type_system/typefactory.rs` API Reference
 
+## 2026-09-22：`intern_imported` — DWARF 导入边界的工厂注册（HERITAGE-PROMOTE-SYMBOLTAIL-0001 配套）
+
+新 `pub(crate) fn intern_imported(candidate)`：`find_add(candidate, true)` 的公共包装，
+对应 type.cc:3390 `TypeFactory::findAdd` 的 DWARF/type-manager 导入通道（Ghidra
+的 DWARF analyzer 把每个导入类型注册进 Architecture 的唯一工厂，跨引用恒等由此
+成立）。调用方为 `debugproto.rs` 的 `intern_named` 软驻留（见 docs/api/debugproto.md
+同日条目）；对齐计算走生产 find_add 路径，导入类型携带 DWARF byte size。
+
+
 ## 2026-08-28：三种 core-type bootstrap
 
 `CoreTypeFlavor` 现区分 compiler-supplied DataOrg、
