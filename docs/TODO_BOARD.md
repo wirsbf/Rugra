@@ -251,7 +251,17 @@
 > 同根因 register addrSize)**。E2E 三门禁见 docs/api/{space,heritage,subflow}.md
 > 同日条目。
 > **CR-orderBlocks 绑定条件履行(2026-09-22,root)**: 新登记
-> **CR-CQ 条件履行+CQ 集成(2026-09-22,root)**: ①登记 `VARGROUP-ABSORB-0001`
+> **CU 收官并集成(2026-09-22,root 亲测 9ba67aeb)**: ordinal 185 根因=镜像态残留两层
+> 全分析数据符号(oracle 裸环境只 addFunction 零数据 SymbolEntry→queryContainer NULL→
+> constantptr 不 fire)——bare-load 门下双抑制(examples-only,默认零变化)。**Phase 2
+> 首分歧 185→186**(oppool2 4vs3,1-185 全匹配!)。亲测 curl 3105/0/0 稳定/httpd
+> 2392/0/0 恒等。**新登记 `HTTPD-WORKER-CURLSYM-0001`(P2,CU 顺带发现)**:
+> build_worker_architecture 的 DWARF+ELF OBJECT seeding 硬编码读 `examples/curl`——
+> httpd worker 默认路径会被喂 curl 的全局符号(镜像态已被门关闭,默认 E2E 行为待
+> 裁量)。readonly range 全段镜像留 P3。**CV 已派发**(fix-11,wt/sb-ord186):
+> oppool2 5 条 Rule 差 1 fire 追杀——**若清掉则 next_url 全函数 phase 对齐**。
+
+
 > (P1,owner=CT lane 在途): VariableGroup/GroupSymbol printc 吸收链,验收=main 3095→
 > golden 的 `glob.pattern[i].xxx` 字段形态吸收;②登记 `INIMPLIED-14-173-0001`(P2):
 > in-implied R=14 vs O=173(SIGSIG 公平口径,修复前后均 14=预存口径差非本修引入),
