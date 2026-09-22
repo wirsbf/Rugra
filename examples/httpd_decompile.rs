@@ -499,7 +499,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // curl_decompile.rs:2109/2471 — restoring the oracle invariant.
             // E2E: httpd skeleton 2546→2230, defects 5→5, numbering 0→0,
             // in_RSP lines 148→0 (2026-08-30).
-            fd.set_arch(std::sync::Arc::new(rugra::arch::Architecture::new()));
+            // RUGRA-FLOW-MIRROR-0001: under the gate the Architecture also
+            // carries the PT_LOAD loader (the oracle BfdArchitecture maps
+            // every PT_LOAD — the loader is part of the input contract).
+            // Jumptable recovery reads the table bytes through
+            // fd.arch.loader (jumptable.rs sanity_check / find_normalized
+            // readonly rescue / emulate get_load_image_value — the
+            // MemoryImage channel of jumptable.cc:1225-1226/1588-1598); a
+            // bare loader-less Architecture makes recovery DataUnavail and
+            // main's relative-offset switch at 0x2ba94 (table @0x88530)
+            // fail-thunks into CALLIND + artificial RETURN (the first
+            // recorded httpd cross-side divergence, see
+            // /dev/shm/rugra-tests/sb-httpdff/cross_side_report.txt).
+            fd.set_arch({
+                let mut arch = rugra::arch::Architecture::new();
+                if mirror_fn {
+                    let image = mirror_img
+                        .as_deref()
+                        .expect("mirror image captured behind the gate");
+                    arch.loader = Some(std::sync::Arc::new(
+                        rugra::loadimage::RawLoadImage::from_bytes("httpd", 0, image.to_vec()),
+                    ));
+                }
+                std::sync::Arc::new(arch)
+            });
             if !mirror_fn {
                 fd.external_prototypes = proto_db;
             }
