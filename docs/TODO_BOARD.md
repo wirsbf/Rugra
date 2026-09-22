@@ -251,6 +251,14 @@
 > 同根因 register addrSize)**。E2E 三门禁见 docs/api/{space,heritage,subflow}.md
 > 同日条目。
 > **CR-orderBlocks 绑定条件履行(2026-09-22,root)**: 新登记
+> **CL 探查闭环(2026-09-22,OKOK-0001 裁决)**: **假阴性对=0**(双侧独立:oracle 266 次
+> 真 testUntiedCallIntersection 求值 cross=1 计 0/Rust 112 mixed-tied 对零翻转)——
+> CE 精确相交移植承重无反向风险,CR-CE 条件①闭环。残差 84 归因: +44 same-high
+> 打印侧(归 PRINTC-CONDBLOCK-JUNKOPS-0001)/**+33 可并未尝试(候选生成/顺序域=
+> 新杠杆,OKOK-0001 基线口径改锚此域,CO 车道已派)**/+5 cover 过严/+2 req0 边缘。
+> UNTEDINTERSECT 维持 P3(升级条件=任一语料 oracle 侧 cross=1>0)。勘误: merge.rs
+> "分支不可达"辩护被证伪(结构可达,oracle main 实测 146 次)→改记 reachable,
+> empirically non-decisive, deferred。
 > **CR-BZ 绑定条件履行(2026-09-22,root)**: 登记扩充——`HERITAGE-PROMOTE-SYMBOLTAIL-
 > 0001` 子项(约 10 处 oracle 提升位点 Rust 缺符号分支: normalize 族 cc:391/441/462/
 > 473/485 仅折叠/guard 读端 invn cc:1595 裸建/callsplit cc:1225/1332/1353/splitVarnode
