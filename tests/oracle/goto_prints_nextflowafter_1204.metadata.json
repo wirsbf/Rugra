@@ -39,16 +39,17 @@
    "switch_fallthru_goto: Switch components [head, goto(c0→c1), c1, c2] — arm① head (cs[0] dispatch root) → null; t_goto case → next caseblock front leaf (c1) == target → prints=0; non-t_goto cases c1/c2 → null; labels all 0 so the finalizePrinting stable_sort preserves grabCaseBasic order (real label sort tracked by JUMPTABLE-TABLEAPI-0001 on both sides)",
    "goto_wrapping_goto: g_out wraps List[g_in(→b2)], both target b2 — Goto arm: inner goto gets front_leaf(b2) == target → prints=0 (subsumed)",
    "if_else_tail_goto: If[b0, tc=List[b1, goto(b2→b4)], fc=b3], roots [if, b4] — If arm: slot0 null, tc/fc → parent arm b4 (never sibling fc); tc-tail goto target b4 → prints=0",
-   "dowhile_tail_goto: DoWhile[List[b0, goto(b1→b2)]], roots [dw, b2] — DoWhile arm: null → prints=1; scopeBreak converts gototype to break(2)"
+   "dowhile_tail_goto: DoWhile[List[b0, goto(b1→b2)]], roots [dw, b2] — DoWhile arm: null → prints=1; scopeBreak converts gototype to break(2)",
+   "switch_multigoto_gotoedge: Switch cs[0] = BlockMultiGoto (production newBlockMultiGoto peel over the head copy, gotoedge = head's slot-2 target c3); regular cases cA (plain copy) and g0 (t_goto wrapping cB, own target `out` outside); grabCaseBasic's t_multigoto append arm (block.cc:3548-3553) adds c3 as the case AFTER g0 with gototype f_goto_goto — g0's nextFlowAfter falls through into the APPENDED case (front leaf c3, cc:3653-3657), not to g0's own target; multigoto dispatch (cc:2931-2936) null for the wrapped head; scopeBreak promotes the appended case to f_break_goto (cc:3620-3623, target c3 IS the switch exit = block after the switch root) while g0 stays f_goto_goto; g0 prints=1 (target out != next c3)"
   ],
-  "sha256": "2caae346e5f57a0a0c1e955e20dd70503ab51ca5e88c9b2d0e716a68c57e6c1c"
+  "sha256": "f3a479f9212817fc8ba06ea1ce7e5846dca58d312c487816f4206e7095aea31c"
  },
  "known_divergences": [],
  "comparand_sha256": {
-  "cpp_fixture_sha256": "05f0231f8a836fec64c0ffe0d3942e27b9b06b6dca41b2d0cad2b22ae01e30d6",
-  "rust_fixture_sha256": "3c5c56dfdc7074c50275da345f503e30aeb3cd05955c896c854dd30567324854",
+  "cpp_fixture_sha256": "e1e2a881590841da6fb4d9a25f14aa878709ebed13c918dfd751d0e0a1a528c7",
+  "rust_fixture_sha256": "e10fbf242bb8c175b0df71e4e89f725ab3d88eef51a6149f7ffec4d701ac7412",
   "rugra_block_sha256": "cd53ff71960e6863b64b673678dd7838fd205dc21602e6bb9f02f8fe1fb6c11c",
   "rugra_coreaction_sha256": "24605f887d05fbe5aed6770784456d576c18e89e495dfe0f5dc1eaaa5c9a022a"
  },
- "overall_status": "MATCH: all six cases (while-tail break-goto / infloop backedge / switch fallthru / goto-wrapping-goto / if-else tail / dowhile tail) byte-identical between the locked 12.0.4 oracle virtual dispatch and Rugra's promoted next_flow_after_successors walk (per-(composite,component) successor identity + per-goto gototype/prints)"
+ "overall_status": "MATCH: all seven cases (while-tail break-goto / infloop backedge / switch fallthru / goto-wrapping-goto / if-else tail / dowhile tail / switch multigoto-gotoedge append-arm) byte-identical between the locked 12.0.4 oracle virtual dispatch and Rugra's promoted next_flow_after_successors walk (per-(composite,component) successor identity + per-goto gototype/prints)"
 }

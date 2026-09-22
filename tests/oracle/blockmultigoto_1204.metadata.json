@@ -1,0 +1,44 @@
+{
+ "schema": 2,
+ "fixture_id": "BLOCKSTRUCT-MULTIGOTO-0001",
+ "covered_projection_status": "MATCH",
+ "overall_status": "MATCH (all four families, bilateral oracle run on locked 12.0.4)",
+ "status_note": "Pinned runner landed from lane wt/sb-multigoto (root integration of the B2-MG-RESID-1/2/3 closure lane wt/sb-mgresid). Families: (A) rule-driven switch_double_back_multigoto — production collapseAll + scopeBreak over a buildCopy graph with f_switch_out set, observing the formed BlockSwitch's case facts recursively; (A2) loop_exit_conflict — B2-MG-RESID-2 same-shape closure: WhileDo[cond=h, body=List[mg(s), gt(t→e)]] roots [wd, e] built through production factories over a production newBlockMultiGoto peel; scopeBreak promotes ONLY the contrast BlockGoto to f_break_goto (block.cc:2872-2873) while the multigoto's gotoedge exiting the same loop is never reclassified (block.cc:2918-2922 discards curexit, never consults gotoedges) — the withdrawn collapse-driven variant diverged in the legacy cascade domain (not newBlockMultiGoto), registered at withdrawal; (B) direct new_block_multigoto — peel1 fresh wrap (identifyInternal self-edge absorption + forceOutputNum(sizeOut()+1) restore, loopouts=1, bilateral t1_sizein=0), peel2 already-t_multigoto branch (addEdge + removeEdge + setDefaultGoto with pre-mutation isDefaultBranch capture), after_scopebreak (curesxit discarded, gotoedges untouched); (C) copy_switch_consumption — B2-MG-RESID-1 same-shape closure: buildCopy graph, production multigoto peel over the switch-out head, then newBlockSwitch's recording calls (grabCaseBasic before identifyInternal + addBlock) consume the multigoto as cs[0]; the peeled gotoedge target re-appears as the APPENDED case with gototype f_goto_goto (block.cc:3548-3553); roots [switch, after, gotoedge-target] keep the raw f_goto_goto through scopeBreak (cc:3620-3623 does not fire — the target is not the immediate switch exit). The withdrawn rule-pipeline variant lost the pre-collapse goto mark on the oracle side (synthetic-graph rule interaction, not a newBlockMultiGoto defect); the real-input consumption path is covered by the curl gp E2E evidence.",
+ "oracle": {
+  "repository": "NationalSecurityAgency/ghidra",
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "bfd_root": "/tmp/rugra-ghidra-bfd-2.38 (machine-local, rebuild per AGENTS.md oracle note)"
+ },
+ "rugra_source": {
+  "base_commit": "dff36e7 (master, lane wt/sb-mgresid)",
+  "note": "worktree /home/ls/Rugra-wt-sb-mgresid; live tree at fixture run"
+ },
+ "capture": {
+  "cases": [
+   "switch_double_back_multigoto",
+   "loop_exit_conflict",
+   "direct_newblockmultigoto",
+   "copy_switch_consumption"
+  ],
+  "verdict": "blockmultigoto_1204: MATCH (diff lines 0)",
+  "runner": "tools/run_blockmultigoto_oracle.sh (pinned: oracle-commit gate, dirty-oracle-file gate, metadata comparand gate, libdecomp.a reuse)"
+ },
+ "registered_normalizations": [
+  "observation lines sorted before printing (factory append vs slot-install order is order-free per-block facts)",
+  "canonical root list arranged explicitly after construction (production orderBlocks intent)",
+  "residual-multigoto walk skips the BlockSwitch's cs[0] dispatch root on the oracle side (Rugra keeps it in BlockSwitch::control outside the walked component list — a multigoto consumed as cs[0] is not residual)",
+  "loop_exit_conflict and copy_switch_consumption observations are name-based (no raw composite indexes printed): scopeBreak's promotion compares an index threaded from the very block it is compared against, so the observable facts are index-value independent",
+  "copy_switch_consumption case_values stay basic out-edge-slot placeholders on the Rust side (oracle labels stay 0 with the hollow jumptable) — the real label sort is JUMPTABLE-TABLEAPI-0001 on both sides"
+ ],
+ "residuals": [
+  "switch case real labels (recoverLabels + finalizePrinting label sort) remain JUMPTABLE-TABLEAPI-0001 (P0-A lane)",
+  "B2-MG-RESID-3 glob_set +5 curl skeleton residual: function-level token attribution recorded on the TODO board (same-mechanism neighborhood restructure vs real divergence)"
+ ],
+ "comparand_sha256": {
+  "cpp_fixture_sha256": "d0104bbcb64f05cec4e8934a6bb25782c579a38e3fdcadf534c88ecfecb24bcd",
+  "rust_fixture_sha256": "ebac57d452bb54923e0d7ebb804ab8b51657dc750e3713fe6be8bf68e21ab5a9",
+  "rugra_block_sha256": "cd53ff71960e6863b64b673678dd7838fd205dc21602e6bb9f02f8fe1fb6c11c",
+  "rugra_blockaction_sha256": "480250de37f11b1db709b5b7a5d97f825cd64551eb1c68ad81dbb113bf3a6bff"
+ }
+}
