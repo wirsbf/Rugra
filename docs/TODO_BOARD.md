@@ -251,7 +251,14 @@
 > 同根因 register addrSize)**。E2E 三门禁见 docs/api/{space,heritage,subflow}.md
 > 同日条目。
 > **CR-orderBlocks 绑定条件履行(2026-09-22,root)**: 新登记
-> **BR 收官并集成(2026-09-22,root 亲测 94681b76)**: ActionReturnRecovery 完整忠实重写
+> **CR-BZ 绑定条件履行(2026-09-22,root)**: 登记扩充——`HERITAGE-PROMOTE-SYMBOLTAIL-
+> 0001` 子项(约 10 处 oracle 提升位点 Rust 缺符号分支: normalize 族 cc:391/441/462/
+> 473/485 仅折叠/guard 读端 invn cc:1595 裸建/callsplit cc:1225/1332/1353/splitVarnode
+> cc:1742/1750/restrain cc:2008/joinrec 族 cc:2095/2100/2241/rebuild cc:288)——同类
+> 潜在缺口(部分覆盖/join 的全局读保持无类型→RulePtrArith 症状族);owner=CF lane
+> (待派),验收=符号尾携带+config 域零回退重放。
+
+
 > (三重自创+计数器错接全清:maxPass 硬编码 3→model getMaxOutputDelay/apply 返 0+
 > take_count_delta/onlyOpUse RETURN-case res=false/BFS 全类型),ordinal 19 四元组
 > **4/4/0/1 逐轮一致**;**Phase 2 首分歧推进至 ordinal 28 stackstall:oppool1**
