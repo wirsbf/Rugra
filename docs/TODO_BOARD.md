@@ -251,7 +251,22 @@
 > 同根因 register addrSize)**。E2E 三门禁见 docs/api/{space,heritage,subflow}.md
 > 同日条目。
 > **CR-orderBlocks 绑定条件履行(2026-09-22,root)**: 新登记
+> **CR-CQ 条件履行+CQ 集成(2026-09-22,root)**: ①登记 `VARGROUP-ABSORB-0001`
+> (P1,owner=CT lane 在途): VariableGroup/GroupSymbol printc 吸收链,验收=main 3095→
+> golden 的 `glob.pattern[i].xxx` 字段形态吸收;②登记 `INIMPLIED-14-173-0001`(P2):
+> in-implied R=14 vs O=173(SIGSIG 公平口径,修复前后均 14=预存口径差非本修引入),
+> 归因假设=SIGSIG local-scope 注册差影响 MarkImplied 输入冻结,验收=VariableGroup
+> lane 闭合时成员级 join 重测;③census 表述更正: 30d6 波 40 成员 **39 个** oimpl=0/
+> oexpl=1(成员 4282=未拆 8B 原拷贝同位同判);④merge.rs:52 doc 注释并行损伤顺手修。
+
 > **CR-CR2 条件履行+CR2 集成(2026-09-22,root)**: ①登记 `SUBFLOW-CSU-MASK-0001`
+> (P2,新): __libc_csu_init 间接实参 `& 0xffffffff` 掩码消失背离 golden(+1,指向
+> consume/nzmask 上游=ActionDeadCode→minimalmark 域与本修 consume 守卫的交互,oracle
+> 拒而 Rugra 受);②main oppool1@65 **oracle=821 vs rugra=778(残 −43,绑上游
+> ordinal-5/uniq 族)**,@END 28 预存 +8——main 等值不宣称(结构性限制);③Differential
+> 归因更正: curl −14=main−4/glob_word−4/glob_set−6/csu_init+1(**getparameter 未变**,
+> 其投影字节恒等自证);"逐名一致"降级为"flaky 家族内抖动零新增"。
+
 > (P2,新): __libc_csu_init 间接实参 `& 0xffffffff` 掩码消失背离 golden(+1,指向
 > consume/nzmask 上游=ActionDeadCode→minimalmark 域与本修 consume 守卫的交互,oracle
 > 拒而 Rugra 受);②main oppool1@65 **oracle=821 vs rugra=778(残 −43,绑上游
