@@ -200,6 +200,13 @@
 > 数量差(另域)。**连带关闭 `HERITAGE-SUBPIECE-CONST-WIDTH-0001`(312 处族,
 > 同根因 register addrSize)**。E2E 三门禁见 docs/api/{space,heritage,subflow}.md
 > 同日条目。
+> **gp 978 triage(2026-09-22,Lane BW,净改善判定)**: 48/48 case 值+序 100% 等于
+> oracle;449 上涨=真实内容从无到有+三部曲新工件。**新登记**:
+> `SWITCH-BRIDGE-DUP-0001`(P1,~121 行 switch#2 重复桥工件——48 空 case+孤立 if+
+> default-check 双发,含非法 C,疑 BO label 管道×BL 递归发射交互,owner=BX lane);
+> `SWITCH-CASE-TAIL-0001`(P1,case 0x23/0x35 尾赋值+break 全缺→fallthrough 真损失);
+> PRINTC-SWITCH-EMIT-0001 补证(default 末位/体拍平/头缺 -0x23U&0xff);aliases 零恢复
+> 并入 JUMPTABLE/varmap 残差。报告=sb-switch/GP978_TRIAGE.md。
 > **双链集成(2026-09-22 root)**: SwitchNorm P0-A(b400e90+e27e985,Cross-Review attempt2
 > APPROVE)+spacebase 分派修复(2b324b8..97d6857,B2 fixture 7/10)合并 master,亲测
 > httpd **2343/0/0**、curl **3685/0/0**(3711−6−20 对账一致),已回流 result(curl sha
