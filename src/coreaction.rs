@@ -1639,7 +1639,7 @@ impl Action for ActionMergeRequired {
         let mut merge = crate::merge::Merge::new();
         // Ghidra coreaction.hh:370: three calls in sequence.
         merge.merge_addr_tied(fd);
-        merge.group_partials(fd);  // currently no-op (CONCAT infra TODO)
+        merge.group_partials(fd);
         merge.merge_marker(fd);
         Ok(action_status::NO_CHANGE)
     }
@@ -3898,12 +3898,21 @@ impl ActionMarkExplicit {
                         if std::sync::Arc::ptr_eq(&root_arc, vn_arc) {
                             return -1;
                         }
-                        // cc:3040: `rootVn->getDef()->isPartialRoot()` — Rugra
-                        // has no PcodeOp::partialroot flag (ruleaction.rs
-                        // RulePieceStructure skips setPartialRoot at Ghidra
-                        // ruleaction.cc:7642; VariablePiece registry tracked
-                        // by MERGE-ADDRTIED-CLOSURE-0001), so the flag reads
-                        // false for every IR the current pipeline builds.
+                        // cc:3040-3044: `rootVn->getDef()->isPartialRoot()`
+                        // — the varnode is getting PIECEd into a structure
+                        // whose root def is flagged partialRoot (set by
+                        // RulePieceStructure ruleaction.cc:7642 and
+                        // SplitDatatype::buildOutConcats subflow.cc:2599);
+                        // all such PIECE operations should be explicit.
+                        if root_arc
+                            .read()
+                            .unwrap()
+                            .get_def()
+                            .map(|d| d.read().unwrap().is_partial_root())
+                            .unwrap_or(false)
+                        {
+                            return -1;
+                        }
                     }
                     None => return -1,
                 }

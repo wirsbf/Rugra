@@ -420,8 +420,7 @@ pub struct MergePersistentState {
     /// `HighIntersectTest::testUntiedCallIntersection`
     /// variable.cc:1080-1081). No Rust production path populates it yet.
     stack_affecting_ops: Vec<crate::op::PcodeOpRef>,
-    /// `PcodeOpSet::is_pop` mirror of `stackAffectingOps` (cover.hh:39): the
-    /// lazy-populate flag that `PcodeOpSet::clear` (cover.hh:63) resets.
+    /// `PcodeOpSet::is_pop` mirror of `stackAffectingOps` (cover.hh:39): the    /// lazy-populate flag that `PcodeOpSet::clear` (cover.hh:63) resets.
     stack_affecting_populated: bool,
 }
 
@@ -441,6 +440,21 @@ impl MergePersistentState {
         self.proto_partial.clear();
         self.stack_affecting_ops.clear();
         self.stack_affecting_populated = false;
+    }
+
+    // Ghidra: merge.cc:1549 Merge::registerProtoPartialRoot
+    /// Register an unmapped CONCAT stack with the merge process. Faithful
+    /// to `Merge::registerProtoPartialRoot` (merge.cc:1549-1553): the root
+    /// Varnode's defining op (the final PIECE of the stack) is pushed onto
+    /// the `protoPartial` list; `groupPartials` (merge.cc:967-976) later
+    /// groups each still-alive partial root into a single variable. The
+    /// Funcdata-mounted channel stands in for Ghidra's Funcdata-owned
+    /// `Merge` object (rules register during the cleanup pool, long before
+    /// any merge-family Action constructs its local `Merge`).
+    pub fn register_proto_partial_root(&mut self, vn: &Arc<RwLock<crate::varnode::Varnode>>) {
+        if let Some(def) = vn.read().unwrap().get_def() {
+            self.proto_partial.push(crate::op::PcodeOpRef(def));
+        }
     }
 
     // RUGRA-GLUE: fixture observability for the persistent channels; the
@@ -1907,21 +1921,34 @@ impl Merge {
     }
 
     // Ghidra: merge.cc:967 Merge::groupPartials
-    /// Group CONCAT-piece roots.  RulePieceStructure marks each rewritten
-    /// PIECE root and its unmapped pieces as proto-partial; this pass rebuilds
-    /// the same VariableGroup before naming (merge.cc:967-976, 1374-1407).
+    /// Group CONCAT-piece roots.  RulePieceStructure and
+    /// SplitDatatype::buildOutConcats register each unmapped CONCAT root via
+    /// `registerProtoPartialRoot`; this pass rebuilds the same VariableGroup
+    /// before naming (merge.cc:967-976, 1374-1407). Candidates come from the
+    /// registered `protoPartial` list in registration order — the
+    /// registration sites are RulePieceStructure's root walk
+    /// (ruleaction.cc:7697-7698) and splitCopy/splitLoad's
+    /// buildOutConcats (subflow.cc:2601-2602).
     pub fn group_partials(&mut self, fd: &mut Funcdata) {
         use std::collections::HashSet;
-        // `protoPartial` is populated while RulePieceStructure walks the
-        // ordered op list. Reproduce that order from the bank's alive-op
-        // sequence; loc_tree order is storage order, not registration order.
-        // ActionPool::processOp advances the sorted PcodeOpTree (action.rs:1400-1414).
-        let candidates: Vec<_> = fd.obank.optree.iter()
+        let candidates: Vec<_> = fd
+            .merge_state
+            .proto_partial
+            .iter()
             .filter_map(|op_ref| {
+                // Ghidra merge.cc:970-971: dead roots were consumed or
+                // destroyed since registration.
                 let op = op_ref.0.read().unwrap();
-                (op.opcode == crate::opcodes::OpCode::CPUI_PIECE && op.is_partial_root())
-                    .then(|| op.output.clone()).flatten()
-            }).collect();
+                if op.is_dead() {
+                    return None;
+                }
+                // Ghidra merge.cc:972-973: only still-flagged partial roots.
+                if !op.is_partial_root() {
+                    return None;
+                }
+                op.output.clone()
+            })
+            .collect();
         let mut roots = HashSet::new();
         for candidate in candidates {
             let root = Self::partial_root(&candidate).unwrap_or(candidate);

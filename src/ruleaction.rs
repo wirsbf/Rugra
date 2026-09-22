@@ -13887,8 +13887,12 @@ impl Rule for RulePieceStructure {
                 }
             }
         }
-        // registerProtoPartialRoot(outvn) when !anyAddrTied: not modelled.
-        let _ = any_addr_tied;
+        // cc:7697-7698: if (!anyAddrTied) data.getMerge().
+        // registerProtoPartialRoot(outvn) — the unmapped CONCAT stack is
+        // registered so Merge::groupPartials can group it into one variable.
+        if !any_addr_tied {
+            fd.merge_state.register_proto_partial_root(&outvn);
+        }
         Ok(action_status::CHANGE)
     }
 

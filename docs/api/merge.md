@@ -43,7 +43,7 @@ curl `main` 在 ActionMergeRequired(groupPartials)确定性复现 256MB worker
 修复:`piece_is_leaf`(op.cc:801 忠实移植,五项判定全补,符号项用
 `Arc::ptr_eq` 对应指针相等;地址项同时比较空间与偏移)作为递归门;
 `gather_partial_pieces` 增加 `root_offset` 参数并在非叶时才递归;
-`group_partials` 按 `groupPartialRoot`(merge.cc:1381-1387)从 root 的
+`group_partials` 候选来自 `MergePersistentState::proto_partial` 注册表(RulePieceStructure cc:7697-7698 与 SplitDatatype::buildOutConcats cc:2601-2602 经`register_proto_partial_root` 注册; merge.cc:967-976 按 `isDead`/`isPartialRoot` 过滤后逐 root 调 `groupPartialRoot`)。`group_partials` 按 `groupPartialRoot`(merge.cc:1381-1387)从 root 的
 symbol entry 取 `base_offset`(无符号为 0),groupWith 偏移改为
 `offset - base_offset`(cc:1404)。验证:main 恢复反编译(76/124,0
 worker-failure),curl 全语料 defects=0/numbering=0。
