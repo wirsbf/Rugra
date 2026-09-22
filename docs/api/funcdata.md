@@ -1282,11 +1282,25 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - Rust 适配：trial_killed_by_call/trial_size 快照字段 + pending_ind_create_formed/pending_condexe_effect 延迟应用
 
 **ancestorOpUse**（funcdata_varnode.cc:1917-1994）+ **onlyOpUse**（funcdata_varnode.cc:1805-1904）：
-- `pub fn ancestor_op_use(has_active_output, maxlevel, vn, op, trial_slot, offset, flags) -> bool`
-- 递归 def 链遍历（INDIRECT/MULTIEQUAL/COPY/PIECE/SUBPIECE）+ only_op_use 回调
-- `only_op_use` — 前向 descend 迭代器遍历，检测 BRANCH/CBRANCH/BRANCHIND/LOAD/STORE/CALL/CALLIND/INDIRECT/COPY/RETURN
+- `pub fn ancestor_op_use(fd, maxlevel, vn, op, trial: &mut ParamTrial, offset, flags, match_fc) -> bool`
+- 递归 def 链遍历（INDIRECT/MULTIEQUAL/COPY/PIECE/SUBPIECE）+ only_op_use 回调；PIECE 只按
+  offset 门控递归单一 piece（cc:1958-1964，least-sig at 0 / most-sig at in(1).size）；
+  SUBPIECE 以 offset+newOff 前进并在 REM/SREM 旁效时 setRemFormed（cc:1965-1985）
+- `only_op_use(fd, vn, opmatch, trial, flags, match_fc)` — 前向 descend BFS：BRANCH/LOAD/STORE
+  → false；CALL/CALLIND → checkCallDoubleUse 可 continue；不同 RETURN：仅当持有同 slot
+  varnode 才豁免，否则 res=false（cc:1849-1861，activeoutput 分支带 isAlternatePathValid）；
+  PIECE/SUBPIECE 维护 CONCAT_HIGH/LSB_TRUNCATED；default 置 ACTIONALT；每个 op 的
+  非 persist 输出都入队（cc:1887-1896）
+- `fn is_alternate_path_valid(vn, flags)` — TraverseNode::isAlternatePathValid
+  （expression.cc:28-50）1:1 端口
+- checkCallDoubleUse（cc:1756-1793）：fc/matchfc 均不再重复加锁——opmatch 的 spec 由调用方
+  以 `match_fc: Option<&FuncCallSpecs>` 传入（Rust 锁重入规避；op==opmatch 时两者同引用）
 - traverse_flags 模块：ACTIONALT/INDIRECT/INDIRECTALT/LSB_TRUNCATED/CONCAT_HIGH
-- checkCallDoubleUse 保守端口（返回 false = 非合法双重使用 → 安全方向）
+
+**initActiveOutput maxPass 修正**（funcdata_varnode.cc:585-593）：
+- `init_active_output` 现按 Ghidra 计算 `maxdelay = funcp.get_max_output_delay()`
+  （>0 时夹到 3）；锁定 cspec 的全部模型输出条目都在 register 空间（delay=0），
+  故 maxpass=0 —— 由 oracle next_url 投影 round-1 finalize（ordinal 19 裁 RDX）实证。
 
 **新增 PcodeOp mark 访问器**：is_mark/set_mark/clear_mark（op.hh:190/234/235，flags MARK=1<<13）
 <!-- annotation-pass: 2026-08-15 -->

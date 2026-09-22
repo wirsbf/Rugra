@@ -8849,7 +8849,6 @@ impl Action for ActionActiveParam {
         let mut aliascheck = crate::varmap::AliasChecker::new(1);
         aliascheck.gather_internal(fd);
         let maxancestor = fd.get_arch().map(|a| a.trim_recurse_max).unwrap_or(5);
-        let has_active_output = fd.active_output.is_some();
         let n_calls = fd.num_calls();
         let debug = std::env::var("RUGRA_DEBUG_ACTIVEPARAM").is_ok();
         if debug && n_calls > 0 { eprintln!("[ACTIVEPARAM-DBG] {} n_calls={}", fd.name, n_calls); }
@@ -8875,10 +8874,34 @@ impl Action for ActionActiveParam {
             };
             // Ghidra line 1742-1743: checkInputTrialUse if !fullyChecked.
             if !fully_checked_before {
-                let replace_slots = if let (Some(op_ref), Some(mut fc)) =
-                    (&op_ref, fd.get_call_specs_mut(i))
+                let replace_slots = if let (Some(op_ref), Some(fc_arc)) =
+                    (&op_ref, fd.callspecs.get(i).cloned())
                 {
-                    fc.check_input_trial_use(op_ref, has_active_output, &aliascheck, maxancestor)
+                    // Ghidra hands both `fc` and `data` into checkInputTrialUse
+                    // as plain pointers. Rust cannot hold this spec's write
+                    // guard across the walk: checkCallDoubleUse (deep inside
+                    // onlyOpUse) resolves other call specs through
+                    // Funcdata::getCallSpecs, whose fallback scan re-enters
+                    // every spec lock including this one. Park the spec value
+                    // out of its RwLock for the walk instead — the parked slot
+                    // holds a placeholder with a dangling op Weak, so the
+                    // identity scans can never match it, exactly like Ghidra
+                    // where no concurrent mutation exists.
+                    let mut spec = {
+                        let mut guard = fc_arc.write().unwrap();
+                        let placeholder = crate::fspec::FuncCallSpecs::new(
+                            crate::address::Address::new(0),
+                            guard.prototype.clone(),
+                        );
+                        std::mem::replace(&mut *guard, placeholder)
+                    };
+                    let slots =
+                        spec.check_input_trial_use(fd, op_ref, &aliascheck, maxancestor);
+                    {
+                        let mut guard = fc_arc.write().unwrap();
+                        *guard = spec;
+                    }
+                    slots
                 } else {
                     Vec::new()
                 };
@@ -12245,14 +12268,10 @@ impl Action for ActionLaneDivide {
 ///    for multi-register returns).
 /// 5. `clearActiveOutput`.
 ///
-/// Rugra gap: the function-level `guardReturns` heritage pass that registers
-/// RETURN trials is still a stub (see heritage.rs `guard_returns`), so
-/// `active_output` frequently arrives empty. To keep behaviour faithful AND
-/// functional we seed the active-output trials from the calling-convention
-/// model's `output_entries` (Rugra's `ProtoModel::default_x86_64`) when the
-/// container is present but empty. This replaces the previous hard-coded
-/// "scan for any write of Register offset 0x0" heuristic with the model-driven
-/// trial list while preserving the same end effect on the common RAX case.
+/// Rugra note: the function-level `guardReturns` heritage pass that registers
+/// RETURN trials and inserts their input varnodes is ported in heritage.rs
+/// (`Heritage::guard_returns`), so the active-output container arrives
+/// populated exactly like Ghidra's and no trial seeding happens here.
 pub struct ActionReturnRecovery { pub count: i32 ,
 }
 impl ActionReturnRecovery {
@@ -12286,8 +12305,11 @@ impl ActionReturnRecovery {
             if !curtrial.is_used() { break; }
             let slot = curtrial.get_slot() as usize;
             if slot >= num_input { break; }
-            let vn = retop.0.read().unwrap().get_in(slot).cloned();
-            newparam_push_unique(&mut newparam, vn);
+            // cc:1846: plain push_back of the trial slot's varnode (slots
+            // are strictly increasing so no duplicate can occur).
+            if let Some(vn) = retop.0.read().unwrap().get_in(slot).cloned() {
+                newparam.push(vn);
+            }
         }
 
         if newparam.len() <= 2 {
@@ -12373,156 +12395,21 @@ impl ActionReturnRecovery {
 impl Action for ActionReturnRecovery {
     // Ghidra: coreaction.cc:1908 ActionReturnRecovery::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Ghidra cc:4637-4651: if the output is type-locked the prototype is
-        // authoritative and return-value recovery must not run.
-        if fd.funcp.output_type_locked {
-            return Ok(action_status::NO_CHANGE);
-        }
-
-        // Ghidra cc:1911: the whole body is guarded by
+        // cc:1911: the whole body is guarded by
         // `if (active != (ParamActive*)0)`; apply returns 0 when the
-        // container is absent. The ONLY creation point is
+        // container is absent AND when it did work (cc:1954 `return 0;` —
+        // the change count lives in the protected count field, drained by
+        // take_count_delta). The ONLY creation point is
         // ActionPrototypeTypes (cc:4651, onceperfunc); after
-        // clearActiveOutput sets it to NULL it is never re-created, which is
-        // what lets the mainloop converge.
-        if fd.active_output.is_none() {
-            return Ok(action_status::NO_CHANGE);
-        }
-
-        // Seed trials from the calling-convention model when the container is
-        // empty. This substitutes for the (stub) function-level guardReturns
-        // pass that, in Ghidra, calls `active->registerTrial(addr, size)` for
-        // each candidate return storage location.
-        let need_seed = fd
-            .active_output
-            .as_ref()
-            .map(|a| a.get_num_trials() == 0)
-            .unwrap_or(true);
-        if need_seed {
-            seed_output_trials(fd);
-        }
-
-        let maxancestor = fd.get_arch().map(|a| a.trim_recurse_max).unwrap_or(5);
-
-        // Snapshot RETURN ops (cc:1919-1921 iterates beginOp/endOp(CPUI_RETURN)).
-        let return_ops: Vec<crate::op::PcodeOpRef> = fd
-            .obank
-            .returnlist
-            .iter()
-            .filter(|r| !r.0.read().unwrap().is_dead())
-            .filter(|r| (r.0.read().unwrap().flags & crate::op::pcodeop_flags::HALT) == 0)
-            .cloned()
-            .collect();
-        if return_ops.is_empty() {
-            // Ghidra's walk loop is a natural no-op with zero RETURNs, but the
-            // lifecycle tail still runs: finishPass, the maxPass check, and —
-            // once fully checked — deriveOutputMap + clearActiveOutput with
-            // the single finalize count (cc:1937-1951). Completing the
-            // lifecycle here (instead of early-returning) is what lets the
-            // mainloop converge and clears the container exactly once.
-            let fully_checked = {
-                let active = fd.active_output.as_mut().unwrap();
-                active.finish_pass();
-                if active.get_num_passes() > active.get_max_pass() {
-                    active.mark_fully_checked();
-                }
-                active.is_fully_checked()
-            };
-            let mut count = 0;
-            if fully_checked {
-                derive_func_output_map(fd);
-                fd.active_output = None; // Ghidra cc:1950: clearActiveOutput.
-                count += 1;
-            }
-            self.count += count;
-            return if count > 0 {
-                Ok(action_status::CHANGE)
-            } else {
-                Ok(action_status::NO_CHANGE)
-            };
-        }
-
-        // Ghidra cc:1919-1935: per-RETURN, per-trial liveness analysis.
-        let trial_count = fd
-            .active_output
-            .as_ref()
-            .map(|a| a.get_num_trials())
-            .unwrap_or(0);
-        // Ghidra cc:1935: count += 1 for every unchecked trial processed,
-        // accumulated across the whole walk and carried into the finalize
-        // count below.
-        let mut count = 0;
-        if trial_count > 0 {
-            let mut ancestor_real = crate::funcdata::AncestorRealistic::new();
-            for retop in &return_ops {
-                // Gather unchecked trial indices first so we never hold a
-                // borrow on active while mutating trials or fd.
-                let pending: Vec<usize> = (0..trial_count)
-                    .filter(|&i| !fd.active_output.as_ref().unwrap().get_trial(i).is_checked())
-                    .collect();
-                for i in pending {
-                    let slot = fd.active_output.as_ref().unwrap().get_trial(i).get_slot();
-                    // The trial varnode for a RETURN is the op input at the
-                    // trial's slot. If absent (RETURN has no return-value
-                    // operand yet), synthesise a candidate varnode at the
-                    // trial address so the ancestor walk has something to
-                    // chase — mirroring guardReturns' opInsertInput of a fresh
-                    // varnode. Only insert when the slot is missing.
-                    let op_num_input = retop.0.read().unwrap().num_input();
-                    if slot as usize >= op_num_input {
-                        let (addr, size) = {
-                            let t = fd.active_output.as_ref().unwrap().get_trial(i);
-                            (t.get_address(), t.get_size())
-                        };
-                        let cand = fd.vbank.create_with_space(
-                            size as usize, crate::space::AddressSpace::Register, addr.as_u64(),
-                        );
-                        cand.write().unwrap().set_active_heritage();
-                        fd.op_insert_input(retop, cand, slot as usize);
-                    }
-                    let success_real = {
-                        let active = fd.active_output.as_mut().unwrap();
-                        ancestor_real.execute(retop, slot, active.get_trial_mut(i), false)
-                    };
-                    // Ghidra cc:1935: count += 1 — every unchecked trial
-                    // processed increments the count exactly once.
-                    count += 1;
-                    if success_real {
-                        // Ghidra cc:1931-1932: ancestorOpUse(op, vn) -> markActive.
-                        let vn_opt = retop.0.read().unwrap().get_in(slot as usize).cloned();
-                        if let Some(vn) = vn_opt {
-                            let used = crate::funcdata::ancestor_op_use(
-                                true, maxancestor, &vn, retop, slot, 0, 0,
-                            );
-                            if used {
-                                fd.active_output
-                                    .as_mut()
-                                    .unwrap()
-                                    .get_trial_mut(i)
-                                    .mark_active();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Ghidra cc:1937-1939: finishPass + maxPass check.
-        let fully_checked = {
-            let active = fd.active_output.as_mut().unwrap();
-            active.finish_pass();
-            if active.get_num_passes() > active.get_max_pass() {
-                active.mark_fully_checked();
-            }
-            active.is_fully_checked()
-        };
-
-        let mut count = count; // carry the per-trial count from cc:1935
-        if fully_checked {
-            // Ghidra cc:1942: deriveOutputMap resolves USED trials.
-            derive_func_output_map(fd);
-            // Ghidra cc:1943-1949: buildReturnOutput for every RETURN.
-            let return_ops_again: Vec<crate::op::PcodeOpRef> = fd
+        // clearActiveOutput sets it to NULL it is never re-created, which
+        // is what lets the mainloop converge.
+        if fd.active_output.is_some() {
+            // cc:1918: maxancestor = data.getArch()->trim_recurse_max.
+            let maxancestor = fd.get_arch().map(|a| a.trim_recurse_max).unwrap_or(5);
+            // cc:1919-1921: iterate beginOp..endOp(CPUI_RETURN) — the live
+            // op list in creation order; dead and special-halt RETURNs are
+            // skipped inside the loop body (cc:1923-1924).
+            let return_ops: Vec<crate::op::PcodeOpRef> = fd
                 .obank
                 .returnlist
                 .iter()
@@ -12530,79 +12417,95 @@ impl Action for ActionReturnRecovery {
                 .filter(|r| (r.0.read().unwrap().flags & crate::op::pcodeop_flags::HALT) == 0)
                 .cloned()
                 .collect();
-            // Take the active container out of fd so we can read its final
-            // USED-trial state while mutating fd inside buildReturnOutput.
-            let active = fd.active_output.take().unwrap();
-            for retop in &return_ops_again {
-                Self::build_return_output(fd, &active, retop);
+            // Take the container out of fd so trial mutation and the fd
+            // reads inside ancestorOpUse never alias.
+            let mut active = fd.active_output.take().unwrap();
+            let mut ancestor_real = crate::funcdata::AncestorRealistic::new();
+            for retop in &return_ops {
+                for i in 0..active.get_num_trials() {
+                    // cc:1927: already checked trials are skipped.
+                    if active.get_trial(i).is_checked() {
+                        continue;
+                    }
+                    let slot = active.get_trial(i).get_slot();
+                    // cc:1929: vn = op->getIn(slot). The slot is populated
+                    // by Heritage::guardReturns' opInsertInput for every
+                    // RETURN that existed at heritage time; a Rust-side
+                    // missing input can only mean the RETURN was created
+                    // after registration, which Ghidra never observes.
+                    let vn = match {
+                        let op_rg = retop.0.read().unwrap();
+                        op_rg.get_in(slot as usize).cloned()
+                    } {
+                        Some(v) => v,
+                        None => continue,
+                    };
+                    // cc:1930-1932: markActive only when both the ancestor
+                    // walk sees realistic movement AND the trial varnode is
+                    // only used by this RETURN.
+                    if ancestor_real.execute(retop, slot, active.get_trial_mut(i), false) {
+                        if crate::funcdata::ancestor_op_use(
+                            fd,
+                            maxancestor,
+                            &vn,
+                            retop,
+                            active.get_trial_mut(i),
+                            0,
+                            0,
+                            None,
+                        ) {
+                            active.get_trial_mut(i).mark_active();
+                        }
+                    }
+                    // cc:1933: count += 1 for every unchecked trial
+                    // processed, regardless of the verdicts above.
+                    self.count += 1;
+                }
             }
-            // Ghidra cc:1950-1951: clearActiveOutput (taken == cleared); the
-            // single count += 1 fires once here, NOT per RETURN op.
-            count += 1;
-        }
 
-        self.count += count;
-        if count > 0 {
-            Ok(action_status::CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
+            // cc:1937: active->finishPass().
+            active.finish_pass();
+            // cc:1938-1939: once the pass count exceeds the model-derived
+            // maxPass (Funcdata::initActiveOutput), no new trials are
+            // expected and the map can be finalized.
+            if active.get_num_passes() > active.get_max_pass() {
+                active.mark_fully_checked();
+            }
+
+            if active.is_fully_checked() {
+                // cc:1942: data.getFuncProto().deriveOutputMap(active).
+                if let Some(model) = fd.funcp.get_model_arc() {
+                    model.derive_output_map(&mut active);
+                }
+                // cc:1943-1949: rebuild the input list of every live
+                // non-halt RETURN from the USED trials.
+                for retop in &return_ops {
+                    Self::build_return_output(fd, &active, retop);
+                }
+                // cc:1950: data.clearActiveOutput() — the container taken
+                // above is simply not put back.
+                // cc:1951: count += 1 — the single finalize increment.
+                self.count += 1;
+            } else {
+                fd.active_output = Some(active);
+            }
         }
+        // cc:1954: apply always returns 0.
+        Ok(action_status::NO_CHANGE)
+    }
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:1933/1951) into the Rust ActionState accumulator;
+    // apply itself returns 0 exactly like the oracle.
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "returnrecovery" mirrors ctor at coreaction.hh:799
     fn get_name(&self) -> &str { "returnrecovery" }
 }
 
-// Push a varnode into newparam unless it duplicates the current last element
-// (guards against copying slot 0 twice). Mirrors Ghidra's vector push_back
-// inside buildReturnOutput's trial loop (cc:1846), which never duplicates
-// because trial slots are strictly increasing.
-// RUGRA-GLUE: ANN-F; Rust Option<Arc> adapter for Ghidra's inline push_back; duplicate suppression is tracked by OPBANK-0001/FSPEC-0002.
-fn newparam_push_unique(
-    newparam: &mut Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
-    vn: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
-) {
-    if let Some(v) = vn {
-        let already_last = newparam
-            .last()
-            .map(|last| std::sync::Arc::ptr_eq(last, &v))
-            .unwrap_or(false);
-        if !already_last { newparam.push(v); }
-    }
-}
 
-// Ghidra analogue: Heritage::guardReturns (heritage.cc:1653-1676) registers a
-// ParamActive trial for each candidate return storage location described by
-// the calling-convention model. Rugra's function-level guardReturns is a stub,
-// so we perform the equivalent registration here, driven by
-// ProtoModel::output_entries (the x86-64 SysV default's sole output entry is
-// RAX at Register offset 0x0, size 8).
-// RUGRA-GLUE: ANN-F; fallback seeds default-model outputs because Heritage::guardReturns is not wired; relocation is tracked by HERITAGE-0001/FSPEC-0002.
-fn seed_output_trials(fd: &mut Funcdata) {
-    use crate::address::Address;
-    let model = crate::type_system::protomodel::ProtoModel::default_x86_64();
-    let active = match fd.active_output.as_mut() {
-        Some(a) => a,
-        None => return,
-    };
-    for entry in &model.output_entries {
-        let addr = Address::new(entry.base);
-        if active.which_trial_in_space(entry.space, addr, entry.size) < 0 {
-            active.register_trial_in_space(entry.space, addr, entry.size);
-        }
-    }
-}
 
-// Ghidra analogue: data.getFuncProto().deriveOutputMap(active) (coreaction.cc:1942)
-// delegates to ProtoModel::deriveOutputMap -> ParamListStandard::fillinMap.
-// Rugra's FuncProto has no ProtoModel pointer, so resolve the default model
-// directly and call its derive_output_map.
-// RUGRA-GLUE: ANN-F; calls a default ProtoModel because FuncProto lacks oracle model ownership; replacement is tracked by FSPEC-0001/FSPEC-0002.
-fn derive_func_output_map(fd: &mut Funcdata) {
-    let model = crate::type_system::protomodel::ProtoModel::default_x86_64();
-    if let Some(active) = fd.active_output.as_mut() {
-        model.derive_output_map(active);
-    }
-}
+
 
 /// Calculate the non-zero mask property on all Varnode objects. Faithful
 /// to `ActionNonzeroMask` (coreaction.hh:293-301, coreaction.cc:5507).

@@ -1181,6 +1181,21 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 - 完整版需 AncestorRealistic + ancestorOpUse + deriveOutputMap + buildReturnOutput — deferred。
 - 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
+### 2026-09-22：ActionReturnRecovery 对齐修复（RETREC-ORD19 家族）
+- `apply`（coreaction.cc:1908-1955）去除三处自创逻辑：output_type_locked 早退（Ghidra
+  无此守卫）、seed_output_trials 假 trial 播种（guardReturns 已在 heritage.rs 移植并
+  注册真实 trial）、walk 内缺失 slot 的候选 varnode 合成 + opInsertInput（Ghidra 直接
+  读 `op->getIn(slot)`）。
+- apply 恒返回 0（cc:1954），计数走 `take_count_delta`（cc:1933/1951 的 protected
+  count 递增）。
+- deriveOutputMap 改走 `fd.funcp.get_model_arc().derive_output_map`（真 cspec 模型），
+  替换 ProtoModel::default_x86_64 简化模型。
+- 依赖修复：init_active_output 的 maxPass 从模型 getMaxOutputDelay 计算（见
+  funcdata.md）；ancestorOpUse/onlyOpUse 全量 1:1 移植（见 funcdata.md）。
+- 验证：oracle next_url 投影 ordinal 19 returnrecovery 四元组 result=4 count=4
+  tests=0 apply=1 与 RDX(register:10) 裁剪 op 线全部命中；Phase 2 首分歧推进至
+  ordinal 28 stackstall:oppool1（863 vs 826，新家族）。
+
 ### 2026-06-29（续 9）：ActionInputPrototype 忠实移植（coreaction.cc:4707-4763）
 - 对未锁定 input prototype 的函数，扫描输入 varnodes（非 spacebase/persist），创建 ParamActive trials，标记有后代的为 active。
 - 为每个 active input 创建 ProtoParameter（type=long, name=param_N）。
