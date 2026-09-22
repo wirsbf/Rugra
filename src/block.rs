@@ -409,27 +409,143 @@ pub fn print_tree_dbg(
     }
 }
 
-// RUGRA-GLUE: one nesting level of the `getParent()->nextFlowAfter(this)`
-// recursion (block.cc:1335-1353) used by the tree-wide gotoPrints evaluation.
-/// For each component, its in-flow successor is the next sibling's front leaf
-/// (cc:1349-1352); for the last component it is `tail_next` — the successor
-/// the enclosing composite itself received (cc:1344-1348's parent recursion,
-/// null at the root). Each component is then visited with its successor.
-fn goto_prints_walk_level(
+// Ghidra: block.cc:1335 BlockGraph::nextFlowAfter (sibling arm)
+/// `BlockGraph::nextFlowAfter` (block.cc:1335-1353) for a plain graph/list
+/// parent, evaluated for every component at once: each component's in-flow
+/// successor is the next sibling's front leaf (cc:1349-1352); for the last
+/// component it is `tail_next` — the successor the enclosing composite
+/// itself received (cc:1344-1348's parent recursion, null at the root).
+pub(crate) fn graph_sibling_successors(
     components: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
     tail_next: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
-) {
+) -> Vec<Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>> {
     let n = components.len();
-    for i in 0..n {
-        // cc:1340-1343: find the block after this one; cc:1349-1352:
-        // front-leaf it. Last component: cc:1344-1348 parent arm, precomputed
-        // by the caller as tail_next (None at the root = the oracle's null).
-        let succ = if i + 1 < n {
-            front_leaf(&components[i + 1])
-        } else {
-            tail_next.clone()
-        };
-        goto_prints_visit(&components[i], succ);
+    (0..n)
+        .map(|i| match components.get(i + 1) {
+            // cc:1340-1343: find the block after this one; cc:1349-1352:
+            // front-leaf it.
+            Some(next) => front_leaf(next),
+            // Last component: cc:1344-1348 parent arm, precomputed by the
+            // caller as tail_next (None at the root = the oracle's null).
+            None => tail_next.clone(),
+        })
+        .collect()
+}
+
+// Ghidra: block.cc:1335 BlockGraph::nextFlowAfter (per-type dispatch)
+/// The `getParent()->nextFlowAfter(this)` virtual dispatch (block.cc:2885),
+/// evaluated for every component of `node` at once with the successor
+/// `succ` the walk already computed for `node` itself. One row per
+/// `FlowBlock::nextFlowAfter` override:
+/// - `FlowBlock` base (block.hh:884-887): null — leaves never dispatch here
+///   (the walk only recurses through walkable composites).
+/// - `BlockGraph`/`BlockList` (block.cc:1335-1353; block.hh:600 no override):
+///   the sibling arm above.
+/// - `BlockGoto` (block.cc:2899-2903): front leaf of the goto target, for
+///   any component (the wrapped block flows to the target).
+/// - `BlockMultiGoto` (block.cc:2931-2934): null for any component — but
+///   Rugra's MultiGoto `component_list_dyn` is empty (its wrapped child is
+///   the dispatch basic leaf, which holds no BlockGoto), so this arm is
+///   structurally unreachable here.
+/// - `BlockCondition` (block.cc:3053-3056): null ("do not know where flow
+///   goes") for any component.
+/// - `BlockIf` (block.cc:3127-3134): slot 0 (the condition, incl. the
+///   if-goto form's only component) → null; any other slot (tc/fc) → the
+///   parent arm `succ` — **no sibling scan**: both bodies' successors are
+///   the whole if's successor, never each other.
+/// - `BlockWhileDo` (block.cc:3341-3351): slot 0 (condition) → null; the
+///   body → `front_leaf(getBlock(0))` = the loop head (the body flows back
+///   to the condition, not past the loop).
+/// - `BlockDoWhile` (block.cc:3448-3451): null for any component ("don't
+///   know what will execute next" — the fused body may iterate).
+/// - `BlockInfLoop` (block.cc:3476-3483): `front_leaf(getBlock(0))` = the
+///   loop head for any component (flow re-enters the loop).
+/// - `BlockSwitch` (block.cc:3639-3661): oracle arm ① `getBlock(0)==bl →
+///   null` addresses the dispatch root cs[0], which Rugra keeps in
+///   `BlockSwitch::control` OUTSIDE the component list — no Rust component
+///   reaches that arm (a t_multigoto root also falls to null via arm ②).
+///   Arm ②: a component whose type is not `t_goto` → null ("Otherwise there
+///   is a break statement in the flow"). Arm ③-⑤: a `t_goto` case is looked
+///   up in the case order — oracle `caseblocks`, label/depth stable_sort at
+///   finalizePrinting (block.cc:3591) after ActionFinalStructure's
+///   `finalizePrinting` call (blockaction.cc:2192); Rugra prints cases in
+///   component order (cases + appended default, printc emit_block_switch),
+///   so the component order IS the print/fallthru order here — and the
+///   next caseblock's front leaf; the LAST caseblock defers to the parent
+///   arm `succ` ("flow is to exit of switch").
+pub(crate) fn next_flow_after_successors(
+    node: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    components: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
+    succ: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+) -> Vec<Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>> {
+    let n = components.len();
+    let bt = node.read().unwrap().get_type();
+    match bt {
+        BlockType::If => {
+            // cc:3130-3131: getBlock(0)==bl → null ("do not know where flow
+            // goes"); cc:3134: else parent recursion — no sibling scan.
+            (0..n)
+                .map(|i| if i == 0 { None } else { succ.clone() })
+                .collect()
+        }
+        BlockType::WhileDo => {
+            // cc:3344-3345: cond slot null ("don't know what will execute
+            // next"); cc:3347-3350: body → front leaf of getBlock(0) (the
+            // loop head).
+            let mut v: Vec<Option<_>> = (0..n).map(|_| None).collect();
+            if let Some(head) = components.first() {
+                let head_leaf = front_leaf(head);
+                for slot in v.iter_mut().skip(1) {
+                    *slot = head_leaf.clone();
+                }
+            }
+            v
+        }
+        BlockType::DoWhile | BlockType::Condition => {
+            // cc:3451 / cc:3056: always null ("don't know what's next").
+            (0..n).map(|_| None).collect()
+        }
+        BlockType::InfLoop => {
+            // cc:3479-3482: front leaf of getBlock(0) for every component.
+            let head_leaf = components.first().and_then(front_leaf);
+            (0..n).map(|_| head_leaf.clone()).collect()
+        }
+        BlockType::Goto => {
+            // cc:2902: getGotoTarget()->getFrontLeaf() for any component.
+            let target = node
+                .read()
+                .unwrap()
+                .as_any()
+                .downcast_ref::<BlockGoto>()
+                .and_then(|g| g.target_dyn.clone());
+            let target_leaf = target.as_ref().and_then(front_leaf);
+            (0..n).map(|_| target_leaf.clone()).collect()
+        }
+        BlockType::Switch => {
+            let mut v: Vec<Option<_>> = Vec::with_capacity(n);
+            for (pos, component) in components.iter().enumerate() {
+                // cc:3646-3647: non-t_goto case → null ("Otherwise there is
+                // a break statement in the flow"). cc:3649-3657: a t_goto
+                // case is fall-thru to the NEXT caseblock in print order
+                // (component order here — see doc comment); cc:3659-3660:
+                // the last caseblock defers to the parent arm. No
+                // dispatch-root arm: Rust components[0] is the first case,
+                // not cs[0].
+                let is_goto = component.read().unwrap().get_type() == BlockType::Goto;
+                if !is_goto {
+                    v.push(None);
+                } else {
+                    v.push(match components.get(pos + 1) {
+                        Some(next) => front_leaf(next),
+                        None => succ.clone(),
+                    });
+                }
+            }
+            v
+        }
+        // Root graph / BlockList / any other plain BlockGraph: the sibling
+        // rule of block.cc:1340-1352.
+        _ => graph_sibling_successors(components, succ),
     }
 }
 
@@ -438,8 +554,9 @@ fn goto_prints_walk_level(
 /// `gotobl = getGotoTarget()->getFrontLeaf(); nextbl = <successor>;
 /// return gotobl != nextbl` (pointer identity; None vs None compares equal,
 /// matching C++ null == null). Every block then recurses into its component
-/// list with its own successor as the nested tail (the last component of a
-/// composite flows into whatever follows the composite — block.cc:1347).
+/// list, each component receiving the per-parent-type successor of
+/// `next_flow_after_successors` — the virtual dispatch of cc:2885's
+/// `getParent()->nextFlowAfter(this)` for every parent kind.
 fn goto_prints_visit(
     bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
     succ: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
@@ -459,7 +576,10 @@ fn goto_prints_visit(
     }
     let components = BlockGraph::component_list_dyn(bl);
     if !components.is_empty() {
-        goto_prints_walk_level(&components, succ);
+        let succs = next_flow_after_successors(bl, &components, succ);
+        for (child, child_succ) in components.into_iter().zip(succs) {
+            goto_prints_visit(&child, child_succ);
+        }
     }
 }
 
@@ -3846,9 +3966,11 @@ impl BlockGraph {
     /// Evaluate every tree-resident `BlockGoto::gotoPrints` (block.cc:2881-
     /// 2890) once over the final structured tree: `prints = (front_leaf(target)
     /// != next-in-flow successor)` where the successor is
-    /// `getParent()->nextFlowAfter(this)` (block.cc:1335-1353) — the next
-    /// sibling's front leaf, or, for a last child, the enclosing composite's
-    /// own successor, up to the root where it is null. Called by
+    /// `getParent()->nextFlowAfter(this)` — the per-parent-type virtual
+    /// dispatch (`next_flow_after_successors`, block.cc:1335/2899/2931/
+    /// 3053/3127/3341/3448/3476/3639). The root graph itself is a plain
+    /// BlockGraph, so its components get the sibling rule (cc:1335-1353)
+    /// with the null parent at the root (cc:1344-1346). Called by
     /// ActionFinalStructure after `scopeBreak(-1,-1)` and before
     /// `markUnstructured()` (blockaction.cc:2193-2194) — the oracle's own
     /// first lazy evaluation point — so `markUnstructured`'s `gotoPrints()`
@@ -3856,7 +3978,10 @@ impl BlockGraph {
     /// computes on demand. Results are stored on `BlockGoto::prints_precomputed`.
     pub fn compute_goto_prints(&mut self) {
         let components = self.blocks.clone();
-        goto_prints_walk_level(&components, None);
+        let succs = graph_sibling_successors(&components, None);
+        for (child, succ) in components.into_iter().zip(succs) {
+            goto_prints_visit(&child, succ);
+        }
     }
 
     // Ghidra: block.cc:796 FlowBlock::findCommonBlock
@@ -5522,22 +5647,6 @@ impl BlockGoto {
         // cc:2895-2896: s << "Plain goto block "; FlowBlock::printHeader(s);
         format!("Plain goto block {}", self.index)
     }
-
-    /// Ghidra `BlockGoto::nextFlowAfter` (block.cc:2899-2903): the block
-    /// containing the next statement in flow is the goto target's front leaf.
-    /// Reads the real dyn capture (`target_dyn`, block.cc:1705); the typed
-    /// leaf projection is the fallback. Returns the front leaf's index or
-    /// `None` if no target is set.
-    // Ghidra: block.cc:2899 BlockGoto::nextFlowAfter
-    pub fn next_flow_after_index(&self) -> Option<i32> {
-        // cc:2902: return getGotoTarget()->getFrontLeaf();
-        if let Some(t) = &self.target_dyn {
-            return front_leaf(t).map(|leaf| leaf.read().unwrap().get_index());
-        }
-        self.goto_target
-            .as_ref()
-            .map(|t| t.read().unwrap().index)
-    }
 }
 
 /// A block with multiple edges out, at least one of which is an unstructured
@@ -6032,27 +6141,6 @@ impl BlockIf {
         }
     }
 
-    /// Ghidra `BlockIf::nextFlowAfter` (block.cc:3127-3135): if the query is
-    /// about the condition block (getBlock(0)==bl), flow is unknown (returns
-    /// null); otherwise defer to the parent's nextFlowAfter. Rugra identifies
-    /// the condition by `Arc::ptr_eq` with the passed block.
-    // Ghidra: block.cc:3127 BlockIf::nextFlowAfter
-    pub fn next_flow_after_parent(
-        &self,
-        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-    ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
-        // cc:3130-3131: if (getBlock(0) == bl) return null;
-        if Arc::ptr_eq(&self.condition, bl) {
-            return None;
-        }
-        // cc:3132-3133: if (getParent() == null) return null;
-        // cc:3134: return getParent()->nextFlowAfter(this);
-        // BlockGraph's nextFlowAfter is not yet ported; return None to signal
-        // "unknown" (matching the null-parent branch).
-        let _parent = self.get_parent();
-        None
-    }
-
     /// Ghidra `BlockIf::preferComplement` (block.cc:3093-3109): for an
     /// if/else block, test whether flipping the CBRANCH condition (so the
     /// if/else arms swap) is legal and beneficial, and if so perform the
@@ -6316,24 +6404,6 @@ impl BlockWhileDo {
         }
         s
     }
-
-    /// Ghidra `BlockWhileDo::nextFlowAfter` (block.cc:3341-3351): if the query
-    /// is about the condition block, flow is unknown; otherwise the next block
-    /// in flow is the condition's front leaf (the first statement of the
-    /// while body). Rugra returns the condition block when the query is not
-    /// about it.
-    // Ghidra: block.cc:3341 BlockWhileDo::nextFlowAfter
-    pub fn next_flow_after(
-        &self,
-        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-    ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
-        // cc:3344-3345: if (getBlock(0) == bl) return null;
-        if Arc::ptr_eq(&self.condition, bl) {
-            return None;
-        }
-        // cc:3347-3350: nextbl = getBlock(0); if (nextbl != null) nextbl = nextbl->getFrontLeaf(); return nextbl;
-        Some(self.condition.clone())
-    }
 }
 
 /// Represents a DO-WHILE loop
@@ -6487,18 +6557,6 @@ impl BlockDoWhile {
     pub fn print_header(&self) -> String {
         // cc:3444-3445: s << "Dowhile block "; FlowBlock::printHeader(s);
         format!("Dowhile block {}", self.index)
-    }
-
-    /// Ghidra `BlockDoWhile::nextFlowAfter` (block.cc:3448-3452): flow after
-    /// any child of a do-while is unknown (the loop may iterate). Returns
-    /// null.
-    // Ghidra: block.cc:3448 BlockDoWhile::nextFlowAfter
-    pub fn next_flow_after(
-        &self,
-        _bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-    ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
-        // cc:3451: return null;   // Don't know what will execute next
-        None
     }
 }
 
@@ -6656,18 +6714,6 @@ impl BlockInfLoop {
     pub fn print_header(&self) -> String {
         // cc:3472-3473: s << "Infinite loop block "; FlowBlock::printHeader(s);
         format!("Infinite loop block {}", self.index)
-    }
-
-    /// Ghidra `BlockInfLoop::nextFlowAfter` (block.cc:3476-3483): the next
-    /// block in flow after a child query is the body's front leaf (the first
-    /// statement of the infinite loop). Rugra returns the body block.
-    // Ghidra: block.cc:3476 BlockInfLoop::nextFlowAfter
-    pub fn next_flow_after(
-        &self,
-        _bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-    ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
-        // cc:3479-3482: nextbl = getBlock(0); if (nextbl != null) nextbl = nextbl->getFrontLeaf(); return nextbl;
-        Some(self.body.clone())
     }
 }
 
@@ -7151,17 +7197,6 @@ impl BlockCondition {
         format!("Condition block({}) {}", op_str, self.index)
     }
 
-    /// Ghidra `BlockCondition::nextFlowAfter` (block.cc:3053-3057): flow after
-    /// a compound condition is unknown. Returns null.
-    // Ghidra: block.cc:3053 BlockCondition::nextFlowAfter
-    pub fn next_flow_after(
-        &self,
-        _bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-    ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
-        // cc:3056: return null;   // Do not know where flow goes
-        None
-    }
-
     /// Ghidra `BlockCondition::encodeHeader` (block.cc:3059-3065): emit the
     /// base header plus an `opcode` attribute with the boolean op name. Rugra
     /// returns `(index, opcode_name)` for the marshal layer.
@@ -7461,33 +7496,6 @@ impl BlockSwitch {
     pub fn print_header(&self) -> String {
         // cc:3635-3636: s << "Switch block "; FlowBlock::printHeader(s);
         format!("Switch block {}", self.index)
-    }
-
-    /// Ghidra `BlockSwitch::nextFlowAfter` (block.cc:3639-3661): if the query
-    /// is about the switch control, flow is unknown; otherwise, if the query
-    /// is a goto case block, the next block in flow is the next case in
-    /// fallthru order; if it is the last case, defer to the parent. Rugra
-    /// returns the case following the queried block, or None if not found or
-    /// at the end.
-    // Ghidra: block.cc:3639 BlockSwitch::nextFlowAfter
-    pub fn next_flow_after(
-        &self,
-        bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-    ) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
-        // cc:3642-3643: if (getBlock(0) == bl) return null;
-        if Arc::ptr_eq(&self.control, bl) {
-            return None;
-        }
-        // cc:3651-3653: find bl in caseblocks.
-        let pos = self.cases.iter().position(|c| Arc::ptr_eq(c, bl))?;
-        // cc:3655-3657: i = i + 1; if (i < caseblocks.size()) return caseblocks[i].block->getFrontLeaf();
-        let next = pos.checked_add(1)?;
-        if next < self.cases.len() {
-            return self.cases.get(next).cloned();
-        }
-        // cc:3658-3660: otherwise flow is to exit of switch -> parent->nextFlowAfter(this).
-        // BlockGraph's nextFlowAfter is not yet ported; return None.
-        None
     }
 
     /// Ghidra `BlockSwitch::getSwitchVar` (block.cc:3596-3601): the input

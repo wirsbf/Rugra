@@ -14179,16 +14179,14 @@ impl ActionReturnSplit {
             active_ancestors: 0,
             gotoblocks: 0,
         };
+        let roots = fd.sblocks.blocks.clone();
         // Root level = BlockGraph::nextFlowAfter sibling rule (block.cc:1335-
         // 1353): each root's successor is the next root's front leaf; the
         // last root defers to the (null) parent — the oracle's null at root.
-        let roots = fd.sblocks.blocks.clone();
-        for i in 0..roots.len() {
-            let succ = match roots.get(i + 1) {
-                Some(next) => crate::block::front_leaf(next),
-                None => None,
-            };
-            walk.visit(&roots[i], succ);
+        // Shared dispatch source with the goto-prints walk (block.rs).
+        let root_succs = crate::block::graph_sibling_successors(&roots, None);
+        for (root, succ) in roots.into_iter().zip(root_succs) {
+            walk.visit(&root, succ);
         }
         // Selection walk (cc:2291-2303): in-edge i is split iff the copy-map
         // chain of its source holds a marked node ⟺ the copy is a leaf under
@@ -14292,7 +14290,8 @@ impl GatherReturnGotosWalk {
         }
         let components = crate::block::BlockGraph::component_list_dyn(node);
         if !components.is_empty() {
-            let succs = next_flow_after_successors(node, &components, succ);
+            let succs =
+                crate::block::next_flow_after_successors(node, &components, succ);
             for (child, child_succ) in components.into_iter().zip(succs) {
                 self.visit(&child, child_succ);
             }
@@ -14351,106 +14350,6 @@ impl GatherReturnGotosWalk {
                 None => return false,
             }
         }
-    }
-}
-
-/// The per-parent-type `nextFlowAfter` successor each component of `node`
-/// receives — the virtual dispatch `BlockGoto::gotoPrints` reaches through
-/// `getParent()->nextFlowAfter(this)` (block.cc:2885):
-/// - `BlockGraph` (root/list) block.cc:1335-1353: next sibling's front leaf;
-///   last component defers to the composite's own successor (null at root).
-/// - `BlockIf` block.cc:3127-3135: the getBlock(0) condition slot gets null
-///   ("do not know where flow goes"); body/else defer to the parent.
-/// - `BlockWhileDo` block.cc:3341-3351: condition slot null; body flows back
-///   to front leaf of the condition (getBlock(0)).
-/// - `BlockDoWhile` block.cc:3448-3452 / `BlockCondition` block.cc:3053-3057:
-///   always null.
-/// - `BlockInfLoop` block.cc:3476-3483: front leaf of getBlock(0) (the body
-///   head — flow re-enters the loop).
-/// - `BlockGoto` block.cc:2899-2903: front leaf of the goto target.
-/// - `BlockSwitch` block.cc:3639-3661: case 0 null; a t_goto case gets the
-///   next case's front leaf (last case defers to the parent); non-goto
-///   cases null ("break statement in the flow").
-// Ghidra: block.cc:1335 BlockGraph::nextFlowAfter (per-type dispatch)
-fn next_flow_after_successors(
-    node: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
-    components: &[Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>],
-    succ: Option<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>>,
-) -> Vec<Option<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>>> {
-    use crate::block::{BlockGoto, BlockType, front_leaf};
-    let n = components.len();
-    let sibling_rule = |tail: &Option<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>>| {
-        (0..n)
-            .map(|i| match components.get(i + 1) {
-                Some(next) => front_leaf(next),
-                None => tail.clone(),
-            })
-            .collect::<Vec<_>>()
-    };
-    let bt = node.read().unwrap().get_type();
-    match bt {
-        BlockType::If => {
-            // cc:3130-3134: getBlock(0)==bl → null; else parent recursion.
-            (0..n)
-                .map(|i| if i == 0 { None } else { succ.clone() })
-                .collect()
-        }
-        BlockType::WhileDo => {
-            // cc:3344-3350: cond null; body → front leaf of getBlock(0).
-            let mut v: Vec<Option<_>> = (0..n).map(|_| None).collect();
-            if let Some(head) = components.first() {
-                let head_leaf = front_leaf(head);
-                for slot in v.iter_mut().skip(1) {
-                    *slot = head_leaf.clone();
-                }
-            }
-            v
-        }
-        BlockType::DoWhile | BlockType::Condition => {
-            // cc:3451 / cc:3056: always null ("don't know what's next").
-            (0..n).map(|_| None).collect()
-        }
-        BlockType::InfLoop => {
-            // cc:3479-3482: front leaf of getBlock(0) for every component.
-            let head_leaf = components.first().and_then(front_leaf);
-            (0..n).map(|_| head_leaf.clone()).collect()
-        }
-        BlockType::Goto => {
-            // cc:2902: getGotoTarget()->getFrontLeaf().
-            let target = node
-                .read()
-                .unwrap()
-                .as_any()
-                .downcast_ref::<BlockGoto>()
-                .and_then(|g| g.target_dyn.clone());
-            let target_leaf = target.as_ref().and_then(front_leaf);
-            (0..n).map(|_| target_leaf.clone()).collect()
-        }
-        BlockType::Switch => {
-            // cc:3642-3660: case 0 null; t_goto case → next case's front
-            // leaf (last → parent); non-goto case null.
-            let mut v: Vec<Option<_>> = Vec::with_capacity(n);
-            for i in 0..n {
-                if i == 0 {
-                    v.push(None);
-                    continue;
-                }
-                let is_goto =
-                    components[i].read().unwrap().get_type() == BlockType::Goto;
-                if !is_goto {
-                    v.push(None);
-                } else {
-                    v.push(match components.get(i + 1) {
-                        Some(next) => front_leaf(next),
-                        None => succ.clone(),
-                    });
-                }
-            }
-            v
-        }
-        // Root graph / BlockList / any other plain BlockGraph: the sibling
-        // rule of block.cc:1340-1352.
-        _ => sibling_rule(&succ),
     }
 }
 
