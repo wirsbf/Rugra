@@ -209,6 +209,20 @@ PrintC 的 label discovery、pending-label backpatch、graph code start、
 `unwrap_or(0)` 生成零地址 sentinel；残差继续绑定
 `GOTO-LABEL-UNPRINTED-0001` / `PRINTC-GOTOPRINTS-0001`。
 
+## 2026-09-22：label/goto 寻址切换为 getEntryAddr（SB-HERITAGE50-BLOCKCOVER-0001）
+
+`flow_entry_address` 末步与 `block::front_leaf_start_addr` 现在都解析到
+`BlockBasic::get_entry_addr()`（block.cc:2291 端口，见 docs/api/block.md
+2026-09-22 节），对齐 printc.cc:3170 `emitLabel` 的取址：**label 永远用目标
+块的入口地址**，而不是最低 cover 范围（getStart）或分支常量。拼接块
+（多范围 cover）上 label 与 getStart 可以不同；next_url 实测 label=
+0x50e7 块在 heritage 插入 MULTIEQUAL@getStart=0x2534 到块头后，入口
+地址随之变为 0x2534（首 op 落在 0x2534 范围）——与 oracle accessor
+语义逐字一致。残差：goto 抑制（`code_block_starts` 白名单）与 label
+打印（UNSTRUCTURED_TARG 臂）之间的不对称现在可见——被抑制 goto 的
+marked leaf 会打出无引用 label（curl GetStr 37B2 / httpd 2CB68×2，
+合法 C，defects=0），登记 `PRINTC-LABEL-WITHOUT-GOTO-0001`。
+
 ## 2026-08-28：结构化条件按 FlowBlock 类型分派（GETSTR-PRINTC-STRUCTCOND-0001）
 
 `emitBlockIf` 的 condition 不再抽取/拼接条件文本，而是像 Ghidra

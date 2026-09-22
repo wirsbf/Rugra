@@ -1145,7 +1145,7 @@ forceSpecific/removeBlockEdges/setOut 在锁定 oracle 不存在、"238 行只�
 | `CONDEXE-ERROR-0006` | P1 | resolve 链 Result 化+死循环消灭 | `src/condexe.rs:546-746` | 0001 |
 | `CONDEXE-FIXTURE-0007` | P2 | 27 函数 locked-oracle fixture 补全 | tests/ + tools/ | 0001-0006 |
 
-| `BLOCKBASIC-COVER-0001` | P2 | comment 审计新增：BlockBasic::contains 的 cover 边界投影形式化等价未证 | `src/block.rs`、fixture | 排队 |
+| `BLOCKBASIC-COVER-0001` | P2 | 部分闭合（2026-09-22 SB-HERITAGE50-BLOCKCOVER-0001：多范围 cover+copyRange/mergeRange/getEntryAddr/getStart/getStop 已接线；残余=contains(cover.inRange) 的 comment 域消费+RangeList marshal+空 cover invalid-Address() 精确化） | comment 域后续认领 | `src/block.rs`、fixture | 排队 |
 | `COMMENT-DB-EMITTED-0001` | P2 | comment 审计新增：setEmitted(false) 不回写 CommentDatabaseInternal（Ghidra mutable 直改库内对象） | `src/comment.rs`、`src/database_*.rs` | 排队 |
 | `COMMENT-SORTER-PRINTC-0001` | P2 | comment 审计新增：printc 消费端迁移到直接协议（消除 Vec 快照与 printc.rs:6651 警告） | `src/printc.rs`、`src/comment.rs` | printc 租约释放后认领 |
 
@@ -2183,6 +2183,29 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
 > next_url/main/getparameter.constprop.0 --func defects=0/numbering=0。
 > ruleaction.rs+funcdata.rs 属主管线 Rule 改动 → 机制 C 待独立 Cross-Review。
 
+> **SB-HERITAGE50-BLOCKCOVER-0001 修复(2026-09-22,Lane CM `wt/sb-heritage50`,owner=fixer)**:
+> Phase 2 首分歧(stage seq 50)`universal:fullloop:mainloop:heritage`
+> V1_OP_LINE_DIVERGENCE:SNAP 50 里 oracle 的 8 条 MULTIEQUAL(投影表槽位名 BUILD)
+> 挂在 0x2534 而 rugra 挂在 0x50e7,其余 142 条新增 op(INDIRECT/CALL/COPY+42 条
+> MULTIEQUAL)逐字节一致。根因**不在 heritage**——`Heritage::placeMultiequals`
+> cc:2633 `fd->newOp(bl->sizeIn(), bl->getStart())` 忠实,而 `BlockBasic::getStart`
+> (block.cc:2319)=**cover(多范围 RangeList)按 offset 排序的首范围首地址**;
+> Rugra 把 cover 模型降级成了单一 `initial_range` 且 `splice_block_basic` 缺
+> `mergeRange`(funcdata_block.cc:942),拼接块(next_url blk28 吸收了 0x2534 的
+> 尾块,0x2534<0x50e7)永不产生第二范围。自底向上补齐:block.rs cover→RangeList
+> +copy_range(block.hh:468)/merge_range(:469)/get_entry_addr(block.cc:2291),
+> funcdata.rs splice 前接线 mergeRange、node_split_block_edge 接线 copyRange
+> (funcdata_block.cc:832),printc label/goto 寻址(printc.cc:3170 emitLabel)
+> 从 getStart/分支常量切换为 getEntryAddr。**Phase 2 首分歧 50→65**
+> (event-ordinal 60,= 已登记 SB-OPPOOL-R4-COUNT-0001 的 oppool1
+> result/count 85 vs 77,数字逐字一致,ordinals 1-64 全匹配)。
+> curl E2E defects=numbering=0(skeleton 3959→3960,见 Differential);
+> httpd defects=0 numbering=8(=master 侧预存集,逐字相同);cargo test --lib
+> 失败集与 master 逐名一致(16 预存+flaky 家族)。block.rs/funcdata.rs/
+> printc.rs 非机制 C 白名单;heritage.rs 本 commit 净零改动(半成品探针
+> 未提交)。可见输出残差=3 条无引用 label(合法 C),登记
+> `PRINTC-LABEL-WITHOUT-GOTO-0001`。oracle e40ed13014025f82488b1f8f7bca566894ac376b;2026-09-22。
+
 > **SB-REDUNDBRANCH-ORD39-0001 修复(2026-09-22,Lane CJ `wt/sb-redund39`,owner=fixer)**:
 > Phase 2 ordinal 39 `universal:fullloop:mainloop:redundbranch` result/count/apply
 > 1(oracle) vs 0(rugra)。drill:oracle 在该窗口把 `50fa:53 BRANCH in=n:ram:2530:1`
@@ -2205,7 +2228,9 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
 |---|---|---|---|---|---|
 | `OPPOOL28-EQUAL2ZERO-LADDER-0001` | P1 | FIXED_PENDING_REVIEW(候选 wt/sb-oppool28;机制 C 待独立复核) | oppool28-agent@wt-sb-oppool28 + root | `src/ruleaction.rs`(RuleEqual2Zero/RulePullsubMulti)+`src/funcdata.rs`(cse_elimination/cse_eliminate_list)+`docs/api/{ruleaction,funcdata}.md`+本行 | ordinal-28 三根因修复,详见上方块;oracle e40ed13014025f82488b1f8f7bca566894ac376b;2026-09-22 |
 | `SB-REDUNDBRANCH-ORD39-0001` | P1 | FIXED(候选 wt/sb-redund39 1df1c4b1;coreaction 非机制 C 白名单) | redund39-agent@wt-sb-redund39 | `src/coreaction.rs`(ActionRedundBranch)+`docs/api/coreaction.md`+本行 | 根因=纯计数缺口:Rust apply 从未镜像 cc:3509/cc:3525 `count += 1`(无 take_count_delta 收割),perform 的 lcount<count 永不触发→@END result/count/apply=0 而 oracle=1;IR 变换本身(SNAP 39 `50fa:53 BRANCH` dead 化)双侧已逐字节一致。同趟补两处忠实性:case 1 splice 后 `i=-1` 重扫(cc:3510-3511,旧代码提前 return)、case 2 removeBranch 后继续扫描;isSwitchOut 守卫从 `&0` 占位接上 `block_flags::SWITCH_OUT`(cc:3506)。验证:CD 干净基线(wt/sb-oppool28+cherry-pick,RUGRA_MIRROR=1)Phase 2 首分歧 39→60(ordinals 1-59 全匹配,redundbranch@39 result/count/apply=1/1/1 与 oracle 逐字节同);本 lane 分支(master 22b5ad84 合并基)因 SB-MASTER-ACTIVEPARAM-0001 在 ordinal 15 先分歧,masked;curl/httpd E2E defects=numbering=0;oracle e40ed13014025f82488b1f8f7bca566894ac376b;2026-09-22 |
-| `SB-OPPOOL-R4-COUNT-0001` | P1 | OPEN(Phase 2 新首分歧) | 未认领 | TBD | ordinal 60 `universal:fullloop:mainloop:stackstall:oppool1`(apply 轮 4)result/count 85(oracle) vs 77(rugra):redundbranch 清零后的下一车道;CD 干净基线+redundbranch 修复后实测;2026-09-22 |
+| `SB-OPPOOL-R4-COUNT-0001` | P1 | OPEN(Phase 2 新首分歧) | 未认领 | TBD | ordinal 60 `universal:fullloop:mainloop:stackstall:oppool1`(apply 轮 4)result/count 85(oracle) vs 77(rugra):redundbranch 清零后的下一车道;CD 干净基线+redundbranch 修复后实测;**a58091e5 基线上 SB-HERITAGE50-BLOCKCOVER-0001 修复后同一边界可达(stage seq 65=event-ordinal 60,数字逐字一致),不再被 heritage@50 遮挡**;2026-09-22 |
+| `SB-HERITAGE50-BLOCKCOVER-0001` | P1 | FIXED(候选 wt/sb-heritage50;block.rs/funcdata.rs/printc.rs 非机制 C 白名单,root 快速复核) | heritage50-agent@wt/sb-heritage50 | `src/block.rs`(cover 模型+copy/merge/entry)+`src/funcdata.rs`(splice mergeRange+nodeSplit copyRange)+`src/printc.rs`(label/goto→getEntryAddr)+`docs/api/{block,funcdata,printc}.md`+本行 | 根因=BlockBasic cover 基础设施缺口(单范围降级+splice 缺 mergeRange),heritage MULTIEQUAL@getStart 语义本身已忠实;Phase 2 首分歧 50→65;详见上方块;2026-09-22 |
+| `PRINTC-LABEL-WITHOUT-GOTO-0001` | P2 | OPEN(SB-HERITAGE50-BLOCKCOVER-0001 暴露) | 未认领 | `src/printc.rs`(emit_any_label_statement/emit_goto_statement 传输层) | getEntryAddr/copyRange 忠实化后被抑制 goto 的 UNSTRUCTURED_TARG 叶现解析出真实地址并打印无引用 label(curl GetStr 域 0x37b2×1;httpd 0x2cb68×2;合法 C,defects=0,skeleton +3);Ghidra 侧该不对称不可达(结构化树 t_copy 全量+goto 必印),修复方向=抑制 goto 时同步清除对应叶的 label 打印义务;2026-09-22 |
 | `SB-MASTER-ACTIVEPARAM-0001` | P0 | OPEN(master 侧回归,heritage symbol-tail 域) | 未认领 | TBD(疑 `src/heritage.rs`/`src/funcdata.rs` symbol-tail 插入路径,0804d8c8..22b5ad84 范围) | master 22b5ad84 起(不含 oppool28 合并,单独构建实测):Phase 2 投影 ordinal 15 `mainloop:activeparam` result 9(oracle) vs 2(master),returnrecovery@16 4 vs 0,且初始 SNAP 2 即分歧——`50fa:53` oracle=BRANCH→`n:ram:2530:1` 而 master=CALL→`f:50fa:53`(尾部跳 0x2530 在初始 IR 即被转成 call);嫌疑=heritage symbol-tail promotion 系列(978a0a80/6eab5da9/22b5ad84);阻断一切 master 基线的 Phase 2 首分歧推进(ordinal 1-38 匹配前提被破坏);wt/sb-oppool28 基线不受影响;2026-09-22 |
 | `RULE-PULLSUBMULTI-JOINRENORM-0001` | P3 | OPEN | 未认领 | `src/ruleaction.rs`+`src/arch.rs`(暴露 AddrSpaceManager) | RulePullsubMulti join 基底 renormalize(translate.cc:870-916)需活体 AddrSpaceManager,Architecture 现仅简化 join_db;寄存器/unique 空间已精确,debug_assert 拦截 join 命中;2026-09-22 |
 | `RULE-PULLSUBMULTI-LOOPIN-0001` | P3 | OPEN | 未认领 | `src/block.rs`+`src/ruleaction.rs` | FlowBlock::hasLoopIn(block.cc loop-in 标记)缺失,RulePullsubMulti cc:883 守卫保守放行;2026-09-22 |
