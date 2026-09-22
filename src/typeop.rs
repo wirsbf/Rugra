@@ -2533,18 +2533,35 @@ impl TypeOp for TypeOpMulti {
         if inslot != -1 && outslot != -1 {
             return None; // Must propagate input <-> output
         }
-        let src_slot = if inslot == -1 { outslot } else { inslot };
-        if src_slot >= 0 {
-            if let Some(vn) = op.get_in(src_slot as usize) {
-                if vn.read().unwrap().is_spacebase() {
-                    return Some(propagate_to_pointer(&Arc::new(Datatype::Base(
-                        crate::type_system::TypeBase::new(
-                            "unknown".to_string(),
+        // coreaction.cc:5080: invn = (inslot==-1) ? op->getOut() : op->getIn(inslot)
+        // — the SPACEBASE test is on the edge's SOURCE varnode, which is the
+        // op output when propagating output->input.
+        let src_vn = if inslot == -1 {
+            op.get_out().cloned()
+        } else {
+            op.get_in(inslot as usize).cloned()
+        };
+        if let Some(vn) = src_vn {
+            if vn.read().unwrap().is_spacebase() {
+                // typeop.cc:1957-1960: getTypePointer(alttype->getSize(),
+                    // getBase(1,TYPE_UNKNOWN), defaultDataSpace->getWordSize())
+                    // — the POINTER SIZE is the alttype's size, the pointee is
+                    // unknown1 (SB-ORD186-PTRARITH-0001: propagate_to_pointer
+                    // sized the pointer from the unknown1 base (=1), not from
+                    // alttype). Ram wordsize is 1.
+                    return Some(std::sync::Arc::new(Datatype::Pointer(
+                        crate::type_system::datatype::TypePointer::new(
+                            alt_type.get_size(),
+                            std::sync::Arc::new(Datatype::Base(
+                                crate::type_system::TypeBase::new(
+                                    "unknown".to_string(),
+                                    1,
+                                    TypeMetatype::Unknown,
+                                ),
+                            )),
                             1,
-                            TypeMetatype::Unknown,
                         ),
-                    ))));
-                }
+                    )));
             }
         }
         Some(alt_type.clone())

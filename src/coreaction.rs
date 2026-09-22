@@ -6518,17 +6518,60 @@ impl ActionInferTypes {
                 Some(alttype.clone())
             }
 
-            // MULTIEQUAL (phi): Ghidra has NO TypeOpMultiequal::propagateType
-            // override — the base TypeOp::propagateType (typeop.cc:317-321)
-            // returns null, so types NEVER flow across a phi's edges during
-            // ActionInferTypes. The earlier `Some(alttype)` here let a
-            // locked CALL output type leak through the phi into sibling
-            // inputs (my_fwrite: fopen's FILE* overwrote the LOAD-out temp
-            // and then lost to the inferred char*), diverging from the
-            // oracle where phi members keep their independent temps and the
-            // HighVariable::getTypeRepresentative merge (variable.cc:377-395)
-            // alone decides the high type.
-            OpCode::CPUI_MULTIEQUAL => None,
+            // MULTIEQUAL (typeop.cc:1951-1965 TypeOpMulti::propagateType):
+            // the phi IS transparent in the locked oracle — a type flows
+            // between the output and any input (exactly one of
+            // inslot/outslot is -1); a SPACEBASE source is rewrapped as a
+            // pointer-to-unknown1 whose size is the alttype's size
+            // (getTypePointer(alttype->getSize(), getBase(1,TYPE_UNKNOWN),
+            // default-data-space wordsize); ram wordsize is 1 here, same
+            // literal as the COPY arm above). The base
+            // TypeOp::propagateType (typeop.cc:317-319) is the null default,
+            // but TypeOpMulti overrides it — SB-ORD186-PTRARITH-0001: the
+            // 2026-08-26 my_f_write session replaced the earlier transparent
+            // arm with `None` on the false premise that no override exists;
+            // that severed pointer propagation through phis and cost the
+            // ordinal-186 oppool2 ptrarith fire (next_url 0x50db: MULTIEQUAL
+            // RBP base stayed int-typed while the oracle converted the
+            // INT_ADD to PTRADD).
+            OpCode::CPUI_MULTIEQUAL => {
+                if inslot != -1 && outslot != -1 {
+                    return None; // Must propagate input <-> output
+                }
+                let src_is_spacebase = if inslot == -1 {
+                    op.get_out().cloned()
+                } else {
+                    op.inrefs.get(inslot as usize).cloned()
+                }
+                .map(|v| v.read().unwrap().is_spacebase())
+                .unwrap_or(false);
+                if src_is_spacebase {
+                    let factory = type_factory?;
+                    let unknown1 = factory
+                        .read()
+                        .unwrap()
+                        .get_base(1, TypeMetatype::Unknown)
+                        .unwrap_or_else(|| {
+                            std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+                                crate::type_system::datatype::TypeBase::new(
+                                    "unknown".to_string(),
+                                    1,
+                                    TypeMetatype::Unknown,
+                                ),
+                            ))
+                        });
+                    return Some(std::sync::Arc::new(
+                        crate::type_system::datatype::Datatype::Pointer(
+                            crate::type_system::datatype::TypePointer::new(
+                                alttype.get_size(),
+                                unknown1,
+                                1,
+                            ),
+                        ),
+                    ));
+                }
+                Some(alttype.clone())
+            }
 
             // INDIRECT (typeop.cc:2005-2020 TypeOpIndirect::propagateType):
             // see the dedicated arm below.

@@ -2419,3 +2419,30 @@ func_link_input(coreaction.rs:9703-9774)忠实落地,再入库内守卫=非 orac
 - oracle 的 COPY 治理=merge 相位四 Action（MergeCopy/DominantCopy/HideShadow/
   CopyMarker），Rugra 均已实现并按 cc:5722/5723/5728/5729 顺序挂树；本删除
   行为零变化（curl E2E byte-identical，defects=0，numbering=0）。
+
+## 2026-09-22：SB-ORD186-PTRARITH-0001 — MULTIEQUAL 类型传播恢复忠实（TypeOpMulti::propagateType）
+
+`ActionInferTypes::propagate_type` 的 `CPUI_MULTIEQUAL` 分支恢复为锁死 oracle 的
+忠实语义（typeop.cc:1951-1965 `TypeOpMulti::propagateType`）：
+
+- `inslot!=-1 && outslot!=-1` → `None`（只能 input↔output 传播）；
+- 源 varnode（`inslot==-1` 时为 op output，否则 `in[inslot]`，coreaction.cc:5080
+  的 `invn` 选取）是 spacebase → `getTypePointer(alttype->getSize(),
+  getBase(1,TYPE_UNKNOWN), defaultDataSpace->getWordSize())`，指针尺寸取
+  **alttype 尺寸**、pointee 为 unknown1、ram wordsize=1（与 COPY 分支同一字面量）；
+- 其余 → `Some(alttype)`（phi 透明）。
+
+背景：2026-08-26 my_f_write 会话曾以"Ghidra 没有 TypeOpMulti::propagateType
+覆写"为由把该分支改成 `None`——该前提对锁死 oracle 为假（typeop.cc:40 注册
+`TypeOpMulti`，1951 行有覆写；基类 typeop.cc:317-319 的 null 默认被覆盖）。phi
+不透明切断了指针类型跨 MULTIEQUAL 的传播，next_url mirror Phase 2 首分歧
+ordinal 186（universal:fullloop:mainloop:oppool2，oracle result/count 4/4 vs
+rugra 3/3）：`0x50db:c4 RBP(phi 0x50c0:65b) + RAX(free retval)` 的 base phi 在
+rugra 侧保持 int8，RulePtrArith::applyOp 的 TYPE_PTR 槽搜索失败，第 4 次
+INT_ADD→PTRADD(*#0x1) 转换未发生。恢复透明后 drill 窗口 4/4 对齐，Phase 2 首分
+歧后移至 ordinal 332（universal:setcasts，33 vs 41，独立已登记缺口）。
+
+验证：curl E2E 124 函数 defects=0/numbering=0，skeleton 3105→3049；httpd E2E
+29 函数 defects=0/numbering=0，skeleton 2392→2348；`--func next_url` 0/0。该修
+复不依赖 my_f_write 的旧行为——2026-08-26 同 commit 的 LOAD/STORE
+`propagate_to_pointer` 截断修复才是 my_f_write 收敛的真实原因。
