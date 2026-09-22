@@ -5531,6 +5531,547 @@ pub struct PrototypePieces<'a> {
     pub first_var_arg_slot: i32,
 }
 
+/// Ghidra: fspec.hh:598 `list<ModelRule> modelRules` — the fillin-relevant
+/// projection of one decoded `ModelRule` (modelrules.hh:530-560,
+/// modelrules.cc:1676-1709). `ModelRule::fillinOutputMap`
+/// (modelrules.hh:559-563) delegates to the assign action only: the
+/// datatype filter, qualifier filters, preconditions, and side-effects are
+/// never consulted on the fill-in path. This projection therefore stores
+/// exactly the per-action state the two fill-in entry points consume:
+/// `canAffectFillinOutput()` (the constructor `fillinOutputActive` flag)
+/// and `fillinOutputMap()` (the action's trial walk). The forward
+/// `assignAddress` path remains the registered
+/// FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001 residual.
+#[derive(Debug, Clone)]
+pub struct ModelRuleFillin {
+    /// The decoded assign action (modelrules.cc:605
+    /// `assign = AssignAction::decodeAction(decoder, res)`).
+    pub action: FillinAction,
+}
+
+/// Ghidra: modelrules.cc:587-614 `AssignAction::decodeAction` dispatch —
+/// the seven concrete assign actions, carrying exactly the state their
+/// `fillinOutputMap` bodies read.
+#[derive(Debug, Clone)]
+pub enum FillinAction {
+    /// modelrules.cc:708 `GotoStack` (ctor sets fillinOutputActive=true;
+    /// `decode` calls `initializeEntry` which binds
+    /// `stackEntry = resource->getStackEntry()`, fspec.cc:642-654). The
+    /// bound entry's index within the owning list; `None` mirrors
+    /// Ghidra's null stackEntry.
+    GotoStack { stack_entry: Option<usize> },
+    /// modelrules.cc:780 `MultiSlotAssign` — `<join>`
+    /// (fillinOutputActive=true).
+    MultiSlot { resource_type: TypeClass, justify_right: bool, consume_most_sig: bool },
+    /// modelrules.cc:1332 `ConsumeAs` — `<consume>`
+    /// (fillinOutputActive=true).
+    Consume { resource_type: TypeClass },
+    /// modelrules.cc:748 `ConvertToPointer` — `<convert_to_ptr>`
+    /// (fillinOutputActive stays the `AssignAction` default false).
+    ConvertToPointer,
+    /// modelrules.cc:1374 `HiddenReturnAssign` — `<hidden_return>`
+    /// (fillinOutputActive stays the default false; its decode reads
+    /// voidlock/strategy into retCode, which no fill-in path reads).
+    HiddenReturn,
+    /// modelrules.cc:975 `MultiMemberAssign` — `<join_per_primitive>`
+    /// (fillinOutputActive=true; the decodeAction ctor passes
+    /// `mostSig = res->isBigEndian()`, modelrules.cc:601).
+    MultiMember { resource_type: TypeClass, consume_most_sig: bool },
+    /// modelrules.cc:1137 `MultiSlotDualAssign` — `<join_dual_class>`
+    /// (fillinOutputActive=true).
+    MultiSlotDual { base_type: TypeClass, alt_type: TypeClass, justify_right: bool, consume_most_sig: bool },
+}
+
+impl ModelRuleFillin {
+    // Ghidra: modelrules.cc:1676 ModelRule::decode (fillin projection)
+    /// Decode one `<rule>` element: open the element, then walk children in
+    /// document order structurally consuming the datatype filter
+    /// (`<datatype>`, modelrules.cc:246-269), the qualifier filters
+    /// (`<varargs>`/`<position>`/`<datatype_at>`, modelrules.cc:456-473),
+    /// the preconditions (`<consume_extra>`, modelrules.cc:566-580) and the
+    /// trailing side-effects (`<consume_extra>`/`<extra_stack>`/
+    /// `<consume_remaining>`, modelrules.cc:582-600), and decode the single
+    /// assign action via the `decodeAction` dispatch (modelrules.cc:587).
+    /// An element that is none of these is Ghidra's
+    /// "Expecting model rule action" DecoderError.
+    pub fn decode_rule(
+        list: &ParamListStandard,
+        decoder: &mut dyn crate::marshal::Decoder,
+    ) -> Result<Self, String> {
+        let rule_id = decoder.open_element();
+        let mut action: Option<FillinAction> = None;
+        loop {
+            let sub_id = decoder.peek_element();
+            if sub_id == 0 {
+                break;
+            }
+            let sub_name = decoder.element_name(sub_id).unwrap_or_default();
+            match sub_name.as_str() {
+                // Datatype filter + qualifier filters: consumed without
+                // fillin-relevant state (modelrules.cc:246-269 / 456-473).
+                "datatype" | "datatype_at" | "varargs" | "position" => {
+                    let id = decoder.open_element();
+                    decoder.close_element_skipping(id);
+                }
+                // Preconditions and side-effects (modelrules.cc:566-600).
+                "consume_extra" | "extra_stack" | "consume_remaining" => {
+                    let id = decoder.open_element();
+                    decoder.close_element_skipping(id);
+                }
+                // modelrules.cc:593-594 GotoStack(res,0) + GotoStack::decode
+                // (cc:739-744) + initializeEntry (cc:695-702): no
+                // attributes; binds the owning list's stack entry.
+                "goto_stack" => {
+                    let id = decoder.open_element();
+                    decoder.close_element(id);
+                    action = Some(FillinAction::GotoStack { stack_entry: list.get_stack_entry() });
+                }
+                // modelrules.cc:590-591 MultiSlotAssign(res) +
+                // MultiSlotAssign::decode (cc:942-963). Ctor defaults
+                // (cc:780-792): resourceType=GENERAL, justifyRight=false,
+                // consumeMostSig=false (little-endian).
+                "join" => {
+                    let id = decoder.open_element();
+                    let mut resource_type = TypeClass::General;
+                    let mut justify_right = false;
+                    let mut consume_most_sig = false;
+                    loop {
+                        let attrib_id = decoder.next_attribute_id();
+                        if attrib_id == 0 {
+                            break;
+                        }
+                        let name = decoder.attribute_name(attrib_id).unwrap_or_default();
+                        match name.as_str() {
+                            "reversejustify" => {
+                                if decoder.read_bool() {
+                                    justify_right = !justify_right;
+                                }
+                            }
+                            "reversesignif" => {
+                                if decoder.read_bool() {
+                                    consume_most_sig = !consume_most_sig;
+                                }
+                            }
+                            "storage" => {
+                                resource_type = string_to_type_class(&decoder.read_string());
+                            }
+                            // align (enforceAlignment) and stackspill
+                            // (consumeFromStack) are not read by
+                            // fillinOutputMap; consumed for stream position.
+                            "align" => {
+                                let _ = decoder.read_bool();
+                            }
+                            "stackspill" => {
+                                let _ = decoder.read_bool();
+                            }
+                            _ => {
+                                let _ = decoder.read_string();
+                            }
+                        }
+                    }
+                    decoder.close_element(id);
+                    action = Some(FillinAction::MultiSlot { resource_type, justify_right, consume_most_sig });
+                }
+                // modelrules.cc:592-593 ConsumeAs(TYPECLASS_GENERAL,res) +
+                // ConsumeAs::decode (cc:1366-1371).
+                "consume" => {
+                    let id = decoder.open_element();
+                    let mut resource_type = TypeClass::General;
+                    loop {
+                        let attrib_id = decoder.next_attribute_id();
+                        if attrib_id == 0 {
+                            break;
+                        }
+                        let name = decoder.attribute_name(attrib_id).unwrap_or_default();
+                        if name == "storage" {
+                            resource_type = string_to_type_class(&decoder.read_string());
+                        } else {
+                            let _ = decoder.read_string();
+                        }
+                    }
+                    decoder.close_element(id);
+                    action = Some(FillinAction::Consume { resource_type });
+                }
+                // modelrules.cc:594-595 ConvertToPointer(res) +
+                // ConvertToPointer::decode (cc:762-766): no attributes.
+                "convert_to_ptr" => {
+                    let id = decoder.open_element();
+                    decoder.close_element(id);
+                    action = Some(FillinAction::ConvertToPointer);
+                }
+                // modelrules.cc:596-597 HiddenReturnAssign(res,
+                // hiddenret_specialreg) + decode (cc:1386-1402): voidlock/
+                // strategy feed retCode, unread by fill-in.
+                "hidden_return" => {
+                    let id = decoder.open_element();
+                    loop {
+                        let attrib_id = decoder.next_attribute_id();
+                        if attrib_id == 0 {
+                            break;
+                        }
+                        let name = decoder.attribute_name(attrib_id).unwrap_or_default();
+                        match name.as_str() {
+                            "voidlock" => {
+                                let _ = decoder.read_bool();
+                            }
+                            "strategy" => {
+                                let strategy = decoder.read_string();
+                                if strategy != "normalparam" && strategy != "special" {
+                                    return Err(format!(
+                                        "Bad <hidden_return> strategy: {strategy}"
+                                    ));
+                                }
+                            }
+                            _ => break,
+                        }
+                    }
+                    decoder.close_element(id);
+                    action = Some(FillinAction::HiddenReturn);
+                }
+                // modelrules.cc:598-600 MultiMemberAssign(TYPECLASS_GENERAL,
+                // false, res->isBigEndian(), res) + decode (cc:1054-1063).
+                "join_per_primitive" => {
+                    let id = decoder.open_element();
+                    let mut resource_type = TypeClass::General;
+                    loop {
+                        let attrib_id = decoder.next_attribute_id();
+                        if attrib_id == 0 {
+                            break;
+                        }
+                        let name = decoder.attribute_name(attrib_id).unwrap_or_default();
+                        if name == "storage" {
+                            resource_type = string_to_type_class(&decoder.read_string());
+                        } else {
+                            let _ = decoder.read_string();
+                        }
+                    }
+                    decoder.close_element(id);
+                    action = Some(FillinAction::MultiMember {
+                        resource_type,
+                        consume_most_sig: list.is_big_endian(),
+                    });
+                }
+                // modelrules.cc:601-602 MultiSlotDualAssign(res) +
+                // MultiSlotDualAssign::decode (cc:1300-1330). Ctor defaults
+                // (cc:1137-1152): baseType=GENERAL, altType=FLOAT,
+                // justifyRight=false, consumeMostSig=false.
+                "join_dual_class" => {
+                    let id = decoder.open_element();
+                    let mut base_type = TypeClass::General;
+                    let mut alt_type = TypeClass::Float;
+                    let mut justify_right = false;
+                    let mut consume_most_sig = false;
+                    loop {
+                        let attrib_id = decoder.next_attribute_id();
+                        if attrib_id == 0 {
+                            break;
+                        }
+                        let name = decoder.attribute_name(attrib_id).unwrap_or_default();
+                        match name.as_str() {
+                            "reversejustify" => {
+                                if decoder.read_bool() {
+                                    justify_right = !justify_right;
+                                }
+                            }
+                            "reversesignif" => {
+                                if decoder.read_bool() {
+                                    consume_most_sig = !consume_most_sig;
+                                }
+                            }
+                            "storage" | "a" => {
+                                base_type = string_to_type_class(&decoder.read_string());
+                            }
+                            "b" => {
+                                alt_type = string_to_type_class(&decoder.read_string());
+                            }
+                            // stackspill (consumeFromStack) and fillalternate
+                            // (fillAlternate) are not read by
+                            // fillinOutputMap; consumed for stream position.
+                            "stackspill" | "fillalternate" => {
+                                let _ = decoder.read_bool();
+                            }
+                            _ => {
+                                let _ = decoder.read_string();
+                            }
+                        }
+                    }
+                    decoder.close_element(id);
+                    action = Some(FillinAction::MultiSlotDual {
+                        base_type,
+                        alt_type,
+                        justify_right,
+                        consume_most_sig,
+                    });
+                }
+                other => {
+                    return Err(format!("Expecting model rule action: {other}"));
+                }
+            }
+        }
+        decoder.close_element(rule_id);
+        match action {
+            Some(action) => Ok(ModelRuleFillin { action }),
+            // modelrules.cc:604-605: reaching the end of the rule without
+            // an action element is the decodeAction DecoderError.
+            None => Err("Expecting model rule action".to_string()),
+        }
+    }
+}
+
+impl FillinAction {
+    // Ghidra: modelrules.hh:276-278 AssignAction::canAffectFillinOutput
+    /// The constructor `fillinOutputActive` flag per action kind: true for
+    /// GotoStack (modelrules.cc:710/717), MultiSlotAssign (cc:805/824),
+    /// MultiMemberAssign (cc:989), MultiSlotDualAssign (cc:1143/1163) and
+    /// ConsumeAs (cc:1336); the `AssignAction` default false otherwise
+    /// (modelrules.hh:276).
+    pub fn can_affect_fillin_output(&self) -> bool {
+        match self {
+            FillinAction::GotoStack { .. } => true,
+            FillinAction::MultiSlot { .. } => true,
+            FillinAction::Consume { .. } => true,
+            FillinAction::ConvertToPointer => false,
+            FillinAction::HiddenReturn => false,
+            FillinAction::MultiMember { .. } => true,
+            FillinAction::MultiSlotDual { .. } => true,
+        }
+    }
+
+    // Ghidra: modelrules.hh:313 AssignAction::fillinOutputMap (dispatch)
+    /// Test and mark the trial set that can be a valid return value.
+    /// `entries` is the owning list's ParamEntry table (Ghidra reads the
+    /// trial's `const ParamEntry *` back-pointer).
+    pub fn fillin_output_map(
+        &self,
+        active: &mut ParamActive,
+        entries: &[ParamEntry],
+    ) -> bool {
+        match self {
+            // modelrules.cc:579 AssignAction::fillinOutputMap default.
+            FillinAction::ConvertToPointer | FillinAction::HiddenReturn => false,
+            // modelrules.cc:731-744 GotoStack::fillinOutputMap
+            FillinAction::GotoStack { stack_entry } => {
+                let mut count = 0i32;
+                for i in 0..active.get_num_trials() {
+                    let entry_index = match active.get_trial(i).get_entry_index() {
+                        Some(e) => e,
+                        None => break,
+                    };
+                    if Some(entry_index) != *stack_entry {
+                        return false;
+                    }
+                    count += 1;
+                    if count > 1 {
+                        return false;
+                    }
+                }
+                count == 1
+            }
+            // modelrules.cc:902-940 MultiSlotAssign::fillinOutputMap
+            FillinAction::MultiSlot { resource_type, justify_right, consume_most_sig } => {
+                let mut count = 0i32;
+                let mut cur_group = -1i32;
+                let mut partial: i64 = -1;
+                for i in 0..active.get_num_trials() {
+                    let (entry_index, trial_size) = {
+                        let t = active.get_trial(i);
+                        match t.get_entry_index() {
+                            Some(e) => (e, t.get_size()),
+                            None => break,
+                        }
+                    };
+                    let entry = &entries[entry_index];
+                    // Trials must come from action's type_class
+                    if entry.get_type() != *resource_type {
+                        return false;
+                    }
+                    if count == 0 {
+                        // Trials must start on first entry of the type_class
+                        if !entry.is_first_in_class() {
+                            return false;
+                        }
+                    } else if entry.get_group() != cur_group + 1 {
+                        // Trials must be consecutive
+                        return false;
+                    }
+                    cur_group = entry.get_group();
+                    if trial_size != entry.get_size() {
+                        // At most, one trial can be partial size
+                        if partial != -1 {
+                            return false;
+                        }
+                        partial = i as i64;
+                    }
+                    count += 1;
+                }
+                if partial != -1 {
+                    if *justify_right {
+                        if partial != 0 {
+                            return false;
+                        }
+                    } else if partial != (count as i64) - 1 {
+                        return false;
+                    }
+                    let t = active.get_trial(partial as usize);
+                    if *justify_right == *consume_most_sig {
+                        // Partial entry must be least sig bytes
+                        if t.get_offset() != 0 {
+                            return false;
+                        }
+                    } else if t.get_offset() + t.get_size()
+                        != entries[t.get_entry_index().unwrap()].get_size()
+                    {
+                        // Partial entry must be most sig bytes
+                        return false;
+                    }
+                }
+                if count == 0 {
+                    return false;
+                }
+                if *consume_most_sig {
+                    active.set_join_reverse(true);
+                }
+                true
+            }
+            // modelrules.cc:1019-1042 MultiMemberAssign::fillinOutputMap
+            FillinAction::MultiMember { resource_type, consume_most_sig } => {
+                let mut count = 0i32;
+                let mut cur_group = -1i32;
+                for i in 0..active.get_num_trials() {
+                    let entry_index = match active.get_trial(i).get_entry_index() {
+                        Some(e) => e,
+                        None => break,
+                    };
+                    let entry = &entries[entry_index];
+                    // Trials must come from action's type_class
+                    if entry.get_type() != *resource_type {
+                        return false;
+                    }
+                    if count == 0 {
+                        if !entry.is_first_in_class() {
+                            return false;
+                        }
+                    } else if entry.get_group() != cur_group + 1 {
+                        return false;
+                    }
+                    cur_group = entry.get_group();
+                    if active.get_trial(i).get_offset() != 0 {
+                        // Entry must be justified
+                        return false;
+                    }
+                    count += 1;
+                }
+                if count == 0 {
+                    return false;
+                }
+                if *consume_most_sig {
+                    active.set_join_reverse(true);
+                }
+                true
+            }
+            // modelrules.cc:1242-1291 MultiSlotDualAssign::fillinOutputMap
+            FillinAction::MultiSlotDual { base_type, alt_type, justify_right, consume_most_sig } => {
+                let mut count = 0i32;
+                let mut cur_group = -1i32;
+                let mut partial: i64 = -1;
+                let mut resource_type = TypeClass::General;
+                for i in 0..active.get_num_trials() {
+                    let (entry_index, trial_size) = {
+                        let t = active.get_trial(i);
+                        match t.get_entry_index() {
+                            Some(e) => (e, t.get_size()),
+                            None => break,
+                        }
+                    };
+                    let entry = &entries[entry_index];
+                    if count == 0 {
+                        resource_type = entry.get_type();
+                        if resource_type != *base_type && resource_type != *alt_type {
+                            return false;
+                        }
+                    } else if entry.get_type() != resource_type {
+                        // Trials must come from action's type_class
+                        return false;
+                    }
+                    if count == 0 {
+                        // Trials must start on first entry of the type_class
+                        if !entry.is_first_in_class() {
+                            return false;
+                        }
+                    } else if entry.get_group() != cur_group + 1 {
+                        // Trials must be consecutive
+                        return false;
+                    }
+                    cur_group = entry.get_group();
+                    if trial_size != entry.get_size() {
+                        // At most, one trial can be partial size
+                        if partial != -1 {
+                            return false;
+                        }
+                        partial = i as i64;
+                    }
+                    count += 1;
+                }
+                if partial != -1 {
+                    if *justify_right {
+                        if partial != 0 {
+                            return false;
+                        }
+                    } else if partial != (count as i64) - 1 {
+                        return false;
+                    }
+                    let t = active.get_trial(partial as usize);
+                    if *justify_right == *consume_most_sig {
+                        // Partial entry must be least sig bytes
+                        if t.get_offset() != 0 {
+                            return false;
+                        }
+                    } else if t.get_offset() + t.get_size()
+                        != entries[t.get_entry_index().unwrap()].get_size()
+                    {
+                        // Partial entry must be most sig bytes
+                        return false;
+                    }
+                }
+                if count == 0 {
+                    return false;
+                }
+                if *consume_most_sig {
+                    active.set_join_reverse(true);
+                }
+                true
+            }
+            // modelrules.cc:1345-1364 ConsumeAs::fillinOutputMap
+            FillinAction::Consume { resource_type } => {
+                let mut count = 0i32;
+                for i in 0..active.get_num_trials() {
+                    let entry_index = match active.get_trial(i).get_entry_index() {
+                        Some(e) => e,
+                        None => break,
+                    };
+                    let entry = &entries[entry_index];
+                    // Trials must come from action's type_class
+                    if entry.get_type() != *resource_type {
+                        return false;
+                    }
+                    if !entry.is_first_in_class() {
+                        return false;
+                    }
+                    count += 1;
+                    if count > 1 {
+                        return false;
+                    }
+                    if active.get_trial(i).get_offset() != 0 {
+                        // Entry must be justified
+                        return false;
+                    }
+                }
+                count > 0
+            }
+        }
+    }
+}
+
 /// A standard model for parameters as an ordered list of storage resources.
 /// Faithful port of `class ParamListStandard` (fspec.hh:589-646).
 #[derive(Debug, Clone)]
@@ -5543,6 +6084,10 @@ pub struct ParamListStandard {
     entry: Vec<ParamEntry>,
     space_base: Option<AddressSpace>,
     stack_entry_index: Option<usize>,
+    /// Ghidra: fspec.hh:598 `list<ModelRule> modelRules` — rules to apply
+    /// when assigning addresses (fillin-relevant projection, see
+    /// [`ModelRuleFillin`]).
+    model_rules: Vec<ModelRuleFillin>,
 }
 
 impl Default for ParamListStandard {
@@ -5564,6 +6109,7 @@ impl ParamListStandard {
             entry: Vec::new(),
             space_base: None,
             stack_entry_index: None,
+            model_rules: Vec::new(),
         }
     }
 
@@ -5572,9 +6118,9 @@ impl ParamListStandard {
     ///
     /// `<pentry>` and `<group>` children are decoded in document order.  Once
     /// the first `<rule>` is seen, subsequent resource entries are rejected,
-    /// matching Ghidra's two-phase child walk.  ModelRule decoding is outside
-    /// this slice; rule elements are consumed without changing the decoded
-    /// ParamEntry list.
+    /// matching Ghidra's two-phase child walk.  `<rule>` children decode
+    /// into the fillin-relevant [`ModelRuleFillin`] projection
+    /// (fspec.cc:1490-1500).
     pub fn decode(
         &mut self,
         decoder: &mut dyn crate::marshal::Decoder,
@@ -5590,6 +6136,7 @@ impl ParamListStandard {
         self.entry.clear();
         self.space_base = None;
         self.stack_entry_index = None;
+        self.model_rules.clear();
         let mut pointer_max = 0i32;
         let mut split_float = true;
 
@@ -5674,8 +6221,13 @@ impl ParamListStandard {
                 }
                 "rule" => {
                     saw_rule = true;
-                    let rule_id = decoder.open_element();
-                    decoder.close_element_skipping(rule_id);
+                    // fspec.cc:1493-1495: modelRules.emplace_back();
+                    // modelRules.back().decode(decoder, this). Entries are
+                    // fully decoded before the first rule (two-phase walk,
+                    // fspec.cc:1477-1500), so GotoStack's initializeEntry
+                    // binding sees the final entry table.
+                    let rule = ModelRuleFillin::decode_rule(self, decoder)?;
+                    self.model_rules.push(rule);
                 }
                 "pentry" | "group" => {
                     return Err(
@@ -6657,15 +7209,21 @@ impl ParamListStandardOut {
     }
 
     // Ghidra: fspec.cc:1614 ParamListStandardOut::initialize
-    /// Cache the output fill-in policy (`initialize`, fspec.cc:1614-1627).
-    /// The locked implementation scans `modelRules`; only when no rule can
-    /// affect fill-in does it keep `use_fillin_fallback=true` and force
-    /// `auto_killed_by_call=true`. Rugra does not yet own the decoded rules,
-    /// so this is exactly the empty-rule branch. Production
-    /// `join_dual_class` therefore remains a fixture-recorded MISMATCH.
+    /// Cache the output fill-in policy (`initialize`, fspec.cc:1614-1627):
+    /// start legacy (`useFillinFallback=true`), then clear it if any
+    /// decoded model rule `canAffectFillinOutput()`. Only the legacy
+    /// branch forces `autoKilledByCall = true`.
     pub fn initialize(&mut self) {
         self.use_fillin_fallback = true;
-        self.base.set_auto_killed_by_call(true);
+        for rule in self.base.model_rules.iter() {
+            if rule.action.can_affect_fillin_output() {
+                self.use_fillin_fallback = false;
+                break;
+            }
+        }
+        if self.use_fillin_fallback {
+            self.base.set_auto_killed_by_call(true);
+        }
     }
 
     // Ghidra: fspec.cc:1569 ParamListStandardOut::assignMap
@@ -6885,13 +7443,13 @@ impl ParamListStandardOut {
 
     // Ghidra: fspec.cc:1721 ParamListStandardOut::fillinMap
     /// Decide the formal output parameter given a set of trials, following
-    /// the structural branches of `fillinMap` (fspec.cc:1721-1763). If `use_fillinFallback`
-    /// is set, defers entirely to the fallback path; otherwise walks the
-    /// trials, attaches each active one to its entry (rejecting remainder /
-    /// indirect-creation pieces that aren't first-in-class), then asks the
-    /// model rules to settle the output. Rugra has no decoded model-rule
-    /// objects yet, so the non-fallback path reaches
-    /// `fillin_map_fallback(true)`; the locked fixture records this residual.
+    /// the structural branches of `fillinMap` (fspec.cc:1721-1763). If
+    /// `use_fillin_fallback` is set, defers entirely to the fallback path;
+    /// otherwise walks the trials, attaches each active one to its entry
+    /// (rejecting remainder / indirect-creation pieces that aren't
+    /// first-in-class), then asks the model rules to settle the output,
+    /// falling back to the first-entry-only fallback
+    /// (`fillinMapFallback(active, true)`, fspec.cc:1762).
     pub fn fillin_map(&self, active: &mut ParamActive) {
         if active.get_num_trials() == 0 { return; }
         if self.use_fillin_fallback {
@@ -6928,10 +7486,24 @@ impl ParamListStandardOut {
             active.get_trial_mut(i).set_entry(entry_idx, res);
         }
         active.sort_trials(self.base.get_entry());
-        // FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001 residual: concrete
-        // `ModelRule::fillinOutputMap` ownership is not yet connected to
-        // this list. The locked implementation walks rules in declaration
-        // order before reaching the first-entry-only fallback.
+        // fspec.cc:1746-1761: walk the model rules in declaration order;
+        // the first whose fillinOutputMap accepts the trial set settles
+        // the output — every active trial is marked used, inactives get
+        // markNoUse with the entry reset — and fillinMap returns.
+        for rule in self.base.model_rules.iter() {
+            if rule.action.fillin_output_map(active, self.base.get_entry()) {
+                for i in 0..active.get_num_trials() {
+                    let t_active = active.get_trial(i).is_active();
+                    if t_active {
+                        active.get_trial_mut(i).mark_used();
+                    } else {
+                        active.get_trial_mut(i).mark_no_use();
+                        active.get_trial_mut(i).clear_entry();
+                    }
+                }
+                return;
+            }
+        }
         self.fillin_map_fallback(active, true);
     }
 
@@ -6960,9 +7532,7 @@ impl ParamListStandardOut {
     // Ghidra: fspec.cc:1776 ParamListStandardOut::decode
     /// Decode this list, then cache the available fill-in information. The
     /// locked `decode` (fspec.cc:1776-1780) delegates `<pentry>` / `<group>` /
-    /// `<rule>` parsing and calls `initialize()`. Rugra's base decoder keeps
-    /// entry order but only consumes rule elements, so initialization observes
-    /// the empty-rule branch; metadata records the production mismatch.
+    /// `<rule>` parsing and calls `initialize()`.
     pub fn decode(
         &mut self,
         decoder: &mut dyn crate::marshal::Decoder,
