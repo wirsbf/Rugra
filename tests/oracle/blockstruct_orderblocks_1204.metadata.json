@@ -1,0 +1,71 @@
+{
+ "schema": 1,
+ "fixture_id": "BLOCKSTRUCT-ORDERBLOCKS-0001",
+ "stable_function_id": "GH12-F-8129b72588e28d509633",
+ "stable_function_closure": [
+  "ghidra::BlockGraph::orderBlocks block.hh:430 GH12-F-8129b72588e28d509633",
+  "ghidra::FlowBlock::compareFinalOrder block.cc:709 GH12-F-4d4c5cc660c5f15851b2",
+  "ghidra::BlockGoto::lastOp block.hh:562 GH12-F-b107435cfddafb799088",
+  "ghidra::BlockMultiGoto::lastOp block.hh:590 GH12-F-4a08fe6f0d0948f6eb91"
+ ],
+ "oracle": {
+  "tag": "Ghidra_12.0.4_build",
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{block.hh:430-431,block.cc:709-730,block.cc:1704-1754}"
+ },
+ "rugra_base_commit": "74f9e34dd237a858ebb82fd0da5b724415290bc4",
+ "architecture": "locked synthetic plain FlowBlock graphs built through production BlockGraph APIs (addBlock/addEdge, newBlockGoto/newBlockMultiGoto); hand-assigned FlowBlock::index values reproduce the collapse-phase inheritance (entry mirror index 0 / min-of-components); no AddrSpace, no Funcdata",
+ "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
+ "analysis_options": {
+  "entrypoint": "BlockGraph::orderBlocks() (Rugra: BlockGraph::order_blocks) driven directly on each synthetic top-level list, exactly as ActionFinalStructure blockaction.cc:2191 does",
+  "prestate": "per-case fresh BlockGraph; components appended in a fixed creation order; BlockGoto/BlockMultiGoto cases built through the production factories (identifyInternal membership) so lastOp() runs the real virtual delegation",
+  "observation": "per case: the post-sort list as '<pos> name=bN idx=<i> type=<typename> lastop=<R|n|->' lines (R=CPUI_RETURN last op, n=non-RETURN last op, -=null lastOp)"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "entry_first_return_last: entry (index 0) mid-list with two RETURN-ending blocks ahead of it — cc:712-713 entry key, cc:717-728 return-last key, cc:729 index key, stable tie between the two RETURN blocks (libstdc++ insertion sort keeps pre-sort order for ranges <= 16; Rust stable sort identical)",
+   "null_vs_return_arms: (null, RETURN) / (RETURN, null) / (null, non-RETURN) arms with an entry whose lastOp is null",
+   "goto_wrapped_lastop: real BlockGoto (newBlockGoto cc:1704-1716) wrapping a RETURN-ending block — BlockGoto::lastOp (cc:562) delegation sorts the composite to the tail",
+   "multigoto_wrapped_lastop: real BlockMultiGoto (newBlockMultiGoto cc:1719-1754) wrapping a non-RETURN block — cc:590 delegation sorts it by index ahead of a RETURN-ending sibling",
+   "single_block_skip: one-element list is left untouched (block.hh:431 list.size()!=1 guard)"
+  ]
+ },
+ "observation_schema": {
+  "format": "per case: 'case <name>', one '<pos> name=bN idx=<i> type=<typename> lastop=<R|n|->' line per list entry, then 'end'",
+  "normalization": "block identity prints as creation-order names (bN), never pointers; wrapper composites are pushed to created on both sides for stable naming; lastop prints as the comparator's three arms (R/n/-)"
+ },
+ "comparand_sha256": {
+  "cpp_fixture_sha256": "30c3dbe2cc5630bb850f5267efff463522ced5b70062de8c5cd8cbe37f3efcca",
+  "rust_fixture_sha256": "ff01172cdf2770119308cd87f0356de0151b63b60916cbf845cb9dbb0930440d",
+  "rugra_block_sha256": "e093c10b7b87cdc6cda2e06bb34a6054d3dfe2ce7f95c7448f5e450a4e7721ed",
+  "rugra_blockaction_sha256": "05f4377a8cb3550be27276bdec74be6388accaaa3c9a24b301154f12f86f6462",
+  "runner_sha256": "6ea6cc8431a15a2ab39b29c81ea923aa7123ad1866899900a5b3e4365a38fae4",
+  "ghidra_block_cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",
+  "ghidra_block_hh": "103d023e88e88986c8d7bb6a4309eaee91d0f627636838f25452763e1212b139"
+ },
+ "host": {
+  "cxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)",
+  "bfd_root": "/tmp/rugra-ghidra-bfd-2.38"
+ },
+ "oracle_stdout_sha256": "598d180dcad76ec4ef15f663105c2285a663abaf6a2f4d24657ebfd5ce6aed97",
+ "expected_exit_code": 0,
+ "covered_projection_status": "MATCH",
+ "coverage": {
+  "comparator_keys": "MATCH: all three decision surfaces of compareFinalOrder (entry-first cc:712-713, RETURN-last cc:717-728 including both null-lastOp arms, index cc:729) project identically on both sides across the five cases",
+  "wrapper_virtual_dispatch": "MATCH: BlockGoto::lastOp (cc:562) and BlockMultiGoto::lastOp (cc:590) delegate through the wrapped component (Rugra: the `wrapped` field overrides added with this lane) and drive the composite's sort position identically",
+  "tie_behavior": "MATCH: two RETURN-ending blocks tie in both directions (cc:719+724 both false); libstdc++ std::sort's insertion-sort phase (threshold 16, stable for ties) and Rugra's stable sort_by keep the pre-sort relative order on every case",
+  "size_guard": "MATCH: single-element lists skip the sort on both sides (block.hh:431)"
+ },
+ "residual_diffs": [
+  {
+   "todo_id": "BLOCKSTRUCT-ORDERBLOCKS-0001",
+   "summary": "ranges with MORE than 16 top-level components: libstdc++ introsort permutes comparator ties (multiple RETURN-ending blocks) through its quicksort partition phase; Rugra's stable sort_by always keeps pre-sort order. No such function exists in the curl/httpd corpora today (every function collapses to a single top-level component, so the block.hh:431 guard skips the sort — verified byte-identical A/B), and the oracle's tie permutation for >16 ranges is implementation-defined; revisit only if a multi-component corpus function with >16 members and multiple RETURN-ending blocks appears",
+   "evidence": "order_blocks tie note (src/block.rs); A/B sha256 equality before/after on curl 124/124 and httpd 29/29"
+  }
+ ],
+ "unit_tests": "cargo test --lib block:: (compare_final_order_sort_keys_and_order_blocks_guard) green",
+ "overall_status": "MATCH (bilateral, 5/5 cases byte-identical)",
+ "input_sha256": "43cc9906d4ab4ff5b95fd97200ed2c2e6e64ee4bc4373ac0db10e310853015a9"
+}

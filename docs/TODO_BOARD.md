@@ -138,6 +138,29 @@
 > 基线**字节一致**(潜伏雷排除,当前语料零翻转);cargo test 失败集=父提交既有 flaky(heritage/
 > funcdata SSA,与本改动无关,两轮对照确认)。**blockaction.rs 未触及**(机制 C 白名单字面未命中,
 > 但主管线行为变化,root 集成时建议独立复核)。
+> **Lane BV 修复落地(2026-09-22,wt/sb-orderblocks,`BLOCKSTRUCT-ORDERBLOCKS-0001` = CR-BO
+> 条件③ cc:2191 orderBlocks 缺口 ✅落地)**: ActionFinalStructure 补 `graph.orderBlocks()`
+> (block.hh:430-431)于 finalizePrinting 之前;`FlowBlock::compareFinalOrder`(block.cc:709-730)
+> 三键(entry idx==0 恒首 / lastOp()==RETURN 压尾 / 其余按 index;双 RETURN 块 tie)完整移植为
+> block.rs `compare_final_order`+`BlockGraph::order_blocks`(稳定 sort_by 解 tie=libstdc++
+> 插入排序 phase ≤16 元素同形);**顺带补齐缺失的 per-type lastOp 委托**:BlockGoto(cc:562)/
+> BlockMultiGoto(cc:590)→wrapped(此前 trait 默认 None,compareFinalOrder 依赖分派不符)。
+> 语义影响=顶层输出序+scopeBreak/gotoPrints 的 next-sibling 取序。三门禁:curl 124/124 与
+> httpd 29/29 全量 A/B(d847acc 基线)**字节恒等**(sha256 相同——当前语料所有函数顶层列表均
+> 单元素(glob_set 15→1/getparameter 30→1/main 105→1,树 dump 证实),block.hh:431 守卫双侧
+> 同步跳过);getparameter(978)/glob_set(97) --func defects=numbering=0 前后不变;B2 双侧
+> fixture `blockstruct_orderblocks_1204` 5/5 case **MATCH**(runner
+> tools/run_blockstruct_orderblocks_oracle.sh,真 newBlockGoto/newBlockMultiGoto 委托覆盖);
+> cargo test --lib 单线程 18 failed=已知 FUNCDATA-TESTS-FLAKY-0001 集(与 BO 车道基线同集),
+> block::/blockaction:: 全绿。残差:>16 元素列表 tie 置换(libstdc++ quicksort phase vs 稳定
+> sort,语料内不存在该形态,已登记 fixture metadata residual)。**blockaction.rs 属机制 C
+> 白名单:Cross-Review PENDING(root 派)**。
+> **⚠ P0 新登记 `HTTPD-EXAMPLE-BRACE-0001`(2026-09-22,Lane BV 抓获)**: master dff36e78
+> (10:04 "tool: integrate httpd pspec tracked-context ingestion")提交的
+> examples/httpd_decompile.rs **无法编译**(fn worker_memory_image_bytes line 71 起未闭合
+> 大括号,ea0f7a74 09:53 为最后可编译版;可运行修版困在 stash@{0} emptyelse WIP——共享 stash
+> 禁触碰,需持有者释放或 root 从 ea0f7a74 重放)。BV 车道 httpd 门禁双侧统一用 ea0f7a74 驱动
+> A/B(同一驱动隔离 src 变更,结论不受影响)。任何车道跑 httpd E2E 前须先修此 P0。
 > **⚠ 配额事件(2026-09-22 ~04:3x)**: zai-coding-plan 5 小时用量墙,BL/BM/BN/
 > SWITCH_OUT-Cross-Review 四派发全部未启动,05:32:32 重置后需重发。
 > **Lane BB 修复落地(2026-09-22,wt/sb-returnsplit)**: BRANCH/CBRANCH 代理已替换为
@@ -352,6 +375,7 @@
 | w-selfcopy | `MAIN-SELF-COPY-ABSORB-0001`(新登记) | writer | `src/merge.rs`+`src/varmap.rs`+`docs/api/{merge,varmap}.md`+fixture+registry，branch `wt2/selfcopy` | 在途:main 简单赋值 900 vs golden 90,temp↔stack COPY 未被 high 吸收;含复核 F2(其余 raw-cover 入口)/F3 线索;机制 C 域(merge/varmap) |
 | w-scopefix | `CALLSPEC-DRIVER-0001`+`FUNCDATA-SCOPELOCALOVERFLOW-0001`(scopefix2 重放) | writer | `src/funcdata.rs`+`docs/api/funcdata.md`+scopelocal_wrap fixture+registry(如需 pushmultiequals/scope_find_overlap 重钉)，branch `wt2/scopefix` | 在途(2026-09-01 新派,nodesplit 释放租约后):重放 `de4309f`(inject_raw_ops 出生 CALL 无 spec→移植 flow.cc:683-690 核心)+`657ff89d`/`877ea9d`(wrap 域);fixture 对 master 重钉(双形态);repin commit 勿 pick;先读 oracle 全貌再落地,发现旧分支偏差按 oracle 修正 |
 | BN(w-gotoprints) | `GOTO-PRINTS-NEXTFLOWAFTER-ARMS-0001` | writer | `src/block.rs`+`src/coreaction.rs`+`docs/api/{block,blockaction,coreaction}.md`+`tests/oracle/goto_prints_nextflowafter_1204.*`+`tools/run_goto_prints_nextflowafter_oracle.sh`，branch `wt/sb-gotoprints` | **DONE(2026-09-22,见 wave 日志当日条)**:nextFlowAfter 12 分臂单一事实源落 block.rs(`next_flow_after_successors`/`graph_sibling_successors`,pub)+修 BB 表 Switch 槽0/序两偏差+删 7 死代码 typed 方法;双侧 fixture 六形态 **MATCH**;curl/httpd 全量 defects=numbering=0 且输出与父提交**字节一致**(当前语料零翻转,纯潜伏雷排除);**机制 C: blockaction.rs 未触及**(改动域=block.rs/coreaction.rs,主管线行为变化建议 root 安排独立复核) |
+| BV(wt/sb-orderblocks) | `BLOCKSTRUCT-ORDERBLOCKS-0001`(=CR-BO 条件③)+`HTTPD-EXAMPLE-BRACE-0001`(P0 抓获登记) | writer | `src/block.rs`+`src/blockaction.rs`+`docs/api/{block,blockaction}.md`+`tests/oracle/blockstruct_orderblocks_1204.*`+`tools/run_blockstruct_orderblocks_oracle.sh`+registry+本行，branch `wt/sb-orderblocks` | **DONE(2026-09-22,见 wave 日志当日条)**:cc:2191 orderBlocks+compareFinalOrder 三键移植+BlockGoto/MultiGoto lastOp 委托补齐;B2 fixture 5/5 MATCH;curl/httpd A/B 字节恒等(语料全单元素列表,守卫双侧同步跳过);**机制 C: blockaction.rs 触及 → Cross-Review PENDING(root 派)**;附带 P0=master httpd 示例 dff36e78 编译破损(修版在 stash@{0},勿动) |
 | ~~w-salvage~~ | 12 个老 agent/* 分支甄别 | 只读 | 无 | **DONE**:SALVAGE-TRIAGE-2026-09-01.md;结论已并入上文 salvage 节 |
 
 > 冲突矩阵:x86_lift.rs=w-sse;subflow.rs 已并;funcdata.rs=w-scopefix;coreaction.rs+fspec.rs=已并(PENDING 复核);

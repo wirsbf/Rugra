@@ -1326,3 +1326,27 @@ rugra.statement 16 行逐字节 MATCH，覆盖 slot_desc（label 排序≠槽位
 multi_shared（多条目组 addressIndex 序 [0x5,0x2]）、fallthru_chain
 （chain/depth/label 下传：排序键 0x3 vs 打印组 [0x8]）、default_edge
 （default 路由 + label=0）。
+
+### 2026-09-22：接入 `graph.orderBlocks()`（blockaction.cc:2191，BLOCKSTRUCT-ORDERBLOCKS-0001，Lane BV）
+
+- `ActionFinalStructure::apply` 现按 oracle 顺序执行全部五个图调用：
+  `graph.orderBlocks()` → `graph.finalizePrinting()` → `graph.scopeBreak(-1,-1)`
+  → `graph.markUnstructured()` → `graph.markLabelBumpUp(false)`
+  （blockaction.cc:2191-2195）。
+- `orderBlocks`（block.hh:430-431）：单元素列表跳过；否则按
+  `FlowBlock::compareFinalOrder`（block.cc:709-730）排序——entry
+  （index 0）恒最前、`lastOp()` 为 CPUI_RETURN 的块压尾、其余按 index
+  升序；两个 RETURN 结尾块为并列（tie）。Rust 实现与排序键细节见
+  docs/api/block.md 的 `order_blocks`/`compare_final_order` 条目
+  （含本次一并补齐的 BlockGoto/BlockMultiGoto `lastOp` 委托覆盖）。
+- 之前缺口：Rugra 顶层列表保持 finalize_structure 的幸存者（槽位）序，
+  不是 oracle 的 compareFinalOrder 置换；return 结尾顶层块不会移到尾部。
+- 语义影响：排序发生在 finalizePrinting 之前，因此 scopeBreak 的
+  next-sibling fall-thru（block.cc:1277-1287）、gotoPrints 的
+  next-in-flow 后继（block.cc:2881-2890）与 emitBlockGraph 发射序均按
+  最终打印序取后继。
+- 验证：curl 124/124 与 httpd 29/29 全量 E2E 改动前后**字节恒等**
+  （sha256 相同——当前语料所有函数顶层列表均为单元素，block.hh:431
+  守卫双侧同步跳过）；getparameter.constprop.0（skeleton 978）与
+  glob_set（skeleton 97）`--func` 前后 defects=0/numbering=0 不变；
+  B2 双侧 fixture `blockstruct_orderblocks_1204` 5/5 case MATCH。
