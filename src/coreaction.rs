@@ -1795,120 +1795,15 @@ impl Action for ActionMergeType {
 // by oppool1 Rules (RuleXorCollapse, RuleAndOrLump, etc.) + mainloop+fullloop
 // RULE_REPEATAPPLY convergence. Verified redundant: defects=0, 952/952 tests.
 
-/// Copy propagation pass — folds COPY chains
-///
-/// Corresponds to Ghidra's `RuleCopyPropagate`. For each `COPY out = in`,
-/// redirects all users of `out` to use `in` directly, then kills the COPY.
-pub struct ActionCopyPropagate;
-
-impl ActionCopyPropagate {
-    // RUGRA-GLUE: Rugra-specific copy-propagation pass; no direct Ghidra Action counterpart
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Action for ActionCopyPropagate {
-    // RUGRA-GLUE: Rugra-specific copy-propagation apply
-    fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        let mut changed = 0;
-        let mut to_kill: Vec<crate::op::PcodeOpRef> = Vec::new();
-
-        // Multi-pass: keep propagating until no more COPYs can be folded
-        loop {
-            let mut round_changed = 0;
-
-            for op_ref in &fd.obank.alivelist {
-                let op = op_ref.0.read().unwrap();
-                if op.opcode != OpCode::CPUI_COPY {
-                    continue;
-                }
-                if op.inrefs.is_empty() || op.output.is_none() {
-                    continue;
-                }
-
-                let src = op.inrefs[0].clone();
-                let dst = op.output.as_ref().unwrap().clone();
-
-                if Arc::ptr_eq(&src, &dst) {
-                    continue;
-                }
-
-                // Propagate type from COPY output to input before redirecting.
-                // ActionTypeInfer (which runs before CopyPropagate) may have
-                // assigned a meaningful type to the output based on usage
-                // context. Transfer it to the source so the type survives
-                // the COPY elimination.
-                {
-                    let dst_vn = dst.read().unwrap();
-                    let dst_type = dst_vn.v_type.clone();
-                    drop(dst_vn);
-                    if let Some(dt) = dst_type {
-                        let mut src_vn = src.write().unwrap();
-                        let should_update = src_vn.v_type.as_ref().map_or(true, |t| {
-                            t.get_metatype() == crate::type_system::TypeMetatype::Unknown
-                                || t.get_name() == "undefined"
-                        });
-                        if should_update {
-                            src_vn.v_type = Some(dt);
-                        }
-                    }
-                }
-
-                let dst_vn = dst.read().unwrap();
-                let users: Vec<_> = dst_vn.descend.iter()
-                    .filter_map(|w| w.upgrade())
-                    .collect();
-
-                if users.is_empty() {
-                    // No users, dead code will clean up
-                    continue;
-                }
-
-                drop(dst_vn);
-                drop(op);
-
-                // Redirect all users of dst to use src instead
-                for user_arc in &users {
-                    let mut user = user_arc.write().unwrap();
-                    for slot in 0..user.inrefs.len() {
-                        if Arc::ptr_eq(&user.inrefs[slot], &dst) {
-                            user.inrefs[slot] = src.clone();
-                            src.write().unwrap().descend.push(Arc::downgrade(user_arc));
-                        }
-                    }
-                }
-
-                // Clear dst's descendents since we redirected them
-                dst.write().unwrap().descend.clear();
-
-                to_kill.push(op_ref.clone());
-                round_changed += 1;
-            }
-
-            changed += round_changed;
-            if round_changed == 0 {
-                break;
-            }
-
-            // Kill the propagated COPYs
-            for op_ref in to_kill.drain(..) {
-                fd.obank.mark_dead(op_ref);
-            }
-        }
-
-        if changed > 0 {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
-    }
-
-    // RUGRA-GLUE: Rust Action trait get_name for Rugra-specific ActionCopyPropagate
-    fn get_name(&self) -> &str {
-        "copy_propagate"
-    }
-}
+// ActionCopyPropagate DELETED (COPYPROP lane 2026-09-22): self-invented
+// blanket copy-propagation pass with NO Ghidra counterpart (12.0.4 oracle has
+// no ActionCopyPropagation/RuleCopyPropagate; see
+// docs/alignment_docs/COPYPROP_LANE_VERDICT_1204.md). It was never registered
+// (zero references) and its comment falsely claimed a Ghidra correspondence.
+// Ghidra's COPY governance is merge-phase HighVariable grouping + print
+// suppression (ActionMergeCopy/DominantCopy/HideShadow/CopyMarker), all of
+// which are implemented and wired. Deletion verified behavior-neutral:
+// curl E2E byte-identical, defects=0, numbering=0.
 
 /// Attach System V AMD64 ABI register parameters to CPUI_CALL operations
 ///
