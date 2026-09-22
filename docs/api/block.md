@@ -1754,3 +1754,15 @@ MATCH（runner `tools/run_blockstruct_orderblocks_oracle.sh`）。
 - 验证与三门禁见 docs/api/blockaction.md 同日条目；B2 双侧 fixture
   `tests/oracle/blockstruct_marklabelbumpup_1204`（runner
   `tools/run_blockstruct_marklabelbumpup_oracle.sh`）5/5 MATCH。
+
+## 2026-09-22 追加（PRINTC-SWITCH-EMIT-0001 — default_label 字段）
+
+`BlockSwitch` 增 `default_label: Option<u64>`：oracle 的 default 是 caseblocks 普通成员
+（addCase cc:3515 isdefault），label 取其基本块首个表索引（finalizePrinting
+block.cc:3573-3576），与全部 case 一起按 (label,depth) 稳定排序（cc:3591）——
+`default:` 印在 label 秩位而非末位。Rugra default 走独立槽，该字段由
+`finalize_case_labels` 末尾按同款配方计算（front_leaf→original 基本块 +
+getIndexByBlock(basic,0)→getLabelByIndex）；无表索引或 case_order/cases 长度不齐时
+None（printc 保持末位旧位）。已知角落：default 为 fall-thru 链非根时 oracle 继承
+链根 label（cc:3577-3584），Rugra 按自身首索引排位（语料未见）。消费方与门禁见
+docs/api/printc.md 同日条目。

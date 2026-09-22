@@ -4986,6 +4986,39 @@ impl PrintC {
     // printc.cc:582-591) and the full emitBlockSwitch header
     // (printc.cc:3325-3327) render the identical expression text.
     fn emit_switch_head_expr(&mut self, switch_data: &crate::block::BlockSwitch) {
+        // Ghidra opBranchind (printc.cc:582-591): `pushVn(op->getIn(0),op,mods)`
+        // reads the BRANCHIND's LIVE input varnode at print time, so the head
+        // renders whatever the final IR feeds the dispatch — after
+        // ActionSwitchNorm's foldInNormalization (jumptable.cc:1546-1553)
+        // rewired it, that is the switchvn normalization expression
+        // (e.g. `AND(SUB(x,min),mask)`), which ActionMarkImplied marks
+        // implied and pushVn therefore inlines as an expression tree.
+        // Rugra's BlockSwitch captured `index_varnode` during
+        // ActionBlockStructure — BEFORE switchnorm/deadcode rewrite the
+        // input — so the snapshot goes stale and printed the pre-rewrite
+        // varnode's name (PRINTC-SWITCH-EMIT-0001 head-shape residual:
+        // `switch(iVar31)` vs oracle `switch((int)pCVar10 - 0x23U & 0xff)`).
+        // Resolve the control block's BRANCHIND op fresh and push its current
+        // input through the normal varnode channel (implied inlining, casts,
+        // constants) exactly like pushVn.
+        let live_input = {
+            let ctrl = switch_data.control.read().unwrap();
+            ctrl.get_ops().iter().find_map(|op_ref| {
+                let op = op_ref.0.read().unwrap();
+                if op.opcode == OpCode::CPUI_BRANCHIND {
+                    op.get_in(0).cloned()
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some(vn_arc) = live_input {
+            let vn = vn_arc.read().unwrap();
+            self.push_varnode(&vn, None);
+            return;
+        }
+        // Fallback (control block holds no live BRANCHIND — e.g. a dispatch
+        // consumed by a later restructure): legacy snapshot channel below.
         if let Some(ref idx_vn_arc) = switch_data.index_varnode {
             let idx_vn = idx_vn_arc.read().unwrap();
             let key = (idx_vn.get_space(), idx_vn.get_offset());
@@ -5184,9 +5217,43 @@ impl PrintC {
                     });
 
                     // cc:3331-3349: emit one label group + body per case block.
+                    // cc:3140-3145 + cc:3331-3332: the default case — part of
+                    // caseblocks in Ghidra (tagged isdefault, addCase
+                    // cc:3515), placed at its label rank by the cc:3591 sort
+                    // (oracle gp prints it 2nd, ghidra_curl_1204.c:1769).
+                    // Rugra stores it separately; default_label (computed in
+                    // finalize_case_labels, block.cc:3573-3576 recipe) now
+                    // restores the oracle rank: first slot whose case label
+                    // exceeds the default's. None (no table index for the
+                    // default basic block) keeps the legacy last position.
+                    let def_pos: usize = match switch_data.default_label {
+                        Some(dl)
+                            if switch_data.case_order.len()
+                                == switch_data.cases.len() =>
+                        {
+                            switch_data
+                                .case_order
+                                .iter()
+                                .filter(|co| co.label < dl)
+                                .count()
+                        }
+                        _ => switch_data.cases.len(),
+                    };
                     let mut emitted_case_values: std::collections::HashSet<u64> = std::collections::HashSet::new();
                     let has_default = switch_data.default_case.is_some();
                     for (idx, case_block) in switch_data.cases.iter().enumerate() {
+                        // cc:3331-3332 iterates the merged sorted caseblocks;
+                        // the default interleaves at def_pos.
+                        if idx == def_pos && has_default {
+                            let def_block = switch_data.default_case.as_ref().unwrap();
+                            self.emit_switch_default_slot(
+                                switch_data,
+                                def_block,
+                                graph,
+                                emitted,
+                                false,
+                            );
+                        }
                         let case_idx = std::sync::Arc::as_ptr(case_block) as *const () as usize;
                         let body_already_emitted = emitted.contains(&case_idx);
                         let values = &switch_data.case_values[idx];
@@ -5272,8 +5339,14 @@ impl PrintC {
                             .map_or(false, |o| o.0.read().unwrap().opcode == OpCode::CPUI_RETURN
                                 )
                         };
+                        // cc:3342 `i!=bl->getNumCaseBlocks()-1`: the FINAL
+                        // label in the merged emission order (cases + the
+                        // default at its sorted rank, block.cc:3591) never
+                        // takes a break. With no default — or with the
+                        // default placed before the last case (def_pos<len)
+                        // — the last case IS that final label.
                         let is_last_label =
-                            !has_default && idx + 1 == switch_data.cases.len();
+                            idx + 1 == switch_data.cases.len() && (!has_default || def_pos < switch_data.cases.len());
                         if !ends_with_return && !is_last_label {
                             self.emit.tag_line(0);
                             self.emit.print("break;");
@@ -5283,46 +5356,18 @@ impl PrintC {
                         self.emit.drop_indent();
                     }
 
-                    // cc:3140-3145: the default case (part of caseblocks in
-                    // Ghidra, tagged isdefault; Rugra stores it separately and
-                    // emits it after the regular cases). As the final label it
-                    // never takes a break (cc:3342 i != numCaseBlocks-1).
-                    if let Some(ref def_block) = switch_data.default_case {
-                        let def_idx = std::sync::Arc::as_ptr(&def_block) as *const () as usize;
-                        // cc:3334-3337 via addCase's isdefault tag: a default
-                        // edge peeled into the BlockMultiGoto prints `default:`
-                        // followed by the goto statement only — no body (the
-                        // target block is emitted separately at its own place
-                        // in the tree).
-                        if switch_data.default_gototype != 0 {
-                            let def_gt = switch_data.default_gototype;
-                            self.emit.tag_line(0);
-                            self.emit.print("default:");
-                            self.emit.bump_indent();
-                            self.emit.tag_line(0);
-                            let target_addr =
-                                crate::block::front_leaf_start_addr(def_block);
-                            let bt = match def_gt {
-                                crate::block::goto_type::BREAK_GOTO => {
-                                    crate::op::branch_type::BREAK
-                                }
-                                crate::block::goto_type::CONTINUE_GOTO => {
-                                    crate::op::branch_type::CONTINUE
-                                }
-                                _ => crate::op::branch_type::GOTO,
-                            };
-                            self.emit_goto_statement(target_addr, bt);
-                            self.emit.drop_indent();
-                        } else if !emitted.contains(&def_idx) {
-                            self.emit.tag_line(0);
-                            self.emit.print("default:");
-                            self.emit.bump_indent();
-                            let saved_seen_return = self.seen_return;
-                            self.seen_return = false;
-                            self.emit_switch_case_body(def_block, graph, emitted);
-                            self.seen_return = saved_seen_return;
-                            self.emit.drop_indent();
-                        }
+                    // cc:3140-3145 + cc:3331-3332: trailing default — the
+                    // label-rank slot fell at/after the last case, so the
+                    // default emits as the final label (no break per cc:3342).
+                    if def_pos >= switch_data.cases.len() && switch_data.default_case.is_some() {
+                        let def_block = switch_data.default_case.as_ref().unwrap();
+                        self.emit_switch_default_slot(
+                            switch_data,
+                            def_block,
+                            graph,
+                            emitted,
+                            true,
+                        );
                     }
 
                     // cc:3350-3351: emit->tagLine(); emit->print(CLOSE_CURLY);
@@ -5331,6 +5376,63 @@ impl PrintC {
                 } else {
                     self.emit_block_ops(block_arc, false);
                 }
+    }
+
+    // Ghidra: printc.cc:3140-3145 PrintC::emitSwitchCase default arm
+    /// Emit the formal default case: `default:` + goto statement (peeled
+    /// goto-arm default, cc:3334-3337) or `default:` + body (+ trailing
+    /// break per cc:3342-3345 isExit semantics). `is_last_label` carries the
+    /// merged-order finality (the cc:3342 `i != numCaseBlocks-1` test) since
+    /// the default now interleaves at its label rank.
+    fn emit_switch_default_slot(
+        &mut self,
+        switch_data: &crate::block::BlockSwitch,
+        def_block: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        graph: &crate::block::BlockGraph,
+        emitted: &mut std::collections::HashSet<usize>,
+        is_last_label: bool,
+    ) {
+        let def_idx = std::sync::Arc::as_ptr(def_block) as *const () as usize;
+        // cc:3334-3337 via addCase's isdefault tag: a default
+        // edge peeled into the BlockMultiGoto prints `default:`
+        // followed by the goto statement only — no body (the
+        // target block is emitted separately at its own place
+        // in the tree).
+        if switch_data.default_gototype != 0 {
+            let def_gt = switch_data.default_gototype;
+            self.emit.tag_line(0);
+            self.emit.print("default:");
+            self.emit.bump_indent();
+            self.emit.tag_line(0);
+            let target_addr = crate::block::front_leaf_start_addr(def_block);
+            let bt = match def_gt {
+                crate::block::goto_type::BREAK_GOTO => crate::op::branch_type::BREAK,
+                crate::block::goto_type::CONTINUE_GOTO => crate::op::branch_type::CONTINUE,
+                _ => crate::op::branch_type::GOTO,
+            };
+            self.emit_goto_statement(target_addr, bt);
+            self.emit.drop_indent();
+        } else if !emitted.contains(&def_idx) {
+            self.emit.tag_line(0);
+            self.emit.print("default:");
+            self.emit.bump_indent();
+            let saved_seen_return = self.seen_return;
+            self.seen_return = false;
+            self.emit_switch_case_body(def_block, graph, emitted);
+            self.seen_return = saved_seen_return;
+            // cc:3342-3345: `bl->isExit(i)&&(i!=bl->getNumCaseBlocks()-1)`
+            // — a non-final default whose case block flows to the switch
+            // exit takes an explicit break; one that exits via
+            // goto/return (sizeOut()!=1, addCase cc:3514) does not
+            // (oracle gp: default body ends `goto LAB_0010404b`, no break;
+            // oracle httpd 0x12f92a default mid-list WITH break).
+            let def_isexit = def_block.read().unwrap().size_out() == 1;
+            if !is_last_label && def_isexit {
+                self.emit.tag_line(0);
+                self.emit.print("break;");
+            }
+            self.emit.drop_indent();
+        }
     }
 
     // RUGRA-GLUE: emit_switch_case_body — dispatch shim for FlowBlock::emit
@@ -7413,6 +7515,70 @@ impl PrintC {
                     self.push_input(def_op, i);
                 }
                 self.emit.print(")");
+                return;
+            }
+            // Ghidra: printc.cc:843/872-877 PrintC::opSubpiece — the
+            // non-special-printing fall-thru: isSubpieceCast(outDef,inRead,
+            // offset) renders as a type cast `(int)x` (opTypeCast,
+            // printc.cc:451-462: dt = out getHighTypeDefFacing), anything
+            // else stays functional `SUB81(x,0)` (opFunc + typeop.cc:2127
+            // "SUB"+insize+outsize). Mirrors the RPN dispatch arm's
+            // cc:2244-2272 logic in the inline channel: without it the
+            // implied SUBPIECE leaf of the switch head normalization chain
+            // (e.g. AND(SUB(SUBPIECE(param),0x23),0xff)) hit the `_ =>`
+            // unnamed-location fallback and printed `unique0x1000026e`
+            // instead of the oracle's `(int)pCVar10` cast form
+            // (PRINTC-SWITCH-EMIT-0001 head-shape family).
+            OpCode::CPUI_SUBPIECE => {
+                // cc:872-874: isSubpieceCast(outDef, inRead, offset).
+                let (out_dt, in_dt, offset) = {
+                    let out = def_op.get_out().map(|a| a.read().unwrap());
+                    let in0 = def_op.get_in(0).map(|a| a.read().unwrap());
+                    let off = def_op
+                        .get_in(1)
+                        .map(|a| a.read().unwrap().get_offset())
+                        .unwrap_or(0);
+                    match (out, in0) {
+                        (Some(o), Some(i)) => (
+                            o.get_high_type_def_facing(),
+                            i.get_high_type_read_facing(def_op, 0),
+                            off as u32,
+                        ),
+                        _ => (None, None, off as u32),
+                    }
+                };
+                let is_sub = match (&out_dt, &in_dt) {
+                    (Some(o), Some(i)) => self.cast_strategy.is_subpiece_cast(o, i, offset),
+                    _ => false,
+                };
+                if is_sub && !self.option_nocasts {
+                    // pushOp(&typecast,op); pushType(dt); pushVn(in0) —
+                    // inline-channel spelling: `(<type>)` + operand.
+                    if let Some(dt) = &out_dt {
+                        self.emit.print(&format!("({})", dt.get_name()));
+                    }
+                    self.push_input(def_op, 0);
+                } else {
+                    // typeop.cc:2127: "SUB" + dec(insize) + dec(outsize).
+                    let insz = def_op
+                        .get_in(0)
+                        .map(|a| a.read().unwrap().get_size())
+                        .unwrap_or(0);
+                    let outsz = def_op
+                        .get_out()
+                        .map(|a| a.read().unwrap().get_size())
+                        .unwrap_or(0);
+                    let nm = format!("SUB{}{}", insz, outsz);
+                    self.emit.print(&nm);
+                    self.emit.print("(");
+                    for i in 0..def_op.num_input() {
+                        if i > 0 {
+                            self.emit.print(",");
+                        }
+                        self.push_input(def_op, i);
+                    }
+                    self.emit.print(")");
+                }
                 return;
             }
             _ => {

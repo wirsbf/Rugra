@@ -2323,3 +2323,56 @@ If 条件 List 末位（oracle 中该函数经 jumptable guard 折叠，golden �
 skeleton 3751→3653（−98）、defects=0、numbering=0；printc 域单测 12/12。残留（拓扑域，另行
 登记）：条件槽 `if switch(iVar31) {`（1 行非法 C，待 BO/guard-folding lane 消 If）、双
 default-check（If body 侧）、SWITCH-CASE-TAIL-0001（0x23/0x35 尾语句蒸发，未动）。
+
+## 2026-09-22 追加（PRINTC-SWITCH-EMIT-0001 残差收口 — default 位置族 + 头形态）
+
+三源登记（CR-BO 条件②/GP978_TRIAGE §2/PRINTC-SWITCH-EMIT-0001 补证）的 gp switch 残差
+~24 行中的两族在本轮收口；条件槽 `if switch(...)` 残迹（SWITCH-BRIDGE-DUP-0001 残留，拓扑
+域）未动，如实保留。
+
+**① 头形态（`switch(iVar31)` → `switch((int)config_00 - 0x23 & 0xff)`）**：
+
+- oracle 通道（printc.cc:582-591 opBranchind）：`pushVn(op->getIn(0),op,mods)` 在**打印时**
+  读 BRANCHIND 的**活输入**。switchnorm（coreaction.cc:5684，fullloop 尾）晚于
+  ActionBlockStructure（cc:5676，mainloop）——oracle 结构层从不缓存 switch 索引 varnode，
+  头表达式永远反映 foldInNormalization（jumptable.cc:1546-1553）改写后的最终 IR。
+- Rugra 根因：`BlockSwitch::index_varnode` 在 blockaction 结构化时快照捕获；gp 终态 IR 实证
+  （RUGRA_DUMP_FUNC）BRANCHIND 输入已是 `AND(SUB(SUBPIECE(config_00),0x23),0xff)`（全 implied，
+  outimpl=true），但打印读的是结构化时刻的陈旧 varnode（被 varmap 命名 iVar31）→ 印裸名。
+- 修复：`emit_switch_head_expr` 先解析 control 块的活 BRANCHIND op，取其当前 in(0) 走
+  `push_varnode`（implied 内联/常量/符号通道，即 pushVn 等价物）；无活 op 时保留快照回退。
+  附带收益：glob_set 头 `*(( *)unique0x00008f00)` → `cVar1`（活输入=被加载字符）。
+- 配套：`emit_inline_expr` 补 SUBPIECE 臂（printc.cc:843/872-877 opSubpiece fall-thru：
+  isSubpieceCast → `(int)` cast（opTypeCast cc:451-462 语义），否则 `SUB81(x,0)` opFunc——
+  镜像 RPN 通道 cc:2244-2272 同款逻辑）。此前该臂缺失使归一化链叶子落 `_ =>` 无名位置
+  回退印 `unique0x1000026e`。
+- 头残余（登记族，非本层）：叶名 `config_00` vs `pCVar10`（varmap 命名族）；`0x23` vs
+  `0x23U`（常量后缀族——scalar helper 无 U/L 后缀，push_integer 注释自认）；httpd main 头
+  现印未归一化派发表达式（该表 Rugra foldInNormalization 未折基，jumptable 上游域）。
+
+**② default 位置（末位 → label 排序位第二）**：
+
+- oracle（block.cc:3556-3592 finalizePrinting + printc.cc:3331-3332/3140-3145）：default 是
+  caseblocks 普通成员（addCase cc:3515 isdefault 标注），label 取其基本块**首个表索引**
+  （cc:3573-3576 getIndexByBlock(basic,0)→getLabelByIndex），与全部 case 一起按
+  `(label,depth)` 稳定排序（cc:3591, block.hh:903-908 compare）→ `default:` 印在 label
+  秩位（golden gp: case 0 → default → case 0xf，ghidra_curl_1204.c:1765-1769）。
+- Rugra 根因：default 存独立槽 `default_case`，发射恒在常规 case 之后（自认偏差），且从不
+  参与 finalize_case_labels 的 label 计算/排序。
+- 修复：`BlockSwitch` 增 `default_label: Option<u64>`（finalize_case_labels 末尾按 cc:3573-
+  3576 同款配方计算——front_leaf→original 基本块 + 首个表索引 label；`case_order`/`cases`
+  长度不一致或无表索引时 None=保持末位旧位）。`emit_structured_switch` 按 label 秩插入：
+  `def_pos = case_order.filter(label < default_label).count()`，循环内该位先发 default，
+  末位则循环后发。break 语义按 cc:3342-3345 `isExit(i)&&(i!=numCaseBlocks-1)`：default 的
+  isExit=addCase cc:3514 `sizeOut()==1`（goto/return 出口=sizeOut!=1 → 无 break，匹配 gp
+  golden default 尾 `goto LAB_0010404b` 无 break；httpd 0x12f92a default 中位带 break）。
+  last-case 的 `is_last_label` 同步泛化：default 中位时末 case 即最终标签（无 break）。
+- 已知角落（vs oracle，注释已记）：default 为 fall-thru 链非根时 oracle 继承链根 label
+  （cc:3577-3584），Rugra default 槽无链路，按自身首索引排位；语料未见该形态。
+
+**验证**：gp `--func` 887→878 skeleton（case 0 → default → case 0xf 逐位= golden；CB 修的
+0x23/0x35 尾赋值+break 原样保持；default 体不变仅位移）；curl 全量 3607→3595 / defects=0 /
+numbering=0；httpd 2456→2458（+2：main 头活输入暴露该表 foldInNormalization 未折基的上游
+差，jumptable 域登记）/ defects=0 / numbering=0；httpd ap_vhost_iterate_given_conn 与 CB 基线
+逐字节恒等（37 行= jumptable 不可恢复既有差，未回归）；gcc 审计 curl 81/26、httpd 7/22 与
+CB 基线恒等；printc 单测 12/12 + switch 1/1；block:: 5/5、jumptable 36/36。

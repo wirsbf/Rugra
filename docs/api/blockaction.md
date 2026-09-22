@@ -1383,3 +1383,10 @@ multi_shared（多条目组 addressIndex 序 [0x5,0x2]）、fallthru_chain
   blockmultigoto / blockstruct_orderblocks / blockstruct_scopebreak_gototype
   MATCH；blockstruct_blockgoto_wrapped 维持其已登记 MISMATCH
   （BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001，形态与 metadata 记载一致）。
+
+## 2026-09-22 追加（PRINTC-SWITCH-EMIT-0001 — BlockSwitch 构造点补字段）
+
+5 处 `BlockSwitch { ... }` 结构体字面量（try_rule_switch 主路径 6249、multigoto goto 臂
+重建 4583/7281/7574/7766 一族）补 `default_label: None` 字段初始化——纯字段接线，无
+算法改动；label 值由 block.rs `finalize_case_labels` 统一物化。形态与门禁见
+docs/api/printc.md 同日条目（gp default 末位→第二位，curl 3607→3595/0/0）。
