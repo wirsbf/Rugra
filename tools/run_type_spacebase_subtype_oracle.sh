@@ -7,8 +7,8 @@ oracle_commit=e40ed13014025f82488b1f8f7bca566894ac376b
 oracle_tag=Ghidra_12.0.4_build
 oracle_cpp_tree=b02e230a539c65de14e50f357d0ba834d8184f4f
 oracle_makefile_blob=ca0719fa5f17aabd14c52f40ed8b030f54d2aac6
-rugra_base_commit=781722ec04cc407ce22f83a45da1d9cd05485e77
-rugra_base_tree=917ba7abab51566a1eb07b9e87d605d019afd94e
+rugra_base_commit=a0c4083e1e5645e6e73032d8fc571a09dda8f289
+rugra_base_tree=bbac9992afe484d43b74d51858ba01d3a3c46a35
 ghidra_root="$repo_root/ghidra"
 cpp_root="$ghidra_root/Ghidra/Features/Decompiler/src/decompile/cpp"
 metadata="$repo_root/tests/oracle/type_spacebase_subtype_1204.metadata.json"
@@ -135,8 +135,11 @@ if set(top_residuals) != all_residuals:
     raise SystemExit("top-level and coverage residual TODO sets differ")
 
 expected_mismatches = metadata.get("expected_mismatches")
-if not isinstance(expected_mismatches, dict) or not expected_mismatches:
-    raise SystemExit("expected_mismatches must be a non-empty object")
+if not isinstance(expected_mismatches, dict):
+    raise SystemExit("expected_mismatches must be an object")
+# An empty table is the fully-MATCH state: every observation record agrees
+# and no residual TODO pins a divergence (TYPE-SPACEBASE-MISSFALLBACK-0001
+# closed 2026-09-23, lane DG SB-MATCHURL-ORD191-0001).
 mismatch_todos = set()
 for key, entry in expected_mismatches.items():
     if not isinstance(entry, dict) or set(entry) != {"ghidra", "rugra", "todo"}:
@@ -309,4 +312,4 @@ print(f"matched={records-len(actual_mismatches)} mismatched={len(actual_mismatch
 print(f"ghidra_stdout_sha256={ghidra_sha}")
 print(f"rugra_stdout_sha256={rugra_sha}")
 PY
-printf 'type_spacebase_subtype_1204: 7/10 MATCH, 3 MISMATCH pinned to TYPE-SPACEBASE-MISSFALLBACK-0001\n'
+printf 'type_spacebase_subtype_1204: all records MATCH (TYPE-SPACEBASE-MISSFALLBACK-0001 closed)\n'

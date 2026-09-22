@@ -1,7 +1,7 @@
 {
  "schema_version": 2,
  "fixture_id": "TYPE-SPACEBASE-SUBTYPE-DISPATCH-0001",
- "status_note": "Virtual-dispatch routing fixture: Datatype::get_sub_type routes the Spacebase arm to TypeSpacebase::get_sub_type (type.cc:2947 scope query) exactly as the C++ virtual call from TypePointer::isPtrsubMatching (type.cc:1129) does; 7 of 10 records MATCH. The 3 remaining records pin the pre-existing no-container fallback divergence TYPE-SPACEBASE-MISSFALLBACK-0001: Ghidra returns glb->types->getBase(1,TYPE_UNKNOWN) with newoff=0, Rugra returns None because its type layer has no TypeFactory handle on TypeSpacebase.",
+ "status_note": "Full-fallback closure fixture: Datatype::get_sub_type routes the Spacebase arm to TypeSpacebase::get_sub_type (type.cc:2947 scope query) exactly as the C++ virtual call from TypePointer::isPtrsubMatching (type.cc:1129) does, and the no-container branch answers glb->types->getBase(1,TYPE_UNKNOWN) with newoff=0 (type.cc:2964-2966) instead of Rust None; all 10 records MATCH byte-identically (ghidra stdout sha256 == rugra stdout sha256), closing TYPE-SPACEBASE-MISSFALLBACK-0001 (lane DG SB-MATCHURL-ORD191-0001).",
  "decisive_semantics": {
   "reference_and_output_parameters": "getSubType(int8 off, int8* newoff) returns the component Datatype* and writes the renormalized offset through the out-pointer; isPtrsubMatching(int8,int8,int8) is const, value-only. Rugra mirrors with (Option<Arc<Datatype>>, i64) tuples; the Arc is the canonical factory/scope-owned object, mirroring the C++ pointer identity.",
   "loop_boundaries_and_iteration_order": "ScopeInternal::findContainer walks the address rangemap from the last entry starting at-or-before addr downward (database.cc:2255-2274), keeping the strictly smallest containing entry; getMap returns the global scope, or the function-local scope when localframe is valid (type.cc:2938-2943). Rugra find_container mirrors the same last-start descending scan with smallest-size preference; get_map returns the stored scope reference.",
@@ -136,11 +136,9 @@
    "residual_todo_ids": []
   },
   "getsubtype_miss_unknown_fallback": {
-   "status": "MISMATCH",
-   "covers": "subtype.miss_gap, subtype.hit_endboundary — Ghidra returns getBase(1,TYPE_UNKNOWN) with newoff=0; Rugra returns None from the same no-container branch",
-   "residual_todo_ids": [
-    "TYPE-SPACEBASE-MISSFALLBACK-0001"
-   ]
+   "status": "MATCH",
+   "covers": "subtype.miss_gap, subtype.hit_endboundary — the no-container branch answers Ghidra's getBase(1,TYPE_UNKNOWN) fallback with newoff=0 (type.cc:2964-2966), closing TYPE-SPACEBASE-MISSFALLBACK-0001",
+   "residual_todo_ids": []
   },
   "isptrsub_matching_spacebase_gate_in_symbol": {
    "status": "MATCH",
@@ -148,11 +146,9 @@
    "residual_todo_ids": []
   },
   "isptrsub_matching_unmapped_extra_zero": {
-   "status": "MISMATCH",
-   "covers": "gate.miss_extra0 — Ghidra's UNKNOWN fallback type (size 1) admits extra==0, Rugra's None does not",
-   "residual_todo_ids": [
-    "TYPE-SPACEBASE-MISSFALLBACK-0001"
-   ]
+   "status": "MATCH",
+   "covers": "gate.miss_extra0 — the UNKNOWN fallback type (size 1) admits extra==0 on both sides",
+   "residual_todo_ids": []
   },
   "isptrsub_matching_unmapped_extra_out_of_bounds": {
    "status": "MATCH",
@@ -160,49 +156,31 @@
    "residual_todo_ids": []
   }
  },
- "expected_mismatches": {
-  "subtype.miss_gap": {
-   "ghidra": "unknown:1:0",
-   "rugra": "none:0:0",
-   "todo": "TYPE-SPACEBASE-MISSFALLBACK-0001"
-  },
-  "subtype.hit_endboundary": {
-   "ghidra": "unknown:1:0",
-   "rugra": "none:0:0",
-   "todo": "TYPE-SPACEBASE-MISSFALLBACK-0001"
-  },
-  "gate.miss_extra0": {
-   "ghidra": "1",
-   "rugra": "0",
-   "todo": "TYPE-SPACEBASE-MISSFALLBACK-0001"
-  }
- },
- "residual_todo_ids": [
-  "TYPE-SPACEBASE-MISSFALLBACK-0001"
- ],
+ "expected_mismatches": {},
+ "residual_todo_ids": [],
  "comparand": {
-  "rust_base_commit": "781722ec04cc407ce22f83a45da1d9cd05485e77",
-  "rust_base_tree": "917ba7abab51566a1eb07b9e87d605d019afd94e",
+  "rust_base_commit": "a0c4083e1e5645e6e73032d8fc571a09dda8f289",
+  "rust_base_tree": "bbac9992afe484d43b74d51858ba01d3a3c46a35",
   "base_blobs": {
-   "src/type_system/datatype.rs": "412a0ffbf16ae9dfeeb6607c6fcf89d7773eb148",
-   "src/ruleaction.rs": "d5afb251a48977be64b3b2767a7048678a5db5f4",
-   "src/type_system/typefactory.rs": "e85e7d8aefe38d2fd6e15e2435ce662b77bcdb6b",
-   "src/unionresolve.rs": "14b3650eee3f6c0d9cb78c70cbde8ec80e9a276a",
-   "src/varmap.rs": "3659b164797c3d6cb819214cca650be0eae79efa"
+   "src/type_system/datatype.rs": "a46e0cd748eaceab59d44ad5e92d49b307b6f373",
+   "src/ruleaction.rs": "0ab04439f2c61527198d0b12c36d2ff5e77e7f97",
+   "src/type_system/typefactory.rs": "80d676df7ac582b80cf49648bcdd2188f7b48197",
+   "src/unionresolve.rs": "b90f77652f06a30394ae3adb208db124ea904d4a",
+   "src/varmap.rs": "6351c869f1fcc5ae44e372c2b1c123609188d5ec"
   },
   "overlay_sha256": {
-   "src/type_system/datatype.rs": "716a5f976a9bcbea9976e615319d0f5b2dc57f52c5a966f8f2eff4283939a495",
-   "src/ruleaction.rs": "7e16295ea8b957757883f92d1877c492862eea71a8018ada87ccbac44a1234d7",
-   "src/type_system/typefactory.rs": "9093338b4d6fc7ee007ead74adf9e76f03a60c518ad535de45b5c3c2aeabf6ee",
+   "src/type_system/datatype.rs": "f677b856e501ae9c010c6c79670b158a2bc15b4b105492df309fb23662e22809",
+   "src/ruleaction.rs": "db6c05b202f571332eed9565486efd916ad762d41e717a3beafb0e3402721b0e",
+   "src/type_system/typefactory.rs": "2f357620e03a5579d14c0c8fc14fde1a1cca270540e86e7a847779f9c886aca9",
    "src/unionresolve.rs": "eb11e74013dbc8734fa45d91710a401cf413f0c78f91beb00f6027bf8debd764",
-   "src/varmap.rs": "e1ba94143ae38c19789a360bb31c4dede4daed8ea2353700fa8d6d115e2b72af"
+   "src/varmap.rs": "2ecde69725adc5b3e81a9e277aa2fce5a0f3f3fc536dbab9befc40ae88b3e6ba"
   },
   "cpp_fixture_sha256": "e3f12ae6fa5181fab7f752bdbe05d617a50076266da9ec97fc2e543111736d2b",
   "rust_fixture_sha256": "1e288e54e206644b29124ef72122539a1112c9bbcbfeedb45fcaff9d330b5bd9",
   "source_policy": "Snapshot the pinned Rugra base commit 781722e (pre-fix master), overlay the five candidate src files from the live tree, build the lib, and compile the rust fixture driver against it; the ghidra side compiles the cc fixture against the locked oracle libdecomp.a"
  },
  "expected_ghidra_stdout_sha256": "db3869d631b760d3b98d8bbcf75b5f46a2d7c5d1ce9287b281475ef9302ca451",
- "expected_rugra_stdout_sha256": "11e0ec7ded2b5a6df733a3e72176c75a17115ae3c88637f90fe1876fc3e657b3",
+ "expected_rugra_stdout_sha256": "db3869d631b760d3b98d8bbcf75b5f46a2d7c5d1ce9287b281475ef9302ca451",
  "oracle_sources": [
   "type.cc:174-179 Datatype::getSubType base virtual",
   "type.cc:920-931 TypePointer::getSubType",

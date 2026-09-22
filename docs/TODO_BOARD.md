@@ -396,8 +396,27 @@
 > ad0e4170…)。**新登记**:
 > - `JUMPTABLE-PARENTFACTS-FIXTURE-0001`(P1,Cross-Review 绑定条件,owner=fixture lane):
 >   multistage 表通道①+兄弟 BRANCHIND 通道② 双侧 fixture;固化前两通道 B2=UNTESTED。
-> - `TYPE-SPACEBASE-MISSFALLBACK-0001`(P2,Lane AE): Ghidra miss 回退 getBase(1,
->   TYPE_UNKNOWN) vs Rugra (None,0);涉 typefactory 注入链,超出 AE write-set。
+> - `TYPE-SPACEBASE-MISSFALLBACK-0001`(P2,**FIXED 2026-09-23**,Lane DG
+>   `wt/sb-ord191`,owner=fixer,commit a0c4083e+fixture 重钉 commit): Ghidra miss
+>   回退 getBase(1,TYPE_UNKNOWN)(type.cc:2964-2966,恒非 null) vs Rugra (None,0)。
+>   修复:`TypeSpacebase::get_sub_type` miss/无 scope 两路径返回 (1 字节匿名
+>   UNKNOWN 基类型, newoff=0)。验证(本树亲测,oracle e40ed130):双侧 fixture
+>   `type_spacebase_subtype_1204` **10/10 MATCH**(ghidra/rugra stdout sha256 同为
+>   db3869d6…);match_url Phase 2 首分歧 **191→317**(oppool2 result/count 23/23
+>   对齐,ops 80385=80385);drill path layer 104 路径计数全等(ptrarith 23=23);
+>   curl E2E 2713/0/0(基线 2733,-20)、httpd 2339/0/0 持平;next_url 投影 MATCH
+>   保持;单测串行与 master 基线逐条一致。
+> - `MATCHURL-PREFERCOMPLEMENT-317-0001`(P2,新登记 2026-09-23,Lane DG,owner
+>   待认领): match_url Phase 2 新首分歧 ordinal **317**
+>   `universal:prefercomplement`(oracle 1 fire vs rugra 0):oracle 于 0x52ec:108
+>   将 `u0x23d00:4 != #0x3` 翻补为 `== #0x3`(ActionPreferComplement,
+>   coreaction.rs 域);产物在 /dev/shm/rugra-tests/sb-ord191/(fix1.rugra.projection
+>   sha 70c61387…)。
+> - `FIXTURE-STOREVARNODE-STALE-0001`(P3,新登记 2026-09-23,Lane DG 发现,owner
+>   待认领): `rule_store_varnode_spacebase_1204` fixture 在 master HEAD(5b9f12cf)
+>   即双重失效——crate-tree pin 漂移(任何 src 改动触发)+ metadata.overall_status
+>   与 runner 硬编码 require 串大小写不一致(MATCH:…untested vs …UNTESTED);需
+>   专属重钉租约,非 DG write-set。
 > - `FUNCDATA-OPSTACKLOAD-CONTAIN-0001`(P0 热修,**FIXED 2026-09-22**,Lane AO
 >   `wt/sb-opstackload`,owner=fixer): funcdata.rs:6157/6113 双处(load+store)
 >   `spc.space_id()` → `Architecture::get_contain(spc)` 解析 contain(ram)。
