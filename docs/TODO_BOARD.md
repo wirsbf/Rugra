@@ -251,6 +251,14 @@
 > 同根因 register addrSize)**。E2E 三门禁见 docs/api/{space,heritage,subflow}.md
 > 同日条目。
 > **CR-orderBlocks 绑定条件履行(2026-09-22,root)**: 新登记
+> **CR-CR2 条件履行+CR2 集成(2026-09-22,root)**: ①登记 `SUBFLOW-CSU-MASK-0001`
+> (P2,新): __libc_csu_init 间接实参 `& 0xffffffff` 掩码消失背离 golden(+1,指向
+> consume/nzmask 上游=ActionDeadCode→minimalmark 域与本修 consume 守卫的交互,oracle
+> 拒而 Rugra 受);②main oppool1@65 **oracle=821 vs rugra=778(残 −43,绑上游
+> ordinal-5/uniq 族)**,@END 28 预存 +8——main 等值不宣称(结构性限制);③Differential
+> 归因更正: curl −14=main−4/glob_word−4/glob_set−6/csu_init+1(**getparameter 未变**,
+> 其投影字节恒等自证);"逐名一致"降级为"flaky 家族内抖动零新增"。
+
 > **CO 探查闭环(2026-09-22,CANDGEN 裁决)**: 候选生成/顺序域**零缺陷**(never-seen
 > 0/0,双侧 mergeOpcode 单次,门语义逐行一致)——MERGE-COPYNOISE-CANDGEN-0001 关闭。
 > 33 对定因: **+48 implied 群体**(上游 MarkImplied/op 创建波域,指纹=uniq 30d6 创建波
