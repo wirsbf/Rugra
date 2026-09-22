@@ -736,6 +736,19 @@ impl TypeFactory {
     /// This slice projects the complete dependency key for TypeArray and the
     /// three partial variants. Other container comparators remain on the
     /// registered TYPE-0001 residual.
+    // RUGRA-GLUE: DWARF/type-manager import boundary — Ghidra's DWARF
+    // analyzer registers every imported type through the architecture's
+    // single factory (the type.cc:3412 findAdd path below), which is what
+    // makes cross-reference type identity hold; this pub(crate) wrapper
+    // exposes that registration channel to the debugproto importer.
+    pub(crate) fn intern_imported(
+        &mut self,
+        candidate: Datatype,
+    ) -> Result<Arc<Datatype>, String> {
+        self.find_add(candidate, true)
+    }
+
+    // Ghidra: type.cc:3412 TypeFactory::findAdd
     fn find_add(
         &mut self,
         mut candidate: Datatype,

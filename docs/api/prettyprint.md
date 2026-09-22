@@ -1,5 +1,16 @@
 # `prettyprint.rs` API Reference
 
+## 2026-09-22：WARN-EMIT2 R4 — 签名启发式排除比较运算符（glob_range 重复声明 0→6→0）
+
+`backfill_missing_locals`（RUGRA-GLUE，无 oracle 对应）的签名形状启发式第四次
+误命中：HERITAGE-PROMOTE-SYMBOLTAIL-0001 使 gp/glob 家族出现多行 if 条件续行
+`iVar5 < *(int *)((int *)&((URLPattern *)(uVar4 + 0x50) + iVar8)->content + 4))) {`
+——不以 `(` 开头（绕过 R3）、无分号（绕过 MAIN-IVAR4-DUP）、含 `(` 且含
+`*`、以 `{` 结尾，被当作函数签名 → if 体被当嵌套函数，`int iVar5; … long
+uVar4;` 六条重复声明注入块内（glob_range numbering 0→6）。R4 门：C 函数签名
+永不含比较/逻辑运算符（`<` `>` `==` `!=` `&&` `||`；`>` 同时覆盖只出现在
+表达式里的 `->` 字段链），全部排除出签名检测。
+
 ## 2026-08-30：POSTFIX-RETIRE-0001 W3 — P22 签名改写的词边界修复（glob_url 回归 golden）
 
 W3 对 P22（`fix_unary_deref_declarations`）活跃突变的排查结论（curl 2/2、

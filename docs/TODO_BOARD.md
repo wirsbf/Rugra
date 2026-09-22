@@ -449,6 +449,33 @@
 > COPY 对顺序在三次语义无关集成间振荡(cur→cur2→cur4:x86_lift 改动不可能语义影响 curl SLEIGH 路径,却使输出
 > 翻回旧序)——迭代序/堆布局敏感,已知会 w-selfcopy 定位(其域内)。master 当前验证:curl 3713/0/0、httpd 2344/0/0
 > (字节=cur4/cur2 除该一对外稳定)。
+> **`HERITAGE-PROMOTE-SYMBOLTAIL-0001`(P1,**FIXED 2026-09-22**,Lane BZ
+> `wt/sb-globfield`,owner=fixer,rebase 于 0b737955)**: globalsym typed-global 覆盖
+> 扩展到 glob 族(BT 的 RESID-3 归因第二域)。根因:heritage 的 renameRecurse 三处
+> 输入提升(heritage.cc:2500/2509/2539)、guardReturns 三处(cc:1628/1670/1687)、
+> guardInput 两处(cc:1973/1985)在 oracle 全经 `Funcdata::newVarnode`(带
+> queryProperties→setSymbolProperties 符号尾,funcdata_varnode.cc:161-166),Rugra
+> 只跑 flags 折叠且 Ram 腿预置 MAPPED 堵死后续 attach——`glob_expand` 读
+> (0x17660,DWARF `URLGlob*`)提升后 `t=Int/int8` 无 typelock,RulePtrArith
+> (cc:6629 TYPE_PTR 门)不点火,输出 `(int*)glob_expand+…*0x18` 原始算术。
+> 修=各点补 `fd.set_varnode_properties(&vn)`(create 后、flags 前)+
+> `Funcdata::set_input_varnode` 补 cc:364 属性遍(早退/去重臂不跑)+
+> debugproto 类型工厂软驻留(intern_named/pointer_type 走共享 TypeFactory,
+> 消双 DWARF 通道 Arc 分裂的伪 cast,glob_url 4 保持)+
+> prettyprint WARN-EMIT2 R4 门(签名启发式排除比较运算符,堵本修复引入的
+> 多行 if 续行误命中→glob_range 重复声明 numbering 0→6→0)。验证(rebase
+> 0b737955 双侧):glob_set 97→94/glob_range 80→76(URLGlob 字段化形态
+> `glob_expand->size/->pattern/->type/->content`),**main 1199=1199/
+> gp 880=880/parseconfig 199=199 零回退**(config 域 `::config.` 186=186,
+> DAT_00117[56]xx=0,`.rodata` witness 4 保留),curl 3645/0/0(基线 3654),
+> httpd 29 函数 0/0,gcc 审计 81/26 同基线。b9277490 旧基线上 gp 866→978
+> 为 2154919d 已判"净改善"态(SWITCH-BRIDGE-DUP 触发),8e9a98ed/cfd6b40a
+> 已修,新基线实测零差。**新登记**:`GLOBFIELD-RESIDUAL-0001`(P2,残差:
+> ①glob_url `->size` store 侧未字段化——malloc 结果 void*→CAST int8 挡
+> RulePtrArith,TYPEOP-PTRSUB-FIELDCAST-0001 域;②`pattern[i]` 打成
+> `(&pattern + i)` 数组下标形;③`.content.Set.elements` 联合成员下钻;
+> ④`(URLPatternType)0x1` vs `UPTSet` 枚举名;⑤uVar4 传播类型 vs oracle
+> typed pUVar2)。报告=/dev/shm/rugra-tests/sb-globfield/。
 
 ## 历史 wave：`W-2026-08-29-FLEET10`（2026-08-29~31；goal=函数文本级对齐；会话中断，成果已大宗回收入 master）
 

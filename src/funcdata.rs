@@ -865,7 +865,19 @@ impl Funcdata {
         &mut self,
         vn: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
-        self.vbank.set_input_varnode(vn)
+        // cc:344: if (vn->isInput()) return vn — no property pass on the
+        // early-out (funcdata_varnode.cc:344).
+        let already_input = vn.read().unwrap().is_input();
+        let promoted = self.vbank.set_input_varnode(vn.clone());
+        // cc:363-364: vn = vbank.setInput(vn); setVarnodeProperties(vn) —
+        // the property pass runs only when the bank freshly promoted this
+        // varnode (the dedup arm returns the preexisting input without it,
+        // cc:356-357). set_varnode_properties' isMapped guard keeps this a
+        // no-op when the creating site's newVarnode tail already attached.
+        if !already_input && std::sync::Arc::ptr_eq(&promoted, &vn) {
+            self.set_varnode_properties(&promoted);
+        }
+        promoted
     }
 
     // RUGRA-GLUE: fallible Rust adapter around the checked portion of

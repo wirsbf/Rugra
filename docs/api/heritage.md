@@ -2,6 +2,26 @@
 
 **源代码路径**: `src/heritage.rs`
 
+## 2026-09-22：heritage 提升/守卫路径补符号尾（HERITAGE-PROMOTE-SYMBOLTAIL-0001）
+
+`HERITAGE-MULTIEQ-VNIN-SYMBOLTAIL-0001` 同族根因的剩余面落地。oracle 中
+`Heritage::renameRecurse` 的三处输入提升（heritage.cc:2500-2502/2509-2512/2539-2546）、
+`Heritage::guardReturns` 的三处 return-copy/重叠除输入（cc:1628/1670-1672/1687）、
+`Heritage::guardInput` 的两处洞填补（cc:1973-1976/1985-1988）全部经
+`Funcdata::newVarnode`（funcdata_varnode.cc:148-169），其符号尾
+`queryProperties → setSymbolProperties`（cc:161-166）把 typelocked 全局符号的
+DWARF 类型挂到被提升 varnode 上。Rugra 这些点此前只跑 `apply_new_varnode_flags`
+（仅 flags 折叠，且 Ram 腿给一切全局地址 OR 上 MAPPED——`set_varnode_properties`
+的 `isMapped` 守卫被预先堵死，符号 attach 永不发生）。witness：glob_set 的
+`glob_expand` 读（ram:0x17660，8B，DWARF `URLGlob*`）经 renameRecurse 提升后
+`t=Int/int8` 无 typelock——RulePtrArith（ruleaction.cc:6629，输入需 TYPE_PTR）
+永不点火，输出保持 `(int *)glob_expand + … * 0x18` 原始算术；修复后该 varnode
+typelocked `URLGlob*`，PTRADD/PTRSUB 重写为 `glob_expand->size / ->pattern /
+->type / ->content` 字段化形态（glob_set 97→94、glob_range 80→76，
+oracle=ghidra_curl_1204）。各点在 `create_with_space` 后、`apply_new_varnode_flags`
+前补 `fd.set_varnode_properties(&vn)`（顺序承载 cc:148 尾内联语义；flags OR 可结合、
+不 Clear typelock）。
+
 ## 2026-09-22：SUBFLOW-SUBPIECE-WIDTH-0001 — normalizeReadSize 常量宽度
 
 `normalize_read_size`（heritage.cc:383-401）的 SUBPIECE 偏移常量由硬编码

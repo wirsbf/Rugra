@@ -1676,6 +1676,10 @@ impl Heritage {
             let invn = fd
                 .vbank
                 .create_with_space(size as usize, space, addr.as_u64());
+            // heritage.cc:1628 routes through Funcdata::newVarnode, whose
+            // symbol tail attaches the typelocked global's DWARF type
+            // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+            fd.set_varnode_properties(&invn);
             Heritage::apply_new_varnode_flags(fd, &invn);
             // cc:1629-1632: SUBPIECE(invn, offset)
             let sub_op = fd.new_op(2, op_addr);
@@ -1768,6 +1772,9 @@ impl Heritage {
                     let invn = fd
                         .vbank
                         .create_with_space(size as usize, space, addr.as_u64());
+                    // heritage.cc:1670 newVarnode symbol tail
+                    // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+                    fd.set_varnode_properties(&invn);
                     Heritage::apply_new_varnode_flags(fd, &invn);
                     invn.write().unwrap().set_active_heritage();
                     fd.op_insert_input(&op, invn, num_input);
@@ -1828,6 +1835,10 @@ impl Heritage {
             let invn = fd
                 .vbank
                 .create_with_space(size as usize, space, addr.as_u64());
+            // heritage.cc:1687 routes through Funcdata::newVarnode, whose
+            // symbol tail attaches the typelocked global's DWARF type
+            // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+            fd.set_varnode_properties(&invn);
             Heritage::apply_new_varnode_flags(fd, &invn);
             invn.write().unwrap().set_active_heritage();
             fd.op_set_input(&copyop, invn, 0);
@@ -4278,6 +4289,10 @@ impl Heritage {
                     // missing input piece.
                     let sz = (vn_off - cur) as usize;
                     let vn = fd.vbank.create_with_space(sz, vn_space, cur);
+                    // heritage.cc:1975 routes through Funcdata::newVarnode,
+                    // whose symbol tail attaches the typelocked global's
+                    // DWARF type (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+                    fd.set_varnode_properties(&vn);
                     let promoted = fd.set_input_varnode(vn);
                     newinput.push(promoted);
                 } else {
@@ -4288,6 +4303,10 @@ impl Heritage {
                 // cc:1985-1988: tail hole after the last input.
                 let sz = (end - cur) as usize;
                 let vn = fd.vbank.create_with_space(sz, vn_space, cur);
+                // heritage.cc:1986 routes through Funcdata::newVarnode,
+                // whose symbol tail attaches the typelocked global's
+                // DWARF type (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+                fd.set_varnode_properties(&vn);
                 let promoted = fd.set_input_varnode(vn);
                 newinput.push(promoted);
             }
@@ -5456,6 +5475,16 @@ impl Heritage {
                                     };
                                     let new_vn =
                                         fd.vbank.create_with_space(vn_size, vn_space, vn_off);
+                                    // heritage.cc:2500 routes through
+                                    // Funcdata::newVarnode, whose symbol tail
+                                    // (queryProperties -> setSymbolProperties,
+                                    // funcdata_varnode.cc:161-166) attaches the
+                                    // typelocked global's DWARF type onto the
+                                    // promoted input; the bare bank create left
+                                    // global reads (e.g. glob_expand's URLGlob*)
+                                    // untyped so RulePtrArith never fired
+                                    // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+                                    fd.set_varnode_properties(&new_vn);
                                     Heritage::apply_new_varnode_flags(fd, &new_vn);
                                     let promoted = fd.set_input_varnode(new_vn);
                                     stack.push(promoted.clone());
@@ -5507,6 +5536,9 @@ impl Heritage {
                                         let new_vn = fd
                                             .vbank
                                             .create_with_space(vn_size, vn_space, vn_off);
+                                        // heritage.cc:2510 newVarnode symbol tail
+                                        // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+                                        fd.set_varnode_properties(&new_vn);
                                         Heritage::apply_new_varnode_flags(fd, &new_vn);
                                         let promoted = fd.set_input_varnode(new_vn);
                                         stack.insert(0, promoted.clone());
@@ -5583,6 +5615,9 @@ impl Heritage {
                                 };
                                 let new_vn =
                                     fd.vbank.create_with_space(vn_size, vn_space, vn_off);
+                                // heritage.cc:2540 newVarnode symbol tail
+                                // (HERITAGE-PROMOTE-SYMBOLTAIL-0001).
+                                fd.set_varnode_properties(&new_vn);
                                 Heritage::apply_new_varnode_flags(fd, &new_vn);
                                 let promoted = fd.set_input_varnode(new_vn);
                                 stack.push(promoted.clone());

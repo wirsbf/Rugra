@@ -1,5 +1,14 @@
 # `funcdata.rs` API Reference
 
+## 2026-09-22：`set_input_varnode` 补 cc:364 属性遍（HERITAGE-PROMOTE-SYMBOLTAIL-0001）
+
+`Funcdata::set_input_varnode` 此前直通 `vbank.set_input_varnode`，漏掉 oracle
+`Funcdata::setInputVarnode` 的 `vn = vbank.setInput(vn); setVarnodeProperties(vn);`
+对（funcdata_varnode.cc:363-364）。现按 oracle 控制流补属性遍：早退臂（cc:344
+isInput）与去重臂（cc:356-357 返回既有 input）不跑，仅银行真实提升的新鲜
+varnode 跑（`Arc::ptr_eq` 判定）；`set_varnode_properties` 的 `isMapped` 守卫使
+创建点已挂符号尾时为 no-op——与 oracle 的双重查询逐点一致。
+
 ## 2026-09-22:`op_stack_load`/`op_stack_store` 空间注记宽度 1→8(FUNCDATA-SPACEID-WIDTH-0001)
 
 `newVarnodeSpace`(funcdata_varnode.cc:190-198)用 `sizeof(spc)`(AddrSpace\*
