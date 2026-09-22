@@ -153,7 +153,16 @@ COPY-follow（cc:2761-2769）、oracle buildPointers 的 PTRSUB/PTRADD op
 - `SplitDatatype::get_value_datatype(op, size, types)` — 指针→值类型恢复,canonical `get_exact_piece` (subflow.cc:2910-2938)
 - `SplitDatatype::get_component` / `categorize_datatype` / `test_datatype_compatibility` — 组件/hole/类别门 (subflow.cc:2208-2234/2237-2274/2285-2367)
 - `SplitDatatype::build_in_constants` / `build_pointers` — 常量直建 / 根指针 PTRADD·PTRSUB 链重建 (subflow.cc:2474-2488/2616-2672)
-- `SplitDatatype::split_copy` / `split_load(op, in_type)` / `split_store(op, out_type)` — 拆分重写 (subflow.cc:2717/2756/2808)
+- `SplitDatatype::split_copy` / `split_load(op, in_type)` / `split_store(op, out_type)` — 拆分重写 (subflow.cc:2717/2756/2808)。`split_copy` 按 cc:2730-2744 分派到四个 builder:
+  `generate_constants`(cc:2409-2465, ZEXT/PIECE 扩展精度常量折叠为分片常量并销毁 def op;
+  `build_in_constants` cc:2483 的 `baseVal >> (8*off)` 在 oracle 侧因纯常量 ≤8 字节而
+  8*off<64 恒成立, Rugra 对 >8 字节纯常量按缺失高字节读 0(饱和移位), 避免 C++ UB 边界 panic)、
+  `build_in_subpieces`(cc:2497-2519, 非常量输入按 piece offset 建 SUBPIECE, 输出落 root 空间
+  `baseAddr+off` 地址并 `updateType(inType)`)、`build_out_varnodes`(cc:2527-2539, 输出分片落
+  root 空间地址并 `updateType(outType)`)、`build_out_concats`(cc:2548-2603, root 无读者早退;
+  非 addr-tied 时全部分片 `setProtoPartial`, 大端/小端各自 most→least significant 建 PIECE 栈,
+  中间输出 `newVarnodeOut` 于分片地址、非 addr-tied 时 `setProtoPartial`, 末位 PIECE
+  `setPartialRoot` 且输出绑回 root, 非 addr-tied 时向 `Merge` `registerProtoPartialRoot(root)`)。
 - `RootPointer::find` / `duplicate_to_temp` / `free_pointer_chain`（+私有 `back_up_pointer`）— LOAD/STORE 根指针定位/复制/释放 (subflow.cc:2098-2203)
 - `test_copy_constraints` — COPY 约束（函数输入/同地址 addrTied/LOAD 单读者）(subflow.cc:2370-2384)
 - 自由函数 `is_arithmetic_opcode` / `is_arithmetic_input` / `is_arithmetic_output` / `load_store_space` — arithmetic sanity / LOAD·STORE 空间常量解码 (subflow.cc:2673-2696, typeop.hh:140, varnode.hh:426)

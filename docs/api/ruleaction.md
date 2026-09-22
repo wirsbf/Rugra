@@ -1127,7 +1127,9 @@ identity、mark、def-use、alive/dead bank、基本块顺序和 `Funcdata::opDe
 - `RuleExpandLoad`(10937) — helpers(checkAndComparison/modifyAndComparison) 1:1；applyOp 标 TODO（需 pointer datatype）
 - `RulePtrsubCharConstant`(7372) — pushConstFurther helper 1:1；applyOp 标 TODO（需 TYPE_SPACEBASE/Scope/stringManager）
 - `RuleExtensionPush`(7435) — descendant-count guard 1:1；duplicateNeed 标 TODO
-- `RulePieceStructure`(7625) — helpers(determineDatatype/spanningRange/convertZextToPiece) 占位 1:1；applyOp 标 TODO（需 structured types）
+- `RulePieceStructure`(7625) — helpers(determineDatatype/spanningRange/convertZextToPiece) 1:1；applyOp 全量(setPartialRoot cc:7642 → storage walk → 叶 COPY/非叶换存储 + setProtoPartial →
+  `!anyAddrTied` 时 `registerProtoPartialRoot(outvn)` cc:7697-7698, 注册入 Funcdata 挂载的
+  MergePersistentState 供 ActionMergeRequired groupPartials 分组; SB-IMPLIEDWAVE-0001)
 
 **oppool1 独立族新增**：
 - `RulePullsubIndirect`(962) — 可触发非 creation 分支（复用 RulePullsubMulti helpers）；indirect-creation/iop 分支标 TODO

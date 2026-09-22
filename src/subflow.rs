@@ -5398,75 +5398,316 @@ impl<'a> SplitDatatype<'a> {
         if is_arithmetic_input(&out_vn) {
             return Ok(false); // Sanity check on output (cc:2734)
         }
-        // Rewrite per component: SUBPIECE(input, offset) -> temp -> PIECE
-        // chain back into the original output (buildInSubpieces /
-        // buildOutConcats analogue, cc:2730-2744).
-        let pieces: Vec<(i32, i32)> = self
-            .data_type_pieces
-            .iter()
-            .map(|c| (c.offset, c.in_type.get_size() as i32))
-            .collect();
-        let num = pieces.len();
-        // Build the output reconstruction: chain of PIECE ops recombining the
-        // per-component temps back into the original output Varnode.
-        let mut piece_out_vns: Vec<Arc<RwLock<Varnode>>> = Vec::with_capacity(num);
-        for i in 0..num {
-            let size = pieces[i].1;
-            // Per-component temp holding the copied value.
-            let temp = self.data.new_unique(size as usize);
-            piece_out_vns.push(temp);
-        }
-        // Per-component COPYs: SUBPIECE(input, offset) -> temp.
-        for i in 0..num {
-            let in_off = pieces[i].0;
-            let in_size = pieces[i].1;
-            let off_const = self.data.new_constant(4, in_off as u64);
-            // SUBPIECE to extract the input piece.
-            let sub_op = self.data.new_op(2, op_addr);
-            self.data.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
-            let sub_out = self.data.new_unique_out(in_size as usize, &sub_op);
-            self.data.op_set_input(&sub_op, in_vn.clone(), 0);
-            self.data.op_set_input(&sub_op, off_const, 1);
-            self.data.op_insert_before(&sub_op, &crate::op::PcodeOpRef(copy_op.clone()));
-            // COPY the piece into the per-component temp.
-            let copy_i = self.data.new_op(1, op_addr);
-            self.data.op_set_opcode(&copy_i, OpCode::CPUI_COPY);
-            self.data.op_set_output(&copy_i, piece_out_vns[i].clone());
-            self.data.op_set_input(&copy_i, sub_out, 0);
-            self.data.op_insert_before(&copy_i, &crate::op::PcodeOpRef(copy_op.clone()));
-        }
-        // Reassemble the output: PIECE(piece_out_vns[last], ..., piece_out_vns[0]).
-        if num == 1 {
-            // Single piece — directly write the whole output.
-            let copy_whole = self.data.new_op(1, op_addr);
-            self.data.op_set_opcode(&copy_whole, OpCode::CPUI_COPY);
-            self.data.op_set_output(&copy_whole, out_vn);
-            self.data.op_set_input(&copy_whole, piece_out_vns[0].clone(), 0);
-            self.data.op_insert_before(&copy_whole, &crate::op::PcodeOpRef(copy_op.clone()));
+        // splitCopy (cc:2730-2744): SUBPIECE/constant inputs → root+off
+        // addressed piece outputs → PIECE reassembly stack → per-piece COPYs
+        // → destroy the original COPY. All four builders are faithful ports
+        // (see build_in_subpieces / build_out_varnodes / build_out_concats).
+        let mut in_varnodes: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        let mut out_varnodes: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        if in_vn.read().unwrap().is_constant() {
+            // cc:2732-2733: constant input splits into per-piece constants.
+            let big_endian = out_vn.read().unwrap().get_space().is_big_endian();
+            self.build_in_constants(&in_vn.clone(), &mut in_varnodes, big_endian);
         } else {
-            // Build a left-leaning chain of PIECE ops.
-            // PIECE takes (high, low). Start from the most-significant piece.
-            let mut acc = piece_out_vns[num - 1].clone();
-            for i in (0..num - 1).rev() {
-                let piece_op = self.data.new_op(2, op_addr);
-                self.data.op_set_opcode(&piece_op, OpCode::CPUI_PIECE);
-                if i == 0 {
-                    // Final PIECE writes the whole output.
-                    self.data.op_set_output(&piece_op, out_vn.clone());
-                } else {
-                    let acc_out = self.data.new_unique_out(
-                        (pieces[i].1 + pieces[i + 1].1) as usize,
-                        &piece_op,
-                    );
-                    acc = acc_out;
-                }
-                self.data.op_set_input(&piece_op, acc.clone(), 0); // high (already accumulated)
-                self.data.op_set_input(&piece_op, piece_out_vns[i].clone(), 1); // low
-                self.data.op_insert_before(&piece_op, &crate::op::PcodeOpRef(copy_op.clone()));
-            }
+            // cc:2734-2735: any other input splits via SUBPIECE extraction.
+            self.build_in_subpieces(&in_vn.clone(), copy_op, &mut in_varnodes);
+        }
+        self.build_out_varnodes(&out_vn.clone(), &mut out_varnodes);
+        self.build_out_concats(&out_vn.clone(), copy_op, &mut out_varnodes);
+        // cc:2738-2744: one COPY per piece, all inserted before the original
+        // (which is destroyed last, cc:2745).
+        for i in 0..in_varnodes.len() {
+            let new_copy_op = self.data.new_op(1, op_addr);
+            self.data.op_set_opcode(&new_copy_op, OpCode::CPUI_COPY);
+            self.data.op_set_input(&new_copy_op, in_varnodes[i].clone(), 0);
+            self.data.op_set_output(&new_copy_op, out_varnodes[i].clone());
+            self.data
+                .op_insert_before(&new_copy_op, &crate::op::PcodeOpRef(copy_op.clone()));
         }
         self.data.op_destroy(&crate::op::PcodeOpRef(copy_op.clone()));
         Ok(true)
+    }
+
+    // Ghidra: subflow.cc:2409 SplitDatatype::generateConstants
+    /// If the given Varnode is an extended precision constant (ZEXT of a
+    /// constant, or PIECE of two constants), create split constants for the
+    /// pieces and destroy the defining op. Faithful to
+    /// `SplitDatatype::generateConstants` (subflow.cc:2409-2465): the lone
+    /// descendant guard, the ZEXT/PIECE constant inputs, the big-endian
+    /// shift arithmetic (`sa`/`val` from `hi`/`lo`), `calc_mask` truncation,
+    /// per-piece `newConstant` + `updateType`, then `opDestroy` of the
+    /// defining op.
+    fn generate_constants(
+        &mut self,
+        vn: &Arc<RwLock<Varnode>>,
+        in_varnodes: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) -> bool {
+        // cc:2412-2413: loneDescend + isWritten guards.
+        if vn.read().unwrap().lone_descend().is_none() {
+            return false;
+        }
+        let def = vn.read().unwrap().get_def();
+        let def = match def {
+            Some(d) => d,
+            None => return false,
+        };
+        let (opc, in0, in1) = {
+            let d = def.read().unwrap();
+            (d.opcode, d.get_in(0).cloned(), d.get_in(1).cloned())
+        };
+        if opc == OpCode::CPUI_INT_ZEXT {
+            if !in0.as_ref().is_some_and(|v| v.read().unwrap().is_constant()) {
+                return false;
+            }
+        } else if opc == OpCode::CPUI_PIECE {
+            if !in0.as_ref().is_some_and(|v| v.read().unwrap().is_constant())
+                || !in1.as_ref().is_some_and(|v| v.read().unwrap().is_constant())
+            {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        // cc:2425-2438: split the extended value into hi/lo words.
+        let fullsize = vn.read().unwrap().get_size();
+        let is_big_endian = vn.read().unwrap().get_space().is_big_endian();
+        let (hi, lo, losize) = if opc == OpCode::CPUI_INT_ZEXT {
+            let c = in0.unwrap();
+            let g = c.read().unwrap();
+            (0u64, g.get_offset(), g.get_size())
+        } else {
+            let (h, l) = (in0.unwrap(), in1.unwrap());
+            let (hg, lg) = (h.read().unwrap(), l.read().unwrap());
+            (hg.get_offset(), lg.get_offset(), lg.get_size())
+        };
+        for piece in &self.data_type_pieces {
+            let dt = &piece.in_type;
+            // cc:2441-2444: piece wider than uintb cannot be formed.
+            if dt.get_size() > std::mem::size_of::<u64>() {
+                in_varnodes.clear();
+                return false;
+            }
+            // cc:2446-2449: byte shift of the piece within the whole.
+            let sa = if is_big_endian {
+                fullsize as i64 - (piece.offset as i64 + dt.get_size() as i64)
+            } else {
+                piece.offset as i64
+            };
+            let mut val = if sa >= losize as i64 {
+                hi >> (sa - losize as i64)
+            } else {
+                let mut v = lo >> (sa * 8) as u64;
+                if sa + dt.get_size() as i64 > losize as i64 {
+                    v |= hi << ((losize as i64 - sa) * 8) as u64;
+                }
+                v
+            };
+            val &= crate::address::calc_mask(dt.get_size());
+            // cc:2459-2461: newConstant + updateType per piece.
+            let out_vn = self.data.new_constant(dt.get_size(), val);
+            out_vn.write().unwrap().update_type(dt.clone());
+            in_varnodes.push(out_vn);
+        }
+        // cc:2463: destroy the extended-precision defining op.
+        self.data
+            .op_destroy(&crate::op::PcodeOpRef(def));
+        true
+    }
+
+    // Ghidra: subflow.cc:2497 SplitDatatype::buildInSubpieces
+    /// Build input Varnodes by extracting SUBPIECEs from the root. Faithful
+    /// to `SplitDatatype::buildInSubpieces` (subflow.cc:2497-2519): the
+    /// `generateConstants` fold (cc:2500-2501), per-piece SUBPIECE at the
+    /// input root's own address + piece offset (`addr.renormalize` is a
+    /// no-op outside join spaces in Rugra's flat offset model), the
+    /// big-endian offset mirror (cc:2508-2509), `newConstant(4, off)` as the
+    /// shift input (cc:2513), `newVarnodeOut(size, addr, subpiece)` carrying
+    /// the input root's SPACE (cc:2514), `updateType(inType)` (cc:2516) and
+    /// insertion before the follow op (cc:2517).
+    fn build_in_subpieces(
+        &mut self,
+        root_vn: &Arc<RwLock<Varnode>>,
+        follow_op: &Arc<RwLock<PcodeOp>>,
+        in_varnodes: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) {
+        // cc:2500-2501: ZEXT/CONCAT extended constants fold into split
+        // constants instead of SUBPIECEs.
+        if self.generate_constants(root_vn, in_varnodes) {
+            return;
+        }
+        let (base_off, base_space, root_size, big_endian, follow_addr) = {
+            let g = root_vn.read().unwrap();
+            (
+                g.get_offset(),
+                g.get_space(),
+                g.get_size(),
+                g.get_space().is_big_endian(),
+                follow_op.read().unwrap().get_addr(),
+            )
+        };
+        for piece in &self.data_type_pieces {
+            let dt = &piece.in_type;
+            let off = piece.offset as i64;
+            // cc:2506: addr = baseAddr + off (little-endian layout address).
+            let addr = crate::address::Address::new(base_off.wrapping_add(off as u64));
+            // cc:2508-2509: big-endian mirrors the SUBPIECE shift amount.
+            let sub_off = if big_endian {
+                root_size as i64 - off - dt.get_size() as i64
+            } else {
+                off
+            };
+            // cc:2510-2517: SUBPIECE(root, off) inserted before followOp,
+            // out at the root-space piece address, typed with inType.
+            let subpiece = self.data.new_op(2, follow_addr);
+            self.data.op_set_opcode(&subpiece, OpCode::CPUI_SUBPIECE);
+            self.data.op_set_input(&subpiece, root_vn.clone(), 0);
+            let off_const = self.data.new_constant(4, sub_off as u64);
+            self.data.op_set_input(&subpiece, off_const, 1);
+            let out_vn = self
+                .data
+                .new_varnode_out_full(dt.get_size(), base_space, addr, &subpiece);
+            in_varnodes.push(out_vn.clone());
+            out_vn.write().unwrap().update_type(dt.clone());
+            self.data
+                .op_insert_before(&subpiece, &crate::op::PcodeOpRef(follow_op.clone()));
+        }
+    }
+
+    // Ghidra: subflow.cc:2527 SplitDatatype::buildOutVarnodes
+    /// Build output Varnodes with storage based on the given root. Faithful
+    /// to `SplitDatatype::buildOutVarnodes` (subflow.cc:2527-2539): per
+    /// piece, `newVarnode(size, rootAddr + off, outType)` carries the output
+    /// root's SPACE (cc:2536).
+    fn build_out_varnodes(
+        &mut self,
+        root_vn: &Arc<RwLock<Varnode>>,
+        out_varnodes: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) {
+        let (base_off, base_space) = {
+            let g = root_vn.read().unwrap();
+            (g.get_offset(), g.get_space())
+        };
+        for piece in &self.data_type_pieces {
+            let dt = &piece.out_type;
+            let addr = crate::address::Address::new(base_off.wrapping_add(piece.offset as u64));
+            // cc:2536: newVarnode(dt->getSize(), addr, dt) — the explicit
+            // type lands via updateType.
+            let out_vn = self
+                .data
+                .new_varnode_in_space(dt.get_size(), base_space, addr);
+            out_vn.write().unwrap().update_type(dt.clone());
+            out_varnodes.push(out_vn);
+        }
+    }
+
+    // Ghidra: subflow.cc:2548 SplitDatatype::buildOutConcats
+    /// Concatenate output Varnodes into the given root Varnode. Faithful to
+    /// `SplitDatatype::buildOutConcats` (subflow.cc:2548-2603): the
+    /// unused-root early out (cc:2551-2552), the protoPartial pre-mark of
+    /// all pieces when the root is not address-tied (cc:2559-2562), the
+    /// most-significant-first PIECE stack with intermediate outputs at
+    /// address-derived storage (`outVarnodes[i]->getAddr()` renormalized,
+    /// cc:2576/2592-2594) carrying the root's SPACE, protoPartial marks on
+    /// intermediates (cc:2577-2578/2595-2596), the final PIECE flagged
+    /// `partialRoot` and bound to the root output (cc:2599-2600), and
+    /// `registerProtoPartialRoot` when no piece is address-tied
+    /// (cc:2601-2602).
+    fn build_out_concats(
+        &mut self,
+        root_vn: &Arc<RwLock<Varnode>>,
+        previous_op: &Arc<RwLock<PcodeOp>>,
+        out_varnodes: &mut Vec<Arc<RwLock<Varnode>>>,
+    ) {
+        // cc:2551-2552: no concatenation needed if the root is unused.
+        if root_vn.read().unwrap().has_no_descend() {
+            return;
+        }
+        let (base_space, big_endian, previous_addr) = {
+            let g = root_vn.read().unwrap();
+            (g.get_space(), g.get_space().is_big_endian(), {
+                previous_op.read().unwrap().get_addr()
+            })
+        };
+        let address_tied = root_vn.read().unwrap().is_addr_tied();
+        // cc:2559-2562: creating a CONCAT stack — mark pieces appropriately.
+        for vn in out_varnodes.iter() {
+            if !address_tied {
+                vn.write().unwrap().set_proto_partial();
+            }
+        }
+        let mut concat_op: Option<crate::op::PcodeOpRef> = None;
+        if big_endian {
+            // cc:2564-2579: big-endian walks pieces most to least
+            // significant (index 0 is most significant).
+            let mut vn = out_varnodes[0].clone();
+            let mut pre_op = crate::op::PcodeOpRef(previous_op.clone());
+            let mut i = 1usize;
+            loop {
+                let concat = self.data.new_op(2, previous_addr);
+                self.data.op_set_opcode(&concat, OpCode::CPUI_PIECE);
+                self.data.op_set_input(&concat, vn.clone(), 0); // Most significant
+                self.data
+                    .op_set_input(&concat, out_varnodes[i].clone(), 1); // Least significant
+                self.data.op_insert_after(&concat, &pre_op);
+                concat_op = Some(concat.clone());
+                if i + 1 >= out_varnodes.len() {
+                    break;
+                }
+                pre_op = concat.clone();
+                let sz = vn.read().unwrap().get_size() + out_varnodes[i].read().unwrap().get_size();
+                // cc:2574-2576: intermediate storage at the root base
+                // address renormalized to the accumulated size.
+                let addr = crate::address::Address::new(
+                    root_vn.read().unwrap().get_offset().wrapping_add(0),
+                );
+                vn = self.data.new_varnode_out_full(sz, base_space, addr, &concat);
+                if !address_tied {
+                    vn.write().unwrap().set_proto_partial();
+                }
+                i += 1;
+            }
+        } else {
+            // cc:2582-2597: little-endian walks pieces most to least
+            // significant (last index is most significant).
+            let mut vn = out_varnodes[out_varnodes.len() - 1].clone();
+            let mut pre_op = crate::op::PcodeOpRef(previous_op.clone());
+            let mut i = out_varnodes.len() as i64 - 2;
+            loop {
+                let concat = self.data.new_op(2, previous_addr);
+                self.data.op_set_opcode(&concat, OpCode::CPUI_PIECE);
+                self.data.op_set_input(&concat, vn.clone(), 0); // Most significant
+                self.data
+                    .op_set_input(&concat, out_varnodes[i as usize].clone(), 1); // Least significant
+                self.data.op_insert_after(&concat, &pre_op);
+                concat_op = Some(concat.clone());
+                if i <= 0 {
+                    break;
+                }
+                pre_op = concat.clone();
+                let sz = vn.read().unwrap().get_size()
+                    + out_varnodes[i as usize].read().unwrap().get_size();
+                // cc:2592-2594: intermediate storage at the current piece's
+                // address renormalized to the accumulated size.
+                let addr = crate::address::Address::new(
+                    out_varnodes[i as usize].read().unwrap().get_offset(),
+                );
+                vn = self.data.new_varnode_out_full(sz, base_space, addr, &concat);
+                if !address_tied {
+                    vn.write().unwrap().set_proto_partial();
+                }
+                i -= 1;
+            }
+        }
+        // cc:2599-2600: the final PIECE becomes the partial root defining
+        // the original output.
+        let concat_op = concat_op.expect("buildOutConcats ran with zero pieces");
+        concat_op.0.write().unwrap().set_partial_root();
+        self.data.op_set_output(&concat_op, root_vn.clone());
+        // cc:2601-2602: register the unmapped CONCAT stack with the merge
+        // process so groupPartials can group it into a single variable.
+        if !address_tied {
+            self.data.merge_state.register_proto_partial_root(root_vn);
+        }
     }
 
     // Ghidra: subflow.cc:2474 SplitDatatype::buildInConstants
@@ -5491,7 +5732,19 @@ impl<'a> SplitDatatype<'a> {
             if big_endian {
                 off = root_size as i32 - off - dt.get_size() as i32;
             }
-            let val = (base_val >> ((8 * off) as u64)) & calc_mask(dt.get_size());
+            // cc:2483 `baseVal >> (8*off)`: plain constants are at most
+            // sizeof(uintb) wide on the oracle side, so 8*off < 64 there by
+            // construction (wider values arrive as ZEXT/PIECE and fold via
+            // generateConstants). Rugra can hold >8-byte plain constants
+            // whose get_offset() carries only the low 8 bytes, so pieces at
+            // off >= 8 read the (absent) high bytes as zero instead of
+            // panicking on the C++ UB boundary.
+            let shift = (8 * off).max(0) as u64;
+            let val = if shift >= 64 {
+                0
+            } else {
+                (base_val >> shift) & calc_mask(dt.get_size())
+            };
             let out_vn = self.data.new_constant(dt.get_size(), val);
             out_vn.write().unwrap().update_type(dt);
             in_varnodes.push(out_vn);
