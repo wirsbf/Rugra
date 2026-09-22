@@ -2183,9 +2183,29 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
 > next_url/main/getparameter.constprop.0 --func defects=0/numbering=0。
 > ruleaction.rs+funcdata.rs 属主管线 Rule 改动 → 机制 C 待独立 Cross-Review。
 
+> **SB-REDUNDBRANCH-ORD39-0001 修复(2026-09-22,Lane CJ `wt/sb-redund39`,owner=fixer)**:
+> Phase 2 ordinal 39 `universal:fullloop:mainloop:redundbranch` result/count/apply
+> 1(oracle) vs 0(rugra)。drill:oracle 在该窗口把 `50fa:53 BRANCH in=n:ram:2530:1`
+> (尾跳 thunk 0x2530 的桥 BRANCH)dead 化——case 1 spliceBlockBasic 路径;CD fix3 的
+> SNAP 39 显示 rugra 侧同 op 同样 dead 化,**IR 变换双侧逐字节一致,缺的只是计数**:
+> Rust apply 从未镜像 cc:3509/cc:3525 `count += 1`(也无 take_count_delta 收割),
+> perform 的 `lcount < count` 永不触发→count_apply 不增、@END 报 0。同趟补齐两处
+> 忠实性:①case 1 splice 后 `i = -1` 重扫(cc:3510-3511,图尺寸每轮重求值;旧代码
+> 提前 return);②isSwitchOut 守卫从 `(flags & 0)` 占位接上真实
+> `block_flags::SWITCH_OUT`/`is_switch_out()`(cc:3506)。验证:CD 干净基线
+> (wt/sb-oppool28 + cherry-pick 本修复,RUGRA_MIRROR=1)Phase 2 首分歧 39→**60**
+> (ordinals 1-59 全匹配,redundbranch@39 = result=1 count=1 apply=1 与 oracle 逐字
+> 节同,SNAP 39 `50fa:53 BRANCH d=1 out=- in=-` 行号 28399 都一致);本 lane 分支
+> (master 22b5ad84 合并)被 SB-MASTER-ACTIVEPARAM-0001 在 ordinal 15 抢先,masked
+> (master 单独构建实测回归,非本修复引入);curl/httpd E2E defects=numbering=0;
+> coreaction 非机制 C 白名单,root 快速复核即可。
+
+
 | ID | 优先级 | 状态 | owner | write-set | 说明 |
 |---|---|---|---|---|---|
 | `OPPOOL28-EQUAL2ZERO-LADDER-0001` | P1 | FIXED_PENDING_REVIEW(候选 wt/sb-oppool28;机制 C 待独立复核) | oppool28-agent@wt-sb-oppool28 + root | `src/ruleaction.rs`(RuleEqual2Zero/RulePullsubMulti)+`src/funcdata.rs`(cse_elimination/cse_eliminate_list)+`docs/api/{ruleaction,funcdata}.md`+本行 | ordinal-28 三根因修复,详见上方块;oracle e40ed13014025f82488b1f8f7bca566894ac376b;2026-09-22 |
-| `SB-REDUNDBRANCH-ORD39-0001` | P1 | OPEN(Phase 2 新首分歧) | 未认领 | TBD | ordinal 39 `universal:fullloop:mainloop:redundbranch` result/count/apply 1 vs 0:oracle ActionRedundBranch(coreaction.cc)做了一次变更而 rugra 未做——oppool1 清零后的下一车道;2026-09-22 |
+| `SB-REDUNDBRANCH-ORD39-0001` | P1 | FIXED(候选 wt/sb-redund39 1df1c4b1;coreaction 非机制 C 白名单) | redund39-agent@wt-sb-redund39 | `src/coreaction.rs`(ActionRedundBranch)+`docs/api/coreaction.md`+本行 | 根因=纯计数缺口:Rust apply 从未镜像 cc:3509/cc:3525 `count += 1`(无 take_count_delta 收割),perform 的 lcount<count 永不触发→@END result/count/apply=0 而 oracle=1;IR 变换本身(SNAP 39 `50fa:53 BRANCH` dead 化)双侧已逐字节一致。同趟补两处忠实性:case 1 splice 后 `i=-1` 重扫(cc:3510-3511,旧代码提前 return)、case 2 removeBranch 后继续扫描;isSwitchOut 守卫从 `&0` 占位接上 `block_flags::SWITCH_OUT`(cc:3506)。验证:CD 干净基线(wt/sb-oppool28+cherry-pick,RUGRA_MIRROR=1)Phase 2 首分歧 39→60(ordinals 1-59 全匹配,redundbranch@39 result/count/apply=1/1/1 与 oracle 逐字节同);本 lane 分支(master 22b5ad84 合并基)因 SB-MASTER-ACTIVEPARAM-0001 在 ordinal 15 先分歧,masked;curl/httpd E2E defects=numbering=0;oracle e40ed13014025f82488b1f8f7bca566894ac376b;2026-09-22 |
+| `SB-OPPOOL-R4-COUNT-0001` | P1 | OPEN(Phase 2 新首分歧) | 未认领 | TBD | ordinal 60 `universal:fullloop:mainloop:stackstall:oppool1`(apply 轮 4)result/count 85(oracle) vs 77(rugra):redundbranch 清零后的下一车道;CD 干净基线+redundbranch 修复后实测;2026-09-22 |
+| `SB-MASTER-ACTIVEPARAM-0001` | P0 | OPEN(master 侧回归,heritage symbol-tail 域) | 未认领 | TBD(疑 `src/heritage.rs`/`src/funcdata.rs` symbol-tail 插入路径,0804d8c8..22b5ad84 范围) | master 22b5ad84 起(不含 oppool28 合并,单独构建实测):Phase 2 投影 ordinal 15 `mainloop:activeparam` result 9(oracle) vs 2(master),returnrecovery@16 4 vs 0,且初始 SNAP 2 即分歧——`50fa:53` oracle=BRANCH→`n:ram:2530:1` 而 master=CALL→`f:50fa:53`(尾部跳 0x2530 在初始 IR 即被转成 call);嫌疑=heritage symbol-tail promotion 系列(978a0a80/6eab5da9/22b5ad84);阻断一切 master 基线的 Phase 2 首分歧推进(ordinal 1-38 匹配前提被破坏);wt/sb-oppool28 基线不受影响;2026-09-22 |
 | `RULE-PULLSUBMULTI-JOINRENORM-0001` | P3 | OPEN | 未认领 | `src/ruleaction.rs`+`src/arch.rs`(暴露 AddrSpaceManager) | RulePullsubMulti join 基底 renormalize(translate.cc:870-916)需活体 AddrSpaceManager,Architecture 现仅简化 join_db;寄存器/unique 空间已精确,debug_assert 拦截 join 命中;2026-09-22 |
 | `RULE-PULLSUBMULTI-LOOPIN-0001` | P3 | OPEN | 未认领 | `src/block.rs`+`src/ruleaction.rs` | FlowBlock::hasLoopIn(block.cc loop-in 标记)缺失,RulePullsubMulti cc:883 守卫保守放行;2026-09-22 |

@@ -3267,9 +3267,17 @@ impl ActionRedundBranch {
 impl Action for ActionRedundBranch {
     // Ghidra: coreaction.cc:3492 ActionRedundBranch::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        let n = fd.bblocks.get_size();
-        for i in 0..n {
-            let bl = match fd.bblocks.get_block(i) {
+        // cc:3501 `for(i=0;i<graph.getSize();++i)` re-evaluates the bound
+        // every iteration (splices shrink the graph); the case-1 reset
+        // `i = -1` (cc:3511) rescans from block 0 after each splice. Ported
+        // as an index loop so both behaviors survive.
+        let mut i: i64 = -1;
+        loop {
+            i += 1;
+            if i >= fd.bblocks.get_size() as i64 {
+                break;
+            }
+            let bl = match fd.bblocks.get_block(i as usize) {
                 Some(b) => b,
                 None => continue,
             };
@@ -3286,28 +3294,30 @@ impl Action for ActionRedundBranch {
             };
 
             if n_out == 1 {
-                // Case 1: splice block if target has only 1 in-edge and it's
-                // from this block, and this isn't a switch output. Faithful to
-                // ActionRedundBranch::apply case 1 (coreaction.cc:3505-3513).
+                // Case 1 (cc:3505-3513): splice bb into its sole successor
+                // when the successor is entered only from bb, is not the
+                // entry point, and bb is not a switch dispatch output
+                // (splicing a single-exit switch block would prevent second
+                // stage recovery).
                 let should_splice = {
                     let bl_rg = bl.read().unwrap();
-                    let is_switch_out = (bl_rg.get_flags() & 0) != 0; // isSwitchOut not tracked;保守 false
-                    let _ = is_switch_out;
-                    let target_rg = first_target.read().unwrap();
-                    let target_n_in = target_rg.size_in();
-                    let target_is_entry = (target_rg.get_flags()
-                        & crate::block::block_flags::ENTRY_POINT) != 0;
-                    target_n_in == 1 && !target_is_entry
-                };
-                if should_splice {
-                    if fd.splice_block_basic(&bl) {
-                        return Ok(action_status::NO_CHANGE);
+                    if bl_rg.is_switch_out() {
+                        false
+                    } else {
+                        let target_rg = first_target.read().unwrap();
+                        target_rg.size_in() == 1 && !target_rg.is_entry_point()
                     }
+                };
+                if should_splice && fd.splice_block_basic(&bl) {
+                    // cc:3509 `count += 1`; harvested by take_count_delta.
+                    self.count += 1;
+                    // cc:3510-3511: one block was removed, reset the scan.
+                    i = -1;
                 }
                 continue;
             }
 
-            // Case 2: check if all out-edges go to the same target.
+            // Case 2 (cc:3515-3517): are all out-edges to the same block?
             let all_same = {
                 let bl_rg = bl.read().unwrap();
                 let mut same = true;
@@ -3325,14 +3335,22 @@ impl Action for ActionRedundBranch {
                 continue;
             }
 
-            // coreaction.cc:3528: remove the branch edge at slot 1.
+            // cc:3524-3525: remove the branch edge at slot 1, count the
+            // change, and keep scanning (no index reset in this arm).
             fd.remove_branch(&bl, 1);
-            return Ok(action_status::NO_CHANGE);
+            self.count += 1;
         }
+        // cc:3527: indicate the full rule was applied.
         Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "redundbranch" mirrors ctor at coreaction.hh:515
     fn get_name(&self) -> &str { "redundbranch" }
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:3509/3525 `count += 1`) into the ActionState accumulator
+    // harvested by Action::perform, same pattern as ActionDeterminedBranch.
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
+    }
 }
 
 /// Remove determined conditional branches (constant condition). Faithful to
