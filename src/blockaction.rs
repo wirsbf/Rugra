@@ -8230,9 +8230,12 @@ impl Action for ActionFinalStructure {
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         use crate::op::branch_type;
 
-        // Ghidra blockaction.cc:2186-2197: this action runs five graph calls
-        // (orderBlocks/finalizePrinting/scopeBreak/markUnstructured/
-        // markLabelBumpUp) and unconditionally returns 0. It never touches the
+        // Ghidra blockaction.cc:2186-2197: this action runs four wired graph
+        // calls (orderBlocks/finalizePrinting/scopeBreak/markUnstructured)
+        // and unconditionally returns 0. The fifth oracle call
+        // markLabelBumpUp (cc:2195) is NOT wired here — per-type impls exist
+        // in block.rs but are dead code, registered as
+        // BLOCKSTRUCT-MARKLABELBUMPUP-0001. It never touches the
         // protected `count` member, so the fixture-observed count/apply/res
         // triple must stay 0 even when graph/IR mutations occur below.
 

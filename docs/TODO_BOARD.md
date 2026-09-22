@@ -250,6 +250,12 @@
 > 数量差(另域)。**连带关闭 `HERITAGE-SUBPIECE-CONST-WIDTH-0001`(312 处族,
 > 同根因 register addrSize)**。E2E 三门禁见 docs/api/{space,heritage,subflow}.md
 > 同日条目。
+> **CR-orderBlocks 绑定条件履行(2026-09-22,root)**: 新登记
+> `BLOCKSTRUCT-MARKLABELBUMPUP-0001`(P2): markLabelBumpUp(cc:2195)在 Rugra 无
+> 调用点——per-type 实现存在于 block.rs 但为死代码,影响=循环内 goto 的 label
+> 定位(f_label_bumpup 永不置位);apply 注释与 docs/api 已纠偏为"四调用已接线+
+> 第五缺口登记";fixture 的 RETURN-尾入口判别形态留扩展项。
+
 > **gp 978 triage(2026-09-22,Lane BW,净改善判定)**: 48/48 case 值+序 100% 等于
 > oracle;449 上涨=真实内容从无到有+三部曲新工件。**新登记**:
 > `SWITCH-BRIDGE-DUP-0001`(P1,~121 行 switch#2 重复桥工件——48 空 case+孤立 if+

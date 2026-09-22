@@ -1329,7 +1329,9 @@ multi_shared（多条目组 addressIndex 序 [0x5,0x2]）、fallthru_chain
 
 ### 2026-09-22：接入 `graph.orderBlocks()`（blockaction.cc:2191，BLOCKSTRUCT-ORDERBLOCKS-0001，Lane BV）
 
-- `ActionFinalStructure::apply` 现按 oracle 顺序执行全部五个图调用：
+- `ActionFinalStructure::apply` 按 oracle 顺序执行**四个已接线**图调用：
+  → `graph.markUnstructured()`（markLabelBumpUp(cc:2195) **未接线**，
+  per-type 实现为死代码，登记 BLOCKSTRUCT-MARKLABELBUMPUP-0001）
   `graph.orderBlocks()` → `graph.finalizePrinting()` → `graph.scopeBreak(-1,-1)`
   → `graph.markUnstructured()` → `graph.markLabelBumpUp(false)`
   （blockaction.cc:2191-2195）。
