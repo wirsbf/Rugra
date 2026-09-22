@@ -2110,5 +2110,14 @@ PRINTRAW-WORDSIZE / UNLINKED-REF / MAKEREC-CALLIND / HERITAGE-COLLECT-WRAPAROUND
 > 缺闭括号,rustc unclosed delimiter@71)——既有损坏,该文件属 BP/constbase lane
 > write-set,本 lane 不碰;**新登记 `HTTPD-EXAMPLE-SYNTAX-0001`(P0,BP lane)**。
 > **残留(拓扑域)**:条件槽 `if switch(iVar31) {`(1 行非法 C)、双 default-check
-> (If body 侧)、case 0x4e goto 改道——待 guard-folding/BO lane 消条件位 If;
-> SWITCH-CASE-TAIL-0001(0x23/0x35)未动,证据见 GP978_TRIAGE.md §3(a)。
+> (If body 侧)、case 0x4e goto 改道——待 guard-folding/BO lane 消条件位 If。
+> **SWITCH-CASE-TAIL-0001 已修(2026-09-22,Lane CB `wt/sb-casetail`,owner=fixer)**:
+> 根因=**文本后处理层**(非发射/非结构——case 树 dump 证 Copy@42f0 在场、emit trace
+> 证 token 全入 Oppen 队列与 lowlevel 输出):post_process_output_legacy 第十遍把折行后
+> 独占一行的 `goto …;` 当无条件终结符启动死区,删掉其后同缩进活语句直到 case 标签;
+> 单行 `if (…) goto …;`(0x41)行首是 if 不命中,故仅两个复合长条件 case 受害。
+> 修复=P10 goto 启动子加折行 if 臂判别(前一非空行以 `)`/`else` 结尾→条件臂不启动)。
+> 验收:curl 全文恰 +7 行且全在 gp(0x23 恢复 3 行、0x35 恢复 4 行,含 break);
+> 差分 curl 3661/0/0(base 3654,+7=恢复行本体,golden 侧枚举名形态属已登记 varmap 族)、
+> httpd 2459/0/0 与基线恒等、gcc 81/26 与 7/22 不变、逐函数抽查恒等。
+> 详见 docs/api/prettyprint.md 2026-09-22 追加节;证据=本 lane commit。

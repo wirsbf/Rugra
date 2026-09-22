@@ -864,3 +864,39 @@ httpd main/ap_fini_vhost_config 受害）。
 验收:curl 124 函数花括号全部平衡,gcc 审计 81 OK/26 FAIL = master 基线逐位一致;
 httpd 29 函数全部平衡（master 基线因 main 未闭合 brace 整文件提取失败 0 OK/1 FAIL,
 本修复顺带解除）;差分 defects=numbering=0 双语料保持。
+
+## 2026-09-22 追加（SWITCH-CASE-TAIL-0001 — P10 死区启动子误伤折行 if 臂 goto）
+
+**现象**（Lane BW triage 定位，/dev/shm/rugra-tests/sb-switch/GP978_TRIAGE.md §3(a)）：
+curl getparameter.constprop.0 的 switch 内 case 0x23/0x35 尾部
+`::config.httpreq = HTTPREQ_POST/CUSTOM; break;` 整体蒸发（guard-goto 在场、
+直落下一 case），是该 switch 唯一的真语义损失（≈10 行）。
+
+**根因**（非发射层、非结构层——两层的证据链）：
+- 结构层:RUGRA_BS_DUMP+case 树 dump 证明 case 0x23 的 BlockList 尾部
+  `Copy idx=109 @0x42f0`(COPY@42f0 即赋值)在场,CaseOrder chain=-1 正确;
+- 发射层:emit trace 证明语句 token 与 `break;` 全部进入 EmitPrettyPrint 的
+  Oppen tokqueue 并经 print_token→low_print 落入 EmitNoMarkup.output
+  (绕过 post_process 的对照输出完整含尾赋值);
+- **真凶 = post_process_output_legacy 第十遍 "remove dead code after
+  return/break/continue"**:该遍把 `goto …;` 行当作 return 类无条件终结符启动
+  "死区"(其后同缩进语句全部删除直到 case 标签/浅层 `}`)。当 guard 条件足够长
+  被 Oppen 折行时,`goto …;` 独占一行(行首=goto)即命中;单行形态
+  `if (…) goto …;`(如 case 0x41)行首是 `if`,永不命中——故只有两个复合长条件
+  case(0x23/0x35)受害。
+
+**修复**:P10 的 goto 启动子增加折行 if 臂判别——`goto …;` 行的**前一非空行**
+(trim 后)以 `)` 结尾(闭合的 if/while 条件)或等于/以 `else` 结尾时,该 goto 是
+条件臂,其后语句是**活**的 fall-through 路径,不启动死区;其余 goto(前一非空行
+以 `;`/`{`/`}`/`:` 结尾或无前行)仍视为无条件语句,保持原死区行为。新增
+`prev_nonempty_trimmed` 追踪(仅非空行更新)。
+
+**验收**:curl 全文 diff 恰好 +7 行且全部位于 getparameter.constprop.0
+(case 0x23 恢复 3 行:`::config.httpreq = 3; uVar27 = uVar27; break;`;
+case 0x35 恢复 4 行:`::config.httpreq = 5; uVar27 = uVar27; uVar32 = uVar32; break;`),
+零其它函数变化;差分 curl 3661/0/0(base 3654/0/0,+7=恢复行本体,
+golden 侧为 `= HTTPREQ_POST` 枚举名形态——已登记 varmap/符号残差族,非新增缺陷);
+httpd 2459/0/0 与 sb-condreplay 记录基线恒等;gcc 审计 81/26、7/22 双语料不变;
+SetHTTPrequest/parseconfig/my_get_token 逐函数 skeleton 恒等。该层属
+POSTFIX-RETIRE-0001 补偿层(oracle prettyprint.cc 零文本后处理),本修复为层内
+误伤封堵,不改变层的退役路线。

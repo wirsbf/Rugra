@@ -1093,6 +1093,21 @@ impl EmitNoMarkup {
         let mut alive: Vec<String> = Vec::with_capacity(structural.len());
         let mut dead_after_return = false;
         let mut dead_indent = 0usize;
+        // SWITCH-CASE-TAIL-0001: a `goto …;` line only starts a dead zone
+        // when it is an UNCONDITIONAL whole-statement goto. When the Oppen
+        // pretty printer wraps a long `if (cond)` across lines, the arm's
+        // `goto …;` lands alone on the NEXT line and the previous non-empty
+        // line ends with `)` (the closed condition) or `else` — that goto
+        // is CONDITIONAL (if-arm) and the following statements are the
+        // live fall-through path, not dead code. Treating it as a dead-zone
+        // starter deleted reachable tail statements + `break;` (observed:
+        // curl getparameter.constprop.0 case 0x23 lost
+        // `::config.httpreq = HTTPREQ_POST; break;`, case 0x35 lost the
+        // HTTPREQ_CUSTOM tail — the only true semantic losses of that
+        // switch, ~10 lines). Single-line `if (…) goto …;` arms never
+        // matched (line starts with `if`), which is why only the two
+        // long-compound-condition cases were hit.
+        let mut prev_nonempty_trimmed: Option<String> = None;
         // First collect all goto-referenced labels
         let all_text = structural.join("\n");
         for line in &structural {
@@ -1160,9 +1175,22 @@ impl EmitNoMarkup {
             }
 
             // Check if this line starts a dead zone
-            if t == "return;" || t == "break;" || t == "continue;" || t.starts_with("goto ") {
+            // SWITCH-CASE-TAIL-0001: `goto` starts the zone only when it is
+            // NOT a wrapped conditional arm — previous non-empty line ending
+            // with `)` (closed if/while condition) or `else` marks the goto
+            // as the arm of a wrapped `if`, whose fall-through statements
+            // are live code.
+            let goto_starts_dead_zone = t.starts_with("goto ")
+                && !prev_nonempty_trimmed.as_deref().map_or(false, |p| {
+                    let p = p.trim_end();
+                    p.ends_with(')') || p == "else" || p.ends_with(" else")
+                });
+            if t == "return;" || t == "break;" || t == "continue;" || goto_starts_dead_zone {
                 dead_after_return = true;
                 dead_indent = indent;
+            }
+            if !t.is_empty() {
+                prev_nonempty_trimmed = Some(t.to_string());
             }
         }
         pfx.observe(PF_P10, &snap_p10, &alive);
