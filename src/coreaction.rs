@@ -4737,23 +4737,19 @@ impl ActionSetCasts {
             return None;
         }
         // cc:444: reqtype = op->getOut()->getHighTypeDefFacing()
+        // (through HighVariable::getType's lazy typedirty re-derivation)
         let reqtype = op.get_out().and_then(|o| {
             let vn = o.read().unwrap();
-            vn.high
-                .as_ref()
-                .map(|h| h.read().unwrap().v_type.get())
-                .or_else(|| vn.v_type.clone())
+            vn.get_high_type_def_facing().or_else(|| vn.v_type.clone())
         })?;
         let invn = op.get_in(1)?;
         let in_size = invn.read().unwrap().get_size();
         // cc:446: curtype = invn->getHighTypeReadFacing(op)
-        let curtype_full = {
-            let vn = invn.read().unwrap();
-            vn.high
-                .as_ref()
-                .map(|h| h.read().unwrap().v_type.get())
-                .or_else(|| vn.v_type.clone())
-        }?;
+        let curtype_full = invn
+            .read()
+            .unwrap()
+            .get_high_type_read_facing(op, 1)
+            .or_else(|| invn.read().unwrap().v_type.clone())?;
         // cc:450-453: unwrap exactly one level; a non-pointer address takes
         // a direct pointer-to-reqtype cast.
         let curtype = match curtype_full.as_ref() {
@@ -4806,20 +4802,16 @@ impl ActionSetCasts {
         }
         let pointer_vn = op.get_in(1)?;
         let value_vn = op.get_in(2)?;
-        let pointer_type = {
-            let vn = pointer_vn.read().unwrap();
-            vn.high
-                .as_ref()
-                .map(|h| h.read().unwrap().v_type.get())
-                .or_else(|| vn.v_type.clone())
-        }?;
-        let value_type = {
-            let vn = value_vn.read().unwrap();
-            vn.high
-                .as_ref()
-                .map(|h| h.read().unwrap().v_type.get())
-                .or_else(|| vn.v_type.clone())
-        }?;
+        let pointer_type = pointer_vn
+            .read()
+            .unwrap()
+            .get_high_type_read_facing(op, 1)
+            .or_else(|| pointer_vn.read().unwrap().v_type.clone())?;
+        let value_type = value_vn
+            .read()
+            .unwrap()
+            .get_high_type_read_facing(op, 2)
+            .or_else(|| value_vn.read().unwrap().v_type.clone())?;
         let ptr_size = pointer_vn.read().unwrap().get_size();
         // cc:530-535: pointedToType / destSize.
         let (pointed_to, dest_size) = match pointer_type.as_ref() {
@@ -4965,10 +4957,10 @@ impl ActionSetCasts {
                 // extensions force the cast), else castStandard(req, cur,
                 // TRUE, TRUE). Slot 1 falls to the base metain arm.
                 OpCode::CPUI_INT_RIGHT if slot == 0 => {
-                    Self::shift_input_cast(&op, slot, strategy, 1, &type_factory)
+                    Self::shift_input_cast(&op, slot, strategy, 1, crate::type_system::datatype::TypeMetatype::Uint, &type_factory)
                 }
                 OpCode::CPUI_INT_SRIGHT if slot == 0 => {
-                    Self::shift_input_cast(&op, slot, strategy, 2, &type_factory)
+                    Self::shift_input_cast(&op, slot, strategy, 2, crate::type_system::datatype::TypeMetatype::Int, &type_factory)
                 }
                 // typeop.cc:1639/1659/1679/1699 TypeOpIntDiv/Sdiv/Rem/Srem
                 // ::getInputCast (both slots): promotion gate as the shifts
@@ -5111,7 +5103,7 @@ impl ActionSetCasts {
         // implied, inserted before op.
         let new_op = fd.new_op(1, op_pc);
         let out_vn = fd.new_unique_out(vnin.read().unwrap().get_size(), &new_op);
-        out_vn.write().unwrap().v_type = Some(ct);
+        out_vn.write().unwrap().update_type(ct);
         out_vn.write().unwrap().set_implied();
         fd.op_set_opcode(&new_op, OpCode::CPUI_CAST);
         fd.op_set_input(&new_op, vnin, 0);
@@ -5216,6 +5208,7 @@ impl ActionSetCasts {
         slot: usize,
         strategy: &crate::type_system::cast::CastStrategyC,
         gate: i32,
+        metain: crate::type_system::datatype::TypeMetatype,
         type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
     ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
         let in_vn = op.get_in(slot)?;
@@ -5223,10 +5216,10 @@ impl ActionSetCasts {
         let curtype = vn
             .get_high_type_read_facing(op, slot as i32)
             .or_else(|| vn.v_type.clone());
-        let reqtype = type_factory.read().unwrap().get_base(
-            vn.get_size(),
-            crate::type_system::datatype::TypeMetatype::Int,
-        )?;
+        // typeop.cc:1549/1574: reqtype = op->inputTypeLocal(slot) — the
+        // op's registered metain (TypeOpBinary ctor: INT_RIGHT=TYPE_UINT at
+        // cc:1528, INT_SRIGHT=TYPE_INT at cc:1568), not a hardcoded int.
+        let reqtype = type_factory.read().unwrap().get_base(vn.get_size(), metain)?;
         let promo_type = strategy.int_promotion_type(&vn);
         const NO_PROMOTION: i32 = -1;
         drop(vn);
@@ -5454,7 +5447,7 @@ impl ActionSetCasts {
             .unwrap()
             .high
             .as_ref()
-            .map(|h| h.read().unwrap().v_type.get())
+            .map(|h| h.read().unwrap().get_type())
             .or_else(|| vn.read().unwrap().v_type.clone());
         let Some(dt) = dt else {
             return false;
@@ -5625,22 +5618,20 @@ impl ActionSetCasts {
                 };
                 token
             } else if op_rg.opcode == OpCode::CPUI_LOAD {
-                let in1_high = op_rg
-                    .get_in(1)
-                    .and_then(|a| {
-                        let vn = a.read().unwrap();
-                        vn.high
-                            .as_ref()
-                            .map(|h| h.read().unwrap().v_type.get())
-                            .or_else(|| vn.v_type.clone())
-                    });
+                // typeop.cc:473: in(1)->getHighTypeReadFacing(op) — the
+                // read must observe a same-action updateType on the address
+                // varnode (castInput's cast-adjust arm) through the
+                // HighVariable typedirty re-derivation.
+                let in1_high = op_rg.get_in(1).and_then(|a| {
+                    let vn = a.read().unwrap();
+                    vn.get_high_type_read_facing(&op_rg, 1)
+                        .or_else(|| vn.v_type.clone())
+                });
                 let out_high = || {
                     outvn
                         .read()
                         .unwrap()
-                        .high
-                        .as_ref()
-                        .map(|h| h.read().unwrap().v_type.get())
+                        .get_high_type_def_facing()
                         .or_else(|| outvn.read().unwrap().v_type.clone())
                 };
                 match in1_high {
@@ -5678,6 +5669,16 @@ impl ActionSetCasts {
                 // (typeop.cc:782); Rugra's get_call_specs_of_op performs the
                 // same op-identity verification through the slot-0 Iop
                 // annotation (TYPEOP-FSPEC-SPACE-0001).
+                // typeop.cc:261-265/720-735: the unlocked/void default is
+                // tlst->getBase(size, TYPE_UNKNOWN) — the factory-interned
+                // base ("undefined8" under the SLEIGH core table), never a
+                // fabricated un-interned TypeBase.
+                let unknown_base = || {
+                    type_factory
+                        .as_ref()
+                        .and_then(|f| f.read().unwrap().get_base(out_size, TypeMetatype::Unknown))
+                        .unwrap_or_else(|| base_type_for(out_size, TypeMetatype::Unknown))
+                };
                 match fd.get_call_specs_of_op(op) {
                     Some(fc) => {
                         let fc_r = fc.read().unwrap();
@@ -5686,17 +5687,55 @@ impl ActionSetCasts {
                             if ct.get_metatype() != TypeMetatype::Void {
                                 ct
                             } else {
-                                base_type_for(out_size, TypeMetatype::Unknown)
+                                unknown_base()
                             }
                         } else {
-                            base_type_for(out_size, TypeMetatype::Unknown)
+                            unknown_base()
                         }
                     }
-                    None => base_type_for(out_size, TypeMetatype::Unknown),
+                    None => unknown_base(),
+                }
+            } else if matches!(
+                op_rg.opcode,
+                OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT
+            ) {
+                // typeop.cc:1518/1558/1608 TypeOpInt{Left,Right,Sright}
+                // ::getOutputToken: the token is the input-0 HIGH
+                // read-facing type, with bool demoted to the factory int
+                // base of the same size.
+                let res = op_rg.get_in(0).and_then(|a| {
+                    let vn = a.read().unwrap();
+                    vn.get_high_type_read_facing(&op_rg, 0)
+                        .or_else(|| vn.v_type.clone())
+                });
+                match res {
+                    Some(r) if r.get_metatype() == TypeMetatype::Bool => {
+                        let base = type_factory.as_ref().and_then(|f| {
+                            f.read()
+                                .unwrap()
+                                .get_base(r.get_size(), TypeMetatype::Int)
+                        });
+                        match base {
+                            Some(b) => b,
+                            None => return 0,
+                        }
+                    }
+                    Some(r) => r,
+                    None => return 0,
                 }
             } else {
+                // typeop.cc:261-265: TypeOp::getOutputToken's default is
+                // tlst->getBase(size, metatype) — the factory-interned core
+                // base ("int8"/"uint8" under the SLEIGH table), so the
+                // token participates in interned identity comparisons
+                // (coreaction.cc:2544) exactly as in the oracle. The raw
+                // base_type_for fallback only serves detached fixtures
+                // without an architecture factory.
                 match Self::output_metatype(op_rg.opcode) {
-                    Some(m) => base_type_for(out_size, m),
+                    Some(m) => type_factory
+                        .as_ref()
+                        .and_then(|f| f.read().unwrap().get_base(out_size, m))
+                        .unwrap_or_else(|| base_type_for(out_size, m)),
                     None => return 0,
                 }
             }
@@ -5707,7 +5746,7 @@ impl ActionSetCasts {
             .unwrap()
             .high
             .as_ref()
-            .map(|h| h.read().unwrap().v_type.get())
+            .map(|h| h.read().unwrap().get_type())
             .or_else(|| outvn.read().unwrap().v_type.clone())
             .unwrap_or_else(|| tokenct.clone());
         // cc:2544: if (tokenct == outHighType) → no cast needed. Ghidra
@@ -5806,7 +5845,7 @@ impl ActionSetCasts {
         // cc:2595-2609: insert CAST/PTRSUB op after `op`.
         // vn = newUnique(outvn->getSize()); vn->updateType(tokenct); vn->setImplied()
         let vn = fd.new_unique(out_size);
-        vn.write().unwrap().v_type = Some(tokenct.clone());
+        vn.write().unwrap().update_type(tokenct.clone());
         vn.write().unwrap().set_implied();
         // cc:2598: newOp(2) for the PTRSUB form, newOp(1) for CAST.
         let op_addr = op.0.read().unwrap().get_addr();
@@ -6003,11 +6042,11 @@ impl ActionSetCasts {
         // reqtype = op->getIn(0)->getTypeReadFacing(op)
         let reqtype = in0.v_type.clone()?;
         // curtype = op->getIn(0)->getHighTypeReadFacing(op)
-        let curtype = in0
-            .high
-            .as_ref()
-            .map(|h| h.read().unwrap().v_type.get())
-            .unwrap_or_else(|| reqtype.clone());
+        let curtype = {
+            let op_rg = op.0.read().unwrap();
+            in0.get_high_type_read_facing(&op_rg, 0)
+                .unwrap_or_else(|| reqtype.clone())
+        };
         // Pointer-identity equality mirrors Ghidra's interned `Datatype*`
         // comparison; the name check extends it across separately-constructed
         // Arcs of the same named factory type.
@@ -6076,14 +6115,36 @@ impl ActionSetCasts {
 
     // RUGRA-GLUE: output_metatype (no Ghidra direct counterpart; derived from
     // TypeOp::getOutputToken which Rugra lacks)
-    /// Determine the output metatype for an opcode (for castOutput). Mirrors
-    /// the integer/boolean branches of Ghidra's
-    /// `TypeOp::getOutputToken(op, castStrategy)` (typeop.cc). Pointer-
-    /// producing ops (PTRSUB/PTRADD/LOAD/CALL/COPY/etc.) return None so
-    /// castOutput leaves their output pointer type untouched — the pointer
-    /// shape is established upstream by ActionInferTypes / cast_input_ptr,
-    /// and forcing a base-int token would wrongly cast `(long *)out` →
-    /// `(long)out`.
+    /// Determine the output metatype for an opcode (for castOutput). The
+    /// metatypes are the TypeOpBinary/TypeOpUnary/TypeOpFunc constructor
+    /// registrations (typeop.cc:925-2566), consumed via
+    /// `outputTypeLocal -> getBase(size, metaout)` (typeop.cc:323/345/365):
+    ///
+    /// - BOOL outputs: INT_EQUAL(925)/INT_NOTEQUAL(989)/INT_SLESS(1016)/
+    ///   INT_SLESSEQUAL(1042)/INT_LESS(1068)/INT_LESSEQUAL(1092)/
+    ///   INT_CARRY(1333)/INT_SCARRY(1349)/INT_SBORROW(1365)/
+    ///   FLOAT_EQUAL(1744)-FLOAT_LESSEQUAL(1768)/FLOAT_NAN(1776)/
+    ///   BOOL_NEGATE(1712)/BOOL_XOR(1720)/BOOL_AND(1728)/BOOL_OR(1736)
+    /// - UINT outputs: INT_XOR(1409)/INT_AND(1442)/INT_OR(1475)/
+    ///   INT_RIGHT(1528)/INT_DIV(1632)/INT_REM(1672)/INT_NEGATE(1395)/
+    ///   INT_ZEXT(1116)
+    /// - INT outputs: INT_ADD(1168)/INT_SUB(1319)/INT_LEFT(1503)/
+    ///   INT_SRIGHT(1568)/INT_MULT(1618)/INT_SDIV(1652)/INT_SREM(1692)/
+    ///   INT_2COMP(1381)/INT_SEXT(1142)/FLOAT_TRUNC(1913)/EXTRACT(2544)/
+    ///   POPCOUNT(2559)/LZCOUNT(2566)
+    /// - FLOAT outputs: FLOAT_ADD(1784)/FLOAT_DIV(1792)/FLOAT_MULT(1800)/
+    ///   FLOAT_SUB(1808)/FLOAT_NEG(1816)/FLOAT_ABS(1824)/FLOAT_SQRT(1832)/
+    ///   FLOAT_INT2FLOAT(1840)/FLOAT_FLOAT2FLOAT(1905)/FLOAT_CEIL(1921)/
+    ///   FLOAT_FLOOR(1929)/FLOAT_ROUND(1937)
+    /// - UNKNOWN outputs (PIECE(2038)/SUBPIECE(2117)/INSERT(2529)) fall to
+    ///   the same getBase(size, TYPE_UNKNOWN) as the plain-TypeOp classes,
+    ///   so they map to Unknown here.
+    ///
+    /// Pointer-producing ops (PTRSUB/PTRADD/LOAD/CALL/CALLIND/COPY/
+    /// INDIRECT/MULTIEQUAL/CAST) return None so castOutput leaves their
+    /// output pointer type untouched — the pointer shape is established
+    /// upstream by ActionInferTypes / cast_input_ptr, and forcing a base-int
+    /// token would wrongly cast `(long *)out` → `(long)out`.
     fn output_metatype(opc: OpCode) -> Option<crate::type_system::datatype::TypeMetatype> {
         use crate::opcodes::OpCode;
         use crate::type_system::datatype::TypeMetatype;
@@ -6098,6 +6159,25 @@ impl ActionSetCasts {
             | OpCode::CPUI_INT_CARRY | OpCode::CPUI_INT_SCARRY
             | OpCode::CPUI_INT_SBORROW | OpCode::CPUI_FLOAT_NAN
             => Some(TypeMetatype::Bool),
+            // UINT registrations (typeop.cc:1116/1395/1409/1442/1475/1528/
+            // 1632/1672): the old `_ => Int` catch-all mistyped these as
+            // signed, e.g. INT_RIGHT's token read `int8` where the oracle's
+            // TypeOpBinary(TYPE_UINT) yields the interned `uint8`.
+            OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_AND | OpCode::CPUI_INT_OR
+            | OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_REM
+            | OpCode::CPUI_INT_NEGATE | OpCode::CPUI_INT_ZEXT
+            => Some(TypeMetatype::Uint),
+            // FLOAT registrations (typeop.cc:1784-1937).
+            OpCode::CPUI_FLOAT_ADD | OpCode::CPUI_FLOAT_DIV
+            | OpCode::CPUI_FLOAT_MULT | OpCode::CPUI_FLOAT_SUB
+            | OpCode::CPUI_FLOAT_NEG | OpCode::CPUI_FLOAT_ABS
+            | OpCode::CPUI_FLOAT_SQRT | OpCode::CPUI_FLOAT_INT2FLOAT
+            | OpCode::CPUI_FLOAT_FLOAT2FLOAT | OpCode::CPUI_FLOAT_CEIL
+            | OpCode::CPUI_FLOAT_FLOOR | OpCode::CPUI_FLOAT_ROUND
+            => Some(TypeMetatype::Float),
+            // UNKNOWN registrations (typeop.cc:2038/2117/2529).
+            OpCode::CPUI_PIECE | OpCode::CPUI_SUBPIECE | OpCode::CPUI_INSERT
+            => Some(TypeMetatype::Unknown),
             // Pointer-producing ops: their output token is the pointer type
             // itself (set by type inference), not a base int/bool. Skip
             // castOutput for them.
@@ -6106,6 +6186,9 @@ impl ActionSetCasts {
             | OpCode::CPUI_COPY | OpCode::CPUI_INDIRECT
             | OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_CAST
             => None,
+            // INT registrations (typeop.cc:1142/1168/1319/1381/1503/1568/
+            // 1618/1652/1692/1913/2544/2559/2566) and the remaining
+            // plain-TypeOp classes.
             _ => Some(TypeMetatype::Int),
         }
     }

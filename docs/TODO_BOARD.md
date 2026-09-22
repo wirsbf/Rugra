@@ -417,14 +417,34 @@
 >   Phase 2 首分歧 317→337,@END 317 result=1/count=1/apply=1 与 oracle 一致,
 >   聚合 @END 1 universal 1323=1323;curl/httpd E2E 与 next_url 投影见 commit
 >   message;docs/api/coreaction.md 同 commit。
-> - `MATCHURL-SETCASTS-337-0001`(P2,新登记 2026-09-23,Lane DH 发现,owner
->   待认领): match_url Phase 2 新首分歧 ordinal **337**
->   `universal:setcasts` op-line 46:oracle `52bd:7f8 CAST out=u:100002ef` vs
->   rugra `52bd:7f9 CAST out=u:100002f7`——setcasts 前多一个 8 字节 unique
->   分配且该 CAST 建立时序靠后(seqnum 7f8→7f9),连锁 LOAD/CAST 链偏移
->   (u:100002ef→u:100002f7 族);ActionSetCasts(coreaction.rs 域)CAST/CROSSBUILD/
->   LABEL 注入顺序或前置 unique 消耗差。产物 /dev/shm/rugra-tests/sb-ord317/
->   (fix.rugra.projection,bisect-fix.txt)。
+> - `MATCHURL-SETCASTS-337-0001`(P2,**FIXED 2026-09-23**,Lane DI
+>   `wt/sb-ord337`,owner=fixer;coreaction 非机制 C 白名单,root 复核建议):
+>   根因是**四层叠加的类型状态缺口**(双侧 CASTOUT/CASTIN 探针实证,
+>   oracle 打补丁 build /dev/shm/rugra-tests/sb-ord337/oracle-probe):
+>   ①`Varnode::update_type` 不置 high TYPEDIRTY(varnode.cc:461-463 的
+>   `high->typeDirty()` 被"No-op"占位)且 setcasts 的类型读绕过
+>   `getHighTypeReadFacing` 惰性重推导直读 stale 缓存——castInput 的
+>   double-cast 调整臂对 5449 LOAD 地址 `updateType(code * *)` 后,
+>   castOutput 的 LOAD token(typeop.cc:472 pointee)仍读旧
+>   `undefined8 *` → 误插 CAST(=多出的 8 字节 unique+1 拍,337 的直接
+>   表现);②`cast_standard_full` 把参数包进 `Arc::new(clone)` 恒不等,
+>   interned 身份比较(cast.cc:302/329/392)全部失效,返回值也丢身份;
+>   ③castOutput fallback/CALL 臂的 token 用未 interned 的
+>   `base_type_for`("long"),oracle 是 factory `getBase`(SLEIGH 表
+>   "int8"),token==outHigh 短路永不命中且污染实例类型;④
+>   `shift_input_cast` reqtype 硬编码 Int,oracle 是
+>   `inputTypeLocal`(INT_RIGHT=TYPE_UINT,typeop.cc:1528)+shift 族
+>   getOutputToken 覆写(1518/1558/1608=in0 high)缺失、output_metatype
+>   表 `_ => Int` 粗化。修复=varnode.rs update_type/update_type_lock
+>   置 typeDirty+coreaction.rs setcasts 读路径走忠实 getter/token 工厂
+>   化/metatype 表补齐/shift 臂+cast.rs 签名 &Arc 化保身份。验证(本树
+>   亲测,oracle e40ed130,产物 /dev/shm/rugra-tests/sb-ord337/):
+>   match_url Phase 2 投影 **MATCH**(340 stages/80385 ops,337 起全量
+>   一致,@END 337 result=14 count=14 双侧一致);next_url 投影 MATCH
+>   保持;curl E2E 2691/0/0(亲父实测基线 2713/0/0,−22=改进)、httpd
+>   2331/0/0(基线 2339/0/0);config 域 11 函数逐个 0/0 零回退;gcc
+>   审计 81 OK/26 FAIL=预存基线。残差:无(match_url 投影无剩余差异;
+>   后续 lane 可换新函数/新域开新首分歧追杀)。
 > - `FIXTURE-STOREVARNODE-STALE-0001`(P3,新登记 2026-09-23,Lane DG 发现,owner
 >   待认领): `rule_store_varnode_spacebase_1204` fixture 在 master HEAD(5b9f12cf)
 >   即双重失效——crate-tree pin 漂移(任何 src 改动触发)+ metadata.overall_status

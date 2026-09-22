@@ -513,17 +513,23 @@ impl CastStrategyC {
     /// conservative).
     pub fn cast_standard_full(
         &self,
-        reqtype: &Datatype,
-        curtype: &Datatype,
+        reqtype: &Arc<Datatype>,
+        curtype: &Arc<Datatype>,
         mut care_uint_int: bool,
         care_ptr_uint: bool,
     ) -> Option<Arc<Datatype>> {
-        let req_arc = Arc::new(reqtype.clone());
-        // Types equal → no cast.
-        if Arc::ptr_eq(&req_arc, &Arc::new(curtype.clone())) {
+        // Types equal → no cast. Ghidra compares the interned Datatype
+        // pointers (cast.cc:302 `curtype == reqtype`); Rugra's Arc identity
+        // is the mirror for factory-interned types.
+        if Arc::ptr_eq(reqtype, curtype) {
             return None;
         }
-        // From void → always cast.
+        // From void → always cast. Returned Arc preserves reqtype identity
+        // (Ghidra returns the same interned Datatype*), so downstream
+        // pointer-identity comparisons (e.g. castOutput's
+        // `tokenct == outHighType`, coreaction.cc:2544) behave as in the
+        // oracle.
+        let req_arc = Arc::clone(reqtype);
         if curtype.get_metatype() == TypeMetatype::Void {
             return Some(req_arc);
         }
@@ -538,15 +544,17 @@ impl CastStrategyC {
             // beyond wordsize==1 default; skip the space-mismatch cast branch
             // (would need AddrSpace wiring). Wordsize equality is implicitly
             // handled by size equality below.
-            reqbase = match reqbase { Datatype::Pointer(p) => &p.ptr_to, _ => break ,
+            reqbase = match reqbase.as_ref() { Datatype::Pointer(p) => &p.ptr_to, _ => break ,
             };
-            curbase = match curbase { Datatype::Pointer(p) => &p.ptr_to, _ => break ,
+            curbase = match curbase.as_ref() { Datatype::Pointer(p) => &p.ptr_to, _ => break ,
             };
             care_uint_int = true;
             isptr = true;
         }
-        // No typedef chains in Rugra (getTypedef loop is a no-op).
-        if std::ptr::eq(reqbase as *const _, curbase as *const _) {
+        // No typedef chains in Rugra (getTypedef loop is a no-op); the
+        // peeled bases are compared by Arc identity, mirroring the interned
+        // `curbase == reqbase` (cast.cc:329).
+        if Arc::ptr_eq(reqbase, curbase) {
             return None;
         }
         let reqmeta = reqbase.get_metatype();

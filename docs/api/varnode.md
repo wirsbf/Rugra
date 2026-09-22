@@ -746,6 +746,23 @@ local-type closure，继续为 `MISMATCH/UNTESTED`。
 - `contains_storage(&Varnode) -> i32`（varnode.cc:105-116）— 0=包含/-1=op在前/1=越界/2=op在后/3=不同空间。含 `IPTR_CONSTANT → 3` 短路（cc:109）：当 `self` 处于常量空间时直接返回 3，等价 Ghidra `loc.getSpace()->getType()==IPTR_CONSTANT`。
 - `overlap(&Varnode) -> i32`（varnode.cc:178 + address.cc:153-165）— 返回 LSB 相对偏移。含 `IPTR_CONSTANT → -1` 短路（address.cc:159）：当 `self` 处于常量空间时直接返回 -1。范围算术用 unsigned `wrapping_sub` 模拟 Ghidra `wrapOffset`（address.cc:161），`dist >= size → -1`（cc:163）。
 
+### 2026-09-23：update_type/update_type_lock 补 high typeDirty（MATCHURL-SETCASTS-337-0001）
+
+- `update_type(ct)` / `update_type_lock(ct, lock, override)` 现在在写入
+  `v_type` 后对挂接的 HighVariable 置 TYPEDIRTY（varnode.cc:461-463 /
+  500-501 的 `if (high != 0) high->typeDirty();`），替换旧注释的
+  "typeDirty on high — no-op" 占位。HighVariable 侧
+  `get_type()`/`get_type_representative()`（variable.hh:174 →
+  variable.cc:400-415）的惰性重推导链因此第一次对
+  `Varnode::update_type` 的调用方可观察：同一 Action 内对某 varnode
+  `update_type` 后，紧随的 `get_high_type_read_facing` /
+  `get_high_type_def_facing`（varnode.cc:665/651）读到重推导后的类型，
+  与 oracle 的 `high->getType()` 时序一致。
+- 效果示例（match_url setcasts 337）：castInput 的 double-cast 调整臂对
+  LOAD 地址 varnode `updateType(code * *)` 后，castOutput 计算 LOAD token
+  （TypeOpLoad::getOutputToken，typeop.cc:472）经 read-facing 读到
+  `code * *` 的 pointee `code *`，与输出 high 相等 → 短路不插 CAST。
+
 ### 2026-07-01（续 2）：update_type + get_type_read_facing + copy_symbol（解锁 ~15 TODO）
 - `update_type(ct)`（varnode.cc:456-464）— 无锁设类型，typelock 时不改。
 - `update_type_lock(ct, lock, override)`（varnode.cc:474-489）— TYPE_UNKNOWN 强制 unlock + lock/override 控制。
