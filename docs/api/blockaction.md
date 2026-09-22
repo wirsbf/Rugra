@@ -1264,3 +1264,26 @@ collapse_switches/collapse_cbranch_cascades/update_switch_case_reference/
 refresh_switch_cases 重建点）补 `jump: None, case_order: Vec::new()` 占位，
 保持编译与现有行为不变；真实 jump 解析与 case_order 记录在下一提交
 （collapse 接线）落地。
+
+## 2026-09-22（续）：label 管道 collapse 接线（try_rule_switch/ActionFinalStructure）
+
+- `CollapseStructure` 新增 `jump_tables` 字段 + `with_jump_tables` builder
+  （RUGRA-GLUE：oracle 经 FlowBlock 的 Funcdata 反查指针，block.cc:637；
+  Rugra 复合块无反查，由 ActionBlockStructure::apply 传入 fd.jump_tables）。
+- 新增 `grab_case_order(&self, switch_block, cases, branchind_addr)`
+  （grabCaseBasic 的 CaseOrder 记录半部，block.cc:3527-3546 + ctor 3488）：
+  逐 case 解析 basicblock（front_leaf→BlockCopy.original，cc:3500）与
+  outindex（入边反扫，cc:3506-3509），建 casemap（cc:3527/3532），对
+  BlockGoto case 走 fall-thru chain 链接（cc:3536-3546，经 target_dyn 的
+  basic 入边 → casemap[rev]），并按 BRANCHIND op 地址从 jump_tables 解析
+  ctor jumptable（block.cc:630-639 语义）。
+- `switch_case_basic_coords` 返回值扩为 `(isdefault, outindex, basic)`，
+  multigoto goto 臂非 default 目标追加 `CaseOrder::placeholder(basic,
+  outindex)`（chain=-1，cc:3548-3553 臂在 chain 填充循环之后）；goto-default
+  不记 order（Rugra default 独立槽不打印 label，已在 block.rs 注明分歧）。
+- `try_rule_switch` 与 `collapse_switches` 构造点改喂真 `jump`/`case_order`；
+  `update_switch_case_reference` 与 `collapse_case_fallthru` 的重建点携带
+  两字段（oracle 同对象原地改，Rugra 重建需显式带过）。
+- `ActionFinalStructure::apply` 在 scopeBreak 之前补
+  `fd.sblocks.finalize_printing()`（blockaction.cc:2192 调用点；cc:2191
+  orderBlocks 未移植，已登记缺口——顶层 list 顺序仍为 collapse 安装序）。

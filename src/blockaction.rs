@@ -61,7 +61,8 @@ impl Action for ActionBlockStructure {
         fd.sblocks.build_copy(&fd.bblocks);
 
         // Collapse structured patterns iteratively
-        let mut collapse = CollapseStructure::new(&mut fd.sblocks, &fd.name);
+        let mut collapse = CollapseStructure::new(&mut fd.sblocks, &fd.name)
+            .with_jump_tables(fd.jump_tables.clone());
         collapse.collapse_all();
         self.count += collapse.get_change_count() as i32;
 
@@ -1421,6 +1422,12 @@ pub struct CollapseStructure<'a> {
     /// exactly: initialized to the copy graph's order, identify_internal
     /// removes consumed entries and pushes the install slot at the end.
     virtual_list: Vec<i32>,
+    /// Jumptables of the function under collapse, for the BlockSwitch ctor
+    /// (`jump = ind->getJumptable()`, block.cc:3488 — the oracle resolves
+    /// the BRANCHIND last-op through Funcdata::findJumpTable, block.cc:637;
+    /// Rugra passes the Arc list in because CollapseStructure has no
+    /// Funcdata back-pointer).
+    jump_tables: Vec<Arc<RwLock<crate::jumptable::JumpTable>>>,
 }
 
 impl<'a> CollapseStructure<'a> {
@@ -1444,7 +1451,20 @@ impl<'a> CollapseStructure<'a> {
             likelylistfull: false,
             loopbodyiter: -1,
             virtual_list: (0..n).collect(),
+            jump_tables: Vec::new(),
         }
+    }
+
+    // RUGRA-GLUE: builder supplying Funcdata::jump_tables for the BlockSwitch
+    // ctor lookup (Ghidra reaches them through the FlowBlock Funcdata
+    // back-pointer, block.cc:637; Rugra composites carry none).
+    /// Attach the function's jumptables so new BlockSwitch components can
+    /// hold their table (block.cc:3488 ctor semantics).
+    pub fn with_jump_tables(
+        mut self, jts: Vec<Arc<RwLock<crate::jumptable::JumpTable>>>,
+    ) -> Self {
+        self.jump_tables = jts;
+        self
     }
 
     // (The `virtual_list` field IS the Ghidra list-order mirror — see its
@@ -4539,6 +4559,8 @@ impl<'a> CollapseStructure<'a> {
                     sw.default_gototype,
                     sw.case_values.clone(),
                     sw.index_varnode.clone(),
+                    sw.jump.clone(),
+                    sw.case_order.clone(),
                 )
             };
             // Rebuild with updated references
@@ -4565,8 +4587,8 @@ impl<'a> CollapseStructure<'a> {
                     default_case: new_default,
                     case_gototypes: sw_fields.4,
                     default_gototype: sw_fields.5,
-                    jump: None,
-                    case_order: Vec::new(),
+                    jump: sw_fields.8,
+                    case_order: sw_fields.9,
                     case_values: sw_fields.6,
                     index_varnode: sw_fields.7,
                     incoming: Vec::new(),
@@ -6172,12 +6194,16 @@ impl<'a> CollapseStructure<'a> {
         let ctrl_idx = block.read().unwrap().get_index();
         let mut case_values: Vec<Vec<u64>> = Vec::new();
         let mut index_varnode = None;
+        let mut branchind_addr: Option<u64> = None;
         {
             let b = block.read().unwrap();
             for op_ref in &b.get_ops() {
                 let op = op_ref.0.read().unwrap();
                 if op.opcode == OpCode::CPUI_BRANCHIND && !op.inrefs.is_empty() {
                     index_varnode = Some(op.inrefs[0].clone());
+                    // block.cc:630-639 FlowBlock::getJumptable reads the
+                    // block's lastOp (the BRANCHIND) for findJumpTable.
+                    branchind_addr = Some(op.get_seq_num().get_addr().as_u64());
                     break;
                 }
             }
@@ -6185,6 +6211,11 @@ impl<'a> CollapseStructure<'a> {
                 case_values.push(vec![j as u64]);
             }
         }
+        // cc:1912 + cc:3488 + cc:3524: grabCaseBasic's CaseOrder recording
+        // (basicblock/outindex/casemap/chain) and the ctor jumptable
+        // resolution, both running "before the identifyInternal" like the
+        // oracle.
+        let (jump, case_order) = self.grab_case_order(&block, &cases, branchind_addr);
         // Ghidra newBlockSwitch (block.cc:1904-1919): identifyInternal(ret, cs)
         // consumes the dispatch block AND the case blocks into the component
         // (cs[0] is the switch block itself), forceOutputNum(1) when there is
@@ -6200,8 +6231,8 @@ impl<'a> CollapseStructure<'a> {
                 default_case: None,
                 case_gototypes: Vec::new(),
                 default_gototype: 0,
-                jump: None,
-                case_order: Vec::new(),
+                jump,
+                case_order,
                 case_values,
                 index_varnode,
                 incoming: Vec::new(),
@@ -6262,12 +6293,15 @@ impl<'a> CollapseStructure<'a> {
                 let sw_ref = sw.as_any_mut().downcast_mut::<BlockSwitch>().unwrap();
                 sw_ref.case_gototypes = vec![0; sw_ref.cases.len()];
                 for target in gotoedges {
-                    let (isdefault, outindex) =
+                    let (isdefault, outindex, basic) =
                         Self::switch_case_basic_coords(&switch_basic, &target);
                     if isdefault {
                         // The oracle's addCase tags this case isdefault (it
                         // prints `default:`); Rugra's BlockSwitch holds the
-                        // default in its own slot.
+                        // default in its own slot. The oracle still records
+                        // the CaseOrder entry; Rugra's separate default slot
+                        // never prints labels for it, so no order record is
+                        // needed (documented divergence, block.rs).
                         sw_ref.default_case = Some(target);
                         sw_ref.default_gototype = crate::block::goto_type::GOTO_GOTO;
                     } else {
@@ -6282,6 +6316,13 @@ impl<'a> CollapseStructure<'a> {
                         sw_ref
                             .case_values
                             .push(outindex.map(|j| vec![j as u64]).unwrap_or_default());
+                        // cc:3495 addCase for the goto arm: the CaseOrder
+                        // record with basicblock/outindex (chain stays -1 —
+                        // the arm is appended after the chain-fill loop).
+                        sw_ref.case_order.push(crate::block::CaseOrder::placeholder(
+                            basic,
+                            outindex.map(|j| j as i32).unwrap_or(-1),
+                        ));
                     }
                 }
                 let _ = numgoto;
@@ -6316,13 +6357,14 @@ impl<'a> CollapseStructure<'a> {
     /// `isdefault = switchbl->isDefaultBranch(outindex)` reading the basic
     /// edge label (installSwitchDefaults, funcdata_block.cc:687, lands on the
     /// basic graph; buildCopy duplicates labels into the copy graph, so both
-    /// sides agree). Returns `(isdefault, basic out-edge slot)`.
+    /// sides agree). Returns `(isdefault, basic out-edge slot, case basic
+    /// block)` — the basic block is `CaseOrder::basicblock` (block.hh:757).
     fn switch_case_basic_coords(
         switch_basic: &Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
         case_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
-    ) -> (bool, Option<usize>) {
+    ) -> (bool, Option<usize>, Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>) {
         let Some(switch_basic) = switch_basic else {
-            return (false, None);
+            return (false, None, None);
         };
         // cc:3500: const FlowBlock *basicbl = bl->getFrontLeaf()->subBlock(0);
         let case_basic = crate::block::front_leaf(case_block).and_then(|leaf| {
@@ -6332,7 +6374,7 @@ impl<'a> CollapseStructure<'a> {
                 .map(|c| c.original.clone())
         });
         let Some(case_basic) = case_basic else {
-            return (false, None);
+            return (false, None, None);
         };
         // cc:3506: int4 inindex = basicbl->getInIndex(switchbl);
         let rev = {
@@ -6353,7 +6395,7 @@ impl<'a> CollapseStructure<'a> {
         // switch") at inindex==-1 (cc:3507-3508); the multigoto path cannot
         // detach (basic edges persist), so None degrades to "no coords".
         let Some(rev) = rev else {
-            return (false, None);
+            return (false, None, Some(case_basic));
         };
         let outindex = if rev >= 0 {
             Some(rev as usize)
@@ -6365,7 +6407,126 @@ impl<'a> CollapseStructure<'a> {
             Some(j) => switch_basic.read().unwrap().is_default_branch(j),
             None => false,
         };
-        (isdefault, outindex)
+        (isdefault, outindex, Some(case_basic))
+    }
+
+    // Ghidra: block.cc:3524 BlockSwitch::grabCaseBasic
+    /// The CaseOrder recording half of `grabCaseBasic` (cc:3527-3546): for
+    /// each regular case component, resolve `CaseOrder::basicblock`
+    /// (`bl->getFrontLeaf()->subBlock(0)`, cc:3500) and `outindex`
+    /// (cc:3506-3509) on the underlying basic graph, build the casemap from
+    /// out-edge slot to case index (cc:3527/3532), then fill the fall-thru
+    /// `chain` links (cc:3536-3546) for case components already wrapped as
+    /// BlockGoto: the goto target's basic block, when it is another switch
+    /// case, links `chain = casemap[rev]`. Also resolves the ctor jumptable
+    /// (`jump = ind->getJumptable()`, block.cc:3488 via FlowBlock::
+    /// getJumptable block.cc:630-639: the BRANCHIND last-op looked up
+    /// against Funcdata's tables by op address). The multigoto goto-arm
+    /// (cc:3548-3553) is appended by the caller. RUGRA-GLUE: method on
+    /// CollapseStructure because the jumptables live on Funcdata, which the
+    /// oracle reaches through its FlowBlock back-pointer.
+    fn grab_case_order(
+        &self,
+        switch_block: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+        cases: &[Arc<RwLock<dyn FlowBlock + Send + Sync>>],
+        branchind_addr: Option<u64>,
+    ) -> (
+        Option<Arc<RwLock<crate::jumptable::JumpTable>>>,
+        Vec<crate::block::CaseOrder>,
+    ) {
+        // block.cc:3488 + block.cc:630-639: jump = ind->getJumptable().
+        let jump = branchind_addr.and_then(|addr| {
+            self.jump_tables
+                .iter()
+                .find(|jt| jt.read().unwrap().get_op_address().as_u64() == addr)
+                .cloned()
+        });
+        // cc:1912: switchbl = leafbl->subBlock(0) — the switch's basic block.
+        let switch_basic = crate::block::front_leaf(switch_block).and_then(|leaf| {
+            let r = leaf.read().unwrap();
+            r.as_any()
+                .downcast_ref::<crate::block::BlockCopy>()
+                .map(|c| c.original.clone())
+        });
+        let casemap_len = switch_basic
+            .as_ref()
+            .map(|b| b.read().unwrap().size_out())
+            .unwrap_or(0);
+        // cc:3527: vector<int4> casemap(switchbl->sizeOut(),-1);
+        let mut casemap: Vec<i32> = vec![-1; casemap_len];
+        let mut order: Vec<crate::block::CaseOrder> = Vec::with_capacity(cases.len());
+        for (i, case) in cases.iter().enumerate() {
+            let (_, outindex, basic) =
+                Self::switch_case_basic_coords(&switch_basic, case);
+            if let (Some(rev), Some(basic)) = (outindex, &basic) {
+                let _ = basic;
+                // cc:3532: casemap[caseblocks[i-1].outindex] = i-1;
+                if rev < casemap.len() {
+                    casemap[rev] = i as i32;
+                }
+            }
+            // cc:3498-3505 addCase init: label=0, depth=0, chain=-1.
+            order.push(crate::block::CaseOrder::placeholder(
+                basic,
+                outindex.map(|r| r as i32).unwrap_or(-1),
+            ));
+        }
+        // cc:3536-3546: fall-thru chaining — all fall-thru blocks are plain
+        // gotos at this point; the goto target resolves to another case's
+        // basic block via its in-edge from the switch block.
+        for (i, case) in cases.iter().enumerate() {
+            let is_goto = case.read().unwrap().get_type() == crate::block::BlockType::Goto;
+            if !is_goto {
+                continue;
+            }
+            // cc:3540: targetbl = ((BlockGoto *)casebl)->getGotoTarget();
+            let target = {
+                let r = case.read().unwrap();
+                r.as_any()
+                    .downcast_ref::<crate::block::BlockGoto>()
+                    .and_then(|g| g.target_dyn.clone())
+            };
+            let Some(target) = target else {
+                continue;
+            };
+            // cc:3541: basicbl = targetbl->getFrontLeaf()->subBlock(0);
+            let target_basic = crate::block::front_leaf(&target).and_then(|leaf| {
+                let r = leaf.read().unwrap();
+                r.as_any()
+                    .downcast_ref::<crate::block::BlockCopy>()
+                    .map(|c| c.original.clone())
+            });
+            let Some(target_basic) = target_basic else {
+                continue;
+            };
+            let Some(switch_basic) = &switch_basic else {
+                continue;
+            };
+            // cc:3542: inindex = basicbl->getInIndex(switchbl);
+            let rev = {
+                let tb = target_basic.read().unwrap();
+                let mut found = None;
+                for slot in 0..tb.size_in() {
+                    if let Some(e) = tb.get_in(slot) {
+                        if Arc::ptr_eq(&e.point, switch_basic) {
+                            found = Some(e.reverse_index);
+                            break;
+                        }
+                    }
+                }
+                found
+            };
+            // cc:3543: if (inindex == -1) continue; — goto target is not
+            // another switch case.
+            let Some(rev) = rev else {
+                continue;
+            };
+            if rev >= 0 && (rev as usize) < casemap.len() {
+                // cc:3544: curcase.chain = casemap[basicbl->getInRevIndex(inindex)];
+                order[i].chain = casemap[rev as usize];
+            }
+        }
+        (jump, order)
     }
 
     // Ghidra: blockaction.hh:46 LoopBody::collapseLoops
@@ -7043,10 +7204,13 @@ impl<'a> CollapseStructure<'a> {
             }
 
             let mut index_varnode = None;
+            let mut branchind_addr: Option<u64> = None;
             for op_ref in &ops {
                 let op = op_ref.0.read().unwrap();
                 if op.opcode == OpCode::CPUI_BRANCHIND && !op.inrefs.is_empty() {
                     index_varnode = Some(op.inrefs[0].clone());
+                    // block.cc:3488 ctor jumptable lookup input.
+                    branchind_addr = Some(op.get_seq_num().get_addr().as_u64());
                     break;
                 }
             }
@@ -7063,6 +7227,10 @@ impl<'a> CollapseStructure<'a> {
             let ctrl_idx = b.get_index();
             drop(b);
 
+            // block.cc:3524 grabCaseBasic CaseOrder recording + block.cc:3488
+            // ctor jumptable resolution for this installer path too.
+            let (jump, case_order) = self.grab_case_order(&block, &cases, branchind_addr);
+
             let switch_block: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
                 Arc::new(RwLock::new(BlockSwitch {
                     index: ctrl_idx,
@@ -7071,8 +7239,8 @@ impl<'a> CollapseStructure<'a> {
                     default_case: None,
                     case_gototypes: Vec::new(),
                     default_gototype: 0,
-                    jump: None,
-                    case_order: Vec::new(),
+                    jump,
+                    case_order,
                     case_values,
                     index_varnode,
                     incoming: Vec::new(),
@@ -7543,6 +7711,8 @@ impl<'a> CollapseStructure<'a> {
                 let dgt = sw.default_gototype;
                 let cv = sw.case_values.clone();
                 let iv = sw.index_varnode.clone();
+                let jmpz = sw.jump.clone();
+                let jo = sw.case_order.clone();
                 drop(b);
 
                 let new_sw: Arc<RwLock<dyn FlowBlock + Send + Sync>> =
@@ -7553,8 +7723,8 @@ impl<'a> CollapseStructure<'a> {
                         default_case: new_def,
                         case_gototypes: cgt,
                         default_gototype: dgt,
-                        jump: None,
-                        case_order: Vec::new(),
+                        jump: jmpz,
+                        case_order: jo,
                         case_values: cv,
                         index_varnode: iv,
                         incoming: Vec::new(),
@@ -8018,6 +8188,17 @@ impl Action for ActionFinalStructure {
         // markLabelBumpUp) and unconditionally returns 0. It never touches the
         // protected `count` member, so the fixture-observed count/apply/res
         // triple must stay 0 even when graph/IR mutations occur below.
+
+        // Ghidra blockaction.cc:2192: graph.finalizePrinting(data); —
+        // BlockGraph::finalizePrinting (block.cc:1364) recurses the tree and
+        // runs BlockSwitch::finalizePrinting (block.cc:3556-3592) on every
+        // switch component: the fall-thru depth passes, the chain-root label
+        // fill via JumpTable::numIndicesByBlock/getIndexByBlock/
+        // getLabelByIndex, the CaseOrder::compare stable sort, and the
+        // case_values materialization that printc's emit_structured_switch
+        // reads. cc:2191 orderBlocks is not yet ported (registered gap —
+        // Rugra's top-level list order is the collapse install order).
+        fd.sblocks.finalize_printing();
 
         // Ghidra blockaction.cc:2193: graph.scopeBreak(-1,-1);
         // Walk the structure tree (sblocks) reclassifying any unstructured

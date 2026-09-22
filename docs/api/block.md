@@ -1664,3 +1664,7 @@ BlockSwitch 补齐 Ghidra ctor/finalizePrinting 语义（block.cc:3485-3601）�
 fixture：tests/oracle/printc_switch_emit_1204.rs 字面量补
 `jump: None, case_order: Vec::new()`（行为不变，仅结构体字段跟进），
 metadata rust_fixture_sha256 重钉（e8f69bfc→81656ef8）。
+
+## 2026-09-22（续）：CaseOrder 补 Clone
+
+`CaseOrder` derive 补 `Clone`（collapse 期重建点需按位携带 caseblocks）。

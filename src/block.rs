@@ -7304,7 +7304,7 @@ impl BlockCondition {
 /// `label`/`depth`/`chain` drive `finalizePrinting`'s ordering passes
 /// (block.cc:3562-3591), and `outindex` is the basic-graph out-edge slot the
 /// dispatch uses to reach the case (block.cc:3509).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CaseOrder {
     /// The first basic-block to execute within the case block.
     pub basicblock: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
