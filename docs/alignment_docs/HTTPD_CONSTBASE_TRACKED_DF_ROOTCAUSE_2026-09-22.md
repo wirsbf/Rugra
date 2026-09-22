@@ -121,3 +121,24 @@ httpd 驱动没有任何 `decode_context_data` 调用点。curl 驱动已接
 - TrackedSetMap 跨 space 交错排序 caveat 已在 arch.rs 登记(SLEIGH-0002C/ADDRESS-0001),
   x86-64 单 ram 分区不受影响。
 - injectUponEntry 生产 -1(INJECT-0001),双侧同跳过。
+
+## 6. 修复验证(commit ea0f7a7,2026-09-22)
+
+1. **镜像对拍复跑**(观测构建 = BP 分支 3e34488 + 本修复,/dev/shm/rugra-tests/
+   sb-constbase/):修复前首分歧 `universal:constbase` stage 3 / op-line 3;
+   修复后 stage 3 SNAP 3 头部与 oracle 逐字节一致,含
+   `2b824:7f8 COPY d=0 out=n:register:20a:1 in=c:0:1`(ops 2040→2041,
+   register:20a 全投影出现次数 1456 = oracle 1456)。
+   **首分歧后移至 stage ordinal 5 `universal:extrapopsetup` op-line 68**:
+   oracle `2b864:7f9 INT_ADD out=n:register:20:8 in=n:register:20:8,c:8:8`
+   vs rugra `2b864:7f9 DELAY_SLOT out=n:register:20:8 in=n:register:20:8,
+   o:2b864:42`(callee extrapop 应用形态:INT_ADD vs DELAY_SLOT 伪 op,新的
+   待派发 lane 材料,cross_side_report_fixed.txt)。
+2. **httpd E2E**(release,29 函数):skeleton 2326 / defects 0 / numbering 0
+   ——与修复前基线(BP envoff_master 产物对 golden 同跑)完全一致;DF COPY 如
+   预期被死代码消除,无 register:20a 泄漏。
+3. **curl E2E**(release,124 函数):defects 0(0/124)/ numbering 0;
+   `--func next_url` 0/0,无回退(Phase 2 spot check)。
+4. 库层回归:`cargo test --lib -- constbase` 通过
+   (test_action_constbase_inserts_tracked_copy_at_entry_head)。
+
