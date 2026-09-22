@@ -329,6 +329,30 @@ output-locked/output-active guards 与 `addPush`。两者继续保守返回 fals
 确认它们尚未等价，但没有同输入双侧 fixture，证据状态为 `UNTESTED`，统一绑定
 已登记的 `CALLSPEC-0001`，不计入 D0 的 identity `MATCH` 投影。
 
+## 2026-09-22：SB-OPPOOL-R4-COUNT-0001 — `try_call_pull` 接线（D0 residual 消除之一）
+
+Phase 2 next_url 镜像态首分歧 ordinal 65（event-ordinal 60，
+`universal:fullloop:mainloop:stackstall:oppool1` apply 轮 4）result/count
+85(oracle) vs 77(rugra) 的根因落地：Rugra `try_call_pull` 在 CALLSPEC-0001
+D0 下无条件返回 false，凡 4 字节 lane 直达 CALL/CALLIND 参数槽的
+`RuleSubvarZext` 触发全部夭折（窗口内首例：ZEXT `5040:69a` 的 R9 lane 流入
+`505d:131` call free 的 R9D 槽，oracle 创建 `R9D(:803) = u:23d00:4(:11a)` 并
+parameter_patch 呼叫输入）。修复后 `try_call_pull` 1:1 执行
+subflow.cc:208-228 全体语义：slot==0 早退 → 非 aggressive 的
+`(consume & ~mask)!=0` 截断拒绝 → `get_call_specs_of_op`
+（funcdata.cc:484-497 fast path + 线性回退）→ `isInputActive` 拒绝 →
+`isInputLocked && !isDotdotdot` 拒绝 → `parameter_patch` PatchRecord +
+`pullcount += 1`（消费端 `do_replacement` 的 ParameterPatch 臂
+`op_set_input(pullop, invn, slot)` 已在位）。`try_call_return_push` 仍保留
+保守 false（indirect-creation trim 未被当前语料触发，绑定 CALLSPEC-0001）。
+
+验证（镜像态）：oppool1 四窗口应用计数 oracle/rugra = [863,85,15,12] 全等
+（修复前 [863,**77**,15,12]，差 8 = earlyremoval −4 / propagatecopy −2 /
+subvar_zext −2）；v1 投影首分歧由 ordinal 65 后移至 ordinal 159
+（`universal:fullloop:activereturn`，dead DELAY_SLOT `2534:5a4` 输入计数
+`-,-` vs `-`——master 同位置实测一致，属 pre-existing latent 家族，非本修复
+回归，移交 Phase 2 后续车道）。
+
 ## 2026-08-29：SUBFLOAT-TRANSFORM-NOT-PORTED-0001 — RuleSubfloatConvert 非常量路径改为 defer
 
 `RuleSubfloatConvert::applyOp`（subflow.cc:3489-3507）在 oracle 中构造完整
