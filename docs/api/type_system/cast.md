@@ -78,7 +78,7 @@ the integer cases: size 1→char/byte, 2→short, 4→int, 8→long (signed) /
 ulong (unsigned). Used by input-type-local to derive the type an op
 expects for its input slot (`TypeOpBinary::getInputLocal`, typeop.cc:329-333).
 
-### `pub fn cast_standard_full(&self, reqtype: &Datatype, curtype: &Datatype, care_uint_int: bool, care_ptr_uint: bool) -> Option<Arc<Datatype>>`
+### `pub fn cast_standard_full(&self, reqtype: &Arc<Datatype>, curtype: &Arc<Datatype>, care_uint_int: bool, care_ptr_uint: bool) -> Option<Arc<Datatype>>`
 
 Faithful 1:1 port of Ghidra `CastStrategyC::castStandard` (cast.cc:300-392).
 Determines whether an explicit cast is required when a varnode of
@@ -86,6 +86,15 @@ Determines whether an explicit cast is required when a varnode of
 
 - Returns `Some(reqtype)` if a cast IS needed (caller inserts CPUI_CAST),
   or `None` if no cast is needed.
+
+2026-09-23 identity 语义修正（MATCHURL-SETCASTS-337-0001）：签名改为
+`&Arc<Datatype>`，返回值 `Arc::clone(reqtype)` 保留调用方传入的 interned
+对象身份（Ghidra 返回同一 interned `Datatype*`，cast.cc:303/307/392）；
+开头的 `curtype == reqtype` 与剥层后的 `curbase == reqbase`
+（cast.cc:302/329）用 `Arc::ptr_eq` 镜像。旧实现把两侧参数包进
+`Arc::new(reqtype.clone())` 新对象，恒不等，下游依赖 interned 身份的
+比较（如 castOutput 的 token==outHigh 短路，coreaction.cc:2544）永远
+失效。
 - `care_uint_int` — if true, distinguish signed/unsigned (under pointers);
   if false, treat int/uint interchangeably (most arithmetic ops).
 - `care_ptr_uint` — if true, casting a pointer to an integer needs a cast

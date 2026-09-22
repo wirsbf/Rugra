@@ -1369,7 +1369,15 @@ impl Varnode {
             return false;
         }
         self.v_type = Some(ct);
-        // typeDirty on high — no-op until HighVariable tracks dirtiness.
+        // cc:461-463: `if (high != (HighVariable *)0) high->typeDirty();` —
+        // the instance-type write must invalidate the HighVariable's cached
+        // type so the next HighVariable::getType (variable.hh:174 →
+        // variable.cc:400-415) re-derives from the type representative.
+        // HighVariable now tracks TYPEDIRTY, so the former "no-op until
+        // HighVariable tracks dirtiness" placeholder is retired.
+        if let Some(high) = &self.high {
+            high.write().unwrap().type_dirty();
+        }
         true
     }
 
@@ -1399,6 +1407,11 @@ impl Varnode {
             self.set_flags(varnode_flags::TYPELOCK);
         }
         self.v_type = Some(ct);
+        // cc:500-501: same high typeDirty as updateType — the locked write
+        // also invalidates the HighVariable's cached type.
+        if let Some(high) = &self.high {
+            high.write().unwrap().type_dirty();
+        }
         true
     }
 

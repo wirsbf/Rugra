@@ -71,6 +71,38 @@ infertypes 派发 40 个 INT_ADD，但当前各 ADD 输出临时类型为 Int �
   的 typedef 输出走 force 判定），17→19 records 与锁定 oracle 字节一致（负控：
   修复前该 case 双侧分叉——Rugra 误插 CAST）。
 
+## 2026-09-23：ActionSetCasts 类型读路径/token 工厂化/shift metain（MATCHURL-SETCASTS-337-0001）
+
+- `cast_output`（cc:2532-2616）类型读全部改走忠实 getter：LOAD token 臂的
+  in1 用 `get_high_type_read_facing(&op,1)`（typeop.cc:473）、outHigh 用
+  `HighVariable::get_type()`（cc:2543）——配合 varnode.rs 的
+  update_type→typeDirty 修复，同 Action 内的 updateType 立即可见；插入路径
+  的 `vn->updateType(tokenct)`（cc:2596）与 castInput 的
+  `vnout->updateType(ct)`（cc:2706）从裸 `v_type =` 写改为 `update_type`
+  调用。
+- `cast_output` token 工厂化：fallback 臂与 CALL/CALLIND 臂的
+  `base_type_for`（未 interned 的 "long"/"ulong" 名）改为经
+  `TypeFactory::get_base`（typeop.cc:261-265 的
+  `tlst->getBase(size,metatype)`）——SLEIGH 核心表下得到 interned
+  `int8`/`uint8`/`undefined8`，token 参与 interned 身份比较
+  （coreaction.cc:2544）与 oracle 一致；detached fixture 无 factory 时
+  保留 base_type_for 兜底。
+- `output_metatype` 表补齐 TypeOpBinary/Unary/Func 构造器注册的
+  metatype（typeop.cc:925-2566）：XOR/AND/OR/DIV/REM/NEGATE/ZEXT →
+  Uint，FLOAT 算术族 → Float，PIECE/SUBPIECE/INSERT → Unknown
+  （此前 `_ => Int` 全部按有符号处理）。
+- 新增 shift 族输出 token 臂：INT_LEFT/INT_RIGHT/INT_SRIGHT 的
+  `getOutputToken` 覆写（typeop.cc:1518/1558/1608）= in0 high
+  read-facing，bool 降级为 factory int 基型——不走 metatype 表。
+- `shift_input_cast`（typeop.cc:1543-1566/1589-1606）reqtype 从硬编码
+  Int 改为按 op metain（INT_RIGHT=TYPE_UINT cc:1528、
+  INT_SRIGHT=TYPE_INT cc:1568，`op->inputTypeLocal(slot)` 语义）。
+- `load_input_cast`/`store_input_cast` 的 req/cur 读改走
+  `get_high_type_def_facing`/`get_high_type_read_facing`
+  （typeop.cc:444/446/525/527）。
+- 验证：match_url Phase 2 投影 **MATCH**（340 stages/80385 ops，
+  首分歧 337→全量一致）；next_url 投影 MATCH 保持。
+
 ## 2026-08-30：castOutput 完整臂 + castInput guard/const/explicit（PTRSUB-SWITCH-CAST-RESIDUAL-0001 steps 3+4）
 
 - `cast_output`（cc:2532-2616）：token 分发补 PTRADD 臂（typeop.cc:2244 = in0 high
