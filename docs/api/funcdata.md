@@ -1,18 +1,5 @@
 # `funcdata.rs` API Reference
 
-## 2026-09-23：spacebase TypeSpacebase 挂载重启(v3 step1,wt/sb-loadchain)
-
-`Funcdata::spacebase` 重启 funcdata.cc:263-264 尾:输入 SP 寄存器按
-`getTypeSpacebase(Some(Stack), entry)` + `getTypePointer(sb_size, ct, wordsize=1)`
-构造指针类型并以 `update_type_lock(ptr, true, true)` 挂锁(VARGROUP-ABSORB-0001 v3)。
-驱动 = 调用点 opStackLoad LOAD 存活语义车道根因:SP 输入无指针类型时,
-oppool2 的 RulePtrArith 无法把折叠后的 `INT_ADD(SP-input, c)` 转 PTRSUB
-(oracle 最终 SP 形态全部为 `RSP(i) -> #c`),loadvarnode 的 vnSpacebase
-INT_ADD-only 守卫(ruleaction.cc:4208)失效路径被放开;同时
-`ActionInferTypes::propagateSpacebaseRef`(coreaction.cc:5265,接收端已移植)
-依赖该挂载识别 SP 输入。v2 撤回时的 config 域漂移由 v3 commit 的
-glob_set/glob_range A/B 重新门控。
-
 ## 2026-09-22：spacebase 类型挂载与 setVarnodeProperties localmap 腿(撤回,改由 heritage 侧承接)
 
 VARGROUP-ABSORB-0001 第一版(commit a77d6c02)曾在此两处落子:`spacebase()` 给 SP 输入寄存器挂
