@@ -251,7 +251,16 @@
 > 同根因 register addrSize)**。E2E 三门禁见 docs/api/{space,heritage,subflow}.md
 > 同日条目。
 > **CR-orderBlocks 绑定条件履行(2026-09-22,root)**: 新登记
-> **CN 集成(2026-09-22,root)**: minimalmask 整字节阶梯(address.hh:525-534)修复
+> **CN 集成(2026-09-22,root)+双重复核纠偏**: minimalmask 整字节阶梯修复合并(双语料
+> 字节恒等=语料中性,潜伏语义缺口真实闭合)。**双 CR 纠偏登记**(第二独立复核更严):
+> ①commit message 的"httpd under-consumed"因果叙述=作者自归因,以 lane report §2
+> 为准(diff=0,+2 与 minimalmask 无关);②**CR-CH 条件③(httpd +2)在 master 上 moot**
+> ——root 证据:CH 合并时 httpd 与合并前字节恒等,+2 是 CH 分支本地(基于 pre-CE
+> 基线)现象,从未进入 master;真凶排查不需要重开(master 无此症状);③DEADCODE-
+> SELFLOOP-0001 的 minimalmask 残项措辞更新: callee 已忠实,B2 fixture(CP 在途)
+> 前保持 NO_ORACLE/UNTESTED;④coveringmask 行号勘误 address.cc:760→800。
+
+
 > 合并,双语料字节恒等(语料中性,CR-CN 评审亲跑门禁确认);**JUMPTABLE-HYGIENE-0001
 > 交叉引用**: foldInNormalization 的 minimalmask 轴已由 7049549b 关闭(独立预存
 > 缺口,非 AC 移植错——调用点本就忠实,被共享 helper 暗中破坏),coreaction 侧
