@@ -134,11 +134,13 @@ httpd 驱动没有任何 `decode_context_data` 调用点。curl 驱动已接
    vs rugra `2b864:7f9 DELAY_SLOT out=n:register:20:8 in=n:register:20:8,
    o:2b864:42`(callee extrapop 应用形态:INT_ADD vs DELAY_SLOT 伪 op,新的
    待派发 lane 材料,cross_side_report_fixed.txt)。
-2. **httpd E2E**(release,29 函数):skeleton 2326 / defects 0 / numbering 0
-   ——与修复前基线(BP envoff_master 产物对 golden 同跑)完全一致;DF COPY 如
-   预期被死代码消除,无 register:20a 泄漏。
-3. **curl E2E**(release,124 函数):defects 0(0/124)/ numbering 0;
-   `--func next_url` 0/0,无回退(Phase 2 spot check)。
+2. **httpd E2E**(release,29 函数):skeleton 2326 / defects 0 / numbering 0。
+   修复前后对照:以 31bc1e0 干净构建(master-before,无本修复)重跑,
+   **输出逐字节相同**(`cmp` clean)——DF COPY 如预期被死代码消除,无
+   register:20a 泄漏,skeleton 增减 = 0。
+3. **curl E2E**(release,124 函数):defects 0(0/124)/ numbering 0,
+   skeleton 3304(修复前后逐字节相同);`--func next_url` 0/0 且函数体
+   逐字节相同(Phase 2 spot check,无回退)。
 4. 库层回归:`cargo test --lib -- constbase` 通过
    (test_action_constbase_inserts_tracked_copy_at_entry_head)。
 
