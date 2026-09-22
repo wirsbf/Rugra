@@ -789,8 +789,12 @@ impl Merge {
         // faithful no-op (no CONCAT machinery).
         self.merge_required(fd);
 
-        // Compute liveness covers (Ghidra calculateCover). Must run after the
-        // required merges so the speculative passes see final instance sets.
+        // Compute liveness covers for the live varnode population. The
+        // oracle has no eager Merge pass here — covers rebuild lazily via
+        // Varnode::getCover()/updateCover (varnode.cc:233) — this eager
+        // materialization runs the identical Cover::rebuild product
+        // (cover.cc:477) once, after required merges finalize the
+        // instance sets the speculative passes will read.
         self.compute_varnode_covers(fd);
 
         // Step 4: MergeMultiEntry (faithful no-op without symbol machinery).
@@ -2349,7 +2353,8 @@ impl Merge {
                     };
                     let Some(high_in) = high_in else { continue };
                     // mergeTestRequired — pure property test, no cover check
-                    if !self.merge_test_required(&high_out, &high_in) {
+                    let req_ok = self.merge_test_required(&high_out, &high_in);
+                    if !req_ok {
                         continue;
                     }
                     // merge(high_out, high_in, false) — cover intersection
@@ -4416,24 +4421,34 @@ impl Merge {
         self.detach(fd);
     }
 
-    // Ghidra: merge.hh:83 Merge::computeVarnodeCovers
-    /// Populate `vn.cover` for every writable varnode from its def op and
-    /// reader ops. Mirrors Ghidra's `Varnode::calculateCover` /
-    /// `HighVariable::updateCover`. Constants and annotations are skipped.
+    // Ghidra: varnode.cc:233 Varnode::updateCover
+    /// Materialize `vn.cover` for every live/input varnode as the exact
+    /// product of the oracle's lazy cover machinery. Ghidra has NO eager
+    /// cover pass inside Merge: covers are allocated by `Varnode::calcCover`
+    /// (varnode.cc:254-263) at assign time (`Funcdata::setVarnodeProperties`
+    /// / `assignHigh`, funcdata_varnode.cc:38-41/52-53) and rebuilt lazily
+    /// by `Varnode::updateCover` (varnode.cc:233-241) on the first
+    /// `getCover()` read after any `coverdirty` mutation.
     ///
-    /// Cover semantics per block (matching Ghidra):
-    ///   - def in block, also used in block → `[def_order, last_use_order]`
-    ///   - def in block, no use in block but read in a later block →
-    ///     `[def_order, MAX]` (live-out); no reads anywhere → point
-    ///     `[def_order, def_order]` (oracle Cover::rebuild encoding)
-    ///   - no def in block, used in block → `[0, last_use_order]` (live-in)
-    ///   - no def, no use in block → no cover entry
+    /// The oracle Cover shape (cover.cc:477-496 `Cover::rebuild` +
+    /// `addDefPoint`/`addRefPoint`/`addRefRecurse`, cover.cc:501-612):
+    ///   - def block: `[def, end-of-block]` once any read lives elsewhere;
+    ///     `[def, def]` point when there are no reads;
+    ///   - every block on ANY predecessor path from a read back toward the
+    ///     def is filled FULLY (`addRefRecurse` setAll + backward
+    ///     recursion over `bl->getIn(j)`) — the cover is reconstructed by
+    ///     walking the CFG BACKWARD from each read, never forward over
+    ///     successors;
+    ///   - a MULTIEQUAL read only pulls cover through the incoming edges
+    ///     whose slot actually reads the varnode (cover.cc:604-607);
+    ///   - input varnodes plant the input marker at block 0
+    ///     (cover.cc:514-518).
     ///
-    /// After per-block computation, covers are propagated forward through
-    /// the CFG: any live-out block's successors get `[0, MAX]` entries
-    /// (transitively live). This is conservative but correct — it may
-    /// block some valid merges (if the varnode doesn't actually flow to
-    /// ALL successors) but never allows invalid merges.
+    /// This pass runs the same rebuild eagerly at one pipeline point.
+    /// `Cover::rebuild` is a pure function of the varnode's def/descendant/
+    /// CFG state, so forcing the COVERDIRTY flag before rebuilding yields
+    /// the oracle state even if a Rugra mutation path misses setting the
+    /// flag (the oracle's own rebuild always clears it afterward).
     pub fn compute_varnode_covers(&mut self, fd: &mut Funcdata) {
         let vn_arcs: Vec<Arc<RwLock<Varnode>>> = fd.vbank.loc_tree
             .iter()
@@ -4445,86 +4460,28 @@ impl Merge {
             .collect();
 
         for vn_arc in vn_arcs {
-            let skip = {
-                let vn = vn_arc.read().unwrap();
-                vn.flags & (varnode_flags::CONSTANT | varnode_flags::ANNOTATION) != 0
-            };
-            if skip {
-                continue;
-            }
-
-            let mut events: Vec<(i32, u32, bool)> = Vec::new();
-
-            if let Some(def_op) = vn_arc.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
-                if let Some((bi, order)) = op_block_order(&def_op) {
-                    events.push((bi, order, true));
-                }
-            }
-
-            let reader_arcs: Vec<_> = {
-                let vn = vn_arc.read().unwrap();
-                vn.descend.iter().filter_map(|w| w.upgrade()).collect()
-            };
-            for reader_arc in reader_arcs {
-                if let Some((bi, order)) = op_block_order(&reader_arc) {
-                    events.push((bi, order, false));
-                }
-            }
-
-            let mut by_block: std::collections::BTreeMap<i32, (Option<u32>, Option<u32>)> =
-                std::collections::BTreeMap::new();
-            for (bi, order, is_def) in events {
-                let entry = by_block.entry(bi).or_insert((None, None));
-                if is_def {
-                    entry.0 = Some(order);
+            // Ghidra: funcdata_varnode.cc:52-53 assignHigh /
+            // :38-41 setVarnodeProperties — `if (vn->hasCover())
+            // vn->calcCover();` (hasCover excludes constants/annotations).
+            let materialize = {
+                let mut vn = vn_arc.write().unwrap();
+                if !vn.has_cover() {
+                    false
                 } else {
-                    entry.1 = Some(entry.1.map_or(order, |existing| existing.max(order)));
+                    if vn.cover.is_none() {
+                        vn.calc_cover();
+                    }
+                    vn.flags |= varnode_flags::COVERDIRTY;
+                    true
                 }
-            }
-
-            let mut cover = Cover::new();
-            // Highest block index holding a read event (for the live-out
-            // rule below).
-            let max_reader_block = by_block
-                .iter()
-                .filter_map(|(bi, (_, last))| last.map(|_| *bi))
-                .max();
-            for (bi, (def_order, last_ref)) in by_block {
-                let start = def_order.unwrap_or(0);
-                // A def with no in-block read: if a LATER block reads the
-                // varnode it is live-out here -> [def, MAX] (Ghidra
-                // Cover::rebuild's successor fill, e.g. P defined in b0 and
-                // read in b1); with no reads anywhere it is the POINT
-                // [def, def] the locked 12.0.4 fixture observes for
-                // def-no-read Varnodes (tA/tB/tC). The previous
-                // unconditional [def, MAX] diverged on the zero-reader case.
-                let end = match last_ref {
-                    Some(last) => last,
-                    None => match max_reader_block {
-                        Some(max_bi) if max_bi > bi => u32::MAX,
-                        _ => start,
-                    },
-                };
-                let cb = cover.blocks.entry(bi).or_insert_with(CoverBlock::new);
-                // Setter form keeps the pointer-identity domain (start_id/
-                // end_id) in sync with the u32 projection fields.
-                cb.set_begin(start);
-                cb.set_end(end);
-            }
-
-            // NOTE: We intentionally do NOT propagate covers through CFG
-            // successors (unlike an earlier version). Ghidra's Cover is a
-            // precise def->use range (cover.cc), not a forward reachability
-            // over-approximation. Propagating live-out to ALL successors as
-            // [0, MAX] made covers cover the whole CFG, which broke
-            // ActionMarkImplied's inflateTest (every input intersected) and
-            // over-blocked merge_by_cover. Precise def/use ranges are correct.
-
-            let mut vn = vn_arc.write().unwrap();
-            if cover.blocks.is_empty() {
-                vn.cover = None;
-            } else {
-                vn.cover = Some(Box::new(cover));
+            };
+            if materialize {
+                // Ghidra: varnode.cc:233 Varnode::updateCover →
+                // cover.cc:477 Cover::rebuild (backward fill through
+                // predecessors, MULTIEQUAL slot precision, INDIRECT marker
+                // ordering) — the faithful path already implemented by
+                // Cover::rebuild_from_root_snapshot.
+                Varnode::update_cover_locked(&vn_arc);
             }
         }
     }
@@ -4568,92 +4525,6 @@ fn aggregate_high_cover_from(high: &HighVariable) -> Cover {
         }
     }
     agg
-}
-
-// Ghidra: merge.hh:83 Merge::opBlockOrder
-fn op_block_order(op_arc: &Arc<RwLock<crate::op::PcodeOp>>) -> Option<(i32, u32)> {
-    let op = op_arc.read().unwrap();
-    let order = op.start.get_order();
-    let block_idx = op
-        .parent
-        .as_ref()
-        .and_then(|weak| weak.upgrade())
-        .map(|blk_arc| blk_arc.read().unwrap().get_index());
-    block_idx.map(|bi| (bi, order))
-}
-
-// Ghidra: merge.hh:83 Merge::propagateCoverThroughCfg
-/// Forward-propagate cover entries through the CFG. For each block whose
-/// cover extends to end-of-block (`end == u32::MAX`, meaning live-out),
-/// all successor blocks that don't already have a cover entry get filled
-/// with `[0, MAX]` (transitively live). Iterates to fixed point.
-///
-/// This is conservative: a varnode might not actually flow to EVERY
-/// successor (e.g., conditional branches). Over-approximating liveness
-/// is safe — it blocks some valid merges but never allows invalid ones.
-#[allow(dead_code)] // disabled: over-conservative CFG propagation broke inflateTest
-fn propagate_cover_through_cfg(cover: &mut Cover, fd: &Funcdata) {
-    if cover.blocks.is_empty() {
-        return;
-    }
-
-    // Build block_idx → successor block_idx map from the CFG.
-    // BlockGraph stores blocks by index; FlowBlock::get_out gives edges.
-    let mut successors: std::collections::HashMap<i32, Vec<i32>> = std::collections::HashMap::new();
-    for i in 0..fd.bblocks.get_size() {
-        if let Some(blk_arc) = fd.bblocks.get_block(i) {
-            let blk = blk_arc.read().unwrap();
-            let blk_idx = blk.get_index();
-            let mut succs = Vec::new();
-            for slot in 0..blk.size_out() {
-                if let Some(edge) = blk.get_out(slot) {
-                    succs.push(edge.point.read().unwrap().get_index());
-                }
-            }
-            successors.insert(blk_idx, succs);
-        }
-    }
-
-    // Worklist of blocks that are live-out and need their successors filled.
-    let mut worklist: Vec<i32> = cover
-        .blocks
-        .iter()
-        .filter(|(_, cb)| cb.end == u32::MAX)
-        .map(|(idx, _)| *idx)
-        .collect();
-
-    while let Some(bi) = worklist.pop() {
-        let Some(succs) = successors.get(&bi) else {
-            continue;
-        };
-        for succ_idx in succs {
-            let already_full = cover
-                .blocks
-                .get(succ_idx)
-                .map(|cb| cb.start == 0 && cb.end == u32::MAX)
-                .unwrap_or(false);
-            if already_full {
-                continue;
-            }
-
-            // If the successor already has a cover entry with a real range
-            // (start > 0 or end < MAX), the varnode is actually def'd/used
-            // there — don't overwrite. Only fill empty entries.
-            let has_real_entry = cover.blocks.contains_key(succ_idx);
-            if has_real_entry {
-                continue;
-            }
-
-            let cb = cover
-                .blocks
-                .entry(*succ_idx)
-                .or_insert_with(CoverBlock::new);
-            // Full-block fill via the setAll setter (identity domain sync).
-            cb.set_all();
-            // This new full-block entry is itself live-out; queue it.
-            worklist.push(*succ_idx);
-        }
-    }
 }
 
 /// Represents a varnode within a specific block for merging purposes.
@@ -4863,6 +4734,124 @@ mod tests {
             !Arc::ptr_eq(&rdi_high, &rsi_high),
             "RDI and RSI are independent parameters and must not share a HighVariable"
         );
+    }
+
+    /// `compute_varnode_covers` must materialize the oracle `Cover::rebuild`
+    /// product (cover.cc:477-496): a def in b0 read in b2 through an empty
+    /// intermediate b1 produces
+    ///   b0: [def, end-of-block]   (addRefRecurse extends the stop, cc:542-543)
+    ///   b1: full [begin, end]     (intermediate block setAll, cc:531-536)
+    ///   b2: [begin, read]         (addRefPoint setEnd, cc:574-575)
+    /// The pre-fix events approximation produced ONLY {b0: [def,MAX],
+    /// b2: [0,read]} — the intermediate block never received cover.
+    ///
+    /// Layout (stride 0x10 per op):
+    ///   b0 @0x1000: cmp; t=COPY(RDI); CBRANCH→0x1040
+    ///   b1 @0x1030: BRANCH→0x1040        (pure intermediate block)
+    ///   b2 @0x1040: STORE(...,t); RETURN  (read block)
+    #[test]
+    fn test_compute_varnode_covers_backfills_intermediate_blocks() {
+        let mut fd = Funcdata::new("cover_backfill", Address::new(0x1000), 0x80);
+
+        let mut cmp_zf = PcodeOpRaw::new(OpCode::CPUI_INT_EQUAL as i32);
+        cmp_zf.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8)); // RDI
+        cmp_zf.add_input(VarnodeRaw::new(AddressSpace::Register, 0x30, 8)); // RSI
+        cmp_zf.set_output(VarnodeRaw::new(AddressSpace::Register, 0x206, 1)); // ZF
+
+        let mut copy_t = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+        copy_t.set_output(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8));
+        copy_t.add_input(VarnodeRaw::new(AddressSpace::Register, 0x38, 8)); // RDI
+
+        let mut cbranch = PcodeOpRaw::new(OpCode::CPUI_CBRANCH as i32);
+        cbranch.add_input(VarnodeRaw::new(AddressSpace::Ram, 0x1040, 8)); // → b2
+        cbranch.add_input(VarnodeRaw::new(AddressSpace::Register, 0x206, 1)); // ZF
+
+        let mut goto_b2 = PcodeOpRaw::new(OpCode::CPUI_BRANCH as i32);
+        goto_b2.add_input(VarnodeRaw::new(AddressSpace::Ram, 0x1040, 8)); // → b2
+
+        let mut store = PcodeOpRaw::new(OpCode::CPUI_STORE as i32);
+        store.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+        store.add_input(VarnodeRaw::new(AddressSpace::Register, 0x18, 8)); // RAM ptr
+        store.add_input(VarnodeRaw::new(AddressSpace::Unique, 0x100, 8)); // reads t
+
+        let mut ret = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
+
+        fd.inject_raw_ops(&[cmp_zf, copy_t, cbranch, goto_b2, store, ret]);
+        fd.bblocks.build_dom_tree();
+        fd.run_heritage_direct();
+
+        let mut merge = Merge::new();
+        merge.merge_all(&mut fd);
+
+        // Locate t by (Unique, 0x100) — SSA/merge passes keep unique-space
+        // identity stable.
+        let t_vn = fd
+            .vbank
+            .loc_tree
+            .iter()
+            .find(|r| {
+                let v = r.0.read().unwrap();
+                v.address_space == AddressSpace::Unique
+                    && v.loc.to_space_address().get_offset() == 0x100
+                    && v.size == 8
+            })
+            .map(|r| r.0.clone())
+            .expect("unique temp t should exist");
+
+        let cover = t_vn
+            .read()
+            .unwrap()
+            .cover
+            .clone()
+            .expect("t must have a materialized cover after compute_varnode_covers");
+        let copy_op_def = t_vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+        let (def_blk, def_order) = {
+            let op_arc = copy_op_def.expect("t must keep its COPY def");
+            let op = op_arc.read().unwrap();
+            let blk_arc = op.parent.as_ref().and_then(|w| w.upgrade()).expect("def parent");
+            let idx = blk_arc.read().unwrap().get_index();
+            (idx, op.start.get_order())
+        };
+
+        // Exactly three blocks hold cover: the def block, the intermediate,
+        // the read block.
+        assert_eq!(
+            cover.blocks.len(),
+            3,
+            "def + intermediate + read blocks must all hold cover (got {:?})",
+            cover.blocks.keys().collect::<Vec<_>>()
+        );
+
+        // Def block: [def_order, MAX] — extended to end-of-block by
+        // addRefRecurse (cover.cc:542-543).
+        let def_cb = cover.blocks.get(&def_blk).expect("def block cover");
+        assert_eq!(def_cb.start, def_order);
+        assert_eq!(def_cb.end, u32::MAX, "def block extends to end-of-block");
+
+        // Intermediate block (b1, the pure BRANCH block): FULL [0, MAX]
+        // (cover.cc:531-536 setAll + predecessor recursion).
+        let full_blocks: Vec<i32> = cover
+            .blocks
+            .iter()
+            .filter(|(_, cb)| cb.start == 0 && cb.end == u32::MAX)
+            .map(|(idx, _)| *idx)
+            .collect();
+        assert_eq!(
+            full_blocks.len(),
+            1,
+            "exactly one intermediate block must be fully covered"
+        );
+
+        // Read block: [0, read_order] with read_order < MAX (the STORE).
+        let read_blocks: Vec<(i32, u32)> = cover
+            .blocks
+            .iter()
+            .filter(|(idx, cb)| **idx != def_blk && !(cb.start == 0 && cb.end == u32::MAX))
+            .map(|(idx, cb)| (*idx, cb.end))
+            .collect();
+        assert_eq!(read_blocks.len(), 1, "exactly one read block");
+        assert!(read_blocks[0].1 != u32::MAX, "read block ends at the read op, not end-of-block");
+        assert!(read_blocks[0].1 > 0, "read block spans from begin to the read op");
     }
 
     /// `merge_marker` (ActionMergeRequired, merge.cc:889) must force-merge the

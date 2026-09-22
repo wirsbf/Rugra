@@ -117,10 +117,21 @@ Perform the full merging + naming pipeline. Phase order:
    PcodeOpTree order into offset-aware `VariableGroup`s (merge.cc:967-976,
    1374-1407), allowing
    structured pointer expressions to use the root HighVariable.
-5. `compute_varnode_covers` → per-Varnode liveness covers (precise def→use
-   range, NOT propagated through CFG successors — that over-approximation
-   broke ActionMarkImplied's inflateTest; `propagate_cover_through_cfg` is
-   now `#[allow(dead_code)]` disabled)
+5. `compute_varnode_covers` → materialize per-Varnode liveness covers as the
+   exact product of the oracle's lazy machinery: allocate via `calc_cover`
+   (varnode.cc:254-263, the `Funcdata::setVarnodeProperties`/`assignHigh`
+   call sites), force `COVERDIRTY`, then rebuild through
+   `Varnode::update_cover_locked` → `Cover::rebuild` (cover.cc:477-496) —
+   the backward fill from every read through CFG predecessors
+   (`addRefPoint`/`addRefRecurse`, cover.cc:524-612) with MULTIEQUAL
+   per-slot precision. Ghidra has no eager Merge pass here (covers rebuild
+   lazily on first `getCover()`); eager materialization at this one pipeline
+   point yields the identical state because `Cover::rebuild` is a pure
+   function of def/descendants/CFG. The self-invented successor
+   `[0,MAX]` propagator (`propagate_cover_through_cfg`) and its events-based
+   predecessor (def/read blocks only, index-order live-out heuristic) are
+   both removed; shape regression pinned by
+   `test_compute_varnode_covers_backfills_intermediate_blocks`.
 
 `protoPartial` ordering evidence: Ghidra registers roots from the ordered
 `ActionPool::processOp` traversal (`action.cc:822`), and `groupPartials`
@@ -822,3 +833,28 @@ Varnode::updateCover → cover->rebuild）。跳过它导致聚合 cover 恒为�
 `Merge::mergeOp → trimOpInput`（merge.cc:692）恢复对 phi(X,f(X)) 的 lane 裁剪 —— 在 phi
 每个入边块尾插 COPY（CMOVcc 惯用法的分支内实例化，curl main/my_get_line/file2string 共
 6 处空 if 全部恢复 if 体）。双侧 oracle fixture：tests/oracle/merge_trim_lane_1204.*。
+
+### 2026-09-22：MERGE-COPYNOISE-DIFFHIGH-0001 — compute_varnode_covers 换轨为 oracle 惰性机之积极物化
+`compute_varnode_covers` 的 events 式近似实现（def 块 + 读块直算、`max_bi > bi`
+索引序 live-out 启发式、无中间块回填、无 MULTIEQUAL 槽位精度）整体删除，
+改为物化 oracle 惰性机的产物：`has_cover()` 门 + 缺失时 `calc_cover()`
+（varnode.cc:254-263，funcdata_varnode.cc:38-41/52-53 调用位）→ 置
+COVERDIRTY → `Varnode::update_cover_locked`（varnode.cc:233 →
+cover.cc:477 `Cover::rebuild` 前驱回填）。死代码
+`propagate_cover_through_cfg`（自创 successor [0,MAX] 填充，先前已禁用）
+与 `op_block_order`（仅近似实现使用）一并移除；`merge.hh:83
+Merge::computeVarnodeCovers` 错注更正为 `varnode.cc:233
+Varnode::updateCover`。形状回归测试
+`test_compute_varnode_covers_backfills_intermediate_blocks` 钉住
+def 块 [def,end] / 中间块全块 / 读块 [begin,read] 的 oracle 形状
+（旧近似下中间块永无 cover，该测试必败）。
+
+**实证边界（B2 状态如实）**：`merge_all`/`compute_varnode_covers` 在生产
+管线零调用（coreaction.rs 走逐 Action 细粒度路径，与 oracle 同构）——
+本改动 E2E byte-identical（curl+httpd，defects=0/numbering=0），生产行为
+零变化；函数级 NO_ORACLE（无真实 oracle 对拍，仅单测形状断言 +
+E2E 不变性证据）。COPY 噪声真根因不在 cover 范围层：探针（/dev/shm/
+rugra-tests/sb-copynoise/）测得 CopyMarker 时 1957 个 diff-high 幸存 COPY
+中 1531 个的一侧为 implied（mergeTestBasic 正确拒绝），仅 ~312 ok/ok 对
+未被合并 —— 主杠杆移至 MarkImplied×打印折叠（printc lane）与 ok/ok 对
+的 req/inter/重分裂排查，已在 TODO_BOARD 重新登记。
