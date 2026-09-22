@@ -99,3 +99,12 @@ those branches are faithful no-ops.
 
 
 <!-- annotation-pass: 2026-07-04 -->
+
+## 2026-09-22：int_promotion_type 可见性 pub（SB-ORD332-SETCASTS-0001）
+
+`CastStrategyC::int_promotion_type`（cast.cc:178）可见性 private → pub：
+coreaction.rs 的 ActionSetCasts::cast_input 新移植的 getInputCast 覆写臂
+（TypeOpIntRight/Sright slot0 的 UNSIGNED/SIGNED_EXTENSION 门、TypeOpIntZext/
+Sext 的 checkIntPromotionForExtension、TypeOpIntDiv/Sdiv/Rem/Srem 的同族门）
+直接消费该扩展码，与 CastStrategyC 自家 checkIntPromotionForCompare_op 同一
+访问层级。语义零改动（纯可见性）。

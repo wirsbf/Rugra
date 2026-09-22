@@ -1002,6 +1002,52 @@ pub fn propagate_to_pointer(alt_type: &Arc<Datatype>) -> Arc<Datatype> {
     Arc::new(Datatype::Pointer(TypePointer::new(sz, pointee, 1)))
 }
 
+/// Faithful `TypeOp::propagateToPointer` (typeop.cc:186-198): the POINTER is
+/// sized by the propagation edge's destination varnode (`sz` — the LOAD/STORE
+/// callers pass `outvn->getSize()` at typeop.cc:495/565), NOT by the alttype,
+/// and the product is factory-INTERNED via `t->getTypePointer(sz,dt,wordsz)`
+/// so pointer-identity comparisons (`TypeOpStore::getInputCast` cc:546-548)
+/// see the canonical instance. A pointer alttype is demoted to an unknown
+/// base of its own size (never ptr->ptr); a PARTIALSTRUCT alttype resolves
+/// through `getComponentForPtr` (cc:194-196).
+// Ghidra: typeop.cc:186 TypeOp::propagateToPointer
+pub fn propagate_to_pointer_sized(
+    alt_type: &Arc<Datatype>,
+    sz: usize,
+    type_factory: Option<&Arc<std::sync::RwLock<crate::type_system::typefactory::TypeFactory>>>,
+) -> Arc<Datatype> {
+    use crate::type_system::datatype::TypePointer;
+    use std::sync::Arc as ArcT;
+    let unknown_base = |size: usize| -> ArcT<Datatype> {
+        if let Some(factory) = type_factory {
+            if let Some(base) =
+                factory.read().unwrap().get_base(size, TypeMetatype::Unknown)
+            {
+                return base;
+            }
+        }
+        ArcT::new(Datatype::Base(crate::type_system::TypeBase::new(
+            "unknown".to_string(),
+            size,
+            TypeMetatype::Unknown,
+        )))
+    };
+    let pointee = match alt_type.as_ref() {
+        // cc:190-193: pointer alttype → unknown base of the pointer's size.
+        Datatype::Pointer(_) => unknown_base(alt_type.get_size()),
+        // cc:194-196: partial struct → its pointer component.
+        Datatype::PartialStruct(ps) => ps.get_component_for_ptr().unwrap_or_else(|| alt_type.clone()),
+        _ => alt_type.clone(),
+    };
+    if let Some(factory) = type_factory {
+        return factory
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_type_pointer(sz, pointee, 1);
+    }
+    ArcT::new(Datatype::Pointer(TypePointer::new(sz, pointee, 1)))
+}
+
 /// Unwrap a pointer data-type to its pointee (used by LOAD/STORE input->output
 /// propagation). Mirrors Ghidra's `TypeOp::propagateFromPointer`
 /// (typeop.cc:206-228). Fixed-size pointees propagate only when their size is

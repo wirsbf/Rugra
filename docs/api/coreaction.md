@@ -2446,3 +2446,66 @@ INT_ADD→PTRADD(*#0x1) 转换未发生。恢复透明后 drill 窗口 4/4 对�
 29 函数 defects=0/numbering=0，skeleton 2392→2348；`--func next_url` 0/0。该修
 复不依赖 my_f_write 的旧行为——2026-08-26 同 commit 的 LOAD/STORE
 `propagate_to_pointer` 截断修复才是 my_f_write 收敛的真实原因。
+
+## 2026-09-22：SB-ORD332-SETCASTS-0001 — propagateType 覆写集合忠实化 + getInputCast 覆写臂移植（Phase 2 ordinal 332 setcasts）
+
+Phase 2 next_url mirror 首分歧 ordinal 332（universal:setcasts，oracle
+result/count 33/33 vs rugra 41/41）：rugra 的 ActionSetCasts 比 oracle 多做 8 次转换。
+drill 双侧窗口分解 = **+4 多余 cast**（`507d:830 RAX=CAST(sext出)`、`5088:831
+CAST(RAX)→*#0x18`、`50b8:836 RAX=CAST(call free出)`、`50c0:83e CAST(RAX)→*#0x8`）
++ **−3 缺失 EBX 输入 cast**（`507b:5a s>>`、`5077:117 INT_LESS`、`50e5:d9
+INT_LESSEQUAL`）+ **7 次不可见计数**。三层根因、三个修复：
+
+1. **`propagate_type` 自造传播臂删除**（根因主项）：旧代码有
+   `INT_ZEXT|INT_SEXT → 前传 input 类型`、`BOOL_* → bool`、
+   `INT_MULT/DIV/SDIV/REM/SREM/NEGATE/LEFT/RIGHT/SRIGHT + FLOAT_* → 泛型整数前传`
+   三组**无 oracle 对应物**的臂。锁死 oracle 的 propagateType 覆写集合（typeop.cc
+   全量枚举）只有：COPY(411)、LOAD(487)、STORE(557)、EQUAL/NOTEQUAL/LESS/
+   LESSEQUAL(945/1009/1085/1109 经 propagateAcrossCompare)、SLESS/SLESSEQUAL
+   (1033/1059 仅 TYPE_INT)、INT_ADD(1181)、AND/XOR(1455/1422 仅 enum 或
+   floatSignManipulation 浮点)、OR(1488 仅 enum)、MULTIEQUAL(1951)、INDIRECT
+   (2005)、PIECE(2074)、SUBPIECE(2161)、PTRADD(2268)、PTRSUB(2366)、SEGMENT
+   (2431)、NEW(2501)；其余全是基类 null 默认（typeop.cc:317-321）。ZEXT/SEXT
+   前传把 4 字节 `uint`（s>> 输出 EAX 的类型）盖到 8 字节 `RAX=sext` 输出上，
+   类型尺寸错配 → setcasts 的 castStandard "尺寸不等恒 cast" 制造全部 4 个多余
+   cast。本次：删三组自造臂、新增 INDIRECT/PIECE/SEGMENTOP/NEW 臂、SUBPIECE 按
+   cc:2161-2186 的 getSubType 逐层下降重写（union resolveTruncation stub 保留
+   residual）、AND/XOR/OR 按 enum/floatSignManipulation 门移植、SLESS/SLESSEQUAL
+   从 acrossCompare 混合臂拆出（仅 INT）、FLOAT_* 比较从传播中移除、
+   floatSignManipulation（typeop.cc:153-176）随臂移植。
+2. **比较/移位/除余 getInputCast 覆写臂移植**（−3 缺失 cast 根因）：
+   `TypeOpIntSless/SlessEqual/Less/LessEqual::getInputCast`（typeop.cc:1023/1049/
+   1075/1099：checkIntPromotionForCompare 门 + castStandard care_uint_int=TRUE；
+   SLESS 族 metain=INT+care_ptr_uint=TRUE，LESS 族 metain=UINT+care_ptr_uint=FALSE）、
+   `TypeOpIntZext/Sext`（1131/1157 + cast.cc:126-138 checkIntPromotionForExtension
+   方向匹配门）、`TypeOpIntRight/Sright` slot0（1543/1585 + UNSIGNED/SIGNED_EXTENSION
+   门）、`TypeOpIntDiv/Sdiv/Rem/Srem`（1639/1659/1679/1699 同门）。旧行为走泛型
+   `input_metatype` 臂 care=false，int/uint 互换自由 → LESS/SRIGHT 的 EBX(uint4)
+   输入永不 cast。
+3. **指针 intern 化（+6 不可见计数根因）**：`make_ptr` 原地新建非 intern 的
+   `Arc<Pointer>`，而 `TypePointer` 的 `type_equal` 是 ptr_eq —
+   `TypeOpStore::getInputCast` 的 cast-already-in-place 测试（typeop.cc:542-551）
+   恒判"不同"→ recast → castInput 双 cast 守卫的 lone-descend retype 路径
+   （cc:2675-2678）隐形 +1×6。oracle 的 `tlst->getTypePointer` 返回 intern 实例，
+   内容相等即同一指针 → 返回 null。修复 = `make_ptr` 经
+   `TypeFactory::get_type_pointer` intern（detached fixture 无工厂时保留原构造）；
+   同族根因 `propagate_to_pointer`（typeop.rs）以 **alttype 尺寸**建指针而 oracle
+   `TypeOp::propagateToPointer`（typeop.cc:186-198）以 **outvn 尺寸**为 sz — 6 个
+   STORE 地址 vn 得到 ptr::1/2/4（8 字节地址！）。新增
+   `typeop::propagate_to_pointer_sized(alt, sz, factory)` 忠实镜像（含
+   PARTIALSTRUCT getComponentForPtr 与 unknown* 降级），coreaction.rs 的
+   LOAD/STORE 传播臂改传地址 vn 尺寸。
+
+**验证**：Phase 2 next_url mirror **全函数投影 MATCH**（335 stages + 全部 @SNAP
+逐字节一致，首分歧清零——不止后移）；curl E2E 124 函数 defects=0/numbering=0
+skeleton 3105→3024；httpd 29 函数 defects=0/numbering=0 skeleton 2392→2357；
+config 域 main/getparameter.constprop.0/parseconfig.constprop.0/glob_set/
+glob_range/glob_url/next_url 逐函数 0/0；确定性双跑（E2E stdout sha256 相等 +
+投影 cmp 通过）。
+
+残差（登记 SB-ORD332-SETCASTS-0001 行）：acrossCompare 的 PointerRel 降级臂
+（cc:972-982，Rugra 无 TypePointerRel，不可达）；PIECE/SUBPIECE 的 near/far
+指针 resize 臂（本 arch 无 alt pointer，不可达）；TypeUnion::resolveTruncation
+无 Rust 移植（stub None）；typeop.rs 侧 `propagate_to_pointer` 旧签名调用点
+（spacebase 臂族）仍以 alttype 尺寸建指针——测试路径 twin，未在本 lane write-set
+内，留待 typeop 域收敛。

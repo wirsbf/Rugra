@@ -580,3 +580,16 @@ calc_submeta）构造。coreaction.rs 的 `make_pointer_type`/`make_ptr`/
 COPY-spacebase 指针臂（typeop.cc:418 同源）同批修正，见
 docs/api/coreaction.md。
 
+
+## 2026-09-22：propagate_to_pointer_sized — TypeOp::propagateToPointer 忠实镜像（SB-ORD332-SETCASTS-0001）
+
+新增 `pub fn propagate_to_pointer_sized(alt_type, sz, type_factory)`（typeop.cc
+:186-198）：指针尺寸取**传播边目的 varnode**（LOAD/STORE 调用方传
+`outvn->getSize()`，typeop.cc:495/565），非 alttype 尺寸；指针 alttype 降级为
+自身尺寸的 unknown 基类型（getBase(dt.size, UNKNOWN)，永不 ptr→ptr）；
+PARTIALSTRUCT 经 getComponentForPtr（cc:194-196）；产物经
+`TypeFactory::get_type_pointer(sz, dt, ws=1)` **intern**（指针身份比较——如
+TypeOpStore::getInputCast cc:546-548 的 cast-already-in-place 测试——依赖 intern
+实例相等；无工厂的 detached fixture 回退原构造）。旧 `propagate_to_pointer`
+（alttype 尺寸、非 intern）保留给既有调用点（typeop.rs spacebase 臂族 twin，
+留待该域收敛；coreaction.rs LOAD/STORE 臂已全部切换到 _sized 版本）。
