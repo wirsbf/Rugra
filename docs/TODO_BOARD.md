@@ -251,6 +251,14 @@
 > 同根因 register addrSize)**。E2E 三门禁见 docs/api/{space,heritage,subflow}.md
 > 同日条目。
 > **CR-orderBlocks 绑定条件履行(2026-09-22,root)**: 新登记
+> **BR 收官并集成(2026-09-22,root 亲测 94681b76)**: ActionReturnRecovery 完整忠实重写
+> (三重自创+计数器错接全清:maxPass 硬编码 3→model getMaxOutputDelay/apply 返 0+
+> take_count_delta/onlyOpUse RETURN-case res=false/BFS 全类型),ordinal 19 四元组
+> **4/4/0/1 逐轮一致**;**Phase 2 首分歧推进至 ordinal 28 stackstall:oppool1**
+> (863 vs 826,ruleaction/oppool 域,CD 车道已派)。亲测 curl 3654→**3610/0/0**(−44),
+> httpd **2459 恒等**(其 2465=基点树陈旧假数,仲裁为准)。新登记(checkCallDoubleUse
+> 既有 RUGRA-GAP: per-slot trial-address vn.loc 近似+isAlternatePathValid 未接
+> input-active 分支,P2)。
 > `BLOCKSTRUCT-MARKLABELBUMPUP-0001`(P2): markLabelBumpUp(cc:2195)在 Rugra 无
 > 调用点——per-type 实现存在于 block.rs 但为死代码,影响=循环内 goto 的 label
 > 定位(f_label_bumpup 永不置位);apply 注释与 docs/api 已纠偏为"四调用已接线+
