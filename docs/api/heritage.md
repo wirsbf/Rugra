@@ -1,5 +1,60 @@
 # `heritage.rs` API Reference
 
+## 2026-09-23：SB-MATCHURL-ORD55-0001 — discoverIndexedStackPointers 落地 + guardLoads COPY 边界体（load-guard COPY 族）
+
+match_url Phase 2 ordinal 55（heritage 二轮）根因修复。oracle 在 heritage 二轮对每个
+stack range 的 `guard()` 内由 `Heritage::guardLoads`（heritage.cc:1570-1601）为每条
+与 range 相交的 `loadGuard` 记录创建一个 COPY 边界 op（cc:1590-1599，uniq 消耗 =
+每 range 每记录 1 个），`handleNewLoadCopies`（cc:695-730）在 pass 尾
+`propagateCopyAway` 把它们传播销毁——drill 中表现为 7 个"双 `**`"即死临时 op
+（52bd:643..52c5:649），使后续 MULTIEQUAL 的 uniq 从 64a 起。Rugra 侧
+`load_guard` 记录生产链整体缺失（`guard_loads` 记录构造器仅测试调用，
+`guard_loads_range` 的 COPY 插入体为登记 stub）→ phi uniq 前移 7 至 643。
+
+本 lane 落地内容（全部对齐锁定 oracle 12.0.4 e40ed130）：
+
+- `discover_indexed_stack_pointers`（cc:986-1102 全函数移植）：显式 DFS 栈
+  （`StackWalkNode` 镜像 heritage.hh:216-236 的 `StackNode`，`iter` 为 descend
+  下标），Varnode mark 防指数梯子；INT_ADD 常量臂累积 wrapOffset 偏移/非常量臂
+  置 `nonconstant_index`，SEGMENTOP 仅 in(2) 为当前指针时落 COPY 语义，
+  INDIRECT/COPY 同偏移同 traversals，MULTIEQUAL 置 `multiequal`；LOAD 在
+  traversals≠0 时 `generate_load_guard`（cc:909-917：!usesSpacebasePtr 门 +
+  `LoadGuard::set(op,spc,node.offset)` 记录 pointerBase + opMarkSpacebasePtr），
+  STORE 在指针输入来自链上时 traversals≠0 走 `generate_store_guard`
+  （cc:926-936）否则仅 mark（cc:1087）；链死端输出落 SPACEBASE 型空间
+  （enum 模型 = Stack）置 `unknown_stack_storage`，结尾按 checkFreeStores 调
+  `protect_free_stores`。Rugra 语义注记：INT_SUB 不在 oracle switch 内，不移植
+  （旧近似 `discover_and_guard_stack_stores_fd` 曾含 INT_SUB 且自建 INDIRECT——
+  非 oracle 行为，该函数保留但生产路径不再触达）。
+- `protect_free_stores`（cc:944-972）：bank 序 STORE，指针经 COPY / INT_ADD(常量)
+  链回溯到基 varnode，`isFree`（varnode.hh:238 = 非 written 非 input）且落本
+  空间 → opMarkSpacebasePtr + freeStores 追加。
+- `heritage()` 接线（cc:2691-2697）：`load_guard_search` 首趟置位时调
+  discovery（checkFreeStores=true），返回真时 reprocessStackCount/stackSpace
+  记账 → cc:2751-2752 `reprocess_free_stores` 首次可达。
+- `reprocess_free_stores` cc:1117 行：近似调用换真实 discovery
+  （checkFreeStores=false）。
+- `guard_loads_range` 补 COPY 插入体（cc:1590-1599 逐行）：
+  `new_op(1, load_addr)` → `new_varnode_out_full(size, space, addr, op)` +
+  setActiveHeritage + setAddrForce → COPY → 输入
+  `create_with_space`+`set_varnode_properties`（HERITAGE-MULTIEQ-VNIN-
+  SYMBOLTAIL-0001 同模式）+ setActiveHeritage → `op_set_input` →
+  `op_insert_before(load_op)` → `load_copy_ops` 压栈。窗口判定从"range 相交"
+  改回 oracle 原形（cc:1588-1589：range **起始** offset 对
+  [minimumOffset, maximumOffset] 的逐侧 continue）。
+
+对齐证据（match_url Phase 2 mirror 投影 vs curl.match_url.oracle.projection
+sha 2bdabd73…，340 stages/80385 ops）：首分歧 ordinal 55 → **70**。heritage 二轮
+drill 块（oracle 847 行 vs rugra 846 行）除既有 `ffunc_0x…` vs `i0x…` 调用名显示
+噪音外逐行一致，slot 130 的 phi uniq 64a-64f 双侧对齐（64d/725/741… 处处相等）。
+新首分歧 ordinal 70 = stackstall:oppool1 count 102 vs 151（RuleIndirectCollapse
++39），探针实证为 stack 槽位 varnode `nolocalalias` flag 状态差
+（`ActionRestructureVarnode` cc:2279 `aliasyes=(numpass!=0)` 门 + 二趟
+markUnaliased 别名表内容差）→ varmap/ScopeLocal 域，登记
+SB-MATCHURL-ORD70-0001，非本 lane write-set。
+
+**heritage.rs=机制 C 白名单：本改动合并主管线前需独立 Cross-Review。**
+
 ## 2026-09-22：place_multiequals MULTIEQUAL 输出改走 newVarnodeOut 完整尾（VARGROUP-ABSORB-0001 / SUBRIGHT-ADDRTIE-0001 二段）
 
 heritage.cc:2634 的原调用是 `vnout = fd->newVarnodeOut(size, memrange.addr, multiop)`——带
@@ -39,7 +94,7 @@ usepoint=`op->getAddr()`,**同样有 queryProperties→setSymbolProperties 尾**
 | cc:485 nWS `bigout` | newVarnodeOut | **补** | Rust 2095 |
 | cc:1225 guardCallOverlappingInput `wholeVn` | newVarnode | **补** | Rust 2943 裸建 |
 | cc:1332/1353 guardOutputOverlapStack `newInput` ×2 | newVarnode | **补** | Rust 3523/3584 裸建(stack 域,当前 no-op,结构补齐) |
-| cc:1595 guardLoads `invn` | newVarnode | **不补** | Rust `guard_loads_range` 的 COPY 插入体是既有登记 stub(需 ValueSetSolver 精化区间),位点尚不存在,补尾无从谈起 |
+| cc:1595 guardLoads `invn` | newVarnode | **已补**（2026-09-23 SB-MATCHURL-ORD55-0001） | COPY 插入体落地：`create_with_space` + `set_varnode_properties`（HERITAGE-MULTIEQ-VNIN-SYMBOLTAIL-0001 模式） |
 | cc:1742/1750 splitByRefinement 循环片 | newVarnode | **补** | Rust 4422 循环单建点覆盖两行 |
 | cc:2008 guardInput `newout` | newVarnode | **补** | Rust 4327 裸建(concat 目标) |
 | cc:2095/2100 splitJoinLevel 半片 | newVarnode(Address 形) | **补** | Rust 3390/3397 + 2-piece 内联点 3284/3285(read)/3327/3337(write);register 空间在 Rugra 当前查询通道为 no-op,结构补齐 |
@@ -971,8 +1026,9 @@ provenance，不改变 guard 行为或对齐状态。
   GETPARAM-EMPTYELSE-0001 已补 Ram 空间 global-scope 尾巴（见
   HERITAGE-GUARD-NORMALIZE-0001 节 2026-08-29 补记）；该 fixture 投影中
   `af` 仍双侧省略，未随fixture重钉（fixture 重钉归 heritage owner）；
-  reprocessFreeStores 的
-  discoverIndexedStackPointers 触发链与生产 Action 切换归后续任务。
+  reprocessFreeStores 的 discoverIndexedStackPointers 触发链与生产 Action 切换
+  **已于 2026-09-23 SB-MATCHURL-ORD55-0001 落地**（discovery 接入 heritage()
+  cc:2691-2697 与 reprocess cc:1117）。
 
 ### 2026-08-15: HERITAGE-ADT-RENAME-0001 — canonical placeMultiequals/rename 消费 disjoint
 

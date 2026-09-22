@@ -574,6 +574,22 @@ impl Default for LoadGuard {
     }
 }
 
+// Ghidra: heritage.hh:216 Heritage::StackNode
+/// Walk element for `Heritage::discoverIndexedStackPointers`
+/// (heritage.hh:216-236 `StackNode`). `iter` is the index of the next
+/// descendant to follow in `vn.descend` (standing in for the
+/// `list<PcodeOp *>::const_iterator`).
+struct StackWalkNode {
+    vn: Arc<RwLock<Varnode>>,
+    offset: u64,
+    traversals: u32,
+    iter: usize,
+}
+
+// cc:217-220 StackNode traversal bits (heritage.hh:217-220)
+const STACK_WALK_NONCONSTANT_INDEX: u32 = 1;
+const STACK_WALK_MULTIEQUAL: u32 = 2;
+
 // Ghidra: heritage.hh:142 LoadGuard::spaceHighest
 /// Conservative "highest addressable offset" for a space, standing in for
 /// Ghidra's `AddrSpace::getHighest()`. Rugra spaces are 64-bit addressable
@@ -1163,6 +1179,382 @@ impl Heritage {
             };
             if let Some(vn) = in0 { vn.write().unwrap().set_active_heritage(); }
             if let Some(vn) = out { vn.write().unwrap().set_active_heritage(); }
+        }
+    }
+
+    // Ghidra: heritage.cc:909 Heritage::generateLoadGuard
+    /// Generate a guard record given an indexed LOAD into a stack space.
+    /// Faithful to `generateLoadGuard` (heritage.cc:909-917): if the op is
+    /// not already marked as a spacebase user, append an unanalyzed
+    /// `LoadGuard` (pointerBase = the path's accumulated offset) and mark
+    /// the op.
+    fn generate_load_guard(
+        &mut self,
+        fd: &Funcdata,
+        op: &Arc<RwLock<PcodeOp>>,
+        spc: AddressSpace,
+        node_offset: u64,
+    ) {
+        // cc:912: if (!op->usesSpacebasePtr())
+        if !op.read().unwrap().uses_spacebase_ptr() {
+            // cc:913-914: loadGuard.emplace_back(); loadGuard.back().set(op,spc,node.offset)
+            self.load_guard
+                .push(LoadGuard::new_unanalyzed(op, spc, node_offset));
+            // cc:915: fd->opMarkSpacebasePtr(op)
+            fd.op_mark_spacebase_ptr(&PcodeOpRef(op.clone()));
+        }
+    }
+
+    // Ghidra: heritage.cc:926 Heritage::generateStoreGuard
+    /// Generate a guard record given an indexed STORE to a stack space.
+    /// Faithful to `generateStoreGuard` (heritage.cc:926-936): same
+    /// !usesSpacebasePtr gate as `generate_load_guard`, appending into
+    /// `storeGuard`.
+    fn generate_store_guard(
+        &mut self,
+        fd: &Funcdata,
+        op: &Arc<RwLock<PcodeOp>>,
+        spc: AddressSpace,
+        node_offset: u64,
+    ) {
+        if !op.read().unwrap().uses_spacebase_ptr() {
+            self.store_guard
+                .push(LoadGuard::new_unanalyzed(op, spc, node_offset));
+            fd.op_mark_spacebase_ptr(&PcodeOpRef(op.clone()));
+        }
+    }
+
+    // Ghidra: heritage.cc:944 Heritage::protectFreeStores
+    /// Identify STORE ops that use a free pointer from the given address
+    /// space. Faithful to `protectFreeStores` (heritage.cc:944-972): for
+    /// every live STORE (bank order), follow the pointer input through
+    /// COPY and INT_ADD(constant) chains to the base Varnode; if that base
+    /// is free (neither written nor input, varnode.hh:238) and lives in
+    /// \p space, mark the STORE as a spacebase user and append it to
+    /// \p free_stores.
+    pub fn protect_free_stores(
+        &mut self,
+        fd: &mut Funcdata,
+        space: AddressSpace,
+        free_stores: &mut Vec<Arc<RwLock<PcodeOp>>>,
+    ) -> bool {
+        let mut has_new = false;
+        // cc:947-952: iterate beginOp(CPUI_STORE)..endOp, skipping dead ops.
+        let store_arcs: Vec<Arc<RwLock<PcodeOp>>> = fd
+            .obank
+            .storelist
+            .iter()
+            .filter(|s| (s.0.read().unwrap().flags & crate::op::pcodeop_flags::DEAD) == 0)
+            .map(|s| s.0.clone())
+            .collect();
+        for store_arc in store_arcs {
+            // cc:954: vn = op->getIn(1)
+            let mut vn = match store_arc.read().unwrap().get_in(1) {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+            // cc:955-964: follow COPY / INT_ADD(constant) definitions.
+            loop {
+                let next_vn: Option<Arc<RwLock<Varnode>>> = {
+                    let v = vn.read().unwrap();
+                    if !v.is_written() {
+                        break;
+                    }
+                    let def_op = match v.def.as_ref().and_then(|w| w.upgrade()) {
+                        Some(d) => d,
+                        None => break,
+                    };
+                    let d = def_op.read().unwrap();
+                    match d.opcode {
+                        // cc:958-959: COPY — follow in(0)
+                        OpCode::CPUI_COPY => d.get_in(0).cloned(),
+                        // cc:960-961: INT_ADD with constant second input — follow in(0)
+                        OpCode::CPUI_INT_ADD
+                            if d.get_in(1)
+                                .map(|iv| iv.read().unwrap().is_constant())
+                                .unwrap_or(false) =>
+                        {
+                            d.get_in(0).cloned()
+                        }
+                        // cc:962-963: any other definition ends the chase
+                        _ => None,
+                    }
+                };
+                match next_vn {
+                    Some(next) => vn = next,
+                    None => break,
+                }
+            }
+            // cc:965-969: if (vn->isFree() && vn->getSpace() == spc)
+            let is_free_in_space = {
+                let v = vn.read().unwrap();
+                !v.is_written() && !v.is_input() && v.address_space == space
+            };
+            if is_free_in_space {
+                fd.op_mark_spacebase_ptr(&PcodeOpRef(store_arc.clone()));
+                free_stores.push(store_arc);
+                has_new = true;
+            }
+        }
+        has_new
+    }
+
+    // Ghidra: heritage.cc:986 Heritage::discoverIndexedStackPointers
+    /// Trace the input stack pointer to any indexed loads. Faithful to
+    /// `discoverIndexedStackPointers` (heritage.cc:986-1102): an explicit
+    /// depth-first walk (with Varnode marks preventing exponential
+    /// ladders) over the data-flow reachable from the space's spacebase
+    /// input. Constant `INT_ADD`s accumulate the offset, non-constant
+    /// `INT_ADD`s and `MULTIEQUAL`s set traversal bits; a `LOAD`/`STORE`
+    /// reached with a non-zero traversal mask generates a guard record
+    /// (via `generate_load_guard`/`generate_store_guard`), a `STORE` with
+    /// a zero mask is merely marked
+    /// (cc:1082-1088). Returns \b true (and fills \p free_stores via
+    /// `protectFreeStores`, cc:1099-1100) when the walk found
+    /// spacebase-space dead-ends and \p check_free_stores is set.
+    pub fn discover_indexed_stack_pointers(
+        &mut self,
+        fd: &mut Funcdata,
+        space: AddressSpace,
+        free_stores: &mut Vec<Arc<RwLock<PcodeOp>>>,
+        check_free_stores: bool,
+    ) -> bool {
+        // cc:989-993: markedVn / path / unknownStackStorage.
+        let mut marked_vn: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        let mut unknown_stack_storage = false;
+        // cc:994: for(int4 i=0;i<spc->numSpacebase();++i). In the enum
+        // space model only the Stack (spacebase) space has a spacebase
+        // register, held by Funcdata's stack_pointer_* fields (RSP on
+        // x86:LE:64).
+        if space == AddressSpace::Stack {
+            // cc:995-997: spInput = fd->findVarnodeInput(size, addr)
+            let sp_input: Option<Arc<RwLock<Varnode>>> = fd
+                .vbank
+                .loc_tree
+                .iter()
+                .filter(|v| {
+                    let g = v.0.read().unwrap();
+                    g.is_input()
+                        && g.get_space() == fd.stack_pointer_space
+                        && g.get_offset() == fd.stack_pointer_offset
+                        && g.get_size() == fd.stack_pointer_size
+                })
+                .map(|v| v.0.clone())
+                .next();
+            if let Some(sp_input) = sp_input {
+                // cc:998: path.push_back(StackNode(spInput,0,0))
+                let mut path: Vec<StackWalkNode> = vec![StackWalkNode {
+                    vn: sp_input,
+                    offset: 0,
+                    traversals: 0,
+                    iter: 0,
+                }];
+                // cc:999: while(!path.empty())
+                while !path.is_empty() {
+                    // cc:1001-1004: pop when this node's descendants are
+                    // exhausted; otherwise fetch the next descendant op.
+                    // (Dead weak refs have no Ghidra counterpart — the
+                    // oracle's descend list only holds live ops.)
+                    let next_op: Option<Arc<RwLock<PcodeOp>>> = {
+                        let cur = path.last_mut().expect("path non-empty");
+                        let descend: Vec<Weak<RwLock<PcodeOp>>> =
+                            cur.vn.read().unwrap().descend.clone();
+                        let mut found = None;
+                        while cur.iter < descend.len() {
+                            let weak = descend[cur.iter].clone();
+                            cur.iter += 1;
+                            if let Some(op) = weak.upgrade() {
+                                found = Some(op);
+                                break;
+                            }
+                        }
+                        found
+                    };
+                    let op = match next_op {
+                        Some(op) => op,
+                        None => {
+                            path.pop();
+                            continue;
+                        }
+                    };
+                    let (cur_vn, cur_offset, cur_traversals) = {
+                        let cur = path.last().expect("path non-empty");
+                        (cur.vn.clone(), cur.offset, cur.traversals)
+                    };
+                    // cc:1007: outVn = op->getOut()
+                    let (out_vn, opcode) = {
+                        let o = op.read().unwrap();
+                        (o.output.clone(), o.opcode)
+                    };
+                    // cc:1008: if (outVn != 0 && outVn->isMark()) continue
+                    if let Some(out) = &out_vn {
+                        if out.read().unwrap().is_mark() {
+                            continue;
+                        }
+                    }
+                    // cc:1009-1094: switch(op->code())
+                    match opcode {
+                        OpCode::CPUI_INT_ADD => {
+                            // cc:1012: otherVn = op->getIn(1-op->getSlot(curNode.vn))
+                            let other_vn = {
+                                let o = op.read().unwrap();
+                                let slot = (0..o.num_input())
+                                    .find(|&i| {
+                                        o.get_in(i)
+                                            .map(|v| Arc::ptr_eq(&v, &cur_vn))
+                                            .unwrap_or(false)
+                                    })
+                                    .unwrap_or(0);
+                                o.get_in(1 - slot).cloned()
+                            };
+                            let (new_offset, new_traversals) = match &other_vn {
+                                Some(other) if other.read().unwrap().is_constant() => {
+                                    // cc:1014: wrapOffset(offset + const)
+                                    let add = other.read().unwrap().get_offset();
+                                    (
+                                        cur_offset.wrapping_add(add),
+                                        cur_traversals,
+                                    )
+                                }
+                                _ => (
+                                    cur_offset,
+                                    cur_traversals | STACK_WALK_NONCONSTANT_INDEX,
+                                ),
+                            };
+                            Self::stack_walk_push(
+                                &mut path,
+                                &mut marked_vn,
+                                &mut unknown_stack_storage,
+                                space,
+                                out_vn,
+                                new_offset,
+                                new_traversals,
+                            );
+                        }
+                        OpCode::CPUI_SEGMENTOP => {
+                            // cc:1038: only if the stackpointer comes in as
+                            // the inner pointer (in(2)); then COPY semantics.
+                            let is_inner = {
+                                let o = op.read().unwrap();
+                                o.get_in(2).map(|v| Arc::ptr_eq(&v, &cur_vn)).unwrap_or(false)
+                            };
+                            if is_inner {
+                                Self::stack_walk_push(
+                                    &mut path,
+                                    &mut marked_vn,
+                                    &mut unknown_stack_storage,
+                                    space,
+                                    out_vn,
+                                    cur_offset,
+                                    cur_traversals,
+                                );
+                            }
+                        }
+                        OpCode::CPUI_INDIRECT | OpCode::CPUI_COPY => {
+                            // cc:1044: same offset and traversals.
+                            Self::stack_walk_push(
+                                &mut path,
+                                &mut marked_vn,
+                                &mut unknown_stack_storage,
+                                space,
+                                out_vn,
+                                cur_offset,
+                                cur_traversals,
+                            );
+                        }
+                        OpCode::CPUI_MULTIEQUAL => {
+                            // cc:1056: traversals |= multiequal
+                            Self::stack_walk_push(
+                                &mut path,
+                                &mut marked_vn,
+                                &mut unknown_stack_storage,
+                                space,
+                                out_vn,
+                                cur_offset,
+                                cur_traversals | STACK_WALK_MULTIEQUAL,
+                            );
+                        }
+                        OpCode::CPUI_LOAD => {
+                            // cc:1071-1073: if (curNode.traversals != 0)
+                            // generateLoadGuard(curNode,op,spc)
+                            if cur_traversals != 0 {
+                                self.generate_load_guard(fd, &op, space, cur_offset);
+                            }
+                        }
+                        OpCode::CPUI_STORE => {
+                            // cc:1078: make sure the STORE pointer comes
+                            // from our path
+                            let is_pointer_input = {
+                                let o = op.read().unwrap();
+                                o.get_in(1).map(|v| Arc::ptr_eq(&v, &cur_vn)).unwrap_or(false)
+                            };
+                            if is_pointer_input {
+                                if cur_traversals != 0 {
+                                    // cc:1080: generateStoreGuard
+                                    self.generate_store_guard(fd, &op, space, cur_offset);
+                                } else {
+                                    // cc:1087: fd->opMarkSpacebasePtr(op)
+                                    fd.op_mark_spacebase_ptr(&PcodeOpRef(op.clone()));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // cc:1097-1098: clear marks
+        for vn in &marked_vn {
+            vn.write().unwrap().clear_mark();
+        }
+        // cc:1099-1101
+        if unknown_stack_storage && check_free_stores {
+            return self.protect_free_stores(fd, space, free_stores);
+        }
+        false
+    }
+
+    // RUGRA-GLUE: Rust helper factoring the shared push-or-dead-end tail of
+    // the four discoverIndexedStackPointers switch cases (heritage.cc:1015-
+    // 1022 / 1045-1051 / 1057-1063); Ghidra has no separate function.
+    // A chain node with at least one live descendant is marked and pushed;
+    // a chain dead-end whose output lives in the spacebase (stack) space
+    // sets the unknownStackStorage flag.
+    #[allow(clippy::too_many_arguments)]
+    fn stack_walk_push(
+        path: &mut Vec<StackWalkNode>,
+        marked_vn: &mut Vec<Arc<RwLock<Varnode>>>,
+        unknown_stack_storage: &mut bool,
+        space: AddressSpace,
+        out_vn: Option<Arc<RwLock<Varnode>>>,
+        offset: u64,
+        traversals: u32,
+    ) {
+        let out_vn = match out_vn {
+            Some(o) => o,
+            None => return,
+        };
+        // cc:1016/1026/1045/1057: nextNode.iter != nextNode.vn->endDescend()
+        let has_live_descendant = out_vn
+            .read()
+            .unwrap()
+            .descend
+            .iter()
+            .any(|w| w.upgrade().is_some());
+        if has_live_descendant {
+            // cc:1017-1019/1046-1048: outVn->setMark(); path.push_back
+            out_vn.write().unwrap().set_mark();
+            marked_vn.push(out_vn.clone());
+            path.push(StackWalkNode {
+                vn: out_vn,
+                offset,
+                traversals,
+                iter: 0,
+            });
+        } else if out_vn.read().unwrap().address_space == space {
+            // cc:1021-1022/1050-1051: outVn in a SPACEBASE-typed space
+            // (the enum model's Stack) — unknown stack storage.
+            *unknown_stack_storage = true;
         }
     }
 
@@ -2804,20 +3196,19 @@ impl Heritage {
         &mut self,
         fd: &mut Funcdata,
         space: AddressSpace,
-        free_stores: &[Arc<RwLock<PcodeOp>>],
+        free_stores: &mut Vec<Arc<RwLock<PcodeOp>>>,
     ) {
         // cc:1114-1115: fd->opClearSpacebasePtr(freeStores[i])
-        for op_arc in free_stores {
+        for op_arc in free_stores.iter() {
             fd.op_clear_spacebase_ptr(&PcodeOpRef(op_arc.clone()));
         }
         // cc:1117: discoverIndexedStackPointers(spc, freeStores, false)
-        // Re-run discovery. Rugra's discovery closure is the stack-store
-        // approximation (the full indexed-stack-pointer trace belongs to the
-        // load-guard/stack-delay residual family); the reprocess contract
-        // here only needs the resulting usesSpacebasePtr marks.
-        Heritage::discover_and_guard_stack_stores_fd(fd);
+        // — with checkFreeStores=false the walk only re-establishes the
+        // spacebase marks (and any fresh guard records); it cannot append
+        // to free_stores.
+        let _ = self.discover_indexed_stack_pointers(fd, space, free_stores, false);
         // cc:1119-1140: remove the now-unnecessary INDIRECTs.
-        for op_arc in free_stores {
+        for op_arc in free_stores.iter() {
             // cc:1124: if (op->usesSpacebasePtr()) continue
             if op_arc.read().unwrap().uses_spacebase_ptr() {
                 continue;
@@ -3298,17 +3689,45 @@ impl Heritage {
                 None => false,
             });
         // cc:1587: if (guardRec.spc != addr.getSpace()) continue
-        // cc:1588-1589: minimumOffset/maximumOffset window check.
-        let addr_start = addr.as_u64();
-        let addr_end = addr.as_u64().wrapping_add(size as u64);
-        let _ = fd;
-        for guard in &self.load_guard {
-            if guard.spc != space { continue; }
-            let intersects = guard.maximum_offset >= addr_start
-                && guard.minimum_offset <= addr_end;
-            if !intersects { continue; }
-            // cc:1590-1599: COPY boundary insertion (registered TODO: needs
-            // the ValueSetSolver-refined guard ranges first).
+        // cc:1588-1589: if (addr.getOffset() < guardRec.minimumOffset)
+        //                    continue;  if (addr.getOffset() >
+        //                    guardRec.maximumOffset) continue;
+        // The oracle tests the RANGE START offset against the guard window
+        // (not a two-sided range intersection).
+        let addr_offset = addr.as_u64();
+        let guarded_ops: Vec<Arc<RwLock<PcodeOp>>> = self
+            .load_guard
+            .iter()
+            .filter(|g| g.spc == space)
+            .filter(|g| !(addr_offset < g.minimum_offset || addr_offset > g.maximum_offset))
+            .filter_map(|g| g.op.upgrade())
+            .collect();
+        for load_op in guarded_ops {
+            // cc:1590: copyop = fd->newOp(1,guardRec.op->getAddr())
+            let load_addr = load_op.read().unwrap().get_addr();
+            let copyop = fd.new_op(1, load_addr);
+            // cc:1591-1593: vn = newVarnodeOut(size,addr,copyop);
+            // setActiveHeritage; setAddrForce
+            let vn = fd.new_varnode_out_full(size as usize, space, addr, &copyop);
+            vn.write().unwrap().set_active_heritage();
+            vn.write().unwrap().set_addr_force();
+            // cc:1594: opSetOpcode(copyop,CPUI_COPY)
+            fd.op_set_opcode(&copyop, OpCode::CPUI_COPY);
+            // cc:1595-1596: invn = newVarnode(size,addr);
+            // setActiveHeritage (heritage.cc:2638 routes through
+            // Funcdata::newVarnode's symbol tail — HERITAGE-MULTIEQ-VNIN-
+            // SYMBOLTAIL-0001 pattern)
+            let invn = fd
+                .vbank
+                .create_with_space(size as usize, space, addr.as_u64());
+            fd.set_varnode_properties(&invn);
+            invn.write().unwrap().set_active_heritage();
+            // cc:1597: opSetInput(copyop,invn,0)
+            fd.op_set_input(&copyop, invn, 0);
+            // cc:1598: opInsertBefore(copyop,guardRec.op)
+            fd.op_insert_before(&copyop, &PcodeOpRef(load_op));
+            // cc:1599: loadCopyOps.push_back(copyop)
+            self.load_copy_ops.push(Arc::downgrade(&copyop.0));
         }
     }
 
@@ -4954,11 +5373,12 @@ impl Heritage {
             //   info->loadGuardSearch = true;
             //   if (discoverIndexedStackPointers(info->space,freeStores,true))
             //     { reprocessStackCount += 1; stackSpace = info->space; } }
-            // GAP (HERITAGE-CALLGUARD-0001): discoverIndexedStackPointers is
-            // not on this path yet, so reprocessStackCount stays 0 and the
-            // cc:2751-2752 reprocessFreeStores call below cannot fire.
             if !self.infolist[i].load_guard_search {
                 self.infolist[i].load_guard_search = true;
+                if self.discover_indexed_stack_pointers(fd, space, &mut free_stores, true) {
+                    reprocess_stack_count += 1;
+                    stack_space = space;
+                }
             }
 
             // cc:2698-2732: build disjoint ranges from this space's
@@ -5085,7 +5505,7 @@ impl Heritage {
         // Ghidra cc:2751-2752: if (reprocessStackCount > 0)
         //   reprocessFreeStores(stackSpace, freeStores);
         if reprocess_stack_count > 0 {
-            self.reprocess_free_stores(fd, stack_space, &free_stores);
+            self.reprocess_free_stores(fd, stack_space, &mut free_stores);
         }
 
         // Ghidra cc:2753: analyzeNewLoadGuards();
