@@ -7638,6 +7638,25 @@ impl BlockSwitch {
             }
             self.case_values[i] = group;
         }
+        // RUGRA-GLUE: env-gated (RUGRA_BS_DUMP=1) structural witness for the
+        // label pipeline (no Ghidra counterpart; debug-only) — prints the
+        // finalized CaseOrder records per switch.
+        if std::env::var("RUGRA_BS_DUMP")
+            .map(|v| v == "1" || v == "2")
+            .unwrap_or(false)
+        {
+            for (i, co) in self.case_order.iter().enumerate() {
+                eprintln!(
+                    "[BLOCKSTRUCT] finalizePrinting case[{}] label=0x{:x} depth={} chain={} outindex={} labels={:?}",
+                    i,
+                    co.label,
+                    co.depth,
+                    co.chain,
+                    co.outindex,
+                    self.case_values.get(i).map(|v| v.as_slice()).unwrap_or(&[])
+                );
+            }
+        }
     }
 
     /// Ghidra `BlockSwitch::isDefaultCase` (block.hh:789, inline): is the i-th

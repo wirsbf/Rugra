@@ -1297,3 +1297,17 @@ collapse_switches）历史上把 case_gototypes 留成空 Vec（printc 用
 （cc:3510-3511，仅 multigoto 臂附 f_goto_goto，cc:3552），两构造点改为
 `vec![0; cases.len()]` 初始化。修复后 curl E2E 124/124、PANICKED=0、
 defects=numbering=0。
+
+## 2026-09-22（续 3）：常规 default 边路由 + finalize 见证 dump
+
+- `try_rule_switch`/`collapse_switches` 的 case 收集循环补 cc:3515 addCase 的
+  isdefault 判定（`switchbl->isDefaultBranch(outindex)`，标记链=
+  switchOver cc:2552-2568 maxcount 选 defaultBlock → installSwitchDefaults →
+  set_default_switch_mirrored）：被标记出边的目标路由进 `default_case` 独立槽
+  （default_gototype=0 正文形态），不再混入 `cases`（否则其 40 个表条目会被
+  finalizePrinting 物化成 40 个假 `case v:` 臂——gp 实测 88→48 对齐 golden）。
+- `finalize_case_labels` 尾部加 RUGRA_BS_DUMP=1/2 门控的 `[BLOCKSTRUCT]
+  finalizePrinting case[i] label/depth/chain/outindex/labels` 结构层见证
+  （无 Ghidra 对应物，纯调试工具）。
+- gp 结构层验证：finalize 后 48 臂 label 集合与 golden 逐项相等、逐臂顺序
+  相等（case 0 起,含 0xf/0x10/0x15…）；default 的 40 值组正确路由不进 cases。

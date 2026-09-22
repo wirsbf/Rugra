@@ -6176,7 +6176,20 @@ impl<'a> CollapseStructure<'a> {
         // identifyInternal consumes it; Rugra's BlockSwitch keeps the
         // dispatch in the `control` field and `cases` holds ONLY the case
         // bodies (aligned with case_values, which printc indexes jointly).
+        // cc:3515 (addCase): isdefault = switchbl->isDefaultBranch(outindex)
+        // — the out-edge installSwitchDefaults marked (the most-hit table
+        // target, switchOver cc:2552-2568) is the formal default; Rugra
+        // routes it to the separate default_case slot (Ghidra keeps it in
+        // caseblocks tagged isdefault; printc.cc:3140-3145 prints `default:`
+        // without labels either way).
+        let switch_basic = crate::block::front_leaf(&block).and_then(|leaf| {
+            let r = leaf.read().unwrap();
+            r.as_any()
+                .downcast_ref::<crate::block::BlockCopy>()
+                .map(|c| c.original.clone())
+        });
         let mut cases: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = Vec::new();
+        let mut default_case: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = None;
         let exit_idx = exitblock;
         for j in 0..sizeout {
             let curbl = match block.read().unwrap().get_out(j) {
@@ -6185,6 +6198,14 @@ impl<'a> CollapseStructure<'a> {
             };
             let cur_idx = curbl.read().unwrap().get_index();
             if Some(cur_idx) == exit_idx {
+                continue;
+            }
+            let is_default_edge = switch_basic
+                .as_ref()
+                .map(|sb| sb.read().unwrap().is_default_branch(j))
+                .unwrap_or(false);
+            if is_default_edge {
+                default_case = Some(curbl);
                 continue;
             }
             cases.push(curbl);
@@ -6229,7 +6250,7 @@ impl<'a> CollapseStructure<'a> {
                 index: ctrl_idx,
                 control: block.clone(),
                 cases,
-                default_case: None,
+                default_case,
                 // cc:3510-3511 addCase: every regular case carries gototype 0
                 // (only the multigoto arm appends f_goto_goto, cc:3552) — the
                 // parallel array must be cases-length from construction.
@@ -7221,8 +7242,25 @@ impl<'a> CollapseStructure<'a> {
 
             let mut cases = Vec::new();
             let mut case_values = Vec::new();
+            let mut default_case: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = None;
+            // cc:3515 (addCase): the installSwitchDefaults-marked out-edge is
+            // the formal default — route to the separate default_case slot.
+            let switch_basic_orig = crate::block::front_leaf(&block).and_then(|leaf| {
+                let r = leaf.read().unwrap();
+                r.as_any()
+                    .downcast_ref::<crate::block::BlockCopy>()
+                    .map(|c| c.original.clone())
+            });
             for j in 0..size_out {
                 if let Some(edge) = b.get_out(j) {
+                    let is_default_edge = switch_basic_orig
+                        .as_ref()
+                        .map(|sb| sb.read().unwrap().is_default_branch(j))
+                        .unwrap_or(false);
+                    if is_default_edge {
+                        default_case = Some(edge.point.clone());
+                        continue;
+                    }
                     cases.push(edge.point.clone());
                     case_values.push(vec![j as u64]);
                 }
@@ -7241,7 +7279,7 @@ impl<'a> CollapseStructure<'a> {
                     index: ctrl_idx,
                     control: block.clone(),
                     cases,
-                    default_case: None,
+                    default_case,
                     // cc:3510-3511 addCase: regular cases carry gototype 0.
                     case_gototypes: vec![0; num_cases_here],
                     default_gototype: 0,

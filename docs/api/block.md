@@ -1668,3 +1668,10 @@ metadata rust_fixture_sha256 重钉（e8f69bfc→81656ef8）。
 ## 2026-09-22（续）：CaseOrder 补 Clone
 
 `CaseOrder` derive 补 `Clone`（collapse 期重建点需按位携带 caseblocks）。
+
+## 2026-09-22（续 2）：finalize 见证 dump（调试工具）
+
+`finalize_case_labels` 尾部新增 RUGRA_BS_DUMP=1/2 门控的
+`[BLOCKSTRUCT] finalizePrinting case[i] label=0x.. depth= chain= outindex=
+labels=[..]` 逐臂见证输出（RUGRA-GLUE，无 Ghidra 对应物；label 管道结构层
+验收的观察窗口）。
