@@ -1053,6 +1053,12 @@ input-slot 状态仍是 **MISMATCH**，不能由插入或 collapse fixture 推�
   查询。Rugra 尚未完整表达 Ghidra 的动态 AddressSpace、TypeFactory、
   `assignHigh`、laned-register 和 ScopeLocal property 边效应，这些调用闭包仍为
   **MISMATCH/UNTESTED**。
+- SB-IMPLIEDWAVE-0001（2026-09-22）：`new_varnode_out` 的 split-Address
+  Register-pin 适配器保持不变（无语义变化；本 lane 的临时 NVOBT 探针已随
+  验证完成移除）。`new_varnode_out_full` 的完整 newVarnodeOut 序列
+  （createDef→assignHigh→laned→queryProperties 尾）由 subflow 分片 builder
+  （build_in_subpieces/build_out_concats）以 root 空间调用，见
+  docs/api/subflow.md。
 解锁 RuleLeftRight。
 
 ### 2026-06-26（续）：replace_lessequal

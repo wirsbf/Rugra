@@ -5351,81 +5351,24 @@ impl<'a> SplitDatatype<'a> {
         // testCopyConstraints (cc:2370-2384): don't split function inputs,
         // same-address addr-tied pairs, or a LOAD output feeding only this
         // COPY (handled by splitLoad).
-        let wave_probe = std::env::var("RUGRA_SPLITWAVE").is_ok_and(|v| v == "1");
-        if wave_probe {
-            let g = in_vn.read().unwrap();
-            let og = out_vn.read().unwrap();
-            let it = g.get_type_read_facing();
-            let ot = og.get_type_def_facing();
-            let desc = |t: &Option<Arc<crate::type_system::Datatype>>| match t {
-                Some(dt) => format!(
-                    "{}/{}/{:p}",
-                    dt.get_name(),
-                    format!("{:?}", dt.get_metatype()),
-                    Arc::as_ptr(dt)
-                ),
-                None => "none".to_string(),
-            };
-            let seq = copy_op.read().unwrap().get_seq_num().clone();
-            eprintln!(
-                "[SPLITWAVE] try seq={:x} op={:p} addr={} in={}:{}:{} out={}:{}:{} inT={} outT={}",
-                seq.time,
-                Arc::as_ptr(copy_op),
-                op_addr,
-                g.get_space().name(),
-                g.get_offset(),
-                g.get_size(),
-                og.get_space().name(),
-                og.get_offset(),
-                og.get_size(),
-                desc(&it),
-                desc(&ot)
-            );
-        }
         if !self.test_copy_constraints(copy_op, &in_vn, &out_vn) {
-            if wave_probe {
-                eprintln!("[SPLITWAVE] reject gate=constraints");
-            }
             return Ok(false);
         }
         let in_type = in_vn.read().unwrap().get_type_read_facing();
         let out_type = out_vn.read().unwrap().get_type_def_facing();
         let (in_type, out_type) = match (in_type, out_type) {
             (Some(i), Some(o)) => (i, o),
-            _ => {
-                if wave_probe {
-                    eprintln!("[SPLITWAVE] reject gate=notype");
-                }
-                return Ok(false);
-            }
+            _ => return Ok(false),
         };
         let in_constant = in_vn.read().unwrap().is_constant();
         if !self.test_datatype_compatibility(&in_type, &out_type, in_constant) {
-            if wave_probe {
-                eprintln!("[SPLITWAVE] reject gate=compat");
-            }
             return Ok(false);
         }
         if is_arithmetic_output(&in_vn) {
-            if wave_probe {
-                eprintln!("[SPLITWAVE] reject gate=arith_in");
-            }
             return Ok(false); // Sanity check on input (cc:2729)
         }
         if is_arithmetic_input(&out_vn) {
-            if wave_probe {
-                eprintln!("[SPLITWAVE] reject gate=arith_out");
-            }
             return Ok(false); // Sanity check on output (cc:2734)
-        }
-        if wave_probe {
-            let pieces: Vec<String> = self
-                .data_type_pieces
-                .iter()
-                .map(|c| format!("{}:{}", c.offset, c.in_type.get_size()))
-                .collect();
-            eprintln!("[SPLITWAVE] SPLIT n={}", self.data_type_pieces.len());
-            eprintln!("[SPLITWAVE] pieces={}", pieces.join(","));
         }
         // splitCopy (cc:2730-2744): SUBPIECE/constant inputs → root+off
         // addressed piece outputs → PIECE reassembly stack → per-piece COPYs

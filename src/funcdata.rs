@@ -2577,16 +2577,6 @@ impl Funcdata {
         // Rugra split-Address adapter: callers without a known true space keep
         // the historical Register pin; the full newVarnodeOut sequence runs in
         // new_varnode_out_full below.
-        if std::env::var("RUGRA_SPLITWAVE_BT").is_ok_and(|v| v == "1") && size >= 64 {
-            let bt = std::backtrace::Backtrace::force_capture();
-            eprintln!(
-                "[NVOBT] size={} addr={:x} op={:p}\n{}",
-                size,
-                addr.as_u64(),
-                std::sync::Arc::as_ptr(&op.0),
-                bt
-            );
-        }
         self.new_varnode_out_full(size, crate::space::AddressSpace::Register, addr, op)
     }
 

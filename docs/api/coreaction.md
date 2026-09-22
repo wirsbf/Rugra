@@ -1899,8 +1899,10 @@ e2e return 值折叠链的最后检验环节（GAP-A/GAP-B 已集成后的上游
     -1 符号扩展永不匹配小偏移）→ -1；`lone_descend`：ZEXT 输出 addr-tied 且
     `contains(vn)==0` 才可继续 implied 候选（cc:3032-3036）；PIECE 经
     `piece_node_find_root`（op.cc:824-852，funcdata.rs 私有 helper 的本地镜像，
-    租约边界）判定根/内部件（cc:3037-3045，`isPartialRoot` 因 Rugra 无
-    PcodeOp::partialroot flag 恒 false，MERGE-ADDRTIED-CLOSURE-0001）；其余
+    租约边界）判定根/内部件（cc:3037-3045，根 def `isPartialRoot()` 现已真实生效:
+    flag 由 RulePieceStructure(ruleaction.cc:7642)与 SplitDatatype::buildOutConcats
+    (subflow.cc:2599)`setPartialRoot` 设置, root def 为 partialRoot 时整栈
+    显式——SB-IMPLIEDWAVE-0001 补齐, 原"恒 false"注记作废）；其余
     lone reader → -1（cc:3046-3048）。
   - cc:3050-3063：`is_mapped → -1`（heritage 属性尾）、`is_proto_partial → -1`、
     PIECE def 且 in(0) proto-partial → -1。
