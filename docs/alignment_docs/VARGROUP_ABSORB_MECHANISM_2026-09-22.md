@@ -112,6 +112,23 @@ makeRec 拒绝——真实 DWARF 锁名);②缺 `._4_4_` padding store(手工布
    40 个 ADD 输出临时类型是 Int → ME/输入影子无 TypePartialStruct → subright 的
    pieceStructured 分支(cc:7256)与 printc opSubpiece/cc:843 特殊打印不触发。
    **下一环 = 调用点 LOAD 的存活语义(RuleLoadInput/directify 侧差异)**。
+
+   > **勘误(2026-09-23,HERITAGE-LOADCLAIM-0001 lane,oracle gdb 逐步轨迹)**:本节
+   > "Ghidra 侧 opStackLoad LOAD 活到最后/最终 raw 仍有 0x30d6:c5b+c5c LOAD"的表述
+   > **不成立**——那是 CW 当时观测到的某个中间窗口,非终态路径。oracle 真实序列(gdb
+   > 断点+backtrace 实证,decomp_opt 锁定源码):①mainloop 迭代1 oppool2
+   > **RuleLoadVarnode(ruleaction.cc:4278)把 LOAD directify 成 COPY(s@fc78:130)**
+   > ——与 Rugra 相同;②mainloop restart;③**heritage pass2 认领**:
+   > placeMultiequals(heritage.cc:2599)→collect(307)→refinement(1890)→
+   > **refineRead(1772)→concatPieces(507)** 把 304B 自由栈读替换为 280+8+8+8 的
+   > PIECE 梯(seq 3501-3503),killedbycall INDIRECT 3515 是同 pass guardCalls
+   > (heritage.cc:1521-1525)对 280B 影写域的独立产物;④oppool1 RulePropagateCopy
+   > 折叠 COPY,CALL 直接读 CONCAT join(终态 raw 的 u0x10000a27@3503 即此件)。
+   > "0x30d6:c5b/c5c"在终态不存在。Rugra master 5c610849 阶段投影实证**同链已在位**
+   > (marker42 directify→marker50 认领建 3450-3452 同形梯),本节所述差异实为
+   > 下游 typing/符号层而非 LOAD 存活语义。spacebase 挂载已于本日按 lane 重启用
+   > (funcdata.cc:263-264 镜像),梯根 writeback URLGlob 成功;吸收剩余阻塞在 §4-4
+   > 符号/打印层。
 4. **打印/符号层(未修)**:golden 的 `glob.pattern[0].type = auVar21._0_4_`(
    `auVar21 = in_stack_fc78._80_24_`)形态需要:store LHS 用组符号字段路径
    (separateSymbol/establishGroupSymbolOffset/linkProtoPartial 链)+ 件 varnode 的临时名/
