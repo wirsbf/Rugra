@@ -251,6 +251,15 @@
 > 同根因 register addrSize)**。E2E 三门禁见 docs/api/{space,heritage,subflow}.md
 > 同日条目。
 > **CR-orderBlocks 绑定条件履行(2026-09-22,root)**: 新登记
+> **CV 收官并集成(2026-09-22,root 亲测)**: CR-CV APPROVE(复核独立验证强于声明: oppool2
+> 全阶段字节恒等/双构建复现/my_fwrite 无回归独立证实=None 状态不承重)。**Phase 2
+> 首分歧 186→332(1-331 全匹配,+146 序号)**;亲测 curl **3049/0/0**(−56)/httpd
+> **2348/0/0**(−44),已回流。**条件登记**: ①测试数字口径更正(单线程稳定失败=既有
+> 18 名单家族,"9 failed"=并行抖动口径);②`RESOLVEINFLOW-DRIVER-0001`(P2): 驱动器
+> 缺 needsResolution→resolveInFlow(coreaction.cc:5075-5078,联合体解析传播缺口,
+> 未认领);③孪生双实现(coreaction 臂+typeop trait)漂移风险记档,收敛列入 wave 议题。
+
+
 > **CU 收官并集成(2026-09-22,root 亲测 9ba67aeb)**: ordinal 185 根因=镜像态残留两层
 > 全分析数据符号(oracle 裸环境只 addFunction 零数据 SymbolEntry→queryContainer NULL→
 > constantptr 不 fire)——bare-load 门下双抑制(examples-only,默认零变化)。**Phase 2
