@@ -356,6 +356,22 @@ Encode to string format (comma-separated ranges)
 - `coveringmask(val: u64) -> u64`（address.cc:760）：返回覆盖 val 所有置位位的掩码 = `(1 << (msb+1)) - 1`。val==0 返回 0。解锁 JumpBasic::get_max_value（INT_AND 掩码分析）。
 - `minimalmask(val: u64) -> u64`：coveringmask 别名，匹配 jumptable.cc 的 minimalmask 用法。
 
+### 2026-09-22（sb-foldinnorm）：minimalmask 修正为真身
+
+- 上述"coveringmask 别名"为误植（CR-CH 条件③暴露）。Ghidra `minimalmask`（address.hh:525-534 inline，
+  非 address.cc 的 coveringmask）是**整字节掩码阶梯选择器**：val>0xffffffff→~0；val>0xffff→0xffffffff；
+  val>0xff→0xffff；否则 0xff。与 coveringmask 系统性不同（minimalmask ≥ coveringmask 恒成立：
+  minimalmask(0x7ff)=0xffff vs coveringmask(0x7ff)=0x7ff；minimalmask(0)=0xff vs coveringmask(0)=0）。
+- 已改为 1:1 移植地址阶梯；三个消费方语义随之修正（调用点本身早已正确）：
+  - `ActionDeadCode::mark_consumed_parameters`（coreaction.rs:447，cc:3856）：未锁定原型的 CALL 入参
+    consume 从 nzmask 的覆盖幂掩码改为整字节掩码（consumed 变大 → 参数位截断/清零面收窄）；
+  - `ActionDeadCode::gather_consumed_return`（coreaction.rs:470，cc:3884）：RETURN 值 consume 同上；
+  - `JumpTable::fold_in_normalization` 的 `switch_var_consume`（jumptable.rs:5014，cc:2581）：
+    switch 变量 consumed 位升为整字节 → ActionDeadCode BRANCHIND 臂（coreaction.rs:629）对
+    switch 变量的截断/清零与 oracle 对齐。
+- 单测 `test_minimalmask` 改钉阶梯边界（0/0xff/0x100/0xffff/0x10000/0xffffffff/0x1_0000_0000）。
+
+
 ### 2026-06-27（会话2 续）：count_leading_zeros
 
 - `count_leading_zeros(val) -> i32` — `count_leading_zeros`（address.cc:773）：64 位前导零计数，val==0 返回 64。用 Rust `leading_zeros` 精确等价。被 RuleDivOpt::findForm 用于计算 numerand 的有效位数（xsize = 64 - clz(nz_mask)）。

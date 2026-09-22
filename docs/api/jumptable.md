@@ -562,7 +562,9 @@ dbcc9cb 集成：守卫交集就地写回、isBoolOutput 分支、常量无 earl
   lastBlock=sizeOut-1、defaultBlock=-1。
 - `fold_in_normalization(fd)`（jumptable.cc:2574-2591）：jmodel->
   foldInNormalization 后按 minimalmask(NZMask) 设 switch_var_consume，全覆盖时
-  对 INT_SEXT def 退化为 calc_mask(输入尺寸)。
+  对 INT_SEXT def 退化为 calc_mask(输入尺寸)。（2026-09-22 sb-foldinnorm：minimalmask
+  修正为 address.hh:525 整字节阶梯真身后，本调用点语义方才与 oracle 一致——
+  修正前 coveringmask 别名系统性低估 consumed 位，见 docs/api/address.md 同日节。）
 - `fold_in_guards(fd)`（jumptable.hh:615 inline）：委托 jmodel->foldInGuards
   （Rust 以 take/put-back 表达 C++ 的 this 别名，无实现读 jt.jmodel）。
 
