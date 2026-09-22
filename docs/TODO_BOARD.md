@@ -251,6 +251,13 @@
 > 同根因 register addrSize)**。E2E 三门禁见 docs/api/{space,heritage,subflow}.md
 > 同日条目。
 > **CR-orderBlocks 绑定条件履行(2026-09-22,root)**: 新登记
+> **CN 集成(2026-09-22,root)**: minimalmask 整字节阶梯(address.hh:525-534)修复
+> 合并,双语料字节恒等(语料中性,CR-CN 评审亲跑门禁确认);**JUMPTABLE-HYGIENE-0001
+> 交叉引用**: foldInNormalization 的 minimalmask 轴已由 7049549b 关闭(独立预存
+> 缺口,非 AC 移植错——调用点本就忠实,被共享 helper 暗中破坏),coreaction 侧
+> markConsumedParameters/gatherConsumedReturn 两消费者一并继承;B2 bilateral
+> fixture(CP 车道)升级中。
+
 > **CL 探查闭环(2026-09-22,OKOK-0001 裁决)**: **假阴性对=0**(双侧独立:oracle 266 次
 > 真 testUntiedCallIntersection 求值 cross=1 计 0/Rust 112 mixed-tied 对零翻转)——
 > CE 精确相交移植承重无反向风险,CR-CE 条件①闭环。残差 84 归因: +44 same-high
