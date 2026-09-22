@@ -770,6 +770,27 @@ coreaction.rs 现有 58 个 Action structs（覆盖全部 Ghidra coreaction ::ap
   2. ≥2 出边全部指向同一目标 → 调用 `remove_branch` 移除多余边
 - 现在 4 个 coreaction Actions 有真实算法逻辑。
 
+## 2026-09-22：ActionRedundBranch 计数/重扫/守卫补齐（SB-REDUNDBRANCH-ORD39-0001）
+
+- **ActionRedundBranch**（coreaction.cc:3492-3528）三处移植缺陷修复：
+  1. **count 缺失**：两处变更路径（splice cc:3509 / removeBranch cc:3525）都未
+     `count += 1`，也无 `take_count_delta` 收割——Action::perform 的
+     `lcount < count` 永不触发，count_apply 不增，阶段投影报
+     `result/count/apply=0` 而 oracle 为 1（Phase 2 ordinal 39
+     `universal:fullloop:mainloop:redundbranch` 1 vs 0）。IR 变换本身
+     （splice 后 `50fa:53 BRANCH` dead 化）双侧 SNAP 已逐字节一致，纯计数缺口。
+  2. **循环语义**：case 1 splice 后 Ghidra 置 `i = -1` 从头重扫（cc:3510-3511，
+     图尺寸也在每轮重新求值），case 2 removeBranch 后继续扫描不重置；旧 Rust
+     两处都提前 `return`。改为索引循环 + splice 后 `i = -1` 重扫。
+  3. **isSwitchOut 守卫**：旧代码 `(flags & 0) != 0` 恒 false（占位）；
+     `block_flags::SWITCH_OUT`/`FlowBlock::is_switch_out()` 基础设施已在，
+     接上 cc:3506 的 `!bb->isSwitchOut()`（单出边 switch 块不 splice，保住
+     二阶段恢复）。
+- 验收：CD 干净基线（wt/sb-oppool28 58301801 + 本修复）Phase 2 首分歧
+  39→40 之后；本 lane 分支（master 22b5ad84 合并）因 master 侧
+  activeparam-15 回归（见 SB-MASTER-ACTIVEPARAM-0001）masked，redundbranch
+  窗口在该基线无 splice 候选。
+
 ## 2026-06-27（续 5）：ActionConstbase + ActionPrototypeWarnings + ActionNormalizeSetup 算法逻辑
 
 - **ActionConstbase**：实现入口块追踪上下文注入逻辑框架——获取 entry block + func address + 查询 ContextDatabase tracked set。完整 COPY op 创建待 ContextDatabase 集成到 Funcdata。
