@@ -7938,6 +7938,46 @@
           "Scope::inScope"
         ]
       }
+    },
+    {
+      "id": "blockstruct_orderblocks_1204",
+      "description": "BLOCKSTRUCT-ORDERBLOCKS-0001: BlockGraph::orderBlocks / FlowBlock::compareFinalOrder final-print-order sort keys (entry-first, RETURN-last, index) incl. BlockGoto/BlockMultiGoto lastOp delegation and the single-element guard",
+      "runner": [
+        "tools/run_blockstruct_orderblocks_oracle.sh"
+      ],
+      "timeout_seconds": 900,
+      "always_tiers": [
+        "wave",
+        "nightly"
+      ],
+      "evidence_status": "MATCH",
+      "cache": {
+        "metadata": "tests/oracle/blockstruct_orderblocks_1204.metadata.json",
+        "tools": {
+          "runner": "tools/run_blockstruct_orderblocks_oracle.sh"
+        },
+        "inputs": {
+          "fixture_source_1": "tests/oracle/blockstruct_orderblocks_1204.cc",
+          "fixture_source_2": "tests/oracle/blockstruct_orderblocks_1204.rs"
+        }
+      },
+      "impact": {
+        "paths": [
+          "src/block.rs",
+          "src/blockaction.rs",
+          "docs/api/block.md",
+          "docs/api/blockaction.md",
+          "tests/oracle/blockstruct_orderblocks_1204.*",
+          "tools/run_blockstruct_orderblocks_oracle.sh"
+        ],
+        "rust_function_ids": [],
+        "ghidra_function_ids": [
+          "GH12-F-8129b72588e28d509633",
+          "GH12-F-4d4c5cc660c5f15851b2",
+          "GH12-F-b107435cfddafb799088",
+          "GH12-F-4a08fe6f0d0948f6eb91"
+        ]
+      }
     }
   ]
 }

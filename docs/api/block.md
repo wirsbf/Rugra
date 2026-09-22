@@ -1675,3 +1675,49 @@ metadata rust_fixture_sha256 重钉（e8f69bfc→81656ef8）。
 `[BLOCKSTRUCT] finalizePrinting case[i] label=0x.. depth= chain= outindex=
 labels=[..]` 逐臂见证输出（RUGRA-GLUE，无 Ghidra 对应物；label 管道结构层
 验收的观察窗口）。
+
+## 2026-09-22（续 3）：orderBlocks 顶层排序（BLOCKSTRUCT-ORDERBLOCKS-0001，Lane BV）
+
+`BlockGraph::order_blocks`（block.hh:430-431）：`if (list.size()!=1)
+sort(list.begin(),list.end(),compareFinalOrder)` 的完整移植——单元素列表
+跳过排序；排序用 `compare_final_order`（见下），在 ActionFinalStructure
+（blockaction.cc:2191）内、finalizePrinting/scopeBreak/markUnstructured
+**之前**调用，使 scopeBreak 的 next-sibling fall-thru（block.cc:1277-1287）、
+gotoPrints 的 next-in-flow 后继（block.cc:2881-2890）与 emitBlockGraph 的
+发射序都看到最终打印序。
+
+自由函数 `compare_final_order`（block.cc:709-730 FlowBlock::compareFinalOrder）
+返回 `std::cmp::Ordering`，三个排序键逐行对齐：
+
+1. **entry 键**（cc:712-713）：`getIndex()==0` 恒最前（双侧索引互异，
+   both-zero 分支映射 Equal 仅为保持全序）；
+2. **RETURN 键**（cc:717-728）：`lastOp()`（per-type virtual 分派）为
+   CPUI_RETURN 的块排在所有非 RETURN 结尾块之后，含
+   (RETURN,null)/(null,RETURN) 两臂；两个 RETURN 结尾块双向比较均为
+   false（cc:719+724），即并列（tie），映射 `Ordering::Equal`，永不落入
+   索引比较；
+3. **index 键**（cc:729）：其余按 `getIndex()` 升序。
+
+tie 解析：libstdc++ `std::sort` 对 ≤16 元素范围走插入排序 phase（对 tie
+稳定）；Rust 用稳定 `sort_by`，小列表（真实结构图的常态）tie 保序与 oracle
+一致。>16 元素范围的 quicksort phase tie 置换差异为已登记残差（metadata
+residual_diffs，当前 curl/httpd 全语料所有函数顶层列表均为单元素，
+block.hh:431 守卫直接跳过，A/B 字节恒等）。
+
+新增 per-type `lastOp` 委托覆盖（compareFinalOrder 的依赖，此前 trait 默认
+None 与 oracle 分派不符）：
+
+- `BlockGoto::last_op`（block.hh:562）：`wrapped`（getBlock(0)）委托；
+- `BlockMultiGoto::last_op`（block.hh:590）：同上。
+
+`Ord for BlockRef` 注释更正：其纯 index 比较对应 `compareBlockIndex`
+（block.hh:893，Varnode def-block 排序用），非 compareFinalOrder；真正的
+compareFinalOrder 落在 `compare_final_order` 自由函数。
+
+单测：`compare_final_order_sort_keys_and_order_blocks_guard`
+（entry/RETURN/null 三臂、双 RETURN tie、index 键、单元素守卫、
+order_blocks 端到端置换）。B2 双侧 fixture：
+`tests/oracle/blockstruct_orderblocks_1204`（5 case：entry-first+return-last+
+stable tie、null/RETURN 混合臂、真 BlockGoto 包裹 RETURN 块委托、真
+BlockMultiGoto 包裹非 RETURN 块委托、单元素跳过）——双侧投影逐字节
+MATCH（runner `tools/run_blockstruct_orderblocks_oracle.sh`）。

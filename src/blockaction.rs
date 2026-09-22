@@ -8236,6 +8236,20 @@ impl Action for ActionFinalStructure {
         // protected `count` member, so the fixture-observed count/apply/res
         // triple must stay 0 even when graph/IR mutations occur below.
 
+        // Ghidra blockaction.cc:2191: graph.orderBlocks(); — sort the
+        // top-level structure list with FlowBlock::compareFinalOrder
+        // (block.cc:709): entry block (index 0) first, blocks whose lastOp()
+        // is a RETURN last, otherwise ascending index; a single-element list
+        // skips the sort (block.hh:431). This runs BEFORE finalizePrinting
+        // so that scopeBreak's next-sibling fall-thru (block.cc:1277-1287),
+        // gotoPrints' next-in-flow successor (block.cc:2881-2890) and
+        // emitBlockGraph's emission order all observe the final printing
+        // order. Rugra previously kept finalize_structure's survivor (slot)
+        // order, which is not the oracle's compareFinalOrder permutation:
+        // return-ending top-level blocks stayed interleaved instead of
+        // moving to the tail.
+        fd.sblocks.order_blocks();
+
         // Ghidra blockaction.cc:2192: graph.finalizePrinting(data); —
         // BlockGraph::finalizePrinting (block.cc:1364) recurses the tree and
         // runs BlockSwitch::finalizePrinting (block.cc:3556-3592) on every
@@ -8243,8 +8257,7 @@ impl Action for ActionFinalStructure {
         // fill via JumpTable::numIndicesByBlock/getIndexByBlock/
         // getLabelByIndex, the CaseOrder::compare stable sort, and the
         // case_values materialization that printc's emit_structured_switch
-        // reads. cc:2191 orderBlocks is not yet ported (registered gap —
-        // Rugra's top-level list order is the collapse install order).
+        // reads.
         fd.sblocks.finalize_printing();
 
         // Ghidra blockaction.cc:2193: graph.scopeBreak(-1,-1);

@@ -165,6 +165,29 @@
 > 基线**字节一致**(潜伏雷排除,当前语料零翻转);cargo test 失败集=父提交既有 flaky(heritage/
 > funcdata SSA,与本改动无关,两轮对照确认)。**blockaction.rs 未触及**(机制 C 白名单字面未命中,
 > 但主管线行为变化,root 集成时建议独立复核)。
+> **Lane BV 修复落地(2026-09-22,wt/sb-orderblocks,`BLOCKSTRUCT-ORDERBLOCKS-0001` = CR-BO
+> 条件③ cc:2191 orderBlocks 缺口 ✅落地)**: ActionFinalStructure 补 `graph.orderBlocks()`
+> (block.hh:430-431)于 finalizePrinting 之前;`FlowBlock::compareFinalOrder`(block.cc:709-730)
+> 三键(entry idx==0 恒首 / lastOp()==RETURN 压尾 / 其余按 index;双 RETURN 块 tie)完整移植为
+> block.rs `compare_final_order`+`BlockGraph::order_blocks`(稳定 sort_by 解 tie=libstdc++
+> 插入排序 phase ≤16 元素同形);**顺带补齐缺失的 per-type lastOp 委托**:BlockGoto(cc:562)/
+> BlockMultiGoto(cc:590)→wrapped(此前 trait 默认 None,compareFinalOrder 依赖分派不符)。
+> 语义影响=顶层输出序+scopeBreak/gotoPrints 的 next-sibling 取序。三门禁:curl 124/124 与
+> httpd 29/29 全量 A/B(d847acc 基线)**字节恒等**(sha256 相同——当前语料所有函数顶层列表均
+> 单元素(glob_set 15→1/getparameter 30→1/main 105→1,树 dump 证实),block.hh:431 守卫双侧
+> 同步跳过);getparameter(978)/glob_set(97) --func defects=numbering=0 前后不变;B2 双侧
+> fixture `blockstruct_orderblocks_1204` 5/5 case **MATCH**(runner
+> tools/run_blockstruct_orderblocks_oracle.sh,真 newBlockGoto/newBlockMultiGoto 委托覆盖);
+> cargo test --lib 单线程 18 failed=已知 FUNCDATA-TESTS-FLAKY-0001 集(与 BO 车道基线同集),
+> block::/blockaction:: 全绿。残差:>16 元素列表 tie 置换(libstdc++ quicksort phase vs 稳定
+> sort,语料内不存在该形态,已登记 fixture metadata residual)。**blockaction.rs 属机制 C
+> 白名单:Cross-Review PENDING(root 派)**。
+> **⚠ P0 新登记 `HTTPD-EXAMPLE-BRACE-0001`(2026-09-22,Lane BV 抓获)**: master dff36e78
+> (10:04 "tool: integrate httpd pspec tracked-context ingestion")提交的
+> examples/httpd_decompile.rs **无法编译**(fn worker_memory_image_bytes line 71 起未闭合
+> 大括号,ea0f7a74 09:53 为最后可编译版;可运行修版困在 stash@{0} emptyelse WIP——共享 stash
+> 禁触碰,需持有者释放或 root 从 ea0f7a74 重放)。BV 车道 httpd 门禁双侧统一用 ea0f7a74 驱动
+> A/B(同一驱动隔离 src 变更,结论不受影响)。任何车道跑 httpd E2E 前须先修此 P0。
 > **⚠ 配额事件(2026-09-22 ~04:3x)**: zai-coding-plan 5 小时用量墙,BL/BM/BN/
 > SWITCH_OUT-Cross-Review 四派发全部未启动,05:32:32 重置后需重发。
 > **Lane BB 修复落地(2026-09-22,wt/sb-returnsplit)**: BRANCH/CBRANCH 代理已替换为
@@ -387,6 +410,8 @@
 | w-scopefix | `CALLSPEC-DRIVER-0001`+`FUNCDATA-SCOPELOCALOVERFLOW-0001`(scopefix2 重放) | writer | `src/funcdata.rs`+`docs/api/funcdata.md`+scopelocal_wrap fixture+registry(如需 pushmultiequals/scope_find_overlap 重钉)，branch `wt2/scopefix` | 在途(2026-09-01 新派,nodesplit 释放租约后):重放 `de4309f`(inject_raw_ops 出生 CALL 无 spec→移植 flow.cc:683-690 核心)+`657ff89d`/`877ea9d`(wrap 域);fixture 对 master 重钉(双形态);repin commit 勿 pick;先读 oracle 全貌再落地,发现旧分支偏差按 oracle 修正 |
 | BN(w-gotoprints) | `GOTO-PRINTS-NEXTFLOWAFTER-ARMS-0001` | writer | `src/block.rs`+`src/coreaction.rs`+`docs/api/{block,blockaction,coreaction}.md`+`tests/oracle/goto_prints_nextflowafter_1204.*`+`tools/run_goto_prints_nextflowafter_oracle.sh`，branch `wt/sb-gotoprints` | **DONE(2026-09-22,见 wave 日志当日条)**:nextFlowAfter 12 分臂单一事实源落 block.rs(`next_flow_after_successors`/`graph_sibling_successors`,pub)+修 BB 表 Switch 槽0/序两偏差+删 7 死代码 typed 方法;双侧 fixture 六形态 **MATCH**;curl/httpd 全量 defects=numbering=0 且输出与父提交**字节一致**(当前语料零翻转,纯潜伏雷排除);**机制 C: blockaction.rs 未触及**(改动域=block.rs/coreaction.rs,主管线行为变化建议 root 安排独立复核);**开项②(append 臂 multigoto gotoedge 形态)已由 BT 车道物化(第七形态 MATCH,见 BT 行)** |
 | BT(w-mgresid) | `B2-MG-RESID-1/2/3`(MultiGoto Cross-Review 绑定条件收口)+BN 开项② | writer | `tests/oracle/blockmultigoto_1204.{cc,rs,metadata.json}`+`tools/run_blockmultigoto_oracle.sh`+`tests/oracle/goto_prints_nextflowafter_1204.{cc,rs,metadata.json}`+`docs/TODO_BOARD.md`，branch `wt/sb-mgresid` | **DONE(2026-09-22,fixture-only,零 src 改动)**:①fixture 三件套+pin runner 入库,四 family(规则驱动 switch_double_back/loop_exit_conflict 同形构造/direct 剥离契约/copy_switch_consumption 同形构造)双侧 runner **MATCH**;②`goto_prints_nextflowafter_1204` 第七形态 `switch_multigoto_gotoedge`(cc:3548-3553 append 臂)落地,MATCH,既有六形态字节不变;③glob_set/gp 归因=真差但全量落在 JUMPTABLE-TABLEAPI-0001(label 占位+goto-case 发射)+globalsym 覆盖缺口(原始偏移 vs 字段化),multigoto 域无可修项,详见 wave 日志 B2-MG-RESID 节;master E2E 基线 3648/0/0 复测无损;**续作(同日,BO label 管道并后适配)**:BlockSwitch 新增 jump/case_order 字段,两 fixture 三处字面量按 pre-label 旁观默认填充(jump=None/case_order=空,同 printc_switch_emit_1204 模式;case_gototypes/case_values 保持观测语义原值),全部漂移 pin(block/blockaction/rust_fixture)重钉,两 runner 于 label-pipeline master 复跑 **MATCH**(观测投影字节不变) |
+| BN(w-gotoprints) | `GOTO-PRINTS-NEXTFLOWAFTER-ARMS-0001` | writer | `src/block.rs`+`src/coreaction.rs`+`docs/api/{block,blockaction,coreaction}.md`+`tests/oracle/goto_prints_nextflowafter_1204.*`+`tools/run_goto_prints_nextflowafter_oracle.sh`，branch `wt/sb-gotoprints` | **DONE(2026-09-22,见 wave 日志当日条)**:nextFlowAfter 12 分臂单一事实源落 block.rs(`next_flow_after_successors`/`graph_sibling_successors`,pub)+修 BB 表 Switch 槽0/序两偏差+删 7 死代码 typed 方法;双侧 fixture 六形态 **MATCH**;curl/httpd 全量 defects=numbering=0 且输出与父提交**字节一致**(当前语料零翻转,纯潜伏雷排除);**机制 C: blockaction.rs 未触及**(改动域=block.rs/coreaction.rs,主管线行为变化建议 root 安排独立复核) |
+| BV(wt/sb-orderblocks) | `BLOCKSTRUCT-ORDERBLOCKS-0001`(=CR-BO 条件③)+`HTTPD-EXAMPLE-BRACE-0001`(P0 抓获登记) | writer | `src/block.rs`+`src/blockaction.rs`+`docs/api/{block,blockaction}.md`+`tests/oracle/blockstruct_orderblocks_1204.*`+`tools/run_blockstruct_orderblocks_oracle.sh`+registry+本行，branch `wt/sb-orderblocks` | **DONE(2026-09-22,见 wave 日志当日条)**:cc:2191 orderBlocks+compareFinalOrder 三键移植+BlockGoto/MultiGoto lastOp 委托补齐;B2 fixture 5/5 MATCH;curl/httpd A/B 字节恒等(语料全单元素列表,守卫双侧同步跳过);**机制 C: blockaction.rs 触及 → Cross-Review PENDING(root 派)**;附带 P0=master httpd 示例 dff36e78 编译破损(修版在 stash@{0},勿动) |
 | ~~w-salvage~~ | 12 个老 agent/* 分支甄别 | 只读 | 无 | **DONE**:SALVAGE-TRIAGE-2026-09-01.md;结论已并入上文 salvage 节 |
 | sb-condreplay(wt 分支) | `PRINTC-COND-REPLAY-0001`(BL 审计遗留两处条件通道裁决+转换) | writer | `src/printc.rs`+`docs/api/printc.md`+本行 | **DONE(2026-09-22)**:裁决=两处均真偏离(oracle cc:3053-3056=comma_separate 块分派全量 walk、cc:3088-3093=only_branch 块分派重放,括号由 opCbranch 供给;golden 1592/1601/2523 comma-init 形态实证)。改动=whiledo 入口 mod 协议(cc:3012-13/3065)+普通臂/overflow 重放分派化+dowhile 入口协议+尾部 only_branch 分派化,删 dowhile 文本缓冲+块级 R50 折叠。三门禁:curl 3649/0/0(基线 3648)、httpd 2459/0/0(基线 2462)、gcc 失败集逐函数恒等(81/26、7/22);printc 单测 12/12。golden 形态落地:comma-init 族/getparameter `']'` 修复(golden 2253)/glob->size 解析/unique+`( *)` 泄漏清除。新登记 `PRINTC-CONDBLOCK-JUNKOPS-0001`。详见 docs/api/printc.md 2026-09-22 追加节 |
 | (排队) | `PRINTC-CONDBLOCK-JUNKOPS-0001` | writer | `src/blockaction.rs`(whiledo cond 块构建)+相关 SSA/merge 域,owner 待派 | 排队(2026-09-22 sb-condreplay 发现):whiledo 条件块残留 junk COPY(`glob = filename`/`uVar6 = uVar6`/`__ptr = __ptr` 自拷贝)随 comma_separate 全量 walk 打印(match_url 97→99、parseconfig 197→199 波动源)——打印通道正确,多余 op 为结构层差异(golden 条件块已消除);修域=structurer/SSA copy 消除,非 printc。**根因数据补注(2026-09-22 sb-copyprop lane)**:本症状属 diff-high COPY 幸存族——main 在 ActionCopyMarker 时活 COPY 9051、same-high 8059 已标 nonprinting、**diff-high 992 幸存**,打印 608 条(Unique-out 为主,spill/restore 乒乓形态);主杠杆=merge 相 Cover 保守近似挡掉 required merge,详见 MERGE-COPYNOISE-DIFFHIGH-0001 与 docs/alignment_docs/COPYPROP_LANE_VERDICT_1204.md §3/§4 |

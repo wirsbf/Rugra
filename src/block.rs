@@ -3816,6 +3816,36 @@ impl BlockGraph {
         }
     }
 
+    /// Ghidra `BlockGraph::orderBlocks` (block.hh:430-431): sort the
+    /// top-level component list with `FlowBlock::compareFinalOrder`
+    /// (block.cc:709) — the entry block (index 0) first, blocks whose
+    /// `lastOp()` is a RETURN last, otherwise ascending index — skipping
+    /// the sort entirely when the list holds exactly one block. Called by
+    /// `ActionFinalStructure::apply` (blockaction.cc:2191) BEFORE
+    /// `finalizePrinting`/`scopeBreak`/`markUnstructured`, so the
+    /// next-sibling fall-thru that `BlockGraph::scopeBreak` feeds each
+    /// child (block.cc:1277-1287: `(*iter)->getIndex()` of the following
+    /// list entry), `gotoPrints`' next-in-flow successor (block.cc:2881-
+    /// 2890) and `emitBlockGraph`'s emission order all observe the final
+    /// printing order.
+    // Ghidra: block.hh:430 BlockGraph::orderBlocks
+    pub fn order_blocks(&mut self) {
+        // cc:431: if (list.size()!=1) sort(list.begin(),list.end(),compareFinalOrder);
+        if self.blocks.len() != 1 {
+            // Ghidra's std::sort is libstdc++ introsort: ranges <= 16
+            // elements sort via its insertion-sort phase, which is STABLE
+            // for comparator ties. The only tie compareFinalOrder produces
+            // is two RETURN-ending blocks (block.cc:717-725 returns false
+            // in both directions, never reaching the index comparison), so
+            // Rust's stable sort reproduces the oracle's tie permutation
+            // for the small top-level lists that dominate real structured
+            // graphs. Ranges > 16 may permute ties differently from
+            // libstdc++'s quicksort phase (registered residual, see the
+            // blockstruct_orderblocks_1204 fixture notes).
+            self.blocks.sort_by(compare_final_order);
+        }
+    }
+
     /// Find the nearest common ancestor (dominator) of two blocks in the
     /// dominator tree. Faithful to `FlowBlock::findCommonBlock`
     /// (block.cc:736-795). Used by `PcodeOp::compareOrder` (op.cc:778) to
@@ -5074,19 +5104,94 @@ pub fn finalize_printing_block(bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
 impl Eq for BlockRef {}
 
 impl PartialOrd for BlockRef {
-    // RUGRA-GLUE: Rust PartialOrd for BlockRef (Ghidra sorts FlowBlock* via compareFinalOrder block.cc:709)
+    // RUGRA-GLUE: Rust PartialOrd for BlockRef (Ghidra sorts FlowBlock* via
+    // compareBlockIndex block.hh:893 — the pure index `<` used by Varnode
+    // def-block ordering; NOT compareFinalOrder, which adds entry-first /
+    // RETURN-last keys and lives in compare_final_order below)
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for BlockRef {
-    // RUGRA-GLUE: Rust Ord for BlockRef (Ghidra sorts FlowBlock* via compareFinalOrder block.cc:709)
+    // RUGRA-GLUE: Rust Ord for BlockRef (Ghidra compareBlockIndex block.hh:893:
+    // `bl1->getIndex() < bl2->getIndex()` — see PartialOrd note above)
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         let a = self.0.read().unwrap();
         let b = other.0.read().unwrap();
         a.get_index().cmp(&b.get_index())
     }
+}
+
+/// Ghidra `FlowBlock::compareFinalOrder` (block.cc:709-730): the comparator
+/// behind `BlockGraph::orderBlocks` (block.hh:430) that establishes the
+/// final printing order of the top-level structure list.
+///
+/// Semantics, line by line against the oracle:
+/// - cc:712-713: the entry block (`getIndex() == 0`) always comes first.
+///   Distinct top-level blocks always carry distinct indices (a composite's
+///   index is the minimum basic-block index it contains, and components are
+///   disjoint), so at most one of the two arms can fire; the both-zero case
+///   is unreachable in the oracle and maps to `Equal` here only to keep the
+///   comparator a total order.
+/// - cc:714-715: `lastOp()` is the per-type virtual — null for the
+///   FlowBlock base, loops and switch (block.hh:239/707/723/737/793 region);
+///   the wrapped component's for BlockGoto/BlockMultiGoto (block.hh:562/590);
+///   the mirrored block's for BlockCopy (block.hh:533); the last child's for
+///   BlockList (block.cc:2960); the second child's for BlockCondition
+///   (block.cc:3016); the condition's for a single-component if-goto
+///   BlockIf (block.cc:3119); the block's own last op for BlockBasic
+///   (block.cc:2344).
+/// - cc:717-728: a block whose last op is CPUI_RETURN sorts AFTER every
+///   block that does not end in RETURN (whether the other side has a
+///   non-RETURN last op or no last op at all).
+/// - cc:719-725 tie: two blocks BOTH ending in RETURN compare `false` in
+///   both directions — the oracle's std::sort never reaches the index
+///   comparison for them, so they are a tie. Mapped to `Ordering::Equal`;
+///   `BlockGraph::order_blocks` resolves ties with a stable sort (see the
+///   tie note there).
+/// - cc:729: everything else orders by `getIndex()`.
+// Ghidra: block.cc:709 FlowBlock::compareFinalOrder
+pub fn compare_final_order(
+    bl1: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+    bl2: &Arc<RwLock<dyn FlowBlock + Send + Sync>>,
+) -> std::cmp::Ordering {
+    let a = bl1.read().unwrap();
+    let b = bl2.read().unwrap();
+    // cc:712-713: entry point (index 0) first.
+    if a.get_index() == 0 {
+        return std::cmp::Ordering::Less;
+    }
+    if b.get_index() == 0 {
+        return std::cmp::Ordering::Greater;
+    }
+    // cc:714-715: virtual lastOp() dispatch; only the opcode of the final
+    // op matters (CPUI_RETURN vs anything else vs absent).
+    let ret1 = a.last_op().map(|op| {
+        op.0.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_RETURN
+    });
+    let ret2 = b.last_op().map(|op| {
+        op.0.read().unwrap().opcode == crate::opcodes::OpCode::CPUI_RETURN
+    });
+    match (ret1, ret2) {
+        // cc:719-720: (op1 RETURN, op2 not RETURN) -> return false.
+        (Some(true), Some(false)) => return std::cmp::Ordering::Greater,
+        // cc:721-722: (op1 not RETURN, op2 RETURN) -> return true.
+        (Some(false), Some(true)) => return std::cmp::Ordering::Less,
+        // cc:724: op1 RETURN with op2 absent -> return false.
+        (Some(true), None) => return std::cmp::Ordering::Greater,
+        // cc:726-727: op2 RETURN with op1 absent -> return true.
+        (None, Some(true)) => return std::cmp::Ordering::Less,
+        // cc:719+724 both firing false: two RETURN-ending blocks — tie
+        // (comparator returns false in both directions, index is never
+        // consulted).
+        (Some(true), Some(true)) => return std::cmp::Ordering::Equal,
+        // Neither side ends in RETURN (non-RETURN ops, absent ops, or a
+        // mix): fall through to the index comparison (cc:729).
+        _ => {}
+    }
+    // cc:729: return (bl1->getIndex() < bl2->getIndex());
+    a.get_index().cmp(&b.get_index())
 }
 
 /// Represents a copy of another block
@@ -5569,6 +5674,16 @@ impl FlowBlock for BlockGoto {
     fn first_op(&self) -> Option<PcodeOpRef> {
         self.wrapped.as_ref().map(|w| w.read().unwrap().first_op())?
     }
+    // Ghidra: block.hh:562 BlockGoto::lastOp
+    fn last_op(&self) -> Option<PcodeOpRef> {
+        // cc:562: return getBlock(0)->lastOp(); — getBlock(0) is the
+        // wrapped component moved in by identifyInternal (block.cc:1706-
+        // 1708). compareFinalOrder (block.cc:714-715) reads this to push
+        // return-ending goto blocks to the end of the final print order.
+        self.wrapped
+            .as_ref()
+            .and_then(|w| w.read().unwrap().last_op())
+    }
     // Ghidra: block.hh:561 BlockGoto::getExitLeaf — getBlock(0)->getExitLeaf()
     fn get_exit_leaf_trait(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
         match &self.wrapped {
@@ -5854,6 +5969,15 @@ impl FlowBlock for BlockMultiGoto {
     // Ghidra: block.cc:1330 BlockGraph::firstOp — getBlock(0)->firstOp()
     fn first_op(&self) -> Option<PcodeOpRef> {
         self.wrapped.as_ref().map(|w| w.read().unwrap().first_op())?
+    }
+    // Ghidra: block.hh:590 BlockMultiGoto::lastOp
+    fn last_op(&self) -> Option<PcodeOpRef> {
+        // cc:590: return getBlock(0)->lastOp(); — same wrapped-component
+        // delegation as BlockGoto (block.hh:562); compareFinalOrder
+        // (block.cc:714-715) reads this for the final print order.
+        self.wrapped
+            .as_ref()
+            .and_then(|w| w.read().unwrap().last_op())
     }
     // Ghidra: block.hh:589 BlockMultiGoto::getExitLeaf — getBlock(0)->getExitLeaf()
     fn get_exit_leaf_trait(&self) -> Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>> {
@@ -7860,6 +7984,118 @@ mod edge_flag_tests {
             copy_second.read().unwrap().get_in(0).unwrap().flags & default_flag,
             0
         );
+    }
+
+    /// compareFinalOrder sort keys (block.cc:709-730) + orderBlocks' size
+    /// guard (block.hh:430-431), on BlockBasic blocks carrying real ops so
+    /// the production `lastOp` dispatch is exercised: entry (index 0)
+    /// always first (cc:712-713), RETURN-ending blocks last (cc:717-728,
+    /// including the null-lastOp arms), two RETURN-ending blocks tie
+    /// (cc:719+724 both false), everything else by index (cc:729), and a
+    /// single-element list skips the sort entirely (cc:431).
+    #[test]
+    fn compare_final_order_sort_keys_and_order_blocks_guard() {
+        use crate::op::PcodeOpRef;
+        use crate::opcodes::OpCode;
+        type BlockArc = Arc<RwLock<dyn FlowBlock + Send + Sync>>;
+
+        // BlockBasic::add_op appends, so the LAST op defines lastOp().
+        let make = |index: i32, opcode: Option<OpCode>| -> BlockArc {
+            let bl: BlockArc =
+                Arc::new(RwLock::new(BlockBasic::new(index, Address::new(0x1000))));
+            if let Some(opc) = opcode {
+                let op = PcodeOpRef(Arc::new(RwLock::new(crate::op::PcodeOp::new(
+                    crate::address::SeqNum::new(Address::new(0x1000), 1),
+                    opc,
+                ))));
+                bl.write().unwrap().add_op(op);
+            }
+            bl
+        };
+        let plain = |index: i32| make(index, Some(OpCode::CPUI_COPY));
+        let ret = |index: i32| make(index, Some(OpCode::CPUI_RETURN));
+        let no_op = |index: i32| make(index, None);
+
+        // cc:712-713: entry (index 0) before everything, including a
+        // RETURN-ending block; and the mirror comparison.
+        assert_eq!(
+            super::compare_final_order(&plain(0), &ret(3)),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            super::compare_final_order(&ret(3), &plain(0)),
+            std::cmp::Ordering::Greater
+        );
+        // cc:719-722: RETURN vs non-RETURN last ops.
+        assert_eq!(
+            super::compare_final_order(&ret(2), &plain(1)),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            super::compare_final_order(&plain(1), &ret(2)),
+            std::cmp::Ordering::Less
+        );
+        // cc:724: RETURN vs absent last op.
+        assert_eq!(
+            super::compare_final_order(&ret(2), &no_op(1)),
+            std::cmp::Ordering::Greater
+        );
+        // cc:726-727: absent vs RETURN last op.
+        assert_eq!(
+            super::compare_final_order(&no_op(1), &ret(2)),
+            std::cmp::Ordering::Less
+        );
+        // cc:719+724 tie: two RETURN-ending blocks, both directions Equal
+        // (the index comparison at cc:729 is never reached).
+        assert_eq!(
+            super::compare_final_order(&ret(5), &ret(2)),
+            std::cmp::Ordering::Equal
+        );
+        assert_eq!(
+            super::compare_final_order(&ret(2), &ret(5)),
+            std::cmp::Ordering::Equal
+        );
+        // Non-RETURN op vs absent op: falls through to the index key.
+        assert_eq!(
+            super::compare_final_order(&plain(4), &no_op(1)),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            super::compare_final_order(&no_op(1), &plain(4)),
+            std::cmp::Ordering::Less
+        );
+        // cc:729: plain index ordering.
+        assert_eq!(
+            super::compare_final_order(&plain(3), &plain(7)),
+            std::cmp::Ordering::Less
+        );
+
+        // End-to-end order_blocks permutation: initial list
+        // [ret5, entry0, ret2, plain7, no_op4] (a RETURN block ahead of the
+        // entry, mirroring the collapse-residue orders the oracle sorts).
+        let mut graph = BlockGraph::new();
+        let blocks = vec![ret(5), plain(0), ret(2), plain(7), no_op(4)];
+        for b in &blocks {
+            graph.add_block(b.clone());
+        }
+        graph.order_blocks();
+        let order: Vec<i32> = graph
+            .blocks
+            .iter()
+            .map(|b| b.read().unwrap().get_index())
+            .collect();
+        // Entry first, then non-RETURN blocks ascending by index, then the
+        // RETURN-ending blocks (stable tie: ret5 precedes ret2 because
+        // ret5 preceded ret2 in the pre-sort list).
+        assert_eq!(order, vec![0, 4, 7, 5, 2]);
+
+        // block.hh:431 size guard: a single-element list skips the sort
+        // (observable here as the identity permutation).
+        let mut single = BlockGraph::new();
+        single.add_block(ret(1));
+        single.order_blocks();
+        assert_eq!(single.blocks.len(), 1);
+        assert_eq!(single.blocks[0].read().unwrap().get_index(), 1);
     }
 }
 
