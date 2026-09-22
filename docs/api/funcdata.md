@@ -1,5 +1,55 @@
 # `funcdata.rs` API Reference
 
+## 2026-09-22：INDIRECT 构造器符号尾补齐（FUNCDATA-INDIRECT-SYMBOLTAIL-0001）
+
+CF 裁决表（wt/sb-promosite, `HERITAGE-PROMOTE-SYMBOLTAIL-0001` 收尾行 36）登记的
+funcdata 域缺口：`new_indirect_op`（oracle cc:689/692）与
+`new_indirect_creation_in_space`（cc:719）的注释声称构造器带符号尾，但实现只有
+`Heritage::apply_new_varnode_flags` 的 flags 折叠（无 `setSymbolProperties` 分支）。
+本次按 BZ 模式在 create/def 接线与 flags 折叠之间插入
+`self.set_varnode_properties(&vn)`（折叠保留，OR 可结合、不 Clear typelock）。
+
+**oracle 双路径 usepoint 语义**（逐字核对）：
+
+- **cc:689 newin（newVarnode 路径,free varnode）**：
+  `localmap->queryProperties(vn->getAddr(), vn->getSize(), Address(), vflags)`
+  （funcdata_varnode.cc:162）——usepoint 是 INVALID 默认 `Address()`。推论
+  （database.cc:117-119 `SymbolEntry::inUse`）：`isAddrTied()` 项对任意 usepoint
+  成立；**invalid usepoint 永不命中 window-limited 项**（cc:118
+  `if (usepoint.isInvalid()) return false;`）。命中→`setSymbolProperties(entry)`
+  （varnode.cc:404-421：`entry->updateType(vn)` 类型强制 + typelocked 时挂
+  `mapentry`+`high->setSymbol` + `setFlags(entry->getAllFlags() & ~typelock)`）；
+  未命中→`setFlags(vflags & ~typelock)`（cc:166）。
+- **cc:692/cc:719 newout（newVarnodeOut 路径,defined varnode）**：尾在
+  `op->setOutput(vn)` 接线**之后**跑
+  `queryProperties(m, s, op->getAddr(), vflags)`（funcdata_varnode.cc:115）——
+  usepoint 是**定义 op 的地址**（两构造器里 = 引发 op 的地址，因
+  `newOp(2, indeffect->getAddr())`）。Rust `set_varnode_properties` 内部
+  `get_use_point`（varnode.cc:696-703：written→`def->getAddr()`）在接线后调用
+  即得同值——**精确对齐**。cc:719 尾先于 cc:720-722 的 `indirect_creation`
+  位 OR（顺序保持）。
+- free newin 路径已知残差：Rust `get_use_point` 对 free varnode 返
+  `fd.getAddress()+-1`（varnode.cc:701 同款），非 INVALID——仅当某 window
+  覆盖函数入口前一地址时可观察差异（BZ lane 同款近似，语料内无此形态）。
+- in0 走 `newConstant`（cc:716）无尾（oracle cc:74 注释 "no chance of matching
+  localmap"）；`newVarnodeIop` 亦无尾。
+
+**A/B 验证（同机同树,base=d3fbe924 vs after,均诚实 exit 0）**：
+curl base **3607/0/0** → after **3605/0/0**（skeleton −2）;httpd base=after
+**2456/0/0 字节级一致**。diff 恰 5 行,全部在 config 域潜伏位点：
+`main` 4 行（3 行 char 字面量 `'\0'`/`'\x01'`→`0`/`1`,golden 为 `false`/`true`
+保持非 bool 残差、方向中性;1 行 `::config.outfile != (void *)0x0`→
+`(char *)0x0` **与 golden cc:1008 逐字节一致**）、`parseconfig_constprop_0`
+1 行（`::config.url != (char *)0x0`,**与 golden cc:1017 一致**）——typelocked
+全局 `char*` 经 `setSymbolProperties` 挂上 DWARF 类型（与 BZ lane 的
+glob_expand `URLGlob*` 同族机制）。config 域抽验
+main/getparameter/parseconfig/glob_set/glob_range/glob_url 逐函数
+defects=numbering=0;函数体 A/B:getparameter_constprop_0(652L)/glob_set(67L)/
+glob_range(70L)/glob_url(18L) 字节级一致,仅 main(969L) 与
+parseconfig_constprop_0(160L) 含上述改善行——零回退。`cargo test --lib`
+funcdata/indirect/guard 域 62/17 与 base 完全相同（17 失败为 d3fbe924 既有,
+非本改动引入）。annotations/refs hooks 绿。
+
 ## 2026-09-22：`set_input_varnode` 补 cc:364 属性遍（HERITAGE-PROMOTE-SYMBOLTAIL-0001）
 
 `Funcdata::set_input_varnode` 此前直通 `vbank.set_input_varnode`，漏掉 oracle
