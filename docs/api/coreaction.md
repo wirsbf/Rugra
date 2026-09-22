@@ -2550,3 +2550,7 @@ glob_range/glob_url/next_url 逐函数 0/0；确定性双跑（E2E stdout sha256
 无 Rust 移植（stub None）；typeop.rs 侧 `propagate_to_pointer` 旧签名调用点
 （spacebase 臂族）仍以 alttype 尺寸建指针——测试路径 twin，未在本 lane write-set
 内，留待 typeop 域收敛。
+
+### 2026-09-23（VARGROUP-ABSORB-0001 §4-4）：ActionRestrictLocal 参数谓词 + ActionRestructureVarnode 持久 scope
+- `ActionRestrictLocal::apply` 循环 1 的 spacebase 参数判定从 `p.address.as_u64() > 0x7FFF_FFFF`（从不命中 callee 相对偏移）修正为 `p.address_space == AddressSpace::Stack`（coreaction.cc:1974-1975 的 `IPTR_SPACEBASE` 空间类型测试）。match_url 调用点（so=fc70 + Stack:8:304）现在把 fc78..fd90 出参影子区 markNotMapped——oracle `print localrange` 的 fc78-fda7 间隙由此产生，30d6 字段件因此非 addr-tied/mapped。
+- `ActionRestructureVarnode::apply` 改为复用 `fd.scope`（Ghidra 的 localmap 为 Funcdata 生命周期单一对象，funcdata.cc:69-70）；仅首趟构造 + seed 平台参数符号 + `reset_local_window`（一次性窗口安装）。此前每趟 fresh scope + 全量重装窗口，把 RestrictLocal 的窄化整体抹掉。

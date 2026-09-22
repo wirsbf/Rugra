@@ -11,7 +11,10 @@ driver 对 `.data/.bss` 逐字节 span-盲播 DAT_ 名，main/gp/parseconfig 的
 `DAT_00117[56]xx` 族（167 处 config 内部字节引用）全部落 DAT 代理名。本 commit 按
 oracle 语义修复三件：
 
-- **①打印优先级（符号优先）**：新 `push_symbol_detail_leaf(&self, vn, allow_cast)
+- ### 2026-09-23（VARGROUP-ABSORB-0001 §4-4）：push_symbol_detail_leaf 局部符号 partial 走向恢复
+- 移除局部符号裸名降级（原注释以"bridge 符号尺寸近似"为由对 `!symbol_is_global` 直接返回 displayName）。oracle 的 pushSymbolDetail（printlanguage.cc:238-262）对局部/全局符号走同一 symboloff→bound check→partial/mismatch 阶梯——`glob.pattern[0].type`/`auVar24._0_4_`/`in_stack_..._80_24_` 全部产自局部符号。持久 ScopeLocal 符号层（见 varmap.md/coreaction.md）现已精确尺寸，bound check 与 `._off_sz_` 臂产出 oracle 形态；mismatch 臂（`_name`/unnamed-location，printc.cc:2067-2083）仍守超大读。
+
+**①打印优先级（符号优先）**：新 `push_symbol_detail_leaf(&self, vn, allow_cast)
   -> Option<String>`（`// Ghidra: printlanguage.cc:238`）实现 sym!=null 臂的完整文本
   形态，插在两条叶子路径的**最前**：`symboloff==-1` 且类型不需 resolution →
   pushSymbol 形态（scope 前缀 + displayName，printc.cc:1905-1936）；

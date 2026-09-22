@@ -909,23 +909,90 @@ impl Merge {
         a: &Arc<RwLock<Varnode>>,
         high: &crate::variable::HighVariable,
     ) -> bool {
+        // Ghidra merge.cc:1616-1646 Merge::inflateTest.
+        //   ahigh = a->getHigh();
+        //   testCache.updateHigh(high);  (lazily rebuilds high->internalCover)
+        //   for each instance b of ahigh:
+        //     if (b->copyShadow(a)) continue;   // copy-chain shadow allowed
+        //     if (2 == b->getCover()->intersect(high->internalCover)) return true;
+        //   piece = ahigh->piece;
+        //   if (piece != null) {
+        //     piece->updateIntersections();
+        //     for each intersecting otherPiece:
+        //       off = otherPiece->getOffset() - piece->getOffset();
+        //       for each instance b of otherHigh:
+        //         if (b->partialCopyShadow(a, off)) continue;
+        //         if (2 == b->getCover()->intersect(highCover)) return true;
+        //   }
+        //   return false;
+        // The decisive semantic: only a WHOLE-INTERVAL intersection (== 2)
+        // refuses implication; a boundary-only touch (== 1) is allowed. The
+        // previous `intersects()` (any overlap) form made every SUBPIECE
+        // field extraction explicit because the input shadow's read point
+        // coincides with the piece's def point (a boundary touch).
         let a_high = a.read().unwrap().high.clone();
-        let Some(ahigh) = a_high else {
+        let Some(ahigh_arc) = a_high else {
             return false; // a has no HighVariable — no intersection possible
         };
-        let ahigh = ahigh.read().unwrap();
-        // high.cover is the union of the implied varnode's instance covers.
-        // We test each instance of a's HighVariable against it.
-        for inst_arc in &ahigh.instances {
+        let ahigh = ahigh_arc.read().unwrap();
+        // high.cover is the union of the implied varnode's instance covers
+        // (Rugra's materialization of internalCover, merge.rs cover pass).
+        // First loop: instances of a's HighVariable (merge.cc:1623-1632).
+        // Snapshot the instance arcs, then drop the read guard BEFORE the
+        // piece walk: update_intersections takes a WRITE lock on the owning
+        // high (variable.rs), and read+write on the same RwLock from one
+        // thread would deadlock (observed: pipeline hang at markimplied).
+        let first_instances: Vec<Arc<RwLock<Varnode>>> = ahigh.instances.clone();
+        let piece_arc = ahigh.piece.clone();
+        drop(ahigh);
+        for inst_arc in &first_instances {
             let inst = inst_arc.read().unwrap();
-            // Skip the instance that IS 'a' (Arc identity) — intersection
-            // with itself or its copy-shadow is allowed (merge.cc:1626 copyShadow).
-            if Arc::ptr_eq(inst_arc, a) {
+            // merge.cc:1626: if (b->copyShadow(a)) continue; — copy-chain
+            // shadows hold the same value, their cover is shared with a.
+            let a_g = a.read().unwrap();
+            if inst.copy_shadow(&a_g) {
                 continue;
             }
+            drop(a_g);
             if let Some(ic) = inst.cover.as_ref() {
-                if ic.intersects(&high.cover) {
+                if 2 == ic.intersect_char(&high.cover) {
                     return true;
+                }
+            }
+        }
+        // merge.cc:1633-1644: VariablePiece intersection walk.
+        if let Some(piece_arc) = piece_arc {
+            let other_pieces: Vec<Arc<RwLock<crate::variable::VariablePiece>>> = {
+                crate::variable::VariablePiece::update_intersections(&piece_arc);
+                let piece = piece_arc.read().unwrap();
+                (0..piece.num_intersection())
+                    .filter_map(|i| piece.get_intersection(i))
+                    .collect()
+            };
+            let piece_offset = piece_arc.read().unwrap().group_offset;
+            let a_vn_guard = a.read().unwrap();
+            for other_arc in other_pieces {
+                let (other_off, other_high_weak) = {
+                    let p = other_arc.read().unwrap();
+                    (p.group_offset, p.get_high())
+                };
+                let Some(other_high_arc) = other_high_weak.and_then(|w| w.upgrade()) else {
+                    continue;
+                };
+                let off = other_off - piece_offset;
+                let other_high = other_high_arc.read().unwrap();
+                for inst_arc in &other_high.instances {
+                    let inst = inst_arc.read().unwrap();
+                    // merge.cc:1640: partialCopyShadow allows SUBPIECE/PIECE
+                    // derived shadows at the piece-relative offset.
+                    if inst.partial_copy_shadow(&a_vn_guard, off) {
+                        continue;
+                    }
+                    if let Some(ic) = inst.cover.as_ref() {
+                        if 2 == ic.intersect_char(&high.cover) {
+                            return true;
+                        }
+                    }
                 }
             }
         }
@@ -4450,8 +4517,104 @@ impl Merge {
                     }
                     let _ = in_vn;
                 }
-                // PIECE/SUBPIECE: VariablePiece CONCAT reassembly (merge.cc:1478-1528).
-                // Omitted — Rugra has no VariablePiece infrastructure.
+                // PIECE: output built out of pieces of itself (merge.cc:1478-1506).
+                // All three highs carry VariablePieces in the SAME group, with
+                // offsets consistent with the concat reconstruction →
+                // nonprinting op + inputs forced explicit (internal PIECE ops
+                // are hidden; the pieces print as their own statements).
+                OpCode::CPUI_PIECE => {
+                    let (v1, v2, v3) = {
+                        let op = op_ref.0.read().unwrap();
+                        (
+                            op.output.clone(),
+                            op.inrefs.get(0).cloned(),
+                            op.inrefs.get(1).cloned(),
+                        )
+                    };
+                    let (Some(v1), Some(v2), Some(v3)) = (&v1, &v2, &v3) else { continue ;
+                    };
+                    let p1 = v1.read().unwrap().high.clone()
+                        .and_then(|h| h.read().unwrap().piece.clone());
+                    let p2 = v2.read().unwrap().high.clone()
+                        .and_then(|h| h.read().unwrap().piece.clone());
+                    let p3 = v3.read().unwrap().high.clone()
+                        .and_then(|h| h.read().unwrap().piece.clone());
+                    let (Some(p1), Some(p2), Some(p3)) = (p1, p2, p3) else { continue };
+                    // p1->getGroup() != p2/p3->getGroup() → break (cc:1486-1489).
+                    let same_group = {
+                        let g1 = p1.read().unwrap().get_group_arc();
+                        let g2 = p2.read().unwrap().get_group_arc();
+                        let g3 = p3.read().unwrap().get_group_arc();
+                        match (g1, g2, g3) {
+                            (Some(a), Some(b), Some(c)) => {
+                                Arc::ptr_eq(&a, &b) && Arc::ptr_eq(&a, &c)
+                            }
+                            _ => false,
+                        }
+                    };
+                    if !same_group { continue; }
+                    // Little-endian (cc:1496-1499): p3->getOffset() == p1->getOffset()
+                    // && p2->getOffset() == p1->getOffset() + v3->getSize().
+                    // (Rugra targets x86-64 LE only; the BE arm mirrors cc:1492-1495.)
+                    let (p1_off, p2_off, p3_off) = (
+                        p1.read().unwrap().group_offset,
+                        p2.read().unwrap().group_offset,
+                        p3.read().unwrap().group_offset,
+                    );
+                    let v3_size = v3.read().unwrap().get_size() as i32;
+                    if p3_off != p1_off { continue; }
+                    if p2_off != p1_off + v3_size { continue; }
+                    fd.op_mark_non_printing(op_ref);
+                    // cc:1499-1506: inputs forced explicit (clearImplied+setExplicit).
+                    if v2.read().unwrap().is_implied() {
+                        v2.write().unwrap().clear_implied();
+                        v2.write().unwrap().set_explicit();
+                    }
+                    if v3.read().unwrap().is_implied() {
+                        v3.write().unwrap().clear_implied();
+                        v3.write().unwrap().set_explicit();
+                    }
+                }
+                // SUBPIECE: internal field extraction (merge.cc:1508-1528).
+                // out and in highs share a group and the truncation offset
+                // matches the piece-offset delta → nonprinting + in(0) explicit.
+                OpCode::CPUI_SUBPIECE => {
+                    let (v1, v2, val) = {
+                        let op = op_ref.0.read().unwrap();
+                        (
+                            op.output.clone(),
+                            op.inrefs.get(0).cloned(),
+                            op.inrefs.get(1).map(|c| c.read().unwrap().get_offset() as i32),
+                        )
+                    };
+                    let (Some(v1), Some(v2), Some(val)) = (v1, v2, val) else { continue };
+                    let p1 = v1.read().unwrap().high.clone()
+                        .and_then(|h| h.read().unwrap().piece.clone());
+                    let p2 = v2.read().unwrap().high.clone()
+                        .and_then(|h| h.read().unwrap().piece.clone());
+                    let (Some(p1), Some(p2)) = (p1, p2) else { continue };
+                    let same_group = {
+                        let g1 = p1.read().unwrap().get_group_arc();
+                        let g2 = p2.read().unwrap().get_group_arc();
+                        match (g1, g2) {
+                            (Some(a), Some(b)) => Arc::ptr_eq(&a, &b),
+                            _ => false,
+                        }
+                    };
+                    if !same_group { continue; }
+                    // Little-endian (cc:1521-1523): p2->getOffset() + val ==
+                    // p1->getOffset(). (BE arm mirrors cc:1518-1520.)
+                    let (p1_off, p2_off) = (
+                        p1.read().unwrap().group_offset,
+                        p2.read().unwrap().group_offset,
+                    );
+                    if p2_off + val != p1_off { continue; }
+                    fd.op_mark_non_printing(op_ref);
+                    if v2.read().unwrap().is_implied() {
+                        v2.write().unwrap().clear_implied();
+                        v2.write().unwrap().set_explicit();
+                    }
+                }
                 _ => {}
             }
         }

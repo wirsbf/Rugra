@@ -533,6 +533,28 @@ impl TypeFactory {
         }
         drop(cache);
 
+        // type.cc:3652-3657: a base request over max_basetype_size becomes an
+        // ARRAY of 1-byte unknowns ("Create array of unknown bytes to match
+        // size"), regardless of the requested metatype — the source of the
+        // oracle's `xunknown1 [280]` input-shadow type, whose TYPE_ARRAY
+        // metatype is what makes RuleSubRight's isPieceStructured test
+        // (ruleaction.cc:7256) fire for large SUBPIECE inputs. The twin
+        // previously built a scalar TypeBase of the raw size, so oversized
+        // inputs typed as scalar INT were never piece-structured and degraded
+        // to the INT_RIGHT shift ladder (VARGROUP-ABSORB-0001 §4-4).
+        if size > self.max_base_type_size {
+            let element = self.get_base(1, TypeMetatype::Unknown)?;
+            let array = self.oversize_unknown_array(size, element)?;
+            // Cache per (size, metatype): every oversize metatype maps to the
+            // same unknown1 array (type.cc:3655 ignores m here).
+            let mut cache = self
+                .base_cache
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            cache.entry(cache_key).or_insert_with(|| array.clone());
+            return Some(array);
+        }
+
         // Ghidra constructs an unnamed TypeBase and canonicalizes it through
         // findAdd when no preferred core entry exists. Its structural key is
         // the plain base sub-metatype, descending size, then id zero.
@@ -562,6 +584,53 @@ impl TypeFactory {
         Some(
             tree.entry(tree_key)
                 .or_insert_with(|| Arc::new(Datatype::Base(TypeBase::new(String::new(), size, m))))
+                .clone(),
+        )
+    }
+
+    // RUGRA-GLUE: the `&self`-twin form of the type.cc:3652-3657 oversize-base
+    // array conversion (mirror of `get_array_result`, type.cc:3902-3908, for
+    /// the unknown1 family): build/find the unnamed array of `element` in
+    /// `base_type_tree` under the same structural key `find_add` uses, so
+    /// both the `&mut` faithful path and this twin hand out the identical
+    /// `Arc` identity.
+    fn oversize_unknown_array(
+        &self,
+        num_elements: usize,
+        element: Arc<Datatype>,
+    ) -> Option<Arc<Datatype>> {
+        // get_array_result strips the element (type.cc:3655 getTypeArray ->
+        // getStripped); unnamed bases have no stripped form, so the element
+        // passes through unchanged.
+        let element =
+            Datatype::get_stripped_arc(&element).unwrap_or(element);
+        let size = num_elements * element.get_align_size();
+        let mut base = TypeBase::new(String::new(), size, TypeMetatype::Array);
+        base.alignment = element.get_alignment() as i32;
+        base.align_size = size;
+        // type.hh:937-944: arraysize==1 sets needs_resolution; oversize
+        // requests have num_elements > 1 here.
+        let candidate = Datatype::Array(TypeArray {
+            base,
+            array_of: element,
+            num_elements,
+        });
+        let tree_key = Self::type_tree_key(&candidate);
+        let tree = self
+            .base_type_tree
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(existing) = tree.get(&tree_key) {
+            return Some(existing.clone());
+        }
+        drop(tree);
+        let mut tree = self
+            .base_type_tree
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Some(
+            tree.entry(tree_key)
+                .or_insert_with(move || Arc::new(candidate))
                 .clone(),
         )
     }
