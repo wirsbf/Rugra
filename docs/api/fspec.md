@@ -991,3 +991,51 @@ type-lock。Rugra 现已通过 `prototype.is_input_locked()` 对齐该门与首�
 scalar x86 input/slot/placeholder 投影。它不批准 `commitNewInputs/Outputs` 的
 完整分支、ParamEntry join/reverse/endian/error 状态、hidden-return pointer、
 ModelRules 或 Architecture-owned Address identity；`fspec` 保持 L2。
+
+
+## 2026-09-23（SB-MATCHURL-ORD164-0001）：`<rule>` fillin 投影接入 output 派发链
+
+- **根因**（match_url Phase 2 ordinal 164，`universal:fullloop:activereturn`
+  op-idx 139）：exit@plt 调用点（0x53ee）的 RDX 输出试探（guardCalls
+  killedbycall 臂 `newIndirectCreation` 的 const0 DELAY_SLOT）被错误提交为
+  CALL 正式输出。链路：oracle `ParamListStandardOut::initialize`
+  （fspec.cc:1614-1627）因 gcc `__stdcall` output 含
+  `<join_dual_class/>`（`MultiSlotDualAssign` 构造器置
+  `fillinOutputActive=true`，modelrules.cc:1143）而得
+  `useFillinFallback=false` → `fillinMap`（fspec.cc:1721-1763）走规则步：
+  `MultiSlotDualAssign::fillinOutputMap`（modelrules.cc:1242-1291）对唯一
+  active 的 RDX 试探因 `!entry->isFirstInClass()`（RAX 才是 general 类
+  首entry，resolveFirst fspec.cc:76-88）拒绝 → `fillinMapFallback(true)`
+  的 firstOnly 过滤（cc:1649）跳过 RDX → 全部 markNoUse →
+  `buildOutputFromTrials`（fspec.cc:5770-5860）在
+  `getNumTrials()==0` 早退，CALL out=- 保持、const0 试探 INDIRECT 存活。
+  Rugra 侧 `initialize` 钉死空规则分支（`use_fillin_fallback=true` 强制
+  legacy）→ `fillin_map_fallback(active,false)` 的 firstOnly=false 让
+  非-first 的 RDX entry 参选 → lone RDX 试探被 markUsed → 输出直连 +
+  DELAY_SLOT 销毁（ordinal 164 分歧形态）。
+- **修复**：`src/fspec.rs` 新增 `ModelRuleFillin`/`FillinAction` ——
+  `<rule>` 元素到 fillin 相关状态的解码投影（`ModelRule::decode`
+  modelrules.cc:1676-1709 只委托 assign action，datatype filter/qualifier/
+  precondition/sideeffect 不进 fillin 路径，结构化跳过保持流位置）。
+  七种 assign action（decodeAction 派发 modelrules.cc:587-614）中五种
+  `fillinOutputActive=true`（GotoStack/MultiSlotAssign/MultiMemberAssign/
+  MultiSlotDualAssign/ConsumeAs），`fillin_output_map` 逐行移植五种
+  trial-walk（cc:731/902/1019/1242/1345）+ 默认 false 两种
+  （ConvertToPointer/HiddenReturn，cc:579）。`ParamListStandard` 增加
+  `model_rules` 字段，`decode` 的 `<rule>` 分支从 skip 改为真解码；
+  `ParamListStandardOut::initialize` 忠实扫描
+  `canAffectFillinOutput()`（仅 legacy 分支强制
+  `auto_killed_by_call=true`）；`fillin_map` 在 `sort_trials` 后按声明序
+  走规则（cc:1746-1761：首个接受的规则把 active 全部 markUsed、
+  inactive markNoUse+清 entry 后 return），否则落
+  `fillin_map_fallback(true)`。
+- **验证**：match_url Phase 2 投影首分歧 164 → **191**（oppool2
+  CROSSBUILD 族，新登记 SB-MATCHURL-ORD191-0001）；三门禁 curl 124
+  函数 defects=0/numbering=0（skeleton 2795=亲父实测基线）、httpd 29/29
+  0/0（2339=基线）、config 域 10 函数逐个 0/0、next_url Phase 2 投影
+  MATCH 保持（335 stages/96457 ops）；cargo test --lib 串行 1650/18
+  失败集与基线逐名一致；gcc 审计 81 OK/26 FAIL=预存基线。
+- **残差**：`ModelRule` 的 forward `assignAddress` 消费端仍属
+  FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001 / FSPEC-0002（本投影只覆盖
+  fillin 两入口消费的状态）；`HiddenReturnAssign::decode` 的
+  voidlock/strategy 读入后不入 fillin 状态（oracle 同样无消费）。
