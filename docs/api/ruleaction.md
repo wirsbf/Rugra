@@ -28,6 +28,11 @@ output、descend、autolive、deadcode-delay 六个守卫，成功后调用完�
   传播成功才 `op_destroy` PTRSUB；任一失败或 addr-force 走 COPY 转换
   （cc:7395-7400，char* 类型随常量携带）。
 - descendant 快照对应 oracle 迭代器先 `++iter` 再变换的遍历健壮性。
+- （2026-09-22，SB-ORD159-NULLSLOT-0001）回归测试
+  `test_rule_ptrsub_char_constant_string_manager_confirms` 的销毁后断言改为
+  忠实后置条件：`op_destroy`（cc:7392-7393）逐槽 clearInput（op.cc:98）
+  置 NULL 保留槽数——post-destroy `numInput()==2`、两槽均为共享 null 哨兵
+  （旧断言 `inrefs.is_empty()` 编码了已修复的 nullable 表示缺口）。
 
 E2E：hugehelp 三个合法字符串地址（0x10ea40/0x111270/0x113ad0）折叠为
 字面量，三个非法 UTF-8 地址保持 `&DAT_*` 形态（isString 负缓存拒绝），

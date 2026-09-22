@@ -26,6 +26,10 @@ NULL input slot 建模：Ghidra 的 `PcodeOp` 构造函数（op.cc:71，`inrefs(
 `inrefs` 是非可选 `Vec<Arc<RwLock<Varnode>>>`，因此用 `null_slot_sentinel()`
 （脱离 bank、size-0 的 Varnode）表示 NULL 槽：不经 `VarnodeBank` 创建（无
 create-index/计数副作用）、不带 descendant、在观察投影中按 NULL 处理。
+（2026-09-22，SB-ORD159-NULLSLOT-0001：本文件私有 `null_slot_sentinel` 改为
+委托 `crate::op::null_slot_sentinel()` 的进程级共享实例——两个 NULL 槽之间
+`Arc::ptr_eq` 恒 true，匹配 Ghidra 指针相等；`createReplacement` 的
+逐槽 unset 循环不再需要手动补写哨兵，`op_unset_input` 自带 clearInput。）
 
 ## 导出的公共 API
 

@@ -311,7 +311,7 @@ binary / disasm
 
 `clear_dead_varnodes` 的 `makeFree` 调用点（2026-08-13，`VARNODE-INIT-0001`）从当前 bank 的 loc-tree snapshot 获取 Arc，因而使用带 debug ownership 断言的 prevalidated remove→mutate→reinsert；随后清 cover，并在同一个 `hasNoDescend` 守卫内删除 free 值。`combine_input_varnodes` 按锁定 `funcdata_varnode.cc:381-454` 在 synthetic LE、register storage、无符号/ProtoModel effect、high-level-off 的合法图上执行：PIECE reader 改成 COPY；其他 reader 在入口块首逆序插入 SUBPIECE，输出保留原 source Address space/offset；`totalReplace` 支持同一 op 的重复输入槽；旧输入 detach 后经 checked `delete_varnode` 删除；最终建立并传播 setInput 返回的 canonical Arc。真实 12.0.4 fixture 观察完整 slots、descendants、bank membership/cardinality、op 顺序与 storage，并覆盖 non-input/non-contiguous 两条异常。big-endian、nullable/missing-entry 图，以及 `newVarnodeOut` 的 local-map/`assignHigh`/lane/ProtoModel property 副作用仍未由该 fixture 证明。
 
-`Funcdata::destroy_varnode` 只把 read edges 从 descendant 索引 detach、清定义输出，再走 prevalidated bank 删除；因为 Rust `Vec<Arc<Varnode>>` 不能表示 Ghidra 的 NULL input slot，`op_unset_input` 后槽中仍保留 stale Arc，直到调用方移除或替换该槽。本函数对 foreign/stale handle 的行为未闭合，不能当成 public checked `destroyVarnode`。相对地，inline `delete_varnode` 返回 `Result<()>` 并直接走 public checked `VarnodeBank::destroy_varnode`；bank API 的 integrated/foreign/stale 错误由 `Result` 表达。Ghidra delete 与外部 Rust Arc 生命周期差异继续归 `VARNODE-0001`。
+`Funcdata::destroy_varnode` 只把 read edges 从 descendant 索引 detach、清定义输出，再走 prevalidated bank 删除。（2026-09-22 更新，SB-ORD159-NULLSLOT-0001：`op_unset_input` 现在把槽置为共享 null 哨兵而非保留 stale Arc——不再依赖"槽中残留旧 Arc"的表示。）本函数对 foreign/stale handle 的行为未闭合，不能当成 public checked `destroyVarnode`。相对地，inline `delete_varnode` 返回 `Result<()>` 并直接走 public checked `VarnodeBank::destroy_varnode`；bank API 的 integrated/foreign/stale 错误由 `Result` 表达。Ghidra delete 与外部 Rust Arc 生命周期差异继续归 `VARNODE-0001`。
 
 `set_input`/`set_def` 的 canonical 返回值已贯穿当前生产调用点：`combine_input_varnodes`、INDIRECT 构造、raw P-code 两种注入路径及 Heritage MULTIEQUAL 输出都把 canonical Arc 接到后续 op/output。`inject_raw_ops` Phase 3 在转换前先 snapshot `(opcode, inputs, output)` 并释放 op read guard，避免 xref replacement 回写同 op 时自锁；每个变换后的 slot 在 debug build 验证确实指向返回的 canonical Arc。这里仅证明这些 fresh/bank-owned 内部路径和锁生命周期，不把 raw 注入桥接整体宣称为 Ghidra `PcodeEmitFd::dump` MATCH。
 
@@ -1009,10 +1009,16 @@ fixture `tests/oracle/op_insert_1204.*` 验证。
 相邻但未纳入该 MATCH 的结构缺口：Ghidra `opUnlink/opDestroy` 会把每个
 输入槽清成 NULL 而保留槽数。`RULE-MULTICOLLAPSE-0001` 已让 Rugra
 `op_destroy` 通过 `destroy_varnode` 真正删除输出 Varnode，并在有 parent 时
-执行 markDead + 从 `BlockBasic` 移除；但 `Vec<Arc<Varnode>>` 仍不能表达
-nullable slot，只能在按序擦除 descendant 后清空整个 Vec。因此 dead op 的
-input-slot 状态仍是 **MISMATCH**，不能由插入或 collapse fixture 推导为完整
-`opDestroy` B2 `MATCH`。
+执行 markDead + 从 `BlockBasic` 移除。（2026-09-22 更新，SB-ORD159-NULLSLOT-0001：
+`op_unset_input` 现在实现 cc:98 `clearInput` 的槽内置 NULL——写入共享
+`crate::op::null_slot_sentinel`（Ghidra `(Varnode*)0` 的进程级替身），槽数保留；
+`op_destroy` 不再清空整个 Vec。dead op 的 `numInput()` 槽数与 NULL 槽状态
+与 oracle 一致（next_url 镜像投影 ordinal 159 起 dead INDIRECT 渲染
+`in=-,-` 逐字节对齐）；`op_unlink`/condexe 槽丢弃路径的 stale-Arc 泄漏同修。
+唯一残留：`new_op` 创建期不预置 N 个 NULL 槽（Ghidra `PcodeOp(inputs,sq)`
+ctor op.cc:71 `inrefs(s)` 预置），`PcodeOpBank::create` 只 reserve——若语料
+出现"创建后未填满即被 SNAP"的形态仍会暴露 `in=-` vs `in=-,-`（登记于
+SB-ORD159-NULLSLOT-0001 残差）。）
 同一 OPBANK 缺口也意味着 `new_op(inputs, pc)` 当前 `num_input()==0`，并
 预置 COPY opcode/派生 flags；fixture 在插入前立即设置 opcode 和所需输入，
 所以本次 `MATCH` 仅证明插入族和 dead/alive 生命周期，不证明完整 newOp。
@@ -1032,8 +1038,8 @@ input-slot 状态仍是 **MISMATCH**，不能由插入或 collapse fixture 推�
 
 ### 2026-06-26（续）：op_destroy / op_unset_input
 
-- `op_destroy(op)` — `Funcdata::opDestroy`（funcdata_op.cc:203）：调用 `destroy_varnode` 删除输出及其 bank identity，按 slot 顺序断开所有输入；有 parent 时 markDead 并从原 `BlockBasic` 删除。（2026-08-23 修正：无 parent 路径也必须 mark_dead——Ghidra 后置条件是 opDestroy 后 op 恒为 dead：Ghidra 中无 parent 的 op 由 `PcodeOpBank::create`（op.cc:946）起始即 dead、在 deadlist，仅 opInsert 的 markAlive（funcdata_op.cc:157）转活；Rugra 的 create 起始即 alive，故无 parent 销毁（未插入 op 或 block Arc 已释放）需显式 mark_dead，否则无输入 alive op 滞留 ActionPool 迭代（processOp isDead 检查 action.cc:830），使读取 getIn(0) 的 Rule（如 RuleSubvarSubpiece subflow.cc:1593）panic——glob_word 修复。）dead op 的 NULL-slot 保留仍受上述 nullable 表示缺口约束。
-- `op_unset_input(op, slot)` — `Funcdata::opUnsetInput`：断某输入的 descend 链。
+- `op_destroy(op)` — `Funcdata::opDestroy`（funcdata_op.cc:203）：调用 `destroy_varnode` 删除输出及其 bank identity，按 slot 顺序断开所有输入；有 parent 时 markDead 并从原 `BlockBasic` 删除。（2026-08-23 修正：无 parent 路径也必须 mark_dead——Ghidra 后置条件是 opDestroy 后 op 恒为 dead：Ghidra 中无 parent 的 op 由 `PcodeOpBank::create`（op.cc:946）起始即 dead、在 deadlist，仅 opInsert 的 markAlive（funcdata_op.cc:157）转活；Rugra 的 create 起始即 alive，故无 parent 销毁（未插入 op 或 block Arc 已释放）需显式 mark_dead，否则无输入 alive op 滞留 ActionPool 迭代（processOp isDead 检查 action.cc:830），使读取 getIn(0) 的 Rule（如 RuleSubvarSubpiece subflow.cc:1593）panic——glob_word 修复。）（2026-09-22，SB-ORD159-NULLSLOT-0001：不再清空 inrefs Vec；`op_unset_input` 的 clearInput 写入把每个槽置为共享 null 哨兵，dead op 保留 `numInput()` 个 NULL 槽，与 oracle 的 post-opDestroy 可观测状态一致。）
+- `op_unset_input(op, slot)` — `Funcdata::opUnsetInput`：断某输入的 descend 链，并执行 cc:98 `clearInput(slot)`——槽内置 NULL（共享 `crate::op::null_slot_sentinel`），槽数不变；对已断链/已置 NULL 的槽是幂等 no-op。
 解锁 RuleEarlyRemoval。
 
 ### 2026-06-27（续）：op_destroy_recursive / total_replace

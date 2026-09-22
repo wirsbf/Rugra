@@ -24589,8 +24589,16 @@ mod tests {
         // Readonly + StringManager confirm 0x2000 → CHANGE. With no
         // descendants the propagation half vacuously succeeds (cc:7381),
         // so the PTRSUB is destroyed (cc:7392-7393): inputs detached.
+        // opDestroy nulls each slot in place (op.cc:98 clearInput via
+        // opUnsetInput) keeping the slot count — post-destroy numInput()==2
+        // NULL slots (SB-ORD159-NULLSLOT-0001 shared null sentinel).
         assert_eq!(r.apply_op(&op_arc, &mut fd).unwrap(), action_status::CHANGE);
-        assert!(op_arc.read().unwrap().inrefs.is_empty());
+        let guard = op_arc.read().unwrap();
+        assert_eq!(guard.inrefs.len(), 2);
+        assert!(guard
+            .inrefs
+            .iter()
+            .all(|vn| Arc::ptr_eq(vn, &crate::op::null_slot_sentinel())));
     }
 
     /// RulePtrsubCharConstant addr-force arm: an address-forced output
