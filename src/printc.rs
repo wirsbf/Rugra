@@ -4519,7 +4519,12 @@ impl PrintC {
         }
         self.pop_mod();
     }
-    // RUGRA-GLUE: emit_structured_whiledo (no Ghidra counterpart found)
+    // Ghidra: printc.cc:3001 PrintC::emitBlockWhileDo
+    /// Emit a BlockWhileDo: for-loop dispatch (cc:3007-3009), overflow
+    /// `while( true ) { condbody; if (cond) break; }` (cc:3017-3044), or
+    /// `while (cond) { body }` (cc:3046-3064) with the full mod protocol
+    /// (entry pushMod/unset cc:3012-3013, comma_separate condition replay
+    /// cc:3053-3056, no_branch body cc:3060, popMod cc:3065).
     fn emit_structured_whiledo(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -4547,7 +4552,18 @@ impl PrintC {
                         // so we must NOT fall through to the while-body path below.
                         self.emit_for_loop(while_data, graph, emitted);
                         return;
-                    } else if overflow {
+                    }
+                    // cc:3012-3013: pushMod(); unsetMod(no_branch|only_branch) —
+                    // the whole construct emits with both branch mods cleared
+                    // (same entry protocol as emitBlockInfLoop cc:3102-3103).
+                    // Load-bearing for the condition dispatch below: an
+                    // inherited only_branch would hijack cc:3055's condBlock
+                    // emit into the lastOp-only path, an inherited no_branch
+                    // would skip the CBRANCH statement (empty while header).
+                    self.push_mod();
+                    self.unset_mod(
+                        print_mods::NO_BRANCH | print_mods::ONLY_BRANCH);
+                    if overflow {
                         // cc:3022: emit->tagLine();
                         self.emit.tag_line(0);
                         // cc:3023-3028: tagOp(KEYWORD_WHILE) + openParen +
@@ -4567,12 +4583,36 @@ impl PrintC {
                         self.emit.spaces(1, 0);
                         self.emit.close_paren(")", id1);
                     } else {
-                        // cc:3049: emit->tagLine();
+                        // cc:3048: emitCommentBlockTree(condBlock) — comments
+                        // attached to the condition subtree print before the
+                        // `while` header line.
+                        self.emit_comment_block_tree(&while_data.condition);
+                        // cc:3049-3052: tagLine + tagOp(KEYWORD_WHILE) +
+                        // spaces(1) + openParen — the while's own paren pair.
                         self.emit.tag_line(0);
-                        // Emit as while(cond)
-                        self.emit.print("while (");
-                        self.emit_block_condition(&while_data.condition);
-                        self.emit.print(")");
+                        self.emit.tag_op("while");
+                        self.emit.spaces(1, 0);
+                        let id1 = self.emit.open_paren("(");
+                        // cc:3053-3056: pushMod + setMod(comma_separate) +
+                        // condBlock->emit(this) + popMod — the condition
+                        // replays through the structured virtual dispatch,
+                        // never the expression channel: emitBlockBasic walks
+                        // ALL printed ops of the cond block comma-separated
+                        // (`while (a = f(x), a != 0)` — the golden line form,
+                        // ghidra_curl_1204.c:1592/1601/2523), a BlockCondition
+                        // composes `(A && (B))` (cc:2846-2868), and the
+                        // COMMA_SEPARATE mod suppresses opCbranch's own parens
+                        // (cc:541 yesparen=false → openGroup, no text).
+                        // Insert-first: this visit owns the condition block's
+                        // emission.
+                        self.push_mod();
+                        self.set_mod(print_mods::COMMA_SEPARATE);
+                        emitted.insert(
+                            std::sync::Arc::as_ptr(&while_data.condition)
+                                as *const () as usize);
+                        self.emit_flow_block(&while_data.condition, graph, emitted);
+                        self.pop_mod();
+                        self.emit.close_paren(")", id1);
                     }
 
                     self.emit.begin_block();
@@ -4597,11 +4637,28 @@ impl PrintC {
                                 as *const () as usize);
                         self.emit_flow_block(&while_data.condition, graph, emitted);
                         self.pop_mod();
-                        // cc:3035-3043: if (<condition>) break;
+                        // cc:3035-3043: tagLine + tagOp(KEYWORD_IF) +
+                        // spaces(1) + pushMod + setMod(only_branch) +
+                        // condBlock->emit(this) + popMod + spaces(1) +
+                        // `break;` (emitGotoStatement f_break_goto,
+                        // cc:2309-2311 + SEMICOLON cc:2321). The condition
+                        // parens come from opCbranch (cc:554-555, yesparen —
+                        // comma_separate is NOT set on this replay), never
+                        // from hard-coded `if (` text. The only_branch replay
+                        // re-dispatches the cond block through the structured
+                        // virtual channel; the no_branch visit above inserted
+                        // its identity, and emit_flow_block does not consult
+                        // the once-guard.
                         self.emit.tag_line(0);
-                        self.emit.print("if (");
-                        self.emit_block_condition(&while_data.condition);
-                        self.emit.print(") break;");
+                        self.emit.tag_op("if");
+                        self.emit.spaces(1, 0);
+                        self.push_mod();
+                        self.set_mod(print_mods::ONLY_BRANCH);
+                        self.emit_flow_block(&while_data.condition, graph, emitted);
+                        self.pop_mod();
+                        self.emit.spaces(1, 0);
+                        self.emit.print("break");
+                        self.emit.print(";");
                     }
                     // A loop body is an independent control-flow path: a RETURN
                     // seen before the loop (or in a sibling branch) must NOT
@@ -4621,17 +4678,28 @@ impl PrintC {
                     // re-gated.
                     let saved = self.seen_return;
                     self.seen_return = false;
+                    // cc:3060: setMod(no_branch) — dont print goto at bottom of
+                    // clause; the body dispatch runs with the branch mod set so
+                    // the latch CBRANCH never prints as a raw statement.
+                    self.set_mod(print_mods::NO_BRANCH);
                     self.emit_block_structured(&while_data.body, graph, emitted);
                     self.seen_return = saved;
                     self.loop_depth -= 1;
                     self.emit.end_block();
+                    // cc:3065: popMod() — closes the cc:3012 pushMod.
+                    self.pop_mod();
                 } else {
                     self.emit_block_ops(block_arc, false);
                 }
     }
 
 
-    // RUGRA-GLUE: emit_structured_dowhile (no Ghidra counterpart found)
+    // Ghidra: printc.cc:3068 PrintC::emitBlockDoWhile
+    /// Emit a BlockDoWhile as `do { body } while (cond);` with the full mod
+    /// protocol: entry pushMod/unset (cc:3074-3075), no_branch body visit
+    /// (cc:3080-3085), ` while` + spaces (cc:3087-3090), ONLY_BRANCH body
+    /// replay for the tail condition (cc:3091-3092 — the parens come from
+    /// opCbranch, not from this emitter), SEMICOLON + popMod (cc:3093-3094).
     fn emit_structured_dowhile(
         &mut self,
         block_arc: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -4644,6 +4712,13 @@ impl PrintC {
                 let block = block_arc.read().unwrap();
                 let dowhile_block = block.as_any().downcast_ref::<BlockDoWhile>();
                 if let Some(dowhile_data) = dowhile_block {
+                    // cc:3074-3075: pushMod(); unsetMod(no_branch|only_branch) —
+                    // entry protocol (same as emitBlockWhileDo cc:3012-3013 /
+                    // emitBlockInfLoop cc:3102-3103): the construct's emission
+                    // never inherits branch mods from an enclosing context.
+                    self.push_mod();
+                    self.unset_mod(
+                        print_mods::NO_BRANCH | print_mods::ONLY_BRANCH);
                     self.emit.tag_line(0);
                     // cc:3078: print(KEYWORD_DO) — bare keyword, no trailing
                     // space; the brace emitter supplies " {" (same_line
@@ -4679,59 +4754,38 @@ impl PrintC {
                     self.seen_return = saved;
                     self.loop_depth -= 1;
                     self.emit.end_block();
-                    
-                    self.emit.print(" while (");
-                    let ops = block.get_ops();
-                    if let Some(last_op_ref) = ops.last() {
-                        let last_op = last_op_ref.0.read().unwrap();
-                        if let Some(cond_vn) = last_op.get_in(1) {
-                            // Capture the condition into a throwaway buffer first so
-                            // we can apply the same malformed-condition guard used
-                            // by emit_block_condition / emit_cbranch_condition
-                            // (cast-concat, varname-concat, degenerate self-compare
-                            // `X == X`/`X != X`). The do-while CBRANCH's condition
-                            // varnode can lose its SSA def under Rugra's x86-flags
-                            // recovery, leaving a tautology like `local_0 == local_0`
-                            // — fold it to `1` rather than emitting a nonsense
-                            // `while (X == X);`. (Audit: R50.)
-                            let cond_vn = cond_vn.clone();
-                            drop(last_op);
-                            let orig_emit = std::mem::replace(
-                        &mut self.emit,
-                                Box::new(crate::prettyprint::EmitNoMarkup::new()),
-                    );
-                            self.emit_condition(&cond_vn);
-                            let text = {
-                                let buf = std::mem::replace(&mut self.emit, orig_emit);
-                                buf.into_any()
-                            .downcast::<crate::prettyprint::EmitNoMarkup>()
-                                    .map(|b| b.get_output())
-                            .unwrap_or_default()
-                            };
-                            let t = text.trim();
-                            let cast_count = t.matches("(long)").count() + t.matches("(int)").count()
-                                + t.matches("(char)").count() + t.matches("(bool)").count()
-                                + t.matches("(short)").count();
-                            let has_bool_op = t.contains(" || ") || t.contains(" && ")
-                                || t.contains(" == ") || t.contains(" != ")
-                                || t.contains(" < ") || t.contains(" > ")
-                                || t.contains(" <= ") || t.contains(" >= ");
-                            let has_concat_cast = cast_count >= 2 && !has_bool_op;
-                            let has_concat_varname = Self::regex_concat_varname(t);
-                            let has_self_comparison = Self::is_self_comparison(t);
-                            let looks_valid = !t.is_empty()
-                                && t.chars().any(|c| c.is_alphanumeric() || c == '_')
-                                && !has_concat_cast
-                                && !has_concat_varname
-                                && !has_self_comparison;
-                            if looks_valid {
-                                self.emit.print(&text);
-                            } else {
-                                self.emit.print("1");
-                            }
-                        }
-                    }
-                    self.emit.print(");");
+
+                    // cc:3086-3087: closeBraceIndent + spaces(1) — end_block
+                    // supplies `}`, then the single space before `while`.
+                    self.emit.spaces(1, 0);
+                    // cc:3088-3090: op = getBlock(0)->lastOp();
+                    // tagOp(KEYWORD_WHILE) + spaces(1). emitBlockDoWhile opens
+                    // NO paren of its own — the `while (cond)` parens come
+                    // from opCbranch's yesparen (cc:554-555; comma_separate is
+                    // NOT set on this replay), matching the golden
+                    // `} while (iVar16 < argc);` byte form.
+                    self.emit.tag_op("while");
+                    self.emit.spaces(1, 0);
+                    // cc:3091-3092: setMod(only_branch) +
+                    // bl->getBlock(0)->emit(this) — the body block REPLAYS
+                    // through the structured virtual dispatch, never a
+                    // throwaway text buffer: emitBlockLs collapses to its
+                    // final child under only_branch (cc:2787-2791), and the
+                    // basic block's only_branch path prints just lastOp's
+                    // expression via emitExpression (cc:2686-2690) → opCbranch.
+                    // The former buffer channel ran the LEGACY value-scan
+                    // emitter plus Rugra-side textual malformed-guards (R50
+                    // folds) that have no oracle counterpart; the missing-in(1)
+                    // case is handled at the op layer (op_cbranch_rpn R50
+                    // transport). emit_flow_block does not consult the
+                    // once-guard, so the first body visit's insert does not
+                    // suppress this replay.
+                    self.set_mod(print_mods::ONLY_BRANCH);
+                    self.emit_flow_block(&dowhile_data.condition.clone(), graph, emitted);
+                    // cc:3093: emit->print(SEMICOLON)
+                    self.emit.print(";");
+                    // cc:3094: popMod() — closes the cc:3074 pushMod.
+                    self.pop_mod();
                 } else {
                     self.emit_block_ops(block_arc, false);
                 }

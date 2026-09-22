@@ -2237,3 +2237,54 @@ oracle `emitBlockInfLoop` printc.cc:3109 是 `bl->getBlock(0)->emit(this)` 虚�
 - InfLoop body 走 emit_block_structured 后，Basic 叶经 emit_flow_basic（有 discovery 记账、
   无 pending_goto_labels backpatch）——与 whiledo/dowhile/for 兄弟的既有取舍一致；若差分
   出现 label 缺失型缺陷，需把 backpatch 迁到 emit_flow_basic（同机制迁移，另行登记）。
+
+## 2026-09-22 追加（PRINTC-COND-REPLAY-0001 — whiledo/dowhile 条件重放通道分派化）
+
+上节遗留的两处条件缓冲通道（BL 判定"非 body 平铺，影响全语料条件文本，需专用 lane"）本轮
+裁决并转换。**裁决：两处均为真偏离**（非 BL 过严）：
+
+- **oracle 形态核实**（printc.cc 完整读证）：①whiledo 普通臂条件（cc:3053-3056）是
+  `pushMod + setMod(comma_separate) + condBlock->emit(this) + popMod` —— **块级虚分派重放**，
+  emitBlockBasic（cc:2678）在 comma_separate 下遍历条件块**全部** printed op（逗号连接、无
+  tagLine、语句无分号，cc:2706-2719/2291-2292），CBRANCH 经 opCbranch 的 `yesparen=false`
+  （cc:541）不再加自身括号；BlockCondition 组合成 `(A && (B))`（cc:2846-2868，second 半边
+  才置 comma_separate）。golden 实证：ghidra_curl_1204.c:1592 `while (line = my_get_line(...),
+  line != (char *)0x0)`、:1601 `while (__ptr = nextarg, cVar2 == '-')`、:2523、:2115
+  （BlockCondition+comma 复合形态）——**表达式重放通道结构性无法产生该形态**（丢失
+  comma-joined 副作用语句、BlockCondition 括号形态错为 `(A) && (B)`、块级 "1" 折叠）。
+  ②dowhile 尾部条件（cc:3088-3093）是 `setMod(only_branch) + getBlock(0)->emit(this) +
+  print(SEMICOLON)` —— 同为块分派重放：emitBlockLs 收缩到末子块（cc:2787-2791），
+  emitBlockBasic only_branch 路径 print lastOp 表达式（cc:2686-2690）→ opCbranch，
+  **`while (cond)` 的括号来自 opCbranch yesparen（cc:554-555），emitBlockDoWhile 自身不开
+  括号**。Rugra 原实现 = 取 dowhile 聚合 ops 的 last CBRANCH in(1) → 丢弃式文本缓冲 +
+  legacy value-scan 发射器（RPN 模式下也不走 RPN！）+ 文本级 malformed-guard（R50 折叠）。
+
+- **改动**（src/printc.rs emit_structured_whiledo / emit_structured_dowhile）：
+  - whiledo：补齐 cc:3012-3013 入口 `push_mod + unset(NO_BRANCH|ONLY_BRANCH)`（for 早退
+    cc:3007-3010 之后、overflow/normal 臂之前）与 cc:3065 出口 pop；普通臂改为
+    `emit_comment_block_tree(cond)`（cc:3048）+ `tag_op("while")+spaces(1)+open_paren`
+    （cc:3050-3052）+ `push_mod + set_mod(COMMA_SEPARATE) + insert-first +
+    emit_flow_block(&condition) + pop_mod + close_paren`（cc:3053-3057）；overflow 臂
+    `if (cond) break;` 重放改为 `tag_op("if")+spaces(1)+push_mod+set_mod(ONLY_BRANCH)+
+    emit_flow_block(&condition)+pop_mod+spaces(1)+break;`（cc:3036-3043，括号由
+    op_cbranch_rpn yesparen 供给）；body 前补 cc:3060 `set_mod(NO_BRANCH)`。
+  - dowhile：补 cc:3074-3075 入口 push/unset 与 cc:3094 出口 pop；尾部由文本缓冲整段替换为
+    `spaces(1)+tag_op("while")+spaces(1)+set_mod(ONLY_BRANCH)+emit_flow_block(&body)+
+    print(";")`（cc:3087-3093）。原缓冲通道的块级 R50 文本折叠删除（缺 in(1) 场景由
+    op_cbranch_rpn 的 op 层 R50 transport 承接）。
+  - 两函数注释由 RUGRA-GLUE 升格为 `// Ghidra: printc.cc:3001 PrintC::emitBlockWhileDo` /
+    `printc.cc:3068 PrintC::emitBlockDoWhile`（blockarm 拆分前身的溯源更正）。
+
+- **差分影响**（e40ed130 golden，fresh 基线=BL final）：curl **defects=0 numbering=0**、
+  skeleton 3648→3649；httpd **defects=0 numbering=0**、skeleton 2462→2459；gcc 审计失败集
+  逐函数恒等（curl 81/26、httpd 7/22）；printc 单测 12/12。条件文本形态变化明细：
+  - **golden 形态落地**：`while (line = my_get_line(fp), line != 0)` 族 comma-init（golden
+    1592/1601/2523 同构）；getparameter break 条件 `'['`→`']'`（golden 2253 `== 0x5d` 修复，
+    原 legacy 通道扫错比较对象）；next_url `glob->size` 符号解析（原 unique0x00009100 泄漏）+
+    `( *)` 退化 cast 与 unique 空间声明泄漏清除（my_get_token/next_url/httpd 多处）。
+  - **+2 波动（match_url 97→99、parseconfig 197→199）**：条件块内残留 junk COPY 语句
+    （`glob = filename`、`uVar6 = uVar6`、`__ptr = __ptr` 自拷贝）现随 comma_separate 全量
+    walk 一并打印——**通道行为正确（打印条件块全部 printed op），多余 op 是结构/SSA 层差异**
+    （golden 条件块已消除这些 copy）。登记 `PRINTC-CONDBLOCK-JUNKOPS-0001`。
+  - httpd：overflow 臂 `if (cond) break;` 条件由 legacy 扫描值变为真实 CBRANCH 条件
+    （`iVar3 == 0x1117e && ...`），机制正确。
