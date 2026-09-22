@@ -316,9 +316,16 @@ union 切片，解析延迟到流分析阶段（`needs_resolution` 恒真）。
 - `get_sub_type(off)`（type.cc:2947）— 经 `get_map` 的 `find_container`
   （queryContainer）取最小包含 SymbolEntry 的符号类型与 renormalized offset；
   2026-09-22 起 `Datatype::get_sub_type` 通用 match 臂**虚分派路由到此覆写**
-  （`TYPE-SPACEBASE-SUBTYPE-DISPATCH-0001` 修复），miss 回退差异登记
+  （`TYPE-SPACEBASE-SUBTYPE-DISPATCH-0001` 修复）。2026-09-23 起 miss 回退
+  （type.cc:2964-2966）返回 `getBase(1,TYPE_UNKNOWN)` 语义——即 1 字节匿名
+  UNKNOWN 基类型 + `newoff=0`，**恒非 None**（无 scope 接线时同答案，对应
+  Ghidra getMap 的全局 scope 查空路径），关闭
   `TYPE-SPACEBASE-MISSFALLBACK-0001`（双侧 fixture
-  `tests/oracle/type_spacebase_subtype_1204`）。
+  `tests/oracle/type_spacebase_subtype_1204` 10/10 记录字节一致，
+  ghidra/rugra stdout sha256 相同；下游 `AddTreeState::calc_subtype` 的
+  TYPE_SPACEBASE 臂因此对 `RSP+const`/pushptr 后形态保持 valid 并产出
+  PTRSUB 链，恢复 oppool2 ptrarith 的 spacebase fire——match_url Phase 2
+  首分歧 191→317，Lane DG `SB-MATCHURL-ORD191-0001`）。
 - `get_address(off, sz)`（type.cc:3063）— 构造目标 `Address`。
 - `compare` / `compare_dependency`（type.cc:3039/3045）— 比 spaceid/localframe。
 - `new_global(address)` 便捷构造全局 spacebase；`is_invalid()` 判定 localframe 是否 INVALID。

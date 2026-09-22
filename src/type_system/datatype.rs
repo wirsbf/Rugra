@@ -4029,13 +4029,30 @@ impl TypeSpacebase {
     /// querying the indexed symbol table. Faithful to
     /// `TypeSpacebase::getSubType` (type.cc:2947-2969): converts `off` to an
     /// address unit, looks up the smallest containing `SymbolEntry`, and
-    /// returns its symbol's type with the renormalized offset. With no scope
-    /// attached (the common Rugra case today), returns `(None, off)` matching
-    /// Ghidra's "no container ⇒ base behaviour".
+    /// returns its symbol's type with the renormalized offset. The miss path
+    /// (type.cc:2964-2966) NEVER returns null: with no containing entry it
+    /// answers the 1-byte TYPE_UNKNOWN base with `newoff = 0`, which callers
+    /// like `AddTreeState::calcSubtype`'s TYPE_SPACEBASE arm (via
+    /// `hasMatchingSubType`) consume as `extra = 0`. With no scope attached,
+    /// Ghidra's `getMap` still hands back a (global) scope whose
+    /// `queryContainer` finds nothing for the queried address, i.e. the same
+    /// miss path — Rugra mirrors that answer directly.
     pub fn get_sub_type(&self, off: i64) -> (Option<Arc<Datatype>>, i64) {
         let scope = match self.get_map() {
             Some(s) => s.clone(),
-            None => return (None, off),
+            // No scope wired: Ghidra's getMap (type.cc:2935-2945) always
+            // returns a scope (global fallback), and its queryContainer miss
+            // lands on the getBase(1,TYPE_UNKNOWN) answer (type.cc:2964).
+            None => {
+                return (
+                    Some(Arc::new(Datatype::Base(TypeBase::new(
+                        String::new(),
+                        1,
+                        TypeMetatype::Unknown,
+                    )))),
+                    0,
+                )
+            }
         };
         let wordsize = self.spaceid.map(|s| s.word_size()).unwrap_or(1).max(1) as i64;
         // AddrSpace::byteToAddress(off, wordsize) (space.hh).
@@ -4052,7 +4069,18 @@ impl TypeSpacebase {
                     + entry.offset as i64;
                 (entry.symbol.read().unwrap().get_type(), newoff)
             }
-            None => (None, 0),
+            // type.cc:2964-2966 — no container: `*newoff = 0; return
+            // glb->types->getBase(1,TYPE_UNKNOWN);` (never null). The
+            // structural anonymous 1-byte unknown base matches the factory's
+            // getBase(1,Unknown) product for the no-core-entry shape.
+            None => (
+                Some(Arc::new(Datatype::Base(TypeBase::new(
+                    String::new(),
+                    1,
+                    TypeMetatype::Unknown,
+                )))),
+                0,
+            ),
         }
     }
 
@@ -5198,11 +5226,18 @@ mod tests {
 
     #[test]
     fn test_spacebase_get_sub_type_no_scope_returns_identity() {
-        // type.cc:2947 — with no scope (Rugra default), returns (None, off).
+        // type.cc:2947/2964-2966 — with no scope wired, Ghidra's getMap
+        // still yields a scope whose queryContainer misses, landing on the
+        // getBase(1,TYPE_UNKNOWN) fallback with newoff = 0 (verified against
+        // the locked-oracle fixture tests/oracle/type_spacebase_subtype_1204:
+        // ghidra stdout == rugra stdout, 10/10 MATCH after
+        // TYPE-SPACEBASE-MISSFALLBACK-0001).
         let sb = TypeSpacebase::new_global(Address::new(0));
         let (sub, newoff) = sb.get_sub_type(42);
-        assert!(sub.is_none());
-        assert_eq!(newoff, 42);
+        let sub = sub.expect("undefined1 fallback sub-type");
+        assert_eq!(sub.get_metatype(), TypeMetatype::Unknown);
+        assert_eq!(sub.get_size(), 1);
+        assert_eq!(newoff, 0);
     }
 
     #[test]
@@ -5251,20 +5286,30 @@ mod tests {
         let (sub, newoff) = sb.get_sub_type(0x1008);
         assert!(Arc::ptr_eq(&sub.expect("symbol sub-type"), &config_t));
         assert_eq!(newoff, 8);
-        // No container at the offset → the override's miss fallback.
+        // No container at the offset → the override's miss fallback
+        // (type.cc:2964-2966): getBase(1,TYPE_UNKNOWN) with newoff = 0,
+        // never None — the oracle-pinned answer of fixture
+        // type_spacebase_subtype_1204 (subtype.miss_gap == unknown:1:0).
         let (sub, newoff) = sb.get_sub_type(0x5000);
-        assert!(sub.is_none());
+        let sub = sub.expect("undefined1 fallback sub-type");
+        assert_eq!(sub.get_metatype(), TypeMetatype::Unknown);
+        assert_eq!(sub.get_size(), 1);
         assert_eq!(newoff, 0);
 
         // The PTRSUB gate consumes the same virtual dispatch
         // (type.cc:1127-1137): the base offset must hit the symbol start
         // (renormalized newoff == 0) and `extra` must land within the
-        // symbol's type; a mid-symbol base offset or an unmapped offset
-        // does not match.
+        // symbol's type; a mid-symbol base offset or extra beyond the
+        // type does not match. An UNMAPPED base offset with extra == 0
+        // DOES match: the getSubType miss answers the 1-byte UNKNOWN
+        // fallback (type.cc:2964-2966), which admits extra == 0 — the
+        // oracle-pinned gate.miss_extra0 == 1 record of fixture
+        // tests/oracle/type_spacebase_subtype_1204.
         let ptr = TypePointer::new(8, Arc::new(sb), 1);
         assert!(pointer_is_ptrsub_matching(&ptr.ptr_to, 1, 0x1000, 0, 0));
         assert!(!pointer_is_ptrsub_matching(&ptr.ptr_to, 1, 0x1008, 8, 0));
-        assert!(!pointer_is_ptrsub_matching(&ptr.ptr_to, 1, 0x5000, 0, 0));
+        assert!(pointer_is_ptrsub_matching(&ptr.ptr_to, 1, 0x5000, 0, 0));
+        assert!(!pointer_is_ptrsub_matching(&ptr.ptr_to, 1, 0x5000, 8, 0));
         assert!(!pointer_is_ptrsub_matching(&ptr.ptr_to, 1, 0x1000, 16, 0));
     }
 

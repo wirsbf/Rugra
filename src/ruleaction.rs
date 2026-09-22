@@ -18149,10 +18149,19 @@ impl<'a> AddTreeState<'a> {
             use crate::type_system::datatype::TypeMetatype;
             match bt.get_metatype() {
                 TypeMetatype::Spacebase => {
-                    // offsetbytes = addressToByteInt(offset, wordSize)
-                    // hasMatchingSubType needs scope/var-offset mapping; with
-                    // arrayHint 0, Ghidra falls to getSubType. We use that.
-                    // (nearestArrayedComponent* not modelled.)
+                    // Ghidra (ruleaction.cc:6296-6310): offsetbytes =
+                    // addressToByteInt(offset, ct wordSize); hasMatchingSubType
+                    // (arrayHint == biggestNonMultCoeff). With arrayHint 0 the
+                    // answer is exactly getSubType, which we call here
+                    // (TypeSpacebase::getSubType now mirrors type.cc:2964-2966,
+                    // answering (undefined1, 0) on the miss so extra == 0 and
+                    // the arm stays valid — the match_url oppool2 CROSSBUILD
+                    // chain). With arrayHint != 0 Ghidra first consults
+                    // nearestArrayedComponentBackward/Forward (type.cc:2971-
+                    // 3038), not modelled here; for the no-container stack
+                    // state both oracle arms reduce to getSubType's miss
+                    // answer (extra 0). wordsize-1 spaces make the
+                    // byte/address conversions identity.
                     let extra = match bt.get_sub_type(self.offset as i64) {
                         (Some(_), e) => e as u64,
                         (None, _) => { self.valid = false; return; }

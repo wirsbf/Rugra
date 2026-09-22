@@ -1376,6 +1376,30 @@ abort placeholder）。闭合 CALLSPEC-0001 中登记的
   PTRSUB 子类型路 / 非倍数 valid=false / 未类型化基座 / 未启动 type
   recovery）10 条记录与锁定 12.0.4 oracle 逐字节一致。
 
+## 2026-09-23：AddTreeState calc_subtype SPACEBASE 臂 miss 回退接通（SB-MATCHURL-ORD191-0001，TYPE-SPACEBASE-MISSFALLBACK-0001 关闭）
+
+- 根因（锁定 oracle e40ed130 双侧 drill 实证）：match_url Phase 2 首分歧
+  ordinal 191 `universal:fullloop:mainloop:oppool2`（oracle result/count
+  23/23 vs rugra 15/15）——oracle 在 0x52b0~0x5390 窗口对 `RSP(i)+#const`
+  与 pushptr 产物 `RSP(i)+(RAX+#const)` 触发 RulePtrArith/AddTreeState，
+  产出 PTRSUB（opcode_name 表显示名 CROSSBUILD）+ INT_ADD 常量折叠链
+  （`7d7=RSP->#0x68`、`7d6=#-0x68+t`、`7d8=7d7+7d6`）；rugra 的 pushptr
+  七连发后 calc_subtype 在 TYPE_SPACEBASE 臂因 `TypeSpacebase::get_sub_type`
+  miss 返回 None 而 `valid=false`，ptrarith 一发未响（差 15 fire；
+  AddTreeState walk 本身与 oracle 逐字段一致：size=0/offset=0x68/
+  nonmultsum=0x68/nonmult=1）。
+- 修复在类型层而非规则层：`TypeSpacebase::get_sub_type` 的 miss/无 scope
+  路径改为 type.cc:2964-2966 的 `getBase(1,TYPE_UNKNOWN)`+`newoff=0` 语义
+  （见 docs/api/type_system/datatype.md）；`calc_subtype` SPACEBASE 臂
+  注释更新为引用 6296-6310 的 offsetbytes/hasMatchingSubType 结构与
+  arrayHint!=0 时 nearestArrayedComponent*（未建模，无容器栈状态下两条
+  臂在 oracle 侧同为 extra=0）的等价性说明。
+- 验证：双侧 drill path layer 104 条共享路径计数全部相等
+  （oppool2:ptrarith 23=23）；match_url 投影 ops 80385=80385，首分歧
+  191→317（`universal:prefercomplement`，oracle 1 vs rugra 0，新域移交）；
+  fixture `tests/oracle/type_spacebase_subtype_1204` 10/10 记录 MATCH
+  （ghidra/rugra stdout sha256 相同）。
+
 ## 2026-08-27：RulePullsubMulti 非 join 输出空间（RULE-PULLSUB-NEWVNODEOUT-0001）
 
 `RulePullsubMulti::build_subpiece` 对照 `ruleaction.cc:776-839`：非 join 基底按
