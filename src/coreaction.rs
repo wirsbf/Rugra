@@ -14412,6 +14412,16 @@ impl Action for ActionPreferComplement {
         Ok(action_status::NO_CHANGE)
     }
 
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (incremented at blockaction.cc:2163 inside apply, reset by
+    // Action::perform at action.cc:306) into the Rust ActionState
+    // accumulator — the same member-count adapter the other struct-count
+    // actions use. Without it the stage projection's @END reads
+    // ActionState.count=0 even though the flip executed.
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
+    }
+
     // RUGRA-GLUE: Rust Action trait get_name; "prefercomplement" mirrors ctor at blockaction.hh:302
     fn get_name(&self) -> &str {
         "prefercomplement"

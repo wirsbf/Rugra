@@ -406,12 +406,25 @@
 >   对齐,ops 80385=80385);drill path layer 104 路径计数全等(ptrarith 23=23);
 >   curl E2E 2713/0/0(基线 2733,-20)、httpd 2339/0/0 持平;next_url 投影 MATCH
 >   保持;单测串行与 master 基线逐条一致。
-> - `MATCHURL-PREFERCOMPLEMENT-317-0001`(P2,新登记 2026-09-23,Lane DG,owner
->   待认领): match_url Phase 2 新首分歧 ordinal **317**
->   `universal:prefercomplement`(oracle 1 fire vs rugra 0):oracle 于 0x52ec:108
->   将 `u0x23d00:4 != #0x3` 翻补为 `== #0x3`(ActionPreferComplement,
->   coreaction.rs 域);产物在 /dev/shm/rugra-tests/sb-ord191/(fix1.rugra.projection
->   sha 70c61387…)。
+> - `MATCHURL-PREFERCOMPLEMENT-317-0001`(P2,**FIXED 2026-09-23**,Lane DH
+>   `wt/sb-ord317`,owner=fixer): 根因非翻转本体——SNAP 317 op 流双侧逐字节相同
+>   (52ec:108 INT_NOTEQUAL→INT_EQUAL 双侧发生),缺口是 `ActionPreferComplement`
+>   的结构体 `count` 字段从未经 `take_count_delta` 收割进投影可见的
+>   `ActionState.count`(Ghidra blockaction.cc:2163 `count += 1` 走继承 protected
+>   成员,fixture @END 直接读 `action->count`;action.cc:319-341 perform 对正 res
+>   不累加)。修复=补 ActionConstantPtr 同款 `std::mem::take` 适配器。验证(本树
+>   亲测,oracle e40ed130,产物 /dev/shm/rugra-tests/sb-ord317/): match_url
+>   Phase 2 首分歧 317→337,@END 317 result=1/count=1/apply=1 与 oracle 一致,
+>   聚合 @END 1 universal 1323=1323;curl/httpd E2E 与 next_url 投影见 commit
+>   message;docs/api/coreaction.md 同 commit。
+> - `MATCHURL-SETCASTS-337-0001`(P2,新登记 2026-09-23,Lane DH 发现,owner
+>   待认领): match_url Phase 2 新首分歧 ordinal **337**
+>   `universal:setcasts` op-line 46:oracle `52bd:7f8 CAST out=u:100002ef` vs
+>   rugra `52bd:7f9 CAST out=u:100002f7`——setcasts 前多一个 8 字节 unique
+>   分配且该 CAST 建立时序靠后(seqnum 7f8→7f9),连锁 LOAD/CAST 链偏移
+>   (u:100002ef→u:100002f7 族);ActionSetCasts(coreaction.rs 域)CAST/CROSSBUILD/
+>   LABEL 注入顺序或前置 unique 消耗差。产物 /dev/shm/rugra-tests/sb-ord317/
+>   (fix.rugra.projection,bisect-fix.txt)。
 > - `FIXTURE-STOREVARNODE-STALE-0001`(P3,新登记 2026-09-23,Lane DG 发现,owner
 >   待认领): `rule_store_varnode_spacebase_1204` fixture 在 master HEAD(5b9f12cf)
 >   即双重失效——crate-tree pin 漂移(任何 src 改动触发)+ metadata.overall_status

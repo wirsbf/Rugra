@@ -1197,6 +1197,13 @@ ActionActiveParam::apply finalize 路径现调用 `fc.resolve_model()` + `fc.der
 - 使用 collect-then-apply 模式避免借用冲突。
 - 验证：780/780 测试，curl 24/24，httpd 29/29 gcc 审计通过。
 
+### 2026-09-23：ActionPreferComplement count 通道接入 ActionState（MATCHURL-PREFERCOMPLEMENT-317-0001）
+
+`apply`（blockaction.cc:2140-2167）在 `preferComplement` 成功时对继承 protected `count += 1`（cc:2163）；oracle 投影的 `@END` 直接读 `action->count`，且 `Action::perform`（action.cc:298-360）对正返回值不二次累加（`res` 丢弃，`count` 只来自成员自增）。Rugra 侧翻转本体早已逐字节一致（match_url SNAP 317 op 流两侧相同，`52ec:108 INT_NOTEQUAL→INT_EQUAL` 双侧发生），但结构体字段 `self.count` 从未被收割进投影可见的 `ActionState.count`——缺 `take_count_delta` 适配器，`@END 317` 读到 `result=0 count=0 apply=0`。补上与 ActionConstantPtr（cc:1213）等同款的 `std::mem::take` 适配器后：
+- match_url Phase 2 `@END 317 universal:prefercomplement result=1 count=1 tests=0 apply=1` 与 oracle 一致；聚合 `@END 1 universal` 1322→1323 同步一致（oracle=1323）。
+- 首分歧 317→337（`universal:setcasts` op-line 46：oracle `52bd:7f8 CAST out=u:100002ef` vs rugra `52bd:7f9 CAST out=u:100002f7`——setcasts 前多一个 unique 分配且 CAST 建立时序靠后 1 拍，ActionSetCasts 域独立缺口，另行登记 TODO）。
+- 既有单测直接调 `apply` 后读 `a.count`，不受收割影响（drain 只发生在 `perform` 驱动路径）。
+
 ### 2026-09-23：ActionRestrictLocal 重写为逐行忠实版（SB-MATCHURL-ORD70-0001）
 
 旧实现的两个循环均偏离 oracle：
