@@ -1256,3 +1256,11 @@ printc.rs:4738 `emit_structured_infloop` 用 `emit_block_ops(body)` 扁平发射
 cat 进自环 List→InfLoop 体后，扁平化吞掉全部结构）——登记 PRINTC 侧
 （PRINTC-SWITCH-EMIT-0001 域），不阻塞本修。case 值仍为出边槽占位
 （JUMPTABLE-TABLEAPI-0001）。
+
+## 2026-09-22：BlockSwitch 构造点跟进新字段（结构层提交）
+
+本提交 blockaction.rs 仅在 5 处 BlockSwitch 字面量（try_rule_switch/
+collapse_switches/collapse_cbranch_cascades/update_switch_case_reference/
+refresh_switch_cases 重建点）补 `jump: None, case_order: Vec::new()` 占位，
+保持编译与现有行为不变；真实 jump 解析与 case_order 记录在下一提交
+（collapse 接线）落地。

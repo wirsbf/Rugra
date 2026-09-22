@@ -1633,3 +1633,34 @@ COPY/SUBPIECE；输出 addr-tied 拒绝；任一后代 op 的 parent 不在本�
   + per-goto gototype/prints 双侧逐字节一致）；Switch 槽位以 oracle 索引打印
   （调度根=槽0），label 全 0 使 stable_sort 保序（真实 label 排序绑定
   JUMPTABLE-TABLEAPI-0001）。
+## 2026-09-22：BlockSwitch label 管道结构层（JUMPTABLE-TABLEAPI-0001 消费半部）
+
+BlockSwitch 补齐 Ghidra ctor/finalizePrinting 语义（block.cc:3485-3601）：
+- 新增字段 `jump: Option<Arc<RwLock<JumpTable>>>`（block.hh:753，ctor
+  cc:3488 `jump = ind->getJumptable()`，经 block.cc:630 FlowBlock::getJumptable
+  的 BRANCHIND last-op 反查）与 `case_order: Vec<CaseOrder>`（block.hh:767
+  caseblocks 的 Rust 平行数组形态）。
+- 新增 `pub struct CaseOrder`（block.hh:755-767）：basicblock/label/depth/
+  chain/outindex，`CaseOrder::placeholder` 对应 addCase 的逐字段初始化
+  （cc:3498-3505：label=0/depth=0/chain=-1）。
+- `BlockSwitch::finalize_case_labels`（block.cc:3556-3592）：pass1 标记
+  fall-thru 链非根 depth=-1（cc:3562-3570）；pass2 仅链根设 label
+  （numIndicesByBlock>0 && depth==0，cc:3571-3589）并沿链下传
+  depthcount/label；stable_sort 按 CaseOrder::compare（block.hh:903-909，
+  label→depth），Rust 侧 cases/case_gototypes/case_values/case_order 四数组
+  联动置换；最后按 print-time 查询（block.hh:780/787）物化
+  `case_values[i][j] = getLabelByIndex(getIndexByBlock(basic_i, j))`，
+  get_num_labels/get_label 读取物化结果（值与 oracle 的活查询恒等，
+  finalizePrinting 先于任何打印运行）。
+- `BlockGraph::finalize_printing`（block.cc:1364-1371）：子节点递归入口，
+  由 ActionFinalStructure 调用（见 docs/api/blockaction.md）。
+- 自由函数 `finalize_printing_block`（RUGRA-GLUE，C++ virtual dispatch 的
+  Rust 形态）：Switch 分支先递归 control+非 goto case（= newBlockSwitch 经
+  identifyInternal 消费的 list 成员，cc:3559/1913；goto 臂目标留在周围图由
+  父图递归覆盖，cc:3548-3553）再跑 finalize_case_labels；其余复合块走
+  component_list_dyn 继承递归；叶子为 FlowBlock::finalizePrinting 空实现
+  （block.hh:262）。
+
+fixture：tests/oracle/printc_switch_emit_1204.rs 字面量补
+`jump: None, case_order: Vec::new()`（行为不变，仅结构体字段跟进），
+metadata rust_fixture_sha256 重钉（e8f69bfc→81656ef8）。

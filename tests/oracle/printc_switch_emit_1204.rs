@@ -99,6 +99,8 @@ impl SwitchBuild {
             control: self.head.clone(),
             cases: self.cases.clone(),
             default_case: self.default_case.clone(),
+            jump: None,
+            case_order: Vec::new(),
             case_values: self.case_values.clone(),
             index_varnode: Some(self.index_varnode.clone()),
             incoming: Vec::new(),

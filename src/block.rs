@@ -3797,6 +3797,25 @@ impl BlockGraph {
         }
     }
 
+    /// Ghidra `BlockGraph::finalizePrinting` (block.cc:1364-1371): recurse
+    /// `finalizePrinting(data)` into every child of the list. This is the
+    /// entry point invoked by `ActionFinalStructure::apply`
+    /// (blockaction.cc:2192: `graph.finalizePrinting(data)`); dispatching is
+    /// per child via [`finalize_printing_block`], which runs the
+    /// `BlockSwitch::finalizePrinting` override (block.cc:3556) for switch
+    /// components and the inherited graph recursion for every other
+    /// composite. Leaf types inherit the base `FlowBlock::finalizePrinting`
+    /// no-op (block.hh:262).
+    // Ghidra: block.cc:1364 BlockGraph::finalizePrinting
+    pub fn finalize_printing(&mut self) {
+        // cc:1368-1370: for(iter=list.begin();iter!=list.end();++iter)
+        //   (*iter)->finalizePrinting(data);
+        let n = self.blocks.len();
+        for i in 0..n {
+            finalize_printing_block(&self.blocks[i]);
+        }
+    }
+
     /// Find the nearest common ancestor (dominator) of two blocks in the
     /// dominator tree. Faithful to `FlowBlock::findCommonBlock`
     /// (block.cc:736-795). Used by `PcodeOp::compareOrder` (op.cc:778) to
@@ -5000,6 +5019,54 @@ impl BlockGraph {
             bl.write()
                 .unwrap()
                 .clear_flags(block_flags::MARK | block_flags::MARK2);
+        }
+    }
+}
+
+/// Per-child dispatch for [`BlockGraph::finalize_printing`]: the virtual
+/// `FlowBlock::finalizePrinting` call (block.hh:262 base no-op;
+/// block.cc:1364 graph recursion; block.cc:3556 switch override).
+///
+/// `BlockSwitch` (cc:3556-3592) recurses FIRST into its component list —
+/// the dispatch block plus the structured (non-goto) case components,
+/// exactly the members Ghidra's `newBlockSwitch` consumed via
+/// `identifyInternal` (block.cc:1913); the goto-arm case targets stay in
+/// the surrounding graph (block.cc:3548-3553) and are finalized by the
+/// parent graph's own recursion — then runs the label/depth passes and
+/// the stable sort. Every other composite inherits the plain recursion
+/// over its component children. `BlockMultiGoto`'s wrapped copy is a
+/// dispatch leaf (newBlockMultiGoto nodes=[bl], block.cc:1734-1738), so
+/// the no-entry walk matches the oracle.
+// RUGRA-GLUE: free-function form of the C++ virtual dispatch; Rugra
+// composites implement FlowBlock individually instead of subclassing one
+// BlockGraph vtable.
+pub fn finalize_printing_block(bl: &Arc<RwLock<dyn FlowBlock + Send + Sync>>) {
+    let is_switch = bl.read().unwrap().get_type() == BlockType::Switch;
+    if is_switch {
+        // cc:3559: BlockGraph::finalizePrinting(data) — recurse into the
+        // switch's list before the label passes.
+        let children: Vec<Arc<RwLock<dyn FlowBlock + Send + Sync>>> = {
+            let r = bl.read().unwrap();
+            let sw = r.as_any().downcast_ref::<BlockSwitch>().unwrap();
+            let mut v = vec![sw.control.clone()];
+            for (case, &gt) in sw.cases.iter().zip(sw.case_gototypes.iter()) {
+                if gt == 0 {
+                    v.push(case.clone());
+                }
+            }
+            v
+        };
+        for child in &children {
+            finalize_printing_block(child);
+        }
+        // cc:3562-3591: the label/depth passes + stable sort.
+        let mut w = bl.write().unwrap();
+        let sw = w.as_any_mut().downcast_mut::<BlockSwitch>().unwrap();
+        sw.finalize_case_labels();
+    } else {
+        // Inherited BlockGraph::finalizePrinting recursion (cc:1364-1371).
+        for child in BlockGraph::component_list_dyn(bl) {
+            finalize_printing_block(&child);
         }
     }
 }
@@ -7231,6 +7298,40 @@ impl BlockCondition {
     }
 }
 
+/// Ghidra `BlockSwitch::CaseOrder` (block.hh:755-767): the annotation and
+/// sort record for one switch case. `basicblock` is the first basic-block to
+/// execute within the case (`bl->getFrontLeaf()->subBlock(0)`, block.cc:3500),
+/// `label`/`depth`/`chain` drive `finalizePrinting`'s ordering passes
+/// (block.cc:3562-3591), and `outindex` is the basic-graph out-edge slot the
+/// dispatch uses to reach the case (block.cc:3509).
+#[derive(Debug)]
+pub struct CaseOrder {
+    /// The first basic-block to execute within the case block.
+    pub basicblock: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>,
+    /// The label for this case, as an untyped constant (addCase init 0).
+    pub label: u64,
+    /// How deep in a fall-thru chain we are (addCase init 0).
+    pub depth: i32,
+    /// Who we immediately chain to, expressed as case index, -1 for no
+    /// chaining (addCase init -1).
+    pub chain: i32,
+    /// Index coming out of switch to this case.
+    pub outindex: i32,
+}
+
+impl CaseOrder {
+    // RUGRA-GLUE: aggregate form of BlockSwitch::addCase's field-by-field
+    // initialization (block.cc:3498-3505: emplace_back + label=0/depth=0/
+    // chain=-1), so parallel-array bookkeeping cannot drop a field.
+    /// Construct the placeholder record `addCase` builds before its
+    /// `basicbl` lookups (label=0, depth=0, chain=-1, block.hh:760-762).
+    pub fn placeholder(
+        basicblock: Option<Arc<RwLock<dyn FlowBlock + Send + Sync>>>, outindex: i32,
+    ) -> Self {
+        Self { basicblock, label: 0, depth: 0, chain: -1, outindex }
+    }
+}
+
 /// A structured switch-case block.
 ///
 /// Corresponds to Ghidra's `BlockSwitch`. Contains:
@@ -7257,6 +7358,17 @@ pub struct BlockSwitch {
     /// peeled as an unstructured goto (newBlockMultiGoto's setDefaultGoto
     /// path). Same promotion rules as `case_gototypes`.
     pub default_gototype: u32,
+    /// Ghidra `BlockSwitch::jump` (block.hh:753): the jump table associated
+    /// with this switch, captured by the ctor (`jump = ind->getJumptable()`,
+    /// block.cc:3488, via `FlowBlock::getJumptable`, block.cc:630-639, which
+    /// resolves the BRANCHIND last-op through Funcdata::findJumpTable). Held
+    /// as the shared `Arc<RwLock<JumpTable>>` from `Funcdata::jump_tables`.
+    pub jump: Option<Arc<RwLock<crate::jumptable::JumpTable>>>,
+    /// Ghidra `BlockSwitch::caseblocks` (block.hh:767, `mutable vector<CaseOrder>`):
+    /// the per-case annotation records built by `grabCaseBasic`
+    /// (block.cc:3524-3554) and consumed/sorted by `finalizePrinting`
+    /// (block.cc:3556-3592). Parallel to `cases` positionally.
+    pub case_order: Vec<CaseOrder>,
     pub case_values: Vec<Vec<u64>>,
     pub index_varnode: Option<Arc<RwLock<crate::varnode::Varnode>>>,
     pub incoming: Vec<BlockEdge>,
@@ -7388,19 +7500,144 @@ impl BlockSwitch {
         self.cases.get(i).cloned()
     }
 
-    /// Ghidra `BlockSwitch::getNumLabels` (block.hh:785, inline): the number
-    /// of case labels for the i-th case (each case may be reached by multiple
-    /// switch values). Rugra reads from `case_values[i]`.
+    /// Ghidra `BlockSwitch::getNumLabels` (block.hh:785, inline):
+    /// `jump->numIndicesByBlock(caseblocks[i].basicblock)` — the number of
+    /// case labels for the i-th case. Rugra materializes the identical value
+    /// group into `case_values[i]` during `finalize_case_labels`
+    /// (block.cc:3556-3592 runs before any printing), so this reads the
+    /// materialized length; before finalize the field holds the addCase-style
+    /// placeholder (out-edge slot).
     // Ghidra: block.hh:785 BlockSwitch::getNumLabels
     pub fn get_num_labels(&self, i: usize) -> usize {
         self.case_values.get(i).map(|v| v.len()).unwrap_or(0)
     }
 
-    /// Ghidra `BlockSwitch::getLabel` (block.hh:786, inline): the j-th case
-    /// label value for the i-th case.
+    /// Ghidra `BlockSwitch::getLabel` (block.hh:786, inline):
+    /// `jump->getLabelByIndex(jump->getIndexByBlock(caseblocks[i].basicblock, j))`
+    /// — the j-th case label value for the i-th case. Rugra reads the group
+    /// materialized by `finalize_case_labels` (same jumptable queries, same
+    /// per-block addressIndex order).
     // Ghidra: block.hh:786 BlockSwitch::getLabel
     pub fn get_label(&self, i: usize, j: usize) -> Option<u64> {
         self.case_values.get(i).and_then(|v| v.get(j).copied())
+    }
+
+    /// Ghidra `BlockSwitch::finalizePrinting` (block.cc:3556-3592): the
+    /// label/depth passes over `caseblocks` plus the final stable sort.
+    ///
+    /// Pass 1 (cc:3562-3570) walks every fall-thru chain once and marks
+    /// non-root chain nodes `depth = -1`. Pass 2 (cc:3571-3589) sets the
+    /// label on chain roots only (`numIndicesByBlock > 0 && depth == 0`),
+    /// propagating the root label down the chain with increasing depth;
+    /// cases with no address-table entry keep label 0 (cc:3588 "Should never
+    /// happen"). The sort (cc:3591, `stable_sort` with
+    /// `CaseOrder::compare`, block.hh:903-909: label, then depth) reorders
+    /// the caseblocks; Rugra permutes the parallel `cases`/`case_gototypes`/
+    /// `case_values`/`case_order` arrays jointly. Finally the label groups
+    /// are materialized into `case_values` with the exact print-time queries
+    /// (block.hh:780/787) so `get_num_labels`/`get_label` observe the same
+    /// values Ghidra's live jumptable lookups would return.
+    ///
+    /// The tree recursion half of `finalizePrinting` (`BlockGraph::
+    /// finalizePrinting`, block.cc:1364-1371) lives in
+    /// [`BlockGraph::finalize_printing`], which invokes this per switch after
+    /// recursing into the component list.
+    // Ghidra: block.cc:3556 BlockSwitch::finalizePrinting
+    pub fn finalize_case_labels(&mut self) {
+        // Ghidra dereferences `jump` unconditionally (ctor block.cc:3488);
+        // a switch without a recovered table never formed in the oracle.
+        // Conservative skip keeps the placeholder case_values.
+        let Some(jump) = &self.jump else {
+            return;
+        };
+        let jt = jump.read().unwrap();
+        let n = self.case_order.len();
+        // cc:3562-3570: mark non-roots of fall-thru chains.
+        for i in 0..n {
+            let mut j = self.case_order[i].chain;
+            while j != -1 {
+                let ju = j as usize;
+                if self.case_order[ju].depth != 0 {
+                    break; // Break any possible loops (already visited)
+                }
+                self.case_order[ju].depth = -1; // Mark non-roots of chains
+                j = self.case_order[ju].chain;
+            }
+        }
+        // cc:3571-3589: populate label and depth.
+        for i in 0..n {
+            let Some(basic) = self.case_order[i].basicblock.clone() else {
+                continue;
+            };
+            if jt.num_indices_by_block(&basic) > 0 {
+                if self.case_order[i].depth == 0 {
+                    // Only set label on chain roots.
+                    if let Some(ind) = jt.get_index_by_block(&basic, 0) {
+                        let label = jt.get_label_by_index(ind);
+                        self.case_order[i].label = label;
+                        let mut j = self.case_order[i].chain;
+                        let mut depthcount: i32 = 1;
+                        while j != -1 {
+                            let ju = j as usize;
+                            if self.case_order[ju].depth > 0 {
+                                break; // Has this node had its depth set
+                            }
+                            self.case_order[ju].depth = depthcount;
+                            depthcount += 1;
+                            self.case_order[ju].label = label;
+                            j = self.case_order[ju].chain;
+                        }
+                    }
+                }
+            } else {
+                self.case_order[i].label = 0; // Should never happen
+            }
+        }
+        drop(jt);
+        // cc:3591: stable_sort(caseblocks.begin(),caseblocks.end(),
+        // CaseOrder::compare) — label, then depth (block.hh:903-909). Rust's
+        // sort_by is stable; permute the parallel arrays jointly.
+        let mut perm: Vec<usize> = (0..n).collect();
+        perm.sort_by(|&a, &b| {
+            let (ca, cb) = (&self.case_order[a], &self.case_order[b]);
+            if ca.label != cb.label {
+                ca.label.cmp(&cb.label)
+            } else {
+                ca.depth.cmp(&cb.depth)
+            }
+        });
+        let new_cases: Vec<_> = perm.iter().map(|&i| self.cases[i].clone()).collect();
+        let new_gototypes: Vec<_> = perm.iter().map(|&i| self.case_gototypes[i]).collect();
+        let new_values: Vec<_> = perm.iter().map(|&i| self.case_values[i].clone()).collect();
+        let new_order: Vec<_> = perm.iter().map(|&i| {
+            std::mem::replace(
+                &mut self.case_order[i],
+                CaseOrder::placeholder(None, -1),
+            )
+        }).collect();
+        self.cases = new_cases;
+        self.case_gototypes = new_gototypes;
+        self.case_values = new_values;
+        self.case_order = new_order;
+        // Materialize the print-time label groups (block.hh:780/787):
+        // values[i][j] = getLabelByIndex(getIndexByBlock(basic_i, j)) for
+        // j in 0..numIndicesByBlock(basic_i) — addressIndex order within the
+        // block's sorted block2addr entries.
+        let jump = jump.clone();
+        let jt = jump.read().unwrap();
+        for i in 0..n {
+            let Some(basic) = self.case_order[i].basicblock.clone() else {
+                continue;
+            };
+            let count = jt.num_indices_by_block(&basic);
+            let mut group: Vec<u64> = Vec::with_capacity(count);
+            for j in 0..count {
+                if let Some(ind) = jt.get_index_by_block(&basic, j) {
+                    group.push(jt.get_label_by_index(ind));
+                }
+            }
+            self.case_values[i] = group;
+        }
     }
 
     /// Ghidra `BlockSwitch::isDefaultCase` (block.hh:789, inline): is the i-th
