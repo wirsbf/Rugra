@@ -497,6 +497,22 @@
 > `(&pattern + i)` 数组下标形;③`.content.Set.elements` 联合成员下钻;
 > ④`(URLPatternType)0x1` vs `UPTSet` 枚举名;⑤uVar4 传播类型 vs oracle
 > typed pUVar2)。报告=/dev/shm/rugra-tests/sb-globfield/。
+> **`FUNCDATA-INDIRECT-SYMBOLTAIL-0001`(P2,CLOSED 2026-09-22,Lane CI
+> `wt/sb-indirecttail`,owner=fixer)**: CF 裁决表登记的 funcdata 域子项——
+> `new_indirect_op`(cc:689/692)与 `new_indirect_creation_in_space`(cc:719)
+> 注释声称带符号尾、实现仅 `apply_new_varnode_flags` 折叠。修=BZ 模式在
+> create/def 接线与折叠间插 `set_varnode_properties`(折叠保留)+注释按
+> oracle 逐字纠偏(双路径 usepoint:newVarnode cc:162=INVALID `Address()`,
+> 仅 addr-tied 项可挂,database.cc:117-119;newVarnodeOut cc:115=定义 op 地址,
+> 接线后 `get_use_point` 精确同值)。验收(A/B 同机同树 base=d3fbe924):
+> curl 3607/0/0→**3605/0/0**(−2,config 域潜伏位点激活:main 4 行+
+> parseconfig_constprop_0 1 行,其中 `(void*)0x0`→`(char*)0x0` 2 行与 golden
+> 1008/1017 逐字节一致,char 字面量 `'\0'`→`0` 方向中性仍非 bool 残差);
+> httpd 2456/0/0 字节级一致;config 域 6 函数抽验 0/0+函数体 A/B 零回退
+> (getparameter_constprop_0/glob_set/glob_range/glob_url 恒等);cargo
+> test funcdata/indirect/guard 域 62/17 与 base 逐项相同(17 失败 d3fbe924
+> 既有)。funcdata.rs 非白名单,root 快速复核。证据=/dev/shm/rugra-tests/
+> sb-indirecttail/。
 
 ## 历史 wave：`W-2026-08-29-FLEET10`（2026-08-29~31；goal=函数文本级对齐；会话中断，成果已大宗回收入 master）
 
