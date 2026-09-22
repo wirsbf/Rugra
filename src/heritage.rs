@@ -3041,6 +3041,14 @@ impl Heritage {
         );
         // cc:1254: vnCollect = indOp->getOut()
         let mut vn_collect = ind_op.0.read().unwrap().output.as_ref().cloned();
+        // cc:1259/1272: both concat ops are created with indOp->getAddr() —
+        // the address of the return-storage INDIRECT creation (which
+        // newIndirectCreation derives from the causing op: the call), NOT
+        // retAddr (the guarded range address). MATCHURL-CONCAT-SEQNUM-0001:
+        // passing ret_addr gave the PIECE ops a register-space SeqNum pc
+        // (e.g. 0x1200), flipping the projection's seqnum-sorted op order
+        // at the heritage snapshot (first divergence: ordinal 12, op-idx 0).
+        let ind_op_addr = ind_op.0.read().unwrap().get_addr();
         // cc:1273/1260 endianness: the locked oracle arch is x86:LE:64, so
         // retAddr.isBigEndian() == false (Rugra Address carries no space,
         // so the flag cannot be consulted dynamically; ADDRESS-0001).
@@ -3051,7 +3059,7 @@ impl Heritage {
                 &ind_op, space, addr.as_u64(), size_front as usize, false,
             );
             let new_front = ind_front.0.read().unwrap().output.as_ref().cloned();
-            let concat_front = fd.new_op(2, ret_addr);
+            let concat_front = fd.new_op(2, ind_op_addr);
             let slot_new = if big_endian { 0 } else { 1 };
             fd.op_set_opcode(&concat_front, OpCode::CPUI_PIECE);
             if let (Some(front_vn), Some(collect_vn)) = (&new_front, &vn_collect) {
@@ -3072,7 +3080,7 @@ impl Heritage {
                 call_op, space, addr_back.as_u64(), size_back as usize, false,
             );
             let new_back = ind_back.0.read().unwrap().output.as_ref().cloned();
-            let concat_back = fd.new_op(2, ret_addr);
+            let concat_back = fd.new_op(2, ind_op_addr);
             let slot_new = if big_endian { 1 } else { 0 };
             fd.op_set_opcode(&concat_back, OpCode::CPUI_PIECE);
             if let (Some(back_vn), Some(collect_vn)) = (&new_back, &vn_collect) {

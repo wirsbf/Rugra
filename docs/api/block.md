@@ -1788,3 +1788,16 @@ getIndexByBlock(basic,0)→getLabelByIndex）；无表索引或 case_order/cases
 None（printc 保持末位旧位）。已知角落：default 为 fall-thru 链非根时 oracle 继承
 链根 label（cc:3577-3584），Rugra 按自身首索引排位（语料未见）。消费方与门禁见
 docs/api/printc.md 同日条目。
+
+## 2026-09-23：RULE-PULLSUBMULTI-LOOPIN-0001 关闭 — FlowBlock::hasLoopIn 落地
+
+新增 trait 默认方法 `has_loop_in`（block.cc:428-428-433 逐行）：任一入边带
+`f_loop_edge` 即真。边标已由 `find_spanning_tree`（block.cc:1101 回边标
+`F_BACK_EDGE|F_LOOP_EDGE`，Rugra block.rs:3492 同字面）维护，
+`ActionLaneDivide` 前无清除点，规则期读取即 oracle 语义。消费者
+`RulePullsubMulti::applyOp` cc:883 守卫（"We only pull up, do not pull down
+to bottom of loop"）接入：match_url Phase 2 ordinal 28 oppool1 首个发射错位
+（idx 358，Rugra 多发 pullsub_multi+dumptyhump）即 __libc_csu_init 循环体
+phi@0x5440（5454→5440 回边）被错误放行；守卫接入后该池 861=861 对齐。
+四类核对：引用参数=无（只读入边 flags）；遍历序=入边槽位序；计数器=无；
+排序键=flag 位测试（block.hh:110 f_loop_edge=2）。

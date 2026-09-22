@@ -1962,13 +1962,27 @@ fn build_worker_architecture(
                 .map_err(|_| "processor spec element lock poisoned".to_string())?
                 .name
                 .clone();
-            if child_name != "context_data" {
-                continue;
+            match child_name.as_str() {
+                "context_data" => {
+                    let mut decoder =
+                        rugra::marshal::TreeDecoder::new(child, pspec_registry.clone());
+                    arch.decode_context_data(&mut decoder, host.as_ref())
+                        .map_err(|error| format!("processor spec context_data decode failed: {error}"))?;
+                }
+                // ARCH-REGISTERDATA-LANE-0001: the ELEM_REGISTER_DATA arm of
+                // Architecture::parseProcessorConfig (architecture.cc:929)
+                // builds the laned-register records (vector_lane_sizes)
+                // that ActionLaneDivide consults; matched_url Phase 2
+                // ordinal 29 (lanedivide 2 vs 0) was the first visible
+                // miss of the skipped element.
+                "register_data" => {
+                    let mut decoder =
+                        rugra::marshal::TreeDecoder::new(child, pspec_registry.clone());
+                    arch.decode_register_data(&mut decoder, host.as_ref())
+                        .map_err(|error| format!("processor spec register_data decode failed: {error}"))?;
+                }
+                _ => {}
             }
-            let mut decoder =
-                rugra::marshal::TreeDecoder::new(child, pspec_registry.clone());
-            arch.decode_context_data(&mut decoder, host.as_ref())
-                .map_err(|error| format!("processor spec context_data decode failed: {error}"))?;
         }
         arch.parse_compiler_config(&mut store, host.as_ref(), 8)
             .map_err(|error| format!("compiler spec parse failed: {error}"))?;

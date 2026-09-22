@@ -228,13 +228,24 @@ fn tracked_context_architecture() -> Result<rugra::arch::Architecture, String> {
             .map_err(|_| "processor spec element lock poisoned".to_string())?
             .name
             .clone();
-        if child_name != "context_data" {
-            continue;
+        match child_name.as_str() {
+            "context_data" => {
+                let mut decoder =
+                    rugra::marshal::TreeDecoder::new(child, pspec_registry.clone());
+                arch.decode_context_data(&mut decoder, &host)
+                    .map_err(|error| format!("processor spec context_data decode failed: {error}"))?;
+            }
+            // ARCH-REGISTERDATA-LANE-0001: register_data builds the
+            // laned-register records (vector_lane_sizes) for
+            // ActionLaneDivide (curl driver comment has the full note).
+            "register_data" => {
+                let mut decoder =
+                    rugra::marshal::TreeDecoder::new(child, pspec_registry.clone());
+                arch.decode_register_data(&mut decoder, &host)
+                    .map_err(|error| format!("processor spec register_data decode failed: {error}"))?;
+            }
+            _ => {}
         }
-        let mut decoder =
-            rugra::marshal::TreeDecoder::new(child, pspec_registry.clone());
-        arch.decode_context_data(&mut decoder, &host)
-            .map_err(|error| format!("processor spec context_data decode failed: {error}"))?;
     }
     Ok(arch)
 }

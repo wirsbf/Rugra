@@ -477,3 +477,25 @@ ActionConstbase（coreaction.rs:5477 stub）激活在 setcasts 租约释放后�
 far_pointer=None）真实执行，替换原 recorded-no-op。缺此接线时
 TypeFactory::getBase 的 findAdd 因对齐映射未初始化在 downChain/
 get_type_pointer 全路径 panic。
+
+## 2026-09-23：ARCH-REGISTERDATA-LANE-0001 — pspec register_data → lanerecords 装载
+
+新增 `Architecture::decode_register_data`（architecture.cc:929-977
+ELEM_REGISTER_DATA 臂逐行）：`<register vector_lane_sizes="1,2,4,8">` 经
+`LanedRegister::parse_sizes`（transform.cc:300）入 `maskList[wholeSize]`，
+循环后按尺寸重建 lanerecords（`set_lane_records` 同序同并）。此前 lane 记录
+仅测试装载，生产恒空 → `getMinimumLanedRegisterSize()==-1` → Funcdata
+`min_laned_size=u32::MAX` → `check_for_laned_register` 永不触发 →
+ActionLaneDivide 空转（match_url Phase 2 ordinal 29：oracle 2 vs rugra 0）。
+装载后 min=16（XMM 整尺寸），XMM0(16) 读写入 laned map。两个易错点已修：
+① **rewind**——oracle cc:945 在 storage 解析前显式 `rewindAttributes()`
+（旋钮循环已耗尽属性流），漏掉则 walk 空转返回默认 (0,0)，lanerecords 得
+wholeSize=0；② `VarnodeData::decodeFromAttributes`（pcoderaw.cc:33-52）name
+属性经 `SleighBase::getRegister` 解析整存储并立即返回。
+**残差 ARCH-REGISTERDATA-VOLATILE-0001**：`volatile` 臂（cc:960-963
+`symboltab->setPropertyRange`）未接——锁定 x86-64.pspec 零 volatile 声明
+（grep 干净），臂不可达；命中时 stderr 报告（[ARCH] 标签）。
+消费链：`decode_register_data`（curl/httpd driver pspec 循环，文档顺序与
+`parseProcessorConfig` 一致）→ lane_records → `Funcdata::min_laned_size`
+（funcdata_varnode.cc:148 家族的 `s >= minLanedSize` 门）→ laned_map →
+`ActionLaneDivide::apply` 的 beginLaneAccess 迭代。

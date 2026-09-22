@@ -6795,6 +6795,20 @@ impl Funcdata {
                     &op_ref.0,
                 );
                 op_ref.0.write().unwrap().output = Some(out_vn);
+                // funcdata.cc:890's newVarnodeOut leg carries the laned-
+                // register probe (funcdata_varnode.cc:113
+                // `if (s >= minLanedSize) checkForLanedRegister(s,m)`),
+                // which this direct materialization must not drop: the
+                // 16-byte LOAD outputs feeding ActionLaneDivide's unique-
+                // space splits (match_url ordinal 29) enter the laned map
+                // here (ARCH-REGISTERDATA-LANE-0001).
+                if out_raw.size >= self.min_laned_size as usize {
+                    self.check_for_laned_register(
+                        out_raw.size,
+                        out_raw.space,
+                        crate::address::Address::new(out_raw.offset),
+                    );
+                }
             }
             // funcdata.cc:891: opcode assignment follows output creation and
             // precedes the input walk.  Besides opcode-derived flags this also
@@ -6839,6 +6853,19 @@ impl Funcdata {
                 };
                 in_vn.write().unwrap().add_descend(&op_ref.0);
                 op_ref.0.write().unwrap().inrefs.push(in_vn);
+                // newVarnode's laned-register probe (funcdata_varnode.cc:160
+                // `if (s >= minLanedSize) checkForLanedRegister(s,m)`): the
+                // STORE-side whole-register reads share the laned map key
+                // with the defining output (ARCH-REGISTERDATA-LANE-0001).
+                if input_raw.space != crate::space::AddressSpace::Const
+                    && input_raw.size >= self.min_laned_size as usize
+                {
+                    self.check_for_laned_register(
+                        input_raw.size,
+                        input_raw.space,
+                        crate::address::Address::new(input_raw.offset),
+                    );
+                }
             }
         }
     }
