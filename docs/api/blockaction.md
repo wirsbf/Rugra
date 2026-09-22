@@ -1329,12 +1329,12 @@ multi_shared（多条目组 addressIndex 序 [0x5,0x2]）、fallthru_chain
 
 ### 2026-09-22：接入 `graph.orderBlocks()`（blockaction.cc:2191，BLOCKSTRUCT-ORDERBLOCKS-0001，Lane BV）
 
-- `ActionFinalStructure::apply` 按 oracle 顺序执行**四个已接线**图调用：
-  → `graph.markUnstructured()`（markLabelBumpUp(cc:2195) **未接线**，
-  per-type 实现为死代码，登记 BLOCKSTRUCT-MARKLABELBUMPUP-0001）
+- `ActionFinalStructure::apply` 按 oracle 顺序执行**五个图调用**：
   `graph.orderBlocks()` → `graph.finalizePrinting()` → `graph.scopeBreak(-1,-1)`
   → `graph.markUnstructured()` → `graph.markLabelBumpUp(false)`
-  （blockaction.cc:2191-2195）。
+  （blockaction.cc:2191-2195；markLabelBumpUp 由 Lane CC 于 2026-09-22
+  接线，见下方同日条目，原缺口登记 BLOCKSTRUCT-MARKLABELBUMPUP-0001
+  已关闭）。
 - `orderBlocks`（block.hh:430-431）：单元素列表跳过；否则按
   `FlowBlock::compareFinalOrder`（block.cc:709-730）排序——entry
   （index 0）恒最前、`lastOp()` 为 CPUI_RETURN 的块压尾、其余按 index
@@ -1352,3 +1352,34 @@ multi_shared（多条目组 addressIndex 序 [0x5,0x2]）、fallthru_chain
   守卫双侧同步跳过）；getparameter.constprop.0（skeleton 978）与
   glob_set（skeleton 97）`--func` 前后 defects=0/numbering=0 不变；
   B2 双侧 fixture `blockstruct_orderblocks_1204` 5/5 case MATCH。
+
+### 2026-09-22：接入 `graph.markLabelBumpUp(false)`（blockaction.cc:2195，BLOCKSTRUCT-MARKLABELBUMPUP-0001，Lane CC）
+
+- `ActionFinalStructure::apply` 在 `fd.sblocks.mark_unstructured()` 之后、
+  返回之前补上**第五个图调用** `fd.sblocks.mark_label_bump_up(false)`
+  （cc:2195 `graph.markLabelBumpUp(false); // Fix up labeling`），与 oracle
+  的五调用序列（cc:2191-2195）完全对齐。此前 per-type 实现存在但为死
+  代码（f_label_bumpup 永不置位）。
+- 语义（详见 docs/api/block.md 同日条目）：循环三 override
+  （WhileDo/DoWhile/InfLoop，block.cc:3316/3426/3454）对自身 list[0]
+  前链强制 `true` 下传（"偷" 子块 label），仅当传入 bump=false 时清除
+  自身旗标；printc 的 `emit_any_label_statement`（printc.cc:3219-3226）
+  读取 f_label_bumpup 决定 label 位置——被旗标块自身的 label 语句跳过，
+  由外层循环构造入口统一打印（goto 进循环头的 label 落在循环关键字行
+  之前，而非 `while(...)` 括号内 / `do {` 体内）。
+- 验证（三门禁）：curl E2E **defects=0/numbering=0**，skeleton
+  3654→3653（−1 = 消除 glob_set do 体内无引用伪 label
+  `code_r0x00004C20`——oracle golden 该函数 0 个 code_r 引用，方向=
+  向 oracle 收敛）；httpd E2E **defects=0/numbering=0**，master 同树
+  基线 2459→2456（−3 = 消除 3 个 do 体内无引用伪 label，golden 均 0
+  引用）；双 corpus goto→label 零 dangling（goto 引用的 label 全部
+  定义），未引用 label 仅减不增，gcc audit FAIL 集与基线逐条相同。
+- B2 双侧 fixture：`tests/oracle/blockstruct_marklabelbumpup_1204`
+  （5 case：whiledo/dowhile/infloop 各自前链投影、nested_loops_front
+  内层 whiledo 保旗判别形态（强制 true 链上 `!bump`=false 不清自身）、
+  straight_line 控制）——双侧 f_label_bumpup 投影逐字节 MATCH
+  （runner `tools/run_blockstruct_marklabelbumpup_oracle.sh`）。
+  连带重钉 8 个 pin block/blockaction 源哈希的 fixture 元数据并复跑：
+  blockmultigoto / blockstruct_orderblocks / blockstruct_scopebreak_gototype
+  MATCH；blockstruct_blockgoto_wrapped 维持其已登记 MISMATCH
+  （BLOCKSTRUCT-IDENTIFY-BOUNDARY-0001，形态与 metadata 记载一致）。

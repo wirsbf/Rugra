@@ -1,0 +1,61 @@
+{
+ "analysis_options": {
+  "entrypoint": "BlockGraph::markLabelBumpUp(false) (Rugra: BlockGraph::mark_label_bump_up) driven directly on each collapsed top-level structure, exactly as ActionFinalStructure blockaction.cc:2195 does",
+  "observation": "per case: every tree-resident node as sorted multiset lines 'type=<t> bump=<0|1> kids=<n>' (kids = component-list size; copies/basics 0)",
+  "prestate": "per-case fresh BlockGraph; basics snapshotted into BlockCopy (production buildCopy shape); structureLoops labeling + CollapseStructure::collapseAll + reduced ActionFinalStructure tail (scopeBreak(-1,-1) then markUnstructured, cc:2193-2194) run before the call under test"
+ },
+ "architecture": "locked synthetic FlowBlock graphs built through the production path (buildCopy snapshot + CollapseStructure::collapseAll, blockaction.cc:2177-2183); no AddrSpace, no Funcdata",
+ "comparand_sha256": {
+  "cpp_fixture_sha256": "48a481d951403b365883ad3d754b2fa164ad84537148f914182ce878a27b5939",
+  "ghidra_block_cc": "c905c91e32569901afe2a035cbaa2787114cb699b6e247599f4ce68f699e26e7",
+  "ghidra_block_hh": "103d023e88e88986c8d7bb6a4309eaee91d0f627636838f25452763e1212b139",
+  "rugra_block_sha256": "6feb58f2ba3dcfd4f7ae339dd8bc7a1016836573a888cef29610d9ba21508364",
+  "rugra_blockaction_sha256": "b97c59a72c5bbdd59f93844e9854b25707f9186ca999420d9ab25f66f377542e",
+  "rust_fixture_sha256": "376ef7f99dd9d513212084d329e22d69e0df189f62c0f4cd30b87ebb3409b687"
+ },
+ "compiler_spec": "not applicable: no Funcdata, no prototype model, no symbols (pure BlockGraph fixture)",
+ "coverage": {
+  "consumer_wiring": "MATCH: the call is driven from the ActionFinalStructure fifth position (cc:2195) exactly as production",
+  "graph_recursion": "MATCH: first subblock receives bump, list[1..] receive false (cc:1263-1267) across list/goto/if/condition inheritance",
+  "leaf_base": "MATCH: copies/basics take the base FlowBlock::markLabelBumpUp (cc:262-263, set only) — front-chain copies flagged, all others 0",
+  "loop_overrides": "MATCH: WhileDo/DoWhile/InfLoop force true down the front chain and clear their own flag only on incoming bump=false (cc:3319-3321/3429-3431/3457-3459); nested_loops_front pins the kept-flag case"
+ },
+ "covered_projection_status": "MATCH",
+ "expected_exit_code": 0,
+ "fixture_id": "BLOCKSTRUCT-MARKLABELBUMPUP-0001",
+ "host": {
+  "bfd_root": "/tmp/rugra-ghidra-bfd-2.38",
+  "cxx": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "rustc": "rustc 1.96.0-nightly (03749d625 2026-03-14)"
+ },
+ "input_manifest": {
+  "canonicalization": "UTF-8 JSON with sorted keys and compact separators over architecture, compiler_spec, analysis_options, and cases",
+  "cases": [
+   "whiledo_simple: b0->b1(cond)->b2(body)/b3(exit), b2->b1 back — condition chain flagged (bump=1), body not, loop own flag cleared (root bump=false)",
+   "dowhile_simple: b0->b1(body)->b2(bottom)->b1 back/b3 exit — body list + front copy flagged, dowhile cleared",
+   "infloop_simple: b0->b1, b1->b1 self back — body list + front copy flagged, infloop cleared",
+   "nested_loops_front: WhileDo at the FRONT of a DoWhile body (next_url shape minus the unstructured edge) — the forced-true front chain makes the INNER WhileDo keep bump=1 (cc:3320 !bump is false) while the DoWhile clears its own; the differentiator against flat-mark or unconditional-clear ports",
+   "straight_line: b0->b1->b2, no loops — control, nothing flagged"
+  ]
+ },
+ "observation_schema": {
+  "format": "per case: 'case <name>', 'roots=<n>', one 'type=<t> bump=<0|1> kids=<n>' line per tree node (sorted), then 'end'",
+  "normalization": "lines sorted (the two collapse implementations install composites at different list slots — registered normalization, same scheme as blockstruct_scopebreak_gototype_1204); per-node (type,bump,kids) facts are order-free"
+ },
+ "oracle": {
+  "commit": "e40ed13014025f82488b1f8f7bca566894ac376b",
+  "source": "Ghidra/Features/Decompiler/src/decompile/cpp/{block.cc:259-264,block.cc:1258-1268,block.cc:3316-3322,block.cc:3426-3432,block.cc:3454-3460,blockaction.cc:2186-2197}",
+  "tag": "Ghidra_12.0.4_build"
+ },
+ "oracle_stdout_sha256": "460bfbaf6a4f392aa3e2c80f8dd33eb76e031210a16ffbdcd90cf0e65a340c0a",
+ "rugra_base_commit": "03210101d514ddadf9bb71e1264e0173e22b3933",
+ "schema": 1,
+ "stable_function_closure": [
+  "ghidra::BlockGraph::markLabelBumpUp block.cc:1258 GH12-F-8c2d41f0a6b3e7159c40",
+  "ghidra::FlowBlock::markLabelBumpUp block.cc:259 GH12-F-2f3a55c81d9e40b7c6d5",
+  "ghidra::BlockWhileDo::markLabelBumpUp block.cc:3316 GH12-F-d08e7f921c3b4a5068e1",
+  "ghidra::BlockDoWhile::markLabelBumpUp block.cc:3426 GH12-F-1b4e37a05c8d2f609743",
+  "ghidra::BlockInfLoop::markLabelBumpUp block.cc:3454 GH12-F-6a90c2d1e4b3587f20c6"
+ ],
+ "stable_function_id": "GH12-F-a4f1c0e9b7d2365817ab"
+}

@@ -1721,3 +1721,36 @@ order_blocks 端到端置换）。B2 双侧 fixture：
 stable tie、null/RETURN 混合臂、真 BlockGoto 包裹 RETURN 块委托、真
 BlockMultiGoto 包裹非 RETURN 块委托、单元素跳过）——双侧投影逐字节
 MATCH（runner `tools/run_blockstruct_orderblocks_oracle.sh`）。
+
+### 2026-09-22：markLabelBumpUp 家族接线与死代码纠偏（BLOCKSTRUCT-MARKLABELBUMPUP-0001，Lane CC）
+
+- **新增 trait 默认方法** `FlowBlock::mark_label_bump_up_trait(bump)`（对应
+  block.hh:195 虚方法声明、block.cc:259-264 基类体）：`bump=true` 时置
+  `f_label_bumpup`，无递归无清除；叶子（BlockBasic/BlockCopy）继承该默认
+  （Ghidra 二者均直接继承 FlowBlock）。
+- **新增 `BlockGraph::mark_label_bump_up`**（block.cc:1258-1268）：基类法
+  标自身（bump=true 时）→ list 为空即返 → list[0] 原样接收 bump、
+  list[1..] 一律 false（虚派发）。`ActionFinalStructure::apply` 以
+  `mark_label_bump_up(false)` 驱动（blockaction.cc:2195）。
+- **新增继承 override**（Ghidra 中继承 BlockGraph::markLabelBumpUp 的类）：
+  BlockGoto/BlockMultiGoto（单一 `wrapped`=list[0]，gotoedges/gototarget
+  不在 list 内不递归）、BlockList（children[0] 收 bump 其余 false）、
+  BlockCondition（first 收 bump、second false）、BlockIf（[condition,
+  if_body, else_body?] 列表序，condition 收 bump，cc:newBlockIf/
+  newBlockIfElse block.cc:1822-1852）、BlockSwitch（[control, cases...,
+  default]，control=getBlock(0) 收 bump，grabCaseBasic block.cc:3524-3534）。
+- **死代码三 override 重写**（BlockWhileDo block.cc:3316 / BlockDoWhile
+  block.cc:3426 / BlockInfLoop block.cc:3454）：旧实现对 condition+body
+  双双平铺 `set_flags(LABEL_BUMPUP)`（WhileDo 连 body 也置位）且无递归，
+  违背 cc:3319/3429/3457 的 `BlockGraph::markLabelBumpUp(true)` 语义。
+  重写后：自置位 → WhileDo: condition(true)/body(false)；DoWhile/
+  InfLoop: 唯一子（list[0]）(true) → `!bump` 时清自身。嵌套前链（内层
+  循环收到 true）保持自身旗标——B2 fixture nested_loops_front 判别。
+- **消费侧**（printc.rs `emit_any_label_statement` 顶部）：补
+  printc.cc:3222 `if (bl->isLabelBumpUp()) return;` 早退——被旗标块的
+  label 语句跳过，由外层循环构造入口的调用统一打印（walker 级
+  `emit_any_label_statement` 于构造首个 token 前触发，位置等价 oracle
+  的 cc:3014/3076/3104/2965 构造入口调用）。
+- 验证与三门禁见 docs/api/blockaction.md 同日条目；B2 双侧 fixture
+  `tests/oracle/blockstruct_marklabelbumpup_1204`（runner
+  `tools/run_blockstruct_marklabelbumpup_oracle.sh`）5/5 MATCH。
