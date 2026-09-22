@@ -1,5 +1,22 @@
 # `funcdata.rs` API Reference
 
+## 2026-09-22：spacebase 输入寄存器补挂 TypeSpacebase 指针类型 + setVarnodeProperties 补 localmap 腿（VARGROUP-ABSORB-0001）
+
+- `Funcdata::spacebase`（funcdata.cc:240-266 else 分支）：标记 SPACEBASE 标志后，若该
+  varnode 是输入寄存器，按 cc:263-264 `getTypeSpacebase(stack, getAddress())` +
+  `getTypePointer(sb_size, ct, 1)` 构造指针类型并以 `updateType(ptr,true,true)` 挂锁。
+  此前注释称"类型系统尚无 TypeSpacebase"而跳过——该类型现已存在，且
+  ActionInferTypes::propagateSpacebaseRef 依赖它识别 SP 输入。
+- `Funcdata::setVarnode_properties`（funcdata_varnode.cc:25-42）：补上 Ghidra
+  `localmap->queryProperties` 的函数自身作用域腿（database.cc:1268-1277）——栈空间
+  varnode 先查 ScopeLocal：容器条目/在域内均折叠 flags（含 mapped|addrtied），
+  未应答再走原 Ram/全局通道。此前栈 varnode 从未获得 addrtied，导致
+  RuleSubRight 的 overlap 守卫（ruleaction.cc:7265-7268 两侧 addr-tied）不触发，
+  splitCopy 建出的 45 个栈地址 SUBPIECE 被 INT_RIGHT 化（42 处 CONCAT 中间态的直接
+  诱因）。修复后 heritage MULTIEQUAL 影写链与 SUBPIECE 件均为 addr-tied，守卫按
+  Ghidra 语义跳过（Rugra 保守版：双侧 tied 即跳过，等价覆盖 overlap==c 情形）。
+
+
 ## 2026-09-22：INDIRECT 构造器符号尾补齐（FUNCDATA-INDIRECT-SYMBOLTAIL-0001）
 
 CF 裁决表（wt/sb-promosite, `HERITAGE-PROMOTE-SYMBOLTAIL-0001` 收尾行 36）登记的

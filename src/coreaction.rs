@@ -6971,6 +6971,250 @@ impl ActionInferTypes {
             }
         }
     }
+
+    /// Faithful to `ActionInferTypes::propagateRef` (coreaction.cc:5208-5256).
+    /// Given a Varnode that is a likely pointer and an Address that is a
+    /// known alias of the pointer, propagate the pointer's pointee data-type
+    /// to every Varnode overlapping that address, as an exact piece of the
+    /// pointee (`TypeFactory::getExactPiece`). Assignments go to the temp
+    /// store and are then pushed across data-flow edges by
+    /// [`Self::propagate_one_type`], mirroring the `setTempType` +
+    /// `propagateOneType` pair at coreaction.cc:5248-5252.
+    // Ghidra: coreaction.cc:5208 ActionInferTypes::propagateRef
+    #[allow(clippy::too_many_arguments)]
+    fn propagate_ref(
+        &self,
+        fd: &Funcdata,
+        vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        addr: crate::address::Address,
+        walk_space: crate::space::AddressSpace,
+        temps: &mut TempTypes,
+        int_types: &IntTypes,
+        ptr_size: usize,
+        type_factory: Option<
+            &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        >,
+    ) {
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+        // Datatype *ct = vn->getTempType(); if (ct->getMetatype() != TYPE_PTR) return;
+        let ct_ptr = {
+            let id = vn_id(&vn.read().unwrap());
+            match temps.get(&id) {
+                Some(t) => t.clone(),
+                None => return,
+            }
+        };
+        let Datatype::Pointer(ptr) = &*ct_ptr else {
+            // if (ct->getMetatype() != TYPE_PTR) return;
+            return;
+        };
+        let ct = ptr.ptr_to.clone();
+        // if (ct->getMetatype() == TYPE_SPACEBASE) return;
+        if ct.get_metatype() == TypeMetatype::Spacebase {
+            return;
+        }
+        // if (ct->getMetatype() == TYPE_UNKNOWN) return;
+        if ct.get_metatype() == TypeMetatype::Unknown {
+            return;
+        }
+        let Some(factory_arc) = type_factory else {
+            return;
+        };
+        let ct_size = ct.get_size() as u64;
+        let off = addr.as_u64();
+        let end = off.wrapping_add(ct_size);
+        let wrapped = end < off; // Ghidra: address wrapped -> run to end of space
+        let mut lastoff: u64 = 0;
+        let mut lastsize: usize = ct.get_size();
+        let mut lastct: Option<Arc<Datatype>> = Some(ct.clone());
+        // Snapshot the location tree: the loop inserts temp types and pushes
+        // them across edges, which must not invalidate the iteration.
+        let candidates: Vec<_> = fd
+            .vbank
+            .loc_tree
+            .iter()
+            .map(|v| v.0.clone())
+            .filter(|vn_arc| {
+                let g = vn_arc.read().unwrap();
+                if g.get_space() != walk_space {
+                    return false;
+                }
+                let voff = g.get_offset();
+                if !wrapped {
+                    voff < end
+                } else {
+                    true // endLoc(space) — accept the rest of the space
+                }
+            })
+            .collect();
+        for vn_arc in candidates {
+            // Skip annotation / dead / typelock / symbol-mapped varnodes
+            // (coreaction.cc:5236-5240).
+            let (voff, vsize) = {
+                let g = vn_arc.read().unwrap();
+                if g.is_annotation()
+                    || (!g.is_written() && g.has_no_descend())
+                    || g.is_type_lock()
+                    || g.get_symbol_entry().is_some()
+                {
+                    continue;
+                }
+                (g.get_offset(), g.get_size())
+            };
+            let curoff = voff.wrapping_sub(off);
+            // if (curoff + cursize > ct->getSize()) continue; (uintb wrap-safe)
+            if curoff.wrapping_add(vsize as u64) > ct_size {
+                continue;
+            }
+            if vsize != lastsize || curoff != lastoff {
+                lastoff = curoff;
+                lastsize = vsize;
+                let mut factory = factory_arc.write().unwrap();
+                lastct = factory.get_exact_piece(ct.clone(), curoff as i64, vsize);
+            }
+            let Some(piece) = lastct.clone() else {
+                continue;
+            };
+            let id = vn_id(&vn_arc.read().unwrap());
+            let current = match temps.get(&id) {
+                Some(t) => t.clone(),
+                // buildLocaltypes seeds every eligible varnode; the fallback
+                // mirrors Ghidra's default UNKNOWN base for the comparison.
+                None => factory_arc
+                    .read()
+                    .unwrap()
+                    .get_base(vsize, TypeMetatype::Unknown)
+                    .unwrap_or_else(|| {
+                        Arc::new(Datatype::Base(TypeBase::new(
+                            "undefined".to_string(),
+                            vsize,
+                            TypeMetatype::Unknown,
+                        )))
+                    }),
+            };
+            // if (0>lastct->typeOrder(*curvn->getTempType())) set + propagate
+            if piece.type_order(&current) < 0 {
+                temps.insert(id, piece);
+                self.propagate_one_type(&vn_arc, temps, int_types, ptr_size, type_factory);
+            }
+        }
+    }
+
+    /// Faithful to `ActionInferTypes::propagateSpacebaseRef`
+    /// (coreaction.cc:5258-5306). Walks the direct descendants of the
+    /// spacebase (stack pointer) input register; for constant-offset
+    /// COPY/INT_ADD/PTRSUB/PTRADD pointers whose output carries a known
+    /// pointer temp-type, propagates the pointee into the varnodes at the
+    /// addressed stack range via [`Self::propagate_ref`].
+    // Ghidra: coreaction.cc:5258 ActionInferTypes::propagateSpacebaseRef
+    fn propagate_spacebase_ref(
+        &self,
+        fd: &Funcdata,
+        temps: &mut TempTypes,
+        int_types: &IntTypes,
+        ptr_size: usize,
+        type_factory: Option<
+            &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        >,
+    ) {
+        use crate::opcodes::OpCode;
+        use crate::type_system::datatype::Datatype;
+        // AddrSpace *spcid = data.getScopeLocal()->getSpaceId();
+        // Varnode *spcvn = data.findSpacebaseInput(spcid);
+        let Some(spcvn) = fd.find_spacebase_input(fd.stack_pointer_space) else {
+            return;
+        };
+        // Datatype *spctype = spcvn->getType(); — absolute property, no temp.
+        let spc_type = spcvn
+            .read()
+            .unwrap()
+            .get_type()
+            .map(|t| t.clone());
+        let Some(spc_type_arc) = spc_type else {
+            return;
+        };
+        let Datatype::Pointer(ptr) = &*spc_type_arc else {
+            // if (spctype->getMetatype() != TYPE_PTR) return;
+            return;
+        };
+        let Datatype::Spacebase(sb) = ptr.ptr_to.as_ref() else {
+            // if (spctype->getMetatype() != TYPE_SPACEBASE) return;
+            return;
+        };
+        // TypeSpacebase::getAddress resolves through the indexed space
+        // (type.cc:3063 resolveConstant: wordsize conversion + wrap).
+        let sb_space = sb.spaceid.unwrap_or(crate::space::AddressSpace::Stack);
+        let walk_space = if sb_space.is_stack() {
+            sb_space
+        } else {
+            // The stack-pointer spacebase indexes the stack space; anything
+            // else cannot be walked with Rugra's stack-varnode model.
+            return;
+        };
+        let descendants: Vec<_> = spcvn.read().unwrap().descend_iter().collect();
+        for op in descendants {
+            let (opcode, op_addr) = {
+                let g = op.read().unwrap();
+                (g.opcode, g.get_addr())
+            };
+            let addr = match opcode {
+                // case CPUI_COPY: addr = sbtype->getAddress(0, in(0)->getSize(), op->getAddr());
+                OpCode::CPUI_COPY => {
+                    let sz = op
+                        .read()
+                        .unwrap()
+                        .get_in(0)
+                        .map(|v| v.read().unwrap().get_size())
+                        .unwrap_or(0) as i32;
+                    sb.get_address(0, sz, op_addr)
+                }
+                // case CPUI_INT_ADD/CPUI_PTRSUB: constant in(1) offsets.
+                OpCode::CPUI_INT_ADD | OpCode::CPUI_PTRSUB => {
+                    let in1 = op.read().unwrap().get_in(1).cloned();
+                    let Some(in1) = in1 else {
+                        continue;
+                    };
+                    let (is_const, off, sz) = {
+                        let r = in1.read().unwrap();
+                        (r.is_constant(), r.get_offset(), r.get_size() as i32)
+                    };
+                    if !is_const {
+                        continue;
+                    }
+                    sb.get_address(off, sz, op_addr)
+                }
+                // case CPUI_PTRADD: off = in(1)->getOffset() * in(2)->getOffset()
+                OpCode::CPUI_PTRADD => {
+                    let g = op.read().unwrap();
+                    let Some(in1) = g.get_in(1) else { continue };
+                    let Some(in2) = g.get_in(2) else { continue };
+                    let (is_const, off1, sz) = {
+                        let r = in1.read().unwrap();
+                        (r.is_constant(), r.get_offset(), r.get_size() as i32)
+                    };
+                    if !is_const {
+                        continue;
+                    }
+                    let off2 = in2.read().unwrap().get_offset();
+                    sb.get_address(off1.wrapping_mul(off2), sz, op_addr)
+                }
+                _ => continue,
+            };
+            let Some(out_vn) = op.read().unwrap().output.clone() else {
+                continue;
+            };
+            self.propagate_ref(
+                fd,
+                &out_vn,
+                addr,
+                walk_space,
+                temps,
+                int_types,
+                ptr_size,
+                type_factory,
+            );
+        }
+    }
 }
 
 /// Cached base types for a propagation pass, indexed by size. Avoids
@@ -7114,6 +7358,14 @@ impl Action for ActionInferTypes {
 
         // 5. propagateAcrossReturns.
         self.propagate_across_returns(fd, &mut temps, &int_types, ptr_size, type_factory.as_ref());
+
+        // 5.5 propagateSpacebaseRef (coreaction.cc:5407-5410): after the
+        // data-flow propagation pass, walk the spacebase register's
+        // constant-offset aliases and feed the pointed-to stack range with
+        // exact-piece temp types. This is the source of the piece-structured
+        // (TypePartialStruct) types that gate RuleSubRight's special-print
+        // branch (ruleaction.cc:7256) and RuleSplitCopy's field granularity.
+        self.propagate_spacebase_ref(fd, &mut temps, &int_types, ptr_size, type_factory.as_ref());
 
         // 6. writeBack: commit temp types to v_type.
         if self.write_back(fd, &temps) {

@@ -1,5 +1,18 @@
 # `ruleaction.rs` API Reference
 
+## 2026-09-22：RulePieceStructure 存储地址保留根地址空间（VARGROUP-ABSORB-0001 / PIECESTRUCT-SPACE-0001）
+
+`RulePieceStructure::apply` 的重定位寻址（ruleaction.cc:7643-7695）改为携带根 varnode 的
+地址空间：`baseAddr = outvn->getAddr() - baseOffset` 的减法在 Ghidra 保持空间（唯一空间
+根 → 所有重定位件仍在唯一空间）；Rugra 此前用无空间 `Address::new(offset)` +
+`new_varnode_out` 的 Register 钉死，使 concat 梯的叶子 COPY 与中间件全部落进
+Register 空间的唯一式偏移（r0x10000b2e 等），进而触发 splitcopy 二次拆分在寄存器域
+重建。现在：地址相等判据按（空间,偏移）双元组（对齐 Ghidra 的全 Address 比较）；
+叶 COPY 走 `new_varnode_out_full(size, root_space, addr, op)`；非叶替换走
+`new_varnode_in_space`。curl main 实测：0x30d6 调用点 304B 实参梯恢复 oracle 形态
+（件落栈地址 fc78..fd8c + 唯一空间梯腿 + setcasts CAST 链）。
+
+
 ## 2026-09-22：VARGROUP-ABSORB-0001 车道探针剥离（无 API 变更）
 
 剥离车道私有 `[DBG]` 诊断探针（wip 1cd9f682/d3755452 声明的临时探针清单含本文件），

@@ -4950,6 +4950,42 @@ impl Funcdata {
             // cc:30-31: queryProperties(addr, size, usepoint, vflags). The
             // usepoint is vn->getUsePoint(*this) (varnode.cc:696-703).
             let usepoint = vn.read().unwrap().get_use_point(self);
+            // Ghidra queries the function's OWN scope (localmap) first
+            // (database.cc:1268-1277): a container entry attaches the
+            // symbol, and in-scope-but-unmapped storage — every stack
+            // varnode inside the local range — still folds
+            // mapped|addrtied. Rugra previously only ran the Ram/global
+            // channel below, so heritage-created stack varnodes (MULTIEQUAL
+            // outputs, INDIRECT guards) never gained addrtied, diverging
+            // from the oracle's flag state (SUBRIGHT-ADDRTIE-0001; the
+            // observable: Ghidra RuleSubRight's overlap guard at
+            // ruleaction.cc:7265-7268 fires for SUBPIECE(ME,off) pairs on
+            // addr-tied stack storage).
+            let property = |_spc: crate::space::AddressSpace, _off: u64| -> u32 { 0 };
+            let local = self
+                .scope
+                .as_ref()
+                .map(|s| s.query_properties_ex(space, addr, size as i64, Some(usepoint.as_u64()), None, &property));
+            let local_answered = matches!(
+                &local,
+                Some(outcome) if !matches!(outcome.final_scope, crate::varmap::QueryFinalScope::None)
+            );
+            if local_answered {
+                // cc:32-35 fold: entry==NULL → setFlags(vflags & ~typelock).
+                // Rugra's ScopeLocal projection has no live SymbolEntry to
+                // attach, so both container and in-scope outcomes fold the
+                // same flags (mirroring new_varnode_symbol_tail's local leg).
+                if let Some(outcome) = local {
+                    let fl = outcome.flags & !crate::varnode::varnode_flags::TYPELOCK;
+                    vn.write().unwrap().set_flags(fl);
+                }
+                // cc:38-41 cover tail below.
+                let high_on = (self.flags & funcdata_flags::HIGHLEVEL_ON) != 0;
+                if high_on && vn.read().unwrap().has_cover() {
+                    vn.write().unwrap().calc_cover();
+                }
+                return;
+            }
             let mut answered = false;
             if space == crate::space::AddressSpace::Ram {
                 if let Some((hit, vflags)) = self.query_properties_parent_scope(
@@ -5772,10 +5808,30 @@ impl Funcdata {
                     .write()
                     .unwrap()
                     .set_flags(crate::varnode::varnode_flags::SPACEBASE);
-                // Note: Ghidra also sets TypeSpacebase pointer type on the
-                // input register (funcdata.cc:263-264). Rugra's type system
-                // does not yet have TypeSpacebase; the SPACEBASE flag alone is
-                // sufficient for varmap/ActionStackPtrFlow recognition.
+                // Ghidra funcdata.cc:263-264: only the input spacebase
+                // register gets the TypeSpacebase pointer type
+                // (`vn->updateType(ptr,true,true)`). Rugra previously skipped
+                // this ("type system does not yet have TypeSpacebase"); the
+                // type exists now and ActionInferTypes::propagateSpacebaseRef
+                // (coreaction.cc:5283) depends on it to walk SP-relative
+                // aliases (INFERTYPES-SPACEREF-0001).
+                if vn_arc.read().unwrap().is_input() {
+                    if let Some(types) =
+                        self.arch.as_ref().and_then(|a| a.types.clone())
+                    {
+                        // ct = getTypeSpacebase(spc, getAddress()) — the
+                        // space indexed by this base register is the stack
+                        // space, scoped to this function's entry.
+                        let frame = self.get_address().clone();
+                        let mut factory = types.write().unwrap();
+                        let ct = factory
+                            .get_type_spacebase(Some(crate::space::AddressSpace::Stack), frame);
+                        // ptr = getTypePointer(point.size, ct, spc->getWordSize())
+                        let ptr = factory.get_type_pointer(sb_size, ct, 1);
+                        drop(factory);
+                        vn_arc.write().unwrap().update_type_lock(ptr, true, true);
+                    }
+                }
             }
         }
     }

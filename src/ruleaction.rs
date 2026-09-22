@@ -13784,14 +13784,17 @@ impl Rule for RulePieceStructure {
         let type_factory = fd.get_arch().and_then(|arch| arch.types.clone());
 
         // Walk every node and give it the correct storage address.
-        // baseAddr = outvn->getAddr() - baseOffset
-        let base_addr = crate::address::Address::new(
-            outvn
-                .read()
-                .unwrap()
-                .get_offset()
-                .wrapping_sub(base_offset as u64),
-        );
+        // baseAddr = outvn->getAddr() - baseOffset (ruleaction.cc:7644): the
+        // subtraction keeps the root's address space, so every relocated
+        // leaf/intermediate stays in the root's space (typically unique).
+        // Rugra's split-Address model keeps the space on the varnode, so the
+        // root's `AddressSpace` is carried through the arithmetic explicitly
+        // (PIECESTRUCT-SPACE-0001: dropping it made relocated legs land in
+        // the Register space at unique offsets).
+        let (root_space, base_off) = {
+            let r = outvn.read().unwrap();
+            (r.get_space(), r.get_offset().wrapping_sub(base_offset as u64))
+        };
         let mut any_addr_tied = outvn.read().unwrap().is_addr_tied();
         for i in 0..stack.len() {
             let (op_clone, slot, type_offset, is_leaf) = {
@@ -13802,11 +13805,17 @@ impl Rule for RulePieceStructure {
                 Some(v) => v,
                 None => continue,
             };
-            // addr = baseAddr + node.getTypeOffset(); (renormalize is a no-op for
-            // non-join spaces in Rugra's flat Address model.)
-            let addr = crate::address::Address::new(base_addr.as_u64().wrapping_add(type_offset as u64));
-            let vn_addr = vn.read().unwrap().get_offset();
-            if vn_addr == addr.as_u64() {
+            // addr = baseAddr + node.getTypeOffset(); (renormalize is a no-op
+            // for non-join spaces in Rugra's flat Address model.)
+            let addr_off = base_off.wrapping_add(type_offset as u64);
+            let addr = crate::address::Address::new(addr_off);
+            // Ghidra compares full Addresses (space + offset); Rugra mirrors
+            // that with the enum space carried beside the offset.
+            let (vn_space, vn_addr) = {
+                let r = vn.read().unwrap();
+                (r.get_space(), r.get_offset())
+            };
+            if vn_space == root_space && vn_addr == addr_off {
                 // vn already has the correct address.
                 if !is_leaf || !Self::separate_symbol(&outvn, &vn) {
                     // Part of the same symbol as the root: just mark proto-partial.
@@ -13821,10 +13830,14 @@ impl Rule for RulePieceStructure {
             let vn_size = vn.read().unwrap().get_size();
             if is_leaf {
                 // Insert a COPY: vn → newVn at the correct address, then point
-                // the PIECE input at newVn. Faithful to 7679-7699.
+                // the PIECE input at newVn. Faithful to 7679-7699. The new
+                // varnode inherits the root's address space
+                // (PIECESTRUCT-SPACE-0001), matching Ghidra's
+                // newVarnodeOut(size, addr, copyOp) where addr is
+                // space-carrying.
                 let op_addr = op_clone.read().unwrap().get_addr();
                 let copy_op = fd.new_op(1, op_addr);
-                let new_vn = fd.new_varnode_out(vn_size, addr, &copy_op);
+                let new_vn = fd.new_varnode_out_full(vn_size, root_space, addr, &copy_op);
                 any_addr_tied = any_addr_tied || new_vn.read().unwrap().is_addr_tied();
                 // newType = getExactPiece(ct, typeOffset, vn->getSize()) ?: vn->getType()
                 let new_type = type_factory
@@ -13872,7 +13885,10 @@ impl Rule for RulePieceStructure {
                 let lslot = match lslot { Some(s) => s, None => continue ,
                 };
                 let vn_type = vn.read().unwrap().get_type();
-                let new_vn = fd.new_varnode(vn_size, addr);
+                // Non-leaf replacement keeps the root's space as well
+                // (ruleaction.cc:7689 data.newVarnode(size, addr, type) with
+                // the space-carrying addr).
+                let new_vn = fd.new_varnode_in_space(vn_size, root_space, addr);
                 if let Some(t) = vn_type {
                     new_vn.write().unwrap().update_type(t);
                 }
