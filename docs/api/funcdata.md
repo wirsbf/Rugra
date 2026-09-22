@@ -1,6 +1,17 @@
 # `funcdata.rs` API Reference
 
-## 2026-09-22：spacebase 输入寄存器补挂 TypeSpacebase 指针类型 + setVarnodeProperties 补 localmap 腿（VARGROUP-ABSORB-0001）
+## 2026-09-22：spacebase 类型挂载与 setVarnodeProperties localmap 腿(撤回,改由 heritage 侧承接)
+
+VARGROUP-ABSORB-0001 第一版(commit a77d6c02)曾在此两处落子:`spacebase()` 给 SP 输入寄存器挂
+TypeSpacebase 指针 + `set_varnode_properties` 补 localmap queryProperties 腿。A/B 实证(base=70e76ce6)
+显示两处全局改动引发 config 域漂移(glob_set/glob_range 的 pos 合并被拆、getparameter 的
+`__spacebase_1_*` 合成名泄漏)——SP 指针类型流经 Rugra 半移植的 spacebase downChain/ptrarith 臂,
+且 setVarnodeProperties 的 addrtied 折叠与 merge 层的历史补偿偏差相互作用。**第二版撤回两处**,
+等效修复改在 heritage 侧落地(见 docs/api/heritage.md 同日条目:place_multiequals 的 MULTIEQUAL
+输出改走 new_varnode_out_full 完整尾,即 Ghidra cc:2634 的原调用形态),config 域
+glob_set/glob_range/glob_url 逐函数 IDENTICAL,getparameter 向 golden 靠拢(golden 有
+local_5a8/local_5b8 栈名,base 为寄存器名形态)。SP 类型挂载将在"调用点 LOAD 存活语义"
+链条接通时与 propagateSpacebaseRef 一并启用(接收端已移植于 coreaction)。
 
 - `Funcdata::spacebase`（funcdata.cc:240-266 else 分支）：标记 SPACEBASE 标志后，若该
   varnode 是输入寄存器，按 cc:263-264 `getTypeSpacebase(stack, getAddress())` +
