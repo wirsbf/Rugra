@@ -1303,7 +1303,11 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
   - `for _ in 0..szout { move_out_edge(&out_block, 0, bb) }` = `moveOutEdge` 循环（block.cc:1614-1616）
   - `remove_block_arc(out_block)` = `removeBlock`（block.cc:1618）
   - `bb.flags = fl1 | fl2` = Ghidra 的 `bl->flags = fl1 | fl2`（block.cc:1619，**直接赋值非 OR**）
-- `mergeRange`（funcdata_block.cc:953）暂缺：Rugra 无 Cover 系统，记录为已知基础设施缺口。
+- `mergeRange`（funcdata_block.cc:942，旧注释误写 :953）：**已接线（2026-09-22，
+  SB-HERITAGE50-BLOCKCOVER-0001）**——`splice_block_basic` 在 CFG 拼接前执行
+  `bb_bb.merge_range(out_bb)`（`BlockBasic::cover` 已升级为多范围
+  `RangeList`，见 docs/api/block.md 2026-09-22 节）；拼接块 `getStart()` =
+  并集 cover 的最低范围首地址。
 - root cause：flags 丢失导致 `f_unstructured_targ` 丢失，printc 无法解析 goto 目标 → `goto ;`。
 - Alignment Evidence 见 commit message。
 
@@ -1329,6 +1333,9 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 ### 2026-07-04（续 3）：移植 nodeSplit + CloneBlockOps
 - `node_split(b, inedge)`（funcdata_block.cc:856）：分裂基本块，复制 p-code 到新块。
 - `node_split_block_edge`（funcdata_block.cc:835）：创建 DUPLICATE_BLOCK 块，重定向入边。
+  - `copyRange(b)`（funcdata_block.cc:832）已接线（2026-09-22，
+    SB-HERITAGE50-BLOCKCOVER-0001）：重复块 `copy_range` 继承原块完整
+    多范围 cover，getStart/getStop/getEntryAddr 与原块一致（Ghidra 语义）。
 - `switch_edge(in, outbefore, outafter)`（block.cc:1489）：重定向出边目标。
 - `CloneBlockOps` struct（funcdata_block.cc:962-1104）：完整 p-code 克隆逻辑：
   - `build_op_clone`：克隆 op（复制 opcode + flag 子集，跳过 branch）。
