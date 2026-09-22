@@ -251,6 +251,13 @@
 > 同根因 register addrSize)**。E2E 三门禁见 docs/api/{space,heritage,subflow}.md
 > 同日条目。
 > **CR-orderBlocks 绑定条件履行(2026-09-22,root)**: 新登记
+> **CO 探查闭环(2026-09-22,CANDGEN 裁决)**: 候选生成/顺序域**零缺陷**(never-seen
+> 0/0,双侧 mergeOpcode 单次,门语义逐行一致)——MERGE-COPYNOISE-CANDGEN-0001 关闭。
+> 33 对定因: **+48 implied 群体**(上游 MarkImplied/op 创建波域,指纹=uniq 30d6 创建波
+> 20/47,size 8/24/4 struct 分片族;merge 前 implied 已冻结=双侧同确)→**CQ 车道已派**
+> (以 30d6 波定位创建者+in-implied 6 对锚点;验收=implied-out 对 R≤O+指纹消失);
+> −12 const 记账面并入 junk 族回归指标;−3 req flag 漂移=P3 观察项。
+
 > **CN 集成(2026-09-22,root)+双重复核纠偏**: minimalmask 整字节阶梯修复合并(双语料
 > 字节恒等=语料中性,潜伏语义缺口真实闭合)。**双 CR 纠偏登记**(第二独立复核更严):
 > ①commit message 的"httpd under-consumed"因果叙述=作者自归因,以 lane report §2
