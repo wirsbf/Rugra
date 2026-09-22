@@ -167,13 +167,20 @@ RAX_RETURN.md §3.1 实证链:mirror_drill.stderr:118)。
 |---|---|---|
 | `mirror_bundle_enabled()` | `RUGRA_MIRROR`(presence) | 目标 DWARF 原型抑制(§7.3) |
 | `mirror_flow_enabled()` | bundle ∨ `RUGRA_FLOW_MIRROR` | 全段 SLEIGH 镜像、follow_flow_range(0,u64::MAX)、controller shared-return 跳过、load_mode=single_function_bfd |
-| `mirror_bare_load_enabled()` | bundle ∨ `RUGRA_BARE_LOAD` | libc 签名台账清空(PLT-import 覆盖与 link_call_specs 解析变 no-op) |
+| `mirror_bare_load_enabled()` | bundle ∨ `RUGRA_BARE_LOAD` | libc 签名台账清空(PLT-import 覆盖与 link_call_specs 解析变 no-op);**program-DB 数据符号层抑制**(SB-ORD185-CONSTANTPTR-0001:worker 侧 rodata DAT/ELF OBJECT/DWARF globals 不装库,仅留 cspec `<global>` range + loader readonly range,镜像 oracle `readLoaderSymbols` 全 `addFunction` 的裸 BFD 环境) |
 | `mirror_fixture_data_enabled()` | bundle ∨ `RUGRA_ORACLE_FIXTURE_DATA` | known-no-return 两段(函数属性位 + flow callee 表)关闭 |
 
 - `RUGRA_MIRROR=1` = 三组件全集 + 目标 DWARF 抑制,一键即镜像态。
 - 旧三 env 保留组件级 A/B 兼容:单独设置时语义与 c5a8992 **逐字节不变**
   (三 env 齐设重产投影与旧 mirror 投影 sha 全等 `f7acbff2…`,stderr 仍打
   `applied locked DWARF prototype: 1 params`)。
+  **erratum(SB-ORD185-CONSTANTPTR-0001, 2026-09-22)**:`RUGRA_BARE_LOAD`
+  单独语义自本修复起**扩展**——追 ordinal 185(constantptr 0vs4)根因时发现
+  bare-BFD 数据环境还包含"loader 符号全注册为函数"(architecture.cc:346-359),
+  即全局 scope 零数据 SymbolEntry,`queryContainer`(coreaction.cc:1151)恒
+  NULL;故 BARE_LOAD 现同时关闭 program-DB 数据符号层(默认 E2E 路径零变化,
+  curl/httpd skeleton 与基线逐字节相等)。旧行为(数据层保留)本身是
+  pre-existing 分歧源,不属于"组件语义"。
 - worker 子进程经 `Command::new` 继承环境,无需传递。
 
 ### 7.3 目标 DWARF 锁抑制(仅 bundle 键)
