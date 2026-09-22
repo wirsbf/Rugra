@@ -1469,105 +1469,137 @@ impl Action for ActionRestructureVarnode {
         // Ghidra cc:2279: aliasyes = (numpass != 0).
         // Alias calculations are not reliable on the first pass.
         let aliasyes = self.numpass != 0;
-        let mut scope = crate::varmap::ScopeLocal::new();
-        // Ghidra platform-side parameter symbols: the function's local scope
-        // arrives from the Program database with the DWARF function's named
-        // parameter symbols already installed (decompile.cc <localdb>
-        // decode); ScopeLocal::restructureVarnode's fakeInputSymbols
-        // (varmap.cc:1428-1435) then skips inputs that already have a
-        // function_parameter symbol, so printing uses the parameter name
-        // (`string`/`value`) rather than the in_RXX irregular-input fallback
-        // (varmap.cc:1508 buildDefaultName). Rugra's fresh ScopeLocal is
-        // empty, so seed the input-locked FuncProto's parameters here, at
-        // scope construction, before restructure_varnode.
-        if fd.funcp.is_input_locked() {
-            let params: Vec<(
-                String, std::sync::Arc<crate::type_system::datatype::Datatype>, u64,
-            )> =
-                fd
-                .funcp
-                    .parameters
-                    .iter()
-                    .map(|p| (
-                            p.name.clone(),
-                            p.data_type.clone(),
-                            p.address.as_u64()))
-                    .collect();
-            for (index, (name, dtype, offset)) in params.into_iter().enumerate() {
-                let idx = scope.add_symbol(
-                    crate::space::AddressSpace::Register,
-                    &name,
-                    Some(dtype.clone()),
-                    offset,
-                    None,
-                );
-                scope.set_category(
-                    idx,
-                    crate::varmap::symbol_category::FUNCTION_PARAMETER,
-                    index as i32,
-                );
-                // Platform parameter symbols are name+type locked (they
-                // come from the debug info); the locks also protect the
-                // symbols from ScopeInternal::clearUnlockedCategory(
-                // Symbol::function_parameter) (varmap.cc:1275), which runs
-                // at the top of every restructureVarnode pass.
-                scope.symbols[idx].namelock = true;
-                scope.symbols[idx].typelock = true;
-                // The locked parameter symbol also type-locks its storage
-                // varnode: Ghidra's Varnode::setSymbolEntry (varnode.cc:418)
-                // sets Varnode::typelock from the Symbol flags and
-                // syncVarnodesWithSymbol (funcdata_varnode.cc:983-1002)
-                // flows the symbol's Datatype onto the varnode. Rugra's
-                // sync only walks the stack space, so apply the type to the
-                // register input directly here.
-                let input_vn =
-                    fd.find_varnode_input(dtype.get_size(), crate::address::Address::new(offset));
-                if let Some(vn_arc) = input_vn {
-                    let mut vn = vn_arc.write().unwrap();
-                    if !vn.is_type_lock() {
-                        vn.v_type = Some(dtype.clone());
-                        vn.set_flags(crate::varnode::varnode_flags::TYPELOCK);
+        // Ghidra's ScopeLocal is a per-Funcdata object constructed once
+        // (funcdata.cc:63-71: new ScopeLocal + attachScope + funcp.setScope +
+        // resetLocalWindow) that PERSISTS across every
+        // ActionRestructureVarnode pass. Persistence is what keeps the
+        // markNotMapped window narrowing (FuncCallSpecs::buildInputFromTrials
+        // fspec.cc:5737 outgoing-parameter slots; ActionRestrictLocal
+        // coreaction.cc:1979/1997 saved-register spills) active for the next
+        // pass's MapState gather — addRange's inRange gate (varmap.cc:902)
+        // then drops hints for those slots. Rugra previously built a fresh
+        // ScopeLocal per pass and re-installed the full window, resurrecting
+        // entries (and nolocalalias flags) for unmapped slots
+        // (SB-MATCHURL-ORD70-0001). The scope is now created on the first
+        // apply (reset_local_window at the funcdata.cc:70 lifecycle point)
+        // and reused thereafter.
+        let mut scope = match fd.scope.take() {
+            Some(scope) => scope,
+            None => {
+                let mut scope = crate::varmap::ScopeLocal::new();
+                // Ghidra platform-side parameter symbols: the function's
+                // local scope arrives from the Program database with the
+                // DWARF function's named parameter symbols already
+                // installed (decompile.cc <localdb> decode);
+                // ScopeLocal::restructureVarnode's fakeInputSymbols
+                // (varmap.cc:1428-1435) then skips inputs that already
+                // have a function_parameter symbol, so printing uses the
+                // parameter name (`string`/`value`) rather than the
+                // in_RXX irregular-input fallback (varmap.cc:1508
+                // buildDefaultName). Installation happens ONCE at scope
+                // construction; per-pass survival is clearUnlockedCategory's
+                // job (typelocked parameters survive, varmap.cc:1275).
+                if fd.funcp.is_input_locked() {
+                    let params: Vec<(
+                        String, std::sync::Arc<crate::type_system::datatype::Datatype>, u64,
+                    )> =
+                        fd
+                        .funcp
+                            .parameters
+                            .iter()
+                            .map(|p| (
+                                    p.name.clone(),
+                                    p.data_type.clone(),
+                                    p.address.as_u64()))
+                            .collect();
+                    for (index, (name, dtype, offset)) in params.into_iter().enumerate() {
+                        let idx = scope.add_symbol(
+                            crate::space::AddressSpace::Register,
+                            &name,
+                            Some(dtype.clone()),
+                            offset,
+                            None,
+                        );
+                        scope.set_category(
+                            idx,
+                            crate::varmap::symbol_category::FUNCTION_PARAMETER,
+                            index as i32,
+                        );
+                        // Platform parameter symbols are name+type locked
+                        // (they come from the debug info); the locks also
+                        // protect the symbols from
+                        // ScopeInternal::clearUnlockedCategory(
+                        // Symbol::function_parameter) (varmap.cc:1275),
+                        // which runs at the top of every
+                        // restructureVarnode pass.
+                        scope.symbols[idx].namelock = true;
+                        scope.symbols[idx].typelock = true;
+                        // The locked parameter symbol also type-locks its
+                        // storage varnode: Ghidra's Varnode::setSymbolEntry
+                        // (varnode.cc:418) sets Varnode::typelock from the
+                        // Symbol flags and syncVarnodesWithSymbol
+                        // (funcdata_varnode.cc:983-1002) flows the symbol's
+                        // Datatype onto the varnode. Rugra's sync only
+                        // walks the stack space, so apply the type to the
+                        // register input directly here.
+                        let input_vn = fd.find_varnode_input(
+                            dtype.get_size(),
+                            crate::address::Address::new(offset),
+                        );
+                        if let Some(vn_arc) = input_vn {
+                            let mut vn = vn_arc.write().unwrap();
+                            if !vn.is_type_lock() {
+                                vn.v_type = Some(dtype.clone());
+                                vn.set_flags(crate::varnode::varnode_flags::TYPELOCK);
+                            }
+                        }
                     }
                 }
+                // Install the register-name lookup standing in for
+                // `glb->translate->getRegisterName` (translate.hh:380):
+                // Ghidra's ScopeInternal::buildVariableName register queries
+                // (database.cc:2447/2454/2462/2472/2485) read the SLEIGH
+                // `varnode_xref` through the Architecture's Translate;
+                // Rugra's ScopeLocal takes a caller-attached Architecture
+                // handle (`set_arch_lookup`) whose `register_xref`
+                // (populated from `SleighBase::getAllRegisters`,
+                // sleighbase.cc:182-186) answers via the faithful
+                // `Architecture::get_register_name` port
+                // (sleighbase.cc:144-168). The legacy flat table below
+                // stays as the fixture fallback for Funcdata without an
+                // Architecture.
+                scope.set_arch_lookup(fd.arch.clone());
+                if fd.arch.is_none() {
+                    scope.register_names = [
+                        (0x00u64, 8i32, "RAX"), (0x00, 4, "EAX"), (0x00, 2, "AX"), (0x00, 1, "AL"),
+                        (0x08, 8, "RCX"), (0x08, 4, "ECX"),
+                        (0x10, 8, "RDX"), (0x10, 4, "EDX"),
+                        (0x18, 8, "RBX"), (0x18, 4, "EBX"),
+                        (0x20, 8, "RSP"), (0x20, 4, "ESP"),
+                        (0x28, 8, "RBP"), (0x28, 4, "EBP"),
+                        (0x30, 8, "RSI"), (0x30, 4, "ESI"),
+                        (0x38, 8, "RDI"), (0x38, 4, "EDI"),
+                        (0x80, 8, "R8"), (0x88, 8, "R9"),
+                        (0x90, 8, "R10"), (0x98, 8, "R11"),
+                        (0xA0, 8, "R12"), (0xA8, 8, "R13"),
+                        (0xB0, 8, "R14"), (0xB8, 8, "R15"),
+                        (0x200, 8, "RIP"),
+                    ]
+                    .into_iter()
+                    .map(|(o, s, n)| ((o, s), n.to_string()))
+                    .collect();
+                }
+                // localmap->resetLocalWindow() (funcdata.cc:70): install the
+                // prototype's localRange ∪ paramRange as the scope's range
+                // tree — once, at construction. markNotMapped narrowings
+                // applied after this point persist for the function's
+                // lifetime (Ghidra never re-widows inside restructure).
+                scope.reset_local_window(fd);
+                scope
             }
-        }
-        // Install the register-name lookup standing in for
-        // `glb->translate->getRegisterName` (translate.hh:380): Ghidra's
-        // ScopeInternal::buildVariableName register queries
-        // (database.cc:2447/2454/2462/2472/2485) read the SLEIGH
-        // `varnode_xref` through the Architecture's Translate; Rugra's
-        // ScopeLocal takes a caller-attached Architecture handle
-        // (`set_arch_lookup`) whose `register_xref` (populated from
-        // `SleighBase::getAllRegisters`, sleighbase.cc:182-186) answers via
-        // the faithful `Architecture::get_register_name` port
-        // (sleighbase.cc:144-168). The legacy flat table below stays as the
-        // fixture fallback for Funcdata without an Architecture.
-        scope.set_arch_lookup(fd.arch.clone());
-        if fd.arch.is_none() {
-            scope.register_names = [
-                (0x00u64, 8i32, "RAX"), (0x00, 4, "EAX"), (0x00, 2, "AX"), (0x00, 1, "AL"),
-                (0x08, 8, "RCX"), (0x08, 4, "ECX"),
-                (0x10, 8, "RDX"), (0x10, 4, "EDX"),
-                (0x18, 8, "RBX"), (0x18, 4, "EBX"),
-                (0x20, 8, "RSP"), (0x20, 4, "ESP"),
-                (0x28, 8, "RBP"), (0x28, 4, "EBP"),
-                (0x30, 8, "RSI"), (0x30, 4, "ESI"),
-                (0x38, 8, "RDI"), (0x38, 4, "EDI"),
-                (0x80, 8, "R8"), (0x88, 8, "R9"),
-                (0x90, 8, "R10"), (0x98, 8, "R11"),
-                (0xA0, 8, "R12"), (0xA8, 8, "R13"),
-                (0xB0, 8, "R14"), (0xB8, 8, "R15"),
-                (0x200, 8, "RIP"),
-            ]
-            .into_iter()
-            .map(|(o, s, n)| ((o, s), n.to_string()))
-            .collect();
-        }
+        };
         // Ghidra cc:2280: l1->restructureVarnode(aliasyes).
-        // Rugra's restructure_varnode doesn't yet take aliasyes (the
-        // markUnaliased aliasyes gate is inside restructure, which is
-        // always-on in Rugra). TODO: thread aliasyes through.
-        scope.restructure_varnode(fd);
+        scope.restructure_varnode(fd, aliasyes);
         fd.scope = Some(scope);
         // Ghidra cc:2281-2282: if (data.syncVarnodesWithSymbols(l1,false,aliasyes)) count += 1;
         if fd.sync_varnodes_with_symbols(false, aliasyes) {
@@ -8753,69 +8785,123 @@ impl Action for ActionRestrictLocal {
     // Ghidra: coreaction.cc:1957 ActionRestrictLocal::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionRestrictLocal::apply (coreaction.cc:1957-2001).
-        // Collect all mark_not_mapped ranges first, then apply to scope
-        // at the end to avoid borrow conflicts.
+        // Ghidra calls ScopeLocal::markNotMapped inline; Rugra's scope lives
+        // in fd.scope, so the calls are buffered and replayed in collection
+        // order once the fd borrows are dropped (the examinations below
+        // never read scope state, so deferral is observationally identical).
         let mut unmap_ranges: Vec<(u64, i32, bool)> = Vec::new();
 
-        // Loop 1: For each call with locked stack params, markNotMapped.
-        // Faithful to coreaction.cc:1967-1981.
+        // Loop 1 (cc:1967-1981): for each call with locked inputs and a
+        // resolved spacebase offset, every parameter whose storage address
+        // is in the spacebase (stack) space marks the caller-side
+        // outgoing-argument slot unmapped with parameter=true:
+        //   off = addr.getSpace()->wrapOffset(fc->getSpacebaseOffset()
+        //                                      + addr.getOffset())
+        // (cc:1977-1979). Rugra's AddressSpace::Stack is the stack
+        // spacebase space (IPTR_SPACEBASE); wrapOffset for the 64-bit
+        // stack is the modulo-2^64 wrap of the i128 sum.
         let n_calls = fd.num_calls();
         for i in 0..n_calls {
-            let fc = match fd.get_call_specs(i) { Some(fc) => fc, None => continue ,
-            };
-            if !fc.is_input_locked() { continue; }
-            if !fc.has_spacebase_offset() { continue; }
-            let so = fc.get_spacebase_offset();
-            for p in &fc.prototype.parameters {
-                if p.address.as_u64() > 0x7FFF_FFFF {
-                    let off = (so as u64).wrapping_add(p.address.as_u64());
-                    unmap_ranges.push((off, p.data_type.get_size() as i32, true));
+            let (spacebase_offset, param_decisions): (i64, Vec<(crate::space::AddressSpace, u64, i32)>) = {
+                let fc = match fd.get_call_specs(i) {
+                    Some(fc) => fc,
+                    None => continue,
+                };
+                if !fc.is_input_locked() {
+                    continue;
                 }
+                // cc:1972: if (fc->getSpacebaseOffset() ==
+                // FuncCallSpecs::offset_unknown) continue;
+                if !fc.has_spacebase_offset() {
+                    continue;
+                }
+                let decisions = fc
+                    .prototype
+                    .parameters
+                    .iter()
+                    .map(|p| {
+                        (
+                            p.address_space,
+                            p.address.as_u64(),
+                            p.data_type.get_size() as i32,
+                        )
+                    })
+                    .collect();
+                (fc.get_spacebase_offset(), decisions)
+            };
+            for (space, paddr, size) in param_decisions {
+                // cc:1977: if (addr.getSpace()->getType() != IPTR_SPACEBASE)
+                //   continue;
+                if space != crate::space::AddressSpace::Stack {
+                    continue;
+                }
+                let off = ((spacebase_offset as i128 + paddr as i128)
+                    .rem_euclid(1i128 << 64)) as u64;
+                unmap_ranges.push((off, size, true));
             }
         }
 
-        // Loop 2: For each saved-register effect, find COPY ops writing to
-        // stack and mark those locations as not-mapped.
-        // Faithful to coreaction.cc:1983-2000.
+        // Loop 2 (cc:1983-2000): for each non-killedbycall effect record of
+        // the function's own prototype, find the INPUT varnode of that
+        // storage; if it is unaffected (the saved-register case), every COPY
+        // descendant writing stack storage — the spill slot
+        // (isUnaffectedStorage, varmap.hh:244: out space == scope space) —
+        // marks that slot unmapped with parameter=false.
         let effects: Vec<crate::fspec::EffectRecord> = fd.funcp.effects.clone();
         for effect in &effects {
-            if effect.get_type() == crate::fspec::EffectType::KilledByCall { continue; }
-            let effect_offset = effect.get_offset();
-            let effect_size = effect.get_size();
-            // Look for COPY ops from this register to stack storage
-            for op_ref in &fd.obank.alivelist {
-                let op = op_ref.0.read().unwrap();
-                if op.opcode != OpCode::CPUI_COPY { continue; }
-                let in_vn = match op.inrefs.get(0) { Some(v) => v.clone(), None => continue ,
+            // cc:1986: if ((*eiter).getType() == EffectRecord::killedbycall)
+            //   continue;
+            if effect.get_type() == crate::fspec::EffectType::KilledByCall {
+                continue;
+            }
+            // cc:1987: vn = data.findVarnodeInput(size, address);
+            let Some(vn_arc) =
+                fd.find_varnode_input(effect.get_size() as usize, crate::address::Address::new(effect.get_offset()))
+            else {
+                continue;
+            };
+            // cc:1988: if ((vn != 0) && (vn->isUnaffected()))
+            if !vn_arc.read().unwrap().is_unaffected() {
+                continue;
+            }
+            let descend_refs: Vec<_> = {
+                let vn = vn_arc.read().unwrap();
+                vn.descend.iter().filter_map(|w| w.upgrade()).collect()
+            };
+            for op_ref in descend_refs {
+                let (is_copy, out_stack, out_off, out_size) = {
+                    let op = op_ref.read().unwrap();
+                    if op.opcode != OpCode::CPUI_COPY {
+                        continue;
+                    }
+                    let Some(out_vn) = op.output.clone() else {
+                        continue;
+                    };
+                    let out = out_vn.read().unwrap();
+                    (
+                        true,
+                        out.get_space() == crate::space::AddressSpace::Stack,
+                        out.get_offset(),
+                        out.get_size() as i32,
+                    )
                 };
-                let out_vn = match op.output.as_ref() { Some(o) => o.clone(), None => continue ,
-                };
-                let in_g = in_vn.read().unwrap();
-                if !in_g.is_input() { continue; }
-                if in_g.get_offset() != effect_offset { continue; }
-                if in_g.get_size() as i32 != effect_size { continue; }
-                drop(in_g);
-                let out_g = out_vn.read().unwrap();
-                if out_g.get_space() == crate::space::AddressSpace::Register {
-                    unmap_ranges.push((out_g.get_offset(), out_g.get_size() as i32, false));
+                let _ = is_copy;
+                // cc:1995: if (!data.getScopeLocal()->isUnaffectedStorage(
+                //   outvn)) continue;  — varmap.hh:244: vn->getSpace()==space
+                if !out_stack {
+                    continue;
                 }
+                unmap_ranges.push((out_off, out_size, false));
             }
         }
 
-        // Apply collected unmap ranges to scope
-        let mut change = 0;
+        // Replay the buffered markNotMapped calls in collection order.
         if let Some(scope) = fd.scope.as_mut() {
             for (off, sz, param) in &unmap_ranges {
                 scope.mark_not_mapped(*off, *sz, *param);
-                change += 1;
             }
         }
-
-        if change > 0 {
-            Ok(action_status::NO_CHANGE)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "restrictlocal" mirrors ctor at coreaction.hh:813
     fn get_name(&self) -> &str { "restrictlocal" }

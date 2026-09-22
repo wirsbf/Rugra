@@ -2965,7 +2965,11 @@ impl ScopeLocal {
     /// annotateRawStackPtr placeholder (:1284-1285). `fd` is mutable
     /// because annotateRawStackPtr inserts PTRSUB ops (newOpBefore/
     /// opSetInput, varmap.cc:405-406).
-    pub fn restructure_varnode(&mut self, fd: &mut crate::funcdata::Funcdata) {
+    pub fn restructure_varnode(
+        &mut self,
+        fd: &mut crate::funcdata::Funcdata,
+        aliasyes: bool,
+    ) {
         // Ghidra varmap.cc:1259 `clearUnlockedCategory(-1)`（1275 为 function_parameter 另一调用） — NOT a blanket
         // clear: symbols with category >= 0 (function parameters, equates)
         // survive unconditionally (database.cc:2086 `if
@@ -3046,14 +3050,21 @@ impl ScopeLocal {
             .and_then(|a| a.types.clone())
             .unwrap_or_else(crate::type_system::typefactory::TypeFactory::shared_default);
 
-        // resetLocalWindow (varmap.cc:432-460) — the Funcdata lifecycle calls
-        // it right after scope construction (funcdata.cc:70); Rugra's
-        // restructure_varnode owns a fresh ScopeLocal per pass (coreaction.rs),
-        // which matches that lifecycle point on the FIRST pass / after a
-        // clear — from the 2nd RULE_REPEATAPPLY pass on, Ghidra keeps the
-        // narrowed window and accumulated min/max while Rugra reinstalls the
-        // full window (VARMAP-CROSSPASS-PERSISTENCE-0001).
-        self.reset_local_window(fd);
+        // resetLocalWindow (varmap.cc:432-460) is a Funcdata-lifecycle call:
+        // Ghidra runs it exactly once right after scope construction
+        // (funcdata.cc:70; again from Funcdata::clear, funcdata.cc:106) and
+        // NEVER from restructureVarnode. The scope persists across
+        // restructure passes, so the window narrowing done by
+        // markNotMapped (outgoing call-parameter slots via
+        // FuncCallSpecs::buildInputFromTrials fspec.cc:5737 and saved-register
+        // spills via ActionRestrictLocal coreaction.cc:1979/1997) survives
+        // into the next pass's MapState, where addRange's
+        // `range.inRange(Address(spaceid,st),sz)` gate (varmap.cc:902) drops
+        // hints for those slots. Rugra re-installed the full window here per
+        // pass, resurrecting entries for unmapped slots and (through
+        // markUnaliased) their varnodes' nolocalalias flag
+        // (SB-MATCHURL-ORD70-0001); reset_local_window now runs only at
+        // scope creation (coreaction.rs ActionRestructureVarnode).
 
         // Build the MapState with a default unknown base type (1 byte),
         // matching Ghidra's MapState construction (varmap.cc:1260-1261),
@@ -3105,11 +3116,14 @@ impl ScopeLocal {
         let aliases = state.get_alias().to_vec();
         // if (aliasyes) { markUnaliased(state.getAlias());
         // checkUnaliasedReturn(state.getAlias()); } (varmap.cc:1280-1282) —
-        // Rugra threads aliasyes implicitly true (the coreaction caller
-        // does not yet pass its numpass-derived flag; registered at
-        // coreaction.rs ActionRestructureVarnode TODO).
-        self.mark_unaliased(&aliases);
-        self.check_unaliased_return(fd, &aliases);
+        // aliasyes = (numpass != 0) from ActionRestructureVarnode
+        // (coreaction.cc:2279): alias calculations are not reliable on the
+        // first pass, so pass 0 skips both the unaliased marking and the
+        // return-storage check entirely.
+        if aliasyes {
+            self.mark_unaliased(&aliases);
+            self.check_unaliased_return(fd, &aliases);
+        }
         // if (!state.getAlias().empty() && state.getAlias()[0] == 0)
         //   annotateRawStackPtr(); (varmap.cc:1284-1285) — a zero offset use
         // of the stack pointer gets the placeholder PTRSUB.
