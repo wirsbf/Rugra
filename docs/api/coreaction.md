@@ -628,17 +628,6 @@ Folds redundant expressions:
 
 *暂无代码注释*
 
-### `pub struct ActionCopyPropagate`
-
-Copy propagation pass — folds COPY chains
-
-Corresponds to Ghidra's `RuleCopyPropagate`. For each `COPY out = in`,
-redirects all users of `out` to use `in` directly, then kills the COPY.
-
-### `pub fn new() -> Self`
-
-*暂无代码注释*
-
 ### `pub struct ActionCallParams`
 
 Attach System V AMD64 ABI register parameters to CPUI_CALL operations
@@ -2383,3 +2372,12 @@ func_link_input(coreaction.rs:9703-9774)忠实落地,再入库内守卫=非 orac
 - 单测 `test_returnsplit_creates_return_at_goto_pred` 重写为两阶段：阶段 A
   （BRANCH 前驱 + 无 goto 结构）零分裂（替代实现的回归负控）；阶段 B
   （BlockGoto 包装 + copy map 接线）双前驱入选、pop 一条、恰好一次 nodeSplit。
+
+## 2026-09-22：删除自造 ActionCopyPropagate（copyprop lane 判决）
+
+- 删除 `pub struct ActionCopyPropagate`（源码零引用的死代码；注释谎称对应
+  Ghidra `RuleCopyPropagate`——锁定 oracle 12.0.4 无此 Rule/Action，见
+  `docs/alignment_docs/COPYPROP_LANE_VERDICT_1204.md`）。
+- oracle 的 COPY 治理=merge 相位四 Action（MergeCopy/DominantCopy/HideShadow/
+  CopyMarker），Rugra 均已实现并按 cc:5722/5723/5728/5729 顺序挂树；本删除
+  行为零变化（curl E2E byte-identical，defects=0，numbering=0）。
