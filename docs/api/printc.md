@@ -2288,3 +2288,38 @@ oracle `emitBlockInfLoop` printc.cc:3109 是 `bl->getBlock(0)->emit(this)` 虚�
     （golden 条件块已消除这些 copy）。登记 `PRINTC-CONDBLOCK-JUNKOPS-0001`。
   - httpd：overflow 臂 `if (cond) break;` 条件由 legacy 扫描值变为真实 CBRANCH 条件
     （`iVar3 == 0x1117e && ...`），机制正确。
+## 2026-09-22 追加（SWITCH-BRIDGE-DUP-0001 — switch 头的 ONLY_BRANCH 表达式通道）
+
+gp（getparameter.constprop.0）的 switch#2 重复桥工件（48 空 case + 孤立 `if` + `} {` 孤儿块，
+~121 行非法 C）根因：**emit_structured_switch 无视 ONLY_BRANCH 修饰符整只重放**。发射路径
+（backtrace 实证）：`InfLoop body List → If → condition List（末位子块 = Switch）`。
+`emit_structured_if`（printc.cc:2894-2913 emitBlockIf）对 condition 双访问——第一访 NO_BRANCH
+（语句 + 完整 switch = 文本 switch#1），第二访 ONLY_BRANCH（应只打分支表达式，却重放了整个
+switch 头+48 标签+default，case 体已被 `emitted` 压制 → 全空 case = 文本 switch#2）。
+
+oracle 通道对照：
+- printc.cc:2911-2913（emitBlockIf 第二访 `setMod(only_branch); condBlock->emit(this)`）+
+  printc.cc:2790-2794（emitBlockLs only_branch 臂 = 只发末位子块）——Ghidra 结构器保证条件
+  终结块是 CBRANCH 基本块，该通道只会遇到 opBranchind。
+- printc.cc:582-591（opBranchind）：switch 分发作为**表达式**的形态 = `switch(<expr>)`——
+  关键字+开括号+索引表达式+闭括号，无 brace、无 case 重放、无 tagLine（表达式槽以
+  spaces 与 `if `/`while (` 前缀衔接，printc.cc:2909/3033）。
+
+Rugra 侧拓扑缺口（本修复的防御面）：`new_block_switch` 清 f_switch_out（block.cc:1917，与
+oracle 一致）后，已成形的 BlockSwitch 可被 cat/proper_if 吸收——gp 的 dispatcher 被卷入
+If 条件 List 末位（oracle 中该函数经 jumptable guard 折叠，golden 无此 If）。Ghidra 若真遇到
+此拓扑，emitBlockSwitch cc:3316 `unsetMod(no_branch|only_branch)` 也会整只重放；Rugra 选择
+把 ONLY_BRANCH 路由进 opBranchind 表达式通道（头文本逐字节一致），因为完整重放在表达式槽
+永远不是合法 C。
+
+改动：
+- `emit_structured_switch` 入口增 ONLY_BRANCH 早退：`switch(` + 表达式 + `)`，立即 return
+  （不重发 control 语句、不打 brace/cases/default）。
+- 头部表达式解析逻辑（index_varnode → inline_candidates/value_def_map COPY 追逐 →
+  BRANCHIND in0 → CBRANCH 比较回退）原样提取为 `emit_switch_head_expr`（RUGRA-GLUE 纯重构），
+  全量头通道与表达式通道共享同一渲染。
+
+验证：gp 730→645 行、case 标签 96→48、switch#2 空 case 桥与 `} {` 孤儿块消除；curl 全量
+skeleton 3751→3653（−98）、defects=0、numbering=0；printc 域单测 12/12。残留（拓扑域，另行
+登记）：条件槽 `if switch(iVar31) {`（1 行非法 C，待 BO/guard-folding lane 消 If）、双
+default-check（If body 侧）、SWITCH-CASE-TAIL-0001（0x23/0x35 尾语句蒸发，未动）。
