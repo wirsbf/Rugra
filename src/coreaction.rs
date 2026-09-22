@@ -4698,6 +4698,7 @@ impl ActionSetCasts {
         op: &crate::op::PcodeOp,
         slot: usize,
         strategy: &crate::type_system::cast::CastStrategyC,
+        type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
     ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
         use crate::type_system::datatype::{Datatype, TypeMetatype};
         if slot != 1 {
@@ -4725,7 +4726,7 @@ impl ActionSetCasts {
         // a direct pointer-to-reqtype cast.
         let curtype = match curtype_full.as_ref() {
             Datatype::Pointer(pt) => pt.ptr_to.clone(),
-            _ => return Some(make_ptr(reqtype, in_size)),
+            _ => return Some(make_ptr(reqtype, in_size, Some(type_factory))),
         };
         // cc:454-465: postpone branch.
         if !curtype.type_equal(&reqtype) && curtype.get_size() == reqtype.get_size() {
@@ -4751,7 +4752,7 @@ impl ActionSetCasts {
         // cc:467-469: castStandard(reqtype, curtype, false, true), then wrap
         // the resulting cast type back into a pointer.
         let cast = strategy.cast_standard_full(&reqtype, &curtype, false, true)?;
-        Some(make_ptr(cast, in_size))
+        Some(make_ptr(cast, in_size, Some(type_factory)))
     }
 
     /// Faithful port of `TypeOpStore::getInputCast` (typeop.cc:520-555).
@@ -4765,6 +4766,7 @@ impl ActionSetCasts {
         op: &crate::op::PcodeOp,
         slot: usize,
         strategy: &crate::type_system::cast::CastStrategyC,
+        type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
     ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
         use crate::type_system::datatype::Datatype;
         if slot == 0 {
@@ -4795,7 +4797,7 @@ impl ActionSetCasts {
         // cc:536-541: size mismatch → cast the POINTER (slot 1 only).
         if dest_size != value_type.get_size() as i64 {
             if slot == 1 {
-                return Some(make_ptr(value_type, ptr_size));
+                return Some(make_ptr(value_type, ptr_size, Some(type_factory)));
             }
             return None;
         }
@@ -4817,7 +4819,7 @@ impl ActionSetCasts {
                         })
                         .unwrap_or(false)
                 {
-                    let new_type = make_ptr(value_type, ptr_size);
+                    let new_type = make_ptr(value_type, ptr_size, Some(type_factory));
                     if !pointer_type.type_equal(&new_type) {
                         return Some(new_type);
                     }
@@ -4869,10 +4871,82 @@ impl ActionSetCasts {
             let op_pc = op.get_addr();
             let in_size = in_arc.read().unwrap().get_size();
             let ct = match op.opcode {
-                OpCode::CPUI_LOAD => Self::load_input_cast(&op, slot, strategy),
-                OpCode::CPUI_STORE => Self::store_input_cast(&op, slot, strategy),
+                OpCode::CPUI_LOAD => Self::load_input_cast(&op, slot, strategy, &type_factory),
+                OpCode::CPUI_STORE => Self::store_input_cast(&op, slot, strategy, &type_factory),
                 OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
                     crate::typeop::comparison_input_cast(&op, slot, strategy)
+                }
+                // typeop.cc:1023/1049 TypeOpIntSless/SlessEqual::getInputCast
+                // and cc:1075/1099 TypeOpIntLess/LessEqual::getInputCast: the
+                // ordering comparisons take the inputTypeLocal base type
+                // (SLESS family = INT, LESS family = UINT), force it under
+                // int promotion, else castStandard with care_uint_int=TRUE.
+                // care_ptr_uint: signed compares TRUE (cc:1030/1056), the
+                // unsigned compares FALSE (cc:1082/1106).
+                OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL => {
+                    Self::ordering_compare_input_cast(
+                        &op,
+                        slot,
+                        strategy,
+                        crate::type_system::datatype::TypeMetatype::Int,
+                        true,
+                        &type_factory,
+                    )
+                }
+                OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL => {
+                    Self::ordering_compare_input_cast(
+                        &op,
+                        slot,
+                        strategy,
+                        crate::type_system::datatype::TypeMetatype::Uint,
+                        false,
+                        &type_factory,
+                    )
+                }
+                // typeop.cc:1131/1157 TypeOpIntZext/Sext::getInputCast: the
+                // extension's input takes its inputTypeLocal base (ZEXT =
+                // UINT, SEXT = INT), forced under
+                // checkIntPromotionForExtension (cast.cc:126-138: promotion
+                // of the same extension direction is implied), else
+                // castStandard(req, cur, TRUE, FALSE).
+                OpCode::CPUI_INT_ZEXT => {
+                    Self::extension_input_cast(
+                        &op,
+                        slot,
+                        strategy,
+                        crate::type_system::datatype::TypeMetatype::Uint,
+                        &type_factory,
+                    )
+                }
+                OpCode::CPUI_INT_SEXT => {
+                    Self::extension_input_cast(
+                        &op,
+                        slot,
+                        strategy,
+                        crate::type_system::datatype::TypeMetatype::Int,
+                        &type_factory,
+                    )
+                }
+                // typeop.cc:1543 TypeOpIntRight / cc:1585 TypeOpIntSright
+                // slot 0: promotion gate (INT_RIGHT requires an unsigned
+                // extension present, INT_SRIGHT a signed one — the other
+                // extensions force the cast), else castStandard(req, cur,
+                // TRUE, TRUE). Slot 1 falls to the base metain arm.
+                OpCode::CPUI_INT_RIGHT if slot == 0 => {
+                    Self::shift_input_cast(&op, slot, strategy, 1, &type_factory)
+                }
+                OpCode::CPUI_INT_SRIGHT if slot == 0 => {
+                    Self::shift_input_cast(&op, slot, strategy, 2, &type_factory)
+                }
+                // typeop.cc:1639/1659/1679/1699 TypeOpIntDiv/Sdiv/Rem/Srem
+                // ::getInputCast (both slots): promotion gate as the shifts
+                // (DIV/REM unsigned, SDIV/SREM signed), else
+                // castStandard(req, cur, TRUE, TRUE).
+                OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_REM => {
+                    Self::divrem_input_cast(&op, slot, strategy, 1, &type_factory)
+                }
+                OpCode::CPUI_INT_SDIV | OpCode::CPUI_INT_SREM => {
+                    Self::divrem_input_cast(&op, slot, strategy, 2, &type_factory)
                 }
                 opc => match Self::input_metatype(opc) {
                     Some(meta) => {
@@ -5012,6 +5086,160 @@ impl ActionSetCasts {
         fd.op_set_input(op_ref, out_vn, slot);
         fd.op_insert_before(&new_op, op_ref);
         true
+    }
+
+    // Ghidra: typeop.cc:1075 TypeOpIntLess::getInputCast
+    /// Ordering-comparison input cast shared by SLESS/SLESSEQUAL
+    /// (typeop.cc:1023/1049, metain=INT, care_ptr_uint=TRUE) and
+    /// LESS/LESSEQUAL (cc:1075/1099, metain=UINT, care_ptr_uint=FALSE):
+    /// `checkIntPromotionForCompare` forces the inputTypeLocal base type
+    /// (an interned TypeFactory base, like `tlst->getBase`), else
+    /// `castStandard(req, cur, TRUE, care_ptr_uint)`.
+    fn ordering_compare_input_cast(
+        op: &crate::op::PcodeOp,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+        metain: crate::type_system::datatype::TypeMetatype,
+        care_ptr_uint: bool,
+        type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        if slot > 1 {
+            return None;
+        }
+        let in_vn = op.get_in(slot)?;
+        let curtype = {
+            let vn = in_vn.read().unwrap();
+            vn.get_high_type_read_facing(op, slot as i32)
+                .or_else(|| vn.v_type.clone())
+        };
+        let reqtype = type_factory
+            .read()
+            .unwrap()
+            .get_base(in_vn.read().unwrap().get_size(), metain)?;
+        if strategy.check_int_promotion_for_compare_op(op, slot) {
+            return Some(reqtype);
+        }
+        let curtype = curtype?;
+        strategy
+            .cast_standard_full(&reqtype, &curtype, true, care_ptr_uint)
+            .map(|_| reqtype)
+    }
+
+    // Ghidra: typeop.cc:1131 TypeOpIntZext::getInputCast
+    /// Extension input cast shared by ZEXT (metain=UINT) and SEXT
+    /// (metain=INT, typeop.cc:1157):
+    /// `checkIntPromotionForExtension` (cast.cc:126-138) forces the
+    /// inputTypeLocal base when the promotion direction mismatches the
+    /// extension direction, else `castStandard(req, cur, TRUE, FALSE)`.
+    fn extension_input_cast(
+        op: &crate::op::PcodeOp,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+        metain: crate::type_system::datatype::TypeMetatype,
+        type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let in_vn = op.get_in(slot)?;
+        let vn = in_vn.read().unwrap();
+        let curtype = vn
+            .get_high_type_read_facing(op, slot as i32)
+            .or_else(|| vn.v_type.clone());
+        let reqtype = type_factory.read().unwrap().get_base(vn.get_size(), metain)?;
+        let promo_type = strategy.int_promotion_type(&vn);
+        const NO_PROMOTION: i32 = -1;
+        const UNKNOWN_PROMOTION: i32 = 0;
+        const UNSIGNED_EXTENSION: i32 = 1;
+        const SIGNED_EXTENSION: i32 = 2;
+        drop(vn);
+        let forced = match promo_type {
+            NO_PROMOTION => false,
+            UNKNOWN_PROMOTION => true,
+            ext => {
+                // cast.cc:135-136: a promotion extension matching the
+                // explicit extension direction is implied — no cast.
+                if (ext & UNSIGNED_EXTENSION != 0) && op.opcode == OpCode::CPUI_INT_ZEXT {
+                    false
+                } else if (ext & SIGNED_EXTENSION != 0) && op.opcode == OpCode::CPUI_INT_SEXT {
+                    false
+                } else {
+                    true
+                }
+            }
+        };
+        if forced {
+            return Some(reqtype);
+        }
+        let curtype = curtype?;
+        strategy
+            .cast_standard_full(&reqtype, &curtype, true, false)
+            .map(|_| reqtype)
+    }
+
+    // Ghidra: typeop.cc:1585 TypeOpIntSright::getInputCast
+    /// Shift slot-0 input cast (INT_RIGHT cc:1543 gate=UNSIGNED_EXTENSION,
+    /// INT_SRIGHT cc:1585 gate=SIGNED_EXTENSION): a promotion that lacks the
+    /// shift's own extension direction forces the inputTypeLocal base
+    /// (metain=INT for both), else `castStandard(req, cur, TRUE, TRUE)`.
+    fn shift_input_cast(
+        op: &crate::op::PcodeOp,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+        gate: i32,
+        type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let in_vn = op.get_in(slot)?;
+        let vn = in_vn.read().unwrap();
+        let curtype = vn
+            .get_high_type_read_facing(op, slot as i32)
+            .or_else(|| vn.v_type.clone());
+        let reqtype = type_factory.read().unwrap().get_base(
+            vn.get_size(),
+            crate::type_system::datatype::TypeMetatype::Int,
+        )?;
+        let promo_type = strategy.int_promotion_type(&vn);
+        const NO_PROMOTION: i32 = -1;
+        drop(vn);
+        if promo_type != NO_PROMOTION && (promo_type & gate) == 0 {
+            return Some(reqtype);
+        }
+        let curtype = curtype?;
+        strategy
+            .cast_standard_full(&reqtype, &curtype, true, true)
+            .map(|_| reqtype)
+    }
+
+    // Ghidra: typeop.cc:1639 TypeOpIntDiv::getInputCast
+    /// Divide/remainder input cast, both slots (DIV/REM cc:1639/1679 gate =
+    /// UNSIGNED_EXTENSION; SDIV/SREM cc:1659/1699 gate = SIGNED_EXTENSION):
+    /// same promotion gate as the shifts, else `castStandard(req, cur,
+    /// TRUE, TRUE)` with the op's own metain (DIV/REM=UINT, SDIV/SREM=INT).
+    fn divrem_input_cast(
+        op: &crate::op::PcodeOp,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+        gate: i32,
+        type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        let metain = if gate == 1 {
+            crate::type_system::datatype::TypeMetatype::Uint
+        } else {
+            crate::type_system::datatype::TypeMetatype::Int
+        };
+        let in_vn = op.get_in(slot)?;
+        let vn = in_vn.read().unwrap();
+        let curtype = vn
+            .get_high_type_read_facing(op, slot as i32)
+            .or_else(|| vn.v_type.clone());
+        let reqtype = type_factory.read().unwrap().get_base(vn.get_size(), metain)?;
+        let promo_type = strategy.int_promotion_type(&vn);
+        const NO_PROMOTION: i32 = -1;
+        drop(vn);
+        if promo_type != NO_PROMOTION && (promo_type & gate) == 0 {
+            return Some(reqtype);
+        }
+        let curtype = curtype?;
+        strategy
+            .cast_standard_full(&reqtype, &curtype, true, true)
+            .map(|_| reqtype)
     }
 
     // RUGRA-GLUE: addlflags predicates from the Ghidra TypeOp constructors
@@ -6092,11 +6320,29 @@ fn merge_min_type_order(
 // 3-arg overload's `TypePointer tmp(s,pt,ws)` carries an EMPTY name (names
 // attach only via the 4-arg overload, type.cc:3885); see make_pointer_type's
 // note for why the former composed-name spelling diverged from the oracle.
+// Ghidra: type.cc:3785 TypeFactory::getTypePointer (interning constructor)
+/// Build a pointer type of `base` with Rugra's TypeFactory interning, the
+/// same way `tlst->getTypePointer(sz, pt, ws)` (typeop.cc:538/546 and
+/// parallels) hands the caller an INTERNED Datatype. Interning is load
+/// bearing for pointer identity: `TypeOpStore::getInputCast`'s
+/// cast-already-in-place test (typeop.cc:546-548) compares Datatype
+/// pointers, and a factory-free fresh `Arc` never equals the interned
+/// instance, forcing spurious re-casts (Phase 2 ordinal 332,
+/// SB-ORD332-SETCASTS-0001). Wordsize 1 = the ram data-space default.
 fn make_ptr(
     base: std::sync::Arc<crate::type_system::datatype::Datatype>,
     ptr_size: usize,
+    type_factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
 ) -> std::sync::Arc<crate::type_system::datatype::Datatype> {
     use crate::type_system::datatype::Datatype;
+    if let Some(factory) = type_factory {
+        let canonical = factory
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_type_pointer(ptr_size, base, 1);
+        return canonical;
+    }
+    // Detached fixtures without a factory keep the raw construction.
     std::sync::Arc::new(Datatype::Pointer(
         crate::type_system::datatype::TypePointer::new(ptr_size, base, 1),
     ))
@@ -6574,30 +6820,186 @@ impl ActionInferTypes {
             }
 
             // INDIRECT (typeop.cc:2005-2020 TypeOpIndirect::propagateType):
-            // see the dedicated arm below.
-
-            // Zero-extending: output carries input's type (forward).
-            OpCode::CPUI_INT_ZEXT | OpCode::CPUI_INT_SEXT => {
-                if outslot == -1 {
-                    Some(alttype.clone())
-                } else {
-                    None
+            // transparent like COPY between the output and slot-0 input, but
+            // never along the slot-1 (target) edge, and never for indirect
+            // creations. A SPACEBASE source is rewrapped exactly as in COPY.
+            OpCode::CPUI_INDIRECT => {
+                if op.is_indirect_creation() {
+                    return None;
                 }
+                if inslot == 1 || outslot == 1 {
+                    return None;
+                }
+                if inslot != -1 && outslot != -1 {
+                    return None; // Must propagate input <-> output
+                }
+                let src_is_spacebase = Self::edge_src_varnode(op, inslot)
+                    .map(|v| v.read().unwrap().is_spacebase())
+                    .unwrap_or(false);
+                if src_is_spacebase {
+                    return Self::spacebase_rewrap(alttype, type_factory);
+                }
+                Some(alttype.clone())
             }
 
-            // Subpiece: if extracting a full piece, forward the type.
+            // INT_ZEXT / INT_SEXT: the locked oracle has NO propagateType
+            // override for either op (typeop.cc:1115-1165 declares only
+            // getInputCast; the base TypeOp::propagateType at typeop.cc:317-321
+            // returns null) — nothing propagates through an extension. The
+            // former arm here forwarded the input type unchanged, stamping a
+            // 4-byte type onto the 8-byte extension output and manufacturing
+            // size-mismatch casts in setcasts (Phase 2 ordinal 332,
+            // SB-ORD332-SETCASTS-0001). Fell through to `_ => None`.
+
+            // SUBPIECE (typeop.cc:2161-2186 TypeOpSubpiece::propagateType):
+            // propagation is in0 -> output only; the alttype walks
+            // getSubType from the lsb byte offset (little endian) until it
+            // lands at offset 0 with the output's size. A UNION /
+            // PARTIALUNION source resolves through resolveTruncation (Rust
+            // stub returns None → no propagation; residual, see metadata).
+            // The near/far-pointer resize arm (cc:2164-2172) needs
+            // getSizeOfAltPointer, which is 0 on this arch — unreachable,
+            // residual.
             OpCode::CPUI_SUBPIECE => {
-                if inslot == 0 && outslot == -1 {
-                    // Only forward if sizes match (whole varnode extracted).
-                    if let Some(out) = op.get_out() {
-                        if out.read().unwrap().get_size() == alttype.get_size() {
-                            return Some(alttype.clone());
+                if inslot != 0 || outslot != -1 {
+                    return None; // Propagation must be from in0 to out
+                }
+                let mut byte_off: i64 = op
+                    .get_in(1)
+                    .map(|vn| vn.read().unwrap().get_offset() as i64)
+                    .unwrap_or(0);
+                let mut current: Option<std::sync::Arc<crate::type_system::datatype::Datatype>> =
+                    Some(alttype.clone());
+                // cc:2176-2181: a UNION/PARTIALUNION source first resolves
+                // the truncated field. TypePartialUnion::resolveTruncation is
+                // the Funcdata-union-cache stub (returns None); full
+                // TypeUnion::resolveTruncation has no Rust port yet — both
+                // end propagation here (registered residual).
+                if let TypeMetatype::PartialUnion = alt_meta {
+                    if let crate::type_system::datatype::Datatype::PartialUnion(pu) =
+                        alttype.as_ref()
+                    {
+                        if let Some((field, new_off)) =
+                            pu.resolve_truncation(byte_off, Some(op), 1)
+                        {
+                            byte_off = new_off;
+                            current = Some(field.type_ptr);
+                        } else {
+                            current = None;
                         }
                     }
-                    None
-                } else {
-                    None
+                } else if let TypeMetatype::Union = alt_meta {
+                    current = None;
                 }
+                let Some(out_size) = op.get_out().map(|o| o.read().unwrap().get_size())
+                else {
+                    return None;
+                };
+                let Some(mut cur) = current else {
+                    return None;
+                };
+                let mut off = byte_off;
+                while off != 0 || cur.get_size() != out_size {
+                    let (next, new_off) = cur.get_sub_type(off);
+                    match next {
+                        Some(n) => {
+                            cur = n;
+                            off = new_off;
+                        }
+                        None => return None,
+                    }
+                }
+                Some(cur)
+            }
+
+            // PIECE (typeop.cc:2074-2094 TypeOpPiece::propagateType):
+            // output -> input only (inslot == -1); the composite output type
+            // walks getSubType from the receiving input's byte offset
+            // (little endian: slot 0 sits above slot 1, cc:2104-2114) until
+            // it lands at offset 0 with the receiving input's size. The
+            // near/far pointer resize arm (cc:2077-2087) is unreachable on
+            // this arch (no alt pointer) — residual.
+            OpCode::CPUI_PIECE => {
+                if inslot != -1 {
+                    return None; // Only propagate output to an input
+                }
+                let Some(recv_vn) = op.get_in(outslot.max(0) as usize) else {
+                    return None;
+                };
+                let recv_size = recv_vn.read().unwrap().get_size();
+                let mut byte_off: i64 = if outslot == 0 {
+                    op.get_in(1)
+                        .map(|vn| vn.read().unwrap().get_size() as i64)
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+                let mut cur = alttype.clone();
+                let mut off = byte_off;
+                while off != 0 || cur.get_size() != recv_size {
+                    let (next, new_off) = cur.get_sub_type(off);
+                    match next {
+                        Some(n) => {
+                            cur = n;
+                            off = new_off;
+                        }
+                        None => return None,
+                    }
+                }
+                Some(cur)
+            }
+
+            // SEGMENTOP (typeop.cc:2431-2441 TypeOpSegment::propagateType):
+            // slot-2 <-> output only, pointer types only, resized to the
+            // output varnode's size.
+            OpCode::CPUI_SEGMENTOP => {
+                if inslot == 0 || inslot == 1 || outslot == 0 || outslot == 1 {
+                    return None;
+                }
+                if Self::edge_src_varnode(op, inslot)
+                    .map(|v| v.read().unwrap().is_spacebase())
+                    .unwrap_or(false)
+                {
+                    return None;
+                }
+                if alt_meta != TypeMetatype::Pointer {
+                    return None;
+                }
+                let out_size = Self::edge_dest_varnode(op, outslot)
+                    .map(|v| v.read().unwrap().get_size())?;
+                let factory = type_factory?;
+                Some(factory.write().unwrap().resize_pointer(alttype, out_size))
+            }
+
+            // NEW (typeop.cc:2501-2513 TypeOpNew::propagateType): in0 ->
+            // output only, and only when in0 is a cpoolref result (the
+            // allocated type rides the cpool record).
+            OpCode::CPUI_NEW => {
+                if inslot != 0 || outslot != -1 {
+                    return None;
+                }
+                let vn0_written = op
+                    .get_in(0)
+                    .map(|vn| vn.read().unwrap().is_written())
+                    .unwrap_or(false);
+                if !vn0_written {
+                    return None; // Don't propagate
+                }
+                let def_is_cpoolref = op
+                    .get_in(0)
+                    .and_then(|vn| {
+                        vn.read()
+                            .unwrap()
+                            .def
+                            .as_ref()
+                            .and_then(|d| d.upgrade())
+                            .map(|d| d.read().unwrap().opcode == OpCode::CPUI_CPOOLREF)
+                    })
+                    .unwrap_or(false);
+                if !def_is_cpoolref {
+                    return None;
+                }
+                Some(alttype.clone()) // Propagate cpool result as result of new operator
             }
 
             // PTRSUB (typeop.cc:2366-2378 TypeOpPtrsub::propagateType): a
@@ -6700,14 +7102,23 @@ impl ActionInferTypes {
                 if inslot == -1 && outslot == 1 {
                     // output type → address becomes pointer to it.
                     // Ghidra TypeOpLoad::propagateType (typeop.cc:493-496)
-                    // wraps via propagateToPointer (typeop.cc:186-198),
-                    // which truncates a pointer alttype to unknown* — the
-                    // raw ptr-of-ptr here typed my_fwrite's
+                    // wraps via propagateToPointer (typeop.cc:186-198): the
+                    // pointer is sized by the ADDRESS varnode (outvn), a
+                    // pointer alttype is demoted to unknown* (the raw
+                    // ptr-of-ptr here typed my_fwrite's
                     // `stream->_IO_read_ptr` address FILE** (out FILE* →
                     // make_ptr(FILE*)), which outranked the downChain field
                     // type char** in the typeOrder competition and
-                    // suppressed the golden `(FILE *)`/`(char *)` casts.
-                    return Some(crate::typeop::propagate_to_pointer(alttype));
+                    // suppressed the golden `(FILE *)`/`(char *)` casts),
+                    // and the product is factory-interned.
+                    let addr_size = op
+                        .get_in(1)
+                        .map(|vn| vn.read().unwrap().get_size())?;
+                    return Some(crate::typeop::propagate_to_pointer_sized(
+                        alttype,
+                        addr_size,
+                        type_factory,
+                    ));
                 }
                 None
             }
@@ -6723,65 +7134,212 @@ impl ActionInferTypes {
                         dereference_size);
                 }
                 if inslot == 2 && outslot == 1 {
-                    // value → address: propagateToPointer truncation, same
-                    // as the LOAD arm (TypeOpStore::propagateType,
-                    // typeop.cc:563-566).
-                    return Some(crate::typeop::propagate_to_pointer(alttype));
+                    // value → address: propagateToPointer with the ADDRESS
+                    // varnode's size, same as the LOAD arm
+                    // (TypeOpStore::propagateType, typeop.cc:563-566).
+                    let addr_size = op
+                        .get_in(1)
+                        .map(|vn| vn.read().unwrap().get_size())?;
+                    return Some(crate::typeop::propagate_to_pointer_sized(
+                        alttype,
+                        addr_size,
+                        type_factory,
+                    ));
                 }
                 None
             }
 
-            // TypeOpEqual::propagateAcrossCompare (typeop.cc:961-989):
-            // comparisons propagate ACROSS THE INPUTS only (`if (inslot == -1
-            // || outslot == -1) return 0`) — a typed operand lends its type
-            // to the sibling (so `value != 0` types the constant char*);
-            // the boolean output never participates.
+            // TypeOpEqual::propagateAcrossCompare (typeop.cc:961-986):
+            // EQUAL/NOTEQUAL/LESS/LESSEQUAL propagate ACROSS THE INPUTS only
+            // (`if (inslot == -1 || outslot == -1) return 0`) — a typed
+            // operand lends its type to the sibling; the boolean output never
+            // participates. A SPACEBASE source is rewrapped to
+            // ptr(altsize, unknown1, ws). The PointerRel demotion
+            // (cc:972-982) has no Rust TypePointerRel — unreachable,
+            // residual. FLOAT_* comparisons have NO oracle override (the
+            // override set is only these four + SLESS/SLESSEQUAL) and fall
+            // through to the null base default.
             OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL | OpCode::CPUI_INT_LESS
-            | OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_LESSEQUAL
-            | OpCode::CPUI_INT_SLESSEQUAL | OpCode::CPUI_FLOAT_EQUAL
-            | OpCode::CPUI_FLOAT_NOTEQUAL | OpCode::CPUI_FLOAT_LESS
-            | OpCode::CPUI_FLOAT_LESSEQUAL => {
-                if inslot >= 0 && outslot >= 0 {
-                    Some(alttype.clone())
-                } else {
-                    None
+            | OpCode::CPUI_INT_LESSEQUAL => {
+                if inslot == -1 || outslot == -1 {
+                    return None; // Must propagate input <-> input
                 }
+                let src_is_spacebase = Self::edge_src_varnode(op, inslot)
+                    .map(|v| v.read().unwrap().is_spacebase())
+                    .unwrap_or(false);
+                if src_is_spacebase {
+                    return Self::spacebase_rewrap(alttype, type_factory);
+                }
+                Some(alttype.clone())
             }
 
-            // Boolean ops: bool everywhere.
-            OpCode::CPUI_BOOL_NEGATE | OpCode::CPUI_BOOL_AND | OpCode::CPUI_BOOL_OR
-            | OpCode::CPUI_BOOL_XOR => Some(int_types.bool.clone()),
-
-            // Arithmetic/logical on ints: the common int type flows.
-            OpCode::CPUI_INT_MULT | OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_SDIV
-            | OpCode::CPUI_INT_REM | OpCode::CPUI_INT_SREM | OpCode::CPUI_INT_AND
-            | OpCode::CPUI_INT_OR | OpCode::CPUI_INT_XOR | OpCode::CPUI_INT_NEGATE
-            | OpCode::CPUI_INT_LEFT | OpCode::CPUI_INT_RIGHT | OpCode::CPUI_INT_SRIGHT
-            | OpCode::CPUI_FLOAT_ADD | OpCode::CPUI_FLOAT_SUB | OpCode::CPUI_FLOAT_MULT
-            | OpCode::CPUI_FLOAT_DIV | OpCode::CPUI_FLOAT_NEG
-            | OpCode::CPUI_FLOAT_ABS | OpCode::CPUI_FLOAT_SQRT
-            | OpCode::CPUI_FLOAT_CEIL | OpCode::CPUI_FLOAT_FLOOR
-            | OpCode::CPUI_FLOAT_ROUND => {
-                if alt_meta == TypeMetatype::Pointer {
-                    return None; // don't propagate pointers through generic arith
+            // TypeOpIntSless/SlessEqual::propagateType (typeop.cc:1033-1039,
+            // 1059-1065): across the inputs only, and only SIGNED types
+            // (metatype TYPE_INT) propagate — unlike propagateAcrossCompare.
+            OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL => {
+                if inslot == -1 || outslot == -1 {
+                    return None; // Must propagate input <-> input
                 }
-                if outslot == -1 {
-                    Some(alttype.clone())
-                } else if outslot >= 0 {
-                    // Forward to sibling input if both are same-size ints.
-                    if let Some(out) = op.get_out() {
-                        let out_sz = out.read().unwrap().get_size();
-                        if alttype.get_size() == out_sz {
-                            return Some(alttype.clone());
-                        }
+                if alt_meta != TypeMetatype::Int {
+                    return None; // Only propagate signed things
+                }
+                Some(alttype.clone())
+            }
+
+            // TypeOpIntAnd/IntXor::propagateType (typeop.cc:1455-1472,
+            // 1422-1439): only ENUM types, or FLOAT types under a sign-bit
+            // manipulation (floatSignManipulation, typeop.cc:153-176: AND
+            // with the sign-bit-clear mask → FLOAT_ABS; XOR with the
+            // sign-bit mask → FLOAT_NEG), propagate — in either direction
+            // between the inputs and the output. A SPACEBASE source is
+            // rewrapped as in COPY.
+            OpCode::CPUI_INT_AND | OpCode::CPUI_INT_XOR => {
+                if !alttype.is_enum_type() {
+                    if alt_meta != TypeMetatype::Float {
+                        return None;
                     }
-                    None
-                } else {
-                    None
+                    if Self::float_sign_manipulation(op) == OpCode::CPUI_MAX {
+                        return None;
+                    }
                 }
+                let src_is_spacebase = Self::edge_src_varnode(op, inslot)
+                    .map(|v| v.read().unwrap().is_spacebase())
+                    .unwrap_or(false);
+                if src_is_spacebase {
+                    return Self::spacebase_rewrap(alttype, type_factory);
+                }
+                Some(alttype.clone())
             }
+
+            // TypeOpIntOr::propagateType (typeop.cc:1488-1500): only ENUM
+            // types propagate; SPACEBASE rewrap as above.
+            OpCode::CPUI_INT_OR => {
+                if !alttype.is_enum_type() {
+                    return None; // Only propagate enums
+                }
+                let src_is_spacebase = Self::edge_src_varnode(op, inslot)
+                    .map(|v| v.read().unwrap().is_spacebase())
+                    .unwrap_or(false);
+                if src_is_spacebase {
+                    return Self::spacebase_rewrap(alttype, type_factory);
+                }
+                Some(alttype.clone())
+            }
+
+            // INT_MULT/DIV/SDIV/REM/SREM/NEGATE/LEFT/RIGHT/SRIGHT, the
+            // BOOL_* ops, and every FLOAT_* arithmetic op have NO
+            // propagateType override in the locked oracle (override set:
+            // COPY, LOAD, STORE, EQUAL/NOTEQUAL/LESS/LESSEQUAL,
+            // SLESS/SLESSEQUAL, INT_ADD, AND, OR, XOR, MULTIEQUAL,
+            // INDIRECT, PIECE, SUBPIECE, PTRADD, PTRSUB, SEGMENT, NEW — see
+            // typeop.cc) — the base TypeOp::propagateType (typeop.cc:317-321)
+            // returns null and nothing propagates. The former generic
+            // int/bool/float-forwarding arms here were invented propagation
+            // (SB-ORD332-SETCASTS-0001).
 
             _ => None,
+        }
+    }
+
+    /// The edge SOURCE varnode of a propagateType edge
+    /// (coreaction.cc:5080): the op output when `inslot == -1`, else the
+    /// input at `inslot`.
+    // RUGRA-GLUE: edge-source accessor mirroring coreaction.cc:5080 invn selection
+    fn edge_src_varnode(
+        op: &crate::op::PcodeOp,
+        inslot: i32,
+    ) -> Option<std::sync::Arc<RwLock<crate::varnode::Varnode>>> {
+        if inslot == -1 {
+            op.get_out().cloned()
+        } else {
+            op.get_in(inslot as usize).cloned()
+        }
+    }
+
+    /// The edge DESTINATION varnode of a propagateType edge: the op output
+    /// when `outslot == -1`, else the input at `outslot`.
+    // RUGRA-GLUE: edge-destination accessor mirroring propagateTypeEdge outvn selection
+    fn edge_dest_varnode(
+        op: &crate::op::PcodeOp,
+        outslot: i32,
+    ) -> Option<std::sync::Arc<RwLock<crate::varnode::Varnode>>> {
+        if outslot == -1 {
+            op.get_out().cloned()
+        } else {
+            op.get_in(outslot as usize).cloned()
+        }
+    }
+
+    /// SPACEBASE rewrap shared by the COPY/MULTIEQUAL/INDIRECT/acrossCompare
+    /// arms: `tlst->getTypePointer(alttype->getSize(), getBase(1,
+    /// TYPE_UNKNOWN), defaultDataSpace->getWordSize())` — the pointer is
+    /// sized by the alttype, the pointee is unknown1, and the ram data space
+    /// wordsize is 1 (typeop.cc:968-971 and parallels).
+    // RUGRA-GLUE: shared helper for the spacebase rewrap in typeop.cc propagateType overrides
+    fn spacebase_rewrap(
+        alttype: &std::sync::Arc<crate::type_system::datatype::Datatype>,
+        type_factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
+    ) -> Option<std::sync::Arc<crate::type_system::datatype::Datatype>> {
+        let factory = type_factory?;
+        let unknown1 = factory
+            .read()
+            .unwrap()
+            .get_base(1, crate::type_system::datatype::TypeMetatype::Unknown)
+            .unwrap_or_else(|| {
+                std::sync::Arc::new(crate::type_system::datatype::Datatype::Base(
+                    crate::type_system::datatype::TypeBase::new(
+                        "unknown".to_string(),
+                        1,
+                        crate::type_system::datatype::TypeMetatype::Unknown,
+                    ),
+                ))
+            });
+        Some(std::sync::Arc::new(
+            crate::type_system::datatype::Datatype::Pointer(
+                crate::type_system::datatype::TypePointer::new(
+                    alttype.get_size(),
+                    unknown1,
+                    1,
+                ),
+            ),
+        ))
+    }
+
+    /// `TypeOp::floatSignManipulation` (typeop.cc:153-176): an INT_AND whose
+    /// slot-1 constant is the sign-bit-clear mask reads as FLOAT_ABS; an
+    /// INT_XOR whose slot-1 constant is the sign-bit mask reads as
+    /// FLOAT_NEG; anything else is CPUI_MAX (not a sign manipulation).
+    // Ghidra: typeop.cc:153 TypeOp::floatSignManipulation
+    fn float_sign_manipulation(op: &crate::op::PcodeOp) -> OpCode {
+        match op.opcode {
+            OpCode::CPUI_INT_AND => {
+                if let Some(cvn) = op.get_in(1) {
+                    let vn = cvn.read().unwrap();
+                    if vn.is_constant() {
+                        let size = vn.get_size();
+                        let val = crate::address::calc_mask(size) >> 1;
+                        if val == vn.get_offset() {
+                            return OpCode::CPUI_FLOAT_ABS;
+                        }
+                    }
+                }
+                OpCode::CPUI_MAX
+            }
+            OpCode::CPUI_INT_XOR => {
+                if let Some(cvn) = op.get_in(1) {
+                    let vn = cvn.read().unwrap();
+                    if vn.is_constant() {
+                        let size = vn.get_size();
+                        let val = crate::address::calc_mask(size)
+                            ^ (crate::address::calc_mask(size) >> 1);
+                        if val == vn.get_offset() {
+                            return OpCode::CPUI_FLOAT_NEG;
+                        }
+                    }
+                }
+                OpCode::CPUI_MAX
+            }
+            _ => OpCode::CPUI_MAX,
         }
     }
 

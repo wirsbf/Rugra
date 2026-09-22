@@ -207,7 +207,7 @@ impl CastStrategyC {
 
     // Ghidra: cast.cc:178 CastStrategyC::intPromotionType
     /// Calculate the integer-promotion extension code for `vn`.
-    fn int_promotion_type(&self, vn: &Varnode) -> i32 {
+    pub fn int_promotion_type(&self, vn: &Varnode) -> i32 {
         const NO_PROMOTION: i32 = -1;
         const UNKNOWN_PROMOTION: i32 = 0;
         const UNSIGNED_EXTENSION: i32 = 1;
