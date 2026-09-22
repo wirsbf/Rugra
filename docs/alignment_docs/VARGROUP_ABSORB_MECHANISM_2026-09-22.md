@@ -101,17 +101,45 @@ makeRec 拒绝——真实 DWARF 锁名);②缺 `._4_4_` padding store(手工布
    撤回(glob_set/glob_range 合并回退+__spacebase_1_* 合成名泄漏);v2 后 glob_set/
    glob_range/glob_url 逐函数 IDENTICAL,getparameter 向 golden 靠拢(golden 有
    local_5a8/local_5b8 栈名)。守卫用双侧 tied 即跳(保守版,等价覆盖 overlap==c)。
-3. **typing 链断裂(未修,下一环)**:oracle 的 `ActionInferTypes::propagateSpacebaseRef`
-   (coreaction.cc:5258-5306,apply 尾 5407-5410)依赖 SP 输入寄存器带 TypeSpacebase 指针类型
-   (funcdata.cc:263-264)且存在"锁定调用点参数 → LOAD 输出临时类型 URLGlob → LOAD 反向
-   传播(TypeOpLoad cc:493-496)→ ADD(RSP,8) 得 URLGlob* → INT_ADD/INT_SUB 链回传到 SP
-   直接后代"——Ghidra 侧**调用点的 opStackLoad LOAD 活到最后**(最终 raw 仍有
-   `0x30d6:c5b INT_ADD RSP+8` + `c5c LOAD 304`)。Rugra 侧该 LOAD 在 mainloop 早段已被
-   directify 成 COPY(stack:fc78:304) 再接 concat 梯,infertypes 时 URLGlob 落在
-   PIECE 根上而非指针上 → SPACEREF 接收端已移植(a77d6c02,INFERTYPES-SPACEREF-0001;SP 类型挂载撤回待 LOAD 链接通后一并启用)但派发的
-   40 个 ADD 输出临时类型是 Int → ME/输入影子无 TypePartialStruct → subright 的
-   pieceStructured 分支(cc:7256)与 printc opSubpiece/cc:843 特殊打印不触发。
-   **下一环 = 调用点 LOAD 的存活语义(RuleLoadInput/directify 侧差异)**。
+3. **typing 链断裂(根因已闭环,2026-09-23 Lane CZ)**:oracle 的 `ActionInferTypes::propagateSpacebaseRef`
+    (coreaction.cc:5258-5306,apply 尾 5407-5410)依赖 SP 输入寄存器带 TypeSpacebase 指针类型
+    (funcdata.cc:263-264)且存在"锁定调用点参数 → LOAD 输出临时类型 URLGlob → LOAD 反向
+    传播(TypeOpLoad cc:493-496)→ ADD(RSP,8) 得 URLGlob* → INT_ADD/INT_SUB 链回传到 SP
+    直接后代"。**directify 根因(双侧 drill + oracle decomp_opt 动作/规则断点二分,实证)**:
+    - 两侧 SP 调整链在 stackstall oppool1 内被同一组无守卫规则折叠:
+      sub2add(INT_SUB→INT_ADD·-1)→ collapseconstants → addmultcollapse(穿 ME 折叠)
+      → identityel(去 +0)→ propagatecopy。oracle 断点链:infertypes(iter1)时
+      全 INT_SUB 未折叠(`RSP(abe) = RSP(i) - #0x228`);constantptr(iter1)时已折成
+      **`RSP(0x30c1:abe) = RSP(i) + #0xfffffffffffffc78`**——与 Rugra drill @3619
+      (`RSP(a96) = RSP(i) + #fc78`)完全同形。此折叠态下 RuleLoadVarnode::vnSpacebase
+      第 2 路径(def==INT_ADD + vn1=input spacebase + const)**两侧均合法可触发**。
+    - **oracle 侧 LOAD 从未被 loadvarnode 吃掉**:断点 `startcleanup`(mainloop 收敛后)
+      显示 LOAD 已死,调用实参 = heritage 期(seq 3501-3503)的栈件 join
+      `CONCAT8296(8B@fda0, CONCAT8288(16B@fd98, CONCAT8280(..,280B@fc78:118(357c))))`,
+      且 3515 有 killedbycall INDIRECT(`s0xfc78:118 [] i0x30d6:adb`),shadow INDIRECT
+      3606/3690/371a 同批——**LOAD 死于后续 mainloop restart 的 heritage pass 的
+      调用点栈参认领**(loadvarnode 首次 apply 的规则级断点发生在 LOAD 消失之后)。
+      oracle 最终 SP 形态全为 `RSP(i) -> #c`(PTRSUB,seq 4400+):PtrArith 对
+      LOAD 指针用途有 `ptrBase isSpacebase&&isInput&&const → return 0` 守卫
+      (cc:6649 区,两侧一致),PTRSUB 化只在 LOAD 死后发生;该转换依赖 SP 输入
+      带 TypeSpacebase 指针(= cc:263-264 挂载存在的实锤)。
+    - **Rugra 侧**:v2 撤回挂载后 SP 输入无指针类型,PtrArith/propagateSpacebaseRef
+      双 inert;且 Rugra 的 heritage **从不认领**该调用点 LOAD(无 3501-3503 等价
+      join、无 3515 等价 killedbycall INDIRECT),LOAD 存活到 oppool2,loadvarnode
+      在 drill @3895 合法触发 → COPY(stack:fc78:304) → 指针链断 → ~41 CONCAT 残差。
+    - **v3 step1(重挂载)已验证(2026-09-23)**:全语料 A/B 逐函数 IDENTICAL
+      (curl 2989/0/0 = 基线、httpd 2357/0/0 = 基线、next_url/glob_set/glob_range/
+      glob_url/getparameter IDENTICAL);单测 18 fail = master 既有族;单函数驱动
+      main 3 处化妆差(`__spacebase_1_9632 *in_RSP` 声明泄漏 + (int*)cast +
+      `!= 0` 形态,printc 对 TypeSpacebase 输入声明不可见的镜像缺口)。挂载必要
+      (oracle 实锤)但**不充分**:LOAD 仍被 directify(v3 drill @3895 同点),
+      吸收未发生(main C 与 master 逐行相同)。
+    - **下一环(精确登记,HERITAGE-LOADCLAIM-0001)**:oracle 后续 mainloop heritage
+      pass 把 guarded 调用点栈参 LOAD 替换为栈件 CONCAT join(3501-3503)+
+      killedbycall INDIRECT(3515)的确切代码路径(guardStores cc:1538-1559
+      killedbycall 臂 / buildParam+transferLockedInputParam fspec.cc:4982-5027 /
+      processJoins cc:2281 / guardLoads cc:1570 组合中何者,需专门深读定位),
+      Rugra 侧等价物缺失。LOAD 的 mainloop 内存活是 typing 链与 splitLoad 吸收的前提。
 4. **打印/符号层(未修)**:golden 的 `glob.pattern[0].type = auVar21._0_4_`(
    `auVar21 = in_stack_fc78._80_24_`)形态需要:store LHS 用组符号字段路径
    (separateSymbol/establishGroupSymbolOffset/linkProtoPartial 链)+ 件 varnode 的临时名/
