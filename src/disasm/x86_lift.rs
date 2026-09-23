@@ -4645,26 +4645,80 @@ impl X86Lifter {
             }
             "call" | "ret" => {
                 if mnemonic == "call" {
-                    // Emit CPUI_CALL with target address
+                    // ia.sinc :CALL semantics (locked x86-64.sla template dump,
+                    // HTTPD-CALL-PUSH-0001 evidence): the operand is evaluated
+                    // FIRST (indirect forms), then the return address is pushed,
+                    // then the transfer op:
+                    //   direct  (E8 rel32):
+                    //     RSP = INT_SUB(RSP, 8); STORE ram[RSP] = inst_next;
+                    //     CALL ram:target
+                    //   indirect (FF /2 reg):
+                    //     tmp = COPY reg; RSP = INT_SUB(RSP, 8);
+                    //     STORE ram[RSP] = inst_next; CALLIND tmp
+                    //   indirect (FF /2 mem): LOAD tmp = ram[ea]; push; CALLIND
+                    // Parameter varnodes and the return-value output are still
+                    // established by ActionFuncLink's funcLinkInput/funcLinkOutput
+                    // at analysis time (after Heritage), not by the lifter
+                    // (flow.cc:680 setupCallSpecs + coreaction.cc:1474
+                    // funcLinkInput / 1521 funcLinkOutput). Target evaluation
+                    // precedes the RSP adjust so rsp-relative indirect targets
+                    // see the pre-push pointer.
+                    let indirect: Option<VarnodeRaw> = if inst.metadata.branch_target.is_none() {
+                        match inst.operands.first() {
+                            Some(crate::disasm::Operand::Register { name, size }) => {
+                                let Some(src) = Self::get_register(name, *size) else { return ops };
+                                let tmp = self.alloc_tmp(*size);
+                                let mut copy = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+                                copy.add_input(src);
+                                copy.set_output(tmp.clone());
+                                ops.push(copy);
+                                Some(tmp)
+                            }
+                            Some(crate::disasm::Operand::Memory { .. }) => {
+                                self.parse_operand(&inst.operands[0], &mut ops)
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
                     let target_addr = if let Some(ref bt) = inst.metadata.branch_target {
                         bt.as_u64()
-                    } else if let Some(op) = inst.operands.first() {
-                        match op {
+                    } else if let Some(op0) = inst.operands.first() {
+                        match op0 {
                             crate::disasm::Operand::Immediate { value, .. } => *value as u64,
                             _ => 0,
                         }
                     } else {
                         0
                     };
-                    let mut op = PcodeOpRaw::new(OpCode::CPUI_CALL as i32);
-                    // Faithful to Ghidra's x86 lifter (ia.sinc): CALL emits only
-                    // the target address as input(0). Parameter varnodes and the
-                    // return-value output are established by ActionFuncLink's
-                    // funcLinkInput/funcLinkOutput at analysis time (after Heritage),
-                    // not by the lifter. This matches Ghidra flow.cc:680 setupCallSpecs
-                    // + coreaction.cc:1474 funcLinkInput + 1521 funcLinkOutput.
-                    op.add_input(VarnodeRaw::new(AddressSpace::Ram, target_addr, 8));
-                    ops.push(op);
+                    // push inst_next: RSP = RSP - 8; *[ram]RSP = inst_next
+                    let Some(rsp) = Self::get_register("rsp", 8) else { return ops };
+                    let mut op_sub = PcodeOpRaw::new(OpCode::CPUI_INT_SUB as i32);
+                    op_sub.add_input(rsp.clone());
+                    op_sub.add_input(Self::const_vn(8, 8));
+                    op_sub.set_output(rsp.clone());
+                    ops.push(op_sub);
+                    let mut op_store = PcodeOpRaw::new(OpCode::CPUI_STORE as i32);
+                    op_store.add_input(Self::ram_space_const());
+                    op_store.add_input(rsp);
+                    op_store.add_input(Self::const_vn(
+                        inst.address.as_u64() + inst.length as u64,
+                        8,
+                    ));
+                    ops.push(op_store);
+                    match indirect {
+                        None => {
+                            let mut op = PcodeOpRaw::new(OpCode::CPUI_CALL as i32);
+                            op.add_input(VarnodeRaw::new(AddressSpace::Ram, target_addr, 8));
+                            ops.push(op);
+                        }
+                        Some(target_vn) => {
+                            let mut op = PcodeOpRaw::new(OpCode::CPUI_CALLIND as i32);
+                            op.add_input(target_vn);
+                            ops.push(op);
+                        }
+                    }
                 } else if mnemonic == "ret" {
                     let mut op = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
                     op.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
