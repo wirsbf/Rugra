@@ -17172,14 +17172,24 @@ impl Rule for RuleLoadVarnode {
 
         let op_ref = crate::op::PcodeOpRef(op_arc.clone());
         // newvn = data.newVarnode(size, baseoff, offoff);
-        // Rugra's new_varnode takes (size, Address) and defaults to Ram space.
-        // We create a varnode in the resolved space at the byte offset.
-        let newvn = fd.vbank.create_with_space(out_size, baseoff, offoff);
-        // funcdata_varnode.cc:148-172 newVarnode's symbol tail
-        // (localmap->queryProperties -> setSymbolProperties), which attaches
-        // the DWARF global's typelocked symbol type to the address varnode
-        // (verified patch from w-typeflow; RULE-LOADVARNODE-SYMBOLTAIL-0001).
-        fd.set_varnode_properties(&newvn);
+        // newVarnode (funcdata_varnode.cc:148-169) = VarnodeBank::create +
+        // assignHigh + the symbol tail: localmap->queryProperties(m, s,
+        // Address() /*invalid usepoint*/, vflags) -> setSymbolProperties /
+        // setFlags(vflags & ~typelock). The ScopeLocal leg of that walk is
+        // what puts mapped|addrtied on stack locals (database.cc:1268
+        // stackContainer starts at the function's own scope; the in-scope
+        // discovery arm is mapped|addrtied, database.cc:1271-1277), and
+        // BlockBasic::isComplex (block.cc:2419) later reads isAddrTied to
+        // decide whether such a calculation is a statement. The old
+        // create_with_space + set_varnode_properties composition bypassed
+        // the ScopeLocal leg (its mirror only walks the Ram/global parent
+        // channel), so stack locals created here never took addrtied and
+        // structuring saw them as non-statements (file2string ord-76
+        // blockstructure count divergence, lane sb-f2string).
+        // RULE-LOADVARNODE-SYMBOLTAIL-0001 keeps its Ram/global behavior:
+        // the shared tail's parent leg reproduces the DWARF-global
+        // typelocked-symbol attach the old call was added for.
+        let newvn = fd.new_varnode_in_space(out_size, baseoff, crate::address::Address::new(offoff));
 
         // data.opSetInput(op, newvn, 0);
         fd.op_set_input(&op_ref, newvn, 0);
@@ -17279,6 +17289,60 @@ impl Rule for RuleStoreVarnode {
             .vbank
             .create_def_with_space(val_size, baseoff, offset_bytes, &op_ref.0);
         op_ref.0.write().unwrap().output = Some(new_out.clone());
+        // cc:110 assignHigh(vn) + cc:112-113 laned-register witness — the
+        // remaining newVarnodeOut ctor steps between setOutput and the
+        // queryProperties tail.
+        let _ = fd.assign_high(&new_out);
+        if val_size >= fd.min_laned_size as usize {
+            fd.check_for_laned_register(val_size, baseoff, crate::address::Address::new(offset_bytes));
+        }
+        // cc:104-122 newVarnodeOut's symbol tail: localmap->queryProperties(
+        // m, s, op->getAddr(), vflags) -> setSymbolProperties (varnode.cc:
+        // 410-424: setFlags(entry->getAllFlags() & ~typelock)) / setFlags(
+        // vflags & ~typelock). The query's ScopeLocal leg (database.cc:1268)
+        // is what puts mapped|addrtied on stack STORE->COPY outputs;
+        // set_varnode_properties below only mirrors the Ram/global parent
+        // channel, so the local leg is folded here first. Its MAPPED bit
+        // also arms set_varnode_properties' isMapped guard (cc:28), making
+        // the follow-up call a no-op exactly when the local scope answered —
+        // matching newVarnodeOut's single-query tail for stack addresses
+        // while keeping the Ram/global channel for other spacebase spaces.
+        {
+            let op_usepoint = op_ref.0.read().unwrap().get_addr().as_u64();
+            let answered = fd.scope.as_ref().map(|scope| {
+                let property = |spc: crate::space::AddressSpace, _off: u64| -> u32 {
+                    if spc != crate::space::AddressSpace::Ram {
+                        return 0;
+                    }
+                    fd.arch
+                        .as_ref()
+                        .and_then(|a| a.symboltab.clone())
+                        .map(|t| {
+                            t.read()
+                                .unwrap()
+                                .get_property(crate::address::Address::new(_off))
+                        })
+                        .unwrap_or(0)
+                };
+                let outcome = scope.query_properties_ex(
+                    baseoff,
+                    offset_bytes,
+                    val_size as i64,
+                    Some(op_usepoint),
+                    None,
+                    &property,
+                );
+                if !matches!(
+                    outcome.final_scope,
+                    crate::varmap::QueryFinalScope::None
+                ) {
+                    let fl = outcome.flags
+                        & !crate::varnode::varnode_flags::TYPELOCK;
+                    new_out.write().unwrap().set_flags(fl);
+                }
+            });
+            let _ = answered;
+        }
         fd.set_varnode_properties(&new_out);
 
         // op->getOut()->setStackStore(); // Mark as originally from CPUI_STORE
