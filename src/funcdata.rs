@@ -4960,18 +4960,20 @@ impl Funcdata {
     ///   }
     ///   if (vn->cover == NULL && isHighOn()) vn->calcCover();
     ///
-    /// Query routing (B3-COREACTION-CONSTANTPTR-0001 channel): Ghidra's ONE
-    /// `localmap->queryProperties` transparently walks ScopeLocal → parent →
-    /// global scope (database.cc:1268 stackContainer). Rugra's ScopeLocal
-    /// query models the local leg; the parent/global leg is the Database
-    /// query channel (`query_properties_parent_scope`). For default-data
-    /// (RAM) space varnodes the channel answers first — this is where the
-    /// global scope's `mapped|addrtied|persist` fold (database.cc:1271-1277)
-    /// lands, marking global storage persistent for `mapGlobals`
+    /// Query routing: Ghidra's ONE `localmap->queryProperties` walks
+    /// ScopeLocal → parent → global scope (database.cc:1268 stackContainer).
+    /// Rugra composes the same walk: the ScopeLocal leg runs FIRST
+    /// (`ScopeLocal::query_properties_ex` over `fd.scope`, usepoint =
+    /// `get_use_point` — a VALID address, unlike newVarnode's invalid
+    /// `Address()` form), and only when the local scope does not terminate
+    /// the walk does the parent/global leg run — the Database channel
+    /// (`query_properties_parent_scope`), where the global scope's
+    /// `mapped|addrtied|persist` fold (database.cc:1271-1277) lands, marking
+    /// global storage persistent for `mapGlobals`
     /// (funcdata_varnode.cc:1669's `if (!vn->isPersist()) continue;`).
-    /// Non-RAM spaces keep the `symbol_table` name proxy (the channel models
-    /// the global scope over RAM only; the ScopeLocal leg remains the
-    /// registered funcdata_audit gap).
+    /// Non-RAM spaces unclaimed by the local scope keep the `symbol_table`
+    /// name proxy (the Database channel models the global scope over RAM
+    /// only). (FUNCDATA-SETVARNODE-SCOPELOCAL-0001)
     pub fn set_varnode_properties(
         &mut self, vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
     ) {
@@ -4984,10 +4986,55 @@ impl Funcdata {
                 (r.get_space(), r.get_offset(), r.get_size() as i32)
             };
             // cc:30-31: queryProperties(addr, size, usepoint, vflags). The
-            // usepoint is vn->getUsePoint(*this) (varnode.cc:696-703).
+            // usepoint is vn->getUsePoint(*this) (varnode.cc:696-703) — a
+            // VALID address (the defining op's address for written
+            // varnodes, fd->getAddress()-1 otherwise).
             let usepoint = vn.read().unwrap().get_use_point(self);
-            let mut answered = false;
-            if space == crate::space::AddressSpace::Ram {
+            // database.cc:1268 — the ScopeLocal leg: localmap->
+            // queryProperties' stackContainer starts at the querying scope
+            // itself, so the function-local scope is consulted FIRST —
+            // findContainer (database.cc:952, entry hit → getAllFlags) then
+            // the in-scope "discovery of new variable" stop (database.cc:
+            // 957-958 → 1271-1277 mapped|addrtied(|persist)+property).
+            // Rugra's ScopeLocal carries no live SymbolEntry
+            // (DB-LOCALSCOPE-MAP-0001 split), so the entry hit degrades to
+            // the observable flags fold — the same treatment as the local
+            // leg of `new_varnode_symbol_tail` (varnode.cc:422).
+            // (FUNCDATA-SETVARNODE-SCOPELOCAL-0001)
+            let property = |spc: crate::space::AddressSpace, off: u64| -> u32 {
+                if spc != crate::space::AddressSpace::Ram {
+                    return 0;
+                }
+                self.arch
+                    .as_ref()
+                    .and_then(|a| a.symboltab.clone())
+                    .map(|t| t.read().unwrap().get_property(crate::address::Address::new(off)))
+                    .unwrap_or(0)
+            };
+            let local = self.scope.as_ref().map(|s| {
+                s.query_properties_ex(
+                    space,
+                    addr,
+                    size as i64,
+                    Some(usepoint.as_u64()),
+                    None,
+                    &property,
+                )
+            });
+            let mut answered = matches!(
+                &local,
+                Some(outcome) if !matches!(outcome.final_scope, crate::varmap::QueryFinalScope::None)
+            );
+            if answered {
+                // cc:34-35: setFlags(vflags & ~typelock) — the local leg
+                // answered, so the walk never reaches the parent
+                // (database.cc:1269/1271 return the answering scope).
+                if let Some(outcome) = local {
+                    let fl = outcome.flags & !crate::varnode::varnode_flags::TYPELOCK;
+                    vn.write().unwrap().set_flags(fl);
+                }
+            }
+            if !answered && space == crate::space::AddressSpace::Ram {
                 if let Some((hit, vflags)) = self.query_properties_parent_scope(
                     crate::address::Address::new(addr),
                     size,
@@ -17525,6 +17572,56 @@ fn test_scope_local_find_overlap_negative_size_modular() {
     // last = 0x1000 - 1 = 0x0fff still < point 0x1000 → null.
     assert!(scope_local_find_overlap(&scope, AddressSpace::Stack, 0x10_00, 0).is_none());
 }
+
+    // FUNCDATA-SETVARNODE-SCOPELOCAL-0001: Funcdata::setVarnodeProperties'
+    // ONE `localmap->queryProperties` (funcdata_varnode.cc:31) walks
+    // stackContainer starting AT the ScopeLocal (database.cc:1268) — the
+    // leg stack varnodes must take before any parent/global fallback. A
+    // stack varnode inside the scope's local window takes the
+    // database.cc:1273 fold mapped|addrtied; one covered by a local Symbol
+    // takes the entry's getAllFlags fold (database.cc:1270); one outside
+    // the window gets no local answer and — stack space not being the
+    // default-data space — no parent fold either (database.cc:1279 with an
+    // empty property lookup).
+    #[test]
+    fn test_set_varnode_properties_scope_local_leg() {
+        use crate::varmap::ScopeLocal;
+
+        let mut fd = Funcdata::new("scope_leg", Address::new(0x401000), 0x10);
+        // A ScopeLocal whose stack window covers [0x100, 0x200], with one
+        // addr-tied 1-byte whole-map symbol "spud" at stack 0x140.
+        let mut scope = ScopeLocal::new();
+        scope.local_range.push((0x100, 0x200));
+        scope.add_symbol(AddressSpace::Stack, "spud", None, 0x140, None);
+        fd.scope = Some(scope);
+
+        // (1) In-scope discovery (database.cc:957-958 → 1271-1277): stack
+        // varnode at 0x120 with no covering symbol → mapped|addrtied, no
+        // persist (ScopeLocal is not the global scope). ADDRTIED is
+        // asserted on the raw bit: `is_addr_tied()` (varnode.hh:250)
+        // additionally requires INSERT, which only op attachment grants —
+        // orthogonal to this property pass.
+        let vn_plain = fd.vbank.create_with_space(8, AddressSpace::Stack, 0x120);
+        fd.set_varnode_properties(&vn_plain);
+        assert!(vn_plain.read().unwrap().flags & crate::varnode::varnode_flags::ADDRTIED != 0);
+        assert!(vn_plain.read().unwrap().is_mapped());
+        assert!(!vn_plain.read().unwrap().is_persist());
+
+        // (2) Symbol hit (database.cc:952 → 1269-1270): 1-byte stack
+        // varnode exactly on "spud"'s entry → the entry getAllFlags fold.
+        let vn_sym = fd.vbank.create_with_space(1, AddressSpace::Stack, 0x140);
+        fd.set_varnode_properties(&vn_sym);
+        assert!(vn_sym.read().unwrap().flags & crate::varnode::varnode_flags::ADDRTIED != 0);
+        assert!(vn_sym.read().unwrap().is_mapped());
+
+        // (3) Outside the local window: no scope claims the range
+        // (database.cc:1278-1279) → no addrtied from the local leg, and the
+        // stack space never reaches the RAM-only parent channel.
+        let vn_out = fd.vbank.create_with_space(8, AddressSpace::Stack, 0x500);
+        fd.set_varnode_properties(&vn_out);
+        assert!(vn_out.read().unwrap().flags & crate::varnode::varnode_flags::ADDRTIED == 0);
+        assert!(!vn_out.read().unwrap().is_mapped());
+    }
 
 // address.cc:484 (RangeList::inRange via database.hh:597 Scope::inScope)
 // evaluates the same addr.getOffset()+size-1 modular expression.
