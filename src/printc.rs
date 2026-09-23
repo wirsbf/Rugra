@@ -425,6 +425,39 @@ pub struct PrintC {
     symbol_table: HashMap<u64, String>,
     /// Address → string literal lookup (borrowed from Funcdata during doc_function)
     string_table: HashMap<u64, String>,
+    /// Front-end code-label layer: address → label symbol display name
+    /// (`LAB_<image-based addr>`). Transport of the local scope's mapped
+    /// `LabSymbol`s that `PrintC::emitLabel` finds via
+    /// `Scope::queryCodeLabel(addr)` (printc.cc:3176, database.cc:1301):
+    /// in the oracle these live in the function's local ScopeGhidra,
+    /// populated lazily by the remote `getCodeLabel` query
+    /// (database_ghidra.cc:308-325) against the front-end program DB
+    /// (default `LAB_` labels at referenced code addresses, absent at
+    /// function entries where a FUNCTION symbol is primary). Rugra's driver
+    /// installs the equivalent layer per function before printing; the
+    /// raw-BFD mirror environment (no analyzers, no reference-driven
+    /// default labels) keeps it empty, matching the oracle single-function
+    /// harness whose labels all render through the generic arm.
+    /// PRINTC-LABSPELL-LABSYMS-0001.
+    code_labels: HashMap<u64, String>,
+    /// Image-base delta the front-end loader applied to code addresses
+    /// before the label strings render (analyzeHeadless default 0x100000;
+    /// 0 for the raw-BFD mirror whose `Address::printRaw` output
+    /// (space.cc:206-222) shows ELF-relative offsets). Added when
+    /// `code_label` formats the generic/joined/dup arms so the digits
+    /// match the oracle's front-end address space.
+    /// PRINTC-LABSPELL-LABSYMS-0001.
+    code_label_base: u64,
+    /// Entry addresses of `f_joined_block` (block.hh:105) basics.
+    /// `emitLabel`'s `hasSpecialLabel()` gate (block.hh:291,
+    /// printc.cc:3173) makes joined blocks skip the queryCodeLabel lookup
+    /// and print the `joined_` prefix unconditionally.
+    /// PRINTC-LABSPELL-LABSYMS-0001.
+    joined_label_addrs: std::collections::HashSet<u64>,
+    /// Entry addresses of `f_duplicate_block` (block.hh:106) basics —
+    /// the `dup_` arm of the same hasSpecialLabel gate.
+    /// PRINTC-LABSPELL-LABSYMS-0001.
+    dup_label_addrs: std::collections::HashSet<u64>,
     /// Function address range for local label detection
     func_start: u64,
     func_end: u64,
@@ -765,6 +798,10 @@ impl PrintC {
             emit,
             symbol_table: HashMap::new(),
             string_table: HashMap::new(),
+            code_labels: HashMap::new(),
+            code_label_base: 0,
+            joined_label_addrs: std::collections::HashSet::new(),
+            dup_label_addrs: std::collections::HashSet::new(),
             union_resolutions: std::collections::BTreeMap::new(),
             func_start: 0,
             func_end: 0,
@@ -5710,28 +5747,68 @@ impl PrintC {
     fn unset_mod(&mut self, m: u32) { self.mods &= !m; }
 
     // Ghidra: printc.cc:3164 PrintC::emitLabel
-    /// Build a Ghidra-style code label string for a code address.
+    /// Build the label string for a code address.
     /// Faithful to `emitLabel` (printc.cc:3164-3193):
-    ///   - prefix: "joined_" (joined block) / "dup_" (duplicated block) /
-    ///     "code_" (normal). Rugra does not currently track joined/duplicated
-    ///     block state, so "code_" is used (the normal case).
+    ///   - `hasSpecialLabel()` gate (block.hh:291): joined blocks print
+    ///     "joined_", duplicated blocks print "dup_" — and these skip the
+    ///     label-symbol lookup entirely. Rugra transports the flag state as
+    ///     the `joined_label_addrs`/`dup_label_addrs` entry-address sets
+    ///     snapshotted from the final block graph.
+    ///   - otherwise `queryCodeLabel(addr)` (database.cc:1301): a mapped
+    ///     LabSymbol's display name wins (the front-end `LAB_` labels).
+    ///     Rugra consults the driver-installed `code_labels` layer.
+    ///   - generic arm: "code_" + shortcut char + printRaw.
     ///   - shortcut char: space-name first char lowercased (translate.cc:529-533).
-    ///     For x86 RAM space ("ram"), this is 'r'. Rugra hardcodes 'r' for
-    ///     code addresses (the only space that holds goto targets in practice).
-    ///   - printRaw (space.cc:206-222): "0x" + zero-padded hex, shrunk to
-    ///     4/6/8 bytes based on high-zero content. For typical small code
-    ///     addresses (high 32 bits zero), this is 8 hex digits.
+    ///     For x86 RAM space ("ram"), this is 'r'.
+    ///   - printRaw (space.cc:206-222): "0x" + zero-padded hex (C++ `hex`
+    ///     stream = lowercase), shrunk to 4/6/8 bytes based on high-zero
+    ///     content of the FRONT-END address. `code_label_base` transports
+    ///     the loader's image-base delta so the digits match the oracle's
+    ///     address space (golden witness `code_r0x0012ba77`).
     fn code_label(&self, addr: u64) -> String {
+        // printc.cc:3170: emitLabel formats bb->getEntryAddr() — the
+        // front-end address. Rugra's Funcdata keeps ELF-relative offsets,
+        // so the driver's image-base delta is added here.
+        let display = addr.wrapping_add(self.code_label_base);
         // printRaw size selection (space.cc:210-215): if offset>>32 == 0, sz=4.
-        let sz = if addr >> 32 == 0 {
+        let sz = if display >> 32 == 0 {
             4
-        } else if addr >> 48 == 0 {
+        } else if display >> 48 == 0 {
             6
         } else {
             8
         };
-        // code_ prefix + 'r' shortcut (RAM space) + 0x + zero-padded hex.
-        format!("code_r0x{:0width$X}", addr, width = 2 * sz)
+        // printc.cc:3173 hasSpecialLabel gate: joined/duplicated blocks
+        // never consult queryCodeLabel (printc.cc:3184-3189 prefixes).
+        if self.joined_label_addrs.contains(&addr) {
+            return format!("joined_r0x{:0width$x}", display, width = 2 * sz);
+        }
+        if self.dup_label_addrs.contains(&addr) {
+            return format!("dup_r0x{:0width$x}", display, width = 2 * sz);
+        }
+        // printc.cc:3176-3180: queryCodeLabel hit — the LabSymbol's display
+        // name replaces the whole generic construction.
+        if let Some(name) = self.code_labels.get(&addr) {
+            return name.clone();
+        }
+        // code_ prefix + 'r' shortcut (RAM space) + 0x + zero-padded
+        // lowercase hex (printRaw's `<< hex`).
+        format!("code_r0x{:0width$x}", display, width = 2 * sz)
+    }
+
+    // RUGRA-GLUE: set_code_label_layer (front-end data handoff; no single
+    // Ghidra counterpart — the oracle receives this data through the
+    // Architecture's remote-query channel, database_ghidra.cc:308-325)
+    /// Install the front-end code-label layer: address → label display
+    /// name plus the loader image-base delta the generic arms add when
+    /// formatting. Mirrors what the oracle's ScopeGhidra would serve from
+    /// `getCodeLabel` remote queries against the program DB. The raw-BFD
+    /// mirror environment passes an empty layer with base 0 (the
+    /// single-function oracle harness has no analyzer labels and its
+    /// addresses are ELF-relative).
+    pub fn set_code_label_layer(&mut self, labels: HashMap<u64, String>, base: u64) {
+        self.code_labels = labels;
+        self.code_label_base = base;
     }
 
     // RUGRA-GLUE: push_goto_target (no Ghidra counterpart found)
@@ -8722,6 +8799,34 @@ impl PrintLanguage for PrintC {
         // few stack symbols today. gather_spacebase compensates for RSP-derived
         // LOAD/STORE. Full coverage needs type propagation.
         self.snapshot_local_scope(fd);
+
+        // PRINTC-LABSPELL-LABSYMS-0001: snapshot the special-label block
+        // flags for emitLabel's hasSpecialLabel gate (block.hh:291 via
+        // printc.cc:3173). Oracle reads `bb->isJoined()/isDuplicated()`
+        // (block.hh:292-293) on the BlockBasic under the front leaf at emit
+        // time; Rugra's label emission sites are address-keyed (some have
+        // no block handle), so the f_joined_block/f_duplicate_block state
+        // (block.hh:105-106) is projected here into entry-address sets.
+        use crate::block::FlowBlock as _;
+        self.joined_label_addrs.clear();
+        self.dup_label_addrs.clear();
+        for i in 0..fd.bblocks.get_size() {
+            let Some(blk) = fd.bblocks.get_block(i) else {
+                continue;
+            };
+            let blk_r = blk.read().unwrap();
+            let Some(bb) = blk_r.as_any().downcast_ref::<crate::block::BlockBasic>()
+            else {
+                continue;
+            };
+            let flags = bb.get_flags();
+            if flags & crate::block::block_flags::JOINED_BLOCK != 0 {
+                self.joined_label_addrs.insert(bb.get_entry_addr().as_u64());
+            }
+            if flags & crate::block::block_flags::DUPLICATE_BLOCK != 0 {
+                self.dup_label_addrs.insert(bb.get_entry_addr().as_u64());
+            }
+        }
 
         // Populate parameter name mapping from function prototype
         self.param_names.clear();

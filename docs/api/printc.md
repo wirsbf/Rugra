@@ -1,5 +1,55 @@
 # `printc.rs` API Reference
 
+## 2026-09-23：emitLabel 三臂补全——code-label 符号层 + hasSpecialLabel 门 + printRaw 小写/基址（PRINTC-LABSPELL-LABSYMS-0001）
+
+oracle `PrintC::emitLabel`（printc.cc:3164-3193）是三臂决策：①`hasSpecialLabel()`
+（block.hh:291，`f_joined_block|f_duplicate_block`）命中 → 跳过符号查询，前缀
+`joined_`/`dup_` + shortcut + printRaw；②`queryCodeLabel(addr)`（database.cc:1301，
+经 ScopeGhidra 远端 `getCodeLabel`，database_ghidra.cc:308-325）命中 → LabSymbol 的
+displayName 整体替换（前端 DB 的默认 `LAB_<image-based addr>` 标号符号，由反汇编器
+flow reference 建立；函数入口处主符号是 FUNCTION 而非 LABEL → 返回空走泛型臂，
+golden httpd witness `goto code_r0x001542b0;` = FUN_001542b0 自环）；③泛型臂
+`code_` + shortcut + printRaw（space.cc:206-222，`<< hex` = **小写**零填充）。
+Rugra 旧实现三处偏差：无符号层（恒走③）、joined/dup 未追踪（③ 前缀恒 `code_`）、
+`{:0width$X}` 大写且无 image-base。修复：
+
+- **新字段**：`code_labels: HashMap<u64,String>`（前端 DB LABEL 符号层替身——
+  oracle 由本地 ScopeGhidra 缓存远端查询结果承载）、`code_label_base: u64`
+  （前端加载基址差：analyzeHeadless 0x100000 / raw-BFD mirror 0——mirror 下
+  ELF 相对地址 = oracle 单函数 harness 的 printRaw 输出，直接 runner witness
+  `code_r0x0002b8c0`）、`joined_label_addrs`/`dup_label_addrs: HashSet<u64>`
+  （f_joined_block/f_duplicate_block 状态的入口地址投影，doc_function 时从
+  `fd.bblocks` 快照——Rugra 的 label 发射点是地址键控的，部分无块句柄）。
+- **`code_label(addr)` 重写**：`display = addr + code_label_base` 后按
+  display 选 sz（>>32/>>48 收缩），依次判 joined → `joined_r0x…`、dup →
+  `dup_r0x…`、符号层命中 → 名字整体返回、否则 `code_r0x{:0width$x}`（小写）。
+  所有 label 发射点（emit_label_statement / emit_any_label_statement 两臂 /
+  push_goto_target / flat-tail goto / continue 改写 goto）共用此 helper。
+- **驱动侧安装**（examples/curl_decompile.rs + httpd_decompile.rs，镜像
+  PTR_/DAT_ 的 program-DB 层惯例）：后管线、前打印。参考集来源=**反汇编流
+  引用**（每条直接分支 jmp/jcc 的静态目标——正是前端 DB 建 `LAB_` 符号的
+  reference 集合），NOT lift 后的 pcode：管线阶段（condexe 合并/块手术）会把
+  CBRANCH 目的地输入改写成 unique 空间临时量（实证：httpd
+  ap_fini_vhost_config blk 0x2d0a2 outs=[0x2d175,0x2d0f0] 而 CBRANCH
+  in(0)=(Unique,0x10000114)），pcode 级扫描结构性丢目标。排除自身入口与
+  DB 符号占用地址（Java `getCodeLabel` 的 SymbolType==LABEL 过滤替身）；
+  `LAB_{:08x}` 小写 8 位零填充（与 `ANALYZE_HEADLESS_IMAGE_BASE` 相加后的
+  前端地址）。mirror（RUGRA_MIRROR）下不装层、base=0——raw-BFD oracle 无
+  analyzer 标号、地址 ELF 相对。
+- **验收**：curl skeleton 2511→**2381（−130）**、httpd 2282→**2238（−44）**，
+  双门禁 defects=0/numbering=0；共享地址拼写错配双双归零
+  （curl 30 地址 rugra 侧 `code_r↔LAB_` 残留 0、httpd 23 地址残留 0）；
+  逐函数 diff 零回退（curl 10 函数改善 main −39/getparameter −50/
+  parseconfig −15/next_url −9 等,httpd 7 函数改善 ap_getparents −13/
+  ap_ht_time −9/ap_fini_vhost_config −6 等）；三投影（next_url/match_url/
+  parseconfig.constprop.0，RUGRA_MIRROR=1 全家 env，stage_bisect v1.2）
+  保持 **MATCH×3**（label 属打印期，投影只追踪 PcodeOp 级 action 流）；
+  printc 单测 12/12；gcc 审计 curl 82OK/25FAIL==DY 基线。残差：joined/dup
+  投影只覆盖 nodejoin 创建的 BlockBasic 自带 flag（结构器 BlockCopy 包裹链
+  上 flag 传递依赖既有 blockaction 生命周期，0x1037b2 的 joined_ 形态由该域
+  收官）；rugra-only/golden-only 标号地址（curl 5+5、httpd 5+~1120）属
+  goto 目标结构差（块分裂点/未发射块），非拼写层可收敛。
+
 ## 2026-09-22：符号优先的叶子打印优先级 + partial-symbol 叶子形态 + `::` 遮蔽前缀（PRINTC-GLOBALSYM-LEAF-PRIORITY-0001）
 
 oracle 的叶子名解析（`PrintLanguage::pushVnExplicit`，printlanguage.cc:218-230）只有
