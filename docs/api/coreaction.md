@@ -2136,6 +2136,35 @@ continue，coreaction.cc:5018）以 `merge_min_type_order` 播种
    稳定索引不变量的替代路径已弃用）；count 经 apply 返回值承载（Action
    count-bridge 约定）。
 
+## 2026-09-23（SETCASTS-COPYINPUT-0001）：castInput 补 CPUI_COPY 专用臂（TypeOpCopy::getInputCast）
+
+`ActionSetCasts::cast_input` 的 `getInputCast` 虚派发镜像（coreaction.rs
+cast_input 的 `match op.opcode`）此前没有 COPY 臂——COPY 落进
+`input_metatype` 兜底返回 None（输入永不插 cast），golden 的 RHS 前缀
+cast 整族缺失。本臂逐行镜像 typeop.cc:397-403：
+
+- **`copy_input_cast`（Ghidra: typeop.cc:397 TypeOpCopy::getInputCast）**：
+  `reqtype = op->getOut()->getHighTypeDefFacing()`（**输出**的 def-facing
+  high 类型——不是基臂的 `inputTypeLocal` 基类型），`curtype =
+  op->getIn(0)->getHighTypeReadFacing(op)`（覆写直接读 slot 0，忽略调用
+  方传入的 slot 参数；COPY 一元），`castStandard(reqtype,curtype,false,true)`
+  决策。与基臂 typeop.cc:295 的另两处差异：无 annotation 守卫（该守卫在
+  Rugra 侧位于 cast_input 派发后统一应用）、无 inputTypeLocal 查询。
+- **生效形态**：COPY(组符号字段件, SUBPIECE) 之间插 CAST op → printc 的
+  opTypeCast 渲染 `(type)` 前缀——main 的 10×`glob.literal[i] = (char *)
+  in_stack_..._X_8_;`、8×`glob.pattern[i].content = (union_5a7)auVarXX._8_16_;`
+  （union 名 `union_5a7` vs oracle `anon_union_16_3_...` 是已登记的
+  DWARF-ANON-TYPENAME-0001 命名残差，非本臂逻辑）。
+- **配套修复（type_system/cast.rs `cast_standard_full`）**：req/cur 元类型
+  先做 Ghidra 内部呈现规范化（`Enum→Int`、`PartialEnum→Uint`，oracle 依据
+  type.hh:491-494/type.cc:1475，详见 docs/api/type_system/cast.md 2026-09-23
+  段）——否则枚举 req/cur 落进 cast.cc:339-389 的 default 臂恒判需 cast，
+  main 的 `.type` 行与 `(int)::config.httpreq` 会过cast。
+- **暴露的既有类型态残差（登记 DWARF-SYMFIELD-TYPESTATE-0001，非本臂
+  逻辑缺陷）**：COPY 臂按当前类型态正确插出 `(_IO_FILE *)stdout@@`/
+  `(undefined8)…` 等 cast，golden 对应行因符号/字段类型态不同（stdout
+  FILE* 符号类型、pattern[8].content union 字段链）无 cast 或名不同。
+
 ## 2026-08-26（TRI2-CALLOUT-ASSIGN-0001）：ActionActiveReturn::apply 完整移植（collectOutputTrialVarnodes/buildOutputFromTrials 接通）
 
 `ActionActiveReturn::apply`（coreaction.cc:1773-1792）从简化版升级为完整链：

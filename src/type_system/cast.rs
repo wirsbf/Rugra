@@ -557,8 +557,26 @@ impl CastStrategyC {
         if Arc::ptr_eq(reqbase, curbase) {
             return None;
         }
-        let reqmeta = reqbase.get_metatype();
-        let curmeta = curbase.get_metatype();
+        // Ghidra's TypeEnum stores TYPE_INT/TYPE_UINT as its metatype —
+        // every construction path runs
+        // `metatype = (m==TYPE_ENUM_INT) ? TYPE_INT : TYPE_UINT` (inline
+        // ctors type.hh:491-494; decode path type.cc:1475 "Use TYPE_INT or
+        // TYPE_UINT internally") — so cast.cc:339-389's switch never sees a
+        // distinct enum metatype; enum-ness rides the ENUMTYPE flag (see
+        // the "meta can be TYPE_UINT ... if typedef/enumerated" comments
+        // at cast.cc:347/363). Rugra carries a distinct `Enum` metatype
+        // (signedness untracked → signed default, cf. get_submeta's
+        // IntEnum mapping) plus `PartialEnum`; normalize both to the
+        // internal Ghidra presentation: Enum → Int, PartialEnum → Uint
+        // (TYPE_PARTIALENUM is "a specialization of TYPE_UINT",
+        // type.hh:96, and the type.hh:491 ternary maps it to TYPE_UINT).
+        let ghidra_meta = |m: TypeMetatype| match m {
+            TypeMetatype::Enum => TypeMetatype::Int,
+            TypeMetatype::PartialEnum => TypeMetatype::Uint,
+            other => other,
+        };
+        let reqmeta = ghidra_meta(reqbase.get_metatype());
+        let curmeta = ghidra_meta(curbase.get_metatype());
         // Don't cast to/from a void pointer.
         if reqmeta == TypeMetatype::Void || curmeta == TypeMetatype::Void {
             return None;

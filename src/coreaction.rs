@@ -4696,10 +4696,11 @@ impl ActionSetCasts {
             // Integer arithmetic/logic/shift binary ops: metain = TYPE_INT.
             // These are the ops where a pointer-typed operand must be cast to
             // an integer (Ghidra TypeOpBinary metain, typeop.hh:206).
-            // Comparisons, COPY, and extensions have op-specific getInputCast
-            // overrides not captured here, so they are excluded (return None)
-            // to avoid over-casting — faithful to the metain model for the
-            // arithmetic/logic subset only.
+            // Comparisons and extensions have op-specific getInputCast
+            // overrides not captured here, so they are excluded (return
+            // None) to avoid over-casting — faithful to the metain model
+            // for the arithmetic/logic subset only. (COPY is dispatched to
+            // copy_input_cast before reaching this fallback.)
             OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_INT_MULT
             | OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_SDIV | OpCode::CPUI_INT_REM
             | OpCode::CPUI_INT_SREM
@@ -4855,6 +4856,43 @@ impl ActionSetCasts {
         strategy.cast_standard_full(&pointed_to, &value_type, false, true)
     }
 
+    /// `TypeOpCopy::getInputCast` (typeop.cc:397-403): the input of a COPY
+    /// is required to carry the OUTPUT's data-type — `reqtype` is the
+    /// output varnode's def-facing high type (NOT an inputTypeLocal base
+    /// like the generic metain arm), `curtype` is input 0's read-facing
+    /// high type, and `castStandard(reqtype,curtype,false,true)` decides
+    /// the cast. Unlike the base `TypeOp::getInputCast` (typeop.cc:295)
+    /// there is no annotation guard and no inputTypeLocal lookup here.
+    /// This is what renders the `(ContentUnion)SUB2416(...)` /
+    /// `(anon_union_16_3...)auVar21._8_16_` RHS prefixes on
+    /// `glob.pattern[i].content = ...` and the `(char *)in_stack_..._X_8_`
+    /// literal stores in main.
+    // Ghidra: typeop.cc:397 TypeOpCopy::getInputCast
+    fn copy_input_cast(
+        op: &crate::op::PcodeOp,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        // cc:399: reqtype = op->getOut()->getHighTypeDefFacing()
+        // (through HighVariable::getType's lazy typedirty re-derivation)
+        let reqtype = op.get_out().and_then(|o| {
+            let vn = o.read().unwrap();
+            vn.get_high_type_def_facing().or_else(|| vn.v_type.clone())
+        })?;
+        // cc:400: curtype = op->getIn(0)->getHighTypeReadFacing(op) — the
+        // override reads slot 0 directly (COPY is unary), ignoring `slot`.
+        let _ = slot;
+        let invn = op.get_in(0)?;
+        let curtype = invn
+            .read()
+            .unwrap()
+            .get_high_type_read_facing(op, 0)
+            .or_else(|| invn.read().unwrap().v_type.clone())?;
+        // cc:401: castStandard(reqtype,curtype,false,true); the returned Arc
+        // preserves reqtype identity, mirroring Ghidra's `return reqtype`.
+        strategy.cast_standard_full(&reqtype, &curtype, false, true)
+    }
+
     /// Faithful 1:1 port of `ActionSetCasts::castInput` (coreaction.cc:2655-2720).
     /// For input `slot` of `op`, compute the op's expected input type
     /// (inputTypeLocal = getBase(size, metain)), the current varnode's high
@@ -4897,6 +4935,12 @@ impl ActionSetCasts {
             let ct = match op.opcode {
                 OpCode::CPUI_LOAD => Self::load_input_cast(&op, slot, strategy, &type_factory),
                 OpCode::CPUI_STORE => Self::store_input_cast(&op, slot, strategy, &type_factory),
+                // typeop.cc:397 TypeOpCopy::getInputCast: reqtype is the
+                // OUTPUT's def-facing high type, not an inputTypeLocal base
+                // — castStandard(reqtype,curtype,false,true) inserts the
+                // `(type)` prefix cast between a COPY and its SUBPIECE
+                // producer (`(ContentUnion)SUB2416(...,8)` in main).
+                OpCode::CPUI_COPY => Self::copy_input_cast(&op, slot, strategy),
                 OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
                     crate::typeop::comparison_input_cast(&op, slot, strategy)
                 }
