@@ -17888,7 +17888,15 @@ struct AddTreeState<'a> {
     base_op: std::sync::Arc<std::sync::RwLock<PcodeOp>>,
     base_slot: usize,
     ptr: std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-    /// The pointed-to data-type (ct->getPtrTo()).
+    /// The pointer data-type read facing the base op (Ghidra field `ct`,
+    /// ruleaction.hh:48). Needed for the wordsize conversions and the
+    /// `TypePointerRel` (alternate form) logic.
+    ct: Option<std::sync::Arc<crate::type_system::datatype::Datatype>>,
+    /// A copy of `ct` if it is a formal relative pointer (Ghidra field
+    /// `pRelType`, ruleaction.hh:50); `None` otherwise or once
+    /// `init_alternate_form` has dropped the relative interpretation.
+    p_rel: Option<std::sync::Arc<crate::type_system::datatype::Datatype>>,
+    /// The pointed-to data-type (ct->getPtrTo(), or the rel parent).
     base_type: Option<std::sync::Arc<crate::type_system::datatype::Datatype>>,
     ptrsize: usize,
     ptrmask: u64,
@@ -17916,6 +17924,7 @@ impl<'a> AddTreeState<'a> {
     fn new(
         data: &'a mut Funcdata, op: std::sync::Arc<std::sync::RwLock<PcodeOp>>, slot: usize,
     ) -> Self {
+        use crate::type_system::datatype::{type_flags, Datatype, TypeMetatype};
         // ptr = op->getIn(slot). The caller guarantees slot is a pointer, so it
         // must exist; if not, fabricate a 1-byte const placeholder so the state
         // is well-formed (apply() will bail via the type checks).
@@ -17926,54 +17935,59 @@ impl<'a> AddTreeState<'a> {
             .cloned()
             .unwrap_or_else(|| data.vbank.create_constant(1, 0)
         );
-        let (ct, ptrsize, base_type, size, is_degenerate) = {
+        // Ghidra 6037-6038: ct = ptr->getTypeReadFacing(op); ptrsize/ptrmask.
+        let (ct, ptrsize) = {
             let v = ptr.read().unwrap();
-            let ct = v.get_type_read_facing();
-            let ptrsize = v.get_size();
-            let (base_type, size, is_degenerate) = if let Some(ref ct_arc) = ct {
-                use crate::type_system::datatype::{Datatype, TypeMetatype};
+            (v.get_type_read_facing(), v.get_size())
+        };
+        let ptrmask = crate::address::calc_mask(ptrsize);
+        // Ghidra 6029-6031: multsum = nonmultsum = 0; pRelType = null.
+        let mut nonmultsum: u64 = 0;
+        let mut p_rel: Option<std::sync::Arc<Datatype>> = None;
+        // Ghidra 6032-6037: formal relative pointer — baseType = parent,
+        // nonmultsum seeded with the relative address offset (& ptrmask).
+        let rel_state = ct.as_ref().and_then(Self::ptr_rel_state);
+        if let Some((rel_off, rel_parent, _, _)) = &rel_state {
+            p_rel = ct.clone();
+            nonmultsum = (*rel_off as u64) & ptrmask;
+            let _ = rel_parent;
+        }
+        // Ghidra 6028/6038: baseType = ct->getPtrTo() (or the rel parent
+        // assigned above); then the size/degenerate derivation below reads
+        // that base type exactly as 6038-6050 does.
+        let (base_type, size, is_degenerate) = match (&ct, &rel_state) {
+            (Some(ct_arc), Some((_, rel_parent, _, wordsize))) => {
+                // Relative form: baseType = pRelType->getParent().
+                let bt = rel_parent.clone();
+                Self::derive_base_geometry(&bt, *wordsize)
+            }
+            (Some(ct_arc), None) => {
                 if ct_arc.get_metatype() == TypeMetatype::Pointer {
                     if let Datatype::Pointer(tp) = ct_arc.as_ref() {
-                        let word_size = tp.wordsize.max(1) as i64;
-                        let bt = &tp.ptr_to;
-                        let is_var_len = bt.is_variable_length();
-                        let sz = if is_var_len {
-                            0
-                        } else {
-                            // byteToAddressInt(baseType->getAlignSize(), wordSize)
-                            byte_to_address_int(
-                                bt.get_align_size() as i64, tp.wordsize.max(1) as i64,
-                            )
-                        };
-                        // isDegenerate: baseType->getAlignSize() <= unitsize && > 0
-                        // where unitsize = addressToByteInt(1, wordSize) == wordSize.
-                        let unitsize = word_size;
-                        let is_deg = (bt.get_align_size() as i64) <= unitsize && bt.get_align_size() > 0;
-                        (Some(tp.ptr_to.clone()), sz, is_deg)
+                        let wordsize = tp.wordsize.max(1) as i64;
+                        (Some(tp.ptr_to.clone()), Self::size_of_base(&tp.ptr_to, wordsize), Self::is_degenerate_of(&tp.ptr_to, wordsize))
                     } else {
                         (None, 0i64, false)
                     }
                 } else {
                     (None, 0i64, false)
                 }
-            } else {
-                (None, 0i64, false)
-            };
-            (ct, ptrsize, base_type, size, is_degenerate)
+            }
+            (None, _) => (None, 0i64, false),
         };
-        let ptrmask = crate::address::calc_mask(ptrsize);
-        let _ = ct;
         AddTreeState {
             data,
             base_op: op,
             base_slot: slot,
             ptr,
+            ct,
+            p_rel,
             base_type,
             ptrsize,
             ptrmask,
             size,
             multsum: 0,
-            nonmultsum: 0,
+            nonmultsum,
             biggest_non_mult_coeff: 0,
             multiple: Vec::new(),
             coeff: Vec::new(),
@@ -17989,14 +18003,65 @@ impl<'a> AddTreeState<'a> {
         }
     }
 
+    // RUGRA-GLUE: read the formal-relative-pointer state off Rugra's flat
+    // TypePointer model (base.flags IS_PTRREL + base.pointer_rel) — the
+    // ownership twin of Ghidra's `ct->isFormalPointerRel()` virtual plus the
+    // `TypePointerRel` accessors getAddressOffset/getParent.
+    fn ptr_rel_state(
+        ct: &std::sync::Arc<crate::type_system::datatype::Datatype>,
+    ) -> Option<(i64, std::sync::Arc<crate::type_system::datatype::Datatype>, std::sync::Arc<crate::type_system::datatype::Datatype>, i64)> {
+        if let crate::type_system::datatype::Datatype::Pointer(p) = ct.as_ref() {
+            if (p.base.flags & crate::type_system::datatype::type_flags::IS_PTRREL) != 0 {
+                if let Some(rel) = p.base.pointer_rel.as_ref() {
+                    return Some((
+                        rel.offset,
+                        rel.parent.clone(),
+                        p.ptr_to.clone(),
+                        p.wordsize.max(1) as i64,
+                    ));
+                }
+            }
+        }
+        None
+    }
+
+    // RUGRA-GLUE: Ghidra ctor 6038-6041 — size = variableLength ? 0 :
+    // byteToAddressInt(baseType->getAlignSize(), ct->getWordSize()).
+    fn size_of_base(bt: &crate::type_system::datatype::Datatype, wordsize: i64) -> i64 {
+        if bt.is_variable_length() {
+            0
+        } else {
+            byte_to_address_int(bt.get_align_size() as i64, wordsize)
+        }
+    }
+
+    // RUGRA-GLUE: Ghidra ctor 6049-6050 — isDegenerate = baseType->getAlignSize()
+    // <= unitsize && > 0, unitsize = addressToByteInt(1, ct->getWordSize()) == wordsize.
+    fn is_degenerate_of(bt: &crate::type_system::datatype::Datatype, wordsize: i64) -> bool {
+        (bt.get_align_size() as i64) <= wordsize && bt.get_align_size() > 0
+    }
+
+    // RUGRA-GLUE: combined (base, size, isDegenerate) derivation used by the
+    // rel form, where Ghidra reassigns baseType before the 6038-6050 block.
+    fn derive_base_geometry(
+        bt: &std::sync::Arc<crate::type_system::datatype::Datatype>, wordsize: i64,
+    ) -> (Option<std::sync::Arc<crate::type_system::datatype::Datatype>>, i64, bool) {
+        (Some(bt.clone()), Self::size_of_base(bt, wordsize), Self::is_degenerate_of(bt, wordsize))
+    }
+
     /// Faithful to `AddTreeState::clear` (ruleaction.cc:5992-6011). The
-    /// pRelType/`nonmultsum = addressOffset` branch is omitted (no
-    /// TypePointerRel in Rugra — pRelType is always null).
+    /// pRelType re-seed of `nonmultsum` (5980-5983) reads the relative
+    /// address offset off the stored `p_rel` type.
     // Ghidra: ruleaction.cc:5992 AddTreeState::clear
     fn clear(&mut self) {
         self.multsum = 0;
         self.nonmultsum = 0;
         self.biggest_non_mult_coeff = 0;
+        if let Some(rel) = &self.p_rel {
+            if let Some((rel_off, _, _, _)) = Self::ptr_rel_state(rel) {
+                self.nonmultsum = (rel_off as u64) & self.ptrmask;
+            }
+        }
         self.multiple.clear();
         self.coeff.clear();
         self.nonmult.clear();
@@ -18008,11 +18073,30 @@ impl<'a> AddTreeState<'a> {
         self.distribute_op = None;
     }
 
-    /// Faithful to `AddTreeState::initAlternateForm` (ruleaction.cc:6017-6034).
-    /// With no TypePointerRel, there is never an alternate form.
+    /// Faithful to `AddTreeState::initAlternateForm` (ruleaction.cc:6017-6034):
+    /// drop the relative-pointer interpretation, re-derive baseType/size/
+    /// isDegenerate from the plain pointed-to type, reset
+    /// `preventDistribution`, and clear the accumulators. Returns false when
+    /// there was no relative form to begin with.
     // Ghidra: ruleaction.cc:6017 AddTreeState::initAlternateForm
     fn init_alternate_form(&mut self) -> bool {
-        false
+        if self.p_rel.is_none() {
+            return false;
+        }
+        self.p_rel = None;
+        // baseType = ct->getPtrTo() (type.cc baseType reassignment at 6006).
+        if let Some(ct) = &self.ct {
+            if let crate::type_system::datatype::Datatype::Pointer(tp) = ct.as_ref() {
+                let wordsize = tp.wordsize.max(1) as i64;
+                let (base_type, size, is_degenerate) = Self::derive_base_geometry(&tp.ptr_to, wordsize);
+                self.base_type = base_type;
+                self.size = size;
+                self.is_degenerate = is_degenerate;
+            }
+        }
+        self.prevent_distribution = false;
+        self.clear();
+        true
     }
 
     /// Faithful to `AddTreeState::checkMultTerm` (ruleaction.cc:6136-6179).
@@ -18167,7 +18251,16 @@ impl<'a> AddTreeState<'a> {
         if !self.valid { return false; }
         let two_is_non = self.check_term(&in1, tree_coeff);
         if !self.valid { return false; }
-        // pRelType is always null in Rugra, so the pRelType guard is skipped.
+        // Ghidra 6236-6241: with a relative pointer the accumulators must
+        // stay trivial — any multiple, any size-relevant non-multiple sum, or
+        // any multiple container invalidates the relative interpretation.
+        // (`nonmultsum >= size` compares uint8 against int4, i.e. unsigned.)
+        if self.p_rel.is_some() {
+            if self.multsum != 0 || self.nonmultsum >= self.size as u64 || !self.multiple.is_empty() {
+                self.valid = false;
+                return false;
+            }
+        }
         if one_is_non && two_is_non {
             return true;
         }
@@ -18238,6 +18331,13 @@ impl<'a> AddTreeState<'a> {
                     // state both oracle arms reduce to getSubType's miss
                     // answer (extra 0). wordsize-1 spaces make the
                     // byte/address conversions identity.
+                    // MYPROGRESS-OPPOOL2-CONSTSPLIT-0001: the arrayHint!=0
+                    // approximation is only exact while the live local map
+                    // has no container covering the query — the ord150
+                    // myprogress / ord186 parseconfig splits diverge exactly
+                    // when oracle's map (or facing TypePointerRel, see p_rel)
+                    // answers differently; the faithful arrayHint paths need
+                    // the live ScopeLocal wired into the spacebase type first.
                     let extra = match bt.get_sub_type(self.offset as i64) {
                         (Some(_), e) => e as u64,
                         (None, _) => { self.valid = false; return; }
@@ -18261,6 +18361,29 @@ impl<'a> AddTreeState<'a> {
                     };
                     self.offset = (self.offset.wrapping_sub(extra)) & self.ptrmask;
                     self.correct = (self.correct.wrapping_sub(extra)) & self.ptrmask;
+                    // Ghidra 6314-6320: with a relative pointer, when the
+                    // offset lands inside the basic pointed-to type, the
+                    // offset must be explainable through the parent container
+                    // (evaluateThruParent(0)) or the basic form must be used.
+                    if let Some(rel) = &self.p_rel {
+                        if let Some((rel_off, rel_parent, rel_ptrto, _)) = Self::ptr_rel_state(rel) {
+                            // offset (uint8) == getAddressOffset() (int4):
+                            // unsigned comparison after converting the int4.
+                            if self.offset == rel_off as u64 {
+                                if !crate::type_system::datatype::pointer_rel_evaluate_thru_parent(
+                                    rel_ptrto.as_ref(),
+                                    rel_parent.as_ref(),
+                                    self.rel_wordsize(),
+                                    rel_off,
+                                    self.ptrsize,
+                                    0,
+                                ) {
+                                    self.valid = false; // Use basic (alternate) form.
+                                    return;
+                                }
+                            }
+                        }
+                    }
                     self.is_subtype = true;
                 }
                 TypeMetatype::Array => {
@@ -18276,6 +18399,30 @@ impl<'a> AddTreeState<'a> {
         } else {
             self.valid = false;
         }
+        // Ghidra 6332-6336: with a relative pointer, both the sub-type offset
+        // and the correction shift by the relative address offset.
+        if let Some(rel) = &self.p_rel {
+            if let Some((rel_off, _, _, _)) = Self::ptr_rel_state(rel) {
+                let ptr_off = rel_off as u64;
+                self.offset = self.offset.wrapping_sub(ptr_off) & self.ptrmask;
+                self.correct = self.correct.wrapping_sub(ptr_off) & self.ptrmask;
+            }
+        }
+    }
+
+    // RUGRA-GLUE: ct->getWordSize() read for the relative-pointer helpers —
+    // Ghidra reads it off the `ct` TypePointer field (ruleaction.hh:48).
+    fn rel_wordsize(&self) -> usize {
+        self.ct
+            .as_ref()
+            .and_then(|ct| {
+                if let crate::type_system::datatype::Datatype::Pointer(p) = ct.as_ref() {
+                    Some(p.wordsize.max(1) as usize)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(1)
     }
 
     /// Faithful to `AddTreeState::buildMultiples` (ruleaction.cc:6374-6402).
