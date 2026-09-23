@@ -1,5 +1,50 @@
 ﻿# x86_lift.rs API Reference
 
+### 2026-09-23：CONCATRAM-0001 — lea rip-rel 双计 rip 修复 + 32 位写 zext 补齐
+
+**① lea reg,[rip+disp] 地址双计**：`X86_64Disassembler` 对 rip 相对操作数的
+displacement 已是**绝对目标**（iced `memory_displacement64` = next_rip + raw_disp；
+probe：`48 8d 3d d5 e7 04 00` @0x2b9e7 报 0x7a1c3 = httpd "main.c" .rodata 地址），
+与 push（lift:1498-1514）和 comis（lift:3896-3907）两臂的既有约定一致。lea 臂
+却再叠 `next_rip + displacement` → Ram@0xa5bb1 = 目标+rip，全部字符串引用落到
+镜像外（>0x9a7e0），字符串/符号查表永不命中——链态 httpd `uRam`/CONCAT 族
+（EV delta_decomp ③ 族 ~107 行）的总根因。同时错误地址在 0xa5xxx-0xa6xxx 密集
+互相重叠触发别名拆分，物化 `CONCAT53/35/71/17(Ram…,Ram…)` 字节拼装。修复：
+displacement 直接作绝对地址，且结果取 **Const 空间**（地址值，SLEIGH rrip 导出
+`COPY const:8(abs)` 形态——curl 走 SleighLifter 的既有形态；Ram 空间位置 varnode
+会被 varmap ADDRTIED 臂符号化为 `uRam…` 名，阻断 printer Priority-0 的
+符号/字符串叶）。varnode 尺寸随目的寄存器宽度（4/8），`lea r32` 追加
+`INT_ZEXT(esi→rsi)`（ia.sinc check_*32_dest 同则）。
+
+**② mov 32 位寄存器写 zext**：`mov $0x280,%esi` 等此前只写 ESI 不 zext RSI，
+后续 64 位读物化 `CONCAT44(<garbage>, 0x280)`（extraout_var/uVar15 高半族）。
+oracle 语义：x86-64 任何 mod=3 32 位 GPR 写零扩父寄存器（ia.sinc
+check_Reg32_dest/check_Rmr32_dest；`emit_alu_tail` 的 ALU 路径已有同款
+parent64 zext，本臂补齐）。curl E2E 字节不变（主路径 SLEIGH）；httpd
+CONCAT 记号 51→2（余 2 为栈槽 CONCAT44(uStack,uStack)＝栈物化域）。
+
+**门禁**（基线=wt/chainfix f8ee7548，oracle e40ed130）：httpd canon
+2433→2250/0/0（−183）、direct 3000→2711（−289）、gcc 审计 6/23→7/22；
+curl 2507/0/0 字节恒等；三投影 stage_bisect --v1 MATCH×3；
+cargo test --lib 串行 1658P/18F 与 EY2 记录基线逐名同集。canon 微升 2 函数
+（ap_getword +3：`(long)(iVar4+1)` 拓宽形反而对齐 canon 语义，SEXT48 拼写噪音；
+ap_os_is_path_absolute +1：canary 现为 in_FS_OFFSET 形，int8/undefined8 拼写差）。
+
+2026-09-23（HTTPD-CALL-PUSH-0001，httpd main 归因车道 DL）: CALL 模板补全 push 序列。
+锁定 oracle `x86-64.sla` 模板实测（`/dev/shm/rugra-tests/sb-httpdmain/sleigh_probe`，
+SLEIGH `oneInstruction` dump）: `call rel32` 发射三 op —— `RSP = INT_SUB(RSP, 8)`;
+`STORE ram[RSP] = inst_next`(8 字节常量); `CALL ram:target`。`call rax` 发射四 op ——
+`COPY tmp <- RAX`（目标求值先于 RSP 调整）; `RSP = INT_SUB(RSP, 8)`; `STORE`; `CALLIND tmp`。
+`call [mem]` 同理 LOAD 先行。此前 lifter 只发射裸 CALL（2026-06-29 条目"CALL op 现在只挂
+目标地址"的论断是错的——那是简化，不是 oracle 模板）。效果: 返回地址 push 进入 IR，
+golden（`ghidra_httpd_1204.c` main 有 131 条 `local_d0 = 0x12b869;` 式 push 存储，
+98 条紧邻调用）中缺失的整类语句在 IR 层恢复。curl E2E 无变化（2689/0/0，
+curl 主路径走 SLEIGH lifter，本文件只影响其 prototype pre-pass 与 httpd iced 注入路径）。
+已知下游缺口（本修复的吸收链在 CALLSPEC-0001, 见 TODO board HTTPD-CALL-PUSH-0001）:
+无 Architecture cspec/extrapop 支撑时 push 存储以 uStack_168.. 形态整体保留,
+httpd E2E 2331→2667；配 HTTPD-CSPEC-ARCH-0001 后 2542。两项门禁(基线不升)在
+CALLSPEC-0001 落地前不满足——修复暂驻本 lane 分支，勿并入 master。
+
 2026-06-27: opcode 改名对齐 Ghidra 规范名 (INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE / BOOL_NOT->BOOL_NEGATE)，纯重命名，行为不变。
 
 2026-06-29: CALL op 建立 RAX 返回值 output（Register@0x0 size 8）。对齐 Ghidra `ActionFuncLink::funcLinkOutput`（coreaction.cc:1551 `newVarnodeOut`）：为未锁定 prototype 的 CALL 分配返回值寄存器作为 output，使返回值进入 SSA def 链。此前 CALL output 永远为 None，导致返回值"丢失"——下游使用（如 `__dest = strdup(buf)`）变成"声明却未赋值"。多寄存器/XMM 返回与 assumedOutputExtension 是后续工作。

@@ -161,11 +161,13 @@ impl X86Lifter {
             // FS/GS segment BASE registers (8-byte), distinct from the
             // 2-byte selectors: register-catalog dump via
             // examples/x86fs_probe.rs (x86-64.sla getAllRegisters:
-            // FS_OFFSET=register:0x110:8, GS_OFFSET=0x118:8). Oracle pcode
-            // for every segment-relative memory op wraps the effective
-            // address as `INT_ADD tmp = FS_OFFSET, EA` with the base
-            // register FIRST (`mov rax,[fs:0x28]` lifts INT_ADD(FS_OFFSET,
-            // 0x28) + LOAD + COPY — never a direct ram varnode).
+            // FS_OFFSET=register:0x110:8, GS_OFFSET=0x118:8; chain-side
+            // probe examples/rip_probe.rs agrees). Oracle pcode for every
+            // segment-relative memory op wraps the effective address as
+            // `INT_ADD tmp = FS_OFFSET, EA` with the base register FIRST
+            // (`mov rax,[fs:0x28]` lifts INT_ADD(FS_OFFSET, 0x28) + LOAD +
+            // COPY — never a direct ram varnode), the SLEIGH spacebase form
+            // the oracle prints as `*(undefined8 *)(in_FS_OFFSET + 0x28)`.
             "fs_offset" => 0x110,
             "gs_offset" => 0x118,
             // XMM vector registers: 0x1200 + 0x40*N in the locked sla
@@ -4531,8 +4533,31 @@ impl X86Lifter {
                             } else {
                                 let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
                                 op.add_input(src);
-                                op.set_output(dst);
+                                op.set_output(dst.clone());
                                 ops.push(op);
+                                // ia.sinc check_Reg32_dest/check_Rmr32_dest
+                                // (x86-64 language): a 32-bit GPR write
+                                // zero-extends into the 64-bit parent — the
+                                // same parent64 rule emit_alu_tail applies
+                                // for the ALU ops and the lea arm above.
+                                // Without it `mov $0x280,%esi` leaves RSI's
+                                // upper half undefined and every later
+                                // 64-bit read of RSI materializes
+                                // CONCAT44(<garbage>, 0x280) at call sites
+                                // (CONCATRAM lane: the CONCAT44 family root).
+                                if let crate::disasm::Operand::Register { name, size: 4 } =
+                                    &inst.operands[0]
+                                {
+                                    if let Some(parent) = Self::parent64_name(name)
+                                        .and_then(|p| Self::get_register(p, 8))
+                                    {
+                                        let mut op_zext =
+                                            PcodeOpRaw::new(OpCode::CPUI_INT_ZEXT as i32);
+                                        op_zext.add_input(dst);
+                                        op_zext.set_output(parent);
+                                        ops.push(op_zext);
+                                    }
+                                }
                             }
                         }
                     }
@@ -4609,14 +4634,37 @@ impl X86Lifter {
                     if let Some((dst, _)) = self.parse_dest_operand(&inst.operands[0], &mut ops) {
                         // Check for RIP-relative addressing: lea reg, [rip+disp]
                         // In PIE binaries, this is how global variables are addressed.
-                        // Resolve to absolute address = inst_addr + inst_len + disp
-                        // so that seed_global_struct_pointers can match known globals.
+                        // X86_64Disassembler's displacement for a rip-relative
+                        // operand is ALREADY the absolute target (iced
+                        // memory_displacement64 = next_rip + raw_disp — probe:
+                        // `48 8d 3d d5 e7 04 00` @0x2b9e7 reports 0x7a1c3, the
+                        // "main.c" .rodata address), the same convention the
+                        // push (lift:1498-1514) and comis (lift:3896-3907) arms
+                        // already follow: take the displacement as the absolute
+                        // address DIRECTLY. Adding next_rip on top double-counted
+                        // rip (Ram@0xa5bb1 = target+rip), landing every string
+                        // reference out-of-image so no string/symbol lookup
+                        // could ever resolve (CONCATRAM lane: the uRam family
+                        // root). The result is the ADDRESS VALUE, so it takes
+                        // the Const space exactly like SLEIGH's rrip export
+                        // (`lea rdi,[rip+X]` = COPY const:8(abs), the form
+                        // SleighLifter produces for curl) — a Ram-space
+                        // location varnode here instead gets symbolized as an
+                        // address-tied global (varmap ADDRTIED name uRam…),
+                        // which blocks the printer's Priority-0 string/symbol
+                        // leaf that renders the oracle's "main.c" literal; and
+                        // the varnode size must match the dest register width
+                        // so seed_global_struct_pointers can match known
+                        // globals.
                         let resolved_addr_vn = match &inst.operands[1] {
                             crate::disasm::Operand::Memory { base, displacement, .. } => {
                                 if base.as_deref() == Some("rip") && *displacement != 0 {
-                                    let next_rip = inst.address.as_u64() + inst.length as u64;
-                                    let abs_addr = next_rip.wrapping_add(*displacement as u64);
-                                    Some(VarnodeRaw::new(AddressSpace::Ram, abs_addr, 8))
+                                    let abs_addr = *displacement as u64;
+                                    Some(VarnodeRaw::new(
+                                        AddressSpace::Const,
+                                        abs_addr,
+                                        dst.size,
+                                    ))
                                 } else {
                                     None
                                 }
@@ -4626,10 +4674,25 @@ impl X86Lifter {
                         if let Some(addr_vn) = resolved_addr_vn.or_else(||
                             self.parse_dest_operand(&inst.operands[1], &mut ops).map(|(v,_)| v))
                         {
+                            // ia.sinc check_*32_dest (x86-64 language): writing a
+                            // 32-bit GPR zero-extends into the 64-bit parent —
+                            // same rule emit_alu_tail applies for the ALU ops.
+                            let parent64 = match &inst.operands[0] {
+                                crate::disasm::Operand::Register { name, size } if *size == 4 => {
+                                    Self::parent64_name(name).and_then(|p| Self::get_register(p, 8))
+                                }
+                                _ => None,
+                            };
                             let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
                             op.add_input(addr_vn);
-                            op.set_output(dst);
+                            op.set_output(dst.clone());
                             ops.push(op);
+                            if let Some(parent) = parent64 {
+                                let mut op_zext = PcodeOpRaw::new(OpCode::CPUI_INT_ZEXT as i32);
+                                op_zext.add_input(dst);
+                                op_zext.set_output(parent);
+                                ops.push(op_zext);
+                            }
                         }
                     }
                 }
@@ -4743,26 +4806,80 @@ impl X86Lifter {
             }
             "call" | "ret" => {
                 if mnemonic == "call" {
-                    // Emit CPUI_CALL with target address
+                    // ia.sinc :CALL semantics (locked x86-64.sla template dump,
+                    // HTTPD-CALL-PUSH-0001 evidence): the operand is evaluated
+                    // FIRST (indirect forms), then the return address is pushed,
+                    // then the transfer op:
+                    //   direct  (E8 rel32):
+                    //     RSP = INT_SUB(RSP, 8); STORE ram[RSP] = inst_next;
+                    //     CALL ram:target
+                    //   indirect (FF /2 reg):
+                    //     tmp = COPY reg; RSP = INT_SUB(RSP, 8);
+                    //     STORE ram[RSP] = inst_next; CALLIND tmp
+                    //   indirect (FF /2 mem): LOAD tmp = ram[ea]; push; CALLIND
+                    // Parameter varnodes and the return-value output are still
+                    // established by ActionFuncLink's funcLinkInput/funcLinkOutput
+                    // at analysis time (after Heritage), not by the lifter
+                    // (flow.cc:680 setupCallSpecs + coreaction.cc:1474
+                    // funcLinkInput / 1521 funcLinkOutput). Target evaluation
+                    // precedes the RSP adjust so rsp-relative indirect targets
+                    // see the pre-push pointer.
+                    let indirect: Option<VarnodeRaw> = if inst.metadata.branch_target.is_none() {
+                        match inst.operands.first() {
+                            Some(crate::disasm::Operand::Register { name, size }) => {
+                                let Some(src) = Self::get_register(name, *size) else { return ops };
+                                let tmp = self.alloc_tmp(*size);
+                                let mut copy = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
+                                copy.add_input(src);
+                                copy.set_output(tmp.clone());
+                                ops.push(copy);
+                                Some(tmp)
+                            }
+                            Some(crate::disasm::Operand::Memory { .. }) => {
+                                self.parse_operand(&inst.operands[0], &mut ops)
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
                     let target_addr = if let Some(ref bt) = inst.metadata.branch_target {
                         bt.as_u64()
-                    } else if let Some(op) = inst.operands.first() {
-                        match op {
+                    } else if let Some(op0) = inst.operands.first() {
+                        match op0 {
                             crate::disasm::Operand::Immediate { value, .. } => *value as u64,
                             _ => 0,
                         }
                     } else {
                         0
                     };
-                    let mut op = PcodeOpRaw::new(OpCode::CPUI_CALL as i32);
-                    // Faithful to Ghidra's x86 lifter (ia.sinc): CALL emits only
-                    // the target address as input(0). Parameter varnodes and the
-                    // return-value output are established by ActionFuncLink's
-                    // funcLinkInput/funcLinkOutput at analysis time (after Heritage),
-                    // not by the lifter. This matches Ghidra flow.cc:680 setupCallSpecs
-                    // + coreaction.cc:1474 funcLinkInput + 1521 funcLinkOutput.
-                    op.add_input(VarnodeRaw::new(AddressSpace::Ram, target_addr, 8));
-                    ops.push(op);
+                    // push inst_next: RSP = RSP - 8; *[ram]RSP = inst_next
+                    let Some(rsp) = Self::get_register("rsp", 8) else { return ops };
+                    let mut op_sub = PcodeOpRaw::new(OpCode::CPUI_INT_SUB as i32);
+                    op_sub.add_input(rsp.clone());
+                    op_sub.add_input(Self::const_vn(8, 8));
+                    op_sub.set_output(rsp.clone());
+                    ops.push(op_sub);
+                    let mut op_store = PcodeOpRaw::new(OpCode::CPUI_STORE as i32);
+                    op_store.add_input(Self::ram_space_const());
+                    op_store.add_input(rsp);
+                    op_store.add_input(Self::const_vn(
+                        inst.address.as_u64() + inst.length as u64,
+                        8,
+                    ));
+                    ops.push(op_store);
+                    match indirect {
+                        None => {
+                            let mut op = PcodeOpRaw::new(OpCode::CPUI_CALL as i32);
+                            op.add_input(VarnodeRaw::new(AddressSpace::Ram, target_addr, 8));
+                            ops.push(op);
+                        }
+                        Some(target_vn) => {
+                            let mut op = PcodeOpRaw::new(OpCode::CPUI_CALLIND as i32);
+                            op.add_input(target_vn);
+                            ops.push(op);
+                        }
+                    }
                 } else if mnemonic == "ret" {
                     // ia.sinc :RET constructor — locked x86-64.sla template
                     // dump (RET-OP3-0001, lane DU probe over the locked

@@ -2530,3 +2530,31 @@ funcdata` 批（单线程）17 failed==master 逐字（branch 40 passed 含新�
 （in-scope 折叠 / 符号 entry 命中 / 窗外无本地应答——ADDRTIED 断言取裸位，
 因 `is_addr_tied()`（varnode.hh:250）另需 INSERT 位，op 挂接才授予，与本
 属性遍正交）。
+## 2026-09-23（BOOMATTR lane）：adjustInputVarnodes space-aware 修复
+
+- `Funcdata::adjust_input_varnodes`（funcdata_varnode.cc:494-537）签名改为
+  `(space, addr_offset, sz)`：旧实现 (a) inlist 收集无空间过滤——Ghidra 的
+  beginDef(Varnode::input,addr)/endDef(endaddr) 在 Address 序（空间优先）上
+  迭代，偏移界永不跨空间，旧实现会把数值落在区间内的异空间输入（如
+  RSI@0x30）误收进栈容器；(b) 新合并输入经 spaceless `new_varnode` 落 Ram
+  空间（打印为 auRam… 切片）。修复 = 收集按容器空间过滤 + piece 输出走
+  `new_varnode_out_full`（保空间）+ 合并输入走 `new_varnode_in_space`。
+- 调用方唯一：coreaction `ActionUnjustifiedParams::apply`（cc:4822，本 lane
+  首次接通该调用路径——旧 unjustparams 从不触达 adjust）。
+- 实测：default 模式 match_url 的 304B URLGlob 栈参数容器（DWARF 锁定
+  Stack[0x8,0x138)）adjust 后不再产生 Ram 空间 auRam 巨型输入；镜像模式
+  match_url 与 direct-runner golden 同 `in_stack_00000130` 形态。
+
+## 2026-09-23（BOOMATTR lane r2，CR4 次要项）：adjustInputVarnodes 错误契约
+
+- funcdata_varnode.cc:500-514 三处 `throw LowlevelError` 对齐：收集成员资格
+  改为**起始偏移 ∈ [addr, endaddr]**（beginDef(input,addr)..endDef(input,
+  endaddr) 的 Address 序语义）——起始在界内但**尾部越界**的输入保留在迭代
+  中，由 cc:505-506 的 LowlevelError("Cannot properly adjust input varnodes")
+  显式失败（旧实现的静默过滤删除了该错误路径）；cc:512-514 的
+  `(!isInput || sa<0 || sz<=size)` 合并为
+  LowlevelError("Bad adjustment to input varnode")（gather 保证 is_input 与
+  sa>=0，尺寸关系为活检查）。错误经 `crate::error::Error::Lowlevel` 传播，
+  与既有 "Overlapping input varnodes" 同通道。
+- 实测：curl（default+MIRROR）/httpd 全语料零触发（生长环按构造仅向下扩、
+  尾部固定，跨尾输入在 oracle 同样 throw——两侧对非法状态同判）。
