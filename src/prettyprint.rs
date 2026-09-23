@@ -2673,6 +2673,33 @@ impl EmitNoMarkup {
             .map_or(false, |l| l == "{")
     }
 
+    // RUGRA-GLUE: legacy_never_type_evidence (no Ghidra counterpart; shared
+    //   evidence helper of has_symbol_driven_decls / _walk_parens — see the
+    //   PRINTC-LEGACY-DECL-DUP-0001 notes there).
+    /// Type spellings ONLY the symbol-driven emitter produces. printc's
+    /// emit_local_var_decls (printc.cc:2260-2279) prints core-type symbol
+    /// dtypes verbatim, while the legacy text passes synthesize exclusively
+    /// int/long/bool/byte/short/char */void */float/double (see
+    /// flush_func_remove_unused's type_ok table). CHAINFIX-LEGACY-BYPASS-0001:
+    /// `uint*`/`int1`/`int2`/`int8`/`ushort`/`ulong`/`longlong`/`__int*_t`
+    /// are therefore symbol-driven evidence of the same strength as
+    /// `undefined*`; without them, chunks whose only `in_` name the
+    /// ActionInputPrototype function_parameter symbol install retired fell
+    /// back into the legacy pass, whose collector ignores those spellings,
+    /// saw every uVarN as "missing", and injected `int uVarN;` K&R-style
+    /// between the signature and `{` (ap_getparents/httpd, glob_word/curl).
+    fn legacy_never_type_evidence(type_token: &str) -> bool {
+        type_token.starts_with("undefined")
+            || type_token.starts_with("uint")
+            || type_token.starts_with("int1")
+            || type_token.starts_with("int2")
+            || type_token.starts_with("int8")
+            || type_token == "ushort"
+            || type_token == "ulong"
+            || type_token == "longlong"
+            || type_token.starts_with("__int")
+    }
+
     // RUGRA-GLUE: has_symbol_driven_decls (no Ghidra counterpart — Ghidra's
     //   print layer has no declaration passes to bypass: printc.cc:2656
     //   docFunction emits every function-local declaration from Action-phase
@@ -2686,18 +2713,14 @@ impl EmitNoMarkup {
     /// (`backfill_missing_locals` deliberately does NOT consult this — see
     /// its PRINTC-LEGACY-DECL-DUP-0001 note.)
     ///
-    /// Evidence spellings (PRINTC-LEGACY-DECL-DUP-0001):
-    /// - a declaration whose type token starts with `undefined`
-    ///   (undefined1/2/4/8 — core-type spellings only reachable through the
-    ///   symbol-driven emitter; the legacy passes synthesize exclusively
-    ///   int/long/char */float/double), or
-    /// - a declaration whose name token starts with `in_` (register/ram
-    ///   space symbol names like in_RAX / in_ram_00016e70; the legacy passes
-    ///   never generate `in_`-prefixed names).
-    ///
-    /// A decl block without either evidence keeps the legacy passes: those
-    /// functions may still lack symbols and must not lose their backfill
-    /// safety net.
+    /// Evidence spellings (PRINTC-LEGACY-DECL-DUP-0001 /
+    /// CHAINFIX-LEGACY-BYPASS-0001): a declaration whose type token is
+    /// `legacy_never_type_evidence` (symbol-emitter-only spellings), or a
+    /// declaration whose name token starts with `in_` (register/ram space
+    /// symbol names like in_RAX / in_ram_00016e70; the legacy passes never
+    /// generate `in_`-prefixed names). A decl block without either evidence
+    /// keeps the legacy passes: those functions may still lack symbols and
+    /// must not lose their backfill safety net.
     fn has_symbol_driven_decls<L: AsRef<str>>(func_lines: &[L]) -> bool {
         let mut j = 1usize;
         while j < func_lines.len() {
@@ -2709,7 +2732,7 @@ impl EmitNoMarkup {
             if t.ends_with(';') && !t.contains('(') && !t.contains("return") && !t.contains('=') {
                 let tokens: Vec<&str> = t.trim_end_matches(';').split_whitespace().collect();
                 if !tokens.is_empty() {
-                    if tokens[0].starts_with("undefined") {
+                    if Self::legacy_never_type_evidence(tokens[0]) {
                         return true;
                     }
                     let name = tokens[tokens.len() - 1].trim_start_matches('*');
@@ -2756,7 +2779,7 @@ impl EmitNoMarkup {
             if t.ends_with(';') && !t.contains("return") && !t.contains('=') {
                 let tokens: Vec<&str> = t.trim_end_matches(';').split_whitespace().collect();
                 if !tokens.is_empty() {
-                    if tokens[0].starts_with("undefined") {
+                    if Self::legacy_never_type_evidence(tokens[0]) {
                         return true;
                     }
                     let name = tokens[tokens.len() - 1].trim_start_matches('*');

@@ -1092,3 +1092,18 @@ ModelRules 或 Architecture-owned Address identity；`fspec` 保持 L2。
 - 残差：未知类型命名轨道（`undefined8`/`unkbyte1` vs oracle
   `xunknown8`/`xunknown1`）与返回类型（`long` vs `xunknown8`）不折叠——
   属 TypeFactory 命名轨道域，非参数恢复语义。
+
+## 2026-09-23（CHAINFIX lane EY2）：update_input_(no_)types 接通 ProtoStoreSymbol::setInput 折叠回调
+
+- `FuncProto::update_input_types` / `FuncProto::update_input_no_types` 新增
+  `store_set_input: &mut dyn FnMut(usize, &ParameterPieces)` 参数，在两处
+  `store->setInput(count, "", pieces)` 调用点（fspec.cc:4079 / fspec.cc:4121）
+  逐字镜像位置回调——Ghidra 的 store 是 ScopeLocal 背书的
+  `ProtoStoreSymbol`（`FuncProto::setScope`，fspec.cc:3879-3885；
+  `funcdata.cc:69` 以 `baseaddr + -1` 构造 restricted_usepoint），其
+  `setInput`（fspec.cc:3147-3214）把 function_parameter category 符号装进
+  ScopeLocal。Rugra 的 FuncProto 只持平铺 `parameters` store，该副作用由
+  调用方（coreaction `ActionInputPrototype`）注入的闭包折叠执行；两函数
+  本体（used-trial 走查、persist 臂、mark 清理、`update_this_pointer`）
+  不变。回调签名 `&mut dyn FnMut` 保持单调用方（ActionInputPrototype）
+  语义；无其他调用方。

@@ -2812,3 +2812,51 @@ glob_range/glob_url/next_url 逐函数 0/0；确定性双跑（E2E stdout sha256
   3118/0/0、httpd 2099/0/0，MIRROR 输出与 r1 **逐字节相同**——本语料无
   链式跨骑场景触发（降序扫描与升序在单步扩展下行为等价），count 通道
   无行为翻转（unjustparams 无 repeatapply 旗，count 经组级聚合消费）。
+
+## 2026-09-23（CHAINFIX lane EY2）：ActionInputPrototype 补 ProtoStoreSymbol store 副作用折叠
+
+- **根因（EV delta_decomp ① 族）**：合并态 httpd 缺口最大族 = `in_` 参数
+  寄存器命名（179 记号：RDI 48/RSI 45/RCX 17/RDX 15/R8 8/32 位变体 7/
+  RAX 12/RSP 7 + in_RIP 21）。EH 车道恢复了参数发现（trials/模型门/
+  unref 创建），但平铺 FuncProto store 从未把 `ProtoStoreSymbol::setInput`
+  的 ScopeLocal 符号安装副作用带上——`ActionNameVars::link_symbols` →
+  `Funcdata::link_symbol` 的 `queryProperties(addr, 1, usepoint)` 查不到
+  function_parameter 符号（输入 varnode 的 usepoint = `baseaddr-1`，
+  `Varnode::getUsePoint` varnode.cc:696-703 未写 varnode 分支），输入 high
+  无符号 → 打印层落回寄存器名 `in_RDI` 族。EU 车道终报残差 ③
+  （"无锁函数参数的 scope FUNCTION_PARAMETER 符号安装缺口"）即本项。
+- **修复（两处折叠，均逐字锚定 Ghidra 调用点）**：
+  1. cc:4715 `clearUnlockedInput` store 尾：`ProtoStoreSymbol::
+     clearAllInputs` = `scope->clearCategory(0)`（fspec.cc:3233-3236，
+     `ScopeInternal::clearCategory` cat>=0 分支=removeSymbol，
+     database.cc:2020-2029）——在 `!is_input_locked()` 下对
+     `fd.scope` 执行 `clear_category(FUNCTION_PARAMETER)`，防 action
+     restart 循环下旧符号按重推导存储累积。
+  2. `update_input_(no_)types` 注入 `store_install` 闭包（经 fspec 回调
+     在 cc:4079/4121 调用点触发）：镜像 `ProtoStoreSymbol::setInput`
+     （fspec.cc:3151-3183）——既有 slot 符号存储漂移则 removeSymbol；
+     安装分支按 `discoverScope`（database.cc:1353-1365：mapScope 起向上
+     walk，`inScope` 命中=本 scope range tree 拥有该存储=栈窗内 MEMORY
+     类参数）决定 usepoint：命中=INVALID（空 uselimit→addrtied），未命中
+     （寄存器参数）=`restricted_usepoint = baseaddr-1`（fspec.hh:1288、
+     funcdata.cc:69）→ `add_symbol` + `set_category(FUNCTION_PARAMETER,
+     count)`，命名折叠 `param_<count+1>`（Ghidra 传空名，默认名由
+     database.cc:1777-1781 `buildDefaultName` param 分支产生同串；
+     `lookForFuncParamNames` 对 input 跳过重命名，先命名无传播损失）。
+     `pieces.flags==0` 使 indirect/hiddenretparm/typelock/namelock 镜像
+     臂（fspec.cc:3171-3182）不可达。无 scope 的 GLUE 态折叠为空操作。
+- **消费链闭环**：`link_symbol`（funcdata.rs:1448，funcdata_varnode.cc:
+  1156-1184 镜像）以输入 usepoint=baseaddr-1 查中单点 uselimit 符号 →
+  `handle_symbol_conflict` 对 input 直接 `set_symbol_entry` → 打印层出
+  `param_N`。EK usepoint 修复（queryProperties uselimit 匹配）与 EH 参数
+  恢复在合并态的交互缺口由此闭合。
+- **验收（fast-release，oracle e40ed130）**：httpd 2539/0/0 → **2433/0/0**
+  （−106）；curl 2512/0/0 → **2507/0/0**（−5 全为 legacy 死声明删除，
+  零新增行）；`in_` 参数寄存器族 142 记号→0（RDI/RSI/RCX/RDX/R8/32 位
+  变体全消），param_ 记号 243→329；残差 in_RIP 21=CHAINMERGE-INRIP-
+  PRINTFAMILY-0001 域、in_RAX 12+in_RSP 7=非参数寄存器输入（RAX=返回值
+  寄存器/RSP=栈指针，模型不收，基线也不发射该形态，登记
+  CHAINFIX-INRAXRSP-RESIDUAL-0001 待归因）；gcc 审计 curl 82/25、httpd
+  6/23 均与基线恒等；三投影（match_url/next_url/parseconfig.constprop.0）
+  与 EQ2 基线字节恒等 → MATCH 结构性继承；cargo test --lib 串行 1658P/
+  18F=基线逐名同集。

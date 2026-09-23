@@ -1342,6 +1342,7 @@ impl FuncProto {
         triallist: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
         activeinput: &crate::fspec::ParamActive,
         find_disjoint_cover: &dyn Fn(&std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> (Address, i32),
+        store_set_input: &mut dyn FnMut(usize, &ParameterPieces),
     ) {
         if self.is_input_locked() { return; } // Input is locked, do no updating.
         // store->clearAllInputs()
@@ -1394,11 +1395,20 @@ impl FuncProto {
                 }
             });
             pieces.flags = 0;
-            // store->setInput(count, "", pieces) — Ghidra hands the empty
-            // name to the proto store, whose ScopeInternal symbol is
-            // default-named "param_<index+1>" at commit (database.cc:2481,
-            // category function_parameter with catindex=count). The flat
-            // FuncProto store folds that default name here.
+            // store->setInput(count, "", pieces) (fspec.cc:4079) — the store
+            // is the ScopeLocal-backed ProtoStoreSymbol for the function
+            // under analysis (FuncProto::setScope, fspec.cc:3879-3885 with
+            // funcdata.cc:69's baseaddr-1 restricted usepoint), whose
+            // setInput (fspec.cc:3147-3183) installs/refreshes the
+            // function_parameter category symbol the naming passes read.
+            // Rugra folds that side effect through this callback (the flat
+            // FuncProto store keeps signature printing on `parameters`).
+            store_set_input(count, &pieces);
+            // The Ghidra hand-off carries the empty name to the proto
+            // store, whose ScopeInternal symbol is default-named
+            // "param_<index+1>" at commit (database.cc:2481, category
+            // function_parameter with catindex=count). The flat FuncProto
+            // store folds that default name here.
             let nm = format!("param_{}", count + 1);
             self.set_input_parameter(count, &nm, pieces);
             count += 1;
@@ -1423,6 +1433,7 @@ impl FuncProto {
         &mut self,
         triallist: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
         activeinput: &crate::fspec::ParamActive,
+        store_set_input: &mut dyn FnMut(usize, &ParameterPieces),
     ) {
         if self.is_input_locked() { return; }
         self.parameters.clear();
@@ -1471,6 +1482,10 @@ impl FuncProto {
             pieces.space = trial.get_space();
             pieces.ty = Some(ty);
             pieces.flags = 0;
+            // store->setInput(count,"",pieces) (fspec.cc:4121) — same
+            // ScopeLocal-backed ProtoStoreSymbol::setInput side effect as
+            // update_input_types above (fspec.cc:3147-3183).
+            store_set_input(count, &pieces);
             let nm = format!("param_{}", count + 1);
             self.set_input_parameter(count, &nm, pieces);
             count += 1;

@@ -10104,6 +10104,18 @@ impl Action for ActionInputPrototype {
         }
         // cc:4715 — data.getFuncProto().clearUnlockedInput()
         fd.funcp.clear_unlocked_input();
+        // cc:4715 store tail — FuncProto::clearUnlockedInput (fspec.cc:3994)
+        // routes through the ScopeLocal-backed ProtoStoreSymbol:
+        // store->clearAllInputs() → ProtoStoreSymbol::clearAllInputs →
+        // scope->clearCategory(0) (fspec.cc:3233-3236).
+        // The flat store folds the category clear here; without it every
+        // re-run of this action (action restart cycles) would accumulate
+        // stale function_parameter symbols against re-derived storage.
+        if !fd.funcp.is_input_locked() {
+            if let Some(scope) = fd.scope.as_mut() {
+                scope.clear_category(crate::varmap::symbol_category::FUNCTION_PARAMETER);
+            }
+        }
         if !fd.funcp.is_input_locked() {
             // cc:4717-4730 — iterate the VarnodeDefSet for Varnode::input in
             // def order (VarnodeCompareDefLoc: space, offset, size) and
@@ -10203,6 +10215,108 @@ impl Action for ActionInputPrototype {
             // cc:4750-4753 — updateInputTypes (high phase on) or
             // updateInputNoTypes. ActionAssignHigh (analysis group) runs
             // before fixateproto, so highs exist here as in Ghidra.
+            //
+            // The FuncProto store fold: Ghidra's `this` FuncProto carries a
+            // ScopeLocal-backed ProtoStoreSymbol (FuncProto::setScope,
+            // fspec.cc:3879-3885, constructed with restricted_usepoint =
+            // baseaddr-1 at funcdata.cc:69), so every store->setInput in
+            // updateInputTypes/NoTypes installs the function_parameter
+            // category symbol into the ScopeLocal (fspec.cc:3147-3183) that
+            // ActionNameVars::linkSymbols then attaches to the input high
+            // (queryProperties at the input's entry-1 usepoint) — the
+            // symbol that names the parameter `param_N` in the body.
+            // Rust's FuncProto keeps only the flat `parameters` store, so
+            // the symbol install is folded into this closure, passed down
+            // and invoked at exactly the store->setInput call points.
+            // Split borrow for the store fold below: fd.scope backs the
+            // symbol install while fd.funcp carries the flat update.
+            let mut scope_opt = fd.scope.as_mut();
+            let baseaddr_minus1 = fd.baseaddr.as_u64().wrapping_sub(1);
+            let mut store_install =
+                |count: usize, pieces: &crate::fspec::ParameterPieces| {
+                    // No-scope glue state (same as the cc:4714 note above):
+                    // Ghidra's FuncProto always carries the ScopeLocal-backed
+                    // store (setScope at funcdata.cc:69), so a Rust Funcdata
+                    // without a scope has no store side effect to fold.
+                    if scope_opt.is_none() {
+                        return;
+                    }
+                    // fspec.cc:3151-3161 — existing category symbol at slot
+                    // count; keep it when storage matches, removeSymbol on
+                    // drift.
+                    let mut existing = scope_opt
+                        .as_ref()
+                        .and_then(|s| {
+                            s.get_category_symbol(
+                                crate::varmap::symbol_category::FUNCTION_PARAMETER,
+                                count as i32,
+                            )
+                        });
+                    if let Some(idx) = existing {
+                        let drift = {
+                            let sym = &scope_opt.as_ref().unwrap().symbols[idx];
+                            sym.space != pieces.space
+                                || sym.start != pieces.addr.as_u64()
+                                || sym.size
+                                    != pieces
+                                        .ty
+                                        .as_ref()
+                                        .map(|t| t.get_size() as i32)
+                                        .unwrap_or(1)
+                        };
+                        if drift {
+                            scope_opt.as_mut().unwrap().remove_symbol(idx);
+                            existing = None;
+                        }
+                    }
+                    if existing.is_none() {
+                        // fspec.cc:3163-3174 — the addSymbol usepoint:
+                        // discoverScope's walk keeps the INVALID usepoint
+                        // only when a scope's range tree owns the storage
+                        // (the resetLocalWindow localRange ∪ paramRange
+                        // window, i.e. MEMORY-class stack params); register
+                        // storage and anything unowned falls back to
+                        // restricted_usepoint = baseaddr-1 (fspec.hh:1288,
+                        // funcdata.cc:69). The uselimit difference drives
+                        // Scope::addMap's addrtied rule (database.cc:
+                        // 1149-1150): stack params addrtied, register
+                        // params single-point {baseaddr-1} — the same
+                        // ProtoStoreSymbol usepoint semantics the
+                        // input-locked bootstrap install applies
+                        // (ActionRestructureVarnode platform-parameter
+                        // path).
+                        let in_scope = scope_opt
+                            .as_ref()
+                            .map(|s| {
+                                s.in_scope(
+                                    pieces.space,
+                                    pieces.addr.as_u64(),
+                                    pieces.ty.as_ref().map(|t| t.get_size()).unwrap_or(1)
+                                        as i64,
+                                )
+                            })
+                            .unwrap_or(false);
+                        let param_usepoint =
+                            if in_scope { None } else { Some(baseaddr_minus1) };
+                        let nm = format!("param_{}", count + 1);
+                        let idx = scope_opt.as_mut().unwrap().add_symbol(
+                            pieces.space,
+                            &nm,
+                            pieces.ty.clone(),
+                            pieces.addr.as_u64(),
+                            param_usepoint,
+                        );
+                        scope_opt.as_mut().unwrap().set_category(
+                            idx,
+                            crate::varmap::symbol_category::FUNCTION_PARAMETER,
+                            count as i32,
+                        );
+                        // pieces.flags == 0 on both updateInputTypes paths,
+                        // so the indirectstorage/hiddenretparm/typelock/
+                        // namelock mirror arms (fspec.cc:3175-3191) are
+                        // unreachable here.
+                    }
+                };
             if (fd.flags & crate::funcdata::funcdata_flags::HIGHLEVEL_ON) != 0 {
                 fd.funcp.update_input_types(&triallist, &active, &|_vn| {
                     // persist-branch findDisjointCover stand-in: the mirror
@@ -10210,9 +10324,9 @@ impl Action for ActionInputPrototype {
                     // fold matches the varnode's own cover.
                     let guard = _vn.read().unwrap();
                     (guard.get_addr().clone(), guard.get_size() as i32)
-                });
+                }, &mut store_install);
             } else {
-                fd.funcp.update_input_no_types(&triallist, &active);
+                fd.funcp.update_input_no_types(&triallist, &active, &mut store_install);
             }
         }
         // cc:4755 — data.clearDeadVarnodes()

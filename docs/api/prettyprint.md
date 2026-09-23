@@ -950,3 +950,18 @@ HTTPD-MAIN-POSTBLOCKSTRUCT-HANG-0001 不变）；curl 与基**逐字节相同**
 全量 1650/18 与基逐测试同集（funcdata/heritage 18 失败=基分支预存）。
 该层属 POSTFIX-RETIRE-0001 补偿层（oracle prettyprint.cc 零文本后处理），
 本修复为层内误伤封堵，不改变退役路线。
+
+## 2026-09-23（CHAINFIX lane EY2）：legacy_never_type_evidence 证据集扩宽
+
+- 新增 `legacy_never_type_evidence()`（RUGRA-GLUE，`has_symbol_driven_decls`
+  / `_walk_parens` 共用判据 helper）：原 `undefined*` 前缀之外补入
+  `uint*`/`int1`/`int2`/`int8`/`ushort`/`ulong`/`longlong`/`__int*_t`——
+  均为符号驱动发射器独有拼写（printc.cc:2260-2279 core-type dtype 逐字
+  打印），legacy 文本 pass 只合成 int/long/bool/byte/short/char */void */
+  float/double（flush_func_remove_unused 的 type_ok 表）。
+  CHAINFIX-LEGACY-BYPASS-0001：ActionInputPrototype 的 function_parameter
+  符号安装（本车道）退休了部分 chunk 唯一的 `in_` 名字证据后，这些 chunk
+  落回 legacy pass，其收集器不识别符号拼写、把每个 uVarN 判"缺失"，在
+  签名与 `{` 之间注入 `int uVarN;` K&R 式重复声明（httpd ap_getparents、
+  curl glob_word）。扩宽后该误判消除（curl −5 行全为死声明删除）。plain
+  `int` 不在集合内（legacy 合法拼写），判定方向保持保守。
