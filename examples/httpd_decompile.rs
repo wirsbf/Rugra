@@ -247,6 +247,70 @@ fn tracked_context_architecture() -> Result<rugra::arch::Architecture, String> {
             _ => {}
         }
     }
+
+    // Ghidra: architecture.cc:1391-1414 Architecture::init builds the
+    // TypeFactory unconditionally (buildTypegrp at :1398) — every Funcdata
+    // observes `data.getArch()->types`, and Funcdata::spacebase
+    // (funcdata.cc:245-264) relies on it to typelock the input stack
+    // pointer with TypePointer→TypeSpacebase. TYPEPROP-NONSETTLING-HTTPD-0001:
+    // without the factory, the faithfully ported typelock leg is skipped,
+    // RulePtrsubUndo's isPtrsubMatching guard (ruleaction.cc:7138 →
+    // TypeSpacebase::getSubType's TYPE_UNKNOWN fallback, type.cc:2964) never
+    // matches, and the annotateRawStackPtr (varmap.cc:386) PTRSUB(sp,#0)
+    // annotation is dismantled by ptrsubundo→identityel→propagatecopy→
+    // earlyremoval and re-created every mainloop pass — the mainloop
+    // rule_repeatapply loop never reaches a fixed point (ap_build_cont_config
+    // / ap_log_rerror TIMEOUT). Same locked cspec as the curl worker
+    // (sleigh_specs/x86-64-gcc.cspec); data_organization decode mirrors
+    // parseCompilerConfig's ELEM_DATA_ORGANIZATION arm (architecture.cc:1269)
+    // and setupSizes (:1350).
+    {
+        let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
+            .map_err(|error| format!("unable to read compiler spec: {error}"))?;
+        let mut cspec_store = rugra::marshal::DocumentStorage::new();
+        let cspec_doc = cspec_store
+            .parse_document(&cspec_bytes)
+            .map_err(|error| format!("compiler spec parse failed: {error}"))?;
+        let cspec_root = cspec_doc
+            .root
+            .clone()
+            .ok_or_else(|| "compiler spec has no root element".to_string())?;
+        if cspec_root
+            .read()
+            .map_err(|_| "compiler spec element lock poisoned".to_string())?
+            .name
+            != "compiler_spec"
+        {
+            return Err("compiler spec root is not compiler_spec".to_string());
+        }
+        let data_org = cspec_root
+            .read()
+            .map_err(|_| "compiler spec element lock poisoned".to_string())?
+            .children
+            .iter()
+            .find(|child| {
+                child
+                    .read()
+                    .map(|element| element.name == "data_organization")
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .ok_or_else(|| "compiler spec has no data_organization".to_string())?;
+        let mut types = rugra::type_system::typefactory::TypeFactory::new(8);
+        let cspec_registry = std::sync::Arc::new(std::sync::RwLock::new(
+            rugra::marshal::IdRegistry::new(),
+        ));
+        let mut cspec_decoder =
+            rugra::marshal::TreeDecoder::new(data_org, cspec_registry);
+        types.decode_data_organization(&mut cspec_decoder);
+        types.setup_sizes(&rugra::type_system::typefactory::SizeArchInputs {
+            stack_spacebase_size: Some(8),
+            default_data_space_addr_size: 8,
+            default_size: 8,
+            far_pointer: None,
+        });
+        arch.set_types(std::sync::Arc::new(std::sync::RwLock::new(types)));
+    }
     Ok(arch)
 }
 
