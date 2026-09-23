@@ -54,11 +54,56 @@ impl MergeTypeIntersectCache {
     }
 
     // Ghidra: variable.cc:1148 HighIntersectTest::updateHigh
+    // Dirty predicate = the oracle's flag protocol as observed at the test
+    // gate. varnode.cc:352-361 Varnode::setFlags sets the member Varnode's
+    // coverdirty AND synchronously calls high->coverDirty()
+    // (variable.hh:275-281, + piece->markExtendCoverDirty). Rugra's
+    // set_flags/add_descend/erase_descend (varnode.rs) set only the
+    // Varnode-level flag — the propagation half lives HERE so the invariant
+    // "high clean ⇒ internalCover == union of current instance covers"
+    // (which the oracle maintains synchronously) holds at every test:
+    // a high is dirty iff its own flag is set OR any member Varnode still
+    // carries coverdirty (in the oracle both were set together, so this
+    // detects exactly the same state).
     fn update_high(&mut self, high: &Arc<RwLock<HighVariable>>) -> bool {
-        let dirty = high.read().unwrap().is_cover_dirty();
-        if !dirty {
+        let (high_dirty, instance_dirty) = {
+            let h = high.read().unwrap();
+            // The member-scan compensation applies to plain highs only: a
+            // piece-owning high's freshness protocol is the piece machinery
+            // (INTERSECTDIRTY/EXTENDCOVERDIRTY, variable.cc:140-172), which
+            // compute_varnode_covers and merge_highs already mark at
+            // guard-free points, and is_cover_dirty already consults
+            // extendcoverdirty (variable.hh:285-289). Routing a piece high
+            // through the scan+updateCover path from this gate reached a
+            // non-convergent post-restart merge lap in EM2 field runs (the
+            // piece rebuild re-marks members dirty and the lap never
+            // settles); flag-only checking is kept for piece highs, residual
+            // gap tracked as MERGE-COPYNOISE-SPILLRESTORE-0001-R2.
+            let instance_dirty = h.piece.is_none()
+                && h.instances.iter().any(|v| {
+                    (v.read().unwrap().flags & crate::varnode::varnode_flags::COVERDIRTY) != 0
+                });
+            (h.is_cover_dirty(), instance_dirty)
+        };
+        if !high_dirty && !instance_dirty {
             return true;
         }
+        if !high_dirty {
+            // Restore the propagation that varnode.cc:358-359 performs at
+            // setFlags time: mark the high (and its piece's extended cover)
+            // dirty so updateCover's dirty-gated rebuild fires below.
+            // mark_high_cover_dirty avoids the nested same-high write of
+            // the cover_dirty method (see its doc).
+            mark_high_cover_dirty(high);
+        }
+        // variable.cc:1153-1154: updateCover() then purgeHigh() — the purge
+        // is UNCONDITIONAL in the oracle. blockIntersection's verdicts are
+        // instance-level (copy-shadow pairs), so a pair result cached from a
+        // different instance decomposition can disagree with a recomputation
+        // even when the rebuilt union cover is bit-identical; gating the
+        // purge on cover-identity (EM2 experiment) let stale cached verdicts
+        // survive and produced wrong merges elsewhere (uStack_248/in_RDI
+        // noise), so the gate is removed.
         update_high_cover(high);
         self.purge_high(high);
         false
@@ -74,6 +119,13 @@ impl MergeTypeIntersectCache {
         instances
             .into_iter()
             .filter(|vn| {
+                // variable.cc:951: vn->getCover() is the lazy rebuild read
+                // (varnode.hh:202 → varnode.cc:233) — rebuild before reading
+                // so a mid-pass coverdirty Varnode cannot feed its stale
+                // cover into the block filter. No outer guard on vn is held
+                // here (the instances Vec is owned), so the write lock taken
+                // by update_cover_locked cannot re-enter.
+                Varnode::update_cover_locked(vn);
                 vn.read()
                     .unwrap()
                     .cover
@@ -94,6 +146,14 @@ impl MergeTypeIntersectCache {
     ) -> bool {
         let instances = high.read().unwrap().instances.clone();
         for vn in instances {
+            // variable.cc:975: vn->getCover() lazy rebuild read — mirror the
+            // oracle's getCover() so the first-stage cover filter sees the
+            // same (fresh) cover the oracle filters on. update_high refreshes
+            // `a`'s members only when a was dirty; the piece-intersection
+            // highs routed here (interPiece->getHigh()) bypass updateHigh
+            // entirely, so without this rebuild their instances could filter
+            // on stale covers. No outer guard on vn is held (owned Vec).
+            Varnode::update_cover_locked(&vn);
             let intersects_cover = vn
                 .read()
                 .unwrap()
@@ -106,10 +166,14 @@ impl MergeTypeIntersectCache {
             }
             for other in block_list {
                 let pair_intersects = {
-                    let vn_cover = vn.read().unwrap().cover.clone();
-                    let other_cover = other.read().unwrap().cover.clone();
-                    match (vn_cover, other_cover) {
-                        (Some(a), Some(b)) => b.intersect_by_block(block, &a) > 1,
+                    // Borrow both covers instead of cloning: distinct
+                    // Varnodes take independent read guards (same-Arc reads
+                    // are also fine), and the deep BTreeMap clone per pair
+                    // dominated the block-pair loop.
+                    let vn_g = vn.read().unwrap();
+                    let other_g = other.read().unwrap();
+                    match (vn_g.cover.as_ref(), other_g.cover.as_ref()) {
+                        (Some(a), Some(b)) => b.intersect_by_block(block, a) > 1,
                         _ => false,
                     }
                 };
@@ -141,11 +205,11 @@ impl MergeTypeIntersectCache {
         a: &Arc<RwLock<HighVariable>>,
         b: &Arc<RwLock<HighVariable>>,
         block: i32,
+        a_cover: &Cover,
+        b_cover: &Cover,
     ) -> bool {
-        let a_cover = high_cover(a);
-        let b_cover = high_cover(b);
-        let mut block_list = Self::gather_block_varnodes(b, block, &a_cover);
-        if Self::test_block_intersection(a, block, &b_cover, 0, &block_list) {
+        let mut block_list = Self::gather_block_varnodes(b, block, a_cover);
+        if Self::test_block_intersection(a, block, b_cover, 0, &block_list) {
             return true;
         }
 
@@ -167,7 +231,7 @@ impl MergeTypeIntersectCache {
                     if Self::test_block_intersection(
                         &intersect_high,
                         block,
-                        &b_cover,
+                        b_cover,
                         offset,
                         &block_list,
                     ) {
@@ -193,8 +257,8 @@ impl MergeTypeIntersectCache {
                     )
                 };
                 let Some(b_high) = b_high else { continue };
-                block_list = Self::gather_block_varnodes(&b_high, block, &a_cover);
-                if Self::test_block_intersection(a, block, &b_cover, -b_offset, &block_list) {
+                block_list = Self::gather_block_varnodes(&b_high, block, a_cover);
+                if Self::test_block_intersection(a, block, b_cover, -b_offset, &block_list) {
                     return true;
                 }
                 let a_piece = a.read().unwrap().piece.clone();
@@ -299,7 +363,7 @@ impl MergeTypeIntersectCache {
         let b_cover = high_cover(b);
         let mut result = false;
         for block in a_cover.intersect_list(&b_cover, 2) {
-            if Self::block_intersection(a, b, block) {
+            if Self::block_intersection(a, b, block, &a_cover, &b_cover) {
                 result = true;
                 break;
             }
@@ -508,6 +572,27 @@ impl MergePersistentState {
     }
 }
 
+// Ghidra: variable.hh:275 HighVariable::coverDirty
+/// Mark a high's cover dirty WITHOUT the nested-write hazard of
+/// `HighVariable::cover_dirty`: the oracle inline does
+/// `highflags |= coverdirty; if (piece) piece->markExtendCoverDirty();`
+/// where markExtendCoverDirty's final self leg (variable.cc:136) writes
+/// the OWN high again. Calling the Rust `cover_dirty` method while holding
+/// the outer write guard re-enters the same RwLock for write and
+/// deadlocks (single-threaded same-lock reentrancy); the flag write and
+/// the piece walk are therefore sequenced here under separate guards —
+/// the observable flag state is identical to the oracle's inline.
+fn mark_high_cover_dirty(high: &Arc<RwLock<HighVariable>>) {
+    let piece_arc = {
+        let mut h = high.write().unwrap();
+        h.highflags |= crate::variable::high_internal_flags::COVERDIRTY;
+        h.piece.clone()
+    };
+    if let Some(piece_arc) = piece_arc {
+        crate::variable::VariablePiece::mark_extend_cover_dirty_read(&piece_arc);
+    }
+}
+
 // Ghidra: variable.hh:294 HighVariable::getCover
 fn high_cover(high: &Arc<RwLock<HighVariable>>) -> Cover {
     let piece = high.read().unwrap().piece.clone();
@@ -518,6 +603,15 @@ fn high_cover(high: &Arc<RwLock<HighVariable>>) -> Cover {
 }
 
 // Ghidra: variable.cc:338 HighVariable::updateCover
+/// Re-derive the high's cover. The oracle's `updateCover` routes plain highs
+/// to `updateInternalCover` (variable.cc:324), whose member reads go through
+/// `inst[i]->getCover()` (varnode.hh:202) — the LAZY per-member rebuild —
+/// before merging; the member-rebuild leg is done explicitly here because
+/// Rugra's `update_internal_cover` (variable.rs) reads the raw `cover` field.
+/// Piece-owning highs route to the piece machinery (variable.cc:342-346);
+/// the intersecting-high instance rebuild is a Rugra-side freshness
+/// compensation for the piece walk (documented 2026-08-15,
+/// COVER-REBUILD-SELFLOCK-0001) kept from the parent shape.
 fn update_high_cover(high: &Arc<RwLock<HighVariable>>) {
     let instances = high.read().unwrap().instances.clone();
     for instance in instances {
@@ -857,11 +951,15 @@ impl Merge {
         self.detach(fd);
     }
 
-    // Ghidra: merge.hh:83 Merge::updateHighCovers
-    /// Re-derive every HighVariable's internal cover from its member Varnodes.
-    /// Faithful to HighVariable::updateInternalCover (variable.cc:324).
-    /// Collects the distinct HighVariables reachable from live varnodes (each
-    /// HighVariable holds Arc-shared instances, so we dedupe by Arc pointer).
+    // RUGRA-GLUE: wholesale post-merge cover sync. The oracle has no such
+    /// pass — it maintains covers lazily (HighVariable::updateCover
+    /// variable.cc:338 via HighIntersectTest::updateHigh variable.cc:1148,
+    /// Varnode::getCover varnode.hh:202); Rugra materializes high.cover
+    /// eagerly because downstream readers (markimplied's inflateTest fast
+    /// path, varmap) read the stored field. Each high is synced through
+    /// `update_high_cover` (the updateCover port), leaving the same
+    /// invariant point the oracle reaches lazily: every cover clean and
+    /// equal to the union of its members' current covers.
     fn update_high_covers(&mut self, fd: &mut Funcdata) {
         use std::collections::HashSet;
         let mut seen: HashSet<usize> = HashSet::new();
@@ -879,17 +977,42 @@ impl Merge {
             }
         }
         for ha in to_update {
-            ha.write().unwrap().update_internal_cover();
+            update_high_cover(&ha);
         }
     }
 
-    // Ghidra: merge.cc:1595 Merge::markImplied
-    /// Mark a Varnode as implied. Faithful to Merge::markImplied (merge.cc:1595).
-    /// In Ghidra this also sets coverdirty on the def op's inputs so their
-    /// covers get recomputed; Rugra recomputes covers wholesale per merge_all,
-    /// so we only set the IMPLIED flag here.
+    // Ghidra: merge.cc:1594 Merge::markImplied
+    /// Mark a Varnode as implied. Faithful to Merge::markImplied
+    /// (merge.cc:1594-1605): after setImplied, the def op's inputs are
+    /// marked coverdirty because their covers traverse the now-implied
+    /// root and must be rebuilt before any later read. Varnode::setFlags
+    /// (varnode.cc:358-359) propagates the dirty bit to the member's high;
+    /// varnode.rs set_flags lacks that half, so the propagation is done
+    /// inline here — the observable state (vn COVERDIRTY + its high's
+    /// coverdirty) is identical to the oracle's single setFlags call.
     pub fn mark_implied(vn: &Arc<RwLock<Varnode>>) {
         vn.write().unwrap().set_implied();
+        let def = vn.read().unwrap().get_def();
+        let Some(def) = def else { return };
+        let inputs: Vec<std::sync::Arc<RwLock<Varnode>>> = {
+            let op = def.read().unwrap();
+            (0..op.num_input())
+                .filter_map(|i| op.get_in(i).cloned())
+                .collect()
+        };
+        for input in inputs {
+            let high = {
+                let mut v = input.write().unwrap();
+                if !v.has_cover() {
+                    continue;
+                }
+                v.flags |= varnode_flags::COVERDIRTY;
+                v.high.clone()
+            };
+            if let Some(high) = high {
+                mark_high_cover_dirty(&high);
+            }
+        }
     }
 
     // Ghidra: merge.cc:1616 Merge::inflateTest
@@ -935,8 +1058,54 @@ impl Merge {
             return false; // a has no HighVariable — no intersection possible
         };
         let ahigh = ahigh_arc.read().unwrap();
-        // high.cover is the union of the implied varnode's instance covers
-        // (Rugra's materialization of internalCover, merge.rs cover pass).
+        // merge.cc:1621-1622: testCache.updateHigh(high); const Cover
+        // &highCover(high->internalCover). The oracle's updateHigh lazily
+        // rebuilds the high's internal cover from its member Varnodes'
+        // lazily-rebuilt covers, and reads it ONLY when the high was dirty —
+        // a clean high's internalCover already equals the union of its
+        // members' current covers (the setFlags/coverDirty propagation
+        // invariant, varnode.cc:352-361). Mirror both halves: dirty-scan the
+        // members, and only materialize the refreshed product when the scan
+        // hits (or the high's own flag is set); otherwise read the stored
+        // cover directly, exactly as the oracle reads internalCover.
+        let high_instances: Vec<Arc<RwLock<Varnode>>> = high.instances.clone();
+        let high_needs_refresh = high.is_cover_dirty()
+            || high_instances.iter().any(|inst| {
+                (inst.read().unwrap().flags & crate::varnode::varnode_flags::COVERDIRTY) != 0
+            });
+        let high_cover_fresh: Cover = if high_needs_refresh {
+            for inst_arc in &high_instances {
+                // Oracle chain: updateHigh → updateCover → member getCover()
+                // rebuild. NOTE LOCK DISCIPLINE: unlike refresh_cover_lazy,
+                // this rebuild does NOT re-mark the high dirty across the
+                // flag clear (varnode.cc:365-374) — the caller (coreaction
+                // checkImpliedCover) holds a READ guard on this high for the
+                // whole call, so a member back-pointer write on it would
+                // self-deadlock. This is safe for the cached-test invariant:
+                // every intersection()/update_high gate runs inside the
+                // merge passes, which start from compute_varnode_covers'
+                // wholesale re-dirty (+sweep propagation), so no cached test
+                // can be served from a pre-refresh cover after this point in
+                // the cycle.
+                Varnode::update_cover_locked(inst_arc);
+            }
+            let mut fresh = Cover::new();
+            // variable.cc:329: gate the merge loop on inst[0]->hasCover().
+            if high_instances
+                .first()
+                .map(|first| first.read().unwrap().has_cover())
+                .unwrap_or(false)
+            {
+                for inst_arc in &high_instances {
+                    if let Some(ic) = inst_arc.read().unwrap().cover.as_ref() {
+                        fresh.merge(ic);
+                    }
+                }
+            }
+            fresh
+        } else {
+            high.cover.clone()
+        };
         // First loop: instances of a's HighVariable (merge.cc:1623-1632).
         // Snapshot the instance arcs, then drop the read guard BEFORE the
         // piece walk: update_intersections takes a WRITE lock on the owning
@@ -946,6 +1115,13 @@ impl Merge {
         let piece_arc = ahigh.piece.clone();
         drop(ahigh);
         for inst_arc in &first_instances {
+            // merge.cc:1627: b->getCover() is the lazy rebuild read
+            // (varnode.hh:202 → varnode.cc:233). No high-dirty propagation
+            // here: the caller holds a read guard on the propagated high,
+            // and this instance's high may be that same high (mergecopy
+            // merges COPY in/out into one HighVariable) — a back-pointer
+            // write would self-deadlock (see the high_cover_fresh note).
+            Varnode::update_cover_locked(inst_arc);
             let inst = inst_arc.read().unwrap();
             // merge.cc:1626: if (b->copyShadow(a)) continue; — copy-chain
             // shadows hold the same value, their cover is shared with a.
@@ -955,7 +1131,7 @@ impl Merge {
             }
             drop(a_g);
             if let Some(ic) = inst.cover.as_ref() {
-                if 2 == ic.intersect_char(&high.cover) {
+                if 2 == ic.intersect_char(&high_cover_fresh) {
                     return true;
                 }
             }
@@ -982,6 +1158,10 @@ impl Merge {
                 let off = other_off - piece_offset;
                 let other_high = other_high_arc.read().unwrap();
                 for inst_arc in &other_high.instances {
+                    // merge.cc:1639: b->getCover() lazy rebuild read. No
+                    // high-dirty propagation (caller-held read guard — see
+                    // the merge.cc:1627 note).
+                    Varnode::update_cover_locked(inst_arc);
                     let inst = inst_arc.read().unwrap();
                     // merge.cc:1640: partialCopyShadow allows SUBPIECE/PIECE
                     // derived shadows at the piece-relative offset.
@@ -989,7 +1169,7 @@ impl Merge {
                         continue;
                     }
                     if let Some(ic) = inst.cover.as_ref() {
-                        if 2 == ic.intersect_char(&high.cover) {
+                        if 2 == ic.intersect_char(&high_cover_fresh) {
                             return true;
                         }
                     }
@@ -4683,6 +4863,17 @@ impl Merge {
                 }
             };
             if materialize {
+                // Ghidra: varnode.cc:358-359 — setFlags(coverdirty) also
+                // calls high->coverDirty() on the member Varnode's high.
+                // The flag write above is the Rugra equivalent of
+                // calcCover()+setFlags; mirror the propagation half here so
+                // the sweep's rebuild does not leave every high cover
+                // silently stale (MERGE-COPYNOISE-SPILLRESTORE-0001: stale
+                // high covers produced false block-level intersections that
+                // refused merges the oracle performed).
+                if let Some(high) = vn_arc.read().unwrap().high.clone() {
+                    mark_high_cover_dirty(&high);
+                }
                 // Ghidra: varnode.cc:233 Varnode::updateCover →
                 // cover.cc:477 Cover::rebuild (backward fill through
                 // predecessors, MULTIEQUAL slot precision, INDIRECT marker
@@ -4724,8 +4915,11 @@ fn aggregate_high_cover_from(high: &HighVariable) -> Cover {
         return agg;
     }
     for inst_arc in &high.instances {
-        // Ghidra: inst[i]->getCover() — lazy rebuild via update_cover_locked
-        // (varnode.cc:233-241), then merge the rebuilt instance cover.
+        // Ghidra: inst[i]->getCover() — lazy rebuild (varnode.cc:233-241),
+        // then merge the rebuilt instance cover. No high-dirty propagation
+        // across the rebuild (varnode.cc:365-374): the wrapper holds a READ
+        // guard on this high (aggregate_high_cover) and this instance's high
+        // IS this high — a member back-pointer write would self-deadlock.
         Varnode::update_cover_locked(inst_arc);
         if let Some(inst) = inst_arc.read().unwrap().cover.as_ref() {
             agg.merge(inst);
