@@ -106,6 +106,30 @@ metatype-specific same-size rules (cast.cc:339-389). Rugra's Datatype
 lacks typedef chains, variable-length arrays, and per-pointer AddrSpace;
 those branches are faithful no-ops.
 
+2026-09-23 partial 免 cast 五臂补齐（CAST-PARTIAL-REQ-NOCAST-0001）：
+oracle `CastStrategyC::castStandard` 对 TYPE_PARTIALSTRUCT/
+TYPE_PARTIALUNION 有五处免 cast 点，Rugra 此前一处都没有（SB-FINALCAST
+的移植范围未覆盖 partial 臂）：
+
+1. **req 侧免 cast**（cast.cc:341-343）：partial 作为 cast 请求类型直接
+   `return 0`——"As they are ultimately stripped, treat partials as
+   undefined"。可观测影响：STORE 值槽 `pointedToType` 为 partial 片时
+   （TypeOpStore::getInputCast slot2，typeop.cc:554
+   `castStandard(pointedToType,valueType,false,true)`）不再插
+   `(undefined8)` 前缀——main 的 `glob._296_8_ = (undefined8)uVar32`
+   → 裸（golden 792 `uVar29`）、
+   `glob.pattern[8].content.Set.elements/_8_8_` 两行同消。
+2. **curmeta 侧四点**：uint !care 臂（cast.cc:348-349）、int !care 臂
+   （cast.cc:366-367）的宽容名单补 `PartialStruct|PartialUnion`；
+   uint/int care 臂的 `isptr &&` 子臂（cast.cc:356-357/374-375，"Don't
+   cast pointers to unknown"）从仅 `Unknown` 扩为
+   `Unknown|PartialStruct|PartialUnion`。
+
+注意 `CastStrategyJava::castStandard`（cast.cc:471 起）有同形 partial
+臂，但 Rugra 只移植 C 策略（CastStrategyC），Java 侧不在写域。新增
+`test_cast_standard_full_partial_no_cast` 锁五臂（req/!care×2/isptr×2/
+size 门控制组/非指针 care 控制组）。
+
 2026-09-23 enum 元类型规范化（SETCASTS-COPYINPUT-0001）：req/cur 两侧
 metatype 先经 `ghidra_meta` 规范化——`Enum→Int`、`PartialEnum→Uint`。
 Oracle 依据：Ghidra `TypeEnum` 的全部构造路径都把 metatype 强制存为
