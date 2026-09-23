@@ -1,5 +1,41 @@
 # `coreaction.rs` API Reference
 
+## 2026-09-23：五 Action count 收割族覆盖（ACTION-COUNTHARVEST-FAMILY-0001 / FD）
+
+FA2（GETPARAM-SWITCHNORM-0001，4e79535d）普查的五个"member count 无收割"残差，
+逐一对照 oracle 源码后按各自**真实形态**落地——并非五件同形横切：一件纯增覆盖、
+三件双桥收敛、一件自增删除。语义要点：Rust `Action::perform` 的两条 sanctioned
+count 桥（action.rs:338 `take_count_delta` 收割 + :344 正返回值并入）是**相加**
+关系，apply 不得同时走两条；Ghidra action.cc:319-329 只读成员，apply 正返回值
+被丢弃。
+
+1. **ActionUnreachable**（coreaction.cc:3457）：apply 已是"member+=1; return 0"
+   形态，仅缺收割 → 新增 `take_count_delta`（`std::mem::take`，与
+   ActionSwitchNorm/ActionPreferComplement 同款）。唯一累计点 cc:3461。
+   此前投影 result/count/apply 恒 0。
+2. **ActionMarkExplicit**（cc:3237）/ **ActionMarkImplied**（cc:3416）/
+   **ActionReturnSplit**（blockaction.cc:2264）：此前"member+=N 且 `Ok(N)` 返回"
+   双桥并存——返回路径已把 N 计入 ActionState，member 是死重复，未来误加收割即
+   双计。收敛为 Ghidra 正典单桥：apply 恒 `return 0`（cc:3271/3454/2323），count
+   只走 member 收割（新增 `take_count_delta`）。state.count/warning/count_apply/
+   STATUS_END 逐字段不变（数学恒等：旧=返回 N+收割 0，新=收割 N+返回 0）。
+3. **ActionStructureTransform**（blockaction.cc:2110-2115）：**oracle apply 从不
+   碰 count**（函数体仅 finalTransform+return 0，零计数点；该 Action 定义在
+   blockaction.cc 而非 coreaction.cc）——普查清单"五件均有 count+= 需覆盖"的
+   前提对此件不成立。Rugra 侧的 `self.count += 1` 系自创累计，若收割必与 oracle
+   恒 0 分歧（正是"harvest 后翻转 MATCH"风险的唯一真实来源）。按铁律 1.5 删除
+   自创增量，member 恒 0=oracle，不加 `take_count_delta`；
+   `test_structuretransform_detects_for_loop` 改由 for_init/for_iter+NONPRINTING
+   见证（原 count==1 断言锁的是非 oracle 行为）。
+
+**验证**（基线=亲父 c790ae1b 本 worktree 亲测）：curl E2E **2511/0/0** 与 httpd
+E2E **2282/0/0** 均与基线逐字节 cmp 恒等；getparameter/next_url/match_url/
+parseconfig 四投影与基线逐字节 cmp 恒等（gp 首分歧保持 ord186=
+GETPARAM-TABLEADDR-0001 pre-existing；其余三投影 MATCH 保持）；五 Action 投影
+count 字段前后对照全 diff 为空（markexplicit gp 2277/next_url 104/match_url 77/
+parseconfig 251 与 markimplied 98/83/54/36 逐字段不变；unreachable/returnsplit/
+structuretransform 恒 0=oracle，当前语料纯潜伏）；coreaction 单测 58/58。
+
 ## 2026-09-23：castInput double-cast 臂锁卫生（HTTPD-MAIN-POSTBLOCKSTRUCT-HANG-0002 / EW）
 
 - **现象**：stage-projection/mirror 模式（`RUGRA_MIRROR=1 RUGRA_STAGE_PROJ=1
