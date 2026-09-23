@@ -4588,9 +4588,13 @@ impl Rule for RuleAndPiece {
 ///   `(V << c) & mask  =>  (V & (mask >> c)) << c`
 ///   `(V >> c) & mask  =>  (V & (mask << c)) >> c`
 ///
-/// Faithful to Ghidra's `RuleAndCommute` (ruleaction.cc:1519-1626). Ports the
-/// primary INT_LEFT/INT_RIGHT path (the OR/PIECE sub-cases use getNZMask to
-/// decide benefit). When the shift's other input (a constant) can be commuted
+/// Faithful to Ghidra's `RuleAndCommute` (ruleaction.cc:1519-1626). Scans the
+/// AND's inputs for a shift (INT_LEFT/INT_RIGHT with constant amount); the
+/// only unconditional commute is the (LEFT + constant othervn +
+/// shiftvn->loneDescend()==op) fast path (cc:1573-1580). Every other case
+/// must pass the benefit gate (cc:1582-1603): orvn.def must be INT_OR or
+/// PIECE with both halves' NZ-masks overlapping the (shift-adjusted)
+/// othermask. When the shift's other input (a constant) can be commuted
 /// with the AND, perform the commute by creating a new shift + AND.
 pub struct RuleAndCommute;
 
@@ -4637,24 +4641,36 @@ impl Rule for RuleAndCommute {
                 Some(v) if v.read().unwrap().is_constant() => v.clone(),
                 _ => continue,
             };
-            let sa = savn.read().unwrap().get_offset() as usize;
+            let sa = savn.read().unwrap().get_offset() as u32;
             let orvn = match shiftop_arc.read().unwrap().inrefs.get(0) { Some(v) => v.clone(), None => continue ,
             };
             let othervn = { let op = op_arc.read().unwrap(); op.inrefs.get(1 - i).cloned() };
             let othervn = match othervn { Some(v) => v, None => continue ,
             };
-            let othermask = othervn.read().unwrap().get_nz_mask();
-            if othermask == 0 || othermask == fullmask { continue; }
-            // Decide if commute is beneficial (othermask bits affected by shift).
-            let adjusted = if opc == OpCode::CPUI_INT_RIGHT {
-                if (fullmask >> sa) == othermask { continue; }
-                othermask << sa
+            // cc:1556 — othervn must be linked into the SSA tree.
+            if !othervn.read().unwrap().is_heritage_known() { continue; }
+            let mut othermask = othervn.read().unwrap().get_nz_mask();
+            // cc:1561-1568 — check the AND is not merely zeroing bits the shift
+            // already zeroes, then adjust the mask to its post-commute form.
+            if opc == OpCode::CPUI_INT_RIGHT {
+                if (fullmask.wrapping_shr(sa)) == othermask { continue; }
+                othermask = othermask.wrapping_shl(sa);
             } else {
-                if ((fullmask << sa) & fullmask) == othermask { continue; }
-                othermask >> sa
-            };
-            if adjusted == 0 || adjusted == fullmask { continue; }
-            // For LEFT with constant othervn, require loneDescend for stability.
+                // cc:1566 — Ghidra source literally reads
+                // `if (((fullmask<<sa)&&fullmask)==othermask) continue;`: the
+                // `&&` is a logical AND of two uintb values (bool 0/1), not a
+                // bitwise `&`.  Ported verbatim: the gate value is 1 whenever
+                // both shifted fullmask and fullmask are non-zero, so the
+                // reject only fires when othermask == 1 in that situation.
+                let gate = u64::from(fullmask.wrapping_shl(sa) != 0 && fullmask != 0);
+                if gate == othermask { continue; }
+                othermask = othermask.wrapping_shr(sa);
+            }
+            // cc:1569-1570 — post-adjustment checks (andmask handles these).
+            if othermask == 0 { continue; }
+            if othermask == fullmask { continue; }
+            // cc:1573-1580 — the only unconditional commute: LEFT shift with a
+            // constant othervn whose shift output feeds only this AND.
             if opc == OpCode::CPUI_INT_LEFT && othervn.read().unwrap().is_constant() {
                 if shiftvn
                     .read()
@@ -4665,19 +4681,63 @@ impl Rule for RuleAndCommute {
                     found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
                     break;
                 }
-                // Otherwise check if orvn is an OR/PIECE (beneficial sub-case).
-                let orop_arc = { orvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
-                if let Some(oa) = orop_arc {
-                    let oc = oa.read().unwrap().opcode;
-                    if oc == OpCode::CPUI_INT_OR || oc == OpCode::CPUI_PIECE {
+            }
+            // cc:1582 — benefit gate: orvn must be defined by an op.
+            if !orvn.read().unwrap().is_written() { continue; }
+            let orop_arc = { orvn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) };
+            let orop_arc = match orop_arc { Some(a) => a, None => continue };
+            let oc = orop_arc.read().unwrap().opcode;
+            // cc:1585-1603 — commute only pays off when orvn.def is INT_OR or
+            // PIECE whose halves both overlap othermask; anything else (e.g. a
+            // LOAD output) must not commute.
+            if oc == OpCode::CPUI_INT_OR {
+                let (ormask1, ormask2) = {
+                    let orop = orop_arc.read().unwrap();
+                    let m1 = orop.inrefs.get(0).map(|v| v.read().unwrap().get_nz_mask()).unwrap_or(0);
+                    let m2 = orop.inrefs.get(1).map(|v| v.read().unwrap().get_nz_mask()).unwrap_or(0);
+                    (m1, m2)
+                };
+                if (ormask1 & othermask) == 0 {
+                    found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
+                    break;
+                }
+                if (ormask2 & othermask) == 0 {
+                    found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
+                    break;
+                }
+                if othervn.read().unwrap().is_constant() {
+                    if (ormask1 & othermask) == ormask1 {
+                        found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
+                        break;
+                    }
+                    if (ormask2 & othermask) == ormask2 {
                         found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
                         break;
                     }
                 }
+            } else if oc == OpCode::CPUI_PIECE {
+                let (ormask1, ormask2, lowsize) = {
+                    let orop = orop_arc.read().unwrap();
+                    let lowmask = orop.inrefs.get(1).map(|v| v.read().unwrap().get_nz_mask()).unwrap_or(0);
+                    let highmask = orop.inrefs.get(0).map(|v| v.read().unwrap().get_nz_mask()).unwrap_or(0);
+                    let ls = orop.inrefs.get(1).map(|v| v.read().unwrap().get_size()).unwrap_or(0);
+                    (lowmask, highmask, ls)
+                };
+                // Low part of piece (cc:1596-1597).
+                if (ormask1 & othermask) == 0 {
+                    found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
+                    break;
+                }
+                // High part (cc:1598-1600).
+                let ormask2 = ormask2.wrapping_shl((lowsize as u32) * 8);
+                if (ormask2 & othermask) == 0 {
+                    found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
+                    break;
+                }
+            } else {
+                // cc:1602-1603 — orvn.def is neither INT_OR nor PIECE.
                 continue;
             }
-            found = Some((i, shiftop_arc, opc, savn, orvn, othervn));
-            break;
         }
         let (i, shiftop_arc, opc, savn, orvn, othervn) = match found { Some(f) => f, None => return Ok(action_status::NO_CHANGE) ,
         };
@@ -22936,55 +22996,175 @@ mod tests {
     // --- RuleAndCommute (ruleaction.cc:1519) ---
 
     #[test]
-    fn test_and_commute_right_shift() {
-        // (V >> 4) & 0x0f0f (size 2) — othermask=0x0f0f, not full(0xffff).
-        // RIGHT path: adjusted = 0x0f0f << 4 = 0xf0f0 (nonzero, != full).
-        // othervn not constant → found set.
+    fn test_and_commute_benefit_gate_rejects_non_or_piece_shift_input() {
+        // myprogress ord-28 shape (ruleaction.cc:1582-1603): the shift's input
+        // is a LOAD output; only INT_OR/PIECE defs pass the mandatory benefit
+        // gate, so AND(RIGHT(load,10),0xffffffff) must NOT commute.
         let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
-        let v = fd
+        let base = fd
             .vbank
-            .create_with_space(2, crate::space::AddressSpace::Register, 0x10);
-        v.write()
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        base.write()
             .unwrap()
-            .set_flags(crate::varnode::varnode_flags::INPUT);
-        let sa = fd.vbank.create_constant(4, 4);
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+        let load_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_LOAD,
+        )));
+        base.write().unwrap().def = Some(Arc::downgrade(&load_op));
+        let sa = fd.vbank.create_constant(4, 10);
         let shift_out = fd
             .vbank
-            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        shift_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
         let shift_op = Arc::new(RwLock::new(PcodeOp::new(
-            SeqNum::new(Address::new(0x1000), 0),
+            SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_RIGHT,
         )));
         {
             let mut s = shift_op.write().unwrap();
-            s.inrefs = vec![v.clone(), sa.clone()];
+            s.inrefs = vec![base.clone(), sa.clone()];
             s.output = Some(shift_out.clone());
         }
         shift_out.write().unwrap().def = Some(Arc::downgrade(&shift_op));
-        // W = register with NZM = fullmask = 0xffff. To get partial, use a
-        // SUBPIECE-derived varnode? Simpler: this test will be NO_CHANGE for
-        // a register (NZM=full). Document that and test the constant-LEFT
-        // path instead, which is the more common real case.
-        let w = fd.vbank.create_constant(2, 0x0f0f);
+        let mask = fd.vbank.create_constant(8, 0xffffffff);
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_INT_AND,
+        )));
+        {
+            let mut a = and_op.write().unwrap();
+            a.inrefs = vec![shift_out, mask];
+            a.output = Some(fd.vbank.create_with_space(
+                8, crate::space::AddressSpace::Register, 0x30,
+            ));
+        }
+        let rule = RuleAndCommute::new();
+        let result = rule.apply_op(&and_op, &mut fd).unwrap();
+        // LOAD is neither INT_OR nor PIECE → cc:1602-1603 continue → no commute.
+        assert_eq!(result, action_status::NO_CHANGE);
+        let a = and_op.read().unwrap();
+        assert_eq!(a.opcode, OpCode::CPUI_INT_AND);
+        assert_eq!(a.inrefs.len(), 2);
+    }
+
+    #[test]
+    fn test_and_commute_left_constant_lone_descend() {
+        // cc:1573-1580: LEFT shift + constant othervn + shift output feeding
+        // only this AND → the sole unconditional commute path.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x10);
+        let sa = fd.vbank.create_constant(4, 4);
+        let shift_out = fd
+            .vbank
+            .create_with_space(2, crate::space::AddressSpace::Register, 0x20);
+        shift_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_LEFT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![v, sa.clone()];
+            s.output = Some(shift_out.clone());
+        }
+        shift_out.write().unwrap().def = Some(Arc::downgrade(&shift_op));
+        let mask = fd.vbank.create_constant(2, 0x0f0f);
         let and_op = Arc::new(RwLock::new(PcodeOp::new(
             SeqNum::new(Address::new(0x1000), 1),
             OpCode::CPUI_INT_AND,
         )));
         {
             let mut a = and_op.write().unwrap();
-            a.inrefs = vec![shift_out, w];
+            a.inrefs = vec![shift_out.clone(), mask];
             a.output = Some(fd.vbank.create_with_space(
                 2, crate::space::AddressSpace::Register, 0x30,
             ));
         }
+        // shift output is consumed only by this AND.
+        shift_out
+            .write()
+            .unwrap()
+            .descend
+            .push(Arc::downgrade(&and_op));
         let rule = RuleAndCommute::new();
         let result = rule.apply_op(&and_op, &mut fd).unwrap();
-        // othervn is a constant (0x0f0f), opc=RIGHT (not LEFT), so the
-        // LEFT-constant loneDescend guard doesn't apply; RIGHT path accepts.
+        assert_eq!(result, action_status::CHANGE);
+        let a = and_op.read().unwrap();
+        assert_eq!(a.opcode, OpCode::CPUI_INT_LEFT);
+        assert_eq!(a.inrefs[1].read().unwrap().get_val(), 4);
+    }
+
+    #[test]
+    fn test_and_commute_or_mask_disjoint_arm() {
+        // cc:1585-1587: orvn.def is INT_OR whose first arm's NZ mask does not
+        // overlap the (shift-adjusted) othermask → commute.
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let v1 = fd.vbank.create_constant(1, 0xf0);
+        let v2 = fd.vbank.create_constant(1, 0x0f);
+        let or_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x10);
+        or_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+        let or_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_OR,
+        )));
+        {
+            let mut o = or_op.write().unwrap();
+            o.inrefs = vec![v1, v2];
+            o.output = Some(or_out.clone());
+        }
+        or_out.write().unwrap().def = Some(Arc::downgrade(&or_op));
+        let sa = fd.vbank.create_constant(4, 1);
+        let shift_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        shift_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+        let shift_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_RIGHT,
+        )));
+        {
+            let mut s = shift_op.write().unwrap();
+            s.inrefs = vec![or_out, sa.clone()];
+            s.output = Some(shift_out.clone());
+        }
+        shift_out.write().unwrap().def = Some(Arc::downgrade(&shift_op));
+        let mask = fd.vbank.create_constant(1, 0x06);
+        let and_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_INT_AND,
+        )));
+        {
+            let mut a = and_op.write().unwrap();
+            a.inrefs = vec![shift_out, mask];
+            a.output = Some(fd.vbank.create_with_space(
+                1, crate::space::AddressSpace::Register, 0x30,
+            ));
+        }
+        let rule = RuleAndCommute::new();
+        let result = rule.apply_op(&and_op, &mut fd).unwrap();
+        // adjusted othermask = 0x06 << 1 = 0x0c; ormask1 = 0xf0 & 0x0c == 0 →
+        // break → commute.
         assert_eq!(result, action_status::CHANGE);
         let a = and_op.read().unwrap();
         assert_eq!(a.opcode, OpCode::CPUI_INT_RIGHT);
-        assert_eq!(a.inrefs[1].read().unwrap().get_val(), 4);
+        assert_eq!(a.inrefs[1].read().unwrap().get_val(), 1);
     }
 
     // --- RuleOrConsume (ruleaction.cc:344) ---
@@ -26572,4 +26752,6 @@ mod tests {
         assert_eq!(non_leaves, 2); // hi8, lo8
     }
 }
+
+
 

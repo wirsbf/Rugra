@@ -715,6 +715,12 @@ INT_AND 与 PIECE 简化：当 AND mask 清零某半时：
 
 测试：ruleaction::tests +1（RIGHT 路径常量 mask 交换）。
 
+**2026-09-23（MYPROGRESS-ANDCOMMUTE-GATE-0001）重写收益门（cc:1532-1626 全结构 1:1）**：
+- 唯一无条件短路 = LEFT + othervn 常量 + `shiftvn->loneDescend()==op`（cc:1573-1580），其余情形**必须**过 cc:1582-1603 收益门：`orvn.is_written()` 且 `orvn.def ∈ {INT_OR, PIECE}`，INT_OR 需 `(ormask1&othermask)==0`/`(ormask2&othermask)==0`（+常量时 `==ormask1/2` 两补门），PIECE 低半=in(1) nzmask、高半=in(0) nzmask `<< in(1).size*8`，否则 `continue`（LOAD 输出等不得 commute——myprogress ord28 `AND(RIGHT(load,10),0xffffffff)` 首分歧根因）。
+- 补 cc:1556 `othervn->isHeritageKnown()` 守卫;`othermask==0/fullmask` 检查移到移位调整**之后**（cc:1569-1570）。
+- cc:1566 `(fullmask<<sa)&&fullmask` 按 Ghidra 源码字面移植：`&&` 是逻辑与（0/1），非按位 `&`——门值恒 1（fullmask 非零、wrap 后非零），故仅在 `othermask==1` 时拒绝。移位一律 `wrapping_*`（对齐 C++ uintb 环绕）。
+测试重写：+3（收益门拒 LOAD 型 orvn=NO_CHANGE / LEFT+常量+loneDescend 快路径=CHANGE / INT_OR disjoint 臂=CHANGE）。
+
 ### 2026-06-26（续）：RuleOrConsume + get_consume/set_consume/get_nzm/set_nzm
 
 #### Varnode consume/nzm 访问器（varnode.hh:205-206）
