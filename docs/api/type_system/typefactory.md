@@ -982,14 +982,22 @@ same port (TYPEFACTORY-CODEFLAGS-DECODE-0001 residual).
 
 ## 2026-08-25：spacebase 类型携带 scope 快照（B3-COREACTION-CONSTANTPTR-0001 段(b)）
 
-- `TypeFactory::symboltab: Option<Arc<RwLock<Database>>>`（新字段，两构造器
+- `TypeFactory::symboltab: Option<Arc<RwLock<Database>>>`（两构造器
   初始化 None）+ `set_spacebase_scope_source(db)`：Ghidra 的
   `TypeSpacebase::getMap` 每次 `glb->symboltab->getGlobalScope()` 动态解析
   （type.cc:2935-2945）；Rugra 类型不携带 Architecture，改为构造时快照
   （符号图在反编译前安装、期间稳定，与 oracle 可观察答案一致）。
+- `TypeFactory::live_local_scopes: BTreeMap<u64, Arc<RwLock<ScopeLocal>>>`
+  （2026-09-24 VARMAP-STACKBOUNDARY-0001 新字段，两构造器初始化空表）+
+  `get_type_spacebase` 构造期立即挂接（`frame.is_null()` 判定 local frame；
+  registry `entry().or_insert_with()` 保证缓存类型**自诞生即带句柄**，
+  后续发布只替换句柄内容）；`Funcdata::publish_scope_to_spacebase` 在每趟
+  `ActionRestructureVarnode` 后把重构 ScopeLocal 发布进句柄——这是 Ghidra
+  getMap local 臂（type.cc:2938-2944 `fd->getScopeLocal()` 动态解析）的
+  Rust 所有权镜像：spacebase 子类型查询由此读到**活跃**局部图。
 - `get_type_spacebase` 在句柄存在时把 global scope 克隆进新 spacebase 产品
   的 `scope` 字段——`TypeSpacebase::get_sub_type`（RulePtrsubUndo 的
-  isPtrsubMatching 守卫）由此获得 subtype 答案。去重键不变
+  isPtrsubMatching 守卫）由此获得 global-frame 的 subtype 答案。去重键不变
   （`__spacebase_{ws}_{frame}`），首次构造定格快照。
 
 ## 2026-09-23：spacebase 类型名清空（SPACEBASE-SYMNAME-0001）

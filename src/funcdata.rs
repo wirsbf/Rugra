@@ -5921,6 +5921,33 @@ impl Funcdata {
         vn
     }
 
+    // RUGRA-GLUE: TypeSpacebase live-map publish — the Rust ownership seam
+    // standing in for Ghidra's dynamic getMap resolution (type.cc:2935-2945:
+    // every `TypeSpacebase::getSubType` re-resolves
+    // `queryFunction(localframe)->fd->getScopeLocal()` and therefore observes
+    // the CURRENT map). Rugra's Funcdata owns the ScopeLocal and the
+    // factory-cached stack spacebase type holds a shared handle (attached at
+    // construction, see TypeFactory::get_type_spacebase); this refresh makes
+    // the handle contents match the Funcdata's just-mutated scope, so
+    /// subsequent spacebase subtype queries observe the live map. Call after
+    /// every ScopeLocal map mutation (ActionRestructureVarnode passes,
+    /// parameter-symbol bootstrap).
+    pub fn publish_scope_to_spacebase(&mut self) {
+        let Some(scope) = self.scope.as_ref() else { return; };
+        let Some(types) = self.arch.as_ref().and_then(|a| a.types.clone()) else {
+            return;
+        };
+        let frame = self.baseaddr.clone();
+        let mut tf = types.write().unwrap();
+        let sb = tf.get_type_spacebase(Some(crate::space::AddressSpace::Stack), frame);
+        drop(tf);
+        if let crate::type_system::datatype::Datatype::Spacebase(sb) = sb.as_ref() {
+            if let Some(handle) = &sb.fd {
+                *handle.write().unwrap() = scope.clone();
+            }
+        }
+    }
+
     // Ghidra: funcdata.cc:291 Funcdata::findSpacebaseInput
     /// Locate the unique input Varnode holding the incoming value of the base
     /// register for `id`. Faithful to `Funcdata::findSpacebaseInput`

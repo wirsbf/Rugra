@@ -740,6 +740,13 @@ Restructure the local-variable scope from stack varnodes. Faithful to
   `add_range` 的 `range.inRange` 门（varmap.cc:902）才能丢弃这些槽的
   hint）。每趟调用 `restructure_varnode(fd, aliasyes)` 后跑
   `fd.sync_varnodes_with_symbols(false, aliasyes)`。
+  **2026-09-24 VARMAP-STACKBOUNDARY-0001 起每趟发布活跃局部图**：在
+  `fd.scope = Some(scope)` 之后调用 `fd.publish_scope_to_spacebase()`
+  （Ghidra getMap type.cc:2935-2945 动态解析 `fd->getScopeLocal()` 的
+  所有权镜像）——把重构后的 ScopeLocal 发布进工厂缓存 stack spacebase
+  类型的共享句柄，使后续 `TypeSpacebase::get_sub_type` local-frame
+  查询（oppool2 ptrarith `calc_subtype` 的 extra 喂入）读到活跃图；
+  myprogress 投影首分歧 150→399。
   **2026-09-23 VARMAP-PARAMSTORAGE-BLOB-0001 起参数符号按真实存储落位**：
   播种时逐参携带 `ProtoParameter::address_space`——INTEGER 类照旧
   Register 空间（寄存器偏移+寄存器宽度），MEMORY 类按值参数（match_url
