@@ -5,7 +5,8 @@
 **状态**: 🔧 **L2**——CircleRange 全方法 + ValueSetSolver 填充/迭代主链路实跑
 （RANGEUTIL-VSEMPTY-0001 修复，2026-09-23）；约束生成族（applyConstraints/
 constraintsFromCBranch/generateConstraints 等）仍为结构占位（差分门禁口径：改动经
-curl/httpd E2E + gp/next_url/match_url/parseconfig 投影验证）。49 单元测试。
+curl/httpd E2E + gp/next_url/match_url/parseconfig 投影验证）。51 单元测试
+（2026-09-23 CR8 返工 +2：operator== 双空语义 / circle_union wrapping 合并）。
 
 ## 模块说明
 
@@ -156,6 +157,21 @@ range，LoadGuard 停在 establish 全窗臂。
 - `intersect`（cc:549）：改为 faithful `circle_intersect` 的包装（保留
   0=空/1=单区间/2=两段 的旧返回码契约），获得 step/newStride/newDomain/回绕
   语义（此前 step!=1 时直接保守放弃）。
+- `union`（**2026-09-23 CR8 M-A 隔离**）：legacy 简化包装——wrapping/混合/
+  step≠1 一律两片、满覆盖显式返 2——**不得用于对齐语义路径**（上游
+  `circleUnion` 满覆盖返 0+left==right，恒真判决在 translate2Op）；已加
+  禁用注记，RuleRangeMeld OR 臂改接忠实版 `circle_union`。
+- `==`（**2026-09-23 CR8 M-B**）：删除 `derive(PartialEq)`，手写
+  `impl PartialEq` 逐字镜像 `operator==`（hh:331-336）——isempty 不等→
+  false；双空→true（不比残留 mask/step/left/right——`iterate` 的
+  `res==range` 不变判定依赖此语义）；否则比 left/right/mask/step。
+- `set_stride`（cc:707-722，**2026-09-23 CR8 obs② 逐字重写**）：补
+  `newStep==step` early-return、`right-step`（旧步长）快照、
+  `!iseverything && left==right→isempty` 塌缩（旧实现自称 faithful 实为
+  异构：除法取整改写边界+mask 回写，无塌缩）。
+- 成员版 `new_stride`/`new_domain`（CR8 obs①）：死代码删除——生产路径为
+  静态 `new_stride_owned`/`new_domain_owned`（`circle_intersect` 调用），
+  原地留 tombstone 注记防再引入成员镜像。
 - `contains_range`（cc:301-329）：重叠码 'c'/'b' 忠实判定替代边界近似；
   `WidenerFull::do_widening`（cc:1859-1870）landmark 检查改用
   `contains_range`。
@@ -172,7 +188,7 @@ range，LoadGuard 停在 establish 全窗臂。
 INT_ADD 收敛 [0x40,0x41) type=1，read 节点镜像）；test_push_forward_add 期望
 修为 C++ 公式值 [5,24)。
 
-**验证**：rangeutil 49/49；curl/httpd E2E 差分、getparameter/next_url/
+**验证**：rangeutil 51/51（CR8 返工后）；curl/httpd E2E 差分、getparameter/next_url/
 match_url/parseconfig 双投影 bisect（见 TODO_BOARD RANGEUTIL-VSEMPTY-0001 行）。
 
 ## 已知基础设施缺口（约束生成族仍为结构占位）

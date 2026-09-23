@@ -11630,10 +11630,15 @@ impl Rule for RuleRangeMeld {
         }
 
         // Intersect (BOOL_AND) or union (BOOL_OR) the ranges, mirroring
-        // ruleaction.cc:1403-1407. Rugra's legacy-code wrappers return
-        // 0=empty / 1=single / 2=two-pieces (union adds full); we normalize
-        // to the C++ restype contract used below:
-        // 0=try translate, 1=always true, 2=cannot represent, 3=always false.
+        // ruleaction.cc:1403-1407. BOOL_AND: the legacy-code wrapper returns
+        // 0=empty / 1=non-empty single / 2=two-pieces. BOOL_OR: the faithful
+        // `circle_union` (cc:360-444, full 'a'-'g' merge arms incl. wrapping
+        // and stride accommodation) returns 0=merged-single (including the
+        // covers-everything case, which reaches its always-true verdict via
+        // translate_to_op → Err(1) → COPY(1) below, exactly cc:1412-1430) or
+        // 2=two-pieces. The simplified legacy `union` wrapper
+        // (rangeutil.rs) punts on wrapping/stride cases and must not be used
+        // on this path.
         let a1_size = a1.read().unwrap().get_size();
         let mut restype = if central_opc == OpCode::CPUI_BOOL_AND {
             match range1.intersect(&range2) {
@@ -11642,11 +11647,9 @@ impl Rule for RuleRangeMeld {
                 _ => 2, // Two pieces → cannot represent.
             }
         } else {
-            match range1.union(&range2) {
-                0 => 0, // Single range → try translate.
-                1 => 2, // Two pieces → cannot represent.
-                2 => 1, // Full → always true.
-                _ => 0,
+            match range1.circle_union(&range2) {
+                0 => 0, // Merged single (or covers everything) → try translate.
+                _ => 2, // Two pieces → cannot represent.
             }
         };
 
@@ -23644,6 +23647,82 @@ mod tests {
             o.opcode
         );
         assert!(Arc::ptr_eq(&o.inrefs[0], &v));
+    }
+
+    // CR8 M-A regression: (200 <s V) || (250 <s V)  =>  200 <s V.
+    // The OR arm must run the faithful circle_union (ruleaction.cc:1405-
+    // 1406): the pulled-back windows [201,0x80000000) and
+    // [251,0x80000000) merge (subset, 'c' arm) and translate2Op rewrites
+    // the OR as a single INT_SLESS(200, V) with the constant on slot 0.
+    #[test]
+    fn test_rule_range_meld_greater_or_greater_merged() {
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 16);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let c200 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(200, 4)));
+        c200
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::CONSTANT);
+        let c250 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(250, 4)));
+        c250
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::CONSTANT);
+
+        // INT_SLESS(200, V) — "V > 200" — bool output
+        let s1_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x20);
+        let s1 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_SLESS,
+        )));
+        s1.write().unwrap().inrefs = vec![c200, v.clone()];
+        s1.write().unwrap().output = Some(s1_out.clone());
+        s1.write().unwrap().flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
+        s1_out.write().unwrap().def = Some(Arc::downgrade(&s1));
+        s1_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+
+        // INT_SLESS(250, V) — "V > 250"
+        let s2_out = fd
+            .vbank
+            .create_with_space(1, crate::space::AddressSpace::Register, 0x21);
+        let s2 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_SLESS,
+        )));
+        s2.write().unwrap().inrefs = vec![c250, v.clone()];
+        s2.write().unwrap().output = Some(s2_out.clone());
+        s2.write().unwrap().flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
+        s2_out.write().unwrap().def = Some(Arc::downgrade(&s2));
+        s2_out
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+
+        // BOOL_OR(s1_out, s2_out)
+        let outer = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_BOOL_OR,
+        )));
+        outer.write().unwrap().inrefs = vec![s1_out, s2_out];
+
+        let rule = RuleRangeMeld::new();
+        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = outer.read().unwrap();
+        assert_eq!(o.opcode, OpCode::CPUI_INT_SLESS);
+        assert!(o.inrefs[0].read().unwrap().is_constant());
+        assert_eq!(o.inrefs[0].read().unwrap().get_offset(), 200);
+        assert!(Arc::ptr_eq(&o.inrefs[1], &v));
     }
 
     #[test]

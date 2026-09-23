@@ -788,19 +788,22 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - 修复 CircleRange::union 返回码语义对齐 Ghidra circleUnion（0=single, 1=two pieces, 2=full）+ 相邻范围合并。
   - 测试：`(V<5)||(V==5) => V<6`（语义等价 V<=5）。
 
-## 2026-09-23：RuleRangeMeld restype 映射精确化（RANGEUTIL-VSEMPTY-0001 配套）
+## 2026-09-23：RuleRangeMeld restype 映射精确化（RANGEUTIL-VSEMPTY-0001 配套 + CR8 M-A 返工）
 
 - **restype 码流对齐 ruleaction.cc:1403-1437**：`CircleRange::intersect` 忠实化
   （委托 `circle_intersect`，0=空/1=单区间/2=两段）后，调用点映射改为
   BOOL_AND 臂 `0→3(always false)/1→0(try translate)/2→2(cannot)`；
-  BOOL_OR 臂维持 union 包装码 `0→0/1→2/2→1`。`translate_to_op` 改为
-  `Result<(OpCode,u64,i32), i32>`（镜像 `translate2Op` cc:1424-1467 的
-  0/1/2/3 码），非零 Err 码落入 always-true/cannot-represent/always-false
-  臂——旧代码 translate 失败一律 NO_CHANGE，丢失 C++ 的 COPY(1)/COPY(0)
-  常量折叠臂与 INT_EQUAL/INT_NOTEQUAL/INT_SLESS 翻译臂。
-- E2E 影响经三门禁验证：curl 2563/0/0（file2string.part.0 −2 守卫窗驱动的
-  栈数组合并、match_url +4 栈声明浮现，均归因 LoadGuard 真实窗口而非本
-  Rule）、httpd 2333/0/0 恒等基线。
+  **BOOL_OR 臂（CR8 M-A 返工）改接忠实版 `circle_union`**（cc:360-444 完整
+  'a'-'g' 合并臂，含 wrapping/stride 适配），映射 `{0→0, 非零→2}`——满覆盖
+  情形（'g' 臂返 0 且 left==right）经 `translate_to_op→Err(1)→COPY(1)` 恰为
+  cc:1412-1430 原文路径；legacy 简化 `union` 包装（wrapping 一律两片）已从
+  该路径隔离并加注禁用。`translate_to_op` 为 `Result<(OpCode,u64,i32), i32>`
+  （镜像 `translate2Op` cc:1424-1467 的 0/1/2/3 码），非零 Err 码落入
+  always-true/cannot-represent/always-false 臂。
+- 测试：`(V<5)||(V==5) => V<6` 语义等价保持 + CR8 M-A 回归
+  `(200<s V)||(250<s V) => 200<s V`（INT_SLESS 单区间重写）。
+- E2E 影响经三门禁验证：curl 2563/0/0 与 httpd 2333/0/0 均与返工前字节
+  恒等（修复对当前语料不可见——潜伏语义雷类）。
 
 ## 2026-06-27（续 2）：RuleFloatRange 完整移植
 

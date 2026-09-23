@@ -16,7 +16,7 @@
 
 /// A class for manipulating integer value ranges over integers mod 2^n.
 /// Corresponds to Ghidra's `CircleRange` (rangeutil.hh:50).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct CircleRange {
     /// Left boundary of the open range [left, right)
     pub left: u64,
@@ -28,6 +28,29 @@ pub struct CircleRange {
     pub isempty: bool,
     /// Explicit step size
     pub step: u64,
+}
+
+// Ghidra: rangeutil.hh:331 CircleRange::operator==
+/// Equality, mirroring the C++ inline `operator==` (rangeutil.hh:331-336)
+/// field-for-field: unequal `isempty` flags are never equal; two empty
+/// ranges ARE equal without consulting the remaining fields (stale
+/// mask/step/left/right residue on an empty range must not register as a
+/// change — ValueSet::iterate's `res == range` no-change decision depends
+/// on this); otherwise all four of left/right/mask/step must match.
+impl PartialEq for CircleRange {
+    // Ghidra: rangeutil.hh:331 CircleRange::operator==
+    fn eq(&self, op2: &CircleRange) -> bool {
+        if self.isempty != op2.isempty {
+            return false;
+        }
+        if self.isempty {
+            return true;
+        }
+        self.left == op2.left
+            && self.right == op2.right
+            && self.mask == op2.mask
+            && self.step == op2.step
+    }
 }
 
 impl CircleRange {
@@ -113,50 +136,15 @@ impl CircleRange {
     pub fn get_step(&self) -> u64 { self.step }
 
     // Ghidra: rangeutil.cc:103 CircleRange::newStride
-    /// Extend the range to cover values with a different stride. Returns
-    /// true if the resulting range is empty. Faithful to cc:103-131.
-    pub fn new_stride(&mut self, mask: u64, step: u64, old_step: u64, rem: u32, myleft: &mut u64, myright: &mut u64) -> bool {
-        if old_step != 1 {
-            let old_rem = (*myleft % old_step) as u32;
-            if old_rem != (rem % old_step as u32) {
-                return true;
-            }
-        }
-        let orig_order = *myleft < *myright;
-        let left_rem = (*myleft % step) as u32;
-        let right_rem = (*myright % step) as u32;
-        if left_rem > rem {
-            *myleft += rem as u64 + step - left_rem as u64;
-        } else {
-            *myleft += rem as u64 - left_rem as u64;
-        }
-        if right_rem > rem {
-            *myright += rem as u64 + step - right_rem as u64;
-        } else {
-            *myright += rem as u64 - right_rem as u64;
-        }
-        *myleft &= mask;
-        *myright &= mask;
-        let new_order = *myleft < *myright;
-        if orig_order != new_order { return true; }
-        false
-    }
+    // 2026-09-23 (CR8 obs①): the member-mirror `new_stride` was deleted as
+    // dead code — the live faithful path is the static `new_stride_owned`
+    // called by `circle_intersect` (values flow through `&mut` locals,
+    // self is never consulted for inputs). Do not reintroduce member
+    // mirrors that shadow the _owned statics.
 
     // Ghidra: rangeutil.cc:143 CircleRange::newDomain
-    /// Truncate range to fit in a new domain mask. Returns true if empty.
-    pub fn new_domain(&mut self, new_mask: u64, new_step: u64, myleft: &mut u64, myright: &mut u64) -> bool {
-        let rem = if new_step != 1 { *myleft % new_step } else { 0 };
-        if *myleft > new_mask {
-            if *myright > new_mask { return true; }
-            *myleft = rem;
-        }
-        if *myright > new_mask + 1 {
-            *myright = (new_mask + 1) - ((new_mask + 1 - rem) % new_step);
-        }
-        self.mask = new_mask;
-        self.step = new_step;
-        false
-    }
+    // 2026-09-23 (CR8 obs①): the member-mirror `new_domain` was likewise
+    // deleted; the live faithful path is the static `new_domain_owned`.
 
     // Ghidra: rangeutil.cc:219 CircleRange::setRange(lft,rgt,size,stp)
     /// Set range from explicit boundaries, size, and step.
@@ -215,8 +203,15 @@ impl CircleRange {
     }
 
     // Ghidra: rangeutil.cc:179 CircleRange::union
-    /// Union two ranges (circleUnion). Faithful to `CircleRange::circleUnion`
-    /// (rangeutil.cc). Returns:
+    /// Union two ranges (circleUnion). Legacy SIMPLIFIED wrapper — NOT
+    /// faithful to `CircleRange::circleUnion` (rangeutil.cc:360-444): it
+    /// punts (returns two-pieces) on every wrapping range, mixed
+    /// wrap/non-wrap pair, and any step != 1, and it approximates the
+    /// full-coverage verdict with an explicit code 2. Production code that
+    /// must match upstream semantics (e.g. RuleRangeMeld cc:1405-1406) must
+    /// call the faithful `circle_union` instead. Kept only for the legacy
+    /// Rust callers/tests that depend on the 0/1/2 wrapper codes.
+    /// Returns:
     /// - 0 = result fits in a single CircleRange (stored in `self`)
     /// - 1 = result would require 2 pieces (cannot represent)
     /// - 2 = union covers the entire space (always true)
@@ -1212,15 +1207,29 @@ impl CircleRange {
     }
 
     // Ghidra: rangeutil.cc:707 CircleRange::setStride
-    /// Set the stride of this range.
-    /// Faithful to Ghidra CircleRange::setStride (rangeutil.cc:707).
+    /// Change the step for this range — elements are removed; boundaries do
+    /// not change except for the remainder modulo the new step. Verbatim
+    /// port of `CircleRange::setStride` (rangeutil.cc:707-722), including
+    /// the early-return on unchanged step, the pre-assignment `right-step`
+    /// snapshot (OLD step), and the `!iseverything && left==right →
+    /// isempty` collapse (the full-range `left==right` form is preserved).
     pub fn set_stride(&mut self, new_step: u64, rem: u64) {
+        let iseverything = !self.isempty && self.left == self.right;
+        if new_step == self.step {
+            return;
+        }
+        let a_right = self.right.wrapping_sub(self.step);
         self.step = new_step;
-        if self.step > 1 {
-            self.left = (self.left / self.step) * self.step + rem;
-            self.right = (self.right / self.step) * self.step + rem;
-            self.right &= self.mask;
-            self.left &= self.mask;
+        if self.step == 1 {
+            return; // No remainder to fill in
+        }
+        let cur_rem = self.left % self.step;
+        self.left = self.left.wrapping_sub(cur_rem).wrapping_add(rem);
+        let cur_rem = a_right % self.step;
+        let a_right = a_right.wrapping_sub(cur_rem).wrapping_add(rem);
+        self.right = a_right.wrapping_add(self.step);
+        if !iseverything && self.left == self.right {
+            self.isempty = true;
         }
     }
 
@@ -1971,6 +1980,41 @@ mod tests {
         r.set_stride(4, 3); // stride 4, remainder 3
         assert_eq!(r.get_step(), 4);
         assert_eq!(r.get_left() % 4, 3);
+    }
+
+    // CR8 M-B regression (rangeutil.hh:331-336): operator== consults
+    // isempty FIRST — two empty ranges are equal regardless of stale
+    // left/right/mask/step residue; unequal isempty flags are never
+    // equal; non-empty ranges compare all four fields.
+    #[test]
+    fn test_eq_operator_semantics() {
+        let a = CircleRange::empty();
+        let mut b = CircleRange::empty();
+        b.left = 0x37; // stale residue on an empty range
+        b.mask = 0xff;
+        b.step = 8;
+        assert_eq!(a, b); // both empty → true, residue ignored
+        let d = CircleRange::new(1, 5, 4, 1);
+        assert_ne!(a, d); // isempty differs → false
+        let e = CircleRange::new(1, 5, 4, 1);
+        assert_eq!(d, e); // four fields match → true
+        let f = CircleRange::new(1, 5, 4, 2);
+        assert_ne!(d, f); // step differs (non-empty) → false
+    }
+
+    // CR8 M-A regression (rangeutil.cc:419-426 'b'/'c' arms): two
+    // overlapping WRAPPING ranges merge into a single interval under the
+    // faithful circle_union — the legacy simplified `union` wrapper punted
+    // every wrapping pair as "two pieces" (no rewrite).
+    #[test]
+    fn test_circle_union_wrapping_merge() {
+        let mut a = CircleRange::new(0xf0, 0x10, 1, 1); // [0xf0,0x10) wraps
+        let b = CircleRange::new(0xf8, 0x08, 1, 1); // [0xf8,0x8) wraps, subset
+        assert_eq!(a.circle_union(&b), 0); // merged into a single interval
+        assert!(a.contains_val(0xf0));
+        assert!(a.contains_val(0xff));
+        assert!(a.contains_val(0x00));
+        assert!(!a.contains_val(0x10));
     }
 }
 
