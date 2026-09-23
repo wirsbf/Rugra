@@ -721,6 +721,136 @@ impl CircleRange {
         true
     }
 
+    // Ghidra: rangeutil.cc:1022 CircleRange::pullBack
+    /// The pull-back is performed through a given p-code op and set this to
+    /// the resulting range (if possible). If there is a single unknown input,
+    /// and the set of values for this input that cause the output of op to
+    /// fall into this form a range, then set this to the range (the
+    /// "pullBack") and return the unknown varnode. Return None otherwise.
+    ///
+    /// We may know something about the input varnode in the form of its
+    /// NZMASK, which can further restrict the range we return. If
+    /// `usenzmask` is true and NZMASK forms a range, intersect this with the
+    /// result (a 2-piece intersection failure keeps the original range —
+    /// still a successful pull-back).
+    ///
+    /// Faithful to `CircleRange::pullBack` (rangeutil.cc:1022-1084).
+    ///
+    /// Alignment Evidence (four decisive semantics):
+    /// - 引用/输出参数: `self`(=this range) is mutated in place through
+    ///   pullBackUnary/pullBackBinary/SUBPIECE salvage/nzmask intersect;
+    ///   returns the non-constant input Varnode (Arc identity) or None.
+    /// - 循环边界/遍历序: straight-line, no loops; unary/binary/else dispatch
+    ///   on `op->numInput()` (1 / 2 / other → None).
+    /// - 计数器/累加器: none; `slot` starts at 0 and only flips to 1 when
+    ///   in(0) is constant (then in(1) must be non-constant or None).
+    /// - 排序/比较键: `isConstant()` decides slot/const roles; SUBPIECE
+    ///   salvage gated on `usenzmask && val == 0` plus
+    ///   `out->getSize() < (mostsigbit_set(nzmask)+8)/8`; final nzmask
+    ///   intersect only when `setNZMask` reports a valid range.
+    // RUGRA-GLUE: the C++ `Varnode **constMarkup` out param is omitted —
+    // Ghidra writes it only when the constant carries a SymbolEntry, and the
+    // constraint-family callers (constraintsFromPath cc:2190/2199,
+    // generateRelativeConstraint) never read it back (the markup consumers
+    // are jumptable.cc and RuleRangeMeld's copySymbolIfValid, outside this
+    // path). Observationally dead for this port.
+    pub fn pull_back(
+        &mut self,
+        op: &Arc<RwLock<PcodeOp>>,
+        usenzmask: bool,
+    ) -> Option<Arc<RwLock<Varnode>>> {
+        let (num_input, opc) = {
+            let g = op.read().unwrap();
+            (g.num_input(), g.get_opcode())
+        };
+        let res: Arc<RwLock<Varnode>>;
+        if num_input == 1 {
+            // cc:1027-1032
+            let r = op.read().unwrap().get_in(0)?.clone();
+            if r.read().unwrap().is_constant() {
+                return None;
+            }
+            let in_size = r.read().unwrap().get_size();
+            // Ghidra dereferences op->getOut() unconditionally; live defining
+            // ops always have outputs (Ghidra-unreachable → fail pull-back).
+            let out_size = op
+                .read()
+                .unwrap()
+                .get_out()
+                .map(|o| o.read().unwrap().get_size())?;
+            if !self.pull_back_unary(opc, in_size, out_size) {
+                return None;
+            }
+            res = r;
+        } else if num_input == 2 {
+            // cc:1033-1071: find the non-constant varnode input and its slot;
+            // the other input must be constant.
+            let in0 = op.read().unwrap().get_in(0)?.clone();
+            let in1 = op.read().unwrap().get_in(1)?.clone();
+            let (r, constvn, slot) = {
+                if in0.read().unwrap().is_constant() {
+                    if in1.read().unwrap().is_constant() {
+                        return None;
+                    }
+                    (in1.clone(), in0, 1)
+                } else if !in1.read().unwrap().is_constant() {
+                    return None;
+                } else {
+                    (in0.clone(), in1, 0)
+                }
+            };
+            let val = constvn.read().unwrap().get_offset();
+            let in_size = r.read().unwrap().get_size();
+            let out_size = op
+                .read()
+                .unwrap()
+                .get_out()
+                .map(|o| o.read().unwrap().get_size())?;
+            if !self.pull_back_binary(opc, val, slot, in_size, out_size) {
+                // cc:1053-1067: SUBPIECE salvage — if everything truncated
+                // away is known zero (nzmask), the pull-back is still valid.
+                if usenzmask && opc == OpCode::CPUI_SUBPIECE && val == 0 {
+                    let msbset = crate::address::mostsigbit_set(r.read().unwrap().get_nz_mask());
+                    let msbset = (msbset + 8) / 8;
+                    if out_size < msbset as usize {
+                        // Some bytes we are chopping off might not be zero.
+                        return None;
+                    }
+                    // Keep the range but make the mask bigger. If the range
+                    // wraps, the added space is intersected away again by the
+                    // nzmask intersection below (cc:1060-1064 comment).
+                    self.expand_mask(in_size);
+                } else {
+                    return None;
+                }
+            }
+            // cc:1069-1070: constMarkup pass-back omitted (see RUGRA-GLUE
+            // note above).
+            res = r;
+        } else {
+            // Neither unary nor binary.
+            return None;
+        }
+
+        // cc:1075-1082
+        if usenzmask {
+            let (nzm, rsize) = {
+                let g = res.read().unwrap();
+                (g.get_nz_mask(), g.get_size())
+            };
+            match Self::set_nz_mask(nzm, rsize) {
+                // Invalid mask: return the range as-is (still successful).
+                None => return Some(res),
+                Some(nzrange) => {
+                    // If the intersect produces 2 pieces the original range
+                    // is preserved and the pull-back is still a success.
+                    self.circle_intersect(&nzrange);
+                }
+            }
+        }
+        Some(res)
+    }
+
     // Ghidra: rangeutil.cc:1093 CircleRange::pushForwardUnary
     /// Push-forward this range through a unary operator. Faithful to
     /// `CircleRange::pushForwardUnary` (rangeutil.cc:1093-1167), including
@@ -3367,68 +3497,413 @@ impl ValueSetSolver {
         None
     }
 
-    // TODO(RANGEUTIL-VSEMPTY-0001 residual): depends on unported FlowBlock
-    // domination queries and full PcodeOp::pullBack wiring. The following methods are stubbed with their
-    // faithful signatures and algorithm comments so the structure is in place;
-    // they are exercised once establish_value_sets is wired into the pipeline.
+    // RANGEUTIL-CONSTGEN-0001: the constraint-generation family below is now
+    // fully implemented (was TODO stubs depending on FlowBlock domination
+    // queries and CircleRange::pullBack(PcodeOp*)).
 
     // Ghidra: rangeutil.cc:2105 ValueSetSolver::applyConstraints
     /// Look for PcodeOps where the given constraint range applies and
-    /// instantiate an equation. Faithful to `ValueSetSolver::applyConstraints`
-    /// (rangeutil.cc:2105). Requires FlowBlock domination queries not yet
-    /// ported; left as a structural stub.
+    /// instantiate an equation. If a read of the given Varnode is in a basic
+    /// block dominated by the condition producing the constraint, then either
+    /// the constraint or its complement applies to the PcodeOp reading the
+    /// Varnode. An equation holding the constraint is added to the ValueSet
+    /// of the Varnode output of the PcodeOp. Faithful to
+    /// `ValueSetSolver::applyConstraints` (rangeutil.cc:2105-2173).
+    ///
+    /// Alignment Evidence (four decisive semantics):
+    /// - 引用/输出参数: `range` is borrowed (cloned into equations/landmark);
+    ///   `cbranch` is read for parent/flip; equations are written into the
+    ///   arena (`value_nodes`) / `read_nodes` via generateTrue/FalseEquation.
+    /// - 循环边界/遍历序: `vn->beginDescend()..endDescend()` iterated in
+    ///   descend-list order; the dominance walk is `for(;;)` from curBlock up
+    ///   `getImmedDom()` until trueBlock/falseBlock/splitPoint/null.
+    /// - 计数器/累加器: none; the seen_cond-style state lives inside
+    ///   restrictedByConditional (block.rs).
+    /// - 排序/比较键: block identity (pointer compare) for
+    ///   curBlock==true/false/split and `trueBlock->getIn(slot)==splitPoint`;
+    ///   MULTIEQUAL equations keyed to input `slot`; landmark added when the
+    ///   vn's ValueSet opCode is MULTIEQUAL.
     pub fn apply_constraints(
         &mut self,
-        _vn: &Arc<RwLock<Varnode>>,
-        _type_code: i32,
-        _range: &CircleRange,
-        _cbranch: &Arc<RwLock<PcodeOp>>,
+        vn: &Arc<RwLock<Varnode>>,
+        type_code: i32,
+        range: &CircleRange,
+        cbranch: &Arc<RwLock<PcodeOp>>,
     ) {
-        // TODO(RANGEUTIL-VSEMPTY-0001 residual): depends on unported
-        // FlowBlock::getTrueOut/getFalseOut, restrictedByConditional,
-        // getImmedDom, and PcodeOp::getParent wiring.
+        // cc:2108-2117: splitPoint = cbranch parent; boolean flip swaps the
+        // true/false out-edges.
+        let split_point = cbranch
+            .read()
+            .unwrap()
+            .parent
+            .as_ref()
+            .and_then(|w| w.upgrade());
+        let Some(split_point) = split_point else {
+            return; // Ghidra-unreachable: live CBRANCH always has a parent.
+        };
+        let (true_block, false_block) = {
+            let flip = cbranch.read().unwrap().is_boolean_flip();
+            let sp = split_point.read().unwrap();
+            let cbranch_ref = crate::op::PcodeOpRef(cbranch.clone());
+            if flip {
+                (sp.get_false_out(&cbranch_ref), sp.get_true_out(&cbranch_ref))
+            } else {
+                (sp.get_true_out(&cbranch_ref), sp.get_false_out(&cbranch_ref))
+            }
+        };
+        let (true_block, false_block) = match (true_block, false_block) {
+            (Some(t), Some(f)) => (t, f),
+            _ => return, // Ghidra-unreachable: CBRANCH block has both outs.
+        };
+        // cc:2119-2120: is the only path to the true/false block via a
+        // splitPoint out-edge induced by the condition?
+        let true_is_restricted = true_block.read().unwrap().restricted_by_conditional(&split_point);
+        let false_is_restricted = false_block.read().unwrap().restricted_by_conditional(&split_point);
+
+        // cc:2123-2128: leave a landmark for widening on MULTIEQUAL defs.
+        if vn.read().unwrap().is_written() {
+            if let Some(vs_id) = self.find_value_set_by_vn(vn) {
+                if self.value_nodes[vs_id].op_code == OpCode::CPUI_MULTIEQUAL {
+                    self.value_nodes[vs_id].add_landmark(type_code, range.clone());
+                }
+            }
+        }
+        // cc:2129-2172: walk every read of vn.
+        let descend_ops: Vec<Arc<RwLock<PcodeOp>>> = vn.read().unwrap().descend_iter().collect();
+        for op in descend_ops {
+            let mut out_vn: Option<Arc<RwLock<Varnode>>> = None;
+            if !op.read().unwrap().is_mark() {
+                // If this is not a special read site, make sure there is a
+                // Varnode in the system.
+                let Some(out) = op.read().unwrap().get_out().cloned() else {
+                    continue;
+                };
+                if !out.read().unwrap().is_mark() {
+                    continue;
+                }
+                out_vn = Some(out);
+            }
+            let Some(cur) = op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade()) else {
+                continue; // Ghidra-unreachable: live ops have a parent block.
+            };
+            let mut cur_block: Option<Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>> = Some(cur);
+            let Some(slot) = op.read().unwrap().slot_of_input(vn) else {
+                continue; // Ghidra-unreachable: iterating vn's descends.
+            };
+            let slot_i = slot as i32;
+            if op.read().unwrap().get_opcode() == OpCode::CPUI_MULTIEQUAL {
+                let in_true = cur_block.as_ref().is_some_and(|cb| Arc::ptr_eq(cb, &true_block));
+                let in_false = cur_block.as_ref().is_some_and(|cb| Arc::ptr_eq(cb, &false_block));
+                if in_true {
+                    // If it's possible that both the true and false edges can
+                    // reach trueBlock, the only input we can restrict is a
+                    // MULTIEQUAL input along the exact true edge.
+                    let along_true_edge = true_block
+                        .read()
+                        .unwrap()
+                        .get_in(slot)
+                        .map(|e| Arc::ptr_eq(&e.point, &split_point))
+                        .unwrap_or(false);
+                    if true_is_restricted || along_true_edge {
+                        self.generate_true_equation(out_vn.as_ref(), &op, slot_i, type_code, range.clone());
+                    }
+                    continue;
+                } else if in_false {
+                    // ... along the exact false edge.
+                    let along_false_edge = false_block
+                        .read()
+                        .unwrap()
+                        .get_in(slot)
+                        .map(|e| Arc::ptr_eq(&e.point, &split_point))
+                        .unwrap_or(false);
+                    if false_is_restricted || along_false_edge {
+                        self.generate_false_equation(out_vn.as_ref(), &op, slot_i, type_code, range.clone());
+                    }
+                    continue;
+                } else {
+                    // MULTIEQUAL input is really only from one in-block.
+                    cur_block = cur_block
+                        .and_then(|cb| cb.read().unwrap().get_in(slot).map(|e| e.point));
+                    if cur_block.is_none() {
+                        continue; // Ghidra-unreachable: slot < sizeIn.
+                    }
+                }
+            }
+            // cc:2157-2171: walk the dominance chain. A None cur_block exits
+            // without generating (cc:2168 curBlock == null → break).
+            loop {
+                let Some(cb) = cur_block else { break };
+                if Arc::ptr_eq(&cb, &true_block) {
+                    if true_is_restricted {
+                        self.generate_true_equation(out_vn.as_ref(), &op, slot_i, type_code, range.clone());
+                    }
+                    break;
+                } else if Arc::ptr_eq(&cb, &false_block) {
+                    if false_is_restricted {
+                        self.generate_false_equation(out_vn.as_ref(), &op, slot_i, type_code, range.clone());
+                    }
+                    break;
+                } else if Arc::ptr_eq(&cb, &split_point) {
+                    break;
+                }
+                cur_block = cb
+                    .read()
+                    .unwrap()
+                    .get_immed_dom()
+                    .and_then(|w| w.upgrade());
+            }
+        }
     }
 
     // Ghidra: rangeutil.cc:2185 ValueSetSolver::constraintsFromPath
-    /// Generate constraints given a Varnode path. Faithful to
-    /// `ValueSetSolver::constraintsFromPath` (rangeutil.cc:2185). Requires
-    /// `CircleRange::pullBack(PcodeOp*)` which needs full opbehavior wiring.
+    /// Generate constraints given a Varnode path. Knowing that there is a
+    /// lifting path from the given starting Varnode to an ending Varnode in
+    /// the system, lift the given range to a final constraint on the ending
+    /// Varnode, then look for reads of the Varnode where the constraint
+    /// applies. Faithful to `ValueSetSolver::constraintsFromPath`
+    /// (rangeutil.cc:2185-2203).
+    ///
+    /// Alignment Evidence (four decisive semantics):
+    /// - 引用/输出参数: `lift` is mutated in place by each pullBack (cc:2190/
+    ///   2199); equation attachment happens inside applyConstraints.
+    /// - 循环边界/遍历序: first loop `while(startVn != endVn)` walking defs
+    ///   via pullBack (usenzmask=false); second loop `for(;;)` applying
+    ///   constraints then walking endVn defs until unwritten / call / marker
+    ///   / pullBack-fail / unmarked.
+    /// - 计数器/累加器: none.
+    /// - 排序/比较键: Varnode identity (Arc::ptr_eq) for start/end; op gate
+    ///   via isCall()/isMarker(); system membership via isMark().
     pub fn constraints_from_path(
         &mut self,
-        _type_code: i32,
-        _lift: &mut CircleRange,
-        _start_vn: &Arc<RwLock<Varnode>>,
-        _end_vn: &Arc<RwLock<Varnode>>,
-        _cbranch: &Arc<RwLock<PcodeOp>>,
+        type_code: i32,
+        lift: &mut CircleRange,
+        start_vn: &Arc<RwLock<Varnode>>,
+        end_vn: &Arc<RwLock<Varnode>>,
+        cbranch: &Arc<RwLock<PcodeOp>>,
     ) {
-        // TODO(RANGEUTIL-VSEMPTY-0001 residual): depends on unported
-        // CircleRange::pullBack(PcodeOp*,...) which in turn needs PcodeOp
-        // input/const-markup traversal.
+        // cc:2188-2192: pull the lift range all the way back to endVn.
+        let mut start = start_vn.clone();
+        while !Arc::ptr_eq(&start, end_vn) {
+            let Some(def) = start.read().unwrap().get_def() else {
+                return; // Ghidra-unreachable: chain varnodes are written.
+            };
+            let Some(next) = lift.pull_back(&def, false) else {
+                return; // Couldn't pull all the way back to our value set.
+            };
+            start = next;
+        }
+        // cc:2193-2202: apply constraints along the path forward.
+        let mut end = end_vn.clone();
+        loop {
+            self.apply_constraints(&end, type_code, lift, cbranch);
+            if !end.read().unwrap().is_written() {
+                break;
+            }
+            let Some(op) = end.read().unwrap().get_def() else {
+                break; // Ghidra-unreachable: is_written implies def.
+            };
+            let (is_call, is_marker) = {
+                let g = op.read().unwrap();
+                (g.is_call(), g.is_marker())
+            };
+            if is_call || is_marker {
+                break;
+            }
+            let Some(next) = lift.pull_back(&op, false) else {
+                break;
+            };
+            end = next;
+            if !end.read().unwrap().is_mark() {
+                break;
+            }
+        }
     }
 
     // Ghidra: rangeutil.cc:2210 ValueSetSolver::constraintsFromCBranch
-    /// Lift the set of values on a CBRANCH condition to any Varnode in the
-    /// system. Faithful to `ValueSetSolver::constraintsFromCBranch`
-    /// (rangeutil.cc:2210).
-    pub fn constraints_from_cbranch(&mut self, _cbranch: &Arc<RwLock<PcodeOp>>) {
-        // TODO(RANGEUTIL-VSEMPTY-0001 residual): depends on unported
-        // CircleRange::pullBack(PcodeOp*,...) and Varnode defining-op
-        // traversal wiring.
+    /// Lift the set of values on the condition for the given CBRANCH to any
+    /// Varnode in the system, and label (the reads of) any such Varnode with
+    /// the constraint. If the values cannot be lifted or no Varnode in the
+    /// system is found, no constraints are generated. Faithful to
+    /// `ValueSetSolver::constraintsFromCBranch` (rangeutil.cc:2210-2238).
+    ///
+    /// Alignment Evidence (four decisive semantics):
+    /// - 引用/输出参数: none beyond solver mutation via
+    ///   generateRelativeConstraint / constraintsFromPath.
+    /// - 循环边界/遍历序: `while(!vn->isMark())` walking the condition chain
+    ///   via getIn(0) (or getIn(1) when in(0) is constant); breaks on
+    ///   unwritten / call / marker / numInput not in {1,2}.
+    /// - 计数器/累加器: none.
+    /// - 排序/比较键: isMark() decides system membership; both-inputs-
+    ///   non-constant triggers generateRelativeConstraint; the lift starts
+    ///   from the boolean-true range `CircleRange(true)` (mask=0xff, [1,2)).
+    pub fn constraints_from_cbranch(&mut self, cbranch: &Arc<RwLock<PcodeOp>>) {
+        // cc:2213: get Varnode deciding the condition.
+        let Some(mut vn) = cbranch.read().unwrap().get_in(1).cloned() else {
+            return; // Ghidra-unreachable: CBRANCH has an input 1.
+        };
+        while !vn.read().unwrap().is_mark() {
+            if !vn.read().unwrap().is_written() {
+                break;
+            }
+            let Some(op) = vn.read().unwrap().get_def() else {
+                break; // Ghidra-unreachable: is_written implies def.
+            };
+            let (is_call, is_marker) = {
+                let g = op.read().unwrap();
+                (g.is_call(), g.is_marker())
+            };
+            if is_call || is_marker {
+                break;
+            }
+            let num = op.read().unwrap().num_input();
+            if num == 0 || num > 2 {
+                break;
+            }
+            let Some(next) = op.read().unwrap().get_in(0).cloned() else {
+                break; // Ghidra-unreachable: op with numInput>0 has in(0).
+            };
+            vn = next;
+            if num == 2 {
+                if vn.read().unwrap().is_constant() {
+                    let Some(other) = op.read().unwrap().get_in(1).cloned() else {
+                        break; // Ghidra-unreachable.
+                    };
+                    vn = other;
+                } else if !op
+                    .read()
+                    .unwrap()
+                    .get_in(1)
+                    .map_or(false, |v| v.read().unwrap().is_constant())
+                {
+                    // If we reach here, both inputs are non-constant.
+                    self.generate_relative_constraint(&op, cbranch);
+                    return;
+                }
+                // If we reach here, vn is non-constant, other input constant.
+            }
+        }
+        // cc:2233-2237
+        if vn.read().unwrap().is_mark() {
+            let mut lift = CircleRange::boolean(true);
+            let Some(start_vn) = cbranch.read().unwrap().get_in(1).cloned() else {
+                return;
+            };
+            self.constraints_from_path(0, &mut lift, &start_vn, &vn, cbranch);
+        }
     }
 
     // Ghidra: rangeutil.cc:2248 ValueSetSolver::generateConstraints
-    /// Given a complete data-flow system of Varnodes, look for any constraint
-    /// due to branch conditions. Faithful to
-    /// `ValueSetSolver::generateConstraints` (rangeutil.cc:2248). Requires
-    /// FlowBlock domination queries.
+    /// Given a complete data-flow system of Varnodes, look for any
+    /// constraint: for a particular Varnode, a limited set of values, due to
+    /// its involvement in a branch condition, which applies at a particular
+    /// read of the Varnode. Faithful to `ValueSetSolver::generateConstraints`
+    /// (rangeutil.cc:2248-2307).
+    ///
+    /// Alignment Evidence (four decisive semantics):
+    /// - 引用/输出参数: block marks (`setMark`/`clearMark`) are the state;
+    ///   `blockList` marks are cleared before the finalList pass, whose
+    ///   marks dedupe split points and are cleared at the end.
+    /// - 循环边界/遍历序: worklist outer order; MULTIEQUAL defs walk dom
+    ///   chains of every in-block, other defs walk their own block's dom
+    ///   chain; reads walk their block's dom chain; finalList scans every
+    ///   in-edge j of every blockList entry.
+    /// - 计数器/累加器: none; each block enters blockList at most once
+    ///   (mark-checked before push).
+    /// - 排序/比较键: splitPoint qualifies iff not marked, `sizeOut()==2`,
+    ///   and `lastOp()` is a CBRANCH; mark reuse dedupes split points.
     pub fn generate_constraints(
         &mut self,
-        _worklist: &[Arc<RwLock<Varnode>>],
-        _reads: &[Arc<RwLock<PcodeOp>>],
+        worklist: &[Arc<RwLock<Varnode>>],
+        reads: &[Arc<RwLock<PcodeOp>>],
     ) {
-        // TODO(RANGEUTIL-VSEMPTY-0001 residual): depends on unported
-        // FlowBlock::getImmedDom/setMark/clearMark and BlockBasic::lastOp
-        // wiring.
+        type Blk = Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
+        let mut block_list: Vec<Blk> = Vec::new();
+        // cc:2253-2276: collect all blocks that contain a system op (input)
+        // or dominate a container.
+        for vn in worklist {
+            let Some(op) = vn.read().unwrap().get_def() else {
+                continue;
+            };
+            let Some(bl) = op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade()) else {
+                continue;
+            };
+            let is_multiequal = op.read().unwrap().get_opcode() == OpCode::CPUI_MULTIEQUAL;
+            if is_multiequal {
+                let n_in = bl.read().unwrap().size_in();
+                for j in 0..n_in {
+                    let mut cur = bl.read().unwrap().get_in(j).map(|e| e.point);
+                    while let Some(c) = cur {
+                        if c.read().unwrap().is_mark() {
+                            break;
+                        }
+                        c.write().unwrap().set_mark();
+                        block_list.push(c.clone());
+                        cur = c.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
+                    }
+                }
+            } else {
+                let mut cur = Some(bl);
+                while let Some(c) = cur {
+                    if c.read().unwrap().is_mark() {
+                        break;
+                    }
+                    c.write().unwrap().set_mark();
+                    block_list.push(c.clone());
+                    cur = c.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
+                }
+            }
+        }
+        // cc:2277-2285: reads.
+        for read_op in reads {
+            let Some(bl) = read_op.read().unwrap().parent.as_ref().and_then(|w| w.upgrade()) else {
+                continue;
+            };
+            let mut cur = Some(bl);
+            while let Some(c) = cur {
+                if c.read().unwrap().is_mark() {
+                    break;
+                }
+                c.write().unwrap().set_mark();
+                block_list.push(c.clone());
+                cur = c.read().unwrap().get_immed_dom().and_then(|w| w.upgrade());
+            }
+        }
+        // cc:2286-2287
+        for bl in &block_list {
+            bl.write().unwrap().clear_mark();
+        }
+
+        // cc:2289-2304: go through input blocks of the previously calculated
+        // blocks, looking for 2-out CBRANCH split points.
+        let mut final_list: Vec<Blk> = Vec::new();
+        for bl in &block_list {
+            let n_in = bl.read().unwrap().size_in();
+            for j in 0..n_in {
+                let Some(edge) = bl.read().unwrap().get_in(j) else {
+                    continue;
+                };
+                let split_point = edge.point.clone();
+                if split_point.read().unwrap().is_mark() {
+                    continue;
+                }
+                if split_point.read().unwrap().size_out() != 2 {
+                    continue;
+                }
+                let Some(last_op) = split_point.read().unwrap().last_op() else {
+                    continue;
+                };
+                if last_op.0.read().unwrap().get_opcode() == OpCode::CPUI_CBRANCH {
+                    split_point.write().unwrap().set_mark();
+                    final_list.push(split_point.clone());
+                    // Try to generate constraints from this splitPoint.
+                    self.constraints_from_cbranch(&last_op.0);
+                }
+            }
+        }
+        // cc:2305-2306
+        for bl in &final_list {
+            bl.write().unwrap().clear_mark();
+        }
     }
 
     // Ghidra: rangeutil.cc:2316 ValueSetSolver::checkRelativeConstant
@@ -3506,15 +3981,103 @@ impl ValueSetSolver {
     }
 
     // Ghidra: rangeutil.cc:2351 ValueSetSolver::generateRelativeConstraint
-    /// Try to find a relative constraint from a comparison op and a cbranch.
-    /// Faithful to `ValueSetSolver::generateRelativeConstraint`
-    /// (rangeutil.cc:2351).
+    /// Given a binary PcodeOp producing a conditional branch, check if it can
+    /// be interpreted as a constraint relative to (the) base register
+    /// specified for this system. If it can be, a relative Equation is
+    /// generated, which will apply to relative ValueSets. Faithful to
+    /// `ValueSetSolver::generateRelativeConstraint` (rangeutil.cc:2351-2406).
+    ///
+    /// Alignment Evidence (four decisive semantics):
+    /// - 引用/输出参数: `lift` (boolean-true range) is mutated in place by
+    ///   pullBackBinary; type/value are out params of checkRelativeConstant.
+    /// - 循环边界/遍历序: endVn walk `while(!endVn->isMark())` through
+    ///   COPY/PTRSUB in(0) and INT_ADD in(0) (with constant in(1) required).
+    /// - 计数器/累加器: `value` accumulates the relative offset inside
+    ///   checkRelativeConstant (masked by each constant's size).
+    /// - 排序/比较键: opcode remap INT_LESS→INT_SLESS / INT_LESSEQUAL→
+    ///   INT_SLESSEQUAL (unsigned pointer comparisons treated signed
+    ///   relative to the base register); pullBackBinary slot = the side NOT
+    ///   identified as the relative constant; outSize is 1 (boolean).
     pub fn generate_relative_constraint(
         &mut self,
-        _comp_op: &Arc<RwLock<PcodeOp>>,
-        _cbranch: &Arc<RwLock<PcodeOp>>,
+        comp_op: &Arc<RwLock<PcodeOp>>,
+        cbranch: &Arc<RwLock<PcodeOp>>,
     ) {
-        // TODO: depends on check_relative_constant + pullBackBinary wiring.
+        // cc:2354-2369
+        let mut opc = comp_op.read().unwrap().get_opcode();
+        match opc {
+            // Treat unsigned pointer comparisons as signed relative to the
+            // base register.
+            OpCode::CPUI_INT_LESS => opc = OpCode::CPUI_INT_SLESS,
+            OpCode::CPUI_INT_LESSEQUAL => opc = OpCode::CPUI_INT_SLESSEQUAL,
+            OpCode::CPUI_INT_SLESS
+            | OpCode::CPUI_INT_SLESSEQUAL
+            | OpCode::CPUI_INT_EQUAL
+            | OpCode::CPUI_INT_NOTEQUAL => {}
+            _ => return,
+        }
+        let mut type_code = 0i32;
+        let mut value = 0u64;
+        let (in_vn0, in_vn1) = {
+            let g = comp_op.read().unwrap();
+            (g.get_in(0).cloned(), g.get_in(1).cloned())
+        };
+        let (Some(in_vn0), Some(in_vn1)) = (in_vn0, in_vn1) else {
+            return; // Ghidra-unreachable: comparison op has both inputs.
+        };
+        let mut lift = CircleRange::boolean(true);
+        let vn: Arc<RwLock<Varnode>>;
+        // cc:2376-2387: which side looks like a relative constant?
+        if self.check_relative_constant(in_vn0.clone(), &mut type_code, &mut value) {
+            vn = in_vn1;
+            let size = vn.read().unwrap().get_size();
+            if !lift.pull_back_binary(opc, value, 1, size, 1) {
+                return;
+            }
+        } else if self.check_relative_constant(in_vn1.clone(), &mut type_code, &mut value) {
+            vn = in_vn0;
+            let size = vn.read().unwrap().get_size();
+            if !lift.pull_back_binary(opc, value, 0, size, 1) {
+                return;
+            }
+        } else {
+            return; // Neither side looks like a relative constant.
+        }
+        // cc:2389-2404: walk to the system Varnode.
+        let mut end_vn = vn.clone();
+        while !end_vn.read().unwrap().is_mark() {
+            if !end_vn.read().unwrap().is_written() {
+                return;
+            }
+            let Some(op) = end_vn.read().unwrap().get_def() else {
+                return; // Ghidra-unreachable: is_written implies def.
+            };
+            let code = op.read().unwrap().get_opcode();
+            if code == OpCode::CPUI_COPY || code == OpCode::CPUI_PTRSUB {
+                let Some(next) = op.read().unwrap().get_in(0).cloned() else {
+                    return; // Ghidra-unreachable.
+                };
+                end_vn = next;
+            } else if code == OpCode::CPUI_INT_ADD {
+                // Can pull-back through INT_ADD if second param is constant.
+                let const_ok = op
+                    .read()
+                    .unwrap()
+                    .get_in(1)
+                    .map_or(false, |c| c.read().unwrap().is_constant());
+                if !const_ok {
+                    return;
+                }
+                let Some(next) = op.read().unwrap().get_in(0).cloned() else {
+                    return; // Ghidra-unreachable.
+                };
+                end_vn = next;
+            } else {
+                return;
+            }
+        }
+        // cc:2405
+        self.constraints_from_path(type_code, &mut lift, &vn, &end_vn, cbranch);
     }
 
     // Ghidra: rangeutil.cc:2416 ValueSetSolver::establishValueSets
@@ -4081,6 +4644,206 @@ mod value_set_tests {
         // Marks were cleared by establishValueSets.
         assert!(!sum_vn.read().unwrap().is_mark());
         assert!(!stack_reg.read().unwrap().is_mark());
+    }
+
+    // RANGEUTIL-CONSTGEN-0001 regression: CircleRange::pullBack(PcodeOp*)
+    // (cc:1022) — binary comparison arm. `lift` starts as boolean-true
+    // (CircleRange(true) = [1,2)@0xff); pulling back through
+    // INT_LESS(x, 5) yields x with the true-branch range [0,5)@size(x).
+    #[test]
+    fn test_circle_range_pull_back_binary_less() {
+        use crate::address::{Address, SeqNum};
+        use std::sync::{Arc, RwLock};
+
+        let x = Arc::new(RwLock::new(Varnode::new_unique(0x2000, 4)));
+        let c5 = Arc::new(RwLock::new(Varnode::new_constant(5, 4)));
+        let bool_vn = Arc::new(RwLock::new(Varnode::new_unique(0x2001, 1)));
+        let less_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_LESS,
+        )));
+        less_op.write().unwrap().inrefs.push(x.clone());
+        less_op.write().unwrap().inrefs.push(c5.clone());
+        less_op.write().unwrap().output = Some(bool_vn.clone());
+
+        let mut lift = CircleRange::boolean(true);
+        let res = lift.pull_back(&less_op, false);
+        let res = res.expect("pull back through INT_LESS(x, 5)");
+        assert!(Arc::ptr_eq(&res, &x), "returns the non-constant input");
+        assert_eq!(lift.get_left(), 0);
+        assert_eq!(lift.get_end(), 5);
+        assert_eq!(lift.get_mask(), 0xffff_ffff);
+
+        // Constant slot swap: INT_LESS(5, x) restricts slot 1 → x >= 6,
+        // i.e. [6, 0) wrapping in 4 bytes.
+        let less2 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1002), 1),
+            OpCode::CPUI_INT_LESS,
+        )));
+        less2.write().unwrap().inrefs.push(c5.clone());
+        less2.write().unwrap().inrefs.push(x.clone());
+        less2.write().unwrap().output = Some(bool_vn.clone());
+        let mut lift2 = CircleRange::boolean(true);
+        let res2 = lift2.pull_back(&less2, false).expect("slot-1 pull back");
+        assert!(Arc::ptr_eq(&res2, &x));
+        assert_eq!(lift2.get_left(), 6);
+        assert_eq!(lift2.get_end(), 0);
+
+        // Both inputs non-constant → None.
+        let y = Arc::new(RwLock::new(Varnode::new_unique(0x2002, 4)));
+        let less3 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1004), 1),
+            OpCode::CPUI_INT_LESS,
+        )));
+        less3.write().unwrap().inrefs.push(x.clone());
+        less3.write().unwrap().inrefs.push(y.clone());
+        less3.write().unwrap().output = Some(bool_vn.clone());
+        let mut lift3 = CircleRange::boolean(true);
+        assert!(lift3.pull_back(&less3, false).is_none());
+    }
+
+    // RANGEUTIL-CONSTGEN-0001 regression: pullBack SUBPIECE nzmask salvage
+    // (cc:1053-1064) + final nzmask intersect (cc:1075-1082). Truncating a
+    // size-8 value whose high 4 bytes are known zero (nzm = 0xffff_ffff) to
+    // size 4: without usenzmask this fails; with it the pull-back survives,
+    // the mask expands to 8 bytes, and the nzmask range [0,0x1_0000_0000)
+    // keeps the boolean range [1,2).
+    #[test]
+    fn test_circle_range_pull_back_subpiece_salvage() {
+        use crate::address::{Address, SeqNum};
+        use std::sync::{Arc, RwLock};
+
+        let x8 = Arc::new(RwLock::new(Varnode::new_unique(0x3000, 8)));
+        x8.write().unwrap().nzm = 0xffff_ffff; // high bytes known zero
+        let c0 = Arc::new(RwLock::new(Varnode::new_constant(0, 8)));
+        let out4 = Arc::new(RwLock::new(Varnode::new_unique(0x3001, 4)));
+        let sub = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_SUBPIECE,
+        )));
+        sub.write().unwrap().inrefs.push(x8.clone());
+        sub.write().unwrap().inrefs.push(c0.clone());
+        sub.write().unwrap().output = Some(out4.clone());
+
+        // usenzmask=false → SUBPIECE has no pullBackBinary arm → None.
+        let mut lift_a = CircleRange::boolean(true);
+        assert!(lift_a.pull_back(&sub, false).is_none());
+
+        // usenzmask=true → salvage + intersect.
+        let mut lift = CircleRange::boolean(true);
+        let res = lift.pull_back(&sub, true).expect("SUBPIECE salvage");
+        assert!(Arc::ptr_eq(&res, &x8));
+        // Mask expanded to the full 8-byte input domain; the nzmask
+        // intersection keeps [1,2) valid under the bigger mask.
+        assert_eq!(lift.get_mask(), u64::MAX);
+        assert_eq!(lift.get_left(), 1);
+        assert_eq!(lift.get_end(), 2);
+    }
+
+    // RANGEUTIL-CONSTGEN-0001 regression: the full constraint-generation
+    // chain (generateConstraints → constraintsFromCBranch →
+    // constraintsFromPath → applyConstraints). A CBRANCH `if (x <u 5)`
+    // splits b1 into true b2 / false b3; a LOAD reads x inside the true
+    // block b2. The read node must carry the true-branch equation
+    // [0,5)@4 so the solved read range narrows from x's full range.
+    #[test]
+    fn test_generate_constraints_true_branch_equation() {
+        use crate::address::{Address, SeqNum};
+        use crate::block::{BlockBasic, BlockGraph};
+        use std::sync::{Arc, RwLock};
+
+        type BlockArc = Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>;
+
+        // Varnodes: i0 (input, full range), x = COPY(i0), c5, bool, tgt,
+        // space id.
+        let i0 = Arc::new(RwLock::new(Varnode::new_unique(0x4000, 4)));
+        let x = Arc::new(RwLock::new(Varnode::new_unique(0x4001, 4)));
+        let c5 = Arc::new(RwLock::new(Varnode::new_constant(5, 4)));
+        let bool_vn = Arc::new(RwLock::new(Varnode::new_unique(0x4002, 1)));
+        let tgt = Arc::new(RwLock::new(Varnode::new_constant(0x2100, 4)));
+        let space = Arc::new(RwLock::new(Varnode::new_constant(0, 8)));
+
+        // Ops.
+        let copy_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_COPY,
+        )));
+        copy_op.write().unwrap().inrefs.push(i0.clone());
+        copy_op.write().unwrap().output = Some(x.clone());
+        let less_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1100), 1),
+            OpCode::CPUI_INT_LESS,
+        )));
+        less_op.write().unwrap().inrefs.push(x.clone());
+        less_op.write().unwrap().inrefs.push(c5.clone());
+        less_op.write().unwrap().output = Some(bool_vn.clone());
+        let cbranch = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1104), 2),
+            OpCode::CPUI_CBRANCH,
+        )));
+        cbranch.write().unwrap().inrefs.push(tgt.clone());
+        cbranch.write().unwrap().inrefs.push(bool_vn.clone());
+        let load_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1200), 1),
+            OpCode::CPUI_LOAD,
+        )));
+        load_op.write().unwrap().inrefs.push(space.clone());
+        load_op.write().unwrap().inrefs.push(x.clone());
+
+        // WRITTEN flags + def/descend wiring.
+        x.write().unwrap().flags |= crate::varnode::varnode_flags::WRITTEN;
+        x.write().unwrap().def = Some(Arc::downgrade(&copy_op));
+        bool_vn.write().unwrap().flags |= crate::varnode::varnode_flags::WRITTEN;
+        bool_vn.write().unwrap().def = Some(Arc::downgrade(&less_op));
+        i0.write().unwrap().descend.push(Arc::downgrade(&copy_op));
+        x.write().unwrap().descend.push(Arc::downgrade(&less_op));
+        x.write().unwrap().descend.push(Arc::downgrade(&load_op));
+        c5.write().unwrap().descend.push(Arc::downgrade(&less_op));
+        bool_vn.write().unwrap().descend.push(Arc::downgrade(&cbranch));
+        tgt.write().unwrap().descend.push(Arc::downgrade(&cbranch));
+        space.write().unwrap().descend.push(Arc::downgrade(&load_op));
+
+        // Block graph: b0 → b1 → {false b3 (out0), true b2 (out1)}.
+        let b0: BlockArc = Arc::new(RwLock::new(BlockBasic::new(0, Address::new(0x1000))));
+        let b1: BlockArc = Arc::new(RwLock::new(BlockBasic::new(1, Address::new(0x1100))));
+        let b2: BlockArc = Arc::new(RwLock::new(BlockBasic::new(2, Address::new(0x1200))));
+        let b3: BlockArc = Arc::new(RwLock::new(BlockBasic::new(3, Address::new(0x1300))));
+        let mut graph = BlockGraph::new();
+        graph.add_block(b0.clone());
+        graph.add_block(b1.clone());
+        graph.add_block(b2.clone());
+        graph.add_block(b3.clone());
+        graph.add_edge(b0.clone(), b1.clone());
+        graph.add_edge(b1.clone(), b3.clone()); // out0 = FALSE
+        graph.add_edge(b1.clone(), b2.clone()); // out1 = TRUE
+        // Dominators (b2/b3 dominated by b1).
+        let rpo = graph.calc_rpo();
+        graph.calc_forward_dominator_on(&rpo, &[b0.clone()]).unwrap();
+        // Ops into blocks (add_block installed self_ref → op.parent wired).
+        b0.write().unwrap().add_op(crate::op::PcodeOpRef(copy_op.clone()));
+        b1.write().unwrap().add_op(crate::op::PcodeOpRef(less_op.clone()));
+        b1.write().unwrap().add_op(crate::op::PcodeOpRef(cbranch.clone()));
+        b2.write().unwrap().add_op(crate::op::PcodeOpRef(load_op.clone()));
+
+        // Solver: sink = the guard pointer x, read = the LOAD.
+        let mut solver = ValueSetSolver::new();
+        solver.establish_value_sets(&[x.clone()], &[load_op.clone()], None, false);
+        let widener = WidenerNone::new();
+        solver.solve(10000, &widener);
+
+        // The read node carries the true-branch equation [0,5)@4 and the
+        // solved range narrowed from x's full (COPY of an input) range.
+        let seq = load_op.read().unwrap().get_seq_num().clone();
+        let read = solver.get_value_set_read(&seq).expect("read node");
+        assert_eq!(read.equation_type_code, 0);
+        assert_eq!(read.equation_constraint.get_left(), 0);
+        assert_eq!(read.equation_constraint.get_end(), 5);
+        assert!(!read.get_range().is_empty());
+        assert_eq!(read.get_range().get_left(), 0);
+        assert_eq!(read.get_range().get_end(), 5);
+        // Marks cleared by establishValueSets.
+        assert!(!x.read().unwrap().is_mark());
+        assert!(!load_op.read().unwrap().is_mark());
     }
 
     #[test]

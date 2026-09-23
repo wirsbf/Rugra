@@ -3,10 +3,13 @@
 **源代码路径**: `src/rangeutil.rs`
 **Ghidra 对应**: `rangeutil.hh` / `rangeutil.cc` (3015行)
 **状态**: 🔧 **L2**——CircleRange 全方法 + ValueSetSolver 填充/迭代主链路实跑
-（RANGEUTIL-VSEMPTY-0001 修复，2026-09-23）；约束生成族（applyConstraints/
-constraintsFromCBranch/generateConstraints 等）仍为结构占位（差分门禁口径：改动经
-curl/httpd E2E + gp/next_url/match_url/parseconfig 投影验证）。51 单元测试
-（2026-09-23 CR8 返工 +2：operator== 双空语义 / circle_union wrapping 合并）。
+（RANGEUTIL-VSEMPTY-0001 修复，2026-09-23）+ 约束生成族全量
+（RANGEUTIL-CONSTGEN-0001，2026-09-23：applyConstraints/constraintsFromPath/
+constraintsFromCBranch/generateConstraints/generateRelativeConstraint/
+CircleRange::pullBack(PcodeOp*)）（差分门禁口径：改动经
+curl/httpd E2E + gp/next_url/match_url/parseconfig 投影验证）。54 单元测试
+（2026-09-23 CR8 返工 +2：operator== 双空语义 / circle_union wrapping 合并；
+RANGEUTIL-CONSTGEN-0001 +3）。
 
 ## 模块说明
 
@@ -114,7 +117,13 @@ curl/httpd E2E + gp/next_url/match_url/parseconfig 投影验证）。51 单元�
 - `solve(max, widener)`（cc:2524）——主迭代循环，component 栈 + isDirty 重启 + widener 重置。
 - `establish_value_sets(sinks, reads, stack_reg, indirect_as_copy)`（cc:2416）——构建数据流系统（2026-09-23 全量 worklist 扩展接通）。
 - `generate_true_equation` / `generate_false_equation`（cc:2066/2084）。
-- 结构占位（待 FlowBlock 支配查询 + CircleRange::pullBack(PcodeOp*) 接入）：`apply_constraints`（cc:2105）/`constraints_from_path`（cc:2185）/`constraints_from_cbranch`（cc:2210）/`generate_constraints`（cc:2248）/`check_relative_constant`（cc:2316）/`generate_relative_constraint`（cc:2351）。
+- `apply_constraints(vn, type_code, range, cbranch)`（cc:2105）——2026-09-23 全量（RANGEUTIL-CONSTGEN-0001）：splitPoint/boolean-flip 真假出边、restrictedByConditional、MULTIEQUAL landmark（addLandmark@numParams）、descend 遍历 + MULTIEQUAL 精确边槽位限制 + 支配链上溯生成真假方程。
+- `constraints_from_path(type_code, lift, start_vn, end_vn, cbranch)`（cc:2185）——2026-09-23 全量：`CircleRange::pull_back(PcodeOp*)` 回拉至系统 varnode 后沿 def 链 apply_constraints。
+- `constraints_from_cbranch(cbranch)`（cc:2210）——2026-09-23 全量：条件链回溯（unwritten/call/marker/numInput∉{1,2} 截断）、双非常量输入转 generate_relative_constraint、boolean(true) lift 起步。
+- `generate_constraints(worklist, reads)`（cc:2248）——2026-09-23 全量：系统块支配链收集（MULTIEQUAL 全入块）、读点块链、blockList 清标后扫入边找 2 出边 CBRANCH splitPoint、finalList 去重清标。
+- `check_relative_constant(vn, &mut type_code, &mut value)`（cc:2316）。
+- `generate_relative_constraint(comp_op, cbranch)`（cc:2351）——2026-09-23 全量：INT_LESS/LESSEQUAL→SLESS/SLESSEQUAL 重映射、checkRelativeConstant 两侧判定、COPY/PTRSUB/INT_ADD(const in1) 链回溯后 constraintsFromPath(typeCode)。
+- `CircleRange::pull_back(op, usenzmask)`（cc:1022）——2026-09-23 新增（RANGEUTIL-CONSTGEN-0001）：op 级回拉（一元/二元非常量槽位、SUBPIECE nzmask 补救臂 cc:1053-1064、末尾 setNZMask 交集 cc:1075-1082）；C++ `constMarkup` 出参在本路径观测死代码，RUGRA-GLUE 省略（注释说明）。
 - `ValueSetEdge`（hh:281）——出边迭代器，预收集后继 id。
 
 **`pub struct ValueSetInput`**（RUGRA-GLUE，**2026-09-23 移除**）——旧的 `iterate`
@@ -188,17 +197,55 @@ range，LoadGuard 停在 establish 全窗臂。
 INT_ADD 收敛 [0x40,0x41) type=1，read 节点镜像）；test_push_forward_add 期望
 修为 C++ 公式值 [5,24)。
 
-**验证**：rangeutil 51/51（CR8 返工后）；curl/httpd E2E 差分、getparameter/next_url/
+**验证**：rangeutil 54/54（CR8 返工 + RANGEUTIL-CONSTGEN-0001 后）；curl/httpd E2E 差分、getparameter/next_url/
 match_url/parseconfig 双投影 bisect（见 TODO_BOARD RANGEUTIL-VSEMPTY-0001 行）。
 
-## 已知基础设施缺口（约束生成族仍为结构占位）
-- `FlowBlock` 支配查询（`getImmedDom`/`restrictedByConditional`/`getTrueOut`/
-  `getFalseOut`）未接入 → `apply_constraints`（cc:2105）/
-  `constraints_from_path`（cc:2185）/`constraints_from_cbranch`（cc:2210）/
-  `generate_constraints`（cc:2248）/`generate_relative_constraint`（cc:2351）
-  为结构占位；约束只会收窄，缺失只导致守卫偏宽（过度保护）。
-- `check_relative_constant`（cc:2316）依赖同样的 defining-op 链遍历，待接线。
+## 2026-09-23：RANGEUTIL-CONSTGEN-0001——约束生成族全量移植
+
+**根因**：EI 之后 establish/iterate 真实，但 finalize（WidenerFull）对 load 守卫
+爆窗（size≈0x2fffffb70 vs oracle 窄窗）——landmark/equation 只能来自约束生成
+族，而 applyConstraints/constraintsFromPath/constraintsFromCBranch/
+generateConstraints/generateRelativeConstraint 全为结构壳，前置缺口=
+CircleRange::pullBack(PcodeOp*) op 级回拉。
+
+**修复**（全部对照 rangeutil.cc 锁定 oracle 逐行）：
+- `CircleRange::pull_back(op, usenzmask)`（cc:1022-1084）：一元臂/二元槽位臂/
+  SUBPIECE nzmask 补救（mostsigbit_set(nzm)+8)/8 与 outSize 比较、mask 扩展）/
+  setNZMask 集合交集（2 段失败保留原范围仍算成功）。
+- `apply_constraints`（cc:2105-2173）：boolean-flip 真假出边对调、
+  restrictedByConditional 双侧、MULTIEQUAL ValueSet 加 landmark
+  （addLandmark=equation@slot numParams）、descend 顺序遍历、read-site
+  （op mark）旁路 outVn 检查、MULTIEQUAL 真假块精确入边槽位限制、
+  getImmedDom 支配链上溯（null/splitPoint 终止）。
+- `constraints_from_path`（cc:2185-2203）：while startVn!=endVn pullBack 回拉 +
+  for(;;) apply/def 前进（isCall/isMarker/pullBack 失败/unmark 终止）。
+- `constraints_from_cbranch`（cc:2210-2238）：条件链 while(!isMark) 回溯
+  （in(0) 常量换 in(1)；双非常量 → generate_relative_constraint 提前返回），
+  命中系统后 CircleRange(true) lift + constraintsFromPath(0,...)。
+- `generate_constraints`（cc:2248-2307）：worklist def 块（MULTIEQUAL 遍历全部
+  入块）+ reads 块的支配链 mark 收集 → blockList；清标后对 blockList 每块每
+  入边找未标、2 出边、lastOp==CBRANCH 的 splitPoint（mark 去重）→
+  constraintsFromCBranch；finalList 清标。
+- `generate_relative_constraint`（cc:2351-2406）：比较码重映射
+  （INT_LESS→SLESS 等）、checkRelativeConstant 两侧（先 in0 后 in1）、
+  pullBackBinary(slot 对侧, outSize=1)、COPY/PTRSUB/INT_ADD(常量 in1) 链回溯
+  至标记 varnode、constraintsFromPath(typeCode)。
+- heritage.rs `analyze_new_load_guards` 的 "Known residual" 注释同步为已实现。
+
+**测试**：+3（`test_circle_range_pull_back_binary_less`——真臂 [0,5)/slot 换位
+[6,0)/双常量 None；`test_circle_range_pull_back_subpiece_salvage`——无
+usenzmask 失败/usenzmask 补救+8 字节 mask+nzm 集交；`test_generate_constraints_
+true_branch_equation`——四块图 CBRANCH 真块 LOAD 读点方程 [0,5)@4 全链 + solve
+后读范围收窄）。
+
+## 已知基础设施缺口
 - `Varnode::getValueSet()` 反向指针未实现 → solver 用 arena 扫描
   （`find_value_set_by_vn`）替代。
+- `CircleRange::pullBack` 的 `constMarkup` 出参省略（RUGRA-GLUE）：本路径
+  调用方（constraintsFromPath/generateRelativeConstraint）从不读回；
+  消费者在 jumptable.cc 与 RuleRangeMeld 的 copySymbolIfValid（域外）。
+- FlowBlock trait 的 mark 方法默认 no-op，仅 BlockBasic/BlockCopy 覆写——
+  求解器运行的未结构化图中全部为 BlockBasic（Ghidra cc:2294 的
+  `(BlockBasic*)bl->getIn(j)` 未检查转型同构），无观测差异。
 
 测试：新增 21 个（rangeutil::value_set_tests），覆盖 Equation/ValueSet 构造与访问器、add_equation 有序性、does_equation_apply、compute_type_code、WidenerFull/WidenerNone、ValueSetRead::compute/add_equation、circle_union/circle_intersect/minimal_container、print_range_raw、encode_range_overlaps。全部通过（1026/1026）。

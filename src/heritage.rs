@@ -3366,11 +3366,10 @@ impl Heritage {
     /// `[0, highest]` range, so RuleIndirectCollapse's store-guard arm
     /// (ruleaction.cc:3203-3218) never collapsed stack INDIRECTs.
     ///
-    /// Known residual: the solver's branch-condition constraint machinery
-    /// (rangeutil.rs applyConstraints/constraintsFromCbranch/
-    /// generateConstraints) is still stubbed, so ranges can be wider than
-    /// Ghidra's (constraints only ever narrow). A wider guard range only
-    /// over-protects (keeps INDIRECTs), never under-protects.
+    /// The solver's branch-condition constraint machinery
+    /// (applyConstraints/constraintsFromCbranch/generateConstraints/
+    /// generateRelativeConstraint, RANGEUTIL-CONSTGEN-0001) is implemented;
+    /// constraints only ever narrow guard ranges.
     pub fn analyze_new_load_guards(&mut self, fd: &mut Funcdata) {
         // cc:837-846: nothingToDo — only the back of each list is checked
         let mut nothing_to_do = true;
