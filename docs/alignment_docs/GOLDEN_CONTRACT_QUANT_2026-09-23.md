@@ -210,6 +210,11 @@ vs 仍在(=库级真实残差)"。量化答案(§3.2/§3.3):
 - httpd 全量(467 fns)对 direct 侧 2 defects:`ap_parse_uri` 空 else(line 16)、
   `ap_invoke_handler` 空 else(line 57)。29 函数门禁面外暴露,非本 lane 引入(零 src 改动),
   建议登记 TODO 并归入 L2 仪表盘初始 backlog。
+- httpd 全量 3 个未完成函数(470 试图、467 完成、3 skipped/failed,当前 bf3f5064 二进制):
+  `pcre_exec`(worker panic:`src/varnode.rs:2565:17: Free varnode has multiple descendants`,
+  隔离在单函数 worker 内未炸进程)、`ap_build_cont_config` 与 `ap_log_rerror`
+  (`WARNING: Type propagation algorithm not settling` 非收敛)。均为门禁面外预存信号,
+  建议 root 登记 TODO(varnode 不变式 / 类型传播收敛各一条)。
 - 桥接层原型轴重灾户(my_get_line/glob_word/ap_process_resource_config 等,Rd−Rc>+500)
   与 DP 移交项⑤同所指,若未来做 L2 收敛,优先级应给 `C=D≠R` 而非桥接差本身。
 
@@ -227,6 +232,14 @@ vs 仍在(=库级真实残差)"。量化答案(§3.2/§3.3):
   worktree 干净树重建 release 并复跑全部 E2E(2561/2333 0/0 双双复现),陈旧产物
   (rugra_curl.c/rugra_httpd.c/rugra_httpd840.c)已从 lane 产物目录清除。教训:接手
   中断会话的 E2E 产物必须先做基线复核再消费。
+- **前任孤儿提交的数字已被本报告取代**:前任会话的孤儿 shell 在 13:08:55 落了
+  5e93d30b(本 lane 分支上、基于上述陈旧产物的 census 版报告),其关键数字
+  (`C=D≠R` 45 curl/2106 httpd840 行、"43 canonical-exact 函数")均为陈旧/截断
+  (225 函数)数据派生;e285264b 起以新鲜完整数据为准(`C=D≠R` 63/4661、44 函数)。
+  其登记的 open item "httpd MAX_FUNCS=840 segv at ap_core_input_filter (#227)" 同时
+  结案:新鲜二进制下全量 840 跑完成(467+3),`ap_core_input_filter`(0x3e940)正常
+  反编译——该 crash 为陈旧二进制伪象,真实残留为 §6 的 3 个未完成函数(不同函数、
+  不同失效模式)。
 
 ## 8. 复现命令
 
