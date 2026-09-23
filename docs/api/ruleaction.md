@@ -1596,4 +1596,39 @@ defects/numbering 保持 0,`(0 - ` 残留 30→0。
   `test_rule_range_meld_markup_propagates_to_new_constant`（`(V<5)||(V==5)`
   合并常量 6 携带 c5 的 equate SymbolEntry）。
 
-- 2026-09-23: CR14 observation — RuleSubRight and getAddr anchor corrections (7238/7245/7251; getAddr inline header).
+## 2026-09-24：AddTreeState pRelType 机制补全（MYPROGRESS-OPPOOL2-CONSTSPLIT-0001 归因交付，ruleaction.cc:5992-6069/6236-6241/6314-6336）
+
+- 归因（锁定 oracle e40ed130 双侧 drill + 作用域 dump 实证）：myprogress 首分歧
+  ord 150 `mainloop:oppool2` 的互补 ±1 常量拆分定位到
+  `AddTreeState::calc_subtype` TYPE_SPACEBASE 臂的 `hasMatchingSubType`
+  `extra`——oracle 对 `RSP(i)+(RCX+#-55)` 答出 extra=1（PTRSUB `#-0x38` +
+  INT_ADD `#0x238`），rugra 恒答 extra=0（`#-0x37`+`#0x237`）。parseconfig
+  ord 186 同族（`#-0x4e8`+`#0x4e8` vs `#-0x4f0`+`#0x4f0`，extra=8 vs 0）。
+  rugra 恒 0 的两层原因：①`TypeSpacebase.scope` 装的是 typefactory 创建期
+  的全局 scope 克隆（typefactory.rs:1966-1973），从不查活跃 ScopeLocal——
+  ord150 时活跃映射为 `$$undef2[-0x138,-0x30)` 264 字节数组（吞并 oracle
+  outline[-0x138,-0x38) 256 与 [-0x38,-0x30) 8 的边界）+`$$undef3[-0x30,-0x28)`
+  8B，与 oracle 边界不同（varmap restructure 域）；②Ghidra 的 extra 还有
+  TypePointerRel 路径（ctor 6032-6037 以 `getAddressOffset()` 播种
+  nonmultsum）——Rugra facing type 实测为 plain `Pointer→Spacebase`
+  （`IS_PTRREL=false`），该路径 dormant。两层喂入端均不在本 write-set。
+- 本次交付（ruleaction.cc 逐行对照）：`AddTreeState` 补 `ct`/`p_rel` 字段与
+  pRelType 全机制——ctor 6032-6037（formal 相对指针：baseType=parent、
+  nonmultsum=getAddressOffset()&ptrmask 播种）、`clear` 5980-5983 重播种、
+  `init_alternate_form` 5999-6016 完整体（弃相对解释→baseType/size/
+  isDegenerate 按 ptrTo 重导+preventDistribution 复位+clear）、
+  `span_add_tree` 6236-6241（multsum!=0 ‖ nonmultsum>=size(无符号比) ‖
+  multiple 非空 → valid=false）、calc_subtype STRUCT 臂 6314-6320
+  （offset==getAddressOffset() 时 `pointer_rel_evaluate_thru_parent(0)`
+  失败→valid=false 走 basic 形态）与尾部 6332-6336（offset/correct 各减
+  ptrOff）。Rugra 相对指针为 TypePointer 扁平态（`IS_PTRREL`+
+  `base.pointer_rel{offset,parent}`），`ptr_rel_state` 即
+  `isFormalPointerRel()`+getAddressOffset/getParent 的所有权镜像。
+- 行为验证：当前管线 facing type 无 rel 指针 → 全路径 dormant，四个投影
+  （myprogress ord150 不变/next_url MATCH/match_url MATCH/parseconfig
+  ord186 不变）与 curl/httpd E2E 输出字节级不变；pRelType 路径的行为对齐
+  状态为 UNTESTED（喂入端 typeop 传播/`get_type_read_facing` 的
+  findResolve（现 identity）补齐前无 oracle 可跑），绑定
+  MYPROGRESS-OPPOOL2-CONSTSPLIT-0001 的后继 TODO（varmap 边界+spacebase
+  活跃 scope 接线+hasMatchingSubType arrayHint 路径）。
+
