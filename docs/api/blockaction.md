@@ -1101,6 +1101,13 @@ interior-goto 标记。
   无 Ghidra 对应物）：`RUGRA_BS_DUMP=1` 时在 selectGoto exhausted 位点
   （blockaction.cc:1275 LowlevelError 站点）dump 全图 in/out/flags 状态，
   用于结构化分叉 triage。
+- `debug_dump_graph` 地址列（2026-09-24，PRINTC-GOTOSTRUCT-RESID-0001）：
+  每行增加 `addr=` 首叶起始地址（`dbg_front_leaf_start_addr`，含 BlockCopy
+  下钻），供块索引↔地址映射；`RUGRA_BS_DUMP=3` 时在 collapseAll 首轮
+  collapseInternal 之后（cc:1888/1889 之间）输出 `stuck1` 全图 dump——
+  oracle 同位点的 collapseInternal 残留态对照（插桩 oracle 侧证据见
+  /dev/shm/rugra-reports/LANE_FK_GOTOSTRUCT_2026-09-24.md）。默认关闭，
+  零行为变化。
 - `collapse_internal_rules` 内 `bs_try!` 宏：`RUGRA_BS_TRACE=1` 时打印
   每条规则命中（规则名 + 块索引）。默认关闭，零行为变化。
 
