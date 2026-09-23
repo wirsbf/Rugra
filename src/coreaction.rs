@@ -3663,6 +3663,14 @@ impl Action for ActionSwitchNorm {
         // action regardless of the local counter.
         Ok(action_status::NO_CHANGE)
     }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:4557/4561 `count += 1`) into the Rust ActionState
+    // accumulator harvested by Action::perform (action.cc:319 calls apply,
+    // 327-329 examine the grown member, 361 `return count`).
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
+    }
     // RUGRA-GLUE: Rust Action trait get_name; "switchnorm" mirrors ctor at coreaction.hh:609
     fn get_name(&self) -> &str { "switchnorm" }
 }

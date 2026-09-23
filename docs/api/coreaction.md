@@ -2761,6 +2761,34 @@ glob_range/glob_url/next_url 逐函数 0/0；确定性双跑（E2E stdout sha256
 （spacebase 臂族）仍以 alttype 尺寸建指针——测试路径 twin，未在本 lane write-set
 内，留待 typeop 域收敛。
 
+### 2026-09-23（GETPARAM-SWITCHNORM-0001）：ActionSwitchNorm count 外化（take_count_delta）
+
+`ActionSwitchNorm` 补齐 `take_count_delta` 覆盖（16 个既有覆盖同一适配族）：
+Ghidra `Action::perform`（action.cc:319 调 apply、327-329 检查成员增量、
+361 `return count`）读取 apply 内 `count += 1`（coreaction.cc:4557 未标注臂 /
+4561 foldInGuards 臂）积累的成员并作为返回值上报。Rugra 侧该成员此前无人收割
+（默认 `take_count_delta` 恒 0），apply 体虽忠实执行（unlabelled 表
+match_model/recover_labels/fold_in_normalization + 全表 fold_in_guards 照跑），
+但 stage 投影的 result/count/apply 恒报 0——getparameter 投影 ord155
+`universal:fullloop:switchnorm` oracle=2/2/1 vs rugra=0/0/0 的"缺 fire 型"分歧
+即此（ET RANGEUTIL-CONSTGEN-0001 后首分歧）。修复后 ord155 逐字段
+`result=2 count=2 tests=0 apply=1`==oracle（表实况:1 表 unlabelled+fold 成功
+=2 计数;ord299/340 labelled+fold false=0,亦==oracle）,投影首分歧 155→186
+（+31 stages;186 分歧=oppool2 新建 switch 表寻址 op 常量对 c:4f0/fb10 vs
+c:4e8/fb18,pre-existing 被旧 155 掩蔽,另登记）。flags=0 → `issue_warning`
+门卫短路,`check_action_break` 断点位未设——改动对 E2E 文本零影响
+（curl 2511/0/0、httpd 2282/0/0 逐字节==亲父基线即为证）。
+
+**验证**：getparameter 双投影 bisect 首分歧 155→186;`--func getparameter`
+729/0/0（=8be100d9 亲父值;ET 报 743 系 CR8 基）;三门禁 curl 2511/0/0 +
+httpd 2282/0/0 == 亲父 8be100d9;三投影 next_url/match_url/parseconfig
+全 MATCH 保持。同族残差（本 lane 未动,登记 ACTION-COUNTHARVEST-FAMILY-0001）:
+ActionUnreachable/ActionMarkExplicit/ActionMarkImplied/ActionStructureTransform/
+ActionReturnSplit 的 `self.count +=` 同样无收割覆盖（ActionDoNothing 经返回
+路径适配已覆盖）——当前三投影函数内 oracle 计数均为 0 故不可观测,harvest 后
+不可能翻转 MATCH（计数非 0 ⇒ 快照已分歧行为先暴露）。
+
 ### 2026-09-23（VARGROUP-ABSORB-0001 §4-4）：ActionRestrictLocal 参数谓词 + ActionRestructureVarnode 持久 scope
+
 - `ActionRestrictLocal::apply` 循环 1 的 spacebase 参数判定从 `p.address.as_u64() > 0x7FFF_FFFF`（从不命中 callee 相对偏移）修正为 `p.address_space == AddressSpace::Stack`（coreaction.cc:1974-1975 的 `IPTR_SPACEBASE` 空间类型测试）。match_url 调用点（so=fc70 + Stack:8:304）现在把 fc78..fd90 出参影子区 markNotMapped——oracle `print localrange` 的 fc78-fda7 间隙由此产生，30d6 字段件因此非 addr-tied/mapped。
 - `ActionRestructureVarnode::apply` 改为复用 `fd.scope`（Ghidra 的 localmap 为 Funcdata 生命周期单一对象，funcdata.cc:69-70）；仅首趟构造 + seed 平台参数符号 + `reset_local_window`（一次性窗口安装）。此前每趟 fresh scope + 全量重装窗口，把 RestrictLocal 的窄化整体抹掉。
