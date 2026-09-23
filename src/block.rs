@@ -1878,7 +1878,12 @@ pub fn find_condition(
         rg.get_in(edge1).map(|e| e.point)
     };
     let mut cond = cond1?;
-    // Walk bl1's in-chain up to a 2-out decision block.
+    // Walk bl1's in-chain up to a 2-out decision block.  Ghidra (block.cc:845-847)
+    // updates bl1 = cond; edge1 = 0 on every hop, so the final rev-index below
+    // must be taken on the block directly below `cond`, not on the caller's
+    // original bl1/edge1.
+    let mut cur_bl1 = bl1.clone();
+    let mut cur_edge1 = edge1;
     loop {
         let cond_rg = cond.read().unwrap();
         let nout = cond_rg.size_out();
@@ -1890,13 +1895,13 @@ pub fn find_condition(
         }
         let next = cond_rg.get_in(0).map(|e| e.point);
         drop(cond_rg);
-        // bl1 becomes cond, edge1=0, cond = cond's in(0)
+        // cc:845-847: bl1 = cond; edge1 = 0; cond = bl1->getIn(0);
         let new_cond = match next {
             Some(p) => p,
             None => return None,
         };
-        // bl1 = cond (for rev-index below), but we need the original bl1's
-        // rev-index into the FINAL cond — Ghidra defers that to the end.
+        cur_bl1 = cond.clone();
+        cur_edge1 = 0;
         cond = new_cond;
     }
 
@@ -1924,11 +1929,12 @@ pub fn find_condition(
         cur_edge2 = 0;
     }
 
-    // slot1 = bl1's rev-in-edge index into cond.
-    // bl1 here is the original bl1 passed in; get_in_rev_index(edge1).
+    // slot1 = bl1's rev-in-edge index into cond — with bl1/edge1 as updated by
+    // the walk (block.cc:856), i.e. the out-slot of `cond` whose edge leads to
+    // the last block on the bl1 chain.
     let slot1 = {
-        let rg = bl1.read().unwrap();
-        rg.get_in_rev_index(edge1)
+        let rg = cur_bl1.read().unwrap();
+        rg.get_in_rev_index(cur_edge1)
     };
     Some((cond, slot1))
 }

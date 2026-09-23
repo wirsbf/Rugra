@@ -1069,6 +1069,7 @@ BlockGraph 新增：
 - `FlowBlock::swap_edges()`（block.cc:218-233）— **2026-08-23 补齐 cc:225-228**：交换 out[0]/out[1] 后，按交换后槽位回写目标块入边的 reverse_index（此前缺失，negateCondition 后 get_in_rev_index 会过期）。
 - `FlowBlock::get_in_rev_index(slot)` trait 方法（block.hh:308）— 入边的反向索引。
 - `find_condition(bl1,edge1,bl2,edge2)` 自由函数（block.cc:839-858）— 返回支配两路径的 CBRANCH 块 + slot1。解锁 RuleInt2FloatCollapse 核心。
+  - **2026-09-23（MYPROGRESS-INT2FLOATCOLLAPSE-0001）修正 bl1/edge1 步进语义**：Ghidra 循环体（cc:845-847）每跳一步执行 `bl1=cond; edge1=0`，最终 `slot1=bl1->getInRevIndex(edge1)`（cc:856）取的是 **cond 正下方块** 对 cond 的反向出边槽位（即 dir2unsigned 判向）。旧实现误用调用方原始 bl1/edge1 求反索引——菱形（walk≥1 hop）场景恒返回臂块唯一出边槽 0，导致 RuleInt2FloatCollapse 的 `dir2unsigned` 判向永假、规则在 `(basevn<0)` 形态永不 fire。现随 walk 维护 `cur_bl1/cur_edge1`，逐字对齐。
 
 ### 2026-07-01（续 2）：is_entry_point + get_start_block
 - `FlowBlock::is_entry_point()`（block.hh:325）— ENTRY_POINT flag 检查，trait default。
