@@ -516,6 +516,118 @@ impl FuncProto {
         model.input.characterize_as_param(addr_space, addr_offset, size)
     }
 
+    // Ghidra: fspec.cc:3767 FuncProto::resolveModel
+    /// If \b this has a \e merged model, pick the most likely model (from
+    /// the merged set), using the given parameter trials. Faithful to
+    /// `FuncProto::resolveModel` (fspec.cc:3767-3776): a null model returns
+    /// immediately; a concrete (non-merged) model returns immediately —
+    /// resolution is only meaningful for `ProtoModelMerged`, which selects
+    /// between alternative models based on the active trials. Rugra's
+    /// `ProtoModelFull` is always concrete, so the merged arm is unreachable
+    /// (the `selectModel` port is gated on merged-model support).
+    pub fn resolve_model(&mut self) {
+        // cc:3770 — if (model == (ProtoModel *)0) return;
+        if self.model.is_none() {
+            return;
+        }
+        // cc:3771 — if (!model->isMerged()) return; — Rugra models are
+        // always concrete; nothing to remark (cc:3775 comment: fillinMap
+        // does the trial remarking).
+    }
+
+    // Ghidra: fspec.hh:1494 FuncProto::deriveInputMap
+    /// Derive the input prototype from the active trials via the model's
+    /// input ParamList. Faithful to the inline `deriveInputMap`
+    /// (fspec.hh:1494-1495 `model->deriveInputMap(active)`, whose ProtoModel
+    /// body at fspec.hh:791-792 is `input->fillinMap(active)`) — the same
+    /// dispatch `FuncCallSpecs::derive_input_map` uses. A modelless FuncProto
+    /// is an invalid state in Ghidra (the dereference would fault); Rugra
+    /// production must bind the model first (the ActionInputPrototype
+    /// setScope-fallback glue), so the modelless arm is a defensive no-op.
+    pub fn derive_input_map(&mut self, active: &mut crate::fspec::ParamActive) {
+        if let Some(model) = self.model.as_ref() {
+            model.input.fillin_map(active);
+        }
+    }
+
+    // Ghidra: fspec.cc:4426 FuncProto::unjustifiedInputParam
+    /// Check if the given storage location looks like an \e unjustified
+    /// input parameter: contained in a normal parameter location but not
+    /// justified at the least-significant end. Passes back the full
+    /// parameter container. Faithful to `FuncProto::unjustifiedInputParam`
+    /// (fspec.cc:4426-4453) with the same ADDRESS-0001 degradation as
+    /// `characterize_as_input_param`/`possible_input_param`: the
+    /// locked-parameter justifiedContain loop compares through the
+    /// spaceless legacy `Address` plus the recorded `address_space`, so a
+    /// foreign-space parameter cannot produce a false containment (the
+    /// space equality guard below); Ghidra's `justifiedContain` itself
+    /// rejects cross-space queries (address.cc:133 `base != op2.base`).
+    pub fn unjustified_input_param(
+        &self,
+        addr_space: AddressSpace,
+        addr_offset: u64,
+        size: i32,
+        res: &mut crate::fspec::VarnodeData,
+    ) -> bool {
+        // cc:4429 — if (!isDotdotdot()) { if ((flags&voidinputlock)!=0)
+        //   return false; ... }
+        if !self.is_dotdotdot {
+            if self.void_input_locked {
+                return false;
+            }
+            let num = self.parameters.len();
+            if num > 0 {
+                let mut locktest = false; // Have tested against locked symbol
+                for i in 0..num {
+                    let param = &self.parameters[i];
+                    // cc:4436 — if (!param->isTypeLocked()) continue;
+                    if !param.is_type_locked() {
+                        continue;
+                    }
+                    locktest = true;
+                    // cc:4438-4447 — iaddr.justifiedContain(param->getSize(),
+                    // addr,size,false): 0 = contained and justified, > 0 =
+                    // contained but unjustified (pass back the container).
+                    if param.get_address_space() != addr_space {
+                        // address.cc:133 — a cross-space query is never
+                        // contained; keep scanning locked params as Ghidra's
+                        // per-space containment rejection does.
+                        continue;
+                    }
+                    let iaddr = param.address.as_u64();
+                    let psize = param.data_type.get_size() as i32;
+                    let just = justified_contain_range(
+                        iaddr,
+                        psize,
+                        addr_offset,
+                        size,
+                        false,
+                        addr_space.is_big_endian(),
+                    );
+                    if just == 0 {
+                        return false; // cc:4441 — contained but not improperly
+                    }
+                    if just > 0 {
+                        res.space = param.get_address_space();
+                        res.offset = iaddr;
+                        res.size = psize;
+                        return true;
+                    }
+                }
+                if locktest {
+                    return false; // cc:4449
+                }
+            }
+        }
+        // cc:4452 — return model->unjustifiedInputParam(addr,size,res)
+        match self.model.as_ref() {
+            Some(model) => model
+                .input
+                .unjustified_container(addr_space, Address::new(addr_offset), size, res),
+            None => false,
+        }
+    }
+
     // Ghidra: fspec.cc:4366 FuncProto::possibleInputParam
     /// Does the given storage location make sense as an input parameter?
     /// Faithful port of `possibleInputParam` (fspec.cc:4366-4387). If the
@@ -1230,6 +1342,7 @@ impl FuncProto {
         triallist: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
         activeinput: &crate::fspec::ParamActive,
         find_disjoint_cover: &dyn Fn(&std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>) -> (Address, i32),
+        store_set_input: &mut dyn FnMut(usize, &ParameterPieces),
     ) {
         if self.is_input_locked() { return; } // Input is locked, do no updating.
         // store->clearAllInputs()
@@ -1256,7 +1369,7 @@ impl FuncProto {
                     let ty = if sz as usize == vn_r.get_size() {
                         vn_r.get_type()
                     } else {
-                        None // Ghidra: getBase(sz, TYPE_UNKNOWN) — caller may fill.
+                        None // Ghidra: getBase(sz, TYPE_UNKNOWN) — filled below.
                     };
                     (cover_addr, ty)
                 } else {
@@ -1265,10 +1378,39 @@ impl FuncProto {
                 }
             };
             pieces.addr = addr;
-            pieces.ty = ty;
+            pieces.space = trial.get_space();
+            // Ghidra's high type is never null (every HighVariable carries
+            // at least the size-derived TYPE_UNKNOWN); fold Rust's None to
+            // the unknown base of the varnode's size, matching the
+            // updateInputNoTypes factory call (fspec.cc:4118).
+            pieces.ty = Some(match ty {
+                Some(t) => t,
+                None => {
+                    let size = vn.read().unwrap().get_size();
+                    crate::type_system::TypeFactory::shared_default()
+                        .read()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .get_base(size, crate::type_system::TypeMetatype::Unknown)
+                        .expect("factory always produces an unknown base type")
+                }
+            });
             pieces.flags = 0;
-            // store->setInput(count, "", pieces)
-            self.set_input_parameter(count, "", pieces);
+            // store->setInput(count, "", pieces) (fspec.cc:4079) — the store
+            // is the ScopeLocal-backed ProtoStoreSymbol for the function
+            // under analysis (FuncProto::setScope, fspec.cc:3879-3885 with
+            // funcdata.cc:69's baseaddr-1 restricted usepoint), whose
+            // setInput (fspec.cc:3147-3183) installs/refreshes the
+            // function_parameter category symbol the naming passes read.
+            // Rugra folds that side effect through this callback (the flat
+            // FuncProto store keeps signature printing on `parameters`).
+            store_set_input(count, &pieces);
+            // The Ghidra hand-off carries the empty name to the proto
+            // store, whose ScopeInternal symbol is default-named
+            // "param_<index+1>" at commit (database.cc:2481, category
+            // function_parameter with catindex=count). The flat FuncProto
+            // store folds that default name here.
+            let nm = format!("param_{}", count + 1);
+            self.set_input_parameter(count, &nm, pieces);
             count += 1;
             vn.write().unwrap().set_mark();
         }
@@ -1279,6 +1421,80 @@ impl FuncProto {
         self.update_this_pointer();
     }
 
+    // Ghidra: fspec.cc:4097 FuncProto::updateInputNoTypes
+    /// Update input parameters based on Varnode trials, but do not store
+    /// the data-type. Faithful 1:1 port of `updateInputNoTypes`
+    /// (fspec.cc:4097-4128): same used-trial walk as `update_input_types`,
+    /// with only the size used — an undefined data-type of the varnode's
+    /// size (or the disjoint-cover size for persistent varnodes) comes from
+    /// the shared TypeFactory. Names fold to the same proto-store default
+    /// ("param_<count+1>") as `update_input_types`.
+    pub fn update_input_no_types(
+        &mut self,
+        triallist: &[std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>],
+        activeinput: &crate::fspec::ParamActive,
+        store_set_input: &mut dyn FnMut(usize, &ParameterPieces),
+    ) {
+        if self.is_input_locked() { return; }
+        self.parameters.clear();
+        let mut count = 0usize;
+        let numtrials = activeinput.get_num_trials();
+        for i in 0..numtrials {
+            let trial = activeinput.get_trial(i);
+            if !trial.is_used() { continue; }
+            let slot = trial.get_slot();
+            if slot < 1 { continue; }
+            let idx = (slot - 1) as usize;
+            if idx >= triallist.len() { continue; }
+            let vn = triallist[idx].clone();
+            if vn.read().unwrap().is_mark() { continue; }
+            let mut pieces = ParameterPieces::default();
+            let factory_arc = crate::type_system::TypeFactory::shared_default();
+            let factory = factory_arc
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let (addr, ty) = {
+                let vn_r = vn.read().unwrap();
+                if vn_r.is_persist() {
+                    // cc:4110-4114 — findDisjointCover + getBase(sz,UNKNOWN):
+                    // with findDisjointCover unported, the varnode's own
+                    // (addr,size) is the cover stand-in (same fold as
+                    // update_input_types' persist arm).
+                    let sz = vn_r.get_size();
+                    (
+                        vn_r.get_addr().clone(),
+                        factory
+                            .get_base(sz, crate::type_system::TypeMetatype::Unknown)
+                            .expect("factory always produces an unknown base type"),
+                    )
+                } else {
+                    // cc:4117-4119 — trial.getAddress() +
+                    // getBase(vn->getSize(),TYPE_UNKNOWN)
+                    (
+                        trial.get_address(),
+                        factory
+                            .get_base(vn_r.get_size(), crate::type_system::TypeMetatype::Unknown)
+                            .expect("factory always produces an unknown base type"),
+                    )
+                }
+            };
+            pieces.addr = addr;
+            pieces.space = trial.get_space();
+            pieces.ty = Some(ty);
+            pieces.flags = 0;
+            // store->setInput(count,"",pieces) (fspec.cc:4121) — same
+            // ScopeLocal-backed ProtoStoreSymbol::setInput side effect as
+            // update_input_types above (fspec.cc:3147-3183).
+            store_set_input(count, &pieces);
+            let nm = format!("param_{}", count + 1);
+            self.set_input_parameter(count, &nm, pieces);
+            count += 1;
+            vn.write().unwrap().set_mark();
+        }
+        for vn in triallist {
+            vn.write().unwrap().clear_mark();
+        }
+    }
     // Ghidra: fspec.cc:4194 FuncProto::updateAllTypes
     /// Set this entire function prototype from a list of names and data-types.
     /// This ports the model-driven scalar path of `updateAllTypes`
@@ -2124,6 +2340,14 @@ pub struct FuncCallSpecs {
     /// (`Heritage::tryOutputStackGuard` builds it caller-perspective,
     /// heritage.cc:1414).
     pub is_stack_output_locked: bool,
+    /// Working extrapop for the CALL. Faithful to
+    /// `FuncCallSpecs::effective_extrapop` (fspec.hh:1650): initialized to
+    /// `ProtoModel::extrapop_unknown` by the constructor (fspec.cc:4927),
+    /// set to the model's known extrapop by `ActionExtraPopSetup`
+    /// (coreaction.cc:1454) or to the StackSolver-recovered value by
+    /// `ActionStackPtrFlow::analyzeExtraPop` (coreaction.cc:306). Carried
+    /// across a clone (fspec.cc:4971).
+    effective_extrapop: i32,
 }
 
 /// Sentinel value for unknown stack offset. Faithful to
@@ -2149,7 +2373,21 @@ impl FuncCallSpecs {
             input_consume: Vec::new(),
             stack_placeholder_slot: -1,
             is_stack_output_locked: false,
+            // fspec.cc:4927 `effective_extrapop = ProtoModel::extrapop_unknown`
+            effective_extrapop: EXTRAPOP_UNKNOWN_FULL,
         }
+    }
+
+    // Ghidra: fspec.hh:1687 FuncCallSpecs::setEffectiveExtraPop
+    /// Set the specific \e extrapop associated with \b this call site.
+    pub fn set_effective_extrapop(&mut self, epop: i32) {
+        self.effective_extrapop = epop;
+    }
+
+    // Ghidra: fspec.hh:1688 FuncCallSpecs::getEffectiveExtraPop
+    /// Get the specific \e extrapop associated with \b this call site.
+    pub fn get_effective_extrapop(&self) -> i32 {
+        self.effective_extrapop
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::FuncCallSpecs

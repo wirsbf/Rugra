@@ -2328,6 +2328,31 @@ impl EmitNoMarkup {
                         continue;
                     }
                 }
+                // VARMAP-DUPDECL-EXTRAOUT-0001: parens-carrying pure decl
+                // lines — the oracle spellings printc emits for
+                // pointer-to-array symbols (`undefined1 (*pauVar7) [16];`,
+                // varmap Symbol dtype verbatim per printc.cc:2503-2506) and
+                // function pointers (`void (*pVar4)();`) — are still
+                // declarations. Stopping the walk here made every name
+                // declared after them read as "missing" and re-injected as a
+                // duplicate (same name, prefix-inferred type — the httpd
+                // numbering=16 duplicates of this lane's three target
+                // functions). Collect the embedded name instead; the walk
+                // still stops at the first real body statement (`;`-lines
+                // with '=' are rejected above, non-decl shapes break below).
+                if t.ends_with(';') && t.contains("(*") && !t.contains("return")
+                    && !t.contains('=') {
+                    let body = t.trim_end_matches(';');
+                    if let Some(p) = body.find("(*") {
+                        let name: String = body[p + 2..]
+                            .chars()
+                            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                            .collect();
+                        if !name.is_empty() { declared.insert(name); }
+                        j += 1;
+                        continue;
+                    }
+                }
                 break;
             }
             // j now points at the first body line (after declarations + blank lines).
@@ -2648,6 +2673,33 @@ impl EmitNoMarkup {
             .map_or(false, |l| l == "{")
     }
 
+    // RUGRA-GLUE: legacy_never_type_evidence (no Ghidra counterpart; shared
+    //   evidence helper of has_symbol_driven_decls / _walk_parens — see the
+    //   PRINTC-LEGACY-DECL-DUP-0001 notes there).
+    /// Type spellings ONLY the symbol-driven emitter produces. printc's
+    /// emit_local_var_decls (printc.cc:2260-2279) prints core-type symbol
+    /// dtypes verbatim, while the legacy text passes synthesize exclusively
+    /// int/long/bool/byte/short/char */void */float/double (see
+    /// flush_func_remove_unused's type_ok table). CHAINFIX-LEGACY-BYPASS-0001:
+    /// `uint*`/`int1`/`int2`/`int8`/`ushort`/`ulong`/`longlong`/`__int*_t`
+    /// are therefore symbol-driven evidence of the same strength as
+    /// `undefined*`; without them, chunks whose only `in_` name the
+    /// ActionInputPrototype function_parameter symbol install retired fell
+    /// back into the legacy pass, whose collector ignores those spellings,
+    /// saw every uVarN as "missing", and injected `int uVarN;` K&R-style
+    /// between the signature and `{` (ap_getparents/httpd, glob_word/curl).
+    fn legacy_never_type_evidence(type_token: &str) -> bool {
+        type_token.starts_with("undefined")
+            || type_token.starts_with("uint")
+            || type_token.starts_with("int1")
+            || type_token.starts_with("int2")
+            || type_token.starts_with("int8")
+            || type_token == "ushort"
+            || type_token == "ulong"
+            || type_token == "longlong"
+            || type_token.starts_with("__int")
+    }
+
     // RUGRA-GLUE: has_symbol_driven_decls (no Ghidra counterpart — Ghidra's
     //   print layer has no declaration passes to bypass: printc.cc:2656
     //   docFunction emits every function-local declaration from Action-phase
@@ -2661,18 +2713,14 @@ impl EmitNoMarkup {
     /// (`backfill_missing_locals` deliberately does NOT consult this — see
     /// its PRINTC-LEGACY-DECL-DUP-0001 note.)
     ///
-    /// Evidence spellings (PRINTC-LEGACY-DECL-DUP-0001):
-    /// - a declaration whose type token starts with `undefined`
-    ///   (undefined1/2/4/8 — core-type spellings only reachable through the
-    ///   symbol-driven emitter; the legacy passes synthesize exclusively
-    ///   int/long/char */float/double), or
-    /// - a declaration whose name token starts with `in_` (register/ram
-    ///   space symbol names like in_RAX / in_ram_00016e70; the legacy passes
-    ///   never generate `in_`-prefixed names).
-    ///
-    /// A decl block without either evidence keeps the legacy passes: those
-    /// functions may still lack symbols and must not lose their backfill
-    /// safety net.
+    /// Evidence spellings (PRINTC-LEGACY-DECL-DUP-0001 /
+    /// CHAINFIX-LEGACY-BYPASS-0001): a declaration whose type token is
+    /// `legacy_never_type_evidence` (symbol-emitter-only spellings), or a
+    /// declaration whose name token starts with `in_` (register/ram space
+    /// symbol names like in_RAX / in_ram_00016e70; the legacy passes never
+    /// generate `in_`-prefixed names). A decl block without either evidence
+    /// keeps the legacy passes: those functions may still lack symbols and
+    /// must not lose their backfill safety net.
     fn has_symbol_driven_decls<L: AsRef<str>>(func_lines: &[L]) -> bool {
         let mut j = 1usize;
         while j < func_lines.len() {
@@ -2684,7 +2732,54 @@ impl EmitNoMarkup {
             if t.ends_with(';') && !t.contains('(') && !t.contains("return") && !t.contains('=') {
                 let tokens: Vec<&str> = t.trim_end_matches(';').split_whitespace().collect();
                 if !tokens.is_empty() {
-                    if tokens[0].starts_with("undefined") {
+                    if Self::legacy_never_type_evidence(tokens[0]) {
+                        return true;
+                    }
+                    let name = tokens[tokens.len() - 1].trim_start_matches('*');
+                    if name.starts_with("in_") {
+                        return true;
+                    }
+                }
+                j += 1;
+                continue;
+            }
+            break;
+        }
+        false
+    }
+
+    // RUGRA-GLUE: has_symbol_driven_decls_walk_parens (no Ghidra counterpart;
+    //   same GLUE family as has_symbol_driven_decls above — see
+    //   POSTFIX-RETIRE-0001 W0. VARMAP-DUPDECL-EXTRAOUT-0001: the original
+    //   detector breaks the decl-block walk at parens-carrying declaration
+    //   lines — the oracle spellings printc emits for pointer-to-array
+    //   symbols (`undefined1 (*pauVar7) [16];`, Symbol dtype verbatim per
+    //   printc.cc:2503-2506) and function pointers (`void (*pVar4)();`) —
+    //   so a symbol-driven chunk whose ONLY undefined*/in_ evidence sits
+    //   behind such a line read as legacy and the flush pass's
+    //   missing-injection half manufactured `int uVarN;` duplicate
+    //   declarations the oracle never emits (printc.cc:2260-2279
+    //   emitLocalVarDecls declares each scope symbol exactly once). This
+    //   variant walks past those lines: same acceptance set (ends_with(';'),
+    //   no "return", no '='), no '(' rejection, so paren decl lines continue
+    //   instead of breaking. Used ONLY by flush_func_remove_unused's bypass:
+    //   the P22 mask (symbol_driven_function_line_mask) keeps the original
+    //   detector on purpose — flipping it there would newly bypass
+    //   fix_unary_deref_declarations's legacy `*param_N` legality repair for
+    //   chunks like curl progressbarinit (base `char *param_1` → `long
+    //   param_1` flip, curl E2E byte-divergence; verified 2026-09-23).
+    fn has_symbol_driven_decls_walk_parens<L: AsRef<str>>(func_lines: &[L]) -> bool {
+        let mut j = 1usize;
+        while j < func_lines.len() {
+            let t = func_lines[j].as_ref().trim();
+            if t.is_empty() || t == "{" {
+                j += 1;
+                continue;
+            }
+            if t.ends_with(';') && !t.contains("return") && !t.contains('=') {
+                let tokens: Vec<&str> = t.trim_end_matches(';').split_whitespace().collect();
+                if !tokens.is_empty() {
+                    if Self::legacy_never_type_evidence(tokens[0]) {
                         return true;
                     }
                     let name = tokens[tokens.len() - 1].trim_start_matches('*');
@@ -2799,7 +2894,8 @@ impl EmitNoMarkup {
         // declarations Ghidra always prints (printc.cc:2260 emitLocalVarDecls
         // emits every symbol regardless of body use). Pass the chunk through
         // untouched; functions without symbol evidence keep the legacy pass.
-        if Self::has_symbol_driven_decls(func_lines) {
+        if Self::has_symbol_driven_decls(func_lines)
+            || Self::has_symbol_driven_decls_walk_parens(func_lines) {
             out.extend(func_lines.iter().cloned());
             return;
         }

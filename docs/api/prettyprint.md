@@ -900,3 +900,68 @@ httpd 2459/0/0 与 sb-condreplay 记录基线恒等;gcc 审计 81/26、7/22 双�
 SetHTTPrequest/parseconfig/my_get_token 逐函数 skeleton 恒等。该层属
 POSTFIX-RETIRE-0001 补偿层(oracle prettyprint.cc 零文本后处理),本修复为层内
 误伤封堵,不改变层的退役路线。
+
+### 2026-09-23：VARMAP-DUPDECL-EXTRAOUT-0001 — 带括号声明行截断两个 GLUE pass 的声明块遍历（httpd numbering 16 的根因）
+
+**背景**：DP 停车链（wt/sb-pushabsorb@764c3036，RC1 CALL 三 op + RC2 cspec +
+RC3 analyzeExtraPop 写回合流后）httpd E2E 2137/0/**16**——numbering 16 全部为
+同名双声明，集中在 ap_parse_vhost_addrs（7）/ap_set_name_virtual_host（6）/
+ap_update_vhost_from_headers（3）。逐符号审计证明 varmap 侧清白：ScopeLocal
+每名字恰一个符号（38 符号/50 输出行），printc `emit_scope_local_var_decls`
+按 (space rank, start, usepoint) 每符号恰发射一次；16 处重复**全部**由本文件
+两个无 oracle 对应物的 GLUE 文本 pass 制造。
+
+**根因**（两 pass 同型缺陷）：printc 按 Symbol dtype 逐字发射的指针-数组/
+函数指针声明形（`undefined1 (*pauVar7) [16];`、`void (*pVar4)();`，
+printc.cc:2503-2506；oracle direct-runner golden 同形
+`xunknown1 (*paxVar11) [16];`）含 `(`——而两个 pass 的声明块遍历把
+`contains('(')` 当"非声明"信号提前 break：
+
+- `has_symbol_driven_decls`（flush_func_remove_unused 的旁路判据）：在带括号
+  声明处 break → 其后才出现的 `undefined*`/`in_*` 证据不可见 → 符号驱动
+  chunk 被判 legacy → flush 的 missing-injection 半臂运行，其 type_ok 表不识
+  别 `uint8`/`uint`/`uint1` 等拼写 → 注入 `int uVarN;` 重复（httpd 侧 9 处）。
+- `backfill_missing_locals` 的 declared 收集：同处 break → 其后所有已声明名
+  判 missing → 按前缀推断类型整组重注入（`long uVar10;`…`int bVar18;`，
+  覆盖全部 16 处——单独旁路 flush 仍剩 9，单独旁路 backfill 归零，实测定位）。
+
+**修复**（跨租约最小化两 hunk + 一 helper，printc.rs 未动）：
+
+1. 新增 `has_symbol_driven_decls_walk_parens()`：同 acceptance 集
+   （`ends_with(';')`、无 `return`、无 `=`）但去掉 `!contains('('')` 拒绝，
+   带括号纯声明行 continue 而非 break。**仅**接入
+   `flush_func_remove_unused` 的旁路（`||` 并联原判据，原判据命中集不减）。
+   P22 掩码（`symbol_driven_function_line_mask` →
+   `fix_unary_deref_declarations`）**刻意**保持原判据：若一并放宽，curl
+   progressbarinit 等函数会新增旁路，丢失 `*param_N` 合法性修复的 legacy
+   补偿（实测签名 `char *param_1`→`long param_1` 翻转、curl E2E 字节漂移；
+   该补偿是 P22 fiction，oracle 为 `ProgressData *bar`，属 FuncProto 参数
+  指针定型域另案）。
+2. `backfill_missing_locals` 的 declared 收集新增带括号纯声明分支：行含
+   `(*` 且无 `=`/`return` 时抽取括号内标识符（`(*pauVar7)` → `pauVar7`），
+   continue 遍历；真 body 语句（含 `=`）仍在上方被拒，非声明形照常 break。
+
+**验收**（fast-release + release 双口径，RUGRA_MIRROR，oracle e40ed130）：
+httpd **2137/0/16 → 2104/0/0**（三目标函数 326/7→311/0、228/6→217/0、
+219/3→212/0；`--func main` 两态均 TIMEOUT=已知
+HTTPD-MAIN-POSTBLOCKSTRUCT-HANG-0001 不变）；curl 与基**逐字节相同**
+（4073/0/0，cmp 零差异）；gcc 审计 httpd 1/27、curl 101/19 均不变；
+`cargo test --lib -- --test-threads=1 prettyprint varmap printc` 63/63，
+全量 1650/18 与基逐测试同集（funcdata/heritage 18 失败=基分支预存）。
+该层属 POSTFIX-RETIRE-0001 补偿层（oracle prettyprint.cc 零文本后处理），
+本修复为层内误伤封堵，不改变退役路线。
+
+## 2026-09-23（CHAINFIX lane EY2）：legacy_never_type_evidence 证据集扩宽
+
+- 新增 `legacy_never_type_evidence()`（RUGRA-GLUE，`has_symbol_driven_decls`
+  / `_walk_parens` 共用判据 helper）：原 `undefined*` 前缀之外补入
+  `uint*`/`int1`/`int2`/`int8`/`ushort`/`ulong`/`longlong`/`__int*_t`——
+  均为符号驱动发射器独有拼写（printc.cc:2260-2279 core-type dtype 逐字
+  打印），legacy 文本 pass 只合成 int/long/bool/byte/short/char */void */
+  float/double（flush_func_remove_unused 的 type_ok 表）。
+  CHAINFIX-LEGACY-BYPASS-0001：ActionInputPrototype 的 function_parameter
+  符号安装（本车道）退休了部分 chunk 唯一的 `in_` 名字证据后，这些 chunk
+  落回 legacy pass，其收集器不识别符号拼写、把每个 uVarN 判"缺失"，在
+  签名与 `{` 之间注入 `int uVarN;` K&R 式重复声明（httpd ap_getparents、
+  curl glob_word）。扩宽后该误判消除（curl −5 行全为死声明删除）。plain
+  `int` 不在集合内（legacy 合法拼写），判定方向保持保守。

@@ -101,6 +101,9 @@ fn worker_memory_image_bytes(elf: &goblin::elf::Elf, buffer: &[u8]) -> Vec<u8> {
 // reaches are implemented (get_register for `<set name="DF">`, space_by_name
 // for the `<tracked_set space="ram">` range, space_highest for the range's
 // open last address).
+// HTTPD-CSPEC-ARCH-0001: PcodeInjectLibrary unique-space base (curl worker parity).
+const SPEC_UNIQUE_INJECT_BASE: u64 = 0x364_400;
+
 struct TrackedSpecHost {
     registers: HashMap<String, rugra::fspec::VarnodeData>,
 }
@@ -127,6 +130,24 @@ fn tracked_spec_space_by_name(name: &str) -> Option<rugra::space::AddressSpace> 
         "unique" => Some(AddressSpace::Unique),
         "const" => Some(AddressSpace::Const),
         _ => None,
+    }
+}
+
+// Callfixup snippet parsing needs the symbol lookup (both sides of the
+// cm3 merge carry this identical impl: chain RC2 HTTPD-CSPEC-ARCH-0001 and
+// master DBG-BSB probe — deduplicated).
+impl rugra::pcodeparse::SleighSymbolLookup for TrackedSpecHost {
+    fn find_symbol(&self, name: &str) -> Option<rugra::pcodeparse::SleighSymbol> {
+        self.registers
+            .get(name)
+            .map(|vd| rugra::pcodeparse::SleighSymbol {
+                name: name.to_string(),
+                kind: rugra::pcodeparse::SleightSymbolKind::Varnode(rugra::varnode::VarnodeData {
+                    space: vd.space,
+                    offset: vd.offset,
+                    size: vd.size.max(0) as usize,
+                }),
+            })
     }
 }
 
@@ -160,22 +181,6 @@ impl rugra::arch::SpecQuery for TrackedSpecHost {
     }
 }
 
-// DBG-BSB probe: callfixup snippet parsing needs the symbol lookup.
-impl rugra::pcodeparse::SleighSymbolLookup for TrackedSpecHost {
-    fn find_symbol(&self, name: &str) -> Option<rugra::pcodeparse::SleighSymbol> {
-        self.registers
-            .get(name)
-            .map(|vd| rugra::pcodeparse::SleighSymbol {
-                name: name.to_string(),
-                kind: rugra::pcodeparse::SleightSymbolKind::Varnode(rugra::varnode::VarnodeData {
-                    space: vd.space,
-                    offset: vd.offset,
-                    size: vd.size.max(0) as usize,
-                }),
-            })
-    }
-}
-
 // SB-CONSTBASE-0001: build the per-run Architecture template carrying the
 // pspec tracked-context partitions.  Oracle chain this mirrors: every
 // BfdArchitecture serving a function ran Architecture::init ->
@@ -199,6 +204,12 @@ fn tracked_context_architecture(
     let sleigh = rugra::sleigh_ffi::SleighCtx::new()
         .ok_or_else(|| "unable to initialize SLEIGH register catalog".to_string())?;
     let mut registers = HashMap::new();
+    // HTTPD-CSPEC-ARCH-0001: same enumeration as the curl worker
+    // (B3-VARMAP-REGNAME-0001): the SLEIGH register catalog also feeds the
+    // Architecture register_xref (SleighBase::getAllRegisters ->
+    // varnode_xref, sleighbase.cc:182-186) that
+    // Architecture::get_register_name (sleighbase.cc:144-168) walks.
+    let mut register_xref: Vec<(i32, u64, i32, String)> = Vec::new();
     for index in 0..sleigh.num_registers() {
         let Some((name, space, offset, size)) = sleigh.register_info(index) else {
             continue;
@@ -206,6 +217,7 @@ fn tracked_context_architecture(
         let Ok(space_id) = u8::try_from(space) else {
             continue;
         };
+        register_xref.push((space, offset, size, name.to_string()));
         registers.insert(
             name.to_string(),
             rugra::fspec::VarnodeData {
@@ -268,41 +280,62 @@ fn tracked_context_architecture(
         }
     }
 
-    // Ghidra: architecture.cc:1391-1414 Architecture::init builds the
-    // TypeFactory unconditionally (buildTypegrp at :1398) — every Funcdata
-    // observes `data.getArch()->types`, and Funcdata::spacebase
-    // (funcdata.cc:245-264) relies on it to typelock the input stack
-    // pointer with TypePointer→TypeSpacebase. TYPEPROP-NONSETTLING-HTTPD-0001:
-    // without the factory, the faithfully ported typelock leg is skipped,
-    // RulePtrsubUndo's isPtrsubMatching guard (ruleaction.cc:7138 →
+    // HTTPD-CSPEC-ARCH-0001: parse the locked production compiler spec into
+    // the same DocumentStorage and establish the full Architecture init
+    // chain the curl worker builds (FUNCPROTO-MODEL-BIND-0001):
+    // archid + register_xref + commentdb + TypeFactory (data_organization
+    // decode + setup_sizes mirror parseCompilerConfig's ELEM_DATA_ORGANIZATION
+    // arm, architecture.cc:1269, and its trailing types->setupSizes() at
+    // cc:1350) + PcodeInjectLibrary/UserOpManage + the final
+    // parse_compiler_config (architecture.cc:1239-1351) which establishes
+    // `defaultfp`. Ghidra's BfdArchitecture completes this before any
+    // Funcdata is constructed, so the headless oracle that produced
+    // tests/golden/ghidra_httpd_1204.c decompiled every function with
+    // defaultfp resolved; the previous bare Architecture::new() left the
+    // httpd Funcdata modelless ("Unknown calling convention"), which kept
+    // CALL return-address push stores alive in every function (the golden
+    // absorbs them everywhere except main) and unblocked neither
+    // ActionStackPtrFlow's known-extrapop path nor the callspec models.
+    // TYPEPROP-NONSETTLING-HTTPD-0001 (EO2 root-cause note, folded in from
+    // master 983e0fc9; the factory below is the fix): Architecture::init
+    // builds the TypeFactory unconditionally (buildTypegrp at
+    // architecture.cc:1398) — every Funcdata observes
+    // `data.getArch()->types`, and Funcdata::spacebase (funcdata.cc:245-264)
+    // relies on it to typelock the input stack pointer with
+    // TypePointer→TypeSpacebase. Without the factory, the typelock leg is
+    // skipped, RulePtrsubUndo's isPtrsubMatching guard (ruleaction.cc:7138 →
     // TypeSpacebase::getSubType's TYPE_UNKNOWN fallback, type.cc:2964) never
     // matches, and the annotateRawStackPtr (varmap.cc:386) PTRSUB(sp,#0)
     // annotation is dismantled by ptrsubundo→identityel→propagatecopy→
     // earlyremoval and re-created every mainloop pass — the mainloop
-    // rule_repeatapply loop never reaches a fixed point (ap_build_cont_config
-    // / ap_log_rerror TIMEOUT). Same locked cspec as the curl worker
-    // (sleigh_specs/x86-64-gcc.cspec); data_organization decode mirrors
-    // parseCompilerConfig's ELEM_DATA_ORGANIZATION arm (architecture.cc:1269)
-    // and setupSizes (:1350).
+    // rule_repeatapply loop never reaches a fixed point
+    // (ap_build_cont_config / ap_log_rerror TIMEOUT). Same locked cspec as
+    // the curl worker.
+    let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
+        .map_err(|error| format!("unable to read compiler spec: {error}"))?;
+    let cspec_doc = store
+        .parse_document(&cspec_bytes)
+        .map_err(|error| format!("compiler spec parse failed: {error}"))?;
+    let cspec_root = cspec_doc
+        .root
+        .clone()
+        .ok_or_else(|| "compiler spec has no root element".to_string())?;
+    if cspec_root
+        .read()
+        .map_err(|_| "compiler spec element lock poisoned".to_string())?
+        .name
+        != "compiler_spec"
     {
-        let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
-            .map_err(|error| format!("unable to read compiler spec: {error}"))?;
-        let mut cspec_store = rugra::marshal::DocumentStorage::new();
-        let cspec_doc = cspec_store
-            .parse_document(&cspec_bytes)
-            .map_err(|error| format!("compiler spec parse failed: {error}"))?;
-        let cspec_root = cspec_doc
-            .root
-            .clone()
-            .ok_or_else(|| "compiler spec has no root element".to_string())?;
-        if cspec_root
-            .read()
-            .map_err(|_| "compiler spec element lock poisoned".to_string())?
-            .name
-            != "compiler_spec"
-        {
-            return Err("compiler spec root is not compiler_spec".to_string());
-        }
+        return Err("compiler spec root is not compiler_spec".to_string());
+    }
+    store.register_tag(&cspec_root);
+    arch.archid = "x86:LE:64:default".to_string();
+    arch.set_register_xref(register_xref);
+    arch.set_commentdb(std::sync::Arc::new(std::sync::RwLock::new(
+        rugra::comment::CommentDatabaseInternal::new(),
+    )));
+    {
+        let mut types = rugra::type_system::typefactory::TypeFactory::new(8);
         let data_org = cspec_root
             .read()
             .map_err(|_| "compiler spec element lock poisoned".to_string())?
@@ -316,13 +349,11 @@ fn tracked_context_architecture(
             })
             .cloned()
             .ok_or_else(|| "compiler spec has no data_organization".to_string())?;
-        let mut types = rugra::type_system::typefactory::TypeFactory::new(8);
-        let cspec_registry = std::sync::Arc::new(std::sync::RwLock::new(
+        let registry = std::sync::Arc::new(std::sync::RwLock::new(
             rugra::marshal::IdRegistry::new(),
         ));
-        let mut cspec_decoder =
-            rugra::marshal::TreeDecoder::new(data_org, cspec_registry);
-        types.decode_data_organization(&mut cspec_decoder);
+        let mut decoder = rugra::marshal::TreeDecoder::new(data_org, registry);
+        types.decode_data_organization(&mut decoder);
         types.setup_sizes(&rugra::type_system::typefactory::SizeArchInputs {
             stack_spacebase_size: Some(8),
             default_data_space_addr_size: 8,
@@ -330,35 +361,34 @@ fn tracked_context_architecture(
             far_pointer: None,
         });
         arch.set_types(std::sync::Arc::new(std::sync::RwLock::new(types)));
-        // PRINTC-BADSPACEBASE-RENDER-0001: mount the cspec's prototype
-        // surface the way the curl worker does (parseCompilerConfig,
-        // architecture.cc:1239-1351 — curl_decompile.rs:2010 shape), then
-        // keep only its EffectRecord surface reachable to Funcdatas: the
-        // default model is captured and cleared so Funcdata::setArch's
-        // model-binding tail (funcdata.rs set_arch -> FuncProto::setModel)
-        // stays off — binding the full model flips the iced-prelude call-
-        // spec registration gate (funcdata.rs prelude phase "register_specs
-        // = funcp.has_model()") whose guarded reload copies Rugra cannot
-        // yet absorb (ActionCopyPropagation, coreaction.cc:5510-5511, is
-        // absent from the universal tree; measured httpd 29/29 skeleton
-        // 2225 -> 2634 with the model bound). The effect records alone
-        // restore the oracle's Funcdata::setInputVarnode effect tail
-        // (funcdata_varnode.cc:365-370: Varnode::unaffected from the
-        // cspec <unaffected> RSP/RBP/RBX records), which is what
-        // HighVariable::hasName's spacebase suppression
-        // (variable.cc:737-744) and ActionNameVars::linkSymbols
-        // (coreaction.cc:2961-2962) need so the spacebase input high is
-        // never named and printc never emits a `BADSPACEBASE *…`
-        // declaration. FuncProto::hasEffect/effectBegin read this exact
-        // record list first (fspec.cc:4234-4240/4243-4257).
-        let mut inject_lib = rugra::pcodeinject::PcodeInjectLibrary::new(0x364_400);
+        // PRINTC-BADSPACEBASE-RENDER-0001 (ES effect table, merged with the
+        // RC2 init chain): mount the cspec's prototype surface the way the
+        // curl worker does (parseCompilerConfig, architecture.cc:1239-1351 —
+        // curl_decompile.rs:2010 shape) and hand the default model's
+        // EffectRecord surface to every Funcdata. In the ES master-only
+        // world the defaultfp was captured and cleared (binding the full
+        // model measured httpd 2225 -> 2634 there); in this merged tree the
+        // RC2 chain world is the proven configuration (defaultfp bound,
+        // chain httpd 2250/0/0), so the model stays bound AND the effect
+        // records are additionally wired via fd.funcp.effects below —
+        // FuncProto::try_has_effect prefers the explicit record list and
+        // otherwise falls back to the same model records, so both surfaces
+        // answer identically. The records restore the oracle's
+        // Funcdata::setInputVarnode effect tail (funcdata_varnode.cc:
+        // 365-370: Varnode::unaffected from the cspec <unaffected>
+        // RSP/RBP/RBX records), which is what HighVariable::hasName's
+        // spacebase suppression (variable.cc:737-744) and
+        // ActionNameVars::linkSymbols (coreaction.cc:2961-2962) need so the
+        // spacebase input high is never named and printc never emits a
+        // `BADSPACEBASE *…` declaration. FuncProto::hasEffect/effectBegin
+        // read this exact record list first (fspec.cc:4234-4240/4243-4257).
+        let mut inject_lib = rugra::pcodeinject::PcodeInjectLibrary::new(SPEC_UNIQUE_INJECT_BASE);
         inject_lib.set_sleigh_lookup(host.clone());
         arch.pcodeinjectlib = Some(std::sync::Arc::new(std::sync::RwLock::new(inject_lib)));
         arch.userops = Some(std::sync::Arc::new(std::sync::RwLock::new(
             rugra::userop::UserOpManage::new(),
         )));
-        cspec_store.register_tag(&cspec_root);
-        arch.parse_compiler_config(&mut cspec_store, host.as_ref(), 8)
+        arch.parse_compiler_config(&mut store, host.as_ref(), 8)
             .map_err(|error| format!("compiler spec parse failed: {error}"))?;
         let default_effects = arch
             .defaultfp
@@ -366,7 +396,6 @@ fn tracked_context_architecture(
             .ok_or_else(|| "No default prototype specified".to_string())?
             .effectlist
             .clone();
-        arch.defaultfp = None;
         Ok((arch, default_effects))
     }
 }

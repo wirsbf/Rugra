@@ -10499,8 +10499,9 @@ impl Funcdata {
     }
 
     // Ghidra: funcdata_varnode.cc:494 Funcdata::adjustInputVarnodes
-    /// Collapse any input Varnodes contained in the range `[addr, addr+sz)`
-    /// into a single input, redefining the originals as SUBPIECEs of it.
+    /// Collapse any input Varnodes contained in the range
+    /// `[addr_offset, addr_offset+sz)` in the given space into a single
+    /// input, redefining the originals as SUBPIECEs of it.
     /// Faithful to `Funcdata::adjustInputVarnodes`
     /// (funcdata_varnode.cc:494-537):
     ///   endaddr = addr + (sz-1);
@@ -10520,24 +10521,33 @@ impl Funcdata {
     ///   invn->setWriteMask();
     ///   for each vn in inlist: opSetInput(vn->getDef(), invn, 0);
     /// RUGRA-GAP: `justifiedContain` is approximated by a direct byte offset;
-    /// Rugra scans loc_tree for inputs completely contained in the range.
+    /// Rugra scans loc_tree for inputs completely contained in the range —
+    /// now pinned to the container's space (Ghidra's beginDef/endDef iterate
+    /// the Address-ordered def subset, so the offset bounds never cross
+    /// spaces; the piece outputs and the new combined input keep the
+    /// container's space via new_varnode_out_full/new_varnode_in_space).
     pub fn adjust_input_varnodes(
         &mut self,
-        addr: crate::address::Address,
+        space: crate::space::AddressSpace,
+        addr_offset: u64,
         sz: usize,
     ) -> crate::error::Result<()> {
-        let end = addr.as_u64().saturating_add(sz.saturating_sub(1) as u64);
-        // cc:500-508: gather inputs completely contained in [addr, end].
+        let end = addr_offset.wrapping_add(sz.saturating_sub(1) as u64);
+        // cc:500-508 — beginDef(Varnode::input, addr)..endDef(Varnode::input,
+        // endaddr): the Address-ordered input-def subset — the space of
+        // `addr` pins the iteration and membership is by START offset in
+        // [addr, endaddr]. An input whose start is in range but extends
+        // past endaddr STAYS in the iteration: the cc:505-506
+        // LowlevelError below is the only exit for it, exactly as in Ghidra.
         let inlist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = self
             .vbank
             .loc_tree
             .iter()
             .filter_map(|lr| {
                 let r = lr.0.read().unwrap();
-                if !r.is_input() { return None; }
+                if !r.is_input() || r.get_space() != space { return None; }
                 let start = r.loc.as_u64();
-                let vn_end = start.saturating_add(r.size as u64).saturating_sub(1);
-                if start < addr.as_u64() || vn_end > end { return None; }
+                if start < addr_offset || start > end { return None; }
                 Some(lr.0.clone())
             })
             .collect();
@@ -10545,18 +10555,35 @@ impl Funcdata {
         // combined input, then destroy the old input.
         let mut replaced: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
         for vn in inlist {
-            let (vn_addr, vn_size) = {
+            let (vn_addr, vn_size, vn_is_input) = {
                 let r = vn.read().unwrap();
-                (r.loc.as_u64(), r.size)
+                (r.loc.as_u64(), r.size, r.is_input())
             };
-            let sa = vn_addr.saturating_sub(addr.as_u64()) as usize;
-            if sz <= vn_size { continue; }
+            // cc:505-506 — extends past the container end: fatal, no silent
+            // skip.
+            if vn_addr.wrapping_add(vn_size as u64).wrapping_sub(1) > end {
+                return Err(crate::error::Error::Lowlevel(
+                    "Cannot properly adjust input varnodes".to_string(),
+                ));
+            }
+            // cc:512-514 — sa = addr.justifiedContain(sz, vn->getAddr(),
+            // vn->getSize(), false); (!isInput || sa < 0 || sz <= size) is
+            // fatal. The gather guarantees is_input and start >= addr, so
+            // sa >= 0; the size relation is the live check.
+            let sa = vn_addr.wrapping_sub(addr_offset) as usize;
+            if !vn_is_input || sz <= vn_size {
+                return Err(crate::error::Error::Lowlevel(
+                    "Bad adjustment to input varnode".to_string(),
+                ));
+            }
             let pc = self.baseaddr;
             let subop = self.new_op(2, pc);
             self.op_set_opcode(&subop, crate::opcodes::OpCode::CPUI_SUBPIECE);
             let sa_const = self.new_constant(4, sa as u64);
             self.op_set_input(&subop, sa_const, 1);
-            let newvn = self.new_varnode_out(vn_size, crate::address::Address::new(vn_addr), &subop);
+            // cc:518 — newVarnodeOut(vn->getSize(), vn->getAddr(), subop):
+            // the piece keeps the container's space.
+            let newvn = self.new_varnode_out_full(vn_size, space, crate::address::Address::new(vn_addr), &subop);
             // cc:520: opInsertBegin(subop, bblocks[0]).
             if let Some(bb0) = self.bblocks.get_block(0) {
                 self.op_insert_begin(&subop, &bb0);
@@ -10566,8 +10593,9 @@ impl Funcdata {
             replaced.push(newvn);
         }
         if replaced.is_empty() { return Ok(()); }
-        // cc:526-531: create the combined input and mark it writemask.
-        let invn = self.new_varnode(sz, addr);
+        // cc:526-531 — newVarnode(sz,addr) with the container's full storage
+        // address, then setInputVarnode + setWriteMask.
+        let invn = self.new_varnode_in_space(sz, space, crate::address::Address::new(addr_offset));
         let invn = self.set_input_varnode(invn);
         invn.write().unwrap().set_write_mask();
         // cc:533-536: each replacement SUBPIECE reads the new input at slot 0.
