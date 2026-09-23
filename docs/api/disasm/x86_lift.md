@@ -1,5 +1,20 @@
 ﻿# x86_lift.rs API Reference
 
+2026-09-23（HTTPD-CALL-PUSH-0001，httpd main 归因车道 DL）: CALL 模板补全 push 序列。
+锁定 oracle `x86-64.sla` 模板实测（`/dev/shm/rugra-tests/sb-httpdmain/sleigh_probe`，
+SLEIGH `oneInstruction` dump）: `call rel32` 发射三 op —— `RSP = INT_SUB(RSP, 8)`;
+`STORE ram[RSP] = inst_next`(8 字节常量); `CALL ram:target`。`call rax` 发射四 op ——
+`COPY tmp <- RAX`（目标求值先于 RSP 调整）; `RSP = INT_SUB(RSP, 8)`; `STORE`; `CALLIND tmp`。
+`call [mem]` 同理 LOAD 先行。此前 lifter 只发射裸 CALL（2026-06-29 条目"CALL op 现在只挂
+目标地址"的论断是错的——那是简化，不是 oracle 模板）。效果: 返回地址 push 进入 IR，
+golden（`ghidra_httpd_1204.c` main 有 131 条 `local_d0 = 0x12b869;` 式 push 存储，
+98 条紧邻调用）中缺失的整类语句在 IR 层恢复。curl E2E 无变化（2689/0/0，
+curl 主路径走 SLEIGH lifter，本文件只影响其 prototype pre-pass 与 httpd iced 注入路径）。
+已知下游缺口（本修复的吸收链在 CALLSPEC-0001, 见 TODO board HTTPD-CALL-PUSH-0001）:
+无 Architecture cspec/extrapop 支撑时 push 存储以 uStack_168.. 形态整体保留,
+httpd E2E 2331→2667；配 HTTPD-CSPEC-ARCH-0001 后 2542。两项门禁(基线不升)在
+CALLSPEC-0001 落地前不满足——修复暂驻本 lane 分支，勿并入 master。
+
 2026-06-27: opcode 改名对齐 Ghidra 规范名 (INT_NEG->INT_2COMP / INT_NOT->INT_NEGATE / BOOL_NOT->BOOL_NEGATE)，纯重命名，行为不变。
 
 2026-06-29: CALL op 建立 RAX 返回值 output（Register@0x0 size 8）。对齐 Ghidra `ActionFuncLink::funcLinkOutput`（coreaction.cc:1551 `newVarnodeOut`）：为未锁定 prototype 的 CALL 分配返回值寄存器作为 output，使返回值进入 SSA def 链。此前 CALL output 永远为 None，导致返回值"丢失"——下游使用（如 `__dest = strdup(buf)`）变成"声明却未赋值"。多寄存器/XMM 返回与 assumedOutputExtension 是后续工作。
