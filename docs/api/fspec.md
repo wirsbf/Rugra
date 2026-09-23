@@ -1039,3 +1039,17 @@ ModelRules 或 Architecture-owned Address identity；`fspec` 保持 L2。
   FSPEC-PARAMLIST-OUTPUT-DISPATCH-0001 / FSPEC-0002（本投影只覆盖
   fillin 两入口消费的状态）；`HiddenReturnAssign::decode` 的
   voidlock/strategy 读入后不入 fillin 状态（oracle 同样无消费）。
+
+### 2026-09-23（HTTPD-CALL-PUSH-0001 RC3）：FuncCallSpecs::effective_extrapop 存储
+- `FuncCallSpecs` 新增 `effective_extrapop: i32` 私有字段 + 
+  `set_effective_extrapop`/`get_effective_extrapop`（fspec.hh:1687-1688 的
+  inline 访问器镜像），构造初始化 `ProtoModel::extrapop_unknown`
+  （fspec.cc:4927，`EXTRAPOP_UNKNOWN_FULL`）。此前该"每个调用点的实际
+  extrapop"无存储面——`ActionExtraPopSetup`（coreaction.cc:1454）与
+  `ActionStackPtrFlow::analyzeExtraPop`（cc:306）两处写回均无落点，
+  CALLSPEC-0001 残差的主要存储半边就此闭合。
+- 写入方：coreaction.rs 的 `ActionExtraPopSetup::apply`（已知 extrapop 分支
+  cc:1454，调用点索引延迟到循环外统一回写避免借用交叉）与
+  `analyze_extra_pop`（StackSolver 解出的 INDIRECT 变量按
+  `soln-soln2` 写回，cc:302-307）。Ghidra 的 clone 携带面
+  （fspec.cc:4971）在 Rugra 无 FuncCallSpecs 克隆路径，无对应物。

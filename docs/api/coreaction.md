@@ -2593,3 +2593,23 @@ glob_range/glob_url/next_url 逐函数 0/0；确定性双跑（E2E stdout sha256
 ### 2026-09-23（VARGROUP-ABSORB-0001 §4-4）：ActionRestrictLocal 参数谓词 + ActionRestructureVarnode 持久 scope
 - `ActionRestrictLocal::apply` 循环 1 的 spacebase 参数判定从 `p.address.as_u64() > 0x7FFF_FFFF`（从不命中 callee 相对偏移）修正为 `p.address_space == AddressSpace::Stack`（coreaction.cc:1974-1975 的 `IPTR_SPACEBASE` 空间类型测试）。match_url 调用点（so=fc70 + Stack:8:304）现在把 fc78..fd90 出参影子区 markNotMapped——oracle `print localrange` 的 fc78-fda7 间隙由此产生，30d6 字段件因此非 addr-tied/mapped。
 - `ActionRestructureVarnode::apply` 改为复用 `fd.scope`（Ghidra 的 localmap 为 Funcdata 生命周期单一对象，funcdata.cc:69-70）；仅首趟构造 + seed 平台参数符号 + `reset_local_window`（一次性窗口安装）。此前每趟 fresh scope + 全量重装窗口，把 RestrictLocal 的窄化整体抹掉。
+
+### 2026-09-23（HTTPD-CALL-PUSH-0001 RC3）：analyzeExtraPop 写回 + ExtraPopSetup setEffectiveExtraPop
+- `analyze_extra_pop`（coreaction.cc:261-318）从"只计数骨架"升级为完整写回
+  端口：cc:264-267 早退守卫现读架构 `evalfp_called`/`defaultfp` 模型的
+  extrapop（与 oracle 同源；此前误用 `fd.funcp.get_extra_pop()` 投影）；
+  cc:278 变量数为 0 早退；cc:287-293 的 65535 不可解解值只打一次
+  `warning_header("Unable to track spacebase fully for stack")`；cc:296-309
+  对 iop 挂 CALL 的 INDIRECT 定义变量按 `soln - soln2`（companion 缺席为
+  0）回写 `FuncCallSpecs::set_effective_extrapop`；cc:310-315 所有可解变量
+  的定义 op 经 `op_set_opcode(INT_ADD)` + `op_set_all_input([spcbase_in,
+  const soln])` 重写。签名随之 `&Funcdata → &mut Funcdata`。
+- `ActionStackPtrFlow::apply`（cc:495）调用点的 funcp 守卫移除（守卫回归
+  oracle 位置——函数体首部）；`ActionExtraPopSetup::apply` 的已知 extrapop
+  分支补 cc:1454 的 `setEffectiveExtraPop(extrapop)` 写回（调用点索引收集
+  后循环外统一写，避免与 `find_call_op` 的注册表读交叉借用）。
+- 行为边界（实测）：httpd/curl（defaultfp=__stdcall extrapop=8 已知）两语料
+  走 cc:264-267 早退，本次写回不触达——E2E 数字不变（httpd 2137/0/0 缺
+  numbering 见 TODO 板 VARMAP-DUPDECL 家族；curl 4073/0/0 优于当前 master
+  4085）。未知 extrapop 平台（32 位 __cdecl 类）的写回路径当前无 E2E 语料
+  覆盖，状态 UNTESTED（B2 件待后续 wave 建 fixture）。

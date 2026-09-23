@@ -11473,38 +11473,130 @@ impl StackSolver {
 
 // Ghidra: coreaction.cc:261 ActionStackPtrFlow::analyzeExtraPop
 /// Calculate stack-pointer change across undetermined sub-functions.
-/// Structurally corresponds to `ActionStackPtrFlow::analyzeExtraPop`
-/// (coreaction.cc:261-318). It uses StackSolver to build and solve the equation
-/// system for the stack pointer, but currently only counts solved changes.
+/// Faithful to `ActionStackPtrFlow::analyzeExtraPop` (coreaction.cc:261-318).
 ///
-/// **Status**: structural skeleton. D0 supplies exact callspec identity, but
-/// effective_extrapop storage and this solver's mutating write-back are still
-/// absent under `CALLSPEC-0001`. StackSolver's equation/solve core is present,
-/// but its known-extrapop INDIRECT branch and this consumer are incomplete.
+/// cc:264-267: reads the architecture's `evalfp_called` (or `defaultfp`)
+/// model and returns immediately when its extra-pop is known — the solver
+/// only runs for unknown-extrapop platforms. cc:269-279: StackSolver
+/// build+solve. cc:281-316: for each solved variable (index 1..n, index 0
+/// is the stack-pointer input): solution 65535 prints one header warning
+/// per call; a variable defined by a call-attached INDIRECT gets
+/// `fc->setEffectiveExtraPop(soln-soln2)` (companion solution, 0 when
+/// absent); every solved variable's defining op is rewritten to
+/// `INT_ADD(spcbaseInput, soln)` via opSetOpcode+opSetAllInput.
 pub fn analyze_extra_pop(
-    data: &crate::funcdata::Funcdata,
+    fd: &mut Funcdata,
     stackspace_spacebase: crate::address::Address,
     spacebase_size: usize,
     _spcbase: i32,
-) -> i32 {
-    let mut solver = StackSolver::new();
-    solver.build(data, stackspace_spacebase, spacebase_size);
-    solver.solve();
-    let mut numchange = 0;
-    // Ghidra cc:303-316: walk solutions, for each INDIRECT-companion varnode
-    // with a valid solution, set the callspec's extrapop. Exact owner lookup is
-    // available, but effective_extrapop/write-back is CALLSPEC-0001; count the
-    // changes without mutating the owner.
-    for i in 0..solver.get_num_variables() {
-        let sol = solver.get_solution(i);
-        let comp = solver.get_companion(i);
-        if sol != StackSolver::UNSOLVED && comp >= 0 {
-            // Would write: fc->setEffectiveExtraPop(sol-sol2) on the exact
-            // callspec for vnlist[i]'s INDIRECT op. CALLSPEC-0001.
-            numchange += 1;
+) {
+    use crate::opcodes::OpCode;
+    // cc:264-267: ProtoModel *myfp = evalfp_called ?: defaultfp;
+    //               if (myfp->getExtraPop() != extrapop_unknown) return;
+    // No Architecture bound (legacy fixtures): no model can certify a known
+    // extrapop, so the solver path stays reachable exactly as a null-model
+    // oracle would never take the early-out.
+    let myfp_extrapop = fd.get_arch().and_then(|arch| {
+        arch.evalfp_called
+            .clone()
+            .or_else(|| arch.defaultfp.clone())
+            .map(|m| m.extrapop)
+    });
+    if let Some(epop) = myfp_extrapop {
+        if epop != crate::fspec::EXTRAPOP_UNKNOWN_FULL {
+            return;
         }
     }
-    numchange
+    // cc:269-277: solver.build inside try/catch LowlevelError — a build
+    // failure warns and returns. Rugra's StackSolver::build reports gaps
+    // through the missed-variables counter instead of failing closed; the
+    // "not setup normally" header-warning path has no faithful trigger.
+    let mut solver = StackSolver::new();
+    solver.build(fd, stackspace_spacebase, spacebase_size);
+    // cc:278: nothing to solve.
+    if solver.get_num_variables() == 0 {
+        return;
+    }
+    // cc:279
+    solver.solve();
+
+    // cc:281: Varnode *invn = solver.getVariable(0);
+    let Some(invn) = solver.get_variable(0).cloned() else {
+        return;
+    };
+    // cc:282: bool warningprinted = false;
+    let mut warningprinted = false;
+
+    // cc:284: for(int4 i=1;i<solver.getNumVariables();++i)
+    for i in 1..solver.get_num_variables() {
+        let Some(vn) = solver.get_variable(i).cloned() else {
+            continue;
+        };
+        // cc:286: int4 soln = solver.getSolution(i);
+        let soln = solver.get_solution(i);
+        // cc:287-293: 65535 = unable to track; one header warning total.
+        if soln == StackSolver::UNSOLVED {
+            if !warningprinted {
+                // cc:289: "Unable to track spacebase fully for "
+                //         + stackspace->getName()
+                fd.warning_header("Unable to track spacebase fully for stack");
+                warningprinted = true;
+            }
+            continue;
+        }
+        // cc:294: PcodeOp *op = vn->getDef();
+        let def_arc = vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
+        let Some(def_arc) = def_arc else {
+            continue;
+        };
+        let op = crate::op::PcodeOpRef(def_arc);
+
+        // cc:296-309: INDIRECT whose iop input references a CALL op →
+        // setEffectiveExtraPop(soln - soln2) on that call's FuncCallSpecs.
+        if op.0.read().unwrap().opcode == OpCode::CPUI_INDIRECT {
+            let iopvn = op.0.read().unwrap().inrefs.get(1).cloned();
+            if let Some(iopvn) = iopvn {
+                let is_iop = iopvn.read().unwrap().get_space().is_iop();
+                if is_iop {
+                    // cc:299: PcodeOp *iop = PcodeOp::getOpFromConst(...)
+                    if let Some(iop) = fd.get_op_from_const(&iopvn) {
+                        // cc:300: FuncCallSpecs *fc = data.getCallSpecs(iop)
+                        for ci in 0..fd.num_calls() {
+                            let attached = fd
+                                .get_call_specs(ci)
+                                .and_then(|fc| fc.op.upgrade())
+                                .map(|o| std::sync::Arc::ptr_eq(&o, &iop.0))
+                                .unwrap_or(false);
+                            if !attached {
+                                continue;
+                            }
+                            // cc:302-305: soln2 from the companion equation,
+                            // 0 when there is no companion.
+                            let comp = solver.get_companion(i);
+                            let soln2 = if comp >= 0 {
+                                solver.get_solution(comp as usize)
+                            } else {
+                                0
+                            };
+                            // cc:306: fc->setEffectiveExtraPop(soln-soln2)
+                            if let Some(mut fc) = fd.get_call_specs_mut(ci) {
+                                fc.set_effective_extrapop(soln - soln2);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        // cc:310-315: rewrite the defining op to INT_ADD(invn, soln).
+        let sz = invn.read().unwrap().get_size();
+        let paramlist = vec![
+            invn.clone(),
+            fd.new_constant(sz, (soln as u64) & crate::address::calc_mask(sz)),
+        ];
+        fd.op_set_opcode(&op, OpCode::CPUI_INT_ADD);
+        fd.op_set_all_input(&op, &paramlist);
+    }
 }
 
 /// (coreaction.cc:261-499). Repairs "stack pointer clogs": an INT_ADD on the
@@ -11787,18 +11879,14 @@ impl Action for ActionStackPtrFlow {
             self.count += 1;
         }
         if numchange == 0 {
-            // cc:495 analyzeExtraPop. The cc:264-267 guard reads the
-            // architecture's evalfp_called/defaultfp proto model and elides
-            // the solver when the model's extra-pop is known; Rugra reads the
-            // function prototype's resolved extra_pop (same "known" answer in
-            // the default pipeline once the model is installed). The unknown
-            // path runs StackSolver — its callspec write-back is still
-            // unwired (see analyze_extra_pop), tracked by
-            // PIPE-STACKSTALL-COUNT-0001's solver residual.
-            if fd.funcp.get_extra_pop() == crate::fspec::EXTRAPOP_UNKNOWN_FULL {
-                if let Some((spacebase_addr, spacebase_size)) = spacebase_loc {
-                    analyze_extra_pop(fd, spacebase_addr, spacebase_size, 0);
-                }
+            // cc:495 analyzeExtraPop. The cc:264-267 guard (evalfp_called /
+            // defaultfp model extrapop known → elide the solver) now lives
+            // inside analyze_extra_pop itself, exactly as in the oracle; the
+            // earlier funcp-based read here was a projection of the same
+            // "known" answer, retired with the write-back port
+            // (HTTPD-CALL-PUSH-0001 RC3).
+            if let Some((spacebase_addr, spacebase_size)) = spacebase_loc {
+                analyze_extra_pop(fd, spacebase_addr, spacebase_size, 0);
             }
             // cc:496 — analysis finished on a clean pass.
             self.analysis_finished = true;
@@ -11945,6 +12033,7 @@ impl Action for ActionExtraPopSetup {
         let sb_size = arch.stack_pointer_size;
 
         let n = fd.num_calls();
+        let mut set_eff_pops: Vec<(usize, i32)> = Vec::new();
         for i in 0..n {
             // cc:1447-1448: fc = data.getCallSpecs(i); skip when extraPop==0.
             let (call_op, extra_pop) = {
@@ -11973,10 +12062,11 @@ impl Action for ActionExtraPopSetup {
                 .create_with_space(sb_size, sb_space, sb_offset);
             fd.op_set_input(&op, invn, 0);
             if extra_pop != crate::fspec::EXTRAPOP_UNKNOWN_FULL {
-                // cc:1453-1457: setEffectiveExtraPop (bookkeeping; Rugra's
-                // FuncCallSpecs has no effective_extrapop field yet — the
-                // value is only read back by FuncCallSpecs consumers that
-                // Rugra has not ported) + INT_ADD form inserted AFTER call.
+                // cc:1453-1454: we know exactly how the stack pointer is
+                // changed — record it on the callspec
+                // (`fc->setEffectiveExtraPop(fc->getExtraPop())`), then the
+                // INT_ADD form is inserted AFTER the call (cc:1455-1457).
+                set_eff_pops.push((i, extra_pop));
                 fd.op_set_opcode(&op, OpCode::CPUI_INT_ADD);
                 let pop_c = fd.new_constant(sb_size, extra_pop as u64);
                 fd.op_set_input(&op, pop_c, 1);
@@ -11988,6 +12078,13 @@ impl Action for ActionExtraPopSetup {
                 let iop_vn = fd.new_varnode_iop(&call_op);
                 fd.op_set_input(&op, iop_vn, 1);
                 fd.op_insert_before(&op, &call_op);
+            }
+        }
+        // cc:1454 write-back deferred until after the loop so the callspec
+        // registry is not mutably borrowed while `find_call_op` walks it.
+        for (i, epop) in set_eff_pops {
+            if let Some(mut fc) = fd.get_call_specs_mut(i) {
+                fc.set_effective_extrapop(epop);
             }
         }
         Ok(action_status::NO_CHANGE)

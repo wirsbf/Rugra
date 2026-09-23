@@ -2124,6 +2124,14 @@ pub struct FuncCallSpecs {
     /// (`Heritage::tryOutputStackGuard` builds it caller-perspective,
     /// heritage.cc:1414).
     pub is_stack_output_locked: bool,
+    /// Working extrapop for the CALL. Faithful to
+    /// `FuncCallSpecs::effective_extrapop` (fspec.hh:1650): initialized to
+    /// `ProtoModel::extrapop_unknown` by the constructor (fspec.cc:4927),
+    /// set to the model's known extrapop by `ActionExtraPopSetup`
+    /// (coreaction.cc:1454) or to the StackSolver-recovered value by
+    /// `ActionStackPtrFlow::analyzeExtraPop` (coreaction.cc:306). Carried
+    /// across a clone (fspec.cc:4971).
+    effective_extrapop: i32,
 }
 
 /// Sentinel value for unknown stack offset. Faithful to
@@ -2149,7 +2157,21 @@ impl FuncCallSpecs {
             input_consume: Vec::new(),
             stack_placeholder_slot: -1,
             is_stack_output_locked: false,
+            // fspec.cc:4927 `effective_extrapop = ProtoModel::extrapop_unknown`
+            effective_extrapop: EXTRAPOP_UNKNOWN_FULL,
         }
+    }
+
+    // Ghidra: fspec.hh:1687 FuncCallSpecs::setEffectiveExtraPop
+    /// Set the specific \e extrapop associated with \b this call site.
+    pub fn set_effective_extrapop(&mut self, epop: i32) {
+        self.effective_extrapop = epop;
+    }
+
+    // Ghidra: fspec.hh:1688 FuncCallSpecs::getEffectiveExtraPop
+    /// Get the specific \e extrapop associated with \b this call site.
+    pub fn get_effective_extrapop(&self) -> i32 {
+        self.effective_extrapop
     }
 
     // Ghidra: fspec.cc:4924 FuncCallSpecs::FuncCallSpecs
