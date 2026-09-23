@@ -282,7 +282,11 @@ python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --su
 - **result/ 回流约定**:每次 E2E 后 `cp /tmp/<run>.log result/curl_cur.c`(gitignored 存档),防陈旧事故。
 - **worktree 惯例**:runner 需 `ghidra -> 主仓/ghidra` symlink(gitignored);GIT_DIR 劫持已修(tools/check_gate_health.py 清环境变量),worktree 提交无需 --no-verify。
 - **worktree 内禁用 `git stash`**(2026-08-30 三起事故):stash 栈是 repo 级共享(~170 worktree),并发 agent 交错 push/pop 会弹错分支致改动丢失;一律 per-worktree commit(wip checkpoint --no-verify)。
-- **分支修复测试代码放内存盘**(2026-09-21 用户指令):agent 在分支/worktree 上修复时产生的测试代码(探针脚本、调试 harness、临时 fixture 草稿、A/B 对拍驱动)一律写入内存盘 **`/dev/shm/rugra-tests/<branch>/`**(本机 `/tmp` 不是 tmpfs,真正的内存盘是 `/dev/shm`),禁止落进 repo/worktree,防止分支残留测试垃圾互相污染。唯一例外:按机制 B2 必须固化的双侧回归 fixture,只在 root 集成阶段挑拣入库,分支上仍先在内存盘迭代。内存盘重启即丢,未集成的证据自行负责及时归档。
+- **分支修复测试代码放内存盘**(2026-09-21 用户指令;**2026-09-23 扩展到 worktree**):
+  agent 在分支/worktree 上修复时产生的测试代码(探针脚本、调试 harness、临时 fixture 草稿、A/B 对拍驱动)一律写入内存盘 **`/dev/shm/rugra-tests/<branch>/`**;**新 worktree 一律建在
+  `/dev/shm/rugra-worktrees/<name>`**(commit 对象存于主仓 .git 对象库=重启安全,工作区易失可由 wip 纪律覆盖)。
+  在飞车道完成前不迁移其 worktree;空闲的旧 `/home/ls/Rugra-wt-*` 在下次认领时迁移。
+  例外:按机制 B2 必须固化的双侧回归 fixture,只在 root 集成阶段挑拣入库,分支上仍先在内存盘迭代。内存盘重启即丢,未集成的证据自行负责及时归档。
 - **oracle 环境**:`/tmp/rugra-ghidra-bfd-2.38` 机器重启即丢;重建用直连 https 拉 binutils-dev deb 解包(**apt 代理不可用**)。
 
 当前反编译质量数据见 `CURRENT_STATUS.md`(不再放 AGENTS.md,避免数据过期)。
