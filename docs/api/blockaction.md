@@ -233,6 +233,27 @@ Create a new ActionFinalStructure instance
   `act=finalstructure|status=1|count=0|lcount=0|tests=1|apply=0|res=0`，
   与 oracle 行为一致。
 
+### 2026-09-23：post-terminator op 清理改为 block 作用域 + oracle 完整 kill 路径（BLOCKACTION-ALIVELIST-GLUE-0001）
+- Oracle `ActionFinalStructure::apply`（blockaction.cc:2186-2197）本身不删任何 op；
+  Ghidra 里 "unconditional BRANCH/RETURN 之后的 op" 根本不会存在——flow 生成期每个
+  分支处切块（funcdata_block.cc），BlockBasic 的 op 列表以 terminator 结尾，alive
+  ⟺ 在块内（`PcodeOpBank::markAlive`/`markDead`，op.cc:1017-1034）。
+- 旧 glue 用 alivelist 地址连续性代理（`cur_addr < prev || cur_addr > prev + 32`）推断
+  "同块"，但 alivelist 是 mark-alive 插入序（MULTIEQUAL/INDIRECT/CALL 相关 op 常与
+  顺序地址交错），代理会把地址相邻的**下一个块**的活 op 判为同块死代码。curl 语料
+  实测误删 314 个、httpd 误删 646 个 alivelist 条目——全是活数据流 op（INDIRECT/
+  COPY，其输出仍被打印语句消费）。若按旧 glue 意图"补全副作用"（置 DEAD+清 block）
+  会直接破坏打印（main 出现 `(Configurable *;` 级 RPN 断裂）。
+- 修正：检测改为遍历 `fd.bblocks` 每个 BlockBasic 的 op 列表，块内首个
+  CPUI_BRANCH/CPUI_RETURN 之后的 op 才是 loader 残留（oracle 语义下不可能存在）；
+  kill 走 `Funcdata::op_uninsert`（funcdata_op.cc:164-173 = `markDead` + `BlockBasic::
+  removeOp`，block.cc:2292-2297），不再是裸 alivelist splice。
+- 现语料实测：block 作用域检测命中 **0** 个 op（Rugra 块切分正确），alivelist 不变
+  不再被污染；curl/httpd 输出与基线仅 20 行既有 diff 行的 cast 形态互换
+  （printc 后备注解路径按 alivelist 数 use，恢复完整 alivelist 后选型变化，
+  `(int8*)`↔`(int*)`，golden 均为 `(long)`，两侧本就是 diff 行），三门禁
+  curl 2585/0/0、httpd 2333/0/0 与基线恒等；next_url/match_url 双投影字节级不变。
+
 ### `pub struct ActionNormalizeBranches`
 
 Action for normalizing branches (e.g., converting goto to break/continue)

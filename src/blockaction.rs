@@ -8351,43 +8351,53 @@ impl Action for ActionFinalStructure {
             }
         }
 
-        // Remove unreachable ops after unconditional BRANCH or RETURN
-        let mut dead_indices: Vec<usize> = Vec::new();
-        let mut hit_terminator = false;
-        let mut prev_addr: Option<u64> = None;
-
-        for (idx, op_ref) in fd.obank.alivelist.iter().enumerate() {
-            let op = op_ref.0.read().unwrap();
-            let cur_addr = op.get_addr().as_u64();
-
-            // Non-sequential address jump → new basic block
-            if let Some(prev) = prev_addr {
-                if cur_addr < prev || cur_addr > prev + 32 {
-                    hit_terminator = false;
-                }
-            }
-            prev_addr = Some(cur_addr);
-
-            if hit_terminator {
-                dead_indices.push(idx);
+        // RUGRA-GLUE: retire post-terminator ops. The oracle action has no
+        // counterpart here (blockaction.cc:2186-2197 only runs the five graph
+        // calls); in Ghidra such ops never exist in the first place — a
+        // BlockBasic's op list ends at its terminator (blocks are split at
+        // every branch during flow generation, funcdata_block.cc), and flow
+        // following never marks ops past an unconditional BRANCH/RETURN
+        // alive. Where Rugra's loader still leaves ops in a block after its
+        // unconditional BRANCH/RETURN, this glue retires them via the
+        // oracle's canonical kill path, Funcdata::opUninsert
+        // (funcdata_op.cc:164-173): PcodeOpBank::markDead (op.cc:1028-1034 —
+        // alive-list removal + `dead` flag set + dead-list append) plus
+        // BlockBasic::removeOp (block.cc:2292-2297 — parent cleared + block
+        // op-list removal). The former glue walked the alive list with an
+        // address-continuity proxy, which fired on ops of the NEXT
+        // (address-adjacent) block — killing live dataflow ops — and only
+        // spliced the alive list, leaving retired ops `is_dead() == false`
+        // and in their blocks, so block walkers (printc, dump census) still
+        // observed them while every alive-list consumer was blind
+        // (BLOCKACTION-ALIVELIST-GLUE-0001).
+        let mut dead_ops: Vec<crate::op::PcodeOpRef> = Vec::new();
+        for block_idx in 0..fd.bblocks.get_size() {
+            let Some(block_arc) = fd.bblocks.get_block(block_idx) else {
                 continue;
-            }
-
-            match op.opcode {
-                OpCode::CPUI_BRANCH | OpCode::CPUI_RETURN => {
-                    hit_terminator = true;
+            };
+            let ops = block_arc.read().unwrap().get_ops();
+            let mut hit_terminator = false;
+            for op_ref in ops.iter() {
+                let op = op_ref.0.read().unwrap();
+                if hit_terminator {
+                    dead_ops.push(op_ref.clone());
+                    continue;
                 }
-                _ => {}
+                match op.opcode {
+                    OpCode::CPUI_BRANCH | OpCode::CPUI_RETURN => {
+                        hit_terminator = true;
+                    }
+                    _ => {}
+                }
             }
         }
 
-        // Reverse removal preserves indices. Like the tagging above, dead-op
-        // cleanup is printing/IR glue with no `count +=` counterpart in the
-        // oracle action.
-        for &idx in dead_indices.iter().rev() {
-            if idx < fd.obank.alivelist.len() {
-                fd.obank.alivelist.remove(idx);
-            }
+        // Like the GOTO tagging above, this cleanup is printing/IR glue with
+        // no `count +=` counterpart in the oracle action. op_uninsert mutates
+        // block op lists, so ops are collected first and retired only after
+        // the walk completes.
+        for op in dead_ops {
+            fd.op_uninsert(&op);
         }
 
         // Ghidra blockaction.cc:2196: unconditional `return 0` — never
