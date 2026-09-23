@@ -10477,10 +10477,16 @@ impl Action for ActionParamDouble {
 
 /// Unjustified parameters. Faithful to `ActionUnjustifiedParams`
 /// (coreaction.cc).
-pub struct ActionUnjustifiedParams;
+pub struct ActionUnjustifiedParams {
+    /// Ghidra's inherited protected `Action::count`: bumped once per
+    /// adjustInputVarnodes (cc:4826) while the apply return stays 0
+    /// (cc:4828); externalized to the executor through `take_count_delta`
+    /// (drives lcount<count → count_apply/repeat, action.cc:298).
+    pub count: i32,
+}
 impl ActionUnjustifiedParams {
     // Ghidra: coreaction.hh:918 ActionUnjustifiedParams (constructor mirror)
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self { Self { count: 0 } }
 }
 impl Action for ActionUnjustifiedParams {
     // Ghidra: coreaction.cc:4784 ActionUnjustifiedParams::apply
@@ -10523,8 +10529,19 @@ impl Action for ActionUnjustifiedParams {
                 // inputs until it stops growing / stays justified.
                 loop {
                     let mut overlaps = false;
-                    // cc:4805-4815 — walk the inputs BEFORE the current one.
-                    for prev_arc in input_vns[..idx].iter() {
+                    // cc:4803-4815 — `iter2 = iter` (one PAST the current
+                    // varnode, already advanced at cc:4794) then
+                    // `while (iter2 != begiter) { --iter2; vn = *iter2; }`:
+                    // the scan starts ON the current varnode itself and
+                    // walks BACKWARD (descending def order) to the first
+                    // input. Chained straddles must complete in this one
+                    // pass — a higher input extending vdata.offset downward
+                    // turns a still-lower input into an overlap that only
+                    // this descending order observes against the updated
+                    // boundary (CR4 MISMATCH-1: an ascending exclusive scan
+                    // would permanently miss it if the grown container
+                    // rejustifies and breaks the do-while).
+                    for prev_arc in input_vns[..=idx].iter().rev() {
                         let prev = prev_arc.read().unwrap();
                         if prev.get_space() != vdata.space {
                             continue;
@@ -10552,15 +10569,29 @@ impl Action for ActionUnjustifiedParams {
                 }
                 // cc:4822 — data.adjustInputVarnodes(vdata.getAddr(),vdata.size)
                 fd.adjust_input_varnodes(vdata.space, vdata.offset, vdata.size as usize)?;
+                // cc:4826 — count += 1: one change signal per adjust, riding
+                // the inherited count channel (harvested via
+                // take_count_delta; the apply return stays 0, cc:4828).
+                self.count += 1;
                 // cc:4823-4825 — additions and deletions happened: reset the
                 // iteration to the adjusted address by restarting the walk.
-                // (Ghidra bumps the action count here but still returns 0.)
                 continue 'walk;
             }
             break;
         }
+        // cc:4828 — return 0: the per-adjust change signal rides the count
+        // channel, not the return value.
         Ok(action_status::NO_CHANGE)
     }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:4826 `count += 1` per adjustInputVarnodes) into the
+    // Rust ActionState accumulator harvested by Action::perform
+    // (action.rs:338-339 — drives lcount<count → count_apply/repeat).
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
+    }
+
     // RUGRA-GLUE: Rust Action trait get_name; "unjustparams" mirrors ctor at coreaction.hh:920 (Action(0,"unjustparams",g))
     fn get_name(&self) -> &str { "unjustparams" }
 }

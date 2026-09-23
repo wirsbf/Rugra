@@ -2648,3 +2648,23 @@ glob_range/glob_url/next_url 逐函数 0/0；确定性双跑（E2E stdout sha256
   残差）；httpd 2099/0/0（≤2104 基线）；next_url/match_url 双投影 vs
   sb-oracle 锁定 oracle 投影逐 stage MATCH（仅 META 身份行差异）；
   cargo test --lib 18 失败=基预存同集（b8031069 A/B 复核）。
+
+## 2026-09-23（BOOMATTR lane r2，CR4 REJECT 返工）：unjustparams 遍历方向 + count 通道
+
+- **MISMATCH-1 修正（coreaction.cc:4803-4815 逐字核对）**：oracle 重叠扩展内循环
+  `iter2 = iter; while (iter2 != begiter) { --iter2; vn = *iter2; }`——iter 在
+  cc:4794 `*iter++` 后指向当前 varnode 之后的下一项，`--iter2` 首次落回**当前
+  varnode 自身**，随后**降序**扫到首个输入。链式跨骑（高位输入下扩 vdata.offset
+  后使更低位输入变为跨骑）必须在**同一趟降序扫描**内以更新后的边界判定完成；
+  前向升序不含自身的扫描在"生长后容器 rejustify 成功 break"时会永久漏掉更低位。
+  修正 = `input_vns[..=idx].iter().rev()`（含自身、降序，逐字镜像 --iter2 序）。
+- **MISMATCH-2 修正（coreaction.cc:4826）**：`ActionUnjustifiedParams` 增加
+  `count: i32` 字段，每次 adjustInputVarnodes 后 `count += 1`，经
+  `take_count_delta`（std::mem::take）外化到 ActionState 累加器——action.rs
+  perform cc:338-339 的既有 count 通道（lcount<count → count_apply/repeat/
+  组级变更判定）即 Ghidra `Action::count` 的等价物，apply 返回值保持 0
+  （cc:4828）。
+- 实测：curl default 2684/0/0、MIRROR canonical 4064/0/0、direct-runner
+  3118/0/0、httpd 2099/0/0，MIRROR 输出与 r1 **逐字节相同**——本语料无
+  链式跨骑场景触发（降序扫描与升序在单步扩展下行为等价），count 通道
+  无行为翻转（unjustparams 无 repeatapply 旗，count 经组级聚合消费）。

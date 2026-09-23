@@ -10442,10 +10442,12 @@ impl Funcdata {
         sz: usize,
     ) -> crate::error::Result<()> {
         let end = addr_offset.wrapping_add(sz.saturating_sub(1) as u64);
-        // cc:500-508: gather inputs completely contained in [addr, end].
-        // Ghidra's beginDef(Varnode::input,addr)/endDef(Varnode::input,endaddr)
-        // iterate the Address-ordered def subset — the space of `addr` pins
-        // the iteration; the offset bounds alone must not cross spaces.
+        // cc:500-508 — beginDef(Varnode::input, addr)..endDef(Varnode::input,
+        // endaddr): the Address-ordered input-def subset — the space of
+        // `addr` pins the iteration and membership is by START offset in
+        // [addr, endaddr]. An input whose start is in range but extends
+        // past endaddr STAYS in the iteration: the cc:505-506
+        // LowlevelError below is the only exit for it, exactly as in Ghidra.
         let inlist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = self
             .vbank
             .loc_tree
@@ -10454,8 +10456,7 @@ impl Funcdata {
                 let r = lr.0.read().unwrap();
                 if !r.is_input() || r.get_space() != space { return None; }
                 let start = r.loc.as_u64();
-                let vn_end = start.saturating_add(r.size as u64).saturating_sub(1);
-                if start < addr_offset || vn_end > end { return None; }
+                if start < addr_offset || start > end { return None; }
                 Some(lr.0.clone())
             })
             .collect();
@@ -10463,12 +10464,27 @@ impl Funcdata {
         // combined input, then destroy the old input.
         let mut replaced: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = Vec::new();
         for vn in inlist {
-            let (vn_addr, vn_size) = {
+            let (vn_addr, vn_size, vn_is_input) = {
                 let r = vn.read().unwrap();
-                (r.loc.as_u64(), r.size)
+                (r.loc.as_u64(), r.size, r.is_input())
             };
-            let sa = vn_addr.saturating_sub(addr_offset) as usize;
-            if sz <= vn_size { continue; }
+            // cc:505-506 — extends past the container end: fatal, no silent
+            // skip.
+            if vn_addr.wrapping_add(vn_size as u64).wrapping_sub(1) > end {
+                return Err(crate::error::Error::Lowlevel(
+                    "Cannot properly adjust input varnodes".to_string(),
+                ));
+            }
+            // cc:512-514 — sa = addr.justifiedContain(sz, vn->getAddr(),
+            // vn->getSize(), false); (!isInput || sa < 0 || sz <= size) is
+            // fatal. The gather guarantees is_input and start >= addr, so
+            // sa >= 0; the size relation is the live check.
+            let sa = vn_addr.wrapping_sub(addr_offset) as usize;
+            if !vn_is_input || sz <= vn_size {
+                return Err(crate::error::Error::Lowlevel(
+                    "Bad adjustment to input varnode".to_string(),
+                ));
+            }
             let pc = self.baseaddr;
             let subop = self.new_op(2, pc);
             self.op_set_opcode(&subop, crate::opcodes::OpCode::CPUI_SUBPIECE);

@@ -2460,3 +2460,17 @@ ordinal 29 lanedivide 双分裂（unique 槽 + XMM0 phi 群）在 Rugra 侧同�
 - 实测：default 模式 match_url 的 304B URLGlob 栈参数容器（DWARF 锁定
   Stack[0x8,0x138)）adjust 后不再产生 Ram 空间 auRam 巨型输入；镜像模式
   match_url 与 direct-runner golden 同 `in_stack_00000130` 形态。
+
+## 2026-09-23（BOOMATTR lane r2，CR4 次要项）：adjustInputVarnodes 错误契约
+
+- funcdata_varnode.cc:500-514 三处 `throw LowlevelError` 对齐：收集成员资格
+  改为**起始偏移 ∈ [addr, endaddr]**（beginDef(input,addr)..endDef(input,
+  endaddr) 的 Address 序语义）——起始在界内但**尾部越界**的输入保留在迭代
+  中，由 cc:505-506 的 LowlevelError("Cannot properly adjust input varnodes")
+  显式失败（旧实现的静默过滤删除了该错误路径）；cc:512-514 的
+  `(!isInput || sa<0 || sz<=size)` 合并为
+  LowlevelError("Bad adjustment to input varnode")（gather 保证 is_input 与
+  sa>=0，尺寸关系为活检查）。错误经 `crate::error::Error::Lowlevel` 传播，
+  与既有 "Overlapping input varnodes" 同通道。
+- 实测：curl（default+MIRROR）/httpd 全语料零触发（生长环按构造仅向下扩、
+  尾部固定，跨尾输入在 oracle 同样 throw——两侧对非法状态同判）。
