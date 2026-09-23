@@ -1053,3 +1053,42 @@ ModelRules 或 Architecture-owned Address identity；`fspec` 保持 L2。
   `analyze_extra_pop`（StackSolver 解出的 INDIRECT 变量按
   `soln-soln2` 写回，cc:302-307）。Ghidra 的 clone 携带面
   （fspec.cc:4971）在 Rugra 无 FuncCallSpecs 克隆路径，无对应物。
+
+## 2026-09-23（BOOMATTR lane）：FuncProto 自函数参数恢复三件套 + updateInputNoTypes
+
+- `FuncProto::resolve_model()`（fspec.cc:3767-3776 镜像）：null model 早退 +
+  非 merged 模型早退——Rugra 的 `ProtoModelFull` 恒为具体模型，merged 分支
+  （`ProtoModelMerged::selectModel`）不可达，保留完整签名面供 merged 支持
+  落地时接通。
+- `FuncProto::derive_input_map(&mut ParamActive)`（fspec.hh:1494-1495 inline
+  `model->deriveInputMap(active)` = fspec.hh:791-792 `input->fillinMap(active)`）：
+  与 `FuncCallSpecs::derive_input_map` 同一 dispatch；modelless FuncProto 是
+  Ghidra 的非法状态（解引用即 fault），Rugra 生产侧由
+  `ActionInputPrototype` 的 setScope-fallback glue 先绑模型，防御性 no-op 兜底。
+- `FuncProto::unjustified_input_param(space,offset,size,res)`（fspec.cc:4426-4453）：
+  锁定参数 justifiedContain 环（ ADDRESS-0001 退化同
+  `characterize_as_input_param`：spaceless legacy Address + 记录的
+  address_space 空间等价守卫替代 address.cc:133 的 `base != op2.base`）+
+  模型 `unjustifiedContainer` 尾（fspec.rs:6946 已有移植首次接通到
+  FuncProto 侧）。
+- `FuncProto::update_input_types`：空类型折叠补齐——Ghidra high 类型永不为
+  null（最少是尺寸派生 TYPE_UNKNOWN），Rugra `Option::None` 折叠为
+  shared_default 工厂的 unknown base（对应 updateInputNoTypes 的
+  fspec.cc:4118 factory 调用）；参数命名折叠为 `param_<count+1>`
+  （ProtoStoreSymbol 的 ScopeInternal 符号在 commit 时按 category
+  function_parameter + catindex 默认命名，database.cc:2481）。
+- `FuncProto::update_input_no_types`（fspec.cc:4097-4128 全量镜像）：
+  与 update_input_types 同 used-trial 走查，仅用尺寸——persist 臂用
+  varnode 自身 (addr,size) 作 findDisjointCover stand-in（同
+  update_input_types 的 persist 臂折叠）。
+
+## 2026-09-23（BOOMATTR lane）：行为边界（实测）
+
+- 调用方 = coreaction `ActionInputPrototype::apply`（fixateproto，见
+  docs/api/coreaction.md 同日条目）。镜像契约下 main 19 参塌缩恢复为
+  2 参（RDI int + RSI int8）、next_url 4→1（RDI）、match_url 3→2、
+  myprogress 6→5、glob_word 9→5——全部与 direct-runner golden
+  （tests/golden/ghidra_curl_1204.direct-runner.c）签名形态一致。
+- 残差：未知类型命名轨道（`undefined8`/`unkbyte1` vs oracle
+  `xunknown8`/`xunknown1`）与返回类型（`long` vs `xunknown8`）不折叠——
+  属 TypeFactory 命名轨道域，非参数恢复语义。

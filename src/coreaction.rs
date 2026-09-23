@@ -9561,10 +9561,55 @@ impl Action for ActionConstbase {
     fn get_name(&self) -> &str { "constbase" }
 }
 
+// RUGRA-GLUE: bank_has_input_intersection (VarnodeBank::hasInputIntersection,
+// varnode.cc:1536-1554, borrowed as a free function to keep the write-set
+// inside the calling action file). Ghidra probes the input-flagged def subset
+// with the query address: the first def at-or-after the address and the one
+// before it are the only candidates for intersection; both must be inputs in
+// the same space overlapping [offset, offset+size-1]. For the input class the
+// def order is (space, offset, size) — the same order as the loc tree — so the
+// probe folds to a partition_point over the loc-ordered input varnodes.
+fn bank_has_input_intersection(
+    fd: &Funcdata,
+    space: crate::space::AddressSpace,
+    offset: u64,
+    size: usize,
+) -> bool {
+    let end = offset.wrapping_add(size.saturating_sub(1) as u64);
+    // Same-space projection only: the query address pins the space, and the
+    // def/loc orders agree on the offset within one space.
+    let inputs: Vec<_> = fd
+        .vbank
+        .loc_tree
+        .iter()
+        .map(|e| e.0.clone())
+        .filter(|vn| {
+            let guard = vn.read().unwrap();
+            guard.is_input() && guard.get_space() == space
+        })
+        .collect();
+    // First entry at-or-after offset within the space.
+    let pos = inputs
+        .iter()
+        .position(|vn| vn.read().unwrap().get_offset() >= offset)
+        .unwrap_or(inputs.len());
+    let intersects = |vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>| {
+        let guard = vn.read().unwrap();
+        let last = guard.get_offset() + guard.get_size().saturating_sub(1) as u64;
+        guard.get_offset() <= end && last >= offset
+    };
+    if pos < inputs.len() && intersects(&inputs[pos]) {
+        return true;
+    }
+    if pos > 0 && intersects(&inputs[pos - 1]) {
+        return true;
+    }
+    false
+}
+
 /// Input prototype analysis. Faithful to `ActionInputPrototype`
 /// (coreaction.cc).
-pub struct ActionInputPrototype;
-impl ActionInputPrototype {
+pub struct ActionInputPrototype;impl ActionInputPrototype {
     // Ghidra: coreaction.hh:892 ActionInputPrototype (constructor mirror)
     pub fn new() -> Self { Self }
 }
@@ -9577,75 +9622,128 @@ impl Action for ActionInputPrototype {
     // Ghidra: coreaction.cc:4707 ActionInputPrototype::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
         // Faithful to ActionInputPrototype::apply (coreaction.cc:4707-4763).
-        // If the function's input prototype is NOT locked, derive it from
-        // the input varnodes:
-        // 1. Create ParamActive and register trials for each input varnode
-        //    that could be a parameter (register-based, not spacebase/persist)
-        // 2. Mark active trials (varnodes with descendants)
-        // 3. Resolve the model and derive the input map
-        // 4. Create unreferenced input varnodes for unused param slots
-        if fd.funcp.is_input_locked() {
-            return Ok(action_status::NO_CHANGE);
+        // cc:4714 — data.getScopeLocal()->clearCategory(Symbol::fake_input).
+        // Rugra's ScopeLocal lives on fd.scope (created by the earlier
+        // ActionRestructureVarnode pass); a missing scope is the no-scope
+        // glue state, where the clear is vacuous.
+        if let Some(scope) = fd.scope.as_mut() {
+            scope.clear_category(crate::varmap::symbol_category::FAKE_INPUT);
         }
-        // Collect input varnodes that could be parameters
-        let input_vns: Vec<_> = fd
-            .vbank
-            .loc_tree
-            .iter()
-            .map(|v| v.0.clone())
-            .filter(|v| {
-                let g = v.read().unwrap();
-                g.is_input() && !g.is_spacebase() && !g.is_persist()
-            })
-            .collect();
-        if input_vns.is_empty() {
-            return Ok(action_status::NO_CHANGE);
-        }
-        // Build ParamActive and register trials
-        let mut active = crate::fspec::ParamActive::new(false);
-        for vn_arc in &input_vns {
-            let vn = vn_arc.read().unwrap();
-            let slot = active.get_num_trials();
-            active.register_trial_in_space(
-                vn.get_space(),
-                crate::address::Address::new(vn.get_offset()),
-                vn.get_size() as i32,
-            );
-            // Mark active if the varnode has descendants (is used)
-            if vn.count_descends() > 0 {
-                // Faithful: active.getTrial(slot).markActive()
-                // Rugra doesn't expose trial mutably, so we count active inputs
-            }
-        }
-        // deriveInputMap would assign types and finalize params.
-        // For now, update the function's parameter count to match active inputs.
-        let active_count = input_vns
-            .iter()
-            .filter(|v| v.read().unwrap().count_descends() > 0)
-            .count();
-        // Only update if we found params and the prototype is empty
-        if active_count > 0 && fd.funcp.parameters.is_empty() {
-            // Create basic ProtoParameters for each active input
+        // cc:4715 — data.getFuncProto().clearUnlockedInput()
+        fd.funcp.clear_unlocked_input();
+        if !fd.funcp.is_input_locked() {
+            // cc:4717-4730 — iterate the VarnodeDefSet for Varnode::input in
+            // def order (VarnodeCompareDefLoc: space, offset, size) and
+            // register a trial for every input whose storage the model
+            // accepts as a possible input parameter.
+            let input_vns: Vec<_> = fd
+                .vbank
+                .def_tree
+                .iter()
+                .map(|r| r.0.clone())
+                .filter(|v| v.read().unwrap().is_input())
+                .collect();
+            let mut active = crate::fspec::ParamActive::new(false);
+            let mut triallist: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+                Vec::new();
             for vn_arc in &input_vns {
-                let vn = vn_arc.read().unwrap();
-                if vn.count_descends() == 0 { continue; }
-                let dt = std::sync::Arc::new(
-                    crate::type_system::datatype::Datatype::Base(
-                        crate::type_system::datatype::TypeBase::new(
-                            "long".to_string(),
-                            vn.get_size(),
-                            crate::type_system::datatype::TypeMetatype::Int,
-                        )
-                    ,
-                )
-                );
-                fd.funcp.add_parameter(crate::fspec::ProtoParameter::new(
-                    format!("param_{}", fd.funcp.parameters.len() + 1),
-                    dt,
-                    crate::address::Address::new(vn.get_offset()),
-                ));
+                let (space, offset, size) = {
+                    let vn = vn_arc.read().unwrap();
+                    (vn.get_space(), vn.get_offset(), vn.get_size())
+                };
+                // cc:4723 — data.getFuncProto().possibleInputParam(...)
+                if fd
+                    .funcp
+                    .possible_input_param(offset, size as i32, space)
+                {
+                    // cc:4724 — int4 slot = active.getNumTrials() (the index
+                    // of the trial registerTrial is about to push).
+                    let slot = active.get_num_trials();
+                    // cc:4725 — active.registerTrial(vn->getAddr(),vn->getSize())
+                    active.register_trial_in_space(
+                        space,
+                        crate::address::Address::new(offset),
+                        size as i32,
+                    );
+                    // cc:4726-4727 — if (!vn->hasNoDescend()) markActive()
+                    if vn_arc.read().unwrap().count_descends() > 0 {
+                        active.get_trial_mut(slot).mark_active();
+                    }
+                    triallist.push(vn_arc.clone());
+                }
+            }
+            // FuncProto::setScope fallback (fspec.cc:3879-3885 guarantees a
+            // model is attached by falling back to the Architecture's
+            // defaultfp): bind the registry model for the prototype's
+            // convention name, else the Architecture default, before the
+            // model dispatches below — the same precedence as varmap's
+            // func_proto_param_range glue.
+            if !fd.funcp.has_model() {
+                if let Some(arch) = &fd.arch {
+                    let name = fd.funcp.get_model_name().to_string();
+                    let resolved = arch
+                        .proto_models
+                        .get(&name)
+                        .cloned()
+                        .or_else(|| arch.defaultfp.clone());
+                    if let Some(model) = resolved {
+                        fd.funcp.set_model(Some(model));
+                    }
+                }
+            }
+            // cc:4731 — data.getFuncProto().resolveModel(&active)
+            fd.funcp.resolve_model();
+            // cc:4732 — data.getFuncProto().deriveInputMap(&active)
+            fd.funcp.derive_input_map(&mut active);
+            // cc:4733-4749 — create any unreferenced input varnodes for
+            // model-required slots that fillinMap marked used.
+            for i in 0..active.get_num_trials() {
+                let (is_unref, is_used) = {
+                    let trial = active.get_trial(i);
+                    (trial.is_unref(), trial.is_used())
+                };
+                if !is_unref || !is_used {
+                    continue;
+                }
+                let (space, addr, size) = {
+                    let trial = active.get_trial(i);
+                    (trial.get_space(), trial.get_address(), trial.get_size())
+                };
+                // cc:4737 — data.hasInputIntersection(paramtrial.getSize(),
+                // paramtrial.getAddress()): VarnodeBank::hasInputIntersection
+                // (varnode.cc:1536-1554) — the def-order next/previous probe
+                // folded over the loc-ordered input bank.
+                if bank_has_input_intersection(fd, space, addr.as_u64(), size as usize) {
+                    // cc:4738-4739 — something in the way: don't create it.
+                    active.get_trial_mut(i).mark_no_use();
+                } else {
+                    // cc:4742-4743 — vn = data.newVarnode(size,addr);
+                    // vn = data.setInputVarnode(vn)
+                    let vn = fd.new_varnode_in_space(size as usize, space, addr);
+                    let vn = fd.set_input_varnode(vn);
+                    // cc:4744-4746 — slot = triallist.size(); push; setSlot
+                    let slot = triallist.len();
+                    triallist.push(vn);
+                    active.get_trial_mut(i).set_slot((slot + 1) as i32);
+                }
+            }
+            // cc:4750-4753 — updateInputTypes (high phase on) or
+            // updateInputNoTypes. ActionAssignHigh (analysis group) runs
+            // before fixateproto, so highs exist here as in Ghidra.
+            if (fd.flags & crate::funcdata::funcdata_flags::HIGHLEVEL_ON) != 0 {
+                fd.funcp.update_input_types(&triallist, &active, &|_vn| {
+                    // persist-branch findDisjointCover stand-in: the mirror
+                    // corpus registers no persist inputs; the (addr,size)
+                    // fold matches the varnode's own cover.
+                    let guard = _vn.read().unwrap();
+                    (guard.get_addr().clone(), guard.get_size() as i32)
+                });
+            } else {
+                fd.funcp.update_input_no_types(&triallist, &active);
             }
         }
+        // cc:4755 — data.clearDeadVarnodes()
+        fd.clear_dead_varnodes();
         Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "inputprototype" mirrors ctor at coreaction.hh:892
@@ -10387,65 +10485,80 @@ impl ActionUnjustifiedParams {
 impl Action for ActionUnjustifiedParams {
     // Ghidra: coreaction.cc:4784 ActionUnjustifiedParams::apply
     fn apply(&mut self, fd: &mut Funcdata) -> Result<i32> {
-        // Faithful to ActionUnjustifiedParams::apply (coreaction.cc:4784-4823).
-        // Find input varnodes whose storage is not fully covered by the
-        // prototype's parameter list. These are "unjustified" inputs that
-        // need to be adjusted (e.g. by creating a larger container param).
-        //
-        // Simplified: scan input varnodes, find any whose (space, offset)
-        // doesn't match a declared parameter. For each, create a placeholder
-        // ProtoParameter if the varnode has descendants (is used).
-        if fd.funcp.is_input_locked() {
-            return Ok(action_status::NO_CHANGE);
-        }
-
-        let input_vns: Vec<_> = fd
-            .vbank
-            .loc_tree
-            .iter()
-            .map(|v| v.0.clone())
-            .filter(|v| {
-                let g = v.read().unwrap();
-                g.is_input() && !g.is_spacebase() && !g.is_persist()
-            })
-            .collect();
-
-        let mut change = 0;
-        for vn_arc in &input_vns {
-            let vn = vn_arc.read().unwrap();
-            let vn_offset = vn.get_offset();
-            let vn_size = vn.get_size();
-
-            // Check if this input matches any declared parameter
-            let is_justified = fd
-                .funcp
-                .parameters
+        // Faithful to ActionUnjustifiedParams::apply (coreaction.cc:4784-4828).
+        // Walk the input VarnodeDefSet; for each input whose storage is
+        // UNJUSTIFIED within a model/locked parameter container (i.e. it
+        // occupies not-the-least-significant bytes of the container), grow
+        // the container over earlier overlapping inputs and rejustify via
+        // Funcdata::adjustInputVarnodes, then restart the walk (additions
+        // and deletions invalidate the iterator, cc:4823-4825). This action
+        // NEVER creates prototype parameters — that is ActionInputPrototype's
+        // job (fixateproto).
+        'walk: loop {
+            let input_vns: Vec<_> = fd
+                .vbank
+                .def_tree
                 .iter()
-                .any(|p| p.address.as_u64() == vn_offset
-            );
-
-            if !is_justified && vn.count_descends() > 0 {
-                // This input is used but not declared as a parameter.
-                // Create a ProtoParameter for it.
-                let dt = std::sync::Arc::new(
-                    crate::type_system::datatype::Datatype::Base(
-                        crate::type_system::datatype::TypeBase::new(
-                            "long".to_string(),
-                            vn_size,
-                            crate::type_system::datatype::TypeMetatype::Int,
-                        )
-                    ,
-                )
-                );
-                fd.funcp.add_parameter(crate::fspec::ProtoParameter::new(
-                    format!("param_{}", fd.funcp.parameters.len() + 1),
-                    dt,
-                    crate::address::Address::new(vn_offset),
-                ));
-                change += 1;
+                .map(|r| r.0.clone())
+                .filter(|v| v.read().unwrap().is_input())
+                .collect();
+            for (idx, vn_arc) in input_vns.iter().enumerate() {
+                let (space, offset, size) = {
+                    let vn = vn_arc.read().unwrap();
+                    (vn.get_space(), vn.get_offset(), vn.get_size())
+                };
+                let mut vdata = crate::fspec::VarnodeData {
+                    space,
+                    offset,
+                    size: size as i32,
+                };
+                // cc:4796 — if (!proto.unjustifiedInputParam(...)) continue
+                if !fd
+                    .funcp
+                    .unjustified_input_param(space, offset, size as i32, &mut vdata)
+                {
+                    continue;
+                }
+                // cc:4798-4820 — grow the container over earlier overlapping
+                // inputs until it stops growing / stays justified.
+                loop {
+                    let mut overlaps = false;
+                    // cc:4805-4815 — walk the inputs BEFORE the current one.
+                    for prev_arc in input_vns[..idx].iter() {
+                        let prev = prev_arc.read().unwrap();
+                        if prev.get_space() != vdata.space {
+                            continue;
+                        }
+                        let last = prev.get_offset() + (prev.get_size() - 1) as u64;
+                        if last >= vdata.offset && prev.get_offset() < vdata.offset {
+                            overlaps = true;
+                            let endpoint = vdata.offset + vdata.size as u64;
+                            vdata.offset = prev.get_offset();
+                            vdata.size = (endpoint - vdata.offset) as i32;
+                        }
+                    }
+                    if !overlaps {
+                        break; // cc:4817 — go with the current container
+                    }
+                    // cc:4819 — rejustify the grown container.
+                    if !fd.funcp.unjustified_input_param(
+                        vdata.space,
+                        vdata.offset,
+                        vdata.size,
+                        &mut vdata,
+                    ) {
+                        break;
+                    }
+                }
+                // cc:4822 — data.adjustInputVarnodes(vdata.getAddr(),vdata.size)
+                fd.adjust_input_varnodes(vdata.space, vdata.offset, vdata.size as usize)?;
+                // cc:4823-4825 — additions and deletions happened: reset the
+                // iteration to the adjusted address by restarting the walk.
+                // (Ghidra bumps the action count here but still returns 0.)
+                continue 'walk;
             }
+            break;
         }
-
         Ok(action_status::NO_CHANGE)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "unjustparams" mirrors ctor at coreaction.hh:920 (Action(0,"unjustparams",g))

@@ -2445,3 +2445,18 @@ funcdata_varnode.cc:269-292 的 OPACTION_DEBUG 钩子位;守卫先行、变更�
 ordinal 29 lanedivide 双分裂（unique 槽 + XMM0 phi 群）在 Rugra 侧同样
 2=2。min_laned_size 在 lane 记录空时为 u32::MAX（旧中性行为），装载后为
 最小整尺寸 16，见 docs/api/arch.md 同日条目。
+
+## 2026-09-23（BOOMATTR lane）：adjustInputVarnodes space-aware 修复
+
+- `Funcdata::adjust_input_varnodes`（funcdata_varnode.cc:494-537）签名改为
+  `(space, addr_offset, sz)`：旧实现 (a) inlist 收集无空间过滤——Ghidra 的
+  beginDef(Varnode::input,addr)/endDef(endaddr) 在 Address 序（空间优先）上
+  迭代，偏移界永不跨空间，旧实现会把数值落在区间内的异空间输入（如
+  RSI@0x30）误收进栈容器；(b) 新合并输入经 spaceless `new_varnode` 落 Ram
+  空间（打印为 auRam… 切片）。修复 = 收集按容器空间过滤 + piece 输出走
+  `new_varnode_out_full`（保空间）+ 合并输入走 `new_varnode_in_space`。
+- 调用方唯一：coreaction `ActionUnjustifiedParams::apply`（cc:4822，本 lane
+  首次接通该调用路径——旧 unjustparams 从不触达 adjust）。
+- 实测：default 模式 match_url 的 304B URLGlob 栈参数容器（DWARF 锁定
+  Stack[0x8,0x138)）adjust 后不再产生 Ram 空间 auRam 巨型输入；镜像模式
+  match_url 与 direct-runner golden 同 `in_stack_00000130` 形态。

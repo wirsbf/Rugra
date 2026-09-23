@@ -2613,3 +2613,38 @@ glob_range/glob_url/next_url 逐函数 0/0；确定性双跑（E2E stdout sha256
   numbering 见 TODO 板 VARMAP-DUPDECL 家族；curl 4073/0/0 优于当前 master
   4085）。未知 extrapop 平台（32 位 __cdecl 类）的写回路径当前无 E2E 语料
   覆盖，状态 UNTESTED（B2 件待后续 wave 建 fixture）。
+
+## 2026-09-23（BOOMATTR lane）：ActionInputPrototype/ActionUnjustifiedParams 全量重写（自函数参数恢复）
+
+- 根因（curl 镜像契约 +1488 爆炸族，SB-F2STRING-ADDRTIED-PARAMRECOVERY-0001）：
+  `ActionUnjustifiedParams`（fullloop/protorecovery）旧实现是自创 raw 兜底——
+  对每个"未匹配声明参数且有后代"的输入 varnode 直接造 `param_N`/long 参数；
+  `ActionInputPrototype`（fixateproto）旧实现只在参数为空时把全部 used 输入
+  raw 化。f2string 修复（RuleLoadVarnode 走 newVarnode 符号尾→栈 varnode 获
+  addrtied）后输入面扩大，raw 兜底把 RBX/RBP/R12 等未合并 high 全部升参：
+  main 19 参、next_url 4 参等。
+- **ActionUnjustifiedParams::apply** 按 coreaction.cc:4784-4828 全量重写：
+  def 序遍历输入 → `FuncProto::unjustified_input_param`（新增，见
+  docs/api/fspec.md）判定"在参数容器内但未对齐最低有效端"→ 向前生长容器
+  （cc:4798-4820 重叠环）→ `Funcdata::adjust_input_varnodes`（cc:4822，
+  space-aware 修复见 docs/api/funcdata.md）→ 重启遍历（cc:4823-4825 迭代器
+  失效语义）。**本 Action 永不创建参数**——参数创建是 fixateproto 的
+  ActionInputPrototype 职责。
+- **ActionInputPrototype::apply** 按 coreaction.cc:4707-4763 全量重写：
+  cc:4714 clearCategory(fake_input) → cc:4715 clearUnlockedInput → 锁定早退 →
+  def 序（VarnodeCompareDefLoc）遍历输入 + `possibleInputParam` 门 +
+  ParamActive trial 注册 + hasNoDescend 判 active（cc:4717-4730）→ setScope
+  fallback glue（fspec.cc:3879-3885：convention 名模型→arch defaultfp，同
+  varmap func_proto_param_range 优先序）→ resolveModel + deriveInputMap
+  （cc:4731-4732）→ unref&&used trial 物化新输入 varnode
+  （cc:4733-4749，hasInputIntersection 折叠为 bank_has_input_intersection
+  GLUE：varnode.cc:1536-1554 的 def 序 next/prev 探针）→ updateInputTypes
+  （high 已开）/updateInputNoTypes（cc:4750-4753）→ clearDeadVarnodes
+  （cc:4755）。
+- 验收（fast-release，RUGRA_MIRROR）：curl 镜像 4071→4064/0/0（vs canonical
+  golden）；vs direct-runner golden 3149→3118；default 模式 2683→2684
+  （match_url +1：304B URLGlob 栈参数容器 adjust 后 in_stack_00000008[304]
+  声明——oracle 同形 adjust 的符号吸附残差，登记 BOOMATTR-INSTACK-SYMATTACH
+  残差）；httpd 2099/0/0（≤2104 基线）；next_url/match_url 双投影 vs
+  sb-oracle 锁定 oracle 投影逐 stage MATCH（仅 META 身份行差异）；
+  cargo test --lib 18 失败=基预存同集（b8031069 A/B 复核）。
