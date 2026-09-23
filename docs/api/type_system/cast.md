@@ -106,6 +106,21 @@ metatype-specific same-size rules (cast.cc:339-389). Rugra's Datatype
 lacks typedef chains, variable-length arrays, and per-pointer AddrSpace;
 those branches are faithful no-ops.
 
+2026-09-23 enum 元类型规范化（SETCASTS-COPYINPUT-0001）：req/cur 两侧
+metatype 先经 `ghidra_meta` 规范化——`Enum→Int`、`PartialEnum→Uint`。
+Oracle 依据：Ghidra `TypeEnum` 的全部构造路径都把 metatype 强制存为
+TYPE_INT/TYPE_UINT（内联构造器 type.hh:491-494
+`metatype = (m==TYPE_ENUM_INT) ? TYPE_INT : TYPE_UINT`，decode 路径
+type.cc:1475 同转），枚举性由 ENUMTYPE flag 携带；cast.cc:347/363 的
+"meta can be TYPE_INT/UINT ... if typedef/enumerated" 注释即此呈现。
+因此 cast.cc:339-389 的 switch 永远看不到独立的枚举 metatype，其
+TYPE_INT/TYPE_UINT 宽容臂（`!care_uint_int` 下 UNKNOWN/INT/UINT/BOOL
+免 cast）对枚举同样生效。Rugra 的独立 `Enum` metatype（有符号默认，
+cf. `get_submeta` 的 IntEnum 映射）若不规范化会落进 default 臂恒判
+"需 cast"——修复前 main 的 9 条 `glob.pattern[i].type =
+(URLPatternType)…` 过cast 与 `(int)::config.httpreq & …` 前缀均源于
+此（golden 两处均无 cast）。
+
 
 <!-- annotation-pass: 2026-07-04 -->
 
