@@ -13571,14 +13571,25 @@ impl PrintC {
         }
         // cc:2772: popMod();
         self.pop_mod();
-        // cc:2775-2778: if (bl->gotoPrints()) { emit->tagLine(); emitGotoStatement(...); }
+        // cc:2775-2778: if (bl->gotoPrints()) { emit->tagLine();
+        // emitGotoStatement(bl->getGotoTarget(),bl->gototype); }
+        // PRINTC-GOTOPRINTS-0001 target switch: emitGotoStatement receives
+        // the live FlowBlock target and emitLabel resolves
+        // getFrontLeaf()->subBlock(0)->getEntryAddr (printc.cc:3167-3170).
+        // The legacy typed `goto_target` projection is always None (the
+        // collapse graph's leaves are dyn-coerced BlockCopys; see the field
+        // doc, block.rs BlockGoto::goto_target), so reading it produced
+        // addr=0 and the zero-addr defense suppressed the goto statement
+        // (observed: my_get_token `goto joined_r0x001037b2;` label-only).
+        // `target_dyn` is Ghidra's gototarget pointer (block.hh:548) and
+        // flow_entry_address is the emitLabel address chain.
         let (prints, target_addr, gt) = {
             let bl = block_arc.read().unwrap();
             if let Some(g) = bl.as_any().downcast_ref::<crate::block::BlockGoto>() {
                 let addr = g
-                    .goto_target
+                    .target_dyn
                     .as_ref()
-                    .map(|t| t.read().unwrap().start_addr.as_u64())
+                    .and_then(|t| Self::flow_entry_address(t))
                     .unwrap_or(0);
                 // block.cc:2884-2888 parent-present comparison vs the
                 // cc:2889 null-parent false.
