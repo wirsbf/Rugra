@@ -955,6 +955,10 @@ clamp——Ram 全空间时 maxSize 回绕 0 → 窗口回到 highest，与 C++ 
 尾随 state==0 守卫收集（loads 先于 stores）、`find_spacebase_input(Stack)`、
 `ValueSetSolver::establish_value_sets(sinks,reads,stackReg,false)` + `solve(10000,
 WidenerNone)` + establish、任一 state==0 时 `WidenerFull` 重解 + finalize。
+2026-09-23（RANGEUTIL-CONSTGEN-0001）：求解器约束生成族已全量（见
+docs/api/rangeutil.md），本方法头部的"Known residual: constraint machinery
+still stubbed"注释同步移除——约束只会收窄守卫窗口，finalize 爆窗残差由此
+路径解决。
 `find_address_forces` 补上 cc:637 `vn->isAddrForce() continue` 停走守卫（此前只
 有注释没有检查）。
 LoadGuard::set/new_unanalyzed/Default/space_highest。测试更新：`test_load_guard_
