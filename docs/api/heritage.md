@@ -947,8 +947,28 @@ guard_stores（heritage.cc:1539+927）：扫描 spacebase-marked stack STORE，�
 guard_loads（heritage.cc:1571+910）：同理 LOAD，含 stale-record 清理。
 guard_calls/guard_returns：stub（需 FuncCallSpecs effect characterization）。
 guard_all：调用全部 4 个阶段。
-establish_range/finalize_range：stub（需 ValueSetRead 求解器）。
-LoadGuard::set/new_unanalyzed/Default/space_highest。3 新测试验证填充。
+establish_range/finalize_range：~~stub~~ **2026-09-23（GETPARAM-OPPOOL-COUNT-0001）改为
+faithful 全量移植**（heritage.cc:740-785 / 787-813，接收 `&rangeutil::ValueSetRead`；
+含 cc:746-781 的 empty/full/leftStable/rightStable 分支与 cc:774-784 的 uintb 回绕
+clamp——Ram 全空间时 maxSize 回绕 0 → 窗口回到 highest，与 C++ 无符号语义一致）。
+`analyze_new_load_guards(fd)`（heritage.cc:834-900）同样从 stub 换成真接线：
+尾随 state==0 守卫收集（loads 先于 stores）、`find_spacebase_input(Stack)`、
+`ValueSetSolver::establish_value_sets(sinks,reads,stackReg,false)` + `solve(10000,
+WidenerNone)` + establish、任一 state==0 时 `WidenerFull` 重解 + finalize。
+`find_address_forces` 补上 cc:637 `vn->isAddrForce() continue` 停走守卫（此前只
+有注释没有检查）。
+LoadGuard::set/new_unanalyzed/Default/space_highest。测试更新：`test_load_guard_
+range_establish_finalize`（empty-range 臂语义）。
+
+> 残差（登记 RANGEUTIL-VSEMPTY-0001）：`rangeutil.rs` 的 ValueSetSolver 虽有
+> establish/solve 骨架，但对 getparameter 的全部 guard sinks 返回 `empty=true`
+> 的 ValueSetRead（系统未填充或迭代不传播），因此 load 守卫停留在 establish
+> 的 `[pointerBase, highest]` 窗口（state=1），oracle 则以约束收敛到
+> `[fb08..ffa7]` 类窄区间（state=2）。后果：`handle_new_load_copies` 对
+> `stack:fc40` 误设 ADDRFORCE → `RulePropagateCopy` marker 守卫
+> (ruleaction.cc:3948) 拒绝 op 0x3f52:1a6e → getparameter oppool1 ord 65
+> 计数残差 -2（740 vs 738）。修复需 rangeutil 求解器实跑（约束机制 +
+> establish_value_sets 填充调试），另行立项。
 
 ### 2026-07-01（续 2）：block-not-found 优雅降级
 place_multiequal_direct 的 block 查找从 .expect 改为优雅 return。
