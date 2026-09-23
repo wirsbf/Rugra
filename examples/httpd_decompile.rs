@@ -101,6 +101,9 @@ fn worker_memory_image_bytes(elf: &goblin::elf::Elf, buffer: &[u8]) -> Vec<u8> {
 // reaches are implemented (get_register for `<set name="DF">`, space_by_name
 // for the `<tracked_set space="ram">` range, space_highest for the range's
 // open last address).
+// HTTPD-CSPEC-ARCH-0001: PcodeInjectLibrary unique-space base (curl worker parity).
+const SPEC_UNIQUE_INJECT_BASE: u64 = 0x364_400;
+
 struct TrackedSpecHost {
     registers: HashMap<String, rugra::fspec::VarnodeData>,
 }
@@ -127,6 +130,21 @@ fn tracked_spec_space_by_name(name: &str) -> Option<rugra::space::AddressSpace> 
         "unique" => Some(AddressSpace::Unique),
         "const" => Some(AddressSpace::Const),
         _ => None,
+    }
+}
+
+impl rugra::pcodeparse::SleighSymbolLookup for TrackedSpecHost {
+    fn find_symbol(&self, name: &str) -> Option<rugra::pcodeparse::SleighSymbol> {
+        self.registers
+            .get(name)
+            .map(|vd| rugra::pcodeparse::SleighSymbol {
+                name: name.to_string(),
+                kind: rugra::pcodeparse::SleightSymbolKind::Varnode(rugra::varnode::VarnodeData {
+                    space: vd.space,
+                    offset: vd.offset,
+                    size: vd.size.max(0) as usize,
+                }),
+            })
     }
 }
 
@@ -179,6 +197,12 @@ fn tracked_context_architecture() -> Result<rugra::arch::Architecture, String> {
     let sleigh = rugra::sleigh_ffi::SleighCtx::new()
         .ok_or_else(|| "unable to initialize SLEIGH register catalog".to_string())?;
     let mut registers = HashMap::new();
+    // HTTPD-CSPEC-ARCH-0001: same enumeration as the curl worker
+    // (B3-VARMAP-REGNAME-0001): the SLEIGH register catalog also feeds the
+    // Architecture register_xref (SleighBase::getAllRegisters ->
+    // varnode_xref, sleighbase.cc:182-186) that
+    // Architecture::get_register_name (sleighbase.cc:144-168) walks.
+    let mut register_xref: Vec<(i32, u64, i32, String)> = Vec::new();
     for index in 0..sleigh.num_registers() {
         let Some((name, space, offset, size)) = sleigh.register_info(index) else {
             continue;
@@ -186,6 +210,7 @@ fn tracked_context_architecture() -> Result<rugra::arch::Architecture, String> {
         let Ok(space_id) = u8::try_from(space) else {
             continue;
         };
+        register_xref.push((space, offset, size, name.to_string()));
         registers.insert(
             name.to_string(),
             rugra::fspec::VarnodeData {
@@ -195,7 +220,7 @@ fn tracked_context_architecture() -> Result<rugra::arch::Architecture, String> {
             },
         );
     }
-    let host = TrackedSpecHost { registers };
+    let host = std::sync::Arc::new(TrackedSpecHost { registers });
     // Parse the locked pspec and hand every <context_data> child to the
     // mapped decode (same DOM extraction model as the curl worker).
     let pspec_bytes = fs::read("sleigh_specs/x86-64.pspec")
@@ -232,7 +257,7 @@ fn tracked_context_architecture() -> Result<rugra::arch::Architecture, String> {
             "context_data" => {
                 let mut decoder =
                     rugra::marshal::TreeDecoder::new(child, pspec_registry.clone());
-                arch.decode_context_data(&mut decoder, &host)
+                arch.decode_context_data(&mut decoder, host.as_ref())
                     .map_err(|error| format!("processor spec context_data decode failed: {error}"))?;
             }
             // ARCH-REGISTERDATA-LANE-0001: register_data builds the
@@ -241,11 +266,91 @@ fn tracked_context_architecture() -> Result<rugra::arch::Architecture, String> {
             "register_data" => {
                 let mut decoder =
                     rugra::marshal::TreeDecoder::new(child, pspec_registry.clone());
-                arch.decode_register_data(&mut decoder, &host)
+                arch.decode_register_data(&mut decoder, host.as_ref())
                     .map_err(|error| format!("processor spec register_data decode failed: {error}"))?;
             }
             _ => {}
         }
+    }
+
+    // HTTPD-CSPEC-ARCH-0001: parse the locked production compiler spec into
+    // the same DocumentStorage and establish the full Architecture init
+    // chain the curl worker builds (FUNCPROTO-MODEL-BIND-0001):
+    // archid + register_xref + commentdb + TypeFactory (data_organization
+    // decode + setup_sizes mirror parseCompilerConfig's ELEM_DATA_ORGANIZATION
+    // arm, architecture.cc:1269, and its trailing types->setupSizes() at
+    // cc:1350) + PcodeInjectLibrary/UserOpManage + the final
+    // parse_compiler_config (architecture.cc:1239-1351) which establishes
+    // `defaultfp`. Ghidra's BfdArchitecture completes this before any
+    // Funcdata is constructed, so the headless oracle that produced
+    // tests/golden/ghidra_httpd_1204.c decompiled every function with
+    // defaultfp resolved; the previous bare Architecture::new() left the
+    // httpd Funcdata modelless ("Unknown calling convention"), which kept
+    // CALL return-address push stores alive in every function (the golden
+    // absorbs them everywhere except main) and unblocked neither
+    // ActionStackPtrFlow's known-extrapop path nor the callspec models.
+    let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
+        .map_err(|error| format!("unable to read compiler spec: {error}"))?;
+    let cspec_doc = store
+        .parse_document(&cspec_bytes)
+        .map_err(|error| format!("compiler spec parse failed: {error}"))?;
+    let cspec_root = cspec_doc
+        .root
+        .clone()
+        .ok_or_else(|| "compiler spec has no root element".to_string())?;
+    if cspec_root
+        .read()
+        .map_err(|_| "compiler spec element lock poisoned".to_string())?
+        .name
+        != "compiler_spec"
+    {
+        return Err("compiler spec root is not compiler_spec".to_string());
+    }
+    store.register_tag(&cspec_root);
+    arch.archid = "x86:LE:64:default".to_string();
+    arch.set_register_xref(register_xref);
+    arch.set_commentdb(std::sync::Arc::new(std::sync::RwLock::new(
+        rugra::comment::CommentDatabaseInternal::new(),
+    )));
+    {
+        let mut types = rugra::type_system::typefactory::TypeFactory::new(8);
+        let data_org = cspec_root
+            .read()
+            .map_err(|_| "compiler spec element lock poisoned".to_string())?
+            .children
+            .iter()
+            .find(|child| {
+                child
+                    .read()
+                    .map(|element| element.name == "data_organization")
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .ok_or_else(|| "compiler spec has no data_organization".to_string())?;
+        let registry = std::sync::Arc::new(std::sync::RwLock::new(
+            rugra::marshal::IdRegistry::new(),
+        ));
+        let mut decoder = rugra::marshal::TreeDecoder::new(data_org, registry);
+        types.decode_data_organization(&mut decoder);
+        types.setup_sizes(&rugra::type_system::typefactory::SizeArchInputs {
+            stack_spacebase_size: Some(8),
+            default_data_space_addr_size: 8,
+            default_size: 8,
+            far_pointer: None,
+        });
+        arch.set_types(std::sync::Arc::new(std::sync::RwLock::new(types)));
+    }
+    let mut inject_lib =
+        rugra::pcodeinject::PcodeInjectLibrary::new(SPEC_UNIQUE_INJECT_BASE);
+    inject_lib.set_sleigh_lookup(host.clone());
+    arch.pcodeinjectlib = Some(std::sync::Arc::new(std::sync::RwLock::new(inject_lib)));
+    arch.userops = Some(std::sync::Arc::new(std::sync::RwLock::new(
+        rugra::userop::UserOpManage::new(),
+    )));
+    arch.parse_compiler_config(&mut store, host.as_ref(), 8)
+        .map_err(|error| format!("compiler spec parse failed: {error}"))?;
+    if arch.defaultfp.is_none() {
+        return Err("No default prototype specified".to_string());
     }
     Ok(arch)
 }

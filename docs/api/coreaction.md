@@ -2692,3 +2692,78 @@ glob_range/glob_url/next_url 逐函数 0/0；确定性双跑（E2E stdout sha256
 ### 2026-09-23（VARGROUP-ABSORB-0001 §4-4）：ActionRestrictLocal 参数谓词 + ActionRestructureVarnode 持久 scope
 - `ActionRestrictLocal::apply` 循环 1 的 spacebase 参数判定从 `p.address.as_u64() > 0x7FFF_FFFF`（从不命中 callee 相对偏移）修正为 `p.address_space == AddressSpace::Stack`（coreaction.cc:1974-1975 的 `IPTR_SPACEBASE` 空间类型测试）。match_url 调用点（so=fc70 + Stack:8:304）现在把 fc78..fd90 出参影子区 markNotMapped——oracle `print localrange` 的 fc78-fda7 间隙由此产生，30d6 字段件因此非 addr-tied/mapped。
 - `ActionRestructureVarnode::apply` 改为复用 `fd.scope`（Ghidra 的 localmap 为 Funcdata 生命周期单一对象，funcdata.cc:69-70）；仅首趟构造 + seed 平台参数符号 + `reset_local_window`（一次性窗口安装）。此前每趟 fresh scope + 全量重装窗口，把 RestrictLocal 的窄化整体抹掉。
+
+### 2026-09-23（HTTPD-CALL-PUSH-0001 RC3）：analyzeExtraPop 写回 + ExtraPopSetup setEffectiveExtraPop
+- `analyze_extra_pop`（coreaction.cc:261-318）从"只计数骨架"升级为完整写回
+  端口：cc:264-267 早退守卫现读架构 `evalfp_called`/`defaultfp` 模型的
+  extrapop（与 oracle 同源；此前误用 `fd.funcp.get_extra_pop()` 投影）；
+  cc:278 变量数为 0 早退；cc:287-293 的 65535 不可解解值只打一次
+  `warning_header("Unable to track spacebase fully for stack")`；cc:296-309
+  对 iop 挂 CALL 的 INDIRECT 定义变量按 `soln - soln2`（companion 缺席为
+  0）回写 `FuncCallSpecs::set_effective_extrapop`；cc:310-315 所有可解变量
+  的定义 op 经 `op_set_opcode(INT_ADD)` + `op_set_all_input([spcbase_in,
+  const soln])` 重写。签名随之 `&Funcdata → &mut Funcdata`。
+- `ActionStackPtrFlow::apply`（cc:495）调用点的 funcp 守卫移除（守卫回归
+  oracle 位置——函数体首部）；`ActionExtraPopSetup::apply` 的已知 extrapop
+  分支补 cc:1454 的 `setEffectiveExtraPop(extrapop)` 写回（调用点索引收集
+  后循环外统一写，避免与 `find_call_op` 的注册表读交叉借用）。
+- 行为边界（实测）：httpd/curl（defaultfp=__stdcall extrapop=8 已知）两语料
+  走 cc:264-267 早退，本次写回不触达——E2E 数字不变（httpd 2137/0/0 缺
+  numbering 见 TODO 板 VARMAP-DUPDECL 家族；curl 4073/0/0 优于当前 master
+  4085）。未知 extrapop 平台（32 位 __cdecl 类）的写回路径当前无 E2E 语料
+  覆盖，状态 UNTESTED（B2 件待后续 wave 建 fixture）。
+
+## 2026-09-23（BOOMATTR lane）：ActionInputPrototype/ActionUnjustifiedParams 全量重写（自函数参数恢复）
+
+- 根因（curl 镜像契约 +1488 爆炸族，SB-F2STRING-ADDRTIED-PARAMRECOVERY-0001）：
+  `ActionUnjustifiedParams`（fullloop/protorecovery）旧实现是自创 raw 兜底——
+  对每个"未匹配声明参数且有后代"的输入 varnode 直接造 `param_N`/long 参数；
+  `ActionInputPrototype`（fixateproto）旧实现只在参数为空时把全部 used 输入
+  raw 化。f2string 修复（RuleLoadVarnode 走 newVarnode 符号尾→栈 varnode 获
+  addrtied）后输入面扩大，raw 兜底把 RBX/RBP/R12 等未合并 high 全部升参：
+  main 19 参、next_url 4 参等。
+- **ActionUnjustifiedParams::apply** 按 coreaction.cc:4784-4828 全量重写：
+  def 序遍历输入 → `FuncProto::unjustified_input_param`（新增，见
+  docs/api/fspec.md）判定"在参数容器内但未对齐最低有效端"→ 向前生长容器
+  （cc:4798-4820 重叠环）→ `Funcdata::adjust_input_varnodes`（cc:4822，
+  space-aware 修复见 docs/api/funcdata.md）→ 重启遍历（cc:4823-4825 迭代器
+  失效语义）。**本 Action 永不创建参数**——参数创建是 fixateproto 的
+  ActionInputPrototype 职责。
+- **ActionInputPrototype::apply** 按 coreaction.cc:4707-4763 全量重写：
+  cc:4714 clearCategory(fake_input) → cc:4715 clearUnlockedInput → 锁定早退 →
+  def 序（VarnodeCompareDefLoc）遍历输入 + `possibleInputParam` 门 +
+  ParamActive trial 注册 + hasNoDescend 判 active（cc:4717-4730）→ setScope
+  fallback glue（fspec.cc:3879-3885：convention 名模型→arch defaultfp，同
+  varmap func_proto_param_range 优先序）→ resolveModel + deriveInputMap
+  （cc:4731-4732）→ unref&&used trial 物化新输入 varnode
+  （cc:4733-4749，hasInputIntersection 折叠为 bank_has_input_intersection
+  GLUE：varnode.cc:1536-1554 的 def 序 next/prev 探针）→ updateInputTypes
+  （high 已开）/updateInputNoTypes（cc:4750-4753）→ clearDeadVarnodes
+  （cc:4755）。
+- 验收（fast-release，RUGRA_MIRROR）：curl 镜像 4071→4064/0/0（vs canonical
+  golden）；vs direct-runner golden 3149→3118；default 模式 2683→2684
+  （match_url +1：304B URLGlob 栈参数容器 adjust 后 in_stack_00000008[304]
+  声明——oracle 同形 adjust 的符号吸附残差，登记 BOOMATTR-INSTACK-SYMATTACH
+  残差）；httpd 2099/0/0（≤2104 基线）；next_url/match_url 双投影 vs
+  sb-oracle 锁定 oracle 投影逐 stage MATCH（仅 META 身份行差异）；
+  cargo test --lib 18 失败=基预存同集（b8031069 A/B 复核）。
+
+## 2026-09-23（BOOMATTR lane r2，CR4 REJECT 返工）：unjustparams 遍历方向 + count 通道
+
+- **MISMATCH-1 修正（coreaction.cc:4803-4815 逐字核对）**：oracle 重叠扩展内循环
+  `iter2 = iter; while (iter2 != begiter) { --iter2; vn = *iter2; }`——iter 在
+  cc:4794 `*iter++` 后指向当前 varnode 之后的下一项，`--iter2` 首次落回**当前
+  varnode 自身**，随后**降序**扫到首个输入。链式跨骑（高位输入下扩 vdata.offset
+  后使更低位输入变为跨骑）必须在**同一趟降序扫描**内以更新后的边界判定完成；
+  前向升序不含自身的扫描在"生长后容器 rejustify 成功 break"时会永久漏掉更低位。
+  修正 = `input_vns[..=idx].iter().rev()`（含自身、降序，逐字镜像 --iter2 序）。
+- **MISMATCH-2 修正（coreaction.cc:4826）**：`ActionUnjustifiedParams` 增加
+  `count: i32` 字段，每次 adjustInputVarnodes 后 `count += 1`，经
+  `take_count_delta`（std::mem::take）外化到 ActionState 累加器——action.rs
+  perform cc:338-339 的既有 count 通道（lcount<count → count_apply/repeat/
+  组级变更判定）即 Ghidra `Action::count` 的等价物，apply 返回值保持 0
+  （cc:4828）。
+- 实测：curl default 2684/0/0、MIRROR canonical 4064/0/0、direct-runner
+  3118/0/0、httpd 2099/0/0，MIRROR 输出与 r1 **逐字节相同**——本语料无
+  链式跨骑场景触发（降序扫描与升序在单步扩展下行为等价），count 通道
+  无行为翻转（unjustparams 无 repeatapply 旗，count 经组级聚合消费）。

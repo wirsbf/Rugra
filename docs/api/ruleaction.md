@@ -1493,3 +1493,28 @@ defects/numbering 保持 0,`(0 - ` 残留 30→0。
    MULTIEQUAL，oracle 不可达形态）保守放行 false。
 验收：match_url Phase 2 ordinal 28（oppool1 861=861）→29（lanedivide 2=2，
 见 docs/api/arch.md）连续两级对齐；curl/httpd E2E defects=numbering=0。
+
+## 2026-09-23：RuleLoadVarnode/RuleStoreVarnode 栈 varnode 创建走 newVarnode/newVarnodeOut 符号尾（file2string ord 76）
+
+file2string.part.0 Phase 2 首分歧（ordinal 76 blockstructure count 1v4）根因链：
+① 旧 RuleLoadVarnode 用 `vbank.create_with_space + set_varnode_properties` 自创组合，
+而 oracle（ruleaction.cc:4290）用 `data.newVarnode(size, baseoff, offoff)`——其符号尾
+`localmap->queryProperties(m, s, Address(), vflags)`（funcdata_varnode.cc:161-166）经
+database.cc:1268 stackContainer **先走 ScopeLocal**：符号命中→entry flags，in-scope→
+`mapped|addrtied`。② `set_varnode_properties` 镜像（funcdata.rs:4963）只走 Ram/全局
+父通道，**栈空间永不进 ScopeLocal 腿**→RuleLoadVarnode 产出的栈 varnode（如
+stack:0x…feb8:1）永远缺 addrtied。③ `BlockBasic::isComplex`（block.cc:2419）以
+isAddrTied 判定 SUBPIECE 计算是否算语句：oracle 块@3ad5（SUBPIECE+STORE）stmt=3→complex
+→`ruleBlockOr` 的 `orblock->isComplex()` 守卫拒绝 OR 折叠；Rugra stmt=2→放行→pass-2
+多折叠 3 个条件（negate 4 vs 1）→blockstructure dataflow_changecount 4 vs 1→结构化
+路径分叉（skeleton ~130 主因族）。修复：RuleLoadVarnode 改走
+`new_varnode_in_space`（=create+assignHigh+laned+完整符号尾，usepoint=invalid，
+与 cc:148-169 逐段对应）；RuleStoreVarnode（cc:4331-4332 `newVarnodeOut(size,addr,op)`）
+补 assignHigh+laned 步 + ScopeLocal 腿 query_properties_ex（usepoint=op addr，
+fold=`getAllFlags() & ~typelock`，varnode.cc:410-424），其 MAPPED 位同时让后续
+set_varnode_properties 的 isMapped 门短路（栈路径单查询=oracle）。
+双侧探针实证（/dev/shm/rugra-tests/sb-f2string/，oracle RAM 副本 stderr 补丁
+NEGPROBE/ORTRACE/ICPROBE3/VNWATCH vs rugra 同款）：修后 feb8:1 varnode 逐 stage
+flags 与 oracle 逐字相同（0x1208000=mapped|addrtied|coverdirty），negate census
+10/10 逐 site 全等；首分歧 76→**178**（stackstall:oppool1 SNAP 多一条
+3aa2:541 SP INT_ADD，登记 SB-F2STRING-ORD178-0001）。
