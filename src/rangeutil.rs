@@ -748,16 +748,19 @@ impl CircleRange {
     ///   salvage gated on `usenzmask && val == 0` plus
     ///   `out->getSize() < (mostsigbit_set(nzmask)+8)/8`; final nzmask
     ///   intersect only when `setNZMask` reports a valid range.
-    // RUGRA-GLUE: the C++ `Varnode **constMarkup` out param is omitted —
-    // Ghidra writes it only when the constant carries a SymbolEntry, and the
-    // constraint-family callers (constraintsFromPath cc:2190/2199,
-    // generateRelativeConstraint) never read it back (the markup consumers
-    // are jumptable.cc and RuleRangeMeld's copySymbolIfValid, outside this
-    // path). Observationally dead for this port.
+    // RUGRA-GLUE: the C++ `Varnode **constMarkup` out param is mirrored as
+    // `const_markup: &mut Option<Arc<RwLock<Varnode>>>`. Ghidra writes it
+    // only when the constant carries a SymbolEntry (cc:1069-1070); it is
+    // never cleared, so successive pull-backs keep the last symbol-carrying
+    // constant — last writer wins, exactly like the shared out-param in the
+    // C++ callers (RuleRangeMeld threads one `markup` across all its calls).
+    // The constraint-family callers (constraintsFromPath cc:2190/2199,
+    // generateRelativeConstraint) pass a discard slot.
     pub fn pull_back(
         &mut self,
         op: &Arc<RwLock<PcodeOp>>,
         usenzmask: bool,
+        const_markup: &mut Option<Arc<RwLock<Varnode>>>,
     ) -> Option<Arc<RwLock<Varnode>>> {
         let (num_input, opc) = {
             let g = op.read().unwrap();
@@ -824,8 +827,13 @@ impl CircleRange {
                     return None;
                 }
             }
-            // cc:1069-1070: constMarkup pass-back omitted (see RUGRA-GLUE
-            // note above).
+            // cc:1069-1070: pass back the constant varnode as potential
+            // markup when it carries a SymbolEntry. Runs on every successful
+            // binary pull-back (including the SUBPIECE salvage arm above);
+            // unary pull-backs never write markup.
+            if constvn.read().unwrap().get_symbol_entry().is_some() {
+                *const_markup = Some(constvn.clone());
+            }
             res = r;
         } else {
             // Neither unary nor binary.
@@ -3687,7 +3695,7 @@ impl ValueSetSolver {
             let Some(def) = start.read().unwrap().get_def() else {
                 return; // Ghidra-unreachable: chain varnodes are written.
             };
-            let Some(next) = lift.pull_back(&def, false) else {
+            let Some(next) = lift.pull_back(&def, false, &mut None) else {
                 return; // Couldn't pull all the way back to our value set.
             };
             start = next;
@@ -3709,7 +3717,7 @@ impl ValueSetSolver {
             if is_call || is_marker {
                 break;
             }
-            let Some(next) = lift.pull_back(&op, false) else {
+            let Some(next) = lift.pull_back(&op, false, &mut None) else {
                 break;
             };
             end = next;
@@ -4667,7 +4675,7 @@ mod value_set_tests {
         less_op.write().unwrap().output = Some(bool_vn.clone());
 
         let mut lift = CircleRange::boolean(true);
-        let res = lift.pull_back(&less_op, false);
+        let res = lift.pull_back(&less_op, false, &mut None);
         let res = res.expect("pull back through INT_LESS(x, 5)");
         assert!(Arc::ptr_eq(&res, &x), "returns the non-constant input");
         assert_eq!(lift.get_left(), 0);
@@ -4684,7 +4692,7 @@ mod value_set_tests {
         less2.write().unwrap().inrefs.push(x.clone());
         less2.write().unwrap().output = Some(bool_vn.clone());
         let mut lift2 = CircleRange::boolean(true);
-        let res2 = lift2.pull_back(&less2, false).expect("slot-1 pull back");
+        let res2 = lift2.pull_back(&less2, false, &mut None).expect("slot-1 pull back");
         assert!(Arc::ptr_eq(&res2, &x));
         assert_eq!(lift2.get_left(), 6);
         assert_eq!(lift2.get_end(), 0);
@@ -4699,7 +4707,7 @@ mod value_set_tests {
         less3.write().unwrap().inrefs.push(y.clone());
         less3.write().unwrap().output = Some(bool_vn.clone());
         let mut lift3 = CircleRange::boolean(true);
-        assert!(lift3.pull_back(&less3, false).is_none());
+        assert!(lift3.pull_back(&less3, false, &mut None).is_none());
     }
 
     // RANGEUTIL-CONSTGEN-0001 regression: pullBack SUBPIECE nzmask salvage
@@ -4727,11 +4735,11 @@ mod value_set_tests {
 
         // usenzmask=false → SUBPIECE has no pullBackBinary arm → None.
         let mut lift_a = CircleRange::boolean(true);
-        assert!(lift_a.pull_back(&sub, false).is_none());
+        assert!(lift_a.pull_back(&sub, false, &mut None).is_none());
 
         // usenzmask=true → salvage + intersect.
         let mut lift = CircleRange::boolean(true);
-        let res = lift.pull_back(&sub, true).expect("SUBPIECE salvage");
+        let res = lift.pull_back(&sub, true, &mut None).expect("SUBPIECE salvage");
         assert!(Arc::ptr_eq(&res, &x8));
         // Mask expanded to the full 8-byte input domain; the nzmask
         // intersection keeps [1,2) valid under the bigger mask.
