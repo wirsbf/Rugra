@@ -128,6 +128,11 @@ pub enum Operand {
         scale: i32,
         displacement: i64,
         size: usize,
+        /// Segment override register ("fs"/"gs") — None for unprefixed
+        /// operands (and for CS/DS/ES/SS prefixes, which long mode ignores).
+        /// Drives the FS_OFFSET/GS_OFFSET segment-base INT_ADD of the lift
+        /// (LIFT-FS-CANARY-FORM-0001).
+        segment: Option<String>,
     },
 }
 
@@ -142,9 +147,13 @@ impl fmt::Display for Operand {
                 index,
                 scale,
                 displacement,
+                segment,
                 ..
             } => {
                 write!(f, "[")?;
+                if let Some(s) = segment {
+                    write!(f, "{}:", s)?;
+                }
                 let mut first = true;
                 if let Some(b) = base {
                     write!(f, "{}", b)?;

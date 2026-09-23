@@ -99,12 +99,22 @@ impl X86_64Disassembler {
                         None
                     };
 
+                    // Segment override: only FS/GS are meaningful in long
+                    // mode; legacy CS/DS/ES/SS prefixes are ignored by the
+                    // architecture (and never reach the oracle lift).
+                    let segment = match inst.segment_prefix() {
+                        Register::FS => Some("fs".to_string()),
+                        Register::GS => Some("gs".to_string()),
+                        _ => None,
+                    };
+
                     Some(Operand::Memory {
                         base,
                         index,
                         scale: inst.memory_index_scale() as i32,
                         displacement: inst.memory_displacement64() as i64,
                         size: inst.memory_size().size(),
+                        segment,
                     })
                 }
                 OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64 => {
