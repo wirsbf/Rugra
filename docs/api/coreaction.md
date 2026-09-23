@@ -632,6 +632,19 @@ Restructure the local-variable scope from stack varnodes. Faithful to
   `add_range` 的 `range.inRange` 门（varmap.cc:902）才能丢弃这些槽的
   hint）。每趟调用 `restructure_varnode(fd, aliasyes)` 后跑
   `fd.sync_varnodes_with_symbols(false, aliasyes)`。
+  **2026-09-23 VARMAP-PARAMSTORAGE-BLOB-0001 起参数符号按真实存储落位**：
+  播种时逐参携带 `ProtoParameter::address_space`——INTEGER 类照旧
+  Register 空间（寄存器偏移+寄存器宽度），MEMORY 类按值参数（match_url
+  的 304B `URLGlob glob`）落 **Stack 空间**（模型偏移 8 = entry_rsp+8 起
+  整类型宽度），与 oracle localdb 参数符号的 per-space SymbolEntry
+  （database.cc:1848-1851 maptable per spaceid）一致；旧实现硬编码
+  Register+整类型宽度的 blob 条目使 `find_container_entry` 的
+  [start..start+size) 包含判定（database.cc:2269）错误吞掉无关指针寄存器
+  （rax）而真栈槽读反查不到。寄存器参数的 varnode typelock 支腿现按
+  `space == Register` 门控；栈参数的 typelock 走
+  `sync_varnodes_with_symbols` 的 stack-space 步进 +
+  `SymbolEntry::getSizedType` 字段投影（funcdata_varnode.cc:947-960），
+  与 oracle 同路。
 - `aliasyes = (numpass != 0)`（coreaction.cc:2279）已穿透：第 0 趟跳过
   `mark_unaliased`/`check_unaliased_return`（varmap.cc:1280-1282）；
   `annotate_raw_stack_ptr` 不受门（cc:1284-1285）。
