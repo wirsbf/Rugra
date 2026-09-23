@@ -2,7 +2,11 @@
 
 **源代码路径**: `src/rangeutil.rs`
 **Ghidra 对应**: `rangeutil.hh` / `rangeutil.cc` (3015行)
-**状态**: ✅ **L3（2026-06-28 完整对齐）**——全部 CircleRange 方法覆盖（含 normalize/contains_range/widen/push_forward_trinary/get_max_info/set_stride）。26 单元测试。
+**状态**: 🔧 **L2**——CircleRange 全方法 + ValueSetSolver 填充/迭代主链路实跑
+（RANGEUTIL-VSEMPTY-0001 修复，2026-09-23）；约束生成族（applyConstraints/
+constraintsFromCBranch/generateConstraints 等）仍为结构占位（差分门禁口径：改动经
+curl/httpd E2E + gp/next_url/match_url/parseconfig 投影验证）。51 单元测试
+（2026-09-23 CR8 返工 +2：operator== 双空语义 / circle_union wrapping 合并）。
 
 ## 模块说明
 
@@ -82,11 +86,12 @@
 
 **`pub struct ValueSet`**（rangeutil.hh:113）——附在 Varnode 上的值集，兼作数据流子图节点。
 - `new()` — 默认构造（替代 C++ `list<ValueSet>::emplace_back`）。
-- `set_varnode(vn, t_code)`（cc:1503）/ `set_defining_op(op, n)` — 初始化（Varnode::getDef 暂未接入，op-code 由 solver 注入）。
+- `set_varnode(vn, t_code)`（cc:1503）——初始化；written 分支经 `get_def()` 读
+  defining op（2026-09-23 接通）。
 - `add_equation(slot, type, range)`（cc:1549）/ `add_landmark(type, range)`（hh:146）——按 slot 有序插入约束。
 - `does_equation_apply(num, slot) -> bool`（hh:143）/ `get_land_mark() -> Option<&CircleRange>`（cc:1742）。
 - `compute_type_code_with(input_type_codes) -> bool`（cc:1567）——绝对/相对判定，不可判定返回 true。
-- `iterate(widener) -> bool`（cc:1611）——核心迭代：MULTIEQUAL/1参/2参/3参分支，push-forward + circleUnion + widening，faithful。
+- 求解器侧 `ValueSetSolver::iterate_node(cur, widener)`（cc:1611）——核心迭代（2026-09-23 arena 活读版，见下节）。
 - 访问器：`get_count/get_type_code/get_varnode/get_range/is_left_stable/is_right_stable`。
 - `print_raw() -> String`（cc:1756）。
 
@@ -107,17 +112,93 @@
 - `visit(vertex, part) -> i32`（cc:1991）/ `component(vertex, part)`（cc:1974）/ `establish_topological_order()`（cc:2042）——Bourdoncle 算法，DFS 编号 + 头节点 0x7fffffff + 回路边重置 0。
 - `partition_prepend_vertex_in_arena` / `partition_prepend_head_in_arena`（hh:389/400）——arena 化的 partition 前插。
 - `solve(max, widener)`（cc:2524）——主迭代循环，component 栈 + isDirty 重启 + widener 重置。
-- `establish_value_sets(sinks, reads, stack_reg, indirect_as_copy)`（cc:2416）——构建数据流系统（Varnode::getDef 未接入前 input 扩展受限）。
+- `establish_value_sets(sinks, reads, stack_reg, indirect_as_copy)`（cc:2416）——构建数据流系统（2026-09-23 全量 worklist 扩展接通）。
 - `generate_true_equation` / `generate_false_equation`（cc:2066/2084）。
 - 结构占位（待 FlowBlock 支配查询 + CircleRange::pullBack(PcodeOp*) 接入）：`apply_constraints`（cc:2105）/`constraints_from_path`（cc:2185）/`constraints_from_cbranch`（cc:2210）/`generate_constraints`（cc:2248）/`check_relative_constant`（cc:2316）/`generate_relative_constraint`（cc:2351）。
 - `ValueSetEdge`（hh:281）——出边迭代器，预收集后继 id。
 
-**`pub struct ValueSetInput`**（RUGRA-GLUE）——`iterate` 的输入暂存（range/left_stable/right_stable/vn_size），替代 C++ `op->getIn(i)->getValueSet()` 链。
+**`pub struct ValueSetInput`**（RUGRA-GLUE，**2026-09-23 移除**）——旧的 `iterate`
+输入暂存被 arena 活读替代（见下节）。
 
-**已知基础设施缺口**（均标 `// TODO: depends on unported <X>`，结构就位待接入）：
-- `Varnode::getDef()` 未暴露给 rangeutil → `set_varnode` 的 written 分支与 `establish_value_sets` 的 input 扩展、`check_relative_constant` 的 COPY/INT_ADD 链遍历受限。
-- `Varnode::getValueSet()` 反向指针未实现 → solver 用 arena 扫描（`find_value_set_by_vn`）替代。
-- `FlowBlock` 支配查询（`getImmedDom`/`restrictedByConditional`/`getTrueOut`/`getFalseOut`）未接入 → 约束生成族方法为结构占位。
-- `CircleRange::pullBack(PcodeOp*,...)` 需 opbehavior 完整接线 → `constraints_from_path` 占位。
+## 2026-09-23：RANGEUTIL-VSEMPTY-0001——求解器填充/迭代主链路实跑
+
+**根因**：`establish_value_sets` 的 worklist 扩展循环是 TODO 占位（sink 的
+defining-op 输入从不进系统），且 `ValueSet::iterate` 依赖的输入暂存
+（`set_iterate_inputs`）无任何调用方——求解器对全部 guard sink 返回 empty
+range，LoadGuard 停在 establish 全窗臂。
+
+**修复**（全部对照 rangeutil.cc 锁定 oracle 行为）：
+- `set_varnode` written 分支（cc:1516-1527）：经 `Varnode::get_def()` 读取
+  defining op，opCode/numParams 忠实初始化（INDIRECT→COPY, numParams=1）；
+  删除 `set_defining_op` 注入胶水。
+- `establish_value_sets`（cc:2450-2498）：全量 worklist 扩展——INDIRECT
+  （indirectAsCopy||isIndirectStore → 扩展 in0；否则 setFull+root）、
+  CALL/CALLIND/CALLOTHER/LOAD/NEW/SEGMENTOP/CPOOLREF/FLOAT_*（setFull+root）、
+  default（全部输入 newValueSet+mark+入列，annotation 跳过）。同时在扩展时为
+  每个 written ValueSet 暂存 `input_ids`/`input_sizes`/`out_size`
+  （RUGRA-GLUE：替代 C++ `op->getIn(i)->getValueSet()` 活链）。
+- `ValueSetSolver::iterate_node(cur, widener)`（cc:1611-1737）：核心迭代改为
+  arena 级活读——输入 range/稳定性/type_code 每次 iterate 从 arena 快照读取
+  （与 C++ 活读语义一致，id 稳定）；count==0 → computeTypeCode；MULTIEQUAL
+  circleUnion 折叠 / 1-2-3 参 push-forward；res==range 不变判定；partHead 成员
+  走 doWidening（失败 setFull）。`solve`（cc:2524）两个调用点改接
+  `iterate_node`；移除 `iterate`/`iterate_with`/`set_iterate_inputs` 暂存层。
+- `push_forward_unary`（cc:1093-1167）全量忠实化：CAST/COPY 恒等、INT_ZEXT/
+  INT_SEXT 的 full 与 2-pieces 臂、INT_2COMP/INT_NEGATE（+normalize）、
+  BOOL_NEGATE/FLOAT_NAN → [0,2)。
+- `push_forward_binary`（cc:1180-1367）全量忠实化：PTRSUB 并入 INT_ADD（含
+  step/min/sizenew<size1 covered-everything 臂）、INT_MULT（step 增长 +
+  getMaxInfo>wholeSize 折叠 + 负数乘法臂）、INT_LEFT、SUBPIECE、INT_RIGHT、
+  INT_SRIGHT（sign_extend_bits 按 address.hh:543 位式符号扩展）、布尔输出族
+  → [0,2)。
+- `pull_back_unary` ZEXT/SEXT（cc:754-794）忠实化（含 SEXT 的
+  `left & step` 位与怪癖与"交集须为空才成功"上游行为）；`pull_back_binary`
+  补 SLESS/SLESSEQUAL/CARRY/SRIGHT（cc:878-998）。
+- `intersect`（cc:549）：改为 faithful `circle_intersect` 的包装（保留
+  0=空/1=单区间/2=两段 的旧返回码契约），获得 step/newStride/newDomain/回绕
+  语义（此前 step!=1 时直接保守放弃）。
+- `union`（**2026-09-23 CR8 M-A 隔离**）：legacy 简化包装——wrapping/混合/
+  step≠1 一律两片、满覆盖显式返 2——**不得用于对齐语义路径**（上游
+  `circleUnion` 满覆盖返 0+left==right，恒真判决在 translate2Op）；已加
+  禁用注记，RuleRangeMeld OR 臂改接忠实版 `circle_union`。
+- `==`（**2026-09-23 CR8 M-B**）：删除 `derive(PartialEq)`，手写
+  `impl PartialEq` 逐字镜像 `operator==`（hh:331-336）——isempty 不等→
+  false；双空→true（不比残留 mask/step/left/right——`iterate` 的
+  `res==range` 不变判定依赖此语义）；否则比 left/right/mask/step。
+- `set_stride`（cc:707-722，**2026-09-23 CR8 obs② 逐字重写**）：补
+  `newStep==step` early-return、`right-step`（旧步长）快照、
+  `!iseverything && left==right→isempty` 塌缩（旧实现自称 faithful 实为
+  异构：除法取整改写边界+mask 回写，无塌缩）。
+- 成员版 `new_stride`/`new_domain`（CR8 obs①）：死代码删除——生产路径为
+  静态 `new_stride_owned`/`new_domain_owned`（`circle_intersect` 调用），
+  原地留 tombstone 注记防再引入成员镜像。
+- `contains_range`（cc:301-329）：重叠码 'c'/'b' 忠实判定替代边界近似；
+  `WidenerFull::do_widening`（cc:1859-1870）landmark 检查改用
+  `contains_range`。
+- `invert`（cc:533-540）：忠实化（step 置 1 后 complement，返回原 step），
+  `generate_false_equation` 的补约束由此获得正确语义。
+- `translate_to_op`（cc:1424-1467）：全量忠实化（EQUAL/NOTEQUAL/SLESS 臂 +
+  1/2/3 码），返回 `Result<(OpCode,u64,i32), i32>`；ruleaction RuleRangeMeld
+  调用点改为 cc:1403-1437 的精确 restype 映射。
+- 移位 Panic 安全：`<< val`/`>> val` 全部 `wrapping_shl/shr(val as u32)`
+  （C++ UB 位点，x86 语义 = 掩 6 位）。
+
+**测试**：+2（translate_to_op 码表；solver 端到端
+`test_solver_fills_sink_range_through_int_add`——stackreg{0}+0x40 常量经
+INT_ADD 收敛 [0x40,0x41) type=1，read 节点镜像）；test_push_forward_add 期望
+修为 C++ 公式值 [5,24)。
+
+**验证**：rangeutil 51/51（CR8 返工后）；curl/httpd E2E 差分、getparameter/next_url/
+match_url/parseconfig 双投影 bisect（见 TODO_BOARD RANGEUTIL-VSEMPTY-0001 行）。
+
+## 已知基础设施缺口（约束生成族仍为结构占位）
+- `FlowBlock` 支配查询（`getImmedDom`/`restrictedByConditional`/`getTrueOut`/
+  `getFalseOut`）未接入 → `apply_constraints`（cc:2105）/
+  `constraints_from_path`（cc:2185）/`constraints_from_cbranch`（cc:2210）/
+  `generate_constraints`（cc:2248）/`generate_relative_constraint`（cc:2351）
+  为结构占位；约束只会收窄，缺失只导致守卫偏宽（过度保护）。
+- `check_relative_constant`（cc:2316）依赖同样的 defining-op 链遍历，待接线。
+- `Varnode::getValueSet()` 反向指针未实现 → solver 用 arena 扫描
+  （`find_value_set_by_vn`）替代。
 
 测试：新增 21 个（rangeutil::value_set_tests），覆盖 Equation/ValueSet 构造与访问器、add_equation 有序性、does_equation_apply、compute_type_code、WidenerFull/WidenerNone、ValueSetRead::compute/add_equation、circle_union/circle_intersect/minimal_container、print_range_raw、encode_range_overlaps。全部通过（1026/1026）。
