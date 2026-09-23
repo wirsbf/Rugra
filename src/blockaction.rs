@@ -1671,6 +1671,13 @@ impl<'a> CollapseStructure<'a> {
         self.collapse_conditions();
         // cc:1888: collapseInternal(NULL).
         let mut isolated = self.collapse_internal(None);
+        if std::env::var("RUGRA_BS_DUMP")
+            .map(|v| v == "3")
+            .unwrap_or(false)
+            && isolated < self.graph.get_size() as i32
+        {
+            self.debug_dump_graph("stuck1");
+        }
         // cc:1889-1892: the selectGoto loop. Ghidra has no deadline, round
         // cap, progress guard, or batch cascade — selectGoto marks ONE edge
         // and collapseInternal(targetbl) re-structures before the next mark.
@@ -1715,48 +1722,49 @@ impl<'a> CollapseStructure<'a> {
             };
             let r = b.read().unwrap();
             let dead = self.is_consumed(r.get_index());
-            let mut outs = String::new();
-            for s in 0..r.size_out() {
-                if let Some(e) = r.get_out(s) {
-                    let (dst_idx, ty) = match e.point.try_read() {
-                        Ok(g) => (g.get_index(), debug_type_name(&*g)),
-                        Err(_) => (-1, "?".to_string()),
-                    };
-                    let goto = r.is_goto_out(s);
-                    outs.push_str(&format!(
-                        " [{}:{}:{}{}]",
-                        s,
-                        dst_idx,
-                        ty,
-                        if goto { ",GOTO" } else { "" }
-                    ));
-                }
-            }
-            let mut ins = String::new();
-            for s in 0..r.size_in() {
-                if let Some(e) = r.get_in(s) {
-                    let src_idx = match e.point.try_read() {
-                        Ok(g) => g.get_index(),
-                        Err(_) => -1,
-                    };
-                    ins.push_str(&format!(" [{}:{}]", s, src_idx));
-                }
-            }
+            let addr = crate::block::dbg_front_leaf_start_addr(&b);
             let iso = dead || (r.size_in() == 0 && r.size_out() == 0);
             if !iso {
                 nonisolated += 1;
             }
             eprintln!(
-                "[DBG] {} {} blk#{} ty={} dead={} in={}{} out={}{} flags={:#x}",
+                "[DBG] {} {} blk#{} addr={:#x} ty={} dead={} in={}{} out={}{} flags={:#x}",
                 when,
                 self.name,
                 i,
+                addr,
                 debug_type_name(&*r),
-                dead,
+                self.is_consumed(r.get_index()),
                 r.size_in(),
-                ins,
+                {
+                    let mut s = String::new();
+                    for sl in 0..r.size_in() {
+                        if let Some(e) = r.get_in(sl) {
+                            s.push_str(&format!(" [{}:{}]", sl, e.point.read().unwrap().get_index()));
+                        }
+                    }
+                    s
+                },
                 r.size_out(),
-                outs,
+                {
+                    let mut s = String::new();
+                    for sl in 0..r.size_out() {
+                        if let Some(e) = r.get_out(sl) {
+                            let (dst_idx, ty) = match e.point.try_read() {
+                                Ok(g) => (g.get_index(), debug_type_name(&*g)),
+                                Err(_) => (-1, "?".to_string()),
+                            };
+                            s.push_str(&format!(
+                                " [{}:{}:{}{}]",
+                                sl,
+                                dst_idx,
+                                ty,
+                                if r.is_goto_out(sl) { ",GOTO" } else { "" }
+                            ));
+                        }
+                    }
+                    s
+                },
                 r.get_flags()
             );
         }
