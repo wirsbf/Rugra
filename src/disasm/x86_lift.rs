@@ -1846,7 +1846,14 @@ impl X86Lifter {
         let not_cond = self.emit_bool_not(cond, ops);
         let next = inst.address.as_u64() + inst.length as u64;
         let mut op_cbr = PcodeOpRaw::new(OpCode::CPUI_CBRANCH as i32);
-        op_cbr.add_input(VarnodeRaw::new(AddressSpace::Ram, next, 8));
+        // Ghidra: funcdata_varnode.cc:222 Funcdata::newCodeRef — a branch
+        // destination is a 1-byte code-ref annotation varnode. An 8-byte
+        // ram varnode at the target overlaps neighboring branch targets,
+        // and Heritage's range refinement (heritage.cc:390 refineRead /
+        // cc:474 refineWrite family) then splits/rejoins them with PIECE
+        // chains whose dead residue lands in jmp-only basic blocks and
+        // blocks ActionDoNothing (HTTPD-FULLEMPTY-ELSE-0001).
+        op_cbr.add_input(VarnodeRaw::new(AddressSpace::Ram, next, 1));
         op_cbr.add_input(not_cond);
         ops.push(op_cbr);
         // Reg = tmp
@@ -4672,7 +4679,10 @@ impl X86Lifter {
                     match &inst.operands[0] {
                         crate::disasm::Operand::Immediate { value, .. } => {
                             let mut op = PcodeOpRaw::new(OpCode::CPUI_BRANCH as i32);
-                            op.add_input(VarnodeRaw::new(AddressSpace::Ram, *value as u64, 8));
+                            // Ghidra: funcdata_varnode.cc:222 Funcdata::
+                            // newCodeRef — 1-byte code-ref form (see the
+                            // cmovcc site above; HTTPD-FULLEMPTY-ELSE-0001).
+                            op.add_input(VarnodeRaw::new(AddressSpace::Ram, *value as u64, 1));
                             ops.push(op);
                         }
                         // Indirect jump through register or memory → CPUI_BRANCHIND.
@@ -4728,7 +4738,10 @@ impl X86Lifter {
                 // offsets (0x201/0x202/0x203) and SF-only signed conditions.
                 if inst.operands.len() == 1 {
                     if let crate::disasm::Operand::Immediate { value, .. } = inst.operands[0] {
-                        let target = VarnodeRaw::new(AddressSpace::Ram, value as u64, 8);
+                        // Ghidra: funcdata_varnode.cc:222 Funcdata::
+                        // newCodeRef — 1-byte code-ref form (see the cmovcc
+                        // site above; HTTPD-FULLEMPTY-ELSE-0001).
+                        let target = VarnodeRaw::new(AddressSpace::Ram, value as u64, 1);
                         if let Some(cond_vn) = self.emit_cc_cond(&mnemonic[1..], &mut ops) {
                             let mut op = PcodeOpRaw::new(OpCode::CPUI_CBRANCH as i32);
                             op.add_input(target);

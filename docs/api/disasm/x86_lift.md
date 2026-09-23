@@ -427,3 +427,31 @@
   `in_register_00000110`(curl 侧有原型锁,同链路渲染正确
   `in_FS_OFFSET`);根因在 fspec 原型输入表/varmap 输入符号安装域,
   见 TODO BOARD 移交行。
+
+### 2026-09-24:HTTPD-FULLEMPTY-ELSE-0001 — 直接分支目标 1 字节 code-ref 形(wt/elsefix)
+- 改动:三处直接分支目标 `jmp rel` / `jCC rel` / cmovcc 内部
+  `if(!cc) goto inst_next` 的目标输入从 `VarnodeRaw(Ram, target, 8)` 改为
+  `(Ram, target, 1)`——Ghidra `Funcdata::newCodeRef`(funcdata_varnode.cc:
+  222-233)的 code-ref 形:1 字节 ram 注记(oracle 直跑探针实证
+  `[target-space=ram size=1]`,fspec CALL 目标另属 fspec 空间,本就不动)。
+- 根因链(空 else defect):8 字节目标 varnode 使相邻分支目标互相重叠 →
+  Heritage 范围细化(refineRead/refineWrite,heritage.cc:390-414/474-494)
+  把它们拆分再用 PIECE 链重组(`concat` 残骸)→ 死 PIECE 落进仅含 jmp 的
+  基本块(如 ap_parse_uri 的 0x34335)→ `BlockBasic::isDoNothing` 的
+  hasOnlyMarkers(block.cc:2578)不过 → 块不被 ActionDoNothing 移除 →
+  ruleBlockIfElse(blockaction.cc:1416)合法地把幸存块包成 else 臂 →
+  打印层按 printc.cc:2926-2944 发射 `else {`+空体 → `else {}` 缺陷。
+  oracle 侧同输入无 PIECE(1 字节目标不重叠,read-only range 走
+  renameRecurse 输入晋升即止),jmp-only 块被 donothing 移除后
+  ruleBlockProperIf 产出无 else 的 if。
+- E2E(wt/elsefix,fast-release,基=亲父 a57da535 亲测):
+  - httpd 全量 L2 vs direct-runner **37867/0/0**(基 37939/2/0;defects
+    2→0,ap_parse_uri L16/ap_invoke_handler L57 空 else 均消失,skeleton
+    −72 只降不升,双跑逐字节恒等);
+  - httpd 门禁面 29 fns canonical **2148/0/0**(基 2225/0/0,−77);
+  - curl **逐字节恒等于基线**(curl 主解码走 SleighLifter,iced 仅
+    __libc_csu_init/fini);
+  - 三投影(RUGRA_MIRROR=1)next_url/match_url/parseconfig.constprop.0
+    stage_bisect --v1 全 **MATCH×3**;
+  - cargo test --lib 串行 1677 通过/18 失败 == 基线逐字同集(并行跑的
+    失败集为共享状态串扰 flake,基线同现)。
