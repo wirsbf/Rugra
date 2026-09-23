@@ -5194,15 +5194,26 @@ impl ActionSetCasts {
                     }
                 }
                 // cc:2680-2684: cast directly from the input of the
-                // previous cast.
-                if let Some(prev) = in_vn
+                // previous cast. The extraction is bound to a let, NOT an
+                // if-let scrutinee: a scrutinee temporary would keep
+                // in_vn's read guard alive through the whole arm, and the
+                // arm's op_set_input opUnsetInput leg (funcdata.rs
+                // op_set_input step (3)) write-locks the OLD slot input —
+                // exactly in_vn here — self-deadlocking the futex RwLock
+                // (HTTPD-MAIN-POSTBLOCKSTRUCT-HANG-0002: stage-emitter
+                // httpd main froze at 76745763B in ActionSetCasts, CPU
+                // idle, first content trigger under RC2 cspec types).
+                // Ghidra reads vn->getDef()->getIn(0) to completion
+                // before opSetInput; the let-bound read preserves that
+                // order exactly.
+                let prev_cast_input = in_vn
                     .read()
                     .unwrap()
                     .def
                     .as_ref()
                     .and_then(|d| d.upgrade())
-                    .and_then(|d| d.read().unwrap().get_in(0).cloned())
-                {
+                    .and_then(|d| d.read().unwrap().get_in(0).cloned());
+                if let Some(prev) = prev_cast_input {
                     vnin = prev;
                     if vnin
                         .read()

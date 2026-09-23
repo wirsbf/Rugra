@@ -1,5 +1,32 @@
 # `coreaction.rs` API Reference
 
+## 2026-09-23：castInput double-cast 臂锁卫生（HTTPD-MAIN-POSTBLOCKSTRUCT-HANG-0002 / EW）
+
+- **现象**：stage-projection/mirror 模式（`RUGRA_MIRROR=1 RUGRA_STAGE_PROJ=1
+  RUGRA_STAGE_FUNC=main`）httpd main 确定性死锁——输出冻结于 76745763B（两轮合并态
+  逐字节复现），CPU idle（600s wall / 3.1s user），stderr 终点
+  `[BLOCKSTRUCT] main finalize_structure: 89 -> 12`；default 模式同树 main <1s 完成。
+  gdb 双采样（setsid+gdb-as-parent 绕 ptrace_scope=1）定格：worker 线程阻塞于
+  `RwLock::write_contended` ← `Funcdata::op_set_input` ← `ActionSetCasts::cast_input`。
+- **根因（Rugra 侧锁卫生，非 Ghidra 语义差异）**：cc:2680-2684 臂的
+  `if let Some(prev) = in_vn.read().unwrap().def...` 以 if-let **scrutinee 临时值**持
+  `in_vn` 读锁贯穿整个臂体；臂体内 `fd.op_set_input(op_ref, vnin, slot)`（cc:2682 的
+  opSetInput）在 `op_set_input` 第 (3) 步（funcdata_op.cc:120-121 的 opUnsetInput /
+  eraseDescend）**写锁 OLD slot 输入——恰为 `in_vn` 本身**，futex RwLock 同线程
+  读→写自死锁。Ghidra 单线程裸指针无锁，cc:2680-2682 先完整读
+  `vn->getDef()->getIn(0)` 再 opSetInput，无此问题。default 模式此前不触发仅因
+  inject 路径+无 cspec 的类型形态从未进入该臂；链侧 RC2（fb935792 cspec 挂载，bisect
+  实锤：RC1 b00bf54d 单独 6s 完成、RC2 起 20s 冻结）首次让 httpd main 的
+  implied-CAST×ct 匹配形态到达此臂。
+- **修复形态**：prev 提取改为 `let prev_cast_input = ...; if let Some(prev) =
+  prev_cast_input`——读锁在 let 语句末释放，臂体内 op_set_input 的写不再撞自持读锁；
+  读序仍镜像 cc:2680（先完整读 def 输入再 opSetInput），语义零变化。
+- **验收（Lane EW，wt/emitterhang@736982f2+本修）**：emitter 模式 httpd main 3s 完成
+  （294 @BEGIN，`stage emitters done`，78MB 投影）；default curl 语素**逐字节等于**
+  修复前树（eq2_curl_r2.c cmp 零差异，2512/0/0）；default httpd 逐字节等于修复前树
+  （eq2_httpd_r2.c，2539/0/0）；三投影 next_url/match_url/parseconfig 非 META diff=0
+  全 MATCH。coreaction 属机制 B 白名单，差分门禁双零通过。
+
 ## 2026-09-23：union 逐边解析管线接线（UNIONRESOLVE-PIPELINE-WIRING-0001 / EN2）
 
 `fd.union_map` 生产方全链接通——`ActionSetCasts`/`ActionInferTypes` 三个 oracle 调用点
