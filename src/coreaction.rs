@@ -12435,29 +12435,52 @@ impl ActionConditionalConst {
     // Ghidra: coreaction.cc:4201 ActionConditionalConst::placeCopy
     /// Create a COPY op assigning `const_vn` at the bottom of block `bl`,
     /// before any branch. Returns the output Varnode of the COPY.
+    /// Faithful to placeCopy (cc:4201-4225): pick the insert position per
+    /// cc:4204-4218 (empty block → endOp + the alternate op's address; last
+    /// op is a branch → insert before it at its address; otherwise → endOp
+    /// at the last op's address), then `data.opInsert(copyOp, bl, iter)`
+    /// (cc:4223) so the COPY is attached to the block — the former port
+    /// only pushed onto the alivelist, leaving the op unattached (SNAP
+    /// d=1, PARSECONFIG-CONDCONST-PHI-0001 op-line divergence).
     fn place_copy(
         fd: &mut Funcdata,
         op: &crate::op::PcodeOpRef,
         bl: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
         const_vn: &Arc<RwLock<crate::varnode::Varnode>>,
     ) -> Arc<RwLock<crate::varnode::Varnode>> {
-        let addr = {
+        // cc:4204-4218: insert iterator + address selection.
+        let (addr, iter_index) = {
             let bl_r = bl.read().unwrap();
             let bb = match bl_r.as_any().downcast_ref::<crate::block::BlockBasic>() {
                 Some(b) => b,
-                None => return fd.new_unique_out(const_vn.read().unwrap().get_size(), op),
+                None => {
+                    // Non-basic blocks cannot host the COPY; keep the legacy
+                    // unattached fallback (unreachable for bblocks graphs).
+                    return fd.new_unique_out(const_vn.read().unwrap().get_size(), op);
+                }
             };
-            if let Some(last_op) = bb.ops.last() {
-                last_op.0.read().unwrap().start.addr
-            } else {
-                op.0.read().unwrap().start.addr
+            match bb.ops.last() {
+                None => (op.0.read().unwrap().start.addr, None),
+                Some(last) => {
+                    let last_r = last.0.read().unwrap();
+                    let addr = last_r.start.addr; // lastOp->getAddr()
+                    if last_r.is_branch() {
+                        // lastOp->getBasicIter(): insert before the branch.
+                        (addr, Some(bb.ops.len() - 1))
+                    } else {
+                        // bl->endOp(): insert at the end.
+                        (addr, None)
+                    }
+                }
             }
         };
         let copy_op = fd.new_op(1, addr);
         fd.op_set_opcode(&copy_op, crate::opcodes::OpCode::CPUI_COPY);
         let out_vn = fd.new_unique_out(const_vn.read().unwrap().get_size(), &copy_op);
         fd.op_set_input(&copy_op, const_vn.clone(), 0);
-        fd.obank.alivelist.push(copy_op.clone());
+        // cc:4223: data.opInsert(copyOp, bl, iter) — attach to the block
+        // (also moves the op off the deadlist via mark_alive).
+        fd.op_insert(&copy_op, bl, iter_index);
         out_vn
     }
 
@@ -12842,50 +12865,40 @@ impl Action for ActionConditionalConst {
         //    d. propagateConstant: replace reads of the constant-path Varnode
         //       with the constant, within blocks dominated by the const edge.
         //
-        // Safety guards (Rugra-specific, see propagateConstant and the
-        // CONVERGENCE GUARD below):
+        // Note on remaining Rugra-side guards (see propagateConstant):
         //  - propagateConstant replaces an input only when the op's block is
         //    dominated by the const block, matching Ghidra's
         //    `constBlock->dominates(op->getParent())` check.
         //  - A value-level idempotency guard skips replacements where the slot
-        //    already holds the same constant (avoids non-convergence under
-        //    repeatapply, since each new_constant allocates a fresh Arc).
-        //  - The IR-mutating work runs at most once per function (cond_const_done
-        //    flag), because re-propagating after downstream CFG reshaping does
-        //    not converge for some functions.
+        //    already holds the same constant (each new_constant allocates a
+        //    fresh Arc; the value guard is behavior-neutral because Ghidra's
+        //    Varnode bank canonicalizes constants, varnode.cc
+        //    setConstantCollect).
         //  - op_set_input already does constant dedup + descend-link fixup, so
         //    no dangling references are produced.
-        //  - MULTIEQUAL/phi-node replacement (handlePhiNodes -> placeCopy) is
-        //    disabled (use_multiequal forced false) because op-insertion under
-        //    the repeatapply mainloop does not converge.
         use crate::block::FlowBlock;
         use crate::opcodes::OpCode;
 
         self.count = 0;
 
-        // CONVERGENCE GUARD (Rugra-specific): the implied-boolean propagation
-        // path below mutates the IR by replacing CBRANCH-condition reads with
-        // constants. Re-running this on later mainloop iterations (after the
-        // downstream ActionConditionalExe/branch-folding has reshaped the CFG)
-        // does not converge for some functions — each pass finds fresh
-        // propagation targets and the repeatapply loop never settles (5/24 curl
-        // timeouts). Gate the IR-mutating work to run at most once per function.
-        // The detect/scan still happens every pass (harmless), but once we've
-        // mutated, subsequent passes skip. This mirrors Ghidra's effective
-        // single-pass behaviour within one mainloop cycle.
-        let already_done = fd.cond_const_done;
-        fd.cond_const_done = true;
+        // NOTE (PARSECONFIG-CONDCONST-PHI-0001): the former Rugra-only
+        // guards are removed — (a) the once-per-function cond_const_done
+        // gate and (b) the `use_multiequal = false` hard override — both
+        // suppressed the oracle's MULTIEQUAL/phi-node path
+        // (coreaction.cc:4401-4426 + handlePhiNodes cc:4299-4337), which
+        // is exactly the parseconfig ordinal-83 firing: placeCopy of the
+        // constant down the conditional edge + phi input rewrite. Ghidra
+        // runs this path unconditionally per mainloop pass (repeatapply
+        // convergence is handled by the perform() count state machine,
+        // action.cc:298-362, mirrored in src/action.rs); any remaining
+        // non-convergence is a downstream port defect to chase in
+        // Ghidra source, not a reason to keep the gate (铁律 1.5).
 
-        // cc:4517-4525: useMultiequal gate based on stack heritage passes.
-        let use_multiequal = fd.num_heritage_passes() > 0;
-        // SAFETY GATE (progressive enablement): the MULTIEQUAL / phi-node
-        // replacement path (handlePhiNodes -> placeCopy) inserts new ops into
-        // the IR, and under Rugra's repeatapply mainloop this does not converge
-        // — it causes 12/24 curl functions to time out. Disable it until the
-        // op-insertion + deadcode convergence is hardened. The non-MULTIEQUAL
-        // dominance-based constant replacement is retained (safe: it only calls
-        // op_set_input, which is idempotent via the cc:107 early-out).
-        let use_multiequal = false;
+        // cc:4517-4525: useMultiequal gate — `stackSpace != null &&
+        // numHeritagePasses(stackSpace) > 0` (coreaction.cc:4522, the
+        // per-space delay-adjusted count heritage.cc:2779-2788; the raw
+        // Funcdata wrapper ignored the Stack delay and is not used here).
+        let use_multiequal = fd.heritage.num_heritage_passes(fd.stack_space) > 0;
 
         let n_blocks = fd.bblocks.get_size();
         for i in 0..n_blocks {
@@ -12955,14 +12968,13 @@ impl Action for ActionConditionalConst {
 
             // cc:4537-4541: if boolVn is read more than once (no lone descend),
             // push implied-constant points (bool=0 down false edge, bool=1 down true).
-            // SAFETY GATE (progressive enablement): the implied-boolean path
-            // propagates the CBRANCH's own boolean (0/1) into downstream reads.
-            // Under Rugra's mainloop, this disrupts ActionConditionalExe / branch
-            // folding convergence for several functions (5/24 curl timeouts).
-            // Ghidra tolerates this because its condexe+deadcode immediately fold
-            // the now-redundant branch; Rugra's do not. Disabled until that
-            // downstream convergence is hardened. The findConstCompare path below
-            // (var==const propagation) is retained — it is safe and useful.
+            // The implied-boolean path (cc:4537-4541) propagates the
+            // CBRANCH's own boolean (0/1) into downstream reads. It was
+            // historically gated off for condexe/folding convergence but
+            // now runs unconditionally, matching the oracle; the
+            // historical convergence problem was downstream and is
+            // resolved on the current baseline (curl/httpd E2E + next_url/
+            // match_url/parseconfig projections all stable with it on).
             if bool_vn.read().unwrap().lone_descend().is_none() {
                 // Need the false/true out-blocks. Ghidra uses getFalseOut/getTrueOut
                 // which account for the boolean flip. bl_out is indexed [0,1] =
@@ -13004,9 +13016,8 @@ impl Action for ActionConditionalConst {
                 flip_edge,
             );
 
-            // cc:4543: propagateConstant (the IR-mutating step).
-            // Guarded by the once-per-function flag (see comment above).
-            if !already_done && !points.is_empty() {
+            // cc:4543: propagateConstant (the IR-mutating step), every pass.
+            if !points.is_empty() {
                 let mut pts = points;
                 self.propagate_constant(fd, &mut pts, use_multiequal);
             }
@@ -16015,6 +16026,16 @@ impl Action for ActionNodeJoin {
     // RUGRA-GLUE: Rust Action trait get_name; "nodejoin" mirrors ctor at blockaction.hh:350
     fn get_name(&self) -> &str {
         "nodejoin"
+    }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (incremented at blockaction.cc:2355 inside apply) into the Rust
+    // ActionState accumulator — same adapter as ActionConstantPtr et al.
+    // Without it the stage projection under-reports nodejoin's result/
+    // count/apply even though the join executed identically
+    // (PARSECONFIG-NODEJOIN-COUNT-0001, ordinal-81 divergence).
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
 }
 
