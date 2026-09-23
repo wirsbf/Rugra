@@ -525,37 +525,113 @@ impl LoadGuard {
         g
     }
 
-    // Ghidra: heritage.cc:741 LoadGuard::establishRange
-    /// Convert a partial value-set analysis result into the guard range.
-    /// Faithful to `LoadGuard::establishRange` (heritage.cc:741-786).
+    // Ghidra: heritage.cc:740 LoadGuard::establishRange
+    /// Convert partial value-set analysis into the guard range.
+    /// Faithful port of `LoadGuard::establishRange` (heritage.cc:740-785):
+    /// empty/full/too-wide ranges keep `minimumOffset = pointerBase` with a
+    /// 0x1000 size window; a converged range picks the left/right stable
+    /// boundary (or pointerBase when unstable); the window is clamped to
+    /// `spc->getHighest()`.
     ///
-    /// Rugra does not yet have a `ValueSetRead`/`CircleRange` solver, so the
-    /// body records what the analysis *would* do and leaves the initial
-    /// "guard everything" range intact, matching Ghidra's behaviour for an
-    /// empty/full range (which cannot be narrowed). `analysis_state` stays 0
-    /// so a later full solver run can still refine it.
-    /// TODO(value-set-analysis): wire a real `ValueSetRead` here.
-    pub fn establish_range(&mut self) {
-        // With no value-set solver available we mirror Ghidra's empty/full
-        // range branch (heritage.cc:747-750): minimumOffset = pointerBase,
-        // maximumOffset = spc->getHighest(). We keep minimumOffset = 0 to
-        // remain maximally permissive (the conservative initial guard) until
-        // a real solver narrows it.
-        self.analysis_state = 0;
+    /// GETPARAM-OPPOOL-COUNT-0001: this used to be a TODO(value-set-analysis)
+    /// stub that kept the initial full-stack `[0, highest]` guard, which made
+    /// `RuleIndirectCollapse`'s store-guard arm (ruleaction.cc:3203-3218)
+    /// reject every stack INDIRECT (guard->isGuarded always true) — 6 missing
+    /// rule applications at getparameter oppool1 ordinal 65.
+    pub fn establish_range(&mut self, value_set: &crate::rangeutil::ValueSetRead) {
+        // cc:743-744: const CircleRange &range; rangeSize = range.getSize()
+        let range = value_set.get_range();
+        let range_size = range.get_size();
+        let mut size: u64;
+        if range.is_empty() {
+            // cc:746-749: minimumOffset = pointerBase; size = 0x1000;
+            self.minimum_offset = self.pointer_base;
+            size = 0x1000;
+        } else if range.is_full() || range_size > 0xffffff {
+            // cc:750-754: minimumOffset = pointerBase; size = 0x1000;
+            //   analysisState = 1 (don't bother doing more analysis)
+            self.minimum_offset = self.pointer_base;
+            size = 0x1000;
+            self.analysis_state = 1;
+        } else {
+            // cc:756: step = (rangeSize == 3) ? range.getStep() : 0
+            self.step = if range_size == 3 { range.get_step() as i32 } else { 0 };
+            size = 0x1000;
+            if value_set.is_left_stable() {
+                // cc:758-760: minimumOffset = range.getMin()
+                self.minimum_offset = range.get_min();
+            } else if value_set.is_right_stable() {
+                // cc:761-770
+                if self.pointer_base < range.get_end() {
+                    self.minimum_offset = self.pointer_base;
+                    size = range.get_end() - self.pointer_base;
+                } else {
+                    self.minimum_offset = range.get_min();
+                    size = range_size.wrapping_mul(range.get_step());
+                }
+            } else {
+                // cc:771-772: minimumOffset = pointerBase
+                self.minimum_offset = self.pointer_base;
+            }
+        }
+        // cc:774-784: clamp to spc->getHighest(). NOTE: uintb arithmetic in
+        // C++ wraps: for a space whose highest is 2^64-1 and minimumOffset 0,
+        // maxSize wraps to 0 and the window clamps back to highest (the
+        // whole-space guard), which is the faithful outcome.
+        let max = space_highest(self.spc);
+        if self.minimum_offset > max {
+            self.minimum_offset = max;
+            self.maximum_offset = self.minimum_offset; // Something is seriously wrong
+        } else {
+            let max_size = (max - self.minimum_offset).wrapping_add(1);
+            if size > max_size {
+                size = max_size;
+            }
+            self.maximum_offset = self.minimum_offset.wrapping_add(size).wrapping_sub(1);
+        }
     }
 
-    // Ghidra: heritage.cc:788 LoadGuard::finalizeRange
-    /// Convert a final value-set analysis result into the guard range.
-    /// Faithful to `LoadGuard::finalizeRange` (heritage.cc:788-814).
-    ///
-    /// Without a `ValueSetRead` solver there is nothing to converge on, so we
-    /// mark the range as partially analyzed (`analysisState == 1`), which in
-    /// Ghidra means "analyzed but partial result, still guard everything".
-    /// TODO(value-set-analysis): wire a real `ValueSetRead` here.
-    pub fn finalize_range(&mut self) {
-        // heritage.cc:791 sets analysisState = 1 unconditionally first.
+    // Ghidra: heritage.cc:787 LoadGuard::finalizeRange
+    /// Convert final value-set analysis to the final guard range.
+    /// Faithful port of `LoadGuard::finalizeRange` (heritage.cc:787-813):
+    /// analysisState=1 unconditionally; a converged reasonable range (with
+    /// the 0x100/0x10000 index-storage caveat) locks the guard at state 2
+    /// with [range.getMin(), (range.getEnd()-1)&range.getMask()], demoted
+    /// back to state 1 (full window to highest) when the mask overflows.
+    pub fn finalize_range(&mut self, value_set: &crate::rangeutil::ValueSetRead) {
+        // cc:790: analysisState = 1 in all cases
         self.analysis_state = 1;
-        // No CircleRange to read; keep the conservative full-range guard.
+        let range = value_set.get_range();
+        let mut range_size = range.get_size();
+        // cc:793-797: sizes that likely result from the storage size of the
+        //   index are discarded unless iteration signs were seen
+        if range_size == 0x100 || range_size == 0x10000 {
+            if self.step == 0 {
+                range_size = 0;
+            }
+        }
+        // cc:798-808: converged to something reasonable
+        if range_size > 1 && range_size < 0xffffff {
+            self.analysis_state = 2; // definitive result
+            if range_size > 2 {
+                self.step = range.get_step() as i32;
+            }
+            self.minimum_offset = range.get_min();
+            // NOTE: Don't subtract a whole step
+            self.maximum_offset = range.get_end().wrapping_sub(1) & range.get_mask();
+            if self.maximum_offset < self.minimum_offset {
+                // Values extend into what is usually stack parameters
+                self.maximum_offset = space_highest(self.spc);
+                self.analysis_state = 1; // remove the lock, likely overflowed
+            }
+        }
+        // cc:809-812: final clamps to spc->getHighest()
+        if self.minimum_offset > space_highest(self.spc) {
+            self.minimum_offset = space_highest(self.spc);
+        }
+        if self.maximum_offset > space_highest(self.spc) {
+            self.maximum_offset = space_highest(self.spc);
+        }
     }
 }
 
@@ -2877,7 +2953,14 @@ impl Heritage {
                     Some(v) => v.clone(), None => continue,
                 };
                 if !vn.read().unwrap().is_written() { continue; }
-                // cc:638: skip already addrForce
+                // cc:637: if (vn->isAddrForce()) continue; — the walk stops
+                // at already-address-forced varnodes. GETPARAM-OPPOOL-COUNT
+                // -0001: this guard was annotated but not implemented, so
+                // the walk pushed through addrforced chains and flagged
+                // extra ops (e.g. COPY@3f3f:2a stack:fc40) into `forces`,
+                // whose spurious ADDRFORCE then blocked RulePropagateCopy's
+                // marker guard (ruleaction.cc:3948).
+                if vn.read().unwrap().is_addr_force() { continue; }
                 // cc:640: skip already marked
                 let def_op = match vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
                     Some(d) => d, None => continue,
@@ -3268,46 +3351,149 @@ impl Heritage {
         }
     }
 
-    // Ghidra: heritage.cc:835 Heritage::analyzeNewLoadGuards
-    /// Analyze new load/store guards using value-set analysis. Faithful to
-    /// `analyzeNewLoadGuards` (heritage.cc:835-901). Uses ValueSetSolver to
-    /// determine the range of possible addresses for guarded LOAD/STORE ops.
+    // Ghidra: heritage.cc:834 Heritage::analyzeNewLoadGuards
+    /// Analyze new load/store guards using value-set analysis. Faithful port
+    /// of `analyzeNewLoadGuards` (heritage.cc:834-900): collect the trailing
+    /// runs of unanalyzed guards (load list first, then store list), build
+    /// the ValueSetSolver over their pointer sinks, solve with WidenerNone,
+    /// establishRange each, then (if any guard is still state 0) re-solve
+    /// with WidenerFull and finalizeRange each.
     ///
-    /// Rugra lacks ValueSetSolver (rangeutil.cc ValueSetSolver). This method
-    /// is a documented stub that marks guards as analyzed (analysisState=1).
-    pub fn analyze_new_load_guards(&mut self) {
-        // cc:838-847: check if any unanalyzed guards exist
-        let has_unanalyzed_load = self
+    /// GETPARAM-OPPOOL-COUNT-0001: this used to be a documented stub
+    /// claiming "Rugra lacks ValueSetSolver" — but src/rangeutil.rs ports the
+    /// solver (establish_value_sets/solve/get_value_set_read +
+    /// WidenerNone/WidenerFull). The stub kept every guard at the full-stack
+    /// `[0, highest]` range, so RuleIndirectCollapse's store-guard arm
+    /// (ruleaction.cc:3203-3218) never collapsed stack INDIRECTs.
+    ///
+    /// Known residual: the solver's branch-condition constraint machinery
+    /// (rangeutil.rs applyConstraints/constraintsFromCbranch/
+    /// generateConstraints) is still stubbed, so ranges can be wider than
+    /// Ghidra's (constraints only ever narrow). A wider guard range only
+    /// over-protects (keeps INDIRECTs), never under-protects.
+    pub fn analyze_new_load_guards(&mut self, fd: &mut Funcdata) {
+        // cc:837-846: nothingToDo — only the back of each list is checked
+        let mut nothing_to_do = true;
+        if self
             .load_guard
-            .iter()
-            .rev()
-            .take_while(|g| g.analysis_state == 0)
-            .count() > 0;
-        let has_unanalyzed_store = self
+            .last()
+            .is_some_and(|g| g.analysis_state == 0)
+        {
+            nothing_to_do = false;
+        }
+        if self
             .store_guard
-            .iter()
-            .rev()
-            .take_while(|g| g.analysis_state == 0)
-            .count() > 0;
-        if !has_unanalyzed_load && !has_unanalyzed_store { return; }
+            .last()
+            .is_some_and(|g| g.analysis_state == 0)
+        {
+            nothing_to_do = false;
+        }
+        if nothing_to_do {
+            return;
+        }
 
-        // cc:871-874: ValueSetSolver establishValueSets + solve(10000, WidenerNone)
-        // TODO: port ValueSetSolver (rangeutil.cc ValueSetSolver). This is a
-        // complex value-set analysis engine (~600 lines in rangeutil.cc).
-        // For now, conservatively mark all guards as analyzed with full range.
-        for guard in &mut self.load_guard {
-            if guard.analysis_state == 0 {
-                guard.analysis_state = 1;
-                // cc:879: guard.establishRange — conservatively set full range
-                guard.minimum_offset = 0;
-                guard.maximum_offset = u64::MAX;
+        // cc:850-865: walk both lists back-to-front collecting the trailing
+        // unanalyzed runs: reads <- guard.op, sinks <- guard.op->getIn(1)
+        let mut sinks: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        let mut reads: Vec<Arc<RwLock<PcodeOp>>> = Vec::new();
+        let mut load_start = self.load_guard.len();
+        while load_start > 0 {
+            let g = &self.load_guard[load_start - 1];
+            if g.analysis_state != 0 {
+                break;
+            }
+            if let Some(op) = g.op.upgrade() {
+                let ptr = op.read().unwrap().inrefs.get(1).cloned();
+                if let Some(ptr) = ptr {
+                    sinks.push(ptr);
+                    reads.push(op);
+                }
+            }
+            load_start -= 1;
+        }
+        let mut store_start = self.store_guard.len();
+        while store_start > 0 {
+            let g = &self.store_guard[store_start - 1];
+            if g.analysis_state != 0 {
+                break;
+            }
+            if let Some(op) = g.op.upgrade() {
+                let ptr = op.read().unwrap().inrefs.get(1).cloned();
+                if let Some(ptr) = ptr {
+                    sinks.push(ptr);
+                    reads.push(op);
+                }
+            }
+            store_start -= 1;
+        }
+
+        // cc:866-869: stackSpc = arch->getStackSpace(); stackReg =
+        //   fd->findSpacebaseInput(stackSpc) when a spacebase exists
+        let stack_reg = fd.find_spacebase_input(AddressSpace::Stack);
+
+        // cc:870-873: establishValueSets(sinks, reads, stackReg, false);
+        //   solve(10000, WidenerNone)
+        let mut solver = crate::rangeutil::ValueSetSolver::new();
+        solver.establish_value_sets(&sinks, &reads, stack_reg, false);
+        let widener_none = crate::rangeutil::WidenerNone::new();
+        solver.solve(10000, &widener_none);
+
+        // cc:876-887: establishRange each new guard; note if full analysis
+        //   is still needed (any guard left at analysisState 0)
+        let mut run_full_analysis = false;
+        for idx in load_start..self.load_guard.len() {
+            Self::establish_guard_range(&mut solver, &mut self.load_guard[idx]);
+            if self.load_guard[idx].analysis_state == 0 {
+                run_full_analysis = true;
             }
         }
-        for guard in &mut self.store_guard {
-            if guard.analysis_state == 0 {
+        for idx in store_start..self.store_guard.len() {
+            Self::establish_guard_range(&mut solver, &mut self.store_guard[idx]);
+            if self.store_guard[idx].analysis_state == 0 {
+                run_full_analysis = true;
+            }
+        }
+
+        // cc:888-899: full widening pass + finalizeRange each new guard
+        if run_full_analysis {
+            let widener_full = crate::rangeutil::WidenerFull::new();
+            solver.solve(10000, &widener_full);
+            for idx in load_start..self.load_guard.len() {
+                Self::finalize_guard_range(&mut solver, &mut self.load_guard[idx]);
+            }
+            for idx in store_start..self.store_guard.len() {
+                Self::finalize_guard_range(&mut solver, &mut self.store_guard[idx]);
+            }
+        }
+    }
+
+    // RUGRA-GLUE: borrow-splitting helper — applies
+    // LoadGuard::establishRange with the solver's ValueSetRead for the
+    // guard op's SeqNum (cc:878/884). When the solver holds no read for the
+    // op (dead-op skip inside establish_value_sets — Ghidra's raw-pointer
+    // map find cannot miss for ops it was handed), the Ghidra-unreachable
+    // fallback applies the full-range arm semantics (min=pointerBase,
+    // size=0x1000, state=1) so the guard is analyzed once and conservatively.
+    fn establish_guard_range(solver: &mut crate::rangeutil::ValueSetSolver, guard: &mut LoadGuard) {
+        let seq = guard.op.upgrade().map(|op| op.read().unwrap().get_seq_num().clone());
+        match seq.as_ref().and_then(|s| solver.get_value_set_read(s)) {
+            Some(vsr) => guard.establish_range(vsr),
+            None => {
+                guard.minimum_offset = guard.pointer_base;
                 guard.analysis_state = 1;
-                guard.minimum_offset = 0;
-                guard.maximum_offset = u64::MAX;
+            }
+        }
+    }
+
+    // RUGRA-GLUE: borrow-splitting helper — applies
+    // LoadGuard::finalizeRange (cc:893/897); same dead-op fallback as
+    // establish_guard_range keeps state 1 with the established range.
+    fn finalize_guard_range(solver: &mut crate::rangeutil::ValueSetSolver, guard: &mut LoadGuard) {
+        let seq = guard.op.upgrade().map(|op| op.read().unwrap().get_seq_num().clone());
+        match seq.as_ref().and_then(|s| solver.get_value_set_read(s)) {
+            Some(vsr) => guard.finalize_range(vsr),
+            None => {
+                guard.analysis_state = 1;
             }
         }
     }
@@ -5509,7 +5695,7 @@ impl Heritage {
         }
 
         // Ghidra cc:2753: analyzeNewLoadGuards();
-        self.analyze_new_load_guards();
+        self.analyze_new_load_guards(fd);
 
         // Ghidra cc:2754: handleNewLoadCopies();
         self.handle_new_load_copies(fd);
@@ -7136,11 +7322,13 @@ mod tests {
         assert_eq!(h.load_guard.len(), 1);
     }
 
-    /// `establish_range`/`finalize_range` must run without panicking and leave
-    /// the guard in a valid (still-permissive) state, since no value-set
-    /// solver is wired yet. TODO(value-set-analysis) will tighten this.
+    /// `establish_range`/`finalize_range` against the empty-range
+    /// ValueSetRead arm (heritage.cc:746-749): min=pointerBase with a
+    /// 0x1000 window, analysisState stays 0 (establish) then 1 without a
+    /// lock (finalize). GETPARAM-OPPOOL-COUNT-0001 turned the former stubs
+    /// into the faithful ports.
     #[test]
-    fn test_load_guard_range_stubs() {
+    fn test_load_guard_range_establish_finalize() {
         use crate::space::AddressSpace;
         let mut g = LoadGuard::default();
         // Default guard protects the whole Ram space.
@@ -7148,12 +7336,22 @@ mod tests {
         assert_eq!(g.maximum_offset, u64::MAX);
         assert_eq!(g.analysis_state, 0);
 
-        g.establish_range(); // no-op refinement (no solver)
+        let vsr = crate::rangeutil::ValueSetRead::new(); // empty range
+        g.establish_range(&vsr);
+        // cc:746-749 empty arm: minimumOffset = pointerBase (0), size 0x1000 —
+        // but Ram's highest is 2^64-1, so uintb wraparound clamps the window
+        // back to the whole space (faithful C++ semantics).
         assert_eq!(g.analysis_state, 0);
+        assert_eq!(g.minimum_offset, 0);
+        assert_eq!(g.maximum_offset, u64::MAX);
         assert!(g.is_guarded(&AddressSpace::Ram, 0x1234));
 
-        g.finalize_range(); // marks partially analyzed (state==1), still permissive
+        g.finalize_range(&vsr);
+        // cc:790 state=1; empty range never locks (rangeSize not in
+        // (1,0xffffff)); min/max keep the established window.
         assert_eq!(g.analysis_state, 1);
+        assert_eq!(g.minimum_offset, 0);
+        assert_eq!(g.maximum_offset, u64::MAX);
         assert!(g.is_guarded(&AddressSpace::Ram, 0xffff));
         // A different space is never guarded.
         assert!(!g.is_guarded(&AddressSpace::Stack, 0x1234));
