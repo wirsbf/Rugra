@@ -66,6 +66,10 @@ RANGEUTIL-CONSTGEN-0001 +3）。
 
 - `expand_mask(size)`（rangeutil.cc:1060 内联）：设置 mask = calc_mask(size)，供 pullBack SUBPIECE 特殊情况使用。
 - `pull_back_through_op`（jumptable.rs）的 SUBPIECE usenzmask 特殊情况（rangeutil.cc:1053-1064）已补齐：当 pullBackBinary 对 SUBPIECE val==0 失败时，检查 NZMask 确认截断的字节是否为零，是则保留范围并扩展 mask。此前保守返回 None。
+  **2026-09-23 更新**：该 jumptable.rs 自由包装已删除，SUBPIECE 补救臂仅存于
+  正典 `CircleRange::pull_back`（cc:1022-1084 镜像）；jumptable 两调用点
+  （cc:1106/cc:1366）改传 `&mut None` discard markup 槽，与 oracle 两处
+  "Throw away markup information" 局部一致。
 
 ## 2026-06-27（续）：union 返回码修复
 
