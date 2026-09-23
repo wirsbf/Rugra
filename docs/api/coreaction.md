@@ -645,11 +645,31 @@ Restructure the local-variable scope from stack varnodes. Faithful to
   `sync_varnodes_with_symbols` 的 stack-space 步进 +
   `SymbolEntry::getSizedType` 字段投影（funcdata_varnode.cc:947-960），
   与 oracle 同路。
+  **2026-09-23 SETVARNODE-SCOPELOCAL-CONSUMER-0001 起参数符号 usepoint 按
+  ProtoStoreSymbol::setInput 落位**（fspec.cc:3153, 3166-3169）：bootstrap
+  现先执行 `reset_local_window`（funcdata.cc:66-70 生命周期——oracle 的
+  ScopeLocal 在 Funcdata 构造时建好窗口，localdb 符号后到），再逐参计算
+  usepoint——存储落在窗口树（localRange ∪ paramRange，varmap.cc:441-458）
+  内的 MEMORY 类栈参数保留 INVALID usepoint（`discoverScope` 命中本 scope，
+  fspec.cc:3167），寄存器参数（无 scope 认领）回退
+  `restricted_usepoint` = baseaddr−1（funcdata.cc:69，fspec.hh:1288）。
+  经 `add_symbol` → `add_map_entry_with_property` 的 addMap 规则
+  （database.cc:1149-1150）：栈参数 empty uselimit → **addrtied 符号**
+  （与旧行为一致），寄存器参数 one-point uselimit {fd−1} → **非 addrtied**
+  且条目仅在函数入口点应答（`entry_in_use` ↔ `SymbolEntry::inUse`，
+  database.cc:114-120）——EE 并入 ScopeLocal 腿后，寄存器空间参数槽上的
+  后续 op 输出（调用实参算术等）不再折叠条目 flags（`set_varnode_properties`
+  的 mapped|addrtied 折叠），下游 `ActionMarkExplicit` 的 addr-tied 强制
+  explicit（coreaction.cc:3022-3048）与 `ActionNameVars::linkSymbols` 的
+  `handleSymbolConflict` 早臂（funcdata_varnode.cc:1000-1003）不再误触发。
 - `aliasyes = (numpass != 0)`（coreaction.cc:2279）已穿透：第 0 趟跳过
   `mark_unaliased`/`check_unaliased_return`（varmap.cc:1280-1282）；
   `annotate_raw_stack_ptr` 不受门（cc:1284-1285）。
 
-测试：`coreaction::tests`（2 个）验证 scope 被构建、get_name 正确。
+测试：`coreaction::tests`（3 个）验证 scope 被构建、get_name 正确、
+参数符号 usepoint/addrtied 分野（`test_action_restructure_param_symbol_usepoint`
+钉 fspec.cc:3166-3169 三观察面：regp usepoint=Some(fd−1) 非 addrtied 且
+条目仅在 fd−1 应答；stkp usepoint=None addrtied）。
 
 
 ### `pub struct ActionStart`
