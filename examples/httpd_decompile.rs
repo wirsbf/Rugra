@@ -155,6 +155,25 @@ impl rugra::arch::SpecQuery for TrackedSpecHost {
             .map(|(_, highest)| *highest)
             .unwrap_or(u64::MAX)
     }
+    fn unique_inject_base(&self) -> u64 {
+        0x364_400
+    }
+}
+
+// DBG-BSB probe: callfixup snippet parsing needs the symbol lookup.
+impl rugra::pcodeparse::SleighSymbolLookup for TrackedSpecHost {
+    fn find_symbol(&self, name: &str) -> Option<rugra::pcodeparse::SleighSymbol> {
+        self.registers
+            .get(name)
+            .map(|vd| rugra::pcodeparse::SleighSymbol {
+                name: name.to_string(),
+                kind: rugra::pcodeparse::SleightSymbolKind::Varnode(rugra::varnode::VarnodeData {
+                    space: vd.space,
+                    offset: vd.offset,
+                    size: vd.size.max(0) as usize,
+                }),
+            })
+    }
 }
 
 // SB-CONSTBASE-0001: build the per-run Architecture template carrying the
@@ -173,7 +192,8 @@ impl rugra::arch::SpecQuery for TrackedSpecHost {
 // The curl worker wires the identical ingest (ARCH-CONTEXT-TRACKED-0001,
 // curl_decompile.rs); the httpd driver must too, or its faithfully ported
 // ActionConstbase observes an empty tracked set and inserts nothing.
-fn tracked_context_architecture() -> Result<rugra::arch::Architecture, String> {
+fn tracked_context_architecture(
+) -> Result<(rugra::arch::Architecture, Vec<rugra::fspec::EffectRecord>), String> {
     let mut arch = rugra::arch::Architecture::new();
     // SLEIGH register catalog (no image needed for the spec query legs).
     let sleigh = rugra::sleigh_ffi::SleighCtx::new()
@@ -195,7 +215,7 @@ fn tracked_context_architecture() -> Result<rugra::arch::Architecture, String> {
             },
         );
     }
-    let host = TrackedSpecHost { registers };
+    let host = std::sync::Arc::new(TrackedSpecHost { registers });
     // Parse the locked pspec and hand every <context_data> child to the
     // mapped decode (same DOM extraction model as the curl worker).
     let pspec_bytes = fs::read("sleigh_specs/x86-64.pspec")
@@ -232,7 +252,7 @@ fn tracked_context_architecture() -> Result<rugra::arch::Architecture, String> {
             "context_data" => {
                 let mut decoder =
                     rugra::marshal::TreeDecoder::new(child, pspec_registry.clone());
-                arch.decode_context_data(&mut decoder, &host)
+                arch.decode_context_data(&mut decoder, host.as_ref())
                     .map_err(|error| format!("processor spec context_data decode failed: {error}"))?;
             }
             // ARCH-REGISTERDATA-LANE-0001: register_data builds the
@@ -241,7 +261,7 @@ fn tracked_context_architecture() -> Result<rugra::arch::Architecture, String> {
             "register_data" => {
                 let mut decoder =
                     rugra::marshal::TreeDecoder::new(child, pspec_registry.clone());
-                arch.decode_register_data(&mut decoder, &host)
+                arch.decode_register_data(&mut decoder, host.as_ref())
                     .map_err(|error| format!("processor spec register_data decode failed: {error}"))?;
             }
             _ => {}
@@ -310,8 +330,45 @@ fn tracked_context_architecture() -> Result<rugra::arch::Architecture, String> {
             far_pointer: None,
         });
         arch.set_types(std::sync::Arc::new(std::sync::RwLock::new(types)));
+        // PRINTC-BADSPACEBASE-RENDER-0001: mount the cspec's prototype
+        // surface the way the curl worker does (parseCompilerConfig,
+        // architecture.cc:1239-1351 — curl_decompile.rs:2010 shape), then
+        // keep only its EffectRecord surface reachable to Funcdatas: the
+        // default model is captured and cleared so Funcdata::setArch's
+        // model-binding tail (funcdata.rs set_arch -> FuncProto::setModel)
+        // stays off — binding the full model flips the iced-prelude call-
+        // spec registration gate (funcdata.rs prelude phase "register_specs
+        // = funcp.has_model()") whose guarded reload copies Rugra cannot
+        // yet absorb (ActionCopyPropagation, coreaction.cc:5510-5511, is
+        // absent from the universal tree; measured httpd 29/29 skeleton
+        // 2225 -> 2634 with the model bound). The effect records alone
+        // restore the oracle's Funcdata::setInputVarnode effect tail
+        // (funcdata_varnode.cc:365-370: Varnode::unaffected from the
+        // cspec <unaffected> RSP/RBP/RBX records), which is what
+        // HighVariable::hasName's spacebase suppression
+        // (variable.cc:737-744) and ActionNameVars::linkSymbols
+        // (coreaction.cc:2961-2962) need so the spacebase input high is
+        // never named and printc never emits a `BADSPACEBASE *…`
+        // declaration. FuncProto::hasEffect/effectBegin read this exact
+        // record list first (fspec.cc:4234-4240/4243-4257).
+        let mut inject_lib = rugra::pcodeinject::PcodeInjectLibrary::new(0x364_400);
+        inject_lib.set_sleigh_lookup(host.clone());
+        arch.pcodeinjectlib = Some(std::sync::Arc::new(std::sync::RwLock::new(inject_lib)));
+        arch.userops = Some(std::sync::Arc::new(std::sync::RwLock::new(
+            rugra::userop::UserOpManage::new(),
+        )));
+        cspec_store.register_tag(&cspec_root);
+        arch.parse_compiler_config(&mut cspec_store, host.as_ref(), 8)
+            .map_err(|error| format!("compiler spec parse failed: {error}"))?;
+        let default_effects = arch
+            .defaultfp
+            .as_ref()
+            .ok_or_else(|| "No default prototype specified".to_string())?
+            .effectlist
+            .clone();
+        arch.defaultfp = None;
+        Ok((arch, default_effects))
     }
-    Ok(arch)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -592,7 +649,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Each function thread clones it for fd.set_arch below — Architecture is
     // Clone and the clone keeps the existing per-thread mutation isolation
     // while carrying the DF=0 tracked partition ActionConstbase reads.
-    let tracked_arch = tracked_context_architecture()?;
+    let (tracked_arch, default_effects) = tracked_context_architecture()?;
 
     let mut total_success = 0;
     let mut total_fail = 0;
@@ -693,6 +750,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        let default_effects = default_effects.clone();
         let sym_table = symbol_table.clone();
         let str_table = string_table.clone();
         let func_name = name.clone();
@@ -759,6 +817,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ));
             }
             fd.set_arch(std::sync::Arc::new(thread_arch));
+            // PRINTC-BADSPACEBASE-RENDER-0001: give funcp the default
+            // model's EffectRecord surface (see tracked_context_architecture)
+            // BEFORE the prelude marks inputs, so the iced prelude's
+            // input promotions carry Funcdata::setInputVarnode's effect
+            // tail (funcdata_varnode.cc:365-370) like every Ghidra input.
+            fd.funcp.effects = default_effects;
             if !mirror_fn {
                 fd.external_prototypes = proto_db;
             }

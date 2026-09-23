@@ -733,6 +733,27 @@ queryCall/checkForFlowModification 尾部移植到 driver 边界（driver 侧 ca
 defaultfp 模型）并补 `ActionCopyPropagation`（coreaction.cc:5510-5511，Rugra
 universal 树缺失——守卫重载拷贝今天能以语句形式存活的直接原因）。
 
+2026-09-23 PRINTC-BADSPACEBASE-RENDER-0001（Phase 3 输入效应尾）：Phase 3 把寄存器
+读标记为 input 的 `vbank.set_input_prevalidated` 之后，补跑
+`Funcdata::setInputVarnode` 的效应尾（funcdata_varnode.cc:365-370）——
+`funcp.try_has_effect(space, offset, size)` 命中 `EffectType::Unaffected` 时置
+`Varnode::unaffected`，命中 `ReturnAddress` 时置 unaffected+return_address。Ghidra
+的每个输入晋升都走 `setInputVarnode`（`vbank.setInput` 唯一调用点即
+funcdata_varnode.cc:363，SLEIGH 侧输入经 `Heritage::guardInput`/`renameRecurse` 的
+`fd->setInputVarnode` 重建，heritage.cc:1975/2501），效应尾因此到达每个输入；iced
+prelude 此前直连 bank 层绕过了它，RSP 输入缺 `unaffected` 位 →
+`HighVariable::hasName`（variable.cc:737-744）不落 spacebase 抑制臂 →
+`ActionNameVars::linkSymbols`（coreaction.cc:2961-2962）给 spacebase 高变量建符号，
+printc 渲染成 `BADSPACEBASE *in_register_00000020;` 声明泄漏（golden 零此形态；
+类型名来自 `PrintC::genericTypeName` 的 TYPE_SPACEBASE 兜底，printc.cc:3387——打印层
+无第二道门，抑制完全在上游符号不创建）。效应位只在 `funcp` 有效应记录时激活
+（curl 全量零观测差异，`__libc_csu_init/fini` 两个 iced 函数字节级不变）；httpd 侧
+效应记录由驱动挂载（`tracked_context_architecture` 的 parseCompilerConfig 表面，
+examples/httpd_decompile.rs，defaultfp 捕获后清空以维持 CALLSPEC-DRIVER-0002 门
+姿态）。观测：httpd 门禁面 2225→2221（main −1、ap_fini_vhost_config −1、
+ap_ht_time −2，全部为声明行消除），3 处 BADSPACEBASE 归零，全量 470/470 保持、
+全量 L2 37677→37655/2/0。
+
 #### 它在主链路中的位置
 
 ```text

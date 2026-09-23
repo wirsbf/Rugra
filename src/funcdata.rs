@@ -7391,6 +7391,38 @@ impl Funcdata {
                 {
                     drop(vn); // Release read lock before write
                     let canonical = self.vbank.set_input_prevalidated(in_arc);
+                    // PRINTC-BADSPACEBASE-RENDER-0001: Funcdata::
+                    // setInputVarnode's effect tail (funcdata_varnode.cc:
+                    // 365-370) must also run for iced-prelude promotions —
+                    // Ghidra marks every input through setInputVarnode, so
+                    // the ProtoModel unaffected/return_address records
+                    // (x86-64 cspec <unaffected> RSP/RBP/RBX) reach every
+                    // input varnode. Without the tail the RSP input misses
+                    // Varnode::unaffected, HighVariable::hasName
+                    // (variable.cc:737-744) then names the spacebase high,
+                    // and printc leaks a `BADSPACEBASE *in_register_…`
+                    // declaration (ActionNameVars::linkSymbols coreaction.cc:
+                    // 2961-2962 hasName gate).
+                    {
+                        let (space, offset, size) = {
+                            let guard = canonical.read().unwrap();
+                            (guard.get_space(), guard.get_offset(), guard.get_size())
+                        };
+                        if let Some(effecttype) =
+                            self.funcp.try_has_effect(space, offset, size as i32)
+                        {
+                            let mut guard = canonical.write().unwrap();
+                            if effecttype == crate::fspec::EffectType::Unaffected {
+                                guard.set_unaffected();
+                            }
+                            if effecttype == crate::fspec::EffectType::ReturnAddress {
+                                // Should be unaffected over the course of
+                                // the function (funcdata_varnode.cc:369).
+                                guard.set_unaffected();
+                                guard.set_return_address();
+                            }
+                        }
+                    }
                     debug_assert!(op_ref
                         .0
                         .read()
