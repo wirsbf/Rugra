@@ -3046,6 +3046,14 @@ impl Action for ActionUnreachable {
         }
         Ok(action_status::NO_CHANGE)
     }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:3461 `count += 1`) into the Rust ActionState
+    // accumulator harvested by Action::perform (action.cc:319 calls apply,
+    // 327-329 examine the grown member, 361 `return count`).
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
+    }
     // RUGRA-GLUE: Rust Action trait get_name; "unreachable" mirrors ctor at coreaction.hh:493
     fn get_name(&self) -> &str { "unreachable" }
 }
@@ -4452,16 +4460,22 @@ impl Action for ActionMarkExplicit {
             vn_arc.write().unwrap().clear_mark();
         }
 
-        if change_count > 0 {
-            // Ghidra coreaction.cc:3252/3262: every setExplicit/purge
-            // increments the inherited Action::count; apply itself returns
-            // 0 (cc:3271). Returning the bump count here is the sanctioned
-            // Rust count-bridge (see Action::perform doc).
-            self.count += change_count;
-            Ok(change_count)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        // Ghidra coreaction.cc:3252/3262: the inherited member accumulates
+        // every setExplicit/purge bump (bulk mirror of the two inline
+        // `count +=` sites); apply itself returns 0 unconditionally
+        // (cc:3271), and Action::perform surfaces the member (action.cc:361
+        // `return count`) via take_count_delta below — the single count
+        // bridge (a positive return would feed state.count a second time).
+        self.count += change_count;
+        Ok(action_status::NO_CHANGE)
+    }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:3252/3262 accumulation) into the Rust ActionState
+    // accumulator harvested by Action::perform (action.cc:319 calls apply,
+    // 327-329 examine the grown member, 361 `return count`).
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "markexplicit" mirrors ctor at coreaction.hh:427
     fn get_name(&self) -> &str { "markexplicit" }
@@ -4716,27 +4730,23 @@ impl Action for ActionMarkImplied {
             change_count += 1;
         }
 
-        if change_count > 0 {
-            // Ghidra coreaction.cc:3434: every candidate popped from the DFS
-            // stack — each Varnode that gets marked either explicit or
-            // implied — increments the inherited Action::count; apply itself
-            // still returns 0, and Action::perform surfaces the accumulated
-            // count as its result (action.cc:362 `return count;`). Returning
-            // the bump count here is the sanctioned Rust count-bridge (see
-            // Action::perform doc; same convention as
-            // ActionMarkExplicit::apply above).
-            // Ghidra coreaction.cc:3434: `count += 1` fires for every
-            // varnode that completes the traversal — it will be marked
-            // either explicit or implied. apply itself returns 0 (cc:3454);
-            // returning the bump count is the sanctioned Rust count-bridge
-            // (see Action::perform doc), so `perform` observes
-            // lcount<count → count_apply/status_end exactly like the oracle
-            // (ActionMarkImplied is rule_onceperfunc, coreaction.hh:461).
-            self.count += change_count;
-            Ok(change_count)
-        } else {
-            Ok(action_status::NO_CHANGE)
-        }
+        // Ghidra coreaction.cc:3434: `count += 1` fires for every varnode
+        // that completes the traversal — it will be marked either explicit
+        // or implied (bulk mirror of the per-varnode inline increments).
+        // apply itself returns 0 (cc:3454); the member rides back through
+        // take_count_delta below, so `perform` observes lcount<count →
+        // count_apply/status_end exactly like the oracle
+        // (ActionMarkImplied is rule_onceperfunc, coreaction.hh:461).
+        self.count += change_count;
+        Ok(action_status::NO_CHANGE)
+    }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (coreaction.cc:3434 accumulation) into the Rust ActionState
+    // accumulator harvested by Action::perform (action.cc:319 calls apply,
+    // 327-329 examine the grown member, 361 `return count`).
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
     // RUGRA-GLUE: Rust Action trait get_name; "markimplied" mirrors ctor at coreaction.hh:449
     fn get_name(&self) -> &str { "markimplied" }
@@ -15429,7 +15439,11 @@ impl Action for ActionStructureTransform {
                 wd.for_init = Some(init_str);
                 wd.for_iter = Some(iter_str);
             }
-            self.count += 1;
+            // Ghidra's ActionStructureTransform::apply never increments the
+            // inherited count (blockaction.cc:2110-2115 calls finalTransform
+            // and returns 0 without touching the member) — no local
+            // counting and no take_count_delta harvest; the conversion is
+            // witnessed by the for-loop metadata + NONPRINTING mark alone.
         }
         // Ghidra always returns 0.
         Ok(action_status::NO_CHANGE)
@@ -15799,20 +15813,25 @@ impl Action for ActionReturnSplit {
             }
         }
 
-        let mut splits = 0;
         for i in 0..splitedge.len() {
             fd.node_split(&retnode[i], splitedge[i]);
+            // cc:2317 `count += 1` per nodeSplit — carried by the inherited
+            // member, harvested via take_count_delta (action.cc:319/361).
             self.count += 1;
-            splits += 1;
         }
-        // Ghidra's apply returns 0 but does `count += 1` per split, which
-        // Action::perform translates into a rule_repeatapply re-entry of the
-        // fullloop (action.cc:332 lcount<count) — that re-entry is what
-        // re-structures the CFG after nodeSplit's structureReset. Rugra's
-        // Action trait carries the change through apply's return value (the
-        // sanctioned count-bridge; same convention as ActionMarkImplied),
-        // so the split count is returned instead of a bare 0.
-        Ok(splits)
+        // Ghidra's apply returns 0 unconditionally (cc:2323 `return 0;`);
+        // perform's lcount<count check (action.cc:327) reads the member,
+        // which take_count_delta below drains into ActionState (a positive
+        // return would feed state.count a second time).
+        Ok(action_status::NO_CHANGE)
+    }
+
+    // RUGRA-GLUE: externalizes Ghidra's inherited protected Action::count
+    // (blockaction.cc:2317 `count += 1` per nodeSplit) into the Rust
+    // ActionState accumulator harvested by Action::perform (action.cc:319
+    // calls apply, 327-329 examine the grown member, 361 `return count`).
+    fn take_count_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.count)
     }
 
     // RUGRA-GLUE: Rust Action trait get_name; "returnsplit" mirrors ctor at blockaction.hh:337
@@ -18499,9 +18518,17 @@ mod tests {
         assert_eq!(add_ref.0.read().unwrap().flags & NONPRINTING, 0);
         let mut a = ActionStructureTransform::new();
         let _ = a.apply(&mut fd).unwrap();
-        // After the transform the iterate op is marked non-printing, and a
-        // candidate was counted.
-        assert_eq!(a.count, 1, "one for-loop detected");
+        // After the transform the iterate op is marked non-printing and the
+        // BlockWhileDo carries the for-loop expressions. Ghidra's apply
+        // never increments the inherited count (blockaction.cc:2110-2115),
+        // so the member must stay 0 — the conversion is witnessed by the
+        // metadata + NONPRINTING mark below, not by a count.
+        assert_eq!(a.count, 0, "structuretransform never counts (blockaction.cc:2110-2115)");
+        {
+            let rg = wd_arc.read().unwrap();
+            let wd = rg.as_any().downcast_ref::<BlockWhileDo>().unwrap();
+            assert!(wd.for_init.is_some() && wd.for_iter.is_some(), "one for-loop detected");
+        }
         assert_ne!(
             add_ref.0.read().unwrap().flags & NONPRINTING,
             0,
@@ -18519,7 +18546,15 @@ mod tests {
         }
         let mut overflow_action = ActionStructureTransform::new();
         let _ = overflow_action.apply(&mut fd).unwrap();
-        assert_eq!(overflow_action.count, 0, "overflow loop must be skipped");
+        assert_eq!(overflow_action.count, 0, "Ghidra never counts in structuretransform");
+        {
+            let rg = wd_arc.read().unwrap();
+            let wd = rg.as_any().downcast_ref::<BlockWhileDo>().unwrap();
+            assert!(
+                wd.for_init.is_none() && wd.for_iter.is_none(),
+                "overflow loop must be skipped"
+            );
+        }
         assert_eq!(
             add_ref.0.read().unwrap().flags & NONPRINTING,
             0,
