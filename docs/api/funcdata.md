@@ -812,6 +812,26 @@ Rugra 侧回归锁：`test_build_blocks_synthetic_target_creates_block_no_zombie
 `test_build_blocks_external_target_edge_still_dropped` /
 `test_branch_remove_internal_destroys_cbranch_at_two_out`（funcdata.rs tests）。
 
+#### 块 cover 初始化（2026-09-24 标号地址漂移修复，ACTION-REWORKFIX-STRUCT-0001）
+
+`build_blocks_from_ops` 建块时此前从不调用 `set_initial_range` —— 块的 cover 恒为空，
+`BlockBasic::get_entry_addr`（block.rs，对 block.cc:2302）落入"首个 op 地址"回退臂。
+死代码消除删除块首 op 后（实测：httpd 0x2cfc6/0x2d7f0 的栈 canary 重载 `mov`、
+0x2e410 的循环增量 `add`），回退地址漂移到下一条指令，所有经
+`emitLabel`（printc.cc:3164-3193）取 `getEntryAddr` 的 goto 标号跟着漂移
+（`code_r0x0012cfcb` vs golden `LAB_0012cfc6`，5 字节偏移同族）。
+
+修复语义（flow.cc:1004/1016 `setBasicBlockRange(cur, start, stop)` → block.cc:2625
+`setInitialRange`）：块建好后立刻锚定闭区间 `[start, 最大 op 地址]`；cover 是块的
+**原始指令区间**，不随后续 Action 删 op 移动。合成空块锚定退化区间 `[taddr, taddr]`。
+
+修复后：httpd `goto LAB_0012cfc6`/`LAB_0012d7f0` 标号与 golden 同址同名
+（ap_parse_vhost_addrs / ap_update_vhost_from_headers 两站点）；httpd skeleton
+2148→2092、defects 0、numbering 0；curl 2152/0/0 字节恒等。残余同族：
+ap_pregsub `LAB_0012e414` vs `LAB_0012e410` —— 0x2e410 块（`add $1,%r13`）在
+Rugra 数据流中整个死亡被重工作删除（golden 保留增量），属 var 级 dead-code 差异，
+非 cover 机制缺口（已登记 ACTION-REWORKFIX-STRUCT-0001 残余项）。
+
 #### CBRANCH 出边顺序（2026-08-30 边序反转修复,HTTPD-EMPTYELSE-LIVEARM-0001）
 
 Ghidra `FlowInfo::generateBlockEdges`(flow.cc:960-967)对 CBRANCH 先 push **fall-thru 边**、
