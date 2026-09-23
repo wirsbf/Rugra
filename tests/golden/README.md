@@ -9,6 +9,16 @@
 |---|---|---|---|---|
 | `ghidra_curl.c` | `examples/curl` | Ghidra 11.3.2 PUBLIC | 2026-06-29 | 清理版（尾部 4 行 INFO 噪音已剥） |
 | `ghidra_curl.11.3.2.c` | `examples/curl` | Ghidra 11.3.2 PUBLIC | 2026-06-29 | 原始存档（含尾部 INFO 噪音，留底） |
+| `ghidra_curl_1204.c` | `examples/curl`(sha `8af50bca…`) | 12.0.4(e40ed130) | 2026-08-15 | **canonical 基线**:analyzeHeadless 默认分析+postScript,124 函数;provenance.json 含逐函数 ledger |
+| `ghidra_curl_1204.direct-runner.c` | 同上 | 12.0.4(e40ed130) | 2026-08-15 | **库级基线**:锁定 cpp 树+BFD 单函数 hermetic 契约(RUGRA_MIRROR 同契约),74 函数;地址=BFD VMA(base 0),对拍须 `--base 0` |
+| `ghidra_httpd_1204.c` | `examples/httpd`(sha `805f89cd…`) | 12.0.4(e40ed130) | 2026-08-15 | canonical,2010 函数 |
+| `ghidra_httpd_1204.direct-runner.c` | 同上 | 12.0.4(e40ed130) | 2026-08-15 | 库级基线,790 函数;`--base 0` |
+
+双基线语义与量化裁决见 `docs/alignment_docs/GOLDEN_CONTRACT_QUANT_2026-09-23.md`
+(GOLDEN-CONTRACT-PUSHABSORB-0001):canonical=analyzeHeadless 桥接层产物(push 存储
+吸收、分析器原型/类型/引用);direct-runner=库级 BFD 契约(保留 `xStack_50 = …;`
+类 push 打印与 `xunknown*` 类型)。库级语料是 canonical 的子集(59.7%/39.3%,
+BFD 符号表发现上限)。
 
 ## 格式约定
 
