@@ -921,10 +921,15 @@ impl DynamicHash {
                     let lone_descend = vn.read().unwrap().lone_descend();
                     if let Some(no) = lone_descend {
                         if translate_opcode(no.read().unwrap().opcode) == 0 {
-                            if let Some(nv) = no.read().unwrap().output.clone() {
-                                varlist.push(nv);
+                            // dynamic.cc:667 `if (vn == (Varnode *)0) continue;`
+                            // — a skipped op with no output contributes NO
+                            // varnode. The old shape fell through to the
+                            // bottom push and leaked the pre-skip vn instead.
+                            let Some(nv) = no.read().unwrap().output.clone() else {
                                 continue;
-                            }
+                            };
+                            varlist.push(nv);
+                            continue;
                         }
                     }
                 }
@@ -1364,6 +1369,39 @@ mod tests {
         assert!(
             Arc::ptr_eq(&varlist2[0], &vn2),
             "non-skip lone descendant keeps the original output varnode"
+        );
+    }
+
+    /// dynamic.cc:667 `if (vn == (Varnode *)0) continue;` — a skip-op lone
+    /// descendant WITHOUT an output contributes NO varnode. The pre-fix Rust
+    /// shape fell through the inner if-let and pushed the pre-skip output
+    /// varnode instead (LOCKHYGIENE-SCRUTINEE-FAMILY-0001).
+    #[test]
+    fn test_gather_first_level_vars_skip_op_without_output_contributes_nothing() {
+        let mut fd = Funcdata::new("t_gather1st_c", Address::new(0), 8);
+        let block = fd.create_new_block();
+        let pc = Address::new(0x1000);
+        let op = fd.new_op(2, pc);
+        fd.op_set_opcode(&op, OpCode::CPUI_INT_ADD);
+        let c_1_op = fd.new_constant(4, 1);
+        fd.op_set_input(&op, c_1_op, 0);
+        let c_2_op = fd.new_constant(4, 2);
+        fd.op_set_input(&op, c_2_op, 1);
+        let vn = fd.new_unique_out(4, &op);
+        fd.op_insert_end(&op, &block);
+        // Output-less CAST reading vn: descend registration via op_set_input
+        // is what lone_descend needs; the op is never inserted.
+        let cast = fd.new_op(1, pc);
+        fd.op_set_opcode(&cast, OpCode::CPUI_CAST);
+        fd.op_set_input(&cast, vn.clone(), 0);
+        let h = ((translate_opcode(OpCode::CPUI_INT_ADD) as u64) << 37)
+            | (0x1fu64 << 32)
+            | (1u64 << 48);
+        let mut varlist: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        DynamicHash::gather_first_level_vars(&mut varlist, &fd, pc, h);
+        assert!(
+            varlist.is_empty(),
+            "skip-op without output must contribute nothing (dynamic.cc:667 continue)"
         );
     }
 

@@ -64,6 +64,13 @@ opcode 索引到哈希翻译值的映射表，将变体合并到同一哈希值�
   `vn.read().unwrap().get_def()` 两处 if-let scrutinee 读守卫提升为语句级 let
   绑定（同 ER/EW/EM3 家族形态；owned `Option<Arc<_>>` 提前 drop 不可观测，
   读序不变=cc:663/cc:677 先取 lone/def 再查 opcode）。
+- `gather_first_level_vars` 行为修正（同日独立 commit）：slot<0 臂 skip-op
+  （transtable==0，如 CAST）lone descendant **无 output** 时，dynamic.cc:667
+  `if (vn == (Varnode *)0) continue;` 语义=不贡献任何 varnode；旧 Rust 形态
+  穿透内层 if-let 落到尾部 push、泄漏 pre-skip 输出 varnode。修正为
+  else-continue + 回归单测（空 varlist）。slot>=0 臂 `get_in(0)` 为 None 时
+  兜底 push 原 vn 属防御性偏差（Ghidra cc:679 直推可能为 null——活 def 恒有
+  slot 0，不可达），注释注明。
 - `gather_ops_at_address(op_list, fd, addr)` — 按 `PcodeOpTree` 的
   `(Address, SeqNum.time)` 顺序遍历目标地址的闭合区间，跳过 dead op，并把活 op
   追加到调用方已有的 `op_list`；不清空输出容器 (dynamic.cc:692-702)。
