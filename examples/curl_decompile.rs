@@ -930,7 +930,23 @@ fn link_call_specs(
                 ),
             }
         }
-        if !installed {
+        // MIRROR-ENVS-CANONICAL-0001 callee-DWARF half: the raw BFD oracle
+        // harness (single_function_bfd) imports no DWARF — the callee
+        // Funcdata shells from readLoaderSymbols carry unlocked default
+        // FuncProtos, so queryCall (flow.cc:656-672) only does setFuncdata +
+        // copyFlowEffects (no flags). Locking the driver's DWARF callee
+        // signatures here instead made funclink take the inputlocked arm
+        // (coreaction.cc:1484-1509, forward param attach) while the oracle
+        // takes the unlocked arm (stack placeholder only, register trials
+        // attach later in heritage guardCalls heritage.cc:1495-1506):
+        // getparameter projection first divergence ordinal 7 (funclink)
+        // op-idx 257, GetStr 2-param call site 0x3ff2, 28 locked DWARF
+        // call-site signatures in the mirror run (GETPARAM-CALLEE-DWARF
+        // -0001, 2026-09-23). next_url/match_url never hit this half (their
+        // callees are all imports; bare-load already empties the libc
+        // ledger), which is why the asymmetry stayed latent until a
+        // function with local DWARF-defined callees was projected.
+        if !installed && !mirror_bundle_enabled() {
             match debug_db.locked_callsite_proto(entry, &model_carrier) {
                 Ok(Some(proto)) => {
                     owner.write().unwrap().prototype = proto;
@@ -953,7 +969,14 @@ fn link_call_specs(
         // query_call slice (src/flow.rs) does not yet consume this
         // (CALLSPEC-NORETURN-WIRE-0001 segment (b)); the marking here is the
         // driver's program-database half of the channel.
-        if is_known_no_return(&name) {
+        // FLOW-NORETURN-DATA-0001 segment (a) mirror gate: in the raw oracle
+        // harness no "Non-Returning Functions - Known" analyzer data exists,
+        // so queryCall's copyFlowEffects (flow.cc:663-664) copies no
+        // no_return flag onto any call site — the callsite marking must stay
+        // off under the mirror fixture-data component, symmetric with
+        // segments (b) (target function attribute) and (c) (flow callee
+        // table) that are already gated by mirror_fixture_data_enabled().
+        if !mirror_fixture_data_enabled() && is_known_no_return(&name) {
             owner.write().unwrap().prototype.set_no_return(true);
             noreturn_marked += 1;
         }
@@ -3626,10 +3649,12 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // instead forces the locked arm (coreaction.cc:4637-4649), attaching a
     // free RAX read at the prototypetypes stage and pinning the
     // consumer-side first divergence there. Under the canonical mirror
-    // bundle the target's own DWARF prototype application is skipped — the
-    // only DWARF source the bundle does not already neutralize (callee libc
-    // signatures vanish via the bare-load component; next_url's callees are
-    // all imports, so locked_callsite_proto contributed zero even before).
+    // bundle the target's own DWARF prototype application is skipped, and
+    // the callee DWARF half of link_call_specs is gated by the same bundle
+    // (GETPARAM-CALLEE-DWARF-0001, 2026-09-23: 28 locked DWARF call-site
+    // signatures fired for getparameter's local callees; next_url/match_url
+    // callees were all imports so locked_callsite_proto contributed zero
+    // there). Callee libc signatures vanish via the bare-load component.
     // Every non-mirror path (default E2E and each legacy env alone) keeps
     // applying it unchanged.
     if mirror_bundle_enabled() {
