@@ -11629,16 +11629,17 @@ impl Rule for RuleRangeMeld {
             return Ok(action_status::NO_CHANGE);
         }
 
-        // Intersect (BOOL_AND) or union (BOOL_OR) the ranges.
-        // Rugra's CircleRange::intersect returns: 0=empty, 1=non-empty single.
-        // Rugra's CircleRange::union returns: 0=single, 1=two pieces, 2=full.
-        // We normalize to Ghidra's restype: 0=try translate, 1=always true,
-        // 2=cannot represent, 3=always false.
+        // Intersect (BOOL_AND) or union (BOOL_OR) the ranges, mirroring
+        // ruleaction.cc:1403-1407. Rugra's legacy-code wrappers return
+        // 0=empty / 1=single / 2=two-pieces (union adds full); we normalize
+        // to the C++ restype contract used below:
+        // 0=try translate, 1=always true, 2=cannot represent, 3=always false.
         let a1_size = a1.read().unwrap().get_size();
-        let restype = if central_opc == OpCode::CPUI_BOOL_AND {
+        let mut restype = if central_opc == OpCode::CPUI_BOOL_AND {
             match range1.intersect(&range2) {
                 0 => 3, // Empty intersection → always false.
-                _ => 0, // Non-empty → try translate.
+                1 => 0, // Non-empty single → try translate.
+                _ => 2, // Two pieces → cannot represent.
             }
         } else {
             match range1.union(&range2) {
@@ -11652,15 +11653,21 @@ impl Rule for RuleRangeMeld {
         let follow = crate::op::PcodeOpRef(op_arc.clone());
 
         if restype == 0 {
-            // Try to translate the merged range back to a single comparison op.
-            if let Some((opc, resc, resslot)) = range1.translate_to_op() {
-                let new_const = fd.new_constant(a1_size, resc);
-                fd.op_set_opcode(&follow, opc);
-                fd.op_set_input(&follow, a1.clone(), (1 - resslot) as usize);
-                fd.op_set_input(&follow, new_const, resslot as usize);
-                return Ok(action_status::CHANGE);
+            // Try to translate the merged range back to a single comparison
+            // op (ruleaction.cc:1410-1424). translate_to_op mirrors
+            // CircleRange::translate2Op's 0/1/2/3 codes; non-zero codes fall
+            // through to the always-true / cannot-represent / always-false
+            // arms exactly as upstream.
+            match range1.translate_to_op() {
+                Ok((opc, resc, resslot)) => {
+                    let new_const = fd.new_constant(a1_size, resc);
+                    fd.op_set_opcode(&follow, opc);
+                    fd.op_set_input(&follow, a1.clone(), (1 - resslot) as usize);
+                    fd.op_set_input(&follow, new_const, resslot as usize);
+                    return Ok(action_status::CHANGE);
+                }
+                Err(code) => restype = code,
             }
-            return Ok(action_status::NO_CHANGE); // Cannot translate.
         }
 
         if restype == 2 {
