@@ -137,3 +137,65 @@ downcasts or `Arc` ownership. No behavior changed and no status was promoted.
   instead of dedicated `IPTR_FSPEC` (`TYPEOP-FSPEC-SPACE-0001`), does not wire
   the TypeOp getter/PrintC/StringManager path in this phase, and retains the
   other scoring gaps listed above.
+
+## 2026-09-23: union drill-down fidelity pass (lane wt/unionres, DZ)
+
+Dead-code scorer brought 1:1 with unionresolve.cc ahead of the pipeline
+wiring (UNIONRESOLVE-PIPELINE-WIRING-0001). The module has NO pipeline
+producer yet — `ScoreUnionFields` is never constructed outside its own
+tests, and `Funcdata::union_map` has no writer — so every change below is
+pipeline-invisible by construction (curl/httpd E2E byte-identical,
+2585/2333 skeleton, 0/0).
+
+Faithfulness fixes, each keyed to the oracle line:
+
+- `ResolveEdge::new` gained the TYPE_PARTIALUNION key arm
+  (unionresolve.cc:73-74): a partial union keys by its container union id,
+  without the +0x1000 pointer encoding bump. Handed over by
+  TYPEUNION-CACHE-READSIDE-0001 observation (a).
+- `ResolvedUnion::with_field` now mirrors unionresolve.cc:40-59 in full:
+  the cc:43-44 partial-union parent unwrap (baseType is the container),
+  and the cc:51-55 pointer-parent arm resolving to a POINTER to the field
+  (`ptrTo->getDepend(fldNum)` wrapped by `getTypePointer(parent.size,
+  field, wordSize)`). The pointer is constructed structurally because the
+  signature receives `&TypeFactory` (funcdata.rs holds a read guard);
+  canonical interning lands with the wiring.
+- `ScoreUnionFields.typegrp` is now `Arc<RwLock<TypeFactory>>` — the
+  mutable twin of Ghidra's `TypeFactory&` — because the scoring interning
+  arms mutate the factory (getTypePointerStripArray cc:1022, downChain
+  cc:435, getTypePointer cc:665). `get_type_pointer_strip_array` is a real
+  port of TypeFactory::getTypePointerStripArray (type.cc:3849-3859):
+  strip the formal stripped twin, strip one array level, intern the
+  pointer. The old approximation returned the bare stripped pointee (not a
+  pointer), which also broke the constructor's field-size gate for
+  pointer-parent trials.
+- `ScoreUnionFields` carries `fd: Option<&Funcdata>`; the CALL/CALLOTHER/
+  CALLIND arms of both scoring directions now consult
+  `score_parameter`/`score_return_type` (locked call-specs) exactly as
+  cc:184/cc:204 do, falling back to the unlocked heuristic when `fd` is
+  absent (Ghidra derives fd from `op->getParent()->getFuncdata()`;
+  Rugra PcodeOps have no back-pointer).
+- `score_trial_down` INT_ADD/INT_SUB/PTRSUB pointer+const arm drills via
+  the virtual `TypePointer::downChain(off, par, parOff, array)`
+  (type.cc:1084) through `TypeFactory::down_chain_virtual`, with the +5
+  score granted only on drill success (cc:429-438). The old code invented
+  an `off == 0 -> resType = fitType` shortcut and always scored +5.
+- `score_trial_up` LOAD arm wraps the trial type in an interned pointer
+  sized by the pointer input with wordsize 1 and recurses on slot 1
+  (cc:664-666). The old code recursed the bare fit type on slot 0.
+- `test_simple_cases_inner` compares array-arithmetic constants against
+  the pointer-stripped union size (`result.baseType->getSize()`), not the
+  pointer size (cc:94/101/108 via the cc:993 ctor).
+- `score_locked_type` lost an invented in-loop identity re-check; the
+  +5 identity bonus is once, before the pointer peel (cc:149-150).
+- `score_truncation`/`score_truncation_inplace` compare the +5 bonus by
+  `result.getBase() == unionDt` Arc identity (cc:856-857), replacing a
+  field-count approximation.
+
+Module verdict stays L1→L2 (typed API, no pipeline connection): the
+observable DV②③ targets (main `pattern[8]` cast target, PartialStruct
+bare-ification) are gated OUTSIDE this file — see
+CAST-PARTIAL-REQ-NOCAST-0001 (cast.rs missing the cast.cc:341-349
+partial no-cast arms) and UNIONRESOLVE-PIPELINE-WIRING-0001 (read-facing
+resolveInFlow + setUnionField producers) on the TODO board. 21/21 module
+tests; full lib 1655 pass / 18 pre-existing failures unchanged.
