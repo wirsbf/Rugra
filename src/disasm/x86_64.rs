@@ -89,6 +89,23 @@ impl X86_64Disassembler {
                 OpKind::Memory => {
                     let base = if inst.memory_base() != Register::None {
                         Some(format!("{:?}", inst.memory_base()).to_lowercase())
+                    } else if inst.segment_prefix() == Register::FS {
+                        // Segment-absolute addressing (mov rax,fs:[0x28]): iced
+                        // reports base=None + explicit FS prefix (segment_prefix;
+                        // memory_segment defaults to DS/SS when unprefixed, so
+                        // the explicit prefix is the discriminator). Route
+                        // through the x86-64.sla FS spacebase register
+                        // (FS_OFFSET = register:0x110:8, dumped via
+                        // examples/rip_probe.rs) so the lifted address is
+                        // INT_ADD(in_FS_OFFSET, disp) — the form both golden
+                        // baselines print as `*(undefined8 *)(in_FS_OFFSET +
+                        // 0x28)`. Without this the segment was dropped and the
+                        // load folded to a bare absolute Ram@0x28 (CONCATRAM
+                        // lane: canary-load uRam family root).
+                        Some("fs_offset".to_string())
+                    } else if inst.segment_prefix() == Register::GS {
+                        // GS spacebase: register:0x118:8 (GS_OFFSET).
+                        Some("gs_offset".to_string())
                     } else {
                         None
                     };
