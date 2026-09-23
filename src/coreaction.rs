@@ -1487,6 +1487,13 @@ impl Action for ActionRestructureVarnode {
             Some(scope) => scope,
             None => {
                 let mut scope = crate::varmap::ScopeLocal::new();
+                // funcdata.cc:66-70 lifecycle: the ScopeLocal is attached
+                // and `resetLocalWindow()` runs at Funcdata construction —
+                // BEFORE the Program database's <localdb> decode installs
+                // the platform parameter symbols. Installing the window
+                // first is what ProtoStoreSymbol::setInput's discoverScope
+                // probe (fspec.cc:3167) sees in the oracle.
+                scope.reset_local_window(fd);
                 // Ghidra platform-side parameter symbols: the function's
                 // local scope arrives from the Program database with the
                 // DWARF function's named parameter symbols already
@@ -1536,12 +1543,42 @@ impl Action for ActionRestructureVarnode {
                         // ActionNameVars linkSymbols while the real stack
                         // reads at [8, 8+size) found nothing (bare
                         // in_stack_00000130 names).
+                        // ProtoStoreSymbol::setInput's usepoint choice
+                        // (fspec.cc:3153, 3166-3169): the default INVALID
+                        // usepoint survives only when discoverScope's walk
+                        // finds a scope whose rangetree contains the
+                        // storage — for the function-local channel that is
+                        // the resetLocalWindow tree (localRange ∪
+                        // paramRange), i.e. MEMORY-class stack params;
+                        // register params (and any storage no scope owns)
+                        // fall back to `restricted_usepoint` = baseaddr-1
+                        // (funcdata.cc:69 `funcp.setScope(localmap,
+                        // baseaddr + -1)`, fspec.hh:1288). The uselimit
+                        // difference then drives Scope::addMap's flag rule
+                        // (database.cc:1149-1150): stack params get the
+                        // empty uselimit → `addrtied`; register params get
+                        // the one-point uselimit {baseaddr-1} → NOT
+                        // addrtied, so SymbolEntry::inUse admits them only
+                        // for queries at the function entry (the input
+                        // varnode's own usepoint, varnode.cc:696-703) —
+                        // later op outputs at the param register no longer
+                        // fold the entry flags (SETVARNODE-SCOPELOCAL-
+                        // CONSUMER-0001).
+                        let param_usepoint = if scope.in_scope(
+                            space,
+                            offset,
+                            dtype.get_size() as i64,
+                        ) {
+                            None
+                        } else {
+                            Some(fd.baseaddr.as_u64().wrapping_sub(1))
+                        };
                         let idx = scope.add_symbol(
                             space,
                             &name,
                             Some(dtype.clone()),
                             offset,
-                            None,
+                            param_usepoint,
                         );
                         scope.set_category(
                             idx,
@@ -1621,12 +1658,11 @@ impl Action for ActionRestructureVarnode {
                     .map(|(o, s, n)| ((o, s), n.to_string()))
                     .collect();
                 }
-                // localmap->resetLocalWindow() (funcdata.cc:70): install the
-                // prototype's localRange ∪ paramRange as the scope's range
-                // tree — once, at construction. markNotMapped narrowings
-                // applied after this point persist for the function's
-                // lifetime (Ghidra never re-widows inside restructure).
-                scope.reset_local_window(fd);
+                // (localmap->resetLocalWindow(), funcdata.cc:70, now runs at
+                // the top of this construction block — before the platform
+                // parameter install, per the oracle's Funcdata construction
+                // → <localdb> decode order. markNotMapped narrowings applied
+                // after this point persist for the function's lifetime.)
                 scope
             }
         };
@@ -16888,6 +16924,87 @@ mod tests {
         let status = action.apply(&mut fd).unwrap();
         assert_eq!(status, action_status::NO_CHANGE);
         assert!(fd.scope.is_some(), "scope must be built");
+    }
+
+    /// SETVARNODE-SCOPELOCAL-CONSUMER-0001: the platform parameter-symbol
+    /// install mirrors ProtoStoreSymbol::setInput's usepoint choice
+    /// (fspec.cc:3153, 3166-3169). A register-storage param — storage no
+    /// scope window owns — falls back to `restricted_usepoint` = function
+    /// entry − 1 (funcdata.cc:69 `funcp.setScope(localmap, baseaddr + -1)`,
+    /// fspec.hh:1288): the symbol is NOT address-tied and its one-point
+    /// uselimit {fd−1} admits queries only at the function entry (the input
+    /// varnode's own usepoint, varnode.cc:696-703) — later op outputs at
+    /// the param register no longer fold the entry flags. A MEMORY-class
+    /// stack param inside the resetLocalWindow tree (localRange ∪
+    /// paramRange, varmap.cc:441-458) keeps the INVALID usepoint → the
+    /// empty-uselimit addMap branch → address-tied symbol
+    /// (database.cc:1149-1150).
+    #[test]
+    fn test_action_restructure_param_symbol_usepoint() {
+        use crate::address::Address;
+        use crate::fspec::{protoparam_flags, FuncProto, ProtoParameter};
+        use crate::space::AddressSpace;
+        use crate::type_system::datatype::{Datatype, TypeBase, TypeMetatype};
+        use std::sync::Arc;
+
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+            "int".to_string(), 4, TypeMetatype::Int,
+        )));
+        let long_t = Arc::new(Datatype::Base(TypeBase::new(
+            "long".to_string(), 8, TypeMetatype::Int,
+        )));
+
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let mut proto = FuncProto::new("t".into(), long_t.clone());
+        let mut p_reg =
+            ProtoParameter::new("regp".into(), int_t.clone(), Address::new(0x30));
+        p_reg.flags |= protoparam_flags::TYPE_LOCKED | protoparam_flags::NAME_LOCKED;
+        let mut p_stk =
+            ProtoParameter::new("stkp".into(), long_t.clone(), Address::new(0x8));
+        p_stk.address_space = AddressSpace::Stack;
+        p_stk.flags |= protoparam_flags::TYPE_LOCKED | protoparam_flags::NAME_LOCKED;
+        proto.add_parameter(p_reg);
+        proto.add_parameter(p_stk);
+        fd.funcp = proto;
+        assert!(fd.funcp.is_input_locked());
+
+        let mut action = ActionRestructureVarnode::new();
+        action.apply(&mut fd).unwrap();
+
+        let scope = fd.scope.as_ref().expect("scope built");
+        let regp = scope
+            .symbols
+            .iter()
+            .find(|s| s.name == "regp")
+            .expect("register param symbol installed");
+        let stkp = scope
+            .symbols
+            .iter()
+            .find(|s| s.name == "stkp")
+            .expect("stack param symbol installed");
+
+        // Register param: restricted_usepoint = 0x1000 − 1, NOT addrtied
+        // (fspec.cc:3167-3168 → database.cc:1149 gate closed).
+        assert_eq!(regp.usepoint, Some(0xfff));
+        assert!(!regp.addrtied);
+        // The entry answers a query at the function entry (the input
+        // varnode's usepoint) but NOT at a later op address.
+        assert!(
+            scope
+                .find_container_entry(AddressSpace::Register, 0x30, 4, Some(0xfff))
+                .is_some()
+        );
+        assert!(
+            scope
+                .find_container_entry(AddressSpace::Register, 0x30, 4, Some(0x1234))
+                .is_none()
+        );
+
+        // Stack param inside paramRange [0,511]: INVALID usepoint survives
+        // (discoverScope hit) → empty uselimit → addrtied (cc:3167 keeps
+        // the default; database.cc:1149-1150 sets the flag).
+        assert_eq!(stkp.usepoint, None);
+        assert!(stkp.addrtied);
     }
 
     // ---- ActionSetCasts tests ----
