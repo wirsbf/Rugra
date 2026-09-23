@@ -1,5 +1,35 @@
 # `printc.rs` API Reference
 
+## 2026-09-23：emitBlockGoto 目标切换 target_dyn + emitLabel 取址链（PRINTC-GOTOPRINTS-0001 收官，joined_/dup_ 形态族）
+
+`emit_block_goto` 的 goto 目标地址此前读 legacy 类型化投影
+`BlockGoto::goto_target`（`Option<Arc<RwLock<BlockBasic>>>`，按字段文档恒为
+`None`——结构树的叶是 dyn 化 BlockCopy，无法回出共享身份的类型化 Arc），产生
+`addr=0`，再被 `emit_goto_statement` 的零地址防御吞掉：**结构树里存在 BlockGoto、
+`compute_goto_prints` 也判 prints=true，但 goto 语句从不打印**，只剩目标块的
+label 孤立输出（witness：curl my_get_token `joined_r0x001037b2:` 有 label 无
+`goto joined_r0x001037b2;`，golden cc:1257 两者都有）。修复 = 切到
+`target_dyn`（Ghidra `gototarget` 指针的活体捕获，block.hh:548）+
+`flow_entry_address`（emitLabel 的 `getFrontLeaf→subBlock(0)→getEntryAddr`
+链，printc.cc:3167-3170 的传输层），即字段文档预告的 PRINTC-GOTOPRINTS-0001
+切换。joined_/dup_ 前缀判定本身（emitLabel cc:3173-3187 + EX2 的
+`joined_label_addrs`/`dup_label_addrs` 投影）无需改动——f_joined_block 在
+`node_join_create_block`（funcdata_block.cc:785）、f_duplicate_block 在
+`node_split_block_edge`（cc:831）置位后沿 bblocks 存活到 print 时快照，链路
+完整；缺口只在 goto 侧目标解析。
+
+**验收**（基线=亲父 2a32802e 亲测）：curl 2381/0/0 → **2330/0/0**（−51）、
+httpd 2238/0/0 → **2224/0/0**（−14）；label-without-goto 位点归零（curl 0/httpd 0，
+修前至少 1+若干）；joined_ 形态族在对比域内收敛（curl 唯一 joined 对
+my_get_token 0x1037b2 双行齐现；httpd golden 的 122 处 joined 全部位于 Rugra
+29 函数语料之外，非对比域）。新暴露的结构族 goto（golden 以循环回边结构化而
+Rugra 树为 BlockGoto：curl glob_set 0x104c20、httpd ap_parse_vhost_addrs
+0x12cfcb / ap_pregsub 0x12e475 / ap_no2slash 0x12e87b）登记
+PRINTC-GOTOSTRUCT-RESID-0001（blockaction 域）；switch-case 标号拼写族
+（`switchD_.._caseD_..` vs `LAB_`/`code_r`）见 PRINTC-LABSPELL 残差清单。
+三投影 next_url/match_url/parseconfig.constprop.0 MATCH×3 保持；printc 单测
+12/12；gcc 审计 curl 82OK/25FAIL、httpd 6OK/23FAIL 均等于基线。
+
 ## 2026-09-23：emitLabel 三臂补全——code-label 符号层 + hasSpecialLabel 门 + printRaw 小写/基址（PRINTC-LABSPELL-LABSYMS-0001）
 
 oracle `PrintC::emitLabel`（printc.cc:3164-3193）是三臂决策：①`hasSpecialLabel()`
