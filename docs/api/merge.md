@@ -158,13 +158,54 @@ The regression test
 6. `update_high_covers` → sync each HighVariable.cover from members
 7. `assign_names` → Ghidra-style auto-naming
 
-### `fn update_high_covers(&mut self, fd: &mut Funcdata)` (private, 2026-06-29)
+### `fn update_high_covers(&mut self, fd: &mut Funcdata)` (private, 2026-06-29; 2026-09-23 EM3 改走 updateCover 链)
 
-Re-derive every HighVariable's internal cover by calling
-`high.update_internal_cover()`. Collects distinct HighVariables reachable
-from loc_tree varnodes (deduped by Arc pointer). Must run after
-merge_by_cover finalizes instance sets so high.cover reflects all members.
-ActionMarkImplied (later in pipeline) consults high.cover.
+Re-derive every HighVariable's cover by calling `update_high_cover(&ha)`
+（variable.cc:338 `HighVariable::updateCover` 链：成员惰性重建 + piece 感知 +
+内部 cover 重建），不再是裸 `update_internal_cover()`。Collects distinct
+HighVariables reachable from loc_tree varnodes (deduped by Arc pointer). Must
+run after all speculative merges finalize instance sets so high.cover reflects
+all members. ActionMarkImplied (later in pipeline) consults high.cover.
+（oracle 无此整体 pass——它经 `HighIntersectTest::updateHigh`
+variable.cc:1148 与 `Varnode::getCover` varnode.hh:202 惰性维护;Rugra 因下游
+直读存储 cover 而物化,达到同一不变量点。）
+
+### `MergeTypeIntersectCache::update_high`（variable.cc:1148 HighIntersectTest::updateHigh,2026-09-23 EM3 终态）
+
+脏判定从「仅 high 自身 coverdirty 标志」扩为「自身标志 OR 任一成员 Varnode 仍带
+COVERDIRTY」——oracle 的 `Varnode::setFlags/clearFlags`（varnode.cc:352-374）在
+写成员 coverdirty 时同步 `high->coverDirty()`，Rugra 的 varnode.rs 旗标写不传播，
+此扫描在测试门补齐同一可观测状态（oracle 中两者同时置位，扫描命中的恰是 oracle
+亦判脏的状态）。命中时经 `mark_high_cover_dirty` 补传播,再走
+`update_high_cover`（成员惰性重建 + updateInternalCover 乘积）,最后
+**无条件 `purge_high`**（variable.cc:1153-1154 逐字;EM2 曾实验「重建后内部
+cover 逐位不变则跳过 purge」,但 blockIntersection 的判定是实例级 copy-shadow
+对,不同实例分解可在同一 union cover 下给出不同判定,该门放行的陈旧缓存判定
+产生错误合并(uStack_248/in_RDI 噪声),已移除）。piece 持有 high 保持仅标志判
+（其新鲜度协议在 piece 机件 INTERSECTDIRTY/EXTENDCOVERDIRTY——`is_cover_dirty`
+已含 extendcoverdirty;扫描+updateCover 路径在 EM2 实测不收敛,残余记
+`MERGE-COPYNOISE-SPILLRESTORE-0001-R2`）。
+
+### `fn gather_block_varnodes` / `test_block_intersection` 惰性读取 + 借用优化（2026-09-23 EM3）
+
+两侧的 Varnode cover 读取前置 `Varnode::update_cover_locked`（oracle 的
+`vn->getCover()` 惰性重建读,variable.cc:951/975/984 → varnode.hh:202）——
+成员 pass 中途被标 COVERDIRTY 后不再喂陈旧 cover 给块级判定;piece-intersection
+high（`interPiece->getHigh()`）不经 updateHigh 刷新,靠此重建对齐 oracle。
+`block_intersection` 的 a/b cover 由 `intersection()` 一次物化并以引用下传
+（原来每块重取 `high_cover` 深拷贝）；`test_block_intersection` 的成对判定借用
+双方读锁（原 `cover.clone()` 每 (vn,other,block) 深拷贝 BTreeMap）。纯性能等价变换。
+
+### `fn mark_high_cover_dirty(high)`（variable.hh:275 HighVariable::coverDirty,2026-09-23 EM3 新增）
+
+`HighVariable::cover_dirty` 方法在持外层写锁调用时,其内部
+`piece->markExtendCoverDirty` 的自腿（variable.cc:136 写回 own high）构成
+**同线程同锁写重入死锁**——EM2 记录的「post-restart mergerequired 圈零进展锁
+等待」的真因（gdb 显示线程 running 而非 blocked,与自旋/不收敛表象一致,实际是
+写锁自等待）。本 helper 将「置 COVERDIRTY 标志」与「piece 走
+mark_extend_cover_dirty_read」拆成两段独立锁窗口,可观测旗标状态与 oracle 内联
+逐位相同。merge.rs 内所有补传播点（update_high / mark_implied /
+compute_varnode_covers materialize 腿）一律走本 helper。
 
 ### `fn update_high_cover(high)` 调用点修复（2026-08-15，`COVER-REBUILD-SELFLOCK-0001`）
 
@@ -178,12 +219,24 @@ slot 与 root 同一 Arc 的图（parseconfig 真实输入）即永久自锁；�
 `tests/oracle/cover_rebuild_1204.*` 行为门禁覆盖；`ActionMergeType`
 caller 闭包与 cleanup 后动作顺序仍归 `PIPE-MERGETYPE-ORDER-0001`。
 
-### `pub fn mark_implied(vn: &Arc<RwLock<Varnode>>)` (2026-06-29)
+**2026-09-23（MERGE-COPYNOISE-SPILLRESTORE-0001 EM3）**：EM2 曾移除本函数的
+逐成员 `update_cover_locked` 重建（当时归因于锁等待;真因见
+`mark_high_cover_dirty`——嵌套写死锁,与成员重建无关),已恢复亲代全形
+（own instances 重建 → 无 piece 则 `update_internal_cover`,否则 piece
+updateIntersections + 相交 high 实例重建 + update_cover_read）。成员重建
+腿即 oracle `updateInternalCover` 的 `inst[i]->getCover()` 惰性链
+（variable.cc:331→varnode.hh:202）,Rugra 因 `update_internal_cover`
+（variable.rs）直读 `cover` 字段而在此显式完成。
 
-Faithful to Merge::markImplied (merge.cc:1595). Sets the IMPLIED flag on a
-varnode. Ghidra also marks coverdirty on the def op's inputs; Rugra
-recomputes covers wholesale per merge_all so only the flag is set. Called
-by ActionMarkImplied when checkImpliedCover passes.
+### `pub fn mark_implied(vn: &Arc<RwLock<Varnode>>)` (2026-06-29; 2026-09-23 EM3 补全)
+
+Faithful to Merge::markImplied (merge.cc:1594-1605). Sets the IMPLIED flag,
+then marks the **def op's inputs** `COVERDIRTY`（gated on `hasCover`,
+merge.cc:1602-1603——它们的 cover 穿过现已 implied 的 root,任何后续读取前
+必须重建）并经 `mark_high_cover_dirty` 补传播到各成员 high
+（varnode.cc:358-359 setFlags 的传播半）。此前版本只置 IMPLIED 旗标、
+靠 merge 周期整体重建兜底——pass 中途的 markimplied 判定因此吃到陈旧
+成员 cover。Called by ActionMarkImplied when checkImpliedCover passes.
 
 ### `pub fn inflate_test(a: &Arc<RwLock<Varnode>>, high: &HighVariable) -> bool` (2026-06-29)
 
@@ -201,6 +254,15 @@ authoritative check in ActionMarkImplied::checkImpliedCover.
 SUBPIECE/PIECE 派生影子）；③借用重构：实例快照先drop `ahigh` 读锁再进
 update_intersections（其取 owning high 写锁——同线程读后写即死锁，曾致 markimplied
 管线挂起）。
+
+**2026-09-23（MERGE-COPYNOISE-SPILLRESTORE-0001 EM2/R2,EM3 终态）**: merge.cc:1621-1622 的
+`testCache.updateHigh(high); const Cover &highCover(high->internalCover)` 落地为
+「脏扫描（自身标志 OR 成员 COVERDIRTY）→ 命中才物化新乘积（成员
+`update_cover_locked` 重建 + inst[0]->hasCover 门控合并），否则直读存储 cover」。
+传播侧不可写：调用方（coreaction checkImpliedCover）全程持有该 high 的读锁，
+成员重建的 clearFlags→high->coverDirty() 传播（varnode.cc:365-374）无法落锁,
+靠 merge 周期起点的 `compute_varnode_covers` 全量重脏兜底（缓存门都在 merge 期内,
+不会吃到跨周期陈旧 cover）。
 
 ### `pub fn merge_addr_tied(&mut self, fd: &mut Funcdata)`
 
