@@ -1501,7 +1501,10 @@ impl Action for ActionRestructureVarnode {
                 // job (typelocked parameters survive, varmap.cc:1275).
                 if fd.funcp.is_input_locked() {
                     let params: Vec<(
-                        String, std::sync::Arc<crate::type_system::datatype::Datatype>, u64,
+                        String,
+                        std::sync::Arc<crate::type_system::datatype::Datatype>,
+                        crate::space::AddressSpace,
+                        u64,
                     )> =
                         fd
                         .funcp
@@ -1510,11 +1513,31 @@ impl Action for ActionRestructureVarnode {
                             .map(|p| (
                                     p.name.clone(),
                                     p.data_type.clone(),
+                                    p.get_address_space(),
                                     p.address.as_u64()))
                             .collect();
-                    for (index, (name, dtype, offset)) in params.into_iter().enumerate() {
+                    for (index, (name, dtype, space, offset)) in params.into_iter().enumerate() {
+                        // Ghidra installs each platform parameter symbol at
+                        // its REAL storage (the localdb decode carries the
+                        // assigned ProtoParameter storage verbatim):
+                        // INTEGER-class params land in the register space at
+                        // their register offset with the register width;
+                        // MEMORY-class by-value params (match_url's 304-byte
+                        // URLGlob `glob`, SysV stack slot [entry_rsp+8,
+                        // +8+size)) land in the STACK space at the model
+                        // offset. ScopeInternal's maptable is per-space
+                        // (database.cc:1848-1851 maptable[spaceid]), so a
+                        // register-space blob entry can never be consulted
+                        // for stack reads — and vice versa. Installing the
+                        // whole-type-width entry in the register space (the
+                        // old Rugra bug) made find_container_entry's
+                        // [start..start+size) containment (database.cc:2269)
+                        // swallow unrelated pointer registers (rax) during
+                        // ActionNameVars linkSymbols while the real stack
+                        // reads at [8, 8+size) found nothing (bare
+                        // in_stack_00000130 names).
                         let idx = scope.add_symbol(
-                            crate::space::AddressSpace::Register,
+                            space,
                             &name,
                             Some(dtype.clone()),
                             offset,
@@ -1537,20 +1560,29 @@ impl Action for ActionRestructureVarnode {
                         // The locked parameter symbol also type-locks its
                         // storage varnode: Ghidra's Varnode::setSymbolEntry
                         // (varnode.cc:418) sets Varnode::typelock from the
-                        // Symbol flags and syncVarnodesWithSymbol
+                        // Symbol flags and syncVarnodesWithSymbols
                         // (funcdata_varnode.cc:983-1002) flows the symbol's
-                        // Datatype onto the varnode. Rugra's sync only
-                        // walks the stack space, so apply the type to the
-                        // register input directly here.
-                        let input_vn = fd.find_varnode_input(
-                            dtype.get_size(),
-                            crate::address::Address::new(offset),
-                        );
-                        if let Some(vn_arc) = input_vn {
-                            let mut vn = vn_arc.write().unwrap();
-                            if !vn.is_type_lock() {
-                                vn.v_type = Some(dtype.clone());
-                                vn.set_flags(crate::varnode::varnode_flags::TYPELOCK);
+                        // Datatype onto the varnode. That sync walk covers
+                        // ONLY the ScopeLocal space (stack,
+                        // funcdata_varnode.cc:947-948 beginLoc(
+                        // lm->getSpaceId())), so register-storage params
+                        // need the type applied to the register input
+                        // directly here; stack-storage params take their
+                        // typelock through the sync pass, which projects
+                        // the exact field piece via SymbolEntry::
+                        // getSizedType (funcdata_varnode.cc:956-960 ->
+                        // local_symbol_sized_type in funcdata.rs).
+                        if space == crate::space::AddressSpace::Register {
+                            let input_vn = fd.find_varnode_input(
+                                dtype.get_size(),
+                                crate::address::Address::new(offset),
+                            );
+                            if let Some(vn_arc) = input_vn {
+                                let mut vn = vn_arc.write().unwrap();
+                                if !vn.is_type_lock() {
+                                    vn.v_type = Some(dtype.clone());
+                                    vn.set_flags(crate::varnode::varnode_flags::TYPELOCK);
+                                }
                             }
                         }
                     }
