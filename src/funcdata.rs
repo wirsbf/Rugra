@@ -13672,8 +13672,9 @@ mod tests {
             all_raw_ops.extend(ops);
         }
         // X86LIFT-FLAG-PCODE-0001: mov→1(COPY) + add→9(CARRY/SCARRY/ADD
-        // direct-dst/SF/ZF/PF chain) + ret→1(RETURN) = 11
-        assert_eq!(all_raw_ops.len(), 11);
+        // direct-dst/SF/ZF/PF chain) + ret→3(RET-OP3-0001: LOAD RIP←
+        // ram[RSP]; INT_ADD RSP,8; RETURN [RIP] — locked .sla template) = 13
+        assert_eq!(all_raw_ops.len(), 13);
 
         // Verify op sequence
         assert_eq!(
@@ -13686,14 +13687,20 @@ mod tests {
             OpCode::from_i32(all_raw_ops[3].get_opcode()), Some(OpCode::CPUI_INT_ADD)
         );
         assert_eq!(
-            OpCode::from_i32(all_raw_ops[10].get_opcode()), Some(OpCode::CPUI_RETURN)
+            OpCode::from_i32(all_raw_ops[10].get_opcode()), Some(OpCode::CPUI_LOAD)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[11].get_opcode()), Some(OpCode::CPUI_INT_ADD)
+        );
+        assert_eq!(
+            OpCode::from_i32(all_raw_ops[12].get_opcode()), Some(OpCode::CPUI_RETURN)
         );
 
         // Phase 3: Inject into Funcdata
         let mut fd = Funcdata::new("seq_mov_add_ret", start, code.len() as i32);
         fd.inject_raw_ops(&all_raw_ops);
 
-        assert_eq!(fd.obank.alivelist.len(), 11);
+        assert_eq!(fd.obank.alivelist.len(), 13);
         // RETURN terminates, all ops in one block
         assert_eq!(fd.bblocks.get_size(), 1);
 
@@ -13704,7 +13711,7 @@ mod tests {
         ffi::set_current_program(fd);
 
         let result =
-            verifier.verify_pcode_generation("seq_mov_add_ret", start, &rugra_ops, 11);
+            verifier.verify_pcode_generation("seq_mov_add_ret", start, &rugra_ops, 13);
 
         assert!(matches!(result, VerifyResult::Match));
     }

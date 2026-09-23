@@ -2445,3 +2445,17 @@ funcdata_varnode.cc:269-292 的 OPACTION_DEBUG 钩子位;守卫先行、变更�
 ordinal 29 lanedivide 双分裂（unique 槽 + XMM0 phi 群）在 Rugra 侧同样
 2=2。min_laned_size 在 lane 记录空时为 u32::MAX（旧中性行为），装载后为
 最小整尺寸 16，见 docs/api/arch.md 同日条目。
+
+## 2026-09-23：test_seq_mov_add_ret_alignment 计数随 RET 模板更新（RET-OP3-0001 波及）
+
+`src/disasm/x86_lift.rs` 的 `ret` 臂按锁定 .sla 模板三 op 化后（见
+docs/api/disasm/x86_lift.md 同日条目），本文件 `test_seq_mov_add_ret_
+alignment` 的手写回归计数随之更新（Rugra 回归测试口径，机制 B2 手写
+expected 性质）：`mov rax,rdi; add rax,rsi; ret` 共 1+9+3=13 op
+（旧 11），断言序列补 `op[10]=LOAD`、`op[11]=INT_ADD`，`op[12]=RETURN`
+（旧 `op[10]=RETURN`），alivelist 13（旧 11），RuntimeVerifier
+verify_pcode_generation 计数 13（旧 11）。生产代码零改动。
+
+另：`test_seq_mov_and_shl_ret_alignment` 在 master 94f3bf58 即稳定失败
+（父基线亲测 2/2；其期望仍为 FLAG-PCODE 之前的 6-op COPY 链形态），
+非本条目引起，属 funcdata 测试债（待该域 writer 更新）。
