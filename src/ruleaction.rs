@@ -18337,12 +18337,172 @@ impl<'a> AddTreeState<'a> {
         false // At least one side contains multiples.
     }
 
+    // RUGRA-GLUE: live getMap projection for the TypeSpacebase query path.
+    /// Resolve the [`SpacebaseMap`] a TypeSpacebase query must run against —
+    /// Ghidra's `TypeSpacebase::getMap` (type.cc:2935-2945) re-resolves this
+    /// on EVERY query through the Architecture: the global scope, or — when
+    /// `localframe` is valid — the function at `localframe`
+    /// (`queryFunction`) whose live ScopeLocal becomes the map. Rugra cannot
+    /// reach the Funcdata from inside the interned `Arc<Datatype>`, so the
+    /// rule query path resolves it from the decompiling function here: this
+    /// AddTreeState always belongs to `self.data`, whose entry address IS
+    /// the spacebase's `localframe` (the spacebase varnode's pointer type is
+    /// created from `Funcdata::getAddress()`, funcdata.cc:245). A frame
+    /// mismatch models the `queryFunction` miss and falls back to the global
+    /// scope, exactly like the C++.
+    fn spacebase_map<'m>(
+        &'m self,
+        bt: &'m std::sync::Arc<crate::type_system::datatype::Datatype>,
+    ) -> crate::type_system::datatype::SpacebaseMap<'m> {
+        use crate::type_system::datatype::{Datatype, SpacebaseMap};
+        if let Datatype::Spacebase(sb) = bt.as_ref() {
+            // Ghidra: `!localframe.isInvalid()` (type.cc:2939) — an invalid
+            // Address is the default-constructed (spaceless) one; a real
+            // function entry is never invalid. Rugra's legacy `Address`
+            // carries no space at all (function baseaddrs arrive as
+            // spaceless NONZERO offsets), so the observable discrimination
+            // is: the global spacebase is the all-zero sentinel frame
+            // (typefactory.rs get_type_spacebase frame 0); any spaced or
+            // nonzero frame references the owning function.
+            let frame_references_function =
+                !sb.localframe.is_invalid() || !sb.localframe.is_null();
+            if frame_references_function {
+                let fd: &'m Funcdata = self.data;
+                if fd.get_address().as_u64() == sb.localframe.as_u64() {
+                    return SpacebaseMap::Local(fd.scope.as_ref());
+                }
+            }
+            // queryFunction(localframe) miss (or the global spacebase): the
+            // global-scope leg.
+            return SpacebaseMap::Global(sb.scope.as_ref());
+        }
+        SpacebaseMap::Global(None)
+    }
+
+    // Ghidra: ruleaction.cc:6064 AddTreeState::hasMatchingSubType
+    /// An explicit offset should target a specific sub data-type, but array
+    /// indexing may confuse things: find the best matching component near
+    /// `off`, preferring a matching array element size and a component start
+    /// nearer to the offset. Faithful to `AddTreeState::hasMatchingSubType`
+    /// (ruleaction.cc:6064-6107). With `array_hint == 0` this is exactly
+    /// `getSubType`; otherwise the backward/forward
+    /// `nearestArrayedComponent*` walks run against the base type — the
+    /// virtual dispatch sends TYPE_SPACEBASE to the live-map overrides
+    /// (type.cc:3020/2971) and TYPE_STRUCT to the field walks
+    /// (type.cc:1669/1698); every other metatype takes the base null walks
+    /// (type.cc:201/188).
+    fn has_matching_sub_type(&self, off: i64, array_hint: u64, newoff: &mut i64) -> bool {
+        use crate::type_system::datatype::{
+            nearest_arrayed_component_backward, nearest_arrayed_component_forward, Datatype,
+            SpacebaseMap, TypeMetatype,
+        };
+        let base_type = match self.base_type.as_ref() {
+            Some(bt) => bt.clone(),
+            None => return false,
+        };
+        // Ghidra passes the uint8 field biggestNonMultCoeff into the uint4
+        // formal arrayHint: the low 32 bits survive.
+        let array_hint = array_hint as u32;
+        let map: Option<SpacebaseMap<'_>> =
+            if base_type.get_metatype() == TypeMetatype::Spacebase {
+                Some(self.spacebase_map(&base_type))
+            } else {
+                None
+            };
+        // The virtual getSubType dispatch (spacebase override resolves the
+        // live map, ruleaction.cc:6068/6087).
+        let query_sub_type = |o: i64| -> (Option<std::sync::Arc<crate::type_system::datatype::Datatype>>, i64) {
+            match (&map, base_type.as_ref()) {
+                (Some(m), Datatype::Spacebase(sb)) => sb.get_sub_type_in_map(m, o),
+                _ => base_type.get_sub_type(o),
+            }
+        };
+        if array_hint == 0 {
+            return match query_sub_type(off) {
+                (Some(_), e) => {
+                    *newoff = e;
+                    true
+                }
+                (None, _) => false,
+            };
+        }
+        // ruleaction.cc:6070-6082 — nearestArrayedComponentBackward: a hit
+        // with a compatible element size whose offset is inside the
+        // component answers directly.
+        let type_before = match (&map, base_type.as_ref()) {
+            (Some(m), Datatype::Spacebase(sb)) => {
+                sb.nearest_arrayed_component_backward_in_map(m, off)
+            }
+            _ => nearest_arrayed_component_backward(&base_type, off),
+        };
+        if let Some(tb) = &type_before.dtype {
+            if array_hint == 1 || type_before.elsize == array_hint as i64 {
+                // int8 sizeAddr = byteToAddressInt(getSize(), ct wordsize)
+                // = size / ws (space.hh:541).
+                let size_addr =
+                    (tb.get_size() as i64).wrapping_div(self.rel_wordsize() as i64);
+                if type_before.newoff >= 0 && type_before.newoff < size_addr {
+                    // If the offset is inside a component with a compatible
+                    // array, return it.
+                    *newoff = type_before.newoff;
+                    return true;
+                }
+            }
+        }
+        // ruleaction.cc:6083-6095 — nearestArrayedComponentForward.
+        let type_after = match (&map, base_type.as_ref()) {
+            (Some(m), Datatype::Spacebase(sb)) => {
+                sb.nearest_arrayed_component_forward_in_map(m, off)
+            }
+            _ => nearest_arrayed_component_forward(&base_type, off),
+        };
+        if type_before.dtype.is_none() && type_after.dtype.is_none() {
+            // ruleaction.cc:6086-6087 — both walks missed: fall back to the
+            // plain getSubType container query.
+            return match query_sub_type(off) {
+                (Some(_), e) => {
+                    *newoff = e;
+                    true
+                }
+                (None, _) => false,
+            };
+        }
+        if type_before.dtype.is_none() {
+            *newoff = type_after.newoff;
+            return true;
+        }
+        if type_after.dtype.is_none() {
+            *newoff = type_before.newoff;
+            return true;
+        }
+        // ruleaction.cc:6097-6105 — pick the nearer start; an element-size
+        // mismatch adds the 0x1000 penalty; the tie goes backward (offBefore).
+        let mut dist_before = (type_before.newoff as i64).unsigned_abs();
+        let mut dist_after = (type_after.newoff as i64).unsigned_abs();
+        if array_hint != 1 {
+            if type_before.elsize != array_hint as i64 {
+                dist_before += 0x1000;
+            }
+            if type_after.elsize != array_hint as i64 {
+                dist_after += 0x1000;
+            }
+        }
+        *newoff = if dist_after < dist_before {
+            type_after.newoff
+        } else {
+            type_before.newoff
+        };
+        true
+    }
+
     /// Faithful to `AddTreeState::calcSubtype` (ruleaction.cc:6270-6355).
     ///
-    /// The pRelType branches (6350-6354) are omitted (no TypePointerRel). The
-    /// TypePointerRel `hasMatchingSubType` path for SPACEBASE/STRUCT needs
-    /// `nearestArrayedComponent*` which Rugra lacks; we approximate with
-    /// `get_sub_type`, mirroring the arrayHint==0 Ghidra path.
+    /// The final pRelType block (6350-6354) lives at the tail below (Rugra's
+    /// relative pointer is a flat TypePointer state, see `ptr_rel_state`).
+    /// The SPACEBASE/STRUCT arms call `hasMatchingSubType` with
+    /// biggestNonMultCoeff as the array hint; the hint path resolves the
+    /// spacebase map live through `spacebase_map` (the TypeSpacebase
+    /// nearestArrayedComponent* overrides, type.cc:2971/3020).
     // Ghidra: ruleaction.cc:6270 AddTreeState::calcSubtype
     fn calc_subtype(&mut self) {
         let tmpoff = (self.multsum.wrapping_add(self.nonmultsum)) & self.ptrmask;
@@ -18382,49 +18542,59 @@ impl<'a> AddTreeState<'a> {
             use crate::type_system::datatype::TypeMetatype;
             match bt.get_metatype() {
                 TypeMetatype::Spacebase => {
-                    // Ghidra (ruleaction.cc:6296-6310): offsetbytes =
-                    // addressToByteInt(offset, ct wordSize); hasMatchingSubType
-                    // (arrayHint == biggestNonMultCoeff). With arrayHint 0 the
-                    // answer is exactly getSubType, which we call here
-                    // (TypeSpacebase::getSubType now mirrors type.cc:2964-2966,
-                    // answering (undefined1, 0) on the miss so extra == 0 and
-                    // the arm stays valid — the match_url oppool2 CROSSBUILD
-                    // chain). With arrayHint != 0 Ghidra first consults
-                    // nearestArrayedComponentBackward/Forward (type.cc:2971-
-                    // 3038), not modelled here; for the no-container stack
-                    // state both oracle arms reduce to getSubType's miss
-                    // answer (extra 0). wordsize-1 spaces make the
-                    // byte/address conversions identity.
-                    // MYPROGRESS-OPPOOL2-CONSTSPLIT-0001: the arrayHint!=0
-                    // approximation is only exact while the live local map
-                    // has no container covering the query — the ord150
-                    // myprogress / ord186 parseconfig splits diverge exactly
-                    // when oracle's map (or facing TypePointerRel, see p_rel)
-                    // answers differently; the faithful arrayHint paths need
-                    // the live ScopeLocal wired into the spacebase type first.
-                    let extra = match bt.get_sub_type(self.offset as i64) {
-                        (Some(_), e) => e as u64,
-                        (None, _) => { self.valid = false; return; }
-                    };
-                    self.offset = (self.offset.wrapping_sub(extra)) & self.ptrmask;
-                    self.correct = (self.correct.wrapping_sub(extra)) & self.ptrmask;
+                    // Ghidra (ruleaction.cc:6286-6298): offsetbytes =
+                    // addressToByteInt(offset, ct wordsize) — the uint8
+                    // offset reinterpreted as int8 then ×ws — and the answer
+                    // converts back with byteToAddress (÷ws,
+                    // space.hh:523/541). hasMatchingSubType carries
+                    // biggestNonMultCoeff (truncated to uint4) as the array
+                    // hint; with hint ≠ 0 the backward/forward
+                    // nearestArrayedComponent* walks resolve through the
+                    // CURRENT ScopeLocal (the live getMap projection,
+                    // RULEARITH-SPACEBASE-ARRAYSNAP-0001) instead of the
+                    // construction-time global snapshot. The no-container
+                    // miss answers (undefined1, 0) keeping the arm valid —
+                    // the match_url oppool2 CROSSBUILD chain.
+                    let wordsize = self.rel_wordsize() as i64;
+                    let offsetbytes = (self.offset as i64).wrapping_mul(wordsize);
+                    let mut extra: i64 = 0;
+                    // Get offset into mapped variable.
+                    if !self.has_matching_sub_type(offsetbytes, self.biggest_non_mult_coeff, &mut extra)
+                    {
+                        self.valid = false; // Cannot find mapped variable but nonmult is non-empty.
+                        return;
+                    }
+                    let extra = extra.wrapping_div(wordsize);
+                    self.offset = self.offset.wrapping_sub(extra as u64) & self.ptrmask;
+                    self.correct = self.correct.wrapping_sub(extra as u64) & self.ptrmask;
                     self.is_subtype = true;
                 }
                 TypeMetatype::Struct => {
                     let soffset = sign_extend_u64(self.offset, self.ptrsize * 8);
-                    let extra = match bt.get_sub_type(soffset) {
-                        (Some(_), e) => e as u64,
-                        (None, _) => {
-                            // Out of structure bounds check (compare as bytes).
-                            if (soffset < 0) || (soffset as u64) >= bt.get_size() as u64 {
-                                self.valid = false;
-                                return;
-                            }
-                            0 // No field, but pretend there is something there.
+                    // Ghidra (ruleaction.cc:6299-6313): offsetbytes =
+                    // addressToByteInt(soffset, ct wordsize) (×ws);
+                    // hasMatchingSubType with biggestNonMultCoeff as the
+                    // array hint consults the struct's
+                    // nearestArrayedComponent* field walks (type.cc:1669/1698)
+                    // on the hint path; the answer converts back with
+                    // byteToAddressInt (÷ws).
+                    let wordsize = self.rel_wordsize() as i64;
+                    let offsetbytes = soffset.wrapping_mul(wordsize);
+                    let mut extra: i64 = 0;
+                    // Get offset into field in structure.
+                    if !self.has_matching_sub_type(offsetbytes, self.biggest_non_mult_coeff, &mut extra)
+                    {
+                        // Out of structure's bounds (compare as bytes! not
+                        // address units).
+                        if offsetbytes < 0 || offsetbytes >= bt.get_size() as i64 {
+                            self.valid = false;
+                            return;
                         }
-                    };
-                    self.offset = (self.offset.wrapping_sub(extra)) & self.ptrmask;
-                    self.correct = (self.correct.wrapping_sub(extra)) & self.ptrmask;
+                        extra = 0; // No field, but pretend there is something there.
+                    }
+                    let extra = extra.wrapping_div(wordsize);
+                    self.offset = self.offset.wrapping_sub(extra as u64) & self.ptrmask;
+                    self.correct = self.correct.wrapping_sub(extra as u64) & self.ptrmask;
                     // Ghidra 6314-6320: with a relative pointer, when the
                     // offset lands inside the basic pointed-to type, the
                     // offset must be explainable through the parent container

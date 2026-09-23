@@ -1045,3 +1045,14 @@ httpd 2339==基线；glob_set/glob_range/glob_url 与 next_url 输出零行变�
 - 附带发现（不在本修复范围）：ap_strcasecmp_match 在 collapse restart
   循环不收敛（`orderLoopBodies`→`finalize_structure: 3 -> 1` 无限重复），
   属 blockaction/collapse 模块缺陷，需独立 TODO 跟踪。
+
+## 2026-09-24：spacebase scope 快照角色收窄为 getMap 全局腿（RULEARITH-SPACEBASE-ARRAYSNAP-0001）
+
+`get_type_spacebase` 构造期克隆的全局 scope 现在只充当 `TypeSpacebase::getMap`
+（type.cc:2935-2945）的**全局腿**（全局 spacebase 或 queryFunction miss）；
+localframe 有效的查询不得读它——管线的 restructureVarnode 会持续改写
+ScopeLocal，RulePtrArith 查询路径（ruleaction.rs `AddTreeState::spacebase_map`）
+改为查询点从被反编译 Funcdata 解析活跃 ScopeLocal
+（`SpacebaseMap::Local`）后传入 datatype.rs 的 `*_in_map` 查询族。
+快照克隆对 localframe 查询的可见缺陷（oppool2 时点全部栈偏移查询 miss，
+extra 恒 0）就此消灭；构造签名与去重键不变。

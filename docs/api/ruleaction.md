@@ -1655,3 +1655,28 @@ NEGPROBE/ORTRACE/ICPROBE3/VNWATCH vs rugra 同款）：修后 feb8:1 varnode 逐
 flags 与 oracle 逐字相同（0x1208000=mapped|addrtied|coverdirty），negate census
 10/10 逐 site 全等；首分歧 76→**178**（stackstall:oppool1 SNAP 多一条
 3aa2:541 SP INT_ADD，登记 SB-F2STRING-ORD178-0001）。
+
+## 2026-09-24：AddTreeState hasMatchingSubType 全量落地 + calc_subtype SPACEBASE/STRUCT 臂接 live map（RULEARITH-SPACEBASE-ARRAYSNAP-0001）
+
+- `AddTreeState::has_matching_sub_type`（ruleaction.cc:6064
+  `AddTreeState::hasMatchingSubType`）首次完整移植：arrayHint==0 直查
+  getSubType；否则 backward（offBefore∈[0,sizeAddr) 且 elSize 兼容直接
+  命中，sizeAddr=byteToAddressInt(size, ct wordsize)）→forward→双 miss 回
+  getSubType→单 miss 直取→距离比较（|off|，elSize≠hint 各 +0x1000，tie 取
+  backward）。uint8 biggestNonMultCoeff→uint4 形参的 32 位截断保留。
+- `AddTreeState::spacebase_map`（RUGRA-GLUE）：Ghidra
+  `TypeSpacebase::getMap`（type.cc:2935-2945）每次查询经 Architecture 动态
+  解析 queryFunction(localframe)→fd->getScopeLocal()；Rugra 的 spacebase
+  类型内无法触达 Funcdata，故由持 `data: &mut Funcdata` 的 AddTreeState 在
+  查询点解析（fd 入口==localframe 时取活跃 `fd.scope`，帧不匹配=queryFunction
+  miss 回退全局 scope），以 `SpacebaseMap` 传入 datatype.rs 的
+  `*_in_map` 查询族——localframe 查询从此不再读构造期全局快照。
+- calc_subtype SPACEBASE 臂（ruleaction.cc:6286-6298）：offsetbytes=
+  addressToByteInt(offset, ct wordsize)（uint8→int8 重解释 ×ws），extra 回转
+  byteToAddress（÷ws，space.hh:523/541 方向：addressToByte 乘、byteToAddress
+  除）；STRUCT 臂（6299-6313）同构接 hint 路径，边界检查按字节比较。
+- 此前状态：两臂只建模 arrayHint==0 的 getSubType 直查（注释自认
+  nearestArrayedComponent* 未建模），ord186 getparameter/ord186 parseconfig/
+  ord150 myprogress 三处 oppool2 ptrarith 常量差 8 族（FG 归因
+  LANE_FG_TABLEADDR_2026-09-23.md：oracle 对 aliases[].letter 链 -0x4f0
+  向前吸附 -0x4e8 数组符号 extra=-8，Rugra 全 miss extra=0）。

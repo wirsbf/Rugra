@@ -2005,12 +2005,17 @@ impl TypeFactory {
             fd: local_handle,
             spaceid,
             localframe: frame,
-            // The getMap global arm (type.cc:2936 reads
-            // glb->symboltab->getGlobalScope() dynamically): clone the live
-            // global scope — installed before decompilation and stable
-            // during it — so get_sub_type answers global-frame subtype
-            // queries with the oracle's answers (B3-COREACTION-CONSTANTPTR-
-            // 0001 b).
+            // The getMap projection (type.cc:2935-2945) reads
+            // glb->symboltab->getGlobalScope() dynamically and — for a
+            // valid localframe — resolves queryFunction(localframe) →
+            // fd->getScopeLocal() on EVERY query. This snapshot of the
+            // global scope is only the GLOBAL leg of that projection
+            // (globals are installed before decompilation and stable during
+            // it); local-frame queries must NOT read it — the live ScopeLocal
+            // is restructured during the pipeline (RULEARITH-SPACEBASE-
+            // ARRAYSNAP-0001), so the RulePtrArith query path resolves
+            // datatype::SpacebaseMap::Local from the decompiling Funcdata at
+            // query time instead (ruleaction.rs spacebase_map).
             scope: self.symboltab.as_ref().and_then(|db| {
                 db.read()
                     .unwrap()
