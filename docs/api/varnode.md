@@ -1195,3 +1195,5 @@ varnode.rs `get_use_point` 此前自由腿(非 written varnode)返回 `Address::
 tools/run_varnode_getusepoint_oracle.sh(written/input/free/zero_base 回绕四形态,MATCH)。
 E2E:curl 3119→3115,defects/numbering 保持 0(此前因祸得福的 Address(0) 未掩盖任何
 queryProperties/inUse 差异)。
+
+- 2026-09-23: getAddr anchor corrected to header inline definition.

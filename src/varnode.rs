@@ -580,7 +580,7 @@ impl Varnode {
         self.call_spec.as_ref().and_then(Weak::upgrade)
     }
 
-    // Ghidra: varnode.cc:578 Varnode::getAddr
+    // Ghidra: varnode.hh:181 Varnode::getAddr
     pub fn get_addr(&self) -> &Address {
         &self.loc
     }

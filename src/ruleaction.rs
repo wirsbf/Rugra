@@ -12595,12 +12595,12 @@ impl Rule for RuleAddUnsigned {
 pub struct RuleSubRight;
 
 impl RuleSubRight {
-    // Ghidra: ruleaction.cc:7256 RuleSubRight
+    // Ghidra: ruleaction.cc:7238 RuleSubRight
     pub fn new() -> Self { Self }
 }
 
 impl Rule for RuleSubRight {
-    // Ghidra: ruleaction.cc:7269 RuleSubRight::applyOp
+    // Ghidra: ruleaction.cc:7251 RuleSubRight::applyOp
     fn apply_op(
         &self, op_arc: &std::sync::Arc<std::sync::RwLock<PcodeOp>>, fd: &mut Funcdata,
     ) -> Result<i32> {
@@ -12721,9 +12721,9 @@ impl Rule for RuleSubRight {
         Ok(action_status::CHANGE)
     }
 
-    // Ghidra: ruleaction.cc:7256 RuleSubRight
+    // Ghidra: ruleaction.cc:7238 RuleSubRight
     fn get_name(&self) -> &str { "subright" }
-    // Ghidra: ruleaction.cc:7263 RuleSubRight::getOpList
+    // Ghidra: ruleaction.cc:7245 RuleSubRight::getOpList
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_SUBPIECE] }
 }
 

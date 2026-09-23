@@ -1589,3 +1589,5 @@ defects/numbering 保持 0,`(0 - ` 残留 30→0。
 - 测试：markup 传播端到端锁
   `test_rule_range_meld_markup_propagates_to_new_constant`（`(V<5)||(V==5)`
   合并常量 6 携带 c5 的 equate SymbolEntry）。
+
+- 2026-09-23: CR14 observation — RuleSubRight and getAddr anchor corrections (7238/7245/7251; getAddr inline header).
