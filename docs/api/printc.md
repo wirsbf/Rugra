@@ -2393,3 +2393,58 @@ numbering=0；httpd 2456→2458（+2：main 头活输入暴露该表 foldInNorma
 差，jumptable 域登记）/ defects=0 / numbering=0；httpd ap_vhost_iterate_given_conn 与 CB 基线
 逐字节恒等（37 行= jumptable 不可恢复既有差，未回归）；gcc 审计 curl 81/26、httpd 7/22 与
 CB 基线恒等；printc 单测 12/12 + switch 1/1；block:: 5/5、jumptable 36/36。
+
+## 2026-09-23 Lane DY (wt/printres):打印阶段残差簇分类账 + InfLoop 尾距发射修正
+
+**基线**:master 47c9ad79,curl 2614/0/0、httpd 2331/0/0。按函数分解量化 printc 写域四个
+登记族的实际 skeleton 贡献(分类脚本 /dev/shm/rugra-tests/sb-printres/classify.txt 谱系):
+
+| 族 | curl 行贡献 | httpd | 修域裁决 |
+|---|---|---|---|
+| EQLEAK(CALLIND 赋值 ` = ` 泄漏) | 44 | — | printc 协议修复**已就绪**但被 prettyprint P6 拦截(下述) |
+| INFLOOP 尾距 `} while ( true);` | 4 | 6 | printc 发射已修(本 commit);文本层 trim 拦截(下述) |
+| LABSPELL(`code_r0x` vs `LAB_xxxxxxxx`) | ≤128(64/75 次出现与 golden LAB_ 地址精确对应) | ≤76(38/45) | 数据域:driver/varmap 需注入前端 LAB_ 代码标号符号 |
+| BARE_TRUE(`= 1` vs `= true`) | 38 | 30 | 类型域:常量 varnode 面向类型非 bool(push_constant_typed Bool 臂已在) |
+
+**① emitBlockInfLoop 尾距(printc.rs,已修)**:oracle cc:3112-3120 的字节序列是
+spaces(1)+`while`+openParen+spaces(1)+`true`+spaces(1)+closeParen+`;` = ` while( true );`
+(while 与括号间**无**空格,`true` 两侧各一空格)。旧发射 `" while ("`+`" true"`+`");"` 两处
+都偏(括号前多空格、`true` 后缺空格)。已改为逐字面镜像 cc:3112-3120(emit 层字节现与
+oracle 完全一致)。**注**:最终输出仍呈 `} while( true);`,因 prettyprint.rs 空白归一化
+pass 的 ` )`→`)` trim 豁免门只认 `starts_with("while(")` 行头,而尾式行以 `}` 开头
+(`  } while( true );`)——登记 PRINTC-POSTFIX-WHILETAIL-TRIM-0001(prettyprint 写域,被占);
+豁免门扩到 `} while(` 后该修复即兑现 4+6 行收益。
+
+**② CALLIND 赋值 RPN 协议(分析闭环,代码保持旧传输层)**:thunk 语句根 = emit_expression_rpn
+对有输出 op 先 push assignment token + LHS 原子(cc:2474-2475),旧 CALLIND 臂直接
+`emit.print("(*(code *)...")` 绕过 RPN 栈,赋值 token 的 ` = ` 分隔符从
+printlanguage.cc:142-148 的 emitOp 路径泄漏到下一语句——curl 22 处 `uVar1(*(code *)PTR_x)();`
++ `return = uVar1;` 双残差形态。协议化修复(pushOp(function_call)+pushOp(dereference)+cc:649-669
+三分支 pushVn/pushAtom)已在隔离测试(EmitNoMarkup 与 EmitPrettyPrint 双验证)与 corpus
+低层字节 dump 双证实:修复后低层缓冲即 `uVar1 = (*(code *)PTR_00116e98)();`+`return uVar1;`
+(golden 同形)。**阻塞**:EmitNoMarkup::post_process 的 P6 单用变量内联(prettyprint.rs,
+Rugra-only 补偿层)对修好的合法 `uVarN = <callind>();` 行按 count==3 内联+死代码消除,
+把 thunk 体清空(净回归)。登记 PRINTC-CALLIND-RPN-ASSIGN-0001(修复就绪)+
+PRINTC-CALLIND-P6-NULLIFY-0001(prettyprint P6 门,被占域)——P6 门解除后协议臂即可落地
+(代码注释保留完整移植说明与臂位)。
+
+**③ LABSPELL 量化(登记 PRINTC-LABSPELL-LABSYMS-0001)**:golden 的 `LAB_00xxxxxx` 来自
+oracle emitLabel cc:3173-3181 的 queryCodeLabel 路径(Ghidra 前端在反汇编跳转目标建 LAB_
+标号符号);Rugra 无此符号数据,恒走 cc:3183-3192 泛型 `code_r0x` 臂。地址级核对(curl 基址
+0x100000/httpd 0x100000):curl 35 个 code_r 地址中 30 个(64/75 次出现)与 golden LAB_/
+joined_r 地址**精确重合**,httpd 23 个中 19 个(38/45)重合——拼写对齐后每处消除 1A+1D
+两行,潜在 curl ~128/httpd ~76 行。修域=examples driver 或 varmap 注入 LAB_ 符号
+(地址集合=跳转目标=lift CFG 可得),非 printc。
+
+**④ PRINTC-LABEL-WITHOUT-GOTO-0001 勘误(证据更新)**:my_get_token 0x37b2 等curl 7 处/
+httpd 3 处 label-only(无 goto 消费者)经全 setter 插桩(BlockGoto 2856-2864 的 gotoPrints 门
+/BlockIf 3067-3073/BlockSwitch 3603/mark_front_leaf 全量 trace)证实:**UNSTRUCTURED_TARG
+从未经任何 markUnstructured 路径落位**——叶 BlockCopy flags=0x230020(0x20+0x2000+
+0x200000),其 original 仅 0x30000;0x20 于 BlockCopy 创建后出现,且指向该地址的 goto 在
+终态树中**从未到达 emit_block_goto**(0 trace)。修域=blockaction/block flags 生命周期
+(被占);printc 消费侧(emit_any_label_statement flagged 臂)对旗标语义本身忠实。
+
+**三门禁 + 双投影**:curl 2614/0/0(==基线,逐函数 diff 恒等零回退)、httpd 2331/0/0(==
+基线)、next_url+match_url Phase 2 投影 **MATCH 保持**(stage_bisect --v1 vs
+/dev/shm/rugra-tests/sb-oracle 钉板);printc 单测 12/12;gcc 审计 curl 82OK/25FAIL==基线;
+lib 串行 1650/18(失败集=既有 flaky 家族)。

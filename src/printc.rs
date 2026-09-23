@@ -1971,15 +1971,41 @@ impl PrintC {
                 self.rpn_push_in(op_arc, op, 2, self.mods);
                 self.rpn_recurse();
             }
-            // printc.cc:596 opCall: pushOp(&function_call) then the name
-            // atom and the implied parameters; the postsurround token's
-            // rpn_emit_op (printlanguage.cc:343-353) renders
-            // spaces(0,bump) openParen spaces(0,bump) ... closeParen, which
-            // is what arms the pretty printer's wrap indent around the
-            // argument group.
+            // Ghidra: printc.cc:637 PrintC::opCallind
+            // Faithful token-protocol port. The oracle pushes
+            //   cc:640 pushOp(&function_call,op)
+            //   cc:641 pushOp(&dereference,op)
+            //   cc:642-648 skip = getHiddenThisSlot(op,fc); count = numInput()-1
+            //     (minus one more when a C++ `this` is hidden)
+            //   cc:649-658 count>1: pushVn(in0); count-1 commas; args in
+            //     reverse (numInput-1 .. 1), skipping `skip`
+            //   cc:660-665 count==1: pushVn(arg); pushVn(in0)
+            //   cc:667-669 count==0: pushVn(in0); pushAtom(EMPTY_STRING)
+            // All through the RPN stack, so the pending assignment token
+            // pushed by emit_expression_rpn (cc:2474) completes exactly as
+            // in the oracle: rpn_push_op's emitOp(revpol.back()) fires the
+            // ` = ` separator before the call text and the postsurround
+            // token wraps the callable+args in `(...)` — matching
+            // printlanguage.cc:142-148/165-185. The previous direct-print
+            // arm bypassed the stack, leaking the assignment separator past
+            // the statement boundary (observed thunks:
+            // `uVar1(*(code *)PTR_00116e98)();` + `return = uVar1;` —
+            // PRINTC-CALLIND-RPN-ASSIGN-0001).
             // Ghidra: printc.cc:637 PrintC::opCallind
             // Indirect calls retain the target expression and dereference it;
             // they must not resolve the target offset as a named CALL.
+            // PRINTC-CALLIND-RPN-ASSIGN-0001 (registered, blocked on
+            // PRINTC-CALLIND-P6-NULLIFY-0001): the faithful token-protocol
+            // form (pushOp(function_call)+pushOp(dereference)+pushVn arms,
+            // cc:640-670) renders the assignment LHS correctly
+            // (`uVar1 = (*(code *)PTR_xxx)(); return uVar1;` — proven
+            // end-to-end down to the low-level byte dump), but
+            // EmitNoMarkup::post_process's P6 single-use
+            // inliner (prettyprint.rs, a Rugra-only compensation layer)
+            // then eliminates the now-valid `uVarN = <callind>();` line
+            // and its declaration, emptying the thunk body — a net
+            // regression until P6 is gated. Keep the legacy direct-print
+            // transport until that lands.
             OpCode::CPUI_CALLIND => {
                 self.emit.print("(*(code *)");
                 if let Some(in0) = op.get_in(0) {
@@ -1999,7 +2025,12 @@ impl PrintC {
                 }
                 self.emit.print(")");
             }
-            // Ghidra: printc.cc:596 PrintC::opCall
+            // printc.cc:596 opCall: pushOp(&function_call) then the name
+            // atom and the implied parameters; the postsurround token's
+            // rpn_emit_op (printlanguage.cc:343-353) renders
+            // spaces(0,bump) openParen spaces(0,bump) ... closeParen, which
+            // is what arms the pretty printer's wrap indent around the
+            // argument group.
             OpCode::CPUI_CALL => {
                 let target_name = if let Some(in0) = op.get_in(0) {
                     let v0 = in0.read().unwrap();
@@ -4846,9 +4877,12 @@ impl PrintC {
             self.seen_return = saved;
             self.loop_depth -= 1;
             self.emit.end_block();
-            // cc:3112-3120: ` while ( true );`
-            self.emit.print(" while (");
-            self.emit.print(" true");
+            // cc:3112-3120: spaces(1) + KEYWORD_WHILE + openParen +
+            // spaces(1) + KEYWORD_TRUE + spaces(1) + closeParen + SEMICOLON
+            // -> ` while( true );` (no space between while and the paren,
+            // one space inside the parens on both sides of `true`).
+            self.emit.print(" while(");
+            self.emit.print(" true ");
             self.emit.print(");");
             // cc:3121: popMod()
             self.pop_mod();
