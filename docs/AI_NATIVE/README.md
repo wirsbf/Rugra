@@ -5,6 +5,17 @@
 > 地位: 与 AGENTS.md 对齐纪律的关系——优化只走 additive flag,正典 sequential perform
 > 路径在 parity 被证明前不动。
 
+## 逐项文档索引
+
+| 文档 | 内容 | 依赖 |
+|---|---|---|
+| [L1_EVENT_SOURCING.md](L1_EVENT_SOURCING.md) | 事件溯源: mutation 事件流,归因/解释查询原生化 | 无 |
+| [L2_DETERMINISM.md](L2_DETERMINISM.md) | 确定性构造化: 容器策略进类型系统 | 无 |
+| [L3_STAGE_SPLIT.md](L3_STAGE_SPLIT.md) | 显式阶段拆分 + 声明式依赖 + per-stage 缓存 | L1 |
+| [L4_PERSISTENT_IR.md](L4_PERSISTENT_IR.md) | 持久化 IR + fork_at 分叉,O(diff) 试错 | L1,L2 |
+| [L5_DUAL_MODE.md](L5_DUAL_MODE.md) | fidelity/fast 双模并行 | L2,L3,L4 |
+| [L6_IR_QUERY.md](L6_IR_QUERY.md) | 结构化 IR 查询 API,读侧门面 | L1,L4 |
+
 ## 0. 一句话
 
 把 wave 里 AI 编排层手工做的"bisect→归因→分叉试探→择优"变成**反编译器内核的原生能力**:
