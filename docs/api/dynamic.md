@@ -59,6 +59,11 @@ opcode 索引到哈希翻译值的映射表，将变体合并到同一哈希值�
 - `move_off_skip(op, slot)` — 穿越 CAST 等跳过 op (dynamic.cc:389-407)
 - `dedup_varnodes(varlist)` — 去重保序 (dynamic.cc:619-634)
 - `gather_first_level_vars(varlist, fd, addr, h)` — 收集 addr 处直接挂接的 Varnode (dynamic.cc:645-685)
+- `gather_first_level_vars` 锁卫生注记（2026-09-23，LOCKHYGIENE-SCRUTINEE-FAMILY-0001）：
+  slot<0 臂 `vn.read().unwrap().lone_descend()` 与 slot>=0 臂
+  `vn.read().unwrap().get_def()` 两处 if-let scrutinee 读守卫提升为语句级 let
+  绑定（同 ER/EW/EM3 家族形态；owned `Option<Arc<_>>` 提前 drop 不可观测，
+  读序不变=cc:663/cc:677 先取 lone/def 再查 opcode）。
 - `gather_ops_at_address(op_list, fd, addr)` — 按 `PcodeOpTree` 的
   `(Address, SeqNum.time)` 顺序遍历目标地址的闭合区间，跳过 dead op，并把活 op
   追加到调用方已有的 `op_list`；不清空输出容器 (dynamic.cc:692-702)。

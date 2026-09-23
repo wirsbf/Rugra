@@ -908,7 +908,18 @@ impl DynamicHash {
                     None => continue,
                 };
                 if isnotattached {
-                    if let Some(no) = vn.read().unwrap().lone_descend() {
+                    // RUGRA-GLUE: scrutinee read guard lifted to statement
+                    // scope (lock-hygiene family: ER ruleaction SubRight /
+                    // EW castInput / EM3 cover_dirty). An `if let Some(x) =
+                    // vn.read().unwrap().lone_descend()` scrutinee would hold
+                    // the read guard through the entire if-let body; any
+                    // future write lock on vn inside the body self-deadlocks
+                    // (std RwLock is non-reentrant). lone_descend returns an
+                    // owned Option<Arc<_>> so the guard dies at the end of
+                    // this let; read order is unchanged (dynamic.cc:663
+                    // loneDescend read, then cc:665/666 opcode + getOut).
+                    let lone_descend = vn.read().unwrap().lone_descend();
+                    if let Some(no) = lone_descend {
                         if translate_opcode(no.read().unwrap().opcode) == 0 {
                             if let Some(nv) = no.read().unwrap().output.clone() {
                                 varlist.push(nv);
@@ -921,8 +932,17 @@ impl DynamicHash {
             } else if (slot as usize) < op.read().unwrap().num_input() {
                 let vn = op.read().unwrap().get_in(slot as usize).cloned().unwrap();
                 if isnotattached {
-                    if let Some(d) = vn.read().unwrap().get_def() {
+                    // RUGRA-GLUE: same scrutinee-guard lift as the slot<0
+                    // arm above; read order unchanged (dynamic.cc:677 getDef
+                    // read, then cc:678/679 opcode + getIn(0)).
+                    let def = vn.read().unwrap().get_def();
+                    if let Some(d) = def {
                         if translate_opcode(d.read().unwrap().opcode) == 0 {
+                            // dynamic.cc:679 pushes getIn(0) unconditionally
+                            // (a live def always has slot 0); the Rust mirror
+                            // keeps a defensive fallback to the original vn
+                            // for a degenerate empty-slot def instead of
+                            // crashing like Ghidra would.
                             if let Some(v0) = d.read().unwrap().get_in(0).cloned() {
                                 varlist.push(v0);
                                 continue;
@@ -1286,5 +1306,116 @@ mod tests {
             assert!(found.is_some(), "find_varnode must round-trip");
             assert!(Arc::ptr_eq(&found.unwrap(), &out));
         }
+    }
+
+    /// gatherFirstLevelVars slot<0 + isnotattached (dynamic.cc:659-672):
+    /// a skip-op (transtable==0, e.g. CAST) lone descendant redirects the
+    /// gather to its own output, while a non-skip lone descendant (INT_ZEXT)
+    /// keeps the original output varnode in the list.
+    #[test]
+    fn test_gather_first_level_vars_not_attached_skip_op() {
+        // (a) skip-op CAST lone descendant with output nv -> gather [nv].
+        let mut fd = Funcdata::new("t_gather1st", Address::new(0), 8);
+        let block = fd.create_new_block();
+        let pc = Address::new(0x1000);
+        let op = fd.new_op(2, pc);
+        fd.op_set_opcode(&op, OpCode::CPUI_INT_ADD);
+        let c_1_op = fd.new_constant(4, 1);
+        fd.op_set_input(&op, c_1_op, 0);
+        let c_2_op = fd.new_constant(4, 2);
+        fd.op_set_input(&op, c_2_op, 1);
+        let vn = fd.new_unique_out(4, &op);
+        fd.op_insert_end(&op, &block);
+        let cast = fd.new_op(1, pc);
+        fd.op_set_opcode(&cast, OpCode::CPUI_CAST);
+        fd.op_set_input(&cast, vn.clone(), 0);
+        let nv = fd.new_unique_out(4, &cast);
+        fd.op_insert_end(&cast, &block);
+        let h = ((translate_opcode(OpCode::CPUI_INT_ADD) as u64) << 37)
+            | (0x1fu64 << 32) // slot = -1 (output)
+            | (1u64 << 48); // isnotattached
+        let mut varlist: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        DynamicHash::gather_first_level_vars(&mut varlist, &fd, pc, h);
+        assert_eq!(varlist.len(), 1);
+        assert!(
+            Arc::ptr_eq(&varlist[0], &nv),
+            "skip-op lone descendant redirects the gather to its output"
+        );
+
+        // (b) non-skip lone descendant (INT_ZEXT, translate != 0) -> [vn].
+        let mut fd2 = Funcdata::new("t_gather1st_b", Address::new(0), 8);
+        let block2 = fd2.create_new_block();
+        let op2 = fd2.new_op(2, pc);
+        fd2.op_set_opcode(&op2, OpCode::CPUI_INT_ADD);
+        let c_1_op2 = fd2.new_constant(4, 1);
+        fd2.op_set_input(&op2, c_1_op2, 0);
+        let c_2_op2 = fd2.new_constant(4, 2);
+        fd2.op_set_input(&op2, c_2_op2, 1);
+        let vn2 = fd2.new_unique_out(4, &op2);
+        fd2.op_insert_end(&op2, &block2);
+        let zext = fd2.new_op(1, pc);
+        fd2.op_set_opcode(&zext, OpCode::CPUI_INT_ZEXT);
+        fd2.op_set_input(&zext, vn2.clone(), 0);
+        let _zext_out = fd2.new_unique_out(8, &zext);
+        fd2.op_insert_end(&zext, &block2);
+        let mut varlist2: Vec<Arc<RwLock<Varnode>>> = Vec::new();
+        DynamicHash::gather_first_level_vars(&mut varlist2, &fd2, pc, h);
+        assert_eq!(varlist2.len(), 1);
+        assert!(
+            Arc::ptr_eq(&varlist2[0], &vn2),
+            "non-skip lone descendant keeps the original output varnode"
+        );
+    }
+
+    /// Lock-hygiene pin for the lifted scrutinee in
+    /// gather_first_level_vars (family: ER ruleaction SubRight / EW
+    /// castInput / EM3 cover_dirty). The exact production call shape must
+    /// release the vn read guard at the `let` statement, so a write lock on
+    /// vn taken while inspecting the lone descendant (the body shape that
+    /// deadlocked ER/EW in production) completes instead of self-deadlocking.
+    /// Run in a worker thread with a hard timeout so a regression to the
+    /// scrutinee-guard shape fails fast instead of hanging the harness.
+    #[test]
+    fn test_gather_first_level_vars_scrutinee_guard_released_before_body() {
+        let mut fd = Funcdata::new("t_gather1st_pin", Address::new(0), 8);
+        let block = fd.create_new_block();
+        let pc = Address::new(0x1000);
+        let op = fd.new_op(2, pc);
+        fd.op_set_opcode(&op, OpCode::CPUI_INT_ADD);
+        let c_1_op = fd.new_constant(4, 1);
+        fd.op_set_input(&op, c_1_op, 0);
+        let c_2_op = fd.new_constant(4, 2);
+        fd.op_set_input(&op, c_2_op, 1);
+        let vn = fd.new_unique_out(4, &op);
+        fd.op_insert_end(&op, &block);
+        let cast = fd.new_op(1, pc);
+        fd.op_set_opcode(&cast, OpCode::CPUI_CAST);
+        fd.op_set_input(&cast, vn.clone(), 0);
+        let nv = fd.new_unique_out(4, &cast);
+        fd.op_insert_end(&cast, &block);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let vn_thread = vn.clone();
+        let handle = std::thread::spawn(move || {
+            // Exact production call shape of the lifted arm:
+            let lone_descend = vn_thread.read().unwrap().lone_descend();
+            if let Some(no) = lone_descend {
+                // Pre-lift `if let Some(x) = vn.read().unwrap()...` kept
+                // the read guard alive here, so this write self-deadlocks
+                // (std RwLock is non-reentrant) — the exact ER/EW failure.
+                let _guard = vn_thread.write().unwrap();
+                assert_eq!(translate_opcode(no.read().unwrap().opcode), 0);
+                assert!(no.read().unwrap().output.is_some());
+                tx.send(()).unwrap();
+            } else {
+                panic!("lone descendant must exist");
+            }
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(10)).is_ok(),
+            "scrutinee read guard must be released before the if-let body"
+        );
+        handle.join().unwrap();
+        drop(nv);
     }
 }

@@ -5631,7 +5631,17 @@ impl ActionSetCasts {
             if outvn.read().unwrap().is_explicit() {
                 return false;
             }
-            if let Some(lone) = outvn.read().unwrap().lone_descend() {
+            // RUGRA-GLUE: scrutinee read guard lifted to statement scope
+            // (lock-hygiene family: ER ruleaction SubRight / EW castInput /
+            // EM3 cover_dirty). An `if let Some(x) = outvn.read().unwrap()
+            // .lone_descend()` scrutinee would hold the read guard through
+            // the entire if-let body; any future write lock on outvn inside
+            // the body self-deadlocks (std RwLock is non-reentrant).
+            // lone_descend returns an owned Option<Arc<_>> so the guard dies
+            // at the end of this let; read order is unchanged (cast.cc:63
+            // loneDescend read, then cc:65 lone opcode check).
+            let lone_descend = outvn.read().unwrap().lone_descend();
+            if let Some(lone) = lone_descend {
                 if !Self::op_inherits_sign(lone.read().unwrap().opcode) {
                     return false;
                 }
@@ -17310,6 +17320,137 @@ mod tests {
         proto.add_parameter(p);
         let fc = FuncCallSpecs::new(Address::new(0x1000), proto);
         assert!(fc.is_input_locked());
+    }
+
+    /// Helper: INT_LESS(typed uint constant, constant) -> non-explicit outvn
+    /// with a lone descendant op of the given opcode, wired so that
+    /// ActionSetCasts::mark_explicit_unsigned reaches the lone-reader arm
+    /// (cast.cc:63-66).
+    fn build_mark_unsigned_scenario(
+        fd: &mut Funcdata,
+        lone_opcode: OpCode,
+    ) -> (
+        crate::op::PcodeOpRef,
+        std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+    ) {
+        let pc = crate::address::Address::new(0x1000);
+        let op = fd.new_op(2, pc);
+        fd.op_set_opcode(&op, OpCode::CPUI_INT_LESS);
+        let c0 = fd.new_constant(4, 5);
+        let c1 = fd.new_constant(4, 7);
+        fd.op_set_input(&op, c0.clone(), 0);
+        fd.op_set_input(&op, c1, 1);
+        let outvn = fd.new_unique_out(4, &op);
+        let lone = fd.new_op(2, crate::address::Address::new(0x1002));
+        fd.op_set_opcode(&lone, lone_opcode);
+        let _lone_out = fd.new_unique_out(4, &lone);
+        fd.op_set_input(&lone, outvn.clone(), 0);
+        let c = fd.new_constant(4, 0);
+        fd.op_set_input(&lone, c, 1);
+        fd.obank.alivelist.push(op.clone());
+        fd.obank.alivelist.push(lone);
+        // UINT read-facing type on the slot-0 constant and INT on the other
+        // side (cast.cc:47-50 / cc:53-58 gates). An untyped constant reports
+        // UNKNOWN — which is unsigned-family — so cc:56 would reject with
+        // "other side forces unsigned"; the INT makes the other side inert.
+        // Set AFTER wiring: op_set_input must keep the very Arc it was given
+        // (single descendant ⇒ no constant dedup copy).
+        let typed_in = op
+            .0
+            .read()
+            .unwrap()
+            .get_in(0)
+            .cloned()
+            .expect("slot 0 wired");
+        let other_in = op.0.read().unwrap().get_in(1).cloned().expect("slot 1 wired");
+        assert!(
+            std::sync::Arc::ptr_eq(&typed_in, &c0),
+            "no constant dedup may swap the typed input"
+        );
+        let tf = crate::type_system::typefactory::TypeFactory::new(8);
+        let uint_dt = tf
+            .get_base(4, crate::type_system::datatype::TypeMetatype::Uint)
+            .expect("uint base type");
+        typed_in.write().unwrap().v_type = Some(uint_dt);
+        let int_dt = tf
+            .get_base(4, crate::type_system::datatype::TypeMetatype::Int)
+            .expect("int base type");
+        other_in.write().unwrap().v_type = Some(int_dt);
+        (op, c0, outvn)
+    }
+
+    /// markExplicitUnsigned lone-reader arm (cast.cc:63-66): an output whose
+    /// lone descendant does not inherit sign blocks the mark (false, no
+    /// UNSIGNED_PRINT flag); a sign-inheriting lone descendant lets the mark
+    /// land (true + flag).
+    #[test]
+    fn test_mark_explicit_unsigned_lone_arm_semantics() {
+        let strategy = crate::type_system::cast::CastStrategyC::new(4);
+
+        let mut fd1 = Funcdata::new("t_markunsigned_neg", crate::address::Address::new(0), 8);
+        let (op1, c0_1, _out1) =
+            build_mark_unsigned_scenario(&mut fd1, OpCode::CPUI_SUBPIECE);
+        assert!(
+            !ActionSetCasts::mark_explicit_unsigned(&op1, 0, &strategy),
+            "SUBPIECE lone reader does not inherit sign => false (cast.cc:65)"
+        );
+        assert_eq!(
+            c0_1.read().unwrap().addlflags & crate::varnode::addl_flags::UNSIGNED_PRINT,
+            0,
+            "blocked arm must not set unsignedprint"
+        );
+
+        let mut fd2 = Funcdata::new("t_markunsigned_pos", crate::address::Address::new(0), 8);
+        let (op2, c0_2, _out2) = build_mark_unsigned_scenario(&mut fd2, OpCode::CPUI_INT_ADD);
+        assert!(
+            ActionSetCasts::mark_explicit_unsigned(&op2, 0, &strategy),
+            "INT_ADD lone reader inherits sign => true (cast.cc:69-70)"
+        );
+        assert_ne!(
+            c0_2.read().unwrap().addlflags & crate::varnode::addl_flags::UNSIGNED_PRINT,
+            0,
+            "vn->setUnsignedPrint() must have run"
+        );
+    }
+
+    /// Lock-hygiene pin for the lifted scrutinee in mark_explicit_unsigned
+    /// (family: ER ruleaction SubRight / EW castInput / EM3 cover_dirty).
+    /// The exact production call shape must release the outvn read guard at
+    /// the `let` statement, so a write lock on outvn taken while inspecting
+    /// the lone descendant (the body shape that deadlocked ER/EW in
+    /// production) completes instead of self-deadlocking. Run in a worker
+    /// thread with a hard timeout so a regression to the scrutinee-guard
+    /// shape fails fast instead of hanging the harness.
+    #[test]
+    fn test_mark_explicit_unsigned_lone_arm_guard_released_before_body() {
+        let mut fd = Funcdata::new("t_markunsigned_pin", crate::address::Address::new(0), 8);
+        let (_op, _c0, outvn) =
+            build_mark_unsigned_scenario(&mut fd, OpCode::CPUI_SUBPIECE);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let outvn_thread = outvn.clone();
+        let handle = std::thread::spawn(move || {
+            // Exact production call shape of the lifted arm:
+            let lone_descend = outvn_thread.read().unwrap().lone_descend();
+            if let Some(lone) = lone_descend {
+                // Pre-lift `if let Some(x) = outvn.read().unwrap()...` kept
+                // the read guard alive here, so this write self-deadlocks
+                // (std RwLock is non-reentrant) — the exact ER/EW failure.
+                let _guard = outvn_thread.write().unwrap();
+                assert!(!ActionSetCasts::op_inherits_sign(
+                    lone.read().unwrap().opcode
+                ));
+                tx.send(()).unwrap();
+            } else {
+                panic!("lone descendant must exist");
+            }
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(10)).is_ok(),
+            "scrutinee read guard must be released before the if-let body"
+        );
+        handle.join().unwrap();
     }
 }
 
