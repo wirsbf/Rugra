@@ -2465,3 +2465,47 @@ verify_pcode_generation 计数 13（旧 11）。生产代码零改动。
 另：`test_seq_mov_and_shl_ret_alignment` 在 master 94f3bf58 即稳定失败
 （父基线亲测 2/2；其期望仍为 FLAG-PCODE 之前的 6-op COPY 链形态），
 非本条目引起，属 funcdata 测试债（待该域 writer 更新）。
+
+## 2026-09-23：set_varnode_properties 补 ScopeLocal 腿（FUNCDATA-SETVARNODE-SCOPELOCAL-0001）
+
+oracle `Funcdata::setVarnodeProperties`（funcdata_varnode.cc:25-42）的单一
+`localmap->queryProperties(vn->getAddr(), vn->getSize(),
+vn->getUsePoint(*this), vflags)` 调用中，`Scope::queryProperties`
+（database.cc:1263-1281）的 `stackContainer`（database.cc:943-962）从查询
+scope 本身——即函数的 ScopeLocal——起步：先 `findContainer`（符号命中 →
+`res->getAllFlags()`，database.cc:1270），再 `inScope` "discovery of new
+variable" 停走（database.cc:957-958 → 1271-1277 的
+`mapped|addrtied(|persist)+property` 折叠），仅当本函数 scope 不终结遍历时
+才上溯父/全局 scope。Rust `set_varnode_properties` 此前只实现了
+RAM/全局父通道（`query_properties_parent_scope`）+ 旧名代理，栈 varnode
+永不获 `addrtied`。
+
+修复 = 在父通道之前插入 ScopeLocal 腿：`self.scope` 上的
+`ScopeLocal::query_properties_ex(space, offset, size, usepoint, None,
+&property)`（varmap 域既有接口，本改动零 varmap 改动），usepoint 取
+`get_use_point` 的**有效**地址（funcdata_varnode.cc:31，区别于
+newVarnode 尾的 INVALID `Address()` 形态——`new_varnode_symbol_tail`）。
+本腿命中即做 flags 折叠（Rugra ScopeLocal 无活 SymbolEntry，
+DB-LOCALSCOPE-MAP-0001 分裂下 entry 命中降级为同一可观测折叠，与
+new_varnode_symbol_tail 本腿同款处理）并跳过父通道与名代理；未命中则
+走既有 RAM/父通道 + 名代理路径（字节不变）。受益调用方：
+condexe/coreaction/heritage/funcdata 内部（`new_indirect_op` 的
+create_with_space+set_varnode_properties 组合此前正是符号尾 ScopeLocal 腿
+的缺口暴露面）。
+
+**A/B 验证**（同机，base=f8525d21 亲测）：next_url/match_url/
+parseconfig.constprop.0 三投影 vs oracle pin **MATCH 保持**；curl E2E
+**2595/0/0**（基线 2563/0/0，skeleton +32）、httpd E2E **2337/0/0**（基线
+2333/0/0，+4），defects/numbering 双侧全 0——"master 无栈 addrtied 消费面
+=恒等"的前置假设被实测证伪：heritage/new_indirect_op 等调用路径的栈
+varnode 现取本地腿 mapped|addrtied，下游变量命名/物化面（varmap/printc
+域）暴露缺口（差分明细见 commit `## Differential` 块；逐函数：
+glob_word +6 / glob_set +8 / glob_range +5 / main +7 / myprogress +1 /
+getparameter.constprop.0 +8 / file2string.part.0 **−3 改善**；httpd main
++3 / ap_fini_vhost_config +1），按铁律 3 以 TODO
+`SETVARNODE-SCOPELOCAL-CONSUMER-0001` 登记绑定；`cargo test --lib
+funcdata` 批（单线程）17 failed==master 逐字（branch 40 passed 含新增
+单测）；新增单测 `test_set_varnode_properties_scope_local_leg` 钉三分支
+（in-scope 折叠 / 符号 entry 命中 / 窗外无本地应答——ADDRTIED 断言取裸位，
+因 `is_addr_tied()`（varnode.hh:250）另需 INSERT 位，op 挂接才授予，与本
+属性遍正交）。
