@@ -507,6 +507,13 @@ impl CastStrategyC {
     /// `care_ptr_uint` — if true, casting a pointer to an integer DOES need a
     ///   cast (e.g. STORE value slot); if false, it's implied.
     ///
+    /// Partial types (TYPE_PARTIALSTRUCT/TYPE_PARTIALUNION) never take a
+    /// cast: as the cast-request they return no-cast unconditionally
+    /// (cast.cc:341-343, "As they are ultimately stripped, treat partials as
+    /// undefined"), and as the current type they ride every curmeta
+    /// whitelist that admits TYPE_UNKNOWN (cast.cc:348-349/356 uint arms,
+    /// cast.cc:366-367/374 int arms).
+    ///
     /// Rugra's Datatype lacks typedef chains, variable-length arrays, and
     /// per-pointer AddrSpace; those branches are faithfully no-ops (a cast
     /// decision is never wrong in their absence — at worst slightly more
@@ -586,17 +593,23 @@ impl CastStrategyC {
             return Some(req_arc);
         }
         // Same size: metatype-specific rules (cast.cc:339-389).
+        // cast.cc:340-343: a partial type as the cast request is never cast —
+        // "As they are ultimately stripped, treat partials as undefined".
         match reqmeta {
-            TypeMetatype::Unknown => return None,
+            TypeMetatype::Unknown
+            | TypeMetatype::PartialStruct
+            | TypeMetatype::PartialUnion => return None,
             _ => {}
         }
         match reqmeta {
             TypeMetatype::Uint => {
                 if !care_uint_int {
+                    // cast.cc:348-349: partial cur-types ride the unknown list.
                     if matches!(
                         curmeta,
                         TypeMetatype::Unknown | TypeMetatype::Int | TypeMetatype::Uint
-                        | TypeMetatype::Bool
+                        | TypeMetatype::Bool | TypeMetatype::PartialStruct
+                        | TypeMetatype::PartialUnion
                     ) {
                         return None;
                     }
@@ -604,7 +617,14 @@ impl CastStrategyC {
                     if matches!(curmeta, TypeMetatype::Uint | TypeMetatype::Bool) {
                         return None;
                     }
-                    if isptr && curmeta == TypeMetatype::Unknown {
+                    // cast.cc:356-357: don't cast pointers to unknown/partials.
+                    if isptr
+                        && matches!(
+                            curmeta,
+                            TypeMetatype::Unknown | TypeMetatype::PartialStruct
+                            | TypeMetatype::PartialUnion
+                        )
+                    {
                         return None; // Don't cast pointers to unknown
                     }
                 }
@@ -614,10 +634,12 @@ impl CastStrategyC {
             }
             TypeMetatype::Int => {
                 if !care_uint_int {
+                    // cast.cc:366-367: partial cur-types ride the unknown list.
                     if matches!(
                         curmeta,
                         TypeMetatype::Unknown | TypeMetatype::Int | TypeMetatype::Uint
-                        | TypeMetatype::Bool
+                        | TypeMetatype::Bool | TypeMetatype::PartialStruct
+                        | TypeMetatype::PartialUnion
                     ) {
                         return None;
                     }
@@ -625,7 +647,14 @@ impl CastStrategyC {
                     if matches!(curmeta, TypeMetatype::Int | TypeMetatype::Bool) {
                         return None;
                     }
-                    if isptr && curmeta == TypeMetatype::Unknown {
+                    // cast.cc:374-375: don't cast pointers to unknown/partials.
+                    if isptr
+                        && matches!(
+                            curmeta,
+                            TypeMetatype::Unknown | TypeMetatype::PartialStruct
+                            | TypeMetatype::PartialUnion
+                        )
+                    {
                         return None;
                     }
                 }
@@ -767,5 +796,97 @@ mod tests {
         assert_eq!(CastStrategyC::new(4).get_promote_size(), 4);
         assert_eq!(CastStrategyC::new(8).get_promote_size(), 8);
         assert_eq!(CastStrategyC::new(2).get_promote_size(), 2);
+    }
+
+    // Ghidra: cast.cc:340-343 — partial cast-requests are never cast
+    // ("As they are ultimately stripped, treat partials as undefined"), and
+    // cast.cc:348-349/356 (uint) + 366-367/374 (int) — partial current types
+    // ride every curmeta whitelist that admits TYPE_UNKNOWN.
+    // CAST-PARTIAL-REQ-NOCAST-0001: this is the STORE value-slot rule that
+    // keeps `glob._296_8_ = uVar29;` free of a spurious `(undefined8)`.
+    #[test]
+    fn test_cast_standard_full_partial_no_cast() {
+        use crate::type_system::datatype::{
+            TypeBase, TypeMetatype, TypePartialStruct, TypePartialUnion, TypePointer, TypeStruct,
+            TypeUnion,
+        };
+        let s = CastStrategyC::new(4);
+
+        let uint4 = Arc::new(Datatype::Base(TypeBase::new(
+            "undefined4".into(),
+            4,
+            TypeMetatype::Uint,
+        )));
+        let int4 = Arc::new(Datatype::Base(TypeBase::new("int".into(), 4, TypeMetatype::Int)));
+        let struct8 = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("pair".into(), 8, TypeMetatype::Struct),
+            fields: vec![],
+        }));
+        let union8 = Arc::new(Datatype::Union(TypeUnion {
+            base: TypeBase::new("alt".into(), 8, TypeMetatype::Union),
+            fields: vec![],
+        }));
+        // 4-byte partials of 8-byte containers (same size as uint4/int4).
+        let ps4 = Arc::new(Datatype::PartialStruct(TypePartialStruct::new(
+            struct8.clone(),
+            0,
+            4,
+            None,
+        )));
+        let pu4 = Arc::new(Datatype::PartialUnion(TypePartialUnion::new(
+            union8.clone(),
+            0,
+            4,
+            None,
+        )));
+
+        // cast.cc:341-342: partial as the REQUEST → no cast, regardless of
+        // the care flags (mirrors TypeOpStore slot-2 pointedToType when the
+        // store target is a partial piece).
+        assert!(
+            s.cast_standard_full(&ps4, &uint4, false, true).is_none(),
+            "req=PartialStruct must not cast (cc:341)"
+        );
+        assert!(
+            s.cast_standard_full(&pu4, &uint4, false, true).is_none(),
+            "req=PartialUnion must not cast (cc:342)"
+        );
+
+        // cast.cc:348-349: req=UINT !care_uint_int, cur=partial → no cast.
+        assert!(s.cast_standard_full(&uint4, &ps4, false, true).is_none());
+        assert!(s.cast_standard_full(&uint4, &pu4, false, true).is_none());
+        // cast.cc:366-367: req=INT !care_uint_int, cur=partial → no cast.
+        assert!(s.cast_standard_full(&int4, &ps4, false, true).is_none());
+        assert!(s.cast_standard_full(&int4, &pu4, false, true).is_none());
+
+        // Size gate still precedes the switch (cc:333-337): an 8-byte
+        // partial vs 4-byte uint keeps its cast.
+        let ps8 = Arc::new(Datatype::PartialStruct(TypePartialStruct::new(
+            struct8, 0, 8, None,
+        )));
+        assert!(s.cast_standard_full(&uint4, &ps8, false, true).is_some());
+
+        // cast.cc:356-357 / 374-375: under pointers (care_uint_int forced
+        // true by the peel), cur=partial → no cast ("don't cast pointers to
+        // unknown").
+        let ptr_to_uint4 = |p: Arc<Datatype>| {
+            Arc::new(Datatype::Pointer(TypePointer {
+                base: TypeBase::new("ptr".into(), 8, TypeMetatype::Pointer),
+                ptr_to: p,
+                wordsize: 1,
+            }))
+        };
+        let req_ptr = ptr_to_uint4(uint4.clone());
+        let cur_ptr = ptr_to_uint4(ps4.clone());
+        assert!(s.cast_standard_full(&req_ptr, &cur_ptr, false, true).is_none());
+        let cur_ptr_u = ptr_to_uint4(pu4.clone());
+        assert!(s
+            .cast_standard_full(&req_ptr, &cur_ptr_u, false, true)
+            .is_none());
+
+        // Control: care_uint_int=true WITHOUT pointer peel keeps the partial
+        // cast (partials only ride the isptr sub-arm of the care branch).
+        assert!(s.cast_standard_full(&uint4, &ps4, true, true).is_some());
+        assert!(s.cast_standard_full(&int4, &pu4, true, true).is_some());
     }
 }
