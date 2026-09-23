@@ -3246,10 +3246,10 @@ impl Funcdata {
         self.bblocks.remove_block_arc(bb);
     }
 
-    // Ghidra: funcdata_block.cc:790 Funcdata::nodeJoinCreateBlock
+    // Ghidra: funcdata_block.cc:779 Funcdata::nodeJoinCreateBlock
     /// Create a joined block from two blocks that share exit targets.
     /// Faithful to `Funcdata::nodeJoinCreateBlock`
-    /// (funcdata_block.cc:790-826).
+    /// (funcdata_block.cc:779-815).
     pub fn node_join_create_block(
         &mut self,
         block1: &Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
@@ -3265,10 +3265,22 @@ impl Funcdata {
             .write()
             .unwrap()
             .set_flags(crate::block::block_flags::JOINED_BLOCK);
-        // setInitialRange(addr, addr) — Rugra's create_new_block uses Address(0);
-        // the range is informational only (used for cover/debug), so we skip it.
+        // cc:786: newblock->setInitialRange(addr, addr). The join block's
+        // cover anchors its address range and is NOT informational:
+        // BlockBasic::getStop reads only the cover (block.hh:476), and
+        // Merge::buildDominantCopy places the dominant copy at
+        // domBl->getStop() (merge.cc:1168); leaving stop=Address(0) built
+        // it at 0:903 instead of 3e84:903.
 
-        // Delete 2 of the original edges into exita and exitb (merge.cc:807-818).
+        newblock
+            .write()
+            .unwrap()
+            .as_any_mut()
+            .downcast_mut::<crate::block::BlockBasic>()
+            .expect("nodeJoinCreateBlock: newblock must be a BlockBasic")
+            .set_initial_range(addr, addr);
+
+        // Delete 2 of the original edges into exita and exitb (funcdata_block.cc:789-805).
         let swapa = if fora_block1ishigh {
             self.bblocks.remove_edge_blocks(block1, exita);
             block2.clone()
