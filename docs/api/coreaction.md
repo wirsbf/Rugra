@@ -1,5 +1,42 @@
 # `coreaction.rs` API Reference
 
+## 2026-09-23：NodeJoin count 适配器 + ConditionalConst phi 路径忠实接通（PARSECONFIG-CONDCONST-PHI-0001）
+
+parseconfig.constprop.0 Phase 2 投影对拍（oracle e40ed130 pin sha256=b2ace56a…，335
+stages/130099 ops）逐层定位并修复三层缺口（首分歧 ordinal 81 → 320，配 funcdata 域一行
+登记项后 **MATCH**）：
+
+1. **ActionNodeJoin 补 `take_count_delta` 适配器**：`apply` 忠实递增结构体 `count`
+   （=Ghidra 继承 protected `Action::count`，blockaction.cc:2355），但未像其它 15 个
+   leaf Action 那样经 `std::mem::take` 收割进 `ActionState.count`，投影层
+   result/count/apply 恒报 0（ordinal 81 假分歧；双侧探针证明 join 本体已逐字节同执行，
+   cb1=3e84:237/cb2=3d20:9b，join 3e78+3ce0 与 3da8+3de1 完全一致）。
+2. **ActionConditionalConst 移除两道 Rugra 专有门**：`use_multiequal = false` 硬覆盖
+   与 `cond_const_done` 每函数一次门。二者共同压制了 oracle 的 MULTIEQUAL/phi 节点
+   路径（coreaction.cc:4401-4426 MULTIEQUAL 臂 + handlePhiNodes cc:4299-4337 →
+   placeCopy + opSetInput），即 ordinal 83 的 condconst firing
+   （`3ebd:8e9 COPY u:10000243=c:0` + BUILD 3ec0:46e slot 重写）。useMultiequal 门改为
+   忠实语义：`Heritage::num_heritage_passes(stack_space) > 0`（coreaction.cc:4522
+   per-space delay 语义，heritage.cc:2779-2788；原 `fd.num_heritage_passes()` 裸
+   pass 忽略 Stack delay）。历史收敛担忧（12/24 curl 超时）未复现：curl/httpd E2E
+   全函数完成、零超时零 panic。
+3. **`place_copy` 补 `opInsert` 挂块**：原实现只 `obank.alivelist.push`，新 COPY 无
+   parent（SNAP 恒 d=1）；忠实版按 cc:4204-4218 选位（空块→endOp+备选 op 地址；
+   尾 op 是分支→分支前；否则 endOp）+ `fd.op_insert` 挂块（cc:4223）。
+
+**验收**：curl E2E 2636/0/0（基线 2665/0/0，−29：parseconfig 126→99、my_get_token
+66→64，均向 golden 收敛——golden my_get_token 正含 `pcVar3=(char*)0x0` 零初始化、
+golden parseconfig 正含 `char *line; char *nextarg;` 声明；逐函数零回退）；httpd
+2333/0/0（基线 2331，+2=httpd main phi 路径 placeCopy 同族机制，缺陷/编号零）；
+next_url+match_url 投影双 MATCH 保持；gcc 审计 81OK/26FAIL==基线；funcdata:: 批测
+17 失败==master 逐字（单跑通过，全量批跑 18↔20 波动为既有跨模块共享态噪声，master
+侧同样存在）。**登记（funcdata 域占线，只登记未写）**：
+`PARSECONFIG-JOINBLOCK-STOPADDR-0001` — `node_join_create_block` 跳过
+`setInitialRange(addr,addr)`（funcdata_block.cc:786），join 块 stop=0，
+`buildDominantCopy`（merge.cc:1168 `domBl->getStop()`）把主拷贝建到地址 0 而非
+cbranch 地址（ordinal 320 `0:903` vs `3e84:903`）；临时诊断补丁实测投影 **MATCH**
+（parseconfig.rugra_diag.proj）。
+
 ## 2026-09-22：ActionInferTypes 补齐 propagateSpacebaseRef/propagateRef（VARGROUP-ABSORB-0001 / INFERTYPES-SPACEREF-0001）
 
 补上 `ActionInferTypes::apply` 缺失的收尾两步（coreaction.cc:5407-5410）：
