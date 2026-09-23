@@ -179,3 +179,75 @@ oracle 侧补充实证（decomp_opt console + gdb）：
 残余（下一环候选）：RHS finalcast（`(anon_union_...)auVarXX._8_16_` 的
 pushPartialSymbol allowCast 臂，printc.cc:2018-2029）；union resolution
 命名（content._8_8_ vs content.Set._8_8_）。
+
+## 7. 残余①"RHS finalcast"归因勘误与真根因（2026-09-23，finalcast lane，wt/sb-finalcast @8fd23706）
+
+> 本节证伪 §6 残余①的 pushPartialSymbol 归因，并把根因定位到 setcasts 的
+> COPY 输入 cast 臂（coreaction 域）+ DWARF 匿名 union 命名（debugproto 域）。
+> printc.rs 本身无缺口——`partial_symbol_walk`（printc.rs:15382-15401）已含
+> printc.cc:2018-2029 的 allowCast 臂全貌。
+
+### 7.1 上节归因的四处证伪（行级证据）
+
+1. **cast.cc:411-414**：`isSubpieceCast` 首行 `if (offset != 0) return false;`
+   ——golden 残差全部是 `._8_16_`（byteOff=8），该臂在 oracle 侧**必然不命中**。
+2. **cast.cc:419-422**：outtype 限 INT/UINT/UNKNOWN/PTR/FLOAT——
+   `(anon_union_16_3_...)` 是 TYPE_UNION，不在允许集，`._8_16_` 的 finalcast
+   臂即使 off=0 也无法产生 union cast。
+3. **结构互斥**：finalcast 臂命中时 `ct=null, succeeded=true`，**不推**人工
+   entry（printc.cc:2024-2027）→ 输出只能是 `(cast)sym`，绝不会是
+   `(cast)sym._off_sz_`。golden 两者共存 → cast 与 `._8_16_` 来自**两个不同
+   机制**（IR 的 CAST op + pushPartialSymbol 人工 entry）。
+4. **oracle 控制台直接证据**（§2 工件，/dev/shm/rugra-tests/sb-vargroup/work/
+   oracle_main.c:604）：`UVar3.pattern[0].content = (ContentUnion)SUB2416(
+   in_stack_...fc78._80_24_,8);` ——cast 包裹**函数式打印**的 SUB2416
+   （pushPartialSymbol 根本未参与，函数式 = opSubpiece 落到 opFunc），
+   证明 cast 是 IR 里的 CAST op（setcasts 插入，opTypeCast 打印）。
+
+### 7.2 真根因（双侧证据链）
+
+- **oracle 机制**：语句为 COPY(组符号字段件, SUBPIECE)。`TypeOpCopy::
+  getInputCast`（typeop.cc:397-403）`reqtype=out->getHighTypeDefFacing()`
+  （=URLPattern.content 的 16B 匿名 union 或 literal 的 char*）、
+  `curtype=in0->getHighTypeReadFacing()`（unknown），`castStandard(req,cur,
+  false,true)`（cast.cc:300-392）同尺寸非标量 reqbase → default → 返回
+  reqtype → `ActionSetCasts::castInput`（coreaction.cc:2655+）在 COPY 输入
+  与 SUBPIECE 之间插 CAST op。打印时 CAST(implied)→opTypeCast 出
+  `(anon_union_16_3_e2f18bb4_for_content)`，内层 SUBPIECE 特殊打印出
+  `auVar21._8_16_`——与 golden 完全一致。
+- **Rugra 缺口**：`cast_input`（coreaction.rs:4873+）的 dispatch 无
+  `CPUI_COPY` 臂——`input_metatype(CPUI_COPY)` 返回 None（coreaction.rs:
+  4693-4715，注释自认" COPY...op-specific overrides not captured"）→ ct=None
+  → 永不插 cast。最终 IR 实测（RUGRA_DUMP_FUNC=main）：content 的 COPY
+  `vn#56014(Union/union_5a7) ← vn#56011(Array)`，23 个既有 CAST 全在别处，
+  content/literal 链上零 CAST。
+- **影响面**：同一缺口同时吞掉 main 的 8 条 `glob.literal[i] = (char *)
+  in_stack_..._X_8_;` 与 8 条 `glob.pattern[i].content = (anon_union_...)...`
+  （16+ 条语句），语料级可能更广。
+- **printc/type_system 无需改**：`cast_standard_full`（type_system/cast.rs:514+）
+  default 臂忠实（Union/Pointer reqtype → Some(req)，对应 cast.cc:339-391）；
+  `op_type_cast`（printc.rs:12351）与 `emit_inline_expr` 的 CPUI_CAST
+  （printc.rs:7490）→ CPUI_SUBPIECE 特殊打印链完整——IR 有 CAST 即可正确
+  渲染 `(type)auVarXX._off_sz_`。
+- **二级缺口（命名）**：即使补 COPY 臂，Rugra 会打印 `(union_5a7)`——
+  `resolve_type` 对匿名 union 用 DIE offset 命名 `union_{:x}`（debugproto.rs:
+  1167，RUGRA-GLUE），而 oracle 名 `anon_union_16_3_e2f18bb4_for_content` 由
+  Ghidra **Java DWARF importer** 合成（binary DWARF 无此串，readelf/strings
+  双查 0 命中；sparse checkout 无 Java 源）。本机 Ghidra 11.4.2 发行版 stubs
+  显示旧方案 `anon_<tag>_for_<fields>`（getAnonNameForMeFromParentContext2），
+  12.0.4 在 tag 后插入了 `_<size>_<n>_<hash8>` 段——**精确算法本机无 oracle
+  可证（NO_ORACLE），按机制 D 禁猜**，需取 12.0.4 DWARFUtil/DIEAggregate 源
+  或以完整 distribution 实测后再实现。
+
+### 7.3 修复路由（移交）
+
+1. `SETCASTS-COPYINPUT-0001`（P1，coreaction 域）：cast_input dispatch 补
+   `OpCode::CPUI_COPY` 臂，逐字镜像 typeop.cc:397-403（reqtype=输出
+   highTypeDefFacing，curtype=in0 highTypeReadFacing(op,0)，castStandard(false,true)）。
+   验收=main 16+ 条 cast 前缀出现且 `(char *)` 名与 golden 逐字节一致、
+   curl/httpd defects=numbering=0、config 域零回退（见 TODO_BOARD 行）。
+2. `DWARF-ANON-TYPENAME-0001`（P2，debugproto/dwarf 域）：匿名 composite
+   命名 oracle 化；前置=取得 12.0.4 Java importer 命名算法的 oracle 证据。
+   未落地前 `(union_5a7)` 与 golden 名差异属已知登记残差。
+3. union resolution 命名（§6 残余②，content._8_8_ vs content.Set._8_8_）不在
+   本环，维持原登记。
