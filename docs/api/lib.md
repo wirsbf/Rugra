@@ -491,7 +491,7 @@ C++ decompiler; it does not move DWARF parsing into `ActionInputPrototype`.
 ## 2026-06-27（续 2）：CircleRange pullBack 全套 + jumptable 守卫扩展/backup2Switch/findUnnormalized
 
 - **`rangeutil.rs`**：CircleRange 新增 `complement`/`convert_to_boolean`/`set_nz_mask`/`pull_back_unary`/`pull_back_binary`（rangeutil.cc:38-1003）。自由函数 `bit_transitions`/`sign_extend_size`。
-- **`jumptable.rs`**：`pull_back_through_op` 自由函数（rangeutil.cc:1022）；JumpBasic 的 `analyze_guards` 现执行 pullBack 扩展循环；`backup2_switch` 反向模拟；`find_unnormalized` 完整链遍历；`flows_only_to_model`；`build_labels` 使用 backup2_switch。11 个新测试。
+- **`jumptable.rs`**：`pull_back_through_op` 自由函数（rangeutil.cc:1022；**2026-09-23 已删除**，jumptable 两调用点改走正典 `CircleRange::pull_back` + discard markup 槽，见 docs/api/jumptable.md 该日小节）；JumpBasic 的 `analyze_guards` 现执行 pullBack 扩展循环；`backup2_switch` 反向模拟；`find_unnormalized` 完整链遍历；`flows_only_to_model`；`build_labels` 使用 backup2_switch。11 个新测试。
 
 ## 2026-06-27（续 3）：新增 marshal 模块（XML 序列化基础设施）
 

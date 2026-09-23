@@ -221,7 +221,8 @@ TypeFactory/instruction registry/symbol scope 也不是同构对象。该输入�
   （cc:2761）。
 - `quasi_copy` / `pull_back_through_op`：改读原始 `nzm` 字段
   （`Varnode::get_nzm`，对应 varnode.hh:231 的 inline `getNZMask` 字段读），
-  不再用按 size 截断的近似。
+  不再用按 size 截断的近似。（`pull_back_through_op` 后已于 2026-09-23 删除，
+  jumptable 调用点改走正典 `CircleRange::pull_back`，见该日小节。）
 - 门禁：`tools/run_jt_guards_oracle.sh` + `tests/oracle/jt_guards_1204.*`
   （FX-GUARD，oracle 12.0.4 e40ed130 双侧）：sc2_unrolled/sc4_other_switch/
   sc5_pathout MATCH；sc1/sc3 MISMATCH = `JUMPTABLE-GUARDS-RESIDUAL-0001`
@@ -459,6 +460,12 @@ Light-weight emulator for switch targets (jumptable.hh:110).
 
 **新增自由函数**：
 - `pull_back_through_op(rng, op, usenzmask) -> Option<Varnode>`（rangeutil.cc:1022）：通过 PcodeOp 反向范围，返回未知输入 varnode。处理一元/二元操作 + NZ 掩码交集 + SUBPIECE usenzmask 特殊情况（2026-07-16 补齐 rangeutil.cc:1053-1064）。
+  **2026-09-23 更新**：该自由包装已删除；`analyze_guards`（cc:1106）与
+  `check_unrolled_guard`（cc:1366）两调用点改走 `rangeutil.rs` 正典
+  `CircleRange::pull_back(op, usenzmask, &mut None)`——discard 槽镜像
+  oracle 两处的 `Varnode *markup; // Throw away markup information`
+  （12.0.4 jumptable 路径从不读取 markup，唯一消费者是 RuleRangeMeld
+  cc:1416，EZ 车道已接）。
 
 **JumpBasic 新增/升级方法**：
 - `analyze_guards`：现执行完整 pullBack 扩展循环（jumptable.cc:1119），从布尔 varnode 反向最多 2 步，每步创建新 GuardRecord。
@@ -641,3 +648,28 @@ label 管道数据层落地（wt/sb-jtlabel）：
 `follow_flow_range` 在 `generate_blocks()` 后调用（funcdata_op.cc:777-778 同位），
 见 docs/api/funcdata.md 与 docs/api/flow.md。后续 finalizePrinting 消费链见
 docs/api/block.md / blockaction.md。
+
+## 2026-09-23：JUMPTABLE-MARKUP-CONSUMER 接线 — 正典 pullBack 调用形态（Lane FB）
+
+**oracle 事实核对（12.0.4 e40ed130，逐行读过 jumptable.cc:1046-1112/1338-1371）**：
+- cc:1103（analyzeGuards）与 cc:1362（checkUnrolledGuard）两处均为
+  `Varnode *markup; // Throw away markup information`，声明后传入
+  `rng.pullBack(readOp,&markup,usenzmask)`（cc:1106/cc:1366）但**从不读取**。
+- jumptable.cc 全文无 `copySymbolIfValid`/`copySymbol` 调用；12.0.4 中
+  pullBack markup 的唯一消费者是 RuleRangeMeld（ruleaction.cc:1416，
+  EZ 车道 0d4e1602 已接）。车道前提"jumptable.cc:1106/1366 消费 markup"
+  对本 oracle 不成立——不存在"恢复路径 EquateSymbol 标注"链路可接。
+
+**实际改动**（wt/jtmarkup）：
+- 删除 jumptable.rs 本地自由包装 `pull_back_through_op`（与 EZ 在 ruleaction
+  侧删除 `pull_back_op` 简化版同型：重复实现 + 非正典调用形态 + 行为微差
+  ——包装对 missing out 用 `unwrap_or(in_size)` 续算，正典按"Ghidra 必然
+  解引用 getOut()"语义返回 None）。
+- `analyze_guards`（cc:1106 镜像）与 `check_unrolled_guard`（cc:1366 镜像）
+  两调用点切正典 `rng.pull_back(&op, usenzmask, &mut None)`——discard 槽
+  逐字镜像 oracle 的 throw-away 局部；`usenzmask` 仍为
+  `!parent.partial_table`（cc:1052）/参数透传（cc:1337）。
+- 顺带修正两调用点周围 cc 行号注释漂移（1365→1366 等 8 处，CR14 注册的
+  annotation-drift 尾巴，限本 write-set 内）。
+- `nzm` 读取无行为差：`get_nzm()` 与 `get_nz_mask()` 均返回裸字段
+  （varnode.hh:231 inline），包装的"raw nzm"注释与正典实现等价。

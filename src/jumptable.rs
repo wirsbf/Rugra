@@ -1065,109 +1065,6 @@ fn matching_constants(
     a_rg.get_offset() == b_rg.get_offset()
 }
 
-// RUGRA-GLUE: Rust helper for CircleRange::pullBack (rangeutil.cc:1022); free wrapper used by JumpBasic
-/// Pull-back this range through a given PcodeOp, returning the unknown input
-/// varnode whose range we now know. Faithful to `CircleRange::pullBack`
-/// (rangeutil.cc:1022).
-///
-/// If there is a single unknown input, and the set of values for this input
-/// that cause the output of `op` to fall into `rng` form a range, then set
-/// `rng` to that range and return the unknown varnode. Return None otherwise.
-///
-/// `usenzmask`: if true, intersect the result with the input varnode's NZMASK
-/// range.
-pub fn pull_back_through_op(
-    rng: &mut CircleRange,
-    op: &Arc<RwLock<PcodeOp>>,
-    usenzmask: bool,
-) -> Option<Arc<RwLock<Varnode>>> {
-    let op_rg = op.read().unwrap();
-    let n_in = op_rg.num_input();
-    if n_in == 1 {
-        let res = op_rg.get_in(0)?;
-        let res_arc = res.clone();
-        let res_rg = res.read().unwrap();
-        if res_rg.is_constant() {
-            return None;
-        }
-        let in_size = res_rg.get_size();
-        let out_size = op_rg.get_out().map(|o| o.read().unwrap().get_size()).unwrap_or(in_size);
-        drop(res_rg);
-        if !rng.pull_back_unary(op_rg.opcode, in_size, out_size) {
-            return None;
-        }
-        if usenzmask {
-            // cc:1077: nzrange.setNZMask(res->getNZMask(),...) — raw nzm
-            // field, not the size-clamped approximation.
-            let nz = res_arc.read().unwrap().get_nzm();
-            if let Some(nzrange) = CircleRange::set_nz_mask(nz, in_size) {
-                rng.intersect(&nzrange);
-            }
-        }
-        return Some(res_arc);
-    }
-    if n_in == 2 {
-        // Find the non-constant input and the constant.
-        let in0 = op_rg.get_in(0);
-        let in1 = op_rg.get_in(1);
-        let (res, const_vn, slot) = match (in0, in1) {
-            (Some(a), Some(b)) => {
-                let a_const = a.read().unwrap().is_constant();
-                let b_const = b.read().unwrap().is_constant();
-                if a_const && !b_const {
-                    (b.clone(), a.clone(), 1)
-                } else if !a_const && b_const {
-                    (a.clone(), b.clone(), 0)
-                } else if a_const && b_const {
-                    return None;
-                } else {
-                    // Neither constant.
-                    return None;
-                }
-            }
-            _ => return None,
-        };
-        let res_arc = res.clone();
-        let val = const_vn.read().unwrap().get_offset();
-        let in_size = res.read().unwrap().get_size();
-        let out_size = op_rg
-            .get_out()
-            .map(|o| o.read().unwrap().get_size())
-            .unwrap_or(in_size);
-        let opc = op_rg.opcode;
-        drop(op_rg);
-        if !rng.pull_back_binary(opc, val, slot, in_size, out_size) {
-            // cc:1053-1064: SUBPIECE usenzmask special case. If truncating
-            // bytes that are known to be zero (via NZMask), keep the range
-            // with a bigger mask (the nzmask intersection will trim it).
-            if usenzmask && opc == OpCode::CPUI_SUBPIECE && val == 0 {
-                // cc:1057: mostsigbit_set(res->getNZMask()) — raw nzm field.
-                let nz = res_arc.read().unwrap().get_nzm();
-                let msbset = mostsigbit_set(nz);
-                let msbset_bytes = (msbset + 8) / 8;
-                if out_size < msbset_bytes as usize {
-                    return None; // Some bytes being chopped might not be zero
-                } else {
-                    // Keep range but make mask bigger (input size).
-                    rng.expand_mask(in_size);
-                }
-            } else {
-                return None;
-            }
-        }
-        if usenzmask {
-            // cc:1077: nzrange.setNZMask(res->getNZMask(),...) — raw nzm
-            // field, not the size-clamped approximation.
-            let nz = res_arc.read().unwrap().get_nzm();
-            if let Some(nzrange) = CircleRange::set_nz_mask(nz, in_size) {
-                rng.intersect(&nzrange);
-            }
-        }
-        return Some(res_arc);
-    }
-    None
-}
-
 /// An iterator over values a switch variable can take.
 ///
 /// This iterator provides the start value for emulation of a jump-table model
@@ -2304,13 +2201,17 @@ impl JumpBasic {
             let def_op = match vn.read().unwrap().def.as_ref().and_then(|w| w.upgrade()) {
                 Some(d) => d, None => break,
             };
-            // cc:1365: vn = rng.pullBack(readOp, &markup, usenzmask).
-            let new_vn = pull_back_through_op(&mut rng, &def_op, use_nzmask);
-            // cc:1366: if (vn == null) break;
+            // cc:1362/1366: Varnode *markup; // Throw away markup
+            // information; vn = rng.pullBack(readOp,&markup,usenzmask).
+            // Canonical pull_back with a discard slot: in 12.0.4 this path
+            // never reads markup (sole pullBack markup consumer is
+            // RuleRangeMeld cc:1416).
+            let new_vn = rng.pull_back(&def_op, use_nzmask, &mut None);
+            // cc:1367: if (vn == null) break;
             let Some(new_vn) = new_vn else { break };
-            // cc:1367: if (rng.isEmpty()) break.
+            // cc:1368: if (rng.isEmpty()) break.
             if rng.is_empty() { break; }
-            // cc:1368: liftVerifyUnroll(varArray, readOp->getSlot(vn)).
+            // cc:1369: liftVerifyUnroll(varArray, readOp->getSlot(vn)).
             let slot = def_op.read().unwrap().slot_of_input(&new_vn).unwrap_or(0);
             if !crate::block::BlockBasic::lift_verify_unroll(&mut var_array, slot as usize) { break; }
         }
@@ -3436,18 +3337,21 @@ impl JumpBasic {
                 if !cv.read().unwrap().is_written() {
                     break;
                 }
-                // cc:1106: readOp = vn->getDef()
+                // cc:1105: readOp = vn->getDef()
                 let read_op = cv.read().unwrap().get_def();
                 let Some(read_op) = read_op else { break };
-                // cc:1107: vn = rng.pullBack(readOp,&markup,usenzmask)
-                let next = pull_back_through_op(&mut rng, &read_op, usenzmask);
-                // cc:1108: if (vn == (Varnode *)0) break;
+                // cc:1103/1106: Varnode *markup; // Throw away markup
+                // information — vn = rng.pullBack(readOp,&markup,usenzmask).
+                // Canonical pull_back with a discard slot (markup is never
+                // read on this path in 12.0.4).
+                let next = rng.pull_back(&read_op, usenzmask, &mut None);
+                // cc:1107: if (vn == (Varnode *)0) break;
                 let Some(next_vn) = next else { break };
-                // cc:1109: if (rng.isEmpty()) break;
+                // cc:1108: if (rng.isEmpty()) break;
                 if rng.is_empty() {
                     break;
                 }
-                // cc:1110: push guard for the pulled-back varnode.
+                // cc:1109: push guard for the pulled-back varnode.
                 self.selectguards.push(GuardRecord::new(
                     cbranch.clone(),
                     read_op,
