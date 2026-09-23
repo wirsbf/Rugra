@@ -147,10 +147,12 @@ The current curl regression input has SHA-256
 `4ee4002baf3525d9fef062f9fcb9b7a9a890509b8bc5211740d0155d7c6b5d1a`.
 Rust-side import tests cover `GetStr` (2 fixed parameters), `myprogress` (5),
 `helpf` (1 plus varargs), the optimized `getparameter` definition (4 via
-`DW_AT_abstract_origin`), locked zero-input `hugehelp`, and the five DWARF
+`DW_AT_abstract_origin`), locked zero-input `hugehelp`, and the DWARF
 globals of the curl fixture (`config`, `save`, `beenhere`, `glob_buffer`,
-`glob_expand`) including the `URLGlob` 304-byte layout (literal char*[10] @0,
-pattern URLPattern[9] @80, size int @296) and the `&global` pointer map.
+`glob_expand`, plus the copy-relocation externals `stdout`/`stdin`/`stderr`
+with their FILE* declaration types) including the `URLGlob` 304-byte layout
+(literal char*[10] @0, pattern URLPattern[9] @80, size int @296) and the
+`&global` pointer map.
 This is useful regression evidence, but it is not a complete Ghidra
 DWARF-analyzer oracle fixture; the importer remains `NO_ORACLE` under mechanism
 B2. A fresh production GetStr differential does prove the resulting visible
@@ -271,6 +273,48 @@ structure/union/enumeration/typedef/base_type DIE 建立名字→类型索引，
 `LibcSignatureTable::locked_proto` 解析签名基础拼写（如 `FILE`）。Ghidra 侧
 由 DWARF analyzer 填充 program type manager；重复名首见优先（锁定 curl
 语料无冲突）。
+
+## 2026-09-23：DWARF-SYMFIELD-TYPESTATE-0001 — typedef 拼写与 copy-reloc 外部符号
+
+两处 DWARF 前端类型态修复（锁定输入 `examples/curl`，oracle
+`ghidra_curl_1204.c` main 行为证据）：
+
+1. **typedef 拼写保留**（`parse_type_names`）：`DW_TAG_typedef` 条目此前直接
+   解析 `DW_AT_type` 目标，索引里 `FILE` 落成底层 `struct _IO_FILE`
+   （216B）——所有 libc 签名与 cast 随之打印 `_IO_FILE *`。现在 typedef 条目
+   经 `resolve_type` 的 typedef 分支物化为**改名为 typedef 拼写**的底层类型
+   （Ghidra 侧 TypeTypedef type.hh:522 保名语义），`type_names["FILE"]` 为
+   名为 `FILE` 的 216B struct，`_IO_FILE` 仍以原名共存。golden 证据：
+   `FILE *__stream` 声明、`(FILE *)0x0` cast、`int fclose(FILE *__stream)`。
+2. **copy-reloc 外部符号导入**（`DebugGlobalDatabase::parse_elf`）：DWARF 中
+   `stdout/stdin/stderr` 只有 `DW_AT_declaration`（无 `DW_AT_location`），
+   此前被 located-global 循环跳过，驱动侧 ELF 回退把它们种成匿名
+   `undefined *`，符号名带 `@@GLIBC_2.2.5` 后缀。现在 walk 期间收集
+   external 声明（`DW_AT_declaration`+`DW_AT_external`+`DW_AT_type`，名字
+   首见优先），walk 后用 goblin 枚举 `R_X86_64_COPY` 重定位目标
+   （`copy_reloc_object_symbols`，STT_OBJECT、剥 `@@VERSION`），按地址种入
+   globals（located globals 仍优先）。curl 语料受影响集合恰为
+   {stdout@0x174e0, stdin@0x174f0, stderr@0x17500}，类型 = 指向统一 `FILE`
+   的指针（与 `type_names["FILE"]` 同一 Arc 身份）。httpd 无 DWARF FILE
+   typedef/声明，路径惰性（globals=0）。
+
+**可见效果**（curl E2E，main）：`__stream = stdin;`/`__stream_00 = stdout;`
+裸赋值（原 `(_IO_FILE *)stdout@@GLIBC_2.2.5` cast）、`stdout == (FILE *)0x0`、
+`heads.stream = (FILE *)stdout;` field-store cast 重现（golden 896）、全部
+`_IO_FILE` 拼写改 `FILE`。三门禁：curl skeleton 2665→**2614**（main
+605→583、libc FILE thunk 11→9、my_fwrite 12→4、getparameter 748→743、
+helpf 81→77，10 函数改善 0 回退），defects=0/numbering=0；httpd 2331==基线
+0/0；next_url/match_url 字节级不变（103/76）。lib 测试 18 失败==已知基线
+（预存 flaky 集合）。
+
+**残余**（登记 TODO DWARF-SYMFIELD-TYPESTATE-0001 ②③，不在 debugproto 域）：
+`glob.pattern[8].content.Set.elements = (undefined8)in_stack_...fd90` 的
+`(char **)` 缺失——Rugra 在该 STORE 插入的是 `union_a49` 8 字节 PartialUnion
+cast（`get_exact_piece` union 臂，dump op@0x30d6
+`CAST(PartialUnion)=in_stack_fd90`），oracle 经 ScoreUnionFields/
+derefPointer 钻取 Set→elements@0 尺寸匹配后 cast 到叶子类型 char**；
+`glob._296_8_ = (undefined8)uVar32` 同类（PartialStruct 剩余片）。修复域在
+coreaction/unionresolve 的 store-cast 目标选择。
 
 ## parse_c_type/split_pointer_depth：嵌套指针归一（2026-08-27）
 

@@ -91,6 +91,19 @@ impl DebugGlobalDatabase {
         let dwarf = load_dwarf(bytes).context("parsing object for DWARF globals")?;
         let mut globals = BTreeMap::new();
         let mut address_size = 8usize;
+        // DWARF-SYMFIELD-TYPESTATE-0001: external variable declarations
+        // (DW_AT_declaration + DW_AT_external, no DW_AT_location) carry the
+        // declared type for data-import symbols whose storage this ELF
+        // defines through an R_X86_64_COPY relocation. Ghidra's DWARF
+        // analyzer applies that declared type to the defined symbol — the
+        // locked-oracle witnesses are `stdout`/`stdin`/`stderr` printing
+        // with bare names (ElfSymbol carries the @@GLIBC version separately)
+        // and the FILE* type state behind golden main's bare
+        // `__stream = stdin;` / `__stream_00 = stdout;` assignments versus
+        // `(FILE *)0x0` casts (ghidra_curl_1204.c:609/894/895). First
+        // declaration per name wins, matching the located-global loop's
+        // first-DIE-wins insert.
+        let mut external_decls: HashMap<String, Arc<Datatype>> = HashMap::new();
         let mut headers = dwarf.units();
         while let Some(header) = headers.next().context("iterating DWARF units")? {
             let unit = dwarf.unit(header).context("loading DWARF unit")?;
@@ -116,6 +129,25 @@ impl DebugGlobalDatabase {
                     scope_stack.push((depth, entry_name, entry.tag() == gimli::DW_TAG_subprogram));
                     continue;
                 }
+                // DWARF-SYMFIELD-TYPESTATE-0001: capture the declaration's
+                // type by name before the storage-address gate below
+                // (declarations have no DW_AT_location and would otherwise
+                // be skipped without recording anything).
+                if attr_flag(entry, gimli::DW_AT_declaration)?
+                    && attr_flag(entry, gimli::DW_AT_external)?
+                {
+                    if let Some(name) = entry_name.as_deref() {
+                        if !external_decls.contains_key(name) {
+                            if let Some(offset) =
+                                entry_reference(&unit, entry, gimli::DW_AT_type)?
+                            {
+                                let data_type =
+                                    resolve_type(&dwarf, &unit, offset, 0, &mut Vec::new())?;
+                                external_decls.insert(name.to_string(), data_type);
+                            }
+                        }
+                    }
+                }
                 let Some(address) = static_location_address(&unit, entry)? else {
                     scope_stack.push((depth, entry_name, false));
                     continue;
@@ -138,6 +170,26 @@ impl DebugGlobalDatabase {
                     },
                 );
                 scope_stack.push((depth, entry_name, false));
+            }
+        }
+        // DWARF-SYMFIELD-TYPESTATE-0001: bind the captured declaration types
+        // to their copy-relocation addresses. Located globals (real
+        // DW_AT_location) stay authoritative; the copy-reloc pass only adds
+        // entries at addresses nothing else claimed.
+        for (address, name) in copy_reloc_object_symbols(bytes) {
+            if globals.contains_key(&address) {
+                continue;
+            }
+            if let Some(data_type) = external_decls.get(&name) {
+                globals.insert(
+                    address,
+                    DebugGlobalVariable {
+                        address,
+                        name,
+                        data_type: data_type.clone(),
+                        parent_function: None,
+                    },
+                );
             }
         }
         Ok(Self {
@@ -405,9 +457,24 @@ pub fn parse_type_names(bytes: &[u8]) -> Result<HashMap<String, Arc<Datatype>>> 
             if names.contains_key(&name) {
                 continue;
             }
-            let data_type = match entry_reference(&unit, entry, gimli::DW_AT_type)? {
-                Some(offset) => resolve_type(&dwarf, &unit, offset, 0, &mut Vec::new())?,
-                None => resolve_type(&dwarf, &unit, entry.offset(), 0, &mut Vec::new())?,
+            // DWARF-SYMFIELD-TYPESTATE-0001: a DW_TAG_typedef entry resolves
+            // through the typedef DIE ITSELF, not its DW_AT_type target, so
+            // the index keeps the typedef spelling the way Ghidra's DWARF
+            // front end keeps a TypeTypedef (type.hh:522) — resolve_type's
+            // typedef branch materializes the underlying composite renamed
+            // to the typedef name (the `FILE` over `struct _IO_FILE`, golden
+            // witnesses `FILE *__stream` decls / `(FILE *)0x0` casts in
+            // ghidra_curl_1204.c main; resolving the raw target printed the
+            // struct spelling `_IO_FILE *` in every libc signature and
+            // cast). Struct/union/enum/base entries have no DW_AT_type and
+            // keep resolving themselves directly.
+            let data_type = if entry.tag() == gimli::DW_TAG_typedef {
+                resolve_type(&dwarf, &unit, entry.offset(), 0, &mut Vec::new())?
+            } else {
+                match entry_reference(&unit, entry, gimli::DW_AT_type)? {
+                    Some(offset) => resolve_type(&dwarf, &unit, offset, 0, &mut Vec::new())?,
+                    None => resolve_type(&dwarf, &unit, entry.offset(), 0, &mut Vec::new())?,
+                }
             };
             names.insert(name, data_type);
         }
@@ -453,6 +520,56 @@ fn static_location_address(
         return Ok(None);
     }
     Ok(Some(address))
+}
+
+// RUGRA-GLUE: reads a DWARF boolean attribute accepting the flag and udata
+// forms producers emit for DW_AT_declaration/DW_AT_external; absent means
+// false, matching the Java analyzer's null-vs-present check
+fn attr_flag(
+    entry: &DebuggingInformationEntry<DwarfReader>,
+    attribute: gimli::DwAt,
+) -> Result<bool> {
+    Ok(match entry.attr_value(attribute)? {
+        Some(gimli::AttributeValue::Flag(value)) => value,
+        Some(gimli::AttributeValue::Udata(value)) => value != 0,
+        _ => false,
+    })
+}
+
+// RUGRA-GLUE: enumerates R_X86_64_COPY relocation targets with their
+// version-stripped object symbol names — the data imports (the
+// stdout/stdin/stderr-class .bss copies) whose declared DWARF type Ghidra's
+// analyzer applies to the locally-defined symbol. The symbol display name
+// carries no @@VERSION suffix (the oracle's ElfSymbol table keeps the
+// version in a separate field; golden prints bare `stdout`/`stdin`/
+// `stderr`), so the ELF strtab spelling is cut at the first '@'.
+fn copy_reloc_object_symbols(bytes: &[u8]) -> Vec<(u64, String)> {
+    let Ok(elf) = goblin::elf::Elf::parse(bytes) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for reloc in &elf.dynrelas {
+        if reloc.r_type != goblin::elf::reloc::R_X86_64_COPY {
+            continue;
+        }
+        let Some(sym) = elf.dynsyms.get(reloc.r_sym) else {
+            continue;
+        };
+        if goblin::elf::sym::st_type(sym.st_info) != goblin::elf::sym::STT_OBJECT {
+            continue;
+        }
+        let Some(full) = elf.dynstrtab.get_at(sym.st_name) else {
+            continue;
+        };
+        let Some(stripped) = full.split('@').next() else {
+            continue;
+        };
+        if stripped.is_empty() || sym.st_value == 0 {
+            continue;
+        }
+        out.push((sym.st_value, stripped.to_string()));
+    }
+    out
 }
 
 // RUGRA-GLUE: the type of an address constant that references a DWARF global; "&global" is a pointer to the variable's declared type, and arrays decay to element pointers per C address-of semantics on the IR
@@ -1898,7 +2015,26 @@ mod tests {
     fn curl_dwarf_globals_import_urlglob_pointer_chain() {
         let bytes = std::fs::read("examples/curl").expect("curl fixture");
         let db = DebugGlobalDatabase::parse_elf(&bytes).expect("DWARF globals");
-        assert_eq!(db.len(), 5);
+        // 5 located globals + the 3 copy-relocation externals
+        // (stdout/stdin/stderr, DWARF-SYMFIELD-TYPESTATE-0001).
+        assert_eq!(db.len(), 8);
+        {
+            let stdout = db.get(0x174e0).expect("stdout copy-reloc global");
+            assert_eq!(stdout.name, "stdout");
+            assert!(stdout.parent_function.is_none());
+            match stdout.data_type.as_ref() {
+                Datatype::Pointer(pointer) => {
+                    // Typedef spelling preserved: FILE over struct _IO_FILE.
+                    assert_eq!(pointer.ptr_to.get_name(), "FILE");
+                    assert_eq!(pointer.ptr_to.get_size(), 216);
+                }
+                other => panic!("stdout declaration is not a pointer: {other:?}"),
+            }
+            let stdin = db.get(0x174f0).expect("stdin copy-reloc global");
+            assert_eq!(stdin.name, "stdin");
+            let stderr = db.get(0x17500).expect("stderr copy-reloc global");
+            assert_eq!(stderr.name, "stderr");
+        }
 
         let glob_expand = db.get(0x17660).expect("glob_expand global");
         assert_eq!(glob_expand.name, "glob_expand");
@@ -1963,7 +2099,7 @@ mod tests {
         assert_eq!(glob_url.data_type.get_size(), 304);
 
         let map = db.address_pointer_map();
-        assert_eq!(map.len(), 5);
+        assert_eq!(map.len(), 8);
         // Address-pointer map types are anonymous pointers (see
         // pointer_type's Ghidra note); assert the pointee spelling through
         // the drill instead of the composed name.
