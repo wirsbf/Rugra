@@ -4666,8 +4666,61 @@ impl X86Lifter {
                     op.add_input(VarnodeRaw::new(AddressSpace::Ram, target_addr, 8));
                     ops.push(op);
                 } else if mnemonic == "ret" {
+                    // ia.sinc :RET constructor — locked x86-64.sla template
+                    // dump (RET-OP3-0001, lane DU probe over the locked
+                    // sleigh_specs, same oneInstruction method as lane DL's
+                    // CALL probe): the return address is popped into RIP,
+                    // the stack pointer is bumped past it, then control
+                    // returns:
+                    //   ret (C3):
+                    //     RIP = LOAD(ram[RSP]); RSP = INT_ADD(RSP, 8);
+                    //     RETURN [RIP]
+                    //   ret imm16 (C2 iw):
+                    //     RIP = LOAD(ram[RSP]); RSP = INT_ADD(RSP, 8);
+                    //     RSP = INT_ADD(RSP, zext(imm16)); RETURN [RIP]
+                    // (imm16 zero-extends: probe `ret 0x8000` dumps
+                    // const 0x8000:8, not a sign-extension; the pop-size
+                    // bump is its own INT_ADD *after* the 8-byte
+                    // return-address bump, probe @0x4.) The old bare
+                    // `RETURN const:0` emission was a simplification, not
+                    // the oracle template. RETURN input(0) is never
+                    // printed (printc.cc:754 opReturn only prints
+                    // numInput()>1 = the return value), and the SLEIGH
+                    // path already feeds this exact template through the
+                    // same pipeline (curl E2E decodes via SLEIGH), so the
+                    // RIP load and the trailing RSP bump die/hide the same
+                    // way they already do there.
+                    let Some(rsp) = Self::get_register("rsp", 8) else {
+                        return ops;
+                    };
+                    let Some(rip) = Self::get_register("rip", 8) else {
+                        return ops;
+                    };
+                    // RIP = *:8 RSP
+                    let mut op_load = PcodeOpRaw::new(OpCode::CPUI_LOAD as i32);
+                    op_load.add_input(Self::ram_space_const());
+                    op_load.add_input(rsp.clone());
+                    op_load.set_output(rip.clone());
+                    ops.push(op_load);
+                    // RSP = RSP + 8
+                    let mut op_add = PcodeOpRaw::new(OpCode::CPUI_INT_ADD as i32);
+                    op_add.add_input(rsp.clone());
+                    op_add.add_input(Self::const_vn(8, 8));
+                    op_add.set_output(rsp.clone());
+                    ops.push(op_add);
+                    // C2 iw: RSP = RSP + zext(imm16)
+                    if let Some(crate::disasm::Operand::Immediate { value, .. }) =
+                        inst.operands.first()
+                    {
+                        let mut op_add_imm = PcodeOpRaw::new(OpCode::CPUI_INT_ADD as i32);
+                        op_add_imm.add_input(rsp.clone());
+                        op_add_imm.add_input(Self::const_vn(*value as u64, 8));
+                        op_add_imm.set_output(rsp);
+                        ops.push(op_add_imm);
+                    }
+                    // return [RIP]
                     let mut op = PcodeOpRaw::new(OpCode::CPUI_RETURN as i32);
-                    op.add_input(VarnodeRaw::new(AddressSpace::Const, 0, 8));
+                    op.add_input(rip);
                     ops.push(op);
                 }
             }

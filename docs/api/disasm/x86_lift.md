@@ -346,3 +346,30 @@
 - E2E:httpd 2274/0/0 输出与 master 基线 a31db12c 字节级一致;curl
   sha256 ff6bef47 不变;cargo test --lib 基线 1644/17 失败 → 本分支
   1645/16(多过 1 个,零回归;16 个 funcdata 失败为既有 master 状态)。
+
+### 2026-09-23:RET-OP3-0001 — RET 模板三 op 化(wt/rettemplate)
+- `lift()` 的 `'ret'` 臂离开旧的裸 `RETURN <- const:0` 单 op 形态,按锁定
+  oracle `sleigh_specs/x86-64.sla` 模板 dump(lane DU 探针
+  `/dev/shm/rugra-tests/sb-rettemplate/sleigh_probe`,`SleighCtx` +
+  `oneInstruction`,同 lane DL CALL 探针方法)逐 op 提升:
+  - `ret`(C3)= 三 op:
+    `LOAD reg:0x288(RIP):8 <- const:0x3:8(ram spaceid), reg:0x20(RSP):8` →
+    `INT_ADD RSP:8 <- RSP:8, const 8:8` → `RETURN <- RIP:8`
+    (返回地址弹入 RIP,RSP 越过它,再 RETURN)。
+  - `ret imm16`(C2 iw)= 四 op:同 LOAD + `INT_ADD +8` + **独立的**
+    `INT_ADD +zext(imm16)`(探针 `ret 0x8000` dump `const 0x8000:8`
+    = 零扩展,非符号扩展)+ RETURN。
+- 旧裸 RETURN 的 inline 注释声称对齐 ia.sinc,与 DL 车道对 CALL 模板的
+  发现同族——.sla 实测推翻(HTTPD_MAIN_ATTRIBUTION_2026-09-23.md §2 RC1)。
+  SLEIGH 路径(curl 主解码)本就把该模板原样送进管线
+  (sleigh_lift.rs convert 直通),curl golden 一致性证明下游对三 op RET
+  的处理已在位。
+- RETURN input(0)(返回地址)永不进入文本输出:printc.cc:754
+  `PrintC::opReturn` 只在 `numInput()>1` 时打印 input(1)(返回值);
+  Rugra printc.rs CPUI_RETURN 臂(printc.cc:754 注释)同构。RIP LOAD 与
+  尾部 RSP bump 在管线内消亡/隐藏的路径与 SLEIGH 路径完全相同。
+- 逐 op 双侧证据(fixture=lift_fixture,oracle=sla_probe,同字节同上下文):
+  `ret`/`ret 0x8`/`ret 0x8000` 三形态 op 序列(opcode/输出 varnode/
+  输入 varnode/顺序)逐 op **MATCH**(/dev/shm/rugra-tests/sb-rettemplate/
+  {sla_probe_out.txt,lift_fixture_out.txt})。
+- `retf`(CB/CA 远返回)仍走 `_ => {}` 未实现臂(既有状态,非本项回归)。
