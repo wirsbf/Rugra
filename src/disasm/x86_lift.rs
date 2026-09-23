@@ -158,6 +158,16 @@ impl X86Lifter {
             // register space, 2-byte selector size).
             "fs" => 0x108,
             "gs" => 0x10a,
+            // FS/GS segment BASE registers (8-byte), distinct from the
+            // 2-byte selectors: register-catalog dump via
+            // examples/x86fs_probe.rs (x86-64.sla getAllRegisters:
+            // FS_OFFSET=register:0x110:8, GS_OFFSET=0x118:8). Oracle pcode
+            // for every segment-relative memory op wraps the effective
+            // address as `INT_ADD tmp = FS_OFFSET, EA` with the base
+            // register FIRST (`mov rax,[fs:0x28]` lifts INT_ADD(FS_OFFSET,
+            // 0x28) + LOAD + COPY — never a direct ram varnode).
+            "fs_offset" => 0x110,
+            "gs_offset" => 0x118,
             // XMM vector registers: 0x1200 + 0x40*N in the locked sla
             // register space (dump /tmp/w-ext-comis.out: comiss xmm0 reads
             // register:0x1200:4, xmm1 0x1240:4, xmm8 0x1400:4; the varnode
@@ -288,14 +298,52 @@ impl X86Lifter {
         })
     }
 
+    // RUGRA-GLUE: FS/GS segment-base resolution for the iced path
+    // (LIFT-FS-CANARY-FORM-0001). The locked oracle (x86-64.sla, dumped by
+    // examples/x86fs_probe.rs) models long-mode segment-relative addressing
+    // off the 8-byte FS_OFFSET/GS_OFFSET base registers (0x110/0x118), NOT
+    // the 2-byte selectors (0x108/0x10a).
+    /// The segment-base register varnode for an fs/gs override, if any.
+    fn segment_base(segment: &Option<String>) -> Option<VarnodeRaw> {
+        let name = segment.as_deref()?;
+        Self::get_register(&format!("{name}_offset"), 8)
+    }
+
+    // RUGRA-GLUE: segment wrap per the x86-64.sla segment-override
+    // constructors (examples/x86fs_probe.rs): `INT_ADD tmp = SEG_OFFSET, EA`
+    // — segment base FIRST input, EA second — applied outermost after the
+    // modrm/SIB EA arithmetic (`[fs:rbx+rcx*4+0x10]` lifts INT_ADD(d,base),
+    // INT_MULT(idx,s), INT_ADD(t,product), INT_ADD(FS_OFFSET, t), LOAD).
+    fn apply_segment(
+        &mut self,
+        segment: &Option<String>,
+        addr_vn: VarnodeRaw,
+        ops: &mut Vec<PcodeOpRaw>,
+    ) -> VarnodeRaw {
+        let Some(base) = Self::segment_base(segment) else {
+            return addr_vn;
+        };
+        let tmp = self.alloc_tmp(8);
+        let mut op = PcodeOpRaw::new(OpCode::CPUI_INT_ADD as i32);
+        op.add_input(base);
+        op.add_input(addr_vn);
+        op.set_output(tmp.clone());
+        ops.push(op);
+        tmp
+    }
+
     // RUGRA-GLUE: memory address computation shared by the flag-pcode ALU
     // paths (oracle emits ONE address varnode reused by the read LOAD, the
     // result STORE and every post-store flag re-LOAD — see `or qword
     // [rsp],0` in /tmp/w-iced-flagprobe.out). Mirrors parse_operand's
     // base + index*scale + displacement arithmetic.
     /// Compute a memory operand's address once, emitting address ops.
+    /// An fs/gs segment override wraps the result in
+    /// `INT_ADD(SEG_OFFSET, EA)`; with no EA components at all the address
+    /// is the bare segment base (d==0 folding, the SLEIGH table convention).
     fn compute_mem_addr(
         &mut self,
+        segment: &Option<String>,
         base: &Option<String>,
         index: &Option<String>,
         scale: &i32,
@@ -352,7 +400,12 @@ impl X86Lifter {
             }
         }
 
-        addr_vn
+        // Segment override (oracle: INT_ADD(SEG_OFFSET, EA), base first;
+        // bare segment base when no EA components remain — d==0 folding).
+        match addr_vn {
+            Some(a) if segment.is_some() => Some(self.apply_segment(segment, a, ops)),
+            other => other.or_else(|| Self::segment_base(segment)),
+        }
     }
 
     // RUGRA-GLUE: LOAD helper for the flag-pcode ALU paths (oracle LOAD
@@ -545,6 +598,7 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
                 // Address computation: base + index * scale + displacement
                 let mut addr_vn: Option<VarnodeRaw> = None;
@@ -599,7 +653,17 @@ impl X86Lifter {
                     }
                 }
 
-                if let Some(a) = addr_vn {
+                // Segment override: INT_ADD(SEG_OFFSET, EA) outermost, or the
+                // bare segment base when no EA components (oracle form).
+                let addr_final = match addr_vn {
+                    Some(a) if segment.is_some() => self.apply_segment(segment, a, ops),
+                    other => match other.or_else(|| Self::segment_base(segment)) {
+                        Some(a) => a,
+                        None => return None,
+                    },
+                };
+
+                {
                     let tmp = self.alloc_tmp(*size);
                     let mut op = PcodeOpRaw::new(OpCode::CPUI_LOAD as i32);
                     op.add_input(VarnodeRaw::new(
@@ -607,12 +671,10 @@ impl X86Lifter {
                         AddressSpace::Ram.space_id() as u64,
                         8,
                     )); // address space ID
-                    op.add_input(a);
+                    op.add_input(addr_final);
                     op.set_output(tmp.clone());
                     ops.push(op);
                     Some(tmp)
-                } else {
-                    None
                 }
             }
         }
@@ -635,6 +697,7 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
                 // Very similar to parse_operand but returns the address var
                 let mut addr_vn: Option<VarnodeRaw> = None;
@@ -688,11 +751,19 @@ impl X86Lifter {
                     }
                 }
 
-                if let Some(a) = addr_vn {
+                // Segment override: INT_ADD(SEG_OFFSET, EA) outermost, or the
+                // bare segment base when no EA components (oracle form).
+                let addr_final = match addr_vn {
+                    Some(a) if segment.is_some() => self.apply_segment(segment, a, ops),
+                    other => match other.or_else(|| Self::segment_base(segment)) {
+                        Some(a) => a,
+                        None => return None,
+                    },
+                };
+
+                {
                     let size_vn = VarnodeRaw::new(AddressSpace::Const, *size as u64, 4);
-                    Some((a, Some(size_vn))) // Address and size marker for memory store
-                } else {
-                    None
+                    Some((addr_final, Some(size_vn))) // Address and size marker for memory store
                 }
             }
             _ => None,
@@ -754,8 +825,9 @@ impl X86Lifter {
                     scale,
                     displacement,
                     size,
+                    segment,
                 } => {
-                    let addr = lifter.compute_mem_addr(base, index, scale, displacement, ops)?;
+                    let addr = lifter.compute_mem_addr(segment, base, index, scale, displacement, ops)?;
                     Some(Op1Ref::MemLoad {
                         addr,
                         size: *size,
@@ -789,9 +861,10 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
                 let addr =
-                    self.compute_mem_addr(base, index, scale, displacement, ops)?;
+                    self.compute_mem_addr(segment, base, index, scale, displacement, ops)?;
                 Some((
                     AluDst::Mem { addr },
                     Op1Ref::MemLoad {
@@ -937,9 +1010,10 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
                 let Some(addr) =
-                    self.compute_mem_addr(base, index, scale, displacement, ops)
+                    self.compute_mem_addr(segment, base, index, scale, displacement, ops)
                 else {
                     return;
                 };
@@ -994,9 +1068,10 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
                 let Some(addr) =
-                    self.compute_mem_addr(base, index, scale, displacement, ops)
+                    self.compute_mem_addr(segment, base, index, scale, displacement, ops)
                 else {
                     return;
                 };
@@ -1058,8 +1133,9 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
-                let addr = self.compute_mem_addr(base, index, scale, displacement, ops)?;
+                let addr = self.compute_mem_addr(segment, base, index, scale, displacement, ops)?;
                 Some(BoundOperand::MemAddr {
                     addr,
                     size: *size,
@@ -1491,12 +1567,17 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
                 // Constant address (rip-relative, or absolute disp-only):
                 // oracle folds to a direct ram-space varnode input of COPY —
-                // no LOAD, no address ops.
-                if base.as_deref() == Some("rip")
-                    || (base.is_none() && index.is_none() && *displacement != 0)
+                // no LOAD, no address ops. A segment override breaks the
+                // constant-address folding (oracle `push [fs:0x28]` lifts
+                // INT_ADD(FS_OFFSET,0x28) + LOAD + COPY), so the shortcut is
+                // segment-gated.
+                if segment.is_none()
+                    && (base.as_deref() == Some("rip")
+                        || (base.is_none() && index.is_none() && *displacement != 0))
                 {
                     // Rugra's X86_64Disassembler resolves a rip-relative
                     // operand's displacement to the ABSOLUTE target already
@@ -1514,8 +1595,17 @@ impl X86Lifter {
                     Some(tmp)
                 } else {
                     // Register-indirect: address ops per the oracle's
-                    // modrm/SIB table shapes, then LOAD + COPY.
-                    let addr = self.compute_push_src_addr(base, index, scale, displacement, ops)?;
+                    // modrm/SIB table shapes, then LOAD + COPY. A segment
+                    // override wraps the EA as INT_ADD(SEG_OFFSET, EA)
+                    // outermost (oracle `[fs:0x28]`: EA is the bare const
+                    // displacement when no base/index).
+                    let ea = self
+                        .compute_push_src_addr(base, index, scale, displacement, ops)
+                        .or_else(|| {
+                            (*displacement != 0)
+                                .then(|| Self::const_vn(*displacement as u64, 8))
+                        })?;
+                    let addr = self.apply_segment(segment, ea, ops);
                     let tl = self.emit_load(*size, &addr, ops);
                     let tmp = self.alloc_tmp(*size);
                     let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
@@ -1843,9 +1933,10 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
                 let Some(addr) =
-                    self.compute_mem_addr(base, index, scale, displacement, ops)
+                    self.compute_mem_addr(segment, base, index, scale, displacement, ops)
                 else {
                     return;
                 };
@@ -1906,8 +1997,9 @@ impl X86Lifter {
                         scale,
                         displacement,
                         size,
+                        segment,
                     } => {
-                        let addr = lifter.compute_mem_addr(base, index, scale, displacement, ops)?;
+                        let addr = lifter.compute_mem_addr(segment, base, index, scale, displacement, ops)?;
                         let loaded = lifter.emit_load(*size, &addr, ops);
                         let temp = lifter.alloc_tmp(*size);
                         let mut op = PcodeOpRaw::new(OpCode::CPUI_COPY as i32);
@@ -2167,9 +2259,10 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
                 let Some(addr) =
-                    self.compute_mem_addr(base, index, scale, displacement, ops)
+                    self.compute_mem_addr(segment, base, index, scale, displacement, ops)
                 else {
                     return;
                 };
@@ -2672,9 +2765,10 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
                 let Some(addr) =
-                    self.compute_mem_addr(base, index, scale, displacement, ops)
+                    self.compute_mem_addr(segment, base, index, scale, displacement, ops)
                 else {
                     return;
                 };
@@ -3651,6 +3745,7 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size,
+                segment,
             } => {
                 let w = *size;
                 let mask: u64 = (w as u64 * 8) - 1;
@@ -3658,7 +3753,7 @@ impl X86Lifter {
                     crate::disasm::Operand::Immediate { value, .. } => {
                         // ---- mem dst, imm idx ----
                         let Some(addr) =
-                            self.compute_mem_addr(base, index, scale, displacement, ops)
+                            self.compute_mem_addr(segment, base, index, scale, displacement, ops)
                         else {
                             return;
                         };
@@ -3744,7 +3839,7 @@ impl X86Lifter {
                             return;
                         };
                         let Some(base_addr) =
-                            self.compute_mem_addr(base, index, scale, displacement, ops)
+                            self.compute_mem_addr(segment, base, index, scale, displacement, ops)
                         else {
                             return;
                         };
@@ -3888,18 +3983,21 @@ impl X86Lifter {
                 scale,
                 displacement,
                 size: msize,
+                segment,
             } => {
                 // rip-relative / absolute-displacement: constant address —
                 // the oracle folds it into a direct ram varnode (the Rugra
                 // disassembler resolves rip displacement to the absolute
-                // target already)
-                if base.as_deref() == Some("rip") && index.is_none() {
+                // target already). Segment-relative addresses are never
+                // constant (FS_OFFSET/GS_OFFSET base), so the folding is
+                // segment-gated.
+                if segment.is_none() && base.as_deref() == Some("rip") && index.is_none() {
                     Rhs::ConstAddr(VarnodeRaw::new(
                         AddressSpace::Ram,
                         *displacement as u64,
                         *msize,
                     ))
-                } else if base.is_none() && index.is_none() {
+                } else if segment.is_none() && base.is_none() && index.is_none() {
                     Rhs::ConstAddr(VarnodeRaw::new(
                         AddressSpace::Ram,
                         *displacement as u64,
@@ -3907,7 +4005,7 @@ impl X86Lifter {
                     ))
                 } else {
                     let Some(addr) =
-                        self.compute_mem_addr(base, index, scale, displacement, ops)
+                        self.compute_mem_addr(segment, base, index, scale, displacement, ops)
                     else {
                         return;
                     };
@@ -4590,7 +4688,7 @@ impl X86Lifter {
                                     let offset = Self::reg_offset(name);
                                     VarnodeRaw::new(AddressSpace::Register, offset, *size)
                                 }
-                                crate::disasm::Operand::Memory { base, index, scale, displacement, size } => {
+                                crate::disasm::Operand::Memory { base, index, scale, displacement, size, .. } => {
                                     // For memory operands like jmp [rip+disp], emit a LOAD
                                     // from the computed address. Simplified: just use the
                                     // displacement as the address for now.
@@ -4736,3 +4834,182 @@ impl X86Lifter {
         ops
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! LIFT-FS-CANARY-FORM-0001 pins: the segment-relative memory forms as
+    //! dumped op-for-op from the locked oracle (sleigh_specs/x86-64.sla via
+    //! examples/x86fs_probe.rs; oracle commit e40ed130, x86-64 language).
+    //! FS_OFFSET=register:0x110:8, GS_OFFSET=register:0x118:8; the wrap is
+    //! `INT_ADD tmp = SEG_OFFSET, EA` with the segment base FIRST, even for
+    //! a pure absolute displacement. Unique-space tmp ids are order-mapped
+    //! (semantics-free), every other field is exact.
+    use super::*;
+    use crate::disasm::Disassembler as _;
+
+    /// (opcode, out sig, in sigs); sigs are (space_id, offset, size).
+    type OpSig = (i32, Option<(u8, u64, u64)>, Vec<(u8, u64, u64)>);
+
+    fn lift_sig(bytes: &[u8]) -> Vec<OpSig> {
+        let insts = crate::disasm::X86_64Disassembler::new()
+            .disassemble(bytes, crate::Address::new(0))
+            .expect("disassembly");
+        let mut lifter = X86Lifter::new();
+        let mut sigs = Vec::new();
+        for inst in &insts {
+            for op in lifter.lift(inst) {
+                let ins = op
+                    .inputs()
+                    .iter()
+                    .map(|v| (v.space.space_id(), v.offset, v.size as u64))
+                    .collect();
+                sigs.push((
+                    op.get_opcode(),
+                    op.output()
+                        .map(|v| (v.space.space_id(), v.offset, v.size as u64)),
+                    ins,
+                ));
+            }
+        }
+        sigs
+    }
+
+    fn normalize(sigs: Vec<OpSig>) -> Vec<OpSig> {
+        let mut uniq: std::collections::HashMap<(u64, u64), u64> = Default::default();
+        let mut next = 0x9000u64;
+        let mut sig = |space: u8, offset: u64, size: u64| -> (u8, u64, u64) {
+            if space == AddressSpace::Unique.space_id() {
+                let key = (offset, size);
+                let mapped = *uniq.entry(key).or_insert_with(|| {
+                    next += 0x100;
+                    next
+                });
+                (space, mapped, size)
+            } else {
+                (space, offset, size)
+            }
+        };
+        sigs.into_iter()
+            .map(|(opcode, out, ins)| {
+                (
+                    opcode,
+                    out.map(|(s, o, z)| sig(s, o, z)),
+                    ins.into_iter().map(|(s, o, z)| sig(s, o, z)).collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn op_id(name: &str) -> i32 {
+        match name {
+            "INT_ADD" => OpCode::CPUI_INT_ADD as i32,
+            "INT_MULT" => OpCode::CPUI_INT_MULT as i32,
+            "LOAD" => OpCode::CPUI_LOAD as i32,
+            "STORE" => OpCode::CPUI_STORE as i32,
+            "COPY" => OpCode::CPUI_COPY as i32,
+            "INT_SUB" => OpCode::CPUI_INT_SUB as i32,
+            _ => panic!("unknown op {name}"),
+        }
+    }
+
+    const REG: u8 = 4;
+    const CST: u8 = 0;
+
+    #[test]
+    fn test_fs_canary_load_mov_rax() {
+        // 64 48 8b 04 25 28 00 00 00: mov rax, [fs:0x28]
+        let got = normalize(lift_sig(&[0x64, 0x48, 0x8b, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00]));
+        assert_eq!(
+            got,
+            vec![
+                // INT_ADD tmp = FS_OFFSET, 0x28
+                (op_id("INT_ADD"), Some((2, 0x9100, 8)), vec![(REG, 0x110, 8), (CST, 0x28, 8)]),
+                // LOAD out = (ram-space-const 3, tmp)
+                (op_id("LOAD"), Some((2, 0x9200, 8)), vec![(CST, 0x3, 8), (2, 0x9100, 8)]),
+                // COPY rax = loaded
+                (op_id("COPY"), Some((REG, 0x0, 8)), vec![(2, 0x9200, 8)]),
+            ],
+            "oracle: INT_ADD(FS_OFFSET,0x28) + LOAD + COPY, FS base first"
+        );
+    }
+
+    #[test]
+    fn test_fs_canary_store_mov_fs_rax() {
+        // 64 48 89 04 25 28 00 00 00: mov [fs:0x28], rax
+        let got = normalize(lift_sig(&[0x64, 0x48, 0x89, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00]));
+        assert_eq!(
+            got,
+            vec![
+                (op_id("INT_ADD"), Some((2, 0x9100, 8)), vec![(REG, 0x110, 8), (CST, 0x28, 8)]),
+                (op_id("STORE"), None, vec![(CST, 0x3, 8), (2, 0x9100, 8), (REG, 0x0, 8)]),
+            ],
+            "oracle: INT_ADD(FS_OFFSET,0x28) then STORE(3, addr, rax)"
+        );
+    }
+
+    #[test]
+    fn test_fs_canary_push_mem() {
+        // 64 ff 34 25 28 00 00 00: push qword [fs:0x28]
+        let got = normalize(lift_sig(&[0x64, 0xff, 0x34, 0x25, 0x28, 0x00, 0x00, 0x00]));
+        assert_eq!(
+            got,
+            vec![
+                (op_id("INT_ADD"), Some((2, 0x9100, 8)), vec![(REG, 0x110, 8), (CST, 0x28, 8)]),
+                (op_id("LOAD"), Some((2, 0x9200, 8)), vec![(CST, 0x3, 8), (2, 0x9100, 8)]),
+                (op_id("COPY"), Some((2, 0x9300, 8)), vec![(2, 0x9200, 8)]),
+                (op_id("INT_SUB"), Some((REG, 0x20, 8)), vec![(REG, 0x20, 8), (CST, 0x8, 8)]),
+                (op_id("STORE"), None, vec![(CST, 0x3, 8), (REG, 0x20, 8), (2, 0x9300, 8)]),
+            ],
+            "oracle: INT_ADD + LOAD + COPY + RSP-=8 + STORE"
+        );
+    }
+
+    #[test]
+    fn test_gs_variant_and_seg_base_reg() {
+        // 65 48 8b 04 25 28 00 00 00: mov rax, [gs:0x28] — GS_OFFSET 0x118
+        let got = normalize(lift_sig(&[0x65, 0x48, 0x8b, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00]));
+        assert_eq!(
+            got[0],
+            (op_id("INT_ADD"), Some((2, 0x9100, 8)), vec![(REG, 0x118, 8), (CST, 0x28, 8)]),
+            "GS base register is 0x118 (not the 2-byte selector 0x10a)"
+        );
+    }
+
+    #[test]
+    fn test_no_segment_absolute_unchanged() {
+        // 48 8b 04 25 28 00 00 00: mov rax, [0x28] — no prefix: the iced path
+        // keeps its pre-FS-lane LOAD(3, const) form (segment-gated only).
+        let got = normalize(lift_sig(&[0x48, 0x8b, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00]));
+        assert_eq!(
+            got[0],
+            (op_id("LOAD"), Some((2, 0x9100, 8)), vec![(CST, 0x3, 8), (CST, 0x28, 8)]),
+            "unprefixed absolute-disp must not grow an INT_ADD"
+        );
+    }
+
+    #[test]
+    fn test_segment_field_extraction() {
+        // The disassembler surfaces the override; long mode ignores
+        // CS/DS/ES/SS prefixes.
+        let insts = crate::disasm::X86_64Disassembler::new()
+            .disassemble(&[0x64, 0x48, 0x8b, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00], crate::Address::new(0))
+            .unwrap();
+        match &insts[0].operands[1] {
+            crate::disasm::Operand::Memory { segment, .. } => {
+                assert_eq!(segment.as_deref(), Some("fs"));
+            }
+            other => panic!("expected memory operand, got {other:?}"),
+        }
+        // DS prefix (3e) is decoded but must not surface as a segment.
+        let insts = crate::disasm::X86_64Disassembler::new()
+            .disassemble(&[0x3e, 0x48, 0x8b, 0x04, 0x25, 0x28, 0x00, 0x00, 0x00], crate::Address::new(0))
+            .unwrap();
+        match &insts[0].operands[1] {
+            crate::disasm::Operand::Memory { segment, .. } => {
+                assert_eq!(segment.as_ref(), None, "DS override is inert in long mode");
+            }
+            other => panic!("expected memory operand, got {other:?}"),
+        }
+    }
+}
+

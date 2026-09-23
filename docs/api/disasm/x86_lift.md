@@ -373,3 +373,57 @@
   输入 varnode/顺序)逐 op **MATCH**(/dev/shm/rugra-tests/sb-rettemplate/
   {sla_probe_out.txt,lift_fixture_out.txt})。
 - `retf`(CB/CA 远返回)仍走 `_ => {}` 未实现臂(既有状态,非本项回归)。
+
+### 2026-09-23:LIFT-FS-CANARY-FORM-0001 — FS/GS 段相对寻址段基化(wt/fscanary)
+- 根因:`mov %fs:0x28,%rax`(stack-protector canary 装载)此前丢失段前缀
+  ——`Operand::Memory` 无 segment 字段,lift 为 `LOAD ram, const 0x28`,
+  下游 directify 成 `uRam0000000000000028` persist 全局输入;oracle
+  golden 同位为 `*(long *)(in_FS_OFFSET + 0x28)` 解引用形(golden 全语料
+  620 处 FS_OFFSET 引用,httpd E2E 侧 2 行,即 EK 后 httpd 残 +2)。
+- 修复面(逐 op 双侧证据,oracle=sleigh_specs/x86-64.sla 经
+  `examples/x86fs_probe.rs` dump,`SleighCtx::one_instruction`,与
+  X86LIFT-PUSH88-0001 探针同法):
+  - 寄存器目录:.sla `getAllRegisters` 给 **FS_OFFSET=register:0x110:8、
+    GS_OFFSET=register:0x118:8**(区别于 2 字节选择器 FS=0x108:2/GS=0x10a:2);
+    `get_register` 表新增 `"fs_offset"`/`"gs_offset"`。
+  - oracle 段寻址模板(逐 op dump,`mov rax,[fs:0x28]` 为
+    `INT_ADD tmp = FS_OFFSET, const 0x28` → `LOAD(3, tmp)` → `COPY rax`;
+    段基为**第一输入**,纯绝对位移也不折叠成直接 ram varnode;
+    `[fs:rbx+rcx*4+0x10]` 段基 INT_ADD 最外层):
+    - 新增 `segment_base`/`apply_segment` helper;
+    - `compute_mem_addr` 增加 `segment` 首参,尾部按
+      `Some(EA)+seg → INT_ADD(SEG_OFFSET, EA)`、`None+seg → 裸 SEG_OFFSET`
+      (d==0 折叠,同 compute_push_src_addr 约定)处理,12 处调用点随迁;
+    - `parse_operand`/`parse_dest_operand` Memory 臂同样段包装;
+    - `push_source_val` 的 rip/绝对位移直连 ram COPY 捷径加
+      `segment.is_none()` 门(oracle `push [fs:0x28]` = INT_ADD+LOAD+COPY+RSP-8+STORE);
+    - `lift_comis` 的常量地址直连 ram 折叠同样段门控。
+  - `src/disasm/mod.rs`:`Operand::Memory` 新增 `segment: Option<String>`;
+    `x86_64.rs` 从 iced `segment_prefix()` 提取(仅 fs/gs;CS/DS/ES/SS
+    长模式无效)。
+- 逐 op MATCH(唯一空间 tmp 序号归一):`mov rax,[fs:0x28]`、
+  `mov [fs:0x28],rax`(STORE 直接 src 形,非本项回归)、`mov rax,[fs:rbx]`、
+  gs 变体、`cmp rax,[fs:0x28]`、`push [fs:0x28]` 全部与 .sla dump 一致
+  (probe 输出 /dev/shm/rugra-tests/sb-fscanary/fs_probe{,_fixed}.out)。
+  已知非 FS 回归性形差(登记不修,FS 前非本项引入):32 位
+  `mov eax,[fs:0x28]` 缺 oracle 尾部 INT_ZEXT;无段前缀绝对位移
+  `mov rax,[0x28]` iced 路径为 LOAD(3,const) 而 oracle 直连 ram COPY
+  (downstream directify 收敛,pre-existing)。
+- E2E(wt/fscanary,fast-release):
+  - httpd **2335→2310/0/0**(超 ≤2333 目标 25;canary 行
+    `uStack_40 = uRam…28;` 消失,代之以 FS 解引用形);
+  - curl **2516/0/0 持平**(curl 主解码走 SleighLifter,本就有
+    `in_FS_OFFSET` 形;唯一字节差 2 处 `} while ( true)` → `} while( true)`
+    空白异形,normalize 骨架不可见,gcc 审计不可见);
+  - gcc 审计 A/B 逐函数恒等:curl 82OK/25FAIL,httpd 6OK/23FAIL;
+  - 三投影(RUGRA_MIRROR=1 全家)next_url/match_url/parseconfig
+    stage_bisect --v1 全 **MATCH**(335/96457、340/80385、335/130099);
+  - cargo test --lib 失败集与 EK 基线逐字相同(18 个既有),新增
+    `disasm::x86_lift::tests` 6 测试钉 oracle 形(load/store/push/gs/
+    无段不变式/segment 提取)。
+- 残余移交(域外,已登记):httpd 无 DWARF 原型锁的函数中,FS_OFFSET
+  输入寄存器被默认参数发现并入原型(`void main(long,long,long,long)`),
+  解引用打印成 `*(param_2 + 0x28)` 形且符号命名走 printc 兜底
+  `in_register_00000110`(curl 侧有原型锁,同链路渲染正确
+  `in_FS_OFFSET`);根因在 fspec 原型输入表/varmap 输入符号安装域,
+  见 TODO BOARD 移交行。
