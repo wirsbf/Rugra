@@ -1402,7 +1402,13 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 ### 2026-07-04（续 2）：移植 block-graph 重写 API
 - `install_switch_defaults`（funcdata_block.cc:687）：遍历 jump_tables，按槽位清除旧 default 后，通过 reciprocal reverse index 在 source out-half 与 target in-half 同步标记唯一默认边。
 - `remove_do_nothing_block(bb)`（funcdata_block.cc:328）：移除 do-nothing 块（setDead + opDestroy + removeBlock + structureReset）。
-- `node_join_create_block(...)`（funcdata_block.cc:790）：创建合并块（newBlockBasic + removeEdge + moveOutEdge + addEdge）。
+- `node_join_create_block(...)`（funcdata_block.cc:779）：创建合并块（newBlockBasic + setFlag(f_joined_block) + setInitialRange(addr,addr) + removeEdge + moveOutEdge + addEdge）。
+  - 2026-09-23（SB-JOINSTOP，PARSECONFIG-JOINBLOCK-STOPADDR-0001）：补齐 cc:786
+    `newblock->setInitialRange(addr, addr)`——原实现误判 informational-only 跳过，join 块
+    cover/getStop 保持 Address(0)；`Merge::buildDominantCopy`（merge.cc:1168）以
+    `domBl->getStop()` 为新主拷贝 op 建址，缺失致 parseconfig ordinal 320 dominantcopy
+    `0:903` vs `3e84:903`。补齐后 parseconfig.constprop.0 投影对 oracle pin b2ace56a
+    全 MATCH（335 stages / 130099 ops）。
 - 文件级 helper `find_out_index`（对应 FlowBlock::getOutIndex）。
 
 ### 2026-07-04（续 3）：移植 nodeSplit + CloneBlockOps
