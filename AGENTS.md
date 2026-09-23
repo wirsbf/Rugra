@@ -286,6 +286,10 @@ python tools/compare_ghidra.py result/curl_cur.c tests/golden/ghidra_curl.c --su
   agent 在分支/worktree 上修复时产生的测试代码(探针脚本、调试 harness、临时 fixture 草稿、A/B 对拍驱动)一律写入内存盘 **`/dev/shm/rugra-tests/<branch>/`**;**新 worktree 一律建在
   `/dev/shm/rugra-worktrees/<name>`**(commit 对象存于主仓 .git 对象库=重启安全,工作区易失可由 wip 纪律覆盖)。
   在飞车道完成前不迁移其 worktree;空闲的旧 `/home/ls/Rugra-wt-*` 在下次认领时迁移。
+  **回收纪律(2026-09-23 用户指令)**: 车道交付并集成后立即回收其内存盘资源
+  (`rm -rf /dev/shm/rugra-targets/<lane>` 与已合并 worktree 的 `target/`);root 在每次
+  merge 后执行清扫,agent 在 lane 收尾时自清自己的 /dev/shm 产物目录(保留 LANE_REPORT
+  等结论文件可归档至 /dev/shm/rugra-reports/)。
   例外:按机制 B2 必须固化的双侧回归 fixture,只在 root 集成阶段挑拣入库,分支上仍先在内存盘迭代。内存盘重启即丢,未集成的证据自行负责及时归档。
 - **oracle 环境**:`/tmp/rugra-ghidra-bfd-2.38` 机器重启即丢;重建用直连 https 拉 binutils-dev deb 解包(**apt 代理不可用**)。
 
