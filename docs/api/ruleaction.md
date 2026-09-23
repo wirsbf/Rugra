@@ -1,5 +1,32 @@
 # `ruleaction.rs` API Reference
 
+## 2026-09-23：RuleSubRight lump 臂改用 `fd.op_unlink`（RULEACTION-SUBRIGHT-UNLINK-0001 / ER）
+
+`RuleSubRight::apply_op` 的 lump 臂（ruleaction.rs `// Ghidra: ruleaction.cc:7269` 函数内，
+对应 oracle ruleaction.cc:7285 `data.opUnlink(op)`）此前误用
+`fd.op_unset_input(op, 0)` —— 只清 slot0、op 仍活、output 未摘，双重偏离
+opUnlink（funcdata_op.cc:179-193 = opUnsetOutput + 全部 opUnsetInput + opUninsert，op 死亡）。
+被肢解的 SUBPIECE（槽0=共享 `null_slot_sentinel`）保持活态可再被 ActionPool 匹配，
+二次落入时 sentinel 被当真 varnode 装入新 op；SetCasts 阶段对该 size-0 free varnode
+插 CAST 形成第二读者，触发 `varnode.rs add_descend` panic（=Ghidra varnode.cc:336
+throw 的忠实断言，断言无罪）。修复一行：`fd.op_unlink(&PcodeOpRef(op_arc.clone()))`
+（载体 funcdata.rs `op_unlink`，注释 `// Ghidra: funcdata_op.cc:179`）替代该
+unset；其余不动（bf3f5064 正控：`Free varnode` panic 0 次，未修基线 3/3 必现，
+见 /dev/shm/rugra-reports/sb-pcrepanic/LANE_REPORT_EJ.md）。
+
+**附带 RUGRA-GLUE（锁卫生，语义无变化）**：lump 臂入口的
+`if let Some(lone) = outvn.read().unwrap().lone_descend()` 的 scrutinee 临时读守卫
+在 Rust ≤2024 语义下活到整个 if-let 体结束，而 `op_unlink → op_unset_output →
+make_free_prevalidated` 会对同一 outvn 取写锁——同线程 RwLock 非重入即死锁
+（确定性单测钉死；EJ 正控的 httpd 15s 超时机制曾掩盖此形态为 TIMEOUT）。守卫提升
+为 `let lone_desc = outvn.read().unwrap().lone_descend();` 后落下，`lone_descend`
+返回 owned `Option<Arc<_>>`，提前 drop 不可观测。
+
+**单测**（ruleaction.rs tests）：`test_rule_subright_lump_unlinks_original_subpiece`
+构造 SUBPIECE(c=4, outvn size 4, a size 8, lone=INT_RIGHT const-shift 8) 命中 lump 臂，
+断言 apply 后原 op DEAD（不在 alivelist、output=None、全槽 sentinel）且存活 op
+（原 lone→SUBPIECE、新 shiftop）无 null 槽残留。
+
 ## 2026-09-23：RulePieceStructure 叶 COPY 的 union 分辨率继承（UNIONRESOLVE-PIPELINE-WIRING-0001 / EN2）
 
 `RulePieceStructure::apply` 存储 walk 的叶 COPY 臂（ruleaction.cc:7661-7681）补上
