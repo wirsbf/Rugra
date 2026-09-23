@@ -7629,6 +7629,7 @@ impl Funcdata {
             let block = Arc::new(RwLock::new(BlockBasic::new(block_idx as i32, block_addr)));
 
             // Add ops to this block
+            let mut stop_addr = start_addr;
             for op_ref in &op_refs[start..end] {
                 {
                     let mut op = op_ref.0.write().unwrap();
@@ -7637,9 +7638,34 @@ impl Funcdata {
                         &(block.clone() as Arc<RwLock<dyn crate::block::FlowBlock + Send + Sync>>),
                     ));
                 }
+                // flow.cc:1010-1012: stop tracks the biggest op address seen
+                // (FlowInfo::splitBasic's setBasicBlockRange(cur, start, stop)
+                // at flow.cc:1004/1016 → BlockBasic::setInitialRange,
+                // block.cc:2625). The cover is the block's ORIGINAL
+                // instruction range and must never move when later Actions
+                // remove leading ops: BlockBasic::getEntryAddr (block.cc:2302)
+                // reads the cover, falling back to the first op's address only
+                // for multi-range covers — without a cover, dead-code removal
+                // of a leading op (observed: the stack-canary reload mov at
+                // httpd 0x12cfc6/0x12d7f0 and the loop-increment add at
+                // 0x12e410) drifted every goto label built on
+                // getEntryAddr/emitLabel (printc.cc:3164-3193) to the next
+                // op's address.
+                let op_addr = op_ref.0.read().unwrap().get_addr().as_u64();
+                if stop_addr < op_addr {
+                    stop_addr = op_addr;
+                }
                 let insert_pos = block.read().unwrap().get_ops().len();
                 block.write().unwrap().insert_op(insert_pos, op_ref.clone());
             }
+            // flow.cc:1016: close the block's range. Synthetic empty blocks
+            // (an instruction the lifter emitted no p-code for) still anchor
+            // the degenerate closed range [taddr, taddr] so a goto targeting
+            // the address resolves a stable label.
+            block
+                .write()
+                .unwrap()
+                .set_initial_range(block_addr, crate::address::Address::new(stop_addr));
 
             blocks.push(block);
         }
