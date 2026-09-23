@@ -1669,6 +1669,13 @@ impl Action for ActionRestructureVarnode {
         // Ghidra cc:2280: l1->restructureVarnode(aliasyes).
         scope.restructure_varnode(fd, aliasyes);
         fd.scope = Some(scope);
+        // Ghidra type.cc:2935-2945 getMap: every TypeSpacebase::getSubType
+        // re-resolves fd->getScopeLocal() dynamically, so the stack
+        // spacebase's subtype queries (AddTreeState::calc_subtype's
+        // TYPE_SPACEBASE arm, hasMatchingSubType) must observe THIS fresh
+        // restructured map. Publish the scope into the factory-cached
+        // spacebase's live handle (VARMAP-STACKBOUNDARY-0001).
+        fd.publish_scope_to_spacebase();
         // Ghidra cc:2281-2282: if (data.syncVarnodesWithSymbols(l1,false,aliasyes)) count += 1;
         if fd.sync_varnodes_with_symbols(false, aliasyes) {
             self.count += 1;

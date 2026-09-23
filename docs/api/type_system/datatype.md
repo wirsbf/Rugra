@@ -312,9 +312,26 @@ union 切片，解析延迟到流分析阶段（`needs_resolution` 恒真）。
 ### `TypeSpacebase` 完整方法（type.hh:721-746, type.cc:2935-3098）
 将一个 `AddrSpace` 视作按指针偏移索引的"结构体"，用于栈帧/全局变量类型传播。
 - 结构体新增字段 `spaceid: Option<AddressSpace>`、`localframe: Address`、`scope: Option<Arc<Scope>>`。
-- `get_map()`（type.cc:2935）— 返回索引的 scope；Rugra 存快照引用，无 scope 时 None。
+- `fd: Option<Arc<RwLock<ScopeLocal>>>`（2026-09-24 VARMAP-STACKBOUNDARY-0001 起，
+  替换原 `stubs::Funcdata` 占位）——local-frame spacebase 的**活跃局部 scope 通道**：
+  Ghidra `getMap` (type.cc:2938-2944) 每次查询动态解析
+  `queryFunction(localframe)->fd->getScopeLocal()`；Rust 所有权上 Funcdata 持有
+  ScopeLocal、工厂缓存的 spacebase 类型持共享句柄（构造时由
+  `TypeFactory::live_local_scopes` registry 立即挂接，初值=空 ScopeLocal=
+  oracle 首趟 restructure 前的可观察态），`ActionRestructureVarnode` 每趟把
+  重构后的 scope 发布进句柄内容。全局 spacebase 恒 None。
+- `get_map()`（type.cc:2935-2945）— 返回 `Option<SpacebaseMap>`（新枚举：
+  `Local(RwLockReadGuard<ScopeLocal>)` 或 `Global(&Scope)`）。local-frame
+  判定用 `!localframe.is_null()`（Rugra legacy `Address::new(frame)` 无 space，
+  `is_invalid()` 对真实函数入口也为真；工厂的 global spacebase 恒 frame 0，
+  故以非零偏移为准）。localframe 非零而无句柄读（首趟前/锁中毒）落 None
+  → `get_sub_type` 回 oracle 空 ScopeLocal 的 miss 答案，**不**回落全局 scope
+  （oracle 对有效 local frame 从不回落）。
 - `get_sub_type(off)`（type.cc:2947）— 经 `get_map` 的 `find_container`
   （queryContainer）取最小包含 SymbolEntry 的符号类型与 renormalized offset；
+  Local 臂用 `ScopeLocal::find_container_entry(space, off, 1, None)`——
+  `queryContainer(addr,1,nullPoint)` 的忠实移植（null usepoint 只收 addrtied
+  entry）；Global 臂保持快照 scope 查询（全局符号图反编译期间稳定）。
   2026-09-22 起 `Datatype::get_sub_type` 通用 match 臂**虚分派路由到此覆写**
   （`TYPE-SPACEBASE-SUBTYPE-DISPATCH-0001` 修复）。2026-09-23 起 miss 回退
   （type.cc:2964-2966）返回 `getBase(1,TYPE_UNKNOWN)` 语义——即 1 字节匿名

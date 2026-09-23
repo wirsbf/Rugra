@@ -52,6 +52,19 @@ pub struct TypeFactory {
     /// The default size of a pointer for this architecture
     ptr_size: usize,
 
+    /// Live function-local scope handles for local-frame spacebases, keyed
+    /// by the frame (function entry) offset. This is the Rust ownership seam
+    /// for Ghidra's dynamic `TypeSpacebase::getMap` resolution
+    /// (type.cc:2938-2944: `queryFunction(localframe)->getScopeLocal()`):
+    /// the Funcdata owns the restructured `ScopeLocal`, the factory-cached
+    /// spacebase type holds a clone of the shared handle (attached eagerly
+    /// HERE, at type construction, so the cache can never hold a
+    /// stale/unattached local frame), and `ActionRestructureVarnode`
+    /// publishes each restructured scope into the handle contents. The
+    /// handle starts as an empty `ScopeLocal` — the oracle's pre-restructure
+    /// observable.
+    live_local_scopes: BTreeMap<u64, std::sync::Arc<std::sync::RwLock<crate::varmap::ScopeLocal>>>,
+
     /// Side data for `TypePointerRel` instances: the parent container and
     /// offset that do not fit on Rugra's flat `TypePointer`. Mirrors the
     /// `parent`/`offset` fields of Ghidra's `TypePointerRel` (type.hh:647).
@@ -151,6 +164,7 @@ impl TypeFactory {
             type_nochar: RwLock::new(None),
             char_cache: RwLock::new(BTreeMap::new()),
             ptr_size,
+            live_local_scopes: BTreeMap::new(),
             rel_pointers: BTreeMap::new(),
             typedefs: BTreeMap::new(),
             incomplete_typedefs: Vec::new(),
@@ -205,6 +219,7 @@ impl TypeFactory {
             // uninitialized raw-constructor state.
             ptr_size: 0,
             rel_pointers: BTreeMap::new(),
+            live_local_scopes: BTreeMap::new(),
             typedefs: BTreeMap::new(),
             incomplete_typedefs: Vec::new(),
             size_of_int: 0,
@@ -1955,17 +1970,47 @@ impl TypeFactory {
         let mut base = TypeBase::new(String::new(), 0, TypeMetatype::Spacebase);
         // Ghidra spacebase is a core type (cached on the architecture).
         base.flags |= type_flags::CORETYPE;
+        // getMap's local-frame arm (type.cc:2938-2944) resolves the LIVE
+        // fd->getScopeLocal() on every query. Attach the shared handle
+        // eagerly at construction (VARMAP-STACKBOUNDARY-0001): the registry
+        // entry is created here if absent, so the cached type always carries
+        // the handle and later publishes (restructure passes) only replace
+        // the handle CONTENTS. An empty ScopeLocal is the oracle's
+        // pre-restructure observable.
+        //
+        // Local-frame test: Rugra's legacy `Address::new(frame)` form is
+        // SPACELESS, so `is_invalid()` (null-base) is true for real function
+        // entries too and cannot distinguish — the factory's global
+        // spacebases are always constructed at frame 0 (funcdata
+        // spacebaseConstant mirror, Address::new(0)), so a NONZERO
+        // localframe offset is the local-frame predicate here (and in
+        // TypeSpacebase::get_map).
+        let local_handle = if frame.is_null() {
+            None
+        } else {
+            Some(
+                self.live_local_scopes
+                    .entry(frame.as_u64())
+                    .or_insert_with(|| {
+                        std::sync::Arc::new(std::sync::RwLock::new(
+                            crate::varmap::ScopeLocal::new(),
+                        ))
+                    })
+                    .clone(),
+            )
+        };
         let sb = TypeSpacebase {
             base,
             address: frame.clone(),
-            fd: None,
+            fd: local_handle,
             spaceid,
             localframe: frame,
-            // The getMap projection (type.cc:2935-2945 reads
+            // The getMap global arm (type.cc:2936 reads
             // glb->symboltab->getGlobalScope() dynamically): clone the live
             // global scope — installed before decompilation and stable
-            // during it — so get_sub_type answers subtype queries with the
-            // oracle's answers (B3-COREACTION-CONSTANTPTR-0001 b).
+            // during it — so get_sub_type answers global-frame subtype
+            // queries with the oracle's answers (B3-COREACTION-CONSTANTPTR-
+            // 0001 b).
             scope: self.symboltab.as_ref().and_then(|db| {
                 db.read()
                     .unwrap()

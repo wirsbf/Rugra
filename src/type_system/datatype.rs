@@ -8,10 +8,9 @@ use crate::fspec::FuncProto;
 use crate::marshal::{AttributeId, Decoder, ElementId, Encoder};
 use crate::AddressSpace;
 
-/// Stubs for related modules
-pub mod stubs {
-    #[derive(Debug)] pub struct Funcdata;
-}
+// (The former `pub mod stubs { pub struct Funcdata; }` placeholder lived
+// here; its only consumer was TypeSpacebase's unused `fd` field, which now
+// carries the live ScopeLocal channel — VARMAP-STACKBOUNDARY-0001.)
 
 // ---------------------------------------------------------------------------
 // XML marshaling element/attribute constants (type.cc references ELEM_*/ATTRIB_*)
@@ -3943,6 +3942,20 @@ impl TypeCode {
     }
 }
 
+/// Resolved map view for [`TypeSpacebase::get_map`] — the Rust shape of
+/// Ghidra's getMap, which returns one live `Scope*` flavor; Rugra's
+/// global and function-local scopes are different types, so the two arms
+/// materialize separately. The local arm holds the `RwLockReadGuard` so the
+/// borrowed `ScopeLocal` outlives the query that reads it.
+#[derive(Debug)]
+pub enum SpacebaseMap<'a> {
+    /// `fd->getScopeLocal()` of the function at `localframe`
+    /// (type.cc:2940-2944) — the live, restructured local map.
+    Local(std::sync::RwLockReadGuard<'a, crate::varmap::ScopeLocal>),
+    /// The global scope snapshot (type.cc:2936).
+    Global(&'a crate::database::Scope),
+}
+
 /// Type representing a spacebase (e.g. stack frame, register bank)
 ///
 /// Corresponds to Ghidra's `TypeSpacebase` class in `type.hh:721-746`.
@@ -3953,8 +3966,18 @@ impl TypeCode {
 pub struct TypeSpacebase {
     pub base: TypeBase,
     pub address: Address,
-    /// Associated function data (if this spacebase is a stack frame)
-    pub fd: Option<Weak<stubs::Funcdata>>,
+    /// Live function-local scope channel for local-frame spacebases.
+    /// Ghidra's `TypeSpacebase::getMap` (type.cc:2935-2945) resolves
+    /// `queryFunction(localframe)->getScopeLocal()` dynamically on EVERY
+    /// query, so subtype lookups observe the restructured map of the
+    /// function being decompiled. Rugra's ownership seam: the Funcdata owns
+    /// the `ScopeLocal`, the factory-cached spacebase type holds this
+    /// shared handle (created eagerly at spacebase construction, an empty
+    /// `ScopeLocal` mirroring the oracle's pre-restructure observable);
+    /// `ActionRestructureVarnode` publishes each restructured scope into
+    /// it. `None` on global spacebases. (The field formerly held an
+    /// unused `stubs::Funcdata` placeholder.)
+    pub fd: Option<std::sync::Arc<std::sync::RwLock<crate::varmap::ScopeLocal>>>,
     /// The address space we are treating as a structure. Ghidra field
     /// `spaceid` (type.hh:723). Rugra stores an `Option` because the decode
     /// path (type.cc:3090) may leave it unset when no `Architecture` is wired
@@ -4002,13 +4025,34 @@ impl TypeSpacebase {
 
     // Ghidra: type.cc:2935 TypeSpacebase::getMap
     /// Get the symbol table indexed by this spacebase. Faithful to
-    /// `TypeSpacebase::getMap` (type.cc:2935-2945): Ghidra returns the global
-    /// scope, or — if `localframe` is valid — the function-local scope of the
-    /// function at `localframe`. Rugra does not yet wire a global symbol table
-    /// into every spacebase, so the stored `scope` reference is returned
-    /// directly. `None` mirrors the "no architecture / no global scope" case.
-    pub fn get_map(&self) -> Option<&Arc<crate::database::Scope>> {
-        self.scope.as_ref()
+    /// `TypeSpacebase::getMap` (type.cc:2935-2945): the global scope, or —
+    /// if `localframe` is valid — the function-local scope of the function
+    /// at `localframe`, resolved dynamically on every call in the oracle
+    /// (`res->queryFunction(localframe)` → `fd->getScopeLocal()`). Rugra's
+    /// ownership seam: the function's `ScopeLocal` is published into the
+    /// `fd` live handle by the Funcdata pipeline (see
+    /// `Funcdata::publish_scope_to_spacebase`), so the dynamic resolution
+    /// becomes a read of that handle; a valid local frame with no handle
+    /// content is impossible (the factory creates the handle eagerly at
+    /// spacebase construction), while a missing/failed read falls to `None`,
+    /// which `get_sub_type` answers with the oracle's empty-ScopeLocal
+    /// observable. `None` for global spacebases without an attached scope
+    /// mirrors the "no global scope" case.
+    pub fn get_map(&self) -> Option<SpacebaseMap<'_>> {
+        // Local-frame test: Rugra's legacy `Address::new(frame)` form is
+        // SPACELESS, so `is_invalid()` is true for real function entries
+        // too; the factory's global spacebases always carry frame 0, so a
+        // NONZERO localframe offset is the local-frame predicate (see
+        // TypeFactory::get_type_spacebase).
+        if !self.localframe.is_null() {
+            // type.cc:2938-2944: local frame → fd->getScopeLocal(). The
+            // oracle's Funcdata always exists for a decompiled local frame,
+            // so this never falls back to the global scope.
+            let handle = self.fd.as_ref()?;
+            handle.read().ok().map(SpacebaseMap::Local)
+        } else {
+            self.scope.as_ref().map(|scope| SpacebaseMap::Global(scope.as_ref()))
+        }
     }
 
     // Ghidra: type.cc:3063 TypeSpacebase::getAddress
@@ -4030,49 +4074,25 @@ impl TypeSpacebase {
     /// `TypeSpacebase::getSubType` (type.cc:2947-2969): converts `off` to an
     /// address unit, looks up the smallest containing `SymbolEntry`, and
     /// returns its symbol's type with the renormalized offset. The miss path
-    /// (type.cc:2964-2966) NEVER returns null: with no containing entry it
-    /// answers the 1-byte TYPE_UNKNOWN base with `newoff = 0`, which callers
-    /// like `AddTreeState::calcSubtype`'s TYPE_SPACEBASE arm (via
-    /// `hasMatchingSubType`) consume as `extra = 0`. With no scope attached,
-    /// Ghidra's `getMap` still hands back a (global) scope whose
-    /// `queryContainer` finds nothing for the queried address, i.e. the same
-    /// miss path — Rugra mirrors that answer directly.
+    /// (type.cc:2964-2966) NEVER answers a nonzero `newoff`: with no
+    /// containing entry it returns the 1-byte TYPE_UNKNOWN base with
+    /// `newoff = 0`, which callers like `AddTreeState::calc_subtype`'s
+    /// TYPE_SPACEBASE arm (via `hasMatchingSubType`) consume as `extra = 0`.
+    /// A containing entry whose symbol has NO type yields `None` (Ghidra's
+    /// null `getSymbol()->getType()`), which `hasMatchingSubType`'s
+    /// arrayHint==0 arm treats as "no match".
+    ///
+    /// Local frames query the LIVE ScopeLocal (type.cc:2938-2944 via
+    /// getMap): the container lookup is `queryContainer(addr, 1,
+    /// nullPoint)` — address-tied entries only — and
+    /// `ScopeLocal::find_container_entry(space, off, 1, None)` is that
+    /// exact port. The global arm keeps the snapshot-scope lookup (the
+    /// global map is stable during decompilation).
     pub fn get_sub_type(&self, off: i64) -> (Option<Arc<Datatype>>, i64) {
-        let scope = match self.get_map() {
-            Some(s) => s.clone(),
-            // No scope wired: Ghidra's getMap (type.cc:2935-2945) always
-            // returns a scope (global fallback), and its queryContainer miss
-            // lands on the getBase(1,TYPE_UNKNOWN) answer (type.cc:2964).
-            None => {
-                return (
-                    Some(Arc::new(Datatype::Base(TypeBase::new(
-                        String::new(),
-                        1,
-                        TypeMetatype::Unknown,
-                    )))),
-                    0,
-                )
-            }
-        };
         let wordsize = self.spaceid.map(|s| s.word_size()).unwrap_or(1).max(1) as i64;
         // AddrSpace::byteToAddress(off, wordsize) (space.hh).
         let addr_off = off.wrapping_mul(wordsize) as u64;
-        let addr = Address::new(addr_off);
-        // type.cc:2962-2963 — "Assume symbol being referenced is address
-        // tied so we use a null point of context": queryContainer(addr, 1,
-        // nullPoint); Rugra's null usepoint is Address::new(0).
-        match scope.find_container(addr, 1, Address::new(0)) {
-            Some(entry_idx) => {
-                let entry = &scope.entries[entry_idx];
-                // newoff = (addr - entry.addr) + entry.offset (type.cc:2967).
-                let newoff = (addr.as_u64().wrapping_sub(entry.addr.as_u64()) as i64)
-                    + entry.offset as i64;
-                (entry.symbol.read().unwrap().get_type(), newoff)
-            }
-            // type.cc:2964-2966 — no container: `*newoff = 0; return
-            // glb->types->getBase(1,TYPE_UNKNOWN);` (never null). The
-            // structural anonymous 1-byte unknown base matches the factory's
-            // getBase(1,Unknown) product for the no-core-entry shape.
+        match self.get_map() {
             None => (
                 Some(Arc::new(Datatype::Base(TypeBase::new(
                     String::new(),
@@ -4081,6 +4101,54 @@ impl TypeSpacebase {
                 )))),
                 0,
             ),
+            Some(SpacebaseMap::Local(local)) => {
+                let space = self.spaceid.unwrap_or(crate::space::AddressSpace::Stack);
+                match local.find_container_entry(space, addr_off, 1, None) {
+                    Some(entry) => {
+                        let symbol = &local.symbols[entry.sym];
+                        // newoff = (addr - smallest->getAddr()) +
+                        // smallest->getOffset() (type.cc:2967).
+                        let newoff = (addr_off.wrapping_sub(entry.start) as i64)
+                            + entry.offset as i64;
+                        (symbol.dtype.clone(), newoff)
+                    }
+                    None => (
+                        Some(Arc::new(Datatype::Base(TypeBase::new(
+                            String::new(),
+                            1,
+                            TypeMetatype::Unknown,
+                        )))),
+                        0,
+                    ),
+                }
+            }
+            Some(SpacebaseMap::Global(scope)) => {
+                // type.cc:2962-2963 — queryContainer(addr, 1, nullPoint):
+                // Rugra's null usepoint is Address::new(0).
+                let addr = Address::new(addr_off);
+                match scope.find_container(addr, 1, Address::new(0)) {
+                    Some(entry_idx) => {
+                        let entry = &scope.entries[entry_idx];
+                        // newoff = (addr - entry.addr) + entry.offset
+                        // (type.cc:2967).
+                        let newoff = (addr.as_u64().wrapping_sub(entry.addr.as_u64()) as i64)
+                            + entry.offset as i64;
+                        (entry.symbol.read().unwrap().get_type(), newoff)
+                    }
+                    // type.cc:2964-2966 — no container: `*newoff = 0; return
+                    // glb->types->getBase(1,TYPE_UNKNOWN);`. The structural
+                    // anonymous 1-byte unknown base matches the factory's
+                    // getBase(1,Unknown) product for the no-core-entry shape.
+                    None => (
+                        Some(Arc::new(Datatype::Base(TypeBase::new(
+                            String::new(),
+                            1,
+                            TypeMetatype::Unknown,
+                        )))),
+                        0,
+                    ),
+                }
+            }
         }
     }
 

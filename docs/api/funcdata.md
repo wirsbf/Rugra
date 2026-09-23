@@ -35,6 +35,21 @@ varmap/符号层既有缺口的表现面，随 VARGROUP-ABSORB-0001 §4-4 符号
   此前注释称"类型系统尚无 TypeSpacebase"而跳过——该类型现已存在，且
   ActionInferTypes::propagateSpacebaseRef 依赖它识别 SP 输入。
 
+## 2026-09-24：TypeSpacebase 活跃局部 scope 发布通道（VARMAP-STACKBOUNDARY-0001）
+
+- `Funcdata::publish_scope_to_spacebase`（RUGRA-GLUE，无 oracle 单函数对应物；
+  行为对应 Ghidra `TypeSpacebase::getMap` type.cc:2935-2945 的动态解析语义）：
+  每趟 ScopeLocal 图变异后（`ActionRestructureVarnode::apply` 内、
+  `fd.scope = Some(scope)` 之后）调用——经 Architecture 的 TypeFactory 取
+  本函数帧的缓存 spacebase 类型，把当前 ScopeLocal 克隆发布进其
+  `fd` 共享句柄（句柄由 `TypeFactory::live_local_scopes` registry 在类型
+  构造期挂接，见 typefactory.md）。此后 `TypeSpacebase::get_sub_type`
+  的 local-frame 查询（`AddTreeState::calc_subtype` TYPE_SPACEBASE 臂的
+  hasMatchingSubType 喂入）读到的是**活跃**重构图而非建期死快照——
+  myprogress ord150 的互补常量拆分根因（oracle extra=1 源自
+  `line` 数组 [-0x238,-0x138) 容器内偏移，判别实验见
+  /dev/shm/rugra-tests/sb-stackbound/discrim/）。
+
 ## 2026-09-22：setVarnodeProperties localmap 腿（v2 保留项；spacebase 挂载见 2026-09-23 条）
 
 v1 曾同时落子 spacebase 挂载与本腿，A/B（base=70e76ce6）显示 config 域漂移后
