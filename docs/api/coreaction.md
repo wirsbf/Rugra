@@ -2828,3 +2828,20 @@ ActionReturnSplit 的 `self.count +=` 同样无收割覆盖（ActionDoNothing �
 
 - `ActionRestrictLocal::apply` 循环 1 的 spacebase 参数判定从 `p.address.as_u64() > 0x7FFF_FFFF`（从不命中 callee 相对偏移）修正为 `p.address_space == AddressSpace::Stack`（coreaction.cc:1974-1975 的 `IPTR_SPACEBASE` 空间类型测试）。match_url 调用点（so=fc70 + Stack:8:304）现在把 fc78..fd90 出参影子区 markNotMapped——oracle `print localrange` 的 fc78-fda7 间隙由此产生，30d6 字段件因此非 addr-tied/mapped。
 - `ActionRestructureVarnode::apply` 改为复用 `fd.scope`（Ghidra 的 localmap 为 Funcdata 生命周期单一对象，funcdata.cc:69-70）；仅首趟构造 + seed 平台参数符号 + `reset_local_window`（一次性窗口安装）。此前每趟 fresh scope + 全量重装窗口，把 RestrictLocal 的窄化整体抹掉。
+
+### 2026-09-23（LOCKHYGIENE-SCRUTINEE-FAMILY-0001）：markExplicitUnsigned lone 臂 scrutinee 读守卫提升
+
+- `ActionSetCasts::mark_explicit_unsigned`（cast.cc:38-71；lone 臂=cc:63-66）的
+  `if let Some(lone) = outvn.read().unwrap().lone_descend()` scrutinee 临时读守卫
+  持有至整个 if-let 体尾——与 ER（ruleaction SubRight lump 臂）/EW（castInput
+  double-cast 臂）/EM3（merge cover_dirty）同族的潜伏锁卫生缺陷：体内一旦出现对
+  同一 outvn 的写锁即同线程 RwLock 自死锁（当前体内只读 lone，未触发）。
+  修复形态与 ER/EW 一致：提升为语句级 `let lone_descend = ...;` 先绑定
+  （lone_descend 返回 owned `Option<Arc<_>>`，读守卫随 let 语句结束释放，
+  不可观测），读序不变（cc:63 loneDescend 读取 → cc:65 lone opcode 检查）。
+- 新增单测 2 个：`test_mark_explicit_unsigned_lone_arm_semantics`
+  （SUBPIECE lone=不继承符号→false 无 unsignedprint；INT_ADD lone→true+flag；
+  注意 untyped 常量报 UNKNOWN=unsigned-family，正控场景须给另一侧 INT 类型）
+  与 `test_mark_explicit_unsigned_lone_arm_guard_released_before_body`
+  （10s 超时线程内以生产调用形状复现"体内写锁 outvn"——scrutinee 形态下
+  该写自死锁，提升后瞬间完成）。
