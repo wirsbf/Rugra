@@ -12665,7 +12665,15 @@ impl Rule for RuleSubRight {
         let mut working_op_ref = crate::op::PcodeOpRef(op_arc.clone());
         // Search for lone right shift descendant and lump it in.
         let mut lumped = false;
-        if let Some(lone) = outvn.read().unwrap().lone_descend() {
+        // RUGRA-GLUE (lock hygiene): the lone_descend read guard must be
+        // hoisted out of the if-let scrutinee — a scrutinee temporary would
+        // stay alive through the whole body, and the lump arm's
+        // op_unlink → opUnsetOutput → make_free write-locks this same outvn,
+        // deadlocking the thread (std RwLock is not reentrant). Dropping the
+        // guard first is unobservable: lone_descend's result is an owned
+        // Option<Arc<_>>.
+        let lone_desc = outvn.read().unwrap().lone_descend();
+        if let Some(lone) = lone_desc {
             let opc2 = lone.read().unwrap().opcode;
             if opc2 == OpCode::CPUI_INT_RIGHT || opc2 == OpCode::CPUI_INT_SRIGHT {
                 let shift_c = lone.read().unwrap().get_in(1).cloned();
@@ -12682,7 +12690,7 @@ impl Rule for RuleSubRight {
                                 d = a_size_bits - 1; // sign extraction
                             }
                             // opUnlink(op); op = lone; opSetOpcode(op,SUBPIECE); opc = opc2;
-                            fd.op_unset_input(&working_op_ref, 0); // unlink this op's inputs
+                            fd.op_unlink(&crate::op::PcodeOpRef(op_arc.clone())); // cc:7285 data.opUnlink(op) = funcdata_op.cc:179-193: op dies (unset output + all inputs + uninsert)
                             working_op_ref = crate::op::PcodeOpRef(lone);
                             fd.op_set_opcode(&working_op_ref, OpCode::CPUI_SUBPIECE);
                             opc = opc2;
@@ -24261,6 +24269,92 @@ mod tests {
                 .unwrap()
                 .get_offset(), 0
         );
+    }
+
+    /// RuleSubRight lump arm (ruleaction.cc:7277-7289): SUBPIECE(c≠0) whose
+    /// lone descendant is a constant INT_RIGHT and outvn.size + c == a.size
+    /// must destroy the original SUBPIECE via op_unlink (cc:7285
+    /// `data.opUnlink(op)` = funcdata_op.cc:179-193: unset output + all
+    /// inputs + uninsert). The old bug kept the op alive with slot0 =
+    /// null_slot_sentinel, so re-matching leaked the sentinel as a real
+    /// varnode and later panicked in add_descend
+    /// (RULEACTION-SUBRIGHT-UNLINK-0001).
+    #[test]
+    fn test_rule_subright_lump_unlinks_original_subpiece() {
+        let mut fd = Funcdata::new("test_subright_lump", Address::new(0x1000), 0x10);
+        // a: 8-byte input; SUBPIECE(a, 4) → outvn 4 bytes (4 + 4 == 8: "hi").
+        let a = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x300);
+        let a = fd.vbank.set_input(a).unwrap();
+        let sub_op = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&sub_op, OpCode::CPUI_SUBPIECE);
+        let outvn = fd.new_unique_out(4, &sub_op);
+        fd.op_set_input(&sub_op, a.clone(), 0);
+        let c4 = fd.new_constant(4, 4);
+        fd.op_set_input(&sub_op, c4, 1); // c = 4 ≠ 0
+        fd.obank.alivelist.push(sub_op.clone());
+        // Lone descendant: INT_RIGHT(outvn, 8) — constant shift.
+        let lone = fd.new_op(2, Address::new(0x1000));
+        fd.op_set_opcode(&lone, OpCode::CPUI_INT_RIGHT);
+        let _lone_out = fd.new_unique_out(4, &lone);
+        fd.op_set_input(&lone, outvn, 0);
+        let shift8 = fd.new_constant(4, 8);
+        fd.op_set_input(&lone, shift8, 1);
+        fd.obank.alivelist.push(lone.clone());
+
+        let rule = RuleSubRight::new();
+        let result = rule.apply_op(&sub_op.0, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+
+        // cc:7285 opUnlink: the original SUBPIECE is dead — out of the alive
+        // list, no output, every input slot nulled to the shared sentinel.
+        assert!(
+            !fd.obank
+                .alivelist
+                .iter()
+                .any(|r| Arc::ptr_eq(&r.0, &sub_op.0)),
+            "unlinked SUBPIECE must leave the alive list"
+        );
+        {
+            let sub = sub_op.0.read().unwrap();
+            assert!(sub.output.is_none(), "opUnsetOutput must have run");
+            for slot in &sub.inrefs {
+                assert!(
+                    Arc::ptr_eq(slot, &crate::op::null_slot_sentinel()),
+                    "all input slots must be nulled; live varnode retained"
+                );
+            }
+        }
+
+        // The lone INT_RIGHT became the least-sig SUBPIECE (cc:7287, 7308-7309)
+        // reading the new shift output + constant 0 — no null-slot residue.
+        let newout = {
+            let lone_r = lone.0.read().unwrap();
+            assert_eq!(lone_r.opcode, OpCode::CPUI_SUBPIECE);
+            assert_eq!(lone_r.inrefs[1].read().unwrap().get_offset(), 0);
+            lone_r.inrefs[0].clone()
+        };
+        assert!(
+            !Arc::ptr_eq(&newout, &crate::op::null_slot_sentinel()),
+            "surviving SUBPIECE slot0 must be the shift output, not the sentinel"
+        );
+
+        // The inserted shift (cc:7299-7305) is the sole INT_RIGHT: it reads a
+        // and the lumped constant d = c*8 + 8 = 40.
+        let shift = fd
+            .obank
+            .alivelist
+            .iter()
+            .find(|r| r.0.read().unwrap().opcode == OpCode::CPUI_INT_RIGHT)
+            .expect("new INT_RIGHT shift op must exist")
+            .clone();
+        {
+            let s = shift.0.read().unwrap();
+            assert!(Arc::ptr_eq(&s.inrefs[0], &a), "shift reads the original a");
+            assert_eq!(s.inrefs[1].read().unwrap().get_offset(), 40);
+            assert!(Arc::ptr_eq(s.output.as_ref().unwrap(), &newout));
+        }
     }
 
     /// RuleSubRight must NOT fire when the SUBPIECE is least-significant (c==0).
