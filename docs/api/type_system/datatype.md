@@ -390,3 +390,29 @@ core-type 位向指针传播。已改为 `flags & CORETYPE`；工厂核心类型
 克隆 `Arc`，保留原返回 Datatype 身份，不再构造深拷贝对象。这是调用约定模型
 carrier 的身份修正；完整 TypeCode prototype、null output 和 dependency 行为
 没有新增双侧门禁，整体仍为 L2/MISMATCH。
+
+## 2026-09-24：TypeSpacebase 数组吸附 walk + live map 查询族（RULEARITH-SPACEBASE-ARRAYSNAP-0001）
+
+- 新增 `SpacebaseMap<'a>`（getMap 动态投影：`Local(Option<&ScopeLocal>)`/
+  `Global(Option<&Arc<Scope>>)`）与 `ArrayedComponent`（newoff/elSize 全精度
+  结果对象）。
+- `TypeSpacebase::get_sub_type_in_map`/`nearest_arrayed_component_forward_in_map`
+  /`nearest_arrayed_component_backward_in_map`：type.cc:2947/2971/3020 的
+  live-map 形式。forward 三分支（miss/偏移非 0 片段→addr+32；struct 符号先走
+  自身 forward walk；否则跳容器末=addr+byteToAddressInt(size,ws)）+ 回绕检查
+  + 第二查询必须整符号（getOffset()==0）且类型为数组或前向含数组的结构体。
+- `spacebase_local_query_container`（database.cc:2250
+  ScopeInternal::findContainer 的 ScopeLocal 静态日志形态）：最小包含条目、
+  严格小于的尺寸竞争、尺寸恰等早退、null usepoint 仅放行 addrtied 符号
+  （database.cc:117-118）；Ghidra 父 scope walk 对 stack 地址在全局 maptable
+  必 miss，仅查本地日志观察等价。
+- 自由函数 `nearest_arrayed_component_forward/backward`（type.cc:188/201 基类
+  +1698/1669 TypeStruct 覆写的虚分派形态，newoff/elSize 全精度；与
+  ruleaction.rs RulePtrsubUndo 的同名布尔版（testForArraySlack 专用）不同）。
+- `get_sub_type` 的 byte→address 换算由乘改除（space.hh:523
+  byteToAddress=val/ws；ws=1 恒等，无行为变化）。
+- 单测：test_spacebase_nearest_arrayed_walks_live_map（FG 反推的 oppool2
+  ScopeLocal 形态 [8B 单元素数组@-0x4f8][8B 标量@-0x4f0][数组@-0x4e8]：
+  backward@-0x4f8 命中 newoff=0、forward@-0x4f0 吸附 newoff=-8、远距 miss
+  (undefined1,0)）+ test_struct_nearest_arrayed_component_walks（结构体
+  字段 walk 的 newoff/elSize 精度与基类 null walk）。
