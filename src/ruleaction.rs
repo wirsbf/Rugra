@@ -13931,7 +13931,7 @@ impl Rule for RulePieceStructure {
             let vn_size = vn.read().unwrap().get_size();
             if is_leaf {
                 // Insert a COPY: vn → newVn at the correct address, then point
-                // the PIECE input at newVn. Faithful to 7679-7699. The new
+                // the PIECE input at newVn. Faithful to 7661-7681. The new
                 // varnode inherits the root's address space
                 // (PIECESTRUCT-SPACE-0001), matching Ghidra's
                 // newVarnodeOut(size, addr, copyOp) where addr is
@@ -13950,16 +13950,36 @@ impl Rule for RulePieceStructure {
                             .get_exact_piece(ct.clone(), type_offset as i64, vn_size)
                     })
                     .or_else(|| vn.read().unwrap().get_type());
-                if let Some(t) = new_type {
-                    new_vn.write().unwrap().update_type(t);
+                if let Some(t) = new_type.as_ref() {
+                    new_vn.write().unwrap().update_type(t.clone());
                 }
                 fd.op_set_opcode(&copy_op, OpCode::CPUI_COPY);
+                // cc:7673 (vn->getType()) read before the edge wiring
+                // consumes the Arc (Rugra borrow-order glue; Ghidra reads it
+                // after opSetInput with identical value).
+                let vn_inst_type = vn.read().unwrap().get_type();
                 fd.op_set_input(&copy_op, vn, 0);
                 fd.op_set_input(
                     &crate::op::PcodeOpRef(op_clone.clone()), new_vn.clone(), slot,
                 );
                 fd.op_insert_before(&copy_op, &crate::op::PcodeOpRef(op_clone.clone()));
-                // needsResolution / resolveInFlow: not modelled in Rugra.
+                // cc:7673-7676: if vn's (instance) type needs resolution,
+                // inherit the PIECE's read resolution for the COPY's read.
+                if let Some(vt) = vn_inst_type.as_ref().filter(|t| t.needs_resolution()) {
+                    fd.inherit_resolution(
+                        vt.as_ref(),
+                        &copy_op,
+                        0,
+                        &crate::op::PcodeOpRef(op_clone.clone()),
+                        slot as i32,
+                    );
+                }
+                // cc:7677-7678: if the piece represents part of a union,
+                // resolve it — resolveInFlow populates union_map for the new
+                // COPY's def-facing edge (last-chance scoring).
+                if let Some(nt) = new_type.as_ref().filter(|t| t.needs_resolution()) {
+                    crate::unionresolve::resolve_in_flow(fd, nt, &copy_op, -1);
+                }
                 let mut nv = new_vn.write().unwrap();
                 if !nv.is_addr_tied() {
                     nv.set_proto_partial();

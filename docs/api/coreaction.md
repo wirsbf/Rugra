@@ -1,5 +1,50 @@
 # `coreaction.rs` API Reference
 
+## 2026-09-23：union 逐边解析管线接线（UNIONRESOLVE-PIPELINE-WIRING-0001 / EN2）
+
+`fd.union_map` 生产方全链接通——`ActionSetCasts`/`ActionInferTypes` 三个 oracle 调用点
+（coreaction.cc:2499/2556/5083）从"登记残差"变为 1:1 移植，`(char **)` 形态落地：
+
+1. **`resolveUnion`（cc:2490-2524）**：apply 循环每 slot 先于 `cast_input` 调用
+   （cc:2759）——annotation 早退 → `vn.high.type` needsResolution 门 →
+   `dt != vn.type` 时 last-chance `resolve_in_flow(op,slot)` → `get_union_field`
+   咨询 → `field_num >= 0` 分三臂：TYPE_PTR 且 `cast_standard(req,res,true,true)`
+   仍需 cast 时不解析，否则 `insert_ptrsub_zero` + 把 resUnion 挂到新 PTRSUB 的
+   def 边（-1）；implied 非 PTR 臂在 write/read resolution 同 field 时返回 0，
+   其余 `setImpliedField()`（varnode.rs 写域占线，已按 RUGRA-GLUE 注释移交）。
+2. **`tryResolutionAdjustment`（cc:2424-2459）**：`castInput` else-if 链第 4 臂
+   （cc:2699）——in/out high type 任一 needsResolution 时
+   `find_compatible_resolve` 互配（in 先，out 以 `get_depend(in,inResolve)` 或
+   inType 为参），两侧 `ResolvedUnion::with_field` + `set_union_field`（locked
+   失败即 false）。
+3. **`insertPtrsubZero`（cc:2630-2644）**：PTRSUB(vn,#0) 占位插入，输出 implied +
+   `update_type(ct)`；被 resolveUnion（读侧）与 castInput TYPE_PTR+testStructOffset0
+   臂（cc:2692-2698，PTRSUB0 修复同轮落地）共用，后者的 needsResolution high
+   继承 `inherit_resolution(newop,0,op,slot)`（cc:2695-2696）。
+4. **`castInput` CAST 后记账（cc:2713-2717）**：ct needsResolution →
+   `force_facing_type(ct,-1,newop,-1)`；vn high needsResolution →
+   `inherit_resolution`。
+5. **`castOutput` 三处（cc:2545-2557/2610-2613）**：tokenct typeEqual + needsResolution
+   → `set_union_field(tokenct,op,-1,ResolvedUnion(tokenct))`；outHighType
+   needsResolution 且 `!= outvn.type` → last-chance `resolve_in_flow(op,-1)`，
+   out_high_resolve 改由 `find_resolve`（def-facing）；新 CAST/PTRSUB 后
+   `force_facing_type`/`inherit_resolution` 对偶记账。
+6. **`propagateTypeEdge`（cc:5081-5084）**：incoming temp type needsResolution 时
+   `resolve_in_flow(op,inslot)` 先于 backtrack 检查执行（"Always give incoming
+   data-type a chance to resolve"——backtrack 边也产生 union_map 写入这一可见
+   副作用）；调用链 `propagate_one_type`/`propagate_across_returns`/
+   `propagate_ref`/`propagate_spacebase_ref` 透传 `&mut fd`。
+7. **fd-aware read-facing 咨询替换**：`load/store/copy/ordering/extension/shift/
+   divrem_input_cast` 及 metain 回退臂的 `get_high_type_read_facing`/
+   `get_high_type_def_facing` 全部改走 `crate::unionresolve::vn_high_type_read_facing`/
+   `vn_high_type_def_facing`（varnode.cc:626-672 的 union_map 感知孪生；varnode.rs
+   本体仍为退化实现，EJ2 写域）。op 读锁在派发前释放，由各臂自取。
+
+**验证**：curl ②行 `glob.pattern[8].content.Set.elements = (char **)in_stack_…fd90`
+== golden 746（124 函数唯一文本变化，main skeleton 588→584）；三门禁 curl
+**2589/0/0**（亲父 dd22aba5 2593，-4）、httpd **2335/0/0** 字节级恒等；
+next_url(335/96457)+match_url(340/80385)+parseconfig(335/130099) 三投影 MATCH。
+
 ## 2026-09-23：NodeJoin count 适配器 + ConditionalConst phi 路径忠实接通（PARSECONFIG-CONDCONST-PHI-0001）
 
 parseconfig.constprop.0 Phase 2 投影对拍（oracle e40ed130 pin sha256=b2ace56a…，335

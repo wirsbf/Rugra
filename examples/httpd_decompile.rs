@@ -289,6 +289,21 @@ fn tracked_context_architecture() -> Result<rugra::arch::Architecture, String> {
     // CALL return-address push stores alive in every function (the golden
     // absorbs them everywhere except main) and unblocked neither
     // ActionStackPtrFlow's known-extrapop path nor the callspec models.
+    // TYPEPROP-NONSETTLING-HTTPD-0001 (EO2 root-cause note, folded in from
+    // master 983e0fc9; the factory below is the fix): Architecture::init
+    // builds the TypeFactory unconditionally (buildTypegrp at
+    // architecture.cc:1398) — every Funcdata observes
+    // `data.getArch()->types`, and Funcdata::spacebase (funcdata.cc:245-264)
+    // relies on it to typelock the input stack pointer with
+    // TypePointer→TypeSpacebase. Without the factory, the typelock leg is
+    // skipped, RulePtrsubUndo's isPtrsubMatching guard (ruleaction.cc:7138 →
+    // TypeSpacebase::getSubType's TYPE_UNKNOWN fallback, type.cc:2964) never
+    // matches, and the annotateRawStackPtr (varmap.cc:386) PTRSUB(sp,#0)
+    // annotation is dismantled by ptrsubundo→identityel→propagatecopy→
+    // earlyremoval and re-created every mainloop pass — the mainloop
+    // rule_repeatapply loop never reaches a fixed point
+    // (ap_build_cont_config / ap_log_rerror TIMEOUT). Same locked cspec as
+    // the curl worker.
     let cspec_bytes = fs::read("sleigh_specs/x86-64-gcc.cspec")
         .map_err(|error| format!("unable to read compiler spec: {error}"))?;
     let cspec_doc = store
