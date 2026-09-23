@@ -123,7 +123,7 @@ RANGEUTIL-CONSTGEN-0001 +3）。
 - `generate_constraints(worklist, reads)`（cc:2248）——2026-09-23 全量：系统块支配链收集（MULTIEQUAL 全入块）、读点块链、blockList 清标后扫入边找 2 出边 CBRANCH splitPoint、finalList 去重清标。
 - `check_relative_constant(vn, &mut type_code, &mut value)`（cc:2316）。
 - `generate_relative_constraint(comp_op, cbranch)`（cc:2351）——2026-09-23 全量：INT_LESS/LESSEQUAL→SLESS/SLESSEQUAL 重映射、checkRelativeConstant 两侧判定、COPY/PTRSUB/INT_ADD(const in1) 链回溯后 constraintsFromPath(typeCode)。
-- `CircleRange::pull_back(op, usenzmask)`（cc:1022）——2026-09-23 新增（RANGEUTIL-CONSTGEN-0001）：op 级回拉（一元/二元非常量槽位、SUBPIECE nzmask 补救臂 cc:1053-1064、末尾 setNZMask 交集 cc:1075-1082）；C++ `constMarkup` 出参在本路径观测死代码，RUGRA-GLUE 省略（注释说明）。
+- `CircleRange::pull_back(op, usenzmask)`（cc:1022）——2026-09-23 新增（RANGEUTIL-CONSTGEN-0001）：op 级回拉（一元/二元非常量槽位、SUBPIECE nzmask 补救臂 cc:1053-1064、末尾 setNZMask 交集 cc:1075-1082）；**同日（RULEMELD-FIDELITY-RESIDUE-0001 / EZ）签名扩为 `pull_back(op, usenzmask, const_markup: &mut Option<Arc<RwLock<Varnode>>>)`**：cc:1069-1070 的 `constMarkup` 出参落地——二元臂回拉成功且常量携带 SymbolEntry 时写出（最后写者胜、从不清零，镜像 C++ 共享出参语义）；约束族调用方传 `&mut None` 丢弃槽，RuleRangeMeld 传入自己的 markup 并在 cc:1414-1417 消费（`copy_symbol_if_valid`）。
 - `ValueSetEdge`（hh:281）——出边迭代器，预收集后继 id。
 
 **`pub struct ValueSetInput`**（RUGRA-GLUE，**2026-09-23 移除**）——旧的 `iterate`
@@ -209,9 +209,10 @@ generateConstraints/generateRelativeConstraint 全为结构壳，前置缺口=
 CircleRange::pullBack(PcodeOp*) op 级回拉。
 
 **修复**（全部对照 rangeutil.cc 锁定 oracle 逐行）：
-- `CircleRange::pull_back(op, usenzmask)`（cc:1022-1084）：一元臂/二元槽位臂/
+- `CircleRange::pull_back(op, usenzmask[, const_markup])`（cc:1022-1084）：一元臂/二元槽位臂/
   SUBPIECE nzmask 补救（mostsigbit_set(nzm)+8)/8 与 outSize 比较、mask 扩展）/
-  setNZMask 集合交集（2 段失败保留原范围仍算成功）。
+  setNZMask 集合交集（2 段失败保留原范围仍算成功）；constMarkup 出参
+  （cc:1069-1070）同日 EZ 车道补齐（见上文 2026-09-23 CONSTGEN 条目更新）。
 - `apply_constraints`（cc:2105-2173）：boolean-flip 真假出边对调、
   restrictedByConditional 双侧、MULTIEQUAL ValueSet 加 landmark
   （addLandmark=equation@slot numParams）、descend 顺序遍历、read-site

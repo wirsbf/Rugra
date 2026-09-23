@@ -829,6 +829,8 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   4. BOOL_AND → intersect，BOOL_OR → union。
   5. 根据结果类型：translate_to_op（INT_LESS/INT_LESSEQUAL）或 COPY(#1)（always true）或 COPY(#0)（always false）。
   - 新增辅助函数 `pull_back_op(range, op)` — 简化版 pullBack（unary/binary 分发，不跟踪 constMarkup/usenzmask）。
+    （2026-09-23 已删除：RuleRangeMeld 切换到正典 `CircleRange::pull_back(op, usenzmask, &mut markup)`，
+    见下文 RULEMELD-FIDELITY-RESIDUE-0001 节。）
   - 修复 CircleRange::union 返回码语义对齐 Ghidra circleUnion（0=single, 1=two pieces, 2=full）+ 相邻范围合并。
   - 测试：`(V<5)||(V==5) => V<6`（语义等价 V<=5）。
 
@@ -1554,3 +1556,36 @@ defects/numbering 保持 0,`(0 - ` 残留 30→0。
    MULTIEQUAL，oracle 不可达形态）保守放行 false。
 验收：match_url Phase 2 ordinal 28（oppool1 861=861）→29（lanedivide 2=2，
 见 docs/api/arch.md）连续两级对齐；curl/httpd E2E defects=numbering=0。
+
+## 2026-09-23：RuleRangeMeld 残差三件 + RuleSubRight lump 地址源（RULEMELD-FIDELITY-RESIDUE-0001 / EZ + CR11 O-1）
+
+- **RuleSubRight lump 臂 shiftop 地址源（CR11 O-1）**：cc:7299
+  `data.newOp(2,op->getAddr())` 的 `op` 在 cc:7286 已重绑为 `lone`（幸存的
+  INT_RIGHT/INT_SRIGHT），shift op 必须继承 **lone 的地址**，不是被 unlink 的
+  原 SUBPIECE 地址。ruleaction.rs 修复为从 `working_op_ref`（镜像重绑后 `op`
+  的 Rust 变量）取地址；`op_insert_before`/`op_set_input` 早已走同一变量。
+  行为锁：`test_rule_subright_lump_unlinks_original_subpiece` 现给 lone 独立
+  地址 0x2000 并断言 shiftop.get_addr()==0x2000。
+- **RuleRangeMeld markup 传播（cc:1414-1417）**：重建比较 op 时
+  `newConst->copySymbolIfValid(markup)` 此前缺失。现在 apply_op 持有单个共享
+  `markup: Option<Arc<RwLock<Varnode>>>`（cc:1377 语义：跨全部 pullBack、从不
+  清零、cc:1069-1070 每次符号常量覆盖=最后写者胜），translate 成功臂对
+  `fd.new_constant` 产物调用 `Varnode::copy_symbol_if_valid`。
+- **cc:1401 isHeritageKnown 真判定**：`if (!A1->isHeritageKnown()) return 0`
+  是 varnode.hh:298 的 flag 检查（`flags & (insert|constant|annotation)`），
+  此前用 `is_free()` 代理（双向偏差：INPUT-only 无 INSERT 的形态被放行，
+  bank 注册未写 varnode（INSERT 置位但 free）被拒）。现接
+  `Varnode::is_heritage_known`（varnode.rs 既有忠实实现）。三个既有 meld
+  fixture 同步改走 `fd.vbank.set_input`（真实输入路径=setInput→xref→INSERT，
+  varnode.cc:1306），不再手拼 INPUT flag。行为锁：
+  `test_rule_range_meld_heritage_unknown_varnode_bails`（INPUT-only 无 INSERT
+  → NO_CHANGE）。
+- **pull_back_op 删除（TODO ③ 的另一半）**：简化版 pullBack（无 constMarkup、
+  无 cc:1053-1065 SUBPIECE nzmask 补救臂、无 cc:1075-1082 nzmask 尾交集）已
+  删除，6 个调用点全部切到正典 `CircleRange::pull_back(op, usenzmask,
+  &mut markup)`（rangeutil.rs 全量版）。RangeMeld 路径 usenzmask=false 与
+  oracle 一致（SUBPIECE 补救臂对该规则为死路，同 Ghidra）；markup 出参见
+  docs/api/rangeutil.md 同日条目。
+- 测试：markup 传播端到端锁
+  `test_rule_range_meld_markup_propagates_to_new_constant`（`(V<5)||(V==5)`
+  合并常量 6 携带 c5 的 equate SymbolEntry）。

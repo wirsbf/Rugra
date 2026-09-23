@@ -11551,15 +11551,18 @@ impl Rule for RuleRangeMeld {
             (op.opcode, sub1, sub2)
         };
 
-        // Pull back range1 from sub1.
+        // Pull back range1 from sub1. cc:1376-1377: one shared `markup`
+        // varnode is threaded through every pull-back (never cleared —
+        // cc:1069-1070 overwrites on each symbol-carrying constant).
         let mut range1 = CircleRange::new(1, 2, 1, 1); // CircleRange(true)
-        let a1 = pull_back_op(&mut range1, &sub1_arc);
+        let mut markup: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = None;
+        let a1 = range1.pull_back(&sub1_arc, false, &mut markup);
         let a1 = match a1 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
         };
 
         // Pull back range2 from sub2.
         let mut range2 = CircleRange::new(1, 2, 1, 1); // CircleRange(true)
-        let a2 = pull_back_op(&mut range2, &sub2_arc);
+        let a2 = range2.pull_back(&sub2_arc, false, &mut markup);
         let a2 = match a2 { Some(v) => v, None => return Ok(action_status::NO_CHANGE) ,
         };
 
@@ -11570,7 +11573,7 @@ impl Rule for RuleRangeMeld {
             let a1_def = a1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
             let a1_def = match a1_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
             };
-            match pull_back_op(&mut range1, &a1_def) {
+            match range1.pull_back(&a1_def, false, &mut markup) {
                 Some(v) => v,
                 None => return Ok(action_status::NO_CHANGE),
             }
@@ -11583,7 +11586,7 @@ impl Rule for RuleRangeMeld {
             let a2_def = a2.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
             let a2_def = match a2_def { Some(d) => d, None => return Ok(action_status::NO_CHANGE) ,
             };
-            match pull_back_op(&mut range2, &a2_def) {
+            match range2.pull_back(&a2_def, false, &mut markup) {
                 Some(v) => v,
                 None => return Ok(action_status::NO_CHANGE),
             }
@@ -11601,7 +11604,7 @@ impl Rule for RuleRangeMeld {
             if s1 < s2 && a2.read().unwrap().is_written() {
                 let a2_def = a2.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
                 if let Some(d) = a2_def {
-                    match pull_back_op(&mut range2, &d) {
+                    match range2.pull_back(&d, false, &mut markup) {
                         Some(v) if functional_equality_eq(&a1, &v) => { /* ok */ }
                         _ => return Ok(action_status::NO_CHANGE),
                     }
@@ -11611,7 +11614,7 @@ impl Rule for RuleRangeMeld {
             } else if a1.read().unwrap().is_written() {
                 let a1_def = a1.read().unwrap().def.as_ref().and_then(|w| w.upgrade());
                 if let Some(d) = a1_def {
-                    match pull_back_op(&mut range1, &d) {
+                    match range1.pull_back(&d, false, &mut markup) {
                         Some(v) if functional_equality_eq(&v, &a2) => { /* ok */ }
                         _ => return Ok(action_status::NO_CHANGE),
                     }
@@ -11623,9 +11626,14 @@ impl Rule for RuleRangeMeld {
             }
         }
 
-        // isHeritageKnown — Rugra has no explicit flag; conservatively assume true
-        // for non-free varnodes.
-        if a1.read().unwrap().is_free() {
+        // cc:1401: if (!A1->isHeritageKnown()) return 0. Faithful flag
+        // check (varnode.hh:298): flags & (insert|constant|annotation).
+        // Bank-created varnodes carry INSERT from VarnodeBank::xref
+        // (varnode.cc:1306); makeFree clears it (varnode.cc:1323). The old
+        // is_free() proxy diverged in both directions: INPUT-only varnodes
+        // (free=false but heritage-unknown pre-bank) passed, and registered
+        // never-written bank varnodes (INSERT set, free=true) bailed.
+        if !a1.read().unwrap().is_heritage_known() {
             return Ok(action_status::NO_CHANGE);
         }
 
@@ -11664,6 +11672,16 @@ impl Rule for RuleRangeMeld {
             match range1.translate_to_op() {
                 Ok((opc, resc, resslot)) => {
                     let new_const = fd.new_constant(a1_size, resc);
+                    // cc:1415-1417: propagate potential constant markup into
+                    // the new constant. copySymbolIfValid is a no-op when the
+                    // symbol's value does not match the constant (varnode.cc
+                    // copySymbolIfValid gating).
+                    if let Some(markup_vn) = &markup {
+                        crate::varnode::Varnode::copy_symbol_if_valid(
+                            &new_const,
+                            &markup_vn.read().unwrap(),
+                        );
+                    }
                     fd.op_set_opcode(&follow, opc);
                     fd.op_set_input(&follow, a1.clone(), (1 - resslot) as usize);
                     fd.op_set_input(&follow, new_const, resslot as usize);
@@ -11698,58 +11716,14 @@ impl Rule for RuleRangeMeld {
     fn get_opcodes(&self) -> Vec<OpCode> { vec![OpCode::CPUI_BOOL_OR, OpCode::CPUI_BOOL_AND] }
 }
 
-/// Pull back a CircleRange through a comparison op. Faithful to
-/// `CircleRange::pullBack` (rangeutil.cc:1022-1073) simplified: returns the
-/// non-constant input Varnode that the range now applies to, or None if the
-/// op cannot be pulled back through. Does not track constMarkup or useNZMask.
-// Ghidra: rangeutil.cc:1022 CircleRange::pullBack
-fn pull_back_op(
-    range: &mut crate::rangeutil::CircleRange,
-    op: &std::sync::Arc<std::sync::RwLock<PcodeOp>>,
-) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
-    let op_rg = op.read().unwrap();
-    let num_input = op_rg.inrefs.len();
-    let opc = op_rg.opcode;
-    let out_size = op_rg
-        .output
-        .as_ref()
-        .map(|v| v.read().unwrap().get_size())
-        .unwrap_or(1);
-    if num_input == 1 {
-        let res = op_rg.inrefs.get(0)?.clone();
-        if res.read().unwrap().is_constant() {
-            return None;
-        }
-        let in_size = res.read().unwrap().get_size();
-        if !range.pull_back_unary(opc, in_size, out_size) {
-            return None;
-        }
-        Some(res)
-    } else if num_input == 2 {
-        // Find the non-constant input and slot.
-        let in0 = op_rg.inrefs.get(0)?;
-        let in1 = op_rg.inrefs.get(1)?;
-        let (res, val, slot) = if in0.read().unwrap().is_constant() {
-            if in1.read().unwrap().is_constant() {
-                return None;
-            }
-            let val = in0.read().unwrap().get_offset();
-            (in1.clone(), val, 1)
-        } else if in1.read().unwrap().is_constant() {
-            let val = in1.read().unwrap().get_offset();
-            (in0.clone(), val, 0)
-        } else {
-            return None;
-        };
-        let in_size = res.read().unwrap().get_size();
-        if !range.pull_back_binary(opc, val, slot, in_size, out_size) {
-            return None;
-        }
-        Some(res)
-    } else {
-        None
-    }
-}
+// RUGRA-GLUE: the former simplified `pull_back_op` wrapper (which dropped
+// constMarkup, the SUBPIECE nzmask salvage arm and the usenzmask tail) was
+// removed — RuleRangeMeld now calls the canonical
+// `CircleRange::pull_back(op, usenzmask, &mut markup)` directly
+// (rangeutil.cc:1022-1084 full port), which restores cc:1053-1065 SUBPIECE
+// salvage (dead here because RuleRangeMeld passes usenzmask=false, exactly
+// like the oracle), the cc:1069-1070 markup pass-back, and the cc:1075-1082
+// nzmask intersection tail for usenzmask=true callers.
 
 /// Merge float range conditions of the form: `V f< c, c f< V, V f== c` etc.
 ///
@@ -12712,7 +12686,11 @@ impl Rule for RuleSubRight {
         }
         // Create shift BEFORE the SUBPIECE happens.
         let a_size = a.read().unwrap().get_size();
-        let addr = op_arc.read().unwrap().get_addr();
+        // cc:7299 `newOp(2,op->getAddr())` reads the address of the REBOUND
+        // `op` — after the lump arm it is `lone` (cc:7286 `op = lone`), i.e.
+        // the surviving SUBPIECE-to-be, not the unlinked original SUBPIECE.
+        // working_op_ref mirrors the rebound `op` exactly.
+        let addr = working_op_ref.0.read().unwrap().get_addr();
         let shiftop = fd.new_op(2, addr);
         fd.op_set_opcode(&shiftop, opc);
         // Ghidra: ct = getBase(a->getSize(), opc==INT_RIGHT?TYPE_UINT:TYPE_INT)
@@ -23616,9 +23594,9 @@ mod tests {
         let v = fd
             .vbank
             .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        v.write()
-            .unwrap()
-            .set_flags(crate::varnode::varnode_flags::INPUT);
+        // Real inputs go through VarnodeBank::setInput → xref → INSERT flag
+        // (varnode.cc:1306) — required for the cc:1401 isHeritageKnown gate.
+        let v = fd.vbank.set_input(v).unwrap();
         let c5 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(5, 4)));
         c5.write()
             .unwrap()
@@ -23688,9 +23666,8 @@ mod tests {
         let v = fd
             .vbank
             .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
-        v.write()
-            .unwrap()
-            .set_flags(crate::varnode::varnode_flags::INPUT);
+        // setInput → xref → INSERT (varnode.cc:1306): cc:1401 gate input.
+        let v = fd.vbank.set_input(v).unwrap();
         let c200 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(200, 4)));
         c200
             .write()
@@ -23751,6 +23728,172 @@ mod tests {
         assert!(o.inrefs[0].read().unwrap().is_constant());
         assert_eq!(o.inrefs[0].read().unwrap().get_offset(), 200);
         assert!(Arc::ptr_eq(&o.inrefs[1], &v));
+    }
+
+    /// cc:1401 `if (!A1->isHeritageKnown()) return 0` — the real flag check
+    /// (varnode.hh:298: flags & (insert|constant|annotation)). A varnode
+    /// that is INPUT-only and was never run through VarnodeBank::xref (no
+    /// INSERT flag) is heritage-UNKNOWN: the rule must bail even though the
+    /// old `is_free()` proxy (flags & (input|written)) == 0 would have let
+    /// the meld proceed (INPUT set → not free).
+    #[test]
+    fn test_rule_range_meld_heritage_unknown_varnode_bails() {
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 16);
+        // Hand-built varnode: INPUT flag only — no bank xref, so no INSERT.
+        let v = Arc::new(RwLock::new(crate::varnode::Varnode::new_register(0x10, 4)));
+        v.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        assert!(!v.read().unwrap().is_free(), "fixture: INPUT ⇒ not free");
+        assert!(
+            !v.read().unwrap().is_heritage_known(),
+            "fixture: INPUT-only without INSERT ⇒ heritage unknown"
+        );
+        let c200 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(200, 4)));
+        c200
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::CONSTANT);
+        let c250 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(250, 4)));
+        c250
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::CONSTANT);
+
+        let mut mk_sless = |ord: u32,
+                            cnst: &Arc<RwLock<crate::varnode::Varnode>>,
+                            out_off: u64|
+         -> (
+            Arc<RwLock<crate::varnode::Varnode>>,
+            Arc<RwLock<PcodeOp>>,
+        ) {
+            let out = fd
+                .vbank
+                .create_with_space(1, crate::space::AddressSpace::Register, out_off);
+            let op = Arc::new(RwLock::new(PcodeOp::new(
+                SeqNum::new(Address::new(0x1000), ord),
+                OpCode::CPUI_INT_SLESS,
+            )));
+            op.write().unwrap().inrefs = vec![cnst.clone(), v.clone()];
+            op.write().unwrap().output = Some(out.clone());
+            op.write().unwrap().flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
+            out.write().unwrap().def = Some(Arc::downgrade(&op));
+            out.write()
+                .unwrap()
+                .set_flags(crate::varnode::varnode_flags::WRITTEN);
+            (out, op)
+        };
+        // Hold both defining ops alive: the outputs' def Weaks die with the
+        // Arcs, which would short-circuit applyOp at the def-upgrade step.
+        let (s1_out, _s1_op) = mk_sless(0, &c200, 0x20);
+        let (s2_out, _s2_op) = mk_sless(1, &c250, 0x21);
+
+        let outer = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_BOOL_OR,
+        )));
+        outer.write().unwrap().inrefs = vec![s1_out, s2_out];
+
+        let rule = RuleRangeMeld::new();
+        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        assert_eq!(
+            result, action_status::NO_CHANGE,
+            "heritage-unknown A1 must bail (cc:1401)"
+        );
+        // And the op is untouched.
+        assert_eq!(
+            outer.read().unwrap().opcode,
+            OpCode::CPUI_BOOL_OR,
+            "no meld must run on heritage-unknown varnode"
+        );
+    }
+
+    /// cc:1414-1417: when a pulled-back constant carries a SymbolEntry, the
+    /// markup must propagate into the rebuilt comparison's new constant via
+    /// `newConst->copySymbolIfValid(markup)`. Mirrors the oracle's shared
+    /// `markup` out-param threading (rangeutil.cc:1069-1070).
+    #[test]
+    fn test_rule_range_meld_markup_propagates_to_new_constant() {
+        let mut fd = Funcdata::new("test", Address::new(0x1000), 16);
+        let v = fd
+            .vbank
+            .create_with_space(4, crate::space::AddressSpace::Register, 0x10);
+        // setInput → xref → INSERT (varnode.cc:1306): cc:1401 gate input.
+        let v = fd.vbank.set_input(v).unwrap();
+        let c5 = Arc::new(RwLock::new(crate::varnode::Varnode::new_constant(5, 4)));
+        c5.write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::CONSTANT);
+        // Attach an equate SymbolEntry to c5, registered value-close to the
+        // merged constant 6 (copySymbolIfValid gating: isValueClose compares
+        // against the NEW constant, varnode.cc:510-522).
+        let symbol = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::database::Symbol::new(0, "EQ5", "equ"),
+        ));
+        crate::varnode::equate_symbol_registry::register_value(&symbol, 6);
+        let entry = crate::database::SymbolEntry::new_dynamic(
+            symbol,
+            0, 1, 0, 4, Default::default(),
+        );
+        c5.write()
+            .unwrap()
+            .set_symbol_entry(std::sync::Arc::new(std::sync::RwLock::new(entry)));
+
+        let mut mk_bool_op =
+            |ord: u32,
+             opc: OpCode,
+             out_off: u64|
+         -> (
+                Arc<RwLock<crate::varnode::Varnode>>,
+                Arc<RwLock<PcodeOp>>,
+            ) {
+                let out = fd
+                    .vbank
+                    .create_with_space(1, crate::space::AddressSpace::Register, out_off);
+                let op = Arc::new(RwLock::new(PcodeOp::new(
+                    SeqNum::new(Address::new(0x1000), ord),
+                    opc,
+                )));
+                op.write().unwrap().inrefs = vec![v.clone(), c5.clone()];
+                op.write().unwrap().output = Some(out.clone());
+                op.write().unwrap().flags |= crate::op::pcodeop_flags::BOOLOUTPUT;
+                out.write().unwrap().def = Some(Arc::downgrade(&op));
+                out.write()
+                    .unwrap()
+                    .set_flags(crate::varnode::varnode_flags::WRITTEN);
+                (out, op)
+            };
+        // Hold both defining ops alive (see heritage test note).
+        let (less_out, _less_op) = mk_bool_op(0, OpCode::CPUI_INT_LESS, 0x20);
+        let (eq_out, _eq_op) = mk_bool_op(1, OpCode::CPUI_INT_EQUAL, 0x21);
+
+        let outer = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_BOOL_OR,
+        )));
+        outer.write().unwrap().inrefs = vec![less_out, eq_out];
+
+        let rule = RuleRangeMeld::new();
+        let result = rule.apply_op(&outer, &mut fd).unwrap();
+        assert_eq!(result, action_status::CHANGE);
+        let o = outer.read().unwrap();
+        // Merged [0,6) → INT_LESS(V, 6): the rebuilt constant input carries
+        // the markup propagated from c5.
+        assert!(
+            o.opcode == OpCode::CPUI_INT_LESS || o.opcode == OpCode::CPUI_INT_LESSEQUAL,
+            "expected INT_LESS or INT_LESSEQUAL, got {:?}",
+            o.opcode
+        );
+        let const_slot = if Arc::ptr_eq(&o.inrefs[0], &v) { 1 } else { 0 };
+        assert!(
+            o.inrefs[const_slot].read().unwrap().is_constant(),
+            "rebuilt comparison must hold the merged constant"
+        );
+        assert_eq!(o.inrefs[const_slot].read().unwrap().get_offset(), 6);
+        assert!(
+            o.inrefs[const_slot].read().unwrap().get_symbol_entry().is_some(),
+            "cc:1415-1417: constant markup must propagate into the new constant"
+        );
     }
 
     #[test]
@@ -24380,8 +24523,13 @@ mod tests {
         let c4 = fd.new_constant(4, 4);
         fd.op_set_input(&sub_op, c4, 1); // c = 4 ≠ 0
         fd.obank.alivelist.push(sub_op.clone());
-        // Lone descendant: INT_RIGHT(outvn, 8) — constant shift.
-        let lone = fd.new_op(2, Address::new(0x1000));
+        // Lone descendant: INT_RIGHT(outvn, 8) — constant shift. Built at a
+        // DIFFERENT address (0x2000) than the SUBPIECE (0x1000) so the test
+        // discriminates which address the lumped shift op inherits:
+        // cc:7286 `op = lone` then cc:7299 `newOp(2,op->getAddr())` must
+        // take the REBOUND op's (lone's) address, not the unlinked
+        // SUBPIECE's.
+        let lone = fd.new_op(2, Address::new(0x2000));
         fd.op_set_opcode(&lone, OpCode::CPUI_INT_RIGHT);
         let _lone_out = fd.new_unique_out(4, &lone);
         fd.op_set_input(&lone, outvn, 0);
@@ -24440,6 +24588,13 @@ mod tests {
             assert!(Arc::ptr_eq(&s.inrefs[0], &a), "shift reads the original a");
             assert_eq!(s.inrefs[1].read().unwrap().get_offset(), 40);
             assert!(Arc::ptr_eq(s.output.as_ref().unwrap(), &newout));
+            // O-1 (CR11): the lumped shift op carries lone's address
+            // (cc:7299 via the cc:7286 rebinding), not the SUBPIECE's.
+            assert_eq!(
+                s.get_addr(),
+                Address::new(0x2000),
+                "shiftop must inherit the rebound op's (lone's) address"
+            );
         }
     }
 
@@ -26417,3 +26572,4 @@ mod tests {
         assert_eq!(non_leaves, 2); // hi8, lo8
     }
 }
+
