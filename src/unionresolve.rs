@@ -8,10 +8,23 @@
 //! The full Ghidra scoring algorithm is implemented as the typed
 //! [`ScoreUnionFields`] API, which threads `Arc<Datatype>`,
 //! `Arc<RwLock<PcodeOp>>`, and `Arc<RwLock<Varnode>>` exactly as Ghidra
-//! threads raw `Datatype*`/`PcodeOp*`/`Varnode*`. The scoring tables in
+//! threads raw `Datatype*`/`PcodeOp*`/`Varnode*`. The TypeFactory is held
+//! as `Arc<RwLock<TypeFactory>>` — the mutable twin of Ghidra's
+//! `TypeFactory&` — because the scoring interning arms
+//! (`getTypePointerStripArray` cc:1022, `downChain` cc:435,
+//! `getTypePointer` cc:665) mutate the factory. The scoring tables in
 //! [`score_trial_down`](ScoreUnionFields::score_trial_down) and
 //! [`score_trial_up`](ScoreUnionFields::score_trial_up) are 1:1 with
 //! unionresolve.cc:305-833.
+//!
+//! NOTE (wiring gap, UNIONRESOLVE-PIPELINE-WIRING-0001): no pipeline
+//! producer invokes this scorer yet. The oracle entry points are
+//! `TypePointer::resolveInFlow`/`TypeUnion::resolveInFlow` (type.cc:1177 /
+//! type.cc:2125) called from the read-facing paths
+//! (`ActionSetCasts::resolveUnion` coreaction.cc:2499, `castOutput`
+//! coreaction.cc:2556, the typeprop driver coreaction.cc:5083, and
+//! `RulePtrsubUndo` ruleaction.cc:7678), which populate
+//! `Funcdata::union_map` via `setUnionField`.
 //!
 //! Ghidra reference:
 //! ghidra/Ghidra/Features/Decompiler/src/decompile/cpp/unionresolve.{hh,cc}.
@@ -56,19 +69,45 @@ impl ResolvedUnion {
     // Ghidra: unionresolve.cc:40 ResolvedUnion::ResolvedUnion(Datatype*,int4,TypeFactory&)
     /// Construct a reference to a specific field. Faithful to
     /// `ResolvedUnion::ResolvedUnion(Datatype *parent,int4 fldNum,
-    /// TypeFactory &typegrp)` (unionresolve.hh:47).
+    /// TypeFactory &typegrp)` (unionresolve.hh:47), including the cc:43-44
+    /// PARTIALUNION unwrap and the cc:51-55 pointer-parent arm (resolve is a
+    /// POINTER to the field, sized by the parent pointer).
+    ///
+    /// Ghidra interns the pointer through `typegrp.getTypePointer`; Rugra's
+    /// `with_field` only receives `&TypeFactory` (funcdata.rs
+    /// force_facing_type holds a read guard), so the pointer is constructed
+    /// structurally. Canonical interning lands with the pipeline wiring
+    /// (UNIONRESOLVE-PIPELINE-WIRING-0001); the structure/field_num are
+    /// already faithful.
     pub fn with_field(parent: Arc<Datatype>, fld_num: i32, typegrp: &TypeFactory) -> Self {
+        let _ = typegrp;
+        // cc:43-44: a partial-union parent resolves within its container.
+        let unwrapped;
+        let parent = match parent.as_ref() {
+            Datatype::PartialUnion(pu) => {
+                unwrapped = pu.container.clone();
+                &unwrapped
+            }
+            _ => &parent,
+        };
         let base_type = parent.clone();
         let resolve = if fld_num < 0 {
             parent.clone()
         } else {
             match parent.as_ref() {
-                Datatype::Pointer(_p) => {
-                    let field = depend_at(parent.as_ref(), fld_num as usize);
-                    let _ = typegrp;
-                    field
+                // cc:51-55: field = ptrTo->getDepend(fldNum); resolve =
+                // typegrp.getTypePointer(parent.size, field, wordSize).
+                Datatype::Pointer(pointer) => {
+                    let field = get_depend(pointer.ptr_to.as_ref(), fld_num as usize);
+                    Arc::new(Datatype::Pointer(
+                        crate::type_system::datatype::TypePointer::new(
+                            parent.get_size(),
+                            field,
+                            pointer.wordsize,
+                        ),
+                    ))
                 }
-                _ => depend_at(parent.as_ref(), fld_num as usize),
+                _ => get_depend(parent.as_ref(), fld_num as usize),
             }
         };
         Self { resolve, base_type, field_num: fld_num, lock: false }
@@ -146,6 +185,12 @@ impl ResolveEdge {
                 encoding += 0x1000;
                 pointee.get_id()
             }
+            // cc:73-74: a partial union keys by its container union id (the
+            // encoding is NOT bumped, unlike the pointer arm).
+            TypeMetatype::PartialUnion => match parent {
+                Datatype::PartialUnion(pu) => pu.container.get_id(),
+                _ => unreachable!("metatype PartialUnion without PartialUnion"),
+            },
             _ => parent.get_id(),
         };
         Self { type_id, op_time, encoding }
@@ -306,8 +351,17 @@ pub const MAX_TRIALS: i32 = 1024;
 /// Analyze data-flow to resolve which field of a union data-type is being
 /// accessed. Faithful to `ScoreUnionFields` (unionresolve.hh:82).
 pub struct ScoreUnionFields<'t> {
-    /// The factory containing data-types (cc:136 `typegrp`).
-    pub typegrp: &'t TypeFactory,
+    /// The factory containing data-types (cc:136 `typegrp`). Held as the
+    /// shared mutable twin of Ghidra's `TypeFactory&`: the scoring interning
+    /// arms mutate the factory in Ghidra (getTypePointerStripArray cc:1022,
+    /// downChain cc:435, getTypePointer cc:665).
+    pub typegrp: Arc<RwLock<TypeFactory>>,
+    /// The function being scored, for the locked call-spec consults
+    /// (scoreParameter cc:184 / scoreReturnType cc:204). Ghidra derives it
+    /// from `op->getParent()->getFuncdata()`; Rugra PcodeOps carry no
+    /// Funcdata back-pointer, so the caller threads it. `None` falls back to
+    /// the unlocked-param heuristic arms of both scorers.
+    pub fd: Option<&'t crate::funcdata::Funcdata>,
     /// Score for each field, indexed by `fieldNum + 1` (whole union is
     /// index 0) (cc:137 `scores`).
     pub scores: Vec<i32>,
@@ -330,8 +384,9 @@ impl<'t> ScoreUnionFields<'t> {
     /// Score a data-type involving a union against a data-flow edge.
     /// Faithful to the primary constructor (unionresolve.cc:990-1037).
     pub fn new(
-        typegrp: &'t TypeFactory, parent_type: Arc<Datatype>,
+        typegrp: Arc<RwLock<TypeFactory>>, parent_type: Arc<Datatype>,
         op: Arc<RwLock<PcodeOp>>, slot: i32,
+        fd: Option<&'t crate::funcdata::Funcdata>,
     ) -> Self {
         let result = ResolvedUnion::new(parent_type.clone());
         {
@@ -372,7 +427,9 @@ impl<'t> ScoreUnionFields<'t> {
             let mut is_array = false;
             if word_size != 0 {
                 if field_type.get_metatype() == TypeMetatype::Array { is_array = true; }
-                field_type = type_pointer_strip_array(typegrp, parent_type.get_size(), field_type, word_size);
+                let mut tg = typegrp.write().unwrap();
+                field_type = get_type_pointer_strip_array(
+                    &mut tg, parent_type.get_size(), field_type, word_size);
             }
             let vn_size = vn.read().unwrap().get_size();
             if vn_size != field_type.get_size() {
@@ -386,7 +443,7 @@ impl<'t> ScoreUnionFields<'t> {
             visited.insert(VisitMark::new(&vn, (i + 1) as i32));
         }
         let mut s = Self {
-            typegrp, scores, fields, visited, trial_current,
+            typegrp, fd, scores, fields, visited, trial_current,
             trial_next: Vec::new(), result, trial_count: 0,
         };
         s.run_passes();
@@ -398,8 +455,9 @@ impl<'t> ScoreUnionFields<'t> {
     /// Score a union against a SUBPIECE truncation. Faithful to the
     /// SUBPIECE constructor (unionresolve.cc:1050-1072).
     pub fn new_for_subpiece(
-        typegrp: &'t TypeFactory, union_type: Arc<Datatype>,
+        typegrp: Arc<RwLock<TypeFactory>>, union_type: Arc<Datatype>,
         offset: i64, op: Arc<RwLock<PcodeOp>>,
+        fd: Option<&'t crate::funcdata::Funcdata>,
     ) -> Self {
         let result = ResolvedUnion::new(union_type.clone());
         let vn = {
@@ -412,7 +470,7 @@ impl<'t> ScoreUnionFields<'t> {
         fields[0] = union_type.clone();
         scores[0] = -10;
         let mut s = Self {
-            typegrp, scores, fields,
+            typegrp, fd, scores, fields,
             visited: std::collections::BTreeSet::new(),
             trial_current: Vec::new(), trial_next: Vec::new(),
             result, trial_count: 0,
@@ -436,8 +494,9 @@ impl<'t> ScoreUnionFields<'t> {
     /// Score a union against an implied truncation at a data-flow edge.
     /// Faithful to the implied-truncation constructor (unionresolve.cc:1083-1108).
     pub fn new_for_implied_trunc(
-        typegrp: &'t TypeFactory, union_type: Arc<Datatype>,
+        typegrp: Arc<RwLock<TypeFactory>>, union_type: Arc<Datatype>,
         offset: i64, op: Arc<RwLock<PcodeOp>>, slot: i32,
+        fd: Option<&'t crate::funcdata::Funcdata>,
     ) -> Self {
         let result = ResolvedUnion::new(union_type.clone());
         let vn = {
@@ -457,7 +516,7 @@ impl<'t> ScoreUnionFields<'t> {
             let field_offset = uf.offset as i64;
             let ct_opt = score_truncation_inplace(
                 &mut scores, &uf.type_ptr, vn_size,
-                offset - field_offset, (i + 1) as i32);
+                offset - field_offset, (i + 1) as i32, &result.base_type);
             fields[i + 1] = uf.type_ptr.clone();
             if let Some(ct) = ct_opt {
                 if slot < 0 {
@@ -469,7 +528,7 @@ impl<'t> ScoreUnionFields<'t> {
             }
         }
         let mut s = Self {
-            typegrp, scores, fields, visited, trial_current,
+            typegrp, fd, scores, fields, visited, trial_current,
             trial_next: Vec::new(), result, trial_count: 0,
         };
         if s.trial_current.len() > 1 { s.run_passes(); }
@@ -485,9 +544,9 @@ impl<'t> ScoreUnionFields<'t> {
         fields.push(parent.clone());
         for n in field_names { fields.push(name_placeholder(n)); }
         let scores = vec![0i32; fields.len()];
-        let leaked: &'static TypeFactory = Box::leak(Box::new(TypeFactory::new(8)));
         Self {
-            typegrp: leaked, scores, fields,
+            typegrp: Arc::new(RwLock::new(TypeFactory::new(8))),
+            fd: None, scores, fields,
             visited: std::collections::BTreeSet::new(),
             trial_current: Vec::new(), trial_next: Vec::new(),
             result: ResolvedUnion::new(parent), trial_count: 0,
@@ -495,9 +554,9 @@ impl<'t> ScoreUnionFields<'t> {
     }
 
     // RUGRA-GLUE: Construct an empty scorer holding just an initial result.
-    fn empty(typegrp: &'t TypeFactory, result: ResolvedUnion) -> Self {
+    fn empty(typegrp: Arc<RwLock<TypeFactory>>, result: ResolvedUnion) -> Self {
         Self {
-            typegrp, scores: Vec::new(), fields: Vec::new(),
+            typegrp, fd: None, scores: Vec::new(), fields: Vec::new(),
             visited: std::collections::BTreeSet::new(),
             trial_current: Vec::new(), trial_next: Vec::new(),
             result, trial_count: 0,
@@ -601,7 +660,13 @@ impl<'t> ScoreUnionFields<'t> {
         if op.is_marker() { return true; }
         if parent.get_metatype() == TypeMetatype::Pointer {
             if in_slot < 0 { return true; }
-            if Self::test_array_arithmetic(op, in_slot, parent.get_size()) { return true; }
+            // cc:94/101/108 compare against result.baseType->getSize() —
+            // the pointer-stripped union size, not the pointer size.
+            let base_size = match parent {
+                Datatype::Pointer(p) => p.ptr_to.get_size(),
+                _ => parent.get_size(),
+            };
+            if Self::test_array_arithmetic(op, in_slot, base_size) { return true; }
         }
         if op.get_opcode() != OpCode::CPUI_COPY { return false; }
         if in_slot < 0 { return false; }
@@ -619,13 +684,14 @@ impl<'t> ScoreUnionFields<'t> {
         let mut score = 0i32;
         let mut ct = ct;
         let mut lock_type = lock_type;
+        // cc:149-150: the identity bonus is checked once, before the
+        // pointer-peel loop (no in-loop re-check).
         if std::ptr::eq(ct, lock_type) { score += 5; }
         while ct.get_metatype() == TypeMetatype::Pointer {
             if lock_type.get_metatype() != TypeMetatype::Pointer { break; }
             score += 5;
             ct = pointee_of(ct);
             lock_type = pointee_of(lock_type);
-            if std::ptr::eq(ct, lock_type) { score += 5; }
         }
         let ct_meta = ct.get_metatype();
         let vn_meta = lock_type.get_metatype();
@@ -844,11 +910,21 @@ impl<'t> ScoreUnionFields<'t> {
             OpCode::CPUI_CALL | OpCode::CPUI_CALLOTHER => {
                 let _ = in1;
                 if trial.in_slot > 0 {
-                    if matches!(meta,
-                        TypeMetatype::Array | TypeMetatype::Struct
-                        | TypeMetatype::Union | TypeMetatype::Code) {
-                        score = -1;
-                    } else { score = 0; }
+                    score = match self.fd {
+                        // cc:352-353: scoreParameter consults the locked
+                        // call-specs; absent/unlocked specs fall back to the
+                        // generic param heuristic inside score_parameter.
+                        Some(fd) => Self::score_parameter(
+                            trial.fit_type.as_ref(), fd,
+                            &crate::op::PcodeOpRef(op.clone()), trial.in_slot - 1),
+                        None => {
+                            if matches!(meta,
+                                TypeMetatype::Array | TypeMetatype::Struct
+                                | TypeMetatype::Union | TypeMetatype::Code) {
+                                -1
+                            } else { 0 }
+                        }
+                    };
                 }
             }
             OpCode::CPUI_CALLIND => {
@@ -858,11 +934,19 @@ impl<'t> ScoreUnionFields<'t> {
                         if ptrto.get_metatype() == TypeMetatype::Code { score = 10; } else { score = -10; }
                     }
                 } else {
-                    if matches!(meta,
-                        TypeMetatype::Array | TypeMetatype::Struct
-                        | TypeMetatype::Union | TypeMetatype::Code) {
-                        score = -1;
-                    } else { score = 0; }
+                    // cc:367-368: scoreParameter for the indirect input slot.
+                    score = match self.fd {
+                        Some(fd) => Self::score_parameter(
+                            trial.fit_type.as_ref(), fd,
+                            &crate::op::PcodeOpRef(op.clone()), trial.in_slot - 1),
+                        None => {
+                            if matches!(meta,
+                                TypeMetatype::Array | TypeMetatype::Struct
+                                | TypeMetatype::Union | TypeMetatype::Code) {
+                                -1
+                            } else { 0 }
+                        }
+                    };
                 }
             }
             OpCode::CPUI_RETURN => {
@@ -916,10 +1000,29 @@ impl<'t> ScoreUnionFields<'t> {
             OpCode::CPUI_INT_ADD | OpCode::CPUI_INT_SUB | OpCode::CPUI_PTRSUB => {
                 if meta == TypeMetatype::Pointer {
                     if trial.in_slot >= 0 {
-                        if let Some(off) = in1_offset_const {
-                            let _ = off;
-                            if off == 0 { res_type = Some(trial.fit_type.clone()); }
-                            score = 5;
+                        // cc:429-438: the offset is the constant on the OTHER
+                        // input slot (1 - inslot); the drill is the virtual
+                        // TypePointer::downChain(off, par, parOff, array),
+                        // and score 5 is added only when the drill succeeds.
+                        let other_off_const = {
+                            let op_rg = op.read().unwrap();
+                            op_rg.get_in((1 - trial.in_slot) as usize).and_then(|v| {
+                                let vr = v.read().unwrap();
+                                if vr.is_constant() { Some(vr.get_offset() as i64) } else { None }
+                            })
+                        };
+                        if let Some(off) = other_off_const {
+                            let typegrp_arc = self.typegrp.clone();
+                            let mut tg = typegrp_arc.write().unwrap();
+                            let mut chain_off = off;
+                            let mut par: Option<Arc<Datatype>> = None;
+                            let mut par_off: i64 = 0;
+                            if let Some(rt) = tg.down_chain_virtual(
+                                &trial.fit_type, &mut chain_off, &mut par, &mut par_off,
+                                trial.is_array) {
+                                res_type = Some(rt);
+                                score = 5;
+                            }
                         } else if trial.is_array {
                             score = 1;
                             let mut el_size = 1usize;
@@ -1147,19 +1250,40 @@ impl<'t> ScoreUnionFields<'t> {
             (def_rg.get_opcode(), in1_off, in2_off)
         };
         let meta = trial.fit_type.get_metatype();
-        let new_slot = 0i32;
+        let mut new_slot = 0i32;
         match def_code {
             OpCode::CPUI_COPY | OpCode::CPUI_MULTIEQUAL | OpCode::CPUI_INDIRECT => {
                 res_type = Some(trial.fit_type.clone());
             }
-            OpCode::CPUI_LOAD => { res_type = Some(trial.fit_type.clone()); }
+            // cc:664-666: wrap the trial type in a pointer sized by the
+            // pointer input (slot 1, wordsize 1) and recurse on that input.
+            OpCode::CPUI_LOAD => {
+                let ptr_size = {
+                    let def_rg = def.read().unwrap();
+                    def_rg.get_in(1).map(|v| v.read().unwrap().get_size())
+                };
+                if let Some(sz) = ptr_size {
+                    let typegrp_arc = self.typegrp.clone();
+                    let mut tg = typegrp_arc.write().unwrap();
+                    res_type = Some(tg.get_type_pointer(sz, trial.fit_type.clone(), 1));
+                    new_slot = 1;
+                }
+            }
             OpCode::CPUI_CALL | OpCode::CPUI_CALLOTHER | OpCode::CPUI_CALLIND => {
-                let meta = trial.fit_type.get_metatype();
-                if matches!(meta,
-                    TypeMetatype::Array | TypeMetatype::Struct
-                    | TypeMetatype::Union | TypeMetatype::Code) {
-                    score = -1;
-                } else { score = 0; }
+                // cc:668-672: scoreReturnType consults the locked output
+                // prototype; the fallback heuristic lives inside it.
+                score = match self.fd {
+                    Some(fd) => Self::score_return_type(
+                        trial.fit_type.as_ref(), fd,
+                        &crate::op::PcodeOpRef(def.clone())),
+                    None => {
+                        if matches!(meta,
+                            TypeMetatype::Array | TypeMetatype::Struct
+                            | TypeMetatype::Union | TypeMetatype::Code) {
+                            -1
+                        } else { 0 }
+                    }
+                };
             }
             OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL
             | OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL
@@ -1303,9 +1427,9 @@ impl<'t> ScoreUnionFields<'t> {
                 for field in &u.fields {
                     if field.offset as i64 == offset && field.type_ptr.get_size() == vn_size {
                         score = 10;
-                        if let Datatype::Union(base_u) = self.result.base_type.as_ref() {
-                            if base_u.fields.len() == u.fields.len() { score += 5; }
-                        }
+                        // cc:856-857: the +5 bonus is the identity
+                        // result.getBase() == unionDt (pointer compare).
+                        if Arc::ptr_eq(&self.result.base_type, ct_in) { score += 5; }
                         recurse = None;
                         break;
                     }
@@ -1414,6 +1538,7 @@ fn test_simple_cases(op: &PcodeOp, in_slot: i32, parent: &Datatype) -> bool {
 /// Faithful to `ScoreUnionFields::scoreTruncation` (unionresolve.cc:843-879).
 fn score_truncation_inplace(
     scores: &mut [i32], ct_in: &Arc<Datatype>, vn_size: usize, offset: i64, score_index: i32,
+    result_base: &Arc<Datatype>,
 ) -> Option<Arc<Datatype>> {
     let idx = score_index as usize;
     if ct_in.get_metatype() == TypeMetatype::Union {
@@ -1423,6 +1548,8 @@ fn score_truncation_inplace(
             for field in &u.fields {
                 if field.offset as i64 == offset && field.type_ptr.get_size() == vn_size {
                     score = 10;
+                    // cc:856-857: result.getBase() == unionDt identity bonus.
+                    if Arc::ptr_eq(result_base, ct_in) { score += 5; }
                     break;
                 }
             }
@@ -1521,14 +1648,21 @@ fn union_field_list(dt: &Datatype) -> (Vec<TypeField>, usize) {
     }
 }
 
-// RUGRA-GLUE: `TypeFactory::getTypePointerStripArray(size, ptrto, wordsize)`
-//   (type.cc). Rugra's TypeFactory lacks this method, so we approximate: for
-//   an array pointee we return a pointer to its element type; otherwise we
-//   return the pointee itself.
-fn type_pointer_strip_array(
-    _typegrp: &TypeFactory, _size: usize, ptrto: Arc<Datatype>, _word_size: usize,
+// Ghidra: type.cc:3849 TypeFactory::getTypePointerStripArray
+/// Construct a pointer to the given data-type, stripping the formal
+/// stripped twin and one ARRAY level from the pointee first. Faithful to
+/// `TypeFactory::getTypePointerStripArray` (type.cc:3849-3859): the result
+/// is factory-INTERNED through findAdd (the cc:3858 calcTruncate step is
+/// the known TYPE-0001 structural residual), so pointer-identity
+/// comparisons see the canonical instance.
+fn get_type_pointer_strip_array(
+    typegrp: &mut TypeFactory, size: usize, ptrto: Arc<Datatype>, wordsize: usize,
 ) -> Arc<Datatype> {
-    match ptrto.as_ref() { Datatype::Array(a) => a.array_of.clone(), _ => ptrto }
+    let mut pt = ptrto;
+    // cc:3851-3852: strip the formal twin, then the first array level.
+    if let Some(stripped) = Datatype::get_stripped_arc(&pt) { pt = stripped; }
+    if let Datatype::Array(a) = pt.as_ref() { pt = a.array_of.clone(); }
+    typegrp.get_type_pointer(size, pt, wordsize)
 }
 
 // RUGRA-GLUE: Ghidra `bit_transitions(val,size)` (address.cc). Counts the
@@ -1735,6 +1869,139 @@ mod tests {
         let int_base = Datatype::Base(crate::type_system::datatype::TypeBase::new(
             "int".into(), 4, TypeMetatype::Int));
         assert_eq!(num_depend(&int_base), 0);
+    }
+
+    fn mk_union(name: &str, size: usize) -> Arc<Datatype> {
+        Arc::new(Datatype::Union(TypeUnion {
+            base: crate::type_system::datatype::TypeBase::new(
+                name.into(), size, TypeMetatype::Union),
+            fields: vec![],
+        }))
+    }
+
+    #[test]
+    fn test_resolve_edge_partial_union_keys_by_container() {
+        use crate::address::{Address, SeqNum};
+        use crate::opcodes::OpCode as Op;
+        let union_dt = mk_union("U", 8);
+        let pu = Datatype::PartialUnion(crate::type_system::datatype::TypePartialUnion::new(
+            union_dt.clone(), 0, 4, None));
+        let op = crate::op::PcodeOp::new(SeqNum::new(Address::new(0x1000), 7), Op::CPUI_COPY);
+        let edge = ResolveEdge::new(&pu, &op, 1);
+        // cc:73-74: key = container union id, encoding NOT bumped.
+        assert_eq!(edge.type_id, union_dt.get_id());
+        assert_eq!(edge.encoding, 1);
+        let plain = ResolveEdge::new(union_dt.as_ref(), &op, 1);
+        assert_eq!(edge.type_id, plain.type_id);
+    }
+
+    #[test]
+    fn test_with_field_pointer_parent_builds_field_pointer() {
+        let set_struct = Arc::new(Datatype::Struct(crate::type_system::datatype::TypeStruct {
+            base: crate::type_system::datatype::TypeBase::new(
+                "Set".into(), 16, TypeMetatype::Struct),
+            fields: vec![],
+        }));
+        let union_dt = Arc::new(Datatype::Union(TypeUnion {
+            base: crate::type_system::datatype::TypeBase::new(
+                "U".into(), 16, TypeMetatype::Union),
+            fields: vec![TypeField {
+                name: "Set".into(), offset: 0, type_ptr: set_struct.clone(),
+            }],
+        }));
+        let parent = Arc::new(Datatype::Pointer(crate::type_system::datatype::TypePointer::new(
+            8, union_dt, 1)));
+        let factory = TypeFactory::new(8);
+        // cc:51-55: pointer parent resolves to a POINTER to the field.
+        let r = ResolvedUnion::with_field(parent.clone(), 0, &factory);
+        assert_eq!(r.get_field_num(), 0);
+        let resolve = r.get_datatype();
+        assert!(matches!(resolve.as_ref(), Datatype::Pointer(_)));
+        assert_eq!(resolve.get_size(), 8);
+        match resolve.as_ref() {
+            Datatype::Pointer(p) => assert!(Arc::ptr_eq(&p.ptr_to, &set_struct)),
+            _ => unreachable!(),
+        }
+        // fldNum < 0 resolves to the parent itself (cc:48-49).
+        let r_self = ResolvedUnion::with_field(parent.clone(), -1, &factory);
+        assert_eq!(r_self.get_field_num(), -1);
+        assert!(Arc::ptr_eq(r_self.get_datatype(), &parent));
+    }
+
+    #[test]
+    fn test_with_field_partial_union_parent_unwraps_container() {
+        let union_dt = mk_union("U", 8);
+        let int_t = Arc::new(Datatype::Base(crate::type_system::datatype::TypeBase::new(
+            "int".into(), 4, TypeMetatype::Int)));
+        let union_field = Arc::new(Datatype::Union(TypeUnion {
+            base: crate::type_system::datatype::TypeBase::new(
+                "U".into(), 8, TypeMetatype::Union),
+            fields: vec![TypeField { name: "x".into(), offset: 0, type_ptr: int_t.clone() }],
+        }));
+        let union_dt = union_field;
+        let pu = Arc::new(Datatype::PartialUnion(
+            crate::type_system::datatype::TypePartialUnion::new(union_dt.clone(), 0, 4, None)));
+        let factory = TypeFactory::new(8);
+        // cc:43-44: the partial-union parent resolves within the container.
+        let r = ResolvedUnion::with_field(pu, 0, &factory);
+        assert!(Arc::ptr_eq(r.get_base(), &union_dt));
+        assert!(Arc::ptr_eq(r.get_datatype(), &int_t));
+    }
+
+    #[test]
+    fn test_get_type_pointer_strip_array_interns_pointer() {
+        let mut factory = TypeFactory::new(8);
+        factory.set_default_alignment_map();
+        let elem = Arc::new(Datatype::Base(crate::type_system::datatype::TypeBase::new(
+            "char".into(), 1, TypeMetatype::Int)));
+        let arr = Arc::new(Datatype::Array(crate::type_system::datatype::TypeArray {
+            base: crate::type_system::datatype::TypeBase::new(
+                "char[4]".into(), 4, TypeMetatype::Array),
+            array_of: elem.clone(),
+            num_elements: 4,
+        }));
+        // type.cc:3849-3859: the result is a POINTER (8B) to the stripped
+        // element, interned so repeat calls return the same instance.
+        let p1 = get_type_pointer_strip_array(&mut factory, 8, arr, 1);
+        assert!(matches!(p1.as_ref(), Datatype::Pointer(_)));
+        assert_eq!(p1.get_size(), 8);
+        match p1.as_ref() {
+            Datatype::Pointer(p) => assert!(Arc::ptr_eq(&p.ptr_to, &elem)),
+            _ => unreachable!(),
+        }
+        let arr2 = Arc::new(Datatype::Array(crate::type_system::datatype::TypeArray {
+            base: crate::type_system::datatype::TypeBase::new(
+                "char[4]".into(), 4, TypeMetatype::Array),
+            array_of: elem.clone(),
+            num_elements: 4,
+        }));
+        let p2 = get_type_pointer_strip_array(&mut factory, 8, arr2, 1);
+        assert!(Arc::ptr_eq(&p1, &p2), "strip-array pointer must be interned");
+    }
+
+    #[test]
+    fn test_simple_cases_array_arith_uses_stripped_union_size() {
+        use crate::address::{Address, SeqNum};
+        use crate::opcodes::OpCode as Op;
+        // union U is 32 bytes; the pointer parent is 8 bytes.
+        let union_dt = mk_union("U", 32);
+        let parent = Datatype::Pointer(crate::type_system::datatype::TypePointer::new(
+            8, union_dt, 1));
+        let mut op = crate::op::PcodeOp::new(
+            SeqNum::new(Address::new(0x2000), 1), Op::CPUI_INT_ADD);
+        op.inrefs = vec![
+            std::sync::Arc::new(std::sync::RwLock::new(
+                crate::varnode::Varnode::new_register(0x10, 8))),
+            std::sync::Arc::new(std::sync::RwLock::new(
+                crate::varnode::Varnode::new_constant(16, 8))),
+        ];
+        // cc:94 + cc:993: 16 < union size 32 → NOT array arithmetic (the
+        // old code compared against the pointer size 8 and fired).
+        assert!(!ScoreUnionFields::score_simple_cases_inner(&op, 0, &parent));
+        // >= union size still fires the simple case.
+        op.inrefs[1] = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::varnode::Varnode::new_constant(32, 8)));
+        assert!(ScoreUnionFields::score_simple_cases_inner(&op, 0, &parent));
     }
 
     #[test]
