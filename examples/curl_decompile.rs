@@ -4032,6 +4032,64 @@ fn decompile_request(request: &DecompileRequest) -> Result<Option<String>, Strin
     // through the Oppen token queue, so the driver mirrors that here.
     let mut printer = PrintC::new(Box::new(EmitPrettyPrint::new()));
     printer.set_rpn_enabled(true);
+    // PRINTC-LABSPELL-LABSYMS-0001: the front-end program-DB code-label
+    // layer. In the canonical analyzeHeadless run the disassembler's flow
+    // references put default `LAB_<image-based addr>` LABEL symbols at
+    // every direct-branch target, and `PrintC::emitLabel`'s
+    // `queryCodeLabel` (printc.cc:3176) resolves them through the local
+    // ScopeGhidra's remote `getCodeLabel` query (database_ghidra.cc:308-325),
+    // which returns "" where the primary symbol is not a LABEL (function
+    // entries, data symbols). The driver mirrors that reference set by
+    // disassembling the function bytes and taking every direct-branch
+    // (jmp/jcc) target — the same instruction stream the lift consumed,
+    // NOT lifted pcode: pipeline stages (condexe merging, block surgery)
+    // rewrite CBRANCH destination inputs into unique-space temps, hiding
+    // the static target from a pcode-level scan. Addresses carrying
+    // another symbol in the request's DB layer and the function's own
+    // entry are excluded (Java `getCodeLabel` SymbolType filter).
+    // The raw-BFD mirror (single-function oracle harness) has no analyzer
+    // labels and ELF-relative addresses, so the layer stays empty with
+    // base 0 — the harness prints generic `code_r0x…` labels.
+    if !mirror_bundle_enabled() {
+        let mut code_labels: HashMap<u64, String> = HashMap::new();
+        let db_symbol_addrs: std::collections::HashSet<u64> = request
+            .symbol_entries
+            .iter()
+            .map(|(address, _)| *address)
+            .collect();
+        {
+            // Same slicing contract as the lift input: the target's full
+            // byte range, linearly disassembled from the image.
+            let start = usize::try_from(target.file_offset)
+                .map_err(|_| "label scan file offset does not fit usize".to_string())?;
+            let end = start
+                .saturating_add(target.size)
+                .min(request.binary_image.len());
+            if start < request.binary_image.len() {
+                let mut disasm = X86_64Disassembler::new();
+                if let Ok(instructions) =
+                    disasm.disassemble(&request.binary_image[start..end], Address::new(target.vaddr))
+                {
+                    for inst in &instructions {
+                        if !inst.is_branch() {
+                            continue;
+                        }
+                        let Some(dest) = inst.branch_target() else {
+                            continue;
+                        };
+                        let dest = dest.as_u64();
+                        if dest == target.vaddr || db_symbol_addrs.contains(&dest) {
+                            continue;
+                        }
+                        code_labels
+                            .entry(dest)
+                            .or_insert_with(|| format!("LAB_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + dest));
+                    }
+                }
+            }
+        }
+        printer.set_code_label_layer(code_labels, ANALYZE_HEADLESS_IMAGE_BASE);
+    }
     let fd_read = fd_arc
         .read()
         .map_err(|_| "Funcdata read lock poisoned during printing".to_string())?;

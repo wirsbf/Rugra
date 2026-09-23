@@ -733,12 +733,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mirror_syms = mirror_fn_syms.clone();
 
         let mut raw_ops = Vec::new();
+        // PRINTC-LABSPELL-LABSYMS-0001: the front-end reference set — every
+        // direct-branch (jmp/jcc) target of the disassembly, i.e. exactly the
+        // flow references Ghidra's disassembler creates and the source of its
+        // default `LAB_` LABEL symbols. Derived from the instruction stream,
+        // NOT from lifted pcode: pipeline stages (condexe merging, block
+        // surgery) rewrite CBRANCH destination inputs into unique-space
+        // temps, which hides the static target from a pcode-level scan.
+        let mut branch_ref_addrs: std::collections::HashSet<u64> = std::collections::HashSet::new();
         if !mirror_fn {
             let mut disasm = X86_64Disassembler::new();
             let instructions = match disasm.disassemble(code_bytes, Address::new(vaddr)) {
                 Ok(insts) => insts,
                 Err(_) => { total_fail += 1; continue; }
             };
+            for inst in &instructions {
+                if inst.is_branch() {
+                    if let Some(bt) = inst.branch_target() {
+                        branch_ref_addrs.insert(bt.as_u64());
+                    }
+                }
+            }
 
             let mut lifter = X86Lifter::new();
             for inst in &instructions {
@@ -992,6 +1007,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             let mut printer = PrintC::new(Box::new(EmitNoMarkup::new()));
+            // PRINTC-LABSPELL-LABSYMS-0001: the front-end program-DB
+            // code-label layer (same contract as the curl driver's install,
+            // see the long block comment there): every direct-branch target
+            // of the disassembly (branch_ref_addrs, collected at lift time)
+            // becomes a default `LAB_<image-based addr>` LABEL symbol —
+            // exactly the reference set the front-end disassembler creates —
+            // minus addresses whose primary symbol is not a LABEL (the
+            // thread's sym_table proxy: thunks, discovered functions; and
+            // the func_entry_set: ELF + call targets) and minus the
+            // function's own entry. The raw-BFD mirror keeps the layer
+            // empty with base 0.
+            if !mirror_fn {
+                let mut code_labels: HashMap<u64, String> = HashMap::new();
+                for &dest in &branch_ref_addrs {
+                    if dest == vaddr
+                        || sym_table.contains_key(&dest)
+                        || entry_set.contains(&dest)
+                    {
+                        continue;
+                    }
+                    code_labels
+                        .entry(dest)
+                        .or_insert_with(|| format!("LAB_{:08x}", ANALYZE_HEADLESS_IMAGE_BASE + dest));
+                }
+                printer.set_code_label_layer(code_labels, ANALYZE_HEADLESS_IMAGE_BASE);
+            }
             printer.doc_function(&fd_read);
             let output = printer.take_emit();
             let text = output.into_any().downcast::<EmitNoMarkup>().unwrap();
