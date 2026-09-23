@@ -11474,7 +11474,7 @@ impl Funcdata {
         opmatch: &crate::op::PcodeOpRef,
         op: &crate::op::PcodeOpRef,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-        _fl: u32,
+        fl: u32,
         trial: &crate::fspec::ParamTrial,
         match_fc: Option<&crate::fspec::FuncCallSpecs>,
     ) -> bool {
@@ -11568,11 +11568,12 @@ impl Funcdata {
                 if trial.is_checked() {
                     // cc:1786-1787: checked & active → reject.
                     if trial.is_active() { return false; }
-                    return true; // checked & inactive → keep.
+                } else if is_alternate_path_valid(&vn, fl) {
+                    // cc:1789-1790: unchecked, but the alternate path looks
+                    // more valid than the main path → reject the trial.
+                    return false;
                 }
-                // cc:1789-1790: not yet checked → reject if alt path
-                // valid; RUGRA-GAP: TraverseNode::isAlternatePathValid
-                // not ported, so we conservatively keep the trial.
+                // cc:1791: otherwise the double use is legitimate.
                 return true;
             }
         }

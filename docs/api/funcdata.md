@@ -1445,7 +1445,12 @@ create_new_block(): 创建新空 BlockBasic 并加入 bblocks（funcdata_block.c
 - `fn is_alternate_path_valid(vn, flags)` — TraverseNode::isAlternatePathValid
   （expression.cc:28-50）1:1 端口
 - checkCallDoubleUse（cc:1756-1793）：fc/matchfc 均不再重复加锁——opmatch 的 spec 由调用方
-  以 `match_fc: Option<&FuncCallSpecs>` 传入（Rust 锁重入规避；op==opmatch 时两者同引用）
+  以 `match_fc: Option<&FuncCallSpecs>` 传入（Rust 锁重入规避；op==opmatch 时两者同引用）。
+  input-active 分支的 cc:1789-1790 已接通（2026-09-23，GETPARAM-ACTIVEPARAM-TRIAL-0001）：
+  未 checked trial 若 `is_alternate_path_valid(vn, fl)` 为真 → return false（拒绝该 trial），
+  否则 return true；checked+active → false，checked+inactive → true 不变。此前该分支
+  无条件 return true（保守保留），使 killed-by-call RSI trial 误判 active。
+  `fl` 参数（调用方传 BFS cur_flags）自该修复起被消费
 - traverse_flags 模块：ACTIONALT/INDIRECT/INDIRECTALT/LSB_TRUNCATED/CONCAT_HIGH
 
 **initActiveOutput maxPass 修正**（funcdata_varnode.cc:585-593）：
@@ -1927,7 +1932,11 @@ shared-return 路径，但 public function 仍不能称为逐分支相同。完�
   `SeqNum` 找新 op，创建不同的新 `Arc`，并把克隆 input(0) 从旧 owner 重绑到新
   owner。源/目标 callspec 与 op 身份彼此隔离，active trial 状态由专用 clone 重置。
 - `check_call_double_use` 的 owner 查找也改为 exact identity，而非同地址匹配；其
-  per-input trial 映射与 alternate-path 判定仍是 `CALLSPEC-0001`/`UNTESTED`，本 fixture
+  per-input trial 映射仍是 `CALLSPEC-0001` 近似（per-slot trial-address 以
+  `get_trial_for_input_varnode(j)` 解析），alternate-path 判定已于
+  GETPARAM-ACTIVEPARAM-TRIAL-0001（2026-09-23）接通 input-active 分支并经
+  getparameter Phase 2 投影 ord 1-64 stage-identical + next_url/match_url 全 MATCH
+  实证（此前 `UNTESTED`）；本 fixture
   不把完整 consumer 算法升为 `MATCH`。D0 锁定 oracle fixture/metadata/runner 为
   `callspec_identity_lifecycle_1204`；总体仍
   `MISMATCH`，因为 `AddressSpace::Iop` 只是专用 `IPTR_FSPEC` 的临时替代，numeric
