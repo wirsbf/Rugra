@@ -1,5 +1,22 @@
 # `ruleaction.rs` API Reference
 
+## 2026-09-23：RulePieceStructure 叶 COPY 的 union 分辨率继承（UNIONRESOLVE-PIPELINE-WIRING-0001 / EN2）
+
+`RulePieceStructure::apply` 存储 walk 的叶 COPY 臂（ruleaction.cc:7661-7681）补上
+此前标注 "not modelled in Rugra" 的两行 union 记账：
+
+- **cc:7673-7676**：`vn.getType()` needsResolution 时 `inherit_resolution(vn.type,
+  copyOp, 0, node.op, node.slot)` —— PIECE 读边的分辨率继承到新 COPY 的读边
+  （vn 的实例类型在 Rust 侧因 `op_set_input` 移动语义提前读取，值语义等价）。
+- **cc:7677-7678**：`newType`（getExactPiece 产物或 vn.type 回退）needsResolution
+  时 `crate::unionresolve::resolve_in_flow(fd, newType, copyOp, -1)` —— 新 COPY
+  的 def 边 last-chance 评分入 `fd.union_map`（piece 代表 union 一部分时解析）。
+
+**验证**：全语料 A/B（亲父 dd22aba5 pristine worktree 重跑）124 curl 函数仅 main
+变化（②行 `(char **)`，union 接线本体），29 httpd 函数字节级恒等；RulePieceStructure
+路径（glob_set/glob_range/match_url 等 PIECE 梯函数）零行变化；
+next_url+match_url 投影 MATCH 保持。
+
 ## 2026-09-22：RulePieceStructure 存储地址保留根地址空间（VARGROUP-ABSORB-0001 / PIECESTRUCT-SPACE-0001）
 
 `RulePieceStructure::apply` 的重定位寻址（ruleaction.cc:7643-7695）改为携带根 varnode 的

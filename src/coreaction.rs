@@ -4796,28 +4796,36 @@ impl ActionSetCasts {
     /// cast `char**` that prints `*(char **)stream`.
     // Ghidra: typeop.cc:440 TypeOpLoad::getInputCast
     fn load_input_cast(
-        op: &crate::op::PcodeOp,
+        op_ref: &crate::op::PcodeOpRef,
         slot: usize,
         strategy: &crate::type_system::cast::CastStrategyC,
         type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        fd: &Funcdata,
     ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
         use crate::type_system::datatype::{Datatype, TypeMetatype};
         if slot != 1 {
             return None;
         }
         // cc:444: reqtype = op->getOut()->getHighTypeDefFacing()
-        // (through HighVariable::getType's lazy typedirty re-derivation)
-        let reqtype = op.get_out().and_then(|o| {
-            let vn = o.read().unwrap();
-            vn.get_high_type_def_facing().or_else(|| vn.v_type.clone())
-        })?;
-        let invn = op.get_in(1)?;
-        let in_size = invn.read().unwrap().get_size();
-        // cc:446: curtype = invn->getHighTypeReadFacing(op)
-        let curtype_full = invn
+        // (through HighVariable::getType's lazy typedirty re-derivation).
+        // The def-facing consult resolves through fd.union_map when the high
+        // type needs resolution (varnode.cc:651-658).
+        let reqtype = op_ref
+            .0
             .read()
             .unwrap()
-            .get_high_type_read_facing(op, 1)
+            .get_out()
+            .and_then(|o| {
+                crate::unionresolve::vn_high_type_def_facing(fd, &o)
+                    .or_else(|| o.read().unwrap().v_type.clone())
+            })?;
+        let invn = {
+            let op = op_ref.0.read().unwrap();
+            op.get_in(1).cloned()
+        }?;
+        let in_size = invn.read().unwrap().get_size();
+        // cc:446: curtype = invn->getHighTypeReadFacing(op)
+        let curtype_full = crate::unionresolve::vn_high_type_read_facing(fd, &invn, op_ref, 1)
             .or_else(|| invn.read().unwrap().v_type.clone())?;
         // cc:450-453: unwrap exactly one level; a non-pointer address takes
         // a direct pointer-to-reqtype cast.
@@ -4860,26 +4868,31 @@ impl ActionSetCasts {
     /// pointer.
     // Ghidra: typeop.cc:520 TypeOpStore::getInputCast
     fn store_input_cast(
-        op: &crate::op::PcodeOp,
+        op_ref: &crate::op::PcodeOpRef,
         slot: usize,
         strategy: &crate::type_system::cast::CastStrategyC,
         type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        fd: &Funcdata,
     ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
         use crate::type_system::datatype::Datatype;
         if slot == 0 {
             return None;
         }
-        let pointer_vn = op.get_in(1)?;
-        let value_vn = op.get_in(2)?;
-        let pointer_type = pointer_vn
-            .read()
-            .unwrap()
-            .get_high_type_read_facing(op, 1)
+        let (pointer_vn, value_vn) = {
+            let op = op_ref.0.read().unwrap();
+            match (op.get_in(1).cloned(), op.get_in(2).cloned()) {
+                (Some(p), Some(v)) => (p, v),
+                _ => return None,
+            }
+        };
+        // cc:525/527: pointerType/valueType via getHighTypeReadFacing —
+        // the ② `(char **)` leaf: the pointer's read-facing type resolves
+        // through fd.union_map (varnode.cc:665-672 → TypePointer::findResolve
+        // type.cc:1192), yielding the field-pointer (e.g. char**) whose
+        // pointee then feeds the slot-2 value cast (cc:554).
+        let pointer_type = crate::unionresolve::vn_high_type_read_facing(fd, &pointer_vn, op_ref, 1)
             .or_else(|| pointer_vn.read().unwrap().v_type.clone())?;
-        let value_type = value_vn
-            .read()
-            .unwrap()
-            .get_high_type_read_facing(op, 2)
+        let value_type = crate::unionresolve::vn_high_type_read_facing(fd, &value_vn, op_ref, 2)
             .or_else(|| value_vn.read().unwrap().v_type.clone())?;
         let ptr_size = pointer_vn.read().unwrap().get_size();
         // cc:530-535: pointedToType / destSize.
@@ -4907,7 +4920,7 @@ impl ActionSetCasts {
                         .map(|d| {
                             std::ptr::eq(
                                 &*d.read().unwrap() as *const crate::op::PcodeOp,
-                                op as *const crate::op::PcodeOp,
+                                &*op_ref.0.read().unwrap() as *const crate::op::PcodeOp,
                             )
                         })
                         .unwrap_or(false)
@@ -4937,24 +4950,25 @@ impl ActionSetCasts {
     /// literal stores in main.
     // Ghidra: typeop.cc:397 TypeOpCopy::getInputCast
     fn copy_input_cast(
-        op: &crate::op::PcodeOp,
+        op_ref: &crate::op::PcodeOpRef,
         slot: usize,
         strategy: &crate::type_system::cast::CastStrategyC,
+        fd: &Funcdata,
     ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
         // cc:399: reqtype = op->getOut()->getHighTypeDefFacing()
         // (through HighVariable::getType's lazy typedirty re-derivation)
-        let reqtype = op.get_out().and_then(|o| {
-            let vn = o.read().unwrap();
-            vn.get_high_type_def_facing().or_else(|| vn.v_type.clone())
+        let reqtype = op_ref.0.read().unwrap().get_out().and_then(|o| {
+            crate::unionresolve::vn_high_type_def_facing(fd, &o)
+                .or_else(|| o.read().unwrap().v_type.clone())
         })?;
         // cc:400: curtype = op->getIn(0)->getHighTypeReadFacing(op) — the
         // override reads slot 0 directly (COPY is unary), ignoring `slot`.
         let _ = slot;
-        let invn = op.get_in(0)?;
-        let curtype = invn
-            .read()
-            .unwrap()
-            .get_high_type_read_facing(op, 0)
+        let invn = {
+            let op = op_ref.0.read().unwrap();
+            op.get_in(0).cloned()
+        }?;
+        let curtype = crate::unionresolve::vn_high_type_read_facing(fd, &invn, op_ref, 0)
             .or_else(|| invn.read().unwrap().v_type.clone())?;
         // cc:401: castStandard(reqtype,curtype,false,true); the returned Arc
         // preserves reqtype identity, mirroring Ghidra's `return reqtype`.
@@ -4993,23 +5007,31 @@ impl ActionSetCasts {
         // and the base TypeOp::getInputCast (typeop.cc:293-300) is
         // castStandard(inputTypeLocal(slot), highReadFacing, false, true):
         // a null ct means no cast is needed. Annotations get a null ct
-        // (typeop.cc:295).
+        // (typeop.cc:295). The op guard is dropped before the dispatch so
+        // the fd-aware read-facing consults (union_map) can take their own
+        // guards on the same op.
         let (in_vn, ct_opt, op_pc, in_size) = {
             let op = op_ref.0.read().unwrap();
             let Some(in_arc_ref) = op.get_in(slot) else { return false; };
             let in_arc = in_arc_ref.clone();
             let op_pc = op.get_addr();
             let in_size = in_arc.read().unwrap().get_size();
-            let ct = match op.opcode {
-                OpCode::CPUI_LOAD => Self::load_input_cast(&op, slot, strategy, &type_factory),
-                OpCode::CPUI_STORE => Self::store_input_cast(&op, slot, strategy, &type_factory),
+            let opcode = op.opcode;
+            drop(op);
+            let ct = match opcode {
+                OpCode::CPUI_LOAD => Self::load_input_cast(op_ref, slot, strategy, &type_factory, fd),
+                OpCode::CPUI_STORE => Self::store_input_cast(op_ref, slot, strategy, &type_factory, fd),
                 // typeop.cc:397 TypeOpCopy::getInputCast: reqtype is the
                 // OUTPUT's def-facing high type, not an inputTypeLocal base
                 // — castStandard(reqtype,curtype,false,true) inserts the
                 // `(type)` prefix cast between a COPY and its SUBPIECE
                 // producer (`(ContentUnion)SUB2416(...,8)` in main).
-                OpCode::CPUI_COPY => Self::copy_input_cast(&op, slot, strategy),
+                OpCode::CPUI_COPY => Self::copy_input_cast(op_ref, slot, strategy, fd),
                 OpCode::CPUI_INT_EQUAL | OpCode::CPUI_INT_NOTEQUAL => {
+                    // typeop.rs's comparison_input_cast holds the
+                    // degenerate read-facing (separate write-domain); the
+                    // guard is re-acquired for its &PcodeOp parameter.
+                    let op = op_ref.0.read().unwrap();
                     crate::typeop::comparison_input_cast(&op, slot, strategy)
                 }
                 // typeop.cc:1023/1049 TypeOpIntSless/SlessEqual::getInputCast
@@ -5021,22 +5043,24 @@ impl ActionSetCasts {
                 // unsigned compares FALSE (cc:1082/1106).
                 OpCode::CPUI_INT_SLESS | OpCode::CPUI_INT_SLESSEQUAL => {
                     Self::ordering_compare_input_cast(
-                        &op,
+                        op_ref,
                         slot,
                         strategy,
                         crate::type_system::datatype::TypeMetatype::Int,
                         true,
                         &type_factory,
+                        fd,
                     )
                 }
                 OpCode::CPUI_INT_LESS | OpCode::CPUI_INT_LESSEQUAL => {
                     Self::ordering_compare_input_cast(
-                        &op,
+                        op_ref,
                         slot,
                         strategy,
                         crate::type_system::datatype::TypeMetatype::Uint,
                         false,
                         &type_factory,
+                        fd,
                     )
                 }
                 // typeop.cc:1131/1157 TypeOpIntZext/Sext::getInputCast: the
@@ -5047,20 +5071,22 @@ impl ActionSetCasts {
                 // castStandard(req, cur, TRUE, FALSE).
                 OpCode::CPUI_INT_ZEXT => {
                     Self::extension_input_cast(
-                        &op,
+                        op_ref,
                         slot,
                         strategy,
                         crate::type_system::datatype::TypeMetatype::Uint,
                         &type_factory,
+                        fd,
                     )
                 }
                 OpCode::CPUI_INT_SEXT => {
                     Self::extension_input_cast(
-                        &op,
+                        op_ref,
                         slot,
                         strategy,
                         crate::type_system::datatype::TypeMetatype::Int,
                         &type_factory,
+                        fd,
                     )
                 }
                 // typeop.cc:1543 TypeOpIntRight / cc:1585 TypeOpIntSright
@@ -5069,31 +5095,34 @@ impl ActionSetCasts {
                 // extensions force the cast), else castStandard(req, cur,
                 // TRUE, TRUE). Slot 1 falls to the base metain arm.
                 OpCode::CPUI_INT_RIGHT if slot == 0 => {
-                    Self::shift_input_cast(&op, slot, strategy, 1, crate::type_system::datatype::TypeMetatype::Uint, &type_factory)
+                    Self::shift_input_cast(op_ref, slot, strategy, 1, crate::type_system::datatype::TypeMetatype::Uint, &type_factory, fd)
                 }
                 OpCode::CPUI_INT_SRIGHT if slot == 0 => {
-                    Self::shift_input_cast(&op, slot, strategy, 2, crate::type_system::datatype::TypeMetatype::Int, &type_factory)
+                    Self::shift_input_cast(op_ref, slot, strategy, 2, crate::type_system::datatype::TypeMetatype::Int, &type_factory, fd)
                 }
                 // typeop.cc:1639/1659/1679/1699 TypeOpIntDiv/Sdiv/Rem/Srem
                 // ::getInputCast (both slots): promotion gate as the shifts
                 // (DIV/REM unsigned, SDIV/SREM signed), else
                 // castStandard(req, cur, TRUE, TRUE).
                 OpCode::CPUI_INT_DIV | OpCode::CPUI_INT_REM => {
-                    Self::divrem_input_cast(&op, slot, strategy, 1, &type_factory)
+                    Self::divrem_input_cast(op_ref, slot, strategy, 1, &type_factory, fd)
                 }
                 OpCode::CPUI_INT_SDIV | OpCode::CPUI_INT_SREM => {
-                    Self::divrem_input_cast(&op, slot, strategy, 2, &type_factory)
+                    Self::divrem_input_cast(op_ref, slot, strategy, 2, &type_factory, fd)
                 }
                 opc => match Self::input_metatype(opc) {
                     Some(meta) => {
-                        let curtype = in_arc
-                            .read()
-                            .unwrap()
-                            .get_high_type_read_facing(&op, slot as i32)
-                            .or_else(|| in_arc.read().unwrap().v_type.clone())
-                            .or_else(|| {
-                                type_factory.read().unwrap().get_base(in_size, meta)
-                            });
+                        // typeop.cc:298: curtype = vn->getHighTypeReadFacing(op)
+                        let curtype = crate::unionresolve::vn_high_type_read_facing(
+                            fd,
+                            &in_arc,
+                            op_ref,
+                            slot as i32,
+                        )
+                        .or_else(|| in_arc.read().unwrap().v_type.clone())
+                        .or_else(|| {
+                            type_factory.read().unwrap().get_base(in_size, meta)
+                        });
                         let reqtype =
                             type_factory.read().unwrap().get_base(in_size, meta);
                         match (curtype, reqtype) {
@@ -5115,9 +5144,6 @@ impl ActionSetCasts {
             } else {
                 ct
             };
-            // Release the op read guard before the Funcdata mutations below
-            // take their own write locks on this op.
-            drop(op);
             (in_arc, ct, op_pc, in_size)
         };
         // (2) cc:2663-2668: null ct — mark explicit-print constants; that is
@@ -5208,19 +5234,72 @@ impl ActionSetCasts {
                 return true;
             }
         }
-        // (6) cc:2692-2698 (ct PTR + testStructOffset0 → insertPtrsubZero)
-        // and cc:2699-2701 (tryResolutionAdjustment) remain registered
-        // residuals (input-side PTRSUB-zero / union resolution forms).
+        // (6a) cc:2692-2698: a POINTER requirement whose current (read-facing)
+        // high type passes testStructOffset0 takes a PTRSUB(vn,#0) instead of
+        // a CAST; a needsResolution high type also inherits its read
+        // resolution onto the PTRSUB's input edge.
+        else if ct.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer
+            && {
+                let cur = crate::unionresolve::vn_high_type_read_facing(
+                    fd,
+                    &in_vn,
+                    op_ref,
+                    slot as i32,
+                )
+                .or_else(|| in_vn.read().unwrap().v_type.clone());
+                cur.is_some_and(|cur| Self::test_struct_offset0(&ct, &cur, strategy))
+            }
+        {
+            let new_op = Self::insert_ptrsub_zero(fd, op_ref, slot, &ct);
+            // cc:2695-2696: inheritResolution(vn->getHigh()->getType(),
+            //   newop, 0, op, slot)
+            let high_type = {
+                let r = in_vn.read().unwrap();
+                r.high
+                    .as_ref()
+                    .map(|h| h.read().unwrap().get_type())
+                    .or_else(|| r.v_type.clone())
+            };
+            if high_type.as_ref().is_some_and(|h| h.needs_resolution()) {
+                let high_type = high_type.expect("checked above");
+                fd.inherit_resolution(high_type.as_ref(), &new_op, 0, op_ref, slot as i32);
+            }
+            return true;
+        }
+        // (6b) cc:2699-2701: tryResolutionAdjustment — CAST elimination via
+        // union field-resolution adjustment.
+        else if Self::try_resolution_adjustment(fd, op_ref, slot) {
+            return true;
+        }
         // (7) cc:2702-2718: insert CPUI_CAST op: out = CAST(vnin), out
         // implied, inserted before op.
         let new_op = fd.new_op(1, op_pc);
         let out_vn = fd.new_unique_out(vnin.read().unwrap().get_size(), &new_op);
-        out_vn.write().unwrap().update_type(ct);
+        out_vn.write().unwrap().update_type(ct.clone());
         out_vn.write().unwrap().set_implied();
         fd.op_set_opcode(&new_op, OpCode::CPUI_CAST);
         fd.op_set_input(&new_op, vnin, 0);
         fd.op_set_input(op_ref, out_vn, slot);
         fd.op_insert_before(&new_op, op_ref);
+        // (8) cc:2713-2717: union bookkeeping on the new CAST — force the
+        // required type's edge and inherit vn's high-type read resolution.
+        if ct.needs_resolution() {
+            // cc:2714: data.forceFacingType(ct, -1, newop, -1)
+            fd.force_facing_type(ct.clone(), -1, &new_op, -1);
+        }
+        let vn_high_type = {
+            let r = in_vn.read().unwrap();
+            r.high
+                .as_ref()
+                .map(|h| h.read().unwrap().get_type())
+                .or_else(|| r.v_type.clone())
+        };
+        if vn_high_type.as_ref().is_some_and(|h| h.needs_resolution()) {
+            let vn_high_type = vn_high_type.expect("checked above");
+            // cc:2716-2717: inheritResolution(vn->getHigh()->getType(),
+            //   newop, 0, op, slot)
+            fd.inherit_resolution(vn_high_type.as_ref(), &new_op, 0, op_ref, slot as i32);
+        }
         true
     }
 
@@ -5232,27 +5311,33 @@ impl ActionSetCasts {
     /// (an interned TypeFactory base, like `tlst->getBase`), else
     /// `castStandard(req, cur, TRUE, care_ptr_uint)`.
     fn ordering_compare_input_cast(
-        op: &crate::op::PcodeOp,
+        op_ref: &crate::op::PcodeOpRef,
         slot: usize,
         strategy: &crate::type_system::cast::CastStrategyC,
         metain: crate::type_system::datatype::TypeMetatype,
         care_ptr_uint: bool,
         type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        fd: &Funcdata,
     ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
         if slot > 1 {
             return None;
         }
-        let in_vn = op.get_in(slot)?;
+        let in_vn = {
+            let op = op_ref.0.read().unwrap();
+            let Some(in_vn) = op.get_in(slot).cloned() else { return None };
+            let promo_forced = strategy.check_int_promotion_for_compare_op(&op, slot);
+            (in_vn, promo_forced)
+        };
         let curtype = {
-            let vn = in_vn.read().unwrap();
-            vn.get_high_type_read_facing(op, slot as i32)
+            let vn = in_vn.0.read().unwrap();
+            crate::unionresolve::vn_high_type_read_facing(fd, &in_vn.0, op_ref, slot as i32)
                 .or_else(|| vn.v_type.clone())
         };
         let reqtype = type_factory
             .read()
             .unwrap()
-            .get_base(in_vn.read().unwrap().get_size(), metain)?;
-        if strategy.check_int_promotion_for_compare_op(op, slot) {
+            .get_base(in_vn.0.read().unwrap().get_size(), metain)?;
+        if in_vn.1 {
             return Some(reqtype);
         }
         let curtype = curtype?;
@@ -5268,17 +5353,23 @@ impl ActionSetCasts {
     /// inputTypeLocal base when the promotion direction mismatches the
     /// extension direction, else `castStandard(req, cur, TRUE, FALSE)`.
     fn extension_input_cast(
-        op: &crate::op::PcodeOp,
+        op_ref: &crate::op::PcodeOpRef,
         slot: usize,
         strategy: &crate::type_system::cast::CastStrategyC,
         metain: crate::type_system::datatype::TypeMetatype,
         type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        fd: &Funcdata,
     ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
-        let in_vn = op.get_in(slot)?;
-        let vn = in_vn.read().unwrap();
-        let curtype = vn
-            .get_high_type_read_facing(op, slot as i32)
-            .or_else(|| vn.v_type.clone());
+        let in_vn = {
+            let op = op_ref.0.read().unwrap();
+            let Some(in_vn) = op.get_in(slot).cloned() else { return None };
+            let opcode = op.opcode;
+            (in_vn, opcode)
+        };
+        let vn = in_vn.0.read().unwrap();
+        let curtype =
+            crate::unionresolve::vn_high_type_read_facing(fd, &in_vn.0, op_ref, slot as i32)
+                .or_else(|| vn.v_type.clone());
         let reqtype = type_factory.read().unwrap().get_base(vn.get_size(), metain)?;
         let promo_type = strategy.int_promotion_type(&vn);
         const NO_PROMOTION: i32 = -1;
@@ -5292,9 +5383,9 @@ impl ActionSetCasts {
             ext => {
                 // cast.cc:135-136: a promotion extension matching the
                 // explicit extension direction is implied — no cast.
-                if (ext & UNSIGNED_EXTENSION != 0) && op.opcode == OpCode::CPUI_INT_ZEXT {
+                if (ext & UNSIGNED_EXTENSION != 0) && in_vn.1 == OpCode::CPUI_INT_ZEXT {
                     false
-                } else if (ext & SIGNED_EXTENSION != 0) && op.opcode == OpCode::CPUI_INT_SEXT {
+                } else if (ext & SIGNED_EXTENSION != 0) && in_vn.1 == OpCode::CPUI_INT_SEXT {
                     false
                 } else {
                     true
@@ -5316,17 +5407,17 @@ impl ActionSetCasts {
     /// shift's own extension direction forces the inputTypeLocal base
     /// (metain=INT for both), else `castStandard(req, cur, TRUE, TRUE)`.
     fn shift_input_cast(
-        op: &crate::op::PcodeOp,
+        op_ref: &crate::op::PcodeOpRef,
         slot: usize,
         strategy: &crate::type_system::cast::CastStrategyC,
         gate: i32,
         metain: crate::type_system::datatype::TypeMetatype,
         type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        fd: &Funcdata,
     ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
-        let in_vn = op.get_in(slot)?;
+        let in_vn = { let op = op_ref.0.read().unwrap(); op.get_in(slot).cloned() }?;
         let vn = in_vn.read().unwrap();
-        let curtype = vn
-            .get_high_type_read_facing(op, slot as i32)
+        let curtype = crate::unionresolve::vn_high_type_read_facing(fd, &in_vn, op_ref, slot as i32)
             .or_else(|| vn.v_type.clone());
         // typeop.cc:1549/1574: reqtype = op->inputTypeLocal(slot) — the
         // op's registered metain (TypeOpBinary ctor: INT_RIGHT=TYPE_UINT at
@@ -5350,21 +5441,21 @@ impl ActionSetCasts {
     /// same promotion gate as the shifts, else `castStandard(req, cur,
     /// TRUE, TRUE)` with the op's own metain (DIV/REM=UINT, SDIV/SREM=INT).
     fn divrem_input_cast(
-        op: &crate::op::PcodeOp,
+        op_ref: &crate::op::PcodeOpRef,
         slot: usize,
         strategy: &crate::type_system::cast::CastStrategyC,
         gate: i32,
         type_factory: &Arc<RwLock<crate::type_system::typefactory::TypeFactory>>,
+        fd: &Funcdata,
     ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
         let metain = if gate == 1 {
             crate::type_system::datatype::TypeMetatype::Uint
         } else {
             crate::type_system::datatype::TypeMetatype::Int
         };
-        let in_vn = op.get_in(slot)?;
+        let in_vn = { let op = op_ref.0.read().unwrap(); op.get_in(slot).cloned() }?;
         let vn = in_vn.read().unwrap();
-        let curtype = vn
-            .get_high_type_read_facing(op, slot as i32)
+        let curtype = crate::unionresolve::vn_high_type_read_facing(fd, &in_vn, op_ref, slot as i32)
             .or_else(|| vn.v_type.clone());
         let reqtype = type_factory.read().unwrap().get_base(vn.get_size(), metain)?;
         let promo_type = strategy.int_promotion_type(&vn);
@@ -5636,6 +5727,211 @@ impl ActionSetCasts {
         Arc::ptr_eq(&t1, &t2)
     }
 
+    // Ghidra: coreaction.cc:2424 ActionSetCasts::tryResolutionAdjustment
+    /// Try to adjust the input and output Varnodes to eliminate a CAST
+    /// (coreaction.cc:2415-2459): when either side's high type needs
+    /// resolution, find a compatible form pair via
+    /// `findCompatibleResolve` (type.cc virtual dispatch through
+    /// [`crate::unionresolve::find_compatible_resolve`]) and force both
+    /// edges to that field resolution. Returns true when the adjustment
+    /// made a CAST unnecessary.
+    fn try_resolution_adjustment(
+        fd: &mut Funcdata,
+        op_ref: &crate::op::PcodeOpRef,
+        slot: usize,
+    ) -> bool {
+        // cc:2427-2429
+        let outvn = op_ref.0.read().unwrap().output.clone();
+        let Some(outvn) = outvn else { return false };
+        let high_type_of = |vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>| {
+            let r = vn.read().unwrap();
+            r.high
+                .as_ref()
+                .map(|h| h.read().unwrap().get_type())
+                .or_else(|| r.v_type.clone())
+        };
+        // cc:2430-2431: outType = outvn->getHigh()->getType();
+        //   inType = op->getIn(slot)->getHigh()->getType();
+        let out_type = high_type_of(&outvn);
+        let in_type = {
+            let in_vn_arc = {
+                let Some(inv) = op_ref.0.read().unwrap().get_in(slot).cloned() else {
+                    return false;
+                };
+                inv
+            };
+            high_type_of(&in_vn_arc)
+        };
+        let (Some(out_type), Some(in_type)) = (out_type, in_type) else {
+            return false;
+        };
+        // cc:2432
+        if !in_type.needs_resolution() && !out_type.needs_resolution() {
+            return false;
+        }
+        // cc:2433-2445
+        let mut in_resolve: i32 = -1;
+        let mut out_resolve: i32 = -1;
+        if in_type.needs_resolution() {
+            in_resolve = crate::unionresolve::find_compatible_resolve(&in_type, &out_type);
+            if in_resolve < 0 {
+                return false;
+            }
+        }
+        if out_type.needs_resolution() {
+            let arg = if in_resolve >= 0 {
+                crate::unionresolve::get_depend(in_type.as_ref(), in_resolve as usize)
+            } else {
+                in_type.clone()
+            };
+            out_resolve = crate::unionresolve::find_compatible_resolve(&out_type, &arg);
+            if out_resolve < 0 {
+                return false;
+            }
+        }
+        // cc:2447-2457
+        let typegrp = fd.get_arch().and_then(|a| a.types.clone());
+        let build_resolve = |parent: &Arc<crate::type_system::datatype::Datatype>, fld: i32| {
+            match &typegrp {
+                Some(tg) => {
+                    let guard = tg.read().unwrap();
+                    crate::unionresolve::ResolvedUnion::with_field(parent.clone(), fld, &guard)
+                }
+                None => crate::unionresolve::ResolvedUnion::new(parent.clone()),
+            }
+        };
+        if in_type.needs_resolution() {
+            let resolve = build_resolve(&in_type, in_resolve);
+            if !fd.set_union_field(in_type.as_ref(), op_ref, slot as i32, resolve) {
+                return false;
+            }
+        }
+        if out_type.needs_resolution() {
+            let resolve = build_resolve(&out_type, out_resolve);
+            if !fd.set_union_field(out_type.as_ref(), op_ref, -1, resolve) {
+                return false;
+            }
+        }
+        true
+    }
+
+    // Ghidra: coreaction.cc:2630 ActionSetCasts::insertPtrsubZero
+    /// Insert a PTRSUB with offset 0 accessing a field of the given
+    /// data-type right before `op`, replacing its `slot` input
+    /// (coreaction.cc:2618-2644). Returns the new PTRSUB op.
+    fn insert_ptrsub_zero(
+        fd: &mut Funcdata,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        ct: &Arc<crate::type_system::datatype::Datatype>,
+    ) -> crate::op::PcodeOpRef {
+        let (vn, op_addr) = {
+            let o = op.0.read().unwrap();
+            (
+                o.get_in(slot).expect("insertPtrsubZero: slot out of range").clone(),
+                o.get_addr(),
+            )
+        };
+        let vn_size = vn.read().unwrap().get_size();
+        let newop = fd.new_op(2, op_addr);
+        let vnout = fd.new_unique_out(vn_size, &newop);
+        vnout.write().unwrap().update_type(ct.clone());
+        vnout.write().unwrap().set_implied();
+        fd.op_set_opcode(&newop, OpCode::CPUI_PTRSUB);
+        fd.op_set_input(&newop, vn, 0);
+        let zero = fd.new_constant(4, 0);
+        fd.op_set_input(&newop, zero, 1);
+        fd.op_set_input(op, vnout, slot);
+        fd.op_insert_before(&newop, op);
+        newop
+    }
+
+    // Ghidra: coreaction.cc:2490 ActionSetCasts::resolveUnion
+    /// If `op` reads a pointer to a union at `slot`, insert the CPUI_PTRSUB
+    /// that resolves the union (coreaction.cc:2483-2524): a last-chance
+    /// `resolveInFlow` when the high and instance types differ, then the
+    /// cached `getUnionField` consult; when a concrete field was chosen and
+    /// no cast would still be needed, `insertPtrsubZero` splices the
+    /// placeholder PTRSUB in and the resolution is attached to it
+    /// (consumed by printc's PTRSUB-into-union read, printc.cc:983).
+    /// Non-pointer (bare union) implied varnodes take the implied-field
+    /// marking arm. Returns 1 if a resolution took effect.
+    fn resolve_union(
+        fd: &mut Funcdata,
+        op: &crate::op::PcodeOpRef,
+        slot: usize,
+        strategy: &crate::type_system::cast::CastStrategyC,
+    ) -> i32 {
+        // cc:2493-2494
+        let Some(vn) = op.0.read().unwrap().get_in(slot).cloned() else { return 0 };
+        if vn.read().unwrap().is_annotation() {
+            return 0;
+        }
+        // cc:2495: dt = vn->getHigh()->getType()
+        let dt = {
+            let r = vn.read().unwrap();
+            r.high
+                .as_ref()
+                .map(|h| h.read().unwrap().get_type())
+                .or_else(|| r.v_type.clone())
+        };
+        let Some(dt) = dt else { return 0 };
+        // cc:2496-2497
+        if !dt.needs_resolution() {
+            return 0;
+        }
+        // cc:2498-2499: if (dt != vn->getType()) dt->resolveInFlow(op, slot);
+        let differs = vn
+            .read()
+            .unwrap()
+            .get_type()
+            .map(|t| !Arc::ptr_eq(&t, &dt))
+            .unwrap_or(true);
+        if differs {
+            crate::unionresolve::resolve_in_flow(fd, &dt, op, slot as i32);
+        }
+        // cc:2500-2501
+        let Some(res_union) = fd.get_union_field(dt.as_ref(), op, slot as i32) else {
+            return 0;
+        };
+        if res_union.get_field_num() < 0 {
+            return 0;
+        }
+        if dt.get_metatype() == crate::type_system::datatype::TypeMetatype::Pointer {
+            // cc:2504: reqtype = vn->getTypeReadFacing(op)
+            let reqtype = crate::unionresolve::vn_type_read_facing(fd, &vn, op, slot as i32);
+            let Some(reqtype) = reqtype else { return 0 };
+            // cc:2505-2506: if a cast is still needed, don't do the resolve.
+            if strategy
+                .cast_standard_full(&reqtype, res_union.get_datatype(), true, true)
+                .is_some()
+            {
+                return 0;
+            }
+            // cc:2508-2509
+            let ptrsub = Self::insert_ptrsub_zero(fd, op, slot, &reqtype);
+            fd.set_union_field(dt.as_ref(), &ptrsub, -1, res_union);
+        } else if vn.read().unwrap().is_implied() {
+            // cc:2511-2518: implied varnode whose write-facing resolution
+            // matches needs no field printed.
+            if let Some(def) = vn.read().unwrap().get_def() {
+                let def_ref = crate::op::PcodeOpRef(def);
+                if let Some(write_res) = fd.get_union_field(dt.as_ref(), &def_ref, -1) {
+                    if write_res.get_field_num() == res_union.get_field_num() {
+                        return 0; // Don't print implied fields for vn
+                    }
+                }
+            }
+            // cc:2519: vn->setImpliedField() — Rugra's Varnode has no
+            // has_implied_field addlflag (varnode.rs is under a separate
+            // write-domain lease); the flag's only consumer is
+            // PrintLanguage::recurse → PrintC::pushImpliedField
+            // (printlanguage.cc:527). Registered handover in the wiring
+            // commit; no current Rugra print path reads it.
+        }
+        1
+    }
+
     // Ghidra: coreaction.cc:2532 ActionSetCasts::castOutput
     /// Insert a CAST (or PTRSUB) op after `op` to convert its output to the
     /// token type (cc:2532-2616): token via the TypeOp virtual dispatch
@@ -5867,12 +6163,31 @@ impl ActionSetCasts {
         // equivalent is structural equality of base types
         // (metatype+size+name).
         if tokenct.type_equal(&out_high_type) {
+            // cc:2545-2548: operation copies directly to outvn AS a union —
+            // force the varnode to resolve to the parent data-type.
+            if tokenct.needs_resolution() {
+                let resolve = crate::unionresolve::ResolvedUnion::new(tokenct.clone());
+                fd.set_union_field(tokenct.as_ref(), op, -1, resolve);
+            }
             return 0;
         }
-        // cc:2553-2557: outHighResolve starts as outHighType; the union
-        // needsResolution resolution arm is a registered residual (no union
-        // resolution infrastructure yet).
+        // cc:2553-2557: outHighResolve starts as outHighType; when the high
+        // type needs resolution, a last-chance resolveInFlow (when high and
+        // instance types differ) runs, then the def-facing findResolve
+        // fetches the resolved field type (type.cc:2137/type.cc:1192 through
+        // fd.union_map).
         let mut out_high_resolve = out_high_type.clone();
+        if out_high_type.needs_resolution() {
+            let instance_type = outvn.read().unwrap().get_type();
+            let differs = instance_type
+                .map(|t| !Arc::ptr_eq(&t, &out_high_type))
+                .unwrap_or(true);
+            if differs {
+                crate::unionresolve::resolve_in_flow(fd, &out_high_type, op, -1);
+            }
+            out_high_resolve =
+                crate::unionresolve::find_resolve(fd, &out_high_type, op, -1);
+        }
         // cc:2559-2582: implied varnode must have parse type.
         let mut force = false;
         {
@@ -5911,6 +6226,7 @@ impl ActionSetCasts {
                     // its type in favor of the token type.
                     outvn.write().unwrap().update_type(tokenct.clone());
                     out_high_resolve = Self::refresh_out_high_resolve(
+                        fd,
                         &outvn,
                         &out_high_resolve,
                         &tokenct,
@@ -5931,6 +6247,7 @@ impl ActionSetCasts {
                     if !pointee_composite {
                         outvn.write().unwrap().update_type(tokenct.clone());
                         out_high_resolve = Self::refresh_out_high_resolve(
+                            fd,
                             &outvn,
                             &out_high_resolve,
                             &tokenct,
@@ -5986,6 +6303,15 @@ impl ActionSetCasts {
         }
         fd.op_set_output(&op, vn);
         fd.op_insert_after(&newop, op);
+        // cc:2610-2613: union bookkeeping on the new CAST/PTRSUB — the
+        // token's edge is forced to the parent resolution, and the output
+        // high type's write resolution is inherited onto the new op.
+        if tokenct.needs_resolution() {
+            fd.force_facing_type(tokenct.clone(), -1, &newop, 0);
+        }
+        if out_high_type.needs_resolution() {
+            fd.inherit_resolution(out_high_type.as_ref(), &newop, -1, op, -1);
+        }
         1 // count += 1
     }
 
@@ -5995,11 +6321,14 @@ impl ActionSetCasts {
     // Rugra's typeDirty is a no-op, so a high still reporting the pre-update
     /// type (single-instance implied temp) is projected as the token type.
     fn refresh_out_high_resolve(
+        fd: &Funcdata,
         outvn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         stale: &Arc<crate::type_system::datatype::Datatype>,
         tokenct: &Arc<crate::type_system::datatype::Datatype>,
     ) -> Arc<crate::type_system::datatype::Datatype> {
-        match outvn.read().unwrap().get_high_type_def_facing() {
+        // varnode.cc:651-658: the def-facing consult resolves through
+        // fd.union_map when the high type needs resolution.
+        match crate::unionresolve::vn_high_type_def_facing(fd, outvn) {
             Some(t) if Arc::ptr_eq(&t, stale) => tokenct.clone(),
             Some(t) => t,
             None => tokenct.clone(),
@@ -6438,6 +6767,13 @@ impl Action for ActionSetCasts {
                 (op.opcode, op.num_input())
             };
             for slot in 0..input_count {
+                // cc:2759: count += resolveUnion(op, i, data, castStrategy);
+                // the last-chance flow resolution runs BEFORE castInput and
+                // may splice a PTRSUB(#0) into this slot (its output then
+                // feeds the castInput below, exactly as in the oracle).
+                if Self::resolve_union(fd, op_ref, slot, &strategy) > 0 {
+                    changes += 1;
+                }
                 let changed =
                     if slot == 0 && matches!(live_opcode, OpCode::CPUI_PTRSUB | OpCode::CPUI_PTRADD) {
                         Self::ptr_input_reqtype(op_ref).is_some_and(|required| {
@@ -6815,7 +7151,8 @@ impl ActionInferTypes {
     /// Returns the out varnode arc if the propagation changed its temp type.
     // Ghidra: coreaction.cc:5074 ActionInferTypes::propagateTypeEdge
     fn propagate_type_edge(
-        op: &crate::op::PcodeOp,
+        op_arc: &Arc<RwLock<crate::op::PcodeOp>>,
+        fd: &mut Funcdata,
         temps: &mut TempTypes,
         active_path: &std::collections::HashSet<u64>,
         inslot: i32,
@@ -6824,22 +7161,41 @@ impl ActionInferTypes {
         ptr_size: usize,
         type_factory: Option<&Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
-        if inslot == outslot {
-            return None; // don't backtrack
-        }
         // Resolve the incoming varnode + its temp type.
-        let in_vn_arc: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> =
+        let in_vn_arc: Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> = {
+            let op = op_arc.read().unwrap();
             if inslot == -1 {
                 op.output.clone()
             } else {
                 op.inrefs.get(inslot as usize).cloned()
-            };
-        let in_vn_arc = in_vn_arc?;
+            }
+        };
         let alttype = {
-            let inv = in_vn_arc.read().unwrap();
+            let inv = in_vn_arc.as_ref()?.read().unwrap();
             temps.get(&vn_id(&inv)).cloned()
         };
         let alttype = alttype?;
+
+        // cc:5081-5084: "Always give incoming data-type a chance to resolve,
+        // even if it would not otherwise propagate" — resolveInFlow runs
+        // BEFORE the backtrack check, so even a backtracking edge populates
+        // fd.union_map (a visible side effect ScoreUnionFields consults
+        // later). The op guard is released: the scorer takes its own.
+        let alttype = if alttype.needs_resolution() {
+            crate::unionresolve::resolve_in_flow(
+                fd,
+                &alttype,
+                &crate::op::PcodeOpRef(op_arc.clone()),
+                inslot,
+            )
+        } else {
+            alttype
+        };
+
+        if inslot == outslot {
+            return None; // don't backtrack
+        }
+        let op = op_arc.read().unwrap();
 
         // Resolve the outgoing varnode.
         let out_vn_arc = if outslot < 0 {
@@ -6881,7 +7237,7 @@ impl ActionInferTypes {
         // The per-opcode propagateType dispatch (op.cc propagateType). Returns
         // the new type for the output, if any.
         let newtype = Self::propagate_type(
-            op,
+            &op,
             &alttype,
             inslot,
             outslot,
@@ -7577,6 +7933,7 @@ impl ActionInferTypes {
     fn propagate_one_type(
         &self,
         root: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
+        fd: &mut Funcdata,
         temps: &mut TempTypes,
         int_types: &IntTypes,
         ptr_size: usize,
@@ -7665,10 +8022,13 @@ impl ActionInferTypes {
                 edge
             };
 
+            // The op guard is released before propagate_type_edge so the
+            // union resolveInFlow path can take its own guards (the edge fn
+            // re-acquires for its read-only sections).
             let next_vn = {
-                let op = edge.op.read().unwrap();
                 Self::propagate_type_edge(
-                    &op,
+                    &edge.op,
+                    fd,
                     temps,
                     &active_path,
                     edge.inslot,
@@ -7721,7 +8081,7 @@ impl ActionInferTypes {
     // Ghidra: coreaction.cc:5342 ActionInferTypes::propagateAcrossReturns
     fn propagate_across_returns(
         &self,
-        fd: &Funcdata,
+        fd: &mut Funcdata,
         temps: &mut TempTypes,
         int_types: &IntTypes,
         ptr_size: usize,
@@ -7795,7 +8155,7 @@ impl ActionInferTypes {
             if improved {
                 temps.insert(id, base_ct.clone());
                 let rv2 = rv.clone();
-                self.propagate_one_type(&rv2, temps, int_types, ptr_size, type_factory);
+                self.propagate_one_type(&rv2, fd, temps, int_types, ptr_size, type_factory);
             }
         }
     }
@@ -7812,7 +8172,7 @@ impl ActionInferTypes {
     #[allow(clippy::too_many_arguments)]
     fn propagate_ref(
         &self,
-        fd: &Funcdata,
+        fd: &mut Funcdata,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
         addr: crate::address::Address,
         walk_space: crate::space::AddressSpace,
@@ -7923,7 +8283,7 @@ impl ActionInferTypes {
             // if (0>lastct->typeOrder(*curvn->getTempType())) set + propagate
             if piece.type_order(&current) < 0 {
                 temps.insert(id, piece);
-                self.propagate_one_type(&vn_arc, temps, int_types, ptr_size, type_factory);
+                self.propagate_one_type(&vn_arc, fd, temps, int_types, ptr_size, type_factory);
             }
         }
     }
@@ -7937,7 +8297,7 @@ impl ActionInferTypes {
     // Ghidra: coreaction.cc:5258 ActionInferTypes::propagateSpacebaseRef
     fn propagate_spacebase_ref(
         &self,
-        fd: &Funcdata,
+        fd: &mut Funcdata,
         temps: &mut TempTypes,
         int_types: &IntTypes,
         ptr_size: usize,
@@ -8176,6 +8536,7 @@ impl Action for ActionInferTypes {
 
                 self.propagate_one_type(
                     root,
+                    fd,
                     &mut temps,
                     &int_types,
                     ptr_size,

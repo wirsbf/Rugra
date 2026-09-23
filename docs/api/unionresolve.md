@@ -138,6 +138,49 @@ downcasts or `Arc` ownership. No behavior changed and no status was promoted.
   the TypeOp getter/PrintC/StringManager path in this phase, and retains the
   other scoring gaps listed above.
 
+## 2026-09-23: pipeline wiring — resolveInFlow/findResolve dispatch + fd-aware read-facing twins (UNIONRESOLVE-PIPELINE-WIRING-0001 / lane EN2)
+
+The module now HAS its pipeline producers. New public free functions
+(threading `fd` in place of Ghidra's virtual `Datatype` dispatch, since
+Rugra's `Datatype` enum has no Funcdata back-pointer):
+
+- `resolve_in_flow(fd, ct, op, slot)` — `Datatype::resolveInFlow` virtual
+  mirror (type.cc:574 base / 1177 pointer-to-union / 1283 array / 1929
+  struct / 2125 union / 2498 partial-union): consult `fd.union_map`, on
+  miss score via `ScoreUnionFields` (union arms) or
+  `TypeStruct::score_single_component` (array/struct arms) and write the
+  edge; partial-union walks the container via `union_resolve_truncation`
+  / `get_sub_type` with NO map write. Callers gate on `needs_resolution`
+  exactly as the oracle call sites do.
+- `union_resolve_truncation(fd, union, offset, op, slot)` —
+  `TypeUnion::resolveTruncation` (type.cc:2147-2177): cached-hit
+  fieldNum>=0 return (field, offset-field.offset); miss scores via the
+  SUBPIECE slot-1 constructor (cc:2160, newoff=0) or implied-truncation
+  constructor (cc:2168, newoff=offset-field.offset).
+- `find_resolve(fd, ct, op, slot)` — const `Datatype::findResolve` mirror
+  (type.cc:586/1192/1298/1944/2137/2517): consult-only, no scoring;
+  array→element / struct→field[0] fallbacks per oracle.
+- `find_compatible_resolve(ct, other)` — `findCompatibleResolve` mirror
+  (type.cc:596/1308/1954/2201/2536) for
+  `ActionSetCasts::tryResolutionAdjustment`: pointer-identity at offset 0
+  (non-resolution other) / size-gated mutual recursion (resolution other).
+- `get_depend(dt, i)` made `pub` (coreaction.cc:2441 consumer).
+- Read-facing twins of varnode.cc:626-672 (varnode.rs stays degenerate
+  under the EJ2 write-domain lease; handover registered in the wiring
+  commit): `vn_type_read_facing` / `vn_type_def_facing` /
+  `vn_high_type_read_facing` / `vn_high_type_def_facing` — `find_resolve`
+  when the instance/high type needs resolution.
+
+Producers wired in coreaction.rs (cc:2499/2556/5083 + tryResolutionAdjustment
+cc:2424 + insertPtrsubZero cc:2630 + CAST bookkeeping cc:2713-2717) and
+ruleaction.rs (cc:7675/7678 PIECE leaf COPY); `get_union_field`/
+`set_union_field`/`force_facing_type`/`inherit_resolution` consumers were
+already in place (funcdata.rs:917-1005 mirror).
+
+Observable: curl main ② line now `(char **)` (== golden 746), curl E2E
+2589/0/0 (-4 vs parent), httpd 2335/0/0 byte-identical, three projections
+(next_url/match_url/parseconfig) MATCH.
+
 ## 2026-09-23: union drill-down fidelity pass (lane wt/unionres, DZ)
 
 Dead-code scorer brought 1:1 with unionresolve.cc ahead of the pipeline
