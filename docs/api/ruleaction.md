@@ -934,8 +934,25 @@ opUnsetOutput 断开 op 输出；newVarnodeOut 创建新输出 varnode 并关联
   - 检测 `MULTIEQUAL(op1_out, op2_out)` 其中 op1/op2 功能等价
   - COPY 特殊情况：MERGE of 2 shadowing varnodes → findSubstitute + totalReplace
   - 通用情况：验证 loneDescend，移动 op1 的输出到 MULTIEQUAL 输出（unify），op_uninsert + op_insert_before 重新定位
-  - `find_substitute(in1, in2)` — 搜索已存在的 MULTIEQUAL[in1,in2] 或 CSE
+  - `find_substitute(fd, in1, in2, bb, earliest)` — 搜索**同块**已存在的 MULTIEQUAL[in1,in2] 或 CSE
   - 依赖：functional_equality_level ✅、total_replace ✅、op_destroy ✅、op_uninsert ✅、op_insert_before ✅
+
+### 2026-09-24：findSubstitute 块过滤 + earliest 约束（RULEACTION-FINDSUB-BBFILTER-0001，wt/p3batch）
+
+对齐 ruleaction.cc:1031-1060 的两处缺失：
+
+- **cc:1040 块过滤**：`if (op->getParent() != bb) continue` —— MULTIEQUAL 后代扫描
+  原先跨全部块，搜索网偏宽。现带块限定（裸指针不等式语义：null `bb` 仅匹配无
+  parent 的 op，扁平 bank 单测保持原有可达域）。
+- **cc:1056 earliest 约束**：CSE 臂原为内联「同 opcode+全输入 ptr-eq」扫描（无块、
+  无序约束，且判据本身与 oracle 不同）；现委托正典 `Funcdata::cseFindInBlock`
+  （funcdata.rs `cse_find_in_block`，funcdata_op.cc:1324-1345：块成员 + earliest
+  `SeqNum::order` 上界 + 输出非空 + depth-0 功能等价）。
+- `applyOp` 补 cc:1094-1095 的 `bl = op->getParent()` + `earliest =
+  bl->earliestUse(op->getOut())`，且**前移**到 COPY 特例之前（Ghidra 两臂共用）。
+- 新增 `earliest_use_in_block`（`// Ghidra: block.cc:2778 BlockBasic::earliestUse`，
+  RulePushMulti 私有 helper，ruleaction 写域内落位）：后代扫描限同块，`<`-only
+  比较（平局不替换=先见者胜）。
 
 ## 2026-06-27（续 8）：RuleSelectCse 完整移植
 

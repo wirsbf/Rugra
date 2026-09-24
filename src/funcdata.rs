@@ -735,6 +735,44 @@ impl Funcdata {
         vn
     }
 
+    // Ghidra: funcdata_varnode.cc:148 Funcdata::newVarnode
+    /// Typed explicit-space form of `Funcdata::newVarnode(int4 s,const
+    /// Address &m,Datatype *ct)` — the cc:153-168 body with the caller's
+    /// data-type: `ct == 0` falls back to the factory unknown base, which
+    /// is the Varnode constructor default in Rust (varnode.rs
+    /// `default_unknown_type`, the stand-in for cc:154
+    /// `glb->types->getBase(s,TYPE_UNKNOWN)`); then `vbank.create(s,m,ct)`,
+    /// `assignHigh`, the laned-register check, and the queryProperties
+    /// symbol tail with the INVALID usepoint of cc:162. This is the arm
+    /// `Funcdata::splitUses` cc:1556 reaches through
+    /// `newVarnode(vn->getSize(),vn->getAddr(),vn->getType())`
+    /// (FUNCDATA-SPLITUSES-NEWVN-TYPECARRY-0001).
+    pub(crate) fn new_varnode_typed_in_space(
+        &mut self,
+        size: usize,
+        space: crate::space::AddressSpace,
+        addr: crate::address::Address,
+        ct: Option<std::sync::Arc<crate::type_system::datatype::Datatype>>,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        // cc:156: vn = vbank.create(s,m,ct) — the type is not a bank tree
+        // key (VarnodeBank::create keys on space/loc/def), so installing it
+        // after the insert preserves the tree order (same pattern as
+        // create_unique_typed, varnode.cc:1265).
+        let vn = self.vbank.create_with_space(size, space, addr.as_u64());
+        if let Some(ct) = ct {
+            vn.write().unwrap().v_type = Some(ct);
+        }
+        // cc:157: assignHigh(vn)
+        let _ = self.assign_high(&vn);
+        // cc:159-160: if (s >= minLanedSize) checkForLanedRegister(s,m)
+        if size >= self.min_laned_size as usize {
+            self.check_for_laned_register(size, space, addr);
+        }
+        // cc:161-166: queryProperties symbol tail (usepoint = INVALID).
+        self.new_varnode_symbol_tail(&vn, None);
+        vn
+    }
+
     // RUGRA-GLUE: explicit-space adapter for Ghidra's Address-valued
     // Funcdata::newVarnode; ADDRESS-0001 keeps space and offset split across
     // Rugra until the entire comparison domain migrates atomically.
@@ -744,15 +782,9 @@ impl Funcdata {
         space: crate::space::AddressSpace,
         addr: crate::address::Address,
     ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
-        let vn = self.vbank.create_with_space(size, space, addr.as_u64());
-        let _ = self.assign_high(&vn);
-        if size >= self.min_laned_size as usize {
-            self.check_for_laned_register(size, space, addr);
-        }
         // cc:239-246: the explicit-space overload delegates to the full
         // newVarnode(s,m,ct) — including the queryProperties symbol tail.
-        self.new_varnode_symbol_tail(&vn, None);
-        vn
+        self.new_varnode_typed_in_space(size, space, addr, None)
     }
 
     // Ghidra: funcdata_varnode.cc:161-166 Funcdata::newVarnode (symbol tail)
@@ -1397,12 +1429,15 @@ impl Funcdata {
 
     // Ghidra: funcdata.cc:34 Funcdata::findVarnodeInput
     /// Find an input varnode of the given size at the given address.
-    /// Faithful to `Funcdata::findVarnodeInput` (funcdata.hh:324).
-    /// Used by ActionRestrictLocal and AncestorRealistic.
+    /// Faithful to `Funcdata::findVarnodeInput` (funcdata.hh:324): the
+    /// Address carries the space, so the bank lookup is space-qualified
+    /// (BANK-FINDINPUT-SPACE-0001). Used by ActionRestrictLocal and
+    /// AncestorRealistic.
     pub fn find_varnode_input(
-        &self, size: usize, addr: crate::address::Address,
+        &self, size: usize, space: crate::space::AddressSpace,
+        addr: crate::address::Address,
     ) -> Option<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>> {
-        self.vbank.find_input(size, addr)
+        self.vbank.find_input(size, space, addr)
     }
 
     // Ghidra: funcdata.cc:34 Funcdata::addSymbol
@@ -6049,9 +6084,15 @@ impl Funcdata {
         let (_sp_space, sp_offset, sp_size) = (
             self.stack_pointer_space, self.stack_pointer_offset, self.stack_pointer_size,
         );
-        // cc:298: vn = vbank.findInput(point.size, Address(point.space,point.offset)).
-        self.vbank
-            .find_input(sp_size, crate::address::Address::new(sp_offset))
+        // cc:298: vn = vbank.findInput(point.size, Address(point.space,point.offset))
+        // — point.space is the REGISTER space of the base register
+        // (stack_pointer_space), not the space being pointed into.
+        // (BANK-FINDINPUT-SPACE-0001)
+        self.vbank.find_input(
+            sp_size,
+            self.stack_pointer_space,
+            crate::address::Address::new(sp_offset),
+        )
     }
 
     // Ghidra: funcdata.cc:309 Funcdata::constructSpacebaseInput
@@ -6691,6 +6732,7 @@ impl Funcdata {
         let vn_size = vn.read().unwrap().get_size();
         let vn_addr = vn.read().unwrap().loc.clone();
         let vn_space = vn.read().unwrap().address_space;
+        let vn_type = vn.read().unwrap().get_type();
 
         // Faithful to funcdata_varnode.cc:1549-1565: the descendant iterator
         // is advanced BEFORE each rewrite, so EVERY original descendant is
@@ -6708,13 +6750,22 @@ impl Funcdata {
             }
             // newop = newOp(op->numInput(), op->getAddr())
             let newop = self.new_op(num_inputs, def_addr.clone());
-            // cc:1556: newvn = newVarnode(vn->getSize(), vn->getAddr(),
-            // vn->getType()) — VarnodeBank::create (varnode.cc:1250) inserts
-            // the free varnode under its FINAL (space, loc) tree keys, so no
+            // cc:1556: newvn = newVarnode(vn->getSize(),vn->getAddr(),
+            // vn->getType()) — the FULL Funcdata::newVarnode(s,m,ct) path
+            // (funcdata_varnode.cc:148-169): typed bank create, assignHigh,
+            // the laned-register check (s >= minLanedSize), and the
+            // queryProperties symbol tail with the INVALID usepoint of
+            // cc:162 — same carries PM-F2S proved observable.
+            // VarnodeBank::create (varnode.cc:1250) inserts the free
+            // varnode under its FINAL (space, loc) tree keys, so no
             // post-insert key mutation can drift the tree order.
-            let newvn = self
-                .vbank
-                .create_with_space(vn_size, vn_space, vn_addr.as_u64());
+            // (FUNCDATA-SPLITUSES-NEWVN-TYPECARRY-0001)
+            let newvn = self.new_varnode_typed_in_space(
+                vn_size,
+                vn_space,
+                vn_addr,
+                vn_type.clone(),
+            );
             // cc:1557: opSetOutput(newop,newvn) — Funcdata::opSetOutput
             // (funcdata_op.cc:70-87) routes through VarnodeBank::setDef for
             // the WRITTEN flag and the def-tree re-key; never an in-place
@@ -8583,7 +8634,7 @@ impl Funcdata {
         &self,
         op: &crate::op::PcodeOpRef,
         vn: &std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>,
-        bl: &std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>,
+        bl: Option<&std::sync::Arc<std::sync::RwLock<dyn crate::block::FlowBlock + Send + Sync>>>,
         earliest: Option<&crate::op::PcodeOpRef>,
     ) -> Option<crate::op::PcodeOpRef> {
         // cc:1331-1345: for each descendant res of vn:
@@ -8602,9 +8653,11 @@ impl Funcdata {
                 .parent
                 .clone()
                 .and_then(|w| w.upgrade());
-            // cc:1334: if (res->getParent() != bl) continue.
+            // cc:1334: if (res->getParent() != bl) continue — raw pointer
+            // inequality, so a null -bl- matches ONLY parentless ops.
             let parent_matches = match (&res_parent, bl) {
-                (Some(rp), bp) => std::sync::Arc::ptr_eq(rp, bp),
+                (Some(rp), Some(bp)) => std::sync::Arc::ptr_eq(rp, bp),
+                (None, None) => true,
                 _ => false,
             };
             if !parent_matches {

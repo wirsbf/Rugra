@@ -3565,15 +3565,22 @@ impl ScopeLocal {
         let align = ct.get_align_size().max(1) as i32;
         let num = hint.size / align;
         // NOTE: Ghidra wraps the array through glb->types->getTypeArray
-        // (varmap.cc:625), whose factory deduplication is not yet ported
-        // (no TypeFactory::getTypeArray in Rust); the array shell is built
-        // locally around the factory-owned element type. Registered as a
-        // TYPE-WIRING-0001 residual.
+        // (varmap.cc:625); the factory deduplication is not yet ported
+        // (no TypeFactory::getTypeArray in Rust), so the array shell is
+        // built locally around the factory-owned element type. Registered
+        // as a TYPE-WIRING-0001 residual.
+        // type.hh:937 TypeArray(int4 n,Datatype *ao)
+        //   : Datatype(n*ao->getAlignSize(), ao->getAlignment(), TYPE_ARRAY)
+        // — the array shell's size is num × ELEMENT ALIGN-SIZE, never the
+        // raw hint extent: the non-integral tail of an over-extended open
+        // hint (varmap.cc:1315) stays unmapped (余数留洞).
+        // (VARMAP-SPALIAS-ARRAYSHELL-SIZE-0001)
         let final_dt: Arc<Datatype> = if num > 1 {
+            let array_size = num as usize * ct.get_align_size();
             Arc::new(Datatype::Array(crate::type_system::datatype::TypeArray {
                 base: crate::type_system::datatype::TypeBase::new(
                     format!("{}[{}]", ct.get_name(), num),
-                    hint.size as usize,
+                    array_size,
                     TypeMetatype::Array,
                 ),
                 array_of: ct.clone(),
