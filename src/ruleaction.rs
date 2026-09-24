@@ -17968,7 +17968,7 @@ struct AddTreeState<'a> {
     size: i64,
     multsum: u64,
     nonmultsum: u64,
-    biggest_non_mult_coeff: u64,
+    biggest_non_mult_coeff: u32,
     multiple: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
     coeff: Vec<i64>,
     nonmult: Vec<std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>>>,
@@ -18216,7 +18216,11 @@ impl<'a> AddTreeState<'a> {
                             return self.span_add_tree(&def, val);
                         }
                     }
-                    let vncoeff: u64 = if sval < 0 { (-sval) as u64 } else { sval as u64 };
+                    // Ghidra: ruleaction.cc:6146 `uint4 vncoeff = (sval < 0) ?
+                    // (uint4)-sval : (uint4)sval;` — the cast to uint4 happens
+                    // BEFORE the comparison, so |sval| >= 2^32 wraps (possibly
+                    // to 0) before it can beat the running maximum.
+                    let vncoeff: u32 = if sval < 0 { sval.wrapping_neg() as u32 } else { sval as u32 };
                     if vncoeff > self.biggest_non_mult_coeff {
                         self.biggest_non_mult_coeff = vncoeff;
                     }
@@ -18231,8 +18235,10 @@ impl<'a> AddTreeState<'a> {
                 }
             }
         }
-        if tree_coeff > self.biggest_non_mult_coeff {
-            self.biggest_non_mult_coeff = tree_coeff;
+        // Ghidra: ruleaction.cc:6158-6159 — compare at uint8 (treeCoeff) width
+        // against the uint4 field promoted to uint8, store truncated to uint4.
+        if u64::from(self.biggest_non_mult_coeff) < tree_coeff {
+            self.biggest_non_mult_coeff = tree_coeff as u32;
         }
         true
     }
@@ -18292,8 +18298,11 @@ impl<'a> AddTreeState<'a> {
             self.valid = false;
             return false;
         }
-        if tree_coeff > self.biggest_non_mult_coeff {
-            self.biggest_non_mult_coeff = tree_coeff;
+        // Ghidra: ruleaction.cc:6210-6211 — `treeCoeff` (uint8) is compared at
+        // full 64-bit width against the uint4 field (promoted), but the STORE
+        // truncates to uint4: the running maximum only ever holds 32 bits.
+        if u64::from(self.biggest_non_mult_coeff) < tree_coeff {
+            self.biggest_non_mult_coeff = tree_coeff as u32;
         }
         true
     }
@@ -18337,12 +18346,173 @@ impl<'a> AddTreeState<'a> {
         false // At least one side contains multiples.
     }
 
+    // RUGRA-GLUE: live getMap projection for the TypeSpacebase query path.
+    /// Resolve the [`SpacebaseMap`] a TypeSpacebase query must run against —
+    /// Ghidra's `TypeSpacebase::getMap` (type.cc:2935-2945) re-resolves this
+    /// on EVERY query through the Architecture: the global scope, or — when
+    /// `localframe` is valid — the function at `localframe`
+    /// (`queryFunction`) whose live ScopeLocal becomes the map. Rugra cannot
+    /// reach the Funcdata from inside the interned `Arc<Datatype>`, so the
+    /// rule query path resolves it from the decompiling function here: this
+    /// AddTreeState always belongs to `self.data`, whose entry address IS
+    /// the spacebase's `localframe` (the spacebase varnode's pointer type is
+    /// created from `Funcdata::getAddress()`, funcdata.cc:245). A frame
+    /// mismatch models the `queryFunction` miss and falls back to the global
+    /// scope, exactly like the C++.
+    fn spacebase_map<'m>(
+        &'m self,
+        bt: &'m std::sync::Arc<crate::type_system::datatype::Datatype>,
+    ) -> crate::type_system::datatype::SpacebaseMap<'m> {
+        use crate::type_system::datatype::{Datatype, SpacebaseMap};
+        if let Datatype::Spacebase(sb) = bt.as_ref() {
+            // Ghidra: `!localframe.isInvalid()` (type.cc:2939) — an invalid
+            // Address is the default-constructed (spaceless) one; a real
+            // function entry is never invalid. Rugra's legacy `Address`
+            // carries no space at all (function baseaddrs arrive as
+            // spaceless NONZERO offsets), so the observable discrimination
+            // is: the global spacebase is the all-zero sentinel frame
+            // (typefactory.rs get_type_spacebase frame 0); any spaced or
+            // nonzero frame references the owning function.
+            let frame_references_function =
+                !sb.localframe.is_invalid() || !sb.localframe.is_null();
+            if frame_references_function {
+                let fd: &'m Funcdata = self.data;
+                if fd.get_address().as_u64() == sb.localframe.as_u64() {
+                    return SpacebaseMap::Local(fd.scope.as_ref());
+                }
+            }
+            // queryFunction(localframe) miss (or the global spacebase): the
+            // global-scope leg.
+            return SpacebaseMap::Global(sb.scope.as_ref());
+        }
+        SpacebaseMap::Global(None)
+    }
+
+    // Ghidra: ruleaction.cc:6064 AddTreeState::hasMatchingSubType
+    /// An explicit offset should target a specific sub data-type, but array
+    /// indexing may confuse things: find the best matching component near
+    /// `off`, preferring a matching array element size and a component start
+    /// nearer to the offset. Faithful to `AddTreeState::hasMatchingSubType`
+    /// (ruleaction.cc:6064-6107). With `array_hint == 0` this is exactly
+    /// `getSubType`; otherwise the backward/forward
+    /// `nearestArrayedComponent*` walks run against the base type — the
+    /// virtual dispatch sends TYPE_SPACEBASE to the live-map overrides
+    /// (type.cc:3020/2971) and TYPE_STRUCT to the field walks
+    /// (type.cc:1669/1698); every other metatype takes the base null walks
+    /// (type.cc:201/188).
+    fn has_matching_sub_type(&self, off: i64, array_hint: u32, newoff: &mut i64) -> bool {
+        use crate::type_system::datatype::{
+            nearest_arrayed_component_backward, nearest_arrayed_component_forward, Datatype,
+            SpacebaseMap, TypeMetatype,
+        };
+        let base_type = match self.base_type.as_ref() {
+            Some(bt) => bt.clone(),
+            None => return false,
+        };
+        // The formal is `uint4 coeff` (ruleaction.cc:6064) and the argument is
+        // the uint4 field `biggestNonMultCoeff` (ruleaction.hh:54): no
+        // truncation happens at this call in the oracle — the field is already
+        // 32-bit (stores truncate, see the three mirror sites above).
+        let map: Option<SpacebaseMap<'_>> =
+            if base_type.get_metatype() == TypeMetatype::Spacebase {
+                Some(self.spacebase_map(&base_type))
+            } else {
+                None
+            };
+        // The virtual getSubType dispatch (spacebase override resolves the
+        // live map, ruleaction.cc:6068/6087).
+        let query_sub_type = |o: i64| -> (Option<std::sync::Arc<crate::type_system::datatype::Datatype>>, i64) {
+            match (&map, base_type.as_ref()) {
+                (Some(m), Datatype::Spacebase(sb)) => sb.get_sub_type_in_map(m, o),
+                _ => base_type.get_sub_type(o),
+            }
+        };
+        if array_hint == 0 {
+            return match query_sub_type(off) {
+                (Some(_), e) => {
+                    *newoff = e;
+                    true
+                }
+                (None, _) => false,
+            };
+        }
+        // ruleaction.cc:6070-6082 — nearestArrayedComponentBackward: a hit
+        // with a compatible element size whose offset is inside the
+        // component answers directly.
+        let type_before = match (&map, base_type.as_ref()) {
+            (Some(m), Datatype::Spacebase(sb)) => {
+                sb.nearest_arrayed_component_backward_in_map(m, off)
+            }
+            _ => nearest_arrayed_component_backward(&base_type, off),
+        };
+        if let Some(tb) = &type_before.dtype {
+            if array_hint == 1 || type_before.elsize == array_hint as i64 {
+                // int8 sizeAddr = byteToAddressInt(getSize(), ct wordsize)
+                // = size / ws (space.hh:541).
+                let size_addr =
+                    (tb.get_size() as i64).wrapping_div(self.rel_wordsize() as i64);
+                if type_before.newoff >= 0 && type_before.newoff < size_addr {
+                    // If the offset is inside a component with a compatible
+                    // array, return it.
+                    *newoff = type_before.newoff;
+                    return true;
+                }
+            }
+        }
+        // ruleaction.cc:6083-6095 — nearestArrayedComponentForward.
+        let type_after = match (&map, base_type.as_ref()) {
+            (Some(m), Datatype::Spacebase(sb)) => {
+                sb.nearest_arrayed_component_forward_in_map(m, off)
+            }
+            _ => nearest_arrayed_component_forward(&base_type, off),
+        };
+        if type_before.dtype.is_none() && type_after.dtype.is_none() {
+            // ruleaction.cc:6086-6087 — both walks missed: fall back to the
+            // plain getSubType container query.
+            return match query_sub_type(off) {
+                (Some(_), e) => {
+                    *newoff = e;
+                    true
+                }
+                (None, _) => false,
+            };
+        }
+        if type_before.dtype.is_none() {
+            *newoff = type_after.newoff;
+            return true;
+        }
+        if type_after.dtype.is_none() {
+            *newoff = type_before.newoff;
+            return true;
+        }
+        // ruleaction.cc:6097-6105 — pick the nearer start; an element-size
+        // mismatch adds the 0x1000 penalty; the tie goes backward (offBefore).
+        let mut dist_before = (type_before.newoff as i64).unsigned_abs();
+        let mut dist_after = (type_after.newoff as i64).unsigned_abs();
+        if array_hint != 1 {
+            if type_before.elsize != array_hint as i64 {
+                dist_before += 0x1000;
+            }
+            if type_after.elsize != array_hint as i64 {
+                dist_after += 0x1000;
+            }
+        }
+        *newoff = if dist_after < dist_before {
+            type_after.newoff
+        } else {
+            type_before.newoff
+        };
+        true
+    }
+
     /// Faithful to `AddTreeState::calcSubtype` (ruleaction.cc:6270-6355).
     ///
-    /// The pRelType branches (6350-6354) are omitted (no TypePointerRel). The
-    /// TypePointerRel `hasMatchingSubType` path for SPACEBASE/STRUCT needs
-    /// `nearestArrayedComponent*` which Rugra lacks; we approximate with
-    /// `get_sub_type`, mirroring the arrayHint==0 Ghidra path.
+    /// The final pRelType block (6350-6354) lives at the tail below (Rugra's
+    /// relative pointer is a flat TypePointer state, see `ptr_rel_state`).
+    /// The SPACEBASE/STRUCT arms call `hasMatchingSubType` with
+    /// biggestNonMultCoeff as the array hint; the hint path resolves the
+    /// spacebase map live through `spacebase_map` (the TypeSpacebase
+    /// nearestArrayedComponent* overrides, type.cc:2971/3020).
     // Ghidra: ruleaction.cc:6270 AddTreeState::calcSubtype
     fn calc_subtype(&mut self) {
         let tmpoff = (self.multsum.wrapping_add(self.nonmultsum)) & self.ptrmask;
@@ -18382,49 +18552,59 @@ impl<'a> AddTreeState<'a> {
             use crate::type_system::datatype::TypeMetatype;
             match bt.get_metatype() {
                 TypeMetatype::Spacebase => {
-                    // Ghidra (ruleaction.cc:6296-6310): offsetbytes =
-                    // addressToByteInt(offset, ct wordSize); hasMatchingSubType
-                    // (arrayHint == biggestNonMultCoeff). With arrayHint 0 the
-                    // answer is exactly getSubType, which we call here
-                    // (TypeSpacebase::getSubType now mirrors type.cc:2964-2966,
-                    // answering (undefined1, 0) on the miss so extra == 0 and
-                    // the arm stays valid — the match_url oppool2 CROSSBUILD
-                    // chain). With arrayHint != 0 Ghidra first consults
-                    // nearestArrayedComponentBackward/Forward (type.cc:2971-
-                    // 3038), not modelled here; for the no-container stack
-                    // state both oracle arms reduce to getSubType's miss
-                    // answer (extra 0). wordsize-1 spaces make the
-                    // byte/address conversions identity.
-                    // MYPROGRESS-OPPOOL2-CONSTSPLIT-0001: the arrayHint!=0
-                    // approximation is only exact while the live local map
-                    // has no container covering the query — the ord150
-                    // myprogress / ord186 parseconfig splits diverge exactly
-                    // when oracle's map (or facing TypePointerRel, see p_rel)
-                    // answers differently; the faithful arrayHint paths need
-                    // the live ScopeLocal wired into the spacebase type first.
-                    let extra = match bt.get_sub_type(self.offset as i64) {
-                        (Some(_), e) => e as u64,
-                        (None, _) => { self.valid = false; return; }
-                    };
-                    self.offset = (self.offset.wrapping_sub(extra)) & self.ptrmask;
-                    self.correct = (self.correct.wrapping_sub(extra)) & self.ptrmask;
+                    // Ghidra (ruleaction.cc:6286-6298): offsetbytes =
+                    // addressToByteInt(offset, ct wordsize) — the uint8
+                    // offset reinterpreted as int8 then ×ws — and the answer
+                    // converts back with byteToAddress (÷ws,
+                    // space.hh:523/541). hasMatchingSubType carries
+                    // biggestNonMultCoeff (truncated to uint4) as the array
+                    // hint; with hint ≠ 0 the backward/forward
+                    // nearestArrayedComponent* walks resolve through the
+                    // CURRENT ScopeLocal (the live getMap projection,
+                    // RULEARITH-SPACEBASE-ARRAYSNAP-0001) instead of the
+                    // construction-time global snapshot. The no-container
+                    // miss answers (undefined1, 0) keeping the arm valid —
+                    // the match_url oppool2 CROSSBUILD chain.
+                    let wordsize = self.rel_wordsize() as i64;
+                    let offsetbytes = (self.offset as i64).wrapping_mul(wordsize);
+                    let mut extra: i64 = 0;
+                    // Get offset into mapped variable.
+                    if !self.has_matching_sub_type(offsetbytes, self.biggest_non_mult_coeff, &mut extra)
+                    {
+                        self.valid = false; // Cannot find mapped variable but nonmult is non-empty.
+                        return;
+                    }
+                    let extra = ((extra as u64) / (wordsize as u64)) as i64; // Ghidra: ruleaction.cc:6294 AddrSpace::byteToAddress (uintb unsigned divide, space.hh:523-525)
+                    self.offset = self.offset.wrapping_sub(extra as u64) & self.ptrmask;
+                    self.correct = self.correct.wrapping_sub(extra as u64) & self.ptrmask;
                     self.is_subtype = true;
                 }
                 TypeMetatype::Struct => {
                     let soffset = sign_extend_u64(self.offset, self.ptrsize * 8);
-                    let extra = match bt.get_sub_type(soffset) {
-                        (Some(_), e) => e as u64,
-                        (None, _) => {
-                            // Out of structure bounds check (compare as bytes).
-                            if (soffset < 0) || (soffset as u64) >= bt.get_size() as u64 {
-                                self.valid = false;
-                                return;
-                            }
-                            0 // No field, but pretend there is something there.
+                    // Ghidra (ruleaction.cc:6299-6313): offsetbytes =
+                    // addressToByteInt(soffset, ct wordsize) (×ws);
+                    // hasMatchingSubType with biggestNonMultCoeff as the
+                    // array hint consults the struct's
+                    // nearestArrayedComponent* field walks (type.cc:1669/1698)
+                    // on the hint path; the answer converts back with
+                    // byteToAddressInt (÷ws).
+                    let wordsize = self.rel_wordsize() as i64;
+                    let offsetbytes = soffset.wrapping_mul(wordsize);
+                    let mut extra: i64 = 0;
+                    // Get offset into field in structure.
+                    if !self.has_matching_sub_type(offsetbytes, self.biggest_non_mult_coeff, &mut extra)
+                    {
+                        // Out of structure's bounds (compare as bytes! not
+                        // address units).
+                        if offsetbytes < 0 || offsetbytes >= bt.get_size() as i64 {
+                            self.valid = false;
+                            return;
                         }
-                    };
-                    self.offset = (self.offset.wrapping_sub(extra)) & self.ptrmask;
-                    self.correct = (self.correct.wrapping_sub(extra)) & self.ptrmask;
+                        extra = 0; // No field, but pretend there is something there.
+                    }
+                    let extra = extra.wrapping_div(wordsize);
+                    self.offset = self.offset.wrapping_sub(extra as u64) & self.ptrmask;
+                    self.correct = self.correct.wrapping_sub(extra as u64) & self.ptrmask;
                     // Ghidra 6314-6320: with a relative pointer, when the
                     // offset lands inside the basic pointed-to type, the
                     // offset must be explainable through the parent container
@@ -26961,6 +27141,242 @@ mod tests {
         let non_leaves = stack.iter().filter(|n| !n.is_leaf()).count();
         assert_eq!(leaves, 4); // leaf_a..leaf_d
         assert_eq!(non_leaves, 2); // hi8, lo8
+    }
+#[test]
+    fn test_add_tree_vncoeff_truncates_before_compare() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let vnterm = make_copy_written_vnterm(&mut fd, 0x30);
+        // MULT #1: constant 0xFFFFFFFBFFFFFFFD (8-byte) ×1 → val keeps the
+        // full pattern; sign_extend(·,63) gives sval = -0x100000003.
+        let vn1 = fd.vbank.create_constant(8, 0xFFFF_FFFB_FFFF_FFFD);
+        let out1 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x40);
+        let op1 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_MULT,
+        )));
+        {
+            let mut o = op1.write().unwrap();
+            o.inrefs = vec![vnterm.clone(), vn1];
+            o.output = Some(out1.clone());
+        }
+        // MULT #2: coefficient 5 > 3 (u32 compare) → final accumulator 5.
+        let vn2 = fd.vbank.create_constant(8, 5);
+        let out2 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x50);
+        let op2 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 2),
+            OpCode::CPUI_INT_MULT,
+        )));
+        {
+            let mut o = op2.write().unwrap();
+            o.inrefs = vec![vnterm.clone(), vn2];
+            o.output = Some(out2.clone());
+        }
+        let mut state = make_varlen_add_tree_state(&mut fd);
+        assert!(state.check_mult_term(&out1, &op1, 1));
+        // (uint4)0x100000003 == 3.
+        assert_eq!(state.biggest_non_mult_coeff, 3);
+        assert!(state.check_mult_term(&out2, &op2, 1));
+        assert_eq!(state.biggest_non_mult_coeff, 5);
+    }
+#[test]
+    fn test_add_tree_treecoeff_fullwidth_compare_truncated_store() {
+        let mut fd = Funcdata::new("t", Address::new(0x1000), 0x10);
+        let vnterm = make_copy_written_vnterm(&mut fd, 0x30);
+        // vnconst NOT constant → the cc:6129 constant block is skipped and
+        // control reaches the cc:6158 treeCoeff site.
+        let nonconst = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x60);
+        let out1 = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x40);
+        let op1 = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 1),
+            OpCode::CPUI_INT_MULT,
+        )));
+        {
+            let mut o = op1.write().unwrap();
+            o.inrefs = vec![vnterm.clone(), nonconst];
+            o.output = Some(out1.clone());
+        }
+        // cc:6210 site: an INPUT (unwritten, non-free) varnode falls
+        // straight to the checkTerm treeCoeff accumulator.
+        let input_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x70);
+        input_vn
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::INPUT);
+        let mut state = make_varlen_add_tree_state(&mut fd);
+        assert!(state.check_mult_term(&out1, &op1, 0x1_0000_0005));
+        // Full-width 0x100000005 > 0 wins the compare; store truncates to 5.
+        assert_eq!(state.biggest_non_mult_coeff, 5);
+        assert!(state.check_mult_term(&out1, &op1, 6));
+        assert_eq!(state.biggest_non_mult_coeff, 6);
+        assert!(state.check_term(&input_vn, 0x1_0000_0003));
+        // 0x100000003 > 6 full width → stores (uint4)0x100000003 == 3.
+        assert_eq!(state.biggest_non_mult_coeff, 3);
+    }
+#[test]
+    fn test_add_tree_spacebase_extra_unsigned_byte_to_address() {
+        use crate::type_system::datatype::{
+            Datatype, TypeArray, TypeBase, TypeMetatype, TypePointer, TypeSpacebase,
+        };
+        let mut fd = Funcdata::new("sbws2", Address::new(0x1000), 0x10);
+        // ScopeLocal with one whole, address-tied array symbol int[8]
+        // (size 32) at stack offset 0x2000 — the forward arrayed-component
+        // walk's +32 probe target.
+        let int_t = Arc::new(Datatype::Base(TypeBase::new(
+            "int".into(),
+            4,
+            TypeMetatype::Int,
+        )));
+        let arr_t = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("int[8]".into(), 32, TypeMetatype::Array),
+            array_of: int_t.clone(),
+            num_elements: 8,
+        }));
+        let mut sl = crate::varmap::ScopeLocal::new();
+        let mut sym = crate::varmap::LocalSymbol::new("arr", 0x2000, 32, Some(arr_t), -1);
+        sym.addrtied = true;
+        sl.symbols.push(sym);
+        sl.mapentry_log.push(crate::varmap::LocalMapEntry {
+            sym: 0,
+            space: crate::space::AddressSpace::Stack,
+            start: 0x2000,
+            size: 32,
+            offset: 0,
+            extraflags: 0,
+            uselimit: Vec::new(),
+            subsort: crate::varmap::EntrySubsort { useindex: 0, useoffset: 0 },
+        });
+        fd.scope = Some(sl);
+        // spacebase for THIS function's frame (localframe == fd address so
+        // spacebase_map resolves the live ScopeLocal), pointer wordsize 2 —
+        // the ws > 1 divergence condition.
+        let sb_dt = Arc::new(Datatype::Spacebase(TypeSpacebase {
+            base: TypeBase::new("spacebase".into(), 0, TypeMetatype::Spacebase),
+            address: Address::new(0),
+            fd: None,
+            spaceid: Some(crate::space::AddressSpace::Stack),
+            localframe: Address::new(0x1000),
+            scope: None,
+        }));
+        let ct = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("spacebase *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: sb_dt,
+            wordsize: 2,
+        }));
+        let ptr_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr_vn.write().unwrap().update_type(ct);
+        let other = fd.vbank.create_constant(8, 1);
+        let add_out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut o = add_op.write().unwrap();
+            o.inrefs = vec![ptr_vn.clone(), other];
+            o.output = Some(add_out);
+        }
+        // The non-multiple term that routes calc_subtype into the SPACEBASE
+        // arm (created before the state borrows fd).
+        let nm = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x30);
+        let mut state = AddTreeState::new(&mut fd, add_op, 0);
+        // Seed the accumulator so calc_subtype lands in the SPACEBASE arm:
+        // offset = 0xFF8 (spacebase size 0 → tmpoff passthrough),
+        // offsetbytes = 0xFF8 × 2 = 0x1FF0; the array hint 4 (== int
+        // element size) routes hasMatchingSubType through the forward walk,
+        // which misses at 0x1FF0, probes 0x2010 into the int[8] symbol, and
+        // answers extra = 0x1FF0 - 0x2000 = -16 (cc:6088-6090).
+        state.multsum = 0xFF8;
+        state.biggest_non_mult_coeff = 4;
+        state.nonmult.push(nm);
+        state.calc_subtype();
+        assert!(state.valid);
+        assert!(state.is_subtype);
+        // extra = byteToAddress(-16, 2) = 0xFFFFFFFFFFFFFFF0 / 2 =
+        // 0x7FFFFFFFFFFFFFF8 (unsigned). offset = 0xFF8 - that, mod 2^64.
+        assert_eq!(state.offset, 0x8000_0000_0000_1000);
+        assert_eq!(state.correct, 0x8000_0000_0000_0008);
+    }
+
+    // RUGRA-GLUE: test module helper (Rust-native fixture builder)
+    /// vnterm for check_mult_term: written by a COPY (not INT_ADD) so the
+    /// distribute path (cc:6138-6143) is skipped and the vncoeff
+    /// accumulator at cc:6145 runs; not free (WRITTEN set).
+    fn make_copy_written_vnterm(
+        fd: &mut Funcdata, reg: u64,
+    ) -> std::sync::Arc<std::sync::RwLock<crate::varnode::Varnode>> {
+        let vnterm = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, reg);
+        let vnterm_def = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 5),
+            OpCode::CPUI_COPY,
+        )));
+        vnterm
+            .write()
+            .unwrap()
+            .set_flags(crate::varnode::varnode_flags::WRITTEN);
+        vnterm.write().unwrap().def = Some(Arc::downgrade(&vnterm_def));
+        vnterm
+    }
+
+    // RUGRA-GLUE: test module helper (Rust-native fixture builder)
+    /// Shared fixture: an AddTreeState over an 8-byte pointer to a
+    /// VARIABLE-LENGTH base type, so `size == 0` (cc:6038). That is what
+    /// structurally lets |sval| exceed the cc:6134 `val >= size` bail (the
+    /// gate only fires when size != 0), letting pathological magnitudes
+    /// reach the vncoeff accumulator.
+    fn make_varlen_add_tree_state(
+        fd: &mut Funcdata,
+    ) -> AddTreeState<'_> {
+        use crate::type_system::datatype::{
+            type_flags, Datatype, TypeBase, TypeMetatype, TypePointer,
+        };
+        let varlen_base = {
+            let mut b = TypeBase::new("void".into(), 1, TypeMetatype::Void);
+            b.flags |= type_flags::VARLENGTH;
+            Arc::new(Datatype::Base(b))
+        };
+        let ptr_type = Arc::new(Datatype::Pointer(TypePointer {
+            base: TypeBase::new("void *".into(), 8, TypeMetatype::Pointer),
+            ptr_to: varlen_base,
+            wordsize: 1,
+        }));
+        let ptr_vn = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x10);
+        ptr_vn.write().unwrap().update_type(ptr_type);
+        let other = fd.vbank.create_constant(8, 1);
+        let add_out = fd
+            .vbank
+            .create_with_space(8, crate::space::AddressSpace::Register, 0x20);
+        let add_op = Arc::new(RwLock::new(PcodeOp::new(
+            SeqNum::new(Address::new(0x1000), 0),
+            OpCode::CPUI_INT_ADD,
+        )));
+        {
+            let mut o = add_op.write().unwrap();
+            o.inrefs = vec![ptr_vn.clone(), other];
+            o.output = Some(add_out);
+        }
+        let state = AddTreeState::new(fd, add_op, 0);
+        assert_eq!(state.size, 0);
+        state
     }
 }
 

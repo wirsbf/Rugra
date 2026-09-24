@@ -3947,8 +3947,11 @@ impl TypeCode {
 /// global and function-local scopes are different types, so the two arms
 /// materialize separately. The local arm holds the `RwLockReadGuard` so the
 /// borrowed `ScopeLocal` outlives the query that reads it.
+/// (Renamed `LiveSpacebaseMap` in the 9458a61b×26ffb3c2 merge: FM's
+/// Option-shaped `SpacebaseMap` — the `*_in_map` walk projection threaded
+/// from ruleaction.rs — keeps the original name.)
 #[derive(Debug)]
-pub enum SpacebaseMap<'a> {
+pub enum LiveSpacebaseMap<'a> {
     /// `fd->getScopeLocal()` of the function at `localframe`
     /// (type.cc:2940-2944) — the live, restructured local map.
     Local(std::sync::RwLockReadGuard<'a, crate::varmap::ScopeLocal>),
@@ -3958,6 +3961,263 @@ pub enum SpacebaseMap<'a> {
 
 /// Type representing a spacebase (e.g. stack frame, register bank)
 ///
+/// Result of the `nearestArrayedComponentForward/Backward` walks
+/// (type.cc:188/201 base, type.cc:1698/1669 struct override, type.cc:2971/3020
+/// spacebase override): the found component data-type (`None` = the walk's
+/// null return), the `newoff` difference between the component's start and
+/// the query offset (positive = component starts before the offset), and the
+/// `elSize` array base element size (only set on a hit; Ghidra leaves the
+/// out-param untouched on null, mirrored by `0`).
+#[derive(Clone, Debug)]
+pub struct ArrayedComponent {
+    pub dtype: Option<Arc<Datatype>>,
+    pub newoff: i64,
+    pub elsize: i64,
+}
+
+impl ArrayedComponent {
+    // RUGRA-GLUE: null-walk answer object; Ghidra returns a null Datatype*
+    // and leaves the out-params untouched.
+    fn miss() -> Self {
+        Self { dtype: None, newoff: 0, elsize: 0 }
+    }
+}
+
+/// The live symbol-map view a TypeSpacebase query resolves against — the
+/// dynamic `getMap()` projection (type.cc:2935-2945). Ghidra re-resolves the
+/// map on EVERY query: `res = glb->symboltab->getGlobalScope()`, and — when
+/// `localframe` is valid — `res->queryFunction(localframe)` finds the owning
+/// function whose `getScopeLocal()` becomes the map. Rugra's
+/// construction-time `TypeSpacebase::scope` snapshot (typefactory.rs) cannot
+/// see the per-function ScopeLocal (built and restructured during the
+/// pipeline), so the live query path (`AddTreeState::calcSubtype`,
+/// ruleaction.cc:6290/6304 via `hasMatchingSubType`) resolves this view from
+/// the decompiling Funcdata at query time and threads it into the
+/// `*_in_map` methods below.
+pub enum SpacebaseMap<'a> {
+    /// `localframe` valid AND `queryFunction(localframe)` resolved the owning
+    /// function: `fd->getScopeLocal()`. `None` = the function's ScopeLocal is
+    /// not materialized yet — Ghidra's ScopeLocal object exists (empty) from
+    /// the moment the function is registered in the symbol table, so every
+    /// container query misses.
+    Local(Option<&'a crate::varmap::ScopeLocal>),
+    /// The global scope: global spacebase (`localframe` invalid) or
+    /// `queryFunction` miss. The construction-time global-scope view stands
+    /// in (globals are installed before decompilation and stable during it).
+    Global(Option<&'a Arc<crate::database::Scope>>),
+}
+
+/// One `queryContainer` answer for the ScopeLocal leg: the symbol's type plus
+/// the `SymbolEntry` placement facts the walks read (`getAddr`, `getOffset`,
+/// `getSize`, `getSymbol()->getType()`).
+// RUGRA-GLUE: value bundle of Ghidra's SymbolEntry* answer fields the
+// TypeSpacebase walks consume.
+struct MapContainerHit {
+    dtype: Arc<Datatype>,
+    addr: u64,
+    offset: i32,
+    size: i32,
+}
+
+// Ghidra: database.cc:2250 ScopeInternal::findContainer
+/// Smallest in-use entry of the ScopeLocal static map log containing the
+/// 1-byte range at address `addr` in `space`. Faithful to
+/// `ScopeInternal::findContainer` (database.cc:2250-2282) restricted to the
+/// null-usepoint form every TypeSpacebase walk queries with
+/// (`queryContainer(addr, 1, Address())`, type.cc:2961/2981/3002/3006):
+/// candidates are the entries starting at or before `addr` that reach the
+/// range end, the SMALLEST size wins (strict `<` keeps the first-encountered
+/// on ties; the descending-start scan visits later insertions first, the same
+/// order Ghidra's (last,subsort)-ordered multiset backward iteration yields
+/// for equal keys), the exact-size match breaks early, and the invalid
+/// usepoint admits only address-tied symbols (`SymbolEntry::inUse`,
+/// database.cc:117-118). Ghidra's parent-scope walk (database.cc:1246
+/// `queryContainer` → `stackContainer`) continues into the global scope on a
+/// local miss, but the global scope's maptable for the STACK space index is
+/// empty — stack addresses miss there too, so querying the local log alone is
+/// observably equivalent.
+fn spacebase_local_query_container(
+    sl: &crate::varmap::ScopeLocal,
+    space: crate::space::AddressSpace,
+    addr: u64,
+) -> Option<MapContainerHit> {
+    // database.cc:2266 — end = addr + size - 1 (size == 1 here).
+    let end = addr;
+    // Candidates ordered for the descending-start scan.
+    let mut candidates: Vec<usize> = (0..sl.mapentry_log.len())
+        .filter(|&i| sl.mapentry_log[i].space == space)
+        .collect();
+    candidates.sort_by_key(|&i| (sl.mapentry_log[i].start, i));
+    let mut best: Option<usize> = None;
+    let mut oldsize: i64 = -1;
+    for &i in candidates.iter().rev() {
+        let entry = &sl.mapentry_log[i];
+        // Containment of the start point: entry.first() <= addr.
+        if entry.start > addr {
+            continue;
+        }
+        // cc:2270 — entry->getLast() >= end: we contain the range.
+        // (RangeRecord::last = start + size - 1.)
+        let entry_last = entry
+            .start
+            .wrapping_add(entry.size.max(0) as u64)
+            .wrapping_sub(1);
+        if entry_last < end {
+            continue;
+        }
+        // cc:2271 — strictly smaller than the running best, or first.
+        if (entry.size as i64) < oldsize || oldsize == -1 {
+            // cc:2272 — inUse(usepoint): null usepoint admits only
+            // address-tied symbols (database.cc:117-118).
+            if sl.symbols[entry.sym].addrtied {
+                best = Some(i);
+                oldsize = entry.size as i64;
+                // cc:2274 — exact size match: nothing smaller can contain.
+                if entry.size == 1 {
+                    break;
+                }
+            }
+        }
+    }
+    let i = best?;
+    let entry = &sl.mapentry_log[i];
+    let dtype = sl.symbols[entry.sym].dtype.clone().unwrap_or_else(|| {
+        // Ghidra Symbol::getType() never returns null: untyped varmap
+        // symbols correspond to the 1-byte TYPE_UNKNOWN base.
+        Arc::new(Datatype::Base(TypeBase::new(String::new(), 1, TypeMetatype::Unknown)))
+    });
+    Some(MapContainerHit { dtype, addr: entry.start, offset: entry.offset, size: entry.size })
+}
+
+// Ghidra: type.cc:1604 TypeStruct::getLowerBoundField
+/// Reused by the nearestArrayedComponent walks via the existing
+/// [`struct_get_lower_bound_field`] (index form; `None` = Ghidra's -1
+/// sentinel): index of the field with the greatest offset <= `off`.
+fn nearest_lower_bound(s: &TypeStruct, off: i64) -> i64 {
+    struct_get_lower_bound_field(s, off).map(|x| x as i64).unwrap_or(-1)
+}
+
+/// Array base element size of an `Array` data-type:
+/// `((TypeArray *)t)->getBase()->getAlignSize()`.
+// RUGRA-GLUE: shared accessor for the TypeArray base alignment the three
+// nearestArrayedComponent overrides read.
+fn arrayed_element_size(dt: &Datatype) -> i64 {
+    if let Datatype::Array(a) = dt {
+        a.array_of.get_align_size() as i64
+    } else {
+        0
+    }
+}
+
+// Ghidra: type.cc:188 Datatype::nearestArrayedComponentForward
+/// Virtual `nearestArrayedComponentForward` dispatch: the base override
+/// (type.cc:188-192) returns null; only `TypeStruct` walks its fields
+/// (type.cc:1698-1740). Full-precision form passing back `newoff`/`elSize`
+/// (the boolean-only `RulePtrsubUndo::test_for_array_slack` twins in
+/// ruleaction.rs predate this). The `TYPE_SPACEBASE` override
+/// (type.cc:2971) needs the live map and lives on
+/// `TypeSpacebase::nearest_arrayed_component_forward_in_map`.
+pub fn nearest_arrayed_component_forward(dt: &Arc<Datatype>, off: i64) -> ArrayedComponent {
+    if let Datatype::Struct(s) = dt.as_ref() {
+        // type.cc:1701-1714.
+        let mut i = nearest_lower_bound(s, off);
+        let mut remain: i64;
+        if i < 0 {
+            // No component starting before off: start at first after.
+            i += 1;
+            remain = 0;
+        } else {
+            let subfield = &s.fields[i as usize];
+            remain = off - subfield.offset as i64;
+            if remain != 0
+                && (subfield.type_ptr.get_metatype() != TypeMetatype::Struct
+                    || remain >= subfield.type_ptr.get_size() as i64)
+            {
+                // Middle of a non-structure we must go forward from: skip it.
+                i += 1;
+                remain = 0;
+            }
+        }
+        // type.cc:1715-1738.
+        while (i as usize) < s.fields.len() {
+            let subfield = &s.fields[i as usize];
+            let diff = subfield.offset as i64 - off; // may be negative (first field)
+            if diff > 128 {
+                break;
+            }
+            let subtype = &subfield.type_ptr;
+            if subtype.get_metatype() == TypeMetatype::Array {
+                return ArrayedComponent {
+                    dtype: Some(subtype.clone()),
+                    newoff: -diff,
+                    elsize: arrayed_element_size(subtype),
+                };
+            }
+            let res = nearest_arrayed_component_forward(subtype, remain);
+            if res.dtype.is_some() {
+                // type.cc:1729 — subdiff = diff + remain - suboff.
+                let subdiff = diff + remain - res.newoff;
+                if subdiff > 128 {
+                    break;
+                }
+                return ArrayedComponent {
+                    dtype: Some(subtype.clone()),
+                    newoff: -diff,
+                    elsize: res.elsize,
+                };
+            }
+            i += 1;
+            remain = 0;
+        }
+    }
+    ArrayedComponent::miss()
+}
+
+// Ghidra: type.cc:201 Datatype::nearestArrayedComponentBackward
+/// Virtual `nearestArrayedComponentBackward` dispatch: the base override
+/// (type.cc:201-205) returns null; only `TypeStruct` walks its fields
+/// (type.cc:1669-1696). See [`nearest_arrayed_component_forward`] for the
+/// spacebase/precision notes.
+pub fn nearest_arrayed_component_backward(dt: &Arc<Datatype>, off: i64) -> ArrayedComponent {
+    if let Datatype::Struct(s) = dt.as_ref() {
+        // type.cc:1672-1694.
+        let first_index = nearest_lower_bound(s, off);
+        let mut i = first_index;
+        while i >= 0 {
+            let idx = i as usize;
+            let subfield = &s.fields[idx];
+            let diff = off - subfield.offset as i64;
+            if diff > 128 {
+                break;
+            }
+            let subtype = &subfield.type_ptr;
+            if subtype.get_metatype() == TypeMetatype::Array {
+                return ArrayedComponent {
+                    dtype: Some(subtype.clone()),
+                    newoff: diff,
+                    elsize: arrayed_element_size(subtype),
+                };
+            }
+            // type.cc:1686 — remain = (i == firstIndex) ? diff : size - 1.
+            let remain = if idx == first_index as usize {
+                diff
+            } else {
+                subtype.get_size() as i64 - 1
+            };
+            let res = nearest_arrayed_component_backward(subtype, remain);
+            if res.dtype.is_some() {
+                return ArrayedComponent {
+                    dtype: Some(subtype.clone()),
+                    newoff: diff,
+                    elsize: res.elsize,
+                };
+            }
+            i -= 1;
+        }
+    }
+    ArrayedComponent::miss()
+}
+
 /// Corresponds to Ghidra's `TypeSpacebase` class in `type.hh:721-746`.
 /// A spacebase treats an `AddrSpace` as a "structure" indexed into by pointer
 /// offsets, facilitating type propagation from local symbols into the stack
@@ -4038,7 +4298,7 @@ impl TypeSpacebase {
     /// which `get_sub_type` answers with the oracle's empty-ScopeLocal
     /// observable. `None` for global spacebases without an attached scope
     /// mirrors the "no global scope" case.
-    pub fn get_map(&self) -> Option<SpacebaseMap<'_>> {
+    pub fn get_map(&self) -> Option<LiveSpacebaseMap<'_>> {
         // Local-frame test: Rugra's legacy `Address::new(frame)` form is
         // SPACELESS, so `is_invalid()` is true for real function entries
         // too; the factory's global spacebases always carry frame 0, so a
@@ -4049,9 +4309,9 @@ impl TypeSpacebase {
             // oracle's Funcdata always exists for a decompiled local frame,
             // so this never falls back to the global scope.
             let handle = self.fd.as_ref()?;
-            handle.read().ok().map(SpacebaseMap::Local)
+            handle.read().ok().map(LiveSpacebaseMap::Local)
         } else {
-            self.scope.as_ref().map(|scope| SpacebaseMap::Global(scope.as_ref()))
+            self.scope.as_ref().map(|scope| LiveSpacebaseMap::Global(scope.as_ref()))
         }
     }
 
@@ -4090,8 +4350,11 @@ impl TypeSpacebase {
     /// global map is stable during decompilation).
     pub fn get_sub_type(&self, off: i64) -> (Option<Arc<Datatype>>, i64) {
         let wordsize = self.spaceid.map(|s| s.word_size()).unwrap_or(1).max(1) as i64;
-        // AddrSpace::byteToAddress(off, wordsize) (space.hh).
-        let addr_off = off.wrapping_mul(wordsize) as u64;
+        // AddrSpace::byteToAddress(off, wordsize) (space.hh:523) = off / ws
+        // (FM direction fix: mul→div; ws=1 makes both identity here).
+        // Unsigned uintb division: negative stack offsets divide on the
+        // two's-complement bit pattern like the oracle, not as i64.
+        let addr_off = (off as u64).wrapping_div(wordsize as u64);
         match self.get_map() {
             None => (
                 Some(Arc::new(Datatype::Base(TypeBase::new(
@@ -4101,7 +4364,7 @@ impl TypeSpacebase {
                 )))),
                 0,
             ),
-            Some(SpacebaseMap::Local(local)) => {
+            Some(LiveSpacebaseMap::Local(local)) => {
                 let space = self.spaceid.unwrap_or(crate::space::AddressSpace::Stack);
                 match local.find_container_entry(space, addr_off, 1, None) {
                     Some(entry) => {
@@ -4122,7 +4385,7 @@ impl TypeSpacebase {
                     ),
                 }
             }
-            Some(SpacebaseMap::Global(scope)) => {
+            Some(LiveSpacebaseMap::Global(scope)) => {
                 // type.cc:2962-2963 — queryContainer(addr, 1, nullPoint):
                 // Rugra's null usepoint is Address::new(0).
                 let addr = Address::new(addr_off);
@@ -4150,6 +4413,205 @@ impl TypeSpacebase {
                 }
             }
         }
+    }
+
+    // Ghidra: type.cc:2961 TypeSpacebase::getSubType (queryContainer leg)
+    /// `scope->queryContainer(addr, 1, nullPoint)` against the resolved
+    /// [`SpacebaseMap`] (the live getMap projection). The Global leg queries
+    /// the construction-time global-scope view; the Local leg queries the
+    /// ScopeLocal static entry log ([`spacebase_local_query_container`]).
+    fn query_container_in_map(&self, map: &SpacebaseMap<'_>, addr: u64) -> Option<MapContainerHit> {
+        match map {
+            SpacebaseMap::Local(Some(sl)) => {
+                let space = self.spaceid?;
+                spacebase_local_query_container(sl, space, addr)
+            }
+            // An empty (not yet materialized) ScopeLocal, or a spacebase
+            // without a spaceid: every query misses.
+            SpacebaseMap::Local(None) => None,
+            SpacebaseMap::Global(scope) => {
+                let scope = (*scope)?.clone();
+                let entry_idx = scope.find_container(Address::new(addr), 1, Address::new(0))?;
+                let entry = &scope.entries[entry_idx];
+                let dtype = entry.symbol.read().unwrap().get_type().unwrap_or_else(|| {
+                    // Ghidra Symbol::getType() never returns null: an untyped
+                    // symbol corresponds to the 1-byte TYPE_UNKNOWN base.
+                    Arc::new(Datatype::Base(TypeBase::new(String::new(), 1, TypeMetatype::Unknown)))
+                });
+                Some(MapContainerHit {
+                    dtype,
+                    addr: entry.addr.as_u64(),
+                    offset: entry.offset,
+                    size: entry.size,
+                })
+            }
+        }
+    }
+
+    // Ghidra: type.cc:2947 TypeSpacebase::getSubType
+    /// Live-map form of [`Self::get_sub_type`]: the TypeSpacebase override
+    /// re-resolves the symbol table through `getMap()` on every query, so the
+    /// local-frame map must be the decompiling function's CURRENT ScopeLocal
+    /// (restructured during the pipeline), not the construction-time snapshot.
+    /// Callers resolve [`SpacebaseMap`] and pass it in; the miss path answers
+    /// the 1-byte TYPE_UNKNOWN base with `newoff = 0` (never null), exactly
+    /// like the snapshot form.
+    pub fn get_sub_type_in_map(&self, map: &SpacebaseMap<'_>, off: i64) -> (Option<Arc<Datatype>>, i64) {
+        let wordsize = self.spaceid.map(|s| s.word_size()).unwrap_or(1).max(1) as i64;
+        // AddrSpace::byteToAddress(off, wordsize) = off / ws (space.hh:523),
+        // unsigned uintb division on the bit pattern (negative offsets keep
+        // the oracle's huge-positive quotient at ws > 1; ws = 1 identity).
+        let addr_off = (off as u64).wrapping_div(wordsize as u64);
+        match self.query_container_in_map(map, addr_off) {
+            Some(hit) => {
+                // newoff = (addr - entry.addr) + entry.offset (type.cc:2967).
+                let newoff = (addr_off.wrapping_sub(hit.addr) as i64) + hit.offset as i64;
+                (Some(hit.dtype), newoff)
+            }
+            None => (
+                Some(Arc::new(Datatype::Base(TypeBase::new(
+                    String::new(),
+                    1,
+                    TypeMetatype::Unknown,
+                )))),
+                0,
+            ),
+        }
+    }
+
+    // Ghidra: type.cc:2971 TypeSpacebase::nearestArrayedComponentForward
+    /// Live-map form of the forward arrayed-component walk. Faithful to
+    /// `TypeSpacebase::nearestArrayedComponentForward` (type.cc:2971-3018):
+    /// query the container at the resolved offset; on a miss (or a partial
+    /// piece with `getOffset() != 0`) probe 32 units ahead, on a struct
+    /// symbol first try the struct's own forward walk, else jump to the
+    /// container's end; the wrap check guards both jumps; the second
+    /// container query must again be a whole symbol (`getOffset() == 0`)
+    /// whose type is (or forward-contains) an array.
+    pub fn nearest_arrayed_component_forward_in_map(
+        &self,
+        map: &SpacebaseMap<'_>,
+        off: i64,
+    ) -> ArrayedComponent {
+        let wordsize = self.spaceid.map(|s| s.word_size()).unwrap_or(1).max(1) as i64;
+        // byteToAddress(off, ws) = off / ws (space.hh:523); resolveConstant
+        // is modelled as the identity mapping into the space. Unsigned
+        // uintb division (see get_sub_type_in_map).
+        let addr = (off as u64).wrapping_div(wordsize as u64);
+        // type.cc:2984-2985 — no container, or a partial piece
+        // (getOffset() != 0): probe 32 address units ahead.
+        let first = match self.query_container_in_map(map, addr) {
+            Some(hit) if hit.offset == 0 => hit,
+            _ => {
+                let next_addr = addr.wrapping_add(32);
+                // type.cc:3000-3001 — don't let the address wrap.
+                if next_addr < addr {
+                    return ArrayedComponent::miss();
+                }
+                return self.forward_second_query(map, addr, next_addr);
+            }
+        };
+        if first.dtype.get_metatype() == TypeMetatype::Struct {
+            // type.cc:2989-2995 — structOff = addr - entry.addr; the
+            // struct's own forward walk answers through elSize.
+            let struct_off = addr.wrapping_sub(first.addr) as i64;
+            let res = nearest_arrayed_component_forward(&first.dtype, struct_off);
+            if res.dtype.is_some() {
+                return ArrayedComponent {
+                    dtype: Some(first.dtype.clone()),
+                    newoff: struct_off,
+                    elsize: res.elsize,
+                };
+            }
+        }
+        // type.cc:2997-2998 — sz = byteToAddressInt(size, ws) = size / ws;
+        // nextAddr = the container's end.
+        let sz = (first.size.max(0) as i64).wrapping_div(wordsize);
+        let next_addr = first.addr.wrapping_add(sz as u64);
+        // type.cc:3000-3001 — don't let the address wrap.
+        if next_addr < addr {
+            return ArrayedComponent::miss();
+        }
+        self.forward_second_query(map, addr, next_addr)
+    }
+
+    // Ghidra: type.cc:3002 TypeSpacebase::nearestArrayedComponentForward
+    /// The shared tail of the forward walk (type.cc:3002-3017): the second
+    /// `queryContainer(nextAddr, 1, null)` must hit a whole symbol
+    /// (`getOffset() == 0`) whose type is an array, or a struct whose own
+    /// forward walk (from offset 0) finds an array.
+    fn forward_second_query(
+        &self,
+        map: &SpacebaseMap<'_>,
+        addr: u64,
+        next_addr: u64,
+    ) -> ArrayedComponent {
+        // type.cc:3003-3004 — the second query must be a whole symbol.
+        let second = match self.query_container_in_map(map, next_addr) {
+            Some(hit) if hit.offset == 0 => hit,
+            _ => return ArrayedComponent::miss(),
+        };
+        let symbol_type = second.dtype.clone();
+        // type.cc:3006 — newoff = addr - entry.addr (positive = before).
+        let newoff = addr.wrapping_sub(second.addr) as i64;
+        if symbol_type.get_metatype() == TypeMetatype::Array {
+            // type.cc:3007-3010 — elSize = array base's align size.
+            let elsize = arrayed_element_size(&symbol_type);
+            return ArrayedComponent {
+                dtype: Some(symbol_type),
+                newoff,
+                elsize,
+            };
+        }
+        if symbol_type.get_metatype() == TypeMetatype::Struct {
+            // type.cc:3011-3016 — the struct's forward walk from offset 0.
+            let res = nearest_arrayed_component_forward(&symbol_type, 0);
+            if res.dtype.is_some() {
+                return ArrayedComponent {
+                    dtype: Some(symbol_type),
+                    newoff,
+                    elsize: res.elsize,
+                };
+            }
+        }
+        ArrayedComponent::miss()
+    }
+
+    // Ghidra: type.cc:3020 TypeSpacebase::nearestArrayedComponentBackward
+    /// Live-map form of the backward arrayed-component walk. Faithful to
+    /// `TypeSpacebase::nearestArrayedComponentBackward` (type.cc:3020-3037):
+    /// the `getSubType` answer's symbol type is the component — an array
+    /// answers directly (elSize = base align size), a struct recurses into
+    /// its own backward walk at the renormalized offset, everything else
+    /// misses. `newoff` carries `getSubType`'s renormalized offset either way.
+    pub fn nearest_arrayed_component_backward_in_map(
+        &self,
+        map: &SpacebaseMap<'_>,
+        off: i64,
+    ) -> ArrayedComponent {
+        let (sub_type, newoff) = self.get_sub_type_in_map(map, off);
+        let sub_type = match sub_type {
+            Some(t) => t,
+            // type.cc:3024-3025 — getSubType null: miss (unreachable for a
+            // spacebase, whose miss path answers TYPE_UNKNOWN, not null).
+            None => return ArrayedComponent::miss(),
+        };
+        if sub_type.get_metatype() == TypeMetatype::Array {
+            let elsize = arrayed_element_size(&sub_type);
+            return ArrayedComponent {
+                dtype: Some(sub_type),
+                newoff,
+                elsize,
+            };
+        }
+        if sub_type.get_metatype() == TypeMetatype::Struct {
+            // type.cc:3030-3035 — recurse at getSubType's newoff.
+            let res = nearest_arrayed_component_backward(&sub_type, newoff);
+            if res.dtype.is_some() {
+                return ArrayedComponent { dtype: Some(sub_type), newoff, elsize: res.elsize };
+            }
+        }
+        ArrayedComponent::miss()
     }
 
     // Ghidra: type.cc:3039 TypeSpacebase::compare
@@ -6028,5 +6490,174 @@ mod tests {
             ram_base.compare_dependency(&register_base).signum(),
             -register_base.compare_dependency(&ram_base).signum(),
         );
+    }
+
+    #[test]
+    fn test_spacebase_nearest_arrayed_walks_live_map() {
+        // The RULEARITH-SPACEBASE-ARRAYSNAP-0001 oracle map shape (FG
+        // report: getparameter oppool2, ScopeLocal after restructureVarnode):
+        // [8B single-element array@-0x4f8][8B scalar@-0x4f0][array@-0x4e8].
+        let arr8 = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("arr8".into(), 8, TypeMetatype::Array),
+            array_of: Arc::new(Datatype::Base(TypeBase::new(
+                "long".into(),
+                8,
+                TypeMetatype::Int,
+            ))),
+            num_elements: 1,
+        }));
+        let arr32 = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("arr32".into(), 32, TypeMetatype::Array),
+            array_of: Arc::new(Datatype::Base(TypeBase::new(
+                "long".into(),
+                8,
+                TypeMetatype::Int,
+            ))),
+            num_elements: 4,
+        }));
+        let scalar8 = Arc::new(Datatype::Base(TypeBase::new(
+            "letter".into(),
+            8,
+            TypeMetatype::Unknown,
+        )));
+        let mut sl = crate::varmap::ScopeLocal::new();
+        sl.add_symbol(
+            crate::space::AddressSpace::Stack,
+            "lname",
+            Some(arr8.clone()),
+            (-0x4f8i64) as u64,
+            None,
+        );
+        sl.add_symbol(
+            crate::space::AddressSpace::Stack,
+            "letter",
+            Some(scalar8.clone()),
+            (-0x4f0i64) as u64,
+            None,
+        );
+        sl.add_symbol(
+            crate::space::AddressSpace::Stack,
+            "extraparam",
+            Some(arr32.clone()),
+            (-0x4e8i64) as u64,
+            None,
+        );
+        let sb = TypeSpacebase {
+            base: TypeBase::new(String::new(), 0, TypeMetatype::Spacebase),
+            address: Address::new(0x419d40),
+            fd: None,
+            spaceid: Some(crate::space::AddressSpace::Stack),
+            localframe: Address::new(0x419d40),
+            scope: None,
+        };
+        let map = SpacebaseMap::Local(Some(&sl));
+
+        // Backward @-0x4f8 (lname site): the containing symbol IS the array
+        // → hit with newoff 0 (the oracle's backward array hit, extra=0).
+        let b = sb.nearest_arrayed_component_backward_in_map(&map, -0x4f8);
+        assert!(b.dtype.is_some());
+        assert_eq!(b.newoff, 0);
+        assert_eq!(b.elsize, 8);
+
+        // Backward @-0x4f0 (letter site): the containing symbol is the 8B
+        // scalar → miss (neither array nor struct).
+        let b2 = sb.nearest_arrayed_component_backward_in_map(&map, -0x4f0);
+        assert!(b2.dtype.is_none());
+
+        // Forward @-0x4f0: container = scalar (offset 0, not struct) →
+        // nextAddr = container end (-0x4e8) → the array hit exactly at its
+        // start: newoff -8, elsize 8 — the oracle's forward adsorption
+        // (extra=-8 → PTRSUB -0x4e8 + INT_ADD #0x4e8).
+        let f = sb.nearest_arrayed_component_forward_in_map(&map, -0x4f0);
+        assert!(f.dtype.is_some());
+        assert_eq!(f.newoff, -8);
+        assert_eq!(f.elsize, 8);
+
+        // Forward @-0x4e8 (extraparam site): container = array, offset 0,
+        // nextAddr = container end (-0x4c8) → no further symbol → miss.
+        let f2 = sb.nearest_arrayed_component_forward_in_map(&map, -0x4e8);
+        assert!(f2.dtype.is_none());
+
+        // Far miss: getSubType answers the 1-byte unknown with newoff 0
+        // (type.cc:2964-2966, never null) and both walks miss.
+        let (t, e) = sb.get_sub_type_in_map(&map, -0x300);
+        assert!(t.is_some());
+        assert_eq!(t.unwrap().get_size(), 1);
+        assert_eq!(e, 0);
+        assert!(sb
+            .nearest_arrayed_component_forward_in_map(&map, -0x300)
+            .dtype
+            .is_none());
+        assert!(sb
+            .nearest_arrayed_component_backward_in_map(&map, -0x300)
+            .dtype
+            .is_none());
+
+        // An empty (not yet materialized) ScopeLocal misses everything.
+        let empty = SpacebaseMap::Local(None);
+        let (t, e) = sb.get_sub_type_in_map(&empty, -0x4f0);
+        assert!(t.is_some());
+        assert_eq!(e, 0);
+        assert!(sb
+            .nearest_arrayed_component_forward_in_map(&empty, -0x4f0)
+            .dtype
+            .is_none());
+    }
+
+    #[test]
+    fn test_struct_nearest_arrayed_component_walks() {
+        // Struct field walk precision (type.cc:1669-1696 / 1698-1740):
+        // struct { arr[2]@0 (8B elements); scalar@16; arr2[3]@24 (4B) }.
+        let arr16 = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("a16".into(), 16, TypeMetatype::Array),
+            array_of: Arc::new(Datatype::Base(TypeBase::new(
+                "long".into(),
+                8,
+                TypeMetatype::Int,
+            ))),
+            num_elements: 2,
+        }));
+        let arr12 = Arc::new(Datatype::Array(TypeArray {
+            base: TypeBase::new("a12".into(), 12, TypeMetatype::Array),
+            array_of: Arc::new(Datatype::Base(TypeBase::new(
+                "int".into(),
+                4,
+                TypeMetatype::Int,
+            ))),
+            num_elements: 3,
+        }));
+        let scalar8 = Arc::new(Datatype::Base(TypeBase::new(
+            "s".into(),
+            8,
+            TypeMetatype::Unknown,
+        )));
+        let s = Arc::new(Datatype::Struct(TypeStruct {
+            base: TypeBase::new("S".into(), 36, TypeMetatype::Struct),
+            fields: vec![
+                TypeField { name: "a".into(), offset: 0, type_ptr: arr16 },
+                TypeField { name: "s".into(), offset: 16, type_ptr: scalar8.clone() },
+                TypeField { name: "b".into(), offset: 24, type_ptr: arr12 },
+            ],
+        }));
+        // Backward at 18 (inside the scalar): the scalar is not arrayed, the
+        // previous field's array answers with newoff 18 (into a@0).
+        let b = nearest_arrayed_component_backward(&s, 18);
+        assert!(b.dtype.is_some());
+        assert_eq!(b.newoff, 18);
+        assert_eq!(b.elsize, 8);
+        // Forward at 18 (middle of the non-struct scalar → skip): the next
+        // arrayed field is b@24 → newoff -6, elsize 4.
+        let f = nearest_arrayed_component_forward(&s, 18);
+        assert!(f.dtype.is_some());
+        assert_eq!(f.newoff, -6);
+        assert_eq!(f.elsize, 4);
+        // Backward at 30 (inside b): array component answers newoff 6.
+        let b2 = nearest_arrayed_component_backward(&s, 30);
+        assert!(b2.dtype.is_some());
+        assert_eq!(b2.newoff, 6);
+        assert_eq!(b2.elsize, 4);
+        // Non-struct base: the base null walks (type.cc:188/201).
+        assert!(nearest_arrayed_component_forward(&scalar8, 0).dtype.is_none());
+        assert!(nearest_arrayed_component_backward(&scalar8, 0).dtype.is_none());
     }
 }

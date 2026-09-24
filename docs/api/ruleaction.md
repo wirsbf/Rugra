@@ -1655,3 +1655,86 @@ NEGPROBE/ORTRACE/ICPROBE3/VNWATCH vs rugra 同款）：修后 feb8:1 varnode 逐
 flags 与 oracle 逐字相同（0x1208000=mapped|addrtied|coverdirty），negate census
 10/10 逐 site 全等；首分歧 76→**178**（stackstall:oppool1 SNAP 多一条
 3aa2:541 SP INT_ADD，登记 SB-F2STRING-ORD178-0001）。
+
+## 2026-09-24：AddTreeState hasMatchingSubType 全量落地 + calc_subtype SPACEBASE/STRUCT 臂接 live map（RULEARITH-SPACEBASE-ARRAYSNAP-0001）
+
+- `AddTreeState::has_matching_sub_type`（ruleaction.cc:6064
+  `AddTreeState::hasMatchingSubType`）首次完整移植：arrayHint==0 直查
+  getSubType；否则 backward（offBefore∈[0,sizeAddr) 且 elSize 兼容直接
+  命中，sizeAddr=byteToAddressInt(size, ct wordsize)）→forward→双 miss 回
+  getSubType→单 miss 直取→距离比较（|off|，elSize≠hint 各 +0x1000，tie 取
+  backward）。uint8 biggestNonMultCoeff→uint4 形参的 32 位截断保留。
+- `AddTreeState::spacebase_map`（RUGRA-GLUE）：Ghidra
+  `TypeSpacebase::getMap`（type.cc:2935-2945）每次查询经 Architecture 动态
+  解析 queryFunction(localframe)→fd->getScopeLocal()；Rugra 的 spacebase
+  类型内无法触达 Funcdata，故由持 `data: &mut Funcdata` 的 AddTreeState 在
+  查询点解析（fd 入口==localframe 时取活跃 `fd.scope`，帧不匹配=queryFunction
+  miss 回退全局 scope），以 `SpacebaseMap` 传入 datatype.rs 的
+  `*_in_map` 查询族——localframe 查询从此不再读构造期全局快照。
+- calc_subtype SPACEBASE 臂（ruleaction.cc:6286-6298）：offsetbytes=
+  addressToByteInt(offset, ct wordsize)（uint8→int8 重解释 ×ws），extra 回转
+  byteToAddress（÷ws，space.hh:523/541 方向：addressToByte 乘、byteToAddress
+  除）；STRUCT 臂（6299-6313）同构接 hint 路径，边界检查按字节比较。
+
+## 2026-09-24：biggestNonMultCoeff u32 化 + 三处截断时点镜像（wt/postadsorb，R1）
+
+- 勘误：上文"uint8 biggestNonMultCoeff→uint4 形参的 32 位截断保留"引用的
+  字段宽度有误——oracle 字段本就是 `uint4 biggestNonMultCoeff`
+  （ruleaction.hh:54），形参也是 `uint4 coeff`（ruleaction.cc:6064），
+  调用点（cc:6290/6304）在 oracle 中**不发生任何截断**。
+- 字段 `biggest_non_mult_coeff` 由 u64 改为 u32；截断镜像三处：
+  ① check_mult_term（cc:6146-6147）`uint4 vncoeff=(sval<0)?(uint4)-sval:
+  (uint4)sval` —— 转换发生在**比较之前**，|sval|≥2^32 先回绕（可能为 0）
+  再参与竞争；②③ check_mult_term 尾/check_term 尾（cc:6158-6159/6210-6211）
+  —— `treeCoeff`（uint8）按 64 位宽与字段（uint4 提升后）比较，**store 时**
+  截断到 32 位。`!=0` 消费点（cc:6271）与 hasMatchingSubType 形参读取的
+  均为已截断存储值。`has_matching_sub_type` 形参改 u32，删除入口处
+  自造的 `as u32` 截断（现由字段宽度天然承载）。
+- 可达性：|sval|/treeCoeff ≥ 2^32 需 8 字节常量或 INT_MULT 系数累积；
+  当前语料不可达（E2E curl/httpd 双语素逐字节不变），登记为 CR24-R1
+  修复、ws=1/小系数域下 corpus-neutral。
+- 此前状态：两臂只建模 arrayHint==0 的 getSubType 直查（注释自认
+  nearestArrayedComponent* 未建模），ord186 getparameter/ord186 parseconfig/
+  ord150 myprogress 三处 oppool2 ptrarith 常量差 8 族（FG 归因
+  LANE_FG_TABLEADDR_2026-09-23.md：oracle 对 aliases[].letter 链 -0x4f0
+  向前吸附 -0x4e8 数组符号 extra=-8，Rugra 全 miss extra=0）。
+
+## 2026-09-24：AddTreeState 累加器宽度镜像 + SPACEBASE 臂无符号除（RULEARITH-ADDTREE-NUMWIDTH-0001，CR24 R1/R2）
+
+- **R1 累加器截断时点**（CR24 R1）：`biggest_non_mult_coeff` 字段
+  u64→u32，镜像 ruleaction.hh:54 的 `uint4 biggestNonMultCoeff`。三站点
+  分别镜像 oracle 的混合截断时点：
+  - cc:6145（checkMultTerm vncoeff 站点）`uint4 vncoeff = (sval < 0) ?
+    (uint4)-sval : (uint4)sval;` ——幅度**先截断到 uint4 再比较**
+    （`sval.wrapping_neg() as u32` 后 u32 比较）；
+  - cc:6158-6159/6210-6211（checkMultTerm 不常数 fallthrough 与
+    checkTerm fallthrough 的 treeCoeff 站点）`if (treeCoeff >
+    biggestNonMultCoeff) biggestNonMultCoeff = treeCoeff;` ——uint4 字段
+    提升到 uint8 **全宽比较，存储时截断回 uint4**
+    （`tree_coeff > field as u64` 后 `tree_coeff as u32`）。
+  - cc:6132-6137 的 `val >= size` 门给出结构性保护：size≠0 时
+    |sval|≥2³² 到不了累加器，病理输入仅在 size==0（变长基类型）可达；
+    行为锁单测用 0x100000003 后跟 5 的终值=5（u64 全宽实现会永驻
+    0x100000003）。
+  - `has_matching_sub_type` 两调用点 arrayHint 实参补 `as u64`
+    （uint4 字段→uint4 形参，低 32 位结构性存活）。
+- **R2 SPACEBASE 臂无符号除**（CR24 R2）：calc_subtype SPACEBASE 臂
+  extra 回转换用 cc:6294 的 `AddrSpace::byteToAddress(extra, ws)` ——
+  **uintb 重载按位模式无符号除**（space.hh:523-525 `return val/ws;`），
+  旧实现为 i64 wrapping_div（有符号，byteToAddressInt 语义）。仅
+  extra<0 且 ws>1 时分叉（当前全部空间 ws=1，属 latent）；STRUCT 臂
+  cc:6311 的 `byteToAddressInt`（有符号）保持不动。行为锁单测：
+  ScopeLocal 播种 int[8]@0x2000，offset 0xFF8（ws=2→offsetbytes
+  0x1FF0），forward walk 探 +32 命中数组符号，extra=-16 →
+  0xFFFFFFFFFFFFFFF0/2=0x7FFFFFFFFFFFFFF8（有符号会得 -8），断言
+  offset=0x8000000000001000、correct=0x8000000000000008。
+- **验收**（基线=亲父 781046c2 并集树 pristine worktree 亲测）：
+  curl E2E 2145/0/0、httpd E2E 2057/0/0，双侧 cmp 字节恒等；gcc 审计
+  82OK/25FAIL==亲父；六投影方向（getparameter/myprogress/next_url/
+  match_url/parseconfig/main）defects=0 numbering=0 且逐名==亲父；
+  cargo test --lib 18 失败==亲父失败集（+3 过=新单测）。两修均为
+  latent 输入行为差异，语料内不可达 ⇒ 输出恒等即预期。
+
+- 2026-09-24 (CR25 unlock A+B): calc_subtype SPACEBASE arm extra conversion switched to unsigned divide per ruleaction.cc:6294 (byteToAddress, space.hh:523-525); STRUCT arm keeps signed byteToAddressInt per cc:6311. Three behavior-lock tests added; ten test helpers annotated.
+
+- 2026-09-24: two test helpers (make_copy_written_vnterm, make_varlen_add_tree_state) joined the behavior locks from the sibling branch.
