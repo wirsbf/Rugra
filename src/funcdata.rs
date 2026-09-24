@@ -10219,18 +10219,26 @@ impl Funcdata {
         if num_input == 0 {
             // No branches left: insert a new input varnode at slot 0 and
             // convert to COPY.
-            let (size, addr) = {
+            let (size, addr, space) = {
                 let op_rg = op.0.read().unwrap();
                 let out = op_rg.get_out();
                 match out {
                     Some(o) => {
                         let o_rg = o.read().unwrap();
-                        (o_rg.get_size(), *o_rg.get_addr())
+                        (o_rg.get_size(), *o_rg.get_addr(), o_rg.address_space)
                     }
-                    None => (0, Address::new(0)),
+                    None => (0, Address::new(0), crate::space::AddressSpace::Ram),
                 }
             };
-            let newvn = self.new_varnode(size, addr);
+            // cc:181: newVarnode(op->getOut()->getSize(),op->getOut()->getAddr())
+            // — the FULL storage address (space + offset) of the out
+            // varnode; a zeroed MULTIEQUAL's out is commonly a register, so
+            // the input varnode lives in the register space. The spaceless
+            // new_varnode adapter defaults to RAM, which fabricated
+            // RAM@register-offset garbage instead — the
+            // HERITAGE-CROSSSPACE-MERGE family (same construction as the
+            // pushMultiequals fix at new_varnode_in_space cc:135).
+            let newvn = self.new_varnode_in_space(size, space, addr);
             self.op_insert_input(op, newvn.clone(), 0);
             // Ghidra: setInputVarnode(op->getIn(0)); promote slot 0 to input.
             self.set_input_varnode(newvn);
