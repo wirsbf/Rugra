@@ -1,5 +1,52 @@
 # `printc.rs` API Reference
 
+## 2026-09-24：印前指针兜底盖章通道按 oracle 方向收缩（WIDTHOP 宽度算子族 / Lane GF）
+
+`doc_function` 的印前指针盖章通道（`pointer_varnodes` 收集 + 兜底
+`v_type` 盖章）此前对"LOAD/STORE 地址 **或** 喂给 LOAD 的 INT_ADD/INT_SUB
+任一输入"的 `(space, offset)` 键**无差别盖章** `int *`（8 字节）。三处
+偏离 oracle：
+
+1. **方向禁令**：把 INT_ADD 输出侧的指针用途回灌进加法输入，正是
+   `TypeOpIntAdd::propagateType` 明文禁止的方向（typeop.cc:1197
+   `inslot == -1 → return 0`——"Don't propagate pointer types this
+   direction"）。ZEXT/SEXT 输出（无 propagateType 覆写，typeop.cc:317
+   默认 null）与 SUBPIECE 输出（仅 far/near 指针 + getSubType 尺寸游走，
+   typeop.cc:2161-2186）被盖成 `int *` 后，`isZextCast`/`isSextCast`/
+   `isSubpieceCast`（cast.cc:411-466）全数判 false，printc 的三段式
+   （printc.cc:786-811 opIntZext/opIntSext、:843-878 opSubpiece）落进
+   opFunc 兜底，印出功能算子 `SUB81(x,0)`/`ZEXT48(x)`/`SEXT14(x)`——而
+   oracle 同位点印 `(char)x` cast / 隐没扩展（isExtensionCastImplied）。
+2. **键碰撞**：`(space, offset)` 不是 varnode 身份——寄存器空间一族重叠
+   varnode 共享一个 offset（RAX/EAX/AL 全在 register 0，SSA 每代重写同
+   键），任何一条 LOAD 地址键会把整族亚寄存器与全部 SSA 代一起盖章
+   （实证：getparameter `(Register,0)` 一键 27+ 个 4 字节对象 + 1 字节
+   对象被盖 `int*`）。现改按 `create_index`（VarnodeBank 分配身份）入集
+   `load_addr_direct`。
+3. **尺寸盲**：兜底指针固定 8 字节。现按 `TypeOpLoad::propagateType` 的
+   `propagateToPointer(..., outvn->getSize(), ws)`（typeop.cc:495-498）以
+   地址 varnode 自身尺寸构型。
+
+收缩后的盖章域 = **直接 LOAD/STORE 地址槽 varnode + 尺寸 8 且 def 不属于
+扩展/截断族（ZEXT/SEXT/SUBPIECE/PIECE/INSERT）的加法输入**；命名消费面
+`pointer_varnodes`（Hungarian `piVar` 前缀，`pointer_type_for`）保持原集合
+不动。扩展/截断族作地址侧同样排除：oracle 的 out→地址槽传播要求对面边
+（load 值）已有具体类型，本语料 golden 中扩展输出从不携带指针（全量 0 功能
+ZEXT/SEXT 印记）。
+
+**验收**（基线=亲父 b25bce7a 亲测）：curl 1995/0/0 → **1992/0/0**（−3：
+glob_range 69→67、file2string 113→112）、httpd 2072/0/0 → **2068/0/0**
+（−4：ap_getparents 109→105），逐函数零回退；功能宽度算子 token
+curl 48→12 / httpd 50→16（清一色 cast/隐没形态）；gcc 审计 104OK/20FAIL +
+8OK/21FAIL == 基线；四投影（next_url/match_url/myprogress/parseconfig）
+stage 流与 MATCH 态逐字节恒等（仅 META producer tree-id 行异）；双跑字节
+恒等；`cargo test --lib` 失败集=已知 flaky 族（printc:: 12/12、
+type_system::cast 20/20 全绿）。残余 12+16 token 两亚族让渡：
+①SUB 功能形态（out 高类型=undefined 基型）=setcasts `subpiece_output_token`
+→updateType 应用域（FV2 81cdfa2b 后继，coreaction.rs）；②ZEXT/SEXT 功能
+形态（out 落在含真指针实例的合并 high，代表类型为 `int *`）=varmap/Merge
+代表性类型域。见 WIDTHOP 行（docs/TODO_BOARD.md）。
+
 ## 2026-09-24：sanitize_c_ident 放行 `:`——限定名保真（DRIVER-SWITCHD-DEFFN-0001）
 
 `sanitize_c_ident`（RUGRA-GLUE，无 Ghidra 对应物）此前把一切非
