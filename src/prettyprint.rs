@@ -2513,6 +2513,20 @@ impl EmitNoMarkup {
                     if m.starts_with("DAT_") {
                         continue;
                     }
+                    // Canon never declares unnamed-location tokens
+                    // (printc.cc:1938-1945 PrintC::pushUnnamedLocation —
+                    // `<space>0x<hex>` labels are expression-level storage
+                    // slots, not ScopeLocal symbols, so the oracle's
+                    // emitLocalVarDecls (printc.cc:2260-2279) never emits a
+                    // declaration for them; the 12.0.4 golden declares zero
+                    // of its stack0x/unique0x/register0x/ram0x uses).
+                    // PRINTC-C3-UNNAMED-SPACE-NAME-0001: injecting a decl
+                    // here diverges from the canon text the printc fallback
+                    // now produces.
+                    if m.starts_with("unique0x") || m.starts_with("register0x")
+                        || m.starts_with("stack0x") || m.starts_with("ram0x") {
+                        continue;
+                    }
                     let ty = if m.starts_with("struct") {
                         "int"
                     } else if m.starts_with("lVar") || m.starts_with("uVar") {
@@ -4659,11 +4673,13 @@ mod tests {
     // RUGRA-GLUE: backfill_missing_locals unit tests (legacy text-pass
     // compensation layer; the oracle has no counterpart — Ghidra's
     // emitLocalVarDecls (printc.cc:2260-2279) declares every scope symbol
-    // and never re-scans emitted text). These pin the A69 follow-up contract:
-    // the oracle unnamed-location fallback tokens
+    // and never re-scans emitted text). These pin the PRINTC-C3-UNNAMED-
+    // SPACE-NAME-0001 contract: the oracle unnamed-location fallback tokens
     // <spacename><printRaw> (printc.cc:1938-1945: unique0x.../register0x.../
-    // stack0x.../ram0x...) are recognized by the used-locals prefix scan and
-    // get long declarations when absent from the declaration block.
+    // stack0x.../ram0x...) are expression-level storage-slot labels, NOT
+    // ScopeLocal symbols, so the oracle never declares them (the 12.0.4
+    // golden declares zero of its uses) — the backfill recognizes them in
+    // the used-locals scan but never injects a declaration.
 
     #[test]
     fn backfill_injects_unnamed_location_fallback_tokens() {
@@ -4681,28 +4697,21 @@ long match_url(char *param_1,long param_2)
 }
 ";
         let out = EmitNoMarkup::backfill_missing_locals(input);
-        // All four space spellings get long declarations (the default the
-        // pre-A69 uVar-family spelling of these slots received).
+        // Canon zero-decl contract: no space token gets a declaration.
         assert!(
-            out.contains("  long register0x00000000;\n"), "missing register0x decl:\n{}", out
+            !out.contains("long register0x"), "register0x decl injected:\n{}", out
         );
         assert!(
-            out.contains("  long register0x000000a0;\n"), "missing register0x dest decl:\n{}", out
-        );
-        assert!(
-            out.contains("  long unique0x00023b00;\n"), "missing unique0x decl:\n{}", out
-        );
-        assert!(
-            out.contains("  long unique0x0000aa00;\n"), "missing unique0x hex-tail decl:\n{}", out
+            !out.contains("long unique0x"), "unique0x decl injected:\n{}", out
         );
         // Declared names are not re-injected.
         assert_eq!(
             out.matches("char *piVar1;").count(), 1, "piVar1 re-declared:\n{}", out
         );
-        // Injections land inside the function, before the first body line.
-        let decl_pos = out.find("  long unique0x00023b00;").unwrap();
-        let body_pos = out.find("unique0x00023b00 = *param_1;").unwrap();
-        assert!(decl_pos < body_pos, "injection not before body:\n{}", out);
+        // Body lines are untouched.
+        assert!(
+            out.contains("unique0x00023b00 = *param_1;"), "body line dropped:\n{}", out
+        );
     }
 
     #[test]
@@ -4710,7 +4719,8 @@ long match_url(char *param_1,long param_2)
         // Regression guard for the continuation scan: the fallback token tail
         // is printRaw hex (space.cc:216 lowercase hex), so a decimal-only
         // scan would truncate unique0x0000abef at its first a-f digit and
-        // inject a partial name.
+        // inject a partial name. Under the canon zero-decl contract the
+        // tokens are not injected at all — including no partial-name form.
         let input = "\
 void f(void)
 
@@ -4721,19 +4731,20 @@ void f(void)
 ";
         let out = EmitNoMarkup::backfill_missing_locals(input);
         assert!(
-            out.contains("  long stack0x0000abef;\n"), "stack0x hex tail mishandled:\n{}", out
+            !out.contains("long stack0x"), "stack0x decl injected:\n{}", out
         );
         assert!(
-            out.contains("  long ram0x00023e00;\n"), "ram0x not injected:\n{}", out
-        );
-        assert!(
-            out.contains("  long ram0x0000ff00;\n"), "second ram0x not injected:\n{}", out
+            !out.contains("long ram0x"), "ram0x decl injected:\n{}", out
         );
         assert!(
             !out.contains("stack0x0000;\n"), "hex tail truncated:\n{}", out
         );
         assert!(
             !out.contains("ram0x00023;\n"), "ram hex tail truncated:\n{}", out
+        );
+        assert!(
+            out.contains("ram0x00023e00 = stack0x0000abef + ram0x0000ff00;"),
+            "body line dropped:\n{}", out
         );
     }
 
