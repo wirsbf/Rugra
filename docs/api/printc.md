@@ -738,11 +738,27 @@ printc.cc:2260/2518/2497）：
   （ActionRestructureVarnode 构建、ActionNameVars 命名完成的 ScopeLocal）。
   打印期不重构、不重命名、不重编号；无 scope 则无声明（无兜底）。
 - **遍历序**（emitScopeVarDecls cc:2535-2572）：先地址 map 后 dynamic
-  列表。地址序 =（空间序 Unique<Register<Stack，起始偏移，usepoint 子序）
-  —— `local_maptable_space_rank` 复现 x86-64 maptable 空间序；dynamic 按
-  插入序。过滤器：piece 跳过（Rugra 模型无 piece）、category != no_category
-  跳过（cc:2541，参数类 0 在签名里声明）、空名跳过（cc:2542）；
-  FunctionSymbol/LabSymbol 与多 entry 去重在 Rugra 模型中结构性不可达。
+  列表。地址序 = 空间序（`local_maptable_space_rank` 复现 x86-64
+  maptable 序 Unique<Register<Stack，`grouped.sort_by_key` 对齐
+  database.cc:1952 的 maptable 空间索引序）× 每空间
+  `std::list<SymbolEntry>` 的 **rangemap 插入拼接序**——MapIterator
+  解引用的是 per-space `begin_list()` 列表（database.hh:379-401/
+  database.cc:1889-1919），不是排序好的 AddrRange 多重集；列表序由
+  `rangemap::insert`（rangemap.hh:221-277）决定：每条新记录拼接到
+  键（细化片含端 `last`，EntrySubsort）>= 其整域键 `(b, subsort)` 的
+  首个 AddrRange 属主之前，无则追加到表尾。由
+  `scope_rangemap_list_order`（含 `scope_rangemap_unzip` 的细化片
+  分裂）逐条重放；EntrySubsort 投影 = addrtied 取最小 `(0,0)`，
+  否则 `(1, 首用偏移)`（database.cc:97-109 getSubsort，局部 scope
+  的 uselimit 共享代码空间故 useindex 折叠为常数）。在该语义下，
+  重叠条目按含端先后访问（EAX[0,4) 先于 RAX[0,8)），等域条目按
+  subsort；外扩条目的分裂片可捕获后续小条目，使列表序**并非**纯
+  `(end, subsort)` 排序——此形态由
+  `test_scope_rangemap_list_order_enclosing_piece_capture` 固化。
+  dynamic 按插入序。过滤器：piece 跳过（Rugra 模型无 piece）、
+  category != no_category 跳过（cc:2541，参数类 0 在签名里声明）、
+  空名跳过（cc:2542）；FunctionSymbol/LabSymbol 与多 entry 去重
+  在 Rugra 模型中结构性不可达。
   **注意**：map 分支没有 `$$undef` 过滤（那是 cc:2529 类别分支独有的）
   ——`$$undef` 名的 no-category 符号会被原样声明；生产中
   assignDefaultNames 在 Action 期（coreaction.cc:2998）保证这类名字不会
@@ -2808,3 +2824,32 @@ E2E：curl 1438→1334（−104，3 目标函数归零，main 285→267、getpar
 1447→1441（−6）；双跑恒等；defects/numbering 双侧 0。已知代价：httpd
 ap_fini_vhost_config 237→239（iVar7 声明移位，LCS 位置性 +2，函数存量
 残差 237 行远未清零；登记 REGWIN-VHOST-DECLORDER-0001）。
+## 2026-09-24：emitScopeVarDecls 遍历序钉死为 rangemap 插入拼接序（Lane VHOST / REGWIN-VHOST-DECLORDER-0001）
+REGWIN 换 (space rank, end, usepoint) 纯序后 ap_fini_vhost_config 237→239，
+本 lane 按 oracle 原文逐行核对排序语义完整体，结论：
+**MapIterator 解引用的是 per-space `std::list<SymbolEntry>` 的列表序，不是
+排序好的 AddrRange 多重集**（database.hh:379-401 `curiter` 为
+`list<SymbolEntry>::const_iterator`；database.cc:1889-1919 `begin()` 从
+`begin_list()` 起步）。列表序由 `rangemap::insert`（rangemap.hh:221-277）
+的 splice 决定：每条新记录插到"键（细化片含端 last，EntrySubsort）>= 新
+记录整域键 (b,subsort) 的首个 AddrRange 属主"之前，无则表尾追加；键来自
+公共细化的**分裂片含端**，外扩记录的分裂片可充当 splice 靶，故列表序在
+嵌套形态下**并非**纯 (end, subsort) 排序（P=[5,6) 先插、Q=[0,10) 追加、
+N=[0,3) 落 Q 的 [0..4] 分裂片后 → P,N,Q，纯序为 N,P,Q——单测
+`test_scope_rangemap_list_order_enclosing_piece_capture` 固化）。
+实现替换为逐条重放：`scope_rangemap_list_order`（rangemap.hh:223 insert +
+piece 循环 + 尾余片）+ `scope_rangemap_unzip`（rangemap.hh:196 边界分裂，
+只动 first 不动键故属主位置稳定），EntrySubsort 投影 addrtied→(0,0)、
+其余 (1, 首用偏移)（database.cc:97-109；局部 uselimit 共享代码空间），
+等键多重集摆放按 C++ 语义（plain insert 排等键后、hint insert 等键时落
+hint 前）。
+验证（CARGO_TARGET_DIR=sb-vhost，基线 4a67708e 干净 worktree 亲测 A/B）：
+curl 1329/0/0 与 httpd 1445/0/0 **双侧 stdout cmp 逐字节恒等**——即当前
+语料（含 17 个同空间重叠 scope、ap_fini 的 [0,3)-in-[0,7)×5 与等域回收
+形态）上纯序 == 拼接序，REGWIN 修复本就 oracle 精确；ap_fini_vhost_config
+维持 239，其与 golden 的 +2 为 varmap 域符号集差异（extraout_RDX×3/
+uVar15/in_RIP/unique 集形状）的 LCS 位置性残差，非 printc 排序缺陷
+（残差移交 MAIN2 varmap/merge 车道）。10/10 投影 bank MATCH；cargo test
+--lib 1708P/1F（唯一失败 test_nonzeromask_pipeline_wiring 为基线预存，
+A/B 同败）。新增 3 个单测：vhost 寄存器块 17 条目手工追踪、外扩片捕获
+形态、addrtied 最小 subsort。
