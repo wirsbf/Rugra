@@ -1253,7 +1253,33 @@ fn resolve_type_inner(
                 // renders in decompiled C). Rugra's Datatype enum has no
                 // TypeTypedef variant yet, so the typedef is materialized as
                 // the renamed underlying type.
-                Some(name) => materialized_alias(name, &inner),
+                //
+                // Exception first (PRINTC-BOOLLITERAL-0001): the conventional
+                // boolean typedef names resolve to the core bool type the way
+                // Ghidra's DWARF front end maps `typedef bool` (curl.h line
+                // 394, DW_TAG_typedef "bool" -> char) to its boolean primitive,
+                // landing on the decompiler's core `bool` from
+                // setCoreType("bool",1,TYPE_BOOL,false) (sleigh_arch.cc:216).
+                // Type identity then drives ActionSetCasts::castInput's
+                // constant absorption (coreaction.cc:2687-2691) and
+                // PrintC::pushConstant's TYPE_BOOL arm (printc.cc:1769-1771),
+                // printing `true`/`false` — the canonical-golden behavior for
+                // every typedef-bool field (`::config.showerror = true;`).
+                // Gate on the 1-byte underlying so a malformed larger "bool"
+                // typedef keeps the alias path.
+                Some(name) => {
+                    if inner.get_size() == 1 {
+                        let factory = crate::type_system::typefactory::TypeFactory::shared_default();
+                        let core_bool = factory
+                            .read()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .dwarf_conventional_bool(&name);
+                        if let Some(core_bool) = core_bool {
+                            return Ok(core_bool);
+                        }
+                    }
+                    materialized_alias(name, &inner)
+                }
                 None => Ok(inner),
             }
         }
