@@ -5978,6 +5978,84 @@ impl ActionSetCasts {
         1
     }
 
+    // Ghidra: typeop.cc:2142 TypeOpSubpiece::getOutputToken
+    /// Output token for CPUI_SUBPIECE (typeop.cc:2142-2159):
+    /// (1) `findTruncation` of the in0 read-facing high type at the
+    /// SUBPIECE's composite byte offset (typeop.cc:2195-2207: little-endian
+    /// byte offset is the shift constant `lsb`, big-endian is
+    /// inSize-outSize-lsb), artificial slot 1, consulting the Funcdata union
+    /// resolution map read-only (TypeUnion::findTruncation type.cc:2185) —
+    /// when the matched field's type size equals the output size, the field
+    /// type IS the token; otherwise (2) the output's DEF-facing high type
+    /// when not UNKNOWN; otherwise (3) the factory INT base. This overrides
+    /// the TypeOpFunc ctor's UNKNOWN output base (typeop.cc:2117), so a
+    /// SUBPIECE token is never `undefinedN` — without this, castOutput's
+    /// implied arm (coreaction.cc:2569-2571) retypes implied SUBPIECE
+    /// outputs down to UNKNOWN and later compare inputs pick up spurious
+    /// CASTs (MYPROGRESS-SETCASTS-ORD399-0001: the extra CAST at 3519:99).
+    fn subpiece_output_token(
+        fd: &Funcdata,
+        op: &crate::op::PcodeOp,
+        outvn: &Arc<RwLock<crate::varnode::Varnode>>,
+        type_factory: &Option<Arc<RwLock<crate::type_system::typefactory::TypeFactory>>>,
+    ) -> Option<Arc<crate::type_system::datatype::Datatype>> {
+        use crate::type_system::datatype::TypeMetatype;
+        let out_size = outvn.read().unwrap().get_size();
+        // cc:2147: ct = op->getIn(0)->getHighTypeReadFacing(op)
+        let ct = op.get_in(0).and_then(|a| {
+            let vn = a.read().unwrap();
+            vn.get_high_type_read_facing(op, 0)
+                .or_else(|| vn.v_type.clone())
+        });
+        // cc:2149 + typeop.cc:2195-2207 computeByteOffsetForComposite:
+        // lsb = (int4)op->getIn(1)->getOffset(); big-endian byteOff is
+        // inSize - outSize - lsb, little-endian is lsb.
+        let byte_off = match (op.get_in(0), op.get_in(1)) {
+            (Some(in0), Some(shift_vn)) => {
+                let in0_r = in0.read().unwrap();
+                let in_size = in0_r.get_size();
+                let lsb = shift_vn.read().unwrap().get_offset() as u32 as i64;
+                if in0_r.get_space().is_big_endian() {
+                    in_size as i64 - out_size as i64 - lsb
+                } else {
+                    lsb
+                }
+            }
+            _ => 0,
+        };
+        // cc:2150-2154: field arm — artificial slot 1; only a size-matching
+        // field returns early (a non-matching field falls through, Ghidra's
+        // inner `if` does not return).
+        if let Some(ct) = &ct {
+            if let Some((field, _offset)) = ct.find_truncation(
+                byte_off,
+                out_size,
+                Some(op),
+                1,
+                Some(&fd.union_map),
+            ) {
+                if out_size == field.type_ptr.get_size() {
+                    return Some(field.type_ptr.clone());
+                }
+            }
+        }
+        // cc:2155-2157: dt = outvn->getHighTypeDefFacing(); non-UNKNOWN wins.
+        let dt = outvn
+            .read()
+            .unwrap()
+            .get_high_type_def_facing()
+            .or_else(|| outvn.read().unwrap().v_type.clone());
+        if let Some(dt) = dt {
+            if dt.get_metatype() != TypeMetatype::Unknown {
+                return Some(dt);
+            }
+        }
+        // cc:2158: return tlst->getBase(outvn->getSize(),TYPE_INT);
+        type_factory
+            .as_ref()
+            .and_then(|f| f.read().unwrap().get_base(out_size, TypeMetatype::Int))
+    }
+
     // Ghidra: coreaction.cc:2532 ActionSetCasts::castOutput
     /// Insert a CAST (or PTRSUB) op after `op` to convert its output to the
     /// token type (cc:2532-2616): token via the TypeOp virtual dispatch
@@ -6176,6 +6254,50 @@ impl ActionSetCasts {
                     }
                     Some(r) => r,
                     None => return 0,
+                }
+            } else if op_rg.opcode == OpCode::CPUI_SUBPIECE {
+                // typeop.cc:2142-2159 TypeOpSubpiece::getOutputToken: the
+                // token is (1) the field obtained by findTruncation of the
+                // in0 read-facing high type at the SUBPIECE's composite byte
+                // offset (artificial slot 1; the union arm consults the
+                // Funcdata resolution map read-only, TypeUnion::
+                // findTruncation type.cc:2185), when the field type's size
+                // matches the output size; otherwise (2) the output's
+                // DEF-facing high type when not UNKNOWN; otherwise (3) the
+                // factory INT base — never the ctor's TypeOpFunc UNKNOWN
+                // base (typeop.cc:2117) the generic arm would produce.
+                let Some(subpiece_token) =
+                    Self::subpiece_output_token(fd, &op_rg, &outvn, &type_factory)
+                else {
+                    return 0;
+                };
+                subpiece_token
+            } else if op_rg.opcode == OpCode::CPUI_PIECE {
+                // typeop.cc:2063-2072 TypeOpPiece::getOutputToken: PIECE
+                // casts to the output's DEF-facing high type when that is
+                // INT or UINT, else the factory UINT base.
+                let def_facing = outvn
+                    .read()
+                    .unwrap()
+                    .get_high_type_def_facing()
+                    .or_else(|| outvn.read().unwrap().v_type.clone());
+                match def_facing {
+                    Some(dt)
+                        if matches!(
+                            dt.get_metatype(),
+                            TypeMetatype::Int | TypeMetatype::Uint
+                        ) =>
+                    {
+                        dt
+                    }
+                    _ => type_factory
+                        .as_ref()
+                        .and_then(|f| {
+                            f.read()
+                                .unwrap()
+                                .get_base(out_size, TypeMetatype::Uint)
+                        })
+                        .unwrap_or_else(|| base_type_for(out_size, TypeMetatype::Uint)),
                 }
             } else {
                 // typeop.cc:261-265: TypeOp::getOutputToken's default is
